@@ -57,6 +57,7 @@ const mocks = vi.hoisted(() => {
     printModelTable: vi.fn(),
     resolveModelWithRegistry: vi.fn(),
     readPersistedInstalledPluginIndexSync: vi.fn(),
+    loadPluginRegistrySnapshotWithMetadata: vi.fn(),
   };
 });
 
@@ -95,6 +96,11 @@ function resetMocks() {
   mocks.printModelTable.mockReset();
   mocks.resolveModelWithRegistry.mockReturnValue({ ...OPENAI_CODEX_MODEL });
   mocks.readPersistedInstalledPluginIndexSync.mockReturnValue(null);
+  mocks.loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
+    source: "persisted",
+    snapshot: { plugins: [] },
+    diagnostics: [],
+  });
 }
 
 function createRuntime() {
@@ -215,6 +221,14 @@ function installModelsListCommandForwardCompatMocks() {
   vi.doMock("../../plugins/installed-plugin-index-store.js", () => ({
     readPersistedInstalledPluginIndexSync: mocks.readPersistedInstalledPluginIndexSync,
   }));
+
+  vi.doMock("../../plugins/plugin-registry.js", async (importOriginal) => {
+    const actual = await importOriginal<typeof import("../../plugins/plugin-registry.js")>();
+    return {
+      ...actual,
+      loadPluginRegistrySnapshotWithMetadata: mocks.loadPluginRegistrySnapshotWithMetadata,
+    };
+  });
 }
 
 beforeAll(async () => {
@@ -507,8 +521,12 @@ describe("modelsListCommand forward-compat", () => {
           cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         },
       ]);
-      mocks.readPersistedInstalledPluginIndexSync.mockReturnValue({
-        plugins: [{ syntheticAuthRefs: ["codex"] }],
+      mocks.loadPluginRegistrySnapshotWithMetadata.mockReturnValueOnce({
+        source: "persisted",
+        snapshot: {
+          plugins: [{ enabled: true, syntheticAuthRefs: ["codex"] }],
+        },
+        diagnostics: [],
       });
       const runtime = createRuntime();
 

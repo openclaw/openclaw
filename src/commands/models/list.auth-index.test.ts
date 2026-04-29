@@ -2,9 +2,22 @@ import { describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import { createModelListAuthIndex } from "./list.auth-index.js";
 
-vi.mock("../../plugins/installed-plugin-index-store.js", () => ({
-  readPersistedInstalledPluginIndexSync: vi.fn(() => null),
+const pluginRegistryMocks = vi.hoisted(() => ({
+  loadPluginRegistrySnapshotWithMetadata: vi.fn(() => ({
+    source: "persisted",
+    snapshot: { plugins: [] },
+    diagnostics: [],
+  })),
 }));
+
+vi.mock("../../plugins/plugin-registry.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../plugins/plugin-registry.js")>();
+  return {
+    ...actual,
+    loadPluginRegistrySnapshotWithMetadata:
+      pluginRegistryMocks.loadPluginRegistrySnapshotWithMetadata,
+  };
+});
 
 const emptyStore: AuthProfileStore = {
   version: 1,
@@ -57,6 +70,18 @@ describe("createModelListAuthIndex", () => {
     expect(index.hasProviderAuth("openai")).toBe(false);
   });
 
+  it("uses manifest env metadata for google vertex auth", () => {
+    const index = createModelListAuthIndex({
+      cfg: {},
+      authStore: emptyStore,
+      env: {
+        GOOGLE_CLOUD_API_KEY: "gcp-test",
+      },
+    });
+
+    expect(index.hasProviderAuth("google-vertex")).toBe(true);
+  });
+
   it("records configured provider API keys", () => {
     const index = createModelListAuthIndex({
       cfg: {
@@ -107,5 +132,39 @@ describe("createModelListAuthIndex", () => {
     });
 
     expect(index.hasProviderAuth("codex")).toBe(true);
+  });
+
+  it("ignores derived synthetic auth snapshots", () => {
+    pluginRegistryMocks.loadPluginRegistrySnapshotWithMetadata.mockReturnValueOnce({
+      source: "derived",
+      snapshot: {
+        plugins: [{ enabled: true, syntheticAuthRefs: ["codex"] }],
+      },
+      diagnostics: [],
+    });
+    const index = createModelListAuthIndex({
+      cfg: {},
+      authStore: emptyStore,
+      env: {},
+    });
+
+    expect(index.hasProviderAuth("codex")).toBe(false);
+  });
+
+  it("ignores disabled synthetic auth snapshot entries", () => {
+    pluginRegistryMocks.loadPluginRegistrySnapshotWithMetadata.mockReturnValueOnce({
+      source: "persisted",
+      snapshot: {
+        plugins: [{ enabled: false, syntheticAuthRefs: ["codex"] }],
+      },
+      diagnostics: [],
+    });
+    const index = createModelListAuthIndex({
+      cfg: {},
+      authStore: emptyStore,
+      env: {},
+    });
+
+    expect(index.hasProviderAuth("codex")).toBe(false);
   });
 });

@@ -71,6 +71,15 @@
       }
     }
   },
+  "setup": {
+    "providers": [
+      {
+        "id": "google-vertex",
+        "authMethods": ["api-key"],
+        "envVars": ["GOOGLE_CLOUD_API_KEY"]
+      }
+    ]
+  },
   "cliBackends": ["google-gemini-cli"],
   "providerAuthEnvVars": {
     "google": ["GEMINI_API_KEY", "GOOGLE_API_KEY"]
