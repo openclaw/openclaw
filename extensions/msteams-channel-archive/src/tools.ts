@@ -1,5 +1,5 @@
 import { Type, type Static } from "@sinclair/typebox";
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/msteams";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { parseSearchDate, type MSTeamsChannelArchiveStore } from "./archive-store.js";
 
 const TOOL_LIMIT_MIN = 1;

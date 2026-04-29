@@ -1,5 +1,5 @@
 import { Type } from "@sinclair/typebox";
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/msteams";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { createArchiveStore } from "./src/archive-store.js";
 import { createChannelArchiveCleanupService } from "./src/channel-cleanup.js";
 import { registerArchiveTools } from "./src/tools.js";

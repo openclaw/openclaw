@@ -1,12 +1,9 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import {
-  extractOriginalFilename,
-  readJsonFileWithFallback,
-  withFileLock,
-  writeJsonFileAtomically,
-} from "openclaw/plugin-sdk/msteams";
+import { withFileLock } from "openclaw/plugin-sdk/file-lock";
+import { readJsonFileWithFallback, writeJsonFileAtomically } from "openclaw/plugin-sdk/json-store";
+import { extractOriginalFilename } from "openclaw/plugin-sdk/media-runtime";
 import type {
   ArchiveAttachmentRecord,
   ArchiveChannelEntry,

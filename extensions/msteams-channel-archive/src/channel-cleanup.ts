@@ -1,11 +1,9 @@
+import type { MSTeamsConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawPluginApi, OpenClawPluginService } from "openclaw/plugin-sdk/plugin-entry";
 import {
   normalizeResolvedSecretInputString,
   normalizeSecretInputString,
-  type OpenClawConfig,
-  type OpenClawPluginApi,
-  type OpenClawPluginService,
-  type MSTeamsConfig,
-} from "openclaw/plugin-sdk/msteams";
+} from "openclaw/plugin-sdk/secret-input";
 import type { MSTeamsChannelArchiveStore } from "./archive-store.js";
 
 type Logger = {
