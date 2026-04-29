@@ -177,7 +177,15 @@ export const memoryConfigSchema = {
         apiKey: typeof embedding.apiKey === "string" ? resolveEnvVars(embedding.apiKey) : undefined,
         baseUrl:
           typeof embedding.baseUrl === "string" ? resolveEnvVars(embedding.baseUrl) : undefined,
-        dimensions: typeof embedding.dimensions === "number" ? embedding.dimensions : undefined,
+        dimensions:
+          typeof embedding.dimensions === "number"
+            ? (() => {
+                if (!Number.isFinite(embedding.dimensions) || embedding.dimensions <= 0) {
+                  throw new Error("embedding.dimensions must be a positive number");
+                }
+                return embedding.dimensions;
+              })()
+            : undefined,
       },
       dreaming,
       dbPath: typeof cfg.dbPath === "string" ? cfg.dbPath : DEFAULT_DB_PATH,

@@ -119,4 +119,44 @@ describe("memory-lancedb config", () => {
       });
     }).toThrow("dreaming config must be an object");
   });
+
+  it("rejects non-positive dimensions in runtime parsing", () => {
+    expect(() => {
+      memoryConfigSchema.parse({
+        embedding: {
+          apiKey: "sk-test",
+          dimensions: 0,
+        },
+      });
+    }).toThrow("embedding.dimensions must be a positive number");
+
+    expect(() => {
+      memoryConfigSchema.parse({
+        embedding: {
+          apiKey: "sk-test",
+          dimensions: -1,
+        },
+      });
+    }).toThrow("embedding.dimensions must be a positive number");
+  });
+
+  it("rejects non-positive dimensions in the manifest schema", () => {
+    const manifestResult = validateJsonSchemaValue({
+      schema: manifest.configSchema,
+      cacheKey: "memory-lancedb.manifest.invalid-dimensions",
+      value: {
+        embedding: {
+          apiKey: "sk-test",
+          dimensions: 0,
+        },
+      },
+    });
+
+    expect(manifestResult.ok).toBe(false);
+    if (!manifestResult.ok) {
+      expect(manifestResult.errors.map((error) => error.text)).toContain(
+        "embedding.dimensions: must be >= 1",
+      );
+    }
+  });
 });

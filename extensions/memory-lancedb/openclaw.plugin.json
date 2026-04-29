@@ -74,7 +74,6 @@
     "properties": {
       "embedding": {
         "type": "object",
-        "minProperties": 1,
         "additionalProperties": false,
         "minProperties": 1,
         "properties": {
@@ -91,7 +90,8 @@
             "type": "string"
           },
           "dimensions": {
-            "type": "number"
+            "type": "number",
+            "minimum": 1
           }
         }
       },
