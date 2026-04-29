@@ -180,7 +180,9 @@ Codex after changing config.
   Codex app-server binary by default, so local `codex` commands on `PATH` do
   not affect normal harness startup.
 - Codex auth available to the app-server process or to OpenClaw's Codex auth
-  bridge.
+  bridge. Local app-server launches use an OpenClaw-managed Codex home for each
+  agent, so they do not read your personal `~/.codex` account, skills, plugins,
+  or thread state by default.
 
 The plugin blocks older or unversioned app-server handshakes. That keeps
 OpenClaw on the protocol surface it has been tested against.
@@ -511,11 +513,15 @@ For an already-running app-server, use WebSocket transport:
 ```
 
 Stdio app-server launches inherit OpenClaw's process environment by default,
-but OpenClaw owns the Codex app-server account bridge. Auth is selected in this
-order:
+but OpenClaw owns the Codex app-server account bridge and sets `CODEX_HOME` to a
+per-agent directory under that agent's OpenClaw state. That keeps Codex-native
+skills, plugins, config, accounts, and thread state scoped to the OpenClaw agent
+instead of leaking in from the operator's personal Codex CLI home.
+
+Auth is selected in this order:
 
 1. An explicit OpenClaw Codex auth profile for the agent.
-2. The app-server's existing account, such as a local Codex CLI ChatGPT sign-in.
+2. The app-server's existing account in that agent's Codex home.
 3. For local stdio app-server launches only, `CODEX_API_KEY`, then
    `OPENAI_API_KEY`, when no app-server account is present and OpenAI auth is
    still required.
@@ -553,21 +559,21 @@ If a deployment needs additional environment isolation, add those variables to
 
 Supported `appServer` fields:
 
-| Field               | Default                                  | Meaning                                                                                                                             |
-| ------------------- | ---------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| `transport`         | `"stdio"`                                | `"stdio"` spawns Codex; `"websocket"` connects to `url`.                                                                            |
-| `command`           | managed Codex binary                     | Executable for stdio transport. Leave unset to use the managed binary; set it only for an explicit override.                        |
-| `args`              | `["app-server", "--listen", "stdio://"]` | Arguments for stdio transport.                                                                                                      |
-| `url`               | unset                                    | WebSocket app-server URL.                                                                                                           |
-| `authToken`         | unset                                    | Bearer token for WebSocket transport.                                                                                               |
-| `headers`           | `{}`                                     | Extra WebSocket headers.                                                                                                            |
-| `clearEnv`          | `[]`                                     | Extra environment variable names removed from the spawned stdio app-server process after OpenClaw builds its inherited environment. |
-| `requestTimeoutMs`  | `60000`                                  | Timeout for app-server control-plane calls.                                                                                         |
-| `mode`              | `"yolo"`                                 | Preset for YOLO or guardian-reviewed execution.                                                                                     |
-| `approvalPolicy`    | `"never"`                                | Native Codex approval policy sent to thread start/resume/turn.                                                                      |
-| `sandbox`           | `"danger-full-access"`                   | Native Codex sandbox mode sent to thread start/resume.                                                                              |
-| `approvalsReviewer` | `"user"`                                 | Use `"auto_review"` to let Codex review native approval prompts. `guardian_subagent` remains a legacy alias.                        |
-| `serviceTier`       | unset                                    | Optional Codex app-server service tier: `"fast"`, `"flex"`, or `null`. Invalid legacy values are ignored.                           |
+| Field               | Default                                  | Meaning                                                                                                                                                                                                             |
+| ------------------- | ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `transport`         | `"stdio"`                                | `"stdio"` spawns Codex; `"websocket"` connects to `url`.                                                                                                                                                            |
+| `command`           | managed Codex binary                     | Executable for stdio transport. Leave unset to use the managed binary; set it only for an explicit override.                                                                                                        |
+| `args`              | `["app-server", "--listen", "stdio://"]` | Arguments for stdio transport.                                                                                                                                                                                      |
+| `url`               | unset                                    | WebSocket app-server URL.                                                                                                                                                                                           |
+| `authToken`         | unset                                    | Bearer token for WebSocket transport.                                                                                                                                                                               |
+| `headers`           | `{}`                                     | Extra WebSocket headers.                                                                                                                                                                                            |
+| `clearEnv`          | `[]`                                     | Extra environment variable names removed from the spawned stdio app-server process after OpenClaw builds its inherited environment. `CODEX_HOME` is reserved for OpenClaw's per-agent Codex home on local launches. |
+| `requestTimeoutMs`  | `60000`                                  | Timeout for app-server control-plane calls.                                                                                                                                                                         |
+| `mode`              | `"yolo"`                                 | Preset for YOLO or guardian-reviewed execution.                                                                                                                                                                     |
+| `approvalPolicy`    | `"never"`                                | Native Codex approval policy sent to thread start/resume/turn.                                                                                                                                                      |
+| `sandbox`           | `"danger-full-access"`                   | Native Codex sandbox mode sent to thread start/resume.                                                                                                                                                              |
+| `approvalsReviewer` | `"user"`                                 | Use `"auto_review"` to let Codex review native approval prompts. `guardian_subagent` remains a legacy alias.                                                                                                        |
+| `serviceTier`       | unset                                    | Optional Codex app-server service tier: `"fast"`, `"flex"`, or `null`. Invalid legacy values are ignored.                                                                                                           |
 
 OpenClaw-owned dynamic tool calls are bounded independently from
 `appServer.requestTimeoutMs`: each Codex `item/tool/call` request must receive

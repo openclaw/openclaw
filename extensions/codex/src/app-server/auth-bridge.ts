@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import {
   ensureAuthProfileStore,
   loadAuthProfileStoreForSecretsRuntime,
@@ -17,6 +19,8 @@ import { resolveCodexAppServerSpawnEnv } from "./transport-stdio.js";
 
 const CODEX_APP_SERVER_AUTH_PROVIDER = "openai-codex";
 const OPENAI_CODEX_DEFAULT_PROFILE_ID = "openai-codex:default";
+const CODEX_HOME_ENV_VAR = "CODEX_HOME";
+const CODEX_APP_SERVER_HOME_DIRNAME = "codex-home";
 const CODEX_API_KEY_ENV_VAR = "CODEX_API_KEY";
 const OPENAI_API_KEY_ENV_VAR = "OPENAI_API_KEY";
 const CODEX_APP_SERVER_API_KEY_ENV_VARS = [CODEX_API_KEY_ENV_VAR, OPENAI_API_KEY_ENV_VAR];
@@ -29,14 +33,54 @@ export async function bridgeCodexAppServerStartOptions(params: {
   if (params.startOptions.transport !== "stdio") {
     return params.startOptions;
   }
+  const isolatedStartOptions = await withAgentCodexHomeEnvironment(
+    params.startOptions,
+    params.agentDir,
+  );
   const store = ensureAuthProfileStore(params.agentDir, { allowKeychainPrompt: false });
   const shouldClearInheritedOpenAiApiKey = shouldClearOpenAiApiKeyForCodexAuthProfile({
     store,
     authProfileId: params.authProfileId,
   });
   return shouldClearInheritedOpenAiApiKey
-    ? withClearedEnvironmentVariables(params.startOptions, CODEX_APP_SERVER_API_KEY_ENV_VARS)
-    : params.startOptions;
+    ? withClearedEnvironmentVariables(isolatedStartOptions, CODEX_APP_SERVER_API_KEY_ENV_VARS)
+    : isolatedStartOptions;
+}
+
+export function resolveCodexAppServerHomeDir(agentDir: string): string {
+  return path.join(path.resolve(agentDir), CODEX_APP_SERVER_HOME_DIRNAME);
+}
+
+async function withAgentCodexHomeEnvironment(
+  startOptions: CodexAppServerStartOptions,
+  agentDir: string,
+): Promise<CodexAppServerStartOptions> {
+  const codexHome = startOptions.env?.[CODEX_HOME_ENV_VAR]?.trim()
+    ? startOptions.env[CODEX_HOME_ENV_VAR]
+    : resolveCodexAppServerHomeDir(agentDir);
+  await fs.mkdir(codexHome, { recursive: true });
+  const nextStartOptions: CodexAppServerStartOptions = {
+    ...startOptions,
+    env: {
+      ...startOptions.env,
+      [CODEX_HOME_ENV_VAR]: codexHome,
+    },
+  };
+  const clearEnv = withoutClearedCodexHome(startOptions.clearEnv);
+  if (clearEnv) {
+    nextStartOptions.clearEnv = clearEnv;
+  } else {
+    delete nextStartOptions.clearEnv;
+  }
+  return nextStartOptions;
+}
+
+function withoutClearedCodexHome(clearEnv: string[] | undefined): string[] | undefined {
+  if (!clearEnv) {
+    return undefined;
+  }
+  const filtered = clearEnv.filter((envVar) => envVar.trim().toUpperCase() !== CODEX_HOME_ENV_VAR);
+  return filtered.length === clearEnv.length ? clearEnv : filtered;
 }
 
 export async function applyCodexAppServerAuthProfile(params: {

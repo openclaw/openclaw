@@ -11,6 +11,7 @@ import {
   applyCodexAppServerAuthProfile,
   bridgeCodexAppServerStartOptions,
   refreshCodexAppServerAuthTokens,
+  resolveCodexAppServerHomeDir,
 } from "./auth-bridge.js";
 import type { CodexAppServerStartOptions } from "./config.js";
 
@@ -115,6 +116,58 @@ function createStartOptions(
 }
 
 describe("bridgeCodexAppServerStartOptions", () => {
+  it("sets an agent-owned CODEX_HOME for local app-server launches", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
+    const startOptions = createStartOptions();
+    try {
+      const codexHome = resolveCodexAppServerHomeDir(agentDir);
+
+      await expect(
+        bridgeCodexAppServerStartOptions({
+          startOptions,
+          agentDir,
+        }),
+      ).resolves.toEqual({
+        ...startOptions,
+        env: {
+          CODEX_HOME: codexHome,
+        },
+      });
+      await expect(fs.access(codexHome)).resolves.toBeUndefined();
+      expect(startOptions.env).toBeUndefined();
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves an explicit CODEX_HOME override", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
+    const codexHome = path.join(agentDir, "custom-codex-home");
+    const startOptions = createStartOptions({
+      env: { CODEX_HOME: codexHome, EXISTING: "1" },
+      clearEnv: ["CODEX_HOME", "FOO"],
+    });
+    try {
+      await expect(
+        bridgeCodexAppServerStartOptions({
+          startOptions,
+          agentDir,
+        }),
+      ).resolves.toEqual({
+        ...startOptions,
+        env: {
+          CODEX_HOME: codexHome,
+          EXISTING: "1",
+        },
+        clearEnv: ["FOO"],
+      });
+      await expect(fs.access(codexHome)).resolves.toBeUndefined();
+      expect(startOptions.clearEnv).toEqual(["CODEX_HOME", "FOO"]);
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+    }
+  });
+
   it("clears inherited API-key env vars when the default Codex profile is subscription auth", async () => {
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
     const startOptions = createStartOptions({
@@ -142,6 +195,10 @@ describe("bridgeCodexAppServerStartOptions", () => {
         }),
       ).resolves.toEqual({
         ...startOptions,
+        env: {
+          EXISTING: "1",
+          CODEX_HOME: resolveCodexAppServerHomeDir(agentDir),
+        },
         clearEnv: ["FOO", "CODEX_API_KEY", "OPENAI_API_KEY"],
       });
       expect(startOptions.clearEnv).toEqual(["FOO"]);
@@ -178,6 +235,9 @@ describe("bridgeCodexAppServerStartOptions", () => {
         }),
       ).resolves.toEqual({
         ...startOptions,
+        env: {
+          CODEX_HOME: resolveCodexAppServerHomeDir(agentDir),
+        },
         clearEnv: ["FOO", "CODEX_API_KEY", "OPENAI_API_KEY"],
       });
     } finally {
@@ -207,6 +267,9 @@ describe("bridgeCodexAppServerStartOptions", () => {
         }),
       ).resolves.toEqual({
         ...startOptions,
+        env: {
+          CODEX_HOME: resolveCodexAppServerHomeDir(agentDir),
+        },
         clearEnv: ["FOO", "CODEX_API_KEY", "OPENAI_API_KEY"],
       });
     } finally {
@@ -234,7 +297,12 @@ describe("bridgeCodexAppServerStartOptions", () => {
           agentDir,
           authProfileId: "openai-codex:work",
         }),
-      ).resolves.toBe(startOptions);
+      ).resolves.toEqual({
+        ...startOptions,
+        env: {
+          CODEX_HOME: resolveCodexAppServerHomeDir(agentDir),
+        },
+      });
     } finally {
       await fs.rm(agentDir, { recursive: true, force: true });
     }
