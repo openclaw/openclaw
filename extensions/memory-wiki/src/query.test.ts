@@ -266,6 +266,7 @@ describe("searchMemoryWiki", () => {
       }),
       "utf8",
     );
+    await compileMemoryWikiVault(config);
 
     const personResults = await searchMemoryWiki({
       config,
@@ -284,7 +285,7 @@ describe("searchMemoryWiki", () => {
 
     const routeResults = await searchMemoryWiki({
       config,
-      query: "Teams Azure",
+      query: "who should I ask about Teams?",
       mode: "route-question",
     });
     expect(routeResults[0]?.path).toBe("entities/brad.md");
