@@ -21,6 +21,11 @@ export const OPENCLAW_PROVIDER_INDEX = {
       docs: "/providers/moonshot",
       categories: ["cloud", "llm"],
       previewCatalog: {
+        aliases: {
+          moonshotai: {
+            provider: "moonshot",
+          },
+        },
         models: [
           {
             id: "kimi-k2.6",

@@ -49,4 +49,12 @@ describe("moonshot provider catalog", () => {
     });
     expect(customProvider.models?.[0]?.compat?.supportsUsageInStreaming).toBeUndefined();
   });
+
+  it("moonshotai alias resolves to moonshot provider (#73876)", () => {
+    // Verify moonshotai alias exists in plugin manifest
+    const manifest = require("./openclaw.plugin.json");
+    expect(manifest.modelCatalog?.aliases?.moonshotai).toEqual({
+      provider: "moonshot",
+    });
+  });
 });
