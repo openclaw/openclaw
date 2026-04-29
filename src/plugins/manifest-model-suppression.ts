@@ -103,6 +103,52 @@ export function clearManifestModelSuppressionCacheForTest(): void {
   // Manifest suppressions are read fresh. Keep the test hook as a no-op.
 }
 
+export function createManifestBuiltInModelSuppressionResolver(params: {
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+}) {
+  const suppressions = listManifestModelCatalogSuppressions({
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env: params.env ?? process.env,
+  });
+
+  return (input: {
+    provider?: string | null;
+    id?: string | null;
+    baseUrl?: string | null;
+  }) => {
+    const provider = normalizeLowercaseStringOrEmpty(input.provider);
+    const modelId = normalizeLowercaseStringOrEmpty(input.id);
+    if (!provider || !modelId) {
+      return undefined;
+    }
+    const mergeKey = buildModelCatalogMergeKey(provider, modelId);
+    const suppression = suppressions.find(
+      (entry) =>
+        entry.mergeKey === mergeKey &&
+        manifestSuppressionMatchesConditions({
+          suppression: entry,
+          provider,
+          baseUrl: input.baseUrl,
+          config: params.config,
+        }),
+    );
+    if (!suppression) {
+      return undefined;
+    }
+    return {
+      suppress: true,
+      errorMessage: buildManifestSuppressionError({
+        provider,
+        modelId,
+        reason: suppression.reason,
+      }),
+    };
+  };
+}
+
 export function resolveManifestBuiltInModelSuppression(params: {
   provider?: string | null;
   id?: string | null;
@@ -111,35 +157,14 @@ export function resolveManifestBuiltInModelSuppression(params: {
   env?: NodeJS.ProcessEnv;
   baseUrl?: string | null;
 }) {
-  const provider = normalizeLowercaseStringOrEmpty(params.provider);
-  const modelId = normalizeLowercaseStringOrEmpty(params.id);
-  if (!provider || !modelId) {
-    return undefined;
-  }
-  const mergeKey = buildModelCatalogMergeKey(provider, modelId);
-  const suppression = listManifestModelCatalogSuppressions({
+  const resolver = createManifestBuiltInModelSuppressionResolver({
     config: params.config,
     workspaceDir: params.workspaceDir,
-    env: params.env ?? process.env,
-  }).find(
-    (entry) =>
-      entry.mergeKey === mergeKey &&
-      manifestSuppressionMatchesConditions({
-        suppression: entry,
-        provider,
-        baseUrl: params.baseUrl,
-        config: params.config,
-      }),
-  );
-  if (!suppression) {
-    return undefined;
-  }
-  return {
-    suppress: true,
-    errorMessage: buildManifestSuppressionError({
-      provider,
-      modelId,
-      reason: suppression.reason,
-    }),
-  };
+    env: params.env,
+  });
+  return resolver({
+    provider: params.provider,
+    id: params.id,
+    baseUrl: params.baseUrl,
+  });
 }
