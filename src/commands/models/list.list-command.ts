@@ -111,6 +111,7 @@ export async function modelsListCommand(
       providerFilter,
       normalizeModels: opts?.normalizeModels ?? Boolean(providerFilter),
       loadAvailability: opts?.loadAvailability,
+      workspaceDir,
     });
     modelRegistry = loaded.registry;
     registryModels = loaded.models;
@@ -123,7 +124,10 @@ export async function modelsListCommand(
       await loadRegistryState();
     } else if (!opts.all && opts.local) {
       const { loadConfiguredListModelRegistry } = await loadRegistryLoadModule();
-      const loaded = loadConfiguredListModelRegistry(cfg, entries, { providerFilter });
+      const loaded = loadConfiguredListModelRegistry(cfg, entries, {
+        providerFilter,
+        workspaceDir,
+      });
       modelRegistry = loaded.registry;
       discoveredKeys = loaded.discoveredKeys;
       availableKeys = loaded.availableKeys;
