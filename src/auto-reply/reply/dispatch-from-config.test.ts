@@ -3964,6 +3964,8 @@ describe("before_dispatch hook", () => {
 describe("sendPolicy deny — suppress delivery, not processing (#53328)", () => {
   beforeEach(() => {
     resetInboundDedupe();
+    threadInfoMocks.parseSessionThreadInfo.mockReset();
+    threadInfoMocks.parseSessionThreadInfo.mockImplementation(parseGenericThreadSessionInfo);
     sessionBindingMocks.resolveByConversation.mockReset();
     sessionBindingMocks.resolveByConversation.mockReturnValue(null);
     sessionBindingMocks.touch.mockReset();
@@ -4381,6 +4383,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
   it("defaults group/channel turns to message-tool-only source delivery", async () => {
     setNoAbort();
     const dispatcher = createDispatcher();
+    const onSuppressedSourceReply = vi.fn();
     const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
       expect(opts?.sourceReplyDeliveryMode).toBe("message_tool_only");
       expect(opts?.suppressTyping).toBe(false);
@@ -4395,11 +4398,142 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       cfg: emptyConfig,
       dispatcher,
       replyResolver,
+      replyOptions: {
+        onSuppressedSourceReply,
+      },
     });
 
     expect(replyResolver).toHaveBeenCalledTimes(1);
     expect(result.queuedFinal).toBe(false);
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    expect(onSuppressedSourceReply).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "final reply" }),
+      {
+        sourceReplyDeliveryMode: "message_tool_only",
+        reason: "sourceReplyDeliveryMode: message_tool_only",
+      },
+    );
+  });
+
+  it("delivers suppressed block replies through the source fallback", async () => {
+    setNoAbort();
+    const dispatcher = createDispatcher();
+    const onSuppressedSourceReply = vi.fn();
+    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      await opts?.onBlockReply?.({ text: "streamed topic reply" });
+      return undefined;
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        ChatType: "group",
+        IsForum: true,
+        MessageThreadId: 24,
+        SessionKey: "test:telegram:topic:24",
+      }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+      replyOptions: {
+        onSuppressedSourceReply,
+      },
+    });
+
+    expect(replyResolver).toHaveBeenCalledTimes(1);
+    expect(result.queuedFinal).toBe(false);
+    expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    expect(onSuppressedSourceReply).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "streamed topic reply" }),
+      {
+        sourceReplyDeliveryMode: "message_tool_only",
+        reason: "sourceReplyDeliveryMode: message_tool_only",
+      },
+    );
+  });
+
+  it("delivers verbose progress through the suppressed source fallback", async () => {
+    setNoAbort();
+    const cfg = {
+      ...emptyConfig,
+      agents: {
+        defaults: {
+          verboseDefault: "on",
+        },
+      },
+    } satisfies OpenClawConfig;
+    const dispatcher = createDispatcher();
+    const onSuppressedSourceReply = vi.fn();
+    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      await opts?.onPlanUpdate?.({
+        phase: "update",
+        explanation: "Inspect code, patch it, run tests.",
+        steps: ["Inspect code", "Patch code"],
+      });
+      await opts?.onApprovalEvent?.({
+        phase: "requested",
+        status: "pending",
+        command: "pnpm test",
+      });
+      await opts?.onPatchSummary?.({
+        phase: "end",
+        summary: "1 modified",
+      });
+      await opts?.onToolResult?.({ text: "tool summary" });
+      return undefined;
+    });
+
+    await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Provider: "telegram",
+        ChatType: "group",
+        IsForum: true,
+        MessageThreadId: 26866,
+        SessionKey: "test:telegram:topic:26866",
+      }),
+      cfg,
+      dispatcher,
+      replyResolver,
+      replyOptions: {
+        onSuppressedSourceReply,
+      },
+    });
+
+    expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
+    expect(onSuppressedSourceReply).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        text: "Inspect code, patch it, run tests.\n\n1. Inspect code\n2. Patch code",
+      }),
+      {
+        sourceReplyDeliveryMode: "message_tool_only",
+        reason: "sourceReplyDeliveryMode: message_tool_only",
+      },
+    );
+    expect(onSuppressedSourceReply).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ text: "Working: awaiting approval: pnpm test" }),
+      {
+        sourceReplyDeliveryMode: "message_tool_only",
+        reason: "sourceReplyDeliveryMode: message_tool_only",
+      },
+    );
+    expect(onSuppressedSourceReply).toHaveBeenNthCalledWith(
+      3,
+      expect.objectContaining({ text: "Working: 1 modified" }),
+      {
+        sourceReplyDeliveryMode: "message_tool_only",
+        reason: "sourceReplyDeliveryMode: message_tool_only",
+      },
+    );
+    expect(onSuppressedSourceReply).toHaveBeenNthCalledWith(
+      4,
+      expect.objectContaining({ text: "tool summary" }),
+      {
+        sourceReplyDeliveryMode: "message_tool_only",
+        reason: "sourceReplyDeliveryMode: message_tool_only",
+      },
+    );
   });
 
   it("falls back to automatic group/channel delivery when the message tool is unavailable", async () => {

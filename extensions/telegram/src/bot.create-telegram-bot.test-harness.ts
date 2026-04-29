@@ -22,6 +22,8 @@ type DispatchReplyWithBufferedBlockDispatcherResult = Awaited<
   ReturnType<DispatchReplyWithBufferedBlockDispatcherFn>
 >;
 type DispatchReplyHarnessParams = Parameters<DispatchReplyWithBufferedBlockDispatcherFn>[0];
+type ResolveDirectStatusReplyForSessionFn =
+  typeof import("openclaw/plugin-sdk/command-status-runtime").resolveDirectStatusReplyForSession;
 type ReplyPayloadLike = {
   text?: string;
   mediaUrl?: string;
@@ -160,11 +162,18 @@ const dispatchReplyHoisted = vi.hoisted(() => ({
       }),
   ),
 }));
+const commandStatusHoisted = vi.hoisted(() => ({
+  resolveDirectStatusReplyForSession: vi.fn<ResolveDirectStatusReplyForSessionFn>(async () => ({
+    text: "status reply",
+  })),
+}));
 export const listSkillCommandsForAgents = skillCommandListHoisted.listSkillCommandsForAgents;
 const buildModelsProviderData = modelProviderDataHoisted.buildModelsProviderData;
 export const replySpy = replySpyHoisted.replySpy;
 export const dispatchReplyWithBufferedBlockDispatcher =
   dispatchReplyHoisted.dispatchReplyWithBufferedBlockDispatcher;
+export const resolveDirectStatusReplyForSession =
+  commandStatusHoisted.resolveDirectStatusReplyForSession;
 const menuSyncHoisted = vi.hoisted(() => ({
   syncTelegramMenuCommands: vi.fn(async ({ bot, commandsToRegister }) => {
     await bot.api.setMyCommands(commandsToRegister);
@@ -255,6 +264,12 @@ vi.doMock("./sent-message-cache.js", () => ({
   wasSentByBot: sentMessageCacheHoisted.wasSentByBot,
   recordSentMessage: vi.fn(),
   clearSentMessageCache: vi.fn(),
+}));
+
+vi.mock("openclaw/plugin-sdk/command-status-runtime", () => ({
+  resolveDirectStatusReplyForSession: (
+    params: Parameters<ResolveDirectStatusReplyForSessionFn>[0],
+  ) => commandStatusHoisted.resolveDirectStatusReplyForSession(params),
 }));
 
 // All spy variables used inside vi.mock("grammy", ...) must be created via
@@ -485,6 +500,8 @@ beforeEach(() => {
         return await replySpy(dispatchParams.ctx, dispatchParams.replyOptions);
       }),
   );
+  resolveDirectStatusReplyForSession.mockReset();
+  resolveDirectStatusReplyForSession.mockResolvedValue({ text: "status reply" });
   syncTelegramMenuCommands.mockReset();
   syncTelegramMenuCommands.mockImplementation(async ({ bot, commandsToRegister }) => {
     await bot.api.setMyCommands(commandsToRegister);

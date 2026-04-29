@@ -5,7 +5,10 @@ import {
   logTypingFailure,
   removeAckReactionAfterReply,
 } from "openclaw/plugin-sdk/channel-feedback";
-import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
+import {
+  createChannelReplyPipeline,
+  resolveChannelSourceReplyDeliveryMode,
+} from "openclaw/plugin-sdk/channel-reply-pipeline";
 import {
   resolveChannelStreamingBlockEnabled,
   resolveChannelStreamingPreviewToolProgress,
@@ -820,6 +823,11 @@ export const dispatchTelegramMessage = async ({
       void statusReactionController.setThinking();
     }
 
+    const sourceReplyDeliveryMode = resolveChannelSourceReplyDeliveryMode({
+      cfg,
+      ctx: ctxPayload,
+    });
+
     const { onModelSelected, ...replyPipeline } = (
       telegramDeps.createChannelReplyPipeline ?? createChannelReplyPipeline
     )({
@@ -1046,7 +1054,14 @@ export const dispatchTelegramMessage = async ({
                 },
                 replyOptions: {
                   skillFilter,
+                  sourceReplyDeliveryMode,
                   disableBlockStreaming,
+                  onSuppressedSourceReply: async (payload) => {
+                    if (!resolveSendableOutboundReplyParts(payload).hasContent) {
+                      return;
+                    }
+                    await sendPayload(payload);
+                  },
                   onPartialReply:
                     answerLane.stream || reasoningLane.stream
                       ? (payload) =>

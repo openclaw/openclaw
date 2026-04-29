@@ -27,6 +27,7 @@ const {
   middlewareUseSpy,
   onSpy,
   replySpy,
+  resolveDirectStatusReplyForSession,
   resolveExecApprovalSpy,
   sendAnimationSpy,
   sendChatActionSpy,
@@ -2879,7 +2880,7 @@ describe("createTelegramBot", () => {
     replySpy.mockResolvedValue({ text: "response" });
 
     loadConfig.mockReturnValue({
-      commands: { native: true },
+      commands: { native: true, ownerAllowFrom: ["telegram:12345"] },
       channels: {
         telegram: {
           dmPolicy: "open",
@@ -2892,19 +2893,34 @@ describe("createTelegramBot", () => {
 
     createTelegramBot({ token: "tok" });
     expect(commandSpy).toHaveBeenCalled();
-    const handler = commandSpy.mock.calls[0][1] as (ctx: Record<string, unknown>) => Promise<void>;
+    const handler = commandSpy.mock.calls.find((call) => call[0] === "status")?.[1] as
+      | ((ctx: Record<string, unknown>) => Promise<void>)
+      | undefined;
+    if (!handler) {
+      throw new Error("status command handler missing");
+    }
 
     await handler({
       ...makeForumGroupMessageCtx({ threadId: 99, text: "/status" }),
       match: "",
     });
 
+    expect(resolveDirectStatusReplyForSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "telegram",
+        isGroup: true,
+        senderIsOwner: true,
+        sessionKey: expect.stringContaining("telegram:group:-1001234567890:topic:99"),
+      }),
+    );
+    expect(dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
     expect(sendMessageSpy).toHaveBeenCalledWith(
       "-1001234567890",
-      expect.any(String),
+      expect.stringContaining("status reply"),
       expect.objectContaining({ message_thread_id: 99, reply_to_message_id: 42 }),
     );
   });
+
   it("reloads native command routing bindings between invocations without recreating the bot", async () => {
     commandSpy.mockClear();
     replySpy.mockClear();
@@ -2930,32 +2946,32 @@ describe("createTelegramBot", () => {
     }));
 
     createTelegramBot({ token: "tok" });
-    const statusHandler = commandSpy.mock.calls.find((call) => call[0] === "status")?.[1] as
+    const fastHandler = commandSpy.mock.calls.find((call) => call[0] === "fast")?.[1] as
       | ((ctx: Record<string, unknown>) => Promise<void>)
       | undefined;
-    if (!statusHandler) {
-      throw new Error("status command handler missing");
+    if (!fastHandler) {
+      throw new Error("fast command handler missing");
     }
 
-    const invokeStatus = async (messageId: number) => {
-      await statusHandler({
+    const invokeFastStatus = async (messageId: number) => {
+      await fastHandler({
         message: {
           chat: { id: 1234, type: "private" },
           from: { id: 9, username: "ada_bot" },
-          text: "/status",
+          text: "/fast status",
           date: 1736380800 + messageId,
           message_id: messageId,
         },
-        match: "",
+        match: "status",
       });
     };
 
-    await invokeStatus(401);
+    await invokeFastStatus(401);
     expect(replySpy).toHaveBeenCalledTimes(1);
     expect(replySpy.mock.calls[0]?.[0].SessionKey).toContain("agent:agent-a:");
 
     boundAgentId = "agent-b";
-    await invokeStatus(402);
+    await invokeFastStatus(402);
     expect(replySpy).toHaveBeenCalledTimes(2);
     expect(replySpy.mock.calls[1]?.[0].SessionKey).toContain("agent:agent-b:");
   });

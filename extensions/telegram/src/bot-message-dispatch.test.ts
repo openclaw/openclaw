@@ -447,6 +447,104 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(draftStream.clear).toHaveBeenCalledTimes(1);
   });
 
+  it("passes group source reply delivery mode to the reply runtime", async () => {
+    const createGroupContext = () =>
+      createContext({
+        isGroup: true,
+        primaryCtx: {
+          message: { chat: { id: -100123, type: "supergroup" } },
+        } as TelegramMessageContext["primaryCtx"],
+        msg: {
+          chat: { id: -100123, type: "supergroup" },
+          message_id: 456,
+          message_thread_id: 777,
+        } as TelegramMessageContext["msg"],
+        chatId: -100123,
+        resolvedThreadId: 777,
+        replyThreadId: 777,
+        threadSpec: { id: 777, scope: "forum" },
+        ctxPayload: {
+          ChatType: "group",
+          SessionKey: "agent:main:telegram:group:-100123:777",
+        } as unknown as TelegramMessageContext["ctxPayload"],
+      });
+
+    await dispatchWithContext({ context: createGroupContext() });
+
+    expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replyOptions: expect.objectContaining({
+          sourceReplyDeliveryMode: "message_tool_only",
+        }),
+      }),
+    );
+
+    dispatchReplyWithBufferedBlockDispatcher.mockClear();
+
+    await dispatchWithContext({
+      context: createGroupContext(),
+      cfg: {
+        messages: {
+          groupChat: {
+            visibleReplies: "automatic",
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replyOptions: expect.objectContaining({
+          sourceReplyDeliveryMode: "automatic",
+        }),
+      }),
+    );
+  });
+
+  it("delivers suppressed group final replies as a Telegram fallback", async () => {
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      await replyOptions?.onSuppressedSourceReply?.(
+        { text: "visible fallback" },
+        {
+          sourceReplyDeliveryMode: "message_tool_only",
+          reason: "sourceReplyDeliveryMode: message_tool_only",
+        },
+      );
+      return { queuedFinal: false, counts: { block: 0, final: 0, tool: 0 } };
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({
+      context: createContext({
+        isGroup: true,
+        primaryCtx: {
+          message: { chat: { id: -100123, type: "supergroup" } },
+        } as TelegramMessageContext["primaryCtx"],
+        msg: {
+          chat: { id: -100123, type: "supergroup" },
+          message_id: 456,
+          message_thread_id: 777,
+        } as TelegramMessageContext["msg"],
+        chatId: -100123,
+        threadSpec: { id: 777, scope: "forum" },
+        ctxPayload: {
+          ChatType: "group",
+          MessageSid: "456",
+          SessionKey: "agent:main:telegram:group:-100123:topic:777",
+        } as unknown as TelegramMessageContext["ctxPayload"],
+      }),
+    });
+
+    expect(deliverReplies).toHaveBeenCalledTimes(1);
+    expect(deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        chatId: "-100123",
+        replies: [expect.objectContaining({ text: "visible fallback" })],
+        thread: { id: 777, scope: "forum" },
+      }),
+    );
+  });
+
   it("skips answer draft preview for same-chat selected quotes", async () => {
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
       await dispatcherOptions.deliver({ text: "Hello", replyToId: "1001" }, { kind: "final" });

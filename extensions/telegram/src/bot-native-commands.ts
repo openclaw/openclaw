@@ -17,6 +17,7 @@ import {
   resolveStoredModelOverride,
   type CommandArgs,
 } from "openclaw/plugin-sdk/command-auth-native";
+import { resolveDirectStatusReplyForSession } from "openclaw/plugin-sdk/command-status-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import type { ChannelGroupPolicy } from "openclaw/plugin-sdk/config-types";
 import type {
@@ -209,6 +210,27 @@ function isEditableTelegramProgressResult(result: TelegramNativeReplyPayload): b
     !result.btw &&
     telegramData?.pin !== true,
   );
+}
+
+function resolveTelegramNativeStatusDefaultGroupActivation(params: {
+  isGroup: boolean;
+  groupConfig?: TelegramGroupConfig | TelegramDirectConfig;
+  topicConfig?: TelegramTopicConfig;
+}): () => "always" | "mention" {
+  return () => {
+    if (!params.isGroup) {
+      return "always";
+    }
+    const requireMention =
+      typeof params.topicConfig?.requireMention === "boolean"
+        ? params.topicConfig.requireMention
+        : params.groupConfig &&
+            "requireMention" in params.groupConfig &&
+            typeof params.groupConfig.requireMention === "boolean"
+          ? params.groupConfig.requireMention
+          : true;
+    return requireMention ? "mention" : "always";
+  };
 }
 
 async function cleanupTelegramProgressPlaceholder(params: {
@@ -837,6 +859,7 @@ export const registerTelegramNativeCommands = ({
           groupConfig,
           topicConfig,
           commandAuthorized,
+          senderIsOwner,
         } = auth;
         const runtimeContext = await resolveCommandRuntimeContext({
           msg,
@@ -977,6 +1000,45 @@ export const registerTelegramNativeCommands = ({
           chunkMode,
           linkPreview: runtimeTelegramCfg.linkPreview,
         });
+        if (normalizedCommandName === "status") {
+          const { deliverReplies } = await loadTelegramNativeCommandDeliveryRuntime();
+          const statusReply = await resolveDirectStatusReplyForSession({
+            cfg: executionCfg,
+            sessionKey: commandTargetSessionKey,
+            channel: "telegram",
+            senderId: senderId || undefined,
+            senderIsOwner,
+            isAuthorizedSender: commandAuthorized,
+            isGroup,
+            defaultGroupActivation: resolveTelegramNativeStatusDefaultGroupActivation({
+              isGroup,
+              groupConfig,
+              topicConfig,
+            }),
+          });
+          const replyToCommand = (
+            payload: TelegramNativeReplyPayload,
+          ): TelegramNativeReplyPayload =>
+            payload.replyToId
+              ? payload
+              : {
+                  ...payload,
+                  replyToId: String(msg.message_id),
+                };
+          const result = statusReply
+            ? await deliverReplies({
+                replies: [replyToCommand(statusReply)],
+                ...deliveryBaseOptions,
+              })
+            : { delivered: false };
+          if (!result.delivered) {
+            await deliverReplies({
+              replies: [{ text: "Status unavailable.", replyToId: String(msg.message_id) }],
+              ...deliveryBaseOptions,
+            });
+          }
+          return;
+        }
         const conversationLabel = isGroup
           ? msg.chat.title
             ? `${msg.chat.title} id:${chatId}`

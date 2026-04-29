@@ -637,6 +637,7 @@ export async function dispatchReplyFromConfig(
   });
   const {
     sourceReplyDeliveryMode,
+    sendPolicyDenied,
     suppressAutomaticSourceDelivery,
     suppressDelivery,
     deliverySuppressionReason,
@@ -952,9 +953,6 @@ export async function dispatchReplyFromConfig(
       return parts.join("\n\n").trim() || "Planning next steps.";
     };
     const maybeSendWorkingStatus = async (label: string): Promise<void> => {
-      if (suppressDelivery) {
-        return;
-      }
       const normalizedLabel = normalizeWorkingLabel(label);
       if (
         !shouldEmitVerboseProgress() ||
@@ -970,6 +968,10 @@ export async function dispatchReplyFromConfig(
       const payload: ReplyPayload = {
         text: `Working: ${normalizedLabel}`,
       };
+      if (suppressDelivery) {
+        await deliverSuppressedSourceReply(payload);
+        return;
+      }
       if (shouldRouteToOriginating) {
         await sendPayloadAsync(payload, undefined, false);
         return;
@@ -981,12 +983,16 @@ export async function dispatchReplyFromConfig(
       explanation?: string;
       steps?: string[];
     }): Promise<void> => {
-      if (suppressDelivery || !shouldEmitVerboseProgress() || !shouldSendVerboseProgressMessages) {
+      if (!shouldEmitVerboseProgress() || !shouldSendVerboseProgressMessages) {
         return;
       }
       const replyPayload: ReplyPayload = {
         text: formatPlanUpdateText(payload),
       };
+      if (suppressDelivery) {
+        await deliverSuppressedSourceReply(replyPayload);
+        return;
+      }
       if (shouldRouteToOriginating) {
         await sendPayloadAsync(replyPayload, undefined, false);
         return;
@@ -1073,6 +1079,19 @@ export async function dispatchReplyFromConfig(
       }
       return { ...payload, text: undefined };
     };
+    const deliverSuppressedSourceReply = async (payload: ReplyPayload): Promise<boolean> => {
+      if (!suppressAutomaticSourceDelivery || sendPolicyDenied || payload.isReasoning === true) {
+        return false;
+      }
+      if (!resolveSendableOutboundReplyParts(payload).hasContent) {
+        return false;
+      }
+      await params.replyOptions?.onSuppressedSourceReply?.(payload, {
+        sourceReplyDeliveryMode,
+        reason: deliverySuppressionReason,
+      });
+      return true;
+    };
     const typing = resolveRunTypingPolicy({
       requestedPolicy: params.replyOptions?.typingPolicy,
       suppressTyping: sourceReplyPolicy.suppressTyping,
@@ -1130,9 +1149,6 @@ export async function dispatchReplyFromConfig(
             if (!suppressAutomaticSourceDelivery) {
               await onToolResultFromReplyOptions?.(payload);
             }
-            if (suppressDelivery) {
-              return;
-            }
             const ttsPayload = await maybeApplyTtsToReplyPayload({
               payload,
               cfg,
@@ -1161,6 +1177,10 @@ export async function dispatchReplyFromConfig(
               if (!hasMedia && !hasExecApproval && deliveryPayload.isError !== true) {
                 return;
               }
+            }
+            if (suppressDelivery) {
+              await deliverSuppressedSourceReply(deliveryPayload);
+              return;
             }
             if (shouldRouteToOriginating) {
               await sendPayloadAsync(deliveryPayload, undefined, false);
@@ -1221,9 +1241,6 @@ export async function dispatchReplyFromConfig(
             ) {
               markInboundDedupeReplayUnsafe();
             }
-            if (suppressDelivery) {
-              return;
-            }
             // Suppress reasoning payloads — channels using this generic dispatch
             // path (WhatsApp, web, etc.) do not have a dedicated reasoning lane.
             // Telegram has its own dispatch path that handles reasoning splitting.
@@ -1254,6 +1271,10 @@ export async function dispatchReplyFromConfig(
                   })()
                 : payload;
             if (!resolveSendableOutboundReplyParts(visiblePayload).hasContent) {
+              return;
+            }
+            if (suppressDelivery) {
+              await deliverSuppressedSourceReply(visiblePayload);
               return;
             }
             // Channels that keep a live draft preview may need to rotate their
@@ -1340,6 +1361,11 @@ export async function dispatchReplyFromConfig(
 
     let queuedFinal = false;
     let routedFinalCount = 0;
+    if (suppressAutomaticSourceDelivery && !sendPolicyDenied) {
+      for (const reply of replies) {
+        await deliverSuppressedSourceReply(reply);
+      }
+    }
     if (!suppressDelivery) {
       for (const reply of replies) {
         // Suppress reasoning payloads from channel delivery — channels using this

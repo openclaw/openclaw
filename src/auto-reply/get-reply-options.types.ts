@@ -151,6 +151,18 @@ export type GetReplyOptions = {
    * output private; visible channel output must come from the message tool.
    */
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  /**
+   * Called with final reply payloads that automatic source delivery suppressed.
+   * Channels can use this as a last-chance compatibility fallback after the
+   * agent ignored message-tool-only prompt guidance.
+   */
+  onSuppressedSourceReply?: (
+    payload: ReplyPayload,
+    context: {
+      sourceReplyDeliveryMode: SourceReplyDeliveryMode;
+      reason: string;
+    },
+  ) => Promise<void> | void;
   disableBlockStreaming?: boolean;
   /** Timeout for block reply delivery (ms). */
   blockReplyTimeoutMs?: number;
