@@ -3429,7 +3429,7 @@ describe("ensureBundledPluginRuntimeDeps", () => {
   });
 });
 
-describe("MIRRORED_CORE_RUNTIME_DEP_NAMES drift guard", () => {
+describe("mirrored root runtime dependency drift guard", () => {
   // Intentionally not mirrored at runtime: build-only / type-only / TUI-only
   // tooling and packages that resolve transitively through other mirrored deps.
   // If you change this set, document why in the comment beside the entry.
@@ -3488,6 +3488,18 @@ describe("MIRRORED_CORE_RUNTIME_DEP_NAMES drift guard", () => {
       out.add(name);
     }
     return out;
+  }
+
+  function readMirroredRootRuntimeDeps(repoRoot: string): Set<string> {
+    const parsed = JSON.parse(fs.readFileSync(path.join(repoRoot, "package.json"), "utf8")) as {
+      openclaw?: {
+        bundle?: {
+          mirroredRootRuntimeDependencies?: unknown;
+        };
+      };
+    };
+    const deps = parsed.openclaw?.bundle?.mirroredRootRuntimeDependencies;
+    return new Set(Array.isArray(deps) ? deps.filter((dep) => typeof dep === "string") : []);
   }
 
   function collectExtensionOwnedDeps(repoRoot: string): Set<string> {
@@ -3574,20 +3586,7 @@ describe("MIRRORED_CORE_RUNTIME_DEP_NAMES drift guard", () => {
     const repoRoot = locateRepoRoot();
     const rootDeps = readPackageJsonDeps(path.join(repoRoot, "package.json"));
     const extensionDeps = collectExtensionOwnedDeps(repoRoot);
-    const mirroredCore = new Set<string>([
-      "@agentclientprotocol/sdk",
-      "@lydell/node-pty",
-      "croner",
-      "dotenv",
-      "jiti",
-      "json5",
-      "jszip",
-      "markdown-it",
-      "semver",
-      "tar",
-      "tslog",
-      "web-push",
-    ]);
+    const mirroredCore = readMirroredRootRuntimeDeps(repoRoot);
     const nodeBuiltins = new Set<string>(Module.builtinModules);
 
     const violations = new Map<string, string>();
@@ -3637,9 +3636,9 @@ describe("MIRRORED_CORE_RUNTIME_DEP_NAMES drift guard", () => {
       throw new Error(
         [
           "Bare imports found in src/ that are root-package runtime deps but are neither",
-          "in MIRRORED_CORE_RUNTIME_DEP_NAMES nor declared by any extension's package.json.",
+          "in package.json openclaw.bundle.mirroredRootRuntimeDependencies nor declared by any extension's package.json.",
           "These will be missing from the runtime-deps mirror at gateway start and Node",
-          "will fail to resolve them. Either add the package to MIRRORED_CORE_RUNTIME_DEP_NAMES,",
+          "will fail to resolve them. Either add the package to openclaw.bundle.mirroredRootRuntimeDependencies,",
           "declare it under an owning extension's dependencies, or add it to",
           "KNOWN_UNMIRRORED_BARE_IMPORTS in this test with a comment explaining why.",
           "",

@@ -1732,9 +1732,18 @@
   "openclaw": {
     "bundle": {
       "mirroredRootRuntimeDependencies": [
+        "@agentclientprotocol/sdk",
+        "@lydell/node-pty",
+        "croner",
+        "dotenv",
+        "jiti",
         "json5",
+        "jszip",
+        "markdown-it",
         "semver",
-        "tslog"
+        "tar",
+        "tslog",
+        "web-push"
       ]
     }
   }
