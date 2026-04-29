@@ -56,6 +56,16 @@ class TestGatewayPlugin extends GatewayPlugin {
   }
 }
 
+type GatewaySessionState = {
+  sessionId: string | null;
+  resumeGatewayUrl: string | null;
+  sequence: number | null;
+};
+
+function gatewaySessionState(gateway: GatewayPlugin): GatewaySessionState {
+  return gateway as unknown as GatewaySessionState;
+}
+
 describe("GatewayPlugin", () => {
   afterEach(() => {
     vi.useRealTimers();
@@ -263,20 +273,71 @@ describe("GatewayPlugin", () => {
     expect(gateway.sockets).toHaveLength(2);
   });
 
-  it("re-identifies after non-resumable gateway closes", async () => {
+  it.each([GatewayCloseCodes.InvalidSeq, GatewayCloseCodes.AlreadyAuthenticated])(
+    "re-identifies after non-resumable gateway close %s",
+    async (closeCode) => {
+      vi.useFakeTimers();
+      const gateway = new TestGatewayPlugin({
+        autoInteractions: false,
+        url: "wss://gateway.example.test",
+      });
+
+      gateway.connect(false);
+      gateway.sockets[0]?.emit("open");
+      gateway.sockets[0]?.emit("close", closeCode);
+      await vi.advanceTimersByTimeAsync(2_000);
+
+      expect(gateway.connectCalls).toEqual([false, false]);
+      expect(gateway.sockets).toHaveLength(2);
+    },
+  );
+
+  it("clears resume state after invalid session false", async () => {
     vi.useFakeTimers();
     const gateway = new TestGatewayPlugin({
       autoInteractions: false,
       url: "wss://gateway.example.test",
     });
+    const sessionState = gatewaySessionState(gateway);
+    sessionState.sessionId = "session1";
+    sessionState.resumeGatewayUrl = "wss://resume.example.test";
+    sessionState.sequence = 123;
 
     gateway.connect(false);
     gateway.sockets[0]?.emit("open");
-    gateway.sockets[0]?.emit("close", GatewayCloseCodes.InvalidSeq);
+    (
+      gateway as unknown as {
+        handlePayload(payload: { op: number; d: unknown }, resume: boolean): void;
+      }
+    ).handlePayload({ op: GatewayOpcodes.InvalidSession, d: false }, true);
     await vi.advanceTimersByTimeAsync(2_000);
 
     expect(gateway.connectCalls).toEqual([false, false]);
-    expect(gateway.sockets).toHaveLength(2);
+    expect(sessionState.sessionId).toBeNull();
+    expect(sessionState.resumeGatewayUrl).toBeNull();
+    expect(sessionState.sequence).toBeNull();
+  });
+
+  it("includes close code details when reconnect attempts are exhausted", async () => {
+    vi.useFakeTimers();
+    const gateway = new TestGatewayPlugin({
+      autoInteractions: false,
+      reconnect: { maxAttempts: 0 },
+      url: "wss://gateway.example.test",
+    });
+    const errorSpy = vi.fn();
+    gateway.emitter.on("error", errorSpy);
+
+    gateway.connect(false);
+    gateway.sockets[0]?.emit("open");
+    gateway.sockets[0]?.emit("close", 1006);
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    expect(errorSpy).toHaveBeenCalledWith(
+      new Error("Max reconnect attempts (0) reached after close code 1006"),
+    );
+    expect(gateway.connectCalls).toEqual([false]);
+    expect(gateway.sockets).toHaveLength(1);
   });
 
   it("does not reconnect after fatal gateway closes", async () => {

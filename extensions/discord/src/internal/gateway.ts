@@ -85,7 +85,8 @@ function canResumeAfterGatewayClose(code: GatewayCloseCodes): boolean {
   return (
     code !== GatewayCloseCodes.NotAuthenticated &&
     code !== GatewayCloseCodes.InvalidSeq &&
-    code !== GatewayCloseCodes.SessionTimedOut
+    code !== GatewayCloseCodes.SessionTimedOut &&
+    code !== GatewayCloseCodes.AlreadyAuthenticated
   );
 }
 
@@ -232,7 +233,11 @@ export class GatewayPlugin extends Plugin {
         this.emitter.emit("error", new Error(`Fatal gateway close code: ${code}`));
         return;
       }
-      this.scheduleReconnect(canResumeAfterGatewayClose(closeCode));
+      const canResume = canResumeAfterGatewayClose(closeCode);
+      if (!canResume) {
+        this.resetSessionState();
+      }
+      this.scheduleReconnect(canResume, closeCode);
     });
     socket.on("error", (error) => {
       if (socket !== this.ws) {
@@ -282,6 +287,9 @@ export class GatewayPlugin extends Plugin {
         });
         break;
       case GatewayOpcodes.InvalidSession:
+        if (!payload.d) {
+          this.resetSessionState();
+        }
         this.scheduleReconnect(payload.d);
         break;
       case GatewayOpcodes.Reconnect:
@@ -382,7 +390,13 @@ export class GatewayPlugin extends Plugin {
     }
   }
 
-  private scheduleReconnect(resume: boolean): void {
+  private resetSessionState(): void {
+    this.sessionId = null;
+    this.resumeGatewayUrl = null;
+    this.sequence = null;
+  }
+
+  private scheduleReconnect(resume: boolean, closeCode?: number): void {
     if (!this.shouldReconnect) {
       return;
     }
@@ -395,7 +409,13 @@ export class GatewayPlugin extends Plugin {
     this.outboundLimiter.clear();
     this.reconnectAttempts += 1;
     if (this.reconnectAttempts > (this.options.reconnect?.maxAttempts ?? 50)) {
-      this.emitter.emit("error", new Error("Max reconnect attempts reached"));
+      const maxAttempts = this.options.reconnect?.maxAttempts ?? 50;
+      this.emitter.emit(
+        "error",
+        new Error(
+          `Max reconnect attempts (${maxAttempts}) reached${closeCode !== undefined ? ` after close code ${closeCode}` : ""}`,
+        ),
+      );
       return;
     }
     const delay = Math.min(30_000, 1_000 * 2 ** Math.min(this.reconnectAttempts, 5));

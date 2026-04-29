@@ -71,11 +71,19 @@ export class ComponentRegistry<
   }
 
   resolve(customId: string, options?: { componentType?: number }): T | undefined {
-    const entries = [
-      ...(this.entries.get(parseRegistryKey(customId)) ?? []),
-      ...this.wildcardEntries,
-    ];
-    return entries.find((entry) => {
+    for (const entries of this.entries.values()) {
+      const match = entries.find((entry) => {
+        if (options?.componentType !== undefined && entry.type !== options.componentType) {
+          return false;
+        }
+        const parser = entry.customIdParser ?? parseCustomId;
+        return parseRegistryKey(entry.customId, parser) === parseRegistryKey(customId, parser);
+      });
+      if (match) {
+        return match;
+      }
+    }
+    return this.wildcardEntries.find((entry) => {
       if (options?.componentType !== undefined && entry.type !== options.componentType) {
         return false;
       }

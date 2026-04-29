@@ -80,6 +80,25 @@ describe("ComponentRegistry", () => {
       select,
     );
   });
+
+  it("uses each registered component parser when resolving specific keys", () => {
+    const registry = new ComponentRegistry<Button>();
+    class EncodedButton extends Button {
+      label = "button";
+      customId = "encoded:seed=one";
+      customIdParser = (id: string) => ({
+        key: id.startsWith("encoded:") ? "encoded" : parseCustomId(id).key,
+        data: {},
+      });
+    }
+    const button = new EncodedButton();
+
+    registry.register(button);
+
+    expect(registry.resolve("encoded:payload=two", { componentType: ComponentType.Button })).toBe(
+      button,
+    );
+  });
 });
 
 describe("Client.deployCommands", () => {
