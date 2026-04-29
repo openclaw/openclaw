@@ -237,6 +237,9 @@ describe("web monitor inbox", () => {
     await vi.waitFor(() => {
       expect(groupMetadataCache.get("123@g.us")?.subject).toBe("Recovered Group");
     });
+    expect(
+      (groupMetadataCache.get("123@g.us") as Record<string, unknown>)?.participants,
+    ).toBeUndefined();
     await first.listener.close();
 
     const second = await startInboxMonitor(onMessage as InboxOnMessage, {
@@ -260,11 +263,11 @@ describe("web monitor inbox", () => {
         body: "ping",
         from: "123@g.us",
         groupSubject: "Recovered Group",
-        groupParticipants: ["+444"],
         senderE164: "+444",
         chatType: "group",
       }),
     );
+    expect(onMessage.mock.calls[0]?.[0].groupParticipants).toBeUndefined();
 
     await second.listener.close();
   });

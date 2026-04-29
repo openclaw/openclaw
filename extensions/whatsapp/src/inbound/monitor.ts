@@ -51,15 +51,17 @@ export const WHATSAPP_GROUP_METADATA_CACHE_MAX_ENTRIES = 500;
 
 export type WhatsAppGroupMetadataCacheEntry = {
   subject?: string;
-  participants?: string[];
   expires: number;
 };
 export type WhatsAppGroupMetadataCache = Map<string, WhatsAppGroupMetadataCacheEntry>;
+type LocalGroupMetadataCacheEntry = WhatsAppGroupMetadataCacheEntry & {
+  participants?: string[];
+};
 
-function rememberGroupMetadataCacheEntry(
-  cache: WhatsAppGroupMetadataCache,
+function rememberGroupMetadataCacheEntry<T extends WhatsAppGroupMetadataCacheEntry>(
+  cache: Map<string, T>,
   jid: string,
-  entry: WhatsAppGroupMetadataCacheEntry,
+  entry: T,
 ): void {
   if (cache.has(jid)) {
     cache.delete(jid);
@@ -75,10 +77,10 @@ function rememberGroupMetadataCacheEntry(
   }
 }
 
-function readGroupMetadataCacheEntry(
-  cache: WhatsAppGroupMetadataCache,
+function readGroupMetadataCacheEntry<T extends WhatsAppGroupMetadataCacheEntry>(
+  cache: Map<string, T>,
   jid: string,
-): WhatsAppGroupMetadataCacheEntry | null {
+): T | null {
   const entry = cache.get(jid);
   if (!entry) {
     return null;
@@ -283,7 +285,7 @@ export async function attachWebInboxToSocket(
     },
   });
   const groupMetadataCache = options.groupMetadataCache ?? new Map();
-  const groupMetaCache: WhatsAppGroupMetadataCache = new Map();
+  const groupMetaCache = new Map<string, LocalGroupMetadataCacheEntry>();
   const lidLookup = sock.signalRepository?.lidMapping;
 
   const resolveInboundJid = async (jid: string | null | undefined): Promise<string | null> =>
@@ -368,6 +370,13 @@ export async function attachWebInboxToSocket(
     };
   };
 
+  const summarizeGroupMetaForReconnectCache = (
+    meta: GroupMetadata,
+  ): WhatsAppGroupMetadataCacheEntry => ({
+    subject: meta.subject,
+    expires: Date.now() + GROUP_META_TTL_MS,
+  });
+
   const getGroupMeta = async (jid: string) => {
     const cached = readGroupMetadataCacheEntry(groupMetaCache, jid);
     if (cached) {
@@ -376,7 +385,10 @@ export async function attachWebInboxToSocket(
     try {
       const meta = await sock.groupMetadata(jid);
       const entry = await summarizeGroupMeta(meta);
-      rememberGroupMetadataCacheEntry(groupMetadataCache, jid, entry);
+      rememberGroupMetadataCacheEntry(groupMetadataCache, jid, {
+        subject: entry.subject,
+        expires: entry.expires,
+      });
       rememberGroupMetadataCacheEntry(groupMetaCache, jid, entry);
       return entry;
     } catch (err) {
@@ -794,7 +806,11 @@ export async function attachWebInboxToSocket(
       const groups = await sock.groupFetchAllParticipating();
       for (const [jid, meta] of Object.entries(groups ?? {})) {
         if (meta) {
-          rememberGroupMetadataCacheEntry(groupMetadataCache, jid, await summarizeGroupMeta(meta));
+          rememberGroupMetadataCacheEntry(
+            groupMetadataCache,
+            jid,
+            summarizeGroupMetaForReconnectCache(meta),
+          );
         }
       }
       logWhatsAppVerbose(
