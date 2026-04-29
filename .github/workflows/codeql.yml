@@ -51,6 +51,11 @@ jobs:
             runs_on: blacksmith-4vcpu-ubuntu-2404
             timeout_minutes: 25
             config_file: ./.github/codeql/codeql-network-ssrf-boundary-critical-security.yml
+          - language: javascript-typescript
+            category: mcp-process-tool-boundary
+            runs_on: blacksmith-4vcpu-ubuntu-2404
+            timeout_minutes: 25
+            config_file: ./.github/codeql/codeql-mcp-process-tool-boundary-critical-security.yml
           - language: actions
             category: actions
             runs_on: blacksmith-8vcpu-ubuntu-2404

@@ -267,6 +267,11 @@ JS/TS category. The network-ssrf-boundary job scans core SSRF, IP parsing,
 network guard, web-fetch, and Plugin SDK SSRF policy surfaces under the
 `/codeql-critical-security/network-ssrf-boundary` category so network trust
 boundary signal stays separate from the broader JS/TS security baseline.
+The mcp-process-tool-boundary job scans MCP servers, process execution helpers,
+outbound delivery, and agent tool-execution gates under the
+`/codeql-critical-security/mcp-process-tool-boundary` category so command and
+tool boundary signal stays separate from both the general JS/TS baseline and
+the non-security MCP/process quality shard.
 
 The `CodeQL Android Critical Security` workflow is the scheduled Android
 security shard. It builds the Android app manually for CodeQL on the smallest
