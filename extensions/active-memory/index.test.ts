@@ -3145,7 +3145,7 @@ describe("active-memory plugin", () => {
     __testing.setSetupGraceTimeoutMsForTests(0);
     api.pluginConfig = {
       agents: ["main"],
-      timeoutMs: 1,
+      timeoutMs: 50,
       logging: true,
       circuitBreakerMaxTimeouts: 1,
       circuitBreakerCooldownMs: 60_000,

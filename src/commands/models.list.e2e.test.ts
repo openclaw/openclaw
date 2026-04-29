@@ -16,6 +16,7 @@ const listProfilesForProvider = vi.fn().mockReturnValue([]);
 const resolveEnvApiKey = vi.fn().mockReturnValue(undefined);
 const resolveAwsSdkEnvVarName = vi.fn().mockReturnValue(undefined);
 const hasUsableCustomProviderApiKey = vi.fn().mockReturnValue(false);
+const hasSyntheticLocalProviderAuthConfig = vi.fn().mockReturnValue(false);
 const loadModelCatalog = vi.fn(async () => []);
 const loadProviderCatalogModelsForList = vi.fn<() => Promise<Array<Record<string, unknown>>>>(
   async () => [],
@@ -64,6 +65,7 @@ vi.mock("../agents/auth-profiles/store.js", () => ({
 
 vi.mock("../agents/model-auth.js", () => ({
   hasUsableCustomProviderApiKey,
+  hasSyntheticLocalProviderAuthConfig,
   resolveAwsSdkEnvVarName,
   resolveEnvApiKey,
 }));

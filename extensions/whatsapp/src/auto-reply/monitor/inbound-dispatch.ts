@@ -56,6 +56,29 @@ type SenderContext = {
   e164?: string;
 };
 
+function logWhatsAppReplyDeliveryError(params: {
+  err: unknown;
+  info: { kind: ReplyLifecycleKind };
+  connectionId: string;
+  conversationId: string;
+  msg: WebInboundMsg;
+  replyLogger: ReturnType<typeof getChildLogger>;
+}) {
+  params.replyLogger.error(
+    {
+      err: params.err,
+      replyKind: params.info.kind,
+      correlationId: params.msg.id ?? null,
+      connectionId: params.connectionId,
+      conversationId: params.conversationId,
+      chatId: params.msg.chatId ?? null,
+      to: params.msg.from ?? null,
+      from: params.msg.to ?? null,
+    },
+    "auto-reply delivery failed",
+  );
+}
+
 function resolveWhatsAppDisableBlockStreaming(cfg: ReturnType<LoadConfigFn>): boolean | undefined {
   if (typeof cfg.channels?.whatsapp?.blockStreaming !== "boolean") {
     return undefined;
@@ -355,6 +378,16 @@ export async function dispatchWhatsAppBufferedReply(params: {
         }
       },
       onReplyStart: params.msg.sendComposing,
+      onError: (err, info) => {
+        logWhatsAppReplyDeliveryError({
+          err,
+          info,
+          connectionId: params.connectionId,
+          conversationId: params.conversationId,
+          msg: params.msg,
+          replyLogger: params.replyLogger,
+        });
+      },
     },
     replyOptions: {
       disableBlockStreaming,

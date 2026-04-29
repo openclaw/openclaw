@@ -274,6 +274,61 @@ function isManagedSecretRefApiKeyMarker(apiKey: string | undefined): boolean {
   return apiKey?.trim() === NON_ENV_SECRETREF_MARKER;
 }
 
+export function hasSyntheticLocalProviderAuthConfig(params: {
+  cfg: OpenClawConfig | undefined;
+  provider: string;
+}): boolean {
+  const providerConfig = resolveProviderConfig(params.cfg, params.provider);
+  if (!providerConfig) {
+    return false;
+  }
+
+  const hasApiConfig =
+    Boolean(providerConfig.api?.trim()) ||
+    Boolean(providerConfig.baseUrl?.trim()) ||
+    (Array.isArray(providerConfig.models) && providerConfig.models.length > 0);
+  if (!hasApiConfig) {
+    return false;
+  }
+
+  const authOverride = resolveProviderAuthOverride(params.cfg, params.provider);
+  if (authOverride && authOverride !== "api-key") {
+    return false;
+  }
+  if (!isCustomLocalProviderConfig(providerConfig)) {
+    return false;
+  }
+  if (hasExplicitProviderApiKeyConfig(providerConfig)) {
+    return false;
+  }
+  return Boolean(providerConfig.baseUrl && isLocalBaseUrl(providerConfig.baseUrl));
+}
+
+export function hasRuntimeAvailableProviderAuth(params: {
+  provider: string;
+  cfg?: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+}): boolean {
+  const provider = normalizeProviderId(params.provider);
+  const authOverride = resolveProviderAuthOverride(params.cfg, provider);
+  if (authOverride === "aws-sdk") {
+    return true;
+  }
+  if (resolveEnvApiKey(provider, params.env)) {
+    return true;
+  }
+  if (resolveUsableCustomProviderApiKey({ cfg: params.cfg, provider, env: params.env })) {
+    return true;
+  }
+  if (resolveSyntheticLocalProviderAuth({ cfg: params.cfg, provider })) {
+    return true;
+  }
+  if (authOverride === undefined && provider === "amazon-bedrock") {
+    return true;
+  }
+  return false;
+}
+
 type SyntheticProviderAuthResolution = {
   auth?: ResolvedProviderAuth;
   blockedOnManagedSecretRef?: boolean;
@@ -340,29 +395,10 @@ function resolveSyntheticLocalProviderAuth(params: {
     return null;
   }
 
-  const hasApiConfig =
-    Boolean(providerConfig.api?.trim()) ||
-    Boolean(providerConfig.baseUrl?.trim()) ||
-    (Array.isArray(providerConfig.models) && providerConfig.models.length > 0);
-  if (!hasApiConfig) {
-    return null;
-  }
-
-  const authOverride = resolveProviderAuthOverride(params.cfg, params.provider);
-  if (authOverride && authOverride !== "api-key") {
-    return null;
-  }
-  if (!isCustomLocalProviderConfig(providerConfig)) {
-    return null;
-  }
-  if (hasExplicitProviderApiKeyConfig(providerConfig)) {
-    return null;
-  }
-
   // Custom providers pointing at a local server (e.g. llama.cpp, vLLM, LocalAI)
   // typically don't require auth. Synthesize a local key so the auth resolver
   // doesn't reject them when the user left the API key blank during setup.
-  if (providerConfig.baseUrl && isLocalBaseUrl(providerConfig.baseUrl)) {
+  if (hasSyntheticLocalProviderAuthConfig(params)) {
     return {
       apiKey: CUSTOM_LOCAL_AUTH_MARKER,
       source: `models.providers.${params.provider} (synthetic local key)`,

@@ -1,20 +1,12 @@
 import type { Api, Model } from "@mariozechner/pi-ai";
 import type { ModelRegistry } from "@mariozechner/pi-coding-agent";
 import { resolveOpenClawAgentDir } from "../../agents/agent-paths.js";
-import { listProfilesForProvider } from "../../agents/auth-profiles/profile-list.js";
-import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
-import {
-  hasUsableCustomProviderApiKey,
-  resolveAwsSdkEnvVarName,
-  resolveEnvApiKey,
-} from "../../agents/model-auth.js";
 import {
   shouldSuppressBuiltInModel,
   shouldSuppressBuiltInModelFromManifest,
 } from "../../agents/model-suppression.js";
 import { discoverAuthStorage, discoverModels } from "../../agents/pi-model-discovery.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { resolveRuntimeSyntheticAuthProviderRefs } from "../../plugins/synthetic-auth.runtime.js";
 import {
   formatErrorWithStack,
   MODEL_AVAILABILITY_UNAVAILABLE_CODE,
@@ -23,32 +15,6 @@ import {
 import { toModelRow as toModelRowBase } from "./list.model-row.js";
 import type { ModelRow } from "./list.types.js";
 import { modelKey } from "./shared.js";
-
-const hasAuthForProvider = (
-  provider: string,
-  cfg?: OpenClawConfig,
-  authStore?: AuthProfileStore,
-) => {
-  if (!cfg || !authStore) {
-    return false;
-  }
-  if (listProfilesForProvider(authStore, provider).length > 0) {
-    return true;
-  }
-  if (provider === "amazon-bedrock" && resolveAwsSdkEnvVarName()) {
-    return true;
-  }
-  if (resolveEnvApiKey(provider)) {
-    return true;
-  }
-  if (hasUsableCustomProviderApiKey(cfg, provider)) {
-    return true;
-  }
-  if (resolveRuntimeSyntheticAuthProviderRefs().includes(provider)) {
-    return true;
-  }
-  return false;
-};
 
 function createAvailabilityUnavailableError(message: string): Error {
   const err = new Error(message);
@@ -171,9 +137,5 @@ export async function loadModelRegistry(
 }
 
 export function toModelRow(params: Parameters<typeof toModelRowBase>[0]): ModelRow {
-  return toModelRowBase({
-    ...params,
-    hasAuthForProvider: ({ provider, cfg, authStore }) =>
-      hasAuthForProvider(provider, cfg, authStore),
-  });
+  return toModelRowBase(params);
 }

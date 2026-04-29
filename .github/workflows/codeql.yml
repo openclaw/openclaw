@@ -37,15 +37,30 @@ jobs:
       matrix:
         include:
           - language: javascript-typescript
-            category: javascript-typescript
+            category: core-auth-secrets
             runs_on: blacksmith-8vcpu-ubuntu-2404
             timeout_minutes: 25
-            config_file: ./.github/codeql/codeql-javascript-typescript-critical-security.yml
+            config_file: ./.github/codeql/codeql-core-auth-secrets-critical-security.yml
           - language: javascript-typescript
             category: channel-runtime-boundary
             runs_on: blacksmith-8vcpu-ubuntu-2404
             timeout_minutes: 25
             config_file: ./.github/codeql/codeql-channel-runtime-boundary-critical-security.yml
+          - language: javascript-typescript
+            category: network-ssrf-boundary
+            runs_on: blacksmith-4vcpu-ubuntu-2404
+            timeout_minutes: 25
+            config_file: ./.github/codeql/codeql-network-ssrf-boundary-critical-security.yml
+          - language: javascript-typescript
+            category: mcp-process-tool-boundary
+            runs_on: blacksmith-4vcpu-ubuntu-2404
+            timeout_minutes: 25
+            config_file: ./.github/codeql/codeql-mcp-process-tool-boundary-critical-security.yml
+          - language: javascript-typescript
+            category: plugin-trust-boundary
+            runs_on: blacksmith-4vcpu-ubuntu-2404
+            timeout_minutes: 25
+            config_file: ./.github/codeql/codeql-plugin-trust-boundary-critical-security.yml
           - language: actions
             category: actions
             runs_on: blacksmith-8vcpu-ubuntu-2404

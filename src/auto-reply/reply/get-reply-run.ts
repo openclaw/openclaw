@@ -400,14 +400,15 @@ export async function runPreparedReply(
     ctx,
     isHeartbeat,
   });
+  const silentReplyConversationType = resolvePromptSilentReplyConversationType({
+    ctx: promptSessionCtx,
+    inboundSessionKey: ctx.SessionKey,
+  });
   const silentReplySettings = resolveSilentReplySettings({
     cfg,
     sessionKey: runtimePolicySessionKey,
     surface: promptSessionCtx.Surface ?? promptSessionCtx.Provider,
-    conversationType: resolvePromptSilentReplyConversationType({
-      ctx: promptSessionCtx,
-      inboundSessionKey: ctx.SessionKey,
-    }),
+    conversationType: silentReplyConversationType,
   });
   const useFastReplyRuntime = shouldUseReplyFastTestRuntime({
     cfg,
@@ -425,6 +426,7 @@ export async function runPreparedReply(
   const isFirstTurnInSession = isNewSession || !currentSystemSent;
   const isGroupChat =
     promptSessionCtx.ChatType === "group" || promptSessionCtx.ChatType === "channel";
+  const isDirectChat = promptSessionCtx.ChatType === "direct" || promptSessionCtx.ChatType === "dm";
   const wasMentioned = ctx.WasMentioned === true;
   const { typingPolicy, suppressTyping } = resolveRunTypingPolicy({
     requestedPolicy: opts?.typingPolicy,
@@ -444,15 +446,14 @@ export async function runPreparedReply(
   const shouldInjectGroupIntro = Boolean(
     isGroupChat && (isFirstTurnInSession || sessionEntry?.groupActivationNeedsSystemIntro),
   );
-  const directChatContext =
-    promptSessionCtx.ChatType === "direct" || promptSessionCtx.ChatType === "dm"
-      ? buildDirectChatContext({
-          sessionCtx: promptSessionCtx,
-          silentReplyPolicy: silentReplySettings.policy,
-          silentReplyRewrite: silentReplySettings.rewrite,
-          silentToken: SILENT_REPLY_TOKEN,
-        })
-      : "";
+  const directChatContext = isDirectChat
+    ? buildDirectChatContext({
+        sessionCtx: promptSessionCtx,
+        silentReplyPolicy: silentReplySettings.policy,
+        silentReplyRewrite: silentReplySettings.rewrite,
+        silentToken: SILENT_REPLY_TOKEN,
+      })
+    : "";
   // Always include persistent group chat context (provider + reply guidance).
   const groupChatContext = isGroupChat
     ? buildGroupChatContext({
@@ -476,13 +477,16 @@ export async function runPreparedReply(
       })
     : "";
   const allowEmptyAssistantReplyAsSilent =
-    isGroupChat &&
-    resolveGroupSilentReplyBehavior({
-      sessionEntry,
-      defaultActivation,
-      silentReplyPolicy: silentReplySettings.policy,
-      silentReplyRewrite: silentReplySettings.rewrite,
-    }).allowEmptyAssistantReplyAsSilent;
+    (isDirectChat &&
+      silentReplyConversationType === "direct" &&
+      silentReplySettings.policy === "allow") ||
+    (isGroupChat &&
+      resolveGroupSilentReplyBehavior({
+        sessionEntry,
+        defaultActivation,
+        silentReplyPolicy: silentReplySettings.policy,
+        silentReplyRewrite: silentReplySettings.rewrite,
+      }).allowEmptyAssistantReplyAsSilent);
   const groupSystemPrompt = normalizeOptionalString(promptSessionCtx.GroupSystemPrompt) ?? "";
   const inboundMetaPrompt = buildInboundMetaSystemPrompt(
     isNewSession ? sessionCtx : { ...sessionCtx, ThreadStarterBody: undefined },

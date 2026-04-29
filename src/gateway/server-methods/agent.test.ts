@@ -445,6 +445,118 @@ describe("gateway agent handler", () => {
     expect(capturedEntry?.acp).toEqual(existingAcpMeta);
   });
 
+  it("keeps stored group metadata when a trusted group session receives caller-supplied selectors", async () => {
+    const sessionKey = "agent:main:slack:group:C123";
+    const existingEntry = buildExistingMainStoreEntry({
+      channel: "slack",
+      groupId: "C123",
+      groupChannel: "#trusted",
+      space: "TTRUSTED",
+    });
+    mocks.loadSessionEntry.mockReturnValue({
+      cfg: {},
+      storePath: "/tmp/sessions.json",
+      entry: existingEntry,
+      canonicalKey: sessionKey,
+    });
+
+    let capturedEntry: Record<string, unknown> | undefined;
+    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+      const store: Record<string, unknown> = {
+        [sessionKey]: { ...existingEntry },
+      };
+      const result = await updater(store);
+      capturedEntry = result as Record<string, unknown>;
+      return result;
+    });
+
+    mocks.agentCommand.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: { durationMs: 100 },
+    });
+
+    await invokeAgent(
+      {
+        message: "trusted group turn",
+        agentId: "main",
+        sessionKey,
+        channel: "slack",
+        groupId: "C123",
+        groupChannel: "#forged-admin",
+        groupSpace: "TFORGED",
+        idempotencyKey: "trusted-group-forged-selectors",
+      },
+      { reqId: "trusted-group-forged-selectors" },
+    );
+
+    expect(mocks.updateSessionStore).toHaveBeenCalled();
+    expect(capturedEntry?.groupId).toBe("C123");
+    expect(capturedEntry?.groupChannel).toBe("#trusted");
+    expect(capturedEntry?.space).toBe("TTRUSTED");
+    await waitForAssertion(() => expect(mocks.agentCommand).toHaveBeenCalled());
+    const callArgs = mocks.agentCommand.mock.calls.at(-1)?.[0] as {
+      groupChannel?: string;
+      groupSpace?: string;
+      runContext?: { groupChannel?: string; groupSpace?: string };
+    };
+    expect(callArgs.groupChannel).toBe("#trusted");
+    expect(callArgs.groupSpace).toBe("TTRUSTED");
+    expect(callArgs.runContext?.groupChannel).toBe("#trusted");
+    expect(callArgs.runContext?.groupSpace).toBe("TTRUSTED");
+  });
+
+  it("persists first-turn group selectors for a trusted new group session", async () => {
+    const sessionKey = "agent:main:slack:group:C123";
+    mocks.loadSessionEntry.mockReturnValue({
+      cfg: {},
+      storePath: "/tmp/sessions.json",
+      entry: undefined,
+      canonicalKey: sessionKey,
+    });
+
+    let capturedEntry: Record<string, unknown> | undefined;
+    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+      const store: Record<string, unknown> = {};
+      const result = await updater(store);
+      capturedEntry = result as Record<string, unknown>;
+      return result;
+    });
+
+    mocks.agentCommand.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: { durationMs: 100 },
+    });
+
+    await invokeAgent(
+      {
+        message: "first trusted group turn",
+        agentId: "main",
+        sessionKey,
+        channel: "slack",
+        groupId: "C123",
+        groupChannel: "#general",
+        groupSpace: "TWORKSPACE",
+        idempotencyKey: "trusted-group-first-turn-selectors",
+      },
+      { reqId: "trusted-group-first-turn-selectors" },
+    );
+
+    expect(mocks.updateSessionStore).toHaveBeenCalled();
+    expect(capturedEntry?.groupId).toBe("C123");
+    expect(capturedEntry?.groupChannel).toBe("#general");
+    expect(capturedEntry?.space).toBe("TWORKSPACE");
+    await waitForAssertion(() => expect(mocks.agentCommand).toHaveBeenCalled());
+    const callArgs = mocks.agentCommand.mock.calls.at(-1)?.[0] as {
+      groupChannel?: string;
+      groupSpace?: string;
+      runContext?: { groupChannel?: string; groupSpace?: string };
+    };
+    expect(callArgs.groupChannel).toBe("#general");
+    expect(callArgs.groupSpace).toBe("TWORKSPACE");
+    expect(callArgs.runContext?.groupChannel).toBe("#general");
+    expect(callArgs.runContext?.groupSpace).toBe("TWORKSPACE");
+  });
+
   it("tags newly-created plugin runtime sessions with the plugin owner", async () => {
     const sessionKey = "agent:main:dreaming-narrative-light-workspace-1";
     mocks.loadSessionEntry.mockReturnValue({
@@ -2288,6 +2400,93 @@ describe("gateway agent handler", () => {
     });
   });
 
+  it.each(["all", "non-main"] as const)(
+    "does not preload startup memory from inherited workspaces for spawned sandboxed sessions in %s mode",
+    async (sandboxMode) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-04-27T12:00:00.000Z"));
+      try {
+        await withTempDir(
+          { prefix: "openclaw-gateway-startup-canonical-" },
+          async (canonicalWorkspaceDir) => {
+            await withTempDir(
+              { prefix: "openclaw-gateway-startup-inherited-" },
+              async (inheritedWorkspaceDir) => {
+                await fs.mkdir(`${inheritedWorkspaceDir}/memory`, { recursive: true });
+                const inheritedMarker = "OC_INHERITED_WORKSPACE_MEMORY_MARKER";
+                await fs.writeFile(
+                  `${inheritedWorkspaceDir}/memory/2026-04-27.md`,
+                  inheritedMarker,
+                  "utf-8",
+                );
+                mocks.loadConfigReturn = {
+                  agents: {
+                    defaults: {
+                      workspace: canonicalWorkspaceDir,
+                      userTimezone: "UTC",
+                      startupContext: {
+                        enabled: true,
+                        applyOn: ["new"],
+                        dailyMemoryDays: 1,
+                      },
+                      sandbox: {
+                        mode: sandboxMode,
+                        scope: "session",
+                        workspaceAccess: "none",
+                      },
+                    },
+                  },
+                };
+                mockSessionResetSuccess({
+                  reason: "new",
+                  key: "agent:main:subagent:sandbox-child",
+                });
+                mocks.loadSessionEntry.mockReturnValue({
+                  cfg: mocks.loadConfigReturn,
+                  storePath: "/tmp/sessions.json",
+                  entry: {
+                    sessionId: "existing-child-session",
+                    updatedAt: Date.now(),
+                    spawnedBy: "agent:main:main",
+                    spawnedWorkspaceDir: inheritedWorkspaceDir,
+                  },
+                  canonicalKey: "agent:main:subagent:sandbox-child",
+                });
+                mocks.updateSessionStore.mockResolvedValue(undefined);
+                mocks.agentCommand.mockResolvedValue({
+                  payloads: [{ text: "ok" }],
+                  meta: { durationMs: 100 },
+                });
+
+                await invokeAgent(
+                  {
+                    message: "/new",
+                    sessionKey: "agent:main:subagent:sandbox-child",
+                    idempotencyKey: `test-idem-new-spawned-sandbox-memory-${sandboxMode}`,
+                  },
+                  {
+                    reqId: `4-startup-spawned-sandbox-memory-${sandboxMode}`,
+                    client: {
+                      connect: { scopes: ["operator.admin"] },
+                    } as AgentHandlerArgs["client"],
+                  },
+                );
+
+                await waitForAssertion(() => expect(mocks.agentCommand).toHaveBeenCalled());
+                const call = readLastAgentCommandCall();
+                expect(call?.message).toContain("Execute your Session Startup sequence now");
+                expect(call?.message).not.toContain("[Startup context loaded by runtime]");
+                expect(call?.message).not.toContain(inheritedMarker);
+              },
+            );
+          },
+        );
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
   it("uses /reset suffix as the post-reset message and still injects timestamp", async () => {
     setupNewYorkTimeConfig("2026-01-29T01:30:00.000Z");
     mockSessionResetSuccess({ reason: "reset" });
@@ -2451,6 +2650,71 @@ describe("gateway agent handler", () => {
       }),
       undefined,
     );
+  });
+
+  describe("groupId session-entry persistence validation", () => {
+    async function captureGroupEntryFields(
+      sessionKey: string,
+      entry: Record<string, unknown>,
+      requestGroupId?: string,
+    ) {
+      mocks.loadSessionEntry.mockReturnValue({
+        cfg: {},
+        storePath: "/tmp/sessions.json",
+        entry: { sessionId: "existing-session-id", updatedAt: Date.now(), ...entry },
+        canonicalKey: sessionKey,
+      });
+      let capturedEntry: Record<string, unknown> | undefined;
+      mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+        const store: Record<string, unknown> = {
+          [sessionKey]: { sessionId: "existing-session-id" },
+        };
+        await updater(store);
+        capturedEntry = store[sessionKey] as Record<string, unknown>;
+      });
+      mocks.agentCommand.mockResolvedValue({ payloads: [{ text: "ok" }], meta: { durationMs: 1 } });
+      await invokeAgent({
+        message: "hi",
+        agentId: "main",
+        sessionKey,
+        idempotencyKey: `group-persist-${sessionKey}-${requestGroupId ?? "none"}`,
+        ...(requestGroupId !== undefined ? { groupId: requestGroupId } : {}),
+      });
+      return capturedEntry;
+    }
+
+    it("drops forged groupId on non-group session before writing session entry", async () => {
+      const entry = await captureGroupEntryFields("agent:main:main", {}, "trusted-group");
+      expect(entry?.groupId).toBeUndefined();
+    });
+
+    it("preserves groupId when session key encodes matching group membership", async () => {
+      const entry = await captureGroupEntryFields(
+        "agent:main:slack:group:trusted-group",
+        {},
+        "trusted-group",
+      );
+      expect(entry?.groupId).toBe("trusted-group");
+    });
+
+    it("clears a previously forged groupId from the session entry on reconnection", async () => {
+      // Entry carries a forged groupId from a prior request; new request supplies none.
+      const entry = await captureGroupEntryFields(
+        "agent:main:main",
+        { groupId: "trusted-group" },
+        undefined,
+      );
+      expect(entry?.groupId).toBeUndefined();
+    });
+
+    it("trusts groupId when spawnedBy session key encodes the matching group", async () => {
+      const entry = await captureGroupEntryFields(
+        "agent:main:main",
+        { spawnedBy: "agent:main:slack:group:trusted-group" },
+        "trusted-group",
+      );
+      expect(entry?.groupId).toBe("trusted-group");
+    });
   });
 });
 

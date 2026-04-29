@@ -32,7 +32,7 @@ import { WindowsGuest } from "./guest-transports.ts";
 import { runSmokeLane, type SmokeLane, type SmokeLaneStatus } from "./lane-runner.ts";
 import { waitForVmStatus } from "./parallels-vm.ts";
 import { PhaseRunner } from "./phase-runner.ts";
-import { psArray, psSingleQuote } from "./powershell.ts";
+import { encodePowerShell, psArray, psSingleQuote, windowsOpenClawResolver } from "./powershell.ts";
 import { ensureGuestGit, prepareMinGitZip } from "./windows-git.ts";
 
 interface WindowsOptions {
@@ -481,19 +481,59 @@ class WindowsSmoke {
     script: string,
     options: { check?: boolean; timeoutMs?: number } = {},
   ): string {
-    return this.guest.powershell(script, options);
+    return this.guest.powershell(`${windowsOpenClawResolver}\n${script}`, options);
   }
 
   private restoreSnapshot(): void {
+    this.waitForVmNotRestoring(240);
     say(`Restore snapshot ${this.options.snapshotHint} (${this.snapshot.id})`);
-    run("prlctl", ["snapshot-switch", this.options.vmName, "--id", this.snapshot.id], {
-      quiet: true,
-    });
+    let restored = false;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      const result = run(
+        "prlctl",
+        ["snapshot-switch", this.options.vmName, "--id", this.snapshot.id],
+        {
+          check: false,
+          quiet: true,
+        },
+      );
+      this.log(result.stdout);
+      this.log(result.stderr);
+      if (result.status === 0) {
+        restored = true;
+        break;
+      }
+      if (result.stdout.includes("restoring") || result.stderr.includes("restoring")) {
+        warn(`snapshot-switch retry ${attempt}: VM is still restoring`);
+        this.waitForVmNotRestoring(240);
+        continue;
+      }
+      throw new Error(`snapshot-switch failed with exit code ${result.status}`);
+    }
+    if (!restored) {
+      throw new Error("snapshot-switch failed after restoring-state retries");
+    }
+    this.waitForVmNotRestoring(240);
     if (this.snapshot.state === "poweroff") {
       waitForVmStatus(this.options.vmName, "stopped", 240);
       say(`Start restored poweroff snapshot ${this.snapshot.name}`);
       run("prlctl", ["start", this.options.vmName], { quiet: true });
     }
+  }
+
+  private waitForVmNotRestoring(timeoutSeconds: number): void {
+    const deadline = Date.now() + timeoutSeconds * 1000;
+    while (Date.now() < deadline) {
+      const status = run("prlctl", ["status", this.options.vmName], {
+        check: false,
+        quiet: true,
+      }).stdout;
+      if (!status.includes(" restoring")) {
+        return;
+      }
+      run("sleep", ["5"], { quiet: true });
+    }
+    throw new Error(`VM ${this.options.vmName} did not leave restoring state`);
   }
 
   private waitForGuestReady(timeoutSeconds = 240): void {
@@ -523,7 +563,7 @@ class WindowsSmoke {
 $script = Invoke-RestMethod -Uri ${psSingleQuote(this.options.installUrl)}
 & ([scriptblock]::Create($script))${versionArg} -NoOnboard
 if ($LASTEXITCODE -ne 0) { throw "installer failed with exit code $LASTEXITCODE" }
-& (Join-Path $env:APPDATA 'npm\\openclaw.cmd') --version
+Invoke-OpenClaw --version
 if ($LASTEXITCODE -ne 0) { throw "openclaw --version failed with exit code $LASTEXITCODE" }`,
       { timeoutMs: 420_000 },
     );
@@ -540,7 +580,7 @@ $tgz = Join-Path $env:TEMP ${psSingleQuote(tempName)}
 curl.exe -fsSL ${psSingleQuote(tgzUrl)} -o $tgz
 npm.cmd install -g $tgz --no-fund --no-audit --loglevel=error
 if ($LASTEXITCODE -ne 0) { throw "npm install failed with exit code $LASTEXITCODE" }
-& (Join-Path $env:APPDATA 'npm\\openclaw.cmd') --version
+Invoke-OpenClaw --version
 if ($LASTEXITCODE -ne 0) { throw "openclaw --version failed with exit code $LASTEXITCODE" }`,
       { timeoutMs: 420_000 },
     );
@@ -561,9 +601,7 @@ if ($LASTEXITCODE -ne 0) { throw "openclaw --version failed with exit code $LAST
   }
 
   private verifyVersionContains(needle: string): void {
-    const version = this.guestPowerShell(
-      "& (Join-Path $env:APPDATA 'npm\\openclaw.cmd') --version",
-    );
+    const version = this.guestPowerShell("Invoke-OpenClaw --version");
     if (!version.includes(needle)) {
       throw new Error(`version mismatch: expected substring ${needle}`);
     }
@@ -575,14 +613,137 @@ if ($LASTEXITCODE -ne 0) { throw "openclaw --version failed with exit code $LAST
   }
 
   private runRefOnboard(): void {
-    this.guestPowerShell(
-      `$ErrorActionPreference = 'Stop'
+    this.guestPowerShellBackground(
+      "ref-onboard",
+      `$ErrorActionPreference = 'Continue'
+$PSNativeCommandUseErrorActionPreference = $false
 Set-Item -Path ('Env:' + ${psSingleQuote(this.auth.apiKeyEnv)}) -Value ${psSingleQuote(this.auth.apiKeyValue)}
-$openclaw = Join-Path $env:APPDATA 'npm\\openclaw.cmd'
-& $openclaw onboard --non-interactive --mode local --auth-choice ${psSingleQuote(this.auth.authChoice)} --secret-input-mode ref --gateway-port 18789 --gateway-bind loopback --install-daemon --skip-skills --skip-health --accept-risk --json
+Invoke-OpenClaw onboard --non-interactive --mode local --auth-choice ${psSingleQuote(this.auth.authChoice)} --secret-input-mode ref --gateway-port 18789 --gateway-bind loopback --install-daemon --skip-skills --skip-health --accept-risk --json
 if ($LASTEXITCODE -ne 0) { throw "openclaw onboard failed with exit code $LASTEXITCODE" }`,
-      { timeoutMs: 720_000 },
+      720_000,
     );
+  }
+
+  private guestPowerShellBackground(label: string, script: string, timeoutMs: number): void {
+    const safeLabel = label.replaceAll(/[^A-Za-z0-9_-]/g, "-");
+    const nonce = `${safeLabel}-${Date.now()}-${Math.floor(Math.random() * 100000)}`;
+    const fileBase = `openclaw-parallels-${nonce}`;
+    const pathsScript = `$base = Join-Path $env:TEMP ${psSingleQuote(fileBase)}
+$scriptPath = "$base.ps1"
+$logPath = "$base.log"
+$donePath = "$base.done"
+$exitPath = "$base.exit"`;
+    const payload = Buffer.from(
+      `$ErrorActionPreference = 'Stop'
+$PSNativeCommandUseErrorActionPreference = $false
+${windowsOpenClawResolver}
+${pathsScript}
+try {
+  & {
+${script}
+  } *>&1 | ForEach-Object { $_ | Out-String | Add-Content -Path $logPath -Encoding UTF8 }
+  Set-Content -Path $exitPath -Value '0' -Encoding UTF8
+} catch {
+  $_ | Out-String | Add-Content -Path $logPath -Encoding UTF8
+  Set-Content -Path $exitPath -Value '1' -Encoding UTF8
+} finally {
+  Set-Content -Path $donePath -Value 'done' -Encoding UTF8
+}`,
+      "utf8",
+    ).toString("base64");
+    this.guestPowerShell(
+      `$payload = ${psSingleQuote(payload)}
+${pathsScript}
+Remove-Item -Path $scriptPath, $logPath, $donePath, $exitPath -Force -ErrorAction SilentlyContinue
+[System.IO.File]::WriteAllText($scriptPath, [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($payload)), [System.Text.UTF8Encoding]::new($false))
+if (!(Test-Path $scriptPath)) { throw "background script was not written" }`,
+      { timeoutMs: 30_000 },
+    );
+    let launched = false;
+    let lastLaunchStatus = 0;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      this.waitForGuestReady(120);
+      const launch = run(
+        "timeout",
+        [
+          "20s",
+          "prlctl",
+          "exec",
+          this.options.vmName,
+          "--current-user",
+          "cmd.exe",
+          "/d",
+          "/s",
+          "/c",
+          `start "" /min powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "%TEMP%\\${fileBase}.ps1"`,
+        ],
+        { check: false, quiet: true, timeoutMs: this.remainingPhaseTimeoutMs(30_000) },
+      );
+      this.log(launch.stdout);
+      this.log(launch.stderr);
+      if (launch.status === 0 || launch.status === 124) {
+        launched = true;
+        break;
+      }
+      lastLaunchStatus = launch.status;
+      if (launch.stdout.includes("restoring") || launch.stderr.includes("restoring")) {
+        warn(`${label} launch retry ${attempt}: VM is still restoring`);
+        this.waitForVmNotRestoring(120);
+        continue;
+      }
+      throw new Error(`${label} background launch failed with exit code ${launch.status}`);
+    }
+    if (!launched) {
+      throw new Error(`${label} background launch failed with exit code ${lastLaunchStatus}`);
+    }
+    const deadline = Date.now() + timeoutMs;
+    let lastLogOffset = 0;
+    while (Date.now() < deadline) {
+      const result = this.guest.run(
+        [
+          "powershell.exe",
+          "-NoProfile",
+          "-ExecutionPolicy",
+          "Bypass",
+          "-EncodedCommand",
+          encodePowerShell(`${pathsScript}
+$offset = ${lastLogOffset}
+if (Test-Path $logPath) {
+  $bytes = [System.IO.File]::ReadAllBytes($logPath)
+  if ($bytes.Length -gt $offset) {
+    "__OPENCLAW_LOG_OFFSET__:$($bytes.Length)"
+    [System.Text.Encoding]::UTF8.GetString($bytes, $offset, $bytes.Length - $offset)
+  }
+}
+if (Test-Path $donePath) {
+  '__OPENCLAW_BACKGROUND_DONE__'
+  if ((Test-Path $exitPath) -and ((Get-Content -Path $exitPath -Raw).Trim() -ne '0')) { exit 23 }
+  exit 0
+}`),
+        ],
+        { check: false, timeoutMs: this.remainingPhaseTimeoutMs(30_000) },
+      );
+      const offsetMatch = result.stdout.match(/__OPENCLAW_LOG_OFFSET__:(\d+)/);
+      if (offsetMatch) {
+        lastLogOffset = Number(offsetMatch[1]);
+      }
+      if (result.stdout.includes("__OPENCLAW_BACKGROUND_DONE__")) {
+        if (result.status !== 0) {
+          throw new Error(`${label} failed`);
+        }
+        this.guestPowerShell(
+          `${pathsScript}
+Remove-Item -Path $scriptPath, $logPath, $donePath, $exitPath -Force -ErrorAction SilentlyContinue`,
+          {
+            check: false,
+            timeoutMs: 30_000,
+          },
+        );
+        return;
+      }
+      run("sleep", ["5"], { quiet: true });
+    }
+    throw new Error(`${label} timed out`);
   }
 
   private runDevChannelUpdate(): void {
@@ -592,11 +753,10 @@ $portableGit = Join-Path (Join-Path (Join-Path $env:LOCALAPPDATA 'OpenClaw\\deps
 $env:PATH = "$portableGit\\cmd;$portableGit\\mingw64\\bin;$portableGit\\usr\\bin;$env:PATH"
 where.exe git.exe
 $env:OPENCLAW_DISABLE_BUNDLED_PLUGINS = '1'
-$openclaw = Join-Path $env:APPDATA 'npm\\openclaw.cmd'
-& $openclaw update --channel dev --yes --json
+Invoke-OpenClaw update --channel dev --yes --json
 if ($LASTEXITCODE -ne 0) { throw "openclaw update failed with exit code $LASTEXITCODE" }
-& $openclaw --version
-& $openclaw update status --json`,
+Invoke-OpenClaw --version
+Invoke-OpenClaw update status --json`,
       { timeoutMs: Number(process.env.OPENCLAW_PARALLELS_WINDOWS_UPDATE_TIMEOUT_S || 1200) * 1000 },
     );
   }
@@ -606,7 +766,7 @@ if ($LASTEXITCODE -ne 0) { throw "openclaw update failed with exit code $LASTEXI
       `$portableGit = Join-Path (Join-Path (Join-Path $env:LOCALAPPDATA 'OpenClaw\\deps') 'portable-git') ''
 $env:PATH = "$portableGit\\cmd;$portableGit\\mingw64\\bin;$portableGit\\usr\\bin;$env:PATH"
 where.exe git.exe
-& (Join-Path $env:APPDATA 'npm\\openclaw.cmd') update status --json`,
+Invoke-OpenClaw update status --json`,
     );
     for (const needle of ['"installKind": "git"', '"value": "dev"', '"branch": "main"']) {
       if (!status.includes(needle)) {
@@ -616,11 +776,13 @@ where.exe git.exe
   }
 
   private gatewayAction(action: "restart" | "stop"): void {
-    this.guestPowerShell(
-      `$openclaw = Join-Path $env:APPDATA 'npm\\openclaw.cmd'
-& $openclaw gateway ${action}
+    this.guestPowerShellBackground(
+      `gateway-${action}`,
+      `$ErrorActionPreference = 'Continue'
+$PSNativeCommandUseErrorActionPreference = $false
+Invoke-OpenClaw gateway ${action}
 if ($LASTEXITCODE -ne 0) { throw "gateway ${action} failed with exit code $LASTEXITCODE" }`,
-      { timeoutMs: 420_000 },
+      420_000,
     );
   }
 
@@ -633,7 +795,7 @@ if ($LASTEXITCODE -ne 0) { throw "gateway ${action} failed with exit code $LASTE
     const start = Date.now();
     while (Date.now() < deadline) {
       const probe = this.guestPowerShell(
-        "& (Join-Path $env:APPDATA 'npm\\openclaw.cmd') gateway probe --url ws://127.0.0.1:18789 --timeout 30000 --json",
+        "Invoke-OpenClaw gateway probe --url ws://127.0.0.1:18789 --timeout 30000 --json",
         { check: false, timeoutMs: 60_000 },
       );
       if (/"ok"\s*:\s*true/.test(probe)) {
@@ -643,7 +805,7 @@ if ($LASTEXITCODE -ne 0) { throw "gateway ${action} failed with exit code $LASTE
         warn(
           `gateway-reachable recovery: gateway start after ${Math.floor((Date.now() - start) / 1000)}s`,
         );
-        this.guestPowerShell("& (Join-Path $env:APPDATA 'npm\\openclaw.cmd') gateway start", {
+        this.guestPowerShell("Invoke-OpenClaw gateway start", {
           check: false,
           timeoutMs: 120_000,
         });
@@ -657,22 +819,21 @@ if ($LASTEXITCODE -ne 0) { throw "gateway ${action} failed with exit code $LASTE
   }
 
   private showGatewayStatusCompat(): void {
-    const help = this.guestPowerShell(
-      "& (Join-Path $env:APPDATA 'npm\\openclaw.cmd') gateway status --help",
-      {
-        check: false,
-      },
-    );
+    const help = this.guestPowerShell("Invoke-OpenClaw gateway status --help", {
+      check: false,
+    });
     const suffix = help.includes("--require-rpc") ? "--deep --require-rpc" : "--deep";
-    this.guestPowerShell(`& (Join-Path $env:APPDATA 'npm\\openclaw.cmd') gateway status ${suffix}`);
+    this.guestPowerShell(`Invoke-OpenClaw gateway status ${suffix}`);
   }
 
   private verifyTurn(): void {
-    this.guestPowerShell(
-      `$openclaw = Join-Path $env:APPDATA 'npm\\openclaw.cmd'
-& $openclaw models set ${psSingleQuote(this.auth.modelId)}
+    this.guestPowerShellBackground(
+      "agent-turn",
+      `$ErrorActionPreference = 'Continue'
+$PSNativeCommandUseErrorActionPreference = $false
+Invoke-OpenClaw models set ${psSingleQuote(this.auth.modelId)}
 if ($LASTEXITCODE -ne 0) { throw "models set failed" }
-& $openclaw config set agents.defaults.skipBootstrap true --strict-json
+Invoke-OpenClaw config set agents.defaults.skipBootstrap true --strict-json
 if ($LASTEXITCODE -ne 0) { throw "config set failed" }
 ${windowsAgentWorkspaceScript("Parallels Windows smoke test assistant.")}
 Set-Item -Path ('Env:' + ${psSingleQuote(this.auth.apiKeyEnv)}) -Value ${psSingleQuote(this.auth.apiKeyValue)}
@@ -687,11 +848,11 @@ $args = ${psArray([
         "Reply with exact ASCII text OK only.",
         "--json",
       ])}
-$output = & $openclaw @args 2>&1
+$output = Invoke-OpenClaw @args 2>&1
 if ($null -ne $output) { $output | ForEach-Object { $_ } }
 if ($LASTEXITCODE -ne 0) { throw "agent failed with exit code $LASTEXITCODE" }
 if (($output | Out-String) -notmatch '"finalAssistant(Raw|Visible)Text":\\s*"OK"') { throw 'openclaw agent finished without OK response' }`,
-      { timeoutMs: Number(process.env.OPENCLAW_PARALLELS_WINDOWS_AGENT_TIMEOUT_S || 900) * 1000 },
+      Number(process.env.OPENCLAW_PARALLELS_WINDOWS_AGENT_TIMEOUT_S || 900) * 1000,
     );
   }
 
