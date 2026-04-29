@@ -144,7 +144,7 @@ function normalizeInstallOptions(
     }
     if (!label) {
       if (spec.kind === "brew" && spec.formula) {
-        label = `Install ${spec.formula} (brew)`;
+        label = `Install ${spec.formula} (brew${spec.cask ? " cask" : ""})`;
       } else if (spec.kind === "node" && spec.package) {
         label = `Install ${spec.package} (${prefs.nodeManager})`;
       } else if (spec.kind === "go" && spec.module) {
