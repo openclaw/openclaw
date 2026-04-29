@@ -577,6 +577,29 @@ describe("session_status tool", () => {
     expect(details.sessionKey).toBe("agent:main:current");
   });
 
+  it("resolves sessionKey=current for a channel-plugin requester via implicit fallback", async () => {
+    resetSessionStore({});
+
+    const tool = getSessionStatusTool("agent:main:scope:scopy:direct:scopy");
+
+    const result = await tool.execute("call-current-channel-plugin", { sessionKey: "current" });
+    const details = result.details as { ok?: boolean; sessionKey?: string; statusText?: string };
+    expect(details.ok).toBe(true);
+    expect(details.sessionKey).toBe("agent:main:scope:scopy:direct:scopy");
+    expect(details.statusText).toContain("OpenClaw");
+    expect(details.statusText).toContain("🧠 Model:");
+  });
+
+  it("does not synthesize a current fallback for unknown non-literal session keys", async () => {
+    resetSessionStore({});
+
+    const tool = getSessionStatusTool("agent:main:scope:scopy:direct:scopy");
+
+    await expect(
+      tool.execute("call-current-non-literal", { sessionKey: "definitely-not-current" }),
+    ).rejects.toThrow("Unknown sessionId: definitely-not-current");
+  });
+
   it("includes background task context in session_status output", async () => {
     resetSessionStore({
       "agent:main:main": {
