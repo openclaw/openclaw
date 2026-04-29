@@ -13,6 +13,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Providers/OpenAI Codex: drop the top-level `metadata` field for `openai-codex-responses` requests so the ChatGPT codex backend at `https://chatgpt.com/backend-api/codex/responses` no longer rejects them with HTTP 400 `Unsupported parameter: metadata` (surfaced as the misleading `400 status code (no body)` because the SDK error parser expects an `{"error":{"message":...}}` envelope). Non-Codex `openai-responses` and `azure-openai-responses` paths still attach metadata as before. Fixes #73963. Thanks @kasanuowa.
 - Gateway/shutdown: report structured shutdown warnings and HTTP close timeout warnings through `ShutdownResult` while preserving lifecycle hook hardening. Carries forward #41296. Thanks @edenfunf.
 - Plugins/QA: prebuild the private QA channel runtime before plugin gauntlet source runs so wrapper CPU/RSS measurements are not polluted by private QA dist rebuild work. Thanks @vincentkoc.
 - Gateway/reload: bound default restart deferral and SIGUSR1 restart drain to five minutes while preserving explicit `deferralTimeoutMs: 0` indefinite waits, so stale active work accounting cannot block config reloads forever. Thanks @vincentkoc.

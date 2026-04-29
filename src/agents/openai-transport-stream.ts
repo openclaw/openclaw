@@ -897,7 +897,14 @@ export function buildOpenAIResponsesParams(
     prompt_cache_key: cacheRetention === "none" ? undefined : options?.sessionId,
     prompt_cache_retention: getPromptCacheRetention(model.baseUrl, cacheRetention),
     ...(isCodexResponses ? { instructions: buildOpenAICodexResponsesInstructions(context) } : {}),
-    ...(metadata ? { metadata } : {}),
+    // ChatGPT codex backend at https://chatgpt.com/backend-api/codex/responses
+    // rejects requests carrying a top-level `metadata` field with HTTP 400
+    // `Unsupported parameter: metadata`. The error is surfaced to the user as
+    // the misleading `400 status code (no body)` because the SDK error parser
+    // expects an `{"error":{"message":...}}` envelope. Strip metadata for
+    // Codex-Responses requests; keep it for the regular openai-responses /
+    // azure-openai-responses paths where the field is honored. See #73963.
+    ...(metadata && !isCodexResponses ? { metadata } : {}),
   };
   if (options?.maxTokens) {
     params.max_output_tokens = options.maxTokens;

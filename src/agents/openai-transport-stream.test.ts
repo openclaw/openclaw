@@ -955,14 +955,76 @@ describe("openai transport stream", () => {
     );
     expect(params.prompt_cache_key).toBe("session-123");
     expect(params.prompt_cache_retention).toBeUndefined();
-    expect(params.metadata).toEqual({
-      openclaw_session_id: "session-123",
-      openclaw_turn_id: "turn-123",
-    });
+    // ChatGPT codex backend rejects requests with a top-level `metadata`
+    // field as `Unsupported parameter: metadata` — see #73963. Even though
+    // the caller passed turn metadata, the Codex Responses params must drop
+    // it before send.
+    expect(params.metadata).toBeUndefined();
     expect(params.store).toBe(false);
     expect(params.max_output_tokens).toBe(1024);
     expect(params.temperature).toBe(0.2);
     expect(params.service_tier).toBe("auto");
+  });
+
+  it("strips top-level metadata for openai-codex-responses to avoid ChatGPT 400 (regression for #73963)", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "gpt-5.4-mini",
+        name: "GPT-5.4-mini",
+        api: "openai-codex-responses",
+        provider: "openai-codex",
+        baseUrl: "https://chatgpt.com/backend-api",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-codex-responses">,
+      {
+        systemPrompt: "system",
+        messages: [{ role: "user", content: "ping", timestamp: 1 }],
+        tools: [],
+      } as never,
+      { sessionId: "s-codex" },
+      {
+        openclaw_session_id: "s-codex",
+        openclaw_turn_id: "t-codex",
+      },
+    ) as Record<string, unknown> & { metadata?: Record<string, string> };
+
+    expect(params).not.toHaveProperty("metadata");
+  });
+
+  it("keeps top-level metadata for non-Codex openai-responses (regression for #73963)", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        api: "openai-responses",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-responses">,
+      {
+        systemPrompt: "system",
+        messages: [{ role: "user", content: "ping", timestamp: 1 }],
+        tools: [],
+      } as never,
+      { sessionId: "s-openai" },
+      {
+        openclaw_session_id: "s-openai",
+        openclaw_turn_id: "t-openai",
+      },
+    ) as Record<string, unknown> & { metadata?: Record<string, string> };
+
+    expect(params.metadata).toEqual({
+      openclaw_session_id: "s-openai",
+      openclaw_turn_id: "t-openai",
+    });
   });
 
   it("does not infer high reasoning when Pi passes thinking off", () => {
