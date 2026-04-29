@@ -62,7 +62,11 @@ export async function anthropicAnalyzePdf(params: {
   }
   content.push({ type: "text", text: params.prompt });
 
-  const baseUrl = (params.baseUrl ?? "https://api.anthropic.com").replace(/\/+$/, "");
+  const baseUrl = (
+    params.baseUrl ??
+    process.env.ANTHROPIC_BASE_URL?.trim() ??
+    "https://api.anthropic.com"
+  ).replace(/\/+$/, "");
   const res = await fetch(`${baseUrl}/v1/messages`, {
     method: "POST",
     headers: {
