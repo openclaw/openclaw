@@ -45,6 +45,20 @@ describe("FeishuConfigSchema webhook validation", () => {
     expect(result.groupPolicy).toBe("open");
   });
 
+  it("accepts explicit approval approvers at top-level and account-level", () => {
+    const result = FeishuConfigSchema.parse({
+      approvalApprovers: ["ou_top_level"],
+      accounts: {
+        main: {
+          approvalApprovers: ["ou_account"],
+        },
+      },
+    });
+
+    expect(result.approvalApprovers).toEqual(["ou_top_level"]);
+    expect(result.accounts?.main?.approvalApprovers).toEqual(["ou_account"]);
+  });
+
   it("rejects top-level webhook mode without verificationToken", () => {
     const result = FeishuConfigSchema.safeParse({
       connectionMode: "webhook",

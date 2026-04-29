@@ -55,6 +55,27 @@ openclaw pairing list feishu
 openclaw pairing approve feishu <CODE>
 ```
 
+### Approval approvers
+
+By default, Feishu same-chat approvals infer approvers from `allowFrom` for
+backward compatibility. To let different users chat with the bot while only a
+smaller trusted set can approve sensitive actions, configure
+`approvalApprovers` with Feishu user `open_id` values:
+
+```json5
+{
+  channels: {
+    feishu: {
+      allowFrom: ["ou_regular_user", "ou_operator"],
+      approvalApprovers: ["ou_operator"],
+    },
+  },
+}
+```
+
+`channels.feishu.accounts.<id>.approvalApprovers` can be used for named
+accounts.
+
 ### Group chats
 
 **Group policy** (`channels.feishu.groupPolicy`):
@@ -420,6 +441,7 @@ Full configuration: [Gateway configuration](/gateway/configuration)
 | `channels.feishu.accounts.<id>.tts`               | Per-account TTS override                                                         | `messages.tts`   |
 | `channels.feishu.dmPolicy`                        | DM policy                                                                        | `allowlist`      |
 | `channels.feishu.allowFrom`                       | DM allowlist (open_id list)                                                      | [BotOwnerId]     |
+| `channels.feishu.approvalApprovers`               | Explicit same-chat approval approvers                                            | `allowFrom`      |
 | `channels.feishu.groupPolicy`                     | Group policy                                                                     | `allowlist`      |
 | `channels.feishu.groupAllowFrom`                  | Group allowlist                                                                  | —                |
 | `channels.feishu.requireMention`                  | Require @mention in groups                                                       | `true`           |

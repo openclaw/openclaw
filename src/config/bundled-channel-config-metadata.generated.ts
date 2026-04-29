@@ -3916,6 +3916,19 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
             ],
           },
         },
+        approvalApprovers: {
+          type: "array",
+          items: {
+            anyOf: [
+              {
+                type: "string",
+              },
+              {
+                type: "number",
+              },
+            ],
+          },
+        },
         groupPolicy: {
           default: "allowlist",
           anyOf: [
@@ -4533,6 +4546,19 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                 enum: ["open", "pairing", "allowlist"],
               },
               allowFrom: {
+                type: "array",
+                items: {
+                  anyOf: [
+                    {
+                      type: "string",
+                    },
+                    {
+                      type: "number",
+                    },
+                  ],
+                },
+              },
+              approvalApprovers: {
                 type: "array",
                 items: {
                   anyOf: [

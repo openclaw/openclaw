@@ -17,6 +17,7 @@ export const feishuApprovalAuth = createResolvedApproverActionAuthAdapter({
   resolveApprovers: ({ cfg, accountId }) => {
     const account = resolveFeishuAccount({ cfg, accountId }).config;
     return resolveApprovalApprovers({
+      explicit: account.approvalApprovers,
       allowFrom: account.allowFrom,
       normalizeApprover: normalizeFeishuApproverId,
     });

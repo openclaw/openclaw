@@ -178,6 +178,7 @@ const FeishuSharedConfigShape = {
   configWrites: z.boolean().optional(),
   dmPolicy: DmPolicySchema.optional(),
   allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
+  approvalApprovers: z.array(z.union([z.string(), z.number()])).optional(),
   groupPolicy: GroupPolicySchema.optional(),
   groupAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
   groupSenderAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
