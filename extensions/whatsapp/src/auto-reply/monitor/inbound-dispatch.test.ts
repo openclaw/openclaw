@@ -720,7 +720,7 @@ describe("whatsapp inbound dispatch", () => {
       warn: vi.fn(),
       error: vi.fn(),
       debug: vi.fn(),
-    } as BufferedReplyParams["replyLogger"];
+    } as unknown as BufferedReplyParams["replyLogger"];
     const error = new Error("send failed");
 
     await dispatchBufferedReply({
