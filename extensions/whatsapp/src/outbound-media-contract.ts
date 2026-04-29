@@ -24,6 +24,22 @@ type WhatsAppLoadedMediaLike = {
   fileName?: string;
 };
 
+export type NormalizedWhatsAppOutboundPayload<T extends WhatsAppOutboundPayloadLike> = Omit<
+  T,
+  "text" | "mediaUrl" | "mediaUrls"
+> & {
+  text: string;
+  mediaUrl?: string;
+  mediaUrls?: string[];
+};
+
+export type DeliverableWhatsAppOutboundPayload<T extends WhatsAppOutboundPayloadLike> = Omit<
+  NormalizedWhatsAppOutboundPayload<T>,
+  "text"
+> & {
+  text?: string;
+};
+
 export type CanonicalWhatsAppLoadedMedia = {
   buffer: Buffer;
   kind: "image" | "audio" | "video" | "document";
@@ -82,11 +98,7 @@ export function normalizeWhatsAppOutboundPayload<T extends WhatsAppOutboundPaylo
   options?: {
     normalizeText?: (text: string | undefined) => string;
   },
-): Omit<T, "text" | "mediaUrl" | "mediaUrls"> & {
-  text: string;
-  mediaUrl?: string;
-  mediaUrls?: string[];
-} {
+): NormalizedWhatsAppOutboundPayload<T> {
   const mediaUrls = resolveWhatsAppOutboundMediaUrls(payload);
   const normalizeText = options?.normalizeText ?? normalizeWhatsAppPayloadText;
   return {

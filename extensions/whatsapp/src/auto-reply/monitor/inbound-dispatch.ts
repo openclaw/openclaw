@@ -1,5 +1,6 @@
 import { resolveMergedWhatsAppAccountConfig } from "../../account-config.js";
 import {
+  type DeliverableWhatsAppOutboundPayload,
   normalizeWhatsAppOutboundPayload,
   normalizeWhatsAppPayloadTextPreservingIndentation,
 } from "../../outbound-media-contract.js";
@@ -250,6 +251,7 @@ export async function dispatchWhatsAppBufferedReply(params: {
   conversationId: string;
   deliverReply: (params: {
     replyResult: ReplyPayload;
+    normalizedReplyResult?: DeliverableWhatsAppOutboundPayload<ReplyPayload>;
     msg: WebInboundMsg;
     mediaLocalRoots: readonly string[];
     maxMediaBytes: number;
