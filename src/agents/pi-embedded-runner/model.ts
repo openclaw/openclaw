@@ -25,6 +25,7 @@ import { findNormalizedProviderValue, normalizeProviderId } from "../model-selec
 import {
   buildSuppressedBuiltInModelError,
   shouldSuppressBuiltInModel,
+  shouldUnconditionallySuppress,
 } from "../model-suppression.js";
 import { isLegacyModelsAddCodexMetadataModel } from "../openai-codex-models-add-legacy.js";
 import { discoverAuthStorage, discoverModels } from "../pi-model-discovery.js";
@@ -614,6 +615,14 @@ function resolveExplicitModelWithRegistry(params: {
     modelId,
   });
   if (inlineMatch?.api) {
+    // Unconditional suppressions (no `when` clause) represent absolute provider
+    // capability blocks that cannot be overridden by inline user configuration.
+    // Conditional suppressions (e.g. baseUrlHosts-gated qwen restrictions) are
+    // intentionally bypassable when the user has explicitly configured the model.
+    // (#74451)
+    if (shouldUnconditionallySuppress({ provider, id: modelId, config: cfg })) {
+      return { kind: "suppressed" };
+    }
     const resolvedParams = mergeConfiguredRuntimeModelParams({
       cfg,
       provider,
