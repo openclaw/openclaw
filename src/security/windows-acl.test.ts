@@ -380,6 +380,97 @@ Successfully processed 1 files`;
         ],
         expected: { untrustedWorld: 1 },
       },
+      {
+        name: "Anonymous Logon SID (S-1-5-7) is world, not group (#74350)",
+        entries: [
+          aclEntry({
+            principal: "*S-1-5-7",
+            rights: ["F"],
+            rawRights: "(F)",
+            canRead: true,
+            canWrite: true,
+          }),
+        ],
+        expected: { untrustedWorld: 1 },
+      },
+      {
+        name: "BUILTIN\\\\Guests SID (S-1-5-32-546) is world, not group (#74350)",
+        entries: [
+          aclEntry({
+            principal: "*S-1-5-32-546",
+            rights: ["F"],
+            rawRights: "(F)",
+            canRead: true,
+            canWrite: true,
+          }),
+        ],
+        expected: { untrustedWorld: 1 },
+      },
+      {
+        name: "Interactive SID (S-1-5-4) is world, not group (#74350)",
+        entries: [
+          aclEntry({
+            principal: "*S-1-5-4",
+            rights: ["F"],
+            rawRights: "(F)",
+            canRead: true,
+            canWrite: true,
+          }),
+        ],
+        expected: { untrustedWorld: 1 },
+      },
+      {
+        name: "Local SID (S-1-2-0) is world, not group (#74350)",
+        entries: [
+          aclEntry({
+            principal: "*S-1-2-0",
+            rights: ["F"],
+            rawRights: "(F)",
+            canRead: true,
+            canWrite: true,
+          }),
+        ],
+        expected: { untrustedWorld: 1 },
+      },
+      {
+        name: "Network SID (S-1-5-2) is world, not group (#74350)",
+        entries: [
+          aclEntry({
+            principal: "*S-1-5-2",
+            rights: ["F"],
+            rawRights: "(F)",
+            canRead: true,
+            canWrite: true,
+          }),
+        ],
+        expected: { untrustedWorld: 1 },
+      },
+      {
+        name: "Anonymous Logon principal name is world, not group (#74350)",
+        entries: [
+          aclEntry({
+            principal: "NT AUTHORITY\\Anonymous Logon",
+            rights: ["F"],
+            rawRights: "(F)",
+            canRead: true,
+            canWrite: true,
+          }),
+        ],
+        expected: { untrustedWorld: 1 },
+      },
+      {
+        name: "BUILTIN\\\\Guests principal name is world, not group (#74350)",
+        entries: [
+          aclEntry({
+            principal: "BUILTIN\\Guests",
+            rights: ["F"],
+            rawRights: "(F)",
+            canRead: true,
+            canWrite: true,
+          }),
+        ],
+        expected: { untrustedWorld: 1 },
+      },
     ] as const)("$name", ({ entries, env, expected }) => {
       expectSummaryCounts(entries, expected, env);
     });

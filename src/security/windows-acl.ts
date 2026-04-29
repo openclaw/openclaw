@@ -37,6 +37,20 @@ const WORLD_PRINCIPALS = new Set([
   "builtin\\users",
   "authenticated users",
   "nt authority\\authenticated users",
+  // Unauthenticated and broad-access principals — must classify as
+  // world-equivalent so `worldWritable` audit checks can't be bypassed
+  // by ACL entries granted to anonymous/guest/interactive/local/network.
+  // See #74350.
+  "anonymous logon",
+  "nt authority\\anonymous logon",
+  "guest",
+  "guests",
+  "builtin\\guests",
+  "interactive",
+  "nt authority\\interactive",
+  "local",
+  "network",
+  "nt authority\\network",
 ]);
 const TRUSTED_BASE = new Set([
   "nt authority\\system",
@@ -63,9 +77,27 @@ const TRUSTED_SIDS = new Set([
 // SIDs for world-equivalent principals that icacls /sid emits as raw SIDs.
 // Without this list these would be classified as "group" instead of "world".
 //   S-1-1-0        Everyone
+//   S-1-5-7        Anonymous Logon
 //   S-1-5-11       Authenticated Users
+//   S-1-2-0        Local
+//   S-1-5-2        Network
+//   S-1-5-4        Interactive
 //   S-1-5-32-545   BUILTIN\Users
-const WORLD_SIDS = new Set(["s-1-1-0", "s-1-5-11", "s-1-5-32-545"]);
+//   S-1-5-32-546   BUILTIN\Guests
+// See #74350 — without the unauthenticated / broad-access SIDs,
+// `classifyPrincipal` returned `group` for ACL entries granted to
+// Anonymous Logon / Guests / Interactive, and the `worldWritable`
+// audit guard silently returned false for files writable by anyone.
+const WORLD_SIDS = new Set([
+  "s-1-1-0",
+  "s-1-2-0",
+  "s-1-5-2",
+  "s-1-5-4",
+  "s-1-5-7",
+  "s-1-5-11",
+  "s-1-5-32-545",
+  "s-1-5-32-546",
+]);
 const STATUS_PREFIXES = [
   "successfully processed",
   "processed",
