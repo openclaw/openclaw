@@ -280,6 +280,12 @@ function appendTopLevelListSeparator(state: RenderState) {
   }
 }
 
+function appendNestedListSeparator(state: RenderState) {
+  if (!state.text.endsWith("\n")) {
+    state.text += "\n";
+  }
+}
+
 function appendListPrefix(state: RenderState) {
   const stack = state.env.listStack;
   const top = stack[stack.length - 1];
@@ -669,7 +675,7 @@ function renderTokens(tokens: MarkdownToken[], state: RenderState): void {
       case "bullet_list_open":
         // Add newline before nested list starts (so nested items appear on new line)
         if (state.env.listStack.length > 0) {
-          state.text += "\n";
+          appendNestedListSeparator(state);
         }
         state.env.listStack.push({ type: "bullet", index: 0 });
         break;
@@ -682,7 +688,7 @@ function renderTokens(tokens: MarkdownToken[], state: RenderState): void {
       case "ordered_list_open": {
         // Add newline before nested list starts (so nested items appear on new line)
         if (state.env.listStack.length > 0) {
-          state.text += "\n";
+          appendNestedListSeparator(state);
         }
         const start = Number(getAttr(token, "start") ?? "1");
         state.env.listStack.push({ type: "ordered", index: start - 1 });

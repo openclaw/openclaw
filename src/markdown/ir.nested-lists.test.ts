@@ -331,6 +331,38 @@ second paragraph
 2. next`);
   });
 
+  it("does not add triple newlines before loose nested bullet lists", () => {
+    const input = `- parent
+
+  - child
+
+- next`;
+
+    const result = markdownToIR(input);
+
+    expect(result.text).toBe(`• parent
+
+  • child
+• next`);
+    expect(result.text).not.toContain("\n\n\n");
+  });
+
+  it("does not add triple newlines before loose nested ordered lists", () => {
+    const input = `1. parent
+
+   1. child
+
+2. next`;
+
+    const result = markdownToIR(input);
+
+    expect(result.text).toBe(`1. parent
+
+  1. child
+2. next`);
+    expect(result.text).not.toContain("\n\n\n");
+  });
+
   it("adds blank line between bullet list and following paragraph", () => {
     const input = `- item 1
 - item 2
