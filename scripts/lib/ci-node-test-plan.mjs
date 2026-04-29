@@ -40,6 +40,7 @@ function createAutoReplyReplySplitShards() {
     "auto-reply-reply-agent-runner": [],
     "auto-reply-reply-commands": [],
     "auto-reply-reply-dispatch": [],
+    "auto-reply-reply-session": [],
     "auto-reply-reply-state-routing": [],
   };
 
@@ -62,6 +63,8 @@ function createAutoReplyReplySplitShards() {
       name.startsWith("get-reply")
     ) {
       groups["auto-reply-reply-dispatch"].push(file);
+    } else if (name.startsWith("session")) {
+      groups["auto-reply-reply-session"].push(file);
     } else {
       groups["auto-reply-reply-state-routing"].push(file);
     }
