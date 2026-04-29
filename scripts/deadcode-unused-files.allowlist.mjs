@@ -69,6 +69,7 @@ export const KNIP_UNUSED_FILE_ALLOWLIST = [
   "src/memory-host-sdk/runtime-files.ts",
   "src/memory-host-sdk/runtime.ts",
   "src/plugins/build-smoke-entry.ts",
+  "src/plugins/contracts/advanced-workflow-fixtures.ts",
   "src/plugins/contracts/host-hook-fixture.ts",
   "src/plugins/contracts/rootdir-boundary-canary.ts",
   "src/plugins/contracts/tts-contract-suites.ts",
