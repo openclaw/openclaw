@@ -8,6 +8,8 @@ const TMUX_ATTACH_DISABLE_VALUES = new Set(["0", "false", "no", "off"]);
 const TMUX_ATTACH_FORCE_VALUES = new Set(["1", "true", "yes", "on"]);
 const DEFAULT_PROFILE_NAME = "main";
 const RAW_WATCH_SCRIPT = "scripts/watch-node.mjs";
+const TMUX_CWD_ENV_KEY = "OPENCLAW_GATEWAY_WATCH_CWD";
+const TMUX_CWD_OPTION_KEY = "@openclaw.gateway_watch.cwd";
 const TMUX_CHILD_ENV_KEYS = [
   "NODE_OPTIONS",
   "OPENCLAW_CONFIG_PATH",
@@ -137,6 +139,20 @@ const attachTmux = ({ env, sessionName, spawnSyncImpl }) => {
   return runTmux(spawnSyncImpl, args, { stdio: "inherit" });
 };
 
+const setTmuxSessionMetadata = ({ cwd, sessionName, spawnSyncImpl, stderr }) => {
+  const updates = [
+    ["set-option", "-q", "-t", sessionName, TMUX_CWD_OPTION_KEY, cwd],
+    ["set-environment", "-t", sessionName, TMUX_CWD_ENV_KEY, cwd],
+  ];
+  for (const args of updates) {
+    const result = runTmux(spawnSyncImpl, args);
+    if (result.error || result.status !== 0) {
+      log(stderr, `warning: failed to update tmux session metadata: ${getTmuxErrorText(result)}`);
+      return;
+    }
+  }
+};
+
 export const runGatewayWatchTmuxMain = (params = {}) => {
   const deps = {
     args: params.args ?? process.argv.slice(2),
@@ -219,6 +235,13 @@ export const runGatewayWatchTmuxMain = (params = {}) => {
     return result.status || 1;
   }
 
+  setTmuxSessionMetadata({
+    cwd: deps.cwd,
+    sessionName,
+    spawnSyncImpl: deps.spawnSync,
+    stderr: deps.stderr,
+  });
+
   log(deps.stderr, `gateway:watch ${action} in tmux session ${sessionName}`);
   if (
     shouldAttachTmux({
@@ -241,6 +264,7 @@ export const runGatewayWatchTmuxMain = (params = {}) => {
     return 0;
   }
   deps.stdout.write(`Attach: tmux attach -t ${sessionName}\n`);
+  deps.stdout.write(`Cwd: tmux show-options -v -t ${sessionName} ${TMUX_CWD_OPTION_KEY}\n`);
   deps.stdout.write("Restart: rerun the same pnpm gateway:watch command\n");
   deps.stdout.write(`Stop: tmux kill-session -t ${sessionName}\n`);
   return 0;

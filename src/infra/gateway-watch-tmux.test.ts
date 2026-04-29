@@ -68,6 +68,8 @@ describe("gateway-watch tmux wrapper", () => {
     const spawnSync = vi
       .fn()
       .mockReturnValueOnce({ status: 1, stdout: "", stderr: "" })
+      .mockReturnValueOnce({ status: 0, stdout: "", stderr: "" })
+      .mockReturnValueOnce({ status: 0, stdout: "", stderr: "" })
       .mockReturnValueOnce({ status: 0, stdout: "", stderr: "" });
 
     const code = runGatewayWatchTmuxMain({
@@ -101,10 +103,38 @@ describe("gateway-watch tmux wrapper", () => {
       ],
       expect.objectContaining({ encoding: "utf8" }),
     );
+    expect(spawnSync).toHaveBeenNthCalledWith(
+      3,
+      "tmux",
+      [
+        "set-option",
+        "-q",
+        "-t",
+        "openclaw-gateway-watch-main",
+        "@openclaw.gateway_watch.cwd",
+        "/repo",
+      ],
+      expect.objectContaining({ encoding: "utf8" }),
+    );
+    expect(spawnSync).toHaveBeenNthCalledWith(
+      4,
+      "tmux",
+      [
+        "set-environment",
+        "-t",
+        "openclaw-gateway-watch-main",
+        "OPENCLAW_GATEWAY_WATCH_CWD",
+        "/repo",
+      ],
+      expect.objectContaining({ encoding: "utf8" }),
+    );
     expect(stderr.chunks.join("")).toContain(
       "gateway:watch started in tmux session openclaw-gateway-watch-main",
     );
     expect(stdout.chunks.join("")).toContain("tmux attach -t openclaw-gateway-watch-main");
+    expect(stdout.chunks.join("")).toContain(
+      "tmux show-options -v -t openclaw-gateway-watch-main @openclaw.gateway_watch.cwd",
+    );
   });
 
   it("auto-attaches in an interactive terminal after creating a session", () => {
@@ -113,6 +143,8 @@ describe("gateway-watch tmux wrapper", () => {
     const spawnSync = vi
       .fn()
       .mockReturnValueOnce({ status: 1, stdout: "", stderr: "" })
+      .mockReturnValueOnce({ status: 0, stdout: "", stderr: "" })
+      .mockReturnValueOnce({ status: 0, stdout: "", stderr: "" })
       .mockReturnValueOnce({ status: 0, stdout: "", stderr: "" })
       .mockReturnValueOnce({ status: 0, stdout: "", stderr: "" });
 
@@ -130,7 +162,7 @@ describe("gateway-watch tmux wrapper", () => {
 
     expect(code).toBe(0);
     expect(spawnSync).toHaveBeenNthCalledWith(
-      3,
+      5,
       "tmux",
       ["attach-session", "-t", "openclaw-gateway-watch-main"],
       expect.objectContaining({ stdio: "inherit" }),
@@ -143,6 +175,8 @@ describe("gateway-watch tmux wrapper", () => {
     const stderr = createOutput();
     const spawnSync = vi
       .fn()
+      .mockReturnValueOnce({ status: 0, stdout: "", stderr: "" })
+      .mockReturnValueOnce({ status: 0, stdout: "", stderr: "" })
       .mockReturnValueOnce({ status: 0, stdout: "", stderr: "" })
       .mockReturnValueOnce({ status: 0, stdout: "", stderr: "" })
       .mockReturnValueOnce({ status: 0, stdout: "", stderr: "" });
@@ -161,7 +195,7 @@ describe("gateway-watch tmux wrapper", () => {
 
     expect(code).toBe(0);
     expect(spawnSync).toHaveBeenNthCalledWith(
-      3,
+      5,
       "tmux",
       ["switch-client", "-t", "openclaw-gateway-watch-main"],
       expect.objectContaining({ stdio: "inherit" }),
@@ -174,6 +208,8 @@ describe("gateway-watch tmux wrapper", () => {
     const spawnSync = vi
       .fn()
       .mockReturnValueOnce({ status: 1, stdout: "", stderr: "" })
+      .mockReturnValueOnce({ status: 0, stdout: "", stderr: "" })
+      .mockReturnValueOnce({ status: 0, stdout: "", stderr: "" })
       .mockReturnValueOnce({ status: 0, stdout: "", stderr: "" });
 
     const code = runGatewayWatchTmuxMain({
@@ -189,7 +225,7 @@ describe("gateway-watch tmux wrapper", () => {
     });
 
     expect(code).toBe(0);
-    expect(spawnSync).toHaveBeenCalledTimes(2);
+    expect(spawnSync).toHaveBeenCalledTimes(4);
     expect(stdout.chunks.join("")).toContain("tmux attach -t openclaw-gateway-watch-main");
   });
 
@@ -198,6 +234,8 @@ describe("gateway-watch tmux wrapper", () => {
     const stderr = createOutput();
     const spawnSync = vi
       .fn()
+      .mockReturnValueOnce({ status: 0, stdout: "", stderr: "" })
+      .mockReturnValueOnce({ status: 0, stdout: "", stderr: "" })
       .mockReturnValueOnce({ status: 0, stdout: "", stderr: "" })
       .mockReturnValueOnce({ status: 0, stdout: "", stderr: "" });
 
@@ -238,6 +276,8 @@ describe("gateway-watch tmux wrapper", () => {
       .fn()
       .mockReturnValueOnce({ status: 0, stdout: "", stderr: "" })
       .mockReturnValueOnce({ status: 1, stdout: "", stderr: "can't find window: 0" })
+      .mockReturnValueOnce({ status: 0, stdout: "", stderr: "" })
+      .mockReturnValueOnce({ status: 0, stdout: "", stderr: "" })
       .mockReturnValueOnce({ status: 0, stdout: "", stderr: "" })
       .mockReturnValueOnce({ status: 0, stdout: "", stderr: "" });
 
