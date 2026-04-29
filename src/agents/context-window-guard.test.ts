@@ -191,6 +191,7 @@ describe("context-window-guard", () => {
     expect(info.source).toBe("default");
     expect(guard.shouldWarn).toBe(false);
     expect(guard.shouldBlock).toBe(false);
+    expect(guard.shouldWarnDefault).toBe(true);
   });
 
   it("allows overriding thresholds", () => {
@@ -202,6 +203,7 @@ describe("context-window-guard", () => {
     });
     expect(guard.shouldWarn).toBe(true);
     expect(guard.shouldBlock).toBe(false);
+    expect(guard.shouldWarnDefault).toBe(false);
   });
 
   it("exports thresholds as expected", () => {
