@@ -5,6 +5,7 @@ import { type AgentEventPayload, getAgentRunContext } from "../infra/agent-event
 import { detectErrorKind, type ErrorKind } from "../infra/errors.js";
 import { resolveHeartbeatVisibility } from "../infra/heartbeat-visibility.js";
 import { setSafeTimeout } from "../utils/timer-delay.js";
+import { resolveChatDeltaThrottleMs } from "./chat-delta-throttle.js";
 import {
   normalizeLiveAssistantEventText,
   projectLiveAssistantBufferedText,
@@ -666,7 +667,7 @@ export function createAgentEventHandler({
     }
     const now = Date.now();
     const last = chatRunState.deltaSentAt.get(clientRunId) ?? 0;
-    if (now - last < 150) {
+    if (now - last < resolveChatDeltaThrottleMs()) {
       return;
     }
     chatRunState.deltaSentAt.set(clientRunId, now);
@@ -762,9 +763,10 @@ export function createAgentEventHandler({
       suppressLeadFragments: false,
     });
     // Flush any throttled delta so streaming clients receive the complete text
-    // before the final event. The 150 ms throttle in emitChatDelta may have
-    // suppressed the most recent chunk, leaving the client with stale text.
-    // Only flush if the buffer has grown since the last broadcast to avoid duplicates.
+    // before the final event. The emitChatDelta throttle (default 150ms,
+    // overridable via OPENCLAW_CHAT_DELTA_THROTTLE_MS) may have suppressed the
+    // most recent chunk, leaving the client with stale text. Only flush if the
+    // buffer has grown since the last broadcast to avoid duplicates.
     flushBufferedChatDeltaIfNeeded(sessionKey, clientRunId, sourceRunId, seq);
     chatRunState.deltaLastBroadcastLen.delete(clientRunId);
     chatRunState.rawBuffers.delete(clientRunId);
