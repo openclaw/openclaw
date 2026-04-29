@@ -86,8 +86,14 @@ export async function probeGatewayMemoryStatus(params: {
       timeoutMs,
       config: params.cfg,
     });
+    // Propagate the gateway's checked flag. When the gateway skips the embedding
+    // probe (probe: false path), it returns checked: false to signal that no
+    // readiness determination was made. Mapping that to checked: true here would
+    // cause the renderer to treat a skipped probe as a checked-but-not-ready
+    // failure and emit a false-positive warning for key-optional providers.
+    const gatewayChecked = payload.embedding.checked !== false;
     return {
-      checked: true,
+      checked: gatewayChecked,
       ready: payload.embedding.ok,
       error: payload.embedding.error,
     };

@@ -96,6 +96,25 @@ describe("probeGatewayMemoryStatus", () => {
     });
   });
 
+  it("propagates checked: false when gateway skipped the embedding probe", async () => {
+    // Gateway returns checked: false when called with probe: false and no cached
+    // availability data (SKIPPED_MEMORY_EMBEDDING_PROBE shape).
+    callGateway.mockResolvedValue({
+      embedding: {
+        ok: false,
+        checked: false,
+        error:
+          "memory embedding readiness not checked; run `openclaw memory status --deep` to probe",
+      },
+    });
+
+    await expect(probeGatewayMemoryStatus({ cfg })).resolves.toEqual({
+      checked: false,
+      ready: false,
+      error: expect.stringContaining("not checked"),
+    });
+  });
+
   it("keeps gateway request timeouts as explicit failures", async () => {
     callGateway.mockRejectedValue(new Error("gateway request timeout for doctor.memory.status"));
 
