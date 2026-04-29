@@ -126,10 +126,11 @@ type GatewayClientModule = typeof import("./client.js");
 type GatewayClientInstance = InstanceType<GatewayClientModule["GatewayClient"]>;
 
 let GatewayClient: GatewayClientModule["GatewayClient"];
+let resolveGatewayClientConnectChallengeTimeoutMs: GatewayClientModule["resolveGatewayClientConnectChallengeTimeoutMs"];
 
 async function loadGatewayClientModule() {
   vi.resetModules();
-  ({ GatewayClient } = await import("./client.js"));
+  ({ GatewayClient, resolveGatewayClientConnectChallengeTimeoutMs } = await import("./client.js"));
 }
 
 function getLatestWs(): MockWebSocket {
@@ -275,6 +276,20 @@ describe("GatewayClient security checks", () => {
     expect(onConnectError).not.toHaveBeenCalled();
     expect(wsInstances.length).toBe(1);
     client.stop();
+  });
+});
+
+describe("GatewayClient connect challenge timeout", () => {
+  it("clamps deprecated connectDelayMs through the shared connect-challenge resolver", () => {
+    expect(resolveGatewayClientConnectChallengeTimeoutMs({ connectDelayMs: 50 })).toBe(250);
+    expect(resolveGatewayClientConnectChallengeTimeoutMs({ connectDelayMs: 2_000 })).toBe(2_000);
+    expect(resolveGatewayClientConnectChallengeTimeoutMs({ connectDelayMs: 20_000 })).toBe(15_000);
+    expect(
+      resolveGatewayClientConnectChallengeTimeoutMs({
+        connectChallengeTimeoutMs: 1_000,
+        connectDelayMs: 20_000,
+      }),
+    ).toBe(1_000);
   });
 });
 

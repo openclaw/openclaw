@@ -550,23 +550,30 @@ enumeration of `src/gateway/server-methods/*.ts`.
 The reference client in `src/gateway/client.ts` uses these defaults. Values are
 stable across protocol v3 and are the expected baseline for third-party clients.
 
-| Constant                                  | Default                                               | Source                                                     |
-| ----------------------------------------- | ----------------------------------------------------- | ---------------------------------------------------------- |
-| `PROTOCOL_VERSION`                        | `3`                                                   | `src/gateway/protocol/schema/protocol-schemas.ts`          |
-| Request timeout (per RPC)                 | `30_000` ms                                           | `src/gateway/client.ts` (`requestTimeoutMs`)               |
-| Preauth / connect-challenge timeout       | `15_000` ms                                           | `src/gateway/handshake-timeouts.ts` (clamp `250`–`15_000`) |
-| Initial reconnect backoff                 | `1_000` ms                                            | `src/gateway/client.ts` (`backoffMs`)                      |
-| Max reconnect backoff                     | `30_000` ms                                           | `src/gateway/client.ts` (`scheduleReconnect`)              |
-| Fast-retry clamp after device-token close | `250` ms                                              | `src/gateway/client.ts`                                    |
-| Force-stop grace before `terminate()`     | `250` ms                                              | `FORCE_STOP_TERMINATE_GRACE_MS`                            |
-| `stopAndWait()` default timeout           | `1_000` ms                                            | `STOP_AND_WAIT_TIMEOUT_MS`                                 |
-| Default tick interval (pre `hello-ok`)    | `30_000` ms                                           | `src/gateway/client.ts`                                    |
-| Tick-timeout close                        | code `4000` when silence exceeds `tickIntervalMs * 2` | `src/gateway/client.ts`                                    |
-| `MAX_PAYLOAD_BYTES`                       | `25 * 1024 * 1024` (25 MB)                            | `src/gateway/server-constants.ts`                          |
+| Constant                                  | Default                                               | Source                                                                                              |
+| ----------------------------------------- | ----------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| `PROTOCOL_VERSION`                        | `3`                                                   | `src/gateway/protocol/schema/protocol-schemas.ts`                                                   |
+| Request timeout (per RPC)                 | `30_000` ms                                           | `src/gateway/client.ts` (`requestTimeoutMs`)                                                        |
+| Server preauth / connect-auth timeout     | `15_000` ms                                           | `src/gateway/handshake-timeouts.ts`; `gateway.handshakeTimeoutMs` / `OPENCLAW_HANDSHAKE_TIMEOUT_MS` |
+| Client connect-challenge timeout          | `15_000` ms                                           | `src/gateway/handshake-timeouts.ts` (clamp `250`–`15_000`)                                          |
+| Initial reconnect backoff                 | `1_000` ms                                            | `src/gateway/client.ts` (`backoffMs`)                                                               |
+| Max reconnect backoff                     | `30_000` ms                                           | `src/gateway/client.ts` (`scheduleReconnect`)                                                       |
+| Fast-retry clamp after device-token close | `250` ms                                              | `src/gateway/client.ts`                                                                             |
+| Force-stop grace before `terminate()`     | `250` ms                                              | `FORCE_STOP_TERMINATE_GRACE_MS`                                                                     |
+| `stopAndWait()` default timeout           | `1_000` ms                                            | `STOP_AND_WAIT_TIMEOUT_MS`                                                                          |
+| Default tick interval (pre `hello-ok`)    | `30_000` ms                                           | `src/gateway/client.ts`                                                                             |
+| Tick-timeout close                        | code `4000` when silence exceeds `tickIntervalMs * 2` | `src/gateway/client.ts`                                                                             |
+| `MAX_PAYLOAD_BYTES`                       | `25 * 1024 * 1024` (25 MB)                            | `src/gateway/server-constants.ts`                                                                   |
 
 The server advertises the effective `policy.tickIntervalMs`, `policy.maxPayload`,
 and `policy.maxBufferedBytes` in `hello-ok`; clients should honor those values
 rather than the pre-handshake defaults.
+
+The server clears the preauth timer only after the first frame validates as a
+`connect` request, then starts a fresh connect-auth watchdog with the same
+configured timeout budget. This keeps slow token, bootstrap-token, and device
+auth bounded without letting the original preauth timer cut off a valid connect
+frame that is already being processed.
 
 ## Auth
 

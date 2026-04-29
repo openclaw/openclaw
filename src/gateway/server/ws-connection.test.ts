@@ -167,4 +167,73 @@ describe("attachGatewayWsConnectionHandler", () => {
     expect(registered).toBe(false);
     expect(clients.size).toBe(0);
   });
+
+  it("closes valid connect handshakes that stall before auth completes", () => {
+    vi.useFakeTimers();
+    try {
+      const listeners = new Map<string, (...args: unknown[]) => void>();
+      const wss = {
+        on: vi.fn((event: string, handler: (...args: unknown[]) => void) => {
+          listeners.set(event, handler);
+        }),
+      } as unknown as WebSocketServer;
+      const socket = Object.assign(new EventEmitter(), {
+        _socket: {
+          remoteAddress: "127.0.0.1",
+          remotePort: 1234,
+          localAddress: "127.0.0.1",
+          localPort: 5678,
+        },
+        send: vi.fn(),
+        close: vi.fn(),
+      });
+      const upgradeReq = {
+        headers: { host: "127.0.0.1:19001" },
+        socket: { localAddress: "127.0.0.1" },
+      };
+      const preauthConnectionBudget = { release: vi.fn() };
+
+      attachGatewayWsConnectionHandler({
+        wss,
+        clients: new Set(),
+        preauthConnectionBudget: preauthConnectionBudget as never,
+        port: 19001,
+        preauthHandshakeTimeoutMs: 25,
+        canvasHostEnabled: false,
+        resolvedAuth: createResolvedAuth("token"),
+        gatewayMethods: [],
+        events: [],
+        refreshHealthSnapshot: vi.fn(),
+        logGateway: createLogger() as never,
+        logHealth: createLogger() as never,
+        logWsControl: createLogger() as never,
+        extraHandlers: {},
+        broadcast: vi.fn(),
+        buildRequestContext: () =>
+          ({
+            unsubscribeAllSessionEvents: vi.fn(),
+            nodeRegistry: { unregister: vi.fn() },
+            nodeUnsubscribeAll: vi.fn(),
+          }) as never,
+      });
+
+      const onConnection = listeners.get("connection");
+      expect(onConnection).toBeTypeOf("function");
+      onConnection?.(socket, upgradeReq);
+
+      const passed = attachGatewayWsMessageHandlerMock.mock.calls[0]?.[0] as {
+        armConnectAuthTimer: () => void;
+      };
+      passed.armConnectAuthTimer();
+
+      vi.advanceTimersByTime(24);
+      expect(socket.close).not.toHaveBeenCalled();
+
+      vi.advanceTimersByTime(1);
+      expect(socket.close).toHaveBeenCalledWith(1008, "connect auth timeout");
+      expect(preauthConnectionBudget.release).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

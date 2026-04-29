@@ -224,6 +224,8 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
     let lastFrameType: string | undefined;
     let lastFrameMethod: string | undefined;
     let lastFrameId: string | undefined;
+    let handshakeTimer: NodeJS.Timeout | undefined;
+    let connectAuthTimer: NodeJS.Timeout | undefined;
 
     const setCloseCause = (cause: string, meta?: Record<string, unknown>) => {
       if (!closeCause) {
@@ -240,6 +242,22 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       }
       holdsPreauthBudget = false;
       preauthConnectionBudget.release(preauthBudgetKey);
+    };
+
+    const clearHandshakeTimer = () => {
+      if (!handshakeTimer) {
+        return;
+      }
+      clearTimeout(handshakeTimer);
+      handshakeTimer = undefined;
+    };
+
+    const clearConnectAuthTimer = () => {
+      if (!connectAuthTimer) {
+        return;
+      }
+      clearTimeout(connectAuthTimer);
+      connectAuthTimer = undefined;
     };
 
     const setLastFrameMeta = (meta: { type?: string; method?: string; id?: string }) => {
@@ -270,7 +288,8 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
         return;
       }
       closed = true;
-      clearTimeout(handshakeTimer);
+      clearHandshakeTimer();
+      clearConnectAuthTimer();
       releasePreauthBudget();
       if (client) {
         clients.delete(client);
@@ -369,7 +388,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
     const handshakeTimeoutMs = resolvePreauthHandshakeTimeoutMs({
       configuredTimeoutMs: params.preauthHandshakeTimeoutMs,
     });
-    const handshakeTimer = setTimeout(() => {
+    handshakeTimer = setTimeout(() => {
       if (!client) {
         handshakeState = "failed";
         setCloseCause("handshake-timeout", {
@@ -382,6 +401,28 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
         close();
       }
     }, handshakeTimeoutMs);
+    handshakeTimer.unref?.();
+
+    const armConnectAuthTimer = () => {
+      clearHandshakeTimer();
+      clearConnectAuthTimer();
+      const connectAuthStartedAt = Date.now();
+      connectAuthTimer = setTimeout(() => {
+        if (!client) {
+          handshakeState = "failed";
+          setCloseCause("connect-auth-timeout", {
+            handshakeMs: Date.now() - openedAt,
+            connectAuthMs: Date.now() - connectAuthStartedAt,
+            endpoint,
+          });
+          logWsControl.warn(
+            `connect auth timeout conn=${connId} peer=${endpoint ?? "n/a"} remote=${remoteAddr ?? "?"}`,
+          );
+          close(1008, "connect auth timeout");
+        }
+      }, handshakeTimeoutMs);
+      connectAuthTimer.unref?.();
+    };
 
     attachGatewayWsMessageHandler({
       socket,
@@ -411,7 +452,9 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       send,
       close,
       isClosed: () => closed,
-      clearHandshakeTimer: () => clearTimeout(handshakeTimer),
+      clearHandshakeTimer,
+      armConnectAuthTimer,
+      clearConnectAuthTimer,
       getClient: () => client,
       setClient: (next) => {
         if (closed) {

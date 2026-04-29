@@ -200,6 +200,8 @@ export function attachGatewayWsMessageHandler(params: {
   close: (code?: number, reason?: string) => void;
   isClosed: () => boolean;
   clearHandshakeTimer: () => void;
+  armConnectAuthTimer: () => void;
+  clearConnectAuthTimer: () => void;
   getClient: () => GatewayWsClient | null;
   setClient: (next: GatewayWsClient) => boolean;
   setHandshakeState: (state: "pending" | "connected" | "failed") => void;
@@ -239,6 +241,8 @@ export function attachGatewayWsMessageHandler(params: {
     close,
     isClosed,
     clearHandshakeTimer,
+    armConnectAuthTimer,
+    clearConnectAuthTimer,
     getClient,
     setClient,
     setHandshakeState,
@@ -418,6 +422,8 @@ export function attachGatewayWsMessageHandler(params: {
 
         const frame = parsed;
         const connectParams = frame.params as ConnectParams;
+        clearHandshakeTimer();
+        armConnectAuthTimer();
         const resolvedAuth = getResolvedAuth();
         const clientLabel = connectParams.client.displayName ?? connectParams.client.id;
         const clientMeta = {
@@ -561,6 +567,9 @@ export function attachGatewayWsMessageHandler(params: {
           rateLimiter: authRateLimiter,
           clientIp: browserRateLimitClientIp,
         });
+        if (isClosed()) {
+          return;
+        }
         const rejectUnauthorized = (failedAuth: GatewayAuthResult) => {
           const { authProvided, canRetryWithDeviceToken, recommendedNextStep } =
             resolveUnauthorizedHandshakeContext({
@@ -791,6 +800,9 @@ export function attachGatewayWsMessageHandler(params: {
             }),
           verifyDeviceToken,
         }));
+        if (isClosed()) {
+          return;
+        }
         pairingLocality = resolvePairingLocality({
           connectParams,
           isLocalClient,
@@ -1287,7 +1299,7 @@ export function attachGatewayWsMessageHandler(params: {
           canvasHostUrl && canvasCapability
             ? (buildCanvasScopedHostUrl(canvasHostUrl, canvasCapability) ?? canvasHostUrl)
             : canvasHostUrl;
-        clearHandshakeTimer();
+        clearConnectAuthTimer();
         const nextClient: GatewayWsClient = {
           socket,
           connect: connectParams,

@@ -1,7 +1,7 @@
 import type { IncomingMessage } from "node:http";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { WebSocket } from "ws";
-import type { ResolvedGatewayAuth } from "../../auth.js";
+import type { GatewayAuthResult, ResolvedGatewayAuth } from "../../auth.js";
 import { PROTOCOL_VERSION } from "../../protocol/index.js";
 import type { GatewayRequestContext } from "../../server-methods/types.js";
 
@@ -11,6 +11,8 @@ const {
   getHealthVersionMock,
   incrementPresenceVersionMock,
   loadConfigMock,
+  resolveConnectAuthDecisionMock,
+  resolveConnectAuthStateMock,
   upsertPresenceMock,
 } = vi.hoisted(() => ({
   buildGatewaySnapshotMock: vi.fn(() => ({
@@ -37,6 +39,8 @@ const {
       },
     },
   })),
+  resolveConnectAuthDecisionMock: vi.fn(),
+  resolveConnectAuthStateMock: vi.fn(),
   upsertPresenceMock: vi.fn(),
 }));
 
@@ -63,6 +67,11 @@ vi.mock("../health-state.js", () => ({
   incrementPresenceVersion: incrementPresenceVersionMock,
 }));
 
+vi.mock("./auth-context.js", () => ({
+  resolveConnectAuthDecision: resolveConnectAuthDecisionMock,
+  resolveConnectAuthState: resolveConnectAuthStateMock,
+}));
+
 import { attachGatewayWsMessageHandler } from "./message-handler.js";
 
 function createLogger() {
@@ -74,9 +83,30 @@ function createLogger() {
   };
 }
 
+type AuthStateMock = {
+  authResult: GatewayAuthResult;
+  authOk: boolean;
+  authMethod: GatewayAuthResult["method"];
+  sharedAuthOk: boolean;
+  sharedAuthProvided: boolean;
+};
+
 describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    const authState: AuthStateMock = {
+      authResult: { ok: true, method: "none" },
+      authOk: true,
+      authMethod: "none",
+      sharedAuthOk: false,
+      sharedAuthProvided: false,
+    };
+    resolveConnectAuthStateMock.mockResolvedValue(authState);
+    resolveConnectAuthDecisionMock.mockImplementation(async (params: { state: AuthStateMock }) => ({
+      authResult: params.state.authResult,
+      authOk: params.state.authOk,
+      authMethod: params.state.authMethod,
+    }));
   });
 
   it("uses the injected runtime-aware health refresh after hello", async () => {
@@ -103,6 +133,9 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
     } as unknown as WebSocket;
     const send = vi.fn();
     const isClosed = vi.fn(() => false);
+    const clearHandshakeTimer = vi.fn();
+    const armConnectAuthTimer = vi.fn();
+    const clearConnectAuthTimer = vi.fn();
     let client: unknown = null;
     const resolvedAuth: ResolvedGatewayAuth = {
       mode: "none",
@@ -130,7 +163,9 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
       send,
       close: vi.fn(),
       isClosed,
-      clearHandshakeTimer: vi.fn(),
+      clearHandshakeTimer,
+      armConnectAuthTimer,
+      clearConnectAuthTimer,
       getClient: () => client as never,
       setClient: (next) => {
         client = next;
@@ -172,10 +207,113 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
     });
     const hello = JSON.parse(socketSend.mock.calls[0]?.[0] ?? "{}") as { ok?: boolean };
     expect(hello.ok).toBe(true);
+    expect(clearHandshakeTimer).toHaveBeenCalledOnce();
+    expect(armConnectAuthTimer).toHaveBeenCalledOnce();
+    expect(clearConnectAuthTimer).toHaveBeenCalledOnce();
 
     await vi.waitFor(() => {
       expect(refreshHealthSnapshot).toHaveBeenCalledWith({ probe: true });
     });
     resolveRefresh?.();
+  });
+
+  it("clears the preauth timer and arms connect-auth watchdog after a valid connect frame", async () => {
+    const stalledAuth = new Promise<never>(() => {
+      // Intentionally unsettled: this simulates an auth backend that stops responding.
+    });
+    resolveConnectAuthStateMock.mockReturnValueOnce(stalledAuth);
+    const socketSend = vi.fn((_payload: string, cb?: (err?: Error) => void) => {
+      cb?.();
+    });
+    let onMessage: ((data: string) => void) | undefined;
+    const socket = {
+      _receiver: {},
+      send: socketSend,
+      on: vi.fn((event: string, handler: (data: string) => void) => {
+        if (event === "message") {
+          onMessage = handler;
+        }
+        return socket;
+      }),
+    } as unknown as WebSocket;
+    const close = vi.fn();
+    const clearHandshakeTimer = vi.fn();
+    const armConnectAuthTimer = vi.fn();
+    const clearConnectAuthTimer = vi.fn();
+    let client: unknown = null;
+    const resolvedAuth: ResolvedGatewayAuth = {
+      mode: "none",
+      allowTailscale: false,
+    };
+
+    attachGatewayWsMessageHandler({
+      socket,
+      upgradeReq: {
+        headers: { host: "127.0.0.1:19001", origin: "http://127.0.0.1:19001" },
+        socket: { localAddress: "127.0.0.1", remoteAddress: "127.0.0.1" },
+      } as unknown as IncomingMessage,
+      connId: "conn-stalled-auth",
+      remoteAddr: "127.0.0.1",
+      localAddr: "127.0.0.1",
+      requestHost: "127.0.0.1:19001",
+      requestOrigin: "http://127.0.0.1:19001",
+      connectNonce: "nonce-1",
+      getResolvedAuth: () => resolvedAuth,
+      gatewayMethods: [],
+      events: [],
+      extraHandlers: {},
+      buildRequestContext: () => ({}) as GatewayRequestContext,
+      refreshHealthSnapshot: vi.fn(),
+      send: vi.fn(),
+      close,
+      isClosed: vi.fn(() => false),
+      clearHandshakeTimer,
+      armConnectAuthTimer,
+      clearConnectAuthTimer,
+      getClient: () => client as never,
+      setClient: (next) => {
+        client = next;
+        return true;
+      },
+      setHandshakeState: vi.fn(),
+      setCloseCause: vi.fn(),
+      setLastFrameMeta: vi.fn(),
+      originCheckMetrics: { hostHeaderFallbackAccepted: 0 },
+      logGateway: createLogger() as never,
+      logHealth: createLogger() as never,
+      logWsControl: createLogger() as never,
+    });
+
+    expect(onMessage).toBeDefined();
+
+    onMessage?.(
+      JSON.stringify({
+        type: "req",
+        id: "connect-stalled",
+        method: "connect",
+        params: {
+          minProtocol: PROTOCOL_VERSION,
+          maxProtocol: PROTOCOL_VERSION,
+          client: {
+            id: "openclaw-control-ui",
+            version: "dev",
+            platform: "test",
+            mode: "ui",
+          },
+          role: "operator",
+          caps: [],
+        },
+      }),
+    );
+
+    await vi.waitFor(() => {
+      expect(resolveConnectAuthStateMock).toHaveBeenCalled();
+    });
+    expect(clearHandshakeTimer).toHaveBeenCalledOnce();
+    expect(armConnectAuthTimer).toHaveBeenCalledOnce();
+    expect(clearConnectAuthTimer).not.toHaveBeenCalled();
+    expect(socketSend).not.toHaveBeenCalled();
+    expect(close).not.toHaveBeenCalled();
+    expect(client).toBeNull();
   });
 });
