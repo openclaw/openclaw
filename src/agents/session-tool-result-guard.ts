@@ -10,8 +10,10 @@ import type {
   PluginHookBeforeMessageWriteEvent,
   PluginHookBeforeMessageWriteResult,
 } from "../plugins/types.js";
-import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
-import type { SessionTranscriptUpdateMode } from "../sessions/transcript-events.js";
+import {
+  emitSessionTranscriptUpdate,
+  type SessionTranscriptUpdateMode,
+} from "../sessions/transcript-events.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { formatContextLimitTruncationNotice } from "./pi-embedded-runner/tool-result-context-guard.js";
 import {

@@ -5,6 +5,7 @@ import {
   acquireSessionWriteLock,
   emitSessionTranscriptUpdate,
   type AgentMessage,
+  type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { guardSessionManager } from "openclaw/plugin-sdk/session-transcript-guard";
 
@@ -14,7 +15,7 @@ export async function mirrorCodexAppServerTranscript(params: {
   agentId?: string;
   messages: AgentMessage[];
   idempotencyScope?: string;
-  config?: Parameters<typeof guardSessionManager>[1]["config"];
+  config?: EmbeddedRunAttemptParams["config"];
 }): Promise<void> {
   const messages = params.messages.filter(
     (message) => message.role === "user" || message.role === "assistant",
@@ -34,6 +35,10 @@ export async function mirrorCodexAppServerTranscript(params: {
       agentId: params.agentId,
       sessionKey: params.sessionKey,
       config: params.config,
+      // Suppress per-message emits inside the guard; the single batch-level
+      // emitSessionTranscriptUpdate below fires once after all messages are
+      // written, preserving the pre-guard semantics of one notification per mirror call.
+      updateMode: "none",
     });
     for (const [index, message] of messages.entries()) {
       const idempotencyKey = params.idempotencyScope
