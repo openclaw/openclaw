@@ -74,7 +74,7 @@ stripe balance_transactions list --limit 10
 
 ```bash
 # Recent successful payments
-stripe payment_intents list --limit 10
+stripe payment_intents list --limit 10 --status succeeded
 
 # Failed payments only
 stripe payment_intents list --limit 10 --status requires_payment_method
