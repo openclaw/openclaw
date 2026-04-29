@@ -13,6 +13,7 @@ import {
 import { formatErrorMessage } from "../infra/errors.js";
 import { withExtractedArchiveRoot } from "../infra/install-flow.js";
 import {
+  CLAWHUB_SKILL_ARCHIVE_ROOT_MARKERS,
   installExtractedSkillRoot,
   normalizeTrackedSkillSlug,
   resolveWorkspaceSkillInstallDir,
@@ -232,7 +233,7 @@ async function performClawHubSkillInstall(
         archivePath: archive.archivePath,
         tempDirPrefix: "openclaw-skill-clawhub-",
         timeoutMs: 120_000,
-        rootMarkers: ["SKILL.md"],
+        rootMarkers: CLAWHUB_SKILL_ARCHIVE_ROOT_MARKERS,
         onExtracted: async (rootDir) =>
           await installExtractedSkillRoot({
             workspaceDir: params.workspaceDir,
@@ -241,6 +242,7 @@ async function performClawHubSkillInstall(
             mode: params.force ? "update" : "install",
             logger: params.logger,
             scan: false,
+            rootMarkers: CLAWHUB_SKILL_ARCHIVE_ROOT_MARKERS,
           }),
       });
       if (!install.ok) {

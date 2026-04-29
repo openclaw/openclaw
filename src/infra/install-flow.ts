@@ -32,7 +32,7 @@ export async function withExtractedArchiveRoot<TResult extends { ok: boolean }>(
   tempDirPrefix: string;
   timeoutMs: number;
   logger?: ArchiveLogger;
-  rootMarkers?: string[];
+  rootMarkers?: readonly string[];
   onExtracted: (rootDir: string) => Promise<TResult>;
 }): Promise<TResult | { ok: false; error: string }> {
   return await withTempDir(params.tempDirPrefix, async (tmpDir) => {

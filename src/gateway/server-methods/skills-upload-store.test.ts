@@ -219,6 +219,32 @@ describe("skill upload store", () => {
     expect(commit.sha256).toBe(sha256(archive));
   });
 
+  it("rejects idempotent commit when committed metadata is missing the actual sha", async () => {
+    const rootDir = await makeTempDir();
+    const store = createSkillUploadStore({ rootDir });
+    const archive = Buffer.from("abc");
+    const begin = await store.begin({
+      kind: "skill-archive",
+      slug: "corrupt-skill",
+      sizeBytes: archive.length,
+    });
+    await store.chunk({
+      uploadId: begin.uploadId,
+      offset: 0,
+      dataBase64: archive.toString("base64"),
+    });
+    await store.commit({ uploadId: begin.uploadId });
+    const metadataPath = path.join(rootDir, begin.uploadId, "metadata.json");
+    const metadata = JSON.parse(await fs.readFile(metadataPath, "utf8")) as Record<string, unknown>;
+    delete metadata.actualSha256;
+    await fs.writeFile(metadataPath, `${JSON.stringify(metadata, null, 2)}\n`, "utf8");
+
+    await expectUploadError(
+      store.commit({ uploadId: begin.uploadId }),
+      "committed upload is missing sha256",
+    );
+  });
+
   it("limits active uploads", async () => {
     const rootDir = await makeTempDir();
     const store = createSkillUploadStore({ rootDir });
