@@ -152,6 +152,25 @@ describe("resolveDiscordTarget", () => {
     ).resolves.toMatchObject({ kind: "user", id: "456", normalized: "user:456" });
   });
 
+  it("prefers top-level allowFrom over legacy dm.allowFrom for bare numeric ids", async () => {
+    const cfg = {
+      channels: {
+        discord: {
+          accounts: {
+            default: {
+              allowFrom: ["123"],
+              dm: { allowFrom: ["456"] },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    await expect(
+      resolveDiscordTarget("456", { cfg, accountId: "default" }, { defaultKind: "channel" }),
+    ).resolves.toMatchObject({ kind: "channel", id: "456", normalized: "channel:456" });
+  });
+
   it("caches username lookups under the configured default account when accountId is omitted", async () => {
     const cfg = {
       channels: {

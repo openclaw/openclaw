@@ -101,7 +101,7 @@ function isConfiguredAllowedDiscordDmUser(input: string, options: DirectoryConfi
     cfg: options.cfg,
     accountId: options.accountId,
   });
-  const allowFrom = [...(account.config.allowFrom ?? []), ...(account.config.dm?.allowFrom ?? [])];
+  const allowFrom = account.config.allowFrom ?? account.config.dm?.allowFrom ?? [];
   return allowFromContainsDiscordUserId(allowFrom, input);
 }
 
