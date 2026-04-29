@@ -134,6 +134,7 @@ async function clearTerminalWebAuthState(params: {
     );
   }
 }
+const DEFAULT_TRANSPORT_TIMEOUT_MS = 5 * 60 * 1000;
 
 export async function monitorWebChannel(
   verbose: boolean,
@@ -220,6 +221,7 @@ export async function monitorWebChannel(
   };
   process.once("SIGINT", handleSigint);
 
+  const transportTimeoutMs = tuning.transportTimeoutMs ?? DEFAULT_TRANSPORT_TIMEOUT_MS;
   const messageTimeoutMs = tuning.messageTimeoutMs ?? 30 * 60 * 1000;
   const watchdogCheckMs = tuning.watchdogCheckMs ?? 60 * 1000;
   const controller = new WhatsAppConnectionController({
@@ -228,6 +230,7 @@ export async function monitorWebChannel(
     verbose,
     keepAlive,
     heartbeatSeconds,
+    transportTimeoutMs,
     messageTimeoutMs,
     watchdogCheckMs,
     reconnectPolicy,
@@ -328,6 +331,7 @@ export async function monitorWebChannel(
                 ? { minutesSinceLastMessage }
                 : {}),
             };
+            statusController.noteTransportActivity(snapshot.lastTransportActivityAt);
 
             if (minutesSinceLastMessage && minutesSinceLastMessage > 30) {
               heartbeatLogger.warn(
@@ -345,7 +349,7 @@ export async function monitorWebChannel(
             const minutesSinceTransportActivity = Math.floor(transportSilentMs / 60000);
             const minutesSinceAppActivity = Math.floor((now - appBaselineAt) / 60000);
             const watchdogReason =
-              transportSilentMs > messageTimeoutMs ? "transport-inactive" : "app-silent";
+              transportSilentMs > transportTimeoutMs ? "transport-inactive" : "app-silent";
             statusController.noteWatchdogStale();
             heartbeatLogger.warn(
               {

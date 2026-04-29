@@ -24,6 +24,17 @@ describe("createWebChannelStatusController", () => {
     expect(last.lastTransportActivityAt).toBe(2000);
   });
 
+  it("updates lastTransportActivityAt from explicit transport activity", () => {
+    const patches: Record<string, unknown>[] = [];
+    const controller = createWebChannelStatusController((s) => patches.push({ ...s }));
+
+    controller.noteConnected(1000);
+    controller.noteTransportActivity(3000);
+
+    const last = patches.at(-1)!;
+    expect(last.lastTransportActivityAt).toBe(3000);
+  });
+
   it("does not set lastTransportActivityAt on noteWatchdogStale", () => {
     const patches: Record<string, unknown>[] = [];
     const controller = createWebChannelStatusController((s) => patches.push({ ...s }));

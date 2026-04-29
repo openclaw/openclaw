@@ -36,6 +36,7 @@ export type WebMonitorTuning = {
   reconnect?: Partial<ReconnectPolicy>;
   socketTiming?: WhatsAppSocketTimingOptions;
   heartbeatSeconds?: number;
+  transportTimeoutMs?: number;
   messageTimeoutMs?: number;
   watchdogCheckMs?: number;
   sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;

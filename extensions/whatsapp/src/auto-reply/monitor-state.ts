@@ -53,6 +53,13 @@ export function createWebChannelStatusController(statusSink?: (status: WebChanne
       }
       emit();
     },
+    noteTransportActivity(at = Date.now()) {
+      if (status.lastTransportActivityAt === at) {
+        return;
+      }
+      Object.assign(status, createTransportActivityStatusPatch(at));
+      emit();
+    },
     noteWatchdogStale(at = Date.now()) {
       status.lastEventAt = at;
       if (status.connected) {
