@@ -1,0 +1,237 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { loadSessionStore } from "openclaw/plugin-sdk/config-runtime";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../runtime-api.js";
+import { isFeishuSessionStoreKey, runFeishuDoctorSequence } from "./doctor.js";
+
+type EnvSnapshot = {
+  HOME?: string;
+  OPENCLAW_HOME?: string;
+  OPENCLAW_STATE_DIR?: string;
+};
+
+function captureEnv(): EnvSnapshot {
+  return {
+    HOME: process.env.HOME,
+    OPENCLAW_HOME: process.env.OPENCLAW_HOME,
+    OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR,
+  };
+}
+
+function restoreEnv(snapshot: EnvSnapshot) {
+  for (const key of Object.keys(snapshot) as Array<keyof EnvSnapshot>) {
+    const value = snapshot[key];
+    if (value === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = value;
+    }
+  }
+}
+
+function feishuConfig(): OpenClawConfig {
+  return {
+    channels: {
+      feishu: {
+        appId: "cli_xxx",
+        appSecret: "secret_xxx",
+      },
+    },
+  } as OpenClawConfig;
+}
+
+function stateDir(): string {
+  const dir = process.env.OPENCLAW_STATE_DIR;
+  if (!dir) {
+    throw new Error("OPENCLAW_STATE_DIR is not set");
+  }
+  return dir;
+}
+
+function sessionsDir(agentId = "main"): string {
+  return path.join(stateDir(), "agents", agentId, "sessions");
+}
+
+function storePath(agentId = "main"): string {
+  return path.join(sessionsDir(agentId), "sessions.json");
+}
+
+function writeStore(entries: Record<string, unknown>, agentId = "main"): string {
+  const target = storePath(agentId);
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.writeFileSync(target, JSON.stringify(entries, null, 2));
+  return target;
+}
+
+function writeTranscript(sessionId: string, lines: unknown[], agentId = "main"): string {
+  const target = path.join(sessionsDir(agentId), `${sessionId}.jsonl`);
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.writeFileSync(target, `${lines.map((line) => JSON.stringify(line)).join("\n")}\n`);
+  return target;
+}
+
+function sessionHeader(sessionId: string) {
+  return {
+    type: "session",
+    id: sessionId,
+    version: 7,
+    timestamp: new Date(0).toISOString(),
+    cwd: "/tmp",
+  };
+}
+
+function userMessage(content: string) {
+  return {
+    type: "message",
+    id: `msg-${content || "blank"}-${Math.random().toString(36).slice(2)}`,
+    parentId: null,
+    timestamp: new Date(0).toISOString(),
+    message: { role: "user", content },
+  };
+}
+
+function listBackupDirs(): string[] {
+  const backupsDir = path.join(stateDir(), "backups");
+  return fs.existsSync(backupsDir)
+    ? fs.readdirSync(backupsDir).filter((name) => name.startsWith("feishu-state-repair-"))
+    : [];
+}
+
+describe("Feishu doctor state repair", () => {
+  let envSnapshot: EnvSnapshot;
+  let tempHome = "";
+
+  beforeEach(() => {
+    envSnapshot = captureEnv();
+    tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-feishu-doctor-"));
+    process.env.HOME = tempHome;
+    process.env.OPENCLAW_HOME = tempHome;
+    process.env.OPENCLAW_STATE_DIR = path.join(tempHome, ".openclaw");
+    fs.mkdirSync(process.env.OPENCLAW_STATE_DIR, { recursive: true, mode: 0o700 });
+  });
+
+  afterEach(() => {
+    restoreEnv(envSnapshot);
+    fs.rmSync(tempHome, { recursive: true, force: true });
+  });
+
+  it("matches only Feishu channel session keys", () => {
+    expect(isFeishuSessionStoreKey("agent:main:feishu:direct:ou_user")).toBe(true);
+    expect(isFeishuSessionStoreKey("feishu:direct:ou_user")).toBe(true);
+    expect(isFeishuSessionStoreKey("agent:codex:acp:binding:feishu:default:abc123")).toBe(false);
+    expect(isFeishuSessionStoreKey("agent:main:discord:direct:user")).toBe(false);
+  });
+
+  it("stays quiet for healthy Feishu state and transcripts", async () => {
+    const feishuDedupDir = path.join(stateDir(), "feishu", "dedup");
+    fs.mkdirSync(feishuDedupDir, { recursive: true });
+    fs.writeFileSync(path.join(feishuDedupDir, "default.json"), JSON.stringify({ msg1: 1 }));
+
+    writeTranscript("sess-ok", [sessionHeader("sess-ok"), userMessage("hello")]);
+    writeStore({
+      "agent:main:feishu:direct:ou_user": {
+        sessionId: "sess-ok",
+        sessionFile: "sess-ok.jsonl",
+        updatedAt: Date.now(),
+      },
+    });
+
+    const result = await runFeishuDoctorSequence({
+      cfg: feishuConfig(),
+      env: process.env,
+      shouldRepair: false,
+    });
+
+    expect(result).toEqual({ changeNotes: [], warningNotes: [] });
+  });
+
+  it("warns before repair when Feishu local state is corrupt", async () => {
+    const feishuDedupDir = path.join(stateDir(), "feishu", "dedup");
+    fs.mkdirSync(feishuDedupDir, { recursive: true });
+    fs.writeFileSync(path.join(feishuDedupDir, "default.json"), "{");
+
+    const result = await runFeishuDoctorSequence({
+      cfg: feishuConfig(),
+      env: process.env,
+      shouldRepair: false,
+    });
+
+    expect(result.changeNotes).toEqual([]);
+    expect(result.warningNotes.join("\n")).toContain("Feishu local channel state may need repair");
+    expect(result.warningNotes.join("\n")).toContain("preserving Feishu App ID/secret config");
+    expect(result.warningNotes.join("\n")).toContain("openclaw doctor --fix");
+  });
+
+  it("archives Feishu state and direct Feishu sessions while preserving config and other sessions", async () => {
+    const feishuDedupDir = path.join(stateDir(), "feishu", "dedup");
+    fs.mkdirSync(feishuDedupDir, { recursive: true });
+    fs.writeFileSync(path.join(feishuDedupDir, "default.json"), JSON.stringify({ msg1: 1 }));
+
+    const transcriptPath = writeTranscript("sess-bad", [
+      sessionHeader("sess-bad"),
+      userMessage(""),
+      userMessage(""),
+      userMessage(""),
+    ]);
+    const trajectoryPath = path.join(sessionsDir(), "sess-bad.trajectory.jsonl");
+    const trajectoryIndexPath = path.join(sessionsDir(), "sess-bad.trajectory-path.json");
+    fs.writeFileSync(trajectoryPath, "{}\n");
+    fs.writeFileSync(trajectoryIndexPath, "{}\n");
+
+    const targetStorePath = writeStore({
+      "agent:main:feishu:direct:ou_user": {
+        sessionId: "sess-bad",
+        sessionFile: "sess-bad.jsonl",
+        updatedAt: Date.now(),
+      },
+      "agent:codex:acp:binding:feishu:default:abc123": {
+        sessionId: "sess-acp",
+        updatedAt: Date.now(),
+      },
+      "agent:main:discord:direct:user": {
+        sessionId: "sess-discord",
+        updatedAt: Date.now(),
+      },
+    });
+
+    const result = await runFeishuDoctorSequence({
+      cfg: feishuConfig(),
+      env: process.env,
+      shouldRepair: true,
+    });
+
+    expect(result.warningNotes).toEqual([]);
+    expect(result.changeNotes.join("\n")).toContain("Feishu local state repaired");
+    expect(result.changeNotes.join("\n")).toContain("Preserved Feishu App ID/secret config");
+
+    expect(fs.existsSync(path.join(stateDir(), "feishu"))).toBe(true);
+    expect(fs.existsSync(path.join(stateDir(), "feishu", "dedup", "default.json"))).toBe(false);
+
+    const backups = listBackupDirs();
+    expect(backups).toHaveLength(1);
+    const backupDir = path.join(stateDir(), "backups", backups[0] ?? "");
+    expect(fs.existsSync(path.join(backupDir, "feishu", "dedup", "default.json"))).toBe(true);
+    expect(fs.existsSync(path.join(backupDir, "session-stores", "main", "sessions.json"))).toBe(
+      true,
+    );
+
+    const store = loadSessionStore(targetStorePath, { skipCache: true });
+    expect(store["agent:main:feishu:direct:ou_user"]).toBeUndefined();
+    expect(store["agent:codex:acp:binding:feishu:default:abc123"]).toBeDefined();
+    expect(store["agent:main:discord:direct:user"]).toBeDefined();
+
+    expect(fs.existsSync(transcriptPath)).toBe(false);
+    expect(fs.existsSync(trajectoryPath)).toBe(false);
+    expect(fs.existsSync(trajectoryIndexPath)).toBe(false);
+    const archivedNames = fs.readdirSync(sessionsDir());
+    expect(archivedNames.some((name) => name.startsWith("sess-bad.jsonl.deleted."))).toBe(true);
+    expect(
+      archivedNames.some((name) => name.startsWith("sess-bad.trajectory.jsonl.deleted.")),
+    ).toBe(true);
+    expect(
+      archivedNames.some((name) => name.startsWith("sess-bad.trajectory-path.json.deleted.")),
+    ).toBe(true);
+  });
+});
