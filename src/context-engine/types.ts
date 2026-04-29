@@ -8,6 +8,11 @@ export type AssembleResult = {
   messages: AgentMessage[];
   /** Estimated total tokens in assembled context */
   estimatedTokens: number;
+  /**
+   * Declares whether the assembled messages are the authoritative prompt for
+   * overflow prechecks. Defaults to "assembled".
+   */
+  promptAuthority?: "assembled" | "preassembly_may_overflow";
   /** Optional context-engine-provided instructions prepended to the runtime system prompt */
   systemPromptAddition?: string;
 };
