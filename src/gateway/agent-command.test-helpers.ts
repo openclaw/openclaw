@@ -1,5 +1,5 @@
 import { vi } from "vitest";
-import { agentCommand } from "../test-helpers.runtime-state.js";
+import { agentCommand } from "./test-helpers.runtime-state.js";
 
 export type AgentCommandCall = Record<string, unknown>;
 
