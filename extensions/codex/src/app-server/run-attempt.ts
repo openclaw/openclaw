@@ -44,7 +44,7 @@ import { isCodexAppServerApprovalRequest, type CodexAppServerClient } from "./cl
 import { ensureCodexComputerUse } from "./computer-use.js";
 import { resolveCodexAppServerRuntimeOptions } from "./config.js";
 import { projectContextEngineAssemblyForCodex } from "./context-engine-projection.js";
-import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
+import { createCodexDynamicToolBridge, type CodexDynamicToolBridge } from "./dynamic-tools.js";
 import { handleCodexAppServerElicitationRequest } from "./elicitation-bridge.js";
 import { CodexAppServerEventProjector } from "./event-projector.js";
 import {
@@ -60,6 +60,7 @@ import {
   isJsonObject,
   type CodexServerNotification,
   type CodexDynamicToolCallParams,
+  type CodexDynamicToolCallResponse,
   type CodexTurnStartResponse,
   type JsonObject,
   type JsonValue,
@@ -80,6 +81,9 @@ import {
 import { mirrorCodexAppServerTranscript } from "./transcript-mirror.js";
 import { createCodexUserInputBridge } from "./user-input-bridge.js";
 import { filterToolsForVisionInputs } from "./vision-tools.js";
+
+const CODEX_DYNAMIC_TOOL_TIMEOUT_MS = 30_000;
+const CODEX_TURN_COMPLETION_IDLE_TIMEOUT_MS = 60_000;
 
 type OpenClawCodingToolsOptions = NonNullable<
   Parameters<(typeof import("openclaw/plugin-sdk/agent-harness"))["createOpenClawCodingTools"]>[0]
@@ -129,6 +133,7 @@ export async function runCodexAppServerAttempt(
       gatewayTimeoutMs?: number;
       hookTimeoutSec?: number;
     };
+    turnCompletionIdleTimeoutMs?: number;
   } = {},
 ): Promise<EmbeddedRunAttemptResult> {
   const attemptStartedAt = Date.now();
@@ -311,7 +316,7 @@ export async function runCodexAppServerAttempt(
       timeoutFloorMs: options.startupTimeoutFloorMs,
       signal: runAbortController.signal,
       operation: async () => {
-        const startupClient = await clientFactory(appServer.start, startupAuthProfileId);
+        const startupClient = await clientFactory(appServer.start, startupAuthProfileId, agentDir);
         await ensureCodexComputerUse({
           client: startupClient,
           pluginConfig: options.pluginConfig,
@@ -361,6 +366,8 @@ export async function runCodexAppServerAttempt(
   let userInputBridge: ReturnType<typeof createCodexUserInputBridge> | undefined;
   let completed = false;
   let timedOut = false;
+  let turnCompletionIdleTimedOut = false;
+  let turnCompletionIdleTimeoutMessage: string | undefined;
   let lifecycleStarted = false;
   let lifecycleTerminalEmitted = false;
   let resolveCompletion: (() => void) | undefined;
@@ -368,6 +375,82 @@ export async function runCodexAppServerAttempt(
     resolveCompletion = resolve;
   });
   let notificationQueue: Promise<void> = Promise.resolve();
+  const turnCompletionIdleTimeoutMs = resolveCodexTurnCompletionIdleTimeoutMs(
+    options.turnCompletionIdleTimeoutMs,
+  );
+  let turnCompletionIdleTimer: ReturnType<typeof setTimeout> | undefined;
+  let turnCompletionIdleWatchArmed = false;
+  let turnCompletionLastActivityAt = Date.now();
+  let turnCompletionLastActivityReason = "startup";
+  let activeAppServerTurnRequests = 0;
+
+  const clearTurnCompletionIdleTimer = () => {
+    if (turnCompletionIdleTimer) {
+      clearTimeout(turnCompletionIdleTimer);
+      turnCompletionIdleTimer = undefined;
+    }
+  };
+
+  const fireTurnCompletionIdleTimeout = () => {
+    if (
+      completed ||
+      runAbortController.signal.aborted ||
+      !turnCompletionIdleWatchArmed ||
+      activeAppServerTurnRequests > 0
+    ) {
+      return;
+    }
+    const idleMs = Math.max(0, Date.now() - turnCompletionLastActivityAt);
+    if (idleMs < turnCompletionIdleTimeoutMs) {
+      scheduleTurnCompletionIdleWatch();
+      return;
+    }
+    timedOut = true;
+    turnCompletionIdleTimedOut = true;
+    turnCompletionIdleTimeoutMessage =
+      "codex app-server turn idle timed out waiting for turn/completed";
+    projector?.markTimedOut();
+    trajectoryRecorder?.recordEvent("turn.completion_idle_timeout", {
+      threadId: thread.threadId,
+      turnId,
+      idleMs,
+      timeoutMs: turnCompletionIdleTimeoutMs,
+      lastActivityReason: turnCompletionLastActivityReason,
+    });
+    embeddedAgentLog.warn("codex app-server turn idle timed out waiting for completion", {
+      threadId: thread.threadId,
+      turnId,
+      idleMs,
+      timeoutMs: turnCompletionIdleTimeoutMs,
+      lastActivityReason: turnCompletionLastActivityReason,
+    });
+    runAbortController.abort("turn_completion_idle_timeout");
+  };
+
+  function scheduleTurnCompletionIdleWatch() {
+    clearTurnCompletionIdleTimer();
+    if (
+      completed ||
+      runAbortController.signal.aborted ||
+      !turnCompletionIdleWatchArmed ||
+      activeAppServerTurnRequests > 0
+    ) {
+      return;
+    }
+    const elapsedMs = Math.max(0, Date.now() - turnCompletionLastActivityAt);
+    const delayMs = Math.max(1, turnCompletionIdleTimeoutMs - elapsedMs);
+    turnCompletionIdleTimer = setTimeout(fireTurnCompletionIdleTimeout, delayMs);
+    turnCompletionIdleTimer.unref?.();
+  }
+
+  const touchTurnCompletionActivity = (reason: string, options?: { arm?: boolean }) => {
+    turnCompletionLastActivityAt = Date.now();
+    turnCompletionLastActivityReason = reason;
+    if (options?.arm) {
+      turnCompletionIdleWatchArmed = true;
+    }
+    scheduleTurnCompletionIdleWatch();
+  };
 
   const emitLifecycleStart = () => {
     emitCodexAppServerEvent(params, {
@@ -393,6 +476,7 @@ export async function runCodexAppServerAttempt(
   };
 
   const handleNotification = async (notification: CodexServerNotification) => {
+    touchTurnCompletionActivity(`notification:${notification.method}`);
     userInputBridge?.handleNotification(notification);
     if (!projector || !turnId) {
       pendingNotifications.push(notification);
@@ -414,6 +498,7 @@ export async function runCodexAppServerAttempt(
     } finally {
       if (isTurnCompletion) {
         completed = true;
+        clearTurnCompletionIdleTimer();
         resolveCompletion?.();
       }
     }
@@ -428,64 +513,93 @@ export async function runCodexAppServerAttempt(
 
   const notificationCleanup = client.addNotificationHandler(enqueueNotification);
   const requestCleanup = client.addRequestHandler(async (request) => {
-    if (request.method === "account/chatgptAuthTokens/refresh") {
-      return refreshCodexAppServerAuthTokens({
-        agentDir,
-        authProfileId: startupAuthProfileId,
-      });
-    }
-    if (!turnId) {
-      return undefined;
-    }
-    if (request.method === "mcpServer/elicitation/request") {
-      return handleCodexAppServerElicitationRequest({
-        requestParams: request.params,
-        paramsForRun: params,
-        threadId: thread.threadId,
-        turnId,
-        signal: runAbortController.signal,
-      });
-    }
-    if (request.method === "item/tool/requestUserInput") {
-      return userInputBridge?.handleRequest({
-        id: request.id,
-        params: request.params,
-      });
-    }
-    if (request.method !== "item/tool/call") {
-      if (isCodexAppServerApprovalRequest(request.method)) {
-        return handleApprovalRequest({
-          method: request.method,
-          params: request.params,
+    activeAppServerTurnRequests += 1;
+    clearTurnCompletionIdleTimer();
+    touchTurnCompletionActivity(`request:${request.method}`);
+    let armCompletionWatchOnResponse = false;
+    try {
+      if (request.method === "account/chatgptAuthTokens/refresh") {
+        return refreshCodexAppServerAuthTokens({
+          agentDir,
+          authProfileId: startupAuthProfileId,
+        });
+      }
+      if (!turnId) {
+        return undefined;
+      }
+      if (request.method === "mcpServer/elicitation/request") {
+        armCompletionWatchOnResponse = true;
+        return handleCodexAppServerElicitationRequest({
+          requestParams: request.params,
           paramsForRun: params,
           threadId: thread.threadId,
           turnId,
           signal: runAbortController.signal,
         });
       }
-      return undefined;
+      if (request.method === "item/tool/requestUserInput") {
+        armCompletionWatchOnResponse = true;
+        return userInputBridge?.handleRequest({
+          id: request.id,
+          params: request.params,
+        });
+      }
+      if (request.method !== "item/tool/call") {
+        if (isCodexAppServerApprovalRequest(request.method)) {
+          armCompletionWatchOnResponse = true;
+          return handleApprovalRequest({
+            method: request.method,
+            params: request.params,
+            paramsForRun: params,
+            threadId: thread.threadId,
+            turnId,
+            signal: runAbortController.signal,
+          });
+        }
+        return undefined;
+      }
+      const call = readDynamicToolCallParams(request.params);
+      if (!call || call.threadId !== thread.threadId || call.turnId !== turnId) {
+        return undefined;
+      }
+      armCompletionWatchOnResponse = true;
+      trajectoryRecorder?.recordEvent("tool.call", {
+        threadId: call.threadId,
+        turnId: call.turnId,
+        toolCallId: call.callId,
+        name: call.tool,
+        arguments: call.arguments,
+      });
+      const response = await handleDynamicToolCallWithTimeout({
+        call,
+        toolBridge,
+        signal: runAbortController.signal,
+        timeoutMs: CODEX_DYNAMIC_TOOL_TIMEOUT_MS,
+        onTimeout: () => {
+          trajectoryRecorder?.recordEvent("tool.timeout", {
+            threadId: call.threadId,
+            turnId: call.turnId,
+            toolCallId: call.callId,
+            name: call.tool,
+            timeoutMs: CODEX_DYNAMIC_TOOL_TIMEOUT_MS,
+          });
+        },
+      });
+      trajectoryRecorder?.recordEvent("tool.result", {
+        threadId: call.threadId,
+        turnId: call.turnId,
+        toolCallId: call.callId,
+        name: call.tool,
+        success: response.success,
+        contentItems: response.contentItems,
+      });
+      return response as JsonValue;
+    } finally {
+      activeAppServerTurnRequests = Math.max(0, activeAppServerTurnRequests - 1);
+      touchTurnCompletionActivity(`request:${request.method}:response`, {
+        arm: armCompletionWatchOnResponse,
+      });
     }
-    const call = readDynamicToolCallParams(request.params);
-    if (!call || call.threadId !== thread.threadId || call.turnId !== turnId) {
-      return undefined;
-    }
-    trajectoryRecorder?.recordEvent("tool.call", {
-      threadId: call.threadId,
-      turnId: call.turnId,
-      toolCallId: call.callId,
-      name: call.tool,
-      arguments: call.arguments,
-    });
-    const response = await toolBridge.handleToolCall(call);
-    trajectoryRecorder?.recordEvent("tool.result", {
-      threadId: call.threadId,
-      turnId: call.turnId,
-      toolCallId: call.callId,
-      name: call.tool,
-      success: response.success,
-      contentItems: response.contentItems,
-    });
-    return response as JsonValue;
   });
 
   const llmInputEvent = {
@@ -621,6 +735,7 @@ export async function runCodexAppServerAttempt(
     abort: () => runAbortController.abort("aborted"),
   };
   setActiveEmbeddedRun(params.sessionId, handle, params.sessionKey);
+  touchTurnCompletionActivity("turn:start");
 
   const timeout = setTimeout(
     () => {
@@ -647,7 +762,11 @@ export async function runCodexAppServerAttempt(
     await completion;
     const result = activeProjector.buildResult(toolBridge.telemetry, { yieldDetected });
     const finalAborted = result.aborted || runAbortController.signal.aborted;
-    const finalPromptError = timedOut ? "codex app-server attempt timed out" : result.promptError;
+    const finalPromptError = turnCompletionIdleTimedOut
+      ? turnCompletionIdleTimeoutMessage
+      : timedOut
+        ? "codex app-server attempt timed out"
+        : result.promptError;
     const finalPromptErrorSource = timedOut ? "prompt" : result.promptErrorSource;
     recordCodexTrajectoryCompletion(trajectoryRecorder, {
       attempt: params,
@@ -770,6 +889,7 @@ export async function runCodexAppServerAttempt(
     await trajectoryRecorder?.flush();
     userInputBridge?.cancelPending();
     clearTimeout(timeout);
+    clearTurnCompletionIdleTimer();
     notificationCleanup();
     requestCleanup();
     nativeHookRelay?.unregister();
@@ -777,6 +897,79 @@ export async function runCodexAppServerAttempt(
     params.abortSignal?.removeEventListener("abort", abortFromUpstream);
     clearActiveEmbeddedRun(params.sessionId, handle, params.sessionKey);
   }
+}
+
+async function handleDynamicToolCallWithTimeout(params: {
+  call: CodexDynamicToolCallParams;
+  toolBridge: Pick<CodexDynamicToolBridge, "handleToolCall">;
+  signal: AbortSignal;
+  timeoutMs: number;
+  onTimeout?: () => void;
+}): Promise<CodexDynamicToolCallResponse> {
+  if (params.signal.aborted) {
+    return failedDynamicToolResponse("OpenClaw dynamic tool call aborted before execution.");
+  }
+
+  const controller = new AbortController();
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  let timedOut = false;
+  let resolveAbort: ((response: CodexDynamicToolCallResponse) => void) | undefined;
+  const abortFromRun = () => {
+    const message = "OpenClaw dynamic tool call aborted.";
+    controller.abort(params.signal.reason ?? new Error(message));
+    resolveAbort?.(failedDynamicToolResponse(message));
+  };
+  const abortPromise = new Promise<CodexDynamicToolCallResponse>((resolve) => {
+    resolveAbort = resolve;
+  });
+  const timeoutPromise = new Promise<CodexDynamicToolCallResponse>((resolve) => {
+    const timeoutMs = Math.max(1, Math.min(CODEX_DYNAMIC_TOOL_TIMEOUT_MS, params.timeoutMs));
+    timeout = setTimeout(() => {
+      timedOut = true;
+      const message = `OpenClaw dynamic tool call timed out after ${timeoutMs}ms.`;
+      controller.abort(new Error(message));
+      params.onTimeout?.();
+      embeddedAgentLog.warn("codex dynamic tool call timed out", {
+        tool: params.call.tool,
+        toolCallId: params.call.callId,
+        threadId: params.call.threadId,
+        turnId: params.call.turnId,
+        timeoutMs,
+      });
+      resolve(failedDynamicToolResponse(message));
+    }, timeoutMs);
+    timeout.unref?.();
+  });
+
+  try {
+    params.signal.addEventListener("abort", abortFromRun, { once: true });
+    if (params.signal.aborted) {
+      abortFromRun();
+    }
+    return await Promise.race([
+      params.toolBridge.handleToolCall(params.call, { signal: controller.signal }),
+      abortPromise,
+      timeoutPromise,
+    ]);
+  } catch (error) {
+    return failedDynamicToolResponse(error instanceof Error ? error.message : String(error));
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+    params.signal.removeEventListener("abort", abortFromRun);
+    resolveAbort = undefined;
+    if (!timedOut && !controller.signal.aborted) {
+      controller.abort(new Error("OpenClaw dynamic tool call finished."));
+    }
+  }
+}
+
+function failedDynamicToolResponse(message: string): CodexDynamicToolCallResponse {
+  return {
+    success: false,
+    contentItems: [{ type: "inputText", text: message }],
+  };
 }
 
 function createCodexNativeHookRelay(params: {
@@ -965,6 +1158,16 @@ async function withCodexStartupTimeout<T>(params: {
   }
 }
 
+function resolveCodexTurnCompletionIdleTimeoutMs(value: number | undefined): number {
+  if (value === undefined) {
+    return CODEX_TURN_COMPLETION_IDLE_TIMEOUT_MS;
+  }
+  if (!Number.isFinite(value)) {
+    return CODEX_TURN_COMPLETION_IDLE_TIMEOUT_MS;
+  }
+  return Math.max(1, Math.floor(value));
+}
+
 function readDynamicToolCallParams(
   value: JsonValue | undefined,
 ): CodexDynamicToolCallParams | undefined {
@@ -1075,7 +1278,10 @@ function handleApprovalRequest(params: {
 }
 
 export const __testing = {
+  CODEX_DYNAMIC_TOOL_TIMEOUT_MS,
+  CODEX_TURN_COMPLETION_IDLE_TIMEOUT_MS,
   filterToolsForVisionInputs,
+  handleDynamicToolCallWithTimeout,
   ...createCodexAppServerClientFactoryTestHooks((factory) => {
     clientFactory = factory;
   }),

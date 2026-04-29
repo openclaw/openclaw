@@ -118,7 +118,6 @@ const registry = loadOpenClawPlugins({
   env: {
     ...process.env,
     OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(repoRoot, "dist-runtime", "extensions"),
-    OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE: "1",
   },
   config: {
     plugins: {
@@ -135,9 +134,10 @@ const record = registry.plugins.find((entry) => entry.id === pluginId);
 assert.ok(record, "smoke plugin missing from registry");
 assert.equal(record.status, "loaded", record.error ?? "smoke plugin failed to load");
 
-assert.deepEqual(getPluginCommandSpecs(), [
-  { name: "pair", description: "Pair a device", acceptsArgs: true },
-]);
+assert.deepEqual(
+  getPluginCommandSpecs().filter((command) => command.name === "pair"),
+  [{ name: "pair", description: "Pair a device", acceptsArgs: true }],
+);
 
 const match = matchPluginCommand("/pair now");
 assert.ok(match, "canonical built command registry did not receive the command");

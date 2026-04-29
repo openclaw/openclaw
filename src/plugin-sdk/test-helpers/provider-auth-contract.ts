@@ -308,7 +308,7 @@ export function describeGithubCopilotProviderAuthContract(load: ProviderAuthCont
       return requireProvider(await registerProviders(githubCopilotPlugin), "github-copilot");
     }
 
-    it("keeps device auth results provider-owned", async () => {
+    it("keeps existing device auth results provider-owned", async () => {
       const provider = await getProvider();
       state.authStore.profiles["github-copilot:github"] = {
         type: "token",
@@ -327,10 +327,7 @@ export function describeGithubCopilotProviderAuthContract(load: ProviderAuthCont
 
       try {
         const result = await provider.auth[0]?.run(buildAuthContext() as never);
-        expect(githubCopilotLoginCommandMock).toHaveBeenCalledWith(
-          { yes: true, profileId: "github-copilot:github" },
-          expect.any(Object),
-        );
+        expect(githubCopilotLoginCommandMock).not.toHaveBeenCalled();
         expect(result).toEqual({
           profiles: [
             {

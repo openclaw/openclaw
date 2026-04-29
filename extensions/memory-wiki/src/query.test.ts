@@ -117,6 +117,123 @@ describe("searchMemoryWiki", () => {
     expect(getActiveMemorySearchManagerMock).not.toHaveBeenCalled();
   });
 
+  it("does not match generated related blocks during wiki search", async () => {
+    const { rootDir, config } = await createQueryVault({
+      initialize: true,
+    });
+    await fs.writeFile(
+      path.join(rootDir, "entities", "alpha.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "entity",
+          id: "entity.alpha",
+          title: "Alpha",
+          sourceIds: ["source.alpha"],
+        },
+        body: [
+          "# Alpha",
+          "",
+          "Alpha body.",
+          "",
+          "## Related",
+          "<!-- openclaw:wiki:related:start -->",
+          "### Related Pages",
+          "- [Needle Person](entities/needle-person.md)",
+          "<!-- openclaw:wiki:related:end -->",
+          "",
+        ].join("\n"),
+      }),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(rootDir, "entities", "needle-person.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "entity",
+          id: "entity.needle-person",
+          title: "Needle Person",
+          sourceIds: ["source.alpha"],
+        },
+        body: "# Needle Person\n\nNeedle body.\n",
+      }),
+      "utf8",
+    );
+
+    const results = await searchMemoryWiki({
+      config,
+      query: "Needle Person",
+      maxResults: 10,
+    });
+
+    expect(results.map((result) => result.path)).toEqual(["entities/needle-person.md"]);
+  });
+
+  it("matches pages when all query terms appear without an exact phrase", async () => {
+    const { rootDir, config } = await createQueryVault({
+      initialize: true,
+    });
+    await fs.writeFile(
+      path.join(rootDir, "entities", "brad.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "entity",
+          id: "entity.brad",
+          title: "Maintainer: Brad Groux",
+          sourceIds: ["source.maintainers"],
+        },
+        body: [
+          "# Maintainer: Brad Groux",
+          "",
+          "## Agent Card",
+          "- Maintainer lane: CEO; Microsoft-facing OpenClaw maintainer",
+          "",
+          "## AI Notes",
+          "- Main sample theme is Microsoft ecosystem adoption: Teams, M365, Azure, Foundry, tenants, and pilots.",
+          "",
+        ].join("\n"),
+      }),
+      "utf8",
+    );
+
+    const results = await searchMemoryWiki({
+      config,
+      query: "Brad Microsoft Teams",
+      maxResults: 10,
+    });
+
+    expect(results.map((result) => result.path)).toEqual(["entities/brad.md"]);
+    expect(results[0]?.snippet).toContain("Teams");
+  });
+
+  it("uses body text instead of frontmatter for fallback snippets", async () => {
+    const { rootDir, config } = await createQueryVault({
+      initialize: true,
+    });
+    await fs.writeFile(
+      path.join(rootDir, "entities", "alias.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "entity",
+          id: "entity.alias",
+          title: "Alias Carrier",
+          aliases: ["frontmatter-only-alias"],
+          sourceIds: ["source.maintainers"],
+        },
+        body: "# Alias Carrier\n\nReadable agent card summary.\n",
+      }),
+      "utf8",
+    );
+
+    const results = await searchMemoryWiki({
+      config,
+      query: "frontmatter-only-alias",
+      maxResults: 10,
+    });
+
+    expect(results.map((result) => result.path)).toEqual(["entities/alias.md"]);
+    expect(results[0]?.snippet).toBe("# Alias Carrier");
+  });
+
   it("finds wiki pages by structured claim text and surfaces the claim as the snippet", async () => {
     const { rootDir, config } = await createQueryVault({
       initialize: true,

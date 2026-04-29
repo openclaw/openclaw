@@ -28,7 +28,7 @@ permissions:
 
 jobs:
   critical-security:
-    name: Critical Security (${{ matrix.language }})
+    name: Critical Security (${{ matrix.category }})
     if: ${{ github.event_name != 'workflow_dispatch' || inputs.profile == 'all' || inputs.profile == 'security' }}
     runs-on: ${{ matrix.runs_on }}
     timeout-minutes: ${{ matrix.timeout_minutes }}
@@ -37,10 +37,17 @@ jobs:
       matrix:
         include:
           - language: javascript-typescript
+            category: javascript-typescript
             runs_on: blacksmith-8vcpu-ubuntu-2404
             timeout_minutes: 25
             config_file: ./.github/codeql/codeql-javascript-typescript-critical-security.yml
+          - language: javascript-typescript
+            category: channel-runtime-boundary
+            runs_on: blacksmith-8vcpu-ubuntu-2404
+            timeout_minutes: 25
+            config_file: ./.github/codeql/codeql-channel-runtime-boundary-critical-security.yml
           - language: actions
+            category: actions
             runs_on: blacksmith-8vcpu-ubuntu-2404
             timeout_minutes: 10
             config_file: ./.github/codeql/codeql-actions-critical-security.yml
@@ -59,4 +66,4 @@ jobs:
       - name: Analyze
         uses: github/codeql-action/analyze@95e58e9a2cdfd71adc6e0353d5c52f41a045d225 # v4
         with:
-          category: "/codeql-critical-security/${{ matrix.language }}"
+          category: "/codeql-critical-security/${{ matrix.category }}"

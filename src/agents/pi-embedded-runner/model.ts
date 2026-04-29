@@ -11,7 +11,6 @@ import {
   applyProviderResolvedModelCompatWithPlugins,
   applyProviderResolvedTransportWithPlugin,
   buildProviderUnknownModelHintWithPlugin,
-  clearProviderRuntimeHookCache,
   normalizeProviderTransportWithPlugin,
   prepareProviderDynamicModel,
   runProviderDynamicModel,
@@ -53,7 +52,6 @@ type ProviderRuntimeHooks = {
   buildProviderUnknownModelHintWithPlugin: (
     params: Parameters<typeof buildProviderUnknownModelHintWithPlugin>[0],
   ) => string | undefined;
-  clearProviderRuntimeHookCache: () => void;
   prepareProviderDynamicModel: (
     params: Parameters<typeof prepareProviderDynamicModel>[0],
   ) => Promise<void>;
@@ -73,7 +71,6 @@ const DEFAULT_PROVIDER_RUNTIME_HOOKS: ProviderRuntimeHooks = {
   applyProviderResolvedModelCompatWithPlugins,
   applyProviderResolvedTransportWithPlugin,
   buildProviderUnknownModelHintWithPlugin,
-  clearProviderRuntimeHookCache,
   prepareProviderDynamicModel,
   runProviderDynamicModel,
   shouldPreferProviderRuntimeResolvedModel,
@@ -85,7 +82,6 @@ const STATIC_PROVIDER_RUNTIME_HOOKS: ProviderRuntimeHooks = {
   applyProviderResolvedModelCompatWithPlugins: () => undefined,
   applyProviderResolvedTransportWithPlugin: () => undefined,
   buildProviderUnknownModelHintWithPlugin: () => undefined,
-  clearProviderRuntimeHookCache: () => {},
   prepareProviderDynamicModel: async () => {},
   runProviderDynamicModel: () => undefined,
   normalizeProviderResolvedModelWithPlugin: () => undefined,
@@ -1020,10 +1016,7 @@ export async function resolveModelAsync(
     };
   }
   const providerConfig = resolveConfiguredProviderConfig(cfg, normalizedRef.provider);
-  const resolveDynamicAttempt = async (attemptOptions?: { clearHookCache?: boolean }) => {
-    if (attemptOptions?.clearHookCache) {
-      runtimeHooks.clearProviderRuntimeHookCache();
-    }
+  const resolveDynamicAttempt = async () => {
     await runtimeHooks.prepareProviderDynamicModel({
       provider: normalizedRef.provider,
       config: cfg,
@@ -1058,9 +1051,9 @@ export async function resolveModelAsync(
       : await resolveDynamicAttempt();
   if (!model && !explicitModel && options?.retryTransientProviderRuntimeMiss) {
     // Startup can race the first provider-runtime snapshot load on a fresh
-    // gateway boot. Retry once with a cleared hook cache before surfacing a
-    // user-visible "Unknown model" that disappears on the next message.
-    model = await resolveDynamicAttempt({ clearHookCache: true });
+    // gateway boot. Retry once before surfacing a user-visible "Unknown model"
+    // that disappears on the next message.
+    model = await resolveDynamicAttempt();
   }
   if (model) {
     return { model, authStorage, modelRegistry };

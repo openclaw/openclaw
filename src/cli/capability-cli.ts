@@ -22,6 +22,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway, randomIdempotencyKey } from "../gateway/call.js";
 import { buildGatewayConnectionDetailsWithResolvers } from "../gateway/connection-details.js";
 import { isLoopbackHost } from "../gateway/net.js";
+import { ADMIN_SCOPE } from "../gateway/operator-scopes.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../gateway/protocol/client-info.js";
 import { generateImage, listRuntimeImageGenerationProviders } from "../image-generation/runtime.js";
 import type {
@@ -104,6 +105,7 @@ type CapabilityEnvelope = {
   provider?: string;
   model?: string;
   attempts: Array<Record<string, unknown>>;
+  inputs?: Array<Record<string, unknown>>;
   outputs: Array<Record<string, unknown>>;
   ignoredOverrides?: Array<Record<string, unknown>>;
   error?: string;
@@ -112,9 +114,9 @@ type CapabilityEnvelope = {
 const CAPABILITY_METADATA: CapabilityMetadata[] = [
   {
     id: "model.run",
-    description: "Run a one-shot text inference turn through the selected model provider.",
+    description: "Run a one-shot inference turn through the selected model provider.",
     transports: ["local", "gateway"],
-    flags: ["--prompt", "--model", "--local", "--gateway", "--json"],
+    flags: ["--prompt", "--file", "--model", "--local", "--gateway", "--json"],
     resultShape: "normalized payloads plus provider/model attribution",
   },
   {
@@ -584,13 +586,62 @@ function requireModelRunPrompt(value: unknown): string {
   return value;
 }
 
+type ModelRunImageFile = {
+  path: string;
+  fileName: string;
+  mimeType: string;
+  data: string;
+};
+
+async function readModelRunImageFiles(files: string[] | undefined): Promise<ModelRunImageFile[]> {
+  if (!files || files.length === 0) {
+    return [];
+  }
+  return await Promise.all(
+    files.map(async (filePath) => {
+      const resolvedPath = path.resolve(filePath);
+      const buffer = await fs.readFile(resolvedPath);
+      const mimeType = normalizeMimeType(
+        await detectMime({
+          buffer,
+          filePath: resolvedPath,
+        }),
+      );
+      if (!mimeType?.startsWith("image/")) {
+        throw new Error(
+          `Unsupported --file for model run: ${resolvedPath}. Only image files are supported; use infer audio transcribe for audio files.`,
+        );
+      }
+      return {
+        path: resolvedPath,
+        fileName: path.basename(resolvedPath),
+        mimeType,
+        data: buffer.toString("base64"),
+      };
+    }),
+  );
+}
+
 async function runModelRun(params: {
   prompt: string;
+  files?: string[];
   model?: string;
   transport: CapabilityTransport;
 }) {
   const cfg = getRuntimeConfig();
   const agentId = resolveDefaultAgentId(cfg);
+  const imageFiles = await readModelRunImageFiles(params.files);
+  const messageContent =
+    imageFiles.length > 0
+      ? [
+          { type: "text" as const, text: params.prompt },
+          ...imageFiles.map((image) => ({
+            type: "image" as const,
+            data: image.data,
+            mimeType: image.mimeType,
+          })),
+        ]
+      : params.prompt;
   if (params.transport === "local") {
     const prepared = await prepareSimpleCompletionModelForAgent({
       cfg,
@@ -609,7 +660,7 @@ async function runModelRun(params: {
         messages: [
           {
             role: "user",
-            content: params.prompt,
+            content: messageContent,
             timestamp: Date.now(),
           },
         ],
@@ -634,6 +685,14 @@ async function runModelRun(params: {
       provider: prepared.selection.provider,
       model: prepared.selection.modelId,
       attempts: [],
+      ...(imageFiles.length > 0
+        ? {
+            inputs: imageFiles.map((image) => ({
+              path: image.path,
+              mimeType: image.mimeType,
+            })),
+          }
+        : {}),
       outputs: [
         {
           text,
@@ -644,6 +703,9 @@ async function runModelRun(params: {
   }
 
   const { provider, model } = resolveModelRefOverride(params.model);
+  // Provider/model overrides require trusted-operator scope. Use the backend
+  // shared-secret lane so local gateway smokes do not depend on paired CLI device scopes.
+  const hasModelOverride = Boolean(provider || model);
   const response: {
     result?: {
       payloads?: Array<{ text?: string; mediaUrl?: string | null; mediaUrls?: string[] }>;
@@ -654,6 +716,15 @@ async function runModelRun(params: {
     params: {
       agentId,
       message: params.prompt,
+      attachments:
+        imageFiles.length > 0
+          ? imageFiles.map((image) => ({
+              type: "image",
+              fileName: image.fileName,
+              mimeType: image.mimeType,
+              content: image.data,
+            }))
+          : undefined,
       provider,
       model,
       modelRun: true,
@@ -663,8 +734,9 @@ async function runModelRun(params: {
     },
     expectFinal: true,
     timeoutMs: 120_000,
-    clientName: GATEWAY_CLIENT_NAMES.CLI,
-    mode: GATEWAY_CLIENT_MODES.CLI,
+    clientName: hasModelOverride ? GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT : GATEWAY_CLIENT_NAMES.CLI,
+    mode: hasModelOverride ? GATEWAY_CLIENT_MODES.BACKEND : GATEWAY_CLIENT_MODES.CLI,
+    ...(hasModelOverride ? { scopes: [ADMIN_SCOPE] } : {}),
   });
   return {
     ok: true,
@@ -678,6 +750,14 @@ async function runModelRun(params: {
       mediaUrl: payload.mediaUrl,
       mediaUrls: payload.mediaUrls,
     })),
+    ...(imageFiles.length > 0
+      ? {
+          inputs: imageFiles.map((image) => ({
+            path: image.path,
+            mimeType: image.mimeType,
+          })),
+        }
+      : {}),
   } satisfies CapabilityEnvelope;
 }
 
@@ -1494,6 +1574,7 @@ export function registerCapabilityCli(program: Command) {
     .command("run")
     .description("Run a one-shot model turn")
     .requiredOption("--prompt <text>", "Prompt text")
+    .option("--file <path>", "Image file", collectOption, [])
     .option("--model <provider/model>", "Model override")
     .option("--local", "Force local execution", false)
     .option("--gateway", "Force gateway execution", false)
@@ -1509,6 +1590,7 @@ export function registerCapabilityCli(program: Command) {
         });
         const result = await runModelRun({
           prompt,
+          files: opts.file as string[] | undefined,
           model: opts.model as string | undefined,
           transport,
         });
