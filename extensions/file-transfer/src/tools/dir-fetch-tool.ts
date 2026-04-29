@@ -352,6 +352,15 @@ export async function validateTarUncompressedBudget(
         reason: `tar uncompressed budget validation error: ${String(error)}`,
       });
     });
+    child.stdin.on("error", (error: NodeJS.ErrnoException) => {
+      if (settled && error.code === "EPIPE") {
+        return;
+      }
+      finish({
+        ok: false,
+        reason: `tar uncompressed budget validation input error: ${String(error)}`,
+      });
+    });
     child.stdin.end(tarBuffer);
   });
 }

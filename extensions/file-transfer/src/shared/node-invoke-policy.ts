@@ -225,6 +225,7 @@ function prepareParams(input: {
     ...input.params,
     followSymlinks: input.followSymlinks,
   };
+  delete next.preflightOnly;
   if (input.command === "file.fetch") {
     next.maxBytes = readMaxBytes({
       value: input.params.maxBytes,

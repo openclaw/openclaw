@@ -210,7 +210,7 @@ describe("file-transfer node invoke policy", () => {
     });
   });
 
-  it("continues file.write after preflight when the canonical path is also allowed", async () => {
+  it("continues file.write after preflight without forwarding caller preflightOnly", async () => {
     const policy = createFileTransferNodeInvokePolicy();
     const { ctx, invokeNode } = createCtx({
       command: "file.write",
@@ -218,6 +218,7 @@ describe("file-transfer node invoke policy", () => {
         path: "/tmp/link/out.txt",
         contentBase64: Buffer.from("payload").toString("base64"),
         createParents: true,
+        preflightOnly: true,
       },
       pluginConfig: {
         nodes: {
