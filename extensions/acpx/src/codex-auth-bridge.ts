@@ -130,7 +130,7 @@ function buildAdapterWrapperScript(params: {
   extraImports?: string;
 }): string {
   return `#!/usr/bin/env node
-import { existsSync } from "node:fs";
+import { existsSync, symlinkSync } from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -210,8 +210,7 @@ function buildCodexAcpWrapperScript(installedBinPath?: string): string {
     packageSpec: `${CODEX_ACP_PACKAGE}@${CODEX_ACP_PACKAGE_RANGE}`,
     binName: CODEX_ACP_BIN,
     installedBinPath,
-    extraImports: `import { symlinkSync } from "node:fs";
-import os from "node:os";`,
+    extraImports: `import os from "node:os";`,
     envSetup: `const codexHome = fileURLToPath(new URL("./codex-home/", import.meta.url));
 const env = {
   ...process.env,
@@ -229,7 +228,7 @@ if (existsSync(canonicalAuthPath) && !existsSync(isolatedAuthPath)) {
   } catch {
     // If symlink fails (e.g. permissions), the adapter will surface auth error.
   }
-};`,
+}`,
   });
 }
 
