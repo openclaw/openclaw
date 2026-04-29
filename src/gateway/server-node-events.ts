@@ -4,6 +4,7 @@ import { updatePairedDeviceMetadata } from "../infra/device-pairing.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { updatePairedNodeMetadata } from "../infra/node-pairing.js";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
+import { resolveEventSessionKey } from "../routing/session-key.js";
 import {
   NODE_PRESENCE_ALIVE_EVENT,
   normalizeNodePresenceAliveReason,
@@ -741,7 +742,7 @@ export const handleNodeEvent = async (
       }
 
       const queued = enqueueSystemEvent(text, {
-        sessionKey,
+        sessionKey: resolveEventSessionKey(sessionKey, cfg.session?.mainKey),
         contextKey: runId ? `exec:${runId}` : "exec",
         trusted: false,
       });
