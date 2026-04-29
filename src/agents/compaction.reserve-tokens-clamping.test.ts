@@ -1,17 +1,24 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
-import * as piCodingAgent from "@mariozechner/pi-coding-agent";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("@mariozechner/pi-coding-agent", async (importOriginal) => {
-  const actual = await importOriginal<typeof piCodingAgent>();
+const piCodingAgentMocks = vi.hoisted(() => ({
+  estimateTokens: vi.fn((message: unknown) => Math.ceil(JSON.stringify(message).length / 4)),
+  generateSummary: vi.fn(),
+}));
+
+vi.mock("@mariozechner/pi-coding-agent", async () => {
+  const actual = await vi.importActual<typeof import("@mariozechner/pi-coding-agent")>(
+    "@mariozechner/pi-coding-agent",
+  );
   return {
     ...actual,
-    generateSummary: vi.fn(),
+    estimateTokens: piCodingAgentMocks.estimateTokens,
+    generateSummary: piCodingAgentMocks.generateSummary,
   };
 });
 
-const mockGenerateSummary = vi.mocked(piCodingAgent.generateSummary);
+const mockGenerateSummary = piCodingAgentMocks.generateSummary;
 
 let summarizeInStages: typeof import("./compaction.js").summarizeInStages;
 
@@ -33,6 +40,10 @@ describe("compaction reserveTokens clamping", () => {
     await loadFreshCompactionModuleForTest();
     mockGenerateSummary.mockReset();
     mockGenerateSummary.mockResolvedValue("summary");
+    piCodingAgentMocks.estimateTokens.mockReset();
+    piCodingAgentMocks.estimateTokens.mockImplementation((message: unknown) =>
+      Math.ceil(JSON.stringify(message).length / 4),
+    );
   });
 
   it("clamps reserveTokens when model maxTokens is smaller than requested", async () => {
