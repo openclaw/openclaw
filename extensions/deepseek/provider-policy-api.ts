@@ -27,3 +27,4 @@ export function normalizeConfig(params: { provider: string; providerConfig: any 
     return next;
   });
   return mutated ? { ...pc, models } : pc;
+}
