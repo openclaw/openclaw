@@ -57,6 +57,19 @@ const ALWAYS_RECOVERABLE_MESSAGES = new Set(["fetch failed", "typeerror: fetch f
 const GRAMMY_NETWORK_REQUEST_FAILED_AFTER_RE =
   /^network request(?:\s+for\s+["']?[^"']+["']?)?\s+failed\s+after\b.*[!.]?$/i;
 
+/**
+ * Matches grammY's plain pre-response network envelope:
+ *   "Network request for 'sendMessage' failed!"
+ *
+ * This fires when the underlying fetch throws *before* a response is received,
+ * so the request was never delivered to Telegram — safe to retry for
+ * non-idempotent sends.
+ *
+ * Distinct from GRAMMY_NETWORK_REQUEST_FAILED_AFTER_RE which requires "failed after".
+ */
+const GRAMMY_NETWORK_REQUEST_FAILED_RE =
+  /^network request(?:\s+for\s+["']?[^"']+["']?)?\s+failed[!.]?$/i;
+
 const RECOVERABLE_MESSAGE_SNIPPETS = [
   "undici",
   "network error",
@@ -155,6 +168,12 @@ export function isTelegramPollingNetworkError(err: unknown): boolean {
  * (e.g. sendMessage). Only matches errors that are guaranteed to have occurred *before*
  * the request reached Telegram's servers, preventing duplicate message delivery.
  *
+ * Recognizes:
+ * 1. Pre-connect error codes (ECONNREFUSED, ENOTFOUND, etc.) at any depth.
+ * 2. grammY's plain "Network request for '<method>' failed!" envelope when the
+ *    wrapped inner error is a pre-response fetch failure (TypeError: fetch failed),
+ *    confirming no HTTP response was received.
+ *
  * Use this instead of isRecoverableTelegramNetworkError for sendMessage/sendPhoto/etc.
  * calls where a retry would create a duplicate visible message.
  */
@@ -162,10 +181,32 @@ export function isSafeToRetrySendError(err: unknown): boolean {
   if (!err) {
     return false;
   }
-  for (const candidate of collectTelegramErrorCandidates(err)) {
+  const candidates = collectTelegramErrorCandidates(err);
+  for (const candidate of candidates) {
     const code = normalizeCode(getErrorCode(candidate));
     if (code && PRE_CONNECT_ERROR_CODES.has(code)) {
       return true;
+    }
+  }
+  // Check for grammY's plain pre-response network envelope:
+  // HttpError("Network request for '<method>' failed!") wrapping a fetch failure.
+  // The outer message confirms grammY never received an HTTP response, and the inner
+  // "fetch failed" TypeError confirms the request did not complete — safe to retry.
+  for (const candidate of candidates) {
+    const message = normalizeLowercaseStringOrEmpty(formatErrorMessage(candidate));
+    if (message && GRAMMY_NETWORK_REQUEST_FAILED_RE.test(message)) {
+      // The grammY envelope itself indicates a pre-response failure, but we
+      // additionally require that a nested error is a known fetch-level failure
+      // to avoid false positives from unexpected future grammY error shapes.
+      for (const inner of candidates) {
+        if (inner === candidate) {
+          continue;
+        }
+        const innerMessage = normalizeLowercaseStringOrEmpty(formatErrorMessage(inner));
+        if (innerMessage && ALWAYS_RECOVERABLE_MESSAGES.has(innerMessage)) {
+          return true;
+        }
+      }
     }
   }
   return false;

@@ -202,6 +202,36 @@ describe("isSafeToRetrySendError", () => {
     const wrapped = new MockHttpError("Network request for 'sendMessage' failed!", fetchError);
     expect(isSafeToRetrySendError(wrapped)).toBe(true);
   });
+
+  it("detects plain grammY envelope wrapping fetch failed (no error code)", () => {
+    // grammY HttpError wrapping TypeError("fetch failed") without a specific error code.
+    // This is the shape observed in issue #74203 — the fetch throws before any HTTP
+    // response, so it is safe to retry.
+    const fetchError = new TypeError("fetch failed");
+    const wrapped = new MockHttpError("Network request for 'sendMessage' failed!", fetchError);
+    expect(isSafeToRetrySendError(wrapped)).toBe(true);
+  });
+
+  it("detects plain grammY envelope wrapping fetch failed for editMessageText", () => {
+    const fetchError = new TypeError("fetch failed");
+    const wrapped = new MockHttpError("Network request for 'editMessageText' failed!", fetchError);
+    expect(isSafeToRetrySendError(wrapped)).toBe(true);
+  });
+
+  it("does NOT retry plain grammY envelope without a fetch-level inner error", () => {
+    // If the inner error is not a recognized fetch failure, do not assume safe to retry.
+    const authError = new Error("Unauthorized");
+    const wrapped = new MockHttpError("Network request for 'sendMessage' failed!", authError);
+    expect(isSafeToRetrySendError(wrapped)).toBe(false);
+  });
+
+  it("does NOT retry plain grammY envelope wrapping only a message snippet match", () => {
+    // "socket hang up" is a RECOVERABLE_MESSAGE_SNIPPET but NOT in ALWAYS_RECOVERABLE_MESSAGES.
+    // It could occur after the request was partially sent, so it is not safe for send retry.
+    const socketError = new Error("socket hang up");
+    const wrapped = new MockHttpError("Network request for 'sendMessage' failed!", socketError);
+    expect(isSafeToRetrySendError(wrapped)).toBe(false);
+  });
 });
 
 describe("isTelegramServerError", () => {
