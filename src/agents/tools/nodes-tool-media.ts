@@ -27,7 +27,14 @@ export const MEDIA_INVOKE_ACTIONS = {
   "camera.clip": "camera_clip",
   "photos.latest": "photos_latest",
   "screen.record": "screen_record",
+  // file-transfer commands: redirect to dedicated tools so the path policy
+  // + operator approval flow always runs. Without this, an agent could
+  // call them via the generic nodes.action="invoke" surface and skip
+  // gatekeep() entirely.
   "file.fetch": "file_fetch",
+  "dir.list": "dir_list",
+  "dir.fetch": "dir_fetch",
+  "file.write": "file_write",
 } as const;
 
 export type NodeMediaAction = "camera_snap" | "photos_latest" | "camera_clip" | "screen_record";

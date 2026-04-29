@@ -264,6 +264,20 @@ export function evaluateFilePolicy(input: {
  * the "*" wildcard if that's what was hit). If no entry exists yet,
  * creates one keyed by nodeDisplayName ?? nodeId.
  */
+/**
+ * Reject special object keys that would mutate the prototype chain when
+ * used as a property name (e.g. `__proto__` setter on a plain object).
+ * The nodeDisplayName comes from paired-node metadata which we don't
+ * fully control; refuse to persist policy under a key that could corrupt
+ * the fileTransfer container's prototype.
+ */
+function assertSafeConfigKey(key: string): string {
+  if (key === "__proto__" || key === "prototype" || key === "constructor") {
+    throw new Error(`refusing to persist file-transfer policy under unsafe key: ${key}`);
+  }
+  return key;
+}
+
 export async function persistAllowAlways(input: {
   nodeId: string;
   nodeDisplayName?: string;
@@ -288,9 +302,11 @@ export async function persistAllowAlways(input: {
       const candidates = [input.nodeId, input.nodeDisplayName].filter(
         (k): k is string => typeof k === "string" && k.length > 0,
       );
-      let key = candidates.find((c) => fileTransfer[c]);
+      // Use hasOwnProperty so a node with displayName "constructor" doesn't
+      // accidentally hit Object.prototype.constructor and pretend to match.
+      let key = candidates.find((c) => Object.prototype.hasOwnProperty.call(fileTransfer, c));
       if (!key) {
-        key = input.nodeDisplayName ?? input.nodeId;
+        key = assertSafeConfigKey(input.nodeDisplayName ?? input.nodeId);
         fileTransfer[key] = {};
       }
       const entry = fileTransfer[key];
