@@ -37,6 +37,7 @@ static GtkWidget *inst_state_label = NULL;
 static GtkWidget *inst_remote_box = NULL;
 static GtkWidget *inst_remote_status_label = NULL;
 static GtkWidget *inst_copy_debug_btn = NULL;
+static guint inst_copy_reset_id = 0;
 static GatewayNodesData *inst_nodes_cache = NULL;
 static gboolean inst_nodes_fetch_in_flight = FALSE;
 static gint64 inst_last_fetch_us = 0;
@@ -209,10 +210,13 @@ static gchar* inst_build_debug_summary(void) {
 }
 
 static gboolean on_copy_debug_label_reset(gpointer data) {
-    GtkWidget *btn = GTK_WIDGET(data);
-    if (btn) {
-        gtk_button_set_label(GTK_BUTTON(btn), "Copy Debug Info");
+    (void)data;
+    inst_copy_reset_id = 0;
+
+    if (inst_copy_debug_btn && GTK_IS_BUTTON(inst_copy_debug_btn)) {
+        gtk_button_set_label(GTK_BUTTON(inst_copy_debug_btn), "Copy Debug Info");
     }
+
     return G_SOURCE_REMOVE;
 }
 
@@ -224,8 +228,13 @@ static void on_copy_debug(GtkButton *btn, gpointer user_data) {
     GdkClipboard *cb = gdk_display_get_clipboard(gdk_display_get_default());
     gdk_clipboard_set_text(cb, summary);
 
+    if (inst_copy_reset_id > 0) {
+        g_source_remove(inst_copy_reset_id);
+        inst_copy_reset_id = 0;
+    }
+
     gtk_button_set_label(GTK_BUTTON(btn), "Copied!");
-    g_timeout_add_seconds(2, on_copy_debug_label_reset, btn);
+    inst_copy_reset_id = g_timeout_add_seconds(2, on_copy_debug_label_reset, NULL);
 }
 
 /* ── Remote node card builder ────────────────────────────────────── */
@@ -744,6 +753,11 @@ static void instances_refresh(void) {
 
 static void instances_destroy(void) {
     inst_generation++;
+
+    if (inst_copy_reset_id > 0) {
+        g_source_remove(inst_copy_reset_id);
+        inst_copy_reset_id = 0;
+    }
 
     inst_hostname_label = NULL;
     inst_platform_label = NULL;
