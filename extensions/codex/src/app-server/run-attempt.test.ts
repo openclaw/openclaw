@@ -624,6 +624,68 @@ describe("runCodexAppServerAttempt", () => {
     expect(queueAgentHarnessMessage("session-1", "after silent turn")).toBe(false);
   });
 
+  it("keeps explicit dynamic tool timeouts above the default bridge deadline", () => {
+    const timeoutMs = __testing.CODEX_DYNAMIC_TOOL_TIMEOUT_MS + 1_000;
+
+    expect(
+      __testing.resolveDynamicToolCallTimeoutMs({
+        call: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          callId: "call-long",
+          namespace: null,
+          tool: "image_generate",
+          arguments: { prompt: "cat", timeoutMs },
+        },
+        config: undefined,
+      }),
+    ).toBe(timeoutMs);
+  });
+
+  it("uses configured image generation timeouts for Codex dynamic tool calls", () => {
+    expect(
+      __testing.resolveDynamicToolCallTimeoutMs({
+        call: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          callId: "call-image-default",
+          namespace: null,
+          tool: "image_generate",
+          arguments: { prompt: "cat" },
+        },
+        config: {
+          agents: {
+            defaults: {
+              imageGenerationModel: {
+                primary: "openai/gpt-image-1",
+                timeoutMs: 180_000,
+              },
+            },
+          },
+        },
+      }),
+    ).toBe(180_000);
+  });
+
+  it("caps dynamic tool timeouts at the bridge maximum", () => {
+    expect(
+      __testing.resolveDynamicToolCallTimeoutMs({
+        call: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          callId: "call-too-long",
+          namespace: null,
+          tool: "image_generate",
+          arguments: {
+            prompt: "cat",
+            timeoutMs: __testing.CODEX_DYNAMIC_TOOL_MAX_TIMEOUT_MS + 1_000,
+          },
+        },
+        config: undefined,
+      }),
+    ).toBe(__testing.CODEX_DYNAMIC_TOOL_MAX_TIMEOUT_MS);
+  });
+
   it("applies before_prompt_build to Codex developer instructions and turn input", async () => {
     const beforePromptBuild = vi.fn(async () => ({
       systemPrompt: "custom codex system",
