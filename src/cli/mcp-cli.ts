@@ -5,6 +5,12 @@ import {
   setConfiguredMcpServer,
   unsetConfiguredMcpServer,
 } from "../config/mcp-config.js";
+import {
+  APPROVALS_SCOPE,
+  READ_SCOPE,
+  WRITE_SCOPE,
+  type OperatorScope,
+} from "../gateway/operator-scopes.js";
 import { serveOpenClawChannelMcp } from "../mcp/channel-server.js";
 import { defaultRuntime } from "../runtime.js";
 import {
@@ -24,6 +30,41 @@ function printJson(value: unknown): void {
   defaultRuntime.writeJson(value);
 }
 
+const MCP_SERVE_OPERATOR_SCOPE_VALUES: readonly OperatorScope[] = [
+  READ_SCOPE,
+  WRITE_SCOPE,
+  APPROVALS_SCOPE,
+];
+const MCP_SERVE_OPERATOR_SCOPES: ReadonlySet<OperatorScope> = new Set<OperatorScope>(
+  MCP_SERVE_OPERATOR_SCOPE_VALUES,
+);
+
+function collectScopeOption(value: string | string[], previous: string[] = []): string[] {
+  return [...previous, ...(Array.isArray(value) ? value : [value])];
+}
+
+function parseOperatorScopes(values: unknown): OperatorScope[] | undefined {
+  if (values === undefined) {
+    return undefined;
+  }
+  const rawValues = Array.isArray(values) ? values : [values];
+  const scopes: OperatorScope[] = [];
+  for (const raw of rawValues) {
+    const scope = String(raw).trim();
+    if (!MCP_SERVE_OPERATOR_SCOPES.has(scope as OperatorScope)) {
+      throw new Error(
+        `Invalid --scope value "${scope}". Use one of: ${MCP_SERVE_OPERATOR_SCOPE_VALUES.join(
+          ", ",
+        )}.`,
+      );
+    }
+    if (!scopes.includes(scope as OperatorScope)) {
+      scopes.push(scope as OperatorScope);
+    }
+  }
+  return scopes.length > 0 ? scopes : undefined;
+}
+
 export function registerMcpCli(program: Command) {
   const mcp = program.command("mcp").description("Manage OpenClaw MCP config and channel bridge");
 
@@ -35,6 +76,7 @@ export function registerMcpCli(program: Command) {
     .option("--token-file <path>", "Read gateway token from file")
     .option("--password <password>", "Gateway password (if required)")
     .option("--password-file <path>", "Read gateway password from file")
+    .option("--scope <scope...>", "Operator scope to request (repeatable)", collectScopeOption)
     .option(
       "--claude-channel-mode <mode>",
       "Claude channel notification mode: auto, on, or off",
@@ -58,6 +100,7 @@ export function registerMcpCli(program: Command) {
           gatewayUrl: opts.url as string | undefined,
           gatewayToken,
           gatewayPassword,
+          operatorScopes: parseOperatorScopes(opts.scope),
           claudeChannelMode,
           verbose: Boolean(opts.verbose),
         });
