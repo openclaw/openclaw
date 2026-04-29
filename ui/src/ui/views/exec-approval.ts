@@ -1,6 +1,7 @@
 import { html, nothing } from "lit";
 import { formatApprovalDisplayPath } from "../../../../src/infra/approval-display-paths.ts";
 import type { AppViewState } from "../app-view-state.ts";
+import "../components/modal-dialog.ts";
 import type {
   ExecApprovalRequest,
   ExecApprovalRequestPayload,
@@ -73,13 +74,20 @@ export function renderExecApprovalPrompt(state: AppViewState) {
   const title = isPlugin
     ? (active.pluginTitle ?? "Plugin approval needed")
     : "Exec approval needed";
+  const titleId = "exec-approval-title";
+  const descriptionId = "exec-approval-description";
+  const handleCancel = () => {
+    if (!state.execApprovalBusy) {
+      void state.handleExecApprovalDecision("deny");
+    }
+  };
   return html`
-    <div class="exec-approval-overlay" role="dialog" aria-live="polite">
+    <openclaw-modal-dialog label=${title} description=${remaining} @modal-cancel=${handleCancel}>
       <div class="exec-approval-card">
         <div class="exec-approval-header">
           <div>
-            <div class="exec-approval-title">${title}</div>
-            <div class="exec-approval-sub">${remaining}</div>
+            <div id=${titleId} class="exec-approval-title">${title}</div>
+            <div id=${descriptionId} class="exec-approval-sub">${remaining}</div>
           </div>
           ${queueCount > 1
             ? html`<div class="exec-approval-queue">${queueCount} pending</div>`
@@ -113,6 +121,6 @@ export function renderExecApprovalPrompt(state: AppViewState) {
           </button>
         </div>
       </div>
-    </div>
+    </openclaw-modal-dialog>
   `;
 }

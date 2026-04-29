@@ -43,6 +43,8 @@ const BASE_IMAGE_PNG =
 
 type AgentCommandCall = Record<string, unknown>;
 
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
 function expectChannels(call: Record<string, unknown>, channel: string) {
   expect(call.channel).toBe(channel);
   expect(call.messageChannel).toBe(channel);
@@ -61,18 +63,22 @@ async function setTestSessionStore(params: {
   });
 }
 
-async function waitForAgentCall(runId: string): Promise<AgentCommandCall> {
-  await vi.waitFor(() =>
-    expect(
-      (vi.mocked(agentCommand).mock.calls as unknown as Array<[AgentCommandCall]>).some(
-        ([call]) => call.runId === runId,
-      ),
-    ).toBe(true),
+async function latestAgentCall(runId?: string): Promise<AgentCommandCall> {
+  for (let elapsed = 0; elapsed <= 2_000; elapsed += 5) {
+    const calls = vi.mocked(agentCommand).mock.calls as unknown as Array<[unknown]>;
+    const call = runId
+      ? calls.map((entry) => entry[0] as AgentCommandCall).find((entry) => entry.runId === runId)
+      : (calls.at(-1)?.[0] as AgentCommandCall | undefined);
+    if (call) {
+      return call;
+    }
+    await sleep(5);
+  }
+  throw new Error(
+    runId
+      ? `expected agentCommand to be called for ${runId}`
+      : "expected agentCommand to be called",
   );
-  const calls = vi.mocked(agentCommand).mock.calls as unknown as Array<[unknown]>;
-  return calls.find(
-    ([call]) => (call as AgentCommandCall).runId === runId,
-  )?.[0] as AgentCommandCall;
 }
 
 async function runMainAgentDeliveryWithSession(params: {
@@ -98,7 +104,8 @@ async function runMainAgentDeliveryWithSession(params: {
       ...params.request,
     });
     expect(res.ok).toBe(true);
-    return await waitForAgentCall(String(params.request.idempotencyKey));
+    const runId = params.request.idempotencyKey;
+    return await latestAgentCall(typeof runId === "string" ? runId : undefined);
   } finally {
     testState.allowFrom = undefined;
   }
@@ -202,7 +209,7 @@ describe("gateway server agent", () => {
     });
     expect(res.ok).toBe(true);
 
-    const call = await waitForAgentCall("idem-agent-last-stale");
+    const call = await latestAgentCall("idem-agent-last-stale");
     expectChannels(call, "whatsapp");
     expect(call.to).toBe("+1555");
     expect(call.deliveryTargetMode).toBe("implicit");
@@ -226,7 +233,7 @@ describe("gateway server agent", () => {
     });
     expect(res.ok).toBe(true);
 
-    const call = await waitForAgentCall("idem-agent-subkey");
+    const call = await latestAgentCall("idem-agent-subkey");
     expect(call.sessionKey).toBe("agent:main:subagent:abc");
     expect(call.sessionId).toBe("sess-sub");
     expectChannels(call, "webchat");
@@ -252,7 +259,7 @@ describe("gateway server agent", () => {
       idempotencyKey: "idem-agent-subdepth",
     });
     expect(res.ok).toBe(true);
-    await waitForAgentCall("idem-agent-subdepth");
+    await latestAgentCall("idem-agent-subdepth");
 
     const raw = await fs.readFile(sharedSessionStorePath, "utf-8");
     const persisted = JSON.parse(raw) as Record<
@@ -281,7 +288,7 @@ describe("gateway server agent", () => {
     });
     expect(res.ok).toBe(true);
 
-    const call = await waitForAgentCall("idem-agent-id");
+    const call = await latestAgentCall("idem-agent-id");
     expect(call.sessionKey).toBe("agent:ops:main");
     expect(call.sessionId).toBe("sess-ops");
   });
@@ -428,7 +435,7 @@ describe("gateway server agent", () => {
     });
     expect(res.ok).toBe(true);
 
-    const call = await waitForAgentCall("idem-agent-attachments");
+    const call = await latestAgentCall("idem-agent-attachments");
     expect(call.sessionKey).toBe("agent:main:main");
     expectChannels(call, "webchat");
     expect(typeof call.message).toBe("string");
@@ -525,7 +532,7 @@ describe("gateway server agent", () => {
     });
     expect(res.ok).toBe(true);
 
-    const call = await waitForAgentCall(tc.idempotencyKey);
+    const call = await latestAgentCall(tc.idempotencyKey);
     expectChannels(call, tc.lastChannel);
     expect(call.to).toBe(tc.lastTo);
     expect(call.deliver).toBe(true);

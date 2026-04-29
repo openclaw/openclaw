@@ -5200,6 +5200,22 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   },
                 ],
               },
+              reasoningDefault: {
+                anyOf: [
+                  {
+                    type: "string",
+                    const: "off",
+                  },
+                  {
+                    type: "string",
+                    const: "on",
+                  },
+                  {
+                    type: "string",
+                    const: "stream",
+                  },
+                ],
+              },
               elevatedDefault: {
                 anyOf: [
                   {
