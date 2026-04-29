@@ -139,12 +139,14 @@ directories instead of under `src/agents/tools`, for example:
 
 ### 1. Running an Embedded Agent
 
-The main entry point is `runEmbeddedPiAgent()` in `pi-embedded-runner/run.ts`:
+The neutral entry point is `runEmbeddedAgent()` from the embedded-runner
+barrel. The older `runEmbeddedPiAgent()` / `pi-embedded-runner` names remain as
+compatibility aliases for callers that have not migrated yet:
 
 ```typescript
-import { runEmbeddedPiAgent } from "./agents/pi-embedded-runner.js";
+import { runEmbeddedAgent } from "./agents/embedded-runner.js";
 
-const result = await runEmbeddedPiAgent({
+const result = await runEmbeddedAgent({
   sessionId: "user-123",
   sessionKey: "main:whatsapp:+1234567890",
   sessionFile: "/path/to/session.jsonl",

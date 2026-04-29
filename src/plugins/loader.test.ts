@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { listAgentHarnessIds } from "../agents/harness/registry.js";
+import { getNativeAgentHarnessV2Factory } from "../agents/harness/v2.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -3421,6 +3422,223 @@ module.exports = { id: "throws-after-import", register() {} };`,
     expect(listAgentHarnessIds()).toEqual([]);
   });
 
+  it("registers and clears plugin AgentHarnessV2 factories with their V1 harnesses", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "codex-harness-v2",
+      filename: "codex-harness-v2.cjs",
+      body: `module.exports = {
+        id: "codex-harness-v2",
+        register(api) {
+          api.registerAgentHarness({
+            id: "codex",
+            label: "Codex",
+            supports: () => ({ supported: true }),
+            runAttempt: async () => ({ ok: false, error: "unused" }),
+          });
+          api.registerAgentHarnessV2Factory("codex", (harness) => ({
+            id: harness.id,
+            label: harness.label,
+            supports: (ctx) => harness.supports(ctx),
+            prepare: async (params) => ({
+              harnessId: harness.id,
+              label: harness.label,
+              params,
+              lifecycleState: "prepared",
+            }),
+            start: async (prepared) => ({ ...prepared, lifecycleState: "started" }),
+            send: async (session) => harness.runAttempt(session.params),
+            resolveOutcome: async (_session, result) => result,
+            cleanup: async () => {},
+          }));
+        },
+      };`,
+    });
+
+    loadOpenClawPlugins({
+      cache: false,
+      workspaceDir: plugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["codex-harness-v2"],
+        },
+      },
+      onlyPluginIds: ["codex-harness-v2"],
+    });
+    expect(listAgentHarnessIds()).toEqual(["codex"]);
+    expect(
+      getNativeAgentHarnessV2Factory({ harnessId: "codex", pluginId: "codex-harness-v2" }),
+    ).toBeDefined();
+
+    loadOpenClawPlugins({
+      cache: false,
+      workspaceDir: makeTempDir(),
+      config: {
+        plugins: {
+          allow: [],
+        },
+      },
+    });
+    expect(listAgentHarnessIds()).toEqual([]);
+    expect(
+      getNativeAgentHarnessV2Factory({ harnessId: "codex", pluginId: "codex-harness-v2" }),
+    ).toBeUndefined();
+  });
+
+  it("rejects plugin AgentHarnessV2 factories registered before the matching V1 harness", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "codex-harness-v2-before-v1",
+      filename: "codex-harness-v2-before-v1.cjs",
+      body: `module.exports = {
+        id: "codex-harness-v2-before-v1",
+        register(api) {
+          api.registerAgentHarnessV2Factory("codex", (harness) => ({
+            id: harness.id,
+            label: harness.label,
+            supports: (ctx) => harness.supports(ctx),
+            prepare: async (params) => ({
+              harnessId: harness.id,
+              label: harness.label,
+              params,
+              lifecycleState: "prepared",
+            }),
+            start: async (prepared) => ({ ...prepared, lifecycleState: "started" }),
+            send: async (session) => harness.runAttempt(session.params),
+            resolveOutcome: async (_session, result) => result,
+            cleanup: async () => {},
+          }));
+          api.registerAgentHarness({
+            id: "codex",
+            label: "Codex",
+            supports: () => ({ supported: true }),
+            runAttempt: async () => ({ ok: false, error: "unused" }),
+          });
+        },
+      };`,
+    });
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      workspaceDir: plugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["codex-harness-v2-before-v1"],
+        },
+      },
+      onlyPluginIds: ["codex-harness-v2-before-v1"],
+    });
+
+    expect(listAgentHarnessIds()).toEqual(["codex"]);
+    expect(
+      getNativeAgentHarnessV2Factory({
+        harnessId: "codex",
+        pluginId: "codex-harness-v2-before-v1",
+      }),
+    ).toBeUndefined();
+    expect(
+      registry.diagnostics.some(
+        (diag) =>
+          diag.level === "error" &&
+          diag.pluginId === "codex-harness-v2-before-v1" &&
+          diag.message ===
+            "agent harness V2 factory must be registered after matching agent harness: codex",
+      ),
+    ).toBe(true);
+  });
+
+  it("rejects plugin AgentHarnessV2 factories for another plugin's harness id", () => {
+    useNoBundledPlugins();
+    const attacker = writePlugin({
+      id: "attacker-v2-factory",
+      filename: "attacker-v2-factory.cjs",
+      body: `module.exports = {
+        id: "attacker-v2-factory",
+        register(api) {
+          api.registerAgentHarnessV2Factory("codex", (harness) => ({
+            id: harness.id,
+            label: harness.label,
+            supports: (ctx) => harness.supports(ctx),
+            prepare: async (params) => ({
+              harnessId: harness.id,
+              label: harness.label,
+              params,
+              lifecycleState: "prepared",
+            }),
+            start: async (prepared) => ({ ...prepared, lifecycleState: "started" }),
+            send: async (session) => harness.runAttempt(session.params),
+            resolveOutcome: async (_session, result) => result,
+            cleanup: async () => {},
+          }));
+        },
+      };`,
+    });
+    const owner = writePlugin({
+      id: "owned-codex-v2-factory",
+      filename: "owned-codex-v2-factory.cjs",
+      body: `module.exports = {
+        id: "owned-codex-v2-factory",
+        register(api) {
+          api.registerAgentHarness({
+            id: "codex",
+            label: "Codex",
+            supports: () => ({ supported: true }),
+            runAttempt: async () => ({ ok: false, error: "unused" }),
+          });
+          api.registerAgentHarnessV2Factory("codex", (harness) => ({
+            id: harness.id,
+            label: harness.label,
+            supports: (ctx) => harness.supports(ctx),
+            prepare: async (params) => ({
+              harnessId: harness.id,
+              label: harness.label,
+              params,
+              lifecycleState: "prepared",
+            }),
+            start: async (prepared) => ({ ...prepared, lifecycleState: "started" }),
+            send: async (session) => harness.runAttempt(session.params),
+            resolveOutcome: async (_session, result) => result,
+            cleanup: async () => {},
+          }));
+        },
+      };`,
+    });
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      workspaceDir: makeTempDir(),
+      config: {
+        plugins: {
+          load: { paths: [attacker.file, owner.file] },
+          allow: ["attacker-v2-factory", "owned-codex-v2-factory"],
+        },
+      },
+      onlyPluginIds: ["attacker-v2-factory", "owned-codex-v2-factory"],
+    });
+
+    expect(listAgentHarnessIds()).toEqual(["codex"]);
+    expect(
+      getNativeAgentHarnessV2Factory({ harnessId: "codex", pluginId: "owned-codex-v2-factory" }),
+    ).toBeDefined();
+    expect(registry.agentHarnessV2Factories).toEqual([
+      expect.objectContaining({
+        pluginId: "owned-codex-v2-factory",
+        harnessId: "codex",
+      }),
+    ]);
+    expect(
+      registry.diagnostics.some(
+        (diag) =>
+          diag.level === "error" &&
+          diag.pluginId === "attacker-v2-factory" &&
+          diag.message ===
+            "agent harness V2 factory must be registered after matching agent harness: codex",
+      ),
+    ).toBe(true);
+  });
+
   it("rejects malformed plugin agent harness registrations", () => {
     useNoBundledPlugins();
     const plugin = writePlugin({
@@ -3455,6 +3673,54 @@ module.exports = { id: "throws-after-import", register() {} };`,
         level: "error",
         pluginId: "bad-harness",
         message: 'agent harness "broken" registration missing required runtime methods',
+      }),
+    );
+  });
+
+  it("rejects malformed plugin AgentHarnessV2 factory registrations", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "bad-harness-v2-factory",
+      filename: "bad-harness-v2-factory.cjs",
+      body: `module.exports = {
+        id: "bad-harness-v2-factory",
+        register(api) {
+          api.registerAgentHarness({
+            id: "broken",
+            label: "Broken",
+            supports: () => ({ supported: true }),
+            runAttempt: async () => ({ ok: false, error: "unused" }),
+          });
+          api.registerAgentHarnessV2Factory("broken", { not: "callable" });
+        },
+      };`,
+    });
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      workspaceDir: plugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["bad-harness-v2-factory"],
+        },
+      },
+      onlyPluginIds: ["bad-harness-v2-factory"],
+    });
+
+    expect(getNativeAgentHarnessV2Factory({ harnessId: "broken" })).toBeUndefined();
+    expect(
+      getNativeAgentHarnessV2Factory({
+        harnessId: "broken",
+        pluginId: "bad-harness-v2-factory",
+      }),
+    ).toBeUndefined();
+    expect(registry.agentHarnessV2Factories).toEqual([]);
+    expect(registry.diagnostics).toContainEqual(
+      expect.objectContaining({
+        level: "error",
+        pluginId: "bad-harness-v2-factory",
+        message: "agent harness V2 factory registration must be a function: broken",
       }),
     );
   });
@@ -3640,6 +3906,27 @@ module.exports = { id: "throws-after-import", register() {} };`,
             ingest: async () => {},
             assemble: async () => ({ messages: [] }),
           }));
+          api.registerAgentHarness({
+            id: "failme-harness",
+            label: "Failme Harness",
+            supports: () => ({ supported: true }),
+            runAttempt: async () => ({ ok: false, error: "unused" }),
+          });
+          api.registerAgentHarnessV2Factory("failme-harness", (harness) => ({
+            id: harness.id,
+            label: harness.label,
+            supports: (ctx) => harness.supports(ctx),
+            prepare: async (params) => ({
+              harnessId: harness.id,
+              label: harness.label,
+              params,
+              lifecycleState: "prepared",
+            }),
+            start: async (prepared) => ({ ...prepared, lifecycleState: "started" }),
+            send: async (session) => harness.runAttempt(session.params),
+            resolveOutcome: async (_session, result) => result,
+            cleanup: async () => {},
+          }));
           throw new Error("boom");
         },
       };`,
@@ -3672,6 +3959,14 @@ module.exports = { id: "throws-after-import", register() {} };`,
     expect(resolvePluginInteractiveNamespaceMatch("slack", "failme:payload")).toBeNull();
     expect(getContextEngineFactory("failme-context")).toBeUndefined();
     expect(listContextEngineIds()).not.toContain("failme-context");
+    expect(listAgentHarnessIds()).not.toContain("failme-harness");
+    expect(
+      getNativeAgentHarnessV2Factory({
+        harnessId: "failme-harness",
+        pluginId: "failing-side-effects",
+      }),
+    ).toBeUndefined();
+    expect(registry.agentHarnessV2Factories).toEqual([]);
 
     const event = createInternalHookEvent("gateway", "startup", "gateway:startup");
     await triggerInternalHook(event);

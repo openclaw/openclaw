@@ -4,6 +4,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { loadCliSessionHistoryMessages } from "./cli-runner/session-history.js";
 import type { PreparedCliRunContext, RunCliAgentParams } from "./cli-runner/types.js";
+import type { EmbeddedAgentRunResult } from "./embedded-runner.js";
 import { FailoverError, isFailoverError, resolveFailoverStatus } from "./failover-error.js";
 import { buildAgentHookConversationMessages } from "./harness/hook-history.js";
 import {
@@ -12,21 +13,9 @@ import {
   runAgentHarnessLlmOutputHook,
 } from "./harness/lifecycle-hook-helpers.js";
 import { classifyFailoverReason, isFailoverErrorMessage } from "./pi-embedded-helpers.js";
-import type { EmbeddedPiRunResult } from "./pi-embedded-runner.js";
 
 function buildHandledReplyPayloads(reply?: ReplyPayload) {
-  const normalized = reply ?? { text: SILENT_REPLY_TOKEN };
-  return [
-    {
-      text: normalized.text,
-      mediaUrl: normalized.mediaUrl,
-      mediaUrls: normalized.mediaUrls,
-      replyToId: normalized.replyToId,
-      audioAsVoice: normalized.audioAsVoice,
-      isError: normalized.isError,
-      isReasoning: normalized.isReasoning,
-    },
-  ];
+  return [reply ?? { text: SILENT_REPLY_TOKEN }];
 }
 
 function buildCliHookUserMessage(prompt: string): unknown {
@@ -61,7 +50,7 @@ function buildCliHookAssistantMessage(params: {
   };
 }
 
-export async function runCliAgent(params: RunCliAgentParams): Promise<EmbeddedPiRunResult> {
+export async function runCliAgent(params: RunCliAgentParams): Promise<EmbeddedAgentRunResult> {
   // Cron gate must fire before prepareCliRunContext — that call allocates
   // backend resources released only by runPreparedCliAgent's try…finally.
   params.onExecutionStarted?.();
@@ -120,7 +109,7 @@ export async function runCliAgent(params: RunCliAgentParams): Promise<EmbeddedPi
 
 export async function runPreparedCliAgent(
   context: PreparedCliRunContext,
-): Promise<EmbeddedPiRunResult> {
+): Promise<EmbeddedAgentRunResult> {
   const { executePreparedCliRun } = await import("./cli-runner/execute.runtime.js");
   const { params } = context;
   const hookRunner = getGlobalHookRunner();
@@ -229,7 +218,7 @@ export async function runPreparedCliAgent(
   const buildCliRunResult = (resultParams: {
     output: Awaited<ReturnType<typeof executePreparedCliRun>>;
     effectiveCliSessionId?: string;
-  }): EmbeddedPiRunResult => {
+  }): EmbeddedAgentRunResult => {
     const text = resultParams.output.text?.trim();
     const rawText = resultParams.output.rawText?.trim();
     const payloads = text ? [{ text }] : undefined;
@@ -415,6 +404,6 @@ export function buildRunClaudeCliAgentParams(params: RunClaudeCliAgentParams): R
 
 export async function runClaudeCliAgent(
   params: RunClaudeCliAgentParams,
-): Promise<EmbeddedPiRunResult> {
+): Promise<EmbeddedAgentRunResult> {
   return runCliAgent(buildRunClaudeCliAgentParams(params));
 }

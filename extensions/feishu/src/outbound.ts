@@ -132,9 +132,10 @@ function sanitizeNativeFeishuCardButton(button: unknown): Record<string, unknown
   if (!isRecord(button)) {
     return undefined;
   }
-  const text = isRecord(button.text) && typeof button.text.content === "string"
-    ? button.text.content
-    : undefined;
+  const text =
+    isRecord(button.text) && typeof button.text.content === "string"
+      ? button.text.content
+      : undefined;
   if (!text?.trim()) {
     return undefined;
   }
@@ -176,7 +177,9 @@ function sanitizeNativeFeishuCardElement(element: unknown): Record<string, unkno
   return undefined;
 }
 
-function sanitizeNativeFeishuCard(card: Record<string, unknown>): Record<string, unknown> | undefined {
+function sanitizeNativeFeishuCard(
+  card: Record<string, unknown>,
+): Record<string, unknown> | undefined {
   const body = isRecord(card.body) ? card.body : undefined;
   const rawElements = Array.isArray(body?.elements) ? body.elements : [];
   const elements = rawElements
@@ -187,9 +190,10 @@ function sanitizeNativeFeishuCard(card: Record<string, unknown>): Record<string,
   }
 
   const header = isRecord(card.header) ? card.header : undefined;
-  const title = isRecord(header?.title) && typeof header.title.content === "string"
-    ? header.title.content
-    : undefined;
+  const title =
+    isRecord(header?.title) && typeof header.title.content === "string"
+      ? header.title.content
+      : undefined;
   return markRenderedFeishuCard({
     schema: "2.0",
     config: { width_mode: "fill" },

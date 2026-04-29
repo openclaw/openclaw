@@ -1,40 +1,25 @@
-import { randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
-import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import { ensureContextEnginesInitialized } from "../../context-engine/init.js";
 import { resolveContextEngine } from "../../context-engine/registry.js";
 import { emitAgentPlanEvent } from "../../infra/agent-events.js";
 import { sleepWithAbort } from "../../infra/backoff.js";
-import { freezeDiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
-import { resolveProviderAuthProfileId } from "../../plugins/provider-runtime.js";
-import { enqueueCommandInLane } from "../../process/command-queue.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { sanitizeForLog } from "../../terminal/ansi.js";
-import { resolveUserPath } from "../../utils.js";
-import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
 import {
   hasConfiguredModelFallbacks,
   resolveAgentExecutionContract,
   resolveSessionAgentIds,
-  resolveAgentWorkspaceDir,
 } from "../agent-scope.js";
 import {
   type AuthProfileFailureReason,
-  type AuthProfileStore,
   markAuthProfileFailure,
-  resolveAuthProfileEligibility,
   markAuthProfileGood,
   markAuthProfileUsed,
 } from "../auth-profiles.js";
-import {
-  resolveSessionKeyForRequest,
-  resolveStoredSessionKeyForSessionId,
-} from "../command/session.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
 import { isStrictAgenticExecutionContractActive } from "../execution-contract.js";
 import {
@@ -43,18 +28,9 @@ import {
   FailoverError,
   resolveFailoverStatus,
 } from "../failover-error.js";
-import { selectAgentHarness } from "../harness/selection.js";
 import { LiveSessionModelSwitchError } from "../live-model-switch-error.js";
 import { shouldSwitchToLiveModel, clearLiveModelSwitchPending } from "../live-model-switch.js";
-import {
-  applyAuthHeaderOverride,
-  applyLocalNoAuthHeaderOverride,
-  ensureAuthProfileStore,
-  type ResolvedProviderAuth,
-  resolveAuthProfileOrder,
-  shouldPreferExplicitConfigApiKeyAuth,
-} from "../model-auth.js";
-import { ensureOpenClawModelsJson } from "../models-config.js";
+import type { ResolvedProviderAuth } from "../model-auth.js";
 import {
   retireSessionMcpRuntime,
   retireSessionMcpRuntimeForSessionKey,
@@ -75,19 +51,13 @@ import {
   parseImageSizeError,
   pickFallbackThinkingLevel,
 } from "../pi-embedded-helpers.js";
-import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
-import { buildAgentRuntimeAuthPlan } from "../runtime-plan/auth.js";
-import { buildAgentRuntimePlan } from "../runtime-plan/build.js";
 import { ensureRuntimePluginsLoaded } from "../runtime-plugins.js";
 import { derivePromptTokens, normalizeUsage, type UsageLike } from "../usage.js";
-import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
 import { runPostCompactionSideEffects } from "./compaction-hooks.js";
 import { buildEmbeddedCompactionRuntimeContext } from "./compaction-runtime-context.js";
 import { runContextEngineMaintenance } from "./context-engine-maintenance.js";
 import { resolveEmbeddedRunFailureSignal } from "./failure-signal.js";
-import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
-import { resolveModelAsync } from "./model.js";
 import { createEmbeddedRunReplayState, observeReplayMetadata } from "./replay-state.js";
 import { handleAssistantFailover } from "./run/assistant-failover.js";
 import { forgetPromptBuildDrainCacheForRun } from "./run/attempt.prompt-helpers.js";
@@ -108,18 +78,17 @@ import {
   resolveOverloadProfileRotationLimit,
   resolveRateLimitProfileRotationLimit,
   type RuntimeAuthState,
-  scrubAnthropicRefusalMagic,
 } from "./run/helpers.js";
 import {
   DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT,
   DEFAULT_REASONING_ONLY_RETRY_LIMIT,
   resolveAckExecutionFastPathInstruction,
-  resolveAttemptReplayMetadata,
   extractPlanningOnlyPlanDetails,
   resolveEmptyResponseRetryInstruction,
   resolveIncompleteTurnPayloadText,
   resolvePlanningOnlyRetryLimit,
   resolvePlanningOnlyRetryInstruction,
+  resolveAttemptReplayMetadata,
   resolveReasoningOnlyRetryInstruction,
   resolveSilentToolResultReplyPayload,
   STRICT_AGENTIC_BLOCKED_TEXT,
@@ -127,14 +96,29 @@ import {
   resolveRunLivenessState,
   shouldTreatEmptyAssistantReplyAsSilent,
 } from "./run/incomplete-turn.js";
+import {
+  buildEmbeddedRunQueuePlan,
+  isEmbeddedProbeSession,
+  logEmbeddedRunWorkspaceFallback,
+  resolveEmbeddedRunToolResultFormat,
+  resolveEmbeddedRunWorkspaceContext,
+  throwIfEmbeddedRunAborted,
+} from "./run/lane-workspace.js";
+import { buildEmbeddedRunModelAuthPlan } from "./run/model-auth-plan.js";
 import type { RunEmbeddedPiAgentParams } from "./run/params.js";
 import { buildEmbeddedRunPayloads } from "./run/payloads.js";
 import { handleRetryLimitExhaustion } from "./run/retry-limit.js";
 import {
-  buildBeforeModelResolveAttachments,
-  resolveEffectiveRuntimeModel,
-  resolveHookModelSelection,
-} from "./run/setup.js";
+  backfillSessionKey,
+  buildHandledReplyPayloads,
+  buildTraceToolSummary,
+} from "./run/run-orchestration-helpers.js";
+import { buildEmbeddedRunAttemptInput } from "./run/runtime-plan-factory.js";
+import { buildBeforeModelResolveAttachments, resolveHookModelSelection } from "./run/setup.js";
+import {
+  buildEmbeddedRunTerminalResult,
+  resolveEmbeddedRunStopReason,
+} from "./run/terminal-result.js";
 import { mergeAttemptToolMediaPayloads } from "./run/tool-media-payloads.js";
 import {
   resolveLiveToolResultMaxChars,
@@ -145,7 +129,6 @@ import type {
   EmbeddedPiAgentMeta,
   EmbeddedPiRunResult,
   TraceAttempt,
-  ToolSummaryTrace,
   EmbeddedRunLivenessState,
 } from "./types.js";
 import { createUsageAccumulator, mergeUsageIntoAccumulator } from "./usage-accumulator.js";
@@ -184,92 +167,6 @@ function normalizeEmbeddedRunAttemptResult(
   };
 }
 
-function createEmptyAuthProfileStore(): AuthProfileStore {
-  return {
-    version: 1,
-    profiles: {},
-  };
-}
-
-function buildTraceToolSummary(params: {
-  toolMetas?: Array<{ toolName: string; meta?: string }>;
-  hadFailure: boolean;
-}): ToolSummaryTrace | undefined {
-  if (!params.toolMetas?.length) {
-    return undefined;
-  }
-  const tools: string[] = [];
-  const seen = new Set<string>();
-  for (const entry of params.toolMetas) {
-    const toolName = normalizeOptionalString(entry.toolName);
-    if (!toolName || seen.has(toolName)) {
-      continue;
-    }
-    seen.add(toolName);
-    tools.push(toolName);
-  }
-  return {
-    calls: params.toolMetas?.length ?? 0,
-    tools,
-    failures: params.hadFailure ? 1 : 0,
-  };
-}
-
-/**
- * Best-effort backfill of sessionKey from sessionId when not explicitly provided.
- * The return value is normalized: whitespace-only inputs collapse to undefined, and
- * successful resolution returns a trimmed session key. This is a read-only lookup
- * with no side effects.
- * See: https://github.com/openclaw/openclaw/issues/60552
- */
-function backfillSessionKey(params: {
-  config: RunEmbeddedPiAgentParams["config"];
-  sessionId: string;
-  sessionKey?: string;
-  agentId?: string;
-}): string | undefined {
-  const trimmed = normalizeOptionalString(params.sessionKey);
-  if (trimmed) {
-    return trimmed;
-  }
-  if (!params.config || !params.sessionId) {
-    return undefined;
-  }
-  try {
-    const resolved = normalizeOptionalString(params.agentId)
-      ? resolveStoredSessionKeyForSessionId({
-          cfg: params.config,
-          sessionId: params.sessionId,
-          agentId: params.agentId,
-        })
-      : resolveSessionKeyForRequest({
-          cfg: params.config,
-          sessionId: params.sessionId,
-        });
-    return normalizeOptionalString(resolved.sessionKey);
-  } catch (err) {
-    log.warn(
-      `[backfillSessionKey] Failed to resolve sessionKey for sessionId=${redactRunIdentifier(sanitizeForLog(params.sessionId))}: ${formatErrorMessage(err)}`,
-    );
-    return undefined;
-  }
-}
-
-function buildHandledReplyPayloads(reply?: ReplyPayload) {
-  const normalized = reply ?? { text: SILENT_REPLY_TOKEN };
-  return [
-    {
-      text: normalized.text,
-      mediaUrl: normalized.mediaUrl,
-      mediaUrls: normalized.mediaUrls,
-      replyToId: normalized.replyToId,
-      audioAsVoice: normalized.audioAsVoice,
-      isError: normalized.isError,
-      isReasoning: normalized.isReasoning,
-    },
-  ];
-}
-
 export async function runEmbeddedPiAgent(
   params: RunEmbeddedPiAgentParams,
 ): Promise<EmbeddedPiRunResult> {
@@ -284,37 +181,20 @@ export async function runEmbeddedPiAgent(
   if (effectiveSessionKey !== params.sessionKey) {
     params = { ...params, sessionKey: effectiveSessionKey };
   }
-  const sessionLane = resolveSessionLane(params.sessionKey?.trim() || params.sessionId);
-  const globalLane = resolveGlobalLane(params.lane);
-  const enqueueGlobal =
-    params.enqueue ?? ((task, opts) => enqueueCommandInLane(globalLane, task, opts));
-  const enqueueSession =
-    params.enqueue ?? ((task, opts) => enqueueCommandInLane(sessionLane, task, opts));
-  const channelHint = params.messageChannel ?? params.messageProvider;
-  const resolvedToolResultFormat =
-    params.toolResultFormat ??
-    (channelHint
-      ? isMarkdownCapableMessageChannel(channelHint)
-        ? "markdown"
-        : "plain"
-      : "markdown");
-  const isProbeSession = params.sessionId?.startsWith("probe-") ?? false;
+  const { enqueueGlobal, enqueueSession } = buildEmbeddedRunQueuePlan({
+    sessionKey: params.sessionKey,
+    sessionId: params.sessionId,
+    lane: params.lane,
+    enqueue: params.enqueue,
+  });
+  const resolvedToolResultFormat = resolveEmbeddedRunToolResultFormat({
+    toolResultFormat: params.toolResultFormat,
+    messageChannel: params.messageChannel,
+    messageProvider: params.messageProvider,
+  });
+  const isProbeSession = isEmbeddedProbeSession(params.sessionId);
 
-  const throwIfAborted = () => {
-    if (!params.abortSignal?.aborted) {
-      return;
-    }
-    const reason = params.abortSignal.reason;
-    if (reason instanceof Error) {
-      throw reason;
-    }
-    const abortErr =
-      reason !== undefined
-        ? new Error("Operation aborted", { cause: reason })
-        : new Error("Operation aborted");
-    abortErr.name = "AbortError";
-    throw abortErr;
-  };
+  const throwIfAborted = () => throwIfEmbeddedRunAborted(params.abortSignal);
 
   throwIfAborted();
 
@@ -324,25 +204,20 @@ export async function runEmbeddedPiAgent(
       throwIfAborted();
       const started = Date.now();
       params.onExecutionStarted?.();
-      const workspaceResolution = resolveRunWorkspaceDir({
-        workspaceDir: params.workspaceDir,
+      const { workspaceResolution, resolvedWorkspace, isCanonicalWorkspace } =
+        resolveEmbeddedRunWorkspaceContext({
+          workspaceDir: params.workspaceDir,
+          sessionKey: params.sessionKey,
+          agentId: params.agentId,
+          config: params.config,
+        });
+      logEmbeddedRunWorkspaceFallback({
+        workspaceResolution,
+        resolvedWorkspace,
+        runId: params.runId,
+        sessionId: params.sessionId,
         sessionKey: params.sessionKey,
-        agentId: params.agentId,
-        config: params.config,
       });
-      const resolvedWorkspace = workspaceResolution.workspaceDir;
-      const canonicalWorkspace = resolveUserPath(
-        resolveAgentWorkspaceDir(params.config ?? {}, workspaceResolution.agentId),
-      );
-      const isCanonicalWorkspace = canonicalWorkspace === resolvedWorkspace;
-      const redactedSessionId = redactRunIdentifier(params.sessionId);
-      const redactedSessionKey = redactRunIdentifier(params.sessionKey);
-      const redactedWorkspace = redactRunIdentifier(resolvedWorkspace);
-      if (workspaceResolution.usedFallback) {
-        log.warn(
-          `[workspace-fallback] caller=runEmbeddedPiAgent reason=${workspaceResolution.fallbackReason} run=${params.runId} session=${redactedSessionId} sessionKey=${redactedSessionKey} agent=${workspaceResolution.agentId} workspace=${redactedWorkspace}`,
-        );
-      }
       ensureRuntimePluginsLoaded({
         config: params.config,
         workspaceDir: resolvedWorkspace,
@@ -406,139 +281,32 @@ export async function runEmbeddedPiAgent(
       provider = hookSelection.provider;
       modelId = hookSelection.modelId;
       const legacyBeforeAgentStartResult = hookSelection.legacyBeforeAgentStartResult;
-      const agentHarness = selectAgentHarness({
+      const modelAuthPlan = await buildEmbeddedRunModelAuthPlan({
         provider,
         modelId,
+        agentDir,
         config: params.config,
         agentId: params.agentId,
         sessionKey: params.sessionKey,
         agentHarnessId: params.agentHarnessId,
+        authProfileId: params.authProfileId,
+        authProfileIdSource: params.authProfileIdSource,
+        workspaceDir: resolvedWorkspace,
       });
-      const pluginHarnessOwnsTransport = agentHarness.id !== "pi";
-      const dynamicModelResolution = await resolveModelAsync(
-        provider,
-        modelId,
-        agentDir,
-        params.config,
-        {
-          // Plugin dynamic model hooks can resolve explicit model refs without
-          // first generating PI models.json. This keeps one-shot model runs from
-          // blocking on unrelated provider discovery.
-          skipPiDiscovery: true,
-        },
-      );
-      const modelResolution =
-        dynamicModelResolution.model || pluginHarnessOwnsTransport
-          ? dynamicModelResolution
-          : await (async () => {
-              await ensureOpenClawModelsJson(params.config, agentDir);
-              return await resolveModelAsync(provider, modelId, agentDir, params.config);
-            })();
-      const { model, error, authStorage, modelRegistry } = modelResolution;
-      if (!model) {
-        throw new FailoverError(error ?? `Unknown model: ${provider}/${modelId}`, {
-          reason: "model_not_found",
-          provider,
-          model: modelId,
-        });
-      }
-      let runtimeModel = model;
-
-      const resolvedRuntimeModel = resolveEffectiveRuntimeModel({
-        cfg: params.config,
-        provider,
-        modelId,
-        runtimeModel,
-      });
-      const ctxInfo = resolvedRuntimeModel.ctxInfo;
-      let effectiveModel = resolvedRuntimeModel.effectiveModel;
-
-      const authStore = pluginHarnessOwnsTransport
-        ? createEmptyAuthProfileStore()
-        : ensureAuthProfileStore(agentDir, {
-            allowKeychainPrompt: false,
-          });
-      const preferredProfileId = params.authProfileId?.trim();
-      let lockedProfileId = params.authProfileIdSource === "user" ? preferredProfileId : undefined;
-      if (lockedProfileId) {
-        if (pluginHarnessOwnsTransport) {
-          const runtimeAuthPlan = buildAgentRuntimeAuthPlan({
-            provider,
-            authProfileProvider: lockedProfileId.split(":", 1)[0],
-            sessionAuthProfileId: lockedProfileId,
-            config: params.config,
-            workspaceDir: resolvedWorkspace,
-            harnessId: agentHarness.id,
-          });
-          if (!runtimeAuthPlan.forwardedAuthProfileId) {
-            lockedProfileId = undefined;
-          }
-        } else {
-          const lockedProfile = authStore.profiles[lockedProfileId];
-          const lockedProfileProvider = lockedProfile
-            ? resolveProviderIdForAuth(lockedProfile.provider, {
-                config: params.config,
-                workspaceDir: resolvedWorkspace,
-              })
-            : undefined;
-          const runProvider = resolveProviderIdForAuth(provider, {
-            config: params.config,
-            workspaceDir: resolvedWorkspace,
-          });
-          if (!lockedProfile || !lockedProfileProvider || lockedProfileProvider !== runProvider) {
-            lockedProfileId = undefined;
-          }
-        }
-      }
-      if (lockedProfileId && !pluginHarnessOwnsTransport) {
-        const eligibility = resolveAuthProfileEligibility({
-          cfg: params.config,
-          store: authStore,
-          provider,
-          profileId: lockedProfileId,
-        });
-        if (!eligibility.eligible) {
-          throw new Error(`Auth profile "${lockedProfileId}" is not configured for ${provider}.`);
-        }
-      }
-      const profileOrder = shouldPreferExplicitConfigApiKeyAuth(params.config, provider)
-        ? []
-        : resolveAuthProfileOrder({
-            cfg: params.config,
-            store: authStore,
-            provider,
-            preferredProfile: preferredProfileId,
-          });
-      const providerPreferredProfileId = lockedProfileId
-        ? undefined
-        : resolveProviderAuthProfileId({
-            provider,
-            config: params.config,
-            workspaceDir: resolvedWorkspace,
-            context: {
-              config: params.config,
-              agentDir,
-              workspaceDir: resolvedWorkspace,
-              provider,
-              modelId,
-              preferredProfileId,
-              lockedProfileId,
-              profileOrder,
-              authStore,
-            },
-          });
-      const providerOrderedProfiles =
-        providerPreferredProfileId && profileOrder.includes(providerPreferredProfileId)
-          ? [
-              providerPreferredProfileId,
-              ...profileOrder.filter((profileId) => profileId !== providerPreferredProfileId),
-            ]
-          : profileOrder;
-      const profileCandidates = lockedProfileId
-        ? [lockedProfileId]
-        : providerOrderedProfiles.length > 0
-          ? providerOrderedProfiles
-          : [undefined];
+      const {
+        agentHarness,
+        authStorage,
+        authStore,
+        ctxInfo,
+        lockedProfileId,
+        model,
+        modelRegistry,
+        pluginHarnessOwnsTransport,
+        preferredProfileId,
+        profileCandidates,
+      } = modelAuthPlan;
+      let runtimeModel = modelAuthPlan.runtimeModel;
+      let effectiveModel = modelAuthPlan.effectiveModel;
       let profileIndex = 0;
       const traceAttempts: TraceAttempt[] = [];
 
@@ -853,155 +621,42 @@ export async function runEmbeddedPiAgent(
           attemptedThinking.add(thinkLevel);
           await fs.mkdir(resolvedWorkspace, { recursive: true });
 
-          const basePrompt =
-            provider === "anthropic" ? scrubAnthropicRefusalMagic(params.prompt) : params.prompt;
-          const promptAdditions = [
-            ackExecutionFastPathInstruction,
-            planningOnlyRetryInstruction,
-            reasoningOnlyRetryInstruction,
-            emptyResponseRetryInstruction,
-          ].filter(
-            (value): value is string => typeof value === "string" && value.trim().length > 0,
+          const rawAttempt = await runEmbeddedAttemptWithBackend(
+            buildEmbeddedRunAttemptInput({
+              runParams: params,
+              activeSessionId,
+              activeSessionFile,
+              resolvedSessionKey,
+              resolvedWorkspace,
+              agentDir,
+              agentId: workspaceResolution.agentId,
+              isCanonicalWorkspace,
+              contextEngine,
+              contextTokenBudget: ctxInfo.tokens,
+              provider,
+              modelId,
+              effectiveModel,
+              harnessId: agentHarness.id,
+              pluginHarnessOwnsTransport,
+              apiKeyInfo,
+              runtimeAuthState,
+              lastProfileId,
+              lockedProfileId,
+              initialReplayState: accumulatedReplayState,
+              authStorage,
+              modelRegistry,
+              legacyBeforeAgentStartResult,
+              thinkLevel,
+              resolvedToolResultFormat,
+              bootstrapPromptWarningSignaturesSeen,
+              instructions: {
+                ackExecutionFastPathInstruction,
+                planningOnlyRetryInstruction,
+                reasoningOnlyRetryInstruction,
+                emptyResponseRetryInstruction,
+              },
+            }),
           );
-          const prompt =
-            promptAdditions.length > 0
-              ? `${basePrompt}\n\n${promptAdditions.join("\n\n")}`
-              : basePrompt;
-          let resolvedStreamApiKey: string | undefined;
-          if (!runtimeAuthState && apiKeyInfo) {
-            resolvedStreamApiKey = (apiKeyInfo as ApiKeyInfo).apiKey;
-          }
-          const runtimePlan = buildAgentRuntimePlan({
-            provider,
-            modelId,
-            model: effectiveModel,
-            modelApi: effectiveModel.api,
-            harnessId: agentHarness.id,
-            harnessRuntime: agentHarness.id,
-            allowHarnessAuthProfileForwarding: pluginHarnessOwnsTransport,
-            authProfileProvider: lastProfileId?.split(":", 1)[0],
-            sessionAuthProfileId: lastProfileId,
-            config: params.config,
-            workspaceDir: resolvedWorkspace,
-            agentDir,
-            agentId: workspaceResolution.agentId,
-            thinkingLevel: thinkLevel,
-            extraParamsOverride: {
-              ...params.streamParams,
-              fastMode: params.fastMode,
-            },
-          });
-
-          const rawAttempt = await runEmbeddedAttemptWithBackend({
-            sessionId: activeSessionId,
-            sessionKey: resolvedSessionKey,
-            sandboxSessionKey: params.sandboxSessionKey,
-            trigger: params.trigger,
-            memoryFlushWritePath: params.memoryFlushWritePath,
-            messageChannel: params.messageChannel,
-            messageProvider: params.messageProvider,
-            agentAccountId: params.agentAccountId,
-            messageTo: params.messageTo,
-            messageThreadId: params.messageThreadId,
-            groupId: params.groupId,
-            groupChannel: params.groupChannel,
-            groupSpace: params.groupSpace,
-            memberRoleIds: params.memberRoleIds,
-            spawnedBy: params.spawnedBy,
-            isCanonicalWorkspace,
-            senderId: params.senderId,
-            senderName: params.senderName,
-            senderUsername: params.senderUsername,
-            senderE164: params.senderE164,
-            senderIsOwner: params.senderIsOwner,
-            currentChannelId: params.currentChannelId,
-            currentThreadTs: params.currentThreadTs,
-            currentMessageId: params.currentMessageId,
-            replyToMode: params.replyToMode,
-            hasRepliedRef: params.hasRepliedRef,
-            sessionFile: activeSessionFile,
-            workspaceDir: resolvedWorkspace,
-            agentDir,
-            config: params.config,
-            allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
-            contextEngine,
-            contextTokenBudget: ctxInfo.tokens,
-            skillsSnapshot: params.skillsSnapshot,
-            prompt,
-            transcriptPrompt: params.transcriptPrompt,
-            images: params.images,
-            imageOrder: params.imageOrder,
-            clientTools: params.clientTools,
-            disableTools: params.disableTools,
-            provider,
-            modelId,
-            // Use the harness selected before model/auth setup for the actual
-            // attempt too. Otherwise plugin-owned transports can skip PI auth
-            // bootstrap but drift back to PI when the attempt is created.
-            agentHarnessId: agentHarness.id,
-            runtimePlan,
-            model: applyAuthHeaderOverride(
-              applyLocalNoAuthHeaderOverride(effectiveModel, apiKeyInfo),
-              // When runtime auth exchange produced a different credential
-              // (runtimeAuthState is set), the exchanged token lives in
-              // authStorage and the SDK will pick it up automatically.
-              // Skip header injection to avoid leaking the pre-exchange key.
-              runtimeAuthState ? null : apiKeyInfo,
-              params.config,
-            ),
-            resolvedApiKey: resolvedStreamApiKey,
-            authProfileId: lastProfileId,
-            authProfileIdSource: lockedProfileId ? "user" : "auto",
-            initialReplayState: accumulatedReplayState,
-            authStorage,
-            modelRegistry,
-            agentId: workspaceResolution.agentId,
-            legacyBeforeAgentStartResult,
-            thinkLevel,
-            fastMode: params.fastMode,
-            verboseLevel: params.verboseLevel,
-            reasoningLevel: params.reasoningLevel,
-            toolResultFormat: resolvedToolResultFormat,
-            execOverrides: params.execOverrides,
-            bashElevated: params.bashElevated,
-            timeoutMs: params.timeoutMs,
-            runId: params.runId,
-            abortSignal: params.abortSignal,
-            replyOperation: params.replyOperation,
-            shouldEmitToolResult: params.shouldEmitToolResult,
-            shouldEmitToolOutput: params.shouldEmitToolOutput,
-            onPartialReply: params.onPartialReply,
-            onAssistantMessageStart: params.onAssistantMessageStart,
-            onBlockReply: params.onBlockReply,
-            onBlockReplyFlush: params.onBlockReplyFlush,
-            blockReplyBreak: params.blockReplyBreak,
-            blockReplyChunking: params.blockReplyChunking,
-            onReasoningStream: params.onReasoningStream,
-            onReasoningEnd: params.onReasoningEnd,
-            onToolResult: params.onToolResult,
-            onAgentEvent: params.onAgentEvent,
-            extraSystemPrompt: params.extraSystemPrompt,
-            sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
-            inputProvenance: params.inputProvenance,
-            streamParams: params.streamParams,
-            modelRun: params.modelRun,
-            promptMode: params.promptMode,
-            ownerNumbers: params.ownerNumbers,
-            enforceFinalTag: params.enforceFinalTag,
-            silentExpected: params.silentExpected,
-            bootstrapContextMode: params.bootstrapContextMode,
-            bootstrapContextRunKind: params.bootstrapContextRunKind,
-            jobId: params.jobId,
-            toolsAllow: params.toolsAllow,
-            ownerOnlyToolAllowlist: params.ownerOnlyToolAllowlist,
-            disableMessageTool: params.disableMessageTool,
-            forceMessageTool: params.forceMessageTool,
-            requireExplicitMessageTarget: params.requireExplicitMessageTarget,
-            internalEvents: params.internalEvents,
-            bootstrapPromptWarningSignaturesSeen,
-            bootstrapPromptWarningSignature:
-              bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1],
-          });
           const attempt = normalizeEmbeddedRunAttemptResult(rawAttempt);
 
           const {
@@ -2355,97 +2010,44 @@ export async function runEmbeddedPiAgent(
                 attempt,
                 incompleteTurnText: null,
               });
-          const stopReason = attempt.clientToolCall
-            ? "tool_calls"
-            : attempt.yieldDetected
-              ? "end_turn"
-              : (sessionLastAssistant?.stopReason as string | undefined);
-          const terminalPayloads = emptyAssistantReplyIsSilent
-            ? [{ text: SILENT_REPLY_TOKEN }]
-            : payloadsForTerminalPath;
+          const stopReason = resolveEmbeddedRunStopReason({
+            clientToolCall: attempt.clientToolCall,
+            yieldDetected: attempt.yieldDetected,
+            assistantStopReason: sessionLastAssistant?.stopReason as string | undefined,
+          });
           attempt.setTerminalLifecycleMeta?.({
             replayInvalid,
             livenessState,
             stopReason,
             yielded: attempt.yieldDetected === true,
           });
-          return {
-            payloads: terminalPayloads?.length ? terminalPayloads : undefined,
-            ...(attempt.diagnosticTrace
-              ? { diagnosticTrace: freezeDiagnosticTraceContext(attempt.diagnosticTrace) }
-              : {}),
-            meta: {
-              durationMs: Date.now() - started,
-              agentMeta,
-              aborted,
-              systemPromptReport: attempt.systemPromptReport,
-              finalPromptText: attempt.finalPromptText,
-              finalAssistantVisibleText,
-              finalAssistantRawText,
-              replayInvalid,
-              livenessState,
-              agentHarnessResultClassification: attempt.agentHarnessResultClassification,
-              ...(attempt.yieldDetected ? { yielded: true } : {}),
-              ...(emptyAssistantReplyIsSilent
-                ? { terminalReplyKind: "silent-empty" as const }
-                : {}),
-              // Handle client tool calls (OpenResponses hosted tools)
-              // Propagate the LLM stop reason so callers (lifecycle events,
-              // ACP bridge) can distinguish end_turn from max_tokens.
-              stopReason,
-              pendingToolCalls: attempt.clientToolCall
-                ? [
-                    {
-                      id: randomBytes(5).toString("hex").slice(0, 9),
-                      name: attempt.clientToolCall.name,
-                      arguments: JSON.stringify(attempt.clientToolCall.params),
-                    },
-                  ]
-                : undefined,
-              executionTrace: {
-                winnerProvider: sessionLastAssistant?.provider ?? provider,
-                winnerModel: sessionLastAssistant?.model ?? model.id,
-                attempts:
-                  traceAttempts.length > 0 ||
-                  sessionLastAssistant?.provider ||
-                  sessionLastAssistant?.model
-                    ? [
-                        ...traceAttempts,
-                        {
-                          provider: sessionLastAssistant?.provider ?? provider,
-                          model: sessionLastAssistant?.model ?? model.id,
-                          result: "success",
-                          stage: "assistant",
-                        },
-                      ]
-                    : undefined,
-                fallbackUsed: traceAttempts.length > 0,
-                runner: "embedded",
-              },
-              requestShaping: {
-                ...(lastProfileId ? { authMode: "auth-profile" } : {}),
-                ...(thinkLevel ? { thinking: thinkLevel } : {}),
-                ...(params.reasoningLevel ? { reasoning: params.reasoningLevel } : {}),
-                ...(params.verboseLevel ? { verbose: params.verboseLevel } : {}),
-                ...(params.blockReplyBreak ? { blockStreaming: params.blockReplyBreak } : {}),
-              },
-              toolSummary: attemptToolSummary,
-              ...(failureSignal ? { failureSignal } : {}),
-              completion: {
-                ...(stopReason ? { stopReason } : {}),
-                ...(stopReason ? { finishReason: stopReason } : {}),
-                ...(stopReason?.toLowerCase().includes("refusal") ? { refusal: true } : {}),
-              },
-              contextManagement:
-                autoCompactionCount > 0 ? { lastTurnCompactions: autoCompactionCount } : undefined,
-            },
-            didSendViaMessagingTool: attempt.didSendViaMessagingTool,
-            didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
-            messagingToolSentTexts: attempt.messagingToolSentTexts,
-            messagingToolSentMediaUrls: attempt.messagingToolSentMediaUrls,
-            messagingToolSentTargets: attempt.messagingToolSentTargets,
-            successfulCronAdds: attempt.successfulCronAdds,
-          };
+          return buildEmbeddedRunTerminalResult({
+            attempt,
+            payloadsWithToolMedia: payloadsForTerminalPath,
+            emptyAssistantReplyIsSilent,
+            durationMs: Date.now() - started,
+            agentMeta,
+            aborted,
+            finalAssistantVisibleText,
+            finalAssistantRawText,
+            replayInvalid,
+            livenessState,
+            stopReason,
+            traceAttempts,
+            winnerProvider: sessionLastAssistant?.provider ?? provider,
+            winnerModel: sessionLastAssistant?.model ?? model.id,
+            includeSuccessTraceAttempt:
+              traceAttempts.length > 0 ||
+              Boolean(sessionLastAssistant?.provider || sessionLastAssistant?.model),
+            lastProfileId,
+            thinkLevel,
+            reasoningLevel: params.reasoningLevel,
+            verboseLevel: params.verboseLevel,
+            blockReplyBreak: params.blockReplyBreak,
+            toolSummary: attemptToolSummary,
+            failureSignal,
+            autoCompactionCount,
+          });
         }
       } finally {
         forgetPromptBuildDrainCacheForRun(params.runId);

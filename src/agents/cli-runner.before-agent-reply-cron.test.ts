@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 
 // vi.mock factories are hoisted above imports, so any references inside them
@@ -11,7 +12,7 @@ type BeforeAgentReplyResult =
   | undefined
   | {
       handled?: boolean;
-      reply?: { text?: string };
+      reply?: ReplyPayload;
     };
 
 const {
@@ -156,6 +157,49 @@ describe("runCliAgent cron before_agent_reply seam", () => {
 
     expect(executePreparedCliRunMock).not.toHaveBeenCalled();
     expect(result.payloads?.[0]?.text).toBe(SILENT_REPLY_TOKEN);
+  });
+
+  it("preserves rich before_agent_reply payload fields for cron runs", async () => {
+    const { runCliAgent } = await import("./cli-runner.js");
+    const richReply = {
+      text: "dreaming claimed via cli runner with rich payload",
+      presentation: {
+        title: "Memory promotion",
+        tone: "success",
+        blocks: [{ type: "context", text: "promoted" }],
+      },
+      delivery: { pin: true },
+      interactive: {
+        blocks: [{ type: "buttons", buttons: [{ label: "Open", value: "open" }] }],
+      },
+      btw: { question: "Review the promotion?" },
+      channelData: { telegram: { parseMode: "Markdown" } },
+      trustedLocalMedia: true,
+      sensitiveMedia: true,
+      spokenText: "spoken archive copy",
+      replyToCurrent: true,
+      replyToTag: true,
+    } satisfies ReplyPayload;
+
+    hasHooksMock.mockImplementation((hookName) => hookName === "before_agent_reply");
+    runBeforeAgentReplyMock.mockResolvedValue({
+      handled: true,
+      reply: richReply,
+    });
+
+    const result = await runCliAgent({ ...baseRunParams, trigger: "cron", jobId: "cron-job-123" });
+
+    expect(executePreparedCliRunMock).not.toHaveBeenCalled();
+    expect(result.payloads?.[0]).toBe(richReply);
+    expect(result.payloads?.[0]).toMatchObject({
+      presentation: richReply.presentation,
+      delivery: richReply.delivery,
+      interactive: richReply.interactive,
+      btw: richReply.btw,
+      channelData: richReply.channelData,
+      trustedLocalMedia: true,
+      sensitiveMedia: true,
+    });
   });
 
   it("does not invoke before_agent_reply for non-cron triggers", async () => {

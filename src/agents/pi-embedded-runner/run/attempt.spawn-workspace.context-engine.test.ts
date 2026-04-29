@@ -769,4 +769,80 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       allowPool: false,
     });
   });
+
+  it("allows websocket session pooling only for clean attempt teardown", async () => {
+    const releaseMock = vi.fn(async () => {});
+    const disposeMock = vi.fn();
+    const flushMock = vi.fn(async () => {});
+
+    await cleanupEmbeddedAttemptResources({
+      removeToolResultContextGuard: () => {},
+      flushPendingToolResultsAfterIdle: flushMock,
+      session: { agent: {}, dispose: disposeMock },
+      sessionManager: hoisted.sessionManager,
+      releaseWsSession: hoisted.releaseWsSessionMock,
+      allowWsSessionPool: true,
+      sessionId: embeddedSessionId,
+      bundleLspRuntime: undefined,
+      sessionLock: { release: releaseMock },
+    });
+
+    expect(flushMock).toHaveBeenCalledTimes(1);
+    expect(disposeMock).toHaveBeenCalledTimes(1);
+    expect(releaseMock).toHaveBeenCalledTimes(1);
+    expect(hoisted.releaseWsSessionMock).toHaveBeenCalledWith("embedded-session", {
+      allowPool: true,
+    });
+  });
+
+  it("does not pool websocket sessions after assistant error turns", async () => {
+    await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey,
+      tempPaths,
+      sessionPrompt: async (session) => {
+        session.messages = [
+          ...session.messages,
+          {
+            role: "assistant",
+            stopReason: "error",
+            errorMessage: "response.failed after partial output",
+            content: [{ type: "text", text: "partial response" }],
+            timestamp: 2,
+          },
+        ];
+      },
+    });
+
+    expect(hoisted.releaseWsSessionMock).toHaveBeenCalledWith("embedded-session", {
+      allowPool: false,
+    });
+  });
+
+  it("does not treat historical assistant errors as current turn failures", async () => {
+    await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey,
+      tempPaths,
+      sessionMessages: [
+        seedMessage,
+        {
+          role: "assistant",
+          stopReason: "error",
+          errorMessage: "older transport failure",
+          content: [{ type: "text", text: "older partial response" }],
+          timestamp: 2,
+        } as AgentMessage,
+        { role: "user", content: "retry", timestamp: 3 } as AgentMessage,
+      ],
+      sessionPrompt: async () => {
+        // Simulates a skipped/no-output turn; historical assistant errors must
+        // not mark this attempt as a model failure.
+      },
+    });
+
+    expect(hoisted.releaseWsSessionMock).toHaveBeenCalledWith("embedded-session", {
+      allowPool: true,
+    });
+  });
 });

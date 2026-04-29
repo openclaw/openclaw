@@ -4,6 +4,8 @@ import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.typ
 import type {
   AnyAgentTool,
   AgentHarness,
+  AgentHarnessV2,
+  AgentHarnessV2Factory,
   MediaUnderstandingProviderPlugin,
   MigrationApplyResult,
   MigrationDetection,
@@ -106,6 +108,8 @@ import { createCachedLazyValueGetter } from "./lazy-value.js";
 export type {
   AnyAgentTool,
   AgentHarness,
+  AgentHarnessV2,
+  AgentHarnessV2Factory,
   MediaUnderstandingProviderPlugin,
   MigrationApplyResult,
   MigrationDetection,

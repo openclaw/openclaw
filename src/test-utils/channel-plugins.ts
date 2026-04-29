@@ -41,6 +41,7 @@ export const createTestRegistry = (channels: TestChannelRegistration[] = []): Pl
   memoryEmbeddingProviders: [],
   textTransforms: [],
   agentHarnesses: [],
+  agentHarnessV2Factories: [],
   gatewayHandlers: {},
   gatewayMethodScopes: {},
   httpRoutes: [],

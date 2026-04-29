@@ -31,4 +31,12 @@ describe("plugin update unchanged Docker E2E", () => {
     expect(script).toContain('"--- plugin update output ---"');
     expect(script).toContain('"--- local registry output ---"');
   });
+
+  it("delegates the Docker wrapper to the package-mounted scenario", () => {
+    const script = readFileSync(PLUGIN_UPDATE_DOCKER_SCRIPT, "utf8");
+
+    expect(script).toContain("bash scripts/e2e/lib/plugin-update/unchanged-scenario.sh");
+    expect(script).toContain("docker_e2e_package_mount_args");
+    expect(script).toContain("OPENCLAW_TEST_STATE_SCRIPT_B64");
+  });
 });

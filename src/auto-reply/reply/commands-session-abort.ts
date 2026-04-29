@@ -26,9 +26,9 @@ type AbortTarget = {
   sessionId?: string;
 };
 
-async function abortEmbeddedPiRunForSession(sessionId: string): Promise<void> {
-  const { abortEmbeddedPiRun } = await import("../../agents/pi-embedded-runner/runs.js");
-  abortEmbeddedPiRun(sessionId);
+async function abortEmbeddedAgentRunForSession(sessionId: string): Promise<void> {
+  const { abortEmbeddedAgentRun } = await import("../../agents/embedded-runner.js");
+  abortEmbeddedAgentRun(sessionId);
 }
 
 function resolveAbortTarget(params: {
@@ -94,7 +94,7 @@ async function applyAbortTarget(params: {
     replyRunRegistry.abort(abortTarget.key);
   }
   if (abortTarget.sessionId) {
-    await abortEmbeddedPiRunForSession(abortTarget.sessionId);
+    await abortEmbeddedAgentRunForSession(abortTarget.sessionId);
   }
 
   const persisted = await persistAbortTargetEntry({

@@ -100,6 +100,7 @@ const createRegistry = (diagnostics: PluginDiagnostic[]): PluginRegistry => ({
   agentToolResultMiddlewares: [],
   textTransforms: [],
   agentHarnesses: [],
+  agentHarnessV2Factories: [],
   gatewayHandlers: {},
   httpRoutes: [],
   cliRegistrars: [],

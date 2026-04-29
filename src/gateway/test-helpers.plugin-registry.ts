@@ -28,6 +28,7 @@ function createStubPluginRegistry(): PluginRegistry {
     memoryEmbeddingProviders: [],
     textTransforms: [],
     agentHarnesses: [],
+    agentHarnessV2Factories: [],
     gatewayHandlers: {},
     httpRoutes: [],
     cliRegistrars: [],

@@ -21,6 +21,7 @@ import type { PluginRuntime } from "./runtime/types.js";
 import type {
   AnyAgentTool,
   AgentHarness,
+  AgentHarnessV2Factory,
   CliBackendPlugin,
   OpenClawPluginApi,
   ImageGenerationProviderPlugin,
@@ -49,6 +50,7 @@ export type CapturedPluginRegistration = {
   api: OpenClawPluginApi;
   providers: ProviderPlugin[];
   agentHarnesses: AgentHarness[];
+  agentHarnessV2Factories: Array<{ harnessId: string; factory: AgentHarnessV2Factory }>;
   cliRegistrars: CapturedPluginCliRegistration[];
   cliBackends: CliBackendPlugin[];
   textTransforms: PluginTextTransformRegistration[];
@@ -84,6 +86,7 @@ export function createCapturedPluginRegistration(params?: {
 }): CapturedPluginRegistration {
   const providers: ProviderPlugin[] = [];
   const agentHarnesses: AgentHarness[] = [];
+  const agentHarnessV2Factories: Array<{ harnessId: string; factory: AgentHarnessV2Factory }> = [];
   const cliRegistrars: CapturedPluginCliRegistration[] = [];
   const cliBackends: CliBackendPlugin[] = [];
   const textTransforms: PluginTextTransformRegistration[] = [];
@@ -121,6 +124,7 @@ export function createCapturedPluginRegistration(params?: {
   return {
     providers,
     agentHarnesses,
+    agentHarnessV2Factories,
     cliRegistrars,
     cliBackends,
     textTransforms,
@@ -183,6 +187,9 @@ export function createCapturedPluginRegistration(params?: {
         },
         registerAgentHarness(harness: AgentHarness) {
           agentHarnesses.push(harness);
+        },
+        registerAgentHarnessV2Factory(harnessId, factory) {
+          agentHarnessV2Factories.push({ harnessId, factory });
         },
         registerCodexAppServerExtensionFactory(factory: CodexAppServerExtensionFactory) {
           codexAppServerExtensionFactories.push(factory);

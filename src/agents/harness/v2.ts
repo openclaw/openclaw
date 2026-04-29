@@ -70,6 +70,121 @@ export type AgentHarnessV2 = {
   dispose?(): Promise<void> | void;
 };
 
+/**
+ * Low-level native factory registry. Core-owned harnesses register here
+ * directly, while trusted plugins reach it through the public Plugin SDK
+ * `registerAgentHarnessV2Factory(...)` wrapper that verifies same-plugin
+ * harness ownership before installing the factory. Factory lookup is scoped by
+ * harness id plus plugin owner so plugin ids can collide with built-in ids
+ * without accidentally inheriting a core native lifecycle.
+ */
+export type NativeAgentHarnessV2Factory = (harness: AgentHarness) => AgentHarnessV2;
+
+export type NativeAgentHarnessV2FactoryEntry = {
+  harnessId: string;
+  pluginId?: string;
+  factory: NativeAgentHarnessV2Factory;
+  source: "builtin" | "plugin";
+};
+
+export type NativeAgentHarnessV2FactoryOwner = {
+  harnessId: string;
+  pluginId?: string;
+};
+
+const nativeAgentHarnessV2Factories = new Map<string, NativeAgentHarnessV2FactoryEntry>();
+
+function normalizeNativeAgentHarnessV2FactoryOwner(
+  owner: string | NativeAgentHarnessV2FactoryOwner,
+): NativeAgentHarnessV2FactoryOwner {
+  if (typeof owner === "string") {
+    return { harnessId: owner };
+  }
+  return owner;
+}
+
+function nativeAgentHarnessV2FactoryKey(owner: NativeAgentHarnessV2FactoryOwner): string {
+  const harnessId = owner.harnessId.trim();
+  const pluginId = owner.pluginId?.trim() ?? null;
+  return JSON.stringify([pluginId, harnessId]);
+}
+
+export function registerNativeAgentHarnessV2Factory(
+  owner: string | NativeAgentHarnessV2FactoryOwner,
+  factory: NativeAgentHarnessV2Factory,
+  options?: { source?: NativeAgentHarnessV2FactoryEntry["source"] },
+): () => void {
+  const normalizedOwner = normalizeNativeAgentHarnessV2FactoryOwner(owner);
+  const key = nativeAgentHarnessV2FactoryKey(normalizedOwner);
+  const previous = nativeAgentHarnessV2Factories.get(key);
+  nativeAgentHarnessV2Factories.set(key, {
+    harnessId: normalizedOwner.harnessId.trim(),
+    ...(normalizedOwner.pluginId?.trim() ? { pluginId: normalizedOwner.pluginId.trim() } : {}),
+    factory,
+    source: options?.source ?? "plugin",
+  });
+  return () => {
+    if (previous) {
+      nativeAgentHarnessV2Factories.set(key, previous);
+      return;
+    }
+    nativeAgentHarnessV2Factories.delete(key);
+  };
+}
+
+export function getNativeAgentHarnessV2Factory(
+  owner: string | NativeAgentHarnessV2FactoryOwner,
+): NativeAgentHarnessV2Factory | undefined {
+  return nativeAgentHarnessV2Factories.get(
+    nativeAgentHarnessV2FactoryKey(normalizeNativeAgentHarnessV2FactoryOwner(owner)),
+  )?.factory;
+}
+
+export function listNativeAgentHarnessV2FactoryEntries(): NativeAgentHarnessV2FactoryEntry[] {
+  return [...nativeAgentHarnessV2Factories.values()];
+}
+
+export function restoreNativeAgentHarnessV2FactoryEntries(
+  entries: readonly NativeAgentHarnessV2FactoryEntry[],
+): void {
+  const currentBuiltinEntries = listNativeAgentHarnessV2FactoryEntries().filter(
+    (entry) => entry.source === "builtin",
+  );
+  nativeAgentHarnessV2Factories.clear();
+  for (const entry of entries) {
+    nativeAgentHarnessV2Factories.set(nativeAgentHarnessV2FactoryKey(entry), entry);
+  }
+  for (const entry of currentBuiltinEntries) {
+    const key = nativeAgentHarnessV2FactoryKey(entry);
+    if (nativeAgentHarnessV2Factories.has(key)) {
+      continue;
+    }
+    nativeAgentHarnessV2Factories.set(key, entry);
+  }
+}
+
+export function clearPluginNativeAgentHarnessV2Factories(): void {
+  for (const [key, entry] of nativeAgentHarnessV2Factories) {
+    if (entry.source !== "builtin") {
+      nativeAgentHarnessV2Factories.delete(key);
+    }
+  }
+}
+
+/**
+ * Prefer a registered native AgentHarnessV2 implementation when available, and
+ * fall back to wrapping the V1 harness with `adaptAgentHarnessToV2`. This is
+ * the single resolution point used by harness selection so the lifecycle
+ * boundary always runs against an `AgentHarnessV2` instance.
+ */
+export function resolveAgentHarnessV2(harness: AgentHarness): AgentHarnessV2 {
+  const factory = getNativeAgentHarnessV2Factory({
+    harnessId: harness.id,
+    pluginId: harness.pluginId,
+  });
+  return factory ? factory(harness) : adaptAgentHarnessToV2(harness);
+}
+
 export function adaptAgentHarnessToV2(harness: AgentHarness): AgentHarnessV2 {
   return {
     id: harness.id,

@@ -1,3 +1,8 @@
+/**
+ * @deprecated Prefer `./embedded-runner.js` for new imports. This flat barrel
+ * remains as the Pi-named compatibility surface while internal runner helpers
+ * continue moving toward neutral `embedded-runner` ownership.
+ */
 export type { MessagingToolSend } from "./pi-embedded-messaging.types.js";
 export {
   compactEmbeddedPiSession,
@@ -34,6 +39,7 @@ export {
   waitForEmbeddedPiRunEnd,
   waitForEmbeddedPiRunEnd as waitForEmbeddedAgentRunEnd,
 } from "./pi-embedded-runner/runs.js";
+export { getActiveEmbeddedRunCount } from "./pi-embedded-runner/run-state.js";
 export { buildEmbeddedSandboxInfo } from "./pi-embedded-runner/sandbox-info.js";
 export { createSystemPromptOverride } from "./pi-embedded-runner/system-prompt.js";
 export { splitSdkTools } from "./pi-embedded-runner/tool-split.js";

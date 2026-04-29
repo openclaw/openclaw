@@ -22,7 +22,7 @@ import type { EmbeddedPiCompactResult } from "../pi-embedded-runner/types.js";
 import { createPiAgentHarness } from "./builtin-pi.js";
 import { listRegisteredAgentHarnesses } from "./registry.js";
 import type { AgentHarness, AgentHarnessSupport } from "./types.js";
-import { adaptAgentHarnessToV2, runAgentHarnessV2LifecycleAttempt } from "./v2.js";
+import { resolveAgentHarnessV2, runAgentHarnessV2LifecycleAttempt } from "./v2.js";
 
 const log = createSubsystemLogger("agents/harness");
 
@@ -190,7 +190,7 @@ export async function runAgentHarnessAttemptWithFallback(
     sessionKey: params.sessionKey,
     agentId: params.agentId,
   });
-  const v2Harness = adaptAgentHarnessToV2(harness);
+  const v2Harness = resolveAgentHarnessV2(harness);
   if (harness.id === "pi") {
     return await runAgentHarnessV2LifecycleAttempt(v2Harness, params);
   }

@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
 import os from "node:os";
-import path from "node:path";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import {
   createAgentSession,
@@ -14,7 +13,6 @@ import { getRuntimeConfig } from "../../../config/config.js";
 import { emitTrustedDiagnosticEvent } from "../../../infra/diagnostic-events.js";
 import {
   createChildDiagnosticTraceContext,
-  createDiagnosticTraceContextFromActiveScope,
   freezeDiagnosticTraceContext,
 } from "../../../infra/diagnostic-trace-context.js";
 import { isEmbeddedMode } from "../../../infra/embedded-mode.js";
@@ -24,17 +22,13 @@ import { getMachineDisplayName } from "../../../infra/machine-name.js";
 import { MAX_IMAGE_BYTES } from "../../../media/constants.js";
 import { listRegisteredPluginAgentPromptGuidance } from "../../../plugins/command-registry-state.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
-import {
-  extractModelCompat,
-  resolveToolCallArgumentsEncoding,
-} from "../../../plugins/provider-model-compat.js";
+import { extractModelCompat } from "../../../plugins/provider-model-compat.js";
 import {
   resolveProviderSystemPromptContribution,
-  resolveProviderTextTransforms,
   transformProviderSystemPrompt,
 } from "../../../plugins/provider-runtime.js";
 import { getPluginToolMeta } from "../../../plugins/tools.js";
-import { isAcpSessionKey, isSubagentSessionKey } from "../../../routing/session-key.js";
+import { isSubagentSessionKey } from "../../../routing/session-key.js";
 import { annotateInterSessionPromptText } from "../../../sessions/input-provenance.js";
 import { normalizeOptionalLowercaseString } from "../../../shared/string-coerce.js";
 import { normalizeOptionalString } from "../../../shared/string-coerce.js";
@@ -54,20 +48,10 @@ import { resolveOpenClawAgentDir } from "../../agent-paths.js";
 import { resolveSessionAgentIds } from "../../agent-scope.js";
 import { createAnthropicPayloadLogger } from "../../anthropic-payload-log.js";
 import {
-  analyzeBootstrapBudget,
-  buildBootstrapPromptWarning,
   buildBootstrapTruncationReportMeta,
-  buildBootstrapInjectionStats,
   prependBootstrapPromptWarning,
 } from "../../bootstrap-budget.js";
-import {
-  FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE,
-  hasCompletedBootstrapTurn,
-  isWorkspaceBootstrapPending,
-  makeBootstrapWarn,
-  resolveBootstrapContextForRun,
-  resolveContextInjectionMode,
-} from "../../bootstrap-files.js";
+import { FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE } from "../../bootstrap-files.js";
 import { createCacheTrace } from "../../cache-trace.js";
 import {
   listChannelSupportedActions,
@@ -80,7 +64,6 @@ import { resolveOpenClawReferencePaths } from "../../docs-path.js";
 import { isTimeoutError } from "../../failover-error.js";
 import { resolveHeartbeatPromptForSystemPrompt } from "../../heartbeat-system-prompt.js";
 import { resolveImageSanitizationLimits } from "../../image-sanitization.js";
-import { stripRuntimeContextCustomMessages } from "../../internal-runtime-context.js";
 import { buildModelAliasLines } from "../../model-alias-lines.js";
 import { resolveModelAuthMode } from "../../model-auth.js";
 import { resolveDefaultModelForAgent } from "../../model-selection.js";
@@ -88,20 +71,11 @@ import { supportsModelTools } from "../../model-tool-support.js";
 import { releaseWsSession } from "../../openai-ws-stream.js";
 import { resolveOwnerDisplaySetting } from "../../owner-display.js";
 import { createBundleLspToolRuntime } from "../../pi-bundle-lsp-runtime.js";
-import { TOOL_NAME_SEPARATOR } from "../../pi-bundle-mcp-names.js";
 import {
   getOrCreateSessionMcpRuntime,
   materializeBundleMcpToolsForRun,
 } from "../../pi-bundle-mcp-tools.js";
-import type { EmbeddedContextFile } from "../../pi-embedded-helpers.js";
-import {
-  downgradeOpenAIFunctionCallReasoningPairs,
-  downgradeOpenAIReasoningBlocks,
-  isCloudCodeAssistFormatError,
-  resolveBootstrapMaxChars,
-  resolveBootstrapPromptTruncationWarningMode,
-  resolveBootstrapTotalMaxChars,
-} from "../../pi-embedded-helpers.js";
+import { isCloudCodeAssistFormatError } from "../../pi-embedded-helpers.js";
 import { subscribeEmbeddedPiSession } from "../../pi-embedded-subscribe.js";
 import { createPreparedEmbeddedPiSettingsManager } from "../../pi-project-settings.js";
 import {
@@ -114,14 +88,7 @@ import {
   toClientToolDefinitions,
 } from "../../pi-tool-definition-adapter.js";
 import { createOpenClawCodingTools, resolveToolLoopDetectionConfig } from "../../pi-tools.js";
-import {
-  resolveEffectiveToolPolicy,
-  resolveGroupToolPolicy,
-  resolveSubagentToolPolicyForSession,
-} from "../../pi-tools.policy.js";
-import { wrapStreamFnTextTransforms } from "../../plugin-text-transforms.js";
 import { describeProviderRequestRoutingSummary } from "../../provider-attribution.js";
-import { registerProviderStreamForModel } from "../../provider-stream.js";
 import {
   logAgentRuntimeToolDiagnostics,
   normalizeAgentRuntimeTools,
@@ -130,10 +97,7 @@ import { resolveSandboxContext } from "../../sandbox.js";
 import { resolveSandboxRuntimeStatus } from "../../sandbox/runtime-status.js";
 import { repairSessionFileIfNeeded } from "../../session-file-repair.js";
 import { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
-import {
-  sanitizeToolUseResultPairing,
-  stripToolResultDetails,
-} from "../../session-transcript-repair.js";
+import { sanitizeToolUseResultPairing } from "../../session-transcript-repair.js";
 import {
   acquireSessionWriteLock,
   resolveSessionLockMaxHoldFromTimeout,
@@ -144,34 +108,18 @@ import {
   applySkillEnvOverridesFromSnapshot,
   resolveSkillsPromptForRun,
 } from "../../skills.js";
-import {
-  isSubagentEnvelopeSession,
-  resolveSubagentCapabilityStore,
-} from "../../subagent-capabilities.js";
 import { resolveSystemPromptOverride } from "../../system-prompt-override.js";
 import { buildSystemPromptParams } from "../../system-prompt-params.js";
 import { buildSystemPromptReport } from "../../system-prompt-report.js";
 import { resolveAgentTimeoutMs } from "../../timeout.js";
-import {
-  buildEmptyExplicitToolAllowlistError,
-  collectExplicitToolAllowlistSources,
-} from "../../tool-allowlist-guard.js";
-import { UNKNOWN_TOOL_THRESHOLD } from "../../tool-loop-detection.js";
-import { normalizeToolName } from "../../tool-policy.js";
-import { shouldAllowProviderOwnedThinkingReplay } from "../../transcript-policy.js";
+import { buildEmptyExplicitToolAllowlistError } from "../../tool-allowlist-guard.js";
 import { normalizeUsage, type NormalizedUsage } from "../../usage.js";
-import { DEFAULT_BOOTSTRAP_FILENAME } from "../../workspace.js";
 import { isRunnerAbortError } from "../abort.js";
 import { isCacheTtlEligibleProvider, readLastCacheTtlTimestamp } from "../cache-ttl.js";
 import { resolveCompactionTimeoutMs } from "../compaction-safety-timeout.js";
 import { runContextEngineMaintenance } from "../context-engine-maintenance.js";
 import { applyFinalEffectiveToolPolicy } from "../effective-tool-policy.js";
 import { buildEmbeddedExtensionFactories } from "../extensions.js";
-import {
-  applyExtraParamsToAgent,
-  resolveAgentTransportOverride,
-  resolveExplicitSettingsTransport,
-} from "../extra-params.js";
 import { prepareGooglePromptCacheStreamFn } from "../google-prompt-cache.js";
 import { getDmHistoryLimitFromSessionKey, limitHistoryTurns } from "../history.js";
 import { log } from "../logger.js";
@@ -182,7 +130,6 @@ import {
   completePromptCacheObservation,
   type PromptCacheChange,
 } from "../prompt-cache-observability.js";
-import { resolveCacheRetention } from "../prompt-cache-retention.js";
 import {
   normalizeAssistantReplayContent,
   sanitizeSessionHistory,
@@ -200,7 +147,6 @@ import { prewarmSessionFile, trackSessionManagerAccess } from "../session-manage
 import { prepareSessionManagerForRun } from "../session-manager-init.js";
 import { resolveEmbeddedRunSkillEntries } from "../skills-runtime.js";
 import {
-  describeEmbeddedAgentStreamStrategy,
   resetEmbeddedAgentBaseStreamFnCacheForTest,
   resolveEmbeddedAgentApiKey,
   resolveEmbeddedAgentBaseStreamFn,
@@ -211,7 +157,6 @@ import {
   buildEmbeddedSystemPrompt,
   createSystemPromptOverride,
 } from "../system-prompt.js";
-import { dropReasoningFromHistory, dropThinkingBlocks } from "../thinking.js";
 import {
   collectAllowedToolNames,
   collectRegisteredToolNames,
@@ -229,19 +174,41 @@ import {
 import { splitSdkTools } from "../tool-split.js";
 import { mapThinkingLevel } from "../utils.js";
 import { flushPendingToolResultsAfterIdle } from "../wait-for-idle-before-flush.js";
+import { startRunLifecycleDiagnostics } from "./attempt-lifecycle.js";
 import { createEmbeddedAgentSessionWithResourceLoader } from "./attempt-session.js";
 export { buildContextEnginePromptCacheInfo } from "./attempt.context-engine-helpers.js";
-import {
-  appendBootstrapFileToUserPromptPrefix,
-  resolveAttemptWorkspaceBootstrapRouting,
-  shouldStripBootstrapFromEmbeddedContext,
-} from "./attempt-bootstrap-routing.js";
 export { shouldStripBootstrapFromEmbeddedContext } from "./attempt-bootstrap-routing.js";
 import {
   rotateTranscriptAfterCompaction,
   shouldRotateCompactionTranscript,
 } from "../compaction-successor-transcript.js";
 import { configureEmbeddedAttemptHttpRuntime } from "./attempt-http-runtime.js";
+import { summarizeSessionContext } from "./attempt-message-summary.js";
+import {
+  isPrimaryBootstrapRun,
+  normalizeMessagesForLlmBoundary,
+  prepareAttemptBootstrapPromptContext,
+  remapInjectedContextFilesToWorkspace,
+} from "./attempt-prompt.js";
+export {
+  isPrimaryBootstrapRun,
+  normalizeMessagesForLlmBoundary,
+  remapInjectedContextFilesToWorkspace,
+} from "./attempt-prompt.js";
+import {
+  createAttemptAbortable,
+  getAttemptAbortReason,
+  makeAttemptTimeoutAbortReason,
+  runEmbeddedAttemptPromptSubmission,
+} from "./attempt-stream-loop.js";
+import { applyAttemptStreamWrappers } from "./attempt-stream-wrappers.js";
+import {
+  applyEmbeddedAttemptToolsAllow,
+  collectAttemptExplicitToolAllowlistSources,
+  resolveUnknownToolGuardThreshold,
+  shouldCreateBundleMcpRuntimeForAttempt,
+} from "./attempt-tools.js";
+import { configureAttemptTransportRuntime } from "./attempt-transport.js";
 import {
   assembleAttemptContextEngine,
   buildLoopPromptCacheInfo,
@@ -249,13 +216,9 @@ import {
   findCurrentAttemptAssistantMessage,
   finalizeAttemptContextEngineTurn,
   resolvePromptCacheTouchTimestamp,
-  resolveAttemptBootstrapContext,
   runAttemptContextEngineBootstrap,
 } from "./attempt.context-engine-helpers.js";
-import {
-  diagnosticErrorCategory,
-  wrapStreamFnWithDiagnosticModelCallEvents,
-} from "./attempt.model-diagnostic-events.js";
+import { wrapStreamFnWithDiagnosticModelCallEvents } from "./attempt.model-diagnostic-events.js";
 import {
   buildAfterTurnRuntimeContext,
   buildAfterTurnRuntimeContextFromUsage,
@@ -269,13 +232,11 @@ import {
   shouldInjectHeartbeatPrompt,
 } from "./attempt.prompt-helpers.js";
 import {
-  createYieldAbortedResponse,
   persistSessionsYieldContextMessage,
   queueSessionsYieldInterruptMessage,
   stripSessionsYieldArtifacts,
   waitForSessionsYieldAbortSettle,
 } from "./attempt.sessions-yield.js";
-import { wrapStreamFnHandleSensitiveStopReason } from "./attempt.stop-reason-recovery.js";
 import {
   buildEmbeddedSubscriptionParams,
   cleanupEmbeddedAttemptResources,
@@ -285,18 +246,7 @@ import {
   composeSystemPromptWithHookContext,
   resolveAttemptSpawnWorkspaceDir,
   shouldPersistCompletedBootstrapTurn,
-  shouldUseOpenAIWebSocketTransport,
 } from "./attempt.thread-helpers.js";
-import {
-  shouldRepairMalformedToolCallArguments,
-  wrapStreamFnDecodeXaiToolCallArguments,
-  wrapStreamFnRepairMalformedToolCallArguments,
-} from "./attempt.tool-call-argument-repair.js";
-import {
-  sanitizeReplayToolCallIdsForStream,
-  wrapStreamFnSanitizeMalformedToolCalls,
-  wrapStreamFnTrimToolCallNames,
-} from "./attempt.tool-call-normalization.js";
 import { buildEmbeddedAttemptToolRunContext } from "./attempt.tool-run-context.js";
 import { resolveAttemptTranscriptPolicy } from "./attempt.transcript-policy.js";
 import { waitForCompactionRetryWithAggregateTimeout } from "./compaction-retry-aggregate-timeout.js";
@@ -364,220 +314,19 @@ export {
 
 const MAX_BTW_SNAPSHOT_MESSAGES = 100;
 
-export function resolveUnknownToolGuardThreshold(loopDetection?: {
-  enabled?: boolean;
-  unknownToolThreshold?: number;
-}): number {
-  // The unknown-tool guard is a safety net against the model hallucinating a
-  // tool name or calling a tool that has since been removed from the allowlist
-  // (for example after a `skills.allowBundled` config change). After `threshold`
-  // consecutive unknown-tool attempts the stream wrapper rewrites the assistant
-  // message content to tell the model to stop, which breaks otherwise-infinite
-  // Tool-not-found loops against the provider. Unlike the genericRepeat /
-  // pingPong / pollNoProgress detectors this guard has no false-positive
-  // surface because the tool is objectively not registered in this run, so it
-  // stays on regardless of `tools.loopDetection.enabled`.
-  const raw = loopDetection?.unknownToolThreshold;
-  if (typeof raw === "number" && Number.isFinite(raw) && raw > 0) {
-    return Math.floor(raw);
-  }
-  return UNKNOWN_TOOL_THRESHOLD;
-}
-
-export function isPrimaryBootstrapRun(sessionKey?: string): boolean {
-  return !isSubagentSessionKey(sessionKey) && !isAcpSessionKey(sessionKey);
-}
-
-export function remapInjectedContextFilesToWorkspace(params: {
-  files: EmbeddedContextFile[];
-  sourceWorkspaceDir: string;
-  targetWorkspaceDir: string;
-}): EmbeddedContextFile[] {
-  if (params.sourceWorkspaceDir === params.targetWorkspaceDir) {
-    return params.files;
-  }
-  return params.files.map((file) => {
-    const relative = path.relative(params.sourceWorkspaceDir, file.path);
-    const canRemap = relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
-    return canRemap
-      ? {
-          ...file,
-          path:
-            relative === ""
-              ? params.targetWorkspaceDir
-              : path.join(params.targetWorkspaceDir, relative),
-        }
-      : file;
-  });
-}
-
-function summarizeMessagePayload(msg: AgentMessage): { textChars: number; imageBlocks: number } {
-  const content = (msg as { content?: unknown }).content;
-  if (typeof content === "string") {
-    return { textChars: content.length, imageBlocks: 0 };
-  }
-  if (!Array.isArray(content)) {
-    return { textChars: 0, imageBlocks: 0 };
-  }
-
-  let textChars = 0;
-  let imageBlocks = 0;
-  for (const block of content) {
-    if (!block || typeof block !== "object") {
-      continue;
-    }
-    const typedBlock = block as { type?: unknown; text?: unknown };
-    if (typedBlock.type === "image") {
-      imageBlocks++;
-      continue;
-    }
-    if (typeof typedBlock.text === "string") {
-      textChars += typedBlock.text.length;
-    }
-  }
-
-  return { textChars, imageBlocks };
-}
-
-function summarizeSessionContext(messages: AgentMessage[]): {
-  roleCounts: string;
-  totalTextChars: number;
-  totalImageBlocks: number;
-  maxMessageTextChars: number;
-} {
-  const roleCounts = new Map<string, number>();
-  let totalTextChars = 0;
-  let totalImageBlocks = 0;
-  let maxMessageTextChars = 0;
-
-  for (const msg of messages) {
-    const role = typeof msg.role === "string" ? msg.role : "unknown";
-    roleCounts.set(role, (roleCounts.get(role) ?? 0) + 1);
-
-    const payload = summarizeMessagePayload(msg);
-    totalTextChars += payload.textChars;
-    totalImageBlocks += payload.imageBlocks;
-    if (payload.textChars > maxMessageTextChars) {
-      maxMessageTextChars = payload.textChars;
-    }
-  }
-
-  return {
-    roleCounts:
-      [...roleCounts.entries()]
-        .toSorted((a, b) => a[0].localeCompare(b[0]))
-        .map(([role, count]) => `${role}:${count}`)
-        .join(",") || "none",
-    totalTextChars,
-    totalImageBlocks,
-    maxMessageTextChars,
-  };
-}
-
-export function applyEmbeddedAttemptToolsAllow<T extends { name: string }>(
-  tools: T[],
-  toolsAllow?: string[],
-): T[] {
-  if (!toolsAllow || toolsAllow.length === 0) {
-    return tools;
-  }
-  const allowSet = new Set(toolsAllow.map((name) => normalizeToolName(name)));
-  return tools.filter((tool) => allowSet.has(normalizeToolName(tool.name)));
-}
-
-export function normalizeMessagesForLlmBoundary(messages: AgentMessage[]): AgentMessage[] {
-  const normalized = stripToolResultDetails(normalizeAssistantReplayContent(messages));
-  return stripRuntimeContextCustomMessages(normalized);
-}
-
-export function shouldCreateBundleMcpRuntimeForAttempt(params: {
-  toolsEnabled: boolean;
-  disableTools?: boolean;
-  toolsAllow?: string[];
-}): boolean {
-  if (!params.toolsEnabled || params.disableTools === true) {
+function assistantMessageFailed(message: unknown): boolean {
+  if (!message || typeof message !== "object") {
     return false;
   }
-  if (!params.toolsAllow || params.toolsAllow.length === 0) {
-    return true;
-  }
-  return params.toolsAllow.some(
-    (toolName) => toolName === "bundle-mcp" || toolName.includes(TOOL_NAME_SEPARATOR),
-  );
+  const record = message as { stopReason?: unknown };
+  return record.stopReason === "error";
 }
 
-function collectAttemptExplicitToolAllowlistSources(params: {
-  config?: EmbeddedRunAttemptParams["config"];
-  sessionKey?: string;
-  sandboxSessionKey?: string;
-  agentId?: string;
-  modelProvider?: string;
-  modelId?: string;
-  messageProvider?: string;
-  agentAccountId?: string | null;
-  groupId?: string | null;
-  groupChannel?: string | null;
-  groupSpace?: string | null;
-  spawnedBy?: string | null;
-  senderId?: string | null;
-  senderName?: string | null;
-  senderUsername?: string | null;
-  senderE164?: string | null;
-  sandboxToolPolicy?: { allow?: string[]; deny?: string[] };
-  toolsAllow?: string[];
-}) {
-  const { agentId, globalPolicy, globalProviderPolicy, agentPolicy, agentProviderPolicy } =
-    resolveEffectiveToolPolicy({
-      config: params.config,
-      sessionKey: params.sessionKey,
-      agentId: params.agentId,
-      modelProvider: params.modelProvider,
-      modelId: params.modelId,
-    });
-  const groupPolicy = resolveGroupToolPolicy({
-    config: params.config,
-    sessionKey: params.sessionKey,
-    spawnedBy: params.spawnedBy,
-    messageProvider: params.messageProvider,
-    groupId: params.groupId,
-    groupChannel: params.groupChannel,
-    groupSpace: params.groupSpace,
-    accountId: params.agentAccountId,
-    senderId: params.senderId,
-    senderName: params.senderName,
-    senderUsername: params.senderUsername,
-    senderE164: params.senderE164,
-  });
-  const subagentStore = resolveSubagentCapabilityStore(params.sandboxSessionKey, {
-    cfg: params.config,
-  });
-  const subagentPolicy =
-    params.sandboxSessionKey &&
-    isSubagentEnvelopeSession(params.sandboxSessionKey, {
-      cfg: params.config,
-      store: subagentStore,
-    })
-      ? resolveSubagentToolPolicyForSession(params.config, params.sandboxSessionKey, {
-          store: subagentStore,
-        })
-      : undefined;
-  return collectExplicitToolAllowlistSources([
-    { label: "tools.allow", allow: globalPolicy?.allow },
-    { label: "tools.byProvider.allow", allow: globalProviderPolicy?.allow },
-    {
-      label: agentId ? `agents.${agentId}.tools.allow` : "agent tools.allow",
-      allow: agentPolicy?.allow,
-    },
-    {
-      label: agentId ? `agents.${agentId}.tools.byProvider.allow` : "agent tools.byProvider.allow",
-      allow: agentProviderPolicy?.allow,
-    },
-    { label: "group tools.allow", allow: groupPolicy?.allow },
-    { label: "sandbox tools.allow", allow: params.sandboxToolPolicy?.allow },
-    { label: "subagent tools.allow", allow: subagentPolicy?.allow },
-    { label: "runtime toolsAllow", allow: params.toolsAllow },
-  ]);
-}
+export {
+  applyEmbeddedAttemptToolsAllow,
+  resolveUnknownToolGuardThreshold,
+  shouldCreateBundleMcpRuntimeForAttempt,
+} from "./attempt-tools.js";
 
 export async function runEmbeddedAttempt(
   params: EmbeddedRunAttemptParams,
@@ -618,6 +367,9 @@ export async function runEmbeddedAttempt(
   let idleTimedOut = false;
   let timedOutDuringCompaction = false;
   let promptError: unknown = null;
+  let lastAssistant: AgentMessage | undefined;
+  let currentAttemptAssistant: EmbeddedRunAttemptResult["currentAttemptAssistant"];
+  const modelTurnFailed = () => assistantMessageFailed(currentAttemptAssistant);
   let emitDiagnosticRunCompleted:
     | ((outcome: "completed" | "aborted" | "error", err?: unknown) => void)
     | undefined;
@@ -647,7 +399,6 @@ export async function runEmbeddedAttempt(
     });
 
     const sessionLabel = params.sessionKey ?? params.sessionId;
-    const contextInjectionMode = resolveContextInjectionMode(params.config);
     const isRawModelRun = params.modelRun === true || params.promptMode === "none";
     if (isRawModelRun && log.isEnabled("debug")) {
       log.debug(
@@ -656,43 +407,12 @@ export async function runEmbeddedAttempt(
     }
     const activeContextEngine = isRawModelRun ? undefined : params.contextEngine;
     const agentDir = params.agentDir ?? resolveOpenClawAgentDir();
-    const diagnosticTrace = freezeDiagnosticTraceContext(
-      createDiagnosticTraceContextFromActiveScope(),
-    );
-    const runTrace = freezeDiagnosticTraceContext(
-      createChildDiagnosticTraceContext(diagnosticTrace),
-    );
-    const diagnosticRunBase = {
-      runId: params.runId,
-      ...(params.sessionKey && { sessionKey: params.sessionKey }),
-      ...(params.sessionId && { sessionId: params.sessionId }),
-      provider: params.provider,
-      model: params.modelId,
-      trigger: params.trigger,
-      ...((params.messageChannel ?? params.messageProvider)
-        ? { channel: params.messageChannel ?? params.messageProvider }
-        : {}),
-      trace: runTrace,
-    };
-    emitTrustedDiagnosticEvent({
-      type: "run.started",
-      ...diagnosticRunBase,
-    });
-    const diagnosticRunStartedAt = Date.now();
-    let diagnosticRunCompleted = false;
-    emitDiagnosticRunCompleted = (outcome, err) => {
-      if (diagnosticRunCompleted) {
-        return;
-      }
-      diagnosticRunCompleted = true;
-      emitTrustedDiagnosticEvent({
-        type: "run.completed",
-        ...diagnosticRunBase,
-        durationMs: Date.now() - diagnosticRunStartedAt,
-        outcome,
-        ...(err ? { errorCategory: diagnosticErrorCategory(err) } : {}),
-      });
-    };
+    const {
+      diagnosticTrace,
+      runTrace,
+      emitCompleted: emitRunDiagnosticCompleted,
+    } = startRunLifecycleDiagnostics(params);
+    emitDiagnosticRunCompleted = emitRunDiagnosticCompleted;
     const toolsRaw =
       params.disableTools || isRawModelRun
         ? []
@@ -761,84 +481,26 @@ export async function runEmbeddedAttempt(
             return applyEmbeddedAttemptToolsAllow(allTools, params.toolsAllow);
           })();
     const toolsEnabled = supportsModelTools(params.model);
-    const bootstrapHasFileAccess = toolsEnabled && toolsRaw.some((tool) => tool.name === "read");
-    const bootstrapRouting = await resolveAttemptWorkspaceBootstrapRouting({
-      isWorkspaceBootstrapPending,
-      bootstrapContextRunKind: params.bootstrapContextRunKind,
-      trigger: params.trigger,
-      sessionKey: params.sessionKey,
-      isPrimaryRun: isPrimaryBootstrapRun(params.sessionKey),
-      isCanonicalWorkspace: params.isCanonicalWorkspace,
-      effectiveWorkspace,
-      resolvedWorkspace,
-      hasBootstrapFileAccess: bootstrapHasFileAccess,
-    });
-    const bootstrapMode = bootstrapRouting.bootstrapMode;
-    const shouldStripBootstrapFromContext = bootstrapRouting.shouldStripBootstrapFromContext;
     const {
-      bootstrapFiles: hookAdjustedBootstrapFiles,
-      contextFiles: resolvedContextFiles,
-      shouldRecordCompletedBootstrapTurn,
-    } = await resolveAttemptBootstrapContext({
-      // modelRun is a provider probe, not an agent turn. Keep AGENTS/BOOTSTRAP
-      // context out even when the gateway is exercising the embedded runtime.
-      contextInjectionMode: isRawModelRun ? "never" : contextInjectionMode,
-      bootstrapContextMode: params.bootstrapContextMode,
-      bootstrapContextRunKind: params.bootstrapContextRunKind ?? "default",
-      bootstrapMode,
-      sessionFile: params.sessionFile,
-      hasCompletedBootstrapTurn,
-      resolveBootstrapContextForRun: async () =>
-        await resolveBootstrapContextForRun({
-          workspaceDir: resolvedWorkspace,
-          config: params.config,
-          sessionKey: params.sessionKey,
-          sessionId: params.sessionId,
-          warn: makeBootstrapWarn({
-            sessionLabel,
-            workspaceDir: resolvedWorkspace,
-            warn: (message) => log.warn(message),
-          }),
-          contextMode: params.bootstrapContextMode,
-          runKind: params.bootstrapContextRunKind,
-        }),
-    });
-    const remappedContextFiles = remapInjectedContextFilesToWorkspace({
-      files: resolvedContextFiles,
-      sourceWorkspaceDir: resolvedWorkspace,
-      targetWorkspaceDir: effectiveWorkspace,
-    });
-    const contextFiles = shouldStripBootstrapFromContext
-      ? remappedContextFiles.filter((file) => !/(^|[\\/])BOOTSTRAP\.md$/iu.test(file.path.trim()))
-      : remappedContextFiles;
-    const bootstrapFilesForInjectionStats = shouldStripBootstrapFromContext
-      ? hookAdjustedBootstrapFiles.filter((file) => file.name !== DEFAULT_BOOTSTRAP_FILENAME)
-      : hookAdjustedBootstrapFiles;
-    const bootstrapMaxChars = resolveBootstrapMaxChars(params.config);
-    const bootstrapTotalMaxChars = resolveBootstrapTotalMaxChars(params.config);
-    const bootstrapAnalysis = analyzeBootstrapBudget({
-      files: buildBootstrapInjectionStats({
-        bootstrapFiles: bootstrapFilesForInjectionStats,
-        injectedFiles: contextFiles,
-      }),
+      hookAdjustedBootstrapFiles,
+      contextFiles,
       bootstrapMaxChars,
       bootstrapTotalMaxChars,
+      bootstrapAnalysis,
+      bootstrapPromptWarningMode,
+      bootstrapPromptWarning,
+      workspaceNotes,
+      shouldRecordCompletedBootstrapTurn,
+      userPromptPrefixText,
+    } = await prepareAttemptBootstrapPromptContext({
+      attempt: params,
+      sessionLabel,
+      resolvedWorkspace,
+      effectiveWorkspace,
+      toolsEnabled,
+      toolsRaw,
+      logWarn: (message) => log.warn(message),
     });
-    const bootstrapPromptWarningMode = resolveBootstrapPromptTruncationWarningMode(params.config);
-    const bootstrapPromptWarning = buildBootstrapPromptWarning({
-      analysis: bootstrapAnalysis,
-      mode: bootstrapPromptWarningMode,
-      seenSignatures: params.bootstrapPromptWarningSignaturesSeen,
-      previousSignature: params.bootstrapPromptWarningSignature,
-    });
-    const workspaceNotes: string[] = [];
-    if (
-      hookAdjustedBootstrapFiles.some(
-        (file) => file.name === DEFAULT_BOOTSTRAP_FILENAME && !file.missing,
-      )
-    ) {
-      workspaceNotes.push("Reminder: commit your changes in this workspace after edits.");
-    }
     if (isEmbeddedMode()) {
       workspaceNotes.push(
         "Running in local embedded mode (no gateway). Most tools work locally. Gateway-dependent tools (canvas, nodes, cron, message, sessions_send, sessions_spawn, gateway) are unavailable. Subagent kill/steer require a gateway. Do not attempt to read gateway-specific files such as sessions.json, gateway.log, or gateway.pid.",
@@ -1216,11 +878,6 @@ export async function runEmbeddedAttempt(
     });
     const systemPromptOverride = createSystemPromptOverride(appendPrompt);
     let systemPromptText = systemPromptOverride();
-    const userPromptPrefixText = appendBootstrapFileToUserPromptPrefix({
-      prefixText: bootstrapRouting.userPromptPrefixText,
-      bootstrapMode,
-      contextFiles: remappedContextFiles,
-    });
 
     // Keep the session lock scoped to transcript/session mutations. Cold plugin
     // and tool setup can be slow, and holding the lock there blocks CLI fallback
@@ -1582,116 +1239,31 @@ export async function runEmbeddedAttempt(
         }),
       );
 
-      // Rebuild each turn from the session's original stream base so prior-turn
-      // wrappers do not pin us to stale provider/API transport behavior.
-      const defaultSessionStreamFn = resolveEmbeddedAgentBaseStreamFn({
-        session: activeSession,
-      });
-      const providerStreamFn = registerProviderStreamForModel({
-        model: params.model,
-        cfg: params.config,
-        agentDir,
-        workspaceDir: effectiveWorkspace,
-      });
-      const shouldUseWebSocketTransport = shouldUseOpenAIWebSocketTransport({
+      const {
+        effectiveExtraParams,
+        effectivePromptCacheRetention,
+        effectiveAgentTransport,
+        streamStrategy,
+      } = await configureAttemptTransportRuntime({
+        activeSession,
+        config: params.config,
         provider: params.provider,
-        modelApi: params.model.api,
-        modelBaseUrl: params.model.baseUrl,
-      });
-      const wsApiKey = shouldUseWebSocketTransport
-        ? await resolveEmbeddedAgentApiKey({
-            provider: params.provider,
-            resolvedApiKey: params.resolvedApiKey,
-            authStorage: params.authStorage,
-          })
-        : undefined;
-      if (shouldUseWebSocketTransport && !wsApiKey) {
-        log.warn(
-          `[ws-stream] no API key for provider=${params.provider}; keeping session-managed HTTP transport`,
-        );
-      }
-      const streamStrategy = describeEmbeddedAgentStreamStrategy({
-        currentStreamFn: defaultSessionStreamFn,
-        providerStreamFn,
-        shouldUseWebSocketTransport,
-        wsApiKey,
+        modelId: params.modelId,
         model: params.model,
-      });
-      activeSession.agent.streamFn = resolveEmbeddedAgentStreamFn({
-        currentStreamFn: defaultSessionStreamFn,
-        providerStreamFn,
-        shouldUseWebSocketTransport,
-        wsApiKey,
-        sessionId: params.sessionId,
-        signal: runAbortController.signal,
-        model: params.model,
+        agentDir,
+        effectiveWorkspace,
         resolvedApiKey: params.resolvedApiKey,
         authStorage: params.authStorage,
-      });
-      const providerTextTransforms = resolveProviderTextTransforms({
-        provider: params.provider,
-        config: params.config,
-        workspaceDir: effectiveWorkspace,
-      });
-      if (providerTextTransforms) {
-        activeSession.agent.streamFn = wrapStreamFnTextTransforms({
-          streamFn: activeSession.agent.streamFn,
-          input: providerTextTransforms.input,
-          output: providerTextTransforms.output,
-          transformSystemPrompt: false,
-        });
-      }
-
-      const resolvedTransport = resolveExplicitSettingsTransport({
+        runAbortSignal: runAbortController.signal,
         settingsManager,
-        sessionTransport: activeSession.agent.transport,
-      });
-      const streamExtraParamsOverride = {
-        ...params.streamParams,
+        streamParams: params.streamParams,
         fastMode: params.fastMode,
-      };
-      const preparedRuntimeExtraParams = params.runtimePlan?.transport.resolveExtraParams({
-        extraParamsOverride: streamExtraParamsOverride,
-        thinkingLevel: params.thinkLevel,
-        agentId: sessionAgentId,
-        workspaceDir: effectiveWorkspace,
-        model: params.model,
-        resolvedTransport,
-      });
-      const { effectiveExtraParams } = applyExtraParamsToAgent(
-        activeSession.agent,
-        params.config,
-        params.provider,
-        params.modelId,
-        streamExtraParamsOverride,
-        params.thinkLevel,
+        thinkLevel: params.thinkLevel,
         sessionAgentId,
-        effectiveWorkspace,
-        params.model,
-        agentDir,
-        resolvedTransport,
-        preparedRuntimeExtraParams
-          ? { preparedExtraParams: preparedRuntimeExtraParams }
-          : undefined,
-      );
-      const effectivePromptCacheRetention = resolveCacheRetention(
-        effectiveExtraParams,
-        params.provider,
-        params.model.api,
-        params.modelId,
-      );
-      const agentTransportOverride = resolveAgentTransportOverride({
-        settingsManager,
-        effectiveExtraParams,
+        runtimePlan: params.runtimePlan,
+        logDebug: (message) => log.debug(message),
+        logWarn: (message) => log.warn(message),
       });
-      const effectiveAgentTransport = agentTransportOverride ?? activeSession.agent.transport;
-      if (agentTransportOverride && activeSession.agent.transport !== agentTransportOverride) {
-        const previousTransport = activeSession.agent.transport;
-        log.debug(
-          `embedded agent transport override: ${previousTransport} -> ${agentTransportOverride} ` +
-            `(${params.provider}/${params.modelId})`,
-        );
-      }
 
       const cacheObservabilityEnabled = Boolean(cacheTrace) || log.isEnabled("debug");
       const promptCacheToolNames = collectPromptCacheToolNames(
@@ -1705,161 +1277,27 @@ export async function runEmbeddedAttempt(
           system: systemPromptText,
           note: "after session create",
         });
-        activeSession.agent.streamFn = cacheTrace.wrapStreamFn(activeSession.agent.streamFn);
       }
 
-      // Anthropic Claude endpoints can reject replayed `thinking` blocks
-      // (e.g. thinkingSignature:"reasoning_text") on any follow-up provider
-      // call, including tool continuations. Wrap the stream function so every
-      // outbound request sees sanitized messages.
-      if (transcriptPolicy.dropThinkingBlocks || transcriptPolicy.dropReasoningFromHistory) {
-        const inner = activeSession.agent.streamFn;
-        activeSession.agent.streamFn = (model, context, options) => {
-          const ctx = context as unknown as { messages?: unknown };
-          const messages = ctx?.messages;
-          if (!Array.isArray(messages)) {
-            return inner(model, context, options);
-          }
-          const reasoningSanitized = transcriptPolicy.dropReasoningFromHistory
-            ? dropReasoningFromHistory(messages as unknown as AgentMessage[])
-            : (messages as unknown as AgentMessage[]);
-          const sanitized = transcriptPolicy.dropThinkingBlocks
-            ? (dropThinkingBlocks(reasoningSanitized) as unknown)
-            : (reasoningSanitized as unknown);
-          if (sanitized === messages) {
-            return inner(model, context, options);
-          }
-          const nextContext = {
-            ...(context as unknown as Record<string, unknown>),
-            messages: sanitized,
-          } as unknown;
-          return inner(model, nextContext as typeof context, options);
-        };
-      }
-
-      // Mistral (and other strict providers) reject tool call IDs that don't match their
-      // format requirements (e.g. [a-zA-Z0-9]{9}). sanitizeSessionHistory only processes
-      // historical messages at attempt start, but the agent loop's internal tool call →
-      // tool result cycles bypass that path. Wrap streamFn so every outbound request
-      // sees sanitized tool call IDs.
       const isOpenAIResponsesApi =
         params.model.api === "openai-responses" ||
         params.model.api === "azure-openai-responses" ||
         params.model.api === "openai-codex-responses";
-
-      if (
-        transcriptPolicy.sanitizeToolCallIds &&
-        transcriptPolicy.toolCallIdMode &&
-        !isOpenAIResponsesApi
-      ) {
-        const inner = activeSession.agent.streamFn;
-        const mode = transcriptPolicy.toolCallIdMode;
-        activeSession.agent.streamFn = (model, context, options) => {
-          const ctx = context as unknown as { messages?: unknown };
-          const messages = ctx?.messages;
-          if (!Array.isArray(messages)) {
-            return inner(model, context, options);
-          }
-          const nextMessages = sanitizeReplayToolCallIdsForStream({
-            messages: messages as AgentMessage[],
-            mode,
-            allowedToolNames,
-            preserveNativeAnthropicToolUseIds: transcriptPolicy.preserveNativeAnthropicToolUseIds,
-            preserveReplaySafeThinkingToolCallIds: shouldAllowProviderOwnedThinkingReplay({
-              modelApi: (model as { api?: unknown })?.api as string | null | undefined,
-              policy: transcriptPolicy,
-            }),
-            repairToolUseResultPairing: transcriptPolicy.repairToolUseResultPairing,
-          });
-          if (nextMessages === messages) {
-            return inner(model, context, options);
-          }
-          const nextContext = {
-            ...(context as unknown as Record<string, unknown>),
-            messages: nextMessages,
-          } as unknown;
-          return inner(model, nextContext as typeof context, options);
-        };
-      }
-
-      if (isOpenAIResponsesApi) {
-        const inner = activeSession.agent.streamFn;
-        activeSession.agent.streamFn = (model, context, options) => {
-          const ctx = context as unknown as { messages?: unknown };
-          const messages = ctx?.messages;
-          if (!Array.isArray(messages)) {
-            return inner(model, context, options);
-          }
-          // Strip orphaned reasoning blocks first, then fix function-call
-          // pairing — matches the call order in google.ts.
-          const reasoningSanitized = downgradeOpenAIReasoningBlocks(messages as AgentMessage[]);
-          const sanitized = downgradeOpenAIFunctionCallReasoningPairs(reasoningSanitized);
-          if (sanitized === messages) {
-            return inner(model, context, options);
-          }
-          const nextContext = {
-            ...(context as unknown as Record<string, unknown>),
-            messages: sanitized,
-          } as unknown;
-          return inner(model, nextContext as typeof context, options);
-        };
-      }
-
-      const innerStreamFn = activeSession.agent.streamFn;
-      activeSession.agent.streamFn = (model, context, options) => {
-        const signal = runAbortController.signal as AbortSignal & { reason?: unknown };
-        if (yieldDetected && signal.aborted && signal.reason === "sessions_yield") {
-          return createYieldAbortedResponse(model) as unknown as Awaited<
-            ReturnType<typeof innerStreamFn>
-          >;
-        }
-        return innerStreamFn(model, context, options);
-      };
-
-      // Some models emit tool names with surrounding whitespace (e.g. " read ").
-      // pi-agent-core dispatches tool calls with exact string matching, so normalize
-      // names on the live response stream before tool execution.
-      activeSession.agent.streamFn = wrapStreamFnSanitizeMalformedToolCalls(
-        activeSession.agent.streamFn,
-        allowedToolNames,
+      applyAttemptStreamWrappers({
+        activeSession,
+        cacheTrace,
         transcriptPolicy,
-      );
-      activeSession.agent.streamFn = wrapStreamFnTrimToolCallNames(
-        activeSession.agent.streamFn,
         allowedToolNames,
-        {
-          unknownToolThreshold: resolveUnknownToolGuardThreshold(clientToolLoopDetection),
+        isOpenAIResponsesApi,
+        unknownToolThreshold: resolveUnknownToolGuardThreshold(clientToolLoopDetection),
+        provider: params.provider,
+        model: params.model,
+        anthropicPayloadLogger,
+        shouldReturnYieldAbortedResponse: () => {
+          const signal = runAbortController.signal as AbortSignal & { reason?: unknown };
+          return yieldDetected && signal.aborted && signal.reason === "sessions_yield";
         },
-      );
-
-      if (
-        shouldRepairMalformedToolCallArguments({
-          provider: params.provider,
-          modelApi: params.model.api,
-        })
-      ) {
-        activeSession.agent.streamFn = wrapStreamFnRepairMalformedToolCallArguments(
-          activeSession.agent.streamFn,
-        );
-      }
-
-      if (resolveToolCallArgumentsEncoding(params.model) === "html-entities") {
-        activeSession.agent.streamFn = wrapStreamFnDecodeXaiToolCallArguments(
-          activeSession.agent.streamFn,
-        );
-      }
-
-      if (anthropicPayloadLogger) {
-        activeSession.agent.streamFn = anthropicPayloadLogger.wrapStreamFn(
-          activeSession.agent.streamFn,
-        );
-      }
-      // Anthropic-compatible providers can add new stop reasons before pi-ai maps them.
-      // Recover the known "sensitive" stop reason here so a model refusal does not
-      // bubble out as an uncaught runner error and stall channel polling.
-      activeSession.agent.streamFn = wrapStreamFnHandleSensitiveStopReason(
-        activeSession.agent.streamFn,
-      );
+      });
 
       let idleTimeoutTrigger: ((error: Error) => void) | undefined;
 
@@ -2008,26 +1446,6 @@ export async function runEmbeddedAttempt(
       }
 
       let yieldAborted = false;
-      const getAbortReason = (signal: AbortSignal): unknown =>
-        "reason" in signal ? (signal as { reason?: unknown }).reason : undefined;
-      const makeTimeoutAbortReason = (): Error => {
-        const err = new Error("request timed out");
-        err.name = "TimeoutError";
-        return err;
-      };
-      const makeAbortError = (signal: AbortSignal): Error => {
-        const reason = getAbortReason(signal);
-        // If the reason is already an Error, preserve it to keep the original message
-        // (e.g., "LLM idle timeout (<n>s): no response from model" instead of "aborted")
-        if (reason instanceof Error) {
-          const err = new Error(reason.message, { cause: reason });
-          err.name = "AbortError";
-          return err;
-        }
-        const err = reason ? new Error("aborted", { cause: reason }) : new Error("aborted");
-        err.name = "AbortError";
-        return err;
-      };
       const abortCompaction = () => {
         if (!activeSession.isCompacting) {
           return;
@@ -2048,7 +1466,7 @@ export async function runEmbeddedAttempt(
           timedOut = true;
         }
         if (isTimeout) {
-          runAbortController.abort(reason ?? makeTimeoutAbortReason());
+          runAbortController.abort(reason ?? makeAttemptTimeoutAbortReason());
         } else {
           runAbortController.abort(reason);
         }
@@ -2059,29 +1477,7 @@ export async function runEmbeddedAttempt(
         idleTimedOut = true;
         abortRun(true, error);
       };
-      const abortable = <T>(promise: Promise<T>): Promise<T> => {
-        const signal = runAbortController.signal;
-        if (signal.aborted) {
-          return Promise.reject(makeAbortError(signal));
-        }
-        return new Promise<T>((resolve, reject) => {
-          const onAbort = () => {
-            signal.removeEventListener("abort", onAbort);
-            reject(makeAbortError(signal));
-          };
-          signal.addEventListener("abort", onAbort, { once: true });
-          promise.then(
-            (value) => {
-              signal.removeEventListener("abort", onAbort);
-              resolve(value);
-            },
-            (err) => {
-              signal.removeEventListener("abort", onAbort);
-              reject(err);
-            },
-          );
-        });
-      };
+      const abortable = createAttemptAbortable(runAbortController);
 
       const subscription = subscribeEmbeddedPiSession(
         buildEmbeddedSubscriptionParams({
@@ -2157,8 +1553,6 @@ export async function runEmbeddedAttempt(
         },
         abort: abortRun,
       };
-      let lastAssistant: AgentMessage | undefined;
-      let currentAttemptAssistant: EmbeddedRunAttemptResult["currentAttemptAssistant"];
       let attemptUsage: NormalizedUsage | undefined;
       let cacheBreak: ReturnType<typeof completePromptCacheObservation> = null;
       let promptCache: EmbeddedRunAttemptResult["promptCache"];
@@ -2233,7 +1627,7 @@ export async function runEmbeddedAttempt(
       let sessionFileUsed: string | undefined = params.sessionFile;
       const onAbort = () => {
         externalAbort = true;
-        const reason = params.abortSignal ? getAbortReason(params.abortSignal) : undefined;
+        const reason = params.abortSignal ? getAttemptAbortReason(params.abortSignal) : undefined;
         const timeout = reason ? isTimeoutError(reason) : false;
         if (
           shouldFlagCompactionTimeout({
@@ -2718,40 +2112,29 @@ export async function runEmbeddedAttempt(
               messages: btwSnapshotMessages,
               inFlightPrompt: promptSubmission.prompt,
             });
-            if (promptSubmission.runtimeOnly) {
-              await abortable(activeSession.prompt(promptSubmission.prompt));
-            } else {
-              const runtimeContext = promptSubmission.runtimeContext?.trim();
-              const runtimeSystemPrompt = runtimeContext
-                ? composeSystemPromptWithHookContext({
-                    baseSystemPrompt: systemPromptText,
-                    appendSystemContext: buildRuntimeContextSystemContext(runtimeContext),
-                  })
-                : undefined;
-              if (runtimeSystemPrompt) {
+            await runEmbeddedAttemptPromptSubmission({
+              abortable,
+              session: activeSession,
+              promptSubmission,
+              images: imageResult.images,
+              buildRuntimeSystemPrompt: (runtimeContext) =>
+                composeSystemPromptWithHookContext({
+                  baseSystemPrompt: systemPromptText,
+                  appendSystemContext: buildRuntimeContextSystemContext(runtimeContext),
+                }),
+              applyRuntimeSystemPrompt: (runtimeSystemPrompt) => {
                 applySystemPromptOverrideToSession(activeSession, runtimeSystemPrompt);
-              }
-              try {
+              },
+              restoreSystemPrompt: () => {
+                applySystemPromptOverrideToSession(activeSession, systemPromptText);
+              },
+              queueRuntimeContextForNextTurn: async (runtimeContext) => {
                 await queueRuntimeContextForNextTurn({
                   session: activeSession,
                   runtimeContext,
                 });
-
-                // Only pass images option if there are actually images to pass
-                // This avoids potential issues with models that don't expect the images parameter
-                if (imageResult.images.length > 0) {
-                  await abortable(
-                    activeSession.prompt(promptSubmission.prompt, { images: imageResult.images }),
-                  );
-                } else {
-                  await abortable(activeSession.prompt(promptSubmission.prompt));
-                }
-              } finally {
-                if (runtimeSystemPrompt) {
-                  applySystemPromptOverrideToSession(activeSession, systemPromptText);
-                }
-              }
-            }
+              },
+            });
           }
         } catch (err) {
           yieldAborted =
@@ -2954,7 +2337,7 @@ export async function runEmbeddedAttempt(
           });
           await finalizeAttemptContextEngineTurn({
             contextEngine: activeContextEngine,
-            promptError: Boolean(promptError),
+            promptError: Boolean(promptError) || modelTurnFailed(),
             aborted,
             yieldAborted,
             sessionIdUsed,
@@ -3046,8 +2429,12 @@ export async function runEmbeddedAttempt(
             .runAgentEnd(
               {
                 messages: messagesSnapshot,
-                success: !aborted && !promptError,
-                error: promptError ? formatErrorMessage(promptError) : undefined,
+                success: !aborted && !promptError && !modelTurnFailed(),
+                error: promptError
+                  ? formatErrorMessage(promptError)
+                  : modelTurnFailed()
+                    ? "assistant turn ended with error"
+                    : undefined,
                 durationMs: Date.now() - promptStartedAt,
               },
               {
@@ -3204,7 +2591,12 @@ export async function runEmbeddedAttempt(
       trajectoryRecorder?.recordEvent(
         "trace.artifacts",
         buildTrajectoryArtifacts({
-          status: promptError ? "error" : aborted || timedOut ? "interrupted" : "success",
+          status:
+            promptError || modelTurnFailed()
+              ? "error"
+              : aborted || timedOut
+                ? "interrupted"
+                : "success",
           aborted,
           externalAbort,
           timedOut,
@@ -3228,7 +2620,12 @@ export async function runEmbeddedAttempt(
         }),
       );
       trajectoryRecorder?.recordEvent("session.ended", {
-        status: promptError ? "error" : aborted || timedOut ? "interrupted" : "success",
+        status:
+          promptError || modelTurnFailed()
+            ? "error"
+            : aborted || timedOut
+              ? "interrupted"
+              : "success",
         aborted,
         externalAbort,
         timedOut,
@@ -3311,7 +2708,12 @@ export async function runEmbeddedAttempt(
           sessionManager,
           releaseWsSession,
           allowWsSessionPool:
-            !promptError && !aborted && !timedOut && !idleTimedOut && !timedOutDuringCompaction,
+            !promptError &&
+            !modelTurnFailed() &&
+            !aborted &&
+            !timedOut &&
+            !idleTimedOut &&
+            !timedOutDuringCompaction,
           sessionId: params.sessionId,
           bundleMcpRuntime,
           bundleLspRuntime,

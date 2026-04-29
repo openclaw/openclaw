@@ -12,6 +12,18 @@
     "target": "OpenAI provider"
   },
   {
+    "source": "RuntimePlan final stack smoke handoff",
+    "target": "RuntimePlan final stack smoke handoff"
+  },
+  {
+    "source": "RuntimePlan finalization baseline",
+    "target": "RuntimePlan finalization baseline"
+  },
+  {
+    "source": "RuntimePlan finalization complete",
+    "target": "RuntimePlan finalization complete"
+  },
+  {
     "source": "Azure Speech",
     "target": "Azure Speech"
   },

@@ -1,4 +1,5 @@
 import type { AgentHarness } from "../agents/harness/types.js";
+import type { NativeAgentHarnessV2Factory } from "../agents/harness/v2.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { OperatorScope } from "../gateway/operator-scopes.js";
 import type { GatewayRequestHandlers } from "../gateway/server-methods/types.js";
@@ -185,6 +186,14 @@ export type PluginAgentHarnessRegistration = {
   pluginId: string;
   pluginName?: string;
   harness: AgentHarness;
+  source: string;
+  rootDir?: string;
+};
+export type PluginAgentHarnessV2FactoryRegistration = {
+  pluginId: string;
+  pluginName?: string;
+  harnessId: string;
+  factory: NativeAgentHarnessV2Factory;
   source: string;
   rootDir?: string;
 };
@@ -393,6 +402,7 @@ export type PluginRegistry = {
   agentToolResultMiddlewares: PluginAgentToolResultMiddlewareRegistration[];
   memoryEmbeddingProviders: PluginMemoryEmbeddingProviderRegistration[];
   agentHarnesses: PluginAgentHarnessRegistration[];
+  agentHarnessV2Factories: PluginAgentHarnessV2FactoryRegistration[];
   gatewayHandlers: GatewayRequestHandlers;
   gatewayMethodScopes?: Partial<Record<string, OperatorScope>>;
   httpRoutes: PluginHttpRouteRegistration[];

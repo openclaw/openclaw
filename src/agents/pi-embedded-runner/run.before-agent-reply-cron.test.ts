@@ -1,4 +1,5 @@
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
+import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
@@ -66,6 +67,53 @@ describe("runEmbeddedPiAgent cron before_agent_reply seam", () => {
 
     expect(mockedRunEmbeddedAttempt).not.toHaveBeenCalled();
     expect(result.payloads?.[0]?.text).toBe(SILENT_REPLY_TOKEN);
+  });
+
+  it("preserves rich before_agent_reply payload fields for cron runs", async () => {
+    const richReply = {
+      text: "dreaming claimed with rich payload",
+      presentation: {
+        title: "Memory promotion",
+        tone: "info",
+        blocks: [{ type: "text", text: "promoted" }],
+      },
+      delivery: { pin: { enabled: true, notify: false } },
+      interactive: {
+        blocks: [{ type: "buttons", buttons: [{ label: "Open", value: "open" }] }],
+      },
+      btw: { question: "Review the promotion?" },
+      channelData: { telegram: { parseMode: "Markdown" } },
+      trustedLocalMedia: true,
+      sensitiveMedia: true,
+      spokenText: "spoken archive copy",
+      replyToCurrent: true,
+      replyToTag: true,
+    } satisfies ReplyPayload;
+
+    mockedGlobalHookRunner.hasHooks.mockImplementation(
+      (hookName: string) => hookName === "before_agent_reply",
+    );
+    mockedGlobalHookRunner.runBeforeAgentReply.mockResolvedValue({
+      handled: true,
+      reply: richReply,
+    });
+
+    const result = await runEmbeddedPiAgent({
+      ...overflowBaseRunParams,
+      trigger: "cron",
+    });
+
+    expect(mockedRunEmbeddedAttempt).not.toHaveBeenCalled();
+    expect(result.payloads?.[0]).toBe(richReply);
+    expect(result.payloads?.[0]).toMatchObject({
+      presentation: richReply.presentation,
+      delivery: richReply.delivery,
+      interactive: richReply.interactive,
+      btw: richReply.btw,
+      channelData: richReply.channelData,
+      trustedLocalMedia: true,
+      sensitiveMedia: true,
+    });
   });
 
   it("does not invoke before_agent_reply for non-cron embedded runs", async () => {

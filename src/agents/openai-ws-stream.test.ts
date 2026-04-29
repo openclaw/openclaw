@@ -4038,6 +4038,46 @@ describe("releaseWsSession / hasWsSession", () => {
     }
   });
 
+  it("keeps releaseWsSession conservative when pooling is not enabled by env", async () => {
+    const streamFn = createOpenAIWebSocketStreamFn("sk-test", "registry-test");
+    const stream = streamFn(
+      {
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5.4",
+        contextWindow: 128000,
+        maxTokens: 4096,
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        name: "GPT-5.4",
+      } as Parameters<typeof streamFn>[0],
+      {
+        systemPrompt: "test",
+        messages: [userMsg("Hi") as Parameters<typeof convertMessagesToInputItems>[0][number]],
+        tools: [],
+      } as Parameters<typeof streamFn>[1],
+    );
+
+    await new Promise((r) => setImmediate(r));
+    const manager = MockManager.lastInstance!;
+    manager.simulateEvent({
+      type: "response.completed",
+      response: makeResponseObject("resp-no-pool", "done"),
+    });
+    for await (const _ of await resolveStream(stream)) {
+      // consume
+    }
+
+    releaseWsSession("registry-test", {
+      allowPool: true,
+      env: {} as NodeJS.ProcessEnv,
+    });
+
+    expect(hasWsSession("registry-test")).toBe(false);
+    expect(manager.closeCallCount).toBe(1);
+  });
+
   it("releaseWsSession is a no-op for unknown sessions", () => {
     expect(() => releaseWsSession("nonexistent-session")).not.toThrow();
   });

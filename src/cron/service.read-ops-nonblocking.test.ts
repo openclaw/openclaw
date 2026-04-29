@@ -269,6 +269,8 @@ describe("CronService read ops while job is running", () => {
       expect(jobs[0]?.state.nextRunAtMs).toBe(nowMs + 120_000);
     } finally {
       cron.stop();
+      vi.clearAllTimers();
+      vi.useRealTimers();
       await store.cleanup();
     }
   });
