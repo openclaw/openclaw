@@ -20,11 +20,15 @@ import {
 } from "../plugin-state/plugin-state-store.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { deriveSessionChatType } from "../sessions/session-chat-type.js";
+import type { SessionKeyChatType } from "../sessions/session-chat-type.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
-import { tryRecoverTaskBeforeMarkLost } from "./detached-task-runtime.js";
+import {
+  getDetachedTaskLifecycleRuntime,
+  tryRecoverTaskBeforeMarkLost,
+} from "./detached-task-runtime.js";
 import {
   deleteTaskRecordById,
   ensureTaskRegistryReady,
@@ -74,6 +78,7 @@ type TaskRegistryMaintenanceRuntime = {
   unbindSessionBindings?: ReturnType<typeof getSessionBindingService>["unbind"];
   loadSessionStore: typeof loadSessionStore;
   resolveStorePath: typeof resolveStorePath;
+  deriveSessionChatType?: typeof deriveSessionChatType;
   isCronJobActive: typeof isCronJobActive;
   getAgentRunContext: typeof getAgentRunContext;
   parseAgentSessionKey: typeof parseAgentSessionKey;
@@ -112,6 +117,7 @@ const defaultTaskRegistryMaintenanceRuntime: TaskRegistryMaintenanceRuntime = {
   unbindSessionBindings: (input) => getSessionBindingService().unbind(input),
   loadSessionStore,
   resolveStorePath,
+  deriveSessionChatType,
   isCronJobActive,
   getAgentRunContext,
   parseAgentSessionKey,
@@ -160,6 +166,16 @@ type CronRecoveryContext = {
   runLogsByJobId: Map<string, CronRunLogEntry[]>;
 };
 
+type SessionStoreLookup = {
+  store: Record<string, unknown>;
+  normalizedLiveKeys?: Set<string>;
+};
+
+type BackingSessionLookupContext = {
+  sessionStoresByPath: Map<string, SessionStoreLookup>;
+  sessionChatTypesByKey: Map<string, SessionKeyChatType>;
+};
+
 function createCronRecoveryContext(): CronRecoveryContext {
   return {
     storePath: taskRegistryMaintenanceRuntime.resolveCronStorePath(),
@@ -167,18 +183,73 @@ function createCronRecoveryContext(): CronRecoveryContext {
   };
 }
 
-function findSessionEntryByKey(store: Record<string, unknown>, sessionKey: string): unknown {
-  const direct = store[sessionKey];
-  if (direct) {
-    return direct;
+function createBackingSessionLookupContext(): BackingSessionLookupContext {
+  return {
+    sessionStoresByPath: new Map<string, SessionStoreLookup>(),
+    sessionChatTypesByKey: new Map<string, SessionKeyChatType>(),
+  };
+}
+
+function getSessionStoreLookup(
+  storePath: string,
+  context?: BackingSessionLookupContext,
+): SessionStoreLookup {
+  if (!context) {
+    return {
+      store: taskRegistryMaintenanceRuntime.loadSessionStore(storePath),
+    };
   }
-  const normalized = normalizeLowercaseStringOrEmpty(sessionKey);
-  for (const [key, entry] of Object.entries(store)) {
-    if (normalizeLowercaseStringOrEmpty(key) === normalized) {
-      return entry;
+  const cached = context.sessionStoresByPath.get(storePath);
+  if (cached) {
+    return cached;
+  }
+  const lookup = {
+    store: taskRegistryMaintenanceRuntime.loadSessionStore(storePath),
+  };
+  context.sessionStoresByPath.set(storePath, lookup);
+  return lookup;
+}
+
+function getNormalizedLiveSessionKeys(lookup: SessionStoreLookup): Set<string> {
+  if (lookup.normalizedLiveKeys) {
+    return lookup.normalizedLiveKeys;
+  }
+  const keys = new Set<string>();
+  for (const [key, entry] of Object.entries(lookup.store)) {
+    if (entry) {
+      keys.add(normalizeLowercaseStringOrEmpty(key));
     }
   }
-  return undefined;
+  lookup.normalizedLiveKeys = keys;
+  return keys;
+}
+
+function hasSessionEntryByKey(lookup: SessionStoreLookup, sessionKey: string): boolean {
+  if (lookup.store[sessionKey]) {
+    return true;
+  }
+  const normalized = normalizeLowercaseStringOrEmpty(sessionKey);
+  return normalized ? getNormalizedLiveSessionKeys(lookup).has(normalized) : false;
+}
+
+function resolveSessionChatType(
+  sessionKey: string,
+  context?: BackingSessionLookupContext,
+): SessionKeyChatType {
+  if (!context) {
+    return (taskRegistryMaintenanceRuntime.deriveSessionChatType ?? deriveSessionChatType)(
+      sessionKey,
+    );
+  }
+  const cached = context.sessionChatTypesByKey.get(sessionKey);
+  if (cached) {
+    return cached;
+  }
+  const chatType = (taskRegistryMaintenanceRuntime.deriveSessionChatType ?? deriveSessionChatType)(
+    sessionKey,
+  );
+  context.sessionChatTypesByKey.set(sessionKey, chatType);
+  return chatType;
 }
 
 function isActiveTask(task: TaskRecord): boolean {
@@ -341,7 +412,7 @@ function hasActiveCliRun(task: TaskRecord): boolean {
   return false;
 }
 
-function hasBackingSession(task: TaskRecord): boolean {
+function hasBackingSession(task: TaskRecord, context?: BackingSessionLookupContext): boolean {
   if (task.runtime === "cron") {
     if (!taskRegistryMaintenanceRuntime.isCronRuntimeAuthoritative()) {
       return true;
@@ -369,28 +440,48 @@ function hasBackingSession(task: TaskRecord): boolean {
   }
   if (task.runtime === "subagent" || task.runtime === "cli") {
     if (task.runtime === "cli") {
-      const chatType = deriveSessionChatType(childSessionKey);
+      const chatType = resolveSessionChatType(childSessionKey, context);
       if (chatType === "channel" || chatType === "group" || chatType === "direct") {
         return false;
       }
     }
     const agentId = taskRegistryMaintenanceRuntime.parseAgentSessionKey(childSessionKey)?.agentId;
     const storePath = taskRegistryMaintenanceRuntime.resolveStorePath(undefined, { agentId });
-    const store = taskRegistryMaintenanceRuntime.loadSessionStore(storePath);
-    return Boolean(findSessionEntryByKey(store, childSessionKey));
+    return hasSessionEntryByKey(getSessionStoreLookup(storePath, context), childSessionKey);
   }
 
   return true;
 }
 
-function shouldMarkLost(task: TaskRecord, now: number): boolean {
+function shouldMarkLost(
+  task: TaskRecord,
+  now: number,
+  context?: BackingSessionLookupContext,
+): boolean {
   if (!isActiveTask(task)) {
     return false;
   }
   if (!hasLostGraceExpired(task, now)) {
     return false;
   }
-  return !hasBackingSession(task);
+  return !hasBackingSession(task, context);
+}
+
+function hasTaskLostDecisionInputChanged(before: TaskRecord, after: TaskRecord): boolean {
+  return (
+    before.status !== after.status ||
+    before.runtime !== after.runtime ||
+    before.childSessionKey !== after.childSessionKey ||
+    before.sourceId !== after.sourceId ||
+    before.runId !== after.runId ||
+    before.createdAt !== after.createdAt ||
+    before.startedAt !== after.startedAt ||
+    before.lastEventAt !== after.lastEventAt
+  );
+}
+
+function hasDetachedTaskRecoveryHook(): boolean {
+  return Boolean(getDetachedTaskLifecycleRuntime().tryRecoverTaskBeforeMarkLost);
 }
 
 function shouldPruneTerminalTask(task: TaskRecord, now: number): boolean {
@@ -675,13 +766,14 @@ function projectTaskLost(task: TaskRecord, now: number): TaskRecord {
 export function reconcileTaskRecordForOperatorInspection(
   task: TaskRecord,
   context: CronRecoveryContext = createCronRecoveryContext(),
+  backingSessionContext: BackingSessionLookupContext = createBackingSessionLookupContext(),
 ): TaskRecord {
   const cronRecovery = resolveDurableCronTaskRecovery(task, context);
   if (cronRecovery) {
     return projectTaskRecovered(task, cronRecovery);
   }
   const now = Date.now();
-  if (!shouldMarkLost(task, now)) {
+  if (!shouldMarkLost(task, now, backingSessionContext)) {
     return task;
   }
   return projectTaskLost(task, now);
@@ -690,9 +782,12 @@ export function reconcileTaskRecordForOperatorInspection(
 export function reconcileInspectableTasks(): TaskRecord[] {
   taskRegistryMaintenanceRuntime.ensureTaskRegistryReady();
   const cronRecoveryContext = createCronRecoveryContext();
+  const backingSessionContext = createBackingSessionLookupContext();
   return taskRegistryMaintenanceRuntime
     .listTaskRecords()
-    .map((task) => reconcileTaskRecordForOperatorInspection(task, cronRecoveryContext));
+    .map((task) =>
+      reconcileTaskRecordForOperatorInspection(task, cronRecoveryContext, backingSessionContext),
+    );
 }
 
 configureTaskAuditTaskProvider(reconcileInspectableTasks);
@@ -723,12 +818,13 @@ export function previewTaskRegistryMaintenance(): TaskRegistryMaintenanceSummary
   let cleanupStamped = 0;
   let pruned = 0;
   const cronRecoveryContext = createCronRecoveryContext();
+  const backingSessionContext = createBackingSessionLookupContext();
   for (const task of taskRegistryMaintenanceRuntime.listTaskRecords()) {
     if (resolveDurableCronTaskRecovery(task, cronRecoveryContext)) {
       recovered += 1;
       continue;
     }
-    if (shouldMarkLost(task, now)) {
+    if (shouldMarkLost(task, now, backingSessionContext)) {
       reconciled += 1;
       continue;
     }
@@ -772,6 +868,8 @@ export async function runTaskRegistryMaintenance(): Promise<TaskRegistryMaintena
   let pruned = 0;
   const tasks = taskRegistryMaintenanceRuntime.listTaskRecords();
   const cronRecoveryContext = createCronRecoveryContext();
+  const backingSessionContext = createBackingSessionLookupContext();
+  const recoveryHookRegistered = hasDetachedTaskRecoveryHook();
   let processed = 0;
   for (const task of tasks) {
     const current = taskRegistryMaintenanceRuntime.getTaskById(task.taskId);
@@ -790,7 +888,7 @@ export async function runTaskRegistryMaintenance(): Promise<TaskRegistryMaintena
       }
       continue;
     }
-    if (shouldMarkLost(current, now)) {
+    if (shouldMarkLost(current, now, backingSessionContext)) {
       const recovery = await tryRecoverTaskBeforeMarkLost({
         taskId: current.taskId,
         runtime: current.runtime,
@@ -798,7 +896,14 @@ export async function runTaskRegistryMaintenance(): Promise<TaskRegistryMaintena
         now,
       });
       const freshAfterHook = taskRegistryMaintenanceRuntime.getTaskById(current.taskId);
-      if (!freshAfterHook || !shouldMarkLost(freshAfterHook, now)) {
+      const shouldRecheckFreshTask =
+        Boolean(freshAfterHook) &&
+        (recoveryHookRegistered || hasTaskLostDecisionInputChanged(current, freshAfterHook));
+      if (
+        !freshAfterHook ||
+        (shouldRecheckFreshTask &&
+          !shouldMarkLost(freshAfterHook, now, createBackingSessionLookupContext()))
+      ) {
         processed += 1;
         if (processed % SWEEP_YIELD_BATCH_SIZE === 0) {
           await yieldToEventLoop();
