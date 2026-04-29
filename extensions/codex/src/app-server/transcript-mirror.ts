@@ -4,9 +4,9 @@ import { SessionManager } from "@mariozechner/pi-coding-agent";
 import {
   acquireSessionWriteLock,
   emitSessionTranscriptUpdate,
-  guardSessionManager,
   type AgentMessage,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { guardSessionManager } from "openclaw/plugin-sdk/session-transcript-guard";
 
 export async function mirrorCodexAppServerTranscript(params: {
   sessionFile: string;
@@ -14,6 +14,7 @@ export async function mirrorCodexAppServerTranscript(params: {
   agentId?: string;
   messages: AgentMessage[];
   idempotencyScope?: string;
+  config?: Parameters<typeof guardSessionManager>[1]["config"];
 }): Promise<void> {
   const messages = params.messages.filter(
     (message) => message.role === "user" || message.role === "assistant",
@@ -32,6 +33,7 @@ export async function mirrorCodexAppServerTranscript(params: {
     const sessionManager = guardSessionManager(SessionManager.open(params.sessionFile), {
       agentId: params.agentId,
       sessionKey: params.sessionKey,
+      config: params.config,
     });
     for (const [index, message] of messages.entries()) {
       const idempotencyKey = params.idempotencyScope

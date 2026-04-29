@@ -189,6 +189,7 @@
   "session-key-runtime",
   "session-store-runtime",
   "session-transcript-hit",
+  "session-transcript-guard",
   "session-visibility",
   "ssrf-dispatcher",
   "string-coerce-runtime",
