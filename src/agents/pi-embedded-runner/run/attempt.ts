@@ -157,6 +157,7 @@ import {
   collectExplicitToolAllowlistSources,
 } from "../../tool-allowlist-guard.js";
 import { UNKNOWN_TOOL_THRESHOLD } from "../../tool-loop-detection.js";
+import { normalizeToolName } from "../../tool-policy.js";
 import { shouldAllowProviderOwnedThinkingReplay } from "../../transcript-policy.js";
 import { normalizeUsage, type NormalizedUsage } from "../../usage.js";
 import { DEFAULT_BOOTSTRAP_FILENAME } from "../../workspace.js";
@@ -241,6 +242,11 @@ import {
   shouldRotateCompactionTranscript,
 } from "../compaction-successor-transcript.js";
 import { configureEmbeddedAttemptHttpRuntime } from "./attempt-http-runtime.js";
+import {
+  createEmbeddedRunStageTracker,
+  formatEmbeddedRunStageSummary,
+  shouldWarnEmbeddedRunStageSummary,
+} from "./attempt-stage-timing.js";
 import {
   assembleAttemptContextEngine,
   buildLoopPromptCacheInfo,
@@ -480,8 +486,8 @@ export function applyEmbeddedAttemptToolsAllow<T extends { name: string }>(
   if (!toolsAllow || toolsAllow.length === 0) {
     return tools;
   }
-  const allowSet = new Set(toolsAllow);
-  return tools.filter((tool) => allowSet.has(tool.name));
+  const allowSet = new Set(toolsAllow.map((name) => normalizeToolName(name)));
+  return tools.filter((tool) => allowSet.has(normalizeToolName(tool.name)));
 }
 
 export function normalizeMessagesForLlmBoundary(messages: AgentMessage[]): AgentMessage[] {
@@ -588,6 +594,23 @@ export async function runEmbeddedAttempt(
   log.debug(
     `embedded run start: runId=${params.runId} sessionId=${params.sessionId} provider=${params.provider} model=${params.modelId} thinking=${params.thinkLevel} messageChannel=${params.messageChannel ?? params.messageProvider ?? "unknown"}`,
   );
+  const prepStages = createEmbeddedRunStageTracker();
+  const emitPrepStageSummary = (phase: string) => {
+    const summary = prepStages.snapshot();
+    const shouldWarn = shouldWarnEmbeddedRunStageSummary(summary);
+    if (!shouldWarn && !log.isEnabled("trace")) {
+      return;
+    }
+    const message = formatEmbeddedRunStageSummary(
+      `[trace:embedded-run] prep stages: runId=${params.runId} sessionId=${params.sessionId} phase=${phase}`,
+      summary,
+    );
+    if (shouldWarn) {
+      log.warn(message);
+    } else {
+      log.trace(message);
+    }
+  };
 
   await fs.mkdir(resolvedWorkspace, { recursive: true });
 
@@ -609,6 +632,7 @@ export async function runEmbeddedAttempt(
     config: params.config,
     agentId: params.agentId,
   });
+  prepStages.mark("workspace-sandbox");
 
   let restoreSkillEnv: (() => void) | undefined;
   let aborted = Boolean(params.abortSignal?.aborted);
@@ -644,6 +668,7 @@ export async function runEmbeddedAttempt(
       workspaceDir: effectiveWorkspace,
       agentId: sessionAgentId,
     });
+    prepStages.mark("skills");
 
     const sessionLabel = params.sessionKey ?? params.sessionId;
     const contextInjectionMode = resolveContextInjectionMode(params.config);
@@ -718,6 +743,7 @@ export async function runEmbeddedAttempt(
               senderUsername: params.senderUsername,
               senderE164: params.senderE164,
               senderIsOwner: params.senderIsOwner,
+              ownerOnlyToolAllowlist: params.ownerOnlyToolAllowlist,
               allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
               sessionKey: sandboxSessionKey,
               sessionId: params.sessionId,
@@ -758,6 +784,7 @@ export async function runEmbeddedAttempt(
             });
             return applyEmbeddedAttemptToolsAllow(allTools, params.toolsAllow);
           })();
+    prepStages.mark("core-plugin-tools");
     const toolsEnabled = supportsModelTools(params.model);
     const bootstrapHasFileAccess = toolsEnabled && toolsRaw.some((tool) => tool.name === "read");
     const bootstrapRouting = await resolveAttemptWorkspaceBootstrapRouting({
@@ -801,6 +828,7 @@ export async function runEmbeddedAttempt(
           runKind: params.bootstrapContextRunKind,
         }),
     });
+    prepStages.mark("bootstrap-context");
     const remappedContextFiles = remapInjectedContextFilesToWorkspace({
       files: resolvedContextFiles,
       sourceWorkspaceDir: resolvedWorkspace,
@@ -929,9 +957,11 @@ export async function runEmbeddedAttempt(
       senderUsername: params.senderUsername,
       senderE164: params.senderE164,
       senderIsOwner: params.senderIsOwner,
+      ownerOnlyToolAllowlist: params.ownerOnlyToolAllowlist,
       warn: (message) => log.warn(message),
     });
     const effectiveTools = [...tools, ...filteredBundledTools];
+    prepStages.mark("bundle-tools");
     const allowedToolNames = collectAllowedToolNames({
       tools: effectiveTools,
       clientTools,
@@ -1218,6 +1248,7 @@ export async function runEmbeddedAttempt(
       bootstrapMode,
       contextFiles: remappedContextFiles,
     });
+    prepStages.mark("system-prompt");
 
     // Keep the session lock scoped to transcript/session mutations. Cold plugin
     // and tool setup can be slow, and holding the lock there blocks CLI fallback
@@ -1342,6 +1373,7 @@ export async function runEmbeddedAttempt(
         cfg: params.config,
         contextTokenBudget: params.contextTokenBudget,
       });
+      prepStages.mark("session-resource-loader");
 
       // Get hook runner early so it's available when creating tools
       const hookRunner = getGlobalHookRunner();
@@ -1438,6 +1470,7 @@ export async function runEmbeddedAttempt(
       }
       session.setActiveToolsByName(sessionToolAllowlist);
       const activeSession = session;
+      prepStages.mark("agent-session");
       if (isRawModelRun) {
         // Raw model probes should measure exactly the requested prompt against
         // the selected provider/model. Reset clears restored transcript state
@@ -1689,6 +1722,8 @@ export async function runEmbeddedAttempt(
             `(${params.provider}/${params.modelId})`,
         );
       }
+      prepStages.mark("stream-setup");
+      emitPrepStageSummary("stream-ready");
 
       const cacheObservabilityEnabled = Boolean(cacheTrace) || log.isEnabled("debug");
       const promptCacheToolNames = collectPromptCacheToolNames(

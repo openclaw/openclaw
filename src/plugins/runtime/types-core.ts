@@ -227,6 +227,9 @@ export type PluginRuntimeCore = {
   };
   state: {
     resolveStateDir: typeof import("../../config/paths.js").resolveStateDir;
+    openKeyedStore: <T>(
+      options: import("../../plugin-state/plugin-state-store.types.js").OpenKeyedStoreOptions,
+    ) => import("../../plugin-state/plugin-state-store.types.js").PluginStateKeyedStore<T>;
   };
   tasks: {
     runs: PluginRuntimeTaskRuns;

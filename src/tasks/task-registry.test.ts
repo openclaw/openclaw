@@ -91,6 +91,7 @@ function configureTaskRegistryMaintenanceRuntimeForTest(params: {
   currentTasks: Map<string, ReturnType<typeof createTaskRecord>>;
   snapshotTasks: ReturnType<typeof createTaskRecord>[];
   acpEntry?: AcpSessionStoreEntry;
+  acpEntries?: AcpSessionStoreEntry[];
   sessionBindings?: SessionBindingRecord[];
   closeAcpSession?: (params: {
     cfg: AcpSessionStoreEntry["cfg"];
@@ -112,6 +113,7 @@ function configureTaskRegistryMaintenanceRuntimeForTest(params: {
     storeReadFailed: false,
   } satisfies AcpSessionStoreEntry;
   setTaskRegistryMaintenanceRuntimeForTests({
+    listAcpSessionEntries: async () => params.acpEntries ?? [],
     readAcpSessionEntry: () => params.acpEntry ?? emptyAcpEntry,
     listSessionBindingsBySession: () => params.sessionBindings ?? [],
     closeAcpSession: params.closeAcpSession,
@@ -1726,6 +1728,111 @@ describe("task-registry", () => {
     });
   });
 
+  it("closes orphaned parent-owned one-shot ACP sessions after task records are gone", async () => {
+    await withTaskRegistryTempDir(async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+      const parentSessionKey = "agent:main:telegram:direct:owner";
+      const childSessionKey = "agent:claude:acp:orphaned-oneshot";
+      const closeAcpSession = vi.fn().mockResolvedValue(undefined);
+      const unbindSessionBindings = vi.fn().mockResolvedValue([]);
+
+      configureTaskRegistryMaintenanceRuntimeForTest({
+        currentTasks: new Map(),
+        snapshotTasks: [],
+        acpEntries: [
+          createAcpSessionStoreEntry({
+            sessionKey: childSessionKey,
+            parentSessionKey,
+            mode: "oneshot",
+          }),
+        ],
+        closeAcpSession,
+        unbindSessionBindings,
+      });
+
+      await runTaskRegistryMaintenance();
+
+      expect(closeAcpSession).toHaveBeenCalledWith({
+        cfg: {},
+        sessionKey: childSessionKey,
+        reason: "orphaned-parent-task-cleanup",
+      });
+      expect(unbindSessionBindings).toHaveBeenCalledWith({
+        targetSessionKey: childSessionKey,
+        reason: "orphaned-parent-task-cleanup",
+      });
+    });
+  });
+
+  it("keeps orphaned parent-owned persistent ACP sessions while a binding is active", async () => {
+    await withTaskRegistryTempDir(async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+      const parentSessionKey = "agent:main:telegram:direct:owner";
+      const childSessionKey = "agent:claude:acp:bound-orphaned-persistent";
+      const closeAcpSession = vi.fn().mockResolvedValue(undefined);
+      const unbindSessionBindings = vi.fn().mockResolvedValue([]);
+
+      configureTaskRegistryMaintenanceRuntimeForTest({
+        currentTasks: new Map(),
+        snapshotTasks: [],
+        acpEntries: [
+          createAcpSessionStoreEntry({
+            sessionKey: childSessionKey,
+            parentSessionKey,
+            mode: "persistent",
+          }),
+        ],
+        sessionBindings: [createSessionBindingRecord({ targetSessionKey: childSessionKey })],
+        closeAcpSession,
+        unbindSessionBindings,
+      });
+
+      await runTaskRegistryMaintenance();
+
+      expect(closeAcpSession).not.toHaveBeenCalled();
+      expect(unbindSessionBindings).not.toHaveBeenCalled();
+    });
+  });
+
+  it("closes orphaned parent-owned persistent ACP sessions without active bindings", async () => {
+    await withTaskRegistryTempDir(async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+      const parentSessionKey = "agent:main:telegram:direct:owner";
+      const childSessionKey = "agent:claude:acp:unbound-orphaned-persistent";
+      const closeAcpSession = vi.fn().mockResolvedValue(undefined);
+      const unbindSessionBindings = vi.fn().mockResolvedValue([]);
+
+      configureTaskRegistryMaintenanceRuntimeForTest({
+        currentTasks: new Map(),
+        snapshotTasks: [],
+        acpEntries: [
+          createAcpSessionStoreEntry({
+            sessionKey: childSessionKey,
+            parentSessionKey,
+            mode: "persistent",
+          }),
+        ],
+        closeAcpSession,
+        unbindSessionBindings,
+      });
+
+      await runTaskRegistryMaintenance();
+
+      expect(closeAcpSession).toHaveBeenCalledWith({
+        cfg: {},
+        sessionKey: childSessionKey,
+        reason: "orphaned-parent-task-cleanup",
+      });
+      expect(unbindSessionBindings).toHaveBeenCalledWith({
+        targetSessionKey: childSessionKey,
+        reason: "orphaned-parent-task-cleanup",
+      });
+    });
+  });
+
   it("prunes old terminal tasks during maintenance sweeps", async () => {
     await withTaskRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
@@ -1856,6 +1963,7 @@ describe("task-registry", () => {
       process.on("unhandledRejection", onUnhandledRejection);
 
       setTaskRegistryMaintenanceRuntimeForTests({
+        listAcpSessionEntries: async () => [],
         readAcpSessionEntry: () => ({
           cfg: {} as never,
           storePath: "",

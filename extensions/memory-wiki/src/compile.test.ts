@@ -170,6 +170,46 @@ describe("compileMemoryWikiVault", () => {
     );
   });
 
+  it("does not relate every page through a broad shared source", async () => {
+    const { rootDir, config } = await createVault({
+      rootDir: nextCaseRoot(),
+      initialize: true,
+    });
+
+    await fs.writeFile(
+      path.join(rootDir, "sources", "alpha.md"),
+      renderWikiMarkdown({
+        frontmatter: { pageType: "source", id: "source.alpha", title: "Alpha" },
+        body: "# Alpha\n",
+      }),
+      "utf8",
+    );
+
+    for (let index = 0; index < 30; index += 1) {
+      await fs.writeFile(
+        path.join(rootDir, "entities", `entity-${index}.md`),
+        renderWikiMarkdown({
+          frontmatter: {
+            pageType: "entity",
+            id: `entity.${index}`,
+            title: `Entity ${index}`,
+            sourceIds: ["source.alpha"],
+          },
+          body: `# Entity ${index}\n`,
+        }),
+        "utf8",
+      );
+    }
+
+    await compileMemoryWikiVault(config);
+
+    const firstEntity = await fs.readFile(path.join(rootDir, "entities", "entity-0.md"), "utf8");
+    const sourcePage = await fs.readFile(path.join(rootDir, "sources", "alpha.md"), "utf8");
+    expect(firstEntity).toContain("[Alpha](sources/alpha.md)");
+    expect(firstEntity).not.toContain("### Related Pages");
+    expect(sourcePage).not.toContain("### Referenced By");
+  });
+
   it("writes dashboard report pages when createDashboards is enabled", async () => {
     const { rootDir, config } = await createVault({
       rootDir: nextCaseRoot(),

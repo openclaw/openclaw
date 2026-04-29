@@ -145,7 +145,9 @@ function assistantMessage(text: string, timestamp: number) {
 
 function createAppServerHarness(
   requestImpl: (method: string, params: unknown) => Promise<unknown>,
-  options: { onStart?: (authProfileId: string | undefined) => void } = {},
+  options: {
+    onStart?: (authProfileId: string | undefined, agentDir: string | undefined) => void;
+  } = {},
 ) {
   const requests: Array<{ method: string; params: unknown }> = [];
   let notify: (notification: CodexServerNotification) => Promise<void> = async () => undefined;
@@ -154,25 +156,37 @@ function createAppServerHarness(
     return requestImpl(method, params);
   });
 
-  __testing.setCodexAppServerClientFactoryForTests(async (_startOptions, authProfileId) => {
-    options.onStart?.(authProfileId);
-    return {
-      request,
-      addNotificationHandler: (handler: typeof notify) => {
-        notify = handler;
-        return () => undefined;
-      },
-      addRequestHandler: () => () => undefined,
-    } as never;
-  });
+  __testing.setCodexAppServerClientFactoryForTests(
+    async (_startOptions, authProfileId, agentDir) => {
+      options.onStart?.(authProfileId, agentDir);
+      return {
+        request,
+        addNotificationHandler: (handler: typeof notify) => {
+          notify = handler;
+          return () => undefined;
+        },
+        addRequestHandler: () => () => undefined,
+      } as never;
+    },
+  );
 
   return {
     request,
     requests,
     async waitForMethod(method: string) {
-      await vi.waitFor(() => expect(requests.some((entry) => entry.method === method)).toBe(true), {
-        interval: 1,
-      });
+      await vi.waitFor(
+        () => {
+          if (!requests.some((entry) => entry.method === method)) {
+            const mockMethods = request.mock.calls.map((call) => call[0]);
+            throw new Error(
+              `expected app-server method ${method}; saw ${requests
+                .map((entry) => entry.method)
+                .join(", ")}; mock saw ${mockMethods.join(", ")}`,
+            );
+          }
+        },
+        { interval: 1, timeout: 30_000 },
+      );
     },
     async notify(notification: CodexServerNotification) {
       await notify(notification);
@@ -192,7 +206,9 @@ function createAppServerHarness(
 
 function createStartedThreadHarness(
   requestImpl: (method: string, params: unknown) => Promise<unknown> = async () => undefined,
-  options: { onStart?: (authProfileId: string | undefined) => void } = {},
+  options: {
+    onStart?: (authProfileId: string | undefined, agentDir: string | undefined) => void;
+  } = {},
 ) {
   return createAppServerHarness(async (method, params) => {
     const override = await requestImpl(method, params);
@@ -313,8 +329,45 @@ describe("runCodexAppServerAttempt", () => {
     nativeHookRelayTesting.clearNativeHookRelaysForTests();
     resetAgentEventsForTest();
     resetGlobalHookRunner();
+    vi.useRealTimers();
     vi.restoreAllMocks();
     await fs.rm(tempDir, { recursive: true, force: true });
+  });
+
+  it("returns a failed dynamic tool response when an app-server tool call exceeds the deadline", async () => {
+    vi.useFakeTimers();
+    let capturedSignal: AbortSignal | undefined;
+    const onTimeout = vi.fn();
+    const response = __testing.handleDynamicToolCallWithTimeout({
+      call: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-timeout",
+        namespace: null,
+        tool: "message",
+        arguments: { action: "send", text: "hello" },
+      },
+      toolBridge: {
+        handleToolCall: vi.fn((_call, options) => {
+          capturedSignal = options?.signal;
+          return new Promise<never>(() => undefined);
+        }),
+      },
+      signal: new AbortController().signal,
+      timeoutMs: 1,
+      onTimeout,
+    });
+
+    await vi.advanceTimersByTimeAsync(1);
+
+    await expect(response).resolves.toEqual({
+      success: false,
+      contentItems: [
+        { type: "inputText", text: "OpenClaw dynamic tool call timed out after 1ms." },
+      ],
+    });
+    expect(capturedSignal?.aborted).toBe(true);
+    expect(onTimeout).toHaveBeenCalledTimes(1);
   });
 
   it("applies before_prompt_build to Codex developer instructions and turn input", async () => {
@@ -1290,14 +1343,19 @@ describe("runCodexAppServerAttempt", () => {
 
   it("passes the selected auth profile into app-server startup", async () => {
     const seenAuthProfileIds: Array<string | undefined> = [];
+    const seenAgentDirs: Array<string | undefined> = [];
     const { requests, waitForMethod, completeTurn } = createStartedThreadHarness(undefined, {
-      onStart: (authProfileId) => seenAuthProfileIds.push(authProfileId),
+      onStart: (authProfileId, agentDir) => {
+        seenAuthProfileIds.push(authProfileId);
+        seenAgentDirs.push(agentDir);
+      },
     });
     const params = createParams(
       path.join(tempDir, "session.jsonl"),
       path.join(tempDir, "workspace"),
     );
     params.authProfileId = "openai-codex:work";
+    params.agentDir = path.join(tempDir, "agent");
 
     const run = runCodexAppServerAttempt(params);
     await vi.waitFor(() => expect(seenAuthProfileIds).toEqual(["openai-codex:work"]), {
@@ -1309,6 +1367,7 @@ describe("runCodexAppServerAttempt", () => {
     await run;
 
     expect(seenAuthProfileIds).toEqual(["openai-codex:work"]);
+    expect(seenAgentDirs).toEqual([path.join(tempDir, "agent")]);
     expect(requests.map((entry) => entry.method)).toContain("turn/start");
   });
 
@@ -1612,6 +1671,7 @@ describe("runCodexAppServerAttempt", () => {
     });
     const params = createParams(sessionFile, workspaceDir);
     delete params.authProfileId;
+    params.agentDir = path.join(tempDir, "agent");
 
     const binding = await startOrResumeThread({
       client: {
@@ -1650,6 +1710,7 @@ describe("runCodexAppServerAttempt", () => {
       dynamicToolsFingerprint: "[]",
     });
     const seenAuthProfileIds: Array<string | undefined> = [];
+    const seenAgentDirs: Array<string | undefined> = [];
     const { requests, waitForMethod, completeTurn } = createAppServerHarness(
       async (method: string) => {
         if (method === "thread/resume") {
@@ -1660,10 +1721,16 @@ describe("runCodexAppServerAttempt", () => {
         }
         throw new Error(`unexpected method: ${method}`);
       },
-      { onStart: (authProfileId) => seenAuthProfileIds.push(authProfileId) },
+      {
+        onStart: (authProfileId, agentDir) => {
+          seenAuthProfileIds.push(authProfileId);
+          seenAgentDirs.push(agentDir);
+        },
+      },
     );
     const params = createParams(sessionFile, workspaceDir);
     delete params.authProfileId;
+    params.agentDir = path.join(tempDir, "agent");
 
     const run = runCodexAppServerAttempt(params);
     await vi.waitFor(() => expect(seenAuthProfileIds).toEqual(["openai-codex:bound"]), {
@@ -1675,6 +1742,7 @@ describe("runCodexAppServerAttempt", () => {
     await run;
 
     expect(seenAuthProfileIds).toEqual(["openai-codex:bound"]);
+    expect(seenAgentDirs).toEqual([path.join(tempDir, "agent")]);
     expect(requests.map((entry) => entry.method)).toContain("turn/start");
   });
 });

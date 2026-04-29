@@ -390,11 +390,11 @@ Example:
 
 <Tabs>
   <Tab title="DM policy">
-    `channels.discord.dmPolicy` controls DM access (legacy: `channels.discord.dm.policy`):
+    `channels.discord.dmPolicy` controls DM access. `channels.discord.allowFrom` is the canonical DM allowlist.
 
     - `pairing` (default)
     - `allowlist`
-    - `open` (requires `channels.discord.allowFrom` to include `"*"`; legacy: `channels.discord.dm.allowFrom`)
+    - `open` (requires `channels.discord.allowFrom` to include `"*"`)
     - `disabled`
 
     If DM policy is not open, unknown users are blocked (or prompted for pairing in `pairing` mode).
@@ -402,15 +402,18 @@ Example:
     Multi-account precedence:
 
     - `channels.discord.accounts.default.allowFrom` applies only to the `default` account.
-    - Named accounts inherit `channels.discord.allowFrom` when their own `allowFrom` is unset.
+    - For one account, `allowFrom` takes precedence over legacy `dm.allowFrom`.
+    - Named accounts inherit `channels.discord.allowFrom` when their own `allowFrom` and legacy `dm.allowFrom` are unset.
     - Named accounts do not inherit `channels.discord.accounts.default.allowFrom`.
+
+    Legacy `channels.discord.dm.policy` and `channels.discord.dm.allowFrom` still read for compatibility. `openclaw doctor --fix` migrates them to `dmPolicy` and `allowFrom` when it can do so without changing access.
 
     DM target format for delivery:
 
     - `user:<id>`
     - `<@id>` mention
 
-    Bare numeric IDs are ambiguous and rejected unless an explicit user/channel target kind is provided.
+    Bare numeric IDs normally resolve as channel IDs when a channel default is active, but IDs listed in the account's effective DM `allowFrom` are treated as user DM targets for compatibility.
 
   </Tab>
 
@@ -904,12 +907,19 @@ Default slash command settings:
 
     Discord auto-enables native exec approvals when `enabled` is unset or `"auto"` and at least one approver can be resolved, either from `execApprovals.approvers` or from `commands.ownerAllowFrom`. Discord does not infer exec approvers from channel `allowFrom`, legacy `dm.allowFrom`, or direct-message `defaultTo`. Set `enabled: false` to disable Discord as a native approval client explicitly.
 
+    For sensitive owner-only group commands such as `/diagnostics` and `/export-trajectory`, OpenClaw sends approval prompts and final results privately. It tries Discord DM first when the invoking owner has a Discord owner route; if that is not available, it falls back to the first available owner route from `commands.ownerAllowFrom`, such as Telegram.
+
     When `target` is `channel` or `both`, the approval prompt is visible in the channel. Only resolved approvers can use the buttons; other users receive an ephemeral denial. Approval prompts include the command text, so only enable channel delivery in trusted channels. If the channel ID cannot be derived from the session key, OpenClaw falls back to DM delivery.
 
     Discord also renders the shared approval buttons used by other chat channels. The native Discord adapter mainly adds approver DM routing and channel fanout.
     When those buttons are present, they are the primary approval UX; OpenClaw
     should only include a manual `/approve` command when the tool result says
     chat approvals are unavailable or manual approval is the only path.
+    If the Discord native approval runtime is not active, OpenClaw keeps the
+    local deterministic `/approve <id> <decision>` prompt visible. If the
+    runtime is active but a native card cannot be delivered to any target,
+    OpenClaw sends a same-chat fallback notice with the exact `/approve`
+    command from the pending approval.
 
     Gateway auth and approval resolution follow the shared Gateway client contract (`plugin:` IDs resolve through `plugin.approval.resolve`; other IDs through `exec.approval.resolve`). Approvals expire after 30 minutes by default.
 
@@ -1088,26 +1098,20 @@ openclaw logs --follow
 
   </Accordion>
 
-  <Accordion title="Long-running handlers time out or duplicate replies">
+  <Accordion title="Long-running Discord turns or duplicate replies">
 
     Typical logs:
 
-    - `Listener DiscordMessageListener timed out after 30000ms for event MESSAGE_CREATE`
     - `Slow listener detected ...`
-    - `discord inbound worker timed out after ...`
+    - `stuck session: sessionKey=agent:...:discord:... state=processing ...`
 
-    Listener budget knob:
+    Discord gateway queue knobs:
 
     - single-account: `channels.discord.eventQueue.listenerTimeout`
     - multi-account: `channels.discord.accounts.<accountId>.eventQueue.listenerTimeout`
+    - this only controls Discord gateway listener work, not agent turn lifetime
 
-    Worker run timeout knob:
-
-    - single-account: `channels.discord.inboundWorker.runTimeoutMs`
-    - multi-account: `channels.discord.accounts.<accountId>.inboundWorker.runTimeoutMs`
-    - default: `1800000` (30 minutes); set `0` to disable
-
-    Recommended baseline:
+    Discord does not apply a channel-owned timeout to queued agent turns. Message listeners hand off immediately, and queued Discord runs preserve per-session ordering until the session/tool/runtime lifecycle completes or aborts the work.
 
 ```json5
 {
@@ -1118,18 +1122,12 @@ openclaw logs --follow
           eventQueue: {
             listenerTimeout: 120000,
           },
-          inboundWorker: {
-            runTimeoutMs: 1800000,
-          },
         },
       },
     },
   },
 }
 ```
-
-    Use `eventQueue.listenerTimeout` for slow listener setup and `inboundWorker.runTimeoutMs`
-    only if you want a separate safety valve for queued agent turns.
 
   </Accordion>
 
@@ -1191,7 +1189,6 @@ Primary reference: [Configuration reference - Discord](/gateway/config-channels#
 - policy: `groupPolicy`, `dm.*`, `guilds.*`, `guilds.*.channels.*`
 - command: `commands.native`, `commands.useAccessGroups`, `configWrites`, `slashCommand.*`
 - event queue: `eventQueue.listenerTimeout` (listener budget), `eventQueue.maxQueueSize`, `eventQueue.maxConcurrency`
-- inbound worker: `inboundWorker.runTimeoutMs`
 - gateway metadata: `gatewayInfoTimeoutMs`
 - reply/history: `replyToMode`, `historyLimit`, `dmHistoryLimit`, `dms.*.historyLimit`
 - delivery: `textChunkLimit`, `chunkMode`, `maxLinesPerMessage`

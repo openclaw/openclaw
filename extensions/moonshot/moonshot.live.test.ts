@@ -22,7 +22,7 @@ describeLive("moonshot plugin live", () => {
     const provider = createKimiWebSearchProvider();
     const tool = provider.createTool?.({
       config: {},
-      searchConfig: { kimi: { apiKey: KIMI_SEARCH_KEY }, cacheTtlMinutes: 0, timeoutSeconds: 90 },
+      searchConfig: { kimi: { apiKey: KIMI_SEARCH_KEY }, cacheTtlMinutes: 0, timeoutSeconds: 20 },
     } as never);
 
     let result: { provider?: string; content?: unknown; citations?: unknown } | undefined;
@@ -47,5 +47,5 @@ describeLive("moonshot plugin live", () => {
     expect(typeof result?.content).toBe("string");
     expect((result?.content as string).length).toBeGreaterThan(20);
     expect(Array.isArray(result?.citations)).toBe(true);
-  }, 120_000);
+  }, 60_000);
 });

@@ -7,7 +7,6 @@ import type { OpenClawConfig } from "../config/config.js";
 import {
   applyExclusiveSlotSelection,
   buildPluginSnapshotReport,
-  clearPluginManifestRegistryCache,
   enablePluginInConfig,
   installHooksFromNpmSpec,
   installHooksFromPath,
@@ -374,7 +373,6 @@ describe("plugins cli install", () => {
 
     await runPluginsCommand(["plugins", "install", "alpha", "--marketplace", "local/repo"]);
 
-    expect(clearPluginManifestRegistryCache).toHaveBeenCalledTimes(1);
     expect(writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledWith({
       alpha: expect.objectContaining({
         source: "marketplace",

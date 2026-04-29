@@ -323,7 +323,7 @@ describe("openclaw channel mcp server", () => {
       );
     });
 
-    test("lists routed sessions that only expose modern channel fields", async () => {
+    test("lists routed sessions from deliveryContext without mirrored route fields", async () => {
       const bridge = new OpenClawChannelBridge({} as never, {
         claudeChannelMode: "off",
         verbose: false,
@@ -332,20 +332,18 @@ describe("openclaw channel mcp server", () => {
         sessions: [
           {
             key: "agent:main:channel-field",
-            channel: "telegram",
             deliveryContext: {
+              channel: "telegram",
               to: "-100111",
             },
           },
           {
             key: "agent:main:origin-field",
-            origin: {
-              provider: "imessage",
+            deliveryContext: {
+              channel: "imessage",
+              to: "+15551230000",
               accountId: "imessage-default",
               threadId: "thread-7",
-            },
-            deliveryContext: {
-              to: "+15551230000",
             },
           },
         ],

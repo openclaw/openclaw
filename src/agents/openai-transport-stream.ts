@@ -43,6 +43,7 @@ import {
   resolveOpenAIStrictToolFlagForInventory,
   resolveOpenAIStrictToolSetting,
 } from "./openai-tool-schema.js";
+import { resolveProviderRequestPolicyConfig } from "./provider-request-config.js";
 import {
   buildGuardedModelFetch,
   resolveModelRequestTimeoutMs,
@@ -630,23 +631,28 @@ function buildOpenAIClientHeaders(
   optionHeaders?: Record<string, string>,
   turnHeaders?: Record<string, string>,
 ): Record<string, string> {
-  const headers = { ...model.headers };
+  const providerHeaders = { ...model.headers };
   if (model.provider === "github-copilot") {
     Object.assign(
-      headers,
+      providerHeaders,
       buildCopilotDynamicHeaders({
         messages: context.messages,
         hasImages: hasCopilotVisionInput(context.messages),
       }),
     );
   }
-  if (optionHeaders) {
-    Object.assign(headers, optionHeaders);
-  }
-  if (turnHeaders) {
-    Object.assign(headers, turnHeaders);
-  }
-  return headers;
+  const callerHeaders = { ...optionHeaders, ...turnHeaders };
+  const headers = resolveProviderRequestPolicyConfig({
+    provider: model.provider,
+    api: model.api,
+    baseUrl: model.baseUrl,
+    capability: "llm",
+    transport: "stream",
+    providerHeaders,
+    callerHeaders: Object.keys(callerHeaders).length > 0 ? callerHeaders : undefined,
+    precedence: "caller-wins",
+  }).headers;
+  return headers ?? {};
 }
 
 function resolveProviderTransportTurnState(
@@ -1869,6 +1875,7 @@ function mapStopReason(reason: string | null) {
 }
 
 export const __testing = {
+  buildOpenAIClientHeaders,
   buildOpenAISdkClientOptions,
   buildOpenAISdkRequestOptions,
   createAzureOpenAIClient,

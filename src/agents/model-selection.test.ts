@@ -224,6 +224,12 @@ describe("model-selection", () => {
         expected: { provider: "mlx", model: "mlx-community/Qwen3-30B-A3B-6bit" },
       },
       {
+        name: "preserves three-segment refs where the maker equals the provider",
+        variants: ["nvidia/nvidia/nemotron-3-super-120b-a12b"],
+        defaultProvider: "anthropic",
+        expected: { provider: "nvidia", model: "nvidia/nemotron-3-super-120b-a12b" },
+      },
+      {
         name: "normalizes anthropic shorthand aliases",
         variants: ["anthropic/opus-4.6", "opus-4.6", " anthropic / opus-4.6 "],
         defaultProvider: "anthropic",
@@ -629,6 +635,7 @@ describe("model-selection", () => {
                   id: "gpt-test-z",
                   name: "Configured GPT Test Z",
                   contextWindow: 64_000,
+                  compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh"] },
                 },
               ],
             },
@@ -650,6 +657,7 @@ describe("model-selection", () => {
           name: "Configured GPT Test Z",
           alias: "GPT Test Z Alias",
           contextWindow: 64_000,
+          compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh"] },
         },
       ]);
     });
@@ -707,6 +715,7 @@ describe("model-selection", () => {
                   name: "Kimi K2.5 (Configured)",
                   contextWindow: 32_000,
                   reasoning: true,
+                  compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh"] },
                 },
               ],
             },
@@ -729,6 +738,7 @@ describe("model-selection", () => {
           alias: "Kimi K2.5 (NVIDIA)",
           contextWindow: 32_000,
           reasoning: true,
+          compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh"] },
         },
       ]);
     });

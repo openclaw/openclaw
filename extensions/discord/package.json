@@ -4,7 +4,6 @@
   "description": "OpenClaw Discord channel plugin",
   "type": "module",
   "dependencies": {
-    "@buape/carbon": "0.16.0",
     "@discordjs/voice": "^0.19.2",
     "discord-api-types": "^0.38.47",
     "https-proxy-agent": "^9.0.0",
