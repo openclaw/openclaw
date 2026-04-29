@@ -564,27 +564,69 @@ describe("draft stream overflow chaining", () => {
     expect(api.sendMessage).toHaveBeenLastCalledWith(123, "foo bar baz qux", undefined);
   });
 
-  it("stops stream and emits warning when chained overflow slice still exceeds maxChars", async () => {
+  it("drains oversized overflow slice across chained messages", async () => {
     const api = createMockDraftApi();
-    const warn = vi.fn();
+    api.sendMessage
+      .mockResolvedValueOnce({ message_id: 17 })
+      .mockResolvedValueOnce({ message_id: 42 })
+      .mockResolvedValueOnce({ message_id: 55 });
     const stream = createTelegramDraftStream({
       api: api as unknown as Bot["api"],
       chatId: 123,
       maxChars: 10,
-      warn,
     });
 
     stream.update("123456789");
     await stream.flush();
     expect(api.sendMessage).toHaveBeenCalledTimes(1);
 
-    // Overflow slice "ABCDEFGHIJK" is 11 chars > maxChars; stream should stop, not silently succeed.
+    // Overflow slice "ABCDEFGHIJK" is 11 chars > maxChars; binary-search splits it into "ABCDEFGHIJ" + "K".
     stream.update("123456789ABCDEFGHIJK");
     await stream.flush();
 
-    expect(api.sendMessage).toHaveBeenCalledTimes(1);
-    expect(warn).toHaveBeenCalledWith(
-      expect.stringContaining("telegram stream preview stopped (text length 11 > 10)"),
-    );
+    expect(api.sendMessage).toHaveBeenCalledTimes(3);
+    expect(api.sendMessage).toHaveBeenNthCalledWith(2, 123, "ABCDEFGHIJ", undefined);
+    expect(api.sendMessage).toHaveBeenNthCalledWith(3, 123, "K", undefined);
+  });
+
+  it("drains a single oversized update across multiple chained messages", async () => {
+    const api = createMockDraftApi();
+    api.sendMessage
+      .mockResolvedValueOnce({ message_id: 17 })
+      .mockResolvedValueOnce({ message_id: 42 });
+    const stream = createTelegramDraftStream({
+      api: api as unknown as Bot["api"],
+      chatId: 123,
+      maxChars: 10,
+    });
+
+    // Single update with 20 chars (two messages worth) and no prior delivery.
+    stream.update("1234567890ABCDEFGHIJ");
+    await stream.flush();
+
+    expect(api.sendMessage).toHaveBeenCalledTimes(2);
+    expect(api.sendMessage).toHaveBeenNthCalledWith(1, 123, "1234567890", undefined);
+    expect(api.sendMessage).toHaveBeenNthCalledWith(2, 123, "ABCDEFGHIJ", undefined);
+  });
+
+  it("uses renderContinuationText for overflow continuation messages", async () => {
+    const api = createMockDraftApi();
+    api.sendMessage
+      .mockResolvedValueOnce({ message_id: 17 })
+      .mockResolvedValueOnce({ message_id: 42 });
+    const stream = createTelegramDraftStream({
+      api: api as unknown as Bot["api"],
+      chatId: 123,
+      maxChars: 10,
+      renderText: (text) => ({ text, parseMode: "HTML" as const }),
+      renderContinuationText: (text) => ({ text: `cont:${text}`, parseMode: "HTML" as const }),
+    });
+
+    // "1234567890AB" is 12 chars > 10; first 10 chars use renderText, remaining "AB" uses renderContinuationText.
+    stream.update("1234567890AB");
+    await stream.flush();
+
+    expect(api.sendMessage).toHaveBeenNthCalledWith(1, 123, "1234567890", { parse_mode: "HTML" });
+    expect(api.sendMessage).toHaveBeenNthCalledWith(2, 123, "cont:AB", { parse_mode: "HTML" });
   });
 });

@@ -354,16 +354,10 @@ export const dispatchTelegramMessage = async ({
     text: renderTelegramHtmlText(text, { tableMode }),
     parseMode: "HTML" as const,
   });
-  const renderReasoningDraftPreview = (text: string) => {
-    // Reasoning continuation messages start with italic markdown (_...) but have no
-    // "Reasoning:" header — prefix them so the user knows the stream is ongoing.
-    const isReasoningCont = /^_/.test(text.trimStart()) && !text.startsWith("Reasoning:");
-    const prefixed = isReasoningCont ? `Reasoning (cont.):\n${text}` : text;
-    return {
-      text: renderTelegramHtmlText(prefixed, { tableMode }),
-      parseMode: "HTML" as const,
-    };
-  };
+  const renderReasoningContinuationPreview = (text: string) => ({
+    text: renderTelegramHtmlText(`Reasoning (cont.):\n${text}`, { tableMode }),
+    parseMode: "HTML" as const,
+  });
   const accountBlockStreamingEnabled =
     resolveChannelStreamingBlockEnabled(telegramCfg) ??
     cfg.agents?.defaults?.blockStreamingDefault === "on";
@@ -442,6 +436,7 @@ export const dispatchTelegramMessage = async ({
     laneName: LaneName,
     enabled: boolean,
     renderText: (text: string) => { text: string; parseMode?: "HTML" } = renderDraftPreview,
+    renderContinuationText?: (text: string) => { text: string; parseMode?: "HTML" },
   ): DraftLaneState => {
     const stream = enabled
       ? (telegramDeps.createTelegramDraftStream ?? createTelegramDraftStream)({
@@ -452,6 +447,7 @@ export const dispatchTelegramMessage = async ({
           replyToMessageId: draftReplyToMessageId,
           minInitialChars: draftMinInitialChars,
           renderText,
+          renderContinuationText,
           onSupersededPreview:
             laneName === "answer" || laneName === "reasoning"
               ? (preview) => {
@@ -481,7 +477,12 @@ export const dispatchTelegramMessage = async ({
   };
   const lanes: Record<LaneName, DraftLaneState> = {
     answer: createDraftLane("answer", canStreamAnswerDraft),
-    reasoning: createDraftLane("reasoning", canStreamReasoningDraft, renderReasoningDraftPreview),
+    reasoning: createDraftLane(
+      "reasoning",
+      canStreamReasoningDraft,
+      renderDraftPreview,
+      renderReasoningContinuationPreview,
+    ),
   };
   const activePreviewLifecycleByLane: Record<LaneName, LanePreviewLifecycle> = {
     answer: "transient",

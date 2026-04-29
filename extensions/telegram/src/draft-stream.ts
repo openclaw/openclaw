@@ -55,6 +55,26 @@ type SupersededTelegramPreview = {
   visibleSinceMs?: number;
 };
 
+function findRawFitLength(
+  rawSlice: string,
+  maxChars: number,
+  renderFn: ((text: string) => TelegramDraftPreview) | undefined,
+): number {
+  let lo = 0;
+  let hi = rawSlice.length;
+  while (lo < hi) {
+    const mid = Math.ceil((lo + hi) / 2);
+    const chunk = rawSlice.slice(0, mid);
+    const chunkRendered = renderFn?.(chunk) ?? { text: chunk };
+    if (chunkRendered.text.trimEnd().length <= maxChars) {
+      lo = mid;
+    } else {
+      hi = mid - 1;
+    }
+  }
+  return lo;
+}
+
 export function createTelegramDraftStream(params: {
   api: Bot["api"];
   chatId: Parameters<Bot["api"]["sendMessage"]>[0];
@@ -66,6 +86,8 @@ export function createTelegramDraftStream(params: {
   minInitialChars?: number;
   /** Optional preview renderer (e.g. markdown -> HTML + parse mode). */
   renderText?: (text: string) => TelegramDraftPreview;
+  /** Renderer used for overflow continuation messages (textBaseOffset > 0). Falls back to renderText. */
+  renderContinuationText?: (text: string) => TelegramDraftPreview;
   /** Called when a late send resolves after forceNewMessage() switched generations. */
   onSupersededPreview?: (preview: SupersededTelegramPreview) => void;
   log?: (message: string) => void;
@@ -210,19 +232,23 @@ export function createTelegramDraftStream(params: {
     if (!sliced) {
       return false;
     }
-    const rendered = params.renderText?.(sliced) ?? { text: sliced };
+    const renderFn =
+      textBaseOffset > 0 && params.renderContinuationText
+        ? params.renderContinuationText
+        : params.renderText;
+    const rendered = renderFn?.(sliced) ?? { text: sliced };
     const renderedText = rendered.text.trimEnd();
     const renderedParseMode = rendered.parseMode;
     if (!renderedText) {
       return false;
     }
     if (renderedText.length > maxChars) {
-      // When the rendered slice overflows, chain to a new message from the current
-      // delivered position rather than stopping the stream entirely.
+      // When the rendered slice overflows, chain to a new message.
       const deliveredRaw = lastDeliveredText.length;
       const deliveredLen =
         deliveredRaw > textBaseOffset ? deliveredRaw - textBaseOffset : lastSentText.length;
       if (deliveredLen > 0) {
+        // Already-delivered content provides the natural split point.
         textBaseOffset += deliveredLen;
         forceNewMessage();
         lastDeliveredText = "";
@@ -236,11 +262,26 @@ export function createTelegramDraftStream(params: {
         }
         return true;
       }
-      streamState.stopped = true;
-      params.warn?.(
-        `telegram stream preview stopped (text length ${renderedText.length} > ${maxChars})`,
+      // Nothing delivered yet: binary-search for the largest fitting prefix and send it,
+      // then chain the remainder so the stream keeps draining.
+      const fitLen = findRawFitLength(sliced, maxChars, renderFn);
+      if (fitLen === 0) {
+        streamState.stopped = true;
+        params.warn?.(
+          `telegram stream preview stopped (text length ${renderedText.length} > ${maxChars})`,
+        );
+        return false;
+      }
+      params.log?.(
+        `telegram stream preview overflow (${renderedText.length} > ${maxChars}); splitting at raw offset ${textBaseOffset + fitLen}`,
       );
-      return false;
+      const fitText = trimmed.slice(0, textBaseOffset + fitLen);
+      const sent = await sendOrEditStreamMessage(fitText);
+      if (!sent) {
+        return false;
+      }
+      streamState.stopped = false;
+      return await sendOrEditStreamMessage(text);
     }
     if (renderedText === lastSentText && renderedParseMode === lastSentParseMode) {
       return true;
