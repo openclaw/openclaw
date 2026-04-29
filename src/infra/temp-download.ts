@@ -1,8 +1,8 @@
 import crypto from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import path from "node:path";
-import { resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir.js";
 
 const logger = createSubsystemLogger("infra:temp-download");
 
