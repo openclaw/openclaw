@@ -402,7 +402,8 @@ Example:
     Multi-account precedence:
 
     - `channels.discord.accounts.default.allowFrom` applies only to the `default` account.
-    - Named accounts inherit `channels.discord.allowFrom` when their own `allowFrom` is unset.
+    - For one account, `allowFrom` takes precedence over legacy `dm.allowFrom`.
+    - Named accounts inherit `channels.discord.allowFrom` when their own `allowFrom` and legacy `dm.allowFrom` are unset.
     - Named accounts do not inherit `channels.discord.accounts.default.allowFrom`.
 
     DM target format for delivery:
@@ -410,7 +411,7 @@ Example:
     - `user:<id>`
     - `<@id>` mention
 
-    Bare numeric IDs are ambiguous and rejected unless an explicit user/channel target kind is provided.
+    Bare numeric IDs normally resolve as channel IDs when a channel default is active, but IDs listed in the account's effective DM `allowFrom` are treated as user DM targets for compatibility.
 
   </Tab>
 

@@ -91,4 +91,23 @@ describe("discordConfigAdapter", () => {
 
     expect(discordConfigAdapter.resolveAllowFrom?.({ cfg, accountId: "default" })).toEqual(["456"]);
   });
+
+  it("prefers account legacy dm.allowFrom over inherited root allowFrom", () => {
+    const cfg = {
+      channels: {
+        discord: {
+          allowFrom: ["root"],
+          accounts: {
+            work: {
+              dm: { allowFrom: ["account-legacy"] },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(discordConfigAdapter.resolveAllowFrom?.({ cfg, accountId: "work" })).toEqual([
+      "account-legacy",
+    ]);
+  });
 });

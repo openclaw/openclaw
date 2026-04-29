@@ -12,6 +12,7 @@ import {
 } from "discord-api-types/v10";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-types";
+import { resolveDiscordAccountAllowFrom } from "../accounts.js";
 import { formatMention } from "../mentions.js";
 import { resolveDiscordChannelNameSafe } from "../monitor/channel-access.js";
 import { resolveDiscordSenderIdentity } from "../monitor/sender-identity.js";
@@ -88,6 +89,10 @@ async function authorizeVoiceCommand(
     scope: channelContext.isThreadChannel ? "thread" : "channel",
     channelLabel: channelId ? formatMention({ channelId }) : "This channel",
     memberRoleIds,
+    ownerAllowFrom: resolveDiscordAccountAllowFrom({
+      cfg: params.cfg,
+      accountId: params.accountId,
+    }),
     sender: {
       id: sender.id,
       name: sender.name,

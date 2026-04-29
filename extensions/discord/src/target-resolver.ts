@@ -1,6 +1,6 @@
 import type { DirectoryConfigParams } from "openclaw/plugin-sdk/directory-runtime";
 import { buildMessagingTarget, type MessagingTarget } from "openclaw/plugin-sdk/messaging-targets";
-import { resolveDiscordAccount } from "./accounts.js";
+import { resolveDiscordAccount, resolveDiscordAccountAllowFrom } from "./accounts.js";
 import { rememberDiscordDirectoryUser } from "./directory-cache.js";
 import { listDiscordDirectoryPeersLive } from "./directory-live.js";
 import { allowFromContainsDiscordUserId } from "./normalize.js";
@@ -97,11 +97,11 @@ function safeParseDiscordTarget(
 }
 
 function isConfiguredAllowedDiscordDmUser(input: string, options: DirectoryConfigParams): boolean {
-  const account = resolveDiscordAccount({
-    cfg: options.cfg,
-    accountId: options.accountId,
-  });
-  const allowFrom = account.config.allowFrom ?? account.config.dm?.allowFrom ?? [];
+  const allowFrom =
+    resolveDiscordAccountAllowFrom({
+      cfg: options.cfg,
+      accountId: options.accountId,
+    }) ?? [];
   return allowFromContainsDiscordUserId(allowFrom, input);
 }
 

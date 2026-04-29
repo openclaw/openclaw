@@ -171,6 +171,28 @@ describe("resolveDiscordTarget", () => {
     ).resolves.toMatchObject({ kind: "channel", id: "456", normalized: "channel:456" });
   });
 
+  it("uses account legacy dm.allowFrom before inherited root allowFrom for bare numeric ids", async () => {
+    const cfg = {
+      channels: {
+        discord: {
+          allowFrom: ["123"],
+          accounts: {
+            work: {
+              dm: { allowFrom: ["456"] },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    await expect(
+      resolveDiscordTarget("456", { cfg, accountId: "work" }, { defaultKind: "channel" }),
+    ).resolves.toMatchObject({ kind: "user", id: "456", normalized: "user:456" });
+    await expect(
+      resolveDiscordTarget("123", { cfg, accountId: "work" }, { defaultKind: "channel" }),
+    ).resolves.toMatchObject({ kind: "channel", id: "123", normalized: "channel:123" });
+  });
+
   it("caches username lookups under the configured default account when accountId is omitted", async () => {
     const cfg = {
       channels: {
