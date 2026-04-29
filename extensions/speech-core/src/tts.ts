@@ -1524,6 +1524,10 @@ export async function maybeApplyTtsToPayload(params: {
   const trimmedCleaned = cleanedText.trim();
   const visibleText = trimmedCleaned.length > 0 ? trimmedCleaned : "";
   const ttsText = directives.ttsText?.trim() || visibleText;
+  // Tagged hidden text (`[[tts:text]]...[[/tts:text]]`) is an explicit user
+  // opt-in to synthesis; bypass the short-text suppression that exists to
+  // avoid noisy auto-TTS on tiny visible replies. Fixes #73758.
+  const hasExplicitTaggedTtsText = (directives.ttsText?.trim().length ?? 0) > 0;
 
   const nextPayload =
     visibleText === text.trim()
@@ -1554,7 +1558,7 @@ export async function maybeApplyTtsToPayload(params: {
   if (text.includes("MEDIA:")) {
     return nextPayload;
   }
-  if (ttsText.trim().length < 10) {
+  if (ttsText.trim().length < 10 && !hasExplicitTaggedTtsText) {
     return nextPayload;
   }
 
@@ -1594,7 +1598,7 @@ export async function maybeApplyTtsToPayload(params: {
   }
 
   textForAudio = stripMarkdown(textForAudio).trim();
-  if (textForAudio.length < 10) {
+  if (textForAudio.length < 10 && !hasExplicitTaggedTtsText) {
     return nextPayload;
   }
 

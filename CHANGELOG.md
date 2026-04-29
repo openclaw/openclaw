@@ -22,6 +22,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Speech/TTS: synthesize explicitly tagged hidden TTS text (`[[tts:text]]...[[/tts:text]]`) even when shorter than the auto-TTS short-skip threshold, so short tagged replies on backends like claude-cli no longer arrive as empty voice-only payloads that channels skip. Fixes #73758. Thanks @asidko.
 - Exec: reject invalid per-call `host` values instead of silently falling back to the default target, so hostname-like values fail before commands run. Fixes #74426. Thanks @scr00ge-00 and @vyctorbrzezowski.
 - Build/Gateway: route restart, shutdown, respawn, diagnostics, command-queue cleanup, and runtime cleanup through one stable gateway lifecycle runtime entry so rebuilt packages do not strand long-running gateways on stale hashed chunks. Carries forward #73964. Thanks @pashpashpash.
 - Memory/wiki: keep broad shared-source and generated related-link blocks from turning every page into a search hit, cap noisy backlinks, support all-term searches such as people-routing queries, and prefer readable page body snippets over generated metadata. Thanks @vincentkoc.

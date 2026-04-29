@@ -1312,6 +1312,12 @@ export function describeTtsAutoApplyContract() {
         expectedFetchCalls: 1,
         expectSamePayload: false,
       },
+      {
+        name: "tagged short hidden text bypasses the short-skip (regression for #73758)",
+        payload: { text: "[[tts:text]]hello[[/tts:text]]" },
+        expectedFetchCalls: 1,
+        expectSamePayload: false,
+      },
     ] as const)("respects tagged-mode auto-TTS gating: $name", async (testCase) => {
       await expectAutoTtsOutcome({
         cfg: taggedCfg,
