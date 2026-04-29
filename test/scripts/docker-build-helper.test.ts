@@ -205,7 +205,11 @@ describe("docker build helper", () => {
     );
     expect(updateChannel).toContain("assert-config-channel dev");
     expect(updateChannelAssertions).toContain("expected persisted update.channel ${channel}");
-    expect(pluginsAssertions).toContain("expected modern installRecords in installed plugin index");
+    // The assertion message is thrown inside `scripts/e2e/lib/plugins/assertions.mjs`.
+    // The embedded docs should validate that we invoke the correct assertions entrypoint.
+    expect(scripts.join("\n")).toContain(
+      "scripts/e2e/lib/plugins/assertions.mjs marketplace-records",
+    );
   });
 
   it("keeps bundled plugin install/uninstall sweep chunkable", () => {
