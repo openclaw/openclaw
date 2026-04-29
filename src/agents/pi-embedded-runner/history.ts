@@ -5,7 +5,6 @@ import { normalizeProviderId } from "../provider-id.js";
 
 const THREAD_SUFFIX_REGEX = /^(.*)(?::(?:thread|topic):\d+)$/i;
 const TOPIC_SUFFIX_REGEX = /^(.*):topic:(\d+)$/i;
-const DEFAULT_GROUP_HISTORY_LIMIT = 50;
 
 type ProviderHistoryConfig = {
   historyLimit?: number;
@@ -20,10 +19,6 @@ type ProviderHistoryConfig = {
     | undefined
   >;
 };
-
-function resolveDefaultGroupHistoryLimit(config: OpenClawConfig | undefined): number {
-  return config?.messages?.groupChat?.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT;
-}
 
 function stripThreadSuffix(value: string): string {
   const match = value.match(THREAD_SUFFIX_REGEX);
@@ -132,7 +127,7 @@ export function getHistoryLimitFromSessionKey(
     if (groupConfig?.historyLimit !== undefined) {
       return groupConfig.historyLimit;
     }
-    return providerConfig.historyLimit ?? resolveDefaultGroupHistoryLimit(config);
+    return providerConfig.historyLimit;
   }
 
   return undefined;
