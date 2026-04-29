@@ -83,7 +83,7 @@ describe("RequestClient", () => {
     ]);
   });
 
-  it("prunes idle route buckets after Discord bucket remapping", async () => {
+  it("prunes idle route buckets and mappings after Discord bucket remapping", async () => {
     const client = new RequestClient("test-token", {
       fetch: async () =>
         new Response(JSON.stringify({ id: "first" }), {
@@ -95,8 +95,9 @@ describe("RequestClient", () => {
     await expect(client.get("/channels/c1/messages")).resolves.toEqual({ id: "first" });
 
     const metrics = client.getSchedulerMetrics();
-    expect(metrics.activeBuckets).toBe(1);
-    expect(metrics.buckets.map((bucket) => bucket.key)).toEqual(["channel-messages:channels/c1"]);
+    expect(metrics.activeBuckets).toBe(0);
+    expect(metrics.routeBucketMappings).toBe(0);
+    expect(metrics.buckets).toEqual([]);
   });
 
   it("waits for a learned bucket reset before dispatching the next request", async () => {
@@ -135,6 +136,7 @@ describe("RequestClient", () => {
     const client = new RequestClient("test-token", { fetch: fetchSpy });
 
     await expect(client.get("/channels/c1/messages")).resolves.toEqual({ id: "first" });
+    expect(client.getSchedulerMetrics().routeBucketMappings).toBe(1);
 
     const second = client.get("/channels/c1/messages");
     await Promise.resolve();
