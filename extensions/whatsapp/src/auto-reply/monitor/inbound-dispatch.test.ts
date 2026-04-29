@@ -522,43 +522,11 @@ describe("whatsapp inbound dispatch", () => {
     expect(rememberSentText).not.toHaveBeenCalled();
   });
 
-  it("suppresses error payload text when exposeErrorText is false", async () => {
+  it("suppresses error payload text", async () => {
     const deliverReply = vi.fn(async () => undefined);
     const rememberSentText = vi.fn();
 
-    await dispatchBufferedReply({
-      cfg: { channels: { whatsapp: { exposeErrorText: false } } } as never,
-      deliverReply,
-      rememberSentText,
-    });
-
-    const deliver = getCapturedDeliver();
-    expect(deliver).toBeTypeOf("function");
-
-    await deliver?.({ text: "provider exploded", isError: true }, { kind: "final" });
-
-    expect(deliverReply).not.toHaveBeenCalled();
-    expect(rememberSentText).not.toHaveBeenCalled();
-  });
-
-  it("honors account-level exposeErrorText overrides for error payloads", async () => {
-    const deliverReply = vi.fn(async () => undefined);
-    const rememberSentText = vi.fn();
-
-    await dispatchBufferedReply({
-      cfg: {
-        channels: {
-          whatsapp: {
-            accounts: {
-              work: { exposeErrorText: false },
-            },
-          },
-        },
-      } as never,
-      deliverReply,
-      rememberSentText,
-      route: makeRoute({ accountId: "work" }),
-    });
+    await dispatchBufferedReply({ deliverReply, rememberSentText });
 
     const deliver = getCapturedDeliver();
     expect(deliver).toBeTypeOf("function");
