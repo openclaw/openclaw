@@ -667,8 +667,8 @@ jobs:
             --repo-root . \
             --output-dir "${output_dir}" \
             --provider-mode mock-openai \
-            --model "${OPENCLAW_CI_OPENAI_MODEL}" \
-            --alt-model openai/gpt-5.4-alt \
+            --model mock-openai/gpt-5.5 \
+            --alt-model mock-openai/gpt-5.5-alt \
             --profile fast \
             --fast
           )
@@ -755,8 +755,8 @@ jobs:
             --repo-root . \
             --output-dir "${output_dir}" \
             --provider-mode mock-openai \
-            --model "${OPENCLAW_CI_OPENAI_MODEL}" \
-            --alt-model openai/gpt-5.4-alt \
+            --model mock-openai/gpt-5.5 \
+            --alt-model mock-openai/gpt-5.5-alt \
             --fast \
             --credential-source convex \
             --credential-role ci

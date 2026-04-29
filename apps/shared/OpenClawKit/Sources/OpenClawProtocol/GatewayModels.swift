@@ -2866,19 +2866,22 @@ public struct AgentSummary: Codable, Sendable {
     public let identity: [String: AnyCodable]?
     public let workspace: String?
     public let model: [String: AnyCodable]?
+    public let agentruntime: [String: AnyCodable]?
 
     public init(
         id: String,
         name: String?,
         identity: [String: AnyCodable]?,
         workspace: String?,
-        model: [String: AnyCodable]?)
+        model: [String: AnyCodable]?,
+        agentruntime: [String: AnyCodable]?)
     {
         self.id = id
         self.name = name
         self.identity = identity
         self.workspace = workspace
         self.model = model
+        self.agentruntime = agentruntime
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -2887,6 +2890,7 @@ public struct AgentSummary: Codable, Sendable {
         case identity
         case workspace
         case model
+        case agentruntime = "agentRuntime"
     }
 }
 

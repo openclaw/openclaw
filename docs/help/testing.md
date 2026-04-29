@@ -110,7 +110,17 @@ parallel jobs. Scheduled QA and release checks pass Matrix `--profile fast`
 explicitly, while the Matrix CLI and manual workflow input default remain
 `all`; manual dispatch can shard `all` into `transport`, `media`, `e2ee-smoke`,
 `e2ee-deep`, and `e2ee-cli` jobs. `OpenClaw Release Checks` runs parity plus
-the fast Matrix and Telegram lanes before release approval.
+the fast Matrix and Telegram lanes before release approval, using
+`mock-openai/gpt-5.5` for release transport checks so they stay deterministic
+and avoid normal provider-plugin startup. These live transport gateways disable
+memory search; memory behavior stays covered by the QA parity suites.
+
+Full release live media shards use
+`ghcr.io/openclaw/openclaw-live-media-runner:ubuntu-24.04`, which already has
+`ffmpeg` and `ffprobe`. Docker live model/backend shards use the shared
+`ghcr.io/openclaw/openclaw-live-test:<sha>` image built once per selected
+commit, then pull it with `OPENCLAW_SKIP_DOCKER_BUILD=1` instead of rebuilding
+inside every shard.
 
 - `pnpm openclaw qa suite`
   - Runs repo-backed QA scenarios directly on the host.

@@ -51,9 +51,10 @@ map when they have tracked owner usage. They exist for bundled-plugin
 maintenance only and are not recommended import paths for new third-party
 plugins.
 
-`openclaw/plugin-sdk/discord` is also kept as a deprecated compatibility facade
-for the published `@openclaw/discord@2026.3.13` package. Do not copy that import
-path into new plugins; use the generic channel SDK subpaths instead.
+`openclaw/plugin-sdk/discord` and `openclaw/plugin-sdk/telegram-account` are
+also kept as deprecated compatibility facades for tracked owner usage. Do not
+copy those import paths into new plugins; use injected runtime helpers and
+generic channel SDK subpaths instead.
 </Warning>
 
 ## Subpath reference

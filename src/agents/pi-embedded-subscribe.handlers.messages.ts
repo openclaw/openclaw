@@ -644,7 +644,7 @@ export function handleMessageUpdate(
   ) {
     const assistantMessageIndex = ctx.state.assistantMessageIndex;
     void Promise.resolve()
-      .then(() => ctx.flushBlockReplyBuffer({ assistantMessageIndex }))
+      .then(() => ctx.flushBlockReplyBuffer({ assistantMessageIndex, final: true }))
       .catch((err) => {
         ctx.log.debug(`text_end block reply flush failed: ${String(err)}`);
       });
@@ -829,8 +829,15 @@ export function handleMessageEnd(
       text !== ctx.state.lastBlockReplyText)
   ) {
     if (hasBufferedBlockReply && ctx.blockChunker?.hasBuffered()) {
-      ctx.blockChunker.drain({ force: true, emit: ctx.emitBlockChunk });
-      ctx.blockChunker.reset();
+      const flushBlockReplyBufferResult = ctx.flushBlockReplyBuffer({
+        assistantMessageIndex: ctx.state.assistantMessageIndex,
+        final: true,
+      });
+      if (isPromiseLike<void>(flushBlockReplyBufferResult)) {
+        void flushBlockReplyBufferResult.catch((err) => {
+          ctx.log.debug(`message_end block reply flush failed: ${String(err)}`);
+        });
+      }
       // Final-flush the streaming directive accumulator so any partial
       // directive tail held back by splitTrailingDirective (for example a
       // trailing `MEDIA:<path>` that arrived without a closing newline)

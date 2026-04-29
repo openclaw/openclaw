@@ -15966,6 +15966,9 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
             },
           ],
         },
+        exposeErrorText: {
+          type: "boolean",
+        },
         heartbeat: {
           type: "object",
           properties: {
@@ -16254,6 +16257,9 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                   },
                 ],
               },
+              exposeErrorText: {
+                type: "boolean",
+              },
               heartbeat: {
                 type: "object",
                 properties: {
@@ -16341,6 +16347,10 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
       configWrites: {
         label: "WhatsApp Config Writes",
         help: "Allow WhatsApp to write config in response to channel events/commands (default: true).",
+      },
+      exposeErrorText: {
+        label: "WhatsApp Error Text",
+        help: "Deliver user-visible agent/provider error text into WhatsApp (default: true). Disable to keep failures quiet on WhatsApp.",
       },
     },
     unsupportedSecretRefSurfacePatterns: [

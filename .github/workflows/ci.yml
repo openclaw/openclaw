@@ -140,9 +140,6 @@ jobs:
             createNodeTestShards,
           } from "./scripts/lib/ci-node-test-plan.mjs";
           import {
-            assertPluginPrereleaseTestPlanComplete,
-          } from "./scripts/lib/plugin-prerelease-test-plan.mjs";
-          import {
             createChannelContractTestShards,
           } from "./scripts/lib/channel-contract-test-plan.mjs";
           import {
@@ -184,7 +181,7 @@ jobs:
           const runSkillsPython = parseBoolean(process.env.OPENCLAW_CI_RUN_SKILLS_PYTHON) && !docsOnly;
           const runControlUiI18n =
             parseBoolean(process.env.OPENCLAW_CI_RUN_CONTROL_UI_I18N) && !docsOnly;
-          const pluginPrereleasePlan = assertPluginPrereleaseTestPlanComplete();
+          const isMegaCiRun = process.env.OPENCLAW_CI_EVENT_NAME === "workflow_dispatch";
           const trustedPluginPrereleaseRef =
             process.env.OPENCLAW_CI_EVENT_NAME !== "pull_request" ||
             process.env.OPENCLAW_CI_PR_HEAD_REPOSITORY === process.env.OPENCLAW_CI_REPOSITORY;
@@ -192,8 +189,33 @@ jobs:
             process.env.OPENCLAW_CI_EVENT_NAME === "pull_request" && trustedPluginPrereleaseRef
               ? process.env.OPENCLAW_CI_PR_HEAD_SHA
               : process.env.OPENCLAW_CI_CHECKOUT_REVISION;
-          const runPluginPrereleaseSuite =
-            runNodeFull && isCanonicalRepository && trustedPluginPrereleaseRef;
+          let runPluginPrereleaseSuite =
+            isMegaCiRun && runNodeFull && isCanonicalRepository;
+          let pluginPrereleasePlan = { staticChecks: [], dockerLanes: [] };
+          if (runPluginPrereleaseSuite) {
+            try {
+              const { assertPluginPrereleaseTestPlanComplete } = await import(
+                "./scripts/lib/plugin-prerelease-test-plan.mjs"
+              );
+              pluginPrereleasePlan = assertPluginPrereleaseTestPlanComplete();
+            } catch (error) {
+              const errorCode =
+                error && typeof error === "object" && "code" in error ? error.code : "";
+              const moduleUrl =
+                error && typeof error === "object" && "url" in error ? String(error.url) : "";
+              if (
+                errorCode === "ERR_MODULE_NOT_FOUND" &&
+                moduleUrl.endsWith("/scripts/lib/plugin-prerelease-test-plan.mjs")
+              ) {
+                console.warn(
+                  "Plugin prerelease plan unavailable in target ref; skipping plugin prerelease suite.",
+                );
+                runPluginPrereleaseSuite = false;
+              } else {
+                throw error;
+              }
+            }
+          }
           const extensionTestShardCount = isCanonicalRepository
             ? DEFAULT_EXTENSION_TEST_SHARD_COUNT
             : Math.max(DEFAULT_EXTENSION_TEST_SHARD_COUNT, 36);

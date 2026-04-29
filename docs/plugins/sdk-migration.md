@@ -647,8 +647,8 @@ canonical replacement.
     | `ProviderPluginDiscovery` | `ProviderPluginCatalog`   |
 
     Plus the legacy `ProviderCapabilities` static bag — provider plugins
-    should attach capability facts through the provider runtime contract
-    rather than a static object.
+    should use explicit provider hooks such as `buildReplayPolicy`,
+    `normalizeToolSchemas`, and `wrapStreamFn` rather than a static object.
 
   </Accordion>
 

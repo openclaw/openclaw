@@ -32,11 +32,12 @@ vi.mock("../agents/pi-embedded-runner/runtime.js", () => ({
 }));
 
 let prewarmConfiguredPrimaryModel: typeof import("./server-startup.js").__testing.prewarmConfiguredPrimaryModel;
+let shouldSkipStartupModelPrewarm: typeof import("./server-startup.js").__testing.shouldSkipStartupModelPrewarm;
 
 describe("gateway startup primary model warmup", () => {
   beforeAll(async () => {
     ({
-      __testing: { prewarmConfiguredPrimaryModel },
+      __testing: { prewarmConfiguredPrimaryModel, shouldSkipStartupModelPrewarm },
     } = await import("./server-startup.js"));
   });
 
@@ -82,6 +83,20 @@ describe("gateway startup primary model warmup", () => {
 
     expect(ensureOpenClawModelsJsonMock).not.toHaveBeenCalled();
     expect(piModelModuleLoadedMock).not.toHaveBeenCalled();
+  });
+
+  it("honors the startup model prewarm skip env", () => {
+    expect(shouldSkipStartupModelPrewarm({})).toBe(false);
+    expect(
+      shouldSkipStartupModelPrewarm({
+        OPENCLAW_SKIP_STARTUP_MODEL_PREWARM: "1",
+      }),
+    ).toBe(true);
+    expect(
+      shouldSkipStartupModelPrewarm({
+        OPENCLAW_SKIP_STARTUP_MODEL_PREWARM: "true",
+      }),
+    ).toBe(true);
   });
 
   it("skips static warmup for configured CLI backends", async () => {

@@ -25,8 +25,31 @@ function readOptionalUtf8(filePath) {
   return fs.readFileSync(filePath, "utf8");
 }
 
-function removePathIfExists(targetPath) {
-  fs.rmSync(targetPath, { recursive: true, force: true });
+function removePathIfExists(targetPath, options = {}) {
+  const retryDelays = options.retryTransient ? TEMP_REMOVE_RETRY_DELAYS_MS : [];
+  for (let attempt = 0; attempt <= retryDelays.length; attempt += 1) {
+    try {
+      fs.rmSync(targetPath, { recursive: true, force: true });
+      return true;
+    } catch (error) {
+      if (!isTransientTempRemoveError(error)) {
+        throw error;
+      }
+      const delay = retryDelays[attempt];
+      if (delay === undefined) {
+        if (options.ignoreTransient) {
+          return false;
+        }
+        throw error;
+      }
+      sleepSync(delay);
+    }
+  }
+  return true;
+}
+
+function removeOwnedTempPathBestEffort(targetPath) {
+  return removePathIfExists(targetPath, { retryTransient: true, ignoreTransient: true });
 }
 
 function isTransientTempRemoveError(error) {
@@ -92,7 +115,7 @@ function replaceDirAtomically(targetPath, sourcePath) {
     targetParentDir,
     `.openclaw-runtime-deps-backup-${sanitizeTempPrefixSegment(path.basename(targetPath))}-`,
   );
-  removePathIfExists(backupPath);
+  removePathIfExists(backupPath, { retryTransient: true });
 
   let movedExistingTarget = false;
   try {
@@ -102,7 +125,7 @@ function replaceDirAtomically(targetPath, sourcePath) {
       movedExistingTarget = true;
     }
     fs.renameSync(sourcePath, targetPath);
-    removePathIfExists(backupPath);
+    removeOwnedTempPathBestEffort(backupPath);
   } catch (error) {
     if (movedExistingTarget && !fs.existsSync(targetPath) && fs.existsSync(backupPath)) {
       fs.renameSync(backupPath, targetPath);
@@ -128,7 +151,7 @@ function writeJsonAtomically(targetPath, value) {
     });
     fs.renameSync(tempPath, targetPath);
   } finally {
-    removePathIfExists(tempDir);
+    removeOwnedTempPathBestEffort(tempDir);
   }
 }
 
@@ -1014,21 +1037,7 @@ function removeStaleRuntimeDepsTempDirs(pluginDir) {
       if (!shouldRemoveRuntimeDepsTempDir(targetPath)) {
         continue;
       }
-      for (let attempt = 0; attempt <= TEMP_REMOVE_RETRY_DELAYS_MS.length; attempt += 1) {
-        try {
-          removePathIfExists(targetPath);
-          break;
-        } catch (error) {
-          if (!isTransientTempRemoveError(error)) {
-            throw error;
-          }
-          const delay = TEMP_REMOVE_RETRY_DELAYS_MS[attempt];
-          if (delay === undefined) {
-            break;
-          }
-          sleepSync(delay);
-        }
-      }
+      removeOwnedTempPathBestEffort(targetPath);
     }
   }
 }
@@ -1124,7 +1133,7 @@ function stageInstalledRootRuntimeDeps(params) {
     });
     return true;
   } finally {
-    removePathIfExists(path.dirname(stagedNodeModulesDir));
+    removeOwnedTempPathBestEffort(path.dirname(stagedNodeModulesDir));
   }
 }
 
@@ -1216,7 +1225,7 @@ function installPluginRuntimeDeps(params) {
       generatedAt: new Date().toISOString(),
     });
   } finally {
-    removePathIfExists(tempInstallDir);
+    removeOwnedTempPathBestEffort(tempInstallDir);
   }
 }
 

@@ -842,8 +842,9 @@ describe("gateway session utils", () => {
             primary: "openai/gpt-5.4",
             fallbacks: ["openai-codex/gpt-5.4"],
           },
+          agentRuntime: { id: "pi", fallback: "pi" },
         },
-        list: [{ id: "main", default: true }],
+        list: [{ id: "main", default: true, agentRuntime: { id: "claude-cli", fallback: "none" } }],
       },
     } as OpenClawConfig;
 
@@ -854,6 +855,65 @@ describe("gateway session utils", () => {
       model: {
         primary: "openai/gpt-5.4",
         fallbacks: ["openai-codex/gpt-5.4"],
+      },
+      agentRuntime: {
+        id: "claude-cli",
+        fallback: "none",
+        source: "agent",
+      },
+    });
+  });
+
+  test("listAgentsForGateway reports effective env runtime fallback override", () => {
+    const previousFallback = process.env.OPENCLAW_AGENT_HARNESS_FALLBACK;
+    process.env.OPENCLAW_AGENT_HARNESS_FALLBACK = "pi";
+    try {
+      const cfg = {
+        session: { mainKey: "main" },
+        agents: {
+          defaults: {
+            agentRuntime: { id: "codex", fallback: "none" },
+          },
+          list: [{ id: "main", default: true }],
+        },
+      } as OpenClawConfig;
+
+      const result = listAgentsForGateway(cfg);
+      expect(result.agents[0]).toMatchObject({
+        id: "main",
+        agentRuntime: {
+          id: "codex",
+          fallback: "pi",
+          source: "env",
+        },
+      });
+    } finally {
+      if (previousFallback === undefined) {
+        delete process.env.OPENCLAW_AGENT_HARNESS_FALLBACK;
+      } else {
+        process.env.OPENCLAW_AGENT_HARNESS_FALLBACK = previousFallback;
+      }
+    }
+  });
+
+  test("listAgentsForGateway preserves fallback-only agent runtime overrides", () => {
+    const cfg = {
+      session: { mainKey: "main" },
+      agents: {
+        defaults: {
+          agentRuntime: { id: "auto", fallback: "pi" },
+        },
+        list: [{ id: "main", default: true, agentRuntime: { fallback: "none" } }],
+      },
+    } as OpenClawConfig;
+
+    const result = listAgentsForGateway(cfg);
+    expect(result.agents[0]).toMatchObject({
+      id: "main",
+      agentRuntime: {
+        id: "auto",
+        fallback: "none",
+        source: "agent",
       },
     });
   });

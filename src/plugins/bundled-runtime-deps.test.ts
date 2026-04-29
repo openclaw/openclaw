@@ -1014,6 +1014,12 @@ describe("scanBundledPluginRuntimeDeps config policy", () => {
       expectedDeps: [],
     },
     {
+      name: "includes selected memory slot bundled plugins behind restrictive allowlists",
+      config: { plugins: { allow: ["browser"], slots: { memory: "alpha" } } },
+      includeConfiguredChannels: false,
+      expectedDeps: ["alpha-runtime@1.0.0"],
+    },
+    {
       name: "does not let explicit plugin entries bypass restrictive allowlists",
       config: { plugins: { allow: ["browser"], entries: { alpha: { enabled: true } } } },
       includeConfiguredChannels: false,
@@ -2559,6 +2565,40 @@ describe("ensureBundledPluginRuntimeDeps", () => {
       },
     ]);
     expect(installRoot).toContain(stageDir);
+    expect(installRoot).not.toBe(pluginRoot);
+  });
+
+  it("installs runtime deps for the default memory slot bundled plugin", () => {
+    const packageRoot = makeTempDir();
+    const pluginRoot = writeBundledPluginPackage({
+      packageRoot,
+      pluginId: "memory-core",
+      deps: { chokidar: "^5.0.0" },
+    });
+    const calls: BundledRuntimeDepsInstallParams[] = [];
+
+    const result = ensureBundledPluginRuntimeDeps({
+      env: {},
+      config: {},
+      installDeps: (params) => {
+        calls.push(params);
+      },
+      pluginId: "memory-core",
+      pluginRoot,
+    });
+
+    expect(result).toEqual({
+      installedSpecs: ["chokidar@^5.0.0"],
+      retainSpecs: ["chokidar@^5.0.0"],
+    });
+    const installRoot = resolveBundledRuntimeDependencyInstallRoot(pluginRoot, { env: {} });
+    expect(calls).toEqual([
+      {
+        installRoot,
+        missingSpecs: ["chokidar@^5.0.0"],
+        installSpecs: ["chokidar@^5.0.0"],
+      },
+    ]);
     expect(installRoot).not.toBe(pluginRoot);
   });
 

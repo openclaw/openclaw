@@ -2096,13 +2096,6 @@ PY
         warn "windows dev update helper log drain failed after completion"
       fi
       rm -f "$log_state_path"
-      if [[ "$done_status" != "0" ]] &&
-        [[ "$guest_log" == *"ERR_MODULE_NOT_FOUND"* ]] &&
-        [[ "$guest_log" == *"dist\\cli\\run-main.js"* ]] &&
-        verify_windows_dev_update_after_transport_loss; then
-        warn "windows dev update old updater hit stale dist chunk after install; product verification passed"
-        return 0
-      fi
       [[ "$done_status" == "0" ]]
       return $?
     fi
