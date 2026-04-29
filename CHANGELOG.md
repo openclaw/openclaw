@@ -23,6 +23,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Feishu/Lark: render automatic reply-forward @mentions as native post elements while leaving assistant-supplied `<at ...>` text literal in reply bodies. Fixes #49833; carries forward #49837, #49850, and #49983. Thanks @yansong-zhao1974, @gavin-ali, @YizukiAme, @Panniantong, and @vincentkoc.
 - Channels and delivery: preserve account-scoped DM channel send policy, rich Telegram final replies, rich Telegram tables and lists, Telegram thread-create CLI remapping, Slack outbound `message_sent` hooks, contributed message-tool schema optionality, same-channel generated media completions, and channel chunking around surrogate pairs and Infinity limits. (#92788, #92679, #89421, #89943, #91137, #91246, #92735) Thanks @yetval, @obviyus, @spacegeologist, @rishitamrakar, @lundog, @TurboTheTurtle, and @yhterrance.
 - iMessage: normalize leading NUL sent-message echo prefixes while preserving interior NUL bytes and the leading attributedBody marker handling from #73942. Carries forward #63581. Thanks @drvoss.
 - Discord: give generated auto-thread titles a 60-second timeout and 4,096-token reasoning-model output budget, clamped to the selected model output cap. (#64734) Thanks @hanamizuki.
