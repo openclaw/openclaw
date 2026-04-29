@@ -361,6 +361,74 @@ describe("cli credentials", () => {
     });
   });
 
+  it("does not read Codex keychain when keychain prompts are disabled", async () => {
+    const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-codex-no-prompt-"));
+    process.env.CODEX_HOME = tempHome;
+    const expSeconds = Math.floor(Date.parse("2026-03-24T12:34:56Z") / 1000);
+    const authPath = path.join(tempHome, "auth.json");
+    fs.mkdirSync(tempHome, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(
+      authPath,
+      JSON.stringify({
+        tokens: {
+          access_token: createJwtWithExp(expSeconds),
+          refresh_token: "file-refresh",
+        },
+      }),
+      "utf8",
+    );
+
+    const creds = readCodexCliCredentialsCached({
+      allowKeychainPrompt: false,
+      ttlMs: CLI_CREDENTIALS_CACHE_TTL_MS,
+      platform: "darwin",
+      execSync: execSyncMock,
+    });
+
+    expect(creds).toMatchObject({
+      access: createJwtWithExp(expSeconds),
+      refresh: "file-refresh",
+      provider: "openai-codex",
+    });
+    expect(execSyncMock).not.toHaveBeenCalled();
+  });
+
+  it("does not let no-keychain Codex cache misses poison keychain reads", async () => {
+    const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-codex-cache-"));
+    process.env.CODEX_HOME = tempHome;
+    const expSeconds = Math.floor(Date.parse("2026-03-24T12:34:56Z") / 1000);
+
+    const withoutKeychain = readCodexCliCredentialsCached({
+      allowKeychainPrompt: false,
+      ttlMs: CLI_CREDENTIALS_CACHE_TTL_MS,
+      platform: "darwin",
+      execSync: execSyncMock,
+    });
+    expect(withoutKeychain).toBeNull();
+
+    execSyncMock.mockReturnValue(
+      JSON.stringify({
+        tokens: {
+          access_token: createJwtWithExp(expSeconds),
+          refresh_token: "keychain-refresh",
+        },
+      }),
+    );
+    const withKeychain = readCodexCliCredentialsCached({
+      allowKeychainPrompt: true,
+      ttlMs: CLI_CREDENTIALS_CACHE_TTL_MS,
+      platform: "darwin",
+      execSync: execSyncMock,
+    });
+
+    expect(withKeychain).toMatchObject({
+      access: createJwtWithExp(expSeconds),
+      refresh: "keychain-refresh",
+      provider: "openai-codex",
+    });
+    expect(execSyncMock).toHaveBeenCalledTimes(1);
+  });
+
   it("invalidates cached Codex credentials when auth.json changes within the TTL window", () => {
     const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-codex-cache-"));
     process.env.CODEX_HOME = tempHome;

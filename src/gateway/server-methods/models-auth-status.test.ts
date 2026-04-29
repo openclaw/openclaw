@@ -219,6 +219,7 @@ describe("models.authStatus", () => {
     expect(mocks.ensureAuthProfileStore).toHaveBeenCalledWith(
       "/tmp/agent",
       expect.objectContaining({
+        allowKeychainPrompt: false,
         externalCliProviderIds: expect.arrayContaining(["opencode-go"]),
         externalCliProfileIds: ["opencode-go:default"],
       }),
@@ -232,7 +233,14 @@ describe("models.authStatus", () => {
   it("keeps the auth store overlay unscoped when config has no provider signal", async () => {
     await handler(createOptions());
 
-    expect(mocks.ensureAuthProfileStore).toHaveBeenCalledWith("/tmp/agent");
+    expect(mocks.ensureAuthProfileStore).toHaveBeenCalledWith(
+      "/tmp/agent",
+      expect.objectContaining({
+        allowKeychainPrompt: false,
+        externalCliProviderIds: undefined,
+        externalCliProfileIds: undefined,
+      }),
+    );
   });
 
   it("still returns providers when usage fetch fails", async () => {

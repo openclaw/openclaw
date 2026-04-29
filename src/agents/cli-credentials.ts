@@ -249,9 +249,10 @@ function readCodexKeychainAuthRecord(options?: {
   codexHome?: string;
   platform?: NodeJS.Platform;
   execSync?: ExecSyncFn;
+  allowKeychainPrompt?: boolean;
 }): Record<string, unknown> | null {
   const { platform, execSyncImpl, codexHome } = resolveCodexKeychainParams(options);
-  if (platform !== "darwin") {
+  if (platform !== "darwin" || options?.allowKeychainPrompt === false) {
     return null;
   }
   const account = computeCodexKeychainAccount(codexHome);
@@ -277,6 +278,7 @@ function readCodexKeychainCredentials(options?: {
   codexHome?: string;
   platform?: NodeJS.Platform;
   execSync?: ExecSyncFn;
+  allowKeychainPrompt?: boolean;
 }): CodexCliCredential | null {
   const parsed = readCodexKeychainAuthRecord(options);
   if (!parsed) {
@@ -608,11 +610,13 @@ export function writeClaudeCliCredentials(
 
 export function readCodexCliCredentials(options?: {
   codexHome?: string;
+  allowKeychainPrompt?: boolean;
   platform?: NodeJS.Platform;
   execSync?: ExecSyncFn;
 }): CodexCliCredential | null {
   const keychain = readCodexKeychainCredentials({
     codexHome: options?.codexHome,
+    allowKeychainPrompt: options?.allowKeychainPrompt,
     platform: options?.platform,
     execSync: options?.execSync,
   });
@@ -664,18 +668,35 @@ export function readCodexCliCredentials(options?: {
 
 export function readCodexCliCredentialsCached(options?: {
   codexHome?: string;
+  allowKeychainPrompt?: boolean;
   ttlMs?: number;
   platform?: NodeJS.Platform;
   execSync?: ExecSyncFn;
 }): CodexCliCredential | null {
+  const platform = options?.platform ?? process.platform;
+  const ttlMs = options?.ttlMs ?? 0;
   const authPath = path.join(resolveCodexHomePath(options?.codexHome), CODEX_CLI_AUTH_FILENAME);
+  const keychainCacheKey = `${platform}|${authPath}:keychain`;
+  if (
+    ttlMs > 0 &&
+    platform === "darwin" &&
+    options?.allowKeychainPrompt === false &&
+    codexCliCache?.cacheKey === keychainCacheKey &&
+    codexCliCache.value &&
+    Date.now() - codexCliCache.readAt < ttlMs
+  ) {
+    return codexCliCache.value;
+  }
+  const keychainIntent =
+    platform === "darwin" && options?.allowKeychainPrompt !== false ? "keychain" : "file";
   return readCachedCliCredential({
-    ttlMs: options?.ttlMs ?? 0,
+    ttlMs,
     cache: codexCliCache,
-    cacheKey: `${options?.platform ?? process.platform}|${authPath}`,
+    cacheKey: `${platform}|${authPath}:${keychainIntent}`,
     read: () =>
       readCodexCliCredentials({
         codexHome: options?.codexHome,
+        allowKeychainPrompt: options?.allowKeychainPrompt,
         platform: options?.platform,
         execSync: options?.execSync,
       }),
