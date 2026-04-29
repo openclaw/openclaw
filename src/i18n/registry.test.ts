@@ -82,6 +82,7 @@ describeWhenUiI18nPresent("ui i18n locale registry", () => {
     expect(localeRegistry.resolveNavigatorLocale("ko-KR")).toBe("ko");
     expect(localeRegistry.resolveNavigatorLocale("fr-CA")).toBe("fr");
     expect(localeRegistry.resolveNavigatorLocale("ar-EG")).toBe("ar");
+    expect(localeRegistry.resolveNavigatorLocale("ar-SA")).toBe("ar");
     expect(localeRegistry.resolveNavigatorLocale("it-IT")).toBe("it");
     expect(localeRegistry.resolveNavigatorLocale("tr-TR")).toBe("tr");
     expect(localeRegistry.resolveNavigatorLocale("uk-UA")).toBe("uk");
