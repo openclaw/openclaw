@@ -269,6 +269,7 @@ describe("gateway server agent", () => {
       idempotencyKey: "idem-agent-cli-binding",
     });
     expect(res.ok).toBe(true);
+    await readAgentCommandCall({ runId: "idem-agent-cli-binding" });
 
     const sessionStorePath = testState.sessionStorePath;
     if (!sessionStorePath) {

@@ -252,6 +252,7 @@ describe("gateway server agent", () => {
       idempotencyKey: "idem-agent-subdepth",
     });
     expect(res.ok).toBe(true);
+    await waitForAgentCall("idem-agent-subdepth");
 
     const raw = await fs.readFile(sharedSessionStorePath, "utf-8");
     const persisted = JSON.parse(raw) as Record<
