@@ -20,10 +20,7 @@ import {
   type PrecomputedBundledRuntimeMirrorMetadata,
 } from "./bundled-runtime-mirror.js";
 
-const bundledRuntimeDepsRetainSpecsByInstallRoot = new Map<string, readonly string[]>();
 const BUNDLED_RUNTIME_MIRROR_LOCK_DIR = ".openclaw-runtime-mirror.lock";
-
-type BundledRuntimeDepsRetainSpecsByInstallRoot = Map<string, readonly string[]>;
 
 export type PreparedBundledPluginRuntimeLoadRoot = {
   pluginRoot: string;
@@ -47,10 +44,7 @@ export function prepareBundledPluginRuntimeRoot(params: {
   env?: NodeJS.ProcessEnv;
   logInstalled?: (installedSpecs: readonly string[]) => void;
 }): { pluginRoot: string; modulePath: string } {
-  return prepareBundledPluginRuntimeLoadRoot({
-    ...params,
-    retainSpecsByInstallRoot: bundledRuntimeDepsRetainSpecsByInstallRoot,
-  });
+  return prepareBundledPluginRuntimeLoadRoot(params);
 }
 
 export function prepareBundledPluginRuntimeLoadRoot(params: {
@@ -60,7 +54,6 @@ export function prepareBundledPluginRuntimeLoadRoot(params: {
   setupModulePath?: string;
   env?: NodeJS.ProcessEnv;
   config?: OpenClawConfig;
-  retainSpecsByInstallRoot?: BundledRuntimeDepsRetainSpecsByInstallRoot;
   installDeps?: (params: BundledRuntimeDepsInstallParams) => void;
   registerRuntimeAliasRoot?: (rootDir: string) => void;
   logInstalled?: (installedSpecs: readonly string[]) => void;
@@ -70,24 +63,14 @@ export function prepareBundledPluginRuntimeLoadRoot(params: {
     env,
   });
   const installRoot = installRootPlan.installRoot;
-  const retainSpecsByInstallRoot =
-    params.retainSpecsByInstallRoot ?? bundledRuntimeDepsRetainSpecsByInstallRoot;
-  const retainSpecs = retainSpecsByInstallRoot.get(installRoot) ?? [];
   const depsInstallResult = ensureBundledPluginRuntimeDeps({
     pluginId: params.pluginId,
     pluginRoot: params.pluginRoot,
     env,
     config: params.config,
-    retainSpecs,
     installDeps: params.installDeps,
   });
   if (depsInstallResult.installedSpecs.length > 0) {
-    retainSpecsByInstallRoot.set(
-      installRoot,
-      [...new Set([...retainSpecs, ...depsInstallResult.retainSpecs])].toSorted((left, right) =>
-        left.localeCompare(right),
-      ),
-    );
     params.logInstalled?.(depsInstallResult.installedSpecs);
   }
   if (path.resolve(installRoot) === path.resolve(params.pluginRoot)) {

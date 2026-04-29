@@ -55,25 +55,23 @@ function writeInstalledPackage(rootDir: string, packageName: string, version: st
   );
 }
 
-function writeRuntimeDepsState(
-  rootDir: string,
-  specs: readonly string[],
-  packageManager: "npm" | "pnpm" = "npm",
-): void {
-  const sortedSpecs = [...specs].toSorted((left, right) => left.localeCompare(right));
+function writeGeneratedRuntimeDepsManifest(rootDir: string, specs: readonly string[]): void {
+  const dependencies = Object.fromEntries(
+    [...specs]
+      .toSorted((left, right) => left.localeCompare(right))
+      .map((spec) => {
+        const atIndex = spec.lastIndexOf("@");
+        return [spec.slice(0, atIndex), spec.slice(atIndex + 1)];
+      }),
+  );
   fs.mkdirSync(rootDir, { recursive: true });
   fs.writeFileSync(
-    path.join(rootDir, ".openclaw-runtime-state.json"),
+    path.join(rootDir, "package.json"),
     `${JSON.stringify(
       {
-        version: 1,
-        planHash: createHash("sha256").update(sortedSpecs.join("\0")).digest("hex").slice(0, 32),
-        specs: sortedSpecs,
-        packageManager,
-        node: process.version,
-        platform: process.platform,
-        arch: process.arch,
-        completedAt: "2026-04-29T00:00:00.000Z",
+        name: "openclaw-runtime-deps-install",
+        private: true,
+        dependencies,
       },
       null,
       2,
@@ -155,7 +153,7 @@ describe("resolveBundledRuntimeDepsNpmRunner", () => {
   });
 
   it("uses package-manager-neutral install args with npm config env", () => {
-    expect(createBundledRuntimeDepsInstallArgs(["acpx@0.5.3"])).toEqual([
+    expect(createBundledRuntimeDepsInstallArgs()).toEqual([
       "install",
       "--ignore-scripts",
       "--no-audit",
@@ -341,8 +339,12 @@ describe("installBundledRuntimeDeps", () => {
       "node_modules/npm/bin/npm-cli.js",
     );
     const attackerNpmCliPath = "C:\\repo\\evil\\npm-cli.js";
+    const realExistsSync = fs.existsSync.bind(fs);
     vi.spyOn(fs, "existsSync").mockImplementation(
-      (candidate) => candidate === attackerNpmCliPath || candidate === safeNpmCliPath,
+      (candidate) =>
+        candidate === attackerNpmCliPath ||
+        candidate === safeNpmCliPath ||
+        realExistsSync(candidate),
     );
     spawnSyncMock.mockImplementation((_command, _args, options) => {
       writeInstalledPackage(String(options?.cwd ?? ""), "acpx", "0.5.3");
@@ -628,17 +630,16 @@ describe("installBundledRuntimeDeps", () => {
     expect(spawnMock).toHaveBeenCalledOnce();
   });
 
-  it("can retain already-materialized deps during startup repair", async () => {
+  it("writes the requested package-manager install plan during startup repair", async () => {
     const installRoot = makeTempDir();
     writeInstalledPackage(installRoot, "alpha-runtime", "1.0.0");
-    writeRuntimeDepsState(installRoot, ["alpha-runtime@1.0.0"]);
+    writeGeneratedRuntimeDepsManifest(installRoot, ["alpha-runtime@1.0.0"]);
     spawnMock.mockImplementation((_command, _args, options) => {
       const cwd = String(options?.cwd ?? "");
       expect(JSON.parse(fs.readFileSync(path.join(cwd, "package.json"), "utf8"))).toEqual({
         name: "openclaw-runtime-deps-install",
         private: true,
         dependencies: {
-          "alpha-runtime": "1.0.0",
           "beta-runtime": "2.0.0",
         },
       });
@@ -656,13 +657,16 @@ describe("installBundledRuntimeDeps", () => {
       installRoot,
       missingSpecs: ["beta-runtime@2.0.0"],
       installSpecs: ["beta-runtime@2.0.0"],
-      retainMaterializedSpecs: true,
       env: {},
     });
 
-    expect(
-      JSON.parse(fs.readFileSync(path.join(installRoot, ".openclaw-runtime-state.json"), "utf8")),
-    ).toMatchObject({ specs: ["alpha-runtime@1.0.0", "beta-runtime@2.0.0"] });
+    expect(JSON.parse(fs.readFileSync(path.join(installRoot, "package.json"), "utf8"))).toEqual({
+      name: "openclaw-runtime-deps-install",
+      private: true,
+      dependencies: {
+        "beta-runtime": "2.0.0",
+      },
+    });
   });
 
   it("lets the package manager prune stale deps during package-level repair", async () => {
@@ -698,9 +702,13 @@ describe("installBundledRuntimeDeps", () => {
     expect(
       fs.existsSync(path.join(installRoot, "node_modules", "alpha-runtime", "package.json")),
     ).toBe(false);
-    expect(
-      JSON.parse(fs.readFileSync(path.join(installRoot, ".openclaw-runtime-state.json"), "utf8")),
-    ).toMatchObject({ specs: ["beta-runtime@2.0.0"] });
+    expect(JSON.parse(fs.readFileSync(path.join(installRoot, "package.json"), "utf8"))).toEqual({
+      name: "openclaw-runtime-deps-install",
+      private: true,
+      dependencies: {
+        "beta-runtime": "2.0.0",
+      },
+    });
     expect(fs.existsSync(path.join(installRoot, ".openclaw-runtime-deps.json"))).toBe(false);
   });
 
@@ -830,7 +838,7 @@ describe("installBundledRuntimeDeps", () => {
         pluginRoot,
       }),
     ).toEqual({
-      installedSpecs: ["beta-runtime@2.0.0"],
+      installedSpecs: ["alpha-runtime@1.0.0", "beta-runtime@2.0.0"],
     });
     expect(spawnSyncMock).toHaveBeenCalledOnce();
     expect(
@@ -1030,7 +1038,11 @@ describe("installBundledRuntimeDeps", () => {
 
   it("rejects invalid install specs before spawning npm", () => {
     expect(() =>
-      createBundledRuntimeDepsInstallArgs(["tokenjuice@https://evil.example/t.tgz"]),
+      installBundledRuntimeDeps({
+        installRoot: makeTempDir(),
+        missingSpecs: ["tokenjuice@https://evil.example/t.tgz"],
+        env: {},
+      }),
     ).toThrow("Unsupported bundled runtime dependency spec for tokenjuice");
   });
 
@@ -1542,7 +1554,7 @@ describe("scanBundledPluginRuntimeDeps config policy", () => {
     expect(result.missing.map((dep) => `${dep.name}@${dep.version}`)).toEqual(["tslog@^4.10.2"]);
   });
 
-  it("does not report installed deps missing after a broader late plugin plan", () => {
+  it("reports configured deps for package-manager staging even when present", () => {
     const packageRoot = makeTempDir();
     const stageDir = makeTempDir();
     fs.writeFileSync(
@@ -1564,7 +1576,7 @@ describe("scanBundledPluginRuntimeDeps config policy", () => {
     writeInstalledPackage(installRoot, "@lancedb/lancedb", "0.27.2");
     writeInstalledPackage(installRoot, "openai", "6.34.0");
     writeInstalledPackage(installRoot, "typebox", "1.1.33");
-    writeRuntimeDepsState(installRoot, [
+    writeGeneratedRuntimeDepsManifest(installRoot, [
       "@lancedb/lancedb@^0.27.2",
       "openai@^6.34.0",
       "typebox@1.1.33",
@@ -1582,7 +1594,11 @@ describe("scanBundledPluginRuntimeDeps config policy", () => {
       "openai@^6.34.0",
       "typebox@1.1.33",
     ]);
-    expect(result.missing).toEqual([]);
+    expect(result.missing.map((dep) => `${dep.name}@${dep.version}`)).toEqual([
+      "@lancedb/lancedb@^0.27.2",
+      "openai@^6.34.0",
+      "typebox@1.1.33",
+    ]);
   });
 
   it("plans a complete install for the current external stage dir", () => {
@@ -1933,7 +1949,7 @@ describe("ensureBundledPluginRuntimeDeps", () => {
     ).toBe(true);
   });
 
-  it("retains package-level deps across separate loader passes without broad first installs", () => {
+  it("stages complete package-level deps once across separate loader passes", () => {
     const packageRoot = makeTempDir();
     const stageDir = makeTempDir();
     fs.writeFileSync(
@@ -2000,18 +2016,13 @@ describe("ensureBundledPluginRuntimeDeps", () => {
     expect(calls).toEqual([
       {
         installRoot,
-        missingSpecs: ["alpha-runtime@1.0.0"],
-        installSpecs: ["alpha-runtime@1.0.0"],
-      },
-      {
-        installRoot,
-        missingSpecs: ["beta-runtime@2.0.0"],
+        missingSpecs: ["alpha-runtime@1.0.0", "beta-runtime@2.0.0"],
         installSpecs: ["alpha-runtime@1.0.0", "beta-runtime@2.0.0"],
       },
     ]);
   });
 
-  it("keeps no-config package-level installs scoped to the requested plugin", () => {
+  it("uses the complete package-level plan when no config is provided", () => {
     const packageRoot = makeTempDir();
     const stageDir = makeTempDir();
     fs.writeFileSync(
@@ -2050,8 +2061,8 @@ describe("ensureBundledPluginRuntimeDeps", () => {
     expect(calls).toEqual([
       {
         installRoot,
-        missingSpecs: ["alpha-runtime@1.0.0"],
-        installSpecs: ["alpha-runtime@1.0.0"],
+        missingSpecs: ["alpha-runtime@1.0.0", "beta-runtime@2.0.0"],
+        installSpecs: ["alpha-runtime@1.0.0", "beta-runtime@2.0.0"],
       },
     ]);
   });
@@ -2079,7 +2090,7 @@ describe("ensureBundledPluginRuntimeDeps", () => {
     const installRoot = resolveBundledRuntimeDependencyInstallRoot(browserRoot, { env });
     writeInstalledPackage(installRoot, "browser-runtime", "1.0.0");
     writeInstalledPackage(installRoot, "grammy", "1.37.0");
-    writeRuntimeDepsState(installRoot, ["browser-runtime@1.0.0"]);
+    writeGeneratedRuntimeDepsManifest(installRoot, ["browser-runtime@1.0.0"]);
 
     const result = ensureBundledPluginRuntimeDeps({
       env,
@@ -2154,7 +2165,7 @@ describe("ensureBundledPluginRuntimeDeps", () => {
     ).toBe(false);
   });
 
-  it("uses runtime-deps state for the complete package-level plan", () => {
+  it("uses the generated manifest for the complete package-level fast path", () => {
     const packageRoot = makeTempDir();
     const stageDir = makeTempDir();
     fs.writeFileSync(
@@ -2177,7 +2188,7 @@ describe("ensureBundledPluginRuntimeDeps", () => {
     const installRoot = resolveBundledRuntimeDependencyInstallRoot(alphaRoot, { env });
     writeInstalledPackage(installRoot, "alpha-runtime", "1.0.0");
     writeInstalledPackage(installRoot, "beta-runtime", "2.0.0");
-    writeRuntimeDepsState(installRoot, ["alpha-runtime@1.0.0", "beta-runtime@2.0.0"]);
+    writeGeneratedRuntimeDepsManifest(installRoot, ["alpha-runtime@1.0.0", "beta-runtime@2.0.0"]);
 
     const result = ensureBundledPluginRuntimeDeps({
       env,
@@ -2191,7 +2202,7 @@ describe("ensureBundledPluginRuntimeDeps", () => {
     expect(result).toEqual({ installedSpecs: [] });
   });
 
-  it("drops stale retained package versions when repairing a package-level plan", () => {
+  it("drops stale package versions from the next package-level plan", () => {
     const packageRoot = makeTempDir();
     const stageDir = makeTempDir();
     fs.writeFileSync(
@@ -2208,7 +2219,7 @@ describe("ensureBundledPluginRuntimeDeps", () => {
     const installRoot = resolveBundledRuntimeDependencyInstallRoot(pluginRoot, { env });
     writeInstalledPackage(installRoot, "alpha-runtime", "1.0.0");
     writeInstalledPackage(installRoot, "beta-runtime", "1.0.0");
-    writeRuntimeDepsState(installRoot, ["alpha-runtime@1.0.0", "beta-runtime@1.0.0"]);
+    writeGeneratedRuntimeDepsManifest(installRoot, ["alpha-runtime@1.0.0", "beta-runtime@1.0.0"]);
     const calls: BundledRuntimeDepsInstallParams[] = [];
 
     const result = ensureBundledPluginRuntimeDeps({
@@ -2226,17 +2237,12 @@ describe("ensureBundledPluginRuntimeDeps", () => {
       {
         installRoot,
         missingSpecs: ["alpha-runtime@2.0.0"],
-        installSpecs: ["alpha-runtime@2.0.0", "beta-runtime@1.0.0"],
+        installSpecs: ["alpha-runtime@2.0.0"],
       },
     ]);
-    expect(
-      JSON.parse(fs.readFileSync(path.join(installRoot, ".openclaw-runtime-state.json"), "utf8")),
-    ).toMatchObject({
-      specs: ["alpha-runtime@2.0.0", "beta-runtime@1.0.0"],
-    });
   });
 
-  it("refreshes stale runtime-deps state without reinstalling when all deps are present", () => {
+  it("reinstalls when the generated runtime-deps manifest is stale", () => {
     const packageRoot = makeTempDir();
     const stageDir = makeTempDir();
     fs.writeFileSync(
@@ -2258,23 +2264,24 @@ describe("ensureBundledPluginRuntimeDeps", () => {
     writeInstalledPackage(installRoot, "@lancedb/lancedb", "0.27.2");
     writeInstalledPackage(installRoot, "openai", "6.34.0");
     writeInstalledPackage(installRoot, "typebox", "1.1.33");
-    writeRuntimeDepsState(installRoot, ["@mariozechner/pi-ai@0.70.5"]);
+    writeGeneratedRuntimeDepsManifest(installRoot, ["@mariozechner/pi-ai@0.70.5"]);
 
+    const calls: BundledRuntimeDepsInstallParams[] = [];
     const result = ensureBundledPluginRuntimeDeps({
       env,
       pluginId: "memory-lancedb",
       pluginRoot,
-      installDeps: () => {
-        throw new Error("present deps with stale state should not reinstall");
+      installDeps: (params) => {
+        calls.push(params);
       },
     });
 
-    expect(result).toEqual({ installedSpecs: [] });
-    expect(
-      JSON.parse(fs.readFileSync(path.join(installRoot, ".openclaw-runtime-state.json"), "utf8")),
-    ).toMatchObject({
-      specs: ["@lancedb/lancedb@^0.27.2", "openai@^6.34.0", "typebox@1.1.33"],
-    });
+    expect(result.installedSpecs).toEqual([
+      "@lancedb/lancedb@^0.27.2",
+      "openai@^6.34.0",
+      "typebox@1.1.33",
+    ]);
+    expect(calls).toHaveLength(1);
   });
 
   it("does not derive a second-generation stage root from external runtime mirrors", () => {
@@ -2303,7 +2310,7 @@ describe("ensureBundledPluginRuntimeDeps", () => {
       path.join(installRoot, "node_modules", "grammy", "package.json"),
       JSON.stringify({ name: "grammy", version: "1.42.0" }),
     );
-    writeRuntimeDepsState(installRoot, ["grammy@^1.42.0"]);
+    writeGeneratedRuntimeDepsManifest(installRoot, ["grammy@^1.42.0"]);
 
     const nestedUnknownRoot = path.join(
       stageDir,
@@ -2453,7 +2460,7 @@ describe("ensureBundledPluginRuntimeDeps", () => {
     expect(fs.lstatSync(path.join(pluginRoot, "node_modules")).isSymbolicLink()).toBe(false);
   });
 
-  it("keeps the package-level install plan while installing only missing deps", () => {
+  it("keeps the complete package-level install plan for configured plugins", () => {
     const packageRoot = makeTempDir();
     const stageDir = makeTempDir();
     fs.writeFileSync(
@@ -2480,7 +2487,7 @@ describe("ensureBundledPluginRuntimeDeps", () => {
       path.join(installRoot, "node_modules", "alpha-runtime", "package.json"),
       JSON.stringify({ name: "alpha-runtime", version: "1.0.0" }),
     );
-    writeRuntimeDepsState(installRoot, ["alpha-runtime@1.0.0"]);
+    writeGeneratedRuntimeDepsManifest(installRoot, ["alpha-runtime@1.0.0"]);
     expect(fs.existsSync(path.join(installRoot, ".openclaw-runtime-deps.json"))).toBe(false);
 
     const calls: BundledRuntimeDepsInstallParams[] = [];
@@ -2502,12 +2509,12 @@ describe("ensureBundledPluginRuntimeDeps", () => {
     });
 
     expect(result).toEqual({
-      installedSpecs: ["beta-runtime@2.0.0"],
+      installedSpecs: ["alpha-runtime@1.0.0", "beta-runtime@2.0.0"],
     });
     expect(calls).toEqual([
       {
         installRoot,
-        missingSpecs: ["beta-runtime@2.0.0"],
+        missingSpecs: ["alpha-runtime@1.0.0", "beta-runtime@2.0.0"],
         installSpecs: ["alpha-runtime@1.0.0", "beta-runtime@2.0.0"],
       },
     ]);
@@ -2919,8 +2926,8 @@ describe("ensureBundledPluginRuntimeDeps", () => {
     expect(installRoot).toContain(stageDir);
     expect(installRoot).not.toBe(pluginRoot);
     expect(
-      JSON.parse(fs.readFileSync(path.join(installRoot, ".openclaw-runtime-state.json"), "utf8")),
-    ).toMatchObject({ specs: ["tokenjuice@0.6.1"] });
+      fs.existsSync(path.join(installRoot, "node_modules", "tokenjuice", "package.json")),
+    ).toBe(true);
   });
 
   it("keeps source-checkout bundled runtime deps in the plugin root without manifest churn", () => {
@@ -2933,7 +2940,7 @@ describe("ensureBundledPluginRuntimeDeps", () => {
       path.join(pluginRoot, ".openclaw-runtime-deps.json"),
       JSON.stringify({ specs: ["stale@9.9.9"] }),
     );
-    writeRuntimeDepsState(pluginRoot, ["tokenjuice@0.6.1"]);
+    writeGeneratedRuntimeDepsManifest(pluginRoot, ["tokenjuice@0.6.1"]);
     fs.writeFileSync(
       path.join(pluginRoot, "package.json"),
       JSON.stringify({
@@ -2990,7 +2997,7 @@ describe("ensureBundledPluginRuntimeDeps", () => {
       path.join(pluginRoot, ".openclaw-runtime-deps.json"),
       JSON.stringify({ specs: ["stale@9.9.9"] }),
     );
-    writeRuntimeDepsState(pluginRoot, ["tokenjuice@0.6.1"]);
+    writeGeneratedRuntimeDepsManifest(pluginRoot, ["tokenjuice@0.6.1"]);
 
     const result = ensureBundledPluginRuntimeDeps({
       env: {},

@@ -2146,7 +2146,6 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     });
 
     const seenIds = new Map<string, PluginRecord["origin"]>();
-    const bundledRuntimeDepsRetainSpecsByInstallRoot = new Map<string, readonly string[]>();
     const memorySlot = normalized.slots.memory;
     let selectedMemoryPluginId: string | null = null;
     let memorySlotMatched = false;
@@ -2312,15 +2311,14 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
             ...(runtimeSetupSource ? { setupModulePath: runtimeSetupSource } : {}),
             env,
             config: cfg,
-            retainSpecsByInstallRoot: bundledRuntimeDepsRetainSpecsByInstallRoot,
             registerRuntimeAliasRoot: registerBundledRuntimeDependencyJitiAliases,
             installDeps: (installParams) => {
               const installSpecs = installParams.installSpecs ?? installParams.missingSpecs;
               runtimeDepsInstallStartedAt = Date.now();
-              runtimeDepsInstallSpecs = installParams.missingSpecs;
+              runtimeDepsInstallSpecs = installSpecs;
               if (shouldActivate) {
                 logger.info(
-                  `[plugins] ${record.id} staging bundled runtime deps (${installParams.missingSpecs.length} missing, ${installSpecs.length} install specs): ${installParams.missingSpecs.join(", ")}`,
+                  `[plugins] ${record.id} staging bundled runtime deps (${installSpecs.length} specs): ${installSpecs.join(", ")}`,
                 );
               }
               const installer =
@@ -2330,6 +2328,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
                     installRoot: params.installRoot,
                     installExecutionRoot: params.installExecutionRoot,
                     missingSpecs: params.installSpecs ?? params.missingSpecs,
+                    installSpecs: params.installSpecs,
                     env,
                     warn: (message) => logger.warn(`[plugins] ${record.id}: ${message}`),
                   }));

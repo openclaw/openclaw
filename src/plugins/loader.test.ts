@@ -22,7 +22,10 @@ import {
   type DetachedTaskLifecycleRuntime,
 } from "../tasks/detached-task-runtime-state.js";
 import { withEnv } from "../test-utils/env.js";
-import { resolveBundledRuntimeDependencyInstallRootPlan } from "./bundled-runtime-deps.js";
+import {
+  resolveBundledRuntimeDependencyInstallRootPlan,
+  type BundledRuntimeDepsInstallParams,
+} from "./bundled-runtime-deps.js";
 import { ensureOpenClawPluginSdkAlias } from "./bundled-runtime-root.js";
 import { clearPluginCommands } from "./command-registry-state.js";
 import { getPluginCommandSpecs } from "./command-specs.js";
@@ -1048,7 +1051,7 @@ module.exports = {
       },
       bundledRuntimeDepsInstaller: ({ installRoot, missingSpecs }) => {
         expect(logger.info).toHaveBeenCalledWith(
-          "[plugins] discord staging bundled runtime deps (1 missing, 1 install specs): discord-runtime@1.0.0",
+          "[plugins] discord staging bundled runtime deps (1 specs): discord-runtime@1.0.0",
         );
         installedSpecs.push(...missingSpecs);
         expect(fs.realpathSync(installRoot)).toBe(fs.realpathSync(plugin.dir));
@@ -1143,7 +1146,7 @@ module.exports = {
       "[plugins] discord installed bundled runtime deps: discord-runtime@1.0.0",
     );
     expect(logger.info).not.toHaveBeenCalledWith(
-      "[plugins] discord staging bundled runtime deps (1 missing, 1 install specs): discord-runtime@1.0.0",
+      "[plugins] discord staging bundled runtime deps (1 specs): discord-runtime@1.0.0",
     );
   });
 
@@ -2225,6 +2228,26 @@ module.exports = {
 
     try {
       let actualInstallRoot = "";
+      const installExternalRuntime = ({ installRoot }: BundledRuntimeDepsInstallParams) => {
+        actualInstallRoot = installRoot;
+        const depRoot = path.join(installRoot, "node_modules", "external-runtime");
+        fs.mkdirSync(depRoot, { recursive: true });
+        fs.writeFileSync(
+          path.join(depRoot, "package.json"),
+          JSON.stringify({
+            name: "external-runtime",
+            version: "1.0.0",
+            type: "module",
+            exports: "./index.js",
+          }),
+          "utf-8",
+        );
+        fs.writeFileSync(
+          path.join(depRoot, "index.js"),
+          "export default { marker: 'dist-runtime-ok' };\n",
+          "utf-8",
+        );
+      };
       const registry = loadOpenClawPlugins({
         cache: false,
         config: {
@@ -2232,26 +2255,7 @@ module.exports = {
             enabled: true,
           },
         },
-        bundledRuntimeDepsInstaller: ({ installRoot }) => {
-          actualInstallRoot = installRoot;
-          const depRoot = path.join(installRoot, "node_modules", "external-runtime");
-          fs.mkdirSync(depRoot, { recursive: true });
-          fs.writeFileSync(
-            path.join(depRoot, "package.json"),
-            JSON.stringify({
-              name: "external-runtime",
-              version: "1.0.0",
-              type: "module",
-              exports: "./index.js",
-            }),
-            "utf-8",
-          );
-          fs.writeFileSync(
-            path.join(depRoot, "index.js"),
-            "export default { marker: 'dist-runtime-ok' };\n",
-            "utf-8",
-          );
-        },
+        bundledRuntimeDepsInstaller: installExternalRuntime,
       });
 
       const record = registry.plugins.find((entry) => entry.id === "acpx");
@@ -2278,6 +2282,7 @@ module.exports = {
             enabled: true,
           },
         },
+        bundledRuntimeDepsInstaller: installExternalRuntime,
       });
 
       const reloadedRecord = reloadedRegistry.plugins.find((entry) => entry.id === "acpx");

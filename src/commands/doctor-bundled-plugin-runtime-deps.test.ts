@@ -77,12 +77,29 @@ function materializeRuntimeDeps(params: BundledRuntimeDepsInstallParams): void {
   }
 }
 
-function readRuntimeDepsInstallStateSpecs(installRoot: string): string[] {
-  const statePath = path.join(installRoot, ".openclaw-runtime-state.json");
-  const parsed = JSON.parse(fs.readFileSync(statePath, "utf8")) as { specs?: unknown };
-  return Array.isArray(parsed.specs)
-    ? parsed.specs.filter((entry): entry is string => typeof entry === "string")
-    : [];
+function readMaterializedRuntimeDepSpecs(
+  installRoot: string,
+  expectedSpecs: readonly string[],
+): string[] {
+  return expectedSpecs.flatMap((spec) => {
+    const { name } = parseInstallSpec(spec);
+    const packageJsonPath = path.join(
+      installRoot,
+      "node_modules",
+      ...name.split("/"),
+      "package.json",
+    );
+    if (!fs.existsSync(packageJsonPath)) {
+      return [];
+    }
+    const parsed = JSON.parse(fs.readFileSync(packageJsonPath, "utf8")) as {
+      name?: unknown;
+      version?: unknown;
+    };
+    return typeof parsed.name === "string" && typeof parsed.version === "string"
+      ? [`${parsed.name}@${parsed.version}`]
+      : [];
+  });
 }
 
 function expectNoLegacyRuntimeDepsManifest(installRoot: string): void {
@@ -540,7 +557,9 @@ describe("doctor bundled plugin runtime deps", () => {
       },
     ]);
     expect(installRoot).not.toBe(root);
-    expect(readRuntimeDepsInstallStateSpecs(installRoot)).toEqual(["grammy@1.37.0"]);
+    expect(readMaterializedRuntimeDepSpecs(installRoot, ["grammy@1.37.0"])).toEqual([
+      "grammy@1.37.0",
+    ]);
     expectNoLegacyRuntimeDepsManifest(installRoot);
   });
 
@@ -563,9 +582,7 @@ describe("doctor bundled plugin runtime deps", () => {
 
     expect(logs).toEqual(
       expect.arrayContaining([
-        expect.stringContaining(
-          "Installing bundled plugin runtime deps (1 missing, 1 install specs): grammy@1.37.0",
-        ),
+        expect.stringContaining("Installing bundled plugin runtime deps (1 specs): grammy@1.37.0"),
         expect.stringContaining("Installed bundled plugin runtime deps in"),
       ]),
     );
@@ -784,7 +801,9 @@ describe("doctor bundled plugin runtime deps", () => {
       },
     ]);
     expect(installRoot).toContain(stageDir);
-    expect(readRuntimeDepsInstallStateSpecs(installRoot)).toEqual(["@slack/web-api@7.15.1"]);
+    expect(readMaterializedRuntimeDepSpecs(installRoot, ["@slack/web-api@7.15.1"])).toEqual([
+      "@slack/web-api@7.15.1",
+    ]);
     expectNoLegacyRuntimeDepsManifest(installRoot);
   });
 
@@ -874,7 +893,9 @@ describe("doctor bundled plugin runtime deps", () => {
       },
     ]);
     expect(installRoot).not.toBe(root);
-    expect(readRuntimeDepsInstallStateSpecs(installRoot)).toEqual(["grammy@1.37.0"]);
+    expect(readMaterializedRuntimeDepSpecs(installRoot, ["grammy@1.37.0"])).toEqual([
+      "grammy@1.37.0",
+    ]);
     expectNoLegacyRuntimeDepsManifest(installRoot);
   });
 });
