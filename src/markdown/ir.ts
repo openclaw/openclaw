@@ -23,6 +23,7 @@ type MarkdownToken = {
   attrs?: [string, string][];
   attrGet?: (name: string) => string | null;
   hidden?: boolean;
+  level?: number;
 };
 
 export type MarkdownStyle =
@@ -268,7 +269,12 @@ function appendParagraphSeparator(state: RenderState, token?: MarkdownToken) {
     return;
   } // Don't add paragraph separators inside tables
   if (state.env.listStack.length > 0) {
-    if (token?.type !== "paragraph_close" || token.hidden) {
+    const directListParagraphLevel = state.env.listStack.length * 2;
+    if (
+      token?.type !== "paragraph_close" ||
+      token.hidden ||
+      token.level !== directListParagraphLevel
+    ) {
       return;
     }
   }

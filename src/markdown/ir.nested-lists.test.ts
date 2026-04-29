@@ -373,6 +373,16 @@ second paragraph
 • B`);
   });
 
+  it("keeps tight blockquote list items single-spaced", () => {
+    const input = `- > quote
+- next`;
+
+    const result = markdownToIR(input);
+
+    expect(result.text).toBe(`• quote
+• next`);
+  });
+
   it("adds blank line between bullet list and following paragraph", () => {
     const input = `- item 1
 - item 2
