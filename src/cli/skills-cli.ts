@@ -34,6 +34,15 @@ type ResolveSkillsWorkspaceOptions = {
   cwd?: string;
 };
 
+function safeProcessCwd(): string | undefined {
+  try {
+    return process.cwd();
+  } catch {
+    // If cwd is deleted, uv_cwd throws. Return undefined to use default agent.
+    return undefined;
+  }
+}
+
 function resolveSkillsWorkspace(options?: ResolveSkillsWorkspaceOptions): {
   config: ReturnType<typeof getRuntimeConfig>;
   workspaceDir: string;
@@ -42,7 +51,7 @@ function resolveSkillsWorkspace(options?: ResolveSkillsWorkspaceOptions): {
   const explicitAgentId = normalizeOptionalString(options?.agentId);
   const inferredAgentId = explicitAgentId
     ? undefined
-    : resolveAgentIdByWorkspacePath(config, options?.cwd ?? process.cwd());
+    : resolveAgentIdByWorkspacePath(config, options?.cwd ?? safeProcessCwd());
   const agentId = explicitAgentId ?? inferredAgentId ?? resolveDefaultAgentId(config);
   return {
     config,
