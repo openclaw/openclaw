@@ -1412,6 +1412,14 @@ describe("classifyProviderRuntimeFailureKind", () => {
     ).toBe("auth_html_403");
   });
 
+  it("classifies embedded HTML 403 auth failures", () => {
+    expect(
+      classifyProviderRuntimeFailureKind(
+        "Error: fetch failed: 403 <!DOCTYPE html><html><body>Access denied</body></html>",
+      ),
+    ).toBe("auth_html_403");
+  });
+
   it("classifies proxy, dns, timeout, schema, sandbox, and replay failures", () => {
     expect(classifyProviderRuntimeFailureKind("407 Proxy Authentication Required")).toBe("proxy");
     expect(

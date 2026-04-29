@@ -208,6 +208,18 @@ describe("formatAssistantErrorText", () => {
     );
   });
 
+  it("does not misclassify embedded 403 HTML pages as rate limits or transport failures", () => {
+    const msg = makeAssistantError(
+      'Error: fetch failed: 403 <html><head><title>Forbidden</title></head><body>Try again in 30 seconds after login.</body></html>',
+    );
+    const result = formatAssistantErrorText(msg);
+    expect(result).toBe(
+      "Authentication failed with an HTML 403 response from the provider. Re-authenticate and verify your provider account access.",
+    );
+    expect(result).not.toContain("rate limit");
+    expect(result).not.toContain("DNS lookup");
+  });
+
   it("returns a friendly message for empty stream chunk errors", () => {
     const msg = makeAssistantError("request ended without sending any chunks");
     expect(formatAssistantErrorText(msg)).toBe("LLM request timed out.");
@@ -392,6 +404,21 @@ describe("formatRawAssistantErrorForUi", () => {
     expect(formatRawAssistantErrorForUi(htmlError)).toBe(
       "The provider returned an HTML error page instead of an API response. This usually means a CDN or gateway (e.g. Cloudflare) blocked the request. Retry in a moment or check provider status.",
     );
+  });
+
+  it("sanitizes 403 HTML auth pages into a clean re-auth message", () => {
+    const htmlError =
+      '403 <html><head><title>Forbidden</title></head><body>challenge</body></html>';
+
+    expect(formatRawAssistantErrorForUi(htmlError)).toBe(
+      "Authentication failed with an HTML 403 response from the provider. Re-authenticate and verify your provider account access.",
+    );
+  });
+
+  it("preserves a clean ellipsis when truncating fallback error text", () => {
+    const raw = "x".repeat(601);
+
+    expect(formatRawAssistantErrorForUi(raw)).toBe(`${"x".repeat(600)}\u2026`);
   });
 });
 

@@ -2,9 +2,9 @@ import type { AssistantMessage } from "@mariozechner/pi-ai";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
+  extractHtmlHttpError,
   extractLeadingHttpStatus,
   formatRawAssistantErrorForUi,
-  isCloudflareOrHtmlErrorPage,
   parseApiErrorInfo,
 } from "../../shared/assistant-error-format.js";
 import {
@@ -37,16 +37,13 @@ import {
   matchesProviderContextOverflow,
 } from "./provider-error-patterns.js";
 import {
-  BILLING_ERROR_USER_MESSAGE,
   formatBillingErrorMessage,
   formatDiskSpaceErrorCopy,
   formatRateLimitOrOverloadedErrorCopy,
   formatTransportErrorCopy,
-  getApiErrorPayloadFingerprint,
   isInvalidStreamingEventOrderError,
   isLikelyHttpErrorText,
   isRawApiErrorPayload,
-  sanitizeUserFacingText,
 } from "./sanitize-user-facing-text.js";
 import type { FailoverReason } from "./types.js";
 
@@ -377,6 +374,13 @@ function isHtmlErrorResponse(raw: string, status?: number): boolean {
   if (!trimmed) {
     return false;
   }
+  const htmlError = extractHtmlHttpError(trimmed);
+  if (htmlError) {
+    if (typeof status === "number" && Number.isFinite(status) && htmlError.code !== status) {
+      return false;
+    }
+    return true;
+  }
   const candidate = extractLeadingHttpStatus(trimmed) ? trimmed : stripErrorPrefix(trimmed);
   const inferred =
     typeof status === "number" && Number.isFinite(status)
@@ -395,6 +399,14 @@ function isTransportHtmlErrorStatus(status: number | undefined): boolean {
     status === 499 ||
     (typeof status === "number" && status >= 500 && status < 600)
   );
+}
+
+function shouldPreferHtmlHttpErrorCopy(raw: string): boolean {
+  const htmlError = extractHtmlHttpError(raw);
+  if (!htmlError) {
+    return false;
+  }
+  return htmlError.code === 401 || htmlError.code === 403;
 }
 
 function isOpenAICodexScopeContext(raw: string, provider?: string): boolean {
@@ -901,6 +913,7 @@ export function classifyProviderRuntimeFailureKind(
   const normalizedSignal = typeof signal === "string" ? { message: signal } : signal;
   const message = normalizedSignal.message?.trim() ?? "";
   const status = inferSignalStatus(normalizedSignal);
+  const htmlError = message ? extractHtmlHttpError(message) : null;
 
   if (!message && typeof status !== "number") {
     return "empty_response";
@@ -930,7 +943,8 @@ export function classifyProviderRuntimeFailureKind(
     return "proxy";
   }
   if (message && isHtmlErrorResponse(message, status)) {
-    return status === 403 ? "auth_html_403" : "upstream_html";
+    const htmlStatus = htmlError?.code ?? status;
+    return htmlStatus === 403 ? "auth_html_403" : "upstream_html";
   }
   const failoverClassification = classifyFailoverSignal({
     ...normalizedSignal,
@@ -1104,6 +1118,10 @@ export function formatAssistantErrorText(
   const invalidRequest = raw.match(/"type":"invalid_request_error".*?"message":"([^"]+)"/);
   if (invalidRequest?.[1]) {
     return `LLM request rejected: ${invalidRequest[1]}`;
+  }
+
+  if (shouldPreferHtmlHttpErrorCopy(raw)) {
+    return formatRawAssistantErrorForUi(raw);
   }
 
   const transientCopy = formatRateLimitOrOverloadedErrorCopy(raw);

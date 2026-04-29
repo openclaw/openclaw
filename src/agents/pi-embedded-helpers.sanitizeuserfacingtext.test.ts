@@ -160,6 +160,17 @@ describe("sanitizeUserFacingText", () => {
     ).toBe("LLM request failed: connection refused by the provider endpoint.");
   });
 
+  it("prefers HTML 403 auth copy over transport or rate-limit hints", () => {
+    const text =
+      'Error: fetch failed: 403 <html><head><title>Forbidden</title></head><body>Try again in 30 seconds after login.</body></html>';
+    const result = sanitizeUserFacingText(text, { errorContext: true });
+    expect(result).toBe(
+      "Authentication failed with an HTML 403 response from the provider. Re-authenticate and verify your provider account access.",
+    );
+    expect(result).not.toContain("rate limit");
+    expect(result).not.toContain("DNS lookup");
+  });
+
   it.each(["disk full", "ENOSPC: no space left on device"])(
     "rewrites disk-space failures with errorContext: %s",
     (input) => {

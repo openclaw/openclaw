@@ -11,6 +11,8 @@ const HTTP_STATUS_CODE_PREFIX_RE = new RegExp(
 );
 const HTML_ERROR_PREFIX_RE = /^\s*(?:<!doctype\s+html\b|<html\b)/i;
 const HTML_CLOSE_RE = /<\/html>/i;
+const EMBEDDED_HTML_HTTP_ERROR_RE =
+  /\b(?:http\s*)?([45]\d{2})\s+((?:<!doctype\s+html\b|<html\b)[\s\S]*)/i;
 const CLOUDFLARE_HTML_ERROR_CODES = new Set([521, 522, 523, 524, 525, 526, 530]);
 const STANDALONE_HTML_ERROR_HINT_RE =
   /\bcloudflare\b|cdn-cgi\/challenge-platform|challenge-error-text|enable javascript and cookies to continue|access denied|forbidden|service unavailable|bad gateway|web server is down|captcha|attention required/i;
@@ -91,12 +93,48 @@ export function extractLeadingHttpStatus(raw: string): { code: number; rest: str
   return { code, rest: (match[2] ?? "").trim() };
 }
 
+function isHtmlErrorDocument(raw: string): boolean {
+  const trimmed = raw.trim();
+  if (!trimmed || !HTML_ERROR_PREFIX_RE.test(trimmed)) {
+    return false;
+  }
+  return HTML_CLOSE_RE.test(trimmed) || /<(?:head|body)\b/i.test(trimmed);
+}
+
+export function extractHtmlHttpError(raw?: string): { code: number; rest: string } | null {
+  const trimmed = raw?.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  const leadingStatus = extractLeadingHttpStatus(trimmed);
+  if (
+    leadingStatus &&
+    leadingStatus.code >= 400 &&
+    Number.isFinite(leadingStatus.code) &&
+    isHtmlErrorDocument(leadingStatus.rest)
+  ) {
+    return leadingStatus;
+  }
+
+  const embeddedMatch = trimmed.match(EMBEDDED_HTML_HTTP_ERROR_RE);
+  if (!embeddedMatch) {
+    return null;
+  }
+
+  const code = Number(embeddedMatch[1]);
+  const rest = embeddedMatch[2]?.trim() ?? "";
+  if (!Number.isFinite(code) || code < 400 || !isHtmlErrorDocument(rest)) {
+    return null;
+  }
+  return { code, rest };
+}
+
 export function isCloudflareOrHtmlErrorPage(raw: string): boolean {
   const trimmed = raw.trim();
   if (!trimmed) {
     return false;
   }
-
   if (
     HTML_ERROR_PREFIX_RE.test(trimmed) &&
     HTML_CLOSE_RE.test(trimmed) &&
@@ -105,7 +143,7 @@ export function isCloudflareOrHtmlErrorPage(raw: string): boolean {
     return true;
   }
 
-  const status = extractLeadingHttpStatus(trimmed);
+  const status = extractHtmlHttpError(trimmed);
   if (!status || status.code < 500) {
     return false;
   }
@@ -181,13 +219,22 @@ export function formatRawAssistantErrorForUi(raw?: string): string {
     return "LLM request failed with an unknown error.";
   }
 
-  const leadingStatus = extractLeadingHttpStatus(trimmed);
-  const isHtmlChallenge = isCloudflareOrHtmlErrorPage(trimmed);
-  if (leadingStatus && isHtmlChallenge) {
-    return `The AI service is temporarily unavailable (HTTP ${leadingStatus.code}). Please try again in a moment.`;
+  const htmlError = extractHtmlHttpError(trimmed);
+  if (htmlError) {
+    if (htmlError.code === 401 || htmlError.code === 403) {
+      return `Authentication failed with an HTML ${htmlError.code} response from the provider. Re-authenticate and verify your provider account access.`;
+    }
+    if (htmlError.code >= 500 || CLOUDFLARE_HTML_ERROR_CODES.has(htmlError.code)) {
+      return `The AI service is temporarily unavailable (HTTP ${htmlError.code}). Please try again in a moment.`;
+    }
+    return (
+      "The provider returned an HTML error page instead of an API response. " +
+      "This usually means a CDN or gateway (e.g. Cloudflare) blocked the request. " +
+      "Retry in a moment or check provider status."
+    );
   }
 
-  if (isHtmlChallenge) {
+  if (isCloudflareOrHtmlErrorPage(trimmed)) {
     return (
       "The provider returned an HTML error page instead of an API response. " +
       "This usually means a CDN or gateway (e.g. Cloudflare) blocked the request. " +
@@ -210,5 +257,5 @@ export function formatRawAssistantErrorForUi(raw?: string): string {
     return `${prefix}${type}: ${info.message}`;
   }
 
-  return trimmed.length > 600 ? `${trimmed.slice(0, 600)}…` : trimmed;
+  return trimmed.length > 600 ? `${trimmed.slice(0, 600)}\u2026` : trimmed;
 }

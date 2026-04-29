@@ -1,5 +1,6 @@
 import { stripInboundMetadata } from "../../auto-reply/reply/strip-inbound-meta.js";
 import {
+  extractHtmlHttpError,
   extractLeadingHttpStatus,
   formatRawAssistantErrorForUi,
   isCloudflareOrHtmlErrorPage,
@@ -364,6 +365,14 @@ export function isLikelyHttpErrorText(raw: string): boolean {
   return HTTP_ERROR_HINTS.some((hint) => message.includes(hint));
 }
 
+function shouldPreferHtmlHttpErrorCopy(raw: string): boolean {
+  const htmlError = extractHtmlHttpError(raw);
+  if (!htmlError) {
+    return false;
+  }
+  return htmlError.code === 401 || htmlError.code === 403;
+}
+
 export function sanitizeUserFacingText(text: unknown, opts?: { errorContext?: boolean }): string {
   const raw = coerceChatContentText(text);
   if (!raw) {
@@ -413,6 +422,10 @@ export function sanitizeUserFacingText(text: unknown, opts?: { errorContext?: bo
 
     if (isInvalidStreamingEventOrderError(trimmed)) {
       return "LLM request failed: provider returned an invalid streaming response. Please try again.";
+    }
+
+    if (shouldPreferHtmlHttpErrorCopy(trimmed)) {
+      return formatRawAssistantErrorForUi(trimmed);
     }
 
     if (isRawApiErrorPayload(trimmed) || isLikelyHttpErrorText(trimmed)) {
