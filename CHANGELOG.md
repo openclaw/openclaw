@@ -92,6 +92,7 @@ Docs: https://docs.openclaw.ai
 - Configure/Ollama: show the configured Ollama model allowlist after Cloud only or Cloud + Local setup and skip slow per-model cloud metadata fetches. (#73995) Thanks @obviyus.
 - Channels/WhatsApp: detect explicit group `@mentions` again when the bot's own E.164 is in `allowFrom`, so shared-number setups no longer skip group pings that directly mention the bot. Fixes #49317. (#73453) Thanks @juan-flores077.
 - WhatsApp/reliability: publish real transport-liveness into WhatsApp channel status and force earlier reconnects on silent transport stalls, so quiet healthy sessions stay connected while wedged sockets recover before the later remote 408 path. (#72656) Thanks @Sathvik-1007.
+- Telegram/Agents: suppress failed mutating-tool warning payloads when an assistant error or explicit failed-action reply is already user-facing, while keeping warnings for successful or ambiguous replies. Fixes #39631 and #51065; supersedes #39636 and #39717. Thanks @Bartok9 and @Bortlesboat.
 
 ## 2026.4.27
 

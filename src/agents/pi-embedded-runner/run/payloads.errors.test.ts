@@ -80,6 +80,23 @@ describe("buildEmbeddedRunPayloads", () => {
     expect(payloads.some((payload) => payload.text === errorJson)).toBe(false);
   });
 
+  it("suppresses mutating tool warnings when an assistant error is already user-facing", () => {
+    const payloads = buildPayloads({
+      assistantTexts: [errorJson],
+      lastAssistant: makeAssistant({}),
+      lastToolError: {
+        toolName: "edit",
+        meta: "/tmp/out.md",
+        error: "permission denied: /tmp/out.md",
+      },
+      verboseLevel: "on",
+    });
+
+    expectOverloadedFallback(payloads);
+    expect(payloads[0]?.isError).toBe(true);
+    expect(payloads.some((payload) => payload.text?.includes("/tmp/out.md"))).toBe(false);
+  });
+
   it("suppresses pretty-printed error JSON that differs from the errorMessage", () => {
     const payloads = buildPayloads({
       assistantTexts: [errorJsonPretty],

@@ -127,6 +127,7 @@ function shouldIncludeToolErrorDetails(params: {
 function resolveToolErrorWarningPolicy(params: {
   lastToolError: ToolErrorSummary;
   hasUserFacingReply: boolean;
+  hasUserFacingErrorReply: boolean;
   hasUserFacingFailureAcknowledgement: boolean;
   suppressToolErrors: boolean;
   suppressToolErrorWarnings?: boolean;
@@ -152,7 +153,7 @@ function resolveToolErrorWarningPolicy(params: {
     params.lastToolError.mutatingAction ?? isLikelyMutatingToolName(params.lastToolError.toolName);
   if (isMutatingToolError) {
     return {
-      showWarning: !params.hasUserFacingFailureAcknowledgement,
+      showWarning: !params.hasUserFacingErrorReply && !params.hasUserFacingFailureAcknowledgement,
       includeDetails,
     };
   }
@@ -237,6 +238,7 @@ export function buildEmbeddedRunPayloads(params: {
   const normalizedErrorText = errorText ? normalizeTextForComparison(errorText) : null;
   const normalizedGenericBillingErrorText = normalizeTextForComparison(BILLING_ERROR_USER_MESSAGE);
   const genericErrorText = "The AI service returned an error. Please try again.";
+  const hasUserFacingErrorReply = Boolean(errorText);
   if (errorText) {
     replyItems.push({ text: errorText, isError: true });
   }
@@ -394,6 +396,7 @@ export function buildEmbeddedRunPayloads(params: {
     const warningPolicy = resolveToolErrorWarningPolicy({
       lastToolError: params.lastToolError,
       hasUserFacingReply: hasUserFacingAssistantReply,
+      hasUserFacingErrorReply,
       hasUserFacingFailureAcknowledgement,
       suppressToolErrors: Boolean(params.config?.messages?.suppressToolErrors),
       suppressToolErrorWarnings: params.suppressToolErrorWarnings,
@@ -402,7 +405,7 @@ export function buildEmbeddedRunPayloads(params: {
       verboseLevel: params.verboseLevel,
     });
 
-    // Surface mutating failures unless the assistant explicitly acknowledged the failed action.
+    // Surface mutating failures unless the user already saw an error or failed-action acknowledgement.
     // Otherwise, keep the previous behavior and only surface non-recoverable failures when no reply exists.
     if (warningPolicy.showWarning) {
       const toolSummary = formatToolAggregate(
