@@ -16,6 +16,7 @@ describe("memory embedding cache", () => {
     const db = new DatabaseSync(":memory:");
     ensureMemoryIndexSchema({
       db,
+      agentId: "main",
       embeddingCacheTable: "embedding_cache",
       cacheEnabled: true,
       ftsTable: "chunks_fts",

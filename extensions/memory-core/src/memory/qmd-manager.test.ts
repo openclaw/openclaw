@@ -3298,6 +3298,119 @@ describe("QmdMemoryManager", () => {
     await manager.close();
   });
 
+  it("scopes mcporter daemon state and calls per agent", async () => {
+    const mainWorkspaceDir = path.join(tmpRoot, "main-workspace");
+    const devWorkspaceDir = path.join(tmpRoot, "dev-workspace");
+    await fs.mkdir(mainWorkspaceDir, { recursive: true });
+    await fs.mkdir(devWorkspaceDir, { recursive: true });
+
+    const createCfgForAgent = (id: string, agentWorkspaceDir: string) =>
+      ({
+        agents: {
+          defaults: {
+            workspace: agentWorkspaceDir,
+            memorySearch: {
+              provider: "openai",
+              model: "mock-embed",
+              store: {
+                path: path.join(agentWorkspaceDir, "index.sqlite"),
+                vector: { enabled: false },
+              },
+              sync: { watch: false, onSessionStart: false, onSearch: false },
+            },
+          },
+          list: [{ id, default: id === "main", workspace: agentWorkspaceDir }],
+        },
+        memory: {
+          backend: "qmd",
+          qmd: {
+            includeDefaultMemory: false,
+            searchMode: "query",
+            update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+            paths: [{ path: agentWorkspaceDir, pattern: "**/*.md", name: "memory-dir" }],
+            mcporter: { enabled: true, serverName: "qmd", startDaemon: true },
+          },
+        },
+      }) as OpenClawConfig;
+
+    spawnMock.mockImplementation((cmd: string, args: string[]) => {
+      const child = createMockChild({ autoClose: false });
+      if (isMcporterCommand(cmd) && args[0] === "daemon") {
+        emitAndClose(child, "stdout", "");
+        return child;
+      }
+      if (isMcporterCommand(cmd) && args[0] === "call") {
+        emitAndClose(child, "stdout", JSON.stringify({ results: [] }));
+        return child;
+      }
+      emitAndClose(child, "stdout", "[]");
+      return child;
+    });
+
+    const mainCfg = createCfgForAgent("main", mainWorkspaceDir);
+    const mainResolved = resolveMemoryBackendConfig({ cfg: mainCfg, agentId: "main" });
+    const mainManager = trackManager(
+      await QmdMemoryManager.create({
+        cfg: mainCfg,
+        agentId: "main",
+        resolved: mainResolved,
+        mode: "status",
+      }),
+    );
+    expect(mainManager).toBeTruthy();
+    if (!mainManager) {
+      throw new Error("main manager missing");
+    }
+
+    await mainManager.search("hello main", { sessionKey: "agent:main:slack:dm:u123" });
+
+    const devCfg = createCfgForAgent("dev", devWorkspaceDir);
+    const devResolved = resolveMemoryBackendConfig({ cfg: devCfg, agentId: "dev" });
+    const devManager = trackManager(
+      await QmdMemoryManager.create({
+        cfg: devCfg,
+        agentId: "dev",
+        resolved: devResolved,
+        mode: "status",
+      }),
+    );
+    expect(devManager).toBeTruthy();
+    if (!devManager) {
+      throw new Error("dev manager missing");
+    }
+
+    await devManager.search("hello dev", { sessionKey: "agent:dev:slack:dm:u456" });
+
+    const mcporterCalls = spawnMock.mock.calls.filter((call: unknown[]) =>
+      isMcporterCommand(call[0]),
+    );
+    const daemonStarts = mcporterCalls.filter(
+      (call: unknown[]) => (call[1] as string[])[0] === "daemon",
+    );
+    expect(daemonStarts).toHaveLength(2);
+
+    const normalizePath = (value?: string) => value?.replace(/\\/g, "/");
+    const mainDaemonEnv = daemonStarts[0]?.[2] as { env?: NodeJS.ProcessEnv } | undefined;
+    const devDaemonEnv = daemonStarts[1]?.[2] as { env?: NodeJS.ProcessEnv } | undefined;
+    expect(normalizePath(mainDaemonEnv?.env?.XDG_CACHE_HOME)).toContain(
+      "/agents/main/qmd/xdg-cache",
+    );
+    expect(normalizePath(devDaemonEnv?.env?.XDG_CACHE_HOME)).toContain("/agents/dev/qmd/xdg-cache");
+
+    const devCall = mcporterCalls.find((call: unknown[]) => {
+      const args = call[1] as string[];
+      if (args[0] !== "call") {
+        return false;
+      }
+      const callArgs = JSON.parse(args[args.indexOf("--args") + 1]);
+      return Array.isArray(callArgs.collections) && callArgs.collections.includes("memory-dir-dev");
+    });
+    expect(devCall).toBeDefined();
+    const devCallEnv = devCall?.[2] as { env?: NodeJS.ProcessEnv } | undefined;
+    expect(normalizePath(devCallEnv?.env?.XDG_CACHE_HOME)).toContain("/agents/dev/qmd/xdg-cache");
+    expect(normalizePath(devCallEnv?.env?.XDG_CONFIG_HOME)).toContain("/agents/dev/qmd/xdg-config");
+  });
+
   it("fails closed when no managed collections are configured", async () => {
     cfg = {
       ...cfg,

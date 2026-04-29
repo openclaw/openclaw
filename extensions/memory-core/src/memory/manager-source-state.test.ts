@@ -22,10 +22,11 @@ describe("memory source state", () => {
           get: () => undefined,
         }),
       },
+      agentId: "main",
       source: "memory",
     });
 
-    expect(calls).toEqual([{ sql: MEMORY_SOURCE_FILE_STATE_SQL, args: ["memory"] }]);
+    expect(calls).toEqual([{ sql: MEMORY_SOURCE_FILE_STATE_SQL, args: ["main", "memory"] }]);
     expect(state.rows).toEqual([
       { path: "memory/one.md", hash: "hash-1" },
       { path: "memory/two.md", hash: "hash-2" },
@@ -50,6 +51,7 @@ describe("memory source state", () => {
           },
         }),
       },
+      agentId: "main",
       source: "sessions",
       path: "sessions/thread.jsonl",
       existingHashes: new Map([["sessions/thread.jsonl", "hash-from-snapshot"]]),
@@ -71,6 +73,7 @@ describe("memory source state", () => {
           },
         }),
       },
+      agentId: "main",
       source: "sessions",
       path: "sessions/thread.jsonl",
       existingHashes: null,
@@ -80,7 +83,7 @@ describe("memory source state", () => {
     expect(calls).toEqual([
       {
         sql: MEMORY_SOURCE_FILE_HASH_SQL,
-        args: ["sessions/thread.jsonl", "sessions"],
+        args: ["main", "sessions/thread.jsonl", "sessions"],
       },
     ]);
   });

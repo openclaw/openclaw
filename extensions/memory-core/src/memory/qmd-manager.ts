@@ -120,6 +120,10 @@ type McporterState = {
   daemonStart: Promise<void> | null;
 };
 
+type McporterStateRegistry = {
+  states: Map<string, McporterState>;
+};
+
 type QmdEmbedQueueState = {
   tail: Promise<void>;
 };
@@ -128,11 +132,20 @@ type QmdUpdateQueueState = {
   tails: Map<string, Promise<void>>;
 };
 
-function getMcporterState(): McporterState {
-  return resolveGlobalSingleton<McporterState>(MCPORTER_STATE_KEY, () => ({
+function getMcporterState(scopeKey: string): McporterState {
+  const registry = resolveGlobalSingleton<McporterStateRegistry>(MCPORTER_STATE_KEY, () => ({
+    states: new Map(),
+  }));
+  const existing = registry.states.get(scopeKey);
+  if (existing) {
+    return existing;
+  }
+  const created: McporterState = {
     coldStartWarned: false,
     daemonStart: null,
-  }));
+  };
+  registry.states.set(scopeKey, created);
+  return created;
 }
 
 function getQmdEmbedQueueState(): QmdEmbedQueueState {
@@ -1947,7 +1960,7 @@ export class QmdMemoryManager implements MemorySearchManager {
     if (!mcporter.enabled) {
       return;
     }
-    const state = getMcporterState();
+    const state = getMcporterState(this.qmdDir);
     if (!mcporter.startDaemon) {
       if (!state.coldStartWarned) {
         state.coldStartWarned = true;

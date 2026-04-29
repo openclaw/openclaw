@@ -126,8 +126,8 @@ export async function searchVector(params: {
   limit: number;
   snippetMaxChars: number;
   ensureVectorReady: (dimensions: number) => Promise<boolean>;
-  sourceFilterVec: { sql: string; params: SearchSource[] };
-  sourceFilterChunks: { sql: string; params: SearchSource[] };
+  sourceFilterVec: { sql: string; params: Array<string | SearchSource> };
+  sourceFilterChunks: { sql: string; params: Array<string | SearchSource> };
 }): Promise<SearchRowResult[]> {
   if (params.queryVec.length === 0 || params.limit <= 0) {
     return [];
@@ -176,17 +176,19 @@ export async function searchVector(params: {
       const matchingChunkCount = readCount(
         params.db
           .prepare(
-            `SELECT COUNT(*) AS count FROM chunks c WHERE c.model = ?${params.sourceFilterVec.sql}`,
+            `SELECT COUNT(*) AS count FROM chunks c WHERE c.model = ?${params.sourceFilterChunks.sql}`,
           )
-          .get(params.providerModel, ...params.sourceFilterVec.params) as
+          .get(params.providerModel, ...params.sourceFilterChunks.params) as
           | { count?: number | bigint }
           | undefined,
       );
       if (matchingChunkCount > rows.length) {
         const vectorCount = readCount(
-          params.db.prepare(`SELECT COUNT(*) AS count FROM ${params.vectorTable}`).get() as
-            | { count?: number | bigint }
-            | undefined,
+          params.db
+            .prepare(
+              `SELECT COUNT(*) AS count FROM ${params.vectorTable} v JOIN chunks c ON c.id = v.id WHERE 1=1${params.sourceFilterVec.sql}`,
+            )
+            .get(...params.sourceFilterVec.params) as { count?: number | bigint } | undefined,
         );
         if (vectorCount > candidateLimit) {
           rows = runVectorQuery(vectorCount);
@@ -205,34 +207,51 @@ export async function searchVector(params: {
     }));
   }
 
-  return searchChunksByEmbedding({
+  const candidates = listChunks({
     db: params.db,
     providerModel: params.providerModel,
     sourceFilter: params.sourceFilterChunks,
-    queryVec: params.queryVec,
-    limit: params.limit,
-    snippetMaxChars: params.snippetMaxChars,
   });
+  const scored = candidates
+    .map((chunk) => ({
+      chunk,
+      score: cosineSimilarity(params.queryVec, chunk.embedding),
+    }))
+    .filter((entry) => Number.isFinite(entry.score));
+  return scored
+    .toSorted((a, b) => b.score - a.score)
+    .slice(0, params.limit)
+    .map((entry) => ({
+      id: entry.chunk.id,
+      path: entry.chunk.path,
+      startLine: entry.chunk.startLine,
+      endLine: entry.chunk.endLine,
+      score: entry.score,
+      snippet: truncateUtf16Safe(entry.chunk.text, params.snippetMaxChars),
+      source: entry.chunk.source,
+    }));
 }
 
-export function searchChunksByEmbedding(params: {
+export function listChunks(params: {
   db: DatabaseSync;
   providerModel: string;
-  sourceFilter: { sql: string; params: SearchSource[] };
-  queryVec: number[];
-  limit: number;
-  snippetMaxChars: number;
-}): SearchRowResult[] {
-  if (params.limit <= 0) {
-    return [];
-  }
+  sourceFilter: { sql: string; params: Array<string | SearchSource> };
+}): Array<{
+  id: string;
+  path: string;
+  startLine: number;
+  endLine: number;
+  text: string;
+  embedding: number[];
+  source: SearchSource;
+}> {
   const rows = params.db
     .prepare(
       `SELECT id, path, start_line, end_line, text, embedding, source\n` +
         `  FROM chunks\n` +
         ` WHERE model = ?${params.sourceFilter.sql}`,
     )
-    .iterate(params.providerModel, ...params.sourceFilter.params) as IterableIterator<{
+    .all(params.providerModel, ...params.sourceFilter.params) as Array<{
     id: string;
     path: string;
     start_line: number;
@@ -242,36 +261,15 @@ export function searchChunksByEmbedding(params: {
     source: SearchSource;
   }>;
 
-  const topResults: SearchRowResult[] = [];
-  for (const row of rows) {
-    const score = cosineSimilarity(params.queryVec, parseEmbedding(row.embedding));
-    if (!Number.isFinite(score)) {
-      continue;
-    }
-    const result: SearchRowResult = {
-      id: row.id,
-      path: row.path,
-      startLine: row.start_line,
-      endLine: row.end_line,
-      score,
-      snippet: truncateUtf16Safe(row.text, params.snippetMaxChars),
-      source: row.source,
-    };
-    if (topResults.length < params.limit) {
-      topResults.push(result);
-      if (topResults.length === params.limit) {
-        topResults.sort((a, b) => b.score - a.score);
-      }
-      continue;
-    }
-    const lowest = topResults.at(-1);
-    if (lowest && result.score > lowest.score) {
-      topResults[topResults.length - 1] = result;
-      topResults.sort((a, b) => b.score - a.score);
-    }
-  }
-  topResults.sort((a, b) => b.score - a.score);
-  return topResults;
+  return rows.map((row) => ({
+    id: row.id,
+    path: row.path,
+    startLine: row.start_line,
+    endLine: row.end_line,
+    text: row.text,
+    embedding: parseEmbedding(row.embedding),
+    source: row.source,
+  }));
 }
 
 export async function searchKeyword(params: {
@@ -282,7 +280,7 @@ export async function searchKeyword(params: {
   ftsTokenizer?: "unicode61" | "trigram";
   limit: number;
   snippetMaxChars: number;
-  sourceFilter: { sql: string; params: SearchSource[] };
+  sourceFilter: { sql: string; params: Array<string | SearchSource> };
   buildFtsQuery: (raw: string) => string | null;
   bm25RankToScore: (rank: number) => number;
   boostFallbackRanking?: boolean;
@@ -300,9 +298,11 @@ export async function searchKeyword(params: {
   }
 
   // When providerModel is undefined (FTS-only mode), search all models
-  const modelClause = params.providerModel ? " AND model = ?" : "";
+  const modelClause = params.providerModel ? ` AND ${params.ftsTable}.model = ?` : "";
   const modelParams = params.providerModel ? [params.providerModel] : [];
-  const substringClause = plan.substringTerms.map(() => " AND text LIKE ? ESCAPE '\\'").join("");
+  const substringClause = plan.substringTerms
+    .map(() => ` AND ${params.ftsTable}.text LIKE ? ESCAPE '\\'`)
+    .join("");
   const substringParams = plan.substringTerms.map((term) => `%${escapeLikePattern(term)}%`);
   const whereClause = plan.matchQuery
     ? `${params.ftsTable} MATCH ?${substringClause}${modelClause}${params.sourceFilter.sql}`
@@ -318,9 +318,10 @@ export async function searchKeyword(params: {
 
   const rows = params.db
     .prepare(
-      `SELECT id, path, source, start_line, end_line, text,\n` +
+      `SELECT ${params.ftsTable}.id, ${params.ftsTable}.path, ${params.ftsTable}.source, ${params.ftsTable}.start_line, ${params.ftsTable}.end_line, ${params.ftsTable}.text,\n` +
         `       ${rankExpression} AS rank\n` +
         `  FROM ${params.ftsTable}\n` +
+        `  JOIN chunks c ON c.id = ${params.ftsTable}.id\n` +
         ` WHERE ${whereClause}\n` +
         ` ORDER BY rank ASC\n` +
         ` LIMIT ?`,
