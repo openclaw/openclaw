@@ -3,7 +3,11 @@ import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { clearPluginManifestRegistryCache } from "../plugins/manifest-registry.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
-import { createConfigIO } from "./io.js";
+import {
+  createConfigIO,
+  resetConfigRuntimeState,
+  writeConfigFile as writeConfigFileWithRefresh,
+} from "./io.js";
 import type { OpenClawConfig } from "./types.js";
 
 const removedPluginId = "google-antigravity-auth";
@@ -28,7 +32,9 @@ function cleanConfig(port: number): OpenClawConfig {
   };
 }
 
-function configWarningMessages(warn: ReturnType<typeof vi.fn>): string[] {
+function configWarningMessages(warn: {
+  mock: { calls: readonly (readonly unknown[])[] };
+}): string[] {
   return warn.mock.calls
     .map(([message]) => message)
     .filter((message): message is string => {
@@ -52,10 +58,12 @@ describe("config warning log dedupe", () => {
 
   afterEach(() => {
     clearPluginManifestRegistryCache();
+    resetConfigRuntimeState();
   });
 
   afterAll(async () => {
     clearPluginManifestRegistryCache();
+    resetConfigRuntimeState();
     await suiteRootTracker.cleanup();
   });
 
@@ -135,20 +143,65 @@ describe("config warning log dedupe", () => {
   it("deduplicates write warnings and relogs when write content or warning details change", async () => {
     const { io, warn } = await createCaseIo();
 
-    await io.writeConfigFile(configWithRemovedPlugin(19001));
-    await io.writeConfigFile(configWithRemovedPlugin(19001));
-    expect(configWarningMessages(warn)).toHaveLength(1);
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-04-29T00:00:00.000Z"));
+    try {
+      await io.writeConfigFile(configWithRemovedPlugin(19001));
+      await io.writeConfigFile(configWithRemovedPlugin(19001));
+      expect(configWarningMessages(warn)).toHaveLength(1);
 
-    await io.writeConfigFile(configWithRemovedPlugin(19002));
-    expect(configWarningMessages(warn)).toHaveLength(2);
+      await io.writeConfigFile(configWithRemovedPlugin(19002));
+      expect(configWarningMessages(warn)).toHaveLength(2);
 
-    await io.writeConfigFile(configWithRemovedPlugin(19002, true));
-    expect(configWarningMessages(warn)).toHaveLength(3);
+      await io.writeConfigFile(configWithRemovedPlugin(19002, true));
+      expect(configWarningMessages(warn)).toHaveLength(3);
 
-    await io.writeConfigFile(cleanConfig(19002));
-    expect(configWarningMessages(warn)).toHaveLength(3);
+      await io.writeConfigFile(cleanConfig(19002));
+      expect(configWarningMessages(warn)).toHaveLength(3);
 
-    await io.writeConfigFile(configWithRemovedPlugin(19002));
-    expect(configWarningMessages(warn)).toHaveLength(4);
+      await io.writeConfigFile(configWithRemovedPlugin(19002));
+      expect(configWarningMessages(warn)).toHaveLength(4);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("deduplicates exported write refresh warnings against the persisted raw config", async () => {
+    const home = await suiteRootTracker.make("exported-write");
+    const configPath = path.join(home, ".openclaw", "openclaw.json");
+    const stateDir = path.join(home, ".openclaw");
+    const previousEnv = {
+      HOME: process.env.HOME,
+      OPENCLAW_CONFIG_PATH: process.env.OPENCLAW_CONFIG_PATH,
+      OPENCLAW_PLUGIN_MANIFEST_CACHE_MS: process.env.OPENCLAW_PLUGIN_MANIFEST_CACHE_MS,
+      OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR,
+      OPENCLAW_TEST_FAST: process.env.OPENCLAW_TEST_FAST,
+      VITEST: process.env.VITEST,
+    };
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    try {
+      process.env.HOME = home;
+      process.env.OPENCLAW_CONFIG_PATH = configPath;
+      process.env.OPENCLAW_PLUGIN_MANIFEST_CACHE_MS = "0";
+      process.env.OPENCLAW_STATE_DIR = stateDir;
+      process.env.OPENCLAW_TEST_FAST = "1";
+      process.env.VITEST = "true";
+      resetConfigRuntimeState();
+
+      await writeConfigFileWithRefresh(configWithRemovedPlugin(19001));
+
+      expect(configWarningMessages(warn)).toHaveLength(1);
+    } finally {
+      warn.mockRestore();
+      resetConfigRuntimeState();
+      for (const [key, value] of Object.entries(previousEnv)) {
+        if (value === undefined) {
+          delete process.env[key];
+        } else {
+          process.env[key] = value;
+        }
+      }
+    }
   });
 });

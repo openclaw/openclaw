@@ -2071,13 +2071,6 @@ export function createConfigIO(
       const issueMessage = issue?.message ?? "invalid";
       throw new Error(formatConfigValidationFailure(pathLabel, issueMessage));
     }
-    logConfigWarningsOnce({
-      configPath,
-      raw: JSON.stringify(persistCandidate, null, 2),
-      warnings: validated.warnings,
-      logger: deps.logger,
-    });
-
     // Restore ${VAR} env var references that were resolved during config loading.
     // Read the current file (pre-substitution) and restore any references whose
     // resolved values match the incoming config - so we don't overwrite
@@ -2129,6 +2122,12 @@ export function createConfigIO(
     // explicitly set values. Runtime defaults are applied when loading (issue #6070).
     const stampedOutputConfig = stampConfigVersion(outputConfig);
     const json = JSON.stringify(stampedOutputConfig, null, 2).trimEnd().concat("\n");
+    logConfigWarningsOnce({
+      configPath,
+      raw: json,
+      warnings: validated.warnings,
+      logger: deps.logger,
+    });
     const nextHash = hashConfigRaw(json);
     const previousHash = resolveConfigSnapshotHash(snapshot);
     const changedPathCount = changedPaths?.size;
