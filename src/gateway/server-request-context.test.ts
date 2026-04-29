@@ -18,6 +18,7 @@ function makeContextParams(
   return {
     deps: {} as never,
     runtimeState,
+    getRuntimeConfig: vi.fn(() => ({}) as never),
     execApprovalManager: undefined,
     pluginApprovalManager: undefined,
     loadGatewayModelCatalog: vi.fn(async () => []),
@@ -63,6 +64,7 @@ function makeContextParams(
     markChannelLoggedOut: vi.fn(),
     wizardRunner: vi.fn(async () => undefined),
     broadcastVoiceWakeChanged: vi.fn(),
+    broadcastVoiceWakeRoutingChanged: vi.fn(),
     unavailableGatewayMethods: new Set(),
     ...overrides,
   };
@@ -160,7 +162,7 @@ describe("createGatewayRequestContext", () => {
       connect: { device: { id: "device-2" }, role: "primary" },
       socket: { close: vi.fn() },
     };
-    const clients = new Set([target, unrelated] as never);
+    const clients = new Set([target, unrelated]) as never;
 
     const context = createGatewayRequestContext(makeContextParams({ clients }));
     context.invalidateClientsForDevice?.("device-1", { reason: "device-token-rotated" });
@@ -181,7 +183,7 @@ describe("createGatewayRequestContext", () => {
       connect: { device: { id: "device-1" }, role: "primary" },
       socket: { close: vi.fn() },
     };
-    const clients = new Set([target] as never);
+    const clients = new Set([target]) as never;
 
     const context = createGatewayRequestContext(makeContextParams({ clients }));
     context.disconnectClientsForDevice?.("device-1");
@@ -202,7 +204,7 @@ describe("createGatewayRequestContext", () => {
       connect: { device: { id: "device-1" }, role: "secondary" },
       socket: { close: vi.fn() },
     };
-    const clients = new Set([primary, secondary] as never);
+    const clients = new Set([primary, secondary]) as never;
 
     const context = createGatewayRequestContext(makeContextParams({ clients }));
     context.invalidateClientsForDevice?.("device-1", { role: "primary" });
