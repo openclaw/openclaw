@@ -143,7 +143,7 @@ export function guardSessionManager(
       message = {
         ...(message as AgentMessage & { idempotencyKey?: unknown }),
         idempotencyKey: originalIdempotencyKey,
-      } as AgentMessage;
+      } as unknown as AgentMessage;
       changed = true;
     }
     const redacted = redactTranscriptMessage(message, opts?.config);

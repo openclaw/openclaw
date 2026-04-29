@@ -3,6 +3,7 @@ import path from "node:path";
 import type { SessionManager } from "@mariozechner/pi-coding-agent";
 import { guardSessionManager } from "../../agents/session-tool-result-guard-wrapper.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import type { SessionTranscriptUpdateMode } from "../../sessions/transcript-events.js";
 import { extractAssistantVisibleText } from "../../shared/chat-message-content.js";
 import {
   resolveDefaultSessionStorePath,
@@ -50,7 +51,7 @@ export type SessionTranscriptAppendResult =
   | { ok: true; sessionFile: string; messageId: string }
   | { ok: false; reason: string };
 
-export type { SessionTranscriptUpdateMode } from "../../sessions/transcript-events.js";
+export type { SessionTranscriptUpdateMode };
 
 export type SessionTranscriptAssistantMessage = Parameters<SessionManager["appendMessage"]>[0] & {
   role: "assistant";
