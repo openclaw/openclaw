@@ -1,7 +1,9 @@
 import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
 import {
   DEFAULT_CHANNEL_CONNECT_GRACE_MS,
+  DEFAULT_CHANNEL_RECONNECT_GRACE_MS,
   DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS,
+  createChannelHealthSnapshot,
   evaluateChannelHealth,
   type ChannelHealthPolicy,
   type ChannelHealthEvaluation,
@@ -79,9 +81,11 @@ export function createReadinessChecker(deps: {
           now,
           staleEventThresholdMs: DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS,
           channelConnectGraceMs: DEFAULT_CHANNEL_CONNECT_GRACE_MS,
+          reconnectGraceMs: DEFAULT_CHANNEL_RECONNECT_GRACE_MS,
           channelId,
         };
-        const health = evaluateChannelHealth(accountSnapshot, policy);
+        const healthSnapshot = createChannelHealthSnapshot(accountSnapshot);
+        const health = evaluateChannelHealth(healthSnapshot, policy);
         if (!health.healthy && !shouldIgnoreReadinessFailure(accountSnapshot, health)) {
           failing.push(channelId);
           break;

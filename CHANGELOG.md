@@ -131,9 +131,6 @@ Docs: https://docs.openclaw.ai
 - Web search/Brave: point Brave provider metadata at the canonical `/tools/brave-search` docs page and make the legacy `/brave-search` docs page a redirect stub. Fixes #65870 and supersedes #65892. Thanks @Magicray1217 and @Jah-yee.
 - Web search/Brave: allow `freshness` and bounded date ranges in `llm-context` mode, matching Brave's documented LLM Context API support. Supersedes #51005. Thanks @remusao.
 - Web fetch: resolve external plugin `webFetchProviders` for non-sandboxed `web_fetch`, while keeping sandboxed fetches limited to bundled providers. Fixes #74915. Thanks @ultrahighsuper and @mingmingtsao.
-- Heartbeat: strip legacy `[TOOL_CALL]...[/TOOL_CALL]` and `[TOOL_RESULT]...[/TOOL_RESULT]` pseudo-call blocks from heartbeat replies before channel delivery. Fixes #54138. Thanks @Deniable9570.
-- macOS/Voice Wake: send wake-word and Push-to-Talk transcripts through the selected macOS session target instead of always falling back to main WebChat. Fixes #51040. Thanks @carl-jeffrolc.
-- Providers/xAI: give Grok `web_search` a 60s default timeout, harden malformed xAI Responses parsing, and return structured timeout errors instead of aborting the tool call. Fixes #58063 and #58733. Thanks @dnishimura, @marvcasasola-svg, and @Nanako0129.
 - Slack/directory: make `openclaw directory peers/groups list --channel slack` prefer token-backed live readers and return the connected Slack account from `directory self`, so valid Slack tokens no longer produce empty directory CLI results. Fixes #50776. Thanks @pjaillon.
 - Slack: keep assistant typing status, temporary typing reactions, and status reactions active for group/channel turns that use message-tool-only visible replies, while still suppressing automatic source replies. Fixes #75877. Thanks @teosborne.
 - Slack: recover full inbound DM text from top-level rich-text blocks when Slack sends a shortened message preview, so long direct messages still reach the agent intact. Fixes #55358. Thanks @tonyjwinter.
@@ -179,9 +176,7 @@ Docs: https://docs.openclaw.ai
 - Gateway/agents: avoid rebuilding core tools for plugin-only allowlists and keep the full plugin registry cache warm across scoped plugin loads, reducing per-turn latency spikes. Fixes #75882, #75907, #75906, #75887, and #75851. (#75922) Thanks @obviyus.
 
 ## 2026.4.30
-
 ### Changes
-
 - Dependencies: refresh bundled runtime and plugin dependency pins, including Pi 0.71.1, OpenAI 6.35.0, Codex 0.128.0, Zod 4.4.1, and Matrix 41.4.0. Thanks @mariozechner.
 - Agents/workspace: add `agents.defaults.skipOptionalBootstrapFiles` for skipping selected optional workspace files during bootstrap without disabling required workspace setup. (#62110) Thanks @mainstay22.
 - Plugins/CLI: add first-class `git:` plugin installs with ref checkout, commit metadata, normal scanner/staging, and `plugins update` support for recorded git sources. Thanks @badlogic.
@@ -200,9 +195,7 @@ Docs: https://docs.openclaw.ai
 - Agents/Codex: default Codex-harness direct source replies to the OpenClaw `message` tool when visible reply delivery is not explicitly configured, keeping channel-visible output as a deliberate tool call. (#75765) Thanks @pashpashpash.
 - Heartbeats/agents: add a structured `heartbeat_respond` tool for tool-capable heartbeat runs so agents can record quiet outcomes or explicit notification text without relying only on `HEARTBEAT_OK` parsing. (#75765) Thanks @pashpashpash.
 - Gateway/config: allow `$include` directives to read files from operator-approved `OPENCLAW_INCLUDE_ROOTS` directories while preserving default config-directory confinement. Thanks @ificator.
-
 ### Fixes
-
 - Agents/tools: skip unavailable media generation and PDF tool factories from the live reply path when Gateway metadata and the active auth store prove no configured provider can back them, while keeping explicit config and auth-backed providers on the normal factory path. Thanks @shakkernerd.
 - Agents/runtime: reuse the Gateway metadata startup plan when ensuring reply runtime plugins are loaded, so live agent turns do not broad-load plugin runtimes after the Gateway already scoped startup activation. Thanks @shakkernerd.
 - Agents/runtime: delegate scoped reply runtime registry reuse to the plugin loader cache-key compatibility checks, so config changes with the same startup plugin ids cannot keep stale runtime hooks or tools active. Thanks @shakkernerd.
@@ -267,7 +260,6 @@ Docs: https://docs.openclaw.ai
 - MCP/stdio: settle MCP stdio transport send() from the write callback instead of resolving immediately on buffer acceptance, so async write errors reject the promise instead of being lost. Refs #75438.
 - Process/exec: add stdin error listener in runCommandWithTimeout so EPIPE from a prematurely-exited child is swallowed instead of escaping to uncaughtException. Refs #75438.
 - Voice Call/realtime: add default-off fast memory/session context for `openclaw_agent_consult`, giving live calls a bounded answer-or-miss path before the full agent consult. Fixes #71849. Thanks @amzzzzzzz.
-
 - Google Meet: interrupt Realtime provider output when local barge-in clears playback, so command-pair audio stops model speech instead of only restarting Chrome playback. Fixes #73850. (#73834) Thanks @shhtheonlyperson.
 - Gateway/config: cap oversized plugin-owned schemas in the full `config.schema` response so large installed plugin sets cannot balloon Gateway RSS or crash schema clients. Thanks @vincentkoc.
 - Plugins/update: skip ClawHub and marketplace plugin updates when the bundled version is newer than the recorded installed version, so `openclaw update` no longer overwrites working bundled plugins with older external packages. Fixes #75447. Thanks @amknight.
@@ -348,20 +340,14 @@ Docs: https://docs.openclaw.ai
 - Context Engine: treat assembled prompt as the default authority for preemptive overflow prechecks so engines that return a windowed, self-contained context no longer trigger false hard-fail compactions on huge raw history. Engines whose assembled view can hide overflow risk can opt back into the legacy behavior with `AssembleResult.promptAuthority: "preassembly_may_overflow"`. (#74255) Thanks @100yenadmin.
 - Mattermost: refresh current native slash command registrations before accepting callbacks so stale tokens from deleted or regenerated commands stop being accepted without a gateway restart while failed validations stay briefly cached and lookup starts are rate-limited per command, gate each callback against the resolved command's own startup token so a token leaked for one slash command cannot poison another command's failure cache, redact slash validation lookup errors, and add a body read timeout to the multi-account routing path so slow callback senders cannot tie up the dispatcher. Thanks @feynman-hou and @eleqtrizit.
 - Security/dotenv: block `COMSPEC` in workspace `.env` so a malicious repo cannot redirect Windows `cmd.exe` resolution, and lock in case-insensitive workspace-`.env` regression coverage for the full Windows shell trust-root family (`COMSPEC`, `PROGRAMFILES`, `PROGRAMW6432`, `SYSTEMROOT`, `WINDIR`). (#74460) Thanks @mmaps.
-
 ## 2026.4.29
-
 ### Highlights
-
 - Messaging and automation get active-run steering by default, visible-reply enforcement, spawned subagent routing metadata, and opt-in follow-up commitments for heartbeat-delivered reminders. Thanks @vincentkoc, @scoootscooob, @samzong, and @vignesh07.
 - Memory grows into a people-aware wiki with provenance views, per-conversation Active Memory filters, partial recall on timeout, and bounded REM preview diagnostics. Thanks @vincentkoc, @quengh, @joeykrug, and @samzong.
 - Provider/model coverage expands with NVIDIA onboarding/catalogs plus faster manifest-backed model/auth paths, Bedrock Opus 4.7 thinking parity, and safer Codex/OpenAI-compatible replay and streaming behavior. Thanks @eleqtrizit, @shakkernerd, @prasad-yashdeep, @woodhouse-bot, and @LyHug.
 - Gateway and packaged-plugin reliability focuses on slow-host startup, reusable model catalogs, event-loop readiness diagnostics, runtime-dependency repair, stale-session recovery, and version-scoped update caches. Thanks @lpendeavors, @DerFlash, @vincentkoc, @pashpashpash, and @jhsmith409.
 - Channel fixes cluster around Slack Block Kit limits, Telegram proxy/webhook/polling/send resilience, Discord startup/rate-limit handling, WhatsApp delivery/liveness, and Microsoft Teams/Matrix/Feishu edge cases. Thanks @slackapi, @SymbolStar, @djgeorg3, @TinyTb, @dseravalli, @nklock, and @alex-xuweilong.
 - Security and operations add OpenGrep scanning, sharper GHSA triage policy, safer exec/pairing/owner-scope handling, Docker/onboarding automation, and web-fetch IPv6 ULA opt-in for trusted proxy stacks. Thanks @jesse-merhi, @pgondhi987, @mmaps, @jinjimz, and @jeffrey701.
-
-### Changes
-
 - Security/tools: configured tool sections (`tools.exec`, `tools.fs`) no longer implicitly widen restrictive profiles (`messaging`, `minimal`). Users who need those tools under a restricted profile must add explicit `alsoAllow` entries; a startup warning identifies affected configs. Fixes #47487. Thanks @amknight.
 - Gateway/SDK: add SDK-facing artifact list/get/download RPCs and App SDK helpers with transcript provenance and download-source guardrails. Refs #74706. Thanks @tmimmanuel.
 - Agents/commitments: add opt-in inferred follow-up commitments with hidden batched extraction, per-agent/per-channel scoping, heartbeat delivery, CLI management, a simple `commitments.enabled`/`commitments.maxPerDay` config, and heartbeat-interval due-time clamping so magical check-ins do not echo immediately. (#74189) Thanks @vignesh07.
@@ -387,9 +373,6 @@ Docs: https://docs.openclaw.ai
 - Docker setup: add `OPENCLAW_SKIP_ONBOARDING` so automated Docker installs can skip the interactive onboarding step while still applying gateway defaults. (#55518) Thanks @jinjimz.
 - Security policy: classify media/base64 decode and format-conversion overhead after configured acceptance limits as performance-only for GHSA triage unless a report demonstrates a limit bypass, crash, exhaustion, data exposure, or another boundary bypass. (#74311)
 - Security/OpenGrep: add a precise OpenGrep rulepack, source-rule compiler, provenance metadata check, and PR/full scan workflows that validate first-party code and rulepack-only changes while uploading SARIF to GitHub Code Scanning. (#69483) Thanks @jesse-merhi.
-
-### Fixes
-
 - Voice Call: resolve SecretRef-backed Twilio auth tokens and realtime/streaming provider API keys before initializing call providers, so SecretRef-backed voice-call credentials reach runtime as strings. (#73632) Thanks @VACInc.
 - Security/outbound: strip re-formed HTML tags during plain-text sanitization so nested tag fragments cannot leave a CodeQL-detected `<script>` sequence behind. Thanks @vincentkoc.
 - Security/secrets: compare credential bytes with padded timing-safe buffers instead of hashing candidate passwords before equality checks. Thanks @vincentkoc.
@@ -550,6 +533,7 @@ Docs: https://docs.openclaw.ai
 - Docs/Hetzner: clarify that SSH tunnel access requires `AllowTcpForwarding local` before running `ssh -L`, so hardened VPS sshd configs do not block loopback Gateway access. Fixes #54557; carries forward #54564; refs #54954. Thanks @satishkc7, @blackstrype, and @Aftabbs.
 - Agents/config: preserve authored `agents.defaults.params` and per-model `agents.defaults.models[].params` during narrowed internal config writes, so OpenAI transport overrides such as `transport: "sse"` and `openaiWsWarmup: false` are not stripped from `openclaw.json`. Fixes #73607; refs #73428. Thanks @quangtran88.
 - Agents/model config: resolve per-model extra params through canonical model keys while preserving legacy double-prefixed fallback entries, so provider-prefixed model ids such as `openrouter/auto` keep their configured runtime params. (#44319) Thanks @HenryXiaoYang.
+- Gateway/health-monitor: add shared reconnect grace for recently disconnected running channels so provider reconnect loops are not restarted prematurely; based on https://github.com/openclaw/openclaw/pull/45712. Thanks @cass-clearly.
 - Gateway/shutdown: report structured shutdown warnings and HTTP close timeout warnings through `ShutdownResult` while preserving lifecycle hook hardening. Carries forward #41296. Thanks @edenfunf.
 - Control UI: keep Agents Overview and config-form select dropdowns on their configured value after options render while preserving inherited agent model placeholders. Fixes #40352; carries forward #52948. Thanks @xiaoquanidea.
 - Agents/exec: launch zsh, bash, and fish host exec shells with startup files suppressed while preserving existing PATH fallbacks, so daemon env is not overridden by shell startup files. Carries forward #40200; fixes #40179. Thanks @NewdlDewdl.
