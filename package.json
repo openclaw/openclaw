@@ -1193,6 +1193,10 @@
       "types": "./dist/plugin-sdk/target-resolver-runtime.d.ts",
       "default": "./dist/plugin-sdk/target-resolver-runtime.js"
     },
+    "./plugin-sdk/telegram-account": {
+      "types": "./dist/plugin-sdk/telegram-account.d.ts",
+      "default": "./dist/plugin-sdk/telegram-account.js"
+    },
     "./plugin-sdk/telegram-command-config": {
       "types": "./dist/plugin-sdk/telegram-command-config.d.ts",
       "default": "./dist/plugin-sdk/telegram-command-config.js"

@@ -14,7 +14,7 @@ function readCiWorkflow() {
 }
 
 describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
-  it("covers every pre-release plugin skill surface in normal CI", () => {
+  it("covers every pre-release plugin skill surface in mega CI", () => {
     const plan = assertPluginPrereleaseTestPlanComplete();
 
     expect(plan.surfaces).toEqual(
@@ -53,7 +53,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     }
   });
 
-  it("keeps live-ish coverage credential-gated in PR CI", () => {
+  it("keeps live-ish coverage outside provider-backed Docker lanes", () => {
     const plan = createPluginPrereleaseTestPlan();
 
     expect(plan.dockerLanes).not.toContain("openai-web-search-minimal");
@@ -109,6 +109,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     const staticShard = workflow.jobs["plugin-prerelease-static-shard"];
     const dockerSuite = workflow.jobs["plugin-prerelease-docker-suite"];
     const suite = workflow.jobs["plugin-prerelease-suite"];
+    const manifestScript = preflight.steps.find((step) => step.name === "Build CI manifest").run;
 
     expect(preflight.outputs).toMatchObject({
       plugin_prerelease_docker_lanes:
@@ -122,6 +123,18 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
       name: "${{ matrix.check_name }}",
       "runs-on": "blacksmith-8vcpu-ubuntu-2404",
     });
+    expect(manifestScript).toContain(
+      'const isMegaCiRun = process.env.OPENCLAW_CI_EVENT_NAME === "workflow_dispatch";',
+    );
+    expect(manifestScript).toContain(
+      "let runPluginPrereleaseSuite =\n  isMegaCiRun && runNodeFull && isCanonicalRepository;",
+    );
+    expect(manifestScript).toContain("await import(");
+    expect(manifestScript).toContain('"./scripts/lib/plugin-prerelease-test-plan.mjs"');
+    expect(manifestScript).not.toContain('} from "./scripts/lib/plugin-prerelease-test-plan.mjs";');
+    expect(manifestScript).toContain(
+      "Plugin prerelease plan unavailable in target ref; skipping plugin prerelease suite.",
+    );
     expect(staticShard.strategy.matrix).toBe(
       "${{ fromJson(needs.preflight.outputs.plugin_prerelease_static_matrix) }}",
     );

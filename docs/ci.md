@@ -343,6 +343,7 @@ gh workflow run duplicate-after-merge.yml \
 | `build-smoke`                    | Built-CLI smoke tests and startup-memory smoke                                               | Node-relevant changes              |
 | `checks`                         | Verifier for built-artifact channel tests                                                    | Node-relevant changes              |
 | `checks-node-compat-node22`      | Node 22 compatibility build and smoke lane                                                   | Manual CI dispatch for releases    |
+| `plugin-prerelease-suite`        | Aggregate for plugin prerelease static checks and Docker product lanes                       | Manual CI dispatch for releases    |
 | `check-docs`                     | Docs formatting, lint, and broken-link checks                                                | Docs changed                       |
 | `skills-python`                  | Ruff + pytest for Python-backed skills                                                       | Python-skill-relevant changes      |
 | `checks-windows`                 | Windows-specific process/path tests plus shared runtime import specifier regressions         | Windows-relevant changes           |
@@ -353,8 +354,9 @@ gh workflow run duplicate-after-merge.yml \
 
 Manual CI dispatches run the same job graph as normal CI but force every
 scoped lane on: Linux Node shards, bundled-plugin shards, channel contracts,
-Node 22 compatibility, `check`, `check-additional`, build smoke, docs checks,
-Python skills, Windows, macOS, Android, and Control UI i18n. Manual runs use a
+Node 22 compatibility, plugin prerelease coverage, `check`,
+`check-additional`, build smoke, docs checks, Python skills, Windows, macOS,
+Android, and Control UI i18n. Manual runs use a
 unique concurrency group so a release-candidate full suite is not cancelled by
 another push or PR run on the same ref. The optional `target_ref` input lets a
 trusted caller run that graph against a branch, tag, or full commit SHA while
@@ -406,7 +408,7 @@ copy of the PR. Stop that box and warm a fresh one instead of debugging the
 product test failure. For intentional large deletion PRs, set
 `OPENCLAW_TESTBOX_ALLOW_MASS_DELETIONS=1` for that sanity run.
 
-Manual CI dispatches run `checks-node-compat-node22` as release-candidate compatibility coverage. Normal pull requests and `main` pushes skip that lane and keep the matrix focused on the Node 24 test/channel lanes.
+Manual CI dispatches run `checks-node-compat-node22` and `plugin-prerelease-suite` as release-candidate compatibility coverage. Normal pull requests and `main` pushes skip those lanes and keep the matrix focused on the Node 24 test/channel lanes.
 
 The slowest Node test families are split or balanced so each job stays small without over-reserving runners: channel contracts run as three weighted shards, bundled plugin tests balance across six extension workers, small core unit lanes are paired, auto-reply runs as four balanced workers with the reply subtree split into agent-runner, dispatch, and commands/state-routing shards, and agentic gateway/plugin configs are spread across the existing source-only agentic Node jobs instead of waiting on built artifacts. Broad browser, QA, media, and miscellaneous plugin tests use their dedicated Vitest configs instead of the shared plugin catch-all. Extension shard jobs run up to two plugin config groups at a time with one Vitest worker per group and a larger Node heap so import-heavy plugin batches do not create extra CI jobs. The broad agents lane uses the shared Vitest file-parallel scheduler because it is import/scheduling dominated rather than owned by a single slow test file. `runtime-config` runs with the infra core-runtime shard to keep the shared runtime shard from owning the tail. Include-pattern shards record timing entries using the CI shard name, so `.artifacts/vitest-shard-timings.json` can distinguish a whole config from a filtered shard. `check-additional` keeps package-boundary compile/canary work together and separates runtime topology architecture from gateway watch coverage; the boundary guard shard runs its small independent guards concurrently inside one job. Gateway watch, channel tests, and the core support-boundary shard run concurrently inside `build-artifacts` after `dist/` and `dist-runtime/` are already built, keeping their old check names as lightweight verifier jobs while avoiding two extra Blacksmith workers and a second artifact-consumer queue.
 Android CI runs both `testPlayDebugUnitTest` and `testThirdPartyDebugUnitTest`, then builds the Play debug APK. The third-party flavor has no separate source set or manifest; its unit-test lane still compiles that flavor with the SMS/call-log BuildConfig flags, while avoiding a duplicate debug APK packaging job on every Android-relevant push.
