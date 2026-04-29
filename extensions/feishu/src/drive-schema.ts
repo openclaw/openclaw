@@ -69,14 +69,15 @@ export const FeishuDriveSchema = Type.Union([
     file_token: Type.String({ description: "Document token" }),
     file_type: Type.Optional(
       Type.Union([Type.Literal("doc"), Type.Literal("docx")], {
-        description: "Document type. Defaults to docx when omitted.",
+        description:
+          "Document type. Defaults to docx when omitted. In the current local comment-thread context on the same doc/docx file without block_id, add_comment may be delivered as a follow-up reply instead of a new top-level comment.",
       }),
     ),
     content: Type.String({ description: "Comment text content" }),
     block_id: Type.Optional(
       Type.String({
         description:
-          "Optional docx block id for a local comment. Omit to create a full-document comment.",
+          "Optional docx block id for a local comment. When omitted outside an ambient comment-thread flow, this creates a whole-document comment.",
       }),
     ),
   }),

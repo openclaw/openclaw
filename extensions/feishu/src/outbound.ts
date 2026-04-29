@@ -446,6 +446,7 @@ async function sendCommentThreadReply(params: {
         deliveryContext: {
           channel: "feishu",
           to: params.to,
+          accountId: params.accountId,
           threadId: replyId,
         },
       });
