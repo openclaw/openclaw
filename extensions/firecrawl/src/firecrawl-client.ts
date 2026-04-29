@@ -13,6 +13,7 @@ import {
 import { normalizeSecretInput } from "openclaw/plugin-sdk/secret-input";
 import { wrapExternalContent, wrapWebContent } from "openclaw/plugin-sdk/security-runtime";
 import {
+  resolveFirecrawlAllowSelfHosted,
   resolveFirecrawlApiKey,
   resolveFirecrawlBaseUrl,
   resolveFirecrawlMaxAgeMs,
@@ -64,12 +65,19 @@ export type FirecrawlScrapeParams = {
   timeoutSeconds?: number;
 };
 
-function resolveEndpoint(baseUrl: string, pathname: "/v2/search" | "/v2/scrape"): string {
+function resolveEndpoint(
+  baseUrl: string,
+  pathname: "/v2/search" | "/v2/scrape",
+  options: { allowSelfHosted?: boolean } = {},
+): string {
   const url = new URL(baseUrl.trim() || "https://api.firecrawl.dev");
-  if (url.protocol !== "https:") {
-    throw new Error("Firecrawl baseUrl must use https.");
+  const allowSelfHosted = options.allowSelfHosted === true;
+  if (url.protocol !== "https:" && !(allowSelfHosted && url.protocol === "http:")) {
+    throw new Error(
+      "Firecrawl baseUrl must use https unless allowSelfHosted is enabled for an explicit http endpoint.",
+    );
   }
-  if (!ALLOWED_FIRECRAWL_HOSTS.has(url.hostname)) {
+  if (!allowSelfHosted && !ALLOWED_FIRECRAWL_HOSTS.has(url.hostname)) {
     throw new Error(`Firecrawl baseUrl host is not allowed: ${url.hostname}`);
   }
   url.username = "";
@@ -271,6 +279,7 @@ export async function runFirecrawlSearch(
   const sources = Array.isArray(params.sources) ? params.sources.filter(Boolean) : [];
   const categories = Array.isArray(params.categories) ? params.categories.filter(Boolean) : [];
   const baseUrl = resolveFirecrawlBaseUrl(params.cfg);
+  const allowSelfHosted = resolveFirecrawlAllowSelfHosted(params.cfg);
   const cacheKey = normalizeCacheKey(
     JSON.stringify({
       type: "firecrawl-search",
@@ -306,7 +315,7 @@ export async function runFirecrawlSearch(
   const start = Date.now();
   const payload = await postFirecrawlJson(
     {
-      url: resolveEndpoint(baseUrl, "/v2/search"),
+      url: resolveEndpoint(baseUrl, "/v2/search", { allowSelfHosted }),
       timeoutSeconds,
       apiKey,
       body,
@@ -421,6 +430,7 @@ export async function runFirecrawlScrape(
     );
   }
   const baseUrl = resolveFirecrawlBaseUrl(params.cfg);
+  const allowSelfHosted = resolveFirecrawlAllowSelfHosted(params.cfg);
   const timeoutSeconds = resolveFirecrawlScrapeTimeoutSeconds(params.cfg, params.timeoutSeconds);
   const onlyMainContent = resolveFirecrawlOnlyMainContent(params.cfg, params.onlyMainContent);
   const maxAgeMs = resolveFirecrawlMaxAgeMs(params.cfg, params.maxAgeMs);
@@ -450,7 +460,7 @@ export async function runFirecrawlScrape(
 
   const payload = await postFirecrawlJson(
     {
-      url: resolveEndpoint(baseUrl, "/v2/scrape"),
+      url: resolveEndpoint(baseUrl, "/v2/scrape", { allowSelfHosted }),
       timeoutSeconds,
       apiKey,
       errorLabel: "Firecrawl",

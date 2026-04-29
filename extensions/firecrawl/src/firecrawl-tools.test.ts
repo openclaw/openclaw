@@ -611,13 +611,23 @@ describe("firecrawl tools", () => {
     );
     expect(() =>
       firecrawlClientTesting.resolveEndpoint("http://api.firecrawl.dev", "/v2/scrape"),
-    ).toThrow("Firecrawl baseUrl must use https.");
+    ).toThrow("Firecrawl baseUrl must use https");
     expect(() =>
       firecrawlClientTesting.resolveEndpoint("https://127.0.0.1:8787", "/v2/scrape"),
     ).toThrow("Firecrawl baseUrl host is not allowed");
     expect(() =>
       firecrawlClientTesting.resolveEndpoint("https://attacker.example", "/v2/search"),
     ).toThrow("Firecrawl baseUrl host is not allowed");
+    expect(
+      firecrawlClientTesting.resolveEndpoint("http://127.0.0.1:8787", "/v2/scrape", {
+        allowSelfHosted: true,
+      }),
+    ).toBe("http://127.0.0.1:8787/v2/scrape");
+    expect(
+      firecrawlClientTesting.resolveEndpoint("https://firecrawl.internal", "/v2/search", {
+        allowSelfHosted: true,
+      }),
+    ).toBe("https://firecrawl.internal/v2/search");
   });
 
   it("respects positive numeric overrides for scrape and cache behavior", () => {

@@ -49,6 +49,9 @@
           },
           "baseUrl": {
             "type": "string"
+          },
+          "allowSelfHosted": {
+            "type": "boolean"
           }
         }
       },
@@ -61,6 +64,9 @@
           },
           "baseUrl": {
             "type": "string"
+          },
+          "allowSelfHosted": {
+            "type": "boolean"
           },
           "onlyMainContent": {
             "type": "boolean"

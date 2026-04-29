@@ -24,6 +24,7 @@ type FirecrawlSearchConfig =
   | {
       apiKey?: unknown;
       baseUrl?: string;
+      allowSelfHosted?: boolean;
     }
   | undefined;
 
@@ -32,10 +33,12 @@ type PluginEntryConfig =
       webSearch?: {
         apiKey?: unknown;
         baseUrl?: string;
+        allowSelfHosted?: boolean;
       };
       webFetch?: {
         apiKey?: unknown;
         baseUrl?: string;
+        allowSelfHosted?: boolean;
         onlyMainContent?: boolean;
         maxAgeMs?: number;
         timeoutSeconds?: number;
@@ -47,6 +50,7 @@ type FirecrawlFetchConfig =
   | {
       apiKey?: unknown;
       baseUrl?: string;
+      allowSelfHosted?: boolean;
       onlyMainContent?: boolean;
       maxAgeMs?: number;
       timeoutSeconds?: number;
@@ -193,6 +197,12 @@ export function resolveFirecrawlBaseUrl(cfg?: OpenClawConfig): string {
     normalizeSecretInput(process.env.FIRECRAWL_BASE_URL) ||
     "";
   return configured || DEFAULT_FIRECRAWL_BASE_URL;
+}
+
+export function resolveFirecrawlAllowSelfHosted(cfg?: OpenClawConfig): boolean {
+  const search = resolveFirecrawlSearchConfig(cfg);
+  const fetch = resolveFirecrawlFetchConfig(cfg);
+  return search?.allowSelfHosted === true || fetch?.allowSelfHosted === true;
 }
 
 export function resolveFirecrawlOnlyMainContent(cfg?: OpenClawConfig, override?: boolean): boolean {
