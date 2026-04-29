@@ -40,12 +40,6 @@ jobs:
           script: |
             const comment = context.payload.comment;
             const issue = context.payload.issue;
-            const association = comment.author_association;
-            const maintainerAssociations = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
-            if (!maintainerAssociations.has(association)) {
-              core.info(`Skipping non-maintainer command reaction for association ${association || "unknown"}.`);
-              return;
-            }
 
             if (!issue.pull_request) {
               core.info("Skipping command reaction because the comment is not on a pull request.");
@@ -63,6 +57,28 @@ jobs:
 
             if (!commandLine) {
               core.info(`Skipping comment ${comment.id}; no tracked maintainer command found.`);
+              return;
+            }
+
+            const maintainerPermissions = new Set(["admin", "maintain", "write"]);
+            let permission = "none";
+            try {
+              const result = await github.rest.repos.getCollaboratorPermissionLevel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                username: comment.user.login,
+              });
+              permission = String(result.data.permission || "none").toLowerCase();
+            } catch (error) {
+              if (error.status !== 404) {
+                core.info(`Could not resolve repository permission for ${comment.user.login}: ${error.message}`);
+              }
+            }
+
+            if (!maintainerPermissions.has(permission)) {
+              core.info(
+                `Skipping non-maintainer command reaction for ${comment.user.login}; repository permission is ${permission}.`,
+              );
               return;
             }
 
