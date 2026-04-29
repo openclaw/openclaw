@@ -165,7 +165,7 @@ description: test skill
 
     // The scanner should not be called for trusted source skills
     expect(scanSpy).not.toHaveBeenCalled();
-    // No findings should be reported
+    // No code-safety violation findings should be reported (trusted_source info findings are excluded)
     const skillFindings = findings.filter((f) => f.checkId === "skills.code_safety");
     expect(skillFindings).toHaveLength(0);
   });

@@ -23781,6 +23781,20 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
               type: "string",
             },
           },
+          trustedSources: {
+            type: "array",
+            items: {
+              type: "string",
+              enum: [
+                "openclaw-bundled",
+                "openclaw-managed",
+                "openclaw-extra",
+                "openclaw-workspace",
+                "agents-skills-personal",
+                "agents-skills-project",
+              ],
+            },
+          },
           load: {
             type: "object",
             properties: {
@@ -23876,6 +23890,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
               type: "object",
               properties: {
                 enabled: {
+                  type: "boolean",
+                },
+                persist: {
                   type: "boolean",
                 },
                 apiKey: {
