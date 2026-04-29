@@ -26,12 +26,15 @@ import {
   buildSandboxCreateArgs,
   dockerContainerState,
   execDocker,
+  execDockerRaw,
+  isDockerDaemonUnavailable,
   readDockerContainerEnvVar,
   readDockerContainerLabel,
   readDockerNetworkDriver,
   readDockerNetworkGateway,
   readDockerPort,
 } from "./docker.js";
+import type { ExecDockerRawOptions } from "./docker.js";
 import {
   buildNoVncObserverTokenUrl,
   consumeNoVncObserverToken,
@@ -123,11 +126,19 @@ function buildSandboxBrowserResolvedConfig(params: {
   };
 }
 
+import type { SandboxBrowserConfig, SandboxConfig } from "./types.js";
+
 async function ensureSandboxBrowserImage(image: string) {
   const result = await execDocker(["image", "inspect", image], {
     allowFailure: true,
   });
   if (result.code === 0) {
+    return;
+  }
+  const stderr = result.stderr.trim();
+  // When Docker daemon is unavailable, silently return instead of throwing.
+  // This allows sandbox.mode="off" sessions to start without Docker errors.
+  if (isDockerDaemonUnavailable(stderr)) {
     return;
   }
   throw new Error(

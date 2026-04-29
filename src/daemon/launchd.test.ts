@@ -527,7 +527,7 @@ describe("launchd install", () => {
     expect(state.dirModes.get(tmpDir)).toBe(0o700);
   });
 
-  it("writes KeepAlive=true policy with restrictive umask", async () => {
+  it("writes KeepAlive SuccessfulExit=false policy with restrictive umask", async () => {
     const env = createDefaultLaunchdEnv();
     await installLaunchAgent({
       env,
@@ -538,8 +538,9 @@ describe("launchd install", () => {
     const plistPath = resolveLaunchAgentPlistPath(env);
     const plist = state.files.get(plistPath) ?? "";
     expect(plist).toContain("<key>KeepAlive</key>");
-    expect(plist).toContain("<true/>");
-    expect(plist).not.toContain("<key>SuccessfulExit</key>");
+    expect(plist).toContain("<key>SuccessfulExit</key>");
+    expect(plist).toContain("<false/>");
+    expect(plist).not.toContain("<key>KeepAlive</key>\n    <true/>");
     expect(plist).toContain("<key>Umask</key>");
     expect(plist).toContain(`<integer>${LAUNCH_AGENT_UMASK_DECIMAL}</integer>`);
     expect(plist).toContain("<key>ThrottleInterval</key>");
