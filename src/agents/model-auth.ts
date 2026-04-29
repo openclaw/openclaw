@@ -304,6 +304,31 @@ export function hasSyntheticLocalProviderAuthConfig(params: {
   return Boolean(providerConfig.baseUrl && isLocalBaseUrl(providerConfig.baseUrl));
 }
 
+export function hasRuntimeAvailableProviderAuth(params: {
+  provider: string;
+  cfg?: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+}): boolean {
+  const provider = normalizeProviderId(params.provider);
+  const authOverride = resolveProviderAuthOverride(params.cfg, provider);
+  if (authOverride === "aws-sdk") {
+    return true;
+  }
+  if (resolveEnvApiKey(provider, params.env)) {
+    return true;
+  }
+  if (resolveUsableCustomProviderApiKey({ cfg: params.cfg, provider, env: params.env })) {
+    return true;
+  }
+  if (resolveSyntheticLocalProviderAuth({ cfg: params.cfg, provider })) {
+    return true;
+  }
+  if (authOverride === undefined && provider === "amazon-bedrock") {
+    return true;
+  }
+  return false;
+}
+
 type SyntheticProviderAuthResolution = {
   auth?: ResolvedProviderAuth;
   blockedOnManagedSecretRef?: boolean;

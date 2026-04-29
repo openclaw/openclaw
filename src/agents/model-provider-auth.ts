@@ -4,7 +4,7 @@ import {
   listProfilesForProvider,
   type AuthProfileStore,
 } from "./auth-profiles.js";
-import { hasUsableCustomProviderApiKey, resolveEnvApiKey } from "./model-auth.js";
+import { hasRuntimeAvailableProviderAuth } from "./model-auth.js";
 import { normalizeProviderId } from "./model-selection.js";
 
 export function hasAuthForModelProvider(params: {
@@ -15,18 +15,21 @@ export function hasAuthForModelProvider(params: {
   store?: AuthProfileStore;
 }): boolean {
   const provider = normalizeProviderId(params.provider);
+  if (
+    hasRuntimeAvailableProviderAuth({
+      provider,
+      cfg: params.cfg,
+      env: params.env,
+    })
+  ) {
+    return true;
+  }
   const store =
     params.store ??
     ensureAuthProfileStore(params.agentDir, {
       allowKeychainPrompt: false,
     });
   if (listProfilesForProvider(store, provider).length > 0) {
-    return true;
-  }
-  if (resolveEnvApiKey(provider, params.env)?.apiKey) {
-    return true;
-  }
-  if (hasUsableCustomProviderApiKey(params.cfg, provider, params.env)) {
     return true;
   }
   return false;
