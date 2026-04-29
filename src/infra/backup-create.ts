@@ -145,7 +145,16 @@ async function writeTarArchiveWithRetry(params: {
       if (!isTarEofRaceError(err) || attempt === BACKUP_TAR_MAX_ATTEMPTS) {
         break;
       }
-      await fs.rm(params.tempArchivePath, { force: true }).catch(() => undefined);
+      try {
+        await fs.rm(params.tempArchivePath, { force: true });
+      } catch (cleanupErr) {
+        const code = (cleanupErr as NodeJS.ErrnoException).code;
+        if (code && code !== "ENOENT") {
+          params.log?.(
+            `Backup archiver could not remove temp archive ${params.tempArchivePath} between retries: ${code}. Continuing.`,
+          );
+        }
+      }
       const backoff = BACKUP_TAR_BACKOFF_MS[attempt - 1] ?? 0;
       const offendingPath = (err as NodeJS.ErrnoException).path;
       params.log?.(
