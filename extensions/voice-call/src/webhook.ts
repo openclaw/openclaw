@@ -29,6 +29,7 @@ import { startStaleCallReaper } from "./webhook/stale-call-reaper.js";
 
 const MAX_WEBHOOK_BODY_BYTES = WEBHOOK_BODY_READ_DEFAULTS.preAuth.maxBytes;
 const WEBHOOK_BODY_TIMEOUT_MS = WEBHOOK_BODY_READ_DEFAULTS.preAuth.timeoutMs;
+const MISSING_REMOTE_ADDRESS_IN_FLIGHT_KEY = "__voice_call_no_remote__";
 const STREAM_DISCONNECT_HANGUP_GRACE_MS = 2000;
 const TRANSCRIPT_LOG_MAX_CHARS = 200;
 
@@ -616,18 +617,16 @@ export class VoiceCallWebhookServer {
       return { statusCode: 401, body: "Unauthorized" };
     }
 
-    // The shared in-flight limiter (createWebhookInFlightLimiter) returns true
-    // unconditionally when handed an empty key — that is the fail-open path. If
-    // req.socket.remoteAddress is missing for any reason (closed socket, edge
-    // proxy quirk), fall back to a constant non-empty key so all such requests
-    // share one bucket instead of bypassing the limiter entirely.
+    // createWebhookInFlightLimiter intentionally treats an empty key as fail-open.
+    // Missing socket metadata must still share one bucket instead of bypassing
+    // the pre-auth limiter entirely.
     const remoteAddress = req.socket.remoteAddress;
     if (!remoteAddress) {
       console.warn(
         `[voice-call] Webhook accepted with no remote address; using shared fallback in-flight key`,
       );
     }
-    const inFlightKey = remoteAddress || "__voice_call_no_remote__";
+    const inFlightKey = remoteAddress || MISSING_REMOTE_ADDRESS_IN_FLIGHT_KEY;
     if (!this.webhookInFlightLimiter.tryAcquire(inFlightKey)) {
       console.warn(`[voice-call] Webhook rejected before body read: too many in-flight requests`);
       return { statusCode: 429, body: "Too Many Requests" };
