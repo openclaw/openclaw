@@ -384,26 +384,27 @@ export function sanitizeUserFacingText(text: unknown, opts?: { errorContext?: bo
   const errorContext = opts?.errorContext ?? false;
   const stripped = stripInboundMetadata(stripInternalRuntimeContext(stripFinalTagsFromText(raw)));
   const trimmed = stripped.trim();
-  if (!trimmed) {
+  // Strip internal replay placeholder before any user-facing delivery.
+  const withoutReplacer = trimmed.replace(/\B\[tool calls omitted\]\B/gi, "").trim();
+  if (!withoutReplacer) {
     return "";
   }
 
-  if (!errorContext && shouldRewriteRawPayloadWithoutErrorContext(trimmed)) {
-    return formatRawAssistantErrorForUi(trimmed);
+  if (!errorContext && shouldRewriteRawPayloadWithoutErrorContext(withoutReplacer)) {
+    return formatRawAssistantErrorForUi(withoutReplacer);
   }
-
   if (errorContext) {
-    const execDeniedMessage = formatExecDeniedUserMessage(trimmed);
+    const execDeniedMessage = formatExecDeniedUserMessage(withoutReplacer);
     if (execDeniedMessage) {
       return execDeniedMessage;
     }
 
-    const diskSpaceCopy = formatDiskSpaceErrorCopy(trimmed);
+    const diskSpaceCopy = formatDiskSpaceErrorCopy(withoutReplacer);
     if (diskSpaceCopy) {
       return diskSpaceCopy;
     }
 
-    if (/incorrect role information|roles must alternate/i.test(trimmed)) {
+    if (/incorrect role information|roles must alternate/i.test(withoutReplacer)) {
       return (
         "Message ordering conflict - please try again. " +
         "If this persists, use /new to start a fresh session."
@@ -412,45 +413,41 @@ export function sanitizeUserFacingText(text: unknown, opts?: { errorContext?: bo
 
     // Keep this sanitizer on generic overflow heuristics only so callers can
     // avoid importing the heavier provider-runtime-aware error classifier.
-    if (shouldRewriteContextOverflowText(trimmed)) {
+    if (shouldRewriteContextOverflowText(withoutReplacer)) {
       return (
         "Context overflow: prompt too large for the model. " +
         "Try /reset (or /new) to start a fresh session, or use a larger-context model."
       );
     }
 
-    if (isBillingErrorMessage(trimmed)) {
+    if (isBillingErrorMessage(withoutReplacer)) {
       return BILLING_ERROR_USER_MESSAGE;
     }
-
-    if (isInvalidStreamingEventOrderError(trimmed)) {
+    if (isInvalidStreamingEventOrderError(withoutReplacer)) {
       return "LLM request failed: provider returned an invalid streaming response. Please try again.";
     }
-
-    if (isRawApiErrorPayload(trimmed) || isLikelyHttpErrorText(trimmed)) {
-      return formatRawAssistantErrorForUi(trimmed);
+    if (isRawApiErrorPayload(withoutReplacer) || isLikelyHttpErrorText(withoutReplacer)) {
+      return formatRawAssistantErrorForUi(withoutReplacer);
     }
-
-    if (isStreamingJsonParseError(trimmed)) {
+    if (isStreamingJsonParseError(withoutReplacer)) {
       return "LLM streaming response contained a malformed fragment. Please try again.";
     }
-
-    if (ERROR_PREFIX_RE.test(trimmed)) {
-      const prefixedCopy = formatRateLimitOrOverloadedErrorCopy(trimmed);
+    if (ERROR_PREFIX_RE.test(withoutReplacer)) {
+      const prefixedCopy = formatRateLimitOrOverloadedErrorCopy(withoutReplacer);
       if (prefixedCopy) {
         return prefixedCopy;
       }
-      const transportCopy = formatTransportErrorCopy(trimmed);
+      const transportCopy = formatTransportErrorCopy(withoutReplacer);
       if (transportCopy) {
         return transportCopy;
       }
-      if (isTimeoutErrorMessage(trimmed)) {
+      if (isTimeoutErrorMessage(withoutReplacer)) {
         return "LLM request timed out.";
       }
-      return formatRawAssistantErrorForUi(trimmed);
+      return formatRawAssistantErrorForUi(withoutReplacer);
     }
   }
 
-  const withoutLeadingEmptyLines = stripped.replace(/^(?:[ \t]*\r?\n)+/, "");
+  const withoutLeadingEmptyLines = withoutReplacer.replace(/^(?:[ \t]*\r?\n)+/, "");
   return collapseConsecutiveDuplicateBlocks(withoutLeadingEmptyLines);
 }
