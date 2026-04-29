@@ -232,7 +232,6 @@ describe("evaluateChannelHealth", () => {
         configured: true,
         mode: "webhook",
         lastStartAt: 0,
-        lastConnectedAt: 0,
         lastEventAt: 0,
       },
       {

@@ -20,4 +20,5 @@ export {
   normalizeDiscordMessagingTarget,
   normalizeDiscordOutboundTarget,
 } from "./src/normalize.js";
+export { resolveDiscordRuntimeGroupPolicy } from "./src/runtime-group-policy.js";
 export { collectDiscordStatusIssues } from "./src/status-issues.js";
