@@ -8,6 +8,7 @@ import {
   listTasksForSessionKeyForStatus,
 } from "../../tasks/task-status-access.js";
 import {
+  buildTaskOperationalSummary,
   buildTaskStatusSnapshot,
   formatTaskStatusDetail,
   formatTaskStatusTitle,
@@ -80,8 +81,12 @@ function formatVisibleTask(task: TaskRecord, index: number): string {
   const status = task.status.replaceAll("_", " ");
   const timing = formatTaskTiming(task);
   const detail = formatTaskDetail(task);
+  const operationalSummary = buildTaskOperationalSummary(task);
   const meta = [TASK_RUNTIME_LABELS[task.runtime], status, timing].filter(Boolean).join(" · ");
   const lines = [`${index + 1}. ${TASK_STATUS_ICONS[task.status]} ${title}`, `   ${meta}`];
+  lines.push(
+    `   ${operationalSummary.state} · ${operationalSummary.stage}${operationalSummary.nextAction ? ` · next: ${operationalSummary.nextAction}` : ""}`,
+  );
   if (detail) {
     lines.push(`   ${detail}`);
   }

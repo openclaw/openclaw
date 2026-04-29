@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { TaskRecord } from "./task-registry.types.js";
 import {
+  buildTaskOperationalSummary,
   buildTaskStatusSnapshot,
+  formatTaskOperationalSummary,
   formatTaskStatusDetail,
   formatTaskStatusTitle,
   sanitizeTaskStatusText,
@@ -142,5 +144,34 @@ describe("task status formatting", () => {
         ].join("\n"),
       ),
     ).toBe("");
+  });
+
+  it("builds a blocked operational summary for approval waits", () => {
+    const task = makeTask({
+      status: "awaiting_approval",
+      progressSummary: "patch applied",
+    });
+
+    expect(buildTaskOperationalSummary(task)).toMatchObject({
+      state: "blocked",
+      stage: "awaiting approval",
+      lastGoodStep: "patch applied",
+      blocker: "approval required",
+      nextAction: "approve and continue",
+    });
+    expect(formatTaskOperationalSummary(task)).toBe(
+      "blocked · awaiting approval · last good step: patch applied · blocker: approval required · next: approve and continue",
+    );
+  });
+
+  it("builds an active operational summary for running work", () => {
+    const task = makeTask({
+      status: "running",
+      progressSummary: "tests running",
+    });
+
+    expect(formatTaskOperationalSummary(task)).toBe(
+      "active · running · last good step: tests running · next: wait for completion",
+    );
   });
 });

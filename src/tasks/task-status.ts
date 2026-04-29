@@ -4,10 +4,7 @@ import {
 } from "../agents/internal-runtime-context.js";
 import { sanitizeUserFacingText } from "../agents/pi-embedded-helpers/sanitize-user-facing-text.js";
 import { truncateUtf16Safe } from "../utils.js";
-import {
-  isActiveTaskStatus,
-  type TaskRecord,
-} from "./task-registry.types.js";
+import { isActiveTaskStatus, type TaskRecord } from "./task-registry.types.js";
 const FAILURE_TASK_STATUSES = new Set(["failed", "timed_out", "lost"]);
 export const TASK_STATUS_RECENT_WINDOW_MS = 5 * 60_000;
 export const TASK_STATUS_TITLE_MAX_CHARS = 80;
@@ -152,6 +149,99 @@ export function formatTaskStatusDetail(task: TaskRecord): string | undefined {
       maxChars: TASK_STATUS_DETAIL_MAX_CHARS,
     }) || undefined
   );
+}
+
+export type TaskOperationalSummary = {
+  state: "active" | "blocked" | "finished" | "failed" | "cancelled";
+  stage: string;
+  lastGoodStep?: string;
+  blocker?: string;
+  nextAction?: string;
+};
+
+function truncateTaskOperationalSegment(value: string, maxChars = 80): string {
+  return truncateTaskStatusText(value, maxChars);
+}
+
+export function buildTaskOperationalSummary(task: TaskRecord): TaskOperationalSummary {
+  const detail = formatTaskStatusDetail(task);
+  if (task.status === "queued") {
+    return {
+      state: "active",
+      stage: "queued",
+      ...(detail ? { lastGoodStep: detail } : {}),
+      nextAction: "wait for start",
+    };
+  }
+  if (task.status === "running") {
+    return {
+      state: "active",
+      stage: "running",
+      ...(detail ? { lastGoodStep: detail } : {}),
+      nextAction: "wait for completion",
+    };
+  }
+  if (task.status === "awaiting_approval") {
+    return {
+      state: "blocked",
+      stage: "awaiting approval",
+      ...(detail ? { lastGoodStep: detail } : {}),
+      blocker: "approval required",
+      nextAction: "approve and continue",
+    };
+  }
+  if (task.status === "waiting_external") {
+    return {
+      state: "blocked",
+      stage: "waiting external",
+      ...(detail ? { lastGoodStep: detail } : {}),
+      blocker: "external dependency",
+      nextAction: "wait for external result",
+    };
+  }
+  if (task.status === "succeeded") {
+    return {
+      state: "finished",
+      stage: "completed",
+      ...(detail ? { lastGoodStep: detail } : {}),
+      nextAction: "no action",
+    };
+  }
+  if (task.status === "cancelled") {
+    return {
+      state: "cancelled",
+      stage: "cancelled",
+      ...(detail ? { lastGoodStep: detail } : {}),
+    };
+  }
+  return {
+    state: "failed",
+    stage: task.status.replaceAll("_", " "),
+    ...(detail ? { blocker: detail } : {}),
+    nextAction: "inspect failure",
+  };
+}
+
+export function formatTaskOperationalSummary(
+  task: TaskRecord,
+  opts?: { maxChars?: number },
+): string {
+  const summary = buildTaskOperationalSummary(task);
+  const segments = [`${summary.state} · ${summary.stage}`];
+  if (summary.lastGoodStep) {
+    segments.push(
+      `last good step: ${truncateTaskOperationalSegment(summary.lastGoodStep, opts?.maxChars ?? 80)}`,
+    );
+  }
+  if (summary.blocker) {
+    segments.push(
+      `blocker: ${truncateTaskOperationalSegment(summary.blocker, opts?.maxChars ?? 80)}`,
+    );
+  }
+  if (summary.nextAction) {
+    segments.push(`next: ${summary.nextAction}`);
+  }
+  return segments.join(" · ");
 }
 
 export type TaskStatusSnapshot = {

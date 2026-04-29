@@ -40,6 +40,7 @@ import {
   type TaskNotifyPolicy,
   type TaskRecord,
 } from "../tasks/task-registry.types.js";
+import { formatTaskOperationalSummary } from "../tasks/task-status.js";
 import { isRich, theme } from "../terminal/theme.js";
 
 const RUNTIME_PAD = 8;
@@ -114,13 +115,7 @@ function formatTaskRows(tasks: TaskRecord[], rich: boolean) {
   ].join(" ");
   const lines = [rich ? theme.heading(header) : header];
   for (const task of tasks) {
-    const summary = truncate(
-      normalizeOptionalString(task.terminalSummary) ||
-        normalizeOptionalString(task.progressSummary) ||
-        normalizeOptionalString(task.label) ||
-        task.task.trim(),
-      80,
-    );
+    const summary = truncate(formatTaskOperationalSummary(task), 120);
     const line = [
       shortToken(task.taskId).padEnd(ID_PAD),
       task.runtime.padEnd(RUNTIME_PAD),
