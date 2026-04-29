@@ -1,6 +1,10 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   NODE_BROWSER_PROXY_COMMAND,
+  NODE_DIR_FETCH_COMMAND,
+  NODE_DIR_LIST_COMMAND,
+  NODE_FILE_FETCH_COMMAND,
+  NODE_FILE_WRITE_COMMAND,
   NODE_SYSTEM_NOTIFY_COMMAND,
   NODE_SYSTEM_RUN_COMMANDS,
 } from "../infra/node-commands.js";
@@ -48,6 +52,17 @@ const MOTION_COMMANDS = ["motion.activity", "motion.pedometer"];
 
 const SMS_DANGEROUS_COMMANDS = ["sms.send", "sms.search"];
 
+// File operations on arbitrary node paths are sensitive — operator must opt
+// in via `gateway.nodes.allowCommands`. Writes are more dangerous than reads;
+// dir.list leaks information through enumeration; dir.fetch transfers tree
+// content. All four are dangerous-by-default.
+const FILE_DANGEROUS_COMMANDS = [
+  NODE_FILE_FETCH_COMMAND,
+  NODE_DIR_LIST_COMMAND,
+  NODE_DIR_FETCH_COMMAND,
+  NODE_FILE_WRITE_COMMAND,
+];
+
 // iOS nodes don't implement system.run/which, but they do support notifications.
 const IOS_SYSTEM_COMMANDS = [NODE_SYSTEM_NOTIFY_COMMAND];
 
@@ -72,6 +87,7 @@ export const DEFAULT_DANGEROUS_NODE_COMMANDS = [
   ...CALENDAR_DANGEROUS_COMMANDS,
   ...REMINDERS_DANGEROUS_COMMANDS,
   ...SMS_DANGEROUS_COMMANDS,
+  ...FILE_DANGEROUS_COMMANDS,
 ];
 
 const PLATFORM_DEFAULTS: Record<string, string[]> = {

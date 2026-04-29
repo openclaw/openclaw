@@ -1,0 +1,17 @@
+{
+  "name": "@openclaw/file-transfer",
+  "version": "2026.4.27",
+  "description": "OpenClaw file transfer plugin (file_fetch, dir_list, dir_fetch, file_write, file_watch)",
+  "type": "module",
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "bundle": {
+      "stageRuntimeDependencies": false
+    }
+  }
+}

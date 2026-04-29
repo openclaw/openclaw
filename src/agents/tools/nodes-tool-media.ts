@@ -27,6 +27,7 @@ export const MEDIA_INVOKE_ACTIONS = {
   "camera.clip": "camera_clip",
   "photos.latest": "photos_latest",
   "screen.record": "screen_record",
+  "file.fetch": "file_fetch",
 } as const;
 
 export type NodeMediaAction = "camera_snap" | "photos_latest" | "camera_clip" | "screen_record";
