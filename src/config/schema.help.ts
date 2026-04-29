@@ -190,6 +190,43 @@ export const FIELD_HELP: Record<string, string> = {
     "Idle runtime TTL in minutes for ACP session workers before eligible cleanup.",
   "acp.runtime.installCommand":
     "Optional operator install/setup command shown by `/acp install` and `/acp doctor` when ACP backend wiring is missing.",
+  commitments:
+    "Inferred follow-up commitment controls for automatically detecting check-ins from conversation turns and delivering them through heartbeat runs. Keep enabled for ambient follow-ups, or disable when you only want explicit reminders.",
+  "commitments.enabled":
+    "Global inferred commitment feature gate. Set false to disable background extraction, storage, and heartbeat delivery for inferred follow-ups.",
+  "commitments.store":
+    "Optional JSON store path for inferred commitments. Leave unset to use the default OpenClaw state directory store.",
+  "commitments.categories":
+    "Category gates for inferred commitments such as event check-ins, deadline progress, open loops, and care check-ins. Use these to narrow what OpenClaw infers while keeping the system enabled.",
+  "commitments.categories.eventCheckIns":
+    "Enables inferred event check-ins such as asking how an interview or appointment went. Default: true.",
+  "commitments.categories.deadlineCheckIns":
+    "Enables inferred deadline or progress check-ins for work the user expects to revisit. Default: true.",
+  "commitments.categories.openLoops":
+    "Enables inferred open-loop check-ins when the user is waiting on an outcome or unresolved next step. Default: true.",
+  "commitments.categories.careCheckIns":
+    'Controls personal care check-ins. Use "gentle" for conservative care follow-ups, true for normal extraction, or false to disable them.',
+  "commitments.extraction":
+    "Background extraction controls for the hidden LLM pass that creates inferred commitments without adding content to the conversation transcript.",
+  "commitments.extraction.enabled":
+    "Enables hidden background LLM extraction for inferred commitments. Set false to keep stored commitments deliverable while preventing new inferred commitments.",
+  "commitments.extraction.model":
+    "Optional provider/model override for hidden commitment extraction runs. Leave unset to use the active agent model.",
+  "commitments.extraction.debounceMs":
+    "Milliseconds to wait before draining queued conversation turns into a batched hidden extraction run. Default: 15000.",
+  "commitments.extraction.batchMaxItems":
+    "Maximum queued turn extractions sent in one hidden model call. Default: 8.",
+  "commitments.extraction.confidenceThreshold":
+    "Minimum accepted confidence from the extractor for routine inferred commitments. Default: 0.72.",
+  "commitments.extraction.careConfidenceThreshold":
+    "Minimum accepted confidence from the extractor for personal care check-ins. Default: 0.86.",
+  "commitments.extraction.timeoutSeconds":
+    "Maximum runtime in seconds for a hidden extraction pass before it is abandoned. Default: 45.",
+  "commitments.delivery": "Heartbeat delivery controls for due inferred commitments.",
+  "commitments.delivery.maxPerHeartbeat":
+    "Maximum due inferred commitments injected into one heartbeat turn. Default: 3.",
+  "commitments.delivery.expireAfterHours":
+    "Number of hours after the due time before a pending inferred commitment expires instead of being delivered. Default: 72.",
   "agents.list.*.skills":
     "Optional allowlist of skills for this agent. If omitted, the agent inherits agents.defaults.skills when set; otherwise skills stay unrestricted. Set [] for no skills. An explicit list fully replaces inherited defaults instead of merging with them.",
   "agents.list[].skills":
