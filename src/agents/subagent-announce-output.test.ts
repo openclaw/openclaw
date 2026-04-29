@@ -82,6 +82,28 @@ describe("readSubagentOutput", () => {
     );
   });
 
+  it("does not use raw tool results as successful completion output", async () => {
+    const deps = installOutputDeps({
+      messages: [
+        {
+          role: "assistant",
+          stopReason: "toolUse",
+          content: [{ type: "toolCall", id: "call-grep", name: "exec", arguments: {} }],
+        },
+        {
+          role: "toolResult",
+          toolCallId: "call-grep",
+          content: [{ type: "text", text: "raw grep output that is not a final report" }],
+        },
+      ],
+    });
+
+    await expect(
+      readSubagentOutput("agent:main:subagent:child", { status: "ok" }),
+    ).resolves.toBeUndefined();
+    expect(deps.readLatestAssistantReply).toHaveBeenCalled();
+  });
+
   it("keeps normal tool-use assistant output when the tool is not sessions_yield", async () => {
     installOutputDeps({
       messages: [
