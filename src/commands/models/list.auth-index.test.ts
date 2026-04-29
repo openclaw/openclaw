@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import { createModelListAuthIndex } from "./list.auth-index.js";
 
@@ -19,6 +19,21 @@ const pluginRegistryMocks = vi.hoisted(() => ({
     }),
   ),
 }));
+
+const envCandidateMocks = vi.hoisted(() => ({
+  resolveProviderEnvApiKeyCandidates: vi.fn(),
+}));
+
+vi.mock("../../agents/model-auth-env-vars.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../agents/model-auth-env-vars.js")>();
+  envCandidateMocks.resolveProviderEnvApiKeyCandidates.mockImplementation(
+    actual.resolveProviderEnvApiKeyCandidates,
+  );
+  return {
+    ...actual,
+    resolveProviderEnvApiKeyCandidates: envCandidateMocks.resolveProviderEnvApiKeyCandidates,
+  };
+});
 
 vi.mock("../../plugins/plugin-registry.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../plugins/plugin-registry.js")>();
@@ -47,6 +62,11 @@ function modelConfig(id: string) {
 }
 
 describe("createModelListAuthIndex", () => {
+  beforeEach(() => {
+    envCandidateMocks.resolveProviderEnvApiKeyCandidates.mockClear();
+    pluginRegistryMocks.loadPluginRegistrySnapshotWithMetadata.mockClear();
+  });
+
   it("normalizes auth aliases from profiles", () => {
     const index = createModelListAuthIndex({
       cfg: {},
@@ -80,7 +100,8 @@ describe("createModelListAuthIndex", () => {
     expect(index.hasProviderAuth("openai")).toBe(false);
   });
 
-  it("uses manifest env metadata for google vertex auth", () => {
+  it("checks resolver-only env auth on demand", () => {
+    envCandidateMocks.resolveProviderEnvApiKeyCandidates.mockReturnValueOnce({});
     const index = createModelListAuthIndex({
       cfg: {},
       authStore: emptyStore,

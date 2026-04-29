@@ -58,6 +58,7 @@ export function createModelListAuthIndex(
   const envCandidateMap = resolveProviderEnvApiKeyCandidates({ config: params.cfg, env });
   const authenticatedProviders = new Set<string>();
   const syntheticAuthProviders = new Set<string>();
+  const envProviderAuthCache = new Map<string, boolean>();
   const addProvider = (provider: string | undefined) => {
     if (!provider?.trim()) {
       return;
@@ -81,11 +82,6 @@ export function createModelListAuthIndex(
       addProvider(provider);
     }
   }
-  // Google Vertex ADC is still represented by resolveEnvApiKey's compatibility
-  // path. Move this into manifest auth signals once that contract exists.
-  if (resolveEnvApiKey("google-vertex", env, { aliasMap, candidateMap: envCandidateMap })) {
-    addProvider("google-vertex");
-  }
 
   if (resolveAwsSdkEnvVarName(env)) {
     addProvider("amazon-bedrock");
@@ -105,11 +101,29 @@ export function createModelListAuthIndex(
     addSyntheticProvider(provider);
   }
 
+  const hasEnvProviderAuth = (provider: string): boolean => {
+    const normalized = normalizeAuthProvider(provider, aliasMap);
+    const cached = envProviderAuthCache.get(normalized);
+    if (cached !== undefined) {
+      return cached;
+    }
+    const hasAuth = Boolean(
+      resolveEnvApiKey(provider, env, { aliasMap, candidateMap: envCandidateMap }),
+    );
+    envProviderAuthCache.set(normalized, hasAuth);
+    if (hasAuth) {
+      authenticatedProviders.add(normalized);
+    }
+    return hasAuth;
+  };
+
   return {
     hasProviderAuth(provider: string): boolean {
+      const normalizedProvider = normalizeAuthProvider(provider, aliasMap);
       return (
-        authenticatedProviders.has(normalizeAuthProvider(provider, aliasMap)) ||
-        syntheticAuthProviders.has(normalizeProviderIdForAuth(provider))
+        authenticatedProviders.has(normalizedProvider) ||
+        syntheticAuthProviders.has(normalizeProviderIdForAuth(provider)) ||
+        hasEnvProviderAuth(provider)
       );
     },
   };
