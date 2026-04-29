@@ -47,7 +47,6 @@ import {
   shouldReusePreparedBundledRuntimeDistMirror,
 } from "./bundled-runtime-dist-mirror-cache.js";
 import {
-  copyBundledPluginRuntimeRoot,
   materializeBundledRuntimeMirrorFile,
   precomputeBundledRuntimeMirrorMetadata,
   refreshBundledPluginRuntimeMirrorRoot,
