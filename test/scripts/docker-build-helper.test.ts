@@ -140,7 +140,6 @@ describe("docker build helper", () => {
   it("caps package acceptance legacy compatibility at 2026.4.25", () => {
     const doctorScenario = readFileSync(DOCTOR_SWITCH_SCENARIO_PATH, "utf8");
     const updateChannel = readFileSync(UPDATE_CHANNEL_SWITCH_DOCKER_E2E_PATH, "utf8");
-    const updateChannelAssertions = readFileSync(UPDATE_CHANNEL_SWITCH_ASSERTIONS_PATH, "utf8");
     const pluginsSweep = readFileSync(PLUGINS_DOCKER_SWEEP_PATH, "utf8");
     const pluginsMarketplace = readFileSync(PLUGINS_DOCKER_MARKETPLACE_PATH, "utf8");
     const pluginsClawhub = readFileSync(PLUGINS_DOCKER_CLAWHUB_PATH, "utf8");

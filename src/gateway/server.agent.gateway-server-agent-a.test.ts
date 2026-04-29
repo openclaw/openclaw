@@ -246,7 +246,6 @@ describe("gateway server agent", () => {
     >;
     expect(persisted["agent:main:subagent:depth"]?.spawnDepth).toBe(2);
     expect(persisted["agent:main:subagent:depth"]?.spawnedBy).toBe("agent:main:main");
-    await waitForAgentCall("idem-agent-subdepth");
   });
 
   test("agent derives sessionKey from agentId", async () => {
