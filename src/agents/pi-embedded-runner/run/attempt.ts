@@ -2541,6 +2541,7 @@ export async function runEmbeddedAttempt(
             // Replace the empty prompt with a safe greeting so the normal
             // submission flow below dispatches something viable.
             promptSubmission = {
+              ...promptSubmission,
               prompt:
                 "A new session was started. Greet the user briefly in your configured persona and ask what they want to do.",
             };
