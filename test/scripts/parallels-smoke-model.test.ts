@@ -7,6 +7,7 @@ const OS_SCRIPT_PATHS = [
   "scripts/e2e/parallels-windows-smoke.sh",
 ];
 const NPM_UPDATE_SCRIPT_PATH = "scripts/e2e/parallels-npm-update-smoke.sh";
+const PARALLELS_PACKAGE_COMMON_PATH = "scripts/e2e/lib/parallels-package-common.sh";
 
 describe("Parallels smoke model selection", () => {
   it("keeps the OpenAI smoke lane on the stable direct API model by default", () => {
@@ -22,12 +23,18 @@ describe("Parallels smoke model selection", () => {
   });
 
   it("seeds agent workspace state before OS smoke agent turns", () => {
+    const seedHelper = readFileSync(PARALLELS_PACKAGE_COMMON_PATH, "utf8");
+    expect(seedHelper, PARALLELS_PACKAGE_COMMON_PATH).toContain("workspace-state.json");
+    expect(seedHelper, PARALLELS_PACKAGE_COMMON_PATH).toContain("IDENTITY.md");
+    expect(seedHelper, PARALLELS_PACKAGE_COMMON_PATH).toContain("BOOTSTRAP.md");
+
     for (const scriptPath of OS_SCRIPT_PATHS) {
       const script = readFileSync(scriptPath, "utf8");
+      const expectedSeedHelper = scriptPath.includes("windows")
+        ? "parallels_powershell_seed_workspace_snippet"
+        : "parallels_bash_seed_workspace_snippet";
 
-      expect(script, scriptPath).toContain("workspace-state.json");
-      expect(script, scriptPath).toContain("IDENTITY.md");
-      expect(script, scriptPath).toContain("BOOTSTRAP.md");
+      expect(script, scriptPath).toContain(expectedSeedHelper);
       expect(script, scriptPath).toMatch(/--session-id\s+['"]?parallels-/);
       expect(script, scriptPath).toContain("agents.defaults.skipBootstrap true --strict-json");
     }
