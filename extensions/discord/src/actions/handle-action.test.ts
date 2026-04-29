@@ -125,6 +125,36 @@ describe("handleDiscordMessageAction", () => {
     );
   });
 
+  it("forwards Discord-native components from message sends", async () => {
+    const components = {
+      text: "Component fallback",
+      blocks: [{ type: "file", file: "attachment://report.txt" }],
+    };
+
+    await handleDiscordMessageAction({
+      action: "send",
+      params: {
+        to: "channel:123",
+        message: "hello",
+        components,
+      },
+      cfg: {
+        channels: { discord: { token: "tok" } },
+      } as OpenClawConfig,
+    });
+
+    expect(handleDiscordActionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "sendMessage",
+        to: "channel:123",
+        content: "hello",
+        components,
+      }),
+      expect.any(Object),
+      expect.any(Object),
+    );
+  });
+
   it("does not use another provider's current target for Discord sends", async () => {
     await expect(
       handleDiscordMessageAction({

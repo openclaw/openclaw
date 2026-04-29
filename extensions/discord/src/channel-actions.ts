@@ -10,6 +10,7 @@ import type {
 import type { DiscordActionConfig } from "openclaw/plugin-sdk/config-types";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { extractToolSend } from "openclaw/plugin-sdk/tool-send";
+import { Type } from "typebox";
 import {
   createDiscordActionGate,
   listEnabledDiscordAccounts,
@@ -23,6 +24,27 @@ let discordChannelActionsRuntimePromise:
 async function loadDiscordChannelActionsRuntime() {
   discordChannelActionsRuntimePromise ??= import("./channel-actions.runtime.js");
   return await discordChannelActionsRuntimePromise;
+}
+
+const DISCORD_COMPONENTS_SCHEMA = Type.Optional(
+  Type.Object(
+    {},
+    {
+      additionalProperties: true,
+      description:
+        'Discord-specific components payload for action: "send". Supports component blocks, buttons, selects, modals, and v2 containers.',
+    },
+  ),
+);
+
+function buildDiscordMessageToolSchema(): NonNullable<ChannelMessageToolDiscovery["schema"]> {
+  return {
+    actions: ["send"],
+    properties: {
+      components: DISCORD_COMPONENTS_SCHEMA,
+    },
+    visibility: "all-configured",
+  };
 }
 
 function resolveDiscordActionDiscovery(cfg: Parameters<typeof listEnabledDiscordAccounts>[0]) {
@@ -156,6 +178,7 @@ function describeDiscordMessageTool({
   return {
     actions: Array.from(actions),
     capabilities: ["presentation"],
+    schema: actions.has("send") ? buildDiscordMessageToolSchema() : null,
   };
 }
 
