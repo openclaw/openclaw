@@ -86,6 +86,18 @@ describe("diagnostics timeline", () => {
     ).toBe(false);
   });
 
+  it("lets false-like env diagnostics disable config-enabled timeline output", async () => {
+    const { env } = await createTimelineEnv();
+    const configWithTimeline = { diagnostics: { flags: ["timeline"] } } as OpenClawConfig;
+
+    expect(
+      isDiagnosticsTimelineEnabled({
+        config: configWithTimeline,
+        env: { ...env, OPENCLAW_DIAGNOSTICS: "0" },
+      }),
+    ).toBe(false);
+  });
+
   it("writes JSONL diagnostic events with the stable envelope", async () => {
     const { env, path } = await createTimelineEnv();
 
