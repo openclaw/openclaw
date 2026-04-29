@@ -43,6 +43,8 @@ const BASE_IMAGE_PNG =
 
 type AgentCommandCall = Record<string, unknown>;
 
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
 function expectChannels(call: Record<string, unknown>, channel: string) {
   expect(call.channel).toBe(channel);
   expect(call.messageChannel).toBe(channel);
