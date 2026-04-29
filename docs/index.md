@@ -1,7 +1,7 @@
 ---
-summary: "OpenClaw is a multi-channel gateway for AI agents that runs on any OS."
+summary: "OpenClaw 是一个可在任何操作系统上运行的多渠道 AI Agent 网关。"
 read_when:
-  - Introducing OpenClaw to newcomers
+  - 向新手介绍 OpenClaw
 title: "OpenClaw"
 ---
 
@@ -22,123 +22,123 @@ title: "OpenClaw"
     />
 </p>
 
-> _"EXFOLIATE! EXFOLIATE!"_ — A space lobster, probably
+> _"EXFOLIATE! EXFOLIATE!"_ — 一只太空龙虾，大概吧
 
 <p align="center">
-  <strong>Any OS gateway for AI agents across Discord, Google Chat, iMessage, Matrix, Microsoft Teams, Signal, Slack, Telegram, WhatsApp, Zalo, and more.</strong><br />
-  Send a message, get an agent response from your pocket. Run one Gateway across built-in channels, bundled channel plugins, WebChat, and mobile nodes.
+  <strong>跨平台 AI Agent 网关，支持 Discord、Google Chat、iMessage、Matrix、Microsoft Teams、Signal、Slack、Telegram、WhatsApp、Zalo 等渠道。</strong><br />
+  发送消息，获得来自口袋中的 Agent 响应。通过内置渠道、捆绑渠道插件、WebChat 和移动节点运行一个 Gateway。
 </p>
 
 <Columns>
-  <Card title="Get Started" href="/start/getting-started" icon="rocket">
-    Install OpenClaw and bring up the Gateway in minutes.
+  <Card title="快速开始" href="/start/getting-started" icon="rocket">
+    安装 OpenClaw 并在几分钟内启动 Gateway。
   </Card>
-  <Card title="Run Onboarding" href="/start/wizard" icon="sparkles">
-    Guided setup with `openclaw onboard` and pairing flows.
+  <Card title="运行 onboarding" href="/start/wizard" icon="sparkles">
+    通过 `openclaw onboard` 和配对流程进行引导式设置。
   </Card>
-  <Card title="Open the Control UI" href="/web/control-ui" icon="layout-dashboard">
-    Launch the browser dashboard for chat, config, and sessions.
+  <Card title="打开 Control UI" href="/web/control-ui" icon="layout-dashboard">
+    启动浏览器仪表板进行聊天、配置和会话管理。
   </Card>
 </Columns>
 
-## What is OpenClaw?
+## 什么是 OpenClaw？
 
-OpenClaw is a **self-hosted gateway** that connects your favorite chat apps and channel surfaces — built-in channels plus bundled or external channel plugins such as Discord, Google Chat, iMessage, Matrix, Microsoft Teams, Signal, Slack, Telegram, WhatsApp, Zalo, and more — to AI coding agents like Pi. You run a single Gateway process on your own machine (or a server), and it becomes the bridge between your messaging apps and an always-available AI assistant.
+OpenClaw 是一个**自托管网关**，用于连接您喜爱的聊天应用和渠道界面——内置渠道以及捆绑或外部渠道插件，如 Discord、Google Chat、iMessage、Matrix、Microsoft Teams、Signal、Slack、Telegram、WhatsApp、Zalo 等——与 AI 编码 Agent（如 Pi）。您可以在自己的机器上（或服务器上）运行一个 Gateway 进程，它将成为消息应用和全天候可用的 AI 助手之间的桥梁。
 
-**Who is it for?** Developers and power users who want a personal AI assistant they can message from anywhere — without giving up control of their data or relying on a hosted service.
+**谁适合使用？** 想要拥有个人 AI 助手但又不想放弃数据控制权或依赖托管服务的开发者和高级用户。
 
-**What makes it different?**
+**它有什么不同？**
 
-- **Self-hosted**: runs on your hardware, your rules
-- **Multi-channel**: one Gateway serves built-in channels plus bundled or external channel plugins simultaneously
-- **Agent-native**: built for coding agents with tool use, sessions, memory, and multi-agent routing
-- **Open source**: MIT licensed, community-driven
+- **自托管**：运行在您的硬件上，您的规则您做主
+- **多渠道**：一个 Gateway 同时服务内置渠道以及捆绑或外部渠道插件
+- **Agent 原生**：为具备工具使用、会话、记忆和多 Agent 路由的编码 Agent 而构建
+- **开源**：MIT 许可，社区驱动
 
-**What do you need?** Node 24 (recommended), or Node 22 LTS (`22.14+`) for compatibility, an API key from your chosen provider, and 5 minutes. For best quality and security, use the strongest latest-generation model available.
+**您需要什么？** Node 24（推荐）或 Node 22 LTS（`22.14+`）以保证兼容性，一个来自您所选提供商的 API 密钥，以及 5 分钟时间。要获得最佳质量和安全性，请使用可用的最新一代最强模型。
 
-## How it works
+## 工作原理
 
 ```mermaid
 flowchart LR
-  A["Chat apps + plugins"] --> B["Gateway"]
+  A["聊天应用 + 插件"] --> B["Gateway"]
   B --> C["Pi agent"]
   B --> D["CLI"]
   B --> E["Web Control UI"]
-  B --> F["macOS app"]
-  B --> G["iOS and Android nodes"]
+  B --> F["macOS 应用"]
+  B --> G["iOS 和 Android 节点"]
 ```
 
-The Gateway is the single source of truth for sessions, routing, and channel connections.
+Gateway 是会话、路由和渠道连接的单一事实来源。
 
-## Key capabilities
+## 核心功能
 
 <Columns>
-  <Card title="Multi-channel gateway" icon="network" href="/channels">
-    Discord, iMessage, Signal, Slack, Telegram, WhatsApp, WebChat, and more with a single Gateway process.
+  <Card title="多渠道网关" icon="network" href="/channels">
+    Discord、iMessage、Signal、Slack、Telegram、WhatsApp、WebChat 等，一个 Gateway 进程搞定。
   </Card>
-  <Card title="Plugin channels" icon="plug" href="/tools/plugin">
-    Bundled plugins add Matrix, Nostr, Twitch, Zalo, and more in normal current releases.
+  <Card title="插件渠道" icon="plug" href="/tools/plugin">
+    捆绑插件在正式发布版中添加 Matrix、Nostr、Twitch、Zalo 等。
   </Card>
-  <Card title="Multi-agent routing" icon="route" href="/concepts/multi-agent">
-    Isolated sessions per agent, workspace, or sender.
+  <Card title="多 Agent 路由" icon="route" href="/concepts/multi-agent">
+    每个 Agent、工作区或发送者的隔离会话。
   </Card>
-  <Card title="Media support" icon="image" href="/nodes/images">
-    Send and receive images, audio, and documents.
+  <Card title="媒体支持" icon="image" href="/nodes/images">
+    发送和接收图片、音频和文档。
   </Card>
   <Card title="Web Control UI" icon="monitor" href="/web/control-ui">
-    Browser dashboard for chat, config, sessions, and nodes.
+    用于聊天、配置、会话和节点的浏览器仪表板。
   </Card>
-  <Card title="Mobile nodes" icon="smartphone" href="/nodes">
-    Pair iOS and Android nodes for Canvas, camera, and voice-enabled workflows.
+  <Card title="移动节点" icon="smartphone" href="/nodes">
+    配对 iOS 和 Android 节点，实现 Canvas、摄像头和语音工作流。
   </Card>
 </Columns>
 
-## Quick start
+## 快速开始
 
 <Steps>
-  <Step title="Install OpenClaw">
+  <Step title="安装 OpenClaw">
     ```bash
     npm install -g openclaw@latest
     ```
   </Step>
-  <Step title="Onboard and install the service">
+  <Step title="Onboard 并安装服务">
     ```bash
     openclaw onboard --install-daemon
     ```
   </Step>
-  <Step title="Chat">
-    Open the Control UI in your browser and send a message:
+  <Step title="开始聊天">
+    在浏览器中打开 Control UI 并发送消息：
 
     ```bash
     openclaw dashboard
     ```
 
-    Or connect a channel ([Telegram](/channels/telegram) is fastest) and chat from your phone.
+    或者连接一个渠道（[Telegram](/channels/telegram) 是最快的），然后从手机上聊天。
 
   </Step>
 </Steps>
 
-Need the full install and dev setup? See [Getting Started](/start/getting-started).
+需要完整的安装和开发设置？参见[快速开始](/start/getting-started)。
 
-## Dashboard
+## 控制面板
 
-Open the browser Control UI after the Gateway starts.
+Gateway 启动后，在浏览器中打开 Control UI。
 
-- Local default: [http://127.0.0.1:18789/](http://127.0.0.1:18789/)
-- Remote access: [Web surfaces](/web) and [Tailscale](/gateway/tailscale)
+- 本地默认：[http://127.0.0.1:18789/](http://127.0.0.1:18789/)
+- 远程访问：[Web 界面](/web) 和 [Tailscale](/gateway/tailscale)
 
 <p align="center">
   <img src="/whatsapp-openclaw.jpg" alt="OpenClaw" width="420" />
 </p>
 
-## Configuration (optional)
+## 配置（可选）
 
-Config lives at `~/.openclaw/openclaw.json`.
+配置位于 `~/.openclaw/openclaw.json`。
 
-- If you **do nothing**, OpenClaw uses the bundled Pi binary in RPC mode with per-sender sessions.
-- If you want to lock it down, start with `channels.whatsapp.allowFrom` and (for groups) mention rules.
+- 如果您**什么都不做**，OpenClaw 会使用捆绑的 Pi 二进制文件（RPC 模式）和每发送者会话。
+- 如果您想锁定它，请从 `channels.whatsapp.allowFrom` 和（对于群组）提及规则开始。
 
-Example:
+示例：
 
 ```json5
 {
@@ -152,45 +152,45 @@ Example:
 }
 ```
 
-## Start here
+## 从这里开始
 
 <Columns>
-  <Card title="Docs hubs" href="/start/hubs" icon="book-open">
-    All docs and guides, organized by use case.
+  <Card title="文档中心" href="/start/hubs" icon="book-open">
+    所有文档和指南，按用例组织。
   </Card>
   <Card title="Configuration" href="/gateway/configuration" icon="settings">
-    Core Gateway settings, tokens, and provider config.
+    Core Gateway 设置、token 和 provider 配置。
   </Card>
-  <Card title="Remote access" href="/gateway/remote" icon="globe">
-    SSH and tailnet access patterns.
+  <Card title="远程访问" href="/gateway/remote" icon="globe">
+    SSH 和 tailnet 访问模式。
   </Card>
   <Card title="Channels" href="/channels/telegram" icon="message-square">
-    Channel-specific setup for Feishu, Microsoft Teams, WhatsApp, Telegram, Discord, and more.
+    Feishu、Microsoft Teams、WhatsApp、Telegram、Discord 等渠道特定设置。
   </Card>
   <Card title="Nodes" href="/nodes" icon="smartphone">
-    iOS and Android nodes with pairing, Canvas, camera, and device actions.
+    配对 iOS 和 Android 节点，包含 Canvas、摄像头和设备操作。
   </Card>
-  <Card title="Help" href="/help" icon="life-buoy">
-    Common fixes and troubleshooting entry point.
+  <Card title="帮助" href="/help" icon="life-buoy">
+    常见修复和故障排除入口。
   </Card>
 </Columns>
 
-## Learn more
+## 了解更多
 
 <Columns>
-  <Card title="Full feature list" href="/concepts/features" icon="list">
-    Complete channel, routing, and media capabilities.
+  <Card title="完整功能列表" href="/concepts/features" icon="list">
+    完整的渠道、路由和媒体功能。
   </Card>
-  <Card title="Multi-agent routing" href="/concepts/multi-agent" icon="route">
-    Workspace isolation and per-agent sessions.
+  <Card title="多 Agent 路由" href="/concepts/multi-agent" icon="route">
+    工作区隔离和按 Agent 的会话。
   </Card>
-  <Card title="Security" href="/gateway/security" icon="shield">
-    Tokens, allowlists, and safety controls.
+  <Card title="安全" href="/gateway/security" icon="shield">
+    Token、允许列表和安全控制。
   </Card>
-  <Card title="Troubleshooting" href="/gateway/troubleshooting" icon="wrench">
-    Gateway diagnostics and common errors.
+  <Card title="故障排除" href="/gateway/troubleshooting" icon="wrench">
+    Gateway 诊断和常见错误。
   </Card>
-  <Card title="About and credits" href="/reference/credits" icon="info">
-    Project origins, contributors, and license.
+  <Card title="关于和致谢" href="/reference/credits" icon="info">
+    项目起源、贡献者和许可证。
   </Card>
 </Columns>

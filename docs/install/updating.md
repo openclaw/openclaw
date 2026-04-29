@@ -1,99 +1,82 @@
 ---
-summary: "Updating OpenClaw safely (global install or source), plus rollback strategy"
+summary: "安全更新 OpenClaw（全局安装或源码），以及回滚策略"
 read_when:
-  - Updating OpenClaw
-  - Something breaks after an update
+  - 更新 OpenClaw
+  - 更新后出现问题
 title: "Updating"
 ---
 
-Keep OpenClaw up to date.
+保持 OpenClaw 最新。
 
-## Recommended: `openclaw update`
+## 推荐：`openclaw update`
 
-The fastest way to update. It detects your install type (npm or git), fetches the latest version, runs `openclaw doctor`, and restarts the gateway.
+最快的更新方式。它检测您的安装类型（npm 或 git），获取最新版本，运行 `openclaw doctor`，并重启 gateway。
 
 ```bash
 openclaw update
 ```
 
-To switch channels or target a specific version:
+切换渠道或指定版本：
 
 ```bash
 openclaw update --channel beta
 openclaw update --channel dev
 openclaw update --tag main
-openclaw update --dry-run   # preview without applying
+openclaw update --dry-run   # 预览而不应用
 ```
 
-`--channel beta` prefers beta, but the runtime falls back to stable/latest when
-the beta tag is missing or older than the latest stable release. Use `--tag beta`
-if you want the raw npm beta dist-tag for a one-off package update.
+`--channel beta` 优先使用 beta，但当 beta 标签缺失或比最新稳定版旧时，运行时回退到 stable/latest。如果需要原始 npm beta dist-tag 进行一次性包更新，请使用 `--tag beta`。
 
-See [Development channels](/install/development-channels) for channel semantics.
+参见 [Development channels](/install/development-channels) 了解渠道语义。
 
-## Switch between npm and git installs
+## 在 npm 和 git 安装之间切换
 
-Use channels when you want to change the install type. The updater keeps your
-state, config, credentials, and workspace in `~/.openclaw`; it only changes
-which OpenClaw code install the CLI and gateway use.
+当您想更改安装类型时使用渠道。更新程序会保持您的状态、配置、凭证和工作区在 `~/.openclaw`；它只更改 CLI 和 gateway 使用的 OpenClaw 代码安装。
 
 ```bash
-# npm package install -> editable git checkout
+# npm 包安装 -> 可编辑 git 检出
 openclaw update --channel dev
 
-# git checkout -> npm package install
+# git 检出 -> npm 包安装
 openclaw update --channel stable
 ```
 
-Run with `--dry-run` first to preview the exact install-mode switch:
+首先使用 `--dry-run` 预览确切的安装模式切换：
 
 ```bash
 openclaw update --channel dev --dry-run
 openclaw update --channel stable --dry-run
 ```
 
-The `dev` channel ensures a git checkout, builds it, and installs the global CLI
-from that checkout. The `stable` and `beta` channels use package installs. If the
-gateway is already installed, `openclaw update` refreshes the service metadata
-and restarts it unless you pass `--no-restart`.
+`dev` 渠道确保 git 检出、构建并从该检出安装全局 CLI。`stable` 和 `beta` 渠道使用包安装。如果 gateway 已安装，`openclaw update` 会刷新服务元数据并重启，除非您传入 `--no-restart`。
 
-## Alternative: re-run the installer
+## 替代方案：重新运行安装程序
 
 ```bash
 curl -fsSL https://openclaw.ai/install.sh | bash
 ```
 
-Add `--no-onboard` to skip onboarding. To force a specific install type through
-the installer, pass `--install-method git --no-onboard` or
-`--install-method npm --no-onboard`.
+添加 `--no-onboard` 跳过 onboarding。要通过安装程序强制指定安装类型，请传入 `--install-method git --no-onboard` 或 `--install-method npm --no-onboard`。
 
-If `openclaw update` fails after the npm package install phase, re-run the
-installer. The installer does not call the old updater; it runs the global
-package install directly and can recover a partially updated npm install.
+如果 `openclaw update` 在 npm 包安装阶段后失败，请重新运行安装程序。安装程序不调用旧的更新程序；它直接运行全局包安装，可以恢复部分更新的 npm 安装。
 
 ```bash
 curl -fsSL https://openclaw.ai/install.sh | bash -s -- --install-method npm
 ```
 
-To pin the recovery to a specific version or dist-tag, add `--version`:
+要将恢复固定到特定版本或 dist-tag，请添加 `--version`：
 
 ```bash
 curl -fsSL https://openclaw.ai/install.sh | bash -s -- --install-method npm --version <version-or-dist-tag>
 ```
 
-## Alternative: manual npm, pnpm, or bun
+## 替代方案：手动 npm、pnpm 或 bun
 
 ```bash
 npm i -g openclaw@latest
 ```
 
-When `openclaw update` manages a global npm install, it installs the target into
-a temporary npm prefix first, verifies the packaged `dist` inventory, then swaps
-the clean package tree into the real global prefix. That avoids npm overlaying a
-new package onto stale files from the old package. If the install command fails,
-OpenClaw retries once with `--omit=optional`. That retry helps hosts where native
-optional dependencies cannot compile, while keeping the original failure visible
-if the fallback also fails.
+当 `openclaw update` 管理全局 npm 安装时，它首先将目标安装到临时 npm 前缀，验证打包的 `dist` 清单，然后将干净的包树交换到真正的全局前缀。这样可以避免 npm 将新包覆盖到旧包的陈旧文件上。如果安装命令失败，OpenClaw 会使用 `--omit=optional` 重试一次。当原生可选依赖无法编译时，此重试有助于在保持原始失败可见的同时，在主机上完成安装。
 
 ```bash
 pnpm add -g openclaw@latest
@@ -103,47 +86,48 @@ pnpm add -g openclaw@latest
 bun add -g openclaw@latest
 ```
 
-### Advanced npm install topics
+### 高级 npm 安装主题
 
 <AccordionGroup>
-  <Accordion title="Read-only package tree">
-    OpenClaw treats packaged global installs as read-only at runtime, even when the global package directory is writable by the current user. Bundled plugin runtime dependencies are staged into a writable runtime directory instead of mutating the package tree. This keeps `openclaw update` from racing with a running gateway or local agent that is repairing plugin dependencies during the same install.
+  <Accordion title="只读包树">
+    OpenClaw 将打包的全局安装视为运行时只读，即使全局包目录对当前用户可写。捆绑插件运行时依赖被暂存到可写运行时目录，而不是修改包树。这可以防止 `openclaw update` 与在同一安装期间修复插件依赖的运行 gateway 或本地 agent 产生竞争。
 
-    Some Linux npm setups install global packages under root-owned directories such as `/usr/lib/node_modules/openclaw`. OpenClaw supports that layout through the same external staging path.
+    一些 Linux npm 设置将全局包安装在 root 拥有的目录下，如 `/usr/lib/node_modules/openclaw`。OpenClaw 通过相同的外部暂存路径支持该布局。
 
   </Accordion>
-  <Accordion title="Hardened systemd units">
-    Set a writable stage directory that is included in `ReadWritePaths`:
+  <Accordion title="强化的 systemd units">
+    设置一个包含在 `ReadWritePaths` 中的可写暂存目录：
 
     ```ini
     Environment=OPENCLAW_PLUGIN_STAGE_DIR=/var/lib/openclaw/plugin-runtime-deps
     ReadWritePaths=/var/lib/openclaw /home/openclaw/.openclaw /tmp
     ```
 
-    `OPENCLAW_PLUGIN_STAGE_DIR` also accepts a path list. OpenClaw resolves bundled plugin runtime dependencies left-to-right across the listed roots, treats earlier roots as read-only preinstalled layers, and installs or repairs only into the final writable root:
+    `OPENCLAW_PLUGIN_STAGE_DIR` 也接受路径列表。OpenClaw 从左到右解析跨列出根的捆绑插件运行时依赖，将较早的根视为只读预安装层，仅安装或修复到最后一个可写根：
 
     ```ini
     Environment=OPENCLAW_PLUGIN_STAGE_DIR=/opt/openclaw/plugin-runtime-deps:/var/lib/openclaw/plugin-runtime-deps
     ReadWritePaths=/var/lib/openclaw /home/openclaw/.openclaw /tmp
     ```
 
-    If `OPENCLAW_PLUGIN_STAGE_DIR` is not set, OpenClaw uses `$STATE_DIRECTORY` when systemd provides it, then falls back to `~/.openclaw/plugin-runtime-deps`. The repair step treats that stage as an OpenClaw-owned local package root and ignores user npm prefix and global settings, so global-install npm config does not redirect bundled plugin dependencies into `~/node_modules` or the global package tree.
+    如果未设置 `OPENCLAW_PLUGIN_STAGE_DIR`，OpenClaw 会在 systemd 提供时使用 `$STATE_DIRECTORY`，然后回退到 `~/.openclaw/plugin-runtime-deps`。修复步骤将该暂存视为 OpenClaw 拥有的本地包根，并忽略用户 npm 前缀和全局设置，因此全局安装的 npm 配置不会将捆绑插件依赖重定向到 `~/node_modules` 或全局包树。
 
   </Accordion>
-  <Accordion title="Disk-space preflight">
-    Before package updates and bundled runtime-dependency repairs, OpenClaw tries a best-effort disk-space check for the target volume. Low space produces a warning with the checked path, but does not block the update because filesystem quotas, snapshots, and network volumes can change after the check. The actual npm install, copy, and post-install verification remain authoritative.
-  </Accordion>
-  <Accordion title="Bundled plugin runtime dependencies">
-    Packaged installs keep bundled plugin runtime dependencies out of the read-only package tree. On startup and during `openclaw doctor --fix`, OpenClaw repairs runtime dependencies only for bundled plugins that are active in config, active through legacy channel config, or enabled by their bundled manifest default. Persisted channel auth state alone does not trigger Gateway startup runtime-dependency repair.
+  <Accordion title="磁盘空间预检">
+    在包更新和捆绑运行时依赖修复之前，OpenClaw 尝试对目标卷进行尽力而为的磁盘空间检查。空间不足会产生带有检查路径的警告，但不会阻止更新，因为文件系统配额、快照和网络卷可以在检查后更改。实际的 npm 安装、复制和安装后验证仍然是权威的。
 
-    Explicit disablement wins. A disabled plugin or channel does not get its runtime dependencies repaired just because it exists in the package. External plugins and custom load paths still use `openclaw plugins install` or `openclaw plugins update`.
+  </Accordion>
+  <Accordion title="捆绑插件运行时依赖">
+    打包安装将捆绑插件运行时依赖保持在只读包树之外。在启动时和 `openclaw doctor --fix` 期间，OpenClaw 仅对在配置中处于活动状态、通过旧渠道配置处于活动状态或由其捆绑清单默认启用的捆绑插件修复运行时依赖。仅凭持久化的渠道 auth 状态不会触发 Gateway 启动运行时依赖修复。
+
+    明确的禁用优先。禁用的插件或渠道不会仅仅因为它存在于包中就获得其运行时依赖修复。外部插件和自定义加载路径仍然使用 `openclaw plugins install` 或 `openclaw plugins update`。
 
   </Accordion>
 </AccordionGroup>
 
-## Auto-updater
+## 自动更新程序
 
-The auto-updater is off by default. Enable it in `~/.openclaw/openclaw.json`:
+自动更新程序默认关闭。在 `~/.openclaw/openclaw.json` 中启用它：
 
 ```json5
 {
@@ -159,34 +143,33 @@ The auto-updater is off by default. Enable it in `~/.openclaw/openclaw.json`:
 }
 ```
 
-| Channel  | Behavior                                                                                                      |
+| 渠道 | 行为 |
 | -------- | ------------------------------------------------------------------------------------------------------------- |
-| `stable` | Waits `stableDelayHours`, then applies with deterministic jitter across `stableJitterHours` (spread rollout). |
-| `beta`   | Checks every `betaCheckIntervalHours` (default: hourly) and applies immediately.                              |
-| `dev`    | No automatic apply. Use `openclaw update` manually.                                                           |
+| `stable` | 等待 `stableDelayHours`，然后通过 `stableJitterHours`（分散发布）中的确定性抖动应用。 |
+| `beta` | 每 `betaCheckIntervalHours` 检查一次（默认：每小时）并立即应用。 |
+| `dev` | 不自动应用。手动使用 `openclaw update`。 |
 
-The gateway also logs an update hint on startup (disable with `update.checkOnStart: false`).
-For downgrade or incident recovery, set `OPENCLAW_NO_AUTO_UPDATE=1` in the gateway environment to block automatic applies even when `update.auto.enabled` is configured. Startup update hints can still run unless `update.checkOnStart` is also disabled.
+gateway 也在启动时记录更新提示（使用 `update.checkOnStart: false` 禁用）。要降级或事件恢复，请在 gateway 环境中设置 `OPENCLAW_NO_AUTO_UPDATE=1`，以阻止自动应用，即使配置了 `update.auto.enabled`。除非 `update.checkOnStart` 也被禁用，否则启动更新提示仍然可以运行。
 
-## After updating
+## 更新后
 
 <Steps>
 
-### Run doctor
+### 运行 doctor
 
 ```bash
 openclaw doctor
 ```
 
-Migrates config, audits DM policies, and checks gateway health. Details: [Doctor](/gateway/doctor)
+迁移配置、审计 DM 策略并检查 gateway 健康状况。详情：[Doctor](/gateway/doctor)
 
-### Restart the gateway
+### 重启 gateway
 
 ```bash
 openclaw gateway restart
 ```
 
-### Verify
+### 验证
 
 ```bash
 openclaw health
@@ -194,9 +177,9 @@ openclaw health
 
 </Steps>
 
-## Rollback
+## 回滚
 
-### Pin a version (npm)
+### 固定版本（npm）
 
 ```bash
 npm i -g openclaw@<version>
@@ -205,10 +188,10 @@ openclaw gateway restart
 ```
 
 <Tip>
-`npm view openclaw version` shows the current published version.
+`npm view openclaw version` 显示当前发布的版本。
 </Tip>
 
-### Pin a commit (source)
+### 固定提交（源码）
 
 ```bash
 git fetch origin
@@ -217,17 +200,17 @@ pnpm install && pnpm build
 openclaw gateway restart
 ```
 
-To return to latest: `git checkout main && git pull`.
+要返回最新版本：`git checkout main && git pull`。
 
-## If you are stuck
+## 如果您卡住了
 
-- Run `openclaw doctor` again and read the output carefully.
-- For `openclaw update --channel dev` on source checkouts, the updater auto-bootstraps `pnpm` when needed. If you see a pnpm/corepack bootstrap error, install `pnpm` manually (or re-enable `corepack`) and rerun the update.
-- Check: [Troubleshooting](/gateway/troubleshooting)
-- Ask in Discord: [https://discord.gg/clawd](https://discord.gg/clawd)
+- 再次运行 `openclaw doctor` 并仔细阅读输出。
+- 对于源码检出的 `openclaw update --channel dev`，更新程序在需要时自动引导 `pnpm`。如果您看到 pnpm/corepack 引导错误，请手动安装 `pnpm`（或重新启用 `corepack`）然后重新运行更新。
+- 检查：[故障排除](/gateway/troubleshooting)
+- 在 Discord 提问：[https://discord.gg/clawd](https://discord.gg/clawd)
 
-## Related
+## 相关
 
-- [Install overview](/install): all installation methods.
-- [Doctor](/gateway/doctor): health checks after updates.
-- [Migrating](/install/migrating): major version migration guides.
+- [安装概述](/install)：所有安装方式。
+- [Doctor](/gateway/doctor)：更新后的健康检查。
+- [迁移](/install/migrating)：主要版本迁移指南。
