@@ -1,4 +1,4 @@
-import { loadSessionStore, resolveSessionStoreEntry } from "./bot-runtime-api.js";
+import { loadSessionStore, resolveAgentConfig, resolveSessionStoreEntry } from "./bot-runtime-api.js";
 import type { ClawdbotConfig } from "./bot-runtime-api.js";
 
 export function resolveFeishuReasoningPreviewEnabled(params: {
@@ -7,14 +7,14 @@ export function resolveFeishuReasoningPreviewEnabled(params: {
   storePath: string;
   sessionKey?: string;
 }): boolean {
-  // Resolve config-driven default: per-agent override > hardcoded "off".
-  const agentDefault = params.cfg.agents?.list?.find(
-    (a) => a.id === params.agentId,
-  )?.reasoningDefault;
+  // Resolve config-driven default using the shared normalized resolver so that
+  // agent IDs are matched case-insensitively (matching routing behaviour).
+  // Precedence: per-agent reasoningDefault → global agents.defaults.reasoningDefault → "off".
+  const agentDefault = resolveAgentConfig(params.cfg, params.agentId)?.reasoningDefault;
+  const globalDefault = params.cfg.agents?.defaults?.reasoningDefault;
+  const rawDefault = agentDefault ?? globalDefault;
   const configDefault =
-    agentDefault === "on" || agentDefault === "stream" || agentDefault === "off"
-      ? agentDefault
-      : "off";
+    rawDefault === "on" || rawDefault === "stream" || rawDefault === "off" ? rawDefault : "off";
 
   if (!params.sessionKey) {
     // Feishu preview only supports the "stream" variant; "on" (block-mode) has no preview equivalent.

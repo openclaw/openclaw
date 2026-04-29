@@ -1188,6 +1188,60 @@ describe("dispatchTelegramMessage draft streaming", () => {
     );
   });
 
+  it("matches agent ID case-insensitively for reasoningDefault config lookup", async () => {
+    loadSessionStore.mockReturnValue({ s1: {} });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "Hello" }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: { SessionKey: "s1" } as unknown as TelegramMessageContext["ctxPayload"],
+      }),
+      cfg: {
+        agents: {
+          // Agent configured as "Default" but routed as "default" (lowercase).
+          list: [{ id: "Default", reasoningDefault: "on" }],
+        },
+      },
+    });
+
+    expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replyOptions: expect.objectContaining({ disableBlockStreaming: false }),
+      }),
+    );
+  });
+
+  it("uses global agents.defaults.reasoningDefault when no per-agent entry matches", async () => {
+    loadSessionStore.mockReturnValue({ s1: {} });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "Hello" }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: { SessionKey: "s1" } as unknown as TelegramMessageContext["ctxPayload"],
+      }),
+      cfg: {
+        agents: {
+          defaults: { reasoningDefault: "on" },
+          list: [{ id: "default" }],
+        },
+      },
+    });
+
+    expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replyOptions: expect.objectContaining({ disableBlockStreaming: false }),
+      }),
+    );
+  });
+
   it("falls back to off when config reasoningDefault is absent and session has no level", async () => {
     loadSessionStore.mockReturnValue({
       s1: {},

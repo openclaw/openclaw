@@ -133,4 +133,54 @@ describe("resolveFeishuReasoningPreviewEnabled", () => {
       }),
     ).toBe(false);
   });
+
+  it("matches agent ID case-insensitively", () => {
+    const cfgWithStream: ClawdbotConfig = {
+      agents: {
+        list: [{ id: "Ops", reasoningDefault: "stream" }],
+      },
+    };
+
+    expect(
+      resolveFeishuReasoningPreviewEnabled({
+        cfg: cfgWithStream,
+        agentId: "ops",
+        storePath: "/tmp/feishu-sessions.json",
+      }),
+    ).toBe(true);
+  });
+
+  it("uses global agents.defaults.reasoningDefault when no per-agent entry matches", () => {
+    const cfgWithGlobalDefault: ClawdbotConfig = {
+      agents: {
+        defaults: { reasoningDefault: "stream" },
+        list: [{ id: "main" }],
+      },
+    };
+
+    expect(
+      resolveFeishuReasoningPreviewEnabled({
+        cfg: cfgWithGlobalDefault,
+        agentId: "main",
+        storePath: "/tmp/feishu-sessions.json",
+      }),
+    ).toBe(true);
+  });
+
+  it("per-agent reasoningDefault takes precedence over global default", () => {
+    const cfg: ClawdbotConfig = {
+      agents: {
+        defaults: { reasoningDefault: "stream" },
+        list: [{ id: "main", reasoningDefault: "off" }],
+      },
+    };
+
+    expect(
+      resolveFeishuReasoningPreviewEnabled({
+        cfg,
+        agentId: "main",
+        storePath: "/tmp/feishu-sessions.json",
+      }),
+    ).toBe(false);
+  });
 });

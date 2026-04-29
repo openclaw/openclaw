@@ -44,6 +44,7 @@ import {
   findModelInCatalog,
   loadModelCatalog,
   modelSupportsVision,
+  resolveAgentConfig,
   resolveAgentDir,
   resolveDefaultModelForAgent,
 } from "./bot-message-dispatch.agent.runtime.js";
@@ -212,12 +213,14 @@ function resolveTelegramReasoningLevel(params: {
 }): TelegramReasoningLevel {
   const { cfg, sessionKey, agentId, telegramDeps } = params;
 
-  // Resolve config-driven default: per-agent override > hardcoded "off".
-  const agentDefault = cfg.agents?.list?.find((a) => a.id === agentId)?.reasoningDefault;
+  // Resolve config-driven default using the shared normalized resolver so that
+  // agent IDs are matched case-insensitively (matching routing behaviour).
+  // Precedence: per-agent reasoningDefault → global agents.defaults.reasoningDefault → "off".
+  const agentDefault = resolveAgentConfig(cfg, agentId)?.reasoningDefault;
+  const globalDefault = cfg.agents?.defaults?.reasoningDefault;
+  const rawDefault = agentDefault ?? globalDefault;
   const configDefault: TelegramReasoningLevel =
-    agentDefault === "on" || agentDefault === "stream" || agentDefault === "off"
-      ? agentDefault
-      : "off";
+    rawDefault === "on" || rawDefault === "stream" || rawDefault === "off" ? rawDefault : "off";
 
   if (!sessionKey) {
     return configDefault;
