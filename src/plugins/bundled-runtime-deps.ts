@@ -11,6 +11,7 @@ import { resolveHomeRelativePath } from "../infra/home-dir.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { sanitizeTerminalText } from "../terminal/safe-text.js";
 import { beginBundledRuntimeDepsInstall } from "./bundled-runtime-deps-activity.js";
+import { readRuntimeDepsJsonObject, type JsonObject } from "./bundled-runtime-deps-json.js";
 import {
   BUNDLED_RUNTIME_DEPS_LOCK_DIR,
   formatRuntimeDepsLockTimeoutMessage,
@@ -30,11 +31,18 @@ import {
   type BundledRuntimeDepsPackageManagerRunner,
 } from "./bundled-runtime-deps-package-manager.js";
 import {
+  normalizeInstallableRuntimeDepName,
+  parseInstallableRuntimeDep,
+  parseInstallableRuntimeDepSpec,
+  resolveDependencySentinelAbsolutePath,
+  type RuntimeDepEntry,
+} from "./bundled-runtime-deps-specs.js";
+import {
   normalizePluginsConfigWithResolver,
   type NormalizedPluginsConfig,
   type NormalizePluginId,
 } from "./config-normalization-shared.js";
-import { satisfies, validSemver } from "./semver.runtime.js";
+import { satisfies } from "./semver.runtime.js";
 
 export {
   createBundledRuntimeDepsInstallArgs,
@@ -43,17 +51,12 @@ export {
   withBundledRuntimeDepsFilesystemLock,
 };
 export type { BundledRuntimeDepsNpmRunner };
+export type { RuntimeDepEntry } from "./bundled-runtime-deps-specs.js";
 
 export const __testing = {
   formatRuntimeDepsLockTimeoutMessage,
   resolveBundledRuntimeDepsPnpmRunner,
   shouldRemoveRuntimeDepsLock,
-};
-
-export type RuntimeDepEntry = {
-  name: string;
-  version: string;
-  pluginIds: string[];
 };
 
 export type RuntimeDepConflict = {
@@ -91,7 +94,6 @@ export type BundledRuntimeDepsPlan = {
   installRootPlan: BundledRuntimeDepsInstallRootPlan;
 };
 
-type JsonObject = Record<string, unknown>;
 const LEGACY_RETAINED_RUNTIME_DEPS_MANIFEST = ".openclaw-runtime-deps.json";
 // Packaged bundled plugins (Docker image, npm global install) keep their
 // `package.json` next to their entry point; running `npm install <specs>` with
@@ -104,196 +106,13 @@ const DEFAULT_UNKNOWN_RUNTIME_DEPS_ROOTS_TO_KEEP = 20;
 const DEFAULT_UNKNOWN_RUNTIME_DEPS_MIN_AGE_MS = 10 * 60_000;
 const BUNDLED_RUNTIME_DEPS_INSTALL_PROGRESS_INTERVAL_MS = 5_000;
 const MIRRORED_PACKAGE_RUNTIME_DEP_PLUGIN_ID = "openclaw-core";
-const MAX_RUNTIME_DEPS_FILE_CACHE_ENTRIES = 2048;
 
 const registeredBundledRuntimeDepNodePaths = new Set<string>();
-const runtimeDepsTextFileCache = new Map<string, { signature: string; value: string }>();
-const runtimeDepsJsonObjectCache = new Map<
-  string,
-  { signature: string; value: JsonObject | null }
->();
 
 function createBundledRuntimeDepsEnsureResult(
   installedSpecs: string[],
 ): BundledRuntimeDepsEnsureResult {
   return { installedSpecs };
-}
-
-const BUNDLED_RUNTIME_DEP_SEGMENT_RE = /^[a-z0-9][a-z0-9._-]*$/;
-
-function normalizeInstallableRuntimeDepName(rawName: string): string | null {
-  const depName = rawName.trim();
-  if (depName === "") {
-    return null;
-  }
-  const segments = depName.split("/");
-  if (segments.some((segment) => segment === "" || segment === "." || segment === "..")) {
-    return null;
-  }
-  if (segments.length === 1) {
-    return BUNDLED_RUNTIME_DEP_SEGMENT_RE.test(segments[0] ?? "") ? depName : null;
-  }
-  if (segments.length !== 2 || !segments[0]?.startsWith("@")) {
-    return null;
-  }
-  const scope = segments[0].slice(1);
-  const packageName = segments[1];
-  return BUNDLED_RUNTIME_DEP_SEGMENT_RE.test(scope) &&
-    BUNDLED_RUNTIME_DEP_SEGMENT_RE.test(packageName ?? "")
-    ? depName
-    : null;
-}
-
-function normalizeInstallableRuntimeDepVersion(rawVersion: unknown): string | null {
-  if (typeof rawVersion !== "string") {
-    return null;
-  }
-  const version = rawVersion.trim();
-  if (version === "" || version.toLowerCase().startsWith("workspace:")) {
-    return null;
-  }
-  if (validSemver(version)) {
-    return version;
-  }
-  const rangePrefix = version[0];
-  if ((rangePrefix === "^" || rangePrefix === "~") && validSemver(version.slice(1))) {
-    return version;
-  }
-  return null;
-}
-
-function parseInstallableRuntimeDep(
-  name: string,
-  rawVersion: unknown,
-): { name: string; version: string } | null {
-  if (typeof rawVersion !== "string") {
-    return null;
-  }
-  const version = rawVersion.trim();
-  if (version === "" || version.toLowerCase().startsWith("workspace:")) {
-    return null;
-  }
-  const normalizedName = normalizeInstallableRuntimeDepName(name);
-  if (!normalizedName) {
-    throw new Error(`Invalid bundled runtime dependency name: ${name}`);
-  }
-  const normalizedVersion = normalizeInstallableRuntimeDepVersion(version);
-  if (!normalizedVersion) {
-    throw new Error(
-      `Unsupported bundled runtime dependency spec for ${normalizedName}: ${version}`,
-    );
-  }
-  return { name: normalizedName, version: normalizedVersion };
-}
-
-function parseInstallableRuntimeDepSpec(spec: string): { name: string; version: string } {
-  const atIndex = spec.lastIndexOf("@");
-  if (atIndex <= 0 || atIndex === spec.length - 1) {
-    throw new Error(`Invalid bundled runtime dependency install spec: ${spec}`);
-  }
-  const parsed = parseInstallableRuntimeDep(spec.slice(0, atIndex), spec.slice(atIndex + 1));
-  if (!parsed) {
-    throw new Error(`Invalid bundled runtime dependency install spec: ${spec}`);
-  }
-  return parsed;
-}
-
-function dependencySentinelPath(depName: string): string {
-  const normalizedDepName = normalizeInstallableRuntimeDepName(depName);
-  if (!normalizedDepName) {
-    throw new Error(`Invalid bundled runtime dependency name: ${depName}`);
-  }
-  return path.join("node_modules", ...normalizedDepName.split("/"), "package.json");
-}
-
-function resolveDependencySentinelAbsolutePath(rootDir: string, depName: string): string {
-  const nodeModulesDir = path.resolve(rootDir, "node_modules");
-  const sentinelPath = path.resolve(rootDir, dependencySentinelPath(depName));
-  if (sentinelPath !== nodeModulesDir && !sentinelPath.startsWith(`${nodeModulesDir}${path.sep}`)) {
-    throw new Error(`Blocked runtime dependency path escape for ${depName}`);
-  }
-  return sentinelPath;
-}
-
-function readJsonObject(filePath: string): JsonObject | null {
-  const signature = getRuntimeDepsFileSignature(filePath);
-  const cached = signature ? runtimeDepsJsonObjectCache.get(filePath) : undefined;
-  if (cached?.signature === signature) {
-    return cached.value;
-  }
-  const source = readRuntimeDepsTextFile(filePath, signature);
-  if (source === null) {
-    cacheRuntimeDepsJsonObject(filePath, signature, null);
-    return null;
-  }
-  try {
-    const parsed = JSON.parse(source) as unknown;
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      cacheRuntimeDepsJsonObject(filePath, signature, null);
-      return null;
-    }
-    const value = parsed as JsonObject;
-    cacheRuntimeDepsJsonObject(filePath, signature, value);
-    return value;
-  } catch {
-    cacheRuntimeDepsJsonObject(filePath, signature, null);
-    return null;
-  }
-}
-
-function readRuntimeDepsTextFile(filePath: string, signature?: string | null): string | null {
-  const fileSignature = signature ?? getRuntimeDepsFileSignature(filePath);
-  const cached = fileSignature ? runtimeDepsTextFileCache.get(filePath) : undefined;
-  if (cached?.signature === fileSignature) {
-    return cached.value;
-  }
-  try {
-    const value = fs.readFileSync(filePath, "utf8");
-    if (fileSignature) {
-      rememberRuntimeDepsCacheEntry(runtimeDepsTextFileCache, filePath, {
-        signature: fileSignature,
-        value,
-      });
-    }
-    return value;
-  } catch {
-    return null;
-  }
-}
-
-function getRuntimeDepsFileSignature(filePath: string): string | null {
-  try {
-    const stat = fs.statSync(filePath, { bigint: true });
-    if (!stat.isFile()) {
-      return null;
-    }
-    return [
-      stat.dev.toString(),
-      stat.ino.toString(),
-      stat.size.toString(),
-      stat.mtimeNs.toString(),
-    ].join(":");
-  } catch {
-    return null;
-  }
-}
-
-function cacheRuntimeDepsJsonObject(
-  filePath: string,
-  signature: string | null,
-  value: JsonObject | null,
-): void {
-  if (!signature) {
-    return;
-  }
-  rememberRuntimeDepsCacheEntry(runtimeDepsJsonObjectCache, filePath, { signature, value });
-}
-
-function rememberRuntimeDepsCacheEntry<T>(cache: Map<string, T>, key: string, value: T): void {
-  if (cache.size >= MAX_RUNTIME_DEPS_FILE_CACHE_ENTRIES && !cache.has(key)) {
-    cache.delete(cache.keys().next().value as string);
-  }
-  cache.set(key, value);
 }
 
 function withBundledRuntimeDepsInstallRootLock<T>(installRoot: string, run: () => T): T {
@@ -356,7 +175,7 @@ function collectMirroredPackageRuntimeDeps(packageRoot: string | null): {
   if (!packageRoot) {
     return [];
   }
-  const packageJson = readJsonObject(path.join(packageRoot, "package.json"));
+  const packageJson = readRuntimeDepsJsonObject(path.join(packageRoot, "package.json"));
   if (!packageJson) {
     return [];
   }
@@ -471,7 +290,7 @@ function sanitizePathSegment(value: string): string {
 }
 
 function readPackageVersion(packageRoot: string): string {
-  const parsed = readJsonObject(path.join(packageRoot, "package.json"));
+  const parsed = readRuntimeDepsJsonObject(path.join(packageRoot, "package.json"));
   const version = parsed && typeof parsed.version === "string" ? parsed.version.trim() : "";
   return version || "unknown";
 }
@@ -484,7 +303,7 @@ function normalizeRuntimeDepSpecs(specs: readonly string[]): string[] {
 }
 
 function readGeneratedInstallManifestSpecs(installRoot: string): string[] | null {
-  const parsed = readJsonObject(path.join(installRoot, "package.json"));
+  const parsed = readRuntimeDepsJsonObject(path.join(installRoot, "package.json"));
   if (parsed?.name !== "openclaw-runtime-deps-install") {
     return null;
   }
@@ -503,7 +322,7 @@ function readGeneratedInstallManifestSpecs(installRoot: string): string[] | null
 }
 
 function readPackageRuntimeDepSpecs(packageRoot: string): string[] | null {
-  const parsed = readJsonObject(path.join(packageRoot, "package.json"));
+  const parsed = readRuntimeDepsJsonObject(path.join(packageRoot, "package.json"));
   if (!parsed || parsed.name === "openclaw-runtime-deps-install") {
     return null;
   }
@@ -850,7 +669,7 @@ function readBundledPluginRuntimeDepsManifest(
   if (cached) {
     return cached;
   }
-  const manifest = readJsonObject(path.join(pluginDir, "openclaw.plugin.json"));
+  const manifest = readRuntimeDepsJsonObject(path.join(pluginDir, "openclaw.plugin.json"));
   const channels = manifest?.channels;
   const legacyPluginIds = manifest?.legacyPluginIds;
   const providers = manifest?.providers;
@@ -1173,7 +992,7 @@ function collectBundledPluginRuntimeDeps(params: {
       continue;
     }
     includedPluginIds.add(pluginId);
-    const packageJson = readJsonObject(path.join(pluginDir, "package.json"));
+    const packageJson = readRuntimeDepsJsonObject(path.join(pluginDir, "package.json"));
     if (!packageJson) {
       continue;
     }
@@ -1413,7 +1232,7 @@ export function createBundledRuntimeDependencyAliasMap(params: {
   if (path.resolve(params.installRoot) === path.resolve(params.pluginRoot)) {
     return {};
   }
-  const packageJson = readJsonObject(path.join(params.pluginRoot, "package.json"));
+  const packageJson = readRuntimeDepsJsonObject(path.join(params.pluginRoot, "package.json"));
   if (!packageJson) {
     return {};
   }
@@ -1869,7 +1688,7 @@ export function ensureBundledPluginRuntimeDeps(params: {
   ) {
     return createBundledRuntimeDepsEnsureResult([]);
   }
-  const packageJson = readJsonObject(path.join(params.pluginRoot, "package.json"));
+  const packageJson = readRuntimeDepsJsonObject(path.join(params.pluginRoot, "package.json"));
   if (!packageJson) {
     return createBundledRuntimeDepsEnsureResult([]);
   }
