@@ -216,6 +216,8 @@
   --accent-muted: #e5243b;
   --accent-subtle: rgba(229, 36, 59, 0.12);
   --accent-glow: rgba(229, 36, 59, 0.24);
+  --selection-bg: #c41e30;
+  --selection-fg: #fff;
   --primary: #e5243b;
   --primary-foreground: #fafafa;
 
