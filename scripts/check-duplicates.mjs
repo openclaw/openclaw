@@ -14,6 +14,7 @@ const targets = [
   "ui",
   "apps",
   "qa",
+  "test",
   "openclaw.mjs",
   "knip.config.ts",
   "tsdown.config.ts",
