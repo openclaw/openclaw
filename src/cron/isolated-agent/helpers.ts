@@ -7,7 +7,7 @@ import { shouldSkipHeartbeatOnlyDelivery } from "../heartbeat-policy.js";
 
 type DeliveryPayload = Pick<
   ReplyPayload,
-  "text" | "mediaUrl" | "mediaUrls" | "interactive" | "channelData" | "isError"
+  "text" | "mediaUrl" | "mediaUrls" | "interactive" | "channelData" | "isError" | "isReasoning"
 >;
 
 export type CronPayloadOutcome = {
@@ -211,11 +211,12 @@ function payloadHasStructuredDeliveryContent(payload: DeliveryPayload | null | u
 
 export function pickLastDeliverablePayload(payloads: DeliveryPayload[]) {
   for (let i = payloads.length - 1; i >= 0; i--) {
-    if (payloads[i]?.isError) {
+    const p = payloads[i];
+    if (p?.isError || p?.isReasoning) {
       continue;
     }
-    if (isDeliverablePayload(payloads[i])) {
-      return payloads[i];
+    if (isDeliverablePayload(p)) {
+      return p;
     }
   }
   for (let i = payloads.length - 1; i >= 0; i--) {
@@ -228,7 +229,11 @@ export function pickLastDeliverablePayload(payloads: DeliveryPayload[]) {
 
 export function pickDeliverablePayloads(payloads: DeliveryPayload[]): DeliveryPayload[] {
   const successfulDeliverablePayloads = payloads.filter(
-    (payload) => payload != null && payload.isError !== true && isDeliverablePayload(payload),
+    (payload) =>
+      payload != null &&
+      payload.isError !== true &&
+      payload.isReasoning !== true &&
+      isDeliverablePayload(payload),
   );
   if (successfulDeliverablePayloads.length > 0) {
     return successfulDeliverablePayloads;
