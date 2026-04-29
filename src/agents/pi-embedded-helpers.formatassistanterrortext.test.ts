@@ -483,6 +483,14 @@ describe("sanitizeUserFacingText — streaming JSON parse error (#59076)", () =>
     expect(result).toBe("LLM streaming response contained a malformed fragment. Please try again.");
   });
 
+  it.each([
+    "Unexpected end of JSON input",
+    "Unexpected non-whitespace character after JSON at position 4",
+  ])("rewrites plain JSON.parse error variants in error context: %s", (text) => {
+    const result = sanitizeUserFacingText(text, { errorContext: true });
+    expect(result).toBe("LLM streaming response contained a malformed fragment. Please try again.");
+  });
+
   it("does not rewrite JSON parse error when not in error context", () => {
     // When not in error context, the text could be legitimate assistant content
     // mentioning JSON errors. Don't rewrite.

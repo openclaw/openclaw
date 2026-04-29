@@ -223,7 +223,7 @@ export function isStreamingJsonParseError(raw: string): boolean {
     return true;
   }
 
-  return /^(?:Expected (?:',' or '\}' after property value|double-quoted property name|':' after property name|',' or '\]' after array element)|Unterminated string) in JSON at position \d+(?: \(line \d+ column \d+\))?$/i.test(
+  return /^(?:Unexpected end of JSON input|Unexpected non-whitespace character after JSON at position \d+(?: \(line \d+ column \d+\))?|(?:Expected (?:',' or '\}' after property value|double-quoted property name|':' after property name|',' or '\]' after array element)|Unterminated string) in JSON at position \d+(?: \(line \d+ column \d+\))?)$/i.test(
     trimmed,
   );
 }

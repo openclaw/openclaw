@@ -19,6 +19,16 @@ describe("formatAssistantErrorText streaming JSON parse classification", () => {
     );
   });
 
+  it.each([
+    "Unexpected end of JSON input",
+    "Unexpected non-whitespace character after JSON at position 4",
+  ])("suppresses plain JSON.parse streaming fragment failures: %s", (errorMessage) => {
+    const msg = makeAssistantError(errorMessage);
+    expect(formatAssistantErrorText(msg)).toBe(
+      "LLM streaming response contained a malformed fragment. Please try again.",
+    );
+  });
+
   it("suppresses structured Anthropic tool-call delta parse failures", () => {
     const msg = makeAssistantError(
       'Could not parse Anthropic SSE event content_block_delta: Unexpected end of JSON input; data={"type":"content_block_delta","delta":{"type":"input_json_delta","partial_json":"{\\"path\\":"},"index":0}',
