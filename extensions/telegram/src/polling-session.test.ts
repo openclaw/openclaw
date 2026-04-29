@@ -49,6 +49,16 @@ function makeBot() {
   };
 }
 
+function deferred<T = void>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
 function installPollingStallWatchdogHarness(
   dateNowSequence: readonly number[] = [0, 0],
   fallbackDateNow = 150_001,
@@ -311,6 +321,59 @@ describe("TelegramPollingSession", () => {
     // Offset confirmation was removed because it could self-conflict with the runner.
     // OpenClaw middleware still skips duplicates using the persisted update offset.
     expect(bot.api.getUpdates).not.toHaveBeenCalled();
+  });
+
+  it("persists fetched update IDs before returning getUpdates results to the runner", async () => {
+    const abort = new AbortController();
+    const botStop = vi.fn(async () => undefined);
+    const getApiMiddleware = mockBotCapturingApiMiddleware(botStop);
+    const persistGate = deferred();
+    const persistUpdateId = vi.fn(async () => {
+      await persistGate.promise;
+    });
+
+    runMock.mockReturnValueOnce({
+      task: async () => {
+        const apiMiddleware = await waitForApiMiddleware(getApiMiddleware);
+        const updates = [{ update_id: 101 }, { update_id: 102 }];
+        const getUpdatesCall = apiMiddleware(
+          vi.fn(async () => updates),
+          "getUpdates",
+          { offset: 0 },
+        );
+        await Promise.resolve();
+        expect(persistUpdateId).toHaveBeenCalledWith(102);
+
+        let returned = false;
+        void getUpdatesCall.then(() => {
+          returned = true;
+        });
+        await Promise.resolve();
+        expect(returned).toBe(false);
+
+        persistGate.resolve();
+        await expect(getUpdatesCall).resolves.toBe(updates);
+        abort.abort();
+      },
+      stop: vi.fn(async () => undefined),
+      isRunning: () => false,
+    });
+
+    const session = new TelegramPollingSession({
+      token: "tok",
+      config: {},
+      accountId: "default",
+      runtime: undefined,
+      proxyFetch: undefined,
+      abortSignal: abort.signal,
+      runnerOptions: {},
+      getLastUpdateId: () => 100,
+      persistUpdateId,
+      log: () => undefined,
+      telegramTransport: undefined,
+    });
+
+    await session.runUntilAbort();
   });
 
   it("forces a restart when polling stalls without getUpdates activity", async () => {

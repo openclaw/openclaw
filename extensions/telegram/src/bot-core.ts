@@ -326,6 +326,9 @@ export function createTelegramBotCore(
     ...(typeof opts.updateOffset?.onUpdateId === "function"
       ? { onAcceptedUpdateId: opts.updateOffset.onUpdateId }
       : {}),
+    ...(typeof opts.updateOffset?.onCompletedUpdateId === "function"
+      ? { onCompletedUpdateId: opts.updateOffset.onCompletedUpdateId }
+      : {}),
     onPersistError: (err) => {
       runtime.error?.(`telegram: failed to persist update watermark: ${formatErrorMessage(err)}`);
     },
@@ -344,7 +347,7 @@ export function createTelegramBotCore(
       await next();
       completed = true;
     } finally {
-      updateTracker.finishUpdate(begin.update, { completed });
+      await updateTracker.finishUpdate(begin.update, { completed });
     }
   });
 

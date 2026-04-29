@@ -177,7 +177,9 @@ export {
 export {
   deleteTelegramUpdateOffset,
   readTelegramUpdateOffset,
+  readTelegramUpdateOffsetState,
   writeTelegramUpdateOffset,
+  type TelegramUpdateOffsetSnapshot,
 } from "./src/update-offset-store.js";
 export type { TelegramButtonStyle, TelegramInlineButtons } from "./src/button-types.js";
 export type { StickerMetadata } from "./src/bot/types.js";

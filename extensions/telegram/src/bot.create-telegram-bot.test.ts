@@ -1200,6 +1200,52 @@ describe("createTelegramBot", () => {
 
     expect(onUpdateId.mock.calls.map((call) => Number(call[0]))).toEqual([101, 102]);
   });
+
+  it("persists completed update offsets only after earlier in-flight updates finish", async () => {
+    sequentializeSpy.mockImplementationOnce(
+      () => async (_ctx: unknown, next: () => Promise<void>) => {
+        await next();
+      },
+    );
+
+    const onUpdateId = vi.fn();
+    const onCompletedUpdateId = vi.fn();
+
+    createTelegramBot({
+      token: "tok",
+      updateOffset: {
+        lastUpdateId: 100,
+        onUpdateId,
+        onCompletedUpdateId,
+      },
+    });
+
+    let releaseUpdate101: (() => void) | undefined;
+    const update101Gate = new Promise<void>((resolve) => {
+      releaseUpdate101 = resolve;
+    });
+
+    const p101 = runTelegramMiddlewareChain({
+      ctx: { update: { update_id: 101 } },
+      finalHandler: async () => update101Gate,
+    });
+    await Promise.resolve();
+
+    await runTelegramMiddlewareChain({
+      ctx: { update: { update_id: 102 } },
+      finalHandler: async () => undefined,
+    });
+
+    await flushTelegramTestMicrotasks();
+    expect(onUpdateId.mock.calls.map((call) => Number(call[0]))).toEqual([101, 102]);
+    expect(onCompletedUpdateId).not.toHaveBeenCalled();
+
+    releaseUpdate101?.();
+    await p101;
+
+    expect(onCompletedUpdateId.mock.calls.map((call) => Number(call[0]))).toEqual([102]);
+  });
+
   it("logs and swallows update watermark persistence failures", async () => {
     sequentializeSpy.mockImplementationOnce(
       () => async (_ctx: unknown, next: () => Promise<void>) => {

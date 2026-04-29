@@ -54,6 +54,16 @@ function normalizePersistedUpdateId(value: number | null): number | null {
   return value;
 }
 
+function describeTelegramIncompleteUpdateRange(params: {
+  acceptedUpdateId: number;
+  completedUpdateId: number | null;
+}): string {
+  if (params.completedUpdateId === null) {
+    return `up to update_id ${params.acceptedUpdateId}`;
+  }
+  return `update_id ${params.completedUpdateId + 1}..${params.acceptedUpdateId}`;
+}
+
 /** Check if error is a Grammy HttpError (used to scope unhandled rejection handling) */
 const isGrammyHttpError = (err: unknown): boolean => {
   if (!err || typeof err !== "object") {
@@ -159,7 +169,7 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
       return;
     }
 
-    const { TelegramPollingSession, readTelegramUpdateOffset, writeTelegramUpdateOffset } =
+    const { TelegramPollingSession, readTelegramUpdateOffsetState, writeTelegramUpdateOffset } =
       await loadTelegramMonitorPollingRuntime();
 
     const pollingLease = await acquireTelegramPollingLease({
@@ -190,38 +200,106 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
         });
       }
 
-      const persistedOffsetRaw = await readTelegramUpdateOffset({
+      const persistedOffset = await readTelegramUpdateOffsetState({
         accountId: account.accountId,
         botToken: token,
       });
-      let lastUpdateId = normalizePersistedUpdateId(persistedOffsetRaw);
-      if (persistedOffsetRaw !== null && lastUpdateId === null) {
+      let acceptedUpdateId = normalizePersistedUpdateId(persistedOffset.lastUpdateId);
+      let completedUpdateId = normalizePersistedUpdateId(persistedOffset.completedUpdateId);
+      let durableAcceptedUpdateId = acceptedUpdateId;
+      let durableCompletedUpdateId = completedUpdateId;
+      let offsetWriteChain = Promise.resolve();
+
+      if (persistedOffset.lastUpdateId !== null && acceptedUpdateId === null) {
         log(
-          `[telegram] Ignoring invalid persisted update offset (${String(persistedOffsetRaw)}); starting without offset confirmation.`,
+          `[telegram] Ignoring invalid persisted update offset (${String(persistedOffset.lastUpdateId)}); starting without offset confirmation.`,
+        );
+      }
+      if (persistedOffset.completedUpdateId !== null && completedUpdateId === null) {
+        log(
+          `[telegram] Ignoring invalid persisted completed update offset (${String(persistedOffset.completedUpdateId)}).`,
+        );
+      }
+      if (
+        acceptedUpdateId !== null &&
+        (completedUpdateId === null || acceptedUpdateId > completedUpdateId)
+      ) {
+        const incompleteRange = describeTelegramIncompleteUpdateRange({
+          acceptedUpdateId,
+          completedUpdateId,
+        });
+        const completedDescription =
+          completedUpdateId === null
+            ? "no completed update watermark"
+            : `update_id ${completedUpdateId}`;
+        log(
+          `[telegram][recovery] Previous polling fetched Telegram updates through update_id ${acceptedUpdateId}, but durable handler completion only reached ${completedDescription}. OpenClaw will replay ${incompleteRange} if Telegram still has them; if Telegram already confirmed those offsets before restart, those updates cannot be replayed automatically.`,
         );
       }
 
-      const persistUpdateId = async (updateId: number) => {
+      const writeCurrentOffsetState = async () => {
+        const acceptedSnapshot = acceptedUpdateId;
+        if (acceptedSnapshot === null) {
+          return;
+        }
+        const completedSnapshot = completedUpdateId;
+        const write = offsetWriteChain.then(async () => {
+          await writeTelegramUpdateOffset({
+            accountId: account.accountId,
+            updateId: acceptedSnapshot,
+            completedUpdateId: completedSnapshot,
+            botToken: token,
+          });
+          if (durableAcceptedUpdateId === null || acceptedSnapshot > durableAcceptedUpdateId) {
+            durableAcceptedUpdateId = acceptedSnapshot;
+          }
+          if (
+            completedSnapshot !== null &&
+            (durableCompletedUpdateId === null || completedSnapshot > durableCompletedUpdateId)
+          ) {
+            durableCompletedUpdateId = completedSnapshot;
+          }
+        });
+        offsetWriteChain = write.catch(() => undefined);
+        try {
+          await write;
+        } catch (err) {
+          throw new Error(
+            `Telegram update offset durability write failed: ${formatErrorMessage(err)}`,
+            { cause: err },
+          );
+        }
+      };
+
+      const persistAcceptedUpdateId = async (updateId: number) => {
         const normalizedUpdateId = normalizePersistedUpdateId(updateId);
         if (normalizedUpdateId === null) {
           log(`[telegram] Ignoring invalid update_id value: ${String(updateId)}`);
           return;
         }
-        if (lastUpdateId !== null && normalizedUpdateId <= lastUpdateId) {
+        if (durableAcceptedUpdateId !== null && normalizedUpdateId <= durableAcceptedUpdateId) {
           return;
         }
-        lastUpdateId = normalizedUpdateId;
-        try {
-          await writeTelegramUpdateOffset({
-            accountId: account.accountId,
-            updateId: normalizedUpdateId,
-            botToken: token,
-          });
-        } catch (err) {
-          (opts.runtime?.error ?? console.error)(
-            `telegram: failed to persist update offset: ${String(err)}`,
-          );
+        if (acceptedUpdateId === null || normalizedUpdateId > acceptedUpdateId) {
+          acceptedUpdateId = normalizedUpdateId;
         }
+        await writeCurrentOffsetState();
+      };
+
+      const persistCompletedUpdateId = async (updateId: number) => {
+        const normalizedUpdateId = normalizePersistedUpdateId(updateId);
+        if (normalizedUpdateId === null) {
+          log(`[telegram] Ignoring invalid completed update_id value: ${String(updateId)}`);
+          return;
+        }
+        if (durableCompletedUpdateId !== null && normalizedUpdateId <= durableCompletedUpdateId) {
+          return;
+        }
+        if (acceptedUpdateId === null || normalizedUpdateId > acceptedUpdateId) {
+          acceptedUpdateId = normalizedUpdateId;
+        }
+        completedUpdateId = normalizedUpdateId;
+        await writeCurrentOffsetState();
       };
 
       // Preserve sticky IPv4 fallback state across clean/conflict restarts.
@@ -240,8 +318,9 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
         proxyFetch,
         abortSignal: opts.abortSignal,
         runnerOptions: createTelegramRunnerOptions(cfg),
-        getLastUpdateId: () => lastUpdateId,
-        persistUpdateId,
+        getLastUpdateId: () => completedUpdateId,
+        persistUpdateId: persistAcceptedUpdateId,
+        persistCompletedUpdateId,
         log,
         telegramTransport,
         createTelegramTransport: createTelegramTransportForPolling,

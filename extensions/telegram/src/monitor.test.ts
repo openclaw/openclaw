@@ -78,8 +78,17 @@ const { computeBackoff, sleepWithAbort } = vi.hoisted(() => ({
   computeBackoff: vi.fn(() => 0),
   sleepWithAbort: vi.fn(async () => undefined),
 }));
-const { readTelegramUpdateOffsetSpy } = vi.hoisted(() => ({
+const {
+  readTelegramUpdateOffsetSpy,
+  readTelegramUpdateOffsetStateSpy,
+  writeTelegramUpdateOffsetSpy,
+} = vi.hoisted(() => ({
   readTelegramUpdateOffsetSpy: vi.fn(async () => null as number | null),
+  readTelegramUpdateOffsetStateSpy: vi.fn(async () => ({
+    lastUpdateId: null as number | null,
+    completedUpdateId: null as number | null,
+  })),
+  writeTelegramUpdateOffsetSpy: vi.fn(async () => undefined),
 }));
 const { startTelegramWebhookSpy } = vi.hoisted(() => ({
   startTelegramWebhookSpy: vi.fn(async () => ({ server: { close: vi.fn() }, stop: vi.fn() })),
@@ -153,7 +162,10 @@ function mockRunOnceAndAbort(abort: AbortController) {
 }
 
 async function expectOffsetConfirmationSkipped(offset: number | null) {
-  readTelegramUpdateOffsetSpy.mockResolvedValueOnce(offset);
+  readTelegramUpdateOffsetStateSpy.mockResolvedValueOnce({
+    lastUpdateId: offset,
+    completedUpdateId: offset,
+  });
   const abort = new AbortController();
   api.getUpdates.mockReset();
   api.deleteWebhook.mockReset();
@@ -167,7 +179,10 @@ async function expectOffsetConfirmationSkipped(offset: number | null) {
 
 async function runMonitorAndCaptureStartupOrder(params?: { persistedOffset?: number | null }) {
   if (params && "persistedOffset" in params) {
-    readTelegramUpdateOffsetSpy.mockResolvedValueOnce(params.persistedOffset ?? null);
+    readTelegramUpdateOffsetStateSpy.mockResolvedValueOnce({
+      lastUpdateId: params.persistedOffset ?? null,
+      completedUpdateId: params.persistedOffset ?? null,
+    });
   }
   const abort = new AbortController();
   const order: string[] = [];
@@ -328,7 +343,8 @@ vi.mock("./fetch.js", () => ({
 
 vi.mock("./update-offset-store.js", () => ({
   readTelegramUpdateOffset: readTelegramUpdateOffsetSpy,
-  writeTelegramUpdateOffset: vi.fn(async () => undefined),
+  readTelegramUpdateOffsetState: readTelegramUpdateOffsetStateSpy,
+  writeTelegramUpdateOffset: writeTelegramUpdateOffsetSpy,
 }));
 
 describe("monitorTelegramProvider (grammY)", () => {
@@ -347,6 +363,11 @@ describe("monitorTelegramProvider (grammY)", () => {
     });
     initSpy.mockClear();
     readTelegramUpdateOffsetSpy.mockReset().mockResolvedValue(null);
+    readTelegramUpdateOffsetStateSpy.mockReset().mockResolvedValue({
+      lastUpdateId: null,
+      completedUpdateId: null,
+    });
+    writeTelegramUpdateOffsetSpy.mockReset().mockResolvedValue(undefined);
     api.getUpdates.mockReset().mockResolvedValue([]);
     runSpy.mockReset().mockImplementation(() =>
       makeRunnerStub({
@@ -835,6 +856,28 @@ describe("monitorTelegramProvider (grammY)", () => {
     // OpenClaw middleware skips duplicates using the persisted update offset.
     expect(api.getUpdates).not.toHaveBeenCalled();
     expect(order).toEqual(["deleteWebhook", "run"]);
+  });
+
+  it("restarts from the completed update watermark and logs incomplete accepted updates", async () => {
+    readTelegramUpdateOffsetStateSpy.mockResolvedValueOnce({
+      lastUpdateId: 102,
+      completedUpdateId: 100,
+    });
+    const runtime = { error: vi.fn() } as unknown as NonNullable<MonitorTelegramOpts["runtime"]>;
+    const abort = new AbortController();
+    mockRunOnceAndAbort(abort);
+
+    await monitorTelegramProvider({ token: "tok", abortSignal: abort.signal, runtime });
+
+    expect(createTelegramBotCalls[0]?.updateOffset).toMatchObject({
+      lastUpdateId: 100,
+    });
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("Previous polling fetched Telegram updates through update_id 102"),
+    );
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("OpenClaw will replay update_id 101..102 if Telegram still has them"),
+    );
   });
 
   it("skips offset confirmation when no persisted offset exists", async () => {

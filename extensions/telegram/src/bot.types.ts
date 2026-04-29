@@ -19,6 +19,7 @@ export type TelegramBotOptions = {
   updateOffset?: {
     lastUpdateId?: number | null;
     onUpdateId?: (updateId: number) => void | Promise<void>;
+    onCompletedUpdateId?: (updateId: number) => void | Promise<void>;
   };
   testTimings?: {
     mediaGroupFlushMs?: number;

@@ -10,6 +10,7 @@ type PersistUpdateId = (updateId: number) => void | Promise<void>;
 type TelegramUpdateTrackerOptions = {
   initialUpdateId?: number | null;
   onAcceptedUpdateId?: PersistUpdateId;
+  onCompletedUpdateId?: PersistUpdateId;
   onPersistError?: (error: unknown) => void;
   onSkip?: (key: string) => void;
 };
@@ -57,6 +58,7 @@ export function createTelegramUpdateTracker(options: TelegramUpdateTrackerOption
   let highestAcceptedUpdateId: number | null = initialUpdateId;
   let highestPersistedAcceptedUpdateId: number | null = initialUpdateId;
   let highestPersistenceRequestedUpdateId: number | null = initialUpdateId;
+  let highestCompletionPersistRequestedUpdateId: number | null = initialUpdateId;
   let highestCompletedUpdateId: number | null = initialUpdateId;
   let persistInFlight = false;
   let persistTargetUpdateId: number | null = null;
@@ -117,6 +119,25 @@ export function createTelegramUpdateTracker(options: TelegramUpdateTrackerOption
     requestPersistAcceptedUpdateId(updateId);
   };
 
+  const persistCompletedUpdateId = async (updateId: number) => {
+    const persist = options.onCompletedUpdateId;
+    if (typeof persist !== "function") {
+      return;
+    }
+    if (
+      highestCompletionPersistRequestedUpdateId !== null &&
+      updateId <= highestCompletionPersistRequestedUpdateId
+    ) {
+      return;
+    }
+    highestCompletionPersistRequestedUpdateId = updateId;
+    try {
+      await persist(updateId);
+    } catch (err) {
+      options.onPersistError?.(err);
+    }
+  };
+
   const beginUpdate = (ctx: TelegramUpdateKeyContext): BeginUpdateResult => {
     const updateId = resolveTelegramUpdateId(ctx);
     const updateKey = buildTelegramUpdateKey(ctx);
@@ -151,7 +172,7 @@ export function createTelegramUpdateTracker(options: TelegramUpdateTrackerOption
     };
   };
 
-  const finishUpdate = (update: AcceptedTelegramUpdate, finish: FinishUpdateOptions) => {
+  const finishUpdate = async (update: AcceptedTelegramUpdate, finish: FinishUpdateOptions) => {
     if (update.key) {
       activeHandledUpdateKeys.delete(update.key);
       if (finish.completed) {
@@ -169,6 +190,10 @@ export function createTelegramUpdateTracker(options: TelegramUpdateTrackerOption
       } else {
         failedUpdateIds.add(update.updateId);
       }
+    }
+    const safeCompletedUpdateId = resolveSafeCompletedUpdateId();
+    if (safeCompletedUpdateId !== null) {
+      await persistCompletedUpdateId(safeCompletedUpdateId);
     }
   };
 

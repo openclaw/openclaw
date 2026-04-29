@@ -57,6 +57,26 @@ const resolvePollingStallThresholdMs = (value: number | undefined): number => {
   );
 };
 
+const resolveHighestUpdateId = (updates: unknown): number | null => {
+  if (!Array.isArray(updates)) {
+    return null;
+  }
+  let highestUpdateId: number | null = null;
+  for (const update of updates) {
+    const updateId =
+      update && typeof update === "object"
+        ? (update as { update_id?: unknown }).update_id
+        : undefined;
+    if (typeof updateId !== "number" || !Number.isSafeInteger(updateId) || updateId < 0) {
+      continue;
+    }
+    if (highestUpdateId === null || updateId > highestUpdateId) {
+      highestUpdateId = updateId;
+    }
+  }
+  return highestUpdateId;
+};
+
 type TelegramPollingSessionOpts = {
   token: string;
   config: Parameters<typeof createTelegramBot>[0]["config"];
@@ -67,6 +87,7 @@ type TelegramPollingSessionOpts = {
   runnerOptions: RunOptions<unknown>;
   getLastUpdateId: () => number | null;
   persistUpdateId: (updateId: number) => Promise<void>;
+  persistCompletedUpdateId?: (updateId: number) => Promise<void>;
   log: (line: string) => void;
   /** Pre-resolved Telegram transport to reuse across bot instances */
   telegramTransport?: TelegramTransport;
@@ -111,6 +132,14 @@ export class TelegramPollingSession {
 
   abortActiveFetch() {
     this.#activeFetchAbort?.abort();
+  }
+
+  async #persistFetchedUpdateOffset(updates: unknown): Promise<void> {
+    const highestUpdateId = resolveHighestUpdateId(updates);
+    if (highestUpdateId === null) {
+      return;
+    }
+    await this.opts.persistUpdateId(highestUpdateId);
   }
 
   async runUntilAbort(): Promise<void> {
@@ -187,6 +216,9 @@ export class TelegramPollingSession {
         updateOffset: {
           lastUpdateId: this.opts.getLastUpdateId(),
           onUpdateId: this.opts.persistUpdateId,
+          ...(this.opts.persistCompletedUpdateId
+            ? { onCompletedUpdateId: this.opts.persistCompletedUpdateId }
+            : {}),
         },
         telegramTransport,
       });
@@ -239,6 +271,7 @@ export class TelegramPollingSession {
       liveness.noteGetUpdatesStarted(payload);
       try {
         const result = await prev(method, payload, signal);
+        await this.#persistFetchedUpdateOffset(result);
         liveness.noteGetUpdatesSuccess(result);
         return result;
       } catch (err) {

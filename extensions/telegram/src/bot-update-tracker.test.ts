@@ -25,9 +25,11 @@ function deferred() {
 describe("createTelegramUpdateTracker", () => {
   it("persists accepted offsets before earlier pending updates complete", async () => {
     const onAcceptedUpdateId = vi.fn();
+    const onCompletedUpdateId = vi.fn();
     const tracker = createTelegramUpdateTracker({
       initialUpdateId: 100,
       onAcceptedUpdateId,
+      onCompletedUpdateId,
     });
 
     const update101 = tracker.beginUpdate(updateCtx(101));
@@ -41,10 +43,11 @@ describe("createTelegramUpdateTracker", () => {
     if (!update102.accepted) {
       throw new Error("expected update 102 to be accepted");
     }
-    tracker.finishUpdate(update102.update, { completed: true });
+    await tracker.finishUpdate(update102.update, { completed: true });
     await flushTrackerMicrotasks();
 
     expect(onAcceptedUpdateId.mock.calls.map((call) => Number(call[0]))).toEqual([101, 102]);
+    expect(onCompletedUpdateId).not.toHaveBeenCalled();
     expect(tracker.getState()).toMatchObject({
       highestAcceptedUpdateId: 102,
       highestPersistedAcceptedUpdateId: 102,
@@ -54,7 +57,8 @@ describe("createTelegramUpdateTracker", () => {
       failedUpdateIds: [],
     } satisfies Partial<TelegramUpdateTrackerState>);
 
-    tracker.finishUpdate(update101.update, { completed: true });
+    await tracker.finishUpdate(update101.update, { completed: true });
+    expect(onCompletedUpdateId).toHaveBeenCalledWith(102);
     expect(tracker.getState()).toMatchObject({
       highestCompletedUpdateId: 102,
       safeCompletedUpdateId: 102,
@@ -125,13 +129,13 @@ describe("createTelegramUpdateTracker", () => {
     } satisfies Partial<TelegramUpdateTrackerState>);
   });
 
-  it("keeps failed accepted updates retryable in the same process", () => {
+  it("keeps failed accepted updates retryable in the same process", async () => {
     const tracker = createTelegramUpdateTracker({ initialUpdateId: 200 });
     const first = tracker.beginUpdate(updateCtx(201));
     if (!first.accepted) {
       throw new Error("expected first update to be accepted");
     }
-    tracker.finishUpdate(first.update, { completed: false });
+    await tracker.finishUpdate(first.update, { completed: false });
 
     expect(tracker.getState()).toMatchObject({
       highestAcceptedUpdateId: 201,
@@ -144,7 +148,7 @@ describe("createTelegramUpdateTracker", () => {
     if (!retry.accepted) {
       throw new Error("expected failed update retry to be accepted");
     }
-    tracker.finishUpdate(retry.update, { completed: true });
+    await tracker.finishUpdate(retry.update, { completed: true });
 
     expect(tracker.getState()).toMatchObject({
       highestAcceptedUpdateId: 201,
@@ -158,7 +162,7 @@ describe("createTelegramUpdateTracker", () => {
     });
   });
 
-  it("dedupes handler dispatch separately from the accepted watermark", () => {
+  it("dedupes handler dispatch separately from the accepted watermark", async () => {
     const onSkip = vi.fn();
     const tracker = createTelegramUpdateTracker({ initialUpdateId: 300, onSkip });
     const accepted = tracker.beginUpdate(updateCtx(301));
@@ -170,7 +174,7 @@ describe("createTelegramUpdateTracker", () => {
     expect(tracker.shouldSkipHandlerDispatch(updateCtx(301))).toBe(true);
     expect(onSkip).toHaveBeenCalledWith("update:301");
 
-    tracker.finishUpdate(accepted.update, { completed: true });
+    await tracker.finishUpdate(accepted.update, { completed: true });
     expect(tracker.shouldSkipHandlerDispatch(updateCtx(301))).toBe(true);
   });
 });
