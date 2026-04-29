@@ -270,11 +270,14 @@ the separate `/codeql-critical-quality/channel-runtime-boundary` category. The
 agent-runtime-boundary job scans command execution, model/provider dispatch,
 auto-reply dispatch and queues, and ACP control-plane runtime contracts under
 the separate `/codeql-critical-quality/agent-runtime-boundary` category. The
+ui-control-plane job scans Control UI bootstrap, local persistence, gateway
+control flows, and task control-plane runtime contracts under the separate
+`/codeql-critical-quality/ui-control-plane` category. The
 plugin-boundary job scans loader, registry, public-surface, and Plugin SDK
 entrypoint contracts under a separate `/codeql-critical-quality/plugin-boundary`
 category. Keep the workflow separate from security so quality findings can be
 scheduled, measured, disabled, or expanded without obscuring security signal.
-Swift, Python, UI, and bundled-plugin CodeQL expansion should be added back as
+Swift, Python, and bundled-plugin CodeQL expansion should be added back as
 scoped or sharded follow-up work only after the narrow profiles have stable
 runtime and signal.
 
