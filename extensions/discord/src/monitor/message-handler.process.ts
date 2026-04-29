@@ -21,7 +21,6 @@ import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-pay
 import { danger, logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolveDiscordMaxLinesPerMessage } from "../accounts.js";
 import { createDiscordRestClient } from "../client.js";
-import type { RequestClient } from "../internal/discord.js";
 import { removeReactionDiscord } from "../send.js";
 import { editMessageDiscord } from "../send.messages.js";
 import {
@@ -179,12 +178,12 @@ export async function processDiscordMessage(
     cfg,
     token,
     accountId,
-  }).rest as unknown as RequestClient;
+  }).rest;
   const deliveryRest = createDiscordRestClient({
     cfg,
     token,
     accountId,
-  }).rest as unknown as RequestClient;
+  }).rest;
   // Discord outbound helpers expect the internal REST client shape explicitly.
   const ackReactionContext = createDiscordAckReactionContext({
     rest: feedbackRest,
