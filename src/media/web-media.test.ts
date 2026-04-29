@@ -196,39 +196,55 @@ describe("loadWebMedia", () => {
     });
   });
 
-  it("allows host-read CSV files", async () => {
-    const csvFile = path.join(fixtureRoot, "data.csv");
-    await fs.writeFile(csvFile, "name,value\nfoo,1\nbar,2\n", "utf8");
-    const result = await loadWebMedia(csvFile, {
-      maxBytes: 1024 * 1024,
-      localRoots: "any",
-      readFile: async (filePath) => await fs.readFile(filePath),
-      hostReadCapability: true,
-    });
+  it.each([
+    {
+      label: "CSV",
+      fileName: "data.csv",
+      body: "name,value\nfoo,1\nbar,2\n",
+      contentType: "text/csv",
+    },
+    {
+      label: "Markdown",
+      fileName: "notes.md",
+      body: "# Title\n\nSome **bold** text.\n",
+      contentType: "text/markdown",
+    },
+    {
+      label: "HTML",
+      fileName: "page.html",
+      body: "<!doctype html><html><body>Hello</body></html>\n",
+      contentType: "text/html",
+    },
+    {
+      label: "XML",
+      fileName: "feed.xml",
+      body: "<?xml version=\"1.0\"?><root>Hello</root>\n",
+      contentType: "application/xml",
+    },
+    {
+      label: "CSS",
+      fileName: "site.css",
+      body: "body { color: red; }\n",
+      contentType: "text/css",
+    },
+  ])("allows host-read $label files", async ({ fileName, body, contentType }) => {
+    const result = await loadDocumentWithHostRead(fileName, body);
     expect(result.kind).toBe("document");
-    expect(result.contentType).toBe("text/csv");
+    expect(result.contentType).toBe(contentType);
   });
 
-  it("allows host-read Markdown files", async () => {
-    const mdFile = path.join(fixtureRoot, "notes.md");
-    await fs.writeFile(mdFile, "# Title\n\nSome **bold** text.\n", "utf8");
-    const result = await loadWebMedia(mdFile, {
-      maxBytes: 1024 * 1024,
-      localRoots: "any",
-      readFile: async (filePath) => await fs.readFile(filePath),
-      hostReadCapability: true,
-    });
-    expect(result.kind).toBe("document");
-    expect(result.contentType).toBe("text/markdown");
-  });
-
-  it("rejects binary data disguised as a CSV file", async () => {
-    const fakeCsv = path.join(fixtureRoot, "evil.csv");
-    // Write ZIP magic bytes — file-type detects application/zip (not image, not CSV),
-    // so it is rejected by the host-read policy rather than allowed as an image.
-    await fs.writeFile(fakeCsv, Buffer.from([0x50, 0x4b, 0x03, 0x04]));
+  it.each([
+    { label: "CSV", fileName: "evil.csv" },
+    { label: "Markdown", fileName: "evil.md" },
+    { label: "HTML", fileName: "evil.html" },
+    { label: "XML", fileName: "evil.xml" },
+    { label: "CSS", fileName: "evil.css" },
+  ])("rejects ZIP data disguised as a host-read $label file", async ({ fileName }) => {
+    const fakeTextFile = path.join(fixtureRoot, fileName);
+    // Write ZIP magic bytes so file-type detects application/zip rather than a text document.
+    await fs.writeFile(fakeTextFile, Buffer.from([0x50, 0x4b, 0x03, 0x04]));
     await expect(
-      loadWebMedia(fakeCsv, {
+      loadWebMedia(fakeTextFile, {
         maxBytes: 1024 * 1024,
         localRoots: "any",
         readFile: async (filePath) => await fs.readFile(filePath),
@@ -242,6 +258,9 @@ describe("loadWebMedia", () => {
   it.each([
     { label: "CSV", fileName: "opaque.csv" },
     { label: "Markdown", fileName: "opaque.md" },
+    { label: "HTML", fileName: "opaque.html" },
+    { label: "XML", fileName: "opaque.xml" },
+    { label: "CSS", fileName: "opaque.css" },
   ])("rejects opaque non-NUL binary data disguised as %s", async ({ fileName }) => {
     const fakeTextFile = path.join(fixtureRoot, fileName);
     const opaqueBinary = Buffer.alloc(9000);
@@ -405,6 +424,9 @@ describe("loadWebMedia", () => {
   it.each([
     { label: "CSV", fileName: "high-bytes.csv" },
     { label: "Markdown", fileName: "high-bytes.md" },
+    { label: "HTML", fileName: "high-bytes.html" },
+    { label: "XML", fileName: "high-bytes.xml" },
+    { label: "CSS", fileName: "high-bytes.css" },
   ])("rejects high-byte opaque data disguised as %s", async ({ fileName }) => {
     const fakeTextFile = path.join(fixtureRoot, fileName);
     const opaqueBinary = Buffer.alloc(9000);
