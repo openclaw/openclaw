@@ -832,7 +832,7 @@ export async function collectInstalledSkillsCodeSafetyFindings(params: {
 }): Promise<SecurityAuditFinding[]> {
   const findings: SecurityAuditFinding[] = [];
   const pluginExtensionsDir = path.join(params.stateDir, "extensions");
-  const scannedSkillDirs = new Set<string>();
+  const scannedSkillDirs = new Set<string>(); // shared across trusted and normal paths — deduplicates per unique physical dir
   const [{ listAgentWorkspaceDirs }, { resolveSkillSource }] = await Promise.all([
     loadAgentWorkspaceDirsModule(),
     loadSkillSourceModule(),
