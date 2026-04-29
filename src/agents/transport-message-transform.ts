@@ -37,6 +37,64 @@ function isFailedAssistantTurn(message: Context["messages"][number]): boolean {
   return message.stopReason === "error" || message.stopReason === "aborted";
 }
 
+/**
+ * Detects identical thinking blocks across consecutive assistant turns that
+ * also contain tool calls, and injects a loop-breaker user message if found.
+ *
+ * Exported so both the responses transport (`transformTransportMessages`) and
+ * the completions transport (`buildOpenAICompletionsParams`) can wire it in.
+ * (#73781)
+ */
+export function injectLoopHintIfNeeded(msgs: Context["messages"]): Context["messages"] {
+  // Walk turns to find consecutive assistant turns with tool calls
+  // whose thinking blocks are identical.
+  const turns: { thinking: string; hasToolCalls: boolean }[] = [];
+  for (const msg of msgs) {
+    if (msg.role === "assistant" && msg.content) {
+      let thinking = "";
+      let hasToolCalls = false;
+      for (const block of msg.content) {
+        if (block.type === "thinking" && typeof block.thinking === "string") {
+          thinking = block.thinking.trim();
+        } else if (block.type === "toolCall") {
+          hasToolCalls = true;
+        }
+      }
+      if (thinking) {
+        turns.push({ thinking, hasToolCalls });
+      }
+    }
+  }
+  // Require 3 consecutive assistant turns with tool calls AND identical thinking
+  const needed = 3;
+  if (turns.length >= needed) {
+    const last = turns.at(-1);
+    const middle = turns.at(-2);
+    const first = turns.at(-3);
+    if (
+      last && middle && first &&
+      last.thinking === middle.thinking &&
+      last.thinking === first.thinking &&
+      last.hasToolCalls && middle.hasToolCalls && first.hasToolCalls
+    ) {
+      const out = [...msgs, {
+        role: "user" as const,
+        content: [{
+          type: "text" as const,
+          text:
+            "⚠️ [LOOP DETECTED] Your last 3 thinking blocks are identical and " +
+            "all included tool calls. Tool results are already available — analyze " +
+            "them instead of repeating the same reasoning. If the task is done, " +
+            "provide a final response.",
+        }],
+        timestamp: Date.now(),
+      }];
+      return out;
+    }
+  }
+  return msgs;
+}
+
 export function transformTransportMessages(
   messages: Context["messages"],
   model: Model<Api>,
@@ -109,58 +167,6 @@ export function transformTransportMessages(
     }
     return { ...msg, content };
   });
-  // Detect identical thinking blocks across consecutive assistant turns.
-  // Run BEFORE the early return so it covers ALL transports (including Qwen's
-  // openai-completions which is not in SYNTHETIC_TOOL_RESULT_APIS) (#73781).
-  function injectLoopHintIfNeeded(msgs: Context["messages"]): Context["messages"] {
-    // Walk turns backwards to find consecutive assistant turns with tool calls
-    // whose thinking blocks are identical.
-    const turns: { thinking: string; hasToolCalls: boolean }[] = [];
-    for (const msg of msgs) {
-      if (msg.role === "assistant" && msg.content) {
-        let thinking = "";
-        let hasToolCalls = false;
-        for (const block of msg.content) {
-          if (block.type === "thinking" && typeof block.thinking === "string") {
-            thinking = block.thinking.trim();
-          } else if (block.type === "toolCall") {
-            hasToolCalls = true;
-          }
-        }
-        if (thinking) {
-          turns.push({ thinking, hasToolCalls });
-        }
-      }
-    }
-    // Require 3 consecutive assistant turns with tool calls AND identical thinking
-    const needed = 3;
-    if (turns.length >= needed) {
-      const last = turns.at(-1);
-      const middle = turns.at(-2);
-      const first = turns.at(-3);
-      if (
-        last && middle && first &&
-        last.thinking === middle.thinking &&
-        last.thinking === first.thinking &&
-        last.hasToolCalls && middle.hasToolCalls && first.hasToolCalls
-      ) {
-        const out = [...msgs, {
-          role: "user" as const,
-          content: [{
-            type: "text" as const,
-            text:
-              "⚠️ [LOOP DETECTED] Your last 3 thinking blocks are identical and " +
-              "all included tool calls. Tool results are already available — analyze " +
-              "them instead of repeating the same reasoning. If the task is done, " +
-              "provide a final response.",
-          }],
-          timestamp: Date.now(),
-        }];
-        return out;
-      }
-    }
-    return msgs;
-  }
 
   // Preserve the old transport replay filter: failed streamed turns can contain
   // partial text, partial tool calls, or both, and strict providers can treat
