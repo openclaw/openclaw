@@ -980,7 +980,7 @@ describe("modelsListCommand forward-compat", () => {
           loadAvailability: false,
         }),
       );
-      expect(lastPrintedRows<{ key: string }>()).toEqual([
+      expect(lastPrintedRows<{ key: string; available: boolean }>()).toEqual([
         expect.objectContaining({
           key: "anthropic/claude-opus-4-7",
         }),
