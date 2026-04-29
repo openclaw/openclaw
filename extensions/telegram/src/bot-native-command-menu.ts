@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type { Bot } from "grammy";
-import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { collectErrorGraphCandidates, formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { logVerbose, sleep } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString, readStringValue } from "openclaw/plugin-sdk/text-runtime";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
@@ -10,6 +11,9 @@ export const TELEGRAM_MAX_COMMANDS = 100;
 export const TELEGRAM_TOTAL_COMMAND_TEXT_BUDGET = 5700;
 const TELEGRAM_COMMAND_RETRY_RATIO = 0.8;
 const TELEGRAM_MIN_COMMAND_DESCRIPTION_LENGTH = 1;
+const TELEGRAM_COMMAND_RATE_LIMIT_MAX_RETRIES = 3;
+const TELEGRAM_COMMAND_RATE_LIMIT_FALLBACK_DELAY_MS = 1_000;
+const MAX_SAFE_TIMEOUT_DELAY_MS = 2_147_483_647;
 
 export type TelegramMenuCommand = {
   command: string;
@@ -20,6 +24,10 @@ type TelegramPluginCommandSpec = {
   name: unknown;
   description: unknown;
 };
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
 
 function countTelegramCommandText(value: string): number {
   return Array.from(value).length;
@@ -89,10 +97,103 @@ function fitTelegramCommandsWithinTextBudget(
 }
 
 function readErrorTextField(value: unknown, key: "description" | "message"): string | undefined {
-  if (!value || typeof value !== "object" || !(key in value)) {
+  if (!isRecord(value) || !(key in value)) {
     return undefined;
   }
-  return readStringValue((value as Record<"description" | "message", unknown>)[key]);
+  return readStringValue(value[key]);
+}
+
+function collectTelegramCommandErrorCandidates(err: unknown): unknown[] {
+  return collectErrorGraphCandidates(err, (current) => {
+    const nested: unknown[] = [current.cause, current.reason];
+    if (Array.isArray(current.errors)) {
+      nested.push(...current.errors);
+    }
+    nested.push(current.error, current.response);
+    return nested;
+  });
+}
+
+function readTelegramErrorCode(value: unknown): number | undefined {
+  if (!isRecord(value) || !("error_code" in value)) {
+    return undefined;
+  }
+  const code = value.error_code;
+  return typeof code === "number" && Number.isFinite(code) ? code : undefined;
+}
+
+function readRetryAfterSecondsFromParameters(value: unknown): number | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const parameters = value.parameters;
+  if (!isRecord(parameters) || !("retry_after" in parameters)) {
+    return undefined;
+  }
+  const retryAfter = parameters.retry_after;
+  return typeof retryAfter === "number" && Number.isFinite(retryAfter) && retryAfter >= 0
+    ? retryAfter
+    : undefined;
+}
+
+function readRetryAfterSecondsFromText(value: string): number | undefined {
+  const match = /\bretry[_ -]?after\b[^\d]{0,20}(\d+(?:\.\d+)?)/i.exec(value);
+  if (!match) {
+    return undefined;
+  }
+  const retryAfter = Number(match[1]);
+  return Number.isFinite(retryAfter) && retryAfter >= 0 ? retryAfter : undefined;
+}
+
+function readStructuredTelegramRetryAfterMs(err: unknown): number | undefined {
+  for (const candidate of collectTelegramCommandErrorCandidates(err)) {
+    const retryAfterSeconds = readRetryAfterSecondsFromParameters(candidate);
+    if (retryAfterSeconds !== undefined) {
+      return Math.min(retryAfterSeconds * 1_000, MAX_SAFE_TIMEOUT_DELAY_MS);
+    }
+  }
+  return undefined;
+}
+
+function readFallbackTelegramRetryAfterMs(err: unknown): number | undefined {
+  for (const candidate of collectTelegramCommandErrorCandidates(err)) {
+    const texts = [
+      typeof candidate === "string" ? candidate : undefined,
+      candidate instanceof Error ? candidate.message : undefined,
+      readErrorTextField(candidate, "description"),
+      readErrorTextField(candidate, "message"),
+    ];
+    for (const text of texts) {
+      if (!text) {
+        continue;
+      }
+      const retryAfterSeconds = readRetryAfterSecondsFromText(text);
+      if (retryAfterSeconds !== undefined) {
+        return Math.min(retryAfterSeconds * 1_000, MAX_SAFE_TIMEOUT_DELAY_MS);
+      }
+    }
+  }
+  return undefined;
+}
+
+function hasTelegramRateLimitMarker(err: unknown): boolean {
+  for (const candidate of collectTelegramCommandErrorCandidates(err)) {
+    if (readTelegramErrorCode(candidate) === 429) {
+      return true;
+    }
+  }
+  return /(?:^|\b)429\b|too many requests/i.test(formatErrorMessage(err));
+}
+
+function resolveTelegramRateLimitRetryDelayMs(err: unknown): number | undefined {
+  if (!hasTelegramRateLimitMarker(err)) {
+    return undefined;
+  }
+  return (
+    readStructuredTelegramRetryAfterMs(err) ??
+    readFallbackTelegramRetryAfterMs(err) ??
+    TELEGRAM_COMMAND_RATE_LIMIT_FALLBACK_DELAY_MS
+  );
 }
 
 function isBotCommandsTooMuchError(err: unknown): boolean {
@@ -275,12 +376,15 @@ export function syncTelegramMenuCommands(params: {
 
     let retryCommands = commandsToRegister;
     const initialCommandCount = commandsToRegister.length;
+    let rateLimitRetryCount = 0;
     while (retryCommands.length > 0) {
       try {
         await withTelegramApiErrorLogging({
           operation: "setMyCommands",
           runtime,
-          shouldLog: (err) => !isBotCommandsTooMuchError(err),
+          shouldLog: (err) =>
+            !isBotCommandsTooMuchError(err) &&
+            resolveTelegramRateLimitRetryDelayMs(err) === undefined,
           fn: () => bot.api.setMyCommands(retryCommands),
         });
         if (retryCommands.length < initialCommandCount) {
@@ -294,6 +398,18 @@ export function syncTelegramMenuCommands(params: {
         writeCachedCommandHash(accountId, botIdentity, currentHash);
         return;
       } catch (err) {
+        const rateLimitRetryDelayMs = resolveTelegramRateLimitRetryDelayMs(err);
+        if (
+          rateLimitRetryDelayMs !== undefined &&
+          rateLimitRetryCount < TELEGRAM_COMMAND_RATE_LIMIT_MAX_RETRIES
+        ) {
+          rateLimitRetryCount += 1;
+          runtime.log?.(
+            `Telegram rate limited native command registration; retrying setMyCommands in ${rateLimitRetryDelayMs}ms (attempt ${rateLimitRetryCount}/${TELEGRAM_COMMAND_RATE_LIMIT_MAX_RETRIES}).`,
+          );
+          await sleep(rateLimitRetryDelayMs);
+          continue;
+        }
         if (!isBotCommandsTooMuchError(err)) {
           throw err;
         }

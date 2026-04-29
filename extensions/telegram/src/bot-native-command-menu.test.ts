@@ -33,6 +33,12 @@ function syncMenuCommandsWithMocks(options: SyncMenuOptions): void {
   });
 }
 
+async function flushMenuSyncMicrotasks(): Promise<void> {
+  for (let i = 0; i < 5; i += 1) {
+    await Promise.resolve();
+  }
+}
+
 describe("bot-native-command-menu", () => {
   it("caps menu entries to Telegram limit", () => {
     const allCommands = Array.from({ length: 105 }, (_, i) => ({
@@ -348,5 +354,127 @@ describe("bot-native-command-menu", () => {
     expect(runtimeLog).toHaveBeenCalledWith(
       "Telegram rejected 10 commands (BOT_COMMANDS_TOO_MUCH); retrying with 8.",
     );
+  });
+
+  it.each([
+    {
+      label: "top-level parameters",
+      error: {
+        error_code: 429,
+        description: "Too Many Requests",
+        parameters: { retry_after: 2 },
+      },
+      expectedDelayMs: 2_000,
+    },
+    {
+      label: "wrapped response parameters",
+      error: {
+        message: "429 Too Many Requests",
+        response: { parameters: { retry_after: 1.5 } },
+      },
+      expectedDelayMs: 1_500,
+    },
+    {
+      label: "wrapped error parameters",
+      error: {
+        message: "Too Many Requests",
+        error: { error_code: 429, parameters: { retry_after: 0.25 } },
+      },
+      expectedDelayMs: 250,
+    },
+    {
+      label: "description fallback",
+      error: { error_code: 429, description: "Too Many Requests: retry after 3" },
+      expectedDelayMs: 3_000,
+    },
+    {
+      label: "structured parameters preferred over description fallback",
+      error: {
+        error_code: 429,
+        description: "Too Many Requests: retry after 9",
+        parameters: { retry_after: 1 },
+      },
+      expectedDelayMs: 1_000,
+    },
+  ])(
+    "retries setMyCommands after Telegram 429 using $label",
+    async ({ error, expectedDelayMs }) => {
+      vi.useFakeTimers();
+      const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+      try {
+        const deleteMyCommands = vi.fn(async () => undefined);
+        const setMyCommands = vi.fn().mockRejectedValueOnce(error).mockResolvedValue(undefined);
+        const runtimeLog = vi.fn();
+        const runtimeError = vi.fn();
+
+        syncMenuCommandsWithMocks({
+          deleteMyCommands,
+          setMyCommands,
+          runtimeLog,
+          runtimeError,
+          commandsToRegister: [{ command: "rate_limit", description: "Rate limited command" }],
+          accountId: `test-rate-limit-${expectedDelayMs}`,
+          botIdentity: "bot-a",
+        });
+
+        await flushMenuSyncMicrotasks();
+        expect(setMyCommands).toHaveBeenCalledTimes(1);
+        expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), expectedDelayMs);
+
+        await vi.advanceTimersByTimeAsync(Math.max(0, expectedDelayMs - 1));
+        await flushMenuSyncMicrotasks();
+        expect(setMyCommands).toHaveBeenCalledTimes(1);
+
+        await vi.advanceTimersByTimeAsync(1);
+        await flushMenuSyncMicrotasks();
+        expect(setMyCommands).toHaveBeenCalledTimes(2);
+        expect(runtimeLog).toHaveBeenCalledWith(
+          `Telegram rate limited native command registration; retrying setMyCommands in ${expectedDelayMs}ms (attempt 1/3).`,
+        );
+        expect(runtimeError).not.toHaveBeenCalled();
+      } finally {
+        setTimeoutSpy.mockRestore();
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it("does not cache command hash when setMyCommands fails", async () => {
+    const deleteMyCommands = vi.fn(async () => undefined);
+    const setMyCommands = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("transient set failure"))
+      .mockResolvedValue(undefined);
+    const runtimeError = vi.fn();
+    const accountId = `test-set-fail-${Date.now()}`;
+    const commands = [{ command: "set_fail", description: "Set failure retry" }];
+
+    syncMenuCommandsWithMocks({
+      deleteMyCommands,
+      setMyCommands,
+      runtimeError,
+      commandsToRegister: commands,
+      accountId,
+      botIdentity: "bot-a",
+    });
+
+    await vi.waitFor(() => {
+      expect(runtimeError).toHaveBeenCalledWith(
+        "Telegram command sync failed: Error: transient set failure",
+      );
+    });
+
+    syncMenuCommandsWithMocks({
+      deleteMyCommands,
+      setMyCommands,
+      runtimeError,
+      commandsToRegister: commands,
+      accountId,
+      botIdentity: "bot-a",
+    });
+
+    await vi.waitFor(() => {
+      expect(setMyCommands).toHaveBeenCalledTimes(2);
+    });
   });
 });
