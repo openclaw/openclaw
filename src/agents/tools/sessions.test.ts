@@ -644,6 +644,97 @@ describe("sessions_send gating", () => {
     expect(callGatewayMock.mock.calls[0]?.[0]).toMatchObject({ method: "sessions.resolve" });
   });
 
+  it("prefers sessionKey over a redundant label", async () => {
+    const tool = createMainSessionsSendTool();
+
+    const result = await tool.execute("call-session-key-label", {
+      sessionKey: MAIN_AGENT_SESSION_KEY,
+      label: "stale-label",
+      message: "hi",
+      timeoutSeconds: 0,
+    });
+
+    expect(result.details).toMatchObject({
+      status: "accepted",
+      sessionKey: MAIN_AGENT_SESSION_KEY,
+    });
+    expect(callGatewayMock).toHaveBeenCalledTimes(2);
+    expect(callGatewayMock.mock.calls[0]?.[0]).toMatchObject({ method: "sessions.list" });
+    expect(callGatewayMock.mock.calls[1]?.[0]).toMatchObject({
+      method: "agent",
+      params: {
+        sessionKey: MAIN_AGENT_SESSION_KEY,
+      },
+    });
+    expect(callGatewayMock.mock.calls).not.toContainEqual([
+      expect.objectContaining({
+        method: "sessions.resolve",
+        params: expect.objectContaining({ label: "stale-label" }),
+      }),
+    ]);
+  });
+
+  it("prefers a sessionId-shaped sessionKey over redundant label and agentId hints", async () => {
+    loadConfigMock.mockReturnValue({
+      session: { scope: "per-sender", mainKey: "main" },
+      tools: {
+        agentToAgent: { enabled: false },
+        sessions: { visibility: "all" },
+      },
+    });
+    const sessionId = "11111111-1111-4111-8111-111111111111";
+    const resolvedSessionKey = "agent:main:subagent:worker";
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string; params?: Record<string, unknown> };
+      if (request.method === "sessions.resolve" && request.params?.sessionId === sessionId) {
+        return { key: resolvedSessionKey };
+      }
+      if (request.method === "agent") {
+        return { runId: "run-session-id-send" };
+      }
+      return {};
+    });
+    const tool = createMainSessionsSendTool();
+
+    const result = await tool.execute("call-session-id-label-agent", {
+      sessionKey: sessionId,
+      label: "stale-label",
+      agentId: "other",
+      message: "hi",
+      timeoutSeconds: 0,
+    });
+
+    expect(result.details).toMatchObject({
+      status: "accepted",
+      sessionKey: resolvedSessionKey,
+    });
+    expect(callGatewayMock).toHaveBeenCalledTimes(3);
+    expect(callGatewayMock.mock.calls[0]?.[0]).toMatchObject({
+      method: "sessions.resolve",
+      params: { key: sessionId },
+    });
+    expect(callGatewayMock.mock.calls[1]?.[0]).toMatchObject({
+      method: "sessions.resolve",
+      params: {
+        sessionId,
+        includeGlobal: true,
+        includeUnknown: true,
+      },
+    });
+    expect(callGatewayMock.mock.calls[2]?.[0]).toMatchObject({
+      method: "agent",
+      params: {
+        sessionKey: resolvedSessionKey,
+      },
+    });
+    expect(callGatewayMock.mock.calls).not.toContainEqual([
+      expect.objectContaining({
+        method: "sessions.resolve",
+        params: expect.objectContaining({ label: "stale-label" }),
+      }),
+    ]);
+  });
+
   it("blocks cross-agent sends when tools.agentToAgent.enabled is false", async () => {
     const tool = createMainSessionsSendTool();
 
