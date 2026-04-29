@@ -12,7 +12,7 @@ const mocks = vi.hoisted(() => {
       defaultRuntime.log(value.endsWith("\n") ? value.slice(0, -1) : value);
     }),
     writeJson: vi.fn((value: unknown, space = 2) => {
-      defaultRuntime.log(JSON.stringify(value, null, space > 0 ? space : undefined));
+      defaultRuntime.writeStdout(JSON.stringify(value, null, space > 0 ? space : undefined));
     }),
     exit: vi.fn((code: number) => {
       throw new Error(`__exit__:${code}`);
@@ -568,6 +568,33 @@ describe("cron cli", () => {
     expect(defaultRuntime.error).toHaveBeenCalledWith(
       expect.stringContaining("No --agent specified"),
     );
+  });
+
+  it("keeps the missing --agent warning off cron add JSON stdout", async () => {
+    await runCronCommand([
+      "cron",
+      "add",
+      "--name",
+      "No agent JSON",
+      "--cron",
+      "* * * * *",
+      "--message",
+      "hello",
+      "--json",
+    ]);
+
+    expect(defaultRuntime.error).toHaveBeenCalledWith(
+      expect.stringContaining("No --agent specified"),
+    );
+    const stdout = defaultRuntime.writeStdout.mock.calls.map(([value]) => value).join("\n");
+    expect(stdout).not.toContain("No --agent specified");
+    expect(JSON.parse(stdout)).toMatchObject({
+      ok: true,
+      params: {
+        name: "No agent JSON",
+        payload: { kind: "agentTurn", message: "hello" },
+      },
+    });
   });
 
   it("warns when --agent is blank on cron add with --message", async () => {
