@@ -63,7 +63,7 @@ export type ZaloMonitorOptions = {
 };
 
 const ZALO_TEXT_LIMIT = 2000;
-const DEFAULT_MEDIA_MAX_MB = 5;
+const DEFAULT_MEDIA_MAX_MB = 20;
 const WEBHOOK_CLEANUP_TIMEOUT_MS = 5_000;
 const ZALO_TYPING_TIMEOUT_MS = 5_000;
 

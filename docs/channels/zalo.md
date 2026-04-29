@@ -111,7 +111,7 @@ Multi-account support: use `channels.zalo.accounts` with per-account tokens and 
 ## Limits
 
 - Outbound text is chunked to 2000 characters (Zalo API limit).
-- Media downloads/uploads are capped by `channels.zalo.mediaMaxMb` (default 5).
+- Media downloads/uploads are capped by `channels.zalo.mediaMaxMb` (default 20).
 - Streaming is blocked by default due to the 2000 char limit making streaming less useful.
 
 ## Access control (DMs)
@@ -226,7 +226,7 @@ Provider options:
 - `channels.zalo.allowFrom`: DM allowlist (user IDs). `open` requires `"*"`. The wizard will ask for numeric IDs.
 - `channels.zalo.groupPolicy`: `open | allowlist | disabled` (default: allowlist). Present in config; see [Capabilities](#capabilities) and [Access control (Groups)](#access-control-groups) for current Marketplace-bot behavior.
 - `channels.zalo.groupAllowFrom`: group sender allowlist (user IDs). Falls back to `allowFrom` when unset.
-- `channels.zalo.mediaMaxMb`: inbound/outbound media cap (MB, default 5).
+- `channels.zalo.mediaMaxMb`: inbound/outbound media cap (MB, default 20).
 - `channels.zalo.webhookUrl`: enable webhook mode (HTTPS required).
 - `channels.zalo.webhookSecret`: webhook secret (8-256 chars).
 - `channels.zalo.webhookPath`: webhook path on the gateway HTTP server.

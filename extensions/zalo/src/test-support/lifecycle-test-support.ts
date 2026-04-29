@@ -331,7 +331,7 @@ export function expectImageLifecycleDelivery(params: {
   const mediaType = params.mediaType ?? "image/jpeg";
   expect(params.fetchRemoteMediaMock).toHaveBeenCalledWith({
     url: photoUrl,
-    maxBytes: 5 * 1024 * 1024,
+    maxBytes: 20 * 1024 * 1024,
   });
   expect(params.saveMediaBufferMock).toHaveBeenCalledTimes(1);
   expect(params.finalizeInboundContextMock).toHaveBeenCalledWith(

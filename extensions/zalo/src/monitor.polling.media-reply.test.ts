@@ -178,7 +178,7 @@ describe("Zalo polling media replies", () => {
         mediaUrl: "https://example.com/reply-image.png",
         webhookUrl: "https://example.com/hooks/zalo",
         webhookPath: "/hooks/zalo",
-        maxBytes: 5 * 1024 * 1024,
+        maxBytes: 20 * 1024 * 1024,
         proxyUrl: undefined,
       });
       expect(sendPhotoMock).toHaveBeenCalledWith(
