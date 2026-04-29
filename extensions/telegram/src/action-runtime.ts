@@ -487,7 +487,7 @@ export async function handleTelegramAction(
         accountId: accountId ?? undefined,
       },
     );
-    if (deleteResult.ok === false) {
+    if (!deleteResult.ok) {
       // Treat benign Telegram fail-soft warnings as a successful no-op for
       // the caller (the message is gone — the desired state is reached) but
       // surface the warning so dashboards / agents can see what happened

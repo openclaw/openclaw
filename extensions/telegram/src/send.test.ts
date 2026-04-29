@@ -2022,7 +2022,7 @@ describe("deleteMessageTelegram (#73726)", () => {
     });
 
     expect(result).toMatchObject({ ok: false });
-    if (result.ok === false) {
+    if (!result.ok) {
       expect(result.warning).toContain(
         errorMessage.includes("MESSAGE")
           ? (errorMessage.split("Bad Request: ")[1] ?? errorMessage)
