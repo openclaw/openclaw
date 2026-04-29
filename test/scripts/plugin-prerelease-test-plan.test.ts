@@ -287,6 +287,23 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     ]);
   });
 
+  it("cancels superseded manual release validation runs for the same target and group", () => {
+    const releaseChecksWorkflow = parse(
+      readFileSync(".github/workflows/openclaw-release-checks.yml", "utf8"),
+    );
+    const fullReleaseWorkflow = readFullReleaseValidationWorkflow();
+
+    expect(releaseChecksWorkflow.concurrency).toEqual({
+      group:
+        "openclaw-release-checks-${{ inputs.expected_sha || inputs.ref }}-${{ inputs.rerun_group }}",
+      "cancel-in-progress": true,
+    });
+    expect(fullReleaseWorkflow.concurrency).toEqual({
+      group: "full-release-validation-${{ inputs.ref }}-${{ inputs.rerun_group }}",
+      "cancel-in-progress": true,
+    });
+  });
+
   it("keeps the live-ish availability check redacted", () => {
     const output = execFileSync(
       process.execPath,
