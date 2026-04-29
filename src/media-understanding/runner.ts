@@ -1,7 +1,9 @@
+// 引入 Node.js 文件系统常量、文件操作和操作系统模块
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+// 引入提供商 ID 规范化工具
 import { findNormalizedProviderValue } from "../agents/provider-id.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import {
@@ -13,14 +15,15 @@ import type {
   MediaUnderstandingConfig,
   MediaUnderstandingModelConfig,
 } from "../config/types.tools.js";
+// 引入全局日志工具和日志级别
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { logWarn } from "../logger.js";
+// 引入媒体相关模块
 import { resolveChannelInboundAttachmentRoots } from "../media/channel-inbound-roots.js";
 import { mergeInboundPathRoots } from "../media/inbound-path-policy.js";
 import { getDefaultMediaLocalRoots } from "../media/local-roots.js";
 import { runExec } from "../process/exec.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "../shared/string-coerce.js";
 import type { ActiveMediaModel } from "./active-model.types.js";
 import { MediaAttachmentCache, selectAttachments } from "./attachments.js";
 import { isMediaUnderstandingSkipError } from "./errors.js";
@@ -47,28 +50,45 @@ import type {
   MediaUnderstandingOutput,
   MediaUnderstandingProvider,
 } from "./types.js";
+// 导出附件相关功能
 export { createMediaAttachmentCache, normalizeMediaAttachments } from "./runner.attachments.js";
 export type { ActiveMediaModel } from "./active-model.types.js";
 
+// 提供商注册表类型
 type ProviderRegistry = Map<string, MediaUnderstandingProvider>;
+// 提供商认证可用性检查类型
 type HasAvailableAuthForProvider =
   typeof import("../agents/model-auth.js").hasAvailableAuthForProvider;
+// 模型目录 API 类型
 type ModelCatalogApi = typeof import("../agents/model-catalog.js");
+// 模型目录类型
 type ModelCatalog = Awaited<ReturnType<ModelCatalogApi["loadModelCatalog"]>>;
 
+// 运行能力结果类型
 export type RunCapabilityResult = {
-  outputs: MediaUnderstandingOutput[];
-  decision: MediaUnderstandingDecision;
+  outputs: MediaUnderstandingOutput[];    // 输出数组
+  decision: MediaUnderstandingDecision;  // 决策结果
 };
 
+// 缓存的模型目录 API 实例
 let cachedHasAvailableAuthForProvider: HasAvailableAuthForProvider | null = null;
 let cachedModelCatalogApi: ModelCatalogApi | null = null;
 
+/**
+ * 加载模型目录 API（延迟加载）
+ * @returns 模型目录 API
+ */
 async function loadModelCatalogApi(): Promise<ModelCatalogApi> {
   cachedModelCatalogApi ??= await import("../agents/model-catalog.js");
   return cachedModelCatalogApi;
 }
 
+/**
+ * 解析字面上的提供商 API 密钥
+ * @param cfg - OpenClaw 配置
+ * @param providerId - 提供商 ID
+ * @returns API 密钥或 null
+ */
 function resolveLiteralProviderApiKey(
   cfg: OpenClawConfig | undefined,
   providerId: string,
@@ -77,36 +97,55 @@ function resolveLiteralProviderApiKey(
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
 }
 
+/**
+ * 检查提供商是否有可用认证
+ * @param params - 检查参数
+ * @returns 是否有可用认证
+ */
 async function hasProviderAuthAvailable(params: {
   provider: string;
   cfg?: OpenClawConfig;
   agentDir?: string;
 }): Promise<boolean> {
+  // 先检查字面 API 密钥
   if (resolveLiteralProviderApiKey(params.cfg, params.provider)) {
     return true;
   }
+  // 动态加载认证检查函数
   cachedHasAvailableAuthForProvider ??= (await import("../agents/model-auth.js"))
     .hasAvailableAuthForProvider;
   return await cachedHasAvailableAuthForProvider(params);
 }
 
+/**
+ * 解析配置的关键提供商顺序
+ * @param params - 解析参数
+ * @returns 提供商 ID 数组
+ */
 function resolveConfiguredKeyProviderOrder(params: {
   cfg: OpenClawConfig;
   providerRegistry: ProviderRegistry;
   capability: MediaUnderstandingCapability;
   fallbackProviders: readonly string[];
 }): string[] {
+  // 获取配置中定义的所有提供商
   const configuredProviders = Object.keys(params.cfg.models?.providers ?? {})
-    .map((providerId) => normalizeMediaProviderId(providerId))
-    .filter(Boolean)
-    .filter((providerId, index, values) => values.indexOf(providerId) === index)
+    .map((providerId) => normalizeMediaProviderId(providerId))  // 规范化提供商 ID
+    .filter(Boolean)  // 过滤空值
+    .filter((providerId, index, values) => values.indexOf(providerId) === index)  // 去重
     .filter((providerId) =>
-      providerSupportsCapability(params.providerRegistry.get(providerId), params.capability),
+      providerSupportsCapability(params.providerRegistry.get(providerId), params.capability),  // 检查能力支持
     );
 
+  // 合并配置的提供商和回退提供商
   return [...new Set([...configuredProviders, ...params.fallbackProviders])];
 }
 
+/**
+ * 解析配置的图像模型 ID
+ * @param params - 解析参数
+ * @returns 模型 ID 或 undefined
+ */
 function resolveConfiguredImageModelId(params: {
   cfg: OpenClawConfig;
   providerId: string;
@@ -116,6 +155,11 @@ function resolveConfiguredImageModelId(params: {
   return id || undefined;
 }
 
+/**
+ * 解析配置的图像模型
+ * @param params - 解析参数
+ * @returns 模型配置或 undefined
+ */
 function resolveConfiguredImageModel(params: {
   cfg: OpenClawConfig;
   providerId: string;
@@ -131,17 +175,24 @@ function resolveConfiguredImageModel(params: {
         }>;
       }
     | undefined;
+  // 查找支持图像输入的模型
   return providerCfg?.models?.find((entry) => {
     const id = entry?.id?.trim();
     return Boolean(id) && entry?.input?.includes("image");
   });
 }
 
+/**
+ * 从目录解析图像模型 ID
+ * @param params - 解析参数
+ * @returns 模型 ID 或 undefined
+ */
 function resolveCatalogImageModelId(params: {
   providerId: string;
   catalog: ModelCatalog;
   modelSupportsVision: ModelCatalogApi["modelSupportsVision"];
 }): string | undefined {
+  // 查找匹配的提供商和视觉支持模型
   const matches = params.catalog.filter(
     (entry) =>
       normalizeMediaProviderId(entry.provider) === params.providerId &&
@@ -150,10 +201,16 @@ function resolveCatalogImageModelId(params: {
   if (matches.length === 0) {
     return undefined;
   }
+  // 优先选择 "auto" 模型
   const autoEntry = matches.find((entry) => normalizeLowercaseStringOrEmpty(entry.id) === "auto");
   return normalizeOptionalString((autoEntry ?? matches[0])?.id);
 }
 
+/**
+ * 从注册表解析默认媒体模型
+ * @param params - 解析参数
+ * @returns 默认模型 ID 或 undefined
+ */
 function resolveDefaultMediaModelFromRegistry(params: {
   providerId: string;
   capability: MediaUnderstandingCapability;
@@ -163,6 +220,11 @@ function resolveDefaultMediaModelFromRegistry(params: {
   return normalizeOptionalString(provider?.defaultModels?.[params.capability]);
 }
 
+/**
+ * 从注册表解析自动媒体密钥提供商
+ * @param params - 解析参数
+ * @returns 提供商 ID 数组（按优先级排序）
+ */
 function resolveAutoMediaKeyProvidersFromRegistry(params: {
   capability: MediaUnderstandingCapability;
   providerRegistry: ProviderRegistry;
@@ -171,6 +233,7 @@ function resolveAutoMediaKeyProvidersFromRegistry(params: {
     provider: MediaUnderstandingProvider;
     priority: number;
   };
+  // 筛选支持该能力的提供商
   return [...params.providerRegistry.values()]
     .filter(
       (provider) =>
@@ -185,6 +248,7 @@ function resolveAutoMediaKeyProvidersFromRegistry(params: {
     })
     .filter((entry): entry is AutoProviderEntry => entry !== null)
     .toSorted((left, right) => {
+      // 按优先级排序，同优先级按 ID 排序
       if (left.priority !== right.priority) {
         return left.priority - right.priority;
       }
@@ -194,15 +258,22 @@ function resolveAutoMediaKeyProvidersFromRegistry(params: {
     .filter(Boolean);
 }
 
+/**
+ * 获取显式图像模型视觉状态
+ * @param params - 检查参数
+ * @returns 支持状态：supported/unsupported/unknown
+ */
 async function explicitImageModelVisionStatus(params: {
   cfg: OpenClawConfig;
   providerId: string;
   model: string;
 }): Promise<"supported" | "unsupported" | "unknown"> {
   const configured = resolveConfiguredImageModel(params);
+  // 显式配置且支持图像输入
   if (configured?.id?.trim() === params.model && configured.input?.includes("image")) {
     return "supported";
   }
+  // 从模型目录检查
   const { findModelInCatalog, loadModelCatalog, modelSupportsVision } = await loadModelCatalogApi();
   const catalog = await loadModelCatalog({ config: params.cfg });
   const entry = findModelInCatalog(catalog, params.providerId, params.model);
@@ -212,6 +283,11 @@ async function explicitImageModelVisionStatus(params: {
   return modelSupportsVision(entry) ? "supported" : "unsupported";
 }
 
+/**
+ * 解析自动图像模型 ID
+ * @param params - 解析参数
+ * @returns 图像模型 ID 或 undefined
+ */
 async function resolveAutoImageModelId(params: {
   cfg: OpenClawConfig;
   providerId: string;
@@ -220,6 +296,7 @@ async function resolveAutoImageModelId(params: {
 }): Promise<string | undefined> {
   const explicit = normalizeOptionalString(params.explicitModel);
   if (explicit) {
+    // 检查显式模型是否支持视觉
     const explicitStatus = await explicitImageModelVisionStatus({
       cfg: params.cfg,
       providerId: params.providerId,
@@ -229,10 +306,12 @@ async function resolveAutoImageModelId(params: {
       return explicit;
     }
   }
+  // 检查配置的模型
   const configuredModel = resolveConfiguredImageModelId(params);
   if (configuredModel) {
     return configuredModel;
   }
+  // 检查注册表默认模型
   const defaultModel = resolveDefaultMediaModelFromRegistry({
     providerId: params.providerId,
     capability: "image",
@@ -241,6 +320,7 @@ async function resolveAutoImageModelId(params: {
   if (defaultModel) {
     return defaultModel;
   }
+  // 检查捆绑默认模型
   const { resolveDefaultMediaModel } = await import("./defaults.js");
   const bundledDefaultModel = resolveDefaultMediaModel({
     cfg: params.cfg,
@@ -250,6 +330,7 @@ async function resolveAutoImageModelId(params: {
   if (bundledDefaultModel) {
     return bundledDefaultModel;
   }
+  // 从模型目录解析
   const { loadModelCatalog, modelSupportsVision } = await loadModelCatalogApi();
   const catalog = await loadModelCatalog({ config: params.cfg });
   return resolveCatalogImageModelId({
@@ -259,6 +340,12 @@ async function resolveAutoImageModelId(params: {
   });
 }
 
+/**
+ * 构建提供商注册表
+ * @param overrides - 可选的提供商覆盖
+ * @param cfg - OpenClaw 配置
+ * @returns 提供商注册表
+ */
 export function buildProviderRegistry(
   overrides?: Record<string, MediaUnderstandingProvider>,
   cfg?: OpenClawConfig,
@@ -266,15 +353,18 @@ export function buildProviderRegistry(
   return buildMediaUnderstandingRegistry(overrides, cfg);
 }
 
+/**
+ * 解析媒体附件本地根目录
+ * @param params - 解析参数
+ * @returns 本地根目录数组
+ */
 export function resolveMediaAttachmentLocalRoots(params: {
   cfg: OpenClawConfig;
   ctx: MsgContext;
 }): readonly string[] {
-  // ctx.MediaWorkspaceDir is set by chat.send's prestageNonImageOffloads when
-  // inbound attachments were staged into a sandbox workspace. The paths in
-  // ctx.MediaPaths are kept sandbox-relative (so the agent inside the
-  // container can read them), and the workspace dir is carried separately so
-  // host-side media-understanding can still resolve them via this root list.
+  // ctx.MediaWorkspaceDir 由 chat.send 的 prestageNonImageOffloads 设置
+  // 当附件被暂存到沙箱工作区时，路径保持沙箱相对
+  // 工作区目录被单独传递，以便主机端媒体理解仍可通过此根列表解析
   const workspaceDir = params.ctx.MediaWorkspaceDir;
   return mergeInboundPathRoots(
     getDefaultMediaLocalRoots(),
@@ -283,14 +373,23 @@ export function resolveMediaAttachmentLocalRoots(params: {
   );
 }
 
+// 二进制文件缓存和 Gemini 探测缓存
 const binaryCache = new Map<string, Promise<string | null>>();
 const geminiProbeCache = new Map<string, Promise<boolean>>();
 
+/**
+ * 清除媒体理解二进制缓存（仅用于测试）
+ */
 export function clearMediaUnderstandingBinaryCacheForTests(): void {
   binaryCache.clear();
   geminiProbeCache.clear();
 }
 
+/**
+ * 展开 HOME 目录简写
+ * @param value - 路径值
+ * @returns 展开后的路径
+ */
 function expandHomeDir(value: string): string {
   if (!value.startsWith("~")) {
     return value;
@@ -305,18 +404,29 @@ function expandHomeDir(value: string): string {
   return value;
 }
 
+/**
+ * 检查是否包含路径分隔符
+ * @param value - 待检查的值
+ * @returns 是否包含分隔符
+ */
 function hasPathSeparator(value: string): boolean {
   return value.includes("/") || value.includes("\\");
 }
 
+/**
+ * 生成候选二进制文件名（Windows 兼容）
+ * @param name - 二进制名称
+ * @returns 候选文件名数组
+ */
 function candidateBinaryNames(name: string): string[] {
   if (process.platform !== "win32") {
-    return [name];
+    return [name]; // 非 Windows 直接返回
   }
   const ext = path.extname(name);
   if (ext) {
-    return [name];
+    return [name]; // 已有扩展名
   }
+  // 处理 PATHEXT 环境变量
   const pathext = (process.env.PATHEXT ?? ".EXE;.CMD;.BAT;.COM")
     .split(";")
     .map((item) => item.trim())
@@ -326,6 +436,11 @@ function candidateBinaryNames(name: string): string[] {
   return [name, ...unique.map((item) => `${name}${item}`)];
 }
 
+/**
+ * 检查文件是否可执行
+ * @param filePath - 文件路径
+ * @returns 是否可执行
+ */
 async function isExecutable(filePath: string): Promise<boolean> {
   try {
     const stat = await fs.stat(filePath);
@@ -333,7 +448,7 @@ async function isExecutable(filePath: string): Promise<boolean> {
       return false;
     }
     if (process.platform === "win32") {
-      return true;
+      return true; // Windows 不做权限检查
     }
     await fs.access(filePath, fsConstants.X_OK);
     return true;
@@ -342,6 +457,11 @@ async function isExecutable(filePath: string): Promise<boolean> {
   }
 }
 
+/**
+ * 查找二进制文件
+ * @param name - 二进制名称
+ * @returns 二进制路径或 null
+ */
 async function findBinary(name: string): Promise<string | null> {
   const cached = binaryCache.get(name);
   if (cached) {
@@ -349,6 +469,7 @@ async function findBinary(name: string): Promise<string | null> {
   }
   const resolved = (async () => {
     const direct = expandHomeDir(name.trim());
+    // 绝对路径或包含分隔符的路径
     if (direct && hasPathSeparator(direct)) {
       for (const candidate of candidateBinaryNames(direct)) {
         if (await isExecutable(candidate)) {
@@ -361,6 +482,7 @@ async function findBinary(name: string): Promise<string | null> {
     if (!searchName) {
       return null;
     }
+    // 搜索 PATH 环境变量
     const pathEntries = (process.env.PATH ?? "").split(path.delimiter);
     const candidates = candidateBinaryNames(searchName);
     for (const entryRaw of pathEntries) {
@@ -382,10 +504,19 @@ async function findBinary(name: string): Promise<string | null> {
   return resolved;
 }
 
+/**
+ * 检查二进制是否存在
+ * @param name - 二进制名称
+ * @returns 是否存在
+ */
 async function hasBinary(name: string): Promise<boolean> {
   return Boolean(await findBinary(name));
 }
 
+/**
+ * 探测 Gemini CLI 是否可用
+ * @returns 是否可用
+ */
 async function probeGeminiCli(): Promise<boolean> {
   const cached = geminiProbeCache.get("gemini");
   if (cached) {
@@ -396,6 +527,7 @@ async function probeGeminiCli(): Promise<boolean> {
       return false;
     }
     try {
+      // 执行 gemini ok 命令测试
       const { stdout } = await runExec("gemini", ["--output-format", "json", "ok"], {
         timeoutMs: 8000,
       });
@@ -410,6 +542,10 @@ async function probeGeminiCli(): Promise<boolean> {
   return resolved;
 }
 
+/**
+ * 解析本地 Whisper CPP 入口配置
+ * @returns CLI 入口配置或 null
+ */
 async function resolveLocalWhisperCppEntry(): Promise<MediaUnderstandingModelConfig | null> {
   if (!(await hasBinary("whisper-cli"))) {
     return null;
@@ -427,6 +563,10 @@ async function resolveLocalWhisperCppEntry(): Promise<MediaUnderstandingModelCon
   };
 }
 
+/**
+ * 解析本地 Whisper 入口配置
+ * @returns CLI 入口配置或 null
+ */
 async function resolveLocalWhisperEntry(): Promise<MediaUnderstandingModelConfig | null> {
   if (!(await hasBinary("whisper"))) {
     return null;
@@ -448,6 +588,10 @@ async function resolveLocalWhisperEntry(): Promise<MediaUnderstandingModelConfig
   };
 }
 
+/**
+ * 解析本地 Sherpa Onnx 入口配置
+ * @returns CLI 入口配置或 null
+ */
 async function resolveSherpaOnnxEntry(): Promise<MediaUnderstandingModelConfig | null> {
   if (!(await hasBinary("sherpa-onnx-offline"))) {
     return null;
@@ -456,6 +600,7 @@ async function resolveSherpaOnnxEntry(): Promise<MediaUnderstandingModelConfig |
   if (!modelDir) {
     return null;
   }
+  // 检查必需的模型文件
   const tokens = path.join(modelDir, "tokens.txt");
   const encoder = path.join(modelDir, "encoder.onnx");
   const decoder = path.join(modelDir, "decoder.onnx");
@@ -485,7 +630,12 @@ async function resolveSherpaOnnxEntry(): Promise<MediaUnderstandingModelConfig |
   };
 }
 
+/**
+ * 解析本地音频入口配置
+ * @returns CLI 入口配置或 null
+ */
 async function resolveLocalAudioEntry(): Promise<MediaUnderstandingModelConfig | null> {
+  // 按优先级尝试：Sherpa > Whisper CPP > Whisper
   const sherpa = await resolveSherpaOnnxEntry();
   if (sherpa) {
     return sherpa;
@@ -497,6 +647,11 @@ async function resolveLocalAudioEntry(): Promise<MediaUnderstandingModelConfig |
   return await resolveLocalWhisperEntry();
 }
 
+/**
+ * 解析 Gemini CLI 入口配置
+ * @param _capability - 能力类型
+ * @returns CLI 入口配置或 null
+ */
 async function resolveGeminiCliEntry(
   _capability: MediaUnderstandingCapability,
 ): Promise<MediaUnderstandingModelConfig | null> {
@@ -519,6 +674,11 @@ async function resolveGeminiCliEntry(
   };
 }
 
+/**
+ * 解析关键入口配置
+ * @param params - 解析参数
+ * @returns 模型配置或 null
+ */
 async function resolveKeyEntry(params: {
   cfg: OpenClawConfig;
   agentDir?: string;
@@ -527,6 +687,7 @@ async function resolveKeyEntry(params: {
   activeModel?: ActiveMediaModel;
 }): Promise<MediaUnderstandingModelConfig | null> {
   const { cfg, agentDir, providerRegistry, capability } = params;
+  // 检查提供商的函数
   const checkProvider = async (
     providerId: string,
     model?: string,
@@ -535,6 +696,7 @@ async function resolveKeyEntry(params: {
     if (!provider) {
       return null;
     }
+    // 检查提供商是否支持该能力
     if (capability === "audio" && !provider.transcribeAudio) {
       return null;
     }
@@ -544,6 +706,7 @@ async function resolveKeyEntry(params: {
     if (capability === "video" && !provider.describeVideo) {
       return null;
     }
+    // 检查认证可用性
     if (
       !(await hasProviderAuthAvailable({
         provider: providerId,
@@ -553,6 +716,7 @@ async function resolveKeyEntry(params: {
     ) {
       return null;
     }
+    // 解析模型
     const resolvedModel =
       capability === "image"
         ? await resolveAutoImageModelId({
@@ -568,6 +732,7 @@ async function resolveKeyEntry(params: {
     return { type: "provider" as const, provider: providerId, model: resolvedModel };
   };
 
+  // 先检查活动提供商
   const activeProvider = params.activeModel?.provider?.trim();
   if (activeProvider) {
     const activeEntry = await checkProvider(activeProvider, params.activeModel?.model);
@@ -575,6 +740,7 @@ async function resolveKeyEntry(params: {
       return activeEntry;
     }
   }
+  // 遍历配置的提供商
   for (const providerId of resolveConfiguredKeyProviderOrder({
     cfg,
     providerRegistry,
@@ -592,12 +758,19 @@ async function resolveKeyEntry(params: {
   return null;
 }
 
+/**
+ * 从代理默认值解析图像模型
+ * @param cfg - OpenClaw 配置
+ * @returns 模型配置数组
+ */
 function resolveImageModelFromAgentDefaults(cfg: OpenClawConfig): MediaUnderstandingModelConfig[] {
   const refs: string[] = [];
+  // 获取主模型
   const primary = resolveAgentModelPrimaryValue(cfg.agents?.defaults?.imageModel);
   if (primary?.trim()) {
     refs.push(primary.trim());
   }
+  // 获取回退模型
   for (const fb of resolveAgentModelFallbackValues(cfg.agents?.defaults?.imageModel)) {
     if (fb?.trim()) {
       refs.push(fb.trim());
@@ -606,6 +779,7 @@ function resolveImageModelFromAgentDefaults(cfg: OpenClawConfig): MediaUnderstan
   if (refs.length === 0) {
     return [];
   }
+  // 解析为模型配置
   const entries: MediaUnderstandingModelConfig[] = [];
   for (const ref of refs) {
     const slashIdx = ref.indexOf("/");
@@ -621,6 +795,11 @@ function resolveImageModelFromAgentDefaults(cfg: OpenClawConfig): MediaUnderstan
   return entries;
 }
 
+/**
+ * 检查是否有显式图像理解配置
+ * @param params - 检查参数
+ * @returns 是否有显式配置
+ */
 function hasExplicitImageUnderstandingConfig(params: {
   cfg: OpenClawConfig;
   config?: MediaUnderstandingConfig;
@@ -631,6 +810,11 @@ function hasExplicitImageUnderstandingConfig(params: {
   );
 }
 
+/**
+ * 解析自动条目
+ * @param params - 解析参数
+ * @returns 模型配置数组
+ */
 async function resolveAutoEntries(params: {
   cfg: OpenClawConfig;
   agentDir?: string;
@@ -638,16 +822,19 @@ async function resolveAutoEntries(params: {
   capability: MediaUnderstandingCapability;
   activeModel?: ActiveMediaModel;
 }): Promise<MediaUnderstandingModelConfig[]> {
+  // 图像：使用代理默认值
   if (params.capability === "image") {
     const imageModelEntries = resolveImageModelFromAgentDefaults(params.cfg);
     if (imageModelEntries.length > 0) {
       return imageModelEntries;
     }
   }
+  // 活动模型
   const activeEntry = await resolveActiveModelEntry(params);
   if (activeEntry) {
     return [activeEntry];
   }
+  // 音频：尝试本地条目
   if (params.capability === "audio") {
     const keyEntry = await resolveKeyEntry(params);
     if (keyEntry) {
@@ -658,10 +845,12 @@ async function resolveAutoEntries(params: {
       return [localAudio];
     }
   }
+  // Gemini CLI
   const gemini = await resolveGeminiCliEntry(params.capability);
   if (gemini) {
     return [gemini];
   }
+  // 密钥提供商
   const keys = await resolveKeyEntry(params);
   if (keys) {
     return [keys];
@@ -669,12 +858,18 @@ async function resolveAutoEntries(params: {
   return [];
 }
 
+/**
+ * 解析自动图像模型
+ * @param params - 解析参数
+ * @returns 活动媒体模型或 null
+ */
 export async function resolveAutoImageModel(params: {
   cfg: OpenClawConfig;
   agentDir?: string;
   activeModel?: ActiveMediaModel;
 }): Promise<ActiveMediaModel | null> {
   const providerRegistry = buildProviderRegistry(undefined, params.cfg);
+  // 转换为活动模型的函数
   const toActive = (entry: MediaUnderstandingModelConfig | null): ActiveMediaModel | null => {
     if (!entry || entry.type === "cli") {
       return null;
@@ -686,12 +881,14 @@ export async function resolveAutoImageModel(params: {
     }
     return { provider, model };
   };
+  // 检查配置的图像模型
   const configuredImageModel = resolveImageModelFromAgentDefaults(params.cfg)
     .map((entry) => toActive(entry))
     .find((entry): entry is ActiveMediaModel => entry !== null);
   if (configuredImageModel) {
     return configuredImageModel;
   }
+  // 检查活动模型
   const activeEntry = await resolveActiveModelEntry({
     cfg: params.cfg,
     agentDir: params.agentDir,
@@ -703,6 +900,7 @@ export async function resolveAutoImageModel(params: {
   if (resolvedActive) {
     return resolvedActive;
   }
+  // 检查密钥条目
   const keyEntry = await resolveKeyEntry({
     cfg: params.cfg,
     agentDir: params.agentDir,
@@ -713,6 +911,11 @@ export async function resolveAutoImageModel(params: {
   return toActive(keyEntry);
 }
 
+/**
+ * 解析活动模型条目
+ * @param params - 解析参数
+ * @returns 模型配置或 null
+ */
 async function resolveActiveModelEntry(params: {
   cfg: OpenClawConfig;
   agentDir?: string;
@@ -732,6 +935,7 @@ async function resolveActiveModelEntry(params: {
   if (!provider) {
     return null;
   }
+  // 检查能力支持
   if (params.capability === "audio" && !provider.transcribeAudio) {
     return null;
   }
@@ -741,6 +945,7 @@ async function resolveActiveModelEntry(params: {
   if (params.capability === "video" && !provider.describeVideo) {
     return null;
   }
+  // 检查认证
   const hasAuth = await hasProviderAuthAvailable({
     provider: providerId,
     cfg: params.cfg,
@@ -749,6 +954,7 @@ async function resolveActiveModelEntry(params: {
   if (!hasAuth) {
     return null;
   }
+  // 解析模型
   const model =
     params.capability === "image"
       ? await resolveAutoImageModelId({
@@ -768,6 +974,11 @@ async function resolveActiveModelEntry(params: {
   };
 }
 
+/**
+ * 运行附件条目
+ * @param params - 运行参数
+ * @returns 输出和尝试数组
+ */
 async function runAttachmentEntries(params: {
   capability: MediaUnderstandingCapability;
   cfg: OpenClawConfig;
@@ -784,12 +995,13 @@ async function runAttachmentEntries(params: {
 }> {
   const { entries, capability } = params;
   const attempts: MediaUnderstandingModelDecision[] = [];
+  // 遍历条目执行
   for (const entry of entries) {
     const entryType = entry.type ?? (entry.command ? "cli" : "provider");
     try {
       const result =
         entryType === "cli"
-          ? await runCliEntry({
+          ? await runCliEntry({  // CLI 类型入口
               capability,
               entry,
               cfg: params.cfg,
@@ -798,7 +1010,7 @@ async function runAttachmentEntries(params: {
               cache: params.cache,
               config: params.config,
             })
-          : await runProviderEntry({
+          : await runProviderEntry({  // 提供商类型入口
               capability,
               entry,
               cfg: params.cfg,
@@ -810,6 +1022,7 @@ async function runAttachmentEntries(params: {
               config: params.config,
             });
       if (result) {
+        // 成功，构建决策
         const decision = buildModelDecision({ entry, entryType, outcome: "success" });
         if (result.provider) {
           decision.provider = result.provider;
@@ -820,11 +1033,13 @@ async function runAttachmentEntries(params: {
         attempts.push(decision);
         return { output: result, attempts };
       }
+      // 空输出
       attempts.push(
         buildModelDecision({ entry, entryType, outcome: "skipped", reason: "empty output" }),
       );
     } catch (err) {
       if (isMediaUnderstandingSkipError(err)) {
+        // 跳过错误
         attempts.push(
           buildModelDecision({
             entry,
@@ -838,6 +1053,7 @@ async function runAttachmentEntries(params: {
         }
         continue;
       }
+      // 失败
       attempts.push(
         buildModelDecision({
           entry,
@@ -855,12 +1071,22 @@ async function runAttachmentEntries(params: {
   return { output: null, attempts };
 }
 
+/**
+ * 检查是否有失败的媒体尝试
+ * @param attachments - 附件决策数组
+ * @returns 是否有失败
+ */
 function hasFailedMediaAttempt(attachments: MediaUnderstandingDecision["attachments"]): boolean {
   return attachments.some((attachment) =>
     attachment.attempts.some((attempt) => attempt.outcome === "failed"),
   );
 }
 
+/**
+ * 运行能力
+ * @param params - 运行参数
+ * @returns 能力和决策结果
+ */
 export async function runCapability(params: {
   capability: MediaUnderstandingCapability;
   cfg: OpenClawConfig;
@@ -874,6 +1100,7 @@ export async function runCapability(params: {
 }): Promise<RunCapabilityResult> {
   const { capability, cfg, ctx } = params;
   const config = params.config ?? cfg.tools?.media?.[capability];
+  // 能力被禁用
   if (config?.enabled === false) {
     return {
       outputs: [],
@@ -881,6 +1108,7 @@ export async function runCapability(params: {
     };
   }
 
+  // 选择附件
   const attachmentPolicy = config?.attachments;
   const selected = selectAttachments({
     capability,
@@ -894,6 +1122,7 @@ export async function runCapability(params: {
     };
   }
 
+  // 范围决策
   const scopeDecision = resolveScopeDecision({ scope: config?.scope, ctx });
   if (scopeDecision === "deny") {
     if (shouldLogVerbose()) {
@@ -909,8 +1138,8 @@ export async function runCapability(params: {
     };
   }
 
-  // Skip image understanding when the primary model supports vision natively.
-  // The image will be injected directly into the model context instead.
+  // 当主模型原生支持视觉时跳过图像理解
+  // 图像将直接注入模型上下文
   const activeProvider = params.activeModel?.provider?.trim();
   if (
     capability === "image" &&
@@ -951,6 +1180,7 @@ export async function runCapability(params: {
     }
   }
 
+  // 解析模型条目
   const entries = resolveModelEntries({
     cfg,
     capability,
@@ -978,6 +1208,7 @@ export async function runCapability(params: {
     };
   }
 
+  // 运行每个附件
   const outputs: MediaUnderstandingOutput[] = [];
   const attachmentDecisions: MediaUnderstandingDecision["attachments"] = [];
   for (const attachment of selected) {
@@ -1001,6 +1232,7 @@ export async function runCapability(params: {
       chosen: attempts.find((attempt) => attempt.outcome === "success"),
     });
   }
+  // 构建最终决策
   const decision: MediaUnderstandingDecision = {
     capability,
     outcome:
@@ -1011,6 +1243,7 @@ export async function runCapability(params: {
           : "skipped",
     attachments: attachmentDecisions,
   };
+  // 记录日志
   if (decision.outcome === "failed") {
     logWarn(`media-understanding: ${formatDecisionSummary(decision)}`);
   } else if (shouldLogVerbose()) {

@@ -1,59 +1,59 @@
-# OpenClaw iOS Changelog
+# OpenClaw iOS 变更日志
 
 ## 2026.4.27 - 2026-04-27
 
-Maintenance update for the current OpenClaw development release.
+当前 OpenClaw 开发版本维护更新。
 
 ## 2026.4.26 - 2026-04-26
 
-Maintenance update for the current OpenClaw development release.
+当前 OpenClaw 开发版本维护更新。
 
-- Refreshed build hygiene for the iOS app, Share extension, Activity widget, Watch app, and curated shared Swift sources; relay registration now uses StoreKit app transaction JWS data instead of deprecated receipt APIs.
+- 刷新了 iOS 应用、Share 扩展、Activity widget、Watch 应用和精选共享 Swift 源的构建卫生；中继注册现在使用 StoreKit 应用事务 JWS 数据而非已弃用的收据 API。
 
 ## 2026.4.25 - 2026-04-25
 
-Maintenance update for the current OpenClaw development release.
+当前 OpenClaw 开发版本维护更新。
 
 ## 2026.4.23 - 2026-04-23
 
-Maintenance update for the current OpenClaw development release.
+当前 OpenClaw 开发版本维护更新。
 
 ## 2026.4.22 - 2026-04-22
 
-Maintenance update for the current OpenClaw development release.
+当前 OpenClaw 开发版本维护更新。
 
 ## 2026.4.21 - 2026-04-21
 
-Maintenance update for the current OpenClaw development release.
+当前 OpenClaw 开发版本维护更新。
 
 ## 2026.4.20 - 2026-04-20
 
-Maintenance update for the current OpenClaw release.
+当前 OpenClaw 发布版本维护更新。
 
 ## 2026.4.19 - 2026-04-19
 
-Maintenance update for the current OpenClaw beta release.
+当前 OpenClaw beta 发布版本维护更新。
 
 ## 2026.4.18 - 2026-04-18
 
-Maintenance update for the current OpenClaw release.
+当前 OpenClaw 发布版本维护更新。
 
 ## 2026.4.15 - 2026-04-15
 
-Maintenance update for the current OpenClaw beta release.
+当前 OpenClaw beta 发布版本维护更新。
 
 ## 2026.4.14 - 2026-04-14
 
-Maintenance update for the current OpenClaw beta release.
+当前 OpenClaw beta 发布版本维护更新。
 
 ## 2026.4.12 - 2026-04-12
 
-Maintenance update for the current OpenClaw release.
+当前 OpenClaw 发布版本维护更新。
 
 ## 2026.4.10 - 2026-04-10
 
-Maintenance update for the current OpenClaw release.
+当前 OpenClaw 发布版本维护更新。
 
 ## 2026.4.6 - 2026-04-06
 
-First App Store release of OpenClaw for iPhone. Pair with your OpenClaw Gateway to use chat, voice, sharing, and device actions from iOS.
+OpenClaw iPhone 版首次 App Store 发布。通过 OpenClaw Gateway 配对以使用 iOS 的聊天、语音、共享和设备操作。

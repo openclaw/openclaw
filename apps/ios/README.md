@@ -1,28 +1,28 @@
-# OpenClaw iOS (Super Alpha)
+# OpenClaw iOS（超级 Alpha）
 
-This iPhone app is super-alpha and internal-use only. It connects to an OpenClaw Gateway as a `role: node`.
+此 iPhone 应用是超级 alpha 版本，仅供内部使用。它作为 `role: node` 连接到 OpenClaw Gateway。
 
-## Distribution Status
+## 分发状态
 
-- Public distribution: not available.
-- Internal beta distribution: local archive + TestFlight upload via Fastlane.
-- Local/manual deploy from source via Xcode remains the default development path.
+- 公开分发：不可用。
+- 内部 beta 分发：本地归档 + 通过 Fastlane 上传 TestFlight。
+- 通过 Xcode 的本地/手动部署仍然是默认开发路径。
 
-## Super-Alpha Disclaimer
+## 超级 Alpha 免责声明
 
-- Breaking changes are expected.
-- UI and onboarding flows can change without migration guarantees.
-- Foreground use is the only reliable mode right now.
-- Treat this build as sensitive while permissions and background behavior are still being hardened.
+- 预计会有破坏性更改。
+- UI 和入门引导流程可能会在没有迁移保证的情况下更改。
+- 前台使用是目前唯一可靠的模式。
+- 在权限和后台行为仍在加固时，将此构建视为敏感版本。
 
-## Exact Xcode Manual Deploy Flow
+## 精确的 Xcode 手动部署流程
 
-1. Prereqs:
+1. 前置条件：
    - Xcode 16+
    - `pnpm`
    - `xcodegen`
-   - Apple Development signing set up in Xcode
-2. From repo root:
+   - 在 Xcode 中设置 Apple Development 签名
+2. 从仓库根目录：
 
 ```bash
 pnpm install
@@ -32,82 +32,82 @@ xcodegen generate
 open OpenClaw.xcodeproj
 ```
 
-3. In Xcode:
-   - Scheme: `OpenClaw`
-   - Destination: connected iPhone (recommended for real behavior)
-   - Build configuration: `Debug`
-   - Run (`Product` -> `Run`)
-4. If signing fails on a personal team:
-   - Use unique local bundle IDs via `apps/ios/LocalSigning.xcconfig`.
-   - Start from `apps/ios/LocalSigning.xcconfig.example`.
+3. 在 Xcode 中：
+   - Scheme：`OpenClaw`
+   - 目标：已连接的 iPhone（推荐用于真实行为）
+   - 构建配置：`Debug`
+   - 运行（`Product` -> `Run`）
+4. 如果个人团队签名失败：
+   - 通过 `apps/ios/LocalSigning.xcconfig` 使用唯一的本地 bundle ID。
+   - 从 `apps/ios/LocalSigning.xcconfig.example` 开始。
 
-Shortcut command (same flow + open project):
+快捷命令（相同流程 + 打开项目）：
 
 ```bash
 pnpm ios:open
 ```
 
-## Local Beta Release Flow
+## 本地 Beta 发布流程
 
-Prereqs:
+前置条件：
 
 - Xcode 16+
 - `pnpm`
 - `xcodegen`
 - `fastlane`
-- Apple account signed into Xcode for automatic signing/provisioning
-- App Store Connect API key set up in Keychain via `scripts/ios-asc-keychain-setup.sh` when auto-resolving a beta build number or uploading to TestFlight
+- Xcode 中登录的 Apple 账户用于自动签名/配置
+- 当自动解析 beta 构建号或上传到 TestFlight 时，通过 `scripts/ios-asc-keychain-setup.sh` 在 Keychain 中设置 App Store Connect API 密钥
 
-Release behavior:
+发布行为：
 
-- Local development keeps using unique per-developer bundle IDs from `scripts/ios-configure-signing.sh`.
-- Beta release uses canonical `ai.openclaw.client*` bundle IDs through a temporary generated xcconfig in `apps/ios/build/BetaRelease.xcconfig`.
-- Beta release also switches the app to `OpenClawPushTransport=relay`, `OpenClawPushDistribution=official`, and `OpenClawPushAPNsEnvironment=production`.
-- The beta flow does not modify `apps/ios/.local-signing.xcconfig` or `apps/ios/LocalSigning.xcconfig`.
-- `apps/ios/version.json` is the pinned iOS release version source.
-- `apps/ios/CHANGELOG.md` is the iOS-only changelog and release-note source.
-- The pinned iOS version must use CalVer like `2026.4.10`.
-- That pinned value becomes:
+- 本地开发继续使用 `scripts/ios-configure-signing.sh` 中的唯一每开发者 bundle ID。
+- Beta 发布通过 `apps/ios/build/BetaRelease.xcconfig` 中的临时生成 xcconfig 使用规范的 `ai.openclaw.client*` bundle ID。
+- Beta 发布还将应用切换到 `OpenClawPushTransport=relay`、`OpenClawPushDistribution=official` 和 `OpenClawPushAPNsEnvironment=production`。
+- Beta 流程不修改 `apps/ios/.local-signing.xcconfig` 或 `apps/ios/LocalSigning.xcconfig`。
+- `apps/ios/version.json` 是固定的 iOS 发布版本源。
+- `apps/ios/CHANGELOG.md` 是 iOS 专用变更日志和发布说明源。
+- 固定的 iOS 版本必须使用 CalVer，如 `2026.4.10`。
+- 该固定值变为：
   - `CFBundleShortVersionString = 2026.4.10`
-  - `CFBundleVersion = next TestFlight build number for 2026.4.10`
-- Changing the root gateway version does not change the iOS app version until you explicitly pin from the gateway.
-- See `apps/ios/VERSIONING.md` for the full workflow.
+  - `CFBundleVersion = 该 2026.4.10 的下一个 TestFlight 构建号`
+- 更改根网关版本不会更改 iOS 应用版本，直到您明确从网关固定。
+- 完整工作流程参见 `apps/ios/VERSIONING.md`。
 
-Required env for beta builds:
+Beta 构建所需的环境：
 
 - `OPENCLAW_PUSH_RELAY_BASE_URL=https://relay.example.com`
-  This must be a plain `https://host[:port][/path]` base URL without whitespace, query params, fragments, or xcconfig metacharacters.
+  这必须是纯 `https://host[:port][/path]` 基础 URL，不含空白、查询参数、片段或 xcconfig 特殊字符。
 
-Archive without upload:
+归档不上传：
 
 ```bash
 pnpm ios:beta:archive
 ```
 
-Archive and upload to TestFlight:
+归档并上传到 TestFlight：
 
 ```bash
 pnpm ios:beta
 ```
 
-If you need to force a specific build number:
+如果您需要强制使用特定构建号：
 
 ```bash
 pnpm ios:beta -- --build-number 7
 ```
 
-### Maintainer Quick Release Checklist
+### 维护者快速发布检查清单
 
-Use this when a clone is missing local iOS release setup and you want the shortest path to a TestFlight upload.
+当克隆缺少本地 iOS 发布设置且您想要最短路径到 TestFlight 上传时使用。
 
-1. Confirm Fastlane auth is set up:
+1. 确认 Fastlane 认证已设置：
 
 ```bash
 cd apps/ios
 fastlane ios auth_check
 ```
 
-2. If auth is missing, bootstrap it once on this Mac:
+2. 如果认证缺失，在此 Mac 上一次性引导：
 
 ```bash
 scripts/ios-asc-keychain-setup.sh \
@@ -116,49 +116,49 @@ scripts/ios-asc-keychain-setup.sh \
   --write-env
 ```
 
-This should create `apps/ios/fastlane/.env` with the non-secret ASC variables while the private key stays in Keychain.
+这应该创建包含非密钥 ASC 变量的 `apps/ios/fastlane/.env`，而私钥保留在 Keychain 中。
 
-3. Set the official/TestFlight relay URL for the build:
+3. 为构建设置官方/TestFlight 中继 URL：
 
 ```bash
 export OPENCLAW_PUSH_RELAY_BASE_URL=https://relay.example.com
 ```
 
-4. If you are starting a brand-new production release train, pin iOS to the current gateway version first:
+4. 如果您正在启动全新的生产发布序列，先将 iOS 固定到当前网关版本：
 
 ```bash
 pnpm ios:version:pin -- --from-gateway
 ```
 
-5. Upload the beta:
+5. 上传 beta：
 
 ```bash
 pnpm ios:beta
 ```
 
-6. Expected behavior:
-   - Fastlane reads `apps/ios/version.json`
-   - verifies synced iOS versioning artifacts
-   - resolves the next TestFlight build number for that short version
-   - generates `apps/ios/build/BetaRelease.xcconfig`
-   - archives `OpenClaw`
-   - uploads the IPA to TestFlight
+6. 预期行为：
+   - Fastlane 读取 `apps/ios/version.json`
+   - 验证同步的 iOS 版本工件
+   - 解析该短版本的下一个 TestFlight 构建号
+   - 生成 `apps/ios/build/BetaRelease.xcconfig`
+   - 归档 `OpenClaw`
+   - 将 IPA 上传到 TestFlight
 
-7. Expected outputs after a successful run:
+7. 成功运行后的预期输出：
    - `apps/ios/build/beta/OpenClaw-<version>.ipa`
    - `apps/ios/build/beta/OpenClaw-<version>.app.dSYM.zip`
-   - Fastlane log line like `Uploaded iOS beta: version=<version> short=<short> build=<build>`
+   - Fastlane 日志行如 `Uploaded iOS beta: version=<version> short=<short> build=<build>`
 
-8. If this is a fresh clone on a maintainer machine that already works elsewhere, it is OK to copy the non-secret `apps/ios/fastlane/.env` from another trusted local clone on the same Mac. The Keychain-backed private key remains machine-local and is not stored in the repo.
+8. 如果这是同一 Mac 上已正常工作过的维护者机器上的全新克隆，可以从同一 Mac 上的另一个可信本地克隆复制非密钥的 `apps/ios/fastlane/.env`。Keychain 备份私钥是机器本地的，不存储在仓库中。
 
-## iOS Versioning Workflow
+## iOS 版本管理工作流程
 
-- Pinned iOS release version: `apps/ios/version.json`
-- iOS-only changelog: `apps/ios/CHANGELOG.md`
-- Generated checked-in artifacts:
+- 固定的 iOS 发布版本：`apps/ios/version.json`
+- iOS 专用变更日志：`apps/ios/CHANGELOG.md`
+- 生成的签入工件：
   - `apps/ios/Config/Version.xcconfig`
   - `apps/ios/fastlane/metadata/en-US/release_notes.txt`
-- Useful commands:
+- 有用的命令：
 
 ```bash
 pnpm ios:version
@@ -168,158 +168,154 @@ pnpm ios:version:pin -- --from-gateway
 pnpm ios:version:pin -- --version 2026.4.10
 ```
 
-Recommended flow:
+推荐流程：
 
-### TestFlight iteration on an existing train
+### 在现有序列上 TestFlight 迭代
 
-1. Keep `apps/ios/version.json` pinned to the current train version.
-2. Update `apps/ios/CHANGELOG.md`, usually under `## Unreleased` while iterating.
-3. Run `pnpm ios:version:sync` after changelog changes.
-4. Upload more TestFlight builds with `pnpm ios:beta`.
-5. Let Fastlane bump only the numeric build number.
+1. 保持 `apps/ios/version.json` 固定到当前序列版本。
+2. 在 `## Unreleased` 下更新 `apps/ios/CHANGELOG.md` 进行迭代。
+3. 变更日志更改后运行 `pnpm ios:version:sync`。
+4. 使用 `pnpm ios:beta` 上传更多 TestFlight 构建。
+5. 让 Fastlane 仅增加数字构建号。
 
-### Starting the next production release train
+### 启动下一个生产发布序列
 
-1. Pin iOS to the current gateway version:
+1. 将 iOS 固定到当前网关版本：
 
 ```bash
 pnpm ios:version:pin -- --from-gateway
 ```
 
-2. Update `apps/ios/CHANGELOG.md` for the new release as needed.
-3. Run `pnpm ios:version:sync`.
-4. Submit the first TestFlight build for that newly pinned version.
-5. Keep iterating on that same version until the release candidate is ready.
+2. 根据需要更新新发布的 `apps/ios/CHANGELOG.md`。
+3. 运行 `pnpm ios:version:sync`。
+4. 提交该新固定版本的第一个 TestFlight 构建。
+5. 在同一版本上继续迭代，直到发布候选版本准备好。
 
-See `apps/ios/VERSIONING.md` for the detailed spec.
+详细规格参见 `apps/ios/VERSIONING.md`。
 
-## APNs Expectations For Local/Manual Builds
+## 本地/手动构建的 APNs 期望
 
-- The app calls `registerForRemoteNotifications()` at launch.
-- `apps/ios/Sources/OpenClaw.entitlements` sets `aps-environment` to `development`.
-- APNs token registration to gateway happens only after gateway connection (`push.apns.register`).
-- Local/manual builds default to `OpenClawPushTransport=direct` and `OpenClawPushDistribution=local`.
-- Your selected team/profile must support Push Notifications for the app bundle ID you are signing.
-- If push capability or provisioning is wrong, APNs registration fails at runtime (check Xcode logs for `APNs registration failed`).
-- The gateway host also needs direct APNs auth configured separately with `OPENCLAW_APNS_TEAM_ID`, `OPENCLAW_APNS_KEY_ID`, and either `OPENCLAW_APNS_PRIVATE_KEY_P8` or `OPENCLAW_APNS_PRIVATE_KEY_PATH`.
-- Recommended gateway-host storage for the APNs `.p8` file is `~/.openclaw/credentials/apns/AuthKey_<KEYID>.p8` with restrictive permissions, then point `OPENCLAW_APNS_PRIVATE_KEY_PATH` at that file.
-- `apps/ios/fastlane/.env` only covers App Store Connect / Fastlane auth; it does not provide gateway APNs credentials for local direct-push testing.
-- Debug builds default to `OpenClawPushAPNsEnvironment=sandbox`; Release builds default to `production`.
+- 应用在启动时调用 `registerForRemoteNotifications()`。
+- `apps/ios/Sources/OpenClaw.entitlements` 将 `aps-environment` 设置为 `development`。
+- APNs 令牌注册到网关仅在网关连接后发生（`push.apns.register`）。
+- 本地/手动构建默认为 `OpenClawPushTransport=direct` 和 `OpenClawPushDistribution=local`。
+- 您选择的团队/配置文件必须支持您正在签名的应用 bundle ID 的推送通知。
+- 如果推送能力或配置错误，APNs 注册将在运行时失败（检查 Xcode 日志中的 `APNs registration failed`）。
+- 网关主机还需要使用 `OPENCLAW_APNS_TEAM_ID`、`OPENCLAW_APNS_KEY_ID` 以及 `OPENCLAW_APNS_PRIVATE_KEY_P8` 或 `OPENCLAW_APNS_PRIVATE_KEY_PATH` 单独配置直接 APNs 认证。
+- 推荐网关主机存储 APNs `.p8` 文件的位置是 `~/.openclaw/credentials/apns/AuthKey_<KEYID>.p8`，并设置限制性权限，然后将 `OPENCLAW_APNS_PRIVATE_KEY_PATH` 指向该文件。
+- `apps/ios/fastlane/.env` 仅涵盖 App Store Connect / Fastlane 认证；它不提供用于本地直接推送测试的网关 APNs 凭证。
+- Debug 构建默认为 `OpenClawPushAPNsEnvironment=sandbox`；Release 构建默认为 `production`。
 
-## APNs Expectations For Official Builds
+## 官方构建的 APNs 期望
 
-- Official/TestFlight builds register with the external push relay before they publish `push.apns.register` to the gateway.
-- The gateway registration for relay mode contains an opaque relay handle, a registration-scoped send grant, relay origin metadata, and installation metadata instead of the raw APNs token.
-- The relay registration is bound to the gateway identity fetched from `gateway.identity.get`, so another gateway cannot reuse that stored registration.
-- The app persists the relay handle metadata locally so reconnects can republish the gateway registration without re-registering on every connect.
-- If the relay base URL changes in a later build, the app refreshes the relay registration instead of reusing the old relay origin.
-- Relay mode requires a reachable relay base URL and uses App Attest plus a StoreKit app transaction JWS during registration.
-- Gateway-side relay sending is configured through `gateway.push.apns.relay.baseUrl` in `openclaw.json`. `OPENCLAW_APNS_RELAY_BASE_URL` remains a temporary env override only.
+- 官方/TestFlight 构建在将 `push.apns.register` 发布到网关之前先向外部推送中继注册。
+- 网关的中继模式注册包含不透明的中继句柄、注册作用域的发送授权、中继源元数据和安装元数据，而不是原始 APNs 令牌。
+- 中继注册绑定到从 `gateway.identity.get` 获取的网关身份，因此另一个网关不能重用该存储的注册。
+- 应用在本地持久化中继句柄元数据，以便重新连接可以重新发布网关注册，而无需每次连接时重新注册。
+- 如果后续构建中中继基础 URL 更改，应用会刷新中继注册而不是重用旧的中继源。
+- 中继模式需要可访问的中继基础 URL，并在注册期间使用 App Attest 加上 StoreKit 应用事务 JWS。
+- 网关侧中继发送通过 `openclaw.json` 中的 `gateway.push.apns.relay.baseUrl` 配置。`OPENCLAW_APNS_RELAY_BASE_URL` 仍然是临时环境覆盖。
 
-## Official Build Relay Trust Model
+## 官方构建中继信任模型
 
-- `iOS -> gateway`
-  - The app must pair with the gateway and establish both node and operator sessions.
-  - The operator session is used to fetch `gateway.identity.get`.
-- `iOS -> relay`
-  - The app registers with the relay over HTTPS using App Attest plus a StoreKit app transaction JWS.
-  - The relay requires the official production/TestFlight distribution path, which is why local
-    Xcode/dev installs cannot use the hosted relay.
-- `gateway delegation`
-  - The app includes the gateway identity in relay registration.
-  - The relay returns a relay handle and registration-scoped send grant delegated to that gateway.
-- `gateway -> relay`
-  - The gateway signs relay send requests with its own device identity.
-  - The relay verifies both the delegated send grant and the gateway signature before it sends to
-    APNs.
-- `relay -> APNs`
-  - Production APNs credentials and raw official-build APNs tokens stay in the relay deployment,
-    not on the gateway.
+- `iOS -> 网关`
+  - 应用必须与网关配对并建立节点和操作员会话。
+  - 操作员会话用于获取 `gateway.identity.get`。
+- `iOS -> 中继`
+  - 应用使用 App Attest 加上 StoreKit 应用事务 JWS 通过 HTTPS 向中继注册。
+  - 中继需要官方生产/TestFlight 分发路径，这就是本地 Xcode/dev 安装不能使用托管中继的原因。
+- `网关委托`
+  - 应用在中继注册中包含网关身份。
+  - 中继返回委托给该网关的中继句柄和注册作用域的发送授权。
+- `网关 -> 中继`
+  - 网关使用自己的设备身份签署中继发送请求。
+  - 中继在发送到 APNs 之前验证委托的发送授权和网关签名。
+- `中继 -> APNs`
+  - 生产 APNs 凭证和原始官方构建 APNs 令牌保留在中继部署中，而不是网关上。
 
-This exists to keep the hosted relay limited to genuine OpenClaw official builds and to ensure a
-gateway can only send pushes for iOS devices that paired with that gateway.
+此模型将托管中继限制为真正的 OpenClaw 官方构建，并确保网关只能向与该网关配对的 iOS 设备发送推送。
 
-## What Works Now (Concrete)
+## 目前可用的功能（具体）
 
-- Pairing via setup code flow (`/pair` then `/pair approve` in Telegram).
-- Gateway connection via discovery or manual host/port with TLS fingerprint trust prompt.
-- Chat + Talk surfaces through the operator gateway session.
-- iPhone node commands in foreground: camera snap/clip, canvas present/navigate/eval/snapshot, screen record, location, contacts, calendar, reminders, photos, motion, local notifications.
-- Share extension deep-link forwarding into the connected gateway session.
+- 通过设置代码流程配对（`/pair` 然后 `/pair approve` 在 Telegram 中）。
+- 通过发现或手动主机/端口以及 TLS 指纹信任提示进行网关连接。
+- 通过操作员网关会话的聊天+通话界面。
+- 前台中的 iPhone 节点命令：相机 snap/clip、canvas present/navigate/eval/snapshot、屏幕录制、位置、联系人、日历、提醒事项、照片、运动、本地通知。
+- Share 扩展深度链接转发到已连接网关会话。
 
-## Computer Use Relationship
+## 与计算机使用的关系
 
-The iOS app is not a Codex Computer Use backend. Computer Use and `cua-driver mcp` are macOS desktop-control paths; iOS exposes device capabilities as OpenClaw node commands through the gateway. Agents can drive the iPhone canvas, camera, screen, location, voice, and other node capabilities with `node.invoke`, subject to iOS foreground/background limits.
+iOS 应用不是 Codex 计算机使用后端。计算机使用和 `cua-driver mcp` 是 macOS 桌面控制路径；iOS 通过网关将设备功能公开为 OpenClaw 节点命令。代理可以使用 `node.invoke` 驱动 iPhone canvas、相机、屏幕、位置、语音和其他节点功能，受 iOS 前台/后台限制。
 
-## Location Automation Use Case (Testing)
+## 位置自动化用例（测试）
 
-Use this for automation signals ("I moved", "I arrived", "I left"), not as a keep-awake mechanism.
+将此用于自动化信号（"我移动了"、"我到达了"、"我离开了"），而不是作为保持唤醒机制。
 
-- Product intent:
-  - movement-aware automations driven by iOS location events
-  - example: arrival/exit geofence, significant movement, visit detection
-- Non-goal:
-  - continuous GPS polling just to keep the app alive
+- 产品意图：
+  - 由 iOS 位置事件驱动的移动感知自动化
+  - 示例：到达/离开地理围栏、重大移动、访问检测
+- 非目标：
+  - 连续 GPS 轮询只是为了保持应用存活
 
-Test path to include in QA runs:
+包含在 QA 运行中的测试路径：
 
-1. Enable location permission in app:
-   - set `Always` permission
-   - verify background location capability is enabled in the build profile
-2. Background the app and trigger movement:
-   - walk/drive enough for a significant location update, or cross a configured geofence
-3. Validate gateway side effects:
-   - node reconnect/wake if needed
-   - expected location/movement event arrives at gateway
-   - automation trigger executes once (no duplicate storm)
-4. Validate resource impact:
-   - no sustained high thermal state
-   - no excessive background battery drain over a short observation window
+1. 在应用中启用位置权限：
+   - 设置 `始终` 权限
+   - 验证构建配置文件中已启用后台位置能力
+2. 后台应用并触发移动：
+   - 步行/驾驶足够距离以获取重大位置更新，或跨越配置的地理围栏
+3. 验证网关副作用：
+   - 如需要则节点重新连接/唤醒
+   - 预期位置/移动事件到达网关
+   - 自动化触发器执行一次（无重复风暴）
+4. 验证资源影响：
+   - 无持续高热状态
+   - 在短观察窗口内无过多后台电池消耗
 
-Pass criteria:
+通过标准：
 
-- movement events are delivered reliably enough for automation UX
-- no location-driven reconnect spam loops
-- app remains stable after repeated background/foreground transitions
+- 移动事件足够可靠地传递以实现自动化 UX
+- 无位置驱动的重新连接垃圾邮件循环
+- 应用在反复后台/前台转换后保持稳定
 
-## Known Issues / Limitations / Problems
+## 已知问题/限制/问题
 
-- Foreground-first: iOS can suspend sockets in background; reconnect recovery is still being tuned.
-- Background command limits are strict: `canvas.*`, `camera.*`, `screen.*`, and `talk.*` are blocked when backgrounded.
-- Background location requires `Always` location permission.
-- Pairing/auth errors intentionally pause reconnect loops until a human fixes auth/pairing state.
-- Voice Wake and Talk contend for the same microphone; Talk suppresses wake capture while active.
-- APNs reliability depends on local signing/provisioning/topic alignment.
-- Expect rough UX edges and occasional reconnect churn during active development.
+- 前台优先：iOS 可以在后台挂起套接字；重新连接恢复仍在调优中。
+- 后台命令限制严格：`canvas.*`、`camera.*`、`screen.*` 和 `talk.*` 在后台时被阻止。
+- 后台位置需要 `始终` 位置权限。
+- 配对/认证错误有意暂停重新连接循环，直到人工修复认证/配对状态。
+- 语音唤醒和通话争夺同一麦克风；通话在活跃时抑制唤醒捕获。
+- APNs 可靠性取决于本地签名/配置/主题对齐。
+- 在活跃开发期间预计会有粗糙的 UX 边缘和偶尔的重新连接波动。
 
-## Current In-Progress Workstream
+## 当前进行中的工作流
 
-Automatic wake/reconnect hardening:
+自动唤醒/重新连接加固：
 
-- improve wake/resume behavior across scene transitions
-- reduce dead-socket states after background -> foreground
-- tighten node/operator session reconnect coordination
-- reduce manual recovery steps after transient network failures
+- 跨场景转换改善唤醒/恢复行为
+- 减少后台 -> 前台后的死套接字状态
+- 收紧节点/操作员会话重新连接协调
+- 减少瞬态网络故障后的手动恢复步骤
 
-## Debugging Checklist
+## 调试检查清单
 
-1. Confirm build/signing baseline:
-   - regenerate project (`xcodegen generate`)
-   - verify selected team + bundle IDs
-2. In app `Settings -> Gateway`:
-   - confirm status text, server, and remote address
-   - verify whether status shows pairing/auth gating
-3. If pairing is required:
-   - run `/pair approve` from Telegram, then reconnect
-4. If discovery is flaky:
-   - enable `Discovery Debug Logs`
-   - inspect `Settings -> Gateway -> Discovery Logs`
-5. If network path is unclear:
-   - switch to manual host/port + TLS in Gateway Advanced settings
-6. In Xcode console, filter for subsystem/category signals:
+1. 确认构建/签名基线：
+   - 重新生成项目（`xcodegen generate`）
+   - 验证选定的团队 + bundle ID
+2. 在应用 `设置 -> 网关` 中：
+   - 确认状态文本、服务器和远程地址
+   - 验证状态是否显示配对/认证阻塞
+3. 如果需要配对：
+   - 从 Telegram 运行 `/pair approve`，然后重新连接
+4. 如果发现不稳定：
+   - 启用 `发现调试日志`
+   - 检查 `设置 -> 网关 -> 发现日志`
+5. 如果网络路径不清楚：
+   - 在网关高级设置中切换到手动主机/端口 + TLS
+6. 在 Xcode 控制台中，按子系统/类别过滤信号：
    - `ai.openclaw.ios`
    - `GatewayDiag`
    - `APNs registration failed`
-7. Validate background expectations:
-   - repro in foreground first
-   - then test background transitions and confirm reconnect on return
+7. 验证后台期望：
+   - 首先在前台重现
+   - 然后测试后台转换并确认返回时重新连接

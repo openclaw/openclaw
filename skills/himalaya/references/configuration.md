@@ -1,8 +1,8 @@
-# Himalaya Configuration Reference
+# Himalaya 配置参考
 
-Configuration file location: `~/.config/himalaya/config.toml`
+配置文件位置：`~/.config/himalaya/config.toml`
 
-## Minimal IMAP + SMTP Setup
+## 最小 IMAP + SMTP 设置
 
 ```toml
 [accounts.default]
@@ -10,7 +10,7 @@ email = "user@example.com"
 display-name = "Your Name"
 default = true
 
-# IMAP backend for reading emails
+# IMAP 后端用于读取邮件
 backend.type = "imap"
 backend.host = "imap.example.com"
 backend.port = 993
@@ -19,7 +19,7 @@ backend.login = "user@example.com"
 backend.auth.type = "password"
 backend.auth.raw = "your-password"
 
-# SMTP backend for sending emails
+# SMTP 后端用于发送邮件
 message.send.backend.type = "smtp"
 message.send.backend.host = "smtp.example.com"
 message.send.backend.port = 587
@@ -29,30 +29,30 @@ message.send.backend.auth.type = "password"
 message.send.backend.auth.raw = "your-password"
 ```
 
-## Password Options
+## 密码选项
 
-### Raw password (testing only, not recommended)
+### 原始密码（仅测试，不推荐）
 
 ```toml
 backend.auth.raw = "your-password"
 ```
 
-### Password from command (recommended)
+### 从命令获取密码（推荐）
 
 ```toml
 backend.auth.cmd = "pass show email/imap"
 # backend.auth.cmd = "security find-generic-password -a user@example.com -s imap -w"
 ```
 
-### System keyring (requires keyring feature)
+### 系统 keyring（需要 keyring 功能）
 
 ```toml
 backend.auth.keyring = "imap-example"
 ```
 
-Then run `himalaya account configure <account>` to store the password.
+然后运行 `himalaya account configure <account>` 存储密码。
 
-## Gmail Configuration
+## Gmail 配置
 
 ```toml
 [accounts.gmail]
@@ -77,9 +77,9 @@ message.send.backend.auth.type = "password"
 message.send.backend.auth.cmd = "pass show google/app-password"
 ```
 
-**Note:** Gmail requires an App Password if 2FA is enabled.
+**注意：** 如果启用了 2FA，Gmail 需要 App Password。
 
-## iCloud Configuration
+## iCloud 配置
 
 ```toml
 [accounts.icloud]
@@ -103,11 +103,11 @@ message.send.backend.auth.type = "password"
 message.send.backend.auth.cmd = "pass show icloud/app-password"
 ```
 
-**Note:** Generate an app-specific password at appleid.apple.com
+**注意：** 在 appleid.apple.com 生成应用专用密码。
 
-## Folder Aliases
+## 文件夹别名
 
-Map custom folder names:
+映射自定义文件夹名称：
 
 ```toml
 [accounts.default.folder.alias]
@@ -117,7 +117,7 @@ drafts = "Drafts"
 trash = "Trash"
 ```
 
-## Multiple Accounts
+## 多账户
 
 ```toml
 [accounts.personal]
@@ -130,13 +130,13 @@ email = "work@company.com"
 # ... backend config ...
 ```
 
-Switch accounts with `--account`:
+使用 `--account` 切换账户：
 
 ```bash
 himalaya --account work envelope list
 ```
 
-## Notmuch Backend (local mail)
+## Notmuch 后端（本地邮件）
 
 ```toml
 [accounts.local]
@@ -146,7 +146,7 @@ backend.type = "notmuch"
 backend.db-path = "~/.mail/.notmuch"
 ```
 
-## OAuth2 Authentication (for providers that support it)
+## OAuth2 认证（用于支持的提供商）
 
 ```toml
 backend.auth.type = "oauth2"
@@ -158,9 +158,9 @@ backend.auth.auth-url = "https://provider.com/oauth/authorize"
 backend.auth.token-url = "https://provider.com/oauth/token"
 ```
 
-## Additional Options
+## 其他选项
 
-### Signature
+### 签名
 
 ```toml
 [accounts.default]
@@ -168,16 +168,16 @@ signature = "Best regards,\nYour Name"
 signature-delim = "-- \n"
 ```
 
-### Downloads directory
+### 下载目录
 
 ```toml
 [accounts.default]
 downloads-dir = "~/Downloads/himalaya"
 ```
 
-### Editor for composing
+### 撰写编辑器
 
-Set via environment variable:
+通过环境变量设置：
 
 ```bash
 export EDITOR="vim"

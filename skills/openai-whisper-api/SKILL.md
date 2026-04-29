@@ -25,20 +25,20 @@ metadata:
 
 # OpenAI Whisper API (curl)
 
-Transcribe an audio file via OpenAI’s `/v1/audio/transcriptions` endpoint. Set `OPENAI_BASE_URL` to use an OpenAI-compatible proxy or local gateway.
+通过 OpenAI 的 `/v1/audio/transcriptions` 端点转录音频文件。设置 `OPENAI_BASE_URL` 以使用 OpenAI 兼容代理或本地网关。
 
-## Quick start
+## 快速开始
 
 ```bash
 {baseDir}/scripts/transcribe.sh /path/to/audio.m4a
 ```
 
-Defaults:
+默认值：
 
-- Model: `whisper-1`
-- Output: `<input>.txt`
+- Model：`whisper-1`
+- 输出：`<input>.txt`
 
-## Useful flags
+## 有用标志
 
 ```bash
 {baseDir}/scripts/transcribe.sh /path/to/audio.ogg --model whisper-1 --out /tmp/transcript.txt
@@ -47,9 +47,9 @@ Defaults:
 {baseDir}/scripts/transcribe.sh /path/to/audio.m4a --json --out /tmp/transcript.json
 ```
 
-## API key
+## API 密钥
 
-Set `OPENAI_API_KEY`, or configure it in the active OpenClaw config file (`$OPENCLAW_CONFIG_PATH`, default `~/.openclaw/openclaw.json`). Optionally set `OPENAI_BASE_URL` (for example `http://127.0.0.1:51805/v1`) to use an OpenAI-compatible proxy or local gateway:
+设置 `OPENAI_API_KEY`，或在活动 OpenClaw 配置文件中配置（`$OPENCLAW_CONFIG_PATH`，默认 `~/.openclaw/openclaw.json`）。可选设置 `OPENAI_BASE_URL`（例如 `http://127.0.0.1:51805/v1`）以使用 OpenAI 兼容代理或本地网关：
 
 ```json5
 {

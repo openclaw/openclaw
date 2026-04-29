@@ -24,58 +24,58 @@ metadata:
 
 # Obsidian
 
-Obsidian vault = a normal folder on disk.
+Obsidian 仓库 = 磁盘上的普通文件夹。
 
-Vault structure (typical)
+仓库结构（典型）
 
-- Notes: `*.md` (plain text Markdown; edit with any editor)
-- Config: `.obsidian/` (workspace + plugin settings; usually don’t touch from scripts)
-- Canvases: `*.canvas` (JSON)
-- Attachments: whatever folder you chose in Obsidian settings (images/PDFs/etc.)
+- 笔记：`*.md`（纯文本 Markdown；使用任何编辑器编辑）
+- 配置：`.obsidian/`（工作区 + 插件设置；通常不从脚本触碰）
+- Canvas：`*.canvas`（JSON）
+- 附件：您在 Obsidian 设置中选择的文件夹（图片/PDF 等）
 
-## Find the active vault(s)
+## 找到活动的仓库
 
-Obsidian desktop tracks vaults here (source of truth):
+Obsidian 桌面在此跟踪仓库（真相来源）：
 
 - `~/Library/Application Support/obsidian/obsidian.json`
 
-`obsidian-cli` resolves vaults from that file; vault name is typically the **folder name** (path suffix).
+`obsidian-cli` 从该文件解析仓库；仓库名称通常是**文件夹名称**（路径后缀）。
 
-Fast “what vault is active / where are the notes?”
+快速"哪个仓库是活动的/笔记在哪里？"
 
-- If you’ve already set a default: `obsidian-cli print-default --path-only`
-- Otherwise, read `~/Library/Application Support/obsidian/obsidian.json` and use the vault entry with `"open": true`.
+- 如果您已经设置了默认值：`obsidian-cli print-default --path-only`
+- 否则，读取 `~/Library/Application Support/obsidian/obsidian.json` 并使用 `"open": true` 的仓库条目。
 
-Notes
+注意事项
 
-- Multiple vaults common (iCloud vs `~/Documents`, work/personal, etc.). Don’t guess; read config.
-- Avoid writing hardcoded vault paths into scripts; prefer reading the config or using `print-default`.
+- 多个仓库是常见的（iCloud vs `~/Documents`、工作/个人等）。不要猜测；读取配置。
+- 避免将硬编码的仓库路径写入脚本；优先读取配置或使用 `print-default`。
 
-## obsidian-cli quick start
+## obsidian-cli 快速开始
 
-Pick a default vault (once):
+设置默认仓库（一次）：
 
 - `obsidian-cli set-default "<vault-folder-name>"`
 - `obsidian-cli print-default` / `obsidian-cli print-default --path-only`
 
-Search
+搜索
 
-- `obsidian-cli search "query"` (note names)
-- `obsidian-cli search-content "query"` (inside notes; shows snippets + lines)
+- `obsidian-cli search "query"`（笔记名称）
+- `obsidian-cli search-content "query"`（笔记内；显示片段 + 行）
 
-Create
+创建
 
 - `obsidian-cli create "Folder/New note" --content "..." --open`
-- Requires Obsidian URI handler (`obsidian://…`) working (Obsidian installed).
-- Avoid creating notes under “hidden” dot-folders (e.g. `.something/...`) via URI; Obsidian may refuse.
+- 需要 Obsidian URI 处理器（`obsidian://…`）正常工作（已安装 Obsidian）。
+- 避免通过 URI 在"隐藏"点文件夹下创建笔记（例如 `.something/...`）；Obsidian 可能拒绝。
 
-Move/rename (safe refactor)
+移动/重命名（安全重构）
 
 - `obsidian-cli move "old/path/note" "new/path/note"`
-- Updates `[[wikilinks]]` and common Markdown links across the vault (this is the main win vs `mv`).
+- 更新整个仓库中的 `[[wikilinks]]` 和常见 Markdown 链接（这是相对于 `mv` 的主要优势）。
 
-Delete
+删除
 
 - `obsidian-cli delete "path/note"`
 
-Prefer direct edits when appropriate: open the `.md` file and change it; Obsidian will pick it up.
+在适当的时候优先使用直接编辑：打开 `.md` 文件并更改它；Obsidian 会获取更改。

@@ -31,13 +31,13 @@ metadata:
 
 # gifgrep
 
-Use `gifgrep` to search GIF providers (Tenor/Giphy), browse in a TUI, download results, and extract stills or sheets.
+使用 `gifgrep` 搜索 GIF 提供商（Tenor/Giphy）、在 TUI 中浏览、下载结果，并提取静态图像或工作表。
 
-GIF-Grab (gifgrep workflow)
+GIF-Grab（gifgrep 工作流程）
 
-- Search → preview → download → extract (still/sheet) for fast review and sharing.
+- 搜索 → 预览 → 下载 → 提取（静态/工作表）以便快速查看和分享。
 
-Quick start
+快速开始
 
 - `gifgrep cats --max 5`
 - `gifgrep cats --format url | head -n 5`
@@ -45,41 +45,41 @@ Quick start
 - `gifgrep tui "office handshake"`
 - `gifgrep cats --download --max 1 --format url`
 
-TUI + previews
+TUI + 预览
 
-- TUI: `gifgrep tui "query"`
-- CLI still previews: `--thumbs` (Kitty/Ghostty only; still frame)
+- TUI：`gifgrep tui "query"`
+- CLI 静态预览：`--thumbs`（仅 Kitty/Ghostty；静止帧）
 
-Download + reveal
+下载 + 显示
 
-- `--download` saves to `~/Downloads`
-- `--reveal` shows the last download in Finder
+- `--download` 保存到 `~/Downloads`
+- `--reveal` 在 Finder 中显示最后下载的内容
 
-Stills + sheets
+静态 + 工作表
 
 - `gifgrep still ./clip.gif --at 1.5s -o still.png`
 - `gifgrep sheet ./clip.gif --frames 9 --cols 3 -o sheet.png`
-- Sheets = single PNG grid of sampled frames (great for quick review, docs, PRs, chat).
-- Tune: `--frames` (count), `--cols` (grid width), `--padding` (spacing).
+- 工作表 = 采样帧的单个 PNG 网格（非常适合快速查看、文档、PR、聊天）。
+- 调优：`--frames`（数量）、`--cols`（网格宽度）、`--padding`（间距）。
 
-Providers
+提供商
 
 - `--source auto|tenor|giphy`
-- `GIPHY_API_KEY` required for `--source giphy`
-- `TENOR_API_KEY` optional (Tenor demo key used if unset)
+- `--source giphy` 需要 `GIPHY_API_KEY`
+- `TENOR_API_KEY` 可选（如果未设置则使用 Tenor 演示密钥）
 
-Output
+输出
 
-- `--json` prints an array of results (`id`, `title`, `url`, `preview_url`, `tags`, `width`, `height`)
-- `--format` for pipe-friendly fields (e.g., `url`)
+- `--json` 打印结果数组（`id`、`title`、`url`、`preview_url`、`tags`、`width`、`height`）
+- `--format` 用于管道友好的字段（例如 `url`）
 
-GIF asset hygiene
+GIF 资源卫生
 
-- Before recommending or using an animated GIF URL, verify it resolves successfully, has `Content-Type: image/gif`, and is actually animated (multiple frames or loop metadata; e.g. inspect with `file`, `identify`, or a small script).
-- Record attribution/license/source URL alongside the asset.
-- Do not hotlink when a local asset is needed: download/copy it into the project and reference the local file.
+- 在推荐或使用动画 GIF URL 之前，验证它是否成功解析、具有 `Content-Type: image/gif`，并且实际上是动画的（多帧或循环元数据；例如用 `file`、`identify` 或小脚本检查）。
+- 记录归属/许可证/源 URL 以及资产。
+- 当需要本地资产时不要热链接：下载/复制到项目中并引用本地文件。
 
-Environment tweaks
+环境调整
 
-- `GIFGREP_SOFTWARE_ANIM=1` to force software animation
-- `GIFGREP_CELL_ASPECT=0.5` to tweak preview geometry
+- `GIFGREP_SOFTWARE_ANIM=1` 强制软件动画
+- `GIFGREP_CELL_ASPECT=0.5` 调整预览几何

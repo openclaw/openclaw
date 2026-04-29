@@ -25,63 +25,60 @@ metadata:
 
 # Peekaboo
 
-Peekaboo is a full macOS UI automation CLI: capture/inspect screens, target UI
-elements, drive input, and manage apps/windows/menus. Commands share a snapshot
-cache and support `--json`/`-j` for scripting. Run `peekaboo` or
-`peekaboo <cmd> --help` for flags; `peekaboo --version` prints build metadata.
-Tip: run via `polter peekaboo` to ensure fresh builds.
+Peekaboo 是一个完整的 macOS UI 自动化 CLI：捕获/检查屏幕、定位 UI 元素、驱动输入以及管理应用/窗口/菜单。命令共享快照缓存并支持 `--json`/`-j` 用于脚本处理。运行 `peekaboo` 或 `peekaboo <cmd> --help` 获取标志；`peekaboo --version` 打印构建元数据。
+提示：通过 `polter peekaboo` 运行以确保使用最新构建。
 
-## Features (all CLI capabilities, excluding agent/MCP)
+## 功能（所有 CLI 能力，排除 agent/MCP）
 
-Core
+核心
 
-- `bridge`: inspect Peekaboo Bridge host connectivity
-- `capture`: live capture or video ingest + frame extraction
-- `clean`: prune snapshot cache and temp files
-- `config`: init/show/edit/validate, providers, models, credentials
-- `image`: capture screenshots (screen/window/menu bar regions)
-- `learn`: print the full agent guide + tool catalog
-- `list`: apps, windows, screens, menubar, permissions
-- `permissions`: check Screen Recording/Accessibility status
-- `run`: execute `.peekaboo.json` scripts
-- `sleep`: pause execution for a duration
-- `tools`: list available tools with filtering/display options
+- `bridge`：检查 Peekaboo Bridge 主机连接性
+- `capture`：实时捕获或视频摄入 + 帧提取
+- `clean`：清除快照缓存和临时文件
+- `config`：初始化/显示/编辑/验证、提供商、模型、凭证
+- `image`：捕获屏幕截图（屏幕/窗口/菜单栏区域）
+- `learn`：打印完整 agent 指南 + 工具目录
+- `list`：应用、窗口、屏幕、菜单栏、权限
+- `permissions`：检查屏幕录制/辅助功能状态
+- `run`：执行 `.peekaboo.json` 脚本
+- `sleep`：暂停执行一段时间
+- `tools`：列出具有过滤/显示选项的可用工具
 
-Interaction
+交互
 
-- `click`: target by ID/query/coords with smart waits
-- `drag`: drag & drop across elements/coords/Dock
-- `hotkey`: modifier combos like `cmd,shift,t`
-- `move`: cursor positioning with optional smoothing
-- `paste`: set clipboard -> paste -> restore
-- `press`: special-key sequences with repeats
-- `scroll`: directional scrolling (targeted + smooth)
-- `swipe`: gesture-style drags between targets
-- `type`: text + control keys (`--clear`, delays)
+- `click`：通过 ID/查询/坐标定位，带智能等待
+- `drag`：跨元素/坐标/Dock 的拖放
+- `hotkey`：修饰符组合如 `cmd,shift,t`
+- `move`：光标定位，可选平滑
+- `paste`：设置剪贴板 -> 粘贴 -> 恢复
+- `press`：带重复的特殊键序列
+- `scroll`：定向滚动（定向 + 平滑）
+- `swipe`：目标之间的手势式拖动
+- `type`：文本 + 控制键（`--clear`、延迟）
 
-System
+系统
 
-- `app`: launch/quit/relaunch/hide/unhide/switch/list apps
-- `clipboard`: read/write clipboard (text/images/files)
-- `dialog`: click/input/file/dismiss/list system dialogs
-- `dock`: launch/right-click/hide/show/list Dock items
-- `menu`: click/list application menus + menu extras
-- `menubar`: list/click status bar items
-- `open`: enhanced `open` with app targeting + JSON payloads
-- `space`: list/switch/move-window (Spaces)
-- `visualizer`: exercise Peekaboo visual feedback animations
-- `window`: close/minimize/maximize/move/resize/focus/list
+- `app`：启动/退出/重启/隐藏/显示/切换/列出应用
+- `clipboard`：读写剪贴板（文本/图片/文件）
+- `dialog`：点击/输入/文件/关闭/列出系统对话框
+- `dock`：启动/右键/隐藏/显示/列出 Dock 项目
+- `menu`：点击/列出应用菜单 + 菜单额外项
+- `menubar`：列出/点击状态栏项目
+- `open`：增强的 `open`，带应用定位 + JSON payload
+- `space`：列出/切换/移动窗口（Spaces）
+- `visualizer`：练习 Peekaboo 视觉反馈动画
+- `window`：关闭/最小化/最大化/移动/调整大小/聚焦/列出
 
-Vision
+视觉
 
-- `see`: annotated UI maps, snapshot IDs, optional analysis
+- `see`：带注释的 UI 地图、快照 ID、可选分析
 
-Global runtime flags
+全局运行时标志
 
-- `--json`/`-j`, `--verbose`/`-v`, `--log-level <level>`
-- `--no-remote`, `--bridge-socket <path>`
+- `--json`/`-j`、`--verbose`/`-v`、`--log-level <level>`
+- `--no-remote`、`--bridge-socket <path>`
 
-## Quickstart (happy path)
+## 快速开始（快乐路径）
 
 ```bash
 peekaboo permissions
@@ -91,31 +88,31 @@ peekaboo click --on B1
 peekaboo type "Hello" --return
 ```
 
-## Common targeting parameters (most interaction commands)
+## 常见定位参数（大多数交互命令）
 
-- App/window: `--app`, `--pid`, `--window-title`, `--window-id`, `--window-index`
-- Snapshot targeting: `--snapshot` (ID from `see`; defaults to latest)
-- Element/coords: `--on`/`--id` (element ID), `--coords x,y`
-- Focus control: `--no-auto-focus`, `--space-switch`, `--bring-to-current-space`,
-  `--focus-timeout-seconds`, `--focus-retry-count`
+- 应用/窗口：`--app`、`--pid`、`--window-title`、`--window-id`、`--window-index`
+- 快照定位：`--snapshot`（来自 `see` 的 ID；默认为最新）
+- 元素/坐标：`--on`/`--id`（元素 ID）、`--coords x,y`
+- 焦点控制：`--no-auto-focus`、`--space-switch`、`--bring-to-current-space`、
+  `--focus-timeout-seconds`、`--focus-retry-count`
 
-## Common capture parameters
+## 常见捕获参数
 
-- Output: `--path`, `--format png|jpg`, `--retina`
-- Targeting: `--mode screen|window|frontmost`, `--screen-index`,
-  `--window-title`, `--window-id`
-- Analysis: `--analyze "prompt"`, `--annotate`
-- Capture engine: `--capture-engine auto|classic|cg|modern|sckit`
+- 输出：`--path`、`--format png|jpg`、`--retina`
+- 定位：`--mode screen|window|frontmost`、`--screen-index`、
+  `--window-title`、`--window-id`
+- 分析：`--analyze "prompt"`、`--annotate`
+- 捕获引擎：`--capture-engine auto|classic|cg|modern|sckit`
 
-## Common motion/typing parameters
+## 常见运动/打字参数
 
-- Timing: `--duration` (drag/swipe), `--steps`, `--delay` (type/scroll/press)
-- Human-ish movement: `--profile human|linear`, `--wpm` (typing)
-- Scroll: `--direction up|down|left|right`, `--amount <ticks>`, `--smooth`
+- 时序：`--duration`（拖动/滑动）、`--steps`、`--delay`（打字/滚动/按下）
+- 类人运动：`--profile human|linear`、`--wpm`（打字）
+- 滚动：`--direction up|down|left|right`、`--amount <ticks>`、`--smooth`
 
-## Examples
+## 示例
 
-### See -> click -> type (most reliable flow)
+### See -> click -> type（最可靠的流程）
 
 ```bash
 peekaboo see --app Safari --window-title "Login" --annotate --path /tmp/see.png
@@ -125,7 +122,7 @@ peekaboo press tab --count 1 --app Safari
 peekaboo type "supersecret" --app Safari --return
 ```
 
-### Target by window id
+### 通过窗口 ID 定位
 
 ```bash
 peekaboo list windows --app "Visual Studio Code" --json
@@ -133,7 +130,7 @@ peekaboo click --window-id 12345 --coords 120,160
 peekaboo type "Hello from Peekaboo" --window-id 12345
 ```
 
-### Capture screenshots + analyze
+### 捕获屏幕截图 + 分析
 
 ```bash
 peekaboo image --mode screen --screen-index 0 --retina --path /tmp/screen.png
@@ -141,14 +138,14 @@ peekaboo image --app Safari --window-title "Dashboard" --analyze "Summarize KPIs
 peekaboo see --mode screen --screen-index 0 --analyze "Summarize the dashboard"
 ```
 
-### Live capture (motion-aware)
+### 实时捕获（运动感知）
 
 ```bash
 peekaboo capture live --mode region --region 100,100,800,600 --duration 30 \
   --active-fps 8 --idle-fps 2 --highlight-changes --path /tmp/capture
 ```
 
-### App + window management
+### 应用 + 窗口管理
 
 ```bash
 peekaboo app launch "Safari" --open https://example.com
@@ -157,7 +154,7 @@ peekaboo window set-bounds --app Safari --x 50 --y 50 --width 1200 --height 800
 peekaboo app quit --app Safari
 ```
 
-### Menus, menubar, dock
+### 菜单、菜单栏、Dock
 
 ```bash
 peekaboo menu click --app Safari --item "New Window"
@@ -167,7 +164,7 @@ peekaboo dock launch Safari
 peekaboo menubar list --json
 ```
 
-### Mouse + gesture input
+### 鼠标 + 手势输入
 
 ```bash
 peekaboo move 500,300 --smooth
@@ -176,7 +173,7 @@ peekaboo swipe --from-coords 100,500 --to-coords 100,200 --duration 800
 peekaboo scroll --direction down --amount 6 --smooth
 ```
 
-### Keyboard input
+### 键盘输入
 
 ```bash
 peekaboo hotkey --keys "cmd,shift,t"
@@ -184,7 +181,7 @@ peekaboo press escape
 peekaboo type "Line 1\nLine 2" --delay 10
 ```
 
-Notes
+注意事项
 
-- Requires Screen Recording + Accessibility permissions.
-- Use `peekaboo see --annotate` to identify targets before clicking.
+- 需要屏幕录制 + 辅助功能权限。
+- 点击前使用 `peekaboo see --annotate` 识别目标。

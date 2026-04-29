@@ -24,106 +24,106 @@ metadata:
 
 # Weather Skill
 
-Get current weather conditions and forecasts.
+获取当前天气状况和预报。
 
-## When to Use
+## 何时使用
 
-✅ **USE this skill when:**
+✅ **使用此 skill 当：**
 
-- "What's the weather?"
-- "Will it rain today/tomorrow?"
-- "Temperature in [city]"
-- "Weather forecast for the week"
-- Travel planning weather checks
+- "天气怎么样？"
+- "今天/明天会下雨吗？"
+- "[城市] 的温度"
+- "本周天气预报"
+- 旅行规划天气检查
 
-## When NOT to Use
+## 何时不使用
 
-❌ **DON'T use this skill when:**
+❌ **不要使用此 skill 当：**
 
-- Historical weather data → use weather archives/APIs
-- Climate analysis or trends → use specialized data sources
-- Hyper-local microclimate data → use local sensors
-- Severe weather alerts → check official NWS sources
-- Aviation/marine weather → use specialized services (METAR, etc.)
+- 历史天气数据 → 使用天气档案/API
+- 气候分析或趋势 → 使用专业数据源
+- 超本地微气候数据 → 使用本地传感器
+- 严重天气警报 → 检查官方 NWS 来源
+- 航空/海洋天气 → 使用专业服务（METAR 等）
 
-## Location
+## 位置
 
-Always include a city, region, or airport code in weather queries.
+始终在天气查询中包含城市、地区或机场代码。
 
-## Commands
+## 命令
 
-### Current Weather
+### 当前天气
 
 ```bash
-# One-line summary
+# 一行摘要
 curl "wttr.in/London?format=3"
 
-# Detailed current conditions
+# 详细当前状况
 curl "wttr.in/London?0"
 
-# Specific city
+# 特定城市
 curl "wttr.in/New+York?format=3"
 ```
 
-### Forecasts
+### 预报
 
 ```bash
-# 3-day forecast
+# 3 天预报
 curl "wttr.in/London"
 
-# Week forecast
+# 周预报
 curl "wttr.in/London?format=v2"
 
-# Specific day (0=today, 1=tomorrow, 2=day after)
+# 特定日期（0=今天，1=明天，2=后天）
 curl "wttr.in/London?1"
 ```
 
-### Format Options
+### 格式选项
 
 ```bash
-# One-liner
+# 一行
 curl "wttr.in/London?format=%l:+%c+%t+%w"
 
-# JSON output
+# JSON 输出
 curl "wttr.in/London?format=j1"
 
-# PNG image
+# PNG 图像
 curl "wttr.in/London.png"
 ```
 
-### Format Codes
+### 格式代码
 
-- `%c` — Weather condition emoji
-- `%t` — Temperature
-- `%f` — "Feels like"
-- `%w` — Wind
-- `%h` — Humidity
-- `%p` — Precipitation
-- `%l` — Location
+- `%c` — 天气状况 emoji
+- `%t` — 温度
+- `%f` — "体感温度"
+- `%w` — 风
+- `%h` — 湿度
+- `%p` — 降水量
+- `%l` — 位置
 
-## Quick Responses
+## 快速响应
 
-**"What's the weather?"**
+**"天气怎么样？"**
 
 ```bash
 curl -s "wttr.in/London?format=%l:+%c+%t+(feels+like+%f),+%w+wind,+%h+humidity"
 ```
 
-**"Will it rain?"**
+**"会下雨吗？"**
 
 ```bash
 curl -s "wttr.in/London?format=%l:+%c+%p"
 ```
 
-**"Weekend forecast"**
+**"周末预报"**
 
 ```bash
 curl "wttr.in/London?format=v2"
 ```
 
-## Notes
+## 提示
 
-- No API key needed (uses wttr.in)
-- Rate limited; don't spam requests
-- Works for most global cities
-- Supports airport codes: `curl wttr.in/ORD`
+- 不需要 API 密钥（使用 wttr.in）
+- 有速率限制；不要频繁请求
+- 适用于大多数全球城市
+- 支持机场代码：`curl wttr.in/ORD`

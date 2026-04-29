@@ -24,22 +24,22 @@ metadata:
 
 # camsnap
 
-Use `camsnap` to grab snapshots, clips, or motion events from configured cameras.
+使用 `camsnap` 从已配置的相机抓取快照、片段或运动事件。
 
-Setup
+设置
 
-- Config file: `~/.config/camsnap/config.yaml`
-- Add camera: `camsnap add --name kitchen --host 192.168.0.10 --user user --pass pass`
+- 配置文件：`~/.config/camsnap/config.yaml`
+- 添加相机：`camsnap add --name kitchen --host 192.168.0.10 --user user --pass pass`
 
-Common commands
+常用命令
 
-- Discover: `camsnap discover --info`
-- Snapshot: `camsnap snap kitchen --out shot.jpg`
-- Clip: `camsnap clip kitchen --dur 5s --out clip.mp4`
-- Motion watch: `camsnap watch kitchen --threshold 0.2 --action '...'`
-- Doctor: `camsnap doctor --probe`
+- 发现：`camsnap discover --info`
+- 快照：`camsnap snap kitchen --out shot.jpg`
+- 片段：`camsnap clip kitchen --dur 5s --out clip.mp4`
+- 运动监控：`camsnap watch kitchen --threshold 0.2 --action '...'`
+- 诊断：`camsnap doctor --probe`
 
-Notes
+注意事项
 
-- Requires `ffmpeg` on PATH.
-- Prefer a short test capture before longer clips.
+- 需要 `ffmpeg` 在 PATH 上。
+- 在录制更长片段之前优先进行短测试捕获。

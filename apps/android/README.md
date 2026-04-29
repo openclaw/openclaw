@@ -1,30 +1,30 @@
-## OpenClaw Android App
+## OpenClaw Android 应用
 
-Status: **extremely alpha**. The app is actively being rebuilt from the ground up.
+状态：**极度 alpha 版本**。应用正在从零开始重建。
 
-### Rebuild Checklist
+### 重建清单
 
-- [x] New 4-step onboarding flow
-- [x] Connect tab with `Setup Code` + `Manual` modes
-- [x] Encrypted persistence for gateway setup/auth state
-- [x] Chat UI restyled
-- [x] Settings UI restyled and de-duplicated (gateway controls moved to Connect)
-- [x] QR code scanning in onboarding
-- [x] Performance improvements
-- [x] Streaming support in chat UI
-- [x] Request camera/location and other permissions in onboarding/settings flow
-- [x] Push notifications for gateway/chat status updates
-- [x] Security hardening (biometric lock, token handling, safer defaults)
-- [x] Authenticated background presence beacons
-- [x] Voice tab full functionality
-- [x] Screen tab full functionality
-- [ ] Full end-to-end QA and release hardening
+- [x] 新的 4 步入门引导流程
+- [x] 连接标签页，支持 `Setup Code` + `Manual` 模式
+- [x] 网关设置/认证状态的加密持久化
+- [x] 聊天 UI 重新设计
+- [x] 设置 UI 重新设计并去重（网关控制移至连接）
+- [x] 入门引导中的二维码扫描
+- [x] 性能改进
+- [x] 聊天 UI 流式支持
+- [x] 在入门引导/设置流程中请求相机/位置等权限
+- [x] 网关/聊天状态更新的推送通知
+- [x] 安全加固（生物识别锁、令牌处理、更安全的默认设置）
+- [x] 已认证的后台存在信标
+- [x] 语音标签完整功能
+- [x] 屏幕标签完整功能
+- [ ] 完整的端到端 QA 和发布加固
 
-## Open in Android Studio
+## 在 Android Studio 中打开
 
-- Open the folder `apps/android`.
+- 打开文件夹 `apps/android`。
 
-## Build / Run
+## 构建/运行
 
 ```bash
 cd apps/android
@@ -35,7 +35,7 @@ cd ../..
 bun run android:bundle:release
 ```
 
-Third-party debug flavor:
+第三方调试版本：
 
 ```bash
 cd apps/android
@@ -44,12 +44,12 @@ cd apps/android
 ./gradlew :app:testThirdPartyDebugUnitTest
 ```
 
-`bun run android:bundle:release` auto-bumps Android `versionName`/`versionCode` in `apps/android/app/build.gradle.kts`, then builds two signed release bundles:
+`bun run android:bundle:release` 自动更新 Android `versionName`/`versionCode` 于 `apps/android/app/build.gradle.kts`，然后构建两个签名发布包：
 
-- Play build: `apps/android/build/release-bundles/openclaw-<version>-play-release.aab`
-- Third-party build: `apps/android/build/release-bundles/openclaw-<version>-third-party-release.aab`
+- Play 构建：`apps/android/build/release-bundles/openclaw-<version>-play-release.aab`
+- 第三方构建：`apps/android/build/release-bundles/openclaw-<version>-third-party-release.aab`
 
-Flavor-specific direct Gradle tasks:
+特定版本的直接 Gradle 任务：
 
 ```bash
 cd apps/android
@@ -57,20 +57,20 @@ cd apps/android
 ./gradlew :app:bundleThirdPartyRelease
 ```
 
-## Kotlin Lint + Format
+## Kotlin Lint + 格式化
 
 ```bash
 pnpm android:lint
 pnpm android:format
 ```
 
-Android framework/resource lint (separate pass):
+Android framework/resource lint（单独检查）：
 
 ```bash
 pnpm android:lint:android
 ```
 
-Direct Gradle tasks:
+直接 Gradle 任务：
 
 ```bash
 cd apps/android
@@ -79,22 +79,22 @@ cd apps/android
 ./gradlew :app:lintDebug
 ```
 
-`gradlew` auto-detects the Android SDK at `~/Library/Android/sdk` (macOS default) if `ANDROID_SDK_ROOT` / `ANDROID_HOME` are unset.
+`gradlew` 如果 `ANDROID_SDK_ROOT` / `ANDROID_HOME` 未设置，会自动检测 `~/Library/Android/sdk`（macOS 默认）的 Android SDK。
 
-## Macrobenchmark (Startup + Frame Timing)
+## 宏基准测试（启动+帧时间）
 
 ```bash
 cd apps/android
 ./gradlew :benchmark:connectedDebugAndroidTest
 ```
 
-Reports are written under:
+报告写入位置：
 
 - `apps/android/benchmark/build/reports/androidTests/connected/`
 
-## Perf CLI (low-noise)
+## Perf CLI（低噪声）
 
-Deterministic startup measurement + hotspot extraction with compact CLI output:
+确定性启动测量+热点提取，CLI 输出紧凑：
 
 ```bash
 cd apps/android
@@ -102,130 +102,130 @@ cd apps/android
 ./scripts/perf-startup-hotspots.sh
 ```
 
-Benchmark script behavior:
+基准脚本行为：
 
-- Runs only `StartupMacrobenchmark#coldStartup` (10 iterations).
-- Prints median/min/max/COV in one line.
-- Writes timestamped snapshot JSON to `apps/android/benchmark/results/`.
-- Auto-compares with previous local snapshot (or pass explicit baseline: `--baseline <old-benchmarkData.json>`).
+- 仅运行 `StartupMacrobenchmark#coldStartup`（10 次迭代）。
+- 一行打印中位数/最小/最大/COV。
+- 将带时间戳的快照 JSON 写入 `apps/android/benchmark/results/`。
+- 与之前的本地快照自动比较（或者传入显式基准：`--baseline <old-benchmarkData.json>`）。
 
-Hotspot script behavior:
+热点脚本行为：
 
-- Ensures debug app installed, captures startup `simpleperf` data for `.MainActivity`.
-- Prints top DSOs, top symbols, and key app-path clues (Compose/MainActivity/WebView).
-- Writes raw `perf.data` path for deeper follow-up if needed.
+- 确保已安装调试应用，捕获 `.MainActivity` 的启动 `simpleperf` 数据。
+- 打印顶级 DSO、顶级符号和关键应用路径线索（Compose/MainActivity/WebView）。
+- 如需更深入的跟进，写入原始 `perf.data` 路径。
 
-## Run on a Real Android Phone (USB)
+## 在真实 Android 手机上运行（USB）
 
-1) On phone, enable **Developer options** + **USB debugging**.
-2) Connect by USB and accept the debugging trust prompt on phone.
-3) Verify ADB can see the device:
+1) 在手机上启用**开发者选项** + **USB 调试**。
+2) 通过 USB 连接，并在手机上接受调试信任提示。
+3) 验证 ADB 可以看到设备：
 
 ```bash
 adb devices -l
 ```
 
-4) Install + launch debug build:
+4) 安装+启动调试构建：
 
 ```bash
 pnpm android:install
 pnpm android:run
 ```
 
-If `adb devices -l` shows `unauthorized`, re-plug and accept the trust prompt again.
+如果 `adb devices -l` 显示 `unauthorized`，重新插拔并再次接受信任提示。
 
-### USB-only gateway testing (no LAN dependency)
+### 仅 USB 网关测试（无 LAN 依赖）
 
-Use `adb reverse` so Android `localhost:18789` tunnels to your laptop `localhost:18789`.
+使用 `adb reverse` 使 Android `localhost:18789` 隧道到笔记本 `localhost:18789`。
 
-Terminal A (gateway):
+终端 A（网关）：
 
 ```bash
 pnpm openclaw gateway --port 18789 --verbose
 ```
 
-Terminal B (USB tunnel):
+终端 B（USB 隧道）：
 
 ```bash
 adb reverse tcp:18789 tcp:18789
 ```
 
-Then in app **Connect → Manual**:
+然后在应用**连接 → Manual**中：
 
-- Host: `127.0.0.1`
-- Port: `18789`
-- TLS: off
+- 主机：`127.0.0.1`
+- 端口：`18789`
+- TLS：关闭
 
-## Hot Reload / Fast Iteration
+## 热重载/快速迭代
 
-This app is native Kotlin + Jetpack Compose.
+此应用是原生 Kotlin + Jetpack Compose。
 
-- For Compose UI edits: use Android Studio **Live Edit** on a debug build (works on physical devices; project `minSdk=31` already meets API requirement).
-- For many non-structural code/resource changes: use Android Studio **Apply Changes**.
-- For structural/native/manifest/Gradle changes: do full reinstall (`pnpm android:run`).
-- Canvas web content already supports live reload when loaded from Gateway `__openclaw__/canvas/` (see `docs/platforms/android.md`).
+- Compose UI 编辑：使用 Android Studio **Live Edit** 调试构建（在物理设备上有效；项目 `minSdk=31` 已满足 API 要求）。
+- 许多非结构性代码/资源更改：使用 Android Studio **Apply Changes**。
+- 结构性/原生/清单/Gradle 更改：执行完整重装（`pnpm android:run`）。
+- Canvas 网页内容从网关 `__openclaw__/canvas/` 加载时已支持热重载（参见 `docs/platforms/android.md`）。
 
-## Connect / Pair
+## 连接/配对
 
-1) Start the gateway (on your main machine):
+1) 启动网关（在主电脑上）：
 
 ```bash
 pnpm openclaw gateway --port 18789 --verbose
 ```
 
-2) In the Android app:
+2) 在 Android 应用中：
 
-- Open the **Connect** tab.
-- Use **Setup Code** or **Manual** mode to connect.
+- 打开**连接**标签页。
+- 使用**Setup Code**或**Manual**模式连接。
 
-3) Approve pairing (on the gateway machine):
+3) 批准配对（在网关电脑上）：
 
 ```bash
 openclaw devices list
 openclaw devices approve <requestId>
 ```
 
-More details: `docs/platforms/android.md`.
+更多详情：`docs/platforms/android.md`。
 
-## Permissions
+## 权限
 
-- Discovery:
-  - Android 13+ (`API 33+`): `NEARBY_WIFI_DEVICES`
-  - Android 12 and below: `ACCESS_FINE_LOCATION` (required for NSD scanning)
-- Foreground service notification (Android 13+): `POST_NOTIFICATIONS`
-- Camera:
-  - `CAMERA` for `camera.snap` and `camera.clip`
-  - `RECORD_AUDIO` for `camera.clip` when `includeAudio=true`
+- 发现：
+  - Android 13+（`API 33+`）：`NEARBY_WIFI_DEVICES`
+  - Android 12 及以下：`ACCESS_FINE_LOCATION`（NSD 扫描需要）
+- 前台服务通知（Android 13+）：`POST_NOTIFICATIONS`
+- 相机：
+  - `camera.snap` 和 `camera.clip` 需要 `CAMERA`
+  - `camera.clip` 当 `includeAudio=true` 时需要 `RECORD_AUDIO`
 
-## Google Play Restricted Permissions
+## Google Play 受限权限
 
-As of March 19, 2026, these manifest permissions are the main Google Play policy risk for this app:
+截至 2026 年 3 月 19 日，这些清单权限是此应用主要的 Google Play 策略风险：
 
 - `READ_SMS`
 - `SEND_SMS`
 - `READ_CALL_LOG`
 
-Why these matter:
+重要性说明：
 
-- Google Play treats SMS and Call Log access as highly restricted. In most cases, Play only allows them for the default SMS app, default Phone app, default Assistant, or a narrow policy exception.
-- Review usually involves a `Permissions Declaration Form`, policy justification, and demo video evidence in Play Console.
-- If we want a Play-safe build, these should be the first permissions removed behind a dedicated product flavor / variant.
+- Google Play 将 SMS 和通话记录访问视为高度受限。在大多数情况下，Play 仅允许默认 SMS 应用、默认电话应用、默认助手或狭窄的策略例外。
+- 审核通常涉及 `Permissions Declaration Form`、策略理由和 Play Console 中的演示视频证据。
+- 如果需要 Play 安全构建，这些应该是首个在特定产品版本/变体后面移除的权限。
 
-Current OpenClaw Android implication:
+当前 OpenClaw Android 影响：
 
-- APK / sideload build can keep SMS and Call Log features.
-- Google Play build should exclude SMS send/search and Call Log search unless the product is intentionally positioned and approved as a default-handler exception case.
-- The repo now ships this split as Android product flavors:
-  - `play`: removes `READ_SMS`, `SEND_SMS`, and `READ_CALL_LOG`, and hides SMS / Call Log surfaces in onboarding, settings, and advertised node capabilities.
-  - `thirdParty`: keeps the full permission set and the existing SMS / Call Log functionality.
+- APK / 侧载构建可以保留 SMS 和通话记录功能。
+- Google Play 构建应排除 SMS 发送/搜索和通话记录搜索，除非产品被有意定位并被批准为默认处理程序例外情况。
+- 仓库现在将此拆分作为 Android 产品版本：
+  - `play`：移除 `READ_SMS`、`SEND_SMS` 和 `READ_CALL_LOG`，并在入门引导、设置和广告节点功能中隐藏 SMS/通话记录界面。
+  - `thirdParty`：保留完整权限集和现有 SMS/通话记录功能。
 
-Policy links:
+策略链接：
 
-- [Google Play SMS and Call Log policy](https://support.google.com/googleplay/android-developer/answer/10208820?hl=en)
-- [Google Play sensitive permissions policy hub](https://support.google.com/googleplay/android-developer/answer/16558241)
-- [Android default handlers guide](https://developer.android.com/guide/topics/permissions/default-handlers)
+- [Google Play SMS 和通话记录策略](https://support.google.com/googleplay/android-developer/answer/10208820?hl=en)
+- [Google Play 敏感权限策略中心](https://support.google.com/googleplay/android-developer/answer/16558241)
+- [Android 默认处理程序指南](https://developer.android.com/guide/topics/permissions/default-handlers)
 
-Other Play-restricted surfaces to watch if added later:
+以后添加时需关注的 Play 受限界面：
 
 - `ACCESS_BACKGROUND_LOCATION`
 - `MANAGE_EXTERNAL_STORAGE`
@@ -233,63 +233,63 @@ Other Play-restricted surfaces to watch if added later:
 - `REQUEST_INSTALL_PACKAGES`
 - `AccessibilityService`
 
-Reference links:
+参考链接：
 
-- [Background location policy](https://support.google.com/googleplay/android-developer/answer/9799150)
-- [AccessibilityService policy](https://support.google.com/googleplay/android-developer/answer/10964491?hl=en-GB)
-- [Photo and Video Permissions policy](https://support.google.com/googleplay/android-developer/answer/14594990)
+- [后台位置策略](https://support.google.com/googleplay/android-developer/answer/9799150)
+- [AccessibilityService 策略](https://support.google.com/googleplay/android-developer/answer/10964491?hl=en-GB)
+- [照片和视频权限策略](https://support.google.com/googleplay/android-developer/answer/14594990)
 
-## Integration Capability Test (Preconditioned)
+## 集成能力测试（预条件）
 
-This suite assumes setup is already done manually. It does **not** install/run/pair automatically.
+此套件假设手动完成设置。它**不**自动安装/运行/配对。
 
-Pre-req checklist:
+前置检查清单：
 
-1) Gateway is running and reachable from the Android app.
-2) Android app is connected to that gateway and `openclaw nodes status` shows it as paired + connected.
-3) App stays unlocked and in foreground for the whole run.
-4) Open the app **Screen** tab and keep it active during the run (canvas/A2UI commands require the canvas WebView attached there).
-5) Grant runtime permissions for capabilities you expect to pass (camera/mic/location/notification listener/location, etc.).
-6) No interactive system dialogs should be pending before test start.
-7) Canvas host is enabled and reachable from the device (do not run gateway with `OPENCLAW_SKIP_CANVAS_HOST=1`; startup logs should include `canvas host mounted at .../__openclaw__/`).
-8) Local operator test client pairing is approved. If first run fails with `pairing required`, approve latest pending device pairing request, then rerun:
-9) For A2UI checks, keep the app on **Screen** tab; the node now auto-refreshes canvas capability once on first A2UI reachability failure (TTL-safe retry).
+1) 网关正在运行且 Android 应用可访问。
+2) Android 应用已连接到该网关，`openclaw nodes status` 显示为已配对+已连接。
+3) 整个运行期间应用保持解锁且在前台。
+4) 打开应用的**屏幕**标签页并在运行期间保持活跃（canvas/A2UI 命令需要在 Canvas WebView 附加在那里）。
+5) 为您期望通过的能力授予运行时权限（相机/麦克风/位置/通知监听器/位置等）。
+6) 测试开始前不应有待处理的重叠系统对话框。
+7) Canvas 主机已启用且设备可访问（不要使用 `OPENCLAW_SKIP_CANVAS_HOST=1` 运行网关；启动日志应包含 `canvas host mounted at .../__openclaw__/`）。
+8) 本地操作员测试客户端配对已批准。如果首次运行因 `pairing required` 失败，批准最新的待处理设备配对请求，然后重新运行：
+9) 对于 A2UI 检查，保持应用在**屏幕**标签页；节点在首次 A2UI 可达性失败时会自动刷新 canvas 功能（TTL 安全重试）。
 
 ```bash
 openclaw devices list
 openclaw devices approve --latest
 ```
 
-Run:
+运行：
 
 ```bash
 pnpm android:test:integration
 ```
 
-Optional overrides:
+可选覆盖：
 
-- `OPENCLAW_ANDROID_GATEWAY_URL=ws://...` (default: from your local OpenClaw config)
+- `OPENCLAW_ANDROID_GATEWAY_URL=ws://...`（默认值：来自您的本地 OpenClaw 配置）
 - `OPENCLAW_ANDROID_GATEWAY_TOKEN=...`
 - `OPENCLAW_ANDROID_GATEWAY_PASSWORD=...`
-- `OPENCLAW_ANDROID_NODE_ID=...` or `OPENCLAW_ANDROID_NODE_NAME=...`
+- `OPENCLAW_ANDROID_NODE_ID=...` 或 `OPENCLAW_ANDROID_NODE_NAME=...`
 
-What it does:
+功能：
 
-- Reads `node.describe` command list from the selected Android node.
-- Invokes advertised non-interactive commands.
-- Skips `screen.record` in this suite (Android requires interactive per-invocation screen-capture consent).
-- Asserts command contracts (success or expected deterministic error for safe-invalid calls like `sms.send` and `notifications.actions`).
+- 从所选 Android 节点读取 `node.describe` 命令列表。
+- 调用广告的非交互式命令。
+- 此套件中跳过 `screen.record`（Android 需要交互式每次调用的屏幕捕获同意）。
+- 断言命令契约（成功或安全无效调用的确定性预期错误，如 `sms.send` 和 `notifications.actions`）。
 
-Common failure quick-fixes:
+常见故障快速修复：
 
-- `pairing required` before tests start:
-  - approve pending device pairing (`openclaw devices approve --latest`) and rerun.
-- `A2UI host not reachable` / `A2UI_HOST_NOT_CONFIGURED`:
-  - ensure gateway canvas host is running and reachable, keep the app on the **Screen** tab. The app will auto-refresh canvas capability once; if it still fails, reconnect app and rerun.
-- `NODE_BACKGROUND_UNAVAILABLE: canvas unavailable`:
-  - app is not effectively ready for canvas commands; keep app foregrounded and **Screen** tab active.
+- 测试开始前 `pairing required`：
+  - 批准待处理设备配对（`openclaw devices approve --latest`）并重新运行。
+- `A2UI host not reachable` / `A2UI_HOST_NOT_CONFIGURED`：
+  - 确保网关 canvas 主机正在运行且可访问，保持应用在**屏幕**标签页。应用将自动刷新 canvas 功能一次；如果仍然失败，重新连接应用并重新运行。
+- `NODE_BACKGROUND_UNAVAILABLE: canvas unavailable`：
+  - 应用未有效准备好 canvas 命令；保持应用在前台且**屏幕**标签页活跃。
 
-## Contributions
+## 贡献
 
-This Android app is currently being rebuilt.
-Maintainer: @obviyus. For issues/questions/contributions, please open an issue or reach out on Discord.
+此 Android 应用正在重建中。
+维护者：@obviyus。对于问题/问题/贡献，请提交 issue 或在 Discord 上联系。

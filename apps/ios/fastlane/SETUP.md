@@ -1,17 +1,17 @@
-# fastlane setup (OpenClaw iOS)
+# fastlane 设置（OpenClaw iOS）
 
-Install:
+安装：
 
 ```bash
 brew install fastlane
 ```
 
-Create an App Store Connect API key:
+创建 App Store Connect API 密钥：
 
-- App Store Connect → Users and Access → Keys → App Store Connect API → Generate API Key
-- Download the `.p8`, note the **Issuer ID** and **Key ID**
+- App Store Connect → 用户和访问 → 密钥 → App Store Connect API → 生成 API 密钥
+- 下载 `.p8`，记下 **Issuer ID** 和 **Key ID**
 
-Recommended (macOS): store the private key in Keychain and write non-secret vars:
+推荐（macOS）：将私钥存储在 Keychain 中，编写非密钥变量：
 
 ```bash
 scripts/ios-asc-keychain-setup.sh \
@@ -20,7 +20,7 @@ scripts/ios-asc-keychain-setup.sh \
   --write-env
 ```
 
-This writes these auth variables in `apps/ios/fastlane/.env`:
+这会将这些认证变量写入 `apps/ios/fastlane/.env`：
 
 ```bash
 ASC_KEY_ID=YOUR_KEY_ID
@@ -29,17 +29,17 @@ ASC_KEYCHAIN_SERVICE=openclaw-asc-key
 ASC_KEYCHAIN_ACCOUNT=YOUR_MAC_USERNAME
 ```
 
-Important: `apps/ios/fastlane/.env` is only for Fastlane/App Store Connect auth and optional beta-archive settings. It does **not** configure gateway-side direct APNs push delivery for local iOS builds.
+重要：`apps/ios/fastlane/.env` 仅用于 Fastlane/App Store Connect 认证和可选的 beta 归档设置。它**不**配置网关侧直接 APNs 推送传递以进行本地 iOS 构建。
 
-Optional app targeting variables (helpful if Fastlane cannot auto-resolve app by bundle):
+可选的应用定位变量（如果 Fastlane 无法通过 bundle 自动解析应用）：
 
 ```bash
 ASC_APP_IDENTIFIER=ai.openclaw.client
-# or
+# 或
 ASC_APP_ID=YOUR_APP_STORE_CONNECT_APP_ID
 ```
 
-File-based fallback (CI/non-macOS):
+基于文件的回退（CI/非 macOS）：
 
 ```bash
 ASC_KEY_ID=YOUR_KEY_ID
@@ -47,53 +47,53 @@ ASC_ISSUER_ID=YOUR_ISSUER_ID
 ASC_KEY_PATH=/absolute/path/to/AuthKey_XXXXXXXXXX.p8
 ```
 
-Code signing variable (optional in `.env`):
+代码签名变量（可选，在 `.env` 中）：
 
 ```bash
 IOS_DEVELOPMENT_TEAM=YOUR_TEAM_ID
 ```
 
-Tip: run `scripts/ios-team-id.sh` from repo root to print a Team ID for `.env`. The helper prefers the canonical OpenClaw team (`Y5PE65HELJ`) when present locally; otherwise it prefers the first non-personal team from your Xcode account (then personal team if needed). Fastlane uses this helper automatically if `IOS_DEVELOPMENT_TEAM` is missing.
+提示：从仓库根目录运行 `scripts/ios-team-id.sh` 以打印 Team ID 用于 `.env`。当本地存在时，辅助脚本首选规范 OpenClaw 团队（`Y5PE65HELJ`）；否则首选 Xcode 账户中的第一个非个人团队（然后在需要时使用个人团队）。如果 `IOS_DEVELOPMENT_TEAM` 缺失，Fastlane 自动使用此辅助脚本。
 
-For local/manual iOS builds that stay on direct APNs, configure the gateway host separately with `OPENCLAW_APNS_TEAM_ID`, `OPENCLAW_APNS_KEY_ID`, and either `OPENCLAW_APNS_PRIVATE_KEY_P8` or `OPENCLAW_APNS_PRIVATE_KEY_PATH`. Those gateway runtime env vars are separate from Fastlane's `.env`.
+对于保持在直接 APNs 上的本地/手动 iOS 构建，使用 `OPENCLAW_APNS_TEAM_ID`、`OPENCLAW_APNS_KEY_ID` 以及 `OPENCLAW_APNS_PRIVATE_KEY_P8` 或 `OPENCLAW_APNS_PRIVATE_KEY_PATH` 单独配置网关主机。那些网关运行时环境变量与 Fastlane 的 `.env` 是分开的。
 
-Validate auth:
+验证认证：
 
 ```bash
 cd apps/ios
 fastlane ios auth_check
 ```
 
-ASC auth is only required when:
+ASC 认证仅在以下情况需要：
 
-- uploading to TestFlight
-- auto-resolving the next build number from App Store Connect
+- 上传到 TestFlight
+- 从 App Store Connect 自动解析下一个构建号
 
-If you pass `--build-number` to `pnpm ios:beta:archive`, the local archive path does not need ASC auth.
+如果您向 `pnpm ios:beta:archive` 传递 `--build-number`，则本地归档路径不需要 ASC 认证。
 
-Archive locally without upload:
+本地归档不上传：
 
 ```bash
 pnpm ios:beta:archive
 ```
 
-Upload to TestFlight:
+上传到 TestFlight：
 
 ```bash
 pnpm ios:beta
 ```
 
-Direct Fastlane entry point:
+直接 Fastlane 入口：
 
 ```bash
 cd apps/ios
 fastlane ios beta
 ```
 
-Maintainer recovery path for a fresh clone on the same Mac:
+在同一 Mac 上全新克隆的维护者恢复路径：
 
-1. Reuse the existing Keychain-backed ASC key on that machine.
-2. Restore or recreate `apps/ios/fastlane/.env` so it contains the non-secret variables:
+1. 重用该机器上现有的 Keychain 备份 ASC 密钥。
+2. 恢复或重新创建 `apps/ios/fastlane/.env`，使其包含非密钥变量：
 
 ```bash
 ASC_KEY_ID=YOUR_KEY_ID
@@ -102,48 +102,48 @@ ASC_KEYCHAIN_SERVICE=openclaw-asc-key
 ASC_KEYCHAIN_ACCOUNT=YOUR_MAC_USERNAME
 ```
 
-3. Re-run auth validation:
+3. 重新运行认证验证：
 
 ```bash
 cd apps/ios
 fastlane ios auth_check
 ```
 
-4. If you are starting a brand-new production release train, pin iOS to the current gateway version:
+4. 如果您正在启动全新的生产发布序列，使用以下命令将 iOS 固定到当前网关版本：
 
 ```bash
 pnpm ios:version:pin -- --from-gateway
 ```
 
-5. Set the official/TestFlight relay URL before release:
+5. 发布前设置官方/TestFlight 中继 URL：
 
 ```bash
 export OPENCLAW_PUSH_RELAY_BASE_URL=https://relay.example.com
 ```
 
-6. Upload:
+6. 上传：
 
 ```bash
 pnpm ios:beta
 ```
 
-Quick verification after upload:
+上传后快速验证：
 
-- confirm `apps/ios/build/beta/OpenClaw-<version>.ipa` exists
-- confirm Fastlane prints `Uploaded iOS beta: version=<version> short=<short> build=<build>`
-- remember that TestFlight processing can take a few minutes after the upload succeeds
+- 确认 `apps/ios/build/beta/OpenClaw-<version>.ipa` 存在
+- 确认 Fastlane 打印 `Uploaded iOS beta: version=<version> short=<short> build=<build>`
+- 记住 TestFlight 处理可能在上传成功后需要几分钟时间
 
-Versioning rules:
+版本规则：
 
-- `apps/ios/version.json` is the pinned iOS release version source
-- `apps/ios/CHANGELOG.md` is the iOS-only changelog and release-note source
-- Supported pinned iOS versions use CalVer: `YYYY.M.D`
-- `pnpm ios:version:pin -- --from-gateway` promotes the current root gateway version into the pinned iOS release version
-- Fastlane uses the pinned iOS version only; changing `package.json.version` alone does not change the iOS app version
-- Fastlane sets `CFBundleShortVersionString` to the pinned iOS version, for example `2026.4.10`
-- Fastlane resolves `CFBundleVersion` as the next integer TestFlight build number for that short version
-- Run `pnpm ios:version:sync` after changing `apps/ios/version.json` or `apps/ios/CHANGELOG.md`
-- `pnpm ios:version:check` validates that checked-in iOS version artifacts are in sync
-- The beta flow regenerates `apps/ios/OpenClaw.xcodeproj` from `apps/ios/project.yml` before archiving
-- Local beta signing uses a temporary generated xcconfig and leaves local development signing overrides untouched
-- See `apps/ios/VERSIONING.md` for the detailed workflow
+- `apps/ios/version.json` 是固定的 iOS 发布版本源
+- `apps/ios/CHANGELOG.md` 是 iOS 专用变更日志和发布说明源
+- 支持固定的 iOS 版本使用 CalVer：`YYYY.M.D`
+- `pnpm ios:version:pin -- --from-gateway` 将当前根网关版本提升为固定的 iOS 发布版本
+- Fastlane 仅使用固定的 iOS 版本；仅更改 `package.json.version` 不会改变 iOS 应用版本
+- Fastlane 将 `CFBundleShortVersionString` 设置为固定的 iOS 版本，例如 `2026.4.10`
+- Fastlane 将 `CFBundleVersion` 解析为该短版本的下一个整数 TestFlight 构建号
+- 更改 `apps/ios/version.json` 或 `apps/ios/CHANGELOG.md` 后运行 `pnpm ios:version:sync`
+- `pnpm ios:version:check` 验证签入的 iOS 版本工件是否同步
+- Beta 流程在归档前从 `apps/ios/project.yml` 重新生成 `apps/ios/OpenClaw.xcodeproj`
+- 本地 beta 签名使用临时生成的 xcconfig，并保留本地开发签名覆盖不变
+- 详细工作流程参见 `apps/ios/VERSIONING.md`

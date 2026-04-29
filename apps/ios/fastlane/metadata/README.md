@@ -1,8 +1,8 @@
-# App Store metadata (Fastlane deliver)
+# App Store 元数据（Fastlane deliver）
 
-This directory is used by `fastlane deliver` for App Store Connect text metadata.
+此目录由 `fastlane deliver` 用于 App Store Connect 文本元数据。
 
-## Upload metadata only
+## 仅上传元数据
 
 ```bash
 cd apps/ios
@@ -10,41 +10,41 @@ ASC_APP_ID=YOUR_APP_STORE_CONNECT_APP_ID \
 DELIVER_METADATA=1 fastlane ios metadata
 ```
 
-## Optional: include screenshots
+## 可选：包含截图
 
 ```bash
 cd apps/ios
 DELIVER_METADATA=1 DELIVER_SCREENSHOTS=1 fastlane ios metadata
 ```
 
-## Auth
+## 认证
 
-The `ios metadata` lane uses App Store Connect API key auth from `apps/ios/fastlane/.env`:
+`ios metadata` 通道使用来自 `apps/ios/fastlane/.env` 的 App Store Connect API 密钥认证：
 
-- Keychain-backed (recommended on macOS):
+- Keychain 备份（macOS 推荐）：
   - `ASC_KEY_ID`
   - `ASC_ISSUER_ID`
-  - `ASC_KEYCHAIN_SERVICE` (default: `openclaw-asc-key`)
-  - `ASC_KEYCHAIN_ACCOUNT` (default: current user)
-- File/path fallback:
+  - `ASC_KEYCHAIN_SERVICE`（默认：`openclaw-asc-key`）
+  - `ASC_KEYCHAIN_ACCOUNT`（默认：当前用户）
+- 文件/路径回退：
   - `ASC_KEY_ID`
   - `ASC_ISSUER_ID`
   - `ASC_KEY_PATH`
 
-Or set `APP_STORE_CONNECT_API_KEY_PATH`.
+或设置 `APP_STORE_CONNECT_API_KEY_PATH`。
 
-## Notes
+## 说明
 
-- Locale files live under `metadata/en-US/`.
-- `release_notes.txt` is generated from `apps/ios/CHANGELOG.md`; after changelog updates, run `pnpm ios:version:sync`.
-- Release notes resolve from `## <pinned iOS version>` first, then fall back to `## Unreleased` while a TestFlight train is still in progress.
-- When starting a new production release train, pin the iOS version first with `pnpm ios:version:pin -- --from-gateway`.
-- `privacy_url.txt` is set to `https://openclaw.ai/privacy`.
-- If app lookup fails in `deliver`, set one of:
-  - `ASC_APP_IDENTIFIER` (bundle ID)
-  - `ASC_APP_ID` (numeric App Store Connect app ID, e.g. from `/apps/<id>/...` URL)
-- For first app versions, include review contact files under `metadata/review_information/`:
+- 区域文件位于 `metadata/en-US/` 下。
+- `release_notes.txt` 由 `apps/ios/CHANGELOG.md` 生成；更新变更日志后，运行 `pnpm ios:version:sync`。
+- 发布说明首先从 `## <固定的 iOS 版本>` 解析，然后在 TestFlight 序列仍在进行时回退到 `## Unreleased`。
+- 启动新的生产发布序列时，先使用 `pnpm ios:version:pin -- --from-gateway` 固定 iOS 版本。
+- `privacy_url.txt` 设置为 `https://openclaw.ai/privacy`。
+- 如果 `deliver` 中的应用查找失败，设置以下之一：
+  - `ASC_APP_IDENTIFIER`（bundle ID）
+  - `ASC_APP_ID`（数字 App Store Connect 应用 ID，例如来自 `/apps/<id>/...` URL）
+- 对于首个应用版本，在 `metadata/review_information/` 下包含审核联系文件：
   - `first_name.txt`
   - `last_name.txt`
   - `email_address.txt`
-  - `phone_number.txt` (E.164-ish, e.g. `+1 415 555 0100`)
+  - `phone_number.txt`（E.164 格式，例如 `+1 415 555 0100`）

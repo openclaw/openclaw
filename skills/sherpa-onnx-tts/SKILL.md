@@ -59,20 +59,20 @@ metadata:
 
 # sherpa-onnx-tts
 
-Local TTS using the sherpa-onnx offline CLI.
+使用 sherpa-onnx 离线 CLI 进行本地 TTS。
 
-## Install
+## 安装
 
-1. Download the runtime for your OS (extracts into `$OPENCLAW_STATE_DIR/tools/sherpa-onnx-tts/runtime`, default `~/.openclaw/tools/sherpa-onnx-tts/runtime`)
-2. Download a voice model (extracts into `$OPENCLAW_STATE_DIR/tools/sherpa-onnx-tts/models`, default `~/.openclaw/tools/sherpa-onnx-tts/models`)
+1. 为您的操作系统下载运行时（解压到 `$OPENCLAW_STATE_DIR/tools/sherpa-onnx-tts/runtime`，默认 `~/.openclaw/tools/sherpa-onnx-tts/runtime`）
+2. 下载语音模型（解压到 `$OPENCLAW_STATE_DIR/tools/sherpa-onnx-tts/models`，默认 `~/.openclaw/tools/sherpa-onnx-tts/models`）
 
-Resolve the active state directory first:
+首先解析活动状态目录：
 
 ```bash
 STATE_DIR="${OPENCLAW_STATE_DIR:-$HOME/.openclaw}"
 ```
 
-Then write those resolved paths into the active OpenClaw config file (`$OPENCLAW_CONFIG_PATH`, default `~/.openclaw/openclaw.json`):
+然后将这些解析后的路径写入活动 OpenClaw 配置文件（`$OPENCLAW_CONFIG_PATH`，默认 `~/.openclaw/openclaw.json`）：
 
 ```json5
 {
@@ -89,21 +89,21 @@ Then write those resolved paths into the active OpenClaw config file (`$OPENCLAW
 }
 ```
 
-The wrapper lives in this skill folder. Run it directly, or add the wrapper to PATH:
+包装脚本位于此 skill 文件夹中。直接运行它，或将包装脚本添加到 PATH：
 
 ```bash
 export PATH="{baseDir}/bin:$PATH"
 ```
 
-## Usage
+## 使用方法
 
 ```bash
 {baseDir}/bin/sherpa-onnx-tts -o ./tts.wav "Hello from local TTS."
 ```
 
-Notes:
+注意事项：
 
-- Pick a different model from the sherpa-onnx `tts-models` release if you want another voice.
-- If the model dir has multiple `.onnx` files, set `SHERPA_ONNX_MODEL_FILE` or pass `--model-file`.
-- You can also pass `--tokens-file` or `--data-dir` to override the defaults.
-- Windows: run `node {baseDir}\\bin\\sherpa-onnx-tts -o tts.wav "Hello from local TTS."`
+- 如果您想要其他声音，从 sherpa-onnx `tts-models` release 中选择不同的模型。
+- 如果模型目录有多个 `.onnx` 文件，设置 `SHERPA_ONNX_MODEL_FILE` 或传递 `--model-file`。
+- 您也可以传递 `--tokens-file` 或 `--data-dir` 来覆盖默认值。
+- Windows：运行 `node {baseDir}\\bin\\sherpa-onnx-tts -o tts.wav "Hello from local TTS."`

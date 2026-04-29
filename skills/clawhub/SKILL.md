@@ -22,33 +22,33 @@ metadata:
 
 # ClawHub CLI
 
-Install
+安装
 
 ```bash
 npm i -g clawhub
 ```
 
-Auth (publish)
+认证（发布）
 
 ```bash
 clawhub login
 clawhub whoami
 ```
 
-Search
+搜索
 
 ```bash
 clawhub search "postgres backups"
 ```
 
-Install
+安装
 
 ```bash
 clawhub install my-skill
 clawhub install my-skill --version 1.2.3
 ```
 
-Update (hash-based match + upgrade)
+更新（基于哈希的匹配 + 升级）
 
 ```bash
 clawhub update my-skill
@@ -58,20 +58,20 @@ clawhub update my-skill --force
 clawhub update --all --no-input --force
 ```
 
-List
+列表
 
 ```bash
 clawhub list
 ```
 
-Publish
+发布
 
 ```bash
 clawhub publish ./my-skill --slug my-skill --name "My Skill" --version 1.2.0 --changelog "Fixes + docs"
 ```
 
-Notes
+注意事项
 
-- Default registry: https://clawhub.com (override with CLAWHUB_REGISTRY or --registry)
-- Default workdir: cwd (falls back to OpenClaw workspace); install dir: ./skills (override with --workdir / --dir / CLAWHUB_WORKDIR)
-- Update command hashes local files, resolves matching version, and upgrades to latest unless --version is set
+- 默认注册表：https://clawhub.com（使用 CLAWHUB_REGISTRY 或 --registry 覆盖）
+- 默认工作目录：cwd（回退到 OpenClaw workspace）；安装目录：./skills（使用 --workdir / --dir / CLAWHUB_WORKDIR 覆盖）
+- Update 命令对本地文件进行哈希解析，解析匹配版本，并升级到最新版本，除非设置了 --version

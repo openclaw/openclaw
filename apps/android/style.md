@@ -1,108 +1,108 @@
-# OpenClaw Android UI Style Guide
+# OpenClaw Android UI 风格指南
 
-Scope: all native Android UI in `apps/android` (Jetpack Compose).
-Goal: one coherent visual system across onboarding, settings, and future screens.
+范围：`apps/android` 中的所有原生 Android UI（Jetpack Compose）。
+目标：在入门引导、设置和未来屏幕中建立统一的视觉系统。
 
-## 1. Design Direction
+## 1. 设计方向
 
-- Clean, quiet surfaces.
-- Strong readability first.
-- One clear primary action per screen state.
-- Progressive disclosure for advanced controls.
-- Deterministic flows: validate early, fail clearly.
+- 简洁、安静的画面。
+- 优先强调可读性。
+- 每个屏幕状态一个主要操作。
+- 高级控制采用渐进式展示。
+- 确定性的流程：尽早验证，清晰失败。
 
-## 2. Style Baseline
+## 2. 风格基准
 
-The onboarding flow defines the current visual baseline.
-New screens should match that language unless there is a strong product reason not to.
+入门引导流程定义了当前的视觉基准。
+新屏幕应匹配该语言，除非有充分的理由不这样做。
 
-Baseline traits:
+基准特征：
 
-- Light neutral background with subtle depth.
-- Clear blue accent for active/primary states.
-- Strong border hierarchy for structure.
-- Medium/semibold typography (no thin text).
-- Divider-and-spacing layout over heavy card nesting.
+- 浅色中性背景，带微妙深度。
+- 清晰蓝色强调活跃/主要状态。
+- 强边框层次结构。
+- 中等/半粗字体（不使用细体）。
+- 分隔线+间距布局，而非嵌套卡片。
 
-## 3. Core Tokens
+## 3. 核心设计令牌
 
-Use these as shared design tokens for new Compose UI.
+用于新 Compose UI 的共享设计令牌：
 
-- Background gradient: `#FFFFFF`, `#F7F8FA`, `#EFF1F5`
-- Surface: `#F6F7FA`
-- Border: `#E5E7EC`
-- Border strong: `#D6DAE2`
-- Text primary: `#17181C`
-- Text secondary: `#4D5563`
-- Text tertiary: `#8A92A2`
-- Accent primary: `#1D5DD8`
-- Accent soft: `#ECF3FF`
-- Success: `#2F8C5A`
-- Warning: `#C8841A`
+- 背景渐变：`#FFFFFF`、`#F7F8FA`、`#EFF1F5`
+- 表面：`#F6F7FA`
+- 边框：`#E5E7EC`
+- 强边框：`#D6DAE2`
+- 主要文字：`#17181C`
+- 次要文字：`#4D5563`
+- 三级文字：`#8A92A2`
+- 主要强调色：`#1D5DD8`
+- 柔和强调色：`#ECF3FF`
+- 成功：`#2F8C5A`
+- 警告：`#C8841A`
 
-Rule: do not introduce random per-screen colors when an existing token fits.
+规则：当现有令牌适用时，不要引入随机的屏幕级颜色。
 
-## 4. Typography
+## 4. 字体排版
 
-Primary type family: Manrope (`400/500/600/700`).
+主要字体家族：Manrope（`400/500/600/700`）。
 
-Recommended scale:
+推荐比例：
 
-- Display: `34sp / 40sp`, bold
-- Section title: `24sp / 30sp`, semibold
-- Headline/action: `16sp / 22sp`, semibold
-- Body: `15sp / 22sp`, medium
-- Callout/helper: `14sp / 20sp`, medium
-- Caption 1: `12sp / 16sp`, medium
-- Caption 2: `11sp / 14sp`, medium
+- 展示：34sp / 40sp，粗体
+- 章节标题：24sp / 30sp，半粗体
+- 标题/操作：16sp / 22sp，半粗体
+- 正文：15sp / 22sp，中等
+- 标注/辅助：14sp / 20sp，中等
+- 说明 1：12sp / 16sp，中等
+- 说明 2：11sp / 14sp，中等
 
-Use monospace only for commands, setup codes, endpoint-like values.
-Hard rule: avoid ultra-thin weights on light backgrounds.
+仅在命令、安装代码、类端点值时使用等宽字体。
+硬性规则：浅色背景上避免极细字重。
 
-## 5. Layout And Spacing
+## 5. 布局与间距
 
-- Respect safe drawing insets.
-- Keep content hierarchy mostly via spacing + dividers.
-- Prefer vertical rhythm from `8/10/12/14/20dp`.
-- Use pinned bottom actions for multi-step or high-importance flows.
-- Avoid unnecessary container nesting.
+- 遵守安全绘图边距。
+- 保持内容层次主要通过间距+分隔线。
+- 垂直节奏优先使用 `8/10/12/14/20dp`。
+- 多步骤或重要流程使用固定底部操作。
+- 避免不必要的容器嵌套。
 
-## 6. Buttons And Actions
+## 6. 按钮与操作
 
-- Primary action: filled accent button, visually dominant.
-- Secondary action: lower emphasis (outlined/text/surface button).
-- Icon-only buttons must remain legible and >=44dp target.
-- Back buttons in action rows use rounded-square shape, not circular by default.
+- 主要操作：填充强调色按钮，视觉突出。
+- 次要操作：低强调（轮廓/文本/表面按钮）。
+- 仅图标按钮必须清晰可见，目标区域 >=44dp。
+- 操作行中的返回按钮默认使用圆角方形，而非圆形。
 
-## 7. Inputs And Forms
+## 7. 输入与表单
 
-- Always show explicit label or clear context title.
-- Keep helper copy short and actionable.
-- Validate before advancing steps.
-- Prefer immediate inline errors over hidden failure states.
-- Keep optional advanced fields explicit (`Manual`, `Advanced`, etc.).
+- 始终显示明确标签或清晰上下文标题。
+- 辅助文字简短且可操作。
+- 推进步骤前验证。
+- 优先使用即时内联错误而非隐藏失败状态。
+- 保持可选的高级字段明确（`Manual`、`Advanced` 等）。
 
-## 8. Progress And Multi-Step Flows
+## 8. 进度与多步骤流程
 
-- Use clear step count (`Step X of N`).
-- Use labeled progress rail/indicator when steps are discrete.
-- Keep navigation predictable: back/next behavior should never surprise.
+- 使用明确的步骤计数（`步骤 X / N`）。
+- 当步骤离散时使用带标签的进度轨道/指示器。
+- 保持导航可预测：返回/下一步行为不应令人意外。
 
-## 9. Accessibility
+## 9. 无障碍访问
 
-- Minimum practical touch target: `44dp`.
-- Do not rely on color alone for status.
-- Preserve high contrast for all text tiers.
-- Add meaningful `contentDescription` for icon-only controls.
+- 最小实际触摸目标：44dp。
+- 不单独依赖颜色表示状态。
+- 为所有文字层级保持高对比度。
+- 为仅图标控件添加有意义的 `contentDescription`。
 
-## 10. Architecture Rules
+## 10. 架构规则
 
-- Durable UI state in `MainViewModel`.
-- Composables: state in, callbacks out.
-- No business/network logic in composables.
-- Keep side effects explicit (`LaunchedEffect`, activity result APIs).
+- 持久化 UI 状态在 `MainViewModel` 中。
+- 可组合组件：状态入，回调出。
+- 可组合组件中无业务/网络逻辑。
+- 保持副作用明确（`LaunchedEffect`、活动结果 API）。
 
-## 11. Source Of Truth
+## 11. 真相来源
 
 - `app/src/main/java/ai/openclaw/android/ui/OpenClawTheme.kt`
 - `app/src/main/java/ai/openclaw/android/ui/OnboardingFlow.kt`
@@ -110,4 +110,4 @@ Hard rule: avoid ultra-thin weights on light backgrounds.
 - `app/src/main/java/ai/openclaw/android/ui/SettingsSheet.kt`
 - `app/src/main/java/ai/openclaw/android/MainViewModel.kt`
 
-If style and implementation diverge, update both in the same change.
+如果风格与实现不一致，在同一次更改中更新两者。

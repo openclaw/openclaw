@@ -4,28 +4,28 @@ description: Example TaskFlow pattern for inbox triage, intent routing, waiting 
 metadata: { "openclaw": { "emoji": "📥" } }
 ---
 
-# TaskFlow inbox triage
+# TaskFlow 收件箱分类
 
-This is a concrete example of how to think about TaskFlow without turning the core runtime into a DSL.
+这是一个关于如何思考 TaskFlow 但不将核心运行时变成 DSL 的具体示例。
 
-## Goal
+## 目标
 
-Triage inbox items with one owner flow:
+用一个所有者流程对收件箱项目进行分类：
 
-- business → post to Slack and wait for reply
-- personal → notify the owner now
-- everything else → keep for end-of-day summary
+- 业务 → 发布到 Slack 并等待回复
+- 个人 → 立即通知所有者
+- 其他所有 → 保留以供日终摘要
 
-## Pattern
+## 模式
 
-1. Create one flow for the inbox batch.
-2. Run one detached task to classify new items.
-3. Persist the routing state in `stateJson`.
-4. Move to `waiting` only when an outside reply is required.
-5. Resume the flow when classification or human input completes.
-6. Finish when the batch has been routed.
+1. 为收件箱批次创建一个流程。
+2. 运行一个分离的任务来分类新项目。
+3. 将路由状态持久化在 `stateJson` 中。
+4. 仅在需要外部回复时移至 `waiting`。
+5. 当分类或人工输入完成时恢复流程。
+6. 当批次已被路由时完成。
 
-## Suggested `stateJson` shape
+## 建议的 `stateJson` 形状
 
 ```json
 {
@@ -35,7 +35,7 @@ Triage inbox items with one owner flow:
 }
 ```
 
-Suggested `waitJson` when blocked on Slack:
+在 Slack 上被阻止时的建议 `waitJson`：
 
 ```json
 {
@@ -45,7 +45,7 @@ Suggested `waitJson` when blocked on Slack:
 }
 ```
 
-## Minimal runtime calls
+## 最小运行时调用
 
 ```ts
 const taskFlow = api.runtime.tasks.flow.fromToolContext(ctx);
@@ -114,6 +114,6 @@ taskFlow.finish({
 });
 ```
 
-## Related example
+## 相关示例
 
 - `skills/taskflow/examples/inbox-triage.lobster`

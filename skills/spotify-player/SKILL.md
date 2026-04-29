@@ -32,33 +32,33 @@ metadata:
 
 # spogo / spotify_player
 
-Use `spogo` **(preferred)** for Spotify playback/search. Fall back to `spotify_player` if needed.
+使用 `spogo` **（首选）** 进行 Spotify 播放/搜索。如有需要回退到 `spotify_player`。
 
-Requirements
+要求
 
-- Spotify Premium account.
-- Either `spogo` or `spotify_player` installed.
+- Spotify Premium 账户。
+- 已安装 `spogo` 或 `spotify_player`。
 
-spogo setup
+spogo 设置
 
-- Import cookies: `spogo auth import --browser chrome`
+- 导入 cookies：`spogo auth import --browser chrome`
 
-Common CLI commands
+常用 CLI 命令
 
-- Search: `spogo search track "query"`
-- Playback: `spogo play|pause|next|prev`
-- Devices: `spogo device list`, `spogo device set "<name|id>"`
-- Status: `spogo status`
+- 搜索：`spogo search track "query"`
+- 播放：`spogo play|pause|next|prev`
+- 设备：`spogo device list`、`spogo device set "<name|id>"`
+- 状态：`spogo status`
 
-spotify_player commands (fallback)
+spotify_player 命令（回退）
 
-- Search: `spotify_player search "query"`
-- Playback: `spotify_player playback play|pause|next|previous`
-- Connect device: `spotify_player connect`
-- Like track: `spotify_player like`
+- 搜索：`spotify_player search "query"`
+- 播放：`spotify_player playback play|pause|next|previous`
+- 连接设备：`spotify_player connect`
+- 喜欢曲目：`spotify_player like`
 
-Notes
+提示
 
-- Config folder: `~/.config/spotify-player` (e.g., `app.toml`).
-- For Spotify Connect integration, set a user `client_id` in config.
-- TUI shortcuts are available via `?` in the app.
+- 配置文件夹：`~/.config/spotify-player`（例如 `app.toml`）。
+- 对于 Spotify Connect 集成，在配置中设置用户 `client_id`。
+- TUI 快捷方式可通过应用中的 `?` 获取。

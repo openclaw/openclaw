@@ -6,57 +6,57 @@ metadata: { "openclaw": { "emoji": "🪝" } }
 
 # TaskFlow
 
-Use TaskFlow when a job needs to outlive one prompt or one detached run, but you still want one owner session, one return context, and one place to inspect or resume the work.
+当一个任务需要超越一个提示或一次分离运行而存在时使用 TaskFlow，但您仍然希望有一个所有者会话、一个返回上下文和一个检查或恢复工作的地方。
 
-## When to use it
+## 何时使用
 
-- Multi-step background work with one owner
-- Work that waits on detached ACP or subagent tasks
-- Jobs that may need to emit one clear update back to the owner
-- Jobs that need small persisted state between steps
-- Plugin or tool work that must survive restarts and revision conflicts cleanly
+- 有一个所有者的多步骤后台工作
+- 等待分离的 ACP 或子代理任务的工作
+- 可能需要向所有者发出一个清晰更新的任务
+- 需要在步骤之间保持小持久化状态的任务
+- 必须干净地存活重启和修订冲突的插件或工具工作
 
-## What TaskFlow owns
+## TaskFlow 拥有的内容
 
-- flow identity
-- owner session and requester origin
-- `currentStep`, `stateJson`, and `waitJson`
-- linked child tasks and their parent flow id
-- finish, fail, cancel, waiting, and blocked state
-- revision tracking for conflict-safe mutations
+- flow 身份
+- 所有者会话和请求者来源
+- `currentStep`、`stateJson` 和 `waitJson`
+- 链接的子任务及其父 flow id
+- 完成、失败、取消、等待和阻止状态
+- 冲突安全变更的修订跟踪
 
-It does **not** own branching or business logic. Put that in Lobster, acpx, or the calling code.
+它**不**拥有分支或业务逻辑。将那些放在 Lobster、acpx 或调用代码中。
 
-## Current runtime shape
+## 当前运行时形状
 
-Canonical plugin/runtime entrypoint:
+规范的插件/运行时入口点：
 
 - `api.runtime.tasks.flow`
-- `api.runtime.taskFlow` still exists as an alias, but `api.runtime.tasks.flow` is the canonical shape
+- `api.runtime.taskFlow` 作为别名仍然存在，但 `api.runtime.tasks.flow` 是规范形状
 
-Binding:
+绑定：
 
-- `api.runtime.tasks.flow.fromToolContext(ctx)` when you already have trusted tool context with `sessionKey`
-- `api.runtime.tasks.flow.bindSession({ sessionKey, requesterOrigin })` when your binding layer already resolved the session and delivery context
+- `api.runtime.tasks.flow.fromToolContext(ctx)` 当您已经拥有带有 `sessionKey` 的可信工具上下文时
+- `api.runtime.tasks.flow.bindSession({ sessionKey, requesterOrigin })` 当您的绑定层已经解析了会话和传递上下文时
 
-Managed-flow lifecycle:
+托管流程生命周期：
 
 1. `createManaged(...)`
 2. `runTask(...)`
-3. `setWaiting(...)` when waiting on a person or an external system
-4. `resume(...)` when work can continue
-5. `finish(...)` or `fail(...)`
-6. `requestCancel(...)` or `cancel(...)` when the whole job should stop
+3. `setWaiting(...)` 等待人员或外部系统时
+4. `resume(...)` 工作可以继续时
+5. `finish(...)` 或 `fail(...)`
+6. `requestCancel(...)` 或 `cancel(...)` 当整个作业应该停止时
 
-## Design constraints
+## 设计约束
 
-- Use **managed** TaskFlows when your code owns the orchestration.
-- One-task **mirrored** flows are created by core runtime for detached ACP/subagent work; this skill is mainly about managed flows.
-- Treat `stateJson` as the persisted state bag. There is no separate `setFlowOutput` or `appendFlowOutput` API.
-- Every mutating method after creation is revision-checked. Carry forward the latest `flow.revision` after each successful mutation.
-- `runTask(...)` links the child task to the flow. Use it instead of manually creating detached tasks when you want parent orchestration.
+- 当您的代码拥有编排时使用**托管** TaskFlows。
+- 单任务**镜像**流程由核心运行时为分离的 ACP/子代理工作创建；此 skill 主要关于托管流程。
+- 将 `stateJson` 视为持久化状态袋。没有单独的 `setFlowOutput` 或 `appendFlowOutput` API。
+- 创建后的每个变更方法都经过修订检查。在每次成功变更后携带最新的 `flow.revision`。
+- `runTask(...)` 将子任务链接到流程。当您想要父编排时使用它，而不是手动创建分离任务。
 
-## Example shape
+## 示例形状
 
 ```ts
 const taskFlow = api.runtime.tasks.flow.fromToolContext(ctx);
@@ -126,24 +126,24 @@ taskFlow.finish({
 });
 ```
 
-## Keep conditionals above the runtime
+## 在运行时上方保持条件
 
-Use the flow runtime for state and task linkage. Keep decisions in the authoring layer:
+使用 flow 运行时进行状态和任务链接。将决策保持在创作层：
 
-- `business` → post to Slack and wait
-- `personal` → notify the owner now
-- `later` → append to an end-of-day summary bucket
+- `business` → 发布到 Slack 并等待
+- `personal` → 立即通知所有者
+- `later` → 附加到日终摘要桶
 
-## Operational pattern
+## 操作模式
 
-- Store only the minimum state needed to resume.
-- Put human-readable wait reasons in `blockedSummary` or structured wait metadata in `waitJson`.
-- Use `getTaskSummary(flowId)` when the orchestrator needs a compact health view of child work.
-- Use `requestCancel(...)` when a caller wants the flow to stop scheduling immediately.
-- Use `cancel(...)` when you also want active linked child tasks cancelled.
+- 仅存储恢复所需的最少状态。
+- 将人类可读的等待原因放在 `blockedSummary` 或结构化元数据放在 `waitJson` 中。
+- 当编排器需要子工作的紧凑健康视图时使用 `getTaskSummary(flowId)`。
+- 当调用者希望 flow 立即停止调度时使用 `requestCancel(...)`。
+- 当您也想取消活动链接的子任务时使用 `cancel(...)`。
 
-## Examples
+## 示例
 
-- See `skills/taskflow/examples/inbox-triage.lobster`
-- See `skills/taskflow/examples/pr-intake.lobster`
-- See `skills/taskflow-inbox-triage/SKILL.md` for a concrete routing pattern
+- 参见 `skills/taskflow/examples/inbox-triage.lobster`
+- 参见 `skills/taskflow/examples/pr-intake.lobster`
+- 参见 `skills/taskflow-inbox-triage/SKILL.md` 了解具体路由模式

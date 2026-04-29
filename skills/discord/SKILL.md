@@ -5,31 +5,31 @@ metadata: { "openclaw": { "emoji": "🎮", "requires": { "config": ["channels.di
 allowed-tools: ["message"]
 ---
 
-# Discord (Via `message`)
+# Discord（通过 `message`）
 
-Use the `message` tool. No provider-specific `discord` tool exposed to the agent.
+使用 `message` 工具。没有向 agent 公开的特定于提供商的 `discord` 工具。
 
-## Musts
+## 必须遵守
 
-- Always: `channel: "discord"`.
-- Respect gating: `channels.discord.actions.*` (some default off: `roles`, `moderation`, `presence`, `channels`).
-- Prefer explicit ids: `guildId`, `channelId`, `messageId`, `userId`.
-- Multi-account: optional `accountId`.
+- 始终：`channel: "discord"`。
+- 尊重门控：`channels.discord.actions.*`（一些默认关闭：`roles`、`moderation`、`presence`、`channels`）。
+- 优先使用显式 id：`guildId`、`channelId`、`messageId`、`userId`。
+- 多账户：可选 `accountId`。
 
-## Guidelines
+## 指南
 
-- Avoid Markdown tables in outbound Discord messages.
-- Mention users as `<@USER_ID>`.
-- Prefer Discord components v2 (`components`) for rich UI; use legacy `embeds` only when you must.
+- 避免在出站 Discord 消息中使用 Markdown 表格。
+- 提及其他用户为 `<@USER_ID>`。
+- 优先使用 Discord components v2（`components`）实现富 UI；仅在必须时使用旧版 `embeds`。
 
-## Targets
+## 目标
 
-- Send-like actions: `to: "channel:<id>"` or `to: "user:<id>"`.
-- Message-specific actions: `channelId: "<id>"` (or `to`) + `messageId: "<id>"`.
+- 发送类操作：`to: "channel:<id>"` 或 `to: "user:<id>"`。
+- 特定消息操作：`channelId: "<id>"`（或 `to`）+ `messageId: "<id>"`。
 
-## Common Actions (Examples)
+## 常用操作（示例）
 
-Send message:
+发送消息：
 
 ```json
 {
@@ -41,7 +41,7 @@ Send message:
 }
 ```
 
-Send with media:
+带媒体发送：
 
 ```json
 {
@@ -53,9 +53,9 @@ Send with media:
 }
 ```
 
-- Optional `silent: true` to suppress Discord notifications.
+- 可选 `silent: true` 以禁止 Discord 通知。
 
-Send with components v2 (recommended for rich UI):
+带 components v2 发送（推荐用于富 UI）：
 
 ```json
 {
@@ -67,10 +67,10 @@ Send with components v2 (recommended for rich UI):
 }
 ```
 
-- `components` expects Carbon component instances (Container, TextDisplay, etc.) from JS/TS integrations.
-- Do not combine `components` with `embeds` (Discord rejects v2 + embeds).
+- `components` 期望来自 JS/TS 集成的 Carbon 组件实例（Container、TextDisplay 等）。
+- 不要将 `components` 与 `embeds` 组合使用（Discord 拒绝 v2 + embeds）。
 
-Legacy embeds (not recommended):
+旧版 embeds（不推荐）：
 
 ```json
 {
@@ -82,9 +82,9 @@ Legacy embeds (not recommended):
 }
 ```
 
-- `embeds` are ignored when components v2 are present.
+- 当存在 components v2 时，`embeds` 被忽略。
 
-React:
+反应：
 
 ```json
 {
@@ -96,7 +96,7 @@ React:
 }
 ```
 
-Read:
+读取：
 
 ```json
 {
@@ -107,7 +107,7 @@ Read:
 }
 ```
 
-Edit / delete:
+编辑 / 删除：
 
 ```json
 {
@@ -128,7 +128,7 @@ Edit / delete:
 }
 ```
 
-Poll:
+投票：
 
 ```json
 {
@@ -142,7 +142,7 @@ Poll:
 }
 ```
 
-Pins:
+固定：
 
 ```json
 {
@@ -153,7 +153,7 @@ Pins:
 }
 ```
 
-Threads:
+线程：
 
 ```json
 {
@@ -165,7 +165,7 @@ Threads:
 }
 ```
 
-Search:
+搜索：
 
 ```json
 {
@@ -178,7 +178,7 @@ Search:
 }
 ```
 
-Presence (often gated):
+在线状态（经常有门控）：
 
 ```json
 {
@@ -190,8 +190,8 @@ Presence (often gated):
 }
 ```
 
-## Writing Style (Discord)
+## 写作风格（Discord）
 
-- Short, conversational, low ceremony.
-- No markdown tables.
-- Mention users as `<@USER_ID>`.
+- 简短、对话式、低仪式感。
+- 不使用 markdown 表格。
+- 提及其他用户为 `<@USER_ID>`。

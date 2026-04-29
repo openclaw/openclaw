@@ -5,38 +5,38 @@ description: Diagnose OpenClaw Android, iOS, or macOS node pairing, QR/setup cod
 
 # Node Connect
 
-Goal: find the one real route from node -> gateway, verify OpenClaw is advertising that route, then fix pairing/auth.
+目标：找到从 node -> gateway 的真实路由，验证 OpenClaw 正在广告该路由，然后修复配对/认证。
 
-## Topology first
+## 首先了解拓扑
 
-Decide which case you are in before proposing fixes:
+在提出修复之前决定您处于哪种情况：
 
-- same machine / emulator / USB tunnel
-- same LAN / local Wi-Fi
-- same Tailscale tailnet
-- public URL / reverse proxy
+- 同一机器 / 模拟器 / USB 隧道
+- 同一 LAN / 本地 Wi-Fi
+- 同一 Tailscale tailnet
+- 公共 URL / 反向代理
 
-Do not mix them.
+不要混合它们。
 
-- Local Wi-Fi problem: do not switch to Tailscale unless remote access is actually needed.
-- VPS / remote gateway problem: do not keep debugging `localhost` or LAN IPs.
+- 本地 Wi-Fi 问题：如果远程访问不是真正需要，不要切换到 Tailscale。
+- VPS / 远程网关问题：不要继续调试 `localhost` 或 LAN IP。
 
-## If ambiguous, ask first
+## 如果不清楚，先询问
 
-If the setup is unclear or the failure report is vague, ask short clarifying questions before diagnosing.
+如果设置不清楚或失败报告含糊，在诊断之前先问简短的澄清问题。
 
-Ask for:
+询问：
 
-- which route they intend: same machine, same LAN, Tailscale tailnet, or public URL
-- whether they used QR/setup code or manual host/port
-- the exact app text/status/error, quoted exactly if possible
-- whether `openclaw devices list` shows a pending pairing request
+- 他们打算使用哪个路由：同一机器、同一 LAN、Tailscale tailnet 还是公共 URL
+- 他们使用的是 QR/设置代码还是手动主机/端口
+- 确切的 app 文本/状态/错误，如果可能的话逐字引用
+- `openclaw devices list` 是否显示待处理的配对请求
 
-Do not guess from `can't connect`.
+不要从 `can't connect` 猜测。
 
-## Canonical checks
+## 规范检查
 
-Prefer `openclaw qr --json`. It uses the same setup-code payload Android scans.
+优先使用 `openclaw qr --json`。它使用 Android 扫描的相同设置代码 payload。
 
 ```bash
 openclaw config get gateway.mode
@@ -51,92 +51,92 @@ openclaw devices list
 openclaw nodes status
 ```
 
-If this OpenClaw instance is pointed at a remote gateway, also run:
+如果此 OpenClaw 实例指向远程网关，也要运行：
 
 ```bash
 openclaw qr --remote --json
 ```
 
-If Tailscale is part of the story:
+如果 Tailscale 是问题的一部分：
 
 ```bash
 tailscale status --json
 ```
 
-## Read the result, not guesses
+## 读取结果，而不是猜测
 
-`openclaw qr --json` success means:
+`openclaw qr --json` 成功意味着：
 
-- `gatewayUrl`: this is the actual endpoint the app should use.
-- `urlSource`: this tells you which config path won.
+- `gatewayUrl`：这是 app 应该使用的实际端点。
+- `urlSource`：这告诉您哪个配置路径获胜。
 
-Common good sources:
+常见良好来源：
 
-- `gateway.bind=lan`: same Wi-Fi / LAN only
-- `gateway.bind=tailnet`: direct tailnet access
-- `gateway.tailscale.mode=serve` or `gateway.tailscale.mode=funnel`: Tailscale route
-- `plugins.entries.device-pair.config.publicUrl`: explicit public/reverse-proxy route
-- `gateway.remote.url`: remote gateway route
+- `gateway.bind=lan`：仅同一 Wi-Fi / LAN
+- `gateway.bind=tailnet`：直接 tailnet 访问
+- `gateway.tailscale.mode=serve` 或 `gateway.tailscale.mode=funnel`：Tailscale 路由
+- `plugins.entries.device-pair.config.publicUrl`：显式公共/反向代理路由
+- `gateway.remote.url`：远程网关路由
 
-## Root-cause map
+## 根因映射
 
-If `openclaw qr --json` says `Gateway is only bound to loopback`:
+如果 `openclaw qr --json` 显示 `Gateway is only bound to loopback`：
 
-- remote node cannot connect yet
-- fix the route, then generate a fresh setup code
-- `gateway.bind=auto` is not enough if the effective QR route is still loopback
-- same LAN: use `gateway.bind=lan`
-- same tailnet: prefer `gateway.tailscale.mode=serve` or use `gateway.bind=tailnet`
-- public internet: set a real `plugins.entries.device-pair.config.publicUrl` or `gateway.remote.url`
+- 远程节点尚无法连接
+- 修复路由，然后生成新的设置代码
+- `gateway.bind=auto` 如果有效 QR 路由仍然是 loopback 则不够
+- 同一 LAN：使用 `gateway.bind=lan`
+- 同一 tailnet：优先使用 `gateway.tailscale.mode=serve` 或使用 `gateway.bind=tailnet`
+- 公共互联网：设置一个真实的 `plugins.entries.device-pair.config.publicUrl` 或 `gateway.remote.url`
 
-If `gateway.bind=tailnet set, but no tailnet IP was found`:
+如果 `gateway.bind=tailnet set, but no tailnet IP was found`：
 
-- gateway host is not actually on Tailscale
+- 网关主机实际上不在 Tailscale 上
 
-If `qr --remote requires gateway.remote.url`:
+如果 `qr --remote requires gateway.remote.url`：
 
-- remote-mode config is incomplete
+- 远程模式配置不完整
 
-If the app says `pairing required`:
+如果 app 显示 `pairing required`：
 
-- network route and auth worked
-- approve the pending device
+- 网络路由和认证工作了
+- 批准待处理的设备
 
 ```bash
 openclaw devices list
 openclaw devices approve --latest
 ```
 
-If the app says `bootstrap token invalid or expired`:
+如果 app 显示 `bootstrap token invalid or expired`：
 
-- old setup code
-- generate a fresh one and rescan
-- do this after any URL/auth fix too
+- 旧的设置代码
+- 生成一个新的并重新扫描
+- 在任何 URL/认证修复后也要这样做
 
-If the app says `unauthorized`:
+如果 app 显示 `unauthorized`：
 
-- wrong token/password, or wrong Tailscale expectation
-- for Tailscale Serve, `gateway.auth.allowTailscale` must match the intended flow
-- otherwise use explicit token/password
+- 错误的 token/密码，或错误的 Tailscale 期望
+- 对于 Tailscale Serve，`gateway.auth.allowTailscale` 必须匹配预期流程
+- 否则使用显式 token/密码
 
-## Fast heuristics
+## 快速启发式
 
-- Same Wi-Fi setup + gateway advertises `127.0.0.1`, `localhost`, or loopback-only config: wrong.
-- Remote setup + setup/manual uses private LAN IP: wrong.
-- Tailnet setup + gateway advertises LAN IP instead of MagicDNS / tailnet route: wrong.
-- Public URL set but QR still advertises something else: inspect `urlSource`; config is not what you think.
-- `openclaw devices list` shows pending requests: stop changing network config and approve first.
+- 同一 Wi-Fi 设置 + 网关广告 `127.0.0.1`、`localhost` 或仅 loopback 配置：错误。
+- 远程设置 + 设置/手动使用私有 LAN IP：错误。
+- Tailnet 设置 + 网关广告 LAN IP 而不是 MagicDNS / tailnet 路由：错误。
+- 设置了公共 URL 但 QR 仍然广告其他内容：检查 `urlSource`；配置不是您想的那样。
+- `openclaw devices list` 显示待处理请求：停止更改网络配置，先批准。
 
-## Fix style
+## 修复风格
 
-Reply with one concrete diagnosis and one route.
+回复一个具体的诊断和一个路由。
 
-If there is not enough signal yet, ask for setup + exact app text instead of guessing.
+如果没有足够的信号，询问设置 + 确切的 app 文本而不是猜测。
 
-Good:
+好的：
 
 - `The gateway is still loopback-only, so a node on another network can never reach it. Enable Tailscale Serve, restart the gateway, run openclaw qr again, rescan, then approve the pending device pairing.`
 
-Bad:
+坏的：
 
 - `Maybe LAN, maybe Tailscale, maybe port forwarding, maybe public URL.`

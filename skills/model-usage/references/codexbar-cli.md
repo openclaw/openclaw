@@ -1,33 +1,33 @@
-# CodexBar CLI quick ref (usage + cost)
+# CodexBar CLI 快速参考（usage + cost）
 
-## Install
+## 安装
 
-- App: Preferences -> Advanced -> Install CLI
-- Repo: ./bin/install-codexbar-cli.sh
+- 应用：偏好设置 -> 高级 -> 安装 CLI
+- 仓库：./bin/install-codexbar-cli.sh
 
-## Commands
+## 命令
 
-- Usage snapshot (web/cli sources):
+- Usage 快照（web/cli 来源）：
   - codexbar usage --format json --pretty
   - codexbar --provider all --format json
-- Local cost usage (Codex + Claude only):
+- 本地成本 usage（仅 Codex + Claude）：
   - codexbar cost --format json --pretty
   - codexbar cost --provider codex|claude --format json
 
-## Cost JSON fields
+## 成本 JSON 字段
 
-The payload is an array (one per provider).
+payload 是一个数组（每个提供商一个）。
 
-- provider, source, updatedAt
-- sessionTokens, sessionCostUSD
-- last30DaysTokens, last30DaysCostUSD
-- daily[]: date, inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens, totalTokens, totalCost, modelsUsed, modelBreakdowns[]
-- modelBreakdowns[]: modelName, cost
-- totals: totalInputTokens, totalOutputTokens, cacheReadTokens, cacheCreationTokens, totalTokens, totalCost
+- provider、source、updatedAt
+- sessionTokens、sessionCostUSD
+- last30DaysTokens、last30DaysCostUSD
+- daily[]：date、inputTokens、outputTokens、cacheReadTokens、cacheCreationTokens、totalTokens、totalCost、modelsUsed、modelBreakdowns[]
+- modelBreakdowns[]：modelName、cost
+- totals：totalInputTokens、totalOutputTokens、cacheReadTokens、cacheCreationTokens、totalTokens、totalCost
 
-## Notes
+## 提示
 
-- Cost usage is local-only. It reads JSONL logs under:
+- 成本 usage 是本地-only。它读取以下位置的 JSONL 日志：
   - Codex: ~/.codex/sessions/\*_/_.jsonl
-  - Claude: ~/.config/claude/projects/**/\*.jsonl or ~/.claude/projects/**/\*.jsonl
-- If web usage is required (non-local), use codexbar usage (not cost).
+  - Claude: ~/.config/claude/projects/\*\*/\*.jsonl 或 ~/.claude/projects/\*\*/\*.jsonl
+- 如果需要 Web usage（非本地），使用 codexbar usage（不是 cost）。
