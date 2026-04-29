@@ -42,9 +42,9 @@ function collectPackagedRuntimeDepsRepairPluginIds(params: {
       // Library extensions (no openclaw.plugin.json) opt into runtime
       // deps through package.json#openclaw.bundle.stageRuntimeDependencies.
       try {
-        const pkg = JSON.parse(
-          fs.readFileSync(path.join(pluginDir, "package.json"), "utf-8"),
-        ) as Record<string, unknown>;
+        const pkg = JSON.parse(fs.readFileSync(path.join(pluginDir, "package.json"), "utf-8")) as {
+          openclaw?: { bundle?: { stageRuntimeDependencies?: unknown } };
+        };
         if (pkg?.openclaw?.bundle?.stageRuntimeDependencies === true) {
           const libId = entry.name;
           if (

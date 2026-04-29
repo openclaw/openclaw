@@ -1677,7 +1677,9 @@ function isBundledPluginConfiguredForRuntimeDeps(params: {
   // dependency installation through stageRuntimeDependencies alone.
   // Unlike regular plugins they are loaded on-demand and have no
   // channel/slot activation — the bundle flag is their sole signal.
-  const pkg = readJsonObject(path.join(params.pluginDir, "package.json"));
+  const pkg = readJsonObject(path.join(params.pluginDir, "package.json")) as {
+    openclaw?: { bundle?: { stageRuntimeDependencies?: unknown } };
+  } | null;
   if (pkg?.openclaw?.bundle?.stageRuntimeDependencies === true) {
     return true;
   }
