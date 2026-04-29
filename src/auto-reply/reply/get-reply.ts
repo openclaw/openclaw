@@ -310,6 +310,39 @@ export async function getReplyFromConfig(
     triggerBodyNormalized,
     bodyStripped,
   } = sessionState;
+
+  if (sessionEntry?.pendingFinalDelivery && sessionEntry.pendingFinalDeliveryText) {
+    const text = sessionEntry.pendingFinalDeliveryText;
+
+    // If it's a heartbeat, we definitely want to try delivering the lost reply now.
+    // If it's a user message, we deliver the lost reply first, then continue.
+    // For now, let's just return the lost reply if it's a heartbeat.
+    if (opts?.isHeartbeat) {
+      const updatedAt = Date.now();
+      sessionEntry.pendingFinalDelivery = undefined;
+      sessionEntry.pendingFinalDeliveryText = undefined;
+      sessionEntry.pendingFinalDeliveryContext = undefined;
+      sessionEntry.updatedAt = updatedAt;
+      if (sessionKey && sessionStore) {
+        sessionStore[sessionKey] = sessionEntry;
+      }
+      if (sessionKey && storePath) {
+        const { updateSessionStoreEntry } = await import("../../config/sessions.js");
+        await updateSessionStoreEntry({
+          storePath,
+          sessionKey,
+          update: async () => ({
+            pendingFinalDelivery: undefined,
+            pendingFinalDeliveryText: undefined,
+            pendingFinalDeliveryContext: undefined,
+            updatedAt,
+          }),
+        });
+      }
+      return { text };
+    }
+  }
+
   if (resetTriggered && normalizeOptionalString(bodyStripped)) {
     const { applyResetModelOverride } = await loadSessionResetModelRuntime();
     await applyResetModelOverride({

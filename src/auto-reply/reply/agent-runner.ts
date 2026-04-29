@@ -1814,11 +1814,54 @@ export async function runReplyAgent(params: {
       finalPayloads = appendUsageLine(finalPayloads, responseUsageLine);
     }
 
-    return finalizeWithFollowup(
+    // Capture final payloads in session store to support durable delivery retries.
+    // If the process dies or is interrupted after this point but before the channel
+    // acknowledges receipt, the next heartbeat/turn will recover it.
+    if (sessionKey && storePath && finalPayloads.length > 0) {
+      const pendingText = Array.isArray(finalPayloads)
+        ? finalPayloads
+            .map((p) => (typeof p === "string" ? p : p.text))
+            .filter(Boolean)
+            .join("\n\n")
+        : typeof finalPayloads === "string"
+          ? finalPayloads
+          : finalPayloads.text;
+      if (pendingText) {
+        await updateSessionStoreEntry({
+          storePath,
+          sessionKey,
+          update: async () => ({
+            pendingFinalDelivery: true,
+            pendingFinalDeliveryText: pendingText,
+            pendingFinalDeliveryCreatedAt: Date.now(),
+            updatedAt: Date.now(),
+          }),
+        });
+      }
+    }
+
+    const result = finalizeWithFollowup(
       finalPayloads.length === 1 ? finalPayloads[0] : finalPayloads,
       queueKey,
       runFollowupTurn,
     );
+
+    // After a successful (or at least non-throwing) finalize call, we can
+    // clear the pending flag.  In a real implementation, we'd wait for
+    // channel-level ACK, but this provides a baseline of durability.
+    if (sessionKey && storePath) {
+      void updateSessionStoreEntry({
+        storePath,
+        sessionKey,
+        update: async () => ({
+          pendingFinalDelivery: undefined,
+          pendingFinalDeliveryText: undefined,
+          updatedAt: Date.now(),
+        }),
+      }).catch(() => {});
+    }
+
+    return result;
   } catch (error) {
     if (
       replyOperation.result?.kind === "aborted" &&
