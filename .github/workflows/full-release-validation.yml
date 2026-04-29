@@ -699,6 +699,28 @@ jobs:
                   | map("| `" + (.name | gsub("\\|"; "\\|")) + "` | `" + ((.conclusion // "") | tostring) + "` | " + (.durationMin | tostring) + " |")
                   | .[])
               ' || echo "_Unable to summarize jobs for run ${run_id}._"
+              echo
+              echo "### Longest queues: ${label}"
+              echo
+              gh run view "$run_id" --json createdAt,jobs --jq '
+                def ts: fromdateiso8601;
+                .createdAt as $createdAt |
+                "| Job | Result | Queue minutes | Run minutes |",
+                "| --- | --- | ---: | ---: |",
+                ([.jobs[]
+                  | select(.startedAt != "0001-01-01T00:00:00Z")
+                  | . + {
+                      queueMin: ((((.startedAt | ts) - ($createdAt | ts)) / 60) * 10 | round / 10),
+                      durationMin: (if .completedAt == "0001-01-01T00:00:00Z" then null else ((((.completedAt | ts) - (.startedAt | ts)) / 60) * 10 | round / 10) end)
+                    }
+                  | select(.queueMin > 0)
+                  | {name, conclusion, queueMin, durationMin}]
+                  | sort_by(.queueMin)
+                  | reverse
+                  | .[0:10]
+                  | map("| `" + (.name | gsub("\\|"; "\\|")) + "` | `" + ((.conclusion // "") | tostring) + "` | " + (.queueMin | tostring) + " | " + ((.durationMin // "") | tostring) + " |")
+                  | .[])
+              ' || echo "_Unable to summarize queue times for run ${run_id}._"
             } >> "$GITHUB_STEP_SUMMARY"
           }
 

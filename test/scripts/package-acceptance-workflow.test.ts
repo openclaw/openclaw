@@ -6,6 +6,7 @@ const LIVE_E2E_WORKFLOW = ".github/workflows/openclaw-live-and-e2e-checks-reusab
 const NPM_TELEGRAM_WORKFLOW = ".github/workflows/npm-telegram-beta-e2e.yml";
 const RELEASE_CHECKS_WORKFLOW = ".github/workflows/openclaw-release-checks.yml";
 const FULL_RELEASE_VALIDATION_WORKFLOW = ".github/workflows/full-release-validation.yml";
+const QA_LIVE_TRANSPORTS_WORKFLOW = ".github/workflows/qa-live-transports-convex.yml";
 
 describe("package acceptance workflow", () => {
   it("resolves candidate package sources before reusing Docker E2E lanes", () => {
@@ -138,6 +139,8 @@ describe("package artifact reuse", () => {
       'OPENCLAW_LIVE_CLI_BACKEND_ARGS=["exec","--json","--color","never","--sandbox","danger-full-access","--skip-git-repo-check"]',
     );
     expect(workflow).toContain("bash .release-harness/scripts/ci-live-command-retry.sh");
+    expect(workflow).toMatch(/validate_repo_e2e:[\s\S]*?runs-on: blacksmith-8vcpu-ubuntu-2404/u);
+    expect(workflow).toMatch(/validate_special_e2e:[\s\S]*?runs-on: blacksmith-8vcpu-ubuntu-2404/u);
     expect(workflow).toMatch(
       /validate_live_provider_suites:[\s\S]*?runs-on: blacksmith-8vcpu-ubuntu-2404/u,
     );
@@ -348,5 +351,42 @@ describe("package artifact reuse", () => {
     expect(workflow.match(/trap - EXIT INT TERM/g)?.length ?? 0).toBeGreaterThanOrEqual(6);
     expect(workflow).not.toContain("workflow_ref:");
     expect(workflow).not.toContain("inputs.workflow_ref");
+  });
+
+  it("keeps release QA and repo E2E lanes off scarce 32-core runners", () => {
+    const releaseChecksWorkflow = readFileSync(RELEASE_CHECKS_WORKFLOW, "utf8");
+    const qaWorkflow = readFileSync(QA_LIVE_TRANSPORTS_WORKFLOW, "utf8");
+
+    for (const jobName of [
+      "qa_lab_parity_lane_release_checks",
+      "qa_lab_parity_report_release_checks",
+      "qa_live_matrix_release_checks",
+      "qa_live_telegram_release_checks",
+    ]) {
+      expect(releaseChecksWorkflow).toMatch(
+        new RegExp(`${jobName}:[\\s\\S]*?runs-on: blacksmith-8vcpu-ubuntu-2404`, "u"),
+      );
+    }
+
+    for (const jobName of [
+      "run_mock_parity",
+      "run_live_matrix",
+      "run_live_matrix_sharded",
+      "run_live_telegram",
+      "run_live_discord",
+    ]) {
+      expect(qaWorkflow).toMatch(
+        new RegExp(`${jobName}:[\\s\\S]*?runs-on: blacksmith-8vcpu-ubuntu-2404`, "u"),
+      );
+    }
+  });
+
+  it("summarizes queue time separately from execution time in full validation", () => {
+    const workflow = readFileSync(FULL_RELEASE_VALIDATION_WORKFLOW, "utf8");
+
+    expect(workflow).toContain("### Slowest jobs: ${label}");
+    expect(workflow).toContain("### Longest queues: ${label}");
+    expect(workflow).toContain("| Job | Result | Queue minutes | Run minutes |");
+    expect(workflow).toContain('gh run view "$run_id" --json createdAt,jobs');
   });
 });

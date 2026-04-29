@@ -336,7 +336,7 @@ jobs:
   validate_repo_e2e:
     needs: validate_selected_ref
     if: inputs.include_repo_e2e
-    runs-on: blacksmith-32vcpu-ubuntu-2404
+    runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: 90
     env:
       OPENCLAW_VITEST_MAX_WORKERS: "2"
@@ -363,7 +363,7 @@ jobs:
   validate_special_e2e:
     needs: validate_selected_ref
     if: inputs.include_repo_e2e || (inputs.include_live_suites && !inputs.live_models_only)
-    runs-on: blacksmith-32vcpu-ubuntu-2404
+    runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: ${{ matrix.timeout_minutes }}
     strategy:
       fail-fast: false
