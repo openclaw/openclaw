@@ -24,12 +24,12 @@ read-only report work read-only unless Peter asked to commit.
 
 ## One Bot, One App
 
-Use the ClawSweeper repo and the `openclaw-ci` GitHub App. Use only
+Use the ClawSweeper repo and the `clawsweeper` GitHub App. Use only
 `CLAWSWEEPER_*` configuration for this automation.
 
 Required app setup:
 
-- `CLAWSWEEPER_APP_CLIENT_ID`: public app client ID for `openclaw-ci`.
+- `CLAWSWEEPER_APP_CLIENT_ID`: public app client ID for `clawsweeper`.
 - `CLAWSWEEPER_APP_PRIVATE_KEY`: private key used only inside
   `actions/create-github-app-token` steps.
 - Target app permissions: read target scan context; write issues and pull
@@ -160,22 +160,22 @@ trailers, and closes superseded source PRs only after replacement exists.
 Open execution windows intentionally and close them after the run:
 
 ```bash
-gh variable set CLAWSWEEPER_REPAIR_ALLOW_EXECUTE --repo openclaw/clawsweeper --body 1
-gh variable set CLAWSWEEPER_REPAIR_ALLOW_FIX_PR --repo openclaw/clawsweeper --body 1
-gh variable set CLAWSWEEPER_REPAIR_ALLOW_MERGE --repo openclaw/clawsweeper --body 0
-gh variable set CLAWSWEEPER_REPAIR_ALLOW_AUTOMERGE --repo openclaw/clawsweeper --body 0
+gh variable set CLAWSWEEPER_ALLOW_EXECUTE --repo openclaw/clawsweeper --body 1
+gh variable set CLAWSWEEPER_ALLOW_FIX_PR --repo openclaw/clawsweeper --body 1
+gh variable set CLAWSWEEPER_ALLOW_MERGE --repo openclaw/clawsweeper --body 1
+gh variable set CLAWSWEEPER_ALLOW_AUTOMERGE --repo openclaw/clawsweeper --body 1
 ```
 
-Reset execute/fix gates to `0` after the window. Keep merge gates closed unless
-Peter explicitly opens a merge/automerge window.
+Reset gates only when Peter asks; the active maintainer window may intentionally
+leave them at `1`.
 
 Important gates:
 
-- `CLAWSWEEPER_REPAIR_ALLOW_EXECUTE`: allows deterministic write lanes.
-- `CLAWSWEEPER_REPAIR_ALLOW_FIX_PR`: allows branch repair/replacement PRs.
-- `CLAWSWEEPER_REPAIR_ALLOW_MERGE`: allows merge-capable applicators.
-- `CLAWSWEEPER_REPAIR_ALLOW_AUTOMERGE`: allows comment-router automerge.
-- `CLAWSWEEPER_REPAIR_COMMENT_ROUTER_EXECUTE`: lets scheduled comment routing
+- `CLAWSWEEPER_ALLOW_EXECUTE`: allows deterministic write lanes.
+- `CLAWSWEEPER_ALLOW_FIX_PR`: allows branch repair/replacement PRs.
+- `CLAWSWEEPER_ALLOW_MERGE`: allows merge-capable applicators.
+- `CLAWSWEEPER_ALLOW_AUTOMERGE`: allows comment-router automerge.
+- `CLAWSWEEPER_COMMENT_ROUTER_EXECUTE`: lets scheduled comment routing
   post replies and dispatch repair.
 
 ## Comment Commands
@@ -205,7 +205,7 @@ pnpm run repair:comment-router -- --repo openclaw/openclaw --execute --wait-for-
 ```
 
 Scheduled routing stays dry unless
-`CLAWSWEEPER_REPAIR_COMMENT_ROUTER_EXECUTE=1`.
+`CLAWSWEEPER_COMMENT_ROUTER_EXECUTE=1`.
 
 ## Trusted Automerge
 
@@ -227,8 +227,8 @@ adds `clawsweeper:human-review`.
 Repair caps:
 
 ```bash
-CLAWSWEEPER_REPAIR_MAX_REPAIRS_PER_PR=5
-CLAWSWEEPER_REPAIR_MAX_REPAIRS_PER_HEAD=1
+CLAWSWEEPER_MAX_REPAIRS_PER_PR=5
+CLAWSWEEPER_MAX_REPAIRS_PER_HEAD=1
 ```
 
 ## Security Boundary
