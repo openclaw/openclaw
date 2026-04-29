@@ -663,7 +663,7 @@ Successfully processed 1 files`;
       });
       expect(result).toBe(
         [
-          `"${DEFAULT_ICACLS}"`,
+          DEFAULT_ICACLS,
           '"C:\\test\\file.txt"',
           "/inheritance:r",
           "/grant:r",
@@ -689,7 +689,7 @@ Successfully processed 1 files`;
         env: { SystemRoot: "D:\\Windows", USERNAME: "TestUser" },
       });
 
-      expect(result).toContain('"D:\\Windows\\System32\\icacls.exe"');
+      expect(result.startsWith("D:\\Windows\\System32\\icacls.exe ")).toBe(true);
     });
 
     it("uses system username when env is empty (falls back to os.userInfo)", () => {

@@ -386,8 +386,10 @@ export function formatIcaclsResetCommand(
   const command = resolveWindowsSystemCommand("icacls.exe", opts.env);
   const user = resolveWindowsUserPrincipal(opts.env, opts.userInfo) ?? "%USERNAME%";
   const grant = opts.isDir ? "(OI)(CI)F" : "F";
+  // Quoted executable paths need shell-specific handling in PowerShell; keep
+  // the resolved System32 helper as the command token and quote only arguments.
   return [
-    `"${command}"`,
+    command,
     `"${targetPath}"`,
     "/inheritance:r",
     "/grant:r",
