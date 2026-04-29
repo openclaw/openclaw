@@ -864,6 +864,31 @@ describe("getApiKeyForModel", () => {
     }
   });
 
+  it("resolveEnvApiKey('google-vertex') rejects missing explicit ADC path before fallback paths", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-google-adc-home-"));
+    const fallbackDir = path.join(homeDir, ".config", "gcloud");
+    const missingCredentialsPath = path.join(homeDir, "missing-adc.json");
+    await fs.mkdir(fallbackDir, { recursive: true });
+    await fs.writeFile(
+      path.join(fallbackDir, "application_default_credentials.json"),
+      "{}",
+      "utf8",
+    );
+
+    try {
+      const resolved = resolveEnvApiKey("google-vertex", {
+        GOOGLE_APPLICATION_CREDENTIALS: missingCredentialsPath,
+        GOOGLE_CLOUD_LOCATION: "us-central1",
+        GOOGLE_CLOUD_PROJECT: "vertex-project",
+        HOME: homeDir,
+      } as NodeJS.ProcessEnv);
+
+      expect(resolved).toBeNull();
+    } finally {
+      await fs.rm(homeDir, { recursive: true, force: true });
+    }
+  });
+
   it("resolveEnvApiKey('anthropic-vertex') accepts GOOGLE_APPLICATION_CREDENTIALS with project_id", async () => {
     await expectVertexAdcEnvApiKey({
       provider: "anthropic-vertex",

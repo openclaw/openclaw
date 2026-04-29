@@ -49,8 +49,8 @@ function hasRequiredAuthEvidenceEnv(
 function hasLocalFileAuthEvidence(evidence: ProviderAuthEvidence, env: NodeJS.ProcessEnv): boolean {
   if (evidence.fileEnvVar) {
     const explicitPath = normalizeOptionalSecretInput(env[evidence.fileEnvVar]);
-    if (explicitPath && fs.existsSync(explicitPath)) {
-      return true;
+    if (explicitPath) {
+      return fs.existsSync(explicitPath);
     }
   }
   for (const rawPath of evidence.fallbackPaths ?? []) {
