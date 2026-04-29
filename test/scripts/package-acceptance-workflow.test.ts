@@ -131,6 +131,10 @@ describe("package artifact reuse", () => {
       "command: node .release-harness/scripts/test-live-shard.mjs native-live-src-agents",
     );
     expect(workflow).toContain("OPENCLAW_LIVE_COMMAND: ${{ matrix.command }}");
+    expect(workflow).toContain("live_suite_filter:");
+    expect(workflow).toContain(
+      "inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id",
+    );
     expect(workflow).toContain("OPENCLAW_LIVE_CLI_BACKEND_MODEL=codex-cli/gpt-5.5");
     expect(workflow).toContain("OPENCLAW_LIVE_CLI_BACKEND_AUTH=api-key");
     expect(workflow).toContain("OPENCLAW_LIVE_CLI_BACKEND_USE_CI_SAFE_CODEX_CONFIG=1");
@@ -157,6 +161,9 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain("suite_id: native-live-extensions-a-k");
     expect(workflow).toContain("suite_id: native-live-extensions-l-n");
     expect(workflow).toContain("suite_id: native-live-extensions-moonshot");
+    expect(workflow).toMatch(/suite_id: native-live-extensions-moonshot[\s\S]*?advisory: true/u);
+    expect(workflow).toContain("OPENCLAW_LIVE_SUITE_ADVISORY: ${{ matrix.advisory }}");
+    expect(workflow).toContain("Advisory live suite failed with exit code");
     expect(workflow).toContain("suite_id: native-live-extensions-openai");
     expect(workflow).toContain("suite_id: native-live-extensions-o-z-other");
     expect(workflow).toContain("validate_live_media_provider_suites:");
@@ -299,6 +306,10 @@ describe("package artifact reuse", () => {
       "OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}",
     );
     expect(workflow).toContain("rerun_group:");
+    expect(workflow).toContain("live_suite_filter:");
+    expect(workflow).toContain(
+      "live_suite_filter: ${{ needs.resolve_target.outputs.live_suite_filter }}",
+    );
     expect(workflow).toContain("- live-e2e");
     expect(workflow).toContain("- qa-live");
   });
@@ -347,8 +358,11 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain('-f harness_ref="$TARGET_SHA"');
     expect(workflow).toContain("child_rerun_group=all");
     expect(workflow).toContain('-f rerun_group="$child_rerun_group"');
+    expect(workflow).toContain('args+=(-f live_suite_filter="$LIVE_SUITE_FILTER")');
+    expect(workflow).toContain("cancel-in-progress: false");
+    expect(workflow).not.toContain("gh run cancel");
+    expect(workflow).not.toContain("force-cancel");
     expect(workflow).toContain("NORMAL_CI_RESULT: ${{ needs.normal_ci.result }}");
-    expect(workflow.match(/trap - EXIT INT TERM/g)?.length ?? 0).toBeGreaterThanOrEqual(6);
     expect(workflow).not.toContain("workflow_ref:");
     expect(workflow).not.toContain("inputs.workflow_ref");
   });

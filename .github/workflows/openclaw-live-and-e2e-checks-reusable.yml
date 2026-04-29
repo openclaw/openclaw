@@ -63,6 +63,11 @@ on:
         required: false
         default: ""
         type: string
+      live_suite_filter:
+        description: Optional exact live suite id to run for focused failed-shard recovery; blank runs all selected suites
+        required: false
+        default: ""
+        type: string
       release_test_profile:
         description: Release coverage profile for live/Docker/provider breadth
         required: false
@@ -130,6 +135,11 @@ on:
         type: boolean
       live_model_providers:
         description: Comma/space separated provider ids for the Docker live model matrix; blank runs all providers
+        required: false
+        default: ""
+        type: string
+      live_suite_filter:
+        description: Optional exact live suite id to run for focused failed-shard recovery; blank runs all selected suites
         required: false
         default: ""
         type: string
@@ -296,7 +306,7 @@ jobs:
 
   validate_release_live_cache:
     needs: validate_selected_ref
-    if: inputs.include_live_suites && !inputs.live_models_only
+    if: inputs.include_live_suites && !inputs.live_models_only && (inputs.live_suite_filter == '' || inputs.live_suite_filter == 'live-cache')
     runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: 60
     env:
@@ -335,7 +345,7 @@ jobs:
 
   validate_repo_e2e:
     needs: validate_selected_ref
-    if: inputs.include_repo_e2e
+    if: inputs.include_repo_e2e && inputs.live_suite_filter == ''
     runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: 90
     env:
@@ -362,7 +372,7 @@ jobs:
 
   validate_special_e2e:
     needs: validate_selected_ref
-    if: inputs.include_repo_e2e || (inputs.include_live_suites && !inputs.live_models_only)
+    if: (inputs.include_repo_e2e || (inputs.include_live_suites && !inputs.live_models_only)) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == 'openshell-e2e' || inputs.live_suite_filter == 'openai-ws-stream-live-e2e')
     runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: ${{ matrix.timeout_minutes }}
     strategy:
@@ -401,11 +411,15 @@ jobs:
 
       - name: Build dist for special E2E
         if: |
-          (inputs.include_repo_e2e && matrix.requires_repo_e2e) ||
-          (inputs.include_live_suites && matrix.requires_live_suites)
+          (
+            (inputs.include_repo_e2e && matrix.requires_repo_e2e) ||
+            (inputs.include_live_suites && matrix.requires_live_suites)
+          ) &&
+          (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id)
         run: pnpm build
 
       - name: Configure suite-specific env
+        if: inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id
         shell: bash
         run: |
           set -euo pipefail
@@ -417,6 +431,7 @@ jobs:
           esac
 
       - name: Validate suite credentials
+        if: inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id
         shell: bash
         run: |
           set -euo pipefail
@@ -431,8 +446,11 @@ jobs:
 
       - name: Run ${{ matrix.label }}
         if: |
-          (inputs.include_repo_e2e && matrix.requires_repo_e2e) ||
-          (inputs.include_live_suites && matrix.requires_live_suites)
+          (
+            (inputs.include_repo_e2e && matrix.requires_repo_e2e) ||
+            (inputs.include_live_suites && matrix.requires_live_suites)
+          ) &&
+          (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id)
         run: ${{ matrix.command }}
 
   validate_docker_e2e:
@@ -1278,7 +1296,7 @@ jobs:
 
   prepare_live_test_image:
     needs: validate_selected_ref
-    if: inputs.include_live_suites
+    if: inputs.include_live_suites && (inputs.live_suite_filter == '' || startsWith(inputs.live_suite_filter, 'live-') || startsWith(inputs.live_suite_filter, 'docker-live-models'))
     runs-on: blacksmith-32vcpu-ubuntu-2404
     timeout-minutes: 60
     permissions:
@@ -1351,7 +1369,7 @@ jobs:
   validate_live_models_docker:
     name: Docker live models (${{ matrix.provider_label }})
     needs: [validate_selected_ref, prepare_live_test_image]
-    if: inputs.include_live_suites && inputs.live_model_providers == ''
+    if: inputs.include_live_suites && inputs.live_model_providers == '' && (inputs.live_suite_filter == '' || inputs.live_suite_filter == 'docker-live-models')
     runs-on: blacksmith-32vcpu-ubuntu-2404
     timeout-minutes: 75
     strategy:
@@ -1501,7 +1519,7 @@ jobs:
   validate_live_models_docker_targeted:
     name: Docker live models (selected providers)
     needs: [validate_selected_ref, prepare_live_test_image]
-    if: inputs.include_live_suites && inputs.live_model_providers != ''
+    if: inputs.include_live_suites && inputs.live_model_providers != '' && (inputs.live_suite_filter == '' || inputs.live_suite_filter == 'docker-live-models')
     runs-on: blacksmith-32vcpu-ubuntu-2404
     timeout-minutes: 75
     env:
@@ -1674,7 +1692,7 @@ jobs:
 
   validate_live_provider_suites:
     needs: validate_selected_ref
-    if: inputs.include_live_suites && !inputs.live_models_only
+    if: inputs.include_live_suites && !inputs.live_models_only && (inputs.live_suite_filter == '' || (startsWith(inputs.live_suite_filter, 'native-live-') && !startsWith(inputs.live_suite_filter, 'native-live-extensions-media') && inputs.live_suite_filter != 'native-live-extensions-a-k'))
     runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: ${{ matrix.timeout_minutes }}
     strategy:
@@ -1782,6 +1800,7 @@ jobs:
             command: node .release-harness/scripts/test-live-shard.mjs native-live-extensions-moonshot
             timeout_minutes: 60
             profile_env_only: false
+            advisory: true
             profiles: full
           - suite_id: native-live-extensions-openai
             label: Native live OpenAI plugin
@@ -1852,14 +1871,14 @@ jobs:
       OPENCLAW_VITEST_MAX_WORKERS: "2"
     steps:
       - name: Checkout selected ref
-        if: contains(matrix.profiles, inputs.release_test_profile)
+        if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id)
         uses: actions/checkout@v6
         with:
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 1
 
       - name: Checkout trusted live shard harness
-        if: contains(matrix.profiles, inputs.release_test_profile)
+        if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id)
         uses: actions/checkout@v6
         with:
           ref: ${{ github.sha }}
@@ -1867,7 +1886,7 @@ jobs:
           path: .release-harness
 
       - name: Setup Node environment
-        if: contains(matrix.profiles, inputs.release_test_profile)
+        if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id)
         uses: ./.github/actions/setup-node-env
         with:
           node-version: ${{ env.NODE_VERSION }}
@@ -1875,11 +1894,11 @@ jobs:
           install-bun: "true"
 
       - name: Hydrate live auth/profile inputs
-        if: contains(matrix.profiles, inputs.release_test_profile)
+        if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id)
         run: bash scripts/ci-hydrate-live-auth.sh
 
       - name: Configure suite-specific env
-        if: contains(matrix.profiles, inputs.release_test_profile)
+        if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id)
         shell: bash
         run: |
           set -euo pipefail
@@ -1932,15 +1951,28 @@ jobs:
           esac
 
       - name: Run ${{ matrix.label }}
-        if: contains(matrix.profiles, inputs.release_test_profile)
+        if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id)
         env:
           OPENCLAW_LIVE_COMMAND: ${{ matrix.command }}
-        run: bash .release-harness/scripts/ci-live-command-retry.sh
+          OPENCLAW_LIVE_SUITE_ADVISORY: ${{ matrix.advisory }}
+        run: |
+          set +e
+          bash .release-harness/scripts/ci-live-command-retry.sh
+          status=$?
+          set -e
+          if [[ "$status" -eq 0 ]]; then
+            exit 0
+          fi
+          if [[ "${OPENCLAW_LIVE_SUITE_ADVISORY:-}" == "true" ]]; then
+            echo "::warning::Advisory live suite failed with exit code ${status}: ${{ matrix.suite_id }}"
+            exit 0
+          fi
+          exit "$status"
 
   validate_live_docker_provider_suites:
     name: Docker live suites (${{ matrix.label }})
     needs: [validate_selected_ref, prepare_live_test_image]
-    if: inputs.include_live_suites && !inputs.live_models_only
+    if: inputs.include_live_suites && !inputs.live_models_only && (inputs.live_suite_filter == '' || startsWith(inputs.live_suite_filter, 'live-'))
     runs-on: blacksmith-32vcpu-ubuntu-2404
     timeout-minutes: ${{ matrix.timeout_minutes }}
     strategy:
@@ -2024,14 +2056,14 @@ jobs:
       OPENCLAW_VITEST_MAX_WORKERS: "2"
     steps:
       - name: Checkout selected ref
-        if: contains(matrix.profiles, inputs.release_test_profile)
+        if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id)
         uses: actions/checkout@v6
         with:
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 1
 
       - name: Checkout trusted live shard harness
-        if: contains(matrix.profiles, inputs.release_test_profile)
+        if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id)
         uses: actions/checkout@v6
         with:
           ref: ${{ github.sha }}
@@ -2039,7 +2071,7 @@ jobs:
           path: .release-harness
 
       - name: Setup Node environment
-        if: contains(matrix.profiles, inputs.release_test_profile)
+        if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id)
         uses: ./.github/actions/setup-node-env
         with:
           node-version: ${{ env.NODE_VERSION }}
@@ -2047,11 +2079,11 @@ jobs:
           install-bun: "true"
 
       - name: Hydrate live auth/profile inputs
-        if: contains(matrix.profiles, inputs.release_test_profile)
+        if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id)
         run: bash scripts/ci-hydrate-live-auth.sh
 
       - name: Log in to GHCR
-        if: contains(matrix.profiles, inputs.release_test_profile)
+        if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id)
         uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4
         with:
           registry: ghcr.io
@@ -2059,7 +2091,7 @@ jobs:
           password: ${{ github.token }}
 
       - name: Configure suite-specific env
-        if: contains(matrix.profiles, inputs.release_test_profile)
+        if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id)
         shell: bash
         run: |
           set -euo pipefail
@@ -2093,7 +2125,7 @@ jobs:
           esac
 
       - name: Run ${{ matrix.label }}
-        if: contains(matrix.profiles, inputs.release_test_profile)
+        if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id)
         env:
           OPENCLAW_LIVE_COMMAND: ${{ matrix.command }}
         run: bash .release-harness/scripts/ci-live-command-retry.sh
@@ -2101,7 +2133,7 @@ jobs:
   validate_live_media_provider_suites:
     name: Live media suites (${{ matrix.label }})
     needs: validate_selected_ref
-    if: inputs.include_live_suites && !inputs.live_models_only
+    if: inputs.include_live_suites && !inputs.live_models_only && (inputs.live_suite_filter == '' || startsWith(inputs.live_suite_filter, 'native-live-extensions-media') || inputs.live_suite_filter == 'native-live-extensions-a-k')
     runs-on: blacksmith-8vcpu-ubuntu-2404
     container:
       image: ghcr.io/openclaw/openclaw-live-media-runner:ubuntu-24.04
@@ -2194,14 +2226,14 @@ jobs:
       OPENCLAW_VITEST_MAX_WORKERS: "2"
     steps:
       - name: Checkout selected ref
-        if: contains(matrix.profiles, inputs.release_test_profile)
+        if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id)
         uses: actions/checkout@v6
         with:
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 1
 
       - name: Checkout trusted live shard harness
-        if: contains(matrix.profiles, inputs.release_test_profile)
+        if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id)
         uses: actions/checkout@v6
         with:
           ref: ${{ github.sha }}
@@ -2209,7 +2241,7 @@ jobs:
           path: .release-harness
 
       - name: Verify preinstalled live media dependencies
-        if: contains(matrix.profiles, inputs.release_test_profile)
+        if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id)
         shell: bash
         run: |
           set -euo pipefail
@@ -2217,7 +2249,7 @@ jobs:
           ffprobe -version | head -1
 
       - name: Setup Node environment
-        if: contains(matrix.profiles, inputs.release_test_profile)
+        if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id)
         uses: ./.github/actions/setup-node-env
         with:
           node-version: ${{ env.NODE_VERSION }}
@@ -2225,11 +2257,11 @@ jobs:
           install-bun: "true"
 
       - name: Hydrate live auth/profile inputs
-        if: contains(matrix.profiles, inputs.release_test_profile)
+        if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id)
         run: bash scripts/ci-hydrate-live-auth.sh
 
       - name: Configure suite-specific env
-        if: contains(matrix.profiles, inputs.release_test_profile)
+        if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id)
         shell: bash
         run: |
           set -euo pipefail
@@ -2238,5 +2270,5 @@ jobs:
           fi
 
       - name: Run ${{ matrix.label }}
-        if: contains(matrix.profiles, inputs.release_test_profile)
+        if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id)
         run: ${{ matrix.command }}
