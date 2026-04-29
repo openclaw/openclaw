@@ -34,11 +34,11 @@ import type {
   SessionDailyMessageCounts,
   SessionDailyModelUsage,
   SessionDailyUsage,
-  SessionHourlyMessageCounts,
   SessionLatencyStats,
   SessionLogEntry,
   SessionMessageCounts,
   SessionModelUsage,
+  SessionUtcQuarterHourMessageCounts,
   SessionToolUsage,
   SessionUsageTimePoint,
   SessionUsageTimeSeries,
@@ -54,11 +54,11 @@ export type {
   SessionDailyMessageCounts,
   SessionDailyModelUsage,
   SessionDailyUsage,
-  SessionHourlyMessageCounts,
   SessionLatencyStats,
   SessionLogEntry,
   SessionMessageCounts,
   SessionModelUsage,
+  SessionUtcQuarterHourMessageCounts,
   SessionToolUsage,
   SessionUsageTimePoint,
   SessionUsageTimeSeries,
@@ -171,8 +171,8 @@ const formatUtcDayKey = (date: Date): string =>
   `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(date.getUTCDate()).padStart(2, "0")}`;
 
 /**
- * Accumulate message-level counts into a bucket (daily or hourly).
- * Avoids duplicating the same logic for both SessionDailyMessageCounts and SessionHourlyMessageCounts.
+ * Accumulate message-level counts into a bucket (daily or UTC quarter-hour).
+ * Avoids duplicating the same logic for both daily and quarter-hour message counts.
  */
 const accumulateMessageCounts = (
   bucket: {
@@ -607,7 +607,7 @@ export async function loadSessionCostSummary(params: {
   const activityDatesSet = new Set<string>();
   const dailyMap = new Map<string, { tokens: number; cost: number }>();
   const dailyMessageMap = new Map<string, SessionDailyMessageCounts>();
-  const hourlyMessageMap = new Map<string, SessionHourlyMessageCounts>();
+  const utcQuarterHourMessageMap = new Map<string, SessionUtcQuarterHourMessageCounts>();
   const dailyLatencyMap = new Map<string, number[]>();
   const dailyModelUsageMap = new Map<string, SessionDailyModelUsage>();
   const messageCounts: SessionMessageCounts = {
@@ -714,7 +714,7 @@ export async function loadSessionCostSummary(params: {
         );
         const utcDayKey = formatUtcDayKey(entry.timestamp);
         const quarterKey = `${utcDayKey}::${quarterIndex}`;
-        const hourly = hourlyMessageMap.get(quarterKey) ?? {
+        const utcQuarterHour = utcQuarterHourMessageMap.get(quarterKey) ?? {
           date: utcDayKey,
           quarterIndex,
           total: 0,
@@ -724,8 +724,8 @@ export async function loadSessionCostSummary(params: {
           toolResults: 0,
           errors: 0,
         };
-        accumulateMessageCounts(hourly, entry, errorStopReasons);
-        hourlyMessageMap.set(quarterKey, hourly);
+        accumulateMessageCounts(utcQuarterHour, entry, errorStopReasons);
+        utcQuarterHourMessageMap.set(quarterKey, utcQuarterHour);
       }
 
       if (!entry.usage) {
@@ -811,8 +811,8 @@ export async function loadSessionCostSummary(params: {
     dailyMessageMap.values(),
   ).toSorted((a, b) => a.date.localeCompare(b.date));
 
-  const hourlyMessageCounts: SessionHourlyMessageCounts[] = Array.from(
-    hourlyMessageMap.values(),
+  const utcQuarterHourMessageCounts: SessionUtcQuarterHourMessageCounts[] = Array.from(
+    utcQuarterHourMessageMap.values(),
   ).toSorted((a, b) => a.date.localeCompare(b.date) || a.quarterIndex - b.quarterIndex);
 
   const dailyLatency: SessionDailyLatency[] = Array.from(dailyLatencyMap.entries())
@@ -862,7 +862,9 @@ export async function loadSessionCostSummary(params: {
     activityDates: Array.from(activityDatesSet).toSorted(),
     dailyBreakdown,
     dailyMessageCounts,
-    hourlyMessageCounts: hourlyMessageCounts.length ? hourlyMessageCounts : undefined,
+    utcQuarterHourMessageCounts: utcQuarterHourMessageCounts.length
+      ? utcQuarterHourMessageCounts
+      : undefined,
     dailyLatency: dailyLatency.length ? dailyLatency : undefined,
     dailyModelUsage: dailyModelUsage.length ? dailyModelUsage : undefined,
     messageCounts,

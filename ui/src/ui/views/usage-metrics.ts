@@ -88,17 +88,17 @@ function buildPeakErrorHours(sessions: UsageSessionEntry[], timeZone: "local" | 
     // Data is stored as UTC quarter-hour buckets (quarterIndex 0-95) with UTC date keys.
     // For local view, construct a Date from the UTC components and use getHours()
     // so the browser's DST-aware timezone logic handles offset automatically.
-    if (usage.hourlyMessageCounts && usage.hourlyMessageCounts.length > 0) {
-      for (const hourly of usage.hourlyMessageCounts) {
+    if (usage.utcQuarterHourMessageCounts && usage.utcQuarterHourMessageCounts.length > 0) {
+      for (const quarterHour of usage.utcQuarterHourMessageCounts) {
         const hour =
           timeZone === "utc"
-            ? Math.floor(hourly.quarterIndex / 4)
+            ? Math.floor(quarterHour.quarterIndex / 4)
             : (() => {
-                const [y, m, d] = hourly.date.split("-").map(Number);
-                return new Date(Date.UTC(y, m - 1, d, 0, hourly.quarterIndex * 15)).getHours();
+                const [y, m, d] = quarterHour.date.split("-").map(Number);
+                return new Date(Date.UTC(y, m - 1, d, 0, quarterHour.quarterIndex * 15)).getHours();
               })();
-        hourErrors[hour] += hourly.errors;
-        hourMsgs[hour] += hourly.total;
+        hourErrors[hour] += quarterHour.errors;
+        hourMsgs[hour] += quarterHour.total;
       }
       continue;
     }

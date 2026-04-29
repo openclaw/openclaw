@@ -78,7 +78,7 @@ export type SessionDailyMessageCounts = {
   errors: number;
 };
 
-export type SessionHourlyMessageCounts = {
+export type SessionUtcQuarterHourMessageCounts = {
   date: string; // YYYY-MM-DD (UTC)
   quarterIndex: number; // 0-95, UTC quarter-hour bucket (index = floor((utcH * 60 + utcM) / 15))
   total: number;
@@ -141,7 +141,7 @@ export type SessionCostSummary = CostUsageTotals & {
   activityDates?: string[]; // YYYY-MM-DD dates when session had activity
   dailyBreakdown?: SessionDailyUsage[]; // Per-day token/cost breakdown
   dailyMessageCounts?: SessionDailyMessageCounts[];
-  hourlyMessageCounts?: SessionHourlyMessageCounts[]; // Per-hour message counts for precise hourly stats
+  utcQuarterHourMessageCounts?: SessionUtcQuarterHourMessageCounts[]; // UTC quarter-hour buckets for precise hourly stats
   dailyLatency?: SessionDailyLatency[];
   dailyModelUsage?: SessionDailyModelUsage[];
   messageCounts?: SessionMessageCounts;

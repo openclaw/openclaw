@@ -276,16 +276,16 @@ describe("session cost usage", () => {
     expect(summary?.dailyModelUsage?.[0]?.date).toBe("2026-02-01");
     expect(summary?.dailyModelUsage?.[0]?.model).toBe("gpt-5.4");
 
-    // hourlyMessageCounts should use UTC quarter-hour buckets
+    // utcQuarterHourMessageCounts should use UTC quarter-hour buckets
     // start = 2026-02-01T10:00Z → quarterIndex = floor((10*60+0)/15) = 40
     // end   = 2026-02-01T10:05Z → quarterIndex = floor((10*60+5)/15) = 40
-    expect(summary?.hourlyMessageCounts).toBeDefined();
-    expect(summary?.hourlyMessageCounts?.length).toBe(1);
-    expect(summary?.hourlyMessageCounts?.[0]?.quarterIndex).toBe(40);
-    expect(summary?.hourlyMessageCounts?.[0]?.date).toBe("2026-02-01");
-    expect(summary?.hourlyMessageCounts?.[0]?.total).toBe(2);
-    expect(summary?.hourlyMessageCounts?.[0]?.user).toBe(1);
-    expect(summary?.hourlyMessageCounts?.[0]?.assistant).toBe(1);
+    expect(summary?.utcQuarterHourMessageCounts).toBeDefined();
+    expect(summary?.utcQuarterHourMessageCounts?.length).toBe(1);
+    expect(summary?.utcQuarterHourMessageCounts?.[0]?.quarterIndex).toBe(40);
+    expect(summary?.utcQuarterHourMessageCounts?.[0]?.date).toBe("2026-02-01");
+    expect(summary?.utcQuarterHourMessageCounts?.[0]?.total).toBe(2);
+    expect(summary?.utcQuarterHourMessageCounts?.[0]?.user).toBe(1);
+    expect(summary?.utcQuarterHourMessageCounts?.[0]?.assistant).toBe(1);
   });
 
   it("does not exclude sessions with mtime after endMs during discovery", async () => {
@@ -815,12 +815,12 @@ example
     );
 
     const summary = await loadSessionCostSummary({ sessionFile });
-    const hourly = summary?.hourlyMessageCounts;
-    expect(hourly).toBeDefined();
-    expect(hourly?.length).toBe(4);
+    const quarterHourly = summary?.utcQuarterHourMessageCounts;
+    expect(quarterHourly).toBeDefined();
+    expect(quarterHourly?.length).toBe(4);
 
     // Sort by quarterIndex for deterministic checks
-    const sorted = [...(hourly ?? [])].toSorted((a, b) => a.quarterIndex - b.quarterIndex);
+    const sorted = [...(quarterHourly ?? [])].toSorted((a, b) => a.quarterIndex - b.quarterIndex);
     expect(sorted[0]?.quarterIndex).toBe(0); // 00:14
     expect(sorted[0]?.user).toBe(1);
     expect(sorted[1]?.quarterIndex).toBe(1); // 00:15
@@ -832,14 +832,14 @@ example
     expect(sorted[3]?.errors).toBe(1); // stopReason "error"
   });
 
-  it("returns undefined hourlyMessageCounts when session has no messages", async () => {
+  it("returns undefined utcQuarterHourMessageCounts when session has no messages", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cost-empty-hourly-"));
     const sessionFile = path.join(root, "session.jsonl");
     // Empty file — no entries at all
     await fs.writeFile(sessionFile, "", "utf-8");
 
     const summary = await loadSessionCostSummary({ sessionFile });
-    expect(summary?.hourlyMessageCounts).toBeUndefined();
+    expect(summary?.utcQuarterHourMessageCounts).toBeUndefined();
   });
 
   it("preserves totals and cumulative values when downsampling timeseries", async () => {

@@ -3,7 +3,7 @@ import { buildPeakErrorHours } from "./usage-metrics.ts";
 import type { UsageSessionEntry } from "./usageTypes.ts";
 
 /**
- * Helper: build a minimal UsageSessionEntry with hourlyMessageCounts
+ * Helper: build a minimal UsageSessionEntry with utcQuarterHourMessageCounts
  * using the new UTC quarter-hour bucket format.
  */
 function makeSessionWithQuarterHourly(
@@ -38,7 +38,7 @@ function makeSessionWithQuarterHourly(
         toolResults: 0,
         errors: buckets.reduce((sum, b) => sum + b.errors, 0),
       },
-      hourlyMessageCounts: buckets.map((b) => ({
+      utcQuarterHourMessageCounts: buckets.map((b) => ({
         date: b.date,
         quarterIndex: b.quarterIndex,
         total: b.total,
@@ -227,8 +227,8 @@ describe("buildPeakErrorHours", () => {
     expect(result[0].sub).toContain("30 msgs");
   });
 
-  it("falls back to proportional allocation when hourlyMessageCounts is absent", () => {
-    // Session without hourlyMessageCounts should use forEachSessionHourSlice
+  it("falls back to proportional allocation when utcQuarterHourMessageCounts is absent", () => {
+    // Session without utcQuarterHourMessageCounts should use forEachSessionHourSlice
     const now = Date.now();
     const session: UsageSessionEntry = {
       key: "fallback-session",
@@ -255,7 +255,7 @@ describe("buildPeakErrorHours", () => {
           toolResults: 0,
           errors: 3,
         },
-        // No hourlyMessageCounts → fallback path
+        // No utcQuarterHourMessageCounts -> fallback path
       },
     } as unknown as UsageSessionEntry;
 
