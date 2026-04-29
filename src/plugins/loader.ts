@@ -6,8 +6,6 @@ import {
   listRegisteredAgentHarnesses,
   restoreRegisteredAgentHarnesses,
 } from "../agents/harness/registry.js";
-import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
-import { isChannelConfigured } from "../config/channel-configured.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
@@ -19,10 +17,7 @@ import {
   resolveMemoryDreamingConfig,
   resolveMemoryDreamingPluginConfig,
 } from "../memory-host-sdk/dreaming.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../shared/string-coerce.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import {
   clearDetachedTaskLifecycleRuntimeRegistration,
   getDetachedTaskLifecycleRuntimeRegistration,
@@ -57,7 +52,6 @@ import {
   listRegisteredCompactionProviders,
   restoreRegisteredCompactionProviders,
 } from "./compaction-provider.js";
-import type { PluginCompatCode } from "./compat/registry.js";
 import {
   applyTestPluginDefaults,
   createPluginActivationSource,
@@ -67,7 +61,6 @@ import {
   resolveMemorySlotDecision,
   type PluginActivationConfigSource,
   type NormalizedPluginsConfig,
-  type PluginActivationState,
 } from "./config-state.js";
 import { discoverOpenClawPlugins, type PluginCandidate } from "./discovery.js";
 import { getGlobalHookRunner, initializeGlobalHookRunner } from "./hook-runner-global.js";
@@ -82,12 +75,33 @@ import {
 import { getCachedPluginJitiLoader, type PluginJitiLoaderCache } from "./jiti-loader-cache.js";
 import { PluginLoaderCacheState } from "./loader-cache-state.js";
 import {
+  channelPluginIdBelongsToManifest,
+  loadBundledRuntimeChannelPlugin,
+  mergeSetupRuntimeChannelPlugin,
+  resolveBundledRuntimeChannelRegistration,
+  resolveSetupChannelRegistration,
+  shouldLoadChannelPluginInSetupRuntime,
+} from "./loader-channel-setup.js";
+import {
+  buildProvenanceIndex,
+  compareDuplicateCandidateOrder,
+  warnAboutUntrackedLoadedPlugins,
+  warnWhenAllowlistIsOpen,
+} from "./loader-provenance.js";
+import {
+  createPluginRecord,
+  formatAutoEnabledActivationReason,
+  formatMissingPluginRegisterError,
+  formatPluginFailureSummary,
+  markPluginActivationDisabled,
+  recordPluginError,
+} from "./loader-records.js";
+import {
   loadPluginManifestRegistry,
   type PluginManifestRecord,
   type PluginManifestRegistry,
 } from "./manifest-registry.js";
-import type { PluginBundleFormat, PluginDiagnostic, PluginFormat } from "./manifest-types.js";
-import type { PluginManifestContracts } from "./manifest.js";
+import type { PluginDiagnostic } from "./manifest-types.js";
 import {
   clearMemoryEmbeddingProviders,
   listRegisteredMemoryEmbeddingProviders,
@@ -104,7 +118,6 @@ import {
   restoreMemoryPluginState,
 } from "./memory-state.js";
 import { unwrapDefaultModuleExport } from "./module-export.js";
-import { isPathInside, safeStatSync } from "./path-safety.js";
 import { withProfile } from "./plugin-load-profile.js";
 import {
   createPluginIdScopeSet,
@@ -1027,406 +1040,6 @@ function resolvePluginModuleExport(moduleExport: unknown): {
   return {};
 }
 
-function isPluginLoadDebugEnabled(env: NodeJS.ProcessEnv): boolean {
-  const normalized = normalizeLowercaseStringOrEmpty(env.OPENCLAW_PLUGIN_LOAD_DEBUG);
-  return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
-}
-
-function describePluginModuleExportShape(
-  value: unknown,
-  label = "export",
-  seen: Set<unknown> = new Set(),
-): string[] {
-  if (value === null) {
-    return [`${label}:null`];
-  }
-  if (typeof value !== "object") {
-    return [`${label}:${typeof value}`];
-  }
-  if (seen.has(value)) {
-    return [`${label}:circular`];
-  }
-  seen.add(value);
-
-  const record = value as Record<string, unknown>;
-  const keys = Object.keys(record).toSorted();
-  const visibleKeys = keys.slice(0, 8);
-  const extraCount = keys.length - visibleKeys.length;
-  const keySummary =
-    visibleKeys.length > 0
-      ? `${visibleKeys.join(",")}${extraCount > 0 ? `,+${extraCount}` : ""}`
-      : "none";
-  const details = [`${label}:object keys=${keySummary}`];
-
-  for (const key of ["default", "module", "register", "activate"]) {
-    if (Object.prototype.hasOwnProperty.call(record, key)) {
-      details.push(...describePluginModuleExportShape(record[key], `${label}.${key}`, seen));
-    }
-  }
-  return details;
-}
-
-function formatMissingPluginRegisterError(moduleExport: unknown, env: NodeJS.ProcessEnv): string {
-  const message = "plugin export missing register/activate";
-  if (!isPluginLoadDebugEnabled(env)) {
-    return message;
-  }
-  return `${message} (module shape: ${describePluginModuleExportShape(moduleExport).join("; ")})`;
-}
-
-function mergeChannelPluginSection<T>(
-  baseValue: T | undefined,
-  overrideValue: T | undefined,
-): T | undefined {
-  if (
-    baseValue &&
-    overrideValue &&
-    typeof baseValue === "object" &&
-    typeof overrideValue === "object"
-  ) {
-    const merged = {
-      ...(baseValue as Record<string, unknown>),
-    };
-    for (const [key, value] of Object.entries(overrideValue as Record<string, unknown>)) {
-      if (value !== undefined) {
-        merged[key] = value;
-      }
-    }
-    return {
-      ...merged,
-    } as T;
-  }
-  return overrideValue ?? baseValue;
-}
-
-function mergeSetupRuntimeChannelPlugin(
-  runtimePlugin: ChannelPlugin,
-  setupPlugin: ChannelPlugin,
-): ChannelPlugin {
-  return {
-    ...runtimePlugin,
-    ...setupPlugin,
-    meta: mergeChannelPluginSection(runtimePlugin.meta, setupPlugin.meta),
-    capabilities: mergeChannelPluginSection(runtimePlugin.capabilities, setupPlugin.capabilities),
-    commands: mergeChannelPluginSection(runtimePlugin.commands, setupPlugin.commands),
-    doctor: mergeChannelPluginSection(runtimePlugin.doctor, setupPlugin.doctor),
-    reload: mergeChannelPluginSection(runtimePlugin.reload, setupPlugin.reload),
-    config: mergeChannelPluginSection(runtimePlugin.config, setupPlugin.config),
-    setup: mergeChannelPluginSection(runtimePlugin.setup, setupPlugin.setup),
-    messaging: mergeChannelPluginSection(runtimePlugin.messaging, setupPlugin.messaging),
-    actions: mergeChannelPluginSection(runtimePlugin.actions, setupPlugin.actions),
-    secrets: mergeChannelPluginSection(runtimePlugin.secrets, setupPlugin.secrets),
-  } as ChannelPlugin;
-}
-
-function resolveBundledRuntimeChannelRegistration(moduleExport: unknown): {
-  id?: string;
-  loadChannelPlugin?: () => ChannelPlugin;
-  loadChannelSecrets?: () => ChannelPlugin["secrets"] | undefined;
-  setChannelRuntime?: (runtime: PluginRuntime) => void;
-} {
-  const resolved = unwrapDefaultModuleExport(moduleExport);
-  if (!resolved || typeof resolved !== "object") {
-    return {};
-  }
-  const entryRecord = resolved as {
-    kind?: unknown;
-    id?: unknown;
-    loadChannelPlugin?: unknown;
-    loadChannelSecrets?: unknown;
-    setChannelRuntime?: unknown;
-  };
-  if (
-    entryRecord.kind !== "bundled-channel-entry" ||
-    typeof entryRecord.id !== "string" ||
-    typeof entryRecord.loadChannelPlugin !== "function"
-  ) {
-    return {};
-  }
-  return {
-    id: entryRecord.id,
-    loadChannelPlugin: entryRecord.loadChannelPlugin as () => ChannelPlugin,
-    ...(typeof entryRecord.loadChannelSecrets === "function"
-      ? {
-          loadChannelSecrets: entryRecord.loadChannelSecrets as () =>
-            | ChannelPlugin["secrets"]
-            | undefined,
-        }
-      : {}),
-    ...(typeof entryRecord.setChannelRuntime === "function"
-      ? {
-          setChannelRuntime: entryRecord.setChannelRuntime as (runtime: PluginRuntime) => void,
-        }
-      : {}),
-  };
-}
-
-function loadBundledRuntimeChannelPlugin(params: {
-  registration: ReturnType<typeof resolveBundledRuntimeChannelRegistration>;
-}): {
-  plugin?: ChannelPlugin;
-  loadError?: unknown;
-} {
-  if (typeof params.registration.loadChannelPlugin !== "function") {
-    return {};
-  }
-  try {
-    const loadedPlugin = params.registration.loadChannelPlugin();
-    const loadedSecrets = params.registration.loadChannelSecrets?.();
-    if (!loadedPlugin || typeof loadedPlugin !== "object") {
-      return {};
-    }
-    const mergedSecrets = mergeChannelPluginSection(loadedPlugin.secrets, loadedSecrets);
-    return {
-      plugin: {
-        ...loadedPlugin,
-        ...(mergedSecrets !== undefined ? { secrets: mergedSecrets } : {}),
-      },
-    };
-  } catch (err) {
-    return { loadError: err };
-  }
-}
-
-function resolveSetupChannelRegistration(
-  moduleExport: unknown,
-  params: { installRuntimeDeps?: boolean } = {},
-): {
-  plugin?: ChannelPlugin;
-  setChannelRuntime?: (runtime: PluginRuntime) => void;
-  usesBundledSetupContract?: boolean;
-  loadError?: unknown;
-} {
-  const resolved = unwrapDefaultModuleExport(moduleExport);
-  if (!resolved || typeof resolved !== "object") {
-    return {};
-  }
-  const setupEntryRecord = resolved as {
-    kind?: unknown;
-    loadSetupPlugin?: unknown;
-    loadSetupSecrets?: unknown;
-    setChannelRuntime?: unknown;
-  };
-  if (
-    setupEntryRecord.kind === "bundled-channel-setup-entry" &&
-    typeof setupEntryRecord.loadSetupPlugin === "function"
-  ) {
-    try {
-      const setupLoadOptions =
-        params.installRuntimeDeps === false ? { installRuntimeDeps: false } : undefined;
-      const loadedPlugin = setupEntryRecord.loadSetupPlugin(setupLoadOptions);
-      const loadedSecrets =
-        typeof setupEntryRecord.loadSetupSecrets === "function"
-          ? (setupEntryRecord.loadSetupSecrets(setupLoadOptions) as
-              | ChannelPlugin["secrets"]
-              | undefined)
-          : undefined;
-      if (loadedPlugin && typeof loadedPlugin === "object") {
-        const mergedSecrets = mergeChannelPluginSection(
-          (loadedPlugin as ChannelPlugin).secrets,
-          loadedSecrets,
-        );
-        return {
-          plugin: {
-            ...(loadedPlugin as ChannelPlugin),
-            ...(mergedSecrets !== undefined ? { secrets: mergedSecrets } : {}),
-          },
-          usesBundledSetupContract: true,
-          ...(typeof setupEntryRecord.setChannelRuntime === "function"
-            ? {
-                setChannelRuntime: setupEntryRecord.setChannelRuntime as (
-                  runtime: PluginRuntime,
-                ) => void,
-              }
-            : {}),
-        };
-      }
-    } catch (err) {
-      return { loadError: err };
-    }
-  }
-  const setup = resolved as {
-    plugin?: unknown;
-  };
-  if (!setup.plugin || typeof setup.plugin !== "object") {
-    return {};
-  }
-  return {
-    plugin: setup.plugin as ChannelPlugin,
-  };
-}
-
-function shouldLoadChannelPluginInSetupRuntime(params: {
-  manifestChannels: string[];
-  setupSource?: string;
-  startupDeferConfiguredChannelFullLoadUntilAfterListen?: boolean;
-  cfg: OpenClawConfig;
-  env: NodeJS.ProcessEnv;
-  preferSetupRuntimeForChannelPlugins?: boolean;
-}): boolean {
-  if (!params.setupSource || params.manifestChannels.length === 0) {
-    return false;
-  }
-  if (
-    params.preferSetupRuntimeForChannelPlugins &&
-    params.startupDeferConfiguredChannelFullLoadUntilAfterListen === true
-  ) {
-    return true;
-  }
-  return !params.manifestChannels.some((channelId) =>
-    isChannelConfigured(params.cfg, channelId, params.env),
-  );
-}
-
-function channelPluginIdBelongsToManifest(params: {
-  channelId: string | undefined;
-  pluginId: string;
-  manifestChannels: readonly string[];
-}): boolean {
-  if (!params.channelId) {
-    return true;
-  }
-  return params.channelId === params.pluginId || params.manifestChannels.includes(params.channelId);
-}
-
-function createPluginRecord(params: {
-  id: string;
-  name?: string;
-  description?: string;
-  version?: string;
-  format?: PluginFormat;
-  bundleFormat?: PluginBundleFormat;
-  bundleCapabilities?: string[];
-  source: string;
-  rootDir?: string;
-  origin: PluginRecord["origin"];
-  workspaceDir?: string;
-  enabled: boolean;
-  compat?: readonly PluginCompatCode[];
-  activationState?: PluginActivationState;
-  syntheticAuthRefs?: string[];
-  configSchema: boolean;
-  contracts?: PluginManifestContracts;
-}): PluginRecord {
-  return {
-    id: params.id,
-    name: params.name ?? params.id,
-    description: params.description,
-    version: params.version,
-    format: params.format ?? "openclaw",
-    bundleFormat: params.bundleFormat,
-    bundleCapabilities: params.bundleCapabilities,
-    source: params.source,
-    rootDir: params.rootDir,
-    origin: params.origin,
-    workspaceDir: params.workspaceDir,
-    enabled: params.enabled,
-    compat: params.compat,
-    explicitlyEnabled: params.activationState?.explicitlyEnabled,
-    activated: params.activationState?.activated,
-    activationSource: params.activationState?.source,
-    activationReason: params.activationState?.reason,
-    syntheticAuthRefs: params.syntheticAuthRefs ?? [],
-    status: params.enabled ? "loaded" : "disabled",
-    toolNames: [],
-    hookNames: [],
-    channelIds: [],
-    cliBackendIds: [],
-    providerIds: [],
-    speechProviderIds: [],
-    realtimeTranscriptionProviderIds: [],
-    realtimeVoiceProviderIds: [],
-    mediaUnderstandingProviderIds: [],
-    imageGenerationProviderIds: [],
-    videoGenerationProviderIds: [],
-    musicGenerationProviderIds: [],
-    webFetchProviderIds: [],
-    webSearchProviderIds: [],
-    migrationProviderIds: [],
-    contextEngineIds: [],
-    memoryEmbeddingProviderIds: [],
-    agentHarnessIds: [],
-    gatewayMethods: [],
-    cliCommands: [],
-    services: [],
-    gatewayDiscoveryServiceIds: [],
-    commands: [],
-    httpRoutes: 0,
-    hookCount: 0,
-    configSchema: params.configSchema,
-    configUiHints: undefined,
-    configJsonSchema: undefined,
-    contracts: params.contracts,
-  };
-}
-
-function markPluginActivationDisabled(record: PluginRecord, reason?: string): void {
-  record.activated = false;
-  record.activationSource = "disabled";
-  record.activationReason = reason;
-}
-
-function formatAutoEnabledActivationReason(
-  reasons: readonly string[] | undefined,
-): string | undefined {
-  if (!reasons || reasons.length === 0) {
-    return undefined;
-  }
-  return reasons.join("; ");
-}
-
-function recordPluginError(params: {
-  logger: PluginLogger;
-  registry: PluginRegistry;
-  record: PluginRecord;
-  seenIds: Map<string, PluginRecord["origin"]>;
-  pluginId: string;
-  origin: PluginRecord["origin"];
-  phase: PluginRecord["failurePhase"];
-  error: unknown;
-  logPrefix: string;
-  diagnosticMessagePrefix: string;
-}) {
-  const errorText =
-    process.env.OPENCLAW_PLUGIN_LOADER_DEBUG_STACKS === "1" &&
-    params.error instanceof Error &&
-    typeof params.error.stack === "string"
-      ? params.error.stack
-      : String(params.error);
-  const deprecatedApiHint =
-    errorText.includes("api.registerHttpHandler") && errorText.includes("is not a function")
-      ? "deprecated api.registerHttpHandler(...) was removed; use api.registerHttpRoute(...) for plugin-owned routes or registerPluginHttpRoute(...) for dynamic lifecycle routes"
-      : null;
-  const displayError = deprecatedApiHint ? `${deprecatedApiHint} (${errorText})` : errorText;
-  params.logger.error(`${params.logPrefix}${displayError}`);
-  params.record.status = "error";
-  params.record.error = displayError;
-  params.record.failedAt = new Date();
-  params.record.failurePhase = params.phase;
-  params.registry.plugins.push(params.record);
-  params.seenIds.set(params.pluginId, params.origin);
-  params.registry.diagnostics.push({
-    level: "error",
-    pluginId: params.record.id,
-    source: params.record.source,
-    message: `${params.diagnosticMessagePrefix}${displayError}`,
-  });
-}
-
-function formatPluginFailureSummary(failedPlugins: PluginRecord[]): string {
-  const grouped = new Map<NonNullable<PluginRecord["failurePhase"]>, string[]>();
-  for (const plugin of failedPlugins) {
-    const phase = plugin.failurePhase ?? "load";
-    const ids = grouped.get(phase);
-    if (ids) {
-      ids.push(plugin.id);
-      continue;
-    }
-    grouped.set(phase, [plugin.id]);
-  }
-  return [...grouped.entries()].map(([phase, ids]) => `${phase}: ${ids.join(", ")}`).join("; ");
-}
-
 function pushDiagnostics(diagnostics: PluginDiagnostic[], append: PluginDiagnostic[]) {
   diagnostics.push(...append);
 }
@@ -1442,261 +1055,6 @@ function maybeThrowOnPluginLoadError(
     return;
   }
   throw new PluginLoadFailureError(registry);
-}
-
-type PathMatcher = {
-  exact: Set<string>;
-  dirs: string[];
-};
-
-type InstallTrackingRule = {
-  trackedWithoutPaths: boolean;
-  matcher: PathMatcher;
-};
-
-type PluginProvenanceIndex = {
-  loadPathMatcher: PathMatcher;
-  installRules: Map<string, InstallTrackingRule>;
-};
-
-function createPathMatcher(): PathMatcher {
-  return { exact: new Set<string>(), dirs: [] };
-}
-
-function addPathToMatcher(
-  matcher: PathMatcher,
-  rawPath: string,
-  env: NodeJS.ProcessEnv = process.env,
-): void {
-  const trimmed = rawPath.trim();
-  if (!trimmed) {
-    return;
-  }
-  const resolved = resolveUserPath(trimmed, env);
-  if (!resolved) {
-    return;
-  }
-  if (matcher.exact.has(resolved) || matcher.dirs.includes(resolved)) {
-    return;
-  }
-  const stat = safeStatSync(resolved);
-  if (stat?.isDirectory()) {
-    matcher.dirs.push(resolved);
-    return;
-  }
-  matcher.exact.add(resolved);
-}
-
-function matchesPathMatcher(matcher: PathMatcher, sourcePath: string): boolean {
-  if (matcher.exact.has(sourcePath)) {
-    return true;
-  }
-  return matcher.dirs.some((dirPath) => isPathInside(dirPath, sourcePath));
-}
-
-function buildProvenanceIndex(params: {
-  config: OpenClawConfig;
-  normalizedLoadPaths: string[];
-  env: NodeJS.ProcessEnv;
-}): PluginProvenanceIndex {
-  const loadPathMatcher = createPathMatcher();
-  for (const loadPath of params.normalizedLoadPaths) {
-    addPathToMatcher(loadPathMatcher, loadPath, params.env);
-  }
-
-  const installRules = new Map<string, InstallTrackingRule>();
-  const installs = loadInstalledPluginIndexInstallRecordsSync({ env: params.env });
-  for (const [pluginId, install] of Object.entries(installs)) {
-    const rule: InstallTrackingRule = {
-      trackedWithoutPaths: false,
-      matcher: createPathMatcher(),
-    };
-    const trackedPaths = [install.installPath, install.sourcePath]
-      .map((entry) => normalizeOptionalString(entry))
-      .filter((entry): entry is string => Boolean(entry));
-    if (trackedPaths.length === 0) {
-      rule.trackedWithoutPaths = true;
-    } else {
-      for (const trackedPath of trackedPaths) {
-        addPathToMatcher(rule.matcher, trackedPath, params.env);
-      }
-    }
-    installRules.set(pluginId, rule);
-  }
-
-  return { loadPathMatcher, installRules };
-}
-
-function isTrackedByProvenance(params: {
-  pluginId: string;
-  source: string;
-  index: PluginProvenanceIndex;
-  env: NodeJS.ProcessEnv;
-}): boolean {
-  const sourcePath = resolveUserPath(params.source, params.env);
-  const installRule = params.index.installRules.get(params.pluginId);
-  if (installRule) {
-    if (installRule.trackedWithoutPaths) {
-      return true;
-    }
-    if (matchesPathMatcher(installRule.matcher, sourcePath)) {
-      return true;
-    }
-  }
-  return matchesPathMatcher(params.index.loadPathMatcher, sourcePath);
-}
-
-function matchesExplicitInstallRule(params: {
-  pluginId: string;
-  source: string;
-  index: PluginProvenanceIndex;
-  env: NodeJS.ProcessEnv;
-}): boolean {
-  const sourcePath = resolveUserPath(params.source, params.env);
-  const installRule = params.index.installRules.get(params.pluginId);
-  if (!installRule || installRule.trackedWithoutPaths) {
-    return false;
-  }
-  return matchesPathMatcher(installRule.matcher, sourcePath);
-}
-
-function resolveCandidateDuplicateRank(params: {
-  candidate: ReturnType<typeof discoverOpenClawPlugins>["candidates"][number];
-  manifestByRoot: Map<string, ReturnType<typeof loadPluginManifestRegistry>["plugins"][number]>;
-  provenance: PluginProvenanceIndex;
-  env: NodeJS.ProcessEnv;
-}): number {
-  const manifestRecord = params.manifestByRoot.get(params.candidate.rootDir);
-  const pluginId = manifestRecord?.id;
-  const isExplicitInstall =
-    params.candidate.origin === "global" &&
-    pluginId !== undefined &&
-    matchesExplicitInstallRule({
-      pluginId,
-      source: params.candidate.source,
-      index: params.provenance,
-      env: params.env,
-    });
-
-  if (params.candidate.origin === "config") {
-    return 0;
-  }
-  if (params.candidate.origin === "global" && isExplicitInstall) {
-    return 1;
-  }
-  if (params.candidate.origin === "bundled") {
-    // Bundled plugin ids stay reserved unless the operator configured an override.
-    return 2;
-  }
-  if (params.candidate.origin === "workspace") {
-    return 3;
-  }
-  return 4;
-}
-
-function compareDuplicateCandidateOrder(params: {
-  left: ReturnType<typeof discoverOpenClawPlugins>["candidates"][number];
-  right: ReturnType<typeof discoverOpenClawPlugins>["candidates"][number];
-  manifestByRoot: Map<string, ReturnType<typeof loadPluginManifestRegistry>["plugins"][number]>;
-  provenance: PluginProvenanceIndex;
-  env: NodeJS.ProcessEnv;
-}): number {
-  const leftPluginId = params.manifestByRoot.get(params.left.rootDir)?.id;
-  const rightPluginId = params.manifestByRoot.get(params.right.rootDir)?.id;
-  if (!leftPluginId || leftPluginId !== rightPluginId) {
-    return 0;
-  }
-  return (
-    resolveCandidateDuplicateRank({
-      candidate: params.left,
-      manifestByRoot: params.manifestByRoot,
-      provenance: params.provenance,
-      env: params.env,
-    }) -
-    resolveCandidateDuplicateRank({
-      candidate: params.right,
-      manifestByRoot: params.manifestByRoot,
-      provenance: params.provenance,
-      env: params.env,
-    })
-  );
-}
-
-function warnWhenAllowlistIsOpen(params: {
-  emitWarning: boolean;
-  logger: PluginLogger;
-  pluginsEnabled: boolean;
-  allow: string[];
-  warningCacheKey: string;
-  discoverablePlugins: Array<{ id: string; source: string; origin: PluginRecord["origin"] }>;
-}) {
-  if (!params.emitWarning) {
-    return;
-  }
-  if (!params.pluginsEnabled) {
-    return;
-  }
-  if (params.allow.length > 0) {
-    return;
-  }
-  const autoDiscoverable = params.discoverablePlugins.filter(
-    (entry) => entry.origin === "workspace" || entry.origin === "global",
-  );
-  if (autoDiscoverable.length === 0) {
-    return;
-  }
-  if (pluginLoaderCacheState.hasOpenAllowlistWarning(params.warningCacheKey)) {
-    return;
-  }
-  const preview = autoDiscoverable
-    .slice(0, 6)
-    .map((entry) => `${entry.id} (${entry.source})`)
-    .join(", ");
-  const extra = autoDiscoverable.length > 6 ? ` (+${autoDiscoverable.length - 6} more)` : "";
-  pluginLoaderCacheState.recordOpenAllowlistWarning(params.warningCacheKey);
-  params.logger.warn(
-    `[plugins] plugins.allow is empty; discovered non-bundled plugins may auto-load: ${preview}${extra}. Set plugins.allow to explicit trusted ids.`,
-  );
-}
-
-function warnAboutUntrackedLoadedPlugins(params: {
-  registry: PluginRegistry;
-  provenance: PluginProvenanceIndex;
-  allowlist: string[];
-  emitWarning: boolean;
-  logger: PluginLogger;
-  env: NodeJS.ProcessEnv;
-}) {
-  const allowSet = new Set(params.allowlist);
-  for (const plugin of params.registry.plugins) {
-    if (plugin.status !== "loaded" || plugin.origin === "bundled") {
-      continue;
-    }
-    if (allowSet.has(plugin.id)) {
-      continue;
-    }
-    if (
-      isTrackedByProvenance({
-        pluginId: plugin.id,
-        source: plugin.source,
-        index: params.provenance,
-        env: params.env,
-      })
-    ) {
-      continue;
-    }
-    const message =
-      "loaded without install/load-path provenance; treat as untracked local code and pin trust via plugins.allow or install records";
-    params.registry.diagnostics.push({
-      level: "warn",
-      pluginId: plugin.id,
-      source: plugin.source,
-      message,
-    });
-    if (params.emitWarning) {
-      params.logger.warn(`[plugins] ${plugin.id}: ${message} (${plugin.source})`);
-    }
-  }
 }
 
 function activatePluginRegistry(
@@ -1921,6 +1279,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       pluginsEnabled: normalized.enabled,
       allow: normalized.allow,
       warningCacheKey: cacheKey,
+      warningCache: pluginLoaderCacheState,
       // Keep warning input scoped as well so partial snapshot loads only mention the
       // plugins that were intentionally requested for this registry.
       discoverablePlugins: manifestRegistry.plugins
@@ -1932,7 +1291,6 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         })),
     });
     const provenance = buildProvenanceIndex({
-      config: cfg,
       normalizedLoadPaths: normalized.loadPaths,
       env,
     });
@@ -2810,6 +2168,7 @@ export async function loadOpenClawPluginCliRegistry(
     pluginsEnabled: normalized.enabled,
     allow: normalized.allow,
     warningCacheKey: `${cacheKey}::cli-metadata`,
+    warningCache: pluginLoaderCacheState,
     discoverablePlugins: manifestRegistry.plugins
       .filter((plugin) => !onlyPluginIdSet || onlyPluginIdSet.has(plugin.id))
       .map((plugin) => ({
@@ -2819,7 +2178,6 @@ export async function loadOpenClawPluginCliRegistry(
       })),
   });
   const provenance = buildProvenanceIndex({
-    config: cfg,
     normalizedLoadPaths: normalized.loadPaths,
     env,
   });

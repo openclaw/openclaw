@@ -182,7 +182,7 @@ Telegraph style. Root rules only. Read scoped `AGENTS.md` before subtree work.
 ## Ops / Footguns
 
 - Remote install docs: `docs/install/{exe-dev,fly,hetzner}.md`. Parallels smoke: `$openclaw-parallels-smoke`; Discord roundtrip: `parallels-discord-roundtrip`.
-- Memory wiki: keep prompt digest tiny. The prompt should only say the wiki exists, prefer `wiki_search` / `wiki_get`, start from `reports/maintainer-agent-directory.md` for people routing, and verify contact data before use.
+- Memory wiki: keep prompt digest tiny. The prompt should only say the wiki exists, prefer `wiki_search` / `wiki_get`, start from `reports/person-agent-directory.md` for people routing, use search modes (`find-person`, `route-question`, `source-evidence`, `raw-claim`) when useful, and verify contact data before use.
 - People wiki provenance: generated identity, social, contact, and "fun detail" notes need explicit source class/confidence (`maintainer-whois`, Discrawl sample/stat, GitHub profile, maintainer repo file). Do not promote inferred details to facts.
 - Rebrand/migration/config warnings: run `openclaw doctor`.
 - Never edit `node_modules`.

@@ -698,6 +698,7 @@ describe("bundled channel entry shape guards", () => {
         "  name: 'Alpha',",
         "  description: 'Alpha',",
         "  importMetaUrl: import.meta.url,",
+        "  features: { accountInspect: true },",
         "  plugin: { specifier: './plugin.js' },",
         "});",
         "",
@@ -733,7 +734,7 @@ describe("bundled channel entry shape guards", () => {
         "./bundled.js?scope=bundled-runtime-deps",
       );
 
-      expect(bundled.getBundledChannelPlugin("alpha")).toBeUndefined();
+      expect(bundled.hasBundledChannelEntryFeature("alpha", "accountInspect")).toBe(true);
       expect(testGlobal.__bundledRuntimeDepMarker).toBeUndefined();
     } finally {
       restoreBundledPluginsDir(previousBundledPluginsDir);
