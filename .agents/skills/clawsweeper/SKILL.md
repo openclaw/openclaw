@@ -192,6 +192,7 @@ Important gates:
 Maintainers can use:
 
 ```text
+/review
 /clawsweeper status
 /clawsweeper re-review
 /clawsweeper fix ci
@@ -204,14 +205,16 @@ Maintainers can use:
 /automerge
 /autoclose <maintainer close reason>
 @clawsweeper re-review
+@clawsweeper review
 @clawsweeper[bot] re-review
 @openclaw-clawsweeper fix ci
 @openclaw-clawsweeper[bot] fix ci
 ```
 
-Accepted aliases: `re-review`, `rereview`, `review again`, `rerun review`,
-and `run review`. `re-review` dispatches a fresh ClawSweeper issue/PR review
-without starting repair. `fix ci`, `address review`, and `rebase` dispatch the
+Accepted aliases: `review`, `re-review`, `rereview`, `review again`,
+`rerun review`, and `run review`. `review` and `re-review` dispatch a fresh
+ClawSweeper issue/PR review without starting repair. `fix ci`,
+`address review`, and `rebase` dispatch the
 repair worker only for ClawSweeper PRs or PRs opted into
 `clawsweeper:automerge`.
 
