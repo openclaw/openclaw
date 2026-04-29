@@ -89,6 +89,7 @@ export class RestScheduler<TData> {
     return {
       globalRateLimitUntil: this.globalRateLimitUntil,
       activeBuckets: this.buckets.size,
+      routeBucketMappings: this.routeBuckets.size,
       buckets: Array.from(this.buckets.entries()).map(([key, bucket]) => ({
         key,
         active: bucket.active,
@@ -142,6 +143,34 @@ export class RestScheduler<TData> {
       }
     }
     return false;
+  }
+
+  private isBucketRateLimited(bucket: BucketState<TData>, now = Date.now()): boolean {
+    return bucket.remaining === 0 && bucket.resetAt > now;
+  }
+
+  private pruneRouteMapping(routeKey: string): void {
+    const bucketKey = this.routeBuckets.get(routeKey);
+    if (!bucketKey) {
+      return;
+    }
+    this.routeBuckets.delete(routeKey);
+    this.buckets.get(bucketKey)?.routeKeys.delete(routeKey);
+  }
+
+  private pruneIdleRouteMappings(
+    bucketKey: string,
+    bucket: BucketState<TData>,
+    now = Date.now(),
+  ): void {
+    if (bucket.active > 0 || bucket.pending.length > 0 || this.isBucketRateLimited(bucket, now)) {
+      return;
+    }
+    for (const routeKey of Array.from(bucket.routeKeys)) {
+      if (this.routeBuckets.get(routeKey) === bucketKey) {
+        this.pruneRouteMapping(routeKey);
+      }
+    }
   }
 
   private shouldPruneIdleBucket(key: string): boolean {
@@ -267,7 +296,15 @@ export class RestScheduler<TData> {
         break;
       }
       if (bucket.pending.length === 0) {
-        if (bucket.active === 0 && this.shouldPruneIdleBucket(key)) {
+        if (bucket.active !== 0) {
+          continue;
+        }
+        if (this.isBucketRateLimited(bucket, now)) {
+          nextDelayMs = Math.min(nextDelayMs, bucket.resetAt - now);
+          continue;
+        }
+        this.pruneIdleRouteMappings(key, bucket, now);
+        if (this.shouldPruneIdleBucket(key)) {
           this.buckets.delete(key);
         }
         continue;
