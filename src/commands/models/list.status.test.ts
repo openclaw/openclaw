@@ -48,10 +48,11 @@ const mocks = vi.hoisted(() => {
         .filter(([, cred]) => cred.provider === provider)
         .map(([id]) => id);
     }),
+    loadPersistedAuthProfileStore: vi.fn().mockReturnValue(store),
     resolveAuthProfileDisplayLabel: vi.fn(({ profileId }: { profileId: string }) => profileId),
-    resolveAuthStorePathForDisplay: vi
-      .fn()
-      .mockReturnValue("/tmp/openclaw-agent/auth-profiles.json"),
+    resolveAuthStorePathForDisplay: vi.fn(
+      (agentDir?: string) => `${agentDir ?? "/tmp/openclaw-agent"}/auth-profiles.json`,
+    ),
     resolveProfileUnusableUntilForDisplay: vi.fn().mockReturnValue(undefined),
     resolveEnvApiKey: vi.fn((provider: string) => {
       if (provider === "openai") {
@@ -141,6 +142,9 @@ vi.mock("../../agents/auth-profiles/display.js", () => ({
 }));
 vi.mock("../../agents/auth-profiles/paths.js", () => ({
   resolveAuthStorePathForDisplay: mocks.resolveAuthStorePathForDisplay,
+}));
+vi.mock("../../agents/auth-profiles/persisted.js", () => ({
+  loadPersistedAuthProfileStore: mocks.loadPersistedAuthProfileStore,
 }));
 vi.mock("../../agents/auth-profiles/profiles.js", () => ({
   listProfilesForProvider: mocks.listProfilesForProvider,
@@ -358,6 +362,16 @@ describe("modelsStatusCommand auth overview", () => {
         expect(payload.modelConfig).toEqual({
           defaultSource: "agent",
           fallbacksSource: "agent",
+        });
+        const openAiCodex = (
+          payload.auth.providers as Array<{
+            provider: string;
+            effective?: { kind: string; detail?: string };
+          }>
+        ).find((provider) => provider.provider === "openai-codex");
+        expect(openAiCodex?.effective).toEqual({
+          kind: "profiles",
+          detail: "/tmp/openclaw-agent-custom/auth-profiles.json",
         });
       },
     );
