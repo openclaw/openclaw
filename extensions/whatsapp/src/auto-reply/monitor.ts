@@ -176,7 +176,6 @@ export async function monitorWebChannel(
         mediaMaxMb: account.mediaMaxMb,
         blockStreaming: account.blockStreaming,
         groups: account.groups,
-        exposeErrorText: account.exposeErrorText,
       },
     },
   } satisfies ReturnType<typeof getRuntimeConfig>;
