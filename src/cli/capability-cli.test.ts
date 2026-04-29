@@ -363,6 +363,42 @@ describe("capability cli", () => {
     }) as never);
   });
 
+  async function runModelRunWithModel(model: string, transport: "local" | "gateway") {
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: [
+        "capability",
+        "model",
+        "run",
+        "--model",
+        model,
+        "--prompt",
+        "hello",
+        ...(transport === "gateway" ? ["--gateway"] : []),
+        "--json",
+      ],
+    });
+  }
+
+  function expectModelRunDispatch(transport: "local" | "gateway", modelRef: string) {
+    if (transport === "gateway") {
+      const slash = modelRef.indexOf("/");
+      expect(mocks.callGateway).toHaveBeenCalledWith(
+        expect.objectContaining({
+          method: "agent",
+          params: expect.objectContaining({
+            provider: modelRef.slice(0, slash),
+            model: modelRef.slice(slash + 1),
+          }),
+        }),
+      );
+      return;
+    }
+    expect(mocks.prepareSimpleCompletionModelForAgent).toHaveBeenCalledWith(
+      expect.objectContaining({ modelRef }),
+    );
+  }
+
   it("lists canonical capabilities", async () => {
     await runRegisteredCli({
       register: registerCapabilityCli as (program: Command) => void,
@@ -778,6 +814,30 @@ describe("capability cli", () => {
       }),
     );
   });
+
+  it.each(["local", "gateway"] as const)(
+    "canonicalizes case-mismatched model refs before %s dispatch",
+    async (transport) => {
+      mocks.loadModelCatalog.mockResolvedValueOnce([
+        { id: "claude-opus-4-7", provider: "anthropic", name: "Claude Opus 4.7" },
+      ] as never);
+
+      await runModelRunWithModel("Anthropic/CLAUDE-OPUS-4-7", transport);
+
+      expectModelRunDispatch(transport, "anthropic/claude-opus-4-7");
+    },
+  );
+
+  it.each(["local", "gateway"] as const)(
+    "keeps custom mixed-case model refs before %s dispatch when the catalog has no match",
+    async (transport) => {
+      mocks.loadModelCatalog.mockResolvedValueOnce([] as never);
+
+      await runModelRunWithModel("custom/MyModel", transport);
+
+      expectModelRunDispatch(transport, "custom/MyModel");
+    },
+  );
 
   it("rejects empty model run prompts before gateway dispatch", async () => {
     await expect(
