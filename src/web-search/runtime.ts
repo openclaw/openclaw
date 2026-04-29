@@ -32,6 +32,9 @@ import type {
   RuntimeWebSearchConfig as WebSearchConfig,
 } from "./runtime-types.js";
 
+/**
+ * 导出Web搜索相关类型
+ */
 export type {
   ListWebSearchProvidersParams,
   ResolveWebSearchDefinitionParams,
@@ -42,10 +45,20 @@ export type {
   RuntimeWebSearchToolDefinition,
 } from "./runtime-types.js";
 
+/**
+ * 解析搜索配置
+ * @param cfg - OpenClaw配置
+ * @returns Web搜索配置
+ */
 function resolveSearchConfig(cfg?: OpenClawConfig): WebSearchConfig {
   return resolveWebProviderConfig(cfg, "search") as NonNullable<WebSearchConfig> | undefined;
 }
 
+/**
+ * 解析Web搜索运行时配置
+ * @param config - 可选的配置
+ * @returns 运行时配置或undefined
+ */
 function resolveWebSearchRuntimeConfig(config?: OpenClawConfig): OpenClawConfig | undefined {
   return selectApplicableRuntimeConfig({
     inputConfig: config,
@@ -54,6 +67,11 @@ function resolveWebSearchRuntimeConfig(config?: OpenClawConfig): OpenClawConfig 
   });
 }
 
+/**
+ * 解析Web搜索是否启用
+ * @param params - 搜索配置和沙盒标志
+ * @returns 是否启用
+ */
 export function resolveWebSearchEnabled(params: {
   search?: WebSearchConfig;
   sandboxed?: boolean;
@@ -67,6 +85,13 @@ export function resolveWebSearchEnabled(params: {
   return true;
 }
 
+/**
+ * 检查条目是否有凭证
+ * @param provider - 提供商条目
+ * @param config - OpenClaw配置
+ * @param search - 搜索配置
+ * @returns 是否有凭证
+ */
 function hasEntryCredential(
   provider: Pick<
     PluginWebSearchProviderEntry,
@@ -92,6 +117,11 @@ function hasEntryCredential(
   });
 }
 
+/**
+ * 检查Web搜索提供商是否已配置
+ * @param params - 提供商和配置
+ * @returns 是否已配置
+ */
 export function isWebSearchProviderConfigured(params: {
   provider: Pick<
     PluginWebSearchProviderEntry,
@@ -108,6 +138,11 @@ export function isWebSearchProviderConfigured(params: {
   return hasEntryCredential(params.provider, config, resolveSearchConfig(config));
 }
 
+/**
+ * 列出所有Web搜索提供商
+ * @param params - 可选配置
+ * @returns 提供商条目数组
+ */
 export function listWebSearchProviders(params?: {
   config?: OpenClawConfig;
 }): PluginWebSearchProviderEntry[] {
@@ -118,6 +153,11 @@ export function listWebSearchProviders(params?: {
   });
 }
 
+/**
+ * 列出已配置的Web搜索提供商
+ * @param params - 可选配置
+ * @returns 提供商条目数组
+ */
 export function listConfiguredWebSearchProviders(params?: {
   config?: OpenClawConfig;
 }): PluginWebSearchProviderEntry[] {
@@ -128,6 +168,11 @@ export function listConfiguredWebSearchProviders(params?: {
   });
 }
 
+/**
+ * 解析Web搜索提供商ID
+ * @param params - 搜索配置、配置和提供商列表
+ * @returns 提供商ID
+ */
 export function resolveWebSearchProviderId(params: {
   search?: WebSearchConfig;
   config?: OpenClawConfig;
@@ -179,6 +224,11 @@ export function resolveWebSearchProviderId(params: {
   return providers[0]?.id ?? "";
 }
 
+/**
+ * 解析Web搜索定义
+ * @param options - 解析选项
+ * @returns 提供商和定义或null
+ */
 export function resolveWebSearchDefinition(
   options?: ResolveWebSearchDefinitionParams,
 ): { provider: PluginWebSearchProviderEntry; definition: WebSearchProviderToolDefinition } | null {
@@ -230,6 +280,11 @@ export function resolveWebSearchDefinition(
   });
 }
 
+/**
+ * 解析Web搜索候选提供商
+ * @param options - 解析选项
+ * @returns 候选提供商数组
+ */
 function resolveWebSearchCandidates(
   options?: ResolveWebSearchDefinitionParams,
 ): PluginWebSearchProviderEntry[] {
@@ -279,6 +334,11 @@ function resolveWebSearchCandidates(
   return orderedProviders;
 }
 
+/**
+ * 检查是否有显式的Web搜索选择
+ * @param params - 参数
+ * @returns 是否有显式选择
+ */
 function hasExplicitWebSearchSelection(params: {
   search?: WebSearchConfig;
   runtimeWebSearch?: RuntimeWebSearchMetadata;
@@ -311,6 +371,11 @@ function hasExplicitWebSearchSelection(params: {
   return false;
 }
 
+/**
+ * 运行Web搜索
+ * @param params - 搜索参数
+ * @returns 搜索结果
+ */
 export async function runWebSearch(params: RunWebSearchParams): Promise<RunWebSearchResult> {
   const config = resolveWebSearchRuntimeConfig(params.config);
   const search = resolveSearchConfig(config);
@@ -365,6 +430,9 @@ export async function runWebSearch(params: RunWebSearchParams): Promise<RunWebSe
   throw lastError instanceof Error ? lastError : new Error(String(lastError));
 }
 
+/**
+ * 测试用导出
+ */
 export const __testing = {
   resolveSearchConfig,
   resolveSearchProvider: resolveWebSearchProviderId,

@@ -24,20 +24,40 @@ import type {
 } from "./channel-shared.js";
 import { matchEventFilter, normalizeApprovalId, toConversation, toText } from "./channel-shared.js";
 
+/**
+ * 待处理等待者类型
+ * filter: 事件过滤器
+ * resolve: Promise resolve函数
+ * timeout: 超时计时器
+ */
 type PendingWaiter = {
   filter: WaitFilter;
   resolve: (value: QueueEvent | null) => void;
   timeout: NodeJS.Timeout | null;
 };
 
+/**
+ * 服务器通知类型
+ */
 type ServerNotification = {
   method: string;
   params?: Record<string, unknown>;
 };
 
+/**
+ * Claude权限回复正则表达式
+ */
 const CLAUDE_PERMISSION_REPLY_RE = /^(yes|no)\s+([a-km-z]{5})$/i;
+
+/**
+ * 队列大小限制
+ */
 const QUEUE_LIMIT = 1_000;
 
+/**
+ * OpenClaw通道桥接器
+ * 连接MCP服务器和OpenClaw网关客户端
+ */
 export class OpenClawChannelBridge {
   private gateway: GatewayClient | null = null;
   private readonly verbose: boolean;
@@ -57,6 +77,11 @@ export class OpenClawChannelBridge {
   private rejectReady!: (error: Error) => void;
   private readySettled = false;
 
+  /**
+   * 构造函数
+   * @param cfg - OpenClaw配置
+   * @param params - 其他参数
+   */
   constructor(
     private readonly cfg: OpenClawConfig,
     private readonly params: {
@@ -75,10 +100,18 @@ export class OpenClawChannelBridge {
     });
   }
 
+  /**
+   * 设置MCP服务器实例
+   * @param server - MCP服务器
+   */
   setServer(server: McpServer): void {
     this.server = server;
   }
 
+  /**
+   * 启动桥接器
+   * 初始化网关客户端并建立连接
+   */
   async start(): Promise<void> {
     if (this.started) {
       await this.readyPromise;
@@ -146,10 +179,16 @@ export class OpenClawChannelBridge {
     await this.readyPromise;
   }
 
+  /**
+   * 等待桥接器就绪
+   */
   async waitUntilReady(): Promise<void> {
     await this.readyPromise;
   }
 
+  /**
+   * 关闭桥接器
+   */
   async close(): Promise<void> {
     if (this.closed) {
       return;
@@ -168,6 +207,11 @@ export class OpenClawChannelBridge {
     await gateway?.stopAndWait().catch(() => undefined);
   }
 
+  /**
+   * 列出对话
+   * @param params - 可选参数：限制、搜索、通道筛选等
+   * @returns 对话描述符数组
+   */
   async listConversations(params?: {
     limit?: number;
     search?: string;
@@ -193,6 +237,11 @@ export class OpenClawChannelBridge {
       );
   }
 
+  /**
+   * 获取单个对话
+   * @param sessionKey - 会话键
+   * @returns 对话描述符或null
+   */
   async getConversation(sessionKey: string): Promise<ConversationDescriptor | null> {
     const normalizedSessionKey = sessionKey.trim();
     if (!normalizedSessionKey) {
@@ -204,6 +253,12 @@ export class OpenClawChannelBridge {
     );
   }
 
+  /**
+   * 读取消息
+   * @param sessionKey - 会话键
+   * @param limit - 消息数量限制
+   * @returns 消息数组
+   */
   async readMessages(
     sessionKey: string,
     limit = 20,
@@ -216,6 +271,11 @@ export class OpenClawChannelBridge {
     return response.messages ?? [];
   }
 
+  /**
+   * 发送消息
+   * @param params - 包含会话键和文本的参数
+   * @returns 网关响应
+   */
   async sendMessage(params: {
     sessionKey: string;
     text: string;
@@ -235,12 +295,21 @@ export class OpenClawChannelBridge {
     });
   }
 
+  /**
+   * 列出待处理的审批
+   * @returns 待审批列表
+   */
   listPendingApprovals(): PendingApproval[] {
     return [...this.pendingApprovals.values()].toSorted((a, b) => {
       return (a.createdAtMs ?? 0) - (b.createdAtMs ?? 0);
     });
   }
 
+  /**
+   * 响应审批请求
+   * @param params - 包含种类、ID和决定参的参数
+   * @returns 网关响应
+   */
   async respondToApproval(params: {
     kind: ApprovalKind;
     id: string;
@@ -258,12 +327,24 @@ export class OpenClawChannelBridge {
     });
   }
 
+  /**
+   * 轮询事件
+   * @param filter - 事件过滤器
+   * @param limit - 事件数量限制
+   * @returns 匹配的事件和下一个游标
+   */
   pollEvents(filter: WaitFilter, limit = 20): { events: QueueEvent[]; nextCursor: number } {
     const events = this.queue.filter((event) => matchEventFilter(event, filter)).slice(0, limit);
     const nextCursor = events.at(-1)?.cursor ?? filter.afterCursor;
     return { events, nextCursor };
   }
 
+  /**
+   * 等待事件
+   * @param filter - 事件过滤器
+   * @param timeoutMs - 超时毫秒数
+   * @returns 匹配的事件或null
+   */
   async waitForEvent(filter: WaitFilter, timeoutMs = 30_000): Promise<QueueEvent | null> {
     const existing = this.queue.find((event) => matchEventFilter(event, filter));
     if (existing) {
@@ -287,6 +368,10 @@ export class OpenClawChannelBridge {
     });
   }
 
+  /**
+   * 处理Claude权限请求
+   * @param params - 请求参数
+   */
   async handleClaudePermissionRequest(params: {
     requestId: string;
     toolName: string;
@@ -311,6 +396,12 @@ export class OpenClawChannelBridge {
     }
   }
 
+  /**
+   * 向网关发送请求
+   * @param method - 方法名
+   * @param params - 参数
+   * @returns 响应数据
+   */
   private async requestGateway<T = Record<string, unknown>>(
     method: string,
     params: Record<string, unknown>,
@@ -321,6 +412,10 @@ export class OpenClawChannelBridge {
     return await this.gateway.request<T>(method, params);
   }
 
+  /**
+   * 发送服务器通知
+   * @param notification - 通知内容
+   */
   private async sendNotification(notification: ServerNotification): Promise<void> {
     if (!this.server || this.closed) {
       return;
@@ -336,6 +431,9 @@ export class OpenClawChannelBridge {
     }
   }
 
+  /**
+   * 处理Hello成功事件
+   */
   private async handleHelloOk(): Promise<void> {
     try {
       await this.requestGateway("sessions.subscribe", {});
@@ -346,6 +444,9 @@ export class OpenClawChannelBridge {
     }
   }
 
+  /**
+   * 一次性解决就绪状态
+   */
   private resolveReadyOnce(): void {
     if (this.readySettled) {
       return;
@@ -354,6 +455,10 @@ export class OpenClawChannelBridge {
     this.resolveReady();
   }
 
+  /**
+   * 一次性拒绝就绪状态
+   * @param error - 错误对象
+   */
   private rejectReadyOnce(error: Error): void {
     if (this.readySettled) {
       return;
@@ -362,11 +467,19 @@ export class OpenClawChannelBridge {
     this.rejectReady(error);
   }
 
+  /**
+   * 生成下一个游标值
+   * @returns 新的游标值
+   */
   private nextCursor(): number {
     this.cursor += 1;
     return this.cursor;
   }
 
+  /**
+   * 将事件加入队列
+   * @param event - 队列事件
+   */
   private enqueue(event: QueueEvent): void {
     this.queue.push(event);
     while (this.queue.length > QUEUE_LIMIT) {
@@ -383,6 +496,11 @@ export class OpenClawChannelBridge {
     }
   }
 
+  /**
+   * 跟踪审批
+   * @param kind - 审批种类
+   * @param payload - 载荷
+   */
   private trackApproval(kind: ApprovalKind, payload: Record<string, unknown>): void {
     const id = normalizeApprovalId(payload.id);
     if (!id) {
@@ -400,6 +518,10 @@ export class OpenClawChannelBridge {
     });
   }
 
+  /**
+   * 解析已跟踪的审批
+   * @param payload - 载荷
+   */
   private resolveTrackedApproval(payload: Record<string, unknown>): void {
     const id = normalizeApprovalId(payload.id);
     if (id) {
@@ -407,6 +529,10 @@ export class OpenClawChannelBridge {
     }
   }
 
+  /**
+   * 处理网关事件
+   * @param event - 事件帧
+   */
   private async handleGatewayEvent(event: EventFrame): Promise<void> {
     switch (event.event) {
       case "session.message":
@@ -454,6 +580,10 @@ export class OpenClawChannelBridge {
     }
   }
 
+  /**
+   * 处理会话消息事件
+   * @param payload - 会话消息载荷
+   */
   private async handleSessionMessageEvent(payload: SessionMessagePayload): Promise<void> {
     const sessionKey = toText(payload.sessionKey);
     if (!sessionKey) {
@@ -518,6 +648,12 @@ export class OpenClawChannelBridge {
     });
   }
 
+  /**
+   * 判断是否应发送Claude通道通知
+   * @param role - 消息角色
+   * @param conversation - 对话描述符
+   * @returns 是否应发送
+   */
   private shouldEmitClaudeChannel(
     role: string | undefined,
     conversation: ConversationDescriptor | undefined,
@@ -532,6 +668,11 @@ export class OpenClawChannelBridge {
   }
 }
 
+/**
+ * 判断是否应重试初始MCP网关连接
+ * @param error - 错误对象
+ * @returns 是否应重试
+ */
 export function shouldRetryInitialMcpGatewayConnect(error: Error): boolean {
   if (
     error.name === "GatewayClientRequestError" &&

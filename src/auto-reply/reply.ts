@@ -1,3 +1,7 @@
+/**
+ * 自动回复模块导出
+ * 从reply子模块导出指令提取函数
+ */
 export {
   extractElevatedDirective,
   extractReasoningDirective,

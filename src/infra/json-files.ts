@@ -1,12 +1,17 @@
-import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
-import fs from "node:fs/promises";
-import path from "node:path";
-
+/**
+ * 从错误对象中提取错误码
+ * @param err - 任意错误对象
+ * @returns 错误码字符串或undefined
+ */
 function getErrorCode(err: unknown): string | undefined {
   return err instanceof Error ? (err as NodeJS.ErrnoException).code : undefined;
 }
 
+/**
+ * JSON文件读取错误类型
+ * filePath: 出错的文件路径
+ * reason: 错误原因，'read'表示读取失败，'parse'表示解析失败
+ */
 export class JsonFileReadError extends Error {
   readonly filePath: string;
   readonly reason: "read" | "parse";
@@ -19,6 +24,13 @@ export class JsonFileReadError extends Error {
   }
 }
 
+/**
+ * Windows平台上的原子文件替换操作
+ * 处理Windows上文件替换可能遇到的权限问题和符号链接情况
+ * @param tempPath - 临时文件路径
+ * @param filePath - 目标文件路径
+ * @param mode - 文件权限模式
+ */
 async function replaceFileWithWindowsFallback(tempPath: string, filePath: string, mode: number) {
   try {
     await fs.rename(tempPath, filePath);
@@ -41,11 +53,15 @@ async function replaceFileWithWindowsFallback(tempPath: string, filePath: string
   try {
     await fs.chmod(filePath, mode);
   } catch {
-    // best-effort; ignore on platforms without chmod
   }
   await fs.rm(tempPath, { force: true }).catch(() => undefined);
 }
 
+/**
+ * 异步读取JSON文件
+ * @param filePath - 文件路径
+ * @returns 解析后的JSON对象，读取或解析失败时返回null
+ */
 export async function readJsonFile<T>(filePath: string): Promise<T | null> {
   try {
     const raw = await fs.readFile(filePath, "utf8");
@@ -55,6 +71,12 @@ export async function readJsonFile<T>(filePath: string): Promise<T | null> {
   }
 }
 
+/**
+ * 异步读取JSON文件，失败时抛出详细错误
+ * @param filePath - 文件路径
+ * @returns 解析后的JSON对象
+ * @throws JsonFileReadError 当文件不存在或JSON解析失败时
+ */
 export async function readDurableJsonFile<T>(filePath: string): Promise<T | null> {
   let raw: string;
   try {
@@ -72,6 +94,11 @@ export async function readDurableJsonFile<T>(filePath: string): Promise<T | null
   }
 }
 
+/**
+ * 同步读取JSON文件
+ * @param filePath - 文件路径
+ * @returns 解析后的JSON对象或null
+ */
 export function readJsonFileSync(filePath: string): unknown {
   try {
     const raw = readFileSync(filePath, "utf8");
@@ -81,6 +108,13 @@ export function readJsonFileSync(filePath: string): unknown {
   }
 }
 
+/**
+ * 原子写入JSON文件
+ * 使用临时文件和原子重命名确保文件完整性
+ * @param filePath - 目标文件路径
+ * @param value - 要写入的JSON值
+ * @param options - 可选配置：文件权限、尾部换行、目录权限
+ */
 export async function writeJsonAtomic(
   filePath: string,
   value: unknown,
@@ -94,6 +128,13 @@ export async function writeJsonAtomic(
   });
 }
 
+/**
+ * 原子写入文本文件
+ * 创建临时文件写入后原子重命名，支持Windows兼容性和目录同步
+ * @param filePath - 目标文件路径
+ * @param content - 要写入的文本内容
+ * @param options - 可选配置
+ */
 export async function writeTextAtomic(
   filePath: string,
   content: string,
@@ -120,7 +161,6 @@ export async function writeTextAtomic(
     try {
       await fs.chmod(tmp, mode);
     } catch {
-      // best-effort; ignore on platforms without chmod
     }
     await replaceFileWithWindowsFallback(tmp, filePath, mode);
     try {
@@ -131,18 +171,21 @@ export async function writeTextAtomic(
         await dirHandle.close().catch(() => undefined);
       }
     } catch {
-      // best-effort; some platforms/filesystems do not support syncing directories.
     }
     try {
       await fs.chmod(filePath, mode);
     } catch {
-      // best-effort; ignore on platforms without chmod
     }
   } finally {
     await fs.rm(tmp, { force: true }).catch(() => undefined);
   }
 }
 
+/**
+ * 创建异步锁函数
+ * 确保同一时间只有一个异步操作在执行
+ * @returns 一个包装函数，接受异步操作并确保串行执行
+ */
 export function createAsyncLock() {
   let lock: Promise<void> = Promise.resolve();
   return async function withLock<T>(fn: () => Promise<T>): Promise<T> {

@@ -1,35 +1,32 @@
 ---
-summary: "Prompt caching knobs, merge order, provider behavior, and tuning patterns"
+summary: "Prompt caching 旋钮、合并顺序、提供商行为和调优模式"
 title: "Prompt caching"
 read_when:
-  - You want to reduce prompt token costs with cache retention
-  - You need per-agent cache behavior in multi-agent setups
-  - You are tuning heartbeat and cache-ttl pruning together
+  - 您想用 cache retention 降低 prompt token 成本
+  - 您需要在多 Agent 设置中设置每个 Agent 的 cache 行为
+  - 您正在一起调优 heartbeat 和 cache-ttl pruning
 ---
 
-Prompt caching means the model provider can reuse unchanged prompt prefixes (usually system/developer instructions and other stable context) across turns instead of re-processing them every time. OpenClaw normalizes provider usage into `cacheRead` and `cacheWrite` where the upstream API exposes those counters directly.
+Prompt caching 意味着模型提供商可以跨 turn 重用不变的 prompt 前缀（通常是 system/developer 指令和其他稳定上下文），而不是每次都重新处理。OpenClaw 将提供商使用规范化为 `cacheRead` 和 `cacheWrite`，其中上游 API 直接暴露这些计数器。
 
-Status surfaces can also recover cache counters from the most recent transcript
-usage log when the live session snapshot is missing them, so `/status` can keep
-showing a cache line after partial session metadata loss. Existing nonzero live
-cache values still take precedence over transcript fallback values.
+状态 surface 也可以从最近的 transcript 使用日志中恢复 cache 计数器，当 live session snapshot 缺少它们时，这样 `/status` 可以在部分 session 元数据丢失后继续显示 cache 行。已存在的非零 live cache 值仍优先于 transcript 回退值。
 
-Why this matters: lower token cost, faster responses, and more predictable performance for long-running sessions. Without caching, repeated prompts pay the full prompt cost on every turn even when most input did not change.
+为什么这很重要：更低的 token 成本、更快的响应，以及更可预测的长会话性能。没有 caching，重复的 prompts 在每次 turn 都要支付完整 prompt 成本，即使大部分输入没有改变。
 
-The sections below cover every cache-related knob that affects prompt reuse and token cost.
+以下部分涵盖每个影响 prompt 重用和 token 成本的 cache 相关旋钮。
 
-Provider references:
+提供商参考：
 
 - Anthropic prompt caching: [https://platform.claude.com/docs/en/build-with-claude/prompt-caching](https://platform.claude.com/docs/en/build-with-claude/prompt-caching)
 - OpenAI prompt caching: [https://developers.openai.com/api/docs/guides/prompt-caching](https://developers.openai.com/api/docs/guides/prompt-caching)
 - OpenAI API headers and request IDs: [https://developers.openai.com/api/reference/overview](https://developers.openai.com/api/reference/overview)
 - Anthropic request IDs and errors: [https://platform.claude.com/docs/en/api/errors](https://platform.claude.com/docs/en/api/errors)
 
-## Primary knobs
+## 主要旋钮
 
-### `cacheRetention` (global default, model, and per-agent)
+### `cacheRetention`（全局默认、模型和每个 Agent）
 
-Set cache retention as a global default for all models:
+为所有模型设置 cache retention 全局默认值：
 
 ```yaml
 agents:
@@ -38,7 +35,7 @@ agents:
       cacheRetention: "long" # none | short | long
 ```
 
-Override per-model:
+按模型覆盖：
 
 ```yaml
 agents:
@@ -49,7 +46,7 @@ agents:
           cacheRetention: "short" # none | short | long
 ```
 
-Per-agent override:
+每个 Agent 覆盖：
 
 ```yaml
 agents:
@@ -59,15 +56,15 @@ agents:
         cacheRetention: "none"
 ```
 
-Config merge order:
+配置合并顺序：
 
-1. `agents.defaults.params` (global default — applies to all models)
-2. `agents.defaults.models["provider/model"].params` (per-model override)
-3. `agents.list[].params` (matching agent id; overrides by key)
+1. `agents.defaults.params`（全局默认 —— 适用于所有模型）
+2. `agents.defaults.models["provider/model"].params`（每个模型覆盖）
+3. `agents.list[].params`（匹配的 agent id；按键覆盖）
 
 ### `contextPruning.mode: "cache-ttl"`
 
-Prunes old tool-result context after cache TTL windows so post-idle requests do not re-cache oversized history.
+在 cache TTL 窗口后剪枝旧的 tool-result 上下文，使 idle 后请求不会重新缓存过大的历史。
 
 ```yaml
 agents:
@@ -77,11 +74,11 @@ agents:
       ttl: "1h"
 ```
 
-See [Session Pruning](/concepts/session-pruning) for full behavior.
+参见 [Session Pruning](/concepts/session-pruning) 获取完整行为。
 
 ### Heartbeat keep-warm
 
-Heartbeat can keep cache windows warm and reduce repeated cache writes after idle gaps.
+Heartbeat 可以保持 cache 窗口 warm，减少 idle 间隔后的重复 cache 写入。
 
 ```yaml
 agents:
@@ -90,135 +87,91 @@ agents:
       every: "55m"
 ```
 
-Per-agent heartbeat is supported at `agents.list[].heartbeat`.
+在 `agents.list[].heartbeat` 支持每个 Agent heartbeat。
 
-## Provider behavior
+## 提供商行为
 
-### Anthropic (direct API)
+### Anthropic（直接 API）
 
-- `cacheRetention` is supported.
-- With Anthropic API-key auth profiles, OpenClaw seeds `cacheRetention: "short"` for Anthropic model refs when unset.
-- Anthropic native Messages responses expose both `cache_read_input_tokens` and `cache_creation_input_tokens`, so OpenClaw can show both `cacheRead` and `cacheWrite`.
-- For native Anthropic requests, `cacheRetention: "short"` maps to the default 5-minute ephemeral cache, and `cacheRetention: "long"` upgrades to the 1-hour TTL only on direct `api.anthropic.com` hosts.
+- 支持 `cacheRetention`。
+- 使用 Anthropic API-key auth profiles 时，OpenClaw 在未设置时为 Anthropic 模型引用植入 `cacheRetention: "short"`。
+- Anthropic 原生 Messages 响应暴露 `cache_read_input_tokens` 和 `cache_creation_input_tokens`，所以 OpenClaw 可以同时显示 `cacheRead` 和 `cacheWrite`。
+- 对于原生 Anthropic 请求，`cacheRetention: "short"` 映射到默认的 5 分钟 ephemeral cache，`cacheRetention: "long"` 在直接 `api.anthropic.com` 主机上升级到 1 小时 TTL。
 
-### OpenAI (direct API)
+### OpenAI（直接 API）
 
-- Prompt caching is automatic on supported recent models. OpenClaw does not need to inject block-level cache markers.
-- OpenClaw uses `prompt_cache_key` to keep cache routing stable across turns and uses `prompt_cache_retention: "24h"` only when `cacheRetention: "long"` is selected on direct OpenAI hosts.
-- OpenAI-compatible Completions providers receive `prompt_cache_key` only when their model config explicitly sets `compat.supportsPromptCacheKey: true`; `cacheRetention: "none"` still suppresses it.
-- OpenAI responses expose cached prompt tokens via `usage.prompt_tokens_details.cached_tokens` (or `input_tokens_details.cached_tokens` on Responses API events). OpenClaw maps that to `cacheRead`.
-- OpenAI does not expose a separate cache-write token counter, so `cacheWrite` stays `0` on OpenAI paths even when the provider is warming a cache.
-- OpenAI returns useful tracing and rate-limit headers such as `x-request-id`, `openai-processing-ms`, and `x-ratelimit-*`, but cache-hit accounting should come from the usage payload, not from headers.
-- In practice, OpenAI often behaves like an initial-prefix cache rather than Anthropic-style moving full-history reuse. Stable long-prefix text turns can land near a `4864` cached-token plateau in current live probes, while tool-heavy or MCP-style transcripts often plateau near `4608` cached tokens even on exact repeats.
+- Prompt caching 在支持的新模型上自动启用。OpenClaw 不需要注入 block 级 cache 标记。
+- OpenClaw 使用 `prompt_cache_key` 保持 cache 路由跨 turn 稳定，仅当在直接 OpenAI 主机上选择 `cacheRetention: "long"` 时才使用 `prompt_cache_retention: "24h"`。
+- OpenAI-compatible Completions 提供商仅在其模型配置显式设置 `compat.supportsPromptCacheKey: true` 时才接收 `prompt_cache_key`；`cacheRetention: "none"` 仍会抑制它。
+- OpenAI 响应通过 `usage.prompt_tokens_details.cached_tokens`（或在 Responses API 事件上 `input_tokens_details.cached_tokens`）暴露缓存的 prompt tokens。OpenClaw 将其映射到 `cacheRead`。
+- OpenAI 不暴露单独的 cache-write token 计数器，所以即使提供商正在预热 cache，`cacheWrite` 在 OpenAI 路径上保持为 `0`。
+- OpenAI 返回有用的 tracing 和 rate-limit headers 如 `x-request-id`、`openai-processing-ms` 和 `x-ratelimit-*`，但 cache-hit 计费应来自 usage payload，而不是 headers。
+- 实际上，OpenAI 通常表现得像 initial-prefix cache 而不是 Anthropic 风格的移动全历史重用。稳定的 long-prefix 文本 turn 可以在当前 live probe 中达到接近 `4864` 的缓存 token plateau，而 tool-heavy 或 MCP-style transcripts 即使在完全重复时也经常 plateau 在 `4608` 左右。
 
 ### Anthropic Vertex
 
-- Anthropic models on Vertex AI (`anthropic-vertex/*`) support `cacheRetention` the same way as direct Anthropic.
-- `cacheRetention: "long"` maps to the real 1-hour prompt-cache TTL on Vertex AI endpoints.
-- Default cache retention for `anthropic-vertex` matches direct Anthropic defaults.
-- Vertex requests are routed through boundary-aware cache shaping so cache reuse stays aligned with what providers actually receive.
+- Vertex AI 上的 Anthropic 模型（`anthropic-vertex/*`）以与直接 Anthropic 相同的方式支持 `cacheRetention`。
+- `cacheRetention: "long"` 映射到 Vertex AI 端点上的真实 1 小时 prompt-cache TTL。
+- `anthropic-vertex` 的默认 cache retention 与直接 Anthropic 默认值匹配。
+- Vertex 请求通过 boundary-aware cache shaping 路由，因此 cache 重用与提供商实际接收的内容保持一致。
 
 ### Amazon Bedrock
 
-- Anthropic Claude model refs (`amazon-bedrock/*anthropic.claude*`) support explicit `cacheRetention` pass-through.
-- Non-Anthropic Bedrock models are forced to `cacheRetention: "none"` at runtime.
+- Anthropic Claude 模型引用（`amazon-bedrock/*anthropic.claude*`）支持显式 `cacheRetention` 直通。
+- 非 Anthropic Bedrock 模型在运行时强制为 `cacheRetention: "none"`。
 
-### OpenRouter models
+### OpenRouter 模型
 
-For `openrouter/anthropic/*` model refs, OpenClaw injects Anthropic
-`cache_control` on system/developer prompt blocks to improve prompt-cache
-reuse only when the request is still targeting a verified OpenRouter route
-(`openrouter` on its default endpoint, or any provider/base URL that resolves
-to `openrouter.ai`).
+对于 `openrouter/anthropic/*` 模型引用，OpenClaw 在 system/developer prompt blocks 上注入 Anthropic `cache_control`，以仅在请求仍指向验证的 OpenRouter 路由（`openrouter` 在其默认端点，或解析为 `openrouter.ai` 的任何 provider/base URL）时改善 prompt-cache 重用。
 
-For `openrouter/deepseek/*`, `openrouter/moonshot*/*`, and `openrouter/zai/*`
-model refs, `contextPruning.mode: "cache-ttl"` is allowed because OpenRouter
-handles provider-side prompt caching automatically. OpenClaw does not inject
-Anthropic `cache_control` markers into those requests.
+对于 `openrouter/deepseek/*`、`openrouter/moonshot*/*` 和 `openrouter/zai/*` 模型引用，允许 `contextPruning.mode: "cache-ttl"`，因为 OpenRouter 自动处理提供商端 prompt caching。OpenClaw 不会向这些请求注入 Anthropic `cache_control` 标记。
 
-DeepSeek cache construction is best-effort and can take a few seconds. An
-immediate follow-up may still show `cached_tokens: 0`; verify with a repeated
-same-prefix request after a short delay and use `usage.prompt_tokens_details.cached_tokens`
-as the cache-hit signal.
+DeepSeek cache 构建是 best-effort，可能需要几秒钟。立即跟进可能仍显示 `cached_tokens: 0`；在短延迟后用重复的相同前缀请求验证，并使用 `usage.prompt_tokens_details.cached_tokens` 作为 cache-hit 信号。
 
-If you repoint the model at an arbitrary OpenAI-compatible proxy URL, OpenClaw
-stops injecting those OpenRouter-specific Anthropic cache markers.
+如果您将模型重新指向任意 OpenAI-compatible 代理 URL，OpenClaw 停止注入那些 OpenRouter 特定的 Anthropic cache 标记。
 
-### Other providers
+### 其他提供商
 
-If the provider does not support this cache mode, `cacheRetention` has no effect.
+如果提供商不支持此 cache 模式，`cacheRetention` 没有效果。
 
-### Google Gemini direct API
+### Google Gemini 直接 API
 
-- Direct Gemini transport (`api: "google-generative-ai"`) reports cache hits
-  through upstream `cachedContentTokenCount`; OpenClaw maps that to `cacheRead`.
-- When `cacheRetention` is set on a direct Gemini model, OpenClaw automatically
-  creates, reuses, and refreshes `cachedContents` resources for system prompts
-  on Google AI Studio runs. This means you no longer need to pre-create a
-  cached-content handle manually.
-- You can still pass a pre-existing Gemini cached-content handle through as
-  `params.cachedContent` (or legacy `params.cached_content`) on the configured
-  model.
-- This is separate from Anthropic/OpenAI prompt-prefix caching. For Gemini,
-  OpenClaw manages a provider-native `cachedContents` resource rather than
-  injecting cache markers into the request.
+- 直接 Gemini transport（`api: "google-generative-ai"`）通过上游 `cachedContentTokenCount` 报告 cache hits；OpenClaw 将其映射到 `cacheRead`。
+- 当在直接 Gemini 模型上设置 `cacheRetention` 时，OpenClaw 自动为 Google AI Studio runs 的 system prompts 创建、重用和刷新 `cachedContents` 资源。这意味着您不再需要手动预创建 cached-content handle。
+- 您仍可以通过 `params.cachedContent`（或 legacy `params.cached_content`）传递预存在的 Gemini cached-content handle。
+- 这与 Anthropic/OpenAI 风格的 prompt-prefix caching 是分开的。对于 Gemini，OpenClaw 管理 provider-native `cachedContents` 资源，而不是在请求中注入 cache 标记。
 
 ### Gemini CLI JSON usage
 
-- Gemini CLI JSON output can also surface cache hits through `stats.cached`;
-  OpenClaw maps that to `cacheRead`.
-- If the CLI omits a direct `stats.input` value, OpenClaw derives input tokens
-  from `stats.input_tokens - stats.cached`.
-- This is usage normalization only. It does not mean OpenClaw is creating
-  Anthropic/OpenAI-style prompt-cache markers for Gemini CLI.
+- Gemini CLI JSON 输出也可以通过 `stats.cached` 显示 cache hits；OpenClaw 将其映射到 `cacheRead`。
+- 如果 CLI 省略了显式的 `stats.input` 值，OpenClaw 从 `stats.input_tokens - stats.cached` 派生 input tokens。
+- 这只是 usage 规范化。并不意味着 OpenClaw 为 Gemini 创建 Anthropic/OpenAI 风格的 prompt-cache 标记。
 
 ## System-prompt cache boundary
 
-OpenClaw splits the system prompt into a **stable prefix** and a **volatile
-suffix** separated by an internal cache-prefix boundary. Content above the
-boundary (tool definitions, skills metadata, workspace files, and other
-relatively static context) is ordered so it stays byte-identical across turns.
-Content below the boundary (for example `HEARTBEAT.md`, runtime timestamps, and
-other per-turn metadata) is allowed to change without invalidating the cached
-prefix.
+OpenClaw 将 system prompt 分隔为**稳定前缀**和**不稳定后缀**，由内部 cache-prefix boundary 分隔。boundary 上的内容（工具定义、skills 元数据、工作区文件和其他相对静态上下文）是有序的，因此跨 turn 保持字节相同。boundary 下的内容（例如 `HEARTBEAT.md`、运行时时间戳和其他每 turn 元数据）允许更改而不会使缓存前缀失效。
 
-Key design choices:
+关键设计选择：
 
-- Stable workspace project-context files are ordered before `HEARTBEAT.md` so
-  heartbeat churn does not bust the stable prefix.
-- The boundary is applied across Anthropic-family, OpenAI-family, Google, and
-  CLI transport shaping so all supported providers benefit from the same prefix
-  stability.
-- Codex Responses and Anthropic Vertex requests are routed through
-  boundary-aware cache shaping so cache reuse stays aligned with what providers
-  actually receive.
-- System-prompt fingerprints are normalized (whitespace, line endings,
-  hook-added context, runtime capability ordering) so semantically unchanged
-  prompts share KV/cache across turns.
+- 稳定的工作区项目上下文文件在 `HEARTBEAT.md` 之前排序，因此 heartbeat 变动不会破坏稳定前缀。
+- boundary 跨 Anthropic-family、OpenAI-family、Google 和 CLI transport shaping 应用，因此所有支持的提供商都从相同的前缀稳定性中受益。
+- Codex Responses 和 Anthropic Vertex 请求通过 boundary-aware cache shaping 路由，因此 cache 重用与提供商实际接收的内容保持一致。
+- System-prompt 指纹是规范化的（空白、换行、hook 添加的上下文、运行时能力排序），因此语义上未更改的 prompts 跨 turn 共享 KV/cache。
 
-If you see unexpected `cacheWrite` spikes after a config or workspace change,
-check whether the change lands above or below the cache boundary. Moving
-volatile content below the boundary (or stabilizing it) often resolves the
-issue.
+如果您在配置或工作区更改后看到意外的 `cacheWrite` 峰值，请检查更改是否落在 boundary 上方或下方。将不稳定内容移到 boundary 下方（或稳定它）通常可以解决此问题。
 
 ## OpenClaw cache-stability guards
 
-OpenClaw also keeps several cache-sensitive payload shapes deterministic before
-the request reaches the provider:
+OpenClaw 也在请求到达提供商之前保持多个 cache-sensitive payload shapes 确定性：
 
-- Bundle MCP tool catalogs are sorted deterministically before tool
-  registration, so `listTools()` order changes do not churn the tools block and
-  bust prompt-cache prefixes.
-- Legacy sessions with persisted image blocks keep the **3 most recent
-  completed turns** intact; older already-processed image blocks may be
-  replaced with a marker so image-heavy follow-ups do not keep re-sending large
-  stale payloads.
+- Bundle MCP tool catalogs 在工具注册前进行确定性排序，因此 `listTools()` 顺序更改不会搅动 tools block 并破坏 prompt-cache 前缀。
+- 带有持久化 image blocks 的 legacy sessions 保持**最近 3 个完成的 turns** 完整；较旧的已处理 image blocks 可能被替换为标记，以便 image-heavy 跟进不会继续重新发送大型 stale payloads。
 
-## Tuning patterns
+## 调优模式
 
-### Mixed traffic (recommended default)
+### 混合流量（推荐默认）
 
-Keep a long-lived baseline on your main agent, disable caching on bursty notifier agents:
+在主 Agent 上保持长期基线，在突发通知 Agent 上禁用 caching：
 
 ```yaml
 agents:
@@ -239,120 +192,118 @@ agents:
         cacheRetention: "none"
 ```
 
-### Cost-first baseline
+### 成本优先基线
 
-- Set baseline `cacheRetention: "short"`.
-- Enable `contextPruning.mode: "cache-ttl"`.
-- Keep heartbeat below your TTL only for agents that benefit from warm caches.
+- 设置基线 `cacheRetention: "short"`。
+- 启用 `contextPruning.mode: "cache-ttl"`。
+- 将 heartbeat 保持在 TTL 以下，仅对受益于 warm caches 的 Agent。
 
-## Cache diagnostics
+## Cache 诊断
 
-OpenClaw exposes dedicated cache-trace diagnostics for embedded agent runs.
+OpenClaw 为嵌入式 Agent 运行暴露专用 cache-trace 诊断。
 
-For normal user-facing diagnostics, `/status` and other usage summaries can use
-the latest transcript usage entry as a fallback source for `cacheRead` /
-`cacheWrite` when the live session entry does not have those counters.
+对于正常的面向用户的诊断，`/status` 和其他 usage 摘要可以在 live session 条目没有这些计数器时使用最新 transcript usage 条目作为 `cacheRead`/`cacheWrite` 的回退源。
 
-## Live regression tests
+## Live 回归测试
 
-OpenClaw keeps one combined live cache regression gate for repeated prefixes, tool turns, image turns, MCP-style tool transcripts, and an Anthropic no-cache control.
+OpenClaw 为重复前缀、tool turns、image turns、MCP-style tool transcripts 和 Anthropic no-cache 控制保持一个组合 live cache 回归 gate。
 
 - `src/agents/live-cache-regression.live.test.ts`
 - `src/agents/live-cache-regression-baseline.ts`
 
-Run the narrow live gate with:
+用以下命令运行 narrow live gate：
 
 ```sh
 OPENCLAW_LIVE_TEST=1 OPENCLAW_LIVE_CACHE_TEST=1 pnpm test:live:cache
 ```
 
-The baseline file stores the most recent observed live numbers plus the provider-specific regression floors used by the test.
-The runner also uses fresh per-run session IDs and prompt namespaces so previous cache state does not pollute the current regression sample.
+基线文件存储最近观察的 live numbers 加上测试使用的提供商特定回归 floor。
+runner 也使用新鲜的 per-run session IDs 和 prompt namespaces，所以之前的 cache 状态不会污染当前回归样本。
 
-These tests intentionally do not use identical success criteria across providers.
+这些测试故意不在提供商之间使用相同的成功标准。
 
-### Anthropic live expectations
+### Anthropic live 期望
 
-- Expect explicit warmup writes via `cacheWrite`.
-- Expect near-full history reuse on repeated turns because Anthropic cache control advances the cache breakpoint through the conversation.
-- Current live assertions still use high hit-rate thresholds for stable, tool, and image paths.
+- 通过 `cacheWrite` 期望显式的预热写入。
+- 期望在重复 turns 上接近全历史重用，因为 Anthropic cache control 通过对话推进 cache  breakpoint。
+- 当前 live 断言仍对 stable、tool 和 image 路径使用高 hit-rate 阈值。
 
-### OpenAI live expectations
+### OpenAI live 期望
 
-- Expect `cacheRead` only. `cacheWrite` remains `0`.
-- Treat repeated-turn cache reuse as a provider-specific plateau, not as Anthropic-style moving full-history reuse.
-- Current live assertions use conservative floor checks derived from observed live behavior on `gpt-5.4-mini`:
+- 仅期望 `cacheRead`。`cacheWrite` 保持为 `0`。
+- 将重复 turn cache 重用视为提供商特定的 plateau，而不是 Anthropic 风格的移动全历史重用。
+- 当前 live 断言使用从 `gpt-5.4-mini` 上观察到的 live 行为派生的保守 floor checks：
   - stable prefix: `cacheRead >= 4608`, hit rate `>= 0.90`
   - tool transcript: `cacheRead >= 4096`, hit rate `>= 0.85`
   - image transcript: `cacheRead >= 3840`, hit rate `>= 0.82`
   - MCP-style transcript: `cacheRead >= 4096`, hit rate `>= 0.85`
 
-Fresh combined live verification on 2026-04-04 landed at:
+2026-04-04 的最新组合 live 验证结果为：
 
 - stable prefix: `cacheRead=4864`, hit rate `0.966`
 - tool transcript: `cacheRead=4608`, hit rate `0.896`
 - image transcript: `cacheRead=4864`, hit rate `0.954`
 - MCP-style transcript: `cacheRead=4608`, hit rate `0.891`
 
-Recent local wall-clock time for the combined gate was about `88s`.
+组合 gate 的最近本地 wall-clock 时间约为 `88s`。
 
-Why the assertions differ:
+为什么断言不同：
 
-- Anthropic exposes explicit cache breakpoints and moving conversation-history reuse.
-- OpenAI prompt caching is still exact-prefix sensitive, but the effective reusable prefix in live Responses traffic can plateau earlier than the full prompt.
-- Because of that, comparing Anthropic and OpenAI by a single cross-provider percentage threshold creates false regressions.
+- Anthropic 暴露显式 cache breakpoints 和移动对话历史重用。
+- OpenAI prompt caching 仍然是精确前缀敏感的，但 live Responses 流量中有效可重用前缀可能比完整 prompt 更早 plateau。
+- 正因为如此，通过单一跨提供商百分比阈值比较 Anthropic 和 OpenAI 会产生误报回归。
 
-### `diagnostics.cacheTrace` config
+### `diagnostics.cacheTrace` 配置
 
 ```yaml
 diagnostics:
   cacheTrace:
     enabled: true
-    filePath: "~/.openclaw/logs/cache-trace.jsonl" # optional
-    includeMessages: false # default true
-    includePrompt: false # default true
-    includeSystem: false # default true
+    filePath: "~/.openclaw/logs/cache-trace.jsonl" # 可选
+    includeMessages: false # 默认为 true
+    includePrompt: false # 默认为 true
+    includeSystem: false # 默认为 true
 ```
 
-Defaults:
+默认值：
 
 - `filePath`: `$OPENCLAW_STATE_DIR/logs/cache-trace.jsonl`
 - `includeMessages`: `true`
 - `includePrompt`: `true`
 - `includeSystem`: `true`
 
-### Env toggles (one-off debugging)
+### Env 切换（一次性调试）
 
-- `OPENCLAW_CACHE_TRACE=1` enables cache tracing.
-- `OPENCLAW_CACHE_TRACE_FILE=/path/to/cache-trace.jsonl` overrides output path.
-- `OPENCLAW_CACHE_TRACE_MESSAGES=0|1` toggles full message payload capture.
-- `OPENCLAW_CACHE_TRACE_PROMPT=0|1` toggles prompt text capture.
-- `OPENCLAW_CACHE_TRACE_SYSTEM=0|1` toggles system prompt capture.
+- `OPENCLAW_CACHE_TRACE=1` 启用 cache tracing。
+- `OPENCLAW_CACHE_TRACE_FILE=/path/to/cache-trace.jsonl` 覆盖输出路径。
+- `OPENCLAW_CACHE_TRACE_MESSAGES=0|1` 切换完整 message payload 捕获。
+- `OPENCLAW_CACHE_TRACE_PROMPT=0|1` 切换 prompt text 捕获。
+- `OPENCLAW_CACHE_TRACE_SYSTEM=0|1` 切换 system prompt 捕获。
 
-### What to inspect
+### 检查什么
 
-- Cache trace events are JSONL and include staged snapshots like `session:loaded`, `prompt:before`, `stream:context`, and `session:after`.
-- Per-turn cache token impact is visible in normal usage surfaces via `cacheRead` and `cacheWrite` (for example `/usage full` and session usage summaries).
-- For Anthropic, expect both `cacheRead` and `cacheWrite` when caching is active.
-- For OpenAI, expect `cacheRead` on cache hits and `cacheWrite` to remain `0`; OpenAI does not publish a separate cache-write token field.
-- If you need request tracing, log request IDs and rate-limit headers separately from cache metrics. OpenClaw's current cache-trace output is focused on prompt/session shape and normalized token usage rather than raw provider response headers.
+- Cache trace 事件是 JSONL，包含 staged snapshots 如 `session:loaded`、`prompt:before`、`stream:context` 和 `session:after`。
+- 每 turn cache token 影响可以通过 `cacheRead` 和 `cacheWrite` 在正常使用 surface 中看到（例如 `/usage full` 和 session usage summaries）。
+- 对于 Anthropic，同时有 `cacheRead` 和 `cacheWrite`（当 caching 激活时）。
+- 对于 OpenAI，cache hits 时有 `cacheRead`，`cacheWrite` 保持为 `0`；OpenAI 不发布单独的 cache-write token 字段。
+- 如果您需要 request tracing，从 cache metrics 分别记录 request IDs 和 rate-limit headers。OpenClaw 当前的 cache-trace 输出侧重于 prompt/session shape 和规范化 token usage，而不是原始提供商响应 headers。
 
-## Quick troubleshooting
+## 快速故障排除
 
-- High `cacheWrite` on most turns: check for volatile system-prompt inputs and verify model/provider supports your cache settings.
-- High `cacheWrite` on Anthropic: often means the cache breakpoint is landing on content that changes every request.
-- Low OpenAI `cacheRead`: verify the stable prefix is at the front, the repeated prefix is at least 1024 tokens, and the same `prompt_cache_key` is reused for turns that should share a cache.
-- No effect from `cacheRetention`: confirm model key matches `agents.defaults.models["provider/model"]`.
-- Bedrock Nova/Mistral requests with cache settings: expected runtime force to `none`.
+- 大多数 turns 上高 `cacheWrite`：检查不稳定 system-prompt 输入并验证模型/提供商支持您的 cache 设置。
+- Anthropic 上高 `cacheWrite`：通常意味着 cache breakpoint 落在每次请求都更改的内容上。
+- 低 OpenAI `cacheRead`：验证 stable prefix 在前面，重复前缀至少 1024 tokens，并且相同的 `prompt_cache_key` 用于应该共享 cache 的 turns。
+- `cacheRetention` 没有效果：确认模型 key 与 `agents.defaults.models["provider/model"]` 匹配。
+- Bedrock Nova/Mistral 请求的 cache 设置：预期运行时强制为 `none`。
 
-Related docs:
+相关文档：
 
 - [Anthropic](/providers/anthropic)
 - [Token use and costs](/reference/token-use)
 - [Session pruning](/concepts/session-pruning)
 - [Gateway configuration reference](/gateway/configuration-reference)
 
-## Related
+## 相关
 
 - [Token use and costs](/reference/token-use)
 - [API usage and costs](/reference/api-usage-costs)

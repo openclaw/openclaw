@@ -3,14 +3,23 @@ import { escapeRegExp } from "../shared/regexp.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { HEARTBEAT_TOKEN } from "./tokens.js";
 
+/**
+ * 心跳任务配置类型
+ * name: 任务名称
+ * interval: 执行间隔
+ * prompt: 执行的提示词
+ */
 export type HeartbeatTask = {
   name: string;
   interval: string;
   prompt: string;
 };
 
-// Default heartbeat prompt (used when config.agents.defaults.heartbeat.prompt is unset).
-// Keep it tight and avoid encouraging the model to invent/rehash "open loops" from prior chat context.
+/**
+ * 默认心跳提示词
+ * 用于当配置中未设置 heartbeat.prompt 时
+ * 保持简洁，避免模型重复或推测旧的聊天任务
+ */
 export const HEARTBEAT_PROMPT =
   "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.";
 export const HEARTBEAT_TRANSCRIPT_PROMPT = "[OpenClaw heartbeat poll]";
@@ -18,17 +27,17 @@ export const DEFAULT_HEARTBEAT_EVERY = "30m";
 export const DEFAULT_HEARTBEAT_ACK_MAX_CHARS = 300;
 
 /**
- * Check if HEARTBEAT.md content is "effectively empty" - meaning it has no actionable tasks.
- * This allows skipping heartbeat API calls when no tasks are configured.
+ * 检查HEARTBEAT.md内容是否"实际上为空"
+ * 当文件中没有可操作的任务时允许跳过心跳API调用
  *
- * A file is considered effectively empty if it contains only:
- * - Whitespace / empty lines
- * - Markdown ATX headers (`#`, `##`, ...)
- * - Markdown fence markers such as ``` or ```markdown
- * - Empty list item stubs (`- `, `- [ ]`, `* `, `+ `)
+ * 以下情况视为空：
+ * - 空白/空行
+ * - Markdown ATX标题（#、##、...）
+ * - Markdown代码标记 ``` 或 ```markdown
+ * - 空列表项（- 、- [ ]、* 、+ ）
  *
- * Note: A missing file returns false (not effectively empty) so the LLM can still
- * decide what to do. This function is only for when the file exists but has no content.
+ * 注意：文件不存在返回false（不为空），以便LLM仍可决定做什么
+ * 此函数仅用于文件存在但无内容的情况
  */
 export function isHeartbeatContentEffectivelyEmpty(content: string | undefined | null): boolean {
   if (content === undefined || content === null) {
@@ -41,39 +50,45 @@ export function isHeartbeatContentEffectivelyEmpty(content: string | undefined |
   const lines = content.split("\n");
   for (const line of lines) {
     const trimmed = line.trim();
-    // Skip empty lines
     if (!trimmed) {
       continue;
     }
-    // Skip markdown header lines (# followed by space or EOL, ## etc)
-    // This intentionally does NOT skip lines like "#TODO" or "#hashtag" which might be content
-    // (Those aren't valid markdown headers - ATX headers require space after #)
     if (/^#+(\s|$)/.test(trimmed)) {
       continue;
     }
-    // Skip empty markdown list items like "- [ ]" or "* [ ]" or just "- "
     if (/^[-*+]\s*(\[[\sXx]?\]\s*)?$/.test(trimmed)) {
       continue;
     }
-    // Ignore markdown fence markers that were added for doc rendering but do
-    // not carry task semantics in the workspace template body.
     if (/^```[A-Za-z0-9_-]*$/.test(trimmed)) {
       continue;
     }
-    // Found a non-empty, non-comment line - there's actionable content
     return false;
   }
-  // All lines were either empty or comments
   return true;
 }
 
+/**
+ * 解析心跳提示词
+ * @param raw - 原始提示词字符串
+ * @returns 规范化后的提示词，为空时返回默认值
+ */
 export function resolveHeartbeatPrompt(raw?: string): string {
   const trimmed = normalizeOptionalString(raw) ?? "";
   return trimmed || HEARTBEAT_PROMPT;
 }
 
+/**
+ * 心跳令牌剥离模式
+ * heartbeat: 仅移除心跳标记
+ * message: 在消息上下文中剥离
+ */
 export type StripHeartbeatMode = "heartbeat" | "message";
 
+/**
+ * 剥离文本边缘的心跳标记
+ * @param raw - 原始文本
+ * @returns 剥离结果和是否发生剥离的标志
+ */
 function stripTokenAtEdges(raw: string): { text: string; didStrip: boolean } {
   let text = raw.trim();
   if (!text) {
@@ -100,10 +115,6 @@ function stripTokenAtEdges(raw: string): { text: string; didStrip: boolean } {
       changed = true;
       continue;
     }
-    // Strip the token when it appears at the end of the text.
-    // Also strip up to 4 trailing non-word characters the model may have appended
-    // (e.g. ".", "!!!", "---"). Keep trailing punctuation only when real
-    // sentence text exists before the token.
     if (tokenAtEndWithOptionalTrailingPunctuation.test(next)) {
       const idx = next.lastIndexOf(token);
       const before = next.slice(0, idx).trimEnd();
@@ -122,6 +133,12 @@ function stripTokenAtEdges(raw: string): { text: string; didStrip: boolean } {
   return { text: collapsed, didStrip };
 }
 
+/**
+ * 剥离心跳令牌
+ * @param raw - 原始文本
+ * @param opts - 选项，包含模式和最大确认字符数
+ * @returns 剥离后的文本和是否应跳过的标志
+ */
 export function stripHeartbeatToken(
   raw?: string,
   opts: { mode?: StripHeartbeatMode; maxAckChars?: number } = {},
@@ -145,15 +162,10 @@ export function stripHeartbeatToken(
       : DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
   );
 
-  // Normalize lightweight markup so HEARTBEAT_OK wrapped in HTML/Markdown
-  // (e.g., <b>HEARTBEAT_OK</b> or **HEARTBEAT_OK**) still strips.
   const stripMarkup = (text: string) =>
     text
-      // Drop HTML tags.
       .replace(/<[^>]*>/g, " ")
-      // Decode common nbsp variant.
       .replace(/&nbsp;/gi, " ")
-      // Remove markdown-ish wrappers at the edges.
       .replace(/^[*`~_]+/, "")
       .replace(/[*`~_]+$/, "");
 
@@ -186,13 +198,8 @@ export function stripHeartbeatToken(
 }
 
 /**
- * Parse heartbeat tasks from HEARTBEAT.md content.
- * Supports YAML-like task definitions:
- *
- * tasks:
- *   - name: email-check
- *     interval: 30m
- *     prompt: "Check for urgent unread emails"
+ * 从HEARTBEAT.md内容解析心跳任务
+ * 支持YAML格式的任务定义
  */
 export function parseHeartbeatTasks(content: string): HeartbeatTask[] {
   const tasks: HeartbeatTask[] = [];
@@ -203,7 +210,6 @@ export function parseHeartbeatTasks(content: string): HeartbeatTask[] {
     const line = lines[i];
     const trimmed = line.trim();
 
-    // Detect tasks block start
     if (trimmed === "tasks:") {
       inTasksBlock = true;
       continue;
@@ -213,8 +219,6 @@ export function parseHeartbeatTasks(content: string): HeartbeatTask[] {
       continue;
     }
 
-    // End of tasks block (either empty line or new top-level content)
-    // Don't exit for task fields (interval:, prompt:, - name:)
     const isTaskField =
       trimmed.startsWith("interval:") ||
       trimmed.startsWith("prompt:") ||
@@ -230,7 +234,6 @@ export function parseHeartbeatTasks(content: string): HeartbeatTask[] {
       continue;
     }
 
-    // Parse task entry
     if (trimmed.startsWith("- name:")) {
       const name = trimmed
         .replace("- name:", "")
@@ -239,17 +242,14 @@ export function parseHeartbeatTasks(content: string): HeartbeatTask[] {
       let interval = "";
       let prompt = "";
 
-      // Look ahead for interval and prompt
       for (let j = i + 1; j < lines.length; j++) {
         const nextLine = lines[j];
         const nextTrimmed = nextLine.trim();
 
-        // End of this task
         if (nextTrimmed.startsWith("- name:")) {
           break;
         }
 
-        // Check for task fields BEFORE checking for end of block
         if (
           nextTrimmed.startsWith("interval:") &&
           (nextLine.startsWith(" ") || nextLine.startsWith("\t"))
@@ -267,7 +267,6 @@ export function parseHeartbeatTasks(content: string): HeartbeatTask[] {
             .trim()
             .replace(/^["']|["']$/g, "");
         } else if (!nextTrimmed.startsWith(" ") && !nextTrimmed.startsWith("\t") && nextTrimmed) {
-          // End of tasks block
           inTasksBlock = false;
           break;
         }
@@ -283,11 +282,15 @@ export function parseHeartbeatTasks(content: string): HeartbeatTask[] {
 }
 
 /**
- * Check if a task is due based on its interval and last run time.
+ * 检查任务是否到期
+ * @param lastRunMs - 上次运行时间戳
+ * @param interval - 执行间隔字符串
+ * @param nowMs - 当前时间戳
+ * @returns 任务是否应该执行
  */
 export function isTaskDue(lastRunMs: number | undefined, interval: string, nowMs: number): boolean {
   if (lastRunMs === undefined) {
-    return true; // Never run, always due
+    return true;
   }
 
   try {

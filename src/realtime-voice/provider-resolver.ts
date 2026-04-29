@@ -4,11 +4,17 @@ import type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
 import { getRealtimeVoiceProvider, listRealtimeVoiceProviders } from "./provider-registry.js";
 import type { RealtimeVoiceProviderConfig } from "./provider-types.js";
 
+/**
+ * 已解析的实时语音提供商
+ */
 export type ResolvedRealtimeVoiceProvider = {
   provider: RealtimeVoiceProviderPlugin;
   providerConfig: RealtimeVoiceProviderConfig;
 };
 
+/**
+ * 解析配置的实时语音提供商的参数
+ */
 export type ResolveConfiguredRealtimeVoiceProviderParams = {
   configuredProviderId?: string;
   providerConfigs?: Record<string, Record<string, unknown> | undefined>;
@@ -19,6 +25,11 @@ export type ResolveConfiguredRealtimeVoiceProviderParams = {
   noRegisteredProviderMessage?: string;
 };
 
+/**
+ * 解析配置的实时语音提供商
+ * @param params - 解析参数
+ * @returns 已解析的提供商和配置
+ */
 export function resolveConfiguredRealtimeVoiceProvider(
   params: ResolveConfiguredRealtimeVoiceProviderParams,
 ): ResolvedRealtimeVoiceProvider {

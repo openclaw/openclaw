@@ -1,117 +1,93 @@
 ---
-summary: "How OpenClaw remembers things across sessions"
-title: "Memory overview"
+summary: "OpenClaw 如何跨会话记住事物"
+title: "内存概述"
 read_when:
-  - You want to understand how memory works
-  - You want to know what memory files to write
+  - 您想了解内存如何工作
+  - 您想知道要编写哪些内存文件
 ---
 
-OpenClaw remembers things by writing **plain Markdown files** in your agent's
-workspace. The model only "remembers" what gets saved to disk — there is no
-hidden state.
+OpenClaw 通过在 Agent 工作区中写入**纯 Markdown 文件**来记住事物。模型只"记住"保存到磁盘的内容 —— 没有隐藏状态。
 
-## How it works
+## 工作原理
 
-Your agent has three memory-related files:
+您的 Agent 有三个内存相关文件：
 
-- **`MEMORY.md`** — long-term memory. Durable facts, preferences, and
-  decisions. Loaded at the start of every DM session.
-- **`memory/YYYY-MM-DD.md`** — daily notes. Running context and observations.
-  Today and yesterday's notes are loaded automatically.
-- **`DREAMS.md`** (optional) — Dream Diary and dreaming sweep
-  summaries for human review, including grounded historical backfill entries.
+- **`MEMORY.md`** — 长期记忆。持久的事实、偏好和决定。在每个 DM 会话开始时加载。
+- **`memory/YYYY-MM-DD.md`** — 每日笔记。运行上下文和观察。今天和昨天的笔记自动加载。
+- **`DREAMS.md`**（可选）—— 梦想日记和梦想 sweep 摘要，用于人工审查，包括基于事实的历史 backfill 条目。
 
-These files live in the agent workspace (default `~/.openclaw/workspace`).
+这些文件位于 Agent 工作区（默认 `~/.openclaw/workspace`）。
 
 <Tip>
-If you want your agent to remember something, just ask it: "Remember that I
-prefer TypeScript." It will write it to the appropriate file.
+如果您希望 Agent 记住某些内容，只需问它："记住我更喜欢 TypeScript。"它会写入适当的文件。
 </Tip>
 
-## Memory tools
+## 内存工具
 
-The agent has two tools for working with memory:
+Agent 有两个用于处理内存的工具：
 
-- **`memory_search`** — finds relevant notes using semantic search, even when
-  the wording differs from the original.
-- **`memory_get`** — reads a specific memory file or line range.
+- **`memory_search`** — 使用语义搜索查找相关笔记，即使措辞与原始内容不同。
+- **`memory_get`** — 读取特定的内存文件或行范围。
 
-Both tools are provided by the active memory plugin (default: `memory-core`).
+两个工具都由活动的内存插件提供（默认：`memory-core`）。
 
-## Memory Wiki companion plugin
+## Memory Wiki 配套插件
 
-If you want durable memory to behave more like a maintained knowledge base than
-just raw notes, use the bundled `memory-wiki` plugin.
+如果您希望持久内存更像维护的知识库而不是原始笔记，使用捆绑的 `memory-wiki` 插件。
 
-`memory-wiki` compiles durable knowledge into a wiki vault with:
+`memory-wiki` 将持久知识编译成 wiki vault，具有：
 
-- deterministic page structure
-- structured claims and evidence
-- contradiction and freshness tracking
-- generated dashboards
-- compiled digests for agent/runtime consumers
-- wiki-native tools like `wiki_search`, `wiki_get`, `wiki_apply`, and `wiki_lint`
+- 确定性页面结构
+- 结构化声明和证据
+- 矛盾和新鲜度追踪
+- 生成的仪表板
+- 面向 Agent/运行时消费者的编译摘要
+- wiki 原生工具如 `wiki_search`、`wiki_get`、`wiki_apply` 和 `wiki_lint`
 
-It does not replace the active memory plugin. The active memory plugin still
-owns recall, promotion, and dreaming. `memory-wiki` adds a provenance-rich
-knowledge layer beside it.
+它不替换活动的内存插件。活动内存插件仍拥有召回、提升和梦想。`memory-wiki` 在其旁边添加了丰富的 provenance 知识层。
 
-See [Memory Wiki](/plugins/memory-wiki).
+参见 [Memory Wiki](/plugins/memory-wiki)。
 
-## Memory search
+## 内存搜索
 
-When an embedding provider is configured, `memory_search` uses **hybrid
-search** — combining vector similarity (semantic meaning) with keyword matching
-(exact terms like IDs and code symbols). This works out of the box once you have
-an API key for any supported provider.
+当配置了 embedding 提供商时，`memory_search` 使用**混合搜索** —— 结合向量相似性（语义含义）和关键词匹配（精确术语如 ID 和代码符号）。一旦您有任何一个支持提供商的 API key，它就能开箱即用。
 
 <Info>
-OpenClaw auto-detects your embedding provider from available API keys. If you
-have an OpenAI, Gemini, Voyage, or Mistral key configured, memory search is
-enabled automatically.
+OpenClaw 从可用的 API keys 自动检测您的 embedding 提供商。如果您配置了 OpenAI、Gemini、Voyage 或 Mistral key，内存搜索会自动启用。
 </Info>
 
-For details on how search works, tuning options, and provider setup, see
-[Memory Search](/concepts/memory-search).
+有关搜索如何工作、调优选项和提供商设置的详细信息，请参见 [Memory Search](/concepts/memory-search)。
 
-## Memory backends
+## 内存后端
 
 <CardGroup cols={3}>
-<Card title="Builtin (default)" icon="database" href="/concepts/memory-builtin">
-SQLite-based. Works out of the box with keyword search, vector similarity, and
-hybrid search. No extra dependencies.
+<Card title="Builtin（默认）" icon="database" href="/concepts/memory-builtin">
+  基于 SQLite。开箱即用，支持关键词搜索、向量相似性和混合搜索。无需额外依赖。
 </Card>
 <Card title="QMD" icon="search" href="/concepts/memory-qmd">
-Local-first sidecar with reranking, query expansion, and the ability to index
-directories outside the workspace.
+  本地优先的 sidecar，带 reranking、query expansion 和索引工作区外目录的能力。
 </Card>
 <Card title="Honcho" icon="brain" href="/concepts/memory-honcho">
-AI-native cross-session memory with user modeling, semantic search, and
-multi-agent awareness. Plugin install.
+  AI 原生跨会话内存，带用户建模、语义搜索和多 Agent 感知。插件安装。
 </Card>
 <Card title="LanceDB" icon="layers" href="/plugins/memory-lancedb">
-Bundled LanceDB-backed memory with OpenAI-compatible embeddings, auto-recall,
-auto-capture, and local Ollama embedding support.
+  捆绑的 LanceDB 支持的内存，带 OpenAI-compatible embeddings、自动召回、自动捕获和本地 Ollama embedding 支持。
 </Card>
 </CardGroup>
 
-## Knowledge wiki layer
+## 知识 wiki 层
 
 <CardGroup cols={1}>
 <Card title="Memory Wiki" icon="book" href="/plugins/memory-wiki">
-Compiles durable memory into a provenance-rich wiki vault with claims,
-dashboards, bridge mode, and Obsidian-friendly workflows.
+  将持久内存编译成丰富的 provenance wiki vault，带声明、仪表板、桥接模式和 Obsidian 友好工作流。
 </Card>
 </CardGroup>
 
-## Automatic memory flush
+## 自动内存刷新
 
-Before [compaction](/concepts/compaction) summarizes your conversation, OpenClaw
-runs a silent turn that reminds the agent to save important context to memory
-files. This is on by default — you do not need to configure anything.
+在 [compaction](/concepts/compaction) 总结您的对话之前，OpenClaw 运行一个静默 turn，提醒 Agent 将重要上下文保存到内存文件。这是默认开启的 —— 您不需要配置任何东西。
 
-To keep that housekeeping turn on a local model, set an exact memory-flush model
-override:
+要将该 housekeeping turn 保持在本地模型上，设置精确的 memory-flush 模型覆盖：
 
 ```json
 {
@@ -127,63 +103,47 @@ override:
 }
 ```
 
-The override applies only to the memory-flush turn and does not inherit the
-active session fallback chain.
+该覆盖仅适用于 memory-flush turn，不继承活动会话回退链。
 
 <Tip>
-The memory flush prevents context loss during compaction. If your agent has
-important facts in the conversation that are not yet written to a file, they
-will be saved automatically before the summary happens.
+内存刷新防止 compaction 期间的上下文丢失。如果您的 Agent 在对话中有重要事实尚未写入文件，它们将在摘要发生前自动保存。
 </Tip>
 
-## Dreaming
+## 梦想
 
-Dreaming is an optional background consolidation pass for memory. It collects
-short-term signals, scores candidates, and promotes only qualified items into
-long-term memory (`MEMORY.md`).
+梦想是内存的可选后台整合过程。它收集短期信号，对候选进行评分，只将符合条件的项目提升到长期内存（`MEMORY.md`）。
 
-It is designed to keep long-term memory high signal:
+它旨在保持长期内存高信号：
 
-- **Opt-in**: disabled by default.
-- **Scheduled**: when enabled, `memory-core` auto-manages one recurring cron job
-  for a full dreaming sweep.
-- **Thresholded**: promotions must pass score, recall frequency, and query
-  diversity gates.
-- **Reviewable**: phase summaries and diary entries are written to `DREAMS.md`
-  for human review.
+- **选择加入**：默认禁用。
+- **调度**：启用时，`memory-core` 自动管理一个循环 cron 任务进行完整的梦想 sweep。
+- **阈值化**：提升必须通过评分、召回频率和查询多样性门控。
+- **可审查**：阶段摘要和日记条目写入 `DREAMS.md` 以供人工审查。
 
-For phase behavior, scoring signals, and Dream Diary details, see
-[Dreaming](/concepts/dreaming).
+有关阶段行为、评分信号和梦想日记详细信息，请参见 [Dreaming](/concepts/dreaming)。
 
-## Grounded backfill and live promotion
+## 基于事实的 backfill 和实时提升
 
-The dreaming system now has two closely related review lanes:
+梦想系统现在有两个密切相关的审查通道：
 
-- **Live dreaming** works from the short-term dreaming store under
-  `memory/.dreams/` and is what the normal deep phase uses when deciding what
-  can graduate into `MEMORY.md`.
-- **Grounded backfill** reads historical `memory/YYYY-MM-DD.md` notes as
-  standalone day files and writes structured review output into `DREAMS.md`.
+- **Live dreaming** 从 `memory/.dreams/` 下的短期梦想存储工作，这是正常深度阶段用于决定什么可以升入 `MEMORY.md` 的。
+- **Grounded backfill** 读取历史的 `memory/YYYY-MM-DD.md` 笔记作为独立的日子文件，并将结构化审查输出写入 `DREAMS.md`。
 
-Grounded backfill is useful when you want to replay older notes and inspect what
-the system thinks is durable without manually editing `MEMORY.md`.
+当您想重放较旧的笔记并检查系统认为什么是持久的时候，基于事实的 backfill 很有用，而无需手动编辑 `MEMORY.md`。
 
-When you use:
+当您使用：
 
 ```bash
 openclaw memory rem-backfill --path ./memory --stage-short-term
 ```
 
-the grounded durable candidates are not promoted directly. They are staged into
-the same short-term dreaming store the normal deep phase already uses. That
-means:
+基于事实的持久候选不会直接提升。它们被 staged 到正常深度阶段已经使用的相同短期梦想存储。这意味着：
 
-- `DREAMS.md` stays the human review surface.
-- the short-term store stays the machine-facing ranking surface.
-- `MEMORY.md` is still only written by deep promotion.
+- `DREAMS.md` 保持人工审查表面。
+- 短期存储保持机器面向的排名表面。
+- `MEMORY.md` 仍仅由深度提升写入。
 
-If you decide the replay was not useful, you can remove the staged artifacts
-without touching ordinary diary entries or normal recall state:
+如果您认为重放无用，可以删除 staged 的 artifacts 而不触及普通日记条目或正常召回状态：
 
 ```bash
 openclaw memory rem-backfill --rollback
@@ -193,24 +153,24 @@ openclaw memory rem-backfill --rollback-short-term
 ## CLI
 
 ```bash
-openclaw memory status          # Check index status and provider
-openclaw memory search "query"  # Search from the command line
-openclaw memory index --force   # Rebuild the index
+openclaw memory status          # 检查索引状态和提供商
+openclaw memory search "query"  # 从命令行搜索
+openclaw memory index --force   # 重建索引
 ```
 
-## Further reading
+## 进一步阅读
 
-- [Builtin memory engine](/concepts/memory-builtin): default SQLite backend.
-- [QMD memory engine](/concepts/memory-qmd): advanced local-first sidecar.
-- [Honcho memory](/concepts/memory-honcho): AI-native cross-session memory.
-- [Memory LanceDB](/plugins/memory-lancedb): LanceDB-backed plugin with OpenAI-compatible embeddings.
-- [Memory Wiki](/plugins/memory-wiki): compiled knowledge vault and wiki-native tools.
-- [Memory search](/concepts/memory-search): search pipeline, providers, and tuning.
-- [Dreaming](/concepts/dreaming): background promotion from short-term recall to long-term memory.
-- [Memory configuration reference](/reference/memory-config): all config knobs.
-- [Compaction](/concepts/compaction): how compaction interacts with memory.
+- [Builtin memory engine](/concepts/memory-builtin)：默认 SQLite 后端。
+- [QMD memory engine](/concepts/memory-qmd)：高级本地优先 sidecar。
+- [Honcho memory](/concepts/memory-honcho)：AI 原生跨会话内存。
+- [Memory LanceDB](/plugins/memory-lancedb)：带 OpenAI-compatible embeddings 的 LanceDB 支持插件。
+- [Memory Wiki](/plugins/memory-wiki)：编译的知识 vault 和 wiki 原生工具。
+- [Memory search](/concepts/memory-search)：搜索管道、提供商和调优。
+- [Dreaming](/concepts/dreaming)：从短期召回后台提升到长期内存。
+- [Memory configuration reference](/reference/memory-config)：所有配置旋钮。
+- [Compaction](/concepts/compaction)：compaction 如何与内存交互。
 
-## Related
+## 相关
 
 - [Active memory](/concepts/active-memory)
 - [Memory search](/concepts/memory-search)

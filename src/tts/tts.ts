@@ -1,3 +1,7 @@
+/**
+ * TTS模块导出
+ * 从plugin-sdk导出语音合成运行时功能
+ */
 export {
   _test,
   buildTtsSystemPromptHint,

@@ -22,6 +22,13 @@ import type { ReplyDispatcher } from "./reply/reply-dispatcher.types.js";
 import type { FinalizedMsgContext, MsgContext } from "./templating.js";
 import type { GetReplyOptions, ReplyPayload } from "./types.js";
 
+/**
+ * 解析调度器的静默回复上下文
+ * 根据消息上下文和配置确定静默回复策略
+ * @param ctx - 消息上下文
+ * @param cfg - OpenClaw配置
+ * @returns 包含会话键、表面类型和会话类型的静默回复上下文
+ */
 function resolveDispatcherSilentReplyContext(
   ctx: MsgContext | FinalizedMsgContext,
   cfg: OpenClawConfig,
@@ -50,6 +57,12 @@ function resolveDispatcherSilentReplyContext(
   };
 }
 
+/**
+ * 解析入站回复钩子的目标地址
+ * @param finalized - 完成了的入站上下文
+ * @param hookCtx - 钩子上下文
+ * @returns 消息发送目标地址
+ */
 function resolveInboundReplyHookTarget(
   finalized: FinalizedMsgContext,
   hookCtx: ReturnType<typeof deriveInboundMessageHookContext>,
@@ -63,6 +76,11 @@ function resolveInboundReplyHookTarget(
   return hookCtx.from || hookCtx.conversationId || hookCtx.to || "";
 }
 
+/**
+ * 构建消息发送前的钩子处理函数
+ * @param ctx - 消息上下文
+ * @returns 在消息发送前调用的钩子函数，或undefined
+ */
 function buildMessageSendingBeforeDeliver(
   ctx: MsgContext | FinalizedMsgContext,
 ): ReplyDispatchBeforeDeliver | undefined {
@@ -95,9 +113,22 @@ function buildMessageSendingBeforeDeliver(
   };
 }
 
+/**
+ * 调度入站消息的结果类型
+ */
 export type DispatchInboundResult = DispatchFromConfigResult;
+
+/**
+ * 导出调度器辅助函数
+ */
 export { withReplyDispatcher } from "./dispatch-dispatcher.js";
 
+/**
+ * 完成调度结果，计算取消后的最终计数
+ * @param result - 原始调度结果
+ * @param dispatcher - 回复调度器
+ * @returns 更新了计数的结果
+ */
 function finalizeDispatchResult(
   result: DispatchFromConfigResult,
   dispatcher: ReplyDispatcher,
@@ -118,6 +149,11 @@ function finalizeDispatchResult(
   };
 }
 
+/**
+ * 调度入站消息
+ * @param params - 包含消息上下文、配置、调度器和选项的参数
+ * @returns 调度结果
+ */
 export async function dispatchInboundMessage(params: {
   ctx: MsgContext | FinalizedMsgContext;
   cfg: OpenClawConfig;
@@ -140,6 +176,12 @@ export async function dispatchInboundMessage(params: {
   return finalizeDispatchResult(result, params.dispatcher);
 }
 
+/**
+ * 使用缓冲调度器调度入站消息
+ * 创建一个带缓冲的调度器，支持打字状态
+ * @param params - 包含消息上下文、配置、调度器选项和回复选项的参数
+ * @returns 调度结果
+ */
 export async function dispatchInboundMessageWithBufferedDispatcher(params: {
   ctx: MsgContext | FinalizedMsgContext;
   cfg: OpenClawConfig;
@@ -173,6 +215,11 @@ export async function dispatchInboundMessageWithBufferedDispatcher(params: {
   }
 }
 
+/**
+ * 使用指定调度器调度入站消息
+ * @param params - 包含消息上下文、配置、调度器选项和回复选项的参数
+ * @returns 调度结果
+ */
 export async function dispatchInboundMessageWithDispatcher(params: {
   ctx: MsgContext | FinalizedMsgContext;
   cfg: OpenClawConfig;

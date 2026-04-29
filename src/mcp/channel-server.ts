@@ -6,8 +6,14 @@ import { OpenClawChannelBridge } from "./channel-bridge.js";
 import { ClaudePermissionRequestSchema, type ClaudeChannelMode } from "./channel-shared.js";
 import { getChannelMcpCapabilities, registerChannelMcpTools } from "./channel-tools.js";
 
+/**
+ * 导出OpenClaw通道桥接器类
+ */
 export { OpenClawChannelBridge } from "./channel-bridge.js";
 
+/**
+ * OpenClaw MCP服务选项
+ */
 export type OpenClawMcpServeOptions = {
   gatewayUrl?: string;
   gatewayToken?: string;
@@ -17,6 +23,12 @@ export type OpenClawMcpServeOptions = {
   verbose?: boolean;
 };
 
+/**
+ * 解析MCP配置
+ * 如果未提供配置，则从运行时配置获取
+ * @param config - 可选的配置
+ * @returns 解析后的配置
+ */
 async function resolveMcpConfig(config: OpenClawConfig | undefined): Promise<OpenClawConfig> {
   if (config) {
     return config;
@@ -25,6 +37,11 @@ async function resolveMcpConfig(config: OpenClawConfig | undefined): Promise<Ope
   return getRuntimeConfig();
 }
 
+/**
+ * 创建OpenClaw通道MCP服务器
+ * @param opts - 服务选项
+ * @returns 包含服务器、桥接器、启动和关闭函数的对象
+ */
 export async function createOpenClawChannelMcpServer(opts: OpenClawMcpServeOptions = {}): Promise<{
   server: McpServer;
   bridge: OpenClawChannelBridge;
@@ -70,6 +87,11 @@ export async function createOpenClawChannelMcpServer(opts: OpenClawMcpServeOptio
   };
 }
 
+/**
+ * 启动OpenClaw通道MCP服务器
+ * 使用stdio传输，在stdin关闭时优雅关闭
+ * @param opts - 服务选项
+ */
 export async function serveOpenClawChannelMcp(opts: OpenClawMcpServeOptions = {}): Promise<void> {
   const { server, start, close } = await createOpenClawChannelMcpServer(opts);
   const transport = new StdioServerTransport();

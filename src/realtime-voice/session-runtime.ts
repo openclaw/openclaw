@@ -10,6 +10,10 @@ import type {
   RealtimeVoiceToolResultOptions,
 } from "./provider-types.js";
 
+/**
+ * 实时语音音频接收器类型
+ * 定义音频输出的接口
+ */
 export type RealtimeVoiceAudioSink = {
   isOpen?: () => boolean;
   sendAudio: (audio: Buffer) => void;
@@ -17,8 +21,18 @@ export type RealtimeVoiceAudioSink = {
   sendMark?: (markName: string) => void;
 };
 
+/**
+ * 标记策略类型
+ * transport: 通过传输层处理标记
+ * ack-immediately: 立即确认
+ * ignore: 忽略标记
+ */
 export type RealtimeVoiceMarkStrategy = "transport" | "ack-immediately" | "ignore";
 
+/**
+ * 实时语音桥接会话类型
+ * 提供与实时语音桥接交互的接口
+ */
 export type RealtimeVoiceBridgeSession = {
   bridge: RealtimeVoiceBridge;
   acknowledgeMark(): void;
@@ -31,6 +45,9 @@ export type RealtimeVoiceBridgeSession = {
   triggerGreeting(instructions?: string): void;
 };
 
+/**
+ * 创建实时语音桥接会话的参数
+ */
 export type RealtimeVoiceBridgeSessionParams = {
   provider: RealtimeVoiceProviderPlugin;
   providerConfig: RealtimeVoiceProviderConfig;
@@ -48,6 +65,11 @@ export type RealtimeVoiceBridgeSessionParams = {
   onClose?: (reason: RealtimeVoiceCloseReason) => void;
 };
 
+/**
+ * 创建实时语音桥接会话
+ * @param params - 会话参数
+ * @returns 桥接会话对象
+ */
 export function createRealtimeVoiceBridgeSession(
   params: RealtimeVoiceBridgeSessionParams,
 ): RealtimeVoiceBridgeSession {

@@ -19,6 +19,9 @@ export {
   scheduleCleanup,
 } from "./tts-provider-helpers.js";
 
+/**
+ * 文本摘要依赖类型
+ */
 type SummarizeTextDeps = {
   completeSimple: typeof completeSimple;
   getApiKeyForModel: typeof getApiKeyForModel;
@@ -27,6 +30,10 @@ type SummarizeTextDeps = {
   resolveModelAsync: typeof resolveModelAsync;
 };
 
+/**
+ * 获取默认的摘要文本依赖
+ * @returns 依赖对象
+ */
 function resolveDefaultSummarizeTextDeps(): SummarizeTextDeps {
   return {
     completeSimple,
@@ -37,6 +44,9 @@ function resolveDefaultSummarizeTextDeps(): SummarizeTextDeps {
   };
 }
 
+/**
+ * 摘要结果类型
+ */
 type SummarizeResult = {
   summary: string;
   latencyMs: number;
@@ -44,11 +54,20 @@ type SummarizeResult = {
   outputLength: number;
 };
 
+/**
+ * 摘要模型选择类型
+ */
 type SummaryModelSelection = {
   ref: ModelRef;
   source: "summaryModel" | "default";
 };
 
+/**
+ * 解析摘要模型引用
+ * @param cfg - OpenClaw配置
+ * @param config - TTS配置
+ * @returns 模型选择结果
+ */
 function resolveSummaryModelRef(
   cfg: OpenClawConfig,
   config: ResolvedTtsConfig,
@@ -71,10 +90,22 @@ function resolveSummaryModelRef(
   return { ref: resolved.ref, source: "summaryModel" };
 }
 
+/**
+ * 检查块是否为文本内容块
+ * @param block - 内容块
+ * @returns 是否为文本块
+ */
 function isTextContentBlock(block: { type: string }): block is TextContent {
   return block.type === "text";
 }
 
+/**
+ * 摘要文本
+ * 使用AI模型将文本摘要到目标长度
+ * @param params - 包含文本、目标长度、配置和超时的参数
+ * @param deps - 可选的依赖注入
+ * @returns 摘要结果
+ */
 export async function summarizeText(
   params: {
     text: string;

@@ -8,13 +8,26 @@ import {
   type RealtimeVoiceAgentConsultTranscriptEntry,
 } from "./agent-consult-tool.js";
 
+/**
+ * 实时语音Agent咨询运行时类型
+ */
 export type RealtimeVoiceAgentConsultRuntime = PluginRuntimeCore["agent"];
+
+/**
+ * 实时语音Agent咨询结果类型
+ */
 export type RealtimeVoiceAgentConsultResult = { text: string };
 export {
   resolveRealtimeVoiceAgentConsultTools,
   resolveRealtimeVoiceAgentConsultToolsAllow,
 } from "./agent-consult-tool.js";
 
+/**
+ * 解析实时语音Agent沙盒会话键
+ * @param agentId - Agent ID
+ * @param sessionKey - 会话键
+ * @returns 规范化的沙盒会话键
+ */
 function resolveRealtimeVoiceAgentSandboxSessionKey(agentId: string, sessionKey: string): string {
   const trimmed = sessionKey.trim();
   if (trimmed.toLowerCase().startsWith("agent:")) {
@@ -23,6 +36,12 @@ function resolveRealtimeVoiceAgentSandboxSessionKey(agentId: string, sessionKey:
   return `agent:${agentId}:${trimmed}`;
 }
 
+/**
+ * 咨询实时语音Agent
+ * 在实时语音会话中调用Agent获取响应
+ * @param params - 包含配置、运行时、消息提供商等的参数
+ * @returns Agent响应文本
+ */
 export async function consultRealtimeVoiceAgent(params: {
   cfg: OpenClawConfig;
   agentRuntime: RealtimeVoiceAgentConsultRuntime;

@@ -8,6 +8,11 @@ import {
   toText,
 } from "./channel-shared.js";
 
+/**
+ * 获取通道MCP能力
+ * @param claudeChannelMode - Claude通道模式
+ * @returns 能力配置或undefined
+ */
 export function getChannelMcpCapabilities(claudeChannelMode: "off" | "on" | "auto") {
   if (claudeChannelMode === "off") {
     return undefined;
@@ -20,7 +25,15 @@ export function getChannelMcpCapabilities(claudeChannelMode: "off" | "on" | "aut
   };
 }
 
+/**
+ * 注册通道MCP工具到服务器
+ * @param server - MCP服务器
+ * @param bridge - OpenClaw通道桥接器
+ */
 export function registerChannelMcpTools(server: McpServer, bridge: OpenClawChannelBridge): void {
+  /**
+   * 列出可用对话
+   */
   server.tool(
     "conversations_list",
     "List OpenClaw channel-backed conversations available through session routes.",
@@ -40,6 +53,9 @@ export function registerChannelMcpTools(server: McpServer, bridge: OpenClawChann
     },
   );
 
+  /**
+   * 获取单个对话
+   */
   server.tool(
     "conversation_get",
     "Get one OpenClaw conversation by session key.",
@@ -59,6 +75,9 @@ export function registerChannelMcpTools(server: McpServer, bridge: OpenClawChann
     },
   );
 
+  /**
+   * 读取对话消息
+   */
   server.tool(
     "messages_read",
     "Read recent messages for one OpenClaw conversation.",
@@ -75,6 +94,9 @@ export function registerChannelMcpTools(server: McpServer, bridge: OpenClawChann
     },
   );
 
+  /**
+   * 获取消息附件列表
+   */
   server.tool(
     "attachments_fetch",
     "List non-text attachments for a message in one OpenClaw conversation.",
@@ -100,6 +122,9 @@ export function registerChannelMcpTools(server: McpServer, bridge: OpenClawChann
     },
   );
 
+  /**
+   * 轮询对话事件
+   */
   server.tool(
     "events_poll",
     "Poll queued OpenClaw conversation events since a cursor.",
@@ -120,6 +145,9 @@ export function registerChannelMcpTools(server: McpServer, bridge: OpenClawChann
     },
   );
 
+  /**
+   * 等待下一个对话事件
+   */
   server.tool(
     "events_wait",
     "Wait for the next queued OpenClaw conversation event.",
@@ -140,6 +168,9 @@ export function registerChannelMcpTools(server: McpServer, bridge: OpenClawChann
     },
   );
 
+  /**
+   * 发送消息
+   */
   server.tool(
     "messages_send",
     "Send a message back through the same OpenClaw conversation route.",
@@ -156,6 +187,9 @@ export function registerChannelMcpTools(server: McpServer, bridge: OpenClawChann
     },
   );
 
+  /**
+   * 列出开放的审批请求
+   */
   server.tool(
     "permissions_list_open",
     "List open OpenClaw exec or plugin approval requests visible through the Gateway.",
@@ -169,6 +203,9 @@ export function registerChannelMcpTools(server: McpServer, bridge: OpenClawChann
     },
   );
 
+  /**
+   * 响应审批请求
+   */
   server.tool(
     "permissions_respond",
     "Allow or deny one pending OpenClaw exec or plugin approval request.",
