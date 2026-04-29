@@ -1,11 +1,12 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { DEFAULT_WINDOWS_SYSTEM_ROOT } from "../infra/windows-install-roots.js";
 import type { WindowsAclEntry, WindowsAclSummary } from "./windows-acl.js";
 
 const MOCK_USERNAME = "MockUser";
 const mockUserInfo = () => ({ username: MOCK_USERNAME });
 const emptyUserInfo = () => ({ username: "" });
-const DEFAULT_ICACLS = "C:\\Windows\\System32\\icacls.exe";
-const DEFAULT_WHOAMI = "C:\\Windows\\System32\\whoami.exe";
+const DEFAULT_ICACLS = `${DEFAULT_WINDOWS_SYSTEM_ROOT}\\System32\\icacls.exe`;
+const DEFAULT_WHOAMI = `${DEFAULT_WINDOWS_SYSTEM_ROOT}\\System32\\whoami.exe`;
 
 let createIcaclsResetCommand: typeof import("./windows-acl.js").createIcaclsResetCommand;
 let formatIcaclsResetCommand: typeof import("./windows-acl.js").formatIcaclsResetCommand;

@@ -1,6 +1,9 @@
 import os from "node:os";
 import path from "node:path";
-import { normalizeWindowsInstallRoot } from "../infra/windows-install-roots.js";
+import {
+  DEFAULT_WINDOWS_SYSTEM_ROOT,
+  normalizeWindowsInstallRoot,
+} from "../infra/windows-install-roots.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runExec } from "../process/exec.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
@@ -55,7 +58,6 @@ const TRUSTED_BASE = new Set([
 ]);
 const WORLD_SUFFIXES = ["\\users", "\\authenticated users"];
 const TRUSTED_SUFFIXES = ["\\administrators", "\\system", "\\système"];
-const DEFAULT_WINDOWS_SYSTEM_ROOT = "C:\\Windows";
 
 // Accept an optional leading * which icacls prefixes to SIDs when invoked with /sid
 // (e.g. *S-1-5-18 instead of S-1-5-18).
@@ -119,6 +121,8 @@ function buildTrustedPrincipals(env?: NodeJS.ProcessEnv): Set<string> {
 }
 
 function resolveWindowsSystemCommand(command: string, env?: NodeJS.ProcessEnv): string {
+  // Never fall back to a bare helper name here; Windows command search can
+  // consult the current directory and PATH before the real System32 helper.
   const root =
     [
       normalizeWindowsInstallRoot(env?.SystemRoot),
