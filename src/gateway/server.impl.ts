@@ -535,6 +535,8 @@ export async function startGatewayServer(
     current: resolveCurrentSharedGatewaySessionGeneration(),
     required: null,
   };
+  const preauthHandshakeTimeoutMs =
+    cfgAtStart.gateway?.handshakeTimeoutMs ?? getRuntimeConfig().gateway?.handshakeTimeoutMs;
   const initialHooksConfig = runtimeConfig.hooksConfig;
   const initialHookClientIpConfig = resolveHookClientIpConfig(cfgAtStart);
   const canvasHostEnabled = runtimeConfig.canvasHostEnabled;
@@ -939,6 +941,7 @@ export async function startGatewayServer(
         getRequiredSharedGatewaySessionGeneration(sharedGatewaySessionGenerationState),
       rateLimiter: authRateLimiter,
       browserRateLimiter: browserAuthRateLimiter,
+      preauthHandshakeTimeoutMs,
       gatewayMethods: runtimeState.gatewayMethods,
       events: GATEWAY_EVENTS,
       logGateway: log,

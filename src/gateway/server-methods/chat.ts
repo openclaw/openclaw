@@ -1706,14 +1706,11 @@ export const chatHandlers: GatewayRequestHandlers = {
     }
     let thinkingLevel = entry?.thinkingLevel;
     if (!thinkingLevel) {
-      const loadedCatalog = await context.loadGatewayModelCatalog().catch(() => undefined);
-      const modelCatalog = Array.isArray(loadedCatalog) ? loadedCatalog : undefined;
       thinkingLevel = resolveGatewaySessionThinkingDefault({
         cfg,
         agentId: sessionAgentId,
         provider: resolvedSessionModel.provider,
         model: resolvedSessionModel.model,
-        modelCatalog,
       });
     }
     const verboseLevel = entry?.verboseLevel ?? cfg.agents?.defaults?.verboseDefault;

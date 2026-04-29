@@ -107,18 +107,19 @@ and the shared capability runtime before the provider request is made.
 
 This table maps common inference tasks to the corresponding infer command.
 
-| Task                    | Command                                                                  | Notes                                                 |
-| ----------------------- | ------------------------------------------------------------------------ | ----------------------------------------------------- |
-| Run a text/model prompt | `openclaw infer model run --prompt "..." --json`                         | Uses the normal local path by default                 |
-| Generate an image       | `openclaw infer image generate --prompt "..." --json`                    | Use `image edit` when starting from an existing file  |
-| Describe an image file  | `openclaw infer image describe --file ./image.png --prompt "..." --json` | `--model` must be an image-capable `<provider/model>` |
-| Transcribe audio        | `openclaw infer audio transcribe --file ./memo.m4a --json`               | `--model` must be `<provider/model>`                  |
-| Synthesize speech       | `openclaw infer tts convert --text "..." --output ./speech.mp3 --json`   | `tts status` is gateway-oriented                      |
-| Generate a video        | `openclaw infer video generate --prompt "..." --json`                    | Supports provider hints such as `--resolution`        |
-| Describe a video file   | `openclaw infer video describe --file ./clip.mp4 --json`                 | `--model` must be `<provider/model>`                  |
-| Search the web          | `openclaw infer web search --query "..." --json`                         |                                                       |
-| Fetch a web page        | `openclaw infer web fetch --url https://example.com --json`              |                                                       |
-| Create embeddings       | `openclaw infer embedding create --text "..." --json`                    |                                                       |
+| Task                         | Command                                                                                       | Notes                                                 |
+| ---------------------------- | --------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
+| Run a text/model prompt      | `openclaw infer model run --prompt "..." --json`                                              | Uses the normal local path by default                 |
+| Run a model prompt on images | `openclaw infer model run --prompt "Describe this" --file ./image.png --model provider/model` | Repeat `--file` for multiple image inputs             |
+| Generate an image            | `openclaw infer image generate --prompt "..." --json`                                         | Use `image edit` when starting from an existing file  |
+| Describe an image file       | `openclaw infer image describe --file ./image.png --prompt "..." --json`                      | `--model` must be an image-capable `<provider/model>` |
+| Transcribe audio             | `openclaw infer audio transcribe --file ./memo.m4a --json`                                    | `--model` must be `<provider/model>`                  |
+| Synthesize speech            | `openclaw infer tts convert --text "..." --output ./speech.mp3 --json`                        | `tts status` is gateway-oriented                      |
+| Generate a video             | `openclaw infer video generate --prompt "..." --json`                                         | Supports provider hints such as `--resolution`        |
+| Describe a video file        | `openclaw infer video describe --file ./clip.mp4 --json`                                      | `--model` must be `<provider/model>`                  |
+| Search the web               | `openclaw infer web search --query "..." --json`                                              |                                                       |
+| Fetch a web page             | `openclaw infer web fetch --url https://example.com --json`                                   |                                                       |
+| Create embeddings            | `openclaw infer embedding create --text "..." --json`                                         |                                                       |
 
 ## Behavior
 
@@ -131,7 +132,10 @@ This table maps common inference tasks to the corresponding infer command.
 - Gateway-managed state commands default to gateway.
 - The normal local path does not require the gateway to be running.
 - Local `model run` is a lean one-shot provider completion. It resolves the configured agent model and auth, but does not start a chat-agent turn, load tools, or open bundled MCP servers.
-- `model run --gateway` exercises Gateway routing, saved auth, provider selection, and the embedded runtime, but still runs as a raw model probe: it sends the supplied prompt without prior session transcript, bootstrap/AGENTS context, context-engine assembly, tools, or bundled MCP servers.
+- `model run --file` accepts image files, detects their MIME type, and sends them with the supplied prompt to the selected model. Repeat `--file` for multiple images.
+- `model run --file` rejects non-image inputs. Use `infer audio transcribe` for audio files and `infer video describe` for video files.
+- `model run --gateway` exercises Gateway routing, saved auth, provider selection, and the embedded runtime, but still runs as a raw model probe: it sends the supplied prompt and any image attachments without prior session transcript, bootstrap/AGENTS context, context-engine assembly, tools, or bundled MCP servers.
+- `model run --gateway --model <provider/model>` requires a trusted operator gateway credential because the request asks the Gateway to run a one-off provider/model override.
 
 ## Model
 
@@ -139,7 +143,8 @@ Use `model` for provider-backed text inference and model/provider inspection.
 
 ```bash
 openclaw infer model run --prompt "Reply with exactly: smoke-ok" --json
-openclaw infer model run --prompt "Summarize this changelog entry" --provider openai --json
+openclaw infer model run --prompt "Summarize this changelog entry" --model openai/gpt-5.4 --json
+openclaw infer model run --prompt "Describe this image in one sentence" --file ./photo.jpg --model google/gemini-2.5-flash --json
 openclaw infer model providers --json
 openclaw infer model inspect --name gpt-5.5 --json
 ```
@@ -154,11 +159,15 @@ openclaw infer model run --local --model google/gemini-2.5-flash --prompt "Reply
 openclaw infer model run --local --model groq/llama-3.1-8b-instant --prompt "Reply with exactly: pong" --json
 openclaw infer model run --local --model mistral/mistral-small-latest --prompt "Reply with exactly: pong" --json
 openclaw infer model run --local --model openai/gpt-4.1 --prompt "Reply with exactly: pong" --json
+openclaw infer model run --local --model ollama/qwen2.5vl:7b --prompt "Describe this image." --file ./photo.jpg --json
 ```
 
 Notes:
 
 - Local `model run` is the narrowest CLI smoke for provider/model/auth health because it sends only the supplied prompt to the selected model.
+- Local `model run --file` keeps that lean path and attaches image content directly to the single user message. Common image files such as PNG, JPEG, and WebP work when their MIME type is detected as `image/*`; unsupported or unrecognized files fail before the provider is called.
+- `model run --file` is best when you want to test the selected multimodal text model directly. Use `infer image describe` when you want OpenClaw's image-understanding provider selection and default image-model routing.
+- The selected model must support image input; text-only models may reject the request at the provider layer.
 - `model run --prompt` must contain non-whitespace text; empty prompts are rejected before local providers or the Gateway are called.
 - Local `model run` exits non-zero when the provider returns no text output, so unreachable local providers and empty completions do not look like successful probes.
 - Use `model run --gateway` when you need to test Gateway routing, agent-runtime setup, or Gateway-managed provider state while keeping the model input raw. Use `openclaw agent` or chat surfaces when you want the full agent context, tools, memory, and session transcript.

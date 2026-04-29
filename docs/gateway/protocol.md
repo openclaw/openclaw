@@ -554,7 +554,7 @@ stable across protocol v3 and are the expected baseline for third-party clients.
 | ----------------------------------------- | ----------------------------------------------------- | ---------------------------------------------------------- |
 | `PROTOCOL_VERSION`                        | `3`                                                   | `src/gateway/protocol/schema/protocol-schemas.ts`          |
 | Request timeout (per RPC)                 | `30_000` ms                                           | `src/gateway/client.ts` (`requestTimeoutMs`)               |
-| Preauth / connect-challenge timeout       | `10_000` ms                                           | `src/gateway/handshake-timeouts.ts` (clamp `250`–`10_000`) |
+| Preauth / connect-challenge timeout       | `15_000` ms                                           | `src/gateway/handshake-timeouts.ts` (clamp `250`–`15_000`) |
 | Initial reconnect backoff                 | `1_000` ms                                            | `src/gateway/client.ts` (`backoffMs`)                      |
 | Max reconnect backoff                     | `30_000` ms                                           | `src/gateway/client.ts` (`scheduleReconnect`)              |
 | Fast-retry clamp after device-token close | `250` ms                                              | `src/gateway/client.ts`                                    |

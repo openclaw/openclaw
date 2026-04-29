@@ -51,10 +51,12 @@ describe("startQaGatewayRpcClient", () => {
       },
       { prompt: "hi" },
       {
-        expectFinal: true,
-        progress: false,
         clientName: "gateway-client",
+        deviceIdentity: null,
+        expectFinal: true,
         mode: "backend",
+        progress: false,
+        scopes: ["operator.admin"],
       },
     );
 
@@ -126,10 +128,12 @@ describe("startQaGatewayRpcClient", () => {
       },
       {},
       {
-        expectFinal: undefined,
-        progress: false,
         clientName: "gateway-client",
+        deviceIdentity: null,
+        expectFinal: undefined,
         mode: "backend",
+        progress: false,
+        scopes: ["operator.admin"],
       },
     );
 
