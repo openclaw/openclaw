@@ -1,11 +1,11 @@
 import fs from "node:fs";
 import fsPromises from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import {
   isPathInside,
   isPathInsideWithRealpath,
+  resolvePreferredOpenClawTmpDir,
   writeFileFromPathWithinRoot,
 } from "openclaw/plugin-sdk/security-runtime";
 import {
@@ -158,7 +158,9 @@ async function atomicWriteInsideRoot(params: {
   assertFinalWriteContainment();
   await fsPromises.mkdir(root, { recursive: true });
   assertFinalWriteContainment();
-  const tempDir = await fsPromises.mkdtemp(path.join(os.tmpdir(), "openclaw-skill-workshop-"));
+  const tempRoot = resolvePreferredOpenClawTmpDir();
+  await fsPromises.mkdir(tempRoot, { recursive: true });
+  const tempDir = await fsPromises.mkdtemp(path.join(tempRoot, "skill-workshop-"));
   const tempPath = path.join(tempDir, "payload.txt");
   try {
     await fsPromises.writeFile(tempPath, params.content, "utf8");
