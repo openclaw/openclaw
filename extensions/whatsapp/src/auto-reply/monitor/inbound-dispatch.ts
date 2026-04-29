@@ -327,6 +327,7 @@ export async function dispatchWhatsAppBufferedReply(params: {
         }
         await params.deliverReply({
           replyResult: normalizedDeliveryPayload,
+          normalizedReplyResult: normalizedDeliveryPayload,
           msg: params.msg,
           mediaLocalRoots,
           maxMediaBytes: params.maxMediaBytes,

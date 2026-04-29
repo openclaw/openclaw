@@ -24,6 +24,7 @@ import { elide } from "./util.js";
 
 export async function deliverWebReply(params: {
   replyResult: ReplyPayload;
+  normalizedReplyResult?: ReturnType<typeof normalizeWhatsAppOutboundPayload<ReplyPayload>>;
   msg: WebInboundMsg;
   mediaLocalRoots?: readonly string[];
   maxMediaBytes: number;
@@ -45,9 +46,11 @@ export async function deliverWebReply(params: {
   }
   const tableMode = params.tableMode ?? "code";
   const chunkMode = params.chunkMode ?? "length";
-  const normalizedReply = normalizeWhatsAppOutboundPayload(replyResult, {
-    normalizeText: normalizeWhatsAppPayloadTextPreservingIndentation,
-  });
+  const normalizedReply =
+    params.normalizedReplyResult ??
+    normalizeWhatsAppOutboundPayload(replyResult, {
+      normalizeText: normalizeWhatsAppPayloadTextPreservingIndentation,
+    });
   const convertedText = markdownToWhatsApp(convertMarkdownTables(normalizedReply.text, tableMode));
   const textChunks = chunkMarkdownTextWithMode(convertedText, textLimit, chunkMode);
   const mediaList = normalizedReply.mediaUrls ?? [];
