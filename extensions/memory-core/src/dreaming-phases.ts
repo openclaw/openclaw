@@ -1587,11 +1587,15 @@ async function runLightDreaming(params: {
   const entries = dedupeEntries(
     recentEntries
       .toSorted((a, b) => {
+        const byRecall = b.recallCount - a.recallCount;
+        if (byRecall !== 0) {
+          return byRecall;
+        }
         const byTime = Date.parse(b.lastRecalledAt) - Date.parse(a.lastRecalledAt);
         if (byTime !== 0) {
           return byTime;
         }
-        return b.recallCount - a.recallCount;
+        return a.path.localeCompare(b.path);
       })
       .slice(0, params.config.limit),
     params.config.dedupeSimilarity,
