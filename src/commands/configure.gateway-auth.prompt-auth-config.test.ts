@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/types.js";
 import type { NormalizedModelCatalogRow } from "../model-catalog/index.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
@@ -85,6 +86,18 @@ function createKilocodeProvider() {
   };
 }
 
+function createTestModel(id: string, name = id) {
+  return {
+    id,
+    name,
+    reasoning: false,
+    input: ["text"] as Array<"text" | "image" | "video" | "audio">,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 128_000,
+    maxTokens: 4096,
+  };
+}
+
 function createApplyAuthChoiceConfig(includeMinimaxProvider = false) {
   return {
     config: {
@@ -101,7 +114,7 @@ function createApplyAuthChoiceConfig(includeMinimaxProvider = false) {
                 minimax: {
                   baseUrl: "https://api.minimax.io/anthropic",
                   api: "anthropic-messages",
-                  models: [{ id: "MiniMax-M2.7", name: "MiniMax M2.7" }],
+                  models: [createTestModel("MiniMax-M2.7", "MiniMax M2.7")],
                 },
               }
             : {}),
@@ -303,11 +316,11 @@ describe("promptAuthConfig", () => {
           ollama: {
             baseUrl: "https://ollama.com",
             api: "ollama",
-            models: [{ id: "deepseek-v4-pro", name: "deepseek-v4-pro" }],
+            models: [createTestModel("deepseek-v4-pro")],
           },
         },
       },
-    };
+    } satisfies OpenClawConfig;
     mocks.applyAuthChoice.mockResolvedValue({ config: existingConfig });
     mocks.promptModelAllowlist.mockResolvedValue({ models: undefined });
     mocks.resolveProviderPluginChoice.mockReturnValue(null);
@@ -332,11 +345,11 @@ describe("promptAuthConfig", () => {
           ollama: {
             baseUrl: "https://ollama.com",
             api: "ollama",
-            models: [{ id: "deepseek-v4-pro", name: "deepseek-v4-pro" }],
+            models: [createTestModel("deepseek-v4-pro")],
           },
         },
       },
-    };
+    } satisfies OpenClawConfig;
     mocks.applyAuthChoice.mockResolvedValue({
       config: {
         ...existingConfig,
@@ -348,7 +361,12 @@ describe("promptAuthConfig", () => {
         ref: "github-copilot/claude-opus-4.7",
         provider: "github-copilot",
         id: "claude-opus-4.7",
+        mergeKey: "github-copilot/claude-opus-4.7",
         name: "Claude Opus 4.7",
+        source: "manifest",
+        input: ["text"],
+        reasoning: false,
+        status: "available",
       },
     ]);
     mocks.promptModelAllowlist.mockResolvedValue({ models: undefined });
