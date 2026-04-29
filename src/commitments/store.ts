@@ -265,11 +265,7 @@ export async function upsertInferredCommitments(params: {
     store.commitments.push(record);
     created.push(record);
   }
-  if (created.length > 0) {
-    await saveCommitmentStore(resolved.store, store);
-  } else {
-    await saveCommitmentStore(resolved.store, store);
-  }
+  await saveCommitmentStore(resolved.store, store);
   return created;
 }
 
