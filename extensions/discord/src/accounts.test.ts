@@ -5,6 +5,7 @@ import {
   listEnabledDiscordAccounts,
   resolveDiscordAccount,
   resolveDiscordAccountDisabledReason,
+  resolveDiscordAccountDmPolicy,
   resolveDiscordMaxLinesPerMessage,
 } from "./accounts.js";
 
@@ -243,5 +244,112 @@ describe("Discord duplicate-token account filtering", () => {
 
     expect(isDiscordAccountEnabledForRuntime(activeAccount, cfg)).toBe(true);
     expect(listEnabledDiscordAccounts(cfg).map((account) => account.accountId)).toEqual(["active"]);
+  });
+});
+
+describe("resolveDiscordAccountDmPolicy precedence", () => {
+  it('defaults to "pairing" when neither account nor root specifies dmPolicy', () => {
+    expect(
+      resolveDiscordAccountDmPolicy({
+        cfg: {
+          channels: {
+            discord: {
+              accounts: {
+                default: { token: "token-default" },
+              },
+            },
+          },
+        },
+      }),
+    ).toBe("pairing");
+  });
+
+  it("prefers account-level dmPolicy over root-level", () => {
+    expect(
+      resolveDiscordAccountDmPolicy({
+        cfg: {
+          channels: {
+            discord: {
+              dmPolicy: "open",
+              accounts: {
+                default: { token: "token-default", dmPolicy: "disabled" },
+              },
+            },
+          },
+        },
+      }),
+    ).toBe("disabled");
+  });
+
+  it("falls back to root-level dmPolicy when the account does not specify one", () => {
+    expect(
+      resolveDiscordAccountDmPolicy({
+        cfg: {
+          channels: {
+            discord: {
+              dmPolicy: "allowlist",
+              accounts: {
+                default: { token: "token-default" },
+              },
+            },
+          },
+        },
+      }),
+    ).toBe("allowlist");
+  });
+
+  it("isolates a named account from the default account dmPolicy", () => {
+    expect(
+      resolveDiscordAccountDmPolicy({
+        cfg: {
+          channels: {
+            discord: {
+              accounts: {
+                default: { token: "token-default", dmPolicy: "open" },
+                work: { token: "token-work", dmPolicy: "disabled" },
+              },
+            },
+          },
+        },
+        accountId: "work",
+      }),
+    ).toBe("disabled");
+  });
+
+  it("uses configured defaultAccount when accountId is omitted", () => {
+    expect(
+      resolveDiscordAccountDmPolicy({
+        cfg: {
+          channels: {
+            discord: {
+              defaultAccount: "work",
+              accounts: {
+                default: { token: "token-default", dmPolicy: "open" },
+                work: { token: "token-work", dmPolicy: "allowlist" },
+              },
+            },
+          },
+        },
+      }),
+    ).toBe("allowlist");
+  });
+
+  it("returns undefined when the configured dmPolicy is not a known value", () => {
+    expect(
+      resolveDiscordAccountDmPolicy({
+        cfg: {
+          channels: {
+            discord: {
+              accounts: {
+                default: {
+                  token: "token-default",
+                  dmPolicy: "invalid-policy" as unknown as "pairing",
+                },
+              },
+            },
+          },
+        },
+      }),
+    ).toBeUndefined();
   });
 });
