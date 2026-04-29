@@ -158,8 +158,8 @@ export function upsertCanonicalModelConfigEntry(
       ...models[legacyKey],
       ...models[key],
       params: {
-        ...(models[legacyKey].params ?? {}),
-        ...(models[key]?.params ?? {}),
+        ...models[legacyKey].params,
+        ...models[key]?.params,
       },
     };
   } else if (!models[key]) {
