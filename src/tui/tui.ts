@@ -585,20 +585,30 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     if (!isConnected || typeof client.listCommands !== "function") {
       return;
     }
-    const refreshKey = `${normalizeLowercaseStringOrEmpty(currentAgentId)}:${normalizeLowercaseStringOrEmpty(sessionInfo.modelProvider)}`;
+    const resolveRefreshKey = () =>
+      `${normalizeLowercaseStringOrEmpty(currentAgentId)}:${normalizeLowercaseStringOrEmpty(sessionInfo.modelProvider)}`;
+    let refreshKey = resolveRefreshKey();
     if (!force && refreshKey === remoteCommandsCacheKey) {
       return;
     }
     if (remoteCommandsRefreshInFlight) {
       await remoteCommandsRefreshInFlight;
-      return;
+      if (!isConnected || typeof client.listCommands !== "function") {
+        return;
+      }
+      refreshKey = resolveRefreshKey();
+      if (refreshKey === remoteCommandsCacheKey) {
+        return;
+      }
     }
     const seq = ++remoteCommandsRefreshSeq;
+    const requestAgentId = currentAgentId;
+    const requestProvider = sessionInfo.modelProvider;
     remoteCommandsRefreshInFlight = (async () => {
       try {
         const commands = await client.listCommands?.({
-          agentId: currentAgentId,
-          provider: sessionInfo.modelProvider,
+          agentId: requestAgentId,
+          provider: requestProvider,
         });
         if (seq !== remoteCommandsRefreshSeq) {
           return;
