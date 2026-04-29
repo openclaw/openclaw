@@ -42,7 +42,7 @@ jobs:
         run: |
           curl -fsSL "https://raw.githubusercontent.com/opengrep/opengrep/${OPENGREP_INSTALL_SHA}/install.sh" \
             | bash -s -- -v "$OPENGREP_VERSION"
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          echo "$HOME/.opengrep/cli/latest" >> "$GITHUB_PATH"
 
       - name: Verify opengrep
         run: opengrep --version
