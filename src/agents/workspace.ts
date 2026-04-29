@@ -129,15 +129,7 @@ async function loadTemplate(name: string): Promise<string> {
   }
 }
 
-export type WorkspaceBootstrapFileName =
-  | typeof DEFAULT_AGENTS_FILENAME
-  | typeof DEFAULT_SOUL_FILENAME
-  | typeof DEFAULT_TOOLS_FILENAME
-  | typeof DEFAULT_IDENTITY_FILENAME
-  | typeof DEFAULT_USER_FILENAME
-  | typeof DEFAULT_HEARTBEAT_FILENAME
-  | typeof DEFAULT_BOOTSTRAP_FILENAME
-  | typeof DEFAULT_MEMORY_FILENAME;
+export type WorkspaceBootstrapFileName = string;
 
 export type WorkspaceBootstrapFile = {
   name: WorkspaceBootstrapFileName;
@@ -146,11 +138,7 @@ export type WorkspaceBootstrapFile = {
   missing: boolean;
 };
 
-export type ExtraBootstrapLoadDiagnosticCode =
-  | "invalid-bootstrap-filename"
-  | "missing"
-  | "security"
-  | "io";
+export type ExtraBootstrapLoadDiagnosticCode = "missing" | "security" | "io";
 
 export type ExtraBootstrapLoadDiagnostic = {
   path: string;
@@ -739,23 +727,14 @@ export async function loadExtraBootstrapFilesWithDiagnostics(
   const diagnostics: ExtraBootstrapLoadDiagnostic[] = [];
   for (const relPath of resolvedPaths) {
     const filePath = path.resolve(resolvedDir, relPath);
-    // Only load files whose basename is a recognized bootstrap filename
     const baseName = path.basename(relPath);
-    if (!VALID_BOOTSTRAP_NAMES.has(baseName)) {
-      diagnostics.push({
-        path: filePath,
-        reason: "invalid-bootstrap-filename",
-        detail: `unsupported bootstrap basename: ${baseName}`,
-      });
-      continue;
-    }
     const loaded = await readWorkspaceFileWithGuards({
       filePath,
       workspaceDir: resolvedDir,
     });
     if (loaded.ok) {
       files.push({
-        name: baseName as WorkspaceBootstrapFileName,
+        name: baseName,
         path: filePath,
         content: loaded.content,
         missing: false,

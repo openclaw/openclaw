@@ -34,7 +34,10 @@ workspace root.
       "entries": {
         "bootstrap-extra-files": {
           "enabled": true,
-          "paths": ["packages/*/AGENTS.md", "packages/*/TOOLS.md"]
+          "paths": ["packages/*/AGENTS.md", "packages/*/TOOLS.md"],
+          "sessions": {
+            "agent:main:whatsapp:group:123": ["sessions/zeus-dev/BOOTSTRAP-ZEUS.md"]
+          }
         }
       }
     }
@@ -47,7 +50,8 @@ workspace root.
 - `paths` (string[]): preferred list of glob/path patterns.
 - `patterns` (string[]): alias of `paths`.
 - `files` (string[]): alias of `paths`.
+- `sessions` (object): exact `sessionKey` to extra path list map. Matching session paths are loaded in addition to the global list.
 
 All paths are resolved from the workspace and must stay inside it (including realpath checks).
-Only recognized bootstrap basenames are loaded (`AGENTS.md`, `SOUL.md`, `TOOLS.md`,
-`IDENTITY.md`, `USER.md`, `HEARTBEAT.md`, `BOOTSTRAP.md`, `MEMORY.md`).
+Matching files are loaded even when their basename is not one of the default workspace
+bootstrap filenames.

@@ -24,18 +24,22 @@ describe("loadExtraBootstrapFiles", () => {
     }
   });
 
-  it("loads recognized bootstrap files from glob patterns", async () => {
+  it("loads matching extra files from glob patterns regardless of basename", async () => {
     const workspaceDir = await createWorkspaceDir("glob");
     const packageDir = path.join(workspaceDir, "packages", "core");
     await fs.mkdir(packageDir, { recursive: true });
     await fs.writeFile(path.join(packageDir, "TOOLS.md"), "tools", "utf-8");
-    await fs.writeFile(path.join(packageDir, "README.md"), "not bootstrap", "utf-8");
+    await fs.writeFile(path.join(packageDir, "BOOTSTRAP-EUROTRIP.md"), "eurotrip", "utf-8");
 
     const files = await loadExtraBootstrapFiles(workspaceDir, ["packages/*/*"]);
 
-    expect(files).toHaveLength(1);
-    expect(files[0]?.name).toBe("TOOLS.md");
-    expect(files[0]?.content).toBe("tools");
+    expect(files.map((file) => file.name).toSorted()).toEqual([
+      "BOOTSTRAP-EUROTRIP.md",
+      "TOOLS.md",
+    ]);
+    expect(files.map((file) => file.content)).toEqual(
+      expect.arrayContaining(["eurotrip", "tools"]),
+    );
   });
 
   it("keeps path-traversal attempts outside workspace excluded", async () => {
