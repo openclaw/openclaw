@@ -115,6 +115,9 @@ const GENERATED_LOCALES = [
     navFile: "fa-navigation.json",
     tmFile: "fa.tm.jsonl",
     navMode: "clone-en",
+    // Mintlify does not currently accept `fa` in navigation.languages.
+    // Preserve generated files/translation memory, but do not publish a nav entry.
+    navigation: false,
   },
   {
     language: "tr",
@@ -150,6 +153,9 @@ const GENERATED_LOCALES = [
     navFile: "th-navigation.json",
     tmFile: "th.tm.jsonl",
     navMode: "clone-en",
+    // Mintlify does not currently accept `th` in navigation.languages.
+    // Preserve generated files/translation memory, but do not publish a nav entry.
+    navigation: false,
   },
 ];
 
