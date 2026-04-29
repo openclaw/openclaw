@@ -1,12 +1,12 @@
 ---
-summary: "CLI reference for `openclaw config` (get/set/apply/unset/file/schema/validate)"
+summary: "CLI reference for `openclaw config` (get/set/patch/unset/file/schema/validate)"
 read_when:
   - You want to read or edit config non-interactively
 title: "Config"
 sidebarTitle: "Config"
 ---
 
-Config helpers for non-interactive edits in `openclaw.json`: get/set/apply/unset/file/schema/validate values by path and print the active config file. Run without a subcommand to open the configure wizard (same as `openclaw configure`).
+Config helpers for non-interactive edits in `openclaw.json`: get/set/patch/unset/file/schema/validate values by path and print the active config file. Run without a subcommand to open the configure wizard (same as `openclaw configure`).
 
 ## Root options
 
@@ -31,7 +31,7 @@ openclaw config set agents.list[0].tools.exec.node "node-id-or-name"
 openclaw config set agents.defaults.models '{"openai/gpt-5.4":{}}' --strict-json --merge
 openclaw config set channels.discord.token --ref-provider default --ref-source env --ref-id DISCORD_BOT_TOKEN
 openclaw config set secrets.providers.vaultfile --provider-source file --provider-path /etc/openclaw/secrets.json --provider-mode json
-openclaw config apply --file ./openclaw.patch.json5 --dry-run
+openclaw config patch --file ./openclaw.patch.json5 --dry-run
 openclaw config unset plugins.entries.brave.config.webSearch.apiKey
 openclaw config set channels.discord.token --ref-provider default --ref-source env --ref-id DISCORD_BOT_TOKEN --dry-run
 openclaw config validate
@@ -166,20 +166,20 @@ SecretRef assignments are rejected on unsupported runtime-mutable surfaces (for 
 
 Batch parsing always uses the batch payload (`--batch-json`/`--batch-file`) as the source of truth. `--strict-json` / `--json` do not change batch parsing behavior.
 
-## `config apply`
+## `config patch`
 
-Use `config apply` when you want to paste or pipe a config-shaped patch instead of running many path-based `config set` commands. The input is a JSON5 object. Objects merge recursively, arrays and scalar values replace the target value, and `null` deletes the target path.
+Use `config patch` when you want to paste or pipe a config-shaped patch instead of running many path-based `config set` commands. The input is a JSON5 object. Objects merge recursively, arrays and scalar values replace the target value, and `null` deletes the target path.
 
 ```bash
-openclaw config apply --file ./openclaw.patch.json5 --dry-run
-openclaw config apply --file ./openclaw.patch.json5
+openclaw config patch --file ./openclaw.patch.json5 --dry-run
+openclaw config patch --file ./openclaw.patch.json5
 ```
 
 You can also pipe a patch over stdin, which is useful for remote setup scripts:
 
 ```bash
-ssh openclaw-host 'openclaw config apply --stdin --dry-run' < ./openclaw.patch.json5
-ssh openclaw-host 'openclaw config apply --stdin' < ./openclaw.patch.json5
+ssh openclaw-host 'openclaw config patch --stdin --dry-run' < ./openclaw.patch.json5
+ssh openclaw-host 'openclaw config patch --stdin' < ./openclaw.patch.json5
 ```
 
 Example patch:
@@ -217,7 +217,7 @@ Example patch:
 Use `--replace-path <path>` when one object or array must become exactly the provided value instead of being recursively patched:
 
 ```bash
-openclaw config apply --file ./discord.patch.json5 --replace-path 'channels.discord.guilds["123"].channels'
+openclaw config patch --file ./discord.patch.json5 --replace-path 'channels.discord.guilds["123"].channels'
 ```
 
 `--dry-run` runs schema and SecretRef resolvability checks without writing. Exec-backed SecretRefs are skipped by default during dry-run; add `--allow-exec` when you intentionally want dry-run to execute provider commands.

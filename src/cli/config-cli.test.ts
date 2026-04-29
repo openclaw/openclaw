@@ -1384,7 +1384,7 @@ describe("config cli", () => {
       );
     });
 
-    it("applies a config patch object in one write", async () => {
+    it("patches config from one object in one write", async () => {
       const resolved = {
         secrets: {
           providers: {
@@ -1403,7 +1403,7 @@ describe("config cli", () => {
 
       const pathname = path.join(
         os.tmpdir(),
-        `openclaw-config-apply-${Date.now()}-${Math.random().toString(16).slice(2)}.json5`,
+        `openclaw-config-patch-${Date.now()}-${Math.random().toString(16).slice(2)}.json5`,
       );
       fs.writeFileSync(
         pathname,
@@ -1435,7 +1435,7 @@ describe("config cli", () => {
         "utf8",
       );
       try {
-        await runConfigCommand(["config", "apply", "--file", pathname]);
+        await runConfigCommand(["config", "patch", "--file", pathname]);
       } finally {
         fs.rmSync(pathname, { force: true });
       }
@@ -1462,7 +1462,7 @@ describe("config cli", () => {
       ).toEqual({ source: "env", provider: "default", id: "DISCORD_BOT_TOKEN" });
     });
 
-    it("dry-runs config apply and resolves changed SecretRefs", async () => {
+    it("dry-runs config patch and resolves changed SecretRefs", async () => {
       const resolved = {
         secrets: {
           providers: {
@@ -1474,7 +1474,7 @@ describe("config cli", () => {
 
       const pathname = path.join(
         os.tmpdir(),
-        `openclaw-config-apply-dry-${Date.now()}-${Math.random().toString(16).slice(2)}.json5`,
+        `openclaw-config-patch-dry-${Date.now()}-${Math.random().toString(16).slice(2)}.json5`,
       );
       fs.writeFileSync(
         pathname,
@@ -1488,7 +1488,7 @@ describe("config cli", () => {
         "utf8",
       );
       try {
-        await runConfigCommand(["config", "apply", "--file", pathname, "--dry-run"]);
+        await runConfigCommand(["config", "patch", "--file", pathname, "--dry-run"]);
       } finally {
         fs.rmSync(pathname, { force: true });
       }
@@ -1501,7 +1501,7 @@ describe("config cli", () => {
       );
     });
 
-    it("dry-runs nested SecretRefs inside config apply replacements", async () => {
+    it("dry-runs nested SecretRefs inside config patch replacements", async () => {
       const resolved = {
         secrets: {
           providers: {
@@ -1519,7 +1519,7 @@ describe("config cli", () => {
 
       const pathname = path.join(
         os.tmpdir(),
-        `openclaw-config-apply-nested-ref-${Date.now()}-${Math.random()
+        `openclaw-config-patch-nested-ref-${Date.now()}-${Math.random()
           .toString(16)
           .slice(2)}.json5`,
       );
@@ -1541,7 +1541,7 @@ describe("config cli", () => {
         await expect(
           runConfigCommand([
             "config",
-            "apply",
+            "patch",
             "--file",
             pathname,
             "--replace-path",
@@ -1560,17 +1560,17 @@ describe("config cli", () => {
       );
     });
 
-    it("rejects config apply --json without dry-run", async () => {
-      await expect(runConfigCommand(["config", "apply", "--stdin", "--json"])).rejects.toThrow(
+    it("rejects config patch --json without dry-run", async () => {
+      await expect(runConfigCommand(["config", "patch", "--stdin", "--json"])).rejects.toThrow(
         "__exit__:1",
       );
       expect(mockError).toHaveBeenCalledWith(
-        expect.stringContaining("config apply mode error: --json requires --dry-run."),
+        expect.stringContaining("config patch mode error: --json requires --dry-run."),
       );
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
     });
 
-    it("supports replace-path and null deletes in config apply", async () => {
+    it("supports replace-path and null deletes in config patch", async () => {
       const resolved = {
         channels: {
           slack: {
@@ -1591,7 +1591,7 @@ describe("config cli", () => {
 
       const pathname = path.join(
         os.tmpdir(),
-        `openclaw-config-apply-replace-${Date.now()}-${Math.random().toString(16).slice(2)}.json5`,
+        `openclaw-config-patch-replace-${Date.now()}-${Math.random().toString(16).slice(2)}.json5`,
       );
       fs.writeFileSync(
         pathname,
@@ -1616,7 +1616,7 @@ describe("config cli", () => {
       try {
         await runConfigCommand([
           "config",
-          "apply",
+          "patch",
           "--file",
           pathname,
           "--replace-path",
@@ -1639,6 +1639,47 @@ describe("config cli", () => {
       expect(mockWriteConfigFile.mock.calls[0]?.[1]).toEqual({
         unsetPaths: [["channels", "slack", "appToken"]],
       });
+    });
+
+    it("rejects unused config patch replace paths", async () => {
+      const pathname = path.join(
+        os.tmpdir(),
+        `openclaw-config-patch-unused-replace-${Date.now()}-${Math.random()
+          .toString(16)
+          .slice(2)}.json5`,
+      );
+      fs.writeFileSync(
+        pathname,
+        JSON.stringify({
+          channels: {
+            discord: {
+              enabled: true,
+            },
+          },
+        }),
+        "utf8",
+      );
+      try {
+        await expect(
+          runConfigCommand([
+            "config",
+            "patch",
+            "--file",
+            pathname,
+            "--replace-path",
+            "channels.discord.guilds",
+          ]),
+        ).rejects.toThrow("__exit__:1");
+      } finally {
+        fs.rmSync(pathname, { force: true });
+      }
+
+      expect(mockError).toHaveBeenCalledWith(
+        expect.stringContaining(
+          "config patch mode error: --replace-path channels.discord.guilds did not match any value in the input patch.",
+        ),
+      );
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
     });
 
     it("rejects malformed batch entries with mixed operation keys", async () => {
