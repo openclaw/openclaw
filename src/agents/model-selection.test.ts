@@ -629,6 +629,7 @@ describe("model-selection", () => {
                   id: "gpt-test-z",
                   name: "Configured GPT Test Z",
                   contextWindow: 64_000,
+                  compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh"] },
                 },
               ],
             },
@@ -650,6 +651,7 @@ describe("model-selection", () => {
           name: "Configured GPT Test Z",
           alias: "GPT Test Z Alias",
           contextWindow: 64_000,
+          compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh"] },
         },
       ]);
     });
@@ -707,6 +709,7 @@ describe("model-selection", () => {
                   name: "Kimi K2.5 (Configured)",
                   contextWindow: 32_000,
                   reasoning: true,
+                  compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh"] },
                 },
               ],
             },
@@ -729,6 +732,7 @@ describe("model-selection", () => {
           alias: "Kimi K2.5 (NVIDIA)",
           contextWindow: 32_000,
           reasoning: true,
+          compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh"] },
         },
       ]);
     });
