@@ -7,10 +7,16 @@ import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js
 import { resolveProviderEnvApiKeyCandidates } from "./model-auth-env-vars.js";
 import { GCP_VERTEX_CREDENTIALS_MARKER } from "./model-auth-markers.js";
 import { resolveProviderIdForAuth } from "./provider-auth-aliases.js";
+import { normalizeProviderIdForAuth } from "./provider-id.js";
 
 export type EnvApiKeyResult = {
   apiKey: string;
   source: string;
+};
+
+export type EnvApiKeyLookupOptions = {
+  aliasMap?: Readonly<Record<string, string>>;
+  candidateMap?: Readonly<Record<string, readonly string[]>>;
 };
 
 function hasGoogleVertexAdcCredentials(env: NodeJS.ProcessEnv): boolean {
@@ -39,9 +45,13 @@ function resolveGoogleVertexEnvApiKey(env: NodeJS.ProcessEnv): string | undefine
 export function resolveEnvApiKey(
   provider: string,
   env: NodeJS.ProcessEnv = process.env,
+  options: EnvApiKeyLookupOptions = {},
 ): EnvApiKeyResult | null {
-  const normalized = resolveProviderIdForAuth(provider, { env });
-  const candidateMap = resolveProviderEnvApiKeyCandidates({ env });
+  const normalizedProvider = normalizeProviderIdForAuth(provider);
+  const normalized = options.aliasMap
+    ? (options.aliasMap[normalizedProvider] ?? normalizedProvider)
+    : resolveProviderIdForAuth(provider, { env });
+  const candidateMap = options.candidateMap ?? resolveProviderEnvApiKeyCandidates({ env });
   const applied = new Set(getShellEnvAppliedKeys());
   const pick = (envVar: string): EnvApiKeyResult | null => {
     const value = normalizeOptionalSecretInput(env[envVar]);
