@@ -440,6 +440,29 @@ export function createSessionStatusTool(opts?: {
         });
       }
 
+      if (!resolved && requestedKeyRaw === "current" && effectiveRequesterKey) {
+        // Channel-plugin agents (Slack, Discord, Scope, ...) pass
+        // sessionKey="current" per the docstring, but
+        // `resolveCurrentSessionClientAlias` only maps first-party UI client
+        // ids (TUI, CLI, WEBCHAT_UI, ...) to the requester key. When the
+        // literal-current store lookup and the gateway's `sessions.resolve`
+        // call both find nothing matching, fall back to treating "current"
+        // as the requester's own session — the universal alias intent of the
+        // docstring. Without this fallback, the tool throws
+        // `Unknown sessionKey: current` and the agent retries with a
+        // constructed key, costing an extra LLM round-trip per turn.
+        requestedKeyRaw = effectiveRequesterKey;
+        resolvedViaImplicitCurrentFallback = true;
+        resolved = resolveSessionEntry({
+          store,
+          keyRaw: requestedKeyRaw,
+          alias,
+          mainKey,
+          requesterInternalKey: storeScopedRequesterKey,
+          includeAliasFallback: true,
+        });
+      }
+
       if (!resolved && requestedKeyParam === undefined) {
         for (const fallbackKey of listImplicitDefaultDirectFallbackKeys({
           keyRaw: requestedKeyRaw,

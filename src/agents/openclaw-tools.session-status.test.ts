@@ -468,6 +468,29 @@ describe("session_status tool", () => {
     expect(details.sessionKey).toBe("main");
   });
 
+  it("resolves sessionKey=current for a channel-plugin session via implicit fallback", async () => {
+    // Regression: agents driven by a channel plugin (Slack, Discord, Scope, ...)
+    // pass channel-style requester keys (e.g. agent:scopy:scope:scopy:direct:scopy)
+    // that don't match `CURRENT_SESSION_CLIENT_ALIAS_IDS`. Without the implicit
+    // "current"-as-requester fallback in session-status-tool.ts, the tool
+    // throws `Unknown sessionKey: current` even though the requester's own
+    // session exists in the store — costing an extra LLM round-trip per turn
+    // for date/time / model-status questions.
+    resetSessionStore({
+      "agent:main:scope:scopy:direct:scopy": {
+        sessionId: "s-channel",
+        updatedAt: 10,
+      },
+    });
+
+    const tool = getSessionStatusTool("agent:main:scope:scopy:direct:scopy");
+
+    const result = await tool.execute("call-current-channel", { sessionKey: "current" });
+    const details = result.details as { ok?: boolean; sessionKey?: string };
+    expect(details.ok).toBe(true);
+    expect(details.sessionKey).toBe("agent:main:scope:scopy:direct:scopy");
+  });
+
   it("treats the TUI client label as the current requester session", async () => {
     resetSessionStore({
       "agent:main:main": {
