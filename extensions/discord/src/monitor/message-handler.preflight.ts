@@ -40,6 +40,13 @@ import {
   resolvePreflightMentionRequirement,
   shouldIgnoreBoundThreadWebhookMessage,
 } from "./message-handler.preflight-helpers.js";
+import {
+  isPreflightAborted,
+  loadDiscordThreadingRuntime,
+  loadPluralKitRuntime,
+  loadPreflightAudioRuntime,
+  loadSystemEventsRuntime,
+} from "./message-handler.preflight-runtime.js";
 import type {
   DiscordMessagePreflightContext,
   DiscordMessagePreflightParams,
@@ -61,35 +68,6 @@ export {
   resolvePreflightMentionRequirement,
   shouldIgnoreBoundThreadWebhookMessage,
 } from "./message-handler.preflight-helpers.js";
-
-let pluralkitRuntimePromise: Promise<typeof import("../pluralkit.js")> | undefined;
-let preflightAudioRuntimePromise: Promise<typeof import("./preflight-audio.js")> | undefined;
-let systemEventsRuntimePromise: Promise<typeof import("./system-events.js")> | undefined;
-let discordThreadingRuntimePromise: Promise<typeof import("./threading.js")> | undefined;
-
-async function loadPluralKitRuntime() {
-  pluralkitRuntimePromise ??= import("../pluralkit.js");
-  return await pluralkitRuntimePromise;
-}
-
-async function loadPreflightAudioRuntime() {
-  preflightAudioRuntimePromise ??= import("./preflight-audio.js");
-  return await preflightAudioRuntimePromise;
-}
-
-async function loadSystemEventsRuntime() {
-  systemEventsRuntimePromise ??= import("./system-events.js");
-  return await systemEventsRuntimePromise;
-}
-
-async function loadDiscordThreadingRuntime() {
-  discordThreadingRuntimePromise ??= import("./threading.js");
-  return await discordThreadingRuntimePromise;
-}
-
-function isPreflightAborted(abortSignal?: AbortSignal): boolean {
-  return Boolean(abortSignal?.aborted);
-}
 
 export async function preflightDiscordMessage(
   params: DiscordMessagePreflightParams,

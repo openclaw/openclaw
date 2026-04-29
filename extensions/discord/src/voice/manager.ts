@@ -3,13 +3,12 @@ import { agentCommandFromIngress } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-types";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
-import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { resolveDiscordAccountAllowFrom } from "../accounts.js";
-import { ChannelType, type Client, ReadyListener } from "../internal/discord.js";
+import { type Client, ReadyListener } from "../internal/discord.js";
 import type { VoicePlugin } from "../internal/voice.js";
 import { formatMention } from "../mentions.js";
 import { normalizeDiscordSlug } from "../monitor/allow-list.js";
@@ -24,7 +23,6 @@ import {
   isVoiceCaptureActive,
   scheduleVoiceCaptureFinalize,
   stopVoiceCaptureState,
-  type VoiceCaptureState,
 } from "./capture-state.js";
 import { formatVoiceIngressPrompt } from "./prompt.js";
 import {
@@ -36,46 +34,23 @@ import {
   finishVoiceDecryptRecovery,
   noteVoiceDecryptFailure,
   resetVoiceReceiveRecoveryState,
-  type VoiceReceiveRecoveryState,
 } from "./receive-recovery.js";
 import { loadDiscordVoiceSdk } from "./sdk-runtime.js";
+import {
+  CAPTURE_FINALIZE_GRACE_MS,
+  isVoiceChannel,
+  logVoiceVerbose,
+  MIN_SEGMENT_SECONDS,
+  PLAYBACK_READY_TIMEOUT_MS,
+  SPEAKING_READY_TIMEOUT_MS,
+  VOICE_CONNECT_READY_TIMEOUT_MS,
+  type VoiceOperationResult,
+  type VoiceSessionEntry,
+} from "./session.js";
 import { DiscordVoiceSpeakerContextResolver } from "./speaker-context.js";
 import { synthesizeVoiceReplyAudio, transcribeVoiceAudio } from "./tts.js";
 
-const MIN_SEGMENT_SECONDS = 0.35;
-const CAPTURE_FINALIZE_GRACE_MS = 1_200;
-const VOICE_CONNECT_READY_TIMEOUT_MS = 15_000;
-const PLAYBACK_READY_TIMEOUT_MS = 60_000;
-const SPEAKING_READY_TIMEOUT_MS = 60_000;
-
 const logger = createSubsystemLogger("discord/voice");
-
-const logVoiceVerbose = (message: string) => {
-  logVerbose(`discord voice: ${message}`);
-};
-
-type VoiceOperationResult = {
-  ok: boolean;
-  message: string;
-  channelId?: string;
-  guildId?: string;
-};
-
-type VoiceSessionEntry = {
-  guildId: string;
-  guildName?: string;
-  channelId: string;
-  channelName?: string;
-  sessionChannelId: string;
-  route: ReturnType<typeof resolveAgentRoute>;
-  connection: import("@discordjs/voice").VoiceConnection;
-  player: import("@discordjs/voice").AudioPlayer;
-  playbackQueue: Promise<void>;
-  processingQueue: Promise<void>;
-  capture: VoiceCaptureState;
-  receiveRecovery: VoiceReceiveRecoveryState;
-  stop: () => void;
-};
 
 export class DiscordVoiceManager {
   private sessions = new Map<string, VoiceSessionEntry>();
@@ -722,8 +697,4 @@ export class DiscordVoiceReadyListener extends ReadyListener {
       .autoJoin()
       .catch((err) => logger.warn(`discord voice: autoJoin failed: ${formatErrorMessage(err)}`));
   }
-}
-
-function isVoiceChannel(type: ChannelType) {
-  return type === ChannelType.GuildVoice || type === ChannelType.GuildStageVoice;
 }
