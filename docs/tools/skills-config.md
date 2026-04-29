@@ -108,6 +108,11 @@ Per-skill fields:
 - `env`: environment variables injected for the agent run (only if not already set).
 - `apiKey`: optional convenience for skills that declare a primary env var.
   Supports plaintext string or SecretRef object (`{ source, provider, id }`).
+- `config`: nested skill-specific configuration object.
+- Custom top-level fields are accepted for third-party skill workflows that
+  expect their own config shape. Secret-looking field names such as `token`,
+  `password`, `secret`, or `api_key` are redacted in config snapshots, but prefer
+  `apiKey`, `env`, or SecretRef values for credentials when possible.
 
 ## Notes
 

@@ -1125,6 +1125,34 @@ describe("redactConfigSnapshot", () => {
     expect(restored.skills.entries.web_search.env.BRAVE_REGION).toBe("us");
   });
 
+  it("redacts and restores secret-like custom skills entry fields", () => {
+    const hints: ConfigUiHints = {
+      "some.other.path": { sensitive: true },
+    };
+    const snapshot = makeSnapshot({
+      skills: {
+        entries: {
+          web_search: {
+            api_endpoint: "https://example.invalid",
+            user_api_key: "skill-secret-789", // pragma: allowlist secret
+          },
+        },
+      },
+    });
+    const redacted = redactConfigSnapshot(snapshot, hints);
+    const entry = (
+      redacted.config.skills as {
+        entries: Record<string, { api_endpoint: string; user_api_key: string }>;
+      }
+    ).entries.web_search;
+    expect(entry.api_endpoint).toBe("https://example.invalid");
+    expect(entry.user_api_key).toBe(REDACTED_SENTINEL);
+
+    const restored = restoreRedactedValues(redacted.config, snapshot.config, hints);
+    expect(restored.skills.entries.web_search.api_endpoint).toBe("https://example.invalid");
+    expect(restored.skills.entries.web_search.user_api_key).toBe("skill-secret-789");
+  });
+
   it("contract-covers dynamic catchall/record paths for redact+restore", () => {
     const hints = mainSchemaHints;
     const snapshot = makeSnapshot({
