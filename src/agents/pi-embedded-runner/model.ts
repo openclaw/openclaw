@@ -592,13 +592,14 @@ function resolveExplicitModelWithRegistry(params: {
     provider,
     modelId,
   });
+  const globallySuppressedBuiltInModel = shouldSuppressBuiltInModel({
+    provider,
+    id: modelId,
+  });
   if (inlineMatch?.api) {
-    if (
-      shouldSuppressBuiltInModel({
-        provider,
-        id: modelId,
-      })
-    ) {
+    // Inline rows can intentionally override endpoint-conditional suppressions;
+    // unconditional retirements still reject stale configured rows.
+    if (globallySuppressedBuiltInModel) {
       return { kind: "suppressed" };
     }
     const resolvedParams = mergeConfiguredRuntimeModelParams({
