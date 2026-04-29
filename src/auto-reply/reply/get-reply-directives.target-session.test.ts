@@ -336,7 +336,7 @@ describe("resolveReplyDirectives", () => {
       isGroup: false,
       triggerBodyNormalized: "hello",
       resetTriggered: false,
-      commandAuthorized: false,
+      commandAuthorized: true,
       defaultProvider: "openai",
       defaultModel: "gpt-4o-mini",
       aliasIndex: { byAlias: new Map(), byKey: new Map() },
@@ -541,6 +541,39 @@ describe("resolveReplyDirectives", () => {
       kind: "continue",
       result: expect.objectContaining({
         resolvedReasoningLevel: "off",
+      }),
+    });
+    expect(resolveDefaultReasoningLevel).not.toHaveBeenCalled();
+  });
+
+  it("does not expose session reasoning state to untrusted senders", async () => {
+    const { result, resolveDefaultReasoningLevel } = await resolveHelloWithModelDefaults({
+      defaultThinking: "off",
+      defaultReasoning: "on",
+      sessionEntry: makeSessionEntry({ reasoningLevel: "stream" }),
+    });
+
+    expect(result).toEqual({
+      kind: "continue",
+      result: expect.objectContaining({
+        resolvedReasoningLevel: "off",
+      }),
+    });
+    expect(resolveDefaultReasoningLevel).not.toHaveBeenCalled();
+  });
+
+  it("allows session reasoning state for authorized senders", async () => {
+    const { result, resolveDefaultReasoningLevel } = await resolveHelloWithModelDefaults({
+      defaultThinking: "off",
+      defaultReasoning: "on",
+      sessionEntry: makeSessionEntry({ reasoningLevel: "stream" }),
+      commandAuthorized: true,
+    });
+
+    expect(result).toEqual({
+      kind: "continue",
+      result: expect.objectContaining({
+        resolvedReasoningLevel: "stream",
       }),
     });
     expect(resolveDefaultReasoningLevel).not.toHaveBeenCalled();

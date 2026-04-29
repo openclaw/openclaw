@@ -87,8 +87,8 @@ export async function resolveDirectStatusReplyForSession(
     (agentCfg?.reasoningDefault !== undefined && agentCfg.reasoningDefault !== null);
   const sessionReasoningExplicitlySet =
     statusEntry?.reasoningLevel !== undefined && statusEntry.reasoningLevel !== null;
-  const canUseConfiguredReasoningDefault = params.senderIsOwner || params.isAuthorizedSender;
-  if (hasAgentReasoningDefault && !sessionReasoningExplicitlySet && !canUseConfiguredReasoningDefault) {
+  const canUseReasoningState = params.senderIsOwner || params.isAuthorizedSender;
+  if (!canUseReasoningState && (sessionReasoningExplicitlySet || hasAgentReasoningDefault)) {
     resolvedReasoningLevel = "off";
   }
   const reasoningExplicitlySet = sessionReasoningExplicitlySet || hasAgentReasoningDefault;

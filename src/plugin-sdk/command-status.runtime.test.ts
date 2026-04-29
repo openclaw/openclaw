@@ -181,4 +181,72 @@ describe("resolveDirectStatusReplyForSession", () => {
       resolvedReasoningLevel: "off",
     });
   });
+
+  it("hides session reasoning state from unauthorized direct /status senders", async () => {
+    loadSessionEntry.mockReturnValue({
+      cfg: {},
+      canonicalKey: "main",
+      entry: {
+        sessionId: "sess-main",
+        reasoningLevel: "stream",
+      },
+      store: {},
+      storePath: "/tmp/sessions.json",
+    });
+    resolveCurrentDirectiveLevels.mockResolvedValueOnce({
+      currentThinkLevel: "off",
+      currentFastMode: false,
+      currentVerboseLevel: "off",
+      currentReasoningLevel: "stream",
+      currentElevatedLevel: "off",
+    });
+
+    const result = await resolveDirectStatusReplyForSession({
+      cfg: {},
+      sessionKey: "main",
+      channel: "cli",
+      senderIsOwner: false,
+      isAuthorizedSender: false,
+      isGroup: false,
+      defaultGroupActivation: () => "always",
+    });
+
+    expect(result).toMatchObject({
+      resolvedReasoningLevel: "off",
+    });
+  });
+
+  it("allows session reasoning state for authorized direct /status senders", async () => {
+    loadSessionEntry.mockReturnValue({
+      cfg: {},
+      canonicalKey: "main",
+      entry: {
+        sessionId: "sess-main",
+        reasoningLevel: "stream",
+      },
+      store: {},
+      storePath: "/tmp/sessions.json",
+    });
+    resolveCurrentDirectiveLevels.mockResolvedValueOnce({
+      currentThinkLevel: "off",
+      currentFastMode: false,
+      currentVerboseLevel: "off",
+      currentReasoningLevel: "stream",
+      currentElevatedLevel: "off",
+    });
+
+    const result = await resolveDirectStatusReplyForSession({
+      cfg: {},
+      sessionKey: "main",
+      channel: "cli",
+      senderIsOwner: false,
+      isAuthorizedSender: true,
+      isGroup: false,
+      defaultGroupActivation: () => "always",
+    });
+
+    expect(result).toMatchObject({
+      resolvedReasoningLevel: "stream",
+    });
+  });
 });

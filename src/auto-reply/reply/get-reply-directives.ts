@@ -435,21 +435,26 @@ export async function resolveReplyDirectives(params: {
   const configuredReasoningDefault =
     (agentEntry?.reasoningDefault as ReasoningLevel | undefined) ??
     (agentCfg?.reasoningDefault as ReasoningLevel | undefined);
-  const sessionReasoningLevel = targetSessionEntry?.reasoningLevel as
+  const canUseReasoningState =
+    command.isAuthorizedSender ||
+    command.senderIsOwner ||
+    (Array.isArray(ctx.GatewayClientScopes) && ctx.GatewayClientScopes.includes("operator.admin"));
+  const rawSessionReasoningLevel = targetSessionEntry?.reasoningLevel as
     | ReasoningLevel
     | null
     | undefined;
+  const sessionReasoningLevel = canUseReasoningState ? rawSessionReasoningLevel : undefined;
+  const blockedSessionReasoningLevel =
+    rawSessionReasoningLevel !== undefined &&
+    rawSessionReasoningLevel !== null &&
+    !canUseReasoningState;
   const reasoningUsesConfiguredDefault =
     directives.reasoningLevel === undefined &&
     sessionReasoningLevel == null &&
     configuredReasoningDefault != null;
-  const canUseConfiguredReasoningDefault =
-    command.isAuthorizedSender ||
-    command.senderIsOwner ||
-    (Array.isArray(ctx.GatewayClientScopes) && ctx.GatewayClientScopes.includes("operator.admin"));
   let resolvedReasoningLevel: ReasoningLevel =
     directives.reasoningLevel ?? sessionReasoningLevel ?? configuredReasoningDefault ?? "off";
-  if (reasoningUsesConfiguredDefault && !canUseConfiguredReasoningDefault) {
+  if (reasoningUsesConfiguredDefault && !canUseReasoningState) {
     resolvedReasoningLevel = "off";
   }
   const resolvedElevatedLevel = elevatedAllowed
@@ -535,8 +540,8 @@ export async function resolveReplyDirectives(params: {
   const reasoningExplicitlySet =
     directives.reasoningLevel !== undefined ||
     unauthorizedReasoningDirectiveAttempt ||
-    (targetSessionEntry?.reasoningLevel !== undefined &&
-      targetSessionEntry?.reasoningLevel !== null) ||
+    blockedSessionReasoningLevel ||
+    (sessionReasoningLevel !== undefined && sessionReasoningLevel !== null) ||
     hasAgentReasoningDefault;
   const thinkingActive = resolvedThinkLevelWithDefault !== "off";
   if (
