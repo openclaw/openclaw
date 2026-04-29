@@ -5,7 +5,6 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { SESSION_SUMMARY_DAILY_MEMORY_SENTINEL } from "../../../memory-host-sdk/runtime-files.js";
 import { writeWorkspaceFile } from "../../../test-helpers/workspace.js";
-import { withEnvAsync } from "../../../test-utils/env.js";
 import { createHookEvent } from "../../hooks.js";
 import { generateSlugViaLLM } from "../../llm-slug-generator.js";
 import {
@@ -398,21 +397,27 @@ describe("session-memory hook", () => {
   });
 
   it("uses local timezone date and fallback time in memory filenames and headers", async () => {
-    await withEnvAsync({ TZ: "America/New_York" }, async () => {
-      const tempDir = await createCaseWorkspace("workspace");
+    const tempDir = await createCaseWorkspace("workspace");
 
-      const { files, memoryContent } = await runNewWithPreviousSessionEntry({
-        tempDir,
-        timestamp: new Date("2026-01-01T04:30:15.000Z"),
-        previousSessionEntry: {
-          sessionId: "local-time-session",
+    const { files, memoryContent } = await runNewWithPreviousSessionEntry({
+      tempDir,
+      cfg: {
+        agents: {
+          defaults: {
+            workspace: tempDir,
+            userTimezone: "America/New_York",
+          },
         },
-      });
-
-      expect(files).toEqual(["2025-12-31-233015-u043015.md"]);
-      expect(memoryContent).toContain("# Session: 2025-12-31 23:30:15 America/New_York");
-      expect(memoryContent).not.toContain("# Session: 2026-01-01 04:30:15 UTC");
+      } satisfies OpenClawConfig,
+      timestamp: new Date("2026-01-01T04:30:15.000Z"),
+      previousSessionEntry: {
+        sessionId: "local-time-session",
+      },
     });
+
+    expect(files).toEqual(["2025-12-31-233015-u043015.md"]);
+    expect(memoryContent).toContain("# Session: 2025-12-31 23:30:15 America/New_York");
+    expect(memoryContent).not.toContain("# Session: 2026-01-01 04:30:15 UTC");
   });
 
   it("keeps same-minute fallback timestamp captures by adding a filename suffix", async () => {
