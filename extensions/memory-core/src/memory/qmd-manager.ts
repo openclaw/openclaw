@@ -1827,7 +1827,7 @@ export class QmdMemoryManager implements MemorySearchManager {
         command: this.qmd.command,
         args,
         env: this.env,
-        packageName: "qmd",
+        packageName: "@tobilu/qmd",
       }),
       env: this.env,
       cwd: this.workspaceDir,
