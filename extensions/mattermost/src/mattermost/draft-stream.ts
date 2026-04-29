@@ -31,9 +31,44 @@ export function normalizeMattermostDraftText(text: string, maxChars: number): st
   return `${trimmed.slice(0, Math.max(0, maxChars - 3)).trimEnd()}...`;
 }
 
-export function buildMattermostToolStatusText(params: { name?: string; phase?: string }): string {
-  const tool = params.name?.trim() ? ` \`${params.name.trim()}\`` : " tool";
-  return `Running${tool}…`;
+const TOOL_STATUS_ICONS: Record<string, string> = {
+  exec: "⚡",
+  read: "📖",
+  write: "✏️",
+  edit: "✏️",
+  message: "📨",
+  web_fetch: "🌐",
+  browser: "🌐",
+  canvas: "🎨",
+  tts: "🔊",
+  process: "⚙️",
+  lcm_grep: "🔍",
+  lcm_describe: "🔍",
+  lcm_expand: "🔍",
+  lcm_expand_query: "🔍",
+  memory_search: "📝",
+  memory_get: "📝",
+  sessions_spawn: "🤖",
+  sessions_send: "📨",
+  sessions_list: "📋",
+  sessions_history: "📜",
+  subagents: "🤖",
+  session_status: "📊",
+};
+
+export function buildMattermostToolStatusText(params: {
+  name?: string;
+  phase?: string;
+  title?: string;
+}): string {
+  const name = params.name?.trim();
+  const title = params.title?.trim();
+  if (!name) return "⚡ tool…";
+  const icon = TOOL_STATUS_ICONS[name] ?? "⚡";
+  // Avoid backticks: Mattermost desktop client hides text after inline code.
+  // Use plain text with an emoji prefix so the title is always visible.
+  if (title && title !== name) return `${icon} ${name} — ${title}…`;
+  return `${icon} ${name}…`;
 }
 
 export function createMattermostDraftStream(params: {
