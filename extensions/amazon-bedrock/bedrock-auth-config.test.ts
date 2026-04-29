@@ -64,3 +64,56 @@ describe('normalizeBedrockAuthConfig', () => {
     expect(result.awsAuthentication).toBe('default');
   });
 });
+
+describe('normalizeBedrockAuthConfig — coverage gaps', () => {
+  it('preserves valid reasoningEffort values', () => {
+    for (const effort of ['none', 'low', 'medium', 'high'] as const) {
+      const result = normalizeBedrockAuthConfig({ reasoningEffort: effort });
+      expect(result.reasoningEffort).toBe(effort);
+    }
+  });
+
+  it('drops invalid reasoningEffort to undefined', () => {
+    const result = normalizeBedrockAuthConfig({ reasoningEffort: 'extreme' });
+    expect(result.reasoningEffort).toBeUndefined();
+  });
+
+  it('preserves thinkingBudgetTokens and enable1MContext', () => {
+    const result = normalizeBedrockAuthConfig({
+      thinkingBudgetTokens: 8192,
+      enable1MContext: true,
+    });
+    expect(result.thinkingBudgetTokens).toBe(8192);
+    expect(result.enable1MContext).toBe(true);
+  });
+
+  it('preserves explicit boolean overrides (false survives the default)', () => {
+    const result = normalizeBedrockAuthConfig({
+      awsUseCrossRegionInference: false,
+      awsUseGlobalInference: false,
+      awsBedrockUsePromptCache: false,
+    });
+    expect(result.awsUseCrossRegionInference).toBe(false);
+    expect(result.awsUseGlobalInference).toBe(false);
+    expect(result.awsBedrockUsePromptCache).toBe(false);
+  });
+
+  it('resolveMode precedence: explicit awsAuthentication wins over inferred', () => {
+    const result = normalizeBedrockAuthConfig({
+      awsAuthentication: 'default',
+      awsBedrockApiKey: 'sk-abc',
+      awsUseProfile: true,
+    });
+    expect(result.awsAuthentication).toBe('default');
+  });
+
+  it('resolveMode precedence: awsUseProfile wins over awsBedrockApiKey when both present without explicit mode', () => {
+    const result = normalizeBedrockAuthConfig({
+      awsUseProfile: true,
+      awsBedrockApiKey: 'sk-abc',
+      awsProfile: 'work',
+    });
+    expect(result.awsAuthentication).toBe('profile');
+    expect(result.awsBedrockApiKey).toBe('sk-abc'); // field preserved even though mode is profile
+  });
+});
