@@ -211,6 +211,8 @@ export function createWhatsAppPluginBase(params: {
       chatTypes: ["direct", "group", "channel"],
       polls: true,
       reactions: true,
+      edit: true,
+      unsend: true,
       media: true,
       tts: {
         voice: {

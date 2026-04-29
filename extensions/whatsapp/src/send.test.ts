@@ -17,6 +17,8 @@ const loadWebMediaMock = vi.fn();
 let sendMessageWhatsApp: typeof import("./send.js").sendMessageWhatsApp;
 let sendPollWhatsApp: typeof import("./send.js").sendPollWhatsApp;
 let sendReactionWhatsApp: typeof import("./send.js").sendReactionWhatsApp;
+let editMessageWhatsApp: typeof import("./send.js").editMessageWhatsApp;
+let unsendMessageWhatsApp: typeof import("./send.js").unsendMessageWhatsApp;
 let resetLogger: typeof import("openclaw/plugin-sdk/runtime-env").resetLogger;
 let setLoggerOverride: typeof import("openclaw/plugin-sdk/runtime-env").setLoggerOverride;
 
@@ -84,9 +86,17 @@ describe("web outbound", () => {
   const sendMessage = vi.fn(async () => acceptedSendResult("text", "msg123"));
   const sendPoll = vi.fn(async () => acceptedSendResult("poll", "poll123"));
   const sendReaction = vi.fn(async () => acceptedSendResult("reaction", "reaction123"));
+  const editMessage = vi.fn(async () => ({ messageId: "msg123" }));
+  const unsendMessage = vi.fn(async () => {});
 
   beforeAll(async () => {
-    ({ sendMessageWhatsApp, sendPollWhatsApp, sendReactionWhatsApp } = await import("./send.js"));
+    ({
+      editMessageWhatsApp,
+      sendMessageWhatsApp,
+      sendPollWhatsApp,
+      sendReactionWhatsApp,
+      unsendMessageWhatsApp,
+    } = await import("./send.js"));
     ({ resetLogger, setLoggerOverride } = await import("openclaw/plugin-sdk/runtime-env"));
   });
 
@@ -118,10 +128,12 @@ describe("web outbound", () => {
     );
     hoisted.controllerListeners.clear();
     hoisted.controllerListeners.set("default", {
+      editMessage,
       sendComposingTo,
       sendMessage,
       sendPoll,
       sendReaction,
+      unsendMessage,
     });
   });
 
@@ -166,10 +178,12 @@ describe("web outbound", () => {
   it("uses configured defaultAccount when outbound accountId is omitted", async () => {
     hoisted.controllerListeners.clear();
     hoisted.controllerListeners.set("work", {
+      editMessage,
       sendComposingTo,
       sendMessage,
       sendPoll,
       sendReaction,
+      unsendMessage,
     });
 
     const result = await sendMessageWhatsApp("+1555", "hi", {
@@ -432,10 +446,12 @@ describe("web outbound", () => {
 
   it("uses account-aware WhatsApp media caps for outbound uploads", async () => {
     hoisted.controllerListeners.set("work", {
+      editMessage,
       sendComposingTo,
       sendMessage,
       sendPoll,
       sendReaction,
+      unsendMessage,
     });
     loadWebMediaMock.mockResolvedValueOnce({
       buffer: Buffer.from("img"),
@@ -527,6 +543,139 @@ describe("web outbound", () => {
       "1555@s.whatsapp.net",
       "msg123",
       "✅",
+      false,
+      undefined,
+    );
+  });
+
+  it("edits messages via active listener", async () => {
+    const result = await editMessageWhatsApp("+1555", "msg123", "updated", {
+      verbose: false,
+      cfg: WHATSAPP_TEST_CFG,
+    });
+
+    expect(result).toEqual({
+      messageId: "msg123",
+      toJid: "1555@s.whatsapp.net",
+    });
+    expect(editMessage).toHaveBeenCalledWith("+1555", "msg123", "updated");
+  });
+
+  it("uses the resolved default account for edit markdown table formatting", async () => {
+    hoisted.controllerListeners.clear();
+    hoisted.controllerListeners.set("work", {
+      editMessage,
+      sendComposingTo,
+      sendMessage,
+      sendPoll,
+      sendReaction,
+      unsendMessage,
+    });
+
+    const body = "| A | B |\n|---|---|\n| 1 | 2 |";
+    await editMessageWhatsApp("+1555", "msg123", body, {
+      verbose: false,
+      cfg: {
+        channels: {
+          whatsapp: {
+            defaultAccount: "work",
+            markdown: { tables: "code" },
+            accounts: {
+              work: { markdown: { tables: "off" } },
+            },
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    expect(editMessage).toHaveBeenCalledWith("+1555", "msg123", body);
+  });
+
+  it("rejects empty edit bodies before calling the listener", async () => {
+    await expect(
+      editMessageWhatsApp("+1555", "msg123", "   ", {
+        verbose: false,
+        cfg: WHATSAPP_TEST_CFG,
+      }),
+    ).rejects.toThrow(/edit text cannot be empty/);
+    expect(editMessage).not.toHaveBeenCalled();
+  });
+
+  it("unsends messages via active listener", async () => {
+    const result = await unsendMessageWhatsApp("+1555", "msg123", {
+      verbose: false,
+      cfg: WHATSAPP_TEST_CFG,
+    });
+
+    expect(result).toEqual({
+      messageId: "msg123",
+      toJid: "1555@s.whatsapp.net",
+    });
+    expect(unsendMessage).toHaveBeenCalledWith("+1555", "msg123");
+  });
+
+  it("sanitizes edit and unsend message ids in outbound logs", async () => {
+    const logPath = path.join(os.tmpdir(), `openclaw-whatsapp-actions-${crypto.randomUUID()}.log`);
+    setLoggerOverride({ level: "trace", file: logPath });
+    const lineSeparator = String.fromCharCode(0x2028);
+    const paragraphSeparator = String.fromCharCode(0x2029);
+    const editMessageId = `msg${lineSeparator}forged`;
+    const unsendMessageId = `msg${paragraphSeparator}forged`;
+
+    await editMessageWhatsApp("+1555", editMessageId, "updated", {
+      verbose: false,
+      cfg: WHATSAPP_TEST_CFG,
+    });
+    await unsendMessageWhatsApp("+1555", unsendMessageId, {
+      verbose: false,
+      cfg: WHATSAPP_TEST_CFG,
+    });
+
+    await vi.waitFor(
+      () => {
+        expect(fsSync.existsSync(logPath)).toBe(true);
+      },
+      { timeout: 2_000, interval: 5 },
+    );
+
+    const content = fsSync.readFileSync(logPath, "utf-8");
+    expect(content).toContain("msgforged");
+    expect(content).not.toContain(editMessageId);
+    expect(content).not.toContain(unsendMessageId);
+    expect(editMessage).toHaveBeenCalledWith("+1555", editMessageId, "updated");
+    expect(unsendMessage).toHaveBeenCalledWith("+1555", unsendMessageId);
+  });
+
+  it("sanitizes reaction message ids and emojis in outbound logs", async () => {
+    const logPath = path.join(os.tmpdir(), `openclaw-whatsapp-reaction-${crypto.randomUUID()}.log`);
+    setLoggerOverride({ level: "trace", file: logPath });
+    const lineSeparator = String.fromCharCode(0x2028);
+    const paragraphSeparator = String.fromCharCode(0x2029);
+    const messageId = `msg${lineSeparator}forged`;
+    const emoji = `ok${paragraphSeparator}forged`;
+
+    await sendReactionWhatsApp("1555@s.whatsapp.net", messageId, emoji, {
+      verbose: false,
+      cfg: WHATSAPP_TEST_CFG,
+      fromMe: false,
+    });
+
+    await vi.waitFor(
+      () => {
+        expect(fsSync.existsSync(logPath)).toBe(true);
+      },
+      { timeout: 2_000, interval: 5 },
+    );
+
+    const content = fsSync.readFileSync(logPath, "utf-8");
+    expect(content).toContain("msgforged");
+    expect(content).toContain("okforged");
+    expect(content).not.toContain(messageId);
+    expect(content).not.toContain(emoji);
+    expect(sendReaction).toHaveBeenCalledWith(
+      "1555@s.whatsapp.net",
+      messageId,
+      emoji,
       false,
       undefined,
     );

@@ -27,6 +27,23 @@ import { markdownToWhatsApp, toWhatsappJid } from "./text-runtime.js";
 
 const outboundLog = createSubsystemLogger("gateway/channels/whatsapp").child("outbound");
 
+function sanitizeWhatsAppLogValue(value: string): string {
+  const c0Start = String.fromCharCode(0x00);
+  const c0End = String.fromCharCode(0x1f);
+  const del = String.fromCharCode(0x7f);
+  const c1Start = String.fromCharCode(0x80);
+  const c1End = String.fromCharCode(0x9f);
+  const lineSeparator = String.fromCharCode(0x2028);
+  const paragraphSeparator = String.fromCharCode(0x2029);
+  return value.replace(
+    new RegExp(
+      `[${c0Start}-${c0End}${del}${c1Start}-${c1End}${lineSeparator}${paragraphSeparator}]`,
+      "g",
+    ),
+    "",
+  );
+}
+
 function resolveOutboundWhatsAppAccountId(params: {
   cfg: OpenClawConfig;
   accountId?: string;
@@ -200,6 +217,104 @@ export async function sendTypingWhatsApp(
   }
 }
 
+export async function editMessageWhatsApp(
+  to: string,
+  messageId: string,
+  body: string,
+  options: {
+    verbose: boolean;
+    accountId?: string;
+    cfg: OpenClawConfig;
+  },
+): Promise<{ messageId: string; toJid: string }> {
+  let text = body.trimStart();
+  if (!text.trim()) {
+    throw new Error("WhatsApp message edit text cannot be empty.");
+  }
+  const correlationId = generateSecureUuid();
+  const startedAt = Date.now();
+  const cfg = requireRuntimeConfig(options.cfg, "WhatsApp edit");
+  const { listener: active, accountId: resolvedAccountId } = requireOutboundActiveWebListener({
+    cfg,
+    accountId: options.accountId,
+  });
+  const tableMode = resolveMarkdownTableMode({
+    cfg,
+    channel: "whatsapp",
+    accountId: resolvedAccountId,
+  });
+  text = convertMarkdownTables(text, tableMode);
+  text = markdownToWhatsApp(text);
+  const jid = toWhatsappJid(to);
+  const redactedTo = redactIdentifier(to);
+  const redactedJid = redactIdentifier(jid);
+  const safeMessageId = sanitizeWhatsAppLogValue(messageId);
+  const logger = getChildLogger({
+    module: "web-outbound",
+    correlationId,
+    to: redactedTo,
+    messageId: safeMessageId,
+  });
+  try {
+    outboundLog.info(`Editing message ${safeMessageId} -> ${redactedJid}`);
+    logger.info({ jid: redactedJid, messageId: safeMessageId }, "editing message");
+    const result = await active.editMessage(to, messageId, text);
+    const durationMs = Date.now() - startedAt;
+    outboundLog.info(`Edited message ${safeMessageId} -> ${redactedJid} (${durationMs}ms)`);
+    logger.info({ jid: redactedJid, messageId: safeMessageId }, "edited message");
+    return { messageId: result.messageId, toJid: jid };
+  } catch (err) {
+    logger.error(
+      { err: String(err), to: redactedTo, messageId: safeMessageId },
+      "failed to edit message",
+    );
+    throw err;
+  }
+}
+
+export async function unsendMessageWhatsApp(
+  to: string,
+  messageId: string,
+  options: {
+    verbose: boolean;
+    accountId?: string;
+    cfg: OpenClawConfig;
+  },
+): Promise<{ messageId: string; toJid: string }> {
+  const correlationId = generateSecureUuid();
+  const startedAt = Date.now();
+  const cfg = requireRuntimeConfig(options.cfg, "WhatsApp unsend");
+  const { listener: active } = requireOutboundActiveWebListener({
+    cfg,
+    accountId: options.accountId,
+  });
+  const jid = toWhatsappJid(to);
+  const redactedTo = redactIdentifier(to);
+  const redactedJid = redactIdentifier(jid);
+  const safeMessageId = sanitizeWhatsAppLogValue(messageId);
+  const logger = getChildLogger({
+    module: "web-outbound",
+    correlationId,
+    to: redactedTo,
+    messageId: safeMessageId,
+  });
+  try {
+    outboundLog.info(`Unsending message ${safeMessageId} -> ${redactedJid}`);
+    logger.info({ jid: redactedJid, messageId: safeMessageId }, "unsending message");
+    await active.unsendMessage(to, messageId);
+    const durationMs = Date.now() - startedAt;
+    outboundLog.info(`Unsent message ${safeMessageId} -> ${redactedJid} (${durationMs}ms)`);
+    logger.info({ jid: redactedJid, messageId: safeMessageId }, "unsent message");
+    return { messageId, toJid: jid };
+  } catch (err) {
+    logger.error(
+      { err: String(err), to: redactedTo, messageId: safeMessageId },
+      "failed to unsend message",
+    );
+    throw err;
+  }
+}
+
 export async function sendReactionWhatsApp(
   chatJid: string,
   messageId: string,
@@ -219,17 +334,22 @@ export async function sendReactionWhatsApp(
     accountId: options.accountId,
   });
   const redactedChatJid = redactIdentifier(chatJid);
+  const safeMessageId = sanitizeWhatsAppLogValue(messageId);
+  const safeEmoji = sanitizeWhatsAppLogValue(emoji);
   const logger = getChildLogger({
     module: "web-outbound",
     correlationId,
     chatJid: redactedChatJid,
-    messageId,
+    messageId: safeMessageId,
   });
   try {
     const jid = toWhatsappJid(chatJid);
     const redactedJid = redactIdentifier(jid);
-    outboundLog.info(`Sending reaction "${emoji}" -> message ${messageId}`);
-    logger.info({ chatJid: redactedJid, messageId, emoji }, "sending reaction");
+    outboundLog.info(`Sending reaction "${safeEmoji}" -> message ${safeMessageId}`);
+    logger.info(
+      { chatJid: redactedJid, messageId: safeMessageId, emoji: safeEmoji },
+      "sending reaction",
+    );
     await active.sendReaction(
       chatJid,
       messageId,
@@ -237,11 +357,14 @@ export async function sendReactionWhatsApp(
       options.fromMe ?? false,
       options.participant,
     );
-    outboundLog.info(`Sent reaction "${emoji}" -> message ${messageId}`);
-    logger.info({ chatJid: redactedJid, messageId, emoji }, "sent reaction");
+    outboundLog.info(`Sent reaction "${safeEmoji}" -> message ${safeMessageId}`);
+    logger.info(
+      { chatJid: redactedJid, messageId: safeMessageId, emoji: safeEmoji },
+      "sent reaction",
+    );
   } catch (err) {
     logger.error(
-      { err: String(err), chatJid: redactedChatJid, messageId, emoji },
+      { err: String(err), chatJid: redactedChatJid, messageId: safeMessageId, emoji: safeEmoji },
       "failed to send reaction via web session",
     );
     throw err;

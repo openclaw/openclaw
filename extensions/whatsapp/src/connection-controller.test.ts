@@ -32,6 +32,8 @@ function createListenerStub(messageId = "ok") {
     sendMessage: vi.fn(async () => acceptedSendResult("text", messageId)),
     sendPoll: vi.fn(async () => acceptedSendResult("poll", messageId)),
     sendReaction: vi.fn(async () => acceptedSendResult("reaction", messageId)),
+    editMessage: vi.fn(async () => ({ messageId })),
+    unsendMessage: vi.fn(async () => {}),
     sendComposingTo: vi.fn(async () => {}),
   };
 }

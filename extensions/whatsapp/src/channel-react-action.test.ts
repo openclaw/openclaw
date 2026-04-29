@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { handleWhatsAppReactAction } from "./channel-react-action.js";
+import { handleWhatsAppMessageAction, handleWhatsAppReactAction } from "./channel-react-action.js";
 import type { OpenClawConfig } from "./runtime-api.js";
 
 const hoisted = vi.hoisted(() => ({
@@ -290,5 +290,123 @@ describe("whatsapp react action messageId resolution", () => {
     }).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(Error);
     expect((err as Error).name).toBe("ToolInputError");
+  });
+
+  it("forwards edit actions with explicit target and message id", async () => {
+    await handleWhatsAppMessageAction({
+      action: "edit",
+      params: { to: "+1555", messageId: "msg-42", message: "updated" },
+      cfg: baseCfg,
+      accountId: "default",
+    });
+
+    expect(hoisted.handleWhatsAppAction).toHaveBeenCalledWith(
+      {
+        action: "edit",
+        to: "+1555",
+        messageId: "msg-42",
+        message: "updated",
+        accountId: "default",
+      },
+      baseCfg,
+    );
+  });
+
+  it("uses current WhatsApp channel as edit target when target is omitted", async () => {
+    await handleWhatsAppMessageAction({
+      action: "edit",
+      params: { messageId: "msg-42", text: "updated" },
+      cfg: baseCfg,
+      accountId: "default",
+      toolContext: {
+        currentChannelId: "whatsapp:+1555",
+        currentChannelProvider: "whatsapp",
+        currentMessageId: "ctx-msg-42",
+      },
+    });
+
+    expect(hoisted.handleWhatsAppAction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "edit",
+        to: "whatsapp:+1555",
+        messageId: "msg-42",
+        message: "updated",
+      }),
+      baseCfg,
+    );
+  });
+
+  it("requires explicit message id for edit actions", async () => {
+    const err = await handleWhatsAppMessageAction({
+      action: "edit",
+      params: { to: "+1555", message: "updated" },
+      cfg: baseCfg,
+      accountId: "default",
+      toolContext: {
+        currentChannelId: "whatsapp:+1555",
+        currentChannelProvider: "whatsapp",
+        currentMessageId: "ctx-msg-42",
+      },
+    }).catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).name).toBe("ToolInputError");
+    expect(hoisted.handleWhatsAppAction).not.toHaveBeenCalled();
+  });
+
+  it("throws ToolInputError when edit target is missing outside WhatsApp context", async () => {
+    const err = await handleWhatsAppMessageAction({
+      action: "edit",
+      params: { messageId: "msg-42", message: "updated" },
+      cfg: baseCfg,
+      accountId: "default",
+      toolContext: {
+        currentChannelId: "telegram:-1003841603622",
+        currentChannelProvider: "telegram",
+        currentMessageId: "tg-msg-99",
+      },
+    }).catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).name).toBe("ToolInputError");
+    expect(hoisted.handleWhatsAppAction).not.toHaveBeenCalled();
+  });
+
+  it("forwards unsend actions without exposing participant control", async () => {
+    await handleWhatsAppMessageAction({
+      action: "unsend",
+      params: { chatJid: "12345@g.us", messageId: "msg-42", participant: "other@s.whatsapp.net" },
+      cfg: baseCfg,
+      accountId: "default",
+    });
+
+    expect(hoisted.handleWhatsAppAction).toHaveBeenCalledWith(
+      {
+        action: "unsend",
+        to: "12345@g.us",
+        messageId: "msg-42",
+        accountId: "default",
+      },
+      baseCfg,
+    );
+  });
+
+  it("forwards delete actions as WhatsApp message mutations", async () => {
+    await handleWhatsAppMessageAction({
+      action: "delete",
+      params: { to: "+1555", messageId: "msg-42" },
+      cfg: baseCfg,
+      accountId: "default",
+    });
+
+    expect(hoisted.handleWhatsAppAction).toHaveBeenCalledWith(
+      {
+        action: "delete",
+        to: "+1555",
+        messageId: "msg-42",
+        accountId: "default",
+      },
+      baseCfg,
+    );
   });
 });

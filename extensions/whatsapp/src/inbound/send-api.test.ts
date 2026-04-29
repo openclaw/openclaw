@@ -307,6 +307,46 @@ describe("createWebSendApi", () => {
     );
   });
 
+  it("edits only own messages", async () => {
+    const res = await api.editMessage("+1555", "msg-2", "updated");
+    expect(res.messageId).toBe("msg-2");
+    expect(sendMessage).toHaveBeenCalledWith(
+      "1555@s.whatsapp.net",
+      expect.objectContaining({
+        text: "updated",
+        edit: {
+          remoteJid: "1555@s.whatsapp.net",
+          id: "msg-2",
+          fromMe: true,
+        },
+      }),
+    );
+    expect(recordChannelActivity).toHaveBeenCalledWith({
+      channel: "whatsapp",
+      accountId: "main",
+      direction: "outbound",
+    });
+  });
+
+  it("unsends only own messages", async () => {
+    await api.unsendMessage("12345@g.us", "msg-2");
+    expect(sendMessage).toHaveBeenCalledWith(
+      "12345@g.us",
+      expect.objectContaining({
+        delete: {
+          remoteJid: "12345@g.us",
+          id: "msg-2",
+          fromMe: true,
+        },
+      }),
+    );
+    expect(recordChannelActivity).toHaveBeenCalledWith({
+      channel: "whatsapp",
+      accountId: "main",
+      direction: "outbound",
+    });
+  });
+
   it("sends composing presence updates to the recipient JID", async () => {
     await api.sendComposingTo("+1555");
     expect(sendPresenceUpdate).toHaveBeenCalledWith("composing", "1555@s.whatsapp.net");

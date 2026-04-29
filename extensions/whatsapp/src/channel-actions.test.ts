@@ -22,15 +22,20 @@ vi.mock("./channel-actions.runtime.js", async () => {
   return {
     listWhatsAppAccountIds: hoisted.listWhatsAppAccountIds,
     resolveWhatsAppAccount: hoisted.resolveWhatsAppAccount,
-    createActionGate: (actions?: { reactions?: boolean; polls?: boolean }) => (name: string) => {
-      if (name === "reactions") {
-        return actions?.reactions !== false;
-      }
-      if (name === "polls") {
-        return actions?.polls !== false;
-      }
-      return true;
-    },
+    createActionGate:
+      (actions?: { reactions?: boolean; polls?: boolean; sendMessage?: boolean }) =>
+      (name: string) => {
+        if (name === "reactions") {
+          return actions?.reactions !== false;
+        }
+        if (name === "polls") {
+          return actions?.polls !== false;
+        }
+        if (name === "sendMessage") {
+          return actions?.sendMessage !== false;
+        }
+        return true;
+      },
     resolveWhatsAppReactionLevel: ({
       cfg,
       accountId,
@@ -130,6 +135,9 @@ describe("whatsapp channel action helpers", () => {
     expect(describeWhatsAppMessageActions({ cfg, accountId: "default" })?.actions).toEqual([
       "react",
       "poll",
+      "edit",
+      "delete",
+      "unsend",
     ]);
   });
 
@@ -151,6 +159,9 @@ describe("whatsapp channel action helpers", () => {
 
     expect(describeWhatsAppMessageActions({ cfg, accountId: "default" })?.actions).toEqual([
       "poll",
+      "edit",
+      "delete",
+      "unsend",
     ]);
   });
 
@@ -172,6 +183,9 @@ describe("whatsapp channel action helpers", () => {
     expect(describeWhatsAppMessageActions({ cfg, accountId: "work" })?.actions).toEqual([
       "react",
       "poll",
+      "edit",
+      "delete",
+      "unsend",
     ]);
   });
 
@@ -191,7 +205,13 @@ describe("whatsapp channel action helpers", () => {
     } as OpenClawConfig;
     hoisted.listWhatsAppAccountIds.mockReturnValue(["default", "work"]);
 
-    expect(describeWhatsAppMessageActions({ cfg })?.actions).toEqual(["react", "poll"]);
+    expect(describeWhatsAppMessageActions({ cfg })?.actions).toEqual([
+      "react",
+      "poll",
+      "edit",
+      "delete",
+      "unsend",
+    ]);
   });
 
   it("omits react in global discovery when only disabled accounts enable agent reactions", () => {
@@ -211,6 +231,27 @@ describe("whatsapp channel action helpers", () => {
     } as OpenClawConfig;
     hoisted.listWhatsAppAccountIds.mockReturnValue(["default", "work"]);
 
-    expect(describeWhatsAppMessageActions({ cfg })?.actions).toEqual(["poll"]);
+    expect(describeWhatsAppMessageActions({ cfg })?.actions).toEqual([
+      "poll",
+      "edit",
+      "delete",
+      "unsend",
+    ]);
+  });
+
+  it("omits edit, delete, and unsend when WhatsApp message sends are disabled", () => {
+    const cfg = {
+      channels: {
+        whatsapp: {
+          actions: { sendMessage: false },
+          allowFrom: ["*"],
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(describeWhatsAppMessageActions({ cfg, accountId: "default" })?.actions).toEqual([
+      "react",
+      "poll",
+    ]);
   });
 });

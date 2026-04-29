@@ -30,6 +30,8 @@ type MockWebListener = {
   sendMessage: () => Promise<WhatsAppSendResult>;
   sendPoll: () => Promise<WhatsAppSendResult>;
   sendReaction: () => Promise<WhatsAppSendResult>;
+  editMessage: () => Promise<{ messageId: string }>;
+  unsendMessage: () => Promise<void>;
   sendComposingTo: () => Promise<void>;
 };
 type UnknownMock = Mock<(...args: unknown[]) => unknown>;
@@ -256,6 +258,8 @@ export function createMockWebListener(): MockWebListener {
     sendMessage: vi.fn(async () => createAcceptedWhatsAppSendResult("text", "msg-1")),
     sendPoll: vi.fn(async () => createAcceptedWhatsAppSendResult("poll", "poll-1")),
     sendReaction: vi.fn(async () => createAcceptedWhatsAppSendResult("reaction", "reaction-1")),
+    editMessage: vi.fn(async () => ({ messageId: "msg-1" })),
+    unsendMessage: vi.fn(async () => undefined),
     sendComposingTo: vi.fn(async () => undefined),
   };
 }
