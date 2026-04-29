@@ -144,6 +144,11 @@ export class RestScheduler<TData> {
     return false;
   }
 
+  private shouldPruneIdleBucket(key: string): boolean {
+    const mappedBucketKey = this.routeBuckets.get(key);
+    return mappedBucketKey !== key && !this.hasBucketReference(key);
+  }
+
   private bindRouteToBucket(routeKey: string, bucketKey: string): BucketState<TData> {
     const target = this.getBucket(bucketKey);
     target.routeKeys.add(routeKey);
@@ -262,7 +267,7 @@ export class RestScheduler<TData> {
         break;
       }
       if (bucket.pending.length === 0) {
-        if (bucket.active === 0 && !this.routeBuckets.has(key) && !this.hasBucketReference(key)) {
+        if (bucket.active === 0 && this.shouldPruneIdleBucket(key)) {
           this.buckets.delete(key);
         }
         continue;
