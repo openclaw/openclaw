@@ -1,5 +1,6 @@
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import type { CheckContext, GuardrailsDecision, HttpConfig, Logger } from "../config.js";
-import type { GuardrailsProviderAdapter } from "../http-connector.js";
+import type { GuardrailsProviderAdapter } from "../provider-types.js";
 
 const HIDYLAN_DEFAULT_URL = "https://hidylan.ai/v1/injection-check";
 const HIDYLAN_SYSTEM_PROMPT =
@@ -43,34 +44,38 @@ export function createHidylanAdapter(_logger: Logger): GuardrailsProviderAdapter
       timeoutMs: number,
     ): Promise<GuardrailsDecision> {
       const url = config.apiUrl || HIDYLAN_DEFAULT_URL;
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), timeoutMs);
+      const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+      };
+      if (config.apiKey) {
+        headers["X-API-Key"] = config.apiKey;
+      }
 
+      let release: (() => Promise<void>) | undefined;
       try {
-        const headers: Record<string, string> = {
-          "Content-Type": "application/json",
-        };
-        if (config.apiKey) {
-          headers["X-API-Key"] = config.apiKey;
-        }
-
-        const response = await fetch(url, {
-          method: "POST",
-          headers,
-          body: JSON.stringify({
-            system_prompt: HIDYLAN_SYSTEM_PROMPT,
-            retrieved_docs: [
-              {
-                doc_id: "tool_output",
-                content: text,
-                source: "openclaw",
-                trust_tier: "untrusted",
-              },
-            ],
-            source: "openclaw",
-          }),
-          signal: controller.signal,
+        const guarded = await fetchWithSsrFGuard({
+          url,
+          init: {
+            method: "POST",
+            headers,
+            body: JSON.stringify({
+              system_prompt: HIDYLAN_SYSTEM_PROMPT,
+              retrieved_docs: [
+                {
+                  doc_id: "tool_output",
+                  content: text,
+                  source: "openclaw",
+                  trust_tier: "untrusted",
+                },
+              ],
+              source: "openclaw",
+            }),
+          },
+          timeoutMs,
+          auditContext: "guardrails:hidylan",
         });
+        release = guarded.release;
+        const { response } = guarded;
 
         if (!response.ok) {
           return { action: fallbackOnError };
@@ -84,7 +89,7 @@ export function createHidylanAdapter(_logger: Logger): GuardrailsProviderAdapter
       } catch {
         return { action: fallbackOnError };
       } finally {
-        clearTimeout(timer);
+        await release?.();
       }
     },
   };

@@ -1,5 +1,6 @@
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import type { CheckContext, GuardrailsDecision, HttpConfig } from "../config.js";
-import type { GuardrailsProviderAdapter } from "../http-connector.js";
+import type { GuardrailsProviderAdapter } from "../provider-types.js";
 
 const OPENAI_DEFAULT_URL = "https://api.openai.com/v1/moderations";
 
@@ -28,19 +29,23 @@ export function createOpenAIModerationAdapter(logger?: {
       }
 
       const url = config.apiUrl || OPENAI_DEFAULT_URL;
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), timeoutMs);
-
+      let release: (() => Promise<void>) | undefined;
       try {
-        const response = await fetch(url, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${config.apiKey}`,
+        const guarded = await fetchWithSsrFGuard({
+          url,
+          init: {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${config.apiKey}`,
+            },
+            body: JSON.stringify({ input: text, model: config.model }),
           },
-          body: JSON.stringify({ input: text, model: config.model }),
-          signal: controller.signal,
+          timeoutMs,
+          auditContext: "guardrails:openai-moderation",
         });
+        release = guarded.release;
+        const { response } = guarded;
 
         if (!response.ok) {
           return { action: fallbackOnError };
@@ -59,7 +64,7 @@ export function createOpenAIModerationAdapter(logger?: {
       } catch {
         return { action: fallbackOnError };
       } finally {
-        clearTimeout(timer);
+        await release?.();
       }
     },
   };

@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import type { CheckContext, GuardrailsDecision, HttpConfig, Logger } from "../config.js";
-import type { GuardrailsProviderAdapter } from "../http-connector.js";
+import type { GuardrailsProviderAdapter } from "../provider-types.js";
 
 const DKNOWNAI_DEFAULT_URL = "https://open.dknownai.com/v1/guard";
 
@@ -91,19 +92,23 @@ export function createDKnownAIAdapter(logger: Logger): GuardrailsProviderAdapter
       const requestId = crypto.randomUUID();
       const sessionId = resolveSessionId(context);
 
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), timeoutMs);
-
+      let release: (() => Promise<void>) | undefined;
       try {
-        const response = await fetch(url, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${config.apiKey}`,
+        const guarded = await fetchWithSsrFGuard({
+          url,
+          init: {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${config.apiKey}`,
+            },
+            body: JSON.stringify({ request_id: requestId, session_id: sessionId, input: text }),
           },
-          body: JSON.stringify({ request_id: requestId, session_id: sessionId, input: text }),
-          signal: controller.signal,
+          timeoutMs,
+          auditContext: "guardrails:dknownai",
         });
+        release = guarded.release;
+        const { response } = guarded;
 
         if (!response.ok) {
           return { action: fallbackOnError };
@@ -119,7 +124,7 @@ export function createDKnownAIAdapter(logger: Logger): GuardrailsProviderAdapter
       } catch {
         return { action: fallbackOnError };
       } finally {
-        clearTimeout(timer);
+        await release?.();
       }
     },
   };

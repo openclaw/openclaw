@@ -1,5 +1,6 @@
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import type { CheckContext, GuardrailsDecision, HttpConfig, Logger } from "../config.js";
-import type { GuardrailsProviderAdapter } from "../http-connector.js";
+import type { GuardrailsProviderAdapter } from "../provider-types.js";
 
 const SECRA_DEFAULT_URL = "https://secra-backend-production.up.railway.app/v1/scan";
 
@@ -46,19 +47,23 @@ export function createSecraAdapter(logger: Logger): GuardrailsProviderAdapter {
       }
 
       const url = config.apiUrl || SECRA_DEFAULT_URL;
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), timeoutMs);
-
+      let release: (() => Promise<void>) | undefined;
       try {
-        const response = await fetch(url, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${config.apiKey}`,
+        const guarded = await fetchWithSsrFGuard({
+          url,
+          init: {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${config.apiKey}`,
+            },
+            body: JSON.stringify({ prompt: text }),
           },
-          body: JSON.stringify({ prompt: text }),
-          signal: controller.signal,
+          timeoutMs,
+          auditContext: "guardrails:secra",
         });
+        release = guarded.release;
+        const { response } = guarded;
 
         // BLOCK results are delivered as HTTP 403 with a `detail` envelope.
         // 2xx responses carry an ALLOW/REVIEW/BLOCK payload directly; any other
@@ -98,7 +103,7 @@ export function createSecraAdapter(logger: Logger): GuardrailsProviderAdapter {
       } catch {
         return { action: fallbackOnError };
       } finally {
-        clearTimeout(timer);
+        await release?.();
       }
     },
   };

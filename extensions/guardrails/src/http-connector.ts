@@ -1,29 +1,11 @@
-import type { BackendFn, CheckContext, GuardrailsDecision, HttpConfig, Logger } from "./config.js";
+import type { BackendFn, CheckContext, HttpConfig, Logger } from "./config.js";
+import type { GuardrailsProviderAdapter } from "./provider-types.js";
 import { createDKnownAIAdapter } from "./providers/dknownai.js";
 import { createHidylanAdapter } from "./providers/hidylan.js";
 import { createOpenAIModerationAdapter } from "./providers/openai-moderation.js";
 import { createSecraAdapter } from "./providers/secra.js";
 
-// ── GuardrailsProviderAdapter interface ─────────────────────────────────
-
-/**
- * Interface for HTTP provider adapters.
- *
- * init() is called once at plugin registration for global, one-time
- * initialization (auth, connection pools, model loading, etc.).
- *
- * check() returns a GuardrailsDecision with action "pass" or "block".
- */
-export interface GuardrailsProviderAdapter {
-  init?(config: HttpConfig): Promise<void> | void;
-  check(
-    text: string,
-    context: CheckContext,
-    config: HttpConfig,
-    fallbackOnError: "pass" | "block",
-    timeoutMs: number,
-  ): Promise<GuardrailsDecision>;
-}
+export type { GuardrailsProviderAdapter };
 
 export type HttpBackendHandle = {
   backendFn: BackendFn;
