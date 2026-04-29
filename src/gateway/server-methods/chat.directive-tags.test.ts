@@ -715,6 +715,54 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     );
   });
 
+  it("does not persist text-only assistant-media fallbacks when TTS media is unavailable", async () => {
+    const transcriptDir = createTranscriptFixture("openclaw-chat-send-agent-tts-missing-");
+    const audioPath = path.join(transcriptDir, "missing.mp3");
+    mockState.config = {
+      agents: {
+        defaults: {
+          workspace: transcriptDir,
+        },
+      },
+    };
+    mockState.triggerAgentRunStart = true;
+    mockState.dispatchedReplies = [
+      {
+        kind: "final",
+        payload: {
+          text: "Text-only test: one clean reply, no TTS, no media, no tool narration.",
+          spokenText: "Text-only test: one clean reply, no TTS, no media, no tool narration.",
+          mediaUrl: audioPath,
+          mediaUrls: [audioPath],
+          trustedLocalMedia: true,
+          audioAsVoice: true,
+        },
+      },
+    ];
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-agent-tts-missing",
+      expectBroadcast: false,
+      waitFor: "dedupe",
+    });
+
+    const assistantUpdates = mockState.emittedTranscriptUpdates.filter(
+      (update) =>
+        typeof update.message === "object" &&
+        update.message !== null &&
+        (update.message as { role?: unknown }).role === "assistant",
+    );
+    expect(assistantUpdates).toHaveLength(0);
+    expect(JSON.stringify(mockState.emittedTranscriptUpdates)).not.toContain(
+      "idem-agent-tts-missing:assistant-media",
+    );
+    expect(context.dedupe.has("chat:idem-agent-tts-missing")).toBe(true);
+  });
+
   it("keeps visible text on non-agent TTS final media because no model transcript exists", async () => {
     const transcriptDir = createTranscriptFixture("openclaw-chat-send-command-tts-final-");
     const audioPath = path.join(transcriptDir, "tts.mp3");

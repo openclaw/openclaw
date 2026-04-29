@@ -2250,16 +2250,16 @@ export const chatHandlers: GatewayRequestHandlers = {
         const persistedContentForAppend = hasAssistantDisplayMediaContent(persistedAssistantContent)
           ? persistedAssistantContent
           : undefined;
+        if (!persistedContentForAppend) {
+          return;
+        }
         const transcriptReply =
           mediaMessage?.transcriptText ??
           extractAssistantDisplayTextFromContent(assistantContent) ??
           buildTranscriptReplyText([transcriptPayload]);
-        if (!transcriptReply && !persistedAssistantContent?.length && !assistantContent?.length) {
-          return;
-        }
         const appended = appendAssistantTranscriptMessage({
           message: transcriptReply,
-          ...(persistedContentForAppend?.length ? { content: persistedContentForAppend } : {}),
+          content: persistedContentForAppend,
           sessionId,
           storePath: latestStorePath,
           sessionFile: latestEntry?.sessionFile,
