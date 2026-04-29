@@ -3,9 +3,16 @@ import os from "node:os";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const runExec = vi.hoisted(() => vi.fn());
+const resolvePreferredOpenClawTmpDirMock = vi.hoisted(() => vi.fn(() => "/tmp/openclaw"));
+const OPENCLAW_TMP_ROOT = "/tmp/openclaw";
+const TRASH_SOURCE = `${OPENCLAW_TMP_ROOT}/demo`;
 
 vi.mock("../process/exec.js", () => ({
   runExec,
+}));
+
+vi.mock("openclaw/plugin-sdk/temp-path", () => ({
+  resolvePreferredOpenClawTmpDir: resolvePreferredOpenClawTmpDirMock,
 }));
 
 function mockTrashContainer(...suffixes: string[]) {
@@ -21,6 +28,8 @@ describe("browser trash", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
     runExec.mockReset();
+    resolvePreferredOpenClawTmpDirMock.mockReset();
+    resolvePreferredOpenClawTmpDirMock.mockReturnValue("/tmp/openclaw");
     vi.spyOn(Date, "now").mockReturnValue(123);
     vi.spyOn(os, "homedir").mockReturnValue("/home/test");
     vi.spyOn(os, "tmpdir").mockReturnValue("/tmp");
@@ -39,7 +48,7 @@ describe("browser trash", () => {
     const cpSync = vi.spyOn(fs, "cpSync");
     const rmSync = vi.spyOn(fs, "rmSync");
 
-    await expect(movePathToTrash("/tmp/demo")).resolves.toBe(
+    await expect(movePathToTrash(TRASH_SOURCE)).resolves.toBe(
       "/home/test/.Trash/demo-123-secure/demo",
     );
     expect(runExec).not.toHaveBeenCalled();
@@ -48,7 +57,7 @@ describe("browser trash", () => {
       mode: 0o700,
     });
     expect(mkdtempSync).toHaveBeenCalledWith("/home/test/.Trash/demo-123-");
-    expect(renameSync).toHaveBeenCalledWith("/tmp/demo", "/home/test/.Trash/demo-123-secure/demo");
+    expect(renameSync).toHaveBeenCalledWith(TRASH_SOURCE, "/home/test/.Trash/demo-123-secure/demo");
     expect(cpSync).not.toHaveBeenCalled();
     expect(rmSync).not.toHaveBeenCalled();
   });
@@ -69,12 +78,12 @@ describe("browser trash", () => {
     const mkdtempSync = mockTrashContainer("secure");
     const renameSync = vi.spyOn(fs, "renameSync").mockImplementation(() => undefined);
 
-    await expect(movePathToTrash("/tmp/demo")).resolves.toBe(
+    await expect(movePathToTrash(TRASH_SOURCE)).resolves.toBe(
       "/real/home/test/.Trash/demo-123-secure/demo",
     );
     expect(mkdtempSync).toHaveBeenCalledWith("/real/home/test/.Trash/demo-123-");
     expect(renameSync).toHaveBeenCalledWith(
-      "/tmp/demo",
+      TRASH_SOURCE,
       "/real/home/test/.Trash/demo-123-secure/demo",
     );
   });
@@ -96,12 +105,15 @@ describe("browser trash", () => {
   it("refuses to use a symlinked trash directory", async () => {
     const { movePathToTrash } = await import("./trash.js");
     vi.spyOn(fs, "mkdirSync").mockImplementation(() => undefined);
-    vi.spyOn(fs, "lstatSync").mockReturnValue({
-      isDirectory: () => true,
-      isSymbolicLink: () => true,
-    } as fs.Stats);
+    vi.spyOn(fs, "lstatSync").mockImplementation(
+      (candidate) =>
+        ({
+          isDirectory: () => true,
+          isSymbolicLink: () => String(candidate) === "/home/test/.Trash",
+        }) as fs.Stats,
+    );
 
-    await expect(movePathToTrash("/tmp/demo")).rejects.toThrow(
+    await expect(movePathToTrash(TRASH_SOURCE)).rejects.toThrow(
       "Refusing to use non-directory/symlink trash directory",
     );
   });
@@ -117,15 +129,15 @@ describe("browser trash", () => {
     const cpSync = vi.spyOn(fs, "cpSync").mockImplementation(() => undefined);
     const rmSync = vi.spyOn(fs, "rmSync").mockImplementation(() => undefined);
 
-    await expect(movePathToTrash("/tmp/demo")).resolves.toBe(
+    await expect(movePathToTrash(TRASH_SOURCE)).resolves.toBe(
       "/home/test/.Trash/demo-123-secure/demo",
     );
-    expect(cpSync).toHaveBeenCalledWith("/tmp/demo", "/home/test/.Trash/demo-123-secure/demo", {
+    expect(cpSync).toHaveBeenCalledWith(TRASH_SOURCE, "/home/test/.Trash/demo-123-secure/demo", {
       recursive: true,
       force: false,
       errorOnExist: true,
     });
-    expect(rmSync).toHaveBeenCalledWith("/tmp/demo", { recursive: true, force: false });
+    expect(rmSync).toHaveBeenCalledWith(TRASH_SOURCE, { recursive: true, force: false });
   });
 
   it("retries copy fallback when the copy destination is created concurrently", async () => {
@@ -147,12 +159,12 @@ describe("browser trash", () => {
       .mockImplementation(() => undefined);
     const rmSync = vi.spyOn(fs, "rmSync").mockImplementation(() => undefined);
 
-    await expect(movePathToTrash("/tmp/demo")).resolves.toBe(
+    await expect(movePathToTrash(TRASH_SOURCE)).resolves.toBe(
       "/home/test/.Trash/demo-123-second/demo",
     );
     expect(cpSync).toHaveBeenNthCalledWith(
       1,
-      "/tmp/demo",
+      TRASH_SOURCE,
       "/home/test/.Trash/demo-123-first/demo",
       {
         recursive: true,
@@ -162,7 +174,7 @@ describe("browser trash", () => {
     );
     expect(cpSync).toHaveBeenNthCalledWith(
       2,
-      "/tmp/demo",
+      TRASH_SOURCE,
       "/home/test/.Trash/demo-123-second/demo",
       {
         recursive: true,
@@ -186,17 +198,17 @@ describe("browser trash", () => {
       })
       .mockImplementation(() => undefined);
 
-    await expect(movePathToTrash("/tmp/demo")).resolves.toBe(
+    await expect(movePathToTrash(TRASH_SOURCE)).resolves.toBe(
       "/home/test/.Trash/demo-123-second/demo",
     );
     expect(renameSync).toHaveBeenNthCalledWith(
       1,
-      "/tmp/demo",
+      TRASH_SOURCE,
       "/home/test/.Trash/demo-123-first/demo",
     );
     expect(renameSync).toHaveBeenNthCalledWith(
       2,
-      "/tmp/demo",
+      TRASH_SOURCE,
       "/home/test/.Trash/demo-123-second/demo",
     );
     expect(Date.now).toHaveBeenCalledTimes(1);

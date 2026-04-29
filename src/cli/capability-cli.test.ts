@@ -589,6 +589,38 @@ describe("capability cli", () => {
     );
   });
 
+  it("requests admin scope for gateway model probes with provider/model overrides", async () => {
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: [
+        "capability",
+        "model",
+        "run",
+        "--prompt",
+        "hello",
+        "--gateway",
+        "--model",
+        "anthropic/claude-haiku-4-5",
+        "--json",
+      ],
+    });
+
+    expect(mocks.callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        clientName: "gateway-client",
+        method: "agent",
+        mode: "backend",
+        scopes: ["operator.admin"],
+        params: expect.objectContaining({
+          provider: "anthropic",
+          model: "claude-haiku-4-5",
+          modelRun: true,
+          promptMode: "none",
+        }),
+      }),
+    );
+  });
+
   it("rejects empty model run prompts before gateway dispatch", async () => {
     await expect(
       runRegisteredCli({

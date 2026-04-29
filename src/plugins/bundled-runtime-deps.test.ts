@@ -25,6 +25,7 @@ import {
   resolveBundledRuntimeDependencyInstallRootPlan,
   resolveBundledRuntimeDepsNpmRunner,
   scanBundledPluginRuntimeDeps,
+  shouldMaterializeBundledRuntimeMirrorDistFile,
   type BundledRuntimeDepsInstallParams,
 } from "./bundled-runtime-deps.js";
 
@@ -99,9 +100,40 @@ afterEach(() => {
   spawnMock.mockReset();
   spawnSyncMock.mockReset();
   bundledRuntimeDepsActivityTesting.resetBundledRuntimeDepsInstallActivity();
+  bundledRuntimeDepsTesting.clearBundledRuntimeMirrorMaterializeCache();
   for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+describe("shouldMaterializeBundledRuntimeMirrorDistFile", () => {
+  it("reuses unchanged root dist file decisions without rereading source", () => {
+    const root = makeTempDir();
+    const sourcePath = path.join(root, "shared-runtime.js");
+    fs.writeFileSync(
+      sourcePath,
+      [
+        `//#region extensions/browser/src/runtime.ts`,
+        `export const marker = "shared-runtime";`,
+        `//#endregion`,
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    const realReadFileSync = fs.readFileSync.bind(fs);
+    let sourceReads = 0;
+    vi.spyOn(fs, "readFileSync").mockImplementation(((target, options) => {
+      if (path.resolve(target.toString()) === path.resolve(sourcePath)) {
+        sourceReads += 1;
+      }
+      return realReadFileSync(target, options as never);
+    }) as typeof fs.readFileSync);
+
+    expect(shouldMaterializeBundledRuntimeMirrorDistFile(sourcePath)).toBe(true);
+    expect(shouldMaterializeBundledRuntimeMirrorDistFile(sourcePath)).toBe(true);
+
+    expect(sourceReads).toBe(1);
+  });
 });
 
 describe("resolveBundledRuntimeDepsNpmRunner", () => {
@@ -154,6 +186,10 @@ describe("resolveBundledRuntimeDepsNpmRunner", () => {
       PATH: "/usr/bin:/bin",
       npm_config_cache: "/opt/openclaw/runtime-cache",
       npm_config_dry_run: "false",
+      npm_config_fetch_retries: "5",
+      npm_config_fetch_retry_maxtimeout: "120000",
+      npm_config_fetch_retry_mintimeout: "10000",
+      npm_config_fetch_timeout: "300000",
       npm_config_global: "false",
       npm_config_legacy_peer_deps: "true",
       npm_config_location: "project",
@@ -203,6 +239,23 @@ describe("resolveBundledRuntimeDepsNpmRunner", () => {
     });
   });
 
+  it("uses the Node-adjacent POSIX npm shim when npm-cli.js is unavailable", () => {
+    const execPath = "/opt/node/bin/node";
+    const npmPath = "/opt/node/bin/npm";
+    const runner = resolveBundledRuntimeDepsNpmRunner({
+      env: {},
+      execPath,
+      existsSync: (candidate) => candidate === npmPath,
+      npmArgs: ["install", "acpx@0.5.3"],
+      platform: "linux",
+    });
+
+    expect(runner).toEqual({
+      command: npmPath,
+      args: ["install", "acpx@0.5.3"],
+    });
+  });
+
   it("refuses Windows shell fallback when no safe npm executable is available", () => {
     expect(() =>
       resolveBundledRuntimeDepsNpmRunner({
@@ -222,7 +275,7 @@ describe("resolveBundledRuntimeDepsNpmRunner", () => {
           PATH: "/repo/evil/bin:/usr/bin:/bin",
         },
         execPath: "/opt/node/bin/node",
-        existsSync: (candidate) => candidate === "/opt/node/bin/npm",
+        existsSync: (candidate) => candidate === "/usr/bin/npm",
         npmArgs: ["install"],
         platform: "linux",
       }),

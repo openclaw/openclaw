@@ -35,6 +35,7 @@ import {
   extractMediaPlaceholder,
   extractMentionedJids,
   extractText,
+  hasInboundUserContent,
 } from "./extract.js";
 import { attachEmitterListener, closeInboundMonitorSocket } from "./lifecycle.js";
 import { downloadInboundMedia } from "./media.js";
@@ -381,6 +382,18 @@ export async function attachWebInboxToSocket(
       );
       return null;
     }
+    // Gate pairing access-control on extractable inbound user content. Baileys
+    // delivers receipts, typing indicators, presence updates, and protocol
+    // messages on the same `messages.upsert` stream as real messages; without
+    // this gate, `checkInboundAccessControl` can send an unsolicited pairing
+    // verification reply to a `dmPolicy: pairing` peer who never typed
+    // anything (e.g. when Master sends an outbound message to a new JID and
+    // the receipt round-trip arrives before the recipient ever replies).
+    // Echoes of our own outbound messages are already handled above.
+    if (!hasInboundUserContent(msg.message ?? undefined)) {
+      return null;
+    }
+
     const participantJid = msg.key?.participant ?? undefined;
     const from = group ? remoteJid : await resolveInboundJid(remoteJid);
     if (!from) {

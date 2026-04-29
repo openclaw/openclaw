@@ -230,7 +230,12 @@ or overlapping changed hunks.
 The `CodeQL` workflow is intentionally a narrow first-pass security scanner,
 not the full repository sweep. Daily and manual runs scan Actions workflow code
 plus the highest-risk JavaScript/TypeScript auth, secrets, sandbox, cron, and
-gateway surfaces with high-precision security queries.
+gateway surfaces with high-precision security queries. The
+channel-runtime-boundary job separately scans core channel implementation
+contracts plus the channel plugin runtime, gateway, Plugin SDK, secrets, and
+audit touchpoints under the `/codeql-critical-security/channel-runtime-boundary`
+category so channel security signal can scale without broadening the baseline
+JS/TS category.
 
 The `CodeQL Android Critical Security` workflow is the scheduled Android
 security shard. It builds the Android app manually for CodeQL on the smallest
@@ -245,13 +250,19 @@ default workflow because the macOS build dominates runtime even when clean.
 
 The `CodeQL Critical Quality` workflow is the matching non-security shard. It
 runs only error-severity, non-security JavaScript/TypeScript quality queries
-over narrow high-value surfaces. Its baseline job scans the same auth, secrets,
-sandbox, cron, and gateway surface as the security workflow. The config-boundary
+over narrow high-value surfaces on the smaller Blacksmith Linux runner. Its
+baseline job scans the same auth, secrets, sandbox, cron, and gateway surface
+as the security workflow. The config-boundary
 job scans config schema, migration, normalization, and IO contracts under the
 separate `/codeql-critical-quality/config-boundary` category. The
 gateway-runtime-boundary job scans gateway protocol schemas and server method
 contracts under the separate
 `/codeql-critical-quality/gateway-runtime-boundary` category. The
+channel-runtime-boundary job scans core channel implementation contracts under
+the separate `/codeql-critical-quality/channel-runtime-boundary` category. The
+agent-runtime-boundary job scans command execution, model/provider dispatch,
+auto-reply dispatch and queues, and ACP control-plane runtime contracts under
+the separate `/codeql-critical-quality/agent-runtime-boundary` category. The
 plugin-boundary job scans loader, registry, public-surface, and Plugin SDK
 entrypoint contracts under a separate `/codeql-critical-quality/plugin-boundary`
 category. Keep the workflow separate from security so quality findings can be
@@ -383,6 +394,7 @@ The automatic CI concurrency key is versioned (`CI-v7-*`) so a GitHub-side zombi
 | Runner                           | Jobs                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `ubuntu-24.04`                   | `preflight`, fast security jobs and aggregates (`security-scm-fast`, `security-dependency-audit`, `security-fast`), fast protocol/contract/bundled checks, sharded channel contract checks, `check` shards except lint, `check-additional` shards and aggregates, Node test aggregate verifiers, docs checks, Python skills, workflow-sanity, labeler, auto-response; install-smoke preflight also uses GitHub-hosted Ubuntu so the Blacksmith matrix can queue earlier |
+| `blacksmith-4vcpu-ubuntu-2404`   | `CodeQL Critical Quality`, lower-weight extension shards, `checks-fast-core`, `checks-node-compat-node22`, `check-prod-types`, and `check-test-types`                                                                                                                                                                                                                                                                                                                   |
 | `blacksmith-8vcpu-ubuntu-2404`   | `build-artifacts`, build-smoke, Linux Node test shards, bundled plugin test shards, `android`                                                                                                                                                                                                                                                                                                                                                                           |
 | `blacksmith-16vcpu-ubuntu-2404`  | `check-lint`, which remains CPU-sensitive enough that 8 vCPU cost more than it saved; install-smoke Docker builds, where 32-vCPU queue time cost more than it saved                                                                                                                                                                                                                                                                                                     |
 | `blacksmith-16vcpu-windows-2025` | `checks-windows`                                                                                                                                                                                                                                                                                                                                                                                                                                                        |

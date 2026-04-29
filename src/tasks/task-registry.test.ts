@@ -11,6 +11,7 @@ import {
   hasPendingHeartbeatWake,
   resetHeartbeatWakeStateForTests,
 } from "../infra/heartbeat-wake.js";
+import type { SessionBindingRecord } from "../infra/outbound/session-binding-service.js";
 import { peekSystemEvents, resetSystemEventsForTest } from "../infra/system-events.js";
 import type { ParsedAgentSessionKey } from "../routing/session-key.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
@@ -89,6 +90,18 @@ vi.mock("../utils/message-channel.js", () => ({
 function configureTaskRegistryMaintenanceRuntimeForTest(params: {
   currentTasks: Map<string, ReturnType<typeof createTaskRecord>>;
   snapshotTasks: ReturnType<typeof createTaskRecord>[];
+  acpEntry?: AcpSessionStoreEntry;
+  sessionBindings?: SessionBindingRecord[];
+  closeAcpSession?: (params: {
+    cfg: AcpSessionStoreEntry["cfg"];
+    sessionKey: string;
+    reason: string;
+  }) => Promise<void>;
+  unbindSessionBindings?: (params: {
+    targetSessionKey?: string;
+    bindingId?: string;
+    reason: string;
+  }) => Promise<SessionBindingRecord[]>;
 }): void {
   const emptyAcpEntry = {
     cfg: {} as never,
@@ -99,7 +112,10 @@ function configureTaskRegistryMaintenanceRuntimeForTest(params: {
     storeReadFailed: false,
   } satisfies AcpSessionStoreEntry;
   setTaskRegistryMaintenanceRuntimeForTests({
-    readAcpSessionEntry: () => emptyAcpEntry,
+    readAcpSessionEntry: () => params.acpEntry ?? emptyAcpEntry,
+    listSessionBindingsBySession: () => params.sessionBindings ?? [],
+    closeAcpSession: params.closeAcpSession,
+    unbindSessionBindings: params.unbindSessionBindings,
     loadSessionStore: () => ({}),
     resolveStorePath: () => "",
     parseAgentSessionKey: () => null as ParsedAgentSessionKey | null,
@@ -152,6 +168,54 @@ function configureTaskRegistryMaintenanceRuntimeForTest(params: {
     resolveCronRunLogPath: ({ jobId }) => jobId,
     readCronRunLogEntriesSync: () => [],
   });
+}
+
+function createSessionBindingRecord(
+  overrides: Partial<SessionBindingRecord> & Pick<SessionBindingRecord, "targetSessionKey">,
+): SessionBindingRecord {
+  return {
+    bindingId: overrides.bindingId ?? "binding-1",
+    targetSessionKey: overrides.targetSessionKey,
+    targetKind: overrides.targetKind ?? "session",
+    conversation: overrides.conversation ?? {
+      channel: "telegram",
+      accountId: "default",
+      conversationId: "telegram:thread:1",
+    },
+    status: overrides.status ?? "active",
+    boundAt: overrides.boundAt ?? Date.now(),
+    ...(overrides.expiresAt !== undefined ? { expiresAt: overrides.expiresAt } : {}),
+    ...(overrides.metadata !== undefined ? { metadata: overrides.metadata } : {}),
+  };
+}
+
+function createAcpSessionStoreEntry(params: {
+  sessionKey: string;
+  parentSessionKey: string;
+  mode: "persistent" | "oneshot";
+}): AcpSessionStoreEntry {
+  const acp = {
+    backend: "acpx",
+    agent: "claude",
+    runtimeSessionName: `${params.sessionKey}:runtime`,
+    mode: params.mode,
+    state: "idle",
+    lastActivityAt: Date.now(),
+  } as const;
+  return {
+    cfg: {} as never,
+    storePath: "/tmp/openclaw-test-sessions.json",
+    sessionKey: params.sessionKey,
+    storeSessionKey: params.sessionKey,
+    entry: {
+      sessionId: `${params.sessionKey}:session`,
+      updatedAt: Date.now(),
+      spawnedBy: params.parentSessionKey,
+      acp,
+    },
+    acp,
+    storeReadFailed: false,
+  };
 }
 
 async function waitForAssertion(assertion: () => void, timeoutMs = 2_000, stepMs = 5) {
@@ -1503,6 +1567,162 @@ describe("task-registry", () => {
           lost: 1,
         }),
       });
+    });
+  });
+
+  it("closes terminal parent-owned one-shot ACP sessions during maintenance", async () => {
+    await withTaskRegistryTempDir(async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+      const now = Date.now();
+      const parentSessionKey = "agent:main:telegram:direct:owner";
+      const childSessionKey = "agent:claude:acp:stale-oneshot";
+      const task = createTaskRecord({
+        runtime: "acp",
+        ownerKey: parentSessionKey,
+        requesterSessionKey: parentSessionKey,
+        scopeKind: "session",
+        childSessionKey,
+        runId: "run-terminal-acp-oneshot",
+        task: "Old ACP task",
+        status: "succeeded",
+        deliveryStatus: "delivered",
+      });
+      setTaskTimingById({
+        taskId: task.taskId,
+        endedAt: now - 60_000,
+        lastEventAt: now - 60_000,
+      });
+      const current = getTaskById(task.taskId)!;
+      const closeAcpSession = vi.fn().mockResolvedValue(undefined);
+      const unbindSessionBindings = vi.fn().mockResolvedValue([]);
+
+      configureTaskRegistryMaintenanceRuntimeForTest({
+        currentTasks: new Map([[task.taskId, current]]),
+        snapshotTasks: [current],
+        acpEntry: createAcpSessionStoreEntry({
+          sessionKey: childSessionKey,
+          parentSessionKey,
+          mode: "oneshot",
+        }),
+        closeAcpSession,
+        unbindSessionBindings,
+      });
+
+      expect(await runTaskRegistryMaintenance()).toMatchObject({
+        reconciled: 0,
+        recovered: 0,
+        pruned: 0,
+      });
+      expect(closeAcpSession).toHaveBeenCalledWith({
+        cfg: {},
+        sessionKey: childSessionKey,
+        reason: "terminal-task-cleanup",
+      });
+      expect(unbindSessionBindings).toHaveBeenCalledWith({
+        targetSessionKey: childSessionKey,
+        reason: "terminal-task-cleanup",
+      });
+    });
+  });
+
+  it("closes stale terminal persistent ACP sessions only when no binding remains", async () => {
+    await withTaskRegistryTempDir(async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+      const now = Date.now();
+      const parentSessionKey = "agent:main:telegram:direct:owner";
+      const childSessionKey = "agent:claude:acp:stale-persistent";
+      const task = createTaskRecord({
+        runtime: "acp",
+        ownerKey: parentSessionKey,
+        requesterSessionKey: parentSessionKey,
+        scopeKind: "session",
+        childSessionKey,
+        runId: "run-terminal-acp-persistent",
+        task: "Old persistent ACP task",
+        status: "failed",
+        deliveryStatus: "failed",
+      });
+      setTaskTimingById({
+        taskId: task.taskId,
+        endedAt: now - 60_000,
+        lastEventAt: now - 60_000,
+      });
+      const current = getTaskById(task.taskId)!;
+      const closeAcpSession = vi.fn().mockResolvedValue(undefined);
+      const unbindSessionBindings = vi.fn().mockResolvedValue([]);
+
+      configureTaskRegistryMaintenanceRuntimeForTest({
+        currentTasks: new Map([[task.taskId, current]]),
+        snapshotTasks: [current],
+        acpEntry: createAcpSessionStoreEntry({
+          sessionKey: childSessionKey,
+          parentSessionKey,
+          mode: "persistent",
+        }),
+        closeAcpSession,
+        unbindSessionBindings,
+      });
+
+      await runTaskRegistryMaintenance();
+
+      expect(closeAcpSession).toHaveBeenCalledWith({
+        cfg: {},
+        sessionKey: childSessionKey,
+        reason: "terminal-task-cleanup",
+      });
+      expect(unbindSessionBindings).toHaveBeenCalledWith({
+        targetSessionKey: childSessionKey,
+        reason: "terminal-task-cleanup",
+      });
+    });
+  });
+
+  it("keeps terminal persistent ACP sessions that still have an active binding", async () => {
+    await withTaskRegistryTempDir(async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+      const now = Date.now();
+      const parentSessionKey = "agent:main:telegram:direct:owner";
+      const childSessionKey = "agent:claude:acp:bound-persistent";
+      const task = createTaskRecord({
+        runtime: "acp",
+        ownerKey: parentSessionKey,
+        requesterSessionKey: parentSessionKey,
+        scopeKind: "session",
+        childSessionKey,
+        runId: "run-terminal-acp-bound",
+        task: "Thread-bound ACP session",
+        status: "succeeded",
+        deliveryStatus: "delivered",
+      });
+      setTaskTimingById({
+        taskId: task.taskId,
+        endedAt: now - 60_000,
+        lastEventAt: now - 60_000,
+      });
+      const current = getTaskById(task.taskId)!;
+      const closeAcpSession = vi.fn().mockResolvedValue(undefined);
+      const unbindSessionBindings = vi.fn().mockResolvedValue([]);
+
+      configureTaskRegistryMaintenanceRuntimeForTest({
+        currentTasks: new Map([[task.taskId, current]]),
+        snapshotTasks: [current],
+        acpEntry: createAcpSessionStoreEntry({
+          sessionKey: childSessionKey,
+          parentSessionKey,
+          mode: "persistent",
+        }),
+        sessionBindings: [createSessionBindingRecord({ targetSessionKey: childSessionKey })],
+        closeAcpSession,
+        unbindSessionBindings,
+      });
+
+      await runTaskRegistryMaintenance();
+
+      expect(closeAcpSession).not.toHaveBeenCalled();
+      expect(unbindSessionBindings).not.toHaveBeenCalled();
     });
   });
 

@@ -25,6 +25,7 @@ export {
   buildOpenGroupPolicyWarning,
   collectAllowlistProviderGroupPolicyWarnings,
   collectAllowlistProviderRestrictSendersWarnings,
+  collectOpenGroupPolicyConfiguredRouteWarnings,
   collectOpenGroupPolicyRestrictSendersWarnings,
   collectOpenGroupPolicyRouteAllowlistWarnings,
   collectOpenProviderGroupPolicyWarnings,

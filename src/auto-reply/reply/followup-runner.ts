@@ -336,6 +336,7 @@ export function createFollowupRunner(params: {
                       runId,
                       stream: evt.stream,
                       data: evt.data,
+                      ...(evt.sessionKey ? { sessionKey: evt.sessionKey } : {}),
                     });
                   }
                   if (evt.stream !== "compaction") {
