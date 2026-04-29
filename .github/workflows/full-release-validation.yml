@@ -652,16 +652,15 @@ jobs:
               echo
               echo "### Longest queues: ${label}"
               echo
-              gh run view "$run_id" --json createdAt,jobs --jq '
+              gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/jobs?per_page=100" --jq ".jobs[] | @json" | jq -sr '
                 def ts: fromdateiso8601;
-                .createdAt as $createdAt |
                 "| Job | Result | Queue minutes | Run minutes |",
                 "| --- | --- | ---: | ---: |",
-                ([.jobs[]
-                  | select(.startedAt != "0001-01-01T00:00:00Z")
+                ([.[]
+                  | select(.created_at != null and .started_at != null)
                   | . + {
-                      queueMin: ((((.startedAt | ts) - ($createdAt | ts)) / 60) * 10 | round / 10),
-                      durationMin: (if .completedAt == "0001-01-01T00:00:00Z" then null else ((((.completedAt | ts) - (.startedAt | ts)) / 60) * 10 | round / 10) end)
+                      queueMin: ((((.started_at | ts) - (.created_at | ts)) / 60) * 10 | round / 10),
+                      durationMin: (if .completed_at == null then null else ((((.completed_at | ts) - (.started_at | ts)) / 60) * 10 | round / 10) end)
                     }
                   | select(.queueMin > 0)
                   | {name, conclusion, queueMin, durationMin}]

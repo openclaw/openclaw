@@ -410,6 +410,10 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain("### Slowest jobs: ${label}");
     expect(workflow).toContain("### Longest queues: ${label}");
     expect(workflow).toContain("| Job | Result | Queue minutes | Run minutes |");
-    expect(workflow).toContain('gh run view "$run_id" --json createdAt,jobs');
+    expect(workflow).toContain(
+      'gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/jobs?per_page=100"',
+    );
+    expect(workflow).toContain("(.started_at | ts) - (.created_at | ts)");
+    expect(workflow).not.toContain('gh run view "$run_id" --json createdAt,jobs');
   });
 });
