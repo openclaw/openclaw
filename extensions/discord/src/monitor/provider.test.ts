@@ -307,6 +307,42 @@ describe("monitorDiscordProvider", () => {
     );
   });
 
+  it("fails closed before lifecycle when Discord bot identity fetch rejects", async () => {
+    const runtime = baseRuntime();
+    clientFetchUserMock.mockRejectedValueOnce(new Error("identity offline"));
+
+    await expect(
+      monitorDiscordProvider({
+        config: baseConfig(),
+        runtime,
+      }),
+    ).rejects.toThrow("Failed to resolve Discord bot identity");
+
+    expect(createDiscordMessageHandlerMock).not.toHaveBeenCalled();
+    expect(monitorLifecycleMock).not.toHaveBeenCalled();
+    expect(createdBindingManagers).toHaveLength(1);
+    expect(createdBindingManagers[0]?.stop).toHaveBeenCalledTimes(1);
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("identity offline"));
+  });
+
+  it("fails closed before lifecycle when Discord bot identity has no usable id", async () => {
+    const runtime = baseRuntime();
+    clientFetchUserMock.mockResolvedValueOnce({ username: "Molty" } as never);
+
+    await expect(
+      monitorDiscordProvider({
+        config: baseConfig(),
+        runtime,
+      }),
+    ).rejects.toThrow("Failed to resolve Discord bot identity");
+
+    expect(createDiscordMessageHandlerMock).not.toHaveBeenCalled();
+    expect(monitorLifecycleMock).not.toHaveBeenCalled();
+    expect(createdBindingManagers).toHaveLength(1);
+    expect(createdBindingManagers[0]?.stop).toHaveBeenCalledTimes(1);
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("no usable id"));
+  });
+
   it("does not double-stop thread bindings when lifecycle performs cleanup", async () => {
     await monitorDiscordProvider({
       config: baseConfig(),
