@@ -1621,18 +1621,7 @@ describe("doctor config flow", () => {
       config: {
         commitments: {
           enabled: true,
-          categories: {
-            careCheckIns: "gentle",
-            eventCheckIns: false,
-          },
-          extraction: {
-            enabled: true,
-            batchMaxItems: 4,
-          },
-          delivery: {
-            maxPerHeartbeat: 2,
-            expireAfterHours: 48,
-          },
+          maxPerDay: 2,
         },
       },
       run: loadAndMaybeMigrateDoctorConfig,
@@ -1640,18 +1629,7 @@ describe("doctor config flow", () => {
 
     expect(result.cfg.commitments).toEqual({
       enabled: true,
-      categories: {
-        careCheckIns: "gentle",
-        eventCheckIns: false,
-      },
-      extraction: {
-        enabled: true,
-        batchMaxItems: 4,
-      },
-      delivery: {
-        maxPerHeartbeat: 2,
-        expireAfterHours: 48,
-      },
+      maxPerDay: 2,
     });
   });
 

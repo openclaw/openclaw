@@ -21073,145 +21073,21 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             type: "boolean",
             title: "Commitments Enabled",
             description:
-              "Global inferred commitment feature gate. Set false to disable background extraction, storage, and heartbeat delivery for inferred follow-ups.",
+              "Enable hidden LLM extraction, storage, and heartbeat delivery for inferred follow-up commitments. Default: false.",
           },
-          store: {
-            type: "string",
-            title: "Commitments Store Path",
+          maxPerDay: {
+            type: "integer",
+            exclusiveMinimum: 0,
+            maximum: 9007199254740991,
+            title: "Commitments per Day",
             description:
-              "Optional JSON store path for inferred commitments. Leave unset to use the default OpenClaw state directory store.",
-          },
-          categories: {
-            type: "object",
-            properties: {
-              eventCheckIns: {
-                type: "boolean",
-                title: "Event Check-ins",
-                description:
-                  "Enables inferred event check-ins such as asking how an interview or appointment went. Default: true.",
-              },
-              deadlineCheckIns: {
-                type: "boolean",
-                title: "Deadline Check-ins",
-                description:
-                  "Enables inferred deadline or progress check-ins for work the user expects to revisit. Default: true.",
-              },
-              openLoops: {
-                type: "boolean",
-                title: "Open-loop Check-ins",
-                description:
-                  "Enables inferred open-loop check-ins when the user is waiting on an outcome or unresolved next step. Default: true.",
-              },
-              careCheckIns: {
-                anyOf: [
-                  {
-                    type: "boolean",
-                  },
-                  {
-                    type: "string",
-                    const: "gentle",
-                  },
-                ],
-                title: "Care Check-ins",
-                description:
-                  'Controls personal care check-ins. Use "gentle" for conservative care follow-ups, true for normal extraction, or false to disable them.',
-              },
-            },
-            additionalProperties: false,
-            title: "Commitment Categories",
-            description:
-              "Category gates for inferred commitments such as event check-ins, deadline progress, open loops, and care check-ins. Use these to narrow what OpenClaw infers while keeping the system enabled.",
-          },
-          extraction: {
-            type: "object",
-            properties: {
-              enabled: {
-                type: "boolean",
-                title: "Commitment Extraction Enabled",
-                description:
-                  "Enables hidden background LLM extraction for inferred commitments. Set false to keep stored commitments deliverable while preventing new inferred commitments.",
-              },
-              model: {
-                type: "string",
-                title: "Commitment Extraction Model",
-                description:
-                  "Optional provider/model override for hidden commitment extraction runs. Leave unset to use the active agent model.",
-              },
-              debounceMs: {
-                type: "integer",
-                minimum: 0,
-                maximum: 9007199254740991,
-                title: "Commitment Extraction Debounce (ms)",
-                description:
-                  "Milliseconds to wait before draining queued conversation turns into a batched hidden extraction run. Default: 15000.",
-              },
-              batchMaxItems: {
-                type: "integer",
-                exclusiveMinimum: 0,
-                maximum: 9007199254740991,
-                title: "Commitment Extraction Batch Size",
-                description:
-                  "Maximum queued turn extractions sent in one hidden model call. Default: 8.",
-              },
-              confidenceThreshold: {
-                type: "number",
-                minimum: 0,
-                maximum: 1,
-                title: "Commitment Confidence Threshold",
-                description:
-                  "Minimum accepted confidence from the extractor for routine inferred commitments. Default: 0.72.",
-              },
-              careConfidenceThreshold: {
-                type: "number",
-                minimum: 0,
-                maximum: 1,
-                title: "Care Commitment Confidence Threshold",
-                description:
-                  "Minimum accepted confidence from the extractor for personal care check-ins. Default: 0.86.",
-              },
-              timeoutSeconds: {
-                type: "integer",
-                exclusiveMinimum: 0,
-                maximum: 9007199254740991,
-                title: "Commitment Extraction Timeout (sec)",
-                description:
-                  "Maximum runtime in seconds for a hidden extraction pass before it is abandoned. Default: 45.",
-              },
-            },
-            additionalProperties: false,
-            title: "Commitment Extraction",
-            description:
-              "Background extraction controls for the hidden LLM pass that creates inferred commitments without adding content to the conversation transcript.",
-          },
-          delivery: {
-            type: "object",
-            properties: {
-              maxPerHeartbeat: {
-                type: "integer",
-                exclusiveMinimum: 0,
-                maximum: 9007199254740991,
-                title: "Commitments per Heartbeat",
-                description:
-                  "Maximum due inferred commitments injected into one heartbeat turn. Default: 3.",
-              },
-              expireAfterHours: {
-                type: "integer",
-                exclusiveMinimum: 0,
-                maximum: 9007199254740991,
-                title: "Commitment Expiration (hours)",
-                description:
-                  "Number of hours after the due time before a pending inferred commitment expires instead of being delivered. Default: 72.",
-              },
-            },
-            additionalProperties: false,
-            title: "Commitment Delivery",
-            description: "Heartbeat delivery controls for due inferred commitments.",
+              "Maximum inferred follow-up commitments delivered per agent session in a rolling day. Default: 3.",
           },
         },
         additionalProperties: false,
         title: "Commitments",
         description:
-          "Inferred follow-up commitment controls for automatically detecting check-ins from conversation turns and delivering them through heartbeat runs. Keep enabled for ambient follow-ups, or disable when you only want explicit reminders.",
+          "Inferred follow-up commitment controls for automatically detecting check-ins from conversation turns and delivering them through heartbeat runs.",
       },
       hooks: {
         type: "object",
@@ -24448,98 +24324,18 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     commitments: {
       label: "Commitments",
-      help: "Inferred follow-up commitment controls for automatically detecting check-ins from conversation turns and delivering them through heartbeat runs. Keep enabled for ambient follow-ups, or disable when you only want explicit reminders.",
+      help: "Inferred follow-up commitment controls for automatically detecting check-ins from conversation turns and delivering them through heartbeat runs.",
       tags: ["advanced"],
     },
     "commitments.enabled": {
       label: "Commitments Enabled",
-      help: "Global inferred commitment feature gate. Set false to disable background extraction, storage, and heartbeat delivery for inferred follow-ups.",
+      help: "Enable hidden LLM extraction, storage, and heartbeat delivery for inferred follow-up commitments. Default: false.",
       tags: ["advanced"],
     },
-    "commitments.store": {
-      label: "Commitments Store Path",
-      help: "Optional JSON store path for inferred commitments. Leave unset to use the default OpenClaw state directory store.",
-      tags: ["storage"],
-    },
-    "commitments.categories": {
-      label: "Commitment Categories",
-      help: "Category gates for inferred commitments such as event check-ins, deadline progress, open loops, and care check-ins. Use these to narrow what OpenClaw infers while keeping the system enabled.",
-      tags: ["advanced"],
-    },
-    "commitments.categories.eventCheckIns": {
-      label: "Event Check-ins",
-      help: "Enables inferred event check-ins such as asking how an interview or appointment went. Default: true.",
-      tags: ["advanced"],
-    },
-    "commitments.categories.deadlineCheckIns": {
-      label: "Deadline Check-ins",
-      help: "Enables inferred deadline or progress check-ins for work the user expects to revisit. Default: true.",
-      tags: ["advanced"],
-    },
-    "commitments.categories.openLoops": {
-      label: "Open-loop Check-ins",
-      help: "Enables inferred open-loop check-ins when the user is waiting on an outcome or unresolved next step. Default: true.",
-      tags: ["advanced"],
-    },
-    "commitments.categories.careCheckIns": {
-      label: "Care Check-ins",
-      help: 'Controls personal care check-ins. Use "gentle" for conservative care follow-ups, true for normal extraction, or false to disable them.',
-      tags: ["advanced"],
-    },
-    "commitments.extraction": {
-      label: "Commitment Extraction",
-      help: "Background extraction controls for the hidden LLM pass that creates inferred commitments without adding content to the conversation transcript.",
-      tags: ["advanced"],
-    },
-    "commitments.extraction.enabled": {
-      label: "Commitment Extraction Enabled",
-      help: "Enables hidden background LLM extraction for inferred commitments. Set false to keep stored commitments deliverable while preventing new inferred commitments.",
-      tags: ["advanced"],
-    },
-    "commitments.extraction.model": {
-      label: "Commitment Extraction Model",
-      help: "Optional provider/model override for hidden commitment extraction runs. Leave unset to use the active agent model.",
-      tags: ["models"],
-    },
-    "commitments.extraction.debounceMs": {
-      label: "Commitment Extraction Debounce (ms)",
-      help: "Milliseconds to wait before draining queued conversation turns into a batched hidden extraction run. Default: 15000.",
+    "commitments.maxPerDay": {
+      label: "Commitments per Day",
+      help: "Maximum inferred follow-up commitments delivered per agent session in a rolling day. Default: 3.",
       tags: ["performance"],
-    },
-    "commitments.extraction.batchMaxItems": {
-      label: "Commitment Extraction Batch Size",
-      help: "Maximum queued turn extractions sent in one hidden model call. Default: 8.",
-      tags: ["performance"],
-    },
-    "commitments.extraction.confidenceThreshold": {
-      label: "Commitment Confidence Threshold",
-      help: "Minimum accepted confidence from the extractor for routine inferred commitments. Default: 0.72.",
-      tags: ["advanced"],
-    },
-    "commitments.extraction.careConfidenceThreshold": {
-      label: "Care Commitment Confidence Threshold",
-      help: "Minimum accepted confidence from the extractor for personal care check-ins. Default: 0.86.",
-      tags: ["advanced"],
-    },
-    "commitments.extraction.timeoutSeconds": {
-      label: "Commitment Extraction Timeout (sec)",
-      help: "Maximum runtime in seconds for a hidden extraction pass before it is abandoned. Default: 45.",
-      tags: ["performance"],
-    },
-    "commitments.delivery": {
-      label: "Commitment Delivery",
-      help: "Heartbeat delivery controls for due inferred commitments.",
-      tags: ["advanced"],
-    },
-    "commitments.delivery.maxPerHeartbeat": {
-      label: "Commitments per Heartbeat",
-      help: "Maximum due inferred commitments injected into one heartbeat turn. Default: 3.",
-      tags: ["performance", "automation"],
-    },
-    "commitments.delivery.expireAfterHours": {
-      label: "Commitment Expiration (hours)",
-      help: "Number of hours after the due time before a pending inferred commitment expires instead of being delivered. Default: 72.",
-      tags: ["advanced"],
     },
     "diagnostics.enabled": {
       label: "Diagnostics Enabled",

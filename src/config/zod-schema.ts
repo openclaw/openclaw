@@ -257,35 +257,7 @@ const CrestodianSchema = z
 const CommitmentsSchema = z
   .object({
     enabled: z.boolean().optional(),
-    store: z.string().optional(),
-    categories: z
-      .object({
-        eventCheckIns: z.boolean().optional(),
-        deadlineCheckIns: z.boolean().optional(),
-        openLoops: z.boolean().optional(),
-        careCheckIns: z.union([z.boolean(), z.literal("gentle")]).optional(),
-      })
-      .strict()
-      .optional(),
-    extraction: z
-      .object({
-        enabled: z.boolean().optional(),
-        model: z.string().optional(),
-        debounceMs: z.number().int().nonnegative().optional(),
-        batchMaxItems: z.number().int().positive().optional(),
-        confidenceThreshold: z.number().min(0).max(1).optional(),
-        careConfidenceThreshold: z.number().min(0).max(1).optional(),
-        timeoutSeconds: z.number().int().positive().optional(),
-      })
-      .strict()
-      .optional(),
-    delivery: z
-      .object({
-        maxPerHeartbeat: z.number().int().positive().optional(),
-        expireAfterHours: z.number().int().positive().optional(),
-      })
-      .strict()
-      .optional(),
+    maxPerDay: z.number().int().positive().optional(),
   })
   .strict()
   .optional();

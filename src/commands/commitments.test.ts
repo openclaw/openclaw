@@ -9,7 +9,7 @@ const mocks = vi.hoisted(() => ({
   resolveCommitmentStorePath: vi.fn(() => "/tmp/openclaw-commitments.json"),
   getRuntimeConfig: vi.fn(() => ({
     commitments: {
-      store: "/tmp/openclaw-commitments.json",
+      enabled: true,
     },
   })),
 }));
