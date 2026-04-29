@@ -24,6 +24,8 @@ Status: the macOS/iOS SwiftUI chat UI talks directly to the Gateway WebSocket.
 
 - The UI connects to the Gateway WebSocket and uses `chat.history`, `chat.send`, and `chat.inject`.
 - `chat.history` is bounded for stability: Gateway may truncate long text fields, omit heavy metadata, and replace oversized entries with `[chat.history omitted: message too large]`.
+- `chat.history` follows the active transcript branch for modern append-only session files, so abandoned rewrite branches and superseded prompt copies are not rendered in WebChat.
+- Control UI coalesces duplicate in-flight submits for the same session, message, and attachments before generating a new `chat.send` run id; the Gateway still dedupes repeated requests that reuse the same idempotency key.
 - `chat.history` is also display-normalized: runtime-only OpenClaw context,
   inbound envelope wrappers, inline delivery directive tags
   such as `[[reply_to_*]]` and `[[audio_as_voice]]`, plain-text tool-call XML
@@ -33,6 +35,7 @@ Status: the macOS/iOS SwiftUI chat UI talks directly to the Gateway WebSocket.
   leaked ASCII/full-width model control tokens are stripped from visible text,
   and assistant entries whose whole visible text is only the exact silent
   token `NO_REPLY` / `no_reply` are omitted.
+- Reasoning-flagged reply payloads (`isReasoning: true`) are excluded from WebChat assistant content, transcript replay text, and audio content blocks, so thinking-only payloads do not surface as visible assistant messages or playable audio.
 - `chat.inject` appends an assistant note directly to the transcript and broadcasts it to the UI (no agent run).
 - Aborted runs can keep partial assistant output visible in the UI.
 - Gateway persists aborted partial assistant text into transcript history when buffered output exists, and marks those entries with abort metadata.

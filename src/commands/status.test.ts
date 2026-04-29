@@ -689,6 +689,7 @@ vi.mock("../infra/update-check.js", () => ({
   compareSemverStrings: vi.fn(() => 0),
 }));
 vi.mock("../config/config.js", () => ({
+  getRuntimeConfig: mocks.loadConfig,
   loadConfig: mocks.loadConfig,
   readBestEffortConfig: vi.fn(async () => mocks.loadConfig()),
   resolveGatewayPort: vi.fn(() => 18789),
@@ -740,6 +741,7 @@ vi.mock("./status-runtime-shared.ts", () => ({
       deep: false,
       includeFilesystem: true,
       includeChannelSecurity: true,
+      loadPluginSecurityCollectors: false,
     }),
   ),
   resolveStatusUsageSummary: vi.fn(async () => undefined),
@@ -759,6 +761,7 @@ vi.mock("./status-runtime-shared.ts", () => ({
                 deep: false,
                 includeFilesystem: true,
                 includeChannelSecurity: true,
+                loadPluginSecurityCollectors: false,
               }))
           )({
             config: params.config,
@@ -1009,6 +1012,12 @@ describe("statusCommand", () => {
     );
   });
 
+  it("keeps default text status off the security audit path", async () => {
+    await statusCommand({}, runtime as never);
+
+    expect(mocks.runSecurityAudit).not.toHaveBeenCalled();
+  });
+
   it("surfaces unknown usage when totalTokens is missing", async () => {
     await withUnknownUsageStore(async () => {
       runtimeLogMock.mockClear();
@@ -1049,8 +1058,7 @@ describe("statusCommand", () => {
       "OpenClaw status",
       "Overview",
       "Security audit",
-      "Summary:",
-      "CRITICAL",
+      "Skipped in fast status",
       "Dashboard",
       "macos 14.0 (arm64)",
       "Memory",

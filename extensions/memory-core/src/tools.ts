@@ -1,4 +1,5 @@
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import type { MemorySource } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
   asToolParamsRecord,
   jsonResult,
@@ -6,7 +7,6 @@ import {
   readStringParam,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
-import type { MemorySource } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import type {
   MemorySearchResult,
   MemorySearchRuntimeDebug,
@@ -182,6 +182,7 @@ async function executeMemoryReadResult<T>(params: {
 
 export function createMemorySearchTool(options: {
   config?: OpenClawConfig;
+  getConfig?: () => OpenClawConfig | undefined;
   agentSessionKey?: string;
   sandboxed?: boolean;
 }) {
@@ -344,6 +345,7 @@ export function createMemorySearchTool(options: {
 
 export function createMemoryGetTool(options: {
   config?: OpenClawConfig;
+  getConfig?: () => OpenClawConfig | undefined;
   agentSessionKey?: string;
 }) {
   return createMemoryTool({

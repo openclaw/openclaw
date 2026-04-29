@@ -441,7 +441,12 @@ describe("failover-error", () => {
     ).toBeNull();
   });
 
-  it("classifies provider-scoped generic upstream errors for failover", () => {
+  it("classifies bare pi-ai stream wrapper as timeout regardless of provider (#71620)", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        message: "An unknown error occurred",
+      }),
+    ).toBe("timeout");
     expect(
       resolveFailoverReasonFromError({
         provider: "anthropic",
@@ -450,24 +455,28 @@ describe("failover-error", () => {
     ).toBe("timeout");
     expect(
       resolveFailoverReasonFromError({
+        provider: "google",
+        message: "An unknown error occurred",
+      }),
+    ).toBe("timeout");
+    expect(
+      resolveFailoverReasonFromError({
+        provider: "openrouter",
+        message: "An unknown error occurred",
+      }),
+    ).toBe("timeout");
+  });
+
+  it("classifies openrouter-scoped upstream errors for failover", () => {
+    expect(
+      resolveFailoverReasonFromError({
         provider: "openrouter",
         message: "Provider returned error",
       }),
     ).toBe("timeout");
   });
 
-  it("does not classify provider-scoped upstream errors without the matching provider", () => {
-    expect(
-      resolveFailoverReasonFromError({
-        message: "An unknown error occurred",
-      }),
-    ).toBeNull();
-    expect(
-      resolveFailoverReasonFromError({
-        provider: "openrouter",
-        message: "An unknown error occurred",
-      }),
-    ).toBeNull();
+  it("does not classify openrouter-scoped upstream errors without the matching provider", () => {
     expect(
       resolveFailoverReasonFromError({
         message: "Provider returned error",
@@ -591,6 +600,33 @@ describe("failover-error", () => {
         message: "LLM error: monthly limit reached",
       }),
     ).toBe("rate_limit");
+  });
+
+  it("treats Chinese provider network/server errors as timeout for failover", () => {
+    // ZhipuAI/GLM error code 1234: "网络错误" — real production error
+    expect(
+      resolveFailoverReasonFromError({
+        message:
+          "LLM error 1234: 网络错误，错误id：202603281427587491f4467f1c4712，请联系客服。 (request_id: 202603281427587491f4467f1c4712)",
+      }),
+    ).toBe("timeout");
+    // JSON payload variant
+    expect(
+      resolveFailoverReasonFromError({
+        message:
+          '{"error":{"code":"1234","message":"网络错误，错误id：abc123，请联系客服。"},"request_id":"abc123"}',
+      }),
+    ).toBe("timeout");
+    // Generic Chinese server errors
+    expect(resolveFailoverReasonFromError({ message: "系统错误，请稍后重试" })).toBe("timeout");
+    expect(resolveFailoverReasonFromError({ message: "服务器内部错误" })).toBe("timeout");
+  });
+
+  it("treats Chinese provider auth errors as auth for failover", () => {
+    // ZhipuAI/GLM 403: "您无权访问glm-5.1" — real production error
+    expect(resolveFailoverReasonFromError({ message: "403 您无权访问glm-5.1。" })).toBe("auth");
+    expect(resolveFailoverReasonFromError({ message: "认证失败" })).toBe("auth");
+    expect(resolveFailoverReasonFromError({ message: "鉴权失败，请检查API Key" })).toBe("auth");
   });
 
   it("treats overloaded provider payloads as overloaded", () => {

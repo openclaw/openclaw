@@ -26,6 +26,10 @@ import {
   buildEmbeddedCompactionRuntimeContext,
   resolveEmbeddedCompactionTarget,
 } from "./compaction-runtime-context.js";
+import {
+  rotateTranscriptAfterCompaction,
+  shouldRotateCompactionTranscript,
+} from "./compaction-successor-transcript.js";
 import { runContextEngineMaintenance } from "./context-engine-maintenance.js";
 import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
@@ -47,8 +51,12 @@ export async function compactEmbeddedPiSession(
     allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
   });
   ensureContextEnginesInitialized();
-  const contextEngine = await resolveContextEngine(params.config);
   const agentDir = params.agentDir ?? resolveOpenClawAgentDir();
+  const resolvedWorkspaceDir = resolveUserPath(params.workspaceDir);
+  const contextEngine = await resolveContextEngine(params.config, {
+    agentDir,
+    workspaceDir: resolvedWorkspaceDir,
+  });
   let contextTokenBudget = params.contextTokenBudget;
   if (!contextTokenBudget || !Number.isFinite(contextTokenBudget) || contextTokenBudget <= 0) {
     const resolvedCompactionTarget = resolveEmbeddedCompactionTarget({
@@ -125,7 +133,7 @@ export async function compactEmbeddedPiSession(
           sessionId: params.sessionId,
           agentId: sessionAgentId,
           sessionKey: hookSessionKey,
-          workspaceDir: resolveUserPath(params.workspaceDir),
+          workspaceDir: resolvedWorkspaceDir,
           messageProvider: resolvedMessageProvider,
         };
         const runtimeContext = contextEngineRuntimeContext;
@@ -158,15 +166,46 @@ export async function compactEmbeddedPiSession(
           force: params.trigger === "manual",
           runtimeContext,
         });
+        const delegatedSessionId = result.result?.sessionId;
+        const delegatedSessionFile = result.result?.sessionFile;
+        const delegatedRotatedTranscript =
+          (typeof delegatedSessionId === "string" && delegatedSessionId !== params.sessionId) ||
+          (typeof delegatedSessionFile === "string" && delegatedSessionFile !== params.sessionFile);
+        let postCompactionSessionId = delegatedSessionId ?? params.sessionId;
+        let postCompactionSessionFile = delegatedSessionFile ?? params.sessionFile;
+        let postCompactionLeafId: string | undefined;
         if (result.ok && result.compacted) {
+          if (shouldRotateCompactionTranscript(params.config) && !delegatedRotatedTranscript) {
+            try {
+              const rotation = await rotateTranscriptAfterCompaction({
+                sessionManager: SessionManager.open(params.sessionFile),
+                sessionFile: params.sessionFile,
+              });
+              if (rotation.rotated) {
+                postCompactionSessionId = rotation.sessionId ?? postCompactionSessionId;
+                postCompactionSessionFile = rotation.sessionFile ?? postCompactionSessionFile;
+                postCompactionLeafId = rotation.leafId;
+                log.info(
+                  `[compaction] rotated active transcript after context-engine compaction ` +
+                    `(sessionKey=${params.sessionKey ?? params.sessionId})`,
+                );
+              }
+            } catch (err) {
+              log.warn("failed to rotate compacted transcript", {
+                errorMessage: formatErrorMessage(err),
+              });
+            }
+          }
           if (params.config && params.sessionKey && checkpointSnapshot) {
             try {
-              const postCompactionSession = SessionManager.open(params.sessionFile);
-              const postLeafId = postCompactionSession.getLeafId() ?? undefined;
+              const postLeafId =
+                postCompactionLeafId ??
+                SessionManager.open(postCompactionSessionFile).getLeafId() ??
+                undefined;
               const storedCheckpoint = await persistSessionCompactionCheckpoint({
                 cfg: params.config,
                 sessionKey: params.sessionKey,
-                sessionId: params.sessionId,
+                sessionId: postCompactionSessionId,
                 reason: resolveSessionCompactionCheckpointReason({
                   trigger: params.trigger,
                 }),
@@ -175,7 +214,7 @@ export async function compactEmbeddedPiSession(
                 firstKeptEntryId: result.result?.firstKeptEntryId,
                 tokensBefore: result.result?.tokensBefore,
                 tokensAfter: result.result?.tokensAfter,
-                postSessionFile: params.sessionFile,
+                postSessionFile: postCompactionSessionFile,
                 postLeafId,
                 postEntryId: postLeafId,
               });
@@ -188,9 +227,9 @@ export async function compactEmbeddedPiSession(
           }
           await runContextEngineMaintenance({
             contextEngine,
-            sessionId: params.sessionId,
+            sessionId: postCompactionSessionId,
             sessionKey: params.sessionKey,
-            sessionFile: params.sessionFile,
+            sessionFile: postCompactionSessionFile,
             reason: "compaction",
             runtimeContext,
           });
@@ -199,7 +238,7 @@ export async function compactEmbeddedPiSession(
           await runPostCompactionSideEffects({
             config: params.config,
             sessionKey: params.sessionKey,
-            sessionFile: params.sessionFile,
+            sessionFile: postCompactionSessionFile,
           });
         }
         if (
@@ -209,14 +248,18 @@ export async function compactEmbeddedPiSession(
           hookRunner.runAfterCompaction
         ) {
           try {
+            const afterHookCtx = {
+              ...hookCtx,
+              sessionId: postCompactionSessionId,
+            };
             await hookRunner.runAfterCompaction(
               {
                 messageCount: -1,
                 compactedCount: -1,
                 tokenCount: result.result?.tokensAfter,
-                sessionFile: params.sessionFile,
+                sessionFile: postCompactionSessionFile,
               },
-              hookCtx,
+              afterHookCtx,
             );
           } catch (err) {
             log.warn("after_compaction hook failed", {
@@ -235,6 +278,12 @@ export async function compactEmbeddedPiSession(
                 tokensBefore: result.result.tokensBefore,
                 tokensAfter: result.result.tokensAfter,
                 details: result.result.details,
+                ...(postCompactionSessionId !== params.sessionId
+                  ? { sessionId: postCompactionSessionId }
+                  : {}),
+                ...(postCompactionSessionFile !== params.sessionFile
+                  ? { sessionFile: postCompactionSessionFile }
+                  : {}),
               }
             : undefined,
         };
@@ -276,6 +325,7 @@ function buildCompactionContextEngineRuntimeContext(params: {
       reasoningLevel: params.params.reasoningLevel,
       bashElevated: params.params.bashElevated,
       extraSystemPrompt: params.params.extraSystemPrompt,
+      sourceReplyDeliveryMode: params.params.sourceReplyDeliveryMode,
       ownerNumbers: params.params.ownerNumbers,
     }),
     tokenBudget: params.contextTokenBudget,

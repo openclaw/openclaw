@@ -1,6 +1,7 @@
 import { normalizeProviderId } from "../agents/model-selection.js";
 import type { ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 import {
   listPluginContributionIds,
   loadPluginRegistrySnapshot,
@@ -42,6 +43,7 @@ export type ResolveRuntimePluginDiscoveryProvidersParams = {
   includeUntrustedWorkspacePlugins?: boolean;
   requireCompleteDiscoveryEntryCoverage?: boolean;
   discoveryEntriesOnly?: boolean;
+  pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "index" | "manifestRegistry">;
 };
 
 export type ResolveInstalledPluginProviderContributionIdsParams = LoadPluginRegistryParams & {
@@ -56,7 +58,11 @@ function sortedValues(values: Iterable<string>): string[] {
 export function resolveInstalledPluginProviderContributionIds(
   params: ResolveInstalledPluginProviderContributionIdsParams = {},
 ): string[] {
-  const index = params.index ?? loadPluginRegistrySnapshot(params);
+  const registryParams =
+    params.candidates && params.preferPersisted === undefined
+      ? { ...params, preferPersisted: false }
+      : params;
+  const index = params.index ?? loadPluginRegistrySnapshot(registryParams);
   return sortedValues(
     listPluginContributionIds({
       index,
@@ -73,12 +79,6 @@ export async function resolveRuntimePluginDiscoveryProviders(
   return (await loadProviderRuntime())
     .resolvePluginDiscoveryProvidersRuntime(params)
     .filter((provider) => resolveProviderCatalogOrderHook(provider));
-}
-
-export async function resolvePluginDiscoveryProviders(
-  params: ResolveRuntimePluginDiscoveryProvidersParams,
-): Promise<ProviderPlugin[]> {
-  return resolveRuntimePluginDiscoveryProviders(params);
 }
 
 export function groupPluginDiscoveryProvidersByOrder(

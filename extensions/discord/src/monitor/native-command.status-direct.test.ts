@@ -1,5 +1,5 @@
 import { ChannelType } from "discord-api-types/v10";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createMockCommandInteraction as createInteraction } from "./native-command.test-helpers.js";
 import { createNoopThreadBindingManager } from "./thread-bindings.js";
@@ -40,7 +40,7 @@ function createConfig(params?: { requireMention?: boolean }): OpenClawConfig {
     },
     channels: {
       discord: {
-        dm: { enabled: true, policy: "open" },
+        dm: { enabled: true, policy: "open", allowFrom: ["*"] },
         guilds: {
           guild1: {
             requireMention: true,

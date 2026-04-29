@@ -1,12 +1,12 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   AUTH_PROFILE_RUNTIME_CONTRACT,
   createAuthAliasManifestRegistry,
   expectedForwardedAuthProfile,
-} from "../../test/helpers/agents/auth-profile-runtime-contract.js";
+} from "openclaw/plugin-sdk/agent-runtime-test-contracts";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type * as ManifestRegistryModule from "../plugins/manifest-registry.js";
@@ -30,6 +30,22 @@ vi.mock("../plugins/manifest-registry.js", async (importOriginal) => {
   return {
     ...actual,
     loadPluginManifestRegistry,
+  };
+});
+
+vi.mock("../plugins/manifest-registry-installed.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../plugins/manifest-registry-installed.js")>();
+  return {
+    ...actual,
+    loadPluginManifestRegistryForInstalledIndex: loadPluginManifestRegistry,
+  };
+});
+
+vi.mock("../plugins/plugin-registry.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../plugins/plugin-registry.js")>();
+  return {
+    ...actual,
+    loadPluginRegistrySnapshot: () => ({ plugins: [] }),
   };
 });
 
@@ -131,6 +147,7 @@ async function runAuthContractAttempt(params: {
 
   await runAgentAttempt({
     providerOverride: params.providerOverride,
+    originalProvider: params.providerOverride,
     modelOverride: "gpt-5.4",
     cfg,
     sessionEntry,
@@ -286,7 +303,7 @@ describe("Auth profile runtime contract - Pi and CLI adapter", () => {
       cfg: {
         agents: {
           defaults: {
-            embeddedHarness: { runtime: "codex", fallback: "none" },
+            agentRuntime: { id: "codex", fallback: "none" },
           },
         },
       } as OpenClawConfig,
@@ -369,7 +386,7 @@ describe("Auth profile runtime contract - Pi and CLI adapter", () => {
       cfg: {
         agents: {
           defaults: {
-            embeddedHarness: { runtime: "codex", fallback: "none" },
+            agentRuntime: { id: "codex", fallback: "none" },
           },
         },
       } as OpenClawConfig,
@@ -392,7 +409,7 @@ describe("Auth profile runtime contract - Pi and CLI adapter", () => {
       cfg: {
         agents: {
           defaults: {
-            embeddedHarness: { runtime: "codex", fallback: "none" },
+            agentRuntime: { id: "codex", fallback: "none" },
           },
         },
       } as OpenClawConfig,
@@ -418,7 +435,7 @@ describe("Auth profile runtime contract - Pi and CLI adapter", () => {
           list: [
             {
               id: "main",
-              embeddedHarness: { runtime: "codex", fallback: "none" },
+              agentRuntime: { id: "codex", fallback: "none" },
             },
           ],
         },

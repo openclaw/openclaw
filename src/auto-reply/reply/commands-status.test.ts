@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
+import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { normalizeTestText } from "../../../test/helpers/normalize-text.js";
-import { withTempHome } from "../../../test/helpers/temp-home.js";
 import { clearAgentHarnesses, registerAgentHarness } from "../../agents/harness/registry.js";
 import type { AgentHarness } from "../../agents/harness/types.js";
 import {
@@ -489,7 +489,7 @@ describe("buildStatusReply subagent summary", () => {
         ...baseCfg,
         agents: {
           defaults: {
-            embeddedHarness: { runtime: "codex" },
+            agentRuntime: { id: "codex" },
           },
         },
       },
@@ -529,7 +529,7 @@ describe("buildStatusReply subagent summary", () => {
         ...baseCfg,
         agents: {
           defaults: {
-            embeddedHarness: { runtime: "codex" },
+            agentRuntime: { id: "codex" },
           },
         },
       },

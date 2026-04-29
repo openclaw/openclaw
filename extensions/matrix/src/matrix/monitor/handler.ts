@@ -3,6 +3,7 @@ import {
   evaluateSupplementalContextVisibility,
   resolveChannelContextVisibilityMode,
 } from "openclaw/plugin-sdk/context-visibility-runtime";
+import type { GetReplyOptions } from "openclaw/plugin-sdk/reply-runtime";
 import {
   loadSessionStore,
   resolveSessionStoreEntry,
@@ -76,6 +77,7 @@ import { isMatrixVerificationRoomMessage } from "./verification-utils.js";
 
 const ALLOW_FROM_STORE_CACHE_TTL_MS = 30_000;
 const PAIRING_REPLY_COOLDOWN_MS = 5 * 60_000;
+const MATRIX_TOOL_PROGRESS_MAX_CHARS = 300;
 let matrixSendModulePromise: Promise<typeof import("../send.js")> | undefined;
 let acpBindingRuntimePromise:
   | Promise<typeof import("openclaw/plugin-sdk/acp-binding-runtime")>
@@ -171,6 +173,7 @@ export type MatrixMonitorHandlerParams = {
   /** DM session grouping behavior. */
   dmSessionScope?: "per-user" | "per-room";
   streaming: MatrixStreamingMode;
+  previewToolProgressEnabled: boolean;
   blockStreamingEnabled: boolean;
   dmEnabled: boolean;
   dmPolicy: "open" | "pairing" | "allowlist" | "disabled";
@@ -354,6 +357,32 @@ function resolveMatrixAllowBotsMode(value?: boolean | "mentions"): MatrixAllowBo
   return "off";
 }
 
+function formatMatrixToolProgressMarkdownCode(text: string): string {
+  const clipped =
+    text.length <= MATRIX_TOOL_PROGRESS_MAX_CHARS
+      ? text
+      : `${text.slice(0, MATRIX_TOOL_PROGRESS_MAX_CHARS - 1).trimEnd()}...`;
+  const safe = clipped.replaceAll("`", "'");
+  return `\`${safe}\``;
+}
+
+function formatMatrixCommandOutputToolProgress(payload: {
+  exitCode?: number | null;
+  name?: string;
+  title?: string;
+}) {
+  if (!payload.name) {
+    return payload.title;
+  }
+  if (payload.exitCode === 0) {
+    return `${payload.name} ok`;
+  }
+  if (payload.exitCode != null) {
+    return `${payload.name} (exit ${payload.exitCode})`;
+  }
+  return payload.name;
+}
+
 export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParams) {
   const {
     client,
@@ -374,6 +403,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
     dmThreadReplies,
     dmSessionScope,
     streaming,
+    previewToolProgressEnabled,
     blockStreamingEnabled,
     dmEnabled,
     dmPolicy,
@@ -671,9 +701,12 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           senderNamePromise ??= getMemberDisplayName(roomId, senderId).catch(() => senderId);
           return await senderNamePromise;
         };
-        const storeAllowFrom = isDirectMessage ? await readStoreAllowFrom() : [];
+        const storeAllowFrom =
+          isDirectMessage && dmPolicy !== "allowlist" && dmPolicy !== "open"
+            ? await readStoreAllowFrom()
+            : [];
         const roomUsers = roomConfig?.users ?? [];
-        const liveCfg = core.config.loadConfig() as CoreConfig;
+        const liveCfg = core.config.current() as CoreConfig;
         const liveAccountAllowlists = resolveMatrixAccountAllowlistConfig({
           cfg: liveCfg,
           accountId,
@@ -699,6 +732,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         const accessState = resolveMatrixMonitorAccessState({
           allowFrom: liveDmAllowFrom,
           storeAllowFrom,
+          dmPolicy,
           groupAllowFrom: liveGroupAllowFrom,
           roomUsers,
           senderId,
@@ -719,63 +753,59 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
             await commitInboundEventIfClaimed();
             return undefined;
           }
-          if (dmPolicy !== "open") {
-            const allowMatchMeta = formatAllowlistMatchMeta(directAllowMatch);
-            if (!directAllowMatch.allowed) {
-              if (!isReactionEvent && dmPolicy === "pairing") {
-                const senderName = await getSenderName();
-                const { code, created } = await core.channel.pairing.upsertPairingRequest({
+          const allowMatchMeta = formatAllowlistMatchMeta(directAllowMatch);
+          if (!directAllowMatch.allowed) {
+            if (!isReactionEvent && dmPolicy === "pairing") {
+              const senderName = await getSenderName();
+              const { code, created } = await core.channel.pairing.upsertPairingRequest({
+                channel: "matrix",
+                id: senderId,
+                accountId,
+                meta: { name: senderName },
+              });
+              if (shouldSendPairingReply(senderId, created)) {
+                const pairingReply = core.channel.pairing.buildPairingReply({
                   channel: "matrix",
-                  id: senderId,
-                  accountId,
-                  meta: { name: senderName },
+                  idLine: `Your Matrix user id: ${senderId}`,
+                  code,
                 });
-                if (shouldSendPairingReply(senderId, created)) {
-                  const pairingReply = core.channel.pairing.buildPairingReply({
-                    channel: "matrix",
-                    idLine: `Your Matrix user id: ${senderId}`,
-                    code,
-                  });
-                  logVerboseMessage(
+                logVerboseMessage(
+                  created
+                    ? `matrix pairing request sender=${senderId} name=${senderName ?? "unknown"} (${allowMatchMeta})`
+                    : `matrix pairing reminder sender=${senderId} name=${senderName ?? "unknown"} (${allowMatchMeta})`,
+                );
+                try {
+                  const { sendMessageMatrix } = await loadMatrixSendModule();
+                  await sendMessageMatrix(
+                    `room:${roomId}`,
                     created
-                      ? `matrix pairing request sender=${senderId} name=${senderName ?? "unknown"} (${allowMatchMeta})`
-                      : `matrix pairing reminder sender=${senderId} name=${senderName ?? "unknown"} (${allowMatchMeta})`,
-                  );
-                  try {
-                    const { sendMessageMatrix } = await loadMatrixSendModule();
-                    await sendMessageMatrix(
-                      `room:${roomId}`,
-                      created
-                        ? pairingReply
-                        : `${pairingReply}\n\nPairing request is still pending approval. Reusing existing code.`,
-                      {
-                        client,
-                        cfg,
-                        accountId,
-                      },
-                    );
-                    await commitInboundEventIfClaimed();
-                  } catch (err) {
-                    logVerboseMessage(
-                      `matrix pairing reply failed for ${senderId}: ${String(err)}`,
-                    );
-                    return undefined;
-                  }
-                } else {
-                  logVerboseMessage(
-                    `matrix pairing reminder suppressed sender=${senderId} (cooldown)`,
+                      ? pairingReply
+                      : `${pairingReply}\n\nPairing request is still pending approval. Reusing existing code.`,
+                    {
+                      client,
+                      cfg,
+                      accountId,
+                    },
                   );
                   await commitInboundEventIfClaimed();
+                } catch (err) {
+                  logVerboseMessage(`matrix pairing reply failed for ${senderId}: ${String(err)}`);
+                  return undefined;
                 }
-              }
-              if (isReactionEvent || dmPolicy !== "pairing") {
+              } else {
                 logVerboseMessage(
-                  `matrix: blocked ${isReactionEvent ? "reaction" : "dm"} sender ${senderId} (dmPolicy=${dmPolicy}, ${allowMatchMeta})`,
+                  `matrix pairing reminder suppressed sender=${senderId} (cooldown)`,
                 );
                 await commitInboundEventIfClaimed();
               }
-              return undefined;
             }
+            if (isReactionEvent || dmPolicy !== "pairing") {
+              logVerboseMessage(
+                `matrix: blocked ${isReactionEvent ? "reaction" : "dm"} sender ${senderId} (dmPolicy=${dmPolicy}, ${allowMatchMeta})`,
+              );
+              await commitInboundEventIfClaimed();
+            }
+            return undefined;
           }
         }
 
@@ -1298,6 +1328,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         SenderUsername: senderId.split(":")[0]?.replace(/^@/, ""),
         GroupSubject: isRoom ? (roomName ?? roomId) : undefined,
         GroupId: isRoom ? roomId : undefined,
+        GroupChannel: isRoom ? roomId : undefined,
         GroupSystemPrompt: isRoom ? groupSystemPrompt : undefined,
         Provider: "matrix" as const,
         Surface: "matrix" as const,
@@ -1465,6 +1496,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           )
         : undefined;
       draftStreamRef = draftStream;
+      const shouldStreamPreviewToolProgress = Boolean(draftStream) && previewToolProgressEnabled;
       type PendingDraftBoundary = {
         messageGeneration: number;
         endOffset: number;
@@ -1478,8 +1510,90 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       const pendingDraftBoundaries: PendingDraftBoundary[] = [];
       const latestQueuedDraftBoundaryOffsets = new Map<number, number>();
       let currentDraftReplyToId = draftReplyToId;
+      let previewToolProgressSuppressed = false;
+      let previewToolProgressLines: string[] = [];
       // Set after the first final payload consumes or discards the draft event
       // so subsequent finals go through normal delivery.
+
+      const pushPreviewToolProgress = (line?: string) => {
+        if (!draftStream || !shouldStreamPreviewToolProgress || previewToolProgressSuppressed) {
+          return;
+        }
+        const normalized = line?.replace(/\s+/g, " ").trim();
+        if (!normalized) {
+          return;
+        }
+        const previous = previewToolProgressLines.at(-1);
+        if (previous === normalized) {
+          return;
+        }
+        previewToolProgressLines = [...previewToolProgressLines, normalized].slice(-8);
+        draftStream.update(
+          [
+            "Working...",
+            ...previewToolProgressLines.map(
+              (entry) => `- ${formatMatrixToolProgressMarkdownCode(entry)}`,
+            ),
+          ].join("\n"),
+        );
+      };
+
+      const suppressPreviewToolProgressForAnswerText = (text: string | undefined) => {
+        if (!text?.trim()) {
+          return;
+        }
+        previewToolProgressSuppressed = true;
+        previewToolProgressLines = [];
+      };
+
+      const resetPreviewToolProgress = () => {
+        previewToolProgressSuppressed = false;
+        previewToolProgressLines = [];
+      };
+
+      const buildPreviewToolProgressReplyOptions = (): Partial<GetReplyOptions> => {
+        if (!shouldStreamPreviewToolProgress) {
+          return {};
+        }
+        return {
+          suppressDefaultToolProgressMessages: true,
+          onToolStart: async (payload) => {
+            const toolName = payload.name?.trim();
+            pushPreviewToolProgress(toolName ? `tool: ${toolName}` : "tool running");
+          },
+          onItemEvent: async (payload) => {
+            pushPreviewToolProgress(
+              payload.progressText ?? payload.summary ?? payload.title ?? payload.name,
+            );
+          },
+          onPlanUpdate: async (payload) => {
+            if (payload.phase !== "update") {
+              return;
+            }
+            pushPreviewToolProgress(payload.explanation ?? payload.steps?.[0] ?? "planning");
+          },
+          onApprovalEvent: async (payload) => {
+            if (payload.phase !== "requested") {
+              return;
+            }
+            pushPreviewToolProgress(
+              payload.command ? `approval: ${payload.command}` : "approval requested",
+            );
+          },
+          onCommandOutput: async (payload) => {
+            if (payload.phase !== "end") {
+              return;
+            }
+            pushPreviewToolProgress(formatMatrixCommandOutputToolProgress(payload));
+          },
+          onPatchSummary: async (payload) => {
+            if (payload.phase !== "end") {
+              return;
+            }
+            pushPreviewToolProgress(payload.summary ?? payload.title ?? "patch applied");
+          },
+        };
+      };
 
       const getDisplayableDraftText = () => {
         const nextDraftBoundaryOffset = pendingDraftBoundaries.find(
@@ -1770,6 +1884,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
                 onPartialReply: draftStream
                   ? (payload) => {
                       latestDraftFullText = payload.text ?? "";
+                      suppressPreviewToolProgressForAnswerText(latestDraftFullText);
                       updateDraftFromLatestFullText();
                     }
                   : undefined,
@@ -1787,8 +1902,10 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
                 onAssistantMessageStart: draftStream
                   ? () => {
                       resetDraftBlockOffsets();
+                      resetPreviewToolProgress();
                     }
                   : undefined,
+                ...buildPreviewToolProgressReplyOptions(),
                 onModelSelected,
               },
             });

@@ -1,5 +1,4 @@
 import path from "node:path";
-import { fileTypeFromBuffer } from "file-type";
 import { type MediaKind, mediaKindFromMime } from "./constants.js";
 
 /** @internal */
@@ -21,6 +20,7 @@ const EXT_BY_MIME: Record<string, string> = {
   "audio/opus": ".opus",
   "audio/x-m4a": ".m4a",
   "audio/mp4": ".m4a",
+  "audio/x-caf": ".caf",
   "video/mp4": ".mp4",
   "video/quicktime": ".mov",
   "application/pdf": ".pdf",
@@ -66,6 +66,8 @@ const AUDIO_FILE_EXTENSIONS = new Set([
   ".wav",
 ]);
 
+let fileTypeModulePromise: Promise<typeof import("file-type")> | undefined;
+
 export function normalizeMimeType(mime?: string | null): string | undefined {
   if (!mime) {
     return undefined;
@@ -87,11 +89,28 @@ async function sniffMime(buffer?: Buffer): Promise<string | undefined> {
     return undefined;
   }
   try {
+    fileTypeModulePromise ??= import("file-type");
+    const { fileTypeFromBuffer } = await fileTypeModulePromise;
     const type = await fileTypeFromBuffer(sliceMimeSniffBuffer(buffer));
-    return type?.mime ?? undefined;
+    if (type?.mime) {
+      return type.mime;
+    }
   } catch {
-    return undefined;
+    // fall through to manual magic-byte sniffs
   }
+  return sniffKnownAudioMagic(buffer);
+}
+
+// Fallbacks for audio containers `file-type` doesn't recognize natively (e.g.
+// Apple's CAF, used by iMessage voice memos when produced by `afconvert`).
+// Without this the host-local-media validator drops these buffers as unknown
+// binary blobs because the sniff returns undefined, even though the file is
+// a valid audio container.
+function sniffKnownAudioMagic(buffer: Buffer): string | undefined {
+  if (buffer.byteLength >= 4 && buffer.toString("ascii", 0, 4) === "caff") {
+    return "audio/x-caf";
+  }
+  return undefined;
 }
 
 export function getFileExtension(filePath?: string | null): string | undefined {

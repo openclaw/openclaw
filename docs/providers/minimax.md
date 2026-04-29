@@ -17,10 +17,10 @@ MiniMax also provides:
 
 Provider split:
 
-| Provider ID      | Auth    | Capabilities                                                    |
-| ---------------- | ------- | --------------------------------------------------------------- |
-| `minimax`        | API key | Text, image generation, image understanding, speech, web search |
-| `minimax-portal` | OAuth   | Text, image generation, image understanding, speech             |
+| Provider ID      | Auth    | Capabilities                                                                                        |
+| ---------------- | ------- | --------------------------------------------------------------------------------------------------- |
+| `minimax`        | API key | Text, image generation, music generation, video generation, image understanding, speech, web search |
+| `minimax-portal` | OAuth   | Text, image generation, music generation, video generation, image understanding, speech             |
 
 ## Built-in catalog
 
@@ -235,6 +235,13 @@ Both `minimax` and `minimax-portal` register `image_generate` with the same
 `image-01` model. API-key setups use `MINIMAX_API_KEY`; OAuth setups can use
 the bundled `minimax-portal` auth path instead.
 
+Image generation always uses MiniMax's dedicated image endpoint
+(`/v1/image_generation`) and ignores `models.providers.minimax.baseUrl`,
+since that field configures the chat/Anthropic-compatible base URL. Set
+`MINIMAX_API_HOST=https://api.minimaxi.com` to route image generation
+through the CN endpoint; the default global endpoint is
+`https://api.minimax.io`.
+
 When onboarding or API-key setup writes explicit `models.providers.minimax`
 entries, OpenClaw materializes `MiniMax-M2.7` and
 `MiniMax-M2.7-highspeed` as text-only chat models. Image understanding is
@@ -279,10 +286,11 @@ The bundled `minimax` plugin registers MiniMax T2A v2 as a speech provider for
 
 ### Music generation
 
-The bundled `minimax` plugin also registers music generation through the shared
-`music_generate` tool.
+The bundled MiniMax plugin registers music generation through the shared
+`music_generate` tool for both `minimax` and `minimax-portal`.
 
 - Default music model: `minimax/music-2.6`
+- OAuth music model: `minimax-portal/music-2.6`
 - Also supports `minimax/music-2.5` and `minimax/music-2.0`
 - Prompt controls: `lyrics`, `instrumental`, `durationSeconds`
 - Output format: `mp3`
@@ -308,10 +316,11 @@ See [Music Generation](/tools/music-generation) for shared tool parameters, prov
 
 ### Video generation
 
-The bundled `minimax` plugin also registers video generation through the shared
-`video_generate` tool.
+The bundled MiniMax plugin registers video generation through the shared
+`video_generate` tool for both `minimax` and `minimax-portal`.
 
 - Default video model: `minimax/MiniMax-Hailuo-2.3`
+- OAuth video model: `minimax-portal/MiniMax-Hailuo-2.3`
 - Modes: text-to-video and single-image reference flows
 - Supports `aspectRatio` and `resolution`
 
@@ -418,6 +427,7 @@ See [MiniMax Search](/tools/minimax-search) for full web search configuration an
     - OpenClaw normalizes MiniMax coding-plan usage to the same `% left` display used by other providers. MiniMax's raw `usage_percent` / `usagePercent` fields are remaining quota, not consumed quota, so OpenClaw inverts them. Count-based fields win when present.
     - When the API returns `model_remains`, OpenClaw prefers the chat-model entry, derives the window label from `start_time` / `end_time` when needed, and includes the selected model name in the plan label so coding-plan windows are easier to distinguish.
     - Usage snapshots treat `minimax`, `minimax-cn`, and `minimax-portal` as the same MiniMax quota surface, and prefer stored MiniMax OAuth before falling back to Coding Plan key env vars.
+
   </Accordion>
 </AccordionGroup>
 

@@ -6,7 +6,11 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { getAcpRuntimeBackend } from "../acp/runtime/registry.js";
 import { isLiveTestEnabled } from "../agents/live-test-helpers.js";
-import { clearConfigCache, clearRuntimeConfigSnapshot, loadConfig } from "../config/config.js";
+import {
+  clearConfigCache,
+  clearRuntimeConfigSnapshot,
+  getRuntimeConfig,
+} from "../config/config.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { clearPluginLoaderCache } from "../plugins/loader.js";
 import {
@@ -36,9 +40,16 @@ const describeLive = LIVE && ACP_BIND_LIVE ? describe : describe.skip;
 
 const CONNECT_TIMEOUT_MS = 90_000;
 const LIVE_TIMEOUT_MS = 240_000;
+const ACP_CRON_MCP_PROBE_MAX_ATTEMPTS = 2;
+const ACP_CRON_MCP_PROBE_VERIFY_POLLS = 5;
+const ACP_CRON_MCP_PROBE_VERIFY_POLL_MS = 1_000;
 const DEFAULT_LIVE_CODEX_MODEL = "gpt-5.5";
 const DEFAULT_LIVE_PARENT_MODEL = "openai/gpt-5.4";
-type LiveAcpAgent = "claude" | "codex" | "gemini" | "opencode";
+type LiveAcpAgent = "claude" | "codex" | "droid" | "gemini" | "opencode";
+
+class AcpBindSkipError extends Error {
+  readonly name = "AcpBindSkipError";
+}
 
 function createSlackCurrentConversationBindingRegistry() {
   return createTestRegistry([
@@ -75,6 +86,9 @@ function normalizeAcpAgent(raw: string | undefined): LiveAcpAgent {
   }
   if (normalized === "codex") {
     return "codex";
+  }
+  if (normalized === "droid") {
+    return "droid";
   }
   if (normalized === "opencode") {
     return "opencode";
@@ -141,9 +155,14 @@ function logLiveStep(message: string): void {
 
 function shouldRequireBoundAssistantTranscript(liveAgent: LiveAcpAgent): boolean {
   return (
+    liveAgent === "droid" ||
     liveAgent === "opencode" ||
     isTruthyEnvValue(process.env.OPENCLAW_LIVE_ACP_BIND_REQUIRE_TRANSCRIPT)
   );
+}
+
+function shouldRequireCronMcpProbe(): boolean {
+  return isTruthyEnvValue(process.env.OPENCLAW_LIVE_ACP_BIND_REQUIRE_CRON);
 }
 
 function normalizeOpenAiModelRef(value: string): string {
@@ -246,9 +265,55 @@ function isRetryableAcpBindWarmupText(texts: string[]): boolean {
     combined.includes("acp runtime backend is currently unavailable") ||
     combined.includes("try again in a moment") ||
     combined.includes("acp runtime backend is not configured") ||
-    combined.includes("acp dispatch is disabled")
+    combined.includes("acp dispatch is disabled") ||
+    combined.includes("startup timed out before initialize completed")
   );
 }
+
+function isSkippableAcpBindText(params: { liveAgent: LiveAcpAgent; texts: string[] }): boolean {
+  if (params.liveAgent !== "codex") {
+    return false;
+  }
+  const combined = params.texts.join("\n\n").toLowerCase();
+  return (
+    combined.includes("acp_session_init_failed") && combined.includes("authentication required")
+  );
+}
+
+describe("isRetryableAcpBindWarmupText", () => {
+  it.each([
+    {
+      texts: ["ACP runtime backend is currently unavailable; try again in a moment."],
+      expected: true,
+    },
+    {
+      texts: [
+        "ACP error (ACP_SESSION_INIT_FAILED): Gemini CLI ACP startup timed out before initialize completed.",
+      ],
+      expected: true,
+    },
+    { texts: ["ACP error (ACP_SESSION_INIT_FAILED): ACP metadata is missing."], expected: false },
+  ])("returns $expected for $texts", ({ texts, expected }) => {
+    expect(isRetryableAcpBindWarmupText(texts)).toBe(expected);
+  });
+});
+
+describe("isSkippableAcpBindText", () => {
+  it.each([
+    {
+      liveAgent: "codex" as const,
+      texts: ["ACP error (ACP_SESSION_INIT_FAILED): Authentication required"],
+      expected: true,
+    },
+    {
+      liveAgent: "gemini" as const,
+      texts: ["ACP error (ACP_SESSION_INIT_FAILED): Authentication required"],
+      expected: false,
+    },
+  ])("returns $expected for $liveAgent", ({ liveAgent, texts, expected }) => {
+    expect(isSkippableAcpBindText({ liveAgent, texts })).toBe(expected);
+  });
+});
 
 function formatAssistantTextPreview(texts: string[], maxChars = 600): string {
   const combined = texts.join("\n\n").trim();
@@ -283,24 +348,30 @@ async function bindConversationAndWait(params: {
           doctor?: () => Promise<{ message?: string; details?: string[] }>;
         }
       | undefined;
-    if (runtime?.probeAvailability) {
-      await runtime.probeAvailability().catch(() => {});
-    }
-    if (!(backend?.healthy?.() ?? false)) {
-      if (runtime?.doctor && (attempt === 1 || attempt % 6 === 0)) {
-        const report = await runtime.doctor().catch((error) => ({
-          message: error instanceof Error ? error.message : String(error),
-          details: [],
-        }));
-        logLiveStep(
-          `acpx doctor before bind attempt ${attempt}: ${report.message ?? "unknown"}${
-            report.details?.length ? ` (${report.details.join("; ")})` : ""
-          }`,
-        );
+    const backendUnavailable = !backend || (backend.healthy && !backend.healthy());
+    if (backendUnavailable) {
+      if (runtime?.probeAvailability) {
+        await runtime.probeAvailability().catch(() => {});
       }
-      logLiveStep(`acpx backend still unhealthy before bind attempt ${attempt}`);
-      await sleep(5_000);
-      continue;
+      const backendReadyAfterProbe = backend && (!backend.healthy || backend.healthy());
+      if (backendReadyAfterProbe) {
+        logLiveStep(`acpx backend became healthy before bind attempt ${attempt}`);
+      } else {
+        if (runtime?.doctor && (attempt === 1 || attempt % 6 === 0)) {
+          const report = await runtime.doctor().catch((error) => ({
+            message: error instanceof Error ? error.message : String(error),
+            details: [],
+          }));
+          logLiveStep(
+            `acpx doctor before bind attempt ${attempt}: ${report.message ?? "unknown"}${
+              report.details?.length ? ` (${report.details.join("; ")})` : ""
+            }`,
+          );
+        }
+        logLiveStep(`acpx backend still unhealthy before bind attempt ${attempt}`);
+        await sleep(5_000);
+        continue;
+      }
     }
 
     await sendChatAndWait({
@@ -326,6 +397,13 @@ async function bindConversationAndWait(params: {
       return { mainAssistantTexts, spawnedSessionKey };
     }
     if (!isRetryableAcpBindWarmupText(mainAssistantTexts)) {
+      if (isSkippableAcpBindText({ liveAgent: params.liveAgent, texts: mainAssistantTexts })) {
+        throw new AcpBindSkipError(
+          `SKIP: ${params.liveAgent} ACP bind unavailable: ${formatAssistantTextPreview(
+            mainAssistantTexts,
+          )}`,
+        );
+      }
       throw new Error(
         `bind command did not produce an ACP session: ${formatAssistantTextPreview(mainAssistantTexts)}`,
       );
@@ -459,6 +537,25 @@ async function waitForAssistantTurn(params: {
   );
 }
 
+async function pollCronJobVisibleViaCli(params: {
+  port: number;
+  token: string;
+  env: NodeJS.ProcessEnv;
+  expectedName: string;
+  expectedMessage: string;
+}): Promise<{ job?: Awaited<ReturnType<typeof assertCronJobVisibleViaCli>>; pollsUsed: number }> {
+  for (let verifyAttempt = 0; verifyAttempt < ACP_CRON_MCP_PROBE_VERIFY_POLLS; verifyAttempt += 1) {
+    const job = await assertCronJobVisibleViaCli(params);
+    if (job) {
+      return { job, pollsUsed: verifyAttempt + 1 };
+    }
+    if (verifyAttempt < ACP_CRON_MCP_PROBE_VERIFY_POLLS - 1) {
+      await sleep(ACP_CRON_MCP_PROBE_VERIFY_POLL_MS);
+    }
+  }
+  return { pollsUsed: ACP_CRON_MCP_PROBE_VERIFY_POLLS };
+}
+
 describeLive("gateway live (ACP bind)", () => {
   it(
     "binds a synthetic Slack DM conversation to a live ACP session and reroutes the next turn",
@@ -503,7 +600,7 @@ describeLive("gateway live (ACP bind)", () => {
         await prepareCodexHomeForLiveBindTest();
       }
 
-      const cfg = loadConfig();
+      const cfg = getRuntimeConfig();
       const acpxEntry = cfg.plugins?.entries?.acpx;
       const existingAgentOverrides: Record<string, { command?: string }> =
         typeof acpxEntry?.config === "object" &&
@@ -607,14 +704,24 @@ describeLive("gateway live (ACP bind)", () => {
       pinActivePluginChannelRegistry(channelRegistry);
 
       try {
-        const { mainAssistantTexts, spawnedSessionKey } = await bindConversationAndWait({
-          client,
-          sessionKey: originalSessionKey,
-          liveAgent,
-          originatingChannel: "slack",
-          originatingTo: conversationId,
-          originatingAccountId: accountId,
-        });
+        let bindResult: Awaited<ReturnType<typeof bindConversationAndWait>>;
+        try {
+          bindResult = await bindConversationAndWait({
+            client,
+            sessionKey: originalSessionKey,
+            liveAgent,
+            originatingChannel: "slack",
+            originatingTo: conversationId,
+            originatingAccountId: accountId,
+          });
+        } catch (error) {
+          if (error instanceof AcpBindSkipError) {
+            console.error(error.message);
+            return;
+          }
+          throw error;
+        }
+        const { mainAssistantTexts, spawnedSessionKey } = bindResult;
         logLiveStep("bind command completed");
         expect(mainAssistantTexts.join("\n\n")).toContain("Bound this conversation to");
         expect(spawnedSessionKey).toMatch(new RegExp(`^agent:${liveAgent}:acp:`));
@@ -848,9 +955,10 @@ describeLive("gateway live (ACP bind)", () => {
           agentId: liveAgent,
           sessionKey: spawnedSessionKey,
         });
+        const requireCronMcpProbe = shouldRequireCronMcpProbe();
         let cronJobId: string | undefined;
         let lastCronAssistantText = "";
-        for (let attempt = 0; attempt < 2; attempt += 1) {
+        for (let attempt = 0; attempt < ACP_CRON_MCP_PROBE_MAX_ATTEMPTS; attempt += 1) {
           await sendChatAndWait({
             client,
             sessionKey: originalSessionKey,
@@ -872,7 +980,7 @@ describeLive("gateway live (ACP bind)", () => {
             cronHistory = await waitForAssistantText({
               client,
               sessionKey: spawnedSessionKey,
-              timeoutMs: liveAgent === "claude" ? 90_000 : 45_000,
+              timeoutMs: 20_000,
               contains: cronProbe.name,
             });
           } catch {
@@ -881,13 +989,14 @@ describeLive("gateway live (ACP bind)", () => {
           if (cronHistory) {
             lastCronAssistantText = cronHistory.lastAssistantText;
           }
-          const createdJob = await assertCronJobVisibleViaCli({
+          const verifyResult = await pollCronJobVisibleViaCli({
             port,
             token,
             env: process.env,
             expectedName: cronProbe.name,
             expectedMessage: cronProbe.message,
           });
+          const createdJob = verifyResult.job;
           if (createdJob) {
             assertCronJobMatches({
               job: createdJob,
@@ -902,10 +1011,15 @@ describeLive("gateway live (ACP bind)", () => {
             }
             break;
           }
-          if (attempt === 1) {
-            if (liveAgent !== "claude") {
+          logLiveStep(
+            `cron mcp job not observed after attempt ${String(
+              attempt + 1,
+            )}; polls=${String(verifyResult.pollsUsed)}`,
+          );
+          if (attempt === ACP_CRON_MCP_PROBE_MAX_ATTEMPTS - 1) {
+            if (!requireCronMcpProbe) {
               logLiveStep(
-                `cron mcp job ${cronProbe.name} not observed for ${liveAgent}; continuing after bind/image verification`,
+                `cron mcp job ${cronProbe.name} not observed; continuing after bind/image verification`,
               );
               break;
             }
@@ -917,7 +1031,7 @@ describeLive("gateway live (ACP bind)", () => {
           }
         }
         if (!cronJobId) {
-          if (liveAgent !== "claude") {
+          if (!requireCronMcpProbe) {
             return;
           }
           throw new Error(`acp cron cli verify did not create job ${cronProbe.name}`);

@@ -362,7 +362,8 @@ export function resolveExistingUsageSessionFile(params: {
 export async function loadCostUsageSummary(params?: {
   startMs?: number;
   endMs?: number;
-  days?: number; // Deprecated, for backwards compatibility
+  /** @deprecated Use startMs/endMs. */
+  days?: number;
   config?: OpenClawConfig;
   agentId?: string;
 }): Promise<CostUsageSummary> {

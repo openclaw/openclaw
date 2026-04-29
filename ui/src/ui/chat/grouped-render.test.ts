@@ -26,12 +26,7 @@ vi.mock("../markdown.ts", () => ({
 }));
 
 vi.mock("../icons.ts", () => ({
-  icons: new Proxy(
-    {},
-    {
-      get: () => "",
-    },
-  ),
+  icons: {},
 }));
 
 vi.mock("../views/agents-utils.ts", () => {
@@ -94,13 +89,6 @@ vi.mock("../tool-display.ts", () => ({
   }),
 }));
 
-vi.mock("./speech.ts", () => ({
-  isTtsSpeaking: () => false,
-  isTtsSupported: () => false,
-  speakText: () => false,
-  stopTts: () => undefined,
-}));
-
 type RenderMessageGroupOptions = Parameters<typeof renderMessageGroup>[1];
 
 function renderAssistantMessage(
@@ -109,6 +97,40 @@ function renderAssistantMessage(
   opts: Partial<RenderMessageGroupOptions> = {},
 ) {
   renderGroupedMessage(container, message, "assistant", opts);
+}
+
+function renderAssistantMessages(
+  container: HTMLElement,
+  messages: unknown[],
+  opts: Partial<RenderMessageGroupOptions> = {},
+) {
+  const timestamp =
+    typeof messages[0] === "object" &&
+    messages[0] !== null &&
+    typeof (messages[0] as { timestamp?: unknown }).timestamp === "number"
+      ? (messages[0] as { timestamp: number }).timestamp
+      : Date.now();
+  const group: MessageGroup = {
+    kind: "group",
+    key: "assistant-group",
+    role: "assistant",
+    messages: messages.map((message, index) => ({
+      key: `assistant-message-${index}`,
+      message,
+    })),
+    timestamp,
+    isStreaming: false,
+  };
+  render(
+    renderMessageGroup(group, {
+      showReasoning: true,
+      showToolCalls: true,
+      assistantName: "OpenClaw",
+      assistantAvatar: null,
+      ...opts,
+    }),
+    container,
+  );
 }
 
 function renderGroupedMessage(
@@ -233,44 +255,63 @@ afterEach(() => {
 });
 
 describe("grouped chat rendering", () => {
-  it("positions delete confirm by message side", () => {
-    const renderDeletable = (role: "user" | "assistant") => {
-      const container = document.createElement("div");
-      clearDeleteConfirmSkip();
-      renderGroupedMessage(
-        container,
-        {
-          role,
-          content: `hello from ${role}`,
-          timestamp: 1000,
-        },
-        role,
-        { onDelete: vi.fn() },
-      );
-      return container;
-    };
+  it("does not render the stale assistant read-aloud footer action", () => {
+    const container = document.createElement("div");
+    renderAssistantMessage(container, {
+      role: "assistant",
+      content: "hello from assistant",
+      timestamp: 1000,
+    });
 
-    const userContainer = renderDeletable("user");
-    const userDeleteButton = userContainer.querySelector<HTMLButtonElement>(
+    expect(container.querySelector(".chat-tts-btn")).toBeNull();
+    expect(container.querySelector('[aria-label="Read aloud"]')).toBeNull();
+  });
+
+  it("positions delete confirm by message side", () => {
+    const container = document.createElement("div");
+    clearDeleteConfirmSkip();
+    renderMessageGroups(
+      container,
+      [
+        createMessageGroup(
+          {
+            role: "user",
+            content: "hello from user",
+            timestamp: 1000,
+          },
+          "user",
+        ),
+        createMessageGroup(
+          {
+            role: "assistant",
+            content: "hello from assistant",
+            timestamp: 1001,
+          },
+          "assistant",
+        ),
+      ],
+      { onDelete: vi.fn() },
+    );
+
+    const userDeleteButton = container.querySelector<HTMLButtonElement>(
       ".chat-group.user .chat-group-delete",
     );
     expect(userDeleteButton).not.toBeNull();
     userDeleteButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
-    const userConfirm = userContainer.querySelector<HTMLElement>(
+    const userConfirm = container.querySelector<HTMLElement>(
       ".chat-group.user .chat-delete-confirm",
     );
     expect(userConfirm).not.toBeNull();
     expect(userConfirm?.classList.contains("chat-delete-confirm--left")).toBe(true);
 
-    const assistantContainer = renderDeletable("assistant");
-    const assistantDeleteButton = assistantContainer.querySelector<HTMLButtonElement>(
+    const assistantDeleteButton = container.querySelector<HTMLButtonElement>(
       ".chat-group.assistant .chat-group-delete",
     );
     expect(assistantDeleteButton).not.toBeNull();
     assistantDeleteButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
-    const assistantConfirm = assistantContainer.querySelector<HTMLElement>(
+    const assistantConfirm = container.querySelector<HTMLElement>(
       ".chat-group.assistant .chat-delete-confirm",
     );
     expect(assistantConfirm).not.toBeNull();
@@ -321,6 +362,32 @@ describe("grouped chat rendering", () => {
       10_000,
     );
     expect(outputHeavy.querySelector(".msg-meta__ctx")?.textContent).toBe("10% ctx");
+  });
+
+  it("uses the largest single assistant call for grouped context usage", () => {
+    const container = document.createElement("div");
+
+    renderAssistantMessages(
+      container,
+      [
+        {
+          role: "assistant",
+          content: "Checking",
+          usage: { input: 105_944, output: 100 },
+          timestamp: 1000,
+        },
+        {
+          role: "assistant",
+          content: "Done",
+          usage: { input: 108_577, output: 100 },
+          timestamp: 1001,
+        },
+      ],
+      { contextWindow: 258_400 },
+    );
+
+    expect(container.querySelector(".msg-meta__ctx")?.textContent).toBe("42% ctx");
+    expect(container.textContent).toContain("↑214.5k");
   });
 
   it("renders full dates with message and streaming timestamps", () => {
@@ -660,11 +727,16 @@ describe("grouped chat rendering", () => {
       id: "user-history-document",
       role: "user",
       content: "",
-      MediaPath: "/tmp/openclaw/user-upload.pdf",
+      MediaPath: "/__openclaw__/media/user-upload.pdf",
       MediaType: "application/pdf",
       timestamp: Date.now(),
     });
     expect(container.querySelector(".chat-message-image")).toBeNull();
+    const documentLink = container.querySelector<HTMLAnchorElement>(
+      ".chat-assistant-attachment-card__link",
+    );
+    expect(documentLink?.textContent).toContain("user-upload.pdf");
+    expect(documentLink?.getAttribute("href")).toBe("/__openclaw__/media/user-upload.pdf");
   });
 
   it("fetches managed chat images with auth and renders blob previews", async () => {

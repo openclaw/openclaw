@@ -2,6 +2,10 @@ import type {
   GeneratedImageAsset,
   ImageGenerationProvider,
 } from "openclaw/plugin-sdk/image-generation";
+import {
+  imageFileExtensionForMimeType,
+  toImageDataUrl,
+} from "openclaw/plugin-sdk/image-generation";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
@@ -16,15 +20,13 @@ import {
   type SsrFPolicy,
   ssrfPolicyFromDangerouslyAllowPrivateNetwork,
 } from "openclaw/plugin-sdk/ssrf-runtime";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
-} from "openclaw/plugin-sdk/text-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 
 const DEFAULT_FAL_BASE_URL = "https://fal.run";
 const DEFAULT_FAL_IMAGE_MODEL = "fal-ai/flux/dev";
 const DEFAULT_FAL_EDIT_SUBPATH = "image-to-image";
 const DEFAULT_OUTPUT_FORMAT = "png";
+const FAL_OUTPUT_FORMATS = ["png", "jpeg"] as const;
 const FAL_SUPPORTED_SIZES = [
   "1024x1024",
   "1024x1536",
@@ -213,22 +215,6 @@ function resolveFalImageSize(params: {
   return undefined;
 }
 
-function toDataUri(buffer: Buffer, mimeType: string): string {
-  return `data:${mimeType};base64,${buffer.toString("base64")}`;
-}
-
-function fileExtensionForMimeType(mimeType: string | undefined): string {
-  const normalized = normalizeOptionalLowercaseString(mimeType);
-  if (!normalized) {
-    return "png";
-  }
-  if (normalized.includes("jpeg")) {
-    return "jpg";
-  }
-  const slashIndex = normalized.indexOf("/");
-  return slashIndex >= 0 ? normalized.slice(slashIndex + 1) || "png" : "png";
-}
-
 async function fetchImageBuffer(
   url: string,
   networkPolicy?: FalNetworkPolicy,
@@ -292,6 +278,9 @@ export function buildFalImageGenerationProvider(): ImageGenerationProvider {
         aspectRatios: [...FAL_SUPPORTED_ASPECT_RATIOS],
         resolutions: ["1K", "2K", "4K"],
       },
+      output: {
+        formats: [...FAL_OUTPUT_FORMATS],
+      },
     },
     async generateImage(req) {
       const auth = await resolveApiKeyForProvider({
@@ -333,7 +322,7 @@ export function buildFalImageGenerationProvider(): ImageGenerationProvider {
       const requestBody: Record<string, unknown> = {
         prompt: req.prompt,
         num_images: req.count ?? 1,
-        output_format: DEFAULT_OUTPUT_FORMAT,
+        output_format: req.outputFormat ?? DEFAULT_OUTPUT_FORMAT,
       };
       if (imageSize !== undefined) {
         requestBody.image_size = imageSize;
@@ -344,7 +333,7 @@ export function buildFalImageGenerationProvider(): ImageGenerationProvider {
         if (!input) {
           throw new Error("fal image edit request missing reference image");
         }
-        requestBody.image_url = toDataUri(input.buffer, input.mimeType);
+        requestBody.image_url = toImageDataUrl(input);
       }
       const { response, release } = await falFetchGuard({
         url: `${baseUrl}/${model}`,
@@ -374,7 +363,7 @@ export function buildFalImageGenerationProvider(): ImageGenerationProvider {
           images.push({
             buffer: downloaded.buffer,
             mimeType: downloaded.mimeType,
-            fileName: `image-${imageIndex}.${fileExtensionForMimeType(
+            fileName: `image-${imageIndex}.${imageFileExtensionForMimeType(
               downloaded.mimeType || entry.content_type,
             )}`,
           });

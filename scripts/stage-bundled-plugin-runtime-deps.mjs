@@ -8,6 +8,7 @@ import { resolveNpmRunner } from "./npm-runner.mjs";
 
 const TRANSIENT_TEMP_REMOVE_ERROR_CODES = new Set(["EBUSY", "ENOTEMPTY", "EPERM"]);
 const TEMP_REMOVE_RETRY_DELAYS_MS = [10, 25, 50];
+const TEMP_OWNER_FILE = "owner.json";
 
 function readJson(filePath) {
   return JSON.parse(fs.readFileSync(filePath, "utf8"));
@@ -24,8 +25,31 @@ function readOptionalUtf8(filePath) {
   return fs.readFileSync(filePath, "utf8");
 }
 
-function removePathIfExists(targetPath) {
-  fs.rmSync(targetPath, { recursive: true, force: true });
+function removePathIfExists(targetPath, options = {}) {
+  const retryDelays = options.retryTransient ? TEMP_REMOVE_RETRY_DELAYS_MS : [];
+  for (let attempt = 0; attempt <= retryDelays.length; attempt += 1) {
+    try {
+      fs.rmSync(targetPath, { recursive: true, force: true });
+      return true;
+    } catch (error) {
+      if (!isTransientTempRemoveError(error)) {
+        throw error;
+      }
+      const delay = retryDelays[attempt];
+      if (delay === undefined) {
+        if (options.ignoreTransient) {
+          return false;
+        }
+        throw error;
+      }
+      sleepSync(delay);
+    }
+  }
+  return true;
+}
+
+function removeOwnedTempPathBestEffort(targetPath) {
+  return removePathIfExists(targetPath, { retryTransient: true, ignoreTransient: true });
 }
 
 function isTransientTempRemoveError(error) {
@@ -48,13 +72,26 @@ function makeTempDir(parentDir, prefix) {
   return fs.mkdtempSync(path.join(parentDir, prefix));
 }
 
+function writeRuntimeDepsTempOwner(tempDir) {
+  writeJson(path.join(tempDir, TEMP_OWNER_FILE), {
+    pid: process.pid,
+    createdAtMs: Date.now(),
+  });
+}
+
+function makeOwnedTempDir(parentDir, prefix) {
+  const tempDir = makeTempDir(parentDir, prefix);
+  writeRuntimeDepsTempOwner(tempDir);
+  return tempDir;
+}
+
 function sanitizeTempPrefixSegment(value) {
   const normalized = value.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/-+/g, "-");
   return normalized.length > 0 ? normalized : "plugin";
 }
 
 function makePluginOwnedTempDir(pluginDir, label) {
-  return makeTempDir(pluginDir, `.openclaw-runtime-deps-${label}-`);
+  return makeOwnedTempDir(pluginDir, `.openclaw-runtime-deps-${label}-`);
 }
 
 function assertPathIsNotSymlink(targetPath, label) {
@@ -78,19 +115,21 @@ function replaceDirAtomically(targetPath, sourcePath) {
     targetParentDir,
     `.openclaw-runtime-deps-backup-${sanitizeTempPrefixSegment(path.basename(targetPath))}-`,
   );
-  removePathIfExists(backupPath);
+  removePathIfExists(backupPath, { retryTransient: true });
 
   let movedExistingTarget = false;
   try {
     if (fs.existsSync(targetPath)) {
       fs.renameSync(targetPath, backupPath);
+      writeRuntimeDepsTempOwner(backupPath);
       movedExistingTarget = true;
     }
     fs.renameSync(sourcePath, targetPath);
-    removePathIfExists(backupPath);
+    removeOwnedTempPathBestEffort(backupPath);
   } catch (error) {
     if (movedExistingTarget && !fs.existsSync(targetPath) && fs.existsSync(backupPath)) {
       fs.renameSync(backupPath, targetPath);
+      removePathIfExists(path.join(targetPath, TEMP_OWNER_FILE));
     }
     throw error;
   }
@@ -100,7 +139,7 @@ function writeJsonAtomically(targetPath, value) {
   assertPathIsNotSymlink(targetPath, "write runtime deps stamp");
   const targetParentDir = path.dirname(targetPath);
   fs.mkdirSync(targetParentDir, { recursive: true });
-  const tempDir = makeTempDir(
+  const tempDir = makeOwnedTempDir(
     targetParentDir,
     `.openclaw-runtime-deps-stamp-${sanitizeTempPrefixSegment(path.basename(targetPath))}-`,
   );
@@ -112,7 +151,7 @@ function writeJsonAtomically(targetPath, value) {
     });
     fs.renameSync(tempPath, targetPath);
   } finally {
-    removePathIfExists(tempDir);
+    removeOwnedTempPathBestEffort(tempDir);
   }
 }
 
@@ -869,6 +908,11 @@ function runNpmInstall(params) {
     ...(params.npmRunner.env ?? process.env),
     CI: "1",
     npm_config_audit: "false",
+    npm_config_dry_run: "false",
+    npm_config_fetch_retries: process.env.npm_config_fetch_retries ?? "5",
+    npm_config_fetch_retry_maxtimeout: process.env.npm_config_fetch_retry_maxtimeout ?? "120000",
+    npm_config_fetch_retry_mintimeout: process.env.npm_config_fetch_retry_mintimeout ?? "10000",
+    npm_config_fetch_timeout: process.env.npm_config_fetch_timeout ?? "300000",
     npm_config_fund: "false",
     npm_config_legacy_peer_deps: "true",
     npm_config_loglevel: "error",
@@ -877,13 +921,15 @@ function runNpmInstall(params) {
     npm_config_save: "false",
     npm_config_yes: "true",
   };
-  const result = spawnSync(params.npmRunner.command, params.npmRunner.args, {
+  const runSpawnSync = params.spawnSyncImpl ?? spawnSync;
+  const result = runSpawnSync(params.npmRunner.command, params.npmRunner.args, {
     cwd: params.cwd,
     encoding: "utf8",
     env: npmEnv,
     shell: params.npmRunner.shell,
     stdio: ["ignore", "pipe", "pipe"],
     timeout: params.timeoutMs ?? 5 * 60 * 1000,
+    windowsHide: true,
     windowsVerbatimArguments: params.npmRunner.windowsVerbatimArguments,
   });
   if (result.status === 0) {
@@ -952,6 +998,35 @@ function readRuntimeDepsStamp(stampPath) {
   }
 }
 
+function readRuntimeDepsTempOwner(tempDir) {
+  try {
+    const owner = readJson(path.join(tempDir, TEMP_OWNER_FILE));
+    return owner && typeof owner === "object" ? owner : null;
+  } catch {
+    return null;
+  }
+}
+
+function isLiveProcess(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) {
+    return false;
+  }
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error?.code === "EPERM";
+  }
+}
+
+function shouldRemoveRuntimeDepsTempDir(tempDir) {
+  const owner = readRuntimeDepsTempOwner(tempDir);
+  if (!owner || typeof owner.pid !== "number") {
+    return true;
+  }
+  return !isLiveProcess(owner.pid);
+}
+
 function removeStaleRuntimeDepsTempDirs(pluginDir) {
   if (!fs.existsSync(pluginDir)) {
     return;
@@ -959,21 +1034,10 @@ function removeStaleRuntimeDepsTempDirs(pluginDir) {
   for (const entry of fs.readdirSync(pluginDir, { withFileTypes: true })) {
     if (entry.name.startsWith(".openclaw-runtime-deps-")) {
       const targetPath = path.join(pluginDir, entry.name);
-      for (let attempt = 0; attempt <= TEMP_REMOVE_RETRY_DELAYS_MS.length; attempt += 1) {
-        try {
-          removePathIfExists(targetPath);
-          break;
-        } catch (error) {
-          if (!isTransientTempRemoveError(error)) {
-            throw error;
-          }
-          const delay = TEMP_REMOVE_RETRY_DELAYS_MS[attempt];
-          if (delay === undefined) {
-            break;
-          }
-          sleepSync(delay);
-        }
+      if (!shouldRemoveRuntimeDepsTempDir(targetPath)) {
+        continue;
       }
+      removeOwnedTempPathBestEffort(targetPath);
     }
   }
 }
@@ -1069,7 +1133,7 @@ function stageInstalledRootRuntimeDeps(params) {
     });
     return true;
   } finally {
-    removePathIfExists(path.dirname(stagedNodeModulesDir));
+    removeOwnedTempPathBestEffort(path.dirname(stagedNodeModulesDir));
   }
 }
 
@@ -1161,7 +1225,7 @@ function installPluginRuntimeDeps(params) {
       generatedAt: new Date().toISOString(),
     });
   } finally {
-    removePathIfExists(tempInstallDir);
+    removeOwnedTempPathBestEffort(tempInstallDir);
   }
 }
 
@@ -1239,6 +1303,13 @@ export function stageBundledPluginRuntimeDeps(params = {}) {
     }
   }
 }
+
+export const __testing = {
+  removeStaleRuntimeDepsTempDirs,
+  replaceDirAtomically,
+  runNpmInstall,
+  writeRuntimeDepsTempOwner,
+};
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   stageBundledPluginRuntimeDeps();

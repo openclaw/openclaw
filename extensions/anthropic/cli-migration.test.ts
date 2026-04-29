@@ -20,9 +20,8 @@ vi.mock("./cli-auth-seam.js", async (importActual) => {
 });
 
 const { buildAnthropicCliMigrationResult, hasClaudeCliAuth } = await import("./cli-migration.js");
-const { registerSingleProviderPlugin } =
-  await import("../../test/helpers/plugins/plugin-registration.js");
-const { createTestWizardPrompter } = await import("../../test/helpers/plugins/setup-wizard.js");
+const { createTestWizardPrompter, registerSingleProviderPlugin } =
+  await import("openclaw/plugin-sdk/plugin-test-runtime");
 const { default: anthropicPlugin } = await import("./index.js");
 
 async function resolveAnthropicCliAuthMethod() {
@@ -122,7 +121,7 @@ describe("anthropic cli migration", () => {
             primary: "anthropic/claude-opus-4-7",
             fallbacks: ["anthropic/claude-opus-4-6", "openai/gpt-5.2"],
           },
-          embeddedHarness: { runtime: "claude-cli" },
+          agentRuntime: { id: "claude-cli" },
           models: {
             "anthropic/claude-opus-4-7": { alias: "Opus" },
             "anthropic/claude-sonnet-4-6": {},
@@ -153,7 +152,7 @@ describe("anthropic cli migration", () => {
     expect(result.configPatch).toEqual({
       agents: {
         defaults: {
-          embeddedHarness: { runtime: "claude-cli" },
+          agentRuntime: { id: "claude-cli" },
           models: {
             "openai/gpt-5.2": {},
             "anthropic/claude-opus-4-7": {},
@@ -184,7 +183,7 @@ describe("anthropic cli migration", () => {
       agents: {
         defaults: {
           model: { primary: "anthropic/claude-opus-4-7" },
-          embeddedHarness: { runtime: "claude-cli" },
+          agentRuntime: { id: "claude-cli" },
           models: {
             "anthropic/claude-opus-4-7": {},
             "anthropic/claude-sonnet-4-6": {},
@@ -325,7 +324,7 @@ describe("anthropic cli migration", () => {
             primary: "anthropic/claude-opus-4-7",
             fallbacks: ["anthropic/claude-opus-4-6", "openai/gpt-5.2"],
           },
-          embeddedHarness: { runtime: "claude-cli" },
+          agentRuntime: { id: "claude-cli" },
           models: {
             "anthropic/claude-opus-4-7": { alias: "Opus" },
             "anthropic/claude-opus-4-6": { alias: "Opus" },

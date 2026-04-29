@@ -9,10 +9,10 @@ const { messageQueueMock, messageAllowMock } = vi.hoisted(() => ({
   messageAllowMock: vi.fn(),
 }));
 
-vi.mock("openclaw/plugin-sdk/infra-runtime", () => ({
+vi.mock("openclaw/plugin-sdk/system-event-runtime", () => ({
   enqueueSystemEvent: (...args: unknown[]) => messageQueueMock(...args),
 }));
-vi.mock("openclaw/plugin-sdk/infra-runtime.js", () => ({
+vi.mock("openclaw/plugin-sdk/system-event-runtime.js", () => ({
   enqueueSystemEvent: (...args: unknown[]) => messageQueueMock(...args),
 }));
 vi.mock("openclaw/plugin-sdk/security-runtime", () => ({
@@ -263,6 +263,35 @@ describe("registerSlackMessageEvents", () => {
           ts: "123.456",
           user: "U_BOT",
           text: "preview edit",
+        },
+      },
+    });
+
+    expect(handleSlackMessage).not.toHaveBeenCalled();
+    expect(messageQueueMock).not.toHaveBeenCalled();
+  });
+
+  it("drops self-authored message_changed events that only include block user IDs", async () => {
+    const { handleSlackMessage } = await invokeRegisteredHandler({
+      eventName: "message",
+      overrides: { dmPolicy: "open" },
+      event: {
+        ...makeAssistantChangedEvent(),
+        message: {
+          ts: "123.456",
+          user: "U_BOT",
+          text: "preview edit with mention",
+          blocks: [
+            {
+              type: "rich_text",
+              elements: [
+                {
+                  type: "rich_text_section",
+                  elements: [{ type: "user", user_id: "UREAL123" }],
+                },
+              ],
+            },
+          ],
         },
       },
     });

@@ -28,6 +28,7 @@ import {
   resolveSessionFilePathOptions,
   resolveSessionPluginStatusLines,
   resolveSessionPluginTraceLines,
+  resolveFreshSessionTotalTokens,
   type SessionEntry,
   type SessionScope,
 } from "../config/sessions.js";
@@ -451,6 +452,7 @@ const formatMediaUnderstandingLine = (decisions?: ReadonlyArray<MediaUnderstandi
 const formatVoiceModeLine = (
   config?: OpenClawConfig,
   sessionEntry?: SessionEntry,
+  agentId?: string,
 ): string | null => {
   if (!config) {
     return null;
@@ -458,11 +460,33 @@ const formatVoiceModeLine = (
   const snapshot = resolveStatusTtsSnapshot({
     cfg: config,
     sessionAuto: sessionEntry?.ttsAuto,
+    agentId,
   });
   if (!snapshot) {
     return null;
   }
-  return `🔊 Voice: ${snapshot.autoMode} · provider=${snapshot.provider} · limit=${snapshot.maxLength} · summary=${snapshot.summarize ? "on" : "off"}`;
+  const parts = [`🔊 Voice: ${snapshot.autoMode}`, `provider=${snapshot.provider}`];
+  if (snapshot.persona) {
+    parts.push(`persona=${snapshot.persona}`);
+  }
+  if (snapshot.displayName) {
+    parts.push(`name=${snapshot.displayName}`);
+  }
+  if (snapshot.model) {
+    parts.push(`model=${snapshot.model}`);
+  }
+  if (snapshot.voice) {
+    parts.push(`voice=${snapshot.voice}`);
+  }
+  if (snapshot.baseUrl) {
+    parts.push(
+      snapshot.customBaseUrl
+        ? `endpoint=custom(${snapshot.baseUrl})`
+        : `endpoint=${snapshot.baseUrl}`,
+    );
+  }
+  parts.push(`limit=${snapshot.maxLength}`, `summary=${snapshot.summarize ? "on" : "off"}`);
+  return parts.join(" · ");
 };
 
 export function buildStatusMessage(args: StatusArgs): string {
@@ -548,7 +572,13 @@ export function buildStatusMessage(args: StatusArgs): string {
   let outputTokens = entry?.outputTokens;
   let cacheRead = entry?.cacheRead;
   let cacheWrite = entry?.cacheWrite;
-  let totalTokens = entry?.totalTokens ?? (entry?.inputTokens ?? 0) + (entry?.outputTokens ?? 0);
+  const freshTotalTokens = resolveFreshSessionTotalTokens(entry);
+  const allowTranscriptContextUsage = entry?.totalTokensFresh !== false;
+  let totalTokens =
+    freshTotalTokens ??
+    (entry?.totalTokensFresh === false
+      ? undefined
+      : (entry?.totalTokens ?? (entry?.inputTokens ?? 0) + (entry?.outputTokens ?? 0)));
 
   // Prefer prompt-size tokens from the session transcript when it looks larger
   // (cached prompt tokens are often missing from agent meta/store).
@@ -562,7 +592,10 @@ export function buildStatusMessage(args: StatusArgs): string {
     );
     if (logUsage) {
       const candidate = logUsage.promptTokens || logUsage.total;
-      if (!totalTokens || totalTokens === 0 || candidate > totalTokens) {
+      if (
+        allowTranscriptContextUsage &&
+        (!totalTokens || totalTokens === 0 || candidate > totalTokens)
+      ) {
         totalTokens = candidate;
       }
       if (!entry?.model && logUsage.model) {
@@ -890,7 +923,7 @@ export function buildStatusMessage(args: StatusArgs): string {
   const usageCostLine =
     usagePair && costLine ? `${usagePair} · ${costLine}` : (usagePair ?? costLine);
   const mediaLine = formatMediaUnderstandingLine(args.mediaDecisions);
-  const voiceLine = formatVoiceModeLine(args.config, args.sessionEntry);
+  const voiceLine = formatVoiceModeLine(args.config, args.sessionEntry, args.agentId);
 
   return [
     versionLine,

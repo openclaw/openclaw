@@ -607,15 +607,19 @@ export default definePluginEntry({
 
     api.registerService({
       id: "voicecall",
-      start: async () => {
+      start: () => {
         if (!config.enabled) {
           return;
         }
-        try {
-          await ensureRuntime();
-        } catch (err) {
-          api.logger.error(`[voice-call] Failed to start runtime: ${formatErrorMessage(err)}`);
+        if (!validation.valid) {
+          api.logger.warn(
+            `[voice-call] Runtime not started; setup incomplete: ${validation.errors.join("; ")}`,
+          );
+          return;
         }
+        void ensureRuntime().catch((err) => {
+          api.logger.error(`[voice-call] Failed to start runtime: ${formatErrorMessage(err)}`);
+        });
       },
       stop: async () => {
         if (runtimeState[VOICE_CALL_RUNTIME_STOP_PROMISE_KEY]) {

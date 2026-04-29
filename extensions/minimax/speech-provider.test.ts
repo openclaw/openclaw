@@ -3,10 +3,10 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const runFfmpegMock = vi.hoisted(() => vi.fn());
+const transcodeAudioBufferToOpusMock = vi.hoisted(() => vi.fn());
 
 vi.mock("openclaw/plugin-sdk/media-runtime", () => ({
-  runFfmpeg: runFfmpegMock,
+  transcodeAudioBufferToOpus: transcodeAudioBufferToOpusMock,
 }));
 
 import { buildMinimaxSpeechProvider } from "./speech-provider.js";
@@ -293,7 +293,7 @@ describe("buildMinimaxSpeechProvider", () => {
       };
       clearMinimaxAuthEnv();
       vi.stubGlobal("fetch", vi.fn());
-      runFfmpegMock.mockReset();
+      transcodeAudioBufferToOpusMock.mockReset();
     });
 
     afterEach(async () => {
@@ -333,7 +333,7 @@ describe("buildMinimaxSpeechProvider", () => {
       expect(body.model).toBe("speech-2.8-hd");
       expect(body.text).toBe("Hello world");
       expect(body.voice_setting.voice_id).toBe("English_expressive_narrator");
-      expect(runFfmpegMock).not.toHaveBeenCalled();
+      expect(transcodeAudioBufferToOpusMock).not.toHaveBeenCalled();
     });
 
     it("transcodes MiniMax MP3 to Opus for voice-note targets", async () => {
@@ -345,15 +345,7 @@ describe("buildMinimaxSpeechProvider", () => {
           headers: { "Content-Type": "application/json" },
         }),
       );
-      runFfmpegMock.mockImplementationOnce(async (args: string[]) => {
-        const outputPath = args.at(-1);
-        if (typeof outputPath !== "string") {
-          throw new Error("missing ffmpeg output path");
-        }
-        await import("node:fs/promises").then((fs) =>
-          fs.writeFile(outputPath, Buffer.from("fake-opus-data")),
-        );
-      });
+      transcodeAudioBufferToOpusMock.mockResolvedValueOnce(Buffer.from("fake-opus-data"));
 
       const result = await provider.synthesize({
         text: "Hello world",
@@ -367,10 +359,12 @@ describe("buildMinimaxSpeechProvider", () => {
       expect(result.fileExtension).toBe(".opus");
       expect(result.voiceCompatible).toBe(true);
       expect(result.audioBuffer.toString()).toBe("fake-opus-data");
-      expect(runFfmpegMock).toHaveBeenCalledWith(
-        expect.arrayContaining(["-c:a", "libopus", "-ar", "48000"]),
-        { timeoutMs: 30000 },
-      );
+      expect(transcodeAudioBufferToOpusMock).toHaveBeenCalledWith({
+        audioBuffer: Buffer.from("fake-mp3-data"),
+        inputExtension: "mp3",
+        tempPrefix: "tts-minimax-",
+        timeoutMs: 30000,
+      });
     });
 
     it("applies overrides", async () => {

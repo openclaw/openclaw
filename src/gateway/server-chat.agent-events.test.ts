@@ -8,8 +8,12 @@ vi.mock("./server-chat.persist-session-lifecycle.runtime.js", () => ({
     persistGatewaySessionLifecycleEventMock(...args),
 }));
 
-vi.mock("../config/config.js", () => ({
-  loadConfig: vi.fn(() => ({})),
+vi.mock("../config/io.js", () => ({
+  getRuntimeConfig: vi.fn(() => ({})),
+}));
+
+vi.mock("../config/io.js", () => ({
+  getRuntimeConfig: vi.fn(() => ({})),
 }));
 
 vi.mock("../infra/heartbeat-visibility.js", () => ({
@@ -24,7 +28,7 @@ vi.mock("./server-chat.load-gateway-session-row.runtime.js", () => ({
   loadGatewaySessionRow: vi.fn(),
 }));
 
-import { loadConfig } from "../config/config.js";
+import { getRuntimeConfig } from "../config/io.js";
 import { resolveHeartbeatVisibility } from "../infra/heartbeat-visibility.js";
 import {
   createAgentEventHandler,
@@ -36,7 +40,7 @@ import { loadGatewaySessionRow } from "./server-chat.load-gateway-session-row.ru
 
 describe("agent event handler", () => {
   beforeEach(() => {
-    vi.mocked(loadConfig).mockReturnValue({});
+    vi.mocked(getRuntimeConfig).mockReturnValue({});
     vi.mocked(resolveHeartbeatVisibility).mockReturnValue({
       showOk: false,
       showAlerts: true,
@@ -79,6 +83,7 @@ describe("agent event handler", () => {
       clearAgentRunContext,
       toolEventRecipients,
       sessionEventSubscribers,
+      loadGatewaySessionRowForSnapshot: loadGatewaySessionRow,
       lifecycleErrorRetryGraceMs: params?.lifecycleErrorRetryGraceMs,
       isChatSendRunActive: params?.isChatSendRunActive,
     });
@@ -211,6 +216,34 @@ describe("agent event handler", () => {
       message?: { content?: Array<{ text?: string }> };
     };
     expect(payload.message?.content?.[0]?.text).toBe("Hello  world ");
+    expect(sessionChatCalls(nodeSendToSession)).toHaveLength(1);
+    nowSpy?.mockRestore();
+  });
+
+  it("strips internal runtime context from assistant chat events", () => {
+    const { broadcast, nodeSendToSession, nowSpy } = emitRun1AssistantText(
+      createHarness({ now: 1_000 }),
+      [
+        "Visible before.",
+        "",
+        "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+        "OpenClaw runtime context (internal):",
+        "[Internal task completion event]",
+        "secret child result",
+        "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+        "",
+        "Visible after.",
+      ].join("\n"),
+    );
+
+    const chatCalls = chatBroadcastCalls(broadcast);
+    expect(chatCalls).toHaveLength(1);
+    const payload = chatCalls[0]?.[1] as {
+      message?: { content?: Array<{ text?: string }> };
+    };
+    expect(payload.message?.content?.[0]?.text).toBe("Visible before.\n\nVisible after.");
+    expect(payload.message?.content?.[0]?.text).not.toContain("BEGIN_OPENCLAW_INTERNAL_CONTEXT");
+    expect(payload.message?.content?.[0]?.text).not.toContain("secret child result");
     expect(sessionChatCalls(nodeSendToSession)).toHaveLength(1);
     nowSpy?.mockRestore();
   });
@@ -1471,7 +1504,7 @@ describe("agent event handler", () => {
   });
 
   it("keeps heartbeat alert text in final chat output when remainder exceeds ackMaxChars", () => {
-    vi.mocked(loadConfig).mockReturnValue({
+    vi.mocked(getRuntimeConfig).mockReturnValue({
       agents: { defaults: { heartbeat: { ackMaxChars: 10 } } },
     });
 

@@ -11,6 +11,7 @@ import {
 } from "../../bindings/records.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { shouldSuppressLocalExecApprovalPrompt } from "../../channels/plugins/exec-approval-local.js";
+import { applyMergePatch } from "../../config/merge-patch.js";
 import { parseSessionThreadInfoFast } from "../../config/sessions/thread-info.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -49,9 +50,11 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../../shared/string-coerce.js";
+import { createTtsDirectiveTextStreamCleaner } from "../../tts/directives.js";
 import {
   normalizeTtsAutoMode,
   resolveConfiguredTtsMode,
+  shouldCleanTtsDirectiveText,
   shouldAttemptTtsPayload,
 } from "../../tts/tts-config.js";
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
@@ -72,8 +75,10 @@ import type {
   DispatchFromConfigResult,
 } from "./dispatch-from-config.types.js";
 import { resolveEffectiveReplyRoute } from "./effective-reply-route.js";
+import { withFullRuntimeReplyConfig } from "./get-reply-fast-path.js";
 import { claimInboundDedupe, commitInboundDedupe, releaseInboundDedupe } from "./inbound-dedupe.js";
 import { resolveReplyRoutingDecision } from "./routing-policy.js";
+import { resolveSourceReplyVisibilityPolicy } from "./source-reply-delivery-mode.js";
 import { resolveRunTypingPolicy } from "./typing-policy.js";
 
 let routeReplyRuntimePromise: Promise<typeof import("./route-reply.runtime.js")> | null = null;
@@ -82,7 +87,7 @@ let getReplyFromConfigRuntimePromise: Promise<
 > | null = null;
 let abortRuntimePromise: Promise<typeof import("./abort.runtime.js")> | null = null;
 let ttsRuntimePromise: Promise<typeof import("../../tts/tts.runtime.js")> | null = null;
-let runtimePluginsPromise: Promise<typeof import("../../agents/runtime-plugins.js")> | null = null;
+let runtimePluginsPromise: Promise<typeof import("./runtime-plugins.runtime.js")> | null = null;
 let replyMediaPathsRuntimePromise: Promise<typeof import("./reply-media-paths.runtime.js")> | null =
   null;
 
@@ -107,7 +112,7 @@ function loadTtsRuntime() {
 }
 
 function loadRuntimePlugins() {
-  runtimePluginsPromise ??= import("../../agents/runtime-plugins.js");
+  runtimePluginsPromise ??= import("./runtime-plugins.runtime.js");
   return runtimePluginsPromise;
 }
 
@@ -119,7 +124,15 @@ function loadReplyMediaPathsRuntime() {
 async function maybeApplyTtsToReplyPayload(
   params: Parameters<Awaited<ReturnType<typeof loadTtsRuntime>>["maybeApplyTtsToPayload"]>[0],
 ) {
-  if (!shouldAttemptTtsPayload({ cfg: params.cfg, ttsAuto: params.ttsAuto })) {
+  if (
+    !shouldAttemptTtsPayload({
+      cfg: params.cfg,
+      ttsAuto: params.ttsAuto,
+      agentId: params.agentId,
+      channelId: params.channel,
+      accountId: params.accountId,
+    })
+  ) {
     return params.payload;
   }
   const { maybeApplyTtsToPayload } = await loadTtsRuntime();
@@ -279,7 +292,8 @@ export async function dispatchReplyFromConfig(
   const channel = normalizeLowercaseStringOrEmpty(ctx.Surface ?? ctx.Provider ?? "unknown");
   const chatId = ctx.To ?? ctx.From;
   const messageId = ctx.MessageSid ?? ctx.MessageSidFirst ?? ctx.MessageSidLast;
-  const sessionKey = ctx.SessionKey;
+  const sessionKey =
+    normalizeOptionalString(ctx.SessionKey) ?? normalizeOptionalString(ctx.CommandTargetSessionKey);
   const startTime = diagnosticsEnabled ? Date.now() : 0;
   const canTrackSession = diagnosticsEnabled && Boolean(sessionKey);
 
@@ -333,6 +347,15 @@ export async function dispatchReplyFromConfig(
     recordProcessed("skipped", { reason: "duplicate" });
     return { queuedFinal: false, counts: dispatcher.getQueuedCounts() };
   }
+  let inboundDedupeReplayUnsafe = false;
+  const markInboundDedupeReplayUnsafe = () => {
+    inboundDedupeReplayUnsafe = true;
+  };
+  const commitInboundDedupeIfClaimed = () => {
+    if (inboundDedupeClaim.status === "claimed") {
+      commitInboundDedupe(inboundDedupeClaim.key);
+    }
+  };
 
   const initialSessionStoreEntry = resolveSessionStoreLookup(ctx, cfg);
   const boundAcpDispatchSessionKey = resolveBoundAcpDispatchSessionKey({ ctx, cfg });
@@ -422,26 +445,38 @@ export async function dispatchReplyFromConfig(
   });
   const routeReplyTo = replyRoute.to;
   const deliveryChannel = shouldRouteToOriginating ? routeReplyChannel : currentSurface;
-  const { createReplyMediaPathNormalizer } = await loadReplyMediaPathsRuntime();
-  const normalizeReplyMediaPaths = createReplyMediaPathNormalizer({
-    cfg,
-    sessionKey: acpDispatchSessionKey,
-    workspaceDir,
-    messageProvider: deliveryChannel,
-    accountId: replyRoute.accountId,
-    groupId,
-    groupChannel: ctx.GroupChannel,
-    groupSpace: ctx.GroupSpace,
-    requesterSenderId: ctx.SenderId,
-    requesterSenderName: ctx.SenderName,
-    requesterSenderUsername: ctx.SenderUsername,
-    requesterSenderE164: ctx.SenderE164,
-  });
+  let normalizeReplyMediaPaths:
+    | ReturnType<
+        (typeof import("./reply-media-paths.runtime.js"))["createReplyMediaPathNormalizer"]
+      >
+    | undefined;
+  const getNormalizeReplyMediaPaths = async () => {
+    if (normalizeReplyMediaPaths) {
+      return normalizeReplyMediaPaths;
+    }
+    const { createReplyMediaPathNormalizer } = await loadReplyMediaPathsRuntime();
+    normalizeReplyMediaPaths = createReplyMediaPathNormalizer({
+      cfg,
+      sessionKey: acpDispatchSessionKey,
+      workspaceDir,
+      messageProvider: deliveryChannel,
+      accountId: replyRoute.accountId,
+      groupId,
+      groupChannel: ctx.GroupChannel,
+      groupSpace: ctx.GroupSpace,
+      requesterSenderId: ctx.SenderId,
+      requesterSenderName: ctx.SenderName,
+      requesterSenderUsername: ctx.SenderUsername,
+      requesterSenderE164: ctx.SenderE164,
+    });
+    return normalizeReplyMediaPaths;
+  };
   const normalizeReplyMediaPayload = async (payload: ReplyPayload): Promise<ReplyPayload> => {
     if (!resolveSendableOutboundReplyParts(payload).hasMedia) {
       return payload;
     }
-    return await normalizeReplyMediaPaths(payload);
+    const normalizeReplyMediaPayloadPaths = await getNormalizeReplyMediaPaths();
+    return await normalizeReplyMediaPayloadPaths(payload);
   };
 
   const routeReplyToOriginating = async (
@@ -451,6 +486,7 @@ export async function dispatchReplyFromConfig(
     if (!shouldRouteToOriginating || !routeReplyChannel || !routeReplyTo || !routeReplyRuntime) {
       return null;
     }
+    markInboundDedupeReplayUnsafe();
     return await routeReplyRuntime.routeReply({
       payload,
       channel: routeReplyChannel,
@@ -516,6 +552,7 @@ export async function dispatchReplyFromConfig(
       }
       return result.ok;
     }
+    markInboundDedupeReplayUnsafe();
     return mode === "additive"
       ? dispatcher.sendToolResult(payload)
       : dispatcher.sendFinalReply(payload);
@@ -539,10 +576,10 @@ export async function dispatchReplyFromConfig(
     ? toPluginConversationBinding(pluginOwnedBindingRecord)
     : null;
 
-  // Resolve sendPolicy early so every outbound path below (plugin-binding
-  // notices, fast-abort, normal dispatch) honors suppressDelivery. Under
-  // sendPolicy: "deny" the agent still processes inbound, but no outbound
-  // reply/notice/indicator is allowed. See #53328.
+  // Resolve automatic source-delivery suppression early so every outbound path
+  // below (plugin-binding notices, fast-abort, normal dispatch) honors it. The
+  // agent still processes inbound, but automatic replies/notices/indicators are
+  // blocked; explicit message tool sends remain available.
   const sendPolicy = resolveSendPolicy({
     cfg,
     entry: sessionStoreEntry.entry,
@@ -556,8 +593,23 @@ export async function dispatchReplyFromConfig(
       undefined,
     chatType: sessionStoreEntry.entry?.chatType,
   });
-  const suppressDelivery = sendPolicy === "deny";
-  const suppressHookUserDelivery = suppressAcpChildUserDelivery || suppressDelivery;
+  const sourceReplyPolicy = resolveSourceReplyVisibilityPolicy({
+    cfg,
+    ctx,
+    requested: params.replyOptions?.sourceReplyDeliveryMode,
+    sendPolicy,
+    suppressAcpChildUserDelivery,
+    explicitSuppressTyping: params.replyOptions?.suppressTyping === true,
+    shouldSuppressTyping,
+  });
+  const {
+    sourceReplyDeliveryMode,
+    suppressAutomaticSourceDelivery,
+    suppressDelivery,
+    deliverySuppressionReason,
+    suppressHookUserDelivery,
+    suppressHookReplyLifecycle,
+  } = sourceReplyPolicy;
 
   let pluginFallbackReason:
     | "plugin-bound-fallback-missing-plugin"
@@ -568,11 +620,10 @@ export async function dispatchReplyFromConfig(
     touchConversationBindingRecord(pluginOwnedBinding.bindingId);
     if (suppressDelivery) {
       // Plugin-bound inbound handlers typically emit outbound replies we
-      // cannot rewind. Under deny, skip the plugin claim entirely and fall
-      // through to normal (suppressed) agent processing so no delivery leaks
-      // via the plugin path. See #53328.
+      // cannot rewind. When automatic delivery is suppressed, skip the plugin
+      // claim and fall through to normal suppressed agent processing.
       logVerbose(
-        `plugin-bound inbound skipped under sendPolicy: deny (plugin=${pluginOwnedBinding.pluginId} session=${sessionKey ?? "unknown"}); falling through to suppressed agent processing`,
+        `plugin-bound inbound skipped under ${deliverySuppressionReason} (plugin=${pluginOwnedBinding.pluginId} session=${sessionKey ?? "unknown"}); falling through to suppressed agent processing`,
       );
     } else {
       logVerbose(
@@ -601,6 +652,7 @@ export async function dispatchReplyFromConfig(
           }
           markIdle("plugin_binding_dispatch");
           recordProcessed("completed", { reason: "plugin-bound-handled" });
+          commitInboundDedupeIfClaimed();
           return { queuedFinal: false, counts: dispatcher.getQueuedCounts() };
         }
         case "missing_plugin":
@@ -627,6 +679,7 @@ export async function dispatchReplyFromConfig(
           );
           markIdle("plugin_binding_declined");
           recordProcessed("completed", { reason: "plugin-bound-declined" });
+          commitInboundDedupeIfClaimed();
           return { queuedFinal: false, counts: dispatcher.getQueuedCounts() };
         }
         case "error": {
@@ -639,6 +692,7 @@ export async function dispatchReplyFromConfig(
           );
           markIdle("plugin_binding_error");
           recordProcessed("completed", { reason: "plugin-bound-error" });
+          commitInboundDedupeIfClaimed();
           return { queuedFinal: false, counts: dispatcher.getQueuedCounts() };
         }
       }
@@ -699,17 +753,19 @@ export async function dispatchReplyFromConfig(
             );
           }
         } else {
+          markInboundDedupeReplayUnsafe();
           queuedFinal = dispatcher.sendFinalReply(payload);
         }
       } else {
         logVerbose(
-          `dispatch-from-config: fast_abort reply suppressed by sendPolicy: deny (session=${sessionKey ?? "unknown"})`,
+          `dispatch-from-config: fast_abort reply suppressed by ${deliverySuppressionReason} (session=${sessionKey ?? "unknown"})`,
         );
       }
       const counts = dispatcher.getQueuedCounts();
       counts.final += routedFinalCount;
       recordProcessed("completed", { reason: "fast_abort" });
       markIdle("message_completed");
+      commitInboundDedupeIfClaimed();
       return { queuedFinal, counts };
     }
 
@@ -722,6 +778,9 @@ export async function dispatchReplyFromConfig(
     const sendFinalPayload = async (
       payload: ReplyPayload,
     ): Promise<{ queuedFinal: boolean; routedFinalCount: number }> => {
+      if (resolveSendableOutboundReplyParts(payload).hasContent) {
+        markInboundDedupeReplayUnsafe();
+      }
       const ttsPayload = await maybeApplyTtsToReplyPayload({
         payload,
         cfg,
@@ -729,6 +788,8 @@ export async function dispatchReplyFromConfig(
         kind: "final",
         inboundAudio,
         ttsAuto: sessionTtsAuto,
+        agentId: sessionAgentId,
+        accountId: replyRoute.accountId,
       });
       const normalizedPayload = await normalizeReplyMediaPayload(ttsPayload);
       const result = await routeReplyToOriginating(normalizedPayload);
@@ -743,6 +804,7 @@ export async function dispatchReplyFromConfig(
           routedFinalCount: result.ok ? 1 : 0,
         };
       }
+      markInboundDedupeReplayUnsafe();
       return {
         queuedFinal: dispatcher.sendFinalReply(normalizedPayload),
         routedFinalCount: 0,
@@ -782,6 +844,7 @@ export async function dispatchReplyFromConfig(
         counts.final += routedFinalCount;
         recordProcessed("completed", { reason: "before_dispatch_handled" });
         markIdle("message_completed");
+        commitInboundDedupeIfClaimed();
         return { queuedFinal, counts };
       }
     }
@@ -797,6 +860,8 @@ export async function dispatchReplyFromConfig(
           sessionTtsAuto,
           ttsChannel: deliveryChannel,
           suppressUserDelivery: suppressHookUserDelivery,
+          suppressReplyLifecycle: suppressHookReplyLifecycle,
+          sourceReplyDeliveryMode,
           shouldRouteToOriginating,
           originatingChannel: routeReplyChannel,
           originatingTo: routeReplyTo,
@@ -813,6 +878,7 @@ export async function dispatchReplyFromConfig(
         },
       );
       if (replyDispatchResult?.handled) {
+        commitInboundDedupeIfClaimed();
         return {
           queuedFinal: replyDispatchResult.queuedFinal,
           counts: replyDispatchResult.counts,
@@ -820,11 +886,12 @@ export async function dispatchReplyFromConfig(
       }
     }
 
-    // When sendPolicy is "deny", we still let the agent process the inbound message
-    // (context, memory, tool calls) but suppress all outbound delivery.
+    // When automatic source delivery is suppressed, still let the agent process
+    // the inbound message (context, memory, tool calls) but suppress automatic
+    // outbound source delivery.
     if (suppressDelivery) {
       logVerbose(
-        `Delivery suppressed by send policy for session ${sessionStoreEntry.sessionKey ?? sessionKey ?? "unknown"} — agent will still process the message`,
+        `Delivery suppressed by ${deliverySuppressionReason} for session ${sessionStoreEntry.sessionKey ?? sessionKey ?? "unknown"} — agent will still process the message`,
       );
     }
 
@@ -874,6 +941,7 @@ export async function dispatchReplyFromConfig(
         await sendPayloadAsync(payload, undefined, false);
         return;
       }
+      markInboundDedupeReplayUnsafe();
       dispatcher.sendToolResult(payload);
     };
     const sendPlanUpdate = async (payload: {
@@ -890,6 +958,7 @@ export async function dispatchReplyFromConfig(
         await sendPayloadAsync(replyPayload, undefined, false);
         return;
       }
+      markInboundDedupeReplayUnsafe();
       dispatcher.sendToolResult(replyPayload);
     };
     const summarizeApprovalLabel = (payload: {
@@ -928,7 +997,17 @@ export async function dispatchReplyFromConfig(
     // When block streaming succeeds, there's no final reply, so we need to generate
     // TTS audio separately from the accumulated block content.
     let accumulatedBlockText = "";
+    let accumulatedBlockTtsText = "";
     let blockCount = 0;
+    const cleanBlockTtsDirectiveText = shouldCleanTtsDirectiveText({
+      cfg,
+      ttsAuto: sessionTtsAuto,
+      agentId: sessionAgentId,
+      channelId: deliveryChannel,
+      accountId: replyRoute.accountId,
+    })
+      ? createTtsDirectiveTextStreamCleaner()
+      : undefined;
 
     const resolveToolDeliveryPayload = (payload: ReplyPayload): ReplyPayload | null => {
       if (
@@ -963,8 +1042,7 @@ export async function dispatchReplyFromConfig(
     };
     const typing = resolveRunTypingPolicy({
       requestedPolicy: params.replyOptions?.typingPolicy,
-      suppressTyping:
-        suppressDelivery || params.replyOptions?.suppressTyping === true || shouldSuppressTyping,
+      suppressTyping: sourceReplyPolicy.suppressTyping,
       originatingChannel: routeReplyChannel,
       systemEvent: shouldRouteToOriginating,
     });
@@ -977,15 +1055,48 @@ export async function dispatchReplyFromConfig(
 
     const replyResolver =
       params.replyResolver ?? (await loadGetReplyFromConfigRuntime()).getReplyFromConfig;
+    const replyConfig = withFullRuntimeReplyConfig(
+      params.configOverride ? (applyMergePatch(cfg, params.configOverride) as OpenClawConfig) : cfg,
+    );
     const replyResult = await replyResolver(
       ctx,
       {
         ...params.replyOptions,
+        sourceReplyDeliveryMode,
         typingPolicy: typing.typingPolicy,
         suppressTyping: typing.suppressTyping,
+        onPartialReply: suppressAutomaticSourceDelivery
+          ? undefined
+          : params.replyOptions?.onPartialReply,
+        onReasoningStream: suppressAutomaticSourceDelivery
+          ? undefined
+          : params.replyOptions?.onReasoningStream,
+        onReasoningEnd: suppressAutomaticSourceDelivery
+          ? undefined
+          : params.replyOptions?.onReasoningEnd,
+        onAssistantMessageStart: suppressAutomaticSourceDelivery
+          ? undefined
+          : params.replyOptions?.onAssistantMessageStart,
+        onBlockReplyQueued: suppressAutomaticSourceDelivery
+          ? undefined
+          : params.replyOptions?.onBlockReplyQueued,
+        onToolStart: suppressAutomaticSourceDelivery ? undefined : params.replyOptions?.onToolStart,
+        onItemEvent: suppressAutomaticSourceDelivery ? undefined : params.replyOptions?.onItemEvent,
+        onCommandOutput: suppressAutomaticSourceDelivery
+          ? undefined
+          : params.replyOptions?.onCommandOutput,
+        onCompactionStart: suppressAutomaticSourceDelivery
+          ? undefined
+          : params.replyOptions?.onCompactionStart,
+        onCompactionEnd: suppressAutomaticSourceDelivery
+          ? undefined
+          : params.replyOptions?.onCompactionEnd,
         onToolResult: (payload: ReplyPayload) => {
           const run = async () => {
-            await onToolResultFromReplyOptions?.(payload);
+            markInboundDedupeReplayUnsafe();
+            if (!suppressAutomaticSourceDelivery) {
+              await onToolResultFromReplyOptions?.(payload);
+            }
             if (suppressDelivery) {
               return;
             }
@@ -996,6 +1107,8 @@ export async function dispatchReplyFromConfig(
               kind: "tool",
               inboundAudio,
               ttsAuto: sessionTtsAuto,
+              agentId: sessionAgentId,
+              accountId: replyRoute.accountId,
             });
             const normalizedPayload = await normalizeReplyMediaPayload(ttsPayload);
             const deliveryPayload = resolveToolDeliveryPayload(normalizedPayload);
@@ -1019,20 +1132,27 @@ export async function dispatchReplyFromConfig(
             if (shouldRouteToOriginating) {
               await sendPayloadAsync(deliveryPayload, undefined, false);
             } else {
+              markInboundDedupeReplayUnsafe();
               dispatcher.sendToolResult(deliveryPayload);
             }
           };
           return run();
         },
         onPlanUpdate: async (payload) => {
-          await onPlanUpdateFromReplyOptions?.(payload);
+          markInboundDedupeReplayUnsafe();
+          if (!suppressAutomaticSourceDelivery) {
+            await onPlanUpdateFromReplyOptions?.(payload);
+          }
           if (payload.phase !== "update" || suppressDefaultToolProgressMessages) {
             return;
           }
           await sendPlanUpdate({ explanation: payload.explanation, steps: payload.steps });
         },
         onApprovalEvent: async (payload) => {
-          await onApprovalEventFromReplyOptions?.(payload);
+          markInboundDedupeReplayUnsafe();
+          if (!suppressAutomaticSourceDelivery) {
+            await onApprovalEventFromReplyOptions?.(payload);
+          }
           if (payload.phase !== "requested" || suppressDefaultToolProgressMessages) {
             return;
           }
@@ -1047,7 +1167,10 @@ export async function dispatchReplyFromConfig(
           await maybeSendWorkingStatus(label);
         },
         onPatchSummary: async (payload) => {
-          await onPatchSummaryFromReplyOptions?.(payload);
+          markInboundDedupeReplayUnsafe();
+          if (!suppressAutomaticSourceDelivery) {
+            await onPatchSummaryFromReplyOptions?.(payload);
+          }
           if (payload.phase !== "end" || suppressDefaultToolProgressMessages) {
             return;
           }
@@ -1059,6 +1182,12 @@ export async function dispatchReplyFromConfig(
         },
         onBlockReply: (payload: ReplyPayload, context?: BlockReplyContext) => {
           const run = async () => {
+            if (
+              payload.isReasoning !== true &&
+              resolveSendableOutboundReplyParts(payload).hasContent
+            ) {
+              markInboundDedupeReplayUnsafe();
+            }
             if (suppressDelivery) {
               return;
             }
@@ -1072,11 +1201,27 @@ export async function dispatchReplyFromConfig(
             // Exclude compaction status notices — they are informational UI
             // signals and must not be synthesised into the spoken reply.
             if (payload.text && !payload.isCompactionNotice) {
+              const joinsBufferedTtsDirective =
+                cleanBlockTtsDirectiveText?.hasBufferedDirectiveText() === true;
               if (accumulatedBlockText.length > 0) {
                 accumulatedBlockText += "\n";
               }
               accumulatedBlockText += payload.text;
+              if (accumulatedBlockTtsText.length > 0 && !joinsBufferedTtsDirective) {
+                accumulatedBlockTtsText += "\n";
+              }
+              accumulatedBlockTtsText += payload.text;
               blockCount++;
+            }
+            const visiblePayload =
+              payload.text && cleanBlockTtsDirectiveText && !payload.isCompactionNotice
+                ? (() => {
+                    const text = cleanBlockTtsDirectiveText.push(payload.text);
+                    return { ...payload, text: text.trim() ? text : undefined };
+                  })()
+                : payload;
+            if (!resolveSendableOutboundReplyParts(visiblePayload).hasContent) {
+              return;
             }
             // Channels that keep a live draft preview may need to rotate their
             // preview state at the logical block boundary before queued block
@@ -1089,26 +1234,31 @@ export async function dispatchReplyFromConfig(
                     assistantMessageIndex: payloadMetadata.assistantMessageIndex,
                   }
                 : context;
-            await params.replyOptions?.onBlockReplyQueued?.(payload, queuedContext);
+            if (!suppressAutomaticSourceDelivery) {
+              await params.replyOptions?.onBlockReplyQueued?.(visiblePayload, queuedContext);
+            }
             const ttsPayload = await maybeApplyTtsToReplyPayload({
-              payload,
+              payload: visiblePayload,
               cfg,
               channel: deliveryChannel,
               kind: "block",
               inboundAudio,
               ttsAuto: sessionTtsAuto,
+              agentId: sessionAgentId,
+              accountId: replyRoute.accountId,
             });
             const normalizedPayload = await normalizeReplyMediaPayload(ttsPayload);
             if (shouldRouteToOriginating) {
               await sendPayloadAsync(normalizedPayload, context?.abortSignal, false);
             } else {
+              markInboundDedupeReplayUnsafe();
               dispatcher.sendBlockReply(normalizedPayload);
             }
           };
           return run();
         },
       },
-      params.configOverride,
+      replyConfig,
     );
 
     if (ctx.AcpDispatchTailAfterReset === true) {
@@ -1126,6 +1276,8 @@ export async function dispatchReplyFromConfig(
             sessionTtsAuto,
             ttsChannel: deliveryChannel,
             suppressUserDelivery: suppressHookUserDelivery,
+            suppressReplyLifecycle: suppressHookReplyLifecycle,
+            sourceReplyDeliveryMode,
             shouldRouteToOriginating,
             originatingChannel: routeReplyChannel,
             originatingTo: routeReplyTo,
@@ -1167,7 +1319,11 @@ export async function dispatchReplyFromConfig(
         routedFinalCount += finalReply.routedFinalCount;
       }
 
-      const ttsMode = resolveConfiguredTtsMode(cfg);
+      const ttsMode = resolveConfiguredTtsMode(cfg, {
+        agentId: sessionAgentId,
+        channelId: deliveryChannel,
+        accountId: replyRoute.accountId,
+      });
       // Generate TTS-only reply after block streaming completes (when there's no final reply).
       // This handles the case where block streaming succeeds and drops final payloads,
       // but we still want TTS audio to be generated from the accumulated block content.
@@ -1175,16 +1331,18 @@ export async function dispatchReplyFromConfig(
         ttsMode === "final" &&
         replies.length === 0 &&
         blockCount > 0 &&
-        accumulatedBlockText.trim()
+        accumulatedBlockTtsText.trim()
       ) {
         try {
           const ttsSyntheticReply = await maybeApplyTtsToReplyPayload({
-            payload: { text: accumulatedBlockText },
+            payload: { text: accumulatedBlockTtsText },
             cfg,
             channel: deliveryChannel,
             kind: "final",
             inboundAudio,
             ttsAuto: sessionTtsAuto,
+            agentId: sessionAgentId,
+            accountId: replyRoute.accountId,
           });
           // Only send if TTS was actually applied (mediaUrl exists)
           if (ttsSyntheticReply.mediaUrl) {
@@ -1193,9 +1351,10 @@ export async function dispatchReplyFromConfig(
             const ttsOnlyPayload: ReplyPayload = {
               mediaUrl: ttsSyntheticReply.mediaUrl,
               audioAsVoice: ttsSyntheticReply.audioAsVoice,
-              spokenText: accumulatedBlockText,
+              spokenText: accumulatedBlockTtsText,
             };
-            const result = await routeReplyToOriginating(ttsOnlyPayload);
+            const normalizedTtsOnlyPayload = await normalizeReplyMediaPayload(ttsOnlyPayload);
+            const result = await routeReplyToOriginating(normalizedTtsOnlyPayload);
             if (result) {
               queuedFinal = result.ok || queuedFinal;
               if (result.ok) {
@@ -1207,7 +1366,8 @@ export async function dispatchReplyFromConfig(
                 );
               }
             } else {
-              const didQueue = dispatcher.sendFinalReply(ttsOnlyPayload);
+              markInboundDedupeReplayUnsafe();
+              const didQueue = dispatcher.sendFinalReply(normalizedTtsOnlyPayload);
               queuedFinal = didQueue || queuedFinal;
             }
           }
@@ -1221,9 +1381,7 @@ export async function dispatchReplyFromConfig(
 
     const counts = dispatcher.getQueuedCounts();
     counts.final += routedFinalCount;
-    if (inboundDedupeClaim.status === "claimed") {
-      commitInboundDedupe(inboundDedupeClaim.key);
-    }
+    commitInboundDedupeIfClaimed();
     recordProcessed(
       "completed",
       pluginFallbackReason ? { reason: pluginFallbackReason } : undefined,
@@ -1232,7 +1390,11 @@ export async function dispatchReplyFromConfig(
     return { queuedFinal, counts };
   } catch (err) {
     if (inboundDedupeClaim.status === "claimed") {
-      releaseInboundDedupe(inboundDedupeClaim.key);
+      if (inboundDedupeReplayUnsafe) {
+        commitInboundDedupe(inboundDedupeClaim.key);
+      } else {
+        releaseInboundDedupe(inboundDedupeClaim.key);
+      }
     }
     recordProcessed("error", { error: String(err) });
     markIdle("message_error");

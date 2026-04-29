@@ -1,7 +1,7 @@
 import type { SlackEventMiddlewareArgs } from "@slack/bolt";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { enqueueSystemEvent } from "openclaw/plugin-sdk/infra-runtime";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
+import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import type { SlackAppMentionEvent, SlackMessageEvent } from "../../types.js";
 import { normalizeSlackChannelType } from "../channel-type.js";
 import type { SlackMonitorContext } from "../context.js";
@@ -59,31 +59,12 @@ function collectMetadataUserCandidates(
   }
 }
 
-function collectBlockUserIds(candidates: Set<string>, value: unknown, botUserId: string): void {
-  if (Array.isArray(value)) {
-    for (const entry of value) {
-      collectBlockUserIds(candidates, entry, botUserId);
-    }
-    return;
-  }
-  const record = asRecord(value);
-  if (!record) {
-    return;
-  }
-  addUserCandidate(candidates, record.user_id, botUserId);
-  for (const key of ["elements", "accessory", "fields"]) {
-    collectBlockUserIds(candidates, record[key], botUserId);
-  }
-}
-
 function resolveAssistantMessageChangedSender(params: {
-  event: SlackMessageChangedEvent;
   message?: SlackAssistantMessageRecord;
   botUserId: string;
 }): string | undefined {
   const candidates = new Set<string>();
   collectMetadataUserCandidates(candidates, params.message?.metadata, params.botUserId);
-  collectBlockUserIds(candidates, params.message?.blocks, params.botUserId);
   return candidates.size === 1 ? [...candidates][0] : undefined;
 }
 
@@ -122,7 +103,6 @@ function resolveAssistantMessageChangedInbound(params: {
     return undefined;
   }
   const senderId = resolveAssistantMessageChangedSender({
-    event: changed,
     message,
     botUserId: params.ctx.botUserId,
   });

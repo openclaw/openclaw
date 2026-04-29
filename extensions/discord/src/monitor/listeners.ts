@@ -1,6 +1,7 @@
 import {
   ChannelType,
   type Client,
+  InteractionCreateListener,
   MessageCreateListener,
   MessageReactionAddListener,
   MessageReactionRemoveListener,
@@ -8,8 +9,7 @@ import {
   ThreadUpdateListener,
   type User,
 } from "@buape/carbon";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { enqueueSystemEvent } from "openclaw/plugin-sdk/infra-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import {
   createSubsystemLogger,
@@ -21,6 +21,7 @@ import {
   readStoreAllowFromForDmPolicy,
   resolveDmGroupAccessWithLists,
 } from "openclaw/plugin-sdk/security-runtime";
+import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import {
   isDiscordGroupAllowedByPolicy,
   normalizeDiscordAllowList,
@@ -37,13 +38,13 @@ import { setPresence } from "./presence-cache.js";
 import { isThreadArchived } from "./thread-bindings.discord-api.js";
 import { resolveFetchedDiscordThreadLikeChannelContext } from "./thread-channel-context.js";
 import { closeDiscordThreadSessions } from "./thread-session-close.js";
-import { normalizeDiscordListenerTimeoutMs, runDiscordTaskWithTimeout } from "./timeouts.js";
 
-type LoadedConfig = ReturnType<typeof import("openclaw/plugin-sdk/config-runtime").loadConfig>;
+type LoadedConfig = OpenClawConfig;
 type RuntimeEnv = import("openclaw/plugin-sdk/runtime-env").RuntimeEnv;
 type Logger = ReturnType<typeof import("openclaw/plugin-sdk/runtime-env").createSubsystemLogger>;
 
 export type DiscordMessageEvent = Parameters<MessageCreateListener["handle"]>[0];
+export type DiscordInteractionEvent = Parameters<InteractionCreateListener["handle"]>[0];
 
 export type DiscordMessageHandler = (
   data: DiscordMessageEvent,
@@ -139,46 +140,13 @@ async function runDiscordListenerWithSlowLog(params: {
   logger: Logger | undefined;
   listener: string;
   event: string;
-  run: (abortSignal: AbortSignal | undefined) => Promise<void>;
-  timeoutMs?: number;
+  run: () => Promise<void>;
   context?: Record<string, unknown>;
   onError?: (err: unknown) => void;
 }) {
   const startedAt = Date.now();
-  const timeoutMs = normalizeDiscordListenerTimeoutMs(params.timeoutMs);
-  const logger = params.logger ?? discordEventQueueLog;
-  let timedOut = false;
-
   try {
-    timedOut = await runDiscordTaskWithTimeout({
-      run: params.run,
-      timeoutMs,
-      onTimeout: (resolvedTimeoutMs) => {
-        logger.error(
-          danger(
-            `discord handler timed out after ${formatDurationSeconds(resolvedTimeoutMs, {
-              decimals: 1,
-              unit: "seconds",
-            })}${formatListenerContextSuffix(params.context)}`,
-          ),
-        );
-      },
-      onAbortAfterTimeout: () => {
-        logger.warn(
-          `discord handler canceled after timeout${formatListenerContextSuffix(params.context)}`,
-        );
-      },
-      onErrorAfterTimeout: (err) => {
-        logger.error(
-          danger(
-            `discord handler failed after timeout: ${String(err)}${formatListenerContextSuffix(params.context)}`,
-          ),
-        );
-      },
-    });
-    if (timedOut) {
-      return;
-    }
+    await params.run();
   } catch (err) {
     if (params.onError) {
       params.onError(err);
@@ -186,15 +154,13 @@ async function runDiscordListenerWithSlowLog(params: {
     }
     throw err;
   } finally {
-    if (!timedOut) {
-      logSlowDiscordListener({
-        logger: params.logger,
-        listener: params.listener,
-        event: params.event,
-        durationMs: Date.now() - startedAt,
-        context: params.context,
-      });
-    }
+    logSlowDiscordListener({
+      logger: params.logger,
+      listener: params.listener,
+      event: params.event,
+      durationMs: Date.now() - startedAt,
+      context: params.context,
+    });
   }
 }
 
@@ -211,7 +177,6 @@ export class DiscordMessageListener extends MessageCreateListener {
     private handler: DiscordMessageHandler,
     private logger?: Logger,
     private onEvent?: () => void,
-    _options?: { timeoutMs?: number },
   ) {
     super();
   }
@@ -219,14 +184,35 @@ export class DiscordMessageListener extends MessageCreateListener {
   async handle(data: DiscordMessageEvent, client: Client) {
     this.onEvent?.();
     // Fire-and-forget: hand off to the handler without blocking the
-    // Carbon listener.  Per-session ordering and run timeouts are owned
-    // by the inbound worker queue, so the listener no longer serializes
-    // or applies its own timeout.
+    // Carbon listener. Per-session ordering is owned by the message run queue,
+    // so the listener no longer serializes or applies its own timeout.
     void Promise.resolve()
       .then(() => this.handler(data, client))
       .catch((err) => {
         const logger = this.logger ?? discordEventQueueLog;
         logger.error(danger(`discord handler failed: ${String(err)}`));
+      });
+  }
+}
+
+export class DiscordInteractionListener extends InteractionCreateListener {
+  constructor(
+    private logger?: Logger,
+    private onEvent?: () => void,
+  ) {
+    super();
+  }
+
+  async handle(data: DiscordInteractionEvent, client: Client) {
+    this.onEvent?.();
+    // Carbon awaits interaction listeners on its critical gateway lane. Hand off
+    // immediately so slash/component handling can wait on session locks or compaction
+    // without tripping Carbon's listener timeout and dropping later gateway events.
+    void Promise.resolve()
+      .then(() => client.handleInteraction(data as Parameters<Client["handleInteraction"]>[0], {}))
+      .catch((err) => {
+        const logger = this.logger ?? discordEventQueueLog;
+        logger.error(danger(`discord interaction handler failed: ${String(err)}`));
       });
   }
 }
@@ -521,6 +507,42 @@ async function handleDiscordChannelReactionNotification(params: {
   params.emitReactionWithAuthor(message);
 }
 
+function hasDiscordGuildChannelOverrides(
+  guildInfo: import("./allow-list.js").DiscordGuildEntryResolved | null,
+) {
+  return Boolean(guildInfo?.channels && Object.keys(guildInfo.channels).length > 0);
+}
+
+function shouldSkipGuildReactionBeforeChannelFetch(params: {
+  reactionMode: DiscordReactionMode;
+  guildInfo: import("./allow-list.js").DiscordGuildEntryResolved | null;
+  groupPolicy: DiscordReactionRoutingParams["groupPolicy"];
+  memberRoleIds: string[];
+  user: User;
+  botUserId?: string;
+  allowNameMatching: boolean;
+}) {
+  if (params.reactionMode === "off" || params.groupPolicy === "disabled") {
+    return true;
+  }
+  if (params.reactionMode !== "allowlist") {
+    return false;
+  }
+  if (hasDiscordGuildChannelOverrides(params.guildInfo)) {
+    return false;
+  }
+  return !shouldEmitDiscordReactionNotification({
+    mode: params.reactionMode,
+    botId: params.botUserId,
+    userId: params.user.id,
+    userName: params.user.username,
+    userTag: formatDiscordUserTag(params.user),
+    guildInfo: params.guildInfo,
+    memberRoleIds: params.memberRoleIds,
+    allowNameMatching: params.allowNameMatching,
+  });
+}
+
 async function handleDiscordReactionEvent(
   params: {
     data: DiscordReactionEvent;
@@ -556,6 +578,24 @@ async function handleDiscordReactionEvent(
     if (isGuildMessage && guildEntries && Object.keys(guildEntries).length > 0 && !guildInfo) {
       return;
     }
+    const memberRoleIds = Array.isArray(data.rawMember?.roles)
+      ? data.rawMember.roles.map((roleId: string) => roleId)
+      : [];
+    const reactionMode = guildInfo?.reactionNotifications ?? "own";
+    if (
+      isGuildMessage &&
+      shouldSkipGuildReactionBeforeChannelFetch({
+        reactionMode,
+        guildInfo,
+        groupPolicy: params.groupPolicy,
+        memberRoleIds,
+        user,
+        botUserId,
+        allowNameMatching: params.allowNameMatching,
+      })
+    ) {
+      return;
+    }
 
     const channel = await client.fetchChannel(data.channel_id);
     if (!channel) {
@@ -572,9 +612,6 @@ async function handleDiscordReactionEvent(
     const isDirectMessage = channelType === ChannelType.DM;
     const isGroupDm = channelType === ChannelType.GroupDM;
     const isThreadChannel = channelContext.isThreadChannel;
-    const memberRoleIds = Array.isArray(data.rawMember?.roles)
-      ? data.rawMember.roles.map((roleId: string) => roleId)
-      : [];
     const reactionIngressBase: Omit<DiscordReactionIngressAuthorizationParams, "channelConfig"> = {
       accountId: params.accountId,
       user,
@@ -695,7 +732,6 @@ async function handleDiscordReactionEvent(
     };
 
     if (isThreadChannel) {
-      const reactionMode = guildInfo?.reactionNotifications ?? "own";
       await handleDiscordThreadReactionNotification({
         reactionMode,
         message: data.message,
@@ -720,7 +756,6 @@ async function handleDiscordReactionEvent(
       parentSlug,
       scope: "channel",
     });
-    const reactionMode = guildInfo?.reactionNotifications ?? "own";
     await handleDiscordChannelReactionNotification({
       isGuildMessage,
       reactionMode,

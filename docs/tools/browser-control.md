@@ -21,6 +21,7 @@ For local integrations only, the Gateway exposes a small loopback HTTP API:
 - Actions: `POST /navigate`, `POST /act`
 - Hooks: `POST /hooks/file-chooser`, `POST /hooks/dialog`
 - Downloads: `POST /download`, `POST /wait/download`
+- Permissions: `POST /permissions/grant`
 - Debugging: `GET /console`, `POST /pdf`
 - Debugging: `GET /errors`, `GET /requests`, `POST /trace/start`, `POST /trace/stop`, `POST /highlight`
 - Network: `POST /response/body`
@@ -75,6 +76,10 @@ a clear 501 error.
 What still works without Playwright:
 
 - ARIA snapshots
+- Role-style accessibility snapshots (`--interactive`, `--compact`,
+  `--depth`, `--efficient`) when a per-tab CDP WebSocket is available. This is
+  a fallback for inspection and ref discovery; Playwright remains the primary
+  action engine.
 - Page screenshots for the managed `openclaw` browser when a per-tab CDP
   WebSocket is available
 - Page screenshots for `existing-session` / Chrome MCP profiles
@@ -84,7 +89,7 @@ What still needs Playwright:
 
 - `navigate`
 - `act`
-- AI snapshots / role snapshots
+- AI snapshots that depend on Playwright's native AI snapshot format
 - CSS-selector element screenshots (`--element`)
 - full browser PDF export
 
@@ -221,6 +226,11 @@ Notes:
 - Download, trace, and upload paths are constrained to OpenClaw temp roots: `/tmp/openclaw{,/downloads,/uploads}` (fallback: `${os.tmpdir()}/openclaw/...`).
 - `upload` can also set file inputs directly via `--input-ref` or `--element`.
 
+Stable tab ids and labels survive Chromium raw-target replacement when OpenClaw
+can prove the replacement tab, such as same URL or a single old tab becoming a
+single new tab after form submission. Raw target ids are still volatile; prefer
+`suggestedTargetId` from `tabs` in scripts.
+
 Snapshot flags at a glance:
 
 - `--format ai` (default with Playwright): AI snapshot with numeric refs (`aria-ref="<n>"`).
@@ -251,13 +261,19 @@ OpenClaw supports two “snapshot” styles:
   - Output: the accessibility tree as structured nodes.
   - Actions: `openclaw browser click ax12` works when the snapshot path can bind
     the ref through Playwright and Chrome backend DOM ids.
-  - If Playwright is unavailable, ARIA snapshots can still be useful for
-    inspection, but refs may not be actionable. Re-snapshot with `--format ai`
-    or `--interactive` when you need action refs.
+- If Playwright is unavailable, ARIA snapshots can still be useful for
+  inspection, but refs may not be actionable. Re-snapshot with `--format ai`
+  or `--interactive` when you need action refs.
+- Docker proof for the raw-CDP fallback path: `pnpm test:docker:browser-cdp-snapshot`
+  starts Chromium with CDP, runs `browser doctor --deep`, and verifies role
+  snapshots include link URLs, cursor-promoted clickables, and iframe metadata.
 
 Ref behavior:
 
 - Refs are **not stable across navigations**; if something fails, re-run `snapshot` and use a fresh ref.
+- `/act` returns the current raw `targetId` after action-triggered replacement
+  when it can prove the replacement tab. Keep using stable tab ids/labels for
+  follow-up commands.
 - If the role snapshot was taken with `--frame`, role refs are scoped to that iframe until the next role snapshot.
 - Unknown or stale `axN` refs fail fast instead of falling through to
   Playwright's `aria-ref` selector. Run a fresh snapshot on the same tab when

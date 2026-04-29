@@ -11,7 +11,6 @@ import {
   closeSync,
   existsSync,
   lstatSync,
-  mkdirSync,
   openSync,
   readdirSync,
   readFileSync,
@@ -22,7 +21,8 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { basename, dirname, isAbsolute, join, relative } from "node:path";
+import { tmpdir } from "node:os";
+import { basename, dirname, isAbsolute, join, posix, relative } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { resolveNpmRunner } from "./npm-runner.mjs";
 
@@ -35,18 +35,6 @@ const DISABLE_POSTINSTALL_ENV = "OPENCLAW_DISABLE_BUNDLED_PLUGIN_POSTINSTALL";
 const DISABLE_PLUGIN_REGISTRY_MIGRATION_ENV = "OPENCLAW_DISABLE_PLUGIN_REGISTRY_MIGRATION";
 const EAGER_BUNDLED_PLUGIN_DEPS_ENV = "OPENCLAW_EAGER_BUNDLED_PLUGIN_DEPS";
 const DIST_INVENTORY_PATH = "dist/postinstall-inventory.json";
-const LEGACY_QA_CHANNEL_DIR = ["qa", "channel"].join("-");
-const LEGACY_QA_LAB_DIR = ["qa", "lab"].join("-");
-const LEGACY_UPDATE_COMPAT_SIDECARS = [
-  {
-    path: `dist/extensions/${LEGACY_QA_CHANNEL_DIR}/runtime-api.js`,
-    content: "export {};\n",
-  },
-  {
-    path: `dist/extensions/${LEGACY_QA_LAB_DIR}/runtime-api.js`,
-    content: "export {};\n",
-  },
-];
 const BAILEYS_MEDIA_FILE = join(
   "node_modules",
   "@whiskeysockets",
@@ -117,6 +105,11 @@ const BAILEYS_MEDIA_ONCE_IMPORT_RE = /import\s+\{\s*once\s*\}\s+from\s+['"]event
 const BAILEYS_MEDIA_ASYNC_CONTEXT_RE =
   /async\s+function\s+encryptedStream|encryptedStream\s*=\s*async/u;
 
+function hasEnvFlag(env, key) {
+  const value = env?.[key]?.trim().toLowerCase();
+  return Boolean(value && value !== "0" && value !== "false" && value !== "no");
+}
+
 function readJson(filePath) {
   return JSON.parse(readFileSync(filePath, "utf8"));
 }
@@ -182,8 +175,8 @@ function assertSafeInstalledDistPath(relativePath, params) {
   return candidatePath;
 }
 
-function isStagedRuntimeNodeModulesPath(relativePath) {
-  return /^dist\/extensions\/[^/]+\/node_modules(?:\/|$)/u.test(
+function isStagedRuntimeDependencyPath(relativePath) {
+  return /^dist\/extensions\/[^/]+\/(?:node_modules|\.openclaw-install-stage(?:-[^/]+)?)(?:\/|$)/u.test(
     normalizeRelativePath(relativePath),
   );
 }
@@ -203,7 +196,7 @@ function listInstalledDistFiles(params = {}) {
       continue;
     }
     const relativeCurrentDir = normalizeRelativePath(relative(packageRoot, currentDir));
-    if (isStagedRuntimeNodeModulesPath(relativeCurrentDir)) {
+    if (isStagedRuntimeDependencyPath(relativeCurrentDir)) {
       continue;
     }
     for (const entry of readDir(currentDir, { withFileTypes: true })) {
@@ -242,7 +235,7 @@ function pruneEmptyDistDirectories(params = {}) {
 
   function prune(currentDir) {
     const relativeCurrentDir = normalizeRelativePath(relative(packageRoot, currentDir));
-    if (isStagedRuntimeNodeModulesPath(relativeCurrentDir)) {
+    if (isStagedRuntimeDependencyPath(relativeCurrentDir)) {
       return;
     }
     for (const entry of readDir(currentDir, { withFileTypes: true })) {
@@ -279,6 +272,137 @@ function pruneEmptyDistDirectories(params = {}) {
   prune(distRoot.distDir);
 }
 
+const JS_DIST_FILE_RE = /^dist\/.*\.(?:cjs|js|mjs)$/u;
+
+function stripSpecifierSuffix(value) {
+  return value.replace(/[?#].*$/u, "");
+}
+
+function resolveDistImportPath(importerPath, specifier) {
+  if (!specifier.startsWith(".")) {
+    return null;
+  }
+  const stripped = stripSpecifierSuffix(specifier);
+  if (!stripped) {
+    return null;
+  }
+  return posix.normalize(posix.join(posix.dirname(importerPath), stripped));
+}
+
+function findStatementStart(source, index) {
+  return (
+    Math.max(
+      source.lastIndexOf(";", index),
+      source.lastIndexOf("{", index),
+      source.lastIndexOf("}", index),
+      source.lastIndexOf("\n", index),
+      source.lastIndexOf("\r", index),
+    ) + 1
+  );
+}
+
+function isImportSpecifierContext(source, index) {
+  const dynamicPrefix = source.slice(Math.max(0, index - 32), index);
+  if (/\bimport\s*\(\s*$/u.test(dynamicPrefix)) {
+    return true;
+  }
+  const statementPrefix = source.slice(findStatementStart(source, index), index).trimStart();
+  return (
+    /^(?:import|export)\b[\s\S]*\bfrom\s*$/u.test(statementPrefix) ||
+    /^import\s*$/u.test(statementPrefix)
+  );
+}
+
+function collectImportSpecifiers(source) {
+  const specifiers = [];
+  let inBlockComment = false;
+  let inLineComment = false;
+  for (let index = 0; index < source.length; index += 1) {
+    if (inBlockComment) {
+      if (source[index] === "*" && source[index + 1] === "/") {
+        inBlockComment = false;
+        index += 1;
+      }
+      continue;
+    }
+    if (inLineComment) {
+      if (source[index] === "\n" || source[index] === "\r") {
+        inLineComment = false;
+      }
+      continue;
+    }
+    if (source[index] === "/" && source[index + 1] === "*") {
+      inBlockComment = true;
+      index += 1;
+      continue;
+    }
+    if (source[index] === "/" && source[index + 1] === "/") {
+      inLineComment = true;
+      index += 1;
+      continue;
+    }
+
+    const quote = source[index];
+    if (quote !== '"' && quote !== "'") {
+      continue;
+    }
+
+    let cursor = index + 1;
+    let value = "";
+    while (cursor < source.length) {
+      const char = source[cursor];
+      if (char === "\\") {
+        value += source.slice(cursor, cursor + 2);
+        cursor += 2;
+        continue;
+      }
+      if (char === quote) {
+        break;
+      }
+      value += char;
+      cursor += 1;
+    }
+    if (cursor >= source.length) {
+      break;
+    }
+
+    if (value.startsWith(".") && isImportSpecifierContext(source, index)) {
+      specifiers.push(value);
+    }
+    index = cursor;
+  }
+  return specifiers;
+}
+
+function expandInstalledDistImportClosure(params) {
+  const files = [...new Set(params.files)];
+  const fileSet = new Set(files);
+  const expectedSet = new Set(params.seedFiles);
+  let changed = true;
+
+  while (changed) {
+    changed = false;
+    for (const importerPath of [...expectedSet]
+      .filter((file) => fileSet.has(file))
+      .toSorted((left, right) => left.localeCompare(right))) {
+      if (!JS_DIST_FILE_RE.test(importerPath) || importerPath.includes("/node_modules/")) {
+        continue;
+      }
+      const source = params.readText(importerPath);
+      for (const specifier of collectImportSpecifiers(source)) {
+        const importedPath = resolveDistImportPath(importerPath, specifier);
+        if (!importedPath || !fileSet.has(importedPath) || expectedSet.has(importedPath)) {
+          continue;
+        }
+        expectedSet.add(importedPath);
+        changed = true;
+      }
+    }
+  }
+
+  return [...expectedSet].toSorted((left, right) => left.localeCompare(right));
+}
+
 export function pruneInstalledPackageDist(params = {}) {
   const packageRoot = params.packageRoot ?? DEFAULT_PACKAGE_ROOT;
   const removeFile = params.unlinkSync ?? unlinkSync;
@@ -300,6 +424,16 @@ export function pruneInstalledPackageDist(params = {}) {
     }
   }
   const installedFiles = listInstalledDistFiles(params);
+  const readFile = params.readFileSync ?? readFileSync;
+  expectedFiles = new Set(
+    expandInstalledDistImportClosure({
+      files: installedFiles,
+      seedFiles: [...expectedFiles],
+      readText(relativePath) {
+        return readFile(join(packageRoot, relativePath), "utf8");
+      },
+    }),
+  );
   const removed = [];
 
   for (const relativePath of installedFiles) {
@@ -322,29 +456,6 @@ export function pruneInstalledPackageDist(params = {}) {
     log.log(`[postinstall] pruned stale dist files: ${removed.join(", ")}`);
   }
   return removed;
-}
-
-export function restoreLegacyUpdaterCompatSidecars(params = {}) {
-  const packageRoot = params.packageRoot ?? DEFAULT_PACKAGE_ROOT;
-  const writeFile = params.writeFileSync ?? writeFileSync;
-  const makeDirectory = params.mkdirSync ?? mkdirSync;
-  const log = params.log ?? console;
-  const restored = [];
-
-  for (const sidecar of LEGACY_UPDATE_COMPAT_SIDECARS) {
-    // Older npm updater builds verify these exact sidecars after npm has
-    // already replaced the package, so generate them independently of prune
-    // results.
-    const sidecarPath = join(packageRoot, sidecar.path);
-    makeDirectory(dirname(sidecarPath), { recursive: true });
-    writeFile(sidecarPath, sidecar.content, "utf8");
-    restored.push(sidecar.path);
-  }
-
-  if (restored.length > 0) {
-    log.log(`[postinstall] restored legacy updater compat sidecars: ${restored.join(", ")}`);
-  }
-  return restored;
 }
 
 function dependencySentinelPath(depName) {
@@ -481,6 +592,11 @@ export function createNestedNpmInstallEnv(env = process.env) {
 export function createBundledRuntimeDependencyInstallEnv(env = process.env) {
   return {
     ...createNestedNpmInstallEnv(env),
+    npm_config_dry_run: "false",
+    npm_config_fetch_retries: env.npm_config_fetch_retries ?? "5",
+    npm_config_fetch_retry_maxtimeout: env.npm_config_fetch_retry_maxtimeout ?? "120000",
+    npm_config_fetch_retry_mintimeout: env.npm_config_fetch_retry_mintimeout ?? "10000",
+    npm_config_fetch_timeout: env.npm_config_fetch_timeout ?? "300000",
     npm_config_legacy_peer_deps: "true",
     npm_config_package_lock: "false",
     npm_config_save: "false",
@@ -666,7 +782,7 @@ export async function runPluginRegistryPostinstallMigration(params = {}) {
   const packageRoot = params.packageRoot ?? DEFAULT_PACKAGE_ROOT;
   const env = params.env ?? process.env;
 
-  if (env[DISABLE_PLUGIN_REGISTRY_MIGRATION_ENV]?.trim()) {
+  if (hasEnvFlag(env, DISABLE_PLUGIN_REGISTRY_MIGRATION_ENV)) {
     return { status: "disabled", migrated: false, reason: "disabled-env" };
   }
 
@@ -746,6 +862,29 @@ function shouldRunBundledPluginPostinstall(params) {
   return true;
 }
 
+export function pruneOpenClawCompileCache(params = {}) {
+  const env = params.env ?? process.env;
+  const pathExists = params.existsSync ?? existsSync;
+  const remove = params.rmSync ?? rmSync;
+  const log = params.log ?? console;
+  const baseDirs = [
+    env.NODE_DISABLE_COMPILE_CACHE ? "" : env.NODE_COMPILE_CACHE,
+    join(tmpdir(), "node-compile-cache"),
+  ].filter((value, index, values) => value && values.indexOf(value) === index);
+
+  for (const baseDir of baseDirs) {
+    const cacheRoot = join(baseDir, "openclaw");
+    if (!pathExists(cacheRoot)) {
+      continue;
+    }
+    try {
+      remove(cacheRoot, { recursive: true, force: true, maxRetries: 2, retryDelay: 100 });
+    } catch (error) {
+      log.warn?.(`[postinstall] could not prune OpenClaw compile cache: ${String(error)}`);
+    }
+  }
+}
+
 export function runBundledPluginPostinstall(params = {}) {
   const env = params.env ?? process.env;
   const packageRoot = params.packageRoot ?? DEFAULT_PACKAGE_ROOT;
@@ -756,6 +895,12 @@ export function runBundledPluginPostinstall(params = {}) {
   if (env?.[DISABLE_POSTINSTALL_ENV]?.trim()) {
     return;
   }
+  pruneOpenClawCompileCache({
+    env,
+    existsSync: pathExists,
+    rmSync: params.rmSync,
+    log,
+  });
   if (isSourceCheckoutRoot({ packageRoot, existsSync: pathExists })) {
     try {
       pruneBundledPluginSourceNodeModules({
@@ -776,19 +921,12 @@ export function runBundledPluginPostinstall(params = {}) {
     });
     return;
   }
-  const prunedDistFiles = pruneInstalledPackageDist({
+  pruneInstalledPackageDist({
     packageRoot,
     existsSync: pathExists,
     readFileSync: params.readFileSync,
     readdirSync: params.readdirSync,
     rmSync: params.rmSync,
-    log,
-  });
-  restoreLegacyUpdaterCompatSidecars({
-    packageRoot,
-    removedFiles: prunedDistFiles,
-    mkdirSync: params.mkdirSync,
-    writeFileSync: params.writeFileSync,
     log,
   });
   if (
@@ -855,6 +993,7 @@ export function runBundledPluginPostinstall(params = {}) {
       encoding: "utf8",
       env: npmRunner.env ?? installEnv,
       stdio: "pipe",
+      windowsHide: true,
       shell: npmRunner.shell,
       windowsVerbatimArguments: npmRunner.windowsVerbatimArguments,
     });

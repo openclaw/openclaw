@@ -6,6 +6,7 @@ const SMOKE_RUNNER_PATH = "scripts/docker/install-sh-smoke/run.sh";
 const BUN_GLOBAL_SMOKE_PATH = "scripts/e2e/bun-global-install-smoke.sh";
 const INSTALL_SMOKE_WORKFLOW_PATH = ".github/workflows/install-smoke.yml";
 const RELEASE_CHECKS_WORKFLOW_PATH = ".github/workflows/openclaw-release-checks.yml";
+const LIVE_E2E_WORKFLOW_PATH = ".github/workflows/openclaw-live-and-e2e-checks-reusable.yml";
 
 describe("test-install-sh-docker", () => {
   it("defaults local Apple Silicon smoke runs to native arm64 while keeping CI on amd64", () => {
@@ -45,16 +46,35 @@ describe("test-install-sh-docker", () => {
     );
     expect(runner).toContain("resolve_update_baseline_version");
     expect(runner).toContain('quiet_npm view "${PACKAGE_NAME}@${UPDATE_BASELINE_VERSION}" version');
-    expect(workflow).toContain("OPENCLAW_INSTALL_SMOKE_UPDATE_BASELINE: latest");
+    expect(workflow).toContain(
+      "OPENCLAW_INSTALL_SMOKE_UPDATE_BASELINE: ${{ inputs.update_baseline_version || 'latest' }}",
+    );
   });
 
   it("can reuse dist from the already-built root Docker smoke image", () => {
     const script = readFileSync(SCRIPT_PATH, "utf8");
+    const dockerfile = readFileSync("Dockerfile", "utf8");
 
     expect(script).toContain('UPDATE_DIST_IMAGE="${OPENCLAW_INSTALL_SMOKE_UPDATE_DIST_IMAGE:-}"');
     expect(script).toContain("restore_local_dist_from_image");
     expect(script).toContain('docker cp "${container_id}:/app/dist" "$ROOT_DIR/dist"');
     expect(script).toContain('echo "==> Reuse local dist/ from Docker image: $image"');
+    expect(script).toContain("ensure_local_update_dist_import_closure");
+    expect(script).toContain('node scripts/check-package-dist-imports.mjs "$ROOT_DIR"');
+    expect(script).toContain("WARN: reused Docker image dist failed import-closure check");
+    expect(script).toContain("pnpm build");
+    expect(script).toContain("pnpm ui:build");
+    expect(dockerfile).toContain("node scripts/check-package-dist-imports.mjs /app");
+  });
+
+  it("allows repository branch history and release tags for secret-backed Docker release checks", () => {
+    const workflow = readFileSync(LIVE_E2E_WORKFLOW_PATH, "utf8");
+
+    expect(workflow).toContain("git fetch --no-tags origin '+refs/heads/*:refs/remotes/origin/*'");
+    expect(workflow).toContain('git rev-parse --verify "${INPUT_REF}^{commit}"');
+    expect(workflow).toContain("repository-branch-history");
+    expect(workflow).toContain("git tag --points-at \"$selected_sha\" | grep -Eq '^v'");
+    expect(workflow).toContain("reachable from an OpenClaw branch or release tag");
   });
 
   it("prints package size audits for release smoke tarballs", () => {
@@ -79,7 +99,9 @@ describe("test-install-sh-docker", () => {
     const script = readFileSync(SCRIPT_PATH, "utf8");
 
     expect(script).toContain("node --import tsx scripts/write-package-dist-inventory.ts");
+    expect(script).toContain('node scripts/check-package-dist-imports.mjs "$ROOT_DIR"');
     expect(script).toContain("quiet_npm pack --ignore-scripts");
+    expect(script).toContain("node scripts/check-openclaw-package-tarball.mjs");
   });
 });
 
@@ -100,6 +122,8 @@ describe("install-sh smoke runner", () => {
     expect(script).toContain("print_install_audit");
     expect(script).toContain('install -g "$@"');
     expect(script).toContain("openclaw update --tag");
+    expect(script).toContain("is_self_swapped_package_process_exit");
+    expect(script).toContain("legacy updater process exited after self-swap");
     expect(script).toContain("parseFirstJsonObject");
     expect(script).toContain("unterminated update JSON object");
   });

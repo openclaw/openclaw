@@ -353,7 +353,7 @@ function parseDiscordExplicitTarget(raw: string) {
       return null;
     }
     return {
-      to: target.id,
+      to: target.normalized,
       chatType: target.kind === "user" ? ("direct" as const) : ("channel" as const),
     };
   } catch {
@@ -791,11 +791,12 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
       ...discordOutbound,
       preferFinalAssistantVisibleText: true,
       shouldTreatDeliveredTextAsVisible: shouldTreatDiscordDeliveredTextAsVisible,
-      shouldSuppressLocalPayloadPrompt: ({ cfg, accountId, payload }) =>
+      shouldSuppressLocalPayloadPrompt: ({ cfg, accountId, payload, hint }) =>
         shouldSuppressLocalDiscordExecApprovalPrompt({
           cfg,
           accountId,
           payload,
+          hint,
         }),
     },
   });

@@ -91,6 +91,12 @@ function mockFirstReplyFailureWithWrappedError(msg: WebInboundMsg, message: stri
   });
 }
 
+function expectFirstSendMediaPayload(msg: WebInboundMsg) {
+  const payload = vi.mocked(msg.sendMedia).mock.calls[0]?.[0];
+  expect(payload).toBeDefined();
+  return payload;
+}
+
 function mockSecondReplySuccess(msg: WebInboundMsg) {
   (msg.reply as unknown as { mockResolvedValueOnce: (v: unknown) => void }).mockResolvedValueOnce(
     undefined,
@@ -169,6 +175,54 @@ describe("deliverWebReply", () => {
     expect(msg.reply).toHaveBeenNthCalledWith(1, "aaa", undefined);
     expect(msg.reply).toHaveBeenNthCalledWith(2, "aaa", undefined);
     expect(replyLogger.info).toHaveBeenCalledWith(expect.any(Object), "auto-reply sent (text)");
+  });
+
+  it("strips raw XML tool-call blocks before WhatsApp text delivery", async () => {
+    const msg = makeMsg();
+
+    await deliverWebReply({
+      replyResult: {
+        text: 'Before\n<function_calls><invoke name="web_search"><parameter name="query">x</parameter></invoke></function_calls>\nAfter',
+      },
+      msg,
+      maxMediaBytes: 1024 * 1024,
+      textLimit: 4000,
+      replyLogger,
+      skipLog: true,
+    });
+
+    expect(msg.reply).toHaveBeenCalledTimes(1);
+    const sentText = vi.mocked(msg.reply).mock.calls[0]?.[0];
+    expect(sentText).not.toContain("function_calls");
+    expect(sentText).not.toContain("invoke");
+    expect(sentText).toContain("Before");
+    expect(sentText).toContain("After");
+  });
+
+  it("uses the same final sanitizer stack for auto-reply text delivery", async () => {
+    const msg = makeMsg();
+
+    await deliverWebReply({
+      replyResult: {
+        text: [
+          "Before",
+          "<function_calls>",
+          '  <invoke name="send_message">',
+          '    <parameter name="text"><b>hidden</b></parameter>',
+          "  </invoke>",
+          "</function_calls>",
+          "<div>After</div>",
+        ].join("\n"),
+      },
+      msg,
+      maxMediaBytes: 1024 * 1024,
+      textLimit: 4000,
+      replyLogger,
+      skipLog: true,
+    });
+
+    expect(msg.reply).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(msg.reply).mock.calls[0]?.[0]).toBe("Before\n\nAfter\n");
   });
 
   it("keeps quote threading on every text chunk for a threaded reply", async () => {
@@ -472,6 +526,30 @@ describe("deliverWebReply", () => {
     ).not.toContain("boom");
   });
 
+  it("sanitizes XML tool-call blocks for outbound sendPayload delivery", async () => {
+    const sendWhatsApp = vi.fn(async (_to: string, _text: string) => ({
+      messageId: "wa-1",
+      toJid: "jid",
+    }));
+
+    await whatsappOutbound.sendPayload!({
+      cfg: {},
+      to: "5511999999999@c.us",
+      text: "",
+      payload: {
+        text: 'Before\n<function_calls><invoke name="web_search"><parameter name="query">x</parameter></invoke></function_calls>\nAfter',
+      },
+      deps: { sendWhatsApp },
+    });
+
+    expect(sendWhatsApp).toHaveBeenCalledTimes(1);
+    const sentText = sendWhatsApp.mock.calls[0]?.[1];
+    expect(sentText).not.toContain("function_calls");
+    expect(sentText).not.toContain("invoke");
+    expect(sentText).toContain("Before");
+    expect(sentText).toContain("After");
+  });
+
   it("keeps payload and auto-reply media normalization in parity", async () => {
     const payload = {
       text: "\n\ncaption",
@@ -524,14 +602,14 @@ describe("deliverWebReply", () => {
         audio: expect.any(Buffer),
         ptt: true,
         mimetype: "audio/ogg; codecs=opus",
-        caption: "caption",
       }),
       undefined,
     );
-    expect(msg.reply).not.toHaveBeenCalled();
+    expect(expectFirstSendMediaPayload(msg)).not.toHaveProperty("caption");
+    expect(msg.reply).toHaveBeenCalledWith("caption", undefined);
   });
 
-  it("sends audio media as ptt voice note", async () => {
+  it("sends audio media as ptt voice note with visible text separately", async () => {
     const msg = makeMsg();
     (
       loadWebMedia as unknown as { mockResolvedValueOnce: (v: unknown) => void }
@@ -555,10 +633,11 @@ describe("deliverWebReply", () => {
         audio: expect.any(Buffer),
         ptt: true,
         mimetype: "audio/ogg; codecs=opus",
-        caption: "cap",
       }),
       undefined,
     );
+    expect(expectFirstSendMediaPayload(msg)).not.toHaveProperty("caption");
+    expect(msg.reply).toHaveBeenCalledWith("cap", undefined);
   });
 
   it("transcodes mp3 audio media before sending a ptt voice note", async () => {
@@ -594,10 +673,11 @@ describe("deliverWebReply", () => {
         audio: Buffer.from("opus-output"),
         ptt: true,
         mimetype: "audio/ogg; codecs=opus",
-        caption: "cap",
       }),
       undefined,
     );
+    expect(expectFirstSendMediaPayload(msg)).not.toHaveProperty("caption");
+    expect(msg.reply).toHaveBeenCalledWith("cap", undefined);
   });
 
   it("sends video media", async () => {

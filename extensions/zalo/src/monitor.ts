@@ -6,7 +6,7 @@ import {
   resolveDirectDmAuthorizationOutcome,
   resolveSenderCommandAuthorizationWithRuntime,
 } from "openclaw/plugin-sdk/command-auth";
-import type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { resolveInboundRouteEnvelopeBuilderWithRuntime } from "openclaw/plugin-sdk/inbound-envelope";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import {
@@ -108,7 +108,6 @@ function registerSharedHostedMediaRoute(params: {
     auth: "plugin",
     match: "prefix",
     path: params.path,
-    replaceExisting: true,
     pluginId: "zalo",
     source: "zalo-hosted-media",
     accountId: params.accountId,

@@ -1,6 +1,5 @@
 import type { Command } from "commander";
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
-import { formatZonedTimestamp } from "openclaw/plugin-sdk/matrix-runtime-shared";
 import type { ChannelSetupInput } from "openclaw/plugin-sdk/setup";
 import { resolveMatrixAccount, resolveMatrixAccountConfig } from "./matrix/accounts.js";
 import { listMatrixOwnDevices, pruneMatrixStaleGatewayDevices } from "./matrix/actions/devices.js";
@@ -30,6 +29,7 @@ import { isOpenClawManagedMatrixDevice } from "./matrix/device-health.js";
 import type { MatrixDirectRoomCandidate } from "./matrix/direct-management.js";
 import { formatMatrixErrorMessage } from "./matrix/errors.js";
 import { applyMatrixProfileUpdate, type MatrixProfileUpdateResult } from "./profile-update.js";
+import { formatZonedTimestamp } from "./runtime-api.js";
 import { getMatrixRuntime } from "./runtime.js";
 import { matrixSetupAdapter } from "./setup-core.js";
 import type { CoreConfig } from "./types.js";
@@ -74,6 +74,44 @@ function markCliFailure(): void {
   process.exitCode = 1;
 }
 
+async function readMatrixCliRecoveryKeyFromStdin(): Promise<string> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of process.stdin) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk)));
+  }
+  const recoveryKey = Buffer.concat(chunks).toString("utf8").trim();
+  if (!recoveryKey) {
+    throw new Error("Matrix recovery key was requested from stdin, but stdin was empty.");
+  }
+  return recoveryKey;
+}
+
+async function resolveMatrixCliRecoveryKeyInput(options: {
+  recoveryKey?: string;
+  recoveryKeyStdin?: boolean;
+}): Promise<string | undefined> {
+  if (options.recoveryKey && options.recoveryKeyStdin === true) {
+    throw new Error("Use either --recovery-key or --recovery-key-stdin, not both.");
+  }
+  if (options.recoveryKeyStdin === true) {
+    return await readMatrixCliRecoveryKeyFromStdin();
+  }
+  return options.recoveryKey;
+}
+
+async function requireMatrixCliRecoveryKeyInput(options: {
+  recoveryKey?: string;
+  recoveryKeyStdin?: boolean;
+}): Promise<string> {
+  const recoveryKey = await resolveMatrixCliRecoveryKeyInput(options);
+  if (!recoveryKey) {
+    throw new Error(
+      "Matrix recovery key is required. Pass --recovery-key-stdin to read it from stdin.",
+    );
+  }
+  return recoveryKey;
+}
+
 function toErrorMessage(err: unknown): string {
   return formatMatrixErrorMessage(err);
 }
@@ -112,7 +150,7 @@ function resolveMatrixCliAccountContext(accountId?: string): {
   accountId: string;
   cfg: CoreConfig;
 } {
-  const cfg = getMatrixRuntime().config.loadConfig() as CoreConfig;
+  const cfg = getMatrixRuntime().config.current() as CoreConfig;
   return {
     accountId: resolveMatrixAuthContext({ cfg, accountId }).accountId,
     cfg,
@@ -121,6 +159,15 @@ function resolveMatrixCliAccountContext(accountId?: string): {
 
 function formatMatrixCliCommand(command: string, accountId?: string): string {
   return formatMatrixCliCommandParts(command.split(" "), accountId);
+}
+
+function formatMatrixCliRecoveryKeyStdinCommand(command: string, accountId?: string): string {
+  const normalizedAccountId = normalizeAccountId(accountId);
+  const envName =
+    normalizedAccountId === "default"
+      ? "MATRIX_RECOVERY_KEY"
+      : `MATRIX_RECOVERY_KEY_${normalizedAccountId.replace(/[^A-Za-z0-9]/g, "_").toUpperCase()}`;
+  return `printf '%s\\n' "$${envName}" | ${formatMatrixCliCommand(command, accountId)}`;
 }
 
 function formatMatrixCliCommandParts(parts: string[], accountId?: string): string {
@@ -198,6 +245,7 @@ type MatrixCliAccountAddResult = {
   accountId: string;
   configPath: string;
   useEnv: boolean;
+  encryptionEnabled: boolean;
   deviceHealth: {
     currentDeviceId: string | null;
     staleOpenClawDeviceIds: string[];
@@ -233,9 +281,10 @@ async function addMatrixAccount(params: {
   initialSyncLimit?: string;
   allowPrivateNetwork?: boolean;
   useEnv?: boolean;
+  enableEncryption?: boolean;
 }): Promise<MatrixCliAccountAddResult> {
   const runtime = getMatrixRuntime();
-  const cfg = runtime.config.loadConfig() as CoreConfig;
+  const cfg = runtime.config.current() as CoreConfig;
   if (!matrixSetupAdapter.applyAccountConfig) {
     throw new Error("Matrix account setup is unavailable.");
   }
@@ -268,12 +317,18 @@ async function addMatrixAccount(params: {
     throw new Error(validationError);
   }
 
-  const updated = matrixSetupAdapter.applyAccountConfig({
+  let updated = matrixSetupAdapter.applyAccountConfig({
     cfg,
     accountId,
     input,
   }) as CoreConfig;
-  await runtime.config.writeConfigFile(updated as never);
+  if (params.enableEncryption === true) {
+    updated = updateMatrixAccountConfig(updated, accountId, { encryption: true });
+  }
+  await runtime.config.replaceConfigFile({
+    nextConfig: updated as never,
+    afterWrite: { mode: "auto" },
+  });
   const accountConfig = resolveMatrixAccountConfig({ cfg: updated, accountId });
 
   let verificationBootstrap: MatrixCliAccountAddResult["verificationBootstrap"] = {
@@ -303,17 +358,21 @@ async function addMatrixAccount(params: {
   if (desiredDisplayName || desiredAvatarUrl) {
     try {
       const synced = await updateMatrixOwnProfile({
+        cfg: updated,
         accountId,
         displayName: desiredDisplayName,
         avatarUrl: desiredAvatarUrl,
       });
       let resolvedAvatarUrl = synced.resolvedAvatarUrl;
       if (synced.convertedAvatarFromHttp && synced.resolvedAvatarUrl) {
-        const latestCfg = runtime.config.loadConfig() as CoreConfig;
+        const latestCfg = runtime.config.current() as CoreConfig;
         const withAvatar = updateMatrixAccountConfig(latestCfg, accountId, {
           avatarUrl: synced.resolvedAvatarUrl,
         });
-        await runtime.config.writeConfigFile(withAvatar as never);
+        await runtime.config.replaceConfigFile({
+          nextConfig: withAvatar as never,
+          afterWrite: { mode: "auto" },
+        });
         resolvedAvatarUrl = synced.resolvedAvatarUrl;
       }
       profile = {
@@ -359,6 +418,7 @@ async function addMatrixAccount(params: {
     accountId,
     configPath: resolveMatrixConfigPath(updated, accountId),
     useEnv: input.useEnv === true,
+    encryptionEnabled: accountConfig.encryption === true,
     deviceHealth,
     verificationBootstrap,
     profile,
@@ -408,7 +468,7 @@ async function inspectMatrixDirectRoom(params: {
   accountId: string;
   userId: string;
 }): Promise<MatrixCliDirectRoomInspection> {
-  const cfg = getMatrixRuntime().config.loadConfig() as CoreConfig;
+  const cfg = getMatrixRuntime().config.current() as CoreConfig;
   const [{ withResolvedActionClient }, { inspectMatrixDirectRooms }] = await Promise.all([
     loadMatrixActionClientModule(),
     loadMatrixDirectManagementModule(),
@@ -438,7 +498,7 @@ async function repairMatrixDirectRoom(params: {
   accountId: string;
   userId: string;
 }): Promise<MatrixCliDirectRoomRepair> {
-  const cfg = getMatrixRuntime().config.loadConfig() as CoreConfig;
+  const cfg = getMatrixRuntime().config.current() as CoreConfig;
   const account = resolveMatrixAccount({ cfg, accountId: params.accountId });
   const [{ withStartedActionClient }, { repairMatrixDirectRooms }] = await Promise.all([
     loadMatrixActionClientModule(),
@@ -490,6 +550,7 @@ type MatrixCliCommandConfig<TResult> = {
   shouldFail?: (result: TResult) => boolean;
   errorPrefix: string;
   onJsonError?: (message: string) => unknown;
+  onTextError?: (message: string) => void;
 };
 
 async function runMatrixCliCommand<TResult>(
@@ -512,6 +573,7 @@ async function runMatrixCliCommand<TResult>(
       printJson(config.onJsonError ? config.onJsonError(message) : { error: message });
     } else {
       console.error(`${config.errorPrefix}: ${formatMatrixCliText(message)}`);
+      config.onTextError?.(message);
     }
     markCliFailure();
   } finally {
@@ -539,8 +601,10 @@ type MatrixCliVerificationStatus = {
   signedByOwner: boolean;
   backupVersion: string | null;
   backup?: MatrixCliBackupStatus;
+  serverDeviceKnown?: boolean | null;
   recoveryKeyStored: boolean;
   recoveryKeyCreatedAt: string | null;
+  recoveryKeyId: string | null;
   pendingVerifications: number;
   recoveryKeyAccepted?: boolean;
   backupUsable?: boolean;
@@ -608,6 +672,111 @@ type MatrixCliDirectRoomRepair = MatrixCliDirectRoomInspection & {
   directContentBefore: Record<string, string[]>;
   directContentAfter: Record<string, string[]>;
 };
+
+type MatrixCliVerificationBootstrap = Awaited<ReturnType<typeof bootstrapMatrixVerification>>;
+
+type MatrixCliEncryptionSetupResult = {
+  accountId: string;
+  configPath: string;
+  encryptionChanged: boolean;
+  bootstrap: MatrixCliVerificationBootstrap;
+  status: MatrixCliVerificationStatus;
+};
+
+function isMatrixVerificationSetupComplete(status: MatrixCliVerificationStatus): boolean {
+  return (
+    status.encryptionEnabled &&
+    status.verified &&
+    status.crossSigningVerified &&
+    status.signedByOwner &&
+    status.serverDeviceKnown === true &&
+    resolveMatrixRoomKeyBackupIssue(resolveBackupStatus(status)).code === "ok"
+  );
+}
+
+function buildNoopMatrixVerificationBootstrap(
+  status: MatrixCliVerificationStatus,
+): MatrixCliVerificationBootstrap {
+  const verification = {
+    ...status,
+    backup: resolveBackupStatus(status),
+    serverDeviceKnown: status.serverDeviceKnown ?? null,
+  };
+  return {
+    success: true,
+    verification,
+    crossSigning: {
+      userId: status.userId,
+      masterKeyPublished: status.crossSigningVerified,
+      selfSigningKeyPublished: status.signedByOwner,
+      userSigningKeyPublished: status.signedByOwner,
+      published: status.crossSigningVerified && status.signedByOwner,
+    },
+    pendingVerifications: status.pendingVerifications,
+    cryptoBootstrap: null,
+  };
+}
+
+async function setupMatrixEncryption(params: {
+  account?: string;
+  recoveryKey?: string;
+  forceResetCrossSigning?: boolean;
+}): Promise<MatrixCliEncryptionSetupResult> {
+  const runtime = getMatrixRuntime();
+  const { accountId, cfg } = resolveMatrixCliAccountContext(params.account);
+  const account = resolveMatrixAccount({ cfg, accountId });
+  if (!account.configured) {
+    throw new Error(
+      `Matrix account "${accountId}" is not configured; run ${formatMatrixCliCommand(
+        "account add",
+        accountId,
+      )} first.`,
+    );
+  }
+
+  const currentAccountConfig = resolveMatrixAccountConfig({ cfg, accountId });
+  const encryptionChanged = currentAccountConfig.encryption !== true;
+  const updated = encryptionChanged
+    ? updateMatrixAccountConfig(cfg, accountId, { encryption: true })
+    : cfg;
+  if (encryptionChanged) {
+    await runtime.config.replaceConfigFile({
+      nextConfig: updated as never,
+      afterWrite: { mode: "auto" },
+    });
+  }
+
+  const canUseExistingBootstrap =
+    !encryptionChanged && !params.recoveryKey && params.forceResetCrossSigning !== true;
+  const existingStatus = canUseExistingBootstrap
+    ? await getMatrixVerificationStatus({ accountId, cfg: updated, readiness: "none" })
+    : null;
+  if (existingStatus && isMatrixVerificationSetupComplete(existingStatus)) {
+    return {
+      accountId,
+      configPath: resolveMatrixConfigPath(updated, accountId),
+      encryptionChanged,
+      bootstrap: buildNoopMatrixVerificationBootstrap(existingStatus),
+      status: existingStatus,
+    };
+  }
+
+  const bootstrap = await bootstrapMatrixVerification({
+    accountId,
+    cfg: updated,
+    recoveryKey: params.recoveryKey,
+    forceResetCrossSigning: params.forceResetCrossSigning === true,
+  });
+  const status = await getMatrixVerificationStatus({ accountId, cfg: updated });
+
+  return {
+    accountId,
+    configPath: resolveMatrixConfigPath(updated, accountId),
+    encryptionChanged,
+    bootstrap,
+    status,
+  };
+}
 
 function toCliDirectRoomCandidate(room: MatrixDirectRoomCandidate): MatrixCliDirectRoomCandidate {
   return {
@@ -1023,12 +1192,26 @@ async function runMatrixCliSelfVerificationCommand(
       }
       console.log("Self-verification complete.");
     },
+    onTextError: () => {
+      printGuidance([
+        `Run ${formatMatrixCliCommand("verify self", accountId)} again and accept the request in another verified Matrix client for this account.`,
+        `Then run ${formatMatrixCliCommand("verify status --verbose", accountId)} to confirm Cross-signing verified: yes and Signed by owner: yes.`,
+      ]);
+    },
     errorPrefix: "Self-verification failed",
   });
 }
 
 function printVerificationGuidance(status: MatrixCliVerificationStatus, accountId?: string): void {
   printGuidance(buildVerificationGuidance(status, accountId));
+}
+
+function printBackupGuidance(
+  backup: MatrixCliBackupStatus,
+  accountId?: string,
+  options: { recoveryKeyStored?: boolean } = {},
+): void {
+  printGuidance(buildBackupGuidance(backup, accountId, options));
 }
 
 function printBackupSummary(backup: MatrixCliBackupStatus): void {
@@ -1044,22 +1227,46 @@ function buildVerificationGuidance(
   accountId?: string,
 ): string[] {
   const backup = resolveBackupStatus(status);
-  const backupIssue = resolveMatrixRoomKeyBackupIssue(backup);
   const nextSteps = new Set<string>();
   if (!status.verified) {
     if (status.recoveryKeyAccepted === true && status.backupUsable === true) {
       nextSteps.add(
-        `Recovery key can unlock the room-key backup, but full Matrix identity trust is still incomplete. Run ${formatMatrixCliCommand("verify self", accountId)} and follow the prompts from another Matrix client.`,
+        `Recovery key can unlock the room-key backup, but full Matrix identity trust is still incomplete. Run ${formatMatrixCliCommand("verify self", accountId)}, accept the request in another verified Matrix client, and confirm the SAS only if it matches.`,
       );
       nextSteps.add(
-        `If you intend to replace the current cross-signing identity, run ${formatMatrixCliCommand("verify bootstrap --recovery-key <key> --force-reset-cross-signing", accountId)}.`,
+        `If you intend to replace the current cross-signing identity, run the shown printf pipeline with the Matrix recovery key env var for this account: ${formatMatrixCliRecoveryKeyStdinCommand("verify bootstrap --recovery-key-stdin --force-reset-cross-signing", accountId)}.`,
       );
     } else {
       nextSteps.add(
-        `Run ${formatMatrixCliCommand("verify device <key>", accountId)} to verify this device.`,
+        `Run the shown printf pipeline with the Matrix recovery key env var for this account: ${formatMatrixCliRecoveryKeyStdinCommand("verify device --recovery-key-stdin", accountId)}. If you do not have the recovery key but still have another verified Matrix client, run ${formatMatrixCliCommand("verify self", accountId)} instead.`,
       );
     }
   }
+  if (status.serverDeviceKnown === false) {
+    nextSteps.add(
+      `This Matrix device is no longer listed on the homeserver. Create a new OpenClaw Matrix device with ${formatMatrixCliCommand("account add --homeserver <url> --user-id <@user:server> --password <password> --device-name OpenClaw-Gateway", accountId)}. If you use token auth, create a fresh Matrix access token in your Matrix client or admin UI, then run ${formatMatrixCliCommand("account add --homeserver <url> --access-token <token>", accountId)}.`,
+    );
+  }
+  for (const step of buildBackupGuidance(backup, accountId, {
+    recoveryKeyStored: status.recoveryKeyStored,
+  })) {
+    nextSteps.add(step);
+  }
+  if (status.pendingVerifications > 0) {
+    nextSteps.add(
+      `Review pending verification requests with ${formatMatrixCliCommand("verify list", accountId)}. Complete each active request with ${formatMatrixCliCommand("verify sas <id>", accountId)} and ${formatMatrixCliCommand("verify confirm-sas <id>", accountId)}, or cancel stale requests with ${formatMatrixCliCommand("verify cancel <id>", accountId)}.`,
+    );
+  }
+  return Array.from(nextSteps);
+}
+
+function buildBackupGuidance(
+  backup: MatrixCliBackupStatus,
+  accountId?: string,
+  options: { recoveryKeyStored?: boolean } = {},
+): string[] {
+  const backupIssue = resolveMatrixRoomKeyBackupIssue(backup);
+  const nextSteps = new Set<string>();
   if (backupIssue.code === "missing-server-backup") {
     nextSteps.add(
       `Run ${formatMatrixCliCommand("verify bootstrap", accountId)} to create a room key backup.`,
@@ -1069,36 +1276,36 @@ function buildVerificationGuidance(
     backupIssue.code === "key-not-loaded" ||
     backupIssue.code === "inactive"
   ) {
-    if (status.recoveryKeyStored) {
+    if (options.recoveryKeyStored) {
       nextSteps.add(
-        `Backup key is not loaded on this device. Run ${formatMatrixCliCommand("verify backup restore", accountId)} to load it and restore old room keys.`,
+        `Backup key is not loaded on this device. Run ${formatMatrixCliCommand("verify backup restore", accountId)} to load it and restore old room keys. If restore still cannot load the key, run the shown printf pipeline with the Matrix recovery key env var for this account: ${formatMatrixCliRecoveryKeyStdinCommand("verify backup restore --recovery-key-stdin", accountId)}.`,
       );
     } else {
       nextSteps.add(
-        `Store a recovery key with ${formatMatrixCliCommand("verify device <key>", accountId)}, then run ${formatMatrixCliCommand("verify backup restore", accountId)}.`,
+        `Run the shown printf pipeline with the Matrix recovery key env var for this account: ${formatMatrixCliRecoveryKeyStdinCommand("verify backup restore --recovery-key-stdin", accountId)} to load the server backup and store the key for future restores.`,
       );
     }
   } else if (backupIssue.code === "key-mismatch") {
     nextSteps.add(
-      `Backup key mismatch on this device. Re-run ${formatMatrixCliCommand("verify device <key>", accountId)} with the matching recovery key.`,
+      `Backup key mismatch on this device. Run the shown printf pipeline with the active server backup recovery key env var for this account: ${formatMatrixCliRecoveryKeyStdinCommand("verify backup restore --recovery-key-stdin", accountId)}.`,
     );
     nextSteps.add(
-      `If you want a fresh backup baseline and accept losing unrecoverable history, run ${formatMatrixCliCommand("verify backup reset --yes", accountId)}. This may also repair secret storage so the new backup key can be loaded after restart.`,
+      `If you want a fresh backup baseline and accept losing unrecoverable history, run ${formatMatrixCliCommand("verify backup reset --yes", accountId)}. Add --rotate-recovery-key only when the old recovery key should stop unlocking the fresh backup.`,
     );
   } else if (backupIssue.code === "untrusted-signature") {
     nextSteps.add(
-      `Backup trust chain is not verified on this device. Re-run ${formatMatrixCliCommand("verify device <key>", accountId)} if you have the correct recovery key.`,
+      `Backup trust chain is not verified on this device. Run the shown printf pipeline with the correct recovery key env var for this account: ${formatMatrixCliRecoveryKeyStdinCommand("verify device --recovery-key-stdin", accountId)}.`,
     );
     nextSteps.add(
-      `If you want a fresh backup baseline and accept losing unrecoverable history, run ${formatMatrixCliCommand("verify backup reset --yes", accountId)}. This may also repair secret storage so the new backup key can be loaded after restart.`,
+      `If device identity trust remains incomplete after that, run ${formatMatrixCliCommand("verify self", accountId)} from another verified Matrix client.`,
+    );
+    nextSteps.add(
+      `If you want a fresh backup baseline and accept losing unrecoverable history, run ${formatMatrixCliCommand("verify backup reset --yes", accountId)}. Add --rotate-recovery-key only when the old recovery key should stop unlocking the fresh backup.`,
     );
   } else if (backupIssue.code === "indeterminate") {
     nextSteps.add(
       `Run ${formatMatrixCliCommand("verify status --verbose", accountId)} to inspect backup trust diagnostics.`,
     );
-  }
-  if (status.pendingVerifications > 0) {
-    nextSteps.add(`Complete ${status.pendingVerifications} pending verification request(s).`);
   }
   return Array.from(nextSteps);
 }
@@ -1119,6 +1326,9 @@ function printVerificationStatus(
   accountId?: string,
 ): void {
   console.log(`Verified by owner: ${status.verified ? "yes" : "no"}`);
+  if (status.serverDeviceKnown === false) {
+    console.log("Device issue: current Matrix device is missing from the homeserver device list");
+  }
   const backup = resolveBackupStatus(status);
   const backupIssue = resolveMatrixRoomKeyBackupIssue(backup);
   printVerificationBackupSummary(status);
@@ -1128,6 +1338,9 @@ function printVerificationStatus(
   if (verbose) {
     console.log("Diagnostics:");
     printVerificationIdentity(status);
+    if (status.serverDeviceKnown !== undefined) {
+      console.log(`Device present on server: ${yesNoUnknown(status.serverDeviceKnown ?? null)}`);
+    }
     printVerificationTrustDiagnostics(status);
     printVerificationBackupStatus(status);
     console.log(`Recovery key stored: ${status.recoveryKeyStored ? "yes" : "no"}`);
@@ -1137,6 +1350,33 @@ function printVerificationStatus(
     console.log(`Recovery key stored: ${status.recoveryKeyStored ? "yes" : "no"}`);
   }
   printVerificationGuidance(status, accountId);
+}
+
+function printMatrixEncryptionSetupResult(
+  result: MatrixCliEncryptionSetupResult,
+  verbose = false,
+): void {
+  printAccountLabel(result.accountId);
+  console.log(
+    `Encryption config: ${result.encryptionChanged ? "enabled" : "already enabled"} at ${formatMatrixCliText(
+      result.configPath,
+    )}`,
+  );
+  console.log(`Bootstrap success: ${result.bootstrap.success ? "yes" : "no"}`);
+  if (result.bootstrap.error) {
+    console.log(`Bootstrap error: ${formatMatrixCliText(result.bootstrap.error)}`);
+  }
+  console.log(`Verified by owner: ${result.status.verified ? "yes" : "no"}`);
+  printVerificationBackupSummary(result.status);
+  if (verbose) {
+    printVerificationIdentity(result.status);
+    printVerificationTrustDiagnostics(result.status);
+    printVerificationBackupStatus(result.status);
+    console.log(`Recovery key stored: ${result.status.recoveryKeyStored ? "yes" : "no"}`);
+    printTimestamp("Recovery key created at", result.status.recoveryKeyCreatedAt);
+    console.log(`Pending verifications: ${result.status.pendingVerifications}`);
+  }
+  printVerificationGuidance(result.status, result.accountId);
 }
 
 export function registerMatrixCli(params: { program: Command }): void {
@@ -1164,6 +1404,8 @@ export function registerMatrixCli(params: { program: Command }): void {
     .option("--password <password>", "Matrix password")
     .option("--device-name <name>", "Matrix device display name")
     .option("--initial-sync-limit <n>", "Matrix initial sync limit")
+    .option("--enable-e2ee", "Enable Matrix end-to-end encryption and bootstrap verification")
+    .option("--encryption", "Alias for --enable-e2ee")
     .option(
       "--use-env",
       "Use MATRIX_* env vars (or MATRIX_<ACCOUNT_ID>_* for non-default accounts)",
@@ -1183,6 +1425,8 @@ export function registerMatrixCli(params: { program: Command }): void {
         password?: string;
         deviceName?: string;
         initialSyncLimit?: string;
+        enableE2ee?: boolean;
+        encryption?: boolean;
         useEnv?: boolean;
         verbose?: boolean;
         json?: boolean;
@@ -1203,6 +1447,7 @@ export function registerMatrixCli(params: { program: Command }): void {
               password: options.password,
               deviceName: options.deviceName,
               initialSyncLimit: options.initialSyncLimit,
+              enableEncryption: options.enableE2ee === true || options.encryption === true,
               useEnv: options.useEnv === true,
             }),
           onText: (result) => {
@@ -1211,6 +1456,7 @@ export function registerMatrixCli(params: { program: Command }): void {
             console.log(
               `Credentials source: ${result.useEnv ? "MATRIX_* / MATRIX_<ACCOUNT_ID>_* env vars" : "inline config"}`,
             );
+            console.log(`Encryption: ${result.encryptionEnabled ? "enabled" : "disabled"}`);
             if (result.verificationBootstrap.attempted) {
               if (result.verificationBootstrap.success) {
                 console.log("Matrix verification bootstrap: complete");
@@ -1368,6 +1614,44 @@ export function registerMatrixCli(params: { program: Command }): void {
             }
           },
           errorPrefix: "Direct room repair failed",
+        });
+      },
+    );
+
+  const encryption = root.command("encryption").description("Set up Matrix end-to-end encryption");
+
+  encryption
+    .command("setup")
+    .description("Enable Matrix E2EE, bootstrap verification, and print next steps")
+    .option("--account <id>", "Account ID (for multi-account setups)")
+    .option("--recovery-key <key>", "Recovery key to apply before bootstrap")
+    .option("--force-reset-cross-signing", "Force reset cross-signing identity before bootstrap")
+    .option("--verbose", "Show detailed diagnostics")
+    .option("--json", "Output as JSON")
+    .action(
+      async (options: {
+        account?: string;
+        recoveryKey?: string;
+        forceResetCrossSigning?: boolean;
+        verbose?: boolean;
+        json?: boolean;
+      }) => {
+        await runMatrixCliCommand({
+          verbose: options.verbose === true,
+          json: options.json === true,
+          run: async () =>
+            await setupMatrixEncryption({
+              account: options.account,
+              recoveryKey: options.recoveryKey,
+              forceResetCrossSigning: options.forceResetCrossSigning === true,
+            }),
+          onText: (result, verbose) => {
+            printMatrixEncryptionSetupResult(result, verbose);
+          },
+          onJson: (result) => ({ success: result.bootstrap.success, ...result }),
+          shouldFail: (result) => !result.bootstrap.success,
+          errorPrefix: "Encryption setup failed",
+          onJsonError: (message) => ({ success: false, error: message }),
         });
       },
     );
@@ -1627,9 +1911,14 @@ export function registerMatrixCli(params: { program: Command }): void {
     .option("--account <id>", "Account ID (for multi-account setups)")
     .option("--verbose", "Show detailed diagnostics")
     .option("--include-recovery-key", "Include stored recovery key in output")
+    .option(
+      "--allow-degraded-local-state",
+      "Return best-effort diagnostics without preparing the Matrix account",
+    )
     .option("--json", "Output as JSON")
     .action(
       async (options: {
+        allowDegradedLocalState?: boolean;
         account?: string;
         verbose?: boolean;
         includeRecoveryKey?: boolean;
@@ -1644,11 +1933,13 @@ export function registerMatrixCli(params: { program: Command }): void {
               accountId,
               cfg,
               includeRecoveryKey: options.includeRecoveryKey === true,
+              ...(options.allowDegradedLocalState === true ? { readiness: "none" as const } : {}),
             }),
           onText: (status, verbose) => {
             printAccountLabel(accountId);
             printVerificationStatus(status, verbose, accountId);
           },
+          shouldFail: (status) => status.serverDeviceKnown === false,
           errorPrefix: "Error",
         });
       },
@@ -1674,6 +1965,7 @@ export function registerMatrixCli(params: { program: Command }): void {
           if (verbose) {
             printBackupStatus(status);
           }
+          printBackupGuidance(status, accountId);
         },
         errorPrefix: "Backup status failed",
       });
@@ -1686,19 +1978,32 @@ export function registerMatrixCli(params: { program: Command }): void {
     )
     .option("--account <id>", "Account ID (for multi-account setups)")
     .option("--yes", "Confirm destructive backup reset", false)
+    .option("--rotate-recovery-key", "Create a new Matrix recovery key for the fresh backup")
     .option("--verbose", "Show detailed diagnostics")
     .option("--json", "Output as JSON")
     .action(
-      async (options: { account?: string; yes?: boolean; verbose?: boolean; json?: boolean }) => {
+      async (options: {
+        account?: string;
+        yes?: boolean;
+        rotateRecoveryKey?: boolean;
+        verbose?: boolean;
+        json?: boolean;
+      }) => {
         const { accountId, cfg } = resolveMatrixCliAccountContext(options.account);
         await runMatrixCliCommand({
           verbose: options.verbose === true,
           json: options.json === true,
           run: async () => {
             if (options.yes !== true) {
-              throw new Error("Refusing to reset Matrix room-key backup without --yes");
+              throw new Error(
+                `Refusing to reset Matrix room-key backup without --yes. If you accept losing unrecoverable history, re-run ${formatMatrixCliCommand("verify backup reset --yes", accountId)}.`,
+              );
             }
-            return await resetMatrixRoomKeyBackup({ accountId, cfg });
+            return await resetMatrixRoomKeyBackup({
+              accountId,
+              cfg,
+              rotateRecoveryKey: options.rotateRecoveryKey === true,
+            });
           },
           onText: (result, verbose) => {
             printAccountLabel(accountId);
@@ -1720,6 +2025,7 @@ export function registerMatrixCli(params: { program: Command }): void {
               printTimestamp("Reset at", result.resetAt);
               printBackupStatus(result.backup);
             }
+            printBackupGuidance(result.backup, accountId);
           },
           shouldFail: (result) => !result.success,
           errorPrefix: "Backup reset failed",
@@ -1732,13 +2038,18 @@ export function registerMatrixCli(params: { program: Command }): void {
     .command("restore")
     .description("Restore encrypted room keys from server backup")
     .option("--account <id>", "Account ID (for multi-account setups)")
-    .option("--recovery-key <key>", "Optional recovery key to load before restoring")
+    .option(
+      "--recovery-key <key>",
+      "Optional recovery key to load before restoring (prefer --recovery-key-stdin)",
+    )
+    .option("--recovery-key-stdin", "Read the Matrix recovery key from stdin")
     .option("--verbose", "Show detailed diagnostics")
     .option("--json", "Output as JSON")
     .action(
       async (options: {
         account?: string;
         recoveryKey?: string;
+        recoveryKeyStdin?: boolean;
         verbose?: boolean;
         json?: boolean;
       }) => {
@@ -1750,7 +2061,7 @@ export function registerMatrixCli(params: { program: Command }): void {
             await restoreMatrixRoomKeyBackup({
               accountId,
               cfg,
-              recoveryKey: options.recoveryKey,
+              recoveryKey: await resolveMatrixCliRecoveryKeyInput(options),
             }),
           onText: (result, verbose) => {
             printAccountLabel(accountId);
@@ -1768,6 +2079,9 @@ export function registerMatrixCli(params: { program: Command }): void {
               printTimestamp("Restored at", result.restoredAt);
               printBackupStatus(result.backup);
             }
+            printBackupGuidance(result.backup, accountId, {
+              recoveryKeyStored: result.loadedFromSecretStorage,
+            });
           },
           shouldFail: (result) => !result.success,
           errorPrefix: "Backup restore failed",
@@ -1780,7 +2094,11 @@ export function registerMatrixCli(params: { program: Command }): void {
     .command("bootstrap")
     .description("Bootstrap Matrix cross-signing and device verification state")
     .option("--account <id>", "Account ID (for multi-account setups)")
-    .option("--recovery-key <key>", "Recovery key to apply before bootstrap")
+    .option(
+      "--recovery-key <key>",
+      "Recovery key to apply before bootstrap (prefer --recovery-key-stdin)",
+    )
+    .option("--recovery-key-stdin", "Read the Matrix recovery key from stdin")
     .option("--force-reset-cross-signing", "Force reset cross-signing identity before bootstrap")
     .option("--verbose", "Show detailed diagnostics")
     .option("--json", "Output as JSON")
@@ -1788,6 +2106,7 @@ export function registerMatrixCli(params: { program: Command }): void {
       async (options: {
         account?: string;
         recoveryKey?: string;
+        recoveryKeyStdin?: boolean;
         forceResetCrossSigning?: boolean;
         verbose?: boolean;
         json?: boolean;
@@ -1800,7 +2119,7 @@ export function registerMatrixCli(params: { program: Command }): void {
             await bootstrapMatrixVerification({
               accountId,
               cfg,
-              recoveryKey: options.recoveryKey,
+              recoveryKey: await resolveMatrixCliRecoveryKeyInput(options),
               forceResetCrossSigning: options.forceResetCrossSigning === true,
             }),
           onText: (result, verbose) => {
@@ -1841,18 +2160,34 @@ export function registerMatrixCli(params: { program: Command }): void {
     );
 
   verify
-    .command("device <key>")
+    .command("device [key]")
     .description("Verify device using a Matrix recovery key")
     .option("--account <id>", "Account ID (for multi-account setups)")
+    .option("--recovery-key-stdin", "Read the Matrix recovery key from stdin")
     .option("--verbose", "Show detailed diagnostics")
     .option("--json", "Output as JSON")
     .action(
-      async (key: string, options: { account?: string; verbose?: boolean; json?: boolean }) => {
+      async (
+        key: string | undefined,
+        options: {
+          account?: string;
+          recoveryKeyStdin?: boolean;
+          verbose?: boolean;
+          json?: boolean;
+        },
+      ) => {
         const { accountId, cfg } = resolveMatrixCliAccountContext(options.account);
         await runMatrixCliCommand({
           verbose: options.verbose === true,
           json: options.json === true,
-          run: async () => await verifyMatrixRecoveryKey(key, { accountId, cfg }),
+          run: async () =>
+            await verifyMatrixRecoveryKey(
+              await requireMatrixCliRecoveryKeyInput({
+                recoveryKey: key,
+                recoveryKeyStdin: options.recoveryKeyStdin,
+              }),
+              { accountId, cfg },
+            ),
           onText: (result, verbose) => {
             printAccountLabel(accountId);
             if (!result.success) {

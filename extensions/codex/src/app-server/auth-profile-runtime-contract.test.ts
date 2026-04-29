@@ -5,8 +5,8 @@ import {
   abortAgentHarnessRun,
   type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness";
+import { AUTH_PROFILE_RUNTIME_CONTRACT } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { AUTH_PROFILE_RUNTIME_CONTRACT } from "../../../../test/helpers/agents/auth-profile-runtime-contract.js";
 import { runCodexAppServerAttempt, __testing } from "./run-attempt.js";
 import { readCodexAppServerBinding, writeCodexAppServerBinding } from "./session-binding.js";
 import { createCodexTestModel } from "./test-support.js";
@@ -43,7 +43,7 @@ function threadStartResult(threadId = "thread-auth-contract") {
       status: { type: "idle" },
       path: null,
       cwd: "",
-      cliVersion: "0.118.0",
+      cliVersion: "0.125.0",
       source: "unknown",
       agentNickname: null,
       agentRole: null,

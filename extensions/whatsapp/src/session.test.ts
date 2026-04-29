@@ -15,6 +15,7 @@ let logWebSelfId: typeof import("./session.js").logWebSelfId;
 let waitForWaConnection: typeof import("./session.js").waitForWaConnection;
 let waitForCredsSaveQueue: typeof import("./session.js").waitForCredsSaveQueue;
 let writeCredsJsonAtomically: typeof import("./session.js").writeCredsJsonAtomically;
+let DEFAULT_WHATSAPP_SOCKET_TIMING: typeof import("./socket-timing.js").DEFAULT_WHATSAPP_SOCKET_TIMING;
 
 async function flushCredsUpdate() {
   await new Promise<void>((resolve) => setImmediate(resolve));
@@ -148,6 +149,7 @@ describe("web session", () => {
       waitForCredsSaveQueue,
       writeCredsJsonAtomically,
     } = await import("./session.js"));
+    ({ DEFAULT_WHATSAPP_SOCKET_TIMING } = await import("./socket-timing.js"));
   });
 
   beforeEach(() => {
@@ -171,7 +173,10 @@ describe("web session", () => {
     await createWaSocket(true, false, { authDir });
     const makeWASocket = baileys.makeWASocket as ReturnType<typeof vi.fn>;
     expect(makeWASocket).toHaveBeenCalledWith(
-      expect.objectContaining({ printQRInTerminal: false }),
+      expect.objectContaining({
+        printQRInTerminal: false,
+        ...DEFAULT_WHATSAPP_SOCKET_TIMING,
+      }),
     );
     const passed = makeWASocket.mock.calls[0][0];
     const passedLogger = (passed as { logger?: { level?: string; trace?: unknown } }).logger;
@@ -185,6 +190,22 @@ describe("web session", () => {
       0o600,
     );
     openMock.restore();
+  });
+
+  it("passes explicit Baileys socket timing overrides", async () => {
+    await createWaSocket(false, false, {
+      keepAliveIntervalMs: 10_000,
+      connectTimeoutMs: 90_000,
+      defaultQueryTimeoutMs: 120_000,
+    });
+
+    expect(baileys.makeWASocket).toHaveBeenCalledWith(
+      expect.objectContaining({
+        keepAliveIntervalMs: 10_000,
+        connectTimeoutMs: 90_000,
+        defaultQueryTimeoutMs: 120_000,
+      }),
+    );
   });
 
   it("uses ambient env proxy agent when HTTPS_PROXY is configured", async () => {
@@ -202,6 +223,33 @@ describe("web session", () => {
     expect(typeof (passed.fetchAgent as { dispatch?: unknown } | undefined)?.dispatch).toBe(
       "function",
     );
+  });
+
+  it("uses lowercase HTTPS proxy before uppercase for WA WebSocket connection", async () => {
+    vi.stubEnv("HTTPS_PROXY", "http://upper-proxy.test:8080");
+    vi.stubEnv("https_proxy", "http://lower-proxy.test:8080");
+
+    await createWaSocket(false, false);
+
+    const passed = (baileys.makeWASocket as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as {
+      agent?: { proxy?: URL };
+    };
+    expect(passed.agent).toBeDefined();
+    expect(passed.agent?.proxy?.href).toContain("lower-proxy.test");
+  });
+
+  it("skips WA WebSocket env proxy agent when NO_PROXY covers WhatsApp Web", async () => {
+    vi.stubEnv("HTTPS_PROXY", "http://proxy.test:8080");
+    vi.stubEnv("NO_PROXY", "mmg.whatsapp.net");
+
+    await createWaSocket(false, false);
+
+    const passed = (baileys.makeWASocket as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as {
+      agent?: unknown;
+      fetchAgent?: unknown;
+    };
+    expect(passed.agent).toBeUndefined();
+    expect(passed.fetchAgent).toBeDefined();
   });
 
   it("does not create a proxy agent when no env proxy is configured", async () => {

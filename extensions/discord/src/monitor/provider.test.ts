@@ -1,7 +1,7 @@
 import { EventEmitter } from "node:events";
 import { RateLimitError } from "@buape/carbon";
 import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   baseConfig,
@@ -637,7 +637,7 @@ describe("monitorDiscordProvider", () => {
     expect(eventQueue?.listenerTimeout).toBe(300_000);
   });
 
-  it("does not reuse eventQueue.listenerTimeout as the queued inbound worker timeout", async () => {
+  it("does not pass eventQueue.listenerTimeout into the message run queue", async () => {
     await monitorDiscordProvider({
       config: createConfigWithDiscordAccount({
         eventQueue: { listenerTimeout: 50_000 },
@@ -653,7 +653,7 @@ describe("monitorDiscordProvider", () => {
     expect("listenerTimeoutMs" in (params ?? {})).toBe(false);
   });
 
-  it("forwards inbound worker timeout config to the Discord message handler", async () => {
+  it("ignores legacy inbound worker timeout config", async () => {
     resolveDiscordAccountMock.mockReturnValue({
       accountId: "default",
       token: "MTIz.abc.def",
@@ -674,7 +674,7 @@ describe("monitorDiscordProvider", () => {
     const params = getFirstDiscordMessageHandlerParams<{
       workerRunTimeoutMs?: number;
     }>();
-    expect(params?.workerRunTimeoutMs).toBe(300_000);
+    expect(params?.workerRunTimeoutMs).toBeUndefined();
   });
 
   it("continues startup when Discord daily slash-command create quota is exhausted", async () => {

@@ -112,7 +112,9 @@ export function formatStatusTailscaleValue(params: {
   const decorateWarn = params.decorateWarn ?? ((value: string) => value);
   if (params.tailscaleMode === "off") {
     const suffix = [
-      params.includeBackendStateWhenOff && params.backendState ? params.backendState : null,
+      params.includeBackendStateWhenOff && params.backendState
+        ? `daemon ${params.backendState}`
+        : null,
       params.includeDnsNameWhenOff && params.dnsName ? params.dnsName : null,
     ]
       .filter(Boolean)
@@ -192,7 +194,7 @@ export function buildStatusOverviewRows(params: {
   const rows: StatusOverviewRow[] = [...(params.prefixRows ?? [])];
   rows.push(
     { Item: "Dashboard", Value: params.dashboardValue },
-    { Item: "Tailscale", Value: params.tailscaleValue },
+    { Item: "Tailscale exposure", Value: params.tailscaleValue },
     { Item: "Channel", Value: params.channelLabel },
   );
   if (params.gitLabel) {

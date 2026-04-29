@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Runs Open WebUI against a Dockerized OpenClaw Gateway and verifies the proxied
+# chat path with a real OpenAI-compatible request.
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -47,6 +49,7 @@ cleanup() {
 trap cleanup EXIT
 
 docker_e2e_build_or_reuse "$IMAGE_NAME" openwebui
+docker_e2e_harness_mount_args
 
 echo "Pulling Open WebUI image: $OPENWEBUI_IMAGE"
 timeout "$DOCKER_PULL_TIMEOUT" docker pull "$OPENWEBUI_IMAGE" >/dev/null
@@ -55,6 +58,7 @@ echo "Creating Docker network..."
 docker_cmd docker network create "$NET_NAME" >/dev/null
 
 echo "Starting gateway container..."
+# Harness files are mounted read-only; the app under test comes from /app/dist.
 docker_cmd docker run -d \
   --name "$GW_NAME" \
   --network "$NET_NAME" \
@@ -66,11 +70,12 @@ docker_cmd docker run -d \
   -e "OPENCLAW_SKIP_CANVAS_HOST=1" \
   -e OPENAI_API_KEY \
   ${OPENAI_BASE_URL_VALUE:+-e OPENAI_BASE_URL} \
+  "${DOCKER_E2E_HARNESS_ARGS[@]}" \
   "$IMAGE_NAME" \
   bash -lc '
     set -euo pipefail
-    entry=dist/index.mjs
-    [ -f "$entry" ] || entry=dist/index.js
+    source scripts/lib/openclaw-e2e-instance.sh
+    entry="$(openclaw_e2e_resolve_entrypoint)"
 
     openai_api_key="${OPENAI_API_KEY:?OPENAI_API_KEY required}"
     batch_file="$(mktemp /tmp/openclaw-openwebui-config.XXXXXX.json)"
@@ -115,7 +120,7 @@ EOF
 EOF
     rm -f "$workspace/BOOTSTRAP.md"
 
-    exec node "$entry" gateway --port '"$PORT"' --bind lan --allow-unconfigured > /tmp/openwebui-gateway.log 2>&1
+    openclaw_e2e_exec_gateway "$entry" '"$PORT"' lan /tmp/openwebui-gateway.log
   ' >/dev/null
 
 echo "Waiting for gateway HTTP surface..."
