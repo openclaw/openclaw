@@ -209,6 +209,7 @@ function installModelsListCommandForwardCompatMocks() {
 
   vi.doMock("../../agents/model-auth.js", () => ({
     hasUsableCustomProviderApiKey: vi.fn().mockReturnValue(false),
+    hasSyntheticLocalProviderAuthConfig: vi.fn().mockReturnValue(false),
   }));
 
   vi.doMock("../../plugins/installed-plugin-index-store.js", () => ({

@@ -66,6 +66,26 @@ describe("createModelListAuthIndex", () => {
     expect(index.hasProviderAuth("custom-openai")).toBe(true);
   });
 
+  it("records configured local custom provider markers", () => {
+    const index = createModelListAuthIndex({
+      cfg: {
+        models: {
+          providers: {
+            "local-openai": {
+              api: "openai-completions",
+              baseUrl: "http://127.0.0.1:8080/v1",
+              models: [{ id: "local-model" }],
+            },
+          },
+        },
+      },
+      authStore: emptyStore,
+      env: {},
+    });
+
+    expect(index.hasProviderAuth("local-openai")).toBe(true);
+  });
+
   it("uses injected synthetic auth refs without loading provider runtime", () => {
     const index = createModelListAuthIndex({
       cfg: {},

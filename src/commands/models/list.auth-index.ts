@@ -2,7 +2,10 @@ import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import { resolveProviderEnvApiKeyCandidates } from "../../agents/model-auth-env-vars.js";
 import { resolveEnvApiKey } from "../../agents/model-auth-env.js";
 import { resolveAwsSdkEnvVarName } from "../../agents/model-auth-runtime-shared.js";
-import { hasUsableCustomProviderApiKey } from "../../agents/model-auth.js";
+import {
+  hasSyntheticLocalProviderAuthConfig,
+  hasUsableCustomProviderApiKey,
+} from "../../agents/model-auth.js";
 import { resolveProviderAuthAliasMap } from "../../agents/provider-auth-aliases.js";
 import { normalizeProviderIdForAuth } from "../../agents/provider-id.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -65,7 +68,10 @@ export function createModelListAuthIndex(
   }
 
   for (const provider of Object.keys(params.cfg.models?.providers ?? {})) {
-    if (hasUsableCustomProviderApiKey(params.cfg, provider, env)) {
+    if (
+      hasUsableCustomProviderApiKey(params.cfg, provider, env) ||
+      hasSyntheticLocalProviderAuthConfig({ cfg: params.cfg, provider })
+    ) {
       addProvider(provider);
     }
   }
