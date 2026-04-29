@@ -1,5 +1,6 @@
 import os from "node:os";
 import path from "node:path";
+import { normalizeWindowsInstallRoot } from "../infra/windows-install-roots.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runExec } from "../process/exec.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
@@ -54,6 +55,7 @@ const TRUSTED_BASE = new Set([
 ]);
 const WORLD_SUFFIXES = ["\\users", "\\authenticated users"];
 const TRUSTED_SUFFIXES = ["\\administrators", "\\system", "\\système"];
+const DEFAULT_WINDOWS_SYSTEM_ROOT = "C:\\Windows";
 
 // Accept an optional leading * which icacls prefixes to SIDs when invoked with /sid
 // (e.g. *S-1-5-18 instead of S-1-5-18).
@@ -118,11 +120,13 @@ function buildTrustedPrincipals(env?: NodeJS.ProcessEnv): Set<string> {
 
 function resolveWindowsSystemCommand(command: string, env?: NodeJS.ProcessEnv): string {
   const root =
-    env?.SystemRoot?.trim() ||
-    env?.SYSTEMROOT?.trim() ||
-    env?.windir?.trim() ||
-    env?.WINDIR?.trim();
-  return root ? path.win32.join(root, "System32", command) : command;
+    [
+      normalizeWindowsInstallRoot(env?.SystemRoot),
+      normalizeWindowsInstallRoot(env?.SYSTEMROOT),
+      normalizeWindowsInstallRoot(env?.windir),
+      normalizeWindowsInstallRoot(env?.WINDIR),
+    ].find((candidate): candidate is string => candidate !== null) ?? DEFAULT_WINDOWS_SYSTEM_ROOT;
+  return path.win32.join(root, "System32", command);
 }
 
 function classifyPrincipal(
@@ -398,7 +402,7 @@ export function createIcaclsResetCommand(
     `*S-1-5-18:${grant}`,
   ];
   return {
-    command: "icacls",
+    command: resolveWindowsSystemCommand("icacls.exe", opts.env),
     args,
     display: formatIcaclsResetCommand(targetPath, opts),
   };

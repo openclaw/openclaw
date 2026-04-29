@@ -4,6 +4,8 @@ import type { WindowsAclEntry, WindowsAclSummary } from "./windows-acl.js";
 const MOCK_USERNAME = "MockUser";
 const mockUserInfo = () => ({ username: MOCK_USERNAME });
 const emptyUserInfo = () => ({ username: "" });
+const DEFAULT_ICACLS = "C:\\Windows\\System32\\icacls.exe";
+const DEFAULT_WHOAMI = "C:\\Windows\\System32\\whoami.exe";
 
 let createIcaclsResetCommand: typeof import("./windows-acl.js").createIcaclsResetCommand;
 let formatIcaclsResetCommand: typeof import("./windows-acl.js").formatIcaclsResetCommand;
@@ -424,7 +426,7 @@ Successfully processed 1 files`;
       expectInspectSuccess(result, 2);
       // /sid is passed so that account names are printed as SIDs, making the
       // audit locale-independent (fixes #35834).
-      expect(mockExec).toHaveBeenCalledWith("icacls.exe", ["C:\\test\\file.txt", "/sid"]);
+      expect(mockExec).toHaveBeenCalledWith(DEFAULT_ICACLS, ["C:\\test\\file.txt", "/sid"]);
     });
 
     it("classifies *S-1-5-18 (SID form of SYSTEM from /sid) as trusted", async () => {
@@ -469,8 +471,8 @@ Successfully processed 1 files`;
       expectInspectSuccess(result, 2);
       expect(result.trusted).toHaveLength(2);
       expect(result.untrustedGroup).toHaveLength(0);
-      expect(mockExec).toHaveBeenNthCalledWith(1, "icacls.exe", ["C:\\test\\file.txt", "/sid"]);
-      expect(mockExec).toHaveBeenNthCalledWith(2, "whoami.exe", ["/user", "/fo", "csv", "/nh"]);
+      expect(mockExec).toHaveBeenNthCalledWith(1, DEFAULT_ICACLS, ["C:\\test\\file.txt", "/sid"]);
+      expect(mockExec).toHaveBeenNthCalledWith(2, DEFAULT_WHOAMI, ["/user", "/fo", "csv", "/nh"]);
     });
 
     it("returns error state on exec failure", async () => {
@@ -533,19 +535,59 @@ Successfully processed 1 files`;
 
       const result = await inspectWindowsAcl("C:\\test\\file.txt", {
         exec: mockExec,
-        env: { SystemRoot: "C:\\Windows" },
+        env: { SystemRoot: "D:\\Windows" },
       });
 
       expectInspectSuccess(result, 1);
-      expect(mockExec).toHaveBeenNthCalledWith(1, "C:\\Windows\\System32\\icacls.exe", [
+      expect(mockExec).toHaveBeenNthCalledWith(1, "D:\\Windows\\System32\\icacls.exe", [
         "C:\\test\\file.txt",
         "/sid",
       ]);
-      expect(mockExec).toHaveBeenNthCalledWith(2, "C:\\Windows\\System32\\whoami.exe", [
+      expect(mockExec).toHaveBeenNthCalledWith(2, "D:\\Windows\\System32\\whoami.exe", [
         "/user",
         "/fo",
         "csv",
         "/nh",
+      ]);
+    });
+
+    it("does not resolve Windows system commands through a relative SystemRoot", async () => {
+      const mockExec = vi
+        .fn()
+        .mockResolvedValueOnce({
+          stdout: "C:\\test\\file.txt *S-1-5-21-111-222-333-1001:(F)",
+          stderr: "",
+        })
+        .mockResolvedValueOnce({
+          stdout: '"mock-host\\\\MockUser","S-1-5-21-111-222-333-1001"\r\n',
+          stderr: "",
+        });
+
+      const result = await inspectWindowsAcl("C:\\test\\file.txt", {
+        exec: mockExec,
+        env: { SystemRoot: ".\\fake-root" },
+      });
+
+      expectInspectSuccess(result, 1);
+      expect(mockExec).toHaveBeenNthCalledWith(1, DEFAULT_ICACLS, ["C:\\test\\file.txt", "/sid"]);
+      expect(mockExec).toHaveBeenNthCalledWith(2, DEFAULT_WHOAMI, ["/user", "/fo", "csv", "/nh"]);
+    });
+
+    it("uses a valid WINDIR when SystemRoot is invalid", async () => {
+      const mockExec = vi.fn().mockResolvedValueOnce({
+        stdout: "C:\\test\\file.txt *S-1-5-18:(F)",
+        stderr: "",
+      });
+
+      const result = await inspectWindowsAcl("C:\\test\\file.txt", {
+        exec: mockExec,
+        env: { SystemRoot: ".\\fake-root", WINDIR: "E:\\Windows" },
+      });
+
+      expectInspectSuccess(result, 1);
+      expect(mockExec).toHaveBeenCalledWith("E:\\Windows\\System32\\icacls.exe", [
+        "C:\\test\\file.txt",
+        "/sid",
       ]);
     });
   });
@@ -653,9 +695,18 @@ Successfully processed 1 files`;
         env,
       });
       expect(result).not.toBeNull();
-      expect(result?.command).toBe("icacls");
+      expect(result?.command).toBe(DEFAULT_ICACLS);
       expect(result?.args).toContain("C:\\test\\file.txt");
       expect(result?.args).toContain("/inheritance:r");
+    });
+
+    it("uses a validated SystemRoot for the structured command executable", () => {
+      const result = createIcaclsResetCommand("C:\\test\\file.txt", {
+        isDir: false,
+        env: { SystemRoot: "D:\\Windows", USERNAME: "TestUser" },
+      });
+
+      expect(result?.command).toBe("D:\\Windows\\System32\\icacls.exe");
     });
 
     it("returns command with system username when env is empty (falls back to os.userInfo)", () => {
@@ -667,7 +718,7 @@ Successfully processed 1 files`;
       });
       // Should return a valid command using the system username
       expect(result).not.toBeNull();
-      expect(result?.command).toBe("icacls");
+      expect(result?.command).toBe(DEFAULT_ICACLS);
       expect(result?.args).toContain(`${MOCK_USERNAME}:F`);
     });
 
