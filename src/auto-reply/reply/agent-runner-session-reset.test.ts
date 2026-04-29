@@ -119,7 +119,7 @@ describe("resetReplyRunSession", () => {
       sessionFile: path.join(rootDir, "session.jsonl"),
     };
     const sessionStore = { main: sessionEntry };
-    await writeSessionStore(storePath, "main", sessionEntry);
+    await writeTestSessionStore(storePath, "main", sessionEntry);
 
     const reset = await resetReplyRunSession({
       options: {
@@ -131,7 +131,7 @@ describe("resetReplyRunSession", () => {
       activeSessionEntry: sessionEntry,
       activeSessionStore: sessionStore,
       storePath,
-      followupRun: createFollowupRun(),
+      followupRun: createTestFollowupRun(),
       onActiveSessionEntry: () => {},
       onNewSession: () => {},
     });
@@ -187,7 +187,7 @@ describe("resetReplyRunSession", () => {
       sessionFile: oldTranscriptPath,
     };
     const sessionStore = { main: sessionEntry };
-    await writeSessionStore(storePath, "main", sessionEntry);
+    await writeTestSessionStore(storePath, "main", sessionEntry);
 
     const reset = await resetReplyRunSession({
       options: {
@@ -200,7 +200,7 @@ describe("resetReplyRunSession", () => {
       activeSessionEntry: sessionEntry,
       activeSessionStore: sessionStore,
       storePath,
-      followupRun: createFollowupRun(),
+      followupRun: createTestFollowupRun(),
       onActiveSessionEntry: () => {},
       onNewSession: () => {},
     });
