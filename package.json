@@ -1735,17 +1735,31 @@
     "bundle": {
       "mirroredRootRuntimeDependencies": [
         "@agentclientprotocol/sdk",
+        "@clack/prompts",
         "@lydell/node-pty",
+        "@mariozechner/pi-ai",
+        "@mariozechner/pi-coding-agent",
+        "@modelcontextprotocol/sdk",
+        "ajv",
+        "chokidar",
+        "commander",
         "croner",
         "dotenv",
+        "https-proxy-agent",
         "jiti",
         "json5",
         "jszip",
         "markdown-it",
+        "openai",
         "semver",
         "tar",
         "tslog",
-        "web-push"
+        "typebox",
+        "undici",
+        "web-push",
+        "ws",
+        "yaml",
+        "zod"
       ]
     }
   }
