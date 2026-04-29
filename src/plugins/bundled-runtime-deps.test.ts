@@ -1388,6 +1388,93 @@ describe("scanBundledPluginRuntimeDeps config policy", () => {
     ]);
     expect(result.missing.map((dep) => `${dep.name}@${dep.version}`)).toEqual(["grammy@1.37.0"]);
   });
+
+  it("includes library extensions with stageRuntimeDependencies set in package.json", () => {
+    const packageRoot = makeTempDir();
+    const pluginDir = path.join(packageRoot, "dist", "extensions", "media-understanding-core");
+    fs.mkdirSync(pluginDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({
+        name: "@openclaw/media-understanding-core",
+        dependencies: { sharp: "0.34.5" },
+        openclaw: { bundle: { stageRuntimeDependencies: true } },
+      }),
+    );
+
+    const result = scanBundledPluginRuntimeDeps({
+      packageRoot,
+      config: {},
+    });
+
+    expect(result.deps.map((dep) => `${dep.name}@${dep.version}`)).toEqual(["sharp@0.34.5"]);
+    expect(result.conflicts).toEqual([]);
+  });
+
+  it("honors denylist for library extensions with stageRuntimeDependencies", () => {
+    const packageRoot = makeTempDir();
+    const pluginDir = path.join(packageRoot, "dist", "extensions", "media-understanding-core");
+    fs.mkdirSync(pluginDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({
+        name: "@openclaw/media-understanding-core",
+        dependencies: { sharp: "0.34.5" },
+        openclaw: { bundle: { stageRuntimeDependencies: true } },
+      }),
+    );
+
+    const result = scanBundledPluginRuntimeDeps({
+      packageRoot,
+      config: { plugins: { deny: ["media-understanding-core"] } },
+    });
+
+    expect(result.deps).toEqual([]);
+  });
+
+  it("honors disabled entry for library extensions with stageRuntimeDependencies", () => {
+    const packageRoot = makeTempDir();
+    const pluginDir = path.join(packageRoot, "dist", "extensions", "media-understanding-core");
+    fs.mkdirSync(pluginDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({
+        name: "@openclaw/media-understanding-core",
+        dependencies: { sharp: "0.34.5" },
+        openclaw: { bundle: { stageRuntimeDependencies: true } },
+      }),
+    );
+
+    const result = scanBundledPluginRuntimeDeps({
+      packageRoot,
+      config: {
+        plugins: { entries: { "media-understanding-core": { enabled: false } } },
+      },
+    });
+
+    expect(result.deps).toEqual([]);
+  });
+
+  it("honors master toggle for library extensions with stageRuntimeDependencies", () => {
+    const packageRoot = makeTempDir();
+    const pluginDir = path.join(packageRoot, "dist", "extensions", "media-understanding-core");
+    fs.mkdirSync(pluginDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({
+        name: "@openclaw/media-understanding-core",
+        dependencies: { sharp: "0.34.5" },
+        openclaw: { bundle: { stageRuntimeDependencies: true } },
+      }),
+    );
+
+    const result = scanBundledPluginRuntimeDeps({
+      packageRoot,
+      config: { plugins: { enabled: false } },
+    });
+
+    expect(result.deps).toEqual([]);
+  });
 });
 
 describe("ensureBundledPluginRuntimeDeps", () => {
