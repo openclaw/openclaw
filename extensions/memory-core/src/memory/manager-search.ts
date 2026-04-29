@@ -335,24 +335,30 @@ export async function searchKeyword(params: {
           params.limit,
         ) as typeof rows;
       usedMatch = true;
-    } catch {
+    } catch (matchErr) {
       // FTS5 MATCH can fail on certain token patterns depending on the
       // Node.js sqlite runtime and tokenizer (e.g. unicode61 vs trigram).
-      // Fall back to LIKE-based substring search so results are still
-      // returned instead of being silently dropped.
-      const likeClause = ` AND text LIKE ? ESCAPE '\\'`;
-      const likeParam = `%${escapeLikePattern(params.query)}%`;
+      // Log the root cause, then fall back to per-token LIKE-based substring
+      // search so results are still returned instead of being silently dropped.
+      console.warn(`memory search: FTS5 MATCH failed, falling back to LIKE: ${String(matchErr)}`);
+      const queryTokens =
+        params.query
+          .match(FTS_QUERY_TOKEN_RE)
+          ?.map((t) => t.trim())
+          .filter(Boolean) ?? [];
+      const allTerms = [...new Set([...queryTokens, ...plan.substringTerms])];
+      const fallbackLikeClause = allTerms.map(() => " AND text LIKE ? ESCAPE '\\'").join("");
+      const fallbackLikeParams = allTerms.map((term) => `%${escapeLikePattern(term)}%`);
       rows = params.db
         .prepare(
           `SELECT id, path, source, start_line, end_line, text,\n` +
             `       0 AS rank\n` +
             `  FROM ${params.ftsTable}\n` +
-            ` WHERE 1=1${likeClause}${substringClause}${modelClause}${params.sourceFilter.sql}\n` +
+            ` WHERE 1=1${fallbackLikeClause}${modelClause}${params.sourceFilter.sql}\n` +
             ` LIMIT ?`,
         )
         .all(
-          likeParam,
-          ...substringParams,
+          ...fallbackLikeParams,
           ...modelParams,
           ...params.sourceFilter.params,
           params.limit,
