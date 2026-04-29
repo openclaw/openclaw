@@ -65,18 +65,26 @@ export async function modelsListCommand(
   if (providerFilter === null) {
     return;
   }
-  const [{ loadAuthProfileStoreWithoutExternalProfiles }, { resolveOpenClawAgentDir }] =
-    await Promise.all([
-      import("../../agents/auth-profiles/store.js"),
-      import("../../agents/agent-paths.js"),
-    ]);
+  const [
+    { loadAuthProfileStoreWithoutExternalProfiles },
+    { resolveOpenClawAgentDir },
+    { resolveAgentWorkspaceDir, resolveDefaultAgentId },
+    { resolveDefaultAgentWorkspaceDir },
+  ] = await Promise.all([
+    import("../../agents/auth-profiles/store.js"),
+    import("../../agents/agent-paths.js"),
+    import("../../agents/agent-scope.js"),
+    import("../../agents/workspace.js"),
+  ]);
   const { resolvedConfig: cfg } = await loadModelsConfigWithSource({
     commandName: "models list",
     runtime,
   });
   const authStore = loadAuthProfileStoreWithoutExternalProfiles();
   const agentDir = resolveOpenClawAgentDir();
-  const authIndex = createModelListAuthIndex({ cfg, authStore });
+  const workspaceDir =
+    resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg)) ?? resolveDefaultAgentWorkspaceDir();
+  const authIndex = createModelListAuthIndex({ cfg, authStore, workspaceDir });
 
   let modelRegistry: ModelRegistry | undefined;
   let registryModels: Model<Api>[] = [];

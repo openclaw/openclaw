@@ -21,6 +21,7 @@ export type ModelListAuthIndex = {
 export type CreateModelListAuthIndexParams = {
   cfg: OpenClawConfig;
   authStore: AuthProfileStore;
+  workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   syntheticAuthProviderRefs?: readonly string[];
 };
@@ -39,10 +40,12 @@ function normalizeAuthProvider(
 
 function listValidatedSyntheticAuthProviderRefs(params: {
   cfg: OpenClawConfig;
+  workspaceDir?: string;
   env: NodeJS.ProcessEnv;
 }): readonly string[] {
   const result = loadPluginRegistrySnapshotWithMetadata({
     config: params.cfg,
+    workspaceDir: params.workspaceDir,
     env: params.env,
   });
   if (result.source !== "persisted" && result.source !== "provided") {
@@ -57,9 +60,14 @@ export function createModelListAuthIndex(
   params: CreateModelListAuthIndexParams,
 ): ModelListAuthIndex {
   const env = params.env ?? process.env;
-  const aliasMap = resolveProviderAuthAliasMap({ config: params.cfg, env });
-  const envCandidateMap = resolveProviderEnvApiKeyCandidates({ config: params.cfg, env });
-  const authEvidenceMap = resolveProviderEnvAuthEvidence({ config: params.cfg, env });
+  const lookupParams = {
+    config: params.cfg,
+    workspaceDir: params.workspaceDir,
+    env,
+  };
+  const aliasMap = resolveProviderAuthAliasMap(lookupParams);
+  const envCandidateMap = resolveProviderEnvApiKeyCandidates(lookupParams);
+  const authEvidenceMap = resolveProviderEnvAuthEvidence(lookupParams);
   const authenticatedProviders = new Set<string>();
   const syntheticAuthProviders = new Set<string>();
   const envProviderAuthCache = new Map<string, boolean>();
@@ -90,6 +98,7 @@ export function createModelListAuthIndex(
         aliasMap,
         candidateMap: envCandidateMap,
         authEvidenceMap,
+        workspaceDir: params.workspaceDir,
       })
     ) {
       addProvider(provider);
@@ -110,7 +119,11 @@ export function createModelListAuthIndex(
   }
 
   for (const provider of params.syntheticAuthProviderRefs ??
-    listValidatedSyntheticAuthProviderRefs({ cfg: params.cfg, env })) {
+    listValidatedSyntheticAuthProviderRefs({
+      cfg: params.cfg,
+      workspaceDir: params.workspaceDir,
+      env,
+    })) {
     addSyntheticProvider(provider);
   }
 

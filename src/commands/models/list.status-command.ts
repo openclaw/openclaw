@@ -4,6 +4,8 @@ import {
   resolveAgentDir,
   resolveAgentExplicitModelPrimary,
   resolveAgentModelFallbacksOverride,
+  resolveAgentWorkspaceDir,
+  resolveDefaultAgentId,
 } from "../../agents/agent-scope.js";
 import {
   buildAuthHealthSummary,
@@ -24,6 +26,7 @@ import {
   resolveConfiguredModelRef,
   resolveModelRefFromString,
 } from "../../agents/model-selection.js";
+import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import { createConfigIO } from "../../config/config.js";
 import {
   resolveAgentModelFallbackValues,
@@ -161,6 +164,9 @@ export async function modelsStatusCommand(
   const cfg = await loadModelsConfig({ commandName: "models status", runtime });
   const agentId = resolveKnownAgentId({ cfg, rawAgentId: opts.agent });
   const agentDir = agentId ? resolveAgentDir(cfg, agentId) : resolveOpenClawAgentDir();
+  const workspaceAgentId = agentId ?? resolveDefaultAgentId(cfg);
+  const workspaceDir =
+    resolveAgentWorkspaceDir(cfg, workspaceAgentId) ?? resolveDefaultAgentWorkspaceDir();
   const agentModelPrimary = agentId ? resolveAgentExplicitModelPrimary(cfg, agentId) : undefined;
   const agentFallbacksOverride = agentId
     ? resolveAgentModelFallbacksOverride(cfg, agentId)
@@ -241,8 +247,12 @@ export async function modelsStatusCommand(
   const providersFromEnv = new Set<string>();
   // Use the shared provider-env registry so `models status` stays aligned with
   // env-backed providers beyond the text-model defaults (for example image-gen).
-  for (const provider of Object.keys(resolveProviderEnvApiKeyCandidates()).toSorted()) {
-    if (resolveEnvApiKey(provider)) {
+  const envCandidateMap = resolveProviderEnvApiKeyCandidates({
+    config: cfg,
+    workspaceDir,
+  });
+  for (const provider of Object.keys(envCandidateMap).toSorted()) {
+    if (resolveEnvApiKey(provider, process.env, { config: cfg, workspaceDir })) {
       providersFromEnv.add(provider);
     }
   }
@@ -296,6 +306,7 @@ export async function modelsStatusCommand(
         store,
         modelsPath,
         agentDir,
+        workspaceDir,
         syntheticAuth: syntheticAuthByProvider.get(provider),
       }),
     )

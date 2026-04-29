@@ -1,4 +1,8 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { withEnvAsync } from "../test-utils/env.js";
 
 let modelsListCommand: typeof import("./models/list.list-command.js").modelsListCommand;
 let loadModelRegistry: typeof import("./models/list.registry.js").loadModelRegistry;
@@ -333,6 +337,35 @@ describe("models list/status", () => {
     modelRegistryState.available = available ? [ZAI_MODEL, OPENAI_MODEL] : [];
   }
 
+  async function writeWorkspaceAuthEvidencePlugin(workspaceDir: string) {
+    const pluginDir = path.join(workspaceDir, ".openclaw", "extensions", "workspace-cloud");
+    await fs.mkdir(pluginDir, { recursive: true });
+    await fs.writeFile(path.join(pluginDir, "index.ts"), "export default {}\n", "utf8");
+    await fs.writeFile(
+      path.join(pluginDir, "openclaw.plugin.json"),
+      JSON.stringify({
+        id: "workspace-cloud",
+        configSchema: { type: "object" },
+        setup: {
+          providers: [
+            {
+              id: "workspace-cloud",
+              authEvidence: [
+                {
+                  type: "local-file-with-env",
+                  fileEnvVar: "WORKSPACE_CLOUD_CREDENTIALS",
+                  credentialMarker: "workspace-cloud-local-credentials",
+                  source: "workspace cloud credentials",
+                },
+              ],
+            },
+          ],
+        },
+      }),
+      "utf8",
+    );
+  }
+
   beforeAll(async () => {
     ({ modelsListCommand } = await import("./models/list.list-command.js"));
     ({ loadModelRegistry, toModelRow } = await import("./models/list.registry.js"));
@@ -408,6 +441,67 @@ describe("models list/status", () => {
 
     const payload = parseJsonLog(runtime);
     expect(payload.models[0]?.available).toBe(false);
+  });
+
+  it("models list uses trusted workspace plugin auth evidence for configured rows", async () => {
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-models-list-auth-"));
+    const workspaceDir = path.join(tempRoot, "workspace");
+    const bundledDir = path.join(tempRoot, "bundled");
+    const stateDir = path.join(tempRoot, "state");
+    const credentialsPath = path.join(tempRoot, "credentials.json");
+    await fs.mkdir(bundledDir, { recursive: true });
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(credentialsPath, "{}", "utf8");
+    await writeWorkspaceAuthEvidencePlugin(workspaceDir);
+    getRuntimeConfig.mockReturnValue({
+      agents: {
+        defaults: {
+          workspace: workspaceDir,
+          model: "workspace-cloud/model-a",
+        },
+      },
+      plugins: { allow: ["workspace-cloud"] },
+      models: {
+        providers: {
+          "workspace-cloud": {
+            baseUrl: "https://workspace-cloud.example/v1",
+            api: "openai-responses",
+            models: [
+              {
+                id: "model-a",
+                name: "Workspace Cloud Model A",
+                input: ["text"],
+                contextWindow: 8192,
+                maxTokens: 4096,
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              },
+            ],
+          },
+        },
+      },
+    });
+    const runtime = makeRuntime();
+
+    try {
+      await withEnvAsync(
+        {
+          OPENCLAW_BUNDLED_PLUGINS_DIR: bundledDir,
+          OPENCLAW_STATE_DIR: stateDir,
+          WORKSPACE_CLOUD_CREDENTIALS: credentialsPath,
+        },
+        () => modelsListCommand({ all: true, provider: "workspace-cloud", json: true }, runtime),
+      );
+    } finally {
+      await fs.rm(tempRoot, { recursive: true, force: true });
+    }
+
+    const payload = parseJsonLog(runtime);
+    expect(payload.models).toEqual([
+      expect.objectContaining({
+        key: "workspace-cloud/model-a",
+        available: true,
+      }),
+    ]);
   });
 
   it("models list all includes unauthenticated provider catalog rows", async () => {
