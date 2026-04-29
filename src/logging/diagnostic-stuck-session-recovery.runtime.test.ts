@@ -105,6 +105,10 @@ describe("stuck session recovery", () => {
     expect(mocks.waitForEmbeddedPiRunEnd).not.toHaveBeenCalled();
     expect(mocks.forceClearEmbeddedPiRun).not.toHaveBeenCalled();
     expect(mocks.resetCommandLane).not.toHaveBeenCalled();
+    expect(mocks.diag.warn).toHaveBeenCalledWith(
+      expect.stringContaining("reason=active_embedded_run"),
+    );
+    expect(mocks.diag.warn).toHaveBeenCalledWith(expect.stringContaining("action=observe_only"));
   });
 
   it("aborts an active embedded run when active abort recovery is enabled", async () => {
@@ -197,6 +201,12 @@ describe("stuck session recovery", () => {
     expect(mocks.abortEmbeddedPiRun).not.toHaveBeenCalled();
     expect(mocks.forceClearEmbeddedPiRun).not.toHaveBeenCalled();
     expect(mocks.resetCommandLane).not.toHaveBeenCalled();
+    expect(mocks.diag.warn).toHaveBeenCalledWith(
+      expect.stringContaining("reason=active_reply_work"),
+    );
+    expect(mocks.diag.warn).toHaveBeenCalledWith(
+      expect.stringContaining("activeSessionId=queued-reply-session"),
+    );
   });
 
   it("does not release the session lane while unregistered lane work is active", async () => {
@@ -223,6 +233,26 @@ describe("stuck session recovery", () => {
     expect(mocks.abortEmbeddedPiRun).not.toHaveBeenCalled();
     expect(mocks.forceClearEmbeddedPiRun).not.toHaveBeenCalled();
     expect(mocks.resetCommandLane).not.toHaveBeenCalled();
+    expect(mocks.diag.warn).toHaveBeenCalledWith(
+      expect.stringContaining("reason=active_lane_task"),
+    );
+    expect(mocks.diag.warn).toHaveBeenCalledWith(expect.stringContaining("laneActive=1"));
+  });
+
+  it("reports when recovery finds no active work to release", async () => {
+    mocks.resolveActiveEmbeddedRunHandleSessionId.mockReturnValue(undefined);
+    mocks.resolveActiveEmbeddedRunSessionId.mockReturnValue(undefined);
+    mocks.isEmbeddedPiRunActive.mockReturnValue(false);
+    mocks.resetCommandLane.mockReturnValue(0);
+
+    await recoverStuckDiagnosticSession({
+      sessionId: "stale-session",
+      sessionKey: "agent:main:main",
+      ageMs: 180_000,
+    });
+
+    expect(mocks.resetCommandLane).toHaveBeenCalledWith("session:agent:main:main");
+    expect(mocks.diag.warn).toHaveBeenCalledWith(expect.stringContaining("reason=no_active_work"));
   });
 
   it("releases a stale session-id lane when no session key is available", async () => {
