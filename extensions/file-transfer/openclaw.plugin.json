@@ -5,7 +5,7 @@
   },
   "enabledByDefault": true,
   "name": "File Transfer",
-  "description": "Fetch, list, write, and watch files on paired nodes via dedicated node commands. Bypasses bash stdout truncation by using base64 over node.invoke for binaries up to 16 MB.",
+  "description": "Fetch, list, and write files on paired nodes via dedicated node commands. Bypasses bash stdout truncation by using base64 over node.invoke for binaries up to 16 MB.",
   "contracts": {
     "tools": ["file_fetch", "dir_list", "dir_fetch", "file_write"]
   },

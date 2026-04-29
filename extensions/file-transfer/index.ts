@@ -53,7 +53,7 @@ const fileTransferNodeHostCommands: OpenClawPluginNodeHostCommand[] = [
 export default definePluginEntry({
   id: "file-transfer",
   name: "File Transfer",
-  description: "Fetch, list, write, and watch files on paired nodes via dedicated node commands.",
+  description: "Fetch, list, and write files on paired nodes via dedicated node commands.",
   nodeHostCommands: fileTransferNodeHostCommands,
   register(api) {
     api.registerTool(createFileFetchTool());
