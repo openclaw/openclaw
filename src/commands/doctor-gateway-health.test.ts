@@ -129,6 +129,7 @@ describe("probeGatewayMemoryStatus", () => {
       checked: true,
       ready: false,
       error: "gateway memory probe unavailable: gateway request timeout for doctor.memory.status",
+      skipped: false,
     });
   });
 
@@ -139,6 +140,7 @@ describe("probeGatewayMemoryStatus", () => {
       checked: true,
       ready: false,
       error: "gateway memory probe unavailable: gateway closed (1006): no close reason",
+      skipped: false,
     });
   });
 });
