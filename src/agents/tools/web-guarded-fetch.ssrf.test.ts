@@ -4,15 +4,11 @@
 // allow/block behaviour for private network addresses.
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { LookupFn } from "../../infra/net/ssrf.js";
 import {
   withSelfHostedWebToolsEndpoint,
   withTrustedWebToolsEndpoint,
 } from "./web-guarded-fetch.js";
-
-type LookupFn = (
-  hostname: string,
-  opts: { all: boolean },
-) => Promise<{ address: string; family: number }[]>;
 
 function makeLookup(address: string): LookupFn {
   return vi.fn(async () => [{ address, family: 4 }]) as unknown as LookupFn;
@@ -81,7 +77,7 @@ describe("web-guarded-fetch SSRF policy integration", () => {
       const lookupFn = makeLookup("93.184.216.34");
       const result = await withTrustedWebToolsEndpoint(
         { url: "https://api.search.example/v1/search", fetchImpl, lookupFn },
-        async (res) => res.status,
+        async (res) => res.response.status,
       );
       expect(result).toBe(200);
       expect(fetchImpl).toHaveBeenCalledTimes(1);
@@ -95,7 +91,7 @@ describe("web-guarded-fetch SSRF policy integration", () => {
         .mockResolvedValueOnce(new Response(JSON.stringify({ results: [] }), { status: 200 }));
       const result = await withSelfHostedWebToolsEndpoint(
         { url: "http://192.168.1.100:8888/search", fetchImpl },
-        async (res) => res.status,
+        async (res) => res.response.status,
       );
       expect(result).toBe(200);
       expect(fetchImpl).toHaveBeenCalledTimes(1);
@@ -107,7 +103,7 @@ describe("web-guarded-fetch SSRF policy integration", () => {
         .mockResolvedValueOnce(new Response(JSON.stringify({ results: [] }), { status: 200 }));
       const result = await withSelfHostedWebToolsEndpoint(
         { url: "http://127.0.0.1:8080/search", fetchImpl },
-        async (res) => res.status,
+        async (res) => res.response.status,
       );
       expect(result).toBe(200);
       expect(fetchImpl).toHaveBeenCalledTimes(1);
@@ -120,7 +116,7 @@ describe("web-guarded-fetch SSRF policy integration", () => {
       const lookupFn = makeLookup("10.0.0.50");
       const result = await withSelfHostedWebToolsEndpoint(
         { url: "http://searxng.internal/search", fetchImpl, lookupFn },
-        async (res) => res.status,
+        async (res) => res.response.status,
       );
       expect(result).toBe(200);
       expect(fetchImpl).toHaveBeenCalledTimes(1);
@@ -133,7 +129,7 @@ describe("web-guarded-fetch SSRF policy integration", () => {
       const lookupFn = makeLookup("93.184.216.34");
       const result = await withSelfHostedWebToolsEndpoint(
         { url: "https://public.example/search", fetchImpl, lookupFn },
-        async (res) => res.status,
+        async (res) => res.response.status,
       );
       expect(result).toBe(200);
       expect(fetchImpl).toHaveBeenCalledTimes(1);
