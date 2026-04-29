@@ -39,6 +39,9 @@ import type { TypingController } from "./typing.js";
 
 type EmbeddedAgentRunResult = Awaited<ReturnType<typeof runEmbeddedPiAgent>>;
 
+const FOLLOWUP_RUN_FAILURE_REPLY =
+  "Something went wrong while processing your request. Please try again.";
+
 export function createFollowupRunner(params: {
   opts?: GetReplyOptions;
   typing: TypingController;
@@ -369,6 +372,22 @@ export function createFollowupRunner(params: {
         const message = formatErrorMessage(err);
         replyOperation.fail("run_failed", err);
         defaultRuntime.error?.(`Followup agent failed before reply: ${message}`);
+        if (opts?.isHeartbeat !== true) {
+          try {
+            await sendFollowupPayloads(
+              [{ text: FOLLOWUP_RUN_FAILURE_REPLY, isError: true }],
+              effectiveQueued,
+              {
+                provider: run.provider,
+                modelId: run.model,
+              },
+            );
+          } catch (sendErr) {
+            defaultRuntime.error?.(
+              `Followup agent failure reply failed: ${formatErrorMessage(sendErr)}`,
+            );
+          }
+        }
         return;
       }
 

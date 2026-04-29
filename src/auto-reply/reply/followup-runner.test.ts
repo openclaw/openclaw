@@ -1236,6 +1236,40 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     persistSpy.mockRestore();
   });
 
+  it("routes a generic error reply to the original Telegram topic when the followup run fails", async () => {
+    runEmbeddedPiAgentMock.mockRejectedValueOnce(new Error("401 status code (no body)"));
+    const onBlockReply = createAsyncReplySpy();
+    const runner = createMessagingDedupeRunner(onBlockReply);
+    const queued = createQueuedRun({
+      originatingChannel: "telegram",
+      originatingTo: "-1003826723328",
+      originatingAccountId: "default",
+      originatingThreadId: 22684,
+      originatingChatType: "group",
+      run: {
+        messageProvider: "telegram",
+        provider: "openai-codex",
+        model: "gpt-5.5",
+      },
+    });
+
+    await expect(runner(queued)).resolves.toBeUndefined();
+
+    expect(routeReplyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "telegram",
+        to: "-1003826723328",
+        accountId: "default",
+        threadId: 22684,
+        payload: {
+          text: "Something went wrong while processing your request. Please try again.",
+          isError: true,
+        },
+      }),
+    );
+    expect(onBlockReply).not.toHaveBeenCalled();
+  });
+
   it("uses providerUsed for snapshot freshness when agent metadata overrides the run provider", async () => {
     const storePath = "/tmp/openclaw-followup-usage-provider.json";
     const sessionKey = "main";
