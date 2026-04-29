@@ -169,6 +169,16 @@ describe("hasInboundUserContent", () => {
     ).toBe(true);
   });
 
+  it("returns true for contactsArrayMessage via contact placeholder extraction", () => {
+    expect(
+      hasInboundUserContent({
+        contactsArrayMessage: {
+          contacts: [{ displayName: "Alice", vcard: "BEGIN:VCARD\nEND:VCARD" }],
+        },
+      } as proto.IMessage),
+    ).toBe(true);
+  });
+
   it("returns true for buttons response (user button click)", () => {
     expect(
       hasInboundUserContent({

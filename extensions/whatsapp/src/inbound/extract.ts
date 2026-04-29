@@ -456,7 +456,7 @@ function hasInteractiveResponseContent(message: proto.IMessage | undefined): boo
 }
 
 /**
- * Fast O(1) check that a Baileys message carries user-visible inbound content
+ * Fast check that a Baileys message carries user-visible inbound content
  * (text, media, contact, location, button/list selection). Returns false for
  * protocol/receipt/typing notifications that arrive on the same
  * `messages.upsert` stream as real messages but should not trigger pairing
@@ -472,19 +472,13 @@ export function hasInboundUserContent(rawMessage: proto.IMessage | undefined): b
   if (extractMediaPlaceholder(rawMessage)) {
     return true;
   }
-  if (extractContactContext(rawMessage)) {
-    return true;
-  }
   if (extractLocationData(rawMessage)) {
-    return true;
-  }
-  if (hasInteractiveResponseContent(rawMessage)) {
     return true;
   }
   // Walk wrappers (ephemeral, viewOnce, etc.) — interactive responses
   // can arrive nested.
   for (const candidate of buildMessageChain(rawMessage)) {
-    if (candidate !== rawMessage && hasInteractiveResponseContent(candidate)) {
+    if (hasInteractiveResponseContent(candidate)) {
       return true;
     }
   }
