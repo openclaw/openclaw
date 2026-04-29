@@ -321,6 +321,8 @@ export async function resolveReplyDirectives(params: {
   }
   // Use command.isAuthorizedSender (resolved authorization) instead of raw commandAuthorized
   // to ensure inline directives work when commands.allowFrom grants access (e.g., LINE).
+  const unauthorizedReasoningDirectiveAttempt =
+    !command.isAuthorizedSender && parsedDirectives.hasReasoningDirective;
   let directives = command.isAuthorizedSender
     ? parsedDirectives
     : {
@@ -329,6 +331,8 @@ export async function resolveReplyDirectives(params: {
         hasVerboseDirective: false,
         hasFastDirective: false,
         hasReasoningDirective: false,
+        reasoningLevel: undefined,
+        rawReasoningLevel: undefined,
         hasStatusDirective: false,
         hasModelDirective: false,
         hasQueueDirective: false,
@@ -530,6 +534,7 @@ export async function resolveReplyDirectives(params: {
     (agentCfg?.reasoningDefault !== undefined && agentCfg?.reasoningDefault !== null);
   const reasoningExplicitlySet =
     directives.reasoningLevel !== undefined ||
+    unauthorizedReasoningDirectiveAttempt ||
     (targetSessionEntry?.reasoningLevel !== undefined &&
       targetSessionEntry?.reasoningLevel !== null) ||
     hasAgentReasoningDefault;

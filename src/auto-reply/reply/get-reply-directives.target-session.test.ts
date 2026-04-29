@@ -34,6 +34,33 @@ function makeTypingController() {
 
 function parseInlineDirectivesForTest(body: string) {
   const normalized = body.trim();
+  if (normalized === "/reasoning stream") {
+    return {
+      cleaned: "",
+      hasThinkDirective: false,
+      hasVerboseDirective: false,
+      hasTraceDirective: false,
+      traceLevel: undefined,
+      rawTraceLevel: undefined,
+      hasFastDirective: false,
+      hasReasoningDirective: true,
+      reasoningLevel: "stream",
+      rawReasoningLevel: "stream",
+      hasElevatedDirective: false,
+      hasExecDirective: false,
+      hasModelDirective: false,
+      hasQueueDirective: false,
+      hasStatusDirective: false,
+      queueReset: false,
+      thinkLevel: undefined,
+      verboseLevel: undefined,
+      fastMode: undefined,
+      elevatedLevel: undefined,
+      rawElevatedLevel: undefined,
+      rawModelDirective: undefined,
+      execSecurity: undefined,
+    };
+  }
   if (normalized === "/trace on") {
     return {
       cleaned: "",
@@ -89,6 +116,7 @@ function parseInlineDirectivesForTest(body: string) {
 async function resolveHelloWithModelDefaults(params: {
   defaultThinking: "off" | "low";
   defaultReasoning: "on";
+  body?: string;
   sessionEntry?: SessionEntry;
   agentCfg?: { reasoningDefault?: "off" | "on" | "stream" };
   commandAuthorized?: boolean;
@@ -108,8 +136,8 @@ async function resolveHelloWithModelDefaults(params: {
 
   const result = await resolveReplyDirectives({
     ctx: buildTestCtx({
-      Body: "hello",
-      CommandBody: "hello",
+      Body: params.body ?? "hello",
+      CommandBody: params.body ?? "hello",
       ...params.ctx,
     }),
     cfg: {},
@@ -118,10 +146,10 @@ async function resolveHelloWithModelDefaults(params: {
     workspaceDir: "/tmp",
     agentCfg: params.agentCfg ?? {},
     sessionCtx: {
-      Body: "hello",
-      BodyStripped: "hello",
-      BodyForAgent: "hello",
-      CommandBody: "hello",
+      Body: params.body ?? "hello",
+      BodyStripped: params.body ?? "hello",
+      BodyForAgent: params.body ?? "hello",
+      CommandBody: params.body ?? "hello",
       Provider: "whatsapp",
     } as TemplateContext,
     sessionEntry: params.sessionEntry ?? makeSessionEntry(),
@@ -491,6 +519,22 @@ describe("resolveReplyDirectives", () => {
       defaultThinking: "off",
       defaultReasoning: "on",
       agentCfg: { reasoningDefault: "stream" },
+    });
+
+    expect(result).toEqual({
+      kind: "continue",
+      result: expect.objectContaining({
+        resolvedReasoningLevel: "off",
+      }),
+    });
+    expect(resolveDefaultReasoningLevel).not.toHaveBeenCalled();
+  });
+
+  it("ignores inline reasoning directives from untrusted senders", async () => {
+    const { result, resolveDefaultReasoningLevel } = await resolveHelloWithModelDefaults({
+      body: "/reasoning stream",
+      defaultThinking: "off",
+      defaultReasoning: "on",
     });
 
     expect(result).toEqual({
