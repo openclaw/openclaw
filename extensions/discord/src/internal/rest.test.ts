@@ -83,6 +83,22 @@ describe("RequestClient", () => {
     ]);
   });
 
+  it("prunes idle route buckets after Discord bucket remapping", async () => {
+    const client = new RequestClient("test-token", {
+      fetch: async () =>
+        new Response(JSON.stringify({ id: "first" }), {
+          status: 200,
+          headers: { "X-RateLimit-Bucket": "channel-messages" },
+        }),
+    });
+
+    await expect(client.get("/channels/c1/messages")).resolves.toEqual({ id: "first" });
+
+    const metrics = client.getSchedulerMetrics();
+    expect(metrics.activeBuckets).toBe(1);
+    expect(metrics.buckets.map((bucket) => bucket.key)).toEqual(["channel-messages:channels/c1"]);
+  });
+
   it("waits for a learned bucket reset before dispatching the next request", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);
