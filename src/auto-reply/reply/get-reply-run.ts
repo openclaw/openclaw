@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { resolveSessionAuthProfileOverride } from "../../agents/auth-profiles/session-override.js";
 import type { ExecToolDefaults } from "../../agents/bash-tools.js";
+import { resolveExecDefaults } from "../../agents/exec-defaults.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
 import { resolveEmbeddedFullAccessState } from "../../agents/pi-embedded-runner/sandbox-info.js";
 import type { EmbeddedFullAccessBlockedReason } from "../../agents/pi-embedded-runner/types.js";
@@ -202,16 +203,21 @@ export function resolvePromptSessionContextForSystemEvent(params: {
 
 export function buildExecOverridePromptHint(params: {
   execOverrides?: ExecOverrides;
+  effectiveExecDefaults?: ReturnType<typeof resolveExecDefaults>;
   elevatedLevel: ElevatedLevel;
   fullAccessAvailable?: boolean;
   fullAccessBlockedReason?: EmbeddedFullAccessBlockedReason;
+  headlessExec?: boolean;
 }): string | undefined {
-  const exec = params.execOverrides;
+  const exec = params.effectiveExecDefaults ?? params.execOverrides;
   if (!exec && params.elevatedLevel === "off") {
     return undefined;
   }
   const parts = [
     exec?.host ? `host=${exec.host}` : undefined,
+    "effectiveHost" in (exec ?? {}) && exec?.effectiveHost
+      ? `effective=${exec.effectiveHost}`
+      : undefined,
     exec?.security ? `security=${exec.security}` : undefined,
     exec?.ask ? `ask=${exec.ask}` : undefined,
     exec?.node ? `node=${exec.node}` : undefined,
@@ -225,11 +231,16 @@ export function buildExecOverridePromptHint(params: {
     params.fullAccessAvailable === false
       ? `Auto-approved /elevated full is unavailable here (${params.fullAccessBlockedReason ?? "runtime"}). Do not ask the user to switch to /elevated full.`
       : undefined;
+  const headlessLine =
+    params.headlessExec === true
+      ? "This is a headless/system-driven turn. Do not invent stricter exec settings than the current defaults above. Prefer omitting host/security/ask unless the task explicitly requires a different target or restriction. In autonomous cron/monitor work, do not choose interactive approvals (`ask=on-miss` or `ask=always`) or ad-hoc allowlist mode unless the task explicitly requires human approval."
+      : undefined;
   return [
     "## Current Exec Session State",
     execLine,
     elevatedLine,
     fullAccessLine,
+    headlessLine,
     "If the user asks to run a command, use the current exec state above. Do not assume a prior denial still applies after `/exec` or `/elevated` changed.",
   ]
     .filter(Boolean)
@@ -488,6 +499,12 @@ export async function runPreparedReply(
     isNewSession ? sessionCtx : { ...sessionCtx, ThreadStarterBody: undefined },
     { includeFormattingHints: !useFastReplyRuntime },
   );
+  const effectiveExecDefaults = resolveExecDefaults({
+    cfg,
+    agentId,
+    sessionKey,
+    sessionEntry,
+  });
   const extraSystemPromptParts = [
     inboundMetaPrompt,
     directChatContext,
@@ -496,9 +513,11 @@ export async function runPreparedReply(
     groupSystemPrompt,
     buildExecOverridePromptHint({
       execOverrides,
+      effectiveExecDefaults,
       elevatedLevel: resolvedElevatedLevel,
       fullAccessAvailable: fullAccessState.available,
       fullAccessBlockedReason: fullAccessState.blockedReason,
+      headlessExec: systemSent === true,
     }),
   ].filter(Boolean);
   // Static parts only (no per-message inbound metadata) for CLI session reuse hashing.
@@ -509,9 +528,11 @@ export async function runPreparedReply(
     groupSystemPrompt,
     buildExecOverridePromptHint({
       execOverrides,
+      effectiveExecDefaults,
       elevatedLevel: resolvedElevatedLevel,
       fullAccessAvailable: fullAccessState.available,
       fullAccessBlockedReason: fullAccessState.blockedReason,
+      headlessExec: systemSent === true,
     }),
   ].filter(Boolean);
   const silentReplyPromptMode: SilentReplyPromptMode =

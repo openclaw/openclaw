@@ -35,6 +35,26 @@ describe("buildExecOverridePromptHint", () => {
     expect(result).toContain("Do not assume a prior denial still applies");
   });
 
+  it("prefers effective exec defaults and adds headless guidance for system turns", () => {
+    const result = buildExecOverridePromptHint({
+      effectiveExecDefaults: {
+        host: "auto",
+        effectiveHost: "gateway",
+        security: "full",
+        ask: "off",
+        canRequestNode: true,
+      },
+      elevatedLevel: "off",
+      headlessExec: true,
+    });
+
+    expect(result).toContain(
+      "Current session exec defaults: host=auto effective=gateway security=full ask=off.",
+    );
+    expect(result).toContain("This is a headless/system-driven turn.");
+    expect(result).toContain("do not choose interactive approvals");
+  });
+
   it("still reports elevated state when exec overrides are inherited", () => {
     const result = buildExecOverridePromptHint({
       elevatedLevel: "full",
