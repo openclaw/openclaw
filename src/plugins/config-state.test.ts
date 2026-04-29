@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-import * as bundledPluginMetadata from "./bundled-plugin-metadata.js";
 import {
   createPluginActivationSource,
   normalizePluginsConfig,
@@ -156,10 +155,14 @@ describe("normalizePluginsConfig", () => {
     expect(result.entries.minimax?.enabled).toBe(false);
   });
 
-  it("reuses the bundled alias scan during one config normalization", () => {
+  it("reuses the bundled alias scan during one config normalization", async () => {
+    vi.resetModules();
+    const bundledPluginMetadata = await import("./bundled-plugin-metadata.js");
     const listBundledMetadata = vi.spyOn(bundledPluginMetadata, "listBundledPluginMetadata");
+    const { normalizePluginsConfig: normalizeFreshPluginsConfig } =
+      await import("./config-state.js");
 
-    const result = normalizePluginsConfig({
+    const result = normalizeFreshPluginsConfig({
       allow: ["unknown-plugin-one", "unknown-plugin-two"],
       deny: ["unknown-plugin-three"],
       entries: {
