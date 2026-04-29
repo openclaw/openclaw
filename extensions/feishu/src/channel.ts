@@ -22,6 +22,8 @@ import {
 import {
   normalizeMessagePresentation,
   renderMessagePresentationFallbackText,
+  type MessagePresentationBlock,
+  type MessagePresentationButton,
 } from "openclaw/plugin-sdk/interactive-runtime";
 import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
 import { createRuntimeOutboundDelegates } from "openclaw/plugin-sdk/outbound-runtime";
@@ -36,7 +38,10 @@ import {
   resolveFeishuRuntimeAccount,
 } from "./accounts.js";
 import { feishuApprovalAuth } from "./approval-auth.js";
-import { FEISHU_CARD_INTERACTION_VERSION } from "./card-interaction.js";
+import {
+  createFeishuCardInteractionEnvelope,
+  FEISHU_CARD_INTERACTION_VERSION,
+} from "./card-interaction.js";
 import type {
   ChannelMessageActionName,
   ChannelMeta,
@@ -139,6 +144,27 @@ function buildFeishuPresentationCard(params: {
     ...(params.presentation.tone ? { tone: params.presentation.tone } : {}),
     blocks: params.presentation.blocks,
   };
+  const elements: Record<string, unknown>[] = [];
+  const fallbackText = params.fallbackText?.trim();
+  if (fallbackText) {
+    elements.push({ tag: "markdown", content: escapeFeishuCardMarkdownText(fallbackText) });
+  }
+  for (const block of params.presentation.blocks) {
+    const element = buildFeishuPresentationCardElement(block);
+    if (element) {
+      elements.push(element);
+    }
+  }
+  if (elements.length === 0) {
+    elements.push({
+      tag: "markdown",
+      content: renderMessagePresentationFallbackText({
+        text: params.fallbackText,
+        presentation: fallbackPresentation,
+      }),
+    });
+  }
+
   return {
     schema: "2.0",
     config: {
@@ -152,17 +178,100 @@ function buildFeishuPresentationCard(params: {
           },
         }
       : {}),
-    body: {
-      elements: [
-        {
-          tag: "markdown",
-          content: renderMessagePresentationFallbackText({
-            text: params.fallbackText,
-            presentation: fallbackPresentation,
-          }),
-        },
-      ],
+    body: { elements },
+  };
+}
+
+function escapeFeishuCardMarkdownText(text: string): string {
+  return text.replace(/[&<>]/g, (char) => {
+    switch (char) {
+      case "&":
+        return "&amp;";
+      case "<":
+        return "&lt;";
+      case ">":
+        return "&gt;";
+      default:
+        return char;
+    }
+  });
+}
+
+function resolveSafeFeishuButtonUrl(url: string | undefined): string | undefined {
+  const trimmed = url?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  try {
+    const parsed = new URL(trimmed);
+    return parsed.protocol === "https:" || parsed.protocol === "http:" ? trimmed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function mapFeishuButtonType(style: MessagePresentationButton["style"]) {
+  if (style === "primary" || style === "success") {
+    return "primary";
+  }
+  if (style === "danger") {
+    return "danger";
+  }
+  return "default";
+}
+
+function buildFeishuPresentationButton(
+  button: MessagePresentationButton,
+): Record<string, unknown> | undefined {
+  const rendered: Record<string, unknown> = {
+    tag: "button",
+    text: {
+      tag: "plain_text",
+      content: button.label,
     },
+    type: mapFeishuButtonType(button.style),
+  };
+  const safeUrl = resolveSafeFeishuButtonUrl(button.url);
+  if (safeUrl) {
+    rendered.url = safeUrl;
+  }
+  if (button.value) {
+    rendered.value = createFeishuCardInteractionEnvelope({
+      k: "quick",
+      a: "feishu.payload.button",
+      q: button.value,
+    });
+  }
+  return rendered.url || rendered.value ? rendered : undefined;
+}
+
+function buildFeishuPresentationCardElement(
+  block: MessagePresentationBlock,
+): Record<string, unknown> | undefined {
+  if (block.type === "text") {
+    return { tag: "markdown", content: escapeFeishuCardMarkdownText(block.text) };
+  }
+  if (block.type === "context") {
+    return {
+      tag: "markdown",
+      content: `<font color='grey'>${escapeFeishuCardMarkdownText(block.text)}</font>`,
+    };
+  }
+  if (block.type === "divider") {
+    return { tag: "hr" };
+  }
+  if (block.type === "buttons") {
+    const actions = block.buttons
+      .map((button) => buildFeishuPresentationButton(button))
+      .filter((button): button is Record<string, unknown> => Boolean(button));
+    return actions.length > 0 ? { tag: "action", actions } : undefined;
+  }
+  const labels = block.options.map((option) => `- ${option.label}`).join("\n");
+  return {
+    tag: "markdown",
+    content: `${escapeFeishuCardMarkdownText(
+      block.placeholder?.trim() || "Options",
+    )}:\n${escapeFeishuCardMarkdownText(labels)}`,
   };
 }
 
@@ -599,6 +708,13 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
         reply: true,
       },
       agentPrompt: {
+        messageToolCapabilities: ({ cfg, accountId }) => {
+          const discovery = describeFeishuMessageTool({ cfg, accountId });
+          return discovery.actions?.includes("send") &&
+            discovery.capabilities?.includes("presentation")
+            ? ["inlineButtons"]
+            : [];
+        },
         messageToolHints: () => [
           "- Feishu targeting: omit `target` to reply to the current conversation (auto-inferred). Explicit targets: `user:open_id` or `chat:chat_id`.",
           "- Feishu supports interactive cards plus native image, file, audio, and video/media delivery.",

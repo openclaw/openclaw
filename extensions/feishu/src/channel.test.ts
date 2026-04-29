@@ -59,6 +59,10 @@ function getDescribedActions(cfg: OpenClawConfig, accountId?: string): string[] 
   return [...(feishuPlugin.actions?.describeMessageTool?.({ cfg, accountId })?.actions ?? [])];
 }
 
+function getAgentPromptMessageToolCapabilities(cfg: OpenClawConfig, accountId?: string): string[] {
+  return [...(feishuPlugin.agentPrompt?.messageToolCapabilities?.({ cfg, accountId }) ?? [])];
+}
+
 describe("feishuPlugin.status.probeAccount", () => {
   it("uses current account credentials for multi-account config", async () => {
     const cfg = {
@@ -205,6 +209,19 @@ describe("feishuPlugin actions", () => {
     ]);
   });
 
+  it("advertises inline buttons only for configured send-capable accounts", () => {
+    expect(getAgentPromptMessageToolCapabilities(cfg)).toEqual(["inlineButtons"]);
+    expect(
+      getAgentPromptMessageToolCapabilities({
+        channels: {
+          feishu: {
+            enabled: true,
+          },
+        },
+      } as OpenClawConfig),
+    ).toEqual([]);
+  });
+
   it("does not advertise reactions when disabled via actions config", () => {
     const disabledCfg = {
       channels: {
@@ -349,7 +366,7 @@ describe("feishuPlugin actions", () => {
     expect(result?.details).toMatchObject({ ok: true, messageId: "om_card", chatId: "oc_group_1" });
   });
 
-  it("renders presentation button labels into the card fallback", async () => {
+  it("renders presentation buttons as native card actions", async () => {
     sendCardFeishuMock.mockResolvedValueOnce({ messageId: "om_card", chatId: "oc_group_1" });
 
     await feishuPlugin.actions?.handleAction?.({
@@ -360,7 +377,11 @@ describe("feishuPlugin actions", () => {
           blocks: [
             {
               type: "buttons",
-              buttons: [{ label: "Run help", value: "feishu.quick_actions.help" }],
+              buttons: [
+                { label: "Run help", value: "feishu.quick_actions.help", style: "success" },
+                { label: "Docs", url: "https://example.com/docs" },
+                { label: "Bad", url: "javascript:alert(1)" },
+              ],
             },
           ],
         },
@@ -376,14 +397,33 @@ describe("feishuPlugin actions", () => {
           body: {
             elements: [
               {
-                tag: "markdown",
-                content: "- Run help",
+                tag: "action",
+                actions: [
+                  expect.objectContaining({
+                    tag: "button",
+                    text: { tag: "plain_text", content: "Run help" },
+                    type: "primary",
+                    value: expect.objectContaining({
+                      oc: "ocf1",
+                      k: "quick",
+                      a: "feishu.payload.button",
+                      q: "feishu.quick_actions.help",
+                    }),
+                  }),
+                  expect.objectContaining({
+                    tag: "button",
+                    text: { tag: "plain_text", content: "Docs" },
+                    type: "default",
+                    url: "https://example.com/docs",
+                  }),
+                ],
               },
             ],
           },
         }),
       }),
     );
+    expect(JSON.stringify(sendCardFeishuMock.mock.calls[0][0].card)).not.toContain("javascript:");
   });
 
   it("renders presentation select labels into the card fallback", async () => {
