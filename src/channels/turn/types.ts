@@ -293,3 +293,18 @@ export type RunChannelTurnParams<TRaw> = {
   adapter: ChannelTurnAdapter<TRaw>;
   log?: (event: ChannelTurnLogEvent) => void;
 };
+
+export type RunResolvedChannelTurnParams<TRaw> = {
+  channel: string;
+  accountId?: string;
+  raw: TRaw;
+  input:
+    | NormalizedTurnInput
+    | ((raw: TRaw) => Promise<NormalizedTurnInput | null> | NormalizedTurnInput | null);
+  resolveTurn: (
+    input: NormalizedTurnInput,
+    eventClass: ChannelEventClass,
+    preflight: PreflightFacts,
+  ) => Promise<ChannelTurnResolved> | ChannelTurnResolved;
+  log?: (event: ChannelTurnLogEvent) => void;
+};

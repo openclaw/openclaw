@@ -122,6 +122,68 @@ function installRuntime(params: {
       };
     },
   );
+  const runTurn = vi.fn(async (params: Parameters<PluginRuntime["channel"]["turn"]["run"]>[0]) => {
+    const input = await params.adapter.ingest(params.raw);
+    if (!input) {
+      return { admission: { kind: "drop" as const, reason: "ingest-null" }, dispatched: false };
+    }
+    const resolved = await params.adapter.resolveTurn(
+      input,
+      {
+        kind: "message",
+        canStartAgentTurn: true,
+      },
+      {},
+    );
+    return await dispatchAssembled(resolved);
+  });
+  const runResolvedTurn = vi.fn(
+    async (params: Parameters<PluginRuntime["channel"]["turn"]["runResolved"]>[0]) => {
+      const input =
+        typeof params.input === "function" ? await params.input(params.raw) : params.input;
+      if (!input) {
+        return {
+          admission: { kind: "drop" as const, reason: "ingest-null" },
+          dispatched: false,
+        };
+      }
+      const resolved = await params.resolveTurn(
+        input,
+        {
+          kind: "message",
+          canStartAgentTurn: true,
+        },
+        {},
+      );
+      return await dispatchAssembled(resolved);
+    },
+  );
+  const buildContext = vi.fn(
+    (params: Parameters<PluginRuntime["channel"]["turn"]["buildContext"]>[0]) =>
+      ({
+        Body: params.message.body ?? params.message.rawBody,
+        BodyForAgent: params.message.bodyForAgent ?? params.message.rawBody,
+        InboundHistory: params.message.inboundHistory,
+        RawBody: params.message.rawBody,
+        CommandBody: params.message.commandBody ?? params.message.rawBody,
+        BodyForCommands: params.message.commandBody ?? params.message.rawBody,
+        From: params.from,
+        To: params.reply.to,
+        SessionKey: params.route.dispatchSessionKey ?? params.route.routeSessionKey,
+        AccountId: params.route.accountId ?? params.accountId,
+        ChatType: params.conversation.kind,
+        ConversationLabel: params.conversation.label,
+        SenderName: params.sender.name,
+        SenderId: params.sender.id,
+        Provider: params.provider ?? params.channel,
+        Surface: params.surface ?? params.provider ?? params.channel,
+        MessageSid: params.messageId,
+        MessageSidFull: params.messageIdFull,
+        OriginatingChannel: params.channel,
+        OriginatingTo: params.reply.originatingTo,
+        ...params.extra,
+      }) as ReturnType<PluginRuntime["channel"]["turn"]["buildContext"]>,
+  );
   const buildAgentSessionKey = vi.fn(
     (input: {
       agentId: string;
@@ -201,6 +263,9 @@ function installRuntime(params: {
         dispatchReplyWithBufferedBlockDispatcher,
       },
       turn: {
+        run: runTurn as unknown as PluginRuntime["channel"]["turn"]["run"],
+        runResolved: runResolvedTurn as unknown as PluginRuntime["channel"]["turn"]["runResolved"],
+        buildContext: buildContext as unknown as PluginRuntime["channel"]["turn"]["buildContext"],
         dispatchAssembled:
           dispatchAssembled as unknown as PluginRuntime["channel"]["turn"]["dispatchAssembled"],
       },

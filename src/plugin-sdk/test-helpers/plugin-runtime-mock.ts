@@ -199,11 +199,21 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
         To: params.reply.to,
         SessionKey: params.route.dispatchSessionKey ?? params.route.routeSessionKey,
         AccountId: params.route.accountId ?? params.accountId,
+        MessageSid: params.messageId,
+        MessageSidFull: params.messageIdFull,
+        ReplyToId: params.reply.replyToId ?? params.supplemental?.quote?.id,
+        ReplyToIdFull: params.reply.replyToIdFull ?? params.supplemental?.quote?.fullId,
+        MediaPath: params.media?.[0]?.path,
+        MediaUrl: params.media?.[0]?.url ?? params.media?.[0]?.path,
+        MediaType: params.media?.[0]?.contentType ?? params.media?.[0]?.kind,
         ChatType: params.conversation.kind,
         ConversationLabel: params.conversation.label,
         SenderName: params.sender.name ?? params.sender.displayLabel,
         SenderId: params.sender.id,
         SenderUsername: params.sender.username,
+        Timestamp: params.timestamp,
+        WasMentioned: params.access?.mentions?.wasMentioned,
+        GroupSystemPrompt: params.supplemental?.groupSystemPrompt,
         Provider: params.provider ?? params.channel,
         Surface: params.surface ?? params.provider ?? params.channel,
         OriginatingChannel: params.channel,
@@ -214,6 +224,28 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
         ...params.extra,
       }) as ReturnType<PluginRuntime["channel"]["turn"]["buildContext"]>,
   ) as unknown as PluginRuntime["channel"]["turn"]["buildContext"];
+  const runResolvedChannelTurnMock = vi.fn(
+    async (params: Parameters<PluginRuntime["channel"]["turn"]["runResolved"]>[0]) => {
+      const input =
+        typeof params.input === "function" ? await params.input(params.raw) : params.input;
+      if (!input) {
+        return {
+          admission: { kind: "drop" as const, reason: "ingest-null" },
+          dispatched: false,
+        };
+      }
+      return await runChannelTurnMock({
+        channel: params.channel,
+        accountId: params.accountId,
+        raw: params.raw,
+        log: params.log,
+        adapter: {
+          ingest: () => input,
+          resolveTurn: params.resolveTurn,
+        },
+      });
+    },
+  ) as unknown as PluginRuntime["channel"]["turn"]["runResolved"];
   const base: PluginRuntime = {
     version: "1.0.0-test",
     config: {
@@ -568,6 +600,7 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       },
       turn: {
         run: runChannelTurnMock,
+        runResolved: runResolvedChannelTurnMock,
         buildContext: buildChannelTurnContextMock,
         runPrepared: runPreparedChannelTurnMock,
         dispatchAssembled: dispatchAssembledChannelTurnMock,

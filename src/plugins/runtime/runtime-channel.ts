@@ -55,6 +55,7 @@ import {
   dispatchAssembledChannelTurn,
   runChannelTurn,
   runPreparedChannelTurn,
+  runResolvedChannelTurn,
 } from "../../channels/turn/kernel.js";
 import {
   resolveChannelGroupPolicy,
@@ -173,6 +174,7 @@ export function createRuntimeChannel(): PluginRuntime["channel"] {
     },
     turn: {
       run: runChannelTurn,
+      runResolved: runResolvedChannelTurn,
       buildContext: buildChannelTurnContext,
       runPrepared: runPreparedChannelTurn,
       dispatchAssembled: dispatchAssembledChannelTurn,

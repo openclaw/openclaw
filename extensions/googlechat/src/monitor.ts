@@ -195,35 +195,65 @@ async function processMessageWithPipeline(params: {
     body: rawBody,
   });
 
-  const ctxPayload = core.channel.reply.finalizeInboundContext({
-    Body: body,
-    BodyForAgent: rawBody,
-    RawBody: rawBody,
-    CommandBody: rawBody,
-    From: `googlechat:${senderId}`,
-    To: `googlechat:${spaceId}`,
-    SessionKey: route.sessionKey,
-    AccountId: route.accountId,
-    ChatType: isGroup ? "channel" : "direct",
-    ConversationLabel: fromLabel,
-    SenderName: senderName || undefined,
-    SenderId: senderId,
-    SenderUsername: senderEmail,
-    WasMentioned: isGroup ? effectiveWasMentioned : undefined,
-    CommandAuthorized: commandAuthorized,
-    Provider: "googlechat",
-    Surface: "googlechat",
-    MessageSid: message.name,
-    MessageSidFull: message.name,
-    ReplyToId: message.thread?.name,
-    ReplyToIdFull: message.thread?.name,
-    MediaPath: mediaPath,
-    MediaType: mediaType,
-    MediaUrl: mediaPath,
-    GroupSpace: isGroup ? (space.displayName ?? undefined) : undefined,
-    GroupSystemPrompt: isGroup ? groupSystemPrompt : undefined,
-    OriginatingChannel: "googlechat",
-    OriginatingTo: `googlechat:${spaceId}`,
+  const ctxPayload = core.channel.turn.buildContext({
+    channel: "googlechat",
+    accountId: route.accountId,
+    messageId: message.name,
+    messageIdFull: message.name,
+    timestamp: event.eventTime ? Date.parse(event.eventTime) : undefined,
+    from: `googlechat:${senderId}`,
+    sender: {
+      id: senderId,
+      name: senderName || undefined,
+      username: senderEmail,
+    },
+    conversation: {
+      kind: isGroup ? "channel" : "direct",
+      id: spaceId,
+      label: fromLabel,
+      routePeer: {
+        kind: isGroup ? "group" : "direct",
+        id: spaceId,
+      },
+    },
+    route: {
+      agentId: route.agentId,
+      accountId: route.accountId,
+      routeSessionKey: route.sessionKey,
+    },
+    reply: {
+      to: `googlechat:${spaceId}`,
+      originatingTo: `googlechat:${spaceId}`,
+      replyToId: message.thread?.name,
+      replyToIdFull: message.thread?.name,
+    },
+    message: {
+      body,
+      bodyForAgent: rawBody,
+      rawBody,
+      commandBody: rawBody,
+      envelopeFrom: fromLabel,
+    },
+    media:
+      mediaPath || mediaType
+        ? [
+            {
+              path: mediaPath,
+              url: mediaPath,
+              contentType: mediaType,
+            },
+          ]
+        : undefined,
+    supplemental: {
+      groupSystemPrompt: isGroup ? groupSystemPrompt : undefined,
+    },
+    extra: {
+      ChatType: isGroup ? "channel" : "direct",
+      WasMentioned: isGroup ? effectiveWasMentioned : undefined,
+      CommandAuthorized: commandAuthorized,
+      GroupSubject: undefined,
+      GroupSpace: isGroup ? (space.displayName ?? undefined) : undefined,
+    },
   });
 
   // Typing indicator setup
@@ -265,47 +295,60 @@ async function processMessageWithPipeline(params: {
     accountId: route.accountId,
   });
 
-  await core.channel.turn.dispatchAssembled({
-    cfg: config,
+  await core.channel.turn.runResolved({
     channel: "googlechat",
     accountId: route.accountId,
-    agentId: route.agentId,
-    routeSessionKey: route.sessionKey,
-    storePath,
-    ctxPayload,
-    recordInboundSession: core.channel.session.recordInboundSession,
-    dispatchReplyWithBufferedBlockDispatcher:
-      core.channel.reply.dispatchReplyWithBufferedBlockDispatcher,
-    delivery: {
-      deliver: async (payload) => {
-        await deliverGoogleChatReply({
-          payload,
-          account,
-          spaceId,
-          runtime,
-          core,
-          config,
-          statusSink,
-          typingMessageName,
-        });
-        // Only use typing message for first delivery
-        typingMessageName = undefined;
-      },
-      onError: (err, info) => {
-        runtime.error?.(
-          `[${account.accountId}] Google Chat ${info.kind} reply failed: ${String(err)}`,
-        );
-      },
+    raw: message,
+    input: {
+      id: message.name ?? spaceId,
+      timestamp: event.eventTime ? Date.parse(event.eventTime) : undefined,
+      rawText: rawBody,
+      textForAgent: rawBody,
+      textForCommands: rawBody,
+      raw: message,
     },
-    dispatcherOptions: replyPipeline,
-    replyOptions: {
-      onModelSelected,
-    },
-    record: {
-      onRecordError: (err) => {
-        runtime.error?.(`googlechat: failed updating session meta: ${String(err)}`);
+    resolveTurn: () => ({
+      cfg: config,
+      channel: "googlechat",
+      accountId: route.accountId,
+      agentId: route.agentId,
+      routeSessionKey: route.sessionKey,
+      storePath,
+      ctxPayload,
+      recordInboundSession: core.channel.session.recordInboundSession,
+      dispatchReplyWithBufferedBlockDispatcher:
+        core.channel.reply.dispatchReplyWithBufferedBlockDispatcher,
+      delivery: {
+        deliver: async (payload) => {
+          await deliverGoogleChatReply({
+            payload,
+            account,
+            spaceId,
+            runtime,
+            core,
+            config,
+            statusSink,
+            typingMessageName,
+          });
+          // Only use typing message for first delivery
+          typingMessageName = undefined;
+        },
+        onError: (err, info) => {
+          runtime.error?.(
+            `[${account.accountId}] Google Chat ${info.kind} reply failed: ${String(err)}`,
+          );
+        },
       },
-    },
+      dispatcherOptions: replyPipeline,
+      replyOptions: {
+        onModelSelected,
+      },
+      record: {
+        onRecordError: (err) => {
+          runtime.error?.(`googlechat: failed updating session meta: ${String(err)}`);
+        },
+      },
+    }),
   });
 }
 

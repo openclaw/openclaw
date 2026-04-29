@@ -1,5 +1,5 @@
 import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.js";
-import type { FinalizedMsgContext, MsgContext } from "../../auto-reply/templating.js";
+import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
 import type {
   AccessFacts,
   ConversationFacts,
@@ -28,7 +28,7 @@ export type BuildChannelTurnContextParams = {
   access?: AccessFacts;
   media?: InboundMediaFacts[];
   supplemental?: SupplementalContextFacts;
-  extra?: MsgContext;
+  extra?: Record<string, unknown>;
 };
 
 function compactStrings(values: Array<string | undefined>): string[] | undefined {

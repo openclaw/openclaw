@@ -153,6 +153,7 @@ export type PluginRuntimeChannel = {
   };
   turn: {
     run: typeof import("../../channels/turn/kernel.js").runChannelTurn;
+    runResolved: typeof import("../../channels/turn/kernel.js").runResolvedChannelTurn;
     buildContext: typeof import("../../channels/turn/kernel.js").buildChannelTurnContext;
     runPrepared: typeof import("../../channels/turn/kernel.js").runPreparedChannelTurn;
     dispatchAssembled: typeof import("../../channels/turn/kernel.js").dispatchAssembledChannelTurn;
