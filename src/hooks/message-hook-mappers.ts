@@ -44,6 +44,8 @@ export type CanonicalInboundMessageHookContext = {
   provider?: string;
   surface?: string;
   threadId?: string | number;
+  replyToId?: string;
+  rootMessageId?: string;
   // `mediaPath(s)` are files OpenClaw has already staged locally. `mediaUrl(s)`
   // are provider/media-server references that may not exist on this host.
   mediaPath?: string;
@@ -52,6 +54,9 @@ export type CanonicalInboundMessageHookContext = {
   mediaPaths?: string[];
   mediaUrls?: string[];
   mediaTypes?: string[];
+  chatType?: string;
+  nativeChannelId?: string;
+  providerMetadata?: Record<string, unknown>;
   originatingChannel?: string;
   originatingTo?: string;
   guildId?: string;
@@ -144,12 +149,17 @@ export function deriveInboundMessageHookContext(
     provider: ctx.Provider,
     surface: ctx.Surface,
     threadId: ctx.MessageThreadId,
+    replyToId: ctx.ReplyToId,
+    rootMessageId: ctx.RootMessageId,
     mediaPath: ctx.MediaPath ?? mediaPaths?.[0],
     mediaUrl: ctx.MediaUrl ?? mediaUrls?.[0],
     mediaType: ctx.MediaType ?? mediaTypes?.[0],
     mediaPaths,
     mediaUrls,
     mediaTypes,
+    chatType: ctx.ChatType,
+    nativeChannelId: ctx.NativeChannelId,
+    providerMetadata: ctx.ProviderMetadata,
     originatingChannel: ctx.OriginatingChannel,
     originatingTo: ctx.OriginatingTo,
     guildId: ctx.GroupSpace,
@@ -339,6 +349,8 @@ export function toPluginInboundClaimEvent(
       surface: canonical.surface,
       originatingChannel: canonical.originatingChannel,
       originatingTo: canonical.originatingTo,
+      replyToId: canonical.replyToId,
+      rootMessageId: canonical.rootMessageId,
       senderE164: canonical.senderE164,
       mediaPath: canonical.mediaPath,
       mediaUrl: canonical.mediaUrl,
@@ -350,6 +362,9 @@ export function toPluginInboundClaimEvent(
       channelName: canonical.channelName,
       groupId: canonical.groupId,
       topicName: canonical.topicName,
+      chatType: canonical.chatType,
+      nativeChannelId: canonical.nativeChannelId,
+      providerMetadata: canonical.providerMetadata,
     },
   };
   assignTraceFields(event, canonical.trace);
@@ -373,6 +388,8 @@ export function toPluginMessageReceivedEvent(
       provider: canonical.provider,
       surface: canonical.surface,
       threadId: canonical.threadId,
+      replyToId: canonical.replyToId,
+      rootMessageId: canonical.rootMessageId,
       originatingChannel: canonical.originatingChannel,
       originatingTo: canonical.originatingTo,
       messageId: canonical.messageId,
@@ -383,6 +400,9 @@ export function toPluginMessageReceivedEvent(
       guildId: canonical.guildId,
       channelName: canonical.channelName,
       topicName: canonical.topicName,
+      chatType: canonical.chatType,
+      nativeChannelId: canonical.nativeChannelId,
+      providerMetadata: canonical.providerMetadata,
     },
   };
   assignTraceFields(event, canonical.trace);
@@ -421,6 +441,8 @@ export function toInternalMessageReceivedContext(
       provider: canonical.provider,
       surface: canonical.surface,
       threadId: canonical.threadId,
+      replyToId: canonical.replyToId,
+      rootMessageId: canonical.rootMessageId,
       senderId: canonical.senderId,
       senderName: canonical.senderName,
       senderUsername: canonical.senderUsername,
@@ -428,6 +450,9 @@ export function toInternalMessageReceivedContext(
       guildId: canonical.guildId,
       channelName: canonical.channelName,
       topicName: canonical.topicName,
+      chatType: canonical.chatType,
+      nativeChannelId: canonical.nativeChannelId,
+      providerMetadata: canonical.providerMetadata,
     },
   };
 }

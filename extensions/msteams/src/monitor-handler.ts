@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { getGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
 import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
 import { formatUnknownError } from "./errors.js";
@@ -52,6 +53,16 @@ function serializeAdaptiveCardActionValue(value: unknown): string | null {
   } catch {
     return null;
   }
+}
+
+function readString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function readRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
 }
 
 async function isInvokeAuthorized(params: {
@@ -447,6 +458,71 @@ export function registerMSTeamsHandlers<T extends MSTeamsActivityHandler>(
           });
         }
         return;
+      }
+
+      if (ctx.activity?.type === "conversationUpdate") {
+        const channelData = readRecord(ctx.activity.channelData);
+        const eventType = readString(channelData?.eventType);
+        if (eventType === "channelDeleted") {
+          const deletedChannel = readRecord(channelData?.channel);
+          const teamInfo = readRecord(channelData?.team);
+          const rawConversationId = readString(ctx.activity.conversation?.id);
+          const conversationId =
+            readString(deletedChannel?.id) ??
+            normalizeMSTeamsConversationId(rawConversationId ?? "");
+          const tenantId =
+            readString(readRecord(channelData?.tenant)?.id) ??
+            readString(ctx.activity.conversation?.tenantId);
+          const hookRunner = getGlobalHookRunner();
+          const hasChannelDeletedHooks = hookRunner?.hasHooks("channel_deleted") ?? false;
+
+          deps.log.info?.("msteams channelDeleted event", {
+            rawConversationId,
+            emittedConversationId: conversationId,
+            activityChannelId: readString(ctx.activity.channelId),
+            deletedChannelId: readString(deletedChannel?.id),
+            deletedChannelName: readString(deletedChannel?.name),
+            teamAadGroupId: readString(teamInfo?.aadGroupId),
+            teamRuntimeId: readString(teamInfo?.id),
+            teamName: readString(teamInfo?.name),
+            tenantId,
+            hasChannelDeletedHooks,
+          });
+
+          if (conversationId && hookRunner && hasChannelDeletedHooks) {
+            const warnChannelDeletedHookFailure = (err: unknown) => {
+              deps.log.warn?.("msteams channelDeleted hook failed", {
+                conversationId,
+                error: err instanceof Error ? err.message : String(err),
+              });
+            };
+            try {
+              const hookResult = hookRunner.runChannelDeleted(
+                {
+                  conversationId,
+                  timestamp: Date.now(),
+                  metadata: {
+                    provider: "msteams",
+                    eventType,
+                    tenantId,
+                    teamId: readString(teamInfo?.aadGroupId) ?? readString(teamInfo?.id),
+                    teamRuntimeId: readString(teamInfo?.id),
+                    teamName: readString(teamInfo?.name),
+                    channelId: readString(deletedChannel?.id),
+                    channelName: readString(deletedChannel?.name),
+                  },
+                },
+                {
+                  channelId: "msteams",
+                  conversationId,
+                },
+              );
+              void Promise.resolve(hookResult).catch(warnChannelDeletedHookFailure);
+            } catch (err) {
+              warnChannelDeletedHookFailure(err);
+            }
+          }
+        }
       }
 
       return originalRun.call(handler, context);

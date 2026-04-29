@@ -36,6 +36,7 @@ import type {
   PluginHookInboundClaimContext,
   PluginHookInboundClaimEvent,
   PluginHookInboundClaimResult,
+  PluginHookChannelDeletedEvent,
   PluginHookLlmInputEvent,
   PluginHookLlmOutputEvent,
   PluginHookBeforeResetEvent,
@@ -110,6 +111,7 @@ export type {
   PluginHookInboundClaimEvent,
   PluginHookInboundClaimResult,
   PluginHookAfterCompactionEvent,
+  PluginHookChannelDeletedEvent,
   PluginHookMessageContext,
   PluginHookMessageReceivedEvent,
   PluginHookMessageSendingEvent,
@@ -919,6 +921,17 @@ export function createHookRunner(
   }
 
   /**
+   * Run channel_deleted hook.
+   * Runs in parallel (fire-and-forget).
+   */
+  async function runChannelDeleted(
+    event: PluginHookChannelDeletedEvent,
+    ctx: PluginHookMessageContext,
+  ): Promise<void> {
+    return runVoidHook("channel_deleted", event, ctx);
+  }
+
+  /**
    * Run before_dispatch hook.
    * Allows plugins to inspect or handle a message before model dispatch.
    * First handler returning { handled: true } wins.
@@ -1371,6 +1384,7 @@ export function createHookRunner(
     runInboundClaimForPlugin,
     runInboundClaimForPluginOutcome,
     runMessageReceived,
+    runChannelDeleted,
     runBeforeDispatch,
     runReplyDispatch,
     runMessageSending,

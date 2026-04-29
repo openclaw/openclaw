@@ -66,6 +66,12 @@ export type PluginHookMessageReceivedEvent = {
   metadata?: Record<string, unknown>;
 };
 
+export type PluginHookChannelDeletedEvent = {
+  conversationId?: string;
+  timestamp?: number;
+  metadata?: Record<string, unknown>;
+};
+
 export type PluginHookMessageSendingEvent = {
   to: string;
   content: string;

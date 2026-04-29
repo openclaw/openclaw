@@ -161,6 +161,8 @@ export type MsgContext = {
   UntrustedContext?: string[];
   /** Structured untrusted metadata rendered by prompt assembly as fenced JSON. */
   UntrustedStructuredContext?: UntrustedStructuredContextEntry[];
+  /** Provider-specific metadata forwarded to hooks/tools as untrusted event data. */
+  ProviderMetadata?: Record<string, unknown>;
   /** System-attached provenance for the current inbound message. */
   InputProvenance?: InputProvenance;
   /** Explicit owner allowlist overrides (trusted, configuration-derived). */
