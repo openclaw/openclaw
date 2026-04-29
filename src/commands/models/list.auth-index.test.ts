@@ -2,12 +2,22 @@ import { describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import { createModelListAuthIndex } from "./list.auth-index.js";
 
+type PluginSnapshotResult = {
+  source: "persisted" | "provided" | "derived";
+  snapshot: {
+    plugins: Array<{ enabled?: boolean; syntheticAuthRefs?: string[] }>;
+  };
+  diagnostics: [];
+};
+
 const pluginRegistryMocks = vi.hoisted(() => ({
-  loadPluginRegistrySnapshotWithMetadata: vi.fn(() => ({
-    source: "persisted",
-    snapshot: { plugins: [] },
-    diagnostics: [],
-  })),
+  loadPluginRegistrySnapshotWithMetadata: vi.fn(
+    (): PluginSnapshotResult => ({
+      source: "persisted",
+      snapshot: { plugins: [] },
+      diagnostics: [],
+    }),
+  ),
 }));
 
 vi.mock("../../plugins/plugin-registry.js", async (importOriginal) => {
