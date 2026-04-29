@@ -345,8 +345,8 @@ describe("promptAuthConfig", () => {
         auth: [],
         wizard: {
           setup: {
-            modelAllowlist: {
-              loadCatalog: true,
+            modelSelection: {
+              promptWhenAuthChoiceProvided: true,
             },
           },
         },

@@ -321,8 +321,8 @@ export default definePluginEntry({
           choiceLabel: "GitHub Copilot",
           choiceHint: "Device login with your GitHub account",
           methodId: "device",
-          modelAllowlist: {
-            loadCatalog: true,
+          modelSelection: {
+            promptWhenAuthChoiceProvided: true,
           },
         },
       },
