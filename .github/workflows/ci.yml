@@ -1396,6 +1396,7 @@ jobs:
               pnpm check:no-conflict-markers
               pnpm tool-display:check
               pnpm check:host-env-policy:swift
+              pnpm dup:check:coverage
               ;;
             prod-types)
               pnpm tsgo:prod
