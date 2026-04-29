@@ -78,6 +78,7 @@ type PersistTextTurnTranscriptParams = {
   sessionAgentId: string;
   threadId?: string | number;
   sessionCwd: string;
+  cfg?: OpenClawConfig;
   assistant: {
     api: string;
     provider: string;
@@ -124,6 +125,7 @@ async function persistTextTurnTranscript(
   const sessionManager = guardSessionManager(SessionManager.open(sessionFile), {
     agentId: params.sessionAgentId,
     sessionKey: params.sessionKey,
+    config: params.cfg,
   });
   await prepareSessionManagerForRun({
     sessionManager,
@@ -187,6 +189,7 @@ export async function persistAcpTurnTranscript(params: {
   sessionAgentId: string;
   threadId?: string | number;
   sessionCwd: string;
+  cfg?: OpenClawConfig;
 }): Promise<SessionEntry | undefined> {
   return await persistTextTurnTranscript({
     ...params,
@@ -210,6 +213,7 @@ export async function persistCliTurnTranscript(params: {
   sessionAgentId: string;
   threadId?: string | number;
   sessionCwd: string;
+  cfg?: OpenClawConfig;
 }): Promise<SessionEntry | undefined> {
   const replyText = resolveCliTranscriptReplyText(params.result);
   const provider = params.result.meta.agentMeta?.provider?.trim() ?? "cli";
@@ -227,6 +231,7 @@ export async function persistCliTurnTranscript(params: {
     sessionAgentId: params.sessionAgentId,
     threadId: params.threadId,
     sessionCwd: params.sessionCwd,
+    cfg: params.cfg,
     assistant: {
       api: "cli",
       provider,

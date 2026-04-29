@@ -569,6 +569,7 @@ async function agentCommandInternal(
           sessionAgentId,
           threadId: opts.threadId,
           sessionCwd: resolveAcpSessionCwd(acpResolution.meta) ?? workspaceDir,
+          cfg,
         });
       } catch (error) {
         log.warn(
@@ -1167,6 +1168,7 @@ async function agentCommandInternal(
           sessionAgentId,
           threadId: opts.threadId,
           sessionCwd: workspaceDir,
+          cfg,
         });
         sessionEntry = await (
           await loadCliCompactionRuntime()

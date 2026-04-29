@@ -425,25 +425,6 @@ describe("transcript message redaction via guardSessionManager", () => {
     );
   }
 
-  it("masks API keys in text content persisted to JSONL", async () => {
-    // No explicit config passed to guardSessionManager at this call site,
-    // so redactSensitiveText applies its built-in default patterns.
-    writeStore();
-
-    const rawSecret = "sk-abcdef1234567890xyz";
-    const result = await appendExactAssistantMessageToSessionTranscript({
-      sessionKey,
-      storePath: fixture.storePath(),
-      message: makeAssistantMessage({ text: `Your API key is ${rawSecret} for auth.` }),
-    });
-
-    expect(result.ok).toBe(true);
-    if (result.ok) {
-      const raw = fs.readFileSync(result.sessionFile, "utf-8");
-      expect(raw).not.toContain(rawSecret);
-    }
-  });
-
   it("writes non-sensitive text content verbatim to JSONL", async () => {
     writeRedactConfig(
       JSON.stringify({
@@ -466,12 +447,11 @@ describe("transcript message redaction via guardSessionManager", () => {
     }
   });
 
-  it("applies default redaction even without explicit config passthrough", async () => {
-    // NOTE: guardSessionManager is called without `config` in transcript.ts.
-    // redactTranscriptText checks cfg?.logging?.redactSensitive === "off" first;
-    // with undefined config that short-circuit never fires, so default
-    // redaction via redactSensitiveText internal fallbacks always applies.
-    // Full opt-out support would require plumbing OpenClawConfig to this call site.
+  it("applies default redaction when no config is provided (safe fallback)", async () => {
+    // With no config passed, guardSessionManager uses undefined opts.config,
+    // so redactTranscriptText falls back to default redaction patterns.
+    // This is the intended safe fallback: callers without a config context
+    // still get redaction applied.
     writeStore();
 
     const secret = "apiKey=sk-abcdef1234567890xyz";
@@ -486,6 +466,29 @@ describe("transcript message redaction via guardSessionManager", () => {
       const raw = fs.readFileSync(result.sessionFile, "utf-8");
       // Default redaction masks long alphanumeric tokens
       expect(raw).not.toContain("sk-abcdef1234567890xyz");
+    }
+  });
+
+  it("honours logging.redactSensitive=off when config is passed through", async () => {
+    // Regression test: before this fix, config was not threaded through
+    // to guardSessionManager, so redactSensitive="off" was silently ignored.
+    writeStore();
+
+    const secret = "apiKey=sk-abcdef1234567890xyz";
+    const result = await appendExactAssistantMessageToSessionTranscript({
+      sessionKey,
+      storePath: fixture.storePath(),
+      message: makeAssistantMessage({ text: `Here is the key: ${secret}` }),
+      config: { logging: { redactSensitive: "off" } } as Parameters<
+        typeof appendExactAssistantMessageToSessionTranscript
+      >[0]["config"],
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      const raw = fs.readFileSync(result.sessionFile, "utf-8");
+      // With redactSensitive="off", the secret should appear verbatim
+      expect(raw).toContain("sk-abcdef1234567890xyz");
     }
   });
 

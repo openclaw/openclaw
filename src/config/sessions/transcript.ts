@@ -5,6 +5,7 @@ import { guardSessionManager } from "../../agents/session-tool-result-guard-wrap
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { SessionTranscriptUpdateMode } from "../../sessions/transcript-events.js";
 import { extractAssistantVisibleText } from "../../shared/chat-message-content.js";
+import type { OpenClawConfig } from "../types.openclaw.js";
 import {
   resolveDefaultSessionStorePath,
   resolveSessionFilePath,
@@ -164,6 +165,7 @@ export async function appendAssistantMessageToSessionTranscript(params: {
   /** Optional override for store path (mostly for tests). */
   storePath?: string;
   updateMode?: SessionTranscriptUpdateMode;
+  config?: OpenClawConfig;
 }): Promise<SessionTranscriptAppendResult> {
   const sessionKey = params.sessionKey.trim();
   if (!sessionKey) {
@@ -184,6 +186,7 @@ export async function appendAssistantMessageToSessionTranscript(params: {
     storePath: params.storePath,
     idempotencyKey: params.idempotencyKey,
     updateMode: params.updateMode,
+    config: params.config,
     message: {
       role: "assistant" as const,
       content: [{ type: "text", text: mirrorText }],
@@ -217,6 +220,7 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
   idempotencyKey?: string;
   storePath?: string;
   updateMode?: SessionTranscriptUpdateMode;
+  config?: OpenClawConfig;
 }): Promise<SessionTranscriptAppendResult> {
   const sessionKey = params.sessionKey.trim();
   if (!sessionKey) {
@@ -281,6 +285,7 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
     agentId: params.agentId,
     sessionKey: params.sessionKey,
     updateMode: params.updateMode ?? "inline",
+    config: params.config,
   });
   const messageId = sessionManager.appendMessage(message);
   return { ok: true, sessionFile, messageId };

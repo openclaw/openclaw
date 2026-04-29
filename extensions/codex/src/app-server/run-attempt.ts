@@ -896,6 +896,7 @@ export async function runCodexAppServerAttempt(
       sessionKey: sandboxSessionKey,
       threadId: thread.threadId,
       turnId: activeTurnId,
+      config: params.config,
     });
     const terminalAssistantText = collectTerminalAssistantText(result);
     if (terminalAssistantText && !finalAborted && !finalPromptError) {
@@ -1362,6 +1363,7 @@ async function mirrorTranscriptBestEffort(params: {
   sessionKey?: string;
   threadId: string;
   turnId: string;
+  config?: EmbeddedRunAttemptParams["config"];
 }): Promise<void> {
   try {
     await mirrorCodexAppServerTranscript({
@@ -1370,6 +1372,7 @@ async function mirrorTranscriptBestEffort(params: {
       sessionKey: params.sessionKey,
       messages: params.result.messagesSnapshot,
       idempotencyScope: `codex-app-server:${params.threadId}:${params.turnId}`,
+      config: params.config,
     });
   } catch (error) {
     embeddedAgentLog.warn("failed to mirror codex app-server transcript", { error });
