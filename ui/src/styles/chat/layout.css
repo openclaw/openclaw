@@ -1029,6 +1029,7 @@
   align-items: center;
   gap: 12px;
   flex-wrap: wrap;
+  min-width: 0;
 }
 
 .chat-controls__model {
@@ -1090,13 +1091,15 @@
 
 @media (max-width: 768px) {
   .chat-controls__session {
-    min-width: 120px;
+    min-width: 0;
     max-width: none;
+    width: 100%;
   }
 
   .chat-controls__model {
-    min-width: 140px;
+    min-width: 0;
     max-width: none;
+    width: 100%;
   }
 
   .chat-controls {
@@ -1138,11 +1141,11 @@
   }
 
   .chat-controls__session {
-    min-width: 120px;
+    min-width: 0;
   }
 
   .chat-controls__model {
-    min-width: 150px;
+    min-width: 0;
   }
 }
 

@@ -32,9 +32,9 @@
 
   .chat-controls__session-row {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    grid-template-columns: 1fr;
     align-items: start;
-    gap: 10px 12px;
+    gap: 8px 12px;
     width: 100%;
   }
 
@@ -381,6 +381,42 @@
   }
 
   /* Content */
+
+  /* Neutralize transition on .shell — it creates a CSS containing block
+     that breaks position:fixed for the mobile settings dropdown */
+  .shell {
+    transition: none !important;
+  }
+
+  /* Safe area insets for Safari chrome (address bar + bottom toolbar) */
+  .shell {
+    padding-top: env(safe-area-inset-top, 0px);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+    padding-left: env(safe-area-inset-left, 0px);
+    padding-right: env(safe-area-inset-right, 0px);
+  }
+
+  /* Keep overflow:hidden on mobile — the chat messages container handles its
+     own scrolling. overflow-y:auto here caused content to push down when
+     Safari tab bar hides/shows instead of staying fixed. */
+  .shell--chat {
+    overflow: hidden;
+  }
+
+  .topbar {
+    /* Topbar sits below the safe-area-inset-top already handled by shell padding */
+  }
+
+  /* Chat compose input — push above bottom safe area */
+  .chat-compose {
+    padding-bottom: calc(4px + env(safe-area-inset-bottom, 0px));
+  }
+
+  /* Sidebar drawer — push above bottom safe area */
+  .shell-nav {
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+
   .content-header {
     display: none;
   }
@@ -394,7 +430,7 @@
     gap: 2px;
   }
 
-  /* Show the mobile gear toggle (lives in topbar now) */
+  /* The dropdown panel — positioned relative to wrapper, but sized to fill viewport */
   .chat-mobile-controls-wrapper {
     display: flex;
     position: relative;
@@ -402,27 +438,99 @@
 
   .chat-mobile-controls-wrapper .chat-controls-mobile-toggle {
     display: flex;
+    width: 40px;
+    height: 40px;
+    border: 1px solid color-mix(in srgb, var(--border) 84%, transparent);
+    border-radius: var(--radius-full);
+    background: color-mix(in srgb, var(--bg-elevated) 80%, transparent);
+    color: var(--muted);
+    align-items: center;
+    justify-content: center;
   }
 
-  /* The dropdown panel — anchored below the gear in topbar */
+  /* Full-viewport overlay using absolute positioning + viewport units */
   .chat-mobile-controls-wrapper .chat-controls-dropdown {
     display: none;
-    position: absolute;
-    top: 100%;
-    right: 0;
-    z-index: 100;
-    background: var(--card, #161b22);
-    border: 1px solid var(--border, #30363d);
-    border-radius: var(--radius-md);
-    padding: 8px;
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+    height: 100dvh;
+    z-index: 9999;
+    padding: 8vh 4vw;
     flex-direction: column;
-    gap: 4px;
-    min-width: 220px;
+    align-items: center;
+    justify-content: center;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    pointer-events: auto;
+    background: rgba(0, 0, 0, 0.5);
   }
 
   .chat-mobile-controls-wrapper .chat-controls-dropdown.open {
     display: flex;
+  }
+
+  .chat-mobile-controls-wrapper .chat-controls-dropdown-card {
+    background: var(--card, #161b22);
+    border: 1px solid var(--border, #30363d);
+    border-radius: var(--radius-xl, 16px);
+    padding: 20px 16px;
+    box-shadow: 0 16px 48px rgba(0, 0, 0, 0.6);
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    width: min(92vw, 360px);
+    max-height: 84vh;
+    overflow-y: auto;
+    flex-shrink: 0;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .chat-mobile-controls-wrapper .chat-controls-dropdown-card select,
+  .chat-mobile-controls-wrapper .chat-controls-dropdown select {
+    touch-action: manipulation;
+    pointer-events: auto;
+    position: relative;
+    z-index: 1;
+    /* Restore native picker on iOS — base .field select sets appearance:none */
+    appearance: auto;
+    -webkit-appearance: menulist;
+    background-image: none;
+    padding-right: 14px;
+    cursor: default;
+  }
+
+  .chat-controls-dropdown-close {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    border: none;
+    border-radius: var(--radius-full);
+    background: transparent;
+    color: var(--muted, #8b949e);
+    cursor: pointer;
+    flex-shrink: 0;
+  }
+
+  .chat-controls-dropdown-close:hover,
+  .chat-controls-dropdown-close:active {
+    background: color-mix(in srgb, var(--border, #30363d) 60%, transparent);
+    color: var(--fg, #e6edf3);
+  }
+
+  /* Backdrop not needed — the dropdown IS the overlay now */
+  .chat-mobile-controls-wrapper .chat-controls-dropdown-backdrop {
+    display: none !important;
+  }
+
+  .chat-mobile-controls-wrapper .chat-controls-dropdown.open + .chat-controls-dropdown-backdrop,
+  .chat-mobile-controls-wrapper .chat-controls-dropdown-backdrop.visible {
+    display: none !important;
   }
 
   .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls {
@@ -432,16 +540,40 @@
     width: 100%;
   }
 
-  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__session {
+  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__session,
+  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__model,
+  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__thinking-select {
     min-width: unset;
     max-width: unset;
     width: 100%;
   }
 
-  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__session select {
+  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__session select,
+  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__model select,
+  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__thinking-select select {
     width: 100%;
-    font-size: 14px;
-    padding: 10px 12px;
+    font-size: 16px;          /* prevents iOS zoom on focus */
+    padding: 12px 14px;
+    min-height: 48px;
+    border-radius: var(--radius-md);
+    background-color: var(--bg-elevated, #0d1117);
+    color: var(--fg, #e6edf3);
+    border: 1px solid var(--border, #30363d);
+    appearance: auto;         /* let the native <select> dropdown escape the container */
+  }
+
+  /* Visible label text above each select so users know what they're picking */
+  .chat-mobile-controls-wrapper .chat-controls-dropdown .field.chat-controls__session::before,
+  .chat-mobile-controls-wrapper .chat-controls-dropdown .field.chat-controls__model::before,
+  .chat-mobile-controls-wrapper .chat-controls-dropdown .field.chat-controls__thinking-select::before {
+    content: attr(data-label);
+    display: block;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--muted, #8b949e);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 4px;
   }
 
   .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__thinking {
