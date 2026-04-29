@@ -33,6 +33,9 @@ export type MonitorTransportParams = {
 const FEISHU_WS_RECONNECT_INITIAL_DELAY_MS = 1_000;
 const FEISHU_WS_RECONNECT_MAX_DELAY_MS = 30_000;
 const FEISHU_WS_LOG_ERROR_MAX_LENGTH = 500;
+const FEISHU_WS_RECONNECT_EXHAUSTED_RE = /^WebSocket reconnect exhausted after \d+ attempts?/;
+const FEISHU_WS_AUTORECONNECT_DISABLED_ERROR =
+  "WebSocket connect failed and autoReconnect is disabled";
 
 function isFeishuWebhookPayload(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
@@ -120,6 +123,14 @@ function formatFeishuWsErrorForLog(err: unknown): string {
   return `${redacted.slice(0, FEISHU_WS_LOG_ERROR_MAX_LENGTH)}...`;
 }
 
+function isFeishuWsTerminalError(err: Error): boolean {
+  const message = err.message.trim();
+  return (
+    FEISHU_WS_RECONNECT_EXHAUSTED_RE.test(message) ||
+    message.startsWith(FEISHU_WS_AUTORECONNECT_DISABLED_ERROR)
+  );
+}
+
 function cleanupFeishuWsClient(params: {
   accountId: string;
   wsClient?: Lark.WSClient;
@@ -199,9 +210,19 @@ export async function monitorWebSocket({
       const terminalError = new Promise<Error>((resolve) => {
         reportTerminalError = resolve;
       });
+      const handleWsError = (err: Error) => {
+        if (isFeishuWsTerminalError(err)) {
+          reportTerminalError(err);
+          return;
+        }
+
+        error(
+          `feishu[${accountId}]: WebSocket SDK reported recoverable error: ${formatFeishuWsErrorForLog(err)}`,
+        );
+      };
       log(`feishu[${accountId}]: starting WebSocket connection...`);
       wsClient = await createFeishuWSClient(account, {
-        onError: reportTerminalError,
+        onError: handleWsError,
       });
       if (abortSignal?.aborted) {
         cleanupFeishuWsClient({ accountId, wsClient, error, clearIdentity: true });

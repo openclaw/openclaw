@@ -202,6 +202,55 @@ describe("feishu websocket cleanup", () => {
     expect(errorMessage).not.toContain("token_abc");
   });
 
+  it("keeps the websocket client alive after recoverable sdk callback errors", async () => {
+    vi.useFakeTimers();
+    const wsClient = createWsClient();
+    createFeishuWSClientMock.mockResolvedValueOnce(wsClient);
+
+    const abortController = new AbortController();
+    const runtime = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(),
+    };
+    const accountId = "recoverable-callback";
+
+    const monitorPromise = monitorWebSocket({
+      account: createAccount(accountId),
+      accountId,
+      runtime,
+      abortSignal: abortController.signal,
+      eventDispatcher: {} as never,
+    });
+
+    await vi.waitFor(() => {
+      expect(wsClient.start).toHaveBeenCalledTimes(1);
+      expect(wsClients.get(accountId)).toBe(wsClient);
+    });
+
+    const callbacks = createFeishuWSClientMock.mock.calls[0]?.[1] as
+      | { onError?: (err: Error) => void }
+      | undefined;
+    callbacks?.onError?.(new Error("temporary callback failure\nBearer token_abc"));
+
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(createFeishuWSClientMock).toHaveBeenCalledTimes(1);
+    expect(wsClient.close).not.toHaveBeenCalled();
+    expect(wsClients.get(accountId)).toBe(wsClient);
+    const errorMessage = String(runtime.error.mock.calls[0]?.[0] ?? "");
+    expect(errorMessage).toContain("WebSocket SDK reported recoverable error");
+    expect(errorMessage).toContain("Bearer [redacted]");
+    expect(errorMessage).not.toContain("\n");
+    expect(errorMessage).not.toContain("token_abc");
+
+    abortController.abort();
+    await monitorPromise;
+
+    expect(createFeishuWSClientMock).toHaveBeenCalledTimes(1);
+    expect(wsClient.close).toHaveBeenCalledTimes(1);
+  });
+
   it("clears identity without recreating a websocket when aborted during reconnect backoff", async () => {
     vi.useFakeTimers();
     const exhaustedClient = createWsClient();
