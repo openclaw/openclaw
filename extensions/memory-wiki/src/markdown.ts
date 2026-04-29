@@ -62,8 +62,16 @@ export type WikiPageSummary = {
 const FRONTMATTER_PATTERN = /^---\n([\s\S]*?)\n---\n?/;
 const OBSIDIAN_LINK_PATTERN = /\[\[([^\]|]+)(?:\|[^\]]+)?\]\]/g;
 const MARKDOWN_LINK_PATTERN = /\[[^\]]+\]\(([^)]+)\)/g;
-const FENCED_CODE_PATTERN = /^( {0,3})`{3,}[^\n]*\n[\s\S]*?\n {0,3}`{3,}\s*$/gm;
-const HTML_COMMENT_PATTERN = /<!--[\s\S]*?-->/g;
+
+/**
+ * Combined pattern that strips fenced code blocks and HTML comments in a
+ * single pass so that neither construct can "shadow" the other.  Because the
+ * regex engine evaluates alternatives left-to-right at each position, the
+ * first matching construct in the text wins – exactly the precedence
+ * CommonMark specifies.
+ */
+const FENCED_OR_COMMENT_PATTERN =
+  /(?:^( {0,3})`{3,}[^\n]*\n[\s\S]*?\n {0,3}`{3,}\s*$)|(?:<!--[\s\S]*?-->)/gm;
 const IMAGE_LINK_PATTERN = /!\[[^\]]*\]\([^)]+\)/g;
 const RELATED_BLOCK_PATTERN = new RegExp(
   `${WIKI_RELATED_START_MARKER}[\\s\\S]*?${WIKI_RELATED_END_MARKER}`,
@@ -219,8 +227,7 @@ export function normalizeWikiClaims(value: unknown): WikiClaim[] {
 export function extractWikiLinks(markdown: string): string[] {
   const searchable = markdown
     .replace(RELATED_BLOCK_PATTERN, "")
-    .replace(HTML_COMMENT_PATTERN, "")
-    .replace(FENCED_CODE_PATTERN, "")
+    .replace(FENCED_OR_COMMENT_PATTERN, "")
     .replace(IMAGE_LINK_PATTERN, "");
   const links: string[] = [];
   for (const match of searchable.matchAll(OBSIDIAN_LINK_PATTERN)) {

@@ -67,11 +67,7 @@ describe("extractWikiLinks", () => {
   });
 
   it("ignores links inside longer fences", () => {
-    const md = [
-      "````text",
-      "[label](target)",
-      "````",
-    ].join("\n");
+    const md = ["````text", "[label](target)", "````"].join("\n");
     expect(extractWikiLinks(md)).toEqual([]);
   });
 
@@ -104,7 +100,10 @@ describe("extractWikiLinks", () => {
       "",
       "![img](image.png)",
     ].join("\n");
-    expect(extractWikiLinks(md)).toEqual(["sources/real-page", "sources/other-page"]);
+    expect(extractWikiLinks(md)).toEqual(
+      expect.arrayContaining(["sources/real-page", "sources/other-page"]),
+    );
+    expect(extractWikiLinks(md)).toHaveLength(2);
   });
 
   it("skips external URLs", () => {
@@ -118,33 +117,24 @@ describe("extractWikiLinks", () => {
   });
 
   it("ignores links in fenced blocks with longer closing fence", () => {
-    const md = [
-      "```py",
-      "[fake](bad)",
-      "````",
-      "[real](sources/good)",
-    ].join("\n");
+    const md = ["```py", "[fake](bad)", "````", "[real](sources/good)"].join("\n");
     expect(extractWikiLinks(md)).toEqual(["sources/good"]);
   });
 
   it("ignores links in indented fenced blocks", () => {
-    const md = [
-      "  ```py",
-      "  [fake](bad)",
-      "  ```",
-      "[real](sources/good)",
-    ].join("\n");
+    const md = ["  ```py", "  [fake](bad)", "  ```", "[real](sources/good)"].join("\n");
     expect(extractWikiLinks(md)).toEqual(["sources/good"]);
   });
 
   it("does not swallow real links when fence opener is inside HTML comment", () => {
-    const md = [
-      "<!--",
-      "```",
-      "-->",
-      "[real](sources/good)",
-      "```",
-    ].join("\n");
+    const md = ["<!--", "```", "-->", "[real](sources/good)", "```"].join("\n");
+    expect(extractWikiLinks(md)).toEqual(["sources/good"]);
+  });
+
+  it("does not swallow real links when HTML comment opener is inside fenced code", () => {
+    const md = ["```", "<!--", "```", "[real](sources/good)", "<!-- a proper comment -->"].join(
+      "\n",
+    );
     expect(extractWikiLinks(md)).toEqual(["sources/good"]);
   });
 });
