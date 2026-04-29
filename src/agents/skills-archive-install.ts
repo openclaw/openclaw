@@ -10,6 +10,13 @@ import {
 } from "../plugins/install-security-scan.js";
 
 const VALID_SLUG_PATTERN = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/i;
+const DEFAULT_SKILL_ARCHIVE_ROOT_MARKERS = ["SKILL.md"] as const;
+export const CLAWHUB_SKILL_ARCHIVE_ROOT_MARKERS = [
+  "SKILL.md",
+  "skill.md",
+  "skills.md",
+  "SKILL.MD",
+] as const;
 
 function hasNonAscii(value: string): boolean {
   for (const char of value) {
@@ -70,8 +77,16 @@ function installFailure(
   return { ok: false, error, failureKind };
 }
 
-async function hasSkillArchiveRoot(rootDir: string): Promise<boolean> {
-  return await fileExists(path.join(rootDir, "SKILL.md"));
+async function hasSkillArchiveRoot(
+  rootDir: string,
+  rootMarkers: readonly string[],
+): Promise<boolean> {
+  for (const candidate of rootMarkers) {
+    if (await fileExists(path.join(rootDir, candidate))) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function scanBlockedFailureKind(
@@ -96,9 +111,15 @@ export async function installExtractedSkillRoot(params: {
   timeoutMs?: number;
   logger?: ArchiveLogger;
   scan?: SkillArchiveInstallScan;
+  rootMarkers?: readonly string[];
 }): Promise<SkillArchiveInstallResult> {
   try {
-    if (!(await hasSkillArchiveRoot(params.extractedRoot))) {
+    if (
+      !(await hasSkillArchiveRoot(
+        params.extractedRoot,
+        params.rootMarkers ?? DEFAULT_SKILL_ARCHIVE_ROOT_MARKERS,
+      ))
+    ) {
       return installFailure("archive is missing SKILL.md", "invalid-request");
     }
     let targetDir: string;

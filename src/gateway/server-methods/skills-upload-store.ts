@@ -513,6 +513,9 @@ export function createSkillUploadStore(options?: {
         const record = await readRecord(rootDir, uploadId);
         await assertNotExpired(rootDir, record, now());
         if (record.committed) {
+          if (!record.actualSha256) {
+            throw new SkillUploadRequestError("committed upload is missing sha256");
+          }
           if (requestedSha && requestedSha !== record.actualSha256) {
             throw new SkillUploadRequestError("upload sha256 mismatch");
           }

@@ -100,6 +100,7 @@ async function makeSkillArchive(params: {
   description?: string;
   body?: string;
   rootDir?: string;
+  skillFileName?: string;
   traversal?: boolean;
   missingSkill?: boolean;
 }): Promise<Buffer> {
@@ -109,7 +110,7 @@ async function makeSkillArchive(params: {
     zip.file(`${prefix}README.md`, "not a skill");
   } else {
     zip.file(
-      `${prefix}SKILL.md`,
+      `${prefix}${params.skillFileName ?? "SKILL.md"}`,
       [
         "---",
         `name: ${params.name ?? "Uploaded Demo"}`,
@@ -352,6 +353,25 @@ describe("skill upload gateway handlers", () => {
     expect(missingInstall.error?.message).toContain("SKILL.md");
     await expect(
       fs.stat(path.join(stateDir, "tmp", "skill-uploads", missingSkill.uploadId)),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+
+    const legacyMarker = await uploadArchive(handlers, {
+      archive: await makeSkillArchive({
+        rootDir: "legacy-root",
+        skillFileName: "skills.md",
+      }),
+      slug: "legacy-marker",
+    });
+    const legacyMarkerInstall = await call(handlers, "skills.install", {
+      source: "upload",
+      uploadId: legacyMarker.uploadId,
+      slug: "legacy-marker",
+    });
+    expect(legacyMarkerInstall.ok).toBe(false);
+    expect(legacyMarkerInstall.error?.code).toBe("INVALID_REQUEST");
+    expect(legacyMarkerInstall.error?.message).toContain("SKILL.md");
+    await expect(
+      fs.stat(path.join(stateDir, "tmp", "skill-uploads", legacyMarker.uploadId)),
     ).rejects.toMatchObject({ code: "ENOENT" });
 
     const traversal = await uploadArchive(handlers, {
