@@ -95,10 +95,25 @@ function scanBlockedFailureKind(
   return blocked.code === "security_scan_failed" ? "unavailable" : "invalid-request";
 }
 
+const TRANSIENT_ARCHIVE_ERROR_PATTERNS = [
+  "enoent",
+  "enospc",
+  "eio",
+  "eacces",
+  "eperm",
+  "ebusy",
+  "emfile",
+  "enfile",
+  "timeout",
+  "timed out",
+] as const;
+
 function archiveFailureKind(error: string): SkillArchiveInstallFailureKind {
   const lower = error.toLowerCase();
-  if (lower.includes("enoent") || lower.includes("timeout") || lower.includes("timed out")) {
-    return "unavailable";
+  for (const pattern of TRANSIENT_ARCHIVE_ERROR_PATTERNS) {
+    if (lower.includes(pattern)) {
+      return "unavailable";
+    }
   }
   return "invalid-request";
 }
