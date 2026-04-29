@@ -1455,6 +1455,56 @@ describe("short-term promotion", () => {
     });
   });
 
+  it("uses the tightest containing range for embedded moved snippets", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await writeDailyMemoryNote(workspaceDir, "2026-04-01", [
+        "Do not promote this adjacent planning line.",
+        "Context prefix Move backups to S3 Glacier. Context suffix.",
+        "Do not promote this adjacent security line.",
+        "Keep the unrelated account note local.",
+      ]);
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "glacier embedded",
+        results: [
+          {
+            path: "memory/2026-04-01.md",
+            startLine: 1,
+            endLine: 4,
+            score: 0.94,
+            snippet: "Move backups to S3 Glacier.",
+            source: "memory",
+          },
+        ],
+      });
+
+      const ranked = await rankShortTermPromotionCandidates({
+        workspaceDir,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+      });
+      const applied = await applyShortTermPromotions({
+        workspaceDir,
+        candidates: ranked,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+      });
+
+      expect(applied.applied).toBe(1);
+      expect(applied.appliedCandidates[0]?.startLine).toBe(2);
+      expect(applied.appliedCandidates[0]?.endLine).toBe(2);
+      expect(applied.appliedCandidates[0]?.snippet).toBe(
+        "Context prefix Move backups to S3 Glacier. Context suffix.",
+      );
+      const memoryText = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8");
+      expect(memoryText).toContain("memory/2026-04-01.md:2-2");
+      expect(memoryText).not.toContain("Do not promote this adjacent planning line.");
+      expect(memoryText).not.toContain("Do not promote this adjacent security line.");
+    });
+  });
+
   it("prefers the nearest matching snippet when the same text appears multiple times", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       await writeDailyMemoryNote(workspaceDir, "2026-04-01", [
