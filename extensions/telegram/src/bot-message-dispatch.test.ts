@@ -417,6 +417,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
         minInitialChars: 30,
       }),
     );
+    expect(createTelegramDraftStream.mock.calls[0]?.[0]).not.toHaveProperty("replyToMessageId");
     expect(draftStream.update).toHaveBeenCalledWith("Hello");
     expect(deliverReplies).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -583,11 +584,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
       replyToMode: "off",
     });
 
-    expect(createTelegramDraftStream).toHaveBeenCalledWith(
-      expect.objectContaining({
-        replyToMessageId: undefined,
-      }),
-    );
+    expect(createTelegramDraftStream.mock.calls[0]?.[0]).not.toHaveProperty("replyToMessageId");
   });
 
   it("passes same-chat quoted reply target id with Telegram quote text", async () => {

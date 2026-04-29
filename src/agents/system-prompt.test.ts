@@ -181,6 +181,8 @@ describe("buildAgentSystemPrompt", () => {
 
     expect(prompt).toContain("## Assistant Output Directives");
     expect(prompt).toContain("[[reply_to_current]]");
+    expect(prompt).toContain("avoid adding them to routine replies");
+    expect(prompt).not.toContain("Prefer [[reply_to_current]]");
     expect(prompt).not.toContain("Tags are stripped before sending");
     expect(prompt).toContain("Supported tags are stripped before user-visible rendering");
   });
