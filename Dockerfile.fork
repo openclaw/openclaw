@@ -20,21 +20,16 @@ FROM ${BASE_IMAGE} AS source
 
 USER root
 
-# Trim runtime-unused content. Conservative — aggressive stripping
-# (typescript .ts files, LICENSE, .d.ts) can break niche packages, so
-# we limit to safely-cuttable patterns.
+# Trim runtime-unused content. Strictly file-extension based — packages
+# routinely keep runtime code in directories named `doc`/`docs`/`test`
+# (e.g., `yaml/doc/directives.js`) and JS files named `changelog.js`
+# (e.g., `@mariozechner/pi-coding-agent`), so directory- or basename-
+# pruning is unsafe in general. The savings here are smaller but safe
+# across packages we don't control.
 RUN set -eux; \
     rm -rf /app/docs /app/qa; \
     find /app/node_modules \
-      \( -type d \( -name test -o -name tests -o -name __tests__ \
-                  -o -name example -o -name examples \
-                  -o -name docs -o -name doc \
-                  -o -name .github -o -name .vscode \) \
-      \) -prune -exec rm -rf {} + 2>/dev/null || true; \
-    find /app/node_modules \
       \( -type f \( -name '*.md' -o -name '*.markdown' \
-                  -o -name 'CHANGELOG*' -o -name 'changelog*' \
-                  -o -name 'HISTORY*' -o -name 'history*' \
                   -o -name '*.map' \
                   -o -name '.npmignore' -o -name '.gitignore' \) \
       \) -delete 2>/dev/null || true; \
