@@ -45,8 +45,13 @@ type WebAutoReplyMonitorHarness = {
   run: Promise<unknown>;
 };
 type MockSessionSocket = {
-  ev: { on: ReturnType<typeof vi.fn>; off: ReturnType<typeof vi.fn> };
-  ws: EventEmitter & { close: ReturnType<typeof vi.fn> };
+  ev: {
+    on: ReturnType<typeof vi.fn>;
+    off: ReturnType<typeof vi.fn>;
+  };
+  ws: EventEmitter & {
+    close: ReturnType<typeof vi.fn>;
+  };
   user: { id: string };
 };
 
@@ -68,7 +73,7 @@ vi.mock("./session.js", async () => {
     createWaSocket: vi.fn(async () => {
       const ws = new EventEmitter() as MockSessionSocket["ws"];
       ws.close = vi.fn();
-      const sock: MockSessionSocket = {
+      const socket: MockSessionSocket = {
         ev: {
           on: vi.fn(),
           off: vi.fn(),
@@ -76,8 +81,8 @@ vi.mock("./session.js", async () => {
         ws,
         user: { id: "123@s.whatsapp.net" },
       };
-      getSessionSockets().push(sock);
-      return sock;
+      getSessionSockets().push(socket);
+      return socket;
     }),
     waitForWaConnection: vi.fn().mockResolvedValue(undefined),
   };
@@ -309,6 +314,7 @@ export function startWebAutoReplyMonitor(params: {
   sleep: UnknownMock | AsyncUnknownMock;
   signal?: AbortSignal;
   heartbeatSeconds?: number;
+  transportTimeoutMs?: number;
   messageTimeoutMs?: number;
   watchdogCheckMs?: number;
   reconnect?: { initialMs: number; maxMs: number; maxAttempts: number; factor: number };
@@ -326,6 +332,7 @@ export function startWebAutoReplyMonitor(params: {
     params.signal ?? controller.signal,
     {
       heartbeatSeconds: params.heartbeatSeconds ?? 1,
+      transportTimeoutMs: params.transportTimeoutMs,
       messageTimeoutMs: params.messageTimeoutMs,
       watchdogCheckMs: params.watchdogCheckMs,
       reconnect: params.reconnect ?? { initialMs: 10, maxMs: 10, maxAttempts: 3, factor: 1.1 },

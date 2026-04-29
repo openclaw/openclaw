@@ -315,14 +315,14 @@ function convertGoogleMessages(model: GoogleTransportModel, context: Context) {
       if (typeof msg.content === "string") {
         contents.push({
           role: "user",
-          parts: [{ text: sanitizeTransportPayloadText(msg.content) }],
+          parts: [{ text: sanitizeTransportPayloadText(msg.content) || " " }],
         });
         continue;
       }
       const parts = msg.content
         .map((item) =>
           item.type === "text"
-            ? { text: sanitizeTransportPayloadText(item.text) }
+            ? { text: sanitizeTransportPayloadText(item.text) || " " }
             : {
                 inlineData: {
                   mimeType: item.mimeType,
@@ -331,9 +331,10 @@ function convertGoogleMessages(model: GoogleTransportModel, context: Context) {
               },
         )
         .filter((item) => model.input.includes("image") || !("inlineData" in item));
-      if (parts.length > 0) {
-        contents.push({ role: "user", parts });
+      if (parts.length === 0) {
+        parts.push({ text: " " });
       }
+      contents.push({ role: "user", parts });
       continue;
     }
 
@@ -436,6 +437,9 @@ function convertGoogleMessages(model: GoogleTransportModel, context: Context) {
         contents.push({ role: "user", parts: [{ text: "Tool result image:" }, ...imageParts] });
       }
     }
+  }
+  if (contents.length === 0) {
+    contents.push({ role: "user", parts: [{ text: " " }] });
   }
   return contents;
 }

@@ -160,6 +160,23 @@
   color: var(--muted);
 }
 
+.topnav-shell .dashboard-header__breadcrumb-link {
+  display: inline-flex;
+  align-items: center;
+  margin: -2px -4px;
+  padding: 2px 4px;
+  border-radius: var(--radius-sm);
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.topnav-shell .dashboard-header__breadcrumb-link:hover,
+.topnav-shell .dashboard-header__breadcrumb-link:focus-visible {
+  color: var(--text);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
 .topnav-shell .dashboard-header__breadcrumb-current {
   color: var(--accent);
   font-weight: 650;

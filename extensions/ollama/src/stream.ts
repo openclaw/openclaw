@@ -387,8 +387,7 @@ export function createConfiguredOllamaCompatStreamWrapper(
   return streamFn;
 }
 
-// Backward-compatible alias for existing imports/tests while the broader
-// Ollama compat wrapper now owns more than num_ctx injection.
+/** @deprecated Use createConfiguredOllamaCompatStreamWrapper. */
 export const createConfiguredOllamaCompatNumCtxWrapper = createConfiguredOllamaCompatStreamWrapper;
 
 export function buildOllamaChatRequest(params: {
@@ -767,12 +766,30 @@ function extractToolCalls(content: unknown): OllamaToolCall[] {
   const result: OllamaToolCall[] = [];
   for (const part of parts) {
     if (part.type === "toolCall") {
-      result.push({ function: { name: part.name, arguments: ensureArgsObject(part.arguments) } });
+      result.push({
+        function: {
+          name: normalizeOllamaToolCallName(part.name),
+          arguments: ensureArgsObject(part.arguments),
+        },
+      });
     } else if (part.type === "tool_use") {
-      result.push({ function: { name: part.name, arguments: ensureArgsObject(part.input) } });
+      result.push({
+        function: {
+          name: normalizeOllamaToolCallName(part.name),
+          arguments: ensureArgsObject(part.input),
+        },
+      });
     }
   }
   return result;
+}
+
+function normalizeOllamaToolCallName(rawName: string): string {
+  const trimmed = rawName.trim();
+  if (!trimmed) {
+    return trimmed;
+  }
+  return trimmed.replace(/^(?:functions?|tools?)[./_-]+/iu, "").trim();
 }
 
 export function convertToOllamaMessages(
@@ -867,7 +884,7 @@ export function buildAssistantMessage(
       content.push({
         type: "toolCall",
         id: `ollama_call_${randomUUID()}`,
-        name: toolCall.function.name,
+        name: normalizeOllamaToolCallName(toolCall.function.name),
         arguments: normalizeOllamaToolCallArguments(toolCall.function.arguments),
       });
     }
@@ -938,10 +955,12 @@ function resolveOllamaModelHeaders(model: {
 
 function resolveOllamaRequestTimeoutMs(
   model: object,
-  options: { requestTimeoutMs?: unknown } | undefined,
+  options: { requestTimeoutMs?: unknown; timeoutMs?: unknown } | undefined,
 ): number | undefined {
   const raw =
-    options?.requestTimeoutMs ?? (model as { requestTimeoutMs?: unknown }).requestTimeoutMs;
+    options?.requestTimeoutMs ??
+    options?.timeoutMs ??
+    (model as { requestTimeoutMs?: unknown }).requestTimeoutMs;
   return typeof raw === "number" && Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : undefined;
 }
 
@@ -999,12 +1018,12 @@ export function createOllamaStreamFn(
             method: "POST",
             headers,
             body: JSON.stringify(body),
-            signal: options?.signal,
           },
           policy: ssrfPolicy,
+          ...(options?.signal ? { signal: options.signal } : {}),
           timeoutMs: resolveOllamaRequestTimeoutMs(
             model,
-            options as { requestTimeoutMs?: unknown } | undefined,
+            options as { requestTimeoutMs?: unknown; timeoutMs?: unknown } | undefined,
           ),
           auditContext: "ollama-stream.chat",
         });

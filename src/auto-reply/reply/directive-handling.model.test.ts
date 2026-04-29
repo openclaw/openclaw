@@ -12,6 +12,10 @@ vi.mock("../../agents/auth-profiles.js", () => ({
     profiles: authProfilesStoreMock.profiles,
   }),
   isProfileInCooldown: () => false,
+  listProfilesForProvider: (_store: unknown, provider: string) =>
+    Object.entries(authProfilesStoreMock.profiles)
+      .filter(([, profile]) => profile.provider === provider)
+      .map(([profileId, profile]) => ({ profileId, profile })),
   replaceRuntimeAuthProfileStoreSnapshots: (
     snapshots: Array<{
       store?: { profiles?: Record<string, { type: "api_key"; provider: string; key: string }> };
@@ -758,6 +762,30 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     expect(result?.text).toContain("openai/gpt-4o");
     expect(result?.text).not.toContain("failed");
     expect(sessionEntry.liveModelSwitchPending).toBe(true);
+  });
+
+  it("persists /model only on the targeted session entry", async () => {
+    const targetEntry = createSessionEntry();
+    const otherEntry = createSessionEntry();
+    const sessionStore = {
+      [sessionKey]: targetEntry,
+      "agent:main:dm:other": otherEntry,
+    };
+
+    await handleDirectiveOnly(
+      createHandleParams({
+        directives: parseInlineDirectives("/model openai/gpt-4o"),
+        sessionEntry: targetEntry,
+        sessionStore,
+      }),
+    );
+
+    expect(targetEntry.providerOverride).toBe("openai");
+    expect(targetEntry.modelOverride).toBe("gpt-4o");
+    expect(targetEntry.modelOverrideSource).toBe("user");
+    expect(otherEntry.providerOverride).toBeUndefined();
+    expect(otherEntry.modelOverride).toBeUndefined();
+    expect(otherEntry.modelOverrideSource).toBeUndefined();
   });
 
   it("remaps unsupported stored thinking levels when persisting a model switch", async () => {

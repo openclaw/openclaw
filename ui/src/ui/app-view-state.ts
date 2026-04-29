@@ -108,6 +108,7 @@ export type AppViewState = {
   chatModelsLoading: boolean;
   chatModelCatalog: ModelCatalogEntry[];
   chatQueue: ChatQueueItem[];
+  chatQueueBySession: Record<string, ChatQueueItem[]>;
   chatLocalInputHistoryBySession: Record<string, Array<{ text: string; ts: number }>>;
   chatInputHistorySessionKey: string | null;
   chatInputHistoryItems: string[] | null;
@@ -118,6 +119,7 @@ export type AppViewState = {
   realtimeTalkDetail: string | null;
   realtimeTalkTranscript: string | null;
   chatManualRefreshInFlight: boolean;
+  chatMobileControlsOpen: boolean;
   nodesLoading: boolean;
   nodes: Array<Record<string, unknown>>;
   chatNewMessagesBelow: boolean;
@@ -404,6 +406,10 @@ export type AppViewState = {
     refreshSessionsAfterChat: Set<string>;
     connect: () => void;
     setTab: (tab: Tab) => void;
+    setChatMobileControlsOpen: (
+      open: boolean,
+      options?: { trigger?: HTMLElement | null; restoreFocus?: boolean },
+    ) => void;
     setTheme: (theme: ThemeName, context?: ThemeTransitionContext) => void;
     setThemeMode: (mode: ThemeMode, context?: ThemeTransitionContext) => void;
     setCustomThemeImportUrl: (next: string) => void;

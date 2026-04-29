@@ -722,11 +722,16 @@ export const de: TranslationMap = {
     jaJP: "日本語 (Japanisch)",
     ko: "한국어 (Koreanisch)",
     fr: "Français (Französisch)",
+    ar: "العربية (Arabisch)",
+    it: "Italiano (Italienisch)",
     tr: "Türkçe (Türkisch)",
     uk: "Українська (Ukrainisch)",
     id: "Bahasa Indonesia (Indonesisch)",
     pl: "Polski (Polnisch)",
     th: "ไทย (Thailändisch)",
+    vi: "Tiếng Việt (Vietnamesisch)",
+    nl: "Nederlands (Niederländisch)",
+    fa: "فارسی (Persisch)",
   },
   cron: {
     summary: {

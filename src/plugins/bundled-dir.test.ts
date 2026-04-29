@@ -330,6 +330,7 @@ describe("resolveBundledPluginsDir", () => {
     process.execArgv.length = 0;
     process.env.VITEST = "true";
     process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = path.join(overrideRoot, "extensions");
+    delete process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR;
     delete process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
 
     const bundledDir = resolveBundledPluginsDir();
