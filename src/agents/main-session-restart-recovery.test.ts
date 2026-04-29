@@ -157,6 +157,37 @@ describe("main-session-restart-recovery", () => {
     expect(store["agent:main:main"]?.abortedLastRun).toBe(true);
   });
 
+  it("fails channel-backed sessions instead of replaying a restart-recovery turn", async () => {
+    const sessionsDir = await makeSessionsDir();
+    await writeStore(sessionsDir, {
+      "agent:main:discord:channel:123": {
+        sessionId: "discord-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+        abortedLastRun: true,
+        channel: "discord",
+        lastTo: "channel:123",
+        origin: {
+          provider: "discord",
+          surface: "channel",
+        },
+      },
+    });
+    await writeTranscript(sessionsDir, "discord-session", [
+      { role: "user", content: "do the thing" },
+      { role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "exec" }] },
+      { role: "toolResult", content: "done" },
+    ]);
+
+    const result = await recoverRestartAbortedMainSessions({ stateDir: tmpDir });
+
+    expect(result).toEqual({ recovered: 0, failed: 1, skipped: 0 });
+    expect(callGateway).not.toHaveBeenCalled();
+    const store = loadSessionStore(path.join(sessionsDir, "sessions.json"));
+    expect(store["agent:main:discord:channel:123"]?.status).toBe("failed");
+    expect(store["agent:main:discord:channel:123"]?.abortedLastRun).toBe(true);
+  });
+
   it("does not scan ordinary running sessions without the restart-aborted marker", async () => {
     const sessionsDir = await makeSessionsDir();
     await writeStore(sessionsDir, {

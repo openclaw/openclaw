@@ -32,6 +32,17 @@ function shouldSkipMainRecovery(entry: SessionEntry, sessionKey: string): boolea
   );
 }
 
+function isChannelBackedMainSession(entry: SessionEntry): boolean {
+  return Boolean(
+    entry.channel ||
+    entry.deliveryContext ||
+    entry.lastChannel ||
+    entry.lastTo ||
+    entry.origin?.surface ||
+    entry.origin?.provider,
+  );
+}
+
 function sessionIdFromLockPath(lockPath: string): string | undefined {
   const fileName = path.basename(lockPath);
   if (!fileName.endsWith(".jsonl.lock")) {
@@ -221,6 +232,16 @@ async function recoverStore(params: {
     }
     if (params.resumedSessionKeys.has(sessionKey)) {
       result.skipped++;
+      continue;
+    }
+
+    if (isChannelBackedMainSession(entry)) {
+      await markSessionFailed({
+        storePath: params.storePath,
+        sessionKey,
+        reason: "channel-backed session requires manual restart recovery",
+      });
+      result.failed++;
       continue;
     }
 
