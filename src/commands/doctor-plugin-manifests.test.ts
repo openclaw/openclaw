@@ -1,7 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanupTrackedTempDirs, makeTrackedTempDir } from "../plugins/test-helpers/fs-fixtures.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { cleanupTrackedTempDirs } from "../plugins/test-helpers/fs-fixtures.js";
 import type { RuntimeEnv } from "../runtime.js";
 import {
   collectLegacyPluginManifestContractMigrations,
@@ -11,20 +12,20 @@ import type { DoctorPrompter } from "./doctor-prompter.js";
 
 const tempDirs: string[] = [];
 
-function makeTempDir() {
-  return makeTrackedTempDir("openclaw-doctor-plugin-manifests", tempDirs);
+function makeTrustedBundledPluginsDir() {
+  const fixturesRoot = path.join(process.cwd(), "dist", "extensions");
+  fs.mkdirSync(fixturesRoot, { recursive: true });
+  const dir = fs.mkdtempSync(path.join(fixturesRoot, "openclaw-doctor-plugin-manifests-"));
+  tempDirs.push(dir);
+  return dir;
 }
 
-function makePluginWorkspace() {
-  const workspaceDir = makeTempDir();
+function configWithPluginLoadPath(pluginRoot: string): OpenClawConfig {
   return {
-    workspaceDir,
-    pluginsRoot: path.join(workspaceDir, ".openclaw", "extensions"),
-    env: {
-      ...process.env,
-      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-      OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE: "1",
-      OPENCLAW_DISABLE_PLUGIN_MANIFEST_CACHE: "1",
+    plugins: {
+      load: {
+        paths: [pluginRoot],
+      },
     },
   };
 }
@@ -90,7 +91,7 @@ describe("doctor plugin manifest legacy contract repair", () => {
   });
 
   it("collects legacy top-level capability keys for migration", () => {
-    const { pluginsRoot } = makePluginWorkspace();
+    const pluginsRoot = makeTrustedBundledPluginsDir();
     const root = path.join(pluginsRoot, "openai");
     fs.mkdirSync(root, { recursive: true });
     writePackageJson(root);
@@ -102,6 +103,7 @@ describe("doctor plugin manifest legacy contract repair", () => {
     });
 
     const migrations = collectLegacyPluginManifestContractMigrations({
+      config: configWithPluginLoadPath(pluginsRoot),
       env: {
         ...process.env,
       },
@@ -115,7 +117,7 @@ describe("doctor plugin manifest legacy contract repair", () => {
   });
 
   it("rewrites legacy top-level capability keys into contracts", async () => {
-    const { pluginsRoot } = makePluginWorkspace();
+    const pluginsRoot = makeTrustedBundledPluginsDir();
     const root = path.join(pluginsRoot, "openai");
     fs.mkdirSync(root, { recursive: true });
     writePackageJson(root);
@@ -131,6 +133,7 @@ describe("doctor plugin manifest legacy contract repair", () => {
     });
 
     await maybeRepairLegacyPluginManifestContracts({
+      config: configWithPluginLoadPath(pluginsRoot),
       env: {
         ...process.env,
       },
@@ -155,7 +158,7 @@ describe("doctor plugin manifest legacy contract repair", () => {
   });
 
   it("ignores non-object contracts payloads when collecting migrations", () => {
-    const { pluginsRoot } = makePluginWorkspace();
+    const pluginsRoot = makeTrustedBundledPluginsDir();
     const root = path.join(pluginsRoot, "openai");
     fs.mkdirSync(root, { recursive: true });
     writePackageJson(root);
@@ -168,6 +171,7 @@ describe("doctor plugin manifest legacy contract repair", () => {
     });
 
     const migrations = collectLegacyPluginManifestContractMigrations({
+      config: configWithPluginLoadPath(pluginsRoot),
       env: {
         ...process.env,
       },

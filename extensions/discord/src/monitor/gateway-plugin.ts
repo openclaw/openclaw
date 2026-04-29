@@ -25,6 +25,7 @@ const DEFAULT_DISCORD_GATEWAY_INFO_TIMEOUT_MS = 30_000;
 const MAX_DISCORD_GATEWAY_INFO_TIMEOUT_MS = 120_000;
 const DISCORD_GATEWAY_INFO_TIMEOUT_ENV = "OPENCLAW_DISCORD_GATEWAY_INFO_TIMEOUT_MS";
 const DISCORD_GATEWAY_METADATA_FALLBACK_LOG_INTERVAL_MS = 60_000;
+const DISCORD_GATEWAY_HANDSHAKE_TIMEOUT_MS = 30_000;
 
 type DiscordGatewayMetadataResponse = Pick<Response, "ok" | "status" | "text">;
 type DiscordGatewayFetchInit = Record<string, unknown> & {
@@ -36,7 +37,10 @@ type DiscordGatewayFetch = (
 ) => Promise<DiscordGatewayMetadataResponse>;
 
 type DiscordGatewayMetadataError = Error & { transient?: boolean };
-type DiscordGatewayWebSocketCtor = new (url: string, options?: { agent?: unknown }) => ws.WebSocket;
+type DiscordGatewayWebSocketCtor = new (
+  url: string,
+  options?: { agent?: unknown; handshakeTimeout?: number },
+) => ws.WebSocket;
 const registrationPromises = new WeakMap<carbonGateway.GatewayPlugin, Promise<void>>();
 const gatewayMetadataFallbackLogLastAt = new WeakMap<RuntimeEnv, number>();
 type CarbonGatewayRegistrationState = {
@@ -421,7 +425,10 @@ function createGatewayPlugin(params: {
       // close-path crashes during Discord gateway teardown; the ws transport is
       // already our proxy path and behaves predictably for lifecycle cleanup.
       const WebSocketCtor = params.testing?.webSocketCtor ?? ws.default;
-      const socket = new WebSocketCtor(url, params.wsAgent ? { agent: params.wsAgent } : undefined);
+      const socket = new WebSocketCtor(url, {
+        handshakeTimeout: DISCORD_GATEWAY_HANDSHAKE_TIMEOUT_MS,
+        ...(params.wsAgent ? { agent: params.wsAgent } : {}),
+      });
       const emitTransportActivity = () => {
         if ((this as unknown as { ws?: unknown }).ws !== socket) {
           return;

@@ -22,6 +22,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway, randomIdempotencyKey } from "../gateway/call.js";
 import { buildGatewayConnectionDetailsWithResolvers } from "../gateway/connection-details.js";
 import { isLoopbackHost } from "../gateway/net.js";
+import { ADMIN_SCOPE } from "../gateway/operator-scopes.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../gateway/protocol/client-info.js";
 import { generateImage, listRuntimeImageGenerationProviders } from "../image-generation/runtime.js";
 import type {
@@ -702,6 +703,9 @@ async function runModelRun(params: {
   }
 
   const { provider, model } = resolveModelRefOverride(params.model);
+  // Provider/model overrides require trusted-operator scope. Use the backend
+  // shared-secret lane so local gateway smokes do not depend on paired CLI device scopes.
+  const hasModelOverride = Boolean(provider || model);
   const response: {
     result?: {
       payloads?: Array<{ text?: string; mediaUrl?: string | null; mediaUrls?: string[] }>;
@@ -730,8 +734,9 @@ async function runModelRun(params: {
     },
     expectFinal: true,
     timeoutMs: 120_000,
-    clientName: GATEWAY_CLIENT_NAMES.CLI,
-    mode: GATEWAY_CLIENT_MODES.CLI,
+    clientName: hasModelOverride ? GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT : GATEWAY_CLIENT_NAMES.CLI,
+    mode: hasModelOverride ? GATEWAY_CLIENT_MODES.BACKEND : GATEWAY_CLIENT_MODES.CLI,
+    ...(hasModelOverride ? { scopes: [ADMIN_SCOPE] } : {}),
   });
   return {
     ok: true,

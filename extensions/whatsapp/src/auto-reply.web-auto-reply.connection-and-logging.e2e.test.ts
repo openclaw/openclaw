@@ -407,7 +407,92 @@ describe("web auto-reply connection", () => {
         socket.ws.emit("frame");
         await vi.advanceTimersByTimeAsync(20);
       }
+      await vi.waitFor(
+        () => {
+          expect(scripted.getListenerCount()).toBeGreaterThanOrEqual(2);
+        },
+        { timeout: 250, interval: 2 },
+      );
 
+      controller.abort();
+      scripted.resolveClose(scripted.getListenerCount() - 1, {
+        status: 499,
+        isLoggedOut: false,
+        error: "aborted",
+      });
+      await Promise.resolve();
+      await run;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("publishes frame-driven transport activity for quiet sessions", async () => {
+    vi.useFakeTimers();
+    try {
+      const sleep = vi.fn(async () => {});
+      const statuses: Array<Record<string, unknown>> = [];
+      const scripted = createScriptedWebListenerFactory();
+      const { controller, run } = startWebAutoReplyMonitor({
+        monitorWebChannelFn: monitorWebChannel as never,
+        listenerFactory: scripted.listenerFactory,
+        sleep,
+        heartbeatSeconds: 1,
+        transportTimeoutMs: 60_000,
+        messageTimeoutMs: 60_000,
+        watchdogCheckMs: 5,
+        statusSink: (next) => statuses.push({ ...next }),
+      });
+
+      await vi.waitFor(
+        () => {
+          expect(scripted.getListenerCount()).toBe(1);
+        },
+        { timeout: 250, interval: 2 },
+      );
+
+      const initialTransportAt = Number(statuses.at(-1)?.lastTransportActivityAt ?? 0);
+      const socket = getLastWebAutoReplySessionSocket();
+      await vi.advanceTimersByTimeAsync(250);
+      socket.ws.emit("frame");
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      const lastTransportAt = Number(statuses.at(-1)?.lastTransportActivityAt ?? 0);
+      expect(lastTransportAt).toBeGreaterThan(initialTransportAt);
+
+      controller.abort();
+      scripted.resolveClose(0, { status: 499, isLoggedOut: false, error: "aborted" });
+      await Promise.resolve();
+      await run;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reconnects on transport stall before the long app-silence window", async () => {
+    vi.useFakeTimers();
+    try {
+      const sleep = vi.fn(async () => {});
+      const scripted = createScriptedWebListenerFactory();
+      const { controller, run } = startWebAutoReplyMonitor({
+        monitorWebChannelFn: monitorWebChannel as never,
+        listenerFactory: scripted.listenerFactory,
+        sleep,
+        heartbeatSeconds: 1,
+        transportTimeoutMs: 30,
+        messageTimeoutMs: 3_000,
+        watchdogCheckMs: 5,
+      });
+
+      await vi.waitFor(
+        () => {
+          expect(scripted.getListenerCount()).toBe(1);
+        },
+        { timeout: 250, interval: 2 },
+      );
+
+      await vi.advanceTimersByTimeAsync(36);
+      await Promise.resolve();
       await vi.waitFor(
         () => {
           expect(scripted.getListenerCount()).toBeGreaterThanOrEqual(2);

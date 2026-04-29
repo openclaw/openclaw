@@ -1,5 +1,5 @@
-import type { EventLogEntry } from "./app-events.ts";
 import type { ChatSendOptions } from "./app-chat.ts";
+import type { EventLogEntry } from "./app-events.ts";
 import type { CompactionStatus, FallbackStatus } from "./app-tool-stream.ts";
 import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "./chat/input-history.ts";
 import type { RealtimeTalkStatus } from "./chat/realtime-talk.ts";
@@ -108,6 +108,7 @@ export type AppViewState = {
   chatModelsLoading: boolean;
   chatModelCatalog: ModelCatalogEntry[];
   chatQueue: ChatQueueItem[];
+  chatQueueBySession: Record<string, ChatQueueItem[]>;
   chatLocalInputHistoryBySession: Record<string, Array<{ text: string; ts: number }>>;
   chatInputHistorySessionKey: string | null;
   chatInputHistoryItems: string[] | null;

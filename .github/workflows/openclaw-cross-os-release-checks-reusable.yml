@@ -169,7 +169,7 @@ env:
 
 jobs:
   prepare:
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     outputs:
       baseline_file_name: ${{ steps.baseline_metadata.outputs.file_name }}
       baseline_spec: ${{ steps.baseline.outputs.value }}

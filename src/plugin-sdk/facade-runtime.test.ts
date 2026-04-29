@@ -4,8 +4,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
 import { setBundledPluginsDirOverrideForTest } from "../plugins/bundled-dir.js";
 import { createPluginActivationSource, normalizePluginsConfig } from "../plugins/config-state.js";
-import { clearPluginDiscoveryCache } from "../plugins/discovery.js";
-import { clearPluginManifestRegistryCache } from "../plugins/manifest-registry.js";
 import {
   evaluateBundledPluginPublicSurfaceAccess,
   resetFacadeActivationCheckRuntimeStateForTest,
@@ -93,8 +91,6 @@ afterEach(() => {
   resetFacadeRuntimeStateForTest();
   resetFacadeActivationCheckRuntimeStateForTest();
   setBundledPluginsDirOverrideForTest(undefined);
-  clearPluginDiscoveryCache();
-  clearPluginManifestRegistryCache();
   vi.doUnmock("../plugins/manifest-registry.js");
   if (originalBundledPluginsDir === undefined) {
     delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;

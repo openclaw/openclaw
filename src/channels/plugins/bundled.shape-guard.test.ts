@@ -104,7 +104,7 @@ afterEach(() => {
 });
 
 describe("bundled channel entry shape guards", () => {
-  const bundledPluginRoots = loadPluginManifestRegistry({ cache: true, config: {} })
+  const bundledPluginRoots = loadPluginManifestRegistry({ config: {} })
     .plugins.filter((plugin) => plugin.origin === "bundled")
     .map((plugin) => plugin.rootDir);
 

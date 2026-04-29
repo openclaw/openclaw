@@ -247,7 +247,23 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ["scripts/lib/extension-test-plan.mjs", ["test/scripts/test-extension.test.ts"]],
   ["scripts/lib/vitest-batch-runner.mjs", ["test/scripts/test-extension.test.ts"]],
   ["scripts/lib/ci-node-test-plan.mjs", ["test/scripts/ci-node-test-plan.test.ts"]],
+  [
+    "scripts/lib/docker-e2e-scenarios.mjs",
+    ["test/scripts/docker-e2e-plan.test.ts", "test/scripts/plugin-prerelease-test-plan.test.ts"],
+  ],
+  [
+    "scripts/lib/plugin-prerelease-test-plan.mjs",
+    ["test/scripts/plugin-prerelease-test-plan.test.ts"],
+  ],
+  [
+    "scripts/e2e/kitchen-sink-plugin-docker.sh",
+    ["test/scripts/plugin-prerelease-test-plan.test.ts"],
+  ],
   ["scripts/lib/vitest-shard-timings.mjs", ["test/scripts/vitest-shard-timings.test.ts"]],
+  [
+    "scripts/plugin-prerelease-liveish-matrix.mjs",
+    ["test/scripts/plugin-prerelease-test-plan.test.ts"],
+  ],
   ["scripts/test-projects.mjs", ["test/scripts/test-projects.test.ts"]],
   ["scripts/test-projects.test-support.d.mts", ["test/scripts/test-projects.test.ts"]],
   ["scripts/test-projects.test-support.mjs", ["test/scripts/test-projects.test.ts"]],
@@ -258,6 +274,10 @@ const TOOLING_TEST_TARGETS = new Map([
   ["test/scripts/changed-lanes.test.ts", ["test/scripts/changed-lanes.test.ts"]],
   ["test/scripts/live-docker-stage.test.ts", ["test/scripts/live-docker-stage.test.ts"]],
   ["test/scripts/openclaw-test-state.test.ts", ["test/scripts/openclaw-test-state.test.ts"]],
+  [
+    "test/scripts/plugin-prerelease-test-plan.test.ts",
+    ["test/scripts/plugin-prerelease-test-plan.test.ts"],
+  ],
   ["test/scripts/test-projects.test.ts", ["test/scripts/test-projects.test.ts"]],
   ["test/scripts/testbox-sync-sanity.test.ts", ["test/scripts/testbox-sync-sanity.test.ts"]],
   [

@@ -17,4 +17,15 @@ describe("plugin update unchanged Docker E2E", () => {
     expect(script).toContain('\\"installRecords\\": {');
     expect(script).toContain('\\"lossless-claw\\": {');
   });
+
+  it("bounds the update command and prints diagnostics on hangs", () => {
+    const script = readFileSync(PLUGIN_UPDATE_DOCKER_SCRIPT, "utf8");
+
+    expect(script).toContain("OPENCLAW_PLUGIN_UPDATE_TIMEOUT_SECONDS");
+    expect(script).toContain(
+      'timeout \\"\\${plugin_update_timeout_seconds}s\\" node \\"\\$entry\\" plugins update',
+    );
+    expect(script).toContain('\\"--- plugin update output ---\\"');
+    expect(script).toContain('\\"--- local registry output ---\\"');
+  });
 });

@@ -42,6 +42,7 @@ export type PluginMarketplaceListOptions = {
 
 export type PluginUninstallOptions = {
   keepFiles?: boolean;
+  /** @deprecated Use keepFiles. */
   keepConfig?: boolean;
   force?: boolean;
   dryRun?: boolean;
