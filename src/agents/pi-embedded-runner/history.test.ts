@@ -50,4 +50,29 @@ describe("getHistoryLimitFromSessionKey", () => {
       }),
     ).toBe(12);
   });
+
+  it("uses the global group history limit when channel history is unset", () => {
+    expect(
+      getHistoryLimitFromSessionKey("agent:main:telegram:group:-1001234567890:topic:42", {
+        channels: {
+          telegram: {},
+        },
+        messages: {
+          groupChat: {
+            historyLimit: 8,
+          },
+        },
+      }),
+    ).toBe(8);
+  });
+
+  it("uses the documented group history default when no explicit limit is set", () => {
+    expect(
+      getHistoryLimitFromSessionKey("agent:main:telegram:group:-1001234567890:topic:42", {
+        channels: {
+          telegram: {},
+        },
+      }),
+    ).toBe(50);
+  });
 });
