@@ -114,8 +114,8 @@ import {
   normalizePluginIdScope,
   serializePluginIdScope,
 } from "./plugin-scope.js";
-import { createPluginRegistry, type PluginRecord, type PluginRegistry } from "./registry.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
+import { createPluginRegistry, type PluginRecord, type PluginRegistry } from "./registry.js";
 import { resolvePluginCacheInputs } from "./roots.js";
 import {
   getActivePluginRegistry,
@@ -2243,12 +2243,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       clearPluginInteractiveHandlers();
       clearDetachedTaskLifecycleRuntimeRegistration();
       clearMemoryPluginState();
-      activatePluginRegistry(
-        emptyRegistry,
-        cacheKey,
-        runtimeSubagentMode,
-        options.workspaceDir,
-      );
+      activatePluginRegistry(emptyRegistry, cacheKey, runtimeSubagentMode, options.workspaceDir);
     }
     return emptyRegistry;
   }
@@ -2854,6 +2849,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         skipLexicalRootCheck: true,
       });
       if (!opened.ok) {
+        fs.closeSync(opened.fd);
         pushPluginLoadError("plugin entry path escapes plugin root or fails alias checks");
         continue;
       }
@@ -2942,6 +2938,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
               skipLexicalRootCheck: true,
             });
             if (!runtimeOpened.ok) {
+              fs.closeSync(runtimeOpened.fd);
               pushPluginLoadError("plugin entry path escapes plugin root or fails alias checks");
               continue;
             }
@@ -3516,6 +3513,7 @@ export async function loadOpenClawPluginCliRegistry(
       skipLexicalRootCheck: true,
     });
     if (!opened.ok) {
+      fs.closeSync(opened.fd);
       pushPluginLoadError("plugin entry path escapes plugin root or fails alias checks");
       continue;
     }
