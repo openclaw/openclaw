@@ -46,6 +46,7 @@ export const ARCEE_MODEL_CATALOG: ModelDefinitionConfig[] = [
     },
     compat: {
       supportsReasoningEffort: false,
+      supportsTools: false,
     },
   },
 ];
