@@ -4,6 +4,8 @@ import path from "node:path";
 import dotenv from "dotenv";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveConfigDir } from "../utils.js";
+
+const logger = createSubsystemLogger("infra:dotenv");
 import { resolveRequiredHomeDir } from "./home-dir.js";
 import {
   isDangerousHostEnvOverrideVarName,
