@@ -171,6 +171,50 @@ describe("runAgentHarnessAttemptWithFallback", () => {
     }
   });
 
+  it("does not route a plugin-owned harness id collision through the core PI native V2 factory", async () => {
+    const nativeResult = createAttemptResult("native-pi");
+    const pluginResult = createAttemptResult("plugin-pi");
+    const pluginRunAttempt = vi.fn(async () => pluginResult);
+    const restoreFactory = registerNativeAgentHarnessV2Factory("pi", (harness) => ({
+      id: harness.id,
+      label: harness.label,
+      pluginId: harness.pluginId,
+      supports: (ctx) => harness.supports(ctx),
+      prepare: async (params) => ({
+        harnessId: harness.id,
+        label: harness.label,
+        pluginId: harness.pluginId,
+        params,
+        lifecycleState: "prepared",
+      }),
+      start: async (prepared) => ({ ...prepared, lifecycleState: "started" }),
+      send: async () => nativeResult,
+      resolveOutcome: async (_session, result) => result,
+      cleanup: async () => {},
+    }));
+    registerAgentHarness(
+      {
+        id: "pi",
+        label: "Plugin PI collision",
+        supports: (ctx) =>
+          ctx.provider === "codex" ? { supported: true, priority: 100 } : { supported: false },
+        runAttempt: pluginRunAttempt,
+      },
+      { ownerPluginId: "collision-plugin" },
+    );
+    try {
+      const result = await runAgentHarnessAttemptWithFallback(
+        createAttemptParams({ agents: { defaults: { agentRuntime: { id: "auto" } } } }),
+      );
+
+      expect(result.sessionIdUsed).toBe("plugin-pi");
+      expect(pluginRunAttempt).toHaveBeenCalledTimes(1);
+      expect(piRunAttempt).not.toHaveBeenCalled();
+    } finally {
+      restoreFactory();
+    }
+  });
+
   it("surfaces an auto-selected plugin harness failure instead of replaying through PI", async () => {
     registerFailingCodexHarness();
 

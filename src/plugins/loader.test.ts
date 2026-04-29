@@ -3432,7 +3432,9 @@ module.exports = { id: "throws-after-import", register() {} };`,
       onlyPluginIds: ["codex-harness-v2"],
     });
     expect(listAgentHarnessIds()).toEqual(["codex"]);
-    expect(getNativeAgentHarnessV2Factory("codex")).toBeDefined();
+    expect(
+      getNativeAgentHarnessV2Factory({ harnessId: "codex", pluginId: "codex-harness-v2" }),
+    ).toBeDefined();
 
     loadOpenClawPlugins({
       cache: false,
@@ -3444,7 +3446,9 @@ module.exports = { id: "throws-after-import", register() {} };`,
       },
     });
     expect(listAgentHarnessIds()).toEqual([]);
-    expect(getNativeAgentHarnessV2Factory("codex")).toBeUndefined();
+    expect(
+      getNativeAgentHarnessV2Factory({ harnessId: "codex", pluginId: "codex-harness-v2" }),
+    ).toBeUndefined();
   });
 
   it("rejects plugin AgentHarnessV2 factories registered before the matching V1 harness", () => {
@@ -3493,7 +3497,12 @@ module.exports = { id: "throws-after-import", register() {} };`,
     });
 
     expect(listAgentHarnessIds()).toEqual(["codex"]);
-    expect(getNativeAgentHarnessV2Factory("codex")).toBeUndefined();
+    expect(
+      getNativeAgentHarnessV2Factory({
+        harnessId: "codex",
+        pluginId: "codex-harness-v2-before-v1",
+      }),
+    ).toBeUndefined();
     expect(
       registry.diagnostics.some(
         (diag) =>
@@ -3575,7 +3584,9 @@ module.exports = { id: "throws-after-import", register() {} };`,
     });
 
     expect(listAgentHarnessIds()).toEqual(["codex"]);
-    expect(getNativeAgentHarnessV2Factory("codex")).toBeDefined();
+    expect(
+      getNativeAgentHarnessV2Factory({ harnessId: "codex", pluginId: "owned-codex-v2-factory" }),
+    ).toBeDefined();
     expect(registry.agentHarnessV2Factories).toEqual([
       expect.objectContaining({
         pluginId: "owned-codex-v2-factory",
@@ -3828,7 +3839,12 @@ module.exports = { id: "throws-after-import", register() {} };`,
     expect(getContextEngineFactory("failme-context")).toBeUndefined();
     expect(listContextEngineIds()).not.toContain("failme-context");
     expect(listAgentHarnessIds()).not.toContain("failme-harness");
-    expect(getNativeAgentHarnessV2Factory("failme-harness")).toBeUndefined();
+    expect(
+      getNativeAgentHarnessV2Factory({
+        harnessId: "failme-harness",
+        pluginId: "failing-side-effects",
+      }),
+    ).toBeUndefined();
     expect(registry.agentHarnessV2Factories).toEqual([]);
 
     const event = createInternalHookEvent("gateway", "startup", "gateway:startup");

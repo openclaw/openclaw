@@ -654,6 +654,93 @@ describe("AgentHarness V2 native factory registry", () => {
     }
   });
 
+  it("does not apply a core native factory to a plugin-owned harness with the same id", async () => {
+    const params = createAttemptParams();
+    const adapterResult = createAttemptResult();
+    const nativeResult = { ...createAttemptResult(), assistantTexts: ["wrong owner"] };
+    const runAttempt = vi.fn(async () => adapterResult);
+    const harness: AgentHarness = {
+      id: "native-factory-owner-scope-test",
+      label: "Plugin-owned collision",
+      pluginId: "plugin-a",
+      supports: () => ({ supported: true }),
+      runAttempt,
+    };
+    const restoreFactory = registerNativeAgentHarnessV2Factory(harness.id, (h) => ({
+      id: h.id,
+      label: h.label,
+      pluginId: h.pluginId,
+      supports: (ctx) => h.supports(ctx),
+      prepare: async (p) => ({
+        harnessId: h.id,
+        label: h.label,
+        pluginId: h.pluginId,
+        params: p,
+        lifecycleState: "prepared",
+      }),
+      start: async (p) => ({ ...p, lifecycleState: "started" }),
+      send: async () => nativeResult,
+      resolveOutcome: async (_session, r) => r,
+      cleanup: async () => {},
+    }));
+    try {
+      const result = await runAgentHarnessV2LifecycleAttempt(
+        resolveAgentHarnessV2(harness),
+        params,
+      );
+
+      expect(result).toEqual({ ...adapterResult, agentHarnessId: harness.id });
+      expect(runAttempt).toHaveBeenCalledWith(params);
+    } finally {
+      restoreFactory();
+    }
+  });
+
+  it("uses a native factory when the plugin owner and harness id both match", async () => {
+    const params = createAttemptParams();
+    const adapterResult = createAttemptResult();
+    const nativeResult = { ...createAttemptResult(), assistantTexts: ["plugin native path"] };
+    const runAttempt = vi.fn(async () => adapterResult);
+    const harness: AgentHarness = {
+      id: "native-factory-plugin-owner-test",
+      label: "Plugin-owned native factory",
+      pluginId: "plugin-a",
+      supports: () => ({ supported: true }),
+      runAttempt,
+    };
+    const restoreFactory = registerNativeAgentHarnessV2Factory(
+      { harnessId: harness.id, pluginId: harness.pluginId },
+      (h) => ({
+        id: h.id,
+        label: h.label,
+        pluginId: h.pluginId,
+        supports: (ctx) => h.supports(ctx),
+        prepare: async (p) => ({
+          harnessId: h.id,
+          label: h.label,
+          pluginId: h.pluginId,
+          params: p,
+          lifecycleState: "prepared",
+        }),
+        start: async (p) => ({ ...p, lifecycleState: "started" }),
+        send: async () => nativeResult,
+        resolveOutcome: async (_session, r) => r,
+        cleanup: async () => {},
+      }),
+    );
+    try {
+      const result = await runAgentHarnessV2LifecycleAttempt(
+        resolveAgentHarnessV2(harness),
+        params,
+      );
+
+      expect(result).toBe(nativeResult);
+      expect(runAttempt).not.toHaveBeenCalled();
+    } finally {
+      restoreFactory();
+    }
+  });
+
   it("native AgentHarnessV2 produces the same final attempt result as the V1 adapter for the same V1 harness", async () => {
     const params = createAttemptParams();
     const baseResult = createAttemptResult();

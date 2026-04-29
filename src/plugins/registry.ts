@@ -886,8 +886,10 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     }
     const existing =
       registryParams.activateGlobalSideEffects === false
-        ? registry.agentHarnessV2Factories.find((entry) => entry.harnessId === id)?.factory
-        : getNativeAgentHarnessV2Factory(id);
+        ? registry.agentHarnessV2Factories.find(
+            (entry) => entry.harnessId === id && entry.pluginId === record.id,
+          )?.factory
+        : getNativeAgentHarnessV2Factory({ harnessId: id, pluginId: record.id });
     if (existing) {
       pushDiagnostic({
         level: "error",
@@ -898,7 +900,10 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       return;
     }
     if (registryParams.activateGlobalSideEffects !== false) {
-      const restore = registerNativeAgentHarnessV2Factory(id, factory);
+      const restore = registerNativeAgentHarnessV2Factory(
+        { harnessId: id, pluginId: record.id },
+        factory,
+      );
       const rollbacks = agentHarnessV2FactoryRollback.get(record.id) ?? [];
       rollbacks.push(restore);
       agentHarnessV2FactoryRollback.set(record.id, rollbacks);

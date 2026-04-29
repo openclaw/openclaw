@@ -74,52 +74,74 @@ export type AgentHarnessV2 = {
  * Low-level native factory registry. Core-owned harnesses register here
  * directly, while trusted plugins reach it through the public Plugin SDK
  * `registerAgentHarnessV2Factory(...)` wrapper that verifies same-plugin
- * harness ownership before installing the factory.
+ * harness ownership before installing the factory. Factory lookup is scoped by
+ * harness id plus plugin owner so plugin ids can collide with built-in ids
+ * without accidentally inheriting a core native lifecycle.
  */
 export type NativeAgentHarnessV2Factory = (harness: AgentHarness) => AgentHarnessV2;
 
 export type NativeAgentHarnessV2FactoryEntry = {
   harnessId: string;
+  pluginId?: string;
   factory: NativeAgentHarnessV2Factory;
   source: "builtin" | "plugin";
 };
 
-const nativeAgentHarnessV2Factories = new Map<
-  string,
-  Omit<NativeAgentHarnessV2FactoryEntry, "harnessId">
->();
+export type NativeAgentHarnessV2FactoryOwner = {
+  harnessId: string;
+  pluginId?: string;
+};
+
+const nativeAgentHarnessV2Factories = new Map<string, NativeAgentHarnessV2FactoryEntry>();
+
+function normalizeNativeAgentHarnessV2FactoryOwner(
+  owner: string | NativeAgentHarnessV2FactoryOwner,
+): NativeAgentHarnessV2FactoryOwner {
+  if (typeof owner === "string") {
+    return { harnessId: owner };
+  }
+  return owner;
+}
+
+function nativeAgentHarnessV2FactoryKey(owner: NativeAgentHarnessV2FactoryOwner): string {
+  const harnessId = owner.harnessId.trim();
+  const pluginId = owner.pluginId?.trim() ?? null;
+  return JSON.stringify([pluginId, harnessId]);
+}
 
 export function registerNativeAgentHarnessV2Factory(
-  harnessId: string,
+  owner: string | NativeAgentHarnessV2FactoryOwner,
   factory: NativeAgentHarnessV2Factory,
   options?: { source?: NativeAgentHarnessV2FactoryEntry["source"] },
 ): () => void {
-  const previous = nativeAgentHarnessV2Factories.get(harnessId);
-  nativeAgentHarnessV2Factories.set(harnessId, {
+  const normalizedOwner = normalizeNativeAgentHarnessV2FactoryOwner(owner);
+  const key = nativeAgentHarnessV2FactoryKey(normalizedOwner);
+  const previous = nativeAgentHarnessV2Factories.get(key);
+  nativeAgentHarnessV2Factories.set(key, {
+    harnessId: normalizedOwner.harnessId.trim(),
+    ...(normalizedOwner.pluginId?.trim() ? { pluginId: normalizedOwner.pluginId.trim() } : {}),
     factory,
     source: options?.source ?? "plugin",
   });
   return () => {
     if (previous) {
-      nativeAgentHarnessV2Factories.set(harnessId, previous);
+      nativeAgentHarnessV2Factories.set(key, previous);
       return;
     }
-    nativeAgentHarnessV2Factories.delete(harnessId);
+    nativeAgentHarnessV2Factories.delete(key);
   };
 }
 
 export function getNativeAgentHarnessV2Factory(
-  harnessId: string,
+  owner: string | NativeAgentHarnessV2FactoryOwner,
 ): NativeAgentHarnessV2Factory | undefined {
-  return nativeAgentHarnessV2Factories.get(harnessId)?.factory;
+  return nativeAgentHarnessV2Factories.get(
+    nativeAgentHarnessV2FactoryKey(normalizeNativeAgentHarnessV2FactoryOwner(owner)),
+  )?.factory;
 }
 
 export function listNativeAgentHarnessV2FactoryEntries(): NativeAgentHarnessV2FactoryEntry[] {
-  return [...nativeAgentHarnessV2Factories.entries()].map(([harnessId, entry]) => ({
-    harnessId,
-    factory: entry.factory,
-    source: entry.source,
-  }));
+  return [...nativeAgentHarnessV2Factories.values()];
 }
 
 export function restoreNativeAgentHarnessV2FactoryEntries(
@@ -130,26 +152,21 @@ export function restoreNativeAgentHarnessV2FactoryEntries(
   );
   nativeAgentHarnessV2Factories.clear();
   for (const entry of entries) {
-    nativeAgentHarnessV2Factories.set(entry.harnessId, {
-      factory: entry.factory,
-      source: entry.source,
-    });
+    nativeAgentHarnessV2Factories.set(nativeAgentHarnessV2FactoryKey(entry), entry);
   }
   for (const entry of currentBuiltinEntries) {
-    if (nativeAgentHarnessV2Factories.has(entry.harnessId)) {
+    const key = nativeAgentHarnessV2FactoryKey(entry);
+    if (nativeAgentHarnessV2Factories.has(key)) {
       continue;
     }
-    nativeAgentHarnessV2Factories.set(entry.harnessId, {
-      factory: entry.factory,
-      source: entry.source,
-    });
+    nativeAgentHarnessV2Factories.set(key, entry);
   }
 }
 
 export function clearPluginNativeAgentHarnessV2Factories(): void {
-  for (const [harnessId, entry] of nativeAgentHarnessV2Factories) {
+  for (const [key, entry] of nativeAgentHarnessV2Factories) {
     if (entry.source !== "builtin") {
-      nativeAgentHarnessV2Factories.delete(harnessId);
+      nativeAgentHarnessV2Factories.delete(key);
     }
   }
 }
@@ -161,8 +178,11 @@ export function clearPluginNativeAgentHarnessV2Factories(): void {
  * boundary always runs against an `AgentHarnessV2` instance.
  */
 export function resolveAgentHarnessV2(harness: AgentHarness): AgentHarnessV2 {
-  const factory = nativeAgentHarnessV2Factories.get(harness.id);
-  return factory ? factory.factory(harness) : adaptAgentHarnessToV2(harness);
+  const factory = getNativeAgentHarnessV2Factory({
+    harnessId: harness.id,
+    pluginId: harness.pluginId,
+  });
+  return factory ? factory(harness) : adaptAgentHarnessToV2(harness);
 }
 
 export function adaptAgentHarnessToV2(harness: AgentHarness): AgentHarnessV2 {
