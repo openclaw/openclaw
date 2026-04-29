@@ -1,6 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { OperatorScope } from "../gateway/operator-scopes.js";
 import { VERSION } from "../version.js";
 import { OpenClawChannelBridge } from "./channel-bridge.js";
 import { ClaudePermissionRequestSchema, type ClaudeChannelMode } from "./channel-shared.js";
@@ -12,6 +13,7 @@ export type OpenClawMcpServeOptions = {
   gatewayUrl?: string;
   gatewayToken?: string;
   gatewayPassword?: string;
+  operatorScopes?: OperatorScope[];
   config?: OpenClawConfig;
   claudeChannelMode?: ClaudeChannelMode;
   verbose?: boolean;
@@ -42,6 +44,7 @@ export async function createOpenClawChannelMcpServer(opts: OpenClawMcpServeOptio
     gatewayUrl: opts.gatewayUrl,
     gatewayToken: opts.gatewayToken,
     gatewayPassword: opts.gatewayPassword,
+    operatorScopes: opts.operatorScopes,
     claudeChannelMode,
     verbose: opts.verbose ?? false,
   });

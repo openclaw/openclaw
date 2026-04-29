@@ -2,6 +2,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { describe, expect, test, vi } from "vitest";
 import { z } from "zod";
+import type { OperatorScope } from "../gateway/operator-scopes.js";
 import { shouldRetryInitialMcpGatewayConnect } from "./channel-bridge.js";
 import { createOpenClawChannelMcpServer, OpenClawChannelBridge } from "./channel-server.js";
 import { extractAttachmentsFromMessage } from "./channel-shared.js";
@@ -81,6 +82,70 @@ function gatewayRequestError(retryable: boolean): Error {
   });
 }
 
+async function captureGatewayClientScopes(operatorScopes?: OperatorScope[]): Promise<unknown> {
+  let capturedScopes: unknown;
+
+  vi.resetModules();
+  vi.doMock("../gateway/client-bootstrap.js", () => ({
+    resolveGatewayClientBootstrap: vi.fn(async () => ({
+      url: "ws://127.0.0.1:18888",
+      auth: {},
+    })),
+  }));
+  vi.doMock("../gateway/client.js", () => ({
+    GatewayClient: class {
+      private readonly opts: {
+        scopes?: unknown;
+        onHelloOk?: () => void;
+      };
+
+      constructor(opts: { scopes?: unknown; onHelloOk?: () => void }) {
+        this.opts = opts;
+        capturedScopes = opts.scopes;
+      }
+
+      start(): void {
+        this.opts.onHelloOk?.();
+      }
+
+      async request(): Promise<Record<string, never>> {
+        return {};
+      }
+
+      async stopAndWait(): Promise<void> {
+        return undefined;
+      }
+    },
+  }));
+  vi.doMock("../gateway/method-scopes.js", () => ({
+    APPROVALS_SCOPE: "operator.approvals",
+    READ_SCOPE: "operator.read",
+    WRITE_SCOPE: "operator.write",
+  }));
+  vi.doMock("../gateway/protocol/client-info.js", () => ({
+    GATEWAY_CLIENT_MODES: { CLI: "cli" },
+    GATEWAY_CLIENT_NAMES: { CLI: "cli" },
+  }));
+
+  const bridge = new OpenClawChannelBridge({} as never, {
+    operatorScopes,
+    claudeChannelMode: "off",
+    verbose: false,
+  });
+  try {
+    await bridge.start();
+  } finally {
+    await bridge.close();
+    vi.doUnmock("../gateway/client-bootstrap.js");
+    vi.doUnmock("../gateway/client.js");
+    vi.doUnmock("../gateway/method-scopes.js");
+    vi.doUnmock("../gateway/protocol/client-info.js");
+    vi.resetModules();
+  }
+
+  return capturedScopes;
+}
+
 describe("openclaw channel mcp server", () => {
   test("keeps initial MCP gateway connection alive through transient connect errors", () => {
     expect(
@@ -88,6 +153,18 @@ describe("openclaw channel mcp server", () => {
     ).toBe(true);
     expect(shouldRetryInitialMcpGatewayConnect(gatewayRequestError(true))).toBe(true);
     expect(shouldRetryInitialMcpGatewayConnect(gatewayRequestError(false))).toBe(false);
+  });
+
+  test("passes configured operator scopes to the gateway client", async () => {
+    await expect(captureGatewayClientScopes(["operator.read"])).resolves.toEqual(["operator.read"]);
+  });
+
+  test("defaults gateway client scopes for mcp serve", async () => {
+    await expect(captureGatewayClientScopes()).resolves.toEqual([
+      "operator.read",
+      "operator.write",
+      "operator.approvals",
+    ]);
   });
 
   describe("gateway-backed flows", () => {
