@@ -10,6 +10,7 @@ import {
   resolvePublicAgentAvatarSource,
 } from "../../agents/identity-avatar.js";
 import type { AgentInternalEvent } from "../../agents/internal-events.js";
+import { resolveSandboxConfigForAgent } from "../../agents/sandbox/config.js";
 import {
   normalizeSpawnedRunMetadata,
   resolveIngressWorkspaceOverrideForSpawnedRun,
@@ -179,6 +180,31 @@ function resolveSessionRuntimeWorkspace(params: {
     runtimeWorkspaceDir: workspaceOverride ?? resolveAgentWorkspaceDir(params.cfg, sessionAgentId),
     isCanonicalWorkspace: !workspaceOverride,
   };
+}
+
+function shouldSkipStartupContextForSpawnedSandbox(params: {
+  cfg: OpenClawConfig;
+  sessionKey: string;
+  spawnedBy?: string;
+}): boolean {
+  if (!params.spawnedBy) {
+    return false;
+  }
+  const agentId = resolveAgentIdFromSessionKey(params.sessionKey);
+  const sandboxCfg = resolveSandboxConfigForAgent(params.cfg, agentId);
+  if (sandboxCfg.mode === "off") {
+    return false;
+  }
+  if (sandboxCfg.mode === "non-main") {
+    const mainSessionKey = resolveAgentMainSessionKey({
+      cfg: params.cfg,
+      agentId,
+    });
+    if (params.sessionKey.trim() === mainSessionKey.trim()) {
+      return false;
+    }
+  }
+  return sandboxCfg.workspaceAccess !== "rw";
 }
 
 function emitSessionsChanged(
@@ -1152,18 +1178,27 @@ export const agentHandlers: GatewayRequestHandlers = {
         }
 
         if (shouldPrependStartupContext && resolvedSessionKey) {
-          const { runtimeWorkspaceDir } = resolveSessionRuntimeWorkspace({
-            cfg: cfgForAgent ?? cfg,
-            sessionKey: resolvedSessionKey,
-            sessionEntry,
-            spawnedBy: spawnedByValue,
-          });
-          const startupContextPrelude = await buildSessionStartupContextPrelude({
-            workspaceDir: runtimeWorkspaceDir,
-            cfg: cfgForAgent ?? cfg,
-          });
-          if (startupContextPrelude) {
-            message = `${startupContextPrelude}\n\n${message}`;
+          const startupCfg = cfgForAgent ?? cfg;
+          if (
+            !shouldSkipStartupContextForSpawnedSandbox({
+              cfg: startupCfg,
+              sessionKey: resolvedSessionKey,
+              spawnedBy: spawnedByValue,
+            })
+          ) {
+            const { runtimeWorkspaceDir } = resolveSessionRuntimeWorkspace({
+              cfg: startupCfg,
+              sessionKey: resolvedSessionKey,
+              sessionEntry,
+              spawnedBy: spawnedByValue,
+            });
+            const startupContextPrelude = await buildSessionStartupContextPrelude({
+              workspaceDir: runtimeWorkspaceDir,
+              cfg: startupCfg,
+            });
+            if (startupContextPrelude) {
+              message = `${startupContextPrelude}\n\n${message}`;
+            }
           }
         }
         if (!isRawModelRun) {

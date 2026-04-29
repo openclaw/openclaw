@@ -2288,6 +2288,93 @@ describe("gateway agent handler", () => {
     });
   });
 
+  it.each(["all", "non-main"] as const)(
+    "does not preload startup memory from inherited workspaces for spawned sandboxed sessions in %s mode",
+    async (sandboxMode) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-04-27T12:00:00.000Z"));
+      try {
+        await withTempDir(
+          { prefix: "openclaw-gateway-startup-canonical-" },
+          async (canonicalWorkspaceDir) => {
+            await withTempDir(
+              { prefix: "openclaw-gateway-startup-inherited-" },
+              async (inheritedWorkspaceDir) => {
+                await fs.mkdir(`${inheritedWorkspaceDir}/memory`, { recursive: true });
+                const inheritedMarker = "OC_INHERITED_WORKSPACE_MEMORY_MARKER";
+                await fs.writeFile(
+                  `${inheritedWorkspaceDir}/memory/2026-04-27.md`,
+                  inheritedMarker,
+                  "utf-8",
+                );
+                mocks.loadConfigReturn = {
+                  agents: {
+                    defaults: {
+                      workspace: canonicalWorkspaceDir,
+                      userTimezone: "UTC",
+                      startupContext: {
+                        enabled: true,
+                        applyOn: ["new"],
+                        dailyMemoryDays: 1,
+                      },
+                      sandbox: {
+                        mode: sandboxMode,
+                        scope: "session",
+                        workspaceAccess: "none",
+                      },
+                    },
+                  },
+                };
+                mockSessionResetSuccess({
+                  reason: "new",
+                  key: "agent:main:subagent:sandbox-child",
+                });
+                mocks.loadSessionEntry.mockReturnValue({
+                  cfg: mocks.loadConfigReturn,
+                  storePath: "/tmp/sessions.json",
+                  entry: {
+                    sessionId: "existing-child-session",
+                    updatedAt: Date.now(),
+                    spawnedBy: "agent:main:main",
+                    spawnedWorkspaceDir: inheritedWorkspaceDir,
+                  },
+                  canonicalKey: "agent:main:subagent:sandbox-child",
+                });
+                mocks.updateSessionStore.mockResolvedValue(undefined);
+                mocks.agentCommand.mockResolvedValue({
+                  payloads: [{ text: "ok" }],
+                  meta: { durationMs: 100 },
+                });
+
+                await invokeAgent(
+                  {
+                    message: "/new",
+                    sessionKey: "agent:main:subagent:sandbox-child",
+                    idempotencyKey: `test-idem-new-spawned-sandbox-memory-${sandboxMode}`,
+                  },
+                  {
+                    reqId: `4-startup-spawned-sandbox-memory-${sandboxMode}`,
+                    client: {
+                      connect: { scopes: ["operator.admin"] },
+                    } as AgentHandlerArgs["client"],
+                  },
+                );
+
+                await waitForAssertion(() => expect(mocks.agentCommand).toHaveBeenCalled());
+                const call = readLastAgentCommandCall();
+                expect(call?.message).toContain("Execute your Session Startup sequence now");
+                expect(call?.message).not.toContain("[Startup context loaded by runtime]");
+                expect(call?.message).not.toContain(inheritedMarker);
+              },
+            );
+          },
+        );
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
   it("uses /reset suffix as the post-reset message and still injects timestamp", async () => {
     setupNewYorkTimeConfig("2026-01-29T01:30:00.000Z");
     mockSessionResetSuccess({ reason: "reset" });

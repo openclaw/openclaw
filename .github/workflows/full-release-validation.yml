@@ -53,6 +53,11 @@ on:
           - qa-parity
           - qa-live
           - npm-telegram
+      live_suite_filter:
+        description: Optional exact live suite id for focused live/E2E reruns; blank runs all selected live suites
+        required: false
+        default: ""
+        type: string
       npm_telegram_package_spec:
         description: Optional published package spec for the post-publish Telegram E2E lane
         required: false
@@ -83,7 +88,7 @@ permissions:
 
 concurrency:
   group: full-release-validation-${{ inputs.ref }}-${{ inputs.rerun_group }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
@@ -123,6 +128,7 @@ jobs:
           NPM_TELEGRAM_PACKAGE_SPEC: ${{ inputs.npm_telegram_package_spec }}
           EVIDENCE_PACKAGE_SPEC: ${{ inputs.evidence_package_spec }}
           RERUN_GROUP: ${{ inputs.rerun_group }}
+          LIVE_SUITE_FILTER: ${{ inputs.live_suite_filter }}
         run: |
           {
             echo "## Full release validation"
@@ -131,6 +137,9 @@ jobs:
             echo "- Target SHA: \`${TARGET_SHA}\`"
             echo "- Child workflow ref: \`${CHILD_WORKFLOW_REF}\`"
             echo "- Rerun group: \`${RERUN_GROUP}\`"
+            if [[ -n "${LIVE_SUITE_FILTER// }" ]]; then
+              echo "- Live suite filter: \`${LIVE_SUITE_FILTER}\`"
+            fi
             if [[ "$RERUN_GROUP" == "all" || "$RERUN_GROUP" == "ci" ]]; then
               echo "- Normal CI: \`CI\` with \`target_ref=${TARGET_SHA}\`"
             else
@@ -213,19 +222,6 @@ jobs:
             echo "Dispatched ${workflow}: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
             echo "run_id=${run_id}" >> "$GITHUB_OUTPUT"
 
-            cleanup_child_run() {
-              local exit_code=$?
-              trap - EXIT INT TERM
-              local child_status
-              child_status="$(gh run view "$run_id" --json status --jq '.status' 2>/dev/null || true)"
-              if [[ "$child_status" != "completed" ]]; then
-                echo "Cancelling child ${workflow} run ${run_id} after parent exit (${exit_code})."
-                gh run cancel "$run_id" || gh api -X POST "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/force-cancel" || true
-              fi
-              return "$exit_code"
-            }
-            trap cleanup_child_run EXIT INT TERM
-
             while true; do
               status="$(gh run view "$run_id" --json status --jq '.status')"
               if [[ "$status" == "completed" ]]; then
@@ -252,23 +248,6 @@ jobs:
             echo "- Target SHA: \`${TARGET_SHA}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
-          cancel_same_sha_push_ci() {
-            local run_ids run_id
-            run_ids="$(
-              gh run list --workflow ci.yml --limit 100 --json databaseId,event,headSha,status \
-                --jq 'map(select(.event == "push" and .headSha == env.TARGET_SHA and (.status == "queued" or .status == "in_progress" or .status == "waiting" or .status == "pending"))) | .[].databaseId'
-            )"
-            if [[ -z "${run_ids// }" ]]; then
-              return 0
-            fi
-            while IFS= read -r run_id; do
-              [[ -n "${run_id// }" ]] || continue
-              echo "Cancelling same-SHA push CI run ${run_id}; Full Release Validation dispatches the full manual CI child for ${TARGET_SHA}."
-              gh run cancel "$run_id" || gh api -X POST "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/force-cancel" || true
-            done <<< "$run_ids"
-          }
-
-          cancel_same_sha_push_ci
           dispatch_and_wait ci.yml -f target_ref="$TARGET_SHA" -f include_android=true
 
   plugin_prerelease:
@@ -328,19 +307,6 @@ jobs:
             echo "Dispatched ${workflow}: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
             echo "run_id=${run_id}" >> "$GITHUB_OUTPUT"
 
-            cleanup_child_run() {
-              local exit_code=$?
-              trap - EXIT INT TERM
-              local child_status
-              child_status="$(gh run view "$run_id" --json status --jq '.status' 2>/dev/null || true)"
-              if [[ "$child_status" != "completed" ]]; then
-                echo "Cancelling child ${workflow} run ${run_id} after parent exit (${exit_code})."
-                gh run cancel "$run_id" || gh api -X POST "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/force-cancel" || true
-              fi
-              return "$exit_code"
-            }
-            trap cleanup_child_run EXIT INT TERM
-
             while true; do
               status="$(gh run view "$run_id" --json status --jq '.status')"
               if [[ "$status" == "completed" ]]; then
@@ -391,6 +357,7 @@ jobs:
           MODE: ${{ inputs.mode }}
           RELEASE_PROFILE: ${{ inputs.release_profile }}
           RERUN_GROUP: ${{ inputs.rerun_group }}
+          LIVE_SUITE_FILTER: ${{ inputs.live_suite_filter }}
         run: |
           set -euo pipefail
 
@@ -430,19 +397,6 @@ jobs:
             echo "Dispatched ${workflow}: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
             echo "run_id=${run_id}" >> "$GITHUB_OUTPUT"
 
-            cleanup_child_run() {
-              local exit_code=$?
-              trap - EXIT INT TERM
-              local child_status
-              child_status="$(gh run view "$run_id" --json status --jq '.status' 2>/dev/null || true)"
-              if [[ "$child_status" != "completed" ]]; then
-                echo "Cancelling child ${workflow} run ${run_id} after parent exit (${exit_code})."
-                gh run cancel "$run_id" || gh api -X POST "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/force-cancel" || true
-              fi
-              return "$exit_code"
-            }
-            trap cleanup_child_run EXIT INT TERM
-
             while true; do
               status="$(gh run view "$run_id" --json status --jq '.status')"
               if [[ "$status" == "completed" ]]; then
@@ -471,6 +425,9 @@ jobs:
             echo "- Cross-OS mode: \`${MODE}\`"
             echo "- Release profile: \`${RELEASE_PROFILE}\`"
             echo "- Rerun group: \`${RERUN_GROUP}\`"
+            if [[ -n "${LIVE_SUITE_FILTER// }" ]]; then
+              echo "- Live suite filter: \`${LIVE_SUITE_FILTER}\`"
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
 
           child_rerun_group="$RERUN_GROUP"
@@ -478,13 +435,19 @@ jobs:
             child_rerun_group=all
           fi
 
-          dispatch_and_wait openclaw-release-checks.yml \
-            -f ref="$TARGET_SHA" \
-            -f expected_sha="$TARGET_SHA" \
-            -f provider="$PROVIDER" \
-            -f mode="$MODE" \
-            -f release_profile="$RELEASE_PROFILE" \
+          args=(
+            -f ref="$TARGET_SHA"
+            -f expected_sha="$TARGET_SHA"
+            -f provider="$PROVIDER"
+            -f mode="$MODE"
+            -f release_profile="$RELEASE_PROFILE"
             -f rerun_group="$child_rerun_group"
+          )
+          if [[ -n "${LIVE_SUITE_FILTER// }" ]]; then
+            args+=(-f live_suite_filter="$LIVE_SUITE_FILTER")
+          fi
+
+          dispatch_and_wait openclaw-release-checks.yml "${args[@]}"
 
   npm_telegram:
     name: Run post-publish Telegram E2E
@@ -537,19 +500,6 @@ jobs:
 
           echo "Dispatched npm-telegram-beta-e2e.yml: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
           echo "run_id=${run_id}" >> "$GITHUB_OUTPUT"
-
-          cleanup_child_run() {
-            local exit_code=$?
-            trap - EXIT INT TERM
-            local child_status
-            child_status="$(gh run view "$run_id" --json status --jq '.status' 2>/dev/null || true)"
-            if [[ "$child_status" != "completed" ]]; then
-              echo "Cancelling npm-telegram-beta-e2e.yml child run ${run_id} after parent exit (${exit_code})."
-              gh run cancel "$run_id" || gh api -X POST "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/force-cancel" || true
-            fi
-            return "$exit_code"
-          }
-          trap cleanup_child_run EXIT INT TERM
 
           while true; do
             status="$(gh run view "$run_id" --json status --jq '.status')"

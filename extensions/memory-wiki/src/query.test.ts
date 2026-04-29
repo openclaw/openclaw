@@ -205,6 +205,114 @@ describe("searchMemoryWiki", () => {
     expect(results[0]?.snippet).toContain("Teams");
   });
 
+  it("supports people-routing search modes and claim evidence drilldown metadata", async () => {
+    const { rootDir, config } = await createQueryVault({
+      initialize: true,
+    });
+    await fs.writeFile(
+      path.join(rootDir, "entities", "brad.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "entity",
+          entityType: "person",
+          id: "entity.brad",
+          title: "Brad Groux",
+          canonicalId: "maintainer.brad-groux",
+          aliases: ["bgroux"],
+          privacyTier: "local-private",
+          personCard: {
+            handles: ["@bgroux"],
+            lane: "Microsoft Teams",
+            askFor: ["Teams and Azure rollout questions"],
+          },
+          bestUsedFor: ["Microsoft ecosystem routing"],
+          relationships: [
+            {
+              targetId: "entity.alice",
+              targetTitle: "Alice",
+              kind: "works-with",
+              note: "Teams escalation buddy",
+            },
+          ],
+          claims: [
+            {
+              id: "claim.brad.teams",
+              text: "Brad is a strong route for Microsoft Teams questions.",
+              status: "supported",
+              confidence: 0.88,
+              evidence: [
+                {
+                  kind: "maintainer-whois",
+                  sourceId: "source.maintainers",
+                  privacyTier: "local-private",
+                },
+              ],
+            },
+          ],
+        },
+        body: "# Brad Groux\n\nAgent card summary.\n",
+      }),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(rootDir, "sources", "maintainers.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "source",
+          id: "source.maintainers",
+          title: "Maintainers Source",
+        },
+        body: "# Maintainers Source\n\nmaintainer-whois Teams sample.\n",
+      }),
+      "utf8",
+    );
+
+    const personResults = await searchMemoryWiki({
+      config,
+      query: "bgroux",
+      mode: "find-person",
+    });
+    expect(personResults[0]).toEqual(
+      expect.objectContaining({
+        path: "entities/brad.md",
+        canonicalId: "maintainer.brad-groux",
+        aliases: ["bgroux"],
+        privacyTier: "local-private",
+        searchMode: "find-person",
+      }),
+    );
+
+    const routeResults = await searchMemoryWiki({
+      config,
+      query: "Teams Azure",
+      mode: "route-question",
+    });
+    expect(routeResults[0]?.path).toBe("entities/brad.md");
+
+    const claimResults = await searchMemoryWiki({
+      config,
+      query: "strong route Teams",
+      mode: "raw-claim",
+    });
+    expect(claimResults[0]).toEqual(
+      expect.objectContaining({
+        path: "entities/brad.md",
+        matchedClaimId: "claim.brad.teams",
+        matchedClaimConfidence: 0.88,
+        evidenceKinds: ["maintainer-whois"],
+        evidenceSourceIds: ["source.maintainers"],
+      }),
+    );
+
+    const evidenceResults = await searchMemoryWiki({
+      config,
+      query: "maintainer-whois",
+      mode: "source-evidence",
+      maxResults: 2,
+    });
+    expect(evidenceResults.map((result) => result.path)).toContain("sources/maintainers.md");
+  });
+
   it("uses body text instead of frontmatter for fallback snippets", async () => {
     const { rootDir, config } = await createQueryVault({
       initialize: true,

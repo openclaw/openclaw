@@ -1341,7 +1341,7 @@ export function renderApp(state: AppViewState) {
         <div class="topnav-shell">
           <button
             type="button"
-            class="topbar-nav-toggle"
+            class="sidebar-menu-trigger topbar-nav-toggle"
             @click=${() => {
               state.navDrawerOpen = !navDrawerOpen;
             }}

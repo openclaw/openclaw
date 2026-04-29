@@ -353,6 +353,101 @@ describe("compileMemoryWikiVault", () => {
     await expect(fs.access(path.join(rootDir, "reports", "open-questions.md"))).rejects.toThrow();
   });
 
+  it("writes agent directory, relationship, provenance, and privacy reports", async () => {
+    const { rootDir, config } = await createVault({
+      rootDir: nextCaseRoot(),
+      initialize: true,
+    });
+
+    await fs.writeFile(
+      path.join(rootDir, "entities", "brad.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "entity",
+          entityType: "person",
+          id: "entity.brad",
+          title: "Brad Groux",
+          canonicalId: "maintainer.brad-groux",
+          aliases: ["brad"],
+          privacyTier: "local-private",
+          bestUsedFor: ["Microsoft routing"],
+          lastRefreshedAt: "2026-04-29T00:00:00.000Z",
+          personCard: {
+            handles: ["@bgroux"],
+            lane: "Microsoft Teams",
+            askFor: ["Teams and Azure questions"],
+            privacyTier: "confirm-before-use",
+          },
+          relationships: [
+            {
+              targetId: "entity.alice",
+              targetTitle: "Alice",
+              kind: "collaborates-with",
+              evidenceKind: "discrawl-stat",
+              privacyTier: "local-private",
+            },
+          ],
+          claims: [
+            {
+              id: "claim.brad.teams",
+              text: "Brad is useful for Microsoft Teams routing.",
+              status: "supported",
+              confidence: 0.9,
+              evidence: [
+                {
+                  kind: "maintainer-whois",
+                  sourceId: "source.maintainers",
+                  privacyTier: "local-private",
+                },
+              ],
+            },
+          ],
+        },
+        body: "# Brad Groux\n",
+      }),
+      "utf8",
+    );
+
+    await compileMemoryWikiVault(config);
+
+    await expect(
+      fs.readFile(path.join(rootDir, "reports", "person-agent-directory.md"), "utf8"),
+    ).resolves.toContain("Microsoft Teams");
+    await expect(
+      fs.readFile(path.join(rootDir, "reports", "relationship-graph.md"), "utf8"),
+    ).resolves.toContain("collaborates-with");
+    await expect(
+      fs.readFile(path.join(rootDir, "reports", "provenance-coverage.md"), "utf8"),
+    ).resolves.toContain("maintainer-whois: 1");
+    await expect(
+      fs.readFile(path.join(rootDir, "reports", "privacy-review.md"), "utf8"),
+    ).resolves.toContain("confirm-before-use");
+
+    const agentDigest = JSON.parse(
+      await fs.readFile(path.join(rootDir, ".openclaw-wiki", "cache", "agent-digest.json"), "utf8"),
+    ) as {
+      pages: Array<{
+        path: string;
+        canonicalId?: string;
+        aliases?: string[];
+        personCard?: { lane?: string };
+        relationshipCount?: number;
+      }>;
+    };
+    expect(agentDigest.pages).toContainEqual(
+      expect.objectContaining({
+        path: "entities/brad.md",
+        canonicalId: "maintainer.brad-groux",
+        aliases: ["brad"],
+        personCard: expect.objectContaining({ lane: "Microsoft Teams" }),
+        relationshipCount: 1,
+      }),
+    );
+    await expect(
+      fs.readFile(path.join(rootDir, ".openclaw-wiki", "cache", "claims.jsonl"), "utf8"),
+    ).resolves.toContain('"evidenceKinds":["maintainer-whois"]');
+  });
+
   it("ignores generated related links when computing backlinks on repeated compile", async () => {
     const { rootDir, config } = await createVault({
       rootDir: nextCaseRoot(),
