@@ -190,7 +190,10 @@ Extracts the last 15 user/assistant messages, generates a descriptive filename s
       "entries": {
         "bootstrap-extra-files": {
           "enabled": true,
-          "paths": ["packages/*/AGENTS.md", "packages/*/TOOLS.md"]
+          "paths": ["packages/*/AGENTS.md", "packages/*/TOOLS.md"],
+          "sessions": {
+            "agent:main:whatsapp:group:123": ["sessions/zeus-dev/BOOTSTRAP-ZEUS.md"]
+          }
         }
       }
     }
@@ -198,7 +201,9 @@ Extracts the last 15 user/assistant messages, generates a descriptive filename s
 }
 ```
 
-Paths resolve relative to workspace. Only recognized bootstrap basenames are loaded (`AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`, `BOOTSTRAP.md`, `MEMORY.md`).
+Paths resolve relative to workspace. Matching files are loaded even when their basename is not one of the default workspace bootstrap filenames.
+
+Use `sessions` to add extra bootstrap files only for an exact `sessionKey`. Session-specific paths are combined with the global `paths`/`patterns`/`files` list and then filtered through the normal session bootstrap allowlist.
 
 <a id="command-logger"></a>
 

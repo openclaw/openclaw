@@ -22,6 +22,20 @@ function resolveExtraBootstrapPatterns(hookConfig: Record<string, unknown>): str
   return normalizeTrimmedStringList(hookConfig.files);
 }
 
+function resolveSessionBootstrapPatterns(
+  hookConfig: Record<string, unknown>,
+  sessionKey?: string,
+): string[] {
+  if (!sessionKey) {
+    return [];
+  }
+  const sessions = hookConfig.sessions;
+  if (!sessions || typeof sessions !== "object" || Array.isArray(sessions)) {
+    return [];
+  }
+  return normalizeTrimmedStringList((sessions as Record<string, unknown>)[sessionKey]);
+}
+
 const bootstrapExtraFilesHook: HookHandler = async (event) => {
   if (!isAgentBootstrapEvent(event)) {
     return;
@@ -33,7 +47,13 @@ const bootstrapExtraFilesHook: HookHandler = async (event) => {
     return;
   }
 
-  const patterns = resolveExtraBootstrapPatterns(hookConfig as Record<string, unknown>);
+  const typedConfig = hookConfig as Record<string, unknown>;
+  const patterns = [
+    ...new Set([
+      ...resolveExtraBootstrapPatterns(typedConfig),
+      ...resolveSessionBootstrapPatterns(typedConfig, context.sessionKey),
+    ]),
+  ];
   if (patterns.length === 0) {
     return;
   }
