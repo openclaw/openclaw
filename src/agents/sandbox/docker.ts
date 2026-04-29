@@ -272,44 +272,42 @@ export async function readDockerPort(containerName: string, port: number) {
   return Number.isFinite(mapped) ? mapped : null;
 }
 
+const DOCKER_DAEMON_UNAVAILABLE_MARKERS = [
+  "cannot connect to the docker daemon",
+  "dial unix",
+  "docker daemon is not running",
+  "connection refused",
+];
+
 export function isDockerDaemonUnavailable(stderr: string): boolean {
-  const lower = stderr.toLowerCase();
-  return (
-    lower.includes("cannot connect to the docker daemon") ||
-    lower.includes("dial unix") ||
-    lower.includes("docker daemon is not running") ||
-    lower.includes("connection refused")
-  );
+  return DOCKER_DAEMON_UNAVAILABLE_MARKERS.some((marker) => stderr.toLowerCase().includes(marker));
 }
 
-async function dockerImageExists(image: string) {
+async function inspectDockerImage(image: string): Promise<"exists" | "missing" | "unavailable"> {
   const result = await execDocker(["image", "inspect", image], {
     allowFailure: true,
   });
   if (result.code === 0) {
-    return true;
+    return "exists";
   }
   const stderr = result.stderr.trim();
-  if (stderr.includes("No such image")) {
-    return false;
+  if (stderr.toLowerCase().includes("no such image")) {
+    return "missing";
   }
-  // When Docker daemon is unavailable, treat the image as non-existent
+  // When Docker daemon is unavailable, treat the image as unavailable
   // rather than throwing. This allows sandbox.mode="off" sessions to
   // start without a running Docker daemon.
   if (isDockerDaemonUnavailable(stderr)) {
-    return false;
+    return "unavailable";
   }
   throw new Error(`Failed to inspect sandbox image: ${stderr}`);
 }
 
 export async function ensureDockerImage(image: string) {
-  const exists = await dockerImageExists(image);
-  if (exists) {
+  const imageState = await inspectDockerImage(image);
+  if (imageState === "exists" || imageState === "unavailable") {
     return;
   }
-  // When Docker daemon is unavailable, silently return — the caller will
-  // fail later if it actually needs Docker, but for sandbox.mode="off"
-  // sessions this prevents unnecessary probe errors.
   if (image === DEFAULT_SANDBOX_IMAGE) {
     throw new Error(
       `Sandbox image not found: ${image}. Build it with scripts/sandbox-setup.sh before enabling Docker sandboxing. The default image includes python3 for sandbox write/edit helpers; OpenClaw will not substitute plain debian:bookworm-slim.`,

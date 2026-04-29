@@ -86,7 +86,6 @@ async function dockerImageExists(image: string): Promise<boolean> {
     if (stderr.includes("No such image")) {
       return false;
     }
-    const lower = stderr.toLowerCase();
     if (isDockerDaemonUnavailable(stderr)) {
       return false;
     }
