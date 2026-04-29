@@ -4,7 +4,7 @@ import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import {
-  createBundledRuntimeDepsWritableInstallSpecs,
+  createBundledRuntimeDepsInstallSpecs,
   repairBundledRuntimeDepsInstallRootAsync,
   resolveBundledRuntimeDependencyPackageInstallRootPlan,
   scanBundledPluginRuntimeDeps,
@@ -168,10 +168,8 @@ export async function maybeRepairBundledPluginRuntimeDeps(params: {
   const installRootPlan = resolveBundledRuntimeDependencyPackageInstallRootPlan(packageRoot, {
     env,
   });
-  const installSpecs = createBundledRuntimeDepsWritableInstallSpecs({
+  const installSpecs = createBundledRuntimeDepsInstallSpecs({
     deps,
-    searchRoots: installRootPlan.searchRoots,
-    installRoot: installRootPlan.installRoot,
   });
   note(
     [

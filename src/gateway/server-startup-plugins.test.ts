@@ -269,6 +269,7 @@ describe("prepareGatewayPluginBootstrap runtime-deps staging", () => {
         installRoot: "/runtime",
         missingSpecs: ["grammy@1.37.0"],
         installSpecs: ["alpha-runtime@1.0.0", "grammy@1.37.0"],
+        retainMaterializedSpecs: true,
       }),
     );
   });

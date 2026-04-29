@@ -101,6 +101,7 @@ async function prestageGatewayBundledRuntimeDeps(params: {
       installRoot,
       missingSpecs,
       installSpecs,
+      retainMaterializedSpecs: true,
       env: process.env,
       warn: (message) => params.log.warn(`[plugins] ${message}`),
     });
