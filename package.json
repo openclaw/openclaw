@@ -1631,8 +1631,6 @@
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "0.20.0",
-    "@aws-sdk/client-polly": "3.1036.0",
-    "@aws-sdk/client-transcribe-streaming": "3.1036.0",
     "@clack/prompts": "^1.2.0",
     "@lydell/node-pty": "1.2.0-beta.12",
     "@mariozechner/pi-agent-core": "0.70.2",

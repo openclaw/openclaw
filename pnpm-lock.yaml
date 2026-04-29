@@ -42,12 +42,6 @@ importers:
       '@agentclientprotocol/sdk':
         specifier: 0.20.0
         version: 0.20.0(zod@4.3.6)
-      '@aws-sdk/client-polly':
-        specifier: 3.1036.0
-        version: 3.1036.0
-      '@aws-sdk/client-transcribe-streaming':
-        specifier: 3.1036.0
-        version: 3.1036.0
       '@clack/prompts':
         specifier: ^1.2.0
         version: 1.2.0

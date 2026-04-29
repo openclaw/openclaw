@@ -15,13 +15,6 @@
     },
     "extensions": [
       "./index.ts"
-    ],
-    "releaseChecks": {
-      "rootDependencyMirrorAllowlist": [
-        "@aws-sdk/client-polly",
-        "@aws-sdk/client-transcribe-streaming",
-        "@aws-sdk/client-bedrock-runtime"
-      ]
-    }
+    ]
   }
 }
