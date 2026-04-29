@@ -1,3 +1,8 @@
+import {
+  GATEWAY_LAUNCH_AGENT_LABEL,
+  MAC_APP_LAUNCH_AGENT_LABEL,
+  resolveGatewayLaunchAgentLabel,
+} from "../daemon/constants.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 
 export type ServiceRepairPolicy = "auto" | "external";
@@ -24,6 +29,40 @@ export function isServiceRepairExternallyManaged(
   policy: ServiceRepairPolicy = resolveServiceRepairPolicy(),
 ): boolean {
   return policy === "external";
+}
+
+export function shouldMacAppLaunchAgentOwnGatewayRepair(
+  env: Record<string, string | undefined> = process.env,
+): boolean {
+  const targetLabel = resolveGatewayLaunchAgentLabel(env.OPENCLAW_PROFILE);
+  return targetLabel === GATEWAY_LAUNCH_AGENT_LABEL || targetLabel === MAC_APP_LAUNCH_AGENT_LABEL;
+}
+
+export function renderMacAppLaunchAgentRepairSkip(
+  ownership: {
+    label: string;
+    installed: boolean;
+    loaded: boolean;
+    detail: string;
+  },
+  params: {
+    env?: Record<string, string | undefined>;
+    skippedAction: string;
+  },
+): string {
+  const targetLabel = resolveGatewayLaunchAgentLabel(params.env?.OPENCLAW_PROFILE);
+  const state =
+    ownership.installed && ownership.loaded
+      ? "installed and loaded"
+      : ownership.loaded
+        ? "loaded"
+        : "installed";
+  return [
+    `OpenClaw.app LaunchAgent ${ownership.label} is ${state}.`,
+    `Ownership path: OpenClaw.app manages the local macOS gateway lifecycle for ${targetLabel}.`,
+    `Skipped ${params.skippedAction}. Use OpenClaw.app to repair or restart Local mode, or disable the app LaunchAgent before using CLI service repair.`,
+    `Detected ${ownership.detail}.`,
+  ].join("\n");
 }
 
 export async function confirmDoctorServiceRepair(

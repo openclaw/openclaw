@@ -341,6 +341,8 @@ That stages grounded durable candidates into the short-term dreaming store while
   <Accordion title="8. Gateway service migrations and cleanup hints">
     Doctor detects legacy gateway services (launchd/systemd/schtasks) and offers to remove them and install the OpenClaw service using the current gateway port. It can also scan for extra gateway-like services and print cleanup hints. Profile-named OpenClaw gateway services are considered first-class and are not flagged as "extra."
 
+    On macOS, when the OpenClaw.app LaunchAgent `ai.openclaw.mac` is installed or loaded, doctor keeps launchd ownership with the app and skips standalone gateway LaunchAgent bootstrap, install, start, restart, and service config rewrite.
+
     On Linux, if the user-level gateway service is missing but a system-level OpenClaw gateway service exists, doctor does not install a second user-level service automatically. Inspect with `openclaw gateway status --deep` or `openclaw doctor --deep`, then remove the duplicate or set `OPENCLAW_SERVICE_REPAIR_POLICY=external` when a system supervisor owns the gateway lifecycle.
 
   </Accordion>
@@ -447,6 +449,7 @@ That stages grounded durable candidates into the short-term dreaming store while
     - `openclaw doctor --repair` applies recommended fixes without prompts.
     - `openclaw doctor --repair --force` overwrites custom supervisor configs.
     - `OPENCLAW_SERVICE_REPAIR_POLICY=external` keeps doctor read-only for gateway service lifecycle. It still reports service health and runs non-service repairs, but skips service install/start/restart/bootstrap, supervisor config rewrites, and legacy service cleanup because an external supervisor owns that lifecycle.
+    - On macOS, doctor also keeps service lifecycle read-only when the OpenClaw.app LaunchAgent `ai.openclaw.mac` is installed or loaded, because the app owns the local runtime path.
     - On Linux, doctor does not rewrite command/entrypoint metadata while the matching systemd gateway unit is active. It also ignores inactive non-legacy extra gateway-like units during the duplicate-service scan so companion service files do not create cleanup noise.
     - If token auth requires a token and `gateway.auth.token` is SecretRef-managed, doctor service install/repair validates the SecretRef but does not persist resolved plaintext token values into supervisor service environment metadata.
     - Doctor detects managed `.env`/SecretRef-backed service environment values that older LaunchAgent, systemd, or Windows Scheduled Task installs embedded inline and rewrites the service metadata so those values load from the runtime source instead of the supervisor definition.

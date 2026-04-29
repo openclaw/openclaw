@@ -34,6 +34,7 @@ const mocks = vi.hoisted(() => ({
   resolveGatewayPort: vi.fn(() => 18789),
   resolveIsNixMode: vi.fn(() => false),
   findExtraGatewayServices: vi.fn().mockResolvedValue([]),
+  findMacAppLaunchAgentOwnership: vi.fn().mockResolvedValue(null),
   renderGatewayServiceCleanupHints: vi.fn().mockReturnValue([]),
   isSystemdUnitActive: vi.fn().mockResolvedValue(false),
   uninstallLegacySystemdUnits: vi.fn().mockResolvedValue([]),
@@ -55,6 +56,7 @@ vi.mock("../config/config.js", async () => {
 
 vi.mock("../daemon/inspect.js", () => ({
   findExtraGatewayServices: mocks.findExtraGatewayServices,
+  findMacAppLaunchAgentOwnership: mocks.findMacAppLaunchAgentOwnership,
   renderGatewayServiceCleanupHints: mocks.renderGatewayServiceCleanupHints,
 }));
 
@@ -244,6 +246,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
     fsMocks.realpath.mockImplementation(async (value: string) => value);
     mocks.resolveGatewayPort.mockReturnValue(18789);
     mocks.isSystemdUnitActive.mockResolvedValue(false);
+    mocks.findMacAppLaunchAgentOwnership.mockResolvedValue(null);
     mocks.resolveGatewayAuthTokenForService.mockImplementation(async (cfg: OpenClawConfig, env) => {
       const configToken =
         typeof cfg.gateway?.auth?.token === "string" ? cfg.gateway.auth.token.trim() : undefined;
@@ -900,6 +903,42 @@ describe("maybeRepairGatewayServiceConfig", () => {
       expect(mocks.stage).not.toHaveBeenCalled();
       expect(mocks.install).not.toHaveBeenCalled();
     });
+  });
+
+  it("reports service config drift but skips rewrite when OpenClaw.app owns launchd", async () => {
+    mockProcessPlatform("darwin");
+    mocks.findMacAppLaunchAgentOwnership.mockResolvedValue({
+      platform: "darwin",
+      label: "ai.openclaw.mac",
+      installed: true,
+      loaded: true,
+      detail:
+        "plist: /Users/test/Library/LaunchAgents/ai.openclaw.mac.plist, loaded: gui/501/ai.openclaw.mac",
+      plistPath: "/Users/test/Library/LaunchAgents/ai.openclaw.mac.plist",
+    });
+    setupGatewayEntrypointRepairScenario({
+      currentEntrypoint: "/Users/test/Library/npm/node_modules/openclaw/dist/entry.js",
+      installEntrypoint: "/Users/test/Library/npm/node_modules/openclaw/dist/index.js",
+      installWorkingDirectory: "/tmp",
+    });
+
+    await runRepair({ gateway: {} });
+
+    expect(mocks.note).toHaveBeenCalledWith(
+      expect.stringContaining("Gateway service entrypoint does not match the current install."),
+      "Gateway service config",
+    );
+    expect(mocks.note).toHaveBeenCalledWith(
+      expect.stringContaining("OpenClaw.app LaunchAgent ai.openclaw.mac is installed and loaded."),
+      "Gateway ownership",
+    );
+    expect(mocks.note).toHaveBeenCalledWith(
+      expect.stringContaining("Skipped gateway service config rewrite."),
+      "Gateway ownership",
+    );
+    expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
+    expect(mocks.stage).not.toHaveBeenCalled();
+    expect(mocks.install).not.toHaveBeenCalled();
   });
 });
 

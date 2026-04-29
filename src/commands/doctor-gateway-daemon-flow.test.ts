@@ -1,5 +1,5 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ExtraGatewayService } from "../daemon/inspect.js";
+import type { ExtraGatewayService, MacAppLaunchAgentOwnership } from "../daemon/inspect.js";
 import * as launchd from "../daemon/launchd.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createDoctorPrompter } from "./doctor-prompter.js";
@@ -18,6 +18,9 @@ const sleep = vi.hoisted(() => vi.fn(async () => {}));
 const healthCommand = vi.hoisted(() => vi.fn(async () => {}));
 const inspectPortUsage = vi.hoisted(() => vi.fn());
 const readLastGatewayErrorLine = vi.hoisted(() => vi.fn(async () => null));
+const findMacAppLaunchAgentOwnership = vi.hoisted(() =>
+  vi.fn<() => Promise<MacAppLaunchAgentOwnership | null>>(async () => null),
+);
 const findSystemGatewayServices = vi.hoisted(() =>
   vi.fn<() => Promise<ExtraGatewayService[]>>(async () => []),
 );
@@ -31,7 +34,15 @@ vi.mock("../config/config.js", async () => {
 });
 
 vi.mock("../daemon/constants.js", () => ({
-  resolveGatewayLaunchAgentLabel: vi.fn(() => "ai.openclaw.gateway"),
+  GATEWAY_LAUNCH_AGENT_LABEL: "ai.openclaw.gateway",
+  MAC_APP_LAUNCH_AGENT_LABEL: "ai.openclaw.mac",
+  resolveGatewayLaunchAgentLabel: vi.fn((profile?: string) => {
+    const normalized = profile?.trim();
+    if (!normalized || normalized.toLowerCase() === "default") {
+      return "ai.openclaw.gateway";
+    }
+    return `ai.openclaw.${normalized}`;
+  }),
   resolveNodeLaunchAgentLabel: vi.fn(() => "ai.openclaw.node"),
 }));
 
@@ -52,6 +63,7 @@ vi.mock("../daemon/launchd.js", async () => {
 });
 
 vi.mock("../daemon/inspect.js", () => ({
+  findMacAppLaunchAgentOwnership,
   findSystemGatewayServices,
 }));
 
@@ -134,7 +146,14 @@ describe("maybeRepairGatewayDaemon", () => {
     service.isLoaded.mockResolvedValue(true);
     service.readRuntime.mockResolvedValue({ status: "running" });
     service.restart.mockResolvedValue({ outcome: "completed" });
+    findMacAppLaunchAgentOwnership.mockResolvedValue(null);
     findSystemGatewayServices.mockResolvedValue([]);
+    vi.mocked(launchd.isLaunchAgentLoaded).mockResolvedValue(false);
+    vi.mocked(launchd.launchAgentPlistExists).mockResolvedValue(false);
+    vi.mocked(launchd.repairLaunchAgentBootstrap).mockResolvedValue({
+      ok: true,
+      status: "repaired",
+    });
     inspectPortUsage.mockResolvedValue({
       port: 18789,
       status: "free",
@@ -338,5 +357,71 @@ describe("maybeRepairGatewayDaemon", () => {
     expect(launchd.repairLaunchAgentBootstrap).not.toHaveBeenCalled();
     expect(service.install).not.toHaveBeenCalled();
     expect(note).toHaveBeenCalledWith(EXTERNAL_SERVICE_REPAIR_NOTE, "Gateway LaunchAgent");
+  });
+
+  it("skips gateway LaunchAgent install when OpenClaw.app owns launchd", async () => {
+    setPlatform("darwin");
+    service.isLoaded.mockResolvedValue(false);
+    findMacAppLaunchAgentOwnership.mockResolvedValue({
+      platform: "darwin",
+      label: "ai.openclaw.mac",
+      installed: true,
+      loaded: false,
+      detail: "plist: /Users/test/Library/LaunchAgents/ai.openclaw.mac.plist",
+      plistPath: "/Users/test/Library/LaunchAgents/ai.openclaw.mac.plist",
+    });
+
+    await runAutoRepair();
+
+    expect(launchd.repairLaunchAgentBootstrap).not.toHaveBeenCalled();
+    expect(service.install).not.toHaveBeenCalled();
+    expect(service.restart).not.toHaveBeenCalled();
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining("OpenClaw.app LaunchAgent ai.openclaw.mac is installed."),
+      "Gateway ownership",
+    );
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining("Skipped CLI gateway LaunchAgent bootstrap/install/start/restart."),
+      "Gateway ownership",
+    );
+  });
+
+  it("skips gateway LaunchAgent restart when OpenClaw.app is loaded", async () => {
+    setPlatform("darwin");
+    findMacAppLaunchAgentOwnership.mockResolvedValue({
+      platform: "darwin",
+      label: "ai.openclaw.mac",
+      installed: true,
+      loaded: true,
+      detail:
+        "plist: /Users/test/Library/LaunchAgents/ai.openclaw.mac.plist, loaded: gui/501/ai.openclaw.mac",
+      plistPath: "/Users/test/Library/LaunchAgents/ai.openclaw.mac.plist",
+    });
+
+    await runAutoRepair();
+
+    expect(service.restart).not.toHaveBeenCalled();
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining("OpenClaw.app LaunchAgent ai.openclaw.mac is installed and loaded."),
+      "Gateway ownership",
+    );
+  });
+
+  it("does not apply the app LaunchAgent owner check to other gateway profiles", async () => {
+    setPlatform("darwin");
+
+    await withEnvAsync({ OPENCLAW_PROFILE: "work" }, async () => {
+      await maybeRepairGatewayDaemon({
+        cfg: { gateway: {} },
+        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+        prompter: createPrompter(() => false),
+        options: { deep: false },
+        gatewayDetailsMessage: "details",
+        healthOk: false,
+      });
+    });
+
+    expect(findMacAppLaunchAgentOwnership).not.toHaveBeenCalled();
+    expect(service.restart).not.toHaveBeenCalled();
   });
 });

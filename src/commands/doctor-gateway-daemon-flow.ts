@@ -6,7 +6,11 @@ import {
   resolveNodeLaunchAgentLabel,
 } from "../daemon/constants.js";
 import { readLastGatewayErrorLine } from "../daemon/diagnostics.js";
-import { findSystemGatewayServices, type ExtraGatewayService } from "../daemon/inspect.js";
+import {
+  findMacAppLaunchAgentOwnership,
+  findSystemGatewayServices,
+  type ExtraGatewayService,
+} from "../daemon/inspect.js";
 import {
   isLaunchAgentLoaded,
   launchAgentPlistExists,
@@ -32,8 +36,10 @@ import {
   confirmDoctorServiceRepair,
   EXTERNAL_SERVICE_REPAIR_NOTE,
   isServiceRepairExternallyManaged,
+  renderMacAppLaunchAgentRepairSkip,
   resolveServiceRepairPolicy,
   SERVICE_REPAIR_POLICY_ENV,
+  shouldMacAppLaunchAgentOwnGatewayRepair,
 } from "./doctor-service-repair-policy.js";
 import { resolveGatewayInstallToken } from "./gateway-install-token.js";
 import { formatHealthCheckFailure } from "./health-format.js";
@@ -118,6 +124,22 @@ export async function maybeRepairGatewayDaemon(params: {
   const serviceRepairPolicy = resolveServiceRepairPolicy();
   const serviceRepairExternal = isServiceRepairExternallyManaged(serviceRepairPolicy);
   const service = resolveGatewayService();
+  const canMacAppOwnGatewayLaunchd =
+    process.platform === "darwin" &&
+    params.cfg.gateway?.mode !== "remote" &&
+    shouldMacAppLaunchAgentOwnGatewayRepair(process.env);
+  const macAppLaunchAgentOwnership = canMacAppOwnGatewayLaunchd
+    ? await findMacAppLaunchAgentOwnership(process.env).catch(() => null)
+    : null;
+  if (macAppLaunchAgentOwnership) {
+    note(
+      renderMacAppLaunchAgentRepairSkip(macAppLaunchAgentOwnership, {
+        env: process.env,
+        skippedAction: "CLI gateway LaunchAgent bootstrap/install/start/restart",
+      }),
+      "Gateway ownership",
+    );
+  }
   // systemd can throw in containers/WSL; treat as "not loaded" and fall back to hints.
   let loaded = false;
   try {
@@ -130,7 +152,11 @@ export async function maybeRepairGatewayDaemon(params: {
     serviceRuntime = await service.readRuntime(process.env).catch(() => undefined);
   }
 
-  if (process.platform === "darwin" && params.cfg.gateway?.mode !== "remote") {
+  if (
+    process.platform === "darwin" &&
+    params.cfg.gateway?.mode !== "remote" &&
+    !macAppLaunchAgentOwnership
+  ) {
     const gatewayRepaired = await maybeRepairLaunchAgentBootstrap({
       env: process.env,
       title: "Gateway",
@@ -167,6 +193,10 @@ export async function maybeRepairGatewayDaemon(params: {
         note(`Last gateway error: ${lastError}`, "Gateway");
       }
     }
+  }
+
+  if (macAppLaunchAgentOwnership) {
+    return;
   }
 
   if (!loaded) {

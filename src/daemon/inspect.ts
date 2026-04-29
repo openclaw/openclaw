@@ -4,10 +4,12 @@ import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import {
   GATEWAY_SERVICE_KIND,
   GATEWAY_SERVICE_MARKER,
+  MAC_APP_LAUNCH_AGENT_LABEL,
   resolveGatewayLaunchAgentLabel,
   resolveGatewaySystemdServiceName,
   resolveGatewayWindowsTaskName,
 } from "./constants.js";
+import { execFileUtf8 } from "./exec-file.js";
 import { resolveHomeDir } from "./paths.js";
 import { execSchtasks } from "./schtasks-exec.js";
 import { parseSystemdExecStart } from "./systemd-unit.js";
@@ -23,6 +25,15 @@ export type ExtraGatewayService = {
 
 export type FindExtraGatewayServicesOptions = {
   deep?: boolean;
+};
+
+export type MacAppLaunchAgentOwnership = {
+  platform: "darwin";
+  label: typeof MAC_APP_LAUNCH_AGENT_LABEL;
+  installed: boolean;
+  loaded: boolean;
+  detail: string;
+  plistPath?: string;
 };
 
 const EXTRA_MARKERS = ["openclaw", "clawdbot"] as const;
@@ -219,6 +230,83 @@ function tryExtractPlistLabel(contents: string): string | null {
     return null;
   }
   return match[1]?.trim() || null;
+}
+
+function resolveLaunchdGuiDomain(): string {
+  if (typeof process.getuid !== "function") {
+    return "gui/501";
+  }
+  return `gui/${process.getuid()}`;
+}
+
+type LaunchdPlistMatch = {
+  plistPath: string;
+};
+
+async function findLaunchdPlistByLabel(params: {
+  dir: string;
+  label: string;
+}): Promise<LaunchdPlistMatch | null> {
+  const entries = (await readDirEntries(params.dir)).toSorted();
+  for (const entry of entries) {
+    if (!entry.endsWith(".plist")) {
+      continue;
+    }
+    const fullPath = path.join(params.dir, entry);
+    const contents = await readUtf8File(fullPath);
+    if (contents === null) {
+      continue;
+    }
+    const labelFromName = entry.slice(0, -".plist".length);
+    const label = tryExtractPlistLabel(contents) ?? labelFromName;
+    if (label !== params.label) {
+      continue;
+    }
+    return { plistPath: fullPath };
+  }
+  return null;
+}
+
+async function isLaunchdLabelLoaded(label: string): Promise<boolean> {
+  const domain = resolveLaunchdGuiDomain();
+  const res = await execFileUtf8("launchctl", ["print", `${domain}/${label}`]);
+  return res.code === 0;
+}
+
+export async function findMacAppLaunchAgentOwnership(
+  env: Record<string, string | undefined>,
+): Promise<MacAppLaunchAgentOwnership | null> {
+  if (process.platform !== "darwin") {
+    return null;
+  }
+
+  const home = resolveHomeDir(env);
+  const launchdDir = path.join(home, "Library", "LaunchAgents");
+  const [plist, loaded] = await Promise.all([
+    findLaunchdPlistByLabel({
+      dir: launchdDir,
+      label: MAC_APP_LAUNCH_AGENT_LABEL,
+    }).catch(() => null),
+    isLaunchdLabelLoaded(MAC_APP_LAUNCH_AGENT_LABEL).catch(() => false),
+  ]);
+
+  if (!plist && !loaded) {
+    return null;
+  }
+
+  const detail = [
+    ...(plist ? [`plist: ${plist.plistPath}`] : []),
+    ...(loaded ? [`loaded: ${resolveLaunchdGuiDomain()}/${MAC_APP_LAUNCH_AGENT_LABEL}`] : []),
+  ].join(", ");
+
+  return {
+    platform: "darwin",
+    label: MAC_APP_LAUNCH_AGENT_LABEL,
+    installed: plist !== null,
+    loaded,
+    detail,
+    ...(plist ? { plistPath: plist.plistPath } : {}),
+  };
 }
 
 function isIgnoredLaunchdLabel(label: string): boolean {

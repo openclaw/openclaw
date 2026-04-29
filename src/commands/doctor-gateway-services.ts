@@ -8,6 +8,7 @@ import { resolveGatewayPort, resolveIsNixMode } from "../config/paths.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
 import {
   findExtraGatewayServices,
+  findMacAppLaunchAgentOwnership,
   renderGatewayServiceCleanupHints,
   type ExtraGatewayService,
 } from "../daemon/inspect.js";
@@ -41,7 +42,9 @@ import {
   confirmDoctorServiceRepair,
   EXTERNAL_SERVICE_REPAIR_NOTE,
   isServiceRepairExternallyManaged,
+  renderMacAppLaunchAgentRepairSkip,
   resolveServiceRepairPolicy,
+  shouldMacAppLaunchAgentOwnGatewayRepair,
 } from "./doctor-service-repair-policy.js";
 
 const execFileAsync = promisify(execFile);
@@ -463,9 +466,6 @@ export async function maybeRepairGatewayServiceConfig(
     return;
   }
 
-  const serviceRepairPolicy = resolveServiceRepairPolicy();
-  const serviceRepairExternal = isServiceRepairExternallyManaged(serviceRepairPolicy);
-
   note(
     audit.issues
       .map((issue) =>
@@ -484,6 +484,25 @@ export async function maybeRepairGatewayServiceConfig(
       "Gateway service config",
     );
   }
+
+  if (process.platform === "darwin" && shouldMacAppLaunchAgentOwnGatewayRepair(process.env)) {
+    const macAppLaunchAgentOwnership = await findMacAppLaunchAgentOwnership(process.env).catch(
+      () => null,
+    );
+    if (macAppLaunchAgentOwnership) {
+      note(
+        renderMacAppLaunchAgentRepairSkip(macAppLaunchAgentOwnership, {
+          env: process.env,
+          skippedAction: "gateway service config rewrite",
+        }),
+        "Gateway ownership",
+      );
+      return;
+    }
+  }
+
+  const serviceRepairPolicy = resolveServiceRepairPolicy();
+  const serviceRepairExternal = isServiceRepairExternallyManaged(serviceRepairPolicy);
 
   if (serviceRepairExternal) {
     note(EXTERNAL_SERVICE_REPAIR_NOTE, "Gateway service config");

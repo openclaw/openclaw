@@ -2,15 +2,33 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { detectMarkerLineWithGateway, findExtraGatewayServices } from "./inspect.js";
+import {
+  detectMarkerLineWithGateway,
+  findExtraGatewayServices,
+  findMacAppLaunchAgentOwnership,
+} from "./inspect.js";
 
-const { execSchtasksMock } = vi.hoisted(() => ({
+const { execFileUtf8Mock, execSchtasksMock } = vi.hoisted(() => ({
+  execFileUtf8Mock: vi.fn(),
   execSchtasksMock: vi.fn(),
+}));
+
+vi.mock("./exec-file.js", () => ({
+  execFileUtf8: (...args: unknown[]) => execFileUtf8Mock(...args),
 }));
 
 vi.mock("./schtasks-exec.js", () => ({
   execSchtasks: (...args: unknown[]) => execSchtasksMock(...args),
 }));
+
+beforeEach(() => {
+  execFileUtf8Mock.mockReset();
+  execFileUtf8Mock.mockResolvedValue({
+    code: 1,
+    stdout: "",
+    stderr: "not loaded",
+  });
+});
 
 // Real content from the openclaw-gateway.service unit file (the canonical gateway unit).
 const GATEWAY_SERVICE_CONTENTS = `\
@@ -292,6 +310,100 @@ describe("findExtraGatewayServices (darwin / scanLaunchdDir) — real filesystem
           legacy: false,
         },
       ]);
+    } finally {
+      await fs.rm(tmpHome, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("findMacAppLaunchAgentOwnership", () => {
+  const originalPlatform = process.platform;
+
+  beforeEach(() => {
+    Object.defineProperty(process, "platform", {
+      configurable: true,
+      value: "darwin",
+    });
+  });
+
+  afterEach(() => {
+    Object.defineProperty(process, "platform", {
+      configurable: true,
+      value: originalPlatform,
+    });
+  });
+
+  it("detects an installed OpenClaw.app LaunchAgent by exact plist label", async () => {
+    const tmpHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-test-"));
+    const launchdDir = path.join(tmpHome, "Library", "LaunchAgents");
+    const plistPath = path.join(launchdDir, "ai.openclaw.mac.plist");
+    try {
+      await fs.mkdir(launchdDir, { recursive: true });
+      await fs.writeFile(
+        plistPath,
+        `<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0"><dict>
+<key>Label</key><string>ai.openclaw.mac</string>
+<key>ProgramArguments</key><array><string>/Applications/OpenClaw.app/Contents/MacOS/OpenClaw</string></array>
+</dict></plist>`,
+      );
+
+      const result = await findMacAppLaunchAgentOwnership({ HOME: tmpHome });
+
+      expect(result).toMatchObject({
+        platform: "darwin",
+        label: "ai.openclaw.mac",
+        installed: true,
+        loaded: false,
+        plistPath,
+      });
+      expect(result?.detail).toContain(`plist: ${plistPath}`);
+    } finally {
+      await fs.rm(tmpHome, { recursive: true, force: true });
+    }
+  });
+
+  it("detects a loaded OpenClaw.app LaunchAgent without requiring a plist", async () => {
+    const tmpHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-test-"));
+    try {
+      execFileUtf8Mock.mockResolvedValueOnce({
+        code: 0,
+        stdout: "",
+        stderr: "",
+      });
+
+      const result = await findMacAppLaunchAgentOwnership({ HOME: tmpHome });
+
+      expect(result).toMatchObject({
+        platform: "darwin",
+        label: "ai.openclaw.mac",
+        installed: false,
+        loaded: true,
+      });
+      expect(result?.detail).toContain("loaded: ");
+      expect(result?.detail).toContain("/ai.openclaw.mac");
+    } finally {
+      await fs.rm(tmpHome, { recursive: true, force: true });
+    }
+  });
+
+  it("does not confuse nearby profile labels with the app LaunchAgent", async () => {
+    const tmpHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-test-"));
+    const launchdDir = path.join(tmpHome, "Library", "LaunchAgents");
+    try {
+      await fs.mkdir(launchdDir, { recursive: true });
+      await fs.writeFile(
+        path.join(launchdDir, "ai.openclaw.macbook.plist"),
+        `<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0"><dict>
+<key>Label</key><string>ai.openclaw.macbook</string>
+<key>ProgramArguments</key><array><string>/usr/local/bin/openclaw</string><string>gateway</string></array>
+</dict></plist>`,
+      );
+
+      const result = await findMacAppLaunchAgentOwnership({ HOME: tmpHome });
+
+      expect(result).toBeNull();
     } finally {
       await fs.rm(tmpHome, { recursive: true, force: true });
     }
