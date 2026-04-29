@@ -10,10 +10,17 @@ import {
   loadAuthProfileStoreForRuntime,
 } from "../agents/auth-profiles.js";
 import { updateAuthProfileStoreWithLock } from "../agents/auth-profiles/store.js";
+import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveMemorySearchConfig } from "../agents/memory-search.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
+import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
+import {
+  buildModelAliasIndex,
+  resolveModelRefFromString,
+} from "../agents/model-selection-shared.js";
 import {
   completeWithPreparedSimpleCompletionModel,
+  prepareSimpleCompletionModel,
   prepareSimpleCompletionModelForAgent,
 } from "../agents/simple-completion-runtime.js";
 import { getRuntimeConfig } from "../config/config.js";
@@ -573,6 +580,37 @@ function requireProviderModelOverride(
   };
 }
 
+function resolveQualifiedModelRunOverride(params: {
+  cfg: OpenClawConfig;
+  raw: string | undefined;
+}): { provider: string; model: string; profileId?: string } | undefined {
+  const trimmed = params.raw?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  const split = splitTrailingAuthProfile(trimmed);
+  if (!split.model.includes("/")) {
+    return undefined;
+  }
+  const aliasIndex = buildModelAliasIndex({
+    cfg: params.cfg,
+    defaultProvider: DEFAULT_PROVIDER,
+  });
+  const resolved = resolveModelRefFromString({
+    raw: split.model,
+    defaultProvider: DEFAULT_PROVIDER,
+    aliasIndex,
+  });
+  if (!resolved || resolved.alias || resolved.ref.provider === "codex") {
+    return undefined;
+  }
+  return {
+    provider: resolved.ref.provider,
+    model: resolved.ref.model,
+    ...(split.profile ? { profileId: split.profile } : {}),
+  };
+}
+
 function collectModelRunText(content: Array<{ type: string; text?: string }>): string {
   return content
     .map((block) => (block.type === "text" && typeof block.text === "string" ? block.text : ""))
@@ -644,17 +682,35 @@ async function runModelRun(params: {
         ]
       : params.prompt;
   if (params.transport === "local") {
-    const prepared = await prepareSimpleCompletionModelForAgent({
+    const override = resolveQualifiedModelRunOverride({
       cfg,
-      agentId,
-      modelRef: params.model,
-      allowMissingApiKeyModes: ["aws-sdk"],
-      skipPiDiscovery: true,
+      raw: params.model,
     });
+    const agentDir = resolveAgentDir(cfg, agentId);
+    const prepared = override
+      ? await prepareSimpleCompletionModel({
+          cfg,
+          provider: override.provider,
+          modelId: override.model,
+          agentDir,
+          ...(override.profileId ? { profileId: override.profileId } : {}),
+          allowMissingApiKeyModes: ["aws-sdk"],
+          skipPiDiscovery: true,
+        })
+      : await prepareSimpleCompletionModelForAgent({
+          cfg,
+          agentId,
+          modelRef: params.model,
+          allowMissingApiKeyModes: ["aws-sdk"],
+          skipPiDiscovery: true,
+        });
     if ("error" in prepared) {
       throw new Error(prepared.error);
     }
-    if (prepared.selection.provider === "codex") {
+    const selectedProvider =
+      "selection" in prepared ? prepared.selection.provider : prepared.model.provider;
+    const selectedModel = "selection" in prepared ? prepared.selection.modelId : prepared.model.id;
+    if (selectedProvider === "codex") {
       throw new Error(
         'The codex provider is served by the Codex app-server agent runtime, not the local simple-completion transport. Use an openai/<model> ref with agents.defaults.agentRuntime.id: "codex", run through the gateway, or use /codex commands.',
       );
@@ -682,15 +738,15 @@ async function runModelRun(params: {
     const text = collectModelRunText(result.content);
     if (!text) {
       throw new Error(
-        `No text output returned for provider "${prepared.selection.provider}" model "${prepared.selection.modelId}".`,
+        `No text output returned for provider "${selectedProvider}" model "${selectedModel}".`,
       );
     }
     return {
       ok: true,
       capability: "model.run",
       transport: "local" as const,
-      provider: prepared.selection.provider,
-      model: prepared.selection.modelId,
+      provider: selectedProvider,
+      model: selectedModel,
       attempts: [],
       ...(imageFiles.length > 0
         ? {

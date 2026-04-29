@@ -37,6 +37,20 @@ const mocks = vi.hoisted(() => ({
   ),
   resolveMemorySearchConfig: vi.fn(() => null),
   loadModelCatalog: vi.fn(async () => []),
+  prepareSimpleCompletionModel: vi.fn(
+    async ({ provider, modelId }: { provider: string; modelId: string }) => ({
+      model: {
+        provider,
+        id: modelId,
+        maxTokens: 128,
+      },
+      auth: {
+        apiKey: "sk-test",
+        source: "env:TEST_API_KEY",
+        mode: "api-key",
+      },
+    }),
+  ),
   prepareSimpleCompletionModelForAgent: vi.fn(async () => ({
     selection: {
       provider: "openai",
@@ -161,6 +175,8 @@ vi.mock("../agents/model-catalog.js", () => ({
 }));
 
 vi.mock("../agents/simple-completion-runtime.js", () => ({
+  prepareSimpleCompletionModel:
+    mocks.prepareSimpleCompletionModel as unknown as typeof import("../agents/simple-completion-runtime.js").prepareSimpleCompletionModel,
   prepareSimpleCompletionModelForAgent:
     mocks.prepareSimpleCompletionModelForAgent as unknown as typeof import("../agents/simple-completion-runtime.js").prepareSimpleCompletionModelForAgent,
   completeWithPreparedSimpleCompletionModel:
@@ -308,6 +324,7 @@ describe("capability cli", () => {
         return store;
       });
     mocks.resolveMemorySearchConfig.mockReset().mockReturnValue(null);
+    mocks.prepareSimpleCompletionModel.mockClear();
     mocks.prepareSimpleCompletionModelForAgent.mockClear();
     mocks.completeWithPreparedSimpleCompletionModel.mockClear();
     mocks.callGateway.mockClear().mockImplementation((async ({ method }: { method: string }) => {
@@ -414,6 +431,82 @@ describe("capability cli", () => {
             }),
           ],
         },
+      }),
+    );
+  });
+
+  it("prepares qualified local model probe overrides directly", async () => {
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: [
+        "capability",
+        "model",
+        "run",
+        "--prompt",
+        "hello",
+        "--model",
+        "github-copilot/gemini-3-flash-preview",
+        "--json",
+      ],
+    });
+
+    expect(mocks.prepareSimpleCompletionModel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "github-copilot",
+        modelId: "gemini-3-flash-preview",
+        agentDir: "/tmp/agent",
+        allowMissingApiKeyModes: ["aws-sdk"],
+        skipPiDiscovery: true,
+      }),
+    );
+    expect(mocks.prepareSimpleCompletionModelForAgent).not.toHaveBeenCalled();
+    expect(mocks.completeWithPreparedSimpleCompletionModel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: expect.objectContaining({
+          provider: "github-copilot",
+          id: "gemini-3-flash-preview",
+        }),
+      }),
+    );
+    expect(mocks.runtime.writeJson).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "github-copilot",
+        model: "gemini-3-flash-preview",
+      }),
+    );
+  });
+
+  it("keeps slash-form model aliases on the agent-aware local path", async () => {
+    mocks.loadConfig.mockReturnValueOnce({
+      agents: {
+        defaults: {
+          models: {
+            "openai/xiaomi/mimo-v2-pro-mit": {
+              alias: "xiaomi/mimo-v2-pro-mit",
+            },
+          },
+        },
+      },
+    });
+
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: [
+        "capability",
+        "model",
+        "run",
+        "--prompt",
+        "hello",
+        "--model",
+        "xiaomi/mimo-v2-pro-mit",
+        "--json",
+      ],
+    });
+
+    expect(mocks.prepareSimpleCompletionModel).not.toHaveBeenCalled();
+    expect(mocks.prepareSimpleCompletionModelForAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        modelRef: "xiaomi/mimo-v2-pro-mit",
       }),
     );
   });
@@ -693,6 +786,37 @@ describe("capability cli", () => {
         params: expect.objectContaining({
           provider: "anthropic",
           model: "claude-haiku-4-5",
+          modelRun: true,
+          promptMode: "none",
+        }),
+      }),
+    );
+  });
+
+  it("passes github copilot model probe overrides to gateway dispatch", async () => {
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: [
+        "capability",
+        "model",
+        "run",
+        "--prompt",
+        "hello",
+        "--gateway",
+        "--model",
+        "github-copilot/gpt-5.3-codex",
+        "--json",
+      ],
+    });
+
+    expect(mocks.callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        clientName: "gateway-client",
+        mode: "backend",
+        scopes: ["operator.admin"],
+        params: expect.objectContaining({
+          provider: "github-copilot",
+          model: "gpt-5.3-codex",
           modelRun: true,
           promptMode: "none",
         }),
