@@ -76,7 +76,10 @@ steps:
         lark-cli --version
         echo
         echo "=== Boot gateway ==="
-        node /app/openclaw.mjs gateway --allow-unconfigured 2>&1 | tee /tmp/gw.log &
+        # Run gateway directly (no pipeline) so $! is the node PID, not tee's.
+        # SIGKILL is required: the gateway intercepts SIGTERM as a soft-reload
+        # signal and won't exit, which would hang the build forever.
+        node /app/openclaw.mjs gateway --allow-unconfigured > /tmp/gw.log 2>&1 &
         gw_pid=$$!
         ok=0
         for i in $$(seq 1 90); do
@@ -88,8 +91,7 @@ steps:
           fi
           sleep 1
         done
-        kill $$gw_pid 2>/dev/null || true
-        wait 2>/dev/null || true
+        kill -9 $$gw_pid 2>/dev/null || true
         if [ "$$ok" -ne 1 ]; then
           echo "=== Gateway log (last 80 lines) ==="
           tail -80 /tmp/gw.log
