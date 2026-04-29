@@ -1,7 +1,11 @@
-// Intentional Knip unused-file findings. These are dynamic entrypoints,
-// generated/build inputs, manifest-discovered plugin surfaces, live-test
-// helpers, or package bridge files that static production scanning cannot see.
-export const KNIP_UNUSED_FILE_ALLOWLIST = [
+// Intentional Knip unused-file findings. Keep this list empty unless static
+// production scanning reports dynamic entrypoints that must remain allowed.
+export const KNIP_UNUSED_FILE_ALLOWLIST = [];
+
+// Knip can disagree across supported local/CI platforms for files that are
+// only reachable through test-only import graphs. Ignore these when reported,
+// but do not require them to be reported.
+export const KNIP_OPTIONAL_UNUSED_FILE_ALLOWLIST = [
   "extensions/diffs/src/viewer-client.ts",
   "extensions/diffs/src/viewer-payload.ts",
   "extensions/mattermost/src/config-schema.ts",
@@ -17,6 +21,7 @@ export const KNIP_UNUSED_FILE_ALLOWLIST = [
   "src/gateway/gateway-cli-backend.live-helpers.ts",
   "src/gateway/gateway-cli-backend.live-probe-helpers.ts",
   "src/gateway/gateway-codex-harness.live-helpers.ts",
+  "src/gateway/test/server-sessions-helpers.ts",
   "src/infra/changelog-unreleased.ts",
   "src/mcp/openclaw-tools-serve.ts",
   "src/mcp/plugin-tools-handlers.ts",
@@ -75,8 +80,3 @@ export const KNIP_UNUSED_FILE_ALLOWLIST = [
   "src/plugins/runtime-sidecar-paths-baseline.ts",
   "src/tasks/task-registry-control.runtime.ts",
 ];
-
-// Knip can disagree across supported local/CI platforms for files that are
-// only reachable through test-only import graphs. Ignore these when reported,
-// but do not require them to be reported.
-export const KNIP_OPTIONAL_UNUSED_FILE_ALLOWLIST = ["src/gateway/test/server-sessions-helpers.ts"];
