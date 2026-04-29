@@ -164,6 +164,8 @@ export function expectDirectMediaSend({
       mediaUrls,
     }),
   );
+  const firstCall = (sendMessageMock as { mock?: { calls?: unknown[][] } }).mock?.calls?.[0]?.[0];
+  expect(firstCall).not.toHaveProperty("mirror");
 }
 
 export function expectFallbackMediaAnnouncement({

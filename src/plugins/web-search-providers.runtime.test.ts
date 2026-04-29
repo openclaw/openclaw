@@ -4,7 +4,6 @@ type RegistryModule = typeof import("./registry.js");
 type RuntimeModule = typeof import("./runtime.js");
 type WebSearchProvidersRuntimeModule = typeof import("./web-search-providers.runtime.js");
 type ManifestRegistryModule = typeof import("./manifest-registry.js");
-type InstalledManifestRegistryModule = typeof import("./manifest-registry-installed.js");
 type PluginAutoEnableModule = typeof import("../config/plugin-auto-enable.js");
 type WebSearchProvidersSharedModule = typeof import("./web-search-providers.shared.js");
 
