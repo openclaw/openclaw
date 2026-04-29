@@ -2126,13 +2126,13 @@ describe("ensureBundledPluginRuntimeDeps", () => {
     ).toBe(true);
   });
 
-  it("treats a PID-alive lock with matching pidStartTimeMs as held by the same incarnation", () => {
+  it("treats a PID-alive lock with matching starttime as held by the same incarnation", () => {
     expect(
       bundledRuntimeDepsTesting.shouldRemoveRuntimeDepsLock(
-        { pid: 7, pidStartTimeMs: 1_000, createdAtMs: 2_000 },
+        { pid: 7, starttime: 1_000, createdAtMs: 2_000 },
         2_500,
         () => true,
-        // Live PID's start-time matches owner.pidStartTimeMs → same process
+        // Live PID's starttime matches the lock owner, so this is the same process.
         () => 1_000,
       ),
     ).toBe(false);
@@ -2146,24 +2146,24 @@ describe("ensureBundledPluginRuntimeDeps", () => {
     // the live PID's start-time disambiguates incarnations.
     expect(
       bundledRuntimeDepsTesting.shouldRemoveRuntimeDepsLock(
-        { pid: 7, pidStartTimeMs: 1_000, createdAtMs: 2_000 },
+        { pid: 7, starttime: 1_000, createdAtMs: 2_000 },
         2_500,
         () => true,
-        // Same PID, but a different incarnation started later → stale.
+        // Same PID, but a different incarnation started later.
         () => 9_000,
       ),
     ).toBe(true);
   });
 
   it("treats a PID-alive lock as fresh when start-time evidence cannot be read", () => {
-    // Defensive: when readProcessStartTimeMs returns null (legacy lock with
-    // no pidStartTimeMs, or a platform that does not expose it) we keep the
+    // Defensive: when getProcessStartTime returns null (legacy lock with no
+    // starttime, or a platform that does not expose it) we keep the
     // pre-existing behavior of trusting isAlive(pid). The only verified
     // disambiguation path is start-time evidence on both sides; without it
     // we err toward "still held" rather than risk stomping a real install.
     expect(
       bundledRuntimeDepsTesting.shouldRemoveRuntimeDepsLock(
-        { pid: 7, pidStartTimeMs: 1_000, createdAtMs: 0 },
+        { pid: 7, starttime: 1_000, createdAtMs: 0 },
         Number.MAX_SAFE_INTEGER,
         () => true,
         () => null,

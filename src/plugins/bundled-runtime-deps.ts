@@ -9,6 +9,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createLowDiskSpaceWarning } from "../infra/disk-space.js";
 import { resolveHomeRelativePath } from "../infra/home-dir.js";
 import { createNpmProjectInstallEnv } from "../infra/npm-install-env.js";
+import { getProcessStartTime } from "../shared/pid-alive.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { sanitizeTerminalText } from "../terminal/safe-text.js";
 import { beginBundledRuntimeDepsInstall } from "./bundled-runtime-deps-activity.js";
@@ -456,65 +457,11 @@ function isProcessAlive(pid: number): boolean {
   }
 }
 
-// Approximate epoch-ms when the current process started, captured once per
-// Node lifetime so the lock owner record carries a value that is stable
-// across `Date.now()` clock skew within the running process.
-const CURRENT_PROCESS_START_TIME_MS = Math.round(Date.now() - process.uptime() * 1000);
-
-// Approximate epoch-ms when `pid` started running, or null when the platform
-// or runtime cannot determine it. Used to distinguish two different process
-// incarnations that happen to share the same numeric PID — most notably
-// inside Docker containers, where the gateway is always PID 1 (or PID 7
-// with `init: true`) in its container PID namespace, so a stale lock left
-// by a previous incarnation looks live to the new one if we only consult
-// `isAlive(pid)`.
-function readProcessStartTimeMs(pid: number): number | null {
-  if (!Number.isInteger(pid) || pid <= 0) {
-    return null;
-  }
-  if (process.platform !== "linux") {
-    return null;
-  }
-  let stat: string;
-  try {
-    stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
-  } catch {
-    return null;
-  }
-  // /proc/<pid>/stat: PID (comm) state ppid pgrp ... starttime ... where
-  // `comm` may contain spaces and parens, so we anchor on the LAST `)` and
-  // count whitespace-separated fields after it. Field index 22 (1-based) is
-  // starttime, expressed in clock ticks since boot. After the `)` the next
-  // field is `state` (1), then ppid (2), pgrp (3), session (4), tty_nr (5),
-  // tpgid (6), flags (7), minflt (8), cminflt (9), majflt (10), cmajflt
-  // (11), utime (12), stime (13), cutime (14), cstime (15), priority (16),
-  // nice (17), num_threads (18), itrealvalue (19), starttime (20).
-  const lastParen = stat.lastIndexOf(")");
-  if (lastParen === -1) {
-    return null;
-  }
-  const tail = stat
-    .slice(lastParen + 1)
-    .trim()
-    .split(/\s+/);
-  // tail[0] is `state`; starttime is therefore tail[19].
-  const starttimeJiffies = Number(tail[19]);
-  if (!Number.isFinite(starttimeJiffies)) {
-    return null;
-  }
-  // sysconf(_SC_CLK_TCK) is universally 100 on Linux x86/arm targets. We
-  // hard-code that here rather than spawning getconf — the exact tick rate
-  // does not matter for our purposes as long as it is stable: the starttime
-  // we capture for our own process and the starttime we read for the
-  // lock-owner PID are converted with the same constant, so equality holds.
-  const clockTicksPerSecond = 100;
-  const bootTimeMs = Date.now() - os.uptime() * 1000;
-  return Math.round(bootTimeMs + (starttimeJiffies * 1000) / clockTicksPerSecond);
-}
+const CURRENT_PROCESS_STARTTIME = getProcessStartTime(process.pid);
 
 type RuntimeDepsLockOwner = {
   pid?: number;
-  pidStartTimeMs?: number;
+  starttime?: number;
   createdAtMs?: number;
   ownerFileState: "ok" | "missing" | "invalid";
   ownerFilePath: string;
@@ -558,7 +505,7 @@ function readRuntimeDepsLockOwner(lockDir: string): RuntimeDepsLockOwner {
   }
   return {
     pid: typeof owner?.pid === "number" ? owner.pid : undefined,
-    pidStartTimeMs: typeof owner?.pidStartTimeMs === "number" ? owner.pidStartTimeMs : undefined,
+    starttime: typeof owner?.starttime === "number" ? owner.starttime : undefined,
     createdAtMs: typeof owner?.createdAtMs === "number" ? owner.createdAtMs : undefined,
     ownerFileState,
     ownerFilePath,
@@ -584,26 +531,26 @@ function latestFiniteMs(values: readonly (number | undefined)[]): number | undef
 function shouldRemoveRuntimeDepsLock(
   owner: Pick<
     RuntimeDepsLockOwner,
-    "pid" | "pidStartTimeMs" | "createdAtMs" | "lockDirMtimeMs" | "ownerFileMtimeMs"
+    "pid" | "starttime" | "createdAtMs" | "lockDirMtimeMs" | "ownerFileMtimeMs"
   >,
   nowMs: number,
   isAlive: (pid: number) => boolean = isProcessAlive,
-  readStartTimeMs: (pid: number) => number | null = readProcessStartTimeMs,
+  readStarttime: (pid: number) => number | null = getProcessStartTime,
 ): boolean {
   if (typeof owner.pid === "number") {
     if (!isAlive(owner.pid)) {
       return true;
     }
-    // PID is alive — but inside Docker the new process can share the same
+    // PID is alive, but inside Docker the new process can share the same
     // PID as the dead writer. If we recorded the writer's start-time and we
     // can read the live PID's start-time, mismatch means a different
     // incarnation owns this PID now and the lock is stale. When start-time
     // evidence is unavailable on either side, fall through to the existing
     // PID-alive-means-fresh behavior so legacy locks keep working as
     // before.
-    if (typeof owner.pidStartTimeMs === "number") {
-      const liveStartTimeMs = readStartTimeMs(owner.pid);
-      if (liveStartTimeMs !== null && liveStartTimeMs !== owner.pidStartTimeMs) {
+    if (typeof owner.starttime === "number") {
+      const liveStarttime = readStarttime(owner.pid);
+      if (liveStarttime !== null && liveStarttime !== owner.starttime) {
         return true;
       }
     }
@@ -695,7 +642,9 @@ export function withBundledRuntimeDepsFilesystemLock<T>(
           `${JSON.stringify(
             {
               pid: process.pid,
-              pidStartTimeMs: CURRENT_PROCESS_START_TIME_MS,
+              ...(typeof CURRENT_PROCESS_STARTTIME === "number"
+                ? { starttime: CURRENT_PROCESS_STARTTIME }
+                : {}),
               createdAtMs: Date.now(),
             },
             null,
@@ -2476,7 +2425,9 @@ async function withBundledRuntimeDepsInstallRootLockAsync<T>(
           `${JSON.stringify(
             {
               pid: process.pid,
-              pidStartTimeMs: CURRENT_PROCESS_START_TIME_MS,
+              ...(typeof CURRENT_PROCESS_STARTTIME === "number"
+                ? { starttime: CURRENT_PROCESS_STARTTIME }
+                : {}),
               createdAtMs: Date.now(),
             },
             null,
