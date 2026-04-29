@@ -3,6 +3,7 @@ import path from "node:path";
 import "./monitor-inbox.test-harness.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { WhatsAppRetryableInboundError } from "./inbound/dedupe.js";
+import { WHATSAPP_GROUP_METADATA_CACHE_MAX_ENTRIES } from "./inbound/monitor.js";
 import {
   type InboxMonitorOptions,
   InboxOnMessage,
@@ -266,6 +267,37 @@ describe("web monitor inbox", () => {
     );
 
     await second.listener.close();
+  });
+
+  it("bounds cached group metadata kept across reconnects", async () => {
+    const groupMetadataCache: NonNullable<InboxMonitorOptions["groupMetadataCache"]> = new Map();
+    const groups = Object.fromEntries(
+      Array.from({ length: WHATSAPP_GROUP_METADATA_CACHE_MAX_ENTRIES + 2 }, (_, index) => [
+        `${index}@g.us`,
+        {
+          id: `${index}@g.us`,
+          subject: `Group ${index}`,
+          owner: undefined,
+          participants: [],
+        },
+      ]),
+    );
+    const sock = getSock();
+    sock.groupFetchAllParticipating.mockResolvedValueOnce(groups);
+
+    const { listener } = await startInboxMonitor(vi.fn(async () => {}) as InboxOnMessage, {
+      groupMetadataCache,
+    });
+
+    await vi.waitFor(() => {
+      expect(groupMetadataCache.size).toBe(WHATSAPP_GROUP_METADATA_CACHE_MAX_ENTRIES);
+    });
+    expect(groupMetadataCache.has("0@g.us")).toBe(false);
+    expect(groupMetadataCache.has(`${WHATSAPP_GROUP_METADATA_CACHE_MAX_ENTRIES + 1}@g.us`)).toBe(
+      true,
+    );
+
+    await listener.close();
   });
 
   it("does not block inbound listeners while group hydration is pending", async () => {

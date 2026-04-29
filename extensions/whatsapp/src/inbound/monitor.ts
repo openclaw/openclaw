@@ -46,8 +46,51 @@ import type { WebInboundMessage, WebListenerCloseReason } from "./types.js";
 
 const LOGGED_OUT_STATUS = DisconnectReason?.loggedOut ?? 401;
 const RECONNECT_IN_PROGRESS_ERROR = "no active socket - reconnection in progress";
+const GROUP_META_TTL_MS = 5 * 60 * 1000; // 5 minutes
+export const WHATSAPP_GROUP_METADATA_CACHE_MAX_ENTRIES = 500;
 
-export type WhatsAppGroupMetadataCache = Map<string, GroupMetadata>;
+export type WhatsAppGroupMetadataCacheEntry = {
+  subject?: string;
+  participants?: string[];
+  expires: number;
+};
+export type WhatsAppGroupMetadataCache = Map<string, WhatsAppGroupMetadataCacheEntry>;
+
+function rememberGroupMetadataCacheEntry(
+  cache: WhatsAppGroupMetadataCache,
+  jid: string,
+  entry: WhatsAppGroupMetadataCacheEntry,
+): void {
+  if (cache.has(jid)) {
+    cache.delete(jid);
+  }
+  cache.set(jid, entry);
+
+  while (cache.size > WHATSAPP_GROUP_METADATA_CACHE_MAX_ENTRIES) {
+    const oldest = cache.keys().next();
+    if (oldest.done) {
+      break;
+    }
+    cache.delete(oldest.value);
+  }
+}
+
+function readGroupMetadataCacheEntry(
+  cache: WhatsAppGroupMetadataCache,
+  jid: string,
+): WhatsAppGroupMetadataCacheEntry | null {
+  const entry = cache.get(jid);
+  if (!entry) {
+    return null;
+  }
+  if (entry.expires <= Date.now()) {
+    cache.delete(jid);
+    return null;
+  }
+  cache.delete(jid);
+  cache.set(jid, entry);
+  return entry;
+}
 
 function logWhatsAppVerbose(enabled: boolean | undefined, message: string) {
   if (!enabled) {
@@ -239,12 +282,8 @@ export async function attachWebInboxToSocket(
       inboundConsoleLog.error(`Failed handling inbound web message: ${String(err)}`);
     },
   });
-  const groupMetadataCache = options.groupMetadataCache ?? new Map<string, GroupMetadata>();
-  const groupMetaCache = new Map<
-    string,
-    { subject?: string; participants?: string[]; expires: number }
-  >();
-  const GROUP_META_TTL_MS = 5 * 60 * 1000; // 5 minutes
+  const groupMetadataCache = options.groupMetadataCache ?? new Map();
+  const groupMetaCache: WhatsAppGroupMetadataCache = new Map();
   const lidLookup = sock.signalRepository?.lidMapping;
 
   const resolveInboundJid = async (jid: string | null | undefined): Promise<string | null> =>
@@ -330,26 +369,25 @@ export async function attachWebInboxToSocket(
   };
 
   const getGroupMeta = async (jid: string) => {
-    const cached = groupMetaCache.get(jid);
-    if (cached && cached.expires > Date.now()) {
+    const cached = readGroupMetadataCacheEntry(groupMetaCache, jid);
+    if (cached) {
       return cached;
     }
     try {
       const meta = await sock.groupMetadata(jid);
-      groupMetadataCache.set(jid, meta);
       const entry = await summarizeGroupMeta(meta);
-      groupMetaCache.set(jid, entry);
+      rememberGroupMetadataCacheEntry(groupMetadataCache, jid, entry);
+      rememberGroupMetadataCacheEntry(groupMetaCache, jid, entry);
       return entry;
     } catch (err) {
-      const hydrated = groupMetadataCache.get(jid);
+      const hydrated = readGroupMetadataCacheEntry(groupMetadataCache, jid);
       if (hydrated) {
-        const entry = await summarizeGroupMeta(hydrated);
-        groupMetaCache.set(jid, entry);
+        rememberGroupMetadataCacheEntry(groupMetaCache, jid, hydrated);
         logWhatsAppVerbose(
           options.verbose,
           `Using cached group metadata for ${jid} after fetch failure: ${String(err)}`,
         );
-        return entry;
+        return hydrated;
       }
       logWhatsAppVerbose(
         options.verbose,
@@ -756,7 +794,7 @@ export async function attachWebInboxToSocket(
       const groups = await sock.groupFetchAllParticipating();
       for (const [jid, meta] of Object.entries(groups ?? {})) {
         if (meta) {
-          groupMetadataCache.set(jid, meta);
+          rememberGroupMetadataCacheEntry(groupMetadataCache, jid, await summarizeGroupMeta(meta));
         }
       }
       logWhatsAppVerbose(
