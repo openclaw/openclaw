@@ -33,6 +33,11 @@ export type OutboundSendContext = {
   agentId?: string;
   sessionKey?: string;
   requesterAccountId?: string;
+  groupId?: string | null;
+  groupChannel?: string | null;
+  groupSpace?: string | null;
+  trustGroupContext?: boolean;
+  verifiedGroupIds?: readonly string[];
   requesterSenderId?: string;
   requesterSenderName?: string;
   requesterSenderUsername?: string;
@@ -86,6 +91,11 @@ async function tryHandleWithPluginAction(params: {
       (params.ctx.sessionKey
         ? (params.ctx.requesterAccountId ?? params.ctx.accountId)
         : params.ctx.accountId) ?? undefined,
+    groupId: params.ctx.groupId,
+    groupChannel: params.ctx.groupChannel,
+    groupSpace: params.ctx.groupSpace,
+    trustGroupContext: params.ctx.trustGroupContext,
+    verifiedGroupIds: params.ctx.verifiedGroupIds,
     requesterSenderId: params.ctx.requesterSenderId,
     requesterSenderName: params.ctx.requesterSenderName,
     requesterSenderUsername: params.ctx.requesterSenderUsername,

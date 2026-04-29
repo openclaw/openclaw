@@ -28,6 +28,7 @@ import {
   resolveOpenAiCompatibleHttpOperatorScopes,
   resolveOpenAiCompatibleHttpSenderIsOwner,
 } from "./http-utils.js";
+import { resolveTrustedGatewayToolGroupContext } from "./tool-group-context.js";
 import { resolveGatewayScopedTools } from "./tool-resolution.js";
 
 const DEFAULT_BODY_BYTES = 2 * 1024 * 1024;
@@ -226,12 +227,18 @@ export async function handleToolsInvokeHttpRequest(
   // with the correct owner context and channel-action gates (e.g. Matrix set-profile)
   // work correctly for both owner and non-owner callers.
   const senderIsOwner = resolveOpenAiCompatibleHttpSenderIsOwner(req, requestAuth);
+  const groupContext = resolveTrustedGatewayToolGroupContext(sessionKey);
   const resolveTools = (disablePluginTools: boolean) =>
     resolveGatewayScopedTools({
       cfg,
       sessionKey,
       messageProvider: messageChannel ?? undefined,
       accountId,
+      groupId: groupContext.groupId,
+      groupChannel: groupContext.groupChannel,
+      groupSpace: groupContext.groupSpace,
+      trustGroupContext: groupContext.trustGroupContext,
+      verifiedGroupIds: groupContext.verifiedGroupIds,
       agentTo,
       agentThreadId,
       allowGatewaySubagentBinding: true,

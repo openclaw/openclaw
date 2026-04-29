@@ -34,6 +34,13 @@ export function resolveAgentRunContext(opts: AgentCommandOpts): AgentRunContext 
     merged.groupSpace = groupSpace;
   }
 
+  if (opts.trustGroupContext === true) {
+    merged.trustGroupContext = true;
+  }
+  if (opts.verifiedGroupIds) {
+    merged.verifiedGroupIds = opts.verifiedGroupIds;
+  }
+
   if (
     merged.currentThreadTs == null &&
     opts.threadId != null &&

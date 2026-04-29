@@ -908,6 +908,8 @@ export async function runEmbeddedPiAgent(
             groupSpace: params.groupSpace,
             memberRoleIds: params.memberRoleIds,
             spawnedBy: params.spawnedBy,
+            trustGroupContext: params.trustGroupContext,
+            verifiedGroupIds: params.verifiedGroupIds,
             isCanonicalWorkspace,
             senderId: params.senderId,
             senderName: params.senderName,

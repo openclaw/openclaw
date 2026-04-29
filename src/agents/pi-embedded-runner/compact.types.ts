@@ -33,6 +33,9 @@ export type CompactEmbeddedPiSessionParams = {
   groupSpace?: string | null;
   /** Parent session key for subagent policy inheritance. */
   spawnedBy?: string | null;
+  /** True only when group metadata came from trusted session or ingress context. */
+  trustGroupContext?: boolean;
+  verifiedGroupIds?: readonly string[];
   /** Whether the sender is an owner (required for owner-only tools). */
   senderIsOwner?: boolean;
   sessionFile: string;

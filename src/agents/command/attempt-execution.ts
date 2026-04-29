@@ -466,6 +466,8 @@ export function runAgentAttempt(params: {
     groupId: params.runContext.groupId,
     groupChannel: params.runContext.groupChannel,
     groupSpace: params.runContext.groupSpace,
+    trustGroupContext: params.runContext.trustGroupContext,
+    verifiedGroupIds: params.runContext.verifiedGroupIds,
     spawnedBy: params.spawnedBy,
     currentChannelId: params.runContext.currentChannelId,
     currentThreadTs: params.runContext.currentThreadTs,

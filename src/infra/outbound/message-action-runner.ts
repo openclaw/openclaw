@@ -109,6 +109,11 @@ export type RunMessageActionParams = {
   gateway?: MessageActionRunnerGateway;
   deps?: OutboundSendDeps;
   sessionKey?: string;
+  groupId?: string | null;
+  groupChannel?: string | null;
+  groupSpace?: string | null;
+  trustGroupContext?: boolean;
+  verifiedGroupIds?: readonly string[];
   agentId?: string;
   sandboxRoot?: string;
   dryRun?: boolean;
@@ -668,6 +673,11 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
       agentId,
       sessionKey: input.sessionKey,
       requesterAccountId: input.requesterAccountId ?? undefined,
+      groupId: input.groupId,
+      groupChannel: input.groupChannel,
+      groupSpace: input.groupSpace,
+      trustGroupContext: input.trustGroupContext,
+      verifiedGroupIds: input.verifiedGroupIds,
       requesterSenderId: input.requesterSenderId ?? undefined,
       requesterSenderName: input.requesterSenderName ?? undefined,
       requesterSenderUsername: input.requesterSenderUsername ?? undefined,
@@ -975,6 +985,11 @@ export async function runMessageAction(
     sessionKey: input.sessionKey,
     messageProvider: input.sessionKey ? undefined : channel,
     accountId: input.sessionKey ? (input.requesterAccountId ?? accountId) : accountId,
+    groupId: input.groupId,
+    groupChannel: input.groupChannel,
+    groupSpace: input.groupSpace,
+    trustGroupContext: input.trustGroupContext,
+    verifiedGroupIds: input.verifiedGroupIds,
     requesterSenderId: input.requesterSenderId,
     requesterSenderName: input.requesterSenderName,
     requesterSenderUsername: input.requesterSenderUsername,

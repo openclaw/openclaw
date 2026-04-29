@@ -7,6 +7,7 @@ import {
   filterToolsByPolicy,
   isToolAllowedByPolicyName,
   resolveEffectiveToolPolicy,
+  resolveGroupToolPolicy,
   resolveSubagentToolPolicy,
   resolveSubagentToolPolicyForSession,
 } from "./pi-tools.policy.js";
@@ -37,6 +38,158 @@ describe("pi-tools.policy", () => {
 
   it("blocks apply_patch when write is denylisted", () => {
     expect(isToolAllowedByPolicyName("apply_patch", { deny: ["write"] })).toBe(false);
+  });
+});
+
+describe("resolveGroupToolPolicy", () => {
+  const cfg = {
+    channels: {
+      whatsapp: {
+        groups: {
+          "trusted-group": {
+            tools: { allow: ["exec", "read", "write", "edit"] },
+          },
+          "limited-group": {
+            tools: { allow: ["read"] },
+          },
+          "topic-parent": {
+            tools: { allow: ["exec", "read", "write", "edit"] },
+          },
+          "topic-parent:topic:alerts": {
+            tools: { allow: ["read"] },
+          },
+        },
+      },
+      telegram: {
+        groups: {
+          "limited-group": {
+            tools: { allow: ["exec", "read", "write", "edit"] },
+          },
+        },
+      },
+    },
+    tools: { allow: ["read"] },
+  } satisfies OpenClawConfig;
+
+  it("rejects caller-provided groupId when the session has no group context", () => {
+    expect(
+      resolveGroupToolPolicy({
+        config: cfg,
+        sessionKey: "agent:main:main",
+        messageProvider: "whatsapp",
+        groupId: "trusted-group",
+        groupChannel: "whatsapp",
+        trustGroupContext: true,
+      }),
+    ).toBeUndefined();
+  });
+
+  it("rejects session-derived group context without caller-provided groupId", () => {
+    expect(
+      resolveGroupToolPolicy({
+        config: cfg,
+        sessionKey: "agent:main:whatsapp:group:trusted-group",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("uses verified group context without caller-provided groupId", () => {
+    expect(
+      resolveGroupToolPolicy({
+        config: cfg,
+        sessionKey: "agent:main:whatsapp:group:trusted-group",
+        trustGroupContext: true,
+        verifiedGroupIds: ["trusted-group"],
+      }),
+    ).toEqual({ allow: ["exec", "read", "write", "edit"] });
+  });
+
+  it("rejects self-asserted group context without verified group ids", () => {
+    expect(
+      resolveGroupToolPolicy({
+        config: cfg,
+        sessionKey: "agent:main:whatsapp:group:trusted-group",
+        groupId: "trusted-group",
+        trustGroupContext: true,
+      }),
+    ).toBeUndefined();
+  });
+
+  it("uses session-derived group context when caller groupId corroborates it", () => {
+    expect(
+      resolveGroupToolPolicy({
+        config: cfg,
+        sessionKey: "agent:main:whatsapp:group:trusted-group",
+        groupId: "trusted-group",
+        trustGroupContext: true,
+        verifiedGroupIds: ["trusted-group"],
+      }),
+    ).toEqual({ allow: ["exec", "read", "write", "edit"] });
+  });
+
+  it("rejects corroborating groupId when group context is not trusted", () => {
+    expect(
+      resolveGroupToolPolicy({
+        config: cfg,
+        sessionKey: "agent:main:whatsapp:group:trusted-group",
+        groupId: "trusted-group",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("ignores caller-provided groupId when it disagrees with the session group", () => {
+    expect(
+      resolveGroupToolPolicy({
+        config: cfg,
+        sessionKey: "agent:main:whatsapp:group:limited-group",
+        messageProvider: "whatsapp",
+        groupId: "trusted-group",
+        groupChannel: "whatsapp",
+        trustGroupContext: true,
+        verifiedGroupIds: ["limited-group"],
+      }),
+    ).toEqual({ allow: ["read"] });
+  });
+
+  it("prefers the session-derived channel when resolving group policy", () => {
+    expect(
+      resolveGroupToolPolicy({
+        config: cfg,
+        sessionKey: "agent:main:whatsapp:group:limited-group",
+        messageProvider: "telegram",
+        groupId: "limited-group",
+        trustGroupContext: true,
+        verifiedGroupIds: ["limited-group"],
+      }),
+    ).toEqual({ allow: ["read"] });
+  });
+
+  it("does not let caller-provided parent groupId outrank scoped session group policy", () => {
+    expect(
+      resolveGroupToolPolicy({
+        config: cfg,
+        sessionKey: "agent:main:whatsapp:group:topic-parent:topic:alerts",
+        messageProvider: "whatsapp",
+        groupId: "topic-parent",
+        trustGroupContext: true,
+        verifiedGroupIds: ["topic-parent:topic:alerts", "topic-parent"],
+      }),
+    ).toEqual({ allow: ["read"] });
+  });
+
+  it("trusts caller-provided groupId when it matches spawnedBy group context", () => {
+    expect(
+      resolveGroupToolPolicy({
+        config: cfg,
+        sessionKey: "agent:main:main",
+        spawnedBy: "agent:main:whatsapp:group:trusted-group",
+        messageProvider: "whatsapp",
+        groupId: "trusted-group",
+        groupChannel: "whatsapp",
+        trustGroupContext: true,
+        verifiedGroupIds: ["trusted-group"],
+      }),
+    ).toEqual({ allow: ["exec", "read", "write", "edit"] });
   });
 });
 

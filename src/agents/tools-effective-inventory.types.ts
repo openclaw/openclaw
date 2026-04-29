@@ -55,6 +55,8 @@ export type ResolveEffectiveToolInventoryParams = {
   groupId?: string | null;
   groupChannel?: string | null;
   groupSpace?: string | null;
+  trustGroupContext?: boolean;
+  verifiedGroupIds?: readonly string[];
   replyToMode?: "off" | "first" | "all" | "batched";
   modelHasVision?: boolean;
   requireExplicitMessageTarget?: boolean;

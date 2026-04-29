@@ -189,7 +189,7 @@ function buildProviderToolPolicyLookup(
   return resolved;
 }
 
-function collectUniqueStrings(values: Array<string | null | undefined>): string[] {
+function collectUniqueStrings(values: readonly (string | null | undefined)[]): string[] {
   const seen = new Set<string>();
   const resolved: string[] = [];
   for (const value of values) {
@@ -203,7 +203,7 @@ function collectUniqueStrings(values: Array<string | null | undefined>): string[
   return resolved;
 }
 
-function buildScopedGroupIdCandidates(groupId?: string | null): string[] {
+export function buildScopedGroupIdCandidates(groupId?: string | null): string[] {
   const raw = groupId?.trim();
   if (!raw) {
     return [];
@@ -277,6 +277,34 @@ export function resolveGroupContextFromSessionKey(sessionKey?: string | null): {
     channel: normalizeLowercaseStringOrEmpty(channel),
     groupIds: buildScopedGroupIdCandidates(groupId),
   };
+}
+
+export function resolveTrustedGroupId(params: {
+  groupId?: string | null;
+  verifiedGroupIds?: readonly string[];
+  trustGroupContext?: boolean;
+}): {
+  groupId: string | null | undefined;
+  dropped: boolean;
+} {
+  const callerGroupId = (params.groupId ?? "").trim();
+  if (!callerGroupId) {
+    return { groupId: params.groupId, dropped: false };
+  }
+  if (params.trustGroupContext !== true) {
+    return { groupId: null, dropped: true };
+  }
+  const trusted = collectUniqueStrings(params.verifiedGroupIds ?? []);
+  // Fail closed when no verified server-side group context exists: a
+  // caller-supplied groupId is only usable after server-side metadata
+  // corroborates it.
+  if (trusted.length === 0) {
+    return { groupId: null, dropped: true };
+  }
+  if (trusted.includes(callerGroupId)) {
+    return { groupId: params.groupId, dropped: false };
+  }
+  return { groupId: null, dropped: true };
 }
 
 function resolveProviderToolPolicy(params: {
@@ -415,21 +443,30 @@ export function resolveGroupToolPolicy(params: {
   senderName?: string | null;
   senderUsername?: string | null;
   senderE164?: string | null;
+  trustGroupContext?: boolean;
+  verifiedGroupIds?: readonly string[];
+  onDroppedGroupId?: () => void;
 }): SandboxToolPolicy | undefined {
+  const verifiedGroupIds =
+    params.trustGroupContext === true ? collectUniqueStrings(params.verifiedGroupIds ?? []) : [];
+  const trustedGroup = resolveTrustedGroupId({
+    groupId: params.groupId,
+    verifiedGroupIds,
+    trustGroupContext: params.trustGroupContext,
+  });
+  if (trustedGroup.dropped) {
+    params.onDroppedGroupId?.();
+  }
   if (!params.config) {
     return undefined;
   }
   const sessionContext = resolveGroupContextFromSessionKey(params.sessionKey);
   const spawnedContext = resolveGroupContextFromSessionKey(params.spawnedBy);
-  const groupIds = collectUniqueStrings([
-    ...buildScopedGroupIdCandidates(params.groupId),
-    ...(sessionContext.groupIds ?? []),
-    ...(spawnedContext.groupIds ?? []),
-  ]);
+  const groupIds = verifiedGroupIds;
   if (groupIds.length === 0) {
     return undefined;
   }
-  const channelRaw = params.messageProvider ?? sessionContext.channel ?? spawnedContext.channel;
+  const channelRaw = sessionContext.channel ?? spawnedContext.channel ?? params.messageProvider;
   const channel = normalizeMessageChannel(channelRaw);
   if (!channel) {
     return undefined;
@@ -444,8 +481,8 @@ export function resolveGroupToolPolicy(params: {
     const toolsConfig = plugin?.groups?.resolveToolPolicy?.({
       cfg: params.config,
       groupId,
-      groupChannel: params.groupChannel,
-      groupSpace: params.groupSpace,
+      groupChannel: trustedGroup.dropped ? null : params.groupChannel,
+      groupSpace: trustedGroup.dropped ? null : params.groupSpace,
       accountId: params.accountId,
       senderId: params.senderId,
       senderName: params.senderName,

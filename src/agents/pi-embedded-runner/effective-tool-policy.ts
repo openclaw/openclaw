@@ -2,7 +2,6 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getPluginToolMeta } from "../../plugins/tools.js";
 import {
   resolveEffectiveToolPolicy,
-  resolveGroupContextFromSessionKey,
   resolveGroupToolPolicy,
   resolveSubagentToolPolicyForSession,
 } from "../pi-tools.policy.js";
@@ -28,9 +27,10 @@ import type { AnyAgentTool } from "../tools/common.js";
  * bundled-tool availability via a group-scoped allowlist), so callers MUST
  * pass values derived from server-verified session metadata (session key,
  * inbound transport event), not from tool-call or model-controlled input.
- * The helper cross-checks caller-provided `groupId` against session-derived
- * group ids and drops the caller value when they disagree, but it cannot
- * detect drift on fields that have no session-bound counterpart.
+ * The shared resolver only uses group policy after its caller has provided
+ * verified group-id candidates, then cross-checks caller `groupId` against
+ * them. It cannot detect drift on fields that have no session-bound
+ * counterpart.
  */
 type FinalEffectiveToolPolicyParams = {
   // Tools appended to the core tool set after `createOpenClawCodingTools()`
@@ -51,6 +51,8 @@ type FinalEffectiveToolPolicyParams = {
   groupChannel?: string | null;
   groupSpace?: string | null;
   spawnedBy?: string | null;
+  trustGroupContext?: boolean;
+  verifiedGroupIds?: readonly string[];
   senderId?: string | null;
   senderName?: string | null;
   senderUsername?: string | null;
@@ -60,43 +62,11 @@ type FinalEffectiveToolPolicyParams = {
   warn: (message: string) => void;
 };
 
-function resolveTrustedGroupId(params: FinalEffectiveToolPolicyParams): {
-  groupId: string | null | undefined;
-  dropped: boolean;
-} {
-  const callerGroupId = (params.groupId ?? "").trim();
-  if (!callerGroupId) {
-    return { groupId: params.groupId, dropped: false };
-  }
-  const sessionGroupIds = resolveGroupContextFromSessionKey(params.sessionKey).groupIds ?? [];
-  const spawnedGroupIds = resolveGroupContextFromSessionKey(params.spawnedBy).groupIds ?? [];
-  const trusted = [...sessionGroupIds, ...spawnedGroupIds];
-  // Fail-closed: if the session/spawnedBy keys do not encode a group context,
-  // we have no server-verified ground truth to compare the caller value
-  // against. A non-group session (direct, subagent, cron) should not consult
-  // a group-scoped tool policy at all, and accepting the caller's groupId
-  // here would let an attacker widen bundled-tool availability by sending
-  // an arbitrary group id.
-  if (trusted.length === 0) {
-    return { groupId: null, dropped: true };
-  }
-  if (trusted.includes(callerGroupId)) {
-    return { groupId: params.groupId, dropped: false };
-  }
-  return { groupId: null, dropped: true };
-}
-
 export function applyFinalEffectiveToolPolicy(
   params: FinalEffectiveToolPolicyParams,
 ): AnyAgentTool[] {
   if (params.bundledTools.length === 0) {
     return params.bundledTools;
-  }
-  const trustedGroup = resolveTrustedGroupId(params);
-  if (trustedGroup.dropped) {
-    params.warn(
-      "effective tool policy: dropping caller-provided groupId that does not match session-derived group context",
-    );
   }
   const {
     agentId,
@@ -121,14 +91,21 @@ export function applyFinalEffectiveToolPolicy(
     sessionKey: params.sessionKey,
     spawnedBy: params.spawnedBy,
     messageProvider: params.messageProvider,
-    groupId: trustedGroup.groupId,
-    groupChannel: trustedGroup.dropped ? null : params.groupChannel,
-    groupSpace: trustedGroup.dropped ? null : params.groupSpace,
+    groupId: params.groupId,
+    groupChannel: params.groupChannel,
+    groupSpace: params.groupSpace,
     accountId: params.agentAccountId,
     senderId: params.senderId,
     senderName: params.senderName,
     senderUsername: params.senderUsername,
     senderE164: params.senderE164,
+    trustGroupContext: params.trustGroupContext,
+    verifiedGroupIds: params.verifiedGroupIds,
+    onDroppedGroupId: () => {
+      params.warn(
+        "effective tool policy: dropping caller-provided groupId that does not match session-derived group context",
+      );
+    },
   });
   const profilePolicy = resolveToolProfilePolicy(profile);
   const providerProfilePolicy = resolveToolProfilePolicy(providerProfile);

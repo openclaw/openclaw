@@ -76,6 +76,7 @@ describe("applyFinalEffectiveToolPolicy", () => {
       sessionKey: "agent:alice:discord:group:111",
       groupId: "222",
       groupChannel: "#different",
+      trustGroupContext: true,
       warn: (message) => warnings.push(message),
     });
 
@@ -94,6 +95,7 @@ describe("applyFinalEffectiveToolPolicy", () => {
       sessionKey: "agent:alice:main",
       groupId: "admin-group",
       groupChannel: "#admin",
+      trustGroupContext: true,
       warn: (message) => warnings.push(message),
     });
 
