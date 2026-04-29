@@ -7,7 +7,12 @@ export async function callGatewayFromCliRuntime(
   method: string,
   opts: GatewayRpcOpts,
   params?: unknown,
-  extra?: { expectFinal?: boolean; progress?: boolean },
+  extra?: {
+    expectFinal?: boolean;
+    progress?: boolean;
+    clientName?: (typeof GATEWAY_CLIENT_NAMES)[keyof typeof GATEWAY_CLIENT_NAMES];
+    mode?: (typeof GATEWAY_CLIENT_MODES)[keyof typeof GATEWAY_CLIENT_MODES];
+  },
 ) {
   const showProgress = extra?.progress ?? opts.json !== true;
   return await withProgress(
@@ -24,8 +29,8 @@ export async function callGatewayFromCliRuntime(
         params,
         expectFinal: extra?.expectFinal ?? Boolean(opts.expectFinal),
         timeoutMs: Number(opts.timeout ?? 10_000),
-        clientName: GATEWAY_CLIENT_NAMES.CLI,
-        mode: GATEWAY_CLIENT_MODES.CLI,
+        clientName: extra?.clientName ?? GATEWAY_CLIENT_NAMES.CLI,
+        mode: extra?.mode ?? GATEWAY_CLIENT_MODES.CLI,
       }),
   );
 }
