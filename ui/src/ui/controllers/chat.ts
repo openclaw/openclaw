@@ -359,6 +359,25 @@ export type ChatState = {
   chatRunId: string | null;
   chatStream: string | null;
   chatStreamStartedAt: number | null;
+  /**
+   * Cumulative length of the upstream full-snapshot text that has already
+   * been committed to `chatStreamSegments` by the tool-stream handler at
+   * each tool boundary. Chat deltas from the gateway are full snapshots
+   * (pre-tool + post-tool), so when this is `> 0`, `handleChatEvent` slices
+   * off the leading `chatStreamCommittedLen` characters before assigning to
+   * `chatStream`. Without this, the pre-tool prefix would render twice
+   * (once in the committed segment above the tool card, once in the active
+   * stream below it). Reset to 0 on chat run termination.
+   */
+  chatStreamCommittedLen?: number;
+  /**
+   * Optional view of the tool-stream handler's committed pre-tool segments.
+   * `handleChatEvent` reads this on `final` / `aborted` fallbacks (when the
+   * payload carries no `message` and we have to persist the streamed text)
+   * so the prepended segments are not lost; only the post-tool slice lives
+   * in `chatStream` after a tool boundary.
+   */
+  chatStreamSegments?: Array<{ text: string; ts: number }>;
   lastError: string | null;
   resetChatInputHistoryNavigation?: () => void;
 };
@@ -544,6 +563,22 @@ function normalizeFinalAssistantMessage(message: unknown): Record<string, unknow
   });
 }
 
+/**
+ * Reconstruct the full assistant text the user has seen on screen by joining
+ * already-committed pre-tool segments (kept in `chatStreamSegments` by
+ * `handleAgentEvent` on each tool boundary) with the current post-tool
+ * `chatStream`. Used by `final` / `aborted` fallback paths when the payload
+ * carries no `message` and we have to persist the streamed text directly:
+ * without rejoining the segments, only the post-tool tail would be persisted
+ * and pre-tool text rendered above the tool card would be lost from history.
+ */
+function composePersistedAssistantText(state: ChatState): string {
+  const segments = state.chatStreamSegments ?? [];
+  const segmentText = segments.map((segment) => segment.text).join("");
+  const streamText = state.chatStream ?? "";
+  return segmentText + streamText;
+}
+
 export async function sendChatMessage(
   state: ChatState,
   message: string,
@@ -621,6 +656,10 @@ export async function sendChatMessage(
   state.chatRunId = runId;
   state.chatStream = "";
   state.chatStreamStartedAt = now;
+  // Start a fresh run with no committed segment offset; previous runs end
+  // with `final`/`aborted`/`error` resetting this, but reset again here as
+  // a defensive guarantee for the first delta of the new run.
+  state.chatStreamCommittedLen = 0;
 
   try {
     await requestChatSend(state, { message: msg, attachments, runId });
@@ -630,6 +669,7 @@ export async function sendChatMessage(
     state.chatRunId = null;
     state.chatStream = null;
     state.chatStreamStartedAt = null;
+    state.chatStreamCommittedLen = 0;
     state.lastError = error;
     state.chatMessages = [
       ...state.chatMessages,
@@ -736,37 +776,42 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
   if (payload.state === "delta") {
     const next = extractText(payload.message);
     if (typeof next === "string" && !isSilentReplyStream(next)) {
-      state.chatStream = next;
+      // The gateway broadcasts deltas as full-snapshot text including any
+      // pre-tool content that was already committed to `chatStreamSegments`
+      // by `handleAgentEvent` on each tool boundary. Slice off that prefix
+      // so the active stream below the most recent tool card only renders
+      // post-tool text (avoiding duplicate display).
+      //
+      // Use `>=` (not `>`) so an exact-length re-broadcast of the committed
+      // prefix collapses to an empty post-tool slice instead of replaying
+      // the pre-tool text under the tool card. The gateway's throttled
+      // `emitChatDelta` may flush an unchanged full snapshot after the
+      // throttle window, which would otherwise recreate the duplicate
+      // pre-tool render below the tool card until a longer delta arrives.
+      //
+      // Falls back to the full text only if `next` is *shorter* than the
+      // committed length (e.g. a stale delta arrived after a reset, or the
+      // gateway buffer was rewound) so we never silently drop visible text.
+      const committedLen = state.chatStreamCommittedLen ?? 0;
+      state.chatStream =
+        committedLen > 0 && next.length >= committedLen ? next.slice(committedLen) : next;
     }
   } else if (payload.state === "final") {
     const finalMessage = normalizeFinalAssistantMessage(payload.message);
     if (finalMessage && !isAssistantSilentReply(finalMessage)) {
       state.chatMessages = [...state.chatMessages, finalMessage];
-    } else if (state.chatStream?.trim() && !isSilentReplyStream(state.chatStream)) {
-      state.chatMessages = [
-        ...state.chatMessages,
-        {
-          role: "assistant",
-          content: [{ type: "text", text: state.chatStream }],
-          timestamp: Date.now(),
-        },
-      ];
-    }
-    state.chatStream = null;
-    state.chatRunId = null;
-    state.chatStreamStartedAt = null;
-  } else if (payload.state === "aborted") {
-    const normalizedMessage = normalizeAbortedAssistantMessage(payload.message);
-    if (normalizedMessage && !isAssistantSilentReply(normalizedMessage)) {
-      state.chatMessages = [...state.chatMessages, normalizedMessage];
     } else {
-      const streamedText = state.chatStream ?? "";
-      if (streamedText.trim() && !isSilentReplyStream(streamedText)) {
+      // Fallback path: payload has no usable message, so persist the streamed
+      // text. After a tool boundary `chatStream` only holds the post-tool
+      // slice; rejoin any committed pre-tool segments first so the persisted
+      // assistant message is not truncated to the post-tool tail.
+      const persistedText = composePersistedAssistantText(state);
+      if (persistedText.trim() && !isSilentReplyStream(persistedText)) {
         state.chatMessages = [
           ...state.chatMessages,
           {
             role: "assistant",
-            content: [{ type: "text", text: streamedText }],
+            content: [{ type: "text", text: persistedText }],
             timestamp: Date.now(),
           },
         ];
@@ -775,10 +820,36 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     state.chatStream = null;
     state.chatRunId = null;
     state.chatStreamStartedAt = null;
+    state.chatStreamCommittedLen = 0;
+  } else if (payload.state === "aborted") {
+    const normalizedMessage = normalizeAbortedAssistantMessage(payload.message);
+    if (normalizedMessage && !isAssistantSilentReply(normalizedMessage)) {
+      state.chatMessages = [...state.chatMessages, normalizedMessage];
+    } else {
+      // Same fallback rationale as the `final` branch above: rejoin any
+      // committed pre-tool segments so an aborted run doesn't lose pre-tool
+      // text that was already committed to `chatStreamSegments`.
+      const persistedText = composePersistedAssistantText(state);
+      if (persistedText.trim() && !isSilentReplyStream(persistedText)) {
+        state.chatMessages = [
+          ...state.chatMessages,
+          {
+            role: "assistant",
+            content: [{ type: "text", text: persistedText }],
+            timestamp: Date.now(),
+          },
+        ];
+      }
+    }
+    state.chatStream = null;
+    state.chatRunId = null;
+    state.chatStreamStartedAt = null;
+    state.chatStreamCommittedLen = 0;
   } else if (payload.state === "error") {
     state.chatStream = null;
     state.chatRunId = null;
     state.chatStreamStartedAt = null;
+    state.chatStreamCommittedLen = 0;
     state.lastError = payload.errorMessage ?? "chat error";
   }
   return payload.state;

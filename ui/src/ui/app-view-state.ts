@@ -94,6 +94,7 @@ export type AppViewState = {
   chatStreamSegments: Array<{ text: string; ts: number }>;
   chatStream: string | null;
   chatStreamStartedAt: number | null;
+  chatStreamCommittedLen: number;
   chatRunId: string | null;
   chatSideResult: ChatSideResult | null;
   chatSideResultTerminalRuns: Set<string>;
