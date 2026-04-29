@@ -4,7 +4,6 @@ import { normalizeOptionalString } from "../../shared/string-coerce.js";
 
 type SqliteVecModule = {
   getLoadablePath: () => string;
-  load: (db: DatabaseSync) => void;
 };
 
 const SQLITE_VEC_MODULE_ID = "sqlite-vec";
@@ -25,11 +24,7 @@ export async function loadSqliteVecExtension(params: {
     const extensionPath = resolvedPath ?? sqliteVec.getLoadablePath();
 
     params.db.enableLoadExtension(true);
-    if (resolvedPath) {
-      params.db.loadExtension(extensionPath);
-    } else {
-      sqliteVec.load(params.db);
-    }
+    params.db.loadExtension(extensionPath);
 
     return { ok: true, extensionPath };
   } catch (err) {
