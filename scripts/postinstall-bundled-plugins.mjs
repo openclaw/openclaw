@@ -883,12 +883,16 @@ export function pruneOpenClawCompileCache(params = {}) {
         if (!entry.isDirectory() || !NODE_COMPILE_CACHE_VERSION_DIR_RE.test(entry.name)) {
           continue;
         }
-        remove(join(baseDir, entry.name), {
-          recursive: true,
-          force: true,
-          maxRetries: 2,
-          retryDelay: 100,
-        });
+        try {
+          remove(join(baseDir, entry.name), {
+            recursive: true,
+            force: true,
+            maxRetries: 2,
+            retryDelay: 100,
+          });
+        } catch (error) {
+          log.warn?.(`[postinstall] could not prune OpenClaw compile cache: ${String(error)}`);
+        }
       }
     } catch (error) {
       log.warn?.(`[postinstall] could not prune OpenClaw compile cache: ${String(error)}`);

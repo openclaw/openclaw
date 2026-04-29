@@ -227,6 +227,36 @@ describe("bundled plugin postinstall", () => {
     }
   });
 
+  it("keeps pruning sibling compile cache dirs after one removal fails", () => {
+    const configuredBase = path.join("/tmp", "openclaw-cache");
+    const attempted: string[] = [];
+    const warn = vi.fn();
+    const firstCacheDir = path.join(configuredBase, "v22.13.1-x64-efe9a9df-1001");
+    const secondCacheDir = path.join(configuredBase, "v22.13.1-x64-efe9a9df-1002");
+    const rmSync = vi.fn((value: string) => {
+      attempted.push(value);
+      if (value === firstCacheDir) {
+        throw new Error("locked");
+      }
+    });
+
+    pruneOpenClawCompileCache({
+      env: { NODE_COMPILE_CACHE: configuredBase },
+      existsSync: vi.fn((value: string) => value === configuredBase),
+      readdirSync: vi.fn(() => [
+        { name: path.basename(firstCacheDir), isDirectory: () => true },
+        { name: path.basename(secondCacheDir), isDirectory: () => true },
+      ]),
+      rmSync,
+      log: { warn },
+    });
+
+    expect(attempted).toEqual([firstCacheDir, secondCacheDir]);
+    expect(warn).toHaveBeenCalledWith(
+      "[postinstall] could not prune OpenClaw compile cache: Error: locked",
+    );
+  });
+
   it("prunes source-checkout bundled plugin node_modules", async () => {
     const packageRoot = await createTempDirAsync("openclaw-source-checkout-");
     const extensionsDir = path.join(packageRoot, "extensions");
