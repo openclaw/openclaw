@@ -167,6 +167,28 @@ describe("resolveSlackAccount allowFrom precedence", () => {
 
     expect(resolveSlackAccountDmPolicy({ cfg, accountId: "work" })).toBe("allowlist");
   });
+
+  it("resolves mixed-case account keys for DM access settings", () => {
+    const cfg = {
+      channels: {
+        slack: {
+          dmPolicy: "open",
+          allowFrom: ["root"],
+          accounts: {
+            Work: {
+              botToken: "xoxb-work",
+              appToken: "xapp-work",
+              dm: { policy: "allowlist" },
+              allowFrom: ["U123"],
+            },
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    expect(resolveSlackAccountDmPolicy({ cfg, accountId: "work" })).toBe("allowlist");
+    expect(resolveSlackAccountAllowFrom({ cfg, accountId: "work" })).toEqual(["U123"]);
+  });
 });
 
 describe("resolveSlackAccount active secret surfaces", () => {
