@@ -33,6 +33,7 @@ import {
   type GoogleThinkingInputLevel,
   type GoogleThinkingLevel,
 } from "./thinking-api.js";
+import { resolveGoogleVertexAuthHeaders } from "./vertex-adc-auth.js";
 
 type GoogleTransportModel = Model<"google-generative-ai"> & {
   headers?: Record<string, string>;
@@ -506,12 +507,24 @@ export function buildGoogleGenerativeAiParams(
   return params;
 }
 
+async function resolveGoogleAuthHeaders(
+  apiKey: string | undefined,
+): Promise<Record<string, string> | undefined> {
+  if (!apiKey) {
+    return undefined;
+  }
+  const adcHeaders = await resolveGoogleVertexAuthHeaders(apiKey);
+  if (adcHeaders.kind === "bearer") {
+    return { ...adcHeaders.headers, "Content-Type": "application/json" };
+  }
+  return parseGeminiAuth(apiKey).headers;
+}
+
 function buildGoogleHeaders(
   model: GoogleTransportModel,
-  apiKey: string | undefined,
+  authHeaders: Record<string, string> | undefined,
   optionHeaders: Record<string, string> | undefined,
 ): Record<string, string> {
-  const authHeaders = apiKey ? parseGeminiAuth(apiKey).headers : undefined;
   return (
     mergeTransportHeaders(
       {
@@ -639,6 +652,7 @@ export function createGoogleGenerativeAiTransportStreamFn(): StreamFn {
       };
       try {
         const apiKey = options?.apiKey ?? getEnvApiKey(model.provider) ?? undefined;
+        const authHeaders = await resolveGoogleAuthHeaders(apiKey);
         const guardedFetch = buildGuardedModelFetch(model);
         let params = buildGoogleGenerativeAiParams(model, context, options);
         const nextParams = await options?.onPayload?.(params, model);
@@ -647,7 +661,7 @@ export function createGoogleGenerativeAiTransportStreamFn(): StreamFn {
         }
         const response = await guardedFetch(buildGoogleRequestUrl(model), {
           method: "POST",
-          headers: buildGoogleHeaders(model, apiKey, options?.headers),
+          headers: buildGoogleHeaders(model, authHeaders, options?.headers),
           body: JSON.stringify(params),
           signal: options?.signal,
         });

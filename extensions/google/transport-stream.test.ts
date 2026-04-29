@@ -564,4 +564,83 @@ describe("google transport stream", () => {
 
     expect(params.contents).toEqual([{ role: "user", parts: [{ text: " " }] }]);
   });
+
+  it("regression #74628: exchanges authorized_user ADC for a Bearer token on google-vertex chat", async () => {
+    const { mkdtemp, writeFile } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const path = await import("node:path");
+    const { clearAdcTokenCache } = await import("./adc-credentials.js");
+    clearAdcTokenCache();
+
+    const dir = await mkdtemp(path.join(tmpdir(), "openclaw-vertex-regression-"));
+    const credPath = path.join(dir, "adc.json");
+    await writeFile(
+      credPath,
+      JSON.stringify({
+        type: "authorized_user",
+        client_id: "cid",
+        client_secret: "csec",
+        refresh_token: "rt",
+      }),
+      "utf8",
+    );
+
+    const originalEnv = process.env.GOOGLE_APPLICATION_CREDENTIALS;
+    const originalFetch = globalThis.fetch;
+    process.env.GOOGLE_APPLICATION_CREDENTIALS = credPath;
+    globalThis.fetch = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ access_token: "ya29.minted", expires_in: 3600 }), {
+          status: 200,
+        }),
+    ) as typeof fetch;
+
+    try {
+      guardedFetchMock.mockResolvedValueOnce(buildSseResponse([]));
+
+      const model = attachModelProviderRequestTransport(
+        {
+          id: "gemini-3.1-pro-preview",
+          name: "Gemini 3.1 Pro Preview",
+          api: "google-generative-ai",
+          provider: "google-vertex",
+          baseUrl: "https://global-aiplatform.googleapis.com/v1beta1",
+          reasoning: true,
+          input: ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 128000,
+          maxTokens: 8192,
+        } satisfies Model<"google-generative-ai">,
+        {},
+      );
+
+      const streamFn = createGoogleGenerativeAiTransportStreamFn();
+      const stream = await Promise.resolve(
+        streamFn(
+          model,
+          {
+            messages: [{ role: "user", content: "hi", timestamp: 0 }],
+          } as unknown as Parameters<typeof streamFn>[1],
+          {
+            apiKey: "gcp-vertex-credentials",
+          } as Parameters<typeof streamFn>[2],
+        ),
+      );
+      await stream.result();
+
+      const headers = (guardedFetchMock.mock.calls[0]?.[1] as RequestInit | undefined)?.headers as
+        | Record<string, string>
+        | undefined;
+      expect(headers).toBeDefined();
+      expect(headers?.Authorization).toBe("Bearer ya29.minted");
+      expect(headers?.["x-goog-api-key"]).toBeUndefined();
+    } finally {
+      if (originalEnv === undefined) {
+        delete process.env.GOOGLE_APPLICATION_CREDENTIALS;
+      } else {
+        process.env.GOOGLE_APPLICATION_CREDENTIALS = originalEnv;
+      }
+      globalThis.fetch = originalFetch;
+    }
+  });
 });
