@@ -7,7 +7,10 @@ import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
 import { shouldSuppressGoogleChatManualExecApprovalFollowupText } from "./approval-card-actions.js";
 import { getGoogleChatAccessToken } from "./auth.js";
+import { isGoogleChatThreadResourceName } from "./thread-resource.js";
 import type { GoogleChatCardV2, GoogleChatReaction } from "./types.js";
+
+export { isGoogleChatThreadResourceName } from "./thread-resource.js";
 
 const CHAT_API_BASE = "https://chat.googleapis.com/v1";
 const CHAT_UPLOAD_BASE = "https://chat.googleapis.com/upload/v1";
@@ -18,10 +21,6 @@ async function readGoogleChatJsonResponse<T>(response: Response, label: string):
   } catch (cause) {
     throw new Error(`${label}: malformed JSON response`, { cause });
   }
-}
-
-export function isGoogleChatThreadResourceName(value: string | undefined): boolean {
-  return typeof value === "string" && /^spaces\/[^/]+\/threads\/[^/]+$/.test(value);
 }
 
 const headersToObject = (headers?: HeadersInit): Record<string, string> =>
