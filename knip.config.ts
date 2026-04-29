@@ -43,7 +43,6 @@ const bundledPluginIgnoredRuntimeDependencies = [
   "linkedom",
   "openclaw",
   "pdfjs-dist",
-  "typebox",
 ] as const;
 
 const config = {
