@@ -208,7 +208,7 @@ async function startNarrativeRunOrFallback(params: {
 }): Promise<string | null> {
   try {
     const run = await params.subagent.run({
-      idempotencyKey: params.sessionKey,
+      idempotencyKey: `${params.sessionKey}-${params.nowMs}`,
       sessionKey: params.sessionKey,
       message: params.message,
       ...(params.model ? { model: params.model } : {}),
@@ -247,10 +247,9 @@ async function startNarrativeRunOrFallback(params: {
 export function buildNarrativeSessionKey(params: {
   workspaceDir: string;
   phase: NarrativePhaseData["phase"];
-  nowMs: number;
 }): string {
   const workspaceHash = createHash("sha1").update(params.workspaceDir).digest("hex").slice(0, 12);
-  return `dreaming-narrative-${params.phase}-${workspaceHash}-${params.nowMs}`;
+  return `dreaming-narrative-${params.phase}-${workspaceHash}`;
 }
 
 // ── Prompt building ────────────────────────────────────────────────────
@@ -916,12 +915,20 @@ export async function generateAndAppendDreamNarrative(params: {
   const sessionKey = buildNarrativeSessionKey({
     workspaceDir: params.workspaceDir,
     phase: params.data.phase,
-    nowMs,
   });
   const message = buildNarrativePrompt(params.data);
   const attempts: Array<{ sessionKey: string; runId: string | null }> = [];
   let successfulSessionKey: string | null = null;
   try {
+    // Clear stale context from a previous failed cleanup before reusing the stable session key.
+    try {
+      await params.subagent.deleteSession({ sessionKey });
+    } catch (preCleanupErr) {
+      params.logger.warn(
+        `memory-core: narrative pre-cleanup failed for ${params.data.phase} phase: ${formatErrorMessage(preCleanupErr)}`,
+      );
+    }
+
     const attemptModels = params.model ? [params.model, undefined] : [undefined];
 
     for (const [attemptIndex, attemptModel] of attemptModels.entries()) {

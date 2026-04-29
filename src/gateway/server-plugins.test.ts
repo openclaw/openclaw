@@ -1077,10 +1077,10 @@ describe("loadGatewayPlugins", () => {
     expect(getLastDispatchedClientScopes()).not.toContain("operator.admin");
   });
 
-  test("uses owner-scoped synthetic admin for plugin-created session cleanup", async () => {
+  test("allows memory-core to clean up dreaming narrative sessions", async () => {
     const serverPlugins = serverPluginsModule;
     const runtime = await createSubagentRuntime(serverPlugins);
-    serverPlugins.setFallbackGatewayContext(createTestContext("fallback-plugin-delete-session"));
+    serverPlugins.setFallbackGatewayContext(createTestContext("synthetic-memory-core-delete"));
 
     handleGatewayRequest.mockImplementationOnce(async (opts: HandleGatewayRequestOptions) => {
       const scopes = Array.isArray(opts.client?.connect?.scopes) ? opts.client.connect.scopes : [];
@@ -1098,16 +1098,82 @@ describe("loadGatewayPlugins", () => {
     await expect(
       gatewayRequestScopeModule.withPluginRuntimePluginIdScope("memory-core", () =>
         runtime.deleteSession({
-          sessionKey: "dreaming-narrative-light-workspace-1",
+          sessionKey: "dreaming-narrative-light-workspacehash",
           deleteTranscript: true,
         }),
       ),
     ).resolves.toBeUndefined();
 
     expect(getLastDispatchedClientScopes()).toEqual(["operator.admin"]);
+    expect(getLastDispatchedParams()).toMatchObject({
+      key: "dreaming-narrative-light-workspacehash",
+      deleteTranscript: true,
+    });
     expect(getLastDispatchedClientInternal()).toMatchObject({
       pluginRuntimeOwnerId: "memory-core",
     });
+  });
+
+  test("does not grant memory-core cleanup scope for unrelated sessions", async () => {
+    const serverPlugins = serverPluginsModule;
+    const runtime = await createSubagentRuntime(serverPlugins);
+    serverPlugins.setFallbackGatewayContext(createTestContext("synthetic-memory-core-regular"));
+
+    handleGatewayRequest.mockImplementationOnce(async (opts: HandleGatewayRequestOptions) => {
+      const scopes = Array.isArray(opts.client?.connect?.scopes) ? opts.client.connect.scopes : [];
+      const auth = methodScopesModule.authorizeOperatorScopesForMethod("sessions.delete", scopes);
+      if (!auth.allowed) {
+        opts.respond(false, undefined, {
+          code: "INVALID_REQUEST",
+          message: `missing scope: ${auth.missingScope}`,
+        });
+        return;
+      }
+      opts.respond(true, {});
+    });
+
+    await expect(
+      gatewayRequestScopeModule.withPluginRuntimePluginIdScope("memory-core", () =>
+        runtime.deleteSession({
+          sessionKey: "regular-session",
+          deleteTranscript: true,
+        }),
+      ),
+    ).rejects.toThrow("missing scope: operator.admin");
+
+    expect(getLastDispatchedClientScopes()).toEqual(["operator.write"]);
+    expect(getLastDispatchedClientScopes()).not.toContain("operator.admin");
+  });
+
+  test("does not grant other plugins cleanup scope for dreaming narrative sessions", async () => {
+    const serverPlugins = serverPluginsModule;
+    const runtime = await createSubagentRuntime(serverPlugins);
+    serverPlugins.setFallbackGatewayContext(createTestContext("synthetic-other-plugin-delete"));
+
+    handleGatewayRequest.mockImplementationOnce(async (opts: HandleGatewayRequestOptions) => {
+      const scopes = Array.isArray(opts.client?.connect?.scopes) ? opts.client.connect.scopes : [];
+      const auth = methodScopesModule.authorizeOperatorScopesForMethod("sessions.delete", scopes);
+      if (!auth.allowed) {
+        opts.respond(false, undefined, {
+          code: "INVALID_REQUEST",
+          message: `missing scope: ${auth.missingScope}`,
+        });
+        return;
+      }
+      opts.respond(true, {});
+    });
+
+    await expect(
+      gatewayRequestScopeModule.withPluginRuntimePluginIdScope("demo", () =>
+        runtime.deleteSession({
+          sessionKey: "dreaming-narrative-light-workspacehash",
+          deleteTranscript: true,
+        }),
+      ),
+    ).rejects.toThrow("missing scope: operator.admin");
+
+    expect(getLastDispatchedClientScopes()).toEqual(["operator.write"]);
+    expect(getLastDispatchedClientScopes()).not.toContain("operator.admin");
   });
 
   test("allows session deletion when the request scope already has admin", async () => {
