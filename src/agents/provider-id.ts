@@ -17,6 +17,14 @@ export function normalizeProviderId(provider: string): string {
   if (normalized === "kimi" || normalized === "kimi-code" || normalized === "kimi-coding") {
     return "kimi";
   }
+  // OpenRouter and Moonshot AI's own branding use the `moonshotai` org slug;
+  // openclaw's direct Moonshot provider is registered as `moonshot`. Accept
+  // `moonshotai` as an alias so users who copy `moonshotai/kimi-k2.6` from
+  // OpenRouter (without the `openrouter/` prefix) resolve to the direct
+  // Moonshot provider instead of `Unknown model: moonshotai/...`. See #73876.
+  if (normalized === "moonshotai" || normalized === "moonshot-ai") {
+    return "moonshot";
+  }
   if (normalized === "bedrock" || normalized === "aws-bedrock") {
     return "amazon-bedrock";
   }

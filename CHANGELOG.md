@@ -13,6 +13,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Providers/Moonshot: accept `moonshotai` (and `moonshot-ai`) as aliases for the direct Moonshot provider in `normalizeProviderId`, so model refs copied from OpenRouter or Moonshot AI's own branding (e.g. `moonshotai/kimi-k2.6`) resolve to the direct provider instead of failing with `Unknown model`. Existing `moonshot/<model>` configs, auth profiles, plugin id, and docs are unchanged. Fixes #73876. Thanks @jimdawdy-hub.
 - Security/audit: recognize dangerous node command IDs as valid `gateway.nodes.denyCommands` entries, so audit only warns on real typos or unsupported patterns. (#56923) Thanks @chziyue.
 - Telegram/exec approvals: stop treating general Telegram chat allowlists and `defaultTo` routes as native exec approvers; Telegram now uses explicit `execApprovals.approvers` or owner identity from `commands.ownerAllowFrom`, matching the first-pairing owner bootstrap path. Thanks @pashpashpash.
 - Chat commands: route sensitive group `/diagnostics` and `/export-trajectory` approvals and results to a private owner route, preferring same-surface DMs before falling back to the first configured owner route, so Discord group invocations can land in Telegram when that is the primary owner interface. Thanks @pashpashpash.
