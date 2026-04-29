@@ -757,6 +757,74 @@ describe("before_tool_call requireApproval handling", () => {
     );
   });
 
+  it("forwards turnSource* routing fields to plugin.approval.request (regression for #74003)", async () => {
+    hookRunner.runBeforeToolCall.mockResolvedValue({
+      requireApproval: {
+        title: "Telegram-routed approval",
+        description: "Send a message",
+        pluginId: "sage",
+      },
+    });
+
+    mockCallGateway.mockResolvedValueOnce({ id: "tg-route-1", status: "accepted" });
+    mockCallGateway.mockResolvedValueOnce({ id: "tg-route-1", decision: "allow-once" });
+
+    await runBeforeToolCallHook({
+      toolName: "bash",
+      params: {
+        command: "rm -rf",
+        // Agent runtime injects these fields before the hook runs.
+        turnSourceChannel: "telegram",
+        turnSourceTo: "12345",
+        turnSourceAccountId: "main",
+        turnSourceThreadId: 67890,
+      },
+      ctx: { agentId: "main", sessionKey: "telegram:main:dm:12345" },
+    });
+
+    expect(mockCallGateway).toHaveBeenCalledWith(
+      "plugin.approval.request",
+      expect.any(Object),
+      expect.objectContaining({
+        twoPhase: true,
+        turnSourceChannel: "telegram",
+        turnSourceTo: "12345",
+        turnSourceAccountId: "main",
+        turnSourceThreadId: 67890,
+      }),
+      { expectFinal: false },
+    );
+  });
+
+  it("omits turnSource* fields when they are absent from tool params (regression for #74003)", async () => {
+    hookRunner.runBeforeToolCall.mockResolvedValue({
+      requireApproval: {
+        title: "Sensitive",
+        description: "Sensitive op",
+        pluginId: "sage",
+      },
+    });
+
+    mockCallGateway.mockResolvedValueOnce({ id: "no-route-1", status: "accepted" });
+    mockCallGateway.mockResolvedValueOnce({ id: "no-route-1", decision: "allow-once" });
+
+    await runBeforeToolCallHook({
+      toolName: "bash",
+      params: { command: "ls" },
+      ctx: { agentId: "main", sessionKey: "main" },
+    });
+
+    const requestCall = mockCallGateway.mock.calls.find(
+      ([method]) => method === "plugin.approval.request",
+    );
+    expect(requestCall).toBeDefined();
+    const requestPayload = requestCall?.[2] as Record<string, unknown>;
+    expect(requestPayload).not.toHaveProperty("turnSourceChannel");
+    expect(requestPayload).not.toHaveProperty("turnSourceTo");
+    expect(requestPayload).not.toHaveProperty("turnSourceAccountId");
+    expect(requestPayload).not.toHaveProperty("turnSourceThreadId");
+  });
+
   it("blocks on deny decision", async () => {
     hookRunner.runBeforeToolCall.mockResolvedValue({
       requireApproval: {

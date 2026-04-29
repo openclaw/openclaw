@@ -154,6 +154,28 @@ async function requestPluginToolApproval(params: {
       log.warn(`plugin onResolution callback failed: ${String(err)}`);
     }
   };
+  // The agent runtime injects `turnSourceChannel`, `turnSourceTo`,
+  // `turnSourceAccountId`, and `turnSourceThreadId` into the tool-call
+  // params before the hook runs (see bash-tools.exec-host-shared.ts and
+  // similar). Forward them to `plugin.approval.request` so the gateway
+  // can route the approval prompt back to the originating channel
+  // (Telegram, Discord, Slack, etc.) instead of returning
+  // `decision: null` and surfacing "no approval route" to the user.
+  // See #74003.
+  const turnSource: Record<string, unknown> = isPlainObject(params.baseParams)
+    ? (params.baseParams as Record<string, unknown>)
+    : {};
+  const turnSourceChannel =
+    typeof turnSource.turnSourceChannel === "string" ? turnSource.turnSourceChannel : undefined;
+  const turnSourceTo =
+    typeof turnSource.turnSourceTo === "string" ? turnSource.turnSourceTo : undefined;
+  const turnSourceAccountId =
+    typeof turnSource.turnSourceAccountId === "string" ? turnSource.turnSourceAccountId : undefined;
+  const turnSourceThreadId =
+    typeof turnSource.turnSourceThreadId === "string" ||
+    typeof turnSource.turnSourceThreadId === "number"
+      ? turnSource.turnSourceThreadId
+      : undefined;
   try {
     const requestResult: {
       id?: string;
@@ -175,6 +197,10 @@ async function requestPluginToolApproval(params: {
         sessionKey: params.ctx?.sessionKey,
         timeoutMs: approval.timeoutMs ?? 120_000,
         twoPhase: true,
+        ...(turnSourceChannel !== undefined ? { turnSourceChannel } : {}),
+        ...(turnSourceTo !== undefined ? { turnSourceTo } : {}),
+        ...(turnSourceAccountId !== undefined ? { turnSourceAccountId } : {}),
+        ...(turnSourceThreadId !== undefined ? { turnSourceThreadId } : {}),
       },
       { expectFinal: false },
     );
