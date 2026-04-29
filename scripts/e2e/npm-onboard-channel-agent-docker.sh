@@ -40,13 +40,7 @@ prepare_package_tgz
 docker_e2e_package_mount_args "$PACKAGE_TGZ"
 docker_e2e_harness_mount_args
 run_log="$(docker_e2e_run_log npm-onboard-channel-agent)"
-OPENCLAW_TEST_STATE_SCRIPT_B64="$(
-  node "$ROOT_DIR/scripts/lib/openclaw-test-state.mjs" shell \
-    --label npm-onboard-channel-agent \
-    --scenario empty \
-    | base64 \
-    | tr -d '\n'
-)"
+OPENCLAW_TEST_STATE_SCRIPT_B64="$(docker_e2e_test_state_shell_b64 npm-onboard-channel-agent empty)"
 
 echo "Running npm tarball onboard/channel/agent Docker E2E ($CHANNEL)..."
 if ! docker run --rm \
