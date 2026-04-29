@@ -61,6 +61,7 @@ export {
 export { formatAllowFromLowercase, formatNormalizedAllowFromEntries } from "./allow-from.js";
 export * from "./channel-config-schema.js";
 export * from "./channel-policy.js";
+export { collectOpenGroupPolicyConfiguredRouteWarnings } from "./channel-policy.js";
 export * from "./reply-history.js";
 export * from "./directory-runtime.js";
 export { mapAllowlistResolutionInputs } from "./allow-from.js";

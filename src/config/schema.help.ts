@@ -95,6 +95,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Explicit gateway-level tool allowlist when you want a narrow set of tools available at runtime. Use this for locked-down environments where tool scope must be tightly controlled.",
   "gateway.tools.deny":
     "Explicit gateway-level tool denylist to block risky tools even if lower-level policies allow them. Use deny rules for emergency response and defense-in-depth hardening.",
+  "gateway.handshakeTimeoutMs":
+    "Pre-auth Gateway WebSocket handshake timeout in milliseconds. Use higher values on loaded or low-powered hosts where local clients can connect during startup warmup. OPENCLAW_HANDSHAKE_TIMEOUT_MS still takes precedence.",
   "gateway.channelHealthCheckMinutes":
     "Interval in minutes for automatic channel health probing and status updates. Use lower intervals for faster detection, or higher intervals to reduce periodic probe noise.",
   "gateway.channelStaleEventThresholdMinutes":
@@ -401,6 +403,14 @@ export const FIELD_HELP: Record<string, string> = {
     "Randomization factor (0-1) applied to reconnect delays to desynchronize clients after outage events. Keep non-zero jitter in multi-client deployments to reduce synchronized spikes.",
   "web.reconnect.maxAttempts":
     "Maximum reconnect attempts before giving up for the current failure sequence (0 means no retries). Use finite caps for controlled failure handling in automation-sensitive environments.",
+  "web.whatsapp":
+    "WhatsApp Web socket timing controls passed directly to Baileys. Tune these when network edges, proxies, or NATs are closing otherwise healthy WhatsApp Web sessions.",
+  "web.whatsapp.keepAliveIntervalMs":
+    "Baileys WhatsApp Web application ping interval in milliseconds. Lower values detect and refresh idle links sooner; keep this comfortably below your network's idle-flow timeout.",
+  "web.whatsapp.connectTimeoutMs":
+    "Maximum time in milliseconds Baileys waits for the WhatsApp WebSocket opening handshake. Use a higher value on slow or lossy networks that report opening handshake 408 timeouts.",
+  "web.whatsapp.defaultQueryTimeoutMs":
+    "Default Baileys query timeout in milliseconds for WhatsApp Web requests. Keep aligned with upstream unless a network-specific investigation shows queries need longer.",
   canvasHost:
     "Canvas host settings for serving canvas assets and local live-reload behavior used by canvas-enabled workflows. Keep disabled unless canvas-hosted assets are actively used.",
   "canvasHost.enabled":
@@ -482,7 +492,7 @@ export const FIELD_HELP: Record<string, string> = {
     'Controls how config edits are applied: "off" ignores live edits, "restart" always restarts, "hot" applies in-process, and "hybrid" tries hot then restarts if required. Keep "hybrid" for safest routine updates.',
   "gateway.reload.debounceMs": "Debounce window (ms) before applying config changes.",
   "gateway.reload.deferralTimeoutMs":
-    "Optional maximum time (ms) to wait for in-flight operations before forcing a restart. Omit or set 0 to wait indefinitely with periodic still-pending warnings. Lower positive values risk aborting active subagent LLM calls.",
+    "Optional maximum time (ms) to wait for in-flight operations before forcing a restart. Omit to use the default bounded wait; set 0 to wait indefinitely with periodic still-pending warnings. Lower positive values risk aborting active subagent LLM calls.",
   "gateway.nodes.browser.mode":
     'Node browser routing ("auto" = pick single connected browser node, "manual" = require node param, "off" = disable).',
   "gateway.nodes.browser.node": "Pin browser routing to a specific node id or name (optional).",

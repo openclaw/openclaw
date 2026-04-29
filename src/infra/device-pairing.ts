@@ -593,26 +593,6 @@ export async function approveDevicePairing(
         scope: roleMismatchScope,
       };
     }
-    const requestedOperatorScopes = requestedScopes.filter((scope) =>
-      scope.startsWith(OPERATOR_SCOPE_PREFIX),
-    );
-    if (requestedOperatorScopes.length > 0) {
-      if (!options?.callerScopes) {
-        return {
-          status: "forbidden",
-          reason: "caller-scopes-required",
-          scope: requestedOperatorScopes[0],
-        };
-      }
-      const missingScope = resolveMissingRequestedScope({
-        role: OPERATOR_ROLE,
-        requestedScopes: requestedOperatorScopes,
-        allowedScopes: options.callerScopes,
-      });
-      if (missingScope) {
-        return { status: "forbidden", reason: "caller-missing-scope", scope: missingScope };
-      }
-    }
     const now = Date.now();
     const existing = state.pairedByDeviceId[pending.deviceId];
     const roles = mergeRoles(existing?.roles, existing?.role, pending.roles, pending.role);
@@ -621,6 +601,7 @@ export async function approveDevicePairing(
       pending.scopes,
     );
     const tokens = existing?.tokens ? { ...existing.tokens } : {};
+    const nextTokenScopesByRole = new Map<string, string[]>();
     for (const roleForToken of requestedRoles) {
       const existingToken = tokens[roleForToken];
       const nextScopes = resolveApprovedTokenScopes({
@@ -630,13 +611,34 @@ export async function approveDevicePairing(
         approvedScopes,
         existing,
       });
-      const now = Date.now();
+      nextTokenScopesByRole.set(roleForToken, nextScopes);
+      if (roleForToken === OPERATOR_ROLE && nextScopes.length > 0) {
+        if (!options?.callerScopes) {
+          return {
+            status: "forbidden",
+            reason: "caller-scopes-required",
+            scope: nextScopes[0],
+          };
+        }
+        const missingScope = resolveMissingRequestedScope({
+          role: OPERATOR_ROLE,
+          requestedScopes: nextScopes,
+          allowedScopes: options.callerScopes,
+        });
+        if (missingScope) {
+          return { status: "forbidden", reason: "caller-missing-scope", scope: missingScope };
+        }
+      }
+    }
+    for (const [roleForToken, nextScopes] of nextTokenScopesByRole) {
+      const existingToken = tokens[roleForToken];
+      const tokenNow = Date.now();
       tokens[roleForToken] = {
         token: newToken(),
         role: roleForToken,
         scopes: nextScopes,
-        createdAtMs: existingToken?.createdAtMs ?? now,
-        rotatedAtMs: existingToken ? now : undefined,
+        createdAtMs: existingToken?.createdAtMs ?? tokenNow,
+        rotatedAtMs: existingToken ? tokenNow : undefined,
         revokedAtMs: undefined,
         lastUsedAtMs: existingToken?.lastUsedAtMs,
       };

@@ -295,6 +295,7 @@ export async function resolveDmAllowState(params: {
   provider: ChannelId;
   accountId: string;
   allowFrom?: Array<string | number> | null;
+  dmPolicy?: string | null;
   normalizeEntry?: (raw: string) => string;
   readStore?: (provider: ChannelId, accountId: string) => Promise<string[]>;
 }): Promise<{
@@ -310,6 +311,7 @@ export async function resolveDmAllowState(params: {
   const storeAllowFrom = await readStoreAllowFromForDmPolicy({
     provider: params.provider,
     accountId: params.accountId,
+    dmPolicy: params.dmPolicy,
     readStore: params.readStore,
   });
   const normalizeEntry = params.normalizeEntry ?? ((value: string) => value);

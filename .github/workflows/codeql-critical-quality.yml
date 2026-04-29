@@ -20,7 +20,7 @@ permissions:
 jobs:
   javascript-typescript:
     name: Critical Quality (javascript-typescript)
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 25
     steps:
       - name: Checkout
@@ -39,9 +39,93 @@ jobs:
         with:
           category: "/codeql-critical-quality/javascript-typescript"
 
+  config-boundary:
+    name: Critical Quality (config-boundary)
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          submodules: false
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@95e58e9a2cdfd71adc6e0353d5c52f41a045d225 # v4
+        with:
+          languages: javascript-typescript
+          config-file: ./.github/codeql/codeql-config-boundary-critical-quality.yml
+
+      - name: Analyze
+        uses: github/codeql-action/analyze@95e58e9a2cdfd71adc6e0353d5c52f41a045d225 # v4
+        with:
+          category: "/codeql-critical-quality/config-boundary"
+
+  gateway-runtime-boundary:
+    name: Critical Quality (gateway-runtime-boundary)
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          submodules: false
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@95e58e9a2cdfd71adc6e0353d5c52f41a045d225 # v4
+        with:
+          languages: javascript-typescript
+          config-file: ./.github/codeql/codeql-gateway-runtime-boundary-critical-quality.yml
+
+      - name: Analyze
+        uses: github/codeql-action/analyze@95e58e9a2cdfd71adc6e0353d5c52f41a045d225 # v4
+        with:
+          category: "/codeql-critical-quality/gateway-runtime-boundary"
+
+  channel-runtime-boundary:
+    name: Critical Quality (channel-runtime-boundary)
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          submodules: false
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@95e58e9a2cdfd71adc6e0353d5c52f41a045d225 # v4
+        with:
+          languages: javascript-typescript
+          config-file: ./.github/codeql/codeql-channel-runtime-boundary-critical-quality.yml
+
+      - name: Analyze
+        uses: github/codeql-action/analyze@95e58e9a2cdfd71adc6e0353d5c52f41a045d225 # v4
+        with:
+          category: "/codeql-critical-quality/channel-runtime-boundary"
+
+  agent-runtime-boundary:
+    name: Critical Quality (agent-runtime-boundary)
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          submodules: false
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@95e58e9a2cdfd71adc6e0353d5c52f41a045d225 # v4
+        with:
+          languages: javascript-typescript
+          config-file: ./.github/codeql/codeql-agent-runtime-boundary-critical-quality.yml
+
+      - name: Analyze
+        uses: github/codeql-action/analyze@95e58e9a2cdfd71adc6e0353d5c52f41a045d225 # v4
+        with:
+          category: "/codeql-critical-quality/agent-runtime-boundary"
+
   plugin-boundary:
     name: Critical Quality (plugin-boundary)
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 25
     steps:
       - name: Checkout

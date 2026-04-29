@@ -84,6 +84,7 @@ For the plugin authoring guide, see [Plugin SDK overview](/plugins/sdk-overview)
     | `plugin-sdk/allowlist-config-edit` | Allowlist config edit/read helpers |
     | `plugin-sdk/group-access` | Shared group-access decision helpers |
     | `plugin-sdk/direct-dm` | Shared direct-DM auth/guard helpers |
+    | `plugin-sdk/discord` | Deprecated Discord compatibility facade for published `@openclaw/discord@2026.3.13`; new plugins should use generic channel SDK subpaths |
     | `plugin-sdk/interactive-runtime` | Semantic message presentation, delivery, and legacy interactive reply helpers. See [Message Presentation](/plugins/message-presentation) |
     | `plugin-sdk/channel-inbound` | Compatibility barrel for inbound debounce, mention matching, mention-policy helpers, and envelope helpers |
     | `plugin-sdk/channel-inbound-debounce` | Narrow inbound debounce helpers |

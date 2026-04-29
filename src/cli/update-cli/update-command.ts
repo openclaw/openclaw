@@ -302,6 +302,20 @@ function resolveServiceRefreshEnv(
   return resolvedEnv;
 }
 
+function disableUpdatedPackageCompileCacheEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  return {
+    ...env,
+    NODE_DISABLE_COMPILE_CACHE: "1",
+  };
+}
+
+function resolveUpdatedInstallCommandEnv(
+  env: NodeJS.ProcessEnv,
+  invocationCwd?: string,
+): NodeJS.ProcessEnv {
+  return disableUpdatedPackageCompileCacheEnv(resolveServiceRefreshEnv(env, invocationCwd));
+}
+
 type UpdateDryRunPreview = {
   dryRun: true;
   root: string;
@@ -376,7 +390,7 @@ async function refreshGatewayServiceEnv(params: {
   if (entrypoint) {
     const res = await runCommandWithTimeout([resolveNodeRunner(), entrypoint, ...args], {
       cwd: params.result.root,
-      env: resolveServiceRefreshEnv(params.env ?? process.env, params.invocationCwd),
+      env: resolveUpdatedInstallCommandEnv(params.env ?? process.env, params.invocationCwd),
       timeoutMs: SERVICE_REFRESH_TIMEOUT_MS,
     });
     if (res.code === 0) {
@@ -415,7 +429,7 @@ async function runUpdatedInstallGatewayRestart(params: {
   }
   const res = await runCommandWithTimeout([resolveNodeRunner(), entrypoint, ...args], {
     cwd: params.result.root,
-    env: resolveServiceRefreshEnv(params.env ?? process.env, params.invocationCwd),
+    env: resolveUpdatedInstallCommandEnv(params.env ?? process.env, params.invocationCwd),
     timeoutMs: SERVICE_REFRESH_TIMEOUT_MS,
   });
   if (res.code === 0) {
@@ -553,7 +567,7 @@ async function runPackageInstallUpdate(params: {
           name: `${CLI_NAME} doctor`,
           argv: [resolveNodeRunner(), entryPath, "doctor", "--non-interactive", "--fix"],
           env: {
-            ...process.env,
+            ...disableUpdatedPackageCompileCacheEnv(process.env),
             OPENCLAW_UPDATE_IN_PROGRESS: "1",
           },
           timeoutMs: params.timeoutMs,
@@ -1140,7 +1154,7 @@ async function continuePostCoreUpdateInFreshProcess(params: {
     const child = spawn(resolveNodeRunner(), argv, {
       stdio: "inherit",
       env: {
-        ...process.env,
+        ...disableUpdatedPackageCompileCacheEnv(process.env),
         [POST_CORE_UPDATE_ENV]: "1",
         [POST_CORE_UPDATE_CHANNEL_ENV]: params.channel,
         ...(resultPath ? { [POST_CORE_UPDATE_RESULT_PATH_ENV]: resultPath } : {}),

@@ -25,6 +25,7 @@ import {
   resolveBundledRuntimeDependencyInstallRootPlan,
   resolveBundledRuntimeDepsNpmRunner,
   scanBundledPluginRuntimeDeps,
+  shouldMaterializeBundledRuntimeMirrorDistFile,
   type BundledRuntimeDepsInstallParams,
 } from "./bundled-runtime-deps.js";
 
@@ -99,24 +100,61 @@ afterEach(() => {
   spawnMock.mockReset();
   spawnSyncMock.mockReset();
   bundledRuntimeDepsActivityTesting.resetBundledRuntimeDepsInstallActivity();
+  bundledRuntimeDepsTesting.clearBundledRuntimeMirrorMaterializeCache();
   for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
 
+describe("shouldMaterializeBundledRuntimeMirrorDistFile", () => {
+  it("reuses unchanged root dist file decisions without rereading source", () => {
+    const root = makeTempDir();
+    const sourcePath = path.join(root, "shared-runtime.js");
+    fs.writeFileSync(
+      sourcePath,
+      [
+        `//#region extensions/browser/src/runtime.ts`,
+        `export const marker = "shared-runtime";`,
+        `//#endregion`,
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    const realReadFileSync = fs.readFileSync.bind(fs);
+    let sourceReads = 0;
+    vi.spyOn(fs, "readFileSync").mockImplementation(((target, options) => {
+      if (path.resolve(target.toString()) === path.resolve(sourcePath)) {
+        sourceReads += 1;
+      }
+      return realReadFileSync(target, options as never);
+    }) as typeof fs.readFileSync);
+
+    expect(shouldMaterializeBundledRuntimeMirrorDistFile(sourcePath)).toBe(true);
+    expect(shouldMaterializeBundledRuntimeMirrorDistFile(sourcePath)).toBe(true);
+
+    expect(sourceReads).toBe(1);
+  });
+});
+
 describe("resolveBundledRuntimeDepsNpmRunner", () => {
-  it("uses npm_execpath through node on Windows when available", () => {
+  it("ignores npm_execpath and uses the Node-adjacent npm CLI on Windows", () => {
+    const execPath = "C:\\Program Files\\nodejs\\node.exe";
+    const npmCliPath = path.win32.resolve(
+      path.win32.dirname(execPath),
+      "node_modules/npm/bin/npm-cli.js",
+    );
     const runner = resolveBundledRuntimeDepsNpmRunner({
-      env: { npm_execpath: "C:\\node\\node_modules\\npm\\bin\\npm-cli.js" },
-      execPath: "C:\\Program Files\\nodejs\\node.exe",
-      existsSync: (candidate) => candidate === "C:\\node\\node_modules\\npm\\bin\\npm-cli.js",
+      env: { npm_execpath: "C:\\repo\\evil\\npm-cli.js" },
+      execPath,
+      existsSync: (candidate) =>
+        candidate === "C:\\repo\\evil\\npm-cli.js" || candidate === npmCliPath,
       npmArgs: ["install", "acpx@0.5.3"],
       platform: "win32",
     });
 
     expect(runner).toEqual({
-      command: "C:\\Program Files\\nodejs\\node.exe",
-      args: ["C:\\node\\node_modules\\npm\\bin\\npm-cli.js", "install", "acpx@0.5.3"],
+      command: execPath,
+      args: [npmCliPath, "install", "acpx@0.5.3"],
     });
   });
 
@@ -139,6 +177,8 @@ describe("resolveBundledRuntimeDepsNpmRunner", () => {
           npm_config_global: "true",
           npm_config_location: "global",
           npm_config_prefix: "/opt/homebrew",
+          npm_execpath: "/repo/evil/npm-cli.js",
+          NPM_EXECPATH: "/repo/evil-uppercase/npm-cli.js",
         },
         { cacheDir: "/opt/openclaw/runtime-cache" },
       ),
@@ -146,6 +186,10 @@ describe("resolveBundledRuntimeDepsNpmRunner", () => {
       PATH: "/usr/bin:/bin",
       npm_config_cache: "/opt/openclaw/runtime-cache",
       npm_config_dry_run: "false",
+      npm_config_fetch_retries: "5",
+      npm_config_fetch_retry_maxtimeout: "120000",
+      npm_config_fetch_retry_mintimeout: "10000",
+      npm_config_fetch_timeout: "300000",
       npm_config_global: "false",
       npm_config_legacy_peer_deps: "true",
       npm_config_location: "project",
@@ -175,15 +219,16 @@ describe("resolveBundledRuntimeDepsNpmRunner", () => {
     });
   });
 
-  it("ignores pnpm npm_execpath and falls back to npm", () => {
+  it("ignores npm_execpath and falls back to Node-adjacent npm", () => {
     const execPath = "/opt/node/bin/node";
     const npmCliPath = "/opt/node/lib/node_modules/npm/bin/npm-cli.js";
     const runner = resolveBundledRuntimeDepsNpmRunner({
       env: {
-        npm_execpath: "/home/runner/setup-pnpm/node_modules/.bin/pnpm.cjs",
+        npm_execpath: "/home/runner/repo/evil/npm-cli.js",
       },
       execPath,
-      existsSync: (candidate) => candidate === npmCliPath,
+      existsSync: (candidate) =>
+        candidate === "/home/runner/repo/evil/npm-cli.js" || candidate === npmCliPath,
       npmArgs: ["install", "acpx@0.5.3"],
       platform: "linux",
     });
@@ -191,6 +236,23 @@ describe("resolveBundledRuntimeDepsNpmRunner", () => {
     expect(runner).toEqual({
       command: execPath,
       args: [npmCliPath, "install", "acpx@0.5.3"],
+    });
+  });
+
+  it("uses the Node-adjacent POSIX npm shim when npm-cli.js is unavailable", () => {
+    const execPath = "/opt/node/bin/node";
+    const npmPath = "/opt/node/bin/npm";
+    const runner = resolveBundledRuntimeDepsNpmRunner({
+      env: {},
+      execPath,
+      existsSync: (candidate) => candidate === npmPath,
+      npmArgs: ["install", "acpx@0.5.3"],
+      platform: "linux",
+    });
+
+    expect(runner).toEqual({
+      command: npmPath,
+      args: ["install", "acpx@0.5.3"],
     });
   });
 
@@ -206,24 +268,18 @@ describe("resolveBundledRuntimeDepsNpmRunner", () => {
     ).toThrow("Unable to resolve a safe npm executable on Windows");
   });
 
-  it("prefixes PATH with the active Node directory on POSIX", () => {
-    const runner = resolveBundledRuntimeDepsNpmRunner({
-      env: {
-        PATH: "/usr/bin:/bin",
-      },
-      execPath: "/opt/node/bin/node",
-      existsSync: () => false,
-      npmArgs: ["install", "acpx@0.5.3"],
-      platform: "linux",
-    });
-
-    expect(runner).toEqual({
-      command: "npm",
-      args: ["install", "acpx@0.5.3"],
-      env: {
-        PATH: `/opt/node/bin${path.delimiter}/usr/bin:/bin`,
-      },
-    });
+  it("refuses POSIX npm shim fallback when npm-cli.js is unavailable", () => {
+    expect(() =>
+      resolveBundledRuntimeDepsNpmRunner({
+        env: {
+          PATH: "/repo/evil/bin:/usr/bin:/bin",
+        },
+        execPath: "/opt/node/bin/node",
+        existsSync: (candidate) => candidate === "/usr/bin/npm",
+        npmArgs: ["install"],
+        platform: "linux",
+      }),
+    ).toThrow("Unable to resolve a safe npm executable");
   });
 });
 
@@ -287,11 +343,16 @@ describe("installBundledRuntimeDeps", () => {
     );
   });
 
-  it("uses the npm cmd shim on Windows", () => {
+  it("ignores npm_execpath during Windows installs", () => {
     const installRoot = makeTempDir();
     vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    const safeNpmCliPath = path.win32.resolve(
+      path.win32.dirname(process.execPath),
+      "node_modules/npm/bin/npm-cli.js",
+    );
+    const attackerNpmCliPath = "C:\\repo\\evil\\npm-cli.js";
     vi.spyOn(fs, "existsSync").mockImplementation(
-      (candidate) => candidate === "C:\\node\\node_modules\\npm\\bin\\npm-cli.js",
+      (candidate) => candidate === attackerNpmCliPath || candidate === safeNpmCliPath,
     );
     spawnSyncMock.mockImplementation((_command, _args, options) => {
       writeInstalledPackage(String(options?.cwd ?? ""), "acpx", "0.5.3");
@@ -311,13 +372,13 @@ describe("installBundledRuntimeDeps", () => {
       env: {
         npm_config_prefix: "C:\\prefix",
         PATH: "C:\\node",
-        npm_execpath: "C:\\node\\node_modules\\npm\\bin\\npm-cli.js",
+        npm_execpath: attackerNpmCliPath,
       },
     });
 
     expect(spawnSyncMock).toHaveBeenCalledWith(
       expect.any(String),
-      ["C:\\node\\node_modules\\npm\\bin\\npm-cli.js", "install", "--ignore-scripts", "acpx@0.5.3"],
+      [safeNpmCliPath, "install", "--ignore-scripts", "acpx@0.5.3"],
       expect.objectContaining({
         cwd: installRoot,
         windowsHide: true,
@@ -335,6 +396,15 @@ describe("installBundledRuntimeDeps", () => {
       expect.objectContaining({
         env: expect.not.objectContaining({
           npm_config_prefix: expect.any(String),
+        }),
+      }),
+    );
+    expect(spawnSyncMock).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.any(Array),
+      expect.objectContaining({
+        env: expect.not.objectContaining({
+          npm_execpath: expect.any(String),
         }),
       }),
     );

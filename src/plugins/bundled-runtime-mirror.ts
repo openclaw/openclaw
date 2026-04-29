@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { tracePluginLifecyclePhase } from "./plugin-lifecycle-trace.js";
 
 const BUNDLED_RUNTIME_MIRROR_METADATA_FILE = ".openclaw-runtime-mirror.json";
 const BUNDLED_RUNTIME_MIRROR_METADATA_VERSION = 1;
@@ -24,16 +25,22 @@ export function refreshBundledPluginRuntimeMirrorRoot(params: {
   tempDirParent?: string;
   precomputedSourceMetadata?: PrecomputedBundledRuntimeMirrorMetadata;
 }): boolean {
-  if (path.resolve(params.sourceRoot) === path.resolve(params.targetRoot)) {
-    return false;
-  }
-  const metadata = createBundledRuntimeMirrorMetadata(params, params.precomputedSourceMetadata);
-  if (isBundledRuntimeMirrorRootFresh(params.targetRoot, metadata)) {
-    return false;
-  }
-  copyBundledPluginRuntimeRoot(params.sourceRoot, params.targetRoot);
-  writeBundledRuntimeMirrorMetadata(params.targetRoot, metadata);
-  return true;
+  return tracePluginLifecyclePhase(
+    "runtime mirror refresh",
+    () => {
+      if (path.resolve(params.sourceRoot) === path.resolve(params.targetRoot)) {
+        return false;
+      }
+      const metadata = createBundledRuntimeMirrorMetadata(params, params.precomputedSourceMetadata);
+      if (isBundledRuntimeMirrorRootFresh(params.targetRoot, metadata)) {
+        return false;
+      }
+      copyBundledPluginRuntimeRoot(params.sourceRoot, params.targetRoot);
+      writeBundledRuntimeMirrorMetadata(params.targetRoot, metadata);
+      return true;
+    },
+    { pluginId: params.pluginId },
+  );
 }
 
 export function copyBundledPluginRuntimeRoot(sourceRoot: string, targetRoot: string): void {
@@ -218,9 +225,15 @@ function writeBundledRuntimeMirrorMetadata(
 }
 
 function fingerprintBundledRuntimeMirrorSourceRoot(sourceRoot: string): string {
-  const hash = createHash("sha256");
-  hashBundledRuntimeMirrorDirectory(hash, sourceRoot, sourceRoot);
-  return hash.digest("hex");
+  return tracePluginLifecyclePhase(
+    "runtime mirror fingerprint",
+    () => {
+      const hash = createHash("sha256");
+      hashBundledRuntimeMirrorDirectory(hash, sourceRoot, sourceRoot);
+      return hash.digest("hex");
+    },
+    { sourceRoot },
+  );
 }
 
 function hashBundledRuntimeMirrorDirectory(

@@ -21678,6 +21678,39 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             description:
               "Reconnect backoff policy for web channel reconnect attempts after transport failure. Keep bounded retries and jitter tuned to avoid thundering-herd reconnect behavior.",
           },
+          whatsapp: {
+            type: "object",
+            properties: {
+              keepAliveIntervalMs: {
+                type: "integer",
+                exclusiveMinimum: 0,
+                maximum: 9007199254740991,
+                title: "WhatsApp Web Keepalive Interval (ms)",
+                description:
+                  "Baileys WhatsApp Web application ping interval in milliseconds. Lower values detect and refresh idle links sooner; keep this comfortably below your network's idle-flow timeout.",
+              },
+              connectTimeoutMs: {
+                type: "integer",
+                exclusiveMinimum: 0,
+                maximum: 9007199254740991,
+                title: "WhatsApp Web Connect Timeout (ms)",
+                description:
+                  "Maximum time in milliseconds Baileys waits for the WhatsApp WebSocket opening handshake. Use a higher value on slow or lossy networks that report opening handshake 408 timeouts.",
+              },
+              defaultQueryTimeoutMs: {
+                type: "integer",
+                exclusiveMinimum: 0,
+                maximum: 9007199254740991,
+                title: "WhatsApp Web Query Timeout (ms)",
+                description:
+                  "Default Baileys query timeout in milliseconds for WhatsApp Web requests. Keep aligned with upstream unless a network-specific investigation shows queries need longer.",
+              },
+            },
+            additionalProperties: false,
+            title: "WhatsApp Web Socket Timing",
+            description:
+              "WhatsApp Web socket timing controls passed directly to Baileys. Tune these when network edges, proxies, or NATs are closing otherwise healthy WhatsApp Web sessions.",
+          },
         },
         additionalProperties: false,
         title: "Web Channel",
@@ -22310,6 +22343,14 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             },
             additionalProperties: false,
           },
+          handshakeTimeoutMs: {
+            type: "integer",
+            minimum: 1,
+            maximum: 9007199254740991,
+            title: "Gateway Handshake Timeout",
+            description:
+              "Pre-auth Gateway WebSocket handshake timeout in milliseconds. Use higher values on loaded or low-powered hosts where local clients can connect during startup warmup. OPENCLAW_HANDSHAKE_TIMEOUT_MS still takes precedence.",
+          },
           channelHealthCheckMinutes: {
             type: "integer",
             minimum: 0,
@@ -22591,7 +22632,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 maximum: 9007199254740991,
                 title: "Restart Deferral Timeout (ms)",
                 description:
-                  "Optional maximum time (ms) to wait for in-flight operations before forcing a restart. Omit or set 0 to wait indefinitely with periodic still-pending warnings. Lower positive values risk aborting active subagent LLM calls.",
+                  "Optional maximum time (ms) to wait for in-flight operations before forcing a restart. Omit to use the default bounded wait; set 0 to wait indefinitely with periodic still-pending warnings. Lower positive values risk aborting active subagent LLM calls.",
               },
             },
             additionalProperties: false,
@@ -24612,6 +24653,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "Explicit gateway-level tool denylist to block risky tools even if lower-level policies allow them. Use deny rules for emergency response and defense-in-depth hardening.",
       tags: ["access", "network"],
     },
+    "gateway.handshakeTimeoutMs": {
+      label: "Gateway Handshake Timeout",
+      help: "Pre-auth Gateway WebSocket handshake timeout in milliseconds. Use higher values on loaded or low-powered hosts where local clients can connect during startup warmup. OPENCLAW_HANDSHAKE_TIMEOUT_MS still takes precedence.",
+      tags: ["network", "performance"],
+    },
     "gateway.channelHealthCheckMinutes": {
       label: "Gateway Channel Health Check Interval (min)",
       help: "Interval in minutes for automatic channel health probing and status updates. Use lower intervals for faster detection, or higher intervals to reduce periodic probe noise.",
@@ -25757,7 +25803,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "gateway.reload.deferralTimeoutMs": {
       label: "Restart Deferral Timeout (ms)",
-      help: "Optional maximum time (ms) to wait for in-flight operations before forcing a restart. Omit or set 0 to wait indefinitely with periodic still-pending warnings. Lower positive values risk aborting active subagent LLM calls.",
+      help: "Optional maximum time (ms) to wait for in-flight operations before forcing a restart. Omit to use the default bounded wait; set 0 to wait indefinitely with periodic still-pending warnings. Lower positive values risk aborting active subagent LLM calls.",
       tags: ["network", "reliability", "performance"],
     },
     "gateway.nodes.browser.mode": {
@@ -28018,6 +28064,26 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     "web.reconnect.maxAttempts": {
       label: "Web Reconnect Max Attempts",
       help: "Maximum reconnect attempts before giving up for the current failure sequence (0 means no retries). Use finite caps for controlled failure handling in automation-sensitive environments.",
+      tags: ["performance"],
+    },
+    "web.whatsapp": {
+      label: "WhatsApp Web Socket Timing",
+      help: "WhatsApp Web socket timing controls passed directly to Baileys. Tune these when network edges, proxies, or NATs are closing otherwise healthy WhatsApp Web sessions.",
+      tags: ["advanced"],
+    },
+    "web.whatsapp.keepAliveIntervalMs": {
+      label: "WhatsApp Web Keepalive Interval (ms)",
+      help: "Baileys WhatsApp Web application ping interval in milliseconds. Lower values detect and refresh idle links sooner; keep this comfortably below your network's idle-flow timeout.",
+      tags: ["performance"],
+    },
+    "web.whatsapp.connectTimeoutMs": {
+      label: "WhatsApp Web Connect Timeout (ms)",
+      help: "Maximum time in milliseconds Baileys waits for the WhatsApp WebSocket opening handshake. Use a higher value on slow or lossy networks that report opening handshake 408 timeouts.",
+      tags: ["performance"],
+    },
+    "web.whatsapp.defaultQueryTimeoutMs": {
+      label: "WhatsApp Web Query Timeout (ms)",
+      help: "Default Baileys query timeout in milliseconds for WhatsApp Web requests. Keep aligned with upstream unless a network-specific investigation shows queries need longer.",
       tags: ["performance"],
     },
     "discovery.wideArea": {

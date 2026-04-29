@@ -1307,6 +1307,26 @@ describe("exec approval handlers", () => {
     );
   });
 
+  it("preserves approval warning line breaks while sanitizing hidden characters", async () => {
+    const { handlers, broadcasts, respond, context } = createExecApprovalFixture();
+    await requestExecApproval({
+      handlers,
+      respond,
+      context,
+      params: {
+        timeoutMs: 10,
+        warningText: "Diagnostics line one\r\n\r\nOpenAI Codex harness:\nSend feedback\u200B",
+      },
+    });
+    const requested = broadcasts.find((entry) => entry.event === "exec.approval.requested");
+    expect(requested).toBeTruthy();
+    const request = (requested?.payload as { request?: Record<string, unknown> })?.request ?? {};
+    expect(request["warningText"]).toBe(
+      "Diagnostics line one\n\nOpenAI Codex harness:\nSend feedback\\u{200B}",
+    );
+    expect(request["warningText"]).not.toContain("\\u{A}");
+  });
+
   it("accepts resolve during broadcast", async () => {
     const manager = new ExecApprovalManager();
     const handlers = createExecApprovalHandlers(manager);
