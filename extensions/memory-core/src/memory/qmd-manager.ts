@@ -1392,8 +1392,9 @@ export class QmdMemoryManager implements MemorySearchManager {
       return false;
     }
     try {
+      const timeoutMs = this.qmd.limits.timeoutMs;
       const result = await this.runQmd(["status"], {
-        timeoutMs: Math.min(this.qmd.limits.timeoutMs, 5_000),
+        timeoutMs,
       });
       const vectorCount = parseQmdStatusVectorCount(`${result.stdout}\n${result.stderr}`);
       if (vectorCount === null) {
