@@ -1673,6 +1673,14 @@ function isBundledPluginConfiguredForRuntimeDeps(params: {
   if (hasConfiguredChannel) {
     return true;
   }
+  // Library extensions (no openclaw.plugin.json) opt into runtime
+  // dependency installation through stageRuntimeDependencies alone.
+  // Unlike regular plugins they are loaded on-demand and have no
+  // channel/slot activation — the bundle flag is their sole signal.
+  const pkg = readJsonObject(path.join(params.pluginDir, "package.json"));
+  if (pkg?.openclaw?.bundle?.stageRuntimeDependencies === true) {
+    return true;
+  }
   return manifest.enabledByDefault;
 }
 
