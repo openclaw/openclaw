@@ -12,7 +12,6 @@ import https from "node:https";
 import { bootstrap as bootstrapGlobalAgent } from "global-agent";
 import type { ProxyConfig } from "../../../config/zod-schema.proxy.js";
 import { logInfo, logWarn } from "../../../logger.js";
-import { isLoopbackIpAddress } from "../../../shared/net/ip.js";
 import { isLoopbackHost } from "../../../gateway/net.js";
 import { forceResetGlobalDispatcher } from "../undici-global-dispatcher.js";
 
