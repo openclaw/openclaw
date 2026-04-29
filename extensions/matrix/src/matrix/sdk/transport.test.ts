@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MatrixMediaSizeLimitError } from "../media-errors.js";
-import { performMatrixRequest } from "./transport.js";
+import { createMatrixGuardedFetch, performMatrixRequest } from "./transport.js";
 
 const TEST_UNDICI_RUNTIME_DEPS_KEY = "__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__";
 
@@ -158,5 +158,109 @@ describe("performMatrixRequest", () => {
     expect(
       (runtimeFetch.mock.calls[0]?.[1] as RequestInit & { dispatcher?: unknown })?.dispatcher,
     ).toBeDefined();
+  });
+});
+
+describe("createMatrixGuardedFetch — OTK collision workaround", () => {
+  beforeEach(() => {
+    vi.unstubAllGlobals();
+    clearTestUndiciRuntimeDepsOverride();
+  });
+
+  afterEach(() => {
+    clearTestUndiciRuntimeDepsOverride();
+  });
+
+  const KEYS_UPLOAD_URL = "http://127.0.0.1:8008/_matrix/client/v3/keys/upload";
+  const KEYS_QUERY_URL = "http://127.0.0.1:8008/_matrix/client/v3/keys/query";
+  const COLLISION_BODY = JSON.stringify({
+    errcode: "M_INVALID_PARAM",
+    error: "signed_curve25519:AAAAAAAAAA0 already exists",
+  });
+
+  it("rewrites a 400 OTK collision on /keys/upload to a synthetic 200 with empty counts", async () => {
+    stubRuntimeFetch(
+      vi.fn(
+        async () =>
+          new Response(COLLISION_BODY, {
+            status: 400,
+            headers: { "content-type": "application/json" },
+          }),
+      ),
+    );
+    const fetchFn = createMatrixGuardedFetch({ ssrfPolicy: { allowPrivateNetwork: true } });
+
+    const response = await fetchFn(KEYS_UPLOAD_URL, { method: "POST", body: "{}" });
+
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body).toEqual({ one_time_key_counts: {} });
+  });
+
+  it("rewrites consecutive collision 400s on the same host to synthetic 200s", async () => {
+    const runtimeFetch = vi.fn(
+      async () =>
+        new Response(COLLISION_BODY, {
+          status: 400,
+          headers: { "content-type": "application/json" },
+        }),
+    );
+    stubRuntimeFetch(runtimeFetch);
+    const fetchFn = createMatrixGuardedFetch({ ssrfPolicy: { allowPrivateNetwork: true } });
+
+    const first = await fetchFn(KEYS_UPLOAD_URL, { method: "POST", body: "{}" });
+    const second = await fetchFn(KEYS_UPLOAD_URL, { method: "POST", body: "{}" });
+
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(200);
+    expect(runtimeFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("passes through a non-collision 400 on /keys/upload (e.g. M_FORBIDDEN) unchanged", async () => {
+    const forbiddenBody = JSON.stringify({
+      errcode: "M_FORBIDDEN",
+      error: "Cross-signing requires UIA",
+    });
+    stubRuntimeFetch(
+      vi.fn(
+        async () =>
+          new Response(forbiddenBody, {
+            status: 400,
+            headers: { "content-type": "application/json" },
+          }),
+      ),
+    );
+    const fetchFn = createMatrixGuardedFetch({ ssrfPolicy: { allowPrivateNetwork: true } });
+
+    const response = await fetchFn(KEYS_UPLOAD_URL, { method: "POST", body: "{}" });
+
+    expect(response.status).toBe(400);
+    const body = await response.json();
+    expect(body).toEqual({
+      errcode: "M_FORBIDDEN",
+      error: "Cross-signing requires UIA",
+    });
+  });
+
+  it("does not rewrite a collision-shaped 400 on /keys/query", async () => {
+    stubRuntimeFetch(
+      vi.fn(
+        async () =>
+          new Response(COLLISION_BODY, {
+            status: 400,
+            headers: { "content-type": "application/json" },
+          }),
+      ),
+    );
+    const fetchFn = createMatrixGuardedFetch({ ssrfPolicy: { allowPrivateNetwork: true } });
+
+    const response = await fetchFn(KEYS_QUERY_URL, { method: "POST", body: "{}" });
+
+    expect(response.status).toBe(400);
+    const body = await response.json();
+    expect(body).toEqual({
+      errcode: "M_INVALID_PARAM",
+      error: "signed_curve25519:AAAAAAAAAA0 already exists",
+    });
   });
 });

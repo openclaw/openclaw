@@ -1,3 +1,8 @@
+import {
+  isKeysUploadCollision400,
+  synthesizeKeysUploadCollisionResponse,
+} from "./keys-upload-collision.js";
+import { LogService } from "./logger.js";
 import { MatrixMediaSizeLimitError } from "../media-errors.js";
 import { readResponseWithLimit } from "./read-response-with-limit.js";
 import {
@@ -206,6 +211,25 @@ async function fetchWithMatrixGuardedRedirects(params: {
   throw new Error(`Too many redirects while requesting ${params.url}`);
 }
 
+const otkCollisionWarnedHosts = new Set<string>();
+
+function warnOtkCollisionOnce(url: string): void {
+  let host: string;
+  try {
+    host = new URL(url).host;
+  } catch {
+    host = url;
+  }
+  if (otkCollisionWarnedHosts.has(host)) {
+    return;
+  }
+  otkCollisionWarnedHosts.add(host);
+  LogService.warn(
+    "MatrixGuardedFetch",
+    `Synthesizing 200 for /keys/upload OTK collision on ${host}; matrix-rust-sdk will mint fresh OTKs on the next outgoing-request tick.`,
+  );
+}
+
 export function createMatrixGuardedFetch(params: {
   ssrfPolicy?: SsrFPolicy;
   dispatcherPolicy?: PinnedDispatcherPolicy;
@@ -213,6 +237,7 @@ export function createMatrixGuardedFetch(params: {
   return (async (resource: RequestInfo | URL, init?: RequestInit) => {
     const url = toFetchUrl(resource);
     const { signal, ...requestInit } = init ?? {};
+    const method = (requestInit.method ?? "GET").toUpperCase();
     const { response, release } = await fetchWithMatrixGuardedRedirects({
       url,
       init: requestInit,
@@ -223,6 +248,18 @@ export function createMatrixGuardedFetch(params: {
 
     try {
       const body = await response.arrayBuffer();
+      const bodyText = new TextDecoder("utf-8", { fatal: false }).decode(body);
+      if (
+        isKeysUploadCollision400({
+          url,
+          method,
+          status: response.status,
+          body: bodyText,
+        })
+      ) {
+        warnOtkCollisionOnce(url);
+        return synthesizeKeysUploadCollisionResponse(url);
+      }
       return buildBufferedResponse({
         source: response,
         body,
