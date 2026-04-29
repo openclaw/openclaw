@@ -437,6 +437,8 @@ describe("buildMinimaxSpeechProvider", () => {
       const body = firstFetchBody();
       expect(body.model).toBe("speech-2.8-hd");
       expect(body.text).toBe("Hello world");
+      expect(body.stream).toBe(false);
+      expect(body.output_format).toBe("hex");
       expect((body.voice_setting as Record<string, unknown>).voice_id).toBe(
         "English_expressive_narrator",
       );
