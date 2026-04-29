@@ -219,21 +219,35 @@ export async function fetchDiscordBotIdentity(params: {
   logStartupPhase: (phase: string, details?: string) => void;
 }) {
   params.logStartupPhase("fetch-bot-identity:start");
+  let botUser: Awaited<ReturnType<typeof params.client.fetchUser>>;
   try {
-    const botUser = await params.client.fetchUser("@me");
-    const botUserId = botUser?.id;
-    const botUserName =
-      normalizeOptionalString(botUser?.username) ?? normalizeOptionalString(botUser?.globalName);
-    params.logStartupPhase(
-      "fetch-bot-identity:done",
-      `botUserId=${botUserId ?? "<missing>"} botUserName=${botUserName ?? "<missing>"}`,
-    );
-    return { botUserId, botUserName };
+    botUser = await params.client.fetchUser("@me");
   } catch (err) {
     params.runtime.error?.(danger(`discord: failed to fetch bot identity: ${String(err)}`));
     params.logStartupPhase("fetch-bot-identity:error", String(err));
-    return { botUserId: undefined, botUserName: undefined };
+    throw new Error("Failed to resolve Discord bot identity", { cause: err });
   }
+
+  const botUserRecord = botUser as
+    | { id?: unknown; username?: unknown; globalName?: unknown }
+    | null
+    | undefined;
+  const botUserId = normalizeOptionalString(botUserRecord?.id);
+  const botUserName =
+    normalizeOptionalString(botUserRecord?.username) ??
+    normalizeOptionalString(botUserRecord?.globalName);
+  if (!botUserId) {
+    const details = 'fetchUser("@me") returned no usable id';
+    params.runtime.error?.(danger(`discord: failed to fetch bot identity: ${details}`));
+    params.logStartupPhase("fetch-bot-identity:error", details);
+    throw new Error("Failed to resolve Discord bot identity");
+  }
+
+  params.logStartupPhase(
+    "fetch-bot-identity:done",
+    `botUserId=${botUserId} botUserName=${botUserName ?? "<missing>"}`,
+  );
+  return { botUserId, botUserName };
 }
 
 export function registerDiscordMonitorListeners(params: {
