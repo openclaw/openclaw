@@ -1,3 +1,9 @@
+import { DEFAULT_PROVIDER } from "../agents/defaults.js";
+import { modelKey } from "../agents/model-selection-normalize.js";
+import {
+  buildModelAliasIndex,
+  resolveModelRefFromString,
+} from "../agents/model-selection-shared.js";
 import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
 import { resolveSandboxToolPolicyForAgent } from "../agents/sandbox/tool-policy.js";
 import type { SandboxToolPolicy } from "../agents/sandbox/types.js";
@@ -66,23 +72,53 @@ function addModel(models: ModelRef[], raw: unknown, source: string) {
   models.push({ id, source });
 }
 
+function resolveAuditModelId(
+  cfg: OpenClawConfig,
+  raw: string,
+  aliasIndex: ReturnType<typeof buildModelAliasIndex>,
+): string {
+  const resolved = resolveModelRefFromString({
+    cfg,
+    raw,
+    defaultProvider: DEFAULT_PROVIDER,
+    aliasIndex,
+    allowPluginNormalization: false,
+  })?.ref;
+  return resolved ? modelKey(resolved.provider, resolved.model) : raw;
+}
+
 function collectModels(cfg: OpenClawConfig): ModelRef[] {
+  const aliasIndex = buildModelAliasIndex({
+    cfg,
+    defaultProvider: DEFAULT_PROVIDER,
+    allowPluginNormalization: false,
+  });
   const out: ModelRef[] = [];
-  addModel(
-    out,
-    resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model),
-    "agents.defaults.model.primary",
-  );
-  for (const fallback of resolveAgentModelFallbackValues(cfg.agents?.defaults?.model)) {
-    addModel(out, fallback, "agents.defaults.model.fallbacks");
+  {
+    const primary = resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model);
+    if (typeof primary === "string" && primary.trim()) {
+      const id = resolveAuditModelId(cfg, primary.trim(), aliasIndex);
+      if (id) out.push({ id, source: "agents.defaults.model.primary" });
+    }
   }
-  addModel(
-    out,
-    resolveAgentModelPrimaryValue(cfg.agents?.defaults?.imageModel),
-    "agents.defaults.imageModel.primary",
-  );
+  for (const fallback of resolveAgentModelFallbackValues(cfg.agents?.defaults?.model)) {
+    if (typeof fallback !== "string") continue;
+    const id = resolveAuditModelId(cfg, fallback.trim(), aliasIndex);
+    if (!id) continue;
+    out.push({ id, source: "agents.defaults.model.fallbacks" });
+  }
+  {
+    const primary = resolveAgentModelPrimaryValue(cfg.agents?.defaults?.imageModel);
+    if (typeof primary === "string" && primary.trim()) {
+      const id = resolveAuditModelId(cfg, primary.trim(), aliasIndex);
+      if (id) out.push({ id, source: "agents.defaults.imageModel.primary" });
+    }
+  }
   for (const fallback of resolveAgentModelFallbackValues(cfg.agents?.defaults?.imageModel)) {
-    addModel(out, fallback, "agents.defaults.imageModel.fallbacks");
+    if (typeof fallback !== "string") continue;
+    const id = resolveAuditModelId(cfg, fallback.trim(), aliasIndex);
+    if (!id) continue;
+    out.push({ id, source: "agents.defaults.imageModel.fallbacks" });
   }
 
   const list = Array.isArray(cfg.agents?.list) ? cfg.agents?.list : [];
@@ -94,13 +130,24 @@ function collectModels(cfg: OpenClawConfig): ModelRef[] {
       typeof (agent as { id?: unknown }).id === "string" ? (agent as { id: string }).id : "";
     const model = (agent as { model?: unknown }).model;
     if (typeof model === "string") {
-      addModel(out, model, `agents.list.${id}.model`);
+      const modelId = model.trim();
+      if (modelId) {
+        const resolvedId = resolveAuditModelId(cfg, modelId, aliasIndex);
+        if (resolvedId) out.push({ id: resolvedId, source: `agents.list.${id}.model` });
+      }
     } else if (model && typeof model === "object") {
-      addModel(out, (model as { primary?: unknown }).primary, `agents.list.${id}.model.primary`);
+      const primary = (model as { primary?: unknown }).primary;
+      if (typeof primary === "string" && primary.trim()) {
+        const resolvedId = resolveAuditModelId(cfg, primary.trim(), aliasIndex);
+        if (resolvedId) out.push({ id: resolvedId, source: `agents.list.${id}.model.primary` });
+      }
       const fallbacks = (model as { fallbacks?: unknown }).fallbacks;
       if (Array.isArray(fallbacks)) {
         for (const fallback of fallbacks) {
-          addModel(out, fallback, `agents.list.${id}.model.fallbacks`);
+          if (typeof fallback !== "string") continue;
+          const fbId = resolveAuditModelId(cfg, fallback.trim(), aliasIndex);
+          if (!fbId) continue;
+          out.push({ id: fbId, source: `agents.list.${id}.model.fallbacks` });
         }
       }
     }
