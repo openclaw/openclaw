@@ -593,6 +593,14 @@ function resolveExplicitModelWithRegistry(params: {
     modelId,
   });
   if (inlineMatch?.api) {
+    if (
+      shouldSuppressBuiltInModel({
+        provider,
+        id: modelId,
+      })
+    ) {
+      return { kind: "suppressed" };
+    }
     const resolvedParams = mergeConfiguredRuntimeModelParams({
       cfg,
       provider,
