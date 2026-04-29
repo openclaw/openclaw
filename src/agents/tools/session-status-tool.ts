@@ -137,6 +137,27 @@ function resolveStoreScopedRequesterKey(params: {
   return parsed.rest === params.mainKey ? params.mainKey : params.requesterKey;
 }
 
+function synthesizeImplicitCurrentSessionEntry(): SessionEntry {
+  return {
+    sessionId: "",
+    updatedAt: Date.now(),
+  };
+}
+
+function resolveImplicitCurrentSessionFallback(params: {
+  requestedKeyRaw: string;
+  storeScopedRequesterKey: string;
+}): { key: string; entry: SessionEntry } | null {
+  const requesterKey = params.storeScopedRequesterKey.trim();
+  if (params.requestedKeyRaw !== "current" || !requesterKey) {
+    return null;
+  }
+  return {
+    key: requesterKey,
+    entry: synthesizeImplicitCurrentSessionEntry(),
+  };
+}
+
 function listImplicitDefaultDirectFallbackKeys(params: {
   keyRaw: string;
   mainKey: string;
@@ -458,6 +479,17 @@ export function createSessionStatusTool(opts?: {
             resolvedViaImplicitCurrentFallback = true;
             break;
           }
+        }
+      }
+
+      if (!resolved) {
+        const fallback = resolveImplicitCurrentSessionFallback({
+          requestedKeyRaw,
+          storeScopedRequesterKey,
+        });
+        if (fallback) {
+          resolved = fallback;
+          resolvedViaImplicitCurrentFallback = true;
         }
       }
 
