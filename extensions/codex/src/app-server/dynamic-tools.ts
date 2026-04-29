@@ -171,7 +171,7 @@ function composeAbortSignals(...signals: Array<AbortSignal | undefined>): AbortS
     return new AbortController().signal;
   }
   if (activeSignals.length === 1) {
-    return activeSignals[0]!;
+    return activeSignals[0];
   }
   return AbortSignal.any(activeSignals);
 }
