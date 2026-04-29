@@ -13,9 +13,8 @@ export type NativeBridgeHost = {
 };
 
 function getWebview(): WebView2Bridge | undefined {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const webview = (window as any).chrome?.webview;
-  return webview as WebView2Bridge | undefined;
+  const webview = (window as unknown as { chrome?: { webview?: WebView2Bridge } }).chrome?.webview;
+  return webview;
 }
 
 export function isWebView2(): boolean {
