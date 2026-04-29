@@ -84,11 +84,33 @@ describe("hasPromptSubmissionContent", () => {
     ).toBe(false);
   });
 
+  it("rejects empty prompt submissions with only blank replay history", () => {
+    expect(
+      hasPromptSubmissionContent({
+        prompt: "   ",
+        messages: [
+          { role: "user", content: "   ", timestamp: 1 },
+          { role: "user", content: { type: "text", text: "" }, timestamp: 2 },
+          { role: "user", content: [{ type: "text", text: "\n\t" }], timestamp: 3 },
+          { role: "assistant", content: [], timestamp: 4 },
+        ],
+        imageCount: 0,
+      }),
+    ).toBe(false);
+  });
+
   it("allows blank prompt submissions when replay history has content", () => {
     expect(
       hasPromptSubmissionContent({
         prompt: "   ",
         messages: [{ role: "user", content: "previous turn", timestamp: 1 }],
+        imageCount: 0,
+      }),
+    ).toBe(true);
+    expect(
+      hasPromptSubmissionContent({
+        prompt: "   ",
+        messages: [{ role: "user", content: [{ type: "image", data: "abc" }], timestamp: 1 }],
         imageCount: 0,
       }),
     ).toBe(true);

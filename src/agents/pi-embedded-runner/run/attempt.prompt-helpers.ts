@@ -241,7 +241,35 @@ export function hasPromptSubmissionContent(params: {
   messages: readonly unknown[];
   imageCount: number;
 }): boolean {
-  return params.prompt.trim().length > 0 || params.messages.length > 0 || params.imageCount > 0;
+  return (
+    params.prompt.trim().length > 0 ||
+    params.messages.some(hasModelVisibleMessageContent) ||
+    params.imageCount > 0
+  );
+}
+
+function hasModelVisibleMessageContent(message: unknown): boolean {
+  if (!message || typeof message !== "object") {
+    return false;
+  }
+  return hasModelVisibleContent((message as { content?: unknown }).content);
+}
+
+function hasModelVisibleContent(content: unknown): boolean {
+  if (typeof content === "string") {
+    return content.trim().length > 0;
+  }
+  if (Array.isArray(content)) {
+    return content.some(hasModelVisibleContent);
+  }
+  if (!content || typeof content !== "object") {
+    return false;
+  }
+  const block = content as { text?: unknown; type?: unknown };
+  if (typeof block.text === "string") {
+    return block.text.trim().length > 0;
+  }
+  return typeof block.type === "string" && block.type.trim().length > 0;
 }
 
 const QUEUED_USER_MESSAGE_MARKER =
