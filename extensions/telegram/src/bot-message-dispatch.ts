@@ -350,7 +350,11 @@ export const dispatchTelegramMessage = async ({
     channel: "telegram",
     accountId: route.accountId,
   });
-  const renderDraftPreview = (text: string) => {
+  const renderDraftPreview = (text: string) => ({
+    text: renderTelegramHtmlText(text, { tableMode }),
+    parseMode: "HTML" as const,
+  });
+  const renderReasoningDraftPreview = (text: string) => {
     // Reasoning continuation messages start with italic markdown (_...) but have no
     // "Reasoning:" header — prefix them so the user knows the stream is ongoing.
     const isReasoningCont = /^_/.test(text.trimStart()) && !text.startsWith("Reasoning:");
@@ -434,7 +438,11 @@ export const dispatchTelegramMessage = async ({
   const mediaLocalRoots = getAgentScopedMediaLocalRoots(cfg, route.agentId);
   const archivedAnswerPreviews: ArchivedPreview[] = [];
   const archivedReasoningPreviewIds: number[] = [];
-  const createDraftLane = (laneName: LaneName, enabled: boolean): DraftLaneState => {
+  const createDraftLane = (
+    laneName: LaneName,
+    enabled: boolean,
+    renderText: (text: string) => { text: string; parseMode?: "HTML" } = renderDraftPreview,
+  ): DraftLaneState => {
     const stream = enabled
       ? (telegramDeps.createTelegramDraftStream ?? createTelegramDraftStream)({
           api: bot.api,
@@ -443,7 +451,7 @@ export const dispatchTelegramMessage = async ({
           thread: threadSpec,
           replyToMessageId: draftReplyToMessageId,
           minInitialChars: draftMinInitialChars,
-          renderText: renderDraftPreview,
+          renderText,
           onSupersededPreview:
             laneName === "answer" || laneName === "reasoning"
               ? (preview) => {
@@ -473,7 +481,7 @@ export const dispatchTelegramMessage = async ({
   };
   const lanes: Record<LaneName, DraftLaneState> = {
     answer: createDraftLane("answer", canStreamAnswerDraft),
-    reasoning: createDraftLane("reasoning", canStreamReasoningDraft),
+    reasoning: createDraftLane("reasoning", canStreamReasoningDraft, renderReasoningDraftPreview),
   };
   const activePreviewLifecycleByLane: Record<LaneName, LanePreviewLifecycle> = {
     answer: "transient",

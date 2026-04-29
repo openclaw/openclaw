@@ -232,10 +232,7 @@ export function createTelegramDraftStream(params: {
         );
         const overflowSlice = trimmed.slice(textBaseOffset).trimStart();
         if (overflowSlice) {
-          const overflowRendered = params.renderText?.(overflowSlice) ?? { text: overflowSlice };
-          if (overflowRendered.text.trimEnd().length <= maxChars) {
-            return await sendOrEditStreamMessage(text);
-          }
+          return await sendOrEditStreamMessage(text);
         }
         return true;
       }

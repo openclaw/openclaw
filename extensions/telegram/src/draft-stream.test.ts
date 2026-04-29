@@ -534,3 +534,57 @@ describe("draft stream initial message debounce", () => {
     });
   });
 });
+
+describe("draft stream overflow chaining", () => {
+  afterEach(() => {
+    __testing.resetTelegramDraftStreamForTests();
+  });
+
+  it("chains overflow to a new message when the remainder fits", async () => {
+    const api = createMockDraftApi();
+    api.sendMessage
+      .mockResolvedValueOnce({ message_id: 17 })
+      .mockResolvedValueOnce({ message_id: 42 });
+    const stream = createTelegramDraftStream({
+      api: api as unknown as Bot["api"],
+      chatId: 123,
+      maxChars: 20,
+    });
+
+    stream.update("Hello world");
+    await stream.flush();
+    expect(api.sendMessage).toHaveBeenCalledTimes(1);
+    expect(api.sendMessage).toHaveBeenCalledWith(123, "Hello world", undefined);
+
+    // Grows past 20 chars; the remainder "foo bar baz qux" (15 chars) fits in a new message.
+    stream.update("Hello world foo bar baz qux");
+    await stream.flush();
+
+    expect(api.sendMessage).toHaveBeenCalledTimes(2);
+    expect(api.sendMessage).toHaveBeenLastCalledWith(123, "foo bar baz qux", undefined);
+  });
+
+  it("stops stream and emits warning when chained overflow slice still exceeds maxChars", async () => {
+    const api = createMockDraftApi();
+    const warn = vi.fn();
+    const stream = createTelegramDraftStream({
+      api: api as unknown as Bot["api"],
+      chatId: 123,
+      maxChars: 10,
+      warn,
+    });
+
+    stream.update("123456789");
+    await stream.flush();
+    expect(api.sendMessage).toHaveBeenCalledTimes(1);
+
+    // Overflow slice "ABCDEFGHIJK" is 11 chars > maxChars; stream should stop, not silently succeed.
+    stream.update("123456789ABCDEFGHIJK");
+    await stream.flush();
+
+    expect(api.sendMessage).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("telegram stream preview stopped (text length 11 > 10)"),
+    );
+  });
+});
