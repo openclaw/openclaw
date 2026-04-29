@@ -198,11 +198,9 @@ export function createEventHandlers(context: EventHandlerContext) {
 
   const clearStaleStreamingIfNoTrackedRunRemains = () => {
     const activeRunId = state.activeChatRunId;
-    if (
-      state.activityStatus !== "streaming" ||
-      (activeRunId ? sessionRuns.has(activeRunId) : false) ||
-      sessionRuns.size > 0
-    ) {
+    // A missing active run is the recovery case; only tracked active runs block cleanup.
+    const activeRunIsStillTracked = activeRunId ? sessionRuns.has(activeRunId) : false;
+    if (state.activityStatus !== "streaming" || activeRunIsStillTracked || sessionRuns.size > 0) {
       return;
     }
     state.activeChatRunId = null;

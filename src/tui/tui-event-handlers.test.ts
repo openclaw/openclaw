@@ -588,8 +588,8 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(setActivityStatus).toHaveBeenCalledWith("idle");
   });
 
-  it("clears stale streaming when a duplicate final arrives after the active run was cleared", () => {
-    const { state, setActivityStatus, handleChatEvent } = createHandlersHarness({
+  it("clears stale streaming when a duplicate final arrives after inactive /btw terminal cleanup", () => {
+    const { state, setActivityStatus, noteLocalBtwRunId, handleChatEvent } = createHandlersHarness({
       state: { activeChatRunId: null, activityStatus: "streaming" },
     });
 
@@ -600,8 +600,22 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       message: { content: [{ type: "text", text: "done" }] },
     });
 
-    state.activityStatus = "streaming";
-    state.activeChatRunId = null;
+    noteLocalBtwRunId("run-btw-error");
+    handleChatEvent({
+      runId: "run-btw-error",
+      sessionKey: state.currentSessionKey,
+      state: "delta",
+      message: { content: "background status update" },
+    });
+    handleChatEvent({
+      runId: "run-btw-error",
+      sessionKey: state.currentSessionKey,
+      state: "error",
+      errorMessage: "background failure",
+    });
+
+    expect(state.activeChatRunId).toBeNull();
+    expect(state.activityStatus).toBe("streaming");
     setActivityStatus.mockClear();
 
     handleChatEvent({
