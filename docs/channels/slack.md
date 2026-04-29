@@ -910,7 +910,7 @@ Slack can attach downloaded media to the agent turn when Slack file downloads su
 | JPEG / PNG / GIF / WebP images | Slack file URL       | Downloaded and attached to the turn for vision-capable handling                   | Per-file cap: `channels.slack.mediaMaxMb` (default 20 MB)                 |
 | PDF files                      | Slack file URL       | Downloaded and exposed as file context for tools such as `download-file` or `pdf` | Slack inbound does not convert PDFs into image-vision input automatically |
 | Other files                    | Slack file URL       | Downloaded when possible and exposed as file context                              | Binary files are not treated as image input                               |
-| Thread replies                 | Thread starter files | Root-message files can be hydrated as context when the reply has no direct media  | Requires an included thread starter with text context                     |
+| Thread replies                 | Thread starter files | Root-message files can be hydrated as context when the reply has no direct media  | File-only starters use an attachment placeholder                          |
 | Multi-image messages           | Multiple Slack files | Each file is evaluated independently                                              | Slack processing is capped at eight files per message                     |
 
 ### Inbound pipeline
@@ -927,9 +927,9 @@ When a Slack message with file attachments arrives:
 
 When a message arrives in a thread (has a `thread_ts` parent):
 
-- If the reply itself has no direct media and the included root message has text plus files, Slack can hydrate the root files as thread-starter context.
+- If the reply itself has no direct media and the included root message has files, Slack can hydrate the root files as thread-starter context.
 - Direct reply attachments take precedence over root-message attachments.
-- A root message that has only files and no text is not included by this fallback today.
+- A root message that has only files and no text is represented with an attachment placeholder so the fallback can still include its files.
 
 ### Multi-attachment handling
 
@@ -954,7 +954,6 @@ When a single Slack message contains multiple file attachments:
 | Vision model not configured            | Image attachments are stored as media references, but not analyzed as images | Configure `agents.defaults.imageModel` or use a vision-capable reply model |
 | Very large images (> 20 MB by default) | Skipped per size cap                                                         | Increase `channels.slack.mediaMaxMb` if Slack allows                       |
 | Forwarded/shared attachments           | Text and Slack-hosted image/file media are best-effort                       | Re-share directly in the OpenClaw thread                                   |
-| Image-only thread root                 | Root attachment fallback is not applied without root text context            | Reply with the image again or include text in the thread root              |
 | PDF attachments                        | Stored as file/media context, not automatically routed through image vision  | Use `download-file` for file metadata or the `pdf` tool for PDF analysis   |
 
 ### Related documentation
