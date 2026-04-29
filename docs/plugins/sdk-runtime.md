@@ -394,13 +394,10 @@ Provider and channel execution paths must use the active runtime config snapshot
 
   </Accordion>
   <Accordion title="api.runtime.state">
-    State directory and persistent keyed storage.
+    State directory resolution and SQLite-backed keyed storage.
 
     ```typescript
-    // Resolve the state directory
     const stateDir = api.runtime.state.resolveStateDir(process.env);
-
-    // Open a persistent keyed store (bundled plugins only)
     const store = api.runtime.state.openKeyedStore<MyRecord>({
       namespace: "my-feature",
       maxEntries: 200,
@@ -408,24 +405,15 @@ Provider and channel execution paths must use the active runtime config snapshot
     });
 
     await store.register("key-1", { value: "hello" });
-    const entry = await store.lookup("key-1");
-    const consumed = await store.consume("key-1");
-    const deleted = await store.delete("key-1");
-    const all = await store.entries();
+    const value = await store.lookup("key-1");
+    await store.consume("key-1");
     await store.clear();
     ```
 
-    The store is backed by SQLite and survives gateway restarts. Each plugin gets automatic namespace isolation: the plugin id is bound by the runtime, not passed by plugin code.
-
-    **Limits:**
-
-    - `maxEntries` is required and enforced per namespace.
-    - Hard ceiling of 1,000 rows per plugin across all namespaces; writes throw when exceeded rather than evicting sibling namespaces.
-    - Values must be JSON-serializable and under 64KB.
-    - Expired entries (via `defaultTtlMs` or per-call `ttlMs`) are excluded from reads and pruned by a background sweeper.
+    Keyed stores survive restarts and are isolated by the runtime-bound plugin id. Limits: `maxEntries` per namespace, 1,000 live rows per plugin, JSON values under 64KB, and optional TTL expiry.
 
     <Warning>
-    Available to bundled plugins only in this release. External plugin access will be enabled in a future version.
+    Bundled plugins only in this release.
     </Warning>
 
   </Accordion>

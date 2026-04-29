@@ -265,6 +265,14 @@ function ensurePluginStatePermissions(pathname: string) {
   }
 }
 
+function ensurePluginStatePermissionsBestEffort(pathname: string): void {
+  try {
+    ensurePluginStatePermissions(pathname);
+  } catch {
+    // The write already committed. Permission hardening is best-effort from here.
+  }
+}
+
 function openPluginStateDatabase(
   operation: PluginStateStoreOperation = "open",
 ): PluginStateDatabase {
@@ -338,11 +346,12 @@ function runWriteTransaction<T>(
   write: (store: PluginStateDatabase) => T,
 ): T {
   const store = openPluginStateDatabase(operation);
+  ensurePluginStatePermissions(store.path);
   store.db.exec("BEGIN IMMEDIATE");
   try {
     const result = write(store);
     store.db.exec("COMMIT");
-    ensurePluginStatePermissions(store.path);
+    ensurePluginStatePermissionsBestEffort(store.path);
     return result;
   } catch (error) {
     try {
@@ -416,7 +425,7 @@ export function pluginStateLookup(params: {
   pluginId: string;
   namespace: string;
   key: string;
-}): unknown | undefined {
+}): unknown {
   try {
     const { statements } = openPluginStateDatabase("lookup");
     const row = statements.selectEntry.get(
@@ -440,7 +449,7 @@ export function pluginStateConsume(params: {
   pluginId: string;
   namespace: string;
   key: string;
-}): unknown | undefined {
+}): unknown {
   try {
     return runWriteTransaction("consume", (store) => {
       const row = store.statements.selectEntry.get(
