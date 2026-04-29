@@ -49,6 +49,8 @@ execution:
       - kitchen_sink_image_job
     maxGatewayCpuCoreRatio: 1.5
     maxGatewayRssMiB: 2048
+    agentTurnTimeoutMs: 120000
+    outboundTimeoutMs: 60000
     livePrompt: "Kitchen Sink OpenAI marker. Reply exactly: KITCHEN-SINK-OPENAI-OK"
 ```
 
@@ -260,7 +262,7 @@ steps:
             message:
               expr: config.livePrompt
             timeoutMs:
-              expr: liveTurnTimeoutMs(env, 60000)
+              expr: liveTurnTimeoutMs(env, config.agentTurnTimeoutMs)
       - call: waitForOutboundMessage
         saveAs: openaiReply
         args:
@@ -268,7 +270,7 @@ steps:
           - lambda:
               params: [candidate]
               expr: "candidate.conversation.id === 'qa-operator' && candidate.text.includes('KITCHEN-SINK-OPENAI-OK')"
-          - expr: liveTurnTimeoutMs(env, 30000)
+          - expr: liveTurnTimeoutMs(env, config.outboundTimeoutMs)
     detailsExpr: "{ openaiReply: openaiReply.text }"
 
   - name: records gateway CPU RSS and log anomaly evidence
