@@ -8,11 +8,19 @@ type RequestCall = {
   options?: GatewayRequestOptions;
 };
 
+type FakeResponse =
+  | unknown
+  | ((
+      params: unknown,
+      options: GatewayRequestOptions | undefined,
+      transport: FakeTransport,
+    ) => Promise<unknown> | unknown);
+
 class FakeTransport implements OpenClawTransport {
   readonly calls: RequestCall[] = [];
-  private readonly eventHub = new EventHub<GatewayEvent>();
+  private readonly eventHub = new EventHub<GatewayEvent>({ replayLimit: 100 });
 
-  constructor(private readonly responses: Record<string, unknown>) {}
+  constructor(private readonly responses: Record<string, FakeResponse>) {}
 
   async request<T = unknown>(
     method: string,
@@ -20,11 +28,15 @@ class FakeTransport implements OpenClawTransport {
     options?: GatewayRequestOptions,
   ): Promise<T> {
     this.calls.push({ method, params, options });
-    return this.responses[method] as T;
+    const response = this.responses[method];
+    if (typeof response === "function") {
+      return (await response(params, options, this)) as T;
+    }
+    return response as T;
   }
 
   events(filter?: (event: GatewayEvent) => boolean): AsyncIterable<GatewayEvent> {
-    return this.eventHub.stream(filter);
+    return this.eventHub.stream(filter, { replay: true });
   }
 
   emit(event: GatewayEvent): void {
@@ -102,6 +114,26 @@ describe("OpenClaw SDK", () => {
         options: { timeoutMs: null },
       },
     ]);
+  });
+
+  it("maps aborted wait snapshots to cancelled even when Gateway status is timeout", async () => {
+    const transport = new FakeTransport({
+      "agent.wait": {
+        status: "timeout",
+        runId: "run_cancelled",
+        stopReason: "rpc",
+        error: "aborted by operator",
+      },
+    });
+    const oc = new OpenClaw({ transport });
+
+    const result = await oc.runs.wait("run_cancelled");
+
+    expect(result).toMatchObject({
+      runId: "run_cancelled",
+      status: "cancelled",
+      error: { message: "aborted by operator" },
+    });
   });
 
   it("splits provider-qualified model refs and rejects unsupported run options", async () => {
@@ -216,6 +248,61 @@ describe("OpenClaw SDK", () => {
     ]);
     expect(transport.calls[1]?.params).toEqual({ runId: "run_without_session" });
     expect(transport.calls[2]?.params).toEqual({ probe: false });
+  });
+
+  it("replays fast run events emitted before the caller starts iterating", async () => {
+    const ts = 1_777_000_000_000;
+    const transport = new FakeTransport({
+      agent: (
+        _params: unknown,
+        _options: GatewayRequestOptions | undefined,
+        fake: FakeTransport,
+      ) => {
+        fake.emit({
+          event: "agent",
+          seq: 1,
+          payload: { runId: "run_fast", stream: "lifecycle", ts, data: { phase: "start" } },
+        });
+        fake.emit({
+          event: "agent",
+          seq: 2,
+          payload: {
+            runId: "run_fast",
+            stream: "assistant",
+            ts: ts + 1,
+            data: { delta: "fast" },
+          },
+        });
+        fake.emit({
+          event: "agent",
+          seq: 3,
+          payload: {
+            runId: "run_fast",
+            stream: "lifecycle",
+            ts: ts + 2,
+            data: { phase: "end" },
+          },
+        });
+        return { status: "accepted", runId: "run_fast", sessionKey: "fast" };
+      },
+    });
+    const oc = new OpenClaw({ transport });
+
+    const run = await oc.runs.create({
+      input: "finish immediately",
+      idempotencyKey: "fast-run-events",
+      sessionKey: "fast",
+    });
+    const seen: string[] = [];
+
+    for await (const event of run.events()) {
+      seen.push(event.type);
+      if (event.type === "run.completed") {
+        break;
+      }
+    }
+
+    expect(seen).toEqual(["run.started", "assistant.delta", "run.completed"]);
   });
 
   it("creates a session and sends a message as a run", async () => {

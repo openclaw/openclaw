@@ -16,6 +16,8 @@ type GatewayClientLike = {
   stopAndWait(): Promise<void>;
 };
 
+const RAW_EVENT_REPLAY_LIMIT = 1000;
+
 export type GatewayClientTransportOptions = {
   url?: string;
   connectChallengeTimeoutMs?: number;
@@ -65,7 +67,9 @@ function toGatewayEvent(event: unknown): GatewayEvent {
 }
 
 export class GatewayClientTransport implements ConnectableOpenClawTransport {
-  private readonly eventsHub = new EventHub<GatewayEvent>();
+  private readonly eventsHub = new EventHub<GatewayEvent>({
+    replayLimit: RAW_EVENT_REPLAY_LIMIT,
+  });
   private readonly options: GatewayClientTransportOptions;
   private client: GatewayClientLike | null = null;
   private connectPromise: Promise<void> | null = null;
@@ -126,7 +130,7 @@ export class GatewayClientTransport implements ConnectableOpenClawTransport {
   }
 
   events(filter?: (event: GatewayEvent) => boolean): AsyncIterable<GatewayEvent> {
-    return this.eventsHub.stream(filter);
+    return this.eventsHub.stream(filter, { replay: true });
   }
 
   async close(): Promise<void> {
