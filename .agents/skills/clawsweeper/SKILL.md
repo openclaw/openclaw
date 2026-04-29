@@ -1,6 +1,6 @@
 ---
 name: clawsweeper
-description: Use for all ClawSweeper work: OpenClaw issue/PR sweep reports, commit-review reports, repair jobs, cloud fix PRs, comment commands, trusted ClawSweeper-reviewed automerge, GitHub Actions monitoring, permissions, gates, and manual backfills.
+description: "Use for all ClawSweeper work: OpenClaw issue/PR sweep reports, commit-review reports, repair jobs, cloud fix PRs, comment commands, trusted ClawSweeper-reviewed automerge, GitHub Actions monitoring, permissions, gates, and manual backfills."
 ---
 
 # ClawSweeper
