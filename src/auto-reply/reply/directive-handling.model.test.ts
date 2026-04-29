@@ -12,6 +12,10 @@ vi.mock("../../agents/auth-profiles.js", () => ({
     profiles: authProfilesStoreMock.profiles,
   }),
   isProfileInCooldown: () => false,
+  listProfilesForProvider: (_store: unknown, provider: string) =>
+    Object.entries(authProfilesStoreMock.profiles)
+      .filter(([, profile]) => profile.provider === provider)
+      .map(([profileId, profile]) => ({ profileId, profile })),
   replaceRuntimeAuthProfileStoreSnapshots: (
     snapshots: Array<{
       store?: { profiles?: Record<string, { type: "api_key"; provider: string; key: string }> };
