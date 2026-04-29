@@ -374,7 +374,7 @@ export function expectImageLifecycleDelivery(params: {
   const saveRemoteMediaMock = params.saveRemoteMediaMock ?? params.readRemoteMediaBufferMock;
   expect(saveRemoteMediaMock).toHaveBeenCalledWith({
     url: photoUrl,
-    maxBytes: 5 * 1024 * 1024,
+    maxBytes: 20 * 1024 * 1024,
   });
   expect(params.saveMediaBufferMock).not.toHaveBeenCalled();
   expect(params.finalizeInboundContextMock).toHaveBeenCalledWith(
