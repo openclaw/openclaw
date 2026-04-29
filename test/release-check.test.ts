@@ -577,6 +577,8 @@ describe("collectMissingPackPaths", () => {
         "dist/index.js",
         "dist/entry.js",
         "dist/control-ui/index.html",
+        "dist/extensions/acpx/error-format.mjs",
+        "dist/extensions/acpx/mcp-command-line.mjs",
         "dist/extensions/acpx/mcp-proxy.mjs",
         bundledDistPluginFile("diffs", "assets/viewer-runtime.js"),
         ...requiredBundledPluginPackPaths,

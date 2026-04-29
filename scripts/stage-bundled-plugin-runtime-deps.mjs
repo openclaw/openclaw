@@ -489,6 +489,33 @@ function resolveInstalledDirectDependencyNames(
   return directDependencyNames;
 }
 
+function appendDirectoryFingerprint(hash, rootDir, currentDir = rootDir) {
+  const entries = fs
+    .readdirSync(currentDir, { withFileTypes: true })
+    .toSorted((left, right) => left.name.localeCompare(right.name));
+
+  for (const entry of entries) {
+    const fullPath = path.join(currentDir, entry.name);
+    const relativePath = path.relative(rootDir, fullPath).replace(/\\/g, "/");
+    const stats = fs.lstatSync(fullPath);
+    if (stats.isSymbolicLink()) {
+      hash.update(`symlink:${relativePath}->${fs.readlinkSync(fullPath).replace(/\\/g, "/")}\n`);
+      continue;
+    }
+    if (stats.isDirectory()) {
+      hash.update(`dir:${relativePath}\n`);
+      appendDirectoryFingerprint(hash, rootDir, fullPath);
+      continue;
+    }
+    if (!stats.isFile()) {
+      continue;
+    }
+    const stat = fs.statSync(fullPath);
+    hash.update(`file:${relativePath}:${stat.size}\n`);
+    hash.update(fs.readFileSync(fullPath));
+  }
+}
+
 function createInstalledRuntimeClosureFingerprint(rootNodeModulesDir, dependencyNames) {
   const hash = createHash("sha256");
   for (const depName of [...dependencyNames].toSorted((left, right) => left.localeCompare(right))) {
@@ -496,19 +523,8 @@ function createInstalledRuntimeClosureFingerprint(rootNodeModulesDir, dependency
     if (depRoot === null || !fs.existsSync(depRoot)) {
       return null;
     }
-    const packageJsonPath = path.join(depRoot, "package.json");
-    const installedVersion = readInstalledDependencyVersionFromRoot(depRoot);
-    const realRoot = fs.realpathSync(depRoot);
-    const packageJsonStat = fs.statSync(packageJsonPath);
-    hash.update(
-      JSON.stringify({
-        depName,
-        installedVersion,
-        packageJsonMtimeMs: packageJsonStat.mtimeMs,
-        packageJsonSize: packageJsonStat.size,
-        realRoot,
-      }),
-    );
+    hash.update(`package:${depName}:${fs.realpathSync(depRoot)}\n`);
+    appendDirectoryFingerprint(hash, depRoot);
   }
   return hash.digest("hex");
 }
