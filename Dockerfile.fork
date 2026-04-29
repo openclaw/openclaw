@@ -2,8 +2,7 @@
 #
 # Fork-specific overlay on top of the upstream OpenClaw runtime image.
 # Adds common CLIs that are useful inside the gateway container:
-#   - gh        (GitHub CLI, via the official apt repo since bookworm
-#                does not ship it)
+#   - gh        (GitHub CLI release binary)
 #   - lark-cli  (official Lark/Feishu CLI, @larksuite/cli on npm)
 #
 # git is already installed by the upstream runtime stage (Dockerfile),
@@ -23,26 +22,29 @@ FROM ${BASE_IMAGE}
 
 USER root
 
-# GitHub CLI. bookworm does not ship gh in its default repos, so install
-# it from the official GitHub CLI apt repo.
-RUN --mount=type=cache,id=openclaw-fork-apt-cache,target=/var/cache/apt,sharing=locked \
-    --mount=type=cache,id=openclaw-fork-apt-lists,target=/var/lib/apt,sharing=locked \
-    apt-get update && \
-    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-      ca-certificates curl gnupg && \
-    install -m 0755 -d /etc/apt/keyrings && \
-    curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
-      -o /etc/apt/keyrings/githubcli-archive-keyring.gpg && \
-    chmod a+r /etc/apt/keyrings/githubcli-archive-keyring.gpg && \
-    printf 'deb [arch=%s signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main\n' \
-      "$(dpkg --print-architecture)" > /etc/apt/sources.list.d/github-cli.list && \
-    apt-get update && \
-    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends gh
-
-# Official Lark/Feishu CLI (@larksuite/cli) — provides the `lark-cli`
-# binary on PATH. Pinned for reproducible image builds; bump as needed.
+ARG OPENCLAW_GH_VERSION="2.92.0"
 ARG OPENCLAW_LARK_CLI_VERSION="1.0.21"
-RUN npm install -g "@larksuite/cli@${OPENCLAW_LARK_CLI_VERSION}" && \
-    npm cache clean --force
+
+# Single layer: download gh release tarball directly (avoids pulling
+# gnupg/keyring/sources.list overhead just to add a third-party apt repo)
+# and install lark-cli via npm. Cleanup happens in the same layer so
+# nothing transient bloats the image.
+RUN set -eux; \
+    arch="$(dpkg --print-architecture)"; \
+    case "$arch" in \
+      amd64|arm64) gh_arch="$arch";; \
+      *) echo "unsupported arch: $arch" >&2; exit 1;; \
+    esac; \
+    tmp="$(mktemp -d)"; \
+    curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 \
+      "https://github.com/cli/cli/releases/download/v${OPENCLAW_GH_VERSION}/gh_${OPENCLAW_GH_VERSION}_linux_${gh_arch}.tar.gz" \
+      -o "$tmp/gh.tgz"; \
+    tar -xzf "$tmp/gh.tgz" -C "$tmp"; \
+    install -m 0755 "$tmp/gh_${OPENCLAW_GH_VERSION}_linux_${gh_arch}/bin/gh" /usr/local/bin/gh; \
+    rm -rf "$tmp"; \
+    npm install -g --no-audit --no-fund --omit=optional \
+      "@larksuite/cli@${OPENCLAW_LARK_CLI_VERSION}"; \
+    npm cache clean --force; \
+    rm -rf /root/.npm /tmp/* /var/lib/apt/lists/*
 
 USER node

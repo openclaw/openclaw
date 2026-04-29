@@ -33,6 +33,7 @@ steps:
       - |
         docker build \
           --platform=linux/amd64 \
+          --build-arg OPENCLAW_VARIANT=slim \
           -t openclaw-base:${SHORT_SHA} \
           -f Dockerfile \
           .
