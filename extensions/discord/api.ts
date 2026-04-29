@@ -23,6 +23,12 @@ export {
 } from "./src/accounts.js";
 export { tryHandleDiscordMessageActionGuildAdmin } from "./src/actions/handle-action.guild-admin.js";
 export { buildDiscordComponentMessage } from "./src/components.js";
+type DiscordMessageActionHandler =
+  typeof import("./src/channel-actions.runtime.js").handleDiscordMessageAction;
+
+// Deprecated compatibility surface for existing @openclaw/discord/api.js consumers.
+export const handleDiscordMessageAction: DiscordMessageActionHandler = async (...args) =>
+  (await import("./src/channel-actions.runtime.js")).handleDiscordMessageAction(...args);
 export {
   listDiscordDirectoryGroupsFromConfig,
   listDiscordDirectoryPeersFromConfig,
@@ -52,8 +58,10 @@ export {
   formatDiscordComponentEventText,
   parseDiscordComponentCustomId,
   parseDiscordComponentCustomIdForInteraction,
+  parseDiscordComponentCustomIdForInteraction as parseDiscordComponentCustomIdForCarbon,
   parseDiscordModalCustomId,
   parseDiscordModalCustomIdForInteraction,
+  parseDiscordModalCustomIdForInteraction as parseDiscordModalCustomIdForCarbon,
   readDiscordComponentSpec,
   resolveDiscordComponentAttachmentName,
   type ComponentData,
