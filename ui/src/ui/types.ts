@@ -600,6 +600,11 @@ export type CronStatus = {
   enabled: boolean;
   jobs: number;
   nextWakeAtMs?: number | null;
+  /** Gateway-resolved IANA timezone — used by the cron timeline to plot tz-less
+   *  cron jobs in the same zone the scheduler evaluates them in (instead of
+   *  defaulting to the operator's browser local time). Optional for backward
+   *  compatibility with older gateway builds. */
+  gatewayTimezone?: string;
 };
 
 export type CronRunLogEntry = {

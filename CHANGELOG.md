@@ -388,6 +388,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Control UI/Cron: add a 24-hour timeline strip with NOW indicator, color-coded job markers, cluster badges, hover popups, click-to-history navigation, three zoom presets, and always-on chips for high-frequency jobs to the Cron Jobs page. Closes #40644. Thanks @xvchris.
 - Control UI/Talk: add a generic browser realtime transport contract, Google Live browser Talk sessions with constrained ephemeral tokens, and a Gateway relay for backend-only realtime voice plugins. Thanks @VACInc.
 - CLI/models: route provider-filtered model listing through an explicit source plan so user config, installed manifest rows, Provider Index previews, and scoped runtime fallbacks keep a stable authority order without adding another catalog cache. Thanks @shakkernerd.
 - Plugins/cron: add a typed `cron_changed` hook for observing gateway-owned cron lifecycle updates without depending on internal cron events. Thanks @amknight.

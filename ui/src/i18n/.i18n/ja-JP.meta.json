@@ -1,11 +1,23 @@
 {
-  "fallbackKeys": [],
-  "generatedAt": "2026-04-27T12:11:44.551Z",
+  "fallbackKeys": [
+    "cron.timeline.alwaysOn",
+    "cron.timeline.clickDetails",
+    "cron.timeline.clickHistory",
+    "cron.timeline.pending",
+    "cron.timeline.runNow",
+    "cron.timeline.title",
+    "cron.timeline.viewDetails",
+    "cron.timeline.viewHistory",
+    "cron.timeline.zoomAll",
+    "cron.timeline.zoomNow",
+    "cron.timeline.zoomWork"
+  ],
+  "generatedAt": "2026-04-27T14:09:12.354Z",
   "locale": "ja-JP",
   "model": "gpt-5.5",
   "provider": "openai",
-  "sourceHash": "5e92fbfbb7e3026ea5f3a0835d933c9ce79369a85b1cf0628b1c86369f1c822d",
-  "totalKeys": 763,
+  "sourceHash": "7a9ecafa7cc59d1694143e4a395ec09337f45ead910bb934ff47f4f3e9a0c63a",
+  "totalKeys": 774,
   "translatedKeys": 763,
   "workflow": 1
 }
