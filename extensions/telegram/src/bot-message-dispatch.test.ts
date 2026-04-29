@@ -111,14 +111,21 @@ vi.mock("./bot-message-dispatch.runtime.js", () => ({
   resolveStorePath,
 }));
 
-vi.mock("./bot-message-dispatch.agent.runtime.js", () => ({
-  findModelInCatalog,
-  loadModelCatalog,
-  modelSupportsVision,
-  resolveAgentConfig: vi.fn().mockReturnValue(undefined),
-  resolveAgentDir,
-  resolveDefaultModelForAgent,
-}));
+vi.mock(
+  "./bot-message-dispatch.agent.runtime.js",
+  async (importOriginal) => {
+    const mod =
+      await importOriginal<typeof import("./bot-message-dispatch.agent.runtime.js")>();
+    return {
+      ...mod,
+      findModelInCatalog,
+      loadModelCatalog,
+      modelSupportsVision,
+      resolveAgentDir,
+      resolveDefaultModelForAgent,
+    };
+  },
+);
 
 vi.mock("./sticker-cache.js", () => ({
   cacheSticker: vi.fn(),
