@@ -14,7 +14,7 @@ export function normalizeProviderId(provider: string): string {
   if (normalized === "opencode-go-auth") {
     return "opencode-go";
   }
-  if (normalized === "kimi" || normalized === "kimi-code" || normalized === "kimi-coding") {
+  if (normalized === "kimi" || normalized === "kimi-code") {
     return "kimi";
   }
   if (normalized === "bedrock" || normalized === "aws-bedrock") {

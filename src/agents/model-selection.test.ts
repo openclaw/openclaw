@@ -139,7 +139,7 @@ describe("model-selection", () => {
       expect(normalizeProviderId("OpenCode-Zen")).toBe("opencode");
       expect(normalizeProviderId("qwen")).toBe("qwen");
       expect(normalizeProviderId("kimi-code")).toBe("kimi");
-      expect(normalizeProviderId("kimi-coding")).toBe("kimi");
+      expect(normalizeProviderId("kimi-coding")).toBe("kimi-coding");
       expect(normalizeProviderId("bedrock")).toBe("amazon-bedrock");
       expect(normalizeProviderId("aws-bedrock")).toBe("amazon-bedrock");
       expect(normalizeProviderId("amazon-bedrock")).toBe("amazon-bedrock");
@@ -378,7 +378,7 @@ describe("model-selection", () => {
           overrideModel: "kimi-code",
         }),
       ).toEqual({
-        provider: "kimi",
+        provider: "kimi-coding",
         model: "kimi-code",
       });
     });
@@ -405,7 +405,7 @@ describe("model-selection", () => {
           overrideModel: "kimi-code",
         }),
       ).toEqual({
-        provider: "kimi",
+        provider: "kimi-coding",
         model: "kimi-code",
       });
     });
