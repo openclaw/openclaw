@@ -227,7 +227,7 @@ export async function editMessageWhatsApp(
     cfg: OpenClawConfig;
   },
 ): Promise<{ messageId: string; toJid: string }> {
-  let text = body.trimStart();
+  let text = normalizeWhatsAppPayloadText(body);
   if (!text.trim()) {
     throw new Error("WhatsApp message edit text cannot be empty.");
   }

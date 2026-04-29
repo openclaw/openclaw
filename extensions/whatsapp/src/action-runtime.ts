@@ -106,18 +106,15 @@ export async function handleWhatsAppAction(
     }
     const chatJid =
       readStringParam(params, "chatJid") ?? readStringParam(params, "to", { required: true });
-    const messageId = readStringParam(params, "messageId", { required: true });
-    const editText = action === "edit" ? readEditMessageText(params) : null;
-    const resolved = whatsAppActionRuntime.resolveAuthorizedWhatsAppOutboundTarget({
-      cfg,
-      chatJid,
-      accountId,
-      actionLabel: `message ${action}`,
-    });
     if (action === "edit") {
-      if (editText === null) {
-        throw new WhatsAppToolInputError("WhatsApp message edit text is required.");
-      }
+      const messageId = readStringParam(params, "messageId", { required: true });
+      const editText = readEditMessageText(params);
+      const resolved = whatsAppActionRuntime.resolveAuthorizedWhatsAppOutboundTarget({
+        cfg,
+        chatJid,
+        accountId,
+        actionLabel: `message ${action}`,
+      });
       const result = await whatsAppActionRuntime.editMessageWhatsApp(
         resolved.to,
         messageId,
@@ -130,6 +127,13 @@ export async function handleWhatsAppAction(
       );
       return jsonResult({ ok: true, edited: true, messageId: result.messageId });
     }
+    const messageId = readStringParam(params, "messageId", { required: true });
+    const resolved = whatsAppActionRuntime.resolveAuthorizedWhatsAppOutboundTarget({
+      cfg,
+      chatJid,
+      accountId,
+      actionLabel: `message ${action}`,
+    });
     await whatsAppActionRuntime.unsendMessageWhatsApp(resolved.to, messageId, {
       verbose: false,
       accountId: resolved.accountId,

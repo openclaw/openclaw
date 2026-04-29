@@ -303,7 +303,7 @@ describe("whatsapp react action messageId resolution", () => {
     expect(hoisted.handleWhatsAppAction).toHaveBeenCalledWith(
       {
         action: "edit",
-        to: "+1555",
+        chatJid: "+1555",
         messageId: "msg-42",
         message: "updated",
         accountId: "default",
@@ -328,7 +328,7 @@ describe("whatsapp react action messageId resolution", () => {
     expect(hoisted.handleWhatsAppAction).toHaveBeenCalledWith(
       expect.objectContaining({
         action: "edit",
-        to: "whatsapp:+1555",
+        chatJid: "whatsapp:+1555",
         messageId: "msg-42",
         message: "updated",
       }),
@@ -383,7 +383,7 @@ describe("whatsapp react action messageId resolution", () => {
     expect(hoisted.handleWhatsAppAction).toHaveBeenCalledWith(
       {
         action: "unsend",
-        to: "12345@g.us",
+        chatJid: "12345@g.us",
         messageId: "msg-42",
         accountId: "default",
       },
@@ -402,7 +402,7 @@ describe("whatsapp react action messageId resolution", () => {
     expect(hoisted.handleWhatsAppAction).toHaveBeenCalledWith(
       {
         action: "delete",
-        to: "+1555",
+        chatJid: "+1555",
         messageId: "msg-42",
         accountId: "default",
       },

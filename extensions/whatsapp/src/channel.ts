@@ -50,6 +50,12 @@ const loadWhatsAppChannelReactAction = createLazyRuntimeModule(
   () => import("./channel-react-action.js"),
 );
 
+const WHATSAPP_GATEWAY_ACTIONS = ["react", "edit", "delete", "unsend"] as const;
+
+function isWhatsAppGatewayAction(action: string): boolean {
+  return WHATSAPP_GATEWAY_ACTIONS.includes(action as (typeof WHATSAPP_GATEWAY_ACTIONS)[number]);
+}
+
 function parseWhatsAppExplicitTarget(raw: string) {
   const normalized = normalizeWhatsAppTarget(raw);
   if (!normalized) {
@@ -148,12 +154,9 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
       actions: {
         describeMessageTool: ({ cfg, accountId }) =>
           describeWhatsAppMessageActions({ cfg, accountId }),
-        supportsAction: ({ action }) =>
-          action === "react" || action === "edit" || action === "delete" || action === "unsend",
+        supportsAction: ({ action }) => isWhatsAppGatewayAction(action),
         resolveExecutionMode: ({ action }) =>
-          action === "react" || action === "edit" || action === "delete" || action === "unsend"
-            ? "gateway"
-            : "local",
+          isWhatsAppGatewayAction(action) ? "gateway" : "local",
         handleAction: async ({ action, params, cfg, accountId, requesterSenderId, toolContext }) =>
           await (
             await loadWhatsAppChannelReactAction()

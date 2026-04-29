@@ -119,7 +119,7 @@ export async function handleWhatsAppMessageAction(params: WhatsAppMessageActionP
     return await handleWhatsAppAction(
       {
         action: params.action,
-        to: target,
+        chatJid: target,
         messageId,
         ...(message !== undefined ? { message } : {}),
         accountId: params.accountId ?? undefined,
