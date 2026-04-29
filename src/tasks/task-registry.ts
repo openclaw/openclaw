@@ -33,11 +33,12 @@ import {
   type TaskRegistryObserverEvent,
 } from "./task-registry.store.js";
 import { summarizeTaskRecords } from "./task-registry.summary.js";
-import type {
-  TaskDeliveryState,
-  TaskDeliveryStatus,
-  TaskEventKind,
-  TaskEventRecord,
+import {
+  isActiveTaskStatus,
+  type TaskDeliveryState,
+  type TaskDeliveryStatus,
+  type TaskEventKind,
+  type TaskEventRecord,
   TaskNotifyPolicy,
   TaskRecord,
   TaskRegistrySummary,
@@ -113,15 +114,6 @@ export class ParentFlowLinkError extends Error {
 
 export function isParentFlowLinkError(error: unknown): error is ParentFlowLinkError {
   return error instanceof ParentFlowLinkError;
-}
-
-function isActiveTaskStatus(status: TaskStatus): boolean {
-  return (
-    status === "queued" ||
-    status === "awaiting_approval" ||
-    status === "waiting_external" ||
-    status === "running"
-  );
 }
 
 function isTerminalFlowStatus(status: TaskFlowRecord["status"]): boolean {
@@ -1452,13 +1444,14 @@ function ensureListener() {
       } else if (evt.stream === "approval") {
         const approvalPhase = typeof evt.data?.phase === "string" ? evt.data.phase : undefined;
         const approvalStatus = typeof evt.data?.status === "string" ? evt.data.status : undefined;
-        const approvalMessage = typeof evt.data?.message === "string" ? evt.data.message : undefined;
+        const approvalMessage =
+          typeof evt.data?.message === "string" ? evt.data.message : undefined;
         if (approvalPhase === "requested" && approvalStatus === "pending") {
           patch.status = "awaiting_approval";
           patch.progressSummary = "Awaiting approval before command can run.";
         } else if (approvalPhase === "resolved" && approvalStatus === "approved") {
           patch.status = "running";
-          patch.progressSummary = current.progressSummary;
+          patch.progressSummary = undefined;
         } else if (
           approvalPhase === "resolved" &&
           (approvalStatus === "denied" || approvalStatus === "failed")
@@ -1480,6 +1473,7 @@ function ensureListener() {
             : undefined;
       if (
         assistantText &&
+        current.status === "running" &&
         /no output for .*it may be waiting for (input|interactive input)/i.test(assistantText)
       ) {
         patch.status = "waiting_external";
