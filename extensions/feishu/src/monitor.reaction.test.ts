@@ -13,6 +13,7 @@ import {
   resolveReactionSyntheticEvent,
   type FeishuReactionCreatedEvent,
 } from "./monitor.account.js";
+import type { FeishuStatusSink } from "./monitor.js";
 import { setFeishuRuntime } from "./runtime.js";
 import type { ResolvedFeishuAccount } from "./types.js";
 
@@ -166,6 +167,8 @@ function createTextEvent(params: {
 async function setupDebounceMonitor(params?: {
   botOpenId?: string;
   botName?: string;
+  account?: ResolvedFeishuAccount;
+  statusSink?: FeishuStatusSink;
 }): Promise<(data: unknown) => Promise<void>> {
   const register = vi.fn((registered: Record<string, (data: unknown) => Promise<void>>) => {
     handlers = registered;
@@ -174,13 +177,14 @@ async function setupDebounceMonitor(params?: {
 
   await monitorSingleAccount({
     cfg: buildDebounceConfig(),
-    account: buildDebounceAccount(),
+    account: params?.account ?? buildDebounceAccount(),
     runtime: createNonExitingRuntimeEnv(),
     botOpenIdSource: {
       kind: "prefetched",
       botOpenId: params?.botOpenId ?? "ou_bot",
       botName: params?.botName,
     },
+    statusSink: params?.statusSink,
   });
 
   const onMessage = handlers["im.message.receive_v1"];
@@ -495,6 +499,99 @@ describe("monitorSingleAccount lifecycle", () => {
       | undefined;
     expect(manager?.stop).toHaveBeenCalledTimes(1);
   });
+
+  it("threads the status sink to the transport without marking setup as connected", async () => {
+    setFeishuRuntime(createFeishuMonitorRuntime());
+    const statusSink = vi.fn();
+
+    await monitorSingleAccount({
+      cfg: buildDebounceConfig(),
+      account: buildDebounceAccount(),
+      runtime: createNonExitingRuntimeEnv(),
+      botOpenIdSource: {
+        kind: "prefetched",
+        botOpenId: "ou_bot",
+      },
+      statusSink,
+    });
+
+    expect(monitorWebSocketMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        statusSink,
+      }),
+    );
+    expect(
+      statusSink.mock.calls.some(
+        ([patch]) => (patch as Record<string, unknown>).connected === true,
+      ),
+    ).toBe(false);
+  });
+
+  it("records websocket inbound events as both event and transport activity", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(12_345);
+      setFeishuRuntime(createFeishuMonitorRuntime());
+      const statusSink = vi.fn();
+      await setupDebounceMonitor({ statusSink });
+
+      await handlers["im.chat.member.bot.added_v1"]?.({
+        chat_id: "oc_group_1",
+        operator_id: { open_id: "ou_admin" },
+      });
+
+      expect(statusSink).toHaveBeenCalledWith(
+        expect.objectContaining({
+          connected: true,
+          lastEventAt: 12_345,
+          lastInboundAt: 12_345,
+          lastTransportActivityAt: 12_345,
+          lastError: null,
+        }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not double-count webhook-dispatched events as transport activity", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(23_456);
+      setFeishuRuntime(createFeishuMonitorRuntime());
+      const statusSink = vi.fn();
+      const account = buildDebounceAccount();
+      await setupDebounceMonitor({
+        account: {
+          ...account,
+          encryptKey: "encrypt_key",
+          verificationToken: "verify_token",
+          config: {
+            ...account.config,
+            connectionMode: "webhook",
+          },
+        },
+        statusSink,
+      });
+
+      await handlers["im.chat.member.bot.added_v1"]?.({
+        chat_id: "oc_group_1",
+        operator_id: { open_id: "ou_admin" },
+      });
+
+      const eventPatch = statusSink.mock.calls
+        .map(([patch]) => patch as Record<string, unknown>)
+        .find((patch) => patch.lastEventAt === 23_456);
+      expect(eventPatch).toEqual({
+        connected: true,
+        lastEventAt: 23_456,
+        lastInboundAt: 23_456,
+        lastError: null,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe("Feishu inbound debounce regressions", () => {
@@ -508,6 +605,26 @@ describe("Feishu inbound debounce regressions", () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();
+  });
+
+  it("updates statusSink with lastEventAt when inbound message events arrive", async () => {
+    setDedupPassThroughMocks();
+    const statusSink = vi.fn();
+    const onMessage = await setupDebounceMonitor({ statusSink });
+
+    await onMessage(createTextEvent({ messageId: "om_status_1", text: "hello" }));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(statusSink).toHaveBeenCalledWith(
+      expect.objectContaining({
+        connected: true,
+        lastError: null,
+        lastEventAt: expect.any(Number),
+        lastInboundAt: expect.any(Number),
+        lastTransportActivityAt: expect.any(Number),
+      }),
+    );
   });
 
   it("keeps bot mention when per-message mention keys collide across non-forward messages", async () => {

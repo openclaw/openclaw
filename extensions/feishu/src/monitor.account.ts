@@ -19,6 +19,7 @@ import {
 import { applyBotIdentityState, startBotIdentityRecovery } from "./monitor.bot-identity.js";
 import { createFeishuBotMenuHandler } from "./monitor.bot-menu-handler.js";
 import { createFeishuDriveCommentNoticeHandler } from "./monitor.comment-notice-handler.js";
+import type { FeishuStatusSink } from "./monitor.js";
 import { createFeishuMessageReceiveHandler } from "./monitor.message-handler.js";
 import { fetchBotIdentityForMonitor } from "./monitor.startup.js";
 import { botNames, botOpenIds } from "./monitor.state.js";
@@ -167,6 +168,8 @@ type RegisterEventHandlersContext = {
   runtime?: RuntimeEnv;
   chatHistories: Map<string, HistoryEntry[]>;
   fireAndForget?: boolean;
+  recordTransportActivityWithEvents?: boolean;
+  statusSink?: FeishuStatusSink;
 };
 
 function parseFeishuBotAddedEventPayload(value: unknown): FeishuBotAddedEvent | null {
@@ -238,16 +241,34 @@ function parseFeishuCardActionEventPayload(value: unknown): FeishuCardActionEven
   };
 }
 
+function isFeishuReactionEventPayload(value: unknown): value is FeishuReactionCreatedEvent {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return Boolean(readString(value.message_id) && isRecord(value.reaction_type));
+}
+
 function registerEventHandlers(
   eventDispatcher: Lark.EventDispatcher,
   context: RegisterEventHandlersContext,
 ): void {
-  const { cfg, accountId, runtime, chatHistories, fireAndForget } = context;
+  const { cfg, accountId, runtime, chatHistories, fireAndForget, statusSink } = context;
   const log = runtime?.log ?? console.log;
   const error = runtime?.error ?? console.error;
+  const markInboundEvent = () => {
+    const now = Date.now();
+    statusSink?.({
+      connected: true,
+      lastEventAt: now,
+      lastInboundAt: now,
+      ...(context.recordTransportActivityWithEvents ? { lastTransportActivityAt: now } : {}),
+      lastError: null,
+    });
+  };
   const runFeishuHandler = async (params: { task: () => Promise<void>; errorMessage: string }) => {
     if (fireAndForget) {
       void params.task().catch((err) => {
+        statusSink?.({ lastError: String(err) });
         error(`${params.errorMessage}: ${String(err)}`);
       });
       return;
@@ -255,6 +276,7 @@ function registerEventHandlers(
     try {
       await params.task();
     } catch (err) {
+      statusSink?.({ lastError: String(err) });
       error(`${params.errorMessage}: ${String(err)}`);
     }
   };
@@ -275,6 +297,7 @@ function registerEventHandlers(
       getBotOpenId: (id) => botOpenIds.get(id),
       getBotName: (id) => botNames.get(id),
       resolveSequentialKey: getFeishuSequentialKey,
+      trackEvent: markInboundEvent,
     }),
     "im.message.message_read_v1": async () => {
       // Ignore read receipts
@@ -285,8 +308,10 @@ function registerEventHandlers(
         if (!event) {
           return;
         }
+        markInboundEvent();
         log(`feishu[${accountId}]: bot added to chat ${event.chat_id}`);
       } catch (err) {
+        statusSink?.({ lastError: String(err) });
         error(`feishu[${accountId}]: error handling bot added event: ${String(err)}`);
       }
     },
@@ -296,8 +321,10 @@ function registerEventHandlers(
         if (!chatId) {
           return;
         }
+        markInboundEvent();
         log(`feishu[${accountId}]: bot removed from chat ${chatId}`);
       } catch (err) {
+        statusSink?.({ lastError: String(err) });
         error(`feishu[${accountId}]: error handling bot removed event: ${String(err)}`);
       }
     },
@@ -311,7 +338,11 @@ function registerEventHandlers(
       await runFeishuHandler({
         errorMessage: `feishu[${accountId}]: error handling reaction event`,
         task: async () => {
-          const event = data as FeishuReactionCreatedEvent;
+          if (!isFeishuReactionEventPayload(data)) {
+            return;
+          }
+          markInboundEvent();
+          const event = data;
           const myBotId = botOpenIds.get(accountId);
           const syntheticEvent = await resolveReactionSyntheticEvent({
             cfg,
@@ -340,6 +371,10 @@ function registerEventHandlers(
       await runFeishuHandler({
         errorMessage: `feishu[${accountId}]: error handling reaction removal event`,
         task: async () => {
+          if (!isFeishuReactionEventPayload(data)) {
+            return;
+          }
+          markInboundEvent();
           const event = data as FeishuReactionDeletedEvent;
           const myBotId = botOpenIds.get(accountId);
           const syntheticEvent = await resolveReactionSyntheticEvent({
@@ -380,6 +415,7 @@ function registerEventHandlers(
           error(`feishu[${accountId}]: ignoring malformed card action payload`);
           return;
         }
+        markInboundEvent();
         const promise = handleFeishuCardAction({
           cfg,
           event,
@@ -389,12 +425,14 @@ function registerEventHandlers(
         });
         if (fireAndForget) {
           promise.catch((err) => {
+            statusSink?.({ lastError: String(err) });
             error(`feishu[${accountId}]: error handling card action: ${String(err)}`);
           });
         } else {
           await promise;
         }
       } catch (err) {
+        statusSink?.({ lastError: String(err) });
         error(`feishu[${accountId}]: error handling card action: ${String(err)}`);
       }
     },
@@ -412,12 +450,14 @@ export type MonitorSingleAccountParams = {
   abortSignal?: AbortSignal;
   botOpenIdSource?: BotOpenIdSource;
   fireAndForget?: boolean;
+  statusSink?: FeishuStatusSink;
 };
 
 export async function monitorSingleAccount(params: MonitorSingleAccountParams): Promise<void> {
-  const { cfg, account, runtime, abortSignal } = params;
+  const { cfg, account, runtime, abortSignal, statusSink } = params;
   const { accountId } = account;
   const log = runtime?.log ?? console.log;
+  let failed = false;
 
   const botOpenIdSource = params.botOpenIdSource ?? { kind: "fetch" };
   const botIdentity =
@@ -432,11 +472,21 @@ export async function monitorSingleAccount(params: MonitorSingleAccountParams): 
   }
 
   const connectionMode = account.config.connectionMode ?? "websocket";
+  statusSink?.({
+    mode: connectionMode,
+    connected: false,
+    lastError: null,
+    ...(connectionMode === "webhook" ? { port: account.config.webhookPort ?? 3000 } : {}),
+  });
   if (connectionMode === "webhook" && !account.verificationToken?.trim()) {
-    throw new Error(`Feishu account "${accountId}" webhook mode requires verificationToken`);
+    const message = `Feishu account "${accountId}" webhook mode requires verificationToken`;
+    statusSink?.({ connected: false, lastError: message });
+    throw new Error(message);
   }
   if (connectionMode === "webhook" && !account.encryptKey?.trim()) {
-    throw new Error(`Feishu account "${accountId}" webhook mode requires encryptKey`);
+    const message = `Feishu account "${accountId}" webhook mode requires encryptKey`;
+    statusSink?.({ connected: false, lastError: message });
+    throw new Error(message);
   }
 
   const warmupCount = await warmupDedupFromDisk(accountId, log);
@@ -456,13 +506,40 @@ export async function monitorSingleAccount(params: MonitorSingleAccountParams): 
       runtime,
       chatHistories,
       fireAndForget: params.fireAndForget ?? true,
+      recordTransportActivityWithEvents: connectionMode === "websocket",
+      statusSink,
     });
 
     if (connectionMode === "webhook") {
-      return await monitorWebhook({ account, accountId, runtime, abortSignal, eventDispatcher });
+      return await monitorWebhook({
+        account,
+        accountId,
+        runtime,
+        abortSignal,
+        eventDispatcher,
+        statusSink,
+      });
     }
-    return await monitorWebSocket({ account, accountId, runtime, abortSignal, eventDispatcher });
+    return await monitorWebSocket({
+      account,
+      accountId,
+      runtime,
+      abortSignal,
+      eventDispatcher,
+      statusSink,
+    });
+  } catch (err) {
+    failed = true;
+    statusSink?.({
+      connected: false,
+      lastError: String(err),
+    });
+    throw err;
   } finally {
+    statusSink?.({
+      connected: false,
+      ...(!failed ? { lastError: null } : {}),
+    });
     threadBindingManager?.stop();
   }
 }
