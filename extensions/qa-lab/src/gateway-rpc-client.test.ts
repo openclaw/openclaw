@@ -53,6 +53,8 @@ describe("startQaGatewayRpcClient", () => {
       {
         expectFinal: true,
         progress: false,
+        clientName: "gateway-client",
+        mode: "backend",
       },
     );
 
@@ -126,6 +128,8 @@ describe("startQaGatewayRpcClient", () => {
       {
         expectFinal: undefined,
         progress: false,
+        clientName: "gateway-client",
+        mode: "backend",
       },
     );
 

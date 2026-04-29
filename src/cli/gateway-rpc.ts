@@ -1,5 +1,6 @@
 import type { Command } from "commander";
 export type { GatewayRpcOpts } from "./gateway-rpc.types.js";
+import type { GatewayClientMode, GatewayClientName } from "../gateway/protocol/client-info.js";
 import type { GatewayRpcOpts } from "./gateway-rpc.types.js";
 
 type GatewayRpcRuntimeModule = typeof import("./gateway-rpc.runtime.js");
@@ -23,7 +24,12 @@ export async function callGatewayFromCli(
   method: string,
   opts: GatewayRpcOpts,
   params?: unknown,
-  extra?: { expectFinal?: boolean; progress?: boolean },
+  extra?: {
+    expectFinal?: boolean;
+    progress?: boolean;
+    clientName?: GatewayClientName;
+    mode?: GatewayClientMode;
+  },
 ) {
   const runtime = await loadGatewayRpcRuntime();
   return await runtime.callGatewayFromCliRuntime(method, opts, params, extra);

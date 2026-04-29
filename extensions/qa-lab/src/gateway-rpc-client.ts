@@ -57,6 +57,8 @@ export async function startQaGatewayRpcClient(params: {
               {
                 expectFinal: opts?.expectFinal,
                 progress: false,
+                clientName: "gateway-client",
+                mode: "backend",
               },
             ),
         );
