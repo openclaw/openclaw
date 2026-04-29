@@ -20,6 +20,7 @@ import type {
 import type { SkillSnapshot } from "../../skills.js";
 import type { SilentReplyPromptMode } from "../../system-prompt.types.js";
 import type { PromptMode } from "../../system-prompt.types.js";
+import type { ToolStrictnessMode } from "../../tool-strictness.js";
 import type { AuthProfileFailurePolicy } from "./auth-profile-failure-policy.types.js";
 export type { ClientToolDefinition } from "../../command/shared-types.js";
 
@@ -123,6 +124,8 @@ export type RunEmbeddedPiAgentParams = {
   modelFallbacksOverride?: string[];
   /** Session-pinned embedded harness id. Prevents runtime hot-switching. */
   agentHarnessId?: string;
+  /** Per-run strict tool mode override. Takes precedence over config/env. */
+  toolStrictnessMode?: ToolStrictnessMode;
   authProfileId?: string;
   authProfileIdSource?: "auto" | "user";
   thinkLevel?: ThinkLevel;

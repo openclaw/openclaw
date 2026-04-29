@@ -242,18 +242,6 @@ import {
 } from "./attempt-tool-construction-plan.js";
 export { buildContextEnginePromptCacheInfo } from "./attempt.context-engine-helpers.js";
 import {
-  rotateTranscriptAfterCompaction,
-  shouldRotateCompactionTranscript,
-} from "../compaction-successor-transcript.js";
-import { resolveAttemptWorkspaceBootstrapRouting } from "./attempt-bootstrap-routing.js";
-import { configureEmbeddedAttemptHttpRuntime } from "./attempt-http-runtime.js";
-import {
-  createEmbeddedRunStageTracker,
-  formatEmbeddedRunStageSummary,
-  shouldWarnEmbeddedRunStageSummary,
-} from "./attempt-stage-timing.js";
-import { buildAttemptSystemPrompt } from "./attempt-system-prompt.js";
-import {
   createEmptyToolStrictnessSummary,
   recordToolStrictnessCompatibilityObservation,
   recordToolStrictnessRepair,
@@ -262,7 +250,19 @@ import {
   type ToolStrictnessRepairEvent,
 } from "../../tool-strictness.js";
 import type { TransportStrictnessOpts } from "../../transport-stream-shared.js";
+import {
+  rotateTranscriptAfterCompaction,
+  shouldRotateCompactionTranscript,
+} from "../compaction-successor-transcript.js";
 import type { ToolStrictnessReport } from "../tool-strictness-report.types.js";
+import { resolveAttemptWorkspaceBootstrapRouting } from "./attempt-bootstrap-routing.js";
+import { configureEmbeddedAttemptHttpRuntime } from "./attempt-http-runtime.js";
+import {
+  createEmbeddedRunStageTracker,
+  formatEmbeddedRunStageSummary,
+  shouldWarnEmbeddedRunStageSummary,
+} from "./attempt-stage-timing.js";
+import { buildAttemptSystemPrompt } from "./attempt-system-prompt.js";
 import {
   assembleAttemptContextEngine,
   buildLoopPromptCacheInfo,
@@ -1855,10 +1855,10 @@ export async function runEmbeddedAttempt(
       );
 
       // Resolve strictness mode early so transport stream factories can capture it in closure.
-      // Priority: per-run config > env variable > default "off".
+      // Priority: per-run override > config > env variable > default "off".
       const toolStrictnessMode = resolveToolStrictnessMode({
         env: process.env,
-        mode: params.config?.toolStrictness?.mode,
+        mode: params.toolStrictnessMode ?? params.config?.toolStrictness?.mode,
       });
       const toolStrictnessReport: ToolStrictnessReport = {
         compatibilityObservations: [],
@@ -2422,6 +2422,7 @@ export async function runEmbeddedAttempt(
           shouldEmitToolResult: params.shouldEmitToolResult,
           shouldEmitToolOutput: params.shouldEmitToolOutput,
           onToolResult: params.onToolResult,
+          onToolStrictnessRepair: collectToolStrictnessRepair,
           onReasoningStream: params.onReasoningStream,
           onReasoningEnd: params.onReasoningEnd,
           onBlockReply: params.onBlockReply,
@@ -2439,6 +2440,7 @@ export async function runEmbeddedAttempt(
           enforceFinalTag: params.enforceFinalTag,
           silentExpected: params.silentExpected,
           config: params.config,
+          toolStrictnessMode,
           sessionKey: sandboxSessionKey,
           sessionId: params.sessionId,
           agentId: sessionAgentId,

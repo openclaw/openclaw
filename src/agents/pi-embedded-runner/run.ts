@@ -1159,6 +1159,7 @@ export async function runEmbeddedPiAgent(
             workspaceDir: resolvedWorkspace,
             agentDir,
             config: params.config,
+            toolStrictnessMode: params.toolStrictnessMode,
             allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
             contextEngine,
             contextTokenBudget: ctxInfo.tokens,

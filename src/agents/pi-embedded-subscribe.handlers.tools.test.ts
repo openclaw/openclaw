@@ -78,6 +78,7 @@ describe("handleToolExecutionStart read path checks", () => {
   });
   it("does not warn when read tool uses file_path alias", async () => {
     const { ctx, warn, onBlockReplyFlush } = createTestContext();
+    ctx.params.config = { toolStrictness: { mode: "off" } };
 
     const evt: ToolExecutionStartEvent = {
       type: "tool_execution_start",

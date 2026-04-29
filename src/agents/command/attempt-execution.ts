@@ -614,6 +614,7 @@ export function runAgentAttempt(params: {
     provider: params.providerOverride,
     model: params.modelOverride,
     modelFallbacksOverride: params.modelFallbacksOverride,
+    toolStrictnessMode: params.opts.toolStrictnessMode,
     authProfileId,
     authProfileIdSource: authProfileId ? harnessAuthSelection.authProfileIdSource : undefined,
     thinkLevel: params.resolvedThinkLevel,

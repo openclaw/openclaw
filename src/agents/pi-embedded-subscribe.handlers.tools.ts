@@ -611,7 +611,7 @@ export function handleToolExecutionStart(
       const record = args && typeof args === "object" ? (args as Record<string, unknown>) : {};
       const strictnessMode = resolveToolStrictnessMode({
         env: process.env,
-        mode: ctx.params.config?.toolStrictness?.mode,
+        mode: ctx.params.toolStrictnessMode ?? ctx.params.config?.toolStrictness?.mode,
       });
       const hasCanonicalPath = typeof record.path === "string" && record.path.trim().length > 0;
       const hasAliasPath =
@@ -627,6 +627,7 @@ export function handleToolExecutionStart(
             to: "path",
             mode: strictnessMode,
           }),
+          onRepairEvent: ctx.params.onToolStrictnessRepair,
           logger: (message) => ctx.log.debug(message),
         });
       }

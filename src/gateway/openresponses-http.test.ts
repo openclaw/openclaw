@@ -130,6 +130,42 @@ function parseSseEvents(text: string): Array<{ event?: string; data: string }> {
   return events;
 }
 
+function buildToolStrictnessReportFixture() {
+  return {
+    compatibilityObservations: [],
+    toolUseDiagnostics: [],
+    repairs: [
+      {
+        kind: "argumentKeyAlias" as const,
+        tool: "read",
+        from: "file_path",
+        to: "path",
+        mode: "warn" as const,
+      },
+    ],
+    summary: {
+      compatibilityObservationCount: 0,
+      toolUseDiagnosticCount: 0,
+      repairCount: 1,
+      hadAnyRepair: true,
+      hadCompatibilityObservation: false,
+      hadReplayDiagnostic: false,
+      warnSurfaceUsed: true,
+      strictFailureCandidate: true,
+      compatibilityLevel: "strict-failure-candidate" as const,
+      warnSurfaceReasons: ["repair" as const],
+      strictFailureReasons: ["repair" as const],
+      compatibilityObservationKindCounts: { toolCallBlockTypeCompatibility: 0 },
+      toolUseDiagnosticKindCounts: { toolUseReplayDiagnostic: 0 },
+      repairKindCounts: {
+        argumentKeyAlias: 1,
+        argumentShapeRepair: 0,
+        toolNameNormalization: 0,
+      },
+    },
+  };
+}
+
 async function ensureResponseConsumed(res: Response) {
   if (res.bodyUsed) {
     return;
@@ -272,6 +308,75 @@ describe("OpenResponses HTTP API (e2e)", () => {
         /^agent:beta:/,
       );
       await ensureResponseConsumed(resModel);
+
+      agentCommand.mockClear();
+      agentCommand.mockResolvedValueOnce({
+        payloads: [{ text: "strictness" }],
+        toolStrictnessReport: {
+          compatibilityObservations: [],
+          toolUseDiagnostics: [],
+          repairs: [
+            {
+              kind: "argumentKeyAlias",
+              tool: "read",
+              from: "file_path",
+              to: "path",
+              mode: "warn",
+            },
+          ],
+          summary: {
+            compatibilityObservationCount: 0,
+            toolUseDiagnosticCount: 0,
+            repairCount: 1,
+            hadAnyRepair: true,
+            hadCompatibilityObservation: false,
+            hadReplayDiagnostic: false,
+            warnSurfaceUsed: true,
+            strictFailureCandidate: true,
+            compatibilityLevel: "strict-failure-candidate",
+            warnSurfaceReasons: ["repair"],
+            strictFailureReasons: ["repair"],
+            compatibilityObservationKindCounts: { toolCallBlockTypeCompatibility: 0 },
+            toolUseDiagnosticKindCounts: { toolUseReplayDiagnostic: 0 },
+            repairKindCounts: {
+              argumentKeyAlias: 1,
+              argumentShapeRepair: 0,
+              toolNameNormalization: 0,
+            },
+          },
+        },
+      } as never);
+      const resStrictnessReport = await postResponses(port, { model: "openclaw", input: "hi" });
+      expect(resStrictnessReport.status).toBe(200);
+      const strictnessJson = (await resStrictnessReport.json()) as Record<string, unknown>;
+      expect(strictnessJson.tool_strictness_report).toMatchObject({
+        summary: {
+          repairCount: 1,
+          hadAnyRepair: true,
+          repairKindCounts: { argumentKeyAlias: 1 },
+        },
+        repairs: [
+          {
+            kind: "argumentKeyAlias",
+            from: "file_path",
+            to: "path",
+            mode: "warn",
+          },
+        ],
+      });
+
+      mockAgentOnce([{ text: "hello" }]);
+      const resStrictness = await postResponses(port, {
+        model: "openclaw",
+        input: "hi",
+        tool_strictness_mode: "strict",
+      });
+      expect(resStrictness.status).toBe(200);
+      const optsStrictness = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0];
+      expect(
+        (optsStrictness as { toolStrictnessMode?: string } | undefined)?.toolStrictnessMode,
+      ).toBe("strict");
+      await ensureResponseConsumed(resStrictness);
 
       mockAgentOnce([{ text: "hello" }]);
       const resDefaultAlias = await postResponses(port, { model: "openclaw/default", input: "hi" });
@@ -670,13 +775,15 @@ describe("OpenResponses HTTP API (e2e)", () => {
     const port = enabledPort;
     try {
       agentCommand.mockClear();
-      agentCommand.mockImplementationOnce((async (opts: unknown) =>
-        buildAssistantDeltaResult({
+      agentCommand.mockImplementationOnce((async (opts: unknown) => ({
+        ...buildAssistantDeltaResult({
           opts,
           emit: emitAgentEvent,
           deltas: ["he", "llo"],
           text: "hello",
-        })) as never);
+        }),
+        toolStrictnessReport: buildToolStrictnessReportFixture(),
+      })) as never);
 
       const resDelta = await postResponses(port, {
         stream: true,
@@ -697,6 +804,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
       expect(eventTypes).toContain("response.output_text.delta");
       expect(eventTypes).toContain("response.output_text.done");
       expect(eventTypes).toContain("response.content_part.done");
+      expect(eventTypes).toContain("response.tool_strictness_report");
       expect(eventTypes).toContain("response.completed");
       expect(deltaEvents.some((e) => e.data === "[DONE]")).toBe(true);
 
@@ -710,6 +818,15 @@ describe("OpenResponses HTTP API (e2e)", () => {
       expect(deltas).toBe("hello");
 
       const completedDeltaResponse = deltaEvents.find((e) => e.event === "response.completed");
+      const reportEvent = deltaEvents.find((e) => e.event === "response.tool_strictness_report");
+      expect(JSON.parse(reportEvent?.data ?? "{}")).toMatchObject({
+        tool_strictness_report: {
+          summary: {
+            repairCount: 1,
+            repairKindCounts: { argumentKeyAlias: 1 },
+          },
+        },
+      });
       const completedDeltaOutput = (
         JSON.parse(completedDeltaResponse?.data ?? "{}") as {
           response?: { output?: Array<Record<string, unknown>> };

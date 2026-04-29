@@ -3,6 +3,10 @@ import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../../system-prompt-cache-boundary.js";
 import { buildAgentSystemPrompt } from "../../system-prompt.js";
+import {
+  createEmptyToolStrictnessSummary,
+  recordToolStrictnessRepair,
+} from "../../tool-strictness.js";
 import { resolveBootstrapContextTargets } from "./attempt-bootstrap-routing.js";
 import {
   buildContextEnginePromptCacheInfo,
@@ -984,9 +988,9 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     }
     await stream.result();
 
-    expect(partialToolCall.name).toBe("functions.read");
-    expect(messageToolCall.name).toBe("functions.write");
-    expect(finalToolCall.name).toBe("tools/exec");
+    expect(partialToolCall.name).toBe(" functions.read ");
+    expect(messageToolCall.name).toBe(" functions.write ");
+    expect(finalToolCall.name).toBe(" tools/exec ");
   });
 
   it("does not normalize toolUse and functionCall names in strict mode", async () => {
@@ -1016,13 +1020,13 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     }
     const result = await stream.result();
 
-    expect(partialToolCall.name).toBe("functions.read");
-    expect(messageToolCall.name).toBe("functions.exec");
-    expect(finalToolCall.name).toBe("tools/write");
+    expect(partialToolCall.name).toBe(" functions.read ");
+    expect(messageToolCall.name).toBe(" functions.exec ");
+    expect(finalToolCall.name).toBe(" tools/write ");
     expect(result).toBe(finalMessage);
   });
 
-  it("still trims allowlisted toolUse and functionCall names in strict mode", async () => {
+  it("preserves whitespace in strict mode instead of trimming allowlisted names", async () => {
     process.env.OPENCLAW_TOOL_STRICTNESS_MODE = "strict";
     const partialToolCall = { type: "toolUse", name: " read " };
     const messageToolCall = { type: "functionCall", name: " exec " };
@@ -1049,9 +1053,9 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     }
     const result = await stream.result();
 
-    expect(partialToolCall.name).toBe("read");
-    expect(messageToolCall.name).toBe("exec");
-    expect(finalToolCall.name).toBe("write");
+    expect(partialToolCall.name).toBe(" read ");
+    expect(messageToolCall.name).toBe(" exec ");
+    expect(finalToolCall.name).toBe(" write ");
     expect(result).toBe(finalMessage);
   });
 
@@ -1491,7 +1495,7 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     expect(finalToolCall.name).toBeUndefined();
   });
 
-  it("keeps inferring canonical tool names from canonical ids when name is missing in strict mode", async () => {
+  it("does not infer canonical tool names from canonical ids when name is missing in strict mode", async () => {
     const finalToolCall: { type: string; id: string; name?: string } = {
       type: "toolCall",
       id: "read",
@@ -1509,10 +1513,10 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     });
     await stream.result();
 
-    expect(finalToolCall.name).toBe("read");
+    expect(finalToolCall.name).toBeUndefined();
   });
 
-  it("keeps inferring tool names from malformed ids when name is missing in strict mode", async () => {
+  it("does not infer tool names from malformed ids when name is missing in strict mode", async () => {
     const finalToolCall: { type: string; id: string; name?: string } = {
       type: "toolCall",
       id: "functionswrite4",
@@ -1530,7 +1534,7 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     });
     await stream.result();
 
-    expect(finalToolCall.name).toBe("write");
+    expect(finalToolCall.name).toBeUndefined();
   });
 
   it("infers malformed non-blank tool names before dispatch", async () => {
@@ -1684,7 +1688,7 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     });
     await stream.result();
 
-    expect(finalToolCall.name).toBe("");
+    expect(finalToolCall.name).toBe("   ");
   });
 
   it("keeps blank names blank and assigns fallback ids when both name and id are blank", async () => {
@@ -2485,7 +2489,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
     expect(seenContext.messages[0]?.content?.[0]?.name).toBe("read");
   });
 
-  it("still sanitizes replayed toolUse and functionCall blocks in strict mode", async () => {
+  it("rejects replayed toolUse and functionCall blocks in strict mode", async () => {
     process.env.OPENCLAW_TOOL_STRICTNESS_MODE = "strict";
     const messages = [
       {
@@ -2503,24 +2507,16 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
     const wrapped = wrapStreamFnSanitizeMalformedToolCalls(
       baseFn as never,
       new Set(["read", "exec"]),
+      undefined,
       { mode: "strict" } as never,
     );
-    const stream = wrapped({} as never, { messages } as never, {} as never) as
-      | FakeWrappedStream
-      | Promise<FakeWrappedStream>;
-    await Promise.resolve(stream);
-
-    expect(baseFn).toHaveBeenCalledTimes(1);
-    const seenContext = baseFn.mock.calls[0]?.[1] as {
-      messages: Array<{ content?: Array<{ type?: string; name?: string }> }>;
-    };
-    expect(seenContext.messages[0]?.content).toEqual([
-      expect.objectContaining({ type: "toolUse", name: "read" }),
-      expect.objectContaining({ type: "functionCall", name: "exec" }),
-    ]);
+    expect(() => wrapped({} as never, { messages } as never, {} as never)).toThrow(
+      "strict tool mode rejected transcript tool call compatibility: toolUse replay diagnostic",
+    );
+    expect(baseFn).not.toHaveBeenCalled();
   });
 
-  it("observes functionCall compatibility hits during strict replay sanitization", async () => {
+  it("observes functionCall compatibility hits before strict replay rejection", async () => {
     process.env.OPENCLAW_TOOL_STRICTNESS_MODE = "strict";
     const messages = [
       {
@@ -2544,16 +2540,10 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
         onCompatibilityEvent: (event: unknown) => observations.push(event),
       } as never,
     );
-    const stream = wrapped({} as never, { messages } as never, {} as never) as
-      | FakeWrappedStream
-      | Promise<FakeWrappedStream>;
-    const resolvedStream = await Promise.resolve(stream);
-    for await (const _item of resolvedStream) {
-      // drain
-    }
-    await resolvedStream.result();
-
-    expect(baseFn).toHaveBeenCalledTimes(1);
+    expect(() => wrapped({} as never, { messages } as never, {} as never)).toThrow(
+      "strict tool mode rejected transcript tool call compatibility: functionCall",
+    );
+    expect(baseFn).not.toHaveBeenCalled();
     expect(observations).toEqual([
       {
         kind: "toolCallBlockTypeCompatibility",
@@ -2565,7 +2555,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
     ]);
   });
 
-  it("leaves snake_case tool_call replay blocks untouched in strict mode", async () => {
+  it("rejects snake_case tool_call replay blocks in strict mode", async () => {
     process.env.OPENCLAW_TOOL_STRICTNESS_MODE = "strict";
     const messages = [
       {
@@ -2579,24 +2569,19 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
       createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
     );
 
-    const wrapped = wrapStreamFnSanitizeMalformedToolCalls(baseFn as never, new Set(["read"]), {
-      mode: "strict",
-    } as never);
-    const stream = wrapped({} as never, { messages } as never, {} as never) as
-      | FakeWrappedStream
-      | Promise<FakeWrappedStream>;
-    await Promise.resolve(stream);
-
-    expect(baseFn).toHaveBeenCalledTimes(1);
-    const seenContext = baseFn.mock.calls[0]?.[1] as {
-      messages: Array<{ content?: Array<{ type?: string; name?: string }> }>;
-    };
-    expect(seenContext.messages[0]?.content?.[0]).toEqual(
-      expect.objectContaining({ type: "tool_call", name: " functions.read " }),
+    const wrapped = wrapStreamFnSanitizeMalformedToolCalls(
+      baseFn as never,
+      new Set(["read"]),
+      undefined,
+      { mode: "strict" } as never,
     );
+    expect(() => wrapped({} as never, { messages } as never, {} as never)).toThrow(
+      "strict tool mode rejected transcript tool call compatibility: tool_call",
+    );
+    expect(baseFn).not.toHaveBeenCalled();
   });
 
-  it("observes tool_call compatibility hits during strict replay sanitization", async () => {
+  it("observes tool_call compatibility hits before strict replay rejection", async () => {
     process.env.OPENCLAW_TOOL_STRICTNESS_MODE = "strict";
     const messages = [
       {
@@ -2620,16 +2605,10 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
         onCompatibilityEvent: (event: unknown) => observations.push(event),
       } as never,
     );
-    const stream = wrapped({} as never, { messages } as never, {} as never) as
-      | FakeWrappedStream
-      | Promise<FakeWrappedStream>;
-    const resolvedStream = await Promise.resolve(stream);
-    for await (const _item of resolvedStream) {
-      // drain
-    }
-    await resolvedStream.result();
-
-    expect(baseFn).toHaveBeenCalledTimes(1);
+    expect(() => wrapped({} as never, { messages } as never, {} as never)).toThrow(
+      "strict tool mode rejected transcript tool call compatibility: tool_call",
+    );
+    expect(baseFn).not.toHaveBeenCalled();
     expect(observations).toEqual([
       {
         kind: "toolCallBlockTypeCompatibility",
@@ -3134,7 +3113,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
     },
   );
 
-  it("observes pairing-sensitive toolUse replay diagnostics without changing transcript behavior", async () => {
+  it("observes pairing-sensitive toolUse replay diagnostics before strict rejection", async () => {
     const messages = [
       {
         role: "assistant",
@@ -3171,22 +3150,12 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
         onToolUseReplayDiagnostic: (event: unknown) => diagnostics.push(event),
       } as never,
     );
-    const stream = wrapped(
-      { api: "anthropic-messages" } as never,
-      { messages } as never,
-      {} as never,
-    ) as FakeWrappedStream | Promise<FakeWrappedStream>;
-    const resolvedStream = await Promise.resolve(stream);
-    for await (const _item of resolvedStream) {
-      // drain
-    }
-    await resolvedStream.result();
-
-    expect(baseFn).toHaveBeenCalledTimes(1);
-    const seenContext = baseFn.mock.calls[0]?.[1] as {
-      messages: Array<{ role?: string; content?: unknown[] }>;
-    };
-    expect(seenContext.messages).toEqual(messages);
+    expect(() =>
+      wrapped({ api: "anthropic-messages" } as never, { messages } as never, {} as never),
+    ).toThrow(
+      "strict tool mode rejected transcript tool call compatibility: toolUse replay diagnostic",
+    );
+    expect(baseFn).not.toHaveBeenCalled();
     expect(diagnostics).toEqual([
       {
         kind: "toolUseReplayDiagnostic",
@@ -3200,7 +3169,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
     ]);
   });
 
-  it("observes provider-owned thinking toolUse replay diagnostics without changing transcript behavior", async () => {
+  it("observes provider-owned thinking toolUse replay diagnostics before strict rejection", async () => {
     const messages = [
       {
         role: "assistant",
@@ -3240,31 +3209,12 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
         onToolUseReplayDiagnostic: (event: unknown) => diagnostics.push(event),
       } as never,
     );
-    const stream = wrapped(
-      { api: "anthropic-messages" } as never,
-      { messages } as never,
-      {} as never,
-    ) as FakeWrappedStream | Promise<FakeWrappedStream>;
-    const resolvedStream = await Promise.resolve(stream);
-    for await (const _item of resolvedStream) {
-      // drain
-    }
-    await resolvedStream.result();
-
-    expect(baseFn).toHaveBeenCalledTimes(1);
-    const seenContext = baseFn.mock.calls[0]?.[1] as {
-      messages: Array<{ role?: string; content?: unknown[] }>;
-    };
-    expect(seenContext.messages).toEqual([
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "[tool calls omitted]" }],
-      },
-      {
-        role: "user",
-        content: [{ type: "text", text: "retry" }],
-      },
-    ]);
+    expect(() =>
+      wrapped({ api: "anthropic-messages" } as never, { messages } as never, {} as never),
+    ).toThrow(
+      "strict tool mode rejected transcript tool call compatibility: toolUse replay diagnostic",
+    );
+    expect(baseFn).not.toHaveBeenCalled();
     expect(diagnostics).toEqual([
       {
         kind: "toolUseReplayDiagnostic",
@@ -3407,6 +3357,33 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
     expect(toolStrictnessReport.repairs).toEqual([toolNameRepairEvent, argumentShapeRepairEvent]);
   });
 
+  it("counts argumentKeyAlias repairs in toolStrictnessReport summary", async () => {
+    const summary = createEmptyToolStrictnessSummary();
+
+    recordToolStrictnessRepair(summary, {
+      kind: "argumentKeyAlias",
+      tool: "read",
+      from: "file_path",
+      to: "path",
+      mode: "warn",
+    });
+
+    expect(summary).toMatchObject({
+      repairCount: 1,
+      hadAnyRepair: true,
+      warnSurfaceUsed: true,
+      strictFailureCandidate: true,
+      compatibilityLevel: "strict-failure-candidate",
+      warnSurfaceReasons: ["repair"],
+      strictFailureReasons: ["repair"],
+      repairKindCounts: {
+        argumentKeyAlias: 1,
+        argumentShapeRepair: 0,
+        toolNameNormalization: 0,
+      },
+    });
+  });
+
   it("builds a minimal toolStrictnessReport from replay observations and diagnostics", async () => {
     const messages = [
       {
@@ -3439,10 +3416,9 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
         onToolUseReplayDiagnostic: (event: unknown) => toolUseDiagnostics.push(event),
       } as never,
     );
-    const stream = wrapped({} as never, { messages } as never, {} as never) as
-      | FakeWrappedStream
-      | Promise<FakeWrappedStream>;
-    await Promise.resolve(stream);
+    expect(() => wrapped({} as never, { messages } as never, {} as never)).toThrow(
+      "strict tool mode rejected transcript tool call compatibility: toolUse replay diagnostic",
+    );
 
     const toolStrictnessReport = {
       compatibilityObservations,

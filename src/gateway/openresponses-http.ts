@@ -10,7 +10,9 @@ import { createHash, randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { ImageContent } from "../agents/command/types.js";
 import type { ClientToolDefinition } from "../agents/pi-embedded-runner/run/params.js";
+import type { ToolStrictnessReport } from "../agents/pi-embedded-runner/tool-strictness-report.types.js";
 import { isClientToolNameConflictError } from "../agents/pi-tool-definition-adapter.js";
+import type { ToolStrictnessMode } from "../agents/tool-strictness.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { agentCommandFromIngress } from "../commands/agent.js";
@@ -227,6 +229,13 @@ function writeSseEvent(res: ServerResponse, event: StreamingEvent) {
   res.write(`data: ${JSON.stringify(event)}\n\n`);
 }
 
+function writeToolStrictnessReportEvent(res: ServerResponse, report: ToolStrictnessReport) {
+  writeSseEvent(res, {
+    type: "response.tool_strictness_report",
+    tool_strictness_report: report,
+  });
+}
+
 type ResolvedResponsesLimits = {
   maxBodyBytes: number;
   maxUrlParts: number;
@@ -401,6 +410,7 @@ async function runResponsesAgentCommand(params: {
   runId: string;
   messageChannel: string;
   senderIsOwner: boolean;
+  toolStrictnessMode?: ToolStrictnessMode;
   deps: CliDeps;
   abortSignal?: AbortSignal;
 }) {
@@ -419,6 +429,7 @@ async function runResponsesAgentCommand(params: {
       bestEffortDeliver: false,
       senderIsOwner: params.senderIsOwner,
       allowModelOverride: true,
+      toolStrictnessMode: params.toolStrictnessMode,
       abortSignal: params.abortSignal,
     },
     defaultRuntime,
@@ -472,6 +483,7 @@ export async function handleOpenResponsesHttpRequest(
 
   const payload: CreateResponseBody = parseResult.data;
   const stream = Boolean(payload.stream);
+  const toolStrictnessMode = payload.tool_strictness_mode ?? payload.toolStrictnessMode;
   const model = payload.model;
   const user = payload.user;
   const agentId = resolveAgentIdForRequest({ req, model });
@@ -692,6 +704,7 @@ export async function handleOpenResponsesHttpRequest(
         runId: responseId,
         messageChannel,
         senderIsOwner,
+        toolStrictnessMode,
         deps,
         abortSignal: abortController.signal,
       });
@@ -821,6 +834,7 @@ export async function handleOpenResponsesHttpRequest(
   let unsubscribe = () => {};
   let stopWatchingDisconnect = () => {};
   let finalUsage: Usage | undefined;
+  let finalToolStrictnessReport: ToolStrictnessReport | undefined;
   let finalizeRequested: { status: ResponseResource["status"]; text: string } | null = null;
 
   const maybeFinalize = () => {
@@ -877,6 +891,9 @@ export async function handleOpenResponsesHttpRequest(
     });
 
     rememberResponseSession();
+    if (finalToolStrictnessReport) {
+      writeToolStrictnessReportEvent(res, finalToolStrictnessReport);
+    }
     writeSseEvent(res, { type: "response.completed", response: finalResponse });
     writeDone(res);
     res.end();
@@ -983,11 +1000,15 @@ export async function handleOpenResponsesHttpRequest(
         runId: responseId,
         messageChannel,
         senderIsOwner,
+        toolStrictnessMode,
         deps,
         abortSignal: abortController.signal,
       });
 
       finalUsage = extractUsageFromResult(result);
+      finalToolStrictnessReport = (
+        result as { toolStrictnessReport?: ToolStrictnessReport } | undefined
+      )?.toolStrictnessReport;
 
       // Check for pending client tool calls BEFORE maybeFinalize() because the
       // lifecycle:end event may already have requested finalization.
@@ -1087,6 +1108,9 @@ export async function handleOpenResponsesHttpRequest(
         stopWatchingDisconnect();
         unsubscribe();
         rememberResponseSession();
+        if (finalToolStrictnessReport) {
+          writeToolStrictnessReportEvent(res, finalToolStrictnessReport);
+        }
         writeSseEvent(res, { type: "response.completed", response: incompleteResponse });
         writeDone(res);
         res.end();

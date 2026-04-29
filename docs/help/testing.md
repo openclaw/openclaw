@@ -36,6 +36,7 @@ Most days:
 - Prefer targeted runs first when you are iterating on a single failure.
 - Docker-backed QA site: `pnpm qa:lab:up`
 - Linux VM-backed QA lane: `pnpm openclaw qa suite --runner multipass --scenario channel-chat-baseline`
+- Strict tool mode fidelity checks: [Strict Tool Mode Testing](/help/strict-tool-mode-testing)
 
 When you touch tests or want extra confidence:
 

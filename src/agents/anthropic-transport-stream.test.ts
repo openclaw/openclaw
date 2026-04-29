@@ -1,6 +1,7 @@
 import type { Model } from "@mariozechner/pi-ai";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { attachModelProviderRequestTransport } from "./provider-request-config.js";
+import type { ToolStrictnessRepairEvent } from "./tool-strictness.js";
 
 const { buildGuardedModelFetchMock, guardedFetchMock } = vi.hoisted(() => ({
   buildGuardedModelFetchMock: vi.fn(),
@@ -688,6 +689,146 @@ describe("anthropic transport stream", () => {
         }),
       ]),
     );
+  });
+
+  it("emits warn-mode repair events when replayed Anthropic tool-call args are JSON strings", async () => {
+    const repairs: ToolStrictnessRepairEvent[] = [];
+    const model = attachModelProviderRequestTransport(
+      {
+        id: "claude-sonnet-4-6",
+        name: "Claude Sonnet 4.6",
+        api: "anthropic-messages",
+        provider: "anthropic",
+        baseUrl: "https://api.anthropic.com",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"anthropic-messages">,
+      {
+        tls: {
+          ca: "ca-pem",
+        },
+      },
+    );
+    const streamFn = createAnthropicMessagesTransportStreamFn({
+      mode: "warn",
+      onRepairEvent: (event) => repairs.push(event),
+    });
+
+    const stream = await Promise.resolve(
+      streamFn(
+        model,
+        {
+          messages: [
+            {
+              role: "assistant",
+              provider: "openai",
+              api: "openai-responses",
+              model: "gpt-5.4",
+              stopReason: "toolUse",
+              timestamp: 0,
+              content: [
+                {
+                  type: "toolCall",
+                  id: "call_1",
+                  name: "lookup",
+                  arguments: '{"q":"hello"}',
+                },
+              ],
+            },
+          ],
+        } as never,
+        {
+          apiKey: "sk-ant-api",
+        } as Parameters<typeof streamFn>[2],
+      ),
+    );
+    await stream.result();
+
+    const firstCallParams = latestAnthropicRequest().payload;
+    expect(firstCallParams.messages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          role: "assistant",
+          content: expect.arrayContaining([
+            expect.objectContaining({
+              type: "tool_use",
+              name: "lookup",
+              input: { q: "hello" },
+            }),
+          ]),
+        }),
+      ]),
+    );
+    expect(repairs).toEqual([
+      expect.objectContaining({
+        kind: "argumentShapeRepair",
+        mode: "warn",
+        fromType: "string",
+        toType: "object",
+        detail: "json-parse",
+      }),
+    ]);
+  });
+
+  it("rejects replayed Anthropic tool-call arg shape repairs in strict mode", async () => {
+    const model = attachModelProviderRequestTransport(
+      {
+        id: "claude-sonnet-4-6",
+        name: "Claude Sonnet 4.6",
+        api: "anthropic-messages",
+        provider: "anthropic",
+        baseUrl: "https://api.anthropic.com",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"anthropic-messages">,
+      {
+        tls: {
+          ca: "ca-pem",
+        },
+      },
+    );
+    const streamFn = createAnthropicMessagesTransportStreamFn({ mode: "strict" });
+
+    const stream = await Promise.resolve(
+      streamFn(
+        model,
+        {
+          messages: [
+            {
+              role: "assistant",
+              provider: "openai",
+              api: "openai-responses",
+              model: "gpt-5.4",
+              stopReason: "toolUse",
+              timestamp: 0,
+              content: [
+                {
+                  type: "toolCall",
+                  id: "call_1",
+                  name: "lookup",
+                  arguments: '{"q":"hello"}',
+                },
+              ],
+            },
+          ],
+        } as never,
+        {
+          apiKey: "sk-ant-api",
+        } as Parameters<typeof streamFn>[2],
+      ),
+    );
+
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    expect(result.errorMessage).toContain("strict tool mode rejected non-object tool arguments");
+    expect(guardedFetchMock).not.toHaveBeenCalled();
   });
 
   it.each([

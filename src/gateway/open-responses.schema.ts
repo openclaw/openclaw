@@ -198,6 +198,8 @@ export const CreateResponseBodySchema = z
     tools: z.array(ToolDefinitionSchema).optional(),
     tool_choice: ToolChoiceSchema.optional(),
     stream: z.boolean().optional(),
+    tool_strictness_mode: z.enum(["off", "warn", "strict"]).optional(),
+    toolStrictnessMode: z.enum(["off", "warn", "strict"]).optional(),
     max_output_tokens: z.number().int().positive().optional(),
     max_tool_calls: z.number().int().positive().optional(),
     user: z.string().optional(),
@@ -317,6 +319,11 @@ export const ResponseFailedEventSchema = z.object({
   response: ResponseResourceSchema,
 });
 
+export const ResponseToolStrictnessReportEventSchema = z.object({
+  type: z.literal("response.tool_strictness_report"),
+  tool_strictness_report: z.unknown(),
+});
+
 export const OutputItemAddedEventSchema = z.object({
   type: z.literal("response.output_item.added"),
   output_index: z.number().int().nonnegative(),
@@ -366,6 +373,7 @@ export type StreamingEvent =
   | z.infer<typeof ResponseInProgressEventSchema>
   | z.infer<typeof ResponseCompletedEventSchema>
   | z.infer<typeof ResponseFailedEventSchema>
+  | z.infer<typeof ResponseToolStrictnessReportEventSchema>
   | z.infer<typeof OutputItemAddedEventSchema>
   | z.infer<typeof OutputItemDoneEventSchema>
   | z.infer<typeof ContentPartAddedEventSchema>

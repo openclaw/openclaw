@@ -14,7 +14,9 @@ export type TransportStrictnessOpts = {
   onRepairEvent?: (event: ToolStrictnessRepairEvent) => void;
 };
 
-type TransportUsage = {
+export type { ToolStrictnessRepairEvent };
+
+export type TransportUsage = {
   input: number;
   output: number;
   cacheRead: number;

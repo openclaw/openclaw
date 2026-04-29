@@ -93,6 +93,42 @@ function parseSseDataLines(text: string): string[] {
     .map((line) => line.slice("data: ".length));
 }
 
+function buildToolStrictnessReportFixture() {
+  return {
+    compatibilityObservations: [],
+    toolUseDiagnostics: [],
+    repairs: [
+      {
+        kind: "argumentShapeRepair" as const,
+        fromType: "string",
+        toType: "object" as const,
+        mode: "warn" as const,
+        detail: "json-parse" as const,
+      },
+    ],
+    summary: {
+      compatibilityObservationCount: 0,
+      toolUseDiagnosticCount: 0,
+      repairCount: 1,
+      hadAnyRepair: true,
+      hadCompatibilityObservation: false,
+      hadReplayDiagnostic: false,
+      warnSurfaceUsed: true,
+      strictFailureCandidate: true,
+      compatibilityLevel: "strict-failure-candidate" as const,
+      warnSurfaceReasons: ["repair" as const],
+      strictFailureReasons: ["repair" as const],
+      compatibilityObservationKindCounts: { toolCallBlockTypeCompatibility: 0 },
+      toolUseDiagnosticKindCounts: { toolUseReplayDiagnostic: 0 },
+      repairKindCounts: {
+        argumentKeyAlias: 0,
+        argumentShapeRepair: 1,
+        toolNameNormalization: 0,
+      },
+    },
+  };
+}
+
 describe("OpenAI-compatible HTTP API (e2e)", () => {
   it("handles request validation and routing", async () => {
     const port = enabledPort;
@@ -137,6 +173,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
             extraSystemPrompt?: string;
             images?: Array<{ type: string; data: string; mimeType: string }>;
             senderIsOwner?: boolean;
+            toolStrictnessMode?: string;
           }
         | undefined;
     const getFirstAgentMessage = () => getFirstAgentCall()?.message ?? "";
@@ -187,6 +224,32 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         expect(agentCommand).toHaveBeenCalledTimes(1);
         expect(getFirstAgentCall()?.messageChannel).toBe("webchat");
         await res.text();
+      }
+
+      {
+        mockAgentOnce([{ text: "hello" }]);
+        const res = await postChatCompletions(port, {
+          model: "openclaw",
+          tool_strictness_mode: "warn",
+          messages: [{ role: "user", content: "hi" }],
+        });
+        expect(res.status).toBe(200);
+        expect(getFirstAgentCall()?.toolStrictnessMode).toBe("warn");
+        await res.text();
+      }
+
+      {
+        agentCommand.mockClear();
+        const res = await postChatCompletions(port, {
+          model: "openclaw",
+          tool_strictness_mode: "loose",
+          messages: [{ role: "user", content: "hi" }],
+        });
+        expect(res.status).toBe(400);
+        const json = (await res.json()) as { error?: { type?: string; message?: string } };
+        expect(json.error?.type).toBe("invalid_request_error");
+        expect(json.error?.message).toContain("tool_strictness_mode");
+        expect(agentCommand).toHaveBeenCalledTimes(0);
       }
 
       await expectAgentSessionKeyMatch({
@@ -849,6 +912,61 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
 
       {
         agentCommand.mockClear();
+        agentCommand.mockResolvedValueOnce({
+          payloads: [{ text: "strictness" }],
+          toolStrictnessReport: {
+            compatibilityObservations: [],
+            toolUseDiagnostics: [],
+            repairs: [
+              {
+                kind: "argumentShapeRepair",
+                fromType: "string",
+                toType: "object",
+                mode: "warn",
+                detail: "json-parse",
+              },
+            ],
+            summary: {
+              compatibilityObservationCount: 0,
+              toolUseDiagnosticCount: 0,
+              repairCount: 1,
+              hadAnyRepair: true,
+              hadCompatibilityObservation: false,
+              hadReplayDiagnostic: false,
+              warnSurfaceUsed: true,
+              strictFailureCandidate: true,
+              compatibilityLevel: "strict-failure-candidate",
+              warnSurfaceReasons: ["repair"],
+              strictFailureReasons: ["repair"],
+              compatibilityObservationKindCounts: { toolCallBlockTypeCompatibility: 0 },
+              toolUseDiagnosticKindCounts: { toolUseReplayDiagnostic: 0 },
+              repairKindCounts: {
+                argumentKeyAlias: 0,
+                argumentShapeRepair: 1,
+                toolNameNormalization: 0,
+              },
+            },
+          },
+        } as never);
+        const json = await postSyncUserMessage("strictness");
+        expect(json.tool_strictness_report).toMatchObject({
+          summary: {
+            repairCount: 1,
+            hadAnyRepair: true,
+            repairKindCounts: { argumentShapeRepair: 1 },
+          },
+          repairs: [
+            {
+              kind: "argumentShapeRepair",
+              detail: "json-parse",
+              mode: "warn",
+            },
+          ],
+        });
+      }
+
+      {
+        agentCommand.mockClear();
         agentCommand.mockResolvedValueOnce({ payloads: [{ text: "" }] } as never);
         const json = await postSyncUserMessage("hi");
         const choice0 = (json.choices as Array<Record<string, unknown>>)[0] ?? {};
@@ -919,13 +1037,15 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
     try {
       {
         agentCommand.mockClear();
-        agentCommand.mockImplementationOnce((async (opts: unknown) =>
-          buildAssistantDeltaResult({
+        agentCommand.mockImplementationOnce((async (opts: unknown) => ({
+          ...buildAssistantDeltaResult({
             opts,
             emit: emitAgentEvent,
             deltas: ["he", "llo"],
             text: "hello",
-          })) as never);
+          }),
+          toolStrictnessReport: buildToolStrictnessReportFixture(),
+        })) as never);
 
         const res = await postChatCompletions(port, {
           stream: true,
@@ -951,6 +1071,16 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         expect(allContent).toBe("hello");
         const usageChunks = jsonChunks.filter((c) => "usage" in c);
         expect(usageChunks).toHaveLength(0);
+        const reportChunks = jsonChunks.filter(
+          (c) => c.object === "chat.completion.tool_strictness_report",
+        );
+        expect(reportChunks).toHaveLength(1);
+        expect(reportChunks[0]?.tool_strictness_report).toMatchObject({
+          summary: {
+            repairCount: 1,
+            repairKindCounts: { argumentShapeRepair: 1 },
+          },
+        });
       }
 
       {

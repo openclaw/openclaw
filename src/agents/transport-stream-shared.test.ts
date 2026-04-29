@@ -10,7 +10,9 @@ import {
 
 describe("coerceTransportToolCallArguments", () => {
   it("parses JSON-string arguments in default mode", () => {
-    expect(coerceTransportToolCallArguments('{"path":"README.md"}')).toEqual({ path: "README.md" });
+    expect(coerceTransportToolCallArguments('{"path":"README.md"}', { mode: "off" })).toEqual({
+      path: "README.md",
+    });
   });
 
   it("emits a warn-mode repair event when JSON-string arguments are parsed", () => {
