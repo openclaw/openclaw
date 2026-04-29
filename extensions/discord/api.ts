@@ -39,15 +39,6 @@ export {
 export { resolveOpenProviderRuntimeGroupPolicy as resolveDiscordRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
 export { collectDiscordStatusIssues } from "./src/status-issues.js";
 
-// Deprecated compatibility surface for existing @openclaw/discord/api.js consumers.
-type HandleDiscordMessageAction =
-  typeof import("./src/actions/handle-action.js").handleDiscordMessageAction;
-
-export const handleDiscordMessageAction: HandleDiscordMessageAction = (async (...args) => {
-  const { handleDiscordMessageAction: run } = await import("./src/actions/handle-action.js");
-  return run(...args);
-}) as HandleDiscordMessageAction;
-
 export {
   buildDiscordComponentCustomId,
   buildDiscordComponentMessageFlags,
@@ -82,10 +73,6 @@ export {
   type DiscordModalFieldSpec,
   type DiscordModalSpec,
 } from "./src/components.js";
-export {
-  parseDiscordComponentCustomIdForInteraction as parseDiscordComponentCustomIdForCarbon,
-  parseDiscordModalCustomIdForInteraction as parseDiscordModalCustomIdForCarbon,
-} from "./src/component-custom-id.js";
 export {
   getDiscordExecApprovalApprovers,
   isDiscordExecApprovalApprover,
