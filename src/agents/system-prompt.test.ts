@@ -792,6 +792,23 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("do not also send plain chat /approve instructions");
   });
 
+  it("keeps approval slug instructions separate from command previews", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+    });
+
+    expect(prompt).toContain(
+      "include the concrete /approve command copied from the tool output's `Reply with:` line",
+    );
+    expect(prompt).toContain(
+      "never substitute the shell command/script for the approval slug",
+    );
+    expect(prompt).toContain(
+      "as descriptive text or a code block separate from the /approve command",
+    );
+    expect(prompt).toContain("never put the command/script in the /approve slug position");
+  });
+
   it("includes runtime provider capabilities when present", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
