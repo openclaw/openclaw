@@ -318,21 +318,26 @@ export function createProcessTool(
               }
               const remainingMs = Math.max(0, Math.min(250, deadline - Date.now()));
               await new Promise<void>((resolve) => {
-                const timer = setTimeout(resolve, remainingMs);
+                const onAbort = () => {
+                  clearTimeout(timer);
+                  resolve();
+                };
+                const timer = setTimeout(() => {
+                  // Remove the listener we registered below when the timer
+                  // wins so we don't accumulate one orphan listener per
+                  // iteration on long polls (~240 over a 60s deadline at
+                  // 250ms ticks). { once: true } only auto-cleans on abort
+                  // fire, not on natural timer expiry.
+                  signal?.removeEventListener("abort", onAbort);
+                  resolve();
+                }, remainingMs);
                 if (signal) {
                   if (signal.aborted) {
                     clearTimeout(timer);
                     resolve();
                     return;
                   }
-                  signal.addEventListener(
-                    "abort",
-                    () => {
-                      clearTimeout(timer);
-                      resolve();
-                    },
-                    { once: true },
-                  );
+                  signal.addEventListener("abort", onAbort, { once: true });
                 }
               });
             }
