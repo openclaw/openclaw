@@ -260,7 +260,7 @@ adds `clawsweeper:human-review`.
 Repair caps:
 
 ```bash
-CLAWSWEEPER_MAX_REPAIRS_PER_PR=5
+CLAWSWEEPER_MAX_REPAIRS_PER_PR=10
 CLAWSWEEPER_MAX_REPAIRS_PER_HEAD=1
 ```
 
