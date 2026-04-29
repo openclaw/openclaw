@@ -51,7 +51,9 @@ const mockState = vi.hoisted(() => ({
   agentRunId: "run-agent-1",
   sessionEntry: {} as Record<string, unknown>,
   lastDispatchCtx: undefined as MsgContext | undefined,
-  lastDispatchImages: undefined as Array<{ mimeType: string; data: string }> | undefined,
+  lastDispatchImages: undefined as
+    | Array<{ type?: string; mimeType: string; data: string }>
+    | undefined,
   lastDispatchImageOrder: undefined as string[] | undefined,
   modelCatalog: null as ModelCatalogEntry[] | null,
   emittedTranscriptUpdates: [] as Array<{
@@ -164,7 +166,7 @@ vi.mock("../../auto-reply/dispatch.js", () => ({
       };
       replyOptions?: {
         onAgentRunStart?: (runId: string) => void;
-        images?: Array<{ mimeType: string; data: string }>;
+        images?: Array<{ type?: string; mimeType: string; data: string }>;
         imageOrder?: string[];
       };
     }) => {
@@ -2506,6 +2508,61 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(mockState.lastDispatchImageOrder).toEqual(["inline"]);
   });
 
+  it("keeps video attachments for ACP-bound sessions on media paths", async () => {
+    createTranscriptFixture("openclaw-chat-send-acp-bound-video-media-paths-");
+    mockState.finalText = "ok";
+    mockState.sessionEntry = {
+      modelProvider: "test-provider",
+      model: "video-model",
+    };
+    mockState.modelCatalog = [
+      {
+        provider: "test-provider",
+        id: "video-model",
+        name: "Video model",
+        input: ["text", "video"],
+      },
+    ];
+    mockState.savedMediaResults = [
+      { path: "/home/user/.openclaw/media/inbound/clip.mp4", contentType: "video/mp4" },
+    ];
+    bindingMocks.resolveByConversation.mockReturnValue({
+      targetSessionKey: "agent:claude:acp:spawned",
+    });
+    const respond = vi.fn();
+    const context = createChatContext();
+    const video = Buffer.from("video-bytes").toString("base64");
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-acp-bound-video-media-paths",
+      message: "describe video",
+      client: createScopedCliClient(["operator.admin"]),
+      requestParams: {
+        originatingChannel: "slack",
+        originatingTo: "user:U123",
+        originatingAccountId: "default",
+        attachments: [
+          {
+            type: "file",
+            mimeType: "video/mp4",
+            fileName: "clip.mp4",
+            content: video,
+          },
+        ],
+      },
+      expectBroadcast: false,
+    });
+
+    expect(mockState.lastDispatchImages).toBeUndefined();
+    expect(mockState.lastDispatchCtx?.MediaPaths).toEqual([
+      "/home/user/.openclaw/media/inbound/clip.mp4",
+    ]);
+    expect(mockState.lastDispatchCtx?.MediaTypes).toEqual(["video/mp4"]);
+    expect(mockState.lastDispatchCtx?.MediaStaged).toBe(true);
+  });
+
   it("resolves attachment image support from the session agent model", async () => {
     createTranscriptFixture("openclaw-chat-send-agent-scoped-text-only-attachments-");
     mockState.finalText = "ok";
@@ -2631,6 +2688,121 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     // Marker replaces the implicit "relative-path no-op" coupling in
     // get-reply.ts with an explicit skip contract.
     expect(mockState.lastDispatchCtx?.MediaStaged).toBe(true);
+  });
+
+  it("routes supported video uploads into ctx.MediaPaths + MediaTypes for media-understanding fallback", async () => {
+    createTranscriptFixture("openclaw-chat-send-video-ctx-media-paths-");
+    mockState.finalText = "ok";
+    mockState.sessionEntry = {
+      modelProvider: "test-provider",
+      model: "text-model",
+    };
+    mockState.modelCatalog = [
+      {
+        provider: "test-provider",
+        id: "text-model",
+        name: "Text model",
+        input: ["text"],
+      },
+    ];
+    mockState.savedMediaResults = [
+      { path: "/home/user/.openclaw/media/inbound/clip.mp4", contentType: "video/mp4" },
+    ];
+    const respond = vi.fn();
+    const context = createChatContext();
+    const video = Buffer.from("video-bytes").toString("base64");
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-video-ctx-media",
+      message: "describe this",
+      requestParams: {
+        attachments: [
+          {
+            type: "file",
+            mimeType: "video/mp4",
+            fileName: "clip.mp4",
+            content: video,
+          },
+        ],
+      },
+      expectBroadcast: false,
+    });
+
+    expect(mockState.lastDispatchCtx?.MediaPaths).toEqual([
+      "/home/user/.openclaw/media/inbound/clip.mp4",
+    ]);
+    expect(mockState.lastDispatchCtx?.MediaPath).toBe(
+      "/home/user/.openclaw/media/inbound/clip.mp4",
+    );
+    expect(mockState.lastDispatchCtx?.MediaTypes).toEqual(["video/mp4"]);
+    expect(mockState.lastDispatchCtx?.MediaType).toBe("video/mp4");
+    expect(mockState.lastDispatchCtx?.Body).not.toContain("media://");
+    expect(mockState.lastDispatchCtx?.BodyForAgent).not.toContain("media://");
+    expect(mockState.lastDispatchImages).toBeUndefined();
+    expect(mockState.lastDispatchCtx?.MediaStaged).toBe(true);
+    expect(mockState.savedMediaCalls).toEqual([
+      { contentType: "video/mp4", subdir: "inbound", size: Buffer.byteLength("video-bytes") },
+    ]);
+  });
+
+  it("delivers supported video uploads as native model media when the catalog advertises video input", async () => {
+    createTranscriptFixture("openclaw-chat-send-video-native-media-");
+    mockState.finalText = "ok";
+    mockState.sessionEntry = {
+      modelProvider: "test-provider",
+      model: "video-model",
+    };
+    mockState.modelCatalog = [
+      {
+        provider: "test-provider",
+        id: "video-model",
+        name: "Video model",
+        input: ["text", "video"],
+      },
+    ];
+    mockState.savedMediaResults = [
+      { path: "/home/user/.openclaw/media/inbound/clip.mp4", contentType: "video/mp4" },
+    ];
+    const respond = vi.fn();
+    const context = createChatContext();
+    const video = Buffer.from("video-bytes").toString("base64");
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-video-native-media",
+      message: "describe this",
+      requestParams: {
+        attachments: [
+          {
+            type: "file",
+            mimeType: "video/mp4",
+            fileName: "clip.mp4",
+            content: video,
+          },
+        ],
+      },
+      expectBroadcast: false,
+    });
+
+    expect(mockState.lastDispatchImages).toEqual([
+      {
+        type: "video",
+        mimeType: "video/mp4",
+        data: video,
+        fallbackPath: "/home/user/.openclaw/media/inbound/clip.mp4",
+      },
+    ]);
+    expect(mockState.lastDispatchCtx?.MediaPaths).toBeUndefined();
+    expect(mockState.lastDispatchCtx?.MediaPath).toBeUndefined();
+    expect(mockState.lastDispatchCtx?.MediaTypes).toBeUndefined();
+    expect(mockState.lastDispatchCtx?.MediaType).toBeUndefined();
+    expect(mockState.lastDispatchCtx?.MediaStaged).toBeUndefined();
+    expect(mockState.savedMediaCalls).toEqual([
+      { contentType: "video/mp4", subdir: "inbound", size: Buffer.byteLength("video-bytes") },
+    ]);
   });
 
   it("preserves sandbox-relative MediaPaths and stores workspace context for media-understanding", async () => {

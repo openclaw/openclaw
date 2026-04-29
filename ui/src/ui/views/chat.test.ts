@@ -483,11 +483,58 @@ describe("chat attachment picker", () => {
     expect(preview.textContent).toContain("brief.pdf");
   });
 
-  it("filters video file attachments", () => {
+  it("accepts and previews supported video attachments", async () => {
     const onAttachmentsChange = vi.fn();
     const container = renderChatView({ onAttachmentsChange });
     const input = container.querySelector<HTMLInputElement>(".agent-chat__file-input");
     const file = new File(["video"], "clip.mp4", { type: "video/mp4" });
+
+    expect(input).not.toBeNull();
+    Object.defineProperty(input!, "files", {
+      configurable: true,
+      value: [file],
+    });
+    input?.dispatchEvent(new Event("change", { bubbles: true }));
+
+    await vi.waitFor(() => {
+      expect(onAttachmentsChange).toHaveBeenCalledWith([
+        expect.objectContaining({
+          fileName: "clip.mp4",
+          mimeType: "video/mp4",
+          sizeBytes: file.size,
+        }),
+      ]);
+    });
+
+    const nextAttachments = onAttachmentsChange.mock.calls[0]?.[0] ?? [];
+    expect(getChatAttachmentDataUrl(nextAttachments[0])).toMatch(/^data:video\/mp4;base64,/);
+    const preview = renderChatView({ attachments: nextAttachments });
+    expect(preview.querySelector(".chat-attachment-thumb--video")).not.toBeNull();
+    expect(preview.querySelector("video")?.getAttribute("src")).toBeTruthy();
+    expect(preview.textContent).toContain("clip.mp4");
+  });
+
+  it("filters unsupported video attachments", () => {
+    const onAttachmentsChange = vi.fn();
+    const container = renderChatView({ onAttachmentsChange });
+    const input = container.querySelector<HTMLInputElement>(".agent-chat__file-input");
+    const file = new File(["video"], "clip.avi", { type: "video/x-msvideo" });
+
+    expect(input).not.toBeNull();
+    Object.defineProperty(input!, "files", {
+      configurable: true,
+      value: [file],
+    });
+    input?.dispatchEvent(new Event("change", { bubbles: true }));
+
+    expect(onAttachmentsChange).not.toHaveBeenCalled();
+  });
+
+  it("filters unsupported video MIME even when the filename extension is supported", () => {
+    const onAttachmentsChange = vi.fn();
+    const container = renderChatView({ onAttachmentsChange });
+    const input = container.querySelector<HTMLInputElement>(".agent-chat__file-input");
+    const file = new File(["video"], "clip.mp4", { type: "video/x-msvideo" });
 
     expect(input).not.toBeNull();
     Object.defineProperty(input!, "files", {

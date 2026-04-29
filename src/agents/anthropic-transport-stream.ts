@@ -303,21 +303,26 @@ function convertAnthropicMessages(
             type: "image";
             source: { type: "base64"; media_type: string; data: string };
           }
-      > = msg.content.map((item) =>
-        item.type === "text"
-          ? {
-              type: "text",
-              text: sanitizeTransportPayloadText(item.text),
-            }
-          : {
-              type: "image",
-              source: {
-                type: "base64",
-                media_type: item.mimeType,
-                data: item.data,
-              },
+      > = [];
+      for (const item of msg.content) {
+        if (item.type === "text") {
+          blocks.push({
+            type: "text",
+            text: sanitizeTransportPayloadText(item.text),
+          });
+          continue;
+        }
+        if (item.type === "image") {
+          blocks.push({
+            type: "image",
+            source: {
+              type: "base64",
+              media_type: item.mimeType,
+              data: item.data,
             },
-      );
+          });
+        }
+      }
       let filteredBlocks = model.input.includes("image")
         ? blocks
         : blocks.filter((block) => block.type !== "image");

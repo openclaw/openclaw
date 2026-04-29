@@ -1,4 +1,5 @@
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
+import type { ModelInputType } from "../../agents/model-catalog.js";
 import { modelKey } from "../../agents/model-ref-shared.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isLocalBaseUrl } from "./list.local-url.js";
@@ -8,7 +9,7 @@ export type ListRowModel = {
   id: string;
   name: string;
   provider: string;
-  input: Array<"text" | "image" | "document">;
+  input: ModelInputType[];
   baseUrl?: string;
   contextWindow?: number | null;
   contextTokens?: number | null;

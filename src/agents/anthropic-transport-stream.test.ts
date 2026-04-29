@@ -193,6 +193,34 @@ describe("anthropic transport stream", () => {
     expect(latestAnthropicRequestHeaders().get("anthropic-beta")).toBeNull();
   });
 
+  it("does not convert user video blocks into Anthropic image inputs", async () => {
+    const model = {
+      ...makeAnthropicTransportModel(),
+      input: ["text", "image"],
+    } satisfies AnthropicMessagesModel;
+
+    await runTransportStream(
+      model,
+      {
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "text", text: "watch this" },
+              { type: "video", mimeType: "video/mp4", data: "dmktYnl0ZXM=" } as never,
+            ],
+          },
+        ],
+      } as AnthropicStreamContext,
+      { apiKey: "sk-ant-api" } as AnthropicStreamOptions,
+    );
+
+    const content = (latestAnthropicRequest().payload.messages as Array<{ content?: unknown }>)[0]
+      ?.content;
+    expect(content).toEqual([expect.objectContaining({ type: "text", text: "watch this" })]);
+    expect(JSON.stringify(content)).not.toContain("dmktYnl0ZXM=");
+  });
+
   it("does not add implicit Anthropic beta headers for custom compatible OAuth endpoints", async () => {
     await runTransportStream(
       makeAnthropicTransportModel({

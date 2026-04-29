@@ -1,4 +1,5 @@
 import type { ExecToolDefaults } from "../../../agents/bash-tools.js";
+import type { PromptMediaContent } from "../../../agents/prompt-media-content.js";
 import type { SkillSnapshot } from "../../../agents/skills.js";
 import type { SilentReplyPromptMode } from "../../../agents/system-prompt.types.js";
 import type { SessionEntry } from "../../../config/sessions.js";
@@ -30,7 +31,7 @@ export type FollowupRun = {
   messageId?: string;
   summaryLine?: string;
   enqueuedAt: number;
-  images?: Array<{ type: "image"; data: string; mimeType: string }>;
+  images?: PromptMediaContent[];
   imageOrder?: PromptImageOrderEntry[];
   /**
    * Originating channel for reply routing.

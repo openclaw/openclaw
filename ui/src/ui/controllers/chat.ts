@@ -482,6 +482,16 @@ function buildApiAttachments(attachments?: ChatAttachment[]) {
     : undefined;
 }
 
+function attachmentKindFromMimeType(mimeType: string): "audio" | "video" | "document" {
+  if (mimeType.startsWith("audio/")) {
+    return "audio";
+  }
+  if (mimeType.startsWith("video/")) {
+    return "video";
+  }
+  return "document";
+}
+
 async function requestChatSend(
   state: ChatState,
   params: { message: string; attachments?: ChatAttachment[]; runId: string },
@@ -571,7 +581,7 @@ export async function sendChatMessage(
     source?: unknown;
     attachment?: {
       url: string;
-      kind: "audio" | "document";
+      kind: "audio" | "video" | "document";
       label: string;
       mimeType?: string;
     };
@@ -598,7 +608,7 @@ export async function sendChatMessage(
         type: "attachment",
         attachment: {
           url: previewUrl,
-          kind: att.mimeType.startsWith("audio/") ? "audio" : "document",
+          kind: attachmentKindFromMimeType(att.mimeType),
           label: att.fileName?.trim() || "Attached file",
           mimeType: att.mimeType,
         },

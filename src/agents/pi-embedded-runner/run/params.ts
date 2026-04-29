@@ -1,4 +1,3 @@
-import type { ImageContent } from "@mariozechner/pi-ai";
 import type { SourceReplyDeliveryMode } from "../../../auto-reply/get-reply-options.types.js";
 import type { ReplyPayload } from "../../../auto-reply/reply-payload.js";
 import type { ReplyOperation } from "../../../auto-reply/reply/reply-run-registry.js";
@@ -15,6 +14,7 @@ import type {
   BlockReplyChunking,
   ToolResultFormat,
 } from "../../pi-embedded-subscribe.shared-types.js";
+import type { PromptMediaContent } from "../../prompt-media-content.js";
 import type { SkillSnapshot } from "../../skills.js";
 import type { SilentReplyPromptMode } from "../../system-prompt.types.js";
 import type { PromptMode } from "../../system-prompt.types.js";
@@ -95,7 +95,7 @@ export type RunEmbeddedPiAgentParams = {
   prompt: string;
   /** User-visible prompt body to submit and persist; runtime context travels separately. */
   transcriptPrompt?: string;
-  images?: ImageContent[];
+  images?: PromptMediaContent[];
   imageOrder?: PromptImageOrderEntry[];
   /** Optional client-provided tools (OpenResponses hosted tools). */
   clientTools?: ClientToolDefinition[];

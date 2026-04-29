@@ -914,6 +914,42 @@ describe("openai transport stream", () => {
     expect(params.input?.[0]).toMatchObject({ role: "developer" });
   });
 
+  it("does not convert user video blocks into OpenAI image inputs", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        api: "openai-responses",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-responses">,
+      {
+        systemPrompt: "",
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "text", text: "watch this" },
+              { type: "video", mimeType: "video/mp4", data: "dmktYnl0ZXM=" } as never,
+            ],
+            timestamp: 1,
+          },
+        ],
+        tools: [],
+      } as never,
+      undefined,
+    ) as { input?: unknown };
+
+    expect(JSON.stringify(params.input)).toContain("watch this");
+    expect(JSON.stringify(params.input)).not.toContain("input_image");
+    expect(JSON.stringify(params.input)).not.toContain("dmktYnl0ZXM=");
+  });
+
   it("uses top-level instructions for Codex responses without dropping parity fields", () => {
     const params = buildOpenAIResponsesParams(
       {

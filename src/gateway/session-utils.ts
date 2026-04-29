@@ -15,6 +15,7 @@ import {
   findModelCatalogEntry,
   modelSupportsInput,
   type ModelCatalogEntry,
+  type ModelInputType,
 } from "../agents/model-catalog.js";
 import {
   inferUniqueProviderFromConfiguredModels,
@@ -1128,60 +1129,48 @@ export function resolveSessionModelRef(
   return resolved;
 }
 
-export async function resolveGatewayModelSupportsImages(params: {
-  loadGatewayModelCatalog: () => Promise<ModelCatalogEntry[]>;
+export function resolveGatewayModelCatalogSupportsInput(params: {
+  catalog: ModelCatalogEntry[];
   provider?: string;
   model?: string;
-}): Promise<boolean> {
+  input: ModelInputType;
+}): boolean {
   if (!params.model) {
-    return true;
+    return params.input === "image";
   }
 
-  try {
-    const catalog = await params.loadGatewayModelCatalog();
-    const modelEntry = findModelCatalogEntry(catalog, {
-      provider: params.provider,
-      modelId: params.model,
-    });
-    const normalizedProvider = normalizeOptionalLowercaseString(
-      params.provider ?? modelEntry?.provider,
-    );
-    const normalizedCandidates = [
-      normalizeLowercaseStringOrEmpty(params.model),
-      normalizeLowercaseStringOrEmpty(modelEntry?.name),
-    ].filter(Boolean);
-    if (modelEntry) {
-      if (modelSupportsInput(modelEntry, "image")) {
-        return true;
-      }
-      // Legacy safety shim for stale persisted Foundry rows that predate
-      // provider-owned capability normalization.
-      if (
-        normalizedProvider === "microsoft-foundry" &&
-        normalizedCandidates.some(
-          (candidate) =>
-            candidate.startsWith("gpt-") ||
-            candidate.startsWith("o1") ||
-            candidate.startsWith("o3") ||
-            candidate.startsWith("o4") ||
-            candidate === "computer-use-preview",
-        )
-      ) {
-        return true;
-      }
-      if (
-        normalizedProvider === "claude-cli" &&
-        normalizedCandidates.some(
-          (candidate) =>
-            candidate === "opus" ||
-            candidate === "sonnet" ||
-            candidate === "haiku" ||
-            candidate.startsWith("claude-"),
-        )
-      ) {
-        return true;
-      }
+  const modelEntry = findModelCatalogEntry(params.catalog, {
+    provider: params.provider,
+    modelId: params.model,
+  });
+  const normalizedProvider = normalizeOptionalLowercaseString(
+    params.provider ?? modelEntry?.provider,
+  );
+  const normalizedCandidates = [
+    normalizeLowercaseStringOrEmpty(params.model),
+    normalizeLowercaseStringOrEmpty(modelEntry?.name),
+  ].filter(Boolean);
+  if (modelEntry) {
+    if (modelSupportsInput(modelEntry, params.input)) {
+      return true;
+    }
+    if (params.input !== "image") {
       return false;
+    }
+    // Legacy safety shim for stale persisted Foundry rows that predate
+    // provider-owned capability normalization.
+    if (
+      normalizedProvider === "microsoft-foundry" &&
+      normalizedCandidates.some(
+        (candidate) =>
+          candidate.startsWith("gpt-") ||
+          candidate.startsWith("o1") ||
+          candidate.startsWith("o3") ||
+          candidate.startsWith("o4") ||
+          candidate === "computer-use-preview",
+      )
+    ) {
+      return true;
     }
     if (
       normalizedProvider === "claude-cli" &&
@@ -1196,9 +1185,58 @@ export async function resolveGatewayModelSupportsImages(params: {
       return true;
     }
     return false;
+  }
+  if (
+    params.input === "image" &&
+    normalizedProvider === "claude-cli" &&
+    normalizedCandidates.some(
+      (candidate) =>
+        candidate === "opus" ||
+        candidate === "sonnet" ||
+        candidate === "haiku" ||
+        candidate.startsWith("claude-"),
+    )
+  ) {
+    return true;
+  }
+  return false;
+}
+
+export async function resolveGatewayModelSupportsInput(params: {
+  loadGatewayModelCatalog: () => Promise<ModelCatalogEntry[]>;
+  provider?: string;
+  model?: string;
+  input: ModelInputType;
+}): Promise<boolean> {
+  if (!params.model) {
+    return params.input === "image";
+  }
+  try {
+    return resolveGatewayModelCatalogSupportsInput({
+      catalog: await params.loadGatewayModelCatalog(),
+      provider: params.provider,
+      model: params.model,
+      input: params.input,
+    });
   } catch {
     return false;
   }
+}
+
+export async function resolveGatewayModelSupportsImages(params: {
+  loadGatewayModelCatalog: () => Promise<ModelCatalogEntry[]>;
+  provider?: string;
+  model?: string;
+}): Promise<boolean> {
+  return resolveGatewayModelSupportsInput({ ...params, input: "image" });
+}
+
+export async function resolveGatewayModelSupportsVideos(params: {
+  loadGatewayModelCatalog: () => Promise<ModelCatalogEntry[]>;
+  provider?: string;
+  model?: string;
+}): Promise<boolean> {
+  return resolveGatewayModelSupportsInput({ ...params, input: "video" });
 }
 
 export function resolveSessionModelIdentityRef(

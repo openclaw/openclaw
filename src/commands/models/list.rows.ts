@@ -7,6 +7,7 @@ import {
   resolveAwsSdkEnvVarName,
   resolveEnvApiKey,
 } from "../../agents/model-auth.js";
+import type { ModelInputType } from "../../agents/model-catalog.js";
 import {
   shouldSuppressBuiltInModel,
   shouldSuppressBuiltInModelFromManifest,
@@ -189,10 +190,11 @@ async function appendVisibleRow(params: {
 
 function resolveConfiguredModelInput(params: {
   model: Partial<ModelDefinitionConfig>;
-}): Array<"text" | "image"> {
+}): ModelInputType[] {
   const input = Array.isArray(params.model.input)
     ? params.model.input.filter(
-        (item): item is "text" | "image" => item === "text" || item === "image",
+        (item): item is Exclude<ModelInputType, "document"> =>
+          item === "text" || item === "image" || item === "audio" || item === "video",
       )
     : [];
   return input.length > 0 ? input : ["text"];

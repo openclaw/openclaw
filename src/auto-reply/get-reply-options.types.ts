@@ -1,4 +1,4 @@
-import type { ImageContent } from "@mariozechner/pi-ai";
+import type { PromptMediaContent } from "../agents/prompt-media-content.js";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
 import type { ReplyPayload } from "./reply-payload.js";
 import type { TypingController } from "./reply/typing.js";
@@ -36,8 +36,8 @@ export type GetReplyOptions = {
   runId?: string;
   /** Abort signal for the underlying agent run. */
   abortSignal?: AbortSignal;
-  /** Optional inbound images (used for webchat attachments). */
-  images?: ImageContent[];
+  /** Optional inbound media blocks (used for webchat attachments). */
+  images?: PromptMediaContent[];
   /** Original inline/offloaded attachment order for inbound images. */
   imageOrder?: PromptImageOrderEntry[];
   /** Notifies when an agent run actually starts (useful for webchat command handling). */

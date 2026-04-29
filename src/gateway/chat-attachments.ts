@@ -1,3 +1,4 @@
+import type { PromptImageContent, PromptVideoContent } from "../agents/prompt-media-content.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { estimateBase64DecodedBytes } from "../media/base64.js";
@@ -6,6 +7,13 @@ import { extensionForMime, mimeTypeFromFilePath } from "../media/mime.js";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
 import { sniffMimeFromBase64 } from "../media/sniff-mime-from-base64.js";
 import { deleteMediaBuffer, saveMediaBuffer } from "../media/store.js";
+import {
+  isKnownChatVideoAttachmentFileName,
+  isSupportedChatVideoAttachmentFileName,
+  isSupportedChatVideoAttachmentMimeType,
+  isUnsupportedChatVideoAttachmentFileName,
+  SUPPORTED_CHAT_VIDEO_ATTACHMENT_FORMAT_LABEL,
+} from "../shared/chat-attachment-policy.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 
 export type ChatAttachment = {
@@ -15,11 +23,9 @@ export type ChatAttachment = {
   content?: unknown;
 };
 
-export type ChatImageContent = {
-  type: "image";
-  data: string;
-  mimeType: string;
-};
+export type ChatImageContent = PromptImageContent;
+
+export type ChatVideoContent = PromptVideoContent;
 
 export type OffloadedRef = {
   mediaRef: string;
@@ -33,6 +39,7 @@ export type OffloadedRef = {
 export type ParsedMessageWithImages = {
   message: string;
   images: ChatImageContent[];
+  videos: ChatVideoContent[];
   imageOrder: PromptImageOrderEntry[];
   offloadedRefs: OffloadedRef[];
 };
@@ -70,6 +77,7 @@ export function resolveChatAttachmentMaxBytes(cfg: OpenClawConfig): number {
 export type UnsupportedAttachmentReason =
   | "empty-payload"
   | "text-only-image"
+  | "unsupported-video"
   | "unsupported-non-image"
   | "non-image-too-large-for-sandbox";
 
@@ -101,6 +109,10 @@ function normalizeMime(mime?: string): string | undefined {
 
 function isImageMime(mime?: string): boolean {
   return typeof mime === "string" && mime.startsWith("image/");
+}
+
+function isVideoMime(mime?: string): boolean {
+  return typeof mime === "string" && mime.startsWith("video/");
 }
 
 function isGenericContainerMime(mime?: string): boolean {
@@ -214,6 +226,7 @@ export async function parseMessageWithAttachments(
     log?: AttachmentLog;
     supportsImages?: boolean;
     supportsInlineImages?: boolean;
+    supportsVideos?: boolean;
     acceptNonImage?: boolean;
   },
 ): Promise<ParsedMessageWithImages> {
@@ -221,13 +234,15 @@ export async function parseMessageWithAttachments(
   const log = opts?.log;
   const shouldForceImageOffload = opts?.supportsImages === false;
   const supportsInlineImages = opts?.supportsInlineImages !== false;
+  const supportsVideos = opts?.supportsVideos === true;
   const acceptNonImage = opts?.acceptNonImage !== false;
 
   if (!attachments || attachments.length === 0) {
-    return { message, images: [], imageOrder: [], offloadedRefs: [] };
+    return { message, images: [], videos: [], imageOrder: [], offloadedRefs: [] };
   }
 
   const images: ChatImageContent[] = [];
+  const videos: ChatVideoContent[] = [];
   const imageOrder: PromptImageOrderEntry[] = [];
   const offloadedRefs: OffloadedRef[] = [];
   let updatedMessage = message;
@@ -282,6 +297,7 @@ export async function parseMessageWithAttachments(
         trustedProvidedMime ||
         labelMime ||
         "application/octet-stream";
+      const normalizedFinalMime = finalMime;
 
       if (
         sniffedMime &&
@@ -290,9 +306,9 @@ export async function parseMessageWithAttachments(
         sniffedMime !== providedMime
       ) {
         const usedSource =
-          finalMime === sniffedMime
+          normalizedFinalMime === sniffedMime
             ? "sniffed"
-            : finalMime === providedMime
+            : normalizedFinalMime === providedMime
               ? "provided"
               : "label-derived";
         log?.warn(
@@ -300,7 +316,32 @@ export async function parseMessageWithAttachments(
         );
       }
 
-      const isImage = isImageMime(finalMime);
+      const isImage = isImageMime(normalizedFinalMime);
+      const finalMimeIsVideo = isVideoMime(normalizedFinalMime);
+      const finalMimeIsSupportedVideo = isSupportedChatVideoAttachmentMimeType(normalizedFinalMime);
+      const labelIsSupportedVideo = isSupportedChatVideoAttachmentFileName(label);
+      const labelIsKnownVideo = isKnownChatVideoAttachmentFileName(label);
+      const hasUnsupportedVideoMime = finalMimeIsVideo && !finalMimeIsSupportedVideo;
+      const hasConcreteNonVideoMime =
+        Boolean(normalizedFinalMime) &&
+        !isGenericContainerMime(normalizedFinalMime) &&
+        !finalMimeIsVideo;
+      const hasConflictingVideoLabelMime = labelIsSupportedVideo && hasConcreteNonVideoMime;
+      const hasVideoSignal = finalMimeIsVideo || labelIsKnownVideo;
+      const supportedVideo =
+        finalMimeIsSupportedVideo ||
+        (labelIsSupportedVideo && !hasConflictingVideoLabelMime && !hasUnsupportedVideoMime);
+      if (
+        hasVideoSignal &&
+        (hasConflictingVideoLabelMime ||
+          !supportedVideo ||
+          isUnsupportedChatVideoAttachmentFileName(label))
+      ) {
+        throw new UnsupportedAttachmentError(
+          "unsupported-video",
+          `attachment ${label}: unsupported video format (${normalizedFinalMime}); supported video formats are ${SUPPORTED_CHAT_VIDEO_ATTACHMENT_FORMAT_LABEL}`,
+        );
+      }
       if (isImage && !supportsInlineImages && !shouldForceImageOffload) {
         throw new UnsupportedAttachmentError(
           "text-only-image",
@@ -310,7 +351,7 @@ export async function parseMessageWithAttachments(
       if (!isImage && !acceptNonImage) {
         throw new UnsupportedAttachmentError(
           "unsupported-non-image",
-          `attachment ${label}: non-image attachments (${finalMime}) are not supported on this entrypoint`,
+          `attachment ${label}: non-image attachments (${normalizedFinalMime}) are not supported on this entrypoint`,
         );
       }
       // Agent-side hydration (loadImageFromRef via optimizeAndClampImage / GIF
@@ -343,7 +384,7 @@ export async function parseMessageWithAttachments(
         shouldForceImageOffload || !isImage || sizeBytes > OFFLOAD_THRESHOLD_BYTES;
 
       if (!shouldOffload) {
-        images.push({ type: "image", data: b64, mimeType: finalMime });
+        images.push({ type: "image", data: b64, mimeType: normalizedFinalMime });
         imageOrder.push("inline");
         continue;
       }
@@ -353,10 +394,10 @@ export async function parseMessageWithAttachments(
 
       let savedMedia: SavedMedia;
       try {
-        const labelWithExt = ensureExtension(label, finalMime);
+        const labelWithExt = ensureExtension(label, normalizedFinalMime);
         const rawResult = await saveMediaBuffer(
           buffer,
-          finalMime,
+          normalizedFinalMime,
           "inbound",
           maxBytes,
           labelWithExt,
@@ -375,17 +416,20 @@ export async function parseMessageWithAttachments(
       if (isImage) {
         updatedMessage += `\n[media attached: ${mediaRef}]`;
       }
+      if (hasVideoSignal && supportedVideo && supportsVideos) {
+        videos.push({ type: "video", data: b64, mimeType: normalizedFinalMime });
+      }
       log?.info?.(
         shouldForceImageOffload && isImage
           ? `[Gateway] Offloaded image for text-only model. Saved: ${mediaRef}`
-          : `[Gateway] Offloaded attachment (${finalMime}). Saved: ${mediaRef}`,
+          : `[Gateway] Offloaded attachment (${normalizedFinalMime}). Saved: ${mediaRef}`,
       );
 
       offloadedRefs.push({
         mediaRef,
         id: savedMedia.id,
         path: savedMedia.path,
-        mimeType: finalMime,
+        mimeType: normalizedFinalMime,
         label,
         sizeBytes,
       });
@@ -406,6 +450,7 @@ export async function parseMessageWithAttachments(
   return {
     message: updatedMessage !== message ? updatedMessage.trimEnd() : message,
     images,
+    videos,
     imageOrder,
     offloadedRefs,
   };

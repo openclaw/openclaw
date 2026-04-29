@@ -1,6 +1,6 @@
 import type { ModelApi, ModelCompatConfig } from "../config/types.models.js";
 
-export type ModelCatalogInput = "text" | "image" | "document";
+export type ModelCatalogInput = "text" | "image" | "audio" | "video" | "document";
 export type ModelCatalogDiscovery = "static" | "refreshable" | "runtime";
 export type ModelCatalogStatus = "available" | "preview" | "deprecated" | "disabled";
 export type ModelCatalogSource =

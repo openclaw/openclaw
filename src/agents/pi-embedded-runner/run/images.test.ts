@@ -10,8 +10,12 @@ import {
   loadImageFromRef,
   mergePromptAttachmentImages,
   modelSupportsImages,
+  modelSupportsVideos,
   splitPromptAndAttachmentRefs,
 } from "./images.js";
+
+const PNG_1X1_BASE64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
 
 function expectNoPromptImages(result: { detectedRefs: unknown[]; images: unknown[] }) {
   expect(result.detectedRefs).toHaveLength(0);
@@ -239,6 +243,16 @@ describe("modelSupportsImages", () => {
   });
 });
 
+describe("modelSupportsVideos", () => {
+  it("returns true when model input includes video", () => {
+    expect(modelSupportsVideos({ input: ["text", "video"] })).toBe(true);
+  });
+
+  it("returns false when model input does not include video", () => {
+    expect(modelSupportsVideos({ input: ["text", "image"] })).toBe(false);
+  });
+});
+
 describe("loadImageFromRef", () => {
   it("allows sandbox-validated host paths outside default media roots", async () => {
     const homeDir = os.homedir();
@@ -286,6 +300,114 @@ describe("detectAndLoadPromptImages", () => {
     });
 
     expectNoPromptImages(result);
+    expect(result.fallbackMediaNotes).toEqual([]);
+  });
+
+  it("preserves native video attachments for video-capable models without image input", async () => {
+    const result = await detectAndLoadPromptImages({
+      prompt: "watch this",
+      workspaceDir: "/tmp",
+      model: { input: ["text", "video"] },
+      existingImages: [
+        {
+          type: "video",
+          data: "dmktYnl0ZXM=",
+          mimeType: "video/mp4",
+          fallbackPath: "media/inbound/clip.mp4",
+        },
+      ],
+    });
+
+    expect(result.images).toEqual([
+      {
+        type: "video",
+        data: "dmktYnl0ZXM=",
+        mimeType: "video/mp4",
+        fallbackPath: "media/inbound/clip.mp4",
+      },
+    ]);
+    expect(result.fallbackMediaNotes).toEqual([]);
+    expect(result.detectedRefs).toHaveLength(0);
+  });
+
+  it("converts unsupported native video attachments into fallback media notes", async () => {
+    const result = await detectAndLoadPromptImages({
+      prompt: "watch this",
+      workspaceDir: "/tmp",
+      model: { input: ["text"] },
+      existingImages: [
+        {
+          type: "video",
+          data: "dmktYnl0ZXM=",
+          mimeType: "video/mp4",
+          fallbackPath: "media/inbound/clip.mp4",
+        },
+      ],
+    });
+
+    expect(result.images).toEqual([]);
+    expect(result.fallbackMediaNotes).toEqual([
+      "[media attached: media/inbound/clip.mp4 (video/mp4)]",
+    ]);
+    expect(result.detectedRefs).toHaveLength(0);
+  });
+
+  it("emits a fallback note when unsupported native video has no staged path", async () => {
+    const result = await detectAndLoadPromptImages({
+      prompt: "watch this",
+      workspaceDir: "/tmp",
+      model: { input: ["text"] },
+      existingImages: [
+        {
+          type: "video",
+          data: "dmktYnl0ZXM=",
+          mimeType: "video/mp4",
+        },
+      ],
+    });
+
+    expect(result.images).toEqual([]);
+    expect(result.fallbackMediaNotes).toEqual(["[video attached: path unavailable (video/mp4)]"]);
+    expect(result.detectedRefs).toHaveLength(0);
+  });
+
+  it("keeps image sanitization aligned when a dropped image is interleaved with video", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sanitize-media-"));
+    try {
+      const promptImagePath = path.join(workspaceDir, "prompt.png");
+      await fs.writeFile(promptImagePath, Buffer.from(PNG_1X1_BASE64, "base64"));
+      const video = {
+        type: "video" as const,
+        data: "dmktYnl0ZXM=",
+        mimeType: "video/mp4",
+        fallbackPath: "media/inbound/clip.mp4",
+      };
+
+      const result = await detectAndLoadPromptImages({
+        prompt: `compare ${promptImagePath}`,
+        workspaceDir,
+        model: { input: ["text", "image", "video"] },
+        existingImages: [
+          {
+            type: "image",
+            data: "%not-base64%",
+            mimeType: "image/png",
+          },
+          video,
+          {
+            type: "image",
+            data: PNG_1X1_BASE64,
+            mimeType: "image/png",
+          },
+        ],
+      });
+
+      expect(result.images).toHaveLength(2);
+      expect(result.images[0]).toEqual(video);
+      expect(result.images[1]).toMatchObject({ type: "image", mimeType: "image/png" });
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
   });
 
   it("returns no detected refs when prompt has no image references", async () => {

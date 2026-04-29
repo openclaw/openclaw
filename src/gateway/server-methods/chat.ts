@@ -4,6 +4,7 @@ import { CURRENT_SESSION_VERSION, SessionManager } from "@mariozechner/pi-coding
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { resolveAgentWorkspaceDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { rewriteTranscriptEntriesInSessionFile } from "../../agents/pi-embedded-runner/transcript-rewrite.js";
+import type { PromptMediaContent } from "../../agents/prompt-media-content.js";
 import { ensureSandboxWorkspaceForSession } from "../../agents/sandbox/context.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
@@ -56,6 +57,7 @@ import {
 } from "../chat-abort.js";
 import {
   type ChatImageContent,
+  type ChatVideoContent,
   MediaOffloadError,
   type OffloadedRef,
   parseMessageWithAttachments,
@@ -97,7 +99,7 @@ import { getMaxChatHistoryMessagesBytes } from "../server-constants.js";
 import {
   capArrayByJsonBytes,
   loadSessionEntry,
-  resolveGatewayModelSupportsImages,
+  resolveGatewayModelCatalogSupportsInput,
   resolveGatewaySessionThinkingDefault,
   resolveDeletedAgentIdFromSessionKey,
   readSessionMessages,
@@ -825,13 +827,21 @@ function stripTrailingOffloadedMediaMarkers(message: string, refs: OffloadedRef[
 async function prestageMediaPathOffloads(params: {
   offloadedRefs: OffloadedRef[];
   includeImageRefs?: boolean;
+  includeVideoRefs?: boolean;
+  cleanupOnError?: boolean;
   cfg: OpenClawConfig;
   sessionKey: string;
   agentId: string;
 }): Promise<{ paths: string[]; types: string[]; workspaceDir?: string }> {
-  const mediaPathRefs = params.offloadedRefs.filter(
-    (ref) => params.includeImageRefs || !ref.mimeType.startsWith("image/"),
-  );
+  const mediaPathRefs = params.offloadedRefs.filter((ref) => {
+    if (ref.mimeType.startsWith("image/")) {
+      return params.includeImageRefs === true;
+    }
+    if (ref.mimeType.startsWith("video/")) {
+      return params.includeVideoRefs !== false;
+    }
+    return true;
+  });
   if (mediaPathRefs.length === 0) {
     return { paths: [], types: [] };
   }
@@ -902,9 +912,11 @@ async function prestageMediaPathOffloads(params: {
     // resolves them via ctx.MediaWorkspaceDir, which we carry separately.
     return { paths: stagedPaths, types: stagedTypes, workspaceDir: sandbox.workspaceDir };
   } catch (err) {
-    await Promise.allSettled(
-      params.offloadedRefs.map((ref) => deleteMediaBuffer(ref.id, "inbound")),
-    );
+    if (params.cleanupOnError !== false) {
+      await Promise.allSettled(
+        params.offloadedRefs.map((ref) => deleteMediaBuffer(ref.id, "inbound")),
+      );
+    }
     if (err instanceof MediaOffloadError) {
       throw err;
     }
@@ -1910,11 +1922,13 @@ export const chatHandlers: GatewayRequestHandlers = {
     });
     let parsedMessage = inboundMessage;
     let parsedImages: ChatImageContent[] = [];
+    let parsedVideos: ChatVideoContent[] = [];
     let imageOrder: PromptImageOrderEntry[] = [];
     let offloadedRefs: OffloadedRef[] = [];
     let mediaPathOffloadPaths: string[] = [];
     let mediaPathOffloadTypes: string[] = [];
     let mediaPathOffloadWorkspaceDir: string | undefined;
+    let nativeVideoFallbackPaths: string[] = [];
     const timeoutMs = resolveAgentTimeoutMs({
       cfg,
       overrideMs: p.timeoutMs,
@@ -1976,23 +1990,34 @@ export const chatHandlers: GatewayRequestHandlers = {
     );
     if (normalizedAttachments.length > 0) {
       const modelRef = resolveSessionModelRef(cfg, entry, agentId);
-      const supportsSessionModelImages = await resolveGatewayModelSupportsImages({
-        loadGatewayModelCatalog: context.loadGatewayModelCatalog,
+      const modelCatalog = await context.loadGatewayModelCatalog().catch(() => []);
+      const supportsSessionModelImages = resolveGatewayModelCatalogSupportsInput({
+        catalog: modelCatalog,
         provider: modelRef.provider,
         model: modelRef.model,
+        input: "image",
       });
+      const supportsSessionModelVideos = resolveGatewayModelCatalogSupportsInput({
+        catalog: modelCatalog,
+        provider: modelRef.provider,
+        model: modelRef.model,
+        input: "video",
+      });
+      const explicitOriginTargetsAcp = explicitOriginTargetsAcpSession(explicitOriginResult.value);
       // Bound plugin sessions own the real recipient model, so keep image
       // attachments even when the parent OpenClaw session model is text-only.
       const supportsImages =
-        supportsSessionModelImages ||
-        explicitOriginTargetsAcpSession(explicitOriginResult.value) ||
-        explicitOriginTargetsPlugin;
+        supportsSessionModelImages || explicitOriginTargetsAcp || explicitOriginTargetsPlugin;
+      const supportsVideos =
+        (supportsSessionModelVideos && !explicitOriginTargetsAcp) || explicitOriginTargetsPlugin;
       const routeImageOffloadsAsMediaPaths = !supportsImages;
+      const routeVideoOffloadsAsMediaPaths = !supportsVideos;
       try {
         const parsed = await parseMessageWithAttachments(inboundMessage, normalizedAttachments, {
           maxBytes: resolveChatAttachmentMaxBytes(cfg),
           log: context.logGateway,
           supportsImages,
+          supportsVideos,
           // chat.send routes selected offloadedRefs into ctx.MediaPaths below
           // so the auto-reply stage pipeline can surface them to the agent.
           acceptNonImage: true,
@@ -2004,8 +2029,19 @@ export const chatHandlers: GatewayRequestHandlers = {
             : [],
         );
         parsedImages = parsed.images;
+        parsedVideos = parsed.videos;
         imageOrder = routeImageOffloadsAsMediaPaths ? [] : parsed.imageOrder;
         offloadedRefs = parsed.offloadedRefs;
+        if (parsedVideos.length > 0) {
+          context.logGateway.info?.("[Gateway] chat.send attached video natively for model input");
+        } else if (
+          !supportsVideos &&
+          offloadedRefs.some((ref) => ref.mimeType.startsWith("video/"))
+        ) {
+          context.logGateway.info?.(
+            "[Gateway] chat.send staged video attachment for media-understanding fallback",
+          );
+        }
         ({
           paths: mediaPathOffloadPaths,
           types: mediaPathOffloadTypes,
@@ -2016,10 +2052,32 @@ export const chatHandlers: GatewayRequestHandlers = {
           // can describe them via agents.defaults.imageModel. Vision-capable
           // image offloads stay as prompt refs for native image loading.
           includeImageRefs: routeImageOffloadsAsMediaPaths,
+          includeVideoRefs: routeVideoOffloadsAsMediaPaths,
           cfg,
           sessionKey,
           agentId,
         }));
+        if (parsedVideos.length > 0) {
+          const videoOffloadedRefs = offloadedRefs.filter((ref) =>
+            ref.mimeType.startsWith("video/"),
+          );
+          try {
+            ({ paths: nativeVideoFallbackPaths } = await prestageMediaPathOffloads({
+              offloadedRefs: videoOffloadedRefs,
+              includeImageRefs: false,
+              includeVideoRefs: true,
+              cleanupOnError: false,
+              cfg,
+              sessionKey,
+              agentId,
+            }));
+          } catch (err) {
+            context.logGateway.warn(
+              `[Gateway] chat.send could not stage native video fallback path: ${formatErrorMessage(err)}`,
+            );
+            nativeVideoFallbackPaths = [];
+          }
+        }
       } catch (err) {
         respond(
           false,
@@ -2068,8 +2126,15 @@ export const chatHandlers: GatewayRequestHandlers = {
         client,
         logGateway: context.logGateway,
       });
+      for (const [index, video] of parsedVideos.entries()) {
+        const fallbackPath = nativeVideoFallbackPaths[index];
+        if (fallbackPath) {
+          video.fallbackPath = fallbackPath;
+        }
+      }
+      const promptMedia: PromptMediaContent[] = [...parsedImages, ...parsedVideos];
       const pluginBoundMediaFields =
-        explicitOriginTargetsPlugin && parsedImages.length > 0
+        explicitOriginTargetsPlugin && (promptMedia.length > 0 || offloadedRefs.length > 0)
           ? resolveChatSendTranscriptMediaFields(await persistedImagesPromise)
           : {};
 
@@ -2325,7 +2390,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         replyOptions: {
           runId: clientRunId,
           abortSignal: activeRunAbort.controller.signal,
-          images: parsedImages.length > 0 ? parsedImages : undefined,
+          images: promptMedia.length > 0 ? promptMedia : undefined,
           imageOrder: imageOrder.length > 0 ? imageOrder : undefined,
           onAgentRunStart: (runId) => {
             agentRunStarted = true;

@@ -370,7 +370,13 @@ vi.mock("../runs.js", () => ({
 }));
 
 vi.mock("./images.js", () => ({
-  detectAndLoadPromptImages: async () => ({ images: [] }),
+  detectAndLoadPromptImages: async () => ({
+    images: [],
+    fallbackMediaNotes: [],
+    detectedRefs: [],
+    loadedCount: 0,
+    skippedCount: 0,
+  }),
 }));
 
 vi.mock("../../system-prompt-params.js", () => ({

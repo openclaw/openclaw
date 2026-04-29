@@ -105,13 +105,13 @@ export async function resolveHookModelSelection(params: {
 }
 
 export function buildBeforeModelResolveAttachments(
-  images: readonly { mimeType?: string }[] | undefined,
+  images: readonly { type?: string; mimeType?: string }[] | undefined,
 ): PluginHookBeforeModelResolveAttachment[] | undefined {
   if (!images?.length) {
     return undefined;
   }
   return images.map((img) => ({
-    kind: "image",
+    kind: img.type === "video" ? "video" : "image",
     mimeType: img.mimeType,
   }));
 }

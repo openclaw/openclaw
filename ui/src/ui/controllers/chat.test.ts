@@ -800,6 +800,54 @@ describe("sendChatMessage", () => {
     });
   });
 
+  it("serializes video chat attachments as files with optimistic video previews", async () => {
+    const request = vi.fn().mockResolvedValue({ runId: "run-1", status: "started" });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+    });
+    const videoBytes = "video-bytes";
+
+    const result = await sendChatMessage(state, "describe", [
+      {
+        id: "att-video",
+        dataUrl: `data:video/mp4;base64,${Buffer.from(videoBytes).toString("base64")}`,
+        mimeType: "video/mp4",
+        fileName: "clip.mp4",
+      },
+    ]);
+
+    expect(result).toEqual(expect.any(String));
+    expect(request).toHaveBeenCalledWith(
+      "chat.send",
+      expect.objectContaining({
+        message: "describe",
+        attachments: [
+          {
+            type: "file",
+            mimeType: "video/mp4",
+            fileName: "clip.mp4",
+            content: Buffer.from(videoBytes).toString("base64"),
+          },
+        ],
+      }),
+    );
+    expect(state.chatMessages[0]).toMatchObject({
+      role: "user",
+      content: [
+        { type: "text", text: "describe" },
+        {
+          type: "attachment",
+          attachment: {
+            kind: "video",
+            label: "clip.mp4",
+            mimeType: "video/mp4",
+          },
+        },
+      ],
+    });
+  });
+
   it("serializes attachments from the side payload store without copying data URLs into chat state", async () => {
     const request = vi.fn().mockResolvedValue({ runId: "run-1", status: "started" });
     const state = createState({
