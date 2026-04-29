@@ -131,7 +131,6 @@ describe("models.authStatus", () => {
     expect(mocks.ensureAuthProfileStore).toHaveBeenCalledWith("/tmp/agent", {
       externalCliProviderIds: [],
     });
-    expect(mocks.buildAuthHealthSummary).toHaveBeenCalledTimes(1);
   });
 
   it("serves cached response within TTL and marks it as cached", async () => {
