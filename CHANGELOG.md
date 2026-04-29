@@ -24,6 +24,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Models/UI: hide unauthenticated providers from the default Web chat, `/models`, and model setup pickers while keeping explicit full-catalog browse paths through `view: "all"`, `/models <provider> all`, and `models list --all`. Fixes #74423. Thanks @guarismo and @SymbolStar.
+- Slack/reactions: treat duplicate `already_reacted` responses as idempotent success so repeated agent reaction adds no longer surface as tool failures. Fixes #69005. Thanks @shipitsteven and @martingarramon.
 - Slack/tools: expose `fileId` in the shared message tool schema so `download-file` can receive Slack attachment IDs from inbound placeholders. Fixes #45574. Thanks @chadvegas.
 - Exec: reject invalid per-call `host` values instead of silently falling back to the default target, so hostname-like values fail before commands run. Fixes #74426. Thanks @scr00ge-00 and @vyctorbrzezowski.
 - Google/Gemini: send non-empty placeholder content when a Gemini run is triggered with empty or filtered user content, avoiding `contents is not specified` API errors. Thanks @CaoYuhaoCarl.
