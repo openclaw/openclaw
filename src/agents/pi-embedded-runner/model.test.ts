@@ -1511,6 +1511,35 @@ describe("resolveModel", () => {
     );
   });
 
+  it("rejects configured openai-codex gpt-5.4-mini inline rows with api", () => {
+    const cfg = {
+      models: {
+        providers: {
+          "openai-codex": {
+            models: [
+              {
+                id: "gpt-5.4-mini",
+                name: "GPT-5.4 Mini",
+                api: "openai-codex-responses",
+                input: ["text"],
+                reasoning: true,
+                contextWindow: 64_000,
+                maxTokens: 8_192,
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("openai-codex", "gpt-5.4-mini", "/tmp/agent", cfg);
+
+    expect(result.model).toBeUndefined();
+    expect(result.error).toBe(
+      "Unknown model: openai-codex/gpt-5.4-mini. gpt-5.4-mini is not supported by the OpenAI Codex OAuth route. Use openai/gpt-5.4-mini with an OpenAI API key or openai-codex/gpt-5.5 with Codex OAuth.",
+    );
+  });
+
   it("does not build an openai-codex fallback for removed gpt-5.3-codex-spark", () => {
     mockOpenAICodexTemplateModel(discoverModels);
 
