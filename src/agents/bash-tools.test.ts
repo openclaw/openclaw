@@ -765,7 +765,11 @@ describe("exec notifyOnExit", () => {
 
     expect(finished).toBeTruthy();
     expect(hasEvent).toBe(true);
-    expect(queuedEvent).toMatchObject({ trusted: false });
+    expect(queuedEvent).toMatchObject({
+      contextKey: `exec:${sessionId}`,
+      origin: "local-exec",
+      trusted: false,
+    });
     expect(formatted).toContain("System (untrusted):");
   });
 
@@ -786,6 +790,8 @@ describe("exec notifyOnExit", () => {
     );
 
     expect(queuedEvent).toMatchObject({
+      contextKey: `exec:${sessionId}`,
+      origin: "local-exec",
       trusted: false,
       deliveryContext: {
         channel: "telegram",
