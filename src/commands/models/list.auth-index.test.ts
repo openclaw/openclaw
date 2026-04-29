@@ -11,6 +11,18 @@ const emptyStore: AuthProfileStore = {
   profiles: {},
 };
 
+function modelConfig(id: string) {
+  return {
+    id,
+    name: id,
+    reasoning: false,
+    input: ["text" as const],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 8192,
+    maxTokens: 4096,
+  };
+}
+
 describe("createModelListAuthIndex", () => {
   it("normalizes auth aliases from profiles", () => {
     const index = createModelListAuthIndex({
@@ -54,7 +66,7 @@ describe("createModelListAuthIndex", () => {
               api: "openai-completions",
               apiKey: "sk-configured",
               baseUrl: "https://custom.example/v1",
-              models: [{ id: "local-model" }],
+              models: [modelConfig("local-model")],
             },
           },
         },
@@ -74,7 +86,7 @@ describe("createModelListAuthIndex", () => {
             "local-openai": {
               api: "openai-completions",
               baseUrl: "http://127.0.0.1:8080/v1",
-              models: [{ id: "local-model" }],
+              models: [modelConfig("local-model")],
             },
           },
         },

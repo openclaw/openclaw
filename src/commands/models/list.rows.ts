@@ -82,7 +82,7 @@ async function buildRow(params: {
     availableKeys: params.context.availableKeys,
     allowProviderAvailabilityFallback: params.allowProviderAvailabilityFallback ?? false,
     hasAuthForProvider: shouldResolveProviderAuth
-      ? params.context.authIndex.hasProviderAuth
+      ? (provider) => params.context.authIndex.hasProviderAuth(provider)
       : undefined,
   });
 }
@@ -466,7 +466,7 @@ export async function appendConfiguredRows(params: {
           ? !params.context.discoveredKeys.has(modelKey(model.provider, model.id))
           : false,
         hasAuthForProvider: shouldResolveProviderAuth
-          ? params.context.authIndex.hasProviderAuth
+          ? (provider) => params.context.authIndex.hasProviderAuth(provider)
           : undefined,
       }),
     );
