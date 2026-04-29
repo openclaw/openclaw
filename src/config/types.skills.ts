@@ -40,7 +40,7 @@ export type SkillsLimitsConfig = {
 };
 
 export type SkillsTrustedSource =
-  | "openclaw-bundled"
+  | "openclaw-bundled" // no-op: bundled skills are already exempt from code-safety scans
   | "openclaw-managed"
   | "openclaw-extra"
   | "openclaw-workspace"

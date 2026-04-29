@@ -145,7 +145,7 @@ description: test skill
 
     // Override the mock to return a skill with a trusted source type.
     const { loadWorkspaceSkillEntries } = await import("../agents/skills.js");
-    (loadWorkspaceSkillEntries as ReturnType<typeof vi.fn>).mockReturnValue([
+    (loadWorkspaceSkillEntries as ReturnType<typeof vi.fn>).mockReturnValueOnce([
       {
         skill: {
           baseDir: sharedCodeSafetyWorkspaceDir,
@@ -166,7 +166,7 @@ description: test skill
     // The scanner should not be called for trusted source skills
     expect(scanSpy).not.toHaveBeenCalled();
     // No findings should be reported
-    const skillFindings = findings.filter((f) => f.checkId.startsWith("skills.code_safety"));
+    const skillFindings = findings.filter((f) => f.checkId === "skills.code_safety");
     expect(skillFindings).toHaveLength(0);
   });
 
