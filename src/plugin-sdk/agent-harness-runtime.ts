@@ -23,8 +23,11 @@ export type {
 } from "../agents/harness/types.js";
 export type {
   AgentHarnessV2,
+  AgentHarnessV2CleanupParams,
   NativeAgentHarnessV2Factory,
   NativeAgentHarnessV2Factory as AgentHarnessV2Factory,
+  AgentHarnessV2PreparedRun,
+  AgentHarnessV2Session,
 } from "../agents/harness/v2.js";
 export type {
   EmbeddedRunAttemptParams,
