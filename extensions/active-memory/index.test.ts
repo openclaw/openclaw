@@ -185,9 +185,19 @@ describe("active-memory plugin", () => {
 
   it("registers a before_prompt_build hook", () => {
     expect(api.on).toHaveBeenCalledWith("before_prompt_build", expect.any(Function), {
-      timeoutMs: 150_000,
+      timeoutMs: 45_000,
     });
-    expect(hookOptions.before_prompt_build?.timeoutMs).toBe(150_000);
+    expect(hookOptions.before_prompt_build?.timeoutMs).toBe(45_000);
+  });
+
+  it("registers before_prompt_build with the configured recall timeout plus setup grace", () => {
+    api.pluginConfig = {
+      agents: ["main"],
+      timeoutMs: 90_000,
+    };
+    plugin.register(api as unknown as OpenClawPluginApi);
+
+    expect(hookOptions.before_prompt_build?.timeoutMs).toBe(120_000);
   });
 
   it("runs recall without recording shared auth-profile failures", async () => {

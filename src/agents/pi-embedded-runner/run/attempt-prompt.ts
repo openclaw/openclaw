@@ -58,9 +58,8 @@ export function remapInjectedContextFilesToWorkspace(params: {
 }
 
 export function normalizeMessagesForLlmBoundary(messages: AgentMessage[]): AgentMessage[] {
-  return stripToolResultDetails(
-    normalizeAssistantReplayContent(stripRuntimeContextCustomMessages(messages)),
-  );
+  const normalized = stripToolResultDetails(normalizeAssistantReplayContent(messages));
+  return stripRuntimeContextCustomMessages(normalized);
 }
 
 export async function prepareAttemptBootstrapPromptContext(params: {

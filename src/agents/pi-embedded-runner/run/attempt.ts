@@ -422,6 +422,7 @@ export async function runEmbeddedAttempt(
               senderUsername: params.senderUsername,
               senderE164: params.senderE164,
               senderIsOwner: params.senderIsOwner,
+              ownerOnlyToolAllowlist: params.ownerOnlyToolAllowlist,
               allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
               sessionKey: sandboxSessionKey,
               sessionId: params.sessionId,
@@ -575,6 +576,7 @@ export async function runEmbeddedAttempt(
       senderUsername: params.senderUsername,
       senderE164: params.senderE164,
       senderIsOwner: params.senderIsOwner,
+      ownerOnlyToolAllowlist: params.ownerOnlyToolAllowlist,
       warn: (message) => log.warn(message),
     });
     const effectiveTools = [...tools, ...filteredBundledTools];

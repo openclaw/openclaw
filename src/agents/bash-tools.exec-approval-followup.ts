@@ -22,6 +22,7 @@ type ExecApprovalFollowupParams = {
   turnSourceAccountId?: string;
   turnSourceThreadId?: string | number;
   resultText: string;
+  direct?: boolean;
 };
 
 function buildExecDeniedFollowupPrompt(resultText: string): string {
@@ -229,7 +230,7 @@ export async function sendExecApprovalFollowup(
 
   let sessionError: unknown = null;
 
-  if (sessionKey) {
+  if (sessionKey && params.direct !== true) {
     try {
       await callGatewayTool(
         "agent",

@@ -100,6 +100,7 @@ import {
   resolveIncompleteTurnPayloadText,
   resolvePlanningOnlyRetryLimit,
   resolvePlanningOnlyRetryInstruction,
+  resolveAttemptReplayMetadata,
   resolveReasoningOnlyRetryInstruction,
   resolveSilentToolResultReplyPayload,
   STRICT_AGENTIC_BLOCKED_TEXT,
@@ -151,6 +152,36 @@ import { createUsageAccumulator, mergeUsageIntoAccumulator } from "./usage-accum
 type ApiKeyInfo = ResolvedProviderAuth;
 
 const MAX_SAME_MODEL_IDLE_TIMEOUT_RETRIES = 1;
+type EmbeddedRunAttemptForRunner = Awaited<ReturnType<typeof runEmbeddedAttemptWithBackend>>;
+
+function normalizeEmbeddedRunAttemptResult(
+  attempt: EmbeddedRunAttemptForRunner,
+): EmbeddedRunAttemptForRunner {
+  const raw = attempt as EmbeddedRunAttemptForRunner & {
+    assistantTexts?: EmbeddedRunAttemptForRunner["assistantTexts"] | null;
+    toolMetas?: EmbeddedRunAttemptForRunner["toolMetas"] | null;
+    messagesSnapshot?: EmbeddedRunAttemptForRunner["messagesSnapshot"] | null;
+    messagingToolSentTexts?: EmbeddedRunAttemptForRunner["messagingToolSentTexts"] | null;
+    messagingToolSentMediaUrls?: EmbeddedRunAttemptForRunner["messagingToolSentMediaUrls"] | null;
+    messagingToolSentTargets?: EmbeddedRunAttemptForRunner["messagingToolSentTargets"] | null;
+    itemLifecycle?: EmbeddedRunAttemptForRunner["itemLifecycle"] | null;
+  };
+  return {
+    ...attempt,
+    assistantTexts: raw.assistantTexts ?? [],
+    toolMetas: raw.toolMetas ?? [],
+    messagesSnapshot: raw.messagesSnapshot ?? [],
+    messagingToolSentTexts: raw.messagingToolSentTexts ?? [],
+    messagingToolSentMediaUrls: raw.messagingToolSentMediaUrls ?? [],
+    messagingToolSentTargets: raw.messagingToolSentTargets ?? [],
+    itemLifecycle: raw.itemLifecycle ?? {
+      startedCount: 0,
+      completedCount: 0,
+      activeCount: 0,
+    },
+    replayMetadata: resolveAttemptReplayMetadata(raw),
+  };
+}
 
 export async function runEmbeddedPiAgent(
   params: RunEmbeddedPiAgentParams,
@@ -600,7 +631,10 @@ export async function runEmbeddedPiAgent(
       // Resolve the context engine once and reuse across retries to avoid
       // repeated initialization/connection overhead per attempt.
       ensureContextEnginesInitialized();
-      const contextEngine = await resolveContextEngine(params.config);
+      const contextEngine = await resolveContextEngine(params.config, {
+        agentDir,
+        workspaceDir: resolvedWorkspace,
+      });
       try {
         let activeSessionId = params.sessionId;
         let activeSessionFile = params.sessionFile;
@@ -710,7 +744,7 @@ export async function runEmbeddedPiAgent(
           attemptedThinking.add(thinkLevel);
           await fs.mkdir(resolvedWorkspace, { recursive: true });
 
-          const attempt = await runEmbeddedAttemptWithBackend(
+          const rawAttempt = await runEmbeddedAttemptWithBackend(
             buildEmbeddedRunAttemptInput({
               runParams: params,
               activeSessionId,
@@ -746,6 +780,7 @@ export async function runEmbeddedPiAgent(
               },
             }),
           );
+          const attempt = normalizeEmbeddedRunAttemptResult(rawAttempt);
 
           const {
             aborted,

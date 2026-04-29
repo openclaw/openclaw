@@ -52,7 +52,8 @@ if ! docker run --rm \
   -i "$IMAGE_NAME" bash -s >"$run_log" 2>&1 <<'EOF'
 set -euo pipefail
 
-eval "$(printf "%s" "${OPENCLAW_TEST_STATE_SCRIPT_B64:?missing OPENCLAW_TEST_STATE_SCRIPT_B64}" | base64 -d)"
+source scripts/lib/openclaw-e2e-instance.sh
+openclaw_e2e_eval_test_state_from_b64 "${OPENCLAW_TEST_STATE_SCRIPT_B64:?missing OPENCLAW_TEST_STATE_SCRIPT_B64}"
 export NPM_CONFIG_PREFIX="$HOME/.npm-global"
 export PATH="$NPM_CONFIG_PREFIX/bin:$PATH"
 export OPENAI_API_KEY="sk-openclaw-npm-onboard-e2e"
@@ -63,6 +64,7 @@ PORT="18789"
 MOCK_PORT="44080"
 SUCCESS_MARKER="OPENCLAW_AGENT_E2E_OK_ASSISTANT"
 MOCK_REQUEST_LOG="/tmp/openclaw-mock-openai-requests.jsonl"
+export SUCCESS_MARKER MOCK_REQUEST_LOG
 mock_pid=""
 
 case "$CHANNEL" in
@@ -81,17 +83,14 @@ case "$CHANNEL" in
 esac
 
 cleanup() {
-  if [ -n "${mock_pid:-}" ] && kill -0 "$mock_pid" 2>/dev/null; then
-    kill "$mock_pid" 2>/dev/null || true
-    wait "$mock_pid" 2>/dev/null || true
-  fi
+  openclaw_e2e_stop_process "${mock_pid:-}"
 }
 trap cleanup EXIT
 
 dump_debug_logs() {
   local status="$1"
   echo "npm onboard/channel/agent scenario failed with exit code $status" >&2
-  for file in \
+  openclaw_e2e_dump_logs \
     /tmp/openclaw-install.log \
     /tmp/openclaw-onboard.json \
     /tmp/openclaw-channel-add.log \
@@ -100,12 +99,7 @@ dump_debug_logs() {
     /tmp/openclaw-agent.err \
     /tmp/openclaw-agent.json \
     /tmp/openclaw-mock-openai.log \
-    "$MOCK_REQUEST_LOG"; do
-    if [ -f "$file" ]; then
-      echo "--- $file ---" >&2
-      sed -n '1,220p' "$file" >&2 || true
-    fi
-  done
+    "$MOCK_REQUEST_LOG"
 }
 trap 'status=$?; dump_debug_logs "$status"; exit "$status"' ERR
 
@@ -136,15 +130,8 @@ assert_dep_present() {
   fi
 }
 
-MOCK_PORT="$MOCK_PORT" SUCCESS_MARKER="$SUCCESS_MARKER" MOCK_REQUEST_LOG="$MOCK_REQUEST_LOG" node scripts/e2e/mock-openai-server.mjs >/tmp/openclaw-mock-openai.log 2>&1 &
-mock_pid="$!"
-for _ in $(seq 1 80); do
-  if node -e "fetch('http://127.0.0.1:${MOCK_PORT}/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"; then
-    break
-  fi
-  sleep 0.1
-done
-node -e "fetch('http://127.0.0.1:${MOCK_PORT}/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+mock_pid="$(openclaw_e2e_start_mock_openai "$MOCK_PORT" /tmp/openclaw-mock-openai.log)"
+openclaw_e2e_wait_mock_openai "$MOCK_PORT"
 
 echo "Running non-interactive onboarding..."
 openclaw onboard --non-interactive --accept-risk \

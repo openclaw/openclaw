@@ -4,7 +4,13 @@
 // prebuilt package artifact with dist inventory, not a source checkout.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { LOCAL_BUILD_METADATA_DIST_PATHS } from "./lib/local-build-metadata-paths.mjs";
+import {
+  collectPackageDistImportErrors,
+  expandPackageDistImportClosure,
+} from "./lib/package-dist-imports.mjs";
 
 function usage() {
   return "Usage: node scripts/check-openclaw-package-tarball.mjs <openclaw.tgz>";
@@ -29,6 +35,20 @@ const list = spawnSync("tar", ["-tf", tarball], {
 });
 if (list.status !== 0) {
   fail(`tar -tf failed for ${tarball}: ${list.stderr || list.status}`);
+}
+
+const extractDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-package-tarball-"));
+try {
+  const extract = spawnSync("tar", ["-xf", tarball, "-C", extractDir], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  if (extract.status !== 0) {
+    fail(`tar -xf failed for ${tarball}: ${extract.stderr || extract.status}`);
+  }
+} catch (error) {
+  fs.rmSync(extractDir, { recursive: true, force: true });
+  throw error;
 }
 
 const entries = list.stdout
@@ -106,14 +126,13 @@ function isLegacyLocalBuildMetadataCompatVersion(version) {
 }
 
 function readTarEntry(entryPath) {
-  const candidates = [entryPath, `package/${entryPath}`];
+  const candidates = [
+    path.join(extractDir, entryPath),
+    path.join(extractDir, "package", entryPath),
+  ];
   for (const candidate of candidates) {
-    const result = spawnSync("tar", ["-xOf", tarball, candidate], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    if (result.status === 0) {
-      return result.stdout;
+    if (fs.existsSync(candidate)) {
+      return fs.readFileSync(candidate, "utf8");
     }
   }
   return "";
@@ -170,6 +189,8 @@ if (entrySet.has("dist/postinstall-inventory.json")) {
     if (!Array.isArray(inventory) || inventory.some((entry) => typeof entry !== "string")) {
       errors.push("invalid dist/postinstall-inventory.json");
     } else {
+      const normalizedInventory = inventory.map((entry) => entry.replace(/\\/gu, "/"));
+      const normalizedInventorySet = new Set(normalizedInventory);
       for (const inventoryEntry of inventory) {
         const normalizedEntry = inventoryEntry.replace(/\\/gu, "/");
         if (!entrySet.has(normalizedEntry)) {
@@ -185,6 +206,16 @@ if (entrySet.has("dist/postinstall-inventory.json")) {
           errors.push(`inventory references missing tar entry ${normalizedEntry}`);
         }
       }
+      const expandedInventory = expandPackageDistImportClosure({
+        files: normalized,
+        seedFiles: normalizedInventory,
+        readText: readTarEntry,
+      });
+      for (const importedEntry of expandedInventory) {
+        if (!normalizedInventorySet.has(importedEntry)) {
+          errors.push(`inventory omits imported dist file ${importedEntry}`);
+        }
+      }
     }
   } catch (error) {
     errors.push(
@@ -195,11 +226,20 @@ if (entrySet.has("dist/postinstall-inventory.json")) {
   }
 }
 
+errors.push(
+  ...collectPackageDistImportErrors({
+    files: normalized,
+    readText: readTarEntry,
+  }),
+);
+
 if (errors.length > 0) {
+  fs.rmSync(extractDir, { recursive: true, force: true });
   fail(`OpenClaw package tarball integrity failed:\n${errors.join("\n")}`);
 }
 
 for (const warning of warnings) {
   console.warn(`OpenClaw package tarball integrity warning: ${warning}`);
 }
+fs.rmSync(extractDir, { recursive: true, force: true });
 console.log("OpenClaw package tarball integrity passed.");

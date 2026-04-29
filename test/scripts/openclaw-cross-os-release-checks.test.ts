@@ -15,6 +15,7 @@ import { describe, expect, it } from "vitest";
 import { LOCAL_BUILD_METADATA_DIST_PATHS } from "../../scripts/lib/local-build-metadata-paths.mjs";
 import {
   agentOutputHasExpectedOkMarker,
+  buildCrossOsReleaseSmokePluginAllowlist,
   buildReleaseOnboardArgs,
   buildWindowsDevUpdateToolchainCheckScript,
   buildWindowsFreshShellVersionCheckScript,
@@ -109,6 +110,21 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     expect(shouldRetryCrossOsAgentTurnError(new Error("Agent output did not contain OK."))).toBe(
       false,
     );
+  });
+
+  it("keeps release smoke plugin allowlists focused on agent-turn essentials", () => {
+    const allowlist = buildCrossOsReleaseSmokePluginAllowlist({ extensionId: "openai" });
+
+    expect(allowlist).toEqual(expect.arrayContaining(["openai", "memory-core", "acpx"]));
+    expect(allowlist).not.toContain("document-extract");
+    expect(allowlist).not.toContain("microsoft");
+    expect(allowlist).not.toContain("web-readability");
+  });
+
+  it("keeps cross-OS live smoke agent turns on minimal thinking", () => {
+    const source = readFileSync("scripts/openclaw-cross-os-release-checks.ts", "utf8");
+
+    expect(source.match(/"--thinking",\s+"minimal"/g)?.length).toBeGreaterThanOrEqual(2);
   });
 
   it("treats explicit empty-string args as values instead of boolean flags", () => {

@@ -111,7 +111,8 @@ rerun after a focused patch.
 the manual "everything before release" umbrella. It resolves a target ref, then
 dispatches:
 
-- manual `CI` for the full normal CI graph
+- manual `CI` for the full normal CI graph, with release-only plugin prerelease
+  lanes enabled via `full_release_validation=true`
 - `OpenClaw Release Checks` for install smoke, cross-OS release checks, live and
   E2E checks, Docker release-path suites, OpenWebUI, QA Lab, fast Matrix, and
   Telegram release lanes
@@ -141,6 +142,12 @@ matrix. Do not make `full` faster by silently dropping suites; optimize setup,
 artifact reuse, and sharding instead. The parent verifier job appends
 slowest-job tables for child runs; rerun only that verifier after a child rerun
 turns green.
+
+Standalone manual `CI` dispatches do not run the plugin prerelease suite, the
+extension batch sweep, or the release-only `agentic-plugins` Vitest shard. Those
+lanes are intentionally reserved for the Full Release Validation CI child so
+PRs, main pushes, and ad hoc broad CI checks do not spend Docker/package time or
+all-plugin runtime time on release-only product coverage.
 
 If a full run is already active on a newer `origin/main`, prefer watching that
 run over dispatching a duplicate. If you accidentally dispatch a stale duplicate,
@@ -221,6 +228,13 @@ release checks, release-path Docker live/E2E checks, and Package Acceptance.
 When `Full Release Validation` dispatches release checks, it passes the requested
 branch/tag plus an `expected_sha` so branch/tag refs resolve through the fast
 remote-ref path while the package and QA jobs still validate the exact SHA.
+
+The full-profile native live media shards use the prebuilt
+`ghcr.io/openclaw/openclaw-live-media-runner:ubuntu-24.04` container so
+`ffmpeg`/`ffprobe` are already present. If those jobs suddenly spend minutes in
+dependency setup again, first check the `Live Media Runner Image` workflow and
+the `Verify preinstalled live media dependencies` step before assuming the media
+tests themselves slowed down.
 
 The release Docker path intentionally shards the plugin/runtime tail. The
 workflow uses `plugins-runtime-plugins`, `plugins-runtime-services`, and

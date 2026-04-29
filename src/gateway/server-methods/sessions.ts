@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { CURRENT_SESSION_VERSION, SessionManager } from "@mariozechner/pi-coding-agent";
+import { resolveAgentRuntimeMetadata } from "../../agents/agent-runtime-metadata.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import {
   abortEmbeddedPiRun,
@@ -79,6 +80,7 @@ import {
   resolveDeletedAgentIdFromSessionKey,
   resolveFreshestSessionEntryFromStoreKeys,
   resolveGatewaySessionStoreTarget,
+  resolveSessionDisplayModelIdentityRef,
   resolveSessionModelRef,
   resolveSessionTranscriptCandidates,
   type SessionsPatchResult,
@@ -1364,14 +1366,22 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     const parsed = parseAgentSessionKey(target.canonicalKey ?? key);
     const agentId = normalizeAgentId(parsed?.agentId ?? resolveDefaultAgentId(cfg));
     const resolved = resolveSessionModelRef(cfg, applied.entry, agentId);
+    const resolvedDisplayModel = resolveSessionDisplayModelIdentityRef({
+      cfg,
+      agentId,
+      provider: resolved.provider,
+      model: resolved.model,
+    });
+    const agentRuntime = resolveAgentRuntimeMetadata(cfg, agentId);
     const result: SessionsPatchResult = {
       ok: true,
       path: storePath,
       key: target.canonicalKey,
       entry: applied.entry,
       resolved: {
-        modelProvider: resolved.provider,
-        model: resolved.model,
+        modelProvider: resolvedDisplayModel.provider,
+        model: resolvedDisplayModel.model,
+        agentRuntime,
       },
     };
     respond(true, result, undefined);

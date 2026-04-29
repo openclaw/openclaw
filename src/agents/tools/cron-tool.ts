@@ -314,6 +314,8 @@ export const CronToolSchema = Type.Object(
 type CronToolOptions = {
   agentSessionKey?: string;
   currentDeliveryContext?: DeliveryContext;
+  /** Restrict this cron tool instance to removing only this active cron job. */
+  selfRemoveOnlyJobId?: string;
 };
 
 type GatewayToolCaller = typeof callGatewayTool;
@@ -341,6 +343,29 @@ function truncateText(input: string, maxLen: number) {
   }
   const truncated = truncateUtf16Safe(input, Math.max(0, maxLen - 3)).trimEnd();
   return `${truncated}...`;
+}
+
+function readCronJobIdParam(params: Record<string, unknown>) {
+  return readStringParam(params, "jobId") ?? readStringParam(params, "id");
+}
+
+function assertCronSelfRemoveScope(
+  opts: CronToolOptions | undefined,
+  action: string,
+  params: Record<string, unknown>,
+) {
+  const selfRemoveOnlyJobId = opts?.selfRemoveOnlyJobId?.trim();
+  if (!selfRemoveOnlyJobId) {
+    return;
+  }
+  if (action !== "remove") {
+    throw new Error("Cron tool is restricted to removing the current cron job.");
+  }
+  const id = readCronJobIdParam(params);
+  if (id && id === selfRemoveOnlyJobId) {
+    return;
+  }
+  throw new Error("Cron tool is restricted to removing the current cron job.");
 }
 
 function extractMessageText(message: ChatMessage): { role: string; text: string } | null {
@@ -616,6 +641,7 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
       const action = readStringParam(params, "action", { required: true });
+      assertCronSelfRemoveScope(opts, action, params);
       const gatewayOpts: GatewayCallOptions = {
         ...readGatewayCallOptions(params),
         timeoutMs:
@@ -745,7 +771,7 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
           return jsonResult(await callGateway("cron.add", gatewayOpts, job));
         }
         case "update": {
-          const id = readStringParam(params, "jobId") ?? readStringParam(params, "id");
+          const id = readCronJobIdParam(params);
           if (!id) {
             throw new Error("jobId required (id accepted for backward compatibility)");
           }
@@ -780,14 +806,14 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
           );
         }
         case "remove": {
-          const id = readStringParam(params, "jobId") ?? readStringParam(params, "id");
+          const id = readCronJobIdParam(params);
           if (!id) {
             throw new Error("jobId required (id accepted for backward compatibility)");
           }
           return jsonResult(await callGateway("cron.remove", gatewayOpts, { id }));
         }
         case "run": {
-          const id = readStringParam(params, "jobId") ?? readStringParam(params, "id");
+          const id = readCronJobIdParam(params);
           if (!id) {
             throw new Error("jobId required (id accepted for backward compatibility)");
           }
@@ -796,7 +822,7 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
           return jsonResult(await callGateway("cron.run", gatewayOpts, { id, mode: runMode }));
         }
         case "runs": {
-          const id = readStringParam(params, "jobId") ?? readStringParam(params, "id");
+          const id = readCronJobIdParam(params);
           if (!id) {
             throw new Error("jobId required (id accepted for backward compatibility)");
           }
