@@ -20,6 +20,12 @@ describe("sanitizeUserFacingText", () => {
     expect(sanitizeUserFacingText("Hi <final>there</final>!")).toBe("Hi there!");
   });
 
+  it("strips self-closing final tags (regression #65867)", () => {
+    expect(sanitizeUserFacingText("<final>Hello<final/>")).toBe("Hello");
+    expect(sanitizeUserFacingText("<final>Hello</final >")).toBe("Hello");
+    expect(sanitizeUserFacingText("<final >Hello< /final>")).toBe("Hello");
+  });
+
   it.each(["202 results found", "400 days left"])(
     "does not clobber normal numeric prefix: %s",
     (text) => {
