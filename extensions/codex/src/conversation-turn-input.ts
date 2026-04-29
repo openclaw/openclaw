@@ -1,4 +1,5 @@
 import path from "node:path";
+import { safeFileURLToPath } from "openclaw/plugin-sdk/file-access-runtime";
 import type { PluginHookInboundClaimEvent } from "openclaw/plugin-sdk/plugin-entry";
 import type { CodexUserInput } from "./app-server/protocol.js";
 
@@ -49,7 +50,10 @@ function toCodexImageInput(media: InboundMedia): CodexUserInput | undefined {
     return undefined;
   }
   if (media.path) {
-    return { type: "localImage", path: normalizeFileUrl(media.path) };
+    const localPath = normalizeFilePath(media.path);
+    if (localPath) {
+      return { type: "localImage", path: localPath };
+    }
   }
   return media.url ? { type: "image", url: media.url } : undefined;
 }
@@ -65,8 +69,15 @@ function isImageMedia(media: InboundMedia): boolean {
   return IMAGE_EXTENSIONS.has(path.extname(candidate.split(/[?#]/, 1)[0] ?? "").toLowerCase());
 }
 
-function normalizeFileUrl(value: string): string {
-  return value.startsWith("file://") ? new URL(value).pathname : value;
+function normalizeFilePath(value: string): string | undefined {
+  if (!value.startsWith("file://")) {
+    return value;
+  }
+  try {
+    return safeFileURLToPath(value);
+  } catch {
+    return undefined;
+  }
 }
 
 function readStringArray(value: unknown): string[] {
