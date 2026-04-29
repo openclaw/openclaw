@@ -907,6 +907,39 @@ function resolveSyncedSkillDestinationPath(params: {
   }).resolved;
 }
 
+/**
+ * Walk a directory up to 2 levels deep and return the newest file mtime
+ * found. Returns 0 if the directory does not exist, is empty, or is
+ * unreadable. Used to detect whether a skill's source tree has changed
+ * since the last sync so we can skip re-copying unchanged skills.
+ */
+async function getNewestMtime(dir: string, depth = 0): Promise<number> {
+  const MAX_DEPTH = 2;
+  let newest = 0;
+  let entries: fs.Dirent[];
+  try {
+    entries = await fsp.readdir(dir, { withFileTypes: true });
+  } catch {
+    return 0;
+  }
+  for (const entry of entries) {
+    const fullPath = path.join(dir, entry.name);
+    try {
+      if (entry.isDirectory() && depth < MAX_DEPTH) {
+        const sub = await getNewestMtime(fullPath, depth + 1);
+        if (sub > newest) newest = sub;
+      } else if (entry.isFile()) {
+        const stat = await fsp.stat(fullPath);
+        if (stat.mtimeMs > newest) newest = stat.mtimeMs;
+      }
+    } catch {
+      // Skip unreadable entries — a best-effort freshness check does not
+      // need perfect coverage.
+    }
+  }
+  return newest;
+}
+
 export async function syncSkillsToWorkspace(params: {
   sourceWorkspaceDir: string;
   targetWorkspaceDir: string;
@@ -935,10 +968,20 @@ export async function syncSkillsToWorkspace(params: {
       bundledSkillsDir: params.bundledSkillsDir,
     });
 
-    await fsp.rm(targetSkillsDir, { recursive: true, force: true });
+    // Ensure the target directory exists, but never wipe it wholesale.
+    // Wiping before copy is unsafe: when `loadWorkspaceSkillEntries`
+    // returns a partial result due to a transient config parse error or
+    // filesystem hiccup, `rm -rf` destroys skills that should have been
+    // preserved and the recopy step can't restore them. A non-destructive
+    // sync is strictly safer — at worst the sandbox carries a few stale
+    // directories, which is cheap because sandboxes are ephemeral.
     await fsp.mkdir(targetSkillsDir, { recursive: true });
 
+    // Build a manifest of destination directory → source entry. We resolve
+    // each destination up front so duplicate source basenames get distinct
+    // target names consistent with the previous behavior.
     const usedDirNames = new Set<string>();
+    const sourceManifest: { entry: SkillEntry; destDir: string }[] = [];
     for (const entry of entries) {
       let dest: string | null = null;
       try {
@@ -958,8 +1001,29 @@ export async function syncSkillsToWorkspace(params: {
         );
         continue;
       }
+      sourceManifest.push({ entry, destDir: dest });
+    }
+
+    // Incremental per-skill copy. For each entry: if the destination is
+    // already at least as new as the source, skip. Otherwise remove only
+    // that one destination directory and re-copy. We never touch
+    // destination directories that aren't in the manifest.
+    let copiedCount = 0;
+    let skippedCount = 0;
+    let failedCount = 0;
+    for (const { entry, destDir } of sourceManifest) {
+      const srcMtime = await getNewestMtime(entry.skill.baseDir);
+      const destMtime = await getNewestMtime(destDir);
+      if (srcMtime > 0 && destMtime >= srcMtime) {
+        skippedCount++;
+        continue;
+      }
+
       try {
-        await fsp.cp(entry.skill.baseDir, dest, {
+        // Scoped removal: only the target directory for this specific
+        // skill, so stale files inside it do not leak into the new copy.
+        await fsp.rm(destDir, { recursive: true, force: true });
+        await fsp.cp(entry.skill.baseDir, destDir, {
           recursive: true,
           force: true,
           filter: (src) => {
@@ -967,11 +1031,17 @@ export async function syncSkillsToWorkspace(params: {
             return !(name === ".git" || name === "node_modules");
           },
         });
+        copiedCount++;
       } catch (error) {
         const message = error instanceof Error ? error.message : JSON.stringify(error);
         skillsLogger.warn(`Failed to copy ${entry.skill.name} to sandbox: ${message}`);
+        failedCount++;
       }
     }
+
+    skillsLogger.debug(
+      `syncSkillsToWorkspace: manifest=${sourceManifest.length} copied=${copiedCount} skipped=${skippedCount} failed=${failedCount}`,
+    );
   });
 }
 
