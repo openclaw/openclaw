@@ -157,6 +157,39 @@ describe("main-session-restart-recovery", () => {
     expect(store["agent:main:main"]?.abortedLastRun).toBe(true);
   });
 
+  it("resumes marked sessions with a durable pending final delivery payload (Phase 2)", async () => {
+    const sessionsDir = await makeSessionsDir();
+    const pendingPayload = "The final answer is 42.";
+    await writeStore(sessionsDir, {
+      "agent:main:main": {
+        sessionId: "main-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+        abortedLastRun: true,
+        pendingFinalDeliveryPayload: pendingPayload,
+        pendingFinalDeliveryAt: Date.now() - 5_000,
+        pendingFinalDeliveryReason: "restart",
+      },
+    });
+    await writeTranscript(sessionsDir, "main-session", [
+      { role: "user", content: "calculate the answer" },
+      { role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "calc" }] },
+      { role: "toolResult", content: "42" },
+    ]);
+
+    const result = await recoverRestartAbortedMainSessions({ stateDir: tmpDir });
+
+    expect(result).toEqual({ recovered: 1, failed: 0, skipped: 0 });
+    expect(callGateway).toHaveBeenCalledOnce();
+    const callParams = vi.mocked(callGateway).mock.calls[0]?.[0].params;
+    expect(callParams.message).toContain(pendingPayload);
+    
+    const store = loadSessionStore(path.join(sessionsDir, "sessions.json"));
+    expect(store["agent:main:main"]?.abortedLastRun).toBe(false);
+    expect(store["agent:main:main"]?.pendingFinalDeliveryPayload).toBeUndefined();
+    expect(store["agent:main:main"]?.pendingFinalDeliveryAt).toBeUndefined();
+  });
+
   it("does not scan ordinary running sessions without the restart-aborted marker", async () => {
     const sessionsDir = await makeSessionsDir();
     await writeStore(sessionsDir, {

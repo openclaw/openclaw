@@ -792,6 +792,19 @@ export async function runHeartbeatOnce(opts: {
     return { status: "skipped", reason: "requests-in-flight" };
   }
 
+  // Phase 2: Stronger heartbeat deferral. 
+  // If the session was updated very recently (e.g., within the last 30 seconds),
+  // defer the heartbeat to avoid interrupting potential follow-up user turns or final delivery.
+  const HEARTBEAT_DEFER_WINDOW_MS = 30_000;
+  if (entry?.updatedAt && startedAt - entry.updatedAt < HEARTBEAT_DEFER_WINDOW_MS) {
+    emitHeartbeatEvent({
+      status: "skipped",
+      reason: "recent-activity",
+      durationMs: Date.now() - startedAt,
+    });
+    return { status: "skipped", reason: "requests-in-flight" }; // Reuse the retry-triggering reason
+  }
+
   const previousUpdatedAt = entry?.updatedAt;
 
   // When isolatedSession is enabled, create a fresh session via the same

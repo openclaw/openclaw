@@ -301,6 +301,15 @@ export type SessionEntry = {
    * Each plugin owns and may overwrite only its own entry between turns.
    */
   pluginDebugEntries?: SessionPluginDebugEntry[];
+  /**
+   * Pending final user-facing reply payload to be delivered after a restart or interrupt.
+   * Part of Phase 2 durable completion delivery for main sessions.
+   */
+  pendingFinalDeliveryPayload?: string;
+  /** Timestamp (ms) when pendingFinalDeliveryPayload was captured. */
+  pendingFinalDeliveryAt?: number;
+  /** Reason for the pending final delivery (e.g., "restart", "heartbeat-interrupt"). */
+  pendingFinalDeliveryReason?: string;
   acp?: SessionAcpMeta;
 };
 

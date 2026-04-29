@@ -1187,7 +1187,32 @@ async function agentCommandInternal(
 
     const payloads = result.payloads ?? [];
     const { deliverAgentCommandResult } = await loadDeliveryRuntime();
-    return await deliverAgentCommandResult({
+
+    // Phase 2: Persist pending final delivery for main sessions before attempting delivery.
+    // This ensures that if the process restarts during delivery, the payload is durable.
+    if (sessionStore && sessionKey && payloads.length > 0 && !isSubagentSessionKey(sessionKey)) {
+      const now = Date.now();
+      const combinedPayload = payloads
+        .map((p) => (typeof p.text === "string" ? p.text : ""))
+        .filter(Boolean)
+        .join("\n\n");
+      
+      if (combinedPayload) {
+        await persistSessionEntry({
+          sessionStore,
+          sessionKey,
+          storePath,
+          entry: {
+            ...(sessionStore[sessionKey] ?? sessionEntry),
+            pendingFinalDeliveryPayload: combinedPayload,
+            pendingFinalDeliveryAt: now,
+            pendingFinalDeliveryReason: "interrupted-run",
+          },
+        });
+      }
+    }
+
+    const deliveryResult = await deliverAgentCommandResult({
       cfg,
       deps: resolvedDeps,
       runtime,
@@ -1197,6 +1222,23 @@ async function agentCommandInternal(
       result,
       payloads,
     });
+
+    // Phase 2: Clear pending delivery payload after successful delivery.
+    if (sessionStore && sessionKey && !isSubagentSessionKey(sessionKey)) {
+      await persistSessionEntry({
+        sessionStore,
+        sessionKey,
+        storePath,
+        entry: {
+          ...(sessionStore[sessionKey] ?? sessionEntry),
+          pendingFinalDeliveryPayload: undefined,
+          pendingFinalDeliveryAt: undefined,
+          pendingFinalDeliveryReason: undefined,
+        },
+      });
+    }
+
+    return deliveryResult;
   } finally {
     clearAgentRunContext(runId);
   }

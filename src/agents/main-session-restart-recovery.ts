@@ -84,12 +84,15 @@ function resolveMainSessionResumeBlockReason(messages: unknown[]): string | null
   return null;
 }
 
-function buildResumeMessage(): string {
-  return (
+function buildResumeMessage(pendingPayload?: string): string {
+  const base =
     "[System] Your previous turn was interrupted by a gateway restart while " +
     "OpenClaw was waiting on tool/model work. Continue from the existing " +
-    "transcript and finish the interrupted response."
-  );
+    "transcript and finish the interrupted response.";
+  if (pendingPayload) {
+    return `${base}\n\nNote: The interrupted final reply was captured: "${pendingPayload}"`;
+  }
+  return base;
 }
 
 async function markSessionFailed(params: {
@@ -108,6 +111,10 @@ async function markSessionFailed(params: {
       entry.abortedLastRun = true;
       entry.endedAt = Date.now();
       entry.updatedAt = entry.endedAt;
+      // Clear pending delivery on failure to avoid stale replay later
+      entry.pendingFinalDeliveryPayload = undefined;
+      entry.pendingFinalDeliveryAt = undefined;
+      entry.pendingFinalDeliveryReason = undefined;
       store[params.sessionKey] = entry;
     },
     { skipMaintenance: true },
@@ -118,12 +125,13 @@ async function markSessionFailed(params: {
 async function resumeMainSession(params: {
   storePath: string;
   sessionKey: string;
+  pendingPayload?: string;
 }): Promise<boolean> {
   try {
     await callGateway<{ runId: string }>({
       method: "agent",
       params: {
-        message: buildResumeMessage(),
+        message: buildResumeMessage(params.pendingPayload),
         sessionKey: params.sessionKey,
         idempotencyKey: crypto.randomUUID(),
         deliver: false,
@@ -140,11 +148,15 @@ async function resumeMainSession(params: {
         }
         entry.abortedLastRun = false;
         entry.updatedAt = Date.now();
+        // Clear pending delivery after successful resume/handoff
+        entry.pendingFinalDeliveryPayload = undefined;
+        entry.pendingFinalDeliveryAt = undefined;
+        entry.pendingFinalDeliveryReason = undefined;
         store[params.sessionKey] = entry;
       },
       { skipMaintenance: true },
     );
-    log.info(`resumed interrupted main session: ${params.sessionKey}`);
+    log.info(`resumed interrupted main session: ${params.sessionKey}${params.pendingPayload ? " (with pending payload)" : ""}`);
     return true;
   } catch (err) {
     log.warn(`failed to resume interrupted main session ${params.sessionKey}: ${String(err)}`);
@@ -247,6 +259,7 @@ async function recoverStore(params: {
     const resumed = await resumeMainSession({
       storePath: params.storePath,
       sessionKey,
+      pendingPayload: entry.pendingFinalDeliveryPayload,
     });
     if (resumed) {
       params.resumedSessionKeys.add(sessionKey);
