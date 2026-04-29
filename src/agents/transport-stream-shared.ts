@@ -21,6 +21,9 @@ type TransportOutputShape = {
 
 export const EMPTY_TOOL_RESULT_TEXT = "(no output)";
 
+export const MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE =
+  "OpenClaw transport error: malformed_streaming_fragment";
+
 export function sanitizeTransportPayloadText(text: string): string {
   return text.replace(
     /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g,

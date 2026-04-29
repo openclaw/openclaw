@@ -14,6 +14,7 @@ import {
 import { formatExecDeniedUserMessage } from "../exec-approval-result.js";
 import { stripInternalRuntimeContext } from "../internal-runtime-context.js";
 import { stableStringify } from "../stable-stringify.js";
+import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../transport-stream-shared.js";
 import {
   isBillingErrorMessage,
   isOverloadedErrorMessage,
@@ -214,18 +215,10 @@ export function isStreamingJsonParseError(raw: string): boolean {
     return false;
   }
   const trimmed = raw.trim();
-  if (
-    /\bcould not parse anthropic sse event\b/i.test(trimmed) &&
-    /\b(?:content_block_delta|input_json_delta|partial_json|tool_use)\b/i.test(trimmed) &&
-    (/\b(?:expected|unexpected|unterminated)\b.+\bin json\b.+\bposition\b/i.test(trimmed) ||
-      /\bunexpected end of json input\b/i.test(trimmed))
-  ) {
+  if (trimmed === MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE) {
     return true;
   }
-
-  return /^(?:Unexpected end of JSON input|Unexpected non-whitespace character after JSON at position \d+(?: \(line \d+ column \d+\))?|(?:Expected (?:',' or '\}' after property value|double-quoted property name|':' after property name|',' or '\]' after array element)|Unterminated string) in JSON at position \d+(?: \(line \d+ column \d+\))?)$/i.test(
-    trimmed,
-  );
+  return false;
 }
 
 function hasRateLimitTpmHint(raw: string): boolean {

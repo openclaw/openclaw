@@ -10,6 +10,7 @@ import {
   sanitizeUserFacingText,
 } from "./pi-embedded-helpers.js";
 import { makeAssistantMessageFixture } from "./test-helpers/assistant-message-fixtures.js";
+import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "./transport-stream-shared.js";
 
 describe("formatAssistantErrorText", () => {
   const makeAssistantError = (errorMessage: string): AssistantMessage =>
@@ -351,28 +352,8 @@ describe("formatAssistantErrorText", () => {
     );
   });
 
-  it("sanitizes streaming JSON parse errors from Anthropic SDK (#59076)", () => {
-    const msg = makeAssistantError(
-      "Expected ',' or '}' after property value in JSON at position 334 (line 1 column 335)",
-    );
-    expect(formatAssistantErrorText(msg)).toBe(
-      "LLM streaming response contained a malformed fragment. Please try again.",
-    );
-  });
-
-  it("sanitizes 'Expected double-quoted property name' JSON parse errors (#59076)", () => {
-    const msg = makeAssistantError(
-      "Expected double-quoted property name in JSON at position 8912 (line 219 column 5)",
-    );
-    expect(formatAssistantErrorText(msg)).toBe(
-      "LLM streaming response contained a malformed fragment. Please try again.",
-    );
-  });
-
-  it("sanitizes context-proven streaming 'Unexpected token' JSON parse errors (#59076)", () => {
-    const msg = makeAssistantError(
-      'Could not parse Anthropic SSE event content_block_delta: Unexpected token } in JSON at position 14; data={"type":"content_block_delta","delta":{"type":"input_json_delta","partial_json":"}"},"index":1}',
-    );
+  it("sanitizes transport-classified malformed streaming fragments (#59076)", () => {
+    const msg = makeAssistantError(MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE);
     expect(formatAssistantErrorText(msg)).toBe(
       "LLM streaming response contained a malformed fragment. Please try again.",
     );
@@ -475,19 +456,10 @@ describe("raw API error payload helpers", () => {
 });
 
 describe("sanitizeUserFacingText — streaming JSON parse error (#59076)", () => {
-  it("rewrites JSON parse error in error context", () => {
-    const result = sanitizeUserFacingText(
-      "Expected ',' or '}' after property value in JSON at position 334 (line 1 column 335)",
-      { errorContext: true },
-    );
-    expect(result).toBe("LLM streaming response contained a malformed fragment. Please try again.");
-  });
-
-  it.each([
-    "Unexpected end of JSON input",
-    "Unexpected non-whitespace character after JSON at position 4",
-  ])("rewrites plain JSON.parse error variants in error context: %s", (text) => {
-    const result = sanitizeUserFacingText(text, { errorContext: true });
+  it("rewrites transport-classified malformed streaming fragments in error context", () => {
+    const result = sanitizeUserFacingText(MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE, {
+      errorContext: true,
+    });
     expect(result).toBe("LLM streaming response contained a malformed fragment. Please try again.");
   });
 
