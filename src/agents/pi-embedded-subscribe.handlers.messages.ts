@@ -137,6 +137,22 @@ export function consumePendingToolMediaIntoReply(
   return mergedPayload;
 }
 
+export function discardAlreadySentPendingToolMedia(
+  state: Pick<
+    EmbeddedPiSubscribeState,
+    "pendingToolMediaUrls" | "pendingToolAudioAsVoice" | "messagingToolSentMediaUrls"
+  >,
+): void {
+  if (state.pendingToolMediaUrls.length === 0 || state.messagingToolSentMediaUrls.length === 0) {
+    return;
+  }
+  const sent = new Set(state.messagingToolSentMediaUrls);
+  state.pendingToolMediaUrls = state.pendingToolMediaUrls.filter((mediaUrl) => !sent.has(mediaUrl));
+  if (state.pendingToolMediaUrls.length === 0) {
+    state.pendingToolAudioAsVoice = false;
+  }
+}
+
 export function consumePendingToolMediaReply(
   state: Pick<EmbeddedPiSubscribeState, "pendingToolMediaUrls" | "pendingToolAudioAsVoice">,
 ): BlockReplyPayload | null {

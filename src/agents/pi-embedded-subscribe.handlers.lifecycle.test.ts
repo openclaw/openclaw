@@ -29,6 +29,7 @@ function createContext(
       pendingCompactionRetry: 0,
       pendingToolMediaUrls: [],
       pendingToolAudioAsVoice: false,
+      messagingToolSentMediaUrls: [],
       replayState: { replayInvalid: false, hadPotentialSideEffects: false },
       blockState: {
         thinking: true,
@@ -291,6 +292,19 @@ describe("handleAgentEnd", () => {
       mediaUrls: ["/tmp/reply.opus"],
       audioAsVoice: true,
     });
+    expect(ctx.state.pendingToolMediaUrls).toEqual([]);
+    expect(ctx.state.pendingToolAudioAsVoice).toBe(false);
+  });
+
+  it("does not flush generated media again after a messaging tool already sent it", async () => {
+    const ctx = createContext(undefined);
+    ctx.state.pendingToolMediaUrls = ["/tmp/generated-song.mp3"];
+    ctx.state.pendingToolAudioAsVoice = true;
+    ctx.state.messagingToolSentMediaUrls = ["/tmp/generated-song.mp3"];
+
+    await handleAgentEnd(ctx);
+
+    expect(ctx.emitBlockReply).not.toHaveBeenCalled();
     expect(ctx.state.pendingToolMediaUrls).toEqual([]);
     expect(ctx.state.pendingToolAudioAsVoice).toBe(false);
   });

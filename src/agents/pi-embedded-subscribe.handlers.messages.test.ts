@@ -4,6 +4,7 @@ import {
   buildAssistantStreamData,
   consumePendingToolMediaIntoReply,
   consumePendingToolMediaReply,
+  discardAlreadySentPendingToolMedia,
   handleMessageEnd,
   handleMessageUpdate,
   hasAssistantVisibleReply,
@@ -226,6 +227,34 @@ describe("consumePendingToolMediaIntoReply", () => {
     });
     expect(state.pendingToolMediaUrls).toEqual(["/tmp/a.png"]);
     expect(state.pendingToolAudioAsVoice).toBe(true);
+  });
+});
+
+describe("discardAlreadySentPendingToolMedia", () => {
+  it("removes pending media that was already delivered via a messaging tool", () => {
+    const state = {
+      pendingToolMediaUrls: ["/tmp/a.mp3", "/tmp/b.mp3"],
+      pendingToolAudioAsVoice: true,
+      messagingToolSentMediaUrls: ["/tmp/a.mp3"],
+    };
+
+    discardAlreadySentPendingToolMedia(state);
+
+    expect(state.pendingToolMediaUrls).toEqual(["/tmp/b.mp3"]);
+    expect(state.pendingToolAudioAsVoice).toBe(true);
+  });
+
+  it("clears the voice flag when all pending media was already delivered", () => {
+    const state = {
+      pendingToolMediaUrls: ["/tmp/a.mp3"],
+      pendingToolAudioAsVoice: true,
+      messagingToolSentMediaUrls: ["/tmp/a.mp3"],
+    };
+
+    discardAlreadySentPendingToolMedia(state);
+
+    expect(state.pendingToolMediaUrls).toEqual([]);
+    expect(state.pendingToolAudioAsVoice).toBe(false);
   });
 });
 

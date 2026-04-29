@@ -9,6 +9,7 @@ import { classifyFailoverReason, formatAssistantErrorText } from "./pi-embedded-
 import { isIncompleteTerminalAssistantTurn } from "./pi-embedded-runner/run/incomplete-turn.js";
 import {
   consumePendingToolMediaReply,
+  discardAlreadySentPendingToolMedia,
   hasAssistantVisibleReply,
 } from "./pi-embedded-subscribe.handlers.messages.js";
 import type { EmbeddedPiSubscribeContext } from "./pi-embedded-subscribe.handlers.types.js";
@@ -160,6 +161,7 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext): void | Promise<
   };
 
   const flushPendingMediaAndChannel = () => {
+    discardAlreadySentPendingToolMedia(ctx.state);
     const pendingToolMediaReply = consumePendingToolMediaReply(ctx.state);
     if (pendingToolMediaReply && hasAssistantVisibleReply(pendingToolMediaReply)) {
       ctx.emitBlockReply(pendingToolMediaReply);
