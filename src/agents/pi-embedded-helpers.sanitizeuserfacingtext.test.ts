@@ -208,6 +208,13 @@ describe("sanitizeUserFacingText", () => {
     expect(sanitizeUserFacingText("Line 1\nLine 2")).toBe("Line 1\nLine 2");
   });
 
+  it("strips tool-call replay placeholders without trimming visible text", () => {
+    expect(sanitizeUserFacingText("[tool calls omitted]")).toBe("");
+    expect(sanitizeUserFacingText("Hello\n\n[tool calls omitted]\nWorld\n")).toBe(
+      "Hello\n\nWorld\n",
+    );
+  });
+
   it("strips marked internal runtime context blocks but keeps real reply text", () => {
     const input = [
       INTERNAL_RUNTIME_CONTEXT_BEGIN,

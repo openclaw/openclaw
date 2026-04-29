@@ -383,28 +383,30 @@ export function sanitizeUserFacingText(text: unknown, opts?: { errorContext?: bo
   }
   const errorContext = opts?.errorContext ?? false;
   const stripped = stripInboundMetadata(stripInternalRuntimeContext(stripFinalTagsFromText(raw)));
-  const trimmed = stripped.trim();
   // Strip internal replay placeholder before any user-facing delivery.
-  const withoutReplacer = trimmed.replace(/\B\[tool calls omitted\]\B/gi, "").trim();
-  if (!withoutReplacer) {
+  const withoutPlaceholder = stripped
+    .replace(/(^|\r?\n)[ \t]*\B\[tool calls omitted\]\B[ \t]*(?:\r?\n|$)/gi, "$1")
+    .replace(/\B\[tool calls omitted\]\B/gi, "");
+  const trimmed = withoutPlaceholder.trim();
+  if (!trimmed) {
     return "";
   }
 
-  if (!errorContext && shouldRewriteRawPayloadWithoutErrorContext(withoutReplacer)) {
-    return formatRawAssistantErrorForUi(withoutReplacer);
+  if (!errorContext && shouldRewriteRawPayloadWithoutErrorContext(trimmed)) {
+    return formatRawAssistantErrorForUi(trimmed);
   }
   if (errorContext) {
-    const execDeniedMessage = formatExecDeniedUserMessage(withoutReplacer);
+    const execDeniedMessage = formatExecDeniedUserMessage(trimmed);
     if (execDeniedMessage) {
       return execDeniedMessage;
     }
 
-    const diskSpaceCopy = formatDiskSpaceErrorCopy(withoutReplacer);
+    const diskSpaceCopy = formatDiskSpaceErrorCopy(trimmed);
     if (diskSpaceCopy) {
       return diskSpaceCopy;
     }
 
-    if (/incorrect role information|roles must alternate/i.test(withoutReplacer)) {
+    if (/incorrect role information|roles must alternate/i.test(trimmed)) {
       return (
         "Message ordering conflict - please try again. " +
         "If this persists, use /new to start a fresh session."
@@ -413,41 +415,41 @@ export function sanitizeUserFacingText(text: unknown, opts?: { errorContext?: bo
 
     // Keep this sanitizer on generic overflow heuristics only so callers can
     // avoid importing the heavier provider-runtime-aware error classifier.
-    if (shouldRewriteContextOverflowText(withoutReplacer)) {
+    if (shouldRewriteContextOverflowText(trimmed)) {
       return (
         "Context overflow: prompt too large for the model. " +
         "Try /reset (or /new) to start a fresh session, or use a larger-context model."
       );
     }
 
-    if (isBillingErrorMessage(withoutReplacer)) {
+    if (isBillingErrorMessage(trimmed)) {
       return BILLING_ERROR_USER_MESSAGE;
     }
-    if (isInvalidStreamingEventOrderError(withoutReplacer)) {
+    if (isInvalidStreamingEventOrderError(trimmed)) {
       return "LLM request failed: provider returned an invalid streaming response. Please try again.";
     }
-    if (isRawApiErrorPayload(withoutReplacer) || isLikelyHttpErrorText(withoutReplacer)) {
-      return formatRawAssistantErrorForUi(withoutReplacer);
+    if (isRawApiErrorPayload(trimmed) || isLikelyHttpErrorText(trimmed)) {
+      return formatRawAssistantErrorForUi(trimmed);
     }
-    if (isStreamingJsonParseError(withoutReplacer)) {
+    if (isStreamingJsonParseError(trimmed)) {
       return "LLM streaming response contained a malformed fragment. Please try again.";
     }
-    if (ERROR_PREFIX_RE.test(withoutReplacer)) {
-      const prefixedCopy = formatRateLimitOrOverloadedErrorCopy(withoutReplacer);
+    if (ERROR_PREFIX_RE.test(trimmed)) {
+      const prefixedCopy = formatRateLimitOrOverloadedErrorCopy(trimmed);
       if (prefixedCopy) {
         return prefixedCopy;
       }
-      const transportCopy = formatTransportErrorCopy(withoutReplacer);
+      const transportCopy = formatTransportErrorCopy(trimmed);
       if (transportCopy) {
         return transportCopy;
       }
-      if (isTimeoutErrorMessage(withoutReplacer)) {
+      if (isTimeoutErrorMessage(trimmed)) {
         return "LLM request timed out.";
       }
-      return formatRawAssistantErrorForUi(withoutReplacer);
+      return formatRawAssistantErrorForUi(trimmed);
     }
   }
 
-  const withoutLeadingEmptyLines = withoutReplacer.replace(/^(?:[ \t]*\r?\n)+/, "");
+  const withoutLeadingEmptyLines = withoutPlaceholder.replace(/^(?:[ \t]*\r?\n)+/, "");
   return collapseConsecutiveDuplicateBlocks(withoutLeadingEmptyLines);
 }
