@@ -1,10 +1,13 @@
 import fs from "node:fs";
 import os from "node:os";
-import path from "node:path";
 import { getShellEnvAppliedKeys } from "../infra/shell-env.js";
 import { resolvePluginSetupProvider } from "../plugins/setup-registry.js";
+import type { ProviderAuthEvidence } from "../secrets/provider-env-vars.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
-import { resolveProviderEnvApiKeyCandidates } from "./model-auth-env-vars.js";
+import {
+  resolveProviderEnvApiKeyCandidates,
+  resolveProviderEnvAuthEvidence,
+} from "./model-auth-env-vars.js";
 import { GCP_VERTEX_CREDENTIALS_MARKER } from "./model-auth-markers.js";
 import { resolveProviderIdForAuth } from "./provider-auth-aliases.js";
 import { normalizeProviderIdForAuth } from "./provider-id.js";
@@ -17,29 +20,65 @@ export type EnvApiKeyResult = {
 export type EnvApiKeyLookupOptions = {
   aliasMap?: Readonly<Record<string, string>>;
   candidateMap?: Readonly<Record<string, readonly string[]>>;
+  authEvidenceMap?: Readonly<Record<string, readonly ProviderAuthEvidence[]>>;
 };
 
-function hasGoogleVertexAdcCredentials(env: NodeJS.ProcessEnv): boolean {
-  const explicitCredentialsPath = normalizeOptionalSecretInput(env.GOOGLE_APPLICATION_CREDENTIALS);
-  if (explicitCredentialsPath) {
-    return fs.existsSync(explicitCredentialsPath);
+function expandAuthEvidencePath(rawPath: string, env: NodeJS.ProcessEnv): string | undefined {
+  const trimmed = rawPath.trim();
+  if (!trimmed) {
+    return undefined;
   }
   const homeDir = normalizeOptionalSecretInput(env.HOME) ?? os.homedir();
-  return fs.existsSync(
-    path.join(homeDir, ".config", "gcloud", "application_default_credentials.json"),
-  );
+  return trimmed.replaceAll("${HOME}", homeDir);
 }
 
-function resolveGoogleVertexEnvApiKey(env: NodeJS.ProcessEnv): string | undefined {
-  const explicitApiKey = normalizeOptionalSecretInput(env.GOOGLE_CLOUD_API_KEY);
-  if (explicitApiKey) {
-    return explicitApiKey;
+function hasRequiredAuthEvidenceEnv(
+  evidence: ProviderAuthEvidence,
+  env: NodeJS.ProcessEnv,
+): boolean {
+  const hasEnv = (key: string) => Boolean(normalizeOptionalSecretInput(env[key]));
+  if (evidence.requiresAnyEnv?.length && !evidence.requiresAnyEnv.some(hasEnv)) {
+    return false;
   }
-  const hasProject = Boolean(env.GOOGLE_CLOUD_PROJECT || env.GCLOUD_PROJECT);
-  const hasLocation = Boolean(env.GOOGLE_CLOUD_LOCATION);
-  return hasProject && hasLocation && hasGoogleVertexAdcCredentials(env)
-    ? GCP_VERTEX_CREDENTIALS_MARKER
-    : undefined;
+  if (evidence.requiresAllEnv?.length && !evidence.requiresAllEnv.every(hasEnv)) {
+    return false;
+  }
+  return true;
+}
+
+function hasLocalFileAuthEvidence(evidence: ProviderAuthEvidence, env: NodeJS.ProcessEnv): boolean {
+  if (evidence.fileEnvVar) {
+    const explicitPath = normalizeOptionalSecretInput(env[evidence.fileEnvVar]);
+    if (explicitPath && fs.existsSync(explicitPath)) {
+      return true;
+    }
+  }
+  for (const rawPath of evidence.fallbackPaths ?? []) {
+    const expandedPath = expandAuthEvidencePath(rawPath, env);
+    if (expandedPath && fs.existsSync(expandedPath)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function resolveAuthEvidence(
+  evidence: readonly ProviderAuthEvidence[] | undefined,
+  env: NodeJS.ProcessEnv,
+): EnvApiKeyResult | null {
+  for (const entry of evidence ?? []) {
+    if (entry.type !== "local-file-with-env") {
+      continue;
+    }
+    if (!hasRequiredAuthEvidenceEnv(entry, env) || !hasLocalFileAuthEvidence(entry, env)) {
+      continue;
+    }
+    return {
+      apiKey: entry.credentialMarker,
+      source: entry.source ?? "local auth evidence",
+    };
+  }
+  return null;
 }
 
 export function resolveEnvApiKey(
@@ -52,6 +91,7 @@ export function resolveEnvApiKey(
     ? (options.aliasMap[normalizedProvider] ?? normalizedProvider)
     : resolveProviderIdForAuth(provider, { env });
   const candidateMap = options.candidateMap ?? resolveProviderEnvApiKeyCandidates({ env });
+  const authEvidenceMap = options.authEvidenceMap ?? resolveProviderEnvAuthEvidence({ env });
   const applied = new Set(getShellEnvAppliedKeys());
   const pick = (envVar: string): EnvApiKeyResult | null => {
     const value = normalizeOptionalSecretInput(env[envVar]);
@@ -70,17 +110,15 @@ export function resolveEnvApiKey(
         return resolved;
       }
     }
-    if (normalized !== "google-vertex") {
-      return null;
-    }
   }
 
-  if (normalized === "google-vertex") {
-    const envKey = resolveGoogleVertexEnvApiKey(env);
-    if (!envKey) {
-      return null;
-    }
-    return { apiKey: envKey, source: "gcloud adc" };
+  const authEvidence = resolveAuthEvidence(authEvidenceMap[normalized], env);
+  if (authEvidence) {
+    return authEvidence;
+  }
+
+  if (Array.isArray(candidates)) {
+    return null;
   }
 
   const setupProvider = resolvePluginSetupProvider({

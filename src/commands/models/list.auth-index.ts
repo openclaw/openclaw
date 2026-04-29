@@ -1,5 +1,8 @@
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
-import { resolveProviderEnvApiKeyCandidates } from "../../agents/model-auth-env-vars.js";
+import {
+  resolveProviderEnvApiKeyCandidates,
+  resolveProviderEnvAuthEvidence,
+} from "../../agents/model-auth-env-vars.js";
 import { resolveEnvApiKey } from "../../agents/model-auth-env.js";
 import { resolveAwsSdkEnvVarName } from "../../agents/model-auth-runtime-shared.js";
 import {
@@ -56,6 +59,7 @@ export function createModelListAuthIndex(
   const env = params.env ?? process.env;
   const aliasMap = resolveProviderAuthAliasMap({ config: params.cfg, env });
   const envCandidateMap = resolveProviderEnvApiKeyCandidates({ config: params.cfg, env });
+  const authEvidenceMap = resolveProviderEnvAuthEvidence({ config: params.cfg, env });
   const authenticatedProviders = new Set<string>();
   const syntheticAuthProviders = new Set<string>();
   const envProviderAuthCache = new Map<string, boolean>();
@@ -77,8 +81,17 @@ export function createModelListAuthIndex(
     addProvider(credential.provider);
   }
 
-  for (const provider of Object.keys(envCandidateMap)) {
-    if (resolveEnvApiKey(provider, env, { aliasMap, candidateMap: envCandidateMap })) {
+  for (const provider of new Set([
+    ...Object.keys(envCandidateMap),
+    ...Object.keys(authEvidenceMap),
+  ])) {
+    if (
+      resolveEnvApiKey(provider, env, {
+        aliasMap,
+        candidateMap: envCandidateMap,
+        authEvidenceMap,
+      })
+    ) {
       addProvider(provider);
     }
   }
