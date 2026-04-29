@@ -18,8 +18,8 @@ permissions:
   security-events: write
 
 jobs:
-  javascript-typescript:
-    name: Critical Quality (javascript-typescript)
+  core-auth-secrets:
+    name: Critical Quality (core-auth-secrets)
     runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 25
     steps:
@@ -32,12 +32,12 @@ jobs:
         uses: github/codeql-action/init@95e58e9a2cdfd71adc6e0353d5c52f41a045d225 # v4
         with:
           languages: javascript-typescript
-          config-file: ./.github/codeql/codeql-javascript-typescript-critical-quality.yml
+          config-file: ./.github/codeql/codeql-core-auth-secrets-critical-quality.yml
 
       - name: Analyze
         uses: github/codeql-action/analyze@95e58e9a2cdfd71adc6e0353d5c52f41a045d225 # v4
         with:
-          category: "/codeql-critical-quality/javascript-typescript"
+          category: "/codeql-critical-quality/core-auth-secrets"
 
   config-boundary:
     name: Critical Quality (config-boundary)
