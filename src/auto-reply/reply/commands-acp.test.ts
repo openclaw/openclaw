@@ -1618,6 +1618,35 @@ describe("/acp command", () => {
     expect(hoisted.runTurnMock).not.toHaveBeenCalled();
   });
 
+  it("falls through to thread-bound resolution when explicit session token is unresolvable", async () => {
+    // callGateway returns null for sessions.resolve (unresolvable token)
+    // but a thread-bound session exists — should use thread-bound, not error out
+    hoisted.callGatewayMock.mockImplementation(async (request: { method?: string }) => {
+      if (request.method === "sessions.resolve") {
+        return null; // token lookup fails
+      }
+      return { ok: true };
+    });
+    mockBoundThreadSession();
+    hoisted.readAcpSessionEntryMock.mockReturnValue(createAcpSessionEntry());
+    hoisted.runTurnMock.mockImplementation(async function* () {
+      yield { type: "text_delta", text: "Steered." };
+      yield { type: "done" };
+    });
+
+    const result = await runThreadAcpCommand(
+      `/acp steer --session unresolvable-token-xyz tighten logging`,
+    );
+
+    expect(hoisted.runTurnMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mode: "steer",
+        sessionKey: defaultAcpSessionKey,
+      }),
+    );
+    expect(result?.reply?.text).toContain("Steered.");
+  });
+
   it("closes an ACP session, unbinds thread targets, and clears metadata", async () => {
     mockBoundThreadSession();
     hoisted.sessionBindingUnbindMock.mockResolvedValue([
