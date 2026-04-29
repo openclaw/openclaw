@@ -1578,196 +1578,138 @@ jobs:
             label: Native live agents
             command: node .release-harness/scripts/test-live-shard.mjs native-live-src-agents
             timeout_minutes: 90
-            needs_ffmpeg: false
             profile_env_only: false
             profiles: stable full
           - suite_id: native-live-src-gateway-core
             label: Native live gateway core
             command: node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-core
             timeout_minutes: 90
-            needs_ffmpeg: false
             profile_env_only: false
             profiles: minimum stable full
           - suite_id: native-live-src-gateway-profiles-anthropic
             label: Native live gateway profiles Anthropic
             command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=anthropic node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
             timeout_minutes: 90
-            needs_ffmpeg: false
             profile_env_only: false
             profiles: stable full
           - suite_id: native-live-src-gateway-profiles-google
             label: Native live gateway profiles Google
             command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=google OPENCLAW_LIVE_GATEWAY_MODELS=google/gemini-3.1-pro-preview,google/gemini-3-flash-preview node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
             timeout_minutes: 90
-            needs_ffmpeg: false
             profile_env_only: false
             profiles: stable full
           - suite_id: native-live-src-gateway-profiles-minimax
             label: Native live gateway profiles MiniMax
             command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=minimax,minimax-portal node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
             timeout_minutes: 90
-            needs_ffmpeg: false
             profile_env_only: false
             profiles: stable full
           - suite_id: native-live-src-gateway-profiles-openai
             label: Native live gateway profiles OpenAI
             command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=openai OPENCLAW_LIVE_GATEWAY_MODELS=openai/gpt-5.5 node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
             timeout_minutes: 90
-            needs_ffmpeg: false
             profile_env_only: false
             profiles: minimum stable full
           - suite_id: native-live-src-gateway-profiles-fireworks
             label: Native live gateway profiles Fireworks
             command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=fireworks node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
             timeout_minutes: 90
-            needs_ffmpeg: false
             profile_env_only: false
             profiles: full
           - suite_id: native-live-src-gateway-profiles-deepseek
             label: Native live gateway profiles DeepSeek
             command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=deepseek node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
             timeout_minutes: 90
-            needs_ffmpeg: false
             profile_env_only: false
             profiles: full
           - suite_id: native-live-src-gateway-profiles-opencode-go
             label: Native live gateway profiles OpenCode Go deep
             command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=opencode-go node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
             timeout_minutes: 90
-            needs_ffmpeg: false
             profile_env_only: false
             profiles: full
           - suite_id: native-live-src-gateway-profiles-opencode-go-smoke
             label: Native live gateway profiles OpenCode Go smoke
             command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=opencode-go OPENCLAW_LIVE_GATEWAY_SMOKE=1 OPENCLAW_LIVE_GATEWAY_MAX_MODELS=1 node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
             timeout_minutes: 45
-            needs_ffmpeg: false
             profile_env_only: false
             profiles: stable
           - suite_id: native-live-src-gateway-profiles-openrouter
             label: Native live gateway profiles OpenRouter
             command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=openrouter node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
             timeout_minutes: 90
-            needs_ffmpeg: false
             profile_env_only: false
             profiles: full
           - suite_id: native-live-src-gateway-profiles-xai
             label: Native live gateway profiles xAI
             command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=xai node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
             timeout_minutes: 90
-            needs_ffmpeg: false
             profile_env_only: false
             profiles: full
           - suite_id: native-live-src-gateway-profiles-zai
             label: Native live gateway profiles Z.ai
             command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=zai node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
             timeout_minutes: 90
-            needs_ffmpeg: false
             profile_env_only: false
             profiles: full
           - suite_id: native-live-src-gateway-backends
             label: Native live gateway backends
             command: node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-backends
             timeout_minutes: 90
-            needs_ffmpeg: false
             profile_env_only: false
             profiles: stable full
           - suite_id: native-live-test
             label: Native live test harnesses
             command: node .release-harness/scripts/test-live-shard.mjs native-live-test
             timeout_minutes: 90
-            needs_ffmpeg: false
             profile_env_only: false
             profiles: stable full
-          - suite_id: native-live-extensions-a-k
-            label: Native live plugins A-K
-            command: node .release-harness/scripts/test-live-shard.mjs native-live-extensions-a-k
-            timeout_minutes: 90
-            needs_ffmpeg: true
-            profile_env_only: false
-            profiles: full
           - suite_id: native-live-extensions-l-n
             label: Native live plugins L-N
             command: node .release-harness/scripts/test-live-shard.mjs native-live-extensions-l-n
             timeout_minutes: 90
-            needs_ffmpeg: false
             profile_env_only: false
             profiles: full
           - suite_id: native-live-extensions-openai
             label: Native live OpenAI plugin
             command: node .release-harness/scripts/test-live-shard.mjs native-live-extensions-openai
             timeout_minutes: 90
-            needs_ffmpeg: false
             profile_env_only: false
             profiles: minimum stable full
           - suite_id: native-live-extensions-o-z-other
             label: Native live plugins O-Z other
             command: node .release-harness/scripts/test-live-shard.mjs native-live-extensions-o-z-other
             timeout_minutes: 90
-            needs_ffmpeg: false
             profile_env_only: false
             profiles: full
           - suite_id: native-live-extensions-xai
             label: Native live xAI plugin
             command: node .release-harness/scripts/test-live-shard.mjs native-live-extensions-xai
             timeout_minutes: 90
-            needs_ffmpeg: false
-            profile_env_only: false
-            profiles: full
-          - suite_id: native-live-extensions-media-audio
-            label: Native live media audio plugins
-            command: node .release-harness/scripts/test-live-shard.mjs native-live-extensions-media-audio
-            timeout_minutes: 90
-            needs_ffmpeg: true
-            profile_env_only: false
-            profiles: full
-          - suite_id: native-live-extensions-media-music-google
-            label: Native live media music Google
-            command: OPENCLAW_LIVE_MUSIC_GENERATION_PROVIDERS=google node .release-harness/scripts/test-live-shard.mjs native-live-extensions-media-music-google
-            timeout_minutes: 90
-            needs_ffmpeg: true
-            profile_env_only: false
-            profiles: full
-          - suite_id: native-live-extensions-media-music-minimax
-            label: Native live media music MiniMax
-            command: OPENCLAW_LIVE_MUSIC_GENERATION_PROVIDERS=minimax node .release-harness/scripts/test-live-shard.mjs native-live-extensions-media-music-minimax
-            timeout_minutes: 90
-            needs_ffmpeg: true
-            profile_env_only: false
-            profiles: full
-          - suite_id: native-live-extensions-media-video
-            label: Native live media video plugins
-            command: node .release-harness/scripts/test-live-shard.mjs native-live-extensions-media-video
-            timeout_minutes: 90
-            needs_ffmpeg: true
             profile_env_only: false
             profiles: full
           - suite_id: live-gateway-docker
             label: Docker live gateway
             command: OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" bash .release-harness/scripts/test-live-gateway-models-docker.sh
             timeout_minutes: 120
-            needs_ffmpeg: false
             profile_env_only: false
             profiles: minimum stable full
           - suite_id: live-cli-backend-docker
             label: Docker live CLI backend
             command: OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" bash .release-harness/scripts/test-live-cli-backend-docker.sh
             timeout_minutes: 120
-            needs_ffmpeg: false
             profile_env_only: false
             profiles: stable full
           - suite_id: live-acp-bind-docker
             label: Docker live ACP bind
             command: OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" bash .release-harness/scripts/test-live-acp-bind-docker.sh
             timeout_minutes: 120
-            needs_ffmpeg: false
             profile_env_only: false
             profiles: stable full
           - suite_id: live-codex-harness-docker
             label: Docker live Codex harness
             command: OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" bash .release-harness/scripts/test-live-codex-harness-docker.sh
             timeout_minutes: 120
-            needs_ffmpeg: false
             profile_env_only: false
             profiles: stable full
     env:
@@ -1847,25 +1789,6 @@ jobs:
         if: contains(matrix.profiles, inputs.release_test_profile)
         run: bash scripts/ci-hydrate-live-auth.sh
 
-      - name: Install live media dependencies
-        if: matrix.needs_ffmpeg && contains(matrix.profiles, inputs.release_test_profile)
-        shell: bash
-        run: |
-          set -euo pipefail
-          if ! command -v ffmpeg >/dev/null 2>&1; then
-            for attempt in 1 2 3; do
-              if sudo apt-get update -o Acquire::Retries=3; then
-                break
-              fi
-              if [[ "${attempt}" == "3" ]]; then
-                exit 1
-              fi
-              sleep $((attempt * 5))
-            done
-            sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ffmpeg
-          fi
-          ffmpeg -version | head -1
-
       - name: Configure suite-specific env
         if: contains(matrix.profiles, inputs.release_test_profile)
         shell: bash
@@ -1918,6 +1841,149 @@ jobs:
               fi
               ;;
           esac
+
+      - name: Run ${{ matrix.label }}
+        if: contains(matrix.profiles, inputs.release_test_profile)
+        run: ${{ matrix.command }}
+
+  validate_live_media_provider_suites:
+    name: Live media suites (${{ matrix.label }})
+    needs: validate_selected_ref
+    if: inputs.include_live_suites && !inputs.live_models_only
+    runs-on: blacksmith-32vcpu-ubuntu-2404
+    container:
+      image: ghcr.io/openclaw/openclaw-live-media-runner:ubuntu-24.04
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ github.token }}
+    timeout-minutes: ${{ matrix.timeout_minutes }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - suite_id: native-live-extensions-a-k
+            label: Native live plugins A-K
+            command: node .release-harness/scripts/test-live-shard.mjs native-live-extensions-a-k
+            timeout_minutes: 90
+            profile_env_only: false
+            profiles: full
+          - suite_id: native-live-extensions-media-audio
+            label: Native live media audio plugins
+            command: node .release-harness/scripts/test-live-shard.mjs native-live-extensions-media-audio
+            timeout_minutes: 90
+            profile_env_only: false
+            profiles: full
+          - suite_id: native-live-extensions-media-music-google
+            label: Native live media music Google
+            command: OPENCLAW_LIVE_MUSIC_GENERATION_PROVIDERS=google node .release-harness/scripts/test-live-shard.mjs native-live-extensions-media-music-google
+            timeout_minutes: 90
+            profile_env_only: false
+            profiles: full
+          - suite_id: native-live-extensions-media-music-minimax
+            label: Native live media music MiniMax
+            command: OPENCLAW_LIVE_MUSIC_GENERATION_PROVIDERS=minimax node .release-harness/scripts/test-live-shard.mjs native-live-extensions-media-music-minimax
+            timeout_minutes: 90
+            profile_env_only: false
+            profiles: full
+          - suite_id: native-live-extensions-media-video
+            label: Native live media video plugins
+            command: node .release-harness/scripts/test-live-shard.mjs native-live-extensions-media-video
+            timeout_minutes: 90
+            profile_env_only: false
+            profiles: full
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      ANTHROPIC_API_TOKEN: ${{ secrets.ANTHROPIC_API_TOKEN }}
+      ANTHROPIC_API_KEY_OLD: ${{ secrets.ANTHROPIC_API_KEY_OLD }}
+      BYTEPLUS_API_KEY: ${{ secrets.BYTEPLUS_API_KEY }}
+      CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
+      DEEPINFRA_API_KEY: ${{ secrets.DEEPINFRA_API_KEY }}
+      DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
+      GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+      KIMI_API_KEY: ${{ secrets.KIMI_API_KEY }}
+      MODELSTUDIO_API_KEY: ${{ secrets.MODELSTUDIO_API_KEY }}
+      MOONSHOT_API_KEY: ${{ secrets.MOONSHOT_API_KEY }}
+      MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
+      MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
+      OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+      OPENCODE_ZEN_API_KEY: ${{ secrets.OPENCODE_ZEN_API_KEY }}
+      OPENCLAW_LIVE_BROWSER_CDP_URL: ${{ secrets.OPENCLAW_LIVE_BROWSER_CDP_URL }}
+      OPENCLAW_LIVE_SETUP_TOKEN: ${{ secrets.OPENCLAW_LIVE_SETUP_TOKEN }}
+      OPENCLAW_LIVE_SETUP_TOKEN_MODEL: ${{ secrets.OPENCLAW_LIVE_SETUP_TOKEN_MODEL }}
+      OPENCLAW_LIVE_SETUP_TOKEN_PROFILE: ${{ secrets.OPENCLAW_LIVE_SETUP_TOKEN_PROFILE }}
+      OPENCLAW_LIVE_SETUP_TOKEN_VALUE: ${{ secrets.OPENCLAW_LIVE_SETUP_TOKEN_VALUE }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      QWEN_API_KEY: ${{ secrets.QWEN_API_KEY }}
+      FAL_KEY: ${{ secrets.FAL_KEY }}
+      RUNWAY_API_KEY: ${{ secrets.RUNWAY_API_KEY }}
+      DEEPGRAM_API_KEY: ${{ secrets.DEEPGRAM_API_KEY }}
+      TOGETHER_API_KEY: ${{ secrets.TOGETHER_API_KEY }}
+      VYDRA_API_KEY: ${{ secrets.VYDRA_API_KEY }}
+      XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
+      ZAI_API_KEY: ${{ secrets.ZAI_API_KEY }}
+      Z_AI_API_KEY: ${{ secrets.Z_AI_API_KEY }}
+      BYTEPLUS_ACCESS_KEY_ID: ${{ secrets.BYTEPLUS_ACCESS_KEY_ID }}
+      BYTEPLUS_SECRET_ACCESS_KEY: ${{ secrets.BYTEPLUS_SECRET_ACCESS_KEY }}
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+      OPENCLAW_CODEX_AUTH_JSON: ${{ secrets.OPENCLAW_CODEX_AUTH_JSON }}
+      OPENCLAW_CODEX_CONFIG_TOML: ${{ secrets.OPENCLAW_CODEX_CONFIG_TOML }}
+      OPENCLAW_CLAUDE_JSON: ${{ secrets.OPENCLAW_CLAUDE_JSON }}
+      OPENCLAW_CLAUDE_CREDENTIALS_JSON: ${{ secrets.OPENCLAW_CLAUDE_CREDENTIALS_JSON }}
+      OPENCLAW_CLAUDE_SETTINGS_JSON: ${{ secrets.OPENCLAW_CLAUDE_SETTINGS_JSON }}
+      OPENCLAW_CLAUDE_SETTINGS_LOCAL_JSON: ${{ secrets.OPENCLAW_CLAUDE_SETTINGS_LOCAL_JSON }}
+      OPENCLAW_GEMINI_SETTINGS_JSON: ${{ secrets.OPENCLAW_GEMINI_SETTINGS_JSON }}
+      FIREWORKS_API_KEY: ${{ secrets.FIREWORKS_API_KEY }}
+      OPENCLAW_LIVE_VIDEO_GENERATION_SKIP_PROVIDERS: ""
+      OPENCLAW_LIVE_VYDRA_VIDEO: "1"
+      OPENCLAW_VITEST_MAX_WORKERS: "2"
+    steps:
+      - name: Checkout selected ref
+        if: contains(matrix.profiles, inputs.release_test_profile)
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
+          fetch-depth: 1
+
+      - name: Checkout trusted live shard harness
+        if: contains(matrix.profiles, inputs.release_test_profile)
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          path: .release-harness
+
+      - name: Verify preinstalled live media dependencies
+        if: contains(matrix.profiles, inputs.release_test_profile)
+        shell: bash
+        run: |
+          set -euo pipefail
+          ffmpeg -version | head -1
+          ffprobe -version | head -1
+
+      - name: Setup Node environment
+        if: contains(matrix.profiles, inputs.release_test_profile)
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          pnpm-version: ${{ env.PNPM_VERSION }}
+          install-bun: "true"
+
+      - name: Hydrate live auth/profile inputs
+        if: contains(matrix.profiles, inputs.release_test_profile)
+        run: bash scripts/ci-hydrate-live-auth.sh
+
+      - name: Configure suite-specific env
+        if: contains(matrix.profiles, inputs.release_test_profile)
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ matrix.profile_env_only }}" == "true" ]]; then
+            echo "OPENCLAW_DOCKER_PROFILE_ENV_ONLY=1" >> "$GITHUB_ENV"
+          fi
 
       - name: Run ${{ matrix.label }}
         if: contains(matrix.profiles, inputs.release_test_profile)

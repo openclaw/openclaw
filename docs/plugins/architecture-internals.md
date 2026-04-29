@@ -87,35 +87,51 @@ discovery order. When setup runtime does execute, registry diagnostics report
 drift between `setup.providers` / `setup.cliBackends` and the providers or CLI
 backends registered by setup-api without blocking legacy plugins.
 
-### What the loader caches
+### Plugin cache boundary
 
-OpenClaw keeps short in-process caches for:
+OpenClaw does not cache plugin discovery results or direct manifest registry
+data behind wall-clock windows. Installs, manifest edits, and load-path changes
+must become visible on the next explicit metadata read or snapshot rebuild.
+
+The safe metadata fast path is explicit object ownership, not a hidden cache.
+Gateway startup hot paths should pass the current `PluginMetadataSnapshot`, the
+derived `PluginLookUpTable`, or an explicit manifest registry through the call
+chain. Config validation, startup auto-enable, plugin bootstrap, setup lookup,
+and provider selection can reuse those objects while they represent the current
+config and plugin inventory. When that input changes, rebuild and replace the
+snapshot instead of mutating it or keeping historical copies.
+Views over the active plugin registry and bundled channel bootstrap helpers
+should be recomputed from the current registry/root. Short-lived maps are fine
+inside one call to dedupe work or guard reentry; they must not become process
+metadata caches.
+
+For plugin loading, the persistent cache layer is runtime loading. It may reuse
+loader state when code or installed artifacts are actually loaded, such as:
+
+- `PluginLoaderCacheState` and compatible active runtime registries
+- jiti/module caches and public-surface loader caches used to avoid importing
+  the same runtime surface repeatedly
+- runtime dependency mirrors and filesystem caches for installed plugin
+  artifacts
+- short-lived per-call maps for path normalization or duplicate resolution
+
+Those caches are data-plane implementation details. They must not answer
+control-plane questions such as "which plugin owns this provider?" unless the
+caller deliberately asked for runtime loading.
+
+Do not add persistent or wall-clock caches for:
 
 - discovery results
-- manifest registry data
-- loaded plugin registries
+- direct manifest registries
+- manifest registries reconstructed from the installed plugin index
+- provider owner lookup, model suppression, provider policy, or public-artifact
+  metadata
+- any other manifest-derived answer where a changed manifest, installed index,
+  or load path should be visible on the next metadata read
 
-These caches reduce bursty startup and repeated command overhead. They are safe
-to think of as short-lived performance caches, not persistence.
-
-Gateway startup hot paths should prefer the current `PluginMetadataSnapshot`,
-the derived `PluginLookUpTable`, or an explicit manifest registry passed through
-the call chain. Config validation, startup auto-enable, and plugin bootstrap use
-the same snapshot when available. For callers that still rebuild manifest
-metadata from the persisted installed plugin index, OpenClaw also keeps a small
-bounded fallback cache keyed by the installed index, request shape, config
-policy, runtime roots, and manifest/package file signatures. That cache is only a
-fallback for repeated installed-index reconstruction; it is not a mutable runtime
-plugin registry.
-
-Performance note:
-
-- Set `OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE=1` or
-  `OPENCLAW_DISABLE_PLUGIN_MANIFEST_CACHE=1` to disable these caches.
-- Set `OPENCLAW_DISABLE_INSTALLED_PLUGIN_MANIFEST_REGISTRY_CACHE=1` to disable
-  only the installed-index manifest-registry fallback cache.
-- Tune cache windows with `OPENCLAW_PLUGIN_DISCOVERY_CACHE_MS` and
-  `OPENCLAW_PLUGIN_MANIFEST_CACHE_MS`.
+Callers that rebuild manifest metadata from the persisted installed plugin
+index reconstruct that registry on demand. The installed index is durable
+source-plane state; it is not a hidden in-process metadata cache.
 
 ## Registry model
 
@@ -944,7 +960,7 @@ source-plane diagnostics without adding a second raw filesystem-path disclosure
 surface. The persisted `plugins/installs.json` plugin index is the install
 source of truth and can be refreshed without loading plugin runtime modules.
 Its `installRecords` map is durable even when a plugin manifest is missing or
-invalid; its `plugins` array is a rebuildable manifest/cache view.
+invalid; its `plugins` array is a rebuildable manifest view.
 
 ## Context engine plugins
 

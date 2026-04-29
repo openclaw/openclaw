@@ -428,28 +428,8 @@ function dedupeSortedPluginIds(values: Iterable<string>): string[] {
   return [...new Set(values)].toSorted((left, right) => left.localeCompare(right));
 }
 
-let owningProviderPluginIdsCache = new WeakMap<
-  NodeJS.ProcessEnv,
-  Map<string, string[] | undefined>
->();
-
-function buildOwningProviderPluginIdsCacheKey(params: {
-  provider: string;
-  config?: PluginLoadOptions["config"];
-  workspaceDir?: string;
-}): string {
-  return JSON.stringify({
-    provider: normalizeProviderId(params.provider),
-    workspaceDir: params.workspaceDir ?? "",
-    plugins: params.config?.plugins ?? null,
-  });
-}
-
 export function resetProviderOwnerPluginIdsCacheForTest(): void {
-  owningProviderPluginIdsCache = new WeakMap<
-    NodeJS.ProcessEnv,
-    Map<string, string[] | undefined>
-  >();
+  // Provider ownership is manifest-derived and intentionally read fresh.
 }
 
 function resolvePreferredManifestPluginIds(
@@ -505,20 +485,6 @@ export function resolveOwningPluginIdsForProvider(params: {
   }
 
   const env = params.env ?? process.env;
-  let envCache = owningProviderPluginIdsCache.get(env);
-  if (!envCache) {
-    envCache = new Map<string, string[] | undefined>();
-    owningProviderPluginIdsCache.set(env, envCache);
-  }
-  const cacheKey = buildOwningProviderPluginIdsCacheKey({
-    provider: normalizedProvider,
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-  });
-  if (envCache.has(cacheKey)) {
-    return envCache.get(cacheKey);
-  }
-
   const pluginIds = [
     ...resolveProviderOwners({
       config: params.config,
@@ -538,9 +504,7 @@ export function resolveOwningPluginIdsForProvider(params: {
   ];
 
   const deduped = dedupeSortedPluginIds(pluginIds);
-  const resolved = deduped.length > 0 ? deduped : undefined;
-  envCache.set(cacheKey, resolved);
-  return resolved;
+  return deduped.length > 0 ? deduped : undefined;
 }
 
 export function resolveOwningPluginIdsForModelRef(params: {

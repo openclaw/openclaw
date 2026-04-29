@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { isDeepStrictEqual } from "node:util";
 import type { probeGatewayMemoryStatus } from "../commands/doctor-gateway-health.js";
 import type { DoctorOptions, DoctorPrompter } from "../commands/doctor-prompter.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -37,6 +38,39 @@ export type DoctorHealthContribution = FlowContribution & {
 
 export function resolveDoctorMode(cfg: OpenClawConfig): DoctorFlowMode {
   return cfg.gateway?.mode === "remote" ? "remote" : "local";
+}
+
+const UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV =
+  "OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE";
+
+function isTruthyEnvValue(value: string | undefined): boolean {
+  if (!value) {
+    return false;
+  }
+  const normalized = value.trim().toLowerCase();
+  return normalized !== "" && normalized !== "0" && normalized !== "false" && normalized !== "no";
+}
+
+function omitDoctorWriteMetadata(cfg: OpenClawConfig): OpenClawConfig {
+  const { meta: _meta, wizard: _wizard, ...rest } = cfg;
+  return rest;
+}
+
+export function shouldSkipLegacyUpdateDoctorMetadataWrite(params: {
+  env: NodeJS.ProcessEnv;
+  before: OpenClawConfig;
+  after: OpenClawConfig;
+}): boolean {
+  if (!isTruthyEnvValue(params.env.OPENCLAW_UPDATE_IN_PROGRESS)) {
+    return false;
+  }
+  if (isTruthyEnvValue(params.env[UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV])) {
+    return false;
+  }
+  return isDeepStrictEqual(
+    omitDoctorWriteMetadata(params.before),
+    omitDoctorWriteMetadata(params.after),
+  );
 }
 
 function createDoctorHealthContribution(params: {
@@ -495,6 +529,16 @@ async function runWriteConfigHealth(ctx: DoctorHealthFlowContext): Promise<void>
       command: "doctor",
       mode: resolveDoctorMode(ctx.cfg),
     });
+    if (
+      shouldSkipLegacyUpdateDoctorMetadataWrite({
+        env: ctx.env,
+        before: ctx.cfgForPersistence,
+        after: ctx.cfg,
+      })
+    ) {
+      ctx.runtime.log("Skipping doctor metadata-only config write during legacy update handoff.");
+      return;
+    }
     await replaceConfigFile({
       nextConfig: ctx.cfg,
       afterWrite: { mode: "auto" },

@@ -68,23 +68,52 @@ gh api "repos/openclaw/openclaw/commits/<sha>/check-runs?per_page=100" \
   --jq '.check_runs[] | select(.name=="ClawSweeper Commit Review") | [.status,.conclusion,.details_url] | @tsv'
 ```
 
-## Manual Backfill
+## Manual Commit Rerun / Backfill
 
-Use the workflow when Peter asks to review a specific commit or historic range:
+Use the receiver workflow when Peter asks to rerun a specific commit report,
+review a specific commit, or backfill a historic range. Reruns overwrite the
+same canonical report file:
+`records/<repo-slug>/commits/<40-char-sha>.md`.
+
+Single-commit rerun:
+
+```bash
+gh workflow run commit-review.yml --repo openclaw/clawsweeper \
+  -f target_repo=openclaw/openclaw \
+  -f commit_sha=<sha> \
+  -f before_sha=<parent-sha> \
+  -f create_checks=false \
+  -f enabled=true
+```
+
+Historic range backfill:
 
 ```bash
 gh workflow run commit-review.yml --repo openclaw/clawsweeper \
   -f target_repo=openclaw/openclaw \
   -f commit_sha=<end-sha> \
   -f before_sha=<start-sha> \
-  -f create_checks=true \
+  -f create_checks=false \
   -f enabled=true
 ```
 
-For a targeted rerun with extra instructions, add:
+Use `create_checks=true` only when Peter explicitly wants target commit check
+runs. Checks are opt-in; markdown reports are the primary surface.
+
+For a targeted rerun with extra instructions, add `additional_prompt`:
 
 ```bash
 -f additional_prompt="Review this commit with focus on <topic>."
+```
+
+After dispatch, monitor and then pull the regenerated report:
+
+```bash
+gh run list --repo openclaw/clawsweeper --workflow "ClawSweeper Commit Review" \
+  --limit 5 --json databaseId,displayTitle,status,conclusion,url
+gh run watch <run-id> --repo openclaw/clawsweeper --interval 30 --exit-status
+git pull --ff-only
+sed -n '1,180p' records/openclaw-openclaw/commits/<sha>.md
 ```
 
 ## Report Reading

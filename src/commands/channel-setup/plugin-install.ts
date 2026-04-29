@@ -4,7 +4,6 @@ import { applyPluginAutoEnable } from "../../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveDiscoverableScopedChannelPluginIds } from "../../plugins/channel-plugin-ids.js";
-import { clearPluginDiscoveryCache } from "../../plugins/discovery.js";
 import { loadOpenClawPlugins } from "../../plugins/loader.js";
 import { createPluginLoaderLogger } from "../../plugins/logger.js";
 import type { PluginRegistry } from "../../plugins/registry.js";
@@ -80,7 +79,6 @@ function loadChannelSetupPluginRegistry(params: {
   installRuntimeDeps?: boolean;
   forceSetupOnlyChannelPlugins?: boolean;
 }): PluginRegistry {
-  clearPluginDiscoveryCache();
   const autoEnabled = applyPluginAutoEnable({ config: params.cfg, env: process.env });
   const resolvedConfig = autoEnabled.config;
   const workspaceDir =

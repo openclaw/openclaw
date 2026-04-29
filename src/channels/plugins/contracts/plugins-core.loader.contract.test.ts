@@ -120,7 +120,7 @@ describe("channel plugin loader", () => {
       expectedOutbound: demoOutbound,
     },
     {
-      name: "refreshes cached plugin values when registry changes",
+      name: "reads updated plugin values when registry changes",
       kind: "reload-plugin" as const,
       firstRegistry: registryWithDemoLoader,
       secondRegistry: registryWithDemoLoaderV2,
@@ -128,7 +128,7 @@ describe("channel plugin loader", () => {
       secondExpected: demoLoaderPluginV2,
     },
     {
-      name: "refreshes cached outbound values when registry changes",
+      name: "reads updated outbound values when registry changes",
       kind: "reload-outbound" as const,
       firstRegistry: registryWithDemoLoader,
       secondRegistry: registryWithDemoLoaderV2,

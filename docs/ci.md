@@ -45,6 +45,13 @@ provider failures easier to rerun and diagnose. The aggregate
 `native-live-extensions-media-music` shard names remain valid for manual
 one-shot reruns.
 
+The native live media shards run in
+`ghcr.io/openclaw/openclaw-live-media-runner:ubuntu-24.04`, built by the
+`Live Media Runner Image` workflow. That image preinstalls `ffmpeg` and
+`ffprobe`; media jobs only verify the binaries before setup. Keep Docker-backed
+live suites on normal Blacksmith runners, because container jobs are the wrong
+place to launch nested Docker tests.
+
 `OpenClaw Release Checks` uses the trusted workflow ref to resolve the selected
 ref once into a `release-package-under-test` tarball, then passes that artifact
 to both the live/E2E release-path Docker workflow and the package acceptance

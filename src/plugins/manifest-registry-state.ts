@@ -1,10 +1,4 @@
-export type PluginManifestRegistryCacheEntry = {
-  expiresAt: number;
-  registry: unknown;
-};
-
-export const pluginManifestRegistryCache = new Map<string, PluginManifestRegistryCacheEntry>();
-
 export function clearPluginManifestRegistryCache(): void {
-  pluginManifestRegistryCache.clear();
+  // Manifest registry loads are intentionally uncached. Keep this legacy hook
+  // as a compatibility no-op for tests and older reset call sites.
 }
