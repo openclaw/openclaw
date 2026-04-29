@@ -41,7 +41,7 @@ let lastRequestOptions: {
   params?: unknown;
   opts?: { expectFinal?: boolean; timeoutMs?: number | null };
 } | null = null;
-type StartMode = "hello" | "close" | "silent";
+type StartMode = "hello" | "close" | "silent" | "startup-retry-then-hello";
 let startMode: StartMode = "hello";
 let closeCode = 1006;
 let closeReason = "";
@@ -82,6 +82,12 @@ vi.mock("./client.js", () => ({
     }
     start() {
       if (startMode === "hello") {
+        void lastClientOptions?.onHelloOk?.({
+          features: {
+            methods: helloMethods,
+          },
+        });
+      } else if (startMode === "startup-retry-then-hello") {
         void lastClientOptions?.onHelloOk?.({
           features: {
             methods: helloMethods,
@@ -129,6 +135,12 @@ class StubGatewayClient {
   }
   start() {
     if (startMode === "hello") {
+      void lastClientOptions?.onHelloOk?.({
+        features: {
+          methods: helloMethods,
+        },
+      });
+    } else if (startMode === "startup-retry-then-hello") {
       void lastClientOptions?.onHelloOk?.({
         features: {
           methods: helloMethods,
@@ -833,6 +845,15 @@ describe("callGateway error details", () => {
       code: 1006,
       reason: "no close reason",
     });
+  });
+
+  it("keeps the request alive through internally retried startup-unavailable handshakes", async () => {
+    startMode = "startup-retry-then-hello";
+    setLocalLoopbackGatewayConfig();
+
+    await expect(callGateway({ method: "health" })).resolves.toEqual({ ok: true });
+
+    expect(lastRequestOptions?.method).toBe("health");
   });
 
   it("includes connection details on timeout", async () => {

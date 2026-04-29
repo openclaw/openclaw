@@ -97,6 +97,12 @@ Gateway → Client:
 }
 ```
 
+While the Gateway is still finishing startup sidecars, the `connect` request can
+return a retryable `UNAVAILABLE` error with `details.reason` set to
+`"startup-sidecars"` and `retryAfterMs`. Clients should retry that response
+within their overall connection budget instead of surfacing it as a terminal
+handshake failure.
+
 `server`, `features`, `snapshot`, and `policy` are all required by the schema
 (`src/gateway/protocol/schema/frames.ts`). `auth` is also required and reports
 the negotiated role/scopes. `canvasHostUrl` is optional.
