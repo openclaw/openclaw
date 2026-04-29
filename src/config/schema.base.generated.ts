@@ -5464,6 +5464,12 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   isolatedSession: {
                     type: "boolean",
                   },
+                  skipWhenBusy: {
+                    type: "boolean",
+                    title: "Heartbeat Skip When Busy",
+                    description:
+                      "When true, defer heartbeat turns on extra busy lanes: subagent or nested command work. Cron lanes always defer heartbeat turns.",
+                  },
                 },
                 additionalProperties: false,
               },
@@ -7197,6 +7203,12 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     },
                     isolatedSession: {
                       type: "boolean",
+                    },
+                    skipWhenBusy: {
+                      type: "boolean",
+                      title: "Heartbeat Skip When Busy",
+                      description:
+                        "Per-agent override that defers heartbeat turns on extra busy lanes: subagent or nested command work. Cron lanes always defer heartbeat turns.",
                     },
                   },
                   additionalProperties: false,
@@ -27261,6 +27273,16 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Heartbeat Timeout (Seconds)",
       tags: ["performance", "automation"],
     },
+    "agents.defaults.heartbeat.skipWhenBusy": {
+      label: "Heartbeat Skip When Busy",
+      help: "When true, defer heartbeat turns on extra busy lanes: subagent or nested command work. Cron lanes always defer heartbeat turns.",
+      tags: ["automation"],
+    },
+    "agents.list.*.heartbeat.skipWhenBusy": {
+      label: "Heartbeat Skip When Busy",
+      help: "Per-agent override that defers heartbeat turns on extra busy lanes: subagent or nested command work. Cron lanes always defer heartbeat turns.",
+      tags: ["automation"],
+    },
     "agents.defaults.sandbox.browser.network": {
       label: "Sandbox Browser Network",
       help: "Docker network for sandbox browser containers (default: openclaw-sandbox-browser). Avoid bridge if you need stricter isolation.",
@@ -28418,6 +28440,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Agent Heartbeat Timeout (Seconds)",
       help: "Per-agent maximum time in seconds allowed for a heartbeat agent turn before it is aborted. Leave unset to inherit the merged heartbeat/default agent timeout.",
       tags: ["performance", "automation"],
+    },
+    "agents.list[].heartbeat.skipWhenBusy": {
+      label: "Agent Heartbeat Skip When Busy",
+      help: "Per-agent override that defers heartbeat turns on extra busy lanes: subagent or nested command work. Cron lanes always defer heartbeat turns.",
+      tags: ["automation"],
     },
     "agents.list[].sandbox.browser.network": {
       label: "Agent Sandbox Browser Network",
