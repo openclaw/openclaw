@@ -267,6 +267,8 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ["scripts/test-projects.mjs", ["test/scripts/test-projects.test.ts"]],
   ["scripts/test-projects.test-support.d.mts", ["test/scripts/test-projects.test.ts"]],
   ["scripts/test-projects.test-support.mjs", ["test/scripts/test-projects.test.ts"]],
+  ["scripts/blacksmith-testbox-state.mjs", ["test/scripts/blacksmith-testbox-state.test.ts"]],
+  ["scripts/blacksmith-testbox-runner.mjs", ["test/scripts/blacksmith-testbox-runner.test.ts"]],
   ["scripts/testbox-sync-sanity.mjs", ["test/scripts/testbox-sync-sanity.test.ts"]],
 ]);
 const TOOLING_TEST_TARGETS = new Map([
@@ -279,6 +281,14 @@ const TOOLING_TEST_TARGETS = new Map([
     ["test/scripts/plugin-prerelease-test-plan.test.ts"],
   ],
   ["test/scripts/test-projects.test.ts", ["test/scripts/test-projects.test.ts"]],
+  [
+    "test/scripts/blacksmith-testbox-runner.test.ts",
+    ["test/scripts/blacksmith-testbox-runner.test.ts"],
+  ],
+  [
+    "test/scripts/blacksmith-testbox-state.test.ts",
+    ["test/scripts/blacksmith-testbox-state.test.ts"],
+  ],
   ["test/scripts/testbox-sync-sanity.test.ts", ["test/scripts/testbox-sync-sanity.test.ts"]],
   [
     "test/scripts/vitest-local-scheduling.test.ts",

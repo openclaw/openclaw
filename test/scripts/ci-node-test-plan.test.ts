@@ -260,7 +260,7 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
     });
   });
 
-  it("keeps plugin prerelease npm install coverage on the agentic plugin CI shard", () => {
+  it("keeps plugin prerelease npm install coverage on the release-only agentic plugin shard", () => {
     const pluginsShard = createNodeTestShards().find(
       (shard) => shard.shardName === "agentic-plugins",
     );

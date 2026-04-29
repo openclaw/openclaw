@@ -64,6 +64,11 @@ export type CronServiceDeps = {
    * See: https://github.com/openclaw/openclaw/issues/18892
    */
   maxMissedJobsPerRestart?: number;
+  /**
+   * Delay before replaying missed agent-turn jobs found during gateway startup.
+   * Keeps model/tool bootstrap work out of the channel connect window.
+   */
+  startupDeferredMissedAgentJobDelayMs?: number;
   enqueueSystemEvent: (
     text: string,
     opts?: { agentId?: string; sessionKey?: string; contextKey?: string; trusted?: boolean },

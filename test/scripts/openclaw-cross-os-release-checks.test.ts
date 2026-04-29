@@ -115,7 +115,8 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
   it("keeps release smoke plugin allowlists focused on agent-turn essentials", () => {
     const allowlist = buildCrossOsReleaseSmokePluginAllowlist({ extensionId: "openai" });
 
-    expect(allowlist).toEqual(expect.arrayContaining(["openai", "memory-core", "acpx"]));
+    expect(allowlist).toEqual(expect.arrayContaining(["openai", "acpx"]));
+    expect(allowlist).not.toContain("memory-core");
     expect(allowlist).not.toContain("document-extract");
     expect(allowlist).not.toContain("microsoft");
     expect(allowlist).not.toContain("web-readability");

@@ -253,7 +253,7 @@ describe("startGatewayPostAttachRuntime", () => {
     expect(hoisted.startGatewayMemoryBackend).not.toHaveBeenCalled();
   });
 
-  it("starts the qmd memory backend only when configured", async () => {
+  it("keeps the qmd memory backend lazy by default", async () => {
     await startGatewayPostAttachRuntime({
       ...createPostAttachParams(),
       gatewayPluginConfigAtStart: {
@@ -262,9 +262,66 @@ describe("startGatewayPostAttachRuntime", () => {
       } as never,
     });
 
+    expect(hoisted.startGatewayMemoryBackend).not.toHaveBeenCalled();
+    expect(
+      __testing.resolveGatewayMemoryStartupPolicy({ memory: { backend: "qmd" } } as never),
+    ).toEqual({ mode: "off" });
+    expect(
+      __testing.resolveGatewayMemoryStartupPolicy({
+        memory: { backend: "qmd", qmd: { update: { startup: "immediate", onBoot: false } } },
+      } as never),
+    ).toEqual({ mode: "off" });
+  });
+
+  it("starts the qmd memory backend when startup refresh is immediate", async () => {
+    await startGatewayPostAttachRuntime({
+      ...createPostAttachParams(),
+      gatewayPluginConfigAtStart: {
+        hooks: { internal: { enabled: false } },
+        memory: { backend: "qmd", qmd: { update: { startup: "immediate" } } },
+      } as never,
+    });
+
     await vi.waitFor(() => {
       expect(hoisted.startGatewayMemoryBackend).toHaveBeenCalledTimes(1);
     });
+  });
+
+  it("defers qmd memory backend startup refresh until the idle delay elapses", async () => {
+    vi.useFakeTimers();
+    try {
+      await startGatewaySidecars({
+        cfg: {
+          hooks: { internal: { enabled: false } },
+          memory: { backend: "qmd", qmd: { update: { startup: "idle", startupDelayMs: 25 } } },
+        } as never,
+        pluginRegistry: createPostAttachParams().pluginRegistry,
+        defaultWorkspaceDir: "/tmp/openclaw-workspace",
+        deps: {} as never,
+        startChannels: vi.fn(async () => undefined),
+        log: { warn: vi.fn() },
+        logHooks: {
+          info: vi.fn(),
+          warn: vi.fn(),
+          error: vi.fn(),
+        },
+        logChannels: {
+          info: vi.fn(),
+          error: vi.fn(),
+        },
+      });
+
+      expect(hoisted.startGatewayMemoryBackend).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(24);
+      expect(hoisted.startGatewayMemoryBackend).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+
+      await vi.waitFor(() => {
+        expect(hoisted.startGatewayMemoryBackend).toHaveBeenCalledTimes(1);
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("waits for sidecars by default before returning", async () => {
