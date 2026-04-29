@@ -1,0 +1,9 @@
+{
+  "id": "clawg-ui",
+  "channels": ["clawg-ui"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

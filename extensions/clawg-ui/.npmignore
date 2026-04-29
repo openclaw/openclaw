@@ -1,0 +1,9 @@
+# Test files
+*.test.ts
+*.e2e.test.ts
+*.live.test.ts
+vitest.config.ts
+
+# Dev artifacts
+coverage/
+*.log

@@ -1,0 +1,68 @@
+{
+  "name": "@contextableai/clawg-ui",
+  "version": "0.7.0",
+  "description": "AG-UI protocol channel plugin for OpenClaw — connect CopilotKit and AG-UI clients to your OpenClaw gateway",
+  "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/contextable/clawg-ui.git"
+  },
+  "keywords": [
+    "openclaw",
+    "ag-ui",
+    "copilotkit",
+    "sse",
+    "agent",
+    "channel-plugin"
+  ],
+  "main": "./dist/index.js",
+  "files": [
+    "dist",
+    "!dist/examples",
+    "openclaw.plugin.json"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "prepublishOnly": "npm run build",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@ag-ui/core": "^0.0.52",
+    "@ag-ui/encoder": "^0.0.52"
+  },
+  "peerDependencies": {
+    "openclaw": "*"
+  },
+  "devDependencies": {
+    "@types/node": "^25.3.5",
+    "commander": "^14.0.3",
+    "openclaw": "file:../openclaw",
+    "typescript": "^5.9.3",
+    "vitest": "^3.0.0"
+  },
+  "openclaw": {
+    "extensions": [
+      "./dist/index.js"
+    ],
+    "channel": {
+      "id": "clawg-ui",
+      "label": "CLAWG-UI",
+      "docsPath": "/channels/clawg-ui",
+      "docsLabel": "clawg-ui",
+      "blurb": "AG-UI protocol endpoint for CopilotKit and HttpAgent clients.",
+      "order": 90,
+      "defaults": {
+        "blockStreaming": true,
+        "chunkMode": "newline",
+        "surfaceReasoning": true,
+        "surfaceSteps": true
+      }
+    },
+    "install": {
+      "npmSpec": "@contextableai/clawg-ui",
+      "localPath": "extensions/clawg-ui",
+      "defaultChoice": "npm"
+    }
+  }
+}
