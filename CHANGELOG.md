@@ -23,6 +23,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Onboarding/skills: show the Homebrew install recommendation only on macOS and Linux, so FreeBSD and other unsupported platforms no longer get a misleading brew prompt. Fixes #68893; carries forward #68894, #68910, #68941, #68943, #69002, and #69545. Thanks @yurivict, @Sanjays2402, @Eruditi, @JustInCache, @nnish16, and @Mlightsnow.
 - Channels and delivery: preserve account-scoped DM channel send policy, rich Telegram final replies, rich Telegram tables and lists, Telegram thread-create CLI remapping, Slack outbound `message_sent` hooks, contributed message-tool schema optionality, same-channel generated media completions, and channel chunking around surrogate pairs and Infinity limits. (#92788, #92679, #89421, #89943, #91137, #91246, #92735) Thanks @yetval, @obviyus, @spacegeologist, @rishitamrakar, @lundog, @TurboTheTurtle, and @yhterrance.
 - iMessage: normalize leading NUL sent-message echo prefixes while preserving interior NUL bytes and the leading attributedBody marker handling from #73942. Carries forward #63581. Thanks @drvoss.
 - Discord: give generated auto-thread titles a 60-second timeout and 4,096-token reasoning-model output budget, clamped to the selected model output cap. (#64734) Thanks @hanamizuki.
