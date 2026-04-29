@@ -459,7 +459,11 @@ describe("noteMemorySearchHealth", () => {
     expect(message).toContain("embeddings are not ready");
   });
 
-  it("warns when lmstudio gateway probe is unavailable", async () => {
+  it("does not warn when key-optional provider (lmstudio) probe was skipped (checked: false)", async () => {
+    // When `openclaw doctor` runs without --deep, the probe is skipped and returns
+    // { checked: false, ready: false }. This must NOT produce a false-positive warning —
+    // it means readiness was never checked, not that embeddings are unavailable.
+    // Regression test for: https://github.com/openclaw/openclaw/issues/74608
     resolveMemorySearchConfig.mockReturnValue({
       provider: "lmstudio",
       local: {},
@@ -470,10 +474,22 @@ describe("noteMemorySearchHealth", () => {
       gatewayMemoryProbe: { checked: false, ready: false },
     });
 
-    const message = String(note.mock.calls[0]?.[0] ?? "");
-    expect(message).toContain('provider "lmstudio" is configured');
-    expect(message).toContain("could not confirm embeddings are ready");
-    expect(message).toContain("openclaw memory status --deep");
+    expect(note).not.toHaveBeenCalled();
+  });
+
+  it("does not warn when key-optional provider (ollama) probe was skipped (checked: false)", async () => {
+    // Same guard for ollama — the most commonly reported false-positive case.
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "ollama",
+      local: {},
+      remote: {},
+    });
+
+    await noteMemorySearchHealth(cfg, {
+      gatewayMemoryProbe: { checked: false, ready: false },
+    });
+
+    expect(note).not.toHaveBeenCalled();
   });
 
   it("notes when gateway probe reports embeddings ready and CLI API key is missing", async () => {

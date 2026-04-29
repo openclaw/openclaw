@@ -410,6 +410,12 @@ export async function noteMemorySearchHealth(
       if (opts?.gatewayMemoryProbe?.checked && opts.gatewayMemoryProbe.ready) {
         return;
       }
+      // When the probe was skipped (checked: false), we have no embedding status
+      // information — do not warn. A skipped probe means the user ran `openclaw doctor`
+      // without --deep; it does not mean embeddings are unavailable.
+      if (opts?.gatewayMemoryProbe && !opts.gatewayMemoryProbe.checked) {
+        return;
+      }
       const gatewayProbeWarning = buildGatewayProbeWarning(opts?.gatewayMemoryProbe);
       note(
         [
