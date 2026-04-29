@@ -4,6 +4,8 @@ import {
   isOpenAIApiBaseUrl,
   isOpenAICodexBaseUrl,
   OPENAI_CODEX_RESPONSES_BASE_URL,
+  OPENAI_DEFAULT_BASE_URL,
+  resolveOpenAIDefaultBaseUrl,
 } from "./base-url.js";
 
 describe("openai base URL helpers", () => {
@@ -40,6 +42,15 @@ describe("openai base URL helpers", () => {
     expect(isOpenAICodexBaseUrl("https://chatgpt.com/backend-api/v2")).toBe(false);
     expect(isOpenAICodexBaseUrl("https://chatgpt.com/backend-api/codex/v2")).toBe(false);
     expect(isOpenAICodexBaseUrl(undefined)).toBe(false);
+  });
+
+  it("resolves the default OpenAI base URL", () => {
+    expect(resolveOpenAIDefaultBaseUrl({})).toBe(OPENAI_DEFAULT_BASE_URL);
+    expect(resolveOpenAIDefaultBaseUrl({ OPENAI_BASE_URL: "" })).toBe(OPENAI_DEFAULT_BASE_URL);
+    expect(resolveOpenAIDefaultBaseUrl({ OPENAI_BASE_URL: "   " })).toBe(OPENAI_DEFAULT_BASE_URL);
+    expect(resolveOpenAIDefaultBaseUrl({ OPENAI_BASE_URL: "https://proxy.example.com/v1" })).toBe(
+      "https://proxy.example.com/v1",
+    );
   });
 
   it("canonicalizes legacy Codex Responses base URLs", () => {
