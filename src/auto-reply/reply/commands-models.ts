@@ -273,6 +273,7 @@ function resolveProviderLabel(params: {
   provider: string;
   cfg: OpenClawConfig;
   agentDir?: string;
+  workspaceDir?: string;
   sessionEntry?: ModelsCommandSessionEntry;
 }): string {
   const authLabel = resolveModelAuthLabel({
@@ -280,6 +281,7 @@ function resolveProviderLabel(params: {
     cfg: params.cfg,
     sessionEntry: params.sessionEntry,
     agentDir: params.agentDir,
+    workspaceDir: params.workspaceDir,
   });
   if (!authLabel || authLabel === "unknown") {
     return params.provider;
@@ -292,12 +294,14 @@ export function formatModelsAvailableHeader(params: {
   total: number;
   cfg: OpenClawConfig;
   agentDir?: string;
+  workspaceDir?: string;
   sessionEntry?: ModelsCommandSessionEntry;
 }): string {
   const providerLabel = resolveProviderLabel({
     provider: params.provider,
     cfg: params.cfg,
     agentDir: params.agentDir,
+    workspaceDir: params.workspaceDir,
     sessionEntry: params.sessionEntry,
   });
   return `Models (${providerLabel}) — ${params.total} available`;
@@ -421,6 +425,7 @@ export async function resolveModelsCommandReply(params: {
       provider,
       cfg: params.cfg,
       agentDir: params.agentDir,
+      workspaceDir: params.workspaceDir,
       sessionEntry: params.sessionEntry,
     });
     return {
@@ -452,6 +457,7 @@ export async function resolveModelsCommandReply(params: {
         total,
         cfg: params.cfg,
         agentDir: params.agentDir,
+        workspaceDir: params.workspaceDir,
         sessionEntry: params.sessionEntry,
       }),
       channelData: interactiveChannelData,
@@ -480,6 +486,7 @@ export async function resolveModelsCommandReply(params: {
     provider,
     cfg: params.cfg,
     agentDir: params.agentDir,
+    workspaceDir: params.workspaceDir,
     sessionEntry: params.sessionEntry,
   });
   const lines = [

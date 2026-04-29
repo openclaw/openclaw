@@ -97,6 +97,7 @@ export async function applyInlineDirectiveOverrides(params: {
   cfg: OpenClawConfig;
   agentId: string;
   agentDir: string;
+  workspaceDir: string;
   agentCfg: AgentDefaults;
   agentEntry?: AgentEntry;
   sessionEntry: SessionEntry;
@@ -131,6 +132,7 @@ export async function applyInlineDirectiveOverrides(params: {
     cfg,
     agentId,
     agentDir,
+    workspaceDir,
     agentCfg,
     agentEntry,
     sessionEntry,
@@ -358,6 +360,7 @@ export async function applyInlineDirectiveOverrides(params: {
         provider,
         model,
         contextTokens,
+        workspaceDir,
         resolvedThinkLevel: resolvedDefaultThinkLevel,
         resolvedVerboseLevel: currentVerboseLevel ?? "off",
         resolvedReasoningLevel: currentReasoningLevel ?? "off",

@@ -361,6 +361,12 @@ describe("handleModelsCommand", () => {
     const result = await handleModelsCommand(params, true);
 
     expect(result?.reply?.text).toContain("Models (anthropic · 🔑 target-auth) — showing 1-2 of 2");
+    expect(modelAuthLabelMocks.resolveModelAuthLabel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "anthropic",
+        workspaceDir: "/tmp",
+      }),
+    );
   });
 
   it("returns a deprecation message for /models add when no provider is given", async () => {
