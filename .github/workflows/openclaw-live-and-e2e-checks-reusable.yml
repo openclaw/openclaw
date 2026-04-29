@@ -304,6 +304,103 @@ jobs:
             echo "Trust reason: \`$trusted_reason\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
+  validate_live_suite_filter:
+    runs-on: ubuntu-24.04
+    if: inputs.live_suite_filter != ''
+    steps:
+      - name: Validate focused live suite filter
+        shell: bash
+        env:
+          LIVE_SUITE_FILTER: ${{ inputs.live_suite_filter }}
+          RELEASE_TEST_PROFILE: ${{ inputs.release_test_profile }}
+          INCLUDE_REPO_E2E: ${{ inputs.include_repo_e2e }}
+          INCLUDE_LIVE_SUITES: ${{ inputs.include_live_suites }}
+          LIVE_MODELS_ONLY: ${{ inputs.live_models_only }}
+          LIVE_MODEL_PROVIDERS: ${{ inputs.live_model_providers }}
+        run: |
+          set -euo pipefail
+
+          selected_suites=()
+
+          add_suite() {
+            selected_suites+=("$1")
+          }
+
+          add_profile_suite() {
+            local suite_id="$1"
+            local profiles="$2"
+            if [[ " ${profiles} " == *" ${RELEASE_TEST_PROFILE} "* ]]; then
+              add_suite "$suite_id"
+            fi
+          }
+
+          live_model_providers="${LIVE_MODEL_PROVIDERS//,/}"
+          live_model_providers="${live_model_providers//[[:space:]]/}"
+
+          if [[ "$INCLUDE_REPO_E2E" == "true" ]]; then
+            add_suite openshell-e2e
+          fi
+
+          if [[ "$INCLUDE_LIVE_SUITES" == "true" ]]; then
+            if [[ -n "$live_model_providers" ]]; then
+              add_suite docker-live-models
+            else
+              add_profile_suite docker-live-models "minimum stable full"
+            fi
+
+            if [[ "$LIVE_MODELS_ONLY" != "true" ]]; then
+              add_suite live-cache
+              add_suite openai-ws-stream-live-e2e
+
+              add_profile_suite native-live-src-agents "stable full"
+              add_profile_suite native-live-src-gateway-core "minimum stable full"
+              add_profile_suite native-live-src-gateway-profiles-anthropic "stable full"
+              add_profile_suite native-live-src-gateway-profiles-google "stable full"
+              add_profile_suite native-live-src-gateway-profiles-minimax "stable full"
+              add_profile_suite native-live-src-gateway-profiles-openai "minimum stable full"
+              add_profile_suite native-live-src-gateway-profiles-fireworks "full"
+              add_profile_suite native-live-src-gateway-profiles-deepseek "full"
+              add_profile_suite native-live-src-gateway-profiles-opencode-go "full"
+              add_profile_suite native-live-src-gateway-profiles-opencode-go-smoke "stable"
+              add_profile_suite native-live-src-gateway-profiles-openrouter "full"
+              add_profile_suite native-live-src-gateway-profiles-xai "full"
+              add_profile_suite native-live-src-gateway-profiles-zai "full"
+              add_profile_suite native-live-src-gateway-backends "stable full"
+              add_profile_suite native-live-test "stable full"
+              add_profile_suite native-live-extensions-l-n "full"
+              add_profile_suite native-live-extensions-moonshot "full"
+              add_profile_suite native-live-extensions-openai "minimum stable full"
+              add_profile_suite native-live-extensions-o-z-other "full"
+              add_profile_suite native-live-extensions-xai "full"
+
+              add_profile_suite live-gateway-docker "minimum stable full"
+              add_profile_suite live-cli-backend-docker "stable full"
+              add_profile_suite live-acp-bind-docker "stable full"
+              add_profile_suite live-codex-harness-docker "stable full"
+
+              add_profile_suite native-live-extensions-a-k "full"
+              add_profile_suite native-live-extensions-media-audio "full"
+              add_profile_suite native-live-extensions-media-music-google "full"
+              add_profile_suite native-live-extensions-media-music-minimax "full"
+              add_profile_suite native-live-extensions-media-video "full"
+            fi
+          fi
+
+          for suite_id in "${selected_suites[@]}"; do
+            if [[ "$LIVE_SUITE_FILTER" == "$suite_id" ]]; then
+              echo "Focused live suite filter is valid: ${LIVE_SUITE_FILTER}"
+              exit 0
+            fi
+          done
+
+          echo "live_suite_filter '${LIVE_SUITE_FILTER}' does not match any runnable suite for release_test_profile='${RELEASE_TEST_PROFILE}' and the selected include flags." >&2
+          if [[ "${#selected_suites[@]}" -gt 0 ]]; then
+            printf 'Runnable focused suite ids: %s\n' "${selected_suites[*]}" >&2
+          else
+            echo "No focused live suites are runnable for the selected include flags." >&2
+          fi
+          exit 1
+
   validate_release_live_cache:
     needs: validate_selected_ref
     if: inputs.include_live_suites && !inputs.live_models_only && (inputs.live_suite_filter == '' || inputs.live_suite_filter == 'live-cache')
