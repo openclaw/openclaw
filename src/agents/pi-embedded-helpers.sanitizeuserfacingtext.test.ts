@@ -456,6 +456,52 @@ describe("sanitizeUserFacingText", () => {
     expect(sanitizeUserFacingText(undefined as unknown as string)).toBe("");
     expect(sanitizeUserFacingText(42 as unknown as string)).toBe("42");
   });
+
+  it("strips reflected <relevant-memories> blocks injected by the memory plugin (#74364)", () => {
+    const input = [
+      "<relevant-memories>",
+      'The following are stored memories for user "kevin". Use them to personalize your response:',
+      "- Kevin prefers operator mode with verification discipline",
+      "- VEDA uses Opus 4.6 as main model",
+      "</relevant-memories>",
+      "",
+      "Here is the actual reply.",
+    ].join("\n");
+    const result = sanitizeUserFacingText(input);
+    expect(result).not.toContain("<relevant-memories>");
+    expect(result).not.toContain("</relevant-memories>");
+    expect(result).not.toContain("stored memories for user");
+    expect(result).toContain("Here is the actual reply.");
+  });
+
+  it("preserves <relevant-memories> inside fenced code blocks (developer is teaching about the tag)", () => {
+    const input = [
+      "Here is how the memory tag works:",
+      "",
+      "```",
+      "<relevant-memories>",
+      "example content",
+      "</relevant-memories>",
+      "```",
+      "",
+      "End of explanation.",
+    ].join("\n");
+    const result = sanitizeUserFacingText(input);
+    expect(result).toContain("<relevant-memories>");
+    expect(result).toContain("</relevant-memories>");
+    expect(result).toContain("example content");
+    expect(result).toContain("End of explanation.");
+  });
+
+  it("strips <relevant-memories> blocks interleaved with normal prose", () => {
+    const input =
+      "Reply intro. <relevant-memories>internal scaffolding</relevant-memories> Reply continues.";
+    const result = sanitizeUserFacingText(input);
+    expect(result).not.toContain("<relevant-memories>");
+    expect(result).not.toContain("internal scaffolding");
+    expect(result).toContain("Reply intro.");
+    expect(result).toContain("Reply continues.");
+  });
 });
 
 describe("stripThoughtSignatures", () => {
