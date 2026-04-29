@@ -4,7 +4,7 @@ import {
   resolveCommitmentStorePath,
 } from "../commitments/store.js";
 import type { CommitmentRecord, CommitmentStatus } from "../commitments/types.js";
-import { loadConfig } from "../config/config.js";
+import { getRuntimeConfig } from "../config/config.js";
 import { info } from "../globals.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
@@ -87,7 +87,7 @@ export async function commitmentsListCommand(
   opts: { json?: boolean; status?: string; all?: boolean; agent?: string },
   runtime: RuntimeEnv,
 ): Promise<void> {
-  const cfg = loadConfig();
+  const cfg = getRuntimeConfig();
   const status = opts.all ? undefined : parseStatus(opts.status ?? "pending", runtime);
   if (!opts.all && opts.status && !status) {
     return;
@@ -144,7 +144,7 @@ export async function commitmentsDismissCommand(
     runtime.exit(1);
     return;
   }
-  const cfg = loadConfig();
+  const cfg = getRuntimeConfig();
   await markCommitmentsStatus({
     cfg,
     ids,

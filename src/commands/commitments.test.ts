@@ -7,7 +7,7 @@ const mocks = vi.hoisted(() => ({
   listCommitments: vi.fn(),
   markCommitmentsStatus: vi.fn(),
   resolveCommitmentStorePath: vi.fn(() => "/tmp/openclaw-commitments.json"),
-  loadConfig: vi.fn(() => ({
+  getRuntimeConfig: vi.fn(() => ({
     commitments: {
       store: "/tmp/openclaw-commitments.json",
     },
@@ -21,7 +21,7 @@ vi.mock("../commitments/store.js", () => ({
 }));
 
 vi.mock("../config/config.js", () => ({
-  loadConfig: mocks.loadConfig,
+  getRuntimeConfig: mocks.getRuntimeConfig,
 }));
 
 function createRuntime(): { runtime: RuntimeEnv; logs: string[] } {
