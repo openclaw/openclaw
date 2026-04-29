@@ -44,7 +44,12 @@ const BUILT_IN_PLUGIN_ALIAS_LOOKUP = new Map<string, string>([
   ...BUILT_IN_PLUGIN_ALIAS_FALLBACKS.map(([, pluginId]) => [pluginId, pluginId] as const),
 ]);
 
+let bundledPluginAliasLookup: ReadonlyMap<string, string> | undefined;
+
 function getBundledPluginAliasLookup(): ReadonlyMap<string, string> {
+  if (bundledPluginAliasLookup) {
+    return bundledPluginAliasLookup;
+  }
   const lookup = new Map<string, string>();
   for (const plugin of listBundledPluginMetadata({ includeChannelConfigs: false })) {
     const pluginId = normalizeOptionalLowercaseString(plugin.manifest.id);
@@ -67,7 +72,8 @@ function getBundledPluginAliasLookup(): ReadonlyMap<string, string> {
   for (const [alias, pluginId] of BUILT_IN_PLUGIN_ALIAS_FALLBACKS) {
     lookup.set(alias, pluginId);
   }
-  return lookup;
+  bundledPluginAliasLookup = lookup;
+  return bundledPluginAliasLookup;
 }
 
 export function normalizePluginId(id: string): string {
