@@ -7,6 +7,12 @@ import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { detectBinary, resolveNodeManagerOptions } from "./onboard-helpers.js";
 
+const HOMEBREW_PROMPT_PLATFORMS = new Set(["darwin", "linux"]);
+
+function supportsHomebrewPrompt(platform: NodeJS.Platform): boolean {
+  return HOMEBREW_PROMPT_PLATFORMS.has(platform);
+}
+
 function summarizeInstallFailure(message: string): string | undefined {
   const cleaned = message.replace(/^Install failed(?:\s*\([^)]*\))?\s*:?\s*/i, "").trim();
   if (!cleaned) {
@@ -109,7 +115,7 @@ export async function setupSkills(
       .filter((item): item is (typeof installable)[number] => Boolean(item));
 
     const needsBrewPrompt =
-      process.platform !== "win32" &&
+      supportsHomebrewPrompt(process.platform) &&
       selectedSkills.some((skill) => skill.install.some((option) => option.kind === "brew")) &&
       !(await detectBinary("brew"));
 

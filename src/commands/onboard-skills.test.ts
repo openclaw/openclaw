@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
@@ -133,9 +133,31 @@ const runtime: RuntimeEnv = {
   }) as RuntimeEnv["exit"],
 };
 
+const supportsHomebrewPrompt = process.platform === "darwin" || process.platform === "linux";
+
+async function withPlatform<T>(platform: NodeJS.Platform, fn: () => Promise<T>): Promise<T> {
+  const originalPlatform = process.platform;
+  Object.defineProperty(process, "platform", {
+    configurable: true,
+    value: platform,
+  });
+  try {
+    return await fn();
+  } finally {
+    Object.defineProperty(process, "platform", {
+      configurable: true,
+      value: originalPlatform,
+    });
+  }
+}
+
 describe("setupSkills", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
   it("does not recommend Homebrew when user skips installing brew-backed deps", async () => {
-    if (process.platform === "win32") {
+    if (!supportsHomebrewPrompt) {
       return;
     }
 
@@ -167,7 +189,7 @@ describe("setupSkills", () => {
   });
 
   it("recommends Homebrew when user selects a brew-backed install and brew is missing", async () => {
-    if (process.platform === "win32") {
+    if (!supportsHomebrewPrompt) {
       return;
     }
 
@@ -185,5 +207,25 @@ describe("setupSkills", () => {
 
     const brewNote = notes.find((n) => n.title === "Homebrew recommended");
     expect(brewNote).toBeDefined();
+  });
+
+  it("does not recommend Homebrew on FreeBSD", async () => {
+    await withPlatform("freebsd", async () => {
+      mockMissingBrewStatus([
+        createBundledSkill({
+          name: "video-frames",
+          description: "ffmpeg",
+          bins: ["ffmpeg"],
+          installLabel: "Install ffmpeg (brew)",
+        }),
+      ]);
+
+      const { prompter, notes } = createPrompter({ multiselect: ["video-frames"] });
+      await setupSkills({} as OpenClawConfig, "/tmp/ws", runtime, prompter);
+
+      const brewNote = notes.find((n) => n.title === "Homebrew recommended");
+      expect(brewNote).toBeUndefined();
+      expect(mocks.detectBinary).not.toHaveBeenCalledWith("brew");
+    });
   });
 });
