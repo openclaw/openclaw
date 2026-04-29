@@ -26,6 +26,38 @@ export async function resolveSandboxedBridgeMediaPath(params: {
   const normalizeFileUrl = (rawPath: string) =>
     rawPath.startsWith("file://") ? rawPath.slice("file://".length) : rawPath;
   const filePath = normalizeFileUrl(params.mediaPath);
+
+  // Detect media:// URIs before bridge resolution so they are not mangled
+  // by POSIX path.resolve (which turns media://inbound/x into workspace/media:/inbound/x).
+  if (/^media:\/\//i.test(filePath)) {
+    const fallbackDir = params.inboundFallbackDir?.trim();
+    if (fallbackDir) {
+      const basename = path.basename(new URL(filePath).pathname);
+      const fallbackPath = path.join(fallbackDir, basename);
+      try {
+        const stat = await params.sandbox.bridge.stat({
+          filePath: fallbackPath,
+          cwd: params.sandbox.root,
+        });
+        if (stat) {
+          const resolvedFallback = params.sandbox.bridge.resolvePath({
+            filePath: fallbackPath,
+            cwd: params.sandbox.root,
+          });
+          return {
+            resolved: resolvedFallback.hostPath ?? resolvedFallback.containerPath,
+            rewrittenFrom: filePath,
+          };
+        }
+      } catch {
+        // stat or resolve failed — fall through to return the raw URI
+      }
+    }
+    // Return the raw media:// URI so downstream loadWebMedia can resolve it
+    // through resolveMediaStoreUriToPath.
+    return { resolved: filePath };
+  }
+
   const enforceWorkspaceBoundary = async (hostPath: string) => {
     if (!params.sandbox.workspaceOnly) {
       return;
