@@ -14,6 +14,7 @@ export class ResizableDivider extends LitElement {
   private isDragging = false;
   private startX = 0;
   private startRatio = 0;
+  private activePointerId: number | null = null;
 
   static styles = css`
     :host {
@@ -53,6 +54,7 @@ export class ResizableDivider extends LitElement {
 
   connectedCallback() {
     super.connectedCallback();
+    this.setStaticAccessibilityAttributes();
     this.addEventListener("pointerdown", this.handlePointerDown);
     this.addEventListener("keydown", this.handleKeyDown);
   }
@@ -65,9 +67,6 @@ export class ResizableDivider extends LitElement {
   }
 
   protected updated() {
-    this.setAttribute("role", "separator");
-    this.setAttribute("tabindex", "0");
-    this.setAttribute("aria-orientation", "vertical");
     this.setAttribute("aria-valuemin", String(this.toAriaValue(this.minRatio)));
     this.setAttribute("aria-valuemax", String(this.toAriaValue(this.maxRatio)));
     this.setAttribute("aria-valuenow", String(this.toAriaValue(this.splitRatio)));
@@ -87,6 +86,7 @@ export class ResizableDivider extends LitElement {
     this.startRatio = this.splitRatio;
     this.classList.add("dragging");
     this.focus();
+    this.capturePointer(e.pointerId);
 
     document.addEventListener("pointermove", this.handlePointerMove);
     document.addEventListener("pointerup", this.handlePointerUp);
@@ -144,6 +144,7 @@ export class ResizableDivider extends LitElement {
     }
     this.isDragging = false;
     this.classList.remove("dragging");
+    this.releaseActivePointer();
 
     document.removeEventListener("pointermove", this.handlePointerMove);
     document.removeEventListener("pointerup", this.handlePointerUp);
@@ -167,6 +168,32 @@ export class ResizableDivider extends LitElement {
 
   private toAriaValue(value: number) {
     return Math.round(value * 100);
+  }
+
+  private setStaticAccessibilityAttributes() {
+    this.setAttribute("role", "separator");
+    this.setAttribute("tabindex", "0");
+    this.setAttribute("aria-orientation", "vertical");
+  }
+
+  private capturePointer(pointerId: number) {
+    if (typeof this.setPointerCapture !== "function") {
+      return;
+    }
+    this.setPointerCapture(pointerId);
+    this.activePointerId = pointerId;
+  }
+
+  private releaseActivePointer() {
+    const pointerId = this.activePointerId;
+    this.activePointerId = null;
+    if (pointerId == null || typeof this.releasePointerCapture !== "function") {
+      return;
+    }
+    if (typeof this.hasPointerCapture === "function" && !this.hasPointerCapture(pointerId)) {
+      return;
+    }
+    this.releasePointerCapture(pointerId);
   }
 }
 

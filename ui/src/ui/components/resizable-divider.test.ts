@@ -6,6 +6,20 @@ import { type ResizableDivider } from "./resizable-divider.ts";
 import "./resizable-divider.ts";
 
 let container: HTMLDivElement;
+const originalPointerEvent = globalThis.PointerEvent;
+
+class TestPointerEvent extends MouseEvent {
+  readonly pointerId: number;
+  readonly pointerType: string;
+  readonly isPrimary: boolean;
+
+  constructor(type: string, init: PointerEventInit = {}) {
+    super(type, init);
+    this.pointerId = init.pointerId ?? 1;
+    this.pointerType = init.pointerType ?? "mouse";
+    this.isPrimary = init.isPrimary ?? true;
+  }
+}
 
 function nextFrame() {
   return new Promise<void>((resolve) => {
@@ -52,20 +66,25 @@ async function renderDivider() {
 
 function dispatchPointer(target: EventTarget, type: string, clientX: number) {
   target.dispatchEvent(
-    new MouseEvent(type, {
-      bubbles: true,
-function dispatchPointer(target: EventTarget, type: string, clientX: number) {
-  target.dispatchEvent(
     new PointerEvent(type, {
       bubbles: true,
+      button: 0,
       cancelable: true,
       clientX,
-      button: 0,
-      pointerId: 1,
+      pointerId: 7,
+      pointerType: "touch",
     }),
   );
 }
+
+describe("resizable-divider", () => {
   beforeEach(() => {
+    if (!globalThis.PointerEvent) {
+      Object.defineProperty(globalThis, "PointerEvent", {
+        configurable: true,
+        value: TestPointerEvent as typeof PointerEvent,
+      });
+    }
     container = document.createElement("div");
     document.body.append(container);
   });
@@ -73,6 +92,14 @@ function dispatchPointer(target: EventTarget, type: string, clientX: number) {
   afterEach(() => {
     render(nothing, container);
     container.remove();
+    if (originalPointerEvent) {
+      Object.defineProperty(globalThis, "PointerEvent", {
+        configurable: true,
+        value: originalPointerEvent,
+      });
+    } else {
+      delete (globalThis as Partial<typeof globalThis>).PointerEvent;
+    }
     vi.restoreAllMocks();
   });
 
@@ -135,11 +162,18 @@ function dispatchPointer(target: EventTarget, type: string, clientX: number) {
   it("uses pointer events for mouse, pen, and touch dragging", async () => {
     const divider = await renderDivider();
     const resized = vi.fn();
+    const setPointerCapture = vi.fn();
+    const releasePointerCapture = vi.fn();
+    const hasPointerCapture = vi.fn(() => true);
+    divider.setPointerCapture = setPointerCapture;
+    divider.releasePointerCapture = releasePointerCapture;
+    divider.hasPointerCapture = hasPointerCapture;
     divider.addEventListener("resize", resized);
 
     dispatchPointer(divider, "pointerdown", 100);
     expect(document.activeElement).toBe(divider);
     expect(divider.classList.contains("dragging")).toBe(true);
+    expect(setPointerCapture).toHaveBeenCalledWith(7);
 
     dispatchPointer(document, "pointermove", 220);
     expect(resized).toHaveBeenLastCalledWith(
@@ -148,5 +182,6 @@ function dispatchPointer(target: EventTarget, type: string, clientX: number) {
 
     dispatchPointer(document, "pointerup", 220);
     expect(divider.classList.contains("dragging")).toBe(false);
+    expect(releasePointerCapture).toHaveBeenCalledWith(7);
   });
 });
