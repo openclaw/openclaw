@@ -327,6 +327,11 @@ function logOptimizedImage(params: { originalSize: number; optimized: OptimizedI
   );
 }
 
+function isImageInputGuardError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return /pixel input limit|unable to determine image dimensions/i.test(message);
+}
+
 async function optimizeImageWithFallback(params: {
   buffer: Buffer;
   cap: number;
@@ -392,7 +397,28 @@ async function loadWebMediaInternal(
     meta?: { contentType?: string; fileName?: string },
   ) => {
     const originalSize = buffer.length;
-    const optimized = await optimizeImageWithFallback({ buffer, cap, meta });
+    let optimized: OptimizedImage;
+    try {
+      optimized = await optimizeImageWithFallback({ buffer, cap, meta });
+    } catch (err) {
+      if (isImageInputGuardError(err)) {
+        throw err;
+      }
+      if (buffer.length <= cap && !isHeicSource(meta ?? {})) {
+        if (shouldLogVerbose()) {
+          logVerbose(
+            `Image optimization failed; sending original ${formatMb(buffer.length)}MB image because it is under the ${formatMb(cap, 0)}MB cap: ${String(err)}`,
+          );
+        }
+        return {
+          buffer,
+          contentType: meta?.contentType,
+          kind: "image" as const,
+          fileName: meta?.fileName,
+        };
+      }
+      throw err;
+    }
     logOptimizedImage({ originalSize, optimized });
 
     if (optimized.buffer.length > cap) {
@@ -642,6 +668,9 @@ export async function optimizeImageToJpeg(
           };
         }
       } catch (err) {
+        if (isImageInputGuardError(err)) {
+          throw err;
+        }
         firstResizeError ??= err;
         const message = formatErrorMessage(err).trim();
         if (message && !errors.includes(message)) {

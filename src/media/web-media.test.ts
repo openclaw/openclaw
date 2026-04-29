@@ -5,6 +5,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { CANVAS_HOST_PATH } from "../canvas-host/a2ui.js";
 import { resolveStateDir } from "../config/paths.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+import { createPngBufferWithDimensions } from "./test-helpers.js";
 
 let loadWebMedia: typeof import("./web-media.js").loadWebMedia;
 let optimizeImageToJpeg: typeof import("./web-media.js").optimizeImageToJpeg;
@@ -113,6 +114,21 @@ describe("loadWebMedia", () => {
       hostReadCapability: true,
     });
   }
+
+  it("fails closed for byte-small images that exceed the pixel input guard", async () => {
+    const oversizedImage = path.join(fixtureRoot, "oversized-pixels.png");
+    await fs.writeFile(
+      oversizedImage,
+      createPngBufferWithDimensions({ width: 8_000, height: 4_000 }),
+    );
+
+    await expect(
+      loadWebMedia(oversizedImage, {
+        maxBytes: 100 * 1024 * 1024,
+        localRoots: [fixtureRoot],
+      }),
+    ).rejects.toThrow(/pixel input limit/i);
+  });
 
   it.each([
     {
