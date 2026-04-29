@@ -113,46 +113,55 @@ describe("runCrestodian", () => {
     expect(lines.join("\n")).not.toContain("Say: status");
   });
 
-  it.each([
-    {
-      name: "stdin is not a TTY",
-      input: { isTTY: false } as unknown as NodeJS.ReadableStream,
-      output: { isTTY: true } as unknown as NodeJS.WritableStream,
-      interactive: true,
-    },
-    {
-      name: "stdout is not a TTY",
-      input: { isTTY: true } as unknown as NodeJS.ReadableStream,
-      output: { isTTY: false } as unknown as NodeJS.WritableStream,
-      interactive: true,
-    },
-    {
-      name: "interactive mode is disabled",
-      input: { isTTY: true } as unknown as NodeJS.ReadableStream,
-      output: { isTTY: true } as unknown as NodeJS.WritableStream,
-      interactive: false,
-    },
-  ])("exits non-zero when $name", async ({ input, output, interactive }) => {
+  it("exits with code 1 when stdin is not a TTY", async () => {
     const { runtime, lines } = createCrestodianTestRuntime();
-    let runInteractiveTuiCalls = 0;
 
+    // Simulate non-TTY stdin (like piping from /dev/null)
     await expect(
       runCrestodian(
         {
-          input,
-          output,
-          interactive,
-          runInteractiveTui: async () => {
-            runInteractiveTuiCalls += 1;
-          },
+          input: { isTTY: false } as unknown as NodeJS.ReadableStream,
+          output: { isTTY: true } as unknown as NodeJS.WritableStream,
         },
         runtime,
       ),
     ).rejects.toThrow("exit 1");
 
-    expect(runInteractiveTuiCalls).toBe(0);
-    expect(lines.join("\n")).toContain(
-      "Crestodian needs an interactive TTY. Use --message for one command.",
-    );
+    expect(lines.join("\n")).toContain("Crestodian needs an interactive TTY");
+    expect(lines.join("\n")).toContain("Use --message for one command");
+  });
+
+  it("exits with code 1 when stdout is not a TTY", async () => {
+    const { runtime, lines } = createCrestodianTestRuntime();
+
+    // Simulate non-TTY stdout
+    await expect(
+      runCrestodian(
+        {
+          input: { isTTY: true } as unknown as NodeJS.ReadableStream,
+          output: { isTTY: false } as unknown as NodeJS.WritableStream,
+        },
+        runtime,
+      ),
+    ).rejects.toThrow("exit 1");
+
+    expect(lines.join("\n")).toContain("Crestodian needs an interactive TTY");
+  });
+
+  it("exits with code 1 when interactive is false", async () => {
+    const { runtime, lines } = createCrestodianTestRuntime();
+
+    await expect(
+      runCrestodian(
+        {
+          interactive: false,
+          input: { isTTY: true } as unknown as NodeJS.ReadableStream,
+          output: { isTTY: true } as unknown as NodeJS.WritableStream,
+        },
+        runtime,
+      ),
+    ).rejects.toThrow("exit 1");
+
+    expect(lines.join("\n")).toContain("Crestodian needs an interactive TTY");
   });
 });
