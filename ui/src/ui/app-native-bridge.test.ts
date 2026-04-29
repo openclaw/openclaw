@@ -26,7 +26,9 @@ function makeBridge(): FakeBridge {
     ),
     removeEventListener: vi.fn((_type: string, fn: (e: MessageEvent) => void) => {
       const i = listeners.indexOf(fn);
-      if (i !== -1) listeners.splice(i, 1);
+      if (i !== -1) {
+        listeners.splice(i, 1);
+      }
     }),
   };
   vi.stubGlobal("chrome", { webview: bridge });
@@ -39,7 +41,9 @@ function makeHost() {
 
 function dispatch(bridge: FakeBridge, data: unknown) {
   const event = { data } as MessageEvent;
-  for (const fn of bridge.listeners) fn(event);
+  for (const fn of bridge.listeners) {
+    fn(event);
+  }
 }
 
 afterEach(() => {

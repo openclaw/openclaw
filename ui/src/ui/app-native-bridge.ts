@@ -27,15 +27,21 @@ export function sendToNative(msg: NativeBridgeMessage): void {
 }
 
 function handleNativeMessage(host: NativeBridgeHost, raw: unknown): void {
-  if (!raw || typeof raw !== "object") return;
+  if (!raw || typeof raw !== "object") {
+    return;
+  }
   const msg = raw as Record<string, unknown>;
-  if (typeof msg.type !== "string") return;
+  if (typeof msg.type !== "string") {
+    return;
+  }
   if (msg.type === "draft-text") {
     const text =
       msg.payload && typeof msg.payload === "object"
         ? (msg.payload as Record<string, unknown>).text
         : undefined;
-    if (typeof text === "string") host.handleChatDraftChange(text);
+    if (typeof text === "string") {
+      host.handleChatDraftChange(text);
+    }
   }
 }
 
@@ -48,7 +54,9 @@ function handleNativeMessage(host: NativeBridgeHost, raw: unknown): void {
  */
 export function initNativeBridge(host: NativeBridgeHost): () => void {
   const bridge = getWebview();
-  if (!bridge) return () => {};
+  if (!bridge) {
+    return () => {};
+  }
 
   const handler = (event: MessageEvent) => {
     handleNativeMessage(host, event.data);
