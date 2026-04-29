@@ -233,6 +233,25 @@ describe("plugin state keyed store", () => {
       await expect(store.register("big", "x".repeat(65_537))).rejects.toMatchObject({
         code: "PLUGIN_STATE_LIMIT_EXCEEDED",
       });
+
+      // Key byte-length limit (512 bytes)
+      await expect(store.register("k".repeat(513), { ok: true })).rejects.toThrow(
+        PluginStateStoreError,
+      );
+
+      // Namespace byte-length limit (128 bytes)
+      expect(() =>
+        createPluginStateKeyedStore("discord", { namespace: "a".repeat(129), maxEntries: 10 }),
+      ).toThrow(PluginStateStoreError);
+
+      // JSON depth limit (64 levels)
+      let deep: unknown = { leaf: true };
+      for (let i = 0; i < 65; i += 1) {
+        deep = { nested: deep };
+      }
+      await expect(store.register("deep", deep)).rejects.toMatchObject({
+        code: "PLUGIN_STATE_LIMIT_EXCEEDED",
+      });
     });
   });
 

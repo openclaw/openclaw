@@ -33,6 +33,9 @@ export {
 } from "./plugin-state-store.sqlite.js";
 
 const NAMESPACE_PATTERN = /^[a-z0-9][a-z0-9._-]*$/iu;
+const MAX_NAMESPACE_BYTES = 128;
+const MAX_KEY_BYTES = 512;
+const MAX_JSON_DEPTH = 64;
 
 type StoreOptionSignature = {
   maxEntries: number;
@@ -49,11 +52,18 @@ function invalidInput(message: string): PluginStateStoreError {
   });
 }
 
+function assertMaxBytes(label: string, value: string, max: number): void {
+  if (textEncoder.encode(value).byteLength > max) {
+    throw invalidInput(`plugin state ${label} must be <= ${max} bytes`);
+  }
+}
+
 function validateNamespace(value: string): string {
   const trimmed = value.trim();
   if (!NAMESPACE_PATTERN.test(trimmed)) {
     throw invalidInput(`plugin state namespace must be a safe path segment: ${value}`);
   }
+  assertMaxBytes("namespace", trimmed, MAX_NAMESPACE_BYTES);
   return trimmed;
 }
 
@@ -62,6 +72,7 @@ function validateKey(value: string): string {
   if (!trimmed) {
     throw invalidInput("plugin state entry key must not be empty");
   }
+  assertMaxBytes("entry key", trimmed, MAX_KEY_BYTES);
   return trimmed;
 }
 
@@ -76,13 +87,24 @@ function validateOptionalTtlMs(value: number | undefined): number | undefined {
   if (value == null) {
     return undefined;
   }
-  if (!Number.isInteger(value) || value < 0) {
-    throw invalidInput("plugin state ttlMs must be an integer >= 0");
+  if (!Number.isInteger(value) || value < 1) {
+    throw invalidInput("plugin state ttlMs must be a positive integer");
   }
   return value;
 }
 
-function assertPlainJsonValue(value: unknown, seen: WeakSet<object>, path: string): void {
+function assertPlainJsonValue(
+  value: unknown,
+  seen: WeakSet<object>,
+  path: string,
+  depth = 0,
+): void {
+  if (depth > MAX_JSON_DEPTH) {
+    throw new PluginStateStoreError(
+      `plugin state value nesting exceeds maximum depth of ${MAX_JSON_DEPTH}`,
+      { code: "PLUGIN_STATE_LIMIT_EXCEEDED", operation: "register" },
+    );
+  }
   if (value === null) {
     return;
   }
@@ -111,7 +133,7 @@ function assertPlainJsonValue(value: unknown, seen: WeakSet<object>, path: strin
         if (!(index in value)) {
           throw invalidInput(`plugin state array at ${path} must not be sparse`);
         }
-        assertPlainJsonValue(value[index], seen, `${path}[${index}]`);
+        assertPlainJsonValue(value[index], seen, `${path}[${index}]`, depth + 1);
       }
       return;
     }
@@ -132,7 +154,7 @@ function assertPlainJsonValue(value: unknown, seen: WeakSet<object>, path: strin
       if (descriptor.get || descriptor.set || !("value" in descriptor)) {
         throw invalidInput(`plugin state object at ${path}.${key} must use data properties`);
       }
-      assertPlainJsonValue(descriptor.value, seen, `${path}.${key}`);
+      assertPlainJsonValue(descriptor.value, seen, `${path}.${key}`, depth + 1);
     }
   } finally {
     seen.delete(objectValue);
