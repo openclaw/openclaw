@@ -10,7 +10,7 @@ export class DashboardHeader extends LitElement {
   @property() tab: Tab = "overview";
   @property() basePath = "";
 
-  private handleOverviewClick(event: MouseEvent) {
+  private readonly handleOverviewClick = (event: MouseEvent) => {
     if (
       event.defaultPrevented ||
       event.button !== 0 ||
@@ -25,7 +25,7 @@ export class DashboardHeader extends LitElement {
     this.dispatchEvent(
       new CustomEvent("navigate", { detail: "overview", bubbles: true, composed: true }),
     );
-  }
+  };
 
   override render() {
     const label = titleForTab(this.tab);
