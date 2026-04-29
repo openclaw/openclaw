@@ -968,13 +968,13 @@ export async function runMemoryFlushIfNeeded(params: {
         return result;
       },
     });
-    let memoryFlushCompactionCount =
+    const memoryFlushCompactionCount =
       activeSessionEntry?.compactionCount ??
       (params.sessionKey ? activeSessionStore?.[params.sessionKey]?.compactionCount : 0) ??
       0;
     if (memoryCompactionCompleted) {
       const previousSessionId = activeSessionEntry?.sessionId ?? params.followupRun.run.sessionId;
-      const nextCount = await memoryDeps.incrementCompactionCount({
+      await memoryDeps.incrementCompactionCount({
         cfg: params.cfg,
         sessionEntry: activeSessionEntry,
         sessionStore: activeSessionStore,
@@ -1001,9 +1001,7 @@ export async function runMemoryFlushIfNeeded(params: {
           });
         }
       }
-      if (typeof nextCount === "number") {
-        memoryFlushCompactionCount = nextCount;
-      }
+      // Persist the pre-increment count so the next compaction cycle remains eligible to flush.
     }
     if (params.storePath && params.sessionKey) {
       try {
