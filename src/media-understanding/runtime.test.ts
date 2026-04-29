@@ -102,6 +102,39 @@ describe("media-understanding runtime", () => {
     expect(mocks.cleanup).toHaveBeenCalledTimes(1);
   });
 
+  it("preserves skipped decisions when no provider entries are available", async () => {
+    const decision = {
+      capability: "image" as const,
+      outcome: "skipped" as const,
+      attachments: [{ attachmentIndex: 0, attempts: [] }],
+    };
+    mocks.normalizeMediaAttachments.mockReturnValue([
+      { index: 0, path: "/tmp/sample.jpg", mime: "image/jpeg" },
+    ]);
+    mocks.runCapability.mockResolvedValue({
+      outputs: [],
+      decision,
+    });
+
+    await expect(
+      runMediaUnderstandingFile({
+        capability: "image",
+        filePath: "/tmp/sample.jpg",
+        mime: "image/jpeg",
+        cfg: {} as OpenClawConfig,
+        agentDir: "/tmp/agent",
+      }),
+    ).resolves.toEqual({
+      text: undefined,
+      provider: undefined,
+      model: undefined,
+      output: undefined,
+      decision,
+    });
+
+    expect(mocks.cleanup).toHaveBeenCalledTimes(1);
+  });
+
   it("passes per-request image prompts into media understanding config", async () => {
     const output: MediaUnderstandingOutput = {
       kind: "image.description",

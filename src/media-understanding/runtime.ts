@@ -129,6 +129,7 @@ export async function runMediaUnderstandingFile(
       provider: output?.provider,
       model: output?.model,
       output,
+      decision: result.decision,
     };
   } finally {
     await cache.cleanup();
@@ -171,7 +172,7 @@ export async function describeVideoFile(
 
 export async function transcribeAudioFile(
   params: TranscribeAudioFileParams,
-): Promise<{ text: string | undefined }> {
+): Promise<RunMediaUnderstandingFileResult> {
   const cfg =
     params.language || params.prompt
       ? {
@@ -192,5 +193,5 @@ export async function transcribeAudioFile(
         }
       : params.cfg;
   const result = await runMediaUnderstandingFile({ ...params, cfg, capability: "audio" });
-  return { text: result.text };
+  return result;
 }

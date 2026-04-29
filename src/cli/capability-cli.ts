@@ -30,6 +30,7 @@ import type {
   ImageGenerationOutputFormat,
 } from "../image-generation/types.js";
 import { buildMediaUnderstandingRegistry } from "../media-understanding/provider-registry.js";
+import type { RunMediaUnderstandingFileResult } from "../media-understanding/runtime-types.js";
 import {
   describeImageFile,
   describeImageFileWithModel,
@@ -963,6 +964,9 @@ async function runImageDescribe(params: {
             timeoutMs: params.timeoutMs,
           });
       if (!result.text) {
+        if (!activeModel && isMissingMediaUnderstandingProviderResult(result)) {
+          throw new Error(buildNoImageUnderstandingProviderConfiguredMessage());
+        }
         throw new Error(`No description returned for image: ${resolvedPath}`);
       }
       return {
@@ -1001,6 +1005,9 @@ async function runAudioTranscribe(params: {
     prompt: params.prompt,
   });
   if (!result.text) {
+    if (!activeModel && isMissingMediaUnderstandingProviderResult(result)) {
+      throw new Error(buildNoAudioTranscriptionProviderConfiguredMessage());
+    }
     throw new Error(`No transcript returned for audio: ${path.resolve(params.file)}`);
   }
   return {
@@ -1037,6 +1044,31 @@ function normalizeImageOutputFormat(
     return normalized as ImageGenerationOutputFormat;
   }
   throw new Error("--output-format must be one of png, jpeg, or webp");
+}
+
+function isMissingMediaUnderstandingProviderResult(
+  result: RunMediaUnderstandingFileResult,
+): boolean {
+  const decision = result.decision;
+  return (
+    decision?.outcome === "skipped" &&
+    decision.attachments.length > 0 &&
+    decision.attachments.every((attachment) => attachment.attempts.length === 0)
+  );
+}
+
+function buildNoImageUnderstandingProviderConfiguredMessage(): string {
+  return [
+    "No image-understanding provider configured.",
+    "Set agents.defaults.imageModel.primary to a provider/model with image support, or configure tools.media.image.models or shared tools.media.models.",
+  ].join(" ");
+}
+
+function buildNoAudioTranscriptionProviderConfiguredMessage(): string {
+  return [
+    "No audio transcription provider configured.",
+    "Configure tools.media.audio.models or shared tools.media.models with an audio transcription provider/model, or configure a local audio transcription CLI or provider auth/env credentials.",
+  ].join(" ");
 }
 
 function normalizeImageBackground(
