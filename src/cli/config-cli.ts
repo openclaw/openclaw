@@ -915,7 +915,7 @@ function configPatchModeError(message: string): Error {
 }
 
 async function readStdinText(): Promise<string> {
-  let raw = "";
+  const chunks: string[] = [];
   let bytes = 0;
   if (process.stdin.isTTY) {
     throw configPatchModeError(
@@ -931,9 +931,9 @@ async function readStdinText(): Promise<string> {
         `--stdin input exceeds ${CONFIG_PATCH_STDIN_MAX_BYTES} bytes; use --file <path> for larger patches.`,
       );
     }
-    raw += text;
+    chunks.push(text);
   }
-  return raw;
+  return chunks.join("");
 }
 
 async function readConfigPatchInput(opts: ConfigPatchOptions): Promise<unknown> {
@@ -972,7 +972,7 @@ function buildDeleteOperation(path: PathSegment[]): ConfigSetOperation {
 function buildApplyValueOperation(params: {
   path: PathSegment[];
   value: unknown;
-  mutation?: "set" | "replace";
+  mutation?: ConfigSetOperation["mutation"];
 }): ConfigSetOperation {
   const ref = isPlainRecord(params.value) ? coerceSecretRef(params.value) : null;
   if (ref) {
@@ -1026,6 +1026,10 @@ function buildConfigPatchOperations(params: {
       return;
     }
     if (isPlainRecord(value)) {
+      if (path.length > 0 && Object.keys(value).length === 0) {
+        operations.push(buildApplyValueOperation({ path, value, mutation: "merge" }));
+        return;
+      }
       for (const [key, child] of Object.entries(value)) {
         visit(child, [...path, key]);
       }
@@ -1373,7 +1377,7 @@ async function runConfigOperations(params: {
   runtime: RuntimeEnv;
   operations: ConfigSetOperation[];
   options: ConfigMutationOptions;
-  successMode: "set" | "apply";
+  successMode: "set" | "patch";
 }) {
   const { runtime, operations, options } = params;
   if (
@@ -1640,7 +1644,7 @@ export async function runConfigPatch(opts: {
         allowExec: opts.cliOptions.allowExec,
         json: opts.cliOptions.json,
       },
-      successMode: "apply",
+      successMode: "patch",
     });
   } catch (err) {
     handleConfigMutationError({ err, runtime, options: opts.cliOptions });
@@ -1795,7 +1799,7 @@ export function registerConfigCli(program: Command) {
   const cmd = program
     .command("config")
     .description(
-      "Non-interactive config helpers (get/set/apply/unset/file/schema/validate). Run without subcommand for guided setup.",
+      "Non-interactive config helpers (get/set/patch/unset/file/schema/validate). Run without subcommand for guided setup.",
     )
     .addHelpText(
       "after",

@@ -81,6 +81,15 @@ function setSnapshotOnce(snapshot: ConfigFileSnapshot) {
   mockReadConfigFileSnapshot.mockResolvedValueOnce(snapshot);
 }
 
+function writeTempJson5File(prefix: string, value: unknown): string {
+  const pathname = path.join(
+    os.tmpdir(),
+    `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}.json5`,
+  );
+  fs.writeFileSync(pathname, JSON.stringify(value), "utf8");
+  return pathname;
+}
+
 function withRuntimeDefaults(resolved: OpenClawConfig): OpenClawConfig {
   return {
     ...resolved,
@@ -733,7 +742,10 @@ describe("config cli", () => {
       const configCommand = program.commands.find((command) => command.name() === "config");
       const setCommand = configCommand?.commands.find((command) => command.name() === "set");
       const helpText = setCommand?.helpInformation() ?? "";
+      const configHelpText = configCommand?.helpInformation() ?? "";
 
+      expect(configHelpText).toContain("get/set/patch/unset/file/schema/validate");
+      expect(configHelpText).not.toContain("get/set/apply/unset/file/schema/validate");
       expect(helpText).toContain("--strict-json");
       expect(helpText).toContain("--json");
       expect(helpText).toContain("Legacy alias for --strict-json");
@@ -1460,6 +1472,71 @@ describe("config cli", () => {
       expect(
         ((written.channels as Record<string, unknown>).discord as Record<string, unknown>).token,
       ).toEqual({ source: "env", provider: "default", id: "DISCORD_BOT_TOKEN" });
+    });
+
+    it("preserves empty object values in config patch", async () => {
+      const resolved = {
+        agents: {
+          defaults: {
+            models: {
+              "openai/gpt-5.4": { alias: "GPT 5.4" },
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+      setSnapshot(resolved, resolved);
+
+      const pathname = writeTempJson5File("openclaw-config-patch-empty-object", {
+        agents: {
+          defaults: {
+            models: {
+              "openai/gpt-5.5": {},
+            },
+          },
+        },
+      });
+      try {
+        await runConfigCommand(["config", "patch", "--file", pathname]);
+      } finally {
+        fs.rmSync(pathname, { force: true });
+      }
+
+      const written = mockWriteConfigFile.mock.calls[0]?.[0] as Record<string, unknown>;
+      expect(
+        ((written.agents as Record<string, unknown>).defaults as Record<string, unknown>).models,
+      ).toEqual({
+        "openai/gpt-5.4": { alias: "GPT 5.4" },
+        "openai/gpt-5.5": {},
+      });
+    });
+
+    it("treats empty object config patches as recursive merges", async () => {
+      const resolved = {
+        channels: {
+          slack: {
+            enabled: true,
+            mode: "socket",
+          },
+        },
+      } as unknown as OpenClawConfig;
+      setSnapshot(resolved, resolved);
+
+      const pathname = writeTempJson5File("openclaw-config-patch-empty-merge", {
+        channels: {
+          slack: {},
+        },
+      });
+      try {
+        await runConfigCommand(["config", "patch", "--file", pathname]);
+      } finally {
+        fs.rmSync(pathname, { force: true });
+      }
+
+      const written = mockWriteConfigFile.mock.calls[0]?.[0] as Record<string, unknown>;
+      expect((written.channels as Record<string, unknown>).slack).toEqual({
+        enabled: true,
+        mode: "socket",
+      });
     });
 
     it("dry-runs config patch and resolves changed SecretRefs", async () => {
