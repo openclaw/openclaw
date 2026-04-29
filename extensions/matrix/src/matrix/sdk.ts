@@ -41,6 +41,7 @@ import type {
   MatrixClientEventMap,
   MatrixCryptoBootstrapApi,
   MatrixDeviceVerificationStatusLike,
+  MatrixHomeserverCapabilities,
   MatrixRelationsPage,
   MatrixRawEvent,
   MessageEventContent,
@@ -472,6 +473,7 @@ export class MatrixClient {
       verificationManager: this.verificationManager,
       recoveryKeyStore: this.recoveryKeyStore,
       decryptBridge: this.decryptBridge,
+      getHomeserverCapabilities: () => this.detectHomeserverCapabilities(),
     });
     if (!this.crypto) {
       this.crypto = runtime.createMatrixCryptoFacade({
@@ -865,6 +867,60 @@ export class MatrixClient {
   async setAccountData(eventType: string, content: Record<string, unknown>): Promise<void> {
     await this.client.setAccountData(eventType as never, content as never);
     await this.refreshDmCache().catch(noop);
+  }
+
+  // Probes the homeserver and caches whether it is fronted by Matrix
+  // Authentication Service (MSC3861), so the cross-signing bootstrap path can
+  // distinguish "this UIA stage is satisfiable by the bot" from "only a human
+  // in a browser can satisfy this stage" and emit actionable errors.
+  //
+  // Detection: /_matrix/client/v1/auth_metadata (stable in ESS / Synapse with
+  // MSC3861 enabled) returns 200 with an OAuth issuer when MAS is in play and
+  // 404 otherwise. The older `unstable_features["org.matrix.msc3861"]` flag is
+  // no longer surfaced by Synapse 1.145+/ESS, so we don't rely on it.
+  private homeserverCapabilitiesCache: Promise<MatrixHomeserverCapabilities> | null = null;
+
+  async detectHomeserverCapabilities(): Promise<MatrixHomeserverCapabilities> {
+    if (this.homeserverCapabilitiesCache) {
+      return await this.homeserverCapabilitiesCache;
+    }
+    this.homeserverCapabilitiesCache = (async (): Promise<MatrixHomeserverCapabilities> => {
+      // Route the auth-metadata probe through MatrixAuthedHttpClient so it
+      // honors the same SSRF policy and pinned dispatcher as the rest of
+      // Matrix traffic. A non-MAS homeserver responds 404 here, which
+      // requestJson surfaces as a thrown error — we catch and treat as
+      // "not MAS". The endpoint accepts requests without auth, but
+      // including the bearer header is harmless and keeps the request on
+      // the existing authed transport.
+      try {
+        const body = (await this.httpClient.requestJson({
+          method: "GET",
+          endpoint: "/_matrix/client/v1/auth_metadata",
+          timeoutMs: 5_000,
+        })) as
+          | {
+              issuer?: unknown;
+              account_management_uri?: unknown;
+            }
+          | null
+          | undefined;
+        const msAuthService = typeof body?.issuer === "string" && body.issuer.length > 0;
+        const accountManagementUri =
+          typeof body?.account_management_uri === "string" &&
+          body.account_management_uri.length > 0
+            ? body.account_management_uri
+            : undefined;
+        return { msAuthService, accountManagementUri };
+      } catch (err) {
+        LogService.warn(
+          "MatrixClientLite",
+          "Failed to probe homeserver auth metadata; assuming non-MAS:",
+          err,
+        );
+        return { msAuthService: false };
+      }
+    })();
+    return await this.homeserverCapabilitiesCache;
   }
 
   async resolveRoom(aliasOrRoomId: string): Promise<string | null> {

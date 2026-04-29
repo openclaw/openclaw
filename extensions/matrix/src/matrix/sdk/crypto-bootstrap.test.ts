@@ -1,6 +1,25 @@
 import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { MatrixCryptoBootstrapper, type MatrixCryptoBootstrapperDeps } from "./crypto-bootstrap.js";
-import type { MatrixCryptoBootstrapApi, MatrixRawEvent } from "./types.js";
+import {
+  MatrixCrossSigningResetRequiredError,
+  MatrixUiaUnsupportedStagesError,
+  type MatrixCryptoBootstrapApi,
+  type MatrixRawEvent,
+  type MatrixUiaResponseBody,
+} from "./types.js";
+
+function uiaError(body: MatrixUiaResponseBody): Error & {
+  httpStatus: number;
+  data: MatrixUiaResponseBody;
+} {
+  const err = new Error("Auth required") as Error & {
+    httpStatus: number;
+    data: MatrixUiaResponseBody;
+  };
+  err.httpStatus = 401;
+  err.data = body;
+  return err;
+}
 
 type BootstrapCrossSigningMock = Mock<MatrixCryptoBootstrapApi["bootstrapCrossSigning"]>;
 
@@ -18,6 +37,10 @@ function createBootstrapperDeps() {
     decryptBridge: {
       bindCryptoRetrySignals: vi.fn(),
     },
+    // Default to no MAS — individual MAS-specific tests override.
+    getHomeserverCapabilities: undefined as
+      | undefined
+      | (() => Promise<{ msAuthService?: boolean }>),
   };
 }
 
@@ -385,10 +408,7 @@ describe("MatrixCryptoBootstrapper", () => {
     >(async ({ authUploadDeviceSigningKeys }) => {
       await authUploadDeviceSigningKeys?.(async (authData) => {
         if (authData === null) {
-          throw new Error("need auth");
-        }
-        if (authData.type === "m.login.dummy") {
-          throw new Error("dummy rejected");
+          throw uiaError({ flows: [{ stages: ["m.login.password"] }], session: "sess-1" });
         }
         return undefined;
       });
@@ -407,9 +427,7 @@ describe("MatrixCryptoBootstrapper", () => {
         forceResetCrossSigning: true,
         allowSecretStorageRecreateWithoutRecoveryKey: true,
       }),
-    ).rejects.toThrow(
-      "Matrix cross-signing key upload requires UIA; provide matrix.password for m.login.password fallback",
-    );
+    ).rejects.toThrow(MatrixUiaUnsupportedStagesError);
 
     expect(deps.recoveryKeyStore.bootstrapSecretStorageWithRecoveryKey).not.toHaveBeenCalled();
   });
@@ -522,7 +540,7 @@ describe("MatrixCryptoBootstrapper", () => {
     );
   });
 
-  it("uses password UIA fallback when null and dummy auth fail", async () => {
+  it("uses password UIA fallback when the homeserver requires m.login.password", async () => {
     const bootstrapCrossSigning = vi.fn(async () => {});
     const { bootstrapper, crypto } = createBootstrapperHarness({
       bootstrapCrossSigning,
@@ -552,10 +570,10 @@ describe("MatrixCryptoBootstrapper", () => {
     const result = await authUploadDeviceSigningKeys?.(async (authData) => {
       seenAuthStages.push(authData);
       if (authData === null) {
-        throw new Error("need auth");
-      }
-      if (authData.type === "m.login.dummy") {
-        throw new Error("dummy rejected");
+        throw uiaError({
+          flows: [{ stages: ["m.login.password"] }],
+          session: "sess-pw",
+        });
       }
       if (authData.type === "m.login.password") {
         return "ok";
@@ -566,13 +584,258 @@ describe("MatrixCryptoBootstrapper", () => {
     expect(result).toBe("ok");
     expect(seenAuthStages).toEqual([
       null,
-      { type: "m.login.dummy" },
       {
         type: "m.login.password",
         identifier: { type: "m.id.user", user: "@bot:example.org" },
         password: "super-secret-password", // pragma: allowlist secret
+        session: "sess-pw",
       },
     ]);
+  });
+
+  it("uses dummy UIA stage when advertised even alongside other stages", async () => {
+    const bootstrapCrossSigning = vi.fn(async () => {});
+    const { bootstrapper, crypto } = createBootstrapperHarness({
+      bootstrapCrossSigning,
+      isCrossSigningReady: vi.fn(async () => true),
+      userHasCrossSigningKeys: vi.fn(async () => true),
+      getDeviceVerificationStatus: vi.fn(async () => createVerifiedDeviceStatus()),
+    });
+
+    await bootstrapper.bootstrap(crypto);
+
+    const callback = (bootstrapCrossSigning.mock.calls[0]?.[0] as {
+      authUploadDeviceSigningKeys?: <T>(
+        makeRequest: (authData: Record<string, unknown> | null) => Promise<T>,
+      ) => Promise<T>;
+    } | undefined)?.authUploadDeviceSigningKeys;
+    expect(callback).toBeTypeOf("function");
+
+    const seen: Array<Record<string, unknown> | null> = [];
+    const result = await callback?.(async (authData) => {
+      seen.push(authData);
+      if (authData === null) {
+        throw uiaError({
+          flows: [{ stages: ["m.login.dummy"] }, { stages: ["m.login.password"] }],
+          session: "sess-dummy",
+        });
+      }
+      if (authData.type === "m.login.dummy") {
+        return "ok";
+      }
+      throw new Error("unexpected auth stage");
+    });
+
+    expect(result).toBe("ok");
+    expect(seen).toEqual([null, { type: "m.login.dummy", session: "sess-dummy" }]);
+  });
+
+  it("surfaces MatrixCrossSigningResetRequiredError with the MAS reset URL", async () => {
+    const masUrl = "https://mas.example.org/account/cross_signing_reset?token=abc";
+    const bootstrapCrossSigning = vi.fn<
+      (opts: {
+        authUploadDeviceSigningKeys?: <T>(
+          makeRequest: (authData: Record<string, unknown> | null) => Promise<T>,
+        ) => Promise<T>;
+      }) => Promise<void>
+    >(async ({ authUploadDeviceSigningKeys }) => {
+      await authUploadDeviceSigningKeys?.(async (authData) => {
+        if (authData === null) {
+          throw uiaError({
+            flows: [{ stages: ["org.matrix.cross_signing_reset"] }],
+            session: "sess-mas",
+            params: {
+              "org.matrix.cross_signing_reset": { url: masUrl },
+            },
+          });
+        }
+        return undefined;
+      });
+    });
+    const { bootstrapper, crypto } = createBootstrapperHarness({
+      bootstrapCrossSigning,
+      isCrossSigningReady: vi.fn(async () => true),
+      userHasCrossSigningKeys: vi.fn(async () => true),
+      getDeviceVerificationStatus: vi.fn(async () => createVerifiedDeviceStatus()),
+    });
+
+    let caught: unknown;
+    try {
+      await bootstrapper.bootstrap(crypto, {
+        strict: true,
+        forceResetCrossSigning: true,
+      });
+    } catch (err) {
+      caught = err;
+    }
+
+    expect(caught).toBeInstanceOf(MatrixCrossSigningResetRequiredError);
+    const resetErr = caught as MatrixCrossSigningResetRequiredError;
+    expect(resetErr.resetUrl).toBe(masUrl);
+    expect(resetErr.session).toBe("sess-mas");
+    expect(resetErr.stages).toContain("org.matrix.cross_signing_reset");
+    expect(resetErr.message).toContain(masUrl);
+  });
+
+  it("attempts forced reset on MAS so a freshly approved reset can land within the MAS window", async () => {
+    // The bot does not know whether the operator has just approved the
+    // org.matrix.cross_signing_reset action in MAS. The only way to find out
+    // is to attempt the upload. When approval is current the upload returns
+    // 200; when it is not, Synapse returns 401 with the MAS reset stage and
+    // the UIA callback rethrows MatrixCrossSigningResetRequiredError. Either
+    // way the bot must call bootstrapCrossSigning rather than short-circuit.
+    const masResetUrl = "https://mas.example.org/account/?action=org.matrix.cross_signing_reset";
+    const bootstrapCrossSigning = vi.fn<
+      (opts: {
+        authUploadDeviceSigningKeys?: <T>(
+          makeRequest: (authData: Record<string, unknown> | null) => Promise<T>,
+        ) => Promise<T>;
+      }) => Promise<void>
+    >(async ({ authUploadDeviceSigningKeys }) => {
+      await authUploadDeviceSigningKeys?.(async (authData) => {
+        if (authData === null) {
+          throw uiaError({
+            flows: [{ stages: ["org.matrix.cross_signing_reset"] }],
+            session: "sess-mas-not-approved",
+            params: { "org.matrix.cross_signing_reset": { url: masResetUrl } },
+          });
+        }
+        return undefined;
+      });
+    });
+    const getHomeserverCapabilities = vi.fn(async () => ({
+      msAuthService: true,
+      accountManagementUri: "https://mas.example.org/account/",
+    }));
+    const { bootstrapper, crypto } = createBootstrapperHarness(
+      {
+        bootstrapCrossSigning,
+        userHasCrossSigningKeys: vi.fn(async () => true),
+        isCrossSigningReady: vi.fn(async () => true),
+        getDeviceVerificationStatus: vi.fn(async () => createVerifiedDeviceStatus()),
+      },
+      { getHomeserverCapabilities },
+    );
+
+    let caught: unknown;
+    try {
+      await bootstrapper.bootstrap(crypto, {
+        strict: true,
+        forceResetCrossSigning: true,
+      });
+    } catch (err) {
+      caught = err;
+    }
+
+    expect(caught).toBeInstanceOf(MatrixCrossSigningResetRequiredError);
+    expect((caught as MatrixCrossSigningResetRequiredError).resetUrl).toBe(masResetUrl);
+    // Did attempt the upload, because we cannot tell from outside whether
+    // MAS approval is current.
+    expect(bootstrapCrossSigning).toHaveBeenCalled();
+  });
+
+  it("allows MSC3967 first-publish on MAS when the user has no master key yet", async () => {
+    const bootstrapCrossSigning = vi.fn<
+      (opts: {
+        authUploadDeviceSigningKeys?: <T>(
+          makeRequest: (authData: Record<string, unknown> | null) => Promise<T>,
+        ) => Promise<T>;
+      }) => Promise<void>
+    >(async ({ authUploadDeviceSigningKeys }) => {
+      const result = await authUploadDeviceSigningKeys?.(async (authData) => {
+        // MSC3967: server accepts the first upload with no auth.
+        return authData === null ? "ok" : "fail";
+      });
+      expect(result).toBe("ok");
+    });
+    const userHasCrossSigningKeys = vi
+      .fn<() => Promise<boolean>>()
+      .mockResolvedValueOnce(false) // initial probe — no server master key yet
+      .mockResolvedValue(true); // after upload — keys are now published
+    const getHomeserverCapabilities = vi.fn(async () => ({ msAuthService: true }));
+    const { bootstrapper, crypto } = createBootstrapperHarness(
+      {
+        bootstrapCrossSigning,
+        userHasCrossSigningKeys,
+        isCrossSigningReady: vi.fn(async () => true),
+        getDeviceVerificationStatus: vi.fn(async () => createVerifiedDeviceStatus()),
+      },
+      { getHomeserverCapabilities },
+    );
+
+    const result = await bootstrapper.bootstrap(crypto, {
+      strict: true,
+      forceResetCrossSigning: true,
+    });
+
+    expect(result.crossSigningPublished).toBe(true);
+    expect(bootstrapCrossSigning).toHaveBeenCalled();
+  });
+
+  it("falls through to a reset upload after an import-key mismatch on MAS, surfacing the MAS URL on 401", async () => {
+    // First-pass import fails (local secret-storage private key doesn't match
+    // the server master pubkey). The bootstrap then falls through to a
+    // setupNewCrossSigning upload — the same upload that, *post* MAS
+    // approval, would land cross-signing successfully. Without approval, the
+    // UIA callback turns Synapse's 401 into MatrixCrossSigningResetRequiredError
+    // carrying the MAS reset URL constructed from the cached MSC2965
+    // accountManagementUri.
+    const bootstrapCrossSigning = vi
+      .fn<
+        (opts: {
+          setupNewCrossSigning?: boolean;
+          authUploadDeviceSigningKeys?: <T>(
+            makeRequest: (authData: Record<string, unknown> | null) => Promise<T>,
+          ) => Promise<T>;
+        }) => Promise<void>
+      >()
+      .mockImplementationOnce(async () => {
+        throw new Error(
+          "Error while importing m.cross_signing.master: The public key of the imported private key doesn't match the public key that was uploaded to the server",
+        );
+      })
+      .mockImplementationOnce(async ({ authUploadDeviceSigningKeys }) => {
+        await authUploadDeviceSigningKeys?.(async (authData) => {
+          if (authData === null) {
+            throw uiaError({
+              flows: [{ stages: ["org.matrix.cross_signing_reset"] }],
+              session: "sess-mas",
+            });
+          }
+          return undefined;
+        });
+      });
+    const getHomeserverCapabilities = vi.fn(async () => ({
+      msAuthService: true,
+      accountManagementUri: "https://auth.example.org/account/",
+    }));
+    const { bootstrapper, crypto } = createBootstrapperHarness(
+      {
+        bootstrapCrossSigning,
+        userHasCrossSigningKeys: vi.fn(async () => true),
+        isCrossSigningReady: vi.fn(async () => false),
+        getDeviceVerificationStatus: vi.fn(async () => createVerifiedDeviceStatus()),
+      },
+      { getHomeserverCapabilities },
+    );
+
+    let caught: unknown;
+    try {
+      await bootstrapper.bootstrap(crypto, { strict: true });
+    } catch (err) {
+      caught = err;
+    }
+
+    expect(caught).toBeInstanceOf(MatrixCrossSigningResetRequiredError);
+    expect((caught as MatrixCrossSigningResetRequiredError).resetUrl).toBe(
+      "https://auth.example.org/account/?action=org.matrix.cross_signing_reset",
+    );
+    // First call was the no-reset attempt; second was the reset upload that hit MAS UIA.
+    expect(bootstrapCrossSigning).toHaveBeenCalledTimes(2);
+    expect(bootstrapCrossSigning).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ setupNewCrossSigning: true }),
+    );
   });
 
   it("resets cross-signing when first bootstrap attempt throws", async () => {
