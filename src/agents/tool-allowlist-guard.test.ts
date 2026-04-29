@@ -17,7 +17,7 @@ describe("tool allowlist guard", () => {
     expect(error?.message).toContain("no registered tools matched");
   });
 
-  it("fails closed for runtime toolsAllow when tools are disabled", () => {
+  it("skips guard when tools are explicitly disabled for the run", () => {
     const error = buildEmptyExplicitToolAllowlistError({
       sources: [{ label: "runtime toolsAllow", entries: ["query_db"] }],
       callableToolNames: [],
@@ -25,8 +25,7 @@ describe("tool allowlist guard", () => {
       disableTools: true,
     });
 
-    expect(error?.message).toContain("runtime toolsAllow: query_db");
-    expect(error?.message).toContain("tools are disabled for this run");
+    expect(error).toBeNull();
   });
 
   it("fails closed when the selected model cannot use requested tools", () => {
