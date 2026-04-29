@@ -49,6 +49,7 @@ async function fetchDiscordApplicationMe(
       "/oauth2/applications/@me",
       normalized,
       createDiscordTimeoutFetch(fetcher, timeoutMs),
+      { retry: { attempts: 1 } },
     );
   } catch {
     return undefined;
