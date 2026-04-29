@@ -130,6 +130,7 @@ export function createFileWriteTool(): AnyAgentTool {
           overwrite,
           createParents,
           expectedSha256,
+          followSymlinks: gate.followSymlinks,
         },
         idempotencyKey: crypto.randomUUID(),
       });

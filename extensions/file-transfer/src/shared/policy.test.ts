@@ -135,6 +135,7 @@ describe("evaluateFilePolicy — allow matching", () => {
       ok: true,
       reason: "matched-allow",
       maxBytes: undefined,
+      followSymlinks: false,
     });
   });
 
@@ -156,6 +157,24 @@ describe("evaluateFilePolicy — allow matching", () => {
     expect(evaluateFilePolicy({ nodeId: "n1", kind: "write", path: "/tmp/out.txt" })).toMatchObject(
       { ok: false, code: "POLICY_DENIED" },
     );
+  });
+
+  it("propagates followSymlinks=false by default and =true when configured", () => {
+    withConfig({
+      n1: { allowReadPaths: ["/tmp/**"] },
+    });
+    expect(evaluateFilePolicy({ nodeId: "n1", kind: "read", path: "/tmp/x" })).toMatchObject({
+      ok: true,
+      followSymlinks: false,
+    });
+
+    withConfig({
+      n2: { allowReadPaths: ["/tmp/**"], followSymlinks: true },
+    });
+    expect(evaluateFilePolicy({ nodeId: "n2", kind: "read", path: "/tmp/x" })).toMatchObject({
+      ok: true,
+      followSymlinks: true,
+    });
   });
 
   it("expands tilde in patterns relative to homedir", () => {

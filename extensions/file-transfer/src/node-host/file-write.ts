@@ -10,6 +10,7 @@ type FileWriteParams = {
   overwrite: boolean;
   createParents: boolean;
   expectedSha256?: string;
+  followSymlinks?: boolean;
 };
 
 type FileWriteSuccess = {
@@ -46,6 +47,7 @@ export async function handleFileWrite(
   const createParents = params?.createParents === true;
   const expectedSha256 =
     typeof params?.expectedSha256 === "string" ? params.expectedSha256 : undefined;
+  const followSymlinks = params?.followSymlinks === true;
 
   // 1. Validate path: must be absolute, non-empty, no NUL byte
   if (!rawPath) {
@@ -106,16 +108,33 @@ export async function handleFileWrite(
     }
   }
 
-  // 4. The lstat-on-final check below catches the case where the target
-  //    itself is a symlink, but it does NOT catch a symlink in a parent
-  //    component (e.g. ~/Downloads/evil → /etc, write to .../evil/passwd).
-  //    The gateway-side post-flight check (in file-write-tool.ts)
-  //    canonicalizes via realpath after the write and re-runs policy
-  //    against that canonical path; an escape through a parent-dir
-  //    symlink surfaces there. The current behavior on a post-flight
-  //    deny is to throw loudly with the canonical path so the operator
-  //    can manually inspect — full rollback requires a node-side
-  //    file.unlink (out of scope; tracked as a follow-up).
+  // 4. Refuse symlink traversal in the parent path. The file may not
+  //    exist yet, so realpath the PARENT and check it matches the
+  //    lexical parent. This catches the case where ~/Downloads/evil is
+  //    a symlink to /etc and the agent asks to write
+  //    ~/Downloads/evil/passwd — the lexical parent doesn't match the
+  //    canonical parent, so we refuse before any write happens.
+  //    The lstat-on-final check below still runs to catch the case
+  //    where the target file itself exists as a symlink.
+  if (!followSymlinks) {
+    let canonicalParent: string;
+    try {
+      canonicalParent = await fs.realpath(parentDir);
+    } catch (e) {
+      // realpath shouldn't fail if we just confirmed parentExists or
+      // mkdir'd it; if it does, the subsequent write will produce a
+      // clearer error.
+      canonicalParent = parentDir;
+      void e;
+    }
+    if (canonicalParent !== parentDir) {
+      return err(
+        "SYMLINK_REDIRECT",
+        `parent ${parentDir} resolves through a symlink to ${canonicalParent}; refusing because followSymlinks=false (set gateway.nodes.fileTransfer.<node>.followSymlinks=true to allow, or update allowWritePaths to the canonical path)`,
+        path.join(canonicalParent, path.basename(targetPath)),
+      );
+    }
+  }
   let overwritten = false;
   try {
     const existingLStat = await fs.lstat(targetPath);

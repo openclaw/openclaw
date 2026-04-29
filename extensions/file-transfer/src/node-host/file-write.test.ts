@@ -8,7 +8,8 @@ import { handleFileWrite } from "./file-write.js";
 let tmpRoot: string;
 
 beforeEach(async () => {
-  tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "file-write-test-"));
+  // realpath: see file-fetch.test.ts for the macOS symlinked-tmpdir reason.
+  tmpRoot = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "file-write-test-")));
 });
 
 afterEach(async () => {
@@ -135,6 +136,51 @@ describe("handleFileWrite — symlink protection", () => {
     expect(r).toMatchObject({ ok: false, code: "SYMLINK_TARGET_DENIED" });
     // The original file must be unchanged.
     expect(await fs.readFile(real, "utf-8")).toBe("untouched");
+  });
+
+  it("refuses to write through a symlink in a parent directory by default", async () => {
+    // realDir is the actual victim; sentinel is a pre-existing file in it.
+    const realDir = path.join(tmpRoot, "real-dir");
+    await fs.mkdir(realDir);
+    const sentinel = path.join(realDir, "sentinel.txt");
+    await fs.writeFile(sentinel, "DO_NOT_TOUCH");
+
+    // /tmpRoot/allowed -> /tmpRoot/real-dir (symlink in a parent segment).
+    const allowed = path.join(tmpRoot, "allowed");
+    await fs.symlink(realDir, allowed);
+
+    // Asking to write to .../allowed/new-file.txt — the lexical parent
+    // (.../allowed) resolves through a symlink to .../real-dir. Refuse.
+    const r = await handleFileWrite({
+      path: path.join(allowed, "new-file.txt"),
+      contentBase64: b64("payload"),
+    });
+    expect(r).toMatchObject({ ok: false, code: "SYMLINK_REDIRECT" });
+    // The error includes the canonical target so the operator can
+    // either update allowWritePaths or set followSymlinks=true.
+    expect(r.ok ? null : r.canonicalPath).toBe(path.join(realDir, "new-file.txt"));
+    // No file was created at the canonical target.
+    await expect(fs.access(path.join(realDir, "new-file.txt"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    // Sentinel must be untouched.
+    expect(await fs.readFile(sentinel, "utf-8")).toBe("DO_NOT_TOUCH");
+  });
+
+  it("follows the parent symlink when followSymlinks=true", async () => {
+    const realDir = path.join(tmpRoot, "real-dir");
+    await fs.mkdir(realDir);
+    const allowed = path.join(tmpRoot, "allowed");
+    await fs.symlink(realDir, allowed);
+
+    const r = await handleFileWrite({
+      path: path.join(allowed, "new-file.txt"),
+      contentBase64: b64("payload"),
+      followSymlinks: true,
+    });
+    expect(r.ok).toBe(true);
+    // The file landed in the canonical (real) directory.
+    expect(await fs.readFile(path.join(realDir, "new-file.txt"), "utf-8")).toBe("payload");
   });
 
   it("refuses to overwrite a directory", async () => {

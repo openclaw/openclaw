@@ -10,6 +10,7 @@ export type DirFetchParams = {
   path?: unknown;
   maxBytes?: unknown;
   includeDotfiles?: unknown;
+  followSymlinks?: unknown;
 };
 
 export type DirFetchOk = {
@@ -26,6 +27,7 @@ export type DirFetchErrCode =
   | "NOT_FOUND"
   | "IS_FILE"
   | "TREE_TOO_LARGE"
+  | "SYMLINK_REDIRECT"
   | "READ_ERROR";
 
 export type DirFetchErr = {
@@ -149,6 +151,7 @@ export async function handleDirFetch(params: DirFetchParams): Promise<DirFetchRe
 
   const maxBytes = clampMaxBytes(params.maxBytes);
   const includeDotfiles = params.includeDotfiles === true;
+  const followSymlinks = params.followSymlinks === true;
 
   let canonical: string;
   try {
@@ -159,6 +162,15 @@ export async function handleDirFetch(params: DirFetchParams): Promise<DirFetchRe
       ok: false,
       code,
       message: code === "NOT_FOUND" ? "directory not found" : `realpath failed: ${String(err)}`,
+    };
+  }
+
+  if (!followSymlinks && canonical !== requestedPath) {
+    return {
+      ok: false,
+      code: "SYMLINK_REDIRECT",
+      message: `path traverses a symlink; refusing because followSymlinks=false (set gateway.nodes.fileTransfer.<node>.followSymlinks=true to allow, or update allowReadPaths to the canonical path)`,
+      canonicalPath: canonical,
     };
   }
 

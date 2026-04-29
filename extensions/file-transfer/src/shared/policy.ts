@@ -15,7 +15,8 @@
 //           "allowReadPaths":   ["~/Screenshots/**", "/tmp/**"],
 //           "allowWritePaths":  ["~/Downloads/**"],
 //           "denyPaths":        ["**/.ssh/**", "**/.aws/**"],
-//           "maxBytes": 16777216
+//           "maxBytes":         16777216,
+//           "followSymlinks":   false
 //         },
 //         "*": { "ask": "on-miss" }
 //       }
@@ -30,6 +31,15 @@
 // `denyPaths` always wins, even in `ask: always`.
 // `allow-always` from the prompt appends the path back into allowReadPaths /
 // allowWritePaths via mutateConfigFile.
+//
+// `followSymlinks` (default false): if false, the node-side handler
+// realpaths the requested path (or its parent for new-file writes) BEFORE
+// any I/O, and refuses with SYMLINK_REDIRECT if it differs from the
+// requested path. This stops a symlink in user-controlled territory
+// (e.g. ~/Downloads/evil → /etc) from redirecting an allowed-looking path
+// to a disallowed canonical location. Set to true to opt back into the
+// looser "follow + post-flight check" behavior, e.g. on macOS where
+// /var → /private/var trips the check for /var/folders paths.
 
 import os from "node:os";
 import path from "node:path";
@@ -41,8 +51,14 @@ export type FilePolicyKind = "read" | "write";
 export type FilePolicyAskMode = "off" | "on-miss" | "always";
 
 export type FilePolicyDecision =
-  | { ok: true; reason: "matched-allow"; maxBytes?: number }
-  | { ok: true; reason: "ask-always"; askMode: FilePolicyAskMode; maxBytes?: number }
+  | { ok: true; reason: "matched-allow"; maxBytes?: number; followSymlinks: boolean }
+  | {
+      ok: true;
+      reason: "ask-always";
+      askMode: FilePolicyAskMode;
+      maxBytes?: number;
+      followSymlinks: boolean;
+    }
   | {
       ok: false;
       code: "NO_POLICY" | "POLICY_DENIED";
@@ -57,6 +73,7 @@ type NodeFilePolicyConfig = {
   allowWritePaths?: string[];
   denyPaths?: string[];
   maxBytes?: number;
+  followSymlinks?: boolean;
 };
 
 type FilePolicyConfig = Record<string, NodeFilePolicyConfig>;
@@ -216,10 +233,11 @@ export function evaluateFilePolicy(input: {
     typeof nodeConfig.maxBytes === "number" && Number.isFinite(nodeConfig.maxBytes)
       ? Math.max(1, Math.floor(nodeConfig.maxBytes))
       : undefined;
+  const followSymlinks = nodeConfig.followSymlinks === true;
 
   // 2. ask=always: prompt every time even if matched.
   if (askMode === "always") {
-    return { ok: true, reason: "ask-always", askMode, maxBytes };
+    return { ok: true, reason: "ask-always", askMode, maxBytes, followSymlinks };
   }
 
   // 3. Match against allow list for this kind.
@@ -229,7 +247,7 @@ export function evaluateFilePolicy(input: {
       : normalizeGlobs(nodeConfig.allowWritePaths);
 
   if (allowPatterns.length > 0 && matchesAny(input.path, allowPatterns)) {
-    return { ok: true, reason: "matched-allow", maxBytes };
+    return { ok: true, reason: "matched-allow", maxBytes, followSymlinks };
   }
 
   // 4. No allow match. Either askable on miss or hard-deny.

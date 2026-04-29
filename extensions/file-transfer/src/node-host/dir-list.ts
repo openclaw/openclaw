@@ -9,6 +9,7 @@ export type DirListParams = {
   path?: unknown;
   pageToken?: unknown;
   maxEntries?: unknown;
+  followSymlinks?: unknown;
 };
 
 export type DirListEntry = {
@@ -33,6 +34,7 @@ export type DirListErrCode =
   | "NOT_FOUND"
   | "PERMISSION_DENIED"
   | "IS_FILE"
+  | "SYMLINK_REDIRECT"
   | "READ_ERROR";
 
 export type DirListErr = {
@@ -80,6 +82,8 @@ export async function handleDirList(params: DirListParams): Promise<DirListResul
       ? Math.max(0, Number.parseInt(params.pageToken, 10) || 0)
       : 0;
 
+  const followSymlinks = params.followSymlinks === true;
+
   let canonical: string;
   try {
     canonical = await fs.realpath(requestedPath);
@@ -89,6 +93,15 @@ export async function handleDirList(params: DirListParams): Promise<DirListResul
       ok: false,
       code,
       message: code === "NOT_FOUND" ? "path not found" : `realpath failed: ${String(err)}`,
+    };
+  }
+
+  if (!followSymlinks && canonical !== requestedPath) {
+    return {
+      ok: false,
+      code: "SYMLINK_REDIRECT",
+      message: `path traverses a symlink; refusing because followSymlinks=false (set gateway.nodes.fileTransfer.<node>.followSymlinks=true to allow, or update allowReadPaths to the canonical path)`,
+      canonicalPath: canonical,
     };
   }
 

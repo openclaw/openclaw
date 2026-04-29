@@ -99,6 +99,7 @@ export function createDirListTool(): AnyAgentTool {
           path: dirPath,
           pageToken,
           maxEntries,
+          followSymlinks: gate.followSymlinks,
         },
         idempotencyKey: crypto.randomUUID(),
       });

@@ -11,7 +11,8 @@ import {
 let tmpRoot: string;
 
 beforeEach(async () => {
-  tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "dir-list-test-"));
+  // realpath: see file-fetch.test.ts for the macOS symlinked-tmpdir reason.
+  tmpRoot = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "dir-list-test-")));
 });
 
 afterEach(async () => {

@@ -12,7 +12,12 @@ import {
 let tmpRoot: string;
 
 beforeEach(async () => {
-  tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "file-fetch-test-"));
+  // realpath the mkdtemp result — on macOS /tmp/foo and /var/folders/... are
+  // symlinks to /private/{tmp,var/folders}, and the new SYMLINK_REDIRECT
+  // default would otherwise refuse every test path. Tests want to exercise
+  // the happy path with canonical paths; symlink-specific assertions create
+  // explicit symlinks inside tmpRoot.
+  tmpRoot = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "file-fetch-test-")));
 });
 
 afterEach(async () => {
@@ -134,19 +139,30 @@ describe("handleFileFetch — size enforcement", () => {
   });
 });
 
-describe("handleFileFetch — symlink canonicalization", () => {
-  it("returns the canonical (realpath) target path, not the symlink path", async () => {
+describe("handleFileFetch — symlink handling", () => {
+  it("refuses to follow a symlink by default (SYMLINK_REDIRECT)", async () => {
     const real = path.join(tmpRoot, "real.txt");
     const link = path.join(tmpRoot, "link.txt");
     await fs.writeFile(real, "data");
     await fs.symlink(real, link);
 
     const r = await handleFileFetch({ path: link });
+    expect(r).toMatchObject({ ok: false, code: "SYMLINK_REDIRECT" });
+    // Caller learns the canonical target so the operator can update the
+    // allowlist or set followSymlinks=true.
+    expect(r.ok ? null : r.canonicalPath).toBe(real);
+  });
+
+  it("follows symlinks and returns the canonical path when followSymlinks=true", async () => {
+    const real = path.join(tmpRoot, "real.txt");
+    const link = path.join(tmpRoot, "link.txt");
+    await fs.writeFile(real, "data");
+    await fs.symlink(real, link);
+
+    const r = await handleFileFetch({ path: link, followSymlinks: true });
     if (!r.ok) {
       throw new Error(`expected ok, got ${r.code}`);
     }
-    // Both inputs canonicalize through the OS; just compare basenames + that
-    // canonical resolution happened (path doesn't end with the symlink name).
     expect(path.basename(r.path)).toBe("real.txt");
   });
 });

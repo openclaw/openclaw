@@ -10,6 +10,7 @@ export const FILE_FETCH_DEFAULT_MAX_BYTES = 8 * 1024 * 1024;
 export type FileFetchParams = {
   path?: unknown;
   maxBytes?: unknown;
+  followSymlinks?: unknown;
 };
 
 export type FileFetchOk = {
@@ -28,6 +29,7 @@ export type FileFetchErrCode =
   | "IS_DIRECTORY"
   | "FILE_TOO_LARGE"
   | "PATH_TRAVERSAL"
+  | "SYMLINK_REDIRECT"
   | "READ_ERROR";
 
 export type FileFetchErr = {
@@ -92,6 +94,7 @@ export async function handleFileFetch(params: FileFetchParams): Promise<FileFetc
   }
 
   const maxBytes = clampMaxBytes(params.maxBytes);
+  const followSymlinks = params.followSymlinks === true;
 
   let canonical: string;
   try {
@@ -102,6 +105,21 @@ export async function handleFileFetch(params: FileFetchParams): Promise<FileFetc
       ok: false,
       code,
       message: code === "NOT_FOUND" ? "file not found" : `realpath failed: ${String(err)}`,
+    };
+  }
+
+  // Refuse to follow symlinks anywhere in the path unless the operator
+  // has explicitly opted in. A symlink in user-controlled territory
+  // (e.g. ~/Downloads/evil → /etc) could redirect an allowed-looking
+  // request to a disallowed canonical target. The error includes the
+  // canonical path so the operator can either update their allowlist
+  // to the canonical form or set followSymlinks=true on this node.
+  if (!followSymlinks && canonical !== requestedPath) {
+    return {
+      ok: false,
+      code: "SYMLINK_REDIRECT",
+      message: `path traverses a symlink; refusing because followSymlinks=false (set gateway.nodes.fileTransfer.<node>.followSymlinks=true to allow, or update allowReadPaths to the canonical path)`,
+      canonicalPath: canonical,
     };
   }
 

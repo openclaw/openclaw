@@ -98,6 +98,7 @@ export function createFileFetchTool(): AnyAgentTool {
         params: {
           path: filePath,
           maxBytes: effectiveMaxBytes,
+          followSymlinks: gate.followSymlinks,
         },
         idempotencyKey: crypto.randomUUID(),
       });

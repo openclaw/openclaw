@@ -8,7 +8,8 @@ import { handleDirFetch } from "./dir-fetch.js";
 let tmpRoot: string;
 
 beforeEach(async () => {
-  tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "dir-fetch-test-"));
+  // realpath: see file-fetch.test.ts for the macOS symlinked-tmpdir reason.
+  tmpRoot = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "dir-fetch-test-")));
 });
 
 afterEach(async () => {

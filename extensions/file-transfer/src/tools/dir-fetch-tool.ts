@@ -428,6 +428,7 @@ export function createDirFetchTool(): AnyAgentTool {
           path: dirPath,
           maxBytes: effectiveMaxBytes,
           includeDotfiles,
+          followSymlinks: gate.followSymlinks,
         },
         idempotencyKey: crypto.randomUUID(),
       });

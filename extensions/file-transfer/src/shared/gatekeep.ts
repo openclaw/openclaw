@@ -7,7 +7,9 @@ import { appendFileTransferAudit, type FileTransferAuditOp } from "./audit.js";
 import type { GatewayCallOptions } from "./params.js";
 import { evaluateFilePolicy, persistAllowAlways, type FilePolicyKind } from "./policy.js";
 
-export type GatekeepOutcome = { ok: true; maxBytes?: number } | { ok: false; throwMessage: string };
+export type GatekeepOutcome =
+  | { ok: true; maxBytes?: number; followSymlinks: boolean }
+  | { ok: false; throwMessage: string };
 
 /**
  * Single-call entry point used by every tool's execute() before it
@@ -42,7 +44,11 @@ export async function gatekeep(input: {
 
   // Silent allow path.
   if (decision.ok && decision.reason === "matched-allow") {
-    return { ok: true, maxBytes: decision.maxBytes };
+    return {
+      ok: true,
+      maxBytes: decision.maxBytes,
+      followSymlinks: decision.followSymlinks,
+    };
   }
 
   // ask=always: prompt even on a match.
@@ -80,6 +86,16 @@ export async function gatekeep(input: {
       };
     }
 
+    // followSymlinks comes from the policy entry that matched (which is
+    // the same entry whether we got an ask-always allow or an on-miss
+    // ask). Default false if the operator hasn't set it.
+    const followSymlinks = decision.ok ? decision.followSymlinks : false;
+    const sharedAllowResult = {
+      ok: true as const,
+      maxBytes: decision.ok ? decision.maxBytes : undefined,
+      followSymlinks,
+    };
+
     if (approval.decision === "allow-once") {
       await appendFileTransferAudit({
         op: input.op,
@@ -89,10 +105,7 @@ export async function gatekeep(input: {
         decision: "allowed:once",
         durationMs: Date.now() - input.startedAt,
       });
-      return {
-        ok: true,
-        maxBytes: decision.ok ? decision.maxBytes : undefined,
-      };
+      return sharedAllowResult;
     }
 
     if (approval.decision === "allow-always") {
@@ -115,10 +128,7 @@ export async function gatekeep(input: {
           reason: `persist failed: ${String(e)}`,
           durationMs: Date.now() - input.startedAt,
         });
-        return {
-          ok: true,
-          maxBytes: decision.ok ? decision.maxBytes : undefined,
-        };
+        return sharedAllowResult;
       }
       await appendFileTransferAudit({
         op: input.op,
@@ -128,10 +138,7 @@ export async function gatekeep(input: {
         decision: "allowed:always",
         durationMs: Date.now() - input.startedAt,
       });
-      return {
-        ok: true,
-        maxBytes: decision.ok ? decision.maxBytes : undefined,
-      };
+      return sharedAllowResult;
     }
 
     // null decision: no operator available, treat as deny.
@@ -169,5 +176,5 @@ export async function gatekeep(input: {
   }
 
   // Shouldn't reach here.
-  return { ok: true, maxBytes: undefined };
+  return { ok: true, maxBytes: undefined, followSymlinks: false };
 }
