@@ -6,6 +6,7 @@ import {
   resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
 import {
+  listAgentIds,
   resolveAgentConfig,
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
@@ -251,6 +252,12 @@ function resolveHeartbeatAgents(cfg: OpenClawConfig): HeartbeatAgent[] {
         return { agentId: id, heartbeat: resolveHeartbeatConfig(cfg, id) };
       })
       .filter((entry) => entry.agentId);
+  }
+  if (cfg.agents?.defaults?.heartbeat) {
+    return listAgentIds(cfg).map((agentId) => ({
+      agentId,
+      heartbeat: resolveHeartbeatConfig(cfg, agentId),
+    }));
   }
   const fallbackId = resolveDefaultAgentId(cfg);
   return [{ agentId: fallbackId, heartbeat: resolveHeartbeatConfig(cfg, fallbackId) }];
@@ -717,12 +724,7 @@ function stripHeartbeatTasksBlock(content: string): string {
         continue;
       }
       const isIndented = /^[\s]/.test(line);
-      const isTaskListItem = trimmed.startsWith("-");
-      const isTaskField =
-        trimmed.startsWith("interval:") ||
-        trimmed.startsWith("prompt:") ||
-        trimmed.startsWith("name:");
-      if (isIndented || isTaskListItem || isTaskField) {
+      if (isIndented || trimmed.startsWith("- name:")) {
         continue;
       }
       inTasksBlock = false;
