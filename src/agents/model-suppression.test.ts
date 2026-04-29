@@ -1,19 +1,23 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
-  resolveManifestBuiltInModelSuppression: vi.fn(),
   buildManifestBuiltInModelSuppressionResolver: vi.fn(),
+  resolveManifestBuiltInModelSuppression: vi.fn(),
 }));
 
 vi.mock("../plugins/manifest-model-suppression.js", () => ({
-  resolveManifestBuiltInModelSuppression: mocks.resolveManifestBuiltInModelSuppression,
   buildManifestBuiltInModelSuppressionResolver: mocks.buildManifestBuiltInModelSuppressionResolver,
+  resolveManifestBuiltInModelSuppression: mocks.resolveManifestBuiltInModelSuppression,
 }));
 
-import { buildShouldSuppressBuiltInModel, shouldSuppressBuiltInModel } from "./model-suppression.js";
+import {
+  buildShouldSuppressBuiltInModel,
+  shouldSuppressBuiltInModel,
+} from "./model-suppression.js";
 
 describe("model suppression", () => {
   beforeEach(() => {
+    mocks.buildManifestBuiltInModelSuppressionResolver.mockReset();
     mocks.resolveManifestBuiltInModelSuppression.mockReset();
   });
 
@@ -51,18 +55,42 @@ describe("model suppression", () => {
       mocks.buildManifestBuiltInModelSuppressionResolver.mockReset();
     });
 
-    it("normalizes provider aliases before checking suppressions", () => {
-      const resolverMock = vi.fn().mockReturnValue({ suppress: true });
-      mocks.buildManifestBuiltInModelSuppressionResolver.mockReturnValueOnce(resolverMock);
+    it("creates a reusable manifest resolver with normalized provider and model ids", () => {
+      const resolver = vi
+        .fn()
+        .mockReturnValueOnce({ suppress: true, errorMessage: "manifest suppression" })
+        .mockReturnValueOnce(undefined);
+      const config = {};
+      mocks.buildManifestBuiltInModelSuppressionResolver.mockReturnValueOnce(resolver);
 
-      const predicate = buildShouldSuppressBuiltInModel({ config: {} });
-      
-      expect(predicate({ provider: "bedrock", id: "anthropic.claude-3-5-sonnet" })).toBe(true);
+      const shouldSuppress = buildShouldSuppressBuiltInModel({ config });
 
-      expect(resolverMock).toHaveBeenCalledOnce();
-      expect(resolverMock).toHaveBeenCalledWith(
-        expect.objectContaining({ provider: "amazon-bedrock", id: "anthropic.claude-3-5-sonnet" })
-      );
+      expect(shouldSuppress({ provider: "bedrock", id: "Claude-3" })).toBe(true);
+      expect(shouldSuppress({ provider: "aws-bedrock", id: "claude-4" })).toBe(false);
+      expect(mocks.buildManifestBuiltInModelSuppressionResolver).toHaveBeenCalledOnce();
+      expect(mocks.buildManifestBuiltInModelSuppressionResolver).toHaveBeenCalledWith({
+        config,
+        env: process.env,
+      });
+      expect(resolver).toHaveBeenNthCalledWith(1, {
+        provider: "amazon-bedrock",
+        id: "claude-3",
+      });
+      expect(resolver).toHaveBeenNthCalledWith(2, {
+        provider: "amazon-bedrock",
+        id: "claude-4",
+      });
+    });
+
+    it("does not call the manifest resolver for empty provider or model ids", () => {
+      const resolver = vi.fn();
+      mocks.buildManifestBuiltInModelSuppressionResolver.mockReturnValueOnce(resolver);
+
+      const shouldSuppress = buildShouldSuppressBuiltInModel({});
+
+      expect(shouldSuppress({ provider: "openai", id: "" })).toBe(false);
+      expect(shouldSuppress({ provider: "", id: "gpt-5.5" })).toBe(false);
+      expect(resolver).not.toHaveBeenCalled();
     });
   });
 });

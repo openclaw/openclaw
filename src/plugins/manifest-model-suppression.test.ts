@@ -114,6 +114,29 @@ describe("manifest model suppression", () => {
     expect(mocks.loadPluginManifestRegistryForPluginRegistry).toHaveBeenCalledTimes(2);
   });
 
+  it("reuses planned manifest suppressions inside a resolver instance", () => {
+    const config = { plugins: { entries: { openai: { enabled: true } } } };
+
+    const resolver = buildManifestBuiltInModelSuppressionResolver({
+      config,
+      env: process.env,
+    });
+
+    expect(
+      resolver({
+        provider: "azure-openai-responses",
+        id: "gpt-5.3-codex-spark",
+      })?.suppress,
+    ).toBe(true);
+    expect(
+      resolver({
+        provider: "azure-openai-responses",
+        id: "gpt-4.1",
+      }),
+    ).toBeUndefined();
+    expect(mocks.loadPluginManifestRegistryForPluginRegistry).toHaveBeenCalledTimes(1);
+  });
+
   it("matches conditional suppressions by base URL host", () => {
     mocks.loadPluginManifestRegistryForPluginRegistry.mockReturnValue({
       diagnostics: [],

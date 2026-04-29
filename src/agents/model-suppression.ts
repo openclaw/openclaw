@@ -72,19 +72,18 @@ export function buildSuppressedBuiltInModelError(params: {
 
 export function buildShouldSuppressBuiltInModel(params: {
   config?: OpenClawConfig;
-}): (input: {
-  provider?: string | null;
-  id?: string | null;
-  baseUrl?: string | null;
-}) => boolean {
+}): (input: { provider?: string | null; id?: string | null; baseUrl?: string | null }) => boolean {
   const resolver = buildManifestBuiltInModelSuppressionResolver({
     config: params.config,
     env: process.env,
   });
 
   return (input) => {
-    return (
-      resolver({ ...input, provider: normalizeProviderId(input.provider ?? "") })?.suppress ?? false
-    );
+    const provider = normalizeProviderId(input.provider ?? "");
+    const id = normalizeLowercaseStringOrEmpty(input.id);
+    if (!provider || !id) {
+      return false;
+    }
+    return resolver({ ...input, provider, id })?.suppress ?? false;
   };
 }
