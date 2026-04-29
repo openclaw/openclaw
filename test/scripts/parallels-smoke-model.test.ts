@@ -14,7 +14,7 @@ describe("Parallels smoke model selection", () => {
       const script = readFileSync(scriptPath, "utf8");
 
       expect(script, scriptPath).toContain(
-        'MODEL_ID="${OPENCLAW_PARALLELS_OPENAI_MODEL:-openai/gpt-5.5}"',
+        'MODEL_ID="${OPENCLAW_PARALLELS_OPENAI_MODEL:-openai/gpt-5.4-mini}"',
       );
       expect(script, scriptPath).toContain("--model <provider/model>");
       expect(script, scriptPath).toContain("MODEL_ID_EXPLICIT=1");
@@ -64,6 +64,14 @@ describe("Parallels smoke model selection", () => {
     expect(script).toContain(
       'TIMEOUT_AGENT_S="${OPENCLAW_PARALLELS_WINDOWS_AGENT_TIMEOUT_S:-1500}"',
     );
+  });
+
+  it("keeps the Windows agent helper secret out of its long-lived command line", () => {
+    const script = readFileSync("scripts/e2e/parallels-windows-smoke.sh", "utf8");
+
+    expect(script).not.toContain("[string]$EnvValue");
+    expect(script).not.toContain("'-EnvValue'");
+    expect(script).toContain("Set-Item -Path ('Env:' + '${env_name_q}')");
   });
 
   it("keeps Windows gateway reachability on a real deadline with start recovery", () => {

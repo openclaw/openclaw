@@ -140,7 +140,7 @@ Options:
   --provider <openai|anthropic|minimax>
                              Provider auth/model lane. Default: openai
   --model <provider/model>    Override the model used for the agent-turn smoke.
-                             Default: openai/gpt-5.5 for the OpenAI lane
+                             Default: openai/gpt-5.4-mini for the OpenAI lane
   --api-key-env <var>        Host env var name for provider API key.
                              Default: OPENAI_API_KEY for openai, ANTHROPIC_API_KEY for anthropic
   --openai-api-key-env <var> Alias for --api-key-env (backward compatible)
@@ -257,7 +257,7 @@ case "$PROVIDER" in
   openai)
     AUTH_CHOICE="openai-api-key"
     AUTH_KEY_FLAG="openai-api-key"
-    [[ "$MODEL_ID_EXPLICIT" -eq 1 ]] || MODEL_ID="${OPENCLAW_PARALLELS_OPENAI_MODEL:-openai/gpt-5.5}"
+    [[ "$MODEL_ID_EXPLICIT" -eq 1 ]] || MODEL_ID="${OPENCLAW_PARALLELS_OPENAI_MODEL:-openai/gpt-5.4-mini}"
     [[ -n "$API_KEY_ENV" ]] || API_KEY_ENV="OPENAI_API_KEY"
     ;;
   anthropic)
@@ -640,14 +640,10 @@ param(
   [string]$StderrPath,
   [string]$OkPath,
   [string]$DonePath,
-  [string]$EnvName,
-  [string]$EnvValue
+  [string]$EnvName
 )
 $ErrorActionPreference = 'Continue'
 try {
-  if ($EnvName -ne '') {
-    Set-Item -Path ('Env:' + $EnvName) -Value $EnvValue
-  }
   $node = Join-Path $env:ProgramFiles 'nodejs\node.exe'
   if (-not (Test-Path $node)) {
     $node = 'node'
@@ -686,6 +682,9 @@ EOF
 \$ok = Join-Path \$env:TEMP '$ok_name'
 Remove-Item \$runner, \$stdout, \$stderr, \$done, \$ok -Force -ErrorAction SilentlyContinue
 curl.exe -fsSL '${runner_url_q}' -o \$runner
+if ('${env_name_q}' -ne '') {
+  Set-Item -Path ('Env:' + '${env_name_q}') -Value '${env_value_q}'
+}
 Start-Process powershell.exe -ArgumentList @(
   '-NoProfile',
   '-ExecutionPolicy',
@@ -701,9 +700,7 @@ Start-Process powershell.exe -ArgumentList @(
   '-DonePath',
   \$done,
   '-EnvName',
-  '${env_name_q}',
-  '-EnvValue',
-  '${env_value_q}'
+  '${env_name_q}'
 ) -WindowStyle Hidden | Out-Null
 EOF
   )"

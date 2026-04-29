@@ -40,7 +40,7 @@ const providerConfig = {
     extensionId: "openai",
     secretEnv: "OPENAI_API_KEY",
     authChoice: "openai-api-key",
-    model: "openai/gpt-5.5",
+    model: "openai/gpt-5.4-mini",
   },
   anthropic: {
     extensionId: "anthropic",
