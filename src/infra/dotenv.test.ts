@@ -42,6 +42,8 @@ const BUNDLED_TRUST_ROOT_ENV_KEYS = BUNDLED_TRUST_ROOT_ENV_LINES.map(
 );
 
 const WINDOWS_SHELL_TRUST_ROOT_ENV_KEYS = [
+  "ComSpec",
+  "COMSPEC",
   "ProgramFiles",
   "PROGRAMFILES",
   "ProgramW6432",
@@ -322,11 +324,16 @@ describe("loadDotEnv", () => {
         await writeEnvFile(
           path.join(cwdDir, ".env"),
           [
+            "ComSpec=.\\evil-comspec",
+            "COMSPEC=.\\evil-comspec-upper",
             "ProgramFiles=.\\evil-pfiles",
             "PROGRAMFILES=.\\evil-pfiles-upper",
             "ProgramW6432=.\\evil-pw6432",
+            "PROGRAMW6432=.\\evil-pw6432-upper",
             "SystemRoot=.\\fake-root",
+            "SYSTEMROOT=.\\fake-root-upper",
             "windir=.\\fake-windir",
+            "WINDIR=.\\fake-windir-upper",
           ].join("\n"),
         );
 
