@@ -1,7 +1,16 @@
+import fs from "node:fs";
 import { formatCliCommand } from "../cli/command-format.js";
 import { getRuntimeConfig } from "../config/config.js";
-import { resolveCronStorePath } from "../cron/store.js";
+import {
+  loadSessionStore,
+  pruneStaleEntries,
+  resolveAllAgentSessionStoreTargetsSync,
+  updateSessionStore,
+  type SessionEntry,
+} from "../config/sessions.js";
+import { loadCronStoreSync, resolveCronStorePath } from "../cron/store.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { getTaskById, updateTaskNotifyPolicyById } from "../tasks/runtime-internal.js";
 import { cancelDetachedTaskRunById } from "../tasks/task-executor.js";
@@ -44,6 +53,7 @@ const STATUS_PAD = 10;
 const DELIVERY_PAD = 14;
 const ID_PAD = 10;
 const RUN_PAD = 10;
+const SESSION_REGISTRY_RETENTION_MS = 7 * 24 * 60 * 60_000;
 
 const info = theme.info;
 
@@ -60,6 +70,142 @@ function configureTaskMaintenanceFromConfig(): void {
   configureTaskRegistryMaintenance({
     cronStorePath: resolveCronStorePath(cfg.cron?.store),
   });
+}
+
+type SessionRegistryMaintenanceStoreSummary = {
+  agentId: string;
+  storePath: string;
+  beforeCount: number;
+  afterCount: number;
+  pruned: number;
+  preservedRunning: number;
+};
+
+type SessionRegistryMaintenanceSummary = {
+  retentionMs: number;
+  runningCronJobs: number;
+  pruned: number;
+  stores: SessionRegistryMaintenanceStoreSummary[];
+};
+
+function parseCronRunSessionJobId(sessionKey: string): string | undefined {
+  const parsed = parseAgentSessionKey(sessionKey);
+  if (!parsed) {
+    return undefined;
+  }
+  return /^cron:([^:]+):run:[^:]+$/u.exec(parsed.rest)?.[1];
+}
+
+function readRunningCronJobIds(): Set<string> {
+  try {
+    const cronStorePath = resolveCronStorePath(getRuntimeConfig().cron?.store);
+    return new Set(
+      loadCronStoreSync(cronStorePath)
+        .jobs.filter((job) => typeof job.state?.runningAtMs === "number")
+        .map((job) => job.id.toLowerCase()),
+    );
+  } catch {
+    return new Set();
+  }
+}
+
+function buildSessionRegistryPreserveKeys(params: {
+  store: Record<string, SessionEntry>;
+  runningCronJobIds: ReadonlySet<string>;
+}): { preserveKeys: Set<string>; preservedRunning: number } {
+  const preserveKeys = new Set<string>();
+  let preservedRunning = 0;
+  for (const key of Object.keys(params.store)) {
+    const jobId = parseCronRunSessionJobId(key);
+    if (!jobId) {
+      preserveKeys.add(key);
+      continue;
+    }
+    if (params.runningCronJobIds.has(jobId)) {
+      preserveKeys.add(key);
+      preservedRunning += 1;
+    }
+  }
+  return { preserveKeys, preservedRunning };
+}
+
+async function runSessionRegistryMaintenance(params: {
+  apply: boolean;
+}): Promise<SessionRegistryMaintenanceSummary> {
+  const cfg = getRuntimeConfig();
+  const runningCronJobIds = readRunningCronJobIds();
+  const stores: SessionRegistryMaintenanceStoreSummary[] = [];
+  for (const target of resolveAllAgentSessionStoreTargetsSync(cfg)) {
+    if (!fs.existsSync(target.storePath)) {
+      stores.push({
+        agentId: target.agentId,
+        storePath: target.storePath,
+        beforeCount: 0,
+        afterCount: 0,
+        pruned: 0,
+        preservedRunning: 0,
+      });
+      continue;
+    }
+    const beforeStore = loadSessionStore(target.storePath, { skipCache: true });
+    const beforeCount = Object.keys(beforeStore).length;
+    const { preservedRunning } = buildSessionRegistryPreserveKeys({
+      store: beforeStore,
+      runningCronJobIds,
+    });
+    if (params.apply) {
+      const applied = await updateSessionStore(
+        target.storePath,
+        (store) => {
+          const { preserveKeys } = buildSessionRegistryPreserveKeys({
+            store,
+            runningCronJobIds,
+          });
+          const pruned = pruneStaleEntries(store, SESSION_REGISTRY_RETENTION_MS, {
+            log: false,
+            preserveKeys,
+          });
+          return {
+            pruned,
+            afterCount: Object.keys(store).length,
+          };
+        },
+        { skipMaintenance: true },
+      );
+      stores.push({
+        agentId: target.agentId,
+        storePath: target.storePath,
+        beforeCount,
+        afterCount: applied.afterCount,
+        pruned: applied.pruned,
+        preservedRunning,
+      });
+      continue;
+    }
+    const previewStore = structuredClone(beforeStore);
+    const { preserveKeys } = buildSessionRegistryPreserveKeys({
+      store: previewStore,
+      runningCronJobIds,
+    });
+    const pruned = pruneStaleEntries(previewStore, SESSION_REGISTRY_RETENTION_MS, {
+      log: false,
+      preserveKeys,
+    });
+    stores.push({
+      agentId: target.agentId,
+      storePath: target.storePath,
+      beforeCount,
+      afterCount: Object.keys(previewStore).length,
+      pruned,
+      preservedRunning,
+    });
+  }
+  return {
+    retentionMs: SESSION_REGISTRY_RETENTION_MS,
+    runningCronJobs: runningCronJobIds.size,
+    pruned: stores.reduce((total, store) => total + store.pruned, 0),
+    stores,
+  };
 }
 
 function truncate(value: string, maxChars: number) {
@@ -517,6 +663,7 @@ export async function tasksMaintenanceCommand(
   const flowMaintenance = opts.apply
     ? await runTaskFlowRegistryMaintenance()
     : previewTaskFlowRegistryMaintenance();
+  const sessionMaintenance = await runSessionRegistryMaintenance({ apply: Boolean(opts.apply) });
   const summary = getInspectableTaskRegistrySummary();
   const auditAfter = opts.apply ? getInspectableTaskAuditSummary() : auditBefore;
   const flowAuditAfter = opts.apply ? getInspectableTaskFlowAuditSummary() : flowAuditBefore;
@@ -529,6 +676,7 @@ export async function tasksMaintenanceCommand(
           maintenance: {
             tasks: taskMaintenance,
             taskFlows: flowMaintenance,
+            sessions: sessionMaintenance,
           },
           tasks: summary,
           auditBefore: {
@@ -550,6 +698,11 @@ export async function tasksMaintenanceCommand(
   runtime.log(
     info(
       `Tasks maintenance (${opts.apply ? "applied" : "preview"}): tasks ${taskMaintenance.reconciled} reconcile · ${taskMaintenance.recovered} recovered · ${taskMaintenance.cleanupStamped} cleanup stamp · ${taskMaintenance.pruned} prune; task-flows ${flowMaintenance.reconciled} reconcile · ${flowMaintenance.pruned} prune`,
+    ),
+  );
+  runtime.log(
+    info(
+      `Session registry: ${sessionMaintenance.pruned} prune · ${sessionMaintenance.runningCronJobs} running cron jobs`,
     ),
   );
   runtime.log(
