@@ -573,11 +573,9 @@ describe("MatrixVerificationManager", () => {
     expect(verifyImpl).toHaveBeenCalledTimes(1);
 
     let confirmResolved = false;
-    const confirmPromise = manager
-      .confirmVerificationSas(tracked.id)
-      .then(() => {
-        confirmResolved = true;
-      });
+    const confirmPromise = manager.confirmVerificationSas(tracked.id).then(() => {
+      confirmResolved = true;
+    });
 
     // Yield once so confirmSasForSession + trustOwnDeviceAfterSas finish, but
     // verifyPromise stays pending. confirmVerificationSas must still be

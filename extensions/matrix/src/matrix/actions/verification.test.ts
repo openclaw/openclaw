@@ -1049,4 +1049,28 @@ describe("matrix verification actions", () => {
     expect(trustOwnIdentityAfterSelfVerification).not.toHaveBeenCalled();
     expect(summary.isSelfVerification).toBe(false);
   });
+
+  it("confirmMatrixVerificationSas does not trust own identity when self-verification failed", async () => {
+    const crypto = {
+      confirmVerificationSas: vi.fn(async () => ({
+        completed: false,
+        error: "verifier rejected mid-protocol",
+        hasSas: true,
+        id: "verification-self",
+        isSelfVerification: true,
+        phaseName: "started",
+        transactionId: "tx-self",
+      })),
+    };
+    const trustOwnIdentityAfterSelfVerification = vi.fn(async () => {});
+    withStartedActionClientMock.mockImplementation(async (_opts, run) => {
+      return await run({ crypto, trustOwnIdentityAfterSelfVerification });
+    });
+
+    const summary = await confirmMatrixVerificationSas("verification-self");
+
+    expect(crypto.confirmVerificationSas).toHaveBeenCalledWith("verification-self");
+    expect(trustOwnIdentityAfterSelfVerification).not.toHaveBeenCalled();
+    expect(summary.error).toMatch(/verifier rejected mid-protocol/);
+  });
 });

@@ -443,7 +443,7 @@ export async function confirmMatrixVerificationSas(
     // completeMatrixSelfVerification: cross-sign the operator's master key
     // from the bot side so Element X clears the "Verify" prompt without
     // waiting for a passive sync tick. Non-self verifications are a no-op.
-    if (summary.isSelfVerification) {
+    if (summary.isSelfVerification && summary.completed && !summary.error) {
       await client.trustOwnIdentityAfterSelfVerification?.();
     }
     return summary;
