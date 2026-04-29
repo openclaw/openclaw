@@ -13,6 +13,7 @@ import type { Message } from "../internal/discord.js";
 export {
   __resetDiscordChannelInfoCacheForTest,
   resolveDiscordChannelInfo,
+  type DiscordChannelInfoClient,
   resolveDiscordMessageChannelId,
   type DiscordChannelInfo,
 } from "./message-channel-info.js";

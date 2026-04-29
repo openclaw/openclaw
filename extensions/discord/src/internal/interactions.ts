@@ -18,8 +18,6 @@ import {
   editWebhookMessage,
   getWebhookMessage,
 } from "./api.js";
-import type { Client } from "./client.js";
-import { type ComponentData, type Modal } from "./components.js";
 import { OptionsHandler } from "./interaction-options.js";
 import {
   InteractionResponseController,
@@ -29,10 +27,28 @@ import {
 import { extractModalFields, ModalFields } from "./modal-fields.js";
 import { serializePayload, type MessagePayload } from "./payload.js";
 import { assertDiscordInteractionPayload } from "./schemas.js";
-import { channelFactory, Guild, Message, User, type DiscordChannel } from "./structures.js";
+import {
+  channelFactory,
+  Guild,
+  Message,
+  User,
+  type DiscordChannel,
+  type StructureClient,
+} from "./structures.js";
 
 export { OptionsHandler } from "./interaction-options.js";
 export { ModalFields } from "./modal-fields.js";
+
+type InteractionClient = StructureClient & {
+  options: { clientId: string };
+  fetchChannel(id: string): Promise<DiscordChannel>;
+};
+
+type Modal = {
+  serialize: () => unknown;
+};
+
+type ComponentData = Record<string, unknown>;
 
 export type RawInteraction = APIInteraction & {
   token: string;
@@ -71,7 +87,7 @@ function toModalSubmitRawInteraction(rawData: RawInteraction): ModalSubmitRawInt
   return rawData as ModalSubmitRawInteraction;
 }
 
-function readInteractionUser(rawData: RawInteraction, client: Client): User | null {
+function readInteractionUser(rawData: RawInteraction, client: InteractionClient): User | null {
   const directUser = "user" in rawData ? rawData.user : undefined;
   if (directUser && typeof directUser === "object" && "id" in directUser) {
     return new User(client, directUser);
@@ -98,7 +114,7 @@ export class BaseInteraction {
   private readonly response = new InteractionResponseController();
 
   constructor(
-    public client: Client,
+    public client: InteractionClient,
     public rawData: RawInteraction,
   ) {
     this.id = rawData.id;
@@ -214,7 +230,10 @@ export class BaseInteraction {
 
 export class CommandInteraction extends BaseInteraction {
   readonly options: OptionsHandler;
-  constructor(client: Client, rawData: APIApplicationCommandInteraction & RawInteraction) {
+  constructor(
+    client: InteractionClient,
+    rawData: APIApplicationCommandInteraction & RawInteraction,
+  ) {
     super(client, rawData);
     this.options = new OptionsHandler(
       rawData.data.options,
@@ -235,7 +254,7 @@ export class AutocompleteInteraction extends CommandInteraction {
 export class BaseComponentInteraction extends BaseInteraction {
   readonly values: string[];
 
-  constructor(client: Client, rawData: APIMessageComponentInteraction & RawInteraction) {
+  constructor(client: InteractionClient, rawData: APIMessageComponentInteraction & RawInteraction) {
     super(client, rawData);
     this.message =
       rawData.message && typeof rawData.message === "object"
@@ -264,7 +283,7 @@ export class ChannelSelectMenuInteraction extends BaseComponentInteraction {}
 
 export class ModalInteraction extends BaseInteraction {
   readonly fields: ModalFields;
-  constructor(client: Client, rawData: APIModalSubmitInteraction & RawInteraction) {
+  constructor(client: InteractionClient, rawData: APIModalSubmitInteraction & RawInteraction) {
     super(client, rawData);
     this.fields = new ModalFields(
       extractModalFields(rawData.data.components ?? []),
@@ -277,7 +296,7 @@ export class ModalInteraction extends BaseInteraction {
   }
 }
 
-export function createInteraction(client: Client, rawData: RawInteraction) {
+export function createInteraction(client: InteractionClient, rawData: RawInteraction) {
   assertDiscordInteractionPayload(rawData);
   if (rawData.type === InteractionType.ApplicationCommandAutocomplete) {
     return new AutocompleteInteraction(client, toCommandRawInteraction(rawData));

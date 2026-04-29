@@ -26,6 +26,7 @@ import {
 } from "./channel-access.js";
 import {
   resolveDiscordChannelInfo,
+  type DiscordChannelInfoClient,
   resolveDiscordEmbedText,
   resolveDiscordForwardedMessagesTextFromSnapshots,
   resolveDiscordMessageChannelId,
@@ -203,7 +204,7 @@ export function resolveDiscordThreadChannel(params: {
 }
 
 export async function resolveDiscordThreadParentInfo(params: {
-  client: Client;
+  client: DiscordChannelInfoClient;
   threadChannel: DiscordThreadChannel;
   channelInfo: import("./message-utils.js").DiscordChannelInfo | null;
 }): Promise<DiscordThreadParentInfo> {

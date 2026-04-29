@@ -1,6 +1,6 @@
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalStringifiedId } from "openclaw/plugin-sdk/text-runtime";
-import type { ChannelType, Client, Message } from "../internal/discord.js";
+import type { ChannelType, Message } from "../internal/discord.js";
 import { resolveDiscordChannelInfoSafe } from "./channel-access.js";
 
 export type DiscordChannelInfo = {
@@ -9,6 +9,9 @@ export type DiscordChannelInfo = {
   topic?: string;
   parentId?: string;
   ownerId?: string;
+};
+export type DiscordChannelInfoClient = {
+  fetchChannel(channelId: string): Promise<unknown>;
 };
 
 type DiscordMessageWithChannelId = Message & {
@@ -45,7 +48,7 @@ export function resolveDiscordMessageChannelId(params: {
 }
 
 export async function resolveDiscordChannelInfo(
-  client: Client,
+  client: DiscordChannelInfoClient,
   channelId: string,
 ): Promise<DiscordChannelInfo | null> {
   const cached = DISCORD_CHANNEL_INFO_CACHE.get(channelId);
@@ -65,8 +68,13 @@ export async function resolveDiscordChannelInfo(
       return null;
     }
     const channelInfo = resolveDiscordChannelInfoSafe(channel);
+    const rawChannel = channel as { type?: ChannelType };
+    const type = (channelInfo.type as ChannelType | undefined) ?? rawChannel.type;
+    if (type === undefined) {
+      return null;
+    }
     const payload: DiscordChannelInfo = {
-      type: (channelInfo.type as ChannelType | undefined) ?? channel.type,
+      type,
       name: channelInfo.name,
       topic: channelInfo.topic,
       parentId: channelInfo.parentId,
