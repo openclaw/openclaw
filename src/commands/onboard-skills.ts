@@ -47,10 +47,6 @@ function upsertSkillEntry(
   };
 }
 
-function formatCredentialSetupMessage(skill: { name: string; primaryEnv: string }): string {
-  return `Set ${skill.primaryEnv} for ${skill.name}?`;
-}
-
 export async function setupSkills(
   cfg: OpenClawConfig,
   workspaceDir: string,
@@ -220,10 +216,7 @@ export async function setupSkills(
 
   for (const skill of missingCredentialSkills) {
     const wantsKey = await prompter.confirm({
-      message: formatCredentialSetupMessage({
-        name: skill.name,
-        primaryEnv: skill.primaryEnv as string,
-      }),
+      message: `Set ${skill.primaryEnv} for ${skill.name}?`,
       initialValue: false,
     });
     if (!wantsKey) {
