@@ -143,8 +143,8 @@ describe("command palette", () => {
     const dialog = container.querySelector<HTMLDialogElement>("dialog.cmd-palette-overlay");
     expect(dialog).not.toBeNull();
     expect(dialog!.open).toBe(true);
-    expect(dialog!.getAttribute("role")).toBe("dialog");
-    expect(dialog!.getAttribute("aria-modal")).toBe("true");
+    expect(dialog!.hasAttribute("role")).toBe(false);
+    expect(dialog!.hasAttribute("aria-modal")).toBe(false);
     expect(dialog!.getAttribute("aria-labelledby")).toBe("cmd-palette-label");
 
     const label = container.querySelector<HTMLLabelElement>("#cmd-palette-label");
@@ -201,5 +201,25 @@ describe("command palette", () => {
     await nextFrame();
     expect(document.activeElement).toBe(returnTarget);
     returnTarget.remove();
+  });
+
+  it("does not toggle twice when Escape is followed by dialog cancel", async () => {
+    const onToggle = vi.fn();
+    await renderPalette({ onToggle });
+    const dialog = container.querySelector<HTMLDialogElement>("dialog.cmd-palette-overlay");
+    const input = container.querySelector<HTMLInputElement>("#cmd-palette-input");
+    expect(dialog).not.toBeNull();
+    expect(input).not.toBeNull();
+
+    input!.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "Escape",
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    dialog!.dispatchEvent(new Event("cancel", { cancelable: true }));
+
+    expect(onToggle).toHaveBeenCalledTimes(1);
   });
 });

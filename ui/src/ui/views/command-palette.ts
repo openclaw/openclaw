@@ -182,6 +182,9 @@ function selectItem(item: PaletteItem, props: CommandPaletteProps) {
 }
 
 function closePalette(props: CommandPaletteProps) {
+  if (!activeDialog) {
+    return;
+  }
   props.onToggle();
   restoreFocus();
 }
@@ -290,12 +293,14 @@ function syncDialog(el: Element | undefined) {
   }
   if (typeof el.showModal === "function") {
     try {
+      el.removeAttribute("aria-modal");
       el.showModal();
       return;
     } catch {
       // Fall through to the open attribute fallback below.
     }
   }
+  el.setAttribute("aria-modal", "true");
   el.setAttribute("open", "");
 }
 
@@ -324,8 +329,6 @@ export function renderCommandPalette(props: CommandPaletteProps) {
     <dialog
       ${ref(syncDialog)}
       class="cmd-palette-overlay"
-      role="dialog"
-      aria-modal="true"
       aria-labelledby=${paletteDialogLabelId}
       @cancel=${(e: Event) => {
         e.preventDefault();
