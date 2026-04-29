@@ -47,9 +47,19 @@ async function resolveCatalogChannelEntry(raw: string, cfg: OpenClawConfig | nul
   if (!trimmed) {
     return undefined;
   }
-  const { listChannelPluginCatalogEntries } = await import("../../channels/plugins/catalog.js");
-  const workspaceDir = cfg ? resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg)) : undefined;
-  return listChannelPluginCatalogEntries({ workspaceDir }).find((entry) => {
+  const entries = cfg
+    ? await import("../channel-setup/trusted-catalog.js").then(
+        ({ listTrustedChannelPluginCatalogEntries }) =>
+          listTrustedChannelPluginCatalogEntries({
+            cfg,
+            workspaceDir: resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg)),
+          }),
+      )
+    : await import("../../channels/plugins/catalog.js").then(
+        ({ listChannelPluginCatalogEntries }) =>
+          listChannelPluginCatalogEntries({ excludeWorkspace: true }),
+      );
+  return entries.find((entry) => {
     if (normalizeOptionalLowercaseString(entry.id) === trimmed) {
       return true;
     }

@@ -1,8 +1,15 @@
 import { render } from "lit";
 import { describe, expect, it } from "vitest";
 import { t } from "../i18n/index.ts";
-import { renderChatControls } from "./app-render.helpers.ts";
+import { renderChatControls, renderChatMobileToggle } from "./app-render.helpers.ts";
 import type { AppViewState } from "./app-view-state.ts";
+import type { SessionsListResult } from "./types.ts";
+
+type SessionRow = SessionsListResult["sessions"][number];
+
+function row(overrides: Partial<SessionRow> & { key: string }): SessionRow {
+  return { kind: "direct", updatedAt: 0, ...overrides };
+}
 
 function createState(overrides: Partial<AppViewState> = {}) {
   return {
@@ -65,5 +72,36 @@ describe("chat header controls (browser)", () => {
       expect(button.getAttribute("title")).toBe(button.getAttribute("data-tooltip"));
       expect(button.getAttribute("aria-label")).toBe(button.getAttribute("data-tooltip"));
     }
+  });
+
+  it("renders the cron session filter in the mobile dropdown controls", async () => {
+    const state = createState({
+      sessionsResult: {
+        ts: 0,
+        path: "",
+        count: 2,
+        defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
+        sessions: [row({ key: "main" }), row({ key: "agent:main:cron:daily-briefing" })],
+      },
+    });
+    const container = document.createElement("div");
+    render(renderChatMobileToggle(state), container);
+    await Promise.resolve();
+
+    const buttons = Array.from(
+      container.querySelectorAll<HTMLButtonElement>(".chat-controls__thinking .btn--icon"),
+    );
+
+    expect(buttons).toHaveLength(4);
+    const cronButton = buttons.at(-1);
+    expect(cronButton?.classList.contains("active")).toBe(true);
+    expect(cronButton?.getAttribute("aria-pressed")).toBe("true");
+    expect(cronButton?.getAttribute("title")).toBe(
+      t("chat.showCronSessionsHidden", { count: "1" }),
+    );
+
+    cronButton?.click();
+
+    expect(state.sessionsHideCron).toBe(false);
   });
 });

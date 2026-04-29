@@ -103,6 +103,17 @@ function getLaneDepth(state: LaneState): number {
   return state.queue.length + state.activeTaskIds.size;
 }
 
+function createCommandLaneSnapshot(state: LaneState): CommandLaneSnapshot {
+  return {
+    lane: state.lane,
+    queuedCount: state.queue.length,
+    activeCount: state.activeTaskIds.size,
+    maxConcurrent: state.maxConcurrent,
+    draining: state.draining,
+    generation: state.generation,
+  };
+}
+
 function getLaneState(lane: string): LaneState {
   const queueState = getQueueState();
   const existing = queueState.lanes.get(lane);
@@ -309,14 +320,13 @@ export function getCommandLaneSnapshot(lane: string = CommandLane.Main): Command
       generation: 0,
     };
   }
-  return {
-    lane: resolved,
-    queuedCount: state.queue.length,
-    activeCount: state.activeTaskIds.size,
-    maxConcurrent: state.maxConcurrent,
-    draining: state.draining,
-    generation: state.generation,
-  };
+  return createCommandLaneSnapshot(state);
+}
+
+export function getCommandLaneSnapshots(): CommandLaneSnapshot[] {
+  return Array.from(getQueueState().lanes.values(), createCommandLaneSnapshot).toSorted((a, b) =>
+    a.lane.localeCompare(b.lane),
+  );
 }
 
 export function getTotalQueueSize() {

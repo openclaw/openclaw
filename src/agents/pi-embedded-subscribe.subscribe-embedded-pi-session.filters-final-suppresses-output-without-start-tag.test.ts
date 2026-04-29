@@ -165,6 +165,58 @@ describe("subscribeEmbeddedPiSession", () => {
     expect(payloads.map((payload) => payload.delta).join("")).toBe("Answer ends with <fi");
   });
 
+  it("flushes a literal trailing final-tag prefix in text_end block replies", async () => {
+    const { session, emit } = createStubSessionHarness();
+
+    const onBlockReply = vi.fn();
+
+    subscribeEmbeddedPiSession({
+      session,
+      runId: "run",
+      onBlockReply,
+      blockReplyBreak: "text_end",
+    });
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emitAssistantTextDelta({ emit, delta: "Answer ends with <fi" });
+    emitAssistantTextEnd({ emit });
+    await Promise.resolve();
+
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
+    expect(onBlockReply.mock.calls[0]?.[0]?.text).toBe("Answer ends with <fi");
+  });
+
+  it("keeps a trailing final-tag prefix when synchronous message_end drains chunked text_end replies", async () => {
+    const { session, emit } = createStubSessionHarness();
+
+    const onBlockReply = vi.fn();
+
+    subscribeEmbeddedPiSession({
+      session,
+      runId: "run",
+      onBlockReply,
+      blockReplyBreak: "text_end",
+      blockReplyChunking: { minChars: 1, maxChars: 200 },
+    });
+
+    const text = "Answer ends with <fi";
+    const assistantMessage = {
+      role: "assistant",
+      content: [{ type: "text", text }],
+    } as AssistantMessage;
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emitAssistantTextDelta({ emit, delta: text });
+    emitAssistantTextEnd({ emit });
+    emit({ type: "message_end", message: assistantMessage });
+    await Promise.resolve();
+
+    expect(onBlockReply.mock.calls.map((call) => call[0]?.text)).toEqual([
+      "Answer ends with",
+      "<fi",
+    ]);
+  });
+
   it("preserves literal trailing tag-prefix text from message end fallback", () => {
     const { session, emit } = createStubSessionHarness();
 

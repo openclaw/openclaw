@@ -72,6 +72,7 @@ export function createEventHandlers(context: EventHandlerContext) {
   let streamAssembler = new TuiStreamAssembler();
   let lastSessionKey = state.currentSessionKey;
   let pendingHistoryRefresh = false;
+  let reconnectPendingRunId: string | null = null;
 
   const streamingWatchdogMs =
     typeof context.streamingWatchdogMs === "number" &&
@@ -98,6 +99,10 @@ export function createEventHandlers(context: EventHandlerContext) {
     streamingWatchdogRunId = null;
   };
 
+  const pauseStreamingWatchdog = () => {
+    clearStreamingWatchdog();
+  };
+
   const armStreamingWatchdog = (runId: string) => {
     if (streamingWatchdogMs <= 0) {
       return;
@@ -115,6 +120,13 @@ export function createEventHandlers(context: EventHandlerContext) {
       state.activeChatRunId = null;
       state.activityStatus = "idle";
       setActivityStatus("idle");
+      if (reconnectPendingRunId === runId) {
+        reconnectPendingRunId = null;
+        pendingHistoryRefresh = false;
+        void loadHistory?.();
+        tui.requestRender();
+        return;
+      }
       flushPendingHistoryRefreshIfIdle();
       chatLog.addSystem(
         `streaming watchdog: no stream updates for ${Math.round(
@@ -162,6 +174,7 @@ export function createEventHandlers(context: EventHandlerContext) {
     streamAssembler = new TuiStreamAssembler();
     pendingHistoryRefresh = false;
     state.pendingOptimisticUserMessage = false;
+    reconnectPendingRunId = null;
     clearLocalRunIds?.();
     clearLocalBtwRunIds?.();
     btw.clear();
@@ -196,14 +209,11 @@ export function createEventHandlers(context: EventHandlerContext) {
     }
   };
 
-  const clearStaleStreamingRunIfNoTrackedRunRemains = () => {
+  const clearStaleStreamingIfNoTrackedRunRemains = () => {
     const activeRunId = state.activeChatRunId;
-    if (
-      !activeRunId ||
-      sessionRuns.has(activeRunId) ||
-      sessionRuns.size > 0 ||
-      state.activityStatus !== "streaming"
-    ) {
+    // A missing active run is the recovery case; only tracked active runs block cleanup.
+    const activeRunIsStillTracked = activeRunId ? sessionRuns.has(activeRunId) : false;
+    if (state.activityStatus !== "streaming" || activeRunIsStillTracked || sessionRuns.size > 0) {
       return;
     }
     state.activeChatRunId = null;
@@ -211,6 +221,27 @@ export function createEventHandlers(context: EventHandlerContext) {
     setActivityStatus("idle");
     clearStreamingWatchdog();
     flushPendingHistoryRefreshIfIdle();
+  };
+
+  const reconnectStreamingWatchdog = () => {
+    clearStreamingWatchdog();
+    const activeRunId = state.activeChatRunId;
+    if (!activeRunId) {
+      reconnectPendingRunId = null;
+      clearStaleStreamingIfNoTrackedRunRemains();
+      return;
+    }
+    if (!sessionRuns.has(activeRunId)) {
+      reconnectPendingRunId = null;
+      state.activeChatRunId = null;
+      state.activityStatus = "idle";
+      setActivityStatus("idle");
+      flushPendingHistoryRefreshIfIdle();
+      return;
+    }
+    reconnectPendingRunId = activeRunId;
+    setActivityStatus("streaming");
+    armStreamingWatchdog(activeRunId);
   };
 
   const finalizeRun = (params: {
@@ -228,7 +259,7 @@ export function createEventHandlers(context: EventHandlerContext) {
       if (streamingWatchdogRunId === params.runId) {
         clearStreamingWatchdog();
       }
-      clearStaleStreamingRunIfNoTrackedRunRemains();
+      clearStaleStreamingIfNoTrackedRunRemains();
     }
     void refreshSessionInfo?.();
   };
@@ -249,7 +280,6 @@ export function createEventHandlers(context: EventHandlerContext) {
       if (streamingWatchdogRunId === params.runId) {
         clearStreamingWatchdog();
       }
-      clearStaleStreamingRunIfNoTrackedRunRemains();
     }
     void refreshSessionInfo?.();
   };
@@ -324,8 +354,12 @@ export function createEventHandlers(context: EventHandlerContext) {
         return;
       }
       if (evt.state === "final") {
+        clearStaleStreamingIfNoTrackedRunRemains();
         return;
       }
+    }
+    if (reconnectPendingRunId === evt.runId) {
+      reconnectPendingRunId = null;
     }
     noteSessionRun(evt.runId);
     if (!state.activeChatRunId && !isLocalBtwRunId?.(evt.runId)) {
@@ -355,6 +389,7 @@ export function createEventHandlers(context: EventHandlerContext) {
       if (!evt.message && isLocalBtwRun) {
         forgetLocalBtwRunId?.(evt.runId);
         noteFinalizedRun(evt.runId);
+        clearStaleStreamingIfNoTrackedRunRemains();
         tui.requestRender();
         return;
       }
@@ -437,6 +472,9 @@ export function createEventHandlers(context: EventHandlerContext) {
       return;
     }
     if (evt.stream === "tool") {
+      if (isActiveRun) {
+        armStreamingWatchdog(evt.runId);
+      }
       const verbose = state.sessionInfo.verboseLevel ?? "off";
       const allowToolEvents = verbose !== "off";
       const allowToolOutput = verbose === "full";
@@ -476,6 +514,9 @@ export function createEventHandlers(context: EventHandlerContext) {
         return;
       }
       const phase = typeof evt.data?.phase === "string" ? evt.data.phase : "";
+      if (phase && phase !== "end" && phase !== "error") {
+        armStreamingWatchdog(evt.runId);
+      }
       if (phase === "start") {
         setActivityStatus("running");
       }
@@ -518,5 +559,12 @@ export function createEventHandlers(context: EventHandlerContext) {
     clearStreamingWatchdog();
   };
 
-  return { handleChatEvent, handleAgentEvent, handleBtwEvent, dispose };
+  return {
+    handleChatEvent,
+    handleAgentEvent,
+    handleBtwEvent,
+    pauseStreamingWatchdog,
+    reconnectStreamingWatchdog,
+    dispose,
+  };
 }

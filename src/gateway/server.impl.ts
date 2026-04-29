@@ -942,6 +942,7 @@ export async function startGatewayServer(
       rateLimiter: authRateLimiter,
       browserRateLimiter: browserAuthRateLimiter,
       preauthHandshakeTimeoutMs,
+      isStartupPending: () => !startupSidecarsReady,
       gatewayMethods: runtimeState.gatewayMethods,
       events: GATEWAY_EVENTS,
       logGateway: log,

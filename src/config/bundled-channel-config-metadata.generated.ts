@@ -3489,10 +3489,6 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
         label: "Discord Thread Parent Inheritance",
         help: "If true, Discord thread sessions inherit the parent channel transcript (default: false).",
       },
-      "inboundWorker.runTimeoutMs": {
-        label: "Discord Inbound Worker Timeout (ms)",
-        help: "Optional queued Discord inbound worker timeout in ms. This is separate from Carbon listener timeouts; defaults to 1800000 and can be disabled with 0. Set per account via channels.discord.accounts.<id>.inboundWorker.runTimeoutMs.",
-      },
       "eventQueue.listenerTimeout": {
         label: "Discord EventQueue Listener Timeout (ms)",
         help: "Canonical Discord listener timeout control in ms for gateway normalization/enqueue handlers. Default is 120000 in OpenClaw; set per account via channels.discord.accounts.<id>.eventQueue.listenerTimeout.",
@@ -15966,6 +15962,9 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
             },
           ],
         },
+        exposeErrorText: {
+          type: "boolean",
+        },
         heartbeat: {
           type: "object",
           properties: {
@@ -16254,6 +16253,9 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                   },
                 ],
               },
+              exposeErrorText: {
+                type: "boolean",
+              },
               heartbeat: {
                 type: "object",
                 properties: {
@@ -16341,6 +16343,10 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
       configWrites: {
         label: "WhatsApp Config Writes",
         help: "Allow WhatsApp to write config in response to channel events/commands (default: true).",
+      },
+      exposeErrorText: {
+        label: "WhatsApp Error Text",
+        help: "Deliver user-visible agent/provider error text into WhatsApp (default: true). Disable to keep failures quiet on WhatsApp.",
       },
     },
     unsupportedSecretRefSurfacePatterns: [

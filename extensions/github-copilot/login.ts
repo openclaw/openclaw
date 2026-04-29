@@ -117,7 +117,7 @@ async function pollForAccessToken(params: {
 }
 
 export async function githubCopilotLoginCommand(
-  opts: { profileId?: string; yes?: boolean },
+  opts: { profileId?: string; yes?: boolean; agentDir?: string },
   runtime: RuntimeEnv,
 ) {
   if (!process.stdin.isTTY) {
@@ -127,7 +127,7 @@ export async function githubCopilotLoginCommand(
   intro(stylePromptTitle("GitHub Copilot login"));
 
   const profileId = opts.profileId?.trim() || "github-copilot:github";
-  const store = ensureAuthProfileStore(undefined, {
+  const store = ensureAuthProfileStore(opts.agentDir, {
     allowKeychainPrompt: false,
   });
 
@@ -169,6 +169,7 @@ export async function githubCopilotLoginCommand(
       // GitHub device flow token doesn't reliably include expiry here.
       // Leave expires unset; we'll exchange into Copilot token plus expiry later.
     },
+    agentDir: opts.agentDir,
   });
 
   await updateConfig((cfg) =>

@@ -1097,21 +1097,7 @@ if [ "\$gateway_ready" != "1" ]; then
   echo "gateway did not become ready after transport recovery" >&2
   exit 1
 fi
-workspace="\${OPENCLAW_WORKSPACE_DIR:-\$HOME/.openclaw/workspace}"
-mkdir -p "\$workspace/.openclaw"
-cat > "\$workspace/IDENTITY.md" <<'IDENTITY_EOF'
-# Identity
-
-- Name: OpenClaw
-- Purpose: Parallels npm update smoke test assistant.
-IDENTITY_EOF
-cat > "\$workspace/.openclaw/workspace-state.json" <<'STATE_EOF'
-{
-  "version": 1,
-  "setupCompletedAt": "2026-01-01T00:00:00.000Z"
-}
-STATE_EOF
-rm -f "\$workspace/BOOTSTRAP.md"
+$(parallels_bash_seed_workspace_snippet "Parallels npm update smoke test assistant.")
   /opt/homebrew/bin/openclaw models set "$MODEL_ID"
   /opt/homebrew/bin/openclaw config set agents.defaults.skipBootstrap true --strict-json
 /opt/homebrew/bin/openclaw agent --agent main --session-id "parallels-npm-update-macos-transport-recovery-$expected_needle" --message "Reply with exact ASCII text OK only." --json
@@ -1734,21 +1720,7 @@ fi
 if [ "\$gateway_ready" != "1" ]; then
   /opt/homebrew/bin/openclaw gateway status --deep --require-rpc
 fi
-workspace="\${OPENCLAW_WORKSPACE_DIR:-\$HOME/.openclaw/workspace}"
-mkdir -p "\$workspace/.openclaw"
-cat > "\$workspace/IDENTITY.md" <<'IDENTITY_EOF'
-# Identity
-
-- Name: OpenClaw
-- Purpose: Parallels npm update smoke test assistant.
-IDENTITY_EOF
-cat > "\$workspace/.openclaw/workspace-state.json" <<'STATE_EOF'
-{
-  "version": 1,
-  "setupCompletedAt": "2026-01-01T00:00:00.000Z"
-}
-STATE_EOF
-rm -f "\$workspace/BOOTSTRAP.md"
+$(parallels_bash_seed_workspace_snippet "Parallels npm update smoke test assistant.")
 /opt/homebrew/bin/openclaw agent --agent main --session-id parallels-npm-update-macos-$expected_needle --message "Reply with exact ASCII text OK only." --json
 EOF
   macos_desktop_user_exec /bin/bash /tmp/openclaw-main-update.sh
@@ -1838,21 +1810,7 @@ fi
 openclaw update status --json
 openclaw models set "$MODEL_ID"
 openclaw config set agents.defaults.skipBootstrap true --strict-json
-workspace="\${OPENCLAW_WORKSPACE_DIR:-\$HOME/.openclaw/workspace}"
-mkdir -p "\$workspace/.openclaw"
-cat > "\$workspace/IDENTITY.md" <<'IDENTITY_EOF'
-# Identity
-
-- Name: OpenClaw
-- Purpose: Parallels npm update smoke test assistant.
-IDENTITY_EOF
-cat > "\$workspace/.openclaw/workspace-state.json" <<'STATE_EOF'
-{
-  "version": 1,
-  "setupCompletedAt": "2026-01-01T00:00:00.000Z"
-}
-STATE_EOF
-rm -f "\$workspace/BOOTSTRAP.md"
+$(parallels_bash_seed_workspace_snippet "Parallels npm update smoke test assistant.")
 openclaw agent --local --agent main --session-id parallels-npm-update-linux-$expected_needle --message "Reply with exact ASCII text OK only." --json
 EOF
   prlctl exec "$LINUX_VM" /usr/bin/env "$API_KEY_ENV=$API_KEY_VALUE" /bin/bash /tmp/openclaw-main-update.sh

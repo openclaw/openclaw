@@ -40,6 +40,7 @@ import {
   resetConfigPendingChanges,
   runUpdate,
   saveConfig,
+  stageDefaultAgentConfigEntry,
   stageConfigPreset,
   updateConfigFormValue,
   removeConfigFormValue,
@@ -1565,20 +1566,7 @@ export function renderApp(state: AppViewState) {
               onSettingsChange: (next) => state.applySettings(next),
               onPasswordChange: (next) => (state.password = next),
               onSessionKeyChange: (next) => {
-                state.sessionKey = next;
-                state.chatMessage = "";
-                state.resetChatInputHistoryNavigation();
-                state.chatMessages = [];
-                state.chatToolMessages = [];
-                state.chatStream = null;
-                state.chatRunId = null;
-                state.chatQueue = [];
-                state.resetToolStream();
-                state.applySettings({
-                  ...state.settings,
-                  sessionKey: next,
-                  lastActiveSessionKey: next,
-                });
+                switchChatSession(state, next);
               },
               onToggleGatewayTokenVisibility: () => {
                 state.overviewShowGatewayToken = !state.overviewShowGatewayToken;
@@ -2161,10 +2149,7 @@ export function renderApp(state: AppViewState) {
                   updateConfigFormValue(state, basePath, { primary, fallbacks: normalized });
                 },
                 onSetDefault: (agentId) => {
-                  if (!configValue) {
-                    return;
-                  }
-                  updateConfigFormValue(state, ["agents", "defaultId"], agentId);
+                  stageDefaultAgentConfigEntry(state, agentId);
                 },
               }),
             )
