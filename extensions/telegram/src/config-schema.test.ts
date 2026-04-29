@@ -67,7 +67,7 @@ describe("telegram custom commands schema", () => {
   });
 
   it("rejects pollingStallThresholdMs outside the watchdog bounds", () => {
-    expectTelegramConfigIssue({ pollingStallThresholdMs: 29_999 }, "pollingStallThresholdMs");
+    expectTelegramConfigIssue({ pollingStallThresholdMs: 59_999 }, "pollingStallThresholdMs");
     expectTelegramConfigIssue({ pollingStallThresholdMs: 600_001 }, "pollingStallThresholdMs");
   });
 

@@ -23,7 +23,9 @@ const TELEGRAM_POLL_RESTART_POLICY = {
 };
 
 const DEFAULT_POLL_STALL_THRESHOLD_MS = 120_000;
-const MIN_POLL_STALL_THRESHOLD_MS = 30_000;
+// Keep the minimum above grammY's 30s getUpdates long-poll window to avoid
+// watchdog restarts caused by normal long-poll jitter.
+const MIN_POLL_STALL_THRESHOLD_MS = 60_000;
 const MAX_POLL_STALL_THRESHOLD_MS = 600_000;
 const POLL_WATCHDOG_INTERVAL_MS = 30_000;
 const POLL_STOP_GRACE_MS = 15_000;

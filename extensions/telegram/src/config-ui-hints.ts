@@ -95,7 +95,7 @@ export const telegramChannelConfigUiHints = {
   },
   pollingStallThresholdMs: {
     label: "Telegram Polling Stall Threshold (ms)",
-    help: "Milliseconds without completed Telegram getUpdates liveness before the polling watchdog restarts the polling runner. Default: 120000.",
+    help: "Milliseconds without completed Telegram getUpdates liveness before the polling watchdog restarts the polling runner. Default: 120000. Minimum: 60000.",
   },
   silentErrorReplies: {
     label: "Telegram Silent Error Replies",
