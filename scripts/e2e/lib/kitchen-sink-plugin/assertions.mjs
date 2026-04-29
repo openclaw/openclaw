@@ -118,6 +118,11 @@ const expectIncludes = (listValue, expected, field) => {
     throw new Error(`${field} missing ${expected}: ${JSON.stringify(listValue)}`);
   }
 };
+const expectMissing = (listValue, expected, field) => {
+  if (Array.isArray(listValue) && listValue.includes(expected)) {
+    throw new Error(`${field} unexpectedly included ${expected}: ${JSON.stringify(listValue)}`);
+  }
+};
 
 function assertRealPathInside(parentPath, childPath, label) {
   const parentRealPath = fs.realpathSync(parentPath);
@@ -221,11 +226,11 @@ function assertInstalled() {
       webFetchProviderIds: ["kitchen-sink-web-fetch-provider", "web fetch providers"],
       webSearchProviderIds: ["kitchen-sink-web-search-provider", "web search providers"],
       migrationProviderIds: ["kitchen-sink-migration-provider", "migration providers"],
-      agentHarnessIds: ["kitchen-sink-agent-harness", "agent harnesses"],
     };
     for (const [field, [id, label]] of Object.entries(pluginSurfaceIds)) {
       expectIncludes(inspect.plugin?.[field], id, label);
     }
+    expectMissing(inspect.plugin?.agentHarnessIds, "kitchen-sink-agent-harness", "agent harnesses");
     expectIncludes(inspect.services, "kitchen-sink-service", "services");
     expectIncludes(inspect.commands, "kitchen-sink-command", "commands");
     expectIncludes(toolNames, "kitchen-sink-tool", "tools");
@@ -241,11 +246,15 @@ function assertInstalled() {
 
     const expectedErrorMessages = new Set([
       "only bundled plugins can register agent tool result middleware",
+      'agent harness "kitchen-sink-agent-harness" registration missing required runtime methods',
       'channel "kitchen-sink-channel-probe" registration missing required config helpers',
       "cli registration missing explicit commands metadata",
       "only bundled plugins can register Codex app-server extension factories",
+      'compaction provider "kitchen-sink-compaction-provider" registration missing summarize',
+      "context engine registration missing id",
       "http route registration missing or invalid auth: /kitchen-sink/http-route",
       "plugin must own memory slot or declare contracts.memoryEmbeddingProviders for adapter: kitchen-sink-memory-embedding-provider",
+      "memory prompt supplement registration missing builder",
     ]);
     for (const message of errorMessages) {
       if (!expectedErrorMessages.has(message)) {

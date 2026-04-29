@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { MessageChannel } from "node:worker_threads";
 import {
   listAgentIds,
   resolveDefaultAgentId,
@@ -390,6 +391,18 @@ function dispatchAgentRunFromGateway(params: {
         params.context.chatAbortControllers.delete(params.runId);
       }
     });
+}
+
+function yieldAfterAgentAcceptedAck(): Promise<void> {
+  return new Promise((resolve) => {
+    const channel = new MessageChannel();
+    channel.port1.on("message", () => {
+      channel.port1.close();
+      channel.port2.close();
+      resolve();
+    });
+    channel.port2.postMessage(undefined);
+  });
 }
 
 export const agentHandlers: GatewayRequestHandlers = {
@@ -1116,6 +1129,10 @@ export const agentHandlers: GatewayRequestHandlers = {
       },
     });
     respond(true, accepted, undefined, { runId });
+    // Give the accepted frame one event-loop turn to flush before the runner
+    // starts potentially heavy synchronous prompt/context setup. Otherwise a
+    // hot pre-turn path can starve the WebSocket caller until it times out.
+    await yieldAfterAgentAcceptedAck();
 
     let dispatched = false;
     try {

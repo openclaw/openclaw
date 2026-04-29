@@ -2491,6 +2491,42 @@ describe("gateway agent handler chat.abort integration", () => {
     expect((entry?.expiresAtMs ?? 0) - (entry?.startedAtMs ?? 0)).toBeGreaterThan(24 * 60 * 60_000);
   });
 
+  it("yields after the accepted ack before dispatching heavy agent work", async () => {
+    prime();
+    mocks.agentCommand.mockReturnValueOnce(new Promise(() => {}));
+
+    const respond = vi.fn();
+    const runId = "idem-yield-before-dispatch";
+    const pending = invokeAgent(
+      {
+        message: "hi",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        idempotencyKey: runId,
+      },
+      { respond, reqId: runId },
+    );
+
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        runId,
+        status: "accepted",
+      }),
+      undefined,
+      { runId },
+    );
+    expect(mocks.agentCommand).not.toHaveBeenCalled();
+
+    await new Promise((resolve) => setImmediate(resolve));
+    await pending;
+
+    expect(mocks.agentCommand).toHaveBeenCalledTimes(1);
+  });
+
   it("uses the explicit no-timeout agent expiry instead of the chat 24h cap", async () => {
     prime();
     mocks.agentCommand.mockReturnValueOnce(new Promise(() => {}));
