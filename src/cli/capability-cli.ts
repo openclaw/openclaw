@@ -963,7 +963,22 @@ async function runImageDescribe(params: {
             timeoutMs: params.timeoutMs,
           });
       if (!result.text) {
-        throw new Error(`No description returned for image: ${resolvedPath}`);
+        // Provide more helpful error message if provider might not be configured
+        const registry = buildMediaUnderstandingRegistry(undefined, cfg);
+        const imageProviders = [...registry.values()]
+          .filter(p => p.capabilities?.includes("image"));
+        const hasConfiguredImageProvider = imageProviders.some(p =>
+          providerHasGenericConfig({
+            cfg,
+            providerId: p.id,
+            envVars: getProviderEnvVars(p.id, { config: cfg, includeUntrustedWorkspacePlugins: false }),
+          })
+        );
+        throw new Error(
+          hasConfiguredImageProvider
+            ? `No description returned for image: ${resolvedPath}`
+            : "No image-understanding provider available. Configure a provider like openai (OPENAI_API_KEY) first."
+        );
       }
       return {
         path: resolvedPath,
@@ -1001,7 +1016,22 @@ async function runAudioTranscribe(params: {
     prompt: params.prompt,
   });
   if (!result.text) {
-    throw new Error(`No transcript returned for audio: ${path.resolve(params.file)}`);
+    // Provide more helpful error message if provider might not be configured
+    const registry = buildMediaUnderstandingRegistry(undefined, cfg);
+    const audioProviders = [...registry.values()]
+      .filter(p => p.capabilities?.includes("audio"));
+    const hasConfiguredAudioProvider = audioProviders.some(p =>
+      providerHasGenericConfig({
+        cfg,
+        providerId: p.id,
+        envVars: getProviderEnvVars(p.id, { config: cfg, includeUntrustedWorkspacePlugins: false }),
+      })
+    );
+    throw new Error(
+      hasConfiguredAudioProvider
+        ? `No transcript returned for audio: ${path.resolve(params.file)}`
+        : "No audio-transcription provider available. Configure a provider like openai (OPENAI_API_KEY) or deepgram (DEEPGRAM_API_KEY) first."
+    );
   }
   return {
     ok: true,

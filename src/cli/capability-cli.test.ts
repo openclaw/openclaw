@@ -769,6 +769,12 @@ describe("capability cli", () => {
   });
 
   it("fails image describe when no description text is returned", async () => {
+    vi.stubEnv("OPENAI_API_KEY", "test-key");
+    mocks.buildMediaUnderstandingRegistry.mockReturnValueOnce(
+      new Map([
+        ["openai", { id: "openai", capabilities: ["image"] }],
+      ]) as never,
+    );
     mocks.describeImageFile.mockResolvedValueOnce({
       text: undefined,
       provider: undefined,
@@ -783,6 +789,26 @@ describe("capability cli", () => {
     ).rejects.toThrow("exit 1");
     expect(mocks.runtime.error).toHaveBeenCalledWith(
       expect.stringMatching(/No description returned for image/),
+    );
+    vi.unstubAllEnvs();
+  });
+
+  it("fails image describe when no provider configured", async () => {
+    mocks.buildMediaUnderstandingRegistry.mockReturnValueOnce(new Map());
+    mocks.describeImageFile.mockResolvedValueOnce({
+      text: undefined,
+      provider: undefined,
+      model: undefined,
+    } as never);
+
+    await expect(
+      runRegisteredCli({
+        register: registerCapabilityCli as (program: Command) => void,
+        argv: ["capability", "image", "describe", "--file", "photo.jpg", "--json"],
+      }),
+    ).rejects.toThrow("exit 1");
+    expect(mocks.runtime.error).toHaveBeenCalledWith(
+      expect.stringMatching(/No image-understanding provider available/),
     );
   });
 
@@ -1269,6 +1295,12 @@ describe("capability cli", () => {
   });
 
   it("fails audio transcribe when no transcript text is returned", async () => {
+    vi.stubEnv("OPENAI_API_KEY", "test-key");
+    mocks.buildMediaUnderstandingRegistry.mockReturnValueOnce(
+      new Map([
+        ["openai", { id: "openai", capabilities: ["audio"] }],
+      ]) as never,
+    );
     mocks.transcribeAudioFile.mockResolvedValueOnce({ text: undefined } as never);
 
     await expect(
@@ -1280,6 +1312,7 @@ describe("capability cli", () => {
     expect(mocks.runtime.error).toHaveBeenCalledWith(
       expect.stringMatching(/No transcript returned for audio/),
     );
+    vi.unstubAllEnvs();
   });
 
   it("surfaces the underlying transcription failure for audio transcribe", async () => {
@@ -1295,6 +1328,21 @@ describe("capability cli", () => {
     ).rejects.toThrow("exit 1");
     expect(mocks.runtime.error).toHaveBeenCalledWith(
       expect.stringMatching(/Audio transcription response missing text/),
+    );
+  });
+
+  it("fails audio transcribe when no provider configured", async () => {
+    mocks.buildMediaUnderstandingRegistry.mockReturnValueOnce(new Map());
+    mocks.transcribeAudioFile.mockResolvedValueOnce({ text: undefined } as never);
+
+    await expect(
+      runRegisteredCli({
+        register: registerCapabilityCli as (program: Command) => void,
+        argv: ["capability", "audio", "transcribe", "--file", "memo.m4a", "--json"],
+      }),
+    ).rejects.toThrow("exit 1");
+    expect(mocks.runtime.error).toHaveBeenCalledWith(
+      expect.stringMatching(/No audio-transcription provider available/),
     );
   });
 
