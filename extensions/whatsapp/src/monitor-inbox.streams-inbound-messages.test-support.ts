@@ -218,7 +218,7 @@ describe("web monitor inbox", () => {
 
   it("keeps group inbound alive with cached metadata after reconnect-time metadata fetch failures", async () => {
     const groupMetadataCache: NonNullable<InboxMonitorOptions["groupMetadataCache"]> = new Map();
-    const onMessage = vi.fn(async () => {
+    const onMessage = vi.fn(async (_msg: Parameters<InboxOnMessage>[0]) => {
       return;
     });
 
