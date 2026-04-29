@@ -230,6 +230,7 @@ Docs: https://docs.openclaw.ai
 - Gateway/startup: skip inherited workspace startup memory for sandboxed spawned sessions without real-workspace write access, so `/new` no longer preloads host workspace memory into isolated child runs. (#73611) Thanks @drobison00.
 - Agents/tool policy: validate caller group IDs against session or spawned context before applying group-scoped tool policies or persisting gateway group metadata, so forged group IDs cannot unlock more permissive tools. (#73720) Thanks @mmaps.
 - Commands: keep channel-prefixed owner allowlist entries scoped to matching providers so webchat command contexts cannot inherit external channel owners. Thanks @zsxsoft.
+- Auth/device pairing: bound bootstrap handoff token issuance, redemption, and approved pairing baselines to the documented per-role scope allowlist, so bootstrap approvals cannot persistently grant `operator.admin`, `operator.pairing`, or `node.exec` scopes. Thanks @eleqtrizit.
 
 ## 2026.4.27
 
