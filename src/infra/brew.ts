@@ -13,8 +13,6 @@ function isExecutable(filePath: string): boolean {
 
 type BrewResolutionOptions = {
   homeDir?: string;
-  // Kept for injected test environments; Homebrew override vars are ignored.
-  env?: NodeJS.ProcessEnv;
 };
 
 export function resolveBrewPathDirs(opts?: BrewResolutionOptions): string[] {
