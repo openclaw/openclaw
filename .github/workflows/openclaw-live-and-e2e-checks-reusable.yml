@@ -475,6 +475,18 @@ jobs:
           - chunk_id: plugins-runtime-install-d
             label: plugins/runtime install D
             timeout_minutes: 120
+          - chunk_id: plugins-runtime-install-e
+            label: plugins/runtime install E
+            timeout_minutes: 120
+          - chunk_id: plugins-runtime-install-f
+            label: plugins/runtime install F
+            timeout_minutes: 120
+          - chunk_id: plugins-runtime-install-g
+            label: plugins/runtime install G
+            timeout_minutes: 120
+          - chunk_id: plugins-runtime-install-h
+            label: plugins/runtime install H
+            timeout_minutes: 120
           - chunk_id: bundled-channels-core
             label: bundled channels core
             timeout_minutes: 90

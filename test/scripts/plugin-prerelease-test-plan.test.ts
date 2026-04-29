@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { findLaneByName } from "../../scripts/lib/docker-e2e-plan.mjs";
+import { BUNDLED_PLUGIN_INSTALL_UNINSTALL_SHARDS } from "../../scripts/lib/docker-e2e-scenarios.mjs";
 import {
   PLUGIN_PRERELEASE_REQUIRED_SURFACES,
   assertPluginPrereleaseTestPlanComplete,
@@ -46,14 +47,10 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
       "gateway-network",
       "mcp-channels",
       "cron-mcp-cleanup",
-      "bundled-plugin-install-uninstall-0",
-      "bundled-plugin-install-uninstall-1",
-      "bundled-plugin-install-uninstall-2",
-      "bundled-plugin-install-uninstall-3",
-      "bundled-plugin-install-uninstall-4",
-      "bundled-plugin-install-uninstall-5",
-      "bundled-plugin-install-uninstall-6",
-      "bundled-plugin-install-uninstall-7",
+      ...Array.from(
+        { length: BUNDLED_PLUGIN_INSTALL_UNINSTALL_SHARDS },
+        (_, index) => `bundled-plugin-install-uninstall-${index}`,
+      ),
     ]);
 
     for (const lane of plan.dockerLanes) {
