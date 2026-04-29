@@ -438,6 +438,7 @@ const MEMORY_TRIGGERS = [
   /my\s+\w+\s+is|is\s+my/i,
   /i (like|prefer|hate|love|want|need)/i,
   /always|never|important/i,
+  /记住|记下|我(喜欢|偏好|讨厌|爱|想要|需要)|我的.*是|决定|总是|从不|重要/i,
 ];
 
 const PROMPT_INJECTION_PATTERNS = [

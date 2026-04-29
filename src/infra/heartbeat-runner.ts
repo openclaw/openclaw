@@ -75,10 +75,11 @@ import { loadOrCreateDeviceIdentity } from "./device-identity.js";
 import { formatErrorMessage, hasErrnoCode } from "./errors.js";
 import { isWithinActiveHours } from "./heartbeat-active-hours.js";
 import {
-  buildExecEventPrompt,
   buildCronEventPrompt,
+  buildExecEventPrompt,
   isCronSystemEvent,
   isExecCompletionEvent,
+  isRelayableExecCompletionEvent,
 } from "./heartbeat-events-filter.js";
 import { emitHeartbeatEvent, resolveIndicatorType } from "./heartbeat-events.js";
 import { resolveHeartbeatReasonKind } from "./heartbeat-reason.js";
@@ -683,6 +684,7 @@ async function resolveHeartbeatPreflight(params: {
 type HeartbeatPromptResolution = {
   prompt: string | null;
   hasExecCompletion: boolean;
+  hasRelayableExecCompletion: boolean;
   hasCronEvents: boolean;
 };
 
@@ -696,6 +698,40 @@ function appendHeartbeatWorkspacePathHint(prompt: string, workspaceDir: string):
     return prompt;
   }
   return `${prompt}\n${hint}`;
+}
+
+function stripHeartbeatTasksBlock(content: string): string {
+  const lines = content.split(/\r?\n/);
+  const kept: string[] = [];
+  let inTasksBlock = false;
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!inTasksBlock && trimmed === "tasks:") {
+      inTasksBlock = true;
+      continue;
+    }
+
+    if (inTasksBlock) {
+      if (!trimmed) {
+        continue;
+      }
+      const isIndented = /^[\s]/.test(line);
+      const isTaskListItem = trimmed.startsWith("-");
+      const isTaskField =
+        trimmed.startsWith("interval:") ||
+        trimmed.startsWith("prompt:") ||
+        trimmed.startsWith("name:");
+      if (isIndented || isTaskListItem || isTaskField) {
+        continue;
+      }
+      inTasksBlock = false;
+    }
+
+    kept.push(line);
+  }
+
+  return kept.join("\n");
 }
 
 function resolveHeartbeatRunPrompt(params: {
@@ -721,6 +757,8 @@ function resolveHeartbeatRunPrompt(params: {
         .map((event) => event.text)
     : [];
   const hasExecCompletion = execEvents.length > 0;
+  const hasRelayableExecCompletion =
+    params.canRelayToUser && execEvents.some((event) => isRelayableExecCompletionEvent(event));
   const hasCronEvents = cronEvents.length > 0;
 
   if (params.preflight.tasks && params.preflight.tasks.length > 0) {
@@ -742,16 +780,24 @@ ${taskList}
 After completing all due tasks, reply HEARTBEAT_OK.`;
 
       if (params.heartbeatFileContent) {
-        const directives = params.heartbeatFileContent
-          .replace(/^[\s\S]*?^tasks:[\s\S]*?(?=^[^\s]|^$)/m, "")
-          .trim();
+        const directives = stripHeartbeatTasksBlock(params.heartbeatFileContent).trim();
         if (directives) {
           prompt += `\n\nAdditional context from HEARTBEAT.md:\n${directives}`;
         }
       }
-      return { prompt, hasExecCompletion: false, hasCronEvents: false };
+      return {
+        prompt,
+        hasExecCompletion: false,
+        hasRelayableExecCompletion: false,
+        hasCronEvents: false,
+      };
     }
-    return { prompt: null, hasExecCompletion: false, hasCronEvents: false };
+    return {
+      prompt: null,
+      hasExecCompletion: false,
+      hasRelayableExecCompletion: false,
+      hasCronEvents: false,
+    };
   }
 
   const basePrompt = hasExecCompletion
@@ -761,7 +807,7 @@ After completing all due tasks, reply HEARTBEAT_OK.`;
       : resolveHeartbeatPrompt(params.cfg, params.heartbeat);
   const prompt = appendHeartbeatWorkspacePathHint(basePrompt, params.workspaceDir);
 
-  return { prompt, hasExecCompletion, hasCronEvents };
+  return { prompt, hasExecCompletion, hasRelayableExecCompletion, hasCronEvents };
 }
 
 export async function runHeartbeatOnce(opts: {
@@ -899,15 +945,16 @@ export async function runHeartbeatOnce(opts: {
     delivery.channel !== "none" && delivery.to && visibility.showAlerts,
   );
   const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
-  const { prompt, hasExecCompletion, hasCronEvents } = resolveHeartbeatRunPrompt({
-    cfg,
-    heartbeat,
-    preflight,
-    canRelayToUser,
-    workspaceDir,
-    startedAt,
-    heartbeatFileContent: preflight.heartbeatFileContent,
-  });
+  const { prompt, hasExecCompletion, hasRelayableExecCompletion, hasCronEvents } =
+    resolveHeartbeatRunPrompt({
+      cfg,
+      heartbeat,
+      preflight,
+      canRelayToUser,
+      workspaceDir,
+      startedAt,
+      heartbeatFileContent: preflight.heartbeatFileContent,
+    });
 
   // If no tasks are due, skip heartbeat entirely
   if (prompt === null) {
@@ -1170,14 +1217,15 @@ export async function runHeartbeatOnce(opts: {
     // Also, if normalized.text is empty due to token stripping but we have exec completion,
     // fall back to the original reply text.
     const execFallbackText =
-      hasExecCompletion && !normalized.text.trim() && replyPayload.text?.trim()
+      hasRelayableExecCompletion && !normalized.text.trim() && replyPayload.text?.trim()
         ? replyPayload.text.trim()
         : null;
     if (execFallbackText) {
       normalized.text = execFallbackText;
       normalized.shouldSkip = false;
     }
-    const shouldSkipMain = normalized.shouldSkip && !normalized.hasMedia && !hasExecCompletion;
+    const shouldSkipMain =
+      normalized.shouldSkip && !normalized.hasMedia && !hasRelayableExecCompletion;
     if (shouldSkipMain && reasoningPayloads.length === 0) {
       await restoreHeartbeatUpdatedAt({
         storePath,

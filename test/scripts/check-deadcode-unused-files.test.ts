@@ -40,6 +40,25 @@ left-pad: package.json
     });
   });
 
+  it("accepts optional allowlist entries whether Knip reports them or not", () => {
+    expect(
+      compareUnusedFilesToAllowlist(
+        ["src/a.ts", "src/platform.ts"],
+        ["src/a.ts"],
+        ["src/platform.ts"],
+      ),
+    ).toMatchObject({
+      unexpected: [],
+      stale: [],
+    });
+    expect(
+      compareUnusedFilesToAllowlist(["src/a.ts"], ["src/a.ts"], ["src/platform.ts"]),
+    ).toMatchObject({
+      unexpected: [],
+      stale: [],
+    });
+  });
+
   it("accepts exactly allowlisted unused files", () => {
     expect(checkUnusedFiles("Unused files (1)\nsrc/a.ts: src/a.ts\n", ["src/a.ts"])).toMatchObject({
       ok: true,

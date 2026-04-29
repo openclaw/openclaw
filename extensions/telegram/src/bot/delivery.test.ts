@@ -130,6 +130,24 @@ function createQuoteNotFoundError(operation = "sendMessage") {
   );
 }
 
+function createWrappedPreConnectHttpError(operation = "sendMessage") {
+  const root = Object.assign(new Error("getaddrinfo ENOTFOUND api.telegram.org"), {
+    code: "ENOTFOUND",
+  });
+  const fetchError = Object.assign(new TypeError("fetch failed"), { cause: root });
+  return Object.assign(new Error(`Network request for '${operation}' failed!`), {
+    name: "HttpError",
+    error: fetchError,
+  });
+}
+
+function createPlainHttpError(operation = "sendMessage") {
+  return Object.assign(new Error(`Network request for '${operation}' failed!`), {
+    name: "HttpError",
+    error: new TypeError("fetch failed"),
+  });
+}
+
 function createVoiceFailureHarness(params: {
   voiceError: Error;
   sendMessageResult?: { message_id: number; chat: { id: string } };
@@ -666,6 +684,48 @@ describe("deliverReplies", () => {
         thread: { id: 42, scope: "forum" },
       }),
     ).rejects.toThrow("message thread not found");
+
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(runtime.error).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries final text sends for wrapped pre-connect grammY HttpError envelopes", async () => {
+    vi.useFakeTimers();
+    const runtime = createRuntime();
+    const sendMessage = vi
+      .fn()
+      .mockRejectedValueOnce(createWrappedPreConnectHttpError("sendMessage"))
+      .mockResolvedValueOnce({
+        message_id: 12,
+        chat: { id: "123" },
+      });
+    const bot = createBot({ sendMessage });
+
+    const delivered = deliverWith({
+      replies: [{ text: "hello" }],
+      runtime,
+      bot,
+    });
+    await vi.runAllTimersAsync();
+    await delivered;
+
+    expect(sendMessage).toHaveBeenCalledTimes(2);
+    expect(runtime.error).not.toHaveBeenCalled();
+    vi.useRealTimers();
+  });
+
+  it("does not retry final text sends for plain grammY envelopes without a safe cause", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi.fn().mockRejectedValue(createPlainHttpError("sendMessage"));
+    const bot = createBot({ sendMessage });
+
+    await expect(
+      deliverWith({
+        replies: [{ text: "hello" }],
+        runtime,
+        bot,
+      }),
+    ).rejects.toThrow(/Network request for 'sendMessage' failed!/);
 
     expect(sendMessage).toHaveBeenCalledTimes(1);
     expect(runtime.error).toHaveBeenCalledTimes(1);

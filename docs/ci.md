@@ -154,7 +154,11 @@ Cross-OS release checks still cover OS-specific onboarding, installer, and
 platform behavior; package/update product validation should start with Package
 Acceptance. The Windows packaged and installer fresh lanes also verify that an
 installed package can import a browser-control override from a raw absolute
-Windows path.
+Windows path. The OpenAI cross-OS agent-turn smoke defaults to
+`OPENCLAW_CROSS_OS_OPENAI_MODEL` when set, otherwise `openai/gpt-5.4-mini`, so
+the install and gateway proof stays fast and deterministic. Dedicated live
+provider/model lanes still cover broader model routing, including slower
+frontier defaults.
 
 Package Acceptance has bounded legacy-compatibility windows for already
 published packages. Packages through `2026.4.25`, including `2026.4.25-beta.*`,
@@ -259,7 +263,15 @@ channel-runtime-boundary job separately scans core channel implementation
 contracts plus the channel plugin runtime, gateway, Plugin SDK, secrets, and
 audit touchpoints under the `/codeql-critical-security/channel-runtime-boundary`
 category so channel security signal can scale without broadening the baseline
-JS/TS category.
+JS/TS category. The network-ssrf-boundary job scans core SSRF, IP parsing,
+network guard, web-fetch, and Plugin SDK SSRF policy surfaces under the
+`/codeql-critical-security/network-ssrf-boundary` category so network trust
+boundary signal stays separate from the broader JS/TS security baseline.
+The mcp-process-tool-boundary job scans MCP servers, process execution helpers,
+outbound delivery, and agent tool-execution gates under the
+`/codeql-critical-security/mcp-process-tool-boundary` category so command and
+tool boundary signal stays separate from both the general JS/TS baseline and
+the non-security MCP/process quality shard.
 
 The `CodeQL Android Critical Security` workflow is the scheduled Android
 security shard. It builds the Android app manually for CodeQL on the smallest
@@ -275,6 +287,10 @@ default workflow because the macOS build dominates runtime even when clean.
 The `CodeQL Critical Quality` workflow is the matching non-security shard. It
 runs only error-severity, non-security JavaScript/TypeScript quality queries
 over narrow high-value surfaces on the smaller Blacksmith Linux runner. Its
+manual dispatch accepts `profile=all|plugin-sdk-package-contract`; the narrow
+profile is the first teaching/iteration hook for running one quality shard in
+isolation without dispatching the rest of the workflow.
+Its
 core-auth-secrets job scans auth, secrets, sandbox, cron, and gateway security
 boundary code under the separate `/codeql-critical-quality/core-auth-secrets`
 category. The config-boundary
@@ -303,7 +319,10 @@ understanding, image-generation, and media-generation runtime contracts under
 the separate `/codeql-critical-quality/web-media-runtime-boundary` category. The
 plugin-boundary job scans loader, registry, public-surface, and Plugin SDK
 entrypoint contracts under a separate `/codeql-critical-quality/plugin-boundary`
-category. Keep the workflow separate from security so quality findings can be
+category. The plugin-sdk-package-contract job scans the published package-side
+Plugin SDK source and plugin package contract helpers under the separate
+`/codeql-critical-quality/plugin-sdk-package-contract` category. Keep the
+workflow separate from security so quality findings can be
 scheduled, measured, disabled, or expanded without obscuring security signal.
 Swift, Python, and bundled-plugin CodeQL expansion should be added back as
 scoped or sharded follow-up work only after the narrow profiles have stable

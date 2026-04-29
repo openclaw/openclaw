@@ -2,6 +2,7 @@ import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   __testing,
+  abortAndDrainEmbeddedPiRun,
   abortEmbeddedPiRun,
   clearActiveEmbeddedRun,
   consumeEmbeddedRunModelSwitch,
@@ -63,6 +64,32 @@ describe("pi-embedded runner run registry", () => {
     expect(aborted).toBe(true);
     expect(abortA).toHaveBeenCalledTimes(1);
     expect(abortB).toHaveBeenCalledTimes(1);
+  });
+
+  it("force-clears an aborted run that does not drain", async () => {
+    vi.useFakeTimers();
+    try {
+      const abortRun = vi.fn();
+      setActiveEmbeddedRun("session-stuck", createRunHandle({ abort: abortRun }), "agent:main");
+
+      const resultPromise = abortAndDrainEmbeddedPiRun({
+        sessionId: "session-stuck",
+        sessionKey: "agent:main",
+        settleMs: 100,
+        forceClear: true,
+        reason: "test_timeout",
+      });
+      await vi.advanceTimersByTimeAsync(100);
+      const result = await resultPromise;
+
+      expect(result).toEqual({ aborted: true, drained: false, forceCleared: true });
+      expect(abortRun).toHaveBeenCalledTimes(1);
+      expect(isEmbeddedPiRunHandleActive("session-stuck")).toBe(false);
+      expect(resolveActiveEmbeddedRunHandleSessionId("agent:main")).toBeUndefined();
+    } finally {
+      await vi.runOnlyPendingTimersAsync();
+      vi.useRealTimers();
+    }
   });
 
   it("waits for active runs to drain", async () => {
