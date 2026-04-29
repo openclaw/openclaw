@@ -303,6 +303,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
       "cancel-in-progress": true,
     });
     expect(releaseChecksWorkflow.jobs.resolve_target["runs-on"]).toBe("ubuntu-24.04");
+    expect(releaseChecksWorkflow.jobs.prepare_release_package["runs-on"]).toBe("ubuntu-24.04");
     expect(releaseChecksWorkflow.jobs.summary["runs-on"]).toBe("ubuntu-24.04");
     for (const jobName of [
       "resolve_target",
