@@ -350,17 +350,28 @@ describe("createAzureSpeechRealtimeTranscriptionSession — audio & teardown", (
     expect(hooks.pushStream.writeSpy).not.toHaveBeenCalled();
   });
 
-  it("lazily connects on the first audio frame when sendAudio runs before connect()", async () => {
+  it("lazily connects on the first audio frame and delivers the buffered frame after connect resolves", async () => {
     const { sdk, hooks } = createMockSdk();
-    const session = createAzureSpeechRealtimeTranscriptionSession(baseSessionConfig, {
-      loadSdk: async () => sdk,
-    });
-    session.sendAudio(Buffer.from([1, 2, 3]));
+    const onError = vi.fn();
+    const session = createAzureSpeechRealtimeTranscriptionSession(
+      { ...baseSessionConfig, onError },
+      {
+        loadSdk: async () => sdk,
+      },
+    );
+    const buf = Buffer.from([1, 2, 3]);
+    session.sendAudio(buf);
     // Allow the lazy connect promise chain to drain.
     for (let i = 0; i < 5; i++) {
       await new Promise<void>((resolve) => setImmediate(resolve));
     }
     expect(hooks.startSpy).toHaveBeenCalled();
+    // The triggering frame must be delivered to the push stream once connect()
+    // resolves; it must not be silently dropped or surfaced as an onError.
+    expect(hooks.pushStream.writeSpy).toHaveBeenCalledTimes(1);
+    const sentArg = hooks.pushStream.writeSpy.mock.calls[0][0] as ArrayBuffer;
+    expect(new Uint8Array(sentArg)).toEqual(new Uint8Array(buf));
+    expect(onError).not.toHaveBeenCalled();
     session.close();
   });
 });

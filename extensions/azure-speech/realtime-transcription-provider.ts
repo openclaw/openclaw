@@ -215,11 +215,13 @@ export function buildAzureSpeechRealtimeTranscriptionProvider(
     autoSelectOrder: 30,
     resolveConfig: ({ rawConfig }) => normalizeAzureSpeechRealtimeProviderConfig(rawConfig),
     isConfigured: ({ providerConfig }) => {
-      const normalized = normalizeAzureSpeechRealtimeProviderConfig(providerConfig);
-      if (!normalized.apiKey) {
+      // providerConfig is already the normalized output of resolveConfig, so use
+      // its typed fields directly instead of re-normalizing.
+      const cfg = providerConfig as AzureSpeechRealtimeProviderConfig;
+      if (!cfg.apiKey) {
         return false;
       }
-      return Boolean(normalized.endpoint || normalized.region);
+      return Boolean(cfg.endpoint || cfg.region);
     },
     createSession: (req) => {
       const normalized = normalizeAzureSpeechRealtimeProviderConfig(req.providerConfig);

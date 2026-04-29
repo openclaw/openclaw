@@ -92,6 +92,11 @@ export function createAzureSpeechRealtimeTranscriptionSession(
   let speechStarted = false;
   let queuedBytes = 0;
   let lastFinalTranscript: string | undefined;
+  // Audio frames received before connect() resolves are buffered here and
+  // flushed once the push stream is ready, so the first lazy-connect frame is
+  // not silently dropped. Capped by AZURE_SPEECH_REALTIME_MAX_QUEUED_BYTES.
+  const pendingAudio: Buffer[] = [];
+  let pendingAudioBytes = 0;
 
   const handleError = (error: Error) => {
     config.onError?.(error);
@@ -238,6 +243,7 @@ export function createAzureSpeechRealtimeTranscriptionSession(
         );
       });
       connected = true;
+      flushPendingAudio();
     })();
     try {
       await connecting;
@@ -274,16 +280,53 @@ export function createAzureSpeechRealtimeTranscriptionSession(
     }
   };
 
+  const flushPendingAudio = (): void => {
+    while (pendingAudio.length > 0) {
+      if (closing || !pushStream) {
+        break;
+      }
+      const next = pendingAudio.shift();
+      if (!next) {
+        break;
+      }
+      pendingAudioBytes = Math.max(0, pendingAudioBytes - next.byteLength);
+      sendAudio(next);
+    }
+  };
+
   return {
     async connect() {
       await connect();
     },
     sendAudio(audio: Buffer) {
-      if (!connected && !connecting) {
-        // Lazy connect on first audio frame for parity with sibling providers.
-        connect().catch((error) =>
-          handleError(error instanceof Error ? error : new Error(String(error))),
-        );
+      if (closing) {
+        return;
+      }
+      if (!connected) {
+        // Buffer the frame until connect() resolves so the triggering frame is
+        // not lost on lazy connect (push stream is not initialized yet).
+        if (
+          queuedBytes + pendingAudioBytes + audio.byteLength >
+          AZURE_SPEECH_REALTIME_MAX_QUEUED_BYTES
+        ) {
+          handleError(
+            new Error(
+              `Azure Speech audio buffer overflow: queued ${
+                queuedBytes + pendingAudioBytes + audio.byteLength
+              } bytes exceeds ${AZURE_SPEECH_REALTIME_MAX_QUEUED_BYTES}`,
+            ),
+          );
+          return;
+        }
+        pendingAudio.push(audio);
+        pendingAudioBytes += audio.byteLength;
+        if (!connecting) {
+          // Lazy connect on first audio frame for parity with sibling providers.
+          connect().catch((error) =>
+            handleError(error instanceof Error ? error : new Error(String(error))),
+          );
+        }
+        return;
       }
       sendAudio(audio);
     },
