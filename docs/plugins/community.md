@@ -131,6 +131,20 @@ formatting, built-in access control, and document/meeting/messaging skills.
 openclaw plugins install @wecom/wecom-openclaw-plugin
 ```
 
+### Workspace Sync & Backup
+
+Workspace cloud sync (mailbox, mirror, bisync modes) and encrypted backups
+via rclone. Supports Dropbox, Google Drive, OneDrive, S3, and 70+ providers.
+Includes inbox notifications with an interactive agent tool for filing incoming
+files. Zero LLM cost for sync operations.
+
+- **npm:** `openclaw-workspace-sync`
+- **repo:** [github.com/ashbrener/openclaw-workspace-sync](https://github.com/ashbrener/openclaw-workspace-sync)
+
+```bash
+openclaw plugins install openclaw-workspace-sync
+```
+
 ### Yuanbao
 
 Yuanbao channel plugin for OpenClaw by the Tencent Yuanbao team. Powered by
