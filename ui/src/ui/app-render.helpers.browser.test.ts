@@ -15,6 +15,13 @@ function createState(overrides: Partial<AppViewState> = {}) {
   return {
     connected: true,
     chatLoading: false,
+    chatSending: false,
+    chatStream: null,
+    chatRunId: null,
+    chatModelOverrides: {},
+    chatModelsLoading: false,
+    chatModelCatalog: [],
+    client: {},
     onboarding: false,
     sessionKey: "main",
     sessionsHideCron: true,
@@ -89,10 +96,12 @@ describe("chat header controls (browser)", () => {
     await Promise.resolve();
 
     const buttons = Array.from(
-      container.querySelectorAll<HTMLButtonElement>(".chat-controls__thinking .btn--icon"),
+      container.querySelectorAll<HTMLButtonElement>(
+        ".chat-controls-dropdown-card .btn--icon:not(.chat-controls-dropdown-close)",
+      ),
     );
 
-    expect(buttons).toHaveLength(4);
+    expect(buttons).toHaveLength(5);
     const cronButton = buttons.at(-1);
     expect(cronButton?.classList.contains("active")).toBe(true);
     expect(cronButton?.getAttribute("aria-pressed")).toBe("true");

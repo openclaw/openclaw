@@ -18,8 +18,9 @@
 }
 
 .chat-tool-card--expanded {
-  max-height: none;
-  overflow: visible;
+  max-height: min(40vh, 400px);
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
 .chat-tool-card:hover {
@@ -814,6 +815,10 @@
   .chat-tool-card {
     padding: 6px 8px;
     max-height: 80px;
+  }
+
+  .chat-tool-card--expanded {
+    max-height: min(50vh, 300px);
   }
 
   .chat-tool-card__preview {

@@ -6,6 +6,7 @@ import type { AppViewState } from "./app-view-state.ts";
 import {
   isCronSessionKey,
   parseSessionKey,
+  renderChatModelSelect,
   renderChatSessionSelect as renderChatSessionSelectBase,
   renderChatThinkingSelect,
   resolveSessionDisplayName,
@@ -381,15 +382,21 @@ export function renderChatControls(state: AppViewState) {
  */
 export function renderChatMobileToggle(state: AppViewState) {
   const sessionGroups = resolveSessionOptionGroups(state, state.sessionKey, state.sessionsResult);
+  const hideCron = state.sessionsHideCron ?? true;
+  const hiddenCronCount = hideCron
+    ? countHiddenCronSessions(state.sessionKey, state.sessionsResult)
+    : 0;
   const disableThinkingToggle = state.onboarding;
   const disableFocusToggle = state.onboarding;
   const showThinking = state.onboarding ? false : state.settings.chatShowThinking;
   const showToolCalls = state.onboarding ? true : state.settings.chatShowToolCalls;
   const focusActive = state.onboarding ? true : state.settings.chatFocusMode;
-  const hideCron = state.sessionsHideCron ?? true;
-  const hiddenCronCount = hideCron
-    ? countHiddenCronSessions(state.sessionKey, state.sessionsResult)
-    : 0;
+  const cronLabel = hideCron
+    ? hiddenCronCount > 0
+      ? t("chat.showCronSessionsHidden", { count: String(hiddenCronCount) })
+      : t("chat.showCronSessions")
+    : t("chat.hideCronSessions");
+  const refreshLabel = t("chat.refreshTitle");
   const toolCallsIcon = html`
     <svg
       width="18"
@@ -404,6 +411,21 @@ export function renderChatMobileToggle(state: AppViewState) {
       <path
         d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"
       ></path>
+    </svg>
+  `;
+  const refreshIcon = html`
+    <svg
+      width="18"
+      height="18"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      stroke-width="2"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+    >
+      <path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"></path>
+      <path d="M21 3v5h-5"></path>
     </svg>
   `;
   const focusIcon = html`
@@ -469,100 +491,156 @@ export function renderChatMobileToggle(state: AppViewState) {
           e.stopPropagation();
         }}
       >
-        <div class="chat-controls">
-          <label class="field chat-controls__session">
-            <select
-              .value=${state.sessionKey}
-              @change=${(e: Event) => {
-                const next = (e.target as HTMLSelectElement).value;
-                switchChatSession(state, next);
-              }}
+        <div class="chat-controls-dropdown-card">
+          <div
+            style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;"
+          >
+            <span style="font-size:14px;font-weight:600;color:var(--fg,#e6edf3);"
+              >Chat Settings</span
             >
-              ${sessionGroups.map(
-                (group) => html`
-                  <optgroup label=${group.label}>
-                    ${group.options.map(
-                      (opt) => html`
-                        <option
-                          value=${opt.key}
-                          title=${opt.title}
-                          ?selected=${opt.key === state.sessionKey}
-                        >
-                          ${opt.label}
-                        </option>
-                      `,
-                    )}
-                  </optgroup>
-                `,
-              )}
-            </select>
-          </label>
-          ${renderChatThinkingSelect(state)}
-          <div class="chat-controls__thinking">
             <button
-              class="btn btn--sm btn--icon ${showThinking ? "active" : ""}"
-              ?disabled=${disableThinkingToggle}
-              @click=${() => {
-                if (!disableThinkingToggle) {
-                  state.applySettings({
-                    ...state.settings,
-                    chatShowThinking: !state.settings.chatShowThinking,
-                  });
-                }
+              class="chat-controls-dropdown-close"
+              @click=${(e: Event) => {
+                e.stopPropagation();
+                const dropdown = (e.currentTarget as HTMLElement).closest(
+                  ".chat-controls-dropdown",
+                ) as HTMLElement;
+                dropdown?.classList.remove("open");
               }}
-              aria-pressed=${showThinking}
-              title=${t("chat.thinkingToggle")}
+              aria-label="Close settings"
             >
-              ${icons.brain}
+              <svg
+                width="18"
+                height="18"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <line x1="18" y1="6" x2="6" y2="18"></line>
+                <line x1="6" y1="6" x2="18" y2="18"></line>
+              </svg>
             </button>
-            <button
-              class="btn btn--sm btn--icon ${showToolCalls ? "active" : ""}"
-              ?disabled=${disableThinkingToggle}
-              @click=${() => {
-                if (!disableThinkingToggle) {
-                  state.applySettings({
-                    ...state.settings,
-                    chatShowToolCalls: !state.settings.chatShowToolCalls,
-                  });
-                }
-              }}
-              aria-pressed=${showToolCalls}
-              title=${t("chat.toolCallsToggle")}
-            >
-              ${toolCallsIcon}
-            </button>
-            <button
-              class="btn btn--sm btn--icon ${focusActive ? "active" : ""}"
-              ?disabled=${disableFocusToggle}
-              @click=${() => {
-                if (!disableFocusToggle) {
-                  state.applySettings({
-                    ...state.settings,
-                    chatFocusMode: !state.settings.chatFocusMode,
-                  });
-                }
-              }}
-              aria-pressed=${focusActive}
-              title=${t("chat.focusToggle")}
-            >
-              ${focusIcon}
-            </button>
-            <button
-              class="btn btn--sm btn--icon ${hideCron ? "active" : ""}"
-              @click=${() => {
-                state.sessionsHideCron = !hideCron;
-              }}
-              aria-pressed=${hideCron}
-              title=${
-                hideCron
-                  ? hiddenCronCount > 0
-                    ? t("chat.showCronSessionsHidden", { count: String(hiddenCronCount) })
-                    : t("chat.showCronSessions")
-                  : t("chat.hideCronSessions")
-              }
-            >
-              ${renderCronFilterIcon(hiddenCronCount)}
-            </button>
+          </div>
+          <div class="chat-controls">
+            <label class="field chat-controls__session" data-label="Session">
+              <select
+                .value=${state.sessionKey}
+                @change=${(e: Event) => {
+                  const next = (e.target as HTMLSelectElement).value;
+                  switchChatSession(state, next);
+                }}
+              >
+                ${sessionGroups.map(
+                  (group) => html`
+                    <optgroup label=${group.label}>
+                      ${group.options.map(
+                        (opt) => html`
+                          <option
+                            value=${opt.key}
+                            title=${opt.title}
+                            ?selected=${opt.key === state.sessionKey}
+                          >
+                            ${opt.label}
+                          </option>
+                        `,
+                      )}
+                    </optgroup>
+                  `,
+                )}
+              </select>
+            </label>
+            ${renderChatModelSelect(state)} ${renderChatThinkingSelect(state)}
+            <div class="chat-controls__thinking" style="margin-top:8px;">
+              <button
+                class="btn btn--sm btn--icon"
+                ?disabled=${state.chatLoading || !state.connected}
+                @click=${async () => {
+                  const app = state as unknown as ChatRefreshHost;
+                  app.chatManualRefreshInFlight = true;
+                  app.chatNewMessagesBelow = false;
+                  await app.updateComplete;
+                  app.resetToolStream();
+                  try {
+                    await refreshChat(state as unknown as Parameters<typeof refreshChat>[0], {
+                      scheduleScroll: false,
+                    });
+                    app.scrollToBottom({ smooth: true });
+                  } finally {
+                    requestAnimationFrame(() => {
+                      app.chatManualRefreshInFlight = false;
+                      app.chatNewMessagesBelow = false;
+                    });
+                  }
+                }}
+                title=${refreshLabel}
+                aria-label=${refreshLabel}
+              >
+                ${refreshIcon}
+              </button>
+              <span class="chat-controls__separator">|</span>
+              <button
+                class="btn btn--sm btn--icon ${showThinking ? "active" : ""}"
+                ?disabled=${disableThinkingToggle}
+                @click=${() => {
+                  if (!disableThinkingToggle) {
+                    state.applySettings({
+                      ...state.settings,
+                      chatShowThinking: !state.settings.chatShowThinking,
+                    });
+                  }
+                }}
+                aria-pressed=${showThinking}
+                title=${t("chat.thinkingToggle")}
+              >
+                ${icons.brain}
+              </button>
+              <button
+                class="btn btn--sm btn--icon ${showToolCalls ? "active" : ""}"
+                ?disabled=${disableThinkingToggle}
+                @click=${() => {
+                  if (!disableThinkingToggle) {
+                    state.applySettings({
+                      ...state.settings,
+                      chatShowToolCalls: !state.settings.chatShowToolCalls,
+                    });
+                  }
+                }}
+                aria-pressed=${showToolCalls}
+                title=${t("chat.toolCallsToggle")}
+              >
+                ${toolCallsIcon}
+              </button>
+              <button
+                class="btn btn--sm btn--icon ${focusActive ? "active" : ""}"
+                ?disabled=${disableFocusToggle}
+                @click=${() => {
+                  if (!disableFocusToggle) {
+                    state.applySettings({
+                      ...state.settings,
+                      chatFocusMode: !state.settings.chatFocusMode,
+                    });
+                  }
+                }}
+                aria-pressed=${focusActive}
+                title=${t("chat.focusToggle")}
+              >
+                ${focusIcon}
+              </button>
+              <button
+                class="btn btn--sm btn--icon ${hideCron ? "active" : ""}"
+                @click=${() => {
+                  state.sessionsHideCron = !hideCron;
+                }}
+                aria-pressed=${hideCron}
+                title=${cronLabel}
+                aria-label=${cronLabel}
+              >
+                ${renderCronFilterIcon(hiddenCronCount)}
+              </button>
+            </div>
           </div>
         </div>
       </div>

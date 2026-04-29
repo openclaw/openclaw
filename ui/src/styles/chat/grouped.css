@@ -207,6 +207,7 @@ img.chat-avatar {
   border: 0;
   background: transparent;
   box-shadow: none;
+  overflow: hidden;
 }
 
 .chat-bubble--tool-shell:hover {

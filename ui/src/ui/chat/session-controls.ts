@@ -84,7 +84,7 @@ async function refreshVisibleToolsEffectiveForCurrentSessionLazy(state: AppViewS
   return refreshVisibleToolsEffectiveForCurrentSession(state);
 }
 
-function renderChatModelSelect(state: AppViewState) {
+export function renderChatModelSelect(state: AppViewState) {
   const { currentOverride, defaultLabel, options } = resolveChatModelSelectState(state);
   const busy =
     state.chatLoading || state.chatSending || Boolean(state.chatRunId) || state.chatStream !== null;
@@ -95,7 +95,7 @@ function renderChatModelSelect(state: AppViewState) {
       ? defaultLabel
       : (options.find((entry) => entry.value === currentOverride)?.label ?? currentOverride);
   return html`
-    <label class="field chat-controls__session chat-controls__model">
+    <label class="field chat-controls__session chat-controls__model" data-label="Model">
       <select
         data-chat-model-select="true"
         aria-label="Chat model"
@@ -236,7 +236,10 @@ export function renderChatThinkingSelect(state: AppViewState) {
       ? defaultLabel
       : (options.find((entry) => entry.value === currentOverride)?.label ?? currentOverride);
   return html`
-    <label class="field chat-controls__session chat-controls__thinking-select">
+    <label
+      class="field chat-controls__session chat-controls__thinking-select"
+      data-label="Thinking"
+    >
       <select
         data-chat-thinking-select="true"
         aria-label="Chat thinking level"
