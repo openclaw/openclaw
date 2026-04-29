@@ -734,7 +734,7 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
     - DM history controls:
       - `channels.telegram.dmHistoryLimit`
       - `channels.telegram.dms["<user_id>"].historyLimit`
-    - `channels.telegram.retry` config applies to Telegram send helpers (CLI/tools/actions) for recoverable outbound API errors.
+    - `channels.telegram.retry` config applies to Telegram send helpers (CLI/tools/actions) for recoverable outbound API errors. Inbound final-reply delivery also uses a bounded safe-send retry for Telegram pre-connect failures, but it does not retry ambiguous post-send network envelopes that could duplicate visible messages.
 
     CLI send target can be numeric chat ID or username:
 
@@ -857,6 +857,7 @@ Per-account, per-group, and per-topic overrides are supported (same inheritance 
     - `getMe returned 401` is a Telegram authentication failure for the configured bot token.
     - Re-copy or regenerate the bot token in BotFather, then update `channels.telegram.botToken`, `channels.telegram.tokenFile`, `channels.telegram.accounts.<id>.botToken`, or `TELEGRAM_BOT_TOKEN` for the default account.
     - `deleteWebhook 401 Unauthorized` during startup is also an auth failure; treating it as "no webhook exists" would only defer the same bad-token failure to later API calls.
+    - If `deleteWebhook` fails with a transient network error during polling startup, OpenClaw checks `getWebhookInfo`; when Telegram reports an empty webhook URL, polling continues because cleanup is already satisfied.
 
   </Accordion>
 

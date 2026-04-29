@@ -1,8 +1,10 @@
 import { type Bot, GrammyError } from "grammy";
+import { createTelegramRetryRunner } from "openclaw/plugin-sdk/retry-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { withTelegramApiErrorLogging } from "../api-logging.js";
 import { markdownToTelegramHtml } from "../format.js";
+import { isSafeToRetrySendError, isTelegramRateLimitError } from "../network-errors.js";
 import {
   buildTelegramSendParams,
   getTelegramNativeQuoteReplyMessageId,
@@ -51,6 +53,13 @@ function removeMessageThreadIdParam(
   return rest;
 }
 
+function createTelegramDeliverySendRetry() {
+  return createTelegramRetryRunner({
+    shouldRetry: (err) => isSafeToRetrySendError(err) || isTelegramRateLimitError(err),
+    strictShouldRetry: true,
+  });
+}
+
 export async function sendTelegramWithThreadFallback<T>(params: {
   operation: string;
   runtime: RuntimeEnv;
@@ -68,14 +77,21 @@ export async function sendTelegramWithThreadFallback<T>(params: {
   const mergedShouldLog = params.shouldLog
     ? (err: unknown) => params.shouldLog!(err) && !shouldSuppressFirstErrorLog(err)
     : (err: unknown) => !shouldSuppressFirstErrorLog(err);
+  const requestWithRetry = createTelegramDeliverySendRetry();
+  const runLoggedSend = (
+    operation: string,
+    requestParams: Record<string, unknown>,
+    shouldLog?: (err: unknown) => boolean,
+  ) =>
+    withTelegramApiErrorLogging({
+      operation,
+      runtime: params.runtime,
+      ...(shouldLog ? { shouldLog } : {}),
+      fn: () => requestWithRetry(() => params.send(requestParams), operation),
+    });
 
   try {
-    return await withTelegramApiErrorLogging({
-      operation: params.operation,
-      runtime: params.runtime,
-      shouldLog: mergedShouldLog,
-      fn: () => params.send(params.requestParams),
-    });
+    return await runLoggedSend(params.operation, params.requestParams, mergedShouldLog);
   } catch (err) {
     if (hasNativeQuote && isTelegramQuoteParamError(err)) {
       params.runtime.log?.(
@@ -94,11 +110,7 @@ export async function sendTelegramWithThreadFallback<T>(params: {
     params.runtime.log?.(
       `telegram ${params.operation}: message thread not found; retrying without message_thread_id`,
     );
-    return await withTelegramApiErrorLogging({
-      operation: `${params.operation} (threadless retry)`,
-      runtime: params.runtime,
-      fn: () => params.send(retryParams),
-    });
+    return await runLoggedSend(`${params.operation} (threadless retry)`, retryParams);
   }
 }
 
