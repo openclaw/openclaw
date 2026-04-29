@@ -2472,7 +2472,7 @@ export async function runEmbeddedAttempt(
           }
           prePromptMessageCount = activeSession.messages.length;
 
-          const promptSubmission = resolveRuntimeContextPromptParts({
+          let promptSubmission = resolveRuntimeContextPromptParts({
             effectivePrompt,
             transcriptPrompt: effectiveTranscriptPrompt,
           });
