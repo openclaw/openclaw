@@ -259,6 +259,11 @@ const sectionIcons = {
       <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
     </svg>
   `,
+  securityGuardrail: html`
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+      <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+    </svg>
+  `,
   mcp: html`
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
       <rect x="2" y="2" width="20" height="8" rx="2" ry="2"></rect>
@@ -322,6 +327,10 @@ export const SECTION_META: Record<string, { label: string; description: string }
     description: "Agent Communication Protocol runtime and streaming settings",
   },
   mcp: { label: "MCP", description: "Model Context Protocol server definitions" },
+  securityGuardrail: {
+    label: "Security Guardrail",
+    description: "Reversible sensitive-data sanitization for outbound prompts to public LLMs",
+  },
 };
 
 function getSectionIcon(key: string) {

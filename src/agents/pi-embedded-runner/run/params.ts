@@ -182,4 +182,20 @@ export type RunEmbeddedPiAgentParams = {
    * exit promptly after emitting the final JSON result.
    */
   cleanupBundleMcpOnRunEnd?: boolean;
+
+  /** Security Guardrail settings for intercepting and redacting sensitive data. */
+  securityGuardrail?: {
+    /** 是否启用安全模式 */
+    enable: boolean;
+    /** 本地模型 OpenAI-compatible API 地址，如 http://10.14.101.124:1234/v1 */
+    localBaseUrl?: string;
+    /** 本地模型 API Key（LM Studio 等可填任意值） */
+    localApiKey?: string;
+    /** 本地模型 ID，如 qwen3-30b-a3b */
+    localModel?: string;
+    /** 用户自定义脱敏提示词，告诉本地模型额外需要过滤哪些内容 */
+    customPrompt?: string;
+    /** 当本地模型不可用时，是否回退到仅正则模式（默认 true） */
+    fallbackToRegexOnly?: boolean;
+  };
 };

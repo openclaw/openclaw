@@ -325,6 +325,26 @@ import {
 } from "./runtime-context-prompt.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
 
+function restoreVaultObject(
+  vault: import("../../../security/vault.js").TokenVault,
+  obj: unknown,
+): unknown {
+  if (typeof obj === "string") {
+    return vault.restore(obj);
+  }
+  if (Array.isArray(obj)) {
+    return obj.map((item) => restoreVaultObject(vault, item));
+  }
+  if (obj && typeof obj === "object") {
+    const newObj: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(obj)) {
+      newObj[k] = restoreVaultObject(vault, v);
+    }
+    return newObj;
+  }
+  return obj;
+}
+
 export {
   appendAttemptCacheTtlIfNeeded,
   composeSystemPromptWithHookContext,
@@ -934,7 +954,24 @@ export async function runEmbeddedAttempt(
       ownerOnlyToolAllowlist: params.ownerOnlyToolAllowlist,
       warn: (message) => log.warn(message),
     });
-    const effectiveTools = [...tools, ...filteredBundledTools];
+    let effectiveTools = [...tools, ...filteredBundledTools];
+
+    if (params.guardrailVault) {
+      const vault = params.guardrailVault;
+      effectiveTools = effectiveTools.map((tool) => {
+        const originalExecute = tool.execute;
+        if (typeof originalExecute !== "function") {
+          return tool;
+        }
+        return {
+          ...tool,
+          execute: async (...args: Parameters<typeof originalExecute>) => {
+            args[1] = restoreVaultObject(vault, args[1]) as (typeof args)[1];
+            return originalExecute.apply(tool, args);
+          },
+        };
+      });
+    }
     const allowedToolNames = collectAllowedToolNames({
       tools: effectiveTools,
       clientTools,
@@ -1395,7 +1432,10 @@ export async function runEmbeddedAttempt(
         ? toClientToolDefinitions(
             clientTools,
             (toolName, toolParams) => {
-              clientToolCallDetected = { name: toolName, params: toolParams };
+              const resolved = params.guardrailVault
+                ? (restoreVaultObject(params.guardrailVault, toolParams) as Record<string, unknown>)
+                : toolParams;
+              clientToolCallDetected = { name: toolName, params: resolved };
             },
             {
               agentId: sessionAgentId,

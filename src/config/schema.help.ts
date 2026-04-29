@@ -1711,4 +1711,18 @@ export const FIELD_HELP: Record<string, string> = {
     "Override default timing. Keys: debounceMs (700), stallSoftMs (25000), stallHardMs (60000), doneHoldMs (1500), errorHoldMs (2500).",
   "messages.inbound.debounceMs":
     "Debounce window (ms) for batching rapid inbound messages from the same sender (0 to disable).",
+  securityGuardrail:
+    "Reversible sensitive-data sanitization layer for outbound prompts sent to public LLMs. Replaces credentials, keys, IPs, and other secrets with opaque [VAULT_N] tokens before transit; restores real values before tool execution so scripts and commands still work.",
+  "securityGuardrail.enable":
+    "Master switch for the security guardrail. When enabled, every outbound prompt is scanned and sanitized before reaching the cloud model.",
+  "securityGuardrail.localBaseUrl":
+    "OpenAI-compatible chat/completions endpoint for the local sanitization model (e.g. http://localhost:1234/v1 for LM Studio). Leave empty to use regex-only mode.",
+  "securityGuardrail.localApiKey":
+    "API key for the local model endpoint. Most local servers accept any value (e.g. 'lm-studio').",
+  "securityGuardrail.localModel":
+    "Model identifier to request from the local endpoint (e.g. 'qwen3-30b-a3b'). Must match a model loaded in your local server.",
+  "securityGuardrail.customPrompt":
+    "Additional filtering instructions appended to the local model's system prompt. Use this for org-specific patterns not covered by defaults (e.g. 'also filter project codenames and internal domain names').",
+  "securityGuardrail.fallbackToRegexOnly":
+    "When true (default), falls back to regex-only pattern scanning if the local model is unreachable. Set to false to skip sanitization entirely when the local model is down.",
 };

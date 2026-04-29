@@ -1033,6 +1033,17 @@ export const OpenClawSchema = z
       )
       .optional(),
     proxy: ProxyConfigSchema,
+    securityGuardrail: z
+      .object({
+        enable: z.boolean().optional(),
+        localBaseUrl: z.string().url().optional(),
+        localApiKey: z.string().optional(),
+        localModel: z.string().optional(),
+        customPrompt: z.string().optional(),
+        fallbackToRegexOnly: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict()
   .superRefine((cfg, ctx) => {

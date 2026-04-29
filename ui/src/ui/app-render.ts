@@ -330,6 +330,7 @@ const AI_AGENTS_SECTION_KEYS = [
   "tools",
   "memory",
   "session",
+  "securityGuardrail",
 ] as const;
 type ConfigSectionSelection = {
   activeSection: string | null;

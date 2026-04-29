@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
+import { getRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { ensureContextEnginesInitialized } from "../../context-engine/init.js";
 import { resolveContextEngine } from "../../context-engine/registry.js";
 import { emitAgentPlanEvent } from "../../infra/agent-events.js";
@@ -12,6 +13,8 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { resolveProviderAuthProfileId } from "../../plugins/provider-runtime.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
+import { applyGuardrail, classifyRedactedValue } from "../../security/scanner.js";
+import { TokenVault } from "../../security/vault.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { sanitizeForLog } from "../../terminal/ansi.js";
 import { resolveUserPath } from "../../utils.js";
@@ -863,10 +866,82 @@ export async function runEmbeddedPiAgent(
           ].filter(
             (value): value is string => typeof value === "string" && value.trim().length > 0,
           );
-          const prompt =
+          let finalPrompt =
             promptAdditions.length > 0
               ? `${basePrompt}\n\n${promptAdditions.join("\n\n")}`
               : basePrompt;
+
+          // Security Guardrail: 安全模式。
+          // 去程：在 prompt 发往云端 LLM 前，调用本地模型或正则扫描进行脱敏。
+          // 仅对用户触发的消息运行，跳过内部触发（cron/heartbeat/memory/overflow）。
+          // 只扫描用户原始消息（params.prompt），避免系统上下文误触发脱敏。
+          // Vault 映射持久化到 session 级别，支持多轮对话中的工具参数还原。
+          let runVault: TokenVault | undefined;
+          const isUserTriggered =
+            !params.trigger || params.trigger === "user" || params.trigger === "manual";
+          const configGuardrail = getRuntimeConfigSnapshot()?.securityGuardrail;
+          const guardrailOpts = params.securityGuardrail ?? configGuardrail;
+          const guardrailDisabled = guardrailOpts?.enable === false;
+          const vaultPersistPath = params.sessionFile
+            ? `${params.sessionFile}.vault.json`
+            : undefined;
+          if (isUserTriggered && !guardrailDisabled && guardrailOpts?.enable) {
+            // Load accumulated vault from previous turns
+            let persistedVault: TokenVault | undefined;
+            if (vaultPersistPath) {
+              try {
+                const raw = await fs.readFile(vaultPersistPath, "utf-8");
+                persistedVault = new TokenVault(JSON.parse(raw));
+              } catch {
+                // No persisted vault yet — first turn or file missing
+              }
+            }
+
+            const scanResult = await applyGuardrail(params.prompt, guardrailOpts);
+            if (scanResult.findingsCount > 0 || persistedVault) {
+              // Build unified vault: start from persisted, add new findings with non-conflicting tokens
+              runVault = persistedVault ?? new TokenVault();
+              if (scanResult.findingsCount > 0) {
+                // Re-add the raw sensitive values to the persisted vault
+                // so they get assigned [VAULT_N] with correct counter
+                const newFindings = Object.values(scanResult.vault.toDict()).map((value) => ({
+                  type: "LLM-detected",
+                  value: value.length > 20 ? value.slice(0, 20) + "..." : value,
+                  fullValue: value,
+                  risk: "high" as const,
+                }));
+                // redact against the user prompt to register new tokens
+                runVault.redact(params.prompt, newFindings);
+              }
+              finalPrompt = runVault.redactKnown(finalPrompt);
+              // Append the guardrail notice (type hints for the cloud model)
+              if (scanResult.findingsCount > 0) {
+                const vaultDict = runVault.toDict();
+                const hints = Object.entries(vaultDict)
+                  .map(([token, value]) => `${token}: ${classifyRedactedValue(value)}`)
+                  .join("; ");
+                finalPrompt += `\n\n[Security Guardrail Notice] The following placeholders have been redacted for transit security: ${hints}. Treat each placeholder as an opaque but COMPLETE value of the described type. Use them directly in commands, connection strings, and tool calls — the runtime resolves them to real values before execution. Do NOT ask the user to re-provide these values or break them into subfields.`;
+              }
+              // Persist merged vault for subsequent turns
+              if (vaultPersistPath) {
+                await fs
+                  .writeFile(vaultPersistPath, JSON.stringify(runVault.toDict()), "utf-8")
+                  .catch(() => {});
+              }
+              if (scanResult.findingsCount > 0) {
+                const methodLabel = scanResult.method === "local-llm" ? "本地模型" : "正则匹配";
+                log.info(
+                  `[🛡️ Guardrail] 拦截 ${scanResult.findingsCount} 项敏感信息 (${methodLabel})，已脱敏后发往云端。`,
+                );
+              }
+              log.info(
+                `[🛡️ Guardrail] Vault 映射数: ${Object.keys(runVault.toDict()).length} (累计)`,
+              );
+            } else if (scanResult.method !== "skipped") {
+              log.info(`[🛡️ Guardrail] 扫描完成 (${scanResult.method})，未发现敏感信息。`);
+            }
+          }
+
           let resolvedStreamApiKey: string | undefined;
           if (!runtimeAuthState && apiKeyInfo) {
             resolvedStreamApiKey = (apiKeyInfo as ApiKeyInfo).apiKey;
@@ -927,8 +1002,9 @@ export async function runEmbeddedPiAgent(
             contextEngine,
             contextTokenBudget: ctxInfo.tokens,
             skillsSnapshot: params.skillsSnapshot,
-            prompt,
+            prompt: finalPrompt,
             transcriptPrompt: params.transcriptPrompt,
+            guardrailVault: runVault,
             images: params.images,
             imageOrder: params.imageOrder,
             clientTools: params.clientTools,
@@ -1891,11 +1967,21 @@ export async function runEmbeddedPiAgent(
             compactionCount: autoCompactionCount > 0 ? autoCompactionCount : undefined,
             compactionTokensAfter: lastCompactionTokensAfter,
           };
-          const finalAssistantVisibleText = resolveFinalAssistantVisibleText(sessionLastAssistant);
-          const finalAssistantRawText = resolveFinalAssistantRawText(sessionLastAssistant);
+          const finalAssistantVisibleText = runVault
+            ? runVault.restore(resolveFinalAssistantVisibleText(sessionLastAssistant) ?? "") ||
+              undefined
+            : resolveFinalAssistantVisibleText(sessionLastAssistant);
+          const finalAssistantRawText = runVault
+            ? runVault.restore(resolveFinalAssistantRawText(sessionLastAssistant) ?? "") ||
+              undefined
+            : resolveFinalAssistantRawText(sessionLastAssistant);
+
+          const restoredAssistantTexts = runVault
+            ? attempt.assistantTexts.map((t) => runVault.restore(t))
+            : attempt.assistantTexts;
 
           const payloads = buildEmbeddedRunPayloads({
-            assistantTexts: attempt.assistantTexts,
+            assistantTexts: restoredAssistantTexts,
             toolMetas: attempt.toolMetas,
             lastAssistant: attempt.lastAssistant,
             lastToolError: attempt.lastToolError,
