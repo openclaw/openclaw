@@ -4,7 +4,7 @@ import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import {
-  createBundledRuntimeDepsWritableInstallSpecs,
+  createBundledRuntimeDepsInstallSpecs,
   repairBundledRuntimeDepsInstallRootAsync,
   resolveBundledRuntimeDependencyPackageInstallRootPlan,
   scanBundledPluginRuntimeDeps,
@@ -164,18 +164,15 @@ export async function maybeRepairBundledPluginRuntimeDeps(params: {
     return;
   }
 
-  const missingSpecs = missing.map((dep) => `${dep.name}@${dep.version}`);
   const installRootPlan = resolveBundledRuntimeDependencyPackageInstallRootPlan(packageRoot, {
     env,
   });
-  const installSpecs = createBundledRuntimeDepsWritableInstallSpecs({
+  const installSpecs = createBundledRuntimeDepsInstallSpecs({
     deps,
-    searchRoots: installRootPlan.searchRoots,
-    installRoot: installRootPlan.installRoot,
   });
   note(
     [
-      "Bundled plugin runtime deps are missing.",
+      "Bundled plugin runtime deps need staging.",
       ...missing.map((dep) => `- ${dep.name}@${dep.version} (used by ${dep.pluginIds.join(", ")})`),
       `Fix: run ${formatCliCommand("openclaw doctor --fix")} to install them.`,
     ].join("\n"),
@@ -198,14 +195,14 @@ export async function maybeRepairBundledPluginRuntimeDeps(params: {
   try {
     const { createCliProgress } = await import("../cli/progress.js");
     progress = createCliProgress({
-      label: `Installing bundled plugin runtime deps (${missingSpecs.length})`,
+      label: `Installing bundled plugin runtime deps (${installSpecs.length})`,
       indeterminate: true,
       enabled: process.env.VITEST !== "true" || process.env.OPENCLAW_TEST_RUNTIME_LOG === "1",
     });
     const installStartedAt = Date.now();
     logRuntimeDepsInstallProgress(
       params.runtime,
-      `Installing bundled plugin runtime deps (${missingSpecs.length} missing, ${installSpecs.length} install specs): ${missingSpecs.join(", ")}`,
+      `Installing bundled plugin runtime deps (${installSpecs.length} specs): ${installSpecs.join(", ")}`,
     );
     heartbeat = setInterval(() => {
       logRuntimeDepsInstallProgress(
@@ -216,7 +213,7 @@ export async function maybeRepairBundledPluginRuntimeDeps(params: {
     heartbeat.unref?.();
     const result = await repairBundledRuntimeDepsInstallRootAsync({
       installRoot: installRootPlan.installRoot,
-      missingSpecs,
+      missingSpecs: installSpecs,
       installSpecs,
       env: params.env ?? process.env,
       installDeps: params.installDeps
