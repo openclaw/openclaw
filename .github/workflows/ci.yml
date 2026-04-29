@@ -141,9 +141,6 @@ jobs:
           import {
             createChannelContractTestShards,
           } from "./scripts/lib/channel-contract-test-plan.mjs";
-          import {
-            createPluginContractTestShards,
-          } from "./scripts/lib/plugin-contract-test-plan.mjs";
 
           const parseBoolean = (value, fallback = false) => {
             if (value === undefined) return fallback;
@@ -152,6 +149,24 @@ jobs:
             if (normalized === "false" || normalized === "0" || normalized === "") return false;
             return fallback;
           };
+
+          const { createPluginContractTestShards } = await import(
+            "./scripts/lib/plugin-contract-test-plan.mjs"
+          ).catch((error) => {
+            if (error?.code !== "ERR_MODULE_NOT_FOUND") {
+              throw error;
+            }
+            return {
+              createPluginContractTestShards: () => [
+                {
+                  checkName: "checks-fast-contracts-plugins-legacy",
+                  includePatterns: ["src/plugins/contracts/**/*.test.ts"],
+                  runtime: "node",
+                  task: "contracts-plugins",
+                },
+              ],
+            };
+          });
 
           const createMatrix = (include) => ({ include });
           const outputPath = process.env.GITHUB_OUTPUT;
