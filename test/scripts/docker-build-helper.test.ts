@@ -31,6 +31,8 @@ const DOCTOR_SWITCH_DOCKER_E2E_PATH = "scripts/e2e/doctor-install-switch-docker.
 const DOCTOR_SWITCH_SCENARIO_PATH = "scripts/e2e/lib/doctor-install-switch/scenario.sh";
 const PACKAGE_COMPAT_PATH = "scripts/e2e/lib/package-compat.mjs";
 const UPDATE_CHANNEL_SWITCH_DOCKER_E2E_PATH = "scripts/e2e/update-channel-switch-docker.sh";
+const UPDATE_CHANNEL_SWITCH_ASSERTIONS_PATH =
+  "scripts/e2e/lib/update-channel-switch/assertions.mjs";
 const CENTRALIZED_BUILD_SCRIPTS = [
   "scripts/docker/setup.sh",
   "scripts/e2e/browser-cdp-snapshot-docker.sh",
@@ -138,6 +140,7 @@ describe("docker build helper", () => {
   it("caps package acceptance legacy compatibility at 2026.4.25", () => {
     const doctorScenario = readFileSync(DOCTOR_SWITCH_SCENARIO_PATH, "utf8");
     const updateChannel = readFileSync(UPDATE_CHANNEL_SWITCH_DOCKER_E2E_PATH, "utf8");
+    const updateChannelAssertions = readFileSync(UPDATE_CHANNEL_SWITCH_ASSERTIONS_PATH, "utf8");
     const pluginsSweep = readFileSync(PLUGINS_DOCKER_SWEEP_PATH, "utf8");
     const pluginsMarketplace = readFileSync(PLUGINS_DOCKER_MARKETPLACE_PATH, "utf8");
     const pluginsClawhub = readFileSync(PLUGINS_DOCKER_CLAWHUB_PATH, "utf8");
@@ -148,6 +151,7 @@ describe("docker build helper", () => {
     const scripts = [
       doctorScenario,
       updateChannel,
+      updateChannelAssertions,
       pluginsSweep,
       pluginsMarketplace,
       pluginsClawhub,
@@ -173,7 +177,8 @@ describe("docker build helper", () => {
     expect(scripts.join("\n")).toContain(
       "Package $package_version must support gateway install --wrapper.",
     );
-    expect(scripts.join("\n")).toContain("expected persisted update.channel dev");
+    expect(updateChannel).toContain("assert-config-channel dev");
+    expect(scripts.join("\n")).toContain("expected persisted update.channel");
     expect(pluginsAssertions).toContain("expected modern installRecords in installed plugin index");
   });
 
