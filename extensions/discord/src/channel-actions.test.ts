@@ -53,7 +53,16 @@ describe("discordMessageActions", () => {
     });
 
     expect(discovery?.capabilities).toEqual(["presentation"]);
-    expect(discovery?.schema).toBeUndefined();
+    expect(discovery?.schema).toMatchObject({
+      actions: ["send"],
+      visibility: "all-configured",
+      properties: {
+        components: {
+          type: "object",
+          additionalProperties: true,
+        },
+      },
+    });
     expect(discovery?.actions).toEqual(
       expect.arrayContaining(["send", "poll", "react", "reactions", "emoji-list", "permissions"]),
     );
@@ -100,7 +109,7 @@ describe("discordMessageActions", () => {
     expect(workDiscovery?.actions).not.toContain("poll");
   });
 
-  it("does not expose Discord-native message tool schema", () => {
+  it("exposes Discord components on the shared message tool schema", () => {
     const discovery = discordMessageActions.describeMessageTool?.({
       cfg: {
         channels: {
@@ -110,7 +119,16 @@ describe("discordMessageActions", () => {
         },
       } as OpenClawConfig,
     });
-    expect(discovery?.schema).toBeUndefined();
+    expect(discovery?.schema).toMatchObject({
+      actions: ["send"],
+      visibility: "all-configured",
+      properties: {
+        components: {
+          type: "object",
+          additionalProperties: true,
+        },
+      },
+    });
   });
 
   it.each(["read", "search"])("routes %s actions through gateway execution mode", (action) => {

@@ -77,6 +77,7 @@ export async function handleDiscordMessageAction(
     }
     const asVoice = readBooleanParam(params, "asVoice") === true;
     const rawComponents =
+      params.components ??
       buildDiscordPresentationComponents(normalizeMessagePresentation(params.presentation)) ??
       buildDiscordInteractiveComponents(normalizeInteractiveReply(params.interactive));
     const hasComponents =
