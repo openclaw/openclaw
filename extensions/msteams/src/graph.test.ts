@@ -172,12 +172,12 @@ describe("msteams graph helpers", () => {
 
     expect(globalThis.fetch).toHaveBeenCalledWith(
       "https://graph.microsoft.com/v1.0/groups?$select=id",
-      {
+      expect.objectContaining({
         headers: expect.objectContaining({
           Authorization: `Bearer ${graphToken}`,
           ConsistencyLevel: "eventual",
         }),
-      },
+      }),
     );
 
     mockTextFetchResponse("forbidden", { status: 403 });
@@ -374,7 +374,7 @@ describe("msteams graph helpers", () => {
 
     expectFetchPathContains(
       0,
-      "/groups?$filter=resourceProvisioningOptions%2FAny(x%3Ax%20eq%20'Team')%20and%20startsWith(displayName%2C'Bob''s%20Team')&$select=id,displayName",
+      "/groups?$filter=resourceProvisioningOptions%2FAny(x%3Ax%20eq%20%27Team%27)%20and%20startsWith(displayName%2C%27Bob%27%27s%20Team%27)&$select=id,displayName",
     );
     expectFetchPathContains(1, "/teams/team%2Fops/channels?$select=id,displayName");
   });
@@ -393,7 +393,7 @@ describe("msteams graph helpers", () => {
     });
     expectFetchPathContains(
       0,
-      "/users?$filter=(mail%20eq%20'alice.o''hara%40example.com'%20or%20userPrincipalName%20eq%20'alice.o''hara%40example.com')&$select=id,displayName,mail,userPrincipalName",
+      "/users?$filter=(mail%20eq%20%27alice.o%27%27hara%40example.com%27%20or%20userPrincipalName%20eq%20%27alice.o%27%27hara%40example.com%27)&$select=id,displayName,mail,userPrincipalName",
     );
   });
 
