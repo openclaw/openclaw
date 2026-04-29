@@ -56,6 +56,14 @@ function createMockQaRuntime(params?: {
           sessionUpdatedAt.set(sessionKey, Date.now());
         },
       },
+      mentions: {
+        buildMentionRegexes(...names: string[]) {
+          return names.map((name) => new RegExp(`\\b${name}\\b`, "iu"));
+        },
+        matchesMentionPatterns(text: string, regexes: RegExp[]) {
+          return regexes.some((regex) => regex.test(text));
+        },
+      },
       reply: {
         resolveEnvelopeFormatOptions() {
           return {};
