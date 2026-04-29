@@ -8,7 +8,14 @@ import {
 } from "./session-transcript-repair.js";
 import { castAgentMessage, castAgentMessages } from "./test-helpers/agent-message-fixtures.js";
 
-const TOOL_CALL_BLOCK_TYPES = new Set(["toolCall", "toolUse", "functionCall"]);
+const TOOL_CALL_BLOCK_TYPES = new Set([
+  "toolCall",
+  "toolUse",
+  "functionCall",
+  "tool_call",
+  "tool_use",
+  "function_call",
+]);
 
 function getAssistantToolCallBlocks(messages: AgentMessage[]) {
   const assistant = messages[0] as Extract<AgentMessage, { role: "assistant" }> | undefined;
@@ -58,6 +65,34 @@ describe("sanitizeToolUseResultPairing", () => {
         ],
       },
       { role: "user", content: "user message that should come after tool use" },
+      {
+        role: "toolResult",
+        toolCallId: "call_2",
+        toolName: "exec",
+        content: [{ type: "text", text: "ok" }],
+        isError: false,
+      },
+    ]);
+
+    const out = sanitizeToolUseResultPairing(input);
+    expect(out[0]?.role).toBe("assistant");
+    expect(out[1]?.role).toBe("toolResult");
+    expect((out[1] as { toolCallId?: string }).toolCallId).toBe("call_1");
+    expect(out[2]?.role).toBe("toolResult");
+    expect((out[2] as { toolCallId?: string }).toolCallId).toBe("call_2");
+    expect(out[3]?.role).toBe("user");
+  });
+
+  it("pairs snake_case tool-call blocks with matching tool results", () => {
+    const input = castAgentMessages([
+      {
+        role: "assistant",
+        content: [
+          { type: "tool_use", id: "call_1", name: "read", input: { path: "README.md" } },
+          { type: "function_call", id: "call_2", name: "exec", arguments: { command: "pwd" } },
+        ],
+      },
+      { role: "user", content: "later user message" },
       {
         role: "toolResult",
         toolCallId: "call_2",
@@ -431,6 +466,39 @@ describe("sanitizeToolCallInputs", () => {
     expect(types).toEqual(["text", "toolUse"]);
   });
 
+  it("keeps valid snake_case tool calls while dropping malformed siblings", () => {
+    const input = castAgentMessages([
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "before" },
+          { type: "tool_use", id: "call_ok", name: "read", input: { path: "a" } },
+          { type: "tool_call", id: "call_missing_input", name: "read" },
+          {
+            type: "function_call",
+            id: "call_exec",
+            name: "exec",
+            arguments: { command: "pwd" },
+          },
+          { type: "function_call", id: "", name: "write", arguments: {} },
+        ],
+      },
+    ]);
+
+    const out = sanitizeToolCallInputs(input);
+    const assistant = out[0] as Extract<AgentMessage, { role: "assistant" }>;
+    const content = Array.isArray(assistant.content) ? assistant.content : [];
+    expect(content.map((block) => (block as { type?: unknown }).type)).toEqual([
+      "text",
+      "tool_use",
+      "function_call",
+    ]);
+    expect(getAssistantToolCallBlocks(out).map((block) => block.id)).toEqual([
+      "call_ok",
+      "call_exec",
+    ]);
+  });
+
   it("drops signed-thinking assistant turns when sibling tool calls are not replay-safe", () => {
     const input = castAgentMessages([
       {
@@ -717,6 +785,36 @@ describe("sanitizeToolCallInputs", () => {
     const attachments = (inputObj.attachments ?? []) as Array<Record<string, unknown>>;
     expect(attachments[0]?.content).toBe("__OPENCLAW_REDACTED__");
   });
+
+  it("redacts sessions_spawn attachments for snake_case tool-use blocks", () => {
+    const input = castAgentMessages([
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "tool_use",
+            id: "call_snake_spawn",
+            name: "sessions_spawn",
+            input: {
+              task: "hello",
+              attachments: [{ name: "a.txt", content: "SNAKE_CASE_INLINE_CONTENT" }],
+            },
+          },
+        ],
+      },
+    ]);
+
+    const out = sanitizeToolCallInputs(input);
+    const toolCalls = getAssistantToolCallBlocks(out) as Array<Record<string, unknown>>;
+
+    expect(toolCalls).toHaveLength(1);
+    expect(toolCalls[0]?.type).toBe("tool_use");
+    expect(JSON.stringify(out)).not.toContain("SNAKE_CASE_INLINE_CONTENT");
+    const inputObj = (toolCalls[0]?.input ?? {}) as Record<string, unknown>;
+    const attachments = (inputObj.attachments ?? []) as Array<Record<string, unknown>>;
+    expect(attachments[0]?.content).toBe("__OPENCLAW_REDACTED__");
+  });
+
   it("preserves other block properties when trimming tool names", () => {
     const toolCalls = sanitizeAssistantToolCalls([
       { type: "toolCall", id: "call_1", name: " read ", arguments: { path: "/tmp/test" } },
