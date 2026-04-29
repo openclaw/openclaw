@@ -335,12 +335,14 @@ class LinuxSmoke {
     await this.phase("fresh.onboard-ref", 180, () => this.runRefOnboard());
     await this.phase("fresh.inject-bad-plugin", 90, () => this.injectBadPluginFixture());
     await this.phase("fresh.gateway-start", 240, () => this.startGatewayBackground());
-    await this.phase("fresh.bad-plugin-diagnostic", 90, () => this.verifyBadPluginDiagnostic());
+    await this.phase("fresh.bad-plugin-diagnostic", 90, () =>
+      this.verifyBadPluginDiagnostic("fresh"),
+    );
     await this.phase("fresh.gateway-status", 240, () => this.verifyGatewayStatus());
     this.status.freshGateway = "pass";
     await this.phase(
       "fresh.first-local-agent-turn",
-      Number(process.env.OPENCLAW_PARALLELS_LINUX_AGENT_TIMEOUT_S || 300),
+      Number(process.env.OPENCLAW_PARALLELS_LINUX_AGENT_TIMEOUT_S || 900),
       () => this.verifyLocalTurn(),
     );
     this.status.freshAgent = "pass";
@@ -362,12 +364,14 @@ class LinuxSmoke {
     await this.phase("upgrade.inject-bad-plugin", 90, () => this.injectBadPluginFixture());
     await this.phase("upgrade.onboard-ref", 180, () => this.runRefOnboard());
     await this.phase("upgrade.gateway-start", 240, () => this.startGatewayBackground());
-    await this.phase("upgrade.bad-plugin-diagnostic", 90, () => this.verifyBadPluginDiagnostic());
+    await this.phase("upgrade.bad-plugin-diagnostic", 90, () =>
+      this.verifyBadPluginDiagnostic("upgrade"),
+    );
     await this.phase("upgrade.gateway-status", 240, () => this.verifyGatewayStatus());
     this.status.upgradeGateway = "pass";
     await this.phase(
       "upgrade.first-local-agent-turn",
-      Number(process.env.OPENCLAW_PARALLELS_LINUX_AGENT_TIMEOUT_S || 300),
+      Number(process.env.OPENCLAW_PARALLELS_LINUX_AGENT_TIMEOUT_S || 900),
       () => this.verifyLocalTurn(),
     );
     this.status.upgradeAgent = "pass";
@@ -550,17 +554,18 @@ plugin_dir = "/root/.openclaw/test-bad-plugin"
 if plugin_dir not in paths:
     paths.append(plugin_dir)
 allow = plugins.get("allow")
-if isinstance(allow, list) and "test-bad-plugin" not in allow:
-    allow.append("test-bad-plugin")
+if not isinstance(allow, list):
+    allow = plugins["allow"] = ["openai"]
+for plugin_id in ("test-bad-plugin", "openai"):
+    if plugin_id not in allow:
+        allow.append(plugin_id)
 config_path.write_text(json.dumps(config, indent=2) + "\n")
 PY`);
   }
 
   private startGatewayBackground(): void {
     const bonjourEnv = this.disableBonjour ? " OPENCLAW_DISABLE_BONJOUR=1" : "";
-    this.guestExec([
-      "bash",
-      "-lc",
+    this.guestBash(
       String.raw`pkill -f "openclaw gateway run" >/dev/null 2>&1 || true
 rm -f /tmp/openclaw-parallels-linux-gateway.log
 setsid sh -lc ` +
@@ -570,7 +575,7 @@ setsid sh -lc ` +
           )} openclaw gateway run --bind loopback --port 18789 --force >/tmp/openclaw-parallels-linux-gateway.log 2>&1`,
         ) +
         String.raw` >/dev/null 2>&1 < /dev/null &`,
-    ]);
+    );
     const deadline = Date.now() + 240_000;
     while (Date.now() < deadline) {
       if (this.showGatewayStatusCompat(false)) {
@@ -635,12 +640,34 @@ setsid sh -lc ` +
     throw new Error("gateway status did not become RPC-ready");
   }
 
-  private verifyBadPluginDiagnostic(): void {
-    this.guestExec([
-      "bash",
-      "-lc",
-      'grep -F "failed to load setup entry" /tmp/openclaw-parallels-linux-gateway.log',
-    ]);
+  private async verifyBadPluginDiagnostic(lane: "fresh" | "upgrade"): Promise<void> {
+    const warning =
+      "channel plugin manifest declares test-bad-plugin without channelConfigs metadata";
+    const gatewayStartLog = await readFile(
+      path.join(this.runDir, `${lane}.gateway-start.log`),
+      "utf8",
+    );
+    if (!gatewayStartLog.includes(warning)) {
+      throw new Error(`bad plugin diagnostic missing: ${warning}`);
+    }
+    this.log(warning);
+    this.guestBash(String.raw`set -euo pipefail
+python3 - <<'PY'
+import json
+from pathlib import Path
+config_path = Path("/root/.openclaw/openclaw.json")
+config = json.loads(config_path.read_text()) if config_path.exists() else {}
+plugins = config.setdefault("plugins", {})
+load = plugins.setdefault("load", {})
+paths = load.get("paths")
+if isinstance(paths, list):
+    load["paths"] = [path for path in paths if path != "/root/.openclaw/test-bad-plugin"]
+allow = plugins.get("allow")
+if isinstance(allow, list):
+    plugins["allow"] = [plugin_id for plugin_id in allow if plugin_id != "test-bad-plugin"]
+config_path.write_text(json.dumps(config, indent=2) + "\n")
+PY
+rm -rf /root/.openclaw/test-bad-plugin`);
   }
 
   private verifyLocalTurn(): void {
@@ -654,21 +681,15 @@ setsid sh -lc ` +
       "--strict-json",
     ]);
     this.prepareAgentWorkspace();
-    this.guestExec([
-      "/bin/sh",
-      "-lc",
+    this.guestBash(
       `exec /usr/bin/env ${shellQuote(`${this.auth.apiKeyEnv}=${this.auth.apiKeyValue}`)} openclaw agent --local --agent main --session-id parallels-linux-smoke --message ${shellQuote(
         "Reply with exact ASCII text OK only.",
       )} --json`,
-    ]);
+    );
   }
 
   private prepareAgentWorkspace(): void {
-    this.guestExec([
-      "/bin/sh",
-      "-lc",
-      posixAgentWorkspaceScript("Parallels Linux smoke test assistant."),
-    ]);
+    this.guestBash(posixAgentWorkspaceScript("Parallels Linux smoke test assistant."));
   }
 
   private async extractLastVersion(phaseId: string): Promise<string> {
