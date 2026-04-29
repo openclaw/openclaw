@@ -16,7 +16,7 @@ import {
   withNormalizedTimestamp,
   readBooleanParam,
 } from "../runtime-api.js";
-import { sendDiscordComponentMessage } from "../send.components.js";
+import { editDiscordComponentMessage, sendDiscordComponentMessage } from "../send.components.js";
 import {
   createThreadDiscord,
   deleteMessageDiscord,
@@ -64,6 +64,7 @@ export const discordMessagingActionRuntime = {
   resolveDiscordChannelId,
   searchMessagesDiscord,
   sendDiscordComponentMessage,
+  editDiscordComponentMessage,
   sendMessageDiscord,
   sendPollDiscord,
   sendStickerDiscord,
@@ -429,9 +430,27 @@ export async function handleDiscordMessagingAction(
       const messageId = readStringParam(params, "messageId", {
         required: true,
       });
+      const rawComponents = params.components;
+      const componentSpec = rawComponents ? readDiscordComponentSpec(rawComponents) : null;
       const content = readStringParam(params, "content", {
-        required: true,
+        required: !componentSpec,
+        allowEmpty: true,
       });
+
+      if (componentSpec) {
+        const normalizedContent = content?.trim() ? content : undefined;
+        const payload = componentSpec.text
+          ? componentSpec
+          : { ...componentSpec, text: normalizedContent };
+        const result = await discordMessagingActionRuntime.editDiscordComponentMessage(
+          `channel:${channelId}`,
+          messageId,
+          payload,
+          { ...cfgOptions, ...(accountId ? { accountId } : {}) },
+        );
+        return jsonResult({ ok: true, result, components: true });
+      }
+
       const message = accountId
         ? await discordMessagingActionRuntime.editMessageDiscord(
             channelId,
@@ -595,7 +614,10 @@ export async function handleDiscordMessagingAction(
             accountId,
           })
         : await discordMessagingActionRuntime.listPinsDiscord(channelId, cfgOptions);
-      return jsonResult({ ok: true, pins: pins.map((pin) => normalizeMessage(pin)) });
+      return jsonResult({
+        ok: true,
+        pins: pins.map((pin) => normalizeMessage(pin)),
+      });
     }
     case "searchMessages": {
       if (!isActionEnabled("search")) {

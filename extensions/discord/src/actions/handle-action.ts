@@ -126,7 +126,9 @@ export async function handleDiscordMessageAction(
     const question = readStringParam(params, "pollQuestion", {
       required: true,
     });
-    const answers = readStringArrayParam(params, "pollOption", { required: true });
+    const answers = readStringArrayParam(params, "pollOption", {
+      required: true,
+    });
     const allowMultiselect = readBooleanParam(params, "pollMulti");
     const durationHours = readNumberParam(params, "pollDurationHours", {
       integer: true,
@@ -149,7 +151,10 @@ export async function handleDiscordMessageAction(
   }
 
   if (action === "react") {
-    const messageIdRaw = resolveReactionMessageId({ args: params, toolContext: ctx.toolContext });
+    const messageIdRaw = resolveReactionMessageId({
+      args: params,
+      toolContext: ctx.toolContext,
+    });
     const messageId = normalizeOptionalStringifiedId(messageIdRaw) ?? "";
     if (!messageId) {
       throw new Error(
@@ -207,14 +212,19 @@ export async function handleDiscordMessageAction(
 
   if (action === "edit") {
     const messageId = readStringParam(params, "messageId", { required: true });
-    const content = readStringParam(params, "message", { required: true });
+    const rawComponents = params.components;
+    const content = readStringParam(params, "message", {
+      required: !rawComponents,
+      allowEmpty: true,
+    });
     return await handleDiscordAction(
       {
         action: "editMessage",
         accountId: accountId ?? undefined,
         channelId: resolveChannelId(),
         messageId,
-        content,
+        content: content ?? "",
+        ...(rawComponents ? { components: rawComponents } : {}),
       },
       cfg,
       actionOptions,

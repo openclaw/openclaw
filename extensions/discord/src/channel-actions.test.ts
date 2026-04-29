@@ -54,7 +54,7 @@ describe("discordMessageActions", () => {
 
     expect(discovery?.capabilities).toEqual(["presentation"]);
     expect(discovery?.schema).toMatchObject({
-      actions: ["send"],
+      actions: ["send", "edit"],
       visibility: "all-configured",
       properties: {
         components: {
@@ -120,7 +120,7 @@ describe("discordMessageActions", () => {
       } as OpenClawConfig,
     });
     expect(discovery?.schema).toMatchObject({
-      actions: ["send"],
+      actions: ["send", "edit"],
       visibility: "all-configured",
       properties: {
         components: {
@@ -132,17 +132,21 @@ describe("discordMessageActions", () => {
   });
 
   it.each(["read", "search"])("routes %s actions through gateway execution mode", (action) => {
-    expect(discordMessageActions.resolveExecutionMode?.({ action: action as never })).toBe(
-      "gateway",
-    );
+    expect(
+      discordMessageActions.resolveExecutionMode?.({
+        action: action as never,
+      }),
+    ).toBe("gateway");
   });
 
   it.each(["send", "edit", "delete", "react", "pin", "poll"])(
     "routes %s actions through local execution mode",
     (action) => {
-      expect(discordMessageActions.resolveExecutionMode?.({ action: action as never })).toBe(
-        "local",
-      );
+      expect(
+        discordMessageActions.resolveExecutionMode?.({
+          action: action as never,
+        }),
+      ).toBe("local");
     },
   );
 

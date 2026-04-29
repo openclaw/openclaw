@@ -32,14 +32,14 @@ const DISCORD_COMPONENTS_SCHEMA = Type.Optional(
     {
       additionalProperties: true,
       description:
-        'OpenClaw Discord component message spec for action: "send". Use an object with text, blocks, modal, and/or container; runtime maps it to Discord components v1/v2.',
+        'OpenClaw Discord component message spec for action: "send" or action: "edit". Use an object with text, blocks, modal, and/or container; runtime maps it to Discord components v1/v2.',
     },
   ),
 );
 
 function buildDiscordMessageToolSchema(): NonNullable<ChannelMessageToolDiscovery["schema"]> {
   return {
-    actions: ["send"],
+    actions: ["send", "edit"],
     properties: {
       components: DISCORD_COMPONENTS_SCHEMA,
     },
@@ -71,7 +71,10 @@ function resolveScopedDiscordActionDiscovery(params: {
   if (!params.accountId) {
     return resolveDiscordActionDiscovery(params.cfg);
   }
-  const account = resolveDiscordAccount({ cfg: params.cfg, accountId: params.accountId });
+  const account = resolveDiscordAccount({
+    cfg: params.cfg,
+    accountId: params.accountId,
+  });
   if (!account.enabled || !account.token.trim()) {
     return null;
   }

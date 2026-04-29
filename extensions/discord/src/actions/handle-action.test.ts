@@ -166,6 +166,38 @@ describe("handleDiscordMessageAction", () => {
     );
   });
 
+  it("forwards Discord-native components from message edits", async () => {
+    const components = {
+      text: "Updated component",
+      container: { accentColor: 0x57f287 },
+      blocks: [{ type: "text", text: "✅ step one" }],
+    };
+
+    await handleDiscordMessageAction({
+      action: "edit",
+      params: {
+        channelId: "channel:123",
+        messageId: "m1",
+        components,
+      },
+      cfg: {
+        channels: { discord: { token: "tok" } },
+      } as OpenClawConfig,
+    });
+
+    expect(handleDiscordActionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "editMessage",
+        channelId: "123",
+        messageId: "m1",
+        content: "",
+        components,
+      }),
+      expect.any(Object),
+      expect.any(Object),
+    );
+  });
+
   it("does not use another provider's current target for Discord sends", async () => {
     await expect(
       handleDiscordMessageAction({

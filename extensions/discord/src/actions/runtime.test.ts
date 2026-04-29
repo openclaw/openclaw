@@ -14,9 +14,13 @@ import {
   handleDiscordModerationAction,
 } from "./runtime.moderation.js";
 
-const originalDiscordMessagingActionRuntime = { ...discordMessagingActionRuntime };
+const originalDiscordMessagingActionRuntime = {
+  ...discordMessagingActionRuntime,
+};
 const originalDiscordGuildActionRuntime = { ...discordGuildActionRuntime };
-const originalDiscordModerationActionRuntime = { ...discordModerationActionRuntime };
+const originalDiscordModerationActionRuntime = {
+  ...discordModerationActionRuntime,
+};
 
 const discordSendMocks = {
   banMemberDiscord: vi.fn(async () => ({})),
@@ -33,6 +37,10 @@ const discordSendMocks = {
     name: "edited",
   })),
   editMessageDiscord: vi.fn(async () => ({})),
+  editDiscordComponentMessage: vi.fn(async () => ({
+    messageId: "m1",
+    channelId: "123",
+  })),
   fetchChannelPermissionsDiscord: vi.fn(async () => ({})),
   fetchMessageDiscord: vi.fn(async () => ({})),
   fetchReactionsDiscord: vi.fn(async () => ({})),
@@ -63,6 +71,8 @@ const {
   createThreadDiscord,
   deleteChannelDiscord,
   editChannelDiscord,
+  editDiscordComponentMessage,
+  editMessageDiscord,
   fetchReactionsDiscord,
   fetchMessageDiscord,
   kickMemberDiscord,
@@ -364,7 +374,9 @@ describe("handleDiscordMessagingAction", () => {
       },
     } as OpenClawConfig;
     await handleMessagingAction("readMessages", { channelId: "C1" }, enableAllActions, cfg);
-    expect(readMessagesDiscord).toHaveBeenCalledWith("C1", expect.any(Object), { cfg });
+    expect(readMessagesDiscord).toHaveBeenCalledWith("C1", expect.any(Object), {
+      cfg,
+    });
   });
 
   it("adds normalized timestamps to fetchMessage payloads", async () => {
@@ -378,7 +390,9 @@ describe("handleDiscordMessagingAction", () => {
       { guildId: "G1", channelId: "C1", messageId: "M1" },
       enableAllActions,
     );
-    const payload = result.details as { message?: { timestampMs?: number; timestampUtc?: string } };
+    const payload = result.details as {
+      message?: { timestampMs?: number; timestampUtc?: string };
+    };
 
     const expectedMs = Date.parse("2026-01-15T11:00:00.000Z");
     expect(payload.message?.timestampMs).toBe(expectedMs);
@@ -427,7 +441,9 @@ describe("handleDiscordMessagingAction", () => {
       enableAllActions,
     );
     const payload = result.details as {
-      results?: { messages?: Array<Array<{ timestampMs?: number; timestampUtc?: string }>> };
+      results?: {
+        messages?: Array<Array<{ timestampMs?: number; timestampUtc?: string }>>;
+      };
     };
 
     const expectedMs = Date.parse("2026-01-15T13:00:00.000Z");
@@ -509,6 +525,36 @@ describe("handleDiscordMessagingAction", () => {
         mediaLocalRoots: ["/tmp/agent-root"],
       }),
     );
+  });
+
+  it("edits Discord component messages when components are provided", async () => {
+    editDiscordComponentMessage.mockClear();
+    editMessageDiscord.mockClear();
+
+    await handleMessagingAction(
+      "editMessage",
+      {
+        channelId: "channel:123",
+        messageId: "m1",
+        components: {
+          text: "Updated component",
+          container: { accentColor: 0x57f287 },
+          blocks: [{ type: "text", text: "✅ step one" }],
+        },
+      },
+      enableAllActions,
+    );
+
+    expect(editDiscordComponentMessage).toHaveBeenCalledWith(
+      "channel:123",
+      "m1",
+      expect.objectContaining({
+        text: "Updated component",
+        container: { accentColor: 0x57f287 },
+      }),
+      { cfg: DISCORD_TEST_CFG },
+    );
+    expect(editMessageDiscord).not.toHaveBeenCalled();
   });
 
   it("forwards the optional filename into sendMessageDiscord", async () => {
@@ -755,7 +801,9 @@ describe("handleDiscordGuildAction - channel management", () => {
 
   it("deletes a channel", async () => {
     await handleGuildAction("channelDelete", { channelId: "C1" }, channelsEnabled);
-    expect(deleteChannelDiscord).toHaveBeenCalledWith("C1", { cfg: DISCORD_TEST_CFG });
+    expect(deleteChannelDiscord).toHaveBeenCalledWith("C1", {
+      cfg: DISCORD_TEST_CFG,
+    });
   });
 
   it("moves a channel", async () => {
@@ -839,7 +887,9 @@ describe("handleDiscordGuildAction - channel management", () => {
 
   it("deletes a category", async () => {
     await handleGuildAction("categoryDelete", { categoryId: "CAT1" }, channelsEnabled);
-    expect(deleteChannelDiscord).toHaveBeenCalledWith("CAT1", { cfg: DISCORD_TEST_CFG });
+    expect(deleteChannelDiscord).toHaveBeenCalledWith("CAT1", {
+      cfg: DISCORD_TEST_CFG,
+    });
   });
 
   it.each([
@@ -931,7 +981,13 @@ describe("handleDiscordAction per-account gating", () => {
     } as OpenClawConfig;
 
     await handleDiscordAction(
-      { action: "timeout", guildId: "G1", userId: "U1", durationMinutes: 5, accountId: "ops" },
+      {
+        action: "timeout",
+        guildId: "G1",
+        userId: "U1",
+        durationMinutes: 5,
+        accountId: "ops",
+      },
       cfg,
     );
     expect(timeoutMemberDiscord).toHaveBeenCalledWith(
@@ -953,7 +1009,13 @@ describe("handleDiscordAction per-account gating", () => {
 
     await expect(
       handleDiscordAction(
-        { action: "timeout", guildId: "G1", userId: "U1", durationMinutes: 5, accountId: "chat" },
+        {
+          action: "timeout",
+          guildId: "G1",
+          userId: "U1",
+          durationMinutes: 5,
+          accountId: "chat",
+        },
         cfg,
       ),
     ).rejects.toThrow(/Discord moderation is disabled/);
@@ -993,7 +1055,12 @@ describe("handleDiscordAction per-account gating", () => {
 
     await expect(
       handleDiscordAction(
-        { action: "channelCreate", guildId: "G1", name: "alerts", accountId: "ops" },
+        {
+          action: "channelCreate",
+          guildId: "G1",
+          name: "alerts",
+          accountId: "ops",
+        },
         cfg,
       ),
     ).rejects.toThrow(/channel management is disabled/i);
@@ -1015,7 +1082,12 @@ describe("handleDiscordAction per-account gating", () => {
     } as OpenClawConfig;
 
     await handleDiscordAction(
-      { action: "channelCreate", guildId: "G1", name: "alerts", accountId: "ops" },
+      {
+        action: "channelCreate",
+        guildId: "G1",
+        name: "alerts",
+        accountId: "ops",
+      },
       cfg,
     );
 
