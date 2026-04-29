@@ -1,0 +1,48 @@
+# syntax=docker/dockerfile:1.7
+#
+# Fork-specific overlay on top of the upstream OpenClaw runtime image.
+# Adds common CLIs that are useful inside the gateway container:
+#   - gh        (GitHub CLI, via the official apt repo since bookworm
+#                does not ship it)
+#   - lark-cli  (official Lark/Feishu CLI, @larksuite/cli on npm)
+#
+# git is already installed by the upstream runtime stage (Dockerfile),
+# so it is intentionally not re-installed here.
+#
+# Build:
+#   docker build \
+#     --build-arg BASE_IMAGE=<upstream-image> \
+#     -f Dockerfile.fork .
+#
+# The upstream runtime image switches to the non-root `node` user as its
+# final step. Drop back to root for the installs and switch back to
+# `node` at the end so the runtime user/permission model is preserved.
+
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
+
+USER root
+
+# GitHub CLI. bookworm does not ship gh in its default repos, so install
+# it from the official GitHub CLI apt repo.
+RUN --mount=type=cache,id=openclaw-fork-apt-cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,id=openclaw-fork-apt-lists,target=/var/lib/apt,sharing=locked \
+    apt-get update && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+      ca-certificates curl gnupg && \
+    install -m 0755 -d /etc/apt/keyrings && \
+    curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+      -o /etc/apt/keyrings/githubcli-archive-keyring.gpg && \
+    chmod a+r /etc/apt/keyrings/githubcli-archive-keyring.gpg && \
+    printf 'deb [arch=%s signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main\n' \
+      "$(dpkg --print-architecture)" > /etc/apt/sources.list.d/github-cli.list && \
+    apt-get update && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends gh
+
+# Official Lark/Feishu CLI (@larksuite/cli) — provides the `lark-cli`
+# binary on PATH. Pinned for reproducible image builds; bump as needed.
+ARG OPENCLAW_LARK_CLI_VERSION="1.0.21"
+RUN npm install -g "@larksuite/cli@${OPENCLAW_LARK_CLI_VERSION}" && \
+    npm cache clean --force
+
+USER node

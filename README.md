@@ -18,6 +18,26 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge" alt="MIT License"></a>
 </p>
 
+## Fork modifications
+
+This fork tracks upstream [openclaw/openclaw](https://github.com/openclaw/openclaw)
+and layers a small set of additions for our own deployment. Everything else is
+unchanged from upstream.
+
+| Path              | Change                                                                                                                                                                                                                          |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `cloudbuild.yaml` | Fork-only Cloud Build pipeline. Triggered by pushes to `dev`. Builds the upstream image, layers `Dockerfile.fork` on top, and publishes to Artifact Registry in `us-central1` and `asia-east2` tagged with version, SHA, and branch. |
+| `Dockerfile.fork` | Overlay on the upstream runtime image. Installs common CLIs into the gateway container: `gh` (GitHub CLI, via the official apt repo) and `lark-cli` (`@larksuite/cli`, pinned via `OPENCLAW_LARK_CLI_VERSION`). `git` is already present in the upstream runtime stage. |
+
+Building locally:
+
+```bash
+docker build -t openclaw-base:local -f Dockerfile .
+docker build --build-arg BASE_IMAGE=openclaw-base:local -t openclaw:local -f Dockerfile.fork .
+```
+
+---
+
 **OpenClaw** is a _personal AI assistant_ you run on your own devices.
 It answers you on the channels you already use. It can speak and listen on macOS/iOS/Android, and can render a live Canvas you control. The Gateway is just the control plane — the product is the assistant.
 

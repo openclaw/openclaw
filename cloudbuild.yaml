@@ -1,6 +1,8 @@
 # Cloud Build pipeline for the openclaw fork.
-# Builds the Docker image from the upstream Dockerfile and publishes it to
-# Artifact Registry repos in us-central1 and asia-east2 (Hong Kong).
+# Builds the upstream Docker image, then layers a fork overlay
+# (Dockerfile.fork) on top to add common CLIs (gh, lark-cli; git is already
+# present in the upstream runtime), and publishes the result to Artifact
+# Registry repos in us-central1 and asia-east2 (Hong Kong).
 #
 # Triggered by pushes to the `dev` branch. The image is tagged with the
 # upstream version from package.json, the short commit SHA, and the branch
@@ -21,7 +23,21 @@ steps:
         echo "VERSION=$$VERSION" > /workspace/env.sh
         echo "Building openclaw v$$VERSION (sha=${SHORT_SHA}, branch=${BRANCH_NAME})"
 
-  - id: build
+  - id: build-base
+    name: gcr.io/cloud-builders/docker
+    entrypoint: bash
+    env:
+      - DOCKER_BUILDKIT=1
+    args:
+      - -ceu
+      - |
+        docker build \
+          --platform=linux/amd64 \
+          -t openclaw-base:${SHORT_SHA} \
+          -f Dockerfile \
+          .
+
+  - id: build-fork
     name: gcr.io/cloud-builders/docker
     entrypoint: bash
     env:
@@ -32,13 +48,14 @@ steps:
         source /workspace/env.sh
         docker build \
           --platform=linux/amd64 \
+          --build-arg BASE_IMAGE=openclaw-base:${SHORT_SHA} \
           -t us-central1-docker.pkg.dev/$PROJECT_ID/openclaw/openclaw:v$$VERSION \
           -t us-central1-docker.pkg.dev/$PROJECT_ID/openclaw/openclaw:${SHORT_SHA} \
           -t us-central1-docker.pkg.dev/$PROJECT_ID/openclaw/openclaw:${BRANCH_NAME} \
           -t asia-east2-docker.pkg.dev/$PROJECT_ID/openclaw/openclaw:v$$VERSION \
           -t asia-east2-docker.pkg.dev/$PROJECT_ID/openclaw/openclaw:${SHORT_SHA} \
           -t asia-east2-docker.pkg.dev/$PROJECT_ID/openclaw/openclaw:${BRANCH_NAME} \
-          -f Dockerfile \
+          -f Dockerfile.fork \
           .
 
   - id: push-us-central1
