@@ -1,5 +1,10 @@
-import { describe, expect, it } from "vitest";
-import { createDiscordPluginBase } from "./shared.js";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDiscordPluginBase, discordConfigAdapter } from "./shared.js";
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 
 describe("createDiscordPluginBase", () => {
   it("owns Discord native command name overrides", () => {
@@ -25,5 +30,102 @@ describe("createDiscordPluginBase", () => {
     expect(plugin.security?.resolveDmPolicy).toBeTypeOf("function");
     expect(plugin.security?.collectWarnings).toBeTypeOf("function");
     expect(plugin.security?.collectAuditFindings).toBeTypeOf("function");
+  });
+
+  it("reports duplicate-token accounts as disabled to gateway startup", () => {
+    vi.stubEnv("DISCORD_BOT_TOKEN", "same-token");
+    const plugin = createDiscordPluginBase({ setup: {} as never });
+    const cfg = {
+      channels: {
+        discord: {
+          accounts: {
+            work: {
+              token: "same-token",
+            },
+          },
+        },
+      },
+    };
+
+    const defaultAccount = plugin.config.resolveAccount(cfg, "default");
+    const workAccount = plugin.config.resolveAccount(cfg, "work");
+
+    expect(plugin.config.isEnabled?.(defaultAccount, cfg)).toBe(false);
+    expect(plugin.config.disabledReason?.(defaultAccount, cfg)).toBe(
+      'duplicate bot token; using account "work"',
+    );
+    expect(plugin.config.isEnabled?.(workAccount, cfg)).toBe(true);
+  });
+});
+
+describe("discordConfigAdapter", () => {
+  it("resolves top-level allowFrom before legacy dm.allowFrom", () => {
+    const cfg = {
+      channels: {
+        discord: {
+          accounts: {
+            default: {
+              allowFrom: ["123"],
+              dm: { allowFrom: ["456"] },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(discordConfigAdapter.resolveAllowFrom?.({ cfg, accountId: "default" })).toEqual(["123"]);
+  });
+
+  it("falls back to legacy dm.allowFrom", () => {
+    const cfg = {
+      channels: {
+        discord: {
+          accounts: {
+            default: {
+              dm: { allowFrom: ["456"] },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(discordConfigAdapter.resolveAllowFrom?.({ cfg, accountId: "default" })).toEqual(["456"]);
+  });
+
+  it("prefers account legacy dm.allowFrom over inherited root allowFrom", () => {
+    const cfg = {
+      channels: {
+        discord: {
+          allowFrom: ["root"],
+          accounts: {
+            work: {
+              dm: { allowFrom: ["account-legacy"] },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(discordConfigAdapter.resolveAllowFrom?.({ cfg, accountId: "work" })).toEqual([
+      "account-legacy",
+    ]);
+  });
+
+  it("coerces numeric allowFrom entries at the config boundary", () => {
+    const cfg = {
+      channels: {
+        discord: {
+          accounts: {
+            default: {
+              allowFrom: [123456789],
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(discordConfigAdapter.resolveAllowFrom?.({ cfg, accountId: "default" })).toEqual([
+      "123456789",
+    ]);
   });
 });

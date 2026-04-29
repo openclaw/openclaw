@@ -132,9 +132,7 @@ function isWorkspaceDerivedPath(
   const realDir = realpathExistingServicePathDir(dir);
   const realCwd = realpathServicePathDir(cwd);
   const realHome = home ? realpathServicePathDir(home) : undefined;
-  return Boolean(
-    realDir && realCwd && realHome !== realCwd && isSameOrChildPath(realDir, realCwd),
-  );
+  return Boolean(realDir && realCwd && realHome !== realCwd && isSameOrChildPath(realDir, realCwd));
 }
 
 function addEnvConfiguredBinDir(

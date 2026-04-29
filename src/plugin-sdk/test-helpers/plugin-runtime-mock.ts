@@ -458,6 +458,9 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
     },
     state: {
       resolveStateDir: vi.fn(() => "/tmp/openclaw"),
+      openKeyedStore: vi.fn(() => {
+        throw new Error("openKeyedStore mock is not configured");
+      }) as unknown as PluginRuntime["state"]["openKeyedStore"],
     },
     tasks: {
       runs: {

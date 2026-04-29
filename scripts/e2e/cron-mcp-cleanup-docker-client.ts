@@ -133,7 +133,7 @@ async function runCronCleanupScenario(params: {
       message: "Use available context and then stop.",
       timeoutSeconds: 90,
       lightContext: true,
-      toolsAllow: ["bundle-mcp"],
+      toolsAllow: ["bundle-mcp", "cronCleanupProbe__cleanup_probe"],
     },
     delivery: { mode: "none" },
   });
@@ -205,17 +205,21 @@ async function runSubagentCleanupScenario(params: {
   const { gateway, pidPath, pidsPath, exitPath } = params;
   await resetProbeFiles({ pidPath, pidsPath, exitPath });
 
-  const run = await gateway.request<AgentRunResult>("agent", {
-    message: "Use available context and then stop.",
-    sessionKey: `agent:main:subagent:docker-${randomUUID()}`,
-    agentId: "main",
-    lane: "subagent",
-    cleanupBundleMcpOnRunEnd: true,
-    idempotencyKey: randomUUID(),
-    deliver: false,
-    timeout: 90,
-    bestEffortDeliver: true,
-  });
+  const run = await gateway.request<AgentRunResult>(
+    "agent",
+    {
+      message: "Use available context and then stop.",
+      sessionKey: `agent:main:subagent:docker-${randomUUID()}`,
+      agentId: "main",
+      lane: "subagent",
+      cleanupBundleMcpOnRunEnd: true,
+      idempotencyKey: randomUUID(),
+      deliver: false,
+      timeout: 90,
+      bestEffortDeliver: true,
+    },
+    { timeoutMs: 240_000 },
+  );
   assert(
     run.status === "accepted" && run.runId,
     `agent did not accept subagent cleanup run: ${JSON.stringify(run)}`,

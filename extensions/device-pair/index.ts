@@ -129,22 +129,34 @@ const QR_CHANNEL_SENDERS: Record<string, QrChannelSender> = {
   },
 };
 
+const GATEWAY_SCHEME_WITHOUT_AUTHORITY_RE = /^(?:https?|wss?):(?!\/\/)/i;
+const SCHEME_LIKE_PATH_RE = /^[A-Za-z][A-Za-z0-9+.-]*:\//;
+
 function normalizeUrl(raw: string, schemeFallback: "ws" | "wss"): string | null {
   const candidate = normalizeOptionalString(raw);
   if (!candidate) {
+    return null;
+  }
+  if (GATEWAY_SCHEME_WITHOUT_AUTHORITY_RE.test(candidate)) {
     return null;
   }
   const parsedUrl = parseNormalizedGatewayUrl(candidate);
   if (parsedUrl) {
     return parsedUrl;
   }
+  if (candidate.includes("://") || SCHEME_LIKE_PATH_RE.test(candidate)) {
+    return null;
+  }
   const hostPort = normalizeOptionalString(candidate.split("/", 1)[0]) ?? "";
-  return hostPort ? `${schemeFallback}://${hostPort}` : null;
+  return hostPort ? parseNormalizedGatewayUrl(`${schemeFallback}://${hostPort}`) : null;
 }
 
 function parseNormalizedGatewayUrl(raw: string): string | null {
   try {
     const parsed = new URL(raw);
+    if (parsed.username || parsed.password) {
+      return null;
+    }
     const scheme = parsed.protocol.slice(0, -1);
     const normalizedScheme = scheme === "http" ? "ws" : scheme === "https" ? "wss" : scheme;
     if (!(normalizedScheme === "ws" || normalizedScheme === "wss")) {

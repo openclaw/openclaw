@@ -3,6 +3,7 @@ import {
   extractLeadingHttpStatus,
   formatRawAssistantErrorForUi,
   isCloudflareOrHtmlErrorPage,
+  MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE,
   parseApiErrorInfo,
   parseApiErrorPayload,
 } from "../../shared/assistant-error-format.js";
@@ -207,6 +208,17 @@ export function isInvalidStreamingEventOrderError(raw: string): boolean {
     lower.includes("message_start") &&
     lower.includes("message_stop")
   );
+}
+
+export function isStreamingJsonParseError(raw: string): boolean {
+  if (!raw) {
+    return false;
+  }
+  const trimmed = raw.trim();
+  if (trimmed === MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE) {
+    return true;
+  }
+  return false;
 }
 
 function hasRateLimitTpmHint(raw: string): boolean {
@@ -417,6 +429,10 @@ export function sanitizeUserFacingText(text: unknown, opts?: { errorContext?: bo
 
     if (isRawApiErrorPayload(trimmed) || isLikelyHttpErrorText(trimmed)) {
       return formatRawAssistantErrorForUi(trimmed);
+    }
+
+    if (isStreamingJsonParseError(trimmed)) {
+      return "LLM streaming response contained a malformed fragment. Please try again.";
     }
 
     if (ERROR_PREFIX_RE.test(trimmed)) {

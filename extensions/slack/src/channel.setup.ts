@@ -8,6 +8,7 @@ import {
   listSlackAccountIds,
   resolveDefaultSlackAccountId,
   resolveSlackAccount,
+  resolveSlackAccountAllowFrom,
 } from "./accounts.js";
 import { type ChannelPlugin } from "./channel-api.js";
 import { SlackChannelConfigSchema } from "./config-schema.js";
@@ -22,15 +23,30 @@ const slackSetupWizard = createSlackSetupWizardProxy(async () => ({
   slackSetupWizard: (await import("./setup-surface.js")).slackSetupWizard,
 }));
 
-const slackSetupConfigAdapter = createScopedChannelConfigAdapter<ResolvedSlackAccount>({
+type SlackSetupConfigAccessorAccount = {
+  allowFrom: string[] | undefined;
+  defaultTo: string | undefined;
+};
+
+const slackSetupConfigAdapter = createScopedChannelConfigAdapter<
+  ResolvedSlackAccount,
+  SlackSetupConfigAccessorAccount
+>({
   sectionKey: SLACK_CHANNEL,
   listAccountIds: listSlackAccountIds,
   resolveAccount: adaptScopedAccountAccessor(resolveSlackAccount),
+  resolveAccessorAccount: (params) => {
+    const account = resolveSlackAccount(params);
+    return {
+      allowFrom: resolveSlackAccountAllowFrom({ cfg: params.cfg, accountId: account.accountId }),
+      defaultTo: account.config.defaultTo,
+    };
+  },
   defaultAccountId: resolveDefaultSlackAccountId,
   clearBaseFields: ["botToken", "appToken", "name"],
-  resolveAllowFrom: (account) => account.dm?.allowFrom,
+  resolveAllowFrom: (account) => account.allowFrom,
   formatAllowFrom: (allowFrom) => formatAllowFromLowercase({ allowFrom }),
-  resolveDefaultTo: (account) => account.config.defaultTo,
+  resolveDefaultTo: (account) => account.defaultTo,
 });
 
 export const slackSetupPlugin: ChannelPlugin<ResolvedSlackAccount> = {

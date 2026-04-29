@@ -792,6 +792,11 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
         proxy: {
           type: "string",
         },
+        gatewayInfoTimeoutMs: {
+          type: "integer",
+          exclusiveMinimum: 0,
+          maximum: 120000,
+        },
         allowBots: {
           anyOf: [
             {
@@ -1443,6 +1448,9 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
               type: "boolean",
             },
             guildMembers: {
+              type: "boolean",
+            },
+            voiceStates: {
               type: "boolean",
             },
           },
@@ -2147,6 +2155,11 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
               proxy: {
                 type: "string",
               },
+              gatewayInfoTimeoutMs: {
+                type: "integer",
+                exclusiveMinimum: 0,
+                maximum: 120000,
+              },
               allowBots: {
                 anyOf: [
                   {
@@ -2798,6 +2811,9 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                     type: "boolean",
                   },
                   guildMembers: {
+                    type: "boolean",
+                  },
+                  voiceStates: {
                     type: "boolean",
                   },
                 },
@@ -3473,10 +3489,6 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
         label: "Discord Thread Parent Inheritance",
         help: "If true, Discord thread sessions inherit the parent channel transcript (default: false).",
       },
-      "inboundWorker.runTimeoutMs": {
-        label: "Discord Inbound Worker Timeout (ms)",
-        help: "Optional queued Discord inbound worker timeout in ms. This is separate from Carbon listener timeouts; defaults to 1800000 and can be disabled with 0. Set per account via channels.discord.accounts.<id>.inboundWorker.runTimeoutMs.",
-      },
       "eventQueue.listenerTimeout": {
         label: "Discord EventQueue Listener Timeout (ms)",
         help: "Canonical Discord listener timeout control in ms for gateway normalization/enqueue handlers. Default is 120000 in OpenClaw; set per account via channels.discord.accounts.<id>.eventQueue.listenerTimeout.",
@@ -3521,9 +3533,17 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
         label: "Discord Guild Members Intent",
         help: "Enable the Guild Members privileged intent. Must also be enabled in the Discord Developer Portal. Default: false.",
       },
+      "intents.voiceStates": {
+        label: "Discord Voice States Intent",
+        help: "Enable the Guild Voice States intent. Defaults to the effective Discord voice setting; set false for text-only gateway sessions even when voice config is present.",
+      },
+      gatewayInfoTimeoutMs: {
+        label: "Discord Gateway Metadata Timeout (ms)",
+        help: "Timeout for Discord /gateway/bot metadata lookup before falling back to the default gateway URL. Default is 30000; OPENCLAW_DISCORD_GATEWAY_INFO_TIMEOUT_MS can override when config is unset.",
+      },
       "voice.enabled": {
         label: "Discord Voice Enabled",
-        help: "Enable Discord voice channel conversations (default: true). Omit channels.discord.voice to keep voice support disabled for the account.",
+        help: "Enable Discord voice channel conversations (default: true). Set false for text-only gateway sessions.",
       },
       "voice.model": {
         label: "Discord Voice Model",
@@ -15263,7 +15283,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
       },
       "execApprovals.approvers": {
         label: "Telegram Exec Approval Approvers",
-        help: "Telegram user IDs allowed to approve exec requests for this bot account. Use numeric Telegram user IDs. If you leave this unset, OpenClaw falls back to numeric owner IDs inferred from channels.telegram.allowFrom and direct-message defaultTo when possible.",
+        help: "Telegram user IDs allowed to approve exec requests for this bot account. Use numeric Telegram user IDs. If you leave this unset, OpenClaw falls back to numeric owner IDs inferred from commands.ownerAllowFrom when possible.",
       },
       "execApprovals.agentFilter": {
         label: "Telegram Exec Approval Agent Filter",
@@ -15942,6 +15962,9 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
             },
           ],
         },
+        exposeErrorText: {
+          type: "boolean",
+        },
         heartbeat: {
           type: "object",
           properties: {
@@ -16230,6 +16253,9 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                   },
                 ],
               },
+              exposeErrorText: {
+                type: "boolean",
+              },
               heartbeat: {
                 type: "object",
                 properties: {
@@ -16317,6 +16343,10 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
       configWrites: {
         label: "WhatsApp Config Writes",
         help: "Allow WhatsApp to write config in response to channel events/commands (default: true).",
+      },
+      exposeErrorText: {
+        label: "WhatsApp Error Text",
+        help: "Deliver user-visible agent/provider error text into WhatsApp (default: true). Disable to keep failures quiet on WhatsApp.",
       },
     },
     unsupportedSecretRefSurfacePatterns: [
