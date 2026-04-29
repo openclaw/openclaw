@@ -22,6 +22,7 @@ import {
   withGatewayServer,
   writeSessionStore,
 } from "./test-helpers.js";
+import { readAgentCommandCall } from "./test/agent-command-helpers.js";
 
 installGatewayTestHooks({ scope: "suite" });
 
@@ -109,22 +110,6 @@ const defaultRegistry = createRegistry([
 function expectChannels(call: Record<string, unknown>, channel: string) {
   expect(call.channel).toBe(channel);
   expect(call.messageChannel).toBe(channel);
-}
-
-async function readAgentCommandCall(params: { runId?: string; fromEnd?: number } = {}) {
-  if (params.runId) {
-    await vi.waitFor(() =>
-      expect(
-        (vi.mocked(agentCommand).mock.calls as unknown as Array<[Record<string, unknown>]>).some(
-          ([call]) => call.runId === params.runId,
-        ),
-      ).toBe(true),
-    );
-    const calls = vi.mocked(agentCommand).mock.calls as unknown as Array<[Record<string, unknown>]>;
-    return calls.find(([call]) => call.runId === params.runId)?.[0] ?? {};
-  }
-  const calls = vi.mocked(agentCommand).mock.calls;
-  return (calls.at(-(params.fromEnd ?? 1))?.[0] ?? {}) as Record<string, unknown>;
 }
 
 async function expectAgentRoutingCall(params: {
