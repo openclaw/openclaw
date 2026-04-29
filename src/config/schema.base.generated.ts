@@ -20927,6 +20927,12 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             description:
               "Bearer token attached to cron webhook POST deliveries when webhook mode is used. Prefer secret/env substitution and rotate this token regularly if shared webhook endpoints are internet-reachable.",
           },
+          webhookAllowPrivateNetwork: {
+            type: "boolean",
+            title: "Cron Webhook Allow Private Network",
+            description:
+              "Allow cron webhook POST delivery to loopback and private-network URLs (default: `false`). Enable only when the webhook endpoint is intentionally on a private network; operators who enable this accept that cron jobs may POST to internal IPs.",
+          },
           sessionRetention: {
             anyOf: [
               {
@@ -27702,6 +27708,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "Bearer token attached to cron webhook POST deliveries when webhook mode is used. Prefer secret/env substitution and rotate this token regularly if shared webhook endpoints are internet-reachable.",
       tags: ["security", "auth", "automation"],
       sensitive: true,
+    },
+    "cron.webhookAllowPrivateNetwork": {
+      label: "Cron Webhook Allow Private Network",
+      help: "Allow cron webhook POST delivery to loopback and private-network URLs (default: `false`). Enable only when the webhook endpoint is intentionally on a private network; operators who enable this accept that cron jobs may POST to internal IPs.",
+      tags: ["access", "automation"],
     },
     "cron.sessionRetention": {
       label: "Cron Session Retention",
