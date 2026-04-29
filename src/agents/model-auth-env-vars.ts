@@ -20,6 +20,14 @@ export function resolveProviderEnvAuthEvidence(
   return resolveProviderAuthEvidence(params);
 }
 
+export function resolveProviderEnvAuthLookupKeys(params?: ProviderEnvVarLookupParams): string[] {
+  const envCandidateMap = resolveProviderEnvApiKeyCandidates(params);
+  const authEvidenceMap = resolveProviderEnvAuthEvidence(params);
+  return Array.from(
+    new Set([...Object.keys(envCandidateMap), ...Object.keys(authEvidenceMap)]),
+  ).toSorted((a, b) => a.localeCompare(b));
+}
+
 export const PROVIDER_ENV_API_KEY_CANDIDATES = resolveProviderEnvApiKeyCandidates();
 
 export function listKnownProviderEnvApiKeyNames(): string[] {
