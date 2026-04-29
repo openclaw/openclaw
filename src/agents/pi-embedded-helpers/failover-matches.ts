@@ -182,10 +182,9 @@ const ERROR_PATTERNS = {
     /insufficient[_ ]quota/i,
     "credit balance",
     "plans & billing",
-    "insufficient balance",
     /insufficient[_ ]balance/i,
     // Fuzzy: "Insufficient MBT balance", "Insufficient token balance", etc.
-    // Only up to ~3 short words between to avoid false positives like
+    // Exactly one intervening word — avoids false positives like
     // "insufficient to reconcile the final balance"
     /\binsufficient\s+\w+\s+balance\b/i,
     "insufficient usd or diem balance",
