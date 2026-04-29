@@ -1818,14 +1818,10 @@ export async function runReplyAgent(params: {
     // If the process dies or is interrupted after this point but before the channel
     // acknowledges receipt, the next heartbeat/turn will recover it.
     if (sessionKey && storePath && finalPayloads.length > 0) {
-      const pendingText = Array.isArray(finalPayloads)
-        ? finalPayloads
-            .map((p) => (typeof p === "string" ? p : p.text))
-            .filter(Boolean)
-            .join("\n\n")
-        : typeof finalPayloads === "string"
-          ? finalPayloads
-          : finalPayloads.text;
+      const pendingText = finalPayloads
+        .map((payload) => payload.text)
+        .filter(Boolean)
+        .join("\n\n");
       if (pendingText) {
         await updateSessionStoreEntry({
           storePath,

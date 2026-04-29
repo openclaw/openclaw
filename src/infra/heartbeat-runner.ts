@@ -1092,6 +1092,23 @@ export async function runHeartbeatOnce(opts: {
     return { status: "skipped", reason: HEARTBEAT_SKIP_LANES_BUSY };
   }
 
+  // Phase 2: Stronger heartbeat deferral.
+  // If the session was updated very recently (e.g., within the last 30 seconds),
+  // defer the heartbeat to avoid interrupting potential follow-up user turns or final delivery.
+  const { entry: recentSessionEntry } = resolveHeartbeatSession(
+    cfg,
+    agentId,
+    heartbeat,
+    opts.sessionKey,
+  );
+  const HEARTBEAT_DEFER_WINDOW_MS = 30_000;
+  if (
+    recentSessionEntry?.updatedAt &&
+    startedAt - recentSessionEntry.updatedAt < HEARTBEAT_DEFER_WINDOW_MS
+  ) {
+    return { status: "skipped", reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT };
+  }
+
   // Preflight centralizes trigger classification, event inspection, and HEARTBEAT.md gating.
   const preflight = await resolveHeartbeatPreflight({
     cfg,
