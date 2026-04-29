@@ -163,7 +163,12 @@ function installModelsListCommandForwardCompatMocks() {
   vi.doMock("./list.registry-load.js", () => ({
     loadListModelRegistry: async (
       cfg: unknown,
-      opts?: { providerFilter?: string; normalizeModels?: boolean; loadAvailability?: boolean },
+      opts?: {
+        providerFilter?: string;
+        normalizeModels?: boolean;
+        loadAvailability?: boolean;
+        workspaceDir?: string;
+      },
     ): Promise<{
       models: Array<{ provider: string; id: string }>;
       availableKeys?: Set<string>;
@@ -639,6 +644,8 @@ describe("modelsListCommand forward-compat", () => {
       expect(mocks.loadModelRegistry).toHaveBeenCalledWith(mocks.resolvedConfig, {
         providerFilter: "openai",
         normalizeModels: true,
+        loadAvailability: undefined,
+        workspaceDir: expect.any(String),
       });
       expect(lastPrintedRows<{ key: string }>()).toEqual([
         expect.objectContaining({ key: "openai/gpt-5.4" }),
@@ -710,6 +717,8 @@ describe("modelsListCommand forward-compat", () => {
       expect(mocks.loadModelRegistry).toHaveBeenCalledWith(mocks.resolvedConfig, {
         providerFilter: undefined,
         normalizeModels: false,
+        loadAvailability: undefined,
+        workspaceDir: expect.any(String),
       });
       expect(mocks.loadProviderCatalogModelsForList).not.toHaveBeenCalled();
       expect(mocks.resolveModelWithRegistry).not.toHaveBeenCalled();
@@ -811,6 +820,7 @@ describe("modelsListCommand forward-compat", () => {
         providerFilter: "anthropic",
         normalizeModels: false,
         loadAvailability: false,
+        workspaceDir: expect.any(String),
       });
       expect(lastPrintedRows<{ key: string; available: boolean }>()).toEqual([
         expect.objectContaining({
