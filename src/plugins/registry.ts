@@ -1959,7 +1959,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     const runtime = new Proxy(registryParams.runtime, {
       get(target, prop, receiver) {
         if (prop === "state") {
-          const baseState = Reflect.get(target, prop, receiver) as PluginRuntime["state"];
+          const baseState = Reflect.get(target, prop, receiver);
           return {
             ...baseState,
             openKeyedStore: <T>(options: OpenKeyedStoreOptions): PluginStateKeyedStore<T> => {
@@ -1978,7 +1978,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
         if (prop !== "subagent") {
           return Reflect.get(target, prop, receiver);
         }
-        const subagent = Reflect.get(target, prop, receiver) as PluginRuntime["subagent"];
+        const subagent = Reflect.get(target, prop, receiver);
         return {
           run: (params) => withPluginRuntimePluginIdScope(pluginId, () => subagent.run(params)),
           waitForRun: (params) =>

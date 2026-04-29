@@ -22,7 +22,7 @@ afterEach(() => {
 // Runtime smoke
 // ---------------------------------------------------------------------------
 describe("runtime smoke", () => {
-  it("fixture plugin loads and calls openKeyedStore", async () => {
+  it("creates and exercises a keyed store directly", async () => {
     await withOpenClawTestState({ label: "e2e-smoke-load" }, async () => {
       const store = createPluginStateKeyedStore<{ ready: boolean }>("fixture-plugin", {
         namespace: "boot",
@@ -126,7 +126,7 @@ describe("TTL", () => {
       // After sweep the entry list contains only the long-lived record.
       const remaining = await store.entries();
       expect(remaining).toHaveLength(1);
-      expect(remaining[0]!.key).toBe("long");
+      expect(remaining[0].key).toBe("long");
     });
   });
 });
@@ -207,12 +207,12 @@ describe("limits", () => {
 
       for (let ns = 0; ns < nsCount; ns += 1) {
         for (let k = 0; k < perNs; k += 1) {
-          await stores[ns]!.register(`k-${k}`, { ns, k });
+          await stores[ns].register(`k-${k}`, { ns, k });
         }
       }
 
       // One more row tips over the plugin-wide limit.
-      await expect(stores[0]!.register("overflow", { boom: true })).rejects.toMatchObject({
+      await expect(stores[0].register("overflow", { boom: true })).rejects.toMatchObject({
         code: "PLUGIN_STATE_LIMIT_EXCEEDED",
       });
     });

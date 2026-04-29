@@ -12,6 +12,7 @@ import type {
   OpenKeyedStoreOptions,
   PluginStateEntry,
   PluginStateKeyedStore,
+  PluginStateStoreOperation,
 } from "./plugin-state-store.types.js";
 import { PluginStateStoreError } from "./plugin-state-store.types.js";
 
@@ -45,50 +46,61 @@ type StoreOptionSignature = {
 const namespaceOptionSignatures = new Map<string, StoreOptionSignature>();
 const textEncoder = new TextEncoder();
 
-function invalidInput(message: string): PluginStateStoreError {
+function invalidInput(
+  message: string,
+  operation: PluginStateStoreOperation = "register",
+): PluginStateStoreError {
   return new PluginStateStoreError(message, {
     code: "PLUGIN_STATE_INVALID_INPUT",
-    operation: "register",
+    operation,
   });
 }
 
-function assertMaxBytes(label: string, value: string, max: number): void {
+function assertMaxBytes(
+  label: string,
+  value: string,
+  max: number,
+  operation: PluginStateStoreOperation = "register",
+): void {
   if (textEncoder.encode(value).byteLength > max) {
-    throw invalidInput(`plugin state ${label} must be <= ${max} bytes`);
+    throw invalidInput(`plugin state ${label} must be <= ${max} bytes`, operation);
   }
 }
 
-function validateNamespace(value: string): string {
+function validateNamespace(value: string, operation: PluginStateStoreOperation = "open"): string {
   const trimmed = value.trim();
   if (!NAMESPACE_PATTERN.test(trimmed)) {
-    throw invalidInput(`plugin state namespace must be a safe path segment: ${value}`);
+    throw invalidInput(`plugin state namespace must be a safe path segment: ${value}`, operation);
   }
-  assertMaxBytes("namespace", trimmed, MAX_NAMESPACE_BYTES);
+  assertMaxBytes("namespace", trimmed, MAX_NAMESPACE_BYTES, operation);
   return trimmed;
 }
 
-function validateKey(value: string): string {
+function validateKey(value: string, operation: PluginStateStoreOperation = "register"): string {
   const trimmed = value.trim();
   if (!trimmed) {
-    throw invalidInput("plugin state entry key must not be empty");
+    throw invalidInput("plugin state entry key must not be empty", operation);
   }
-  assertMaxBytes("entry key", trimmed, MAX_KEY_BYTES);
+  assertMaxBytes("entry key", trimmed, MAX_KEY_BYTES, operation);
   return trimmed;
 }
 
 function validateMaxEntries(value: number): number {
   if (!Number.isInteger(value) || value < 1) {
-    throw invalidInput("plugin state maxEntries must be an integer >= 1");
+    throw invalidInput("plugin state maxEntries must be an integer >= 1", "open");
   }
   return value;
 }
 
-function validateOptionalTtlMs(value: number | undefined): number | undefined {
+function validateOptionalTtlMs(
+  value: number | undefined,
+  operation: PluginStateStoreOperation = "register",
+): number | undefined {
   if (value == null) {
     return undefined;
   }
   if (!Number.isInteger(value) || value < 1) {
-    throw invalidInput("plugin state ttlMs must be a positive integer");
+    throw invalidInput("plugin state ttlMs must be a positive integer", operation);
   }
   return value;
 }
@@ -191,6 +203,7 @@ function assertConsistentOptions(
   ) {
     throw invalidInput(
       `plugin state namespace ${namespace} for ${pluginId} was reopened with incompatible options`,
+      "open",
     );
   }
 }
@@ -206,11 +219,11 @@ function createKeyedStoreForPluginId<T>(
 
   return {
     async register(key, value, opts) {
-      const normalizedKey = validateKey(key);
+      const normalizedKey = validateKey(key, "register");
       assertJsonSerializable(value);
       const json = JSON.stringify(value);
       assertValueSize(json);
-      const ttlMs = validateOptionalTtlMs(opts?.ttlMs) ?? defaultTtlMs;
+      const ttlMs = validateOptionalTtlMs(opts?.ttlMs, "register") ?? defaultTtlMs;
       pluginStateRegister({
         pluginId,
         namespace,
@@ -221,15 +234,15 @@ function createKeyedStoreForPluginId<T>(
       });
     },
     async lookup(key) {
-      const normalizedKey = validateKey(key);
+      const normalizedKey = validateKey(key, "lookup");
       return pluginStateLookup({ pluginId, namespace, key: normalizedKey }) as T | undefined;
     },
     async consume(key) {
-      const normalizedKey = validateKey(key);
+      const normalizedKey = validateKey(key, "consume");
       return pluginStateConsume({ pluginId, namespace, key: normalizedKey }) as T | undefined;
     },
     async delete(key) {
-      const normalizedKey = validateKey(key);
+      const normalizedKey = validateKey(key, "delete");
       return pluginStateDelete({ pluginId, namespace, key: normalizedKey });
     },
     async entries() {
@@ -246,7 +259,7 @@ export function createPluginStateKeyedStore<T>(
   options: OpenKeyedStoreOptions,
 ): PluginStateKeyedStore<T> {
   if (pluginId.startsWith("core:")) {
-    throw invalidInput("Plugin ids starting with 'core:' are reserved for core consumers.");
+    throw invalidInput("Plugin ids starting with 'core:' are reserved for core consumers.", "open");
   }
   return createKeyedStoreForPluginId<T>(pluginId, options);
 }

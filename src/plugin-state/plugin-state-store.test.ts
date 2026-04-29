@@ -173,14 +173,14 @@ describe("plugin state keyed store", () => {
       );
       for (let namespaceIndex = 0; namespaceIndex < stores.length; namespaceIndex += 1) {
         for (let entryIndex = 0; entryIndex < 100; entryIndex += 1) {
-          await stores[namespaceIndex]!.register(`k-${entryIndex}`, { namespaceIndex, entryIndex });
+          await stores[namespaceIndex].register(`k-${entryIndex}`, { namespaceIndex, entryIndex });
         }
       }
 
-      await expect(stores[0]!.register("overflow", { overflow: true })).rejects.toMatchObject({
+      await expect(stores[0].register("overflow", { overflow: true })).rejects.toMatchObject({
         code: "PLUGIN_STATE_LIMIT_EXCEEDED",
       });
-      await expect(stores[1]!.lookup("k-0")).resolves.toEqual({ namespaceIndex: 1, entryIndex: 0 });
+      await expect(stores[1].lookup("k-0")).resolves.toEqual({ namespaceIndex: 1, entryIndex: 0 });
     });
   });
 
@@ -251,6 +251,16 @@ describe("plugin state keyed store", () => {
       }
       await expect(store.register("deep", deep)).rejects.toMatchObject({
         code: "PLUGIN_STATE_LIMIT_EXCEEDED",
+      });
+
+      // Validation errors surface the correct operation
+      await expect(store.lookup(" ")).rejects.toMatchObject({
+        code: "PLUGIN_STATE_INVALID_INPUT",
+        operation: "lookup",
+      });
+      await expect(store.delete(" ")).rejects.toMatchObject({
+        code: "PLUGIN_STATE_INVALID_INPUT",
+        operation: "delete",
       });
     });
   });
