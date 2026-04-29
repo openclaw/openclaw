@@ -3916,7 +3916,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
             ],
           },
         },
-        approvalApprovers: {
+        userToolAllowFrom: {
           type: "array",
           items: {
             anyOf: [
@@ -4558,7 +4558,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                   ],
                 },
               },
-              approvalApprovers: {
+              userToolAllowFrom: {
                 type: "array",
                 items: {
                   anyOf: [

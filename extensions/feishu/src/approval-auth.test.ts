@@ -22,18 +22,18 @@ describe("feishuApprovalAuth", () => {
     ).toEqual({ authorized: true });
   });
 
-  it("uses approvalApprovers before allowFrom when configured", () => {
+  it("uses userToolAllowFrom before allowFrom when configured", () => {
     expect(
       feishuApprovalAuth.authorizeActorAction({
         cfg: {
           channels: {
             feishu: {
               allowFrom: ["ou_dm_user"],
-              approvalApprovers: ["ou_approver"],
+              userToolAllowFrom: ["ou_tool_user"],
             },
           },
         },
-        senderId: "ou_approver",
+        senderId: "ou_tool_user",
         action: "approve",
         approvalKind: "exec",
       }),
@@ -45,7 +45,7 @@ describe("feishuApprovalAuth", () => {
           channels: {
             feishu: {
               allowFrom: ["ou_dm_user"],
-              approvalApprovers: ["ou_approver"],
+              userToolAllowFrom: ["ou_tool_user"],
             },
           },
         },
@@ -59,7 +59,7 @@ describe("feishuApprovalAuth", () => {
     });
   });
 
-  it("uses account-level approvalApprovers for named accounts", () => {
+  it("uses account-level userToolAllowFrom for named accounts", () => {
     expect(
       feishuApprovalAuth.authorizeActorAction({
         cfg: {
@@ -69,14 +69,14 @@ describe("feishuApprovalAuth", () => {
               accounts: {
                 work: {
                   allowFrom: ["ou_account_dm_user"],
-                  approvalApprovers: ["ou_account_approver"],
+                  userToolAllowFrom: ["ou_account_tool_user"],
                 },
               },
             },
           },
         },
         accountId: "work",
-        senderId: "ou_account_approver",
+        senderId: "ou_account_tool_user",
         action: "approve",
         approvalKind: "plugin",
       }),
