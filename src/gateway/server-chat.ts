@@ -312,14 +312,26 @@ export function createAgentEventHandler({
           readChatErrorKind(evt.data?.errorKind) ?? detectErrorKind(evt.data?.error);
         if (chatLink) {
           const finished = chatRunState.registry.shift(evt.runId);
-          if (!finished) {
-            clearAgentRunContext(evt.runId);
-            return;
-          }
-          if (!(opts?.skipChatErrorFinal && lifecyclePhase === "error")) {
+          if (finished) {
+            if (!(opts?.skipChatErrorFinal && lifecyclePhase === "error")) {
+              emitChatFinal(
+                finished.sessionKey,
+                finished.clientRunId,
+                evt.runId,
+                evt.seq,
+                lifecyclePhase === "error" ? "error" : "done",
+                evt.data?.error,
+                evtStopReason,
+                evtErrorKind,
+              );
+            }
+          } else if (!(opts?.skipChatErrorFinal && lifecyclePhase === "error")) {
+            // Registry entry drifted between peek() and shift() (race).
+            // Fall through to the same fallback path used when chatLink is absent,
+            // so the terminal chat event is never silently suppressed.
             emitChatFinal(
-              finished.sessionKey,
-              finished.clientRunId,
+              sessionKey,
+              eventRunId,
               evt.runId,
               evt.seq,
               lifecyclePhase === "error" ? "error" : "done",

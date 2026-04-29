@@ -607,6 +607,43 @@ describe("agent event handler", () => {
     nowSpy?.mockRestore();
   });
 
+  it("emits chat final via fallback when registry entry drifts between peek and shift", () => {
+    // Regression for #74614: when chatRunState.registry.peek() succeeds but shift() returns
+    // undefined (race between concurrent lifecycle events), the terminal handler must fall
+    // through to the sessionKey/eventRunId fallback path rather than returning early and
+    // silently suppressing the final chat event.
+    const { broadcast, chatRunState, handler } = createHarness({
+      resolveSessionKeyForRun: (runId) => (runId === "run-race" ? "session-race" : undefined),
+    });
+
+    // Register the run so peek() finds an entry.
+    chatRunState.registry.add("run-race", {
+      sessionKey: "session-race",
+      clientRunId: "client-race",
+    });
+
+    // Consume the entry before the lifecycle end event fires, simulating the race.
+    chatRunState.registry.shift("run-race");
+    // Registry is now empty: peek() would return undefined here if checked again.
+
+    // Emit lifecycle end — peek() already resolved chatLink before shift() consumed it.
+    // The handler must still emit chat final using the resolved sessionKey/eventRunId.
+    handler({
+      runId: "run-race",
+      seq: 1,
+      stream: "lifecycle",
+      ts: Date.now(),
+      data: { phase: "end" },
+    });
+
+    const chatCalls = chatBroadcastCalls(broadcast);
+    expect(chatCalls.length).toBeGreaterThanOrEqual(1);
+    const finalPayload = chatCalls.find(
+      ([, payload]) => (payload as { state?: string }).state === "final",
+    );
+    expect(finalPayload).toBeDefined();
+  });
+
   it("drops stale events that arrive after lifecycle completion", () => {
     const { broadcast, nodeSendToSession, chatRunState, handler, nowSpy } = createHarness({
       now: 2_500,
