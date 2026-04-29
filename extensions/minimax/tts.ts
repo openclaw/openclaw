@@ -80,6 +80,8 @@ export async function minimaxTTS(params: {
         body: JSON.stringify({
           model,
           text,
+          stream: false,
+          output_format: "hex",
           voice_setting: {
             voice_id: voiceId,
             speed,
