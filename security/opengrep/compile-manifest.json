@@ -1,14 +1,18 @@
 {
   "runId": "2026-04-17T07-37-10Z",
-  "runDir": "/Users/jmerhi/repos/claw-working-space/openclaw/.artifacts/ghsa-detector-review-runs/2026-04-17T07-37-10Z",
+  "runDir": ".artifacts/ghsa-detector-review-runs/2026-04-17T07-37-10Z",
   "advisoryRepo": "openclaw/openclaw",
-  "generatedAt": "2026-04-27T16:26:53.853Z",
+  "generatedAt": "2026-04-29T07:10:35.427Z",
   "totals": {
     "cases": 507,
-    "casesWithAnyRule": 470,
-    "preciseRules": 149,
+    "casesWithAnyRule": 151,
+    "preciseRulesGenerated": 149,
     "preciseSkipped": 3,
-    "preciseInvalid": 0
+    "preciseRulesExisting": 0,
+    "preciseRulesAppended": 149,
+    "preciseRulesDuplicateSkipped": 0,
+    "preciseRules": 148,
+    "preciseInvalid": 1
   },
   "cases": {
     "GHSA-25GX-X37C-7PPH": {
@@ -19,58 +23,6 @@
       "precise": [
         "ghsa-detector.ghsa-25pw-4h6w-qwvm.openclaw.imessage-group-allowlist-merged-with-pairing-store"
       ],
-      "errors": {}
-    },
-    "GHSA-25WV-8PHJ-8P7R": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-2767-2Q9V-9326": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-27CR-4P5M-74RJ": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-2858-XG23-26FP": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-2CH6-X3G4-7759": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-2CQ5-MF3V-MX44": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-2F7J-RP58-MR42": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-2FGQ-7J6H-9RM4": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-2GVC-4F3C-2855": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-2HM8-RQRM-XFJQ": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-2J9J-GF59-P4P5": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-2MC2-G238-722J": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-2PR2-HCV6-7GWV": {
-      "precise": [],
       "errors": {}
     },
     "GHSA-2PRF-9CW7-FQ62": {
@@ -93,18 +45,6 @@
       "precise": ["ghsa-detector.ghsa-2rgf-hm63-5qph.xff-last-hop-without-trusted-proxy-context"],
       "errors": {}
     },
-    "GHSA-2RQG-GJGV-84JM": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-2W79-R9G8-WMCR": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-2WW6-868G-2C56": {
-      "precise": [],
-      "errors": {}
-    },
     "GHSA-2X4X-CC5G-QMMG": {
       "precise": [
         "ghsa-detector.ghsa-2x4x-cc5g-qmmg.node-pair-approve-missing-callerscopes-object"
@@ -119,10 +59,6 @@
       "precise": ["ghsa-detector.ghsa-33hm-cq8r-wc49.openclaw-sandbox-tmp-accepts-os-tmpdir"],
       "errors": {}
     },
-    "GHSA-33RQ-M5X2-FVGF": {
-      "precise": [],
-      "errors": {}
-    },
     "GHSA-354R-7MFH-7RH2": {
       "precise": [
         "ghsa-detector.ghsa-354r-7mfh-7rh2.review-reaction-enqueue-without-dm-access-check"
@@ -135,48 +71,12 @@
       ],
       "errors": {}
     },
-    "GHSA-37GC-85XM-2WW6": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-37V6-FXX8-XJMX": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-392F-GGF5-FP3C": {
-      "precise": [],
-      "errors": {}
-    },
     "GHSA-39MP-545Q-W789": {
       "precise": ["ghsa-detector.ghsa-39mp-545q-w789.openclaw-owner-only-send-policy-mutation"],
       "errors": {}
     },
-    "GHSA-39PP-XP36-Q6MG": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-3CVX-236H-M9FJ": {
-      "precise": [],
-      "errors": {}
-    },
     "GHSA-3CW3-5VXW-G2H3": {
       "precise": ["ghsa-detector.ghsa-3cw3-5vxw-g2h3.discovery-txt-hint-routing"],
-      "errors": {}
-    },
-    "GHSA-3FQR-4CG8-H96Q": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-3FV3-6P2V-GXWJ": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-3H2Q-J2V4-6W5R": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-3H52-CX59-C456": {
-      "precise": [],
       "errors": {}
     },
     "GHSA-3HCM-GGVF-RCH5": {
@@ -185,78 +85,14 @@
       ],
       "errors": {}
     },
-    "GHSA-3JX4-Q2M7-R496": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-3M3Q-X3GJ-F79X": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-3PXQ-F3CP-JMXP": {
-      "precise": [],
-      "errors": {}
-    },
     "GHSA-3Q42-XMXV-9VFR": {
       "precise": [
         "ghsa-detector.ghsa-3q42-xmxv-9vfr.openclaw-talk-voice-set-without-admin-scope-check"
       ],
       "errors": {}
     },
-    "GHSA-3QPV-XF3V-MM45": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-3VVQ-Q2QC-7RMP": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-3W6X-GV34-MQPF": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-3X3X-H76W-HP98": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-3XFW-4PMR-4XC5": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-3XV9-89FM-7H4R": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-42MX-VP8M-J7QH": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-43X4-G22P-3HRQ": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-45CG-2683-GFMQ": {
-      "precise": [],
-      "errors": {}
-    },
     "GHSA-4685-C5CP-VP95": {
       "precise": ["ghsa-detector.ghsa-4685-c5cp-vp95.safe-bin-missing-blocked-option-policy"],
-      "errors": {}
-    },
-    "GHSA-474H-PRJG-MMW3": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-47Q7-97XP-M272": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-48VW-M3QC-WR99": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-48WF-G7CP-GR3M": {
-      "precise": [],
       "errors": {}
     },
     "GHSA-49CG-279W-M73X": {
@@ -269,48 +105,12 @@
       ],
       "errors": {}
     },
-    "GHSA-4F8G-77MW-3RXC": {
-      "precise": [],
-      "errors": {}
-    },
     "GHSA-4G5X-2JFC-XM98": {
       "precise": ["ghsa-detector.ghsa-4g5x-2jfc-xm98.raw-fetch-to-disk-bypasses-media-runtime"],
       "errors": {}
     },
-    "GHSA-4GC7-QCVF-38WG": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-4HG8-92X6-H2F3": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-4HMJ-39M8-JWC7": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-4JPW-HJ22-2XMC": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-4QWC-C7G9-4XCW": {
-      "precise": [],
-      "errors": {}
-    },
     "GHSA-4RJ2-GPMH-QQ5X": {
       "precise": ["ghsa-detector.ghsa-4rj2-gpmh-qq5x.inbound-allowlist-bidirectional-endswith"],
-      "errors": {}
-    },
-    "GHSA-4RQQ-W8V4-7P47": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-4W7M-58CG-CMFF": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-525J-HQQ2-66R4": {
-      "precise": [],
       "errors": {}
     },
     "GHSA-527M-976R-JF79": {
@@ -319,84 +119,20 @@
       ],
       "errors": {}
     },
-    "GHSA-534W-2VM4-89XR": {
-      "precise": [],
-      "errors": {}
-    },
     "GHSA-536Q-MJ95-H29H": {
       "precise": [
         "ghsa-detector.ghsa-536q-mj95-h29h.openclaw-browser-interaction-navigation-guard"
       ],
       "errors": {}
     },
-    "GHSA-53VX-PMQW-863C": {
-      "precise": [],
-      "errors": {}
-    },
     "GHSA-56F2-HVWG-5743": {
       "precise": ["ghsa-detector.ghsa-56f2-hvwg-5743.openclaw-unguarded-remote-media-fetch"],
-      "errors": {}
-    },
-    "GHSA-56PC-6HVP-4GV4": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-57GH-M6RQ-54CF": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-58Q2-7R52-JQ62": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-5F9P-F3W2-FWCH": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-5FC7-F62M-8983": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-5GHC-98WH-GWWF": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-5GJ7-JF77-Q2Q2": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-5GJC-GRVM-M88J": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-5H2C-8V84-QPVR": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-5H3F-885M-V22W": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-5HFF-46VH-RXMW": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-5JVJ-HXMH-6H6J": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-5M9R-P9G7-679C": {
-      "precise": [],
       "errors": {}
     },
     "GHSA-5MX2-2MGW-X8RM": {
       "precise": [
         "ghsa-detector.ghsa-5mx2-2mgw-x8rm.openclaw-webhook-loopback-passwordless-fallback"
       ],
-      "errors": {}
-    },
-    "GHSA-5R8F-96GM-5J6G": {
-      "precise": [],
       "errors": {}
     },
     "GHSA-5V6X-RFC3-7QFR": {
@@ -409,40 +145,12 @@
       "precise": ["ghsa-detector.ghsa-5wcw-8jjv-m286.trusted-proxy-accept-without-origin-guard"],
       "errors": {}
     },
-    "GHSA-5WJ5-87VQ-39XM": {
-      "precise": [],
-      "errors": {}
-    },
     "GHSA-5XFQ-5MR7-426Q": {
       "precise": ["ghsa-detector.ghsa-5xfq-5mr7-426q.openclaw-session-transcript-path-traversal"],
       "errors": {}
     },
     "GHSA-62F6-MRCJ-V8H5": {
       "precise": ["ghsa-detector.ghsa-62f6-mrcj-v8h5.runtime-overrides-unsanitized-override-store"],
-      "errors": {}
-    },
-    "GHSA-6336-QQW9-V6X6": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-63F5-HHC7-CX6P": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-63MG-XP9J-JFCM": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-64QX-VPXX-MVQF": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-659F-22XC-98F2": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-65H8-27JH-Q8WV": {
-      "precise": [],
       "errors": {}
     },
     "GHSA-65RX-FVH6-R4H2": {
@@ -455,72 +163,12 @@
       "precise": ["ghsa-detector.ghsa-66r7-m7xm-v49h.qqbot-outbound-media-unvalidated-local-path"],
       "errors": {}
     },
-    "GHSA-67MF-F936-PPXF": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-68F8-9MHJ-H2MP": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-68V4-HMWV-F43H": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-68X5-XX89-W9MM": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-6C9J-X93C-RW6J": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-6F6J-WX9W-FF4J": {
-      "precise": [],
-      "errors": {}
-    },
     "GHSA-6G25-PC82-VFWP": {
       "precise": ["ghsa-detector.ghsa-6g25-pc82-vfwp.oauth-state-reuses-pkce-verifier"],
       "errors": {}
     },
-    "GHSA-6HF3-MHGC-CM65": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-6J27-PC5C-M8W8": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-6MGF-V5J7-45CR": {
-      "precise": [],
-      "errors": {}
-    },
     "GHSA-6MQC-JQH6-X8FC": {
       "precise": ["ghsa-detector.ghsa-6mqc-jqh6-x8fc.openclaw-canvas-auth-local-direct-bypass"],
-      "errors": {}
-    },
-    "GHSA-6P8R-6M93-557F": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-6PFC-6M7W-M8FX": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-6RCP-VXWF-3MFP": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-6RMX-GVVG-VH6J": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-6X2M-HQFW-HVPJ": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-736R-JWJ6-4W23": {
-      "precise": [],
       "errors": {}
     },
     "GHSA-7437-7HG8-FRRW": {
@@ -529,18 +177,10 @@
         "precise": "no-rules-array"
       }
     },
-    "GHSA-74WF-H43J-VVMJ": {
-      "precise": [],
-      "errors": {}
-    },
     "GHSA-767M-XRHC-FXM7": {
       "precise": [
         "ghsa-detector.ghsa-767m-xrhc-fxm7.telegram-target-writeback-admin-scope-required"
       ],
-      "errors": {}
-    },
-    "GHSA-77HF-7FQF-F227": {
-      "precise": [],
       "errors": {}
     },
     "GHSA-77W2-CRQV-CMV3": {
@@ -553,24 +193,12 @@
       "precise": ["ghsa-detector.ghsa-782p-5fr5-7fj8.channel-metadata-into-trusted-system-prompt"],
       "errors": {}
     },
-    "GHSA-792Q-QW95-F446": {
-      "precise": [],
-      "errors": {}
-    },
     "GHSA-796M-2973-WC5Q": {
       "precise": ["ghsa-detector.ghsa-796m-2973-wc5q.env-wrapper-transparent-unwrap"],
       "errors": {}
     },
     "GHSA-7FCC-CW49-XM78": {
       "precise": ["ghsa-detector.ghsa-7fcc-cw49-xm78.windows-shell-fallback-after-spawn-error"],
-      "errors": {}
-    },
-    "GHSA-7FF8-XJH3-MGH6": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-7G8C-CFR3-VQQR": {
-      "precise": [],
       "errors": {}
     },
     "GHSA-7GGG-PVRF-458V": {
@@ -589,10 +217,6 @@
       ],
       "errors": {}
     },
-    "GHSA-7JX5-9FJG-HP4M": {
-      "precise": [],
-      "errors": {}
-    },
     "GHSA-7QF6-H84J-8FQ4": {
       "precise": ["ghsa-detector.ghsa-7qf6-h84j-8fq4.msteams-safe-fetch-missing-resolvefn"],
       "errors": {}
@@ -601,42 +225,18 @@
       "precise": ["ghsa-detector.ghsa-7rcp-mxpq-72pj.oauth-manual-callback-code-only-acceptance"],
       "errors": {}
     },
-    "GHSA-7VWX-582J-J332": {
-      "precise": [],
-      "errors": {}
-    },
     "GHSA-7WV4-CC7P-JHXC": {
       "precise": [
         "ghsa-detector.ghsa-7wv4-cc7p-jhxc.openclaw.workspace-dotenv-runtime-guard-incomplete"
       ],
       "errors": {}
     },
-    "GHSA-7XHJ-55Q9-PC3M": {
-      "precise": [],
-      "errors": {}
-    },
     "GHSA-7XMQ-G46G-F8PV": {
       "precise": ["ghsa-detector.ghsa-7xmq-g46g-f8pv.openclaw-sandbox-media-deferred-path-read"],
       "errors": {}
     },
-    "GHSA-7XR2-Q9VF-X4R5": {
-      "precise": [],
-      "errors": {}
-    },
     "GHSA-82G8-464F-2MV7": {
       "precise": ["ghsa-detector.ghsa-82g8-464f-2mv7.openclaw-skill-env-host-injection"],
-      "errors": {}
-    },
-    "GHSA-8372-7VHW-CM6Q": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-83F3-HH45-VFW9": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-844J-XRRQ-WGH4": {
-      "precise": [],
       "errors": {}
     },
     "GHSA-846P-HGPV-VPHC": {
@@ -647,18 +247,6 @@
     },
     "GHSA-8689-GM9G-JGR6": {
       "precise": ["ghsa-detector.ghsa-8689-gm9g-jgr6.plivo-v3-replay-key-uses-unsorted-url"],
-      "errors": {}
-    },
-    "GHSA-877V-W3F5-3PCQ": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-8883-9W57-VWV6": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-89R3-6X4J-V7WF": {
-      "precise": [],
       "errors": {}
     },
     "GHSA-8CP7-RP8R-MG77": {
@@ -673,28 +261,8 @@
       ],
       "errors": {}
     },
-    "GHSA-8G75-Q649-6PV6": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-8J2W-6FMM-M587": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-8J9W-9PM5-PV8M": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-8JHH-JCQG-MJ5P": {
-      "precise": [],
-      "errors": {}
-    },
     "GHSA-8JPQ-5H99-FF5R": {
       "precise": ["ghsa-detector.ghsa-8jpq-5h99-ff5r.ghsa-8jpq-local-path-media-send"],
-      "errors": {}
-    },
-    "GHSA-8M9V-XPGF-G99M": {
-      "precise": [],
       "errors": {}
     },
     "GHSA-8MF7-VV8W-HJR2": {
@@ -703,24 +271,8 @@
       ],
       "errors": {}
     },
-    "GHSA-8MH7-PHF8-XGFM": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-8MVX-P2R9-R375": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-8RH7-6779-CJQQ": {
-      "precise": [],
-      "errors": {}
-    },
     "GHSA-92JP-89MQ-4374": {
       "precise": ["ghsa-detector.ghsa-92jp-89mq-4374.openclaw-browser-bridge-preauth-helper-route"],
-      "errors": {}
-    },
-    "GHSA-939R-RJ45-G2RJ": {
-      "precise": [],
       "errors": {}
     },
     "GHSA-94PW-C6M8-P9P9": {
@@ -735,10 +287,6 @@
       ],
       "errors": {}
     },
-    "GHSA-9868-VXMX-W862": {
-      "precise": [],
-      "errors": {}
-    },
     "GHSA-98CH-45WP-CH47": {
       "precise": [
         "ghsa-detector.ghsa-98ch-45wp-ch47.openclaw.system-run-approval-binding-portable-normalization-regression"
@@ -749,44 +297,8 @@
       "precise": ["ghsa-detector.ghsa-98hh-7ghg-x6rq.approval-resolve-call-review"],
       "errors": {}
     },
-    "GHSA-99QW-6MR3-36QR": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-9F72-QCPW-2HXC": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-9GP8-HJXR-6F34": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-9HJH-FR4F-GXC4": {
-      "precise": [],
-      "errors": {}
-    },
     "GHSA-9JPJ-G8VV-J5MF": {
       "precise": ["ghsa-detector.ghsa-9jpj-g8vv-j5mf.oauth-state-reuses-pkce-verifier"],
-      "errors": {}
-    },
-    "GHSA-9MPH-4F7V-FMVH": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-9P38-94JF-HGJJ": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-9P3R-HH9G-5CMG": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-9P93-7J67-5PC2": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-9Q2P-VC84-2RWM": {
-      "precise": [],
       "errors": {}
     },
     "GHSA-9Q7V-8MR7-G23P": {
@@ -795,44 +307,16 @@
       ],
       "errors": {}
     },
-    "GHSA-9VVH-2768-C8VP": {
-      "precise": [],
-      "errors": {}
-    },
     "GHSA-9WQX-G2CW-VC7R": {
       "precise": [
         "ghsa-detector.ghsa-9wqx-g2cw-vc7r.matrix-verification-notice-missing-dm-access-gate"
       ],
       "errors": {}
     },
-    "GHSA-C37P-4QQG-3P76": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-C4QM-58HJ-J6PJ": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-C6HR-W26Q-C636": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-C9H3-5P7R-MRJH": {
-      "precise": [],
-      "errors": {}
-    },
     "GHSA-CCX3-FW7Q-RR2R": {
       "precise": [
         "ghsa-detector.ghsa-ccx3-fw7q-rr2r.openclaw.base64-unbounded-decode-before-size-check"
       ],
-      "errors": {}
-    },
-    "GHSA-CFP9-W5V9-3Q4H": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-CFVJ-7RX7-FC7C": {
-      "precise": [],
       "errors": {}
     },
     "GHSA-CG6C-Q2HX-69H7": {
@@ -845,22 +329,6 @@
       "precise": [
         "ghsa-detector.ghsa-chm2-m3w2-wcxm.googlechat-users-email-allowlist-mutable-principal"
       ],
-      "errors": {}
-    },
-    "GHSA-CJV3-M589-V3RX": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-CMFR-9M2R-XWHQ": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-CQGW-44WG-44RF": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-CR8R-7G2H-6WR6": {
-      "precise": [],
       "errors": {}
     },
     "GHSA-CV7M-C9JX-VG7Q": {
@@ -877,34 +345,14 @@
       "precise": ["ghsa-detector.ghsa-cwq8-6f96-g3q4.openclaw-install-scan-fail-open"],
       "errors": {}
     },
-    "GHSA-CXMW-P77Q-WCHG": {
-      "precise": [],
-      "errors": {}
-    },
     "GHSA-CXPW-2G23-2VGW": {
       "precise": [
         "ghsa-detector.ghsa-cxpw-2g23-2vgw.acp-extract-text-from-prompt-without-size-limit"
       ],
       "errors": {}
     },
-    "GHSA-F3H5-H452-VP3J": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-F44P-C7W9-7XR7": {
-      "precise": [],
-      "errors": {}
-    },
     "GHSA-F5MF-3R52-R83W": {
       "precise": ["ghsa-detector.ghsa-f5mf-3r52-r83w.zalouser-dangerous-group-name-auth-match"],
-      "errors": {}
-    },
-    "GHSA-F6H3-846H-2R8W": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-F6PF-4GJX-C94R": {
-      "precise": [],
       "errors": {}
     },
     "GHSA-F7FH-QG34-X2XH": {
@@ -913,38 +361,14 @@
       ],
       "errors": {}
     },
-    "GHSA-F7WW-2725-QVW2": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-F8MP-VJ46-CQ8V": {
-      "precise": [],
-      "errors": {}
-    },
     "GHSA-F8R2-VG7X-GH8M": {
       "precise": [],
       "errors": {
         "precise": "yaml-errors: Missing closing 'quote at line 6, column 37:\n\n    pattern-regex: 'new\\s+RegExp\\([^\n                                    ^\n; Unexpected flow-seq-end token in YAML stream: \"]\" at line 7, column 1:\n\n    pattern-regex: 'new\\s+RegExp\\([^\n]*,\\s*\"i\"\\s*\\)'\n    metadata:\n^\n; Unexpected alias token in YAML stream: \"*\" at line 7, column 2:\n\n]*,\\s*\"i\"\\s*\\)'\n    metadata:\n ^\n; Unexpected scalar token in YAML stream: \",\\\\s*\\\"i\\\"\\\\s*\\\\)'\\n    metadata\" at line 7, column 3:\n\n]*,\\s*\"i\"\\s*\\)'\n    metadata:\n  ^^^^^^^^^^^^^^^^^^^^^^^^^^\n; Unexpected map-value-ind token in YAML stream: \":\" at line 7, column 29:\n\n]*,\\s*\"i\"\\s*\\)'\n    metadata:\n                            ^\n; Unexpected scalar token in YAML stream: \"category\" at line 8, column 7:\n\n]*,\\s*\"i\"\\s*\\)'\n    metadata:\n      category: security\n      ^^^^^^^^\n; Unexpected map-value-ind token in YAML stream: \":\" at line 8, column 15:\n\n      category: security\n              ^\n; Unexpected scalar token in YAML stream: \"security\" at line 8, column 17:\n\n      category: security\n                ^^^^^^^^\n; Unexpected scalar token in YAML stream: \"confidence\" at line 9, column 7:\n\n      category: security\n      confidence: medium\n      ^^^^^^^^^^\n; Unexpected map-value-ind token in YAML stream: \":\" at line 9, column 17:\n\n      confidence: medium\n                ^\n; Unexpected scalar token in YAML stream: \"medium\" at line 9, column 19:\n\n      confidence: medium\n                  ^^^^^^\n; Unexpected scalar token in YAML stream: \"detector\" at line 10, column 7:\n\n      confidence: medium\n      detector: A\n      ^^^^^^^^\n; Unexpected map-value-ind token in YAML stream: \":\" at line 10, column 15:\n\n      detector: A\n              ^\n; Unexpected scalar token in YAML stream: \"A\" at line 10, column 17:\n\n      detector: A\n                ^\n"
       }
     },
-    "GHSA-F934-5RQF-XX47": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-FF98-W8HJ-QRXF": {
-      "precise": [],
-      "errors": {}
-    },
     "GHSA-FG3M-VHRR-8GJ6": {
       "precise": ["ghsa-detector.ghsa-fg3m-vhrr-8gj6.windows-shell-fallback-retry"],
-      "errors": {}
-    },
-    "GHSA-FGVX-58P6-GJWC": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-FH32-73R9-RGH5": {
-      "precise": [],
       "errors": {}
     },
     "GHSA-FH3F-Q9QW-93J9": {
@@ -963,66 +387,14 @@
       ],
       "errors": {}
     },
-    "GHSA-FQW4-MPH7-2VR8": {
-      "precise": [],
-      "errors": {}
-    },
     "GHSA-FV94-QVG8-XQPW": {
       "precise": [
         "ghsa-detector.ghsa-fv94-qvg8-xqpw.ssh-sandbox-upload-missing-symlink-boundary-check"
       ],
       "errors": {}
     },
-    "GHSA-FVX6-PJ3R-5Q4Q": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-FWJQ-XWFJ-GV75": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-G27F-9QJV-22PM": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-G2F6-PWVX-R275": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-G2HM-779G-VM32": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-G34W-4XQQ-H79M": {
-      "precise": [],
-      "errors": {}
-    },
     "GHSA-G353-MGV3-8PCJ": {
       "precise": ["ghsa-detector.ghsa-g353-mgv3-8pcj.feishu-webhook-mode-missing-encrypt-key"],
-      "errors": {}
-    },
-    "GHSA-G374-MGGX-P6XC": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-G375-H3V6-4873": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-G55J-C2V4-PJCG": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-G6Q9-8FVW-F7RF": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-G75X-8QQM-2VXP": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-G7CR-9H7Q-4QXQ": {
-      "precise": [],
       "errors": {}
     },
     "GHSA-G86V-F9QV-RH6M": {
@@ -1037,18 +409,10 @@
       ],
       "errors": {}
     },
-    "GHSA-G8XP-QX39-9JQ9": {
-      "precise": [],
-      "errors": {}
-    },
     "GHSA-G99V-8HWM-G76G": {
       "precise": [
         "ghsa-detector.ghsa-g99v-8hwm-g76g.openclaw-web-search-citation-redirect-private-network-policy"
       ],
-      "errors": {}
-    },
-    "GHSA-GC9R-867R-J85F": {
-      "precise": [],
       "errors": {}
     },
     "GHSA-GCJ7-R3HG-M7W6": {
@@ -1065,50 +429,10 @@
       ],
       "errors": {}
     },
-    "GHSA-GJ9Q-8W99-MP8J": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-GJM7-HW8F-73RQ": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-GP3Q-WPQ4-5C5H": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-GQ83-8Q7Q-9HFX": {
-      "precise": [],
-      "errors": {}
-    },
     "GHSA-GQ9C-WG68-GWJ2": {
       "precise": [
         "ghsa-detector.ghsa-gq9c-wg68-gwj2.browser-writable-output-path-bypasses-resolvewritablepathwithinroot"
       ],
-      "errors": {}
-    },
-    "GHSA-GW85-XP4Q-5GP9": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-GWQP-86Q6-W47G": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-H2V7-XC88-XX8C": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-H3F9-MJWJ-W476": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-H3X4-HC5V-V2GM": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-H656-5VCF-CM23": {
-      "precise": [],
       "errors": {}
     },
     "GHSA-H7F7-89MM-PQH6": {
@@ -1117,46 +441,10 @@
       ],
       "errors": {}
     },
-    "GHSA-H89V-J3X9-8WQJ": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-H97F-6PQJ-Q452": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-H9G4-589H-68XV": {
-      "precise": [],
-      "errors": {}
-    },
     "GHSA-H9XM-J4QG-FVPG": {
       "precise": [
         "ghsa-detector.ghsa-h9xm-j4qg-fvpg.apply-patch-sandbox-hostpath-without-workspace-guard"
       ],
-      "errors": {}
-    },
-    "GHSA-HC5H-PMR3-3497": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-HF68-49FM-59CQ": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-HFF7-CCV5-52F8": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-HFPR-JHPQ-X4RM": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-HHFF-FJ5F-QG48": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-HHQ4-97C2-P447": {
-      "precise": [],
       "errors": {}
     },
     "GHSA-HJVP-QHM6-WRH2": {
@@ -1165,54 +453,14 @@
         "precise": "no-rules-array"
       }
     },
-    "GHSA-HR5V-J9H9-XJHG": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-HR8G-2Q7X-3F4W": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-HV93-R4J3-Q65F": {
-      "precise": [],
-      "errors": {}
-    },
     "GHSA-J26J-7QC4-3MRF": {
       "precise": [
         "ghsa-detector.ghsa-j26j-7qc4-3mrf.teams-file-consent-missing-conversation-binding"
       ],
       "errors": {}
     },
-    "GHSA-J27P-HQ53-9WGC": {
-      "precise": [],
-      "errors": {}
-    },
     "GHSA-J425-WHC4-4JGC": {
       "precise": ["ghsa-detector.ghsa-j425-whc4-4jgc.openclaw-dangerous-host-env-override-pivots"],
-      "errors": {}
-    },
-    "GHSA-J4C9-W69R-CW33": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-J4XF-96QF-RX69": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-J6C7-3H5X-99G9": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-J7P2-QCWM-94V4": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-J9PV-RRCJ-6PFX": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-JCCR-RRW2-VC8H": {
-      "precise": [],
       "errors": {}
     },
     "GHSA-JF25-7968-H2H5": {
@@ -1221,32 +469,12 @@
       ],
       "errors": {}
     },
-    "GHSA-JF56-MCCX-5F3F": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-JF6W-M8JW-JFXC": {
-      "precise": [],
-      "errors": {}
-    },
     "GHSA-JFV4-H8MC-JCP8": {
       "precise": ["ghsa-detector.ghsa-jfv4-h8mc-jcp8.immediate-process-tree-sigkill"],
       "errors": {}
     },
-    "GHSA-JHPV-5J76-M56H": {
-      "precise": [],
-      "errors": {}
-    },
     "GHSA-JJ6Q-RRRF-H66H": {
       "precise": ["ghsa-detector.ghsa-jj6q-rrrf-h66h.timing-safe-equal-length-short-circuit"],
-      "errors": {}
-    },
-    "GHSA-JJ82-76V6-933R": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-JJGJ-CPP9-CVPV": {
-      "precise": [],
       "errors": {}
     },
     "GHSA-JJW7-3VJF-FG5J": {
@@ -1257,10 +485,6 @@
       "precise": ["ghsa-detector.ghsa-jmm5-fvh5-gf4p.ts-early-length-check-before-timingsafeequal"],
       "errors": {}
     },
-    "GHSA-JMMG-JQC7-5QF4": {
-      "precise": [],
-      "errors": {}
-    },
     "GHSA-JP4J-Q5FC-58GV": {
       "precise": ["ghsa-detector.ghsa-jp4j-q5fc-58gv.discord-component-missing-group-policy"],
       "errors": {}
@@ -1269,34 +493,14 @@
       "precise": ["ghsa-detector.ghsa-jq3f-vjww-8rq7.webhook-body-read-before-secret-validation"],
       "errors": {}
     },
-    "GHSA-JQ4X-98M3-GGQ6": {
-      "precise": [],
-      "errors": {}
-    },
     "GHSA-JQPQ-MGVM-F9R6": {
       "precise": [
         "ghsa-detector.ghsa-jqpq-mgvm-f9r6.openclaw-project-local-node-modules-bin-prepended-to-path"
       ],
       "errors": {}
     },
-    "GHSA-JRVC-8FF5-2F9F": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-JV6R-27WW-4GW4": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-JWF4-8WF4-JF2M": {
-      "precise": [],
-      "errors": {}
-    },
     "GHSA-JWRQ-8G5X-5FHM": {
       "precise": ["ghsa-detector.ghsa-jwrq-8g5x-5fhm.openclaw-collect-auth-key-batching"],
-      "errors": {}
-    },
-    "GHSA-JXRQ-8FM4-9P58": {
-      "precise": [],
       "errors": {}
     },
     "GHSA-M34Q-H93W-VG5X": {
@@ -1313,20 +517,8 @@
       "precise": ["ghsa-detector.ghsa-m69h-jm2f-2pv8.feishu-reaction-chat-type-defaults-to-p2p"],
       "errors": {}
     },
-    "GHSA-M6FX-M8HC-572M": {
-      "precise": [],
-      "errors": {}
-    },
     "GHSA-M7X8-2W3W-PR42": {
       "precise": ["ghsa-detector.ghsa-m7x8-2w3w-pr42.ghsa-m7x8-shell-interpolated-gh-api-login"],
-      "errors": {}
-    },
-    "GHSA-M866-6QV5-P2FG": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-M8V2-6WWH-R4GC": {
-      "precise": [],
       "errors": {}
     },
     "GHSA-MC68-Q9JW-2H3V": {
@@ -1339,32 +531,8 @@
       ],
       "errors": {}
     },
-    "GHSA-MFG5-7Q5G-F37J": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-MHGQ-XPFQ-6R66": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-MHR7-2XMV-4C4Q": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-MJ4P-RC52-M843": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-MJ5R-HH7J-4GXF": {
-      "precise": [],
-      "errors": {}
-    },
     "GHSA-MMPF-JWF4-H3QV": {
       "precise": ["ghsa-detector.ghsa-mmpf-jwf4-h3qv.shell-git-add-paths-must-use-double-dash"],
-      "errors": {}
-    },
-    "GHSA-MP5H-M6QJ-6292": {
-      "precise": [],
       "errors": {}
     },
     "GHSA-MP66-RF4F-MHH8": {
@@ -1373,50 +541,10 @@
       ],
       "errors": {}
     },
-    "GHSA-MQPW-46FH-299H": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-MQR9-VQHQ-3JXW": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-MR32-VWC2-5J6H": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-MR34-9552-QR95": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-MV9J-6XHH-G383": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-MW7W-G3MG-XQM7": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-MWCG-WFQ3-4GJC": {
-      "precise": [],
-      "errors": {}
-    },
     "GHSA-MWXV-35WR-4VVJ": {
       "precise": [
         "ghsa-detector.ghsa-mwxv-35wr-4vvj.openclaw.gateway.api-channels-prefix-auth-gap"
       ],
-      "errors": {}
-    },
-    "GHSA-P25H-9Q54-FFVW": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-P464-M8X6-VHV8": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-P4WH-CR8M-GM6C": {
-      "precise": [],
       "errors": {}
     },
     "GHSA-P4X4-2R7F-WJXG": {
@@ -1429,50 +557,14 @@
       ],
       "errors": {}
     },
-    "GHSA-P7GR-F84W-HQG5": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-PCHC-86F6-8758": {
-      "precise": [],
-      "errors": {}
-    },
     "GHSA-PFV7-RR5M-QMV6": {
       "precise": [
         "ghsa-detector.ghsa-pfv7-rr5m-qmv6.local-relay-json-endpoint-missing-auth-header-check"
       ],
       "errors": {}
     },
-    "GHSA-PG2V-8XWH-QHCC": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-PJ5X-38RW-6FPH": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-PV58-549P-QH99": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-PW7H-9G6P-C378": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-Q284-4PVR-M585": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-Q2GC-XJQW-QP89": {
-      "precise": [],
-      "errors": {}
-    },
     "GHSA-Q2QC-744P-66R2": {
       "precise": ["ghsa-detector.ghsa-q2qc-744p-66r2.ghsa-q2qc-post-resolution-agent-prefix-guard"],
-      "errors": {}
-    },
-    "GHSA-Q399-23R3-HFX4": {
-      "precise": [],
       "errors": {}
     },
     "GHSA-Q447-RJ3R-2CGH": {
@@ -1487,22 +579,6 @@
       ],
       "errors": {}
     },
-    "GHSA-Q9W8-CF67-R238": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-QC36-X95H-7J53": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-QCC3-JQWP-5VH2": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-QCC4-P59M-P54M": {
-      "precise": [],
-      "errors": {}
-    },
     "GHSA-QCJ9-WWGW-6GM8": {
       "precise": ["ghsa-detector.ghsa-qcj9-wwgw-6gm8.openclaw-workspace-trust-root-env-read"],
       "errors": {}
@@ -1511,30 +587,6 @@
       "precise": [
         "ghsa-detector.ghsa-qf48-qfv4-jjm9.openclaw-extension-upload-direct-file-read-before-sandboxed-media-load"
       ],
-      "errors": {}
-    },
-    "GHSA-QHRR-GRQP-6X2G": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-QJ22-XQJR-V83V": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-QM2M-28PF-HGJW": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-QM77-8QJP-4VCM": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-QM9X-V7CX-7RQ4": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-QMWG-QPRG-3J38": {
-      "precise": [],
       "errors": {}
     },
     "GHSA-QPJJ-47VM-64PJ": {
@@ -1547,22 +599,6 @@
       "precise": ["ghsa-detector.ghsa-qqq7-4hxc-x63c.openclaw-trusted-tool-media-alias-bypass"],
       "errors": {}
     },
-    "GHSA-QRQ5-WJGG-RVQW": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-QVR7-G57C-MRC7": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-QW99-GRCX-4PVM": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-QX8J-G322-QJ6M": {
-      "precise": [],
-      "errors": {}
-    },
     "GHSA-QXGF-HMCJ-3XW3": {
       "precise": ["ghsa-detector.ghsa-qxgf-hmcj-3xw3.raw-image-download-fetch-without-ssrf-guard"],
       "errors": {}
@@ -1571,56 +607,12 @@
       "precise": ["ghsa-detector.ghsa-r294-2894-92j3.exported-session-html-unsafe-marked-setup"],
       "errors": {}
     },
-    "GHSA-R54R-WMMQ-MH84": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-R5FQ-947M-XM57": {
-      "precise": [],
-      "errors": {}
-    },
     "GHSA-R5H9-VJQC-HQ3R": {
       "precise": ["ghsa-detector.ghsa-r5h9-vjqc-hq3r.nextcloud-talk-allowlist-display-name-match"],
       "errors": {}
     },
-    "GHSA-R65X-2HQR-J5HF": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-R6H2-5GQQ-V5V6": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-R6QF-8968-WJ9Q": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-R77C-2CMR-7P47": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-R7VR-GR74-94P8": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-R8G4-86FX-92MQ": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-R9Q5-C7QC-P26W": {
-      "precise": [],
-      "errors": {}
-    },
     "GHSA-RCHV-X836-W7XP": {
       "precise": ["ghsa-detector.ghsa-rchv-x836-w7xp.openclaw-dashboard-auth-query-credentials"],
-      "errors": {}
-    },
-    "GHSA-RF6H-5GPW-QRGQ": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-RG8M-3943-VM6Q": {
-      "precise": [],
       "errors": {}
     },
     "GHSA-RHFG-J8JQ-7V2H": {
@@ -1629,30 +621,10 @@
       ],
       "errors": {}
     },
-    "GHSA-RJ2P-J66C-MGQH": {
-      "precise": [],
-      "errors": {}
-    },
     "GHSA-RM2P-J3R7-4X4J": {
       "precise": [
         "ghsa-detector.ghsa-rm2p-j3r7-4x4j.slack-reaction-handler-missing-system-event-authorization"
       ],
-      "errors": {}
-    },
-    "GHSA-RM59-992W-X2MV": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-RM5C-4RMF-VVHW": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-RMXW-JXXX-4CPC": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-RQ6G-PX6M-C248": {
-      "precise": [],
       "errors": {}
     },
     "GHSA-RQP8-Q22P-5J9Q": {
@@ -1661,50 +633,14 @@
       ],
       "errors": {}
     },
-    "GHSA-RQPP-RJJ8-7WV8": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-RV2Q-F2H5-6XMG": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-RV39-79C4-7459": {
-      "precise": [],
-      "errors": {}
-    },
     "GHSA-RVQR-HRCC-J9VV": {
       "precise": ["ghsa-detector.ghsa-rvqr-hrcc-j9vv.unresolved-discovery-routing-from-txt-hints"],
-      "errors": {}
-    },
-    "GHSA-RVVF-6VH3-9J43": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-RW39-5899-8MXP": {
-      "precise": [],
       "errors": {}
     },
     "GHSA-RWJ8-P9VQ-25GV": {
       "precise": [
         "ghsa-detector.ghsa-rwj8-p9vq-25gv.bluebubbles-media-read-without-root-allowlist"
       ],
-      "errors": {}
-    },
-    "GHSA-RX3G-MVC3-QFJF": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-RXMX-G7HR-8MX4": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-RXXP-482V-7MRH": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-V2V2-F783-358J": {
-      "precise": [],
       "errors": {}
     },
     "GHSA-V3J7-34XH-6G3W": {
@@ -1717,26 +653,14 @@
       ],
       "errors": {}
     },
-    "GHSA-V6C6-VQQG-W888": {
-      "precise": [],
-      "errors": {}
-    },
     "GHSA-V6X2-2QVM-6GV8": {
       "precise": [
         "ghsa-detector.ghsa-v6x2-2qvm-6gv8.prompt-hash-secret-falls-back-to-gateway-auth-token"
       ],
       "errors": {}
     },
-    "GHSA-V773-R54F-Q32W": {
-      "precise": [],
-      "errors": {}
-    },
     "GHSA-V865-P3GQ-HW6M": {
       "precise": ["ghsa-detector.ghsa-v865-p3gq-hw6m.repeated-decode-without-limit-anomaly-check"],
-      "errors": {}
-    },
-    "GHSA-V892-HWPG-JWQP": {
-      "precise": [],
       "errors": {}
     },
     "GHSA-V8CG-4474-49V8": {
@@ -1749,34 +673,14 @@
       "precise": ["ghsa-detector.ghsa-v8wv-jg3q-qwpq.outbound-media-alias-not-normalized"],
       "errors": {}
     },
-    "GHSA-VC32-H5MQ-453V": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-VCX4-4QXG-MFP4": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-VFFC-F7R7-RX2W": {
-      "precise": [],
-      "errors": {}
-    },
     "GHSA-VFG3-PQPQ-93M4": {
       "precise": [
         "ghsa-detector.ghsa-vfg3-pqpq-93m4.openclaw-tlon-cites-before-final-auth-general"
       ],
       "errors": {}
     },
-    "GHSA-VFP4-8X56-J7C5": {
-      "precise": [],
-      "errors": {}
-    },
     "GHSA-VFW7-6RHC-6XXG": {
       "precise": ["ghsa-detector.ghsa-vfw7-6rhc-6xxg.openclaw.cli-backend-unsanitized-env-merge"],
-      "errors": {}
-    },
-    "GHSA-VHWF-4X96-VQX2": {
-      "precise": [],
       "errors": {}
     },
     "GHSA-VJ3G-5PX3-GR46": {
@@ -1785,46 +689,14 @@
       ],
       "errors": {}
     },
-    "GHSA-VJP8-WPRM-2JW9": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-VJX8-8P7H-82GR": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-VMHQ-CQM9-6P7Q": {
-      "precise": [],
-      "errors": {}
-    },
     "GHSA-VMQR-RC7X-3446": {
       "precise": ["ghsa-detector.ghsa-vmqr-rc7x-3446.openclaw-safe-bins-external-helper-flag"],
-      "errors": {}
-    },
-    "GHSA-VPJ2-69HF-RPPW": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-VQVG-86CC-CG83": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-VQX8-9XXW-F2M7": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-VR5G-MMX7-H897": {
-      "precise": [],
       "errors": {}
     },
     "GHSA-VVGP-4C28-M3JM": {
       "precise": [
         "ghsa-detector.ghsa-vvgp-4c28-m3jm.trusted-proxy-control-ui-bypass-without-operator-role"
       ],
-      "errors": {}
-    },
-    "GHSA-VVJH-F6P9-5VCF": {
-      "precise": [],
       "errors": {}
     },
     "GHSA-VW3H-Q6XQ-JJM5": {
@@ -1838,20 +710,8 @@
       ],
       "errors": {}
     },
-    "GHSA-W2CG-VXX6-5XJG": {
-      "precise": [],
-      "errors": {}
-    },
     "GHSA-W45G-5746-X9FP": {
       "precise": ["ghsa-detector.ghsa-w45g-5746-x9fp.openclaw-unguarded-cron-webhook-fetch"],
-      "errors": {}
-    },
-    "GHSA-W6M8-CQVJ-PG5V": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-W6WX-JQ6J-6MCJ": {
-      "precise": [],
       "errors": {}
     },
     "GHSA-W76H-8M22-HPGH": {
@@ -1862,28 +722,8 @@
       "precise": ["ghsa-detector.ghsa-w7j5-j98m-w679.dockerfile-missing-user-directive"],
       "errors": {}
     },
-    "GHSA-W85G-3H6X-4XH2": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-W8G9-X8GX-CRMM": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-W9CG-V44M-4QV8": {
-      "precise": [],
-      "errors": {}
-    },
     "GHSA-W9J9-W4CP-6WGR": {
       "precise": ["ghsa-detector.ghsa-w9j9-w4cp-6wgr.openclaw-host-exec-manual-env-merge"],
-      "errors": {}
-    },
-    "GHSA-WCXR-59V9-RXR8": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-WFP2-V9C7-FH79": {
-      "precise": [],
       "errors": {}
     },
     "GHSA-WH94-P5M6-MR7J": {
@@ -1892,26 +732,10 @@
       ],
       "errors": {}
     },
-    "GHSA-WHF9-3HCX-GQ54": {
-      "precise": [],
-      "errors": {}
-    },
     "GHSA-WJ55-88GF-X564": {
       "precise": [
         "ghsa-detector.ghsa-wj55-88gf-x564.queued-node-action-delivery-without-current-policy-recheck"
       ],
-      "errors": {}
-    },
-    "GHSA-WM8R-W8PF-2V6W": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-WPG9-4G4V-F9RC": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-WPPH-CJGR-7C39": {
-      "precise": [],
       "errors": {}
     },
     "GHSA-WQ58-2PVG-5H4F": {
@@ -1920,46 +744,10 @@
       ],
       "errors": {}
     },
-    "GHSA-WR6M-JG37-68XH": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-WV46-V6XC-2QHF": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-WW6V-V748-X7G9": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-WWFP-W96M-C6X8": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-X2CM-HG9C-MF5W": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-X2FF-J5C2-GGPR": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-X2G4-7MJ7-2HHJ": {
-      "precise": [],
-      "errors": {}
-    },
     "GHSA-X2M8-53H4-6HCH": {
       "precise": [
         "ghsa-detector.ghsa-x2m8-53h4-6hch.discord-voice-ingress-missing-authorize-review"
       ],
-      "errors": {}
-    },
-    "GHSA-X4VP-4235-65HG": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-X82F-27X3-Q89C": {
-      "precise": [],
       "errors": {}
     },
     "GHSA-X9CF-3W63-RPQ9": {
@@ -1968,36 +756,8 @@
       ],
       "errors": {}
     },
-    "GHSA-XC7W-V5X6-CC87": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-XF99-J42Q-5W5P": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-XGF2-VXV2-RRMG": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-XH72-V6V9-MWHC": {
-      "precise": [],
-      "errors": {}
-    },
     "GHSA-XHQ5-45PM-2GJR": {
       "precise": ["ghsa-detector.ghsa-xhq5-45pm-2gjr.nextcloud-talk-room-name-fallback-match"],
-      "errors": {}
-    },
-    "GHSA-XJ9W-5R6Q-X6V4": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-XMV6-R34M-62P4": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-XMXX-7P24-H892": {
-      "precise": [],
       "errors": {}
     },
     "GHSA-XP9R-PRPG-373R": {
@@ -2006,36 +766,8 @@
       ],
       "errors": {}
     },
-    "GHSA-XQ8G-HGH6-87HV": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-XQ94-R468-QWGJ": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-XVHF-X56F-2HPP": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-XVX8-77M6-GWG6": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-XW4P-PW82-HQR7": {
-      "precise": [],
-      "errors": {}
-    },
-    "GHSA-XW77-45GV-P728": {
-      "precise": [],
-      "errors": {}
-    },
     "GHSA-XWCJ-HWHF-H378": {
       "precise": ["ghsa-detector.ghsa-xwcj-hwhf-h378.media-fetch-logs-unredacted-url"],
-      "errors": {}
-    },
-    "GHSA-XWCR-V472-8HHR": {
-      "precise": [],
       "errors": {}
     },
     "GHSA-XWJM-J929-XQ7C": {
@@ -2043,11 +775,13 @@
         "ghsa-detector.ghsa-xwjm-j929-xq7c.browser-download-route-missing-resolve-writable-output-path"
       ],
       "errors": {}
-    },
-    "GHSA-XXVH-5HWJ-42PP": {
-      "precise": [],
-      "errors": {}
     }
   },
-  "preciseInvalid": []
+  "preciseInvalid": [
+    {
+      "id": "ghsa-detector.ghsa-jwrq-8g5x-5fhm.openclaw-collect-auth-key-batching",
+      "ghsa": "GHSA-JWRQ-8G5X-5FHM"
+    }
+  ],
+  "preciseDuplicateSkipped": []
 }

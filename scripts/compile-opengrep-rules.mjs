@@ -30,9 +30,12 @@ import { spawn } from "node:child_process";
 import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 import { parseDocument, stringify } from "yaml";
 
 const REPO_BASENAME = "openclaw/openclaw";
+const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
+const REPO_ROOT = path.resolve(SCRIPT_DIR, "..");
 
 function printHelp() {
   console.log(`Usage: node scripts/compile-opengrep-rules.mjs --run-dir <path> [options]
@@ -103,6 +106,15 @@ function ghsaLower(ghsa) {
 
 function buildAdvisoryUrl(advisoryRepo, ghsa) {
   return `https://github.com/${advisoryRepo}/security/advisories/${ghsa}`;
+}
+
+function toPortablePath(filePath, repoRoot = REPO_ROOT) {
+  const resolved = path.resolve(filePath);
+  const relative = path.relative(repoRoot, resolved);
+  if (relative && !relative.startsWith("..") && !path.isAbsolute(relative)) {
+    return relative.split(path.sep).join("/");
+  }
+  return path.basename(resolved);
 }
 
 // NOTE on test-file exclusion: we used to inject a long `paths.exclude`
@@ -183,7 +195,7 @@ async function compile(opts) {
   };
   const manifest = {
     runId,
-    runDir: opts.runDir,
+    runDir: toPortablePath(opts.runDir),
     advisoryRepo: opts.advisoryRepo,
     generatedAt: new Date().toISOString(),
     totals: {},
@@ -310,16 +322,35 @@ function disambiguateCollisions(rules) {
 
 function runCommand(argv, options = {}) {
   return new Promise((resolve) => {
+    const { timeoutMs, ...spawnOptions } = options;
     const child = spawn(argv[0], argv.slice(1), {
       stdio: ["ignore", "pipe", "pipe"],
-      ...options,
+      ...spawnOptions,
     });
     let stdout = "";
     let stderr = "";
+    let settled = false;
+    const finish = (result) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      if (timer) {
+        clearTimeout(timer);
+      }
+      resolve(result);
+    };
+    const timer =
+      timeoutMs && timeoutMs > 0
+        ? setTimeout(() => {
+            child.kill("SIGKILL");
+            finish({ code: null, stdout, stderr, timedOut: true });
+          }, timeoutMs)
+        : null;
     child.stdout.on("data", (chunk) => (stdout += chunk));
     child.stderr.on("data", (chunk) => (stderr += chunk));
-    child.on("close", (code) => resolve({ code, stdout, stderr }));
-    child.on("error", (err) => resolve({ code: -1, stdout, stderr: String(err) }));
+    child.on("close", (code) => finish({ code, stdout, stderr, timedOut: false }));
+    child.on("error", (err) => finish({ code: -1, stdout, stderr: String(err), timedOut: false }));
   });
 }
 
@@ -374,23 +405,53 @@ async function findInvalidRuleSpans(superConfigPath) {
       };
     }
     const invalidLines = new Set();
+    const invalidRuleIds = new Set();
+    const unmappedErrors = [];
     let errorCount = 0;
     for (const err of parsed.errors || []) {
-      if (err.type !== "InvalidRuleSchemaError") {
+      const ruleId = typeof err.rule_id === "string" ? err.rule_id : "";
+      if (ruleId) {
+        invalidRuleIds.add(ruleId);
+        errorCount += 1;
         continue;
       }
-      errorCount += 1;
-      for (const span of err.spans || []) {
-        const start = span.start?.line;
-        const end = span.end?.line ?? start;
-        if (typeof start === "number" && typeof end === "number") {
-          for (let line = start; line <= end; line += 1) {
-            invalidLines.add(line);
+      if (err.type === "InvalidRuleSchemaError") {
+        errorCount += 1;
+        for (const span of err.spans || []) {
+          const start = span.start?.line;
+          const end = span.end?.line ?? start;
+          if (typeof start === "number" && typeof end === "number") {
+            for (let line = start; line <= end; line += 1) {
+              invalidLines.add(line);
+            }
           }
         }
+        if (!err.spans || err.spans.length === 0) {
+          unmappedErrors.push(err.type);
+        }
+        continue;
       }
+      unmappedErrors.push(err.type || "unknown");
     }
-    return { invalidLines, errorCount, validatorOk: true };
+    if (result.code !== 0 && unmappedErrors.length > 0) {
+      return {
+        invalidLines,
+        invalidRuleIds,
+        errorCount,
+        validatorOk: false,
+        validatorError: `opengrep exited ${result.code} with unmapped errors: ${unmappedErrors.join(", ")}`,
+      };
+    }
+    if (result.code !== 0 && invalidLines.size === 0 && invalidRuleIds.size === 0) {
+      return {
+        invalidLines,
+        invalidRuleIds,
+        errorCount,
+        validatorOk: false,
+        validatorError: `opengrep exited ${result.code} with no mappable rule errors`,
+      };
+    }
+    return { invalidLines, invalidRuleIds, errorCount, validatorOk: true };
   } finally {
     await fs.rm(emptyDir, { recursive: true, force: true }).catch(() => {});
   }
@@ -449,7 +510,7 @@ async function pruneInvalidRulesForBucket(rules, manifest, bucket, outDir, maxIt
       stringify({ rules: working }, { lineWidth: 0 });
     const tmpPath = path.join(outDir, `.tmp-${bucket}.yml`);
     await fs.writeFile(tmpPath, yamlText);
-    const { invalidLines, errorCount, validatorOk, validatorError } =
+    const { invalidLines, invalidRuleIds, errorCount, validatorOk, validatorError } =
       await findInvalidRuleSpans(tmpPath);
     await fs.rm(tmpPath, { force: true }).catch(() => {});
     if (!validatorOk) {
@@ -460,13 +521,28 @@ async function pruneInvalidRulesForBucket(rules, manifest, bucket, outDir, maxIt
           `(https://opengrep.dev) and retry. Validator error: ${validatorError}`,
       );
     }
-    if (errorCount === 0 || invalidLines.size === 0) {
+    if (
+      errorCount === 0 ||
+      (invalidLines.size === 0 && (!invalidRuleIds || invalidRuleIds.size === 0))
+    ) {
       return { rules: working, droppedDetails };
     }
     const badIndices = rulesOverlappingLines(yamlText, invalidLines);
+    if (invalidRuleIds && invalidRuleIds.size > 0) {
+      for (let i = 0; i < working.length; i += 1) {
+        const ruleId = String(working[i].id ?? "");
+        for (const invalidRuleId of invalidRuleIds) {
+          if (invalidRuleId === ruleId || invalidRuleId.endsWith(`.${ruleId}`)) {
+            badIndices.add(i);
+            break;
+          }
+        }
+      }
+    }
     if (badIndices.size === 0) {
-      // Errors exist but couldn't be mapped to rules; bail.
-      return { rules: working, droppedDetails };
+      throw new Error(
+        `opengrep reported ${errorCount} invalid ${bucket} rule(s), but the compiler could not map them to generated rules`,
+      );
     }
     const next = [];
     for (let i = 0; i < working.length; i += 1) {
@@ -554,8 +630,7 @@ async function main() {
   const opts = parseArgs(process.argv.slice(2));
   if (!opts.outDir) {
     // Default: assume script lives at openclaw/scripts/<this>; output to openclaw/security/opengrep
-    const scriptDir = path.dirname(new URL(import.meta.url).pathname);
-    opts.outDir = path.resolve(scriptDir, "..", "security", "opengrep");
+    opts.outDir = path.resolve(REPO_ROOT, "security", "opengrep");
   }
   const { buckets, manifest } = await compile(opts);
   await writeOutputs(buckets, manifest, opts.outDir, opts);

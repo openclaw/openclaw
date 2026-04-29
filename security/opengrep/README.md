@@ -39,10 +39,10 @@ The script:
 2. Reads `opengrep/general-rule.yml` (→ precise) when it exists and parses cleanly
 3. Rewrites ids and injects metadata as above
 4. Appends only new precise rule ids to the existing `precise.yml` by default; pass `--replace-precise` to rebuild it from just the supplied run
-5. Runs `opengrep scan --no-strict` against an empty target to identify any rules with `InvalidRuleSchemaError` and drops them so the published super-config loads cleanly
+5. Runs `opengrep scan --no-strict` against an empty target to identify schema-invalid or parser-invalid rules and drops mapped bad rules so the published super-config loads cleanly
 6. Writes `precise.yml` and `compile-manifest.json`
 
-Anything skipped (YAML parse error, duplicate generated rule id, or schema-invalid) is recorded under `preciseInvalid` / `preciseDuplicateSkipped` in `compile-manifest.json` for follow-up.
+Anything skipped (YAML parse error, duplicate generated rule id, or schema/parser-invalid) is recorded under `preciseInvalid` / `preciseDuplicateSkipped` in `compile-manifest.json` for follow-up.
 
 ## Validating locally
 
@@ -50,9 +50,10 @@ Anything skipped (YAML parse error, duplicate generated rule id, or schema-inval
 opengrep validate security/opengrep/precise.yml
 ```
 
-A non-zero exit is fine if the only errors are individual rule warnings — what
-matters is that opengrep can load the file and report a non-zero rule count.
-The compile script already drops fatal-class errors for you.
+This must exit zero. Warnings about unknown fields are acceptable only when
+OpenGrep still reports `Configuration is valid` and a non-zero rule count. The
+compile script drops mapped schema/parser-invalid rules and fails closed when
+OpenGrep validation itself cannot be completed.
 
 ## Running locally
 
@@ -68,10 +69,11 @@ scripts/run-opengrep.sh --sarif
 
 ## Why `--no-strict`?
 
-Some agent-generated rules trigger non-fatal opengrep warnings (e.g.
-TypeScript pattern parse errors on edge-case rules). `--no-strict` keeps
-opengrep's exit code clean so the workflow doesn't fail on rule-level
-warnings — actual scan errors still surface in stderr and the SARIF.
+Some agent-generated rules trigger non-fatal opengrep warnings (for example,
+unknown-field warnings on compatibility-only keys). `--no-strict` keeps
+opengrep's exit code clean for those warnings. Parser-invalid rules are still
+dropped during compilation so the checked-in super-config validates before CI
+uses it.
 
 ## Why `--no-git-ignore`?
 

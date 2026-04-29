@@ -35,6 +35,9 @@ jobs:
         uses: actions/checkout@v4
         with:
           persist-credentials: false
+          # PR scans diff against the base commit; keep history available for
+          # `git diff <base>...HEAD` in scripts/run-opengrep.sh --changed.
+          fetch-depth: 0
 
       - name: Install opengrep
         env:
@@ -52,16 +55,25 @@ jobs:
       - name: Verify opengrep
         run: opengrep --version
 
-      - name: Run opengrep
-        # Findings from precise rules block this workflow. Scan first-party source
-        # dirs only — node_modules/, vendor/, assets/, test-fixtures/ etc. are
-        # deliberately excluded. Per-rule `paths.include` filters in the compiled
-        # rulepack scope each rule further.
+      - name: Run opengrep on PR diff
+        if: github.event_name == 'pull_request'
+        env:
+          OPENCLAW_OPENGREP_BASE_REF: ${{ github.event.pull_request.base.sha }}...HEAD
+        # Findings from precise rules block this workflow. Pull requests scan
+        # changed first-party source paths only so findings stay attributable to
+        # the PR diff. Test/fixture/QA path exclusions live in `.semgrepignore`
+        # at the repo root and are picked up automatically.
         run: |
           mkdir -p .opengrep-out
-          # Test/fixture/QA path exclusions live in `.semgrepignore` at the
-          # repo root and are picked up automatically. Keep this command in
-          # `scripts/run-opengrep.sh` is the canonical local/CI runner.
+          scripts/run-opengrep.sh --changed --sarif --error
+
+      - name: Run opengrep full scan
+        if: github.event_name != 'pull_request'
+        # Pushes to main and manual dispatch run the full first-party source
+        # scan so the rulepack still acts as a repository-wide regression
+        # firewall outside PR review.
+        run: |
+          mkdir -p .opengrep-out
           scripts/run-opengrep.sh --sarif --error
 
       - name: Upload SARIF to GitHub Code Scanning

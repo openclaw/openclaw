@@ -238,8 +238,11 @@
 "security":
   - changed-files:
       - any-glob-to-any-file:
+          - ".github/workflows/opengrep-*.yml"
+          - ".semgrepignore"
           - "docs/cli/security.md"
           - "docs/gateway/security.md"
+          - "security/**"
 
 "extensions: copilot-proxy":
   - changed-files:

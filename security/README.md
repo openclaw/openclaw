@@ -149,8 +149,10 @@ runs on pull requests, pushes to `main`, and manual dispatch.
 
 It:
 
-- Runs `scripts/run-opengrep.sh --sarif --error` against
-  `src/ extensions/ apps/ packages/ scripts/`
+- Runs `scripts/run-opengrep.sh --changed --sarif --error` on pull requests
+  so PR findings stay scoped to changed first-party paths
+- Runs `scripts/run-opengrep.sh --sarif --error` on pushes to `main` and manual
+  dispatch so the rulepack still gets periodic/full repository coverage
 - Inherits the same `.semgrepignore` exclusions used by the local wrapper
 - Uploads SARIF to GitHub Code Scanning under category `opengrep-precise`
 - Fails on precise findings so the rulepack acts as a regression firewall

@@ -4,6 +4,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 const DEFAULT_MODEL = "claude-opus-4.6";
 const DEFAULT_TIMEOUT_MS = 45 * 60_000;
@@ -53,7 +54,7 @@ Options:
 
 function isDirectRun() {
   const direct = process.argv[1];
-  return Boolean(direct && import.meta.url.endsWith(direct));
+  return Boolean(direct && path.resolve(fileURLToPath(import.meta.url)) === path.resolve(direct));
 }
 
 function toLower(value) {
@@ -544,16 +545,19 @@ export async function runHarnessDefault(params) {
   });
 }
 
-function summarizeCaseStatus(params) {
+export function summarizeCaseStatus(params) {
   if (params.exitCode === 0 && params.hasReport) {
-    if (
-      params.coverageRequired &&
-      params.coverage &&
-      params.coverage.aDecision === "yes" &&
-      params.coverage.findings === 0 &&
-      !params.coverage.additiveFix
-    ) {
-      return "no-coverage";
+    if (params.coverageRequired) {
+      if (!params.coverage || params.coverage.ok !== true) {
+        return "coverage-failed";
+      }
+      if (
+        params.coverage.aDecision === "yes" &&
+        params.coverage.findings === 0 &&
+        !params.coverage.additiveFix
+      ) {
+        return "no-coverage";
+      }
     }
     return "succeeded";
   }
@@ -575,8 +579,9 @@ function parseReportCommits(reportText) {
   // Match a sha (7-40 hex) optionally followed by parent qualifiers like ^, ^^, ~1, ~3
   // e.g.: f1e1ad7, f1e1ad7^, f1e1ad7~1, f1e1ad7^2
   const shaPart = "([a-f0-9]{7,40}(?:[\\^~][\\^~0-9]*)?)";
-  const fixRegex = new RegExp(`Fix commit:[^\\n]*?\\b${shaPart}\\b`, "i");
-  const vulnRegex = new RegExp(`Vulnerable commit[^\\n]*?\\b${shaPart}\\b`, "i");
+  const revEnd = "(?=$|[\\s,;)])";
+  const fixRegex = new RegExp(`Fix commit:[^\\n]*?${shaPart}${revEnd}`, "i");
+  const vulnRegex = new RegExp(`Vulnerable commit[^\\n]*?${shaPart}${revEnd}`, "i");
   const fixMatch = fixRegex.exec(reportText);
   const vulnMatch = vulnRegex.exec(reportText);
   return {
@@ -642,6 +647,30 @@ function isAdditiveFixAnnotated(reportText) {
   );
 }
 
+export function resolveInsideDirectory(rootDir, relativePath) {
+  const raw = String(relativePath ?? "");
+  if (
+    !raw ||
+    raw.includes("\0") ||
+    raw.includes("\\") ||
+    path.isAbsolute(raw) ||
+    path.win32.isAbsolute(raw)
+  ) {
+    return null;
+  }
+  const normalized = path.posix.normalize(raw);
+  if (normalized === "." || normalized === ".." || normalized.startsWith("../")) {
+    return null;
+  }
+  const root = path.resolve(rootDir);
+  const target = path.resolve(root, ...normalized.split("/"));
+  const relative = path.relative(root, target);
+  if (relative.startsWith("..") || path.isAbsolute(relative)) {
+    return null;
+  }
+  return target;
+}
+
 export async function validateCoverage(params) {
   const reportText = await readFileBestEffort(params.reportPath);
   if (!reportText) {
@@ -702,7 +731,16 @@ export async function validateCoverage(params) {
       let extractedFiles = 0;
       for (const file of changedFiles) {
         const renamed = extractedAs.get(file) || file;
-        const target = path.join(tmpDir, renamed);
+        const target = resolveInsideDirectory(tmpDir, renamed);
+        if (!target) {
+          return {
+            ok: false,
+            reason: `${label}-invalid-extracted-as`,
+            file,
+            renamed,
+            extractedFiles,
+          };
+        }
         await fs.mkdir(path.dirname(target), { recursive: true });
         const showResult = await params.runCommand(
           ["git", "-C", params.repoRoot, "show", `${commit}:${file}`],
@@ -718,8 +756,25 @@ export async function validateCoverage(params) {
         ["opengrep", "scan", "--config", rulePath, "--json", "--no-git-ignore", tmpDir],
         { timeoutMs: 120_000 },
       );
+      if (semResult.code !== 0) {
+        return {
+          ok: false,
+          reason: `${label}-opengrep-failed`,
+          exitCode: semResult.code,
+          stderr: (semResult.stderr || "").slice(0, 200),
+          extractedFiles,
+        };
+      }
       try {
         const parsed = JSON.parse(semResult.stdout || "{}");
+        if (Array.isArray(parsed.errors) && parsed.errors.length > 0) {
+          return {
+            ok: false,
+            reason: `${label}-opengrep-errors`,
+            errors: parsed.errors.slice(0, 3),
+            extractedFiles,
+          };
+        }
         return {
           ok: true,
           findings: (parsed.results || []).length,
@@ -735,11 +790,11 @@ export async function validateCoverage(params) {
 
   const vulnScan = await scanTreeAtCommit(vuln, "vuln");
   if (!vulnScan.ok) {
-    return { ok: false, reason: vulnScan.reason, fix, vuln, aDecision, additiveFix };
+    return { ...vulnScan, ok: false, reason: vulnScan.reason, fix, vuln, aDecision, additiveFix };
   }
   const fixedScan = await scanTreeAtCommit(fix, "fixed");
   if (!fixedScan.ok) {
-    return { ok: false, reason: fixedScan.reason, fix, vuln, aDecision, additiveFix };
+    return { ...fixedScan, ok: false, reason: fixedScan.reason, fix, vuln, aDecision, additiveFix };
   }
 
   return {
@@ -1120,6 +1175,9 @@ export async function runBatch(params) {
           finishedAt: new Date().toISOString(),
           attempts: attempt,
         };
+        if (params.failFast && summary.status !== "succeeded") {
+          aborted = true;
+        }
       } catch (error) {
         manifest.cases[ghsaId] = {
           status: "failed",
@@ -1312,7 +1370,7 @@ async function main() {
   // repo at security/detector-review/. We resolve them relative to the script
   // location so the runner works the same regardless of which coding harness
   // (rovodev/claude/codex/opencode/...) is invoking it.
-  const scriptDir = path.dirname(new URL(import.meta.url).pathname);
+  const scriptDir = path.dirname(fileURLToPath(import.meta.url));
   const detectorReviewDir = path.resolve(scriptDir, "..", "security", "detector-review");
   const skillPath =
     process.env.GHSA_DETECTOR_REVIEW_SPEC ??

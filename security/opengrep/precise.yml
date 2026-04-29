@@ -4,9 +4,9 @@
 # DO NOT EDIT BY HAND. Re-run the compile script after editing source rules.
 #
 # Source run id : 2026-04-17T07-37-10Z
-# Source run dir: /Users/jmerhi/repos/claw-working-space/openclaw/.artifacts/ghsa-detector-review-runs/2026-04-17T07-37-10Z
-# Generated at  : 2026-04-27T16:26:53.853Z
-# Rule count    : 149
+# Source run dir: .artifacts/ghsa-detector-review-runs/2026-04-17T07-37-10Z
+# Generated at  : 2026-04-29T07:10:35.427Z
+# Rule count    : 148
 rules:
   - id: ghsa-detector.ghsa-25gx-x37c-7pph.openclaw-novnc-x11vnc-missing-auth
     message: x11vnc starts without VNC authentication; avoid -nopw and require password auth when exposing noVNC observer access.
@@ -3216,47 +3216,6 @@ rules:
     pattern-either:
       - pattern: candidates.push(localBinDir)
       - pattern: prepend.push(localBinDir)
-  - id: ghsa-detector.ghsa-jwrq-8g5x-5fhm.openclaw-collect-auth-key-batching
-    languages:
-      - typescript
-    severity: WARNING
-    message: Collect-mode queue drains should not batch queue.items.slice() into a single buildCollectPrompt and dispatch without first splitting items by authorization context.
-    metadata:
-      ghsa: GHSA-JWRQ-8G5X-5FHM
-      category: authorization
-      confidence: medium
-      detector: A
-      advisory-url: https://github.com/openclaw/openclaw/security/advisories/GHSA-JWRQ-8G5X-5FHM
-      detector-bucket: precise
-      source-run: 2026-04-17T07-37-10Z
-      source-rule-id: openclaw-collect-auth-key-batching
-    patterns:
-      - pattern-inside: |
-          if ($MODE === "collect") {
-            ...
-          }
-      - pattern: |
-          const $ITEMS = $QUEUE.items.slice();
-          ...
-          const $RUN = $ITEMS.at(-1)?.run ?? $QUEUE.lastRun;
-          ...
-          const $PROMPT = buildCollectPrompt({
-            ...,
-            items: $ITEMS,
-            ...,
-          });
-          ...
-          await $FOLLOWUP({
-            prompt: $PROMPT,
-            run: $RUN,
-            ...,
-          });
-      - pattern-not-inside: |
-          const $GROUPS = splitCollectItemsByAuthorization($ITEMS);
-          ...
-          for (const $GROUP of $GROUPS) {
-            ...
-          }
   - id: ghsa-detector.ghsa-m34q-h93w-vg5x.openshell-unsafe-remote-path-normalization
     languages:
       - typescript
