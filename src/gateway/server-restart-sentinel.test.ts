@@ -72,6 +72,10 @@ const mocks = vi.hoisted(() => {
     enqueueDelivery: vi.fn(async () => "queue-1"),
     ackDelivery: vi.fn(async () => {}),
     failDelivery: vi.fn(async () => {}),
+    withActiveDeliveryClaim: vi.fn(async (_entryId: string, fn: () => Promise<unknown>) => ({
+      status: "claimed" as const,
+      value: await fn(),
+    })),
     enqueueSystemEvent: vi.fn(),
     requestHeartbeat: vi.fn(),
     enqueueSessionDelivery: vi.fn(async (payload: Record<string, unknown>) => {
@@ -188,6 +192,7 @@ vi.mock("../infra/outbound/delivery-queue.js", () => ({
   enqueueDelivery: mocks.enqueueDelivery,
   ackDelivery: mocks.ackDelivery,
   failDelivery: mocks.failDelivery,
+  withActiveDeliveryClaim: mocks.withActiveDeliveryClaim,
 }));
 
 vi.mock("../infra/system-events.js", () => ({
@@ -273,6 +278,13 @@ describe("scheduleRestartSentinelWake", () => {
     mocks.enqueueDelivery.mockResolvedValue("queue-1");
     mocks.ackDelivery.mockClear();
     mocks.failDelivery.mockClear();
+    mocks.withActiveDeliveryClaim.mockReset();
+    mocks.withActiveDeliveryClaim.mockImplementation(
+      async (_entryId: string, fn: () => Promise<unknown>) => ({
+        status: "claimed" as const,
+        value: await fn(),
+      }),
+    );
     mocks.enqueueSystemEvent.mockClear();
     mocks.requestHeartbeat.mockClear();
     mocks.enqueueSessionDelivery.mockClear();
@@ -288,7 +300,7 @@ describe("scheduleRestartSentinelWake", () => {
     mocks.logError.mockClear();
   });
 
-  it("enqueues the sentinel note and wakes the session even when outbound delivery succeeds", async () => {
+  it("sends routed restart notice directly without also waking the same session", async () => {
     const deps = {} as never;
 
     await scheduleRestartSentinelWake({ deps });
@@ -311,25 +323,30 @@ describe("scheduleRestartSentinelWake", () => {
         bestEffort: false,
       }),
     );
+    expect(mocks.withActiveDeliveryClaim).toHaveBeenCalledWith("queue-1", expect.any(Function));
     expect(mocks.ackDelivery).toHaveBeenCalledWith("queue-1");
     expect(mocks.failDelivery).not.toHaveBeenCalled();
-    expect(mocks.enqueueSystemEvent).toHaveBeenCalledWith(
-      "restart message",
-      expect.objectContaining({
-        sessionKey: "agent:main:main",
-      }),
-    );
-    expect(mocks.requestHeartbeat).toHaveBeenCalledWith({
-      source: "restart-sentinel",
-      intent: "immediate",
-      reason: "wake",
-      sessionKey: "agent:main:main",
-    });
+    expect(mocks.enqueueSystemEvent).not.toHaveBeenCalled();
+    expect(mocks.requestHeartbeat).not.toHaveBeenCalled();
     expect(mocks.recordInboundSessionAndDispatchReply).not.toHaveBeenCalled();
     expect(mocks.logWarn).not.toHaveBeenCalled();
   });
 
-  it("retries outbound delivery once and logs a warning without dropping the agent wake", async () => {
+  it("does not send the restart notice directly when recovery already claimed the queued delivery", async () => {
+    mocks.withActiveDeliveryClaim.mockResolvedValue({ status: "claimed-by-other-owner" });
+
+    await scheduleRestartSentinelWake({ deps: {} as never });
+
+    expect(mocks.withActiveDeliveryClaim).toHaveBeenCalledWith("queue-1", expect.any(Function));
+    expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
+    expect(mocks.ackDelivery).not.toHaveBeenCalled();
+    expect(mocks.failDelivery).not.toHaveBeenCalled();
+    expect(mocks.logInfo).toHaveBeenCalledWith(
+      "restart summary: delivery queue-1 already claimed by recovery",
+    );
+  });
+
+  it("retries outbound delivery once without also waking the same session", async () => {
     vi.useFakeTimers();
     mocks.deliverOutboundPayloads
       .mockRejectedValueOnce(new Error("transport not ready"))
@@ -357,8 +374,8 @@ describe("scheduleRestartSentinelWake", () => {
     );
     expect(mocks.ackDelivery).toHaveBeenCalledWith("queue-1");
     expect(mocks.failDelivery).not.toHaveBeenCalled();
-    expect(mocks.enqueueSystemEvent).toHaveBeenCalledTimes(1);
-    expect(mocks.requestHeartbeat).toHaveBeenCalledTimes(1);
+    expect(mocks.enqueueSystemEvent).not.toHaveBeenCalled();
+    expect(mocks.requestHeartbeat).not.toHaveBeenCalled();
     expect(mocks.logWarn).toHaveBeenCalledWith(
       expect.stringContaining("retrying in 1000ms"),
       expect.objectContaining({
@@ -428,7 +445,7 @@ describe("scheduleRestartSentinelWake", () => {
     );
   });
 
-  it("prefers top-level sentinel threadId for wake routing context", async () => {
+  it("prefers top-level sentinel threadId for fallback wake routing context", async () => {
     // Legacy or malformed sentinel JSON can still carry a nested threadId.
     mocks.readRestartSentinel.mockResolvedValue({
       payload: {
@@ -442,6 +459,10 @@ describe("scheduleRestartSentinelWake", () => {
         threadId: "fresh-thread",
       },
     } as unknown as Awaited<ReturnType<typeof mocks.readRestartSentinel>>);
+    mocks.resolveOutboundTarget.mockReturnValueOnce({
+      ok: false,
+      error: new Error("missing route"),
+    });
 
     await scheduleRestartSentinelWake({ deps: {} as never });
 
@@ -728,7 +749,7 @@ describe("scheduleRestartSentinelWake", () => {
     );
   });
 
-  it("requests another wake after enqueueing a systemEvent continuation", async () => {
+  it("requests a wake after enqueueing a systemEvent continuation", async () => {
     mocks.readRestartSentinel.mockResolvedValue({
       payload: {
         sessionKey: "agent:main:main",
@@ -748,8 +769,9 @@ describe("scheduleRestartSentinelWake", () => {
 
     await scheduleRestartSentinelWake({ deps: {} as never });
 
+    expect(mocks.enqueueSystemEvent).toHaveBeenCalledTimes(1);
     expect(mocks.enqueueSystemEvent).toHaveBeenNthCalledWith(
-      2,
+      1,
       "continue after restart",
       expect.objectContaining({
         sessionKey: "agent:main:main",
@@ -761,13 +783,8 @@ describe("scheduleRestartSentinelWake", () => {
         }),
       }),
     );
+    expect(mocks.requestHeartbeat).toHaveBeenCalledTimes(1);
     expect(mocks.requestHeartbeat).toHaveBeenNthCalledWith(1, {
-      source: "restart-sentinel",
-      intent: "immediate",
-      reason: "wake",
-      sessionKey: "agent:main:main",
-    });
-    expect(mocks.requestHeartbeat).toHaveBeenNthCalledWith(2, {
       source: "restart-sentinel",
       intent: "immediate",
       reason: "wake",
@@ -834,12 +851,7 @@ describe("scheduleRestartSentinelWake", () => {
 
     await scheduleRestartSentinelWake({ deps: {} as never });
 
-    expect(mocks.enqueueSystemEvent).toHaveBeenCalledWith(
-      "restart message",
-      expect.objectContaining({
-        sessionKey: "agent:main:main",
-      }),
-    );
+    expect(mocks.enqueueSystemEvent).not.toHaveBeenCalled();
     expect(mocks.logWarn).toHaveBeenCalledWith(
       expect.stringContaining("retry failed for entry session-delivery-1: Error: dispatch failed"),
     );
@@ -1034,7 +1046,7 @@ describe("scheduleRestartSentinelWake", () => {
     expect(mocks.resolveOutboundTarget).not.toHaveBeenCalled();
   });
 
-  it("resolves session routing before queueing the heartbeat wake", async () => {
+  it("resolves session routing before direct restart notice delivery", async () => {
     mocks.readRestartSentinel.mockResolvedValue({
       payload: {
         sessionKey: "agent:main:qa-channel:channel:qa-room",
@@ -1048,12 +1060,6 @@ describe("scheduleRestartSentinelWake", () => {
       channel: "qa-channel",
       to: "channel:qa-room",
     });
-    mocks.requestHeartbeat.mockImplementation(() => {
-      mocks.deliveryContextFromSession.mockReturnValue({
-        channel: "qa-channel",
-        to: "heartbeat",
-      });
-    });
     mocks.resolveOutboundTarget.mockImplementation((params?: { to?: string }) => ({
       ok: true as const,
       to: params?.to ?? "missing",
@@ -1061,7 +1067,7 @@ describe("scheduleRestartSentinelWake", () => {
 
     await scheduleRestartSentinelWake({ deps: {} as never });
 
-    expect(mocks.requestHeartbeat).toHaveBeenCalledTimes(1);
+    expect(mocks.requestHeartbeat).not.toHaveBeenCalled();
     expect(mocks.resolveOutboundTarget).toHaveBeenCalledWith(
       expect.objectContaining({
         channel: "qa-channel",
