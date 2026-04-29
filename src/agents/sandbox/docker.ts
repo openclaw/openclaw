@@ -276,10 +276,12 @@ export function isDockerDaemonUnavailable(stderr: string): boolean {
   const lower = stderr.toLowerCase();
   return (
     lower.includes("cannot connect to the docker daemon") ||
-    lower.includes("no such file or directory") ||
     lower.includes("dial unix") ||
     lower.includes("docker daemon is not running") ||
-    lower.includes("connection refused")
+    lower.includes("connection refused") ||
+    // Docker socket path errors — narrow enough to avoid false positives
+    lower.includes("no such file or directory") &&
+      (lower.includes("/var/run/docker") || lower.includes("docker.sock"))
   );
 }
 
