@@ -8,6 +8,9 @@ import type { QuickSettingsProps } from "./views/config-quick.ts";
 const quickSettingsProps = vi.hoisted(() => ({
   current: null as QuickSettingsProps | null,
 }));
+const chatRenderProps = vi.hoisted(() => ({
+  current: null as { autoExpandToolCalls?: boolean } | null,
+}));
 const localStorageValues = vi.hoisted(() => new Map<string, string>());
 
 vi.mock("../local-storage.ts", () => ({
@@ -27,7 +30,10 @@ vi.mock("./views/config-quick.ts", () => ({
 }));
 
 vi.mock("./views/chat.ts", () => ({
-  renderChat: () => html`<div data-testid="chat"></div>`,
+  renderChat: (props: { autoExpandToolCalls?: boolean }) => {
+    chatRenderProps.current = props;
+    return html`<div data-testid="chat"></div>`;
+  },
 }));
 
 vi.mock("./icons.ts", () => ({
@@ -109,6 +115,7 @@ function createState(overrides: Partial<AppViewState> = {}): AppViewState {
     chatAvatarStatus: null,
     chatAvatarReason: null,
     chatThinkingLevel: null,
+    chatVerboseLevel: null,
     chatModelOverrides: {},
     chatModelsLoading: false,
     chatModelCatalog: [],
@@ -211,6 +218,7 @@ function createState(overrides: Partial<AppViewState> = {}): AppViewState {
 beforeEach(() => {
   localStorageValues.clear();
   quickSettingsProps.current = null;
+  chatRenderProps.current = null;
 });
 
 describe("renderApp assistant avatar routing", () => {
@@ -226,5 +234,29 @@ describe("renderApp assistant avatar routing", () => {
     expect(quickSettingsProps.current?.assistantAvatarStatus).toBe("data");
     expect(quickSettingsProps.current?.assistantAvatarReason).toBeNull();
     expect(quickSettingsProps.current?.assistantAvatarOverride).toBe(dataUrl);
+  });
+});
+
+describe("renderApp chat rendering", () => {
+  it("auto-expands chat tool calls when the effective verbose level is full", () => {
+    renderApp(
+      createState({
+        tab: "chat",
+        chatVerboseLevel: "full",
+      }),
+    );
+
+    expect(chatRenderProps.current?.autoExpandToolCalls).toBe(true);
+  });
+
+  it("keeps chat tool calls collapsed by default for non-full verbose levels", () => {
+    renderApp(
+      createState({
+        tab: "chat",
+        chatVerboseLevel: "tokens",
+      }),
+    );
+
+    expect(chatRenderProps.current?.autoExpandToolCalls).toBe(false);
   });
 });

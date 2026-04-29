@@ -2329,7 +2329,7 @@ export function renderApp(state: AppViewState) {
               error: state.lastError,
               sessions: state.sessionsResult,
               focusMode: chatFocus,
-              autoExpandToolCalls: false,
+              autoExpandToolCalls: state.chatVerboseLevel === "full",
               onRefresh: () => {
                 state.chatSideResult = null;
                 state.resetToolStream();
