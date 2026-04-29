@@ -217,6 +217,20 @@ describe("canvas host", () => {
     }
   });
 
+  it("treats malformed encoded paths as not found", async () => {
+    const dir = await createCaseDir();
+    await fs.writeFile(path.join(dir, "index.html"), "<html><body>v1</body></html>", "utf8");
+    const handler = await createTestCanvasHostHandler(dir);
+
+    try {
+      const response = await captureHandlerResponse(handler, `${CANVAS_HOST_PATH}/%E0%A4%A`);
+      expect(response.status).toBe(404);
+      expect(response.body).toBe("not found");
+    } finally {
+      await handler.close();
+    }
+  });
+
   it("serves canvas content from the mounted base path and reuses handlers without double close", async () => {
     const dir = await createCaseDir();
     await fs.writeFile(path.join(dir, "index.html"), "<html><body>v1</body></html>", "utf8");

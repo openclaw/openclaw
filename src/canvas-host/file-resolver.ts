@@ -12,7 +12,15 @@ export async function resolveFileWithinRoot(
   rootReal: string,
   urlPath: string,
 ): Promise<SafeOpenResult | null> {
-  const normalized = normalizeUrlPath(urlPath);
+  let normalized: string;
+  try {
+    normalized = normalizeUrlPath(urlPath);
+  } catch (err) {
+    if (err instanceof URIError) {
+      return null;
+    }
+    throw err;
+  }
   const rel = normalized.replace(/^\/+/, "");
   if (rel.split("/").some((p) => p === "..")) {
     return null;
