@@ -848,7 +848,7 @@ Per-account, per-group, and per-topic overrides are supported (same inheritance 
     - authorize your sender identity (pairing and/or numeric `allowFrom`)
     - command authorization still applies even when group policy is `open`
     - `setMyCommands failed` with `BOT_COMMANDS_TOO_MUCH` means the native menu has too many entries; reduce plugin/skill/custom commands or disable native menus
-    - `setMyCommands failed` with network/fetch errors usually indicates DNS/HTTPS reachability issues to `api.telegram.org`
+    - `deleteMyCommands` / `setMyCommands` startup calls are bounded and retry once through Telegram's transport fallback on request timeout. Persistent network/fetch errors usually indicate DNS/HTTPS reachability issues to `api.telegram.org`
 
   </Accordion>
 
