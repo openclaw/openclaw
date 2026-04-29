@@ -24,6 +24,11 @@ import {
   NODE_SYSTEM_NOTIFY_COMMAND,
   NODE_SYSTEM_RUN_COMMANDS,
 } from "../infra/node-commands.js";
+import {
+  createPluginStateKeyedStore,
+  type OpenKeyedStoreOptions,
+  type PluginStateKeyedStore,
+} from "../plugin-state/plugin-state-store.js";
 import { normalizePluginGatewayMethodScope } from "../shared/gateway-method-policy.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
@@ -1944,6 +1949,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
   });
 
   const pluginRuntimeById = new Map<string, PluginRuntime>();
+  const pluginRuntimeRecordById = new Map<string, PluginRecord>();
 
   const resolvePluginRuntime = (pluginId: string): PluginRuntime => {
     const cached = pluginRuntimeById.get(pluginId);
@@ -1952,10 +1958,27 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     }
     const runtime = new Proxy(registryParams.runtime, {
       get(target, prop, receiver) {
+        if (prop === "state") {
+          const baseState = Reflect.get(target, prop, receiver) as PluginRuntime["state"];
+          return {
+            ...baseState,
+            openKeyedStore: <T>(options: OpenKeyedStoreOptions): PluginStateKeyedStore<T> => {
+              const record =
+                pluginRuntimeRecordById.get(pluginId) ??
+                registry.plugins.find((entry) => entry.id === pluginId);
+              if (record?.origin !== "bundled") {
+                throw new Error(
+                  "openKeyedStore is only available for bundled plugins in this release.",
+                );
+              }
+              return createPluginStateKeyedStore<T>(pluginId, options);
+            },
+          } satisfies PluginRuntime["state"];
+        }
         if (prop !== "subagent") {
           return Reflect.get(target, prop, receiver);
         }
-        const subagent = Reflect.get(target, prop, receiver);
+        const subagent = Reflect.get(target, prop, receiver) as PluginRuntime["subagent"];
         return {
           run: (params) => withPluginRuntimePluginIdScope(pluginId, () => subagent.run(params)),
           waitForRun: (params) =>
@@ -1984,6 +2007,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
   ): OpenClawPluginApi => {
     const registrationMode = params.registrationMode ?? "full";
     const registrationCapabilities = resolvePluginRegistrationCapabilities(registrationMode);
+    pluginRuntimeRecordById.set(record.id, record);
     return buildPluginApi({
       id: record.id,
       name: record.name,
