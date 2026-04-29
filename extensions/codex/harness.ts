@@ -5,7 +5,7 @@ import type {
   CodexAppServerModelListResult,
 } from "./src/app-server/models.js";
 
-const DEFAULT_CODEX_HARNESS_PROVIDER_IDS = new Set(["codex"]);
+const DEFAULT_CODEX_HARNESS_PROVIDER_IDS = new Set(["codex", "openai-codex", "openai"]);
 
 export type { CodexAppServerListModelsOptions, CodexAppServerModel, CodexAppServerModelListResult };
 
