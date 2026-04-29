@@ -431,6 +431,7 @@ OpenClaw uses the built-in model catalog. Add custom providers via `models.provi
 <AccordionGroup>
   <Accordion title="Top-level catalog">
     - `models.mode`: provider catalog behavior (`merge` or `replace`).
+      - `replace` uses only configured providers and skips remote pricing-catalog bootstrap by default; set `models.pricing.enabled: true` if you still want OpenRouter/LiteLLM pricing enrichment.
     - `models.providers`: custom provider map keyed by provider id.
       - Safe edits: use `openclaw config set models.providers.<id> '<json>' --strict-json --merge` or `openclaw config set models.providers.<id>.models '<json-array>' --strict-json --merge` for additive updates. `config set` refuses destructive replacements unless you pass `--replace`.
 

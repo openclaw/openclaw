@@ -797,6 +797,9 @@ describe("config help copy quality", () => {
     const modelsMode = FIELD_HELP["models.mode"];
     expect(modelsMode.includes("SecretRef-managed")).toBe(true);
     expect(modelsMode.includes("preserve")).toBe(true);
+    const pricingEnabled = FIELD_HELP["models.pricing.enabled"];
+    expect(pricingEnabled.includes('"replace" mode')).toBe(true);
+    expect(pricingEnabled.includes("set true to force")).toBe(true);
 
     const authCooldowns = FIELD_HELP["auth.cooldowns"];
     expect(/cooldown|backoff|retry/i.test(authCooldowns)).toBe(true);

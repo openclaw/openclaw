@@ -3186,7 +3186,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 type: "boolean",
                 title: "Model Pricing Enabled",
                 description:
-                  "Enable the background model-pricing bootstrap. Set to false to skip OpenRouter and LiteLLM catalog fetches during Gateway startup; changing this value requires a Gateway restart.",
+                  'Enable the background model-pricing bootstrap. By default this is enabled in "merge" mode and disabled in "replace" mode; set true to force OpenRouter and LiteLLM catalog fetches in replace mode, or false to skip them. Changing this value requires a Gateway restart.',
               },
             },
             additionalProperties: false,
@@ -26711,7 +26711,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "models.pricing.enabled": {
       label: "Model Pricing Enabled",
-      help: "Enable the background model-pricing bootstrap. Set to false to skip OpenRouter and LiteLLM catalog fetches during Gateway startup; changing this value requires a Gateway restart.",
+      help: 'Enable the background model-pricing bootstrap. By default this is enabled in "merge" mode and disabled in "replace" mode; set true to force OpenRouter and LiteLLM catalog fetches in replace mode, or false to skip them. Changing this value requires a Gateway restart.',
       tags: ["models"],
     },
     "models.providers": {

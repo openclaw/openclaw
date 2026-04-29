@@ -124,8 +124,10 @@ Gateway startup also performs an optional background pricing bootstrap for
 configured model refs that do not already have local pricing. That bootstrap
 fetches remote OpenRouter and LiteLLM pricing catalogs. Set
 `models.pricing.enabled: false` to skip those startup catalog fetches on offline
-or restricted networks; explicit `models.providers.*.models[].cost` entries
-continue to drive local cost estimates.
+or restricted networks. When `models.mode: "replace"` is set, the bootstrap is
+skipped by default unless you explicitly set `models.pricing.enabled: true`.
+Explicit `models.providers.*.models[].cost` entries continue to drive local cost
+estimates.
 
 ## Cache TTL and pruning impact
 
