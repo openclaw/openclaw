@@ -79,6 +79,7 @@ let feishuClientSdk: FeishuClientSdk = defaultFeishuClientSdk;
 
 /** Default HTTP timeout for Feishu API requests (30 seconds). */
 export const FEISHU_HTTP_TIMEOUT_MS = 30_000;
+export const FEISHU_WS_HTTP_TIMEOUT_MS = 3_000;
 export const FEISHU_HTTP_TIMEOUT_MAX_MS = 300_000;
 export const FEISHU_HTTP_TIMEOUT_ENV_VAR = "OPENCLAW_FEISHU_HTTP_TIMEOUT_MS";
 
@@ -232,10 +233,15 @@ export async function createFeishuWSClient(account: ResolvedFeishuAccount): Prom
   }
 
   const agent = await getWsProxyAgent();
+  const wsHttpTimeoutMs = Math.min(
+    resolveConfiguredHttpTimeoutMs(account),
+    FEISHU_WS_HTTP_TIMEOUT_MS,
+  );
   return new feishuClientSdk.WSClient({
     appId,
     appSecret,
     domain: resolveDomain(domain),
+    httpInstance: createTimeoutHttpInstance(wsHttpTimeoutMs),
     loggerLevel: feishuClientSdk.LoggerLevel.info,
     wsConfig: FEISHU_WS_CONFIG,
     ...(agent ? { agent } : {}),

@@ -44,7 +44,15 @@ describe("feishu quick-action launcher", () => {
       body: {
         elements: Array<{
           tag: string;
-          actions?: Array<{ value?: { oc?: string; c?: { s?: string; t?: string } } }>;
+          actions?: Array<{
+            value?: {
+              oc?: string;
+              k?: string;
+              a?: string;
+              q?: string;
+              c?: { s?: string; t?: string };
+            };
+          }>;
         }>;
       };
     };
@@ -57,6 +65,11 @@ describe("feishu quick-action launcher", () => {
     expect(actionBlock?.actions?.[0]?.value?.oc).toBe("ocf1");
     expect(actionBlock?.actions?.[0]?.value?.c?.s).toBe("agent:codex:feishu:chat:chat1");
     expect(actionBlock?.actions?.[0]?.value?.c?.t).toBeUndefined();
+    expect(actionBlock?.actions?.[1]?.value).toMatchObject({
+      k: "quick",
+      a: "feishu.quick_actions.new",
+      q: "/new",
+    });
   });
 
   it("opens the launcher from a supported bot menu event", async () => {

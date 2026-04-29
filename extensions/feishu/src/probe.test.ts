@@ -143,6 +143,18 @@ describe("probeFeishu", () => {
     );
   });
 
+  it("clamps caller-provided probe timeout to the startup-safe default", async () => {
+    const requestFn = setupSuccessClient();
+
+    await probeFeishu(DEFAULT_CREDS, { timeoutMs: 30_000 });
+
+    expect(requestFn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        timeout: FEISHU_PROBE_REQUEST_TIMEOUT_MS,
+      }),
+    );
+  });
+
   it("returns timeout error when request exceeds timeout", async () => {
     await withFakeTimers(async () => {
       const requestFn = vi.fn().mockImplementation(() => new Promise(() => {}));

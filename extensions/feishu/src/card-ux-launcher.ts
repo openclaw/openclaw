@@ -55,12 +55,9 @@ export function createQuickActionLauncherCard(params: {
               label: "New session",
               type: "primary",
               value: createFeishuCardInteractionEnvelope({
-                k: "meta",
-                a: FEISHU_APPROVAL_REQUEST_ACTION,
-                m: {
-                  command: "/new",
-                  prompt: "Start a fresh session? This will reset the current chat context.",
-                },
+                k: "quick",
+                a: "feishu.quick_actions.new",
+                q: "/new",
                 c: context,
               }),
             }),

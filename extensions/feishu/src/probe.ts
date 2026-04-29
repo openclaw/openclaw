@@ -12,7 +12,7 @@ const probeCache = new Map<string, { result: FeishuProbeResult; expiresAt: numbe
 const PROBE_SUCCESS_TTL_MS = 10 * 60 * 1000; // 10 minutes
 const PROBE_ERROR_TTL_MS = 60 * 1000; // 1 minute
 const MAX_PROBE_CACHE_SIZE = 64;
-export const FEISHU_PROBE_REQUEST_TIMEOUT_MS = 10_000;
+export const FEISHU_PROBE_REQUEST_TIMEOUT_MS = 3_000;
 export type ProbeFeishuOptions = {
   timeoutMs?: number;
   abortSignal?: AbortSignal;
@@ -66,7 +66,13 @@ export async function probeFeishu(
     };
   }
 
-  const timeoutMs = options.timeoutMs ?? FEISHU_PROBE_REQUEST_TIMEOUT_MS;
+  // Startup probes should never inherit long caller timeouts: slow Feishu
+  // credential checks can otherwise hold channel startup and status probes for
+  // tens of seconds.
+  const timeoutMs = Math.min(
+    options.timeoutMs ?? FEISHU_PROBE_REQUEST_TIMEOUT_MS,
+    FEISHU_PROBE_REQUEST_TIMEOUT_MS,
+  );
 
   // Return cached result if still valid.
   // Use accountId when available; otherwise include appSecret prefix so two

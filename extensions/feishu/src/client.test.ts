@@ -49,6 +49,7 @@ let createFeishuWSClient: CreateFeishuWSClient;
 let clearClientCache: ClearClientCache;
 let setFeishuClientRuntimeForTest: SetFeishuClientRuntimeForTest;
 let FEISHU_HTTP_TIMEOUT_MS: number;
+let FEISHU_WS_HTTP_TIMEOUT_MS: number;
 let FEISHU_HTTP_TIMEOUT_MAX_MS: number;
 let FEISHU_HTTP_TIMEOUT_ENV_VAR: string;
 
@@ -119,9 +120,17 @@ function readCallOptions(
   return isRecord(call) ? call : {};
 }
 
-function firstWsClientOptions(): { agent?: unknown; wsConfig?: unknown } {
+function firstWsClientOptions(): {
+  agent?: unknown;
+  httpInstance?: HttpInstanceLike;
+  wsConfig?: unknown;
+} {
   const options = readCallOptions(wsClientCtorMock, 0);
-  return { agent: options.agent, wsConfig: options.wsConfig };
+  return {
+    agent: options.agent,
+    httpInstance: options.httpInstance as HttpInstanceLike | undefined,
+    wsConfig: options.wsConfig,
+  };
 }
 
 beforeAll(async () => {
@@ -144,6 +153,7 @@ beforeAll(async () => {
     clearClientCache,
     setFeishuClientRuntimeForTest,
     FEISHU_HTTP_TIMEOUT_MS,
+    FEISHU_WS_HTTP_TIMEOUT_MS,
     FEISHU_HTTP_TIMEOUT_MAX_MS,
     FEISHU_HTTP_TIMEOUT_ENV_VAR,
   } = await import("./client.js"));
@@ -345,6 +355,20 @@ describe("createFeishuClient HTTP timeout", () => {
 });
 
 describe("createFeishuWSClient proxy handling", () => {
+  it("injects a short timeout into ws token requests", async () => {
+    await createFeishuWSClient(baseAccount);
+
+    const options = firstWsClientOptions();
+    expect(options.httpInstance).toBeDefined();
+    await options.httpInstance?.post("https://example.com/token", {});
+
+    expect(mockBaseHttpInstance.post).toHaveBeenCalledWith(
+      "https://example.com/token",
+      {},
+      expect.objectContaining({ timeout: FEISHU_WS_HTTP_TIMEOUT_MS }),
+    );
+  });
+
   it("passes heartbeat wsConfig defaults to Lark.WSClient", async () => {
     await createFeishuWSClient(baseAccount);
 

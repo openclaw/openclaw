@@ -3,7 +3,7 @@ import type { RuntimeEnv } from "../runtime-api.js";
 import { probeFeishu } from "./probe.js";
 import type { ResolvedFeishuAccount } from "./types.js";
 
-const FEISHU_STARTUP_BOT_INFO_TIMEOUT_DEFAULT_MS = 30_000;
+const FEISHU_STARTUP_BOT_INFO_TIMEOUT_DEFAULT_MS = 3_000;
 const FEISHU_STARTUP_BOT_INFO_TIMEOUT_ENV = "OPENCLAW_FEISHU_STARTUP_PROBE_TIMEOUT_MS";
 
 function resolveStartupProbeTimeoutMs(): number {

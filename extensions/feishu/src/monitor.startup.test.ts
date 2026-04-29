@@ -80,6 +80,10 @@ describe("Feishu monitor startup preflight", () => {
       await waitForStartedAccount(started, "alpha");
       expect(started).toEqual(["alpha"]);
       expect(maxInFlight).toBe(1);
+      expect(probeFeishuMock).toHaveBeenCalledWith(
+        expect.objectContaining({ accountId: "alpha" }),
+        expect.objectContaining({ timeoutMs: 3_000 }),
+      );
     } finally {
       releaseProbes();
       abortController.abort();
