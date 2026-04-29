@@ -124,6 +124,29 @@ function normalizeReplyPayloadInternal(
   });
 }
 
+function normalizeReplyPayloadForDispatch(params: {
+  kind: ReplyDispatchKind;
+  payload: ReplyPayload;
+  options: ReplyDispatcherOptions;
+}): ReplyPayload | null {
+  const silentFinalPayload = resolveSilentFinalPayload({
+    kind: params.kind,
+    payload: params.payload,
+    silentReplyContext: params.options.silentReplyContext,
+  });
+  return (
+    silentFinalPayload ??
+    normalizeReplyPayloadInternal(params.payload, {
+      responsePrefix: params.options.responsePrefix,
+      responsePrefixContext: params.options.responsePrefixContext,
+      responsePrefixContextProvider: params.options.responsePrefixContextProvider,
+      transformReplyPayload: params.options.transformReplyPayload,
+      onHeartbeatStrip: params.options.onHeartbeatStrip,
+      onSkip: (reason) => params.options.onSkip?.(params.payload, { kind: params.kind, reason }),
+    })
+  );
+}
+
 function resolveSilentFinalPayload(params: {
   kind: ReplyDispatchKind;
   payload: ReplyPayload;
@@ -210,21 +233,7 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
 
   const enqueue = (kind: ReplyDispatchKind, payload: ReplyPayload) => {
     const originalWasExactSilent = isSilentReplyText(payload.text, SILENT_REPLY_TOKEN);
-    const silentFinalPayload = resolveSilentFinalPayload({
-      kind,
-      payload,
-      silentReplyContext: options.silentReplyContext,
-    });
-    const normalized =
-      silentFinalPayload ??
-      normalizeReplyPayloadInternal(payload, {
-        responsePrefix: options.responsePrefix,
-        responsePrefixContext: options.responsePrefixContext,
-        responsePrefixContextProvider: options.responsePrefixContextProvider,
-        transformReplyPayload: options.transformReplyPayload,
-        onHeartbeatStrip: options.onHeartbeatStrip,
-        onSkip: (reason) => options.onSkip?.(payload, { kind, reason }),
-      });
+    const normalized = normalizeReplyPayloadForDispatch({ kind, payload, options });
     if (!normalized) {
       if (kind === "final" && originalWasExactSilent) {
         silentReplyLogger.debug("exact NO_REPLY final payload was skipped before delivery", {
@@ -309,6 +318,8 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
     sendToolResult: (payload) => enqueue("tool", payload),
     sendBlockReply: (payload) => enqueue("block", payload),
     sendFinalReply: (payload) => enqueue("final", payload),
+    normalizePayload: (payload, info) =>
+      normalizeReplyPayloadForDispatch({ kind: info.kind, payload, options }),
     waitForIdle: () => sendChain,
     getQueuedCounts: () => ({ ...queuedCounts }),
     getCancelledCounts: () => ({ ...cancelledCounts }),

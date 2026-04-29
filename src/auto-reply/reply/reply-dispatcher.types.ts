@@ -6,6 +6,10 @@ export type ReplyDispatcher = {
   sendToolResult: (payload: ReplyPayload) => boolean;
   sendBlockReply: (payload: ReplyPayload) => boolean;
   sendFinalReply: (payload: ReplyPayload) => boolean;
+  normalizePayload?: (
+    payload: ReplyPayload,
+    info: { kind: ReplyDispatchKind },
+  ) => ReplyPayload | null;
   waitForIdle: () => Promise<void>;
   getQueuedCounts: () => Record<ReplyDispatchKind, number>;
   getCancelledCounts?: () => Record<ReplyDispatchKind, number>;

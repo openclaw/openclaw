@@ -82,6 +82,8 @@ import type {
 import { resolveEffectiveReplyRoute } from "./effective-reply-route.js";
 import { withFullRuntimeReplyConfig } from "./get-reply-fast-path.js";
 import { claimInboundDedupe, commitInboundDedupe, releaseInboundDedupe } from "./inbound-dedupe.js";
+import { normalizeReplyPayload } from "./normalize-reply.js";
+import type { ReplyDispatchKind } from "./reply-dispatcher.types.js";
 import { resolveReplyRoutingDecision } from "./routing-policy.js";
 import { resolveSourceReplyVisibilityPolicy } from "./source-reply-delivery-mode.js";
 import { resolveRunTypingPolicy } from "./typing-policy.js";
@@ -969,7 +971,7 @@ export async function dispatchReplyFromConfig(
         text: `Working: ${normalizedLabel}`,
       };
       if (suppressDelivery) {
-        await deliverSuppressedSourceReply(payload);
+        await deliverSuppressedSourceReply(payload, "tool");
         return;
       }
       if (shouldRouteToOriginating) {
@@ -990,7 +992,7 @@ export async function dispatchReplyFromConfig(
         text: formatPlanUpdateText(payload),
       };
       if (suppressDelivery) {
-        await deliverSuppressedSourceReply(replyPayload);
+        await deliverSuppressedSourceReply(replyPayload, "tool");
         return;
       }
       if (shouldRouteToOriginating) {
@@ -1079,14 +1081,19 @@ export async function dispatchReplyFromConfig(
       }
       return { ...payload, text: undefined };
     };
-    const deliverSuppressedSourceReply = async (payload: ReplyPayload): Promise<boolean> => {
+    const deliverSuppressedSourceReply = async (
+      payload: ReplyPayload,
+      kind: ReplyDispatchKind,
+    ): Promise<boolean> => {
       if (!suppressAutomaticSourceDelivery || sendPolicyDenied || payload.isReasoning === true) {
         return false;
       }
-      if (!resolveSendableOutboundReplyParts(payload).hasContent) {
+      const normalizedPayload =
+        dispatcher.normalizePayload?.(payload, { kind }) ?? normalizeReplyPayload(payload);
+      if (!normalizedPayload || !resolveSendableOutboundReplyParts(normalizedPayload).hasContent) {
         return false;
       }
-      await params.replyOptions?.onSuppressedSourceReply?.(payload, {
+      await params.replyOptions?.onSuppressedSourceReply?.(normalizedPayload, {
         sourceReplyDeliveryMode,
         reason: deliverySuppressionReason,
       });
@@ -1179,7 +1186,7 @@ export async function dispatchReplyFromConfig(
               }
             }
             if (suppressDelivery) {
-              await deliverSuppressedSourceReply(deliveryPayload);
+              await deliverSuppressedSourceReply(deliveryPayload, "tool");
               return;
             }
             if (shouldRouteToOriginating) {
@@ -1274,7 +1281,7 @@ export async function dispatchReplyFromConfig(
               return;
             }
             if (suppressDelivery) {
-              await deliverSuppressedSourceReply(visiblePayload);
+              await deliverSuppressedSourceReply(visiblePayload, "block");
               return;
             }
             // Channels that keep a live draft preview may need to rotate their
@@ -1363,7 +1370,7 @@ export async function dispatchReplyFromConfig(
     let routedFinalCount = 0;
     if (suppressAutomaticSourceDelivery && !sendPolicyDenied) {
       for (const reply of replies) {
-        await deliverSuppressedSourceReply(reply);
+        await deliverSuppressedSourceReply(reply, "final");
       }
     }
     if (!suppressDelivery) {

@@ -4415,6 +4415,68 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     );
   });
 
+  it("normalizes suppressed final replies before source fallback delivery", async () => {
+    setNoAbort();
+    const dispatcher = createDispatcher();
+    const onSuppressedSourceReply = vi.fn();
+    const replyResolver = vi.fn(async () => ({ text: "NO_REPLY" }) satisfies ReplyPayload);
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        ChatType: "group",
+        SessionKey: "test:telegram:group:G1",
+      }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+      replyOptions: {
+        onSuppressedSourceReply,
+      },
+    });
+
+    expect(result.queuedFinal).toBe(false);
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    expect(onSuppressedSourceReply).not.toHaveBeenCalled();
+  });
+
+  it("uses dispatcher normalization for suppressed source fallback replies", async () => {
+    setNoAbort();
+    const dispatcher = {
+      ...createDispatcher(),
+      normalizePayload: vi.fn((payload: ReplyPayload) => ({
+        ...payload,
+        text: payload.text ? `[bot] ${payload.text}` : payload.text,
+      })),
+    };
+    const onSuppressedSourceReply = vi.fn();
+    const replyResolver = vi.fn(async () => ({ text: "final reply" }) satisfies ReplyPayload);
+
+    await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        ChatType: "group",
+        SessionKey: "test:telegram:group:G1",
+      }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+      replyOptions: {
+        onSuppressedSourceReply,
+      },
+    });
+
+    expect(dispatcher.normalizePayload).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "final reply" }),
+      { kind: "final" },
+    );
+    expect(onSuppressedSourceReply).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "[bot] final reply" }),
+      {
+        sourceReplyDeliveryMode: "message_tool_only",
+        reason: "sourceReplyDeliveryMode: message_tool_only",
+      },
+    );
+  });
+
   it("delivers suppressed block replies through the source fallback", async () => {
     setNoAbort();
     const dispatcher = createDispatcher();
