@@ -279,6 +279,7 @@ function createChatHeaderState(
     chatMessages: [],
     chatLoading: false,
     chatThinkingLevel: null,
+    chatVerboseLevel: null,
     lastError: null,
     chatAvatarUrl: null,
     basePath: "",
