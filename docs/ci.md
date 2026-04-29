@@ -272,7 +272,12 @@ The mcp-process-tool-boundary job scans MCP servers, process execution helpers,
 outbound delivery, and agent tool-execution gates under the
 `/codeql-critical-security/mcp-process-tool-boundary` category so command and
 tool boundary signal stays separate from both the auth/secrets baseline and
-the non-security MCP/process quality shard.
+the non-security MCP/process quality shard. The plugin-trust-boundary job scans
+plugin install, loader, manifest, registry, runtime-dependency staging,
+source-loading, public-surface, and Plugin SDK package contract trust surfaces
+under the `/codeql-critical-security/plugin-trust-boundary` category so plugin
+supply-chain and runtime-loading signal stays separate from both bundled plugin
+implementation code and the non-security plugin quality shard.
 
 The `CodeQL Android Critical Security` workflow is the scheduled Android
 security shard. It builds the Android app manually for CodeQL on the smallest
