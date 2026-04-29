@@ -103,32 +103,11 @@ dump_debug_logs() {
 }
 trap 'status=$?; dump_debug_logs "$status"; exit "$status"' ERR
 
-echo "Installing mounted OpenClaw package..."
-package_tgz="${OPENCLAW_CURRENT_PACKAGE_TGZ:?missing OPENCLAW_CURRENT_PACKAGE_TGZ}"
-npm install -g "$package_tgz" --no-fund --no-audit >/tmp/openclaw-install.log 2>&1
+openclaw_e2e_install_package /tmp/openclaw-install.log
 
 command -v openclaw >/dev/null
-package_root="$(npm root -g)/openclaw"
-test -d "$package_root/dist/extensions/telegram"
-test -d "$package_root/dist/extensions/discord"
-
-assert_dep_absent() {
-  local sentinel="$1"
-  if find "$package_root" "$HOME/.openclaw" -path "*/node_modules/$sentinel/package.json" -print -quit 2>/dev/null | grep -q .; then
-    echo "$sentinel should not be installed before channel activation repair" >&2
-    find "$package_root" "$HOME/.openclaw" -path "*/node_modules/$sentinel/package.json" -print 2>/dev/null >&2 || true
-    exit 1
-  fi
-}
-
-assert_dep_present() {
-  local sentinel="$1"
-  if ! find "$package_root" "$HOME/.openclaw" -path "*/node_modules/$sentinel/package.json" -print -quit 2>/dev/null | grep -q .; then
-    echo "$sentinel was not installed on demand" >&2
-    find "$package_root" "$HOME/.openclaw" -maxdepth 6 -type d -name node_modules -print 2>/dev/null >&2 || true
-    exit 1
-  fi
-}
+package_root="$(openclaw_e2e_package_root)"
+openclaw_e2e_assert_package_extensions "$package_root" telegram discord
 
 mock_pid="$(openclaw_e2e_start_mock_openai "$MOCK_PORT" /tmp/openclaw-mock-openai.log)"
 openclaw_e2e_wait_mock_openai "$MOCK_PORT"
@@ -229,7 +208,7 @@ cfg.plugins = {
 fs.writeFileSync(configPath, `${JSON.stringify(cfg, null, 2)}\n`);
 NODE
 
-assert_dep_absent "$DEP_SENTINEL"
+openclaw_e2e_assert_dep_absent "$DEP_SENTINEL" "$package_root" "$HOME/.openclaw"
 
 echo "Configuring $CHANNEL..."
 openclaw channels add --channel "$CHANNEL" --token "$CHANNEL_TOKEN" >/tmp/openclaw-channel-add.log 2>&1
@@ -251,7 +230,7 @@ NODE
 
 echo "Running doctor after channel activation..."
 openclaw doctor --repair --non-interactive >/tmp/openclaw-doctor.log 2>&1
-assert_dep_present "$DEP_SENTINEL"
+openclaw_e2e_assert_dep_present "$DEP_SENTINEL" "$package_root" "$HOME/.openclaw"
 
 echo "Running local agent turn against mocked OpenAI..."
 openclaw agent --local \

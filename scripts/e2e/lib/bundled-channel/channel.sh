@@ -35,32 +35,7 @@ DEP_SENTINEL="${OPENCLAW_DEP_SENTINEL:?missing OPENCLAW_DEP_SENTINEL}"
 gateway_pid=""
 
 terminate_gateways() {
-  if [ -n "${gateway_pid:-}" ] && kill -0 "$gateway_pid" 2>/dev/null; then
-    kill "$gateway_pid" 2>/dev/null || true
-  fi
-  if command -v pkill >/dev/null 2>&1; then
-    pkill -TERM -f "[o]penclaw-gateway" 2>/dev/null || true
-  fi
-  for _ in $(seq 1 100); do
-    local alive=0
-    if [ -n "${gateway_pid:-}" ] && kill -0 "$gateway_pid" 2>/dev/null; then
-      alive=1
-    fi
-    if command -v pgrep >/dev/null 2>&1 && pgrep -f "[o]penclaw-gateway" >/dev/null 2>&1; then
-      alive=1
-    fi
-    [ "$alive" = "0" ] && break
-    sleep 0.1
-  done
-  if [ -n "${gateway_pid:-}" ] && kill -0 "$gateway_pid" 2>/dev/null; then
-    kill -KILL "$gateway_pid" 2>/dev/null || true
-  fi
-  if command -v pkill >/dev/null 2>&1; then
-    pkill -KILL -f "[o]penclaw-gateway" 2>/dev/null || true
-  fi
-  if [ -n "${gateway_pid:-}" ]; then
-    wait "$gateway_pid" 2>/dev/null || true
-  fi
+  openclaw_e2e_terminate_gateways "${gateway_pid:-}"
 }
 
 cleanup() {
@@ -71,12 +46,8 @@ trap cleanup EXIT
 bundled_channel_install_package /tmp/openclaw-install.log
 
 command -v openclaw >/dev/null
-package_root="$(npm root -g)/openclaw"
-test -d "$package_root/dist/extensions/telegram"
-test -d "$package_root/dist/extensions/discord"
-test -d "$package_root/dist/extensions/slack"
-test -d "$package_root/dist/extensions/feishu"
-test -d "$package_root/dist/extensions/memory-lancedb"
+package_root="$(openclaw_e2e_package_root)"
+openclaw_e2e_assert_package_extensions "$package_root" telegram discord slack feishu memory-lancedb
 
 if [ -d "$package_root/dist/extensions/$CHANNEL/node_modules" ]; then
   echo "$CHANNEL runtime deps should not be preinstalled in package" >&2
