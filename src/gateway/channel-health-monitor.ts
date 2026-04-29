@@ -39,6 +39,7 @@ type ChannelHealthMonitorDeps = {
   startupGraceMs?: number;
   /** @deprecated use timing.channelConnectGraceMs */
   channelStartupGraceMs?: number;
+  /** @deprecated use timing.reconnectGraceMs */
   reconnectGraceMs?: number;
   /** @deprecated use timing.staleEventThresholdMs */
   staleEventThresholdMs?: number;
