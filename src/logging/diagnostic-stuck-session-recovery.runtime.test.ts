@@ -18,6 +18,23 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../agents/pi-embedded-runner/runs.js", () => ({
+  abortAndDrainEmbeddedPiRun: async (params: {
+    sessionId: string;
+    sessionKey?: string;
+    settleMs?: number;
+    forceClear?: boolean;
+    reason?: string;
+  }) => {
+    const aborted = mocks.abortEmbeddedPiRun(params.sessionId);
+    const drained = aborted
+      ? await mocks.waitForEmbeddedPiRunEnd(params.sessionId, params.settleMs)
+      : false;
+    const forceCleared =
+      params.forceClear === true && (!aborted || !drained)
+        ? mocks.forceClearEmbeddedPiRun(params.sessionId, params.sessionKey, params.reason)
+        : false;
+    return { aborted, drained, forceCleared };
+  },
   abortEmbeddedPiRun: mocks.abortEmbeddedPiRun,
   forceClearEmbeddedPiRun: mocks.forceClearEmbeddedPiRun,
   isEmbeddedPiRunActive: mocks.isEmbeddedPiRunActive,

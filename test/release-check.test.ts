@@ -11,6 +11,7 @@ import {
   collectAppcastSparkleVersionErrors,
   collectBundledExtensionManifestErrors,
   collectBundledPluginRootRuntimeMirrorErrors,
+  collectDeclaredRootRuntimeDependencyMetadataErrors,
   collectForbiddenPackContentPaths,
   collectInstalledBundledPluginRuntimeDepErrors,
   bundledRuntimeDependencySentinelCandidates,
@@ -262,6 +263,34 @@ describe("bundled plugin root runtime mirrors", () => {
     ]);
   });
 
+  it("flags mirrored root runtime metadata without root deps", () => {
+    expect(
+      collectDeclaredRootRuntimeDependencyMetadataErrors({
+        dependencies: { semver: "7.7.4" },
+        openclaw: {
+          bundle: {
+            mirroredRootRuntimeDependencies: ["json5", "semver"],
+          },
+        },
+      }),
+    ).toEqual([
+      "package.json openclaw.bundle.mirroredRootRuntimeDependencies declares 'json5' but package.json dependencies/optionalDependencies do not include it.",
+    ]);
+  });
+
+  it("accepts mirrored root runtime metadata backed by root deps", () => {
+    expect(
+      collectDeclaredRootRuntimeDependencyMetadataErrors({
+        dependencies: { json5: "^2.2.3", semver: "7.7.4" },
+        openclaw: {
+          bundle: {
+            mirroredRootRuntimeDependencies: ["json5", "semver"],
+          },
+        },
+      }),
+    ).toEqual([]);
+  });
+
   it("does not derive root mirrors for root chunks sourced from the owning plugin", () => {
     const tempRoot = mkdtempSync(join(tmpdir(), "openclaw-root-mirror-owned-"));
 
@@ -406,12 +435,12 @@ describe("collectForbiddenPackPaths", () => {
     expect(
       collectForbiddenPackPaths([
         "dist/index.js",
-        bundledDistPluginFile("discord", "node_modules/@buape/carbon/index.js"),
+        bundledDistPluginFile("discord", "node_modules/@discordjs/voice/index.js"),
         bundledPluginFile("tlon", "node_modules/.bin/tlon"),
         "node_modules/.bin/openclaw",
       ]),
     ).toEqual([
-      bundledDistPluginFile("discord", "node_modules/@buape/carbon/index.js"),
+      bundledDistPluginFile("discord", "node_modules/@discordjs/voice/index.js"),
       bundledPluginFile("tlon", "node_modules/.bin/tlon"),
       "node_modules/.bin/openclaw",
     ]);
@@ -577,6 +606,8 @@ describe("collectMissingPackPaths", () => {
         "dist/index.js",
         "dist/entry.js",
         "dist/control-ui/index.html",
+        "dist/extensions/acpx/error-format.mjs",
+        "dist/extensions/acpx/mcp-command-line.mjs",
         "dist/extensions/acpx/mcp-proxy.mjs",
         bundledDistPluginFile("diffs", "assets/viewer-runtime.js"),
         ...requiredBundledPluginPackPaths,

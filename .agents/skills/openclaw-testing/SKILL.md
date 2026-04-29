@@ -173,7 +173,10 @@ For bounded recovery after a focused fix, pass `-f rerun_group=<group>`.
 Supported umbrella groups are `all`, `ci`, `plugin-prerelease`,
 `release-checks`, `install-smoke`, `cross-os`, `live-e2e`, `package`, `qa`,
 `qa-parity`, `qa-live`, and `npm-telegram`. Use the narrowest group that covers
-the failed box.
+the failed box. After a targeted release-check fix, do not restart the full
+umbrella by habit: dispatch the matching `rerun_group`, cancel older duplicate
+runs for the same target/group, and rerun only the parent verifier/evidence step
+after the child is green unless the release evidence is stale.
 
 ### Release Evidence
 

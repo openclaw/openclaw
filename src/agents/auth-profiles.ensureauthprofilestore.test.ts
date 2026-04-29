@@ -487,7 +487,7 @@ describe("ensureAuthProfileStore", () => {
 
       const store = loadAuthProfileStoreForRuntime(agentDir, { readOnly: true });
 
-      expect(store.order?.["openai-codex"]).toEqual([freshProfileId]);
+      expect(store.order?.["openai-codex"]).toEqual([freshProfileId, defaultProfileId]);
       expect(store.profiles[defaultProfileId]).toMatchObject({
         type: "oauth",
         provider: "openai-codex",

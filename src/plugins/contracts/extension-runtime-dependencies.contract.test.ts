@@ -163,7 +163,6 @@ function allDependencyNames(manifest: PackageManifest): string[] {
 
 function isDiscordPackageDependency(dependencyName: string): boolean {
   return (
-    dependencyName === "@buape/carbon" ||
     dependencyName === "discord-api-types" ||
     dependencyName === "opusscript" ||
     dependencyName.startsWith("@discordjs/") ||

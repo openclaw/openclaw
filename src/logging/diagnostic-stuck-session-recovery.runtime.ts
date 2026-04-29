@@ -1,12 +1,10 @@
 import { resolveEmbeddedSessionLane } from "../agents/pi-embedded-runner/lanes.js";
 import {
-  abortEmbeddedPiRun,
-  forceClearEmbeddedPiRun,
+  abortAndDrainEmbeddedPiRun,
   isEmbeddedPiRunActive,
   isEmbeddedPiRunHandleActive,
   resolveActiveEmbeddedRunSessionId,
   resolveActiveEmbeddedRunHandleSessionId,
-  waitForEmbeddedPiRunEnd,
 } from "../agents/pi-embedded-runner/runs.js";
 import { getCommandLaneSnapshot, resetCommandLane } from "../process/command-queue.js";
 import { diagnosticLogger as diag } from "./diagnostic-runtime.js";
@@ -62,13 +60,15 @@ export async function recoverStuckDiagnosticSession(
         );
         return;
       }
-      aborted = abortEmbeddedPiRun(activeSessionId);
-      if (aborted) {
-        drained = await waitForEmbeddedPiRunEnd(activeSessionId, STUCK_SESSION_ABORT_SETTLE_MS);
-      }
-      if (!aborted || !drained) {
-        forceClearEmbeddedPiRun(activeSessionId, params.sessionKey, "stuck_recovery");
-      }
+      const result = await abortAndDrainEmbeddedPiRun({
+        sessionId: activeSessionId,
+        sessionKey: params.sessionKey,
+        settleMs: STUCK_SESSION_ABORT_SETTLE_MS,
+        forceClear: true,
+        reason: "stuck_recovery",
+      });
+      aborted = result.aborted;
+      drained = result.drained;
     }
 
     if (!activeSessionId && activeWorkSessionId && isEmbeddedPiRunActive(activeWorkSessionId)) {

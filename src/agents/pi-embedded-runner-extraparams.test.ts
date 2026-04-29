@@ -416,7 +416,9 @@ function createTestOpenAIProviderWrapper(
   if (withDefaultTransport) {
     streamFn = createOpenAIDefaultTransportWrapper(streamFn);
   }
-  streamFn = createOpenAIAttributionHeadersWrapper(streamFn);
+  streamFn = createOpenAIAttributionHeadersWrapper(streamFn, {
+    codexNativeTransportStreamFn: params.context.streamFn,
+  });
 
   if (resolveOpenAIFastMode(params.context.extraParams)) {
     streamFn = createOpenAIFastModeWrapper(streamFn);

@@ -1,5 +1,5 @@
-import { ChannelType } from "@buape/carbon";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { ChannelType } from "../internal/discord.js";
 import { createPartialDiscordChannelWithThrowingGetters } from "../test-support/partial-channel.js";
 
 const transcribeFirstAudioMock = vi.hoisted(() => vi.fn());
@@ -120,7 +120,7 @@ function createDmClient(channelId: string): DiscordClient {
 async function runThreadBoundPreflight(params: {
   threadId: string;
   parentId: string;
-  message: import("@buape/carbon").Message;
+  message: import("../internal/discord.js").Message;
   threadBinding: import("openclaw/plugin-sdk/conversation-runtime").SessionBindingRecord;
   discordConfig: DiscordConfig;
   registerBindingAdapter?: boolean;
@@ -161,7 +161,7 @@ async function runThreadBoundPreflight(params: {
 async function runGuildPreflight(params: {
   channelId: string;
   guildId: string;
-  message: import("@buape/carbon").Message;
+  message: import("../internal/discord.js").Message;
   discordConfig: DiscordConfig;
   cfg?: import("openclaw/plugin-sdk/config-types").OpenClawConfig;
   guildEntries?: Parameters<typeof preflightDiscordMessage>[0]["guildEntries"];
@@ -186,7 +186,7 @@ async function runGuildPreflight(params: {
 
 async function runDmPreflight(params: {
   channelId: string;
-  message: import("@buape/carbon").Message;
+  message: import("../internal/discord.js").Message;
   discordConfig: DiscordConfig;
 }) {
   return preflightDiscordMessage({
@@ -206,7 +206,7 @@ async function runDmPreflight(params: {
 async function runMentionOnlyBotPreflight(params: {
   channelId: string;
   guildId: string;
-  message: import("@buape/carbon").Message;
+  message: import("../internal/discord.js").Message;
 }) {
   return runGuildPreflight({
     channelId: params.channelId,
@@ -221,7 +221,7 @@ async function runMentionOnlyBotPreflight(params: {
 async function runIgnoreOtherMentionsPreflight(params: {
   channelId: string;
   guildId: string;
-  message: import("@buape/carbon").Message;
+  message: import("../internal/discord.js").Message;
 }) {
   return runGuildPreflight({
     channelId: params.channelId,

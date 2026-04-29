@@ -1,6 +1,5 @@
 import { DEFAULT_PROVIDER } from "../../agents/defaults.js";
-import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
-import { buildAllowedModelSet, buildConfiguredModelCatalog } from "../../agents/model-selection.js";
+import { resolveVisibleModelCatalog } from "../../agents/model-catalog-visibility.js";
 import {
   ErrorCodes,
   errorShape,
@@ -10,12 +9,6 @@ import {
 import type { GatewayRequestHandlers } from "./types.js";
 
 type ModelsListView = "default" | "configured" | "all";
-
-function sortModelCatalogEntries(entries: ModelCatalogEntry[]): ModelCatalogEntry[] {
-  return entries.toSorted(
-    (a, b) => a.provider.localeCompare(b.provider) || a.id.localeCompare(b.id),
-  );
-}
 
 function resolveModelsListView(params: Record<string, unknown>): ModelsListView {
   return typeof params.view === "string" ? (params.view as ModelsListView) : "default";
@@ -42,21 +35,12 @@ export const modelsHandlers: GatewayRequestHandlers = {
         respond(true, { models: catalog }, undefined);
         return;
       }
-      const allowed = buildAllowedModelSet({
+      const models = resolveVisibleModelCatalog({
         cfg,
         catalog,
         defaultProvider: DEFAULT_PROVIDER,
+        view,
       });
-      const configuredCatalog =
-        view === "configured" ? sortModelCatalogEntries(buildConfiguredModelCatalog({ cfg })) : [];
-      const models =
-        view === "configured" && allowed.allowAny && configuredCatalog.length > 0
-          ? configuredCatalog
-          : allowed.allowedCatalog.length > 0
-            ? allowed.allowedCatalog
-            : configuredCatalog.length > 0
-              ? configuredCatalog
-              : catalog;
       respond(true, { models }, undefined);
     } catch (err) {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(err)));

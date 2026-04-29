@@ -703,11 +703,16 @@ export const th: TranslationMap = {
     jaJP: "日本語 (ญี่ปุ่น)",
     ko: "한국어 (เกาหลี)",
     fr: "Français (ฝรั่งเศส)",
+    ar: "العربية (อาหรับ)",
+    it: "Italiano (อิตาลี)",
     tr: "Türkçe (ตุรกี)",
     uk: "Українська (ยูเครน)",
     id: "Bahasa Indonesia (อินโดนีเซีย)",
     pl: "Polski (โปแลนด์)",
     th: "ไทย (ไทย)",
+    vi: "Tiếng Việt (เวียดนาม)",
+    nl: "Nederlands (ดัตช์)",
+    fa: "فارسی (เปอร์เซีย)",
   },
   cron: {
     summary: {

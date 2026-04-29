@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveBundledRuntimeDependencyInstallRoot } from "./bundled-runtime-deps.js";
 import { prepareBundledPluginRuntimeRoot } from "./bundled-runtime-root.js";
+import { writeGeneratedRuntimeDepsManifest } from "./test-helpers/bundled-runtime-deps-fixtures.js";
 
 const tempRoots: string[] = [];
 
@@ -110,6 +111,7 @@ describe("prepareBundledPluginRuntimeRoot", () => {
       "utf8",
     );
     fs.writeFileSync(path.join(depRoot, "index.js"), "export const marker = 'stage-ok';\n", "utf8");
+    writeGeneratedRuntimeDepsManifest(installRoot, ["playwright-core@1.0.0"]);
 
     const staleMirrorChunk = path.join(installRoot, "dist", "pw-ai.js");
     fs.mkdirSync(path.dirname(staleMirrorChunk), { recursive: true });
@@ -141,14 +143,14 @@ describe("prepareBundledPluginRuntimeRoot", () => {
       false,
     );
     expect(fs.lstatSync(path.join(installRoot, "dist", "config-runtime.js")).isSymbolicLink()).toBe(
-      true,
+      false,
     );
     expect(fs.lstatSync(path.join(installRoot, "dist", "string-runtime.js")).isSymbolicLink()).toBe(
       false,
     );
   });
 
-  it("reuses root chunk materialization decisions across bundled plugin mirrors", () => {
+  it("reuses prepared root mirrors across bundled plugins", () => {
     const packageRoot = makeTempRoot();
     const stageDir = makeTempRoot();
     const env = { ...process.env, OPENCLAW_PLUGIN_STAGE_DIR: stageDir };
@@ -162,6 +164,10 @@ describe("prepareBundledPluginRuntimeRoot", () => {
     );
     fs.writeFileSync(rootChunk, "export const shared = 'root';\n", "utf8");
     fs.writeFileSync(externalChunk, "import zod from 'zod'; export const schema = zod;\n", "utf8");
+    const installRoot = resolveBundledRuntimeDependencyInstallRoot(
+      path.join(packageRoot, "dist", "extensions", "alpha"),
+      { env },
+    );
 
     for (const pluginId of ["alpha", "beta"]) {
       const pluginRoot = path.join(packageRoot, "dist", "extensions", pluginId);
@@ -186,28 +192,20 @@ describe("prepareBundledPluginRuntimeRoot", () => {
         ),
         "utf8",
       );
-      const installRoot = resolveBundledRuntimeDependencyInstallRoot(pluginRoot, { env });
-      fs.mkdirSync(path.join(installRoot, "node_modules", `${pluginId}-runtime`), {
+      const pluginInstallRoot = resolveBundledRuntimeDependencyInstallRoot(pluginRoot, { env });
+      fs.mkdirSync(path.join(pluginInstallRoot, "node_modules", `${pluginId}-runtime`), {
         recursive: true,
       });
       fs.writeFileSync(
-        path.join(installRoot, "node_modules", `${pluginId}-runtime`, "package.json"),
+        path.join(pluginInstallRoot, "node_modules", `${pluginId}-runtime`, "package.json"),
         JSON.stringify({ name: `${pluginId}-runtime`, version: "1.0.0", type: "module" }),
         "utf8",
       );
     }
+    writeGeneratedRuntimeDepsManifest(installRoot, ["alpha-runtime@1.0.0", "beta-runtime@1.0.0"]);
 
-    const realReadFileSync = fs.readFileSync.bind(fs);
     const realReaddirSync = fs.readdirSync.bind(fs);
-    const readPaths: string[] = [];
     const readdirPaths: string[] = [];
-    vi.spyOn(fs, "readFileSync").mockImplementation(((target, options) => {
-      const targetPath = target.toString();
-      if (targetPath === rootChunk || targetPath === externalChunk) {
-        readPaths.push(targetPath);
-      }
-      return realReadFileSync(target, options as never);
-    }) as typeof fs.readFileSync);
     vi.spyOn(fs, "readdirSync").mockImplementation(((target, options) => {
       const targetPath = target.toString();
       if (
@@ -229,8 +227,12 @@ describe("prepareBundledPluginRuntimeRoot", () => {
       });
     }
 
-    expect(readPaths.filter((entry) => entry === rootChunk)).toHaveLength(1);
-    expect(readPaths.filter((entry) => entry === externalChunk)).toHaveLength(1);
+    expect(fs.lstatSync(path.join(installRoot, "dist", "shared-runtime.js")).isSymbolicLink()).toBe(
+      false,
+    );
+    expect(
+      fs.lstatSync(path.join(installRoot, "dist", "external-runtime.js")).isSymbolicLink(),
+    ).toBe(false);
     expect(readdirPaths).toHaveLength(1);
   });
 
@@ -276,6 +278,7 @@ describe("prepareBundledPluginRuntimeRoot", () => {
       JSON.stringify({ name: "alpha-runtime", version: "1.0.0", type: "module" }),
       "utf8",
     );
+    writeGeneratedRuntimeDepsManifest(installRoot, ["alpha-runtime@1.0.0"]);
 
     const realReaddirSync = fs.readdirSync.bind(fs);
     const readdirPaths: string[] = [];
@@ -341,6 +344,7 @@ describe("prepareBundledPluginRuntimeRoot", () => {
       JSON.stringify({ name: "qqbot-runtime", version: "1.0.0", type: "module" }),
       "utf8",
     );
+    writeGeneratedRuntimeDepsManifest(installRoot, ["qqbot-runtime@1.0.0"]);
 
     const prepared = prepareBundledPluginRuntimeRoot({
       pluginId: "qqbot",
@@ -424,6 +428,7 @@ describe("prepareBundledPluginRuntimeRoot", () => {
       JSON.stringify({ name: "qqbot-runtime", version: "1.0.0", type: "module" }),
       "utf8",
     );
+    writeGeneratedRuntimeDepsManifest(installRoot, ["qqbot-runtime@1.0.0"]);
 
     const prepared = prepareBundledPluginRuntimeRoot({
       pluginId: "qqbot",
@@ -489,6 +494,7 @@ describe("prepareBundledPluginRuntimeRoot", () => {
       JSON.stringify({ name: "qqbot-runtime", version: "1.0.0", type: "module" }),
       "utf8",
     );
+    writeGeneratedRuntimeDepsManifest(installRoot, ["qqbot-runtime@1.0.0"]);
 
     const lockPath = path.join(installRoot, ".openclaw-runtime-mirror.lock");
     const fingerprintLockStates: Array<{ source: "runtime" | "canonical"; locked: boolean }> = [];
@@ -551,6 +557,7 @@ describe("prepareBundledPluginRuntimeRoot", () => {
       JSON.stringify({ name: "whatsapp-runtime", version: "1.0.0", type: "module" }),
       "utf8",
     );
+    writeGeneratedRuntimeDepsManifest(installRoot, ["whatsapp-runtime@1.0.0"]);
 
     const prepared = prepareBundledPluginRuntimeRoot({
       pluginId: "whatsapp",
@@ -610,6 +617,7 @@ describe("prepareBundledPluginRuntimeRoot", () => {
       JSON.stringify({ name: "whatsapp-runtime", version: "1.0.0", type: "module" }),
       "utf8",
     );
+    writeGeneratedRuntimeDepsManifest(installRoot, ["whatsapp-runtime@1.0.0"]);
 
     const prepared = prepareBundledPluginRuntimeRoot({
       pluginId: "whatsapp",

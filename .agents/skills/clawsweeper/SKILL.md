@@ -25,7 +25,8 @@ read-only report work read-only unless Peter asked to commit.
 ## One Bot, One App
 
 Use the ClawSweeper repo and the `clawsweeper` GitHub App. Use only
-`CLAWSWEEPER_*` configuration for this automation.
+`CLAWSWEEPER_*` configuration for this automation. Do not use legacy apps,
+variables, labels, or skills.
 
 Required app setup:
 
@@ -33,8 +34,10 @@ Required app setup:
 - `CLAWSWEEPER_APP_PRIVATE_KEY`: private key used only inside
   `actions/create-github-app-token` steps.
 - Target app permissions: read target scan context; write issues and pull
-  requests; optional Checks write for commit check runs; optional Actions write
-  on `openclaw/clawsweeper` for app-token dispatch/cancellation.
+  requests; contents write for report commits, repair branches, and workflow
+  inputs; Actions write on `openclaw/clawsweeper` for comment-router
+  re-review dispatch, workflow dispatch, run cancellation, and self-heal;
+  optional Checks write for commit Check Runs.
 
 Token boundary:
 
@@ -91,6 +94,12 @@ records/<repo-slug>/closed/<number>.md
 Lead with counts, concrete findings, and report links. Do not post unsolicited
 GitHub comments from report-reading work. Public surfaces are markdown reports,
 durable ClawSweeper review comments, and optional checks.
+
+PR reports include Codex `/review`-style `reviewFindings` with priority,
+confidence, repository-relative file, and line range. Public PR comments show a
+short `Review findings:` list when findings exist; full review comments,
+evidence links, likely owners, and runtime details stay inside the collapsed
+`Review details` block.
 
 Useful commands:
 
@@ -183,15 +192,31 @@ Important gates:
 Maintainers can use:
 
 ```text
+/review
 /clawsweeper status
+/clawsweeper re-review
 /clawsweeper fix ci
 /clawsweeper address review
 /clawsweeper rebase
 /clawsweeper automerge
+/clawsweeper approve
 /clawsweeper explain
 /clawsweeper stop
+/automerge
+/autoclose <maintainer close reason>
+@clawsweeper re-review
+@clawsweeper review
+@clawsweeper[bot] re-review
 @openclaw-clawsweeper fix ci
+@openclaw-clawsweeper[bot] fix ci
 ```
+
+Accepted aliases: `review`, `re-review`, `rereview`, `review again`,
+`rerun review`, and `run review`. `review` and `re-review` dispatch a fresh
+ClawSweeper issue/PR review without starting repair. `fix ci`,
+`address review`, and `rebase` dispatch the
+repair worker only for ClawSweeper PRs or PRs opted into
+`clawsweeper:automerge`.
 
 Default accepted maintainers: `OWNER`, `MEMBER`, `COLLABORATOR`; fallback
 repository permission accepts `admin`, `maintain`, or `write`. Contributor

@@ -336,7 +336,7 @@ jobs:
   validate_repo_e2e:
     needs: validate_selected_ref
     if: inputs.include_repo_e2e
-    runs-on: blacksmith-32vcpu-ubuntu-2404
+    runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: 90
     env:
       OPENCLAW_VITEST_MAX_WORKERS: "2"
@@ -363,7 +363,7 @@ jobs:
   validate_special_e2e:
     needs: validate_selected_ref
     if: inputs.include_repo_e2e || (inputs.include_live_suites && !inputs.live_models_only)
-    runs-on: blacksmith-32vcpu-ubuntu-2404
+    runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: ${{ matrix.timeout_minutes }}
     strategy:
       fail-fast: false
@@ -690,7 +690,7 @@ jobs:
   plan_docker_lane_groups:
     needs: validate_selected_ref
     if: inputs.docker_lanes != ''
-    runs-on: ubuntu-24.04
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 5
     outputs:
       groups_json: ${{ steps.plan.outputs.groups_json }}
@@ -1150,7 +1150,11 @@ jobs:
             fi
             cp "${tgzs[0]}" "$target"
           fi
-          node scripts/check-openclaw-package-tarball.mjs "$target"
+          echo "Validating Docker E2E package tarball: $target"
+          started_at="$(date +%s)"
+          timeout --foreground 5m node scripts/check-openclaw-package-tarball.mjs "$target"
+          finished_at="$(date +%s)"
+          echo "Docker E2E package tarball validation finished in $((finished_at - started_at))s."
           digest="$(sha256sum "$target" | awk '{print $1}')"
           tag="pkg-${digest:0:32}"
           echo "sha256=$digest" >> "$GITHUB_OUTPUT"
@@ -1671,7 +1675,7 @@ jobs:
   validate_live_provider_suites:
     needs: validate_selected_ref
     if: inputs.include_live_suites && !inputs.live_models_only
-    runs-on: blacksmith-32vcpu-ubuntu-2404
+    runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: ${{ matrix.timeout_minutes }}
     strategy:
       fail-fast: false
@@ -1771,6 +1775,12 @@ jobs:
             label: Native live plugins L-N
             command: node .release-harness/scripts/test-live-shard.mjs native-live-extensions-l-n
             timeout_minutes: 90
+            profile_env_only: false
+            profiles: full
+          - suite_id: native-live-extensions-moonshot
+            label: Native live Moonshot plugin
+            command: node .release-harness/scripts/test-live-shard.mjs native-live-extensions-moonshot
+            timeout_minutes: 60
             profile_env_only: false
             profiles: full
           - suite_id: native-live-extensions-openai
@@ -2092,7 +2102,7 @@ jobs:
     name: Live media suites (${{ matrix.label }})
     needs: validate_selected_ref
     if: inputs.include_live_suites && !inputs.live_models_only
-    runs-on: blacksmith-32vcpu-ubuntu-2404
+    runs-on: blacksmith-8vcpu-ubuntu-2404
     container:
       image: ghcr.io/openclaw/openclaw-live-media-runner:ubuntu-24.04
       credentials:

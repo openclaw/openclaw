@@ -703,11 +703,16 @@ export const zh_TW: TranslationMap = {
     jaJP: "日本語（Japanese）",
     ko: "한국어（Korean）",
     fr: "Français（French）",
+    ar: "العربية（阿拉伯文）",
+    it: "Italiano（義大利文）",
     tr: "Türkçe（Turkish）",
     uk: "Українська (烏克蘭語)",
     id: "Bahasa Indonesia（Indonesian）",
     pl: "Polski（Polish）",
     th: "ไทย（泰文）",
+    vi: "Tiếng Việt（越南文）",
+    nl: "Nederlands（荷蘭文）",
+    fa: "فارسی（波斯文）",
   },
   cron: {
     summary: {
