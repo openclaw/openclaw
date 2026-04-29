@@ -98,7 +98,7 @@ function toPickerCatalogEntry(
 
 function loadPickerModelCatalog(
   cfg: OpenClawConfig,
-  opts: { preferredProvider?: string } = {},
+  opts: { preferredProvider?: string; workspaceDir?: string } = {},
 ): ReturnType<typeof loadModelCatalog> {
   if (cfg.models?.mode === "replace") {
     return Promise.resolve(buildConfiguredModelCatalog({ cfg }));
@@ -114,6 +114,7 @@ function loadPickerModelCatalog(
   }
   return loadModelCatalog({
     config: cfg,
+    workspaceDir: opts.workspaceDir,
   });
 }
 
@@ -689,7 +690,7 @@ export async function promptDefaultModel(
   const catalogProgress = params.prompter.progress("Loading available models");
   let catalog: Awaited<ReturnType<typeof loadModelCatalog>>;
   try {
-    catalog = await loadPickerModelCatalog(cfg);
+    catalog = await loadPickerModelCatalog(cfg, { workspaceDir: params.workspaceDir });
   } finally {
     catalogProgress.stop();
   }

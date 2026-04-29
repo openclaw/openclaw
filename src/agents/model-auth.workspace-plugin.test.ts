@@ -11,6 +11,7 @@ import {
   resolveApiKeyForProvider,
   resolveModelAuthMode,
 } from "./model-auth.js";
+import { resolveVisibleModelCatalog } from "./model-catalog-visibility.js";
 import { hasAuthForModelProvider } from "./model-provider-auth.js";
 
 async function writeWorkspaceAuthEvidencePlugin(workspaceDir: string) {
@@ -110,6 +111,14 @@ describe("workspace plugin model auth evidence", () => {
               store,
             }),
           ).toBe(true);
+          expect(
+            resolveVisibleModelCatalog({
+              cfg,
+              catalog: [{ provider: "workspace-cloud", id: "cloud-pro", name: "Cloud Pro" }],
+              defaultProvider: "openai",
+              workspaceDir,
+            }),
+          ).toEqual([{ provider: "workspace-cloud", id: "cloud-pro", name: "Cloud Pro" }]);
         },
       );
     } finally {

@@ -12,7 +12,11 @@ export async function __resetModelCatalogCacheForTest(): Promise<void> {
 
 export async function loadGatewayModelCatalog(params?: {
   getConfig?: () => ReturnType<typeof getRuntimeConfig>;
+  workspaceDir?: string;
 }): Promise<GatewayModelChoice[]> {
   const { loadModelCatalog } = await import("../agents/model-catalog.js");
-  return await loadModelCatalog({ config: (params?.getConfig ?? getRuntimeConfig)() });
+  return await loadModelCatalog({
+    config: (params?.getConfig ?? getRuntimeConfig)(),
+    workspaceDir: params?.workspaceDir,
+  });
 }

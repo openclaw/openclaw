@@ -107,6 +107,7 @@ function appendCatalogEntriesIfAbsent(
 
 export async function loadModelCatalog(params?: {
   config?: OpenClawConfig;
+  workspaceDir?: string;
   useCache?: boolean;
   readOnly?: boolean;
 }): Promise<ModelCatalogEntry[]> {
@@ -193,10 +194,12 @@ export async function loadModelCatalog(params?: {
       }
       const supplemental = await augmentModelCatalogWithProviderPlugins({
         config: cfg,
+        workspaceDir: params?.workspaceDir,
         env: process.env,
         context: {
           config: cfg,
           agentDir,
+          workspaceDir: params?.workspaceDir,
           env: process.env,
           entries: [...models],
         },

@@ -30,11 +30,11 @@ export const modelsHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
-      const catalog = await context.loadGatewayModelCatalog();
       const cfg = context.getRuntimeConfig();
       const workspaceDir =
         resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg)) ??
         resolveDefaultAgentWorkspaceDir();
+      const catalog = await context.loadGatewayModelCatalog({ workspaceDir });
       const view = resolveModelsListView(params);
       if (view === "all") {
         respond(true, { models: catalog }, undefined);

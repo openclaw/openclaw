@@ -75,17 +75,18 @@ export async function buildModelsProviderData(
     agentId,
   });
 
-  const catalog = await loadModelCatalog({ config: cfg });
+  const workspaceDir =
+    options.workspaceDir ??
+    (agentId ? resolveAgentWorkspaceDir(cfg, agentId) : undefined) ??
+    resolveDefaultAgentWorkspaceDir();
+  const catalog = await loadModelCatalog({ config: cfg, workspaceDir });
   const visibleCatalog = resolveVisibleModelCatalog({
     cfg,
     catalog,
     defaultProvider: resolvedDefault.provider,
     defaultModel: resolvedDefault.model,
     agentId,
-    workspaceDir:
-      options.workspaceDir ??
-      (agentId ? resolveAgentWorkspaceDir(cfg, agentId) : undefined) ??
-      resolveDefaultAgentWorkspaceDir(),
+    workspaceDir,
     view: options.view,
   });
 
