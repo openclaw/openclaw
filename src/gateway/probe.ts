@@ -144,6 +144,7 @@ export async function probeGateway(opts: {
   url: string;
   auth?: GatewayProbeAuth;
   timeoutMs: number;
+  preauthHandshakeTimeoutMs?: number;
   includeDetails?: boolean;
   detailLevel?: "none" | "presence" | "full";
   tlsFingerprint?: string;
@@ -255,6 +256,7 @@ export async function probeGateway(opts: {
       token: opts.auth?.token,
       password: opts.auth?.password,
       tlsFingerprint: opts.tlsFingerprint,
+      preauthHandshakeTimeoutMs: opts.preauthHandshakeTimeoutMs,
       scopes: [READ_SCOPE],
       clientName: GATEWAY_CLIENT_NAMES.CLI,
       clientVersion: "dev",

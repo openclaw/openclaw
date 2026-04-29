@@ -81,12 +81,16 @@ export async function buildExportTrajectoryCommandReply(
     if (targets.length === 0) {
       return { text: EXPORT_TRAJECTORY_PRIVATE_ROUTE_UNAVAILABLE };
     }
+    const privateTarget = targets[0];
+    if (!privateTarget) {
+      return { text: EXPORT_TRAJECTORY_PRIVATE_ROUTE_UNAVAILABLE };
+    }
     const privateReply = await buildExportTrajectoryApprovalReply(resolvedDeps, params, request, {
-      privateApprovalTarget: targets[0],
+      privateApprovalTarget: privateTarget,
     });
     const delivered = await resolvedDeps.deliverPrivateTrajectoryReply({
       commandParams: params,
-      targets,
+      targets: [privateTarget],
       reply: privateReply,
     });
     return {
@@ -241,14 +245,16 @@ async function requestTrajectoryExportApproval(
       cwd: params.workspaceDir,
       agentId,
       sessionKey: params.sessionKey,
-      messageProvider: params.command.channel,
+      messageProvider: options.privateApprovalTarget?.channel ?? params.command.channel,
       currentChannelId: options.privateApprovalTarget?.to ?? readCommandDeliveryTarget(params),
       currentThreadTs: options.privateApprovalTarget
         ? options.privateApprovalTarget.threadId == null
           ? undefined
           : String(options.privateApprovalTarget.threadId)
         : messageThreadId,
-      accountId: options.privateApprovalTarget?.accountId ?? params.ctx.AccountId ?? undefined,
+      accountId: options.privateApprovalTarget
+        ? (options.privateApprovalTarget.accountId ?? undefined)
+        : (params.ctx.AccountId ?? undefined),
       notifyOnExit: params.cfg.tools?.exec?.notifyOnExit,
       notifyOnExitEmptySuccess: params.cfg.tools?.exec?.notifyOnExitEmptySuccess,
     });

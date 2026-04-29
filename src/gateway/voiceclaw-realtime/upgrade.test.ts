@@ -1,11 +1,13 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { type RawData, WebSocket, WebSocketServer } from "ws";
 import type { ResolvedGatewayAuth } from "../auth.js";
+import { MAX_PAYLOAD_BYTES } from "../server-constants.js";
 import { attachGatewayUpgradeHandler, createGatewayHttpServer } from "../server-http.js";
 import { createPreauthConnectionBudget } from "../server/preauth-connection-budget.js";
 import type { GatewayWsClient } from "../server/ws-types.js";
 import { withTempConfig } from "../test-temp-config.js";
 import { VOICECLAW_REALTIME_PATH } from "./paths.js";
+import { VOICECLAW_REALTIME_MAX_PAYLOAD_BYTES } from "./upgrade.js";
 
 const previousGeminiApiKey = process.env.GEMINI_API_KEY;
 const previousTestHandshakeTimeout = process.env.OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS;
@@ -24,6 +26,10 @@ afterEach(() => {
 });
 
 describe("VoiceClaw realtime gateway upgrade", () => {
+  it("keeps the realtime websocket payload cap aligned with gateway clients", () => {
+    expect(VOICECLAW_REALTIME_MAX_PAYLOAD_BYTES).toBe(MAX_PAYLOAD_BYTES);
+  });
+
   it("accepts the realtime path without the generic gateway websocket handler", async () => {
     delete process.env.GEMINI_API_KEY;
     await withRealtimeGateway(async ({ port }) => {

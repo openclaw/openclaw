@@ -112,7 +112,7 @@ export type ChannelSetupInput = {
   useEnv?: boolean;
   homeserver?: string;
   dangerouslyAllowPrivateNetwork?: boolean;
-  /** Compatibility alias for legacy setup callers; prefer dangerouslyAllowPrivateNetwork. */
+  /** @deprecated Compatibility alias; prefer dangerouslyAllowPrivateNetwork. */
   allowPrivateNetwork?: boolean;
   proxy?: string;
   userId?: string;
@@ -407,6 +407,8 @@ export type ChannelThreadingAdapter = {
    */
   allowExplicitReplyTagsWhenOff?: boolean;
   /**
+   * @deprecated Use allowExplicitReplyTagsWhenOff.
+   *
    * Deprecated alias for allowExplicitReplyTagsWhenOff.
    * Kept for compatibility with older plugin surfaces.
    */

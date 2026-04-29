@@ -116,9 +116,16 @@ async function handleDiagnosticsCommandWithDeps(
         reply: { text: DIAGNOSTICS_PRIVATE_ROUTE_UNAVAILABLE },
       };
     }
+    const privateTarget = targets[0];
+    if (!privateTarget) {
+      return {
+        shouldContinue: false,
+        reply: { text: DIAGNOSTICS_PRIVATE_ROUTE_UNAVAILABLE },
+      };
+    }
     const privateReply = await buildDiagnosticsReply(deps, params, args, {
       diagnosticsPrivateRouted: true,
-      privateApprovalTarget: targets[0],
+      privateApprovalTarget: privateTarget,
     });
     if (!privateReply) {
       return {
@@ -128,7 +135,7 @@ async function handleDiagnosticsCommandWithDeps(
     }
     const delivered = await deps.deliverPrivateDiagnosticsReply({
       commandParams: params,
-      targets,
+      targets: [privateTarget],
       reply: privateReply,
     });
     return {
@@ -177,9 +184,16 @@ async function deliverGroupDiagnosticsReplyPrivately(
       reply: { text: DIAGNOSTICS_PRIVATE_ROUTE_UNAVAILABLE },
     };
   }
+  const privateTarget = targets[0];
+  if (!privateTarget) {
+    return {
+      shouldContinue: false,
+      reply: { text: DIAGNOSTICS_PRIVATE_ROUTE_UNAVAILABLE },
+    };
+  }
   const delivered = await deps.deliverPrivateDiagnosticsReply({
     commandParams: params,
-    targets,
+    targets: [privateTarget],
     reply,
   });
   return {
@@ -294,14 +308,16 @@ async function requestGatewayDiagnosticsExportApproval(
       cwd: params.workspaceDir,
       agentId,
       sessionKey: params.sessionKey,
-      messageProvider: params.command.channel,
+      messageProvider: options.privateApprovalTarget?.channel ?? params.command.channel,
       currentChannelId: options.privateApprovalTarget?.to ?? readCommandDeliveryTarget(params),
       currentThreadTs: options.privateApprovalTarget
         ? options.privateApprovalTarget.threadId == null
           ? undefined
           : String(options.privateApprovalTarget.threadId)
         : messageThreadId,
-      accountId: options.privateApprovalTarget?.accountId ?? params.ctx.AccountId ?? undefined,
+      accountId: options.privateApprovalTarget
+        ? (options.privateApprovalTarget.accountId ?? undefined)
+        : (params.ctx.AccountId ?? undefined),
       notifyOnExit: params.cfg.tools?.exec?.notifyOnExit,
       notifyOnExitEmptySuccess: params.cfg.tools?.exec?.notifyOnExitEmptySuccess,
     });

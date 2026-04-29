@@ -8,6 +8,11 @@ on:
         required: false
         default: ""
         type: string
+      full_release_validation:
+        description: Run release-only CI lanes. Reserved for Full Release Validation.
+        required: false
+        default: false
+        type: boolean
   push:
     branches: [main]
     paths-ignore:
@@ -50,6 +55,7 @@ jobs:
       run_checks_fast: ${{ steps.manifest.outputs.run_checks_fast }}
       checks_fast_core_matrix: ${{ steps.manifest.outputs.checks_fast_core_matrix }}
       channel_contracts_matrix: ${{ steps.manifest.outputs.channel_contracts_matrix }}
+      run_checks_node_extensions: ${{ steps.manifest.outputs.run_checks_node_extensions }}
       checks_node_extensions_matrix: ${{ steps.manifest.outputs.checks_node_extensions_matrix }}
       run_checks: ${{ steps.manifest.outputs.run_checks }}
       checks_matrix: ${{ steps.manifest.outputs.checks_matrix }}
@@ -130,6 +136,7 @@ jobs:
           OPENCLAW_CI_RUN_CONTROL_UI_I18N: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_control_ui_i18n || 'false' }}
           OPENCLAW_CI_CHECKOUT_REVISION: ${{ steps.checkout_ref.outputs.sha }}
           OPENCLAW_CI_EVENT_NAME: ${{ github.event_name }}
+          OPENCLAW_CI_FULL_RELEASE_VALIDATION: ${{ github.event_name == 'workflow_dispatch' && inputs.full_release_validation && 'true' || 'false' }}
           OPENCLAW_CI_PR_HEAD_REPOSITORY: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name || github.repository }}
           OPENCLAW_CI_PR_HEAD_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || '' }}
           OPENCLAW_CI_REPOSITORY: ${{ github.repository }}
@@ -139,9 +146,6 @@ jobs:
           import {
             createNodeTestShards,
           } from "./scripts/lib/ci-node-test-plan.mjs";
-          import {
-            assertPluginPrereleaseTestPlanComplete,
-          } from "./scripts/lib/plugin-prerelease-test-plan.mjs";
           import {
             createChannelContractTestShards,
           } from "./scripts/lib/channel-contract-test-plan.mjs";
@@ -184,7 +188,9 @@ jobs:
           const runSkillsPython = parseBoolean(process.env.OPENCLAW_CI_RUN_SKILLS_PYTHON) && !docsOnly;
           const runControlUiI18n =
             parseBoolean(process.env.OPENCLAW_CI_RUN_CONTROL_UI_I18N) && !docsOnly;
-          const pluginPrereleasePlan = assertPluginPrereleaseTestPlanComplete();
+          const isFullReleaseValidationCiRun =
+            process.env.OPENCLAW_CI_EVENT_NAME === "workflow_dispatch" &&
+            parseBoolean(process.env.OPENCLAW_CI_FULL_RELEASE_VALIDATION);
           const trustedPluginPrereleaseRef =
             process.env.OPENCLAW_CI_EVENT_NAME !== "pull_request" ||
             process.env.OPENCLAW_CI_PR_HEAD_REPOSITORY === process.env.OPENCLAW_CI_REPOSITORY;
@@ -192,13 +198,40 @@ jobs:
             process.env.OPENCLAW_CI_EVENT_NAME === "pull_request" && trustedPluginPrereleaseRef
               ? process.env.OPENCLAW_CI_PR_HEAD_SHA
               : process.env.OPENCLAW_CI_CHECKOUT_REVISION;
-          const runPluginPrereleaseSuite =
-            runNodeFull && isCanonicalRepository && trustedPluginPrereleaseRef;
+          let runPluginPrereleaseSuite =
+            isFullReleaseValidationCiRun && runNodeFull && isCanonicalRepository;
+          const runReleaseOnlyPluginSuites =
+            isFullReleaseValidationCiRun && runNodeFull && isCanonicalRepository;
+          let pluginPrereleasePlan = { staticChecks: [], dockerLanes: [] };
+          if (runPluginPrereleaseSuite) {
+            try {
+              const { assertPluginPrereleaseTestPlanComplete } = await import(
+                "./scripts/lib/plugin-prerelease-test-plan.mjs"
+              );
+              pluginPrereleasePlan = assertPluginPrereleaseTestPlanComplete();
+            } catch (error) {
+              const errorCode =
+                error && typeof error === "object" && "code" in error ? error.code : "";
+              const moduleUrl =
+                error && typeof error === "object" && "url" in error ? String(error.url) : "";
+              if (
+                errorCode === "ERR_MODULE_NOT_FOUND" &&
+                moduleUrl.endsWith("/scripts/lib/plugin-prerelease-test-plan.mjs")
+              ) {
+                console.warn(
+                  "Plugin prerelease plan unavailable in target ref; skipping plugin prerelease suite.",
+                );
+                runPluginPrereleaseSuite = false;
+              } else {
+                throw error;
+              }
+            }
+          }
           const extensionTestShardCount = isCanonicalRepository
             ? DEFAULT_EXTENSION_TEST_SHARD_COUNT
             : Math.max(DEFAULT_EXTENSION_TEST_SHARD_COUNT, 36);
           const extensionShardMatrix = createMatrix(
-            runNodeFull
+            runReleaseOnlyPluginSuites
               ? createExtensionTestShards({
                   shardCount: extensionTestShardCount,
                 }).map((shard) => ({
@@ -241,7 +274,9 @@ jobs:
           }
 
           const nodeTestShards = runNodeFull
-            ? createNodeTestShards().map((shard) => ({
+            ? createNodeTestShards({
+                includeReleaseOnlyPluginShards: runReleaseOnlyPluginSuites,
+              }).map((shard) => ({
                 check_name: shard.checkName,
                 runtime: "node",
                 task: "test-shard",
@@ -270,6 +305,7 @@ jobs:
             channel_contracts_matrix: createMatrix(
               runNodeFull ? createChannelContractTestShards() : [],
             ),
+            run_checks_node_extensions: runReleaseOnlyPluginSuites,
             checks_node_extensions_matrix: extensionShardMatrix,
             run_checks: runNodeFull,
             checks_matrix: createMatrix(
@@ -959,7 +995,7 @@ jobs:
       contents: read
     name: ${{ matrix.check_name }}
     needs: [preflight]
-    if: needs.preflight.outputs.run_checks_fast == 'true'
+    if: needs.preflight.outputs.run_checks_node_extensions == 'true'
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     strategy:
@@ -1032,7 +1068,7 @@ jobs:
       contents: read
     name: checks-node-extensions
     needs: [preflight, checks-node-extensions-shard]
-    if: ${{ !cancelled() && always() && needs.preflight.outputs.run_checks_fast == 'true' }}
+    if: ${{ !cancelled() && always() && needs.preflight.outputs.run_checks_node_extensions == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:

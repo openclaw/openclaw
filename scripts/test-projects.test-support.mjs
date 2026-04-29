@@ -248,7 +248,15 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ["scripts/lib/vitest-batch-runner.mjs", ["test/scripts/test-extension.test.ts"]],
   ["scripts/lib/ci-node-test-plan.mjs", ["test/scripts/ci-node-test-plan.test.ts"]],
   [
+    "scripts/lib/docker-e2e-scenarios.mjs",
+    ["test/scripts/docker-e2e-plan.test.ts", "test/scripts/plugin-prerelease-test-plan.test.ts"],
+  ],
+  [
     "scripts/lib/plugin-prerelease-test-plan.mjs",
+    ["test/scripts/plugin-prerelease-test-plan.test.ts"],
+  ],
+  [
+    "scripts/e2e/kitchen-sink-plugin-docker.sh",
     ["test/scripts/plugin-prerelease-test-plan.test.ts"],
   ],
   ["scripts/lib/vitest-shard-timings.mjs", ["test/scripts/vitest-shard-timings.test.ts"]],

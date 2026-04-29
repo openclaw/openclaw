@@ -401,7 +401,10 @@ describe("buildExportTrajectoryCommandReply", () => {
   it("routes group trajectory export approval privately", async () => {
     const { buildExportTrajectoryCommandReply } = await import("./commands-export-trajectory.js");
     const { execCalls, privateReplies, deps } = createExecDeps({
-      privateTargets: [{ channel: "quietchat", to: "owner-dm", accountId: "account-1" }],
+      privateTargets: [
+        { channel: "telegram", to: "owner-dm", accountId: "account-1" },
+        { channel: "whatsapp", to: "backup-owner-dm", accountId: "account-2" },
+      ],
     });
     const params = makeParams();
     params.isGroup = true;
@@ -415,13 +418,14 @@ describe("buildExportTrajectoryCommandReply", () => {
     expect(reply.text).not.toContain("agent:target:session");
     expect(privateReplies).toHaveLength(1);
     expect(privateReplies[0]?.targets).toEqual([
-      { channel: "quietchat", to: "owner-dm", accountId: "account-1" },
+      { channel: "telegram", to: "owner-dm", accountId: "account-1" },
     ]);
     expect(privateReplies[0]?.text).toContain("Trajectory exports can include prompts");
     expect(privateReplies[0]?.text).toContain("openclaw sessions export-trajectory");
     expect(privateReplies[0]?.text).toContain("Session: agent:target:session");
     expect(execCalls).toHaveLength(1);
     expect(execCalls[0]?.defaults).toMatchObject({
+      messageProvider: "telegram",
       currentChannelId: "owner-dm",
       accountId: "account-1",
     });

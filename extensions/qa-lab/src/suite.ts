@@ -83,6 +83,7 @@ export type QaSuiteRunParams = {
   lab?: QaLabServerHandle;
   startLab?: QaSuiteStartLabFn;
   concurrency?: number;
+  enabledPluginIds?: string[];
   controlUiEnabled?: boolean;
   transportReadyTimeoutMs?: number;
 };
@@ -433,7 +434,12 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
     primaryModel,
     claudeCliAuthMode: params?.claudeCliAuthMode,
   });
-  const enabledPluginIds = collectQaSuitePluginIds(selectedCatalogScenarios);
+  const enabledPluginIds = [
+    ...new Set([
+      ...collectQaSuitePluginIds(selectedCatalogScenarios),
+      ...(params?.enabledPluginIds ?? []).map((pluginId) => pluginId.trim()).filter(Boolean),
+    ]),
+  ];
   const gatewayConfigPatch = collectQaSuiteGatewayConfigPatch(selectedCatalogScenarios);
   const gatewayRuntimeOptions = collectQaSuiteGatewayRuntimeOptions(selectedCatalogScenarios);
   const concurrency = normalizeQaSuiteConcurrency(
@@ -553,6 +559,7 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
               thinkingDefault: params?.thinkingDefault,
               claudeCliAuthMode: params?.claudeCliAuthMode,
               scenarioIds: [scenario.id],
+              enabledPluginIds: params?.enabledPluginIds,
               concurrency: 1,
               startLab,
               // Most isolated workers do not need their own Control UI proxy.
