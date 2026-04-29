@@ -46,16 +46,7 @@ function collectPackagedRuntimeDepsRepairPluginIds(params: {
           openclaw?: { bundle?: { stageRuntimeDependencies?: unknown } };
         };
         if (pkg?.openclaw?.bundle?.stageRuntimeDependencies === true) {
-          const libId = entry.name;
-          if (
-            passesManifestOwnerBasePolicy({
-              plugin: { id: libId },
-              normalizedConfig: plugins,
-              allowRestrictiveAllowlistBypass: true,
-            })
-          ) {
-            ids.add(libId);
-          }
+          ids.add(entry.name);
         }
       } catch {}
       continue;
