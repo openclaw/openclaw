@@ -8,7 +8,7 @@ const mocks = vi.hoisted(() => {
       text: params.spec.text ?? "",
     })),
     collectDiscordStatusIssues: vi.fn(() => []),
-    discordOnboardingAdapter: { kind: "legacy-onboarding" },
+    discordOnboardingAdapter: { kind: "discord-onboarding" },
     inspectDiscordAccount: vi.fn(() => ({ accountId: "default" })),
     listDiscordAccountIds: vi.fn(() => ["default"]),
     listDiscordDirectoryGroupsFromConfig: vi.fn(() => []),
