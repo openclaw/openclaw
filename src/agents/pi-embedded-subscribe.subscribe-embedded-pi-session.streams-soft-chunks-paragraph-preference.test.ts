@@ -43,4 +43,28 @@ describe("subscribeEmbeddedPiSession", () => {
     expect(onBlockReply.mock.calls[1][0].text).toBe("```bash\nline1\nline2\n```");
     expect(onBlockReply.mock.calls[2][0].text).toBe("Outro");
   });
+
+  it("avoids splitting inside markdown tables", () => {
+    const onBlockReply = vi.fn();
+    const { emit, subscription } = createParagraphChunkedBlockReplyHarness({
+      onBlockReply,
+      chunking: {
+        minChars: 5,
+        maxChars: 25,
+      },
+    });
+
+    const table = ["| Name | Value |", "| --- | --- |", "| Alpha | One |", "| Beta | Two |"].join(
+      "\n",
+    );
+    const text = ["Intro", "", table, "", "Outro"].join("\n");
+
+    emitAssistantTextDeltaAndEnd({ emit, text });
+
+    expect(onBlockReply).toHaveBeenCalledTimes(3);
+    expect(onBlockReply.mock.calls[0][0].text).toBe("Intro");
+    expect(onBlockReply.mock.calls[1][0].text).toBe(table);
+    expect(onBlockReply.mock.calls[2][0].text).toBe("Outro");
+    expect(subscription.assistantTexts).toEqual(["Intro", table, "Outro"]);
+  });
 });

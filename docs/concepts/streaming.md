@@ -73,6 +73,7 @@ Block chunking is implemented by `EmbeddedBlockChunker`:
 - **High bound:** prefer splits before `maxChars`; if forced, split at `maxChars`.
 - **Break preference:** `paragraph` → `newline` → `sentence` → `whitespace` → hard break.
 - **Code fences:** never split inside fences; when forced at `maxChars`, close + reopen the fence to keep Markdown valid.
+- **Markdown tables:** avoid splitting inside detected pipe-table spans when a safe boundary is available.
 
 `maxChars` is clamped to the channel `textChunkLimit`, so you can’t exceed per-channel caps.
 
