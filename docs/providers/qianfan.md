@@ -6,8 +6,6 @@ read_when:
 title: "Qianfan"
 ---
 
-# Qianfan
-
 Qianfan is Baidu's MaaS platform, providing a **unified API** that routes requests to many models behind a single
 endpoint and API key. It is OpenAI-compatible, so most OpenAI SDKs work by switching the base URL.
 
@@ -39,7 +37,7 @@ endpoint and API key. It is OpenAI-compatible, so most OpenAI SDKs work by switc
   </Step>
 </Steps>
 
-## Available models
+## Built-in catalog
 
 | Model ref                            | Input       | Context | Max output | Reasoning | Notes         |
 | ------------------------------------ | ----------- | ------- | ---------- | --------- | ------------- |
@@ -112,6 +110,7 @@ The default bundled model ref is `qianfan/deepseek-v3.2`. You only need to overr
     - Ensure your API key starts with `bce-v3/ALTAK-` and has Qianfan API access enabled in the Baidu Cloud console.
     - If models are not listed, confirm your account has the Qianfan service activated.
     - The default base URL is `https://qianfan.baidubce.com/v2`. Only change it if you use a custom endpoint or proxy.
+
   </Accordion>
 </AccordionGroup>
 
@@ -121,7 +120,7 @@ The default bundled model ref is `qianfan/deepseek-v3.2`. You only need to overr
   <Card title="Model selection" href="/concepts/model-providers" icon="layers">
     Choosing providers, model refs, and failover behavior.
   </Card>
-  <Card title="Configuration reference" href="/gateway/configuration" icon="gear">
+  <Card title="Configuration reference" href="/gateway/configuration-reference" icon="gear">
     Full OpenClaw configuration reference.
   </Card>
   <Card title="Agent setup" href="/concepts/agent" icon="robot">

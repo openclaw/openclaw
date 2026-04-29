@@ -2,6 +2,7 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type { MemoryEmbeddingProbeResult } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { resolveMemoryRemDreamingConfig } from "openclaw/plugin-sdk/memory-core-host-status";
 import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
@@ -9,10 +10,10 @@ import {
   colorize,
   defaultRuntime,
   formatErrorMessage,
+  getRuntimeConfig,
   getMemorySearchManager,
   isRich,
   listMemoryFiles,
-  loadConfig,
   normalizeExtraMemoryPaths,
   resolveCommandSecretRefsViaGateway,
   resolveDefaultAgentId,
@@ -44,10 +45,7 @@ import {
   type RepairDreamingArtifactsResult,
 } from "./dreaming-repair.js";
 import { asRecord } from "./dreaming-shared.js";
-import {
-  resolveDreamingBlockedReason,
-  resolveShortTermPromotionDreamingConfig,
-} from "./dreaming.js";
+import { resolveShortTermPromotionDreamingConfig } from "./dreaming.js";
 import { previewGroundedRemMarkdown } from "./rem-evidence.js";
 import {
   applyShortTermPromotions,
@@ -95,7 +93,7 @@ function getMemoryCommandSecretTargetIds(): Set<string> {
 
 async function loadMemoryCommandConfig(commandName: string): Promise<LoadedMemoryCommandConfig> {
   const { resolvedConfig, diagnostics } = await resolveCommandSecretRefsViaGateway({
-    config: loadConfig(),
+    config: getRuntimeConfig(),
     commandName,
     targetIds: getMemoryCommandSecretTargetIds(),
   });
@@ -530,16 +528,11 @@ async function scanMemoryFiles(
 ): Promise<SourceScan> {
   const issues: string[] = [];
   const memoryFile = path.join(workspaceDir, "MEMORY.md");
-  const altMemoryFile = path.join(workspaceDir, "memory.md");
   const memoryDir = path.join(workspaceDir, "memory");
 
   const primary = await checkReadableFile(memoryFile);
-  const alt = await checkReadableFile(altMemoryFile);
   if (primary.issue) {
     issues.push(primary.issue);
-  }
-  if (alt.issue) {
-    issues.push(alt.issue);
   }
 
   const resolvedExtraPaths = normalizeExtraMemoryPaths(workspaceDir, extraPaths);
@@ -605,9 +598,6 @@ async function scanMemoryFiles(
     if (!listedOk) {
       if (primary.exists) {
         files.add(memoryFile);
-      }
-      if (alt.exists) {
-        files.add(altMemoryFile);
       }
     }
     totalFiles = files.size;
@@ -681,7 +671,7 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
   const allResults: Array<{
     agentId: string;
     status: ReturnType<MemoryManager["status"]>;
-    embeddingProbe?: Awaited<ReturnType<MemoryManager["probeEmbeddingAvailability"]>>;
+    embeddingProbe?: MemoryEmbeddingProbeResult;
     indexError?: string;
     scan?: MemorySourceScan;
     audit?: ShortTermAuditSummary;
@@ -691,16 +681,14 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
   }> = [];
 
   for (const agentId of agentIds) {
-    const managerPurpose = opts.index ? "default" : "status";
+    const managerPurpose = opts.index ? "cli" : "status";
     await withMemoryManagerForAgent({
       cfg,
       agentId,
       purpose: managerPurpose,
       run: async (manager) => {
         const deep = Boolean(opts.deep || opts.index);
-        let embeddingProbe:
-          | Awaited<ReturnType<MemoryManager["probeEmbeddingAvailability"]>>
-          | undefined;
+        let embeddingProbe: MemoryEmbeddingProbeResult | undefined;
         let indexError: string | undefined;
         const syncFn = manager.sync ? manager.sync.bind(manager) : undefined;
         if (deep) {
@@ -861,10 +849,6 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
       `${label("Workspace")} ${info(workspacePath)}`,
       `${label("Dreaming")} ${info(formatDreamingSummary(cfg))}`,
     ].filter(Boolean) as string[];
-    const dreamingBlockedReason = resolveDreamingBlockedReason(cfg);
-    if (dreamingBlockedReason) {
-      lines.push(`${label("Dreaming status")} ${warn(`blocked - ${dreamingBlockedReason}`)}`);
-    }
     if (embeddingProbe) {
       const state = embeddingProbe.ok ? "ready" : "unavailable";
       const stateColor = embeddingProbe.ok ? theme.success : theme.warn;
@@ -1040,6 +1024,7 @@ export async function runMemoryIndex(opts: MemoryCommandOptions) {
     await withMemoryManagerForAgent({
       cfg,
       agentId,
+      purpose: "cli",
       run: async (manager) => {
         try {
           const syncFn = manager.sync ? manager.sync.bind(manager) : undefined;
@@ -1192,6 +1177,7 @@ export async function runMemorySearch(
   await withMemoryManagerForAgent({
     cfg,
     agentId,
+    purpose: "cli",
     run: async (manager) => {
       const sessionKey = buildCliMemorySearchSessionKey(agentId);
       let results: Awaited<ReturnType<typeof manager.search>>;

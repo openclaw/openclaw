@@ -112,6 +112,9 @@ const replyMediaPathMocks = vi.hoisted(() => ({
     (_params?: unknown) => async (payload: ReplyPayload) => payload,
   ),
 }));
+const runtimePluginMocks = vi.hoisted(() => ({
+  ensureRuntimePluginsLoaded: vi.fn(),
+}));
 const threadInfoMocks = vi.hoisted(() => ({
   parseSessionThreadInfo: vi.fn<
     (sessionKey: string | undefined) => {
@@ -133,6 +136,7 @@ export {
   sessionBindingMocks,
   sessionStoreMocks,
   replyMediaPathMocks,
+  runtimePluginMocks,
   threadInfoMocks,
   ttsMocks,
 };
@@ -192,8 +196,10 @@ vi.mock("./dispatch-from-config.runtime.js", () => ({
   triggerInternalHook: internalHookMocks.triggerInternalHook,
 }));
 vi.mock("../../plugins/hook-runner-global.js", () => ({
+  initializeGlobalHookRunner: vi.fn(),
   getGlobalHookRunner: () => hookMocks.runner,
   getGlobalPluginRegistry: () => hookMocks.registry,
+  resetGlobalHookRunner: vi.fn(),
 }));
 vi.mock("../../acp/runtime/session-meta.js", () => ({
   listAcpSessionEntries: acpMocks.listAcpSessionEntries,
@@ -226,6 +232,41 @@ vi.mock("../../infra/agent-events.js", () => ({
   emitAgentEvent: (params: unknown) => agentEventMocks.emitAgentEvent(params),
   onAgentEvent: (listener: unknown) => agentEventMocks.onAgentEvent(listener),
 }));
+vi.mock("./runtime-plugins.runtime.js", () => ({
+  ensureRuntimePluginsLoaded: runtimePluginMocks.ensureRuntimePluginsLoaded,
+}));
+vi.mock("./conversation-binding-input.js", () => {
+  const normalize = (value: unknown) =>
+    typeof value === "string" && value.trim() ? value.trim() : undefined;
+  return {
+    resolveConversationBindingContextFromMessage: (params: {
+      ctx: {
+        OriginatingChannel?: string | null;
+        Surface?: string | null;
+        Provider?: string | null;
+        AccountId?: string | null;
+        OriginatingTo?: string | null;
+        To?: string | null;
+        From?: string | null;
+      };
+    }) => {
+      const channel = normalize(
+        params.ctx.OriginatingChannel ?? params.ctx.Surface ?? params.ctx.Provider,
+      )?.toLowerCase();
+      const conversationId = normalize(
+        params.ctx.OriginatingTo ?? params.ctx.To ?? params.ctx.From,
+      );
+      if (!channel || !conversationId) {
+        return null;
+      }
+      return {
+        channel,
+        accountId: normalize(params.ctx.AccountId) ?? "default",
+        conversationId,
+      };
+    },
+  };
+});
 vi.mock("../../plugins/conversation-binding.js", () => ({
   buildPluginBindingDeclinedText: () => "Plugin binding request was declined.",
   buildPluginBindingErrorText: () => "Plugin binding request failed.",
@@ -291,6 +332,7 @@ vi.mock("./dispatch-acp-session.runtime.js", () => ({
 vi.mock("../../tts/tts-config.js", () => ({
   normalizeTtsAutoMode: (value: unknown) => ttsMocks.normalizeTtsAutoMode(value),
   resolveConfiguredTtsMode: (cfg: OpenClawConfig) => ttsMocks.resolveTtsConfig(cfg).mode,
+  shouldCleanTtsDirectiveText: () => true,
   shouldAttemptTtsPayload: () => true,
 }));
 

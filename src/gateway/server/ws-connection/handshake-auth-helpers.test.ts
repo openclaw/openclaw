@@ -362,6 +362,15 @@ describe("handshake auth helpers", () => {
     expect(
       shouldSkipLocalBackendSelfPairing({
         connectParams,
+        locality: "shared_secret_loopback_local",
+        hasBrowserOriginHeader: false,
+        sharedAuthOk: true,
+        authMethod: "token",
+      }),
+    ).toBe(true);
+    expect(
+      shouldSkipLocalBackendSelfPairing({
+        connectParams,
         locality: "remote",
         hasBrowserOriginHeader: false,
         sharedAuthOk: true,
@@ -519,7 +528,29 @@ describe("handshake auth helpers", () => {
     ).toBe("remote");
   });
 
-  it("allows silent scope-upgrade for shared_secret_loopback_local", () => {
+  it("keeps shared-secret loopback clients remote when forwarded headers were present", () => {
+    const connectParams = {
+      client: {
+        id: GATEWAY_CLIENT_IDS.NODE_HOST,
+        mode: GATEWAY_CLIENT_MODES.NODE,
+      },
+    } as ConnectParams;
+
+    expect(
+      resolvePairingLocality({
+        connectParams,
+        isLocalClient: false,
+        requestHost: "127.0.0.1:18789",
+        remoteAddress: "127.0.0.1",
+        hasProxyHeaders: true,
+        hasBrowserOriginHeader: false,
+        sharedAuthOk: true,
+        authMethod: "token",
+      }),
+    ).toBe("remote");
+  });
+
+  it("allows silent scope-upgrade, role-upgrade, and metadata-upgrade for shared_secret_loopback_local", () => {
     expect(
       shouldAllowSilentLocalPairing({
         locality: "shared_secret_loopback_local",
@@ -538,6 +569,8 @@ describe("handshake auth helpers", () => {
         reason: "role-upgrade",
       }),
     ).toBe(true);
+    // metadata-upgrade now auto-approves for shared_secret_loopback_local
+    // (extended allowlist — see shouldAllowSilentLocalPairing).
     expect(
       shouldAllowSilentLocalPairing({
         locality: "shared_secret_loopback_local",
@@ -546,7 +579,103 @@ describe("handshake auth helpers", () => {
         isWebchat: false,
         reason: "metadata-upgrade",
       }),
-    ).toBe(false);
+    ).toBe(true);
+  });
+
+  describe("shouldAllowSilentLocalPairing — metadata-upgrade reason", () => {
+    it("allows silent metadata-upgrade for direct local native app clients without browser origin", () => {
+      expect(
+        shouldAllowSilentLocalPairing({
+          locality: "direct_local",
+          hasBrowserOriginHeader: false,
+          isControlUi: false,
+          isWebchat: false,
+          isNativeAppUi: true,
+          reason: "metadata-upgrade",
+        }),
+      ).toBe(true);
+    });
+
+    it("still requires approval for direct local node metadata-upgrade", () => {
+      expect(
+        shouldAllowSilentLocalPairing({
+          locality: "direct_local",
+          hasBrowserOriginHeader: false,
+          isControlUi: false,
+          isWebchat: false,
+          reason: "metadata-upgrade",
+        }),
+      ).toBe(false);
+    });
+
+    it("allows silent metadata-upgrade for cli_container_local CLI clients", () => {
+      expect(
+        shouldAllowSilentLocalPairing({
+          locality: "cli_container_local",
+          hasBrowserOriginHeader: false,
+          isControlUi: false,
+          isWebchat: false,
+          reason: "metadata-upgrade",
+        }),
+      ).toBe(true);
+    });
+
+    it("allows silent metadata-upgrade for shared_secret_loopback_local CLI clients", () => {
+      expect(
+        shouldAllowSilentLocalPairing({
+          locality: "shared_secret_loopback_local",
+          hasBrowserOriginHeader: false,
+          isControlUi: false,
+          isWebchat: false,
+          reason: "metadata-upgrade",
+        }),
+      ).toBe(true);
+    });
+
+    it("still requires approval for metadata-upgrade from remote clients", () => {
+      expect(
+        shouldAllowSilentLocalPairing({
+          locality: "remote",
+          hasBrowserOriginHeader: false,
+          isControlUi: false,
+          isWebchat: false,
+          reason: "metadata-upgrade",
+        }),
+      ).toBe(false);
+    });
+
+    it("still requires approval for metadata-upgrade from browser_container_local (Control UI)", () => {
+      expect(
+        shouldAllowSilentLocalPairing({
+          locality: "browser_container_local",
+          hasBrowserOriginHeader: true,
+          isControlUi: true,
+          isWebchat: false,
+          reason: "metadata-upgrade",
+        }),
+      ).toBe(false);
+    });
+
+    it("still requires approval for direct local Browser or Control UI metadata-upgrade", () => {
+      expect(
+        shouldAllowSilentLocalPairing({
+          locality: "direct_local",
+          hasBrowserOriginHeader: true,
+          isControlUi: true,
+          isWebchat: false,
+          reason: "metadata-upgrade",
+        }),
+      ).toBe(false);
+      expect(
+        shouldAllowSilentLocalPairing({
+          locality: "direct_local",
+          hasBrowserOriginHeader: true,
+          isControlUi: false,
+          isWebchat: true,
+          reason: "metadata-upgrade",
+        }),
+      ).toBe(false);
+    });
   });
 
   it("prefers cli_container_local over shared_secret_loopback_local for CLI clients", () => {

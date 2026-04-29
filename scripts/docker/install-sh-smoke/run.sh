@@ -9,7 +9,7 @@ DEFAULT_PACKAGE="openclaw"
 PACKAGE_NAME="${OPENCLAW_INSTALL_PACKAGE:-$DEFAULT_PACKAGE}"
 FRESH_VERSION="${OPENCLAW_INSTALL_FRESH_VERSION:-}"
 FRESH_TAG_URL="${OPENCLAW_INSTALL_FRESH_TAG_URL:-}"
-UPDATE_BASELINE_VERSION="${OPENCLAW_INSTALL_UPDATE_BASELINE:-2026.4.10}"
+UPDATE_BASELINE_VERSION="${OPENCLAW_INSTALL_UPDATE_BASELINE:-latest}"
 UPDATE_BASELINE_TAG_URL="${OPENCLAW_INSTALL_UPDATE_BASELINE_TAG_URL:-}"
 UPDATE_EXPECT_VERSION="${OPENCLAW_INSTALL_UPDATE_EXPECT_VERSION:-}"
 UPDATE_TAG_URL="${OPENCLAW_INSTALL_UPDATE_TAG_URL:-}"
@@ -109,6 +109,13 @@ run_with_heartbeat() {
   return "$status"
 }
 
+is_self_swapped_package_process_exit() {
+  local stderr="$1"
+  [[ "$stderr" == *"[openclaw] Failed to start CLI:"* ]] &&
+    [[ "$stderr" == *"ERR_MODULE_NOT_FOUND"* ]] &&
+    [[ "$stderr" == *"/node_modules/openclaw/dist/"* ]]
+}
+
 npm_install_global() {
   local label="$1"
   shift
@@ -122,6 +129,20 @@ npm_install_global() {
       --no-audit \
       --no-progress \
       install -g "$@"
+}
+
+resolve_update_baseline_version() {
+  if [[ -n "$UPDATE_BASELINE_TAG_URL" ]]; then
+    return
+  fi
+
+  local resolved_version
+  resolved_version="$(quiet_npm view "${PACKAGE_NAME}@${UPDATE_BASELINE_VERSION}" version 2>/dev/null || true)"
+  if [[ -z "$resolved_version" ]]; then
+    echo "ERROR: failed to resolve ${PACKAGE_NAME}@${UPDATE_BASELINE_VERSION}" >&2
+    return 1
+  fi
+  UPDATE_BASELINE_VERSION="$resolved_version"
 }
 
 run_install_smoke() {
@@ -216,6 +237,8 @@ run_update_smoke() {
     return 1
   fi
 
+  resolve_update_baseline_version
+
   echo "package=$PACKAGE_NAME baseline=$UPDATE_BASELINE_VERSION target=$UPDATE_EXPECT_VERSION"
   echo "==> Install baseline release"
   if [[ -n "$UPDATE_BASELINE_TAG_URL" ]]; then
@@ -246,8 +269,12 @@ run_update_smoke() {
     printf "%s\n" "$update_stderr" >&2
   fi
   if [[ "$update_status" -ne 0 ]]; then
-    echo "ERROR: openclaw update failed with exit code $update_status" >&2
-    return "$update_status"
+    if is_self_swapped_package_process_exit "$update_stderr"; then
+      echo "WARN: legacy updater process exited after self-swap; validating update JSON and installed CLI" >&2
+    else
+      echo "ERROR: openclaw update failed with exit code $update_status" >&2
+      return "$update_status"
+    fi
   fi
 
   UPDATE_JSON="$UPDATE_JSON" \
@@ -255,7 +282,41 @@ run_update_smoke() {
     UPDATE_BASELINE_VERSION="$UPDATE_BASELINE_VERSION" \
     UPDATE_TAG_URL="$UPDATE_TAG_URL" \
     node - <<'NODE'
-const payload = JSON.parse(process.env.UPDATE_JSON || "{}");
+function parseFirstJsonObject(raw) {
+  const start = raw.indexOf("{");
+  if (start < 0) {
+    throw new Error("missing update JSON object");
+  }
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let index = start; index < raw.length; index += 1) {
+    const char = raw[index];
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (char === "\\") {
+        escaped = true;
+      } else if (char === '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (char === '"') {
+      inString = true;
+    } else if (char === "{") {
+      depth += 1;
+    } else if (char === "}") {
+      depth -= 1;
+      if (depth === 0) {
+        return JSON.parse(raw.slice(start, index + 1));
+      }
+    }
+  }
+  throw new Error("unterminated update JSON object");
+}
+
+const payload = parseFirstJsonObject(process.env.UPDATE_JSON || "{}");
 const expectedVersion = String(process.env.UPDATE_EXPECT_VERSION || "");
 const baselineVersion = String(process.env.UPDATE_BASELINE_VERSION || "");
 const expectedUrl = String(process.env.UPDATE_TAG_URL || "");
@@ -304,6 +365,8 @@ run_npm_global_smoke() {
     echo "ERROR: OPENCLAW_INSTALL_UPDATE_TAG_URL is required for npm-global mode" >&2
     return 1
   fi
+
+  resolve_update_baseline_version
 
   echo "package=$PACKAGE_NAME baseline=$UPDATE_BASELINE_VERSION target=$UPDATE_EXPECT_VERSION"
   echo "==> Direct npm global install candidate"

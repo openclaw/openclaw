@@ -1,4 +1,4 @@
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 import { NonEmptyString } from "./primitives.js";
 
 const ConfigSchemaLookupPathString = Type.String({
@@ -50,6 +50,8 @@ export const ConfigSchemaLookupParamsSchema = Type.Object(
   },
   { additionalProperties: false },
 );
+
+export const UpdateStatusParamsSchema = Type.Object({}, { additionalProperties: false });
 
 export const UpdateRunParamsSchema = Type.Object(
   {

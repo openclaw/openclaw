@@ -1,6 +1,7 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { pluginSdkSubpaths } from "../../scripts/lib/plugin-sdk-entries.mjs";
+import privateLocalOnlyPluginSdkSubpaths from "../../scripts/lib/plugin-sdk-private-local-only-subpaths.json" with { type: "json" };
 import {
   detectVitestHostInfo as detectVitestHostInfoImpl,
   isCiLikeEnv,
@@ -76,7 +77,46 @@ const localScheduling = resolveLocalVitestScheduling(
   detectVitestHostInfo(),
   defaultPool,
 );
-const ciWorkers = isWindows ? 2 : 3;
+
+function hasWorkerOverride(env: Record<string, string | undefined>): boolean {
+  return Boolean((env.OPENCLAW_VITEST_MAX_WORKERS ?? env.OPENCLAW_TEST_WORKERS)?.trim());
+}
+
+export function resolveSharedVitestWorkerConfig(params: {
+  env?: Record<string, string | undefined>;
+  isCI?: boolean;
+  isWindows?: boolean;
+  localScheduling?: LocalVitestScheduling;
+}): Pick<LocalVitestScheduling, "fileParallelism" | "maxWorkers"> {
+  const env = params.env ?? process.env;
+  const local = params.localScheduling ?? localScheduling;
+  if (hasWorkerOverride(env)) {
+    return {
+      fileParallelism: local.fileParallelism,
+      maxWorkers: local.maxWorkers,
+    };
+  }
+  if (params.isCI ?? isCI) {
+    return {
+      fileParallelism: true,
+      maxWorkers: (params.isWindows ?? isWindows) ? 2 : 3,
+    };
+  }
+  return {
+    fileParallelism: local.fileParallelism,
+    maxWorkers: local.maxWorkers,
+  };
+}
+
+const workerConfig = resolveSharedVitestWorkerConfig({
+  env: process.env,
+  isCI,
+  isWindows,
+  localScheduling,
+});
+const sourcePluginSdkSubpaths = [
+  ...new Set([...pluginSdkSubpaths, ...privateLocalOnlyPluginSdkSubpaths]),
+].toSorted((left, right) => left.localeCompare(right));
 
 if (!isCI && localScheduling.throttledBySystem && shouldPrintVitestThrottle(process.env)) {
   console.error(
@@ -95,7 +135,11 @@ export const sharedVitestConfig = {
         find: "openclaw/extension-api",
         replacement: path.join(repoRoot, "src", "extensionAPI.ts"),
       },
-      ...pluginSdkSubpaths.map((subpath) => ({
+      {
+        find: "@openclaw/qa-channel/api.js",
+        replacement: path.join(repoRoot, "extensions", "qa-channel", "api.ts"),
+      },
+      ...sourcePluginSdkSubpaths.map((subpath) => ({
         find: `openclaw/plugin-sdk/${subpath}`,
         replacement: path.join(repoRoot, "src", "plugin-sdk", `${subpath}.ts`),
       })),
@@ -118,8 +162,8 @@ export const sharedVitestConfig = {
     isolate: false,
     pool: defaultPool,
     runner: nonIsolatedRunnerPath,
-    maxWorkers: isCI ? ciWorkers : localScheduling.maxWorkers,
-    fileParallelism: isCI ? true : localScheduling.fileParallelism,
+    maxWorkers: workerConfig.maxWorkers,
+    fileParallelism: workerConfig.fileParallelism,
     forceRerunTriggers: [
       "package.json",
       "pnpm-lock.yaml",
@@ -128,6 +172,11 @@ export const sharedVitestConfig = {
       "test/setup.extensions.ts",
       "test/setup-openclaw-runtime.ts",
       "test/vitest/vitest.channel-paths.mjs",
+      "test/vitest/vitest.agents-paths.mjs",
+      "test/vitest/vitest.agents-core.config.ts",
+      "test/vitest/vitest.agents-pi-embedded.config.ts",
+      "test/vitest/vitest.agents-support.config.ts",
+      "test/vitest/vitest.agents-tools.config.ts",
       "test/vitest/vitest.channels.config.ts",
       "test/vitest/vitest.acp.config.ts",
       "test/vitest/vitest.boundary.config.ts",

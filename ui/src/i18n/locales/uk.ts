@@ -109,6 +109,14 @@ export const uk: TranslationMap = {
       lightningHelp: "Lightning-адреса для чайових (LUD-16)",
     },
   },
+  lazyView: {
+    loadingTitle: "Завантаження панелі",
+    errorTitle: "Не вдалося завантажити панель",
+    errorSubtitle:
+      "Перезавантажте сторінку, щоб завантажити найновіший пакет Control UI, або повторіть спробу, якщо мережевий запит не вдався.",
+    retry: "Повторити",
+    unknownError: "Невідома помилка завантаження модуля.",
+  },
   nodes: {
     binding: {
       loadConfigHint: "Завантажте конфігурацію, щоб редагувати прив’язки.",
@@ -277,6 +285,8 @@ export const uk: TranslationMap = {
       tailscaleDocsLink: "Документація: Tailscale Serve",
       insecureHttpDocsTitle: "Документація щодо незахищеного HTTP (відкривається в новій вкладці)",
       insecureHttpDocsLink: "Документація: незахищений HTTP",
+      copyCommand: "Копіювати команду",
+      copyCommandAria: "Копіювати команду: {command}",
     },
     cards: {
       cost: "Вартість",
@@ -313,6 +323,30 @@ export const uk: TranslationMap = {
     palette: {
       placeholder: "Введіть команду…",
       noResults: "Немає результатів",
+      categories: {
+        search: "Пошук",
+        navigation: "Навігація",
+        skills: "Навички",
+      },
+      items: {
+        overview: "Огляд",
+        sessions: "Сеанси",
+        scheduled: "Заплановано",
+        skills: "Навички",
+        settings: "Налаштування",
+        agents: "Агенти",
+        shellCommand: "Команда оболонки",
+        debugMode: "Режим налагодження",
+      },
+      descriptions: {
+        shellCommand: "Запустити оболонку",
+        debugMode: "Перемкнути налагодження",
+      },
+      footer: {
+        navigate: "навігація",
+        select: "вибрати",
+        close: "закрити",
+      },
     },
   },
   dreaming: {
@@ -326,6 +360,15 @@ export const uk: TranslationMap = {
       refreshing: "Оновлення…",
       on: "Сновидіння увімкнено",
       off: "Сновидіння вимкнено",
+    },
+    restartConfirmation: {
+      title: "Restart Gateway to Apply Change",
+      subtitle: "Changing Dreaming mode restarts the gateway.",
+      warning:
+        "This action will restart the Gateway and may temporarily interrupt chats, automations, and connected channels.",
+      confirm: "Confirm Restart",
+      restarting: "Restarting…",
+      failed: "Could not apply change. Check your connection and try again.",
     },
     status: {
       active: "Сновидіння активне",
@@ -681,6 +724,7 @@ export const uk: TranslationMap = {
     uk: "Українська (українська)",
     id: "Bahasa Indonesia (індонезійська)",
     pl: "Polski (польська)",
+    th: "ไทย (тайська)",
   },
   cron: {
     summary: {

@@ -1,4 +1,4 @@
-import type { OpenClawConfig, TelegramAccountConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig, TelegramAccountConfig } from "openclaw/plugin-sdk/config-types";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -12,6 +12,7 @@ import {
   resetNativeCommandMenuMocks,
   waitForRegisteredCommands,
 } from "./bot-native-commands.menu-test-support.js";
+import { resetTelegramForumFlagCacheForTest } from "./bot/helpers.js";
 import { TELEGRAM_COMMAND_NAME_PATTERN } from "./command-config.js";
 import { pluginCommandMocks, resetPluginCommandMocks } from "./test-support/plugin-command.js";
 
@@ -101,6 +102,7 @@ describe("registerTelegramNativeCommands", () => {
   });
 
   beforeEach(() => {
+    resetTelegramForumFlagCacheForTest();
     resetNativeCommandMenuMocks();
     resetPluginCommandMocks();
   });

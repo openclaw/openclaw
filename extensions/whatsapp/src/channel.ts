@@ -67,6 +67,12 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
       idLabel: "whatsappSenderId",
     },
     outbound: whatsappChannelOutbound,
+    threading: {
+      scopedAccountReplyToMode: {
+        resolveAccount: (cfg, accountId) => resolveWhatsAppAccount({ cfg, accountId }),
+        resolveReplyToMode: (account) => account.replyToMode,
+      },
+    },
     base: {
       ...createWhatsAppPluginBase({
         groups: {
@@ -310,8 +316,10 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
             timeoutMs,
             verbose,
           }),
-        loginWithQrWait: async ({ accountId, timeoutMs }) =>
-          await (await loadWhatsAppChannelRuntime()).waitForWebLogin({ accountId, timeoutMs }),
+        loginWithQrWait: async ({ accountId, timeoutMs, currentQrDataUrl }) =>
+          await (
+            await loadWhatsAppChannelRuntime()
+          ).waitForWebLogin({ accountId, timeoutMs, currentQrDataUrl }),
         logoutAccount: async ({ account, runtime }) => {
           const cleared = await (
             await loadWhatsAppChannelRuntime()

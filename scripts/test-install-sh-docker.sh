@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=./docker/install-sh-common/version-parse.sh
 source "$ROOT_DIR/scripts/docker/install-sh-common/version-parse.sh"
+source "$ROOT_DIR/scripts/lib/docker-build.sh"
 
 resolve_default_smoke_platform() {
   local host_os
@@ -148,7 +149,7 @@ SKIP_SMOKE_IMAGE_BUILD="${OPENCLAW_INSTALL_SMOKE_SKIP_IMAGE_BUILD:-0}"
 SKIP_NONROOT_IMAGE_BUILD="${OPENCLAW_INSTALL_NONROOT_SKIP_IMAGE_BUILD:-0}"
 SKIP_UPDATE="${OPENCLAW_INSTALL_SMOKE_SKIP_UPDATE:-0}"
 SKIP_NPM_GLOBAL="${OPENCLAW_INSTALL_SMOKE_SKIP_NPM_GLOBAL:-0}"
-UPDATE_BASELINE_VERSION="${OPENCLAW_INSTALL_SMOKE_UPDATE_BASELINE:-2026.4.10}"
+UPDATE_BASELINE_VERSION="${OPENCLAW_INSTALL_SMOKE_UPDATE_BASELINE:-latest}"
 UPDATE_PACKAGE_SPEC="${OPENCLAW_INSTALL_SMOKE_UPDATE_PACKAGE_SPEC:-}"
 UPDATE_DIST_IMAGE="${OPENCLAW_INSTALL_SMOKE_UPDATE_DIST_IMAGE:-}"
 UPDATE_SKIP_LOCAL_BUILD="${OPENCLAW_INSTALL_SMOKE_UPDATE_SKIP_LOCAL_BUILD:-0}"
@@ -166,13 +167,32 @@ BASELINE_TAG_URL=""
 FRESH_TAG_URL=""
 UPDATE_TAG_URL=""
 UPDATE_DOCKER_HOST_ARGS=()
+NPM_CACHE_DIR="${OPENCLAW_INSTALL_SMOKE_NPM_CACHE_DIR:-}"
+NPM_CACHE_OWNED=0
+NPM_CACHE_DOCKER_ARGS=()
+
+remove_owned_npm_cache() {
+  if [[ "$NPM_CACHE_OWNED" != "1" || -z "$NPM_CACHE_DIR" || ! -d "$NPM_CACHE_DIR" ]]; then
+    return
+  fi
+
+  if rm -rf "$NPM_CACHE_DIR" 2>/dev/null; then
+    return
+  fi
+  if command -v sudo >/dev/null 2>&1 && sudo -n rm -rf "$NPM_CACHE_DIR" 2>/dev/null; then
+    return
+  fi
+
+  echo "WARN: failed to remove temporary npm cache: $NPM_CACHE_DIR" >&2
+}
 
 cleanup() {
   if [[ -n "$UPDATE_SERVER_PID" ]]; then
     kill "$UPDATE_SERVER_PID" >/dev/null 2>&1 || true
     wait "$UPDATE_SERVER_PID" >/dev/null 2>&1 || true
   fi
-  rm -rf "$LATEST_DIR" "$UPDATE_DIR"
+  remove_owned_npm_cache || true
+  rm -rf "$LATEST_DIR" "$UPDATE_DIR" || true
 }
 
 trap cleanup EXIT
@@ -206,6 +226,15 @@ restore_local_dist_from_image() {
   docker rm -f "$container_id" >/dev/null
 }
 
+ensure_local_update_dist_import_closure() {
+  if node scripts/check-package-dist-imports.mjs "$ROOT_DIR"; then
+    return 0
+  fi
+  echo "WARN: reused Docker image dist failed import-closure check; rebuilding local release artifacts" >&2
+  pnpm build
+  pnpm ui:build
+}
+
 prepare_update_tarball() {
   local pack_json
   local baseline_pack_json
@@ -221,6 +250,7 @@ prepare_update_tarball() {
     echo "==> Build local release artifacts for update smoke"
     if [[ -n "$UPDATE_DIST_IMAGE" ]]; then
       restore_local_dist_from_image "$UPDATE_DIST_IMAGE"
+      ensure_local_update_dist_import_closure
     elif [[ "$UPDATE_SKIP_LOCAL_BUILD" != "1" ]]; then
       pnpm build
       pnpm ui:build
@@ -229,6 +259,7 @@ prepare_update_tarball() {
       node -p 'JSON.parse(require("node:fs").readFileSync("package.json", "utf8")).version'
     )"
     node --import tsx scripts/write-package-dist-inventory.ts
+    node scripts/check-package-dist-imports.mjs "$ROOT_DIR"
     quiet_npm pack --ignore-scripts --json --pack-destination "$UPDATE_DIR" >"$pack_json_file"
   fi
   UPDATE_TGZ_FILE="$(
@@ -242,6 +273,9 @@ if (!last || typeof last.filename !== "string" || last.filename.length === 0) {
 process.stdout.write(last.filename);
 ' "$pack_json_file"
   )"
+  if [[ -z "$UPDATE_PACKAGE_SPEC" ]]; then
+    node scripts/check-openclaw-package-tarball.mjs "${UPDATE_DIR}/${UPDATE_TGZ_FILE}"
+  fi
   print_pack_audit "update" "$pack_json_file"
   assert_pack_unpacked_size_budget "update" "$pack_json_file"
   packed_update_version="$(
@@ -275,6 +309,17 @@ if (!last || typeof last.filename !== "string" || last.filename.length === 0) {
 process.stdout.write(last.filename);
 ' "$baseline_pack_json_file"
   )"
+  UPDATE_BASELINE_VERSION="$(
+    node -e '
+const raw = require("node:fs").readFileSync(process.argv[1], "utf8") || "[]";
+const parsed = JSON.parse(raw);
+const last = Array.isArray(parsed) ? parsed.at(-1) : null;
+if (!last || typeof last.version !== "string" || last.version.length === 0) {
+  process.exit(1);
+}
+process.stdout.write(last.version);
+' "$baseline_pack_json_file"
+  )"
   print_pack_audit "baseline" "$baseline_pack_json_file"
   print_pack_delta_audit "$baseline_pack_json_file" "$pack_json_file"
 }
@@ -286,6 +331,20 @@ prepare_update_host_access() {
   if [[ "$host_os" == "Linux" ]]; then
     UPDATE_DOCKER_HOST_ARGS=(--add-host "${UPDATE_HOST_ALIAS}:host-gateway")
   fi
+}
+
+prepare_npm_cache() {
+  if [[ -z "$NPM_CACHE_DIR" ]]; then
+    NPM_CACHE_DIR="$(mktemp -d)"
+    NPM_CACHE_OWNED=1
+  fi
+  mkdir -p "$NPM_CACHE_DIR"
+  chmod 0777 "$NPM_CACHE_DIR"
+  NPM_CACHE_DOCKER_ARGS=(
+    -v "${NPM_CACHE_DIR}:/npm-cache"
+    -e npm_config_cache=/npm-cache
+    -e NPM_CONFIG_CACHE=/npm-cache
+  )
 }
 
 start_update_server() {
@@ -314,7 +373,7 @@ if [[ "$SKIP_SMOKE_IMAGE_BUILD" == "1" ]]; then
   echo "==> Reuse prebuilt smoke image: $SMOKE_IMAGE"
 else
   echo "==> Build smoke image (upgrade, root, ${SMOKE_PLATFORM}): $SMOKE_IMAGE"
-  docker build \
+  docker_build_run install-smoke-build \
     --platform "$SMOKE_PLATFORM" \
     -t "$SMOKE_IMAGE" \
     -f "$ROOT_DIR/scripts/docker/install-sh-smoke/Dockerfile" \
@@ -326,12 +385,14 @@ if [[ "$SKIP_UPDATE" == "1" ]]; then
 else
   prepare_update_tarball
   prepare_update_host_access
+  prepare_npm_cache
   start_update_server
 
   echo "==> Run installer smoke test (root): $FRESH_TAG_URL"
   docker run --rm -t \
     --platform "$SMOKE_PLATFORM" \
     ${UPDATE_DOCKER_HOST_ARGS[@]+"${UPDATE_DOCKER_HOST_ARGS[@]}"} \
+    "${NPM_CACHE_DOCKER_ARGS[@]}" \
     -v "${LATEST_DIR}:/out" \
     -e OPENCLAW_INSTALL_URL="$INSTALL_URL" \
     -e OPENCLAW_INSTALL_PACKAGE="$PACKAGE_NAME" \
@@ -353,6 +414,7 @@ else
   docker run --rm -t \
     --platform "$SMOKE_PLATFORM" \
     ${UPDATE_DOCKER_HOST_ARGS[@]+"${UPDATE_DOCKER_HOST_ARGS[@]}"} \
+    "${NPM_CACHE_DOCKER_ARGS[@]}" \
     -e OPENCLAW_INSTALL_PACKAGE="$PACKAGE_NAME" \
     -e OPENCLAW_INSTALL_SMOKE_MODE=update \
     -e OPENCLAW_INSTALL_UPDATE_BASELINE="$UPDATE_BASELINE_VERSION" \
@@ -371,6 +433,7 @@ else
     docker run --rm -t \
       --platform "$SMOKE_PLATFORM" \
       ${UPDATE_DOCKER_HOST_ARGS[@]+"${UPDATE_DOCKER_HOST_ARGS[@]}"} \
+      "${NPM_CACHE_DOCKER_ARGS[@]}" \
       -e OPENCLAW_INSTALL_PACKAGE="$PACKAGE_NAME" \
       -e OPENCLAW_INSTALL_SMOKE_MODE=npm-global \
       -e OPENCLAW_INSTALL_UPDATE_BASELINE="$UPDATE_BASELINE_VERSION" \
@@ -393,7 +456,7 @@ else
     echo "==> Reuse prebuilt non-root image: $NONROOT_IMAGE"
   else
     echo "==> Build non-root image (${NONROOT_PLATFORM}): $NONROOT_IMAGE"
-    docker build \
+    docker_build_run install-nonroot-build \
       --platform "$NONROOT_PLATFORM" \
       -t "$NONROOT_IMAGE" \
       -f "$ROOT_DIR/scripts/docker/install-sh-nonroot/Dockerfile" \

@@ -218,7 +218,7 @@ describe("installPackageDir", () => {
       installBaseDir,
       preservedDir: preservedInstallRoot,
       outsideTarget: outsideInstallRoot,
-      rebindAtCall: 3,
+      rebindAtCall: 4,
       run: async () => {
         await expect(
           installPackageDir({
@@ -259,7 +259,7 @@ describe("installPackageDir", () => {
       installBaseDir,
       preservedDir: preservedInstallRoot,
       outsideTarget: outsideInstallRoot,
-      rebindAtCall: 7,
+      rebindAtCall: 8,
       run: async () =>
         await installPackageDir({
           sourceDir,
@@ -325,7 +325,7 @@ describe("installPackageDir", () => {
 
     expect(result).toEqual({ ok: true });
     expect(vi.mocked(runCommandWithTimeout)).toHaveBeenCalledWith(
-      ["npm", "install", "--omit=dev", "--silent", "--ignore-scripts"],
+      ["npm", "install", "--omit=dev", "--loglevel=error", "--ignore-scripts"],
       expect.objectContaining({
         cwd: expect.stringContaining(".openclaw-install-stage-"),
       }),
@@ -386,5 +386,121 @@ describe("installPackageDir", () => {
     await expect(
       listMatchingEntries(targetDir, ".openclaw-install-hidden-npmrc-"),
     ).resolves.toHaveLength(0);
+  });
+
+  it("forces dependency installs to stay project-local when npm global config leaks in", async () => {
+    await fixtureRootTracker.setup();
+    const fixtureRoot = await fixtureRootTracker.make("case");
+    const sourceDir = path.join(fixtureRoot, "source");
+    const targetDir = path.join(fixtureRoot, "plugins", "demo");
+    await fs.mkdir(sourceDir, { recursive: true });
+    await fs.writeFile(
+      path.join(sourceDir, "package.json"),
+      JSON.stringify({
+        name: "demo-plugin",
+        version: "1.0.0",
+        dependencies: {
+          zod: "^4.0.0",
+        },
+      }),
+      "utf-8",
+    );
+
+    vi.stubEnv("NPM_CONFIG_GLOBAL", "true");
+    vi.stubEnv("npm_config_global", "true");
+    vi.stubEnv("NPM_CONFIG_LOCATION", "global");
+    vi.stubEnv("npm_config_location", "global");
+    vi.stubEnv("NPM_CONFIG_PREFIX", path.join(fixtureRoot, "global-prefix-uppercase"));
+    vi.stubEnv("npm_config_prefix", path.join(fixtureRoot, "global-prefix"));
+    vi.mocked(runCommandWithTimeout).mockResolvedValue({
+      stdout: "",
+      stderr: "",
+      code: 0,
+      signal: null,
+      killed: false,
+      termination: "exit",
+    });
+
+    const result = await installPackageDir({
+      sourceDir,
+      targetDir,
+      mode: "install",
+      timeoutMs: 1_000,
+      copyErrorPrefix: "failed to copy plugin",
+      hasDeps: true,
+      depsLogMessage: "Installing deps…",
+    });
+
+    expect(result).toEqual({ ok: true });
+    expect(vi.mocked(runCommandWithTimeout)).toHaveBeenCalledWith(
+      ["npm", "install", "--omit=dev", "--loglevel=error", "--ignore-scripts"],
+      expect.objectContaining({
+        env: expect.objectContaining({
+          npm_config_global: "false",
+          npm_config_location: "project",
+          npm_config_package_lock: "false",
+          npm_config_save: "false",
+        }),
+      }),
+    );
+    expect(vi.mocked(runCommandWithTimeout)).toHaveBeenCalledWith(
+      expect.any(Array),
+      expect.objectContaining({
+        env: expect.not.objectContaining({
+          NPM_CONFIG_GLOBAL: expect.any(String),
+          NPM_CONFIG_LOCATION: expect.any(String),
+          NPM_CONFIG_PREFIX: expect.any(String),
+          npm_config_prefix: expect.any(String),
+        }),
+      }),
+    );
+  });
+
+  it("surfaces npm stderr when dependency install fails", async () => {
+    await fixtureRootTracker.setup();
+    const fixtureRoot = await fixtureRootTracker.make("case");
+    const sourceDir = path.join(fixtureRoot, "source");
+    const targetDir = path.join(fixtureRoot, "plugins", "demo");
+    await fs.mkdir(sourceDir, { recursive: true });
+    await fs.writeFile(
+      path.join(sourceDir, "package.json"),
+      JSON.stringify({
+        name: "demo-plugin",
+        version: "1.0.0",
+        dependencies: {
+          bad: "workspace:^",
+        },
+      }),
+      "utf-8",
+    );
+
+    // Mirrors the Blacksmith repro: npm 11 preserved this stderr with
+    // `--loglevel=error`, while `--silent` returned empty output.
+    vi.mocked(runCommandWithTimeout).mockResolvedValue({
+      stdout: "",
+      stderr:
+        'npm error code EUNSUPPORTEDPROTOCOL\nnpm error Unsupported URL Type "workspace:": workspace:^\n',
+      code: 1,
+      signal: null,
+      killed: false,
+      termination: "exit",
+    });
+
+    const result = await installPackageDir({
+      sourceDir,
+      targetDir,
+      mode: "install",
+      timeoutMs: 1_000,
+      copyErrorPrefix: "failed to copy plugin",
+      hasDeps: true,
+      depsLogMessage: "Installing deps…",
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain("npm install failed:");
+      expect(result.error).toContain("EUNSUPPORTEDPROTOCOL");
+      expect(result.error).toContain("workspace:");
+    }
   });
 });

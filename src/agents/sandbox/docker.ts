@@ -91,7 +91,7 @@ export function execDockerRaw(
       if (signal.aborted) {
         handleAbort();
       } else {
-        signal.addEventListener("abort", handleAbort);
+        signal.addEventListener("abort", handleAbort, { once: true });
       }
     }
 
@@ -292,9 +292,9 @@ export async function ensureDockerImage(image: string) {
     return;
   }
   if (image === DEFAULT_SANDBOX_IMAGE) {
-    await execDocker(["pull", "debian:bookworm-slim"]);
-    await execDocker(["tag", "debian:bookworm-slim", DEFAULT_SANDBOX_IMAGE]);
-    return;
+    throw new Error(
+      `Sandbox image not found: ${image}. Build it with scripts/sandbox-setup.sh before enabling Docker sandboxing. The default image includes python3 for sandbox write/edit helpers; OpenClaw will not substitute plain debian:bookworm-slim.`,
+    );
   }
   throw new Error(`Sandbox image not found: ${image}. Build or pull it first.`);
 }
@@ -443,6 +443,10 @@ export function buildSandboxCreateArgs(params: {
   }
   if (typeof params.cfg.cpus === "number" && params.cfg.cpus > 0) {
     args.push("--cpus", String(params.cfg.cpus));
+  }
+  const gpus = params.cfg.gpus?.trim();
+  if (gpus) {
+    args.push("--gpus", gpus);
   }
   for (const [name, value] of Object.entries(params.cfg.ulimits ?? {})) {
     const formatted = formatUlimitValue(name, value);

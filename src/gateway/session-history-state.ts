@@ -1,7 +1,7 @@
 import {
   DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
-  sanitizeChatHistoryMessages,
-} from "./server-methods/chat.js";
+  projectChatDisplayMessages,
+} from "./chat-display-projection.js";
 import { attachOpenClawTranscriptMeta, readSessionMessages } from "./session-utils.js";
 
 type SessionHistoryTranscriptMeta = {
@@ -99,16 +99,12 @@ export function buildSessionHistorySnapshot(params: {
   limit?: number;
   cursor?: string;
 }): SessionHistorySnapshot {
-  const history = paginateSessionMessages(
-    toSessionHistoryMessages(
-      sanitizeChatHistoryMessages(
-        params.rawMessages,
-        params.maxChars ?? DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
-      ),
-    ),
-    params.limit,
-    params.cursor,
+  const visibleMessages = toSessionHistoryMessages(
+    projectChatDisplayMessages(params.rawMessages, {
+      maxChars: params.maxChars ?? DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
+    }),
   );
+  const history = paginateSessionMessages(visibleMessages, params.limit, params.cursor);
   const rawHistoryMessages = toSessionHistoryMessages(params.rawMessages);
   return {
     history,
@@ -178,11 +174,9 @@ export class SessionHistorySseState {
       ...(typeof update.messageId === "string" ? { id: update.messageId } : {}),
       seq: this.rawTranscriptSeq,
     });
-    const sanitized = sanitizeChatHistoryMessages([nextMessage], this.maxChars);
-    if (sanitized.length === 0) {
-      return null;
-    }
-    const [sanitizedMessage] = toSessionHistoryMessages(sanitized);
+    const [sanitizedMessage] = toSessionHistoryMessages(
+      projectChatDisplayMessages([nextMessage], { maxChars: this.maxChars }),
+    );
     if (!sanitizedMessage) {
       return null;
     }

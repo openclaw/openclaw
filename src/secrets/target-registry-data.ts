@@ -1,7 +1,6 @@
-import {
-  loadPluginManifestRegistry,
-  type PluginManifestRecord,
-} from "../plugins/manifest-registry.js";
+import { listBundledPluginMetadata } from "../plugins/bundled-plugin-metadata.js";
+import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
+import { loadPluginManifestRegistryForPluginRegistry } from "../plugins/plugin-registry.js";
 import { loadBundledChannelSecretContractApi } from "./channel-contract-api.js";
 import type { SecretTargetRegistryEntry } from "./target-registry-types.js";
 
@@ -51,7 +50,8 @@ function hasWebProviderContract(
 
 function listBundledWebProviderSecretTargetRegistryEntries(): SecretTargetRegistryEntry[] {
   const entries: SecretTargetRegistryEntry[] = [];
-  for (const record of loadPluginManifestRegistry({}).plugins) {
+  for (const record of loadPluginManifestRegistryForPluginRegistry({ includeDisabled: true })
+    .plugins) {
     if (record.origin !== "bundled") {
       continue;
     }
@@ -67,10 +67,35 @@ function listBundledWebProviderSecretTargetRegistryEntries(): SecretTargetRegist
   return entries.toSorted((left, right) => left.id.localeCompare(right.id));
 }
 
+function listBundledPluginConfigSecretTargetRegistryEntries(): SecretTargetRegistryEntry[] {
+  const entries: SecretTargetRegistryEntry[] = [];
+  const seen = new Set<string>();
+  for (const record of listBundledPluginMetadata({
+    includeChannelConfigs: false,
+    includeSyntheticChannelConfigs: false,
+  })) {
+    const secretInputs = record.manifest.configContracts?.secretInputs?.paths ?? [];
+    for (const secretInput of secretInputs) {
+      const entry = createPluginOpenClawConfigSecretTargetEntry(
+        record.manifest.id,
+        secretInput.path,
+      );
+      const key = `${entry.configFile}:${entry.pathPattern}`;
+      if (seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      entries.push(entry);
+    }
+  }
+  return entries.toSorted((left, right) => left.id.localeCompare(right.id));
+}
+
 function listChannelSecretTargetRegistryEntries(): SecretTargetRegistryEntry[] {
   const entries: SecretTargetRegistryEntry[] = [];
 
-  for (const record of loadPluginManifestRegistry({}).plugins) {
+  for (const record of loadPluginManifestRegistryForPluginRegistry({ includeDisabled: true })
+    .plugins) {
     if (record.origin !== "bundled") {
       continue;
     }
@@ -203,6 +228,18 @@ const CORE_SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
     includeInConfigure: true,
     includeInAudit: true,
     providerIdPathSegmentIndex: 3,
+  },
+  {
+    id: "agents.list[].tts.providers.*.apiKey",
+    targetType: "agents.list[].tts.providers.*.apiKey",
+    configFile: "openclaw.json",
+    pathPattern: "agents.list[].tts.providers.*.apiKey",
+    secretShape: SECRET_INPUT_SHAPE,
+    expectedResolvedValue: "string",
+    includeInPlan: true,
+    includeInConfigure: false,
+    includeInAudit: true,
+    providerIdPathSegmentIndex: 4,
   },
   {
     id: "models.providers.*.apiKey",
@@ -424,6 +461,7 @@ export function getSecretTargetRegistry(): SecretTargetRegistryEntry[] {
   cachedSecretTargetRegistry = [
     ...CORE_SECRET_TARGET_REGISTRY,
     ...listBundledWebProviderSecretTargetRegistryEntries(),
+    ...listBundledPluginConfigSecretTargetRegistryEntries(),
     ...listChannelSecretTargetRegistryEntries(),
   ];
   return cachedSecretTargetRegistry;

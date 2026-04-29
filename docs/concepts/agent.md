@@ -2,12 +2,13 @@
 summary: "Agent runtime, workspace contract, and session bootstrap"
 read_when:
   - Changing agent runtime, workspace bootstrap, or session behavior
-title: "Agent Runtime"
+title: "Agent runtime"
 ---
 
-# Agent Runtime
-
-OpenClaw runs a single embedded agent runtime.
+OpenClaw runs a **single embedded agent runtime** — one agent process per
+Gateway, with its own workspace, bootstrap files, and session store. This page
+covers that runtime contract: what the workspace must contain, which files get
+injected, and how sessions bootstrap against it.
 
 ## Workspace (required)
 
@@ -43,7 +44,7 @@ If a file is missing, OpenClaw injects a single “missing file” marker line (
 To disable bootstrap file creation entirely (for pre-seeded workspaces), set:
 
 ```json5
-{ agent: { skipBootstrap: true } }
+{ agents: { defaults: { skipBootstrap: true } } }
 ```
 
 ## Built-in tools
@@ -127,3 +128,9 @@ At minimum, set:
 ---
 
 _Next: [Group Chats](/channels/group-messages)_ 🦞
+
+## Related
+
+- [Agent workspace](/concepts/agent-workspace)
+- [Multi-agent routing](/concepts/multi-agent)
+- [Session management](/concepts/session)

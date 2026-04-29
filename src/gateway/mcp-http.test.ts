@@ -1,8 +1,34 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getFreePortBlockWithPermissionFallback } from "../test-utils/ports.js";
 
+type MockGatewayTool = {
+  name: string;
+  description: string;
+  parameters: Record<string, unknown>;
+  ownerOnly?: boolean;
+  execute: (...args: unknown[]) => Promise<{ content: Array<{ type: string; text: string }> }>;
+};
+
+type MockGatewayScopedTools = {
+  agentId: string;
+  tools: MockGatewayTool[];
+};
+
+type MockBeforeToolCallHookResult =
+  | { blocked: true; reason: string }
+  | { blocked: false; params: unknown };
+
+const runBeforeToolCallHookMock = vi.hoisted(() =>
+  vi.fn(
+    async (args: { params: unknown }): Promise<MockBeforeToolCallHookResult> => ({
+      blocked: false,
+      params: args.params,
+    }),
+  ),
+);
+
 const resolveGatewayScopedToolsMock = vi.hoisted(() =>
-  vi.fn(() => ({
+  vi.fn<(...args: unknown[]) => MockGatewayScopedTools>(() => ({
     agentId: "main",
     tools: [
       {
@@ -18,11 +44,16 @@ const resolveGatewayScopedToolsMock = vi.hoisted(() =>
 );
 
 vi.mock("../config/config.js", () => ({
-  loadConfig: () => ({ session: { mainKey: "main" } }),
+  getRuntimeConfig: () => ({ session: { mainKey: "main" } }),
 }));
 
 vi.mock("../config/sessions.js", () => ({
   resolveMainSessionKey: () => "agent:main:main",
+}));
+
+vi.mock("../agents/pi-tools.before-tool-call.js", () => ({
+  runBeforeToolCallHook: (...args: Parameters<typeof runBeforeToolCallHookMock>) =>
+    runBeforeToolCallHookMock(...args),
 }));
 
 vi.mock("./tool-resolution.js", () => ({
@@ -59,6 +90,13 @@ async function sendRaw(params: {
 
 beforeEach(() => {
   resolveGatewayScopedToolsMock.mockClear();
+  runBeforeToolCallHookMock.mockClear();
+  runBeforeToolCallHookMock.mockImplementation(
+    async (args: { params: unknown }): Promise<MockBeforeToolCallHookResult> => ({
+      blocked: false,
+      params: args.params,
+    }),
+  );
   resolveGatewayScopedToolsMock.mockReturnValue({
     agentId: "main",
     tools: [
@@ -110,6 +148,43 @@ describe("mcp loopback server", () => {
         surface: "loopback",
       }),
     );
+  });
+
+  it("adds empty properties for object schemas that omit properties", async () => {
+    resolveGatewayScopedToolsMock.mockReturnValue({
+      agentId: "main",
+      tools: [
+        {
+          name: "schema_probe",
+          description: "exercise no-argument MCP schemas",
+          parameters: { type: "object" },
+          execute: async () => ({
+            content: [{ type: "text", text: "ok" }],
+          }),
+        },
+      ],
+    });
+    server = await startMcpLoopbackServer(0);
+    const runtime = getActiveMcpLoopbackRuntime();
+
+    const response = await sendRaw({
+      port: server.port,
+      token: runtime ? resolveMcpLoopbackBearerToken(runtime, false) : undefined,
+      headers: {
+        "content-type": "application/json",
+        "x-session-key": "agent:main:main",
+      },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+    });
+    const payload = (await response.json()) as {
+      result?: { tools?: Array<{ inputSchema?: Record<string, unknown> }> };
+    };
+
+    expect(response.status).toBe(200);
+    expect(payload.result?.tools?.[0]?.inputSchema).toEqual({
+      type: "object",
+      properties: {},
+    });
   });
 
   it("derives senderIsOwner from the loopback bearer token", async () => {
@@ -179,6 +254,256 @@ describe("mcp loopback server", () => {
         senderIsOwner: false,
         surface: "loopback",
       }),
+    );
+  });
+
+  it("filters owner-only tools from non-owner tool lists", async () => {
+    resolveGatewayScopedToolsMock.mockReturnValue({
+      agentId: "main",
+      tools: [
+        {
+          name: "message",
+          description: "send a message",
+          parameters: { type: "object", properties: {} },
+          execute: async () => ({
+            content: [{ type: "text", text: "ok" }],
+          }),
+        },
+        {
+          name: "cron",
+          description: "manage schedules",
+          parameters: { type: "object", properties: {} },
+          execute: async () => ({
+            content: [{ type: "text", text: "cron" }],
+          }),
+        },
+        {
+          name: "owner_probe",
+          description: "owner-only by flag",
+          parameters: { type: "object", properties: {} },
+          ownerOnly: true,
+          execute: async () => ({
+            content: [{ type: "text", text: "owner" }],
+          }),
+        },
+      ],
+    });
+    server = await startMcpLoopbackServer(0);
+    const runtime = getActiveMcpLoopbackRuntime();
+
+    const response = await sendRaw({
+      port: server.port,
+      token: runtime ? resolveMcpLoopbackBearerToken(runtime, false) : undefined,
+      headers: {
+        "content-type": "application/json",
+        "x-session-key": "agent:main:main",
+      },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+    });
+    const payload = (await response.json()) as {
+      result?: { tools?: Array<{ name: string }> };
+    };
+    const names = (payload.result?.tools ?? []).map((tool) => tool.name);
+
+    expect(response.status).toBe(200);
+    expect(names).toContain("message");
+    expect(names).not.toContain("cron");
+    expect(names).not.toContain("owner_probe");
+  });
+
+  it("keeps owner-only tools available to owner loopback callers", async () => {
+    resolveGatewayScopedToolsMock.mockReturnValue({
+      agentId: "main",
+      tools: [
+        {
+          name: "message",
+          description: "send a message",
+          parameters: { type: "object", properties: {} },
+          execute: async () => ({
+            content: [{ type: "text", text: "ok" }],
+          }),
+        },
+        {
+          name: "cron",
+          description: "manage schedules",
+          parameters: { type: "object", properties: {} },
+          execute: async () => ({
+            content: [{ type: "text", text: "cron" }],
+          }),
+        },
+      ],
+    });
+    server = await startMcpLoopbackServer(0);
+    const runtime = getActiveMcpLoopbackRuntime();
+
+    const response = await sendRaw({
+      port: server.port,
+      token: runtime ? resolveMcpLoopbackBearerToken(runtime, true) : undefined,
+      headers: {
+        "content-type": "application/json",
+        "x-session-key": "agent:main:main",
+      },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+    });
+    const payload = (await response.json()) as {
+      result?: { tools?: Array<{ name: string }> };
+    };
+    const names = (payload.result?.tools ?? []).map((tool) => tool.name);
+
+    expect(response.status).toBe(200);
+    expect(names).toContain("message");
+    expect(names).toContain("cron");
+  });
+
+  it("does not execute owner-only tools for non-owner callers", async () => {
+    const cronExecute = vi.fn(async () => ({
+      content: [{ type: "text", text: "CRON_EXECUTED" }],
+    }));
+    resolveGatewayScopedToolsMock.mockReturnValue({
+      agentId: "main",
+      tools: [
+        {
+          name: "message",
+          description: "send a message",
+          parameters: { type: "object", properties: {} },
+          execute: async () => ({
+            content: [{ type: "text", text: "ok" }],
+          }),
+        },
+        {
+          name: "cron",
+          description: "manage schedules",
+          parameters: { type: "object", properties: {} },
+          execute: cronExecute,
+        },
+      ],
+    });
+    server = await startMcpLoopbackServer(0);
+    const runtime = getActiveMcpLoopbackRuntime();
+
+    const response = await sendRaw({
+      port: server.port,
+      token: runtime ? resolveMcpLoopbackBearerToken(runtime, false) : undefined,
+      headers: {
+        "content-type": "application/json",
+        "x-session-key": "agent:main:main",
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: { name: "cron", arguments: {} },
+      }),
+    });
+    const payload = (await response.json()) as {
+      result?: { content?: Array<{ text?: string }>; isError?: boolean };
+    };
+
+    expect(response.status).toBe(200);
+    expect(cronExecute).not.toHaveBeenCalled();
+    expect(payload.result?.isError).toBe(true);
+    expect(payload.result?.content?.[0]?.text).toBe("Tool not available: cron");
+  });
+
+  it("honors before-tool-call hook blocks before loopback tool execution", async () => {
+    const execute = vi.fn(async () => ({
+      content: [{ type: "text", text: "EXECUTED" }],
+    }));
+    runBeforeToolCallHookMock.mockResolvedValueOnce({
+      blocked: true,
+      reason: "blocked by hook",
+    });
+    resolveGatewayScopedToolsMock.mockReturnValue({
+      agentId: "main",
+      tools: [
+        {
+          name: "message",
+          description: "send a message",
+          parameters: { type: "object", properties: {} },
+          execute,
+        },
+      ],
+    });
+    server = await startMcpLoopbackServer(0);
+    const runtime = getActiveMcpLoopbackRuntime();
+
+    const response = await sendRaw({
+      port: server.port,
+      token: runtime ? resolveMcpLoopbackBearerToken(runtime, false) : undefined,
+      headers: {
+        "content-type": "application/json",
+        "x-session-key": "agent:main:main",
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: { name: "message", arguments: { body: "hello" } },
+      }),
+    });
+    const payload = (await response.json()) as {
+      result?: { content?: Array<{ text?: string }>; isError?: boolean };
+    };
+
+    expect(response.status).toBe(200);
+    expect(runBeforeToolCallHookMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: "message",
+        params: { body: "hello" },
+        ctx: expect.objectContaining({
+          agentId: "main",
+          sessionKey: "agent:main:main",
+        }),
+        signal: expect.any(AbortSignal),
+      }),
+    );
+    expect(execute).not.toHaveBeenCalled();
+    expect(payload.result?.isError).toBe(true);
+    expect(payload.result?.content?.[0]?.text).toBe("blocked by hook");
+  });
+
+  it("forwards the request abort signal to loopback tool execution", async () => {
+    const execute = vi.fn(async () => ({
+      content: [{ type: "text", text: "EXECUTED" }],
+    }));
+    resolveGatewayScopedToolsMock.mockReturnValue({
+      agentId: "main",
+      tools: [
+        {
+          name: "message",
+          description: "send a message",
+          parameters: { type: "object", properties: {} },
+          execute,
+        },
+      ],
+    });
+    server = await startMcpLoopbackServer(0);
+    const runtime = getActiveMcpLoopbackRuntime();
+
+    const response = await sendRaw({
+      port: server.port,
+      token: runtime ? resolveMcpLoopbackBearerToken(runtime, false) : undefined,
+      headers: {
+        "content-type": "application/json",
+        "x-session-key": "agent:main:main",
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: { name: "message", arguments: { body: "hello" } },
+      }),
+    });
+    const payload = (await response.json()) as {
+      result?: { isError?: boolean };
+    };
+
+    expect(response.status).toBe(200);
+    expect(payload.result?.isError).toBe(false);
+    expect(execute).toHaveBeenCalledWith(
+      expect.stringMatching(/^mcp-/),
+      { body: "hello" },
+      expect.any(AbortSignal),
     );
   });
 

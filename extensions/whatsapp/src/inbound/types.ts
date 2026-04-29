@@ -1,6 +1,6 @@
-import type { AnyMessageContent } from "@whiskeysockets/baileys";
+import type { AnyMessageContent, MiscMessageGenerationOptions } from "@whiskeysockets/baileys";
 import type { NormalizedLocation } from "openclaw/plugin-sdk/channel-inbound";
-import type { PollInput } from "openclaw/plugin-sdk/media-runtime";
+import type { PollInput } from "openclaw/plugin-sdk/poll-runtime";
 import type { WhatsAppIdentity, WhatsAppReplyContext, WhatsAppSelfIdentity } from "../identity.js";
 
 export type WebListenerCloseReason = {
@@ -10,6 +10,13 @@ export type WebListenerCloseReason = {
 };
 
 export type ActiveWebSendOptions = {
+  quotedMessageKey?: {
+    id: string;
+    remoteJid: string;
+    fromMe: boolean;
+    participant?: string;
+    messageText?: string;
+  };
   gifPlayback?: boolean;
   accountId?: string;
   fileName?: string;
@@ -35,12 +42,23 @@ export type ActiveWebListener = {
   close?: () => Promise<void>;
 };
 
+export type WhatsAppStructuredContactContext = {
+  kind: "contact" | "contacts";
+  total: number;
+  contacts: Array<{
+    name?: string;
+    phones?: string[];
+  }>;
+};
+
 export type WebInboundMessage = {
   id?: string;
   from: string; // conversation id: E.164 for direct chats, group JID for groups
   conversationId: string; // alias for clarity (same as from)
   to: string;
   accountId: string;
+  /** Set by the real inbound monitor after access-control / pairing checks pass. */
+  accessControlPassed?: boolean;
   body: string;
   pushName?: string;
   timestamp?: number;
@@ -67,11 +85,18 @@ export type WebInboundMessage = {
   fromMe?: boolean;
   location?: NormalizedLocation;
   sendComposing: () => Promise<void>;
-  reply: (text: string) => Promise<void>;
-  sendMedia: (payload: AnyMessageContent) => Promise<void>;
+  reply: (text: string, options?: MiscMessageGenerationOptions) => Promise<void>;
+  sendMedia: (payload: AnyMessageContent, options?: MiscMessageGenerationOptions) => Promise<void>;
   mediaPath?: string;
   mediaType?: string;
   mediaFileName?: string;
   mediaUrl?: string;
+  untrustedStructuredContext?: Array<{
+    label: string;
+    source?: string;
+    type?: string;
+    payload: unknown;
+  }>;
   wasMentioned?: boolean;
+  isBatched?: boolean;
 };

@@ -1,15 +1,35 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { createServer as createNetServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, it } from "vitest";
+import { LOCAL_BUILD_METADATA_DIST_PATHS } from "../../scripts/lib/local-build-metadata-paths.mjs";
 import {
+  agentOutputHasExpectedOkMarker,
+  buildCrossOsReleaseSmokePluginAllowlist,
+  buildReleaseOnboardArgs,
   buildWindowsDevUpdateToolchainCheckScript,
   buildWindowsFreshShellVersionCheckScript,
+  buildInstalledBrowserOverrideImportProbeScript,
   buildWindowsPathBootstrapScript,
   canConnectToLoopbackPort,
   buildDiscordSmokeGuildsConfig,
   buildRealUpdateEnv,
+  CROSS_OS_GATEWAY_READY_TIMEOUT_MS,
+  CROSS_OS_GATEWAY_STATUS_COMMAND_TIMEOUT_MS,
+  CROSS_OS_GATEWAY_STATUS_RPC_TIMEOUT_MS,
+  CROSS_OS_WINDOWS_GATEWAY_READY_TIMEOUT_MS,
+  CROSS_OS_DASHBOARD_FETCH_TIMEOUT_MS,
+  CROSS_OS_DASHBOARD_SMOKE_TIMEOUT_MS,
   isImmutableReleaseRef,
   looksLikeReleaseVersionRef,
   normalizeRequestedRef,
@@ -20,6 +40,7 @@ import {
   readInstalledVersion,
   readRunnerOverrideEnv,
   resolveExplicitBaselineVersion,
+  resolveInstalledPackageRootFromCliPath,
   resolveDevUpdateVerificationRef,
   resolveInstalledPrefixDirFromCliPath,
   resolvePublishedInstallerUrl,
@@ -27,15 +48,85 @@ import {
   resolveRunnerMatrix,
   resolveStaticFileContentType,
   shouldExerciseManagedGatewayLifecycleAfterInstall,
+  shouldRunWindowsInstalledBrowserOverrideImportSmoke,
   shouldSkipInstallerDaemonHealthCheck,
   shouldStopManagedGatewayBeforeManualFallback,
   shouldRunMainChannelDevUpdate,
+  shouldRetryCrossOsAgentTurnError,
   shouldUseManagedGatewayForInstallerRuntime,
   shouldUseManagedGatewayService,
   verifyDevUpdateStatus,
+  verifyPackagedUpgradeUpdateResult,
+  writePackageDistInventoryForCandidate,
 } from "../../scripts/openclaw-cross-os-release-checks.ts";
 
 describe("scripts/openclaw-cross-os-release-checks", () => {
+  it("keeps dashboard smoke patient enough for cold packaged gateway startup", () => {
+    expect(CROSS_OS_DASHBOARD_SMOKE_TIMEOUT_MS).toBeGreaterThanOrEqual(120_000);
+    expect(CROSS_OS_DASHBOARD_FETCH_TIMEOUT_MS).toBeGreaterThanOrEqual(10_000);
+  });
+
+  it("keeps gateway RPC status probes patient enough for live release startup", () => {
+    expect(CROSS_OS_GATEWAY_STATUS_RPC_TIMEOUT_MS).toBeGreaterThanOrEqual(30_000);
+    expect(CROSS_OS_GATEWAY_STATUS_COMMAND_TIMEOUT_MS).toBeGreaterThan(
+      CROSS_OS_GATEWAY_STATUS_RPC_TIMEOUT_MS,
+    );
+    expect(CROSS_OS_GATEWAY_READY_TIMEOUT_MS).toBeGreaterThanOrEqual(180_000);
+    expect(CROSS_OS_WINDOWS_GATEWAY_READY_TIMEOUT_MS).toBeGreaterThanOrEqual(300_000);
+  });
+
+  it("accepts OK agent output from the captured log when stdout is empty", () => {
+    const dir = mkdtempSync(join(tmpdir(), "openclaw-cross-os-agent-output-"));
+    try {
+      const logPath = join(dir, "agent.log");
+      writeFileSync(
+        logPath,
+        [
+          "2026-04-24T15:00:00.000Z command stdout",
+          JSON.stringify({
+            finalAssistantVisibleText: "OK",
+            payloads: [{ type: "text", text: "OK" }],
+          }),
+        ].join("\n"),
+      );
+
+      expect(agentOutputHasExpectedOkMarker("", { logPath })).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("retries transient bundled runtime deps staging failures during agent turns", () => {
+    expect(
+      shouldRetryCrossOsAgentTurnError(
+        new Error("document-extract: failed to install bundled runtime deps: npm install failed"),
+      ),
+    ).toBe(true);
+    expect(
+      shouldRetryCrossOsAgentTurnError(
+        new Error("document-extract failed to stage bundled runtime deps after 463ms"),
+      ),
+    ).toBe(true);
+    expect(shouldRetryCrossOsAgentTurnError(new Error("Agent output did not contain OK."))).toBe(
+      false,
+    );
+  });
+
+  it("keeps release smoke plugin allowlists focused on agent-turn essentials", () => {
+    const allowlist = buildCrossOsReleaseSmokePluginAllowlist({ extensionId: "openai" });
+
+    expect(allowlist).toEqual(expect.arrayContaining(["openai", "memory-core", "acpx"]));
+    expect(allowlist).not.toContain("document-extract");
+    expect(allowlist).not.toContain("microsoft");
+    expect(allowlist).not.toContain("web-readability");
+  });
+
+  it("keeps cross-OS live smoke agent turns on minimal thinking", () => {
+    const source = readFileSync("scripts/openclaw-cross-os-release-checks.ts", "utf8");
+
+    expect(source.match(/"--thinking",\s+"minimal"/g)?.length).toBeGreaterThanOrEqual(2);
+  });
+
   it("treats explicit empty-string args as values instead of boolean flags", () => {
     expect(parseArgs(["--ubuntu-runner", "", "--mode", "both"])).toEqual({
       "ubuntu-runner": "",
@@ -131,6 +222,13 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
         lane: "fresh",
       }),
     );
+    expect(matrix.include).toContainEqual(
+      expect.objectContaining({
+        os_id: "macos",
+        runner: "blacksmith-6vcpu-macos-latest",
+        suite: "packaged-fresh",
+      }),
+    );
   });
 
   it("can rebuild the Windows PATH with or without current-process entries", () => {
@@ -219,6 +317,34 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     expect(shouldUseManagedGatewayService("linux")).toBe(false);
   });
 
+  it("skips workspace bootstrap during release onboarding", () => {
+    expect(
+      buildReleaseOnboardArgs({
+        authChoice: "openai-api-key",
+        gatewayPort: 34111,
+        skipHealth: true,
+      }),
+    ).toEqual([
+      "onboard",
+      "--non-interactive",
+      "--mode",
+      "local",
+      "--auth-choice",
+      "openai-api-key",
+      "--secret-input-mode",
+      "ref",
+      "--gateway-port",
+      "34111",
+      "--gateway-bind",
+      "loopback",
+      "--skip-skills",
+      "--skip-bootstrap",
+      "--accept-risk",
+      "--json",
+      "--skip-health",
+    ]);
+  });
+
   it("keeps the Windows installer runtime on the manual gateway after managed lifecycle checks", () => {
     expect(shouldExerciseManagedGatewayLifecycleAfterInstall("win32")).toBe(true);
     expect(shouldUseManagedGatewayForInstallerRuntime("win32")).toBe(false);
@@ -236,6 +362,29 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     expect(shouldSkipInstallerDaemonHealthCheck("win32")).toBe(true);
     expect(shouldSkipInstallerDaemonHealthCheck("darwin")).toBe(false);
     expect(shouldSkipInstallerDaemonHealthCheck("linux")).toBe(false);
+  });
+
+  it("runs the installed browser override import smoke only on native Windows", () => {
+    expect(shouldRunWindowsInstalledBrowserOverrideImportSmoke("win32")).toBe(true);
+    expect(shouldRunWindowsInstalledBrowserOverrideImportSmoke("darwin")).toBe(false);
+    expect(shouldRunWindowsInstalledBrowserOverrideImportSmoke("linux")).toBe(false);
+
+    const script = buildInstalledBrowserOverrideImportProbeScript();
+    expect(script).toContain('from "openclaw/plugin-sdk/plugin-runtime"');
+    expect(script).toContain('overrideEnvVar: "OPENCLAW_BROWSER_CONTROL_MODULE"');
+    expect(script).toContain("startBrowserControlService");
+    expect(script).toContain("stopBrowserControlService");
+    expect(script).toContain("Browser control override start sentinel was not written.");
+
+    const installedScript = buildInstalledBrowserOverrideImportProbeScript(
+      "file:///C:/Users/runner/AppData/Roaming/npm/node_modules/openclaw/dist/plugin-sdk/plugin-runtime.js",
+    );
+    expect(installedScript).toContain(
+      'from "file:///C:/Users/runner/AppData/Roaming/npm/node_modules/openclaw/dist/plugin-sdk/plugin-runtime.js"',
+    );
+    expect(readFileSync("scripts/openclaw-cross-os-release-checks.ts", "utf8")).toContain(
+      "OPENCLAW_BROWSER_CONTROL_MODULE: pathToFileURL(overridePath).href",
+    );
   });
 
   it("normalizes Windows installed CLI paths to the cmd shim", () => {
@@ -275,6 +424,36 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     ).toBe("/Users/runner/.npm-global");
   });
 
+  it("resolves Linux npm package roots when the CLI is a user-local shim", () => {
+    const homeDir = mkdtempSync(join(tmpdir(), "openclaw-cross-os-linux-home-"));
+    try {
+      const packageRoot = join(homeDir, ".npm-global", "lib", "node_modules", "openclaw");
+      const distDir = join(packageRoot, "dist");
+      const cliDir = join(homeDir, ".local", "bin");
+      mkdirSync(distDir, { recursive: true });
+      mkdirSync(cliDir, { recursive: true });
+      writeFileSync(join(packageRoot, "package.json"), JSON.stringify({ name: "openclaw" }));
+      writeFileSync(join(distDir, "entry.js"), "#!/usr/bin/env node\n");
+
+      expect(
+        resolveInstalledPackageRootFromCliPath(join(cliDir, "openclaw"), "linux", {
+          HOME: homeDir,
+        }),
+      ).toBe(packageRoot);
+
+      rmSync(join(cliDir, "openclaw"), { force: true });
+      symlinkSync(join(distDir, "entry.js"), join(cliDir, "openclaw"));
+
+      expect(
+        resolveInstalledPackageRootFromCliPath(join(cliDir, "openclaw"), "linux", {
+          HOME: homeDir,
+        }),
+      ).toBe(realpathSync(packageRoot));
+    } finally {
+      rmSync(homeDir, { recursive: true, force: true });
+    }
+  });
+
   it("detects whether a managed gateway listener is still reachable on loopback", async () => {
     const server = createNetServer();
     await new Promise((resolvePromise) => {
@@ -286,7 +465,13 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     await new Promise((resolvePromise) => {
       server.close(resolvePromise);
     });
-    expect(await canConnectToLoopbackPort(port)).toBe(false);
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      if (!(await canConnectToLoopbackPort(port, 100))) {
+        return;
+      }
+      await delay(25);
+    }
+    expect(await canConnectToLoopbackPort(port, 100)).toBe(false);
   });
 
   it("writes Discord smoke config using the strict guild channel schema", () => {
@@ -331,11 +516,67 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     expect(
       buildRealUpdateEnv({
         FOO: "bar",
+        NODE_COMPILE_CACHE: "/tmp/stale-openclaw-cache",
         OPENCLAW_DISABLE_BUNDLED_PLUGIN_POSTINSTALL: "1",
       }),
     ).toEqual({
       FOO: "bar",
+      NODE_DISABLE_COMPILE_CACHE: "1",
     });
+  });
+
+  it("accepts a successful packaged update followed by the old self-swapped process import miss", () => {
+    expect(() =>
+      verifyPackagedUpgradeUpdateResult(
+        {
+          exitCode: 1,
+          stdout: JSON.stringify({
+            status: "ok",
+            after: { version: "2026.4.27" },
+            steps: [{ name: "global update", exitCode: 0 }],
+          }),
+          stderr:
+            "[openclaw] Failed to start CLI: Error [ERR_MODULE_NOT_FOUND]: Cannot find module '/tmp/prefix/lib/node_modules/openclaw/dist/memory-state-old.js'",
+        },
+        { candidateVersion: "2026.4.27" },
+      ),
+    ).not.toThrow();
+  });
+
+  it("rejects packaged update failures before the candidate package lands", () => {
+    expect(() =>
+      verifyPackagedUpgradeUpdateResult(
+        {
+          exitCode: 1,
+          stdout: JSON.stringify({
+            status: "ok",
+            after: { version: "2026.4.26" },
+            steps: [{ name: "global update", exitCode: 0 }],
+          }),
+          stderr:
+            "[openclaw] Failed to start CLI: Error [ERR_MODULE_NOT_FOUND]: Cannot find module '/tmp/prefix/lib/node_modules/openclaw/dist/memory-state-old.js'",
+        },
+        { candidateVersion: "2026.4.27" },
+      ),
+    ).toThrow(/Packaged upgrade failed/u);
+  });
+
+  it("rejects packaged update failures with unsuccessful update steps", () => {
+    expect(() =>
+      verifyPackagedUpgradeUpdateResult(
+        {
+          exitCode: 1,
+          stdout: JSON.stringify({
+            status: "ok",
+            after: { version: "2026.4.27" },
+            steps: [{ name: "global update", exitCode: 1 }],
+          }),
+          stderr:
+            "[openclaw] Failed to start CLI: Error [ERR_MODULE_NOT_FOUND]: Cannot find module '/tmp/prefix/lib/node_modules/openclaw/dist/memory-state-old.js'",
+        },
+        { candidateVersion: "2026.4.27" },
+      ),
+    ).toThrow(/Packaged upgrade failed/u);
   });
 
   it("only treats pinned baseline specs as exact installer version assertions", () => {
@@ -384,6 +625,57 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
 
       expect(packageHasScript(packageRoot, "build")).toBe(true);
       expect(packageHasScript(packageRoot, "ui:build")).toBe(false);
+    } finally {
+      rmSync(packageRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects bundled runtime-deps staging debris before candidate inventory generation", async () => {
+    const packageRoot = mkdtempSync(join(tmpdir(), "openclaw-cross-os-stage-debris-"));
+    try {
+      mkdirSync(
+        join(packageRoot, "dist", "Extensions", "demo", ".OpenClaw-Install-Stage", "node_modules"),
+        { recursive: true },
+      );
+      writeFileSync(
+        join(packageRoot, "dist", "Extensions", "demo", ".OpenClaw-Install-Stage", "package.json"),
+        "{}\n",
+        "utf8",
+      );
+
+      await expect(
+        writePackageDistInventoryForCandidate({
+          sourceDir: packageRoot,
+          logPath: join(packageRoot, "npm-pack-dry-run.log"),
+        }),
+      ).rejects.toThrow("unexpected bundled-runtime-deps install staging debris");
+    } finally {
+      rmSync(packageRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("omits local build metadata from candidate package inventories", async () => {
+    const packageRoot = mkdtempSync(join(tmpdir(), "openclaw-cross-os-local-stamps-"));
+    try {
+      mkdirSync(join(packageRoot, "dist"), { recursive: true });
+      writeFileSync(
+        join(packageRoot, "package.json"),
+        JSON.stringify({ name: "openclaw-fixture", version: "0.0.0", files: ["dist/"] }),
+        "utf8",
+      );
+      writeFileSync(join(packageRoot, "dist", "index.js"), "export {};\n", "utf8");
+      for (const relativePath of LOCAL_BUILD_METADATA_DIST_PATHS) {
+        writeFileSync(join(packageRoot, relativePath), "{}\n", "utf8");
+      }
+
+      await writePackageDistInventoryForCandidate({
+        sourceDir: packageRoot,
+        logPath: join(packageRoot, "npm-pack-dry-run.log"),
+      });
+
+      expect(
+        JSON.parse(readFileSync(join(packageRoot, "dist", "postinstall-inventory.json"), "utf8")),
+      ).toEqual(["dist/index.js"]);
     } finally {
       rmSync(packageRoot, { recursive: true, force: true });
     }

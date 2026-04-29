@@ -1,11 +1,11 @@
 {
   "name": "@openclaw/openai-provider",
-  "version": "2026.4.20",
+  "version": "2026.4.25",
   "private": true,
   "description": "OpenClaw OpenAI provider plugins",
   "type": "module",
   "dependencies": {
-    "@mariozechner/pi-ai": "0.68.1",
+    "@mariozechner/pi-ai": "0.70.5",
     "ws": "^8.20.0"
   },
   "devDependencies": {

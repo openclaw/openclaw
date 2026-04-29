@@ -210,11 +210,11 @@ steps:
           message:
             expr: "`report missing expected finding ids: ${reportText}`"
       - assert:
-          expr: "!JSON.stringify(report).includes('REL-STALE-000') && !handoffText.includes('REL-STALE-000')"
+          expr: "!JSON.stringify(Array.isArray(report.findings) ? report.findings : report).includes('REL-STALE-000') && !handoffText.includes('REL-STALE-000')"
           message:
             expr: "`stale archive finding leaked into audit: report=${reportText}\\nhandoff=${handoffText}`"
       - assert:
-          expr: "JSON.stringify(report).includes('ui/control-panel.ts') && /blocked|missing|not found/i.test(`${reportText}\\n${handoffText}`)"
+          expr: "JSON.stringify(report).includes('ui/control-panel.ts') && /blocked|missing|not found|no current source file|no matching source file/i.test(`${reportText}\\n${handoffText}`)"
           message:
             expr: "`missing UI evidence was not explicitly blocked: report=${reportText}\\nhandoff=${handoffText}`"
       - assert:

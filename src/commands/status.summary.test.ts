@@ -14,11 +14,11 @@ vi.mock("./status.summary.runtime.js", () => ({
     classifySessionKey: vi.fn(() => "direct"),
     resolveConfiguredStatusModelRef: vi.fn(() => ({
       provider: "openai",
-      model: "gpt-5.4",
+      model: "gpt-5.5",
     })),
     resolveSessionModelRef: vi.fn(() => ({
       provider: "openai",
-      model: "gpt-5.4",
+      model: "gpt-5.5",
     })),
     resolveContextTokensForModel: vi.fn(() => 200_000),
   },
@@ -26,12 +26,16 @@ vi.mock("./status.summary.runtime.js", () => ({
 
 vi.mock("../agents/defaults.js", () => ({
   DEFAULT_CONTEXT_TOKENS: 200_000,
-  DEFAULT_MODEL: "gpt-5.4",
+  DEFAULT_MODEL: "gpt-5.5",
   DEFAULT_PROVIDER: "openai",
 }));
 
 vi.mock("../config/io.js", () => ({
   loadConfig: vi.fn(() => ({})),
+}));
+
+vi.mock("../config/config.js", () => ({
+  getRuntimeConfig: vi.fn(() => ({})),
 }));
 
 vi.mock("../gateway/agent-list.js", () => ({
@@ -58,6 +62,7 @@ vi.mock("../infra/system-events.js", () => ({
 }));
 
 vi.mock("../tasks/task-registry.maintenance.js", () => ({
+  configureTaskRegistryMaintenance: vi.fn(),
   getInspectableTaskRegistrySummary: vi.fn(() => ({
     total: 0,
     active: 0,

@@ -1,6 +1,14 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { callGateway } from "../../gateway/call.js";
+import {
+  GATEWAY_CLIENT_IDS,
+  normalizeGatewayClientId,
+} from "../../gateway/protocol/client-info.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import {
+  listSpawnedSessionKeys,
+  sessionVisibilityGatewayTesting,
+} from "../../plugin-sdk/session-visibility.js";
 import { isAcpSessionKey, normalizeMainKey } from "../../routing/session-key.js";
 import { looksLikeSessionId } from "../../sessions/session-id.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
@@ -10,6 +18,16 @@ type GatewayCaller = typeof callGateway;
 const defaultSessionsResolutionDeps = {
   callGateway,
 };
+
+const CURRENT_SESSION_CLIENT_ALIAS_IDS = new Set<string>([
+  GATEWAY_CLIENT_IDS.TUI,
+  GATEWAY_CLIENT_IDS.CLI,
+  GATEWAY_CLIENT_IDS.WEBCHAT_UI,
+  GATEWAY_CLIENT_IDS.CONTROL_UI,
+  GATEWAY_CLIENT_IDS.MACOS_APP,
+  GATEWAY_CLIENT_IDS.IOS_APP,
+  GATEWAY_CLIENT_IDS.ANDROID_APP,
+]);
 
 let sessionsResolutionDeps: {
   callGateway: GatewayCaller;
@@ -47,31 +65,24 @@ export function resolveInternalSessionKey(params: {
   return params.key;
 }
 
-export async function listSpawnedSessionKeys(params: {
-  requesterSessionKey: string;
-  limit?: number;
-}): Promise<Set<string>> {
-  const limit =
-    typeof params.limit === "number" && Number.isFinite(params.limit)
-      ? Math.max(1, Math.floor(params.limit))
-      : undefined;
-  try {
-    const list = await sessionsResolutionDeps.callGateway<{ sessions: Array<{ key?: unknown }> }>({
-      method: "sessions.list",
-      params: {
-        includeGlobal: false,
-        includeUnknown: false,
-        ...(limit !== undefined ? { limit } : {}),
-        spawnedBy: params.requesterSessionKey,
-      },
-    });
-    const sessions = Array.isArray(list?.sessions) ? list.sessions : [];
-    const keys = sessions.map((entry) => normalizeOptionalString(entry?.key) ?? "").filter(Boolean);
-    return new Set(keys);
-  } catch {
-    return new Set();
+export function resolveCurrentSessionClientAlias(params: {
+  key: string;
+  requesterInternalKey?: string;
+}): string | undefined {
+  const requesterKey = normalizeOptionalString(params.requesterInternalKey);
+  if (!requesterKey) {
+    return undefined;
   }
+  const clientId = normalizeGatewayClientId(params.key);
+  if (!clientId || !CURRENT_SESSION_CLIENT_ALIAS_IDS.has(clientId)) {
+    return undefined;
+  }
+  // UI/client labels can appear next to the real session key in status text.
+  // Treat them as the current requester instead of probing them as sessionIds.
+  return requesterKey;
 }
+
+export { listSpawnedSessionKeys };
 
 export async function isRequesterSpawnedSessionVisible(params: {
   requesterSessionKey: string;
@@ -381,7 +392,11 @@ export async function resolveSessionReference(params: {
   requesterInternalKey?: string;
   restrictToSpawned: boolean;
 }): Promise<SessionReferenceResolution> {
-  const rawInput = params.sessionKey.trim();
+  const rawInput =
+    resolveCurrentSessionClientAlias({
+      key: params.sessionKey,
+      requesterInternalKey: params.requesterInternalKey,
+    }) ?? params.sessionKey.trim();
   if (rawInput === "current") {
     const resolvedCurrent = await resolveSessionReferenceByKeyOrSessionId({
       raw: rawInput,
@@ -462,5 +477,8 @@ export const __testing = {
           ...overrides,
         }
       : defaultSessionsResolutionDeps;
+    sessionVisibilityGatewayTesting.setCallGatewayForListSpawned(
+      overrides?.callGateway ?? defaultSessionsResolutionDeps.callGateway,
+    );
   },
 };

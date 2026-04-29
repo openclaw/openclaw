@@ -1,3 +1,4 @@
+import { retireSessionMcpRuntime } from "../../agents/pi-bundle-mcp-tools.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import {
   isSilentReplyText,
@@ -17,6 +18,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import type { OutboundDeliveryResult } from "../../infra/outbound/deliver.js";
 import { normalizeTargetForProvider } from "../../infra/outbound/target-normalization.js";
 import { hasReplyPayloadContent } from "../../interactive/payload.js";
+import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -103,6 +105,8 @@ type DispatchCronDeliveryParams = {
   job: CronJob;
   agentId: string;
   agentSessionKey: string;
+  runSessionKey: string;
+  sessionId: string;
   runStartedAt: number;
   runEndedAt: number;
   timeoutMs: number;
@@ -308,7 +312,7 @@ function buildDirectCronDeliveryIdempotencyKey(params: {
   const threadId =
     params.delivery.threadId == null || params.delivery.threadId === ""
       ? ""
-      : String(params.delivery.threadId);
+      : (stringifyRouteThreadId(params.delivery.threadId) ?? "");
   const accountId = params.delivery.accountId?.trim() ?? "";
   const normalizedTo = normalizeDeliveryTarget(params.delivery.channel, params.delivery.to);
   return `cron-direct-delivery:v1:${executionId}:${params.delivery.channel}:${accountId}:${normalizedTo}:${threadId}`;
@@ -477,6 +481,10 @@ export async function dispatchCronDelivery(
       });
       directCronSessionDeleted = true;
     } catch {
+      await retireSessionMcpRuntime({
+        sessionId: params.sessionId,
+        reason: "cron-delete-after-run-fallback",
+      });
       // Best-effort; direct delivery result should still be returned.
     }
   };
@@ -678,8 +686,9 @@ export async function dispatchCronDelivery(
     const initialSynthesizedText = synthesizedText.trim();
     const expectedSubagentFollowup = expectsSubagentFollowup(initialSynthesizedText);
     const subagentRegistryRuntime = await loadDeliverySubagentRegistryRuntime();
+    const subagentFollowupSessionKey = params.runSessionKey;
     let activeSubagentRuns = subagentRegistryRuntime.countActiveDescendantRuns(
-      params.agentSessionKey,
+      subagentFollowupSessionKey,
     );
     const shouldCheckCompletedDescendants =
       activeSubagentRuns === 0 && isLikelyInterimCronMessage(initialSynthesizedText);
@@ -695,24 +704,24 @@ export async function dispatchCronDelivery(
     // descendant's output instead of the interim cron text.
     const completedDescendantReply = shouldCheckCompletedDescendants
       ? await subagentFollowupRuntime?.readDescendantSubagentFallbackReply({
-          sessionKey: params.agentSessionKey,
+          sessionKey: subagentFollowupSessionKey,
           runStartedAt: params.runStartedAt,
         })
       : undefined;
     const hadDescendants = activeSubagentRuns > 0 || Boolean(completedDescendantReply);
     if (activeSubagentRuns > 0 || expectedSubagentFollowup) {
       let finalReply = await subagentFollowupRuntime?.waitForDescendantSubagentSummary({
-        sessionKey: params.agentSessionKey,
+        sessionKey: subagentFollowupSessionKey,
         initialReply: initialSynthesizedText,
         timeoutMs: params.timeoutMs,
         observedActiveDescendants: activeSubagentRuns > 0 || expectedSubagentFollowup,
       });
       activeSubagentRuns = subagentRegistryRuntime.countActiveDescendantRuns(
-        params.agentSessionKey,
+        subagentFollowupSessionKey,
       );
       if (!finalReply && activeSubagentRuns === 0) {
         finalReply = await subagentFollowupRuntime?.readDescendantSubagentFallbackReply({
-          sessionKey: params.agentSessionKey,
+          sessionKey: subagentFollowupSessionKey,
           runStartedAt: params.runStartedAt,
         });
       }

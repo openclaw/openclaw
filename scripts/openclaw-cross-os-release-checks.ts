@@ -4,11 +4,13 @@
 
 import { spawn } from "node:child_process";
 import {
+  appendFileSync,
   chmodSync,
   createWriteStream,
   existsSync,
   mkdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -17,7 +19,9 @@ import { createServer } from "node:http";
 import { createConnection as createNetConnection, createServer as createNetServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve, win32 as pathWin32 } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { assertNoBundledRuntimeDepsStagingDebris } from "../src/infra/package-dist-inventory.ts";
+import { isLocalBuildMetadataDistPath } from "./lib/local-build-metadata-paths.mjs";
 
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
 const PUBLISHED_INSTALLER_BASE_URL = "https://openclaw.ai";
@@ -35,7 +39,7 @@ const providerConfig = {
     extensionId: "openai",
     secretEnv: "OPENAI_API_KEY",
     authChoice: "openai-api-key",
-    model: "openai/gpt-5.4",
+    model: "openai/gpt-5.5",
   },
   anthropic: {
     extensionId: "anthropic",
@@ -51,13 +55,33 @@ const providerConfig = {
   },
 };
 
+const RELEASE_SMOKE_PLUGIN_ALLOWLIST_BASE = [
+  "acpx",
+  "bonjour",
+  "browser",
+  "device-pair",
+  "memory-core",
+  "phone-control",
+  "talk-voice",
+];
+
+export function buildCrossOsReleaseSmokePluginAllowlist(providerMeta) {
+  return [...new Set([providerMeta.extensionId, ...RELEASE_SMOKE_PLUGIN_ALLOWLIST_BASE])];
+}
+
 const PACKAGE_DIST_INVENTORY_RELATIVE_PATH = "dist/postinstall-inventory.json";
-const PACKAGED_QA_RUNTIME_PATHS = new Set(["dist/extensions/qa-channel/runtime-api.js"]);
 const OMITTED_QA_EXTENSION_PREFIXES = [
   "dist/extensions/qa-channel/",
   "dist/extensions/qa-lab/",
   "dist/extensions/qa-matrix/",
 ];
+export const CROSS_OS_DASHBOARD_SMOKE_TIMEOUT_MS = 120_000;
+export const CROSS_OS_DASHBOARD_FETCH_TIMEOUT_MS = 10_000;
+export const CROSS_OS_GATEWAY_STATUS_RPC_TIMEOUT_MS = 30_000;
+export const CROSS_OS_GATEWAY_STATUS_COMMAND_TIMEOUT_MS =
+  CROSS_OS_GATEWAY_STATUS_RPC_TIMEOUT_MS + 45_000;
+export const CROSS_OS_GATEWAY_READY_TIMEOUT_MS = 3 * 60_000;
+export const CROSS_OS_WINDOWS_GATEWAY_READY_TIMEOUT_MS = 5 * 60_000;
 
 if (isMainModule()) {
   try {
@@ -146,7 +170,7 @@ export function resolveRunnerMatrix(params) {
     {
       os_id: "ubuntu",
       display_name: "Linux",
-      runner: pick(params.ubuntuRunner, params.varUbuntuRunner, "ubuntu-latest"),
+      runner: pick(params.ubuntuRunner, params.varUbuntuRunner, "blacksmith-8vcpu-ubuntu-2404"),
       artifact_name: "linux",
     },
     {
@@ -158,7 +182,7 @@ export function resolveRunnerMatrix(params) {
     {
       os_id: "macos",
       display_name: "macOS",
-      runner: pick(params.macosRunner, params.varMacosRunner, "macos-latest-xlarge"),
+      runner: pick(params.macosRunner, params.varMacosRunner, "blacksmith-6vcpu-macos-latest"),
       artifact_name: "macos",
     },
   ];
@@ -471,6 +495,9 @@ function isPackagedDistPath(relativePath) {
   if (relativePath === PACKAGE_DIST_INVENTORY_RELATIVE_PATH) {
     return false;
   }
+  if (isLocalBuildMetadataDistPath(relativePath)) {
+    return false;
+  }
   if (relativePath.endsWith(".map")) {
     return false;
   }
@@ -478,12 +505,13 @@ function isPackagedDistPath(relativePath) {
     return false;
   }
   if (OMITTED_QA_EXTENSION_PREFIXES.some((prefix) => relativePath.startsWith(prefix))) {
-    return PACKAGED_QA_RUNTIME_PATHS.has(relativePath);
+    return false;
   }
   return true;
 }
 
-async function writePackageDistInventoryForCandidate(params) {
+export async function writePackageDistInventoryForCandidate(params) {
+  await assertNoBundledRuntimeDepsStagingDebris(params.sourceDir);
   const dryRun = await runCommand(
     npmCommand(),
     ["pack", "--dry-run", "--ignore-scripts", "--json"],
@@ -558,12 +586,31 @@ async function runFreshLane(params) {
       logPath: join(params.logsDir, "fresh-install.log"),
     });
 
+    let browserOverrideImportStatus = "skipped";
+    if (shouldRunWindowsInstalledBrowserOverrideImportSmoke()) {
+      logLanePhase(lane, "windows-browser-override-import");
+      browserOverrideImportStatus = await runInstalledBrowserOverrideImportSmoke({
+        lane,
+        env,
+        prefixDir: lane.prefixDir,
+        logPath: join(params.logsDir, "fresh-windows-browser-override-import.log"),
+      });
+    }
+
     logLanePhase(lane, "onboard");
     await runOnboard({
       lane,
       env,
       providerConfig: params.providerConfig,
       logPath: join(params.logsDir, "fresh-onboard.log"),
+    });
+
+    logLanePhase(lane, "models-set");
+    await runModelsSet({
+      lane,
+      env,
+      providerConfig: params.providerConfig,
+      logPath: join(params.logsDir, "fresh-models-set.log"),
     });
 
     logLanePhase(lane, "start-gateway");
@@ -587,14 +634,6 @@ async function runFreshLane(params) {
       logPath: join(params.logsDir, "fresh-dashboard.log"),
     });
 
-    logLanePhase(lane, "models-set");
-    await runModelsSet({
-      lane,
-      env,
-      providerConfig: params.providerConfig,
-      logPath: join(params.logsDir, "fresh-models-set.log"),
-    });
-
     logLanePhase(lane, "agent-turn");
     const agent = await runAgentTurn({
       lane,
@@ -609,6 +648,7 @@ async function runFreshLane(params) {
       installedCommit: installed.commit,
       dashboardStatus: "pass",
       gatewayPort: lane.gatewayPort,
+      browserOverrideImportStatus,
       agentOutput: trimForSummary(agent.stdout),
     };
   } finally {
@@ -666,18 +706,22 @@ async function runUpgradeLane(params) {
       "--timeout",
       String(updateStepTimeoutSeconds()),
     ];
-    await runOpenClaw({
+    const updateResult = await runOpenClaw({
       lane,
       env: updateEnv,
       args: updateArgs,
       logPath: join(params.logsDir, "upgrade-update.log"),
       timeoutMs: updateTimeoutMs(),
+      check: false,
+    });
+    verifyPackagedUpgradeUpdateResult(updateResult, {
+      candidateVersion: params.build.candidateVersion,
     });
 
     logLanePhase(lane, "update-status");
     await runOpenClaw({
       lane,
-      env,
+      env: updateEnv,
       args: ["update", "status", "--json"],
       logPath: join(params.logsDir, "upgrade-update-status.log"),
       timeoutMs: 2 * 60 * 1000,
@@ -700,6 +744,14 @@ async function runUpgradeLane(params) {
       logPath: join(params.logsDir, "upgrade-onboard.log"),
     });
 
+    logLanePhase(lane, "models-set");
+    await runModelsSet({
+      lane,
+      env,
+      providerConfig: params.providerConfig,
+      logPath: join(params.logsDir, "upgrade-models-set.log"),
+    });
+
     logLanePhase(lane, "start-gateway");
     const gateway = await startGateway({
       lane,
@@ -719,14 +771,6 @@ async function runUpgradeLane(params) {
     await runDashboardSmoke({
       lane,
       logPath: join(params.logsDir, "upgrade-dashboard.log"),
-    });
-
-    logLanePhase(lane, "models-set");
-    await runModelsSet({
-      lane,
-      env,
-      providerConfig: params.providerConfig,
-      logPath: join(params.logsDir, "upgrade-models-set.log"),
     });
 
     logLanePhase(lane, "agent-turn");
@@ -787,6 +831,17 @@ async function runInstallerFreshSuite(params) {
     const installed = readInstalledMetadataFromCliPath(freshShell.cliPath);
     verifyInstalledCandidate(installed, params.build);
 
+    let browserOverrideImportStatus = "skipped";
+    if (shouldRunWindowsInstalledBrowserOverrideImportSmoke()) {
+      logLanePhase(lane, "windows-browser-override-import");
+      browserOverrideImportStatus = await runInstalledBrowserOverrideImportSmoke({
+        lane,
+        env,
+        prefixDir: resolveInstalledPrefixDirFromCliPath(freshShell.cliPath),
+        logPath: join(params.logsDir, "installer-fresh-windows-browser-override-import.log"),
+      });
+    }
+
     logLanePhase(lane, "onboard");
     await runOnboardWithInstalledCli({
       lane,
@@ -805,6 +860,15 @@ async function runInstallerFreshSuite(params) {
         logPrefix: join(params.logsDir, "installer-fresh-gateway"),
       });
     }
+
+    logLanePhase(lane, "models-set");
+    await runInstalledModelsSet({
+      cliPath: freshShell.cliPath,
+      env,
+      providerConfig: params.providerConfig,
+      cwd: lane.homeDir,
+      logPath: join(params.logsDir, "installer-fresh-models-set.log"),
+    });
 
     if (!useManagedGatewayAfterInstall) {
       // Keep the Windows installer lane validating Scheduled Task registration during
@@ -853,15 +917,6 @@ async function runInstallerFreshSuite(params) {
       logPath: join(params.logsDir, "installer-fresh-dashboard.log"),
     });
 
-    logLanePhase(lane, "models-set");
-    await runInstalledModelsSet({
-      cliPath: freshShell.cliPath,
-      env,
-      providerConfig: params.providerConfig,
-      cwd: lane.homeDir,
-      logPath: join(params.logsDir, "installer-fresh-models-set.log"),
-    });
-
     logLanePhase(lane, "agent-turn");
     const agent = await runInstalledAgentTurn({
       cliPath: freshShell.cliPath,
@@ -892,6 +947,7 @@ async function runInstallerFreshSuite(params) {
       installedCommit: installed.commit,
       gatewayPort: lane.gatewayPort,
       dashboardStatus: "pass",
+      browserOverrideImportStatus,
       discordStatus,
       agentOutput: trimForSummary(agent.stdout),
     };
@@ -991,6 +1047,15 @@ async function runDevUpdateSuite(params) {
       logPath: join(params.logsDir, "dev-update-onboard.log"),
     });
 
+    logLanePhase(lane, "models-set");
+    await runInstalledModelsSet({
+      cliPath: verifiedShell.cliPath,
+      env,
+      providerConfig: params.providerConfig,
+      cwd: lane.homeDir,
+      logPath: join(params.logsDir, "dev-update-models-set.log"),
+    });
+
     if (!useManagedGatewayAfterDevUpdate) {
       logLanePhase(lane, "gateway-start");
       const gateway = await startManualGatewayFromInstalledCli({
@@ -1022,15 +1087,6 @@ async function runDevUpdateSuite(params) {
     await runDashboardSmoke({
       lane,
       logPath: join(params.logsDir, "dev-update-dashboard.log"),
-    });
-
-    logLanePhase(lane, "models-set");
-    await runInstalledModelsSet({
-      cliPath: verifiedShell.cliPath,
-      env,
-      providerConfig: params.providerConfig,
-      cwd: lane.homeDir,
-      logPath: join(params.logsDir, "dev-update-models-set.log"),
     });
 
     logLanePhase(lane, "agent-turn");
@@ -1181,9 +1237,53 @@ export function shouldSkipInstallerDaemonHealthCheck(platform = process.platform
 }
 
 export function buildRealUpdateEnv(env) {
-  const updateEnv = { ...env };
+  const updateEnv = {
+    ...env,
+    NODE_DISABLE_COMPILE_CACHE: "1",
+  };
   delete updateEnv.OPENCLAW_DISABLE_BUNDLED_PLUGIN_POSTINSTALL;
+  delete updateEnv.NODE_COMPILE_CACHE;
   return updateEnv;
+}
+
+export function verifyPackagedUpgradeUpdateResult(result, options) {
+  if (result.exitCode === 0) {
+    return;
+  }
+
+  let payload = null;
+  try {
+    payload = JSON.parse(result.stdout);
+  } catch {
+    payload = null;
+  }
+
+  const steps = Array.isArray(payload?.steps) ? payload.steps : [];
+  const allStepsSucceeded = steps.every((step) => step?.exitCode === 0);
+  const afterVersion = typeof payload?.after?.version === "string" ? payload.after.version : "";
+  if (
+    payload?.status === "ok" &&
+    afterVersion === options.candidateVersion &&
+    allStepsSucceeded &&
+    isSelfSwappedPackageProcessExit(result.stderr)
+  ) {
+    return;
+  }
+
+  throw new Error(
+    `Packaged upgrade failed (${result.exitCode}): ${trimForSummary(
+      `${result.stdout}\n${result.stderr}`,
+    )}`,
+  );
+}
+
+function isSelfSwappedPackageProcessExit(stderr) {
+  return (
+    typeof stderr === "string" &&
+    stderr.includes("[openclaw] Failed to start CLI:") &&
+    stderr.includes("ERR_MODULE_NOT_FOUND") &&
+    /[\\/]node_modules[\\/]openclaw[\\/]dist[\\/]/u.test(stderr)
+  );
 }
 
 export function resolveExplicitBaselineVersion(baselineSpec) {
@@ -1265,7 +1365,9 @@ export function resolveInstalledPrefixDirFromCliPath(cliPath, platform = process
 }
 
 function readInstalledMetadataFromCliPath(cliPath, platform = process.platform) {
-  return readInstalledMetadata(resolveInstalledPrefixDirFromCliPath(cliPath, platform));
+  return readInstalledMetadataFromPackageRoot(
+    resolveInstalledPackageRootFromCliPath(cliPath, platform),
+  );
 }
 
 function resolveInstalledCliInvocation(cliPath, platform = process.platform) {
@@ -1527,29 +1629,12 @@ async function ensureDevUpdateGitInstall(params) {
 
 async function runOnboardWithInstalledCli(params) {
   await withAllocatedGatewayPort(params.lane, async () => {
-    const args = [
-      "onboard",
-      "--non-interactive",
-      "--mode",
-      "local",
-      "--auth-choice",
-      params.providerConfig.authChoice,
-      "--secret-input-mode",
-      "ref",
-      "--gateway-port",
-      String(params.lane.gatewayPort),
-      "--gateway-bind",
-      "loopback",
-      "--skip-skills",
-      "--accept-risk",
-      "--json",
-    ];
-    if (params.installDaemon) {
-      args.push("--install-daemon");
-    }
-    if (!params.installDaemon || shouldSkipInstallerDaemonHealthCheck()) {
-      args.push("--skip-health");
-    }
+    const args = buildReleaseOnboardArgs({
+      authChoice: params.providerConfig.authChoice,
+      gatewayPort: params.lane.gatewayPort,
+      installDaemon: params.installDaemon,
+      skipHealth: !params.installDaemon || shouldSkipInstallerDaemonHealthCheck(),
+    });
     await runInstalledCli({
       cliPath: params.cliPath,
       args,
@@ -1559,6 +1644,34 @@ async function runOnboardWithInstalledCli(params) {
       timeoutMs: 10 * 60 * 1000,
     });
   });
+}
+
+export function buildReleaseOnboardArgs(params) {
+  const args = [
+    "onboard",
+    "--non-interactive",
+    "--mode",
+    "local",
+    "--auth-choice",
+    params.authChoice,
+    "--secret-input-mode",
+    "ref",
+    "--gateway-port",
+    String(params.gatewayPort),
+    "--gateway-bind",
+    "loopback",
+    "--skip-skills",
+    "--skip-bootstrap",
+    "--accept-risk",
+    "--json",
+  ];
+  if (params.installDaemon) {
+    args.push("--install-daemon");
+  }
+  if (params.skipHealth) {
+    args.push("--skip-health");
+  }
+  return args;
 }
 
 async function startManualGatewayFromInstalledCli(params) {
@@ -1626,9 +1739,15 @@ async function resolveInstalledGatewayStatusArgs(params) {
     requireRpc &&
     (help.stdout.includes("--require-rpc") || help.stderr.includes("--require-rpc"))
   ) {
-    return ["gateway", "status", "--deep", "--require-rpc", "--timeout", "5000"];
+    return [
+      "gateway",
+      "status",
+      "--require-rpc",
+      "--timeout",
+      String(CROSS_OS_GATEWAY_STATUS_RPC_TIMEOUT_MS),
+    ];
   }
-  return ["gateway", "status", "--deep"];
+  return ["gateway", "status"];
 }
 
 export async function canConnectToLoopbackPort(port, timeoutMs = 1_000) {
@@ -1671,7 +1790,7 @@ async function waitForInstalledGateway(params) {
       cwd: params.lane.homeDir,
       env: params.env,
       logPath: params.logPath,
-      timeoutMs: 20_000,
+      timeoutMs: CROSS_OS_GATEWAY_STATUS_COMMAND_TIMEOUT_MS,
       check: false,
     });
     if (result.exitCode === 0) {
@@ -1698,7 +1817,7 @@ async function waitForInstalledGatewayToStop(params) {
       cwd: params.lane.homeDir,
       env: params.env,
       logPath: params.logPath,
-      timeoutMs: 20_000,
+      timeoutMs: CROSS_OS_GATEWAY_STATUS_COMMAND_TIMEOUT_MS,
       check: false,
     });
     const portReachable = await canConnectToLoopbackPort(params.lane.gatewayPort);
@@ -1739,6 +1858,28 @@ async function runInstalledModelsSet(params) {
     logPath: params.logPath,
     timeoutMs: 2 * 60 * 1000,
   });
+  await runInstalledCli({
+    cliPath: params.cliPath,
+    args: [
+      "config",
+      "set",
+      "plugins.allow",
+      JSON.stringify(buildCrossOsReleaseSmokePluginAllowlist(params.providerConfig)),
+      "--strict-json",
+    ],
+    cwd: params.cwd,
+    env: params.env,
+    logPath: params.logPath,
+    timeoutMs: 2 * 60 * 1000,
+  });
+  await runInstalledCli({
+    cliPath: params.cliPath,
+    args: ["config", "set", "agents.defaults.skipBootstrap", "true", "--strict-json"],
+    cwd: params.cwd,
+    env: params.env,
+    logPath: params.logPath,
+    timeoutMs: 2 * 60 * 1000,
+  });
 }
 
 async function runInstalledAgentTurn(params) {
@@ -1753,6 +1894,8 @@ async function runInstalledAgentTurn(params) {
       sessionId,
       "--message",
       "Reply with exact ASCII text OK only.",
+      "--thinking",
+      "minimal",
       "--json",
     ],
     cwd: params.cwd,
@@ -1760,8 +1903,7 @@ async function runInstalledAgentTurn(params) {
     logPath: params.logPath,
     timeoutMs: 10 * 60 * 1000,
   });
-  const payloadTexts = parseAgentPayloadTexts(result.stdout);
-  if (!payloadTexts.some((text) => text.trim() === "OK")) {
+  if (!agentOutputHasExpectedOkMarker(result.stdout, { logPath: params.logPath })) {
     throw new Error("Agent output did not contain the expected OK marker.");
   }
   return result;
@@ -2179,6 +2321,111 @@ async function runBundledPluginPostinstall(params) {
   });
 }
 
+export function shouldRunWindowsInstalledBrowserOverrideImportSmoke(platform = process.platform) {
+  return platform === "win32";
+}
+
+export function buildInstalledBrowserOverrideImportProbeScript(
+  runtimeModuleSpecifier = "openclaw/plugin-sdk/plugin-runtime",
+) {
+  return `
+import { existsSync } from "node:fs";
+import { startLazyPluginServiceModule } from ${JSON.stringify(runtimeModuleSpecifier)};
+
+const startedPath = process.env.OPENCLAW_BROWSER_OVERRIDE_STARTED_PATH;
+const stoppedPath = process.env.OPENCLAW_BROWSER_OVERRIDE_STOPPED_PATH;
+
+if (!process.env.OPENCLAW_BROWSER_CONTROL_MODULE) {
+  throw new Error("Missing OPENCLAW_BROWSER_CONTROL_MODULE.");
+}
+if (!startedPath || !stoppedPath) {
+  throw new Error("Missing browser override sentinel path env.");
+}
+
+const handle = await startLazyPluginServiceModule({
+  overrideEnvVar: "OPENCLAW_BROWSER_CONTROL_MODULE",
+  validateOverrideSpecifier: (specifier) => specifier,
+  loadDefaultModule: async () => {
+    throw new Error("Default browser control service should not load during override probe.");
+  },
+  startExportNames: ["startBrowserControlService"],
+  stopExportNames: ["stopBrowserControlService"],
+});
+
+if (!handle) {
+  throw new Error("Browser control override probe did not return a service handle.");
+}
+if (!existsSync(startedPath)) {
+  throw new Error("Browser control override start sentinel was not written.");
+}
+
+await handle.stop();
+
+if (!existsSync(stoppedPath)) {
+  throw new Error("Browser control override stop sentinel was not written.");
+}
+
+console.log("windows browser override import OK");
+`.trim();
+}
+
+function buildBrowserOverrideProbeServiceModule() {
+  return `
+import { writeFileSync } from "node:fs";
+
+export async function startBrowserControlService() {
+  writeFileSync(process.env.OPENCLAW_BROWSER_OVERRIDE_STARTED_PATH, "started\\n", "utf8");
+}
+
+export async function stopBrowserControlService() {
+  writeFileSync(process.env.OPENCLAW_BROWSER_OVERRIDE_STOPPED_PATH, "stopped\\n", "utf8");
+}
+`.trim();
+}
+
+async function runInstalledBrowserOverrideImportSmoke(params) {
+  if (!shouldRunWindowsInstalledBrowserOverrideImportSmoke()) {
+    return "skipped";
+  }
+
+  const probeDir = join(params.lane.rootDir, "browser override import probe");
+  mkdirSync(probeDir, { recursive: true });
+  const overridePath = join(probeDir, "browser override #module.mjs");
+  const probePath = join(probeDir, "run browser override probe.mjs");
+  const startedPath = join(probeDir, "started.txt");
+  const stoppedPath = join(probeDir, "stopped.txt");
+  const packageRoot = installedPackageRoot(params.prefixDir);
+  const runtimeModulePath = join(packageRoot, "dist", "plugin-sdk", "plugin-runtime.js");
+  if (!existsSync(runtimeModulePath)) {
+    throw new Error(`Installed browser runtime module not found: ${runtimeModulePath}`);
+  }
+
+  writeFileSync(overridePath, `${buildBrowserOverrideProbeServiceModule()}\n`, "utf8");
+  writeFileSync(
+    probePath,
+    `${buildInstalledBrowserOverrideImportProbeScript(pathToFileURL(runtimeModulePath).href)}\n`,
+    "utf8",
+  );
+
+  await runCommand(process.execPath, [probePath], {
+    cwd: packageRoot,
+    env: {
+      ...params.env,
+      OPENCLAW_BROWSER_CONTROL_MODULE: pathToFileURL(overridePath).href,
+      OPENCLAW_BROWSER_OVERRIDE_STARTED_PATH: startedPath,
+      OPENCLAW_BROWSER_OVERRIDE_STOPPED_PATH: stoppedPath,
+    },
+    logPath: params.logPath,
+    timeoutMs: 60_000,
+  });
+
+  if (!existsSync(startedPath) || !existsSync(stoppedPath)) {
+    throw new Error("Browser control override import probe did not write both sentinels.");
+  }
+
+  return "pass";
+}
+
 function ensureLocalNpmShim(lane) {
   const shimPath = npmShimPath(lane.prefixDir);
   if (existsSync(shimPath)) {
@@ -2210,24 +2457,11 @@ async function runOnboard(params) {
     await runOpenClaw({
       lane: params.lane,
       env: params.env,
-      args: [
-        "onboard",
-        "--non-interactive",
-        "--mode",
-        "local",
-        "--auth-choice",
-        params.providerConfig.authChoice,
-        "--secret-input-mode",
-        "ref",
-        "--gateway-port",
-        String(params.lane.gatewayPort),
-        "--gateway-bind",
-        "loopback",
-        "--skip-skills",
-        "--skip-health",
-        "--accept-risk",
-        "--json",
-      ],
+      args: buildReleaseOnboardArgs({
+        authChoice: params.providerConfig.authChoice,
+        gatewayPort: params.lane.gatewayPort,
+        skipHealth: true,
+      }),
       logPath: params.logPath,
       timeoutMs: 10 * 60 * 1000,
     });
@@ -2344,7 +2578,7 @@ async function waitForGateway(params) {
         env: params.env,
         args: statusArgs,
         logPath: params.logPath,
-        timeoutMs: 20_000,
+        timeoutMs: CROSS_OS_GATEWAY_STATUS_COMMAND_TIMEOUT_MS,
         check: false,
       });
     } catch {
@@ -2360,7 +2594,9 @@ async function waitForGateway(params) {
 }
 
 function gatewayReadyDeadlineMs() {
-  return process.platform === "win32" ? 5 * 60 * 1000 : 90_000;
+  return process.platform === "win32"
+    ? CROSS_OS_WINDOWS_GATEWAY_READY_TIMEOUT_MS
+    : CROSS_OS_GATEWAY_READY_TIMEOUT_MS;
 }
 
 async function resolveGatewayStatusArgs(lane, env, logPath) {
@@ -2373,9 +2609,15 @@ async function resolveGatewayStatusArgs(lane, env, logPath) {
     check: false,
   });
   if (help.stdout.includes("--require-rpc") || help.stderr.includes("--require-rpc")) {
-    return ["gateway", "status", "--deep", "--require-rpc", "--timeout", "5000"];
+    return [
+      "gateway",
+      "status",
+      "--require-rpc",
+      "--timeout",
+      String(CROSS_OS_GATEWAY_STATUS_RPC_TIMEOUT_MS),
+    ];
   }
-  return ["gateway", "status", "--deep"];
+  return ["gateway", "status"];
 }
 
 async function runModelsSet(params) {
@@ -2386,54 +2628,130 @@ async function runModelsSet(params) {
     logPath: params.logPath,
     timeoutMs: 2 * 60 * 1000,
   });
-}
-
-async function runAgentTurn(params) {
-  const sessionId = `cross-os-release-check-${params.label}-${Date.now()}`;
-  const result = await runOpenClaw({
+  await runOpenClaw({
     lane: params.lane,
     env: params.env,
     args: [
-      "agent",
-      "--agent",
-      "main",
-      "--session-id",
-      sessionId,
-      "--message",
-      "Reply with exact ASCII text OK only.",
-      "--json",
+      "config",
+      "set",
+      "plugins.allow",
+      JSON.stringify(buildCrossOsReleaseSmokePluginAllowlist(params.providerConfig)),
+      "--strict-json",
     ],
     logPath: params.logPath,
-    timeoutMs: 10 * 60 * 1000,
+    timeoutMs: 2 * 60 * 1000,
   });
-  const payloadTexts = parseAgentPayloadTexts(result.stdout);
-  if (!payloadTexts.some((text) => text.trim() === "OK")) {
-    throw new Error("Agent output did not contain the expected OK marker.");
+  await runOpenClaw({
+    lane: params.lane,
+    env: params.env,
+    args: ["config", "set", "agents.defaults.skipBootstrap", "true", "--strict-json"],
+    logPath: params.logPath,
+    timeoutMs: 2 * 60 * 1000,
+  });
+}
+
+async function runAgentTurn(params) {
+  let lastError;
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    const sessionId = `cross-os-release-check-${params.label}-${Date.now()}-${attempt}`;
+    try {
+      const result = await runOpenClaw({
+        lane: params.lane,
+        env: params.env,
+        args: [
+          "agent",
+          "--agent",
+          "main",
+          "--session-id",
+          sessionId,
+          "--message",
+          "Reply with exact ASCII text OK only.",
+          "--thinking",
+          "minimal",
+          "--json",
+        ],
+        logPath: params.logPath,
+        timeoutMs: 10 * 60 * 1000,
+      });
+      if (!agentOutputHasExpectedOkMarker(result.stdout, { logPath: params.logPath })) {
+        throw new Error("Agent output did not contain the expected OK marker.");
+      }
+      return result;
+    } catch (error) {
+      lastError = error;
+      if (attempt >= 2 || !shouldRetryCrossOsAgentTurnError(error)) {
+        throw error;
+      }
+      appendFileSync(
+        params.logPath,
+        `\n[release-checks] retrying agent turn after bundled runtime deps staging failure: ${
+          error instanceof Error ? error.message : String(error)
+        }\n`,
+      );
+    }
   }
-  return result;
+  throw lastError;
+}
+
+export function shouldRetryCrossOsAgentTurnError(error) {
+  const message = error instanceof Error ? error.message : String(error);
+  return /failed to (?:install|stage) bundled runtime deps|failed to stage bundled runtime deps after/u.test(
+    message,
+  );
+}
+
+export function agentOutputHasExpectedOkMarker(stdout, options = {}) {
+  const payloadTexts = parseAgentPayloadTexts(stdout);
+  if (payloadTexts.some((text) => text.trim() === "OK")) {
+    return true;
+  }
+  if (typeof options.logPath !== "string") {
+    return false;
+  }
+  try {
+    const logTexts = parseAgentPayloadTexts(readFileSync(options.logPath, "utf8"));
+    return logTexts.some((text) => text.trim() === "OK");
+  } catch {
+    return false;
+  }
 }
 
 function parseAgentPayloadTexts(stdout) {
   try {
     const payload = JSON.parse(stdout);
+    const directTexts = [
+      payload?.finalAssistantVisibleText,
+      payload?.finalAssistantRawText,
+      payload?.meta?.finalAssistantVisibleText,
+      payload?.meta?.finalAssistantRawText,
+      payload?.result?.finalAssistantVisibleText,
+      payload?.result?.finalAssistantRawText,
+      payload?.result?.meta?.finalAssistantVisibleText,
+      payload?.result?.meta?.finalAssistantRawText,
+    ].filter((text): text is string => typeof text === "string");
     const entries = Array.isArray(payload?.payloads)
       ? payload.payloads
       : Array.isArray(payload?.result?.payloads)
         ? payload.result.payloads
         : [];
-    if (!Array.isArray(entries)) {
-      return [];
-    }
-    return entries.flatMap((entry) => (typeof entry?.text === "string" ? [entry.text] : []));
+    const payloadTexts = Array.isArray(entries)
+      ? entries.flatMap((entry) => (typeof entry?.text === "string" ? [entry.text] : []))
+      : [];
+    return [...directTexts, ...payloadTexts];
   } catch {
-    return stdout.trim() ? [stdout] : [];
+    const finalTextMatches = [
+      ...stdout.matchAll(
+        /"(?:finalAssistantVisibleText|finalAssistantRawText|text)"\s*:\s*"([^"]*)"/gu,
+      ),
+    ].map((match) => match[1]);
+    return finalTextMatches.length > 0 ? finalTextMatches : stdout.trim() ? [stdout] : [];
   }
 }
 
 async function runDashboardSmoke(params) {
   const dashboardUrl = `http://127.0.0.1:${params.lane.gatewayPort}/`;
   const logStream = createWriteStream(params.logPath, { flags: "a" });
-  const deadline = Date.now() + 30_000;
+  const deadline = Date.now() + CROSS_OS_DASHBOARD_SMOKE_TIMEOUT_MS;
   let attempt = 0;
   try {
     while (Date.now() < deadline) {
@@ -2441,7 +2759,7 @@ async function runDashboardSmoke(params) {
       logStream.write(`${new Date().toISOString()} attempt=${attempt} url=${dashboardUrl}\n`);
       try {
         const response = await fetch(dashboardUrl, {
-          signal: AbortSignal.timeout(5_000),
+          signal: AbortSignal.timeout(CROSS_OS_DASHBOARD_FETCH_TIMEOUT_MS),
         });
         const html = await response.text();
         if (
@@ -2559,6 +2877,10 @@ async function runOpenClaw(params) {
 
 function readInstalledPackageManifest(prefixDir) {
   const packageRoot = installedPackageRoot(prefixDir);
+  return readInstalledPackageManifestFromPackageRoot(packageRoot);
+}
+
+function readInstalledPackageManifestFromPackageRoot(packageRoot) {
   const packageJsonPath = join(packageRoot, "package.json");
   if (!existsSync(packageJsonPath)) {
     throw new Error(`Installed package manifest missing: ${packageJsonPath}`);
@@ -2576,6 +2898,15 @@ export function readInstalledVersion(prefixDir) {
 
 function readInstalledMetadata(prefixDir) {
   const { packageJson, packageRoot } = readInstalledPackageManifest(prefixDir);
+  return readInstalledMetadataFromManifest(packageJson, packageRoot);
+}
+
+function readInstalledMetadataFromPackageRoot(packageRoot) {
+  const { packageJson } = readInstalledPackageManifestFromPackageRoot(packageRoot);
+  return readInstalledMetadataFromManifest(packageJson, packageRoot);
+}
+
+function readInstalledMetadataFromManifest(packageJson, packageRoot) {
   const buildInfoPath = join(packageRoot, "dist", "build-info.json");
   if (!existsSync(buildInfoPath)) {
     throw new Error(`Installed build info missing: ${buildInfoPath}`);
@@ -2602,8 +2933,55 @@ function verifyInstalledCandidate(installed, build) {
   }
 }
 
-function installedPackageRoot(prefixDir) {
-  return process.platform === "win32"
+export function resolveInstalledPackageRootFromCliPath(
+  cliPath,
+  platform = process.platform,
+  env = process.env,
+) {
+  const prefixDir = resolveInstalledPrefixDirFromCliPath(cliPath, platform);
+  const candidates = [installedPackageRoot(prefixDir, platform)];
+
+  if (platform !== "win32") {
+    const resolvedCliPath = String(cliPath ?? "").trim();
+    if (resolvedCliPath) {
+      try {
+        const realCliPath = realpathSync(resolvedCliPath);
+        candidates.push(dirname(realCliPath));
+        candidates.push(dirname(dirname(realCliPath)));
+      } catch {
+        // Some installer shims are shell wrappers, not symlinks. Fall through to
+        // common user-local npm prefixes below.
+      }
+    }
+
+    for (const prefix of [
+      env.NPM_CONFIG_PREFIX,
+      env.npm_config_prefix,
+      env.HOME && join(env.HOME, ".npm-global"),
+      env.HOME && join(env.HOME, ".local"),
+    ]) {
+      if (typeof prefix === "string" && prefix.trim()) {
+        candidates.push(installedPackageRoot(prefix, platform));
+      }
+    }
+  }
+
+  const checked: string[] = [];
+  for (const candidate of candidates) {
+    if (!candidate || checked.includes(candidate)) {
+      continue;
+    }
+    checked.push(candidate);
+    if (existsSync(join(candidate, "package.json"))) {
+      return candidate;
+    }
+  }
+
+  throw new Error(`Installed package manifest missing. Checked: ${checked.join(", ")}`);
+}
+
+function installedPackageRoot(prefixDir, platform = process.platform) {
+  return platform === "win32"
     ? join(prefixDir, "node_modules", "openclaw")
     : join(prefixDir, "lib", "node_modules", "openclaw");
 }

@@ -1,9 +1,19 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createLocalEmbeddingProvider, DEFAULT_LOCAL_MODEL } from "./embeddings.js";
-import * as nodeLlamaModule from "./node-llama.js";
+
+const nodeLlamaMock = vi.hoisted(() => ({
+  importNodeLlamaCpp: vi.fn(),
+}));
+
+vi.mock("../../../packages/memory-host-sdk/src/host/node-llama.js", () => ({
+  importNodeLlamaCpp: nodeLlamaMock.importNodeLlamaCpp,
+}));
+vi.mock("./node-llama.js", () => ({
+  importNodeLlamaCpp: nodeLlamaMock.importNodeLlamaCpp,
+}));
 
 beforeEach(() => {
-  vi.spyOn(nodeLlamaModule, "importNodeLlamaCpp");
+  nodeLlamaMock.importNodeLlamaCpp.mockReset();
 });
 
 afterEach(() => {
@@ -16,7 +26,7 @@ function mockLocalEmbeddingRuntime(vector = new Float32Array([2.35, 3.45, 0.63, 
   const loadModel = vi.fn().mockResolvedValue({ createEmbeddingContext });
   const resolveModelFile = vi.fn(async (modelPath: string) => `/resolved/${modelPath}`);
 
-  vi.mocked(nodeLlamaModule.importNodeLlamaCpp).mockResolvedValue({
+  nodeLlamaMock.importNodeLlamaCpp.mockResolvedValue({
     getLlama: async () => ({ loadModel }),
     resolveModelFile,
     LlamaLogLevel: { error: 0 },
@@ -42,6 +52,53 @@ describe("local embedding provider", () => {
     expect(magnitude).toBeCloseTo(1, 5);
     expect(runtime.resolveModelFile).toHaveBeenCalledWith(DEFAULT_LOCAL_MODEL, undefined);
     expect(runtime.getEmbeddingFor).toHaveBeenCalledWith("test query");
+  });
+
+  it("passes default contextSize (4096) to createEmbeddingContext when not configured", async () => {
+    const runtime = mockLocalEmbeddingRuntime();
+
+    const provider = await createLocalEmbeddingProvider({
+      config: {} as never,
+      provider: "local",
+      model: "",
+      fallback: "none",
+    });
+
+    await provider.embedQuery("context size default test");
+
+    expect(runtime.createEmbeddingContext).toHaveBeenCalledWith({ contextSize: 4096 });
+  });
+
+  it("passes configured contextSize to createEmbeddingContext", async () => {
+    const runtime = mockLocalEmbeddingRuntime();
+
+    const provider = await createLocalEmbeddingProvider({
+      config: {} as never,
+      provider: "local",
+      model: "",
+      fallback: "none",
+      local: { contextSize: 2048 },
+    });
+
+    await provider.embedQuery("context size custom test");
+
+    expect(runtime.createEmbeddingContext).toHaveBeenCalledWith({ contextSize: 2048 });
+  });
+
+  it('passes "auto" contextSize to createEmbeddingContext when explicitly set', async () => {
+    const runtime = mockLocalEmbeddingRuntime();
+
+    const provider = await createLocalEmbeddingProvider({
+      config: {} as never,
+      provider: "local",
+      model: "",
+      fallback: "none",
+      local: { contextSize: "auto" },
+    });
+
+    await provider.embedQuery("context size auto test");
+
+    expect(runtime.createEmbeddingContext).toHaveBeenCalledWith({ contextSize: "auto" });
   });
 
   it("trims explicit local model paths and cache directories", async () => {

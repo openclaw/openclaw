@@ -1,18 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const sendMessageSlackMock = vi.hoisted(() => vi.fn());
-const hasHooksMock = vi.hoisted(() => vi.fn());
-const runMessageSendingMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./send.js", () => ({
   sendMessageSlack: (...args: unknown[]) => sendMessageSlackMock(...args),
-}));
-
-vi.mock("openclaw/plugin-sdk/plugin-runtime", () => ({
-  getGlobalHookRunner: () => ({
-    hasHooks: (...args: unknown[]) => hasHooksMock(...args),
-    runMessageSending: (...args: unknown[]) => runMessageSendingMock(...args),
-  }),
 }));
 
 let slackOutbound: typeof import("./outbound-adapter.js").slackOutbound;
@@ -30,9 +21,6 @@ describe("slackOutbound", () => {
 
   beforeEach(() => {
     sendMessageSlackMock.mockReset();
-    hasHooksMock.mockReset();
-    runMessageSendingMock.mockReset();
-    hasHooksMock.mockReturnValue(false);
   });
 
   it("sends payload media first, then finalizes with blocks", async () => {
@@ -128,36 +116,61 @@ describe("slackOutbound", () => {
     expect(result).toEqual({ channel: "slack", messageId: "m-blocks" });
   });
 
-  it("cancels sendMedia when message_sending hooks block it", async () => {
-    hasHooksMock.mockReturnValue(true);
-    runMessageSendingMock.mockResolvedValue({ cancel: true });
+  it("falls back to threadId when payload replyToId is not a Slack thread timestamp", async () => {
+    sendMessageSlackMock.mockResolvedValueOnce({ messageId: "m-blocks" });
 
-    const result = await slackOutbound.sendMedia!({
+    await slackOutbound.sendPayload!({
       cfg,
       to: "C123",
-      text: "caption",
-      mediaUrl: "https://example.com/image.png",
-      accountId: "default",
-      replyToId: "1712000000.000001",
-    });
-
-    expect(runMessageSendingMock).toHaveBeenCalledWith(
-      {
-        to: "C123",
-        content: "caption",
-        metadata: {
-          threadTs: "1712000000.000001",
-          channelId: "C123",
-          mediaUrl: "https://example.com/image.png",
+      text: "",
+      replyToId: "msg-internal-1",
+      threadId: "1712345678.123456",
+      payload: {
+        text: "fallback text",
+        channelData: {
+          slack: {
+            blocks: [{ type: "divider" }],
+          },
         },
       },
-      { channelId: "slack", accountId: "default" },
-    );
-    expect(sendMessageSlackMock).not.toHaveBeenCalled();
-    expect(result).toMatchObject({
-      channel: "slack",
-      messageId: "cancelled-by-hook",
-      meta: { cancelled: true },
+      accountId: "default",
     });
+
+    expect(sendMessageSlackMock).toHaveBeenCalledWith(
+      "C123",
+      "fallback text",
+      expect.objectContaining({
+        threadTs: "1712345678.123456",
+      }),
+    );
+  });
+
+  it("does not thread payloads without a valid Slack thread timestamp", async () => {
+    sendMessageSlackMock.mockResolvedValueOnce({ messageId: "m-blocks" });
+
+    await slackOutbound.sendPayload!({
+      cfg,
+      to: "C123",
+      text: "",
+      replyToId: "msg-internal-1",
+      threadId: "thread-root",
+      payload: {
+        text: "fallback text",
+        channelData: {
+          slack: {
+            blocks: [{ type: "divider" }],
+          },
+        },
+      },
+      accountId: "default",
+    });
+
+    expect(sendMessageSlackMock).toHaveBeenCalledWith(
+      "C123",
+      "fallback text",
+      expect.objectContaining({
+        threadTs: undefined,
+      }),
+    );
   });
 });

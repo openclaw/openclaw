@@ -2,6 +2,7 @@ import { createCodingTools, createReadTool } from "@mariozechner/pi-coding-agent
 import type { ModelCompatConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ToolLoopDetectionConfig } from "../config/types.tools.js";
+import type { DiagnosticTraceContext } from "../infra/diagnostic-trace-context.js";
 import { resolveMergedSafeBinProfileFixtures } from "../infra/exec-safe-bin-runtime-policy.js";
 import { logWarn } from "../logger.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
@@ -65,6 +66,7 @@ import {
   applyOwnerOnlyToolPolicy,
   collectExplicitAllowlist,
   mergeAlsoAllowPolicy,
+  normalizeToolName,
   resolveToolProfilePolicy,
 } from "./tool-policy.js";
 import { resolveWorkspaceRoot } from "./workspace-dir.js";
@@ -268,8 +270,12 @@ export function createOpenClawCodingTools(options?: {
   sessionId?: string;
   /** Stable run identifier for this agent invocation. */
   runId?: string;
+  /** Diagnostic trace context for hook/log correlation during this run. */
+  trace?: DiagnosticTraceContext;
   /** What initiated this run (for trigger-specific tool restrictions). */
   trigger?: string;
+  /** Stable cron job identifier populated for cron-triggered runs. */
+  jobId?: string;
   /** Relative workspace path that memory-triggered writes may append to. */
   memoryFlushWritePath?: string;
   agentDir?: string;
@@ -337,6 +343,11 @@ export function createOpenClawCodingTools(options?: {
   forceMessageTool?: boolean;
   /** Whether the sender is an owner (required for owner-only tools). */
   senderIsOwner?: boolean;
+  /**
+   * Additional owner-only tools authorized by a server-side runtime grant.
+   * Keep this narrowly scoped; it is not a replacement for sender ownership.
+   */
+  ownerOnlyToolAllowlist?: string[];
   /** Callback invoked when sessions_yield tool is called. */
   onYield?: (message: string) => Promise<void> | void;
 }): AnyAgentTool[] {
@@ -347,6 +358,12 @@ export function createOpenClawCodingTools(options?: {
     throw new Error("memoryFlushWritePath required for memory-triggered tool runs");
   }
   const memoryFlushWritePath = isMemoryFlushRun ? options.memoryFlushWritePath : undefined;
+  const cronSelfRemoveOnlyJobId =
+    options?.trigger === "cron" &&
+    options.jobId?.trim() &&
+    options.ownerOnlyToolAllowlist?.some((toolName) => normalizeToolName(toolName) === "cron")
+      ? options.jobId.trim()
+      : undefined;
   const {
     agentId,
     globalPolicy,
@@ -623,6 +640,7 @@ export function createOpenClawCodingTools(options?: {
       modelHasVision: options?.modelHasVision,
       requireExplicitMessageTarget: options?.requireExplicitMessageTarget,
       disableMessageTool: options?.disableMessageTool,
+      ...(cronSelfRemoveOnlyJobId ? { cronSelfRemoveOnlyJobId } : {}),
       requesterAgentIdOverride: agentId,
       requesterSenderId: options?.senderId,
       senderIsOwner: options?.senderIsOwner,
@@ -667,7 +685,11 @@ export function createOpenClawCodingTools(options?: {
   });
   // Security: treat unknown/undefined as unauthorized (opt-in, not opt-out)
   const senderIsOwner = options?.senderIsOwner === true;
-  const toolsByAuthorization = applyOwnerOnlyToolPolicy(toolsForModelProvider, senderIsOwner);
+  const toolsByAuthorization = applyOwnerOnlyToolPolicy(
+    toolsForModelProvider,
+    senderIsOwner,
+    options?.ownerOnlyToolAllowlist,
+  );
   const subagentFiltered = applyToolPolicyPipeline({
     tools: toolsByAuthorization,
     toolMeta: (tool) => getPluginToolMeta(tool),
@@ -707,6 +729,7 @@ export function createOpenClawCodingTools(options?: {
       sessionKey: options?.sessionKey,
       sessionId: options?.sessionId,
       runId: options?.runId,
+      ...(options?.trace ? { trace: options.trace } : {}),
       loopDetection: resolveToolLoopDetectionConfig({ cfg: options?.config, agentId }),
     }),
   );

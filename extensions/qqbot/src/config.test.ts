@@ -1,7 +1,7 @@
 import fs from "node:fs";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { type JsonSchemaObject, validateJsonSchemaValue } from "openclaw/plugin-sdk/config-schema";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { describe, expect, it } from "vitest";
-import { validateJsonSchemaValue } from "../../../src/plugins/schema-validator.js";
 import { qqbotSetupAdapterShared } from "./bridge/config-shared.js";
 import {
   DEFAULT_ACCOUNT_ID,
@@ -16,7 +16,7 @@ describe("qqbot config", () => {
   it("accepts top-level speech overrides in the manifest schema", () => {
     const manifest = JSON.parse(
       fs.readFileSync(new URL("../openclaw.plugin.json", import.meta.url), "utf-8"),
-    ) as { configSchema: Record<string, unknown> };
+    ) as { configSchema: JsonSchemaObject };
 
     const result = validateJsonSchemaValue({
       schema: manifest.configSchema,
@@ -37,7 +37,7 @@ describe("qqbot config", () => {
   it("accepts defaultAccount in the manifest schema", () => {
     const manifest = JSON.parse(
       fs.readFileSync(new URL("../openclaw.plugin.json", import.meta.url), "utf-8"),
-    ) as { configSchema: Record<string, unknown> };
+    ) as { configSchema: JsonSchemaObject };
 
     const result = validateJsonSchemaValue({
       schema: manifest.configSchema,

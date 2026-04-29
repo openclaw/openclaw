@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
   pushMessageMock,
@@ -50,7 +50,7 @@ vi.mock("@line/bot-sdk", () => ({
   messagingApi: { MessagingApiClient: MessagingApiClientMock },
 }));
 
-vi.mock("openclaw/plugin-sdk/config-runtime", () => ({
+vi.mock("openclaw/plugin-sdk/plugin-config-runtime", () => ({
   requireRuntimeConfig: requireRuntimeConfigMock,
 }));
 
@@ -62,7 +62,7 @@ vi.mock("./channel-access-token.js", () => ({
   resolveLineChannelAccessToken: resolveLineChannelAccessTokenMock,
 }));
 
-vi.mock("openclaw/plugin-sdk/infra-runtime", () => ({
+vi.mock("openclaw/plugin-sdk/channel-activity-runtime", () => ({
   recordChannelActivity: recordChannelActivityMock,
 }));
 
@@ -93,8 +93,11 @@ const LINE_TEST_CFG = {
 };
 
 describe("LINE send helpers", () => {
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeAll(async () => {
+    sendModule = await import("./send.js");
+  });
+
+  beforeEach(() => {
     pushMessageMock.mockReset();
     replyMessageMock.mockReset();
     showLoadingAnimationMock.mockReset();
@@ -125,7 +128,6 @@ describe("LINE send helpers", () => {
     pushMessageMock.mockResolvedValue({});
     replyMessageMock.mockResolvedValue({});
     showLoadingAnimationMock.mockResolvedValue({});
-    sendModule = await import("./send.js");
   });
 
   afterEach(() => {

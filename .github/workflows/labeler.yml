@@ -30,7 +30,7 @@ jobs:
     permissions:
       contents: read
       pull-requests: write
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/create-github-app-token@v3
         id: app-token
@@ -278,6 +278,7 @@ jobs:
             const labelColor = "B60205";
             const labelDescription = `Author has more than ${activePrLimit} active PRs in this repo`;
             const authorLogin = pullRequest.user?.login;
+            const headRefName = pullRequest.head?.ref ?? "";
             if (!authorLogin) {
               return;
             }
@@ -374,7 +375,10 @@ jobs:
               return false;
             };
 
-            if (await isPrivilegedAuthor()) {
+            const isClownfishPullRequest =
+              typeof headRefName === "string" && headRefName.startsWith("clownfish/");
+
+            if ((await isPrivilegedAuthor()) || isClownfishPullRequest) {
               if (labelNames.has(activePrLimitLabel)) {
                 try {
                   await github.rest.issues.removeLabel({
@@ -439,7 +443,7 @@ jobs:
     permissions:
       contents: read
       pull-requests: write
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/create-github-app-token@v3
         id: app-token
@@ -737,7 +741,7 @@ jobs:
   label-issues:
     permissions:
       issues: write
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/create-github-app-token@v3
         id: app-token
