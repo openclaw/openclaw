@@ -39,6 +39,7 @@ const MINTLIFY_LANGUAGE_CODES = new Set([
   "nl",
   "uk",
   "vi",
+  "fa",
   "pl",
   "uz",
   "he",

@@ -719,11 +719,16 @@ export const ja_JP: TranslationMap = {
     jaJP: "日本語（Japanese）",
     ko: "한국어（Korean）",
     fr: "Français（French）",
+    ar: "العربية (Arabic)",
+    it: "Italiano (Italian)",
     tr: "Türkçe（Turkish）",
     uk: "Українська（ウクライナ語）",
     id: "Bahasa Indonesia（Indonesian）",
     pl: "Polski（Polish）",
     th: "ไทย (Thai)",
+    vi: "Tiếng Việt (Vietnamese)",
+    nl: "Nederlands (Dutch)",
+    fa: "فارسی (Persian)",
   },
   cron: {
     summary: {

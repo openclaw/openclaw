@@ -720,11 +720,16 @@ export const uk: TranslationMap = {
     jaJP: "日本語 (японська)",
     ko: "한국어 (корейська)",
     fr: "Français (французька)",
+    ar: "العربية (Arabic)",
+    it: "Italiano (Italian)",
     tr: "Türkçe (турецька)",
     uk: "Українська (українська)",
     id: "Bahasa Indonesia (індонезійська)",
     pl: "Polski (польська)",
     th: "ไทย (тайська)",
+    vi: "Tiếng Việt (Vietnamese)",
+    nl: "Nederlands (Dutch)",
+    fa: "فارسی (Persian)",
   },
   cron: {
     summary: {

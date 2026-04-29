@@ -702,11 +702,16 @@ export const zh_CN: TranslationMap = {
     jaJP: "日本語（Japanese）",
     ko: "한국어（Korean）",
     fr: "Français（French）",
+    ar: "العربية (Arabic)",
+    it: "Italiano (Italian)",
     tr: "Türkçe（Turkish）",
     uk: "乌克兰语（Ukrainian）",
     id: "Bahasa Indonesia（Indonesian）",
     pl: "Polski（Polish）",
     th: "ไทย (泰语)",
+    vi: "Tiếng Việt (Vietnamese)",
+    nl: "Nederlands (Dutch)",
+    fa: "فارسی (Persian)",
   },
   cron: {
     summary: {
