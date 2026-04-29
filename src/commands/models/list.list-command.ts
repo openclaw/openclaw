@@ -3,6 +3,7 @@ import type { ModelRegistry } from "@mariozechner/pi-coding-agent";
 import { parseModelRef } from "../../agents/model-selection.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
+import { createModelListAuthIndex } from "./list.auth-index.js";
 import { resolveConfiguredEntries } from "./list.configured.js";
 import { formatErrorWithStack } from "./list.errors.js";
 import { printModelTable } from "./list.table.js";
@@ -75,6 +76,7 @@ export async function modelsListCommand(
   });
   const authStore = loadAuthProfileStoreWithoutExternalProfiles();
   const agentDir = resolveOpenClawAgentDir();
+  const authIndex = createModelListAuthIndex({ cfg, authStore });
 
   let modelRegistry: ModelRegistry | undefined;
   let registryModels: Model<Api>[] = [];
@@ -126,7 +128,7 @@ export async function modelsListCommand(
   const buildRowContext = (skipRuntimeModelSuppression: boolean) => ({
     cfg,
     agentDir,
-    authStore,
+    authIndex,
     availableKeys,
     configuredByKey,
     discoveredKeys,
