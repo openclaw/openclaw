@@ -134,6 +134,112 @@ describe("buildOpenAISpeechProvider", () => {
     });
   });
 
+  it("parses preferred-OpenAI speed directive within the supported range", () => {
+    const provider = buildOpenAISpeechProvider();
+
+    expect(
+      provider.parseDirectiveToken?.({
+        key: "speed",
+        value: "1.5",
+        policy: {
+          allowVoice: true,
+          allowModelId: true,
+          allowVoiceSettings: true,
+        },
+        providerConfig: {
+          baseUrl: "https://api.openai.com/v1/",
+        },
+      } as never),
+    ).toEqual({
+      handled: true,
+      overrides: { speed: 1.5 },
+    });
+  });
+
+  it("parses explicit openai_speed alias", () => {
+    const provider = buildOpenAISpeechProvider();
+
+    expect(
+      provider.parseDirectiveToken?.({
+        key: "openai_speed",
+        value: "0.75",
+        policy: {
+          allowVoice: true,
+          allowModelId: true,
+          allowVoiceSettings: true,
+        },
+        providerConfig: {
+          baseUrl: "https://api.openai.com/v1/",
+        },
+      } as never),
+    ).toEqual({
+      handled: true,
+      overrides: { speed: 0.75 },
+    });
+  });
+
+  it("ignores OpenAI speed directives when allowVoiceSettings is disabled", () => {
+    const provider = buildOpenAISpeechProvider();
+
+    expect(
+      provider.parseDirectiveToken?.({
+        key: "speed",
+        value: "1.5",
+        policy: {
+          allowVoice: true,
+          allowModelId: true,
+          allowVoiceSettings: false,
+        },
+        providerConfig: {
+          baseUrl: "https://api.openai.com/v1/",
+        },
+      } as never),
+    ).toEqual({
+      handled: true,
+    });
+  });
+
+  it("warns on non-numeric OpenAI speed values", () => {
+    const provider = buildOpenAISpeechProvider();
+
+    expect(
+      provider.parseDirectiveToken?.({
+        key: "speed",
+        value: "fast",
+        policy: {
+          allowVoice: true,
+          allowModelId: true,
+          allowVoiceSettings: true,
+        },
+        providerConfig: {
+          baseUrl: "https://api.openai.com/v1/",
+        },
+      } as never),
+    ).toEqual({
+      handled: true,
+      warnings: ["invalid speed value"],
+    });
+  });
+
+  it("rejects OpenAI speed values outside the supported 0.25..4 range", () => {
+    const provider = buildOpenAISpeechProvider();
+
+    expect(() =>
+      provider.parseDirectiveToken?.({
+        key: "speed",
+        value: "5",
+        policy: {
+          allowVoice: true,
+          allowModelId: true,
+          allowVoiceSettings: true,
+        },
+        providerConfig: {
+          baseUrl: "https://api.openai.com/v1/",
+        },
+      } as never),
+    ).toThrow("speed must be between 0.25 and 4");
+  });
+
   it("preserves talk responseFormat overrides", () => {
     const provider = buildOpenAISpeechProvider();
 

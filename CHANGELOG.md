@@ -26,6 +26,7 @@ Docs: https://docs.openclaw.ai
 - Control UI/chat: collapse consecutive duplicate text messages into one bubble with a count so no-op heartbeat acknowledgements stay compact without hiding nearby context.
 - Agents/subagents: preserve every grouped child result when direct completion fallback has to bypass the requester-agent announce turn. Thanks @vincentkoc.
 - TTS/telephony: honor provider voice/model overrides in telephony synthesis providers so Google Meet agent speech logs match the backend that actually produced the audio. Thanks @vincentkoc.
+- OpenAI TTS: forward `[[tts:speed=N]]` model directives to the OpenAI speech provider, gated on `allowVoiceSettings` and bounded to OpenAI's `0.25..4` range, so speech-rate directives now work on OpenAI like they already do on ElevenLabs. Fixes #12163. Thanks @useramuser.
 - Voice Call/realtime: bound the paced Twilio audio queue and close overloaded realtime streams before provider audio can pile up behind the websocket backpressure guard. Thanks @vincentkoc.
 - Tools/BTW: add `/side` as a text and native slash-command alias for `/btw` side questions.
 - Doctor/config: `doctor --fix` now commits safe legacy migrations even when unrelated validation issues (e.g. a missing plugin) prevent full validation from passing, so `agents.defaults.llm` and other known-legacy keys are always cleaned up by `doctor --fix` regardless of other config problems. Fixes #76798. (#76800) Thanks @hclsys.

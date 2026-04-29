@@ -5,6 +5,7 @@ import type {
   SpeechProviderOverrides,
   SpeechProviderPlugin,
 } from "openclaw/plugin-sdk/speech";
+import { requireInRange } from "openclaw/plugin-sdk/speech";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -188,6 +189,11 @@ function renderOpenAITtsPersonaInstructions(req: {
   return lines.length > 0 ? lines.join("\n") : undefined;
 }
 
+function parseNumberValue(value: string): number | undefined {
+  const parsed = Number.parseFloat(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
 function parseDirectiveToken(ctx: SpeechDirectiveTokenParseContext): {
   handled: boolean;
   overrides?: SpeechProviderOverrides;
@@ -215,6 +221,19 @@ function parseDirectiveToken(ctx: SpeechDirectiveTokenParseContext): {
         return { handled: false };
       }
       return { handled: true, overrides: { model: ctx.value } };
+    case "speed":
+    case "openai_speed":
+    case "openaispeed": {
+      if (!ctx.policy.allowVoiceSettings) {
+        return { handled: true };
+      }
+      const value = parseNumberValue(ctx.value);
+      if (value == null) {
+        return { handled: true, warnings: ["invalid speed value"] };
+      }
+      requireInRange(value, 0.25, 4, "speed");
+      return { handled: true, overrides: { speed: value } };
+    }
     default:
       return { handled: false };
   }
