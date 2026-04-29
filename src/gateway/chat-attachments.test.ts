@@ -391,6 +391,23 @@ describe("parseMessageWithAttachments validation errors", () => {
     expect(saveMediaBufferMock).not.toHaveBeenCalled();
   });
 
+  it("rejects non-video payloads renamed with a supported video extension", async () => {
+    const pdf = Buffer.from("%PDF-1.4\n1 0 obj\n<<>>\nendobj\n").toString("base64");
+    let caught: unknown;
+    try {
+      await parseMessageWithAttachments(
+        "x",
+        [{ type: "file", mimeType: "video/mp4", fileName: "clip.mp4", content: pdf }],
+        { log: { warn: () => {} }, supportsVideos: true },
+      );
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(UnsupportedAttachmentError);
+    expect((caught as UnsupportedAttachmentError).reason).toBe("unsupported-video");
+    expect(saveMediaBufferMock).not.toHaveBeenCalled();
+  });
+
   it("rejects generic-container payloads mislabeled as images when acceptNonImage is false", async () => {
     const docx = Buffer.from("PK\u0003\u0004fake-docx-content").toString("base64");
     let caught: unknown;

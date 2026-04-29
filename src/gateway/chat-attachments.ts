@@ -326,12 +326,24 @@ export async function parseMessageWithAttachments(
       }
 
       const isImage = isImageMime(normalizedFinalMime);
-      const hasVideoSignal =
-        isVideoMime(normalizedFinalMime) || isKnownChatVideoAttachmentFileName(label);
+      const finalMimeIsVideo = isVideoMime(normalizedFinalMime);
+      const finalMimeIsSupportedVideo = isSupportedChatVideoAttachmentMimeType(normalizedFinalMime);
+      const labelIsSupportedVideo = isSupportedChatVideoAttachmentFileName(label);
+      const labelIsKnownVideo = isKnownChatVideoAttachmentFileName(label);
+      const hasConcreteNonVideoMime =
+        Boolean(normalizedFinalMime) &&
+        !isGenericContainerMime(normalizedFinalMime) &&
+        !finalMimeIsVideo;
+      const hasConflictingVideoLabelMime = labelIsSupportedVideo && hasConcreteNonVideoMime;
+      const hasVideoSignal = finalMimeIsVideo || labelIsKnownVideo;
       const supportedVideo =
-        isSupportedChatVideoAttachmentMimeType(normalizedFinalMime) ||
-        isSupportedChatVideoAttachmentFileName(label);
-      if (hasVideoSignal && (!supportedVideo || isUnsupportedChatVideoAttachmentFileName(label))) {
+        finalMimeIsSupportedVideo || (labelIsSupportedVideo && !hasConflictingVideoLabelMime);
+      if (
+        hasVideoSignal &&
+        (hasConflictingVideoLabelMime ||
+          !supportedVideo ||
+          isUnsupportedChatVideoAttachmentFileName(label))
+      ) {
         throw new UnsupportedAttachmentError(
           "unsupported-video",
           `attachment ${label}: unsupported video format (${normalizedFinalMime}); supported video formats are ${SUPPORTED_CHAT_VIDEO_ATTACHMENT_FORMAT_LABEL}`,

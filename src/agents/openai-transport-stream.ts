@@ -263,17 +263,26 @@ function convertResponsesMessages(
           content: [{ type: "input_text", text: sanitizeTransportPayloadText(msg.content) }],
         });
       } else {
-        const content = (
-          msg.content.map((item) =>
-            item.type === "text"
-              ? { type: "input_text", text: sanitizeTransportPayloadText(item.text) }
-              : {
-                  type: "input_image",
-                  detail: "auto",
-                  image_url: `data:${item.mimeType};base64,${item.data}`,
-                },
-          ) as ResponseInputMessageContentList
-        ).filter((item) => model.input.includes("image") || item.type !== "input_image");
+        const rawContent: ResponseInputMessageContentList = [];
+        for (const item of msg.content) {
+          if (item.type === "text") {
+            rawContent.push({
+              type: "input_text",
+              text: sanitizeTransportPayloadText(item.text),
+            });
+            continue;
+          }
+          if (item.type === "image") {
+            rawContent.push({
+              type: "input_image",
+              detail: "auto",
+              image_url: `data:${item.mimeType};base64,${item.data}`,
+            });
+          }
+        }
+        const content = rawContent.filter(
+          (item) => model.input.includes("image") || item.type !== "input_image",
+        ) as ResponseInputMessageContentList;
         if (content.length > 0) {
           messages.push({ role: "user", content });
         }

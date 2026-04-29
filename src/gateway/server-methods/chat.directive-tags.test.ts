@@ -2733,7 +2733,12 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     });
 
     expect(mockState.lastDispatchImages).toEqual([
-      { type: "video", mimeType: "video/mp4", data: video },
+      {
+        type: "video",
+        mimeType: "video/mp4",
+        data: video,
+        fallbackPath: "/home/user/.openclaw/media/inbound/clip.mp4",
+      },
     ]);
     expect(mockState.lastDispatchCtx?.MediaPaths).toBeUndefined();
     expect(mockState.lastDispatchCtx?.MediaPath).toBeUndefined();

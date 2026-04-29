@@ -448,6 +448,52 @@ export function modelSupportsImages(model: { input?: string[] }): boolean {
   return model.input?.includes("image") ?? false;
 }
 
+export function modelSupportsVideos(model: { input?: string[] }): boolean {
+  return model.input?.includes("video") ?? false;
+}
+
+function formatPromptMediaFallbackNote(media: PromptMediaContent): string | undefined {
+  if (media.type !== "video" || !media.fallbackPath?.trim()) {
+    return undefined;
+  }
+  const path = media.fallbackPath
+    .trim()
+    .replace(/[\p{Cc}\]]+/gu, " ")
+    .replace(/\s+/g, " ");
+  const mimeType = media.mimeType
+    .trim()
+    .replace(/[\p{Cc}\]]+/gu, " ")
+    .replace(/\s+/g, " ");
+  const typePart = mimeType ? ` (${mimeType})` : "";
+  return `[media attached: ${path}${typePart}]`;
+}
+
+function filterExistingPromptMediaForModel(params: {
+  media: readonly PromptMediaContent[] | undefined;
+  supportsImages: boolean;
+  supportsVideos: boolean;
+}): { media: PromptMediaContent[]; fallbackNotes: string[] } {
+  const media: PromptMediaContent[] = [];
+  const fallbackNotes: string[] = [];
+  for (const item of params.media ?? []) {
+    if (item.type === "image") {
+      if (params.supportsImages) {
+        media.push(item);
+      }
+      continue;
+    }
+    if (params.supportsVideos) {
+      media.push(item);
+      continue;
+    }
+    const note = formatPromptMediaFallbackNote(item);
+    if (note) {
+      fallbackNotes.push(note);
+    }
+  }
+  return { media, fallbackNotes };
+}
+
 /**
  * Detects and loads images referenced in a prompt for models with vision capability.
  *
@@ -471,14 +517,23 @@ export async function detectAndLoadPromptImages(params: {
 }): Promise<{
   /** Images for the current prompt (existingImages + detected in current prompt) */
   images: PromptMediaContent[];
+  fallbackMediaNotes: string[];
   detectedRefs: DetectedImageRef[];
   loadedCount: number;
   skippedCount: number;
 }> {
-  // If model doesn't support images, return empty results
-  if (!modelSupportsImages(params.model)) {
+  const supportsImages = modelSupportsImages(params.model);
+  const supportsVideos = modelSupportsVideos(params.model);
+  const existingMedia = filterExistingPromptMediaForModel({
+    media: params.existingImages,
+    supportsImages,
+    supportsVideos,
+  });
+
+  if (!supportsImages) {
     return {
-      images: params.existingImages ?? [],
+      images: existingMedia.media,
+      fallbackMediaNotes: existingMedia.fallbackNotes,
       detectedRefs: [],
       loadedCount: 0,
       skippedCount: 0,
@@ -490,7 +545,8 @@ export async function detectAndLoadPromptImages(params: {
 
   if (allRefs.length === 0) {
     return {
-      images: params.existingImages ?? [],
+      images: existingMedia.media,
+      fallbackMediaNotes: existingMedia.fallbackNotes,
       detectedRefs: [],
       loadedCount: 0,
       skippedCount: 0,
@@ -541,7 +597,7 @@ export async function detectAndLoadPromptImages(params: {
 
   const promptMedia = mergePromptAttachmentImages({
     imageOrder: params.imageOrder,
-    existingImages: params.existingImages,
+    existingImages: existingMedia.media,
     offloadedImages,
     promptRefImages,
   });
@@ -557,6 +613,7 @@ export async function detectAndLoadPromptImages(params: {
 
   return {
     images: sanitizedPromptMedia,
+    fallbackMediaNotes: existingMedia.fallbackNotes,
     detectedRefs: allRefs,
     loadedCount,
     skippedCount,

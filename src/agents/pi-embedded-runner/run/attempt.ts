@@ -365,6 +365,15 @@ export {
 
 const MAX_BTW_SNAPSHOT_MESSAGES = 100;
 
+function appendFallbackMediaNotes(prompt: string, notes: readonly string[]): string {
+  const cleanNotes = notes.map((note) => note.trim()).filter(Boolean);
+  if (cleanNotes.length === 0) {
+    return prompt;
+  }
+  const suffix = cleanNotes.join("\n");
+  return prompt.trim() ? `${prompt}\n${suffix}` : suffix;
+}
+
 export function resolveUnknownToolGuardThreshold(loopDetection?: {
   enabled?: boolean;
   unknownToolThreshold?: number;
@@ -2506,15 +2515,19 @@ export async function runEmbeddedAttempt(
                 ? { root: sandbox.workspaceDir, bridge: sandbox.fsBridge }
                 : undefined,
           });
+          const promptForModel = appendFallbackMediaNotes(
+            promptSubmission.prompt,
+            imageResult.fallbackMediaNotes,
+          );
 
           cacheTrace?.recordStage("prompt:images", {
-            prompt: promptSubmission.prompt,
+            prompt: promptForModel,
             messages: activeSession.messages,
             note: `images: prompt=${imageResult.images.length}`,
           });
           trajectoryRecorder?.recordEvent("context.compiled", {
             systemPrompt: systemPromptText,
-            prompt: promptSubmission.prompt,
+            prompt: promptForModel,
             messages: activeSession.messages,
             tools: toTrajectoryToolDefinitions(effectiveTools),
             imagesCount: imageResult.images.length,
@@ -2527,7 +2540,7 @@ export async function runEmbeddedAttempt(
             !skipPromptSubmission &&
             !promptSubmission.runtimeOnly &&
             !hasPromptSubmissionContent({
-              prompt: promptSubmission.prompt,
+              prompt: promptForModel,
               messages: activeSession.messages,
               imageCount: imageResult.images.length,
             })
@@ -2540,7 +2553,7 @@ export async function runEmbeddedAttempt(
             );
             trajectoryRecorder?.recordEvent("prompt.skipped", {
               reason: "empty_prompt_history_images",
-              prompt: promptSubmission.prompt,
+              prompt: promptForModel,
               messages: activeSession.messages,
               imagesCount: imageResult.images.length,
             });
@@ -2706,9 +2719,9 @@ export async function runEmbeddedAttempt(
             if (normalizedReplayMessages !== activeSession.messages) {
               activeSession.agent.state.messages = normalizedReplayMessages;
             }
-            finalPromptText = promptSubmission.prompt;
+            finalPromptText = promptForModel;
             trajectoryRecorder?.recordEvent("prompt.submitted", {
-              prompt: promptSubmission.prompt,
+              prompt: promptForModel,
               systemPrompt: systemPromptText,
               messages: activeSession.messages,
               imagesCount: imageResult.images.length,
@@ -2717,10 +2730,10 @@ export async function runEmbeddedAttempt(
             updateActiveEmbeddedRunSnapshot(params.sessionId, {
               transcriptLeafId,
               messages: btwSnapshotMessages,
-              inFlightPrompt: promptSubmission.prompt,
+              inFlightPrompt: promptForModel,
             });
             if (promptSubmission.runtimeOnly) {
-              await abortable(activeSession.prompt(promptSubmission.prompt));
+              await abortable(activeSession.prompt(promptForModel));
             } else {
               const runtimeContext = promptSubmission.runtimeContext?.trim();
               const runtimeSystemPrompt = runtimeContext
@@ -2742,11 +2755,9 @@ export async function runEmbeddedAttempt(
                 // This avoids potential issues with models that don't expect the images parameter
                 if (imageResult.images.length > 0) {
                   const promptMedia = imageResult.images as unknown as ImageContent[];
-                  await abortable(
-                    activeSession.prompt(promptSubmission.prompt, { images: promptMedia }),
-                  );
+                  await abortable(activeSession.prompt(promptForModel, { images: promptMedia }));
                 } else {
-                  await abortable(activeSession.prompt(promptSubmission.prompt));
+                  await abortable(activeSession.prompt(promptForModel));
                 }
               } finally {
                 if (runtimeSystemPrompt) {

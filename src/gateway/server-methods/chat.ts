@@ -828,6 +828,7 @@ async function prestageMediaPathOffloads(params: {
   offloadedRefs: OffloadedRef[];
   includeImageRefs?: boolean;
   includeVideoRefs?: boolean;
+  cleanupOnError?: boolean;
   cfg: OpenClawConfig;
   sessionKey: string;
   agentId: string;
@@ -911,9 +912,11 @@ async function prestageMediaPathOffloads(params: {
     // resolves them via ctx.MediaWorkspaceDir, which we carry separately.
     return { paths: stagedPaths, types: stagedTypes, workspaceDir: sandbox.workspaceDir };
   } catch (err) {
-    await Promise.allSettled(
-      params.offloadedRefs.map((ref) => deleteMediaBuffer(ref.id, "inbound")),
-    );
+    if (params.cleanupOnError !== false) {
+      await Promise.allSettled(
+        params.offloadedRefs.map((ref) => deleteMediaBuffer(ref.id, "inbound")),
+      );
+    }
     if (err instanceof MediaOffloadError) {
       throw err;
     }
@@ -1925,6 +1928,7 @@ export const chatHandlers: GatewayRequestHandlers = {
     let mediaPathOffloadPaths: string[] = [];
     let mediaPathOffloadTypes: string[] = [];
     let mediaPathOffloadWorkspaceDir: string | undefined;
+    let nativeVideoFallbackPaths: string[] = [];
     const timeoutMs = resolveAgentTimeoutMs({
       cfg,
       overrideMs: p.timeoutMs,
@@ -2056,6 +2060,27 @@ export const chatHandlers: GatewayRequestHandlers = {
           sessionKey,
           agentId,
         }));
+        if (parsedVideos.length > 0) {
+          const videoOffloadedRefs = offloadedRefs.filter((ref) =>
+            ref.mimeType.startsWith("video/"),
+          );
+          try {
+            ({ paths: nativeVideoFallbackPaths } = await prestageMediaPathOffloads({
+              offloadedRefs: videoOffloadedRefs,
+              includeImageRefs: false,
+              includeVideoRefs: true,
+              cleanupOnError: false,
+              cfg,
+              sessionKey,
+              agentId,
+            }));
+          } catch (err) {
+            context.logGateway.warn(
+              `[Gateway] chat.send could not stage native video fallback path: ${formatErrorMessage(err)}`,
+            );
+            nativeVideoFallbackPaths = [];
+          }
+        }
       } catch (err) {
         respond(
           false,
@@ -2104,6 +2129,12 @@ export const chatHandlers: GatewayRequestHandlers = {
         client,
         logGateway: context.logGateway,
       });
+      for (const [index, video] of parsedVideos.entries()) {
+        const fallbackPath = nativeVideoFallbackPaths[index];
+        if (fallbackPath) {
+          video.fallbackPath = fallbackPath;
+        }
+      }
       const promptMedia: PromptMediaContent[] = [...parsedImages, ...parsedVideos];
       const pluginBoundMediaFields =
         explicitOriginTargetsPlugin && (promptMedia.length > 0 || offloadedRefs.length > 0)

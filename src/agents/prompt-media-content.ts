@@ -8,6 +8,7 @@ export type PromptVideoContent = {
   type: "video";
   data: string;
   mimeType: string;
+  fallbackPath?: string;
 };
 
 export type PromptMediaContent = PromptImageContent | PromptVideoContent;

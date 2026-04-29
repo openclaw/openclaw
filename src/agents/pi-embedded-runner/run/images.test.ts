@@ -10,6 +10,7 @@ import {
   loadImageFromRef,
   mergePromptAttachmentImages,
   modelSupportsImages,
+  modelSupportsVideos,
   splitPromptAndAttachmentRefs,
 } from "./images.js";
 
@@ -239,6 +240,16 @@ describe("modelSupportsImages", () => {
   });
 });
 
+describe("modelSupportsVideos", () => {
+  it("returns true when model input includes video", () => {
+    expect(modelSupportsVideos({ input: ["text", "video"] })).toBe(true);
+  });
+
+  it("returns false when model input does not include video", () => {
+    expect(modelSupportsVideos({ input: ["text", "image"] })).toBe(false);
+  });
+});
+
 describe("loadImageFromRef", () => {
   it("allows sandbox-validated host paths outside default media roots", async () => {
     const homeDir = os.homedir();
@@ -286,6 +297,56 @@ describe("detectAndLoadPromptImages", () => {
     });
 
     expectNoPromptImages(result);
+    expect(result.fallbackMediaNotes).toEqual([]);
+  });
+
+  it("preserves native video attachments for video-capable models without image input", async () => {
+    const result = await detectAndLoadPromptImages({
+      prompt: "watch this",
+      workspaceDir: "/tmp",
+      model: { input: ["text", "video"] },
+      existingImages: [
+        {
+          type: "video",
+          data: "dmktYnl0ZXM=",
+          mimeType: "video/mp4",
+          fallbackPath: "media/inbound/clip.mp4",
+        },
+      ],
+    });
+
+    expect(result.images).toEqual([
+      {
+        type: "video",
+        data: "dmktYnl0ZXM=",
+        mimeType: "video/mp4",
+        fallbackPath: "media/inbound/clip.mp4",
+      },
+    ]);
+    expect(result.fallbackMediaNotes).toEqual([]);
+    expect(result.detectedRefs).toHaveLength(0);
+  });
+
+  it("converts unsupported native video attachments into fallback media notes", async () => {
+    const result = await detectAndLoadPromptImages({
+      prompt: "watch this",
+      workspaceDir: "/tmp",
+      model: { input: ["text"] },
+      existingImages: [
+        {
+          type: "video",
+          data: "dmktYnl0ZXM=",
+          mimeType: "video/mp4",
+          fallbackPath: "media/inbound/clip.mp4",
+        },
+      ],
+    });
+
+    expect(result.images).toEqual([]);
+    expect(result.fallbackMediaNotes).toEqual([
+      "[media attached: media/inbound/clip.mp4 (video/mp4)]",
+    ]);
+    expect(result.detectedRefs).toHaveLength(0);
   });
 
   it("returns no detected refs when prompt has no image references", async () => {
