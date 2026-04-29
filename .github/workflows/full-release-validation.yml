@@ -82,8 +82,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: full-release-validation-${{ inputs.ref }}
-  cancel-in-progress: ${{ inputs.ref == 'main' }}
+  group: full-release-validation-${{ inputs.ref }}-${{ inputs.rerun_group }}
+  cancel-in-progress: true
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
