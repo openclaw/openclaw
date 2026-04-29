@@ -183,6 +183,21 @@ describe("duckduckgo web search provider", () => {
     ]);
   });
 
+  it("preserves invalid numeric entities while parsing results", () => {
+    const html = `
+      <a class="result__a" href="https://example.com/?q=&#9999999999;">Bad &#x110000;</a>
+      <a class="result__snippet">Snippet &#128512;</a>
+    `;
+
+    expect(ddgClientTesting.parseDuckDuckGoHtml(html)).toEqual([
+      {
+        title: "Bad &#x110000;",
+        url: "https://example.com/?q=&#9999999999;",
+        snippet: "Snippet \u{1F600}",
+      },
+    ]);
+  });
+
   it("detects bot challenge pages without flagging ordinary result snippets", () => {
     const challengeHtml = `
       <html>
