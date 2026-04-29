@@ -824,7 +824,8 @@ function buildRefAssignmentOperation(params: {
     requestedPath: params.requestedPath,
     setPath: params.requestedPath,
     value: params.ref,
-    schemaValidated: true,
+    // Only registry-known SecretRef targets have had their schema shape validated here.
+    ...(resolved ? { schemaValidated: true } : {}),
     touchedSecretTargetPath: resolved
       ? toDotPath(resolved.pathSegments)
       : toDotPath(params.requestedPath),
