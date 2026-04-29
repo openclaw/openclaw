@@ -9,10 +9,10 @@ run_setup_entry_scenario() {
 
   echo "Running bundled channel setup-entry runtime deps Docker E2E..."
   run_logged_print bundled-channel-setup-entry timeout "$DOCKER_RUN_TIMEOUT" docker run --rm \
+    "${DOCKER_E2E_HARNESS_ARGS[@]}" \
     -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
     -e "OPENCLAW_TEST_STATE_SCRIPT_B64=$state_script_b64" \
     "${DOCKER_E2E_PACKAGE_ARGS[@]}" \
-    "${DOCKER_E2E_HARNESS_ARGS[@]}" \
     -i "$IMAGE_NAME" bash -s <<'EOF'
 set -euo pipefail
 

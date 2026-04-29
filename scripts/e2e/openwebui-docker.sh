@@ -49,7 +49,6 @@ cleanup() {
 trap cleanup EXIT
 
 docker_e2e_build_or_reuse "$IMAGE_NAME" openwebui
-docker_e2e_harness_mount_args
 
 echo "Pulling Open WebUI image: $OPENWEBUI_IMAGE"
 timeout "$DOCKER_PULL_TIMEOUT" docker pull "$OPENWEBUI_IMAGE" >/dev/null
@@ -59,7 +58,9 @@ docker_cmd docker network create "$NET_NAME" >/dev/null
 
 echo "Starting gateway container..."
 # Harness files are mounted read-only; the app under test comes from /app/dist.
+docker_e2e_harness_mount_args
 docker_cmd docker run -d \
+  "${DOCKER_E2E_HARNESS_ARGS[@]}" \
   --name "$GW_NAME" \
   --network "$NET_NAME" \
   -e "OPENCLAW_GATEWAY_TOKEN=$TOKEN" \
@@ -70,7 +71,6 @@ docker_cmd docker run -d \
   -e "OPENCLAW_SKIP_CANVAS_HOST=1" \
   -e OPENAI_API_KEY \
   ${OPENAI_BASE_URL_VALUE:+-e OPENAI_BASE_URL} \
-  "${DOCKER_E2E_HARNESS_ARGS[@]}" \
   "$IMAGE_NAME" \
   bash -lc '
     set -euo pipefail

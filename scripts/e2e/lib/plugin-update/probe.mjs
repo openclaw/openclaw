@@ -2,6 +2,7 @@ import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
+import { legacyPackageAcceptanceCompat } from "../package-compat.mjs";
 
 const home = os.homedir();
 
@@ -24,14 +25,6 @@ const pluginRecordSnapshot = () => {
   const { source, spec, resolvedName, resolvedVersion, resolvedSpec, integrity, shasum } = record;
   return { source, spec, resolvedName, resolvedVersion, resolvedSpec, integrity, shasum };
 };
-
-function legacyCompat(version) {
-  const match = /^(\d{4})\.(\d{1,2})\.(\d{1,2})(?:[-+].*)?/.exec(version);
-  const [year, month, day] = match?.slice(1, 4).map(Number) ?? [];
-  return (
-    Boolean(match) && (year < 2026 || (year === 2026 && (month < 4 || (month === 4 && day <= 25))))
-  );
-}
 
 function openclawPath(...parts) {
   return path.join(home, ".openclaw", ...parts);
@@ -121,7 +114,7 @@ function assertOutput(logPath) {
 
 const [command, arg] = process.argv.slice(2);
 const commands = {
-  "legacy-compat": () => console.log(legacyCompat(arg || "") ? "1" : "0"),
+  "legacy-compat": () => console.log(legacyPackageAcceptanceCompat(arg || "") ? "1" : "0"),
   seed: seedInstallState,
   "wait-registry": waitRegistry,
   snapshot: () => process.stdout.write(JSON.stringify(pluginRecordSnapshot(), null, 2)),

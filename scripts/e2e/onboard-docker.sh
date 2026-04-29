@@ -7,12 +7,10 @@ IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-onboard-e2e" OPENCLAW_ONBOARD_E
 OPENCLAW_TEST_STATE_FUNCTION_B64="$(docker_e2e_test_state_function_b64)"
 
 docker_e2e_build_or_reuse "$IMAGE_NAME" onboard
-docker_e2e_harness_mount_args
 
 echo "Running onboarding E2E..."
-docker run --rm -t \
+docker_e2e_run_with_harness -t \
   -e "OPENCLAW_TEST_STATE_FUNCTION_B64=$OPENCLAW_TEST_STATE_FUNCTION_B64" \
-  "${DOCKER_E2E_HARNESS_ARGS[@]}" \
   "$IMAGE_NAME" bash -lc '
   set -euo pipefail
 	  trap "" PIPE

@@ -41,11 +41,12 @@ EOF
   echo "Building Docker image: $IMAGE_NAME"
   docker_build_run browser-cdp-snapshot-build -t "$IMAGE_NAME" -f "$build_dir/Dockerfile" "$build_dir"
 fi
-docker_e2e_harness_mount_args
 OPENCLAW_TEST_STATE_SCRIPT_B64="$(docker_e2e_test_state_shell_b64 browser-cdp-snapshot empty)"
 
 echo "Starting browser CDP snapshot container..."
+docker_e2e_harness_mount_args
 docker_cmd docker run -d \
+  "${DOCKER_E2E_HARNESS_ARGS[@]}" \
   --name "$CONTAINER_NAME" \
   -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
   -e OPENCLAW_GATEWAY_TOKEN="$TOKEN" \
@@ -56,7 +57,6 @@ docker_cmd docker run -d \
   -e OPENCLAW_SKIP_CRON=1 \
   -e OPENCLAW_SKIP_CANVAS_HOST=1 \
   -e "OPENCLAW_TEST_STATE_SCRIPT_B64=$OPENCLAW_TEST_STATE_SCRIPT_B64" \
-  "${DOCKER_E2E_HARNESS_ARGS[@]}" \
   "$IMAGE_NAME" \
   bash -lc "set -euo pipefail
 source scripts/lib/openclaw-e2e-instance.sh
