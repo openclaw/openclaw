@@ -37,7 +37,28 @@
           "trace": { "type": "string", "enum": ["enabled", "disabled", "enabled_full"] }
         },
         "required": ["guardrailIdentifier", "guardrailVersion"]
-      }
+      },
+      "awsAuthentication": {
+        "type": "string",
+        "enum": ["apikey", "profile", "credentials", "default"],
+        "default": "default"
+      },
+      "awsBedrockApiKey": { "type": "string" },
+      "awsProfile": { "type": "string" },
+      "awsAccessKey": { "type": "string" },
+      "awsSecretKey": { "type": "string" },
+      "awsSessionToken": { "type": "string" },
+      "awsRegion": { "type": "string", "default": "us-east-1" },
+      "awsBedrockEndpoint": { "type": "string" },
+      "awsUseCrossRegionInference": { "type": "boolean", "default": true },
+      "awsUseGlobalInference": { "type": "boolean", "default": true },
+      "awsBedrockUsePromptCache": { "type": "boolean", "default": true },
+      "reasoningEffort": {
+        "type": "string",
+        "enum": ["none", "low", "medium", "high"]
+      },
+      "thinkingBudgetTokens": { "type": "integer", "minimum": 0 },
+      "enable1MContext": { "type": "boolean", "default": false }
     }
   },
   "configContracts": {
@@ -75,6 +96,62 @@
     "guardrail": {
       "label": "Guardrail",
       "help": "Amazon Bedrock Guardrails settings applied to Bedrock model invocations."
+    },
+    "awsAuthentication": {
+      "label": "AWS Authentication Mode",
+      "help": "Explicit Bedrock auth mode: apikey, profile, credentials, or default (AWS SDK credential chain)."
+    },
+    "awsBedrockApiKey": {
+      "label": "AWS Bedrock API Key",
+      "help": "Bedrock bearer token used when awsAuthentication is apikey. Falls back to AWS_BEARER_TOKEN_BEDROCK."
+    },
+    "awsProfile": {
+      "label": "AWS Profile",
+      "help": "Named profile from ~/.aws/credentials used when awsAuthentication is profile."
+    },
+    "awsAccessKey": {
+      "label": "AWS Access Key",
+      "help": "Static AWS access key used when awsAuthentication is credentials."
+    },
+    "awsSecretKey": {
+      "label": "AWS Secret Key",
+      "help": "Static AWS secret key used when awsAuthentication is credentials."
+    },
+    "awsSessionToken": {
+      "label": "AWS Session Token",
+      "help": "Optional STS session token used when awsAuthentication is credentials."
+    },
+    "awsRegion": {
+      "label": "AWS Region",
+      "help": "AWS region for Bedrock runtime calls. Defaults to us-east-1."
+    },
+    "awsBedrockEndpoint": {
+      "label": "AWS Bedrock Endpoint",
+      "help": "Optional VPC endpoint URL for Bedrock runtime. Used for private connectivity."
+    },
+    "awsUseCrossRegionInference": {
+      "label": "Use Cross-Region Inference",
+      "help": "Enable Bedrock cross-region inference profiles (regional, for example us.anthropic.*)."
+    },
+    "awsUseGlobalInference": {
+      "label": "Use Global Inference",
+      "help": "Enable Bedrock global inference profiles (for example global.anthropic.*)."
+    },
+    "awsBedrockUsePromptCache": {
+      "label": "Enable Bedrock Prompt Cache",
+      "help": "Inject Bedrock Converse prompt cache points when the model supports caching."
+    },
+    "reasoningEffort": {
+      "label": "Reasoning Effort",
+      "help": "Reasoning effort hint for models that support it: none, low, medium, or high."
+    },
+    "thinkingBudgetTokens": {
+      "label": "Thinking Budget Tokens",
+      "help": "Extended thinking token budget for reasoning-enabled Claude models."
+    },
+    "enable1MContext": {
+      "label": "Enable 1M Context",
+      "help": "Enable 1M-token context beta for supported Claude Opus models."
     }
   }
 }
