@@ -384,9 +384,37 @@ describe("bundled plugin root runtime mirrors", () => {
             },
           ],
         ]),
-        rootPackageJson: { dependencies: { "@larksuiteoapi/node-sdk": "^1.61.0" } },
+        rootPackageJson: {
+          dependencies: { "@larksuiteoapi/node-sdk": "^1.61.0" },
+          openclaw: {
+            bundle: {
+              mirroredRootRuntimeDependencies: ["@larksuiteoapi/node-sdk"],
+            },
+          },
+        },
       }),
     ).toEqual([]);
+  });
+
+  it("flags root mirrors omitted from mirrored root runtime metadata", () => {
+    expect(
+      collectBundledPluginRootRuntimeMirrorErrors({
+        bundledRuntimeDependencySpecs: makeBundledSpecs(),
+        requiredRootMirrors: new Map([
+          [
+            "@larksuiteoapi/node-sdk",
+            {
+              importers: new Set(["probe-Cz2PiFtC.js"]),
+              pluginIds: ["feishu"],
+              spec: "^1.60.0",
+            },
+          ],
+        ]),
+        rootPackageJson: { dependencies: { "@larksuiteoapi/node-sdk": "^1.60.0" } },
+      }),
+    ).toEqual([
+      "installed package root mirror '@larksuiteoapi/node-sdk' for dist importers: probe-Cz2PiFtC.js is missing from package.json openclaw.bundle.mirroredRootRuntimeDependencies. Add it there so packaged runtime installs the mirrored dependency, or keep imports under dist/extensions/feishu/.",
+    ]);
   });
 
   it("accepts matching root mirrors for plugin deps imported by root dist", () => {
@@ -403,7 +431,14 @@ describe("bundled plugin root runtime mirrors", () => {
             },
           ],
         ]),
-        rootPackageJson: { dependencies: { "@larksuiteoapi/node-sdk": "^1.60.0" } },
+        rootPackageJson: {
+          dependencies: { "@larksuiteoapi/node-sdk": "^1.60.0" },
+          openclaw: {
+            bundle: {
+              mirroredRootRuntimeDependencies: ["@larksuiteoapi/node-sdk"],
+            },
+          },
+        },
       }),
     ).toEqual([]);
   });
