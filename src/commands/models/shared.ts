@@ -153,12 +153,17 @@ export function upsertCanonicalModelConfigEntry(
 ) {
   const key = modelKey(params.provider, params.model);
   const legacyKey = legacyModelKey(params.provider, params.model);
-  if (!models[key]) {
-    if (legacyKey && models[legacyKey]) {
-      models[key] = models[legacyKey];
-    } else {
-      models[key] = {};
-    }
+  if (legacyKey && models[legacyKey]) {
+    models[key] = {
+      ...models[legacyKey],
+      ...models[key],
+      params: {
+        ...(models[legacyKey].params ?? {}),
+        ...(models[key]?.params ?? {}),
+      },
+    };
+  } else if (!models[key]) {
+    models[key] = {};
   }
   if (legacyKey) {
     delete models[legacyKey];
