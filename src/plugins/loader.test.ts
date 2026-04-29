@@ -3285,6 +3285,39 @@ module.exports = { id: "throws-after-import", register() {} };`,
     expect(registry.plugins).toEqual([]);
   });
 
+  it("skips discovery and manifest registry loading entirely when onlyPluginIds is an explicit empty array", async () => {
+    useNoBundledPlugins();
+    const allowed = writePlugin({
+      id: "allowed-empty-scope",
+      filename: "allowed-empty-scope.cjs",
+      body: `module.exports = { id: "allowed-empty-scope", register() {} };`,
+    });
+
+    const discovery = await import("./discovery.js");
+    const manifestRegistry = await import("./manifest-registry.js");
+    const discoverySpy = vi.spyOn(discovery, "discoverOpenClawPlugins");
+    const manifestSpy = vi.spyOn(manifestRegistry, "loadPluginManifestRegistry");
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      activate: false,
+      config: {
+        plugins: {
+          load: { paths: [allowed.file] },
+          allow: ["allowed-empty-scope"],
+        },
+      },
+      onlyPluginIds: [],
+    });
+
+    expect(registry.plugins).toEqual([]);
+    expect(discoverySpy).not.toHaveBeenCalled();
+    expect(manifestSpy).not.toHaveBeenCalled();
+
+    discoverySpy.mockRestore();
+    manifestSpy.mockRestore();
+  });
+
   it("only publishes plugin commands to the global registry during activating loads", async () => {
     useNoBundledPlugins();
     const plugin = writePlugin({
