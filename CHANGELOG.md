@@ -2229,6 +2229,7 @@ Docs: https://docs.openclaw.ai
 - Memory/active-memory: default QMD recall to search and surface better search-path telemetry so memory-backed recall works more predictably out of the box. (#65068) Thanks @Takhoffman.
 - Docs/providers: expand bundled provider docs with richer capability, env-var, and setup guidance across provider pages.
 - Docs/memory-wiki: add the recommended QMD + bridge-mode hybrid recipe plus zero-artifact troubleshooting guidance for `memory-wiki` bridge setups. (#63165) Thanks @sercada and @vincentkoc.
+- Agents/commitments: add default-on inferred follow-up commitments with hidden batched extraction, per-agent/per-channel scoping, heartbeat delivery, CLI management, and heartbeat-interval due-time clamping so magical check-ins do not echo immediately. (#74189) Thanks @vignesh07.
 
 ### Fixes
 

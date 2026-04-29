@@ -1615,6 +1615,46 @@ describe("doctor config flow", () => {
     expect(result.cfg.plugins?.entries?.browser?.enabled).toBe(true);
   });
 
+  it("preserves commitments config on repair", async () => {
+    const result = await runDoctorConfigWithInput({
+      repair: true,
+      config: {
+        commitments: {
+          enabled: true,
+          categories: {
+            careCheckIns: "gentle",
+            eventCheckIns: false,
+          },
+          extraction: {
+            enabled: true,
+            batchMaxItems: 4,
+          },
+          delivery: {
+            maxPerHeartbeat: 2,
+            expireAfterHours: 48,
+          },
+        },
+      },
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    expect(result.cfg.commitments).toEqual({
+      enabled: true,
+      categories: {
+        careCheckIns: "gentle",
+        eventCheckIns: false,
+      },
+      extraction: {
+        enabled: true,
+        batchMaxItems: 4,
+      },
+      delivery: {
+        maxPerHeartbeat: 2,
+        expireAfterHours: 48,
+      },
+    });
+  });
+
   it("preserves discord streaming intent while stripping unsupported keys on repair", async () => {
     const result = await runDoctorConfigWithInput({
       repair: true,
