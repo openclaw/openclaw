@@ -12,7 +12,7 @@ const validRule = {
 };
 
 describe("check-opengrep-rule-metadata", () => {
-  it("accepts compiled GHSA rules with durable source metadata", () => {
+  it("accepts GHSA-backed rules with durable source metadata", () => {
     expect(validateRuleMetadata([validRule])).toEqual([]);
   });
 
@@ -33,7 +33,23 @@ describe("check-opengrep-rule-metadata", () => {
     ]);
   });
 
-  it("keeps the GHSA id, rule id, and advisory URL consistent", () => {
+  it("accepts non-GHSA source-backed rules with durable source metadata", () => {
+    expect(
+      validateRuleMetadata([
+        {
+          id: "cve-2026-12345.source-rule",
+          metadata: {
+            "advisory-id": "CVE-2026-12345",
+            "advisory-url": "https://example.test/advisories/CVE-2026-12345",
+            "detector-bucket": "precise",
+            "source-rule-id": "source-rule",
+          },
+        },
+      ]),
+    ).toEqual([]);
+  });
+
+  it("keeps the source id, rule id, and GHSA advisory URL consistent", () => {
     expect(
       validateRuleMetadata([
         {
@@ -47,7 +63,7 @@ describe("check-opengrep-rule-metadata", () => {
         },
       ]),
     ).toEqual([
-      "ghsa-1234-abcd-5678.source-rule: metadata.ghsa (GHSA-9999-ABCD-5678) must match GHSA component in id (ghsa-1234-abcd-5678)",
+      "ghsa-1234-abcd-5678.source-rule: source id in metadata (GHSA-9999-ABCD-5678) must match source id in rule id (ghsa-1234-abcd-5678)",
       "ghsa-1234-abcd-5678.source-rule: metadata.advisory-url must be https://github.com/openclaw/openclaw/security/advisories/GHSA-9999-ABCD-5678",
     ]);
   });

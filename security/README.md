@@ -1,10 +1,10 @@
 # Security tooling
 
 This directory holds OpenClaw's shipped OpenGrep security rulepack and the
-supporting tooling that validates and runs it. Maintainer-only GHSA advisory
-triage and detector-generation prompts live outside the public repo; this repo
-keeps the durable artifacts needed to block regressions in PRs and support local
-rule validation.
+supporting tooling that validates and runs it. Maintainer-only advisory triage
+and detector-generation prompts live outside the public repo; this repo keeps the
+durable artifacts needed to block regressions in PRs and support local rule
+validation.
 
 ## Layout
 
@@ -36,9 +36,8 @@ node security/opengrep/compile-rules.mjs \
   --rules-dir <folder-with-source-rule-yaml>
 ```
 
-Commit the resulting `security/opengrep/precise.yml` diff. The compile manifest
-is written into the source rules directory as a local troubleshooting artifact.
-Durable rule provenance lives in each compiled rule's metadata and is checked by
+Commit the resulting `security/opengrep/precise.yml` diff. Durable rule
+provenance lives in each compiled rule's metadata and is checked by
 `pnpm check:opengrep-rule-metadata`.
 
 Rule quality contract: precise rules must catch the vulnerable behavior they were
@@ -125,12 +124,13 @@ To drop a noisy rule:
 To narrow a rule's path scope, edit the source rule's `paths.include` /
 `paths.exclude` fields in the same local artifact location and recompile.
 
-## Tracing a finding back to its advisory
+## Tracing a finding back to its source
 
-Every compiled rule's `id` is `ghsa-xxxx-xxxx-xxxx.<original-id>` and its
-`metadata` includes `ghsa`, `advisory-url`, `detector-bucket`, and
-`source-rule-id`. New compilations also add `source-file` when available.
-`pnpm check:opengrep-rule-metadata` enforces the durable source fields so each
-committed rule is traceable without a separate committed manifest. The compile
-manifest is written into the source rules directory for audit and debugging of a
-specific compile run.
+Every compiled rule's `id` is `<source-id>.<original-id>`. For GHSA-backed rules,
+`<source-id>` is the lower-case GHSA ID. For other source-backed rules, use a
+stable source identifier without dots such as a CVE, OSV ID, internal advisory ID, or other
+review identifier. Rule `metadata` must include `advisory-url`,
+`detector-bucket`, and `source-rule-id`, plus either `ghsa` or `advisory-id`.
+New compilations also add `source-file` when available.
+`pnpm check:opengrep-rule-metadata` enforces these durable source fields so each
+committed rule is traceable without a separate committed manifest.

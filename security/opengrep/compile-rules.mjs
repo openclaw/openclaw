@@ -5,7 +5,7 @@
  * Compiles source OpenGrep rule YAML files from a folder into OpenClaw's shipped
  * precise super-config. The input folder is intentionally generic: any nested
  * .yml/.yaml file containing a top-level `rules` array can be compiled as long
- * as each rule carries metadata.ghsa.
+ * as each rule carries metadata.ghsa or metadata.advisory-id.
  */
 
 import { spawn } from "node:child_process";
@@ -27,7 +27,6 @@ function printHelp() {
 Options:
   --rules-dir <path>     Required. Directory containing source OpenGrep YAML files.
   --out-dir <path>       Output directory for precise.yml (default: <repo>/security/opengrep).
-  --manifest-dir <path>  Directory for compile-manifest.json (default: <rules-dir>).
   --advisory-repo <r>    GitHub owner/repo used in advisory-url metadata.
                          Default: ${REPO_BASENAME}
   --replace-precise      Replace precise.yml instead of appending new rule ids.
@@ -39,7 +38,6 @@ function parseArgs(argv) {
   const opts = {
     rulesDir: "",
     outDir: "",
-    manifestDir: "",
     advisoryRepo: REPO_BASENAME,
     replacePrecise: false,
   };
@@ -56,10 +54,6 @@ function parseArgs(argv) {
         );
       case "--out-dir":
         opts.outDir = path.resolve(argv[i + 1] ?? "");
-        i += 1;
-        break;
-      case "--manifest-dir":
-        opts.manifestDir = path.resolve(argv[i + 1] ?? "");
         i += 1;
         break;
       case "--advisory-repo":
@@ -93,13 +87,21 @@ function sanitizeIdComponent(value) {
   );
 }
 
-function normalizeGhsa(value) {
+function normalizeSourceId(value) {
   return String(value || "")
     .trim()
     .toUpperCase();
 }
 
-function buildAdvisoryUrl(advisoryRepo, ghsa) {
+function sanitizeSourceIdComponent(value) {
+  return sanitizeIdComponent(value).replace(/[.]+/g, "-");
+}
+
+function sourceIdFromMetadata(metadata) {
+  return normalizeSourceId(metadata?.["advisory-id"] || metadata?.ghsa);
+}
+
+function buildGhsaAdvisoryUrl(advisoryRepo, ghsa) {
   return `https://github.com/${advisoryRepo}/security/advisories/${ghsa}`;
 }
 
@@ -114,20 +116,29 @@ function toPortablePath(filePath, repoRoot = REPO_ROOT) {
 
 function rewriteRule(rule, params) {
   const originalId = String(rule.id ?? "rule");
-  const ghsa = normalizeGhsa(rule.metadata?.ghsa);
-  if (!GHSA_RE.test(ghsa)) {
+  const metadata = { ...(rule.metadata ?? {}) };
+  const sourceId = sourceIdFromMetadata(metadata);
+  if (!sourceId) {
     throw new Error(
-      `${params.sourceFile}: rule ${originalId} must set metadata.ghsa to GHSA-XXXX-XXXX-XXXX`,
+      `${params.sourceFile}: rule ${originalId} must set metadata.advisory-id or metadata.ghsa`,
     );
   }
-  const metadata = { ...(rule.metadata ?? {}) };
-  metadata.ghsa = ghsa;
-  metadata["advisory-url"] =
-    metadata["advisory-url"] || buildAdvisoryUrl(params.advisoryRepo, ghsa);
+
+  if (GHSA_RE.test(sourceId)) {
+    metadata.ghsa = sourceId;
+    metadata["advisory-url"] =
+      metadata["advisory-url"] || buildGhsaAdvisoryUrl(params.advisoryRepo, sourceId);
+  } else if (!metadata["advisory-url"]) {
+    throw new Error(
+      `${params.sourceFile}: rule ${originalId} must set metadata.advisory-url for non-GHSA source ${sourceId}`,
+    );
+  }
+
+  metadata["advisory-id"] = sourceId;
   metadata["detector-bucket"] = "precise";
   metadata["source-rule-id"] = originalId;
   metadata["source-file"] = toPortablePath(params.sourceFile);
-  const newId = `${ghsa.toLowerCase()}.${sanitizeIdComponent(originalId)}`;
+  const newId = `${sanitizeSourceIdComponent(sourceId)}.${sanitizeIdComponent(originalId)}`;
   return { ...rule, id: newId, metadata };
 }
 
@@ -552,20 +563,11 @@ async function writeOutputs(buckets, manifest, outDir, opts) {
   manifest.totals.preciseInvalid = droppedDetails.length;
   manifest.preciseInvalid = droppedDetails;
   manifest.preciseDuplicateSkipped = appendResult.skippedDuplicateIds;
-
-  const manifestDir = opts.manifestDir || opts.rulesDir;
-  await fs.mkdir(manifestDir, { recursive: true });
-  const manifestPath = path.join(manifestDir, "compile-manifest.json");
-  manifest.output = { precisePath, manifestPath };
-  await fs.writeFile(manifestPath, JSON.stringify(manifest, null, 2) + "\n");
 }
 
 function printSummary(buckets, manifest, outDir) {
   console.log(`compile-rules: done`);
   console.log(`  out-dir          : ${outDir}`);
-  if (manifest.output?.manifestPath) {
-    console.log(`  manifest         : ${manifest.output.manifestPath}`);
-  }
   console.log(`  files scanned    : ${manifest.totals.filesScanned}`);
   console.log(`  files with rules : ${manifest.totals.filesWithAnyRule}`);
   console.log(
@@ -579,7 +581,7 @@ function printSummary(buckets, manifest, outDir) {
       console.log(`  [precise] ${s.file}: yaml: ${s.error.split("\n")[0]}`);
     }
     for (const s of (buckets.precise.invalid ?? []).slice(0, 3)) {
-      console.log(`  [precise] ${s.ghsa}: schema-invalid id=${s.id}`);
+      console.log(`  [precise] ${s.id}: schema-invalid`);
     }
   }
 }

@@ -5,12 +5,12 @@ import { parseDocument } from "yaml";
 
 const DEFAULT_RULEPACK = path.resolve("security", "opengrep", "precise.yml");
 const GHSA_RE = /^GHSA-[0-9A-Z]{4}-[0-9A-Z]{4}-[0-9A-Z]{4}$/;
-const RULE_ID_RE = /^(ghsa-[0-9a-z]{4}-[0-9a-z]{4}-[0-9a-z]{4})\..+$/;
+const RULE_ID_RE = /^([a-z0-9][a-z0-9_-]*)\..+$/;
 
 function printHelp() {
   console.log(`Usage: node security/opengrep/check-rule-metadata.mjs [rulepack.yml]
 
-Checks that every compiled GHSA OpenGrep rule carries source/provenance metadata.
+Checks that every compiled OpenGrep rule carries source/provenance metadata.
 Default rulepack: ${DEFAULT_RULEPACK}
 `);
 }
@@ -34,6 +34,19 @@ function hasNonEmptyString(value) {
   return typeof value === "string" && value.trim().length > 0;
 }
 
+function sanitizeIdComponent(value) {
+  return (
+    String(value || "")
+      .replace(/[^a-zA-Z0-9._-]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .toLowerCase() || "rule"
+  );
+}
+
+function sanitizeSourceIdComponent(value) {
+  return sanitizeIdComponent(value).replace(/[.]+/g, "-");
+}
+
 export function validateRuleMetadata(rules) {
   const violations = [];
 
@@ -48,26 +61,37 @@ export function validateRuleMetadata(rules) {
 
     const idMatch = id.match(RULE_ID_RE);
     if (!idMatch) {
-      violations.push(`${label}: id must match ghsa-xxxx-xxxx-xxxx.<source-rule-id>`);
+      violations.push(`${label}: id must match <source-id>.<source-rule-id>`);
     }
 
     const ghsa = String(metadata.ghsa ?? "");
-    if (!GHSA_RE.test(ghsa)) {
-      violations.push(`${label}: metadata.ghsa must match GHSA-XXXX-XXXX-XXXX`);
-    } else if (idMatch && idMatch[1] !== ghsa.toLowerCase()) {
+    const advisoryId = String(metadata["advisory-id"] ?? metadata.ghsa ?? "")
+      .trim()
+      .toUpperCase();
+    if (!hasNonEmptyString(advisoryId)) {
+      violations.push(`${label}: missing metadata.advisory-id or metadata.ghsa`);
+    } else if (idMatch && idMatch[1] !== sanitizeSourceIdComponent(advisoryId)) {
       violations.push(
-        `${label}: metadata.ghsa (${ghsa}) must match GHSA component in id (${idMatch[1]})`,
+        `${label}: source id in metadata (${advisoryId}) must match source id in rule id (${idMatch[1]})`,
+      );
+    }
+
+    if (ghsa && !GHSA_RE.test(ghsa)) {
+      violations.push(`${label}: metadata.ghsa must match GHSA-XXXX-XXXX-XXXX when present`);
+    } else if (ghsa && advisoryId !== ghsa) {
+      violations.push(
+        `${label}: metadata.advisory-id must match metadata.ghsa when both are present`,
       );
     }
 
     const advisoryUrl = String(metadata["advisory-url"] ?? "");
-    const expectedUrl = ghsa
-      ? `https://github.com/openclaw/openclaw/security/advisories/${ghsa}`
+    const expectedGhsaUrl = GHSA_RE.test(advisoryId)
+      ? `https://github.com/openclaw/openclaw/security/advisories/${advisoryId}`
       : "";
     if (!hasNonEmptyString(advisoryUrl)) {
       violations.push(`${label}: missing metadata.advisory-url`);
-    } else if (expectedUrl && advisoryUrl !== expectedUrl) {
-      violations.push(`${label}: metadata.advisory-url must be ${expectedUrl}`);
+    } else if (expectedGhsaUrl && advisoryUrl !== expectedGhsaUrl) {
+      violations.push(`${label}: metadata.advisory-url must be ${expectedGhsaUrl}`);
     }
 
     if (metadata["detector-bucket"] !== "precise") {
