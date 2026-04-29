@@ -5,6 +5,7 @@ export type SkillConfig = {
   apiKey?: SecretInput;
   env?: Record<string, string>;
   config?: Record<string, unknown>;
+  [customField: string]: unknown;
 };
 
 export type SkillsLoadConfig = {

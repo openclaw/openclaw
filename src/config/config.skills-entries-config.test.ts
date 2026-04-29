@@ -20,12 +20,29 @@ describe("skills entries config schema", () => {
     expect(res.success).toBe(true);
   });
 
-  it("rejects unknown top-level fields", () => {
+  it("accepts custom top-level fields for per-skill extension config", () => {
     const res = OpenClawSchema.safeParse({
       skills: {
         entries: {
           "custom-skill": {
-            url: "https://example.invalid",
+            enabled: true,
+            api_endpoint: "https://example.invalid",
+            user_api_key: "abc123",
+            nested: { mode: "fast" },
+          },
+        },
+      },
+    });
+
+    expect(res.success).toBe(true);
+  });
+
+  it("still validates known top-level fields", () => {
+    const res = OpenClawSchema.safeParse({
+      skills: {
+        entries: {
+          "custom-skill": {
+            enabled: "yes",
           },
         },
       },
@@ -39,8 +56,8 @@ describe("skills entries config schema", () => {
     expect(
       res.error.issues.some(
         (issue) =>
-          issue.path.join(".") === "skills.entries.custom-skill" &&
-          issue.message.toLowerCase().includes("unrecognized"),
+          issue.path.join(".") === "skills.entries.custom-skill.enabled" &&
+          issue.message.toLowerCase().includes("boolean"),
       ),
     ).toBe(true);
   });
