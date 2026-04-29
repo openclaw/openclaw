@@ -411,7 +411,15 @@ export async function runPreflightCompactionIfNeeded(params: {
   }
 
   const isCli = isCliProvider(params.followupRun.run.provider, params.cfg);
-  if (params.isHeartbeat || isCli) {
+  // `/new` and hard `/reset` clear the session entirely via `commands-core.ts`
+  // reset hooks, so running a 60-360s preflight compaction WRITE lock
+  // before the reset hook gets a chance is wasted work, and on Discord
+  // it busts the 30s `InteractionEventListener` timeout (#74227).
+  // `/reset soft` preserves the current transcript, so it stays on the normal
+  // compaction path. Use the same prompt-prefix shape that `get-reply.ts:523`
+  // and `get-reply-fast-path.ts:231` use for canonical reset detection.
+  const isResetCommand = /^\/(new|reset(?!\s+soft\b))(?:\s|$)/i.test(params.followupRun.prompt ?? "");
+  if (params.isHeartbeat || isCli || isResetCommand) {
     return entry ?? params.sessionEntry;
   }
 

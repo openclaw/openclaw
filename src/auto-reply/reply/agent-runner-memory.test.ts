@@ -605,4 +605,159 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(flushCall.bootstrapPromptWarningSignaturesSeen).toEqual(["sig-a", "sig-b"]);
     expect(flushCall.bootstrapPromptWarningSignature).toBe("sig-b");
   });
+
+  it("skips preflight compaction for /new and /reset reset commands (#74227)", async () => {
+    const sessionFile = path.join(rootDir, "reset-cmd-session.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      `${JSON.stringify({ message: { role: "user", content: "x".repeat(256) } })}\n`,
+      "utf8",
+    );
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      sessionFile,
+      updatedAt: Date.now(),
+      totalTokens: 10,
+      totalTokensFresh: true,
+      compactionCount: 0,
+    };
+    const sessionStore = { main: sessionEntry };
+    const replyOperation = createReplyOperation();
+
+    for (const prompt of ["/new", "/reset", "/reset hard", "/NEW some-arg"]) {
+      compactEmbeddedPiSessionMock.mockClear();
+      const followupRun = createTestFollowupRun({
+        sessionId: "session",
+        sessionFile,
+        sessionKey: "main",
+      });
+      followupRun.prompt = prompt;
+      const entry = await runPreflightCompactionIfNeeded({
+        cfg: {
+          agents: {
+            defaults: {
+              compaction: {
+                truncateAfterCompaction: true,
+                maxActiveTranscriptBytes: "10b",
+              },
+            },
+          },
+        },
+        followupRun,
+        defaultModel: "anthropic/claude-opus-4-6",
+        agentCfgContextTokens: 100_000,
+        sessionEntry,
+        sessionStore,
+        sessionKey: "main",
+        storePath: path.join(rootDir, "sessions.json"),
+        isHeartbeat: false,
+        replyOperation,
+      });
+
+      expect(entry).toBe(sessionEntry);
+      expect(compactEmbeddedPiSessionMock).not.toHaveBeenCalled();
+    }
+  });
+
+  it("still runs preflight compaction for prompts that merely contain /new mid-string (#74227)", async () => {
+    const sessionFile = path.join(rootDir, "midstring-session.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      `${JSON.stringify({ message: { role: "user", content: "x".repeat(256) } })}\n`,
+      "utf8",
+    );
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      sessionFile,
+      updatedAt: Date.now(),
+      totalTokens: 10,
+      totalTokensFresh: true,
+      compactionCount: 0,
+    };
+    const sessionStore = { main: sessionEntry };
+    const replyOperation = createReplyOperation();
+    compactEmbeddedPiSessionMock.mockClear();
+
+    const followupRun = createTestFollowupRun({
+      sessionId: "session",
+      sessionFile,
+      sessionKey: "main",
+    });
+    followupRun.prompt = "tell me about /new and /reset commands";
+    const entry = await runPreflightCompactionIfNeeded({
+      cfg: {
+        agents: {
+          defaults: {
+            compaction: {
+              truncateAfterCompaction: true,
+              maxActiveTranscriptBytes: "10b",
+            },
+          },
+        },
+      },
+      followupRun,
+      defaultModel: "anthropic/claude-opus-4-6",
+      agentCfgContextTokens: 100_000,
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+      storePath: path.join(rootDir, "sessions.json"),
+      isHeartbeat: false,
+      replyOperation,
+    });
+
+    expect(entry?.compactionCount).toBe(1);
+    expect(compactEmbeddedPiSessionMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("still runs preflight compaction for /reset soft since it preserves the transcript (#74227)", async () => {
+    const sessionFile = path.join(rootDir, "soft-reset-session.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      `${JSON.stringify({ message: { role: "user", content: "x".repeat(256) } })}\n`,
+      "utf8",
+    );
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      sessionFile,
+      updatedAt: Date.now(),
+      totalTokens: 10,
+      totalTokensFresh: true,
+      compactionCount: 0,
+    };
+    const sessionStore = { main: sessionEntry };
+    const replyOperation = createReplyOperation();
+    compactEmbeddedPiSessionMock.mockClear();
+
+    const followupRun = createTestFollowupRun({
+      sessionId: "session",
+      sessionFile,
+      sessionKey: "main",
+    });
+    followupRun.prompt = "/reset soft";
+    const entry = await runPreflightCompactionIfNeeded({
+      cfg: {
+        agents: {
+          defaults: {
+            compaction: {
+              truncateAfterCompaction: true,
+              maxActiveTranscriptBytes: "10b",
+            },
+          },
+        },
+      },
+      followupRun,
+      defaultModel: "anthropic/claude-opus-4-6",
+      agentCfgContextTokens: 100_000,
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+      storePath: path.join(rootDir, "sessions.json"),
+      isHeartbeat: false,
+      replyOperation,
+    });
+
+    expect(entry?.compactionCount).toBe(1);
+    expect(compactEmbeddedPiSessionMock).toHaveBeenCalledTimes(1);
+  });
 });
