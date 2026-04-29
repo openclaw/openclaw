@@ -4,13 +4,17 @@ name: OpenGrep — Precise
 # detector-review pipeline. These rules each correspond to a specific GHSA
 # advisory and ship with `metadata.detector-bucket: precise`. Rules are
 # expected to have real coverage of the original vulnerable line they were
-# written for; some noise is acceptable.
+# written for and must stay low-noise enough to block PRs.
 #
-# This workflow is manual-dispatch only. It uploads SARIF to GitHub Code
+# This workflow runs on PRs and main. It uploads SARIF to GitHub Code
 # Scanning under category `opengrep-precise` so findings show up in the
 # Security tab without colliding with CodeQL.
 
 on:
+  pull_request:
+  push:
+    branches:
+      - main
   workflow_dispatch:
 
 concurrency:
@@ -49,30 +53,20 @@ jobs:
         run: opengrep --version
 
       - name: Run opengrep
-        # `continue-on-error` so findings never block the workflow. The intent
-        # is to surface signal in the Security tab, not gate merges (yet).
-        # Scan first-party source dirs only — node_modules/, vendor/, assets/,
-        # test-fixtures/ etc. are deliberately excluded. Per-rule `paths.include`
-        # filters in the compiled rulepack scope each rule further.
-        continue-on-error: true
+        # Findings from precise rules block this workflow. Scan first-party source
+        # dirs only — node_modules/, vendor/, assets/, test-fixtures/ etc. are
+        # deliberately excluded. Per-rule `paths.include` filters in the compiled
+        # rulepack scope each rule further.
         run: |
           mkdir -p .opengrep-out
           # Test/fixture/QA path exclusions live in `.semgrepignore` at the
           # repo root and are picked up automatically. Keep this command in
-          # lockstep with `scripts/run-opengrep.sh` so local and CI scans
-          # produce identical findings.
-          opengrep scan \
-            --no-strict \
-            --config security/opengrep/precise.yml \
-            --sarif-output=.opengrep-out/precise.sarif \
-            --no-git-ignore \
-            src/ extensions/ apps/ packages/ scripts/
+          # `scripts/run-opengrep.sh` is the canonical local/CI runner.
+          scripts/run-opengrep.sh --sarif --error
 
       - name: Upload SARIF to GitHub Code Scanning
         uses: github/codeql-action/upload-sarif@v3
-        # Only upload if the scan actually produced a SARIF file. Without this
-        # guard, an opengrep crash before output write would hard-fail the job
-        # despite `continue-on-error: true` on the scan step.
+        # Only upload if the scan actually produced a SARIF file.
         if: always() && hashFiles('.opengrep-out/precise.sarif') != ''
         with:
           sarif_file: .opengrep-out/precise.sarif

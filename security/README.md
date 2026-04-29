@@ -2,7 +2,7 @@
 
 This directory holds the GHSA detector-review pipeline that turns each
 published security advisory for `openclaw/openclaw` into a reusable OpenGrep
-rule, plus the supporting tooling and CI to run the compiled rules.
+rule, plus the supporting tooling to run the compiled precise rules.
 
 The pipeline is **harness-agnostic**: any coding-agent CLI (Rovo Dev, Claude
 Code, Codex, OpenCode, or anything you can shell out to) can drive it via the
@@ -21,12 +21,9 @@ security/
 │   │   └── report-template.md
 │   └── scripts/
 │       └── init_case.py                   <- per-case workspace initializer
-├── remediation/
-│   └── remediation-spec.md                <- safe-fix workflow + functionality tradeoff template
 └── opengrep/
-    ├── README.md                          <- per-bucket details + regen recipe
+    ├── README.md                          <- precise rulepack details + regen recipe
     ├── precise.yml                        <- compiled super-config: precise rules
-    ├── broad.yml                          <- compiled super-config: broad/review-aid rules
     └── compile-manifest.json              <- per-rule provenance back to source advisories
 ```
 
@@ -34,11 +31,10 @@ The two scripts that drive everything live under `scripts/`:
 
 - `scripts/run-ghsa-detector-review-batch.mjs` — runs your coding harness of
   choice in parallel against every advisory using the detector-review spec.
-  Each case produces an opengrep `general-rule.yml` (precise) and
-  `broad-rule.yml` (review-aid), plus a coverage-validated report against the
-  vulnerable commit's changed files.
-- `scripts/compile-opengrep-rules.mjs` — gathers all rule YAMLs from a run
-  directory and emits the two super-configs under `security/opengrep/`.
+  Each case can produce an opengrep `general-rule.yml` candidate plus a
+  coverage-validated report against the vulnerable commit's changed files.
+- `scripts/compile-opengrep-rules.mjs` — gathers generated precise rule YAMLs
+  from a run directory and appends new rule IDs to `security/opengrep/precise.yml`.
 
 ## End-to-end flow
 
@@ -53,12 +49,12 @@ GitHub Advisory API ─► run-ghsa-detector-review-batch.mjs ─► .artifacts/
                                                     |             ├── manifest.json
                                                     |             └── cases/<ghsa>/...
                                                     v
-                              compile-opengrep-rules.mjs ─► security/opengrep/{precise,broad}.yml
+                              compile-opengrep-rules.mjs ─► security/opengrep/precise.yml
                                                                   + compile-manifest.json
                                                     |
                                                     v
-                              .github/workflows/opengrep-{precise,broad}.yml
-                                              (manual dispatch; SARIF → Code Scanning)
+                              .github/workflows/opengrep-precise.yml
+                                              (PR/main blocking scan + SARIF → Code Scanning)
 ```
 
 ## Supported coding harnesses
@@ -108,17 +104,17 @@ node scripts/run-ghsa-detector-review-batch.mjs \
   --prompt-suffix-file security/prompt-suffix-coverage-first.md \
   --harness claude       # or: --harness rovodev / --harness codex / --harness opencode
 
-# 2. Compile super-configs from the produced run dir
+# 2. Append new precise rules from the produced run dir
 node scripts/compile-opengrep-rules.mjs \
   --run-dir .artifacts/ghsa-detector-review-runs/<RUN_ID>
 ```
 
 Then commit the diff under `security/opengrep/`.
 
-When fixing findings surfaced by these rules, follow
-`security/remediation/remediation-spec.md`: prove the exploit path, preserve valid
-functionality with tests, and explicitly call out any security/functionality
-tradeoff instead of silently breaking supported behaviour.
+Rule quality contract: precise rules must catch the vulnerable behavior they were
+written for, should be silent on the corresponding fixed behavior when a fix
+exists, and should keep current findings limited to verified regressions or
+variants.
 
 ## Running the rules locally
 
@@ -127,10 +123,10 @@ scans match CI exactly.
 
 ```bash
 scripts/run-opengrep.sh                 # precise rules, human output
-scripts/run-opengrep.sh broad           # broad review-aid rules
-scripts/run-opengrep.sh precise --json  # write .opengrep-out/precise.json
-scripts/run-opengrep.sh precise --sarif # write .opengrep-out/precise.sarif
-scripts/run-opengrep.sh precise -- src/agents/   # scan a single dir
+scripts/run-opengrep.sh --json          # write .opengrep-out/precise.json
+scripts/run-opengrep.sh --sarif         # write .opengrep-out/precise.sarif
+scripts/run-opengrep.sh --changed       # scan changed first-party paths
+scripts/run-opengrep.sh -- src/agents/  # scan a single dir
 ```
 
 If you'd rather invoke `opengrep` directly, the equivalent is:
@@ -148,29 +144,27 @@ Add a glob there if a new test naming convention shows up.
 
 ## Running the rules in CI
 
-Two manual-dispatch GitHub Actions workflows ship with this PR:
+The **OpenGrep — Precise** workflow (`.github/workflows/opengrep-precise.yml`)
+runs on pull requests, pushes to `main`, and manual dispatch.
 
-- **OpenGrep — Precise** (`.github/workflows/opengrep-precise.yml`)
-- **OpenGrep — Broad** (`.github/workflows/opengrep-broad.yml`)
+It:
 
-Both:
-
-- Run `opengrep scan` against `src/ extensions/ apps/ packages/ scripts/`
-- Inherit the same `.semgrepignore` exclusions used by the local wrapper
-- Upload the SARIF to GitHub Code Scanning (categories `opengrep-precise` and
-  `opengrep-broad` so they don't collide with each other or CodeQL)
-- Use `continue-on-error: true` so findings never block the workflow
+- Runs `scripts/run-opengrep.sh --sarif --error` against
+  `src/ extensions/ apps/ packages/ scripts/`
+- Inherits the same `.semgrepignore` exclusions used by the local wrapper
+- Uploads SARIF to GitHub Code Scanning under category `opengrep-precise`
+- Fails on precise findings so the rulepack acts as a regression firewall
 
 ## Silencing or removing rules
 
-The super-configs are **auto-generated** — don't edit them by hand.
+The precise super-config is **auto-generated** — don't edit it by hand.
 
 To drop a noisy rule:
 
 1. Delete the offending source rule from
    `.artifacts/ghsa-detector-review-runs/<RUN_ID>/cases/<ghsa>/.tmp/ghsa-detector-review/<ghsa>/opengrep/`
 2. Re-run `node scripts/compile-opengrep-rules.mjs --run-dir <run-dir>`
-3. Commit the resulting `security/opengrep/*.yml` diff
+3. Commit the resulting `security/opengrep/precise.yml` and `compile-manifest.json` diff
 
 To narrow a rule's path scope, edit the source rule's `paths.include` /
 `paths.exclude` fields in the same artifact location and recompile.
@@ -179,5 +173,5 @@ To narrow a rule's path scope, edit the source rule's `paths.include` /
 
 Every compiled rule's `id` is `ghsa-detector.<ghsa-lower>.<original-id>` and
 its `metadata` includes `ghsa`, `advisory-url`, `detector-bucket`, and
-`source-rule-id`. The full forward map (ghsa → bucket → rule-ids → errors)
+`source-rule-id`. The full forward map (ghsa → precise rule IDs → errors)
 lives in `security/opengrep/compile-manifest.json`.

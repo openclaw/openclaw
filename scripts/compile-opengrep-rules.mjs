@@ -195,7 +195,7 @@ async function compile(opts) {
     const advisoryUrl = buildAdvisoryUrl(opts.advisoryRepo, ghsa);
     const ruleDir = caseRuleDir(opts.runDir, slug);
 
-    const caseEntry = { precise: [], broad: [], errors: {} };
+    const caseEntry = { precise: [], errors: {} };
 
     const bucket = "precise";
     const filePath = path.join(ruleDir, "general-rule.yml");
@@ -216,11 +216,7 @@ async function compile(opts) {
       }
     }
 
-    if (
-      caseEntry.precise.length ||
-      caseEntry.broad.length ||
-      Object.keys(caseEntry.errors).length
-    ) {
+    if (caseEntry.precise.length || Object.keys(caseEntry.errors).length) {
       manifest.cases[ghsa] = caseEntry;
     }
   }
@@ -230,16 +226,13 @@ async function compile(opts) {
     casesWithAnyRule: Object.keys(manifest.cases).length,
     preciseRulesGenerated: buckets.precise.rules.length,
     preciseSkipped: buckets.precise.skipped.length,
-    broadRules: 0,
-    broadSkipped: 0,
   };
 
   return { buckets, manifest };
 }
 
 function buildBucketHeader(bucket, manifest, ruleCount) {
-  const count =
-    ruleCount ?? (bucket === "precise" ? manifest.totals.preciseRules : manifest.totals.broadRules);
+  const count = ruleCount ?? manifest.totals.preciseRules;
   return [
     `# OpenGrep super-config: ${bucket}`,
     `#`,
@@ -529,8 +522,6 @@ async function writeOutputs(buckets, manifest, outDir, opts) {
   manifest.totals.preciseRulesDuplicateSkipped = appendResult.skippedDuplicateIds.length;
   manifest.totals.preciseRules = validRules.length;
   manifest.totals.preciseInvalid = droppedDetails.length;
-  manifest.totals.broadRules = 0;
-  manifest.totals.broadInvalid = 0;
   manifest.preciseInvalid = droppedDetails;
   manifest.preciseDuplicateSkipped = appendResult.skippedDuplicateIds;
 
@@ -546,12 +537,8 @@ function printSummary(buckets, manifest, outDir) {
   console.log(
     `  precise rules    : ${manifest.totals.preciseRules} total (${manifest.totals.preciseRulesExisting ?? 0} existing, ${manifest.totals.preciseRulesAppended ?? 0} appended, ${manifest.totals.preciseRulesDuplicateSkipped ?? 0} duplicate skipped, yaml-skipped: ${manifest.totals.preciseSkipped}, schema-invalid: ${manifest.totals.preciseInvalid ?? 0})`,
   );
-  console.log("  broad rules      : skipped (not written to repo)");
   const totalDropped =
-    (manifest.totals.preciseSkipped ?? 0) +
-    (manifest.totals.broadSkipped ?? 0) +
-    (manifest.totals.preciseInvalid ?? 0) +
-    (manifest.totals.broadInvalid ?? 0);
+    (manifest.totals.preciseSkipped ?? 0) + (manifest.totals.preciseInvalid ?? 0);
   if (totalDropped > 0) {
     console.log("\nFirst few skipped/invalid rules:");
     for (const s of (buckets.precise.skipped ?? []).slice(0, 3)) {

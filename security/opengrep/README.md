@@ -4,7 +4,7 @@
 
 `compile-manifest.json` is a per-rule provenance map for traceability.
 
-Broad/review-aid rules are intentionally kept out of the tracked repo for now because they are noisier and are not part of the CI-published rulepack.
+Noisy exploratory rules are intentionally kept out of the tracked repo. Anything appended to `precise.yml` must be low-noise enough to run as a blocking PR/main check.
 
 ## ⚠️ Do not edit by hand
 
@@ -57,20 +57,13 @@ The compile script already drops fatal-class errors for you.
 ## Running locally
 
 ```bash
-opengrep scan --no-strict \
-  --config security/opengrep/precise.yml \
-  --no-git-ignore \
-  src/
+scripts/run-opengrep.sh
 ```
 
 For SARIF output (matching what CI produces):
 
 ```bash
-opengrep scan --no-strict \
-  --config security/opengrep/precise.yml \
-  --sarif-output=precise.sarif \
-  --no-git-ignore \
-  src/
+scripts/run-opengrep.sh --sarif
 ```
 
 ## Why `--no-strict`?
