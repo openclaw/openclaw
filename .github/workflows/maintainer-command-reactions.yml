@@ -16,6 +16,7 @@ jobs:
     runs-on: ubuntu-24.04
     permissions:
       issues: write
+      pull-requests: write
     env:
       CLOWNFISH_APP_ID: ${{ vars.CLOWNFISH_APP_ID || secrets.CLOWNFISH_APP_ID }}
       CLOWNFISH_APP_AUTH_ENABLED: ${{ secrets.CLOWNFISH_APP_PRIVATE_KEY != '' && (vars.CLOWNFISH_APP_ID != '' || secrets.CLOWNFISH_APP_ID != '') && '1' || '0' }}
@@ -100,6 +101,10 @@ jobs:
               } catch (error) {
                 if (error.status === 422 && /already exists/i.test(String(error.message))) {
                   core.info(`${content} reaction already exists on comment ${comment.id}.`);
+                  return;
+                }
+                if (error.status === 403 && /resource not accessible by integration/i.test(String(error.message))) {
+                  core.warning(`${content} reaction could not be added with this token: ${error.message}`);
                   return;
                 }
                 throw error;
