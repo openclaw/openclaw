@@ -1,13 +1,11 @@
 {
-  "fallbackKeys": [
-    "agents.context.runtime"
-  ],
-  "generatedAt": "2026-04-29T19:08:30.082Z",
+  "fallbackKeys": [],
+  "generatedAt": "2026-04-29T19:25:40.100Z",
   "locale": "ko",
   "model": "gpt-5.5",
   "provider": "openai",
   "sourceHash": "a6a1060fe4eda88e0261e78c7c635df6e579a56cc539595a331da79dc7ca832b",
   "totalKeys": 881,
-  "translatedKeys": 880,
+  "translatedKeys": 881,
   "workflow": 1
 }
