@@ -21,11 +21,17 @@ Docs: https://docs.openclaw.ai
 - Gateway/events: surface `spawnedBy` on subagent chat and agent broadcast payloads so clients can route child session events without an extra session lookup. (#63244) Thanks @samzong.
 - Security policy: classify media/base64 decode and format-conversion overhead after configured acceptance limits as performance-only for GHSA triage unless a report demonstrates a limit bypass, crash, exhaustion, data exposure, or another boundary bypass. (#74311)
 - Security/OpenGrep: add a precise OpenGrep rulepack, source-rule compiler, provenance metadata check, and PR/full scan workflows that validate first-party code and rulepack-only changes while uploading SARIF to GitHub Code Scanning. (#69483) Thanks @jesse-merhi.
+- Control UI/i18n: extend the locale registry with new Persian (fa), Dutch (nl), Vietnamese (vi), Italian (it), Arabic (ar), and Thai (th) entries and ship `fa`, `nl`, `vi`, and `zh-TW` docs glossaries, so the docs translation pipeline and the Control UI language picker stay aligned across surfaces. Thanks @vincentkoc.
+- Gateway/diagnostics: emit an opt-in startup diagnostics timeline that records gateway lifecycle and plugin-load phases behind a config flag, so slow-start diagnosis no longer requires bespoke instrumentation. Thanks @shakkernerd.
 
 ### Fixes
 
 - Web fetch: add a documented `tools.web.fetch.ssrfPolicy.allowIpv6UniqueLocalRange` opt-in and thread it through cache keys and DNS/IP checks so trusted fake-IP proxy stacks using `fc00::/7` can work without broad private-network access. Fixes #74351. Thanks @jeffrey701.
 - Anthropic/Meridian: preserve text and thinking content seeded on `content_block_start` in anthropic-messages streams, so `[thinking, text]` replies no longer persist as empty turns or trigger empty-response fallbacks. Fixes #74410. Thanks @vyctorbrzezowski.
+- Channels/Matrix: complete the cross-signing handshake on `openclaw matrix verify confirm-sas` so the operator's other Matrix device clears its `Verifying…` loop instead of staying stuck after the agent confirms. (#74542) Thanks @nklock.
+- CLI/status: honor channel-specific model context-window overrides when reporting effective context, so channel-scoped sessions reflect the active window in `openclaw status`. Thanks @HemantSudarshan.
+- Sandbox/Docker: tolerate Docker daemon unavailability when sandbox mode is off, so doctor and preflight checks no longer fail on installs that do not run the Docker daemon. Fixes #73671. Thanks @kaseonedge.
+- Control UI/mobile: persist mobile chat settings through Lit-managed state and route mobile navigation through the same view-state path so chat panel toggles survive transitions on small viewports. Thanks @BunsDev.
 - Media: include redacted per-attempt resize failures and resolved model input capabilities in vision-pipeline errors so ARM64 image failures are diagnosable without closing the remaining routing investigation. Refs #74552. Thanks @1yihui.
 - Control UI/i18n: route zh-CN agent, debug, channel-refresh, and exec-approval copy through the locale source while preserving the English `Cron Jobs` agent tab label and the security-audit command styling. Carries forward #39692 repair context. Thanks @hepeng154833488 and @vincentkoc.
 - Auto-reply: honor explicit `silentReply.direct: "allow"` for clean empty or reasoning-only direct chat turns while keeping the default direct-chat empty-response guard conservative. Fixes #74409. Thanks @jesuskannolis.
