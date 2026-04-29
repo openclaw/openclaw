@@ -3,6 +3,9 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { formatUncaughtError } from "./infra/errors.js";
 import { runFatalErrorHooks } from "./infra/fatal-error-hooks.js";
+import { createSubsystemLogger } from "./logging/subsystem.js";
+
+const logger = createSubsystemLogger("infra:runtime");
 import { isMainModule } from "./infra/is-main.js";
 import {
   installUnhandledRejectionHandler,
@@ -94,24 +97,21 @@ if (isMain) {
       return;
     }
     if (isBenignUncaughtExceptionError(error)) {
-      console.warn(
-        "[openclaw] Non-fatal uncaught exception (continuing):",
-        formatUncaughtError(error),
-      );
+      logger.warn("Non-fatal uncaught exception (continuing)", { error });
       return;
     }
-    console.error("[openclaw] Uncaught exception:", formatUncaughtError(error));
+    logger.error("Uncaught exception", { error });
     for (const message of runFatalErrorHooks({ reason: "uncaught_exception", error })) {
-      console.error("[openclaw]", message);
+      logger.error(message, { reason: "uncaught_exception", error });
     }
     restoreTerminalState("uncaught exception", { resumeStdinIfPaused: false });
     process.exit(1);
   });
 
   void runLegacyCliEntry(process.argv).catch((err) => {
-    console.error("[openclaw] CLI failed:", formatUncaughtError(err));
+    logger.error("CLI failed", { error: err });
     for (const message of runFatalErrorHooks({ reason: "legacy_cli_failure", error: err })) {
-      console.error("[openclaw]", message);
+      logger.error(message, { reason: "legacy_cli_failure", error: err });
     }
     restoreTerminalState("legacy cli failure", { resumeStdinIfPaused: false });
     process.exit(1);
