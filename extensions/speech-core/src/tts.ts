@@ -1595,6 +1595,9 @@ export async function maybeApplyTtsToPayload(params: {
   }
 
   textForAudio = stripMarkdown(textForAudio).trim();
+  if (!textForAudio) {
+    return nextPayload;
+  }
   if (!explicitTtsText && textForAudio.length < 10) {
     return nextPayload;
   }

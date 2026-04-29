@@ -432,6 +432,24 @@ describe("speech-core native voice-note routing", () => {
     });
   });
 
+  it("keeps skipping explicit tagged TTS text that strips to empty markdown", async () => {
+    const cfg = createTtsConfig("openclaw-speech-core-empty-hidden-tts-test");
+    const result = await maybeApplyTtsToPayload({
+      payload: {
+        text: "[[tts:text]]***[[/tts:text]]",
+        audioAsVoice: true,
+      },
+      cfg,
+      channel: "telegram",
+      kind: "final",
+    });
+
+    expect(synthesizeMock).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      audioAsVoice: true,
+    });
+  });
+
   it("selects persona preferred provider before config fallback", () => {
     const cfg: OpenClawConfig = {
       messages: {
