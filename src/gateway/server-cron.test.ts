@@ -316,6 +316,79 @@ describe("buildGatewayCronService", () => {
     }
   });
 
+  it("does not inherit explicit heartbeat destinations when cron forces target last", async () => {
+    const cfg = {
+      ...createCronConfig("server-cron-heartbeat-last-destination"),
+      agents: {
+        defaults: {
+          heartbeat: {
+            every: "1h",
+            prompt: "Default heartbeat prompt",
+            target: "none",
+            to: "telegram:dm",
+            accountId: "default",
+          },
+        },
+        list: [
+          {
+            id: "ops",
+            heartbeat: {
+              directPolicy: "block",
+              to: "telegram:ops-dm",
+              accountId: "ops",
+            },
+          },
+        ],
+      },
+    } as OpenClawConfig;
+    loadConfigMock.mockReturnValue(cfg);
+
+    const state = buildGatewayCronService({
+      cfg,
+      deps: {} as CliDeps,
+      broadcast: () => {},
+    });
+    try {
+      const cronDeps = (
+        state.cron as unknown as {
+          state?: {
+            deps?: {
+              runHeartbeatOnce?: (opts?: {
+                agentId?: string;
+                sessionKey?: string | null;
+                reason?: string;
+                heartbeat?: { target?: string };
+              }) => Promise<unknown>;
+            };
+          };
+        }
+      ).state?.deps;
+
+      await cronDeps?.runHeartbeatOnce?.({
+        reason: "cron:test",
+        agentId: "ops",
+        sessionKey: "telegram:group:123:topic:456",
+        heartbeat: { target: "last" },
+      });
+
+      expect(runHeartbeatOnceMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          reason: "cron:test",
+          agentId: "ops",
+          sessionKey: "agent:ops:telegram:group:123:topic:456",
+          heartbeat: {
+            every: "1h",
+            prompt: "Default heartbeat prompt",
+            target: "last",
+            directPolicy: "block",
+          },
+        }),
+      );
+    } finally {
+      state.cron.stop();
+    }
+  });
+
   it("preserves trust downgrades when cron enqueues system events", () => {
     const cfg = createCronConfig("server-cron-untrusted");
     loadConfigMock.mockReturnValue(cfg);
