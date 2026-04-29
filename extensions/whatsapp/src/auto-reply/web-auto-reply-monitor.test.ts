@@ -41,6 +41,7 @@ async function runGroupGating(params: {
   conversationId?: string;
   agentId?: string;
   selfChatMode?: boolean;
+  authDir?: string;
 }) {
   const groupHistories = new Map<string, GroupHistoryEntry[]>();
   const conversationId = params.conversationId ?? "123@g.us";
@@ -55,6 +56,7 @@ async function runGroupGating(params: {
     agentId,
     sessionKey,
     baseMentionConfig,
+    authDir: params.authDir,
     selfChatMode: params.selfChatMode,
     groupHistories,
     groupHistoryLimit: 10,
@@ -192,6 +194,45 @@ describe("applyGroupGating", () => {
     });
 
     expect(result.shouldProcess).toBe(true);
+  });
+
+  it("processes explicit group @mentions when self is in allowFrom (#49317)", async () => {
+    if (!sessionDir) {
+      throw new Error("sessionDir not initialized");
+    }
+    await fs.writeFile(
+      path.join(sessionDir, "lid-mapping-216372600647751_reverse.json"),
+      JSON.stringify("+15551234567"),
+    );
+    const cfg = makeConfig({
+      channels: {
+        whatsapp: {
+          allowFrom: ["+15551234567"],
+          groupPolicy: "open",
+          groups: { "*": { requireMention: true } },
+        },
+      },
+    });
+    const msg = createGroupMessage({
+      id: "g-self-lid-mention",
+      accountId: "default",
+      body: "@216372600647751 can you see this?",
+      mentionedJids: ["216372600647751@lid"],
+      senderE164: "+15550001111",
+      senderName: "Alice",
+      selfE164: "+15551234567",
+      selfJid: "15551234567@s.whatsapp.net",
+    });
+
+    const { result, groupHistories } = await runGroupGating({
+      cfg,
+      authDir: sessionDir,
+      msg,
+    });
+
+    expect(result.shouldProcess).toBe(true);
+    expect(msg.wasMentioned).toBe(true);
+    expect(groupHistories.get("whatsapp:default:group:123@g.us")).toBeUndefined();
   });
 
   it("honors per-account selfChatMode overrides before suppressing implicit mentions", async () => {
