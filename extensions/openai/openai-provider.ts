@@ -11,7 +11,7 @@ import {
 } from "openclaw/plugin-sdk/provider-model-shared";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { OPENAI_ACCOUNT_WIZARD_GROUP, OPENAI_API_KEY_LABEL } from "./auth-choice-copy.js";
-import { isOpenAIApiBaseUrl } from "./base-url.js";
+import { isOpenAIApiBaseUrl, resolveOpenAIDefaultBaseUrl } from "./base-url.js";
 import { applyOpenAIConfig, OPENAI_DEFAULT_MODEL } from "./default-models.js";
 import {
   buildOpenAIResponsesProviderHooks,
@@ -132,7 +132,7 @@ function resolveOpenAIGptForwardCompatModel(ctx: ProviderResolveDynamicModelCont
     patch = {
       api: "openai-responses",
       provider: PROVIDER_ID,
-      baseUrl: "https://api.openai.com/v1",
+      baseUrl: resolveOpenAIDefaultBaseUrl(),
       reasoning: true,
       input: ["text", "image"],
       cost: OPENAI_GPT_55_PRO_COST,
@@ -144,7 +144,7 @@ function resolveOpenAIGptForwardCompatModel(ctx: ProviderResolveDynamicModelCont
     patch = {
       api: "openai-responses",
       provider: PROVIDER_ID,
-      baseUrl: "https://api.openai.com/v1",
+      baseUrl: resolveOpenAIDefaultBaseUrl(),
       reasoning: true,
       input: ["text", "image"],
       cost: OPENAI_GPT_54_COST,
@@ -156,7 +156,7 @@ function resolveOpenAIGptForwardCompatModel(ctx: ProviderResolveDynamicModelCont
     patch = {
       api: "openai-responses",
       provider: PROVIDER_ID,
-      baseUrl: "https://api.openai.com/v1",
+      baseUrl: resolveOpenAIDefaultBaseUrl(),
       reasoning: true,
       input: ["text", "image"],
       cost: OPENAI_GPT_54_PRO_COST,
@@ -168,7 +168,7 @@ function resolveOpenAIGptForwardCompatModel(ctx: ProviderResolveDynamicModelCont
     patch = {
       api: "openai-responses",
       provider: PROVIDER_ID,
-      baseUrl: "https://api.openai.com/v1",
+      baseUrl: resolveOpenAIDefaultBaseUrl(),
       reasoning: true,
       input: ["text", "image"],
       cost: OPENAI_GPT_54_MINI_COST,
@@ -180,7 +180,7 @@ function resolveOpenAIGptForwardCompatModel(ctx: ProviderResolveDynamicModelCont
     patch = {
       api: "openai-responses",
       provider: PROVIDER_ID,
-      baseUrl: "https://api.openai.com/v1",
+      baseUrl: resolveOpenAIDefaultBaseUrl(),
       reasoning: true,
       input: ["text", "image"],
       cost: OPENAI_GPT_54_NANO_COST,
