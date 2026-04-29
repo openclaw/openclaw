@@ -86,6 +86,14 @@ type CommandValidationRateLimitEntry = {
 const commandLookupInflight = new Map<string, CommandLookupInflightEntry>();
 const commandValidationFailureCache = new Map<string, { accountId: string; expiresAt: number }>();
 const commandValidationLookupRateLimit = new Map<string, CommandValidationRateLimitEntry>();
+const SECRET_LOG_KEYS = new Set([
+  "access_token",
+  "authorization",
+  "bottoken",
+  "client_secret",
+  "refresh_token",
+  "token",
+]);
 
 /**
  * Read the full request body as a string.
@@ -129,8 +137,28 @@ function sanitizeCommandLookupError(error: unknown): string {
   const raw = error instanceof Error ? error.message : String(error);
   return raw
     .replace(/[\r\n\t]/gu, " ")
-    .replace(/\b(Bearer|Token)\s+[A-Za-z0-9._~+/=-]+/giu, "$1 [redacted]")
-    .replace(/\b(token|authorization)(=|:)\s*[^,\s;]+/giu, "$1$2[redacted]")
+    .replace(/https?:\/\/[^\s)\]}]+/giu, (urlText) => {
+      try {
+        const url = new URL(urlText);
+        if (url.username || url.password) {
+          url.username = "redacted";
+          url.password = "redacted";
+        }
+        for (const key of [...url.searchParams.keys()]) {
+          if (SECRET_LOG_KEYS.has(key.toLowerCase())) {
+            url.searchParams.set(key, "redacted");
+          }
+        }
+        return url.toString();
+      } catch {
+        return urlText;
+      }
+    })
+    .replace(/(^|[^\w-])(Bearer|Token)\s+[A-Za-z0-9._~+/=-]+/giu, "$1$2 [redacted]")
+    .replace(
+      /\b(token|authorization|access_token|refresh_token|client_secret|botToken)\b(\s*["']?\s*(?:=|:)\s*["']?)[^"',\s;}]+/giu,
+      "$1$2[redacted]",
+    )
     .slice(0, 300);
 }
 

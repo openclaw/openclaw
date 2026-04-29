@@ -727,7 +727,9 @@ describe("slash-http", () => {
       delete_at: 0,
     };
     const client = createCommandLookupClient({
-      commandLookupError: new Error("primary\ntoken=secret-token"),
+      commandLookupError: new Error(
+        "primary\ntoken=secret-token https://user:pass@chat.example.com/api?access_token=secret-access&client_secret=secret-client",
+      ),
       listCommands: [command],
     });
     const log = vi.fn();
@@ -754,14 +756,20 @@ describe("slash-http", () => {
     expect(message).not.toMatch(/[\r\n\t]/u);
     expect(message).toContain("/oc_status  spoofed");
     expect(message).toContain("primary token=[redacted]");
+    expect(message).toContain("https://redacted:redacted@chat.example.com/api");
     expect(message).not.toContain("secret-token");
+    expect(message).not.toContain("secret-access");
+    expect(message).not.toContain("secret-client");
+    expect(message).not.toContain("user:pass");
   });
 
   it("sanitizes upstream lookup errors before logging fallback failures", async () => {
     const registeredCommand = createRegisteredCommand();
     const client = createCommandLookupClient({
-      commandLookupError: new Error("primary\ntoken=secret-token"),
-      listLookupError: new Error("fallback\r\nsecond-line"),
+      commandLookupError: new Error('primary\ntoken=secret-token refresh_token="secret-refresh"'),
+      listLookupError: new Error(
+        "fallback\r\nsecond-line botToken: secret-bot https://user:pass@chat.example.com/hooks?token=secret-query",
+      ),
     });
     const log = vi.fn();
 
@@ -786,7 +794,13 @@ describe("slash-http", () => {
     const message = log.mock.calls[0]?.[0] ?? "";
     expect(message).not.toMatch(/[\r\n\t]/u);
     expect(message).toContain("fallback  second-line");
+    expect(message).toContain("botToken: [redacted]");
+    expect(message).toContain("https://redacted:redacted@chat.example.com/hooks");
     expect(message).toContain("primary token=[redacted]");
     expect(message).not.toContain("secret-token");
+    expect(message).not.toContain("secret-refresh");
+    expect(message).not.toContain("secret-bot");
+    expect(message).not.toContain("secret-query");
+    expect(message).not.toContain("user:pass");
   });
 });
