@@ -514,7 +514,15 @@ function inferDeliveryFromSessionKey(agentSessionKey?: string): CronDelivery | n
   }
 
   const marker = parts[markerIndex];
-  const delivery: CronDelivery = { mode: "announce", to: peerId };
+  const isDirectMessage = marker === "direct" || marker === "dm";
+  // Discord defaults bare numeric IDs to "channel:" in normalizeDiscordMessagingTarget.
+  // Prefix DM targets with "user:" so cron delivery resolves them as user DMs,
+  // not guild channels. Other channels (Telegram, Slack) use unambiguous IDs.
+  const needsUserPrefix = isDirectMessage && channel === "discord";
+  const delivery: CronDelivery = {
+    mode: "announce",
+    to: needsUserPrefix ? `user:${peerId}` : peerId,
+  };
   if (channel) {
     delivery.channel = channel;
   }
