@@ -50,6 +50,18 @@ describe("tool allowlist guard", () => {
     ).toBeNull();
   });
 
+  it("allows disableTools without runtime toolsAllow (intentional no-tools run)", () => {
+    // When disableTools is true and no runtime toolsAllow is passed, the empty
+    // tool set is intentional — even if config-level allowlists exist.
+    const error = buildEmptyExplicitToolAllowlistError({
+      sources: [{ label: "tools.allow", entries: ["read", "write"] }],
+      callableToolNames: [],
+      toolsEnabled: true,
+      disableTools: true,
+    });
+    expect(error).toBeNull();
+  });
+
   it("allows explicit allowlists when at least one callable tool remains", () => {
     expect(
       buildEmptyExplicitToolAllowlistError({

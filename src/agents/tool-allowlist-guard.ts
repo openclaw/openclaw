@@ -21,6 +21,16 @@ export function buildEmptyExplicitToolAllowlistError(params: {
   disableTools?: boolean;
 }): Error | null {
   const callableToolNames = params.callableToolNames.map(normalizeToolName).filter(Boolean);
+  // When the caller explicitly disabled tools and no runtime toolsAllow was passed,
+  // an empty tool set is intentional — not a misconfiguration.
+  if (params.disableTools === true && callableToolNames.length === 0) {
+    const hasRuntimeToolsAllow = params.sources.some(
+      (s) => s.label === "runtime toolsAllow" && s.entries.length > 0,
+    );
+    if (!hasRuntimeToolsAllow) {
+      return null;
+    }
+  }
   if (params.sources.length === 0 || callableToolNames.length > 0) {
     return null;
   }

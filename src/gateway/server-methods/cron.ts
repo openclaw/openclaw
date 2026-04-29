@@ -154,15 +154,28 @@ export const cronHandlers: GatewayRequestHandlers = {
       sortBy?: "nextRunAtMs" | "updatedAtMs" | "name";
       sortDir?: "asc" | "desc";
     };
-    const page = await context.cron.listPage({
-      includeDisabled: p.includeDisabled,
-      limit: p.limit,
-      offset: p.offset,
-      query: p.query,
-      enabled: p.enabled,
-      sortBy: p.sortBy,
-      sortDir: p.sortDir,
-    });
+    let page;
+    try {
+      page = await context.cron.listPage({
+        includeDisabled: p.includeDisabled,
+        limit: p.limit,
+        offset: p.offset,
+        query: p.query,
+        enabled: p.enabled,
+        sortBy: p.sortBy,
+        sortDir: p.sortDir,
+      });
+    } catch (err) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid cron.list params: ${formatErrorMessage(err)}`,
+        ),
+      );
+      return;
+    }
     const deliveryPreviews = await resolveCronDeliveryPreviews({
       cfg: context.getRuntimeConfig(),
       defaultAgentId: context.cron.getDefaultAgentId(),
@@ -182,7 +195,17 @@ export const cronHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const status = await context.cron.status();
+    let status;
+    try {
+      status = await context.cron.status();
+    } catch (err) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, `cron.status failed: ${formatErrorMessage(err)}`),
+      );
+      return;
+    }
     respond(true, status, undefined);
   },
   "cron.add": async ({ params, respond, context }) => {
@@ -242,7 +265,20 @@ export const cronHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const job = await context.cron.add(jobCreate);
+    let job;
+    try {
+      job = await context.cron.add(jobCreate);
+    } catch (err) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid cron.add params: ${formatErrorMessage(err)}`,
+        ),
+      );
+      return;
+    }
     context.logGateway.info("cron: job created", { jobId: job.id, schedule: jobCreate.schedule });
     respond(true, job, undefined);
   },
@@ -321,7 +357,20 @@ export const cronHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const job = await context.cron.update(jobId, patch);
+    let job;
+    try {
+      job = await context.cron.update(jobId, patch);
+    } catch (err) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid cron.update params: ${formatErrorMessage(err)}`,
+        ),
+      );
+      return;
+    }
     context.logGateway.info("cron: job updated", { jobId });
     respond(true, job, undefined);
   },
@@ -347,7 +396,20 @@ export const cronHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const result = await context.cron.remove(jobId);
+    let result;
+    try {
+      result = await context.cron.remove(jobId);
+    } catch (err) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid cron.remove params: ${formatErrorMessage(err)}`,
+        ),
+      );
+      return;
+    }
     if (result.removed) {
       context.logGateway.info("cron: job removed", { jobId });
     }
