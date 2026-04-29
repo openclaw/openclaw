@@ -1,8 +1,10 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
+  buildPluginSnapshotReport,
   enablePluginInConfig,
   loadConfig,
+  runtimeErrors,
   refreshPluginRegistry,
   resetPluginsCliTestState,
   runPluginsCommand,
@@ -23,6 +25,10 @@ describe("plugins cli policy mutations", () => {
       },
     } as OpenClawConfig;
     loadConfig.mockReturnValue({} as OpenClawConfig);
+    buildPluginSnapshotReport.mockReturnValue({
+      plugins: [{ id: "alpha", name: "Alpha" }],
+      diagnostics: [],
+    });
     enablePluginInConfig.mockReturnValue({
       config: enabledConfig,
       enabled: true,
@@ -46,6 +52,10 @@ describe("plugins cli policy mutations", () => {
         },
       },
     } as OpenClawConfig);
+    buildPluginSnapshotReport.mockReturnValue({
+      plugins: [{ id: "alpha", name: "Alpha" }],
+      diagnostics: [],
+    });
 
     await runPluginsCommand(["plugins", "disable", "alpha"]);
 
@@ -56,5 +66,40 @@ describe("plugins cli policy mutations", () => {
       installRecords: {},
       reason: "policy-changed",
     });
+  });
+
+  it("fails without mutating config when enabling an unknown plugin id", async () => {
+    buildPluginSnapshotReport.mockReturnValue({
+      plugins: [{ id: "alpha", name: "Alpha" }],
+      diagnostics: [],
+    });
+
+    await expect(runPluginsCommand(["plugins", "enable", "missing-plugin"])).rejects.toThrow(
+      "__exit__:1",
+    );
+
+    expect(writeConfigFile).not.toHaveBeenCalled();
+    expect(refreshPluginRegistry).not.toHaveBeenCalled();
+    expect(enablePluginInConfig).not.toHaveBeenCalled();
+    expect(runtimeErrors.at(-1)).toContain(
+      "Plugin not found: missing-plugin. Run `openclaw plugins list` to see installed plugins.",
+    );
+  });
+
+  it("fails without mutating config when disabling an unknown plugin id", async () => {
+    buildPluginSnapshotReport.mockReturnValue({
+      plugins: [{ id: "alpha", name: "Alpha" }],
+      diagnostics: [],
+    });
+
+    await expect(runPluginsCommand(["plugins", "disable", "missing-plugin"])).rejects.toThrow(
+      "__exit__:1",
+    );
+
+    expect(writeConfigFile).not.toHaveBeenCalled();
+    expect(refreshPluginRegistry).not.toHaveBeenCalled();
+    expect(runtimeErrors.at(-1)).toContain(
+      "Plugin not found: missing-plugin. Run `openclaw plugins list` to see installed plugins.",
+    );
   });
 });

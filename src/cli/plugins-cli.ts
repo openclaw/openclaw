@@ -120,6 +120,14 @@ function formatInstallLines(install: PluginInstallRecord | undefined): string[] 
   return lines;
 }
 
+function resolveKnownPluginId(
+  rawId: string,
+  plugins: Array<{ id: string; name?: string | null }>,
+): string | null {
+  const plugin = plugins.find((entry) => entry.id === rawId || entry.name === rawId);
+  return plugin?.id ?? null;
+}
+
 function countEnabledPlugins(plugins: readonly { enabled: boolean }[]): number {
   return plugins.filter((plugin) => plugin.enabled).length;
 }
@@ -540,15 +548,23 @@ export function registerPluginsCli(program: Command) {
     .argument("<id>", "Plugin id")
     .action(async (id: string) => {
       const { enablePluginInConfig } = await import("../plugins/enable.js");
+      const { buildPluginSnapshotReport } = await import("../plugins/status.js");
       const { applySlotSelectionForPlugin, logSlotWarnings } =
         await import("./plugins-command-helpers.js");
       const { refreshPluginRegistryAfterConfigMutation } =
         await import("./plugins-registry-refresh.js");
       const snapshot = await readConfigFileSnapshot();
       const cfg = (snapshot.sourceConfig ?? snapshot.config) as OpenClawConfig;
-      const enableResult = enablePluginInConfig(cfg, id);
+      const pluginId = resolveKnownPluginId(id, buildPluginSnapshotReport({ config: cfg }).plugins);
+      if (!pluginId) {
+        defaultRuntime.error(
+          `Plugin not found: ${id}. Run \`openclaw plugins list\` to see installed plugins.`,
+        );
+        return defaultRuntime.exit(1);
+      }
+      const enableResult = enablePluginInConfig(cfg, pluginId);
       let next: OpenClawConfig = enableResult.config;
-      const slotResult = applySlotSelectionForPlugin(next, id);
+      const slotResult = applySlotSelectionForPlugin(next, pluginId);
       next = slotResult.config;
       await replaceConfigFile({
         nextConfig: next,
@@ -563,12 +579,12 @@ export function registerPluginsCli(program: Command) {
       });
       logSlotWarnings(slotResult.warnings);
       if (enableResult.enabled) {
-        defaultRuntime.log(`Enabled plugin "${id}". Restart the gateway to apply.`);
+        defaultRuntime.log(`Enabled plugin "${pluginId}". Restart the gateway to apply.`);
         return;
       }
       defaultRuntime.log(
         theme.warn(
-          `Plugin "${id}" could not be enabled (${enableResult.reason ?? "unknown reason"}).`,
+          `Plugin "${pluginId}" could not be enabled (${enableResult.reason ?? "unknown reason"}).`,
         ),
       );
     });
@@ -578,12 +594,20 @@ export function registerPluginsCli(program: Command) {
     .description("Disable a plugin in config")
     .argument("<id>", "Plugin id")
     .action(async (id: string) => {
+      const { buildPluginSnapshotReport } = await import("../plugins/status.js");
       const { setPluginEnabledInConfig } = await import("./plugins-config.js");
       const { refreshPluginRegistryAfterConfigMutation } =
         await import("./plugins-registry-refresh.js");
       const snapshot = await readConfigFileSnapshot();
       const cfg = (snapshot.sourceConfig ?? snapshot.config) as OpenClawConfig;
-      const next = setPluginEnabledInConfig(cfg, id, false);
+      const pluginId = resolveKnownPluginId(id, buildPluginSnapshotReport({ config: cfg }).plugins);
+      if (!pluginId) {
+        defaultRuntime.error(
+          `Plugin not found: ${id}. Run \`openclaw plugins list\` to see installed plugins.`,
+        );
+        return defaultRuntime.exit(1);
+      }
+      const next = setPluginEnabledInConfig(cfg, pluginId, false);
       await replaceConfigFile({
         nextConfig: next,
         ...(snapshot.hash !== undefined ? { baseHash: snapshot.hash } : {}),
@@ -595,7 +619,7 @@ export function registerPluginsCli(program: Command) {
           warn: (message) => defaultRuntime.log(theme.warn(message)),
         },
       });
-      defaultRuntime.log(`Disabled plugin "${id}". Restart the gateway to apply.`);
+      defaultRuntime.log(`Disabled plugin "${pluginId}". Restart the gateway to apply.`);
     });
 
   plugins
