@@ -304,6 +304,14 @@ export function createOpenClawCodingTools(options?: {
   config?: OpenClawConfig;
   abortSignal?: AbortSignal;
   /**
+   * Skip wrapToolWithBeforeToolCallHook on the returned tools. Used by the
+   * /tools/invoke HTTP surface, which runs runBeforeToolCallHook itself.
+   * Avoids double-firing the hook and adjusted-params leaks; the only safe way
+   * since exec/process are re-spread by applyDeferredFollowupToolDescriptions
+   * after wrapping, dropping symbol-keyed unwrap markers.
+   */
+  skipBeforeToolCallHook?: boolean;
+  /**
    * Provider of the currently selected model (used for provider-specific tool quirks).
    * Example: "anthropic", "openai", "google", "openai-codex".
    */
@@ -829,22 +837,25 @@ export function createOpenClawCodingTools(options?: {
     }),
   );
   options?.recordToolPrepStage?.("schema-normalization");
-  const withHooks = normalized.map((tool) =>
-    wrapToolWithBeforeToolCallHook(tool, {
-      agentId,
-      ...(options?.config ? { config: options.config } : {}),
-      sessionKey: options?.sessionKey,
-      sessionId: options?.sessionId,
-      runId: options?.runId,
-      ...(options?.trace ? { trace: options.trace } : {}),
-      loopDetection: resolveToolLoopDetectionConfig({ cfg: options?.config, agentId }),
-    }),
-  );
+  const withHooks = options?.skipBeforeToolCallHook
+    ? normalized
+    : normalized.map((tool) =>
+        wrapToolWithBeforeToolCallHook(tool, {
+          agentId,
+          ...(options?.config ? { config: options.config } : {}),
+          sessionKey: options?.sessionKey,
+          sessionId: options?.sessionId,
+          runId: options?.runId,
+          ...(options?.trace ? { trace: options.trace } : {}),
+          loopDetection: resolveToolLoopDetectionConfig({ cfg: options?.config, agentId }),
+        }),
+      );
   options?.recordToolPrepStage?.("tool-hooks");
   const withAbort = options?.abortSignal
     ? withHooks.map((tool) => wrapToolWithAbortSignal(tool, options.abortSignal))
     : withHooks;
   options?.recordToolPrepStage?.("abort-wrappers");
+
   const withDeferredFollowupDescriptions = applyDeferredFollowupToolDescriptions(withAbort, {
     agentId,
   });
@@ -854,4 +865,23 @@ export function createOpenClawCodingTools(options?: {
   // pi-ai's Anthropic OAuth transport remaps tool names to Claude Code-style names
   // on the wire and maps them back for tool dispatch.
   return withDeferredFollowupDescriptions;
+}
+
+// HTTP-safe variant of createOpenClawCodingTools.
+//
+// Returns the same tool set but WITHOUT wrapToolWithBeforeToolCallHook applied
+// to ANY tool — including exec/process which applyDeferredFollowupToolDescriptions
+// re-spreads after wrapping (the spread drops symbol-keyed wrap markers, so a
+// post-construction unwrap step cannot reach those tools).
+//
+// The gateway /tools/invoke handler (handleToolsInvokeHttpRequest) calls
+// runBeforeToolCallHook itself before dispatching execute(); routing
+// hook-wrapped tools through that path would double-fire the hook and leak
+// adjusted-params state (the wrapper stashes adjusted params keyed by
+// toolCallId; only the agent subscribe path drains them via
+// consumeAdjustedParamsForToolCall).
+export function createOpenClawCodingToolsRaw(
+  options?: Parameters<typeof createOpenClawCodingTools>[0],
+): AnyAgentTool[] {
+  return createOpenClawCodingTools({ ...options, skipBeforeToolCallHook: true });
 }
