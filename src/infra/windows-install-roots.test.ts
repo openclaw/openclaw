@@ -171,25 +171,25 @@ describe("getWindowsProgramFilesRoots", () => {
 });
 
 describe("locateWindowsRegExe", () => {
-  it("prefers SystemRoot and WINDIR candidates over arbitrary drive scans", () => {
+  it("uses the fixed Windows system reg.exe candidate", () => {
     expect(
       _private.getWindowsRegExeCandidates({
         SystemRoot: "D:\\Windows",
         WINDIR: "E:\\Windows",
       }),
-    ).toEqual([
-      "D:\\Windows\\System32\\reg.exe",
-      "E:\\Windows\\System32\\reg.exe",
-      "C:\\Windows\\System32\\reg.exe",
-    ]);
+    ).toEqual(["C:\\Windows\\System32\\reg.exe"]);
   });
 
-  it("dedupes equivalent roots case-insensitively", () => {
+  it("does not resolve readable reg.exe files from env-derived roots", () => {
+    _resetWindowsInstallRootsForTests({
+      isReadableFile: (filePath) => filePath === "D:\\Windows\\System32\\reg.exe",
+    });
+
     expect(
-      _private.getWindowsRegExeCandidates({
-        SystemRoot: "D:\\Windows\\",
-        windir: "d:\\windows",
+      _private.locateWindowsRegExe({
+        SystemRoot: "D:\\Windows",
+        WINDIR: "E:\\Windows",
       }),
-    ).toEqual(["D:\\Windows\\System32\\reg.exe", "C:\\Windows\\System32\\reg.exe"]);
+    ).toBeNull();
   });
 });
