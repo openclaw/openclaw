@@ -34,6 +34,7 @@ import { sanitizeUserFacingText } from "../../agents/pi-embedded-helpers/sanitiz
 import { isLikelyExecutionAckPrompt } from "../../agents/pi-embedded-runner/run/incomplete-turn.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import { buildAgentRuntimeOutcomePlan } from "../../agents/runtime-plan/build.js";
+import { resolveAgentCommandLane } from "../../config/agent-command-lanes.js";
 import {
   resolveGroupSessionKey,
   resolveSessionTranscriptPath,
@@ -853,6 +854,7 @@ export async function runAgentTurnWithFallback(params: {
           ...params.followupRun.run,
           config: runtimeConfig,
         };
+  const commandLane = resolveAgentCommandLane(runtimeConfig, effectiveRun.agentId);
 
   const runId = params.opts?.runId ?? crypto.randomUUID();
   const replyMediaContext =
@@ -1376,6 +1378,7 @@ export async function runAgentTurnWithFallback(params: {
                 replyOperation: params.replyOperation,
                 blockReplyBreak: params.resolvedBlockStreamingBreak,
                 blockReplyChunking: params.blockReplyChunking,
+                lane: commandLane,
                 onPartialReply: async (payload) => {
                   const textForTyping = await handlePartialForTyping(payload);
                   if (!params.opts?.onPartialReply || textForTyping === undefined) {

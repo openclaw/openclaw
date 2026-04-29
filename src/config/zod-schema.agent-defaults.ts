@@ -3,6 +3,7 @@ import { isValidNonNegativeByteSizeString } from "./byte-size.js";
 import {
   HeartbeatSchema,
   AgentSandboxSchema,
+  AgentCommandLaneSchema,
   AgentContextLimitsSchema,
   AgentEmbeddedHarnessSchema,
   AgentRuntimePolicySchema,
@@ -240,6 +241,7 @@ export const AgentDefaultsSchema = z
     typingMode: TypingModeSchema.optional(),
     heartbeat: HeartbeatSchema,
     maxConcurrent: z.number().int().positive().optional(),
+    commandLane: AgentCommandLaneSchema,
     subagents: z
       .object({
         allowAgents: z.array(z.string()).optional(),

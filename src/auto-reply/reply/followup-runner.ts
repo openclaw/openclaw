@@ -13,6 +13,7 @@ import {
   buildAgentRuntimeDeliveryPlan,
   buildAgentRuntimeOutcomePlan,
 } from "../../agents/runtime-plan/build.js";
+import { resolveAgentCommandLane } from "../../config/agent-command-lanes.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { TypingMode } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
@@ -259,6 +260,7 @@ export function createFollowupRunner(params: {
       let bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
         activeSessionEntry?.systemPromptReport,
       );
+      const commandLane = resolveAgentCommandLane(runtimeConfig, run.agentId);
       replyOperation.setPhase("running");
       try {
         const outcomePlan = buildAgentRuntimeOutcomePlan();
@@ -325,6 +327,7 @@ export function createFollowupRunner(params: {
                 imageOrder: queuedImageOrder,
                 allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
                 blockReplyBreak: run.blockReplyBreak,
+                lane: commandLane,
                 bootstrapPromptWarningSignaturesSeen,
                 bootstrapPromptWarningSignature:
                   bootstrapPromptWarningSignaturesSeen[

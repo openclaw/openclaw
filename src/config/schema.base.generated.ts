@@ -5472,6 +5472,30 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 exclusiveMinimum: 0,
                 maximum: 9007199254740991,
               },
+              commandLane: {
+                type: "object",
+                properties: {
+                  id: {
+                    type: "string",
+                    minLength: 1,
+                    title: "Default Agent Command Lane ID",
+                    description:
+                      "Default command queue lane id for foreground agent runs. Omit to keep using main.",
+                  },
+                  maxConcurrent: {
+                    type: "integer",
+                    exclusiveMinimum: 0,
+                    maximum: 9007199254740991,
+                    title: "Default Agent Command Lane Max Concurrent",
+                    description:
+                      "Maximum concurrent foreground runs for agents using this default command lane.",
+                  },
+                },
+                additionalProperties: false,
+                title: "Default Agent Command Lane",
+                description:
+                  "Default foreground agent command queue lane. Omit to use the shared main lane; set id and maxConcurrent to place routed agents on a separate lane by default.",
+              },
               subagents: {
                 type: "object",
                 properties: {
@@ -6206,6 +6230,29 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   title: "Agent Fast Mode Default",
                   description:
                     "Optional per-agent default for fast mode. Applies when no per-message or session fast-mode override is set.",
+                },
+                commandLane: {
+                  type: "object",
+                  properties: {
+                    id: {
+                      type: "string",
+                      minLength: 1,
+                      title: "Agent Command Lane ID",
+                      description: "Command queue lane id for this agent's foreground runs.",
+                    },
+                    maxConcurrent: {
+                      type: "integer",
+                      exclusiveMinimum: 0,
+                      maximum: 9007199254740991,
+                      title: "Agent Command Lane Max Concurrent",
+                      description:
+                        "Maximum concurrent foreground runs for this agent's configured command lane.",
+                    },
+                  },
+                  additionalProperties: false,
+                  title: "Agent Command Lane",
+                  description:
+                    "Optional per-agent foreground command queue lane override. Use this to isolate heavy routed agents from the shared main lane.",
                 },
                 skills: {
                   type: "array",
@@ -24443,6 +24490,21 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "Optional per-agent default for fast mode. Applies when no per-message or session fast-mode override is set.",
       tags: ["advanced"],
     },
+    "agents.list[].commandLane": {
+      label: "Agent Command Lane",
+      help: "Optional per-agent foreground command queue lane override. Use this to isolate heavy routed agents from the shared main lane.",
+      tags: ["advanced"],
+    },
+    "agents.list[].commandLane.id": {
+      label: "Agent Command Lane ID",
+      help: "Command queue lane id for this agent's foreground runs.",
+      tags: ["advanced"],
+    },
+    "agents.list[].commandLane.maxConcurrent": {
+      label: "Agent Command Lane Max Concurrent",
+      help: "Maximum concurrent foreground runs for this agent's configured command lane.",
+      tags: ["performance"],
+    },
     "agents.defaults": {
       label: "Agent Defaults",
       help: "Shared default settings inherited by agents unless overridden per entry in agents.list. Use defaults to enforce consistent baseline behavior and reduce duplicated per-agent configuration.",
@@ -24471,6 +24533,21 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     "agents.defaults.contextLimits.postCompactionMaxChars": {
       label: "Default Post-compaction Max Chars",
       help: "Default max characters retained from AGENTS.md during post-compaction context refresh injection. Lower this to make compaction recovery cheaper, or raise it for agents that depend on longer startup guidance.",
+      tags: ["performance"],
+    },
+    "agents.defaults.commandLane": {
+      label: "Default Agent Command Lane",
+      help: "Default foreground agent command queue lane. Omit to use the shared main lane; set id and maxConcurrent to place routed agents on a separate lane by default.",
+      tags: ["advanced"],
+    },
+    "agents.defaults.commandLane.id": {
+      label: "Default Agent Command Lane ID",
+      help: "Default command queue lane id for foreground agent runs. Omit to keep using main.",
+      tags: ["advanced"],
+    },
+    "agents.defaults.commandLane.maxConcurrent": {
+      label: "Default Agent Command Lane Max Concurrent",
+      help: "Maximum concurrent foreground runs for agents using this default command lane.",
       tags: ["performance"],
     },
     "agents.defaults.agentRuntime": {

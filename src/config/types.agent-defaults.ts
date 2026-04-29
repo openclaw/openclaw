@@ -3,6 +3,7 @@ import type {
   SilentReplyRewriteShape,
 } from "../shared/silent-reply-policy.js";
 import type {
+  AgentCommandLaneConfig,
   AgentEmbeddedHarnessConfig,
   AgentModelConfig,
   AgentRuntimePolicyConfig,
@@ -386,13 +387,15 @@ export type AgentDefaultsConfig = {
      */
     includeReasoning?: boolean;
   };
-  /** Max concurrent agent runs across all conversations. Default: 1 (sequential). */
+  /** Max concurrent agent runs across all conversations. Default: 4. */
   maxConcurrent?: number;
+  /** Default command queue lane for foreground agent runs. Omitted uses the shared "main" lane. */
+  commandLane?: AgentCommandLaneConfig;
   /** Sub-agent defaults (spawned via sessions_spawn). */
   subagents?: {
     /** Default allowlist of target agent ids for sessions_spawn. Use "*" to allow any. */
     allowAgents?: string[];
-    /** Max concurrent sub-agent runs (global lane: "subagent"). Default: 1. */
+    /** Max concurrent sub-agent runs (global lane: "subagent"). Default: 8. */
     maxConcurrent?: number;
     /** Maximum depth allowed for sessions_spawn chains. Default behavior: 1 (no nested spawns). */
     maxSpawnDepth?: number;

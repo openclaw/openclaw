@@ -548,6 +548,71 @@ describe("gateway agent handler", () => {
     );
   });
 
+  it("uses the configured command lane for the resolved session agent", async () => {
+    const cfg = {
+      agents: {
+        list: [{ id: "main" }, { id: "heavy", commandLane: { id: "agent:heavy" } }],
+      },
+    };
+    mocks.loadConfigReturn = cfg;
+    mocks.listAgentIds.mockReturnValue(["main", "heavy"]);
+    mocks.loadSessionEntry.mockReturnValue({
+      cfg,
+      storePath: "/tmp/sessions.json",
+      entry: {
+        sessionId: "heavy-session-id",
+        updatedAt: Date.now(),
+      },
+      canonicalKey: "agent:heavy:main",
+    });
+    mocks.updateSessionStore.mockImplementation(async (_path, updater) =>
+      updater({
+        "agent:heavy:main": buildExistingMainStoreEntry({ sessionId: "heavy-session-id" }),
+      }),
+    );
+    mocks.agentCommand.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: { durationMs: 100 },
+    });
+    mocks.agentCommand.mockClear();
+
+    await invokeAgent({
+      message: "heavy work",
+      agentId: "heavy",
+      sessionKey: "agent:heavy:main",
+      idempotencyKey: "test-command-lane-heavy",
+    });
+
+    await waitForAssertion(() => expect(mocks.agentCommand).toHaveBeenCalled());
+    const lastCall = mocks.agentCommand.mock.calls.at(-1)?.[0] as { lane?: string };
+    expect(lastCall.lane).toBe("agent:heavy");
+  });
+
+  it("preserves an explicit request lane over configured command lanes", async () => {
+    primeMainAgentRun({
+      cfg: {
+        agents: {
+          defaults: {
+            commandLane: { id: "inbound" },
+          },
+        },
+      },
+    });
+    mocks.agentCommand.mockClear();
+
+    await invokeAgent({
+      message: "manual lane",
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      lane: "manual",
+      idempotencyKey: "test-command-lane-explicit",
+    });
+
+    await waitForAssertion(() => expect(mocks.agentCommand).toHaveBeenCalled());
+    const lastCall = mocks.agentCommand.mock.calls.at(-1)?.[0] as { lane?: string };
+    expect(lastCall.lane).toBe("manual");
+  });
+
   it("rejects provider and model overrides for write-scoped callers", async () => {
     primeMainAgentRun();
     mocks.agentCommand.mockClear();

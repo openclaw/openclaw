@@ -210,6 +210,12 @@ export const FIELD_HELP: Record<string, string> = {
     "Default max characters kept for a single live tool result before truncation. This affects both persisted live tool-result writes and overflow-recovery truncation heuristics.",
   "agents.defaults.contextLimits.postCompactionMaxChars":
     "Default max characters retained from AGENTS.md during post-compaction context refresh injection. Lower this to make compaction recovery cheaper, or raise it for agents that depend on longer startup guidance.",
+  "agents.defaults.commandLane":
+    "Default foreground agent command queue lane. Omit to use the shared main lane; set id and maxConcurrent to place routed agents on a separate lane by default.",
+  "agents.defaults.commandLane.id":
+    "Default command queue lane id for foreground agent runs. Omit to keep using main.",
+  "agents.defaults.commandLane.maxConcurrent":
+    "Maximum concurrent foreground runs for agents using this default command lane.",
   "agents.list":
     "Explicit list of configured agents with IDs and optional overrides for model, tools, identity, and workspace. Keep IDs stable over time so bindings, approvals, and session routing remain deterministic.",
   "agents.list[].skillsLimits":
@@ -232,6 +238,11 @@ export const FIELD_HELP: Record<string, string> = {
     "Optional per-agent default reasoning visibility (on|off|stream). Applies when no per-message or session reasoning override is set.",
   "agents.list[].fastModeDefault":
     "Optional per-agent default for fast mode. Applies when no per-message or session fast-mode override is set.",
+  "agents.list[].commandLane":
+    "Optional per-agent foreground command queue lane override. Use this to isolate heavy routed agents from the shared main lane.",
+  "agents.list[].commandLane.id": "Command queue lane id for this agent's foreground runs.",
+  "agents.list[].commandLane.maxConcurrent":
+    "Maximum concurrent foreground runs for this agent's configured command lane.",
   "agents.list[].runtime":
     "Optional runtime descriptor for this agent. Use embedded for default OpenClaw execution or acp for external ACP harness defaults.",
   "agents.list[].runtime.type":

@@ -331,6 +331,7 @@ Time format in system prompt. Default: `auto` (OS preference).
       mediaMaxMb: 5,
       contextTokens: 200000,
       maxConcurrent: 3,
+      commandLane: { id: "inbound", maxConcurrent: 3 },
     },
   },
 }
@@ -379,6 +380,7 @@ Time format in system prompt. Default: `auto` (OS preference).
 - `agentRuntime`: default low-level agent runtime policy. Omitted id defaults to OpenClaw Pi. Use `id: "pi"` to force the built-in PI harness, `id: "auto"` to let registered plugin harnesses claim supported models, a registered harness id such as `id: "codex"`, or a supported CLI backend alias such as `id: "claude-cli"`. Set `fallback: "none"` to disable automatic PI fallback. Explicit plugin runtimes such as `codex` fail closed by default unless you set `fallback: "pi"` in the same override scope. Keep model refs canonical as `provider/model`; select Codex, Claude CLI, Gemini CLI, and other execution backends through runtime config instead of legacy runtime provider prefixes. See [Agent runtimes](/concepts/agent-runtimes) for how this differs from provider/model selection.
 - Config writers that mutate these fields (for example `/models set`, `/models set-image`, and fallback add/remove commands) save canonical object form and preserve existing fallback lists when possible.
 - `maxConcurrent`: max parallel agent runs across sessions (each session still serialized). Default: 4.
+- `commandLane`: optional default foreground command queue lane for routed agent turns. Omit it to keep using the shared `main` lane and `agents.defaults.maxConcurrent`; set `{ id, maxConcurrent }` when you want a separate default lane for inbound agents.
 
 ### `agents.defaults.agentRuntime`
 
@@ -964,6 +966,7 @@ for provider examples and precedence.
           deny: ["canvas"],
           elevated: { enabled: true },
         },
+        commandLane: { id: "agent:coder", maxConcurrent: 1 },
       },
     ],
   },
@@ -981,6 +984,7 @@ for provider examples and precedence.
 - `fastModeDefault`: optional per-agent default for fast mode (`true | false`). Applies when no per-message or session fast-mode override is set.
 - `agentRuntime`: optional per-agent low-level runtime policy override. Use `{ id: "codex" }` to make one agent Codex-only while other agents keep the default PI fallback in `auto` mode.
 - `runtime`: optional per-agent runtime descriptor. Use `type: "acp"` with `runtime.acp` defaults (`agent`, `backend`, `mode`, `cwd`) when the agent should default to ACP harness sessions.
+- `commandLane`: optional per-agent foreground command queue lane override. Use a distinct `id` to keep heavy agents from consuming the shared `main` lane; `maxConcurrent` caps that lane.
 - `identity.avatar`: workspace-relative path, `http(s)` URL, or `data:` URI.
 - `identity` derives defaults: `ackReaction` from `emoji`, `mentionPatterns` from `name`/`emoji`.
 - `subagents.allowAgents`: allowlist of agent ids for explicit `sessions_spawn.agentId` targets (`["*"]` = any; default: same agent only). Include the requester id when self-targeted `agentId` calls should be allowed.

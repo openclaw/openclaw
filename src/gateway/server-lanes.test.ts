@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { enqueueCommandInLane, resetCommandQueueStateForTest } from "../process/command-queue.js";
+import {
+  enqueueCommandInLane,
+  getCommandLaneSnapshot,
+  resetCommandQueueStateForTest,
+} from "../process/command-queue.js";
 import { CommandLane } from "../process/lanes.js";
 import { applyGatewayLaneConcurrency } from "./server-lanes.js";
 
@@ -76,5 +80,31 @@ describe("applyGatewayLaneConcurrency", () => {
 
     releaseRuns.resolve();
     await Promise.all([first, second]);
+  });
+
+  it("applies configured command lane concurrency for default and per-agent lanes", () => {
+    applyGatewayLaneConcurrency({
+      agents: {
+        defaults: {
+          commandLane: {
+            id: "inbound",
+            maxConcurrent: 3,
+          },
+        },
+        list: [
+          { id: "main" },
+          {
+            id: "heavy",
+            commandLane: {
+              id: "agent:heavy",
+              maxConcurrent: 1,
+            },
+          },
+        ],
+      },
+    } as OpenClawConfig);
+
+    expect(getCommandLaneSnapshot("inbound").maxConcurrent).toBe(3);
+    expect(getCommandLaneSnapshot("agent:heavy").maxConcurrent).toBe(1);
   });
 });

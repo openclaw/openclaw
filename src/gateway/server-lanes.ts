@@ -1,3 +1,4 @@
+import { listConfiguredAgentCommandLaneConcurrencies } from "../config/agent-command-lanes.js";
 import { resolveAgentMaxConcurrent, resolveSubagentMaxConcurrent } from "../config/agent-limits.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { setCommandLaneConcurrency } from "../process/command-queue.js";
@@ -10,4 +11,7 @@ export function applyGatewayLaneConcurrency(cfg: OpenClawConfig) {
   setCommandLaneConcurrency(CommandLane.CronNested, cronMaxConcurrentRuns);
   setCommandLaneConcurrency(CommandLane.Main, resolveAgentMaxConcurrent(cfg));
   setCommandLaneConcurrency(CommandLane.Subagent, resolveSubagentMaxConcurrent(cfg));
+  for (const { lane, maxConcurrent } of listConfiguredAgentCommandLaneConcurrencies(cfg)) {
+    setCommandLaneConcurrency(lane, maxConcurrent);
+  }
 }

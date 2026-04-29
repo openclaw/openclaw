@@ -460,6 +460,37 @@ function createAsyncReplySpy() {
 }
 
 describe("createFollowupRunner runtime config", () => {
+  it("uses the configured command lane for queued routed followup runs", async () => {
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      meta: {},
+    });
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "openai/gpt-5.4",
+    });
+
+    await runner(
+      createQueuedRun({
+        run: {
+          agentId: "heavy",
+          config: {
+            agents: {
+              defaults: {
+                commandLane: { id: "inbound" },
+              },
+              list: [{ id: "main" }, { id: "heavy", commandLane: { id: "agent:heavy" } }],
+            },
+          },
+        },
+      }),
+    );
+
+    const call = runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0] as { lane?: string } | undefined;
+    expect(call?.lane).toBe("agent:heavy");
+  });
+
   it("uses the active runtime snapshot for queued embedded followup runs", async () => {
     const sourceConfig: OpenClawConfig = {
       models: {

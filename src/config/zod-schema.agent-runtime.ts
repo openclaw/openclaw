@@ -824,6 +824,19 @@ export const AgentRuntimePolicySchema = z
   .strict()
   .optional();
 
+const CommandLaneIdSchema = z
+  .string()
+  .min(1)
+  .refine((value) => value.trim().length > 0, "Command lane id must be non-empty");
+
+export const AgentCommandLaneSchema = z
+  .object({
+    id: CommandLaneIdSchema.optional(),
+    maxConcurrent: z.number().int().positive().optional(),
+  })
+  .strict()
+  .optional();
+
 export const AgentEntrySchema = z
   .object({
     id: z.string(),
@@ -840,6 +853,7 @@ export const AgentEntrySchema = z
       .optional(),
     reasoningDefault: z.enum(["on", "off", "stream"]).optional(),
     fastModeDefault: z.boolean().optional(),
+    commandLane: AgentCommandLaneSchema,
     skills: z.array(z.string()).optional(),
     memorySearch: MemorySearchSchema,
     humanDelay: HumanDelaySchema.optional(),

@@ -24,6 +24,7 @@ import {
   shouldApplyStartupContext,
 } from "../../auto-reply/reply/startup-context.js";
 import { agentCommandFromIngress } from "../../commands/agent.js";
+import { resolveAgentCommandLane } from "../../config/agent-command-lanes.js";
 import {
   evaluateSessionFreshness,
   mergeSessionEntry,
@@ -1075,6 +1076,12 @@ export const agentHandlers: GatewayRequestHandlers = {
       (client?.connect && isWebchatConnect(client.connect)
         ? INTERNAL_MESSAGE_CHANNEL
         : resolvedChannel);
+    const runConfig = cfgForAgent ?? cfg;
+    const runAgentId = resolvedSessionKey
+      ? resolveAgentIdFromSessionKey(resolvedSessionKey)
+      : (agentId ?? resolveDefaultAgentId(runConfig));
+    const commandLane =
+      normalizeOptionalString(request.lane) ?? resolveAgentCommandLane(runConfig, runAgentId);
 
     const deliver = request.deliver === true && resolvedChannel !== INTERNAL_MESSAGE_CHANNEL;
 
@@ -1198,7 +1205,7 @@ export const agentHandlers: GatewayRequestHandlers = {
           bestEffortDeliver,
           messageChannel: originMessageChannel,
           runId,
-          lane: request.lane,
+          lane: commandLane,
           modelRun: request.modelRun === true,
           promptMode: request.promptMode,
           extraSystemPrompt: request.extraSystemPrompt,

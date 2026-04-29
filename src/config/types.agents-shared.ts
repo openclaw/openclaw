@@ -30,6 +30,13 @@ export type AgentRuntimePolicyConfig = {
   fallback?: "pi" | "none";
 };
 
+export type AgentCommandLaneConfig = {
+  /** Command queue lane id for foreground agent runs. Omitted inherits the default lane. */
+  id?: string;
+  /** Max concurrent runs for this command lane. Omitted uses the lane default. */
+  maxConcurrent?: number;
+};
+
 export type AgentSandboxConfig = {
   mode?: "off" | "non-main" | "all";
   /** Sandbox runtime backend id. Default: "docker". */

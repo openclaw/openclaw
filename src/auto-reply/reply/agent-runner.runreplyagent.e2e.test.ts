@@ -13,6 +13,7 @@ import {
 import { createMockTypingController } from "./test-helpers.js";
 
 type AgentRunParams = {
+  lane?: string;
   onPartialReply?: (payload: { text?: string }) => Promise<void> | void;
   onAssistantMessageStart?: () => Promise<void> | void;
   onReasoningStream?: (payload: { text?: string }) => Promise<void> | void;
@@ -188,6 +189,28 @@ function createMinimalRun(params?: {
 }
 
 describe("runReplyAgent heartbeat followup guard", () => {
+  it("uses the configured command lane for routed channel runs", async () => {
+    const { run } = createMinimalRun({
+      sessionKey: "agent:heavy:main",
+      runOverrides: {
+        agentId: "heavy",
+        config: {
+          agents: {
+            defaults: {
+              commandLane: { id: "inbound" },
+            },
+            list: [{ id: "main" }, { id: "heavy", commandLane: { id: "agent:heavy" } }],
+          },
+        },
+      },
+    });
+
+    await run();
+
+    const call = state.runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0] as AgentRunParams | undefined;
+    expect(call?.lane).toBe("agent:heavy");
+  });
+
   it("drops heartbeat runs when another run is active", async () => {
     const { run, typing } = createMinimalRun({
       opts: { isHeartbeat: true },
