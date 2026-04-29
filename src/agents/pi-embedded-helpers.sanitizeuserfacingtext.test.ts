@@ -214,6 +214,7 @@ describe("sanitizeUserFacingText", () => {
     expect(sanitizeUserFacingText("Hello\n\n[tool calls omitted]\nWorld\n")).toBe(
       "Hello\n\nWorld\n",
     );
+    expect(sanitizeUserFacingText("A\n[tool calls omitted]\n[tool calls omitted]\nB")).toBe("A\nB");
   });
 
   it("keeps ordinary inline mentions of the replay placeholder", () => {
