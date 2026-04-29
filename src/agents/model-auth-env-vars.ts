@@ -20,12 +20,20 @@ export function resolveProviderEnvAuthEvidence(
   return resolveProviderAuthEvidence(params);
 }
 
-export function resolveProviderEnvAuthLookupKeys(params?: ProviderEnvVarLookupParams): string[] {
-  const envCandidateMap = resolveProviderEnvApiKeyCandidates(params);
-  const authEvidenceMap = resolveProviderEnvAuthEvidence(params);
+export function listProviderEnvAuthLookupKeys(params: {
+  envCandidateMap: Readonly<Record<string, readonly string[]>>;
+  authEvidenceMap: Readonly<Record<string, readonly ProviderAuthEvidence[]>>;
+}): string[] {
   return Array.from(
-    new Set([...Object.keys(envCandidateMap), ...Object.keys(authEvidenceMap)]),
+    new Set([...Object.keys(params.envCandidateMap), ...Object.keys(params.authEvidenceMap)]),
   ).toSorted((a, b) => a.localeCompare(b));
+}
+
+export function resolveProviderEnvAuthLookupKeys(params?: ProviderEnvVarLookupParams): string[] {
+  return listProviderEnvAuthLookupKeys({
+    envCandidateMap: resolveProviderEnvApiKeyCandidates(params),
+    authEvidenceMap: resolveProviderEnvAuthEvidence(params),
+  });
 }
 
 export const PROVIDER_ENV_API_KEY_CANDIDATES = resolveProviderEnvApiKeyCandidates();

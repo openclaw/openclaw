@@ -9,6 +9,7 @@ import {
 } from "./pi-auth-discovery-core.js";
 
 vi.mock("./model-auth-env-vars.js", () => ({
+  listProviderEnvAuthLookupKeys: () => ["mistral", "workspace-cloud"],
   resolveProviderEnvApiKeyCandidates: () => ({
     mistral: ["MISTRAL_API_KEY"],
   }),
@@ -21,7 +22,6 @@ vi.mock("./model-auth-env-vars.js", () => ({
       },
     ],
   }),
-  resolveProviderEnvAuthLookupKeys: () => ["mistral", "workspace-cloud"],
 }));
 
 vi.mock("./model-auth-env.js", () => ({

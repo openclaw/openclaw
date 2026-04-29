@@ -2,9 +2,9 @@ import fs from "node:fs";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isRecord } from "../utils.js";
 import {
+  listProviderEnvAuthLookupKeys,
   resolveProviderEnvApiKeyCandidates,
   resolveProviderEnvAuthEvidence,
-  resolveProviderEnvAuthLookupKeys,
 } from "./model-auth-env-vars.js";
 import { resolveEnvApiKey } from "./model-auth-env.js";
 import type { PiCredentialMap } from "./pi-auth-credentials.js";
@@ -31,7 +31,10 @@ export function addEnvBackedPiCredentials(
   // pi-coding-agent hides providers from its registry when auth storage lacks
   // a matching credential entry. Mirror env-backed provider auth here so
   // live/model discovery sees the same providers runtime auth can use.
-  for (const provider of resolveProviderEnvAuthLookupKeys(lookupParams)) {
+  for (const provider of listProviderEnvAuthLookupKeys({
+    envCandidateMap: candidateMap,
+    authEvidenceMap,
+  })) {
     if (next[provider]) {
       continue;
     }

@@ -92,7 +92,7 @@ const mocks = vi.hoisted(() => {
       fal: ["FAL_KEY"],
     }),
     resolveProviderEnvAuthEvidence: vi.fn().mockReturnValue({}),
-    resolveProviderEnvAuthLookupKeys: vi
+    listProviderEnvAuthLookupKeys: vi
       .fn()
       .mockImplementation(() => [
         "anthropic",
@@ -206,9 +206,9 @@ vi.mock("../../agents/model-auth.js", () => ({
   getCustomProviderApiKey: mocks.getCustomProviderApiKey,
 }));
 vi.mock("../../agents/model-auth-env-vars.js", () => ({
+  listProviderEnvAuthLookupKeys: mocks.listProviderEnvAuthLookupKeys,
   resolveProviderEnvApiKeyCandidates: mocks.resolveProviderEnvApiKeyCandidates,
   resolveProviderEnvAuthEvidence: mocks.resolveProviderEnvAuthEvidence,
-  resolveProviderEnvAuthLookupKeys: mocks.resolveProviderEnvAuthLookupKeys,
   listKnownProviderEnvApiKeyNames: mocks.listKnownProviderEnvApiKeyNames,
 }));
 vi.mock("../../agents/model-selection-cli.js", () => ({
@@ -543,11 +543,11 @@ describe("modelsStatusCommand auth overview", () => {
 
   it("includes auth-evidence-only providers in the auth overview", async () => {
     const localRuntime = createRuntime();
-    const originalKeysImpl = mocks.resolveProviderEnvAuthLookupKeys.getMockImplementation();
+    const originalKeysImpl = mocks.listProviderEnvAuthLookupKeys.getMockImplementation();
     const originalEvidenceImpl = mocks.resolveProviderEnvAuthEvidence.getMockImplementation();
     const originalEnvImpl = mocks.resolveEnvApiKey.getMockImplementation();
 
-    mocks.resolveProviderEnvAuthLookupKeys.mockReturnValue(["workspace-cloud"]);
+    mocks.listProviderEnvAuthLookupKeys.mockReturnValue(["workspace-cloud"]);
     mocks.resolveProviderEnvAuthEvidence.mockReturnValue({
       "workspace-cloud": [
         {
@@ -581,7 +581,7 @@ describe("modelsStatusCommand auth overview", () => {
       );
     } finally {
       if (originalKeysImpl) {
-        mocks.resolveProviderEnvAuthLookupKeys.mockImplementation(originalKeysImpl);
+        mocks.listProviderEnvAuthLookupKeys.mockImplementation(originalKeysImpl);
       }
       if (originalEvidenceImpl) {
         mocks.resolveProviderEnvAuthEvidence.mockImplementation(originalEvidenceImpl);

@@ -17,9 +17,9 @@ import { ensureAuthProfileStoreWithoutExternalProfiles as ensureAuthProfileStore
 import type { AuthProfileCredential } from "../../agents/auth-profiles/types.js";
 import { resolveProfileUnusableUntilForDisplay } from "../../agents/auth-profiles/usage.js";
 import {
+  listProviderEnvAuthLookupKeys,
   resolveProviderEnvApiKeyCandidates,
   resolveProviderEnvAuthEvidence,
-  resolveProviderEnvAuthLookupKeys,
 } from "../../agents/model-auth-env-vars.js";
 import { resolveEnvApiKey } from "../../agents/model-auth.js";
 import {
@@ -257,7 +257,7 @@ export async function modelsStatusCommand(
   };
   const envCandidateMap = resolveProviderEnvApiKeyCandidates(envLookupParams);
   const authEvidenceMap = resolveProviderEnvAuthEvidence(envLookupParams);
-  for (const provider of resolveProviderEnvAuthLookupKeys(envLookupParams)) {
+  for (const provider of listProviderEnvAuthLookupKeys({ envCandidateMap, authEvidenceMap })) {
     if (
       resolveEnvApiKey(provider, process.env, {
         config: cfg,

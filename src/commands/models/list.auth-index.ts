@@ -1,8 +1,8 @@
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import {
+  listProviderEnvAuthLookupKeys,
   resolveProviderEnvAuthEvidence,
   resolveProviderEnvApiKeyCandidates,
-  resolveProviderEnvAuthLookupKeys,
 } from "../../agents/model-auth-env-vars.js";
 import { resolveEnvApiKey } from "../../agents/model-auth-env.js";
 import { resolveAwsSdkEnvVarName } from "../../agents/model-auth-runtime-shared.js";
@@ -25,10 +25,6 @@ export type CreateModelListAuthIndexParams = {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   syntheticAuthProviderRefs?: readonly string[];
-};
-
-export const EMPTY_MODEL_LIST_AUTH_INDEX: ModelListAuthIndex = {
-  hasProviderAuth: () => false,
 };
 
 function normalizeAuthProvider(
@@ -90,12 +86,13 @@ export function createModelListAuthIndex(
     addProvider(credential.provider);
   }
 
-  for (const provider of resolveProviderEnvAuthLookupKeys(lookupParams)) {
+  for (const provider of listProviderEnvAuthLookupKeys({ envCandidateMap, authEvidenceMap })) {
     if (
       resolveEnvApiKey(provider, env, {
         aliasMap,
         candidateMap: envCandidateMap,
         authEvidenceMap,
+        config: params.cfg,
         workspaceDir: params.workspaceDir,
       })
     ) {
@@ -131,8 +128,16 @@ export function createModelListAuthIndex(
     if (cached !== undefined) {
       return cached;
     }
+    const hasPrecomputedCandidates = Object.hasOwn(envCandidateMap, normalized);
+    const hasPrecomputedEvidence = Object.hasOwn(authEvidenceMap, normalized);
     const hasAuth = Boolean(
-      resolveEnvApiKey(provider, env, { aliasMap, candidateMap: envCandidateMap }),
+      resolveEnvApiKey(provider, env, {
+        aliasMap,
+        candidateMap: hasPrecomputedCandidates ? envCandidateMap : undefined,
+        authEvidenceMap: hasPrecomputedEvidence ? authEvidenceMap : undefined,
+        config: params.cfg,
+        workspaceDir: params.workspaceDir,
+      }),
     );
     envProviderAuthCache.set(normalized, hasAuth);
     if (hasAuth) {
