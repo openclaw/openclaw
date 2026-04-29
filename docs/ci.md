@@ -285,6 +285,9 @@ the separate `/codeql-critical-quality/channel-runtime-boundary` category. The
 agent-runtime-boundary job scans command execution, model/provider dispatch,
 auto-reply dispatch and queues, and ACP control-plane runtime contracts under
 the separate `/codeql-critical-quality/agent-runtime-boundary` category. The
+mcp-process-runtime-boundary job scans MCP servers and tool bridges, process
+supervision helpers, and outbound delivery contracts under the separate
+`/codeql-critical-quality/mcp-process-runtime-boundary` category. The
 ui-control-plane job scans Control UI bootstrap, local persistence, gateway
 control flows, and task control-plane runtime contracts under the separate
 `/codeql-critical-quality/ui-control-plane` category. The
