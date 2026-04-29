@@ -2021,13 +2021,7 @@ describe("memory plugin e2e", () => {
 
     memoryPlugin.register(mockApi as any);
     const recallTool = registeredTools.find((t) => t.opts?.name === "memory_recall")?.tool;
-    if (!recallTool) {
-      throw new Error("memory_recall tool was not registered");
-    }
-
-    await expect(recallTool.execute("test-call-zero-dims", { query: "hello" })).rejects.toThrow(
-      "Embedding dimensions must be a positive number",
-    );
+    expect(recallTool).toBeUndefined();
   });
 
 
