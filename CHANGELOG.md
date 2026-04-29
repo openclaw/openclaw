@@ -40,6 +40,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Config: accept documented `browser.tabCleanup` keys in strict root config validation, so configured tab cleanup no longer fails before runtime reads it. Fixes #74577. Thanks @lonexreb and @ezdlp.
 - Channels/status: keep Telegram, Slack, and Google Chat read-only allowlist/default-target accessors on config-only paths, so status and channel summaries do not resolve SecretRef-backed runtime credentials. Thanks @eusine.
 - Channels/Discord: keep read-only allowlist/default-target accessors from resolving SecretRef-backed bot tokens, so status and channel summaries no longer fail when tokens are only available in gateway runtime. (#74737) Thanks @eusine.
 - Gateway/sessions: align session abort wait semantics across `chat`, `agent`, and `sessions` server methods so abort RPCs return after the targeted sessions actually halt instead of resolving early while runs are still draining. (#74751) Thanks @BunsDev.
