@@ -92,7 +92,7 @@ env:
 jobs:
   resolve_target:
     name: Resolve target ref
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     outputs:
       sha: ${{ steps.resolve.outputs.sha }}
@@ -160,7 +160,7 @@ jobs:
     name: Run normal full CI
     needs: [resolve_target]
     if: contains(fromJSON('["all","ci"]'), inputs.rerun_group)
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 240
     outputs:
       run_id: ${{ steps.dispatch.outputs.run_id }}
@@ -275,7 +275,7 @@ jobs:
     name: Run plugin prerelease validation
     needs: [resolve_target]
     if: contains(fromJSON('["all","plugin-prerelease"]'), inputs.rerun_group)
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 300
     outputs:
       run_id: ${{ steps.dispatch.outputs.run_id }}
@@ -373,7 +373,7 @@ jobs:
     name: Run release/live/Docker/QA validation
     needs: [resolve_target]
     if: contains(fromJSON('["all","release-checks","install-smoke","cross-os","live-e2e","package","qa","qa-parity","qa-live"]'), inputs.rerun_group)
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 720
     outputs:
       run_id: ${{ steps.dispatch.outputs.run_id }}
@@ -490,7 +490,7 @@ jobs:
     name: Run post-publish Telegram E2E
     needs: [resolve_target]
     if: inputs.npm_telegram_package_spec != '' && contains(fromJSON('["all","npm-telegram"]'), inputs.rerun_group)
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 120
     outputs:
       run_id: ${{ steps.dispatch.outputs.run_id }}
@@ -573,7 +573,7 @@ jobs:
     name: Verify full validation
     needs: [normal_ci, plugin_prerelease, release_checks, npm_telegram]
     if: always()
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       - name: Request private evidence update

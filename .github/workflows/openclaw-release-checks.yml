@@ -66,7 +66,7 @@ env:
 
 jobs:
   resolve_target:
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
       contents: read
@@ -801,7 +801,7 @@ jobs:
       - qa_live_matrix_release_checks
       - qa_live_telegram_release_checks
     if: always()
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     permissions: {}
     timeout-minutes: 5
     steps:

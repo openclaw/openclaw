@@ -302,6 +302,18 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
       group: "full-release-validation-${{ inputs.ref }}-${{ inputs.rerun_group }}",
       "cancel-in-progress": true,
     });
+    expect(releaseChecksWorkflow.jobs.resolve_target["runs-on"]).toBe("ubuntu-24.04");
+    expect(releaseChecksWorkflow.jobs.summary["runs-on"]).toBe("ubuntu-24.04");
+    for (const jobName of [
+      "resolve_target",
+      "normal_ci",
+      "plugin_prerelease",
+      "release_checks",
+      "npm_telegram",
+      "summary",
+    ]) {
+      expect(fullReleaseWorkflow.jobs[jobName]["runs-on"]).toBe("ubuntu-24.04");
+    }
   });
 
   it("keeps the live-ish availability check redacted", () => {
