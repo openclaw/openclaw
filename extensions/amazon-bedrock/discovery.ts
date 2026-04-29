@@ -112,23 +112,27 @@ const KNOWN_CONTEXT_WINDOWS: Record<string, number> = {
   "qwen.qwen3-vl-235b-a22b": 128_000,
 };
 
-type CompiledCwOverride = { pattern: RegExp; contextWindow: number };
+type CompiledCwOverride = { key: string; pattern: RegExp; contextWindow: number };
 
 /**
  * Compile user-supplied regex → contextWindow overrides into `RegExp` objects.
  * Invalid patterns are logged and skipped.
+ *
+ * Results are sorted by key so that matching order is deterministic and consistent
+ * with {@link sortedCwOverrides} (which sorts the cache key the same way).
  */
 function compileCwOverrides(overrides?: Record<string, number>): CompiledCwOverride[] {
   if (!overrides) return [];
   const compiled: CompiledCwOverride[] = [];
-  for (const [pattern, cw] of Object.entries(overrides)) {
+  for (const [key, cw] of Object.entries(overrides)) {
     if (typeof cw !== "number" || cw <= 0) continue;
     try {
-      compiled.push({ pattern: new RegExp(pattern), contextWindow: Math.floor(cw) });
+      compiled.push({ key, pattern: new RegExp(key), contextWindow: Math.floor(cw) });
     } catch {
-      log.warn("Skipping invalid modelContextWindowOverrides pattern", { pattern });
+      log.warn("Skipping invalid modelContextWindowOverrides pattern", { pattern: key });
     }
   }
+  compiled.sort((a, b) => a.key.localeCompare(b.key));
   return compiled;
 }
 
