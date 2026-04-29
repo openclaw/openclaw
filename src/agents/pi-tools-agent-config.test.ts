@@ -319,6 +319,23 @@ describe("Agent-specific tool filtering", () => {
     expect(toolNames).toEqual(["session_status"]);
   });
 
+  it("should allow intentionally text-only agents with no callable tools", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        list: [{ id: "reviewer", tools: { profile: "text-only" } }],
+      },
+    };
+
+    const tools = createOpenClawCodingTools({
+      config: cfg,
+      sessionKey: "agent:reviewer:main",
+      workspaceDir: "/tmp/test-text-only-profile",
+      agentDir: "/tmp/agent-text-only-profile",
+    });
+
+    expect(tools.map((t) => t.name)).toEqual([]);
+  });
+
   it("should resolve different tool policies for different agents", () => {
     const cfg: OpenClawConfig = {
       agents: {

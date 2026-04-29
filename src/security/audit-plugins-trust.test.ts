@@ -549,6 +549,34 @@ describe("security audit extension tool reachability findings", () => {
         },
       },
       {
+        name: "does not flag plugin tool reachability when profile is text-only",
+        cfg: {
+          plugins: { allow: ["some-plugin"] },
+          tools: { profile: "text-only" },
+        } satisfies OpenClawConfig,
+        assert: (findings: Awaited<ReturnType<typeof runSharedExtensionsAudit>>) => {
+          expect(
+            findings.some(
+              (finding) => finding.checkId === "plugins.tools_reachable_permissive_policy",
+            ),
+          ).toBe(false);
+        },
+      },
+      {
+        name: "does not flag plugin tool reachability for a text-only agent context",
+        cfg: {
+          plugins: { allow: ["some-plugin"] },
+          tools: { profile: "full" },
+          agents: { list: [{ id: "reviewer", tools: { profile: "text-only" } }] },
+        } satisfies OpenClawConfig,
+        assert: (findings: Awaited<ReturnType<typeof runSharedExtensionsAudit>>) => {
+          const finding = findings.find(
+            (entry) => entry.checkId === "plugins.tools_reachable_permissive_policy",
+          );
+          expect(finding?.detail).not.toContain("agents.list.reviewer");
+        },
+      },
+      {
         name: "flags unallowlisted extensions as warn-level findings when extension inventory exists",
         cfg: {
           channels: {

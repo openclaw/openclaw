@@ -421,7 +421,13 @@ const ToolsWebSchema = z
   .optional();
 
 const ToolProfileSchema = z
-  .union([z.literal("minimal"), z.literal("coding"), z.literal("messaging"), z.literal("full")])
+  .union([
+    z.literal("minimal"),
+    z.literal("coding"),
+    z.literal("messaging"),
+    z.literal("text-only"),
+    z.literal("full"),
+  ])
   .optional();
 
 type AllowlistPolicy = {
