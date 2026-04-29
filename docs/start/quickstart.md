@@ -6,8 +6,6 @@ read_when:
 title: "Quick start"
 ---
 
-# Quick start
-
 <Info>
 Quick start is now part of [Getting Started](/start/getting-started).
 </Info>
@@ -16,7 +14,12 @@ Quick start is now part of [Getting Started](/start/getting-started).
   <Card title="Getting Started" href="/start/getting-started">
     Install OpenClaw and run your first chat in minutes.
   </Card>
-  <Card title="Onboarding Wizard" href="/start/wizard">
-    Full CLI wizard reference and advanced options.
+  <Card title="Onboarding (CLI)" href="/start/wizard">
+    Full CLI onboarding reference and advanced options.
   </Card>
 </Columns>
+
+## Related
+
+- [Getting started](/start/getting-started)
+- [Install overview](/install)

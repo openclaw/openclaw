@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import { fileExists } from "./archive.js";
+import { formatErrorMessage } from "./errors.js";
 import { assertCanonicalPathWithinBase, resolveSafeInstallDir } from "./install-safe-path.js";
 
 export async function resolveCanonicalInstallTarget(params: {
@@ -7,12 +8,14 @@ export async function resolveCanonicalInstallTarget(params: {
   id: string;
   invalidNameMessage: string;
   boundaryLabel: string;
+  nameEncoder?: (id: string) => string;
 }): Promise<{ ok: true; targetDir: string } | { ok: false; error: string }> {
   await fs.mkdir(params.baseDir, { recursive: true });
   const targetDirResult = resolveSafeInstallDir({
     baseDir: params.baseDir,
     id: params.id,
     invalidNameMessage: params.invalidNameMessage,
+    nameEncoder: params.nameEncoder,
   });
   if (!targetDirResult.ok) {
     return { ok: false, error: targetDirResult.error };
@@ -24,7 +27,7 @@ export async function resolveCanonicalInstallTarget(params: {
       boundaryLabel: params.boundaryLabel,
     });
   } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    return { ok: false, error: formatErrorMessage(err) };
   }
   return { ok: true, targetDir: targetDirResult.path };
 }

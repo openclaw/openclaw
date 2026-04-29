@@ -1,4 +1,4 @@
-import { stripAssistantInternalScaffolding } from "../../../../src/shared/text/assistant-visible-text.js";
+import { stripAssistantInternalScaffolding } from "openclaw/plugin-sdk/text-runtime";
 
 /**
  * Patterns that indicate assistant-internal metadata leaked into text.

@@ -1,5 +1,10 @@
 import fs from "node:fs";
-import { execDockerRaw, type ExecDockerRawResult } from "./docker.js";
+import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
+import type {
+  SandboxBackendCommandResult,
+  SandboxFsBridgeContext,
+} from "./backend-handle.types.js";
+import { runDockerSandboxShellCommand } from "./docker-backend.js";
 import {
   buildPinnedMkdirpPlan,
   buildPinnedRemovePlan,
@@ -8,12 +13,13 @@ import {
 } from "./fs-bridge-mutation-helper.js";
 import { SandboxFsPathGuard } from "./fs-bridge-path-safety.js";
 import { buildStatPlan, type SandboxFsCommandPlan } from "./fs-bridge-shell-command-plans.js";
+import type { SandboxFsBridge, SandboxFsStat, SandboxResolvedPath } from "./fs-bridge.types.js";
 import {
   buildSandboxFsMounts,
   resolveSandboxFsPathWithMounts,
   type SandboxResolvedFsPath,
 } from "./fs-paths.js";
-import type { SandboxContext, SandboxWorkspaceAccess } from "./types.js";
+import type { SandboxWorkspaceAccess } from "./types.js";
 
 type RunCommandOptions = {
   args?: string[];
@@ -22,55 +28,20 @@ type RunCommandOptions = {
   signal?: AbortSignal;
 };
 
-export type SandboxResolvedPath = {
-  hostPath: string;
-  relativePath: string;
-  containerPath: string;
-};
+export type { SandboxFsBridge, SandboxFsStat, SandboxResolvedPath } from "./fs-bridge.types.js";
 
-export type SandboxFsStat = {
-  type: "file" | "directory" | "other";
-  size: number;
-  mtimeMs: number;
-};
-
-export type SandboxFsBridge = {
-  resolvePath(params: { filePath: string; cwd?: string }): SandboxResolvedPath;
-  readFile(params: { filePath: string; cwd?: string; signal?: AbortSignal }): Promise<Buffer>;
-  writeFile(params: {
-    filePath: string;
-    cwd?: string;
-    data: Buffer | string;
-    encoding?: BufferEncoding;
-    mkdir?: boolean;
-    signal?: AbortSignal;
-  }): Promise<void>;
-  mkdirp(params: { filePath: string; cwd?: string; signal?: AbortSignal }): Promise<void>;
-  remove(params: {
-    filePath: string;
-    cwd?: string;
-    recursive?: boolean;
-    force?: boolean;
-    signal?: AbortSignal;
-  }): Promise<void>;
-  rename(params: { from: string; to: string; cwd?: string; signal?: AbortSignal }): Promise<void>;
-  stat(params: {
-    filePath: string;
-    cwd?: string;
-    signal?: AbortSignal;
-  }): Promise<SandboxFsStat | null>;
-};
-
-export function createSandboxFsBridge(params: { sandbox: SandboxContext }): SandboxFsBridge {
+export function createSandboxFsBridge(params: {
+  sandbox: SandboxFsBridgeContext;
+}): SandboxFsBridge {
   return new SandboxFsBridgeImpl(params.sandbox);
 }
 
 class SandboxFsBridgeImpl implements SandboxFsBridge {
-  private readonly sandbox: SandboxContext;
+  private readonly sandbox: SandboxFsBridgeContext;
   private readonly mounts: ReturnType<typeof buildSandboxFsMounts>;
   private readonly pathGuard: SandboxFsPathGuard;
 
-  constructor(sandbox: SandboxContext) {
+  constructor(sandbox: SandboxFsBridgeContext) {
     this.sandbox = sandbox;
     this.mounts = buildSandboxFsMounts(sandbox);
     const mountsByContainer = [...this.mounts].toSorted(
@@ -248,21 +219,22 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
   private async runCommand(
     script: string,
     options: RunCommandOptions = {},
-  ): Promise<ExecDockerRawResult> {
-    const dockerArgs = [
-      "exec",
-      "-i",
-      this.sandbox.containerName,
-      "sh",
-      "-c",
-      script,
-      "moltbot-sandbox-fs",
-    ];
-    if (options.args?.length) {
-      dockerArgs.push(...options.args);
+  ): Promise<SandboxBackendCommandResult> {
+    const backend = this.sandbox.backend;
+    if (backend) {
+      return await backend.runShellCommand({
+        script,
+        args: options.args,
+        stdin: options.stdin,
+        allowFailure: options.allowFailure,
+        signal: options.signal,
+      });
     }
-    return execDockerRaw(dockerArgs, {
-      input: options.stdin,
+    return await runDockerSandboxShellCommand({
+      containerName: this.sandbox.containerName,
+      script,
+      args: options.args,
+      stdin: options.stdin,
       allowFailure: options.allowFailure,
       signal: options.signal,
     });
@@ -279,7 +251,7 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
 
   private async runCheckedCommand(
     plan: SandboxFsCommandPlan & { stdin?: Buffer | string; signal?: AbortSignal },
-  ): Promise<ExecDockerRawResult> {
+  ): Promise<SandboxBackendCommandResult> {
     await this.pathGuard.assertPathChecks(plan.checks);
     if (plan.recheckBeforeCommand) {
       await this.pathGuard.assertPathChecks(plan.checks);
@@ -295,7 +267,7 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
   private async runPlannedCommand(
     plan: SandboxFsCommandPlan,
     signal?: AbortSignal,
-  ): Promise<ExecDockerRawResult> {
+  ): Promise<SandboxBackendCommandResult> {
     return await this.runCheckedCommand({ ...plan, signal });
   }
 
@@ -324,7 +296,7 @@ function coerceStatType(typeRaw?: string): "file" | "directory" | "other" {
   if (!typeRaw) {
     return "other";
   }
-  const normalized = typeRaw.trim().toLowerCase();
+  const normalized = normalizeOptionalLowercaseString(typeRaw) ?? "";
   if (normalized.includes("directory")) {
     return "directory";
   }

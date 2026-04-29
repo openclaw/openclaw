@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { buildTelegramInteractiveButtons } from "./button-types.js";
+import { describeTelegramInteractiveButtonBehavior } from "./button-types.test-helpers.js";
 import { resolveTelegramTargetChatType } from "./inline-buttons.js";
 
 describe("resolveTelegramTargetChatType", () => {
@@ -33,5 +35,53 @@ describe("resolveTelegramTargetChatType", () => {
   it("returns 'unknown' for empty strings", () => {
     expect(resolveTelegramTargetChatType("")).toBe("unknown");
     expect(resolveTelegramTargetChatType("   ")).toBe("unknown");
+  });
+});
+
+describeTelegramInteractiveButtonBehavior();
+
+describe("buildTelegramInteractiveButtons callback rewrites", () => {
+  it("drops shared buttons whose callback data exceeds Telegram's limit", () => {
+    expect(
+      buildTelegramInteractiveButtons({
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [
+              { label: "Keep", value: "keep" },
+              { label: "Too long", value: `a${"b".repeat(64)}` },
+            ],
+          },
+        ],
+      }),
+    ).toEqual([[{ text: "Keep", callback_data: "keep", style: undefined }]]);
+  });
+
+  it("rewrites /approve allow-always callbacks to always so plugin IDs fit Telegram limits", () => {
+    const pluginApprovalId = `plugin:${"a".repeat(36)}`;
+    expect(
+      buildTelegramInteractiveButtons({
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [
+              {
+                label: "Allow Always",
+                value: `/approve ${pluginApprovalId} allow-always`,
+                style: "primary",
+              },
+            ],
+          },
+        ],
+      }),
+    ).toEqual([
+      [
+        {
+          text: "Allow Always",
+          callback_data: `/approve ${pluginApprovalId} always`,
+          style: "primary",
+        },
+      ],
+    ]);
   });
 });

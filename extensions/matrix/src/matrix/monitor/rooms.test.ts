@@ -4,16 +4,15 @@ import { resolveMatrixRoomConfig } from "./rooms.js";
 describe("resolveMatrixRoomConfig", () => {
   it("matches room IDs and aliases, not names", () => {
     const rooms = {
-      "!room:example.org": { allow: true },
-      "#alias:example.org": { allow: true },
-      "Project Room": { allow: true },
+      "!room:example.org": { enabled: true },
+      "#alias:example.org": { enabled: true },
+      "Project Room": { enabled: true },
     };
 
     const byId = resolveMatrixRoomConfig({
       rooms,
       roomId: "!room:example.org",
       aliases: [],
-      name: "Project Room",
     });
     expect(byId.allowed).toBe(true);
     expect(byId.matchKey).toBe("!room:example.org");
@@ -22,16 +21,14 @@ describe("resolveMatrixRoomConfig", () => {
       rooms,
       roomId: "!other:example.org",
       aliases: ["#alias:example.org"],
-      name: "Other Room",
     });
     expect(byAlias.allowed).toBe(true);
     expect(byAlias.matchKey).toBe("#alias:example.org");
 
     const byName = resolveMatrixRoomConfig({
-      rooms: { "Project Room": { allow: true } },
+      rooms: { "Project Room": { enabled: true } },
       roomId: "!different:example.org",
       aliases: [],
-      name: "Project Room",
     });
     expect(byName.allowed).toBe(false);
     expect(byName.config).toBeUndefined();
@@ -40,7 +37,7 @@ describe("resolveMatrixRoomConfig", () => {
   describe("matchSource classification", () => {
     it('returns matchSource="direct" for exact room ID match', () => {
       const result = resolveMatrixRoomConfig({
-        rooms: { "!room:example.org": { allow: true } },
+        rooms: { "!room:example.org": { enabled: true } },
         roomId: "!room:example.org",
         aliases: [],
       });
@@ -50,7 +47,7 @@ describe("resolveMatrixRoomConfig", () => {
 
     it('returns matchSource="direct" for alias match', () => {
       const result = resolveMatrixRoomConfig({
-        rooms: { "#alias:example.org": { allow: true } },
+        rooms: { "#alias:example.org": { enabled: true } },
         roomId: "!room:example.org",
         aliases: ["#alias:example.org"],
       });
@@ -60,7 +57,7 @@ describe("resolveMatrixRoomConfig", () => {
 
     it('returns matchSource="wildcard" for wildcard match', () => {
       const result = resolveMatrixRoomConfig({
-        rooms: { "*": { allow: true } },
+        rooms: { "*": { enabled: true } },
         roomId: "!any:example.org",
         aliases: [],
       });
@@ -70,7 +67,7 @@ describe("resolveMatrixRoomConfig", () => {
 
     it("returns undefined matchSource when no match", () => {
       const result = resolveMatrixRoomConfig({
-        rooms: { "!other:example.org": { allow: true } },
+        rooms: { "!other:example.org": { enabled: true } },
         roomId: "!room:example.org",
         aliases: [],
       });
@@ -81,8 +78,8 @@ describe("resolveMatrixRoomConfig", () => {
     it("direct match takes priority over wildcard", () => {
       const result = resolveMatrixRoomConfig({
         rooms: {
-          "!room:example.org": { allow: true, systemPrompt: "room-specific" },
-          "*": { allow: true, systemPrompt: "generic" },
+          "!room:example.org": { enabled: true, systemPrompt: "room-specific" },
+          "*": { enabled: true, systemPrompt: "generic" },
         },
         roomId: "!room:example.org",
         aliases: [],
@@ -99,7 +96,7 @@ describe("resolveMatrixRoomConfig", () => {
 
     it("wildcard config should NOT be usable to override DM classification", () => {
       const result = resolveMatrixRoomConfig({
-        rooms: { "*": { allow: true, skills: ["general"] } },
+        rooms: { "*": { enabled: true, skills: ["general"] } },
         roomId: "!dm-room:example.org",
         aliases: [],
       });
@@ -111,8 +108,8 @@ describe("resolveMatrixRoomConfig", () => {
     it("explicitly configured room should be usable to override DM classification", () => {
       const result = resolveMatrixRoomConfig({
         rooms: {
-          "!configured-room:example.org": { allow: true },
-          "*": { allow: true },
+          "!configured-room:example.org": { enabled: true },
+          "*": { enabled: true },
         },
         roomId: "!configured-room:example.org",
         aliases: [],

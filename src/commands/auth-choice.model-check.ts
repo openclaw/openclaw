@@ -2,32 +2,34 @@ import { ensureAuthProfileStore, listProfilesForProvider } from "../agents/auth-
 import { hasUsableCustomProviderApiKey, resolveEnvApiKey } from "../agents/model-auth.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
-import { OPENAI_CODEX_DEFAULT_MODEL } from "./openai-codex-model-default.js";
+import { buildProviderAuthRecoveryHint } from "./provider-auth-guidance.js";
 
 export async function warnIfModelConfigLooksOff(
   config: OpenClawConfig,
   prompter: WizardPrompter,
-  options?: { agentId?: string; agentDir?: string },
+  options?: { agentId?: string; agentDir?: string; validateCatalog?: boolean },
 ) {
   const ref = resolveDefaultModelForAgent({
     cfg: config,
     agentId: options?.agentId,
   });
   const warnings: string[] = [];
-  const catalog = await loadModelCatalog({
-    config,
-    useCache: false,
-  });
-  if (catalog.length > 0) {
-    const known = catalog.some(
-      (entry) => entry.provider === ref.provider && entry.id === ref.model,
-    );
-    if (!known) {
-      warnings.push(
-        `Model not found: ${ref.provider}/${ref.model}. Update agents.defaults.model or run /models list.`,
+  if (options?.validateCatalog !== false) {
+    const catalog = await loadModelCatalog({
+      config,
+      useCache: false,
+    });
+    if (catalog.length > 0) {
+      const known = catalog.some(
+        (entry) => entry.provider === ref.provider && entry.id === ref.model,
       );
+      if (!known) {
+        warnings.push(
+          `Model not found: ${ref.provider}/${ref.model}. Update agents.defaults.model or run /models list.`,
+        );
+      }
     }
   }
 
@@ -37,17 +39,14 @@ export async function warnIfModelConfigLooksOff(
   const hasCustomKey = hasUsableCustomProviderApiKey(config, ref.provider);
   if (!hasProfile && !envKey && !hasCustomKey) {
     warnings.push(
-      `No auth configured for provider "${ref.provider}". The agent may fail until credentials are added.`,
+      `No auth configured for provider "${ref.provider}". The agent may fail until credentials are added. ${buildProviderAuthRecoveryHint(
+        {
+          provider: ref.provider,
+          config,
+          includeEnvVar: true,
+        },
+      )}`,
     );
-  }
-
-  if (ref.provider === "openai") {
-    const hasCodex = listProfilesForProvider(store, "openai-codex").length > 0;
-    if (hasCodex) {
-      warnings.push(
-        `Detected OpenAI Codex OAuth. Consider setting agents.defaults.model to ${OPENAI_CODEX_DEFAULT_MODEL}.`,
-      );
-    }
   }
 
   if (warnings.length > 0) {

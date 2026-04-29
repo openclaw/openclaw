@@ -1,46 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { Type } from "@sinclair/typebox";
 import Ajv from "ajv";
-import {
-  formatThinkingLevels,
-  formatXHighModelHint,
-  normalizeThinkLevel,
-  resolvePreferredOpenClawTmpDir,
-  supportsXHighThinking,
-} from "openclaw/plugin-sdk/llm-task";
-// NOTE: This extension is intended to be bundled with OpenClaw.
-// When running from source (tests/dev), OpenClaw internals live under src/.
-// When running from a built install, internals live under dist/ (no src/ tree).
-// So we resolve internal imports dynamically with src-first, dist-fallback.
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/llm-task";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { Type } from "typebox";
+import { resolvePreferredOpenClawTmpDir } from "../api.js";
+import type { OpenClawPluginApi } from "../api.js";
 
-type RunEmbeddedPiAgentFn = (params: Record<string, unknown>) => Promise<unknown>;
-
-async function loadRunEmbeddedPiAgent(): Promise<RunEmbeddedPiAgentFn> {
-  // Source checkout (tests/dev)
-  try {
-    const mod = await import("../../../src/agents/pi-embedded-runner.js");
-    // oxlint-disable-next-line typescript/no-explicit-any
-    if (typeof (mod as any).runEmbeddedPiAgent === "function") {
-      // oxlint-disable-next-line typescript/no-explicit-any
-      return (mod as any).runEmbeddedPiAgent;
-    }
-  } catch {
-    // ignore
-  }
-
-  // Bundled install (built)
-  // NOTE: there is no src/ tree in a packaged install. Prefer a stable internal entrypoint.
-  const distExtensionApi = "../../../dist/extensionAPI.js";
-  const mod = (await import(distExtensionApi)) as { runEmbeddedPiAgent?: unknown };
-  // oxlint-disable-next-line typescript/no-explicit-any
-  const fn = (mod as any).runEmbeddedPiAgent;
-  if (typeof fn !== "function") {
-    throw new Error("Internal error: runEmbeddedPiAgent not available");
-  }
-  return fn as RunEmbeddedPiAgentFn;
-}
+const AjvCtor = Ajv as unknown as typeof import("ajv").default;
 
 function stripCodeFences(s: string): string {
   const trimmed = s.trim();
@@ -67,6 +33,16 @@ function toModelKey(provider?: string, model?: string): string | undefined {
   return `${p}/${m}`;
 }
 
+function stripDuplicateProviderPrefix(provider: string | undefined, model: string | undefined) {
+  const p = provider?.trim();
+  const m = model?.trim();
+  if (!p || !m) {
+    return m || undefined;
+  }
+  const prefix = `${p}/`;
+  return m.startsWith(prefix) ? m.slice(prefix.length) : m;
+}
+
 type PluginCfg = {
   defaultProvider?: string;
   defaultModel?: string;
@@ -75,6 +51,32 @@ type PluginCfg = {
   maxTokens?: number;
   timeoutMs?: number;
 };
+
+type LlmTaskParams = {
+  prompt?: unknown;
+  input?: unknown;
+  schema?: unknown;
+  provider?: unknown;
+  model?: unknown;
+  thinking?: unknown;
+  authProfileId?: unknown;
+  temperature?: unknown;
+  maxTokens?: unknown;
+  timeoutMs?: unknown;
+};
+
+type ThinkingPolicy = ReturnType<OpenClawPluginApi["runtime"]["agent"]["resolveThinkingPolicy"]>;
+
+function formatThinkingPolicy(policy: ThinkingPolicy): string {
+  return policy.levels.map((level) => level.label).join(", ");
+}
+
+function supportsThinkingPolicyLevel(
+  policy: ThinkingPolicy,
+  level: ReturnType<OpenClawPluginApi["runtime"]["agent"]["normalizeThinkingLevel"]>,
+): boolean {
+  return !!level && policy.levels.some((entry) => entry.id === level);
+}
 
 export function createLlmTaskTool(api: OpenClawPluginApi) {
   return {
@@ -99,7 +101,7 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
       timeoutMs: Type.Optional(Type.Number({ description: "Timeout for the LLM run." })),
     }),
 
-    async execute(_id: string, params: Record<string, unknown>) {
+    async execute(_id: string, params: LlmTaskParams) {
       const prompt = typeof params.prompt === "string" ? params.prompt : "";
       if (!prompt.trim()) {
         throw new Error("prompt required");
@@ -110,8 +112,8 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
       const defaultsModel = api.config?.agents?.defaults?.model;
       const primary =
         typeof defaultsModel === "string"
-          ? defaultsModel.trim()
-          : (defaultsModel?.primary?.trim() ?? undefined);
+          ? normalizeOptionalString(defaultsModel)
+          : normalizeOptionalString(defaultsModel?.primary);
       const primaryProvider = typeof primary === "string" ? primary.split("/")[0] : undefined;
       const primaryModel =
         typeof primary === "string" ? primary.split("/").slice(1).join("/") : undefined;
@@ -122,17 +124,15 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
         primaryProvider ||
         undefined;
 
-      const model =
+      const rawModel =
         (typeof params.model === "string" && params.model.trim()) ||
         (typeof pluginCfg.defaultModel === "string" && pluginCfg.defaultModel.trim()) ||
         primaryModel ||
         undefined;
+      const model = stripDuplicateProviderPrefix(provider, rawModel);
 
       const authProfileId =
-        // oxlint-disable-next-line typescript/no-explicit-any
-        (typeof (params as any).authProfileId === "string" &&
-          // oxlint-disable-next-line typescript/no-explicit-any
-          (params as any).authProfileId.trim()) ||
+        (typeof params.authProfileId === "string" && params.authProfileId.trim()) ||
         (typeof pluginCfg.defaultAuthProfileId === "string" &&
           pluginCfg.defaultAuthProfileId.trim()) ||
         undefined;
@@ -140,7 +140,7 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
       const modelKey = toModelKey(provider, model);
       if (!provider || !model || !modelKey) {
         throw new Error(
-          `provider/model could not be resolved (provider=${String(provider ?? "")}, model=${String(model ?? "")})`,
+          `provider/model could not be resolved (provider=${provider ?? ""}, model=${model ?? ""})`,
         );
       }
 
@@ -153,14 +153,22 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
 
       const thinkingRaw =
         typeof params.thinking === "string" && params.thinking.trim() ? params.thinking : undefined;
-      const thinkLevel = thinkingRaw ? normalizeThinkLevel(thinkingRaw) : undefined;
-      if (thinkingRaw && !thinkLevel) {
-        throw new Error(
-          `Invalid thinking level "${thinkingRaw}". Use one of: ${formatThinkingLevels(provider, model)}.`,
-        );
-      }
-      if (thinkLevel === "xhigh" && !supportsXHighThinking(provider, model)) {
-        throw new Error(`Thinking level "xhigh" is only supported for ${formatXHighModelHint()}.`);
+      let thinkLevel: ReturnType<OpenClawPluginApi["runtime"]["agent"]["normalizeThinkingLevel"]> =
+        undefined;
+      if (thinkingRaw) {
+        const thinkingPolicy = api.runtime.agent.resolveThinkingPolicy({ provider, model });
+        const thinkingLevelsHint = formatThinkingPolicy(thinkingPolicy);
+        thinkLevel = api.runtime.agent.normalizeThinkingLevel(thinkingRaw);
+        if (!thinkLevel) {
+          throw new Error(
+            `Invalid thinking level "${thinkingRaw}". Use one of: ${thinkingLevelsHint}.`,
+          );
+        }
+        if (!supportsThinkingPolicyLevel(thinkingPolicy, thinkLevel)) {
+          throw new Error(
+            `Thinking level "${thinkLevel}" is not supported for ${provider}/${model}. Use one of: ${thinkingLevelsHint}.`,
+          );
+        }
       }
 
       const timeoutMs =
@@ -182,8 +190,7 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
               : undefined,
       };
 
-      // oxlint-disable-next-line typescript/no-explicit-any
-      const input = (params as any).input as unknown;
+      const input = params.input;
       let inputJson: string;
       try {
         inputJson = JSON.stringify(input ?? null, null, 2);
@@ -209,9 +216,7 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
         const sessionId = `llm-task-${Date.now()}`;
         const sessionFile = path.join(tmpDir, "session.json");
 
-        const runEmbeddedPiAgent = await loadRunEmbeddedPiAgent();
-
-        const result = await runEmbeddedPiAgent({
+        const result = await api.runtime.agent.runEmbeddedPiAgent({
           sessionId,
           sessionFile,
           workspaceDir: api.config?.agents?.defaults?.workspace ?? process.cwd(),
@@ -228,8 +233,11 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
           disableTools: true,
         });
 
-        // oxlint-disable-next-line typescript/no-explicit-any
-        const text = collectText((result as any).payloads);
+        const text = collectText(
+          typeof result === "object" && result !== null && "payloads" in result
+            ? (result as { payloads?: Array<{ text?: string; isError?: boolean }> }).payloads
+            : undefined,
+        );
         if (!text) {
           throw new Error("LLM returned empty output");
         }
@@ -242,12 +250,10 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
           throw new Error("LLM returned invalid JSON");
         }
 
-        // oxlint-disable-next-line typescript/no-explicit-any
-        const schema = (params as any).schema as unknown;
+        const schema = params.schema;
         if (schema && typeof schema === "object" && !Array.isArray(schema)) {
-          const ajv = new Ajv.default({ allErrors: true, strict: false });
-          // oxlint-disable-next-line typescript/no-explicit-any
-          const validate = ajv.compile(schema as any);
+          const ajv = new AjvCtor({ allErrors: true, strict: false });
+          const validate = ajv.compile(schema);
           const ok = validate(parsed);
           if (!ok) {
             const msg =

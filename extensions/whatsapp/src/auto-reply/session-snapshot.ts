@@ -1,4 +1,5 @@
-import type { loadConfig } from "../../../../src/config/config.js";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import { normalizeMainKey } from "openclaw/plugin-sdk/routing";
 import {
   evaluateSessionFreshness,
   loadSessionStore,
@@ -8,11 +9,10 @@ import {
   resolveSessionResetType,
   resolveSessionKey,
   resolveStorePath,
-} from "../../../../src/config/sessions.js";
-import { normalizeMainKey } from "../../../../src/routing/session-key.js";
+} from "./config.runtime.js";
 
 export function getSessionSnapshot(
-  cfg: ReturnType<typeof loadConfig>,
+  cfg: OpenClawConfig,
   from: string,
   _isHeartbeat = false,
   ctx?: {

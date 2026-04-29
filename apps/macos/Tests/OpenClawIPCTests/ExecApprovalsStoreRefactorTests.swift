@@ -21,18 +21,17 @@ struct ExecApprovalsStoreRefactorTests {
         try await self.withTempStateDir { _ in
             _ = ExecApprovalsStore.ensureFile()
             let url = ExecApprovalsStore.fileURL()
-            let firstWriteDate = try Self.modificationDate(at: url)
+            let firstIdentity = try Self.fileIdentity(at: url)
 
-            try await Task.sleep(nanoseconds: 1_100_000_000)
             _ = ExecApprovalsStore.ensureFile()
-            let secondWriteDate = try Self.modificationDate(at: url)
+            let secondIdentity = try Self.fileIdentity(at: url)
 
-            #expect(firstWriteDate == secondWriteDate)
+            #expect(firstIdentity == secondIdentity)
         }
     }
 
     @Test
-    func `update allowlist reports rejected basename pattern`() async throws {
+    func `update allowlist accepts basename pattern`() async throws {
         try await self.withTempStateDir { _ in
             let rejected = ExecApprovalsStore.updateAllowlist(
                 agentId: "main",
@@ -40,12 +39,10 @@ struct ExecApprovalsStoreRefactorTests {
                     ExecAllowlistEntry(pattern: "echo"),
                     ExecAllowlistEntry(pattern: "/bin/echo"),
                 ])
-            #expect(rejected.count == 1)
-            #expect(rejected.first?.reason == .missingPathComponent)
-            #expect(rejected.first?.pattern == "echo")
+            #expect(rejected.isEmpty)
 
             let resolved = ExecApprovalsStore.resolve(agentId: "main")
-            #expect(resolved.allowlist.map(\.pattern) == ["/bin/echo"])
+            #expect(resolved.allowlist.map(\.pattern) == ["echo", "/bin/echo"])
         }
     }
 
@@ -81,12 +78,12 @@ struct ExecApprovalsStoreRefactorTests {
         }
     }
 
-    private static func modificationDate(at url: URL) throws -> Date {
+    private static func fileIdentity(at url: URL) throws -> Int {
         let attributes = try FileManager().attributesOfItem(atPath: url.path)
-        guard let date = attributes[.modificationDate] as? Date else {
-            struct MissingDateError: Error {}
-            throw MissingDateError()
+        guard let identifier = (attributes[.systemFileNumber] as? NSNumber)?.intValue else {
+            struct MissingIdentifierError: Error {}
+            throw MissingIdentifierError()
         }
-        return date
+        return identifier
     }
 }

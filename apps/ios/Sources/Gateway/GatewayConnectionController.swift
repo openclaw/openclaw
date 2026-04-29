@@ -3,12 +3,12 @@ import Contacts
 import CoreLocation
 import CoreMotion
 import CryptoKit
+import Darwin
 import EventKit
 import Foundation
-import Darwin
-import OpenClawKit
 import Network
 import Observation
+import OpenClawKit
 import os
 import Photos
 import ReplayKit
@@ -28,7 +28,9 @@ final class GatewayConnectionController {
         let fingerprintSha256: String
         let isManual: Bool
 
-        var id: String { self.stableID }
+        var id: String {
+            self.stableID
+        }
     }
 
     private(set) var gateways: [GatewayDiscoveryModel.DiscoveredGateway] = []
@@ -85,7 +87,6 @@ final class GatewayConnectionController {
         self.discovery.start()
         self.updateFromDiscovery()
     }
-
 
     /// Returns `nil` when a connect attempt was started, otherwise returns a user-facing error.
     func connectWithDiagnostics(_ gateway: GatewayDiscoveryModel.DiscoveredGateway) async -> String? {
@@ -174,7 +175,12 @@ final class GatewayConnectionController {
         let stored = GatewayTLSStore.loadFingerprint(stableID: stableID)
         if resolvedUseTLS, stored == nil {
             guard let url = self.buildGatewayURL(host: host, port: resolvedPort, useTLS: true) else { return }
-            guard let fp = await self.probeTLSFingerprint(url: url) else { return }
+            guard let fp = await self.probeTLSFingerprint(url: url) else {
+                self.appModel?.gatewayStatusText =
+                    "TLS handshake failed for \(host):\(resolvedPort). "
+                        + "Remote gateways must use HTTPS/WSS."
+                return
+            }
             self.pendingTrustConnect = (url: url, stableID: stableID, isManual: true)
             self.pendingTrustPrompt = TrustPrompt(
                 stableID: stableID,
@@ -552,11 +558,11 @@ final class GatewayConnectionController {
     private func resolveHostPortFromBonjourEndpoint(_ endpoint: NWEndpoint) async -> (host: String, port: Int)? {
         switch endpoint {
         case let .hostPort(host, port):
-            return (host: host.debugDescription, port: Int(port.rawValue))
+            (host: host.debugDescription, port: Int(port.rawValue))
         case let .service(name, type, domain, _):
-            return await Self.resolveBonjourServiceToHostPort(name: name, type: type, domain: domain)
+            await Self.resolveBonjourServiceToHostPort(name: name, type: type, domain: domain)
         default:
-            return nil
+            nil
         }
     }
 
@@ -564,8 +570,8 @@ final class GatewayConnectionController {
         name: String,
         type: String,
         domain: String,
-        timeoutSeconds: TimeInterval = 3.0
-    ) async -> (host: String, port: Int)? {
+        timeoutSeconds: TimeInterval = 3.0) async -> (host: String, port: Int)?
+    {
         // NetService callbacks are delivered via a run loop. If we resolve from a thread without one,
         // we can end up never receiving callbacks, which in turn leaks the continuation and leaves
         // the UI stuck "connecting". Keep the whole lifecycle on the main run loop and always
@@ -631,8 +637,8 @@ final class GatewayConnectionController {
                 }
 
                 guard let addrs = svc.addresses else { return nil }
-                    for addrData in addrs {
-                        let host = addrData.withUnsafeBytes { ptr -> String? in
+                for addrData in addrs {
+                    let host = addrData.withUnsafeBytes { ptr -> String? in
                         guard let base = ptr.baseAddress, !ptr.isEmpty else { return nil }
                         var buffer = [CChar](repeating: 0, count: Int(NI_MAXHOST))
 
@@ -759,7 +765,8 @@ final class GatewayConnectionController {
 
     private func resolvedClientId(defaults: UserDefaults, stableID: String?) -> String {
         if let stableID,
-           let override = GatewaySettingsStore.loadGatewayClientIdOverride(stableID: stableID) {
+           let override = GatewaySettingsStore.loadGatewayClientIdOverride(stableID: stableID)
+        {
             return override
         }
         let manualClientId = defaults.string(forKey: "gateway.manual.clientId")?
@@ -776,7 +783,7 @@ final class GatewayConnectionController {
         }
         let trimmedHost = host.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedHost.isEmpty else { return nil }
-        if useTLS && self.shouldForceTLS(host: trimmedHost) {
+        if useTLS, self.shouldForceTLS(host: trimmedHost) {
             return 443
         }
         return 18789
@@ -924,9 +931,9 @@ final class GatewayConnectionController {
     private static func isLocationAuthorized(status: CLAuthorizationStatus) -> Bool {
         switch status {
         case .authorizedAlways, .authorizedWhenInUse:
-            return true
+            true
         default:
-            return false
+            false
         }
     }
 
@@ -1040,8 +1047,8 @@ private final class GatewayTLSFingerprintProbe: NSObject, URLSessionDelegate, @u
     func urlSession(
         _ session: URLSession,
         didReceive challenge: URLAuthenticationChallenge,
-        completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
-    ) {
+        completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void)
+    {
         guard challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust,
               let trust = challenge.protectionSpace.serverTrust
         else {
@@ -1055,7 +1062,8 @@ private final class GatewayTLSFingerprintProbe: NSObject, URLSessionDelegate, @u
     }
 
     private func finish(_ fingerprint: String?) {
-        let (shouldComplete, taskToCancel, sessionToInvalidate) = self.state.withLock { s -> (Bool, URLSessionWebSocketTask?, URLSession?) in
+        typealias FinishState = (Bool, URLSessionWebSocketTask?, URLSession?)
+        let (shouldComplete, taskToCancel, sessionToInvalidate) = self.state.withLock { s -> FinishState in
             guard !s.didFinish else { return (false, nil, nil) }
             s.didFinish = true
             let task = s.task

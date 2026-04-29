@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { maybeInstallDaemon } from "./configure.daemon.js";
 
 const progressSetLabel = vi.hoisted(() => vi.fn());
 const withProgress = vi.hoisted(() =>
@@ -23,6 +24,7 @@ vi.mock("../cli/progress.js", () => ({
 }));
 
 vi.mock("../config/config.js", () => ({
+  getRuntimeConfig: loadConfig,
   loadConfig,
 }));
 
@@ -49,8 +51,9 @@ vi.mock("./daemon-runtime.js", () => ({
   GATEWAY_DAEMON_RUNTIME_OPTIONS: [{ value: "node", label: "Node" }],
 }));
 
-vi.mock("../daemon/service.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../daemon/service.js")>();
+vi.mock("../daemon/service.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("../daemon/service.js")>("../daemon/service.js");
   return {
     ...actual,
     resolveGatewayService: vi.fn(() => ({
@@ -68,8 +71,6 @@ vi.mock("./onboard-helpers.js", () => ({
 vi.mock("./systemd-linger.js", () => ({
   ensureSystemdUserLingerInteractive,
 }));
-
-const { maybeInstallDaemon } = await import("./configure.daemon.js");
 
 describe("maybeInstallDaemon", () => {
   beforeEach(() => {

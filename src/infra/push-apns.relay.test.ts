@@ -9,7 +9,7 @@ import { resolveApnsRelayConfigFromEnv, sendApnsRelayPush } from "./push-apns.re
 
 const relayGatewayIdentity = (() => {
   const { publicKey, privateKey } = generateKeyPairSync("ed25519");
-  const publicKeyPem = publicKey.export({ format: "pem", type: "spki" }).toString();
+  const publicKeyPem = publicKey.export({ format: "pem", type: "spki" });
   const publicKeyRaw = publicKeyRawBase64UrlFromPem(publicKeyPem);
   const deviceId = deriveDeviceIdFromPublicKey(publicKeyRaw);
   if (!deviceId) {
@@ -18,7 +18,7 @@ const relayGatewayIdentity = (() => {
   return {
     deviceId,
     publicKey: publicKeyRaw,
-    privateKeyPem: privateKey.export({ format: "pem", type: "pkcs8" }).toString(),
+    privateKeyPem: privateKey.export({ format: "pem", type: "pkcs8" }),
   };
 })();
 
@@ -26,6 +26,21 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
+
+function createRelayPushParams() {
+  return {
+    relayConfig: {
+      baseUrl: "https://relay.example.com",
+      timeoutMs: 1000,
+    },
+    sendGrant: "send-grant-123",
+    relayHandle: "relay-handle-123",
+    payload: { aps: { "content-available": 1 } },
+    pushType: "background" as const,
+    priority: "5" as const,
+    gatewayIdentity: relayGatewayIdentity,
+  };
+}
 
 describe("push-apns.relay", () => {
   describe("resolveApnsRelayConfigFromEnv", () => {
@@ -190,18 +205,7 @@ describe("push-apns.relay", () => {
       });
       vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
 
-      const result = await sendApnsRelayPush({
-        relayConfig: {
-          baseUrl: "https://relay.example.com",
-          timeoutMs: 1000,
-        },
-        sendGrant: "send-grant-123",
-        relayHandle: "relay-handle-123",
-        payload: { aps: { "content-available": 1 } },
-        pushType: "background",
-        priority: "5",
-        gatewayIdentity: relayGatewayIdentity,
-      });
+      const result = await sendApnsRelayPush(createRelayPushParams());
 
       expect(fetchMock).toHaveBeenCalledTimes(1);
       expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({ redirect: "manual" });
@@ -221,20 +225,7 @@ describe("push-apns.relay", () => {
       });
       vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
 
-      await expect(
-        sendApnsRelayPush({
-          relayConfig: {
-            baseUrl: "https://relay.example.com",
-            timeoutMs: 1000,
-          },
-          sendGrant: "send-grant-123",
-          relayHandle: "relay-handle-123",
-          payload: { aps: { "content-available": 1 } },
-          pushType: "background",
-          priority: "5",
-          gatewayIdentity: relayGatewayIdentity,
-        }),
-      ).resolves.toEqual({
+      await expect(sendApnsRelayPush(createRelayPushParams())).resolves.toEqual({
         ok: true,
         status: 202,
         apnsId: undefined,
@@ -258,20 +249,7 @@ describe("push-apns.relay", () => {
       });
       vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
 
-      await expect(
-        sendApnsRelayPush({
-          relayConfig: {
-            baseUrl: "https://relay.example.com",
-            timeoutMs: 1000,
-          },
-          sendGrant: "send-grant-123",
-          relayHandle: "relay-handle-123",
-          payload: { aps: { "content-available": 1 } },
-          pushType: "background",
-          priority: "5",
-          gatewayIdentity: relayGatewayIdentity,
-        }),
-      ).resolves.toEqual({
+      await expect(sendApnsRelayPush(createRelayPushParams())).resolves.toEqual({
         ok: false,
         status: 410,
         apnsId: "relay-apns-id",

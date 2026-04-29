@@ -1,36 +1,42 @@
-import { appendCronStyleCurrentTimeLine } from "../../../../src/agents/current-time.js";
-import { resolveHeartbeatReplyPayload } from "../../../../src/auto-reply/heartbeat-reply-payload.js";
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
+import { newConnectionId } from "../reconnect.js";
 import {
   DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
-  resolveHeartbeatPrompt,
-  stripHeartbeatToken,
-} from "../../../../src/auto-reply/heartbeat.js";
-import { getReplyFromConfig } from "../../../../src/auto-reply/reply.js";
-import { HEARTBEAT_TOKEN } from "../../../../src/auto-reply/tokens.js";
-import { resolveWhatsAppHeartbeatRecipients } from "../../../../src/channels/plugins/whatsapp-heartbeat.js";
-import { loadConfig } from "../../../../src/config/config.js";
-import {
+  HEARTBEAT_TOKEN,
+  appendCronStyleCurrentTimeLine,
+  canonicalizeMainSessionAlias,
+  emitHeartbeatEvent,
+  formatError,
+  getRuntimeConfig,
+  getChildLogger,
+  getReplyFromConfig,
+  hasOutboundReplyContent,
   loadSessionStore,
+  normalizeMainKey,
+  redactIdentifier,
+  resolveHeartbeatPrompt,
+  resolveHeartbeatReplyPayload,
+  resolveHeartbeatVisibility,
+  resolveIndicatorType,
+  resolveSendableOutboundReplyParts,
   resolveSessionKey,
   resolveStorePath,
+  resolveWhatsAppHeartbeatRecipients,
+  sendMessageWhatsApp,
+  stripHeartbeatToken,
   updateSessionStore,
-} from "../../../../src/config/sessions.js";
-import {
-  emitHeartbeatEvent,
-  resolveIndicatorType,
-} from "../../../../src/infra/heartbeat-events.js";
-import { resolveHeartbeatVisibility } from "../../../../src/infra/heartbeat-visibility.js";
-import { getChildLogger } from "../../../../src/logging.js";
-import { redactIdentifier } from "../../../../src/logging/redact-identifier.js";
-import { normalizeMainKey } from "../../../../src/routing/session-key.js";
-import { newConnectionId } from "../reconnect.js";
-import { sendMessageWhatsApp } from "../send.js";
-import { formatError } from "../session.js";
-import { whatsappHeartbeatLog } from "./loggers.js";
+  whatsappHeartbeatLog,
+} from "./heartbeat-runner.runtime.js";
 import { getSessionSnapshot } from "./session-snapshot.js";
 
+function resolveDefaultAgentIdFromConfig(cfg: ReturnType<typeof getRuntimeConfig>): string {
+  const agents = cfg.agents?.list ?? [];
+  const chosen = agents.find((agent) => agent?.default)?.id ?? agents[0]?.id ?? "main";
+  return normalizeOptionalLowercaseString(chosen) ?? "main";
+}
+
 export async function runWebHeartbeatOnce(opts: {
-  cfg?: ReturnType<typeof loadConfig>;
+  cfg?: ReturnType<typeof getRuntimeConfig>;
   to: string;
   verbose?: boolean;
   replyResolver?: typeof getReplyFromConfig;
@@ -50,7 +56,7 @@ export async function runWebHeartbeatOnce(opts: {
     to: redactedTo,
   });
 
-  const cfg = cfgOverride ?? loadConfig();
+  const cfg = cfgOverride ?? getRuntimeConfig();
 
   // Resolve heartbeat visibility settings for WhatsApp
   const visibility = resolveHeartbeatVisibility({ cfg, channel: "whatsapp" });
@@ -64,7 +70,7 @@ export async function runWebHeartbeatOnce(opts: {
       whatsappHeartbeatLog.info(`[dry-run] heartbeat ok -> ${redactedTo}`);
       return false;
     }
-    const sendResult = await sender(to, heartbeatOkText, { verbose });
+    const sendResult = await sender(to, heartbeatOkText, { verbose, cfg });
     heartbeatLogger.info(
       {
         to: redactedTo,
@@ -81,7 +87,13 @@ export async function runWebHeartbeatOnce(opts: {
   const sessionCfg = cfg.session;
   const sessionScope = sessionCfg?.scope ?? "per-sender";
   const mainKey = normalizeMainKey(sessionCfg?.mainKey);
-  const sessionKey = resolveSessionKey(sessionScope, { From: to }, mainKey);
+  // Canonicalize so the written key matches what read paths produce (#29683).
+  const rawSessionKey = resolveSessionKey(sessionScope, { From: to }, mainKey);
+  const sessionKey = canonicalizeMainSessionAlias({
+    cfg,
+    agentId: resolveDefaultAgentIdFromConfig(cfg),
+    sessionKey: rawSessionKey,
+  });
   if (sessionId) {
     const storePath = resolveStorePath(cfg.session?.store);
     const store = loadSessionStore(storePath);
@@ -100,7 +112,7 @@ export async function runWebHeartbeatOnce(opts: {
       };
     });
   }
-  const sessionSnapshot = getSessionSnapshot(cfg, to, true);
+  const sessionSnapshot = getSessionSnapshot(cfg, to, true, { sessionKey });
   if (verbose) {
     heartbeatLogger.info(
       {
@@ -130,7 +142,7 @@ export async function runWebHeartbeatOnce(opts: {
         );
         return;
       }
-      const sendResult = await sender(to, overrideBody, { verbose });
+      const sendResult = await sender(to, overrideBody, { verbose, cfg });
       emitHeartbeatEvent({
         status: "sent",
         to,
@@ -181,10 +193,7 @@ export async function runWebHeartbeatOnce(opts: {
     );
     const replyPayload = resolveHeartbeatReplyPayload(replyResult);
 
-    if (
-      !replyPayload ||
-      (!replyPayload.text && !replyPayload.mediaUrl && !replyPayload.mediaUrls?.length)
-    ) {
+    if (!replyPayload || !hasOutboundReplyContent(replyPayload)) {
       heartbeatLogger.info(
         {
           to: redactedTo,
@@ -204,7 +213,8 @@ export async function runWebHeartbeatOnce(opts: {
       return;
     }
 
-    const hasMedia = Boolean(replyPayload.mediaUrl || (replyPayload.mediaUrls?.length ?? 0) > 0);
+    const reply = resolveSendableOutboundReplyParts(replyPayload);
+    const hasMedia = reply.hasMedia;
     const ackMaxChars = Math.max(
       0,
       cfg.agents?.defaults?.heartbeat?.ackMaxChars ?? DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
@@ -253,7 +263,7 @@ export async function runWebHeartbeatOnce(opts: {
       );
     }
 
-    const finalText = stripped.text || replyPayload.text || "";
+    const finalText = stripped.text || reply.text;
 
     // Check if alerts are disabled for WhatsApp
     if (!visibility.showAlerts) {
@@ -279,7 +289,7 @@ export async function runWebHeartbeatOnce(opts: {
       return;
     }
 
-    const sendResult = await sender(to, finalText, { verbose });
+    const sendResult = await sender(to, finalText, { verbose, cfg });
     emitHeartbeatEvent({
       status: "sent",
       to,
@@ -313,8 +323,8 @@ export async function runWebHeartbeatOnce(opts: {
 }
 
 export function resolveHeartbeatRecipients(
-  cfg: ReturnType<typeof loadConfig>,
-  opts: { to?: string; all?: boolean } = {},
+  cfg: ReturnType<typeof getRuntimeConfig>,
+  opts: { to?: string; all?: boolean; accountId?: string } = {},
 ) {
   return resolveWhatsAppHeartbeatRecipients(cfg, opts);
 }

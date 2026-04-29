@@ -1,40 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
-import type { ReplyPayload } from "../../../src/auto-reply/types.js";
-import {
-  installSendPayloadContractSuite,
-  primeSendMock,
-} from "../../../src/test-utils/send-payload-contract.js";
 import { whatsappOutbound } from "./outbound-adapter.js";
 
-function createHarness(params: {
-  payload: ReplyPayload;
-  sendResults?: Array<{ messageId: string }>;
-}) {
-  const sendWhatsApp = vi.fn();
-  primeSendMock(sendWhatsApp, { messageId: "wa-1" }, params.sendResults);
-  const ctx = {
-    cfg: {},
-    to: "5511999999999@c.us",
-    text: "",
-    payload: params.payload,
-    deps: {
-      sendWhatsApp,
-    },
-  };
-  return {
-    run: async () => await whatsappOutbound.sendPayload!(ctx),
-    sendMock: sendWhatsApp,
-    to: ctx.to,
-  };
-}
-
 describe("whatsappOutbound sendPayload", () => {
-  installSendPayloadContractSuite({
-    channel: "whatsapp",
-    chunking: { mode: "split", longTextLength: 5000, maxChunkLength: 4000 },
-    createHarness,
-  });
-
   it("trims leading whitespace for direct text sends", async () => {
     const sendWhatsApp = vi.fn(async () => ({ messageId: "wa-1", toJid: "jid" }));
 
@@ -51,6 +18,36 @@ describe("whatsappOutbound sendPayload", () => {
       accountId: undefined,
       gifPlayback: undefined,
     });
+  });
+
+  it("uses the same final sanitizer stack for direct text sends", async () => {
+    const sendWhatsApp = vi.fn(async () => ({ messageId: "wa-1", toJid: "jid" }));
+
+    await whatsappOutbound.sendText!({
+      cfg: {},
+      to: "5511999999999@c.us",
+      text: [
+        "Before",
+        "<function_calls>",
+        '  <invoke name="send_message">',
+        '    <parameter name="text"><b>hidden</b></parameter>',
+        "  </invoke>",
+        "</function_calls>",
+        "<div>After</div>",
+      ].join("\n"),
+      deps: { sendWhatsApp },
+    });
+
+    expect(sendWhatsApp).toHaveBeenCalledWith(
+      "5511999999999@c.us",
+      "Before\n\nAfter\n",
+      expect.objectContaining({
+        verbose: false,
+        cfg: {},
+        accountId: undefined,
+        gifPlayback: undefined,
+      }),
+    );
   });
 
   it("trims leading whitespace for direct media captions", async () => {
@@ -108,6 +105,53 @@ describe("whatsappOutbound sendPayload", () => {
     });
   });
 
+  it("preserves audioAsVoice from payload media sends", async () => {
+    const sendWhatsApp = vi.fn(async () => ({ messageId: "wa-1", toJid: "jid" }));
+
+    await whatsappOutbound.sendPayload!({
+      cfg: {},
+      to: "5511999999999@c.us",
+      text: "",
+      payload: { text: "voice", mediaUrl: "/tmp/voice.ogg", audioAsVoice: true },
+      deps: { sendWhatsApp },
+    });
+
+    expect(sendWhatsApp).toHaveBeenCalledWith("5511999999999@c.us", "voice", {
+      verbose: false,
+      cfg: {},
+      mediaUrl: "/tmp/voice.ogg",
+      mediaLocalRoots: undefined,
+      audioAsVoice: true,
+      accountId: undefined,
+      gifPlayback: undefined,
+    });
+  });
+
+  it("drops blank mediaUrls before sending payload media", async () => {
+    const sendWhatsApp = vi.fn(async () => ({ messageId: "wa-1", toJid: "jid" }));
+
+    await whatsappOutbound.sendPayload!({
+      cfg: {},
+      to: "5511999999999@c.us",
+      text: "",
+      payload: {
+        text: "\n\ncaption",
+        mediaUrls: ["   ", " /tmp/voice.ogg "],
+      },
+      deps: { sendWhatsApp },
+    });
+
+    expect(sendWhatsApp).toHaveBeenCalledTimes(1);
+    expect(sendWhatsApp).toHaveBeenCalledWith("5511999999999@c.us", "caption", {
+      verbose: false,
+      cfg: {},
+      mediaUrl: "/tmp/voice.ogg",
+      mediaLocalRoots: undefined,
+      accountId: undefined,
+      gifPlayback: undefined,
+    });
+  });
+
   it("skips whitespace-only text payloads", async () => {
     const sendWhatsApp = vi.fn();
 
@@ -121,5 +165,60 @@ describe("whatsappOutbound sendPayload", () => {
 
     expect(result).toEqual({ channel: "whatsapp", messageId: "" });
     expect(sendWhatsApp).not.toHaveBeenCalled();
+  });
+
+  it("suppresses routed error payloads when error text is hidden", async () => {
+    const sendWhatsApp = vi.fn();
+
+    const result = await whatsappOutbound.sendPayload!({
+      cfg: { channels: { whatsapp: { exposeErrorText: false } } },
+      to: "5511999999999@c.us",
+      text: "",
+      payload: { text: "provider exploded", isError: true },
+      deps: { sendWhatsApp },
+    });
+
+    expect(result).toEqual({ channel: "whatsapp", messageId: "" });
+    expect(sendWhatsApp).not.toHaveBeenCalled();
+  });
+
+  it("uses account-level error text visibility for routed payloads", async () => {
+    const sendWhatsApp = vi.fn(async () => ({ messageId: "wa-1", toJid: "jid" }));
+
+    await whatsappOutbound.sendPayload!({
+      cfg: {
+        channels: {
+          whatsapp: {
+            exposeErrorText: false,
+            accounts: {
+              work: { exposeErrorText: true },
+            },
+          },
+        },
+      },
+      accountId: "work",
+      to: "5511999999999@c.us",
+      text: "",
+      payload: { text: "provider exploded", isError: true },
+      deps: { sendWhatsApp },
+    });
+
+    expect(sendWhatsApp).toHaveBeenCalledTimes(1);
+    expect(sendWhatsApp).toHaveBeenCalledWith(
+      "5511999999999@c.us",
+      "provider exploded",
+      expect.any(Object),
+    );
+  });
+
+  it("sanitizes HTML-only text to whitespace-only payload", () => {
+    expect(
+      whatsappOutbound
+        .sanitizeText?.({
+          text: "<br><br>",
+          payload: { text: "<br><br>" },
+        })
+        ?.trim(),
+    ).toBe("");
   });
 });

@@ -1,17 +1,28 @@
-// Narrow plugin-sdk surface for the bundled synology-chat plugin.
-// Keep this list additive and scoped to symbols used under extensions/synology-chat.
+// Manual facade. Keep loader boundary explicit.
+import type { SecurityAuditFinding } from "../security/audit.types.js";
+import { loadBundledPluginPublicSurfaceModuleSync } from "./facade-loader.js";
 
-export { setAccountEnabledInConfigSection } from "../channels/plugins/config-helpers.js";
-export { buildChannelConfigSchema } from "../channels/plugins/config-schema.js";
-export {
-  isRequestBodyLimitError,
-  readRequestBodyWithLimit,
-  requestBodyErrorToText,
-} from "../infra/http-body.js";
-export { emptyPluginConfigSchema } from "../plugins/config-schema.js";
-export { registerPluginHttpRoute } from "../plugins/http-registry.js";
-export type { PluginRuntime } from "../plugins/runtime/types.js";
-export type { OpenClawPluginApi } from "../plugins/types.js";
-export { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
-export type { FixedWindowRateLimiter } from "./webhook-memory-guards.js";
-export { createFixedWindowRateLimiter } from "./webhook-memory-guards.js";
+type FacadeModule = {
+  collectSynologyChatSecurityAuditFindings: (params: {
+    accountId?: string | null;
+    account: {
+      accountId?: string;
+      dangerouslyAllowNameMatching?: boolean;
+    };
+    orderedAccountIds: string[];
+    hasExplicitAccountPath: boolean;
+  }) => SecurityAuditFinding[];
+};
+
+function loadFacadeModule(): FacadeModule {
+  return loadBundledPluginPublicSurfaceModuleSync<FacadeModule>({
+    dirName: "synology-chat",
+    artifactBasename: "contract-api.js",
+  });
+}
+
+export const collectSynologyChatSecurityAuditFindings: FacadeModule["collectSynologyChatSecurityAuditFindings"] =
+  ((...args) =>
+    loadFacadeModule().collectSynologyChatSecurityAuditFindings(
+      ...args,
+    )) as FacadeModule["collectSynologyChatSecurityAuditFindings"];

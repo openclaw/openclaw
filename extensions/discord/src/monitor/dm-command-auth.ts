@@ -1,9 +1,9 @@
-import { resolveCommandAuthorizedFromAuthorizers } from "../../../../src/channels/command-gating.js";
+import { resolveCommandAuthorizedFromAuthorizers } from "openclaw/plugin-sdk/command-auth-native";
 import {
   readStoreAllowFromForDmPolicy,
   resolveDmGroupAccessWithLists,
   type DmGroupAccessDecision,
-} from "../../../../src/security/dm-policy-shared.js";
+} from "openclaw/plugin-sdk/security-runtime";
 import { normalizeDiscordAllowList, resolveDiscordAllowListMatch } from "./allow-list.js";
 
 const DISCORD_ALLOW_LIST_PREFIXES = ["discord:", "user:", "pk:"];
@@ -33,13 +33,9 @@ function resolveSenderAllowMatch(params: {
 }
 
 function resolveDmPolicyCommandAuthorization(params: {
-  dmPolicy: DiscordDmPolicy;
   decision: DmGroupAccessDecision;
   commandAuthorized: boolean;
 }) {
-  if (params.dmPolicy === "open" && params.decision === "allow") {
-    return true;
-  }
   return params.commandAuthorized;
 }
 
@@ -53,11 +49,14 @@ export async function resolveDiscordDmCommandAccess(params: {
   readStoreAllowFrom?: () => Promise<string[]>;
 }): Promise<DiscordDmCommandAccess> {
   const storeAllowFrom = params.readStoreAllowFrom
-    ? await params.readStoreAllowFrom().catch(() => [])
+    ? params.dmPolicy === "open"
+      ? []
+      : await params.readStoreAllowFrom().catch(() => [])
     : await readStoreAllowFromForDmPolicy({
         provider: "discord",
         accountId: params.accountId,
         dmPolicy: params.dmPolicy,
+        shouldRead: params.dmPolicy !== "open",
       });
 
   const access = resolveDmGroupAccessWithLists({
@@ -94,11 +93,13 @@ export async function resolveDiscordDmCommandAccess(params: {
   return {
     decision: access.decision,
     reason: access.reason,
-    commandAuthorized: resolveDmPolicyCommandAuthorization({
-      dmPolicy: params.dmPolicy,
-      decision: access.decision,
-      commandAuthorized,
-    }),
+    commandAuthorized:
+      access.decision === "allow"
+        ? resolveDmPolicyCommandAuthorization({
+            decision: access.decision,
+            commandAuthorized,
+          })
+        : false,
     allowMatch,
   };
 }

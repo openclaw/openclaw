@@ -1,6 +1,7 @@
-import type { BaseProbeResult } from "../../../src/channels/plugins/types.js";
-import { resolveFetch } from "../../../src/infra/fetch.js";
-import { fetchWithTimeout } from "../../../src/utils/fetch-timeout.js";
+import type { BaseProbeResult } from "openclaw/plugin-sdk/channel-contract";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { resolveFetch } from "openclaw/plugin-sdk/fetch-runtime";
+import { fetchWithTimeout } from "openclaw/plugin-sdk/text-runtime";
 import { normalizeDiscordToken } from "./token.js";
 
 const DISCORD_API_BASE = "https://discord.com/api/v10";
@@ -167,7 +168,7 @@ export async function probeDiscord(
     return {
       ...result,
       status: err instanceof Response ? err.status : result.status,
-      error: err instanceof Error ? err.message : String(err),
+      error: formatErrorMessage(err),
       elapsedMs: Date.now() - started,
     };
   }

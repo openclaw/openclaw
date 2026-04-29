@@ -2,7 +2,6 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { resolveStateDir } from "../../config/paths.js";
 import { resolveOpenClawPackageRoot } from "../../infra/openclaw-root.js";
 import { readPackageName, readPackageVersion } from "../../infra/package-json.js";
 import { normalizePackageTagInput } from "../../infra/package-tag.js";
@@ -10,6 +9,8 @@ import { trimLogTail } from "../../infra/restart-sentinel.js";
 import { parseSemver } from "../../infra/runtime-guard.js";
 import { fetchNpmTagVersion } from "../../infra/update-check.js";
 import {
+  canResolveRegistryVersionForPackageTarget,
+  createGlobalInstallEnv,
   detectGlobalInstallManagerByPresence,
   detectGlobalInstallManagerForRoot,
   type CommandRunner,
@@ -18,8 +19,10 @@ import {
 import type { UpdateStepProgress, UpdateStepResult } from "../../infra/update-runner.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
+import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { theme } from "../../terminal/theme.js";
 import { pathExists } from "../../utils.js";
+import { COMPLETION_SKIP_PLUGIN_COMMANDS_ENV } from "../completion-runtime.js";
 
 export type UpdateCommandOptions = {
   json?: boolean;
@@ -77,6 +80,9 @@ export async function resolveTargetVersion(
   tag: string,
   timeoutMs?: number,
 ): Promise<string | null> {
+  if (!canResolveRegistryVersionForPackageTarget(tag)) {
+    return null;
+  }
   const direct = normalizeVersionTag(tag);
   if (direct) {
     return direct;
@@ -117,11 +123,15 @@ export function resolveGitInstallDir(): string {
 }
 
 function resolveDefaultGitDir(): string {
-  return resolveStateDir(process.env, os.homedir);
+  const home = os.homedir();
+  if (home.startsWith("/")) {
+    return path.posix.join(home, "openclaw");
+  }
+  return path.join(home, "openclaw");
 }
 
 export function resolveNodeRunner(): string {
-  const base = path.basename(process.execPath).toLowerCase();
+  const base = normalizeLowercaseStringOrEmpty(path.basename(process.execPath));
   if (base === "node" || base === "node.exe") {
     return process.execPath;
   }
@@ -188,12 +198,15 @@ export async function ensureGitCheckout(params: {
   dir: string;
   timeoutMs: number;
   progress?: UpdateStepProgress;
+  env?: NodeJS.ProcessEnv;
 }): Promise<UpdateStepResult | null> {
+  const gitEnv = params.env ?? (await createGlobalInstallEnv());
   const dirExists = await pathExists(params.dir);
   if (!dirExists) {
     return await runUpdateStep({
       name: "git clone",
       argv: ["git", "clone", OPENCLAW_REPO_URL, params.dir],
+      env: gitEnv,
       timeoutMs: params.timeoutMs,
       progress: params.progress,
     });
@@ -211,6 +224,7 @@ export async function ensureGitCheckout(params: {
       name: "git clone",
       argv: ["git", "clone", OPENCLAW_REPO_URL, params.dir],
       cwd: params.dir,
+      env: gitEnv,
       timeoutMs: params.timeoutMs,
       progress: params.progress,
     });
@@ -245,6 +259,10 @@ export async function resolveGlobalManager(params: {
   return byPresence ?? "npm";
 }
 
+const COMPLETION_CACHE_WRITE_TIMEOUT_MS = 30_000;
+const COMPLETION_CACHE_MANUAL_REFRESH_HINT =
+  "Shell tab-completion may be stale; refresh manually with: openclaw completion --write-state";
+
 export async function tryWriteCompletionCache(root: string, jsonMode: boolean): Promise<void> {
   const binPath = path.join(root, "openclaw.mjs");
   if (!(await pathExists(binPath))) {
@@ -253,21 +271,38 @@ export async function tryWriteCompletionCache(root: string, jsonMode: boolean): 
 
   const result = spawnSync(resolveNodeRunner(), [binPath, "completion", "--write-state"], {
     cwd: root,
-    env: process.env,
+    env: {
+      ...process.env,
+      [COMPLETION_SKIP_PLUGIN_COMMANDS_ENV]: "1",
+    },
     encoding: "utf-8",
+    timeout: COMPLETION_CACHE_WRITE_TIMEOUT_MS,
   });
 
   if (result.error) {
     if (!jsonMode) {
-      defaultRuntime.log(theme.warn(`Completion cache update failed: ${String(result.error)}`));
+      const err = result.error as NodeJS.ErrnoException;
+      const reason =
+        err.code === "ETIMEDOUT"
+          ? `timed out after ${COMPLETION_CACHE_WRITE_TIMEOUT_MS / 1000}s`
+          : String(result.error);
+      defaultRuntime.log(
+        theme.warn(
+          `Completion cache update failed: ${reason}. ${COMPLETION_CACHE_MANUAL_REFRESH_HINT}`,
+        ),
+      );
     }
     return;
   }
 
   if (result.status !== 0 && !jsonMode) {
-    const stderr = (result.stderr ?? "").toString().trim();
+    const stderr = (result.stderr ?? "").trim();
     const detail = stderr ? ` (${stderr})` : "";
-    defaultRuntime.log(theme.warn(`Completion cache update failed${detail}.`));
+    defaultRuntime.log(
+      theme.warn(
+        `Completion cache update failed${detail}. ${COMPLETION_CACHE_MANUAL_REFRESH_HINT}`,
+      ),
+    );
   }
 }
 

@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../../../config/config.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { resolveGatewayService } from "../../../daemon/service.js";
 import { isSystemdUserServiceAvailable } from "../../../daemon/systemd.js";
 import type { RuntimeEnv } from "../../../runtime.js";
@@ -56,7 +56,7 @@ export async function installGatewayDaemonNonInteractive(params: {
       [
         "Gateway install blocked:",
         tokenResolution.unavailableReason,
-        "Fix gateway auth config/token input and rerun onboarding.",
+        "Fix gateway auth config/token input and rerun setup.",
       ].join(" "),
     );
     runtime.exit(1);

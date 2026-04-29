@@ -1,6 +1,8 @@
-import type { OpenClawConfig, PluginRuntime, RuntimeEnv } from "openclaw/plugin-sdk/zalouser";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig, PluginRuntime } from "../runtime-api.js";
 import "./monitor.send-mocks.js";
+import "./zalo-js.test-mocks.js";
+import { resolveZalouserAccountSync } from "./accounts.js";
 import { __testing } from "./monitor.js";
 import {
   sendDeliveredZalouserMock,
@@ -19,6 +21,8 @@ function createAccount(): ResolvedZalouserAccount {
     profile: "default",
     authenticated: true,
     config: {
+      dmPolicy: "open",
+      allowFrom: ["*"],
       groupPolicy: "open",
       groups: {
         "*": { requireMention: true },
@@ -32,6 +36,8 @@ function createConfig(): OpenClawConfig {
     channels: {
       zalouser: {
         enabled: true,
+        dmPolicy: "open",
+        allowFrom: ["*"],
         groups: {
           "*": { requireMention: true },
         },
@@ -82,6 +88,101 @@ function installRuntime(params: {
   const readAllowFromStore = vi.fn(async () => []);
   const readSessionUpdatedAt = vi.fn(
     (_params?: { storePath: string; sessionKey: string }): number | undefined => undefined,
+  );
+  const dispatchAssembled = vi.fn(
+    async (turn: Parameters<PluginRuntime["channel"]["turn"]["dispatchAssembled"]>[0]) => {
+      await turn.recordInboundSession({
+        storePath: turn.storePath,
+        sessionKey: turn.ctxPayload.SessionKey ?? turn.routeSessionKey,
+        ctx: turn.ctxPayload,
+        groupResolution: turn.record?.groupResolution,
+        createIfMissing: turn.record?.createIfMissing,
+        updateLastRoute: turn.record?.updateLastRoute,
+        onRecordError: turn.record?.onRecordError ?? (() => undefined),
+      });
+      const dispatchResult = await turn.dispatchReplyWithBufferedBlockDispatcher({
+        ctx: turn.ctxPayload,
+        cfg: turn.cfg,
+        dispatcherOptions: {
+          ...turn.dispatcherOptions,
+          deliver: async (payload, info) => {
+            await turn.delivery.deliver(payload, info);
+          },
+          onError: turn.delivery.onError,
+        },
+        replyOptions: turn.replyOptions,
+        replyResolver: turn.replyResolver,
+      });
+      return {
+        admission: { kind: "dispatch" as const },
+        dispatched: true,
+        ctxPayload: turn.ctxPayload,
+        routeSessionKey: turn.routeSessionKey,
+        dispatchResult,
+      };
+    },
+  );
+  const runTurn = vi.fn(async (params: Parameters<PluginRuntime["channel"]["turn"]["run"]>[0]) => {
+    const input = await params.adapter.ingest(params.raw);
+    if (!input) {
+      return { admission: { kind: "drop" as const, reason: "ingest-null" }, dispatched: false };
+    }
+    const resolved = await params.adapter.resolveTurn(
+      input,
+      {
+        kind: "message",
+        canStartAgentTurn: true,
+      },
+      {},
+    );
+    return await dispatchAssembled(resolved);
+  });
+  const runResolvedTurn = vi.fn(
+    async (params: Parameters<PluginRuntime["channel"]["turn"]["runResolved"]>[0]) => {
+      const input =
+        typeof params.input === "function" ? await params.input(params.raw) : params.input;
+      if (!input) {
+        return {
+          admission: { kind: "drop" as const, reason: "ingest-null" },
+          dispatched: false,
+        };
+      }
+      const resolved = await params.resolveTurn(
+        input,
+        {
+          kind: "message",
+          canStartAgentTurn: true,
+        },
+        {},
+      );
+      return await dispatchAssembled(resolved);
+    },
+  );
+  const buildContext = vi.fn(
+    (params: Parameters<PluginRuntime["channel"]["turn"]["buildContext"]>[0]) =>
+      ({
+        Body: params.message.body ?? params.message.rawBody,
+        BodyForAgent: params.message.bodyForAgent ?? params.message.rawBody,
+        InboundHistory: params.message.inboundHistory,
+        RawBody: params.message.rawBody,
+        CommandBody: params.message.commandBody ?? params.message.rawBody,
+        BodyForCommands: params.message.commandBody ?? params.message.rawBody,
+        From: params.from,
+        To: params.reply.to,
+        SessionKey: params.route.dispatchSessionKey ?? params.route.routeSessionKey,
+        AccountId: params.route.accountId ?? params.accountId,
+        ChatType: params.conversation.kind,
+        ConversationLabel: params.conversation.label,
+        SenderName: params.sender.name,
+        SenderId: params.sender.id,
+        Provider: params.provider ?? params.channel,
+        Surface: params.surface ?? params.provider ?? params.channel,
+        MessageSid: params.messageId,
+        MessageSidFull: params.messageIdFull,
+        OriginatingChannel: params.channel,
+        OriginatingTo: params.reply.originatingTo,
+        ...params.extra,
+      }) as ReturnType<PluginRuntime["channel"]["turn"]["buildContext"]>,
   );
   const buildAgentSessionKey = vi.fn(
     (input: {
@@ -134,8 +235,9 @@ function installRuntime(params: {
         resolveRequireMention: vi.fn((input) => {
           const cfg = input.cfg as OpenClawConfig;
           const groupCfg = cfg.channels?.zalouser?.groups ?? {};
-          const groupEntry = input.groupId ? groupCfg[input.groupId] : undefined;
-          const defaultEntry = groupCfg["*"];
+          const typedGroupCfg = groupCfg as Record<string, { requireMention?: boolean }>;
+          const groupEntry = input.groupId ? typedGroupCfg[input.groupId] : undefined;
+          const defaultEntry = typedGroupCfg["*"];
           if (typeof groupEntry?.requireMention === "boolean") {
             return groupEntry.requireMention;
           }
@@ -159,6 +261,13 @@ function installRuntime(params: {
         formatAgentEnvelope: vi.fn(({ body }) => body),
         finalizeInboundContext: vi.fn((ctx) => ctx),
         dispatchReplyWithBufferedBlockDispatcher,
+      },
+      turn: {
+        run: runTurn as unknown as PluginRuntime["channel"]["turn"]["run"],
+        runResolved: runResolvedTurn as unknown as PluginRuntime["channel"]["turn"]["runResolved"],
+        buildContext: buildContext as unknown as PluginRuntime["channel"]["turn"]["buildContext"],
+        dispatchAssembled:
+          dispatchAssembled as unknown as PluginRuntime["channel"]["turn"]["dispatchAssembled"],
       },
       text: {
         resolveMarkdownTableMode: vi.fn(() => "code"),
@@ -346,8 +455,8 @@ describe("zalouser monitor group mention gating", () => {
           groupPolicy: "allowlist",
           groupAllowFrom: ["*"],
           groups: {
-            "group:g-trusted-001": { allow: true },
-            "Trusted Team": { allow: true },
+            "group:g-trusted-001": { enabled: true },
+            "Trusted Team": { enabled: true },
           },
         },
       },
@@ -374,6 +483,34 @@ describe("zalouser monitor group mention gating", () => {
 
   it("skips unmentioned group messages when requireMention=true", async () => {
     await expectSkippedGroupMessage();
+  });
+
+  it("blocks mentioned group messages by default when groupPolicy is omitted", async () => {
+    const { dispatchReplyWithBufferedBlockDispatcher } = installRuntime({
+      commandAuthorized: false,
+    });
+    const cfg: OpenClawConfig = {
+      channels: {
+        zalouser: {
+          enabled: true,
+        },
+      },
+    };
+    const account = resolveZalouserAccountSync({ cfg, accountId: "default" });
+
+    await __testing.processMessage({
+      message: createGroupMessage({
+        content: "ping @bot",
+        hasAnyMention: true,
+        wasExplicitlyMentioned: true,
+      }),
+      account,
+      config: cfg,
+      runtime: createRuntimeEnv(),
+    });
+
+    expect(account.config.groupPolicy).toBe("allowlist");
+    expect(dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
   });
 
   it("fails closed when requireMention=true but mention detection is unavailable", async () => {
@@ -477,10 +614,9 @@ describe("zalouser monitor group mention gating", () => {
     });
   });
 
-  it("allows allowlisted group replies without inheriting the DM allowlist", async () => {
+  it("blocks routed allowlist groups without an explicit group sender allowlist", async () => {
     const { dispatchReplyWithBufferedBlockDispatcher } = installRuntime({
       commandAuthorized: false,
-      replyPayload: { text: "ok" },
     });
     await __testing.processMessage({
       message: createGroupMessage({
@@ -496,7 +632,7 @@ describe("zalouser monitor group mention gating", () => {
           groupPolicy: "allowlist",
           allowFrom: ["123"],
           groups: {
-            "group:g-1": { allow: true, requireMention: true },
+            "group:g-1": { enabled: true, requireMention: true },
           },
         },
       },
@@ -504,7 +640,7 @@ describe("zalouser monitor group mention gating", () => {
       runtime: createRuntimeEnv(),
     });
 
-    expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
+    expect(dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
   });
 
   it("blocks group messages when sender is not in groupAllowFrom", async () => {
@@ -589,7 +725,7 @@ describe("zalouser monitor group mention gating", () => {
     expect(callArg?.ctx?.SessionKey).toBe("agent:main:zalouser:group:321");
   });
 
-  it("reads pairing store for open DM control commands", async () => {
+  it("skips pairing store read for open DM control commands", async () => {
     const { readAllowFromStore } = installRuntime({
       commandAuthorized: false,
     });
@@ -607,7 +743,7 @@ describe("zalouser monitor group mention gating", () => {
       runtime: createRuntimeEnv(),
     });
 
-    expect(readAllowFromStore).toHaveBeenCalledTimes(1);
+    expect(readAllowFromStore).not.toHaveBeenCalled();
   });
 
   it("skips pairing store read for open DM non-command messages", async () => {
