@@ -1,10 +1,10 @@
 import type { ProviderResolveDynamicModelContext } from "openclaw/plugin-sdk/plugin-entry";
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
+import { buildOpenAICompatibleReplayPolicy } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   cloneFirstTemplateModel,
   DEFAULT_CONTEXT_TOKENS,
   normalizeModelCompat,
-  OPENAI_COMPATIBLE_REPLAY_HOOKS,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import { isFireworksKimiModelId } from "./model-id.js";
 import { applyFireworksConfig, FIREWORKS_DEFAULT_MODEL_REF } from "./onboard.js";
@@ -75,7 +75,14 @@ export default defineSingleProviderPluginEntry({
       buildProvider: buildFireworksProvider,
       allowExplicitBaseUrl: true,
     },
-    ...OPENAI_COMPATIBLE_REPLAY_HOOKS,
+    // Kimi K2+ returns native tool_call IDs shaped like `functions.<name>:<index>`.
+    // Sanitizing them to alphanumeric-only breaks Kimi's serving-layer matching in
+    // multi-turn replay. See openclaw/openclaw#62319 and openclaw/openclaw#74205.
+    buildReplayPolicy: (ctx) =>
+      buildOpenAICompatibleReplayPolicy(ctx.modelApi, {
+        sanitizeToolCallIds: !isFireworksKimiModelId(ctx.modelId ?? ""),
+        modelId: ctx.modelId,
+      }),
     wrapStreamFn: wrapFireworksProviderStream,
     resolveDynamicModel: (ctx) => resolveFireworksDynamicModel(ctx),
     isModernModelRef: () => true,

@@ -144,4 +144,37 @@ describe("fireworks provider plugin", () => {
       reasoning: false,
     });
   });
+
+  it("preserves native Kimi tool_call IDs in replay policy", async () => {
+    const provider = await registerSingleProviderPlugin(fireworksPlugin);
+
+    const policy = provider.buildReplayPolicy?.({
+      provider: "fireworks",
+      modelApi: "openai-completions",
+      modelId: "accounts/fireworks/models/kimi-k2p6",
+    } as never);
+
+    expect(policy).toMatchObject({
+      applyAssistantFirstOrderingFix: true,
+      validateGeminiTurns: true,
+      validateAnthropicTurns: true,
+    });
+    expect(policy).not.toHaveProperty("sanitizeToolCallIds");
+    expect(policy).not.toHaveProperty("toolCallIdMode");
+  });
+
+  it("sanitizes tool_call IDs for non-Kimi Fireworks models in replay policy", async () => {
+    const provider = await registerSingleProviderPlugin(fireworksPlugin);
+
+    const policy = provider.buildReplayPolicy?.({
+      provider: "fireworks",
+      modelApi: "openai-completions",
+      modelId: "accounts/fireworks/models/llama4-maverick",
+    } as never);
+
+    expect(policy).toMatchObject({
+      sanitizeToolCallIds: true,
+      toolCallIdMode: "strict",
+    });
+  });
 });
