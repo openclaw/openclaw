@@ -6,6 +6,8 @@ import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
   downloadClawHubPackageArchive,
   downloadClawHubSkillArchive,
+  fetchClawHubPackageDetail,
+  fetchClawHubSkillDetail,
   normalizeClawHubSha256Integrity,
   normalizeClawHubSha256Hex,
   parseClawHubPluginSpec,
@@ -18,6 +20,15 @@ import {
 
 describe("clawhub helpers", () => {
   const originalHome = process.env.HOME;
+  const clawhubLoginHint =
+    "Hint: run `clawhub login` and retry to use authenticated ClawHub rate limits.";
+
+  async function withMissingClawHubConfig(run: () => Promise<void>): Promise<void> {
+    await withTempDir({ prefix: "openclaw-clawhub-missing-config-" }, async (configRoot) => {
+      process.env.OPENCLAW_CLAWHUB_CONFIG_PATH = path.join(configRoot, "missing-config.json");
+      await run();
+    });
+  }
 
   afterEach(() => {
     delete process.env.OPENCLAW_CLAWHUB_TOKEN;
@@ -221,6 +232,95 @@ describe("clawhub helpers", () => {
 
     await expect(searchClawHubSkills({ query: "calendar", fetchImpl })).resolves.toEqual([]);
   });
+
+  it("appends a login hint to unauthenticated 429 ClawHub JSON errors", async () => {
+    await withMissingClawHubConfig(async () => {
+      const fetchImpl = async () =>
+        new Response("rate limited", {
+          status: 429,
+          statusText: "Too Many Requests",
+        });
+      const createRequests = [
+        () => searchClawHubSkills({ query: "calendar", fetchImpl }),
+        () => fetchClawHubPackageDetail({ name: "demo", fetchImpl }),
+      ];
+
+      for (const createRequest of createRequests) {
+        const request = createRequest();
+        await expect(request).rejects.toThrow(clawhubLoginHint);
+        await expect(request).rejects.toMatchObject({
+          status: 429,
+          responseBody: `rate limited\n\n${clawhubLoginHint}`,
+        });
+      }
+    });
+  });
+
+  it("appends a login hint to unauthenticated 429 ClawHub archive download errors", async () => {
+    await withMissingClawHubConfig(async () => {
+      const fetchImpl = async () =>
+        new Response("archive rate limited", {
+          status: 429,
+          statusText: "Too Many Requests",
+        });
+      const createRequests = [
+        () => downloadClawHubPackageArchive({ name: "demo", fetchImpl }),
+        () => downloadClawHubSkillArchive({ slug: "calendar", fetchImpl }),
+      ];
+
+      for (const createRequest of createRequests) {
+        const request = createRequest();
+        await expect(request).rejects.toThrow(clawhubLoginHint);
+        await expect(request).rejects.toMatchObject({
+          status: 429,
+          responseBody: `archive rate limited\n\n${clawhubLoginHint}`,
+        });
+      }
+    });
+  });
+
+  it("keeps authenticated 429 ClawHub errors unchanged", async () => {
+    const fetchImpl = async (_input: string | URL | Request, init?: RequestInit) => {
+      expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer token-123");
+      return new Response("rate limited", {
+        status: 429,
+        statusText: "Too Many Requests",
+      });
+    };
+
+    const request = searchClawHubSkills({
+      query: "calendar",
+      token: "token-123",
+      fetchImpl,
+    });
+    await expect(request).rejects.toThrow("ClawHub /api/v1/search failed (429): rate limited");
+    await expect(request).rejects.toMatchObject({
+      status: 429,
+      responseBody: "rate limited",
+    });
+  });
+
+  it("keeps unauthenticated non-429 ClawHub errors unchanged", async () => {
+    await withMissingClawHubConfig(async () => {
+      const request = fetchClawHubSkillDetail({
+        slug: "calendar",
+        fetchImpl: async () =>
+          new Response("server exploded", {
+            status: 500,
+            statusText: "Internal Server Error",
+          }),
+      });
+
+      await expect(request).rejects.toThrow(
+        "ClawHub /api/v1/skills/calendar failed (500): server exploded",
+      );
+      await expect(request).rejects.toMatchObject({
+        status: 500,
+        responseBody: "server exploded",
+      });
+    });
+  });
+
   it("downloads package archives to sanitized temp paths and cleans them up", async () => {
     const archive = await downloadClawHubPackageArchive({
       name: "@hyf/zai-external-alpha",

@@ -13,6 +13,8 @@ export { parseClawHubPluginSpec } from "./clawhub-spec.js";
 
 const DEFAULT_CLAWHUB_URL = "https://clawhub.ai";
 const DEFAULT_FETCH_TIMEOUT_MS = 30_000;
+const CLAWHUB_UNAUTHENTICATED_RATE_LIMIT_HINT =
+  "Hint: run `clawhub login` and retry to use authenticated ClawHub rate limits.";
 
 export type ClawHubPackageFamily = "skill" | "code-plugin" | "bundle-plugin";
 export type ClawHubPackageChannel = "official" | "community" | "private";
@@ -378,7 +380,7 @@ function buildUrl(params: Pick<ClawHubRequestParams, "baseUrl" | "path" | "searc
 
 async function clawhubRequest(
   params: ClawHubRequestParams,
-): Promise<{ response: Response; url: URL }> {
+): Promise<{ response: Response; url: URL; authenticated: boolean }> {
   const url = buildUrl(params);
   const token = normalizeOptionalString(params.token) || (await resolveClawHubAuthToken());
   const controller = new AbortController();
@@ -396,28 +398,33 @@ async function clawhubRequest(
       headers: token ? { Authorization: `Bearer ${token}` } : undefined,
       signal: controller.signal,
     });
-    return { response, url };
+    return { response, url, authenticated: Boolean(token) };
   } finally {
     clearTimeout(timeout);
   }
 }
 
-async function readErrorBody(response: Response): Promise<string> {
+async function readErrorBody(response: Response, authenticated: boolean): Promise<string> {
+  let body: string;
   try {
     const text = (await response.text()).trim();
-    return text || response.statusText || `HTTP ${response.status}`;
+    body = text || response.statusText || `HTTP ${response.status}`;
   } catch {
-    return response.statusText || `HTTP ${response.status}`;
+    body = response.statusText || `HTTP ${response.status}`;
   }
+  if (response.status === 429 && !authenticated) {
+    return `${body}\n\n${CLAWHUB_UNAUTHENTICATED_RATE_LIMIT_HINT}`;
+  }
+  return body;
 }
 
 async function fetchJson<T>(params: ClawHubRequestParams): Promise<T> {
-  const { response, url } = await clawhubRequest(params);
+  const { response, url, authenticated } = await clawhubRequest(params);
   if (!response.ok) {
     throw new ClawHubRequestError({
       path: url.pathname,
       status: response.status,
-      body: await readErrorBody(response),
+      body: await readErrorBody(response, authenticated),
     });
   }
   return (await response.json()) as T;
@@ -597,7 +604,7 @@ export async function downloadClawHubPackageArchive(params: {
     : params.tag
       ? { tag: params.tag }
       : undefined;
-  const { response, url } = await clawhubRequest({
+  const { response, url, authenticated } = await clawhubRequest({
     baseUrl: params.baseUrl,
     path: `/api/v1/packages/${encodeURIComponent(params.name)}/download`,
     search,
@@ -609,7 +616,7 @@ export async function downloadClawHubPackageArchive(params: {
     throw new ClawHubRequestError({
       path: url.pathname,
       status: response.status,
-      body: await readErrorBody(response),
+      body: await readErrorBody(response, authenticated),
     });
   }
   const bytes = new Uint8Array(await response.arrayBuffer());
@@ -635,7 +642,7 @@ export async function downloadClawHubSkillArchive(params: {
   timeoutMs?: number;
   fetchImpl?: FetchLike;
 }): Promise<ClawHubDownloadResult> {
-  const { response, url } = await clawhubRequest({
+  const { response, url, authenticated } = await clawhubRequest({
     baseUrl: params.baseUrl,
     path: "/api/v1/download",
     token: params.token,
@@ -651,7 +658,7 @@ export async function downloadClawHubSkillArchive(params: {
     throw new ClawHubRequestError({
       path: url.pathname,
       status: response.status,
-      body: await readErrorBody(response),
+      body: await readErrorBody(response, authenticated),
     });
   }
   const bytes = new Uint8Array(await response.arrayBuffer());
