@@ -9,6 +9,8 @@ const INSTALL_E2E_RUNNER_PATH = "scripts/docker/install-sh-e2e/run.sh";
 const LIVE_CLI_BACKEND_DOCKER_PATH = "scripts/test-live-cli-backend-docker.sh";
 const LIVE_BUILD_DOCKER_PATH = "scripts/test-live-build-docker.sh";
 const OPENAI_WEB_SEARCH_MINIMAL_E2E_PATH = "scripts/e2e/openai-web-search-minimal-docker.sh";
+const OPENAI_WEB_SEARCH_MINIMAL_CLIENT_PATH =
+  "scripts/e2e/lib/openai-web-search-minimal/client.mjs";
 const BUNDLED_PLUGIN_INSTALL_UNINSTALL_E2E_PATH =
   "scripts/e2e/bundled-plugin-install-uninstall-docker.sh";
 const BUNDLED_PLUGIN_INSTALL_UNINSTALL_SWEEP_PATH =
@@ -16,10 +18,12 @@ const BUNDLED_PLUGIN_INSTALL_UNINSTALL_SWEEP_PATH =
 const BUNDLED_PLUGIN_INSTALL_UNINSTALL_PROBE_PATH =
   "scripts/e2e/lib/bundled-plugin-install-uninstall/probe.mjs";
 const PLUGINS_DOCKER_E2E_PATH = "scripts/e2e/plugins-docker.sh";
+const PLUGINS_DOCKER_SWEEP_PATH = "scripts/e2e/lib/plugins/sweep.sh";
 const PLUGIN_UPDATE_SCENARIO_PATH = "scripts/e2e/lib/plugin-update/unchanged-scenario.sh";
 const PLUGIN_UPDATE_PROBE_PATH = "scripts/e2e/lib/plugin-update/probe.mjs";
-const DOCTOR_SWITCH_DOCKER_E2E_PATH = "scripts/e2e/doctor-install-switch-docker.sh";
+const DOCTOR_SWITCH_SCENARIO_PATH = "scripts/e2e/lib/doctor-install-switch/scenario.sh";
 const UPDATE_CHANNEL_SWITCH_DOCKER_E2E_PATH = "scripts/e2e/update-channel-switch-docker.sh";
+const PACKAGE_COMPAT_PATH = "scripts/e2e/lib/package-compat.mjs";
 const CENTRALIZED_BUILD_SCRIPTS = [
   "scripts/docker/setup.sh",
   "scripts/e2e/browser-cdp-snapshot-docker.sh",
@@ -125,18 +129,25 @@ describe("docker build helper", () => {
 
   it("caps package acceptance legacy compatibility at 2026.4.25", () => {
     const dateGateScripts = [
-      readFileSync(DOCTOR_SWITCH_DOCKER_E2E_PATH, "utf8"),
       readFileSync(UPDATE_CHANNEL_SWITCH_DOCKER_E2E_PATH, "utf8"),
-      readFileSync(PLUGINS_DOCKER_E2E_PATH, "utf8"),
+      readFileSync(PACKAGE_COMPAT_PATH, "utf8"),
     ];
+    const doctorSwitchScenario = readFileSync(DOCTOR_SWITCH_SCENARIO_PATH, "utf8");
+    const pluginsSweep = readFileSync(PLUGINS_DOCKER_SWEEP_PATH, "utf8");
     const pluginUpdateScenario = readFileSync(PLUGIN_UPDATE_SCENARIO_PATH, "utf8");
     const pluginUpdateProbe = readFileSync(PLUGIN_UPDATE_PROBE_PATH, "utf8");
-    const scripts = [...dateGateScripts, pluginUpdateScenario, pluginUpdateProbe];
+    const scripts = [
+      ...dateGateScripts,
+      doctorSwitchScenario,
+      pluginsSweep,
+      pluginUpdateScenario,
+      pluginUpdateProbe,
+    ];
 
     for (const script of dateGateScripts) {
-      expect(script).toContain("2026, 4, 25");
+      expect(script).toMatch(/2026[\s\S]*4[\s\S]*25/);
     }
-    expect(pluginUpdateProbe).toContain("month === 4 && day <= 25");
+    expect(pluginUpdateProbe).toContain("legacyPackageAcceptanceCompat");
     expect(scripts.join("\n")).toContain("OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT");
     expect(scripts.join("\n")).toContain(
       "Package $package_version must support gateway install --wrapper.",
@@ -193,20 +204,24 @@ describe("docker build helper", () => {
 
   it("keeps OpenAI web search smoke on one gateway agent connection", () => {
     const runner = readFileSync(OPENAI_WEB_SEARCH_MINIMAL_E2E_PATH, "utf8");
+    const client = readFileSync(OPENAI_WEB_SEARCH_MINIMAL_CLIENT_PATH, "utf8");
 
-    expect(runner).toContain("const callGateway = await loadCallGateway();");
-    expect(runner).toContain('method: "agent"');
-    expect(runner).toContain("expectFinal: true");
-    expect(runner).toContain('scopes: ["operator.write"]');
-    expect(runner).not.toContain('"agent.wait"');
+    expect(runner).toContain("scripts/e2e/lib/openai-web-search-minimal/scenario.sh");
+    expect(client).toContain("const callGateway = await loadCallGateway();");
+    expect(client).toContain('method: "agent"');
+    expect(client).toContain("expectFinal: true");
+    expect(client).toContain('scopes: ["operator.write"]');
+    expect(client).not.toContain('"agent.wait"');
   });
 
   it("keeps ClawHub plugin Docker smoke hermetic by default", () => {
     const runner = readFileSync(PLUGINS_DOCKER_E2E_PATH, "utf8");
+    const sweep = readFileSync(PLUGINS_DOCKER_SWEEP_PATH, "utf8");
 
-    expect(runner).toContain("start_clawhub_fixture_server()");
-    expect(runner).toContain('OPENCLAW_CLAWHUB_URL="http://127.0.0.1:');
-    expect(runner).toContain("live ClawHub can rate-limit CI");
-    expect(runner).toContain('[[ -z "${OPENCLAW_CLAWHUB_URL:-}" && -z "${CLAWHUB_URL:-}" ]]');
+    expect(runner).toContain("scripts/e2e/lib/plugins/sweep.sh");
+    expect(sweep).toContain("start_clawhub_fixture_server()");
+    expect(sweep).toContain('OPENCLAW_CLAWHUB_URL="http://127.0.0.1:');
+    expect(sweep).toContain("live ClawHub can rate-limit CI");
+    expect(sweep).toContain('[[ -z "${OPENCLAW_CLAWHUB_URL:-}" && -z "${CLAWHUB_URL:-}" ]]');
   });
 });
