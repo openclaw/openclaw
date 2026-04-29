@@ -258,9 +258,45 @@ function loadGeneratedBundledChannelEntry(params: {
     };
   } catch (error) {
     const detail = formatErrorMessage(error);
-    log.warn(`[channels] failed to load bundled channel ${params.metadata.manifest.id}: ${detail}`);
+    if (isRuntimeDepsLockTimeoutError(error)) {
+      const lockTimeoutMeta = parseLockTimeoutErrorMeta(error);
+      log.warn(
+        `[channels] failed to load bundled channel ${params.metadata.manifest.id}: lock timeout`,
+        {
+          failureReason: "lock_timeout",
+          bundledChannelId: params.metadata.manifest.id,
+          lockDir: lockTimeoutMeta.lockDir,
+          waitedMs: lockTimeoutMeta.waitedMs,
+        },
+      );
+    } else {
+      log.warn(
+        `[channels] failed to load bundled channel ${params.metadata.manifest.id}: ${detail}`,
+      );
+    }
     return null;
   }
+}
+
+const LOCK_TIMEOUT_MESSAGE_PREFIX = "Timed out waiting for bundled runtime deps lock at ";
+
+function isRuntimeDepsLockTimeoutError(error: unknown): boolean {
+  return error instanceof Error && error.message.startsWith(LOCK_TIMEOUT_MESSAGE_PREFIX);
+}
+
+function parseLockTimeoutErrorMeta(error: unknown): {
+  lockDir: string | undefined;
+  waitedMs: number | undefined;
+} {
+  if (!(error instanceof Error)) {
+    return { lockDir: undefined, waitedMs: undefined };
+  }
+  const afterPrefix = error.message.slice(LOCK_TIMEOUT_MESSAGE_PREFIX.length);
+  const parenIdx = afterPrefix.indexOf(" (");
+  const lockDir = parenIdx >= 0 ? afterPrefix.slice(0, parenIdx) : undefined;
+  const waitedMatch = /waited=(\d+)ms/.exec(error.message);
+  const waitedMs = waitedMatch ? Number(waitedMatch[1]) : undefined;
+  return { lockDir, waitedMs };
 }
 
 function loadGeneratedBundledChannelSetupEntry(params: {
