@@ -116,6 +116,20 @@ function createSelectComponent(params: {
   ) as DiscordComponentSelectType;
   const componentId = params.componentId ?? createShortId("sel_");
   const customId = buildDiscordComponentCustomIdImpl({ componentId });
+  const createEntry = (
+    selectType: DiscordComponentSelectType,
+    label: string,
+    options?: DiscordComponentEntry["options"],
+  ): DiscordComponentEntry => ({
+    id: componentId,
+    kind: "select",
+    label,
+    callbackData: params.spec.callbackData,
+    selectType,
+    ...(options ? { options } : {}),
+    allowedUsers: params.spec.allowedUsers,
+  });
+
   if (type === "string") {
     const options = params.spec.options ?? [];
     if (options.length === 0) {
@@ -131,15 +145,11 @@ function createSelectComponent(params: {
     }
     return {
       component: new DynamicStringSelect(),
-      entry: {
-        id: componentId,
-        kind: "select",
-        label: params.spec.placeholder ?? "select",
-        callbackData: params.spec.callbackData,
-        selectType: "string",
-        options: options.map((option) => ({ value: option.value, label: option.label })),
-        allowedUsers: params.spec.allowedUsers,
-      },
+      entry: createEntry(
+        "string",
+        params.spec.placeholder ?? "select",
+        options.map((option) => ({ value: option.value, label: option.label })),
+      ),
     };
   }
   if (type === "user") {
@@ -152,14 +162,7 @@ function createSelectComponent(params: {
     }
     return {
       component: new DynamicUserSelect(),
-      entry: {
-        id: componentId,
-        kind: "select",
-        label: params.spec.placeholder ?? "user select",
-        callbackData: params.spec.callbackData,
-        selectType: "user",
-        allowedUsers: params.spec.allowedUsers,
-      },
+      entry: createEntry("user", params.spec.placeholder ?? "user select"),
     };
   }
   if (type === "role") {
@@ -172,14 +175,7 @@ function createSelectComponent(params: {
     }
     return {
       component: new DynamicRoleSelect(),
-      entry: {
-        id: componentId,
-        kind: "select",
-        label: params.spec.placeholder ?? "role select",
-        callbackData: params.spec.callbackData,
-        selectType: "role",
-        allowedUsers: params.spec.allowedUsers,
-      },
+      entry: createEntry("role", params.spec.placeholder ?? "role select"),
     };
   }
   if (type === "mentionable") {
@@ -192,14 +188,7 @@ function createSelectComponent(params: {
     }
     return {
       component: new DynamicMentionableSelect(),
-      entry: {
-        id: componentId,
-        kind: "select",
-        label: params.spec.placeholder ?? "mentionable select",
-        callbackData: params.spec.callbackData,
-        selectType: "mentionable",
-        allowedUsers: params.spec.allowedUsers,
-      },
+      entry: createEntry("mentionable", params.spec.placeholder ?? "mentionable select"),
     };
   }
   class DynamicChannelSelect extends ChannelSelectMenu {
@@ -211,14 +200,7 @@ function createSelectComponent(params: {
   }
   return {
     component: new DynamicChannelSelect(),
-    entry: {
-      id: componentId,
-      kind: "select",
-      label: params.spec.placeholder ?? "channel select",
-      callbackData: params.spec.callbackData,
-      selectType: "channel",
-      allowedUsers: params.spec.allowedUsers,
-    },
+    entry: createEntry("channel", params.spec.placeholder ?? "channel select"),
   };
 }
 

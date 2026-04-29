@@ -89,14 +89,13 @@ export async function handleDiscordCommandArgInteraction(params: {
   dispatchCommandInteraction: DispatchDiscordCommandInteraction;
 }) {
   const { interaction, data, ctx } = params;
+  const clearWithMessage = async (content: string) =>
+    await params.safeInteractionCall("command arg update", () =>
+      interaction.update({ content, components: [] }),
+    );
   const parsed = parseDiscordCommandArgData(data);
   if (!parsed) {
-    await params.safeInteractionCall("command arg update", () =>
-      interaction.update({
-        content: "Sorry, that selection is no longer available.",
-        components: [],
-      }),
-    );
+    await clearWithMessage("Sorry, that selection is no longer available.");
     return;
   }
   if (interaction.user?.id && interaction.user.id !== parsed.userId) {
@@ -107,20 +106,10 @@ export async function handleDiscordCommandArgInteraction(params: {
     findCommandByNativeName(parsed.command, "discord") ??
     listChatCommands().find((entry) => entry.key === parsed.command);
   if (!commandDefinition) {
-    await params.safeInteractionCall("command arg update", () =>
-      interaction.update({
-        content: "Sorry, that command is no longer available.",
-        components: [],
-      }),
-    );
+    await clearWithMessage("Sorry, that command is no longer available.");
     return;
   }
-  const argUpdateResult = await params.safeInteractionCall("command arg update", () =>
-    interaction.update({
-      content: `✅ Selected ${parsed.value}.`,
-      components: [],
-    }),
-  );
+  const argUpdateResult = await clearWithMessage(`✅ Selected ${parsed.value}.`);
   if (argUpdateResult === null) {
     return;
   }
@@ -148,37 +137,42 @@ export async function handleDiscordCommandArgInteraction(params: {
   });
 }
 
+type DiscordCommandArgButtonParams = {
+  ctx: DiscordCommandArgContext;
+  safeInteractionCall: SafeDiscordInteractionCall;
+  dispatchCommandInteraction: DispatchDiscordCommandInteraction;
+};
+
+async function runDiscordCommandArgButton(
+  params: DiscordCommandArgButtonParams & {
+    interaction: ButtonInteraction;
+    data: ComponentData;
+  },
+) {
+  await handleDiscordCommandArgInteraction(params);
+}
+
 class DiscordCommandArgButton extends Button {
   label: string;
   customId: string;
   style = ButtonStyle.Secondary;
-  private ctx: DiscordCommandArgContext;
-  private safeInteractionCall: SafeDiscordInteractionCall;
-  private dispatchCommandInteraction: DispatchDiscordCommandInteraction;
 
-  constructor(params: {
-    label: string;
-    customId: string;
-    ctx: DiscordCommandArgContext;
-    safeInteractionCall: SafeDiscordInteractionCall;
-    dispatchCommandInteraction: DispatchDiscordCommandInteraction;
-  }) {
+  constructor(
+    params: {
+      label: string;
+      customId: string;
+    } & DiscordCommandArgButtonParams,
+  ) {
     super();
     this.label = params.label;
     this.customId = params.customId;
-    this.ctx = params.ctx;
-    this.safeInteractionCall = params.safeInteractionCall;
-    this.dispatchCommandInteraction = params.dispatchCommandInteraction;
+    this.params = params;
   }
 
+  private params: DiscordCommandArgButtonParams;
+
   async run(interaction: ButtonInteraction, data: ComponentData) {
-    await handleDiscordCommandArgInteraction({
-      interaction,
-      data,
-      ctx: this.ctx,
-      safeInteractionCall: this.safeInteractionCall,
-      dispatchCommandInteraction: this.dispatchCommandInteraction,
-    });
+    await runDiscordCommandArgButton({ ...this.params, interaction, data });
   }
 }
 
@@ -222,36 +216,18 @@ export function buildDiscordCommandArgMenu(params: {
 class DiscordCommandArgFallbackButton extends Button {
   label = "cmdarg";
   customId = "cmdarg:seed=1";
-  private ctx: DiscordCommandArgContext;
-  private safeInteractionCall: SafeDiscordInteractionCall;
-  private dispatchCommandInteraction: DispatchDiscordCommandInteraction;
 
-  constructor(params: {
-    ctx: DiscordCommandArgContext;
-    safeInteractionCall: SafeDiscordInteractionCall;
-    dispatchCommandInteraction: DispatchDiscordCommandInteraction;
-  }) {
+  constructor(private readonly params: DiscordCommandArgButtonParams) {
     super();
-    this.ctx = params.ctx;
-    this.safeInteractionCall = params.safeInteractionCall;
-    this.dispatchCommandInteraction = params.dispatchCommandInteraction;
   }
 
   async run(interaction: ButtonInteraction, data: ComponentData) {
-    await handleDiscordCommandArgInteraction({
-      interaction,
-      data,
-      ctx: this.ctx,
-      safeInteractionCall: this.safeInteractionCall,
-      dispatchCommandInteraction: this.dispatchCommandInteraction,
-    });
+    await runDiscordCommandArgButton({ ...this.params, interaction, data });
   }
 }
 
-export function createDiscordCommandArgFallbackButton(params: {
-  ctx: DiscordCommandArgContext;
-  safeInteractionCall: SafeDiscordInteractionCall;
-  dispatchCommandInteraction: DispatchDiscordCommandInteraction;
-}): Button {
+export function createDiscordCommandArgFallbackButton(
+  params: DiscordCommandArgButtonParams,
+): Button {
   return new DiscordCommandArgFallbackButton(params);
 }

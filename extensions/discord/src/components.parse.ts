@@ -69,6 +69,18 @@ function readOptionalNumber(value: unknown): number | undefined {
   return value;
 }
 
+function readOptionalEmoji(value: unknown, label: string) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const obj = value as { name?: unknown; id?: unknown; animated?: unknown };
+  return {
+    name: readString(obj.name, `${label}.name`),
+    id: readOptionalString(obj.id),
+    animated: typeof obj.animated === "boolean" ? obj.animated : undefined,
+  };
+}
+
 export function normalizeModalFieldName(value: string | undefined, index: number) {
   const trimmed = value?.trim();
   if (trimmed) {
@@ -144,20 +156,7 @@ function parseSelectOptions(
       label: readString(obj.label, `${label}[${index}].label`),
       value: readString(obj.value, `${label}[${index}].value`),
       description: readOptionalString(obj.description),
-      emoji:
-        typeof obj.emoji === "object" && obj.emoji && !Array.isArray(obj.emoji)
-          ? {
-              name: readString(
-                (obj.emoji as { name?: unknown }).name,
-                `${label}[${index}].emoji.name`,
-              ),
-              id: readOptionalString((obj.emoji as { id?: unknown }).id),
-              animated:
-                typeof (obj.emoji as { animated?: unknown }).animated === "boolean"
-                  ? (obj.emoji as { animated?: boolean }).animated
-                  : undefined,
-            }
-          : undefined,
+      emoji: readOptionalEmoji(obj.emoji, `${label}[${index}].emoji`),
       default: typeof obj.default === "boolean" ? obj.default : undefined,
     };
   });
@@ -175,17 +174,7 @@ function parseButtonSpec(raw: unknown, label: string): DiscordComponentButtonSpe
     style,
     url,
     callbackData: readOptionalString(obj.callbackData),
-    emoji:
-      typeof obj.emoji === "object" && obj.emoji && !Array.isArray(obj.emoji)
-        ? {
-            name: readString((obj.emoji as { name?: unknown }).name, `${label}.emoji.name`),
-            id: readOptionalString((obj.emoji as { id?: unknown }).id),
-            animated:
-              typeof (obj.emoji as { animated?: unknown }).animated === "boolean"
-                ? (obj.emoji as { animated?: boolean }).animated
-                : undefined,
-          }
-        : undefined,
+    emoji: readOptionalEmoji(obj.emoji, `${label}.emoji`),
     disabled: typeof obj.disabled === "boolean" ? obj.disabled : undefined,
     allowedUsers: readOptionalStringArray(obj.allowedUsers, `${label}.allowedUsers`),
   };
