@@ -50,12 +50,14 @@ import {
   validateResponseFrame,
 } from "./protocol/index.js";
 import { resolveGatewayStartupRetryAfterMs } from "./protocol/startup-unavailable.js";
+import type { GatewayClientTimingSession } from "./gateway-client-timing.js";
 
 type Pending = {
   resolve: (value: unknown) => void;
   reject: (err: unknown) => void;
   expectFinal: boolean;
   timeout: NodeJS.Timeout | null;
+  method: string;
 };
 
 type GatewayClientErrorShape = {
@@ -161,6 +163,8 @@ export type GatewayClientOptions = {
   onReconnectPaused?: (info: GatewayReconnectPausedInfo) => void;
   onClose?: (code: number, reason: string) => void;
   onGap?: (info: { expected: number; received: number }) => void;
+  /** Optional transport timing (gated by OPENCLAW_GATEWAY_CLIENT_TIMING_DEBUG=1). */
+  gatewayClientTiming?: GatewayClientTimingSession;
 };
 
 export const GATEWAY_CLOSE_CODE_HINTS: Readonly<Record<number, string>> = {
@@ -340,6 +344,7 @@ export class GatewayClient {
           return;
         }
       }
+      this.opts.gatewayClientTiming?.emit("ws_open", true, undefined, { method: "connect" });
       this.beginPreauthHandshake();
     });
     ws.on("message", (data) => this.handleMessage(rawDataToString(data)));
@@ -499,6 +504,7 @@ export class GatewayClient {
     }
     this.connectSent = true;
     this.clearConnectChallengeTimeout();
+    this.opts.gatewayClientTiming?.emit("connect_handshake", true, undefined, { method: "connect" });
     const role = this.opts.role ?? "operator";
     const {
       authToken,
@@ -601,9 +607,12 @@ export class GatewayClient {
             : 30_000;
         this.lastTick = Date.now();
         this.startTickWatch();
+        this.opts.gatewayClientTiming?.emit("hello_ok", true, undefined, { method: "connect" });
         this.opts.onHelloOk?.(helloOk);
       })
       .catch((err) => {
+        const errObj = err instanceof Error ? err : new Error(String(err));
+        this.opts.gatewayClientTiming?.emit("hello_ok", false, errObj, { method: "connect" });
         this.pendingConnectErrorDetailCode =
           err instanceof GatewayClientRequestError ? readConnectErrorDetailCode(err.details) : null;
         const shouldRetryWithDeviceToken = this.shouldRetryWithStoredDeviceToken({
@@ -859,18 +868,30 @@ export class GatewayClient {
         if (pending.timeout) {
           clearTimeout(pending.timeout);
         }
+        const timingMethod = pending.method;
+        this.opts.gatewayClientTiming?.emit("response_wait", true, undefined, {
+          method: timingMethod,
+        });
+        this.opts.gatewayClientTiming?.emit("frame_receive_parse", true, undefined, {
+          method: timingMethod,
+        });
         if (parsed.ok) {
+          this.opts.gatewayClientTiming?.emit("request_settle", true, undefined, {
+            method: timingMethod,
+          });
           pending.resolve(parsed.payload);
         } else {
-          pending.reject(
-            new GatewayClientRequestError({
-              code: parsed.error?.code,
-              message: parsed.error?.message ?? "unknown error",
-              details: parsed.error?.details,
-              retryable: parsed.error?.retryable,
-              retryAfterMs: parsed.error?.retryAfterMs,
-            }),
-          );
+          const reqErr = new GatewayClientRequestError({
+            code: parsed.error?.code,
+            message: parsed.error?.message ?? "unknown error",
+            details: parsed.error?.details,
+            retryable: parsed.error?.retryable,
+            retryAfterMs: parsed.error?.retryAfterMs,
+          });
+          this.opts.gatewayClientTiming?.emit("request_settle", false, reqErr, {
+            method: timingMethod,
+          });
+          pending.reject(reqErr);
         }
       }
     } catch (err) {
@@ -1037,15 +1058,26 @@ export class GatewayClient {
           ? null
           : setTimeout(() => {
               this.pending.delete(id);
-              reject(new Error(`gateway request timeout for ${method}`));
+              const timeoutErr = new Error(`gateway request timeout for ${method}`);
+              this.opts.gatewayClientTiming?.emit("response_wait", false, timeoutErr, {
+                method,
+              });
+              this.opts.gatewayClientTiming?.emit("request_settle", false, timeoutErr, {
+                method,
+              });
+              reject(timeoutErr);
             }, timeoutMs);
       this.pending.set(id, {
         resolve: (value) => resolve(value as T),
         reject,
         expectFinal,
         timeout,
+        method,
       });
     });
+    if (method !== "connect") {
+      this.opts.gatewayClientTiming?.emit("request_send", true, undefined, { method });
+    }
     this.ws.send(JSON.stringify(frame));
     return p;
   }

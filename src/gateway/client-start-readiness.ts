@@ -9,6 +9,8 @@ export type GatewayClientStartReadinessOptions = {
     "connectChallengeTimeoutMs" | "connectDelayMs" | "preauthHandshakeTimeoutMs"
   >;
   signal?: AbortSignal;
+  /** Invoked immediately before `client.start()` once the event loop is ready. */
+  onBeforeStart?: () => void;
 };
 
 export function resolveGatewayClientStartReadinessTimeoutMs(
@@ -40,6 +42,7 @@ export async function startGatewayClientWhenEventLoopReady(
     signal: options.signal,
   });
   if (readiness.ready && !readiness.aborted && options.signal?.aborted !== true) {
+    options.onBeforeStart?.();
     client.start();
   }
   return readiness;

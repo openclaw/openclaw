@@ -20,6 +20,7 @@ import { resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
 import { VERSION } from "../version.js";
 import { startGatewayClientWhenEventLoopReady } from "./client-start-readiness.js";
 import { GatewayClient, type GatewayClientOptions } from "./client.js";
+import { createGatewayClientTimingSession } from "./gateway-client-timing.js";
 import {
   buildGatewayConnectionDetailsWithResolvers,
   type GatewayConnectionDetails,
@@ -620,6 +621,8 @@ async function executeGatewayRequestWithScopes<T>(params: {
     let settled = false;
     let ignoreClose = false;
     const startAbort = new AbortController();
+    const timing = createGatewayClientTimingSession(opts.method, "rpc");
+    timing?.emit("executeGatewayRequestWithScopes_entered", true);
     const stop = (err?: Error, value?: T) => {
       if (settled) {
         return;
@@ -629,8 +632,10 @@ async function executeGatewayRequestWithScopes<T>(params: {
       clearTimeout(timer);
       void stopGatewayClient(client).finally(() => {
         if (err) {
+          timing?.emit("command_complete", false, err);
           reject(err);
         } else {
+          timing?.emit("command_complete", true);
           resolve(value as T);
         }
       });
@@ -650,6 +655,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
       mode: opts.mode ?? GATEWAY_CLIENT_MODES.CLI,
       role: "operator",
       scopes,
+      gatewayClientTiming: timing,
       deviceIdentity:
         opts.deviceIdentity === undefined
           ? resolveDeviceIdentityForGatewayCall({ opts, url, token, password })
@@ -702,6 +708,9 @@ async function executeGatewayRequestWithScopes<T>(params: {
     void startGatewayClientWhenEventLoopReady(client, {
       timeoutMs: safeTimerTimeoutMs,
       signal: startAbort.signal,
+      onBeforeStart: () => {
+        timing?.emit("event_loop_ready", true);
+      },
     })
       .then((readiness) => {
         if (settled || readiness.ready || readiness.aborted) {
