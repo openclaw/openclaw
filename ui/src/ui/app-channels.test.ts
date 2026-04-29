@@ -14,11 +14,8 @@ type ChannelsActionHostForTest = ConfigState &
   };
 
 function createChannelsSnapshot(name = "saved"): ChannelsStatusSnapshot {
-  const nostrAccount = {
-    accountId: "default",
-    configured: true,
-    profile: { name },
-  } as ChannelsStatusSnapshot["channelAccounts"][string][number];
+  const nostrAccount = { accountId: "default", configured: true, profile: { name } } as
+    ChannelsStatusSnapshot["channelAccounts"][string][number];
   return {
     ts: Date.now(),
     channelOrder: ["nostr"],
