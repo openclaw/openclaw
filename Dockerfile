@@ -241,7 +241,17 @@ RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,shar
       # Update OPENCLAW_DOCKER_GPG_FINGERPRINT when Docker rotates release keys.
       curl -fsSL https://download.docker.com/linux/debian/gpg -o /tmp/docker.gpg.asc && \
       expected_fingerprint="$(printf '%s' "$OPENCLAW_DOCKER_GPG_FINGERPRINT" | tr '[:lower:]' '[:upper:]' | tr -d '[:space:]')" && \
-      actual_fingerprint="$(gpg --batch --show-keys --with-colons /tmp/docker.gpg.asc | awk -F: '$1 == "fpr" { print toupper($10); exit }')" && \
+      # Verify EVERY public key in the fetched file matches the expected
+      # fingerprint. The earlier `awk ... exit` only validated the first
+      # key, so a multi-key file could pass while a later key was used to
+      # sign packages. Fail closed on count != 1 or any mismatch (#74234).
+      actual_fingerprints="$(gpg --batch --show-keys --with-colons /tmp/docker.gpg.asc | awk -F: '$1 == "fpr" { print toupper($10) }')" && \
+      actual_count="$(printf '%s\n' "$actual_fingerprints" | grep -c .)" && \
+      if [ "$actual_count" != "1" ]; then \
+        echo "ERROR: Docker apt key file must contain exactly one public key, got $actual_count" >&2; \
+        exit 1; \
+      fi && \
+      actual_fingerprint="$actual_fingerprints" && \
       if [ -z "$actual_fingerprint" ] || [ "$actual_fingerprint" != "$expected_fingerprint" ]; then \
         echo "ERROR: Docker apt key fingerprint mismatch (expected $expected_fingerprint, got ${actual_fingerprint:-<empty>})" >&2; \
         exit 1; \
