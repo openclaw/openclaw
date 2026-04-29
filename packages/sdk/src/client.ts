@@ -64,7 +64,13 @@ function runStatusFromWaitPayload(payload: unknown): RunResult["status"] {
   if (status === "ok" || status === "completed" || status === "succeeded") {
     return "completed";
   }
-  if (status === "timeout" || status === "timed_out") {
+  if (status === "timeout") {
+    if (stopReason === "timeout" || stopReason === "timed_out" || record.aborted === true) {
+      return "timed_out";
+    }
+    return "accepted";
+  }
+  if (status === "timed_out") {
     return "timed_out";
   }
   if (status === "accepted") {

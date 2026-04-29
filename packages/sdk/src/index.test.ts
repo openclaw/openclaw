@@ -136,6 +136,41 @@ describe("OpenClaw SDK", () => {
     });
   });
 
+  it("keeps wait-only deadlines non-terminal", async () => {
+    const transport = new FakeTransport({
+      "agent.wait": { status: "timeout", runId: "run_still_active" },
+    });
+    const oc = new OpenClaw({ transport });
+
+    const result = await oc.runs.wait("run_still_active");
+
+    expect(result).toMatchObject({
+      runId: "run_still_active",
+      status: "accepted",
+    });
+    expect(result.error).toBeUndefined();
+  });
+
+  it("maps terminal runtime timeout snapshots to timed_out", async () => {
+    const transport = new FakeTransport({
+      "agent.wait": {
+        status: "timeout",
+        runId: "run_timed_out",
+        stopReason: "timeout",
+        error: "agent runtime timeout",
+      },
+    });
+    const oc = new OpenClaw({ transport });
+
+    const result = await oc.runs.wait("run_timed_out");
+
+    expect(result).toMatchObject({
+      runId: "run_timed_out",
+      status: "timed_out",
+      error: { message: "agent runtime timeout" },
+    });
+  });
+
   it("splits provider-qualified model refs and rejects unsupported run options", async () => {
     const transport = new FakeTransport({
       agent: { status: "accepted", runId: "run_openrouter" },
