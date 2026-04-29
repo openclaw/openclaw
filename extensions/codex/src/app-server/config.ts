@@ -48,6 +48,7 @@ export type CodexAppServerStartOptions = {
 export type CodexAppServerRuntimeOptions = {
   start: CodexAppServerStartOptions;
   requestTimeoutMs: number;
+  startupTimeoutMs: number;
   approvalPolicy: CodexAppServerApprovalPolicy;
   sandbox: CodexAppServerSandboxMode;
   approvalsReviewer: CodexAppServerApprovalsReviewer;
@@ -70,6 +71,7 @@ export type CodexPluginConfig = {
     headers?: Record<string, string>;
     clearEnv?: string[];
     requestTimeoutMs?: number;
+    startupTimeoutMs?: number;
     approvalPolicy?: CodexAppServerApprovalPolicy;
     sandbox?: CodexAppServerSandboxMode;
     approvalsReviewer?: CodexAppServerApprovalsReviewer;
@@ -88,6 +90,7 @@ export const CODEX_APP_SERVER_CONFIG_KEYS = [
   "headers",
   "clearEnv",
   "requestTimeoutMs",
+  "startupTimeoutMs",
   "approvalPolicy",
   "sandbox",
   "approvalsReviewer",
@@ -158,6 +161,7 @@ const codexPluginConfigSchema = z
         headers: z.record(z.string(), z.string()).optional(),
         clearEnv: z.array(z.string()).optional(),
         requestTimeoutMs: z.number().positive().optional(),
+        startupTimeoutMs: z.number().positive().optional(),
         approvalPolicy: codexAppServerApprovalPolicySchema.optional(),
         sandbox: codexAppServerSandboxSchema.optional(),
         approvalsReviewer: codexAppServerApprovalsReviewerSchema.optional(),
@@ -219,6 +223,7 @@ export function resolveCodexAppServerRuntimeOptions(
       ...(transport === "stdio" && clearEnv.length > 0 ? { clearEnv } : {}),
     },
     requestTimeoutMs: normalizePositiveNumber(config.requestTimeoutMs, 60_000),
+    startupTimeoutMs: normalizePositiveNumber(config.startupTimeoutMs, 120_000),
     approvalPolicy:
       resolveApprovalPolicy(config.approvalPolicy) ??
       resolveApprovalPolicy(env.OPENCLAW_CODEX_APP_SERVER_APPROVAL_POLICY) ??
