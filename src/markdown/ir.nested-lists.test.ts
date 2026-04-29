@@ -363,6 +363,16 @@ second paragraph
     expect(result.text).not.toContain("\n\n\n");
   });
 
+  it("keeps tight heading list items single-spaced", () => {
+    const input = `- # A
+- # B`;
+
+    const result = markdownToIR(input);
+
+    expect(result.text).toBe(`• A
+• B`);
+  });
+
   it("adds blank line between bullet list and following paragraph", () => {
     const input = `- item 1
 - item 2

@@ -264,12 +264,14 @@ function closeStyle(state: RenderState, style: MarkdownStyle) {
 }
 
 function appendParagraphSeparator(state: RenderState, token?: MarkdownToken) {
-  if (state.env.listStack.length > 0 && token?.hidden) {
-    return;
-  }
   if (state.table) {
     return;
   } // Don't add paragraph separators inside tables
+  if (state.env.listStack.length > 0) {
+    if (token?.type !== "paragraph_close" || token.hidden) {
+      return;
+    }
+  }
   state.text += "\n\n";
 }
 
