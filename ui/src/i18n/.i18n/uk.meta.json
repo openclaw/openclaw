@@ -1,11 +1,11 @@
 {
-  "fallbackKeys": ["languages.ar", "languages.fa", "languages.it", "languages.nl", "languages.vi"],
-  "generatedAt": "2026-04-29T17:08:04.234Z",
+  "fallbackKeys": [],
+  "generatedAt": "2026-04-29T17:37:08.260Z",
   "locale": "uk",
   "model": "gpt-5.5",
   "provider": "openai",
   "sourceHash": "e2d2b3df6a5e614401e887d4c49d24c633ac3435956040c48672ec8b289abdd4",
   "totalKeys": 768,
-  "translatedKeys": 763,
+  "translatedKeys": 768,
   "workflow": 1
 }
