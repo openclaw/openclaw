@@ -37,6 +37,15 @@ const WORLD_PRINCIPALS = new Set([
   "builtin\\users",
   "authenticated users",
   "nt authority\\authenticated users",
+  "anonymous logon",
+  "nt authority\\anonymous logon",
+  "guests",
+  "builtin\\guests",
+  "interactive",
+  "nt authority\\interactive",
+  "network",
+  "nt authority\\network",
+  "local",
 ]);
 const TRUSTED_BASE = new Set([
   "nt authority\\system",
@@ -65,7 +74,21 @@ const TRUSTED_SIDS = new Set([
 //   S-1-1-0        Everyone
 //   S-1-5-11       Authenticated Users
 //   S-1-5-32-545   BUILTIN\Users
-const WORLD_SIDS = new Set(["s-1-1-0", "s-1-5-11", "s-1-5-32-545"]);
+//   S-1-5-7        NT AUTHORITY\Anonymous Logon
+//   S-1-5-32-546   BUILTIN\Guests
+//   S-1-5-4        NT AUTHORITY\Interactive
+//   S-1-2-0        LOCAL
+//   S-1-5-2        NT AUTHORITY\Network
+const WORLD_SIDS = new Set([
+  "s-1-1-0",
+  "s-1-5-11",
+  "s-1-5-32-545",
+  "s-1-5-7",
+  "s-1-5-32-546",
+  "s-1-5-4",
+  "s-1-2-0",
+  "s-1-5-2",
+]);
 const STATUS_PREFIXES = [
   "successfully processed",
   "processed",
