@@ -5,9 +5,35 @@ const LOCAL_ASSISTANT_IDENTITY_KEY = "openclaw.control.assistant.v1";
 const LEGACY_TOKEN_SESSION_KEY = "openclaw.control.token.v1";
 const TOKEN_SESSION_KEY_PREFIX = "openclaw.control.token.v1:";
 const MAX_SCOPED_SESSION_ENTRIES = 10;
+const LOOPBACK_TOKEN_SCOPE_HOST = "localhost";
 
 function settingsKeyForGateway(gatewayUrl: string): string {
   return `${SETTINGS_KEY_PREFIX}${normalizeGatewayTokenScope(gatewayUrl)}`;
+}
+
+function isIpv4LoopbackLiteral(hostname: string): boolean {
+  const parts = hostname.split(".");
+  if (parts.length !== 4) {
+    return false;
+  }
+  const octets = parts.map((part) => {
+    if (!/^\d+$/.test(part)) {
+      return Number.NaN;
+    }
+    return Number(part);
+  });
+  return (
+    octets[0] === 127 &&
+    octets.every((octet) => Number.isInteger(octet) && octet >= 0 && octet <= 255)
+  );
+}
+
+function normalizeGatewayTokenScopeHost(hostname: string): string {
+  const normalized = hostname.toLowerCase();
+  if (normalized === "localhost" || normalized === "[::1]" || isIpv4LoopbackLiteral(normalized)) {
+    return LOOPBACK_TOKEN_SCOPE_HOST;
+  }
+  return hostname;
 }
 
 type ScopedSessionSelection = {
@@ -116,7 +142,12 @@ function normalizeGatewayTokenScope(gatewayUrl: string): string {
     const parsed = base ? new URL(trimmed, base) : new URL(trimmed);
     const pathname =
       parsed.pathname === "/" ? "" : parsed.pathname.replace(/\/+$/, "") || parsed.pathname;
-    return `${parsed.protocol}//${parsed.host}${pathname}`;
+    const scopeHost = normalizeGatewayTokenScopeHost(parsed.hostname);
+    const host =
+      scopeHost === parsed.hostname
+        ? parsed.host
+        : `${scopeHost}${parsed.port ? `:${parsed.port}` : ""}`;
+    return `${parsed.protocol}//${host}${pathname}`;
   } catch {
     return trimmed;
   }

@@ -44,6 +44,28 @@ function expectedGatewayUrl(basePath: string): string {
   return `${proto}://${location.host}${basePath}`;
 }
 
+type UiSettingsFixture = Parameters<typeof saveSettings>[0];
+
+function createUiSettingsFixture(overrides: Partial<UiSettingsFixture> = {}): UiSettingsFixture {
+  return {
+    gatewayUrl: expectedGatewayUrl(""),
+    token: "",
+    sessionKey: "main",
+    lastActiveSessionKey: "main",
+    theme: "claw",
+    themeMode: "system",
+    chatFocusMode: false,
+    chatShowThinking: true,
+    chatShowToolCalls: true,
+    splitRatio: 0.6,
+    navCollapsed: false,
+    navWidth: 220,
+    navGroupsCollapsed: {},
+    borderRadius: 50,
+    ...overrides,
+  };
+}
+
 function createCustomThemeFixture() {
   return normalizeImportedCustomTheme(
     {
@@ -237,6 +259,68 @@ describe("loadSettings default gateway URL derivation", () => {
       gatewayUrl: gwUrl,
       token: "session-token",
     });
+  });
+
+  it("shares same-tab tokens across true loopback aliases on the same protocol port and path", async () => {
+    setTestLocation({
+      protocol: "http:",
+      host: "127.0.0.1:18789",
+      pathname: "/openclaw",
+    });
+
+    saveSettings(
+      createUiSettingsFixture({
+        gatewayUrl: "ws://127.0.0.1:18789/openclaw",
+        token: "loopback-token",
+      }),
+    );
+
+    expect(sessionStorage.getItem("openclaw.control.token.v1:ws://localhost:18789/openclaw")).toBe(
+      "loopback-token",
+    );
+
+    localStorage.clear();
+
+    for (const host of ["localhost:18789", "127.255.255.255:18789", "[::1]:18789"]) {
+      setTestLocation({
+        protocol: "http:",
+        host,
+        pathname: "/openclaw",
+      });
+      expect(loadSettings()).toMatchObject({
+        gatewayUrl: expectedGatewayUrl("/openclaw"),
+        token: "loopback-token",
+      });
+    }
+  });
+
+  it("keeps loopback token scope isolated by protocol port path and DNS hostnames", async () => {
+    setTestLocation({
+      protocol: "http:",
+      host: "127.0.0.1:18789",
+      pathname: "/openclaw",
+    });
+
+    saveSettings(
+      createUiSettingsFixture({
+        gatewayUrl: "ws://127.0.0.1:18789/openclaw",
+        token: "loopback-token",
+      }),
+    );
+    localStorage.clear();
+
+    for (const locationParams of [
+      { protocol: "http:", host: "127.0.0.1:18790", pathname: "/openclaw" },
+      { protocol: "https:", host: "127.0.0.1:18789", pathname: "/openclaw" },
+      { protocol: "http:", host: "127.0.0.1:18789", pathname: "/other" },
+      { protocol: "http:", host: "127.0.0.1.example:18789", pathname: "/openclaw" },
+    ]) {
+      setTestLocation(locationParams);
+      expect(loadSettings()).toMatchObject({
+        gatewayUrl: expectedGatewayUrl(locationParams.pathname),
+        token: "",
+      });
+    }
   });
 
   it("does not reuse a session token for a different gatewayUrl", async () => {
