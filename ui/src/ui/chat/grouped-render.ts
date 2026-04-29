@@ -947,13 +947,21 @@ async function resolveManagedOutgoingImageBlobUrl(
   return pending;
 }
 
+function appendAssistantAttachmentQueryParam(url: string, key: string, value: string): string {
+  return `${url}${url.includes("?") ? "&" : "?"}${new URLSearchParams({ [key]: value }).toString()}`;
+}
+
 function buildAssistantAttachmentMetaUrl(
   source: string,
   basePath?: string,
   authToken?: string | null,
 ): string {
   const attachmentUrl = buildAssistantAttachmentUrl(source, basePath, authToken);
-  return `${attachmentUrl}${attachmentUrl.includes("?") ? "&" : "?"}meta=1`;
+  return appendAssistantAttachmentQueryParam(attachmentUrl, "meta", "1");
+}
+
+function buildAssistantAttachmentDownloadUrl(url: string): string {
+  return appendAssistantAttachmentQueryParam(url, "download", "1");
 }
 
 function resolveAssistantAttachmentAvailability(
@@ -1072,6 +1080,9 @@ function renderAssistantAttachments(
           availability.status === "available"
             ? buildAssistantAttachmentUrl(attachment.url, basePath, authToken)
             : null;
+        const attachmentDownloadUrl = attachmentUrl
+          ? buildAssistantAttachmentDownloadUrl(attachmentUrl)
+          : null;
         if (attachment.kind === "image") {
           if (!attachmentUrl) {
             return renderAssistantAttachmentStatusCard({
@@ -1105,7 +1116,14 @@ function renderAssistantAttachments(
                     : nothing}
               </div>
               ${attachmentUrl
-                ? html`<audio controls preload="metadata" src=${attachmentUrl}></audio>`
+                ? html`<audio controls preload="metadata" src=${attachmentUrl}></audio>
+                    <a
+                      class="chat-assistant-attachment-card__link"
+                      href=${attachmentDownloadUrl}
+                      download=${attachment.label}
+                      rel="noreferrer"
+                      >Download</a
+                    >`
                 : availability.status === "unavailable"
                   ? html`<div class="chat-assistant-attachment-card__reason">
                       ${availability.reason}
@@ -1128,8 +1146,8 @@ function renderAssistantAttachments(
               <video controls preload="metadata" src=${attachmentUrl}></video>
               <a
                 class="chat-assistant-attachment-card__link"
-                href=${attachmentUrl}
-                target="_blank"
+                href=${attachmentDownloadUrl}
+                download=${attachment.label}
                 rel="noreferrer"
                 >${attachment.label}</a
               >
@@ -1149,8 +1167,8 @@ function renderAssistantAttachments(
             <span class="chat-assistant-attachment-card__icon">${icons.paperclip}</span>
             <a
               class="chat-assistant-attachment-card__link"
-              href=${attachmentUrl}
-              target="_blank"
+              href=${attachmentDownloadUrl}
+              download=${attachment.label}
               rel="noreferrer"
               >${attachment.label}</a
             >

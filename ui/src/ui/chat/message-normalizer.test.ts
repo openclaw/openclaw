@@ -250,6 +250,57 @@ describe("message-normalizer", () => {
       expect(result.content).toEqual([]);
     });
 
+    it("renders top-level mediaUrls as assistant attachments", () => {
+      const result = normalizeMessage({
+        role: "assistant",
+        content: "Here is the file",
+        mediaUrls: ["/tmp/openclaw/notes.md"],
+      });
+
+      expect(result.content).toEqual([
+        { type: "text", text: "Here is the file" },
+        {
+          type: "attachment",
+          attachment: {
+            url: "/tmp/openclaw/notes.md",
+            kind: "document",
+            label: "notes.md",
+            mimeType: "text/markdown",
+          },
+        },
+      ]);
+    });
+
+    it("ignores top-level mediaUrls on non-assistant messages", () => {
+      const result = normalizeMessage({
+        role: "user",
+        content: "Here is the file",
+        mediaUrls: ["/tmp/openclaw/notes.md"],
+      });
+
+      expect(result.content).toEqual([{ type: "text", text: "Here is the file" }]);
+    });
+
+    it("deduplicates top-level mediaUrls already present in assistant content", () => {
+      const result = normalizeMessage({
+        role: "assistant",
+        content: "MEDIA:/tmp/openclaw/notes.md",
+        mediaUrls: ["/tmp/openclaw/notes.md"],
+      });
+
+      expect(result.content).toEqual([
+        {
+          type: "attachment",
+          attachment: {
+            url: "/tmp/openclaw/notes.md",
+            kind: "document",
+            label: "notes.md",
+            mimeType: "text/markdown",
+          },
+        },
+      ]);
+    });
+
     it("preserves relative MEDIA references as visible text instead of dropping the assistant turn", () => {
       const result = normalizeMessage({
         role: "assistant",

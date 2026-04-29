@@ -332,6 +332,49 @@ describe("handleControlUiHttpRequest", () => {
     });
   });
 
+  it("serves markdown assistant media as a download", async () => {
+    await withAllowedAssistantMediaRoot({
+      prefix: "ui-media-md-",
+      fn: async (tmpRoot) => {
+        const filePath = path.join(tmpRoot, "notes.md");
+        await fs.writeFile(filePath, "# Notes\n");
+        const { res, handled } = await runAssistantMediaRequest({
+          url: `/__openclaw__/assistant-media?source=${encodeURIComponent(filePath)}&token=test-token`,
+          method: "GET",
+          auth: { mode: "token", token: "test-token", allowTailscale: false },
+        });
+        expect(handled).toBe(true);
+        expect(res.statusCode).toBe(200);
+        expect(res.setHeader).toHaveBeenCalledWith("Content-Type", "text/markdown");
+        expect(res.setHeader).toHaveBeenCalledWith(
+          "Content-Disposition",
+          'attachment; filename="notes.md"',
+        );
+      },
+    });
+  });
+
+  it("serves requested assistant media downloads with an attachment disposition", async () => {
+    await withAllowedAssistantMediaRoot({
+      prefix: "ui-media-download-",
+      fn: async (tmpRoot) => {
+        const filePath = path.join(tmpRoot, "report.pdf");
+        await fs.writeFile(filePath, "%PDF-1.4\n");
+        const { res, handled } = await runAssistantMediaRequest({
+          url: `/__openclaw__/assistant-media?source=${encodeURIComponent(filePath)}&download=1&token=test-token`,
+          method: "GET",
+          auth: { mode: "token", token: "test-token", allowTailscale: false },
+        });
+        expect(handled).toBe(true);
+        expect(res.statusCode).toBe(200);
+        expect(res.setHeader).toHaveBeenCalledWith(
+          "Content-Disposition",
+          'attachment; filename="report.pdf"',
+        );
+      },
+    });
+  });
+
   it("serves assistant media from canonical inbound media refs", async () => {
     const stateDir = resolveStateDir();
     const id = `ui-media-ref-${Date.now()}-${Math.random().toString(36).slice(2)}.png`;
