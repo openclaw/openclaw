@@ -104,6 +104,8 @@ jobs:
 
       - name: Set up Blacksmith Docker Builder
         uses: useblacksmith/setup-docker-builder@ac083cc84672d01c60d5e8561d0a939b697de542 # v1
+        with:
+          max-cache-size-mb: 800000
 
       # Blacksmith's builder owns the Docker layer cache; keep smoke builds off
       # explicit gha cache directives so local tags still load cleanly.
@@ -211,6 +213,8 @@ jobs:
 
       - name: Set up Blacksmith Docker Builder
         uses: useblacksmith/setup-docker-builder@ac083cc84672d01c60d5e8561d0a939b697de542 # v1
+        with:
+          max-cache-size-mb: 800000
 
       # Blacksmith's builder owns the Docker layer cache; keep smoke builds off
       # explicit gha cache directives so local tags still load cleanly.
@@ -361,6 +365,8 @@ jobs:
 
       - name: Set up Blacksmith Docker Builder
         uses: useblacksmith/setup-docker-builder@ac083cc84672d01c60d5e8561d0a939b697de542 # v1
+        with:
+          max-cache-size-mb: 800000
 
       - name: Setup Node environment for package smoke
         uses: ./.github/actions/setup-node-env

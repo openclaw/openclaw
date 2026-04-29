@@ -486,6 +486,13 @@ function buildTelegramQaConfig(
       allow: pluginAllow,
       entries: pluginEntries,
     },
+    messages: {
+      ...baseCfg.messages,
+      groupChat: {
+        ...baseCfg.messages?.groupChat,
+        visibleReplies: "automatic",
+      },
+    },
     channels: {
       ...baseCfg.channels,
       telegram: {
@@ -543,6 +550,17 @@ async function callTelegramApi<T>(
   }
 }
 
+function isRecoverableTelegramQaPollError(error: unknown): boolean {
+  const message = formatErrorMessage(error).toLowerCase();
+  return (
+    message.includes("fetch failed") ||
+    message.includes("econnreset") ||
+    message.includes("etimedout") ||
+    message.includes("socket hang up") ||
+    message.includes("terminated")
+  );
+}
+
 async function getBotIdentity(token: string) {
   return await callTelegramApi<TelegramBotIdentity>(token, "getMe");
 }
@@ -577,6 +595,10 @@ async function sendGroupMessage(token: string, groupId: string, text: string) {
   });
 }
 
+async function waitForTelegramPollRetryDelay(remainingMs: number) {
+  await new Promise((resolve) => setTimeout(resolve, Math.min(250, Math.max(100, remainingMs))));
+}
+
 async function waitForObservedMessage(params: {
   token: string;
   initialOffset: number;
@@ -588,22 +610,34 @@ async function waitForObservedMessage(params: {
 }) {
   const startedAt = Date.now();
   let offset = params.initialOffset;
+  let lastPollingError: unknown;
   while (Date.now() - startedAt < params.timeoutMs) {
     const remainingMs = Math.max(
       1_000,
       Math.min(10_000, params.timeoutMs - (Date.now() - startedAt)),
     );
     const timeoutSeconds = Math.max(1, Math.min(10, Math.floor(remainingMs / 1000)));
-    const updates = await callTelegramApi<TelegramUpdate[]>(
-      params.token,
-      "getUpdates",
-      {
-        offset,
-        timeout: timeoutSeconds,
-        allowed_updates: ["message"],
-      },
-      timeoutSeconds * 1000 + 5_000,
-    );
+    let updates: TelegramUpdate[];
+    try {
+      updates = await callTelegramApi<TelegramUpdate[]>(
+        params.token,
+        "getUpdates",
+        {
+          offset,
+          timeout: timeoutSeconds,
+          allowed_updates: ["message"],
+        },
+        timeoutSeconds * 1000 + 5_000,
+      );
+      lastPollingError = undefined;
+    } catch (error) {
+      if (!isRecoverableTelegramQaPollError(error)) {
+        throw error;
+      }
+      lastPollingError = error;
+      await waitForTelegramPollRetryDelay(params.timeoutMs - (Date.now() - startedAt));
+      continue;
+    }
     const batchObservedAtMs = Date.now();
     if (updates.length === 0) {
       continue;
@@ -627,7 +661,13 @@ async function waitForObservedMessage(params: {
       }
     }
   }
-  throw new Error(`timed out after ${params.timeoutMs}ms waiting for Telegram message`);
+  const timeoutMessage = `timed out after ${params.timeoutMs}ms waiting for Telegram message`;
+  if (lastPollingError) {
+    throw new Error(
+      `${timeoutMessage}; last polling error: ${formatErrorMessage(lastPollingError)}`,
+    );
+  }
+  throw new Error(timeoutMessage);
 }
 
 async function waitForTelegramChannelRunning(
@@ -1433,6 +1473,7 @@ export const __testing = {
   buildObservedMessagesArtifact,
   canaryFailureMessage,
   callTelegramApi,
+  isRecoverableTelegramQaPollError,
   assertTelegramScenarioReply,
   classifyCanaryReply,
   findScenario,
@@ -1445,4 +1486,5 @@ export const __testing = {
   shouldLogTelegramQaLiveProgress,
   formatTelegramQaProgressDetails,
   renderTelegramQaMarkdown,
+  waitForObservedMessage,
 };

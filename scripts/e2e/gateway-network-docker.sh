@@ -24,6 +24,7 @@ cleanup() {
 trap cleanup EXIT
 
 docker_e2e_build_or_reuse "$IMAGE_NAME" gateway-network "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR" "" "$SKIP_BUILD"
+docker_e2e_harness_mount_args
 
 echo "Creating Docker network..."
 docker_cmd docker network create "$NET_NAME" >/dev/null
@@ -37,8 +38,9 @@ docker_cmd docker run -d \
   -e "OPENCLAW_SKIP_GMAIL_WATCHER=1" \
   -e "OPENCLAW_SKIP_CRON=1" \
   -e "OPENCLAW_SKIP_CANVAS_HOST=1" \
+  "${DOCKER_E2E_HARNESS_ARGS[@]}" \
   "$IMAGE_NAME" \
-  bash -lc "set -euo pipefail; entry=dist/index.mjs; [ -f \"\$entry\" ] || entry=dist/index.js; node \"\$entry\" config set gateway.controlUi.enabled false >/dev/null; node \"\$entry\" gateway --port $PORT --bind lan --allow-unconfigured > /tmp/gateway-net-e2e.log 2>&1" >/dev/null
+  bash -lc "set -euo pipefail; source scripts/lib/openclaw-e2e-instance.sh; entry=\"\$(openclaw_e2e_resolve_entrypoint)\"; node \"\$entry\" config set gateway.controlUi.enabled false >/dev/null; openclaw_e2e_exec_gateway \"\$entry\" $PORT lan /tmp/gateway-net-e2e.log" >/dev/null
 
 echo "Waiting for gateway to come up..."
 ready=0
@@ -46,27 +48,7 @@ for _ in $(seq 1 180); do
   if [ "$(docker_cmd docker inspect -f '{{.State.Running}}' "$GW_NAME" 2>/dev/null || echo false)" != "true" ]; then
     break
   fi
-  if docker_cmd docker exec "$GW_NAME" bash -lc "node --input-type=module -e '
-    import net from \"node:net\";
-    const socket = net.createConnection({ host: \"127.0.0.1\", port: $PORT });
-    const timeout = setTimeout(() => {
-      socket.destroy();
-      process.exit(1);
-    }, 400);
-    socket.on(\"connect\", () => {
-      clearTimeout(timeout);
-      socket.end();
-      process.exit(0);
-    });
-    socket.on(\"error\", () => {
-      clearTimeout(timeout);
-      process.exit(1);
-    });
-  ' >/dev/null 2>&1"; then
-    ready=1
-    break
-  fi
-  if docker_cmd docker exec "$GW_NAME" bash -lc "grep -q \"listening on ws://\" /tmp/gateway-net-e2e.log 2>/dev/null"; then
+  if docker_cmd docker exec "$GW_NAME" bash -lc "source scripts/lib/openclaw-e2e-instance.sh; openclaw_e2e_probe_tcp 127.0.0.1 $PORT || grep -q \"listening on ws://\" /tmp/gateway-net-e2e.log 2>/dev/null"; then
     ready=1
     break
   fi

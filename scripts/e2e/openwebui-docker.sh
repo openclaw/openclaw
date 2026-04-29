@@ -74,8 +74,8 @@ docker_cmd docker run -d \
   "$IMAGE_NAME" \
   bash -lc '
     set -euo pipefail
-    entry=dist/index.mjs
-    [ -f "$entry" ] || entry=dist/index.js
+    source scripts/lib/openclaw-e2e-instance.sh
+    entry="$(openclaw_e2e_resolve_entrypoint)"
 
     openai_api_key="${OPENAI_API_KEY:?OPENAI_API_KEY required}"
     batch_file="$(mktemp /tmp/openclaw-openwebui-config.XXXXXX.json)"
@@ -120,7 +120,7 @@ EOF
 EOF
     rm -f "$workspace/BOOTSTRAP.md"
 
-    exec node "$entry" gateway --port '"$PORT"' --bind lan --allow-unconfigured > /tmp/openwebui-gateway.log 2>&1
+    openclaw_e2e_exec_gateway "$entry" '"$PORT"' lan /tmp/openwebui-gateway.log
   ' >/dev/null
 
 echo "Waiting for gateway HTTP surface..."
