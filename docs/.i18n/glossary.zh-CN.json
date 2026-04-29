@@ -396,6 +396,50 @@
     "target": "插件"
   },
   {
+    "source": "ClawHub",
+    "target": "ClawHub"
+  },
+  {
+    "source": "CLI reference",
+    "target": "CLI 参考"
+  },
+  {
+    "source": "Creating skills",
+    "target": "创建 Skills"
+  },
+  {
+    "source": "Docs hubs",
+    "target": "Docs hubs"
+  },
+  {
+    "source": "Plugin bundles",
+    "target": "Plugin bundles"
+  },
+  {
+    "source": "Plugin internals",
+    "target": "Plugin internals"
+  },
+  {
+    "source": "Plugin manifest",
+    "target": "Plugin manifest"
+  },
+  {
+    "source": "Registering tools",
+    "target": "Registering tools"
+  },
+  {
+    "source": "Skill Workshop plugin",
+    "target": "Skill Workshop plugin"
+  },
+  {
+    "source": "Slash commands",
+    "target": "Slash commands"
+  },
+  {
+    "source": "Zalo personal plugin",
+    "target": "Zalo personal plugin"
+  },
+  {
     "source": "Building plugins",
     "target": "构建插件"
   },

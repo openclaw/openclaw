@@ -1178,7 +1178,6 @@
                 "group": "Plugins",
                 "pages": [
                   "tools/plugin",
-                  "plugins/community",
                   "plugins/bundles",
                   "plugins/codex-harness",
                   "plugins/codex-computer-use",

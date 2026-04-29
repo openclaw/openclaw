@@ -15,6 +15,11 @@ ClawHub is the public registry for **OpenClaw skills and plugins**.
 
 Site: [clawhub.ai](https://clawhub.ai)
 
+Featured discovery:
+
+- [Featured plugins](https://clawhub.ai/plugins?featured=true)
+- [Featured skills](https://clawhub.ai/skills?featured=true)
+
 ## Quick start
 
 <Steps>
@@ -100,7 +105,7 @@ them.
 
 - A public registry for OpenClaw skills and plugins.
 - A versioned store of skill bundles and metadata.
-- A discovery surface for search, tags, and usage signals.
+- A discovery surface for search, tags, usage signals, and featured packages.
 
 A typical skill is a versioned bundle of files that includes:
 
@@ -457,6 +462,5 @@ plugin loading paths.
 
 ## Related
 
-- [Community plugins](/plugins/community)
 - [Plugins](/tools/plugin)
 - [Skills](/tools/skills)
