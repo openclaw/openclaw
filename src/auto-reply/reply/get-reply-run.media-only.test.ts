@@ -374,6 +374,42 @@ describe("runPreparedReply media-only handling", () => {
     },
   );
 
+  it("does not borrow target-session silence for native commands sent from direct chats", async () => {
+    await runPreparedReply(
+      baseParams({
+        sessionKey: "agent:main:telegram:group:target",
+        ctx: {
+          Body: "",
+          RawBody: "",
+          CommandBody: "",
+          ThreadHistoryBody: "Earlier direct message",
+          OriginatingChannel: "telegram",
+          OriginatingTo: "D123",
+          ChatType: "direct",
+          CommandSource: "native",
+          SessionKey: "agent:main:telegram:direct:source",
+          CommandTargetSessionKey: "agent:main:telegram:group:target",
+        },
+        sessionCtx: {
+          Body: "",
+          BodyStripped: "",
+          ThreadHistoryBody: "Earlier direct message",
+          MediaPath: "/tmp/input.png",
+          Provider: "telegram",
+          ChatType: "direct",
+          OriginatingChannel: "telegram",
+          OriginatingTo: "D123",
+          CommandSource: "native",
+          SessionKey: "agent:main:telegram:direct:source",
+          CommandTargetSessionKey: "agent:main:telegram:group:target",
+        },
+      }),
+    );
+
+    const call = vi.mocked(runReplyAgent).mock.calls.at(-1)?.[0];
+    expect(call?.followupRun.run.allowEmptyAssistantReplyAsSilent).toBe(false);
+  });
+
   it("allows media-only prompts and preserves thread context in queued followups", async () => {
     const result = await runPreparedReply(baseParams());
     expect(result).toEqual({ text: "ok" });

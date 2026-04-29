@@ -400,14 +400,15 @@ export async function runPreparedReply(
     ctx,
     isHeartbeat,
   });
+  const silentReplyConversationType = resolvePromptSilentReplyConversationType({
+    ctx: promptSessionCtx,
+    inboundSessionKey: ctx.SessionKey,
+  });
   const silentReplySettings = resolveSilentReplySettings({
     cfg,
     sessionKey: runtimePolicySessionKey,
     surface: promptSessionCtx.Surface ?? promptSessionCtx.Provider,
-    conversationType: resolvePromptSilentReplyConversationType({
-      ctx: promptSessionCtx,
-      inboundSessionKey: ctx.SessionKey,
-    }),
+    conversationType: silentReplyConversationType,
   });
   const useFastReplyRuntime = shouldUseReplyFastTestRuntime({
     cfg,
@@ -476,7 +477,9 @@ export async function runPreparedReply(
       })
     : "";
   const allowEmptyAssistantReplyAsSilent =
-    (isDirectChat && silentReplySettings.policy === "allow") ||
+    (isDirectChat &&
+      silentReplyConversationType === "direct" &&
+      silentReplySettings.policy === "allow") ||
     (isGroupChat &&
       resolveGroupSilentReplyBehavior({
         sessionEntry,
