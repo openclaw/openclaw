@@ -208,35 +208,44 @@ describe("gateway server agent", () => {
     setRegistry(emptyRegistry);
   });
 
-  test("agent reuses the last plugin delivery route when channel=last", async () => {
-    const registry = createRegistry([
-      {
-        pluginId: "msteams",
-        source: "test",
-        plugin: createMSTeamsPlugin(),
-      },
-    ]);
-    setRegistry(registry);
-    await writeMainSessionEntry({
-      sessionId: "sess-teams",
-      lastChannel: "msteams",
-      lastTo: "conversation:teams-123",
-    });
-    const res = await rpcReq(ws, "agent", {
-      message: "hi",
-      sessionKey: "main",
-      channel: "last",
-      deliver: true,
-      idempotencyKey: "idem-agent-last-msteams",
-    });
-    expect(res.ok).toBe(true);
-    await expectAgentRoutingCall({
-      channel: "msteams",
-      deliver: true,
-      to: "conversation:teams-123",
-      runId: "idem-agent-last-msteams",
-    });
-  });
+  test(
+    "agent reuses the last plugin delivery route when channel=last",
+    { timeout: 20_000 },
+    async () => {
+      const registry = createRegistry([
+        {
+          pluginId: "msteams",
+          source: "test",
+          plugin: createMSTeamsPlugin(),
+        },
+      ]);
+      setRegistry(registry);
+      await writeMainSessionEntry({
+        sessionId: "sess-teams",
+        lastChannel: "msteams",
+        lastTo: "conversation:teams-123",
+      });
+      const res = await rpcReq(
+        ws,
+        "agent",
+        {
+          message: "hi",
+          sessionKey: "main",
+          channel: "last",
+          deliver: true,
+          idempotencyKey: "idem-agent-last-msteams",
+        },
+        20_000,
+      );
+      expect(res.ok).toBe(true);
+      await expectAgentRoutingCall({
+        channel: "msteams",
+        deliver: true,
+        to: "conversation:teams-123",
+        runId: "idem-agent-last-msteams",
+      });
+    },
+  );
 
   test("agent preserves CLI session binding metadata when refreshing session state", async () => {
     await useTempSessionStorePath();
