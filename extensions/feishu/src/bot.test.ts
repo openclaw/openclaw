@@ -2489,6 +2489,77 @@ describe("handleFeishuMessage command authorization", () => {
     );
   });
 
+  it("replies inside P2P direct-message threads", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          dmPolicy: "open",
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: { sender_id: { open_id: "ou-thread-user" } },
+      message: {
+        message_id: "om_direct_thread_child",
+        root_id: "om_direct_thread_root",
+        thread_id: "omt_direct_thread",
+        chat_id: "oc-dm",
+        chat_type: "p2p",
+        message_type: "text",
+        content: JSON.stringify({ text: "reply inside direct thread" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    expect(mockCreateFeishuReplyDispatcher).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replyToMessageId: "om_direct_thread_root",
+        replyInThread: true,
+        rootId: "om_direct_thread_root",
+        threadReply: true,
+        skipReplyToInMessages: false,
+      }),
+    );
+  });
+
+  it("keeps top-level P2P direct-message replies as plain DM sends", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          dmPolicy: "open",
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: { sender_id: { open_id: "ou-thread-user" } },
+      message: {
+        message_id: "om_direct_top_level",
+        chat_id: "oc-dm",
+        chat_type: "p2p",
+        message_type: "text",
+        content: JSON.stringify({ text: "top-level direct message" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    expect(mockCreateFeishuReplyDispatcher).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replyToMessageId: "om_direct_top_level",
+        replyInThread: false,
+        threadReply: false,
+        skipReplyToInMessages: true,
+      }),
+    );
+  });
+
   it("replies to the topic root when handling a message inside an existing topic", async () => {
     mockShouldComputeCommandAuthorized.mockReturnValue(false);
 

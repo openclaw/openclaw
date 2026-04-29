@@ -701,7 +701,8 @@ export async function handleFeishuMessage(params: {
     const feishuTo = isGroup ? `chat:${ctx.chatId}` : `user:${ctx.senderOpenId}`;
     const peerId = isGroup ? (groupSession?.peerId ?? ctx.chatId) : ctx.senderOpenId;
     const parentPeer = isGroup ? (groupSession?.parentPeer ?? null) : null;
-    const replyInThread = isGroup ? (groupSession?.replyInThread ?? false) : false;
+    const directThreadReply = !isGroup && Boolean(ctx.rootId || ctx.threadId);
+    const replyInThread = isGroup ? (groupSession?.replyInThread ?? false) : directThreadReply;
     const feishuAcpConversationSupported =
       !isGroup ||
       groupSession?.groupSessionScope === "group_topic" ||
@@ -1196,7 +1197,9 @@ export async function handleFeishuMessage(params: {
       });
     };
 
-    // Determine reply target based on group session mode:
+    // Determine reply target based on conversation mode:
+    // - Direct-message thread replies: reply to the direct thread root so the
+    //   bot stays inside the Feishu P2P thread.
     // - Topic-mode groups (group_topic / group_topic_sender): reply to the topic
     //   root so the bot stays in the same thread.
     // - Groups with explicit replyInThread config: reply to the root so the bot
@@ -1211,13 +1214,14 @@ export async function handleFeishuMessage(params: {
     const configReplyInThread =
       isGroup &&
       (groupConfig?.replyInThread ?? feishuCfg?.replyInThread ?? "disabled") === "enabled";
+    const fallbackReplyTargetMessageId =
+      ctx.replyTargetMessageId ?? (ctx.suppressReplyTarget ? undefined : ctx.messageId);
     const replyTargetMessageId =
-      isTopicSession || configReplyInThread
-        ? (ctx.rootId ??
-          ctx.replyTargetMessageId ??
-          (ctx.suppressReplyTarget ? undefined : ctx.messageId))
-        : (ctx.replyTargetMessageId ?? (ctx.suppressReplyTarget ? undefined : ctx.messageId));
-    const threadReply = isGroup ? (groupSession?.threadReply ?? false) : false;
+      directThreadReply || isTopicSession || configReplyInThread
+        ? (ctx.rootId ?? fallbackReplyTargetMessageId)
+        : fallbackReplyTargetMessageId;
+    const threadReply = isGroup ? (groupSession?.threadReply ?? false) : directThreadReply;
+    const skipReplyToInMessages = !isGroup && !directThreadReply;
 
     if (broadcastAgents) {
       // Cross-account dedup: in multi-account setups, Feishu delivers the same
@@ -1276,7 +1280,7 @@ export async function handleFeishuMessage(params: {
             chatId: ctx.chatId,
             allowReasoningPreview,
             replyToMessageId: replyTargetMessageId,
-            skipReplyToInMessages: !isGroup,
+            skipReplyToInMessages,
             replyInThread,
             rootId: ctx.rootId,
             threadReply,
@@ -1385,7 +1389,7 @@ export async function handleFeishuMessage(params: {
         chatId: ctx.chatId,
         allowReasoningPreview,
         replyToMessageId: replyTargetMessageId,
-        skipReplyToInMessages: !isGroup,
+        skipReplyToInMessages,
         replyInThread,
         rootId: ctx.rootId,
         threadReply,
