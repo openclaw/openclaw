@@ -1086,21 +1086,22 @@ export async function deleteMessageTelegram(
     verbose: opts.verbose,
     shouldRetry: (err) => isRecoverableTelegramNetworkError(err, { context: "send" }),
   });
-  try {
-    await requestWithDiag(() => api.deleteMessage(chatId, messageId), "deleteMessage");
-  } catch (err: unknown) {
-    // Fail-soft on benign Telegram Bot API 400s that occur in normal
-    // operation: the message was already removed by the user, is older
-    // than the 48h bot-delete window, or never existed (e.g. a stale
-    // tracking-file `msg_id`). Mirrors the `reactMessageTelegram`
-    // pattern at the top of this file (#73726).
+  const isBenignDeleteError = (err: unknown) => {
     const msg = formatErrorMessage(err);
-    if (
+    return (
       /message to delete not found/i.test(msg) ||
       /message can'?t be deleted/i.test(msg) ||
       /MESSAGE_ID_INVALID/i.test(msg) ||
       /MESSAGE_DELETE_FORBIDDEN/i.test(msg)
-    ) {
+    );
+  };
+  try {
+    await requestWithDiag(() => api.deleteMessage(chatId, messageId), "deleteMessage", {
+      shouldLog: (err) => !isBenignDeleteError(err),
+    });
+  } catch (err: unknown) {
+    if (isBenignDeleteError(err)) {
+      const msg = formatErrorMessage(err);
       logVerbose(
         `[telegram] Delete soft-failed for message ${messageId} in chat ${chatId}: ${msg}`,
       );
