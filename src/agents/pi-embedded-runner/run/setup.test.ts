@@ -16,7 +16,19 @@ describe("buildBeforeModelResolveAttachments", () => {
     ]);
   });
 
-  it("omits attachments when there are no images", () => {
+  it("maps prompt video metadata to before_model_resolve attachments", () => {
+    expect(
+      buildBeforeModelResolveAttachments([
+        { type: "video", mimeType: "video/mp4" },
+        { type: "image", mimeType: "image/png" },
+      ]),
+    ).toEqual([
+      { kind: "video", mimeType: "video/mp4" },
+      { kind: "image", mimeType: "image/png" },
+    ]);
+  });
+
+  it("omits attachments when there is no prompt media", () => {
     expect(buildBeforeModelResolveAttachments(undefined)).toBeUndefined();
     expect(buildBeforeModelResolveAttachments([])).toBeUndefined();
   });

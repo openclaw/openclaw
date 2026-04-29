@@ -160,6 +160,30 @@ describe("resolveGoogleGeminiForwardCompatModel", () => {
       api: "google-generative-ai",
       reasoning: false,
     });
+    expect(model?.input).toEqual(["text", "image", "video"]);
+  });
+
+  it("does not advertise native video for Gemini CLI template clones", () => {
+    const model = resolveGoogleGeminiForwardCompatModel({
+      providerId: "google-gemini-cli",
+      ctx: createContext({
+        provider: "google-gemini-cli",
+        modelId: "gemini-3.1-flash-preview",
+        models: [
+          createTemplateModel("google-gemini-cli", "gemini-3-flash-preview", {
+            api: "google-gemini-cli",
+            baseUrl: "https://cloudcode-pa.googleapis.com",
+          }),
+        ],
+      }),
+    });
+
+    expect(model).toMatchObject({
+      provider: "google-gemini-cli",
+      id: "gemini-3.1-flash-preview",
+      api: "google-gemini-cli",
+    });
+    expect(model?.input).toEqual(["text", "image"]);
   });
 
   it("resolves Gemini latest aliases from current Google templates", () => {

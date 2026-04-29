@@ -49,7 +49,7 @@ function cloneGoogleTemplateModel(params: {
   ctx: ProviderResolveDynamicModelContext;
   patch?: Partial<ProviderRuntimeModel>;
 }): ProviderRuntimeModel | undefined {
-  return cloneFirstTemplateModel({
+  const model = cloneFirstTemplateModel({
     providerId: params.templateProviderId,
     modelId: params.modelId,
     templateIds: params.templateIds,
@@ -59,6 +59,14 @@ function cloneGoogleTemplateModel(params: {
       provider: params.providerId,
     },
   });
+  if (!model || !isGoogleGenerativeAiVideoInputModel(params.modelId)) {
+    return model;
+  }
+  const input = model.input as readonly string[];
+  if (model.api !== "google-generative-ai" || input.includes("video")) {
+    return model;
+  }
+  return { ...model, input: [...input, "video"] as ProviderRuntimeModel["input"] };
 }
 
 function isGoogleGeminiCliProvider(providerId: string): boolean {
@@ -67,6 +75,21 @@ function isGoogleGeminiCliProvider(providerId: string): boolean {
 
 function isGoogleAntigravityProvider(providerId: string): boolean {
   return normalizeOptionalLowercaseString(providerId) === GOOGLE_ANTIGRAVITY_PROVIDER_ID;
+}
+
+function isGoogleGenerativeAiVideoInputModel(modelId: string): boolean {
+  const lower = normalizeOptionalLowercaseString(modelId) ?? "";
+  return (
+    lower.startsWith(GEMINI_2_5_PRO_PREFIX) ||
+    lower.startsWith(GEMINI_2_5_FLASH_LITE_PREFIX) ||
+    lower.startsWith(GEMINI_2_5_FLASH_PREFIX) ||
+    lower.startsWith(GEMINI_3_1_PRO_PREFIX) ||
+    lower.startsWith(GEMINI_3_1_FLASH_LITE_PREFIX) ||
+    lower.startsWith(GEMINI_3_1_FLASH_PREFIX) ||
+    lower === GEMINI_PRO_LATEST_ID ||
+    lower === GEMINI_FLASH_LATEST_ID ||
+    lower === GEMINI_FLASH_LITE_LATEST_ID
+  );
 }
 
 function templateIdsForProvider(

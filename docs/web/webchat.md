@@ -25,7 +25,7 @@ Status: the macOS/iOS SwiftUI chat UI talks directly to the Gateway WebSocket.
 - The UI connects to the Gateway WebSocket and uses `chat.history`, `chat.send`, and `chat.inject`.
 - `chat.history` is bounded for stability: Gateway may truncate long text fields, omit heavy metadata, and replace oversized entries with `[chat.history omitted: message too large]`.
 - `chat.history` follows the active transcript branch for modern append-only session files, so abandoned rewrite branches and superseded prompt copies are not rendered in WebChat.
-- Chat uploads support images, audio, documents, and MP4/M4V/MOV/WebM videos. Videos and other non-image files are staged as managed media and can flow through media-understanding when the selected provider/model does not accept them natively.
+- Chat uploads support images, audio, documents, and MP4/M4V/MOV/WebM videos. Supported videos are delivered as native model media when the selected provider/model advertises `video` input; otherwise they are staged as managed media and can flow through media-understanding.
 - Control UI coalesces duplicate in-flight submits for the same session, message, and attachments before generating a new `chat.send` run id; the Gateway still dedupes repeated requests that reuse the same idempotency key.
 - `chat.history` is also display-normalized: runtime-only OpenClaw context,
   inbound envelope wrappers, inline delivery directive tags

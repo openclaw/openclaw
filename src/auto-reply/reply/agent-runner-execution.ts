@@ -33,6 +33,7 @@ import {
 import { sanitizeUserFacingText } from "../../agents/pi-embedded-helpers/sanitize-user-facing-text.js";
 import { isLikelyExecutionAckPrompt } from "../../agents/pi-embedded-runner/run/incomplete-turn.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
+import { isPromptImageContent } from "../../agents/prompt-media-content.js";
 import { buildAgentRuntimeOutcomePlan } from "../../agents/runtime-plan/build.js";
 import {
   resolveGroupSessionKey,
@@ -1241,7 +1242,7 @@ export async function runAgentTurnWithFallback(params: {
                     bootstrapPromptWarningSignaturesSeen[
                       bootstrapPromptWarningSignaturesSeen.length - 1
                     ],
-                  images: params.opts?.images,
+                  images: params.opts?.images?.filter(isPromptImageContent),
                   imageOrder: params.opts?.imageOrder,
                   skillsSnapshot: params.followupRun.run.skillsSnapshot,
                   messageChannel: params.followupRun.originatingChannel ?? undefined,

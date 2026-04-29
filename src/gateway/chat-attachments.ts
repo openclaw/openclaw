@@ -1,3 +1,4 @@
+import type { PromptImageContent, PromptVideoContent } from "../agents/prompt-media-content.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { estimateBase64DecodedBytes } from "../media/base64.js";
@@ -22,11 +23,9 @@ export type ChatAttachment = {
   content?: unknown;
 };
 
-export type ChatImageContent = {
-  type: "image";
-  data: string;
-  mimeType: string;
-};
+export type ChatImageContent = PromptImageContent;
+
+export type ChatVideoContent = PromptVideoContent;
 
 export type OffloadedRef = {
   mediaRef: string;
@@ -40,6 +39,7 @@ export type OffloadedRef = {
 export type ParsedMessageWithImages = {
   message: string;
   images: ChatImageContent[];
+  videos: ChatVideoContent[];
   imageOrder: PromptImageOrderEntry[];
   offloadedRefs: OffloadedRef[];
 };
@@ -226,6 +226,7 @@ export async function parseMessageWithAttachments(
     log?: AttachmentLog;
     supportsImages?: boolean;
     supportsInlineImages?: boolean;
+    supportsVideos?: boolean;
     acceptNonImage?: boolean;
   },
 ): Promise<ParsedMessageWithImages> {
@@ -233,13 +234,15 @@ export async function parseMessageWithAttachments(
   const log = opts?.log;
   const shouldForceImageOffload = opts?.supportsImages === false;
   const supportsInlineImages = opts?.supportsInlineImages !== false;
+  const supportsVideos = opts?.supportsVideos === true;
   const acceptNonImage = opts?.acceptNonImage !== false;
 
   if (!attachments || attachments.length === 0) {
-    return { message, images: [], imageOrder: [], offloadedRefs: [] };
+    return { message, images: [], videos: [], imageOrder: [], offloadedRefs: [] };
   }
 
   const images: ChatImageContent[] = [];
+  const videos: ChatVideoContent[] = [];
   const imageOrder: PromptImageOrderEntry[] = [];
   const offloadedRefs: OffloadedRef[] = [];
   let updatedMessage = message;
@@ -408,6 +411,9 @@ export async function parseMessageWithAttachments(
       if (isImage) {
         updatedMessage += `\n[media attached: ${mediaRef}]`;
       }
+      if (hasVideoSignal && supportedVideo && supportsVideos) {
+        videos.push({ type: "video", data: b64, mimeType: normalizedFinalMime });
+      }
       log?.info?.(
         shouldForceImageOffload && isImage
           ? `[Gateway] Offloaded image for text-only model. Saved: ${mediaRef}`
@@ -439,6 +445,7 @@ export async function parseMessageWithAttachments(
   return {
     message: updatedMessage !== message ? updatedMessage.trimEnd() : message,
     images,
+    videos,
     imageOrder,
     offloadedRefs,
   };

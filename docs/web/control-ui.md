@@ -147,7 +147,7 @@ Imported themes are stored only in the current browser profile. They are not wri
 <AccordionGroup>
   <Accordion title="Send and history semantics">
     - `chat.send` is **non-blocking**: it acks immediately with `{ runId, status: "started" }` and the response streams via `chat` events.
-    - Chat uploads accept images, audio, supported videos (MP4/M4V/MOV/WebM), and documents. Images keep the native image path; supported videos and other non-image files are stored as managed media, shown in history as attachments, and available to media-understanding when the active provider/model does not consume them natively.
+    - Chat uploads accept images, audio, supported videos (MP4/M4V/MOV/WebM), and documents. Images keep the native image path; supported videos are sent as native model media when the active provider/model advertises `video` input. Videos that cannot be sent natively, plus other non-image files, are stored as managed media, shown in history as attachments, and available to media-understanding.
     - Re-sending with the same `idempotencyKey` returns `{ status: "in_flight" }` while running, and `{ status: "ok" }` after completion.
     - `chat.history` responses are size-bounded for UI safety. When transcript entries are too large, Gateway may truncate long text fields, omit heavy metadata blocks, and replace oversized messages with a placeholder (`[chat.history omitted: message too large]`).
     - Assistant/generated images are persisted as managed media references and served back through authenticated Gateway media URLs, so reloads do not depend on raw base64 image payloads staying in the chat history response.

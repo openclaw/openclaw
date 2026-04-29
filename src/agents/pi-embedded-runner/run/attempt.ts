@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { ImageContent } from "@mariozechner/pi-ai";
 import {
   createAgentSession,
   DefaultResourceLoader,
@@ -2740,8 +2741,9 @@ export async function runEmbeddedAttempt(
                 // Only pass images option if there are actually images to pass
                 // This avoids potential issues with models that don't expect the images parameter
                 if (imageResult.images.length > 0) {
+                  const promptMedia = imageResult.images as unknown as ImageContent[];
                   await abortable(
-                    activeSession.prompt(promptSubmission.prompt, { images: imageResult.images }),
+                    activeSession.prompt(promptSubmission.prompt, { images: promptMedia }),
                   );
                 } else {
                   await abortable(activeSession.prompt(promptSubmission.prompt));

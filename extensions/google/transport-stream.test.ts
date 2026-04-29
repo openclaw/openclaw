@@ -285,6 +285,52 @@ describe("google transport stream", () => {
     });
   });
 
+  it("passes user video blocks as Gemini inlineData when the model advertises video input", () => {
+    const params = buildGoogleGenerativeAiParams(
+      buildGeminiModel({ input: ["text", "video"] as never }),
+      {
+        messages: [
+          {
+            role: "user",
+            timestamp: 0,
+            content: [
+              { type: "text", text: "describe this" },
+              { type: "video", mimeType: "video/mp4", data: "dmktYnl0ZXM=" },
+            ],
+          },
+        ],
+      } as never,
+    );
+
+    expect(params.contents[0]).toEqual({
+      role: "user",
+      parts: [
+        { text: "describe this" },
+        { inlineData: { mimeType: "video/mp4", data: "dmktYnl0ZXM=" } },
+      ],
+    });
+  });
+
+  it("drops user video blocks from Gemini payloads when video input is not advertised", () => {
+    const params = buildGoogleGenerativeAiParams(buildGeminiModel({ input: ["text", "image"] }), {
+      messages: [
+        {
+          role: "user",
+          timestamp: 0,
+          content: [
+            { type: "text", text: "describe this" },
+            { type: "video", mimeType: "video/mp4", data: "dmktYnl0ZXM=" },
+          ],
+        },
+      ],
+    } as never);
+
+    expect(params.contents[0]).toEqual({
+      role: "user",
+      parts: [{ text: "describe this" }],
+    });
+  });
+
   it("replays Gemini tool call thought signatures for same-model history", () => {
     const model = buildGeminiModel({
       id: "gemini-3-flash-preview",

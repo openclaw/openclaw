@@ -8,6 +8,11 @@ import { normalizeLowercaseStringOrEmpty } from "../../../shared/string-coerce.j
 import { resolveUserPath } from "../../../utils.js";
 import type { ImageSanitizationLimits } from "../../image-sanitization.js";
 import {
+  isPromptImageContent,
+  type PromptImageContent,
+  type PromptMediaContent,
+} from "../../prompt-media-content.js";
+import {
   createSandboxBridgeReadFile,
   resolveSandboxedBridgeMediaPath,
 } from "../../sandbox-media-paths.js";
@@ -97,11 +102,11 @@ function normalizeRefForDedupe(raw: string): string {
 
 export function mergePromptAttachmentImages(params: {
   imageOrder?: PromptImageOrderEntry[];
-  existingImages?: ImageContent[];
+  existingImages?: PromptMediaContent[];
   offloadedImages?: Array<ImageContent | null>;
   promptRefImages?: ImageContent[];
-}): ImageContent[] {
-  const promptImages: ImageContent[] = [];
+}): PromptMediaContent[] {
+  const promptImages: PromptMediaContent[] = [];
   const existingImages = params.existingImages ?? [];
   const offloadedImages = params.offloadedImages ?? [];
 
@@ -195,10 +200,10 @@ export function splitPromptAndAttachmentRefs(params: {
 }
 
 async function sanitizeImagesWithLog(
-  images: ImageContent[],
+  images: PromptImageContent[],
   label: string,
   imageSanitization?: ImageSanitizationLimits,
-): Promise<ImageContent[]> {
+): Promise<PromptImageContent[]> {
   const { images: sanitized, dropped } = await sanitizeImageBlocks(
     images,
     label,
@@ -208,6 +213,31 @@ async function sanitizeImagesWithLog(
     log.warn(`Native image: dropped ${dropped} image(s) after sanitization (${label}).`);
   }
   return sanitized;
+}
+
+async function sanitizePromptMediaWithLog(
+  media: PromptMediaContent[],
+  label: string,
+  imageSanitization?: ImageSanitizationLimits,
+): Promise<PromptMediaContent[]> {
+  const imageBlocks = media.filter(isPromptImageContent);
+  if (imageBlocks.length === 0) {
+    return media;
+  }
+  const sanitizedImages = await sanitizeImagesWithLog(imageBlocks, label, imageSanitization);
+  const imageQueue = [...sanitizedImages];
+  const sanitizedMedia: PromptMediaContent[] = [];
+  for (const block of media) {
+    if (!isPromptImageContent(block)) {
+      sanitizedMedia.push(block);
+      continue;
+    }
+    const sanitized = imageQueue.shift();
+    if (sanitized) {
+      sanitizedMedia.push(sanitized);
+    }
+  }
+  return sanitizedMedia;
 }
 
 /**
@@ -432,7 +462,7 @@ export async function detectAndLoadPromptImages(params: {
   prompt: string;
   workspaceDir: string;
   model: { input?: string[] };
-  existingImages?: ImageContent[];
+  existingImages?: PromptMediaContent[];
   imageOrder?: PromptImageOrderEntry[];
   maxBytes?: number;
   maxDimensionPx?: number;
@@ -440,7 +470,7 @@ export async function detectAndLoadPromptImages(params: {
   sandbox?: { root: string; bridge: SandboxFsBridge };
 }): Promise<{
   /** Images for the current prompt (existingImages + detected in current prompt) */
-  images: ImageContent[];
+  images: PromptMediaContent[];
   detectedRefs: DetectedImageRef[];
   loadedCount: number;
   skippedCount: number;
@@ -448,7 +478,7 @@ export async function detectAndLoadPromptImages(params: {
   // If model doesn't support images, return empty results
   if (!modelSupportsImages(params.model)) {
     return {
-      images: [],
+      images: params.existingImages ?? [],
       detectedRefs: [],
       loadedCount: 0,
       skippedCount: 0,
@@ -509,7 +539,7 @@ export async function detectAndLoadPromptImages(params: {
     }
   }
 
-  const promptImages = mergePromptAttachmentImages({
+  const promptMedia = mergePromptAttachmentImages({
     imageOrder: params.imageOrder,
     existingImages: params.existingImages,
     offloadedImages,
@@ -519,14 +549,14 @@ export async function detectAndLoadPromptImages(params: {
   const imageSanitization: ImageSanitizationLimits = {
     maxDimensionPx: params.maxDimensionPx,
   };
-  const sanitizedPromptImages = await sanitizeImagesWithLog(
-    promptImages,
+  const sanitizedPromptMedia = await sanitizePromptMediaWithLog(
+    promptMedia,
     "prompt:images",
     imageSanitization,
   );
 
   return {
-    images: sanitizedPromptImages,
+    images: sanitizedPromptMedia,
     detectedRefs: allRefs,
     loadedCount,
     skippedCount,

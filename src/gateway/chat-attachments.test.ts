@@ -168,6 +168,33 @@ describe("parseMessageWithAttachments", () => {
     expect(logs).toHaveLength(0);
   });
 
+  it("attaches supported videos natively when the target model accepts video input", async () => {
+    const video = Buffer.from("mp4-bytes").toString("base64");
+    const { parsed, logs } = await parseWithWarnings(
+      "watch this",
+      [
+        {
+          type: "file",
+          mimeType: "video/mp4",
+          fileName: "clip.mp4",
+          content: video,
+        },
+      ],
+      { supportsVideos: true },
+    );
+    expect(parsed.images).toHaveLength(0);
+    expect(parsed.videos).toEqual([{ type: "video", data: video, mimeType: "video/mp4" }]);
+    expect(parsed.offloadedRefs).toHaveLength(1);
+    expect(parsed.offloadedRefs[0]).toMatchObject({
+      mimeType: "video/mp4",
+      label: "clip.mp4",
+    });
+    expect(parsed.message).toBe("watch this");
+    expect(saveMediaBufferMock).toHaveBeenCalledOnce();
+    expect(saveMediaBufferMock.mock.calls[0]?.[1]).toBe("video/mp4");
+    expect(logs).toHaveLength(0);
+  });
+
   it("offloads opaque binary when sniff and provided mime are both absent", async () => {
     const unknown = Buffer.from("just some bytes that do not match any signature").toString(
       "base64",

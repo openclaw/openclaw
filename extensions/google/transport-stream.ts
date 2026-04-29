@@ -213,6 +213,18 @@ function resolveExplicitThinkingLevel(
   );
 }
 
+function modelInputIncludes(model: GoogleTransportModel, input: string): boolean {
+  return (model.input as readonly string[]).includes(input);
+}
+
+function modelSupportsInlineContentBlock(model: GoogleTransportModel, block: { type: string }) {
+  return (
+    (block.type === "image" && modelInputIncludes(model, "image")) ||
+    (block.type === "audio" && modelInputIncludes(model, "audio")) ||
+    (block.type === "video" && modelInputIncludes(model, "video"))
+  );
+}
+
 function getDisabledThinkingConfig(modelId: string): Record<string, unknown> | undefined {
   const thinkingLevel = resolveGoogleGemini3ThinkingLevel({ modelId, thinkingLevel: "off" });
   if (thinkingLevel) {
@@ -319,18 +331,18 @@ function convertGoogleMessages(model: GoogleTransportModel, context: Context) {
         });
         continue;
       }
-      const parts = msg.content
-        .map((item) =>
-          item.type === "text"
-            ? { text: sanitizeTransportPayloadText(item.text) }
-            : {
+      const parts = msg.content.flatMap((item) =>
+        item.type === "text"
+          ? { text: sanitizeTransportPayloadText(item.text) }
+          : modelSupportsInlineContentBlock(model, item)
+            ? {
                 inlineData: {
                   mimeType: item.mimeType,
                   data: item.data,
                 },
-              },
-        )
-        .filter((item) => model.input.includes("image") || !("inlineData" in item));
+              }
+            : [],
+      );
       if (parts.length > 0) {
         contents.push({ role: "user", parts });
       }
