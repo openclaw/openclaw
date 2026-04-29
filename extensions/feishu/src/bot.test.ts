@@ -2573,6 +2573,79 @@ describe("handleFeishuMessage command authorization", () => {
     );
   });
 
+  it("replies to P2P direct-message thread roots when thread_id is present", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          dmPolicy: "open",
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: { sender_id: { open_id: "ou-p2p-thread-user" } },
+      message: {
+        message_id: "om_p2p_thread_reply",
+        root_id: "om_p2p_thread_root",
+        thread_id: "omt_p2p_thread",
+        chat_id: "oc-dm",
+        chat_type: "p2p",
+        message_type: "text",
+        content: JSON.stringify({ text: "hello in dm thread" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    expect(mockCreateFeishuReplyDispatcher).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replyToMessageId: "om_p2p_thread_root",
+        skipReplyToInMessages: false,
+        replyInThread: true,
+        rootId: "om_p2p_thread_root",
+        threadReply: true,
+      }),
+    );
+  });
+
+  it("preserves non-thread P2P root_id quote replies", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          dmPolicy: "open",
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: { sender_id: { open_id: "ou-p2p-quote-user" } },
+      message: {
+        message_id: "om_p2p_quote_reply",
+        root_id: "om_p2p_quote_root",
+        chat_id: "oc-dm",
+        chat_type: "p2p",
+        message_type: "text",
+        content: JSON.stringify({ text: "plain quote reply" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    expect(mockCreateFeishuReplyDispatcher).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replyToMessageId: "om_p2p_quote_reply",
+        skipReplyToInMessages: true,
+        replyInThread: false,
+        rootId: "om_p2p_quote_root",
+        threadReply: false,
+      }),
+    );
+  });
+
   it("replies to topic root in topic-mode group with root_id", async () => {
     mockShouldComputeCommandAuthorized.mockReturnValue(false);
 
