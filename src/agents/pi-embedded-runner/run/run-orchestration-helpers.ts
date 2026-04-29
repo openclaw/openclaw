@@ -14,9 +14,9 @@
 //   - `backfillSessionKey` does the read-only sessionId→sessionKey lookup
 //     that runs at the top of `runEmbeddedPiAgent`. It logs a warning on
 //     failure but otherwise has no side effects.
-//   - `buildHandledReplyPayloads` normalises an optional ReplyPayload into
-//     the array shape downstream delivery expects, defaulting to a silent
-//     reply token when the caller did not provide one.
+//   - `buildHandledReplyPayloads` preserves a handled ReplyPayload's full
+//     shape while normalising a missing reply into the array shape downstream
+//     delivery expects.
 
 import type { ReplyPayload } from "../../../auto-reply/reply-payload.js";
 import { SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
@@ -105,16 +105,5 @@ export function backfillSessionKey(params: {
 }
 
 export function buildHandledReplyPayloads(reply?: ReplyPayload) {
-  const normalized = reply ?? { text: SILENT_REPLY_TOKEN };
-  return [
-    {
-      text: normalized.text,
-      mediaUrl: normalized.mediaUrl,
-      mediaUrls: normalized.mediaUrls,
-      replyToId: normalized.replyToId,
-      audioAsVoice: normalized.audioAsVoice,
-      isError: normalized.isError,
-      isReasoning: normalized.isReasoning,
-    },
-  ];
+  return [reply ?? { text: SILENT_REPLY_TOKEN }];
 }

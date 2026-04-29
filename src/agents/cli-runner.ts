@@ -15,18 +15,7 @@ import {
 import { classifyFailoverReason, isFailoverErrorMessage } from "./pi-embedded-helpers.js";
 
 function buildHandledReplyPayloads(reply?: ReplyPayload) {
-  const normalized = reply ?? { text: SILENT_REPLY_TOKEN };
-  return [
-    {
-      text: normalized.text,
-      mediaUrl: normalized.mediaUrl,
-      mediaUrls: normalized.mediaUrls,
-      replyToId: normalized.replyToId,
-      audioAsVoice: normalized.audioAsVoice,
-      isError: normalized.isError,
-      isReasoning: normalized.isReasoning,
-    },
-  ];
+  return [reply ?? { text: SILENT_REPLY_TOKEN }];
 }
 
 function buildCliHookUserMessage(prompt: string): unknown {
