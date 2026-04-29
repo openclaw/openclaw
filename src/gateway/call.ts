@@ -333,16 +333,18 @@ function resolveGatewayCallTimeout(
   const hasEnvHandshakeTimeout =
     Boolean(process.env.OPENCLAW_HANDSHAKE_TIMEOUT_MS) ||
     Boolean(process.env.VITEST && process.env.OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS);
-  const resolvedHandshakeTimeoutMs =
-    hasConfiguredHandshakeTimeout || hasEnvHandshakeTimeout
-      ? resolvePreauthHandshakeTimeoutMs({ configuredTimeoutMs: configuredHandshakeTimeoutMs })
-      : undefined;
+  // Always resolve the handshake timeout to get the proper default (15000ms) even when
+  // no explicit config or env var is set. This ensures gateway calls don't timeout
+  // prematurely for operations like large file uploads.
+  const resolvedHandshakeTimeoutMs = resolvePreauthHandshakeTimeoutMs({
+    configuredTimeoutMs: hasConfiguredHandshakeTimeout ? configuredHandshakeTimeoutMs : undefined,
+  });
   const timeoutMs =
     typeof timeoutValue === "number" && Number.isFinite(timeoutValue)
       ? timeoutValue
-      : typeof resolvedHandshakeTimeoutMs === "number" && resolvedHandshakeTimeoutMs > 10_000
+      : hasEnvHandshakeTimeout || (hasConfiguredHandshakeTimeout && resolvedHandshakeTimeoutMs > 10_000)
         ? resolvedHandshakeTimeoutMs
-        : 10_000;
+        : resolvedHandshakeTimeoutMs;
   const safeTimerTimeoutMs = resolveSafeTimeoutDelayMs(timeoutMs);
   return { timeoutMs, safeTimerTimeoutMs };
 }
