@@ -15,6 +15,7 @@ Docs: https://docs.openclaw.ai
 - Active Memory: return bounded partial recall summaries when the hidden memory sub-agent times out, including the default temporary-transcript path, so useful recovered context is not discarded. (#73219) Thanks @joeykrug.
 - Docker setup: add `OPENCLAW_SKIP_ONBOARDING` so automated Docker installs can skip the interactive onboarding step while still applying gateway defaults. (#55518) Thanks @jinjimz.
 - Gateway/memory: add a read-only `doctor.memory.remHarness` RPC so operator clients can preview bounded REM dreaming output without running mutation paths. (#66673) Thanks @samzong.
+- Gateway/events: surface `spawnedBy` on subagent chat and agent broadcast payloads so clients can route child session events without an extra session lookup. (#63244) Thanks @samzong.
 
 ### Fixes
 
