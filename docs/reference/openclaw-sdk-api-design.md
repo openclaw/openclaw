@@ -146,7 +146,7 @@ have to parse `raw` for normal UI.
 ```typescript
 type RunResult = {
   runId: string;
-  status: "completed" | "failed" | "cancelled" | "timed_out";
+  status: "accepted" | "completed" | "failed" | "cancelled" | "timed_out";
   sessionId?: string;
   sessionKey?: string;
   taskId?: string;
@@ -171,6 +171,11 @@ The result should be boring and stable. Timestamp values preserve the Gateway
 shape, so current lifecycle-backed runs usually report epoch millisecond
 numbers while adapters may still surface ISO strings. Rich UI, tool traces, and
 runtime-native details belong in events and artifacts.
+
+`accepted` is a non-terminal wait result: it means the Gateway wait deadline
+expired before the run produced a lifecycle end/error. It must not be treated as
+`timed_out`; `timed_out` is reserved for a run that exceeded its own runtime
+timeout.
 
 ## Approvals and questions
 
