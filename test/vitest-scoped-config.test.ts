@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { BUNDLED_PLUGIN_TEST_GLOB, bundledPluginFile } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
+import privatePluginSdkSubpaths from "../scripts/lib/plugin-sdk-private-local-only-subpaths.json" with { type: "json" };
 import { cleanupTempDirs, makeTempDir } from "./helpers/temp-dir.js";
 import { normalizeConfigPath, normalizeConfigPaths } from "./helpers/vitest-config-paths.js";
 import { createAcpVitestConfig } from "./vitest/vitest.acp.config.ts";
@@ -69,7 +70,7 @@ import { createUtilsVitestConfig } from "./vitest/vitest.utils.config.ts";
 import { createWizardVitestConfig } from "./vitest/vitest.wizard.config.ts";
 
 const EXTENSIONS_CHANNEL_GLOB = ["extensions", "channel", "**"].join("/");
-const PRIVATE_PLUGIN_SDK_SUBPATHS = ["qa-lab", "qa-runtime"] as const;
+const PRIVATE_PLUGIN_SDK_SUBPATHS = privatePluginSdkSubpaths;
 
 function bundledExcludePatternCouldMatchFile(pattern: string, file: string): boolean {
   if (pattern === file) {

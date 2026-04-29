@@ -16,22 +16,23 @@ export async function runTrustedToolPolicies(
   let adjustedParams = event.params;
   let hasAdjustedParams = false;
   let approval: PluginHookBeforeToolCallResult["requireApproval"];
+  const sessionExtensionCache = new Map<string, PluginJsonValue | undefined>();
   for (const registration of policies) {
-    const sessionExtensionCache = new Map<string, PluginJsonValue | undefined>();
     const policyCtx: PluginHookToolContext = {
       ...ctx,
       // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Plugin callers type JSON reads by namespace.
       getSessionExtension: <T extends PluginJsonValue = PluginJsonValue>(namespace: string) => {
         const normalizedNamespace = namespace.trim();
-        if (sessionExtensionCache.has(normalizedNamespace)) {
-          return sessionExtensionCache.get(normalizedNamespace) as T | undefined;
+        const cacheKey = JSON.stringify([registration.pluginId, normalizedNamespace]);
+        if (sessionExtensionCache.has(cacheKey)) {
+          return sessionExtensionCache.get(cacheKey) as T | undefined;
         }
         const value = getPluginSessionExtensionSync<T>({
           pluginId: registration.pluginId,
           sessionKey: ctx.sessionKey,
           namespace: normalizedNamespace,
         });
-        sessionExtensionCache.set(normalizedNamespace, value);
+        sessionExtensionCache.set(cacheKey, value);
         return value;
       },
     };

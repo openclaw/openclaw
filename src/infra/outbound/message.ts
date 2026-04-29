@@ -81,6 +81,7 @@ type MessageSendParams = {
   mirror?: OutboundMirror;
   abortSignal?: AbortSignal;
   silent?: boolean;
+  parseMode?: "HTML" | "MarkdownV2";
 };
 
 export type MessageSendResult = {
@@ -295,6 +296,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
       threadId: params.threadId,
       gifPlayback: params.gifPlayback,
       forceDocument: params.forceDocument,
+      formatting: params.parseMode ? { parseMode: params.parseMode } : undefined,
       deps: params.deps,
       bestEffort: params.bestEffort,
       abortSignal: params.abortSignal,

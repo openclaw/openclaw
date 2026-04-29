@@ -15,8 +15,18 @@ export type TelegramFormattedChunk = {
   text: string;
 };
 
-function escapeHtml(text: string): string {
+/**
+ * Escape a plain string for safe insertion inside Telegram HTML messages.
+ *
+ * Public alias used by `@openclaw/telegram/api` so plugin authors can render
+ * Telegram-safe captions without re-implementing the escape rules.
+ */
+export function escapeTelegramHtml(text: string): string {
   return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+function escapeHtml(text: string): string {
+  return escapeTelegramHtml(text);
 }
 
 function escapeHtmlAttr(text: string): string {

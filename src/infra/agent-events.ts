@@ -116,6 +116,12 @@ export type AgentRunContext = {
   registeredAt?: number;
   /** Timestamp of last activity (updated on every emitAgentEvent). */
   lastActiveAt?: number;
+  /** Run id of the parent run that spawned this run, if any. */
+  parentRunId?: string;
+  /** Run ids of subagents currently in-flight under this run. */
+  openSubagentRunIds?: string[];
+  /** Wall-clock ms when the most recent subagent of this run settled. */
+  lastSubagentSettledAt?: number;
 };
 
 type AgentEventState = {
@@ -144,7 +150,13 @@ export function registerAgentRunContext(runId: string, context: AgentRunContext)
     state.runContextById.set(runId, {
       ...context,
       registeredAt: context.registeredAt ?? Date.now(),
+      ...(context.openSubagentRunIds
+        ? { openSubagentRunIds: [...context.openSubagentRunIds] }
+        : {}),
     });
+    if (context.parentRunId) {
+      trackSubagentForParent(state, context.parentRunId, runId);
+    }
     return;
   }
   if (context.sessionKey && existing.sessionKey !== context.sessionKey) {
@@ -165,6 +177,47 @@ export function registerAgentRunContext(runId: string, context: AgentRunContext)
   if (context.lastActiveAt !== undefined) {
     existing.lastActiveAt = context.lastActiveAt;
   }
+  // parentRunId is set once at registration; later registrations of the same
+  // runId (for example a model-switch re-registration) must not overwrite the
+  // original parent linkage.
+  if (context.parentRunId && !existing.parentRunId) {
+    existing.parentRunId = context.parentRunId;
+    trackSubagentForParent(state, context.parentRunId, runId);
+  }
+}
+
+function trackSubagentForParent(
+  state: AgentEventState,
+  parentRunId: string,
+  childRunId: string,
+): void {
+  const parent = state.runContextById.get(parentRunId);
+  if (!parent) {
+    return;
+  }
+  const open = parent.openSubagentRunIds ?? [];
+  if (open.includes(childRunId)) {
+    return;
+  }
+  parent.openSubagentRunIds = [...open, childRunId];
+}
+
+function settleSubagentForParent(
+  state: AgentEventState,
+  parentRunId: string,
+  childRunId: string,
+  settledAt: number,
+): void {
+  const parent = state.runContextById.get(parentRunId);
+  if (!parent) {
+    return;
+  }
+  const open = parent.openSubagentRunIds;
+  if (open && open.length > 0) {
+    const next = open.filter((id) => id !== childRunId);
+    parent.openSubagentRunIds = next.length > 0 ? next : undefined;
+  }
+  parent.lastSubagentSettledAt = settledAt;
 }
 
 export function getAgentRunContext(runId: string) {
@@ -173,6 +226,10 @@ export function getAgentRunContext(runId: string) {
 
 export function clearAgentRunContext(runId: string) {
   const state = getAgentEventState();
+  const ctx = state.runContextById.get(runId);
+  if (ctx?.parentRunId) {
+    settleSubagentForParent(state, ctx.parentRunId, runId, Date.now());
+  }
   state.runContextById.delete(runId);
   state.seqByRun.delete(runId);
 }
@@ -191,6 +248,9 @@ export function sweepStaleRunContexts(maxAgeMs = 30 * 60 * 1000): number {
     const lastSeen = ctx.lastActiveAt ?? ctx.registeredAt;
     const age = lastSeen ? now - lastSeen : Infinity;
     if (age > maxAgeMs) {
+      if (ctx.parentRunId) {
+        settleSubagentForParent(state, ctx.parentRunId, runId, now);
+      }
       state.runContextById.delete(runId);
       state.seqByRun.delete(runId);
       swept++;

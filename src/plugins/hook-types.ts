@@ -37,6 +37,7 @@ import type {
   PluginHeartbeatPromptContributionEvent,
   PluginHeartbeatPromptContributionResult,
 } from "./host-hook-turn-types.js";
+import type { HostRuntimeNamespaceKey, HostRuntimeNamespaceMap } from "./host-runtime-namespace.js";
 
 export type {
   PluginHookBeforeAgentStartEvent,
@@ -404,6 +405,14 @@ export type PluginHookToolContext = {
   trace?: DiagnosticTraceContext;
   toolName: string;
   toolCallId?: string;
+  /**
+   * Read a host-owned snapshot from the run context for this run. Returns
+   * `undefined` when no `runId` is present or when the run has been closed.
+   * Plugins may not write `_host.*` namespaces — see {@link HostRuntimeNamespaceMap}.
+   */
+  getHostRunContext?: <K extends HostRuntimeNamespaceKey>(
+    namespace: K,
+  ) => HostRuntimeNamespaceMap[K] | undefined;
   // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Plugin callers type JSON reads by namespace.
   getSessionExtension?: <T extends PluginJsonValue = PluginJsonValue>(
     namespace: string,
@@ -415,6 +424,13 @@ export type PluginHookBeforeToolCallEvent = {
   params: Record<string, unknown>;
   runId?: string;
   toolCallId?: string;
+  /**
+   * Optional destination paths the host derived from `params` for well-known
+   * tool envelopes (e.g. `apply_patch`). When present, plugins can rely on
+   * this list rather than re-parsing the envelope. Absent for tools the host
+   * does not know how to derive paths for.
+   */
+  derivedPaths?: readonly string[];
 };
 
 export const PluginApprovalResolutions = {

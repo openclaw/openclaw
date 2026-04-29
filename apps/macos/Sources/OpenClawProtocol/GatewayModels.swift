@@ -4395,6 +4395,7 @@ public struct PluginControlUiDescriptor: Codable, Sendable {
     public let renderer: String?
     public let statenamespace: String?
     public let actionids: [String]?
+    public let suppresshostinputwhile: [String: AnyCodable]?
     public let schema: AnyCodable?
     public let requiredscopes: [String]?
 
@@ -4409,6 +4410,7 @@ public struct PluginControlUiDescriptor: Codable, Sendable {
         renderer: String?,
         statenamespace: String?,
         actionids: [String]?,
+        suppresshostinputwhile: [String: AnyCodable]?,
         schema: AnyCodable?,
         requiredscopes: [String]?)
     {
@@ -4422,6 +4424,7 @@ public struct PluginControlUiDescriptor: Codable, Sendable {
         self.renderer = renderer
         self.statenamespace = statenamespace
         self.actionids = actionids
+        self.suppresshostinputwhile = suppresshostinputwhile
         self.schema = schema
         self.requiredscopes = requiredscopes
     }
@@ -4437,6 +4440,7 @@ public struct PluginControlUiDescriptor: Codable, Sendable {
         case renderer
         case statenamespace = "stateNamespace"
         case actionids = "actionIds"
+        case suppresshostinputwhile = "suppressHostInputWhile"
         case schema
         case requiredscopes = "requiredScopes"
     }

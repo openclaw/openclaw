@@ -71,6 +71,7 @@ import {
   emitPluginAgentEvent,
   schedulePluginSessionTurn,
   sendPluginSessionAttachment,
+  unschedulePluginSessionTurnsByTag,
 } from "./host-hook-workflow.js";
 import {
   isPluginJsonValue,
@@ -134,6 +135,7 @@ import type {
 import { withPluginRuntimePluginIdScope } from "./runtime/gateway-request-scope.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import { validateJsonSchemaValue } from "./schema-validator.js";
+import { normalizeSessionEntrySlotKey } from "./session-entry-slot-keys.js";
 import { defaultSlotIdForKey, hasKind } from "./slots.js";
 import {
   isConversationHookName,
@@ -1534,6 +1536,35 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     return normalized as string[];
   };
 
+  const normalizeControlUiSuppressHostInputWhile = (
+    value: unknown,
+  ): PluginControlUiDescriptor["suppressHostInputWhile"] | undefined | null => {
+    if (value === undefined) {
+      return undefined;
+    }
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      return null;
+    }
+    const record = value as Record<string, unknown>;
+    const stateNamespace = normalizeOptionalHostHookString(record.stateNamespace);
+    const predicateField = normalizeOptionalHostHookString(record.predicateField);
+    const requireHandlerActionId = normalizeOptionalHostHookString(record.requireHandlerActionId);
+    if (!stateNamespace || predicateField === "" || requireHandlerActionId === "") {
+      return null;
+    }
+    if (record.equalsSessionKey !== undefined && typeof record.equalsSessionKey !== "boolean") {
+      return null;
+    }
+    return {
+      stateNamespace,
+      ...(predicateField !== undefined ? { predicateField } : {}),
+      ...(record.equalsSessionKey !== undefined
+        ? { equalsSessionKey: record.equalsSessionKey }
+        : {}),
+      ...(requireHandlerActionId !== undefined ? { requireHandlerActionId } : {}),
+    };
+  };
+
   const validateSessionActionSchema = (
     record: PluginRecord,
     id: string,
@@ -1602,6 +1633,11 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       invalidMessage = "session extension projector must be synchronous";
     } else if (extension.cleanup !== undefined && typeof extension.cleanup !== "function") {
       invalidMessage = "session extension cleanup must be a function";
+    } else if (extension.sessionEntrySlotKey !== undefined) {
+      const slotKey = normalizeSessionEntrySlotKey(extension.sessionEntrySlotKey);
+      if (!slotKey.ok) {
+        invalidMessage = slotKey.error;
+      }
     }
     if (invalidMessage) {
       pushDiagnostic({
@@ -1757,6 +1793,9 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     const stateNamespace = normalizeOptionalHostHookString(descriptor.stateNamespace);
     const actionIds = normalizeHostHookStringList(descriptor.actionIds);
     const requiredScopes = normalizeHostHookStringList(descriptor.requiredScopes);
+    const suppressHostInputWhile = normalizeControlUiSuppressHostInputWhile(
+      descriptor.suppressHostInputWhile,
+    );
     const surface = typeof descriptor.surface === "string" ? descriptor.surface : "";
     if (
       !id ||
@@ -1767,7 +1806,8 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       renderer === "" ||
       stateNamespace === "" ||
       actionIds === null ||
-      requiredScopes === null
+      requiredScopes === null ||
+      suppressHostInputWhile === null
     ) {
       pushDiagnostic({
         level: "error",
@@ -1827,6 +1867,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
         ...(renderer !== undefined ? { renderer } : {}),
         ...(stateNamespace !== undefined ? { stateNamespace } : {}),
         ...(actionIds !== undefined ? { actionIds } : {}),
+        ...(suppressHostInputWhile !== undefined ? { suppressHostInputWhile } : {}),
         ...(requiredScopes !== undefined
           ? { requiredScopes: requiredScopes as OperatorScope[] }
           : {}),
@@ -2461,6 +2502,14 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                       origin: record.origin,
                       schedule,
                       shouldCommit: shouldCommitWorkflowSideEffect,
+                    }),
+              unscheduleSessionTurnsByTag: (request) =>
+                registryParams.activateGlobalSideEffects === false
+                  ? Promise.resolve({ removed: 0, failed: 0 })
+                  : unschedulePluginSessionTurnsByTag({
+                      pluginId: record.id,
+                      origin: record.origin,
+                      request,
                     }),
               sendSessionAttachment: (attachment) =>
                 registryParams.activateGlobalSideEffects === false

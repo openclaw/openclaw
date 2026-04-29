@@ -15,6 +15,16 @@ export const PluginJsonValueSchema = Type.Cyclic(
   "PluginJsonValue",
 );
 
+export const PluginControlUiSuppressHostInputWhileSchema = Type.Object(
+  {
+    stateNamespace: NonEmptyString,
+    predicateField: Type.Optional(NonEmptyString),
+    equalsSessionKey: Type.Optional(Type.Boolean()),
+    requireHandlerActionId: Type.Optional(NonEmptyString),
+  },
+  { additionalProperties: false },
+);
+
 export const PluginControlUiDescriptorSchema = Type.Object(
   {
     id: NonEmptyString,
@@ -32,6 +42,7 @@ export const PluginControlUiDescriptorSchema = Type.Object(
     renderer: Type.Optional(Type.String()),
     stateNamespace: Type.Optional(Type.String()),
     actionIds: Type.Optional(Type.Array(NonEmptyString)),
+    suppressHostInputWhile: Type.Optional(PluginControlUiSuppressHostInputWhileSchema),
     schema: Type.Optional(PluginJsonValueSchema),
     requiredScopes: Type.Optional(Type.Array(NonEmptyString)),
   },

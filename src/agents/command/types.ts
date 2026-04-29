@@ -91,6 +91,8 @@ export type AgentCommandOpts = {
   abortSignal?: AbortSignal;
   lane?: string;
   runId?: string;
+  /** Parent run id when this command represents a subagent spawn. Tracked by the host run context for plugin observability. */
+  parentRunId?: string;
   extraSystemPrompt?: string;
   /** Bootstrap workspace context injection mode for this run. */
   bootstrapContextMode?: "full" | "lightweight";

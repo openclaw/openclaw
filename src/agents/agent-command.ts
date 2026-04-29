@@ -479,6 +479,7 @@ async function agentCommandInternal(
       const startedAt = Date.now();
       registerAgentRunContext(runId, {
         sessionKey,
+        ...(opts.parentRunId ? { parentRunId: opts.parentRunId } : {}),
       });
       attemptExecutionRuntime.emitAcpLifecycleStart({ runId, startedAt });
 
@@ -605,6 +606,7 @@ async function agentCommandInternal(
       registerAgentRunContext(runId, {
         sessionKey,
         verboseLevel: resolvedVerboseLevel,
+        ...(opts.parentRunId ? { parentRunId: opts.parentRunId } : {}),
       });
     }
 

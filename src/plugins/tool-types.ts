@@ -3,6 +3,7 @@ import type { AnyAgentTool } from "../agents/tools/common.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HookEntry } from "../hooks/types.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
+import type { HostRuntimeNamespaceKey, HostRuntimeNamespaceMap } from "./host-runtime-namespace.js";
 
 /** Trusted execution context passed to plugin-owned agent tool factories. */
 export type OpenClawPluginToolContext = {
@@ -19,6 +20,8 @@ export type OpenClawPluginToolContext = {
   sessionKey?: string;
   /** Ephemeral session UUID - regenerated on /new and /reset. Use for per-conversation isolation. */
   sessionId?: string;
+  /** Active run id, when the tool is constructed in the context of a specific run. */
+  runId?: string;
   browser?: {
     sandboxBridgeUrl?: string;
     allowHostControl?: boolean;
@@ -32,6 +35,14 @@ export type OpenClawPluginToolContext = {
   /** Whether the trusted sender is an owner. */
   senderIsOwner?: boolean;
   sandboxed?: boolean;
+  /**
+   * Read a host-owned snapshot from the run context for this run. Returns
+   * `undefined` when the tool is not running inside a known run or when the
+   * run has been closed. Plugins may not write `_host.*` namespaces.
+   */
+  getHostRunContext?: <K extends HostRuntimeNamespaceKey>(
+    namespace: K,
+  ) => HostRuntimeNamespaceMap[K] | undefined;
 };
 
 export type OpenClawPluginToolFactory = (

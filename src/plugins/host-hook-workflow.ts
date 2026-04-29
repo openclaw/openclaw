@@ -13,11 +13,15 @@ import {
   isPluginJsonValue,
   type PluginAgentEventEmitParams,
   type PluginAgentEventEmitResult,
+  type PluginAttachmentChannelHints,
   type PluginJsonValue,
+  type PluginSessionAttachmentCaptionFormat,
   type PluginSessionAttachmentParams,
   type PluginSessionAttachmentResult,
   type PluginSessionSchedulerJobHandle,
   type PluginSessionTurnScheduleParams,
+  type PluginSessionTurnUnscheduleByTagParams,
+  type PluginSessionTurnUnscheduleByTagResult,
 } from "./host-hooks.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 
@@ -93,6 +97,79 @@ export function emitPluginAgentEvent(params: {
   return { emitted: true, stream };
 }
 
+/**
+ * Resolved per-channel parseMode for attachment captions. `channelHints` wins
+ * over `captionFormat` when both are set; absent values are returned as
+ * `undefined` so callers can spread the result without nullability checks.
+ */
+type ResolvedAttachmentDelivery = {
+  parseMode?: "HTML" | "MarkdownV2";
+  disableNotification?: boolean;
+  forceDocumentMime?: string;
+  ephemeral?: boolean;
+  suppressEmbeds?: boolean;
+  unfurlLinks?: boolean;
+  threadTs?: string;
+};
+
+function captionFormatToParseMode(
+  captionFormat: PluginSessionAttachmentCaptionFormat | undefined,
+): "HTML" | "MarkdownV2" | undefined {
+  if (captionFormat === "html") {
+    return "HTML";
+  }
+  if (captionFormat === "markdownv2") {
+    return "MarkdownV2";
+  }
+  return undefined;
+}
+
+/**
+ * Collapse `captionFormat` and `channelHints` into a single resolved view of
+ * delivery hints. `channelHints.<channel>` keys win over `captionFormat` when
+ * both are set; this matches the documented precedence on
+ * {@link PluginSessionAttachmentParams.channelHints}.
+ *
+ * Channels only consume the keys they recognise, so extra fields are safe to
+ * pass through; this helper centralises the precedence rule so every channel
+ * adapter sees the same resolved view.
+ */
+export function resolveAttachmentDelivery(params: {
+  channel: string;
+  captionFormat?: PluginSessionAttachmentCaptionFormat;
+  channelHints?: PluginAttachmentChannelHints;
+}): ResolvedAttachmentDelivery {
+  const fallbackParseMode = captionFormatToParseMode(params.captionFormat);
+  const channel = params.channel.trim().toLowerCase();
+  if (channel === "telegram") {
+    const hint = params.channelHints?.telegram;
+    return {
+      parseMode: hint?.parseMode ?? fallbackParseMode,
+      ...(hint?.disableNotification !== undefined
+        ? { disableNotification: hint.disableNotification }
+        : {}),
+      ...(hint?.forceDocumentMime ? { forceDocumentMime: hint.forceDocumentMime } : {}),
+    };
+  }
+  if (channel === "discord") {
+    const hint = params.channelHints?.discord;
+    return {
+      ...(fallbackParseMode ? { parseMode: fallbackParseMode } : {}),
+      ...(hint?.ephemeral !== undefined ? { ephemeral: hint.ephemeral } : {}),
+      ...(hint?.suppressEmbeds !== undefined ? { suppressEmbeds: hint.suppressEmbeds } : {}),
+    };
+  }
+  if (channel === "slack") {
+    const hint = params.channelHints?.slack;
+    return {
+      ...(fallbackParseMode ? { parseMode: fallbackParseMode } : {}),
+      ...(hint?.unfurlLinks !== undefined ? { unfurlLinks: hint.unfurlLinks } : {}),
+      ...(hint?.threadTs ? { threadTs: hint.threadTs } : {}),
+    };
+  }
+  return fallbackParseMode ? { parseMode: fallbackParseMode } : {};
+}
+
 async function validateAttachmentFiles(
   files: PluginSessionAttachmentParams["files"],
   maxBytes: number,
@@ -155,6 +232,19 @@ export async function sendPluginSessionAttachment(
   const explicitThreadId = normalizeOptionalString(params.threadId);
   const deliveryThreadId = normalizeOptionalString(deliveryContext.threadId);
   const fallbackThreadId = normalizeOptionalString(threadId);
+  // Resolve per-channel delivery hints (parseMode, disableNotification, etc.)
+  // up front so the precedence rule lives in one place. Channels only consume
+  // the hints they recognise; unknown keys are silently ignored.
+  const resolvedDelivery = resolveAttachmentDelivery({
+    channel: deliveryContext.channel,
+    captionFormat: params.captionFormat,
+    channelHints: params.channelHints,
+  });
+  // Slack threadTs hint takes precedence over the legacy threadId pipeline so
+  // plugins can pin a reply to a specific Slack thread without abusing
+  // `params.threadId`. Other channels keep the existing fallback chain.
+  const resolvedThreadId =
+    resolvedDelivery.threadTs ?? explicitThreadId ?? deliveryThreadId ?? fallbackThreadId;
   let result: Awaited<ReturnType<SendMessage>>;
   try {
     const sendMessage = await loadSendMessage();
@@ -163,10 +253,16 @@ export async function sendPluginSessionAttachment(
       content: text,
       channel: deliveryContext.channel,
       accountId: deliveryContext.accountId,
-      threadId: explicitThreadId ?? deliveryThreadId ?? fallbackThreadId,
+      threadId: resolvedThreadId,
       requesterSessionKey: sessionKey,
       mediaUrls: validated,
-      forceDocument: params.forceDocument,
+      forceDocument:
+        params.forceDocument ?? (resolvedDelivery.forceDocumentMime ? true : undefined),
+      bestEffort: true,
+      ...(resolvedDelivery.parseMode ? { parseMode: resolvedDelivery.parseMode } : {}),
+      ...(resolvedDelivery.disableNotification !== undefined
+        ? { silent: resolvedDelivery.disableNotification }
+        : {}),
     });
   } catch (error) {
     return { ok: false, error: `attachment delivery failed: ${formatErrorMessage(error)}` };
@@ -274,6 +370,59 @@ function normalizeCronJobId(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
+/** Prefix applied to plugin-scheduled cron job names so they are searchable. */
+const PLUGIN_CRON_NAME_PREFIX = "plugin:";
+
+/** Marker that separates the optional tag from the rest of the cron name. */
+const PLUGIN_CRON_TAG_MARKER = ":tag:";
+
+/**
+ * Build the canonical cron job name for a plugin-scheduled session turn. Tags
+ * are auto-prefixed with `${pluginId}:` so two plugins can reuse the same
+ * short tag (e.g. `nudge`) without collision.
+ */
+export function buildPluginSchedulerCronName(params: {
+  pluginId: string;
+  sessionKey: string;
+  tag?: string;
+  uniqueId?: string;
+}): string {
+  const uniqueId = params.uniqueId ?? randomUUID();
+  if (!params.tag) {
+    return `${PLUGIN_CRON_NAME_PREFIX}${params.pluginId}:${params.sessionKey}:${uniqueId}`;
+  }
+  return `${PLUGIN_CRON_NAME_PREFIX}${params.pluginId}${PLUGIN_CRON_TAG_MARKER}${params.tag}:${params.sessionKey}:${uniqueId}`;
+}
+
+/**
+ * Extract the auto-prefixed cron name prefix used to find every job created
+ * for a given `pluginId` + `tag` pair. Used by tag-based cleanup.
+ */
+function buildPluginSchedulerTagPrefix(params: {
+  pluginId: string;
+  tag: string;
+  sessionKey: string;
+}): string {
+  return `${PLUGIN_CRON_NAME_PREFIX}${params.pluginId}${PLUGIN_CRON_TAG_MARKER}${params.tag}:${params.sessionKey}:`;
+}
+
+function isCronJobRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function readCronListJobs(value: unknown): Record<string, unknown>[] {
+  if (Array.isArray(value)) {
+    return value.filter(isCronJobRecord);
+  }
+  if (isCronJobRecord(value)) {
+    const jobs = (value as { jobs?: unknown }).jobs;
+    if (Array.isArray(jobs)) {
+      return jobs.filter(isCronJobRecord);
+    }
+  }
+  return [];
+}
+
 export async function schedulePluginSessionTurn(params: {
   pluginId: string;
   pluginName?: string;
@@ -309,7 +458,31 @@ export async function schedulePluginSessionTurn(params: {
   if (params.shouldCommit && !params.shouldCommit()) {
     return undefined;
   }
-  const name = scheduleName ?? `plugin:${params.pluginId}:${sessionKey}:${randomUUID()}`;
+  const tag = normalizeOptionalString(params.schedule.tag);
+  // When a tag is present, keep the host-owned prefix even if the plugin also
+  // provides a name; tag cleanup depends on that prefix. Without a tag, a
+  // custom name remains a full override for legacy/basic scheduling callers.
+  const name =
+    tag !== undefined
+      ? buildPluginSchedulerCronName({
+          pluginId: params.pluginId,
+          sessionKey,
+          tag,
+          uniqueId: scheduleName,
+        })
+      : (scheduleName ??
+        buildPluginSchedulerCronName({
+          pluginId: params.pluginId,
+          sessionKey,
+        }));
+  // Cron normaliser preserves unknown payload fields via spread. Canonical
+  // fields are written last so plugin extras cannot override the required
+  // `kind`/`message` shape.
+  const payload: Record<string, unknown> = {
+    ...params.schedule.payloadExtras,
+    kind: "agentTurn",
+    message,
+  };
   let result: unknown;
   try {
     result = await callGatewayTool(
@@ -319,10 +492,7 @@ export async function schedulePluginSessionTurn(params: {
         name,
         schedule,
         sessionTarget: `session:${sessionKey}`,
-        payload: {
-          kind: "agentTurn",
-          message,
-        },
+        payload,
         ...(params.schedule.agentId ? { agentId: params.schedule.agentId } : {}),
         deleteAfterRun: params.schedule.deleteAfterRun ?? schedule.kind === "at",
         wakeMode: "now",
@@ -376,4 +546,65 @@ export async function schedulePluginSessionTurn(params: {
       },
     },
   });
+}
+
+/**
+ * Remove every plugin-scheduled session turn that was created with `tag`
+ * inside `sessionKey`. Tag matching uses the auto-prefixed
+ * `${pluginId}:${tag}` name fragment so two plugins reusing the same short
+ * tag (e.g. "nudge") do not clobber each other.
+ */
+export async function unschedulePluginSessionTurnsByTag(params: {
+  pluginId: string;
+  origin?: PluginOrigin;
+  request: PluginSessionTurnUnscheduleByTagParams;
+}): Promise<PluginSessionTurnUnscheduleByTagResult> {
+  if (params.origin !== "bundled") {
+    return { removed: 0, failed: 0 };
+  }
+  const sessionKey = normalizeOptionalString(params.request.sessionKey);
+  const tag = normalizeOptionalString(params.request.tag);
+  if (!sessionKey || !tag) {
+    return { removed: 0, failed: 0 };
+  }
+  const namePrefix = buildPluginSchedulerTagPrefix({
+    pluginId: params.pluginId,
+    tag,
+    sessionKey,
+  });
+  let listResult: unknown;
+  try {
+    listResult = await callGatewayTool(
+      "cron.list",
+      {},
+      { includeDisabled: true },
+      { scopes: [ADMIN_SCOPE] },
+    );
+  } catch (error) {
+    log.warn(`plugin session turn untag-list failed: ${formatErrorMessage(error)}`);
+    return { removed: 0, failed: 1 };
+  }
+  const candidates = readCronListJobs(listResult).filter((job) => {
+    const name = typeof job.name === "string" ? job.name : "";
+    const target = typeof job.sessionTarget === "string" ? job.sessionTarget : "";
+    return name.startsWith(namePrefix) && target === `session:${sessionKey}`;
+  });
+  let removed = 0;
+  let failed = 0;
+  for (const job of candidates) {
+    const id = typeof job.id === "string" ? job.id.trim() : "";
+    if (!id) {
+      continue;
+    }
+    try {
+      await callGatewayTool("cron.remove", {}, { id }, { scopes: [ADMIN_SCOPE] });
+      removed += 1;
+    } catch (error) {
+      log.warn(
+        `plugin session turn untag-remove failed: id=${id} error=${formatErrorMessage(error)}`,
+      );
+      failed += 1;
+    }
+  }
+  return { removed, failed };
 }

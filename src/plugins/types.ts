@@ -117,6 +117,8 @@ import type {
   PluginSessionAttachmentParams,
   PluginSessionAttachmentResult,
   PluginSessionTurnScheduleParams,
+  PluginSessionTurnUnscheduleByTagParams,
+  PluginSessionTurnUnscheduleByTagResult,
   PluginToolMetadataRegistration,
   PluginTrustedToolPolicyRegistration,
 } from "./host-hooks.js";
@@ -231,6 +233,8 @@ export type {
   PluginSessionAttachmentParams,
   PluginSessionAttachmentResult,
   PluginSessionTurnScheduleParams,
+  PluginSessionTurnUnscheduleByTagParams,
+  PluginSessionTurnUnscheduleByTagResult,
   PluginToolMetadataRegistration,
   PluginTrustedToolPolicyRegistration,
 } from "./host-hooks.js";
@@ -2524,6 +2528,15 @@ export type OpenClawPluginApi = {
   scheduleSessionTurn: (
     params: PluginSessionTurnScheduleParams,
   ) => Promise<PluginSessionSchedulerJobHandle | undefined>;
+  /**
+   * Cancel every plugin-scheduled session turn that was registered with `tag`
+   * inside `sessionKey`. Tags are auto-prefixed with the calling plugin id so
+   * two plugins reusing the same short tag (e.g. "nudge") cannot clobber
+   * each other.
+   */
+  unscheduleSessionTurnsByTag: (
+    params: PluginSessionTurnUnscheduleByTagParams,
+  ) => Promise<PluginSessionTurnUnscheduleByTagResult>;
   /** Send one or more host-validated files to the active channel for a session. */
   sendSessionAttachment: (
     params: PluginSessionAttachmentParams,

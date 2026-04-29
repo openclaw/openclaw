@@ -39,6 +39,23 @@ export type PluginSessionExtensionRegistration = {
   description: string;
   project?: (ctx: PluginSessionExtensionProjectionContext) => PluginJsonValue | undefined;
   cleanup?: (ctx: { reason: PluginHostCleanupReason; sessionKey?: string }) => void | Promise<void>;
+  /**
+   * When set, after every successful `patchSessionExtension` the projected
+   * value is mirrored to `SessionEntry[<slotKey>]` so non-plugin readers
+   * (channel renderers, sidebar telemetry, etc.) can consume the typed slot
+   * without reaching into `pluginExtensions[pluginId][namespace]`.
+   *
+   * The slot is a READ-ONLY mirror — writes always go through
+   * `patchSessionExtension`; the host overwrites the slot value on every
+   * subsequent patch.
+   */
+  sessionEntrySlotKey?: string;
+  /**
+   * Optional JSON-compatible schema describing the projected slot value.
+   * Purely informational at this layer; clients may use it to validate the
+   * mirrored slot against a contract.
+   */
+  sessionEntrySlotSchema?: PluginJsonValue;
 };
 
 export type PluginSessionExtensionProjection = {
@@ -83,6 +100,29 @@ export type PluginCommandContinuation = {
   continueAgent?: boolean;
 };
 
+/**
+ * Declarative hint that the host's default chat input should be suppressed
+ * while a plugin-owned control UI (e.g. an approval card) is mounted.
+ *
+ * The host does NOT enforce input suppression — UI clients consume this
+ * descriptor and decide whether to hide their own input. The shape is
+ * deliberately additive so client surfaces that do not understand the field
+ * keep behaving as before.
+ */
+export type PluginControlUiSuppressHostInputWhile = {
+  /** Plugin-owned state namespace whose projection drives the suppression check. */
+  stateNamespace: string;
+  /** Optional dot-path inside the projection to a boolean-ish flag. */
+  predicateField?: string;
+  /**
+   * When true, suppression only applies to the session whose key matches the
+   * descriptor's active session — protects against cross-session leakage.
+   */
+  equalsSessionKey?: boolean;
+  /** When set, suppression only applies if this action id is wired by the plugin. */
+  requireHandlerActionId?: string;
+};
+
 export type PluginControlUiDescriptor = {
   id: string;
   surface: "session" | "tool" | "run" | "settings";
@@ -94,6 +134,12 @@ export type PluginControlUiDescriptor = {
   actionIds?: string[];
   schema?: PluginJsonValue;
   requiredScopes?: OperatorScope[];
+  /**
+   * Declarative hint to UI clients that the host's default chat input should
+   * be hidden while this descriptor is active. UI clients decide whether to
+   * honour the hint; the host does not enforce input gating server-side.
+   */
+  suppressHostInputWhile?: PluginControlUiSuppressHostInputWhile;
 };
 
 export type PluginSessionActionContext = {
@@ -204,6 +250,32 @@ export type PluginSessionAttachmentFile = {
   path: string;
 };
 
+/**
+ * Channel-specific attachment delivery hints. Each channel only consumes the
+ * keys it understands; unknown keys are silently ignored, which keeps this
+ * structure forward-compatible as new channels are added.
+ *
+ * Hint precedence vs the legacy {@link PluginSessionAttachmentParams.captionFormat}:
+ *   `channelHints.<channel>.parseMode` wins when both are set.
+ */
+export type PluginAttachmentChannelHints = {
+  telegram?: {
+    parseMode?: "HTML" | "MarkdownV2";
+    disableNotification?: boolean;
+    forceDocumentMime?: string;
+  };
+  discord?: {
+    ephemeral?: boolean;
+    suppressEmbeds?: boolean;
+  };
+  slack?: {
+    unfurlLinks?: boolean;
+    threadTs?: string;
+  };
+};
+
+export type PluginSessionAttachmentCaptionFormat = "plain" | "html" | "markdownv2";
+
 export type PluginSessionAttachmentParams = {
   sessionKey: string;
   files: PluginSessionAttachmentFile[];
@@ -211,6 +283,14 @@ export type PluginSessionAttachmentParams = {
   threadId?: string;
   forceDocument?: boolean;
   maxBytes?: number;
+  /**
+   * Caption rendering hint. Channels map this to their native parseMode
+   * (e.g. `html` -> Telegram HTML). Overridden by
+   * `channelHints.<channel>.parseMode` when both are set.
+   */
+  captionFormat?: PluginSessionAttachmentCaptionFormat;
+  /** Per-channel delivery hints. Channels only consume keys they understand. */
+  channelHints?: PluginAttachmentChannelHints;
 };
 
 export type PluginSessionAttachmentResult =
@@ -234,6 +314,30 @@ export type PluginSessionTurnScheduleParams = PluginSessionTurnSchedule & {
   deleteAfterRun?: boolean;
   deliveryMode?: "none" | "announce";
   name?: string;
+  /**
+   * Optional grouping label for cleanup. The host auto-prefixes the tag with
+   * the calling plugin id (so two plugins can use the same short tag without
+   * collision) and persists the prefixed tag inside the cron job's `name` so
+   * `unscheduleSessionTurnsByTag` can find it later.
+   */
+  tag?: string;
+  /**
+   * Optional JSON-compatible extras merged into the cron job payload before
+   * `cron.add`. Channels and downstream consumers see these fields alongside
+   * the standard `agentTurn` payload — unknown fields pass through the cron
+   * normaliser untouched and are recovered on cron replay.
+   */
+  payloadExtras?: Record<string, PluginJsonValue>;
+};
+
+export type PluginSessionTurnUnscheduleByTagParams = {
+  sessionKey: string;
+  tag: string;
+};
+
+export type PluginSessionTurnUnscheduleByTagResult = {
+  removed: number;
+  failed: number;
 };
 
 export function normalizePluginHostHookId(value: string | undefined): string {
