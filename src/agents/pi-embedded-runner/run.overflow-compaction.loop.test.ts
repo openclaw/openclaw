@@ -13,6 +13,7 @@ import {
   mockedIsBillingErrorMessage,
   mockedIsCompactionFailureError,
   mockedIsLikelyContextOverflowError,
+  mockedDescribeFailoverError,
   mockedLog,
   mockedRunEmbeddedAttempt,
   mockedSessionLikelyHasOversizedToolResults,
@@ -42,6 +43,13 @@ describe("overflow compaction in run loop", () => {
     mockedLog.isEnabled.mockReturnValue(false);
     mockedIsBillingErrorMessage.mockReset();
     mockedIsBillingErrorMessage.mockReturnValue(false);
+    mockedDescribeFailoverError.mockReset();
+    mockedDescribeFailoverError.mockImplementation((err: unknown) => ({
+      message: err instanceof Error ? err.message : String(err),
+      reason: undefined,
+      status: undefined,
+      code: undefined,
+    }));
     mockedIsCompactionFailureError.mockImplementation((msg?: string) => {
       if (!msg) {
         return false;
@@ -149,16 +157,48 @@ describe("overflow compaction in run loop", () => {
   });
 
   it("does not compact when promptError also carries a billing signal", async () => {
+    const promptError = { message: "insufficient credits", code: "request_too_large" };
     mockedIsBillingErrorMessage.mockImplementation((msg?: string) =>
       (msg ?? "").toLowerCase().includes("insufficient credits"),
     );
+    mockedDescribeFailoverError.mockImplementation((err: unknown) => ({
+      message: err instanceof Error ? err.message : String(err),
+      reason: err === promptError ? "billing" : undefined,
+      status: undefined,
+      code: undefined,
+    }));
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
-        promptError: { message: "insufficient credits", code: "request_too_large" } as never,
+        promptError: promptError as never,
       }),
     );
 
-    await expect(runEmbeddedPiAgent(baseParams)).rejects.toThrow("insufficient credits");
+    await expect(runEmbeddedPiAgent(baseParams)).rejects.toBe(promptError);
+    expect(mockedCompactDirect).not.toHaveBeenCalled();
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not compact when nested .error carries a billing failover reason", async () => {
+    const promptError = {
+      message: "request failed",
+      error: {
+        message: "insufficient credits",
+        cause: new Error("context window exceeded"),
+      },
+    };
+    mockedDescribeFailoverError.mockImplementation((err: unknown) => ({
+      message: err instanceof Error ? err.message : String(err),
+      reason: err === promptError ? "billing" : undefined,
+      status: undefined,
+      code: undefined,
+    }));
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        promptError: promptError as never,
+      }),
+    );
+
+    await expect(runEmbeddedPiAgent(baseParams)).rejects.toBe(promptError);
     expect(mockedCompactDirect).not.toHaveBeenCalled();
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
   });

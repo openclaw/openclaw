@@ -137,17 +137,15 @@ export class MockedFailoverError extends Error {
 }
 
 export const mockedCoerceToFailoverError = vi.fn<MockCoerceToFailoverError>();
-export const mockedCollectErrorChainMessages = vi.fn<(err: unknown) => string[]>(
-  (err: unknown) => {
-    if (err instanceof Error && err.message) {
-      return [err.message];
-    }
-    if (typeof err === "string" && err.length > 0) {
-      return [err];
-    }
-    return [];
-  },
-);
+export const mockedCollectErrorChainMessages = vi.fn<(err: unknown) => string[]>((err: unknown) => {
+  if (err instanceof Error && err.message) {
+    return [err.message];
+  }
+  if (typeof err === "string" && err.length > 0) {
+    return [err];
+  }
+  return [];
+});
 export const mockedDescribeFailoverError = vi.fn<MockDescribeFailoverError>(
   (err: unknown): MockFailoverErrorDescription => ({
     message: formatErrorMessage(err),

@@ -2787,7 +2787,8 @@ describe("runAgentTurnWithFallback", () => {
 
   it("keeps wrapped billing errors classified as billing even when inner causes look like overflow", async () => {
     state.isBillingErrorMessageMock.mockImplementation(
-      (value: string) => value.length < 200 && value.toLowerCase().includes("credit balance is too low"),
+      (value: string) =>
+        value.length < 200 && value.toLowerCase().includes("credit balance is too low"),
     );
     state.isLikelyContextOverflowErrorMock.mockImplementation((value: string) =>
       value.toLowerCase().includes("request_too_large"),

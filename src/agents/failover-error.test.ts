@@ -974,6 +974,19 @@ describe("failover-error", () => {
     expect(described.reason).toBeUndefined();
   });
 
+  it("classifies nested transport .error branches before context overflow causes", () => {
+    const err = {
+      message: "request failed",
+      error: {
+        message: "insufficient credits",
+        cause: new Error("context length exceeded"),
+      },
+    };
+
+    expect(resolveFailoverReasonFromError(err)).toBe("billing");
+    expect(describeFailoverError(err).reason).toBe("billing");
+  });
+
   describe("collectErrorChainMessages", () => {
     it("collects outer and cause messages in order", () => {
       const inner = new Error("context length exceeded");

@@ -394,9 +394,14 @@ function resolveFailoverClassificationFromErrorInternal(
   const hasSessionLock = hasSessionWriteLockTimeout(err);
 
   const classification = classifyFailoverSignal(signal);
+  const classificationReason = failoverReasonFromClassification(classification);
   const nestedCandidates = getNestedErrorCandidates(err);
 
-  if (!classification || classification.kind === "context_overflow") {
+  if (
+    !classification ||
+    classification.kind === "context_overflow" ||
+    (classificationReason === "timeout" && !hasExplicitFailoverMetadata)
+  ) {
     for (const candidate of nestedCandidates) {
       const nestedClassification = resolveFailoverClassificationFromErrorInternal(
         candidate,

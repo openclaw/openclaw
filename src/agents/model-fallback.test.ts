@@ -755,10 +755,24 @@ describe("runWithModelFallback", () => {
 
   it("preserves outer billing failover before inner overflow hints", async () => {
     const overflowCause = new Error("context length exceeded");
-    const wrapper = new Error(
-      "Your credit balance is too low to access the Anthropic API.",
-      { cause: overflowCause },
-    );
+    const wrapper = new Error("Your credit balance is too low to access the Anthropic API.", {
+      cause: overflowCause,
+    });
+
+    await expectFallsBackToHaiku({
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      firstError: wrapper,
+    });
+  });
+
+  it("preserves nested error-branch billing failover before inner overflow hints", async () => {
+    const wrapper = Object.assign(new Error("request failed"), {
+      error: {
+        message: "insufficient credits",
+        cause: new Error("context length exceeded"),
+      },
+    });
 
     await expectFallsBackToHaiku({
       provider: "openai",
