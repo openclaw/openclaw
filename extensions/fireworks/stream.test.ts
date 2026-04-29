@@ -6,6 +6,12 @@ import {
   wrapFireworksProviderStream,
 } from "./stream.js";
 
+function isK2p6ModelId(modelId: string): boolean {
+  const normalized = modelId.trim().toLowerCase();
+  const lastSegment = normalized.split("/").pop() ?? normalized;
+  return /^kimi-k2(?:p6|[.-]6)(?:[-_].+)?$/.test(lastSegment);
+}
+
 function capturePayload(params: {
   provider: string;
   api: string;
@@ -20,7 +26,9 @@ function capturePayload(params: {
     return {} as ReturnType<StreamFn>;
   };
 
-  const wrapped = createFireworksKimiThinkingDisabledWrapper(baseStreamFn);
+  const wrapped = createFireworksKimiThinkingDisabledWrapper(baseStreamFn, {
+    stripReasoningFields: !isK2p6ModelId(params.modelId),
+  });
   void wrapped(
     {
       api: params.api,
@@ -86,6 +94,26 @@ describe("createFireworksKimiThinkingDisabledWrapper", () => {
     });
 
     expect(payload).toEqual({ thinking: { type: "disabled" } });
+  });
+
+  it("preserves reasoning fields for Fireworks Kimi k2.6 models", () => {
+    const payload = capturePayload({
+      provider: "fireworks",
+      api: "openai-completions",
+      modelId: "accounts/fireworks/models/kimi-k2p6",
+      initialPayload: {
+        reasoning_effort: "low",
+        reasoning: { effort: "low" },
+        reasoningEffort: "low",
+      },
+    });
+
+    expect(payload).toEqual({
+      thinking: { type: "disabled" },
+      reasoning_effort: "low",
+      reasoning: { effort: "low" },
+      reasoningEffort: "low",
+    });
   });
 
   it("passes sanitized payloads to caller onPayload hooks", () => {
