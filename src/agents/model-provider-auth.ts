@@ -10,6 +10,7 @@ import { normalizeProviderId } from "./model-selection.js";
 export function hasAuthForModelProvider(params: {
   provider: string;
   cfg?: OpenClawConfig;
+  workspaceDir?: string;
   agentDir?: string;
   env?: NodeJS.ProcessEnv;
   store?: AuthProfileStore;
@@ -19,6 +20,7 @@ export function hasAuthForModelProvider(params: {
     hasRuntimeAvailableProviderAuth({
       provider,
       cfg: params.cfg,
+      workspaceDir: params.workspaceDir,
       env: params.env,
     })
   ) {
@@ -37,6 +39,7 @@ export function hasAuthForModelProvider(params: {
 
 export function createProviderAuthChecker(params: {
   cfg?: OpenClawConfig;
+  workspaceDir?: string;
   agentDir?: string;
   env?: NodeJS.ProcessEnv;
 }): (provider: string) => boolean {
@@ -53,6 +56,7 @@ export function createProviderAuthChecker(params: {
     const value = hasAuthForModelProvider({
       provider: key,
       cfg: params.cfg,
+      workspaceDir: params.workspaceDir,
       agentDir: params.agentDir,
       env: params.env,
       store,

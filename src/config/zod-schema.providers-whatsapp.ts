@@ -83,7 +83,6 @@ function buildWhatsAppCommonShape(params: { useDefaults: boolean }) {
       ? z.number().int().nonnegative().optional().default(0)
       : z.number().int().nonnegative().optional(),
     replyToMode: ReplyToModeSchema.optional(),
-    exposeErrorText: z.boolean().optional(),
     heartbeat: ChannelHeartbeatVisibilitySchema,
     healthMonitor: ChannelHealthMonitorSchema,
   };

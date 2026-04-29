@@ -1,6 +1,7 @@
 import {
   resolveAgentConfig,
   resolveAgentDir,
+  resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
   resolveSessionAgentId,
   resolveAgentModelFallbacksOverride,
@@ -157,6 +158,10 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
     ? resolveSessionAgentId({ sessionKey, config: cfg })
     : resolveDefaultAgentId(cfg);
   const statusAgentDir = resolveAgentDir(cfg, statusAgentId);
+  const statusWorkspaceDir =
+    params.workspaceDir ??
+    sessionEntry?.spawnedWorkspaceDir ??
+    resolveAgentWorkspaceDir(cfg, statusAgentId);
   const modelRefs = resolveSelectedAndActiveModel({
     selectedProvider: provider,
     selectedModel: model,
@@ -169,6 +174,7 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
         cfg,
         sessionEntry,
         agentDir: statusAgentDir,
+        workspaceDir: statusWorkspaceDir,
         includeExternalProfiles: false,
       });
   const activeModelAuth = Object.hasOwn(params, "activeModelAuthOverride")
@@ -179,6 +185,7 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
           cfg,
           sessionEntry,
           agentDir: statusAgentDir,
+          workspaceDir: statusWorkspaceDir,
           includeExternalProfiles: false,
         })
       : selectedModelAuth;

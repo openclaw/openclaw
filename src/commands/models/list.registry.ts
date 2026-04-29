@@ -87,13 +87,20 @@ function loadAvailableModels(
 
 export async function loadModelRegistry(
   cfg: OpenClawConfig,
-  opts?: { providerFilter?: string; normalizeModels?: boolean; loadAvailability?: boolean },
+  opts?: {
+    providerFilter?: string;
+    normalizeModels?: boolean;
+    loadAvailability?: boolean;
+    workspaceDir?: string;
+  },
 ) {
   const runtimeSuppression = opts?.normalizeModels !== false;
   const agentDir = resolveOpenClawAgentDir();
   const authStorage = discoverAuthStorage(agentDir, {
     readOnly: true,
     skipCredentials: opts?.loadAvailability === false,
+    config: cfg,
+    workspaceDir: opts?.workspaceDir,
   });
   const registry = discoverModels(authStorage, agentDir, {
     providerFilter: opts?.providerFilter,

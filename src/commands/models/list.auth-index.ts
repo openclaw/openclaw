@@ -1,5 +1,9 @@
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
-import { resolveProviderEnvApiKeyCandidates } from "../../agents/model-auth-env-vars.js";
+import {
+  listProviderEnvAuthLookupKeys,
+  resolveProviderEnvAuthEvidence,
+  resolveProviderEnvApiKeyCandidates,
+} from "../../agents/model-auth-env-vars.js";
 import { resolveEnvApiKey } from "../../agents/model-auth-env.js";
 import { resolveAwsSdkEnvVarName } from "../../agents/model-auth-runtime-shared.js";
 import {
@@ -18,12 +22,9 @@ export type ModelListAuthIndex = {
 export type CreateModelListAuthIndexParams = {
   cfg: OpenClawConfig;
   authStore: AuthProfileStore;
+  workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   syntheticAuthProviderRefs?: readonly string[];
-};
-
-export const EMPTY_MODEL_LIST_AUTH_INDEX: ModelListAuthIndex = {
-  hasProviderAuth: () => false,
 };
 
 function normalizeAuthProvider(
@@ -36,10 +37,12 @@ function normalizeAuthProvider(
 
 function listValidatedSyntheticAuthProviderRefs(params: {
   cfg: OpenClawConfig;
+  workspaceDir?: string;
   env: NodeJS.ProcessEnv;
 }): readonly string[] {
   const result = loadPluginRegistrySnapshotWithMetadata({
     config: params.cfg,
+    workspaceDir: params.workspaceDir,
     env: params.env,
   });
   if (result.source !== "persisted" && result.source !== "provided") {
@@ -54,8 +57,14 @@ export function createModelListAuthIndex(
   params: CreateModelListAuthIndexParams,
 ): ModelListAuthIndex {
   const env = params.env ?? process.env;
-  const aliasMap = resolveProviderAuthAliasMap({ config: params.cfg, env });
-  const envCandidateMap = resolveProviderEnvApiKeyCandidates({ config: params.cfg, env });
+  const lookupParams = {
+    config: params.cfg,
+    workspaceDir: params.workspaceDir,
+    env,
+  };
+  const aliasMap = resolveProviderAuthAliasMap(lookupParams);
+  const envCandidateMap = resolveProviderEnvApiKeyCandidates(lookupParams);
+  const authEvidenceMap = resolveProviderEnvAuthEvidence(lookupParams);
   const authenticatedProviders = new Set<string>();
   const syntheticAuthProviders = new Set<string>();
   const envProviderAuthCache = new Map<string, boolean>();
@@ -77,8 +86,16 @@ export function createModelListAuthIndex(
     addProvider(credential.provider);
   }
 
-  for (const provider of Object.keys(envCandidateMap)) {
-    if (resolveEnvApiKey(provider, env, { aliasMap, candidateMap: envCandidateMap })) {
+  for (const provider of listProviderEnvAuthLookupKeys({ envCandidateMap, authEvidenceMap })) {
+    if (
+      resolveEnvApiKey(provider, env, {
+        aliasMap,
+        candidateMap: envCandidateMap,
+        authEvidenceMap,
+        config: params.cfg,
+        workspaceDir: params.workspaceDir,
+      })
+    ) {
       addProvider(provider);
     }
   }
@@ -97,7 +114,11 @@ export function createModelListAuthIndex(
   }
 
   for (const provider of params.syntheticAuthProviderRefs ??
-    listValidatedSyntheticAuthProviderRefs({ cfg: params.cfg, env })) {
+    listValidatedSyntheticAuthProviderRefs({
+      cfg: params.cfg,
+      workspaceDir: params.workspaceDir,
+      env,
+    })) {
     addSyntheticProvider(provider);
   }
 
@@ -107,8 +128,16 @@ export function createModelListAuthIndex(
     if (cached !== undefined) {
       return cached;
     }
+    const hasPrecomputedCandidates = Object.hasOwn(envCandidateMap, normalized);
+    const hasPrecomputedEvidence = Object.hasOwn(authEvidenceMap, normalized);
     const hasAuth = Boolean(
-      resolveEnvApiKey(provider, env, { aliasMap, candidateMap: envCandidateMap }),
+      resolveEnvApiKey(provider, env, {
+        aliasMap,
+        candidateMap: hasPrecomputedCandidates ? envCandidateMap : undefined,
+        authEvidenceMap: hasPrecomputedEvidence ? authEvidenceMap : undefined,
+        config: params.cfg,
+        workspaceDir: params.workspaceDir,
+      }),
     );
     envProviderAuthCache.set(normalized, hasAuth);
     if (hasAuth) {

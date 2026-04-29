@@ -1515,7 +1515,9 @@ export async function runReplyAgent(params: {
       (sessionKey ? activeSessionStore?.[sessionKey]?.responseUsage : undefined);
     const responseUsageMode = resolveResponseUsageMode(responseUsageRaw);
     if (responseUsageMode !== "off" && hasNonzeroUsage(usage)) {
-      const authMode = resolveModelAuthMode(providerUsed, cfg);
+      const authMode = resolveModelAuthMode(providerUsed, cfg, undefined, {
+        workspaceDir: followupRun.run.workspaceDir,
+      });
       const showCost = authMode === "api-key";
       const costConfig = showCost
         ? resolveModelCostConfig({
@@ -1678,7 +1680,9 @@ export async function runReplyAgent(params: {
       authMode:
         runResult.meta?.requestShaping?.authMode ??
         (cfg?.models?.providers && providerUsed in cfg.models.providers
-          ? (resolveModelAuthMode(providerUsed, cfg) ?? undefined)
+          ? (resolveModelAuthMode(providerUsed, cfg, undefined, {
+              workspaceDir: followupRun.run.workspaceDir,
+            }) ?? undefined)
           : undefined),
       thinking:
         runResult.meta?.requestShaping?.thinking ??
