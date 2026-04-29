@@ -18977,7 +18977,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 ],
                 title: "Queue Mode",
                 description:
-                  'Queue behavior mode. "steer" injects at the next model boundary; "followup" runs later; "collect" batches later; "steer-backlog" does both; "queue" aliases steer; "interrupt" aborts the active run.',
+                  'Queue behavior mode. "steer" injects at the next model boundary; "followup" runs later; "collect" batches later; "steer-backlog" and "steer+backlog" steer now and preserve backlog; "queue" aliases steer; "interrupt" aborts the active run. Use conservative modes unless interruption is intentional.',
               },
               byChannel: {
                 type: "object",
@@ -19355,7 +19355,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 ],
                 title: "Queue Drop Strategy",
                 description:
-                  'Drop strategy when queue cap is exceeded. "summarize" drops oldest entries but preserves compact summaries; "old" drops oldest without summaries; "new" rejects the newest item.',
+                  'Drop strategy when queue cap is exceeded. "summarize" drops oldest entries but preserves compact summaries; "old" drops oldest without summaries; "new" rejects the newest item. Use "summarize" for long-running chats where context matters.',
               },
             },
             additionalProperties: false,
