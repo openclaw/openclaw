@@ -17,6 +17,7 @@ const BUNDLED_PLUGIN_INSTALL_UNINSTALL_PROBE_PATH =
   "scripts/e2e/lib/bundled-plugin-install-uninstall/probe.mjs";
 const PLUGINS_DOCKER_E2E_PATH = "scripts/e2e/plugins-docker.sh";
 const PLUGIN_UPDATE_SCENARIO_PATH = "scripts/e2e/lib/plugin-update/unchanged-scenario.sh";
+const PLUGIN_UPDATE_PROBE_PATH = "scripts/e2e/lib/plugin-update/probe.mjs";
 const DOCTOR_SWITCH_DOCKER_E2E_PATH = "scripts/e2e/doctor-install-switch-docker.sh";
 const UPDATE_CHANNEL_SWITCH_DOCKER_E2E_PATH = "scripts/e2e/update-channel-switch-docker.sh";
 const CENTRALIZED_BUILD_SCRIPTS = [
@@ -113,24 +114,29 @@ describe("docker build helper", () => {
 
   it("allows plugin update smoke to tolerate config metadata migrations", () => {
     const runner = readFileSync(PLUGIN_UPDATE_SCENARIO_PATH, "utf8");
+    const probe = readFileSync(PLUGIN_UPDATE_PROBE_PATH, "utf8");
 
-    expect(runner).toContain("plugin install record changed unexpectedly");
-    expect(runner).toContain("index.installRecords ?? index.records ?? config.plugins?.installs");
+    expect(runner).toContain('node "$probe" assert-snapshot /tmp/plugin-update-before.json');
     expect(runner).toContain("Config changed unexpectedly for modern package");
     expect(runner).not.toContain("before_hash");
+    expect(probe).toContain("plugin install record changed unexpectedly");
+    expect(probe).toContain("index.installRecords ?? index.records ?? config.plugins?.installs");
   });
 
   it("caps package acceptance legacy compatibility at 2026.4.25", () => {
-    const scripts = [
+    const dateGateScripts = [
       readFileSync(DOCTOR_SWITCH_DOCKER_E2E_PATH, "utf8"),
       readFileSync(UPDATE_CHANNEL_SWITCH_DOCKER_E2E_PATH, "utf8"),
       readFileSync(PLUGINS_DOCKER_E2E_PATH, "utf8"),
-      readFileSync(PLUGIN_UPDATE_SCENARIO_PATH, "utf8"),
     ];
+    const pluginUpdateScenario = readFileSync(PLUGIN_UPDATE_SCENARIO_PATH, "utf8");
+    const pluginUpdateProbe = readFileSync(PLUGIN_UPDATE_PROBE_PATH, "utf8");
+    const scripts = [...dateGateScripts, pluginUpdateScenario, pluginUpdateProbe];
 
-    for (const script of scripts) {
+    for (const script of dateGateScripts) {
       expect(script).toContain("2026, 4, 25");
     }
+    expect(pluginUpdateProbe).toContain("month === 4 && day <= 25");
     expect(scripts.join("\n")).toContain("OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT");
     expect(scripts.join("\n")).toContain(
       "Package $package_version must support gateway install --wrapper.",
