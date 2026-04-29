@@ -6,7 +6,7 @@
 # Source run id : 2026-04-17T07-37-10Z
 # Source run dir: .artifacts/ghsa-detector-review-runs/2026-04-17T07-37-10Z
 # Generated at  : 2026-04-29T07:10:35.427Z
-# Rule count    : 148
+# Rule count    : 147
 rules:
   - id: ghsa-detector.ghsa-25gx-x37c-7pph.openclaw-novnc-x11vnc-missing-auth
     message: x11vnc starts without VNC authentication; avoid -nopw and require password auth when exposing noVNC observer access.
@@ -2063,64 +2063,6 @@ rules:
       - pattern-not-inside: |
           import { resolveMatrixMonitorAccessState, ... } from "$X";
           ...
-  - id: ghsa-detector.ghsa-ccx3-fw7q-rr2r.openclaw.base64-unbounded-decode-before-size-check
-    languages:
-      - typescript
-      - javascript
-    severity: WARNING
-    mode: taint
-    message: |
-      A base64 payload from an external/upstream source is decoded with Buffer.from($DATA, "base64") before a decoded-size guard. Large payloads can allocate unbounded memory before any limit is enforced. Add estimateBase64DecodedBytes($DATA) > MAX guard before the decode, or use rejectOversizedBase64Payload(). See GHSA-CCX3-FW7Q-RR2R.
-      TRIAGE NOTE: This rule can fire in cases where DOS is unlikely in practice — e.g. operator proxy config files, internal CLI tool images, or camera frames. In those cases, consider the realistic size bound: if the data source is inherently small (<1MB) or internally-controlled, this finding may be low-risk. Prioritize findings in media/attachment pipelines receiving data from external APIs or user-controlled sources.
-    metadata:
-      category: security
-      cwe:
-        - CWE-400
-      ghsas:
-        - GHSA-CCX3-FW7Q-RR2R
-      ghsa: GHSA-CCX3-FW7Q-RR2R
-      advisory-url: https://github.com/openclaw/openclaw/security/advisories/GHSA-CCX3-FW7Q-RR2R
-      detector-bucket: precise
-      source-run: 2026-04-17T07-37-10Z
-      source-rule-id: openclaw.base64-unbounded-decode-before-size-check
-    paths:
-      exclude:
-        - "**/*.test.*"
-        - "**/*.spec.*"
-        - src/media/sniff-mime-from-base64.ts
-        - openclaw/plugin-sdk/media-runtime.ts
-        - extensions/device-pair/index.ts
-        - extensions/zalouser/src/qr-temp-file.ts
-        - extensions/voice-call/src/providers/telnyx.ts
-    pattern-sources:
-      - patterns:
-          - pattern: $OBJ.$FIELD
-          - metavariable-regex:
-              metavariable: $FIELD
-              regex: ^(base64|data|content|body|payload|attachment|image|video|audio|file|blob|raw|encoded|b64|bytes)$|^[a-z][a-zA-Z0-9]*(Base64|Data|Content|Body|Payload|Attachment|Image|Video|Audio|File|Blob|Raw|Encoded|B64|Bytes)$
-          - metavariable-regex:
-              metavariable: $OBJ
-              regex: ^(result|response|res|msg|message|attachment|media|data|payload|content|image|file|item|event|chunk|frame|part|body|ext|ctx|upload|entry|inline)$|^[a-z][a-zA-Z0-9]*(Result|Response|Res|Msg|Message|Attachment|Media|Data|Payload|Content|Image|File|Item|Event|Chunk|Frame|Part|Body|Upload|Entry|Inline)$
-      - patterns:
-          - pattern: $DATA
-          - metavariable-regex:
-              metavariable: $DATA
-              regex: ^(base64|pngBase64|jpegBase64|imageBase64|mediaBase64|attachmentBase64|contentBase64|bodyBase64|rawBase64|b64Data|encodedData|contentBytes)$
-    pattern-sanitizers:
-      - pattern: estimateBase64DecodedBytes(...)
-      - pattern: rejectOversizedBase64Payload(...)
-      - patterns:
-          - pattern: |
-              if (estimateBase64DecodedBytes($DATA) > $LIMIT) { ... }
-              Buffer.from($DATA, ...)
-      - patterns:
-          - pattern: |
-              if (estimateBase64DecodedBytes($DATA) > $LIMIT) { ... }
-              ...
-              Buffer.from($DATA, ...)
-    pattern-sinks:
-      - pattern: Buffer.from($DATA, "base64")
-      - pattern: Buffer.from($DATA, 'base64')
   - id: ghsa-detector.ghsa-cg6c-q2hx-69h7.plivo-v2-replay-key-uses-full-verification-url
     message: Plivo V2 replay keys should be derived from the signed base URL without the query string; hashing the full verification URL lets query-only variants mint fresh verifiedRequestKey values.
     severity: ERROR

@@ -5,13 +5,13 @@
   "generatedAt": "2026-04-29T07:10:35.427Z",
   "totals": {
     "cases": 507,
-    "casesWithAnyRule": 151,
+    "casesWithAnyRule": 150,
     "preciseRulesGenerated": 149,
     "preciseSkipped": 3,
     "preciseRulesExisting": 0,
     "preciseRulesAppended": 149,
     "preciseRulesDuplicateSkipped": 0,
-    "preciseRules": 148,
+    "preciseRules": 147,
     "preciseInvalid": 1
   },
   "cases": {
@@ -310,12 +310,6 @@
     "GHSA-9WQX-G2CW-VC7R": {
       "precise": [
         "ghsa-detector.ghsa-9wqx-g2cw-vc7r.matrix-verification-notice-missing-dm-access-gate"
-      ],
-      "errors": {}
-    },
-    "GHSA-CCX3-FW7Q-RR2R": {
-      "precise": [
-        "ghsa-detector.ghsa-ccx3-fw7q-rr2r.openclaw.base64-unbounded-decode-before-size-check"
       ],
       "errors": {}
     },
