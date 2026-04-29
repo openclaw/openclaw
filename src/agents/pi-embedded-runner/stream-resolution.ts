@@ -73,7 +73,7 @@ export function resolveEmbeddedAgentStreamFn(params: {
   authStorage?: { getApiKey(provider: string): Promise<string | undefined> };
 }): StreamFn {
   if (params.providerStreamFn) {
-    return wrapEmbeddedAgentStreamFn(params.providerStreamFn, {
+    return wrapEmbeddedAgentStreamFnWithApiKey(params.providerStreamFn, {
       runSignal: params.signal,
       resolvedApiKey: params.resolvedApiKey,
       authStorage: params.authStorage,
@@ -112,7 +112,7 @@ export function resolveEmbeddedAgentStreamFn(params: {
       // inject the resolved runtime key for them. Without this wrap, OAuth
       // providers (e.g. openai-codex/gpt-5.5) hit the Responses API with an
       // empty bearer and fail with 401 Missing bearer auth header.
-      return wrapEmbeddedAgentStreamFn(boundaryAwareStreamFn, {
+      return wrapEmbeddedAgentStreamFnWithApiKey(boundaryAwareStreamFn, {
         runSignal: params.signal,
         resolvedApiKey: params.resolvedApiKey,
         authStorage: params.authStorage,
@@ -124,7 +124,7 @@ export function resolveEmbeddedAgentStreamFn(params: {
   return currentStreamFn;
 }
 
-function wrapEmbeddedAgentStreamFn(
+export function wrapEmbeddedAgentStreamFnWithApiKey(
   inner: StreamFn,
   params: {
     runSignal: AbortSignal | undefined;

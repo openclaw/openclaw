@@ -6,6 +6,7 @@ import {
   describeEmbeddedAgentStreamStrategy,
   resolveEmbeddedAgentApiKey,
   resolveEmbeddedAgentStreamFn,
+  wrapEmbeddedAgentStreamFnWithApiKey,
 } from "./stream-resolution.js";
 
 // Wrap createBoundaryAwareStreamFnForModel with a spy that delegates to the
@@ -173,6 +174,21 @@ describe("resolveEmbeddedAgentStreamFn", () => {
     });
     expect(authStorage.getApiKey).not.toHaveBeenCalled();
     expect(providerStreamFn).toHaveBeenCalledTimes(1);
+  });
+
+  it("can re-apply the resolved api key after provider wrappers replace the stream function", async () => {
+    const replacementStreamFn = vi.fn(async (_model, _context, options) => options);
+    const streamFn = wrapEmbeddedAgentStreamFnWithApiKey(replacementStreamFn as never, {
+      runSignal: undefined,
+      resolvedApiKey: "resolved-key",
+      authStorage: undefined,
+      providerId: "openai-codex",
+    });
+
+    await expect(
+      streamFn({ provider: "openai-codex", id: "gpt-5.5" } as never, {} as never, {}),
+    ).resolves.toMatchObject({ apiKey: "resolved-key" });
+    expect(replacementStreamFn).toHaveBeenCalledTimes(1);
   });
 
   it("forwards the run abort signal into provider-owned stream functions", async () => {

@@ -1021,10 +1021,7 @@ describe("openai transport stream", () => {
     );
     expect(params.prompt_cache_key).toBe("session-123");
     expect(params.prompt_cache_retention).toBeUndefined();
-    expect(params.metadata).toEqual({
-      openclaw_session_id: "session-123",
-      openclaw_turn_id: "turn-123",
-    });
+    expect(params).not.toHaveProperty("metadata");
     expect(params.store).toBe(false);
     expect(params.max_output_tokens).toBe(1024);
     expect(params.temperature).toBe(0.2);
@@ -1611,6 +1608,37 @@ describe("openai transport stream", () => {
       openclaw_turn_attempt: "1",
       openclaw_transport: "stream",
     });
+  });
+
+  it("omits native turn metadata on Codex Responses routes", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "gpt-5.5",
+        name: "GPT-5.5",
+        api: "openai-codex-responses",
+        provider: "openai-codex",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 400000,
+        maxTokens: 128000,
+      } satisfies Model<"openai-codex-responses">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      { sessionId: "session-123" } as never,
+      {
+        openclaw_session_id: "session-123",
+        openclaw_turn_id: "turn-123",
+        openclaw_turn_attempt: "1",
+        openclaw_transport: "stream",
+      },
+    ) as { metadata?: Record<string, string> };
+
+    expect(params).not.toHaveProperty("metadata");
   });
 
   it("leaves proxy-like OpenAI Responses routes without native turn metadata by default", () => {

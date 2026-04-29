@@ -205,6 +205,7 @@ import {
   resolveEmbeddedAgentApiKey,
   resolveEmbeddedAgentBaseStreamFn,
   resolveEmbeddedAgentStreamFn,
+  wrapEmbeddedAgentStreamFnWithApiKey,
 } from "../stream-resolution.js";
 import {
   applySystemPromptOverrideToSession,
@@ -1703,6 +1704,15 @@ export async function runEmbeddedAttempt(
         preparedRuntimeExtraParams
           ? { preparedExtraParams: preparedRuntimeExtraParams }
           : undefined,
+      );
+      activeSession.agent.streamFn = wrapEmbeddedAgentStreamFnWithApiKey(
+        activeSession.agent.streamFn,
+        {
+          runSignal: runAbortController.signal,
+          resolvedApiKey: params.resolvedApiKey,
+          authStorage: params.authStorage,
+          providerId: params.provider,
+        },
       );
       const effectivePromptCacheRetention = resolveCacheRetention(
         effectiveExtraParams,

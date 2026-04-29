@@ -748,6 +748,7 @@ export function createOpenAIResponsesTransportStreamFn(): StreamFn {
           attempt: 1,
           transport: "stream",
         });
+        const turnMetadata = isOpenAICodexResponsesModel(model) ? undefined : turnState?.metadata;
         const client = createOpenAIResponsesClient(
           model,
           context,
@@ -759,13 +760,13 @@ export function createOpenAIResponsesTransportStreamFn(): StreamFn {
           model,
           context,
           options as OpenAIResponsesOptions,
-          turnState?.metadata,
+          turnMetadata,
         );
         const nextParams = await options?.onPayload?.(params, model);
         if (nextParams !== undefined) {
           params = nextParams as typeof params;
         }
-        params = mergeTransportMetadata(params, turnState?.metadata);
+        params = mergeTransportMetadata(params, turnMetadata);
         const responseStream = (await client.responses.create(
           params as never,
           buildOpenAISdkRequestOptions(model, options?.signal),
@@ -903,7 +904,7 @@ export function buildOpenAIResponsesParams(
     prompt_cache_key: cacheRetention === "none" ? undefined : options?.sessionId,
     prompt_cache_retention: getPromptCacheRetention(model.baseUrl, cacheRetention),
     ...(isCodexResponses ? { instructions: buildOpenAICodexResponsesInstructions(context) } : {}),
-    ...(metadata ? { metadata } : {}),
+    ...(metadata && !isCodexResponses ? { metadata } : {}),
   };
   if (options?.maxTokens) {
     params.max_output_tokens = options.maxTokens;
