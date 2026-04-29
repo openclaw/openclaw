@@ -167,6 +167,7 @@ export async function start(state: CronServiceState) {
 
   await runMissedJobs(state, {
     skipJobIds: interruptedJobIds.size > 0 ? interruptedJobIds : undefined,
+    deferAgentTurnJobs: true,
   });
 
   await locked(state, async () => {
@@ -174,7 +175,7 @@ export async function start(state: CronServiceState) {
     // this path runs before the scheduler begins servicing regular timer ticks.
     // Avoid an extra reload/write cycle on startup.
     await ensureLoaded(state, { skipRecompute: true });
-    const changed = recomputeNextRuns(state);
+    const changed = recomputeNextRunsForMaintenance(state, { recomputeExpired: true });
     if (changed) {
       await persist(state);
     }

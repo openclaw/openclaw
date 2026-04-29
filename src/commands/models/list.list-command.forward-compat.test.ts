@@ -125,6 +125,9 @@ function installModelsListCommandForwardCompatMocks() {
   vi.doMock("../../agents/model-suppression.js", () => ({
     shouldSuppressBuiltInModel: suppressOpenAiSpark,
     shouldSuppressBuiltInModelFromManifest: suppressOpenAiSpark,
+    createManifestBuiltInModelSuppressor: vi.fn(
+      () => (model: { provider?: string | null; id?: string | null }) => suppressOpenAiSpark(model),
+    ),
   }));
 
   vi.doMock("./load-config.js", () => ({
@@ -156,7 +159,7 @@ function installModelsListCommandForwardCompatMocks() {
   vi.doMock("./list.registry-load.js", () => ({
     loadListModelRegistry: async (
       cfg: unknown,
-      opts?: { providerFilter?: string; normalizeModels?: boolean },
+      opts?: { providerFilter?: string; normalizeModels?: boolean; loadAvailability?: boolean },
     ): Promise<{
       models: Array<{ provider: string; id: string }>;
       availableKeys?: Set<string>;
@@ -747,15 +750,55 @@ describe("modelsListCommand forward-compat", () => {
       ]);
     });
 
-    it("does not fall back to the registry for provider filters without catalog coverage", async () => {
+    it("falls back to registry rows for provider filters without catalog coverage", async () => {
       mocks.resolveConfiguredEntries.mockReturnValueOnce({ entries: [] });
       mocks.hasProviderStaticCatalogForFilter.mockResolvedValueOnce(false);
+      mocks.loadModelRegistry.mockResolvedValueOnce({
+        models: [
+          {
+            provider: "anthropic",
+            id: "claude-opus-4-7",
+            name: "Claude Opus 4.7",
+            api: "anthropic-messages",
+            baseUrl: "https://api.anthropic.com/v1",
+            input: ["text", "image"],
+            contextWindow: 1_000_000,
+            maxTokens: 64_000,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          },
+        ],
+        availableKeys: undefined,
+        registry: {
+          getAll: () => [
+            {
+              provider: "anthropic",
+              id: "claude-opus-4-7",
+              name: "Claude Opus 4.7",
+              api: "anthropic-messages",
+              baseUrl: "https://api.anthropic.com/v1",
+              input: ["text", "image"],
+              contextWindow: 1_000_000,
+              maxTokens: 64_000,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            },
+          ],
+        },
+      });
       const runtime = createRuntime();
 
-      await modelsListCommand({ all: true, provider: "openrouter", json: true }, runtime as never);
+      await modelsListCommand({ all: true, provider: "anthropic", json: true }, runtime as never);
 
-      expect(mocks.loadModelRegistry).not.toHaveBeenCalled();
-      expect(runtime.log).toHaveBeenCalledWith("No models found.");
+      expect(mocks.loadModelRegistry).toHaveBeenCalledWith(mocks.resolvedConfig, {
+        providerFilter: "anthropic",
+        normalizeModels: false,
+        loadAvailability: false,
+      });
+      expect(lastPrintedRows<{ key: string; available: boolean }>()).toEqual([
+        expect.objectContaining({
+          key: "anthropic/claude-opus-4-7",
+          available: false,
+        }),
+      ]);
     });
 
     it("includes provider-owned supplemental catalog rows with provider filters", async () => {

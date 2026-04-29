@@ -198,7 +198,9 @@ describe("prepareBundledPluginRuntimeRoot", () => {
     }
 
     const realReadFileSync = fs.readFileSync.bind(fs);
+    const realReaddirSync = fs.readdirSync.bind(fs);
     const readPaths: string[] = [];
+    const readdirPaths: string[] = [];
     vi.spyOn(fs, "readFileSync").mockImplementation(((target, options) => {
       const targetPath = target.toString();
       if (targetPath === rootChunk || targetPath === externalChunk) {
@@ -206,6 +208,16 @@ describe("prepareBundledPluginRuntimeRoot", () => {
       }
       return realReadFileSync(target, options as never);
     }) as typeof fs.readFileSync);
+    vi.spyOn(fs, "readdirSync").mockImplementation(((target, options) => {
+      const targetPath = target.toString();
+      if (
+        targetPath === path.join(packageRoot, "dist") &&
+        new Error().stack?.includes("mirrorBundledRuntimeDistRootEntries")
+      ) {
+        readdirPaths.push(targetPath);
+      }
+      return realReaddirSync(target, options as never);
+    }) as typeof fs.readdirSync);
 
     for (const pluginId of ["alpha", "beta"]) {
       const pluginRoot = path.join(packageRoot, "dist", "extensions", pluginId);
@@ -219,6 +231,75 @@ describe("prepareBundledPluginRuntimeRoot", () => {
 
     expect(readPaths.filter((entry) => entry === rootChunk)).toHaveLength(1);
     expect(readPaths.filter((entry) => entry === externalChunk)).toHaveLength(1);
+    expect(readdirPaths).toHaveLength(1);
+  });
+
+  it("does not memoize source-checkout dist mirrors", () => {
+    const packageRoot = makeTempRoot();
+    const stageDir = makeTempRoot();
+    const env = { ...process.env, OPENCLAW_PLUGIN_STAGE_DIR: stageDir };
+    fs.mkdirSync(path.join(packageRoot, ".git"), { recursive: true });
+    fs.mkdirSync(path.join(packageRoot, "src"), { recursive: true });
+    fs.mkdirSync(path.join(packageRoot, "extensions"), { recursive: true });
+    const pluginRoot = path.join(packageRoot, "dist", "extensions", "alpha");
+    fs.mkdirSync(pluginRoot, { recursive: true });
+    fs.writeFileSync(
+      path.join(packageRoot, "package.json"),
+      JSON.stringify({ name: "openclaw", version: "2026.4.27", type: "module" }),
+      "utf8",
+    );
+    fs.writeFileSync(path.join(packageRoot, "dist", "shared-runtime.js"), "export {};\n", "utf8");
+    fs.writeFileSync(
+      path.join(pluginRoot, "index.js"),
+      `import "../../shared-runtime.js"; export default { id: "alpha" };\n`,
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(pluginRoot, "package.json"),
+      JSON.stringify(
+        {
+          name: "@openclaw/alpha",
+          version: "1.0.0",
+          type: "module",
+          dependencies: { "alpha-runtime": "1.0.0" },
+          openclaw: { extensions: ["./index.js"] },
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+    const installRoot = resolveBundledRuntimeDependencyInstallRoot(pluginRoot, { env });
+    fs.mkdirSync(path.join(installRoot, "node_modules", "alpha-runtime"), { recursive: true });
+    fs.writeFileSync(
+      path.join(installRoot, "node_modules", "alpha-runtime", "package.json"),
+      JSON.stringify({ name: "alpha-runtime", version: "1.0.0", type: "module" }),
+      "utf8",
+    );
+
+    const realReaddirSync = fs.readdirSync.bind(fs);
+    const readdirPaths: string[] = [];
+    vi.spyOn(fs, "readdirSync").mockImplementation(((target, options) => {
+      const targetPath = target.toString();
+      if (
+        targetPath === path.join(packageRoot, "dist") &&
+        new Error().stack?.includes("mirrorBundledRuntimeDistRootEntries")
+      ) {
+        readdirPaths.push(targetPath);
+      }
+      return realReaddirSync(target, options as never);
+    }) as typeof fs.readdirSync);
+
+    for (let index = 0; index < 2; index += 1) {
+      prepareBundledPluginRuntimeRoot({
+        pluginId: "alpha",
+        pluginRoot,
+        modulePath: path.join(pluginRoot, "index.js"),
+        env,
+      });
+    }
+
+    expect(readdirPaths).toHaveLength(2);
   });
 
   it("does not copy staged runtime mirror dist files onto themselves", () => {

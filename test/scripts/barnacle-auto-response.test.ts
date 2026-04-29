@@ -290,10 +290,10 @@ describe("barnacle-auto-response", () => {
     );
   });
 
-  it("does not close clownfish PRs for the active PR limit", async () => {
+  it("does not close ClawSweeper PRs for the active PR limit", async () => {
     for (const headRef of [
-      { head: { ref: "clownfish/clawsweeper-openclaw-openclaw-73880" } },
-      { headRefName: "clownfish/clawsweeper-openclaw-openclaw-73880" },
+      { head: { ref: "clawsweeper/openclaw-openclaw-73880" } },
+      { headRefName: "clawsweeper/openclaw-openclaw-73880" },
     ]) {
       const { calls, github } = barnacleGithub([]);
 
@@ -303,7 +303,7 @@ describe("barnacle-auto-response", () => {
           {
             ...headRef,
             user: {
-              login: "app/openclaw-clownfish",
+              login: "app/openclaw-clawsweeper",
             },
           },
           ["r: too-many-prs"],
