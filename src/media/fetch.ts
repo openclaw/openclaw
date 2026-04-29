@@ -6,6 +6,8 @@ import {
   withTrustedExplicitProxyGuardedFetchMode,
 } from "../infra/net/fetch-guard.js";
 import type { LookupFn, PinnedDispatcherPolicy, SsrFPolicy } from "../infra/net/ssrf.js";
+import { retryAsync, type RetryConfig, type RetryInfo } from "../infra/retry.js";
+import { isAbortError, isTransientNetworkError } from "../infra/unhandled-rejections.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { MAX_DOCUMENT_BYTES } from "./constants.js";
 import { detectMime, extensionForMime } from "./mime.js";
@@ -23,11 +25,17 @@ export type MediaFetchErrorCode = "max_bytes" | "http_error" | "fetch_failed";
 
 export class MediaFetchError extends Error {
   readonly code: MediaFetchErrorCode;
+  readonly status?: number;
 
-  constructor(code: MediaFetchErrorCode, message: string, options?: { cause?: unknown }) {
+  constructor(
+    code: MediaFetchErrorCode,
+    message: string,
+    options?: { cause?: unknown; status?: number },
+  ) {
     super(message, options);
     this.code = code;
     this.name = "MediaFetchError";
+    this.status = options?.status;
   }
 }
 
@@ -36,6 +44,11 @@ export type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promis
 export type FetchDispatcherAttempt = {
   dispatcherPolicy?: PinnedDispatcherPolicy;
   lookupFn?: LookupFn;
+};
+
+export type FetchMediaRetryOptions = RetryConfig & {
+  shouldRetry?: (error: unknown, attempt: number) => boolean;
+  onRetry?: (info: RetryInfo) => void;
 };
 
 type FetchMediaOptions = {
@@ -52,6 +65,7 @@ type FetchMediaOptions = {
   dispatcherPolicy?: PinnedDispatcherPolicy;
   dispatcherAttempts?: FetchDispatcherAttempt[];
   shouldRetryFetchError?: (error: unknown) => boolean;
+  retry?: FetchMediaRetryOptions;
   /**
    * Allow an operator-configured explicit proxy to resolve target DNS after
    * hostname-policy checks instead of forcing local pinned-DNS first.
@@ -106,7 +120,40 @@ function redactMediaUrl(url: string): string {
   return redactSensitiveText(url);
 }
 
+function isRetryableHttpStatus(status: number | undefined): boolean {
+  return typeof status === "number" && status >= 500 && status <= 599;
+}
+
+function isRetryableMediaFetchError(err: unknown): boolean {
+  if (!(err instanceof MediaFetchError)) {
+    return false;
+  }
+  if (isAbortError(err) || isAbortError(err.cause)) {
+    return false;
+  }
+  if (err.code === "http_error") {
+    return isRetryableHttpStatus(err.status);
+  }
+  if (err.code === "fetch_failed") {
+    return isTransientNetworkError(err.cause ?? err);
+  }
+  return false;
+}
+
 export async function fetchRemoteMedia(options: FetchMediaOptions): Promise<FetchMediaResult> {
+  if (!options.retry) {
+    return await fetchRemoteMediaOnce(options);
+  }
+
+  return await retryAsync(() => fetchRemoteMediaOnce(options), {
+    label: "media-fetch",
+    ...options.retry,
+    shouldRetry: (err, attempt) =>
+      options.retry?.shouldRetry?.(err, attempt) ?? isRetryableMediaFetchError(err),
+  });
+}
+
+async function fetchRemoteMediaOnce(options: FetchMediaOptions): Promise<FetchMediaResult> {
   const {
     url,
     fetchImpl,
@@ -209,6 +256,7 @@ export async function fetchRemoteMedia(options: FetchMediaOptions): Promise<Fetc
       throw new MediaFetchError(
         "http_error",
         `Failed to fetch media from ${sourceUrl}${redirected}: ${redactSensitiveText(detail)}`,
+        { status: res.status },
       );
     }
 

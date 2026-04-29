@@ -69,7 +69,11 @@ describe("media understanding attachment URL fallback", () => {
         expect(result.path).toBeTruthy();
         expect(fetchRemoteMediaMock).toHaveBeenCalledTimes(1);
         expect(fetchRemoteMediaMock).toHaveBeenCalledWith(
-          expect.objectContaining({ url: fallbackUrl, maxBytes: 1024 }),
+          expect.objectContaining({
+            url: fallbackUrl,
+            maxBytes: 1024,
+            retry: expect.objectContaining({ attempts: 3 }),
+          }),
         );
         // Clean up the temp file
         if (result.cleanup) {
@@ -91,7 +95,11 @@ describe("media understanding attachment URL fallback", () => {
         expect(result.buffer.toString()).toBe("fallback-buffer");
         expect(fetchRemoteMediaMock).toHaveBeenCalledTimes(1);
         expect(fetchRemoteMediaMock).toHaveBeenCalledWith(
-          expect.objectContaining({ url: fallbackUrl, maxBytes: 1024 }),
+          expect.objectContaining({
+            url: fallbackUrl,
+            maxBytes: 1024,
+            retry: expect.objectContaining({ attempts: 3 }),
+          }),
         );
       },
     );
