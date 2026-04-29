@@ -2,21 +2,22 @@
 /**
  * compile-opengrep-rules.mjs
  *
- * Compiles per-case OpenGrep rules from a GHSA detector-review run and appends
- * newly generated precise rules to security/opengrep/precise.yml, plus a
- * compile-manifest.json with traceability back to each source advisory.
+ * Compiles per-case OpenGrep rules from a GHSA detector-review run, appends
+ * newly generated precise rules to security/opengrep/precise.yml, and writes a
+ * run-local compile-manifest.json for compile auditing.
  *
  * Usage:
- *   node scripts/compile-opengrep-rules.mjs --run-dir <path> [--out-dir <path>]
+ *   node scripts/compile-opengrep-rules.mjs --run-dir <path> [--out-dir <path>] [--manifest-dir <path>]
  *
  * Inputs:
- *   --run-dir <path>   Required. A run dir produced by run-ghsa-detector-review-batch.mjs
- *                      (e.g. .artifacts/ghsa-detector-review-runs/<run-id>/).
- *   --out-dir <path>   Optional. Default: <repo>/security/opengrep/.
+ *   --run-dir <path>       Required. A run dir produced by run-ghsa-detector-review-batch.mjs
+ *                          (e.g. .artifacts/ghsa-detector-review-runs/<run-id>/).
+ *   --out-dir <path>       Optional. Default: <repo>/security/opengrep/.
+ *   --manifest-dir <path>  Optional. Default: <run-dir>/.
  *
  * Outputs:
- *   <out-dir>/precise.yml              Existing precise super-config plus new precise rules
- *   <out-dir>/compile-manifest.json    Per-rule provenance map
+ *   <out-dir>/precise.yml                 Existing precise super-config plus new precise rules
+ *   <manifest-dir>/compile-manifest.json  Run-local compile summary and skip details
  *
  * Each rule's id is rewritten to `ghsa-detector.<ghsa-lower>.<original-id>`
  * (ASCII-sanitized). Each rule's metadata is augmented with:
@@ -42,10 +43,11 @@ function printHelp() {
 
 Options:
   --run-dir <path>     Required. Detector-review run directory.
-  --out-dir <path>     Output directory (default: <repo>/security/opengrep).
-  --advisory-repo <r>  GitHub owner/repo used in advisory-url metadata.
-                       Default: ${REPO_BASENAME}
-  --replace-precise    Replace precise.yml instead of appending new rule ids.
+  --out-dir <path>       Output directory for precise.yml (default: <repo>/security/opengrep).
+  --manifest-dir <path>  Directory for compile-manifest.json (default: <run-dir>).
+  --advisory-repo <r>    GitHub owner/repo used in advisory-url metadata.
+                         Default: ${REPO_BASENAME}
+  --replace-precise      Replace precise.yml instead of appending new rule ids.
   --help               Show this help.
 `);
 }
@@ -54,6 +56,7 @@ function parseArgs(argv) {
   const opts = {
     runDir: "",
     outDir: "",
+    manifestDir: "",
     advisoryRepo: REPO_BASENAME,
     replacePrecise: false,
   };
@@ -66,6 +69,10 @@ function parseArgs(argv) {
         break;
       case "--out-dir":
         opts.outDir = path.resolve(argv[i + 1] ?? "");
+        i += 1;
+        break;
+      case "--manifest-dir":
+        opts.manifestDir = path.resolve(argv[i + 1] ?? "");
         i += 1;
         break;
       case "--advisory-repo":
@@ -601,13 +608,19 @@ async function writeOutputs(buckets, manifest, outDir, opts) {
   manifest.preciseInvalid = droppedDetails;
   manifest.preciseDuplicateSkipped = appendResult.skippedDuplicateIds;
 
-  const manifestPath = path.join(outDir, "compile-manifest.json");
+  const manifestDir = opts.manifestDir || opts.runDir;
+  await fs.mkdir(manifestDir, { recursive: true });
+  const manifestPath = path.join(manifestDir, "compile-manifest.json");
+  manifest.output = { precisePath, manifestPath };
   await fs.writeFile(manifestPath, JSON.stringify(manifest, null, 2) + "\n");
 }
 
 function printSummary(buckets, manifest, outDir) {
   console.log(`compile-opengrep-rules: done`);
   console.log(`  out-dir          : ${outDir}`);
+  if (manifest.output?.manifestPath) {
+    console.log(`  manifest         : ${manifest.output.manifestPath}`);
+  }
   console.log(`  cases scanned    : ${manifest.totals.cases}`);
   console.log(`  cases with rules : ${manifest.totals.casesWithAnyRule}`);
   console.log(

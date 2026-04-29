@@ -23,8 +23,7 @@ security/
 │       └── init_case.py                   <- per-case workspace initializer
 └── opengrep/
     ├── README.md                          <- precise rulepack details + regen recipe
-    ├── precise.yml                        <- compiled super-config: precise rules
-    └── compile-manifest.json              <- per-rule provenance back to source advisories
+    └── precise.yml                        <- compiled super-config: precise rules
 ```
 
 The two scripts that drive everything live under `scripts/`:
@@ -50,7 +49,7 @@ GitHub Advisory API ─► run-ghsa-detector-review-batch.mjs ─► .artifacts/
                                                     |             └── cases/<ghsa>/...
                                                     v
                               compile-opengrep-rules.mjs ─► security/opengrep/precise.yml
-                                                                  + compile-manifest.json
+                                                        └── run-local compile-manifest.json
                                                     |
                                                     v
                               .github/workflows/opengrep-precise.yml
@@ -113,7 +112,10 @@ node scripts/compile-opengrep-rules.mjs \
   --run-dir .artifacts/ghsa-detector-review-runs/<RUN_ID>
 ```
 
-Then commit the diff under `security/opengrep/`.
+Then commit the `security/opengrep/precise.yml` diff. The compile manifest is
+written into the run directory as a local troubleshooting artifact; durable rule
+provenance lives in each compiled rule's metadata and is checked by
+`pnpm check:opengrep-rule-metadata`.
 
 Rule quality contract: precise rules must catch the vulnerable behavior they were
 written for, should be silent on the corresponding fixed behavior when a fix
@@ -163,6 +165,7 @@ Both workflows:
 - Inherit the same `.semgrepignore` exclusions used by the local wrapper
 - Upload SARIF to GitHub Code Scanning under stable OpenGrep categories
 - Fail on precise findings so the rulepack acts as a regression firewall
+- Enforce committed rule provenance with `pnpm check:opengrep-rule-metadata`
 
 ## Silencing or removing rules
 
@@ -173,7 +176,7 @@ To drop a noisy rule:
 1. Delete the offending source rule from
    `.artifacts/ghsa-detector-review-runs/<RUN_ID>/cases/<ghsa>/.tmp/ghsa-detector-review/<ghsa>/opengrep/`
 2. Re-run `node scripts/compile-opengrep-rules.mjs --run-dir <run-dir>`
-3. Commit the resulting `security/opengrep/precise.yml` and `compile-manifest.json` diff
+3. Commit the resulting `security/opengrep/precise.yml` diff
 
 To narrow a rule's path scope, edit the source rule's `paths.include` /
 `paths.exclude` fields in the same artifact location and recompile.
@@ -181,6 +184,8 @@ To narrow a rule's path scope, edit the source rule's `paths.include` /
 ## Tracing a finding back to its advisory
 
 Every compiled rule's `id` is `ghsa-detector.<ghsa-lower>.<original-id>` and
-its `metadata` includes `ghsa`, `advisory-url`, `detector-bucket`, and
-`source-rule-id`. The full forward map (ghsa → precise rule IDs → errors)
-lives in `security/opengrep/compile-manifest.json`.
+its `metadata` includes `ghsa`, `advisory-url`, `detector-bucket`, `source-run`,
+and `source-rule-id`. `pnpm check:opengrep-rule-metadata` enforces those durable
+source fields so each committed rule is traceable without a separate committed
+manifest. The compile manifest is written into the detector-review run directory
+for local audit/debugging of a specific compile run.
