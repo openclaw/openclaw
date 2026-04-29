@@ -794,22 +794,8 @@ verify_gateway_status() {
 }
 
 prepare_agent_workspace() {
-  guest_exec /bin/sh -lc 'set -eu
-workspace="${OPENCLAW_WORKSPACE_DIR:-$HOME/.openclaw/workspace}"
-mkdir -p "$workspace/.openclaw"
-cat > "$workspace/IDENTITY.md" <<'"'"'IDENTITY_EOF'"'"'
-# Identity
-
-- Name: OpenClaw
-- Purpose: Parallels Linux smoke test assistant.
-IDENTITY_EOF
-cat > "$workspace/.openclaw/workspace-state.json" <<'"'"'STATE_EOF'"'"'
-{
-  "version": 1,
-  "setupCompletedAt": "2026-01-01T00:00:00.000Z"
-}
-STATE_EOF
-rm -f "$workspace/BOOTSTRAP.md"'
+  guest_exec /bin/sh -lc "set -eu
+$(parallels_bash_seed_workspace_snippet "Parallels Linux smoke test assistant.")"
 }
 
 verify_local_turn() {

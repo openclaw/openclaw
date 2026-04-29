@@ -2589,28 +2589,7 @@ show_gateway_status_compat() {
 verify_turn() {
   guest_run_openclaw "" "" models set "$MODEL_ID"
   guest_run_openclaw "" "" config set agents.defaults.skipBootstrap true --strict-json
-  guest_powershell "$(cat <<'EOF'
-$workspace = $env:OPENCLAW_WORKSPACE_DIR
-if (-not $workspace) {
-  $workspace = Join-Path $env:USERPROFILE '.openclaw\workspace'
-}
-$stateDir = Join-Path $workspace '.openclaw'
-New-Item -ItemType Directory -Path $stateDir -Force | Out-Null
-@'
-# Identity
-
-- Name: OpenClaw
-- Purpose: Parallels Windows smoke test assistant.
-'@ | Set-Content -Path (Join-Path $workspace 'IDENTITY.md') -Encoding UTF8
-@'
-{
-  "version": 1,
-  "setupCompletedAt": "2026-01-01T00:00:00.000Z"
-}
-'@ | Set-Content -Path (Join-Path $stateDir 'workspace-state.json') -Encoding UTF8
-Remove-Item (Join-Path $workspace 'BOOTSTRAP.md') -Force -ErrorAction SilentlyContinue
-EOF
-  )"
+  guest_powershell "$(parallels_powershell_seed_workspace_snippet "Parallels Windows smoke test assistant.")"
   stop_gateway_processes_for_local_agent_turn
   guest_run_agent_turn_process
 }

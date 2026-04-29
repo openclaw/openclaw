@@ -222,13 +222,10 @@ run_wrapper_flow() {
   export USER="testuser"
   mkdir -p "$HOME/.local/bin"
   local wrapper="$HOME/.local/bin/openclaw-wrapper"
-  cat >"$wrapper" <<WRAPPER
-#!/usr/bin/env bash
-set -euo pipefail
-printf "%s\n" "\$@" >> "$HOME/openclaw-wrapper-argv.log"
-exec "$npm_bin" "\$@"
-WRAPPER
-  chmod +x "$wrapper"
+  node scripts/e2e/lib/doctor-install-switch/write-wrapper.mjs \
+    "$wrapper" \
+    "$npm_bin" \
+    "$HOME/openclaw-wrapper-argv.log"
 
   local unit_path="$HOME/.config/systemd/user/openclaw-gateway.service"
 
