@@ -107,6 +107,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 type HttpInstanceLike = {
+  request: (options?: Record<string, unknown>) => Promise<unknown>;
   get: (url: string, options?: Record<string, unknown>) => Promise<unknown>;
   post: (url: string, body?: unknown, options?: Record<string, unknown>) => Promise<unknown>;
 };
@@ -119,9 +120,36 @@ function readCallOptions(
   return isRecord(call) ? call : {};
 }
 
-function firstWsClientOptions(): { agent?: unknown; wsConfig?: unknown } {
+function firstWsClientOptions(): {
+  agent?: unknown;
+  autoReconnect?: unknown;
+  httpInstance?: HttpInstanceLike;
+  onReady?: unknown;
+  onError?: unknown;
+  onReconnecting?: unknown;
+  onReconnected?: unknown;
+} {
   const options = readCallOptions(wsClientCtorMock, 0);
-  return { agent: options.agent, wsConfig: options.wsConfig };
+  const httpInstance = options.httpInstance;
+  return {
+    agent: options.agent,
+    autoReconnect: options.autoReconnect,
+    httpInstance:
+      isRecord(httpInstance) &&
+      typeof httpInstance.request === "function" &&
+      typeof httpInstance.get === "function" &&
+      typeof httpInstance.post === "function"
+        ? {
+            request: httpInstance.request as HttpInstanceLike["request"],
+            get: httpInstance.get as HttpInstanceLike["get"],
+            post: httpInstance.post as HttpInstanceLike["post"],
+          }
+        : undefined,
+    onReady: options.onReady,
+    onError: options.onError,
+    onReconnecting: options.onReconnecting,
+    onReconnected: options.onReconnected,
+  };
 }
 
 beforeAll(async () => {
@@ -197,10 +225,12 @@ describe("createFeishuClient HTTP timeout", () => {
     const httpInstance = readCallOptions(clientCtorMock).httpInstance;
     if (
       isRecord(httpInstance) &&
+      typeof httpInstance.request === "function" &&
       typeof httpInstance.get === "function" &&
       typeof httpInstance.post === "function"
     ) {
       return {
+        request: httpInstance.request as HttpInstanceLike["request"],
         get: httpInstance.get as HttpInstanceLike["get"],
         post: httpInstance.post as HttpInstanceLike["post"],
       };
@@ -345,13 +375,111 @@ describe("createFeishuClient HTTP timeout", () => {
 });
 
 describe("createFeishuWSClient proxy handling", () => {
-  it("passes heartbeat wsConfig defaults to Lark.WSClient", async () => {
+  it("passes a guarded HTTP instance and lifecycle hooks to Lark.WSClient", async () => {
+    const lifecycleHooks = {
+      onReady: vi.fn(),
+      onError: vi.fn(),
+      onReconnecting: vi.fn(),
+      onReconnected: vi.fn(),
+    };
+
+    await createFeishuWSClient(baseAccount, lifecycleHooks);
+
+    const options = firstWsClientOptions();
+    expect(options.autoReconnect).toBe(true);
+    expect(options.httpInstance).toBeDefined();
+    expect(options.onReady).toBe(lifecycleHooks.onReady);
+    expect(options.onError).toBe(lifecycleHooks.onError);
+    expect(options.onReconnecting).toBe(lifecycleHooks.onReconnecting);
+    expect(options.onReconnected).toBe(lifecycleHooks.onReconnected);
+  });
+
+  it("guards invalid websocket heartbeat and reconnect endpoint config", async () => {
+    mockBaseHttpInstance.request.mockResolvedValueOnce({
+      code: 0,
+      data: {
+        URL: "wss://example.test/ws",
+        ClientConfig: {
+          PingInterval: 0,
+          ReconnectCount: -2,
+          ReconnectInterval: Number.NaN,
+          ReconnectNonce: -1,
+          ExtraField: "kept",
+        },
+      },
+    });
+
     await createFeishuWSClient(baseAccount);
 
     const options = firstWsClientOptions();
-    expect(options.wsConfig).toEqual({
-      PingInterval: 30,
-      PingTimeout: 3,
+    const response = await options.httpInstance?.request({ url: "https://example.test/ws-config" });
+    expect(mockBaseHttpInstance.request).toHaveBeenCalledWith(
+      expect.objectContaining({ timeout: FEISHU_HTTP_TIMEOUT_MS }),
+    );
+    expect(response).toEqual({
+      code: 0,
+      data: {
+        URL: "wss://example.test/ws",
+        ClientConfig: {
+          ExtraField: "kept",
+          PingInterval: 30,
+          ReconnectCount: -1,
+          ReconnectInterval: 120,
+          ReconnectNonce: 30,
+        },
+      },
+    });
+  });
+
+  it("preserves valid websocket endpoint reconnect config", async () => {
+    mockBaseHttpInstance.request.mockResolvedValueOnce({
+      code: 0,
+      data: {
+        URL: "wss://example.test/ws",
+        ClientConfig: {
+          PingInterval: 45,
+          ReconnectCount: 2.7,
+          ReconnectInterval: 15,
+          ReconnectNonce: 0,
+        },
+      },
+    });
+
+    await createFeishuWSClient(baseAccount);
+
+    const options = firstWsClientOptions();
+    const response = await options.httpInstance?.request({ url: "https://example.test/ws-config" });
+    expect(response).toEqual({
+      code: 0,
+      data: {
+        URL: "wss://example.test/ws",
+        ClientConfig: {
+          PingInterval: 45,
+          ReconnectCount: 2,
+          ReconnectInterval: 15,
+          ReconnectNonce: 0,
+        },
+      },
+    });
+  });
+
+  it("leaves non-websocket endpoint responses unchanged", async () => {
+    mockBaseHttpInstance.request.mockResolvedValueOnce({
+      code: 0,
+      data: {
+        value: true,
+      },
+    });
+
+    await createFeishuWSClient(baseAccount);
+
+    const options = firstWsClientOptions();
+    const response = await options.httpInstance?.request({ url: "https://example.test/other" });
+    expect(response).toEqual({
+      code: 0,
+      data: {
+        value: true,
+      },
     });
   });
 

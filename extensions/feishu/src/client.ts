@@ -15,9 +15,11 @@ export { pluginVersion };
 const FEISHU_USER_AGENT = `openclaw-feishu-builtin/${pluginVersion}/${process.platform}`;
 export { FEISHU_USER_AGENT };
 
-const FEISHU_WS_CONFIG = {
+const FEISHU_WS_CLIENT_CONFIG_DEFAULTS = {
   PingInterval: 30,
-  PingTimeout: 3,
+  ReconnectCount: -1,
+  ReconnectInterval: 120,
+  ReconnectNonce: 30,
 } as const;
 
 /** User-Agent header value for all Feishu API requests. */
@@ -87,6 +89,71 @@ type FeishuHttpInstanceLike = Pick<
   "request" | "get" | "post" | "put" | "patch" | "delete" | "head" | "options"
 >;
 
+export type FeishuWsLifecycleHooks = {
+  onReady?: () => void;
+  onError?: (err: Error) => void;
+  onReconnecting?: () => void;
+  onReconnected?: () => void;
+};
+
+type FeishuHttpResponseTransform = <R>(response: R) => R;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function coercePositiveNumber(value: unknown, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
+function coerceNonNegativeNumber(value: unknown, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : fallback;
+}
+
+function coerceReconnectCount(value: unknown, fallback: number): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return fallback;
+  }
+  const normalized = Math.floor(value);
+  return normalized >= -1 ? normalized : fallback;
+}
+
+function sanitizeFeishuWsEndpointResponse<R>(response: R): R {
+  if (!isRecord(response) || !isRecord(response.data)) {
+    return response;
+  }
+  const clientConfig = response.data.ClientConfig;
+  if (!isRecord(clientConfig)) {
+    return response;
+  }
+
+  return {
+    ...response,
+    data: {
+      ...response.data,
+      ClientConfig: {
+        ...clientConfig,
+        PingInterval: coercePositiveNumber(
+          clientConfig.PingInterval,
+          FEISHU_WS_CLIENT_CONFIG_DEFAULTS.PingInterval,
+        ),
+        ReconnectCount: coerceReconnectCount(
+          clientConfig.ReconnectCount,
+          FEISHU_WS_CLIENT_CONFIG_DEFAULTS.ReconnectCount,
+        ),
+        ReconnectInterval: coercePositiveNumber(
+          clientConfig.ReconnectInterval,
+          FEISHU_WS_CLIENT_CONFIG_DEFAULTS.ReconnectInterval,
+        ),
+        ReconnectNonce: coerceNonNegativeNumber(
+          clientConfig.ReconnectNonce,
+          FEISHU_WS_CLIENT_CONFIG_DEFAULTS.ReconnectNonce,
+        ),
+      },
+    },
+  } as R;
+}
+
 async function getWsProxyAgent() {
   return resolveAmbientNodeProxyAgent<Agent>();
 }
@@ -115,22 +182,30 @@ function resolveDomain(domain: FeishuDomain | undefined): Lark.Domain | string {
  * but injects a default request timeout and User-Agent header to prevent
  * indefinite hangs and set a standardized User-Agent per OAPI best practices.
  */
-function createTimeoutHttpInstance(defaultTimeoutMs: number): Lark.HttpInstance {
+function createTimeoutHttpInstance(
+  defaultTimeoutMs: number,
+  transformResponse?: FeishuHttpResponseTransform,
+): Lark.HttpInstance {
   const base: FeishuHttpInstanceLike = feishuClientSdk.defaultHttpInstance;
 
   function injectTimeout<D>(opts?: Lark.HttpRequestOptions<D>): Lark.HttpRequestOptions<D> {
     return { timeout: defaultTimeoutMs, ...opts } as Lark.HttpRequestOptions<D>;
   }
 
+  async function transform<R>(promise: Promise<R>): Promise<R> {
+    const response = await promise;
+    return transformResponse ? transformResponse(response) : response;
+  }
+
   return {
-    request: (opts) => base.request(injectTimeout(opts)),
-    get: (url, opts) => base.get(url, injectTimeout(opts)),
-    post: (url, data, opts) => base.post(url, data, injectTimeout(opts)),
-    put: (url, data, opts) => base.put(url, data, injectTimeout(opts)),
-    patch: (url, data, opts) => base.patch(url, data, injectTimeout(opts)),
-    delete: (url, opts) => base.delete(url, injectTimeout(opts)),
-    head: (url, opts) => base.head(url, injectTimeout(opts)),
-    options: (url, opts) => base.options(url, injectTimeout(opts)),
+    request: (opts) => transform(base.request(injectTimeout(opts))),
+    get: (url, opts) => transform(base.get(url, injectTimeout(opts))),
+    post: (url, data, opts) => transform(base.post(url, data, injectTimeout(opts))),
+    put: (url, data, opts) => transform(base.put(url, data, injectTimeout(opts))),
+    patch: (url, data, opts) => transform(base.patch(url, data, injectTimeout(opts))),
+    delete: (url, opts) => transform(base.delete(url, injectTimeout(opts))),
+    head: (url, opts) => transform(base.head(url, injectTimeout(opts))),
+    options: (url, opts) => transform(base.options(url, injectTimeout(opts))),
   };
 }
 
@@ -224,8 +299,12 @@ export function createFeishuClient(creds: FeishuClientCredentials): Lark.Client 
  * Create a Feishu WebSocket client for an account.
  * Note: WSClient is not cached since each call creates a new connection.
  */
-export async function createFeishuWSClient(account: ResolvedFeishuAccount): Promise<Lark.WSClient> {
+export async function createFeishuWSClient(
+  account: ResolvedFeishuAccount,
+  lifecycleHooks: FeishuWsLifecycleHooks = {},
+): Promise<Lark.WSClient> {
   const { accountId, appId, appSecret, domain } = account;
+  const defaultHttpTimeoutMs = resolveConfiguredHttpTimeoutMs(account);
 
   if (!appId || !appSecret) {
     throw new Error(`Feishu credentials not configured for account "${accountId}"`);
@@ -237,10 +316,13 @@ export async function createFeishuWSClient(account: ResolvedFeishuAccount): Prom
     appSecret,
     domain: resolveDomain(domain),
     loggerLevel: feishuClientSdk.LoggerLevel.info,
-    wsConfig: FEISHU_WS_CONFIG,
+    httpInstance: createTimeoutHttpInstance(defaultHttpTimeoutMs, sanitizeFeishuWsEndpointResponse),
+    autoReconnect: true,
+    onReady: lifecycleHooks.onReady,
+    onError: lifecycleHooks.onError,
+    onReconnecting: lifecycleHooks.onReconnecting,
+    onReconnected: lifecycleHooks.onReconnected,
     ...(agent ? { agent } : {}),
-  } as ConstructorParameters<typeof feishuClientSdk.WSClient>[0] & {
-    wsConfig: typeof FEISHU_WS_CONFIG;
   });
 }
 

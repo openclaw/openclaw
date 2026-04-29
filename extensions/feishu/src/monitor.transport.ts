@@ -140,23 +140,41 @@ function cleanupFeishuWsClient(params: {
   botNames.delete(accountId);
 }
 
-function waitForFeishuWsAbort(abortSignal?: AbortSignal): Promise<void> {
+type FeishuWsStopReason = { status: "abort" } | { status: "error"; error: Error };
+
+function waitForFeishuWsStop(params: {
+  abortSignal?: AbortSignal;
+  errorPromise: Promise<Error>;
+}): Promise<FeishuWsStopReason> {
+  const { abortSignal, errorPromise } = params;
   if (abortSignal?.aborted) {
-    return Promise.resolve();
+    return Promise.resolve({ status: "abort" });
   }
-  return new Promise((resolve) => {
-    if (!abortSignal) {
-      // No external lifecycle owner was provided, so keep the SDK-managed connection alive.
-      return;
-    }
+
+  const errorResult = errorPromise.then(
+    (err): FeishuWsStopReason => ({ status: "error", error: err }),
+  );
+  if (!abortSignal) {
+    // No external lifecycle owner was provided, so keep the SDK-managed connection alive.
+    return errorResult;
+  }
+
+  let removeAbortListener: (() => void) | undefined;
+  const abortResult = new Promise<FeishuWsStopReason>((resolve) => {
     const handleAbort = () => {
       abortSignal.removeEventListener("abort", handleAbort);
-      resolve();
+      resolve({ status: "abort" });
+    };
+    removeAbortListener = () => {
+      abortSignal.removeEventListener("abort", handleAbort);
     };
     abortSignal.addEventListener("abort", handleAbort, { once: true });
     if (abortSignal.aborted) {
       handleAbort();
     }
+  });
+  return Promise.race([errorResult, abortResult]).finally(() => {
+    removeAbortListener?.();
   });
 }
 
@@ -176,22 +194,43 @@ export async function monitorWebSocket({
       break;
     }
 
+    let reportWsError: (err: Error) => void = () => {};
+    const wsErrorPromise = new Promise<Error>((resolve) => {
+      reportWsError = resolve;
+    });
     let wsClient: Lark.WSClient | undefined;
     try {
       log(`feishu[${accountId}]: starting WebSocket connection...`);
-      wsClient = await createFeishuWSClient(account);
+      wsClient = await createFeishuWSClient(account, {
+        onReady: () => {
+          attempt = 0;
+          log(`feishu[${accountId}]: WebSocket client started`);
+        },
+        onError: (err) => {
+          reportWsError(err);
+        },
+        onReconnecting: () => {
+          log(`feishu[${accountId}]: WebSocket reconnecting...`);
+        },
+        onReconnected: () => {
+          attempt = 0;
+          log(`feishu[${accountId}]: WebSocket client reconnected`);
+        },
+      });
       if (abortSignal?.aborted) {
         cleanupFeishuWsClient({ accountId, wsClient, error });
         break;
       }
       wsClients.set(accountId, wsClient);
       await wsClient.start({ eventDispatcher });
-      attempt = 0;
-      log(`feishu[${accountId}]: WebSocket client started`);
-      await waitForFeishuWsAbort(abortSignal);
-      log(`feishu[${accountId}]: abort signal received, stopping`);
+      const stopReason = await waitForFeishuWsStop({ abortSignal, errorPromise: wsErrorPromise });
       cleanupFeishuWsClient({ accountId, wsClient, error });
-      return;
+      wsClient = undefined;
+      if (stopReason.status === "abort") {
+        log(`feishu[${accountId}]: abort signal received, stopping`);
+        return;
+      }
+      throw stopReason.error;
     } catch (err) {
       cleanupFeishuWsClient({ accountId, wsClient, error });
       if (abortSignal?.aborted) {
@@ -201,7 +240,7 @@ export async function monitorWebSocket({
       attempt += 1;
       const delayMs = getFeishuWsReconnectDelayMs(attempt);
       error(
-        `feishu[${accountId}]: WebSocket start failed, retrying in ${delayMs}ms: ${formatFeishuWsErrorForLog(err)}`,
+        `feishu[${accountId}]: WebSocket connection failed, retrying in ${delayMs}ms: ${formatFeishuWsErrorForLog(err)}`,
       );
       const shouldRetry = await waitForAbortableDelay(delayMs, abortSignal);
       if (!shouldRetry) {

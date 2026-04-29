@@ -15,6 +15,13 @@ type MockWsClient = {
   close: ReturnType<typeof vi.fn>;
 };
 
+type MockWsLifecycleHooks = {
+  onReady?: () => void;
+  onError?: (err: Error) => void;
+  onReconnecting?: () => void;
+  onReconnected?: () => void;
+};
+
 function createAccount(accountId: string): ResolvedFeishuAccount {
   return {
     accountId,
@@ -126,7 +133,7 @@ describe("feishu websocket cleanup", () => {
     expect(createFeishuWSClientMock).toHaveBeenCalledTimes(2);
     expect(recoveredClient.close).toHaveBeenCalledTimes(1);
     expect(runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining("WebSocket start failed, retrying in 1000ms"),
+      expect.stringContaining("WebSocket connection failed, retrying in 1000ms"),
     );
     const errorMessage = String(runtime.error.mock.calls[0]?.[0] ?? "");
     expect(errorMessage).not.toContain("\n");
@@ -134,6 +141,104 @@ describe("feishu websocket cleanup", () => {
     expect(errorMessage).not.toContain("secret_abc");
     expect(errorMessage).toContain("Authorization: Bearer [redacted]");
     expect(errorMessage).toContain("appSecret=[redacted]");
+  });
+
+  it("lets the SDK reconnect loop run without stacking monitor backoff", async () => {
+    vi.useFakeTimers();
+    const wsClient = createWsClient();
+    let lifecycleHooks: MockWsLifecycleHooks | undefined;
+    createFeishuWSClientMock.mockImplementation((_account, hooks: MockWsLifecycleHooks) => {
+      lifecycleHooks = hooks;
+      return wsClient;
+    });
+
+    const abortController = new AbortController();
+    const runtime = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(),
+    };
+
+    const monitorPromise = monitorWebSocket({
+      account: createAccount("sdk-reconnect"),
+      accountId: "sdk-reconnect",
+      runtime,
+      abortSignal: abortController.signal,
+      eventDispatcher: {} as never,
+    });
+
+    await vi.waitFor(() => {
+      expect(wsClient.start).toHaveBeenCalledTimes(1);
+    });
+
+    lifecycleHooks?.onReady?.();
+    lifecycleHooks?.onReconnecting?.();
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    expect(createFeishuWSClientMock).toHaveBeenCalledTimes(1);
+    expect(runtime.error).not.toHaveBeenCalled();
+
+    abortController.abort();
+    await monitorPromise;
+  });
+
+  it("retries after SDK reconnect exhaustion and resets backoff after recovery", async () => {
+    vi.useFakeTimers();
+    const failedClient = createWsClient();
+    failedClient.start.mockRejectedValueOnce(new Error("first connect failed"));
+    const recoveredClient = createWsClient();
+    let recoveredHooks: MockWsLifecycleHooks | undefined;
+    createFeishuWSClientMock
+      .mockResolvedValueOnce(failedClient)
+      .mockImplementationOnce((_account, hooks: MockWsLifecycleHooks) => {
+        recoveredHooks = hooks;
+        return recoveredClient;
+      });
+
+    const abortController = new AbortController();
+    const runtime = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(),
+    };
+
+    const monitorPromise = monitorWebSocket({
+      account: createAccount("reset-backoff"),
+      accountId: "reset-backoff",
+      runtime,
+      abortSignal: abortController.signal,
+      eventDispatcher: {} as never,
+    });
+
+    await vi.waitFor(() => {
+      expect(failedClient.start).toHaveBeenCalledTimes(1);
+    });
+
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    await vi.waitFor(() => {
+      expect(recoveredClient.start).toHaveBeenCalledTimes(1);
+    });
+
+    recoveredHooks?.onReady?.();
+    recoveredHooks?.onError?.(new Error("reconnect exhausted access_token=secret_token"));
+
+    await vi.waitFor(() => {
+      expect(recoveredClient.close).toHaveBeenCalledTimes(1);
+      expect(runtime.error).toHaveBeenCalledTimes(2);
+    });
+
+    expect(String(runtime.error.mock.calls[0]?.[0] ?? "")).toContain("retrying in 1000ms");
+    const secondErrorMessage = String(runtime.error.mock.calls[1]?.[0] ?? "");
+    expect(secondErrorMessage).toContain("retrying in 1000ms");
+    expect(secondErrorMessage).toContain("access_token=[redacted]");
+    expect(secondErrorMessage).not.toContain("secret_token");
+
+    abortController.abort();
+    await monitorPromise;
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(createFeishuWSClientMock).toHaveBeenCalledTimes(2);
   });
 
   it("redacts websocket close errors during abort cleanup", async () => {
