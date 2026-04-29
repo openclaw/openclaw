@@ -241,6 +241,7 @@ function assertInstalled() {
 
     const expectedErrorMessages = new Set([
       "only bundled plugins can register agent tool result middleware",
+      'channel "kitchen-sink-channel-probe" registration missing required config helpers',
       "cli registration missing explicit commands metadata",
       "only bundled plugins can register Codex app-server extension factories",
       "http route registration missing or invalid auth: /kitchen-sink/http-route",
