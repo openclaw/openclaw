@@ -37,6 +37,20 @@ export const MEDIA_INVOKE_ACTIONS = {
   "file.write": "file_write",
 } as const;
 
+// Subset of MEDIA_INVOKE_ACTIONS where the dedicated tool enforces a
+// security policy (path allowlist + operator approval), not just bloat
+// avoidance. These commands MUST always redirect, even when the operator
+// has set allowMediaInvokeCommands=true (which only suppresses the
+// base64-bloat redirect, not policy enforcement). The generic
+// nodes.invoke surface would otherwise bypass gatekeep() entirely and
+// return raw payloads outside the file-transfer allowlist.
+export const POLICY_REDIRECT_INVOKE_COMMANDS: ReadonlySet<string> = new Set([
+  "file.fetch",
+  "dir.list",
+  "dir.fetch",
+  "file.write",
+]);
+
 export type NodeMediaAction = "camera_snap" | "photos_latest" | "camera_clip" | "screen_record";
 
 type ExecuteNodeMediaActionParams = {

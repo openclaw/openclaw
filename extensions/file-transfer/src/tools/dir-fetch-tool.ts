@@ -310,14 +310,25 @@ type UnpackedFileEntry = {
  * BSD tar (macOS) and GNU tar disagree on flags: `--no-overwrite-dir` is
  * GNU-only and BSD tar rejects it. We use only flags both implementations
  * accept. Defense-in-depth comes from the pre-validation step instead.
+ *
+ * `--no-same-owner` and `--no-same-permissions` are accepted by both BSD
+ * and GNU tar. They prevent the archive from setting file ownership
+ * (uid/gid) and dangerous mode bits (setuid/setgid/world-writable) on
+ * the gateway filesystem. If the gateway is ever run as root or with
+ * elevated privileges, a malicious node could otherwise plant
+ * privileged executables here.
  */
 async function unpackTar(tarBuffer: Buffer, destDir: string): Promise<void> {
   await fs.mkdir(destDir, { recursive: true, mode: 0o700 });
   return new Promise((resolve, reject) => {
     const tarBin = process.platform !== "win32" ? "/usr/bin/tar" : "tar";
-    const child = spawn(tarBin, ["-xzf", "-", "-C", destDir], {
-      stdio: ["pipe", "ignore", "pipe"],
-    });
+    const child = spawn(
+      tarBin,
+      ["-xzf", "-", "-C", destDir, "--no-same-owner", "--no-same-permissions"],
+      {
+        stdio: ["pipe", "ignore", "pipe"],
+      },
+    );
     let stderrOut = "";
     const watchdog = setTimeout(() => {
       try {
