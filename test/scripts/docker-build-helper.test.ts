@@ -1978,7 +1978,11 @@ output="$(run_logged_print_heartbeat plugins-run 08 bash -c 'printf "captured co
     );
     expect(updateChannel).toContain("assert-config-channel dev");
     expect(updateChannelAssertions).toContain("expected persisted update.channel ${channel}");
-    expect(pluginsAssertions).toContain("expected modern installRecords in installed plugin index");
+    // The assertion message is thrown inside `scripts/e2e/lib/plugins/assertions.mjs`.
+    // The embedded docs should validate that we invoke the correct assertions entrypoint.
+    expect(scripts.join("\n")).toContain(
+      "scripts/e2e/lib/plugins/assertions.mjs marketplace-records",
+    );
   });
 
   it("routes doctor install switch commands through the E2E timeout helper", () => {
