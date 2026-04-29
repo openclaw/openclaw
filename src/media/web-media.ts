@@ -616,6 +616,7 @@ export async function optimizeImageToJpeg(
     resizeSide: number;
     quality: number;
   } | null = null;
+  const errors: string[] = [];
 
   for (const side of sides) {
     for (const quality of qualities) {
@@ -638,7 +639,12 @@ export async function optimizeImageToJpeg(
             quality,
           };
         }
-      } catch {
+      } catch (err) {
+        // Collect error messages to help diagnose failures
+        const errMsg = err instanceof Error ? err.message : String(err);
+        if (errMsg && !errors.includes(errMsg)) {
+          errors.push(errMsg);
+        }
         // Continue trying other size/quality combinations
       }
     }
@@ -653,7 +659,10 @@ export async function optimizeImageToJpeg(
     };
   }
 
-  throw new Error("Failed to optimize image");
+  const errorDetail = errors.length > 0
+    ? ` Errors encountered: ${errors.slice(0, 3).join("; ")}`
+    : "";
+  throw new Error(`Failed to optimize image${errorDetail}`);
 }
 
 export { optimizeImageToPng };
