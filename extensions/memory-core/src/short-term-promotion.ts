@@ -1461,15 +1461,22 @@ function relocateCandidateRange(
         continue;
       }
       const distance = Math.abs(startLine - candidate.startLine);
-      if (
-        !bestMatch ||
-        comparison.quality > bestMatch.quality ||
-        (comparison.quality === bestMatch.quality && distance < bestMatch.distance) ||
-        (comparison.quality === bestMatch.quality &&
-          distance === bestMatch.distance &&
-          Math.abs(span - preferredSpan) <
-            Math.abs(bestMatch.endLine - bestMatch.startLine + 1 - preferredSpan))
-      ) {
+      let shouldReplace = false;
+      if (!bestMatch) {
+        shouldReplace = true;
+      } else if (comparison.quality > bestMatch.quality) {
+        shouldReplace = true;
+      } else if (comparison.quality === bestMatch.quality) {
+        const bestSpan = bestMatch.endLine - bestMatch.startLine + 1;
+        const compareDistance = comparison.quality !== 2 || span === bestSpan;
+        shouldReplace =
+          (comparison.quality === 2 && span < bestSpan) ||
+          (compareDistance && distance < bestMatch.distance) ||
+          (compareDistance &&
+            distance === bestMatch.distance &&
+            Math.abs(span - preferredSpan) < Math.abs(bestSpan - preferredSpan));
+      }
+      if (shouldReplace) {
         bestMatch = {
           startLine,
           endLine,
