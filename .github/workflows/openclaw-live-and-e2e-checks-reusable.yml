@@ -1777,6 +1777,12 @@ jobs:
             timeout_minutes: 90
             profile_env_only: false
             profiles: full
+          - suite_id: native-live-extensions-moonshot
+            label: Native live Moonshot plugin
+            command: node .release-harness/scripts/test-live-shard.mjs native-live-extensions-moonshot
+            timeout_minutes: 60
+            profile_env_only: false
+            profiles: full
           - suite_id: native-live-extensions-openai
             label: Native live OpenAI plugin
             command: node .release-harness/scripts/test-live-shard.mjs native-live-extensions-openai
