@@ -962,6 +962,8 @@ export type ProviderCreateEmbeddingProviderContext = {
   inputType?: string;
   queryInputType?: string;
   documentInputType?: string;
+  queryTask?: string;
+  documentTask?: string;
   outputDimensionality?: number;
   taskType?: string;
 };

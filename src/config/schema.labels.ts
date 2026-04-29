@@ -434,6 +434,8 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.memorySearch.inputType": "Memory Search Input Type",
   "agents.defaults.memorySearch.queryInputType": "Memory Search Query Input Type",
   "agents.defaults.memorySearch.documentInputType": "Memory Search Document Input Type",
+  "agents.defaults.memorySearch.queryTask": "Memory Search Query Task",
+  "agents.defaults.memorySearch.documentTask": "Memory Search Document Task",
   "agents.defaults.memorySearch.outputDimensionality": "Memory Search Output Dimensionality",
   "agents.defaults.memorySearch.fallback": "Memory Search Fallback",
   "agents.defaults.memorySearch.local.modelPath": "Local Embedding Model Path",

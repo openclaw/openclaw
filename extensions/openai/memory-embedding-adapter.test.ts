@@ -37,11 +37,12 @@ describe("OpenAI memory embedding adapter", () => {
         model: "text-embedding-3-small",
         inputType: "passage",
         documentInputType: "document",
+        documentTask: "retrieval.passage",
       },
     });
   });
 
-  it("sends document input_type in OpenAI batch embedding requests", async () => {
+  it("sends document input_type and task in OpenAI batch embedding requests", async () => {
     const result = await openAiMemoryEmbeddingProviderAdapter.create({
       config: {} as never,
       provider: "openai",
@@ -67,6 +68,7 @@ describe("OpenAI memory embedding adapter", () => {
               model: "text-embedding-3-small",
               input: "doc one",
               input_type: "document",
+              task: "retrieval.passage",
             },
           }),
         ],

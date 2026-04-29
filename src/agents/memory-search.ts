@@ -41,6 +41,8 @@ export type ResolvedMemorySearchConfig = {
   queryInputType?: string;
   documentInputType?: string;
   outputDimensionality?: number;
+  queryTask?: string;
+  documentTask?: string;
   local: {
     modelPath?: string;
     modelCacheDir?: string;
@@ -233,6 +235,9 @@ function mergeConfig(
   const documentInputType =
     overrides?.documentInputType?.trim() || defaults?.documentInputType?.trim() || undefined;
   const outputDimensionality = overrides?.outputDimensionality ?? defaults?.outputDimensionality;
+  const queryTask = overrides?.queryTask?.trim() || defaults?.queryTask?.trim() || undefined;
+  const documentTask =
+    overrides?.documentTask?.trim() || defaults?.documentTask?.trim() || undefined;
   const local = {
     modelPath: overrides?.local?.modelPath ?? defaults?.local?.modelPath,
     modelCacheDir: overrides?.local?.modelCacheDir ?? defaults?.local?.modelCacheDir,
@@ -349,6 +354,8 @@ function mergeConfig(
     queryInputType,
     documentInputType,
     outputDimensionality,
+    queryTask,
+    documentTask,
     local,
     store,
     chunking: { tokens: Math.max(1, chunking.tokens), overlap },

@@ -438,6 +438,46 @@ The bundled `openai` plugin registers video generation through the `video_genera
 See [Video Generation](/tools/video-generation) for shared tool parameters, provider selection, and failover behavior.
 </Note>
 
+## Jina v5 embedding task parameters
+
+When routing Jina v5 embedding models (`jina-embeddings-v3`, `jina-embeddings-v4`)
+through the OpenAI-compatible `/v1/embeddings` endpoint, OpenClaw supports the Jina
+`task` parameter for task-specific LoRA adapters:
+
+```json5
+{
+  agents: {
+    defaults: {
+      memorySearch: {
+        provider: "openai",
+        model: "jina-embeddings-v3",
+        remote: {
+          baseUrl: "https://api.jina.ai/v1",
+          apiKey: "${JINA_API_KEY}",
+        },
+        queryTask: "retrieval.query",
+        documentTask: "retrieval.passage",
+      },
+    },
+  },
+}
+```
+
+| Key            | Type     | Description                                                                |
+| -------------- | -------- | -------------------------------------------------------------------------- |
+| `queryTask`    | `string` | Task adapter for query-time embeddings (e.g. `"retrieval.query"`)          |
+| `documentTask` | `string` | Task adapter for document/indexing embeddings (e.g. `"retrieval.passage"`) |
+
+Supported values: `"retrieval.query"`, `"retrieval.passage"`, `"text-matching"`,
+`"clustering"`, `"classification"`, `"separation"`.
+
+When left unset, Jina v5 uses general-purpose embeddings. The document `task`
+parameter is included in the cache identity, so changing it triggers automatic
+cache invalidation for existing indexed embeddings.
+
+See [Memory configuration](/reference/memory-config#provider-specific-config)
+for the full `memorySearch` reference.
+
 ## GPT-5 prompt contribution
 
 OpenClaw adds a shared GPT-5 prompt contribution for GPT-5-family runs across providers. It applies by model id, so `openai-codex/gpt-5.5`, `openai/gpt-5.5`, `openrouter/openai/gpt-5.5`, `opencode/gpt-5.5`, and other compatible GPT-5 refs receive the same overlay. Older GPT-4.x models do not.

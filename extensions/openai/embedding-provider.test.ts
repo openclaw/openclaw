@@ -71,6 +71,42 @@ describe("OpenAI embedding provider", () => {
     );
   });
 
+  it("sends queryTask on query embeddings", async () => {
+    const { provider } = await createOpenAiEmbeddingProvider(
+      createOptions({ queryTask: "retrieval.query", documentTask: "retrieval.passage" }),
+    );
+
+    await provider.embedQuery("hello");
+
+    expect(mocks.fetchRemoteEmbeddingVectors).toHaveBeenCalledWith(
+      expect.objectContaining({
+        body: {
+          model: "text-embedding-3-small",
+          input: ["hello"],
+          task: "retrieval.query",
+        },
+      }),
+    );
+  });
+
+  it("sends documentTask on document batch embeddings", async () => {
+    const { provider } = await createOpenAiEmbeddingProvider(
+      createOptions({ queryTask: "retrieval.query", documentTask: "retrieval.passage" }),
+    );
+
+    await provider.embedBatch(["doc one", "doc two"]);
+
+    expect(mocks.fetchRemoteEmbeddingVectors).toHaveBeenCalledWith(
+      expect.objectContaining({
+        body: {
+          model: "text-embedding-3-small",
+          input: ["doc one", "doc two"],
+          task: "retrieval.passage",
+        },
+      }),
+    );
+  });
+
   it("omits input_type unless configured", async () => {
     const { provider } = await createOpenAiEmbeddingProvider(createOptions());
 

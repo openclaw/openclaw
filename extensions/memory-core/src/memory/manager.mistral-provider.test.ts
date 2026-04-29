@@ -151,6 +151,19 @@ describe("memory manager mistral provider wiring", () => {
     expect(request.documentInputType).toBe("document");
   });
 
+  it("includes Jina task fields in the primary provider request", () => {
+    const request = resolveMemoryPrimaryProviderRequest({
+      settings: {
+        ...createSettings({ provider: "openai" }),
+        queryTask: "retrieval.query",
+        documentTask: "retrieval.passage",
+      } as ResolvedMemorySearchConfig,
+    });
+
+    expect(request.queryTask).toBe("retrieval.query");
+    expect(request.documentTask).toBe("retrieval.passage");
+  });
+
   it("uses default lmstudio model when activating lmstudio fallback", async () => {
     const request = resolveMemoryFallbackProviderRequest({
       cfg: {} as OpenClawConfig,

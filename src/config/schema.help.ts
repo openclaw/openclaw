@@ -1063,6 +1063,10 @@ export const FIELD_HELP: Record<string, string> = {
     "Optional provider-specific `input_type` value for query-time memory embeddings. Use this with OpenAI-compatible asymmetric embedding endpoints that require a query label.",
   "agents.defaults.memorySearch.documentInputType":
     "Optional provider-specific `input_type` value for document and indexing memory embeddings. Use this with OpenAI-compatible asymmetric embedding endpoints that require a passage or document label.",
+  "agents.defaults.memorySearch.queryTask":
+    "Use this optional Jina v5 task-specific adapter for query-time embeddings only when routing OpenAI-compatible memory embeddings to Jina, such as retrieval.query, text-matching, clustering, classification, or separation.",
+  "agents.defaults.memorySearch.documentTask":
+    "Use this optional Jina v5 task-specific adapter for document and indexing embeddings only when routing OpenAI-compatible memory embeddings to Jina, such as retrieval.passage, text-matching, clustering, classification, or separation.",
   "agents.defaults.memorySearch.outputDimensionality":
     "Provider-specific output vector size override for memory embeddings. Gemini embedding-2 supports 768, 1536, or 3072; Bedrock families such as Titan V2, Cohere V4, and Nova expose their own allowed sizes. Expect a full reindex when you change it because stored vector dimensions must stay consistent.",
   "agents.defaults.memorySearch.remote.baseUrl":
