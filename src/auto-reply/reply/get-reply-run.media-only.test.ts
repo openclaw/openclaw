@@ -1,5 +1,5 @@
+import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { importFreshModule } from "../../../test/helpers/import-fresh.ts";
 import {
   clearActiveEmbeddedRun,
   setActiveEmbeddedRun,
@@ -204,6 +204,7 @@ function baseParams(
     resolvedBlockStreamingBreak: "message_end",
     modelState: {
       resolveDefaultThinkingLevel: async () => "medium",
+      resolveThinkingCatalog: async () => [],
     } as never,
     provider: "anthropic",
     model: "claude-opus-4-1",
@@ -1018,7 +1019,7 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.followupRun.transcriptPrompt).toBe("[OpenClaw heartbeat poll]");
   });
 
-  it("keeps bare reset startup instructions out of visible transcript prompt", async () => {
+  it("uses a non-empty transcript marker while keeping bare reset startup instructions out of visible transcript prompt", async () => {
     await runPreparedReply(
       baseParams({
         ctx: {
@@ -1052,8 +1053,8 @@ describe("runPreparedReply media-only handling", () => {
     const call = vi.mocked(runReplyAgent).mock.calls.at(-1)?.[0];
     expect(call?.commandBody).toContain("A new session was started via /new or /reset.");
     expect(call?.followupRun.prompt).toContain("A new session was started via /new or /reset.");
-    expect(call?.transcriptCommandBody).toBe("");
-    expect(call?.followupRun.transcriptPrompt).toBe("");
+    expect(call?.transcriptCommandBody).toBe("[OpenClaw session new]");
+    expect(call?.followupRun.transcriptPrompt).toBe("[OpenClaw session new]");
   });
 
   it("keeps reset user notes visible while hiding startup instructions", async () => {

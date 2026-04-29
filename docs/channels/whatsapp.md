@@ -147,8 +147,10 @@ OpenClaw recommends running WhatsApp on a separate number when possible. (The ch
 
 - Gateway owns the WhatsApp socket and reconnect loop.
 - The reconnect watchdog uses WhatsApp Web transport activity, not only inbound app-message volume, so a quiet linked-device session is not restarted solely because nobody has sent a message recently. A longer application-silence cap still forces a reconnect if transport frames keep arriving but no application messages are handled for the watchdog window.
+- Baileys socket timings are explicit under `web.whatsapp.*`: `keepAliveIntervalMs` controls WhatsApp Web application pings, `connectTimeoutMs` controls the opening handshake timeout, and `defaultQueryTimeoutMs` controls Baileys query timeouts.
 - Outbound sends require an active WhatsApp listener for the target account.
 - Status and broadcast chats are ignored (`@status`, `@broadcast`).
+- The reconnect watchdog follows WhatsApp Web transport activity, not only inbound app-message volume: quiet linked-device sessions stay up while transport frames continue, but a transport stall forces reconnect well before the later remote disconnect path.
 - Direct chats use DM session rules (`session.dmScope`; default `main` collapses DMs to the agent main session).
 - Group sessions are isolated (`agent:<agentId>:whatsapp:group:<jid>`).
 - WhatsApp Web transport honors standard proxy environment variables on the gateway host (`HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY` / lowercase variants). Prefer host-level proxy config over channel-specific WhatsApp proxy settings.
@@ -365,6 +367,7 @@ When the linked self number is also present in `allowFrom`, WhatsApp self-chat s
     - default chunk limit: `channels.whatsapp.textChunkLimit = 4000`
     - `channels.whatsapp.chunkMode = "length" | "newline"`
     - `newline` mode prefers paragraph boundaries (blank lines), then falls back to length-safe chunking
+
   </Accordion>
 
   <Accordion title="Outbound media behavior">
@@ -377,6 +380,7 @@ When the linked self number is also present in `allowFrom`, WhatsApp self-chat s
     - animated GIF playback is supported via `gifPlayback: true` on video sends
     - captions are applied to the first media item when sending multi-media reply payloads, except PTT voice notes send the audio first and visible text separately because WhatsApp clients do not render voice-note captions consistently
     - media source can be HTTP(S), `file://`, or local paths
+
   </Accordion>
 
   <Accordion title="Media size limits and fallback behavior">
@@ -385,6 +389,7 @@ When the linked self number is also present in `allowFrom`, WhatsApp self-chat s
     - per-account overrides use `channels.whatsapp.accounts.<accountId>.mediaMaxMb`
     - images are auto-optimized (resize/quality sweep) to fit limits
     - on media send failure, first-item fallback sends text warning instead of dropping the response silently
+
   </Accordion>
 </AccordionGroup>
 
@@ -469,12 +474,14 @@ Behavior notes:
     - account ids come from `channels.whatsapp.accounts`
     - default account selection: `default` if present, otherwise first configured account id (sorted)
     - account ids are normalized internally for lookup
+
   </Accordion>
 
   <Accordion title="Credential paths and legacy compatibility">
     - current auth path: `~/.openclaw/credentials/whatsapp/<accountId>/creds.json`
     - backup file: `creds.json.bak`
     - legacy default auth in `~/.openclaw/credentials/` is still recognized/migrated for default-account flows
+
   </Accordion>
 
   <Accordion title="Logout behavior">
@@ -514,6 +521,23 @@ Behavior notes:
     Quiet accounts can stay connected past the normal message timeout; the watchdog
     restarts when WhatsApp Web transport activity stops, the socket closes, or
     application-level activity stays silent beyond the longer safety window.
+
+    If logs show repeated `status=408 Request Time-out Connection was lost`, tune
+    Baileys socket timings under `web.whatsapp`. Start by shortening
+    `keepAliveIntervalMs` below your network's idle timeout and increasing
+    `connectTimeoutMs` on slow or lossy links:
+
+    ```json5
+    {
+      web: {
+        whatsapp: {
+          keepAliveIntervalMs: 15000,
+          connectTimeoutMs: 60000,
+          defaultQueryTimeoutMs: 60000,
+        },
+      },
+    }
+    ```
 
     Fix:
 
@@ -638,7 +662,7 @@ High-signal WhatsApp fields:
 - access: `dmPolicy`, `allowFrom`, `groupPolicy`, `groupAllowFrom`, `groups`
 - delivery: `textChunkLimit`, `chunkMode`, `mediaMaxMb`, `sendReadReceipts`, `ackReaction`, `reactionLevel`
 - multi-account: `accounts.<id>.enabled`, `accounts.<id>.authDir`, account-level overrides
-- operations: `configWrites`, `debounceMs`, `web.enabled`, `web.heartbeatSeconds`, `web.reconnect.*`
+- operations: `configWrites`, `debounceMs`, `web.enabled`, `web.heartbeatSeconds`, `web.reconnect.*`, `web.whatsapp.*`
 - session behavior: `session.dmScope`, `historyLimit`, `dmHistoryLimit`, `dms.<id>.historyLimit`
 - prompts: `groups.<id>.systemPrompt`, `groups["*"].systemPrompt`, `direct.<id>.systemPrompt`, `direct["*"].systemPrompt`
 

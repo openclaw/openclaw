@@ -28,8 +28,10 @@ export {
   buildMemorySystemPromptAddition,
   delegateCompactionToRuntime,
 } from "../context-engine/delegate.js";
+export { registerContextEngine } from "../context-engine/registry.js";
 export type { DiagnosticEventPayload } from "../infra/diagnostic-events.js";
 export { onDiagnosticEvent } from "../infra/diagnostic-events.js";
+export { optionalStringEnum, stringEnum } from "../agents/schema/typebox.js";
 export {
   applyAuthProfileConfig,
   buildApiKeyCredential,
@@ -42,6 +44,8 @@ export {
 export { createAccountStatusSink } from "./channel-lifecycle.core.js";
 export { createPluginRuntimeStore } from "./runtime-store.js";
 export { KeyedAsyncQueue } from "./keyed-async-queue.js";
+export { normalizeAccountId } from "./account-id.js";
+export { resolvePreferredOpenClawTmpDir } from "./temp-path.js";
 
 export {
   createHybridChannelConfigAdapter,
@@ -57,6 +61,7 @@ export {
 export { formatAllowFromLowercase, formatNormalizedAllowFromEntries } from "./allow-from.js";
 export * from "./channel-config-schema.js";
 export * from "./channel-policy.js";
+export { collectOpenGroupPolicyConfiguredRouteWarnings } from "./channel-policy.js";
 export * from "./reply-history.js";
 export * from "./directory-runtime.js";
 export { mapAllowlistResolutionInputs } from "./allow-from.js";

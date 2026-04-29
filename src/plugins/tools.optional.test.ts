@@ -20,6 +20,7 @@ vi.mock("../config/plugin-auto-enable.js", () => ({
 }));
 
 let resolvePluginTools: typeof import("./tools.js").resolvePluginTools;
+let buildPluginToolMetadataKey: typeof import("./tools.js").buildPluginToolMetadataKey;
 let resetPluginRuntimeStateForTest: typeof import("./runtime.js").resetPluginRuntimeStateForTest;
 let setActivePluginRegistry: typeof import("./runtime.js").setActivePluginRegistry;
 
@@ -205,7 +206,7 @@ function expectConflictingCoreNameResolution(params: {
 
 describe("resolvePluginTools optional tools", () => {
   beforeAll(async () => {
-    ({ resolvePluginTools } = await import("./tools.js"));
+    ({ buildPluginToolMetadataKey, resolvePluginTools } = await import("./tools.js"));
     ({ resetPluginRuntimeStateForTest, setActivePluginRegistry } = await import("./runtime.js"));
   });
 
@@ -460,6 +461,21 @@ describe("resolvePluginTools optional tools", () => {
           allowGatewaySubagentBinding: true,
         },
       }),
+    );
+  });
+});
+
+describe("buildPluginToolMetadataKey", () => {
+  beforeAll(async () => {
+    ({ buildPluginToolMetadataKey } = await import("./tools.js"));
+  });
+
+  it("does not collide when ids or names contain separator-like characters", () => {
+    expect(buildPluginToolMetadataKey("plugin", "a\uE000b")).not.toBe(
+      buildPluginToolMetadataKey("plugin\uE000a", "b"),
+    );
+    expect(buildPluginToolMetadataKey("plugin", "a\u0000b")).not.toBe(
+      buildPluginToolMetadataKey("plugin\u0000a", "b"),
     );
   });
 });

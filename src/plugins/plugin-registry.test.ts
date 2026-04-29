@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PluginCandidate } from "./discovery.js";
 import {
   readPersistedInstalledPluginIndex,
@@ -47,8 +47,6 @@ function makeTempDir() {
 function hermeticEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   return {
     OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
-    OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE: "1",
-    OPENCLAW_DISABLE_PLUGIN_MANIFEST_CACHE: "1",
     OPENCLAW_VERSION: "2026.4.25",
     VITEST: "true",
     ...overrides,
@@ -542,6 +540,44 @@ describe("plugin registry facade", () => {
     expect(listPluginRecords({ index: result.snapshot }).map((plugin) => plugin.pluginId)).toEqual([
       "demo",
     ]);
+  });
+
+  it("derives fresh config-scoped registries when the persisted registry is missing", () => {
+    const stateDir = makeTempDir();
+    const workspaceDir = makeTempDir();
+    const bundledRoot = makeTempDir();
+    const rootDir = path.join(bundledRoot, "demo");
+    fs.mkdirSync(rootDir, { recursive: true });
+    createCandidate(rootDir);
+    const env = hermeticEnv({ OPENCLAW_BUNDLED_PLUGINS_DIR: bundledRoot });
+    const config = { plugins: { entries: { demo: { enabled: true } } } } as const;
+    const readFileSyncSpy = vi.spyOn(fs, "readFileSync");
+
+    const first = loadPluginRegistrySnapshotWithMetadata({
+      stateDir,
+      workspaceDir,
+      config,
+      env,
+    });
+    const manifestReadsAfterFirst = readFileSyncSpy.mock.calls.filter((call) =>
+      String(call[0]).endsWith("openclaw.plugin.json"),
+    ).length;
+
+    const second = loadPluginRegistrySnapshotWithMetadata({
+      stateDir,
+      workspaceDir,
+      config,
+      env,
+    });
+    const manifestReadsAfterSecond = readFileSyncSpy.mock.calls.filter((call) =>
+      String(call[0]).endsWith("openclaw.plugin.json"),
+    ).length;
+
+    expect(first.source).toBe("derived");
+    expect(second.source).toBe("derived");
+    expect(second).not.toBe(first);
+    expect(manifestReadsAfterFirst).toBeGreaterThan(0);
+    expect(manifestReadsAfterSecond).toBeGreaterThan(manifestReadsAfterFirst);
   });
 
   it("falls back to the derived registry when persisted reads are disabled", async () => {

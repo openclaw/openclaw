@@ -4,7 +4,9 @@ import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-ent
 import {
   applyAnthropicPayloadPolicyToParams,
   composeProviderStreamWrappers,
+  createAnthropicThinkingPrefillPayloadWrapper,
   resolveAnthropicPayloadPolicy,
+  stripTrailingAnthropicAssistantPrefillWhenThinking,
   streamWithPayloadPatch,
 } from "openclaw/plugin-sdk/provider-stream-shared";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
@@ -29,51 +31,6 @@ const PI_AI_OAUTH_ANTHROPIC_BETAS = [
 ] as const;
 
 type AnthropicServiceTier = "auto" | "standard_only";
-
-function isAnthropicThinkingEnabled(payloadObj: Record<string, unknown>): boolean {
-  const thinking = payloadObj.thinking;
-  if (!thinking || typeof thinking !== "object") {
-    return false;
-  }
-  return (thinking as { type?: unknown }).type !== "disabled";
-}
-
-function assistantMessageHasToolUse(message: Record<string, unknown>): boolean {
-  if (Array.isArray(message.tool_calls) && message.tool_calls.length > 0) {
-    return true;
-  }
-  const content = message.content;
-  if (!Array.isArray(content)) {
-    return false;
-  }
-  return content.some(
-    (block) =>
-      block &&
-      typeof block === "object" &&
-      ((block as { type?: unknown }).type === "tool_use" ||
-        (block as { type?: unknown }).type === "toolCall"),
-  );
-}
-
-function stripTrailingAssistantPrefillWhenThinking(payloadObj: Record<string, unknown>): number {
-  if (!isAnthropicThinkingEnabled(payloadObj) || !Array.isArray(payloadObj.messages)) {
-    return 0;
-  }
-  let stripped = 0;
-  while (payloadObj.messages.length > 0) {
-    const last = payloadObj.messages[payloadObj.messages.length - 1];
-    if (!last || typeof last !== "object") {
-      break;
-    }
-    const message = last as Record<string, unknown>;
-    if (message.role !== "assistant" || assistantMessageHasToolUse(message)) {
-      break;
-    }
-    payloadObj.messages.pop();
-    stripped += 1;
-  }
-  return stripped;
-}
 
 function isAnthropic1MModel(modelId: string): boolean {
   const normalized = normalizeLowercaseStringOrEmpty(modelId);
@@ -216,16 +173,11 @@ export function createAnthropicServiceTierWrapper(
 export function createAnthropicThinkingPrefillWrapper(
   baseStreamFn: StreamFn | undefined,
 ): StreamFn {
-  const underlying = baseStreamFn ?? streamSimple;
-  return (model, context, options) =>
-    streamWithPayloadPatch(underlying, model, context, options, (payloadObj) => {
-      const stripped = stripTrailingAssistantPrefillWhenThinking(payloadObj);
-      if (stripped > 0) {
-        log.warn(
-          `removed ${stripped} trailing assistant prefill message${stripped === 1 ? "" : "s"} because Anthropic extended thinking requires conversations to end with a user turn`,
-        );
-      }
-    });
+  return createAnthropicThinkingPrefillPayloadWrapper(baseStreamFn, (stripped) => {
+    log.warn(
+      `removed ${stripped} trailing assistant prefill message${stripped === 1 ? "" : "s"} because Anthropic extended thinking requires conversations to end with a user turn`,
+    );
+  });
 }
 
 export function resolveAnthropicFastMode(
@@ -269,4 +221,7 @@ export function wrapAnthropicProviderStream(
   );
 }
 
-export const __testing = { log, stripTrailingAssistantPrefillWhenThinking };
+export const __testing = {
+  log,
+  stripTrailingAssistantPrefillWhenThinking: stripTrailingAnthropicAssistantPrefillWhenThinking,
+};

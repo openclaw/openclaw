@@ -37,6 +37,9 @@ describe("docker build helper", () => {
     expect(helper).toContain("docker_build_exec()");
     expect(helper).toContain("docker_build_run()");
     expect(helper).toContain("docker buildx build --load");
+    expect(helper).toContain("docker_build_transient_failure()");
+    expect(helper).toContain("OPENCLAW_DOCKER_BUILD_RETRIES");
+    expect(helper).toContain("frontend grpc server closed unexpectedly");
   });
 
   it("keeps shell-script Docker builds behind the helper", () => {
@@ -63,7 +66,9 @@ describe("docker build helper", () => {
     expect(liveBuild).toContain("docker image inspect");
     expect(liveBuild).toContain("docker pull");
     expect(liveBuild).toContain("Live-test image not available; building");
-    expect(liveCliBackend).toContain('"$ROOT_DIR/scripts/test-live-build-docker.sh"');
+    expect(liveCliBackend).toContain(
+      'OPENCLAW_LIVE_DOCKER_REPO_ROOT="$ROOT_DIR" "$TRUSTED_HARNESS_DIR/scripts/test-live-build-docker.sh"',
+    );
     expect(liveCliBackend).not.toContain(
       'echo "==> Reuse live-test image: $LIVE_IMAGE_NAME (OPENCLAW_SKIP_DOCKER_BUILD=1)"',
     );
@@ -177,8 +182,10 @@ describe("docker build helper", () => {
   it("keeps OpenAI web search smoke on one gateway agent connection", () => {
     const runner = readFileSync(OPENAI_WEB_SEARCH_MINIMAL_E2E_PATH, "utf8");
 
-    expect(runner).toContain('"--expect-final"');
-    expect(runner).toContain('[...gatewayArgs, "agent", "--params"');
+    expect(runner).toContain("const callGateway = await loadCallGateway();");
+    expect(runner).toContain('method: "agent"');
+    expect(runner).toContain("expectFinal: true");
+    expect(runner).toContain('scopes: ["operator.write"]');
     expect(runner).not.toContain('"agent.wait"');
   });
 

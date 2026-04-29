@@ -1,9 +1,9 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { GUARDED_EXTENSION_PUBLIC_SURFACE_BASENAMES } from "openclaw/plugin-sdk/plugin-test-contracts";
 import { describe, expect, it } from "vitest";
 import { classifyBundledExtensionSourcePath } from "../../../../scripts/lib/extension-source-classifier.mjs";
-import { GUARDED_EXTENSION_PUBLIC_SURFACE_BASENAMES } from "../../../../test/helpers/plugins/public-artifacts.js";
 import { loadPluginManifestRegistry } from "../../../plugins/manifest-registry.js";
 
 const ROOT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
@@ -12,7 +12,6 @@ const ALLOWED_EXTENSION_PUBLIC_SURFACES = new Set(GUARDED_EXTENSION_PUBLIC_SURFA
 ALLOWED_EXTENSION_PUBLIC_SURFACES.add("test-api.js");
 const BUNDLED_PLUGIN_ROOT_DIR = "extensions";
 const bundledPluginRecords = loadPluginManifestRegistry({
-  cache: true,
   config: {},
 }).plugins.filter((plugin) => plugin.origin === "bundled");
 const bundledPluginRoots = new Map(
@@ -232,7 +231,7 @@ const LOCAL_EXTENSION_API_BARREL_GUARDS = [
 
 const LOCAL_EXTENSION_API_BARREL_EXCEPTIONS = [
   // Direct import avoids a circular init path:
-  // accounts.ts -> runtime-api.ts -> src/plugin-sdk/matrix -> plugin api barrel -> accounts.ts
+  // accounts.ts -> runtime-api.ts -> plugin api barrel -> accounts.ts
   bundledPluginFile("matrix", "src/matrix/accounts.ts"),
   // Config schema stays on the public SDK seam and is covered by dedicated config guardrails.
   bundledPluginFile("msteams", "src/config-schema.ts"),

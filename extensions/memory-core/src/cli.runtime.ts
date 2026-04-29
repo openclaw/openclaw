@@ -2,6 +2,7 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type { MemoryEmbeddingProbeResult } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { resolveMemoryRemDreamingConfig } from "openclaw/plugin-sdk/memory-core-host-status";
 import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
@@ -670,7 +671,7 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
   const allResults: Array<{
     agentId: string;
     status: ReturnType<MemoryManager["status"]>;
-    embeddingProbe?: Awaited<ReturnType<MemoryManager["probeEmbeddingAvailability"]>>;
+    embeddingProbe?: MemoryEmbeddingProbeResult;
     indexError?: string;
     scan?: MemorySourceScan;
     audit?: ShortTermAuditSummary;
@@ -687,9 +688,7 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
       purpose: managerPurpose,
       run: async (manager) => {
         const deep = Boolean(opts.deep || opts.index);
-        let embeddingProbe:
-          | Awaited<ReturnType<MemoryManager["probeEmbeddingAvailability"]>>
-          | undefined;
+        let embeddingProbe: MemoryEmbeddingProbeResult | undefined;
         let indexError: string | undefined;
         const syncFn = manager.sync ? manager.sync.bind(manager) : undefined;
         if (deep) {

@@ -1,22 +1,22 @@
 import { formatCliCommand } from "../cli/command-format.js";
 import {
-  type ConfigFileSnapshot,
-  type GatewayAuthConfig,
-  type GatewayTailscaleConfig,
-  type OpenClawConfig,
-  applyConfigOverrides,
-  isNixMode,
   readConfigFileSnapshotWithPluginMetadata,
   recoverConfigFromLastKnownGood,
   recoverConfigFromJsonRootSuffix,
-  replaceConfigFile,
-  isPluginLocalInvalidConfigSnapshot,
-  shouldAttemptLastKnownGoodRecovery,
-  validateConfigObjectWithPlugins,
-} from "../config/config.js";
+} from "../config/io.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
 import { asResolvedSourceConfig, materializeRuntimeConfig } from "../config/materialize.js";
+import { replaceConfigFile } from "../config/mutate.js";
+import { isNixMode } from "../config/paths.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
+import {
+  isPluginLocalInvalidConfigSnapshot,
+  shouldAttemptLastKnownGoodRecovery,
+} from "../config/recovery-policy.js";
+import { applyConfigOverrides } from "../config/runtime-overrides.js";
+import type { GatewayAuthConfig, GatewayTailscaleConfig } from "../config/types.gateway.js";
+import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
+import { validateConfigObjectWithPlugins } from "../config/validation.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import {

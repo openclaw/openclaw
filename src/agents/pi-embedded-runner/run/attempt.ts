@@ -10,6 +10,7 @@ import {
 import { isAcpRuntimeSpawnAvailable } from "../../../acp/runtime/availability.js";
 import { filterHeartbeatPairs } from "../../../auto-reply/heartbeat-filter.js";
 import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
+import { getRuntimeConfig } from "../../../config/config.js";
 import { emitTrustedDiagnosticEvent } from "../../../infra/diagnostic-events.js";
 import {
   createChildDiagnosticTraceContext,
@@ -34,6 +35,7 @@ import {
 } from "../../../plugins/provider-runtime.js";
 import { getPluginToolMeta } from "../../../plugins/tools.js";
 import { isAcpSessionKey, isSubagentSessionKey } from "../../../routing/session-key.js";
+import { annotateInterSessionPromptText } from "../../../sessions/input-provenance.js";
 import { normalizeOptionalLowercaseString } from "../../../shared/string-coerce.js";
 import { normalizeOptionalString } from "../../../shared/string-coerce.js";
 import {
@@ -78,6 +80,7 @@ import { resolveOpenClawReferencePaths } from "../../docs-path.js";
 import { isTimeoutError } from "../../failover-error.js";
 import { resolveHeartbeatPromptForSystemPrompt } from "../../heartbeat-system-prompt.js";
 import { resolveImageSanitizationLimits } from "../../image-sanitization.js";
+import { stripRuntimeContextCustomMessages } from "../../internal-runtime-context.js";
 import { buildModelAliasLines } from "../../model-alias-lines.js";
 import { resolveModelAuthMode } from "../../model-auth.js";
 import { resolveDefaultModelForAgent } from "../../model-selection.js";
@@ -154,6 +157,7 @@ import {
   collectExplicitToolAllowlistSources,
 } from "../../tool-allowlist-guard.js";
 import { UNKNOWN_TOOL_THRESHOLD } from "../../tool-loop-detection.js";
+import { normalizeToolName } from "../../tool-policy.js";
 import { shouldAllowProviderOwnedThinkingReplay } from "../../transcript-policy.js";
 import { normalizeUsage, type NormalizedUsage } from "../../usage.js";
 import { DEFAULT_BOOTSTRAP_FILENAME } from "../../workspace.js";
@@ -228,6 +232,7 @@ import { flushPendingToolResultsAfterIdle } from "../wait-for-idle-before-flush.
 import { createEmbeddedAgentSessionWithResourceLoader } from "./attempt-session.js";
 export { buildContextEnginePromptCacheInfo } from "./attempt.context-engine-helpers.js";
 import {
+  appendBootstrapFileToUserPromptPrefix,
   resolveAttemptWorkspaceBootstrapRouting,
   shouldStripBootstrapFromEmbeddedContext,
 } from "./attempt-bootstrap-routing.js";
@@ -314,6 +319,7 @@ import {
   shouldPreemptivelyCompactBeforePrompt,
 } from "./preemptive-compaction.js";
 import {
+  buildRuntimeContextSystemContext,
   queueRuntimeContextForNextTurn,
   resolveRuntimeContextPromptParts,
 } from "./runtime-context-prompt.js";
@@ -475,12 +481,13 @@ export function applyEmbeddedAttemptToolsAllow<T extends { name: string }>(
   if (!toolsAllow || toolsAllow.length === 0) {
     return tools;
   }
-  const allowSet = new Set(toolsAllow);
-  return tools.filter((tool) => allowSet.has(tool.name));
+  const allowSet = new Set(toolsAllow.map((name) => normalizeToolName(name)));
+  return tools.filter((tool) => allowSet.has(normalizeToolName(tool.name)));
 }
 
 export function normalizeMessagesForLlmBoundary(messages: AgentMessage[]): AgentMessage[] {
-  return stripToolResultDetails(normalizeAssistantReplayContent(messages));
+  const normalized = stripToolResultDetails(normalizeAssistantReplayContent(messages));
+  return stripRuntimeContextCustomMessages(normalized);
 }
 
 export function shouldCreateBundleMcpRuntimeForAttempt(params: {
@@ -641,6 +648,13 @@ export async function runEmbeddedAttempt(
 
     const sessionLabel = params.sessionKey ?? params.sessionId;
     const contextInjectionMode = resolveContextInjectionMode(params.config);
+    const isRawModelRun = params.modelRun === true || params.promptMode === "none";
+    if (isRawModelRun && log.isEnabled("debug")) {
+      log.debug(
+        `raw model run enabled: modelRun=${params.modelRun === true} promptMode=${params.promptMode ?? "unset"}`,
+      );
+    }
+    const activeContextEngine = isRawModelRun ? undefined : params.contextEngine;
     const agentDir = params.agentDir ?? resolveOpenClawAgentDir();
     const diagnosticTrace = freezeDiagnosticTraceContext(
       createDiagnosticTraceContextFromActiveScope(),
@@ -680,7 +694,7 @@ export async function runEmbeddedAttempt(
       });
     };
     const toolsRaw =
-      params.disableTools || params.modelRun
+      params.disableTools || isRawModelRun
         ? []
         : (() => {
             const allTools = createOpenClawCodingTools({
@@ -705,6 +719,7 @@ export async function runEmbeddedAttempt(
               senderUsername: params.senderUsername,
               senderE164: params.senderE164,
               senderIsOwner: params.senderIsOwner,
+              ownerOnlyToolAllowlist: params.ownerOnlyToolAllowlist,
               allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
               sessionKey: sandboxSessionKey,
               sessionId: params.sessionId,
@@ -719,7 +734,7 @@ export async function runEmbeddedAttempt(
               }),
               config: params.config,
               abortSignal: runAbortController.signal,
-              modelProvider: params.model.provider,
+              modelProvider: params.provider,
               modelId: params.modelId,
               modelCompat: extractModelCompat(params.model),
               modelApi: params.model.api,
@@ -765,7 +780,9 @@ export async function runEmbeddedAttempt(
       contextFiles: resolvedContextFiles,
       shouldRecordCompletedBootstrapTurn,
     } = await resolveAttemptBootstrapContext({
-      contextInjectionMode,
+      // modelRun is a provider probe, not an agent turn. Keep AGENTS/BOOTSTRAP
+      // context out even when the gateway is exercising the embedded runtime.
+      contextInjectionMode: isRawModelRun ? "never" : contextInjectionMode,
       bootstrapContextMode: params.bootstrapContextMode,
       bootstrapContextRunKind: params.bootstrapContextRunKind ?? "default",
       bootstrapMode,
@@ -860,10 +877,10 @@ export async function runEmbeddedAttempt(
       modelApi: params.model.api,
       model: params.model,
     });
-    const clientTools = toolsEnabled ? params.clientTools : undefined;
+    const clientTools = toolsEnabled && !isRawModelRun ? params.clientTools : undefined;
     const bundleMcpEnabled = shouldCreateBundleMcpRuntimeForAttempt({
       toolsEnabled,
-      disableTools: params.disableTools,
+      disableTools: params.disableTools || isRawModelRun,
       toolsAllow: params.toolsAllow,
     });
     const bundleMcpSessionRuntime = bundleMcpEnabled
@@ -883,17 +900,18 @@ export async function runEmbeddedAttempt(
           ],
         })
       : undefined;
-    const bundleLspRuntime = toolsEnabled
-      ? await createBundleLspToolRuntime({
-          workspaceDir: effectiveWorkspace,
-          cfg: params.config,
-          reservedToolNames: [
-            ...tools.map((tool) => tool.name),
-            ...(clientTools?.map((tool) => tool.function.name) ?? []),
-            ...(bundleMcpRuntime?.tools.map((tool) => tool.name) ?? []),
-          ],
-        })
-      : undefined;
+    const bundleLspRuntime =
+      toolsEnabled && !isRawModelRun
+        ? await createBundleLspToolRuntime({
+            workspaceDir: effectiveWorkspace,
+            cfg: params.config,
+            reservedToolNames: [
+              ...tools.map((tool) => tool.name),
+              ...(clientTools?.map((tool) => tool.function.name) ?? []),
+              ...(bundleMcpRuntime?.tools.map((tool) => tool.name) ?? []),
+            ],
+          })
+        : undefined;
     const filteredBundledTools = applyFinalEffectiveToolPolicy({
       bundledTools: [...(bundleMcpRuntime?.tools ?? []), ...(bundleLspRuntime?.tools ?? [])],
       config: params.config,
@@ -913,6 +931,7 @@ export async function runEmbeddedAttempt(
       senderUsername: params.senderUsername,
       senderE164: params.senderE164,
       senderIsOwner: params.senderIsOwner,
+      ownerOnlyToolAllowlist: params.ownerOnlyToolAllowlist,
       warn: (message) => log.warn(message),
     });
     const effectiveTools = [...tools, ...filteredBundledTools];
@@ -1058,7 +1077,7 @@ export async function runEmbeddedAttempt(
     const isDefaultAgent = sessionAgentId === defaultAgentId;
     const promptMode =
       params.promptMode ??
-      (params.modelRun ? "none" : resolvePromptModeForSession(params.sessionKey));
+      (isRawModelRun ? "none" : resolvePromptModeForSession(params.sessionKey));
 
     // When toolsAllow is set, use minimal prompt and strip skills catalog
     const effectivePromptMode = params.toolsAllow?.length ? ("minimal" as const) : promptMode;
@@ -1128,6 +1147,8 @@ export async function runEmbeddedAttempt(
         workspaceNotes: workspaceNotes?.length ? workspaceNotes : undefined,
         reactionGuidance,
         promptMode: effectivePromptMode,
+        sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+        silentReplyPromptMode: params.silentReplyPromptMode,
         acpEnabled: isAcpRuntimeSpawnAvailable({
           config: params.config,
           sandboxed: sandboxInfo?.enabled === true,
@@ -1142,27 +1163,29 @@ export async function runEmbeddedAttempt(
         userTime,
         userTimeFormat,
         contextFiles,
-        includeMemorySection: !params.contextEngine || params.contextEngine.info.id === "legacy",
+        includeMemorySection: !activeContextEngine || activeContextEngine.info.id === "legacy",
         memoryCitationsMode: params.config?.memory?.citations,
         promptContribution,
       });
-    const appendPrompt = transformProviderSystemPrompt({
-      provider: params.provider,
-      config: params.config,
-      workspaceDir: effectiveWorkspace,
-      context: {
-        config: params.config,
-        agentDir: params.agentDir,
-        workspaceDir: effectiveWorkspace,
-        provider: params.provider,
-        modelId: params.modelId,
-        promptMode: effectivePromptMode,
-        runtimeChannel,
-        runtimeCapabilities,
-        agentId: sessionAgentId,
-        systemPrompt: builtAppendPrompt,
-      },
-    });
+    const appendPrompt = isRawModelRun
+      ? ""
+      : transformProviderSystemPrompt({
+          provider: params.provider,
+          config: params.config,
+          workspaceDir: effectiveWorkspace,
+          context: {
+            config: params.config,
+            agentDir: params.agentDir,
+            workspaceDir: effectiveWorkspace,
+            provider: params.provider,
+            modelId: params.modelId,
+            promptMode: effectivePromptMode,
+            runtimeChannel,
+            runtimeCapabilities,
+            agentId: sessionAgentId,
+            systemPrompt: builtAppendPrompt,
+          },
+        });
     const systemPromptReport = buildSystemPromptReport({
       source: "run",
       generatedAt: Date.now(),
@@ -1193,7 +1216,11 @@ export async function runEmbeddedAttempt(
     });
     const systemPromptOverride = createSystemPromptOverride(appendPrompt);
     let systemPromptText = systemPromptOverride();
-    const userPromptPrefixText = bootstrapRouting.userPromptPrefixText;
+    const userPromptPrefixText = appendBootstrapFileToUserPromptPrefix({
+      prefixText: bootstrapRouting.userPromptPrefixText,
+      bootstrapMode,
+      contextFiles: remappedContextFiles,
+    });
 
     // Keep the session lock scoped to transcript/session mutations. Cold plugin
     // and tool setup can be slow, and holding the lock there blocks CLI fallback
@@ -1252,7 +1279,7 @@ export async function runEmbeddedAttempt(
 
       await runAttemptContextEngineBootstrap({
         hadSessionFile,
-        contextEngine: params.contextEngine,
+        contextEngine: activeContextEngine,
         sessionId: params.sessionId,
         sessionKey: params.sessionKey,
         sessionFile: params.sessionFile,
@@ -1292,7 +1319,7 @@ export async function runEmbeddedAttempt(
       });
       applyPiAutoCompactionGuard({
         settingsManager,
-        contextEngineInfo: params.contextEngine?.info,
+        contextEngineInfo: activeContextEngine?.info,
       });
 
       // Sets compaction/pruning runtime state and returns extension factories
@@ -1414,6 +1441,15 @@ export async function runEmbeddedAttempt(
       }
       session.setActiveToolsByName(sessionToolAllowlist);
       const activeSession = session;
+      if (isRawModelRun) {
+        // Raw model probes should measure exactly the requested prompt against
+        // the selected provider/model. Reset clears restored transcript state
+        // and queues; the empty system override prevents Pi from rebuilding the
+        // normal OpenClaw agent/tool prompt when `session.prompt()` starts.
+        activeSession.agent.reset();
+        applySystemPromptOverrideToSession(activeSession, "");
+        systemPromptText = "";
+      }
       if (typeof activeSession.agent.convertToLlm === "function") {
         const baseConvertToLlm = activeSession.agent.convertToLlm.bind(activeSession.agent);
         activeSession.agent.convertToLlm = async (messages) =>
@@ -1427,7 +1463,7 @@ export async function runEmbeddedAttempt(
       queueYieldInterruptForSession = () => {
         queueSessionsYieldInterruptMessage(activeSession);
       };
-      if (params.contextEngine?.info?.ownsCompaction !== true) {
+      if (!activeContextEngine || activeContextEngine.info.ownsCompaction !== true) {
         removeToolResultContextGuard = installToolResultContextGuard({
           agent: activeSession.agent,
           contextWindowTokens: Math.max(
@@ -1440,7 +1476,7 @@ export async function runEmbeddedAttempt(
       } else {
         removeToolResultContextGuard = installContextEngineLoopHook({
           agent: activeSession.agent,
-          contextEngine: params.contextEngine,
+          contextEngine: activeContextEngine,
           sessionId: params.sessionId,
           sessionKey: params.sessionKey,
           sessionFile: params.sessionFile,
@@ -1861,65 +1897,75 @@ export async function runEmbeddedAttempt(
       );
 
       try {
-        const prior = await sanitizeSessionHistory({
-          messages: activeSession.messages,
-          modelApi: params.model.api,
-          modelId: params.modelId,
-          provider: params.provider,
-          allowedToolNames,
-          config: params.config,
-          workspaceDir: effectiveWorkspace,
-          env: process.env,
-          model: params.model,
-          sessionManager,
-          sessionId: params.sessionId,
-          policy: transcriptPolicy,
-        });
-        cacheTrace?.recordStage("session:sanitized", { messages: prior });
-        const validated = await validateReplayTurns({
-          messages: prior,
-          modelApi: params.model.api,
-          modelId: params.modelId,
-          provider: params.provider,
-          config: params.config,
-          workspaceDir: effectiveWorkspace,
-          env: process.env,
-          model: params.model,
-          sessionId: params.sessionId,
-          policy: transcriptPolicy,
-        });
-        const heartbeatSummary =
-          params.config && sessionAgentId
-            ? resolveHeartbeatSummaryForAgent(params.config, sessionAgentId)
-            : undefined;
-        const heartbeatFiltered = filterHeartbeatPairs(
-          validated,
-          heartbeatSummary?.ackMaxChars,
-          heartbeatSummary?.prompt,
-        );
-        const truncated = limitHistoryTurns(
-          heartbeatFiltered,
-          getDmHistoryLimitFromSessionKey(params.sessionKey, params.config),
-        );
-        // Re-run tool_use/tool_result pairing repair after truncation, since
-        // limitHistoryTurns can orphan tool_result blocks by removing the
-        // assistant message that contained the matching tool_use.
-        const limited = transcriptPolicy.repairToolUseResultPairing
-          ? sanitizeToolUseResultPairing(truncated, {
-              erroredAssistantResultPolicy: "drop",
-              ...(isOpenAIResponsesApi ? { missingToolResultText: "aborted" } : {}),
-            })
-          : truncated;
-        cacheTrace?.recordStage("session:limited", { messages: limited });
-        if (limited.length > 0) {
-          activeSession.agent.state.messages = limited;
+        if (isRawModelRun) {
+          activeSession.agent.reset();
+          applySystemPromptOverrideToSession(activeSession, "");
+          systemPromptText = "";
+          cacheTrace?.recordStage("session:raw-model-run", {
+            messages: activeSession.messages,
+            system: systemPromptText,
+          });
+        } else {
+          const prior = await sanitizeSessionHistory({
+            messages: activeSession.messages,
+            modelApi: params.model.api,
+            modelId: params.modelId,
+            provider: params.provider,
+            allowedToolNames,
+            config: params.config,
+            workspaceDir: effectiveWorkspace,
+            env: process.env,
+            model: params.model,
+            sessionManager,
+            sessionId: params.sessionId,
+            policy: transcriptPolicy,
+          });
+          cacheTrace?.recordStage("session:sanitized", { messages: prior });
+          const validated = await validateReplayTurns({
+            messages: prior,
+            modelApi: params.model.api,
+            modelId: params.modelId,
+            provider: params.provider,
+            config: params.config,
+            workspaceDir: effectiveWorkspace,
+            env: process.env,
+            model: params.model,
+            sessionId: params.sessionId,
+            policy: transcriptPolicy,
+          });
+          const heartbeatSummary =
+            params.config && sessionAgentId
+              ? resolveHeartbeatSummaryForAgent(params.config, sessionAgentId)
+              : undefined;
+          const heartbeatFiltered = filterHeartbeatPairs(
+            validated,
+            heartbeatSummary?.ackMaxChars,
+            heartbeatSummary?.prompt,
+          );
+          const truncated = limitHistoryTurns(
+            heartbeatFiltered,
+            getDmHistoryLimitFromSessionKey(params.sessionKey, params.config),
+          );
+          // Re-run tool_use/tool_result pairing repair after truncation, since
+          // limitHistoryTurns can orphan tool_result blocks by removing the
+          // assistant message that contained the matching tool_use.
+          const limited = transcriptPolicy.repairToolUseResultPairing
+            ? sanitizeToolUseResultPairing(truncated, {
+                erroredAssistantResultPolicy: "drop",
+                ...(isOpenAIResponsesApi ? { missingToolResultText: "aborted" } : {}),
+              })
+            : truncated;
+          cacheTrace?.recordStage("session:limited", { messages: limited });
+          if (limited.length > 0) {
+            activeSession.agent.state.messages = limited;
+          }
         }
 
-        if (params.contextEngine) {
+        if (activeContextEngine) {
           try {
             unwindowedContextEngineMessagesForPrecheck = activeSession.messages.slice();
             const assembled = await assembleAttemptContextEngine({
-              contextEngine: params.contextEngine,
+              contextEngine: activeContextEngine,
               sessionId: params.sessionId,
               sessionKey: params.sessionKey,
               messages: activeSession.messages,
@@ -2252,18 +2298,27 @@ export async function runEmbeddedAttempt(
         };
         const promptBuildMessages =
           pruneProcessedHistoryImages(activeSession.messages) ?? activeSession.messages;
-        const hookResult = await resolvePromptBuildHookResult({
-          prompt: params.prompt,
-          messages: promptBuildMessages,
-          hookCtx,
-          hookRunner,
-          legacyBeforeAgentStartResult: params.legacyBeforeAgentStartResult,
-        });
+        const hookResult = isRawModelRun
+          ? undefined
+          : await resolvePromptBuildHookResult({
+              config: params.config ?? getRuntimeConfig(),
+              prompt: params.prompt,
+              messages: promptBuildMessages,
+              hookCtx,
+              hookRunner,
+              legacyBeforeAgentStartResult: params.legacyBeforeAgentStartResult,
+            });
         {
           if (hookResult?.prependContext) {
             effectivePrompt = `${hookResult.prependContext}\n\n${effectivePrompt}`;
             log.debug(
               `hooks: prepended context to prompt (${hookResult.prependContext.length} chars)`,
+            );
+          }
+          if (hookResult?.appendContext) {
+            effectivePrompt = `${effectivePrompt}\n\n${hookResult.appendContext}`;
+            log.debug(
+              `hooks: appended context to prompt (${hookResult.appendContext.length} chars)`,
             );
           }
           const legacySystemPrompt = normalizeOptionalString(hookResult?.systemPrompt) ?? "";
@@ -2355,7 +2410,7 @@ export async function runEmbeddedAttempt(
         });
 
         // Repair orphaned trailing user messages so new prompts don't violate role ordering.
-        const leafEntry = sessionManager.getLeafEntry();
+        const leafEntry = isRawModelRun ? null : sessionManager.getLeafEntry();
         if (leafEntry?.type === "message" && leafEntry.message.role === "user") {
           const orphanPromptMerge = resolveMessageMergeStrategy().mergeOrphanedTrailingUserPrompt({
             prompt: effectivePrompt,
@@ -2390,6 +2445,15 @@ export async function runEmbeddedAttempt(
             log.debug(orphanRepairMessage);
           }
         }
+        if (!isRawModelRun) {
+          effectivePrompt = annotateInterSessionPromptText(effectivePrompt, params.inputProvenance);
+        }
+        const effectiveTranscriptPrompt =
+          params.transcriptPrompt === undefined
+            ? undefined
+            : isRawModelRun
+              ? params.transcriptPrompt
+              : annotateInterSessionPromptText(params.transcriptPrompt, params.inputProvenance);
         const transcriptLeafId =
           (sessionManager.getLeafEntry() as { id?: string } | null | undefined)?.id ?? null;
         const heartbeatSummary =
@@ -2410,7 +2474,7 @@ export async function runEmbeddedAttempt(
 
           const promptSubmission = resolveRuntimeContextPromptParts({
             effectivePrompt,
-            transcriptPrompt: params.transcriptPrompt,
+            transcriptPrompt: effectiveTranscriptPrompt,
           });
           const runtimeSystemContext = promptSubmission.runtimeSystemContext?.trim();
           if (promptSubmission.runtimeOnly && runtimeSystemContext) {
@@ -2524,7 +2588,7 @@ export async function runEmbeddedAttempt(
             );
           }
 
-          if (hookRunner?.hasHooks("llm_input")) {
+          if (!isRawModelRun && hookRunner?.hasHooks("llm_input")) {
             hookRunner
               .runLlmInput(
                 {
@@ -2657,19 +2721,35 @@ export async function runEmbeddedAttempt(
             if (promptSubmission.runtimeOnly) {
               await abortable(activeSession.prompt(promptSubmission.prompt));
             } else {
-              await queueRuntimeContextForNextTurn({
-                session: activeSession,
-                runtimeContext: promptSubmission.runtimeContext,
-              });
+              const runtimeContext = promptSubmission.runtimeContext?.trim();
+              const runtimeSystemPrompt = runtimeContext
+                ? composeSystemPromptWithHookContext({
+                    baseSystemPrompt: systemPromptText,
+                    appendSystemContext: buildRuntimeContextSystemContext(runtimeContext),
+                  })
+                : undefined;
+              if (runtimeSystemPrompt) {
+                applySystemPromptOverrideToSession(activeSession, runtimeSystemPrompt);
+              }
+              try {
+                await queueRuntimeContextForNextTurn({
+                  session: activeSession,
+                  runtimeContext,
+                });
 
-              // Only pass images option if there are actually images to pass
-              // This avoids potential issues with models that don't expect the images parameter
-              if (imageResult.images.length > 0) {
-                await abortable(
-                  activeSession.prompt(promptSubmission.prompt, { images: imageResult.images }),
-                );
-              } else {
-                await abortable(activeSession.prompt(promptSubmission.prompt));
+                // Only pass images option if there are actually images to pass
+                // This avoids potential issues with models that don't expect the images parameter
+                if (imageResult.images.length > 0) {
+                  await abortable(
+                    activeSession.prompt(promptSubmission.prompt, { images: imageResult.images }),
+                  );
+                } else {
+                  await abortable(activeSession.prompt(promptSubmission.prompt));
+                }
+              } finally {
+                if (runtimeSystemPrompt) {
+                  applySystemPromptOverrideToSession(activeSession, systemPromptText);
+                }
               }
             }
           }
@@ -2863,7 +2943,7 @@ export async function runEmbeddedAttempt(
         }
 
         // Let the active context engine run its post-turn lifecycle.
-        if (params.contextEngine) {
+        if (activeContextEngine) {
           const afterTurnRuntimeContext = buildAfterTurnRuntimeContextFromUsage({
             attempt: params,
             workspaceDir: effectiveWorkspace,
@@ -2873,7 +2953,7 @@ export async function runEmbeddedAttempt(
             promptCache,
           });
           await finalizeAttemptContextEngineTurn({
-            contextEngine: params.contextEngine,
+            contextEngine: activeContextEngine,
             promptError: Boolean(promptError),
             aborted,
             yieldAborted,

@@ -60,5 +60,5 @@ docker_e2e_package_mount_args() {
 }
 
 docker_e2e_harness_mount_args() {
-  DOCKER_E2E_HARNESS_ARGS=(-v "$ROOT_DIR/scripts/e2e:/app/scripts/e2e:ro")
+  DOCKER_E2E_HARNESS_ARGS=(-v "$ROOT_DIR/scripts/e2e:/app/scripts/e2e:ro" -v "$ROOT_DIR/scripts/lib:/app/scripts/lib:ro")
 }

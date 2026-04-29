@@ -1,4 +1,5 @@
 import type { Message, ReactionTypeEmoji } from "@grammyjs/types";
+import { parseExecApprovalCommandText } from "openclaw/plugin-sdk/approval-reply-runtime";
 import { resolveChannelConfigWrites } from "openclaw/plugin-sdk/channel-config-helpers";
 import { shouldDebounceTextInbound } from "openclaw/plugin-sdk/channel-inbound";
 import {
@@ -19,7 +20,6 @@ import {
   parsePluginBindingApprovalCustomId,
   resolvePluginConversationBindingApproval,
 } from "openclaw/plugin-sdk/conversation-runtime";
-import { parseExecApprovalCommandText } from "openclaw/plugin-sdk/infra-runtime";
 import { applyModelOverrideToSessionEntry } from "openclaw/plugin-sdk/model-session-runtime";
 import { formatModelsAvailableHeader } from "openclaw/plugin-sdk/models-provider-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";

@@ -16,6 +16,7 @@ import {
   buildPluginApprovalPendingReplyPayload,
   buildPluginApprovalResolvedReplyPayload,
 } from "../plugin-sdk/approval-renderers.js";
+import { channelRouteDedupeKey } from "../plugin-sdk/channel-route.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import {
   isDeliverableMessageChannel,
@@ -169,9 +170,12 @@ function shouldForwardRoute(params: {
 
 function buildTargetKey(target: ExecApprovalForwardTarget): string {
   const channel = normalizeMessageChannel(target.channel) ?? target.channel;
-  const accountId = target.accountId ?? "";
-  const threadId = target.threadId ?? "";
-  return [channel, target.to, accountId, threadId].join(":");
+  return channelRouteDedupeKey({
+    channel,
+    to: target.to,
+    accountId: target.accountId,
+    threadId: target.threadId,
+  });
 }
 
 function buildSyntheticApprovalRequest(routeRequest: ApprovalRouteRequest): ExecApprovalRequest {
@@ -228,6 +232,10 @@ function buildRequestMessage(request: ExecApprovalRequest, nowMs: number) {
   const allowedDecisions = resolveExecApprovalRequestAllowedDecisions(request.request);
   const decisionText = allowedDecisions.join("|");
   const lines: string[] = ["🔒 Exec approval required", `ID: ${request.id}`];
+  const warningText = request.request.warningText?.trim();
+  if (warningText) {
+    lines.push("", warningText);
+  }
   const command = formatApprovalCommand(
     resolveExecApprovalCommandDisplay(request.request).commandText,
   );

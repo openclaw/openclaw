@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-import JSON5 from "json5";
 import type { ChannelConfigRuntimeSchema } from "../channels/plugins/types.config.js";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
 import { matchBoundaryFileOpenFailure, openBoundaryFileSync } from "../infra/boundary-file-read.js";
@@ -23,6 +22,7 @@ import type { JsonSchemaObject } from "../shared/json-schema.types.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { normalizeTrimmedStringList } from "../shared/string-normalization.js";
 import { isRecord } from "../utils.js";
+import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
 import {
   normalizeManifestCommandAliases,
   type PluginManifestCommandAlias,
@@ -33,6 +33,20 @@ import type { PluginKind } from "./plugin-kind.types.js";
 export const PLUGIN_MANIFEST_FILENAME = "openclaw.plugin.json";
 export const PLUGIN_MANIFEST_FILENAMES = [PLUGIN_MANIFEST_FILENAME] as const;
 export const MAX_PLUGIN_MANIFEST_BYTES = 256 * 1024;
+const MAX_PLUGIN_MANIFEST_LOAD_CACHE_ENTRIES = 512;
+
+type PluginManifestLoadCacheEntry = {
+  result: PluginManifestLoadResult;
+  size: number;
+  mtimeMs: number;
+  ctimeMs: number;
+};
+
+const pluginManifestLoadCache = new Map<string, PluginManifestLoadCacheEntry>();
+
+export function clearPluginManifestLoadCache(): void {
+  pluginManifestLoadCache.clear();
+}
 
 export type PluginManifestChannelConfig = {
   schema: JsonSchemaObject;
@@ -140,6 +154,14 @@ export type PluginManifestProviderRequest = {
 export type PluginManifestActivationCapability = "provider" | "channel" | "tool" | "hook";
 
 export type PluginManifestActivation = {
+  /**
+   * Explicit Gateway startup activation. Every plugin should set this as
+   * OpenClaw moves away from implicit startup sidecar loading. Set true when
+   * the plugin must be imported during Gateway startup; set false to opt out
+   * of the deprecated implicit startup sidecar fallback when no other
+   * activation trigger matches.
+   */
+  onStartup?: boolean;
   /**
    * Provider ids that should include this plugin in activation/load plans.
    * This is planner metadata only; runtime behavior still comes from register().
@@ -920,6 +942,7 @@ function normalizeManifestActivation(value: unknown): PluginManifestActivation |
   const onChannels = normalizeTrimmedStringList(value.onChannels);
   const onRoutes = normalizeTrimmedStringList(value.onRoutes);
   const onConfigPaths = normalizeTrimmedStringList(value.onConfigPaths);
+  const onStartup = typeof value.onStartup === "boolean" ? value.onStartup : undefined;
   const onCapabilities = normalizeTrimmedStringList(value.onCapabilities).filter(
     (capability): capability is PluginManifestActivationCapability =>
       capability === "provider" ||
@@ -929,6 +952,7 @@ function normalizeManifestActivation(value: unknown): PluginManifestActivation |
   );
 
   const activation = {
+    ...(onStartup !== undefined ? { onStartup } : {}),
     ...(onProviders.length > 0 ? { onProviders } : {}),
     ...(onAgentHarnesses.length > 0 ? { onAgentHarnesses } : {}),
     ...(onCommands.length > 0 ? { onCommands } : {}),
@@ -1138,6 +1162,62 @@ export function resolvePluginManifestPath(rootDir: string): string {
   return path.join(rootDir, PLUGIN_MANIFEST_FILENAME);
 }
 
+function buildPluginManifestLoadCacheKey(params: {
+  manifestPath: string;
+  rejectHardlinks: boolean;
+  rootRealPath?: string;
+  stats: fs.Stats;
+}): string {
+  return JSON.stringify([
+    path.resolve(params.manifestPath),
+    params.rejectHardlinks,
+    params.rootRealPath ?? "",
+    params.stats.dev,
+    params.stats.ino,
+    params.stats.size,
+    params.stats.mtimeMs,
+    params.stats.ctimeMs,
+  ]);
+}
+
+function getCachedPluginManifestLoadResult(
+  key: string,
+  stats: fs.Stats,
+): PluginManifestLoadResult | undefined {
+  const entry = pluginManifestLoadCache.get(key);
+  if (
+    !entry ||
+    entry.size !== stats.size ||
+    entry.mtimeMs !== stats.mtimeMs ||
+    entry.ctimeMs !== stats.ctimeMs
+  ) {
+    return undefined;
+  }
+  pluginManifestLoadCache.delete(key);
+  pluginManifestLoadCache.set(key, entry);
+  return entry.result;
+}
+
+function setCachedPluginManifestLoadResult(
+  key: string,
+  stats: fs.Stats,
+  result: PluginManifestLoadResult,
+): void {
+  pluginManifestLoadCache.set(key, {
+    result,
+    size: stats.size,
+    mtimeMs: stats.mtimeMs,
+    ctimeMs: stats.ctimeMs,
+  });
+  if (pluginManifestLoadCache.size <= MAX_PLUGIN_MANIFEST_LOAD_CACHE_ENTRIES) {
+    return;
+  }
+  const oldestKey = pluginManifestLoadCache.keys().next().value;
+  if (typeof oldestKey === "string") {
+    pluginManifestLoadCache.delete(oldestKey);
+  }
+}
+
 function parsePluginKind(raw: unknown): PluginKind | PluginKind[] | undefined {
   if (typeof raw === "string") {
     return raw as PluginKind;
@@ -1176,28 +1256,44 @@ export function loadPluginManifest(
       }),
     });
   }
+  const stats = opened.stat;
+  const cacheKey = buildPluginManifestLoadCacheKey({
+    manifestPath,
+    rejectHardlinks,
+    ...(rootRealPath !== undefined ? { rootRealPath } : {}),
+    stats,
+  });
+  const cached = getCachedPluginManifestLoadResult(cacheKey, stats);
+  if (cached) {
+    fs.closeSync(opened.fd);
+    return cached;
+  }
+  const cacheResult = (result: PluginManifestLoadResult): PluginManifestLoadResult => {
+    setCachedPluginManifestLoadResult(cacheKey, stats, result);
+    return result;
+  };
   let raw: unknown;
   try {
-    raw = JSON5.parse(fs.readFileSync(opened.fd, "utf-8"));
+    raw = parseJsonWithJson5Fallback(fs.readFileSync(opened.fd, "utf-8"));
   } catch (err) {
-    return {
+    return cacheResult({
       ok: false,
       error: `failed to parse plugin manifest: ${String(err)}`,
       manifestPath,
-    };
+    });
   } finally {
     fs.closeSync(opened.fd);
   }
   if (!isRecord(raw)) {
-    return { ok: false, error: "plugin manifest must be an object", manifestPath };
+    return cacheResult({ ok: false, error: "plugin manifest must be an object", manifestPath });
   }
   const id = normalizeOptionalString(raw.id) ?? "";
   if (!id) {
-    return { ok: false, error: "plugin manifest requires id", manifestPath };
+    return cacheResult({ ok: false, error: "plugin manifest requires id", manifestPath });
   }
   const configSchema = isRecord(raw.configSchema) ? raw.configSchema : null;
   if (!configSchema) {
-    return { ok: false, error: "plugin manifest requires configSchema", manifestPath };
+    return cacheResult({ ok: false, error: "plugin manifest requires configSchema", manifestPath });
   }
 
   const kind = parsePluginKind(raw.kind);
@@ -1250,7 +1346,7 @@ export function loadPluginManifest(
     uiHints = raw.uiHints as Record<string, PluginConfigUiHint>;
   }
 
-  return {
+  return cacheResult({
     ok: true,
     manifest: {
       id,
@@ -1292,7 +1388,7 @@ export function loadPluginManifest(
       channelConfigs,
     },
     manifestPath,
-  };
+  });
 }
 
 // package.json "openclaw" metadata (used for setup/catalog)

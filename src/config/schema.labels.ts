@@ -119,6 +119,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "gateway.tools": "Gateway Tool Exposure Policy",
   "gateway.tools.allow": "Gateway Tool Allowlist",
   "gateway.tools.deny": "Gateway Tool Denylist",
+  "gateway.handshakeTimeoutMs": "Gateway Handshake Timeout",
   "gateway.channelHealthCheckMinutes": "Gateway Channel Health Check Interval (min)",
   "gateway.channelStaleEventThresholdMinutes": "Gateway Channel Stale Event Threshold (min)",
   "gateway.channelMaxRestartsPerHour": "Gateway Channel Max Restarts Per Hour",
@@ -417,6 +418,8 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.memorySearch.remote.baseUrl": "Remote Embedding Base URL",
   "agents.defaults.memorySearch.remote.apiKey": "Remote Embedding API Key",
   "agents.defaults.memorySearch.remote.headers": "Remote Embedding Headers",
+  "agents.defaults.memorySearch.remote.nonBatchConcurrency":
+    "Remote Non-Batch Embedding Concurrency",
   "agents.defaults.memorySearch.remote.batch.enabled": "Remote Batch Embedding Enabled",
   "agents.defaults.memorySearch.remote.batch.wait": "Remote Batch Wait for Completion",
   "agents.defaults.memorySearch.remote.batch.concurrency": "Remote Batch Concurrency",
@@ -513,6 +516,8 @@ export const FIELD_LABELS: Record<string, string> = {
   "acp.runtime.installCommand": "ACP Runtime Install Command",
   models: "Models",
   "models.mode": "Model Catalog Mode",
+  "models.pricing": "Model Pricing",
+  "models.pricing.enabled": "Model Pricing Enabled",
   "models.providers": "Model Providers",
   "models.providers.*.baseUrl": "Model Provider Base URL",
   "models.providers.*.apiKey": "Model Provider API Key", // pragma: allowlist secret
@@ -607,6 +612,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.compaction.notifyUser": "Compaction Notify User",
   "agents.defaults.compaction.memoryFlush": "Compaction Memory Flush",
   "agents.defaults.compaction.memoryFlush.enabled": "Compaction Memory Flush Enabled",
+  "agents.defaults.compaction.memoryFlush.model": "Compaction Memory Flush Model Override",
   "agents.defaults.compaction.memoryFlush.softThresholdTokens":
     "Compaction Memory Flush Soft Threshold",
   "agents.defaults.compaction.memoryFlush.forceFlushTranscriptBytes":
@@ -630,6 +636,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.sandbox.browser.cdpSourceRange": "Sandbox Browser CDP Source Port Range",
   "agents.defaults.sandbox.docker.dangerouslyAllowContainerNamespaceJoin":
     "Sandbox Docker Allow Container Namespace Join",
+  "agents.defaults.sandbox.docker.gpus": "Sandbox Docker GPUs",
   commands: "Commands",
   "commands.native": "Native Commands",
   "commands.nativeSkills": "Native Skill Commands",
@@ -709,7 +716,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "session.maintenance.pruneAfter": "Session Prune After",
   "session.maintenance.pruneDays": "Session Prune Days (Deprecated)",
   "session.maintenance.maxEntries": "Session Max Entries",
-  "session.maintenance.rotateBytes": "Session Rotate Size",
+  "session.maintenance.rotateBytes": "Deprecated Session Rotate Size",
   "session.maintenance.resetArchiveRetention": "Session Reset Archive Retention",
   "session.maintenance.maxDiskBytes": "Session Max Disk Budget",
   "session.maintenance.highWaterBytes": "Session Disk High-water Target",
@@ -796,6 +803,10 @@ export const FIELD_LABELS: Record<string, string> = {
   "web.reconnect.factor": "Web Reconnect Backoff Factor",
   "web.reconnect.jitter": "Web Reconnect Jitter",
   "web.reconnect.maxAttempts": "Web Reconnect Max Attempts",
+  "web.whatsapp": "WhatsApp Web Socket Timing",
+  "web.whatsapp.keepAliveIntervalMs": "WhatsApp Web Keepalive Interval (ms)",
+  "web.whatsapp.connectTimeoutMs": "WhatsApp Web Connect Timeout (ms)",
+  "web.whatsapp.defaultQueryTimeoutMs": "WhatsApp Web Query Timeout (ms)",
   discovery: "Discovery",
   "discovery.wideArea": "Wide-area Discovery",
   "discovery.wideArea.enabled": "Wide-area Discovery Enabled",
@@ -816,6 +827,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "messages.groupChat": "Group Chat Rules",
   "messages.groupChat.mentionPatterns": "Group Mention Patterns",
   "messages.groupChat.historyLimit": "Group History Limit",
+  "messages.groupChat.visibleReplies": "Group Visible Replies",
   "messages.queue": "Inbound Queue",
   "messages.queue.mode": "Queue Mode",
   "messages.queue.byChannel": "Queue Mode by Channel",
@@ -873,6 +885,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.list[].sandbox.browser.cdpSourceRange": "Agent Sandbox Browser CDP Source Port Range",
   "agents.list[].sandbox.docker.dangerouslyAllowContainerNamespaceJoin":
     "Agent Sandbox Docker Allow Container Namespace Join",
+  "agents.list[].sandbox.docker.gpus": "Agent Sandbox Docker GPUs",
   "discovery.mdns.mode": "mDNS Discovery Mode",
   plugins: "Plugins",
   "plugins.enabled": "Enable Plugins",

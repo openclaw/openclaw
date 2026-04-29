@@ -775,6 +775,63 @@ describe("gateway server sessions", () => {
     ws.close();
   });
 
+  test("sessions.list uses the gateway model catalog for effective thinking defaults", async () => {
+    await createSessionStoreDir();
+    testState.agentConfig = {
+      model: { primary: "test-provider/reasoner" },
+    };
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-main",
+          updatedAt: Date.now(),
+          modelProvider: "test-provider",
+          model: "reasoner",
+        },
+      },
+    });
+
+    const respond = vi.fn();
+    const sessionsHandlers = await getSessionsHandlers();
+    const { getRuntimeConfig } = await getGatewayConfigModule();
+    await sessionsHandlers["sessions.list"]({
+      req: {
+        type: "req",
+        id: "req-sessions-list-thinking-default",
+        method: "sessions.list",
+        params: {},
+      },
+      params: {},
+      respond,
+      client: null,
+      isWebchatConnect: () => false,
+      context: {
+        getRuntimeConfig,
+        loadGatewayModelCatalog: async () => [
+          {
+            provider: "test-provider",
+            id: "reasoner",
+            name: "Reasoner",
+            reasoning: true,
+          },
+        ],
+      } as never,
+    });
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        sessions: expect.arrayContaining([
+          expect.objectContaining({
+            key: "agent:main:main",
+            thinkingDefault: "medium",
+          }),
+        ]),
+      }),
+      undefined,
+    );
+  });
+
   test("sessions.changed mutation events include live usage metadata", async () => {
     const { dir } = await createSessionStoreDir();
     await fs.writeFile(

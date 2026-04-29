@@ -2,8 +2,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { AnyAgentTool } from "openclaw/plugin-sdk/agent-runtime";
+import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createTestPluginApi } from "../../test/helpers/plugins/plugin-api.js";
 import plugin, {
   applyProposalToWorkspace,
   createProposalFromMessages,

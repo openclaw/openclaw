@@ -189,6 +189,24 @@ Matrix reply streaming is opt-in. `streaming` controls how OpenClaw delivers the
 }
 ```
 
+To keep live answer previews but hide interim tool/progress lines, use object
+form:
+
+```json5
+{
+  channels: {
+    matrix: {
+      streaming: {
+        mode: "partial",
+        preview: {
+          toolProgress: false,
+        },
+      },
+    },
+  },
+}
+```
+
 | `streaming`       | Behavior                                                                                                                                                            |
 | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `"off"` (default) | Wait for the full reply, send once. `true` ↔ `"partial"`, `false` ↔ `"off"`.                                                                                        |
@@ -206,7 +224,14 @@ Notes:
 
 - If a preview grows past Matrix's per-event size limit, OpenClaw stops preview streaming and falls back to final-only delivery.
 - Media replies always send attachments normally. If a stale preview can no longer be reused safely, OpenClaw redacts it before sending the final media reply.
+- Tool-progress preview updates are enabled by default when Matrix preview streaming is active. Set `streaming.preview.toolProgress: false` to keep preview edits for answer text but leave tool progress on the normal delivery path.
 - Preview edits cost extra Matrix API calls. Leave `streaming: "off"` if you want the most conservative rate-limit profile.
+
+## Approval metadata
+
+Matrix native approval prompts are normal `m.room.message` events with OpenClaw-specific custom event content under `com.openclaw.approval`. Matrix permits custom event-content keys, so stock clients still render the text body while OpenClaw-aware clients can read the structured approval id, kind, state, available decisions, and exec/plugin details.
+
+When an approval prompt is too long for one Matrix event, OpenClaw chunks the visible text and attaches `com.openclaw.approval` to the first chunk only. Reactions for allow/deny decisions are bound to that first event, so long prompts keep the same approval target as single-event prompts.
 
 ### Self-hosted push rules for quiet finalized previews
 
@@ -844,7 +869,7 @@ Allowlist-style fields (`groupAllowFrom`, `dm.allowFrom`, `groups.<room>.users`)
 - `replyToMode`: `"off"`, `"first"`, `"all"`, or `"batched"`.
 - `threadReplies`: `"off"`, `"inbound"`, or `"always"`.
 - `threadBindings`: per-channel overrides for thread-bound session routing and lifecycle.
-- `streaming`: `"off"` (default), `"partial"`, `"quiet"`. `true` ↔ `"partial"`, `false` ↔ `"off"`.
+- `streaming`: `"off"` (default), `"partial"`, `"quiet"`, or object form `{ mode, preview: { toolProgress } }`. `true` ↔ `"partial"`, `false` ↔ `"off"`.
 - `blockStreaming`: when `true`, completed assistant blocks are kept as separate progress messages.
 - `markdown`: optional Markdown rendering config for outbound text.
 - `responsePrefix`: optional string prepended to outbound replies.

@@ -7,7 +7,11 @@ IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-plugins-e2e" OPENCLAW_PLUGINS_E
 
 docker_e2e_build_or_reuse "$IMAGE_NAME" plugins
 
-DOCKER_ENV_ARGS=(-e COREPACK_ENABLE_DOWNLOAD_PROMPT=0)
+OPENCLAW_TEST_STATE_SCRIPT_B64="$(docker_e2e_test_state_shell_b64 plugins empty)"
+DOCKER_ENV_ARGS=(
+  -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0
+  -e "OPENCLAW_TEST_STATE_SCRIPT_B64=$OPENCLAW_TEST_STATE_SCRIPT_B64"
+)
 for env_name in \
   OPENCLAW_PLUGINS_E2E_CLAWHUB \
   OPENCLAW_PLUGINS_E2E_CLAWHUB_SPEC \
@@ -64,8 +68,7 @@ NODE
 )"
 export OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT
 
-home_dir=$(mktemp -d "/tmp/openclaw-plugins-e2e.XXXXXX")
-export HOME="$home_dir"
+eval "$(printf "%s" "${OPENCLAW_TEST_STATE_SCRIPT_B64:?missing OPENCLAW_TEST_STATE_SCRIPT_B64}" | base64 -d)"
 BUNDLED_PLUGIN_ROOT_DIR="extensions"
 OPENCLAW_PLUGIN_HOME="$HOME/.openclaw/$BUNDLED_PLUGIN_ROOT_DIR"
 
@@ -646,9 +649,9 @@ NODE
 if [ "${OPENCLAW_PLUGINS_E2E_CLAWHUB:-1}" = "0" ]; then
   echo "Skipping ClawHub plugin install and uninstall (OPENCLAW_PLUGINS_E2E_CLAWHUB=0)."
 else
-echo "Testing ClawHub plugin install and uninstall..."
-CLAWHUB_PLUGIN_SPEC="${OPENCLAW_PLUGINS_E2E_CLAWHUB_SPEC:-clawhub:openclaw-now4real}"
-CLAWHUB_PLUGIN_ID="${OPENCLAW_PLUGINS_E2E_CLAWHUB_ID:-now4real}"
+echo "Testing ClawHub kitchen-sink plugin install and uninstall..."
+CLAWHUB_PLUGIN_SPEC="${OPENCLAW_PLUGINS_E2E_CLAWHUB_SPEC:-clawhub:openclaw-kitchen-sink}"
+CLAWHUB_PLUGIN_ID="${OPENCLAW_PLUGINS_E2E_CLAWHUB_ID:-openclaw-kitchen-sink-fixture}"
 export CLAWHUB_PLUGIN_SPEC CLAWHUB_PLUGIN_ID
 
 start_clawhub_fixture_server() {
@@ -666,9 +669,9 @@ const { createRequire } = require("node:module");
 const portFile = process.argv[2];
 const requireFromApp = createRequire(path.join(process.cwd(), "package.json"));
 const JSZip = requireFromApp("jszip");
-const packageName = "openclaw-now4real";
-const pluginId = "now4real";
-const version = "0.1.2";
+const packageName = "openclaw-kitchen-sink";
+const pluginId = "openclaw-kitchen-sink-fixture";
+const version = "0.1.0";
 
 async function main() {
   const zip = new JSZip();
@@ -689,9 +692,18 @@ async function main() {
     "package/index.js",
     `module.exports = {
   id: "${pluginId}",
-  name: "Now 4 Real",
+  name: "OpenClaw Kitchen Sink",
+  description: "Docker E2E kitchen-sink plugin fixture",
   register(api) {
-    api.registerGatewayMethod("now4real.ping", async () => ({ ok: true }));
+    api.on("before_agent_start", async (event, context) => ({
+      kitchenSink: true,
+      observedEventKeys: Object.keys(event || {}),
+      observedContextKeys: Object.keys(context || {}),
+    }));
+    api.registerTool(() => null, { name: "kitchen_sink_tool" });
+    api.registerGatewayMethod("kitchen-sink.ping", async () => ({ ok: true }));
+    api.registerCli(() => {}, { commands: ["kitchen-sink"] });
+    api.registerService({ id: "kitchen-sink-service", start: () => {} });
   },
 };
 `,
@@ -732,7 +744,7 @@ async function main() {
       json(response, {
         package: {
           name: packageName,
-          displayName: "Now 4 Real",
+          displayName: "OpenClaw Kitchen Sink",
           family: "code-plugin",
           channel: "official",
           isOfficial: true,
@@ -741,8 +753,8 @@ async function main() {
           createdAt: 0,
           updatedAt: 0,
           compatibility: {
-            pluginApiRange: ">=2026.4.11",
-            minGatewayVersion: "2026.4.11",
+            pluginApiRange: ">=2026.4.26",
+            minGatewayVersion: "2026.4.26",
           },
         },
       });
@@ -755,11 +767,11 @@ async function main() {
         version: {
           version,
           createdAt: 0,
-          changelog: "Fixture package for Docker plugin E2E.",
+          changelog: "Kitchen-sink fixture package for Docker plugin E2E.",
           sha256hash,
           compatibility: {
-            pluginApiRange: ">=2026.4.11",
-            minGatewayVersion: "2026.4.11",
+            pluginApiRange: ">=2026.4.26",
+            minGatewayVersion: "2026.4.26",
           },
         },
       });

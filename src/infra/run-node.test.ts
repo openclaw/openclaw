@@ -2,18 +2,22 @@ import { EventEmitter } from "node:events";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import {
+  bundledDistPluginFile,
+  bundledPluginFile,
+  bundledPluginRoot,
+} from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
+import {
+  BUILD_STAMP_FILE,
+  RUNTIME_POSTBUILD_STAMP_FILE,
+} from "../../scripts/lib/local-build-metadata-paths.mjs";
 import {
   acquireRunNodeBuildLock,
   resolveBuildRequirement,
   resolveRuntimePostBuildRequirement,
   runNodeMain,
 } from "../../scripts/run-node.mjs";
-import {
-  bundledDistPluginFile,
-  bundledPluginFile,
-  bundledPluginRoot,
-} from "../../test/helpers/bundled-plugin-paths.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 
 const ROOT_SRC = "src/index.ts";
@@ -23,8 +27,8 @@ const ROOT_TSDOWN = "tsdown.config.ts";
 const GENERATED_A2UI_BUNDLE = "src/canvas-host/a2ui/a2ui.bundle.js";
 const GENERATED_A2UI_BUNDLE_HASH = "src/canvas-host/a2ui/.bundle.hash";
 const DIST_ENTRY = "dist/entry.js";
-const BUILD_STAMP = "dist/.buildstamp";
-const RUNTIME_POSTBUILD_STAMP = "dist/.runtime-postbuildstamp";
+const BUILD_STAMP = `dist/${BUILD_STAMP_FILE}`;
+const RUNTIME_POSTBUILD_STAMP = `dist/${RUNTIME_POSTBUILD_STAMP_FILE}`;
 const QA_LAB_PLUGIN_SDK_ENTRY = "dist/plugin-sdk/qa-lab.js";
 const QA_RUNTIME_PLUGIN_SDK_ENTRY = "dist/plugin-sdk/qa-runtime.js";
 const EXTENSION_SRC = bundledPluginFile("demo", "src/index.ts");
@@ -105,6 +109,10 @@ function expectedBuildSpawn() {
 
 function statusCommandSpawn() {
   return [process.execPath, "openclaw.mjs", "status"];
+}
+
+function gatewayCallStatusCommandSpawn() {
+  return [process.execPath, "openclaw.mjs", "gateway", "call", "status", "--json"];
 }
 
 function resolvePath(tmp: string, relativePath: string) {
@@ -217,6 +225,32 @@ async function runStatusCommand(params: {
   return await runNodeMain({
     cwd: params.tmp,
     args: ["status"],
+    env: {
+      ...process.env,
+      OPENCLAW_RUNNER_LOG: "0",
+      ...params.env,
+    },
+    spawn: params.spawn,
+    ...(params.spawnSync ? { spawnSync: params.spawnSync } : {}),
+    ...(params.runRuntimePostBuild ? { runRuntimePostBuild: params.runRuntimePostBuild } : {}),
+    execPath: process.execPath,
+    platform: process.platform,
+  });
+}
+
+async function runGatewayCallStatusCommand(params: {
+  tmp: string;
+  spawn: (cmd: string, args: string[]) => ReturnType<typeof createExitedProcess>;
+  spawnSync?: (cmd: string, args: string[]) => { status: number; stdout: string };
+  env?: Record<string, string>;
+  runRuntimePostBuild?: (params?: {
+    cwd?: string;
+    env?: Record<string, string | undefined>;
+  }) => void | Promise<void>;
+}) {
+  return await runNodeMain({
+    cwd: params.tmp,
+    args: ["gateway", "call", "status", "--json"],
     env: {
       ...process.env,
       OPENCLAW_RUNNER_LOG: "0",
@@ -1054,6 +1088,41 @@ describe("run-node script", () => {
         shouldBuild: true,
         reason: "dirty_watched_tree",
       });
+    });
+  });
+
+  it("does not rebuild for gateway client calls against an existing dirty dist", async () => {
+    await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
+      await setupTrackedProject(tmp, {
+        files: {
+          [ROOT_SRC]: "export const value = 1;\n",
+          [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123"}\n',
+        },
+        buildPaths: [
+          ROOT_SRC,
+          ROOT_TSCONFIG,
+          ROOT_PACKAGE,
+          DIST_ENTRY,
+          BUILD_STAMP,
+          RUNTIME_POSTBUILD_STAMP,
+        ],
+      });
+
+      const runRuntimePostBuild = vi.fn();
+      const { spawnCalls, spawn, spawnSync } = createSpawnRecorder({
+        gitHead: "abc123\n",
+        gitStatus: ` M ${ROOT_SRC}\n`,
+      });
+      const exitCode = await runGatewayCallStatusCommand({
+        tmp,
+        spawn,
+        spawnSync,
+        runRuntimePostBuild,
+      });
+
+      expect(exitCode).toBe(0);
+      expect(spawnCalls).toEqual([gatewayCallStatusCommandSpawn()]);
+      expect(runRuntimePostBuild).not.toHaveBeenCalled();
     });
   });
 

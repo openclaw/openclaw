@@ -362,6 +362,10 @@ function resolveTalkResponseFromConfig(params: {
   const runtimeBaseTts = asRecord(params.runtimeConfig.messages?.tts) ?? {};
   const sourceProviderConfig = sourceResolved?.config ?? {};
   const runtimeProviderConfig = runtimeResolved?.config ?? {};
+  const selectedBaseTts =
+    Object.keys(runtimeBaseTts).length > 0
+      ? runtimeBaseTts
+      : stripUnresolvedSecretApiKeysFromBaseTtsProviders(sourceBaseTts);
   // Prefer runtime-resolved provider config (already-substituted secrets) and
   // fall back to source. Strip any apiKey that is still a SecretRef wrapper —
   // provider plugins (ElevenLabs/OpenAI) call strict secret helpers that throw
@@ -374,14 +378,9 @@ function resolveTalkResponseFromConfig(params: {
   const resolvedConfig =
     speechProvider?.resolveTalkConfig?.({
       cfg: params.runtimeConfig,
-      baseTtsConfig: Object.keys(sourceBaseTts).length > 0 ? sourceBaseTts : runtimeBaseTts,
+      baseTtsConfig: selectedBaseTts,
       talkProviderConfig: providerInputConfig,
-      timeoutMs:
-        typeof sourceBaseTts.timeoutMs === "number"
-          ? sourceBaseTts.timeoutMs
-          : typeof runtimeBaseTts.timeoutMs === "number"
-            ? runtimeBaseTts.timeoutMs
-            : 30_000,
+      timeoutMs: typeof selectedBaseTts.timeoutMs === "number" ? selectedBaseTts.timeoutMs : 30_000,
     }) ?? providerInputConfig;
   const responseConfig =
     sourceProviderConfig.apiKey === undefined
@@ -399,6 +398,44 @@ function resolveTalkResponseFromConfig(params: {
 }
 
 function stripUnresolvedSecretApiKey(config: TalkProviderConfig): TalkProviderConfig {
+  return stripUnresolvedSecretApiKeyFromRecord(config) as TalkProviderConfig;
+}
+
+function stripUnresolvedSecretApiKeysFromBaseTtsProviders(
+  base: Record<string, unknown>,
+): Record<string, unknown> {
+  const providers = asRecord(base.providers);
+  if (!providers) {
+    return base;
+  }
+  let mutated = false;
+  // Null-prototype map so an attacker-influenced provider id like `__proto__`,
+  // `constructor`, or `prototype` cannot pollute Object.prototype via the
+  // dynamic `cleaned[providerId] = ...` assignment below. Provider-id keys
+  // come from operator config and may be plain JSON, so we cannot assume
+  // they're already validated upstream.
+  const cleaned: Record<string, unknown> = Object.create(null);
+  for (const [providerId, providerConfig] of Object.entries(providers)) {
+    const cfg = asRecord(providerConfig);
+    if (!cfg) {
+      cleaned[providerId] = providerConfig;
+      continue;
+    }
+    const next = stripUnresolvedSecretApiKeyFromRecord(cfg);
+    if (next !== cfg) {
+      mutated = true;
+    }
+    cleaned[providerId] = next;
+  }
+  if (!mutated) {
+    return base;
+  }
+  return { ...base, providers: cleaned };
+}
+
+function stripUnresolvedSecretApiKeyFromRecord(
+  config: Record<string, unknown>,
+): Record<string, unknown> {
   if (config.apiKey === undefined || typeof config.apiKey === "string") {
     return config;
   }

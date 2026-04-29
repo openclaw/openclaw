@@ -1,6 +1,6 @@
 import type { Bot } from "grammy";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../../src/config/types.openclaw.js";
 import { resolveAutoTopicLabelConfig as resolveAutoTopicLabelConfigRuntime } from "./auto-topic-label-config.js";
 import type { TelegramBotDeps } from "./bot-deps.js";
 import {
@@ -790,7 +790,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     );
   });
 
-  it("keeps default tool progress messages when answer preview streaming is off", async () => {
+  it("suppresses default tool progress messages when answer preview streaming is off", async () => {
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
       await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
       await replyOptions?.onItemEvent?.({ progressText: "exec ls ~/Desktop" });
@@ -803,7 +803,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledWith(
       expect.objectContaining({
         replyOptions: expect.objectContaining({
-          suppressDefaultToolProgressMessages: false,
+          suppressDefaultToolProgressMessages: true,
         }),
       }),
     );
@@ -3162,7 +3162,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     editMessageTelegram.mockResolvedValue({ ok: true });
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
       async ({ dispatcherOptions, replyOptions }) => {
-        replyOptions?.onPartialReply?.({ text: "Processing..." });
+        await replyOptions?.onPartialReply?.({ text: "Processing..." });
         await dispatcherOptions.deliver(
           { text: "⚠️ exec failed", isError: true },
           { kind: "block" },

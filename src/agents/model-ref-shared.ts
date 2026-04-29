@@ -23,7 +23,14 @@ export function modelKey(provider: string, model: string): string {
     : `${providerId}/${modelId}`;
 }
 
-export function normalizeStaticProviderModelId(provider: string, model: string): string {
+export function normalizeStaticProviderModelId(
+  provider: string,
+  model: string,
+  options: { allowManifestNormalization?: boolean } = {},
+): string {
+  if (options.allowManifestNormalization === false) {
+    return model;
+  }
   return (
     normalizeProviderModelIdWithManifest({
       provider,

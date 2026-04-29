@@ -1,5 +1,8 @@
 {
   "id": "moonshot",
+  "activation": {
+    "onStartup": false
+  },
   "enabledByDefault": true,
   "providerDiscoveryEntry": "./provider-discovery.ts",
   "providers": ["moonshot"],

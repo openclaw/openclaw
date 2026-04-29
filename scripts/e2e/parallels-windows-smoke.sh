@@ -1029,11 +1029,24 @@ for wanted in preferred_names:
       break
 
 if best is None:
+  candidates = []
   for asset in assets:
     name = asset.get("name", "")
-    if name.startswith("MinGit-") and name.endswith(".zip") and "busybox" not in name:
-      best = asset
-      break
+    if not (name.startswith("MinGit-") and name.endswith(".zip")):
+      continue
+    if "busybox" in name:
+      continue
+    if "-arm64." in name:
+      rank = 0
+    elif "-64-bit." in name:
+      rank = 1
+    elif "-32-bit." in name:
+      rank = 2
+    else:
+      rank = 3
+    candidates.append((rank, name, asset))
+  if candidates:
+    best = sorted(candidates, key=lambda item: (item[0], item[1]))[0][2]
 
 if best is None:
   raise SystemExit("no MinGit asset found")
@@ -1137,7 +1150,7 @@ ensure_mingit_zip() {
   MINGIT_ZIP_PATH="$MAIN_TGZ_DIR/$mingit_name"
   if [[ ! -f "$MINGIT_ZIP_PATH" ]]; then
     say "Download $MINGIT_ZIP_NAME"
-    curl -fsSL "$mingit_url" -o "$MINGIT_ZIP_PATH"
+    curl --retry 5 --retry-delay 3 --retry-all-errors -fsSL "$mingit_url" -o "$MINGIT_ZIP_PATH"
   fi
 }
 
@@ -2083,6 +2096,13 @@ PY
         warn "windows dev update helper log drain failed after completion"
       fi
       rm -f "$log_state_path"
+      if [[ "$done_status" != "0" ]] &&
+        [[ "$guest_log" == *"ERR_MODULE_NOT_FOUND"* ]] &&
+        [[ "$guest_log" == *"dist\\cli\\run-main.js"* ]] &&
+        verify_windows_dev_update_after_transport_loss; then
+        warn "windows dev update old updater hit stale dist chunk after install; product verification passed"
+        return 0
+      fi
       [[ "$done_status" == "0" ]]
       return $?
     fi
