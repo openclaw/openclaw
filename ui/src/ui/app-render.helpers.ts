@@ -553,11 +553,13 @@ export function renderChatMobileToggle(state: AppViewState) {
                 state.sessionsHideCron = !hideCron;
               }}
               aria-pressed=${hideCron}
-              title=${hideCron
-                ? hiddenCronCount > 0
-                  ? t("chat.showCronSessionsHidden", { count: String(hiddenCronCount) })
-                  : t("chat.showCronSessions")
-                : t("chat.hideCronSessions")}
+              title=${
+                hideCron
+                  ? hiddenCronCount > 0
+                    ? t("chat.showCronSessionsHidden", { count: String(hiddenCronCount) })
+                    : t("chat.showCronSessions")
+                  : t("chat.hideCronSessions")
+              }
             >
               ${renderCronFilterIcon(hiddenCronCount)}
             </button>

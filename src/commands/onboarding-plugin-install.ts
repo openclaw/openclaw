@@ -475,7 +475,8 @@ function createAnimatedInstallProgress(
   const renderBar = (): string => {
     const percent = computePercent();
     const filled = Math.round((percent / 100) * PROGRESS_BAR_WIDTH);
-    const bar = "█".repeat(filled) + "░".repeat(Math.max(0, PROGRESS_BAR_WIDTH - filled));
+    const bar =
+      "█".repeat(filled) + "░".repeat(Math.max(0, PROGRESS_BAR_WIDTH - filled));
     return `[${bar}] ${percent}%`;
   };
 

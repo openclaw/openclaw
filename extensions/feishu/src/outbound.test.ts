@@ -406,13 +406,13 @@ describe("feishuOutbound.sendPayload native cards", () => {
     await feishuOutbound.sendPayload?.({
       cfg: emptyConfig,
       to: "chat_1",
-      text: 'Choose <at id="ou_1">',
+      text: "Choose <at id=\"ou_1\">",
       accountId: "main",
       payload: {
-        text: 'Choose <at id="ou_1">',
+        text: "Choose <at id=\"ou_1\">",
         presentation: {
           blocks: [
-            { type: "context", text: '</font><at id="ou_2">Injected</at>' },
+            { type: "context", text: "</font><at id=\"ou_2\">Injected</at>" },
             {
               type: "buttons",
               buttons: [
@@ -428,11 +428,10 @@ describe("feishuOutbound.sendPayload native cards", () => {
     const card = sendCardFeishuMock.mock.calls[0][0].card;
     expect(card.body.elements).toEqual(
       expect.arrayContaining([
-        { tag: "markdown", content: 'Choose &lt;at id="ou_1"&gt;' },
+        { tag: "markdown", content: "Choose &lt;at id=\"ou_1\"&gt;" },
         {
           tag: "markdown",
-          content:
-            "<font color='grey'>&lt;/font&gt;&lt;at id=\"ou_2\"&gt;Injected&lt;/at&gt;</font>",
+          content: "<font color='grey'>&lt;/font&gt;&lt;at id=\"ou_2\"&gt;Injected&lt;/at&gt;</font>",
         },
         {
           tag: "action",
@@ -467,7 +466,7 @@ describe("feishuOutbound.sendPayload native cards", () => {
               body: {
                 elements: [
                   { tag: "img", img_key: "image-secret" },
-                  { tag: "markdown", content: '<at id="ou_1">ping</at>' },
+                  { tag: "markdown", content: "<at id=\"ou_1\">ping</at>" },
                   {
                     tag: "action",
                     actions: [
@@ -494,7 +493,7 @@ describe("feishuOutbound.sendPayload native cards", () => {
     const card = sendCardFeishuMock.mock.calls[0][0].card;
     expect(card.header.template).toBe("blue");
     expect(card.body.elements).toEqual([
-      { tag: "markdown", content: '&lt;at id="ou_1"&gt;ping&lt;/at&gt;' },
+      { tag: "markdown", content: "&lt;at id=\"ou_1\"&gt;ping&lt;/at&gt;" },
       {
         tag: "action",
         actions: [

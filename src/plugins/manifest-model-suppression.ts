@@ -114,7 +114,11 @@ export function buildManifestBuiltInModelSuppressionResolver(params: {
     env: params.env ?? process.env,
   });
 
-  return (input: { provider?: string | null; id?: string | null; baseUrl?: string | null }) => {
+  return (input: {
+    provider?: string | null;
+    id?: string | null;
+    baseUrl?: string | null;
+  }) => {
     const provider = normalizeLowercaseStringOrEmpty(input.provider);
     const modelId = normalizeLowercaseStringOrEmpty(input.id);
     if (!provider || !modelId) {
