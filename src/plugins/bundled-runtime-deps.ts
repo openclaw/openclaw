@@ -15,7 +15,7 @@ import { sanitizeTerminalText } from "../terminal/safe-text.js";
 import { beginBundledRuntimeDepsInstall } from "./bundled-runtime-deps-activity.js";
 import { normalizePluginsConfig } from "./config-state.js";
 import { passesManifestOwnerBasePolicy } from "./manifest-owner-policy.js";
-import { validSemver } from "./semver.runtime.js";
+import { satisfies, validSemver } from "./semver.runtime.js";
 
 export type RuntimeDepEntry = {
   name: string;
@@ -753,10 +753,37 @@ function sameRuntimeDepSpecs(left: readonly string[], right: readonly string[]):
   );
 }
 
-function hasInstallSpecPackageDirs(rootDir: string, specs: readonly string[]): boolean {
+function readInstalledRuntimeDepVersion(rootDir: string, depName: string): string | null {
+  try {
+    const parsed = JSON.parse(
+      fs.readFileSync(resolveDependencySentinelAbsolutePath(rootDir, depName), "utf8"),
+    ) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return null;
+    }
+    const version = (parsed as JsonObject).version;
+    return typeof version === "string" && version.trim() ? version.trim() : null;
+  } catch {
+    return null;
+  }
+}
+
+function isRuntimeDepSatisfied(rootDir: string, dep: { name: string; version: string }): boolean {
+  const installedVersion = readInstalledRuntimeDepVersion(rootDir, dep.name);
+  return Boolean(installedVersion && satisfies(installedVersion, dep.version));
+}
+
+function isRuntimeDepSatisfiedInAnyRoot(
+  dep: { name: string; version: string },
+  roots: readonly string[],
+): boolean {
+  return roots.some((root) => isRuntimeDepSatisfied(root, dep));
+}
+
+function hasSatisfiedInstallSpecPackages(rootDir: string, specs: readonly string[]): boolean {
   return specs
     .map(parseInstallableRuntimeDepSpec)
-    .every((dep) => fs.existsSync(resolveDependencySentinelAbsolutePath(rootDir, dep.name)));
+    .every((dep) => isRuntimeDepSatisfied(rootDir, dep));
 }
 
 function isRuntimeDepsPlanMaterialized(
@@ -770,7 +797,7 @@ function isRuntimeDepsPlanMaterialized(
     ((generatedManifestSpecs !== null &&
       sameRuntimeDepSpecs(generatedManifestSpecs, installSpecs)) ||
       (packageManifestSpecs !== null && sameRuntimeDepSpecs(packageManifestSpecs, installSpecs))) &&
-    hasInstallSpecPackageDirs(installRoot, installSpecs)
+    hasSatisfiedInstallSpecPackages(installRoot, installSpecs)
   );
 }
 
@@ -990,7 +1017,7 @@ export function createBundledRuntimeDepsInstallSpecs(params: {
 function assertBundledRuntimeDepsInstalled(rootDir: string, specs: readonly string[]): void {
   const missingSpecs = specs.filter((spec) => {
     const dep = parseInstallableRuntimeDepSpec(spec);
-    return !fs.existsSync(resolveDependencySentinelAbsolutePath(rootDir, dep.name));
+    return !isRuntimeDepSatisfied(rootDir, dep);
   });
   if (missingSpecs.length === 0) {
     return;
@@ -1473,7 +1500,16 @@ export function scanBundledPluginRuntimeDeps(params: {
   const packageRuntimeDeps =
     pluginIds.length > 0 ? collectMirroredPackageRuntimeDeps(params.packageRoot) : [];
   const allDeps = mergeRuntimeDepEntries([...deps, ...packageRuntimeDeps]);
-  return { deps: allDeps, missing: allDeps, conflicts };
+  const installRootPlan = resolveBundledRuntimeDependencyPackageInstallRootPlan(
+    params.packageRoot,
+    {
+      env: params.env,
+    },
+  );
+  const missing = allDeps.filter(
+    (dep) => !isRuntimeDepSatisfiedInAnyRoot(dep, installRootPlan.searchRoots),
+  );
+  return { deps: allDeps, missing, conflicts };
 }
 
 export function resolveBundledRuntimeDependencyPackageInstallRootPlan(

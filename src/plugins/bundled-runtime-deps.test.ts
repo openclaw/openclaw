@@ -22,6 +22,7 @@ import {
   isWritableDirectory,
   pruneUnknownBundledRuntimeDepsRoots,
   repairBundledRuntimeDepsInstallRootAsync,
+  resolveBundledRuntimeDependencyPackageInstallRoot,
   resolveBundledRuntimeDependencyInstallRoot,
   resolveBundledRuntimeDependencyInstallRootPlan,
   resolveBundledRuntimeDepsNpmRunner,
@@ -1265,6 +1266,41 @@ describe("scanBundledPluginRuntimeDeps config policy", () => {
     expect(result.conflicts).toEqual([]);
   });
 
+  it("does not report already staged package-level runtime deps as missing", () => {
+    const packageRoot = setupPolicyPackageRoot();
+    const env = { OPENCLAW_PLUGIN_STAGE_DIR: makeTempDir() };
+    const installRoot = resolveBundledRuntimeDependencyPackageInstallRoot(packageRoot, { env });
+    writeInstalledPackage(installRoot, "alpha-runtime", "1.0.0");
+
+    const result = scanBundledPluginRuntimeDeps({
+      packageRoot,
+      config: {},
+      env,
+    });
+
+    expect(result.deps.map((dep) => `${dep.name}@${dep.version}`)).toEqual(["alpha-runtime@1.0.0"]);
+    expect(result.missing).toEqual([]);
+    expect(result.conflicts).toEqual([]);
+  });
+
+  it("reports staged package-level runtime deps as missing when the version is stale", () => {
+    const packageRoot = setupPolicyPackageRoot();
+    const env = { OPENCLAW_PLUGIN_STAGE_DIR: makeTempDir() };
+    const installRoot = resolveBundledRuntimeDependencyPackageInstallRoot(packageRoot, { env });
+    writeInstalledPackage(installRoot, "alpha-runtime", "0.9.0");
+
+    const result = scanBundledPluginRuntimeDeps({
+      packageRoot,
+      config: {},
+      env,
+    });
+
+    expect(result.missing.map((dep) => `${dep.name}@${dep.version}`)).toEqual([
+      "alpha-runtime@1.0.0",
+    ]);
+    expect(result.conflicts).toEqual([]);
+  });
+
   it("reads each bundled plugin manifest once per runtime-deps scan", () => {
     const packageRoot = makeTempDir();
     const pluginRoot = writeBundledPluginPackage({
@@ -1554,7 +1590,7 @@ describe("scanBundledPluginRuntimeDeps config policy", () => {
     expect(result.missing.map((dep) => `${dep.name}@${dep.version}`)).toEqual(["tslog@^4.10.2"]);
   });
 
-  it("reports configured deps for package-manager staging even when present", () => {
+  it("keeps the complete staging plan without reporting present deps as missing", () => {
     const packageRoot = makeTempDir();
     const stageDir = makeTempDir();
     fs.writeFileSync(
@@ -1594,14 +1630,10 @@ describe("scanBundledPluginRuntimeDeps config policy", () => {
       "openai@^6.34.0",
       "typebox@1.1.33",
     ]);
-    expect(result.missing.map((dep) => `${dep.name}@${dep.version}`)).toEqual([
-      "@lancedb/lancedb@^0.27.2",
-      "openai@^6.34.0",
-      "typebox@1.1.33",
-    ]);
+    expect(result.missing).toEqual([]);
   });
 
-  it("plans a complete install for the current external stage dir", () => {
+  it("keeps a complete install plan while missing only absent deps", () => {
     const packageRoot = makeTempDir();
     const baselineStageDir = makeTempDir();
     const writableStageDir = makeTempDir();
@@ -1639,10 +1671,7 @@ describe("scanBundledPluginRuntimeDeps config policy", () => {
       "@slack/web-api@7.15.1",
       "grammy@1.37.0",
     ]);
-    expect(result.missing.map((dep) => `${dep.name}@${dep.version}`)).toEqual([
-      "@slack/web-api@7.15.1",
-      "grammy@1.37.0",
-    ]);
+    expect(result.missing.map((dep) => `${dep.name}@${dep.version}`)).toEqual(["grammy@1.37.0"]);
   });
 });
 
@@ -2220,6 +2249,45 @@ describe("ensureBundledPluginRuntimeDeps", () => {
     writeInstalledPackage(installRoot, "alpha-runtime", "1.0.0");
     writeInstalledPackage(installRoot, "beta-runtime", "1.0.0");
     writeGeneratedRuntimeDepsManifest(installRoot, ["alpha-runtime@1.0.0", "beta-runtime@1.0.0"]);
+    const calls: BundledRuntimeDepsInstallParams[] = [];
+
+    const result = ensureBundledPluginRuntimeDeps({
+      env,
+      pluginId: "alpha",
+      pluginRoot,
+      installDeps: (params) => {
+        calls.push(params);
+        writeInstalledPackage(params.installRoot, "alpha-runtime", "2.0.0");
+      },
+    });
+
+    expect(result).toEqual({ installedSpecs: ["alpha-runtime@2.0.0"] });
+    expect(calls).toEqual([
+      {
+        installRoot,
+        missingSpecs: ["alpha-runtime@2.0.0"],
+        installSpecs: ["alpha-runtime@2.0.0"],
+      },
+    ]);
+  });
+
+  it("reinstalls when the generated manifest is current but the installed package version is stale", () => {
+    const packageRoot = makeTempDir();
+    const stageDir = makeTempDir();
+    fs.writeFileSync(
+      path.join(packageRoot, "package.json"),
+      JSON.stringify({ name: "openclaw", version: "2026.4.27" }),
+    );
+    const pluginRoot = writeBundledPluginPackage({
+      packageRoot,
+      pluginId: "alpha",
+      deps: { "alpha-runtime": "2.0.0" },
+      enabledByDefault: true,
+    });
+    const env = { OPENCLAW_PLUGIN_STAGE_DIR: stageDir };
+    const installRoot = resolveBundledRuntimeDependencyInstallRoot(pluginRoot, { env });
+    writeInstalledPackage(installRoot, "alpha-runtime", "1.0.0");
+    writeGeneratedRuntimeDepsManifest(installRoot, ["alpha-runtime@2.0.0"]);
     const calls: BundledRuntimeDepsInstallParams[] = [];
 
     const result = ensureBundledPluginRuntimeDeps({
