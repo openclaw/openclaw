@@ -43,6 +43,80 @@ describe("telegramOutbound", () => {
     expect(result).toEqual({ channel: "telegram", messageId: "tg-media" });
   });
 
+  it("passes audioAsVoice as asVoice to sendMessageTelegram in sendMedia", async () => {
+    sendMessageTelegramMock.mockResolvedValueOnce({ messageId: "tg-voice" });
+
+    await telegramOutbound.sendMedia!({
+      cfg: {} as never,
+      to: "12345",
+      text: "",
+      mediaUrl: "https://example.com/tts.ogg",
+      audioAsVoice: true,
+      accountId: "ops",
+      deps: { sendTelegram: sendMessageTelegramMock },
+    });
+
+    expect(sendMessageTelegramMock).toHaveBeenCalledWith(
+      "12345",
+      "",
+      expect.objectContaining({
+        mediaUrl: "https://example.com/tts.ogg",
+        asVoice: true,
+      }),
+    );
+  });
+
+  it("passes audioAsVoice as asVoice to sendMessageTelegram in sendPayload", async () => {
+    sendMessageTelegramMock.mockResolvedValueOnce({
+      messageId: "tg-voice-payload",
+      chatId: "12345",
+    });
+
+    await telegramOutbound.sendPayload!({
+      cfg: {} as never,
+      to: "12345",
+      text: "",
+      audioAsVoice: true,
+      payload: {
+        text: "",
+        audioAsVoice: true,
+        mediaUrl: "https://example.com/tts.ogg",
+      },
+      accountId: "ops",
+      deps: { sendTelegram: sendMessageTelegramMock },
+    });
+
+    expect(sendMessageTelegramMock).toHaveBeenCalledWith(
+      "12345",
+      "",
+      expect.objectContaining({
+        mediaUrl: "https://example.com/tts.ogg",
+        asVoice: true,
+      }),
+    );
+  });
+
+  it("defaults asVoice to false when audioAsVoice is not set in sendMedia", async () => {
+    sendMessageTelegramMock.mockResolvedValueOnce({ messageId: "tg-audio" });
+
+    await telegramOutbound.sendMedia!({
+      cfg: {} as never,
+      to: "12345",
+      text: "",
+      mediaUrl: "https://example.com/song.mp3",
+      accountId: "ops",
+      deps: { sendTelegram: sendMessageTelegramMock },
+    });
+
+    expect(sendMessageTelegramMock).toHaveBeenCalledWith(
+      "12345",
+      "",
+      expect.objectContaining({
+        asVoice: false,
+      }),
+    );
+  });
+
   it("sends payload media in sequence and keeps buttons on the first message only", async () => {
     sendMessageTelegramMock
       .mockResolvedValueOnce({ messageId: "tg-1", chatId: "12345" })
