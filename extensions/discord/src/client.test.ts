@@ -1,11 +1,5 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { describe, expect, it } from "vitest";
-import {
-  parseDiscordComponentCustomIdForCarbon,
-  parseDiscordComponentCustomIdForInteraction,
-  parseDiscordModalCustomIdForCarbon,
-  parseDiscordModalCustomIdForInteraction,
-} from "../api.js";
 import { createDiscordRestClient } from "./client.js";
 import type { RequestClient } from "./internal/discord.js";
 
@@ -78,16 +72,5 @@ describe("createDiscordRestClient", () => {
     } as OpenClawConfig;
 
     expect(() => createDiscordRestClient({ cfg, rest: fakeRest })).toThrow(/unresolved SecretRef/i);
-  });
-});
-
-describe("public Discord API compatibility", () => {
-  it("keeps legacy Carbon parser aliases wired to the interaction parsers", () => {
-    expect(parseDiscordComponentCustomIdForCarbon).toBe(
-      parseDiscordComponentCustomIdForInteraction,
-    );
-    expect(parseDiscordModalCustomIdForCarbon).toBe(parseDiscordModalCustomIdForInteraction);
-    expect(parseDiscordComponentCustomIdForCarbon("occomp:cid=one").data.cid).toBe("one");
-    expect(parseDiscordModalCustomIdForCarbon("ocmodal:mid=two").data.mid).toBe("two");
   });
 });

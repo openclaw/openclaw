@@ -4,10 +4,8 @@ export {
   buildDiscordComponentCustomId,
   buildDiscordModalCustomId,
   parseDiscordComponentCustomId,
-  parseDiscordComponentCustomIdForCarbon,
   parseDiscordComponentCustomIdForInteraction,
   parseDiscordModalCustomId,
-  parseDiscordModalCustomIdForCarbon,
   parseDiscordModalCustomIdForInteraction,
 } from "./component-custom-id.js";
 export {

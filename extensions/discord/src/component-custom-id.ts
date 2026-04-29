@@ -60,8 +60,6 @@ export function parseDiscordComponentCustomIdForInteraction(id: string): Compone
   return { key: "*", data: parsed.data };
 }
 
-export const parseDiscordComponentCustomIdForCarbon = parseDiscordComponentCustomIdForInteraction;
-
 export function parseDiscordModalCustomIdForInteraction(id: string): ComponentParserResult {
   if (id === "*" || isDiscordComponentWildcardRegistrationId(id)) {
     return { key: "*", data: {} };
@@ -72,5 +70,3 @@ export function parseDiscordModalCustomIdForInteraction(id: string): ComponentPa
   }
   return { key: "*", data: parsed.data };
 }
-
-export const parseDiscordModalCustomIdForCarbon = parseDiscordModalCustomIdForInteraction;

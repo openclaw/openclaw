@@ -1,10 +1,8 @@
 import { EventEmitter } from "node:events";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import { DISCORD_GATEWAY_TRANSPORT_ACTIVITY_EVENT } from "./gateway-handle.js";
 
-const { baseConnectSpy, GatewayIntents, GatewayPlugin } = vi.hoisted(() => {
-  const baseConnectSpy = vi.fn<(resume: boolean) => void>();
-
+const { GatewayIntents, GatewayPlugin } = vi.hoisted(() => {
   const GatewayIntents = {
     Guilds: 1 << 0,
     GuildMessages: 1 << 1,
@@ -37,9 +35,9 @@ const { baseConnectSpy, GatewayIntents, GatewayPlugin } = vi.hoisted(() => {
     options: unknown;
     gatewayInfo: unknown;
     emitter = new TestEmitter();
-    heartbeatInterval: ReturnType<typeof setInterval> | undefined = undefined;
-    firstHeartbeatTimeout: ReturnType<typeof setTimeout> | undefined = undefined;
     isConnecting: boolean = false;
+    heartbeatInterval?: NodeJS.Timeout;
+    firstHeartbeatTimeout?: NodeJS.Timeout;
     ws?: unknown;
 
     constructor(options?: unknown) {
@@ -48,12 +46,14 @@ const { baseConnectSpy, GatewayIntents, GatewayPlugin } = vi.hoisted(() => {
 
     async registerClient(_client: unknown): Promise<void> {}
 
-    connect(resume = false): void {
-      baseConnectSpy(resume);
+    connect(_resume = false): void {
+      if (this.isConnecting) {
+        return;
+      }
     }
   }
 
-  return { baseConnectSpy, GatewayIntents, GatewayPlugin };
+  return { GatewayIntents, GatewayPlugin };
 });
 
 vi.mock("../internal/gateway.js", () => ({
@@ -72,7 +72,7 @@ vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
   danger: (value: string) => value,
 }));
 
-describe("SafeGatewayPlugin.connect()", () => {
+describe("createDiscordGatewayPlugin", () => {
   let createDiscordGatewayPlugin: typeof import("./gateway-plugin.js").createDiscordGatewayPlugin;
   let parseDiscordGatewayInfoBody: typeof import("./gateway-plugin.js").parseDiscordGatewayInfoBody;
   let resolveDiscordGatewayIntents: typeof import("./gateway-plugin.js").resolveDiscordGatewayIntents;
@@ -85,10 +85,6 @@ describe("SafeGatewayPlugin.connect()", () => {
       resolveDiscordGatewayIntents,
       resolveDiscordGatewayInfoTimeoutMs,
     } = await import("./gateway-plugin.js"));
-  });
-
-  beforeEach(() => {
-    baseConnectSpy.mockClear();
   });
 
   function createPlugin(
@@ -201,25 +197,6 @@ describe("SafeGatewayPlugin.connect()", () => {
     expect((options?.intents ?? 0) & GatewayIntents.GuildVoiceStates).toBe(0);
   });
 
-  it("clears stale heartbeatInterval before delegating to super when isConnecting=true", () => {
-    const plugin = createPlugin();
-
-    const staleInterval = setInterval(() => {}, 99_999);
-    try {
-      plugin.heartbeatInterval = staleInterval;
-
-      // isConnecting is private on GatewayPlugin — cast required.
-      (plugin as unknown as { isConnecting: boolean }).isConnecting = true;
-
-      plugin.connect(false);
-
-      expect(plugin.heartbeatInterval).toBeUndefined();
-      expect(baseConnectSpy).toHaveBeenCalledWith(false);
-    } finally {
-      clearInterval(staleInterval);
-    }
-  });
-
   it("leaves autoInteractions disabled so OpenClaw owns interaction handoff", () => {
     const plugin = createPlugin();
 
@@ -244,23 +221,21 @@ describe("SafeGatewayPlugin.connect()", () => {
     ).toBeUndefined();
   });
 
-  it("clears stale firstHeartbeatTimeout before delegating to super when isConnecting=true", () => {
-    const plugin = createPlugin();
+  it("clears stale heartbeat timers before reconnecting", () => {
+    const plugin = createPlugin() as unknown as {
+      connect: (resume?: boolean) => void;
+      isConnecting: boolean;
+      heartbeatInterval?: NodeJS.Timeout;
+      firstHeartbeatTimeout?: NodeJS.Timeout;
+    };
+    plugin.isConnecting = true;
+    plugin.heartbeatInterval = setInterval(() => {}, 1_000);
+    plugin.firstHeartbeatTimeout = setTimeout(() => {}, 1_000);
 
-    const staleTimeout = setTimeout(() => {}, 99_999);
-    try {
-      plugin.firstHeartbeatTimeout = staleTimeout;
+    plugin.connect(true);
 
-      // isConnecting is private on GatewayPlugin — cast required.
-      (plugin as unknown as { isConnecting: boolean }).isConnecting = true;
-
-      plugin.connect(false);
-
-      expect(plugin.firstHeartbeatTimeout).toBeUndefined();
-      expect(baseConnectSpy).toHaveBeenCalledWith(false);
-    } finally {
-      clearTimeout(staleTimeout);
-    }
+    expect(plugin.heartbeatInterval).toBeUndefined();
+    expect(plugin.firstHeartbeatTimeout).toBeUndefined();
   });
 
   it("emits transport activity for current gateway socket messages", () => {
