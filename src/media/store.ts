@@ -455,10 +455,7 @@ export async function saveMediaBuffer(
  * @throws        If the ID is unsafe, the file does not exist, or is not a
  *                regular file.
  */
-export async function resolveMediaBufferPath(
-  id: string,
-  subdir: "inbound" = "inbound",
-): Promise<string> {
+export async function resolveMediaBufferPath(id: string, subdir = "inbound"): Promise<string> {
   // Guard against path traversal and null-byte injection.
   //
   // - Separator checks: reject any ID containing "/" or "\" (covers all

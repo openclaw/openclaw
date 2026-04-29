@@ -42,7 +42,8 @@ export async function handleFileWrite(
   params: Partial<FileWriteParams> & Record<string, unknown>,
 ): Promise<FileWriteResult> {
   const rawPath = typeof params?.path === "string" ? params.path : "";
-  const contentBase64 = typeof params?.contentBase64 === "string" ? params.contentBase64 : "";
+  const hasContentBase64 = typeof params?.contentBase64 === "string";
+  const contentBase64 = hasContentBase64 ? (params.contentBase64 as string) : "";
   const overwrite = params?.overwrite === true;
   const createParents = params?.createParents === true;
   const expectedSha256 =
@@ -58,6 +59,9 @@ export async function handleFileWrite(
   }
   if (!path.isAbsolute(rawPath)) {
     return err("INVALID_PATH", "path must be absolute");
+  }
+  if (!hasContentBase64) {
+    return err("INVALID_BASE64", "contentBase64 is required");
   }
 
   // 2. Decode base64 → Buffer.
@@ -130,7 +134,7 @@ export async function handleFileWrite(
     if (canonicalParent !== parentDir) {
       return err(
         "SYMLINK_REDIRECT",
-        `parent ${parentDir} resolves through a symlink to ${canonicalParent}; refusing because followSymlinks=false (set gateway.nodes.fileTransfer.<node>.followSymlinks=true to allow, or update allowWritePaths to the canonical path)`,
+        `parent ${parentDir} resolves through a symlink to ${canonicalParent}; refusing because followSymlinks=false (set plugins.entries.file-transfer.config.nodes.<node>.followSymlinks=true to allow, or update allowWritePaths to the canonical path)`,
         path.join(canonicalParent, path.basename(targetPath)),
       );
     }

@@ -9,9 +9,7 @@ import {
 import { Type } from "typebox";
 import { appendFileTransferAudit } from "../shared/audit.js";
 import { throwFromNodePayload } from "../shared/errors.js";
-import { gatekeep } from "../shared/gatekeep.js";
 import { readClampedInt, readGatewayCallOptions, readTrimmedString } from "../shared/params.js";
-import { evaluateFilePolicy } from "../shared/policy.js";
 
 const DIR_LIST_DEFAULT_MAX_ENTRIES = 200;
 const DIR_LIST_HARD_MAX_ENTRIES = 5000;
@@ -44,7 +42,7 @@ export function createDirListTool(): AnyAgentTool {
     label: "Directory List",
     name: "dir_list",
     description:
-      "Retrieve a structured directory listing from a paired node. Returns file and subdirectory metadata (name, path, size, mimeType, isDir, mtime) without transferring file content. Use this to discover what files exist before fetching them with file_fetch. Pagination is offset-based; pass nextPageToken from the previous result. Requires operator opt-in: gateway.nodes.allowCommands must include 'dir.list' AND gateway.nodes.fileTransfer.<node>.allowReadPaths must match the directory path. Without policy configured, every call is denied.",
+      "Retrieve a structured directory listing from a paired node. Returns file and subdirectory metadata (name, path, size, mimeType, isDir, mtime) without transferring file content. Use this to discover what files exist before fetching them with file_fetch. Pagination is offset-based; pass nextPageToken from the previous result. Requires operator opt-in: gateway.nodes.allowCommands must include 'dir.list' AND plugins.entries.file-transfer.config.nodes.<node>.allowReadPaths must match the directory path. Without policy configured, every call is denied.",
     parameters: DirListToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -77,21 +75,6 @@ export function createDirListTool(): AnyAgentTool {
       const nodeDisplayName = nodeMeta?.displayName ?? node;
       const startedAt = Date.now();
 
-      const gate = await gatekeep({
-        op: "dir.list",
-        nodeId,
-        nodeDisplayName,
-        kind: "read",
-        path: dirPath,
-        toolCallId: _toolCallId,
-        gatewayOpts,
-        startedAt,
-        promptVerb: "List directory",
-      });
-      if (!gate.ok) {
-        throw new Error(gate.throwMessage);
-      }
-
       const raw = await callGatewayTool<{ payload: unknown }>("node.invoke", gatewayOpts, {
         nodeId,
         command: "dir.list",
@@ -99,7 +82,6 @@ export function createDirListTool(): AnyAgentTool {
           path: dirPath,
           pageToken,
           maxEntries,
-          followSymlinks: gate.followSymlinks,
         },
         idempotencyKey: crypto.randomUUID(),
       });
@@ -137,32 +119,6 @@ export function createDirListTool(): AnyAgentTool {
       }
 
       const canonicalPath = typeof payload.path === "string" ? payload.path : dirPath;
-
-      // Post-flight policy on canonicalized dir.
-      if (canonicalPath !== dirPath) {
-        const postflight = evaluateFilePolicy({
-          nodeId,
-          nodeDisplayName,
-          kind: "read",
-          path: canonicalPath,
-        });
-        if (!postflight.ok) {
-          await appendFileTransferAudit({
-            op: "dir.list",
-            nodeId,
-            nodeDisplayName,
-            requestedPath: dirPath,
-            canonicalPath,
-            decision: "denied:symlink_escape",
-            errorCode: postflight.code,
-            reason: postflight.reason,
-            durationMs: Date.now() - startedAt,
-          });
-          throw new Error(
-            `dir.list SYMLINK_TARGET_DENIED: requested path resolved to ${canonicalPath} which is not allowed by policy`,
-          );
-        }
-      }
 
       const entries = Array.isArray(payload.entries)
         ? (payload.entries as Array<Record<string, unknown>>)

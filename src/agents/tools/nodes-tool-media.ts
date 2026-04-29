@@ -27,23 +27,17 @@ export const MEDIA_INVOKE_ACTIONS = {
   "camera.clip": "camera_clip",
   "photos.latest": "photos_latest",
   "screen.record": "screen_record",
-  // file-transfer commands: redirect to dedicated tools so the path policy
-  // + operator approval flow always runs. Without this, an agent could
-  // call them via the generic nodes.action="invoke" surface and skip
-  // gatekeep() entirely.
+  // file-transfer commands: redirect to dedicated tools for better result
+  // formatting and media-store handling. The gateway still enforces the
+  // underlying node-invoke path policy for raw callers.
   "file.fetch": "file_fetch",
   "dir.list": "dir_list",
   "dir.fetch": "dir_fetch",
   "file.write": "file_write",
 } as const;
 
-// Subset of MEDIA_INVOKE_ACTIONS where the dedicated tool enforces a
-// security policy (path allowlist + operator approval), not just bloat
-// avoidance. These commands MUST always redirect, even when the operator
-// has set allowMediaInvokeCommands=true (which only suppresses the
-// base64-bloat redirect, not policy enforcement). The generic
-// nodes.invoke surface would otherwise bypass gatekeep() entirely and
-// return raw payloads outside the file-transfer allowlist.
+// Subset of MEDIA_INVOKE_ACTIONS where the dedicated tool is the preferred
+// agent UX. Gateway node-invoke policy still protects raw node.invoke callers.
 export const POLICY_REDIRECT_INVOKE_COMMANDS: ReadonlySet<string> = new Set([
   "file.fetch",
   "dir.list",

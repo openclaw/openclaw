@@ -12,6 +12,39 @@
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
-    "properties": {}
+    "properties": {
+      "nodes": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "ask": {
+              "type": "string",
+              "enum": ["off", "on-miss", "always"]
+            },
+            "allowReadPaths": {
+              "type": "array",
+              "items": { "type": "string" }
+            },
+            "allowWritePaths": {
+              "type": "array",
+              "items": { "type": "string" }
+            },
+            "denyPaths": {
+              "type": "array",
+              "items": { "type": "string" }
+            },
+            "maxBytes": {
+              "type": "number"
+            },
+            "followSymlinks": {
+              "type": "boolean",
+              "default": false
+            }
+          }
+        }
+      }
+    }
   }
 }

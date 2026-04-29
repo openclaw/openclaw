@@ -37,20 +37,19 @@ describe("handleFileWrite — input validation", () => {
     const r = await handleFileWrite({ path: "/tmp/foo\0bar", contentBase64: b64("x") });
     expect(r).toMatchObject({ ok: false, code: "INVALID_PATH" });
   });
-});
 
-describe("handleFileWrite — zero-byte round-trip", () => {
-  it("writes an empty file when contentBase64 is empty string", async () => {
+  it("requires contentBase64 but allows an empty encoded payload", async () => {
+    const missing = await handleFileWrite({ path: path.join(tmpRoot, "missing.bin") });
+    expect(missing).toMatchObject({ ok: false, code: "INVALID_BASE64" });
+
     const target = path.join(tmpRoot, "empty.bin");
-    const r = await handleFileWrite({ path: target, contentBase64: "" });
-    if (!r.ok) {
-      throw new Error(`expected ok, got ${r.code}: ${r.message}`);
-    }
-    expect(r.size).toBe(0);
-    // SHA-256 of empty input has a known fixed value.
-    expect(r.sha256).toBe("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
-    const stat = await fs.stat(target);
-    expect(stat.size).toBe(0);
+    const empty = await handleFileWrite({ path: target, contentBase64: "" });
+    expect(empty).toMatchObject({
+      ok: true,
+      size: 0,
+      sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    });
+    expect(await fs.readFile(target)).toHaveLength(0);
   });
 });
 
@@ -212,7 +211,7 @@ describe("handleFileWrite — symlink protection", () => {
 });
 
 describe("handleFileWrite — integrity check", () => {
-  it("returns INTEGRITY_FAILURE without touching disk when expectedSha256 mismatches", async () => {
+  it("returns INTEGRITY_FAILURE before writing when expectedSha256 mismatches", async () => {
     const target = path.join(tmpRoot, "checked.txt");
     const r = await handleFileWrite({
       path: target,
@@ -220,8 +219,7 @@ describe("handleFileWrite — integrity check", () => {
       expectedSha256: "0".repeat(64),
     });
     expect(r).toMatchObject({ ok: false, code: "INTEGRITY_FAILURE" });
-    // No file at the target — the hash check runs BEFORE the rename, so
-    // a bad caller hash never reaches disk.
+    // The file must never be created on a mismatch.
     await expect(fs.access(target)).rejects.toMatchObject({ code: "ENOENT" });
   });
 

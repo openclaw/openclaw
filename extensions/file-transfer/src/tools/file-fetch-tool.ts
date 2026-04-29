@@ -10,14 +10,12 @@ import { saveMediaBuffer } from "openclaw/plugin-sdk/media-store";
 import { Type } from "typebox";
 import { appendFileTransferAudit } from "../shared/audit.js";
 import { throwFromNodePayload } from "../shared/errors.js";
-import { gatekeep } from "../shared/gatekeep.js";
 import {
   IMAGE_MIME_INLINE_SET,
   TEXT_INLINE_MAX_BYTES,
   TEXT_INLINE_MIME_SET,
 } from "../shared/mime.js";
 import { humanSize, readGatewayCallOptions, readTrimmedString } from "../shared/params.js";
-import { evaluateFilePolicy } from "../shared/policy.js";
 
 const FILE_FETCH_DEFAULT_MAX_BYTES = 8 * 1024 * 1024;
 const FILE_FETCH_HARD_MAX_BYTES = 16 * 1024 * 1024;
@@ -48,7 +46,7 @@ export function createFileFetchTool(): AnyAgentTool {
     label: "File Fetch",
     name: "file_fetch",
     description:
-      "Retrieve a file from a paired node by absolute path. Returns image content blocks for image MIME types, inlines small text files (≤8 KB) as text content, and saves everything else under the gateway media store with a path you can pass to file_write or other tools. Use this for screenshots, photos, receipts, logs, source files. Pair with file_write to copy a file from one node to another (no exec/cp shell-out needed). Requires operator opt-in: gateway.nodes.allowCommands must include 'file.fetch' AND gateway.nodes.fileTransfer.<node>.allowReadPaths must match the path. Without policy configured, every call is denied.",
+      "Retrieve a file from a paired node by absolute path. Returns image content blocks for image MIME types, inlines small text files (≤8 KB) as text content, and saves everything else under the gateway media store with a path you can pass to file_write or other tools. Use this for screenshots, photos, receipts, logs, source files. Pair with file_write to copy a file from one node to another (no exec/cp shell-out needed). Requires operator opt-in: gateway.nodes.allowCommands must include 'file.fetch' AND plugins.entries.file-transfer.config.nodes.<node>.allowReadPaths must match the path. Without policy configured, every call is denied.",
     parameters: FileFetchToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -73,32 +71,12 @@ export function createFileFetchTool(): AnyAgentTool {
       const nodeDisplayName = nodeMeta?.displayName ?? node;
       const startedAt = Date.now();
 
-      // Gatekeep: evaluate policy + prompt operator if ask=on-miss/always.
-      // Post-flight policy check below (after node returns canonicalPath)
-      // catches symlink escapes.
-      const gate = await gatekeep({
-        op: "file.fetch",
-        nodeId,
-        nodeDisplayName,
-        kind: "read",
-        path: filePath,
-        toolCallId: _toolCallId,
-        gatewayOpts,
-        startedAt,
-        promptVerb: "Read file",
-      });
-      if (!gate.ok) {
-        throw new Error(gate.throwMessage);
-      }
-      const effectiveMaxBytes = gate.maxBytes ? Math.min(maxBytes, gate.maxBytes) : maxBytes;
-
       const raw = await callGatewayTool<{ payload: unknown }>("node.invoke", gatewayOpts, {
         nodeId,
         command: "file.fetch",
         params: {
           path: filePath,
-          maxBytes: effectiveMaxBytes,
-          followSymlinks: gate.followSymlinks,
+          maxBytes,
         },
         idempotencyKey: crypto.randomUUID(),
       });
@@ -146,34 +124,6 @@ export function createFileFetchTool(): AnyAgentTool {
       const sha256 = typeof payload.sha256 === "string" ? payload.sha256 : "";
       if (!canonicalPath || size < 0 || !mimeType || !hasBase64 || !sha256) {
         throw new Error("invalid file.fetch payload (missing fields)");
-      }
-
-      // Post-flight policy check on the canonicalized path. Catches the
-      // symlink-escape case where the requested path matched policy but
-      // resolves to something that doesn't.
-      if (canonicalPath !== filePath) {
-        const postflight = evaluateFilePolicy({
-          nodeId,
-          nodeDisplayName,
-          kind: "read",
-          path: canonicalPath,
-        });
-        if (!postflight.ok) {
-          await appendFileTransferAudit({
-            op: "file.fetch",
-            nodeId,
-            nodeDisplayName,
-            requestedPath: filePath,
-            canonicalPath,
-            decision: "denied:symlink_escape",
-            errorCode: postflight.code,
-            reason: postflight.reason,
-            durationMs: Date.now() - startedAt,
-          });
-          throw new Error(
-            `file.fetch SYMLINK_TARGET_DENIED: requested path resolved to ${canonicalPath} which is not allowed by policy`,
-          );
-        }
       }
 
       const buffer = Buffer.from(base64, "base64");
@@ -237,6 +187,7 @@ export function createFileFetchTool(): AnyAgentTool {
           mimeType,
           sha256,
           localPath,
+          mediaId: saved.id,
           media: {
             mediaUrls: [localPath],
           },

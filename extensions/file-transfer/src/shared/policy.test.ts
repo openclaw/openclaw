@@ -2,7 +2,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// Mock the plugin-sdk config-runtime surface so we can drive the policy
+// Mock the plugin-sdk runtime-config surface so we can drive the policy
 // reader from the test without booting a gateway. mutateConfigFile is also
 // mocked so persistAllowAlways tests can assert what would have been written
 // without touching ~/.openclaw/openclaw.json.
@@ -33,20 +33,26 @@ function withConfig(fileTransfer: Record<string, unknown> | undefined) {
     getRuntimeConfigMock.mockReturnValue({});
   } else {
     getRuntimeConfigMock.mockReturnValue({
-      gateway: { nodes: { fileTransfer } },
+      plugins: {
+        entries: {
+          "file-transfer": {
+            config: { nodes: fileTransfer },
+          },
+        },
+      },
     });
   }
 }
 
 describe("evaluateFilePolicy — default deny", () => {
-  it("returns NO_POLICY when no gateway block is present", () => {
+  it("returns NO_POLICY when no plugin config block is present", () => {
     getRuntimeConfigMock.mockReturnValue({});
     const r = evaluateFilePolicy({ nodeId: "n1", kind: "read", path: "/tmp/x" });
     expect(r).toMatchObject({ ok: false, code: "NO_POLICY", askable: false });
   });
 
-  it("returns NO_POLICY when fileTransfer block is missing", () => {
-    getRuntimeConfigMock.mockReturnValue({ gateway: { nodes: {} } });
+  it("returns NO_POLICY when plugin policy block is missing", () => {
+    getRuntimeConfigMock.mockReturnValue({ plugins: { entries: { "file-transfer": {} } } });
     const r = evaluateFilePolicy({ nodeId: "n1", kind: "read", path: "/tmp/x" });
     expect(r).toMatchObject({ ok: false, code: "NO_POLICY" });
   });
@@ -55,6 +61,21 @@ describe("evaluateFilePolicy — default deny", () => {
     withConfig({ "other-node": { allowReadPaths: ["/tmp/**"] } });
     const r = evaluateFilePolicy({ nodeId: "n1", kind: "read", path: "/tmp/x" });
     expect(r).toMatchObject({ ok: false, code: "NO_POLICY" });
+  });
+
+  it("prefers the passed plugin config over the runtime config snapshot", () => {
+    getRuntimeConfigMock.mockReturnValue({});
+    const r = evaluateFilePolicy({
+      nodeId: "n1",
+      kind: "read",
+      path: "/tmp/x",
+      pluginConfig: {
+        nodes: {
+          n1: { allowReadPaths: ["/tmp/**"] },
+        },
+      },
+    });
+    expect(r).toMatchObject({ ok: true, reason: "matched-allow" });
   });
 });
 
@@ -275,7 +296,13 @@ describe("persistAllowAlways", () => {
     mutateConfigFileMock.mockImplementation(
       async ({ mutate }: { mutate: (draft: Record<string, unknown>) => void }) => {
         const draft: Record<string, unknown> = {
-          gateway: { nodes: { fileTransfer: { n1: { allowReadPaths: ["/tmp/**"] } } } },
+          plugins: {
+            entries: {
+              "file-transfer": {
+                config: { nodes: { n1: { allowReadPaths: ["/tmp/**"] } } },
+              },
+            },
+          },
         };
         mutate(draft);
         captured = draft;
@@ -286,9 +313,17 @@ describe("persistAllowAlways", () => {
     expect(mutateConfigFileMock).toHaveBeenCalledOnce();
     // Drill back into the captured draft to assert the added path.
     const root = captured as unknown as {
-      gateway: { nodes: { fileTransfer: Record<string, { allowReadPaths: string[] }> } };
+      plugins: {
+        entries: {
+          "file-transfer": {
+            config: { nodes: Record<string, { allowReadPaths: string[] }> };
+          };
+        };
+      };
     };
-    expect(root.gateway.nodes.fileTransfer.n1.allowReadPaths).toContain("/srv/added.png");
+    expect(root.plugins.entries["file-transfer"].config.nodes.n1.allowReadPaths).toContain(
+      "/srv/added.png",
+    );
   });
 
   it("creates a new node entry keyed by displayName when no entry exists", async () => {
@@ -309,9 +344,17 @@ describe("persistAllowAlways", () => {
     });
 
     const root = captured as unknown as {
-      gateway: { nodes: { fileTransfer: Record<string, { allowWritePaths: string[] }> } };
+      plugins: {
+        entries: {
+          "file-transfer": {
+            config: { nodes: Record<string, { allowWritePaths: string[] }> };
+          };
+        };
+      };
     };
-    expect(root.gateway.nodes.fileTransfer["Lobster"].allowWritePaths).toContain("/srv/out.txt");
+    expect(root.plugins.entries["file-transfer"].config.nodes["Lobster"].allowWritePaths).toContain(
+      "/srv/out.txt",
+    );
   });
 
   it("never persists under the '*' wildcard even when '*' is the matching key", async () => {
@@ -319,7 +362,13 @@ describe("persistAllowAlways", () => {
     mutateConfigFileMock.mockImplementation(
       async ({ mutate }: { mutate: (draft: Record<string, unknown>) => void }) => {
         const draft: Record<string, unknown> = {
-          gateway: { nodes: { fileTransfer: { "*": { allowReadPaths: ["/var/log/**"] } } } },
+          plugins: {
+            entries: {
+              "file-transfer": {
+                config: { nodes: { "*": { allowReadPaths: ["/var/log/**"] } } },
+              },
+            },
+          },
         };
         mutate(draft);
         captured = draft;
@@ -334,14 +383,22 @@ describe("persistAllowAlways", () => {
     });
 
     const root = captured as unknown as {
-      gateway: {
-        nodes: { fileTransfer: Record<string, { allowReadPaths?: string[] }> };
+      plugins: {
+        entries: {
+          "file-transfer": {
+            config: { nodes: Record<string, { allowReadPaths?: string[] }> };
+          };
+        };
       };
     };
     // The "*" entry must not have been mutated.
-    expect(root.gateway.nodes.fileTransfer["*"].allowReadPaths).toEqual(["/var/log/**"]);
+    expect(root.plugins.entries["file-transfer"].config.nodes["*"].allowReadPaths).toEqual([
+      "/var/log/**",
+    ]);
     // A new entry keyed by displayName (not "*") must hold the new path.
-    expect(root.gateway.nodes.fileTransfer["Lobster"].allowReadPaths).toEqual(["/srv/added.png"]);
+    expect(root.plugins.entries["file-transfer"].config.nodes["Lobster"].allowReadPaths).toEqual([
+      "/srv/added.png",
+    ]);
   });
 
   it("rejects unsafe keys (__proto__, prototype, constructor) that would mutate prototype chain", async () => {
@@ -375,7 +432,13 @@ describe("persistAllowAlways", () => {
     mutateConfigFileMock.mockImplementation(
       async ({ mutate }: { mutate: (draft: Record<string, unknown>) => void }) => {
         const draft: Record<string, unknown> = {
-          gateway: { nodes: { fileTransfer: { n1: { allowReadPaths: ["/tmp/x"] } } } },
+          plugins: {
+            entries: {
+              "file-transfer": {
+                config: { nodes: { n1: { allowReadPaths: ["/tmp/x"] } } },
+              },
+            },
+          },
         };
         mutate(draft);
         captured = draft;
@@ -384,9 +447,15 @@ describe("persistAllowAlways", () => {
     await persistAllowAlways({ nodeId: "n1", kind: "read", path: "/tmp/x" });
 
     const root = captured as unknown as {
-      gateway: { nodes: { fileTransfer: Record<string, { allowReadPaths: string[] }> } };
+      plugins: {
+        entries: {
+          "file-transfer": {
+            config: { nodes: Record<string, { allowReadPaths: string[] }> };
+          };
+        };
+      };
     };
-    const list = root.gateway.nodes.fileTransfer.n1.allowReadPaths;
+    const list = root.plugins.entries["file-transfer"].config.nodes.n1.allowReadPaths;
     expect(list.filter((p) => p === "/tmp/x").length).toBe(1);
   });
 });

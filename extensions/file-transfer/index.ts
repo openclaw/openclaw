@@ -6,6 +6,7 @@ import { handleDirFetch } from "./src/node-host/dir-fetch.js";
 import { handleDirList } from "./src/node-host/dir-list.js";
 import { handleFileFetch } from "./src/node-host/file-fetch.js";
 import { handleFileWrite } from "./src/node-host/file-write.js";
+import { createFileTransferNodeInvokePolicy } from "./src/shared/node-invoke-policy.js";
 import { createDirFetchTool } from "./src/tools/dir-fetch-tool.js";
 import { createDirListTool } from "./src/tools/dir-list-tool.js";
 import { createFileFetchTool } from "./src/tools/file-fetch-tool.js";
@@ -15,6 +16,7 @@ const fileTransferNodeHostCommands: OpenClawPluginNodeHostCommand[] = [
   {
     command: "file.fetch",
     cap: "file",
+    dangerous: true,
     handle: async (paramsJSON) => {
       const params = paramsJSON ? JSON.parse(paramsJSON) : {};
       const result = await handleFileFetch(params);
@@ -24,6 +26,7 @@ const fileTransferNodeHostCommands: OpenClawPluginNodeHostCommand[] = [
   {
     command: "dir.list",
     cap: "file",
+    dangerous: true,
     handle: async (paramsJSON) => {
       const params = paramsJSON ? JSON.parse(paramsJSON) : {};
       const result = await handleDirList(params);
@@ -33,6 +36,7 @@ const fileTransferNodeHostCommands: OpenClawPluginNodeHostCommand[] = [
   {
     command: "dir.fetch",
     cap: "file",
+    dangerous: true,
     handle: async (paramsJSON) => {
       const params = paramsJSON ? JSON.parse(paramsJSON) : {};
       const result = await handleDirFetch(params);
@@ -42,6 +46,7 @@ const fileTransferNodeHostCommands: OpenClawPluginNodeHostCommand[] = [
   {
     command: "file.write",
     cap: "file",
+    dangerous: true,
     handle: async (paramsJSON) => {
       const params = paramsJSON ? JSON.parse(paramsJSON) : {};
       const result = await handleFileWrite(params);
@@ -56,6 +61,7 @@ export default definePluginEntry({
   description: "Fetch, list, and write files on paired nodes via dedicated node commands.",
   nodeHostCommands: fileTransferNodeHostCommands,
   register(api) {
+    api.registerNodeInvokePolicy(createFileTransferNodeInvokePolicy());
     api.registerTool(createFileFetchTool());
     api.registerTool(createDirListTool());
     api.registerTool(createDirFetchTool());

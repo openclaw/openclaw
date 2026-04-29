@@ -36,6 +36,7 @@ import {
 } from "../file-transfer-dispatch.js";
 import { createKnownNodeCatalog, getKnownNode, listKnownNodes } from "../node-catalog.js";
 import { isNodeCommandAllowed, resolveNodeCommandAllowlist } from "../node-command-policy.js";
+import { applyPluginNodeInvokePolicy } from "../node-invoke-plugin-policy.js";
 import { sanitizeNodeInvokeParamsForForwarding } from "../node-invoke-sanitize.js";
 import {
   type ConnectParams,
@@ -1091,6 +1092,45 @@ export const nodeHandlers: GatewayRequestHandlers = {
           errorShape(ErrorCodes.INVALID_REQUEST, forwardedParams.message, {
             details: forwardedParams.details ?? null,
           }),
+        );
+        return;
+      }
+      const policyResult = await applyPluginNodeInvokePolicy({
+        context,
+        client,
+        nodeSession,
+        command,
+        params: forwardedParams.params,
+        timeoutMs: p.timeoutMs,
+        idempotencyKey: p.idempotencyKey,
+      });
+      if (policyResult) {
+        if (!policyResult.ok) {
+          const errorCode = policyResult.unavailable
+            ? ErrorCodes.UNAVAILABLE
+            : ErrorCodes.INVALID_REQUEST;
+          respond(
+            false,
+            undefined,
+            errorShape(errorCode, policyResult.message, {
+              details: {
+                ...(policyResult.details ?? {}),
+                ...(policyResult.code ? { code: policyResult.code } : {}),
+              },
+            }),
+          );
+          return;
+        }
+        respond(
+          true,
+          {
+            ok: true,
+            nodeId,
+            command,
+            payload: policyResult.payload,
+            payloadJSON: policyResult.payloadJSON ?? null,
+          },
+          undefined,
         );
         return;
       }

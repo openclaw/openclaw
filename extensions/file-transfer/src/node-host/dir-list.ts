@@ -100,7 +100,7 @@ export async function handleDirList(params: DirListParams): Promise<DirListResul
     return {
       ok: false,
       code: "SYMLINK_REDIRECT",
-      message: `path traverses a symlink; refusing because followSymlinks=false (set gateway.nodes.fileTransfer.<node>.followSymlinks=true to allow, or update allowReadPaths to the canonical path)`,
+      message: `path traverses a symlink; refusing because followSymlinks=false (set plugins.entries.file-transfer.config.nodes.<node>.followSymlinks=true to allow, or update allowReadPaths to the canonical path)`,
       canonicalPath: canonical,
     };
   }

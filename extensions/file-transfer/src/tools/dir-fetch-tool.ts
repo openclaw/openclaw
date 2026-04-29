@@ -13,7 +13,6 @@ import { saveMediaBuffer } from "openclaw/plugin-sdk/media-store";
 import { Type } from "typebox";
 import { appendFileTransferAudit } from "../shared/audit.js";
 import { throwFromNodePayload } from "../shared/errors.js";
-import { gatekeep } from "../shared/gatekeep.js";
 import { IMAGE_MIME_INLINE_SET, mimeFromExtension } from "../shared/mime.js";
 import {
   humanSize,
@@ -22,7 +21,6 @@ import {
   readGatewayCallOptions,
   readTrimmedString,
 } from "../shared/params.js";
-import { evaluateFilePolicy } from "../shared/policy.js";
 
 const DIR_FETCH_DEFAULT_MAX_BYTES = 8 * 1024 * 1024;
 const DIR_FETCH_HARD_MAX_BYTES = 16 * 1024 * 1024;
@@ -387,7 +385,7 @@ export function createDirFetchTool(): AnyAgentTool {
     label: "Directory Fetch",
     name: "dir_fetch",
     description:
-      "Retrieve a directory tree from a paired node as a gzipped tarball, unpack it on the gateway, and return a manifest of saved paths. Use to pull source trees, asset folders, or log directories in a single round-trip. The unpacked files live on the GATEWAY (not your local machine); pass localPath into other tools or use file_fetch on individual entries to ship them elsewhere. Rejects trees larger than 16 MB compressed. Requires operator opt-in: gateway.nodes.allowCommands must include 'dir.fetch' AND gateway.nodes.fileTransfer.<node>.allowReadPaths must match the directory path.",
+      "Retrieve a directory tree from a paired node as a gzipped tarball, unpack it on the gateway, and return a manifest of saved paths. Use to pull source trees, asset folders, or log directories in a single round-trip. The unpacked files live on the GATEWAY (not your local machine); pass localPath into other tools or use file_fetch on individual entries to ship them elsewhere. Rejects trees larger than 16 MB compressed. Requires operator opt-in: gateway.nodes.allowCommands must include 'dir.fetch' AND plugins.entries.file-transfer.config.nodes.<node>.allowReadPaths must match the directory path.",
     parameters: DirFetchToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -416,30 +414,13 @@ export function createDirFetchTool(): AnyAgentTool {
       const nodeDisplayName = nodeMeta?.displayName ?? node;
       const startedAt = Date.now();
 
-      const gate = await gatekeep({
-        op: "dir.fetch",
-        nodeId,
-        nodeDisplayName,
-        kind: "read",
-        path: dirPath,
-        toolCallId: _toolCallId,
-        gatewayOpts,
-        startedAt,
-        promptVerb: "Fetch directory tree",
-      });
-      if (!gate.ok) {
-        throw new Error(gate.throwMessage);
-      }
-      const effectiveMaxBytes = gate.maxBytes ? Math.min(maxBytes, gate.maxBytes) : maxBytes;
-
       const raw = await callGatewayTool<{ payload: unknown }>("node.invoke", gatewayOpts, {
         nodeId,
         command: "dir.fetch",
         params: {
           path: dirPath,
-          maxBytes: effectiveMaxBytes,
+          maxBytes,
           includeDotfiles,
-          followSymlinks: gate.followSymlinks,
         },
         idempotencyKey: crypto.randomUUID(),
       });
@@ -484,32 +465,6 @@ export function createDirFetchTool(): AnyAgentTool {
 
       if (!canonicalPath || !tarBase64 || tarBytes < 0 || !sha256) {
         throw new Error("invalid dir.fetch payload (missing fields)");
-      }
-
-      // Post-flight policy on canonicalized path.
-      if (canonicalPath !== dirPath) {
-        const postflight = evaluateFilePolicy({
-          nodeId,
-          nodeDisplayName,
-          kind: "read",
-          path: canonicalPath,
-        });
-        if (!postflight.ok) {
-          await appendFileTransferAudit({
-            op: "dir.fetch",
-            nodeId,
-            nodeDisplayName,
-            requestedPath: dirPath,
-            canonicalPath,
-            decision: "denied:symlink_escape",
-            errorCode: postflight.code,
-            reason: postflight.reason,
-            durationMs: Date.now() - startedAt,
-          });
-          throw new Error(
-            `dir.fetch SYMLINK_TARGET_DENIED: requested path resolved to ${canonicalPath} which is not allowed by policy`,
-          );
-        }
       }
 
       const tarBuffer = Buffer.from(tarBase64, "base64");

@@ -1,24 +1,28 @@
-// Path policy for file-transfer tools.
+// Path policy for file-transfer node.invoke calls.
 //
 // Default behavior is DENY. The operator must explicitly opt in by adding
 // a config block to ~/.openclaw/openclaw.json under
-// `gateway.nodes.fileTransfer`. Without a matching block, every file
-// operation is rejected before reaching the node.
+// `plugins.entries.file-transfer.config.nodes`. Without a matching block,
+// every file operation is rejected before reaching the node.
 //
 // Schema (informal):
 //
-//   "gateway": {
-//     "nodes": {
-//       "fileTransfer": {
-//         "<nodeId-or-displayName>": {
-//           "ask":              "off" | "on-miss" | "always",
-//           "allowReadPaths":   ["~/Screenshots/**", "/tmp/**"],
-//           "allowWritePaths":  ["~/Downloads/**"],
-//           "denyPaths":        ["**/.ssh/**", "**/.aws/**"],
-//           "maxBytes":         16777216,
-//           "followSymlinks":   false
-//         },
-//         "*": { "ask": "on-miss" }
+//   "plugins": {
+//     "entries": {
+//       "file-transfer": {
+//         "config": {
+//           "nodes": {
+//             "<nodeId-or-displayName>": {
+//               "ask":              "off" | "on-miss" | "always",
+//               "allowReadPaths":   ["~/Screenshots/**", "/tmp/**"],
+//               "allowWritePaths":  ["~/Downloads/**"],
+//               "denyPaths":        ["**/.ssh/**", "**/.aws/**"],
+//               "maxBytes":         16777216,
+//               "followSymlinks":   false
+//             },
+//             "*": { "ask": "on-miss" }
+//           }
+//         }
 //       }
 //     }
 //   }
@@ -78,14 +82,46 @@ type NodeFilePolicyConfig = {
 
 type FilePolicyConfig = Record<string, NodeFilePolicyConfig>;
 
-function readFilePolicyConfig(): FilePolicyConfig | null {
-  // gateway.nodes.fileTransfer is declared in src/config/types.gateway.ts
-  // so the cast through unknown the previous version needed is gone.
-  const fileTransfer = getRuntimeConfig().gateway?.nodes?.fileTransfer;
-  if (!fileTransfer) {
+function asFilePolicyConfig(value: unknown): FilePolicyConfig | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
     return null;
   }
-  return fileTransfer;
+  return value as FilePolicyConfig;
+}
+
+function readFilePolicyConfigFromPluginConfig(pluginConfig: unknown): FilePolicyConfig | null {
+  if (!pluginConfig || typeof pluginConfig !== "object" || Array.isArray(pluginConfig)) {
+    return null;
+  }
+  const nodes = (pluginConfig as { nodes?: unknown }).nodes;
+  return asFilePolicyConfig(nodes);
+}
+
+function readPluginConfigFromRuntimeConfig(): Record<string, unknown> | null {
+  const cfg = getRuntimeConfig();
+  const plugins = (cfg as { plugins?: unknown }).plugins;
+  if (!plugins || typeof plugins !== "object") {
+    return null;
+  }
+  const entries = (plugins as { entries?: unknown }).entries;
+  if (!entries || typeof entries !== "object") {
+    return null;
+  }
+  const entry = (entries as Record<string, unknown>)["file-transfer"];
+  if (!entry || typeof entry !== "object") {
+    return null;
+  }
+  const pluginConfig = (entry as { config?: unknown }).config;
+  return pluginConfig && typeof pluginConfig === "object" && !Array.isArray(pluginConfig)
+    ? (pluginConfig as Record<string, unknown>)
+    : null;
+}
+
+function readFilePolicyConfig(pluginConfig?: Record<string, unknown>): FilePolicyConfig | null {
+  return (
+    readFilePolicyConfigFromPluginConfig(pluginConfig) ??
+    readFilePolicyConfigFromPluginConfig(readPluginConfigFromRuntimeConfig())
+  );
 }
 
 function expandTilde(p: string): string {
@@ -143,7 +179,7 @@ function normalizeAskMode(value: unknown): FilePolicyAskMode {
  * Evaluate whether (nodeId, kind, path) is permitted.
  *
  * Resolution order:
- *   1. No fileTransfer config or no entry for this node → NO_POLICY (deny,
+ *   1. No file-transfer config or no entry for this node → NO_POLICY (deny,
  *      not askable — operator hasn't opted in at all).
  *   2. denyPaths matches → POLICY_DENIED, not askable (hard deny).
  *   3. ask=always → ask-always (prompt every time).
@@ -176,6 +212,7 @@ export function evaluateFilePolicy(input: {
   nodeDisplayName?: string;
   kind: FilePolicyKind;
   path: string;
+  pluginConfig?: Record<string, unknown>;
 }): FilePolicyDecision {
   // Reject literal traversal sequences before consulting any allow/deny
   // glob list. minimatch on the raw string can wrongly accept
@@ -188,13 +225,13 @@ export function evaluateFilePolicy(input: {
       askable: false,
     };
   }
-  const config = readFilePolicyConfig();
+  const config = readFilePolicyConfig(input.pluginConfig);
   if (!config) {
     return {
       ok: false,
       code: "NO_POLICY",
       reason:
-        "no gateway.nodes.fileTransfer config; file-transfer is deny-by-default until configured",
+        "no plugins.entries.file-transfer.config.nodes config; file-transfer is deny-by-default until configured",
       askable: false,
     };
   }
@@ -203,7 +240,7 @@ export function evaluateFilePolicy(input: {
     return {
       ok: false,
       code: "NO_POLICY",
-      reason: `no fileTransfer policy entry for "${input.nodeDisplayName ?? input.nodeId}"; configure gateway.nodes.fileTransfer or "*"`,
+      reason: `no file-transfer policy entry for "${input.nodeDisplayName ?? input.nodeId}"; configure plugins.entries.file-transfer.config.nodes or "*"`,
       askable: false,
     };
   }
@@ -280,7 +317,7 @@ export function evaluateFilePolicy(input: {
  * used as a property name (e.g. `__proto__` setter on a plain object).
  * The nodeDisplayName comes from paired-node metadata which we don't
  * fully control; refuse to persist policy under a key that could corrupt
- * the fileTransfer container's prototype.
+ * the plugin policy container's prototype.
  */
 function assertSafeConfigKey(key: string): string {
   if (key === "__proto__" || key === "prototype" || key === "constructor") {
@@ -299,11 +336,14 @@ export async function persistAllowAlways(input: {
   await mutateConfigFile({
     afterWrite: { mode: "none", reason: "file-transfer allow-always policy update" },
     mutate: (draft) => {
-      // gateway.nodes.fileTransfer is declared in
-      // src/config/types.gateway.ts (GatewayNodeFileTransferEntry).
-      const gateway = (draft.gateway ??= {});
-      const nodes = (gateway.nodes ??= {});
-      const fileTransfer = (nodes.fileTransfer ??= {});
+      // Plugin config is intentionally plugin-owned; the root OpenClawConfig
+      // type only guarantees `Record<string, unknown>` here.
+      const root = draft as unknown as Record<string, unknown>;
+      const plugins = (root.plugins ??= {}) as Record<string, unknown>;
+      const entries = (plugins.entries ??= {}) as Record<string, unknown>;
+      const pluginEntry = (entries["file-transfer"] ??= {}) as Record<string, unknown>;
+      const pluginConfig = (pluginEntry.config ??= {}) as Record<string, unknown>;
+      const fileTransfer = (pluginConfig.nodes ??= {}) as Record<string, NodeFilePolicyConfig>;
 
       // SECURITY: never persist allow-always under the "*" wildcard. An
       // operator approving a path on node A must not silently grant the

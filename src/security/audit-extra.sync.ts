@@ -12,6 +12,7 @@ import { resolveGatewayAuth } from "../gateway/auth.js";
 import { resolveAllowedAgentIds } from "../gateway/hooks-policy.js";
 import {
   DEFAULT_DANGEROUS_NODE_COMMANDS,
+  listDangerousPluginNodeCommands,
   resolveNodeCommandAllowlist,
 } from "../gateway/node-command-policy.js";
 import {
@@ -868,9 +869,10 @@ export function collectNodeDangerousAllowCommandFindings(
   }
 
   const deny = new Set((cfg.gateway?.nodes?.denyCommands ?? []).map(normalizeNodeCommand));
-  const dangerousAllowed = DEFAULT_DANGEROUS_NODE_COMMANDS.filter(
-    (cmd) => allow.has(cmd) && !deny.has(cmd),
-  );
+  const dangerousAllowed = [
+    ...DEFAULT_DANGEROUS_NODE_COMMANDS,
+    ...listDangerousPluginNodeCommands(),
+  ].filter((cmd) => allow.has(cmd) && !deny.has(cmd));
   if (dangerousAllowed.length === 0) {
     return findings;
   }
