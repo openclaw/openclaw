@@ -2525,11 +2525,13 @@ export async function runEmbeddedAttempt(
           // Secondary guard: even if messages.length > 0, verify they have actual content.
           // Empty user messages (from an active-memory mid-rebuild race) pass the length
           // check but contain no text, which still results in an empty API payload → 400.
-          const hasNonEmptyUserMsg = (activeSession.messages ?? []).some((m) => {
-            if (!m || (m as any).role !== 'user') return false;
-            const c = (m as any).content;
+          const hasNonEmptyUserMsg = (activeSession.messages as readonly unknown[]).some((m) => {
+            if (!m) return false;
+            const msg = m as { role?: string; content?: string | unknown[] };
+            if (msg.role !== 'user') return false;
+            const c = msg.content;
             if (typeof c === 'string') return c.trim().length > 0;
-            if (Array.isArray(c)) return c.some((p: any) => p?.type === 'text' && typeof p.text === 'string' && p.text.trim().length > 0);
+            if (Array.isArray(c)) return c.some((p) => (p as { type?: string; text?: string })?.type === 'text' && typeof (p as { text?: string }).text === 'string' && (p as { text?: string }).text.trim().length > 0);
             return false;
           });
           if (
