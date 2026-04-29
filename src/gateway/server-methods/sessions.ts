@@ -421,7 +421,7 @@ function hasTrackedActiveSessionRun(params: {
   requestedKey: string;
   canonicalKey: string;
 }): boolean {
-  for (const active of params.context.chatAbortControllers.values()) {
+  for (const active of (params.context.chatAbortControllers ?? new Map()).values()) {
     if (active.sessionKey === params.canonicalKey || active.sessionKey === params.requestedKey) {
       return true;
     }
@@ -1800,6 +1800,20 @@ export const sessionsHandlers: GatewayRequestHandlers = {
           compacted: result.compacted,
         });
       }
+      return;
+    }
+
+    const interruptResult = await interruptSessionRunIfActive({
+      req,
+      context,
+      client,
+      isWebchatConnect,
+      requestedKey: key,
+      canonicalKey: target.canonicalKey,
+      sessionId,
+    });
+    if (interruptResult.error) {
+      respond(false, undefined, interruptResult.error);
       return;
     }
 
