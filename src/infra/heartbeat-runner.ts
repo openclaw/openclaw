@@ -722,7 +722,7 @@ function stripHeartbeatTasksBlock(content: string): string {
         continue;
       }
       const isIndented = /^[\s]/.test(line);
-      if (isIndented) {
+      if (isIndented || trimmed.startsWith("- name:")) {
         continue;
       }
       inTasksBlock = false;
