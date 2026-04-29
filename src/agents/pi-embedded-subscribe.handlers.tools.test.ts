@@ -1411,7 +1411,7 @@ describe("handleToolExecutionEnd directReply path", () => {
     expect(abortRun).toHaveBeenCalledWith("direct_reply");
   });
 
-  it("success + empty text: abortRun called, emitBlockReply NOT called", async () => {
+  it("success + empty text: does NOT abort, does NOT emitBlockReply", async () => {
     const { ctx } = createTestContext();
     const emitBlockReply = vi.fn();
     const abortRun = vi.fn();
@@ -1424,11 +1424,10 @@ describe("handleToolExecutionEnd directReply path", () => {
     });
 
     expect(emitBlockReply).not.toHaveBeenCalled();
-    expect(abortRun).toHaveBeenCalledOnce();
-    expect(abortRun).toHaveBeenCalledWith("direct_reply");
+    expect(abortRun).not.toHaveBeenCalled();
   });
 
-  it("success + no content: abortRun called, emitBlockReply NOT called", async () => {
+  it("success + no content: does NOT abort, does NOT emitBlockReply", async () => {
     const { ctx } = createTestContext();
     const emitBlockReply = vi.fn();
     const abortRun = vi.fn();
@@ -1438,8 +1437,7 @@ describe("handleToolExecutionEnd directReply path", () => {
     await runWithDirectReply(ctx, { directReply: true });
 
     expect(emitBlockReply).not.toHaveBeenCalled();
-    expect(abortRun).toHaveBeenCalledOnce();
-    expect(abortRun).toHaveBeenCalledWith("direct_reply");
+    expect(abortRun).not.toHaveBeenCalled();
   });
 
   it("isError + directReply: neither emitBlockReply nor abortRun called", async () => {

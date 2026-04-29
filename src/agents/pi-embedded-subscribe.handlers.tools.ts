@@ -1222,11 +1222,11 @@ export async function handleToolExecutionEnd(
         ...(mediaUrls.length > 0 ? { mediaUrls } : {}),
         ...(mediaArtifact?.audioAsVoice ? { audioAsVoice: true } : {}),
       });
+      ctx.abortRun?.("direct_reply");
     } else {
       ctx.log.warn(
-        `directReply: tool=${toolName} aborted with no content (no text, no mediaUrls) — user will see no reply`,
+        `directReply: tool=${toolName} ignored because no content was extracted (no text, no mediaUrls)`,
       );
     }
-    ctx.abortRun?.("direct_reply");
   }
 }
