@@ -234,8 +234,12 @@ export const FIELD_HELP: Record<string, string> = {
     "Per-agent override for the post-compaction AGENTS.md excerpt budget.",
   "agents.list[].thinkingDefault":
     "Optional per-agent default thinking level. Overrides agents.defaults.thinkingDefault for this agent when no per-message or session override is set.",
+  "agents.list[].verboseDefault":
+    "Optional per-agent default verbosity level (off|on|full). Overrides agents.defaults.verboseDefault for this agent when no per-message or session override is set.",
   "agents.list[].reasoningDefault":
     "Optional per-agent default reasoning visibility (on|off|stream). Applies when no per-message or session reasoning override is set.",
+  "agents.list[].elevatedDefault":
+    "Optional per-agent default elevated permissions level (off|on|ask|full). Overrides agents.defaults.elevatedDefault for this agent when no per-message or session override is set.",
   "agents.list[].fastModeDefault":
     "Optional per-agent default for fast mode. Applies when no per-message or session fast-mode override is set.",
   "agents.list[].runtime":
