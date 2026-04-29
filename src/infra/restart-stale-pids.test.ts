@@ -91,7 +91,12 @@ vi.mock("./windows-port-pids.js", () => ({
 }));
 
 vi.mock("./windows-install-roots.js", () => ({
-  getWindowsInstallRoots: () => ({ systemRoot: "C:\\Windows" }),
+  getWindowsInstallRoots: () => ({
+    systemRoot: "C:\\Windows",
+    programFiles: "C:\\Program Files",
+    programFilesX86: "C:\\Program Files (x86)",
+    programW6432: null,
+  }),
 }));
 
 import { resolveLsofCommandSync } from "./ports-lsof.js";

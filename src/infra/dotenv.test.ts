@@ -675,6 +675,7 @@ describe("workspace .env blocklist completeness", () => {
           "SystemRoot",
           "WINDIR",
           "ProgramFiles",
+          "ProgramFiles(x86)",
           "ProgramW6432",
           "SYNOLOGY_CHAT_INCOMING_URL",
           "SYNOLOGY_NAS_HOST",
