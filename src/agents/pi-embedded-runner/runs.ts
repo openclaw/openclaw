@@ -310,6 +310,29 @@ export function waitForEmbeddedPiRunEnd(sessionId: string, timeoutMs = 15_000): 
   });
 }
 
+export type AbortAndDrainEmbeddedPiRunResult = {
+  aborted: boolean;
+  drained: boolean;
+  forceCleared: boolean;
+};
+
+export async function abortAndDrainEmbeddedPiRun(params: {
+  sessionId: string;
+  sessionKey?: string;
+  settleMs?: number;
+  forceClear?: boolean;
+  reason?: string;
+}): Promise<AbortAndDrainEmbeddedPiRunResult> {
+  const settleMs = params.settleMs ?? 15_000;
+  const aborted = abortEmbeddedPiRun(params.sessionId);
+  const drained = aborted ? await waitForEmbeddedPiRunEnd(params.sessionId, settleMs) : false;
+  const forceCleared =
+    params.forceClear === true && (!aborted || !drained)
+      ? forceClearEmbeddedPiRun(params.sessionId, params.sessionKey, params.reason)
+      : false;
+  return { aborted, drained, forceCleared };
+}
+
 function notifyEmbeddedRunEnded(sessionId: string) {
   const waiters = EMBEDDED_RUN_WAITERS.get(sessionId);
   if (!waiters || waiters.size === 0) {
