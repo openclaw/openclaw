@@ -711,11 +711,13 @@ describe("runCli exit behavior", () => {
     expect(typeof handler).toBe("function");
 
     try {
-      const epipe = Object.assign(new Error("write EPIPE"), { code: "EPIPE" });
-      expect(() => (handler as (error: unknown) => void)(epipe)).not.toThrow();
+      const hostUnreachable = Object.assign(new Error("connect EHOSTUNREACH 149.154.167.220:443"), {
+        code: "EHOSTUNREACH",
+      });
+      expect(() => (handler as (error: unknown) => void)(hostUnreachable)).not.toThrow();
       expect(consoleWarnSpy).toHaveBeenCalledWith(
         "[openclaw] Non-fatal uncaught exception (continuing):",
-        expect.stringContaining("write EPIPE"),
+        expect.stringContaining("EHOSTUNREACH"),
       );
       expect(restoreTerminalStateMock).not.toHaveBeenCalled();
       expect(exitSpy).not.toHaveBeenCalled();

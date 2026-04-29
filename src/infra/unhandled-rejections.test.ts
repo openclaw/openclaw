@@ -259,15 +259,19 @@ describe("isTransientSqliteError", () => {
 });
 
 describe("isTransientUnhandledRejectionError", () => {
-  it("keeps uncaught exception suppression scoped to broken pipes", () => {
+  it("treats raw transient network uncaught exceptions as benign", () => {
     const epipe = Object.assign(new Error("write EPIPE"), { code: "EPIPE" });
     const sqlite = Object.assign(new Error("database is locked"), { code: "SQLITE_BUSY" });
     const network = Object.assign(new Error("connection reset"), { code: "ECONNRESET" });
+    const rawHostUnreachable = new Error(
+      "connect EHOSTUNREACH 149.154.167.220:443 - Local (10.0.10.40:50017)",
+    );
     const generic = new Error("boom");
 
     expect(isBenignUncaughtExceptionError(epipe)).toBe(true);
     expect(isBenignUncaughtExceptionError(sqlite)).toBe(false);
-    expect(isBenignUncaughtExceptionError(network)).toBe(false);
+    expect(isBenignUncaughtExceptionError(network)).toBe(true);
+    expect(isBenignUncaughtExceptionError(rawHostUnreachable)).toBe(true);
     expect(isBenignUncaughtExceptionError(generic)).toBe(false);
   });
   it("returns true for transient SQLite errors", () => {

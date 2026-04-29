@@ -342,6 +342,9 @@ export function isTransientUnhandledRejectionError(err: unknown): boolean {
 }
 
 export function isBenignUncaughtExceptionError(err: unknown): boolean {
+  if (isTransientNetworkError(err)) {
+    return true;
+  }
   for (const candidate of collectNestedUnhandledErrorCandidates(err)) {
     const code = extractErrorCodeOrErrno(candidate);
     if (code && BENIGN_UNCAUGHT_EXCEPTION_CODES.has(code)) {
