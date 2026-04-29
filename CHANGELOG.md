@@ -21,6 +21,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Gateway/restart: write the restart sentinel with the incoming `continuationMessage` when a restart request coalesces with an already-pending restart, so the continuation is not silently dropped for the coalesced caller. Fixes #74424. Thanks @hclsys.
 - Agents/errors: suppress malformed streaming tool-call JSON fragments before they reach chat surfaces while preserving provider request-validation diagnostics. Fixes #59076; keeps #59080 as duplicate coverage. (#59118) Thanks @singleGanghood.
 - CLI/models: restore provider-filtered `models list --all --provider <id>` rows for providers without manifest/static catalog coverage, including Anthropic and Amazon Bedrock, while keeping the compatibility fallback off expensive availability and resolver paths. Thanks @shakkernerd.
 - CLI/models: move the OpenAI listable catalog into the plugin manifest so `models list --all --provider openai` uses the manifest fast path instead of loading provider runtime normalization hooks. Thanks @shakkernerd.

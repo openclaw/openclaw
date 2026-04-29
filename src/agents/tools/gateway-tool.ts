@@ -9,6 +9,7 @@ import {
   buildRestartSuccessContinuation,
   formatDoctorNonInteractiveHint,
   removeRestartSentinelFile,
+  rewriteRestartSentinel,
   type RestartSentinelPayload,
   writeRestartSentinel,
 } from "../../infra/restart-sentinel.js";
@@ -421,6 +422,15 @@ export function createGatewayTool(opts?: {
             },
           },
         });
+        // When coalesced with an already-pending restart, beforeEmit is never
+        // called so the sentinel is never written with this request's
+        // continuationMessage. Merge it into any existing sentinel now.
+        if (scheduled.coalesced && continuationMessage) {
+          await rewriteRestartSentinel((existing) => ({
+            ...existing,
+            continuation: buildRestartSuccessContinuation({ sessionKey, continuationMessage }),
+          })).catch(() => undefined);
+        }
         return jsonResult(scheduled);
       }
 
