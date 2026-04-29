@@ -414,6 +414,26 @@ export const OpenClawSchema = z
         cdpPortRangeStart: z.number().int().min(1).max(65535).optional(),
         defaultProfile: z.string().optional(),
         snapshotDefaults: BrowserSnapshotDefaultsSchema,
+        // Best-effort cleanup policy for tabs opened by primary-agent browser
+        // sessions. Companion to `BrowserTabCleanupConfig` in
+        // src/config/types.browser.ts and the runtime resolver
+        // `resolveBrowserTabCleanupConfig`. Without this entry the strict
+        // browser schema rejected operator overrides as "Unrecognized key:
+        // 'tabCleanup'" even though the runtime read them, so defaults were
+        // the only effective setting (#74577). `idleMinutes` and
+        // `maxTabsPerSession` accept 0 as the documented "disable this
+        // limit" sentinel; `sweepMinutes` must be positive because a
+        // zero-interval sweep would either spin or never fire depending on
+        // the resolver's downstream branch.
+        tabCleanup: z
+          .object({
+            enabled: z.boolean().optional(),
+            idleMinutes: z.number().int().nonnegative().optional(),
+            maxTabsPerSession: z.number().int().nonnegative().optional(),
+            sweepMinutes: z.number().int().positive().optional(),
+          })
+          .strict()
+          .optional(),
         ssrfPolicy: z
           .object({
             dangerouslyAllowPrivateNetwork: z.boolean().optional(),
