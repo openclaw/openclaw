@@ -3,7 +3,9 @@ import type { AuthProfileStore, OAuthCredential } from "./auth-profiles/types.js
 import type { ClaudeCliCredential } from "./cli-credentials.js";
 
 const mocks = vi.hoisted(() => ({
-  readClaudeCliCredentialsCached: vi.fn<() => ClaudeCliCredential | null>(() => null),
+  readClaudeCliCredentialsCached: vi.fn<
+    (options?: { allowKeychainPrompt?: boolean }) => ClaudeCliCredential | null
+  >(() => null),
   readCodexCliCredentialsCached: vi.fn<() => OAuthCredential | null>(() => null),
   readMiniMaxCliCredentialsCached: vi.fn<() => OAuthCredential | null>(() => null),
 }));
@@ -329,6 +331,36 @@ describe("external cli oauth resolution", () => {
         }),
       },
     ]);
+  });
+
+  it("scopes external CLI readers and forwards keychain prompt policy", () => {
+    mocks.readCodexCliCredentialsCached.mockReturnValue(
+      makeOAuthCredential({ provider: "openai-codex" }),
+    );
+    mocks.readClaudeCliCredentialsCached.mockReturnValue({
+      type: "oauth",
+      provider: "anthropic",
+      access: "claude-cli-access",
+      refresh: "claude-cli-refresh",
+      expires: Date.now() + 5 * 24 * 60 * 60_000,
+    });
+
+    const profiles = resolveExternalCliAuthProfiles(makeStore(), {
+      allowKeychainPrompt: false,
+      providerIds: ["claude-cli"],
+    });
+
+    expect(profiles).toEqual([
+      {
+        profileId: CLAUDE_CLI_PROFILE_ID,
+        credential: expect.objectContaining({ access: "claude-cli-access" }),
+      },
+    ]);
+    expect(mocks.readCodexCliCredentialsCached).not.toHaveBeenCalled();
+    expect(mocks.readClaudeCliCredentialsCached).toHaveBeenCalledWith(
+      expect.objectContaining({ allowKeychainPrompt: false }),
+    );
+    expect(mocks.readMiniMaxCliCredentialsCached).not.toHaveBeenCalled();
   });
 
   it("ignores Claude CLI token credentials", () => {

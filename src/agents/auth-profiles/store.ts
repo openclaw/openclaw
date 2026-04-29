@@ -34,6 +34,7 @@ import type { AuthProfileStore } from "./types.js";
 
 type LoadAuthProfileStoreOptions = {
   allowKeychainPrompt?: boolean;
+  externalCliProviderIds?: readonly string[];
   readOnly?: boolean;
   syncExternalCli?: boolean;
 };
@@ -269,12 +270,18 @@ export function loadAuthProfileStoreForRuntime(
   const authPath = resolveAuthStorePath(agentDir);
   const mainAuthPath = resolveAuthStorePath();
   if (!agentDir || authPath === mainAuthPath) {
-    return overlayExternalAuthProfiles(store, { agentDir });
+    return overlayExternalAuthProfiles(store, {
+      agentDir,
+      allowKeychainPrompt: options?.allowKeychainPrompt,
+      externalCliProviderIds: options?.externalCliProviderIds,
+    });
   }
 
   const mainStore = loadAuthProfileStoreForAgent(undefined, options);
   return overlayExternalAuthProfiles(mergeAuthProfileStores(mainStore, store), {
     agentDir,
+    allowKeychainPrompt: options?.allowKeychainPrompt,
+    externalCliProviderIds: options?.externalCliProviderIds,
   });
 }
 
@@ -297,11 +304,18 @@ export function loadAuthProfileStoreWithoutExternalProfiles(agentDir?: string): 
 
 export function ensureAuthProfileStore(
   agentDir?: string,
-  options?: { allowKeychainPrompt?: boolean },
+  options?: {
+    allowKeychainPrompt?: boolean;
+    externalCliProviderIds?: readonly string[];
+  },
 ): AuthProfileStore {
   return overlayExternalAuthProfiles(
     ensureAuthProfileStoreWithoutExternalProfiles(agentDir, options),
-    { agentDir },
+    {
+      agentDir,
+      allowKeychainPrompt: options?.allowKeychainPrompt,
+      externalCliProviderIds: options?.externalCliProviderIds,
+    },
   );
 }
 

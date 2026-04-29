@@ -38,6 +38,8 @@ function resolveExternalAuthProfileMap(params: {
   store: AuthProfileStore;
   agentDir?: string;
   env?: NodeJS.ProcessEnv;
+  allowKeychainPrompt?: boolean;
+  externalCliProviderIds?: readonly string[];
 }): ExternalAuthProfileMap {
   const env = params.env ?? process.env;
   const resolveProfiles =
@@ -54,7 +56,11 @@ function resolveExternalAuthProfileMap(params: {
   });
 
   const resolved: ExternalAuthProfileMap = new Map();
-  const cliProfiles = externalCliSync.resolveExternalCliAuthProfiles?.(params.store) ?? [];
+  const cliProfiles =
+    externalCliSync.resolveExternalCliAuthProfiles?.(params.store, {
+      allowKeychainPrompt: params.allowKeychainPrompt,
+      providerIds: params.externalCliProviderIds,
+    }) ?? [];
   for (const profile of cliProfiles) {
     resolved.set(profile.profileId, {
       profileId: profile.profileId,
@@ -76,24 +82,35 @@ function listRuntimeExternalAuthProfiles(params: {
   store: AuthProfileStore;
   agentDir?: string;
   env?: NodeJS.ProcessEnv;
+  allowKeychainPrompt?: boolean;
+  externalCliProviderIds?: readonly string[];
 }): RuntimeExternalOAuthProfile[] {
   return Array.from(
     resolveExternalAuthProfileMap({
       store: params.store,
       agentDir: params.agentDir,
       env: params.env,
+      allowKeychainPrompt: params.allowKeychainPrompt,
+      externalCliProviderIds: params.externalCliProviderIds,
     }).values(),
   );
 }
 
 export function overlayExternalAuthProfiles(
   store: AuthProfileStore,
-  params?: { agentDir?: string; env?: NodeJS.ProcessEnv },
+  params?: {
+    agentDir?: string;
+    env?: NodeJS.ProcessEnv;
+    allowKeychainPrompt?: boolean;
+    externalCliProviderIds?: readonly string[];
+  },
 ): AuthProfileStore {
   const profiles = listRuntimeExternalAuthProfiles({
     store,
     agentDir: params?.agentDir,
     env: params?.env,
+    allowKeychainPrompt: params?.allowKeychainPrompt,
+    externalCliProviderIds: params?.externalCliProviderIds,
   });
   return overlayRuntimeExternalOAuthProfiles(store, profiles);
 }

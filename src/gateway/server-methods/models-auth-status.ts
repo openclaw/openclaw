@@ -292,8 +292,10 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
     try {
       const cfg = context.getRuntimeConfig();
       const agentDir = resolveOpenClawAgentDir();
-      const store = ensureAuthProfileStore(agentDir);
       const configured = resolveConfiguredProviders(cfg);
+      const store = ensureAuthProfileStore(agentDir, {
+        externalCliProviderIds: configured.providers,
+      });
       const authHealth: AuthHealthSummary = buildAuthHealthSummary({
         store,
         cfg,

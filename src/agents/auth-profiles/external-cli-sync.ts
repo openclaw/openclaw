@@ -34,10 +34,15 @@ export type ExternalCliResolvedProfile = {
   credential: OAuthCredential;
 };
 
+type ExternalCliAuthProfileOptions = {
+  allowKeychainPrompt?: boolean;
+  providerIds?: readonly string[];
+};
+
 type ExternalCliSyncProvider = {
   profileId: string;
   provider: string;
-  readCredentials: () => OAuthCredential | null;
+  readCredentials: (options?: { allowKeychainPrompt?: boolean }) => OAuthCredential | null;
   // bootstrapOnly providers adopt the external CLI credential only to
   // seed an empty slot; once a local OAuth credential exists for the
   // profile, the local refresh token is treated as canonical and the
@@ -96,8 +101,11 @@ const EXTERNAL_CLI_SYNC_PROVIDERS: ExternalCliSyncProvider[] = [
   {
     profileId: CLAUDE_CLI_PROFILE_ID,
     provider: "claude-cli",
-    readCredentials: () => {
-      const credential = readClaudeCliCredentialsCached({ ttlMs: EXTERNAL_CLI_SYNC_TTL_MS });
+    readCredentials: (options) => {
+      const credential = readClaudeCliCredentialsCached({
+        allowKeychainPrompt: options?.allowKeychainPrompt,
+        ttlMs: EXTERNAL_CLI_SYNC_TTL_MS,
+      });
       if (credential?.type !== "oauth") {
         return null;
       }
@@ -147,13 +155,29 @@ export function readExternalCliBootstrapCredential(params: {
 
 export const readManagedExternalCliCredential = readExternalCliBootstrapCredential;
 
+function normalizeProviderIdToken(providerId: string): string {
+  return providerId.trim().toLowerCase();
+}
+
 export function resolveExternalCliAuthProfiles(
   store: AuthProfileStore,
+  options?: ExternalCliAuthProfileOptions,
 ): ExternalCliResolvedProfile[] {
   const profiles: ExternalCliResolvedProfile[] = [];
   const now = Date.now();
+  const eligibleProviderIds = options?.providerIds
+    ? new Set(options.providerIds.map(normalizeProviderIdToken).filter(Boolean))
+    : undefined;
   for (const providerConfig of EXTERNAL_CLI_SYNC_PROVIDERS) {
-    const creds = providerConfig.readCredentials();
+    if (
+      eligibleProviderIds &&
+      !eligibleProviderIds.has(normalizeProviderIdToken(providerConfig.provider))
+    ) {
+      continue;
+    }
+    const creds = providerConfig.readCredentials({
+      allowKeychainPrompt: options?.allowKeychainPrompt,
+    });
     if (!creds) {
       continue;
     }

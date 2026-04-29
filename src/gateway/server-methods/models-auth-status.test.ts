@@ -121,6 +121,19 @@ describe("models.authStatus", () => {
     expect(result.providers[0].profiles[0].type).toBe("oauth");
   });
 
+  it("disables external CLI auth overlays for api-key-only configured providers", async () => {
+    mocks.getRuntimeConfig.mockReturnValue({
+      auth: { profiles: { "opencode-go:default": { provider: "opencode-go", mode: "api_key" } } },
+    });
+
+    await handler(createOptions());
+
+    expect(mocks.ensureAuthProfileStore).toHaveBeenCalledWith("/tmp/agent", {
+      externalCliProviderIds: [],
+    });
+    expect(mocks.buildAuthHealthSummary).toHaveBeenCalledTimes(1);
+  });
+
   it("serves cached response within TTL and marks it as cached", async () => {
     const opts1 = createOptions();
     await handler(opts1);
