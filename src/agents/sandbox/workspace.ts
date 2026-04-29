@@ -9,6 +9,7 @@ import {
   DEFAULT_HEARTBEAT_FILENAME,
   DEFAULT_IDENTITY_FILENAME,
   DEFAULT_SOUL_FILENAME,
+  DEFAULT_TASTE_FILENAME,
   DEFAULT_TOOLS_FILENAME,
   DEFAULT_USER_FILENAME,
   ensureAgentWorkspace,
@@ -30,6 +31,7 @@ export async function ensureSandboxWorkspace(
       DEFAULT_USER_FILENAME,
       DEFAULT_BOOTSTRAP_FILENAME,
       DEFAULT_HEARTBEAT_FILENAME,
+      DEFAULT_TASTE_FILENAME,
     ];
     for (const name of files) {
       const src = path.join(seed, name);

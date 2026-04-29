@@ -90,6 +90,9 @@ These are the standard files OpenClaw expects inside the workspace:
   <Accordion title="MEMORY.md — curated long-term memory (optional)">
     Curated long-term memory. Only load in the main, private session (not shared/group contexts). See [Memory](/concepts/memory) for the workflow and automatic memory flush.
   </Accordion>
+  <Accordion title="TASTE.md — what your human likes (optional)">
+    Evaluative preferences across domains (visual, code, food, etc.). Complements USER.md (descriptive) and MEMORY.md (factual). Loaded only in the main session, not in subagents or cron runs. Spec: [TASTE.md](https://github.com/PitayaK/taste.md).
+  </Accordion>
   <Accordion title="skills/ — workspace skills (optional)">
     Workspace-specific skills. Highest-precedence skill location for that workspace. Overrides project agent skills, personal agent skills, managed skills, bundled skills, and `skills.load.extraDirs` when names collide.
   </Accordion>
@@ -127,7 +130,7 @@ Run these steps on the machine where the Gateway runs (that is where the workspa
     ```bash
     cd ~/.openclaw/workspace
     git init
-    git add AGENTS.md SOUL.md TOOLS.md IDENTITY.md USER.md HEARTBEAT.md memory/
+    git add AGENTS.md SOUL.md TOOLS.md IDENTITY.md USER.md HEARTBEAT.md TASTE.md memory/
     git commit -m "Add agent workspace"
     ```
 

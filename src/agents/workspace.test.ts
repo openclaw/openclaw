@@ -10,6 +10,7 @@ import {
   DEFAULT_IDENTITY_FILENAME,
   DEFAULT_MEMORY_FILENAME,
   DEFAULT_SOUL_FILENAME,
+  DEFAULT_TASTE_FILENAME,
   DEFAULT_TOOLS_FILENAME,
   DEFAULT_USER_FILENAME,
   ensureAgentWorkspace,
@@ -323,6 +324,18 @@ describe("loadWorkspaceBootstrapFiles", () => {
 
     const files = await loadWorkspaceBootstrapFiles(tempDir);
     expect(getMemoryEntries(files)).toHaveLength(0);
+  });
+
+  it("includes TASTE.md after ensureAgentWorkspace seeds the template", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-workspace-");
+    await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
+
+    const files = await loadWorkspaceBootstrapFiles(tempDir);
+    const taste = files.find((file) => file.name === DEFAULT_TASTE_FILENAME);
+    expect(taste).toBeDefined();
+    expect(taste?.missing).toBe(false);
+    expect(taste?.content).toBeDefined();
+    expect(taste?.content?.length ?? 0).toBeGreaterThan(0);
   });
 
   it("treats hardlinked bootstrap aliases as missing", async () => {
