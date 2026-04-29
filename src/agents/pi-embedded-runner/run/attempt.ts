@@ -2538,7 +2538,8 @@ export async function runEmbeddedAttempt(
             imageResult.images.length === 0 &&
             !hasNonEmptyUserMsg
           ) {
-            skipPromptSubmission = true;
+            // Replace the empty prompt with a safe greeting so the normal
+            // submission flow below dispatches something viable.
             promptSubmission = {
               prompt:
                 "A new session was started. Greet the user briefly in your configured persona and ask what they want to do.",
