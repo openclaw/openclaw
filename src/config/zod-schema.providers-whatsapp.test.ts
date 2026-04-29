@@ -108,5 +108,32 @@ describe("WhatsApp prompt config Zod validation", () => {
     });
 
     expect(result.success).toBe(true);
+    if (result.success) {
+      expect(Object.hasOwn(result.data, "exposeErrorText")).toBe(false);
+      expect(Object.hasOwn(result.data.accounts?.work ?? {}, "exposeErrorText")).toBe(false);
+    }
+  });
+
+  it("keeps deprecated exposeErrorText out of generated config surfaces", () => {
+    const schema = WhatsAppConfigSchema.toJSONSchema({
+      target: "draft-07",
+      unrepresentable: "any",
+    }) as {
+      properties?: {
+        exposeErrorText?: unknown;
+        accounts?: {
+          additionalProperties?: {
+            properties?: {
+              exposeErrorText?: unknown;
+            };
+          };
+        };
+      };
+    };
+
+    expect(schema.properties?.exposeErrorText).toBeUndefined();
+    expect(schema.properties?.accounts?.additionalProperties?.properties?.exposeErrorText).toBe(
+      undefined,
+    );
   });
 });
