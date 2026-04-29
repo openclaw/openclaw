@@ -59,6 +59,7 @@ export function createGatewayHooksRequestHandler(params: {
     const sessionKey = value.sessionKey;
     const safeName = sanitizeInboundSystemTags(value.name);
     const jobId = randomUUID();
+    const runId = randomUUID();
     const now = Date.now();
     const delivery = value.deliver
       ? {
@@ -90,7 +91,6 @@ export function createGatewayHooksRequestHandler(params: {
       state: { nextRunAtMs: now },
     };
 
-    const runId = randomUUID();
     let hookEventSessionKey: string | undefined;
     void (async () => {
       try {
@@ -114,7 +114,8 @@ export function createGatewayHooksRequestHandler(params: {
           result.status;
         const prefix =
           result.status === "ok" ? `Hook ${safeName}` : `Hook ${safeName} (${result.status})`;
-        if (shouldAnnounceHookRunResult({ deliver: value.deliver, result })) {
+        const shouldAnnounce = shouldAnnounceHookRunResult({ deliver: value.deliver, result });
+        if (shouldAnnounce) {
           const eventSessionKey = hookEventSessionKey ?? resolveMainSessionKeyFromConfig();
           enqueueSystemEvent(`${prefix}: ${summary}`.trim(), {
             sessionKey: eventSessionKey,
@@ -123,6 +124,16 @@ export function createGatewayHooksRequestHandler(params: {
           if (value.wakeMode === "now") {
             requestHeartbeatNow({ reason: `hook:${jobId}` });
           }
+        } else if (result.status === "ok" && !value.deliver) {
+          logHooks.info("hook agent run completed without announcement", {
+            sourcePath: value.sourcePath,
+            name: safeName,
+            runId,
+            jobId,
+            agentId: value.agentId,
+            sessionKey,
+            completedAt: new Date().toISOString(),
+          });
         }
       } catch (err) {
         logHooks.warn(`hook agent failed: ${String(err)}`);
