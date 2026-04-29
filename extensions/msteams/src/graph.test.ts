@@ -39,6 +39,7 @@ import {
   postGraphBetaJson,
   postGraphJson,
   resolveGraphToken,
+  _resetGraphTokenProviderCacheForTest,
 } from "./graph.js";
 
 const originalFetch = globalThis.fetch;
@@ -144,6 +145,7 @@ function mockGraphTokenResolution(options?: {
 
 describe("msteams graph helpers", () => {
   beforeEach(() => {
+    _resetGraphTokenProviderCacheForTest();
     vi.clearAllMocks();
   });
 
@@ -170,12 +172,12 @@ describe("msteams graph helpers", () => {
 
     expect(globalThis.fetch).toHaveBeenCalledWith(
       "https://graph.microsoft.com/v1.0/groups?$select=id",
-      {
+      expect.objectContaining({
         headers: expect.objectContaining({
           Authorization: `Bearer ${graphToken}`,
           ConsistencyLevel: "eventual",
         }),
-      },
+      }),
     );
 
     mockTextFetchResponse("forbidden", { status: 403 });
@@ -271,6 +273,80 @@ describe("msteams graph helpers", () => {
     expect(getAccessToken).toHaveBeenCalledWith("https://graph.microsoft.com");
   });
 
+  it("uses graphTenantId for app-only Graph token acquisition", async () => {
+    const { getAccessToken } = mockGraphTokenResolution();
+    const creds = {
+      type: "secret",
+      appId: "app-id",
+      appPassword: "app-password",
+      tenantId: "bot-tenant-id",
+      graphTenantId: "graph-tenant-id",
+    };
+    resolveMSTeamsCredentialsMock.mockReturnValue(creds);
+
+    await expect(resolveGraphToken({ channels: { msteams: {} } })).resolves.toBe("resolved-token");
+
+    expect(loadMSTeamsSdkWithAuthMock).toHaveBeenCalledWith({
+      ...creds,
+      tenantId: "graph-tenant-id",
+    });
+    expect(getAccessToken).toHaveBeenCalledWith("https://graph.microsoft.com");
+  });
+
+  it("reuses the Graph token provider for repeated app-only token acquisition", async () => {
+    const { getAccessToken } = mockGraphTokenResolution();
+    const creds = {
+      type: "secret",
+      appId: "app-id",
+      appPassword: "app-password",
+      tenantId: "bot-tenant-id",
+      graphTenantId: "graph-tenant-id",
+    };
+    resolveMSTeamsCredentialsMock.mockReturnValue(creds);
+
+    await expect(resolveGraphToken({ channels: { msteams: {} } })).resolves.toBe("resolved-token");
+    await expect(resolveGraphToken({ channels: { msteams: {} } })).resolves.toBe("resolved-token");
+
+    expect(loadMSTeamsSdkWithAuthMock).toHaveBeenCalledTimes(1);
+    expect(createMSTeamsTokenProviderMock).toHaveBeenCalledTimes(1);
+    expect(getAccessToken).toHaveBeenCalledTimes(2);
+  });
+
+  it("reuses the primary tenant when graphTenantId matches tenantId", async () => {
+    mockGraphTokenResolution();
+    const creds = {
+      type: "secret",
+      appId: "app-id",
+      appPassword: "app-password",
+      tenantId: "tenant-id",
+      graphTenantId: "tenant-id",
+    };
+    resolveMSTeamsCredentialsMock.mockReturnValue(creds);
+
+    await expect(resolveGraphToken({ channels: { msteams: {} } })).resolves.toBe("resolved-token");
+
+    expect(loadMSTeamsSdkWithAuthMock).toHaveBeenCalledWith(creds);
+  });
+
+  it("uses graphTenantId for federated Graph token acquisition", async () => {
+    mockGraphTokenResolution();
+    const creds = {
+      type: "federated",
+      appId: "app-id",
+      tenantId: "bot-tenant-id",
+      graphTenantId: "graph-tenant-id",
+      certificatePath: "/cert.pem",
+    };
+    resolveMSTeamsCredentialsMock.mockReturnValue(creds);
+
+    await expect(resolveGraphToken({ channels: { msteams: {} } })).resolves.toBe("resolved-token");
+
+    expect(loadMSTeamsSdkWithAuthMock).toHaveBeenCalledWith({
+      ...creds,
+      tenantId: "graph-tenant-id",
+    });
+  });
+
   it("fails when credentials or access tokens are unavailable", async () => {
     resolveMSTeamsCredentialsMock.mockReturnValue(undefined);
     await expectRejectsToThrow(resolveGraphToken({ channels: {} }), "MS Teams credentials missing");
@@ -298,7 +374,7 @@ describe("msteams graph helpers", () => {
 
     expectFetchPathContains(
       0,
-      "/groups?$filter=resourceProvisioningOptions%2FAny(x%3Ax%20eq%20'Team')%20and%20startsWith(displayName%2C'Bob''s%20Team')&$select=id,displayName",
+      "/groups?$filter=resourceProvisioningOptions%2FAny(x%3Ax%20eq%20%27Team%27)%20and%20startsWith(displayName%2C%27Bob%27%27s%20Team%27)&$select=id,displayName",
     );
     expectFetchPathContains(1, "/teams/team%2Fops/channels?$select=id,displayName");
   });
@@ -317,7 +393,7 @@ describe("msteams graph helpers", () => {
     });
     expectFetchPathContains(
       0,
-      "/users?$filter=(mail%20eq%20'alice.o''hara%40example.com'%20or%20userPrincipalName%20eq%20'alice.o''hara%40example.com')&$select=id,displayName,mail,userPrincipalName",
+      "/users?$filter=(mail%20eq%20%27alice.o%27%27hara%40example.com%27%20or%20userPrincipalName%20eq%20%27alice.o%27%27hara%40example.com%27)&$select=id,displayName,mail,userPrincipalName",
     );
   });
 

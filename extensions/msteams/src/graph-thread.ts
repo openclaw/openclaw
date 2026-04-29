@@ -74,20 +74,17 @@ export async function resolveTeamGroupId(
 
 /**
  * Fetch a single channel message (the parent/root of a thread).
- * Returns undefined on error so callers can degrade gracefully.
+ * Graph request errors propagate so callers can log permission failures and
+ * decide whether to cache/degrade.
  */
 export async function fetchChannelMessage(
   token: string,
   groupId: string,
   channelId: string,
   messageId: string,
-): Promise<GraphThreadMessage | undefined> {
+): Promise<GraphThreadMessage> {
   const path = `/teams/${encodeURIComponent(groupId)}/channels/${encodeURIComponent(channelId)}/messages/${encodeURIComponent(messageId)}?$select=id,from,body,createdDateTime`;
-  try {
-    return await fetchGraphJson<GraphThreadMessage>({ token, path });
-  } catch {
-    return undefined;
-  }
+  return fetchGraphJson<GraphThreadMessage>({ token, path });
 }
 
 /**

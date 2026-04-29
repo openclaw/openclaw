@@ -229,8 +229,19 @@ export async function monitorMSTeamsProvider(
 
   const { sdk, app } = await loadMSTeamsSdkWithAuth(creds);
 
-  // Build a token provider adapter for Graph API operations
+  // Build a token provider adapter for Graph API operations.
+  // If graphTenantId differs from tenantId (e.g. bot app registered in Azure tenant but
+  // Teams data lives in a separate M365 tenant), create a second App instance using the
+  // M365 tenant so Graph tokens are issued against the correct tenant.
   const tokenProvider = createMSTeamsTokenProvider(app);
+  let graphTokenProvider = tokenProvider;
+  if (creds.graphTenantId && creds.graphTenantId !== creds.tenantId) {
+    const { app: graphApp } = await loadMSTeamsSdkWithAuth({
+      ...creds,
+      tenantId: creds.graphTenantId,
+    });
+    graphTokenProvider = createMSTeamsTokenProvider(graphApp);
+  }
 
   const adapter = createMSTeamsAdapter(app, sdk);
 
@@ -258,6 +269,7 @@ export async function monitorMSTeamsProvider(
     appId,
     adapter: adapter as unknown as MSTeamsAdapter,
     tokenProvider,
+    graphTokenProvider,
     textLimit,
     mediaMaxBytes,
     conversationStore,

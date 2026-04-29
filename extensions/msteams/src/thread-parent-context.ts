@@ -83,7 +83,18 @@ export async function fetchParentMessageCached(
     parentCache.set(key, cached);
     return cached.message;
   }
-  const message = await fetchParent(token, groupId, channelId, parentId);
+  let message: GraphThreadMessage | undefined;
+  try {
+    message = await fetchParent(token, groupId, channelId, parentId);
+  } catch (err) {
+    touchLru(
+      parentCache,
+      key,
+      { message: undefined, expiresAt: now + PARENT_CACHE_TTL_MS },
+      PARENT_CACHE_MAX,
+    );
+    throw err;
+  }
   touchLru(parentCache, key, { message, expiresAt: now + PARENT_CACHE_TTL_MS }, PARENT_CACHE_MAX);
   return message;
 }

@@ -10,6 +10,7 @@ Docs: https://docs.openclaw.ai
 - Active Memory: add optional per-conversation `allowedChatIds` and `deniedChatIds` filters so operators can enable recall only for selected direct, group, or channel conversations while keeping broad sessions skipped. (#67977) Thanks @quengh.
 - Active Memory: return bounded partial recall summaries when the hidden memory sub-agent times out, including the default temporary-transcript path, so useful recovered context is not discarded. (#73219) Thanks @joeykrug.
 - Docker setup: add `OPENCLAW_SKIP_ONBOARDING` so automated Docker installs can skip the interactive onboarding step while still applying gateway defaults. (#55518) Thanks @jinjimz.
+- Microsoft Teams: add `graphTenantId` config field and `MSTEAMS_GRAPH_TENANT_ID` env var for split-tenant deployments where Bot Framework reply tokens and Graph API tokens come from different Azure tenants.
 
 ### Fixes
 

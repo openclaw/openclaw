@@ -95,11 +95,12 @@ describe("fetchChannelMessage", () => {
     });
   });
 
-  it("returns undefined on fetch error", async () => {
+  it("propagates fetch errors to the caller", async () => {
     vi.mocked(fetchGraphJson).mockRejectedValueOnce(new Error("forbidden") as never);
 
-    const result = await fetchChannelMessage("tok", "group-1", "channel-1", "msg-1");
-    expect(result).toBeUndefined();
+    await expect(fetchChannelMessage("tok", "group-1", "channel-1", "msg-1")).rejects.toThrow(
+      "forbidden",
+    );
   });
 
   it("URL-encodes group, channel, and message IDs", async () => {
