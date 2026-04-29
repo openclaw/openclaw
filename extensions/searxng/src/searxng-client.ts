@@ -9,7 +9,7 @@ import {
   resolveSearchCount,
   resolveSiteName,
   resolveTimeoutSeconds,
-  withTrustedWebSearchEndpoint,
+  withSelfHostedWebSearchEndpoint,
   wrapWebContent,
   writeCache,
 } from "openclaw/plugin-sdk/provider-web-search";
@@ -177,7 +177,7 @@ export async function runSearxngSearch(params: {
   });
 
   const startedAt = Date.now();
-  const results = await withTrustedWebSearchEndpoint(
+  const results = await withSelfHostedWebSearchEndpoint(
     {
       url,
       timeoutSeconds,

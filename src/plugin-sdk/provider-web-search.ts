@@ -32,6 +32,7 @@ export {
   resolveSiteName,
   postTrustedWebToolsJson,
   throwWebSearchApiError,
+  withSelfHostedWebSearchEndpoint,
   withTrustedWebSearchEndpoint,
   writeCachedSearchPayload,
 } from "../agents/tools/web-search-provider-common.js";
