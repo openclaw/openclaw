@@ -42,9 +42,9 @@
           "order": 85
         },
         "install": {
-          "npmSpec": "openclaw-plugin-yuanbao@2.12.0",
+          "npmSpec": "openclaw-plugin-yuanbao@2.11.0",
           "defaultChoice": "npm",
-          "expectedIntegrity": "sha512-bANbMwMIKD2jclmbp92krN/eBzNfeQSb9dDCPZHkCwFmwcX0GUHwMJBHB/YoE/ZKK43mUHCRMQe4vZurDbeMaQ=="
+          "expectedIntegrity": "sha512-lYmBrU71ox3v7dzRqaltvzTXPcMjjgYrNqpBj5HIBkXgEFkXRRG8wplXg9Fub41/FjsSPn3WAbYpdTc+k+jsHg=="
         }
       }
     }
