@@ -18,7 +18,8 @@ vi.mock("../../terminal/theme.js", async () => {
   };
 });
 
-const { writeGatewayStatusJson, writeGatewayStatusText } = await import("./output.js");
+const { buildGatewayStatusWarnings, writeGatewayStatusJson, writeGatewayStatusText } =
+  await import("./output.js");
 
 function createRuntimeCapture(): RuntimeEnv {
   return {
@@ -78,6 +79,34 @@ function createTarget(id: string, probe: GatewayProbeResult): GatewayStatusProbe
 describe("gateway status output", () => {
   beforeEach(() => {
     writeRuntimeJson.mockReset();
+  });
+
+  it("warns with diagnostic next steps when no probes or Bonjour discovery find a gateway", () => {
+    const warnings = buildGatewayStatusWarnings({
+      probed: [
+        createTarget(
+          "localLoopback",
+          createProbe("unknown", {
+            ok: false,
+            connectLatencyMs: null,
+            error: "connection refused",
+          }),
+        ),
+      ],
+      sshTarget: null,
+      sshTunnelStarted: false,
+      sshTunnelError: null,
+      discoveryCount: 0,
+    });
+
+    expect(warnings).toContainEqual(
+      expect.objectContaining({
+        code: "no_gateway_reachable",
+        message: expect.stringContaining("openclaw gateway status --deep --require-rpc"),
+        targetIds: ["localLoopback"],
+      }),
+    );
+    expect(warnings.at(0)?.message).toContain("lsof -nP -iTCP:<port>");
   });
 
   it("derives summary capability from reachable probes only in json output", () => {
