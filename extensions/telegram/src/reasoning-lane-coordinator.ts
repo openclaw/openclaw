@@ -86,7 +86,7 @@ export function splitTelegramReasoningText(text?: string): TelegramReasoningSpli
   }
 
   const reasoningText = taggedReasoning ? formatReasoningMessage(taggedReasoning) : undefined;
-  const answerText = strippedAnswer || undefined;
+  const answerText = strippedAnswer && strippedAnswer !== text ? strippedAnswer : undefined;
   return { reasoningText, answerText };
 }
 

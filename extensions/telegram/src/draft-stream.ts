@@ -78,6 +78,14 @@ export function createTelegramDraftStream(params: {
   const throttleMs = Math.max(250, params.throttleMs ?? DEFAULT_THROTTLE_MS);
   const minInitialChars = params.minInitialChars;
   const chatId = params.chatId;
+  let textBaseOffset = 0;
+  const requestedPreviewTransport = params.previewTransport ?? "auto";
+  const prefersDraftTransport =
+    requestedPreviewTransport === "draft"
+      ? true
+      : requestedPreviewTransport === "message"
+        ? false
+        : params.thread?.scope === "dm";
   const threadParams = buildTelegramThreadParams(params.thread);
   const replyToMessageId = normalizeTelegramReplyToMessageId(params.replyToMessageId);
   const replyParams =
@@ -198,13 +206,39 @@ export function createTelegramDraftStream(params: {
     if (!trimmed) {
       return false;
     }
-    const rendered = params.renderText?.(trimmed) ?? { text: trimmed };
+    const sliced = textBaseOffset > 0 ? trimmed.slice(textBaseOffset).trimStart() : trimmed;
+    if (!sliced) {
+      return false;
+    }
+    const rendered = params.renderText?.(sliced) ?? { text: sliced };
     const renderedText = rendered.text.trimEnd();
     const renderedParseMode = rendered.parseMode;
     if (!renderedText) {
       return false;
     }
     if (renderedText.length > maxChars) {
+      // When the rendered slice overflows, chain to a new message from the current
+      // delivered position rather than stopping the stream entirely.
+      const deliveredRaw = lastDeliveredText.length;
+      const deliveredLen =
+        deliveredRaw > textBaseOffset ? deliveredRaw - textBaseOffset : lastSentText.length;
+      if (deliveredLen > 0) {
+        textBaseOffset += deliveredLen;
+        forceNewMessage();
+        lastDeliveredText = "";
+        streamState.stopped = false;
+        params.log?.(
+          `telegram stream preview overflow (${renderedText.length} > ${maxChars}); chaining to new message (offset=${textBaseOffset})`,
+        );
+        const overflowSlice = trimmed.slice(textBaseOffset).trimStart();
+        if (overflowSlice) {
+          const overflowRendered = params.renderText?.(overflowSlice) ?? { text: overflowSlice };
+          if (overflowRendered.text.trimEnd().length <= maxChars) {
+            return await sendOrEditStreamMessage(text);
+          }
+        }
+        return true;
+      }
       streamState.stopped = true;
       params.warn?.(
         `telegram stream preview stopped (text length ${renderedText.length} > ${maxChars})`,

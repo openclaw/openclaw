@@ -350,10 +350,16 @@ export const dispatchTelegramMessage = async ({
     channel: "telegram",
     accountId: route.accountId,
   });
-  const renderDraftPreview = (text: string) => ({
-    text: renderTelegramHtmlText(text, { tableMode }),
-    parseMode: "HTML" as const,
-  });
+  const renderDraftPreview = (text: string) => {
+    // Reasoning continuation messages start with italic markdown (_...) but have no
+    // "Reasoning:" header — prefix them so the user knows the stream is ongoing.
+    const isReasoningCont = /^_/.test(text.trimStart()) && !text.startsWith("Reasoning:");
+    const prefixed = isReasoningCont ? `Reasoning (cont.):\n${text}` : text;
+    return {
+      text: renderTelegramHtmlText(prefixed, { tableMode }),
+      parseMode: "HTML" as const,
+    };
+  };
   const accountBlockStreamingEnabled =
     resolveChannelStreamingBlockEnabled(telegramCfg) ??
     cfg.agents?.defaults?.blockStreamingDefault === "on";
