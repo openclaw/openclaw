@@ -40,6 +40,11 @@ import { resolvePluginUninstallId } from "./plugins-uninstall-selection.js";
 import { runPluginUpdateCommand } from "./plugins-update-command.js";
 import { promptYesNo } from "./prompt.js";
 
+/** Sanitize untrusted input before writing to terminal (strip ANSI + control chars) */
+function sanitizeForTerminal(value: string): string {
+  return value.replace(/[\u0000-\u001F\u007F-\u009F]/g, "").replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "");
+}
+
 export type PluginsListOptions = {
   json?: boolean;
   enabled?: boolean;
@@ -493,8 +498,9 @@ export function registerPluginsCli(program: Command) {
       const report = buildPluginDiagnosticsReport({ config: cfg });
       const availableIds = report.plugins.map((p) => p.id);
       if (!availableIds.includes(resolvedId)) {
+        const safeId = sanitizeForTerminal(id);
         defaultRuntime.log(
-          theme.error(`Plugin "${id}" not found. Run 'openclaw plugins list' to see available plugins.`),
+          theme.error(`Plugin "${safeId}" not found. Run 'openclaw plugins list' to see available plugins.`),
         );
         process.exitCode = 1;
         return;
@@ -508,14 +514,13 @@ export function registerPluginsCli(program: Command) {
         ...(snapshot.hash !== undefined ? { baseHash: snapshot.hash } : {}),
       });
       logSlotWarnings(slotResult.warnings);
+      const safeId = sanitizeForTerminal(id);
       if (enableResult.enabled) {
-        defaultRuntime.log(`Enabled plugin "${id}". Restart the gateway to apply.`);
+        defaultRuntime.log(`Enabled plugin "${safeId}". Restart the gateway to apply.`);
         return;
       }
       defaultRuntime.log(
-        theme.warn(
-          `Plugin "${id}" could not be enabled (${enableResult.reason ?? "unknown reason"}).`,
-        ),
+        theme.warn(`Plugin "${safeId}" could not be enabled (${enableResult.reason ?? "unknown reason"}).`),
       );
     });
 
