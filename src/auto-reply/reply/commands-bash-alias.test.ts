@@ -61,6 +61,17 @@ describe("handleBashCommand alias routing", () => {
     expect(handleBashChatCommandMock).toHaveBeenCalledTimes(2);
   });
 
+  it("keeps punctuation-prefixed bang commands on the bash route", async () => {
+    const result = await handleBashCommand(buildBashParams("!: echo ok"), true);
+
+    expect(result?.shouldContinue).toBe(false);
+    expect(handleBashChatCommandMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ctx: expect.objectContaining({ CommandBody: "!: echo ok" }),
+      }),
+    );
+  });
+
   it("uses the canonical target session agent for /bash routing", async () => {
     const params = buildBashParams("/bash pwd");
     params.agentId = "main";

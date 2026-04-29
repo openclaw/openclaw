@@ -1,11 +1,18 @@
-import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { resolveAgentConfig, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { getFinishedSession, getSession } from "../../agents/bash-process-registry.js";
-import { createExecTool } from "../../agents/bash-tools.js";
+import { createExecTool, type ExecToolDefaults } from "../../agents/bash-tools.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
 import { isCommandFlagEnabled } from "../../config/commands.flags.js";
+import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import {
+  normalizeExecAsk,
+  normalizeExecSecurity,
+  normalizeExecTarget,
+} from "../../infra/exec-approvals.js";
+import { resolveMergedSafeBinProfileFixtures } from "../../infra/exec-safe-bin-runtime-policy.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -46,6 +53,41 @@ function resolveForegroundMs(cfg: OpenClawConfig): number {
     return DEFAULT_FOREGROUND_MS;
   }
   return clampInt(raw, 0, MAX_FOREGROUND_MS);
+}
+
+function resolveChatBashExecDefaults(params: {
+  cfg: OpenClawConfig;
+  agentId?: string;
+  sessionEntry?: SessionEntry;
+}): ExecToolDefaults {
+  const globalExec = params.cfg.tools?.exec;
+  const agentExec = params.agentId
+    ? resolveAgentConfig(params.cfg, params.agentId)?.tools?.exec
+    : undefined;
+  return {
+    host: normalizeExecTarget(params.sessionEntry?.execHost) ?? agentExec?.host ?? globalExec?.host,
+    security:
+      normalizeExecSecurity(params.sessionEntry?.execSecurity) ??
+      agentExec?.security ??
+      globalExec?.security,
+    ask: normalizeExecAsk(params.sessionEntry?.execAsk) ?? agentExec?.ask ?? globalExec?.ask,
+    node:
+      normalizeOptionalString(params.sessionEntry?.execNode) ?? agentExec?.node ?? globalExec?.node,
+    pathPrepend: agentExec?.pathPrepend ?? globalExec?.pathPrepend,
+    safeBins: agentExec?.safeBins ?? globalExec?.safeBins,
+    strictInlineEval: agentExec?.strictInlineEval ?? globalExec?.strictInlineEval,
+    safeBinTrustedDirs: agentExec?.safeBinTrustedDirs ?? globalExec?.safeBinTrustedDirs,
+    safeBinProfiles: resolveMergedSafeBinProfileFixtures({
+      global: globalExec,
+      local: agentExec,
+    }),
+    timeoutSec: agentExec?.timeoutSec ?? globalExec?.timeoutSec,
+    approvalRunningNoticeMs:
+      agentExec?.approvalRunningNoticeMs ?? globalExec?.approvalRunningNoticeMs,
+    notifyOnExit: agentExec?.notifyOnExit ?? globalExec?.notifyOnExit,
+    notifyOnExitEmptySuccess:
+      agentExec?.notifyOnExitEmptySuccess ?? globalExec?.notifyOnExitEmptySuccess,
+  };
 }
 
 function formatSessionSnippet(sessionId: string) {
@@ -186,6 +228,7 @@ export async function handleBashChatCommand(params: {
   cfg: OpenClawConfig;
   agentId?: string;
   sessionKey: string;
+  sessionEntry?: SessionEntry;
   isGroup: boolean;
   elevated: {
     enabled: boolean;
@@ -344,16 +387,16 @@ export async function handleBashChatCommand(params: {
   try {
     const foregroundMs = resolveForegroundMs(params.cfg);
     const shouldBackgroundImmediately = foregroundMs <= 0;
-    const timeoutSec = params.cfg.tools?.exec?.timeoutSec;
-    const notifyOnExit = params.cfg.tools?.exec?.notifyOnExit;
-    const notifyOnExitEmptySuccess = params.cfg.tools?.exec?.notifyOnExitEmptySuccess;
+    const execDefaults = resolveChatBashExecDefaults({
+      cfg: params.cfg,
+      agentId,
+      sessionEntry: params.sessionEntry,
+    });
     const execTool = createExecTool({
+      ...execDefaults,
       scopeKey: CHAT_BASH_SCOPE_KEY,
       allowBackground: true,
-      timeoutSec,
       sessionKey: params.sessionKey,
-      notifyOnExit,
-      notifyOnExitEmptySuccess,
       elevated: {
         enabled: params.elevated.enabled,
         allowed: params.elevated.allowed,
@@ -364,7 +407,7 @@ export async function handleBashChatCommand(params: {
       command: commandText,
       background: shouldBackgroundImmediately,
       yieldMs: shouldBackgroundImmediately ? undefined : foregroundMs,
-      timeout: timeoutSec,
+      timeout: execDefaults.timeoutSec,
       elevated: true,
     });
 

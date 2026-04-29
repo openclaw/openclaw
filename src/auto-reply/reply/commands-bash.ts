@@ -26,6 +26,7 @@ export const handleBashCommand: CommandHandler = async (params, allowTextCommand
     cfg: params.cfg,
     agentId,
     sessionKey: params.sessionKey,
+    sessionEntry: params.sessionStore?.[params.sessionKey] ?? params.sessionEntry,
     isGroup: params.isGroup,
     elevated: params.elevated,
   });
