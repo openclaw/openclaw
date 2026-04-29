@@ -38,15 +38,22 @@ function stripTrustedUpstreamPrefix(modelId: string, prefix: string): string | n
   return upstreamModelId || null;
 }
 
-function resolveOpenAiThinkingProfile(modelId: string): ProviderThinkingProfile {
+function resolveOpenAiThinkingProfile(modelId: string): ProviderThinkingProfile | undefined {
+  if (!matchesExactOrPrefix(modelId, VERCEL_OPENAI_XHIGH_MODEL_IDS)) {
+    return undefined;
+  }
   return {
-    levels: [
-      ...BASE_OPENAI_THINKING_LEVELS,
-      ...(matchesExactOrPrefix(modelId, VERCEL_OPENAI_XHIGH_MODEL_IDS)
-        ? [{ id: "xhigh" as const }]
-        : []),
-    ],
+    levels: [...BASE_OPENAI_THINKING_LEVELS, { id: "xhigh" }],
   };
+}
+
+function hasVercelSpecificClaudeProfile(profile: ProviderThinkingProfile): boolean {
+  return Boolean(
+    profile.defaultLevel ||
+    profile.levels.some(
+      (level) => level.id === "adaptive" || level.id === "xhigh" || level.id === "max",
+    ),
+  );
 }
 
 export function resolveVercelAiGatewayThinkingProfile(
@@ -59,7 +66,11 @@ export function resolveVercelAiGatewayThinkingProfile(
 
   const anthropicModelId = stripTrustedUpstreamPrefix(modelId, UPSTREAM_ANTHROPIC_PREFIX);
   if (anthropicModelId) {
-    return resolveClaudeThinkingProfile(anthropicModelId);
+    const profile = resolveClaudeThinkingProfile(anthropicModelId);
+    // Returning a base-only provider profile would hide catalog compat metadata
+    // from generic thinking resolution. Only take over when Claude has an
+    // upstream-specific default or elevated level set.
+    return hasVercelSpecificClaudeProfile(profile) ? profile : undefined;
   }
 
   return undefined;

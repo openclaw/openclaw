@@ -52,7 +52,7 @@ describe("vercel ai gateway thinking profile", () => {
     expect(profile?.levels.some((level) => level.id === "xhigh" || level.id === "max")).toBe(false);
   });
 
-  it("does not infer xhigh for unsupported OpenAI or untrusted namespaced refs", async () => {
+  it("falls through for unsupported OpenAI or untrusted namespaced refs", async () => {
     const provider = await getProvider();
     const resolveThinkingProfile = provider.resolveThinkingProfile!;
 
@@ -60,8 +60,8 @@ describe("vercel ai gateway thinking profile", () => {
       resolveThinkingProfile({
         provider: "vercel-ai-gateway",
         modelId: "openai/gpt-4.1",
-      })?.levels.some((level) => level.id === "xhigh"),
-    ).toBe(false);
+      }),
+    ).toBeUndefined();
     expect(
       resolveThinkingProfile({
         provider: "vercel-ai-gateway",
