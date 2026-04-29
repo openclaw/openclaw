@@ -1,23 +1,14 @@
-import { DEFAULT_PROVIDER } from "../agents/defaults.js";
-import { modelKey } from "../agents/model-selection-normalize.js";
-import {
-  buildModelAliasIndex,
-  resolveModelRefFromString,
-} from "../agents/model-selection-shared.js";
 import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
 import { resolveSandboxToolPolicyForAgent } from "../agents/sandbox/tool-policy.js";
 import type { SandboxToolPolicy } from "../agents/sandbox/types.js";
 import { isToolAllowedByPolicies } from "../agents/tool-policy-match.js";
 import { resolveToolProfilePolicy } from "../agents/tool-policy.js";
-import {
-  resolveAgentModelFallbackValues,
-  resolveAgentModelPrimaryValue,
-} from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AgentToolsConfig } from "../config/types.tools.js";
 import { hasConfiguredInternalHooks } from "../hooks/configured.js";
 import { hasConfiguredWebSearchCredential } from "../plugins/web-search-credential-presence.js";
 import { inferParamBFromIdOrName } from "../shared/model-param-b.js";
+import { collectAuditModelRefs } from "./audit-model-refs.js";
 import { pickSandboxToolPolicy } from "./audit-tool-policy.js";
 
 export type SecurityAuditFinding = {
@@ -29,8 +20,6 @@ export type SecurityAuditFinding = {
 };
 
 const SMALL_MODEL_PARAM_B_MAX = 300;
-
-type ModelRef = { id: string; source: string };
 
 function summarizeGroupPolicy(cfg: OpenClawConfig): {
   open: number;
@@ -59,100 +48,6 @@ function summarizeGroupPolicy(cfg: OpenClawConfig): {
     }
   }
   return { open, allowlist, other };
-}
-
-function addModel(models: ModelRef[], raw: unknown, source: string) {
-  if (typeof raw !== "string") {
-    return;
-  }
-  const id = raw.trim();
-  if (!id) {
-    return;
-  }
-  models.push({ id, source });
-}
-
-function resolveAuditModelId(
-  cfg: OpenClawConfig,
-  raw: string,
-  aliasIndex: ReturnType<typeof buildModelAliasIndex>,
-): string {
-  const resolved = resolveModelRefFromString({
-    cfg,
-    raw,
-    defaultProvider: DEFAULT_PROVIDER,
-    aliasIndex,
-    allowPluginNormalization: false,
-  })?.ref;
-  return resolved ? modelKey(resolved.provider, resolved.model) : raw;
-}
-
-function collectModels(cfg: OpenClawConfig): ModelRef[] {
-  const aliasIndex = buildModelAliasIndex({
-    cfg,
-    defaultProvider: DEFAULT_PROVIDER,
-    allowPluginNormalization: false,
-  });
-  const out: ModelRef[] = [];
-  {
-    const primary = resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model);
-    if (typeof primary === "string" && primary.trim()) {
-      const id = resolveAuditModelId(cfg, primary.trim(), aliasIndex);
-      if (id) out.push({ id, source: "agents.defaults.model.primary" });
-    }
-  }
-  for (const fallback of resolveAgentModelFallbackValues(cfg.agents?.defaults?.model)) {
-    if (typeof fallback !== "string") continue;
-    const id = resolveAuditModelId(cfg, fallback.trim(), aliasIndex);
-    if (!id) continue;
-    out.push({ id, source: "agents.defaults.model.fallbacks" });
-  }
-  {
-    const primary = resolveAgentModelPrimaryValue(cfg.agents?.defaults?.imageModel);
-    if (typeof primary === "string" && primary.trim()) {
-      const id = resolveAuditModelId(cfg, primary.trim(), aliasIndex);
-      if (id) out.push({ id, source: "agents.defaults.imageModel.primary" });
-    }
-  }
-  for (const fallback of resolveAgentModelFallbackValues(cfg.agents?.defaults?.imageModel)) {
-    if (typeof fallback !== "string") continue;
-    const id = resolveAuditModelId(cfg, fallback.trim(), aliasIndex);
-    if (!id) continue;
-    out.push({ id, source: "agents.defaults.imageModel.fallbacks" });
-  }
-
-  const list = Array.isArray(cfg.agents?.list) ? cfg.agents?.list : [];
-  for (const agent of list ?? []) {
-    if (!agent || typeof agent !== "object") {
-      continue;
-    }
-    const id =
-      typeof (agent as { id?: unknown }).id === "string" ? (agent as { id: string }).id : "";
-    const model = (agent as { model?: unknown }).model;
-    if (typeof model === "string") {
-      const modelId = model.trim();
-      if (modelId) {
-        const resolvedId = resolveAuditModelId(cfg, modelId, aliasIndex);
-        if (resolvedId) out.push({ id: resolvedId, source: `agents.list.${id}.model` });
-      }
-    } else if (model && typeof model === "object") {
-      const primary = (model as { primary?: unknown }).primary;
-      if (typeof primary === "string" && primary.trim()) {
-        const resolvedId = resolveAuditModelId(cfg, primary.trim(), aliasIndex);
-        if (resolvedId) out.push({ id: resolvedId, source: `agents.list.${id}.model.primary` });
-      }
-      const fallbacks = (model as { fallbacks?: unknown }).fallbacks;
-      if (Array.isArray(fallbacks)) {
-        for (const fallback of fallbacks) {
-          if (typeof fallback !== "string") continue;
-          const fbId = resolveAuditModelId(cfg, fallback.trim(), aliasIndex);
-          if (!fbId) continue;
-          out.push({ id: fbId, source: `agents.list.${id}.model.fallbacks` });
-        }
-      }
-    }
-  }
-  return out;
 }
 
 function extractAgentIdFromSource(source: string): string | null {
@@ -257,7 +152,9 @@ export function collectSmallModelRiskFindings(params: {
   env: NodeJS.ProcessEnv;
 }): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
-  const models = collectModels(params.cfg).filter((entry) => !entry.source.includes("imageModel"));
+  const models = collectAuditModelRefs(params.cfg).filter(
+    (entry) => !entry.source.includes("imageModel"),
+  );
   if (models.length === 0) {
     return findings;
   }

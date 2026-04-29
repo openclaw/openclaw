@@ -1,9 +1,3 @@
-import { DEFAULT_PROVIDER } from "../agents/defaults.js";
-import { modelKey } from "../agents/model-selection-normalize.js";
-import {
-  buildModelAliasIndex,
-  resolveModelRefFromString,
-} from "../agents/model-selection-shared.js";
 import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
 import { isDangerousNetworkMode, normalizeNetworkMode } from "../agents/sandbox/network-mode.js";
 import { resolveSandboxToolPolicyForAgent } from "../agents/sandbox/tool-policy.js";
@@ -12,10 +6,6 @@ import { getBlockedBindReason } from "../agents/sandbox/validate-sandbox-securit
 import { isToolAllowedByPolicies } from "../agents/tool-policy-match.js";
 import { resolveToolProfilePolicy } from "../agents/tool-policy.js";
 import { formatCliCommand } from "../cli/command-format.js";
-import {
-  resolveAgentModelFallbackValues,
-  resolveAgentModelPrimaryValue,
-} from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AgentToolsConfig } from "../config/types.tools.js";
 import { resolveGatewayAuth } from "../gateway/auth.js";
@@ -29,6 +19,7 @@ import {
   normalizeOptionalString,
   normalizeStringifiedOptionalString,
 } from "../shared/string-coerce.js";
+import { collectAuditModelRefs } from "./audit-model-refs.js";
 import { pickSandboxToolPolicy } from "./audit-tool-policy.js";
 
 /**
@@ -63,91 +54,6 @@ function isProbablySyncedPath(p: string): boolean {
 function looksLikeEnvRef(value: string): boolean {
   const v = value.trim();
   return v.startsWith("${") && v.endsWith("}");
-}
-
-type ModelRef = { id: string; source: string };
-
-function resolveAuditModelId(
-  cfg: OpenClawConfig,
-  raw: string,
-  aliasIndex: ReturnType<typeof buildModelAliasIndex>,
-): string {
-  const resolved = resolveModelRefFromString({
-    cfg,
-    raw,
-    defaultProvider: DEFAULT_PROVIDER,
-    aliasIndex,
-    allowPluginNormalization: false,
-  })?.ref;
-  return resolved ? modelKey(resolved.provider, resolved.model) : raw;
-}
-
-function collectModels(cfg: OpenClawConfig): ModelRef[] {
-  const aliasIndex = buildModelAliasIndex({
-    cfg,
-    defaultProvider: DEFAULT_PROVIDER,
-    allowPluginNormalization: false,
-  });
-  const out: ModelRef[] = [];
-  {
-    const primary = resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model);
-    if (typeof primary === "string" && primary.trim()) {
-      const id = resolveAuditModelId(cfg, primary.trim(), aliasIndex);
-      if (id) out.push({ id, source: "agents.defaults.model.primary" });
-    }
-  }
-  for (const fallback of resolveAgentModelFallbackValues(cfg.agents?.defaults?.model)) {
-    if (typeof fallback !== "string") continue;
-    const id = resolveAuditModelId(cfg, fallback.trim(), aliasIndex);
-    if (!id) continue;
-    out.push({ id, source: "agents.defaults.model.fallbacks" });
-  }
-  {
-    const primary = resolveAgentModelPrimaryValue(cfg.agents?.defaults?.imageModel);
-    if (typeof primary === "string" && primary.trim()) {
-      const id = resolveAuditModelId(cfg, primary.trim(), aliasIndex);
-      if (id) out.push({ id, source: "agents.defaults.imageModel.primary" });
-    }
-  }
-  for (const fallback of resolveAgentModelFallbackValues(cfg.agents?.defaults?.imageModel)) {
-    if (typeof fallback !== "string") continue;
-    const id = resolveAuditModelId(cfg, fallback.trim(), aliasIndex);
-    if (!id) continue;
-    out.push({ id, source: "agents.defaults.imageModel.fallbacks" });
-  }
-
-  const list = Array.isArray(cfg.agents?.list) ? cfg.agents?.list : [];
-  for (const agent of list ?? []) {
-    if (!agent || typeof agent !== "object") {
-      continue;
-    }
-    const id =
-      typeof (agent as { id?: unknown }).id === "string" ? (agent as { id: string }).id : "";
-    const model = (agent as { model?: unknown }).model;
-    if (typeof model === "string") {
-      const modelId = model.trim();
-      if (modelId) {
-        const resolvedId = resolveAuditModelId(cfg, modelId, aliasIndex);
-        if (resolvedId) out.push({ id: resolvedId, source: `agents.list.${id}.model` });
-      }
-    } else if (model && typeof model === "object") {
-      const primary = (model as { primary?: unknown }).primary;
-      if (typeof primary === "string" && primary.trim()) {
-        const resolvedId = resolveAuditModelId(cfg, primary.trim(), aliasIndex);
-        if (resolvedId) out.push({ id: resolvedId, source: `agents.list.${id}.model.primary` });
-      }
-      const fallbacks = (model as { fallbacks?: unknown }).fallbacks;
-      if (Array.isArray(fallbacks)) {
-        for (const fallback of fallbacks) {
-          if (typeof fallback !== "string") continue;
-          const fbId = resolveAuditModelId(cfg, fallback.trim(), aliasIndex);
-          if (!fbId) continue;
-          out.push({ id: fbId, source: `agents.list.${id}.model.fallbacks` });
-        }
-      }
-    }
-  }
-  return out;
 }
 
 function isGatewayRemotelyExposed(cfg: OpenClawConfig): boolean {
@@ -1022,7 +928,7 @@ export function collectMinimalProfileOverrideFindings(cfg: OpenClawConfig): Secu
 
 export function collectModelHygieneFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
-  const models = collectModels(cfg);
+  const models = collectAuditModelRefs(cfg);
   if (models.length === 0) {
     return findings;
   }
