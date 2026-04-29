@@ -1527,6 +1527,7 @@ export async function runEmbeddedAttempt(
       }
       let prePromptMessageCount = activeSession.messages.length;
       let unwindowedContextEngineMessagesForPrecheck: AgentMessage[] | undefined;
+      let contextEnginePromptAuthority: "assembled" | "preassembly_may_overflow" = "assembled";
       abortSessionForYield = () => {
         yieldAbortSettled = Promise.resolve(activeSession.abort());
       };
@@ -2089,6 +2090,7 @@ export async function runEmbeddedAttempt(
             if (assembled.messages !== activeSession.messages) {
               activeSession.agent.state.messages = assembled.messages;
             }
+            contextEnginePromptAuthority = assembled.promptAuthority ?? "assembled";
             if (assembled.systemPromptAddition) {
               systemPromptText = prependSystemPromptAddition({
                 systemPrompt: systemPromptText,
@@ -2760,7 +2762,9 @@ export async function runEmbeddedAttempt(
 
           const preemptiveCompaction = shouldPreemptivelyCompactBeforePrompt({
             messages: activeSession.messages,
-            unwindowedMessages: unwindowedContextEngineMessagesForPrecheck,
+            ...(contextEnginePromptAuthority === "preassembly_may_overflow"
+              ? { unwindowedMessages: unwindowedContextEngineMessagesForPrecheck }
+              : {}),
             systemPrompt: systemPromptText,
             prompt: effectivePrompt,
             contextTokenBudget,
