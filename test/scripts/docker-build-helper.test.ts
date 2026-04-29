@@ -11,8 +11,12 @@ const LIVE_BUILD_DOCKER_PATH = "scripts/test-live-build-docker.sh";
 const OPENAI_WEB_SEARCH_MINIMAL_E2E_PATH = "scripts/e2e/openai-web-search-minimal-docker.sh";
 const BUNDLED_PLUGIN_INSTALL_UNINSTALL_E2E_PATH =
   "scripts/e2e/bundled-plugin-install-uninstall-docker.sh";
+const BUNDLED_PLUGIN_INSTALL_UNINSTALL_SWEEP_PATH =
+  "scripts/e2e/lib/bundled-plugin-install-uninstall/sweep.sh";
+const BUNDLED_PLUGIN_INSTALL_UNINSTALL_PROBE_PATH =
+  "scripts/e2e/lib/bundled-plugin-install-uninstall/probe.mjs";
 const PLUGINS_DOCKER_E2E_PATH = "scripts/e2e/plugins-docker.sh";
-const PLUGIN_UPDATE_DOCKER_E2E_PATH = "scripts/e2e/plugin-update-unchanged-docker.sh";
+const PLUGIN_UPDATE_SCENARIO_PATH = "scripts/e2e/lib/plugin-update/unchanged-scenario.sh";
 const DOCTOR_SWITCH_DOCKER_E2E_PATH = "scripts/e2e/doctor-install-switch-docker.sh";
 const UPDATE_CHANNEL_SWITCH_DOCKER_E2E_PATH = "scripts/e2e/update-channel-switch-docker.sh";
 const CENTRALIZED_BUILD_SCRIPTS = [
@@ -108,7 +112,7 @@ describe("docker build helper", () => {
   });
 
   it("allows plugin update smoke to tolerate config metadata migrations", () => {
-    const runner = readFileSync(PLUGIN_UPDATE_DOCKER_E2E_PATH, "utf8");
+    const runner = readFileSync(PLUGIN_UPDATE_SCENARIO_PATH, "utf8");
 
     expect(runner).toContain("plugin install record changed unexpectedly");
     expect(runner).toContain("index.installRecords ?? index.records ?? config.plugins?.installs");
@@ -121,7 +125,7 @@ describe("docker build helper", () => {
       readFileSync(DOCTOR_SWITCH_DOCKER_E2E_PATH, "utf8"),
       readFileSync(UPDATE_CHANNEL_SWITCH_DOCKER_E2E_PATH, "utf8"),
       readFileSync(PLUGINS_DOCKER_E2E_PATH, "utf8"),
-      readFileSync(PLUGIN_UPDATE_DOCKER_E2E_PATH, "utf8"),
+      readFileSync(PLUGIN_UPDATE_SCENARIO_PATH, "utf8"),
     ];
 
     for (const script of scripts) {
@@ -139,15 +143,17 @@ describe("docker build helper", () => {
 
   it("keeps bundled plugin install/uninstall sweep chunkable", () => {
     const runner = readFileSync(BUNDLED_PLUGIN_INSTALL_UNINSTALL_E2E_PATH, "utf8");
+    const sweep = readFileSync(BUNDLED_PLUGIN_INSTALL_UNINSTALL_SWEEP_PATH, "utf8");
+    const probe = readFileSync(BUNDLED_PLUGIN_INSTALL_UNINSTALL_PROBE_PATH, "utf8");
 
     expect(runner).toContain("OPENCLAW_BUNDLED_PLUGIN_SWEEP_TOTAL");
     expect(runner).toContain("OPENCLAW_BUNDLED_PLUGIN_SWEEP_INDEX");
-    expect(runner).toContain('"openclaw.plugin.json"');
-    expect(runner).toContain("read -r plugin_id plugin_dir requires_config");
-    expect(runner).toContain('node "$OPENCLAW_ENTRY" plugins install "$plugin_id"');
-    expect(runner).toContain('node "$OPENCLAW_ENTRY" plugins uninstall "$plugin_id" --force');
-    expect(runner).toContain("assert_installed");
-    expect(runner).toContain("assert_uninstalled");
+    expect(probe).toContain('"openclaw.plugin.json"');
+    expect(sweep).toContain("read -r plugin_id plugin_dir requires_config");
+    expect(sweep).toContain('node "$OPENCLAW_ENTRY" plugins install "$plugin_id"');
+    expect(sweep).toContain('node "$OPENCLAW_ENTRY" plugins uninstall "$plugin_id" --force');
+    expect(sweep).toContain('node "$probe" assert-installed');
+    expect(sweep).toContain('node "$probe" assert-uninstalled');
   });
 
   it("passes installer tag env to bash, not curl", () => {
