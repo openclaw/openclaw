@@ -24,6 +24,10 @@ export function normalizeProviderId(provider: string): string {
   if (normalized === "bytedance" || normalized === "doubao") {
     return "volcengine";
   }
+  // Moonshot AI provider aliases (e.g. from OpenRouter).
+  if (normalized === "moonshotai" || normalized === "moonshot-ai") {
+    return "moonshot";
+  }
   return normalized;
 }
 
