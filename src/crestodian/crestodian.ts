@@ -1,4 +1,4 @@
-import { stdin as defaultStdin, stdout as defaultStdout } from "node:process";
+import process, { stdin as defaultStdin, stdout as defaultStdout } from "node:process";
 import { withProgress } from "../cli/progress.js";
 import { defaultRuntime, writeRuntimeJson, type RuntimeEnv } from "../runtime.js";
 import type { CrestodianAssistantPlanner } from "./assistant.js";
@@ -92,6 +92,7 @@ export async function runCrestodian(
   const outputIsTty = (output as { isTTY?: boolean }).isTTY === true;
   if (!interactive || !inputIsTty || !outputIsTty) {
     runtime.error("Crestodian needs an interactive TTY. Use --message for one command.");
+    process.exitCode = 1;
     return;
   }
 

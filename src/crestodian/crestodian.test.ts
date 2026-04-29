@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import process from "node:process";
+import { afterEach, describe, expect, it } from "vitest";
 import { runCrestodian } from "./crestodian.js";
 import { createCrestodianTestRuntime } from "./crestodian.test-helpers.js";
 import type { CrestodianOverview } from "./overview.js";
@@ -111,5 +112,37 @@ describe("runCrestodian", () => {
     expect(runInteractiveTuiCalls).toBe(1);
     expect(onReadyCalls).toBe(1);
     expect(lines.join("\n")).not.toContain("Say: status");
+  });
+
+  it("exits with code 1 when stdin is not a TTY", async () => {
+    const { runtime } = createCrestodianTestRuntime();
+    const originalExitCode = process.exitCode;
+
+    await runCrestodian(
+      {
+        input: { isTTY: false } as unknown as NodeJS.ReadableStream,
+        output: { isTTY: true } as unknown as NodeJS.WritableStream,
+      },
+      runtime,
+    );
+
+    expect(process.exitCode).toBe(1);
+    process.exitCode = originalExitCode;
+  });
+
+  it("exits with code 1 when stdout is not a TTY", async () => {
+    const { runtime } = createCrestodianTestRuntime();
+    const originalExitCode = process.exitCode;
+
+    await runCrestodian(
+      {
+        input: { isTTY: true } as unknown as NodeJS.ReadableStream,
+        output: { isTTY: false } as unknown as NodeJS.WritableStream,
+      },
+      runtime,
+    );
+
+    expect(process.exitCode).toBe(1);
+    process.exitCode = originalExitCode;
   });
 });
