@@ -60,6 +60,7 @@ Docs: https://docs.openclaw.ai
 - Ollama: keep explicit local model runs on target-provider runtime hooks when PI discovery is skipped, so one-shot Ollama calls no longer cold-load unrelated provider runtimes before streaming. Fixes #74078. Thanks @sakalaboator.
 - Slack/prompts: rely on Slack `interactiveReplies` guidance instead of generic `inlineButtons` config hints so enabled Slack button directives are not contradicted. Fixes #46647. Thanks @jeremykoerber.
 - Slack/reactions: treat duplicate `already_reacted` responses as idempotent success so repeated agent reaction adds no longer surface as tool failures. Fixes #69005. Thanks @shipitsteven and @martingarramon.
+- Channels/Discord: cool down Cloudflare/Error 1015 HTML 429 REST failures during startup application lookup and gateway metadata fetches, sanitizing HTML bodies before logging and honoring Retry-After before falling back to a conservative cooldown. Fixes #38853. Thanks @djgeorg3 and @Garyko0730.
 - Slack/tools: expose `fileId` in the shared message tool schema so `download-file` can receive Slack attachment IDs from inbound placeholders. Fixes #45574. Thanks @chadvegas.
 - Exec: reject invalid per-call `host` values instead of silently falling back to the default target, so hostname-like values fail before commands run. Fixes #74426. Thanks @scr00ge-00 and @vyctorbrzezowski.
 - Google/Gemini: send non-empty placeholder content when a Gemini run is triggered with empty or filtered user content, avoiding `contents is not specified` API errors. Thanks @CaoYuhaoCarl.
