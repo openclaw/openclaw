@@ -72,7 +72,7 @@ export type ModelCompatConfig = SupportedOpenAICompatFields &
     requiresOpenAiAnthropicToolPayload?: boolean;
   };
 
-export type ModelProviderAuthMode = "api-key" | "aws-sdk" | "oauth" | "token";
+export type ModelProviderAuthMode = "api-key" | "aws-sdk" | "oauth" | "token" | "google-genai-sdk";
 
 export type ModelDefinitionConfig = {
   id: string;
@@ -115,9 +115,13 @@ export type ModelDefinitionConfig = {
 };
 
 export type ModelProviderConfig = {
-  baseUrl: string;
+  baseUrl?: string;
   apiKey?: SecretInput;
   auth?: ModelProviderAuthMode;
+  vertexai?: {
+    project?: string;
+    location?: string;
+  };
   api?: ModelApi;
   contextWindow?: number;
   contextTokens?: number;
