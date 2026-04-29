@@ -8,7 +8,7 @@ import { es } from "../locales/es.ts";
 import { fa } from "../locales/fa.ts";
 import { fr } from "../locales/fr.ts";
 import { id } from "../locales/id.ts";
-import { it } from "../locales/it.ts";
+import { it as itLocale } from "../locales/it.ts";
 import { ja_JP } from "../locales/ja-JP.ts";
 import { ko } from "../locales/ko.ts";
 import { nl } from "../locales/nl.ts";
@@ -17,7 +17,7 @@ import { pt_BR } from "../locales/pt-BR.ts";
 import { th } from "../locales/th.ts";
 import { tr } from "../locales/tr.ts";
 import { uk } from "../locales/uk.ts";
-import { vi } from "../locales/vi.ts";
+import { vi as viLocale } from "../locales/vi.ts";
 import { zh_CN } from "../locales/zh-CN.ts";
 import { zh_TW } from "../locales/zh-TW.ts";
 
@@ -112,7 +112,7 @@ describe("i18n", () => {
     expect((fa.common as { version?: string }).version).toBeTruthy();
     expect((fr.common as { version?: string }).version).toBeTruthy();
     expect((id.common as { version?: string }).version).toBeTruthy();
-    expect((it.common as { version?: string }).version).toBeTruthy();
+    expect((itLocale.common as { version?: string }).version).toBeTruthy();
     expect((ja_JP.common as { version?: string }).version).toBeTruthy();
     expect((ko.common as { version?: string }).version).toBeTruthy();
     expect((nl.common as { version?: string }).version).toBeTruthy();
@@ -121,7 +121,7 @@ describe("i18n", () => {
     expect((th.common as { version?: string }).version).toBeTruthy();
     expect((tr.common as { version?: string }).version).toBeTruthy();
     expect((uk.common as { version?: string }).version).toBeTruthy();
-    expect((vi.common as { version?: string }).version).toBeTruthy();
+    expect((viLocale.common as { version?: string }).version).toBeTruthy();
     expect((zh_CN.common as { version?: string }).version).toBeTruthy();
     expect((zh_TW.common as { version?: string }).version).toBeTruthy();
   });
@@ -135,7 +135,7 @@ describe("i18n", () => {
       fa,
       fr,
       id,
-      it,
+      it: itLocale,
       ja_JP,
       ko,
       nl,
@@ -144,7 +144,7 @@ describe("i18n", () => {
       th,
       tr,
       uk,
-      vi,
+      vi: viLocale,
       zh_CN,
       zh_TW,
     })) {
