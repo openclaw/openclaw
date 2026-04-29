@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Gateway/dev: run `pnpm gateway:watch` through a named tmux session by default, with `gateway:watch:raw` and `OPENCLAW_GATEWAY_WATCH_TMUX=0` for foreground mode, so repeated starts respawn an inspectable watcher without trapping the invoking agent shell. Thanks @vincentkoc.
 - Plugin SDK: mark remaining legacy alias exports and diffs tool/config aliases with deprecation metadata, and add a guard so future legacy alias comments require `@deprecated` tags. Thanks @vincentkoc.
 - CLI/QR/dependencies: internalize small terminal progress and QR wrapper helpers while keeping the real QR encoder dependency direct, reducing the default runtime dependency graph without changing QR output behavior. Thanks @vincentkoc.
 - Channels: add Yuanbao channel docs entrance so the Tencent Yuanbao bot appears in the channel listing and sidebar navigation. (#73443) Thanks @loongfay.
@@ -16,6 +17,9 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Browser/gateway: ignore Playwright dialog-close races from `Page.handleJavaScriptDialog` so browser automation no longer crashes the Gateway when a dialog disappears before Playwright accepts it. (#40067) Thanks @randyjtw.
+- Cron/Gateway: defer missed isolated agent-turn catch-up out of the channel startup window, so overdue cron work cannot starve Discord or Telegram while providers connect after a restart. Thanks @vincentkoc.
+- Plugins/runtime-deps: prune stale `openclaw-unknown-*` bundled runtime dependency roots during Gateway startup while keeping recent or locked roots, so old staging debris cannot keep growing across restarts. Thanks @vincentkoc.
 - Ollama: compose caller abort signals with guarded-fetch timeouts for native `/api/chat` streams, so `/stop` and early cancellation still interrupt local Ollama requests that also carry provider timeout budgets. Refs #74133. Thanks @obviyus.
 - Doctor/TTS: migrate legacy `messages.tts.enabled`, agent TTS, channel TTS, and voice-call plugin TTS toggles to `auto` mode during `openclaw doctor --fix`, matching the documented TTS config contract. Thanks @vincentkoc.
 - CLI/logs: fall back to the configured Gateway file log when implicit loopback Gateway connections close or time out before or during `logs.tail`, so `openclaw logs` still works while diagnosing local-model Gateway disconnects. Refs #74078. Thanks @sakalaboator.
@@ -28,6 +32,7 @@ Docs: https://docs.openclaw.ai
 - Channels/Telegram: include probed video width and height when sending regular Telegram videos, so portrait clips render with the correct orientation instead of being stretched by clients. (#18915) Thanks @storyarcade.
 - Docs/Hetzner: clarify that SSH tunnel access requires `AllowTcpForwarding local` before running `ssh -L`, so hardened VPS sshd configs do not block loopback Gateway access. Fixes #54557; carries forward #54564; refs #54954. Thanks @satishkc7, @blackstrype, and @Aftabbs.
 - Gateway/shutdown: report structured shutdown warnings and HTTP close timeout warnings through `ShutdownResult` while preserving lifecycle hook hardening. Carries forward #41296. Thanks @edenfunf.
+- Control UI: keep Agents Overview and config-form select dropdowns on their configured value after options render while preserving inherited agent model placeholders. Fixes #40352; carries forward #52948. Thanks @xiaoquanidea.
 - Plugins/QA: prebuild the private QA channel runtime before plugin gauntlet source runs so wrapper CPU/RSS measurements are not polluted by private QA dist rebuild work. Thanks @vincentkoc.
 - Gateway/reload: bound default restart deferral and SIGUSR1 restart drain to five minutes while preserving explicit `deferralTimeoutMs: 0` indefinite waits, so stale active work accounting cannot block config reloads forever. Thanks @vincentkoc.
 - Active Memory: register the prompt-build hook with the configured recall timeout plus setup grace instead of the 150s maximum budget, so default memory recall cannot delay turn startup for multiple minutes. Thanks @vincentkoc.
@@ -38,6 +43,7 @@ Docs: https://docs.openclaw.ai
 - Control UI: fix Peak Error Hours showing incorrect hourly rates when the browser's timezone observes DST, by storing hourly message counts with UTC date keys and using DST-aware `Date.getHours()` for local conversion. Also extract `accumulateMessageCounts` helper to reduce duplicated daily/hourly aggregation logic. (#49396) Thanks @konanok.
 - iMessage: normalize known leading attributedBody corruption markers on sent-message echo text keys so delayed reflected echoes with U+FFFD/U+FFFE/U+FFFF/FEFF prefixes are dropped without collapsing interior text. Fixes #59973; carries forward #59980 and #62191. Thanks @neeravmakwana and @maguilar631697.
 - Security/audit: recognize dangerous node command IDs as valid `gateway.nodes.denyCommands` entries, so audit only warns on real typos or unsupported patterns. (#56923) Thanks @chziyue.
+- Cron: treat implicit text payloads with agent-turn overrides as agent turns, preserving model overrides for scheduled text prompts instead of pruning them as system events. Fixes #28905. (#64060) Thanks @liaoandi.
 - Telegram/exec approvals: stop treating general Telegram chat allowlists and `defaultTo` routes as native exec approvers; Telegram now uses explicit `execApprovals.approvers` or owner identity from `commands.ownerAllowFrom`, matching the first-pairing owner bootstrap path. Thanks @pashpashpash.
 - Plugins/providers: keep Gateway startup primary-model discovery on metadata-only provider entries and reuse active non-speech capability providers even with explicit plugin entries, avoiding unnecessary provider registry loads during startup and media capability checks. Fixes #73729, #73835, and #73793; carries forward #73853 and #73794. Thanks @sg1416-zg, @brokemac79, and @poolside-ventures.
 - Chat commands: route sensitive group `/diagnostics` and `/export-trajectory` approvals and results to a private owner route, preferring same-surface DMs before falling back to the first configured owner route, so Discord group invocations can land in Telegram when that is the primary owner interface. Thanks @pashpashpash.
@@ -55,6 +61,7 @@ Docs: https://docs.openclaw.ai
 - Plugins/runtime-deps: cache bundled runtime-deps JSON/package files and root chunk import scans by file signature, reducing repeated staged-runtime scanning during bundled channel startup. Refs #73647 and #73705. Thanks @mattmcintyre and @bmilne1981.
 - CLI/TUI: keep `chat.history` off model-catalog discovery so initial Gateway-backed TUI history loads cannot block behind slow provider/plugin model scans on low-core hosts. Refs #73524. Thanks @harshcatsystems-collab.
 - Channels/WhatsApp: flag recently reconnected linked accounts in channel status even when the socket is currently healthy, so flapping WhatsApp Web sessions no longer look clean after a brief reconnect. Refs #73602. Thanks @Vksh07.
+- Feishu: suppress distinct late `final` text deliveries after a streaming card has already closed, while keeping media attachments deliverable, so late-finals no longer reopen duplicate Feishu cards. Fixes #71977. (#72294) Thanks @MonkeyLeeT.
 - Gateway: expose `gateway.handshakeTimeoutMs` in config, schema, and docs while preserving `OPENCLAW_HANDSHAKE_TIMEOUT_MS` precedence, so loaded or low-powered hosts can tune local WebSocket pre-auth handshakes without patching dist files. Supersedes #51282; refs #73592 and #73652. Thanks @henry-the-frog.
 - Gateway/TUI/status: align configured and env-based WebSocket handshake budgets across local clients, probes, and fallback RPCs while preserving explicit status timeouts and paired-device auth fallback, so slow local gateways are not marked unreachable by a shorter client watchdog. Refs #73524, #73535, #73592, and #73602. Thanks @harshcatsystems-collab, @DJBlackhawk, and @Vksh07.
 - Agents/auth: scope external CLI credential discovery to configured providers during model auth status and startup prewarm, so opencode-only and other single-provider gateways do not block on unrelated Claude CLI Keychain probes. Fixes #73908. Thanks @Ailuras.
@@ -124,6 +131,7 @@ Docs: https://docs.openclaw.ai
 - Core/channels: tighten selected runtime, media, and plugin edge-case handling while preserving existing behavior. Thanks @jesse-merhi.
 - Channels/WhatsApp: strip leaked plural tool-call XML wrappers on every WhatsApp-visible outbound path and allow `channels.whatsapp.exposeErrorText` to suppress visible error text per channel or account. (#71830) Thanks @rubencu.
 - Agents/embedded-runner: inject the resolved OAuth bearer (and forward the run abort signal) on the boundary-aware embedded stream fallback so models that route through `openai-codex-responses` and other boundary-aware transports stop failing with `401 Unauthorized: Missing bearer or basic authentication in header`. Fixes #73559. (#73588) Thanks @openperf.
+- Telegram/gateway: bound outbound Bot API calls and cache bundled plugin alias lookup so slow Telegram sends or WSL2 filesystem scans no longer wedge gateway replies. (#74210) Thanks @obviyus.
 
 ## 2026.4.27
 

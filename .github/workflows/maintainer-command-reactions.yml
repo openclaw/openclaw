@@ -16,10 +16,11 @@ jobs:
     runs-on: ubuntu-24.04
     permissions:
       issues: write
+      pull-requests: write
     env:
       CLOWNFISH_APP_ID: ${{ vars.CLOWNFISH_APP_ID || secrets.CLOWNFISH_APP_ID }}
       CLOWNFISH_APP_AUTH_ENABLED: ${{ secrets.CLOWNFISH_APP_PRIVATE_KEY != '' && (vars.CLOWNFISH_APP_ID != '' || secrets.CLOWNFISH_APP_ID != '') && '1' || '0' }}
-      MAINTAINER_COMMAND_REACTIONS: ${{ vars.MAINTAINER_COMMAND_REACTIONS || '/automerge,/autoclose,/clownfish autoclose,/merge,/land,/landpr' }}
+      MAINTAINER_COMMAND_REACTIONS: ${{ vars.MAINTAINER_COMMAND_REACTIONS || '/autoclose,/clownfish autoclose,/clownfish automerge,/merge,/land,/landpr' }}
     steps:
       - name: Create Clownfish reaction token
         id: clownfish-token
@@ -60,6 +61,10 @@ jobs:
               commandLine.startsWith("/autoclose ") ||
               commandLine === "/clownfish autoclose" ||
               commandLine.startsWith("/clownfish autoclose ");
+            const isClownfishCommand =
+              isAutocloseCommand ||
+              commandLine === "/clownfish automerge" ||
+              commandLine.startsWith("/clownfish automerge ");
 
             if (!issue.pull_request && !isAutocloseCommand) {
               core.info("Skipping non-autoclose command reaction because the comment is not on a pull request.");
@@ -88,6 +93,12 @@ jobs:
               return;
             }
 
+            const tokenIsClownfishApp = "${{ steps.clownfish-token.outputs.token != '' }}" === "true";
+            if (isClownfishCommand && !tokenIsClownfishApp) {
+              core.info("Skipping Clownfish command reaction because the Clownfish App token is unavailable.");
+              return;
+            }
+
             async function react(content) {
               try {
                 await github.rest.reactions.createForIssueComment({
@@ -102,10 +113,13 @@ jobs:
                   core.info(`${content} reaction already exists on comment ${comment.id}.`);
                   return;
                 }
+                if (error.status === 403 && /resource not accessible by integration/i.test(String(error.message))) {
+                  core.warning(`${content} reaction could not be added with this token: ${error.message}`);
+                  return;
+                }
                 throw error;
               }
             }
 
             await react("eyes");
             core.info(`Maintainer command observed on ${issue.pull_request ? "PR" : "issue"} #${issue.number}: ${commandLine}`);
-            await react("+1");

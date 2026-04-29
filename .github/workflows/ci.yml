@@ -1199,6 +1199,9 @@ jobs:
           - check_name: check-lint
             task: lint
             runner: blacksmith-16vcpu-ubuntu-2404
+          - check_name: check-dependencies
+            task: dependencies
+            runner: ubuntu-24.04
           - check_name: check-policy-guards
             task: policy-guards
             runner: ubuntu-24.04
@@ -1280,6 +1283,9 @@ jobs:
               ;;
             lint)
               pnpm lint --threads=8
+              ;;
+            dependencies)
+              pnpm deadcode:dependencies
               ;;
             policy-guards)
               pnpm lint:webhook:no-low-level-body-read
