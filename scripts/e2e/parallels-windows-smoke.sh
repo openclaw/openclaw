@@ -618,6 +618,35 @@ EOF
 )"
 }
 
+guest_run_node_openclaw() {
+  local env_name="${1:-}"
+  local env_value="${2:-}"
+  shift 2
+
+  local args_literal env_name_q env_value_q
+  args_literal="$(ps_array_literal "$@")"
+  env_name_q="$(ps_single_quote "$env_name")"
+  env_value_q="$(ps_single_quote "$env_value")"
+
+  guest_powershell "$(cat <<EOF
+\$node = Join-Path \$env:ProgramFiles 'nodejs\node.exe'
+if (-not (Test-Path \$node)) {
+  \$node = 'node'
+}
+\$entry = Join-Path \$env:APPDATA 'npm\node_modules\openclaw\openclaw.mjs'
+\$args = $args_literal
+if ('${env_name_q}' -ne '') {
+  Set-Item -Path ('Env:' + '${env_name_q}') -Value '${env_value_q}'
+}
+\$output = & \$node \$entry @args 2>&1
+if (\$null -ne \$output) {
+  \$output | ForEach-Object { \$_ }
+}
+exit \$LASTEXITCODE
+EOF
+)"
+}
+
 guest_run_agent_turn_process() {
   local env_name_q env_value_q runner_basename runner_script_path runner_url runner_url_q
   local runner_name stdout_name stderr_name done_name ok_name
@@ -2618,7 +2647,7 @@ show_gateway_status_compat() {
 
 verify_turn() {
   guest_run_openclaw "" "" models set "$MODEL_ID"
-  guest_run_openclaw "" "" config set plugins.allow "$(release_smoke_plugin_allowlist_json)" --strict-json
+  guest_run_node_openclaw "" "" config set plugins.allow "$(release_smoke_plugin_allowlist_json)" --strict-json
   guest_run_openclaw "" "" config set agents.defaults.skipBootstrap true --strict-json
   guest_powershell "$(cat <<'EOF'
 $workspace = $env:OPENCLAW_WORKSPACE_DIR

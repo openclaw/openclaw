@@ -86,6 +86,15 @@ describe("Parallels smoke model selection", () => {
     expect(script).toContain("Set-Item -Path ('Env:' + '${env_name_q}')");
   });
 
+  it("bypasses the Windows command shim for JSON config values", () => {
+    const script = readFileSync("scripts/e2e/parallels-windows-smoke.sh", "utf8");
+    const npmUpdateScript = readFileSync(NPM_UPDATE_SCRIPT_PATH, "utf8");
+
+    expect(script).toContain("guest_run_node_openclaw");
+    expect(script).toContain('guest_run_node_openclaw "" "" config set plugins.allow');
+    expect(npmUpdateScript).toContain("$node $entry config set plugins.allow");
+  });
+
   it("keeps Windows gateway reachability on a real deadline with start recovery", () => {
     const script = readFileSync("scripts/e2e/parallels-windows-smoke.sh", "utf8");
 
