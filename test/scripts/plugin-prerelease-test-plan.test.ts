@@ -123,6 +123,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     const sweepScript = readFileSync("scripts/e2e/lib/plugins/sweep.sh", "utf8");
     const clawhubScript = readFileSync("scripts/e2e/lib/plugins/clawhub.sh", "utf8");
     const assertionsScript = readFileSync("scripts/e2e/lib/plugins/assertions.mjs", "utf8");
+    const fixtureServer = readFileSync("scripts/e2e/lib/clawhub-fixture-server.cjs", "utf8");
     const prereleasePlan = createPluginPrereleaseTestPlan();
 
     expect(lane).toEqual(
@@ -139,6 +140,8 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     expect(assertionsScript).toContain("assertClawHubExternalInstallContract");
     expect(assertionsScript).toContain('node_modules", "openclaw');
     expect(assertionsScript).toContain('node_modules", "is-number');
+    expect(fixtureServer).toContain('"is-number": "7.0.0"');
+    expect(fixtureServer).toContain('openclaw: ">=2026.4.11"');
   });
 
   it("wires the full plugin prerelease plan into its release workflow", () => {
