@@ -39,6 +39,25 @@ function collectPackagedRuntimeDepsRepairPluginIds(params: {
         fs.readFileSync(path.join(pluginDir, "openclaw.plugin.json"), "utf-8"),
       ) as Record<string, unknown>;
     } catch {
+      // Library extensions (no openclaw.plugin.json) opt into runtime
+      // deps through package.json#openclaw.bundle.stageRuntimeDependencies.
+      try {
+        const pkg = JSON.parse(
+          fs.readFileSync(path.join(pluginDir, "package.json"), "utf-8"),
+        ) as Record<string, unknown>;
+        if (pkg?.openclaw?.bundle?.stageRuntimeDependencies === true) {
+          const libId = entry.name;
+          if (
+            passesManifestOwnerBasePolicy({
+              plugin: { id: libId },
+              normalizedConfig: plugins,
+              allowRestrictiveAllowlistBypass: true,
+            })
+          ) {
+            ids.add(libId);
+          }
+        }
+      } catch {}
       continue;
     }
     const pluginId = typeof manifest.id === "string" && manifest.id ? manifest.id : entry.name;

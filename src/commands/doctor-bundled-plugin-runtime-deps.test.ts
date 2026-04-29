@@ -842,4 +842,51 @@ describe("doctor bundled plugin runtime deps", () => {
     expect(installRoot).not.toBe(root);
     expect(readRetainedRuntimeDepsManifest(installRoot)).toEqual(["grammy@1.37.0"]);
   });
+
+  it("includes library extensions with stageRuntimeDependencies in doctor scan", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-bundled-"));
+    writeJson(path.join(root, "package.json"), { name: "openclaw" });
+    writeJson(path.join(root, "dist", "extensions", "media-understanding-core", "package.json"), {
+      name: "@openclaw/media-understanding-core",
+      dependencies: { sharp: "0.34.5" },
+      openclaw: { bundle: { stageRuntimeDependencies: true } },
+    });
+
+    const result = scanBundledPluginRuntimeDeps({ packageRoot: root, config: {} });
+
+    expect(result.missing.map((dep) => `${dep.name}@${dep.version}`)).toEqual(["sharp@0.34.5"]);
+    expect(result.conflicts).toEqual([]);
+  });
+
+  it("repairs library extension deps during doctor --fix", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-bundled-"));
+    writeJson(path.join(root, "package.json"), { name: "openclaw" });
+    writeJson(path.join(root, "dist", "extensions", "media-understanding-core", "package.json"), {
+      name: "@openclaw/media-understanding-core",
+      dependencies: { sharp: "0.34.5" },
+      openclaw: { bundle: { stageRuntimeDependencies: true } },
+    });
+    const installed = createInstalledRuntimeDeps();
+
+    await maybeRepairBundledPluginRuntimeDeps({
+      runtime: createRuntime(),
+      prompter: createNonInteractivePrompter(),
+      packageRoot: root,
+      config: { plugins: { enabled: true } },
+      installDeps: (params) => {
+        installed.push(params);
+      },
+    });
+
+    const installRoot = resolveBundledRuntimeDependencyPackageInstallRoot(root);
+    expect(installed).toEqual([
+      {
+        installRoot,
+        missingSpecs: ["sharp@0.34.5"],
+        installSpecs: ["sharp@0.34.5"],
+      },
+    ]);
+    expect(installRoot).not.toBe(root);
+    expect(readRetainedRuntimeDepsManifest(installRoot)).toEqual(["sharp@0.34.5"]);
+  });
 });
