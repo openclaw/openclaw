@@ -1873,6 +1873,90 @@ function emitBundledRuntimeDepsOutputProgress(
   }
 }
 
+type BundledRuntimeDepsInstallContext = {
+  installExecutionRoot: string;
+  installSpecs: string[];
+  installEnv: NodeJS.ProcessEnv;
+  runner: BundledRuntimeDepsPackageManagerRunner;
+  isolatedExecutionRoot: boolean;
+  cleanInstallExecutionRoot: boolean;
+};
+
+function createBundledRuntimeDepsInstallContext(params: {
+  installRoot: string;
+  installExecutionRoot?: string;
+  missingSpecs: readonly string[];
+  installSpecs: readonly string[];
+  env: NodeJS.ProcessEnv;
+  warn?: (message: string) => void;
+}): BundledRuntimeDepsInstallContext {
+  const installExecutionRoot = params.installExecutionRoot ?? params.installRoot;
+  const isolatedExecutionRoot =
+    path.resolve(installExecutionRoot) !== path.resolve(params.installRoot);
+  const cleanInstallExecutionRoot =
+    isolatedExecutionRoot &&
+    shouldCleanBundledRuntimeDepsInstallExecutionRoot({
+      installRoot: params.installRoot,
+      installExecutionRoot,
+    });
+
+  fs.mkdirSync(params.installRoot, { recursive: true });
+  fs.mkdirSync(installExecutionRoot, { recursive: true });
+  const diskWarning = createLowDiskSpaceWarning({
+    targetPath: installExecutionRoot,
+    purpose: "bundled plugin runtime dependency staging",
+  });
+  if (diskWarning) {
+    params.warn?.(diskWarning);
+  }
+  ensureNpmInstallExecutionManifest(installExecutionRoot, params.installSpecs);
+  const installEnv = createBundledRuntimeDepsInstallEnv(params.env, {
+    cacheDir: path.join(installExecutionRoot, ".openclaw-npm-cache"),
+  });
+  const runner = resolveBundledRuntimeDepsPackageManagerRunner({
+    installExecutionRoot,
+    env: installEnv,
+    npmArgs: createBundledRuntimeDepsInstallArgs(params.missingSpecs),
+  });
+
+  return {
+    installExecutionRoot,
+    installSpecs: normalizeRuntimeDepSpecs(params.installSpecs),
+    installEnv,
+    runner,
+    isolatedExecutionRoot,
+    cleanInstallExecutionRoot,
+  };
+}
+
+function finalizeBundledRuntimeDepsInstall(params: {
+  installRoot: string;
+  context: BundledRuntimeDepsInstallContext;
+}): void {
+  const { context } = params;
+  assertBundledRuntimeDepsInstalled(context.installExecutionRoot, context.installSpecs);
+  if (context.isolatedExecutionRoot) {
+    const stagedNodeModulesDir = path.join(context.installExecutionRoot, "node_modules");
+    if (!fs.existsSync(stagedNodeModulesDir)) {
+      throw new Error(`${context.runner.packageManager} install did not produce node_modules`);
+    }
+    const targetNodeModulesDir = path.join(params.installRoot, "node_modules");
+    replaceNodeModulesDir(targetNodeModulesDir, stagedNodeModulesDir);
+    assertBundledRuntimeDepsInstalled(params.installRoot, context.installSpecs);
+  }
+  writeRuntimeDepsInstallStateIfMaterialized({
+    installRoot: params.installRoot,
+    installSpecs: context.installSpecs,
+    packageManager: context.runner.packageManager,
+  });
+}
+
+function cleanupBundledRuntimeDepsInstallContext(context: BundledRuntimeDepsInstallContext): void {
+  if (context.cleanInstallExecutionRoot) {
+    fs.rmSync(context.installExecutionRoot, { recursive: true, force: true });
+  }
+}
+
 async function spawnBundledRuntimeDepsInstall(params: {
   command: string;
   args: string[];
@@ -1962,63 +2046,28 @@ export function installBundledRuntimeDeps(params: {
   if (isRuntimeDepsPlanAlreadyMaterialized(params.installRoot, installSpecs)) {
     return;
   }
-  const installExecutionRoot = params.installExecutionRoot ?? params.installRoot;
-  const isolatedExecutionRoot =
-    path.resolve(installExecutionRoot) !== path.resolve(params.installRoot);
-  const cleanInstallExecutionRoot =
-    isolatedExecutionRoot &&
-    shouldCleanBundledRuntimeDepsInstallExecutionRoot({
-      installRoot: params.installRoot,
-      installExecutionRoot,
-    });
+  const context = createBundledRuntimeDepsInstallContext({
+    installRoot: params.installRoot,
+    installExecutionRoot: params.installExecutionRoot,
+    missingSpecs: params.missingSpecs,
+    installSpecs,
+    env: params.env,
+    warn: params.warn,
+  });
   try {
-    fs.mkdirSync(params.installRoot, { recursive: true });
-    fs.mkdirSync(installExecutionRoot, { recursive: true });
-    const diskWarning = createLowDiskSpaceWarning({
-      targetPath: installExecutionRoot,
-      purpose: "bundled plugin runtime dependency staging",
-    });
-    if (diskWarning) {
-      params.warn?.(diskWarning);
-    }
-    ensureNpmInstallExecutionManifest(installExecutionRoot, installSpecs);
-    const installEnv = createBundledRuntimeDepsInstallEnv(params.env, {
-      cacheDir: path.join(installExecutionRoot, ".openclaw-npm-cache"),
-    });
-    const runner = resolveBundledRuntimeDepsPackageManagerRunner({
-      installExecutionRoot,
-      env: installEnv,
-      npmArgs: createBundledRuntimeDepsInstallArgs(params.missingSpecs),
-    });
-    const result = spawnSync(runner.command, runner.args, {
-      cwd: installExecutionRoot,
+    const result = spawnSync(context.runner.command, context.runner.args, {
+      cwd: context.installExecutionRoot,
       encoding: "utf8",
-      env: runner.env ?? installEnv,
+      env: context.runner.env ?? context.installEnv,
       stdio: "pipe",
       windowsHide: true,
     });
     if (result.status !== 0 || result.error) {
       throw new Error(formatBundledRuntimeDepsInstallError(result));
     }
-    assertBundledRuntimeDepsInstalled(installExecutionRoot, installSpecs);
-    if (isolatedExecutionRoot) {
-      const stagedNodeModulesDir = path.join(installExecutionRoot, "node_modules");
-      if (!fs.existsSync(stagedNodeModulesDir)) {
-        throw new Error(`${runner.packageManager} install did not produce node_modules`);
-      }
-      const targetNodeModulesDir = path.join(params.installRoot, "node_modules");
-      replaceNodeModulesDir(targetNodeModulesDir, stagedNodeModulesDir);
-      assertBundledRuntimeDepsInstalled(params.installRoot, installSpecs);
-    }
-    writeRuntimeDepsInstallStateIfMaterialized({
-      installRoot: params.installRoot,
-      installSpecs,
-      packageManager: runner.packageManager,
-    });
+    finalizeBundledRuntimeDepsInstall({ installRoot: params.installRoot, context });
   } finally {
-    if (cleanInstallExecutionRoot) {
-      fs.rmSync(installExecutionRoot, { recursive: true, force: true });
-    }
+    cleanupBundledRuntimeDepsInstallContext(context);
   }
 }
 
@@ -2038,64 +2087,29 @@ export async function installBundledRuntimeDepsAsync(params: {
   if (isRuntimeDepsPlanAlreadyMaterialized(params.installRoot, installSpecs)) {
     return;
   }
-  const installExecutionRoot = params.installExecutionRoot ?? params.installRoot;
-  const isolatedExecutionRoot =
-    path.resolve(installExecutionRoot) !== path.resolve(params.installRoot);
-  const cleanInstallExecutionRoot =
-    isolatedExecutionRoot &&
-    shouldCleanBundledRuntimeDepsInstallExecutionRoot({
-      installRoot: params.installRoot,
-      installExecutionRoot,
-    });
+  const context = createBundledRuntimeDepsInstallContext({
+    installRoot: params.installRoot,
+    installExecutionRoot: params.installExecutionRoot,
+    missingSpecs: params.missingSpecs,
+    installSpecs,
+    env: params.env,
+    warn: params.warn,
+  });
   try {
-    fs.mkdirSync(params.installRoot, { recursive: true });
-    fs.mkdirSync(installExecutionRoot, { recursive: true });
-    const diskWarning = createLowDiskSpaceWarning({
-      targetPath: installExecutionRoot,
-      purpose: "bundled plugin runtime dependency staging",
-    });
-    if (diskWarning) {
-      params.warn?.(diskWarning);
-    }
-    ensureNpmInstallExecutionManifest(installExecutionRoot, installSpecs);
-    const installEnv = createBundledRuntimeDepsInstallEnv(params.env, {
-      cacheDir: path.join(installExecutionRoot, ".openclaw-npm-cache"),
-    });
-    const runner = resolveBundledRuntimeDepsPackageManagerRunner({
-      installExecutionRoot,
-      env: installEnv,
-      npmArgs: createBundledRuntimeDepsInstallArgs(params.missingSpecs),
-    });
     params.onProgress?.(
-      `Starting ${runner.packageManager} install for bundled plugin runtime deps: ${params.missingSpecs.join(", ")}`,
+      `Starting ${context.runner.packageManager} install for bundled plugin runtime deps: ${params.missingSpecs.join(", ")}`,
     );
     await spawnBundledRuntimeDepsInstall({
-      command: runner.command,
-      args: runner.args,
-      cwd: installExecutionRoot,
-      env: runner.env ?? installEnv,
-      packageManager: runner.packageManager,
+      command: context.runner.command,
+      args: context.runner.args,
+      cwd: context.installExecutionRoot,
+      env: context.runner.env ?? context.installEnv,
+      packageManager: context.runner.packageManager,
       onProgress: params.onProgress,
     });
-    assertBundledRuntimeDepsInstalled(installExecutionRoot, installSpecs);
-    if (isolatedExecutionRoot) {
-      const stagedNodeModulesDir = path.join(installExecutionRoot, "node_modules");
-      if (!fs.existsSync(stagedNodeModulesDir)) {
-        throw new Error(`${runner.packageManager} install did not produce node_modules`);
-      }
-      const targetNodeModulesDir = path.join(params.installRoot, "node_modules");
-      replaceNodeModulesDir(targetNodeModulesDir, stagedNodeModulesDir);
-      assertBundledRuntimeDepsInstalled(params.installRoot, installSpecs);
-    }
-    writeRuntimeDepsInstallStateIfMaterialized({
-      installRoot: params.installRoot,
-      installSpecs,
-      packageManager: runner.packageManager,
-    });
+    finalizeBundledRuntimeDepsInstall({ installRoot: params.installRoot, context });
   } finally {
-    if (cleanInstallExecutionRoot) {
-      fs.rmSync(installExecutionRoot, { recursive: true, force: true });
-    }
+    cleanupBundledRuntimeDepsInstallContext(context);
   }
 }
 
