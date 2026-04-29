@@ -130,6 +130,7 @@ export function loadPluginMetadataSnapshot(
     () => loadPluginMetadataSnapshotImpl(params),
     {
       phase: "startup",
+      config: params.config,
       env: params.env,
       attributes: {
         hasWorkspaceDir: params.workspaceDir !== undefined,

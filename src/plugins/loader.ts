@@ -2142,6 +2142,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
                 () => installer(installParams),
                 {
                   phase: "startup",
+                  config: cfg,
                   env,
                   attributes: {
                     pluginId: record.id,

@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { appendFileSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { performance } from "node:perf_hooks";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isDiagnosticFlagEnabled } from "./diagnostic-flags.js";
 
 export const OPENCLAW_DIAGNOSTICS_TIMELINE_SCHEMA_VERSION = "openclaw.diagnostics.v1";
@@ -48,16 +49,32 @@ type DiagnosticsTimelineSpanOptions = {
   phase?: string;
   parentSpanId?: string;
   attributes?: DiagnosticsTimelineAttributes;
+  config?: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+};
+
+type DiagnosticsTimelineOptions = {
+  config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
 };
 
 let warnedAboutTimelineWrite = false;
 const createdTimelineDirs = new Set<string>();
 
-export function isDiagnosticsTimelineEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+function resolveDiagnosticsTimelineOptions(
+  options: DiagnosticsTimelineOptions = {},
+): Required<Pick<DiagnosticsTimelineOptions, "env">> & Pick<DiagnosticsTimelineOptions, "config"> {
+  return {
+    env: options.env ?? process.env,
+    ...(options.config ? { config: options.config } : {}),
+  };
+}
+
+export function isDiagnosticsTimelineEnabled(options: DiagnosticsTimelineOptions = {}): boolean {
+  const { config, env } = resolveDiagnosticsTimelineOptions(options);
   return (
-    (isDiagnosticFlagEnabled("timeline", undefined, env) ||
-      isDiagnosticFlagEnabled("diagnostics.timeline", undefined, env)) &&
+    (isDiagnosticFlagEnabled("timeline", config, env) ||
+      isDiagnosticFlagEnabled("diagnostics.timeline", config, env)) &&
     typeof env.OPENCLAW_DIAGNOSTICS_TIMELINE_PATH === "string" &&
     env.OPENCLAW_DIAGNOSTICS_TIMELINE_PATH.trim().length > 0
   );
@@ -131,9 +148,10 @@ function serializeTimelineEvent(event: DiagnosticsTimelineEvent, env: NodeJS.Pro
 
 export function emitDiagnosticsTimelineEvent(
   event: DiagnosticsTimelineEvent,
-  env: NodeJS.ProcessEnv = process.env,
+  options: DiagnosticsTimelineOptions = {},
 ): void {
-  if (!isDiagnosticsTimelineEnabled(env)) {
+  const { env } = resolveDiagnosticsTimelineOptions(options);
+  if (!isDiagnosticsTimelineEnabled(options)) {
     return;
   }
   const path = env.OPENCLAW_DIAGNOSTICS_TIMELINE_PATH?.trim();
@@ -162,7 +180,7 @@ export async function measureDiagnosticsTimelineSpan<T>(
   options: DiagnosticsTimelineSpanOptions = {},
 ): Promise<T> {
   const env = options.env ?? process.env;
-  if (!isDiagnosticsTimelineEnabled(env)) {
+  if (!isDiagnosticsTimelineEnabled({ config: options.config, env })) {
     return await run();
   }
   const spanId = randomUUID();
@@ -176,7 +194,7 @@ export async function measureDiagnosticsTimelineSpan<T>(
       parentSpanId: options.parentSpanId,
       attributes: options.attributes,
     },
-    env,
+    { config: options.config, env },
   );
   try {
     const result = await run();
@@ -190,7 +208,7 @@ export async function measureDiagnosticsTimelineSpan<T>(
         durationMs: performance.now() - startedAt,
         attributes: options.attributes,
       },
-      env,
+      { config: options.config, env },
     );
     return result;
   } catch (error) {
@@ -206,7 +224,7 @@ export async function measureDiagnosticsTimelineSpan<T>(
         errorName: error instanceof Error ? error.name : typeof error,
         errorMessage: error instanceof Error ? error.message : String(error),
       },
-      env,
+      { config: options.config, env },
     );
     throw error;
   }
@@ -218,7 +236,7 @@ export function measureDiagnosticsTimelineSpanSync<T>(
   options: DiagnosticsTimelineSpanOptions = {},
 ): T {
   const env = options.env ?? process.env;
-  if (!isDiagnosticsTimelineEnabled(env)) {
+  if (!isDiagnosticsTimelineEnabled({ config: options.config, env })) {
     return run();
   }
   const spanId = randomUUID();
@@ -232,7 +250,7 @@ export function measureDiagnosticsTimelineSpanSync<T>(
       parentSpanId: options.parentSpanId,
       attributes: options.attributes,
     },
-    env,
+    { config: options.config, env },
   );
   try {
     const result = run();
@@ -246,7 +264,7 @@ export function measureDiagnosticsTimelineSpanSync<T>(
         durationMs: performance.now() - startedAt,
         attributes: options.attributes,
       },
-      env,
+      { config: options.config, env },
     );
     return result;
   } catch (error) {
@@ -262,7 +280,7 @@ export function measureDiagnosticsTimelineSpanSync<T>(
         errorName: error instanceof Error ? error.name : typeof error,
         errorMessage: error instanceof Error ? error.message : String(error),
       },
-      env,
+      { config: options.config, env },
     );
     throw error;
   }

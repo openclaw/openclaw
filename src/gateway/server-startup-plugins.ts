@@ -50,6 +50,7 @@ async function prestageGatewayBundledRuntimeDeps(params: {
     () => prestageGatewayBundledRuntimeDepsImpl(params),
     {
       phase: "startup",
+      config: params.cfg,
       attributes: {
         pluginCount: params.pluginIds.length,
       },

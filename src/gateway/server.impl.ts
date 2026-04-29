@@ -169,12 +169,23 @@ const canvasRuntime = runtimeForLogger(logCanvas);
 
 function createGatewayStartupTrace() {
   const logEnabled = isTruthyEnvValue(process.env.OPENCLAW_GATEWAY_STARTUP_TRACE);
-  const timelineEnabled = isDiagnosticsTimelineEnabled();
-  const eventLoopTimelineEnabled =
-    timelineEnabled && isTruthyEnvValue(process.env.OPENCLAW_DIAGNOSTICS_EVENT_LOOP);
-  const eventLoopDelay =
-    logEnabled || eventLoopTimelineEnabled ? monitorEventLoopDelay({ resolution: 10 }) : undefined;
-  eventLoopDelay?.enable();
+  let timelineConfig: OpenClawConfig | undefined;
+  let eventLoopDelay: ReturnType<typeof monitorEventLoopDelay> | undefined;
+  const timelineOptions = () => ({
+    ...(timelineConfig ? { config: timelineConfig } : {}),
+    env: process.env,
+  });
+  const eventLoopTimelineEnabled = () =>
+    isDiagnosticsTimelineEnabled(timelineOptions()) &&
+    isTruthyEnvValue(process.env.OPENCLAW_DIAGNOSTICS_EVENT_LOOP);
+  const ensureEventLoopDelay = () => {
+    if (eventLoopDelay || (!logEnabled && !eventLoopTimelineEnabled())) {
+      return;
+    }
+    eventLoopDelay = monitorEventLoopDelay({ resolution: 10 });
+    eventLoopDelay.enable();
+  };
+  ensureEventLoopDelay();
   const started = performance.now();
   let last = started;
   let spanSequence = 0;
@@ -214,23 +225,26 @@ function createGatewayStartupTrace() {
     activeSpanName: string,
     sample: ReturnType<typeof takeEventLoopSample>,
   ) => {
-    if (!eventLoopTimelineEnabled) {
+    if (!eventLoopTimelineEnabled()) {
       return;
     }
     if (!sample) {
       return;
     }
-    emitDiagnosticsTimelineEvent({
-      type: "eventLoop.sample",
-      name: "eventLoop",
-      phase: "startup",
-      activeSpanName: mapTimelineName(activeSpanName),
-      attributes:
-        activeSpanName === mapTimelineName(activeSpanName)
-          ? undefined
-          : { traceName: activeSpanName },
-      ...sample,
-    });
+    emitDiagnosticsTimelineEvent(
+      {
+        type: "eventLoop.sample",
+        name: "eventLoop",
+        phase: "startup",
+        activeSpanName: mapTimelineName(activeSpanName),
+        attributes:
+          activeSpanName === mapTimelineName(activeSpanName)
+            ? undefined
+            : { traceName: activeSpanName },
+        ...sample,
+      },
+      timelineOptions(),
+    );
   };
   const emit = (
     name: string,
@@ -250,17 +264,24 @@ function createGatewayStartupTrace() {
     }
   };
   return {
+    setConfig(config: OpenClawConfig) {
+      timelineConfig = config;
+      ensureEventLoopDelay();
+    },
     mark(name: string) {
       const now = performance.now();
       const eventLoopSample = takeEventLoopSample();
       emit(name, now - last, now - started, eventLoopSample);
-      emitDiagnosticsTimelineEvent({
-        type: "mark",
-        name: mapTimelineName(name),
-        phase: "startup",
-        durationMs: now - started,
-        attributes: name === mapTimelineName(name) ? undefined : { traceName: name },
-      });
+      emitDiagnosticsTimelineEvent(
+        {
+          type: "mark",
+          name: mapTimelineName(name),
+          phase: "startup",
+          durationMs: now - started,
+          attributes: name === mapTimelineName(name) ? undefined : { traceName: name },
+        },
+        timelineOptions(),
+      );
       emitEventLoopTimelineSample(name, eventLoopSample);
       last = now;
       if (name === "ready") {
@@ -274,50 +295,62 @@ function createGatewayStartupTrace() {
           `startup trace: ${name} ${metrics.map(([key, value]) => formatMetric(key, value)).join(" ")}`,
         );
       }
-      emitDiagnosticsTimelineEvent({
-        type: "mark",
-        name: mapTimelineName(name),
-        phase: "startup",
-        attributes: {
-          traceName: name,
-          ...attributes,
+      emitDiagnosticsTimelineEvent(
+        {
+          type: "mark",
+          name: mapTimelineName(name),
+          phase: "startup",
+          attributes: {
+            traceName: name,
+            ...attributes,
+          },
         },
-      });
+        timelineOptions(),
+      );
     },
     async measure<T>(name: string, run: () => Promise<T> | T): Promise<T> {
       const before = performance.now();
       const spanId = `gateway-startup-${++spanSequence}`;
-      emitDiagnosticsTimelineEvent({
-        type: "span.start",
-        name: mapTimelineName(name),
-        phase: "startup",
-        spanId,
-        attributes: name === mapTimelineName(name) ? undefined : { traceName: name },
-      });
+      emitDiagnosticsTimelineEvent(
+        {
+          type: "span.start",
+          name: mapTimelineName(name),
+          phase: "startup",
+          spanId,
+          attributes: name === mapTimelineName(name) ? undefined : { traceName: name },
+        },
+        timelineOptions(),
+      );
       try {
         const result = await run();
         const now = performance.now();
-        emitDiagnosticsTimelineEvent({
-          type: "span.end",
-          name: mapTimelineName(name),
-          phase: "startup",
-          spanId,
-          durationMs: now - before,
-          attributes: name === mapTimelineName(name) ? undefined : { traceName: name },
-        });
+        emitDiagnosticsTimelineEvent(
+          {
+            type: "span.end",
+            name: mapTimelineName(name),
+            phase: "startup",
+            spanId,
+            durationMs: now - before,
+            attributes: name === mapTimelineName(name) ? undefined : { traceName: name },
+          },
+          timelineOptions(),
+        );
         return result;
       } catch (error) {
         const now = performance.now();
-        emitDiagnosticsTimelineEvent({
-          type: "span.error",
-          name: mapTimelineName(name),
-          phase: "startup",
-          spanId,
-          durationMs: now - before,
-          attributes: name === mapTimelineName(name) ? undefined : { traceName: name },
-          errorName: error instanceof Error ? error.name : typeof error,
-          errorMessage: error instanceof Error ? error.message : String(error),
-        });
+        emitDiagnosticsTimelineEvent(
+          {
+            type: "span.error",
+            name: mapTimelineName(name),
+            phase: "startup",
+            spanId,
+            durationMs: now - before,
+            attributes: name === mapTimelineName(name) ? undefined : { traceName: name },
+            errorName: error instanceof Error ? error.name : typeof error,
+            errorMessage: error instanceof Error ? error.message : String(error),
+          },
+          timelineOptions(),
+        );
         throw error;
       } finally {
         const now = performance.now();
@@ -466,6 +499,7 @@ export async function startGatewayServer(
   let startupLastGoodSnapshot = configSnapshot;
   const startupActivationSourceConfig = configSnapshot.sourceConfig;
   const startupRuntimeConfig = applyConfigOverrides(configSnapshot.config);
+  startupTrace.setConfig(startupRuntimeConfig);
   const authBootstrap = await startupTrace.measure("config.auth", () =>
     prepareGatewayStartupConfig({
       configSnapshot,
@@ -476,6 +510,7 @@ export async function startGatewayServer(
     }),
   );
   cfgAtStart = authBootstrap.cfg;
+  startupTrace.setConfig(cfgAtStart);
   if (authBootstrap.generatedToken) {
     if (authBootstrap.persistedGeneratedToken) {
       log.info(
