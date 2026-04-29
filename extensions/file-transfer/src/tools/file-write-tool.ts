@@ -77,7 +77,14 @@ export function createFileWriteTool(): AnyAgentTool {
 
       const nodeQuery = readTrimmedString(raw, "node");
       const filePath = readTrimmedString(raw, "path");
-      const contentBase64 = typeof raw.contentBase64 === "string" ? raw.contentBase64 : "";
+      // Type-check, NOT truthy-check: empty string is the valid base64
+      // representation of a zero-byte file, and rejecting "" here would
+      // make zero-byte writes impossible round-trip from file_fetch.
+      const contentBase64Raw = raw.contentBase64;
+      if (typeof contentBase64Raw !== "string") {
+        throw new Error("contentBase64 required (string, may be empty for zero-byte files)");
+      }
+      const contentBase64 = contentBase64Raw;
       const overwrite = readBoolean(raw, "overwrite", false);
       const createParents = readBoolean(raw, "createParents", false);
 
@@ -86,9 +93,6 @@ export function createFileWriteTool(): AnyAgentTool {
       }
       if (!filePath) {
         throw new Error("path required");
-      }
-      if (!contentBase64) {
-        throw new Error("contentBase64 required");
       }
 
       // Compute the sha256 of the bytes we're sending so the node can do

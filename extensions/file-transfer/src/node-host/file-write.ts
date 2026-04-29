@@ -165,7 +165,21 @@ export async function handleFileWrite(
     }
   }
 
-  // 5. Atomic write: write to tmp, then rename
+  // 5. Hash the decoded buffer BEFORE touching disk. If the caller
+  //    supplied expectedSha256 and it doesn't match, refuse outright so
+  //    a bad caller hash with overwrite=true can't replace + delete the
+  //    original. Computing from the buffer (not a re-read) is the right
+  //    source of truth — the caller asked us to write THESE bytes.
+  const computedSha256 = sha256Hex(buf);
+  if (expectedSha256 && expectedSha256.toLowerCase() !== computedSha256) {
+    return err(
+      "INTEGRITY_FAILURE",
+      `sha256 mismatch: expected ${expectedSha256.toLowerCase()}, got ${computedSha256}`,
+      targetPath,
+    );
+  }
+
+  // 6. Atomic write: write to tmp, then rename
   const tmpSuffix = crypto.randomBytes(8).toString("hex");
   const tmpPath = `${targetPath}.${tmpSuffix}.tmp`;
 
@@ -192,27 +206,6 @@ export async function handleFileWrite(
     return err("WRITE_ERROR", `failed to rename tmp to target: ${message}`);
   }
 
-  // 6. Compute sha256 from the buffer we just wrote, NOT from a re-read.
-  //    A re-read would race against any concurrent process that overwrote
-  //    the file between rename and read — we'd compute the wrong hash and
-  //    either approve a corrupted file or unlink someone else's data on
-  //    a false mismatch. Buffer-side sha256 is what the caller actually
-  //    asked us to write.
-  const computedSha256 = sha256Hex(buf);
-
-  // 7. Integrity check against the optional expectedSha256 — this is now
-  //    a redundancy check (if expectedSha256 differs from what we hashed
-  //    of the input buffer, the caller mis-encoded contentBase64). The
-  //    file already exists at this point; on mismatch we unlink to avoid
-  //    leaving a file the caller didn't intend.
-  if (expectedSha256 && expectedSha256.toLowerCase() !== computedSha256) {
-    await fs.unlink(targetPath).catch(() => {});
-    return err(
-      "INTEGRITY_FAILURE",
-      `sha256 mismatch: expected ${expectedSha256.toLowerCase()}, got ${computedSha256}`,
-      targetPath,
-    );
-  }
   const writtenBuf = buf;
 
   // 8. Re-realpath to resolve any symlinks in the final path

@@ -135,12 +135,16 @@ export function createFileFetchTool(): AnyAgentTool {
         throwFromNodePayload("file.fetch", payload);
       }
 
+      // Type-checks, NOT truthy-checks: an empty file legitimately has
+      // size=0 and base64="". Rejecting falsy values would block zero-byte
+      // round-trips through file_fetch → file_write.
       const canonicalPath = typeof payload.path === "string" ? payload.path : "";
       const size = typeof payload.size === "number" ? payload.size : -1;
       const mimeType = typeof payload.mimeType === "string" ? payload.mimeType : "";
-      const base64 = typeof payload.base64 === "string" ? payload.base64 : "";
+      const hasBase64 = typeof payload.base64 === "string";
+      const base64 = hasBase64 ? (payload.base64 as string) : "";
       const sha256 = typeof payload.sha256 === "string" ? payload.sha256 : "";
-      if (!canonicalPath || size < 0 || !mimeType || !base64 || !sha256) {
+      if (!canonicalPath || size < 0 || !mimeType || !hasBase64 || !sha256) {
         throw new Error("invalid file.fetch payload (missing fields)");
       }
 

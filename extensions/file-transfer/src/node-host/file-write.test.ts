@@ -39,6 +39,21 @@ describe("handleFileWrite — input validation", () => {
   });
 });
 
+describe("handleFileWrite — zero-byte round-trip", () => {
+  it("writes an empty file when contentBase64 is empty string", async () => {
+    const target = path.join(tmpRoot, "empty.bin");
+    const r = await handleFileWrite({ path: target, contentBase64: "" });
+    if (!r.ok) {
+      throw new Error(`expected ok, got ${r.code}: ${r.message}`);
+    }
+    expect(r.size).toBe(0);
+    // SHA-256 of empty input has a known fixed value.
+    expect(r.sha256).toBe("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+    const stat = await fs.stat(target);
+    expect(stat.size).toBe(0);
+  });
+});
+
 describe("handleFileWrite — happy path", () => {
   it("writes a new file and returns size + sha256 + overwritten=false", async () => {
     const target = path.join(tmpRoot, "out.txt");
@@ -197,7 +212,7 @@ describe("handleFileWrite — symlink protection", () => {
 });
 
 describe("handleFileWrite — integrity check", () => {
-  it("unlinks the file and returns INTEGRITY_FAILURE when expectedSha256 mismatches", async () => {
+  it("returns INTEGRITY_FAILURE without touching disk when expectedSha256 mismatches", async () => {
     const target = path.join(tmpRoot, "checked.txt");
     const r = await handleFileWrite({
       path: target,
@@ -205,8 +220,25 @@ describe("handleFileWrite — integrity check", () => {
       expectedSha256: "0".repeat(64),
     });
     expect(r).toMatchObject({ ok: false, code: "INTEGRITY_FAILURE" });
-    // The file must NOT survive a mismatch.
+    // No file at the target — the hash check runs BEFORE the rename, so
+    // a bad caller hash never reaches disk.
     await expect(fs.access(target)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("does NOT replace or delete an existing file when overwrite=true and expectedSha256 mismatches", async () => {
+    const target = path.join(tmpRoot, "victim.txt");
+    await fs.writeFile(target, "ORIGINAL_CONTENT_DO_NOT_TOUCH");
+
+    const r = await handleFileWrite({
+      path: target,
+      contentBase64: b64("attacker-content"),
+      overwrite: true,
+      expectedSha256: "0".repeat(64),
+    });
+    expect(r).toMatchObject({ ok: false, code: "INTEGRITY_FAILURE" });
+    // Critical: the original must survive. A bad caller hash must not
+    // be a primitive for replacing-then-deleting an existing file.
+    expect(await fs.readFile(target, "utf-8")).toBe("ORIGINAL_CONTENT_DO_NOT_TOUCH");
   });
 
   it("accepts a matching expectedSha256 and keeps the file", async () => {

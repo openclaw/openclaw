@@ -70,6 +70,22 @@ describe("handleFileFetch — fs errors", () => {
   });
 });
 
+describe("handleFileFetch — zero-byte round-trip", () => {
+  it("fetches an empty file with size=0 and base64=''", async () => {
+    const target = path.join(tmpRoot, "empty.bin");
+    await fs.writeFile(target, "");
+
+    const r = await handleFileFetch({ path: target });
+    if (!r.ok) {
+      throw new Error(`expected ok, got ${r.code}: ${r.message}`);
+    }
+    expect(r.size).toBe(0);
+    expect(r.base64).toBe("");
+    // SHA-256 of empty input.
+    expect(r.sha256).toBe("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+  });
+});
+
 describe("handleFileFetch — happy path", () => {
   it("reads a small file and returns size + sha256 + base64", async () => {
     const target = path.join(tmpRoot, "hello.txt");
