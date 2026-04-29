@@ -87,7 +87,7 @@ const ACP_TURN_TIMEOUT_GRACE_MS = 1_000;
 const ACP_TURN_TIMEOUT_CLEANUP_GRACE_MS = 2_000;
 const ACP_TURN_TIMEOUT_REASON = "turn-timeout";
 const ACP_BACKGROUND_TASK_TEXT_MAX_LENGTH = 160;
-const ACP_BACKGROUND_TASK_PROGRESS_MAX_LENGTH = 240;
+const ACP_BACKGROUND_TASK_PROGRESS_MAX_LENGTH = 1200;
 
 function summarizeBackgroundTaskText(text: string): string {
   const normalized = normalizeText(text) ?? "ACP background task";
@@ -141,7 +141,7 @@ function resolveBackgroundTaskTerminalResult(progressSummary: string): {
       terminalSummary: "Writable session or apply_patch authorization required.",
     };
   }
-  return {};
+  return { terminalSummary: normalized };
 }
 
 type BackgroundTaskContext = {
