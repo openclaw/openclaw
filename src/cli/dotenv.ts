@@ -1,16 +1,7 @@
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
 import { loadGlobalRuntimeDotEnvFiles, loadWorkspaceDotEnvFile } from "../infra/dotenv.js";
-
-function safeProcessCwd(): string {
-  try {
-    return process.cwd();
-  } catch (error) {
-    // If cwd is deleted, uv_cwd throws. Return a fallback path that won't have .env.
-    // The error will be surfaced earlier in run-main.ts shouldLoadCliDotEnv().
-    return process.env.HOME ?? process.env.USERPROFILE ?? "/";
-  }
-}
+import { safeProcessCwd } from "./utils/cwd.js";
 
 export function loadCliDotEnv(opts?: { quiet?: boolean }) {
   const quiet = opts?.quiet ?? true;

@@ -216,18 +216,7 @@ export function resolveMissingPluginCommandMessage(
   );
 }
 
-function safeProcessCwd(): string {
-  try {
-    return process.cwd();
-  } catch (error) {
-    const message =
-      error instanceof Error && error.message.includes("uv_cwd")
-        ? "Current working directory has been deleted. Please cd to a valid directory before running openclaw."
-        : `Failed to resolve current working directory: ${error instanceof Error ? error.message : String(error)}`;
-    console.error(`[openclaw] Error: ${message}`);
-    process.exit(1);
-  }
-}
+import { safeProcessCwd } from "./utils/cwd.js";
 
 function shouldLoadCliDotEnv(env: NodeJS.ProcessEnv = process.env): boolean {
   if (existsSync(path.join(safeProcessCwd(), ".env"))) {
