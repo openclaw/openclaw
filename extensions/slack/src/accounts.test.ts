@@ -1,6 +1,10 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { describe, expect, it } from "vitest";
-import { resolveSlackAccount, resolveSlackAccountAllowFrom } from "./accounts.js";
+import {
+  resolveSlackAccount,
+  resolveSlackAccountAllowFrom,
+  resolveSlackAccountDmPolicy,
+} from "./accounts.js";
 
 describe("resolveSlackAccount allowFrom precedence", () => {
   it("uses configured defaultAccount when accountId is omitted", () => {
@@ -125,6 +129,43 @@ describe("resolveSlackAccount allowFrom precedence", () => {
     } satisfies OpenClawConfig;
 
     expect(resolveSlackAccountAllowFrom({ cfg, accountId: "work" })).toEqual(["account-legacy"]);
+  });
+
+  it("coerces numeric allowFrom entries at the config boundary", () => {
+    const cfg = {
+      channels: {
+        slack: {
+          accounts: {
+            work: {
+              botToken: "xoxb-work",
+              appToken: "xapp-work",
+              allowFrom: [12345],
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(resolveSlackAccountAllowFrom({ cfg, accountId: "work" })).toEqual(["12345"]);
+  });
+
+  it("resolves account legacy dm policy before inherited root policy", () => {
+    const cfg = {
+      channels: {
+        slack: {
+          dmPolicy: "open",
+          accounts: {
+            work: {
+              botToken: "xoxb-work",
+              appToken: "xapp-work",
+              dm: { policy: "allowlist" },
+            },
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    expect(resolveSlackAccountDmPolicy({ cfg, accountId: "work" })).toBe("allowlist");
   });
 });
 
