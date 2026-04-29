@@ -1,5 +1,6 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createDiscordPluginBase } from "./shared.js";
+import { createDiscordPluginBase, discordConfigAdapter } from "./shared.js";
 
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -54,5 +55,59 @@ describe("createDiscordPluginBase", () => {
       'duplicate bot token; using account "work"',
     );
     expect(plugin.config.isEnabled?.(workAccount, cfg)).toBe(true);
+  });
+});
+
+describe("discordConfigAdapter", () => {
+  it("resolves top-level allowFrom before legacy dm.allowFrom", () => {
+    const cfg = {
+      channels: {
+        discord: {
+          accounts: {
+            default: {
+              allowFrom: ["123"],
+              dm: { allowFrom: ["456"] },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(discordConfigAdapter.resolveAllowFrom?.({ cfg, accountId: "default" })).toEqual(["123"]);
+  });
+
+  it("falls back to legacy dm.allowFrom", () => {
+    const cfg = {
+      channels: {
+        discord: {
+          accounts: {
+            default: {
+              dm: { allowFrom: ["456"] },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(discordConfigAdapter.resolveAllowFrom?.({ cfg, accountId: "default" })).toEqual(["456"]);
+  });
+
+  it("prefers account legacy dm.allowFrom over inherited root allowFrom", () => {
+    const cfg = {
+      channels: {
+        discord: {
+          allowFrom: ["root"],
+          accounts: {
+            work: {
+              dm: { allowFrom: ["account-legacy"] },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(discordConfigAdapter.resolveAllowFrom?.({ cfg, accountId: "work" })).toEqual([
+      "account-legacy",
+    ]);
   });
 });
