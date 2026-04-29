@@ -215,10 +215,15 @@ describe("CronService read ops while job is running", () => {
   });
 
   it("keeps list and status responsive during startup catch-up runs", async () => {
+    vi.useFakeTimers();
     const store = await makeStorePath();
     const enqueueSystemEvent = vi.fn();
     const requestHeartbeatNow = vi.fn();
     const nowMs = Date.parse("2025-12-13T00:00:00.000Z");
+    let resolveFinished: (() => void) | undefined;
+    const finished = new Promise<void>((resolve) => {
+      resolveFinished = resolve;
+    });
 
     await writeCronStoreSnapshot({
       storePath: store.storePath,
@@ -249,10 +254,19 @@ describe("CronService read ops while job is running", () => {
       enqueueSystemEvent,
       requestHeartbeatNow,
       runIsolatedAgentJob: isolatedRun.runIsolatedAgentJob,
+      startupDeferredMissedAgentJobDelayMs: 0,
+      onEvent: (evt) => {
+        if (evt.action === "finished" && evt.status === "ok") {
+          resolveFinished?.();
+        }
+      },
     });
 
     try {
-      const startPromise = cron.start();
+      await cron.start();
+      expect(isolatedRun.runIsolatedAgentJob).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(2_000);
       await isolatedRun.runStarted;
       expect(isolatedRun.runIsolatedAgentJob).toHaveBeenCalledTimes(1);
 
@@ -264,13 +278,15 @@ describe("CronService read ops while job is running", () => {
       );
 
       isolatedRun.completeRun({ status: "ok", summary: "done" });
-      await startPromise;
+      await finished;
 
       const jobs = await cron.list({ includeDisabled: true });
       expect(jobs[0]?.state.lastStatus).toBe("ok");
       expect(jobs[0]?.state.runningAtMs).toBeUndefined();
     } finally {
       cron.stop();
+      vi.clearAllTimers();
+      vi.useRealTimers();
       await store.cleanup();
     }
   });

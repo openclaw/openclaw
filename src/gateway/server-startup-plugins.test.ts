@@ -19,6 +19,9 @@ const loadGatewayStartupPlugins = vi.hoisted(() =>
 const repairBundledRuntimeDepsInstallRootAsync = vi.hoisted(() =>
   vi.fn(async (_params: unknown) => ({})),
 );
+const pruneUnknownBundledRuntimeDepsRoots = vi.hoisted(() =>
+  vi.fn((_params: unknown) => ({ scanned: 0, removed: 0, skippedLocked: 0 })),
+);
 const resolveBundledRuntimeDependencyPackageInstallRoot = vi.hoisted(() =>
   vi.fn((_packageRoot: string, _params: unknown) => "/runtime"),
 );
@@ -120,6 +123,8 @@ vi.mock("../infra/openclaw-root.js", () => ({
 }));
 
 vi.mock("../plugins/bundled-runtime-deps.js", () => ({
+  pruneUnknownBundledRuntimeDepsRoots: (params: unknown) =>
+    pruneUnknownBundledRuntimeDepsRoots(params),
   repairBundledRuntimeDepsInstallRootAsync: (params: unknown) =>
     repairBundledRuntimeDepsInstallRootAsync(params),
   resolveBundledRuntimeDependencyPackageInstallRoot: (packageRoot: string, params: unknown) =>

@@ -7,6 +7,7 @@ import { loadCronStore } from "../store.js";
 import type { CronJob } from "../types.js";
 import { run, start, stop, update } from "./ops.js";
 import { createCronServiceState } from "./state.js";
+import { runMissedJobs } from "./timer.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({
   prefix: "cron-service-ops-seam",
@@ -336,7 +337,7 @@ describe("cron service ops seam coverage", () => {
       now,
     });
 
-    await start(state);
+    await runMissedJobs(state);
 
     expect(findTaskByRunId(`cron:startup-timeout:${now}`)).toMatchObject({
       runtime: "cron",
