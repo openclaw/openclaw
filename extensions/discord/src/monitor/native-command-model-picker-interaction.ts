@@ -11,6 +11,7 @@ import {
   StringSelectMenu,
   type ButtonInteraction,
   type ComponentData,
+  type MessagePayload,
   type StringSelectMenuInteraction,
 } from "../internal/discord.js";
 import { readDiscordModelPickerRecentModels } from "./model-picker-preferences.js";
@@ -173,6 +174,10 @@ export async function handleDiscordModelPickerInteraction(params: {
     allowedModelRefs,
     limit: 5,
   });
+  const updatePicker = async (payload: MessagePayload) =>
+    await params.safeInteractionCall("model picker update", () => interaction.update(payload));
+  const showNotice = async (message: string) =>
+    await updatePicker(buildDiscordModelPickerNoticePayload(message));
 
   if (parsed.action === "recents") {
     const rendered = renderDiscordModelPickerRecentsView({
@@ -185,9 +190,7 @@ export async function handleDiscordModelPickerInteraction(params: {
       page: parsed.page,
       providerPage: parsed.providerPage,
     });
-    await params.safeInteractionCall("model picker update", () =>
-      interaction.update(toDiscordModelPickerMessagePayload(rendered)),
-    );
+    await updatePicker(toDiscordModelPickerMessagePayload(rendered));
     return;
   }
 
@@ -199,9 +202,7 @@ export async function handleDiscordModelPickerInteraction(params: {
       page: parsed.page,
       currentModel: currentModelRef,
     });
-    await params.safeInteractionCall("model picker update", () =>
-      interaction.update(toDiscordModelPickerMessagePayload(rendered)),
-    );
+    await updatePicker(toDiscordModelPickerMessagePayload(rendered));
     return;
   }
 
@@ -221,20 +222,14 @@ export async function handleDiscordModelPickerInteraction(params: {
       currentRuntime,
       quickModels,
     });
-    await params.safeInteractionCall("model picker update", () =>
-      interaction.update(toDiscordModelPickerMessagePayload(rendered)),
-    );
+    await updatePicker(toDiscordModelPickerMessagePayload(rendered));
     return;
   }
 
   if (parsed.action === "provider") {
     const selectedProvider = resolveModelPickerSelectionValue(interaction) ?? parsed.provider;
     if (!selectedProvider || !pickerData.byProvider.has(selectedProvider)) {
-      await params.safeInteractionCall("model picker update", () =>
-        interaction.update(
-          buildDiscordModelPickerNoticePayload("Sorry, that provider isn't available anymore."),
-        ),
-      );
+      await showNotice("Sorry, that provider isn't available anymore.");
       return;
     }
     const rendered = renderDiscordModelPickerModelsView({
@@ -248,9 +243,7 @@ export async function handleDiscordModelPickerInteraction(params: {
       currentRuntime,
       quickModels,
     });
-    await params.safeInteractionCall("model picker update", () =>
-      interaction.update(toDiscordModelPickerMessagePayload(rendered)),
-    );
+    await updatePicker(toDiscordModelPickerMessagePayload(rendered));
     return;
   }
 
@@ -258,11 +251,7 @@ export async function handleDiscordModelPickerInteraction(params: {
     const selectedModel = resolveModelPickerSelectionValue(interaction);
     const provider = parsed.provider;
     if (!provider || !selectedModel) {
-      await params.safeInteractionCall("model picker update", () =>
-        interaction.update(
-          buildDiscordModelPickerNoticePayload("Sorry, I couldn't read that model selection."),
-        ),
-      );
+      await showNotice("Sorry, I couldn't read that model selection.");
       return;
     }
     const modelIndex = resolveDiscordModelPickerModelIndex({
@@ -271,11 +260,7 @@ export async function handleDiscordModelPickerInteraction(params: {
       model: selectedModel,
     });
     if (!modelIndex) {
-      await params.safeInteractionCall("model picker update", () =>
-        interaction.update(
-          buildDiscordModelPickerNoticePayload("Sorry, that model isn't available anymore."),
-        ),
-      );
+      await showNotice("Sorry, that model isn't available anymore.");
       return;
     }
     const modelRef = `${provider}/${selectedModel}`;
@@ -293,9 +278,7 @@ export async function handleDiscordModelPickerInteraction(params: {
       pendingRuntime: parsed.runtime,
       quickModels,
     });
-    await params.safeInteractionCall("model picker update", () =>
-      interaction.update(toDiscordModelPickerMessagePayload(rendered)),
-    );
+    await updatePicker(toDiscordModelPickerMessagePayload(rendered));
     return;
   }
 
@@ -304,11 +287,7 @@ export async function handleDiscordModelPickerInteraction(params: {
       resolveModelPickerSelectionValue(interaction) ?? parsed.runtime ?? "auto";
     const provider = parsed.provider;
     if (!provider || !pickerData.byProvider.has(provider)) {
-      await params.safeInteractionCall("model picker update", () =>
-        interaction.update(
-          buildDiscordModelPickerNoticePayload("Sorry, that provider isn't available anymore."),
-        ),
-      );
+      await showNotice("Sorry, that provider isn't available anymore.");
       return;
     }
     const selectedModel = resolveDiscordModelPickerModelByIndex({
@@ -331,9 +310,7 @@ export async function handleDiscordModelPickerInteraction(params: {
       pendingRuntime: selectedRuntime,
       quickModels,
     });
-    await params.safeInteractionCall("model picker update", () =>
-      interaction.update(toDiscordModelPickerMessagePayload(rendered)),
-    );
+    await updatePicker(toDiscordModelPickerMessagePayload(rendered));
     return;
   }
 
@@ -367,13 +344,7 @@ export async function handleDiscordModelPickerInteraction(params: {
       !parsedModelRef ||
       !pickerData.byProvider.get(parsedModelRef.provider)?.has(parsedModelRef.model)
     ) {
-      await params.safeInteractionCall("model picker update", () =>
-        interaction.update(
-          buildDiscordModelPickerNoticePayload(
-            "That selection expired. Please choose a model again.",
-          ),
-        ),
-      );
+      await showNotice("That selection expired. Please choose a model again.");
       return;
     }
 
@@ -387,19 +358,11 @@ export async function handleDiscordModelPickerInteraction(params: {
       runtime: runtimeOverride,
     });
     if (!selectionCommand) {
-      await params.safeInteractionCall("model picker update", () =>
-        interaction.update(
-          buildDiscordModelPickerNoticePayload("Sorry, /model is unavailable right now."),
-        ),
-      );
+      await showNotice("Sorry, /model is unavailable right now.");
       return;
     }
 
-    const updateResult = await params.safeInteractionCall("model picker update", () =>
-      interaction.update(
-        buildDiscordModelPickerNoticePayload(`Applying model change to ${resolvedModelRef}...`),
-      ),
-    );
+    const updateResult = await showNotice(`Applying model change to ${resolvedModelRef}...`);
     if (updateResult === null) {
       return;
     }
@@ -440,82 +403,59 @@ export async function handleDiscordModelPickerInteraction(params: {
 
   if (parsed.action === "cancel") {
     const displayModel = currentModelRef ?? "default";
-    await params.safeInteractionCall("model picker update", () =>
-      interaction.update(buildDiscordModelPickerNoticePayload(`ℹ️ Model kept as ${displayModel}.`)),
-    );
+    await showNotice(`ℹ️ Model kept as ${displayModel}.`);
   }
+}
+
+type DiscordModelPickerFallbackParams = {
+  ctx: DiscordModelPickerContext;
+  safeInteractionCall: SafeDiscordInteractionCall;
+  dispatchCommandInteraction: DispatchDiscordCommandInteraction;
+};
+
+async function runDiscordModelPickerFallback(
+  params: DiscordModelPickerFallbackParams & {
+    interaction: ButtonInteraction | StringSelectMenuInteraction;
+    data: ComponentData;
+  },
+) {
+  await handleDiscordModelPickerInteraction(params);
 }
 
 class DiscordModelPickerFallbackButton extends Button {
   label = "modelpick";
   customId = `${DISCORD_MODEL_PICKER_CUSTOM_ID_KEY}:seed=btn`;
-  private ctx: DiscordModelPickerContext;
-  private safeInteractionCall: SafeDiscordInteractionCall;
-  private dispatchCommandInteraction: DispatchDiscordCommandInteraction;
 
-  constructor(params: {
-    ctx: DiscordModelPickerContext;
-    safeInteractionCall: SafeDiscordInteractionCall;
-    dispatchCommandInteraction: DispatchDiscordCommandInteraction;
-  }) {
+  constructor(private readonly params: DiscordModelPickerFallbackParams) {
     super();
-    this.ctx = params.ctx;
-    this.safeInteractionCall = params.safeInteractionCall;
-    this.dispatchCommandInteraction = params.dispatchCommandInteraction;
   }
 
   async run(interaction: ButtonInteraction, data: ComponentData) {
-    await handleDiscordModelPickerInteraction({
-      interaction,
-      data,
-      ctx: this.ctx,
-      safeInteractionCall: this.safeInteractionCall,
-      dispatchCommandInteraction: this.dispatchCommandInteraction,
-    });
+    await runDiscordModelPickerFallback({ ...this.params, interaction, data });
   }
 }
 
 class DiscordModelPickerFallbackSelect extends StringSelectMenu {
   customId = `${DISCORD_MODEL_PICKER_CUSTOM_ID_KEY}:seed=sel`;
   options = [];
-  private ctx: DiscordModelPickerContext;
-  private safeInteractionCall: SafeDiscordInteractionCall;
-  private dispatchCommandInteraction: DispatchDiscordCommandInteraction;
 
-  constructor(params: {
-    ctx: DiscordModelPickerContext;
-    safeInteractionCall: SafeDiscordInteractionCall;
-    dispatchCommandInteraction: DispatchDiscordCommandInteraction;
-  }) {
+  constructor(private readonly params: DiscordModelPickerFallbackParams) {
     super();
-    this.ctx = params.ctx;
-    this.safeInteractionCall = params.safeInteractionCall;
-    this.dispatchCommandInteraction = params.dispatchCommandInteraction;
   }
 
   async run(interaction: StringSelectMenuInteraction, data: ComponentData) {
-    await handleDiscordModelPickerInteraction({
-      interaction,
-      data,
-      ctx: this.ctx,
-      safeInteractionCall: this.safeInteractionCall,
-      dispatchCommandInteraction: this.dispatchCommandInteraction,
-    });
+    await runDiscordModelPickerFallback({ ...this.params, interaction, data });
   }
 }
 
-export function createDiscordModelPickerFallbackButton(params: {
-  ctx: DiscordModelPickerContext;
-  safeInteractionCall: SafeDiscordInteractionCall;
-  dispatchCommandInteraction: DispatchDiscordCommandInteraction;
-}): Button {
+export function createDiscordModelPickerFallbackButton(
+  params: DiscordModelPickerFallbackParams,
+): Button {
   return new DiscordModelPickerFallbackButton(params);
 }
 
-export function createDiscordModelPickerFallbackSelect(params: {
-  ctx: DiscordModelPickerContext;
-  safeInteractionCall: SafeDiscordInteractionCall;
-  dispatchCommandInteraction: DispatchDiscordCommandInteraction;
-}): StringSelectMenu {
+export function createDiscordModelPickerFallbackSelect(
+  params: DiscordModelPickerFallbackParams,
+): StringSelectMenu {
   return new DiscordModelPickerFallbackSelect(params);
 }
