@@ -51,6 +51,15 @@ type LaneState = {
   generation: number;
 };
 
+export type CommandLaneSnapshot = {
+  lane: string;
+  queuedCount: number;
+  activeCount: number;
+  maxConcurrent: number;
+  draining: boolean;
+  generation: number;
+};
+
 type ActiveTaskWaiter = {
   activeTaskIds: Set<number>;
   resolve: (value: { drained: boolean }) => void;
@@ -92,6 +101,17 @@ function normalizeLane(lane: string): string {
 
 function getLaneDepth(state: LaneState): number {
   return state.queue.length + state.activeTaskIds.size;
+}
+
+function createCommandLaneSnapshot(state: LaneState): CommandLaneSnapshot {
+  return {
+    lane: state.lane,
+    queuedCount: state.queue.length,
+    activeCount: state.activeTaskIds.size,
+    maxConcurrent: state.maxConcurrent,
+    draining: state.draining,
+    generation: state.generation,
+  };
 }
 
 function getLaneState(lane: string): LaneState {
@@ -287,6 +307,28 @@ export function getQueueSize(lane: string = CommandLane.Main) {
   return getLaneDepth(state);
 }
 
+export function getCommandLaneSnapshot(lane: string = CommandLane.Main): CommandLaneSnapshot {
+  const resolved = normalizeLane(lane);
+  const state = getQueueState().lanes.get(resolved);
+  if (!state) {
+    return {
+      lane: resolved,
+      queuedCount: 0,
+      activeCount: 0,
+      maxConcurrent: 1,
+      draining: false,
+      generation: 0,
+    };
+  }
+  return createCommandLaneSnapshot(state);
+}
+
+export function getCommandLaneSnapshots(): CommandLaneSnapshot[] {
+  return Array.from(getQueueState().lanes.values(), createCommandLaneSnapshot).toSorted((a, b) =>
+    a.lane.localeCompare(b.lane),
+  );
+}
+
 export function getTotalQueueSize() {
   let total = 0;
   for (const s of getQueueState().lanes.values()) {
@@ -307,6 +349,28 @@ export function clearCommandLane(lane: string = CommandLane.Main) {
     entry.reject(new CommandLaneClearedError(cleaned));
   }
   return removed;
+}
+
+/**
+ * Force a single lane back to idle and immediately pump any queued entries.
+ * Used only by recovery paths after the owner has already attempted to abort
+ * the active work; stale completions from the previous generation are ignored.
+ */
+export function resetCommandLane(lane: string = CommandLane.Main): number {
+  const cleaned = normalizeLane(lane);
+  const state = getQueueState().lanes.get(cleaned);
+  if (!state) {
+    return 0;
+  }
+  const released = state.activeTaskIds.size;
+  state.generation += 1;
+  state.activeTaskIds.clear();
+  state.draining = false;
+  if (state.queue.length > 0) {
+    drainLane(cleaned);
+  }
+  notifyActiveTaskWaiters();
+  return released;
 }
 
 /**

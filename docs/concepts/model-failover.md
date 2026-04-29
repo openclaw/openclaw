@@ -232,6 +232,7 @@ OpenClaw builds the candidate list from the currently requested `provider/model`
     - If the current run is on a different provider than config and that current model is not already part of the configured fallback chain, OpenClaw does not append unrelated configured fallbacks from another provider.
     - When no explicit fallback override is supplied to the fallback runner, the configured primary is appended at the end so the chain can settle back onto the normal default once earlier candidates are exhausted.
     - When a caller supplies `fallbacksOverride`, the runner uses exactly the requested model plus that override list. An empty list disables model fallback and prevents the configured primary from being appended as a hidden retry target.
+
   </Accordion>
 </AccordionGroup>
 
@@ -246,11 +247,13 @@ OpenClaw builds the candidate list from the currently requested `provider/model`
     - billing disables
     - `LiveSessionModelSwitchError`, which is normalized into a failover path so a stale persisted model does not create an outer retry loop
     - other unrecognized errors when there are still remaining candidates
+
   </Tab>
   <Tab title="Does not continue on">
     - explicit aborts that are not timeout/failover-shaped
     - context overflow errors that should stay inside compaction/retry logic (for example `request_too_large`, `INVALID_ARGUMENT: input exceeds the maximum number of tokens`, `input token count exceeds the maximum number of input tokens`, `The input is too long for the model`, or `ollama error: context length exceeded`)
     - a final unknown error when there are no candidates left
+
   </Tab>
 </Tabs>
 
@@ -265,6 +268,7 @@ When every auth profile for a provider is already in cooldown, OpenClaw does not
     - The primary candidate may be probed near cooldown expiry, with a per-provider throttle.
     - Same-provider fallback siblings can be attempted despite cooldown when the failure looks transient (`rate_limit`, `overloaded`, or unknown). This is especially relevant when a rate limit is model-scoped and a sibling model may still recover immediately.
     - Transient cooldown probes are limited to one per provider per fallback run so a single provider does not stall cross-provider fallback.
+
   </Accordion>
 </AccordionGroup>
 

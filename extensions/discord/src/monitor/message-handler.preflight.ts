@@ -54,6 +54,7 @@ import {
   buildDiscordRoutePeer,
   resolveDiscordConversationRoute,
   resolveDiscordEffectiveRoute,
+  shouldIgnoreStaleDiscordRouteBinding,
 } from "./route-resolution.js";
 import { resolveDiscordSenderIdentity, resolveDiscordWebhookId } from "./sender-identity.js";
 import { isRecentlyUnboundThreadWebhookMessage } from "./thread-bindings.js";
@@ -644,7 +645,7 @@ export async function preflightDiscordMessage(
       }) ?? `user:${author.id}`)
     : messageChannelId;
   let threadBinding: SessionBindingRecord | undefined;
-  const runtimeRoute = conversationRuntime.resolveRuntimeConversationBindingRoute({
+  let runtimeRoute = conversationRuntime.resolveRuntimeConversationBindingRoute({
     route,
     conversation: {
       channel: "discord",
@@ -653,6 +654,20 @@ export async function preflightDiscordMessage(
       parentConversationId: earlyThreadParentId,
     },
   });
+  if (
+    shouldIgnoreStaleDiscordRouteBinding({
+      bindingRecord: runtimeRoute.bindingRecord,
+      route,
+    })
+  ) {
+    logVerbose(
+      `discord: ignoring stale route binding for conversation ${bindingConversationId} (${runtimeRoute.bindingRecord?.targetSessionKey} -> ${route.sessionKey})`,
+    );
+    runtimeRoute = {
+      bindingRecord: null,
+      route,
+    };
+  }
   threadBinding = runtimeRoute.bindingRecord ?? undefined;
   const configuredRoute =
     threadBinding == null
@@ -994,9 +1009,9 @@ export async function preflightDiscordMessage(
     `[discord-preflight] shouldRequireMention=${shouldRequireMention} baseRequireMention=${shouldRequireMentionByConfig} boundThreadSession=${isBoundThreadSession} mentionDecision.shouldSkip=${mentionDecision.shouldSkip} wasMentioned=${wasMentioned}`,
   );
   if (isGuildMessage && shouldRequireMention) {
-    if (botId && mentionDecision.shouldSkip) {
+    if (mentionDecision.shouldSkip) {
       logDebug(`[discord-preflight] drop: no-mention`);
-      logVerbose(`discord: drop guild message (mention required, botId=${botId})`);
+      logVerbose(`discord: drop guild message (mention required, botId=${botId ?? "<missing>"})`);
       logger.info(
         {
           channelId: messageChannelId,

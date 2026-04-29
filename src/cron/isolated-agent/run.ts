@@ -604,18 +604,21 @@ async function prepareCronRunContext(params: {
   );
   let thinkLevel: ThinkLevel | undefined = jobThink ?? hooksGmailThinking;
   if (!thinkLevel) {
+    const thinkingCatalog = await loadCatalog();
     thinkLevel = resolveThinkingDefault({
       cfg: cfgWithAgentDefaults,
       provider,
       model,
-      catalog: await loadCatalog(),
+      catalog: thinkingCatalog,
     });
   }
-  if (!isThinkingLevelSupported({ provider, model, level: thinkLevel })) {
+  const thinkingCatalog = await loadCatalog();
+  if (!isThinkingLevelSupported({ provider, model, level: thinkLevel, catalog: thinkingCatalog })) {
     const fallbackThinkLevel = resolveSupportedThinkingLevel({
       provider,
       model,
       level: thinkLevel,
+      catalog: thinkingCatalog,
     });
     if (fallbackThinkLevel !== thinkLevel) {
       logWarn(

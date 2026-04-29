@@ -216,8 +216,9 @@ Validation` or from the `main`/release workflow ref so workflow logic and
   before the release publish path
 - If the release work touched CI planning, extension timing manifests, or
   extension test matrices, regenerate and review the planner-owned
-  `checks-node-extensions` workflow matrix outputs from `.github/workflows/ci.yml`
-  before approval so release notes do not describe a stale CI layout
+  `plugin-prerelease-extension-shard` matrix outputs from
+  `.github/workflows/plugin-prerelease.yml` before approval so release notes do
+  not describe a stale CI layout
 - Stable macOS release readiness also includes the updater surfaces:
   - the GitHub release must end up with the packaged `.zip`, `.dmg`, and `.dSYM.zip`
   - `appcast.xml` on `main` must point at the new stable zip after publish
@@ -306,10 +307,11 @@ ids, so after a child workflow is rerun successfully, rerun only the failed
 `Verify full validation` parent job.
 
 For bounded recovery, pass `rerun_group` to the umbrella. `all` is the real
-release-candidate run, `ci` runs only the normal CI child, `release-checks` runs
-every release box, and the narrower release groups are `install-smoke`,
-`cross-os`, `live-e2e`, `package`, `qa`, `qa-parity`, `qa-live`, and
-`npm-telegram` when the standalone package Telegram lane is supplied.
+release-candidate run, `ci` runs only the normal CI child, `plugin-prerelease`
+runs only the release-only plugin child, `release-checks` runs every release
+box, and the narrower release groups are `install-smoke`, `cross-os`,
+`live-e2e`, `package`, `qa`, `qa-parity`, `qa-live`, and `npm-telegram` when the
+standalone package Telegram lane is supplied.
 
 ### Vitest
 
@@ -423,8 +425,10 @@ to npm: private QA inventory entries missing from the tarball, missing
 `gateway install --wrapper`, missing patch files in the tarball-derived git
 fixture, missing persisted `update.channel`, legacy plugin install-record
 locations, missing marketplace install-record persistence, and config metadata
-migration during `plugins update`. Packages after `2026.4.25` must satisfy the
-modern package contracts; those same gaps fail release validation.
+migration during `plugins update`. The published `2026.4.26` package may warn
+for local build metadata stamp files that were already shipped. Later packages
+must satisfy the modern package contracts; those same gaps fail release
+validation.
 
 Use broader Package Acceptance profiles when the release question is about an
 actual installable package:

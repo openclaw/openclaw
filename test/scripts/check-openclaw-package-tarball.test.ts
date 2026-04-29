@@ -12,6 +12,7 @@ function withTarball(
   files: Record<string, string>,
   testBody: (tarball: string) => void,
   version = "0.0.0",
+  options: { includeControlUi?: boolean } = {},
 ) {
   const root = mkdtempSync(join(tmpdir(), "openclaw-package-tarball-test-"));
   try {
@@ -22,7 +23,15 @@ function withTarball(
       join(packageRoot, "dist", "postinstall-inventory.json"),
       JSON.stringify(inventory),
     );
-    for (const [relativePath, body] of Object.entries(files)) {
+    const tarFiles =
+      options.includeControlUi === false
+        ? files
+        : {
+            "dist/control-ui/index.html": "<!doctype html><openclaw-app></openclaw-app>",
+            "dist/control-ui/assets/app.js": "console.log('ok');\n",
+            ...files,
+          };
+    for (const [relativePath, body] of Object.entries(tarFiles)) {
       const filePath = join(packageRoot, relativePath);
       mkdirSync(dirname(filePath), { recursive: true });
       writeFileSync(filePath, body);
@@ -85,6 +94,76 @@ describe("check-openclaw-package-tarball", () => {
     );
   });
 
+  it("rejects dist files that import missing relative chunks", () => {
+    withTarball(
+      ["dist/cli/run-main.js"],
+      { "dist/cli/run-main.js": 'await import("../memory-state-old.js");\n' },
+      (tarball) => {
+        const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
+
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain(
+          "dist/cli/run-main.js imports missing dist/memory-state-old.js",
+        );
+      },
+      "2026.4.27",
+    );
+  });
+
+  it("accepts dist files whose relative chunks are present", () => {
+    withTarball(
+      ["dist/cli/run-main.js", "dist/memory-state-current.js"],
+      {
+        "dist/cli/run-main.js": 'await import("../memory-state-current.js");\n',
+        "dist/memory-state-current.js": "export {};\n",
+      },
+      (tarball) => {
+        const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
+
+        expect(result.status, result.stderr).toBe(0);
+        expect(result.stdout).toContain("OpenClaw package tarball integrity passed.");
+      },
+      "2026.4.27",
+    );
+  });
+
+  it("rejects imported dist chunks omitted from the postinstall inventory", () => {
+    withTarball(
+      ["dist/cli/run-main.js"],
+      {
+        "dist/cli/run-main.js": 'await import("../memory-state-current.js");\n',
+        "dist/memory-state-current.js": "export {};\n",
+      },
+      (tarball) => {
+        const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
+
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain(
+          "inventory omits imported dist file dist/memory-state-current.js",
+        );
+      },
+      "2026.4.27",
+    );
+  });
+
+  it("rejects missing Control UI assets", () => {
+    withTarball(
+      ["dist/index.js"],
+      { "dist/index.js": "export {};\n" },
+      (tarball) => {
+        const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
+
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain("missing required tar entry dist/control-ui/index.html");
+        expect(result.stderr).toContain(
+          "missing required tar entries under dist/control-ui/assets/",
+        );
+      },
+      "2026.4.27",
+      { includeControlUi: false },
+    );
+  });
+
   it("rejects local build metadata entries in package tarballs", () => {
     withTarball(
       ["dist/index.js", ...LOCAL_BUILD_METADATA_DIST_PATHS],
@@ -103,6 +182,30 @@ describe("check-openclaw-package-tarball", () => {
           "forbidden local build metadata tar entry dist/.runtime-postbuildstamp",
         );
       },
+      "2026.4.27",
+    );
+  });
+
+  it("allows local build metadata in already published legacy packages through 2026.4.26", () => {
+    withTarball(
+      ["dist/index.js", ...LOCAL_BUILD_METADATA_DIST_PATHS],
+      {
+        "dist/index.js": "export {};\n",
+        ...Object.fromEntries(LOCAL_BUILD_METADATA_DIST_PATHS.map((entry) => [entry, "{}\n"])),
+      },
+      (tarball) => {
+        const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
+
+        expect(result.status, result.stderr).toBe(0);
+        expect(result.stderr).toContain(
+          "legacy package includes local build metadata tar entry dist/.buildstamp",
+        );
+        expect(result.stderr).toContain(
+          "legacy package includes local build metadata tar entry dist/.runtime-postbuildstamp",
+        );
+        expect(result.stdout).toContain("OpenClaw package tarball integrity passed.");
+      },
+      "2026.4.26",
     );
   });
 });

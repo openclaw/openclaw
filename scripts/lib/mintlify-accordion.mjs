@@ -11,7 +11,7 @@ const MINTLIFY_REPAIRED_COMPONENTS = new Set([
   "Step",
 ]);
 
-function visitMintlifyComponentIndentation(raw, onMisindentedClose) {
+function visitMintlifyComponentIndentation(raw, onMisindentedClose, onMisindentedOpen) {
   const lines = raw.split(/\r?\n/u);
   const componentStack = [];
   let inCodeFence = false;
@@ -28,8 +28,13 @@ function visitMintlifyComponentIndentation(raw, onMisindentedClose) {
 
     const openComponent = line.match(/^(\s*)<([A-Z][A-Za-z0-9]*)\b/u);
     if (openComponent && MINTLIFY_REPAIRED_COMPONENTS.has(openComponent[2])) {
+      let indent = openComponent[1].length;
+      if (componentStack.length === 0 && openComponent[2] === "ParamField" && indent > 0) {
+        onMisindentedOpen?.({ openComponent, index, line, lines });
+        indent = 0;
+      }
       componentStack.push({
-        indent: openComponent[1].length,
+        indent,
         name: openComponent[2],
       });
       continue;
@@ -69,6 +74,20 @@ export function repairMintlifyAccordionIndentation(raw) {
       lines[index] = `${" ".repeat(opening.indent)}${line.slice(closeComponent[1].length)}`;
       changed = true;
     },
+    ({ openComponent, index, line, lines }) => {
+      lines[index] = line.slice(openComponent[1].length);
+      changed = true;
+    },
   );
+  for (let index = lines.length - 1; index > 0; index--) {
+    if (!/^\s*<\/[A-Z][A-Za-z0-9]*>/u.test(lines[index])) {
+      continue;
+    }
+    if (!/^\s*[-*+]\s+/u.test(lines[index - 1])) {
+      continue;
+    }
+    lines.splice(index, 0, "");
+    changed = true;
+  }
   return changed ? lines.join("\n") : raw;
 }

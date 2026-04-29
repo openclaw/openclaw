@@ -253,6 +253,18 @@ Compatibility notes for stricter OpenAI-compatible backends:
   openclaw infer model run --local --model <provider/model> --prompt "Reply with exactly: pong" --json
   ```
 
+  To verify the Gateway route without the full agent prompt shape, use the
+  Gateway model probe instead:
+
+  ```bash
+  openclaw infer model run --gateway --model <provider/model> --prompt "Reply with exactly: pong" --json
+  ```
+
+  Both local and Gateway model probes send only the supplied prompt. The
+  Gateway probe still validates Gateway routing, auth, and provider selection,
+  but it intentionally skips prior session transcript, AGENTS/bootstrap context,
+  context-engine assembly, tools, and bundled MCP servers.
+
   If that succeeds but normal OpenClaw agent turns fail, first try
   `agents.defaults.experimental.localModelLean: true` to drop heavyweight
   default tools like `browser`, `cron`, and `message`; this is an experimental

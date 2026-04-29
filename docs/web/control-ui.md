@@ -61,6 +61,7 @@ Once approved, the device is remembered and won't require re-approval unless you
 - Tailscale Serve can skip the pairing round trip for Control UI operator sessions when `gateway.auth.allowTailscale: true`, Tailscale identity verifies, and the browser presents its device identity.
 - Direct Tailnet binds, LAN browser connects, and browser profiles without device identity still require explicit approval.
 - Each browser profile generates a unique device ID, so switching browsers or clearing browser data will require re-pairing.
+
 </Note>
 
 ## Personal identity (browser-local)
@@ -95,18 +96,21 @@ Imported themes are stored only in the current browser profile. They are not wri
     - Chat with the model via Gateway WS (`chat.history`, `chat.send`, `chat.abort`, `chat.inject`).
     - Talk through browser realtime sessions. OpenAI uses direct WebRTC, Google Live uses a constrained one-use browser token over WebSocket, and backend-only realtime voice plugins use the Gateway relay transport. The relay keeps provider credentials on the Gateway while the browser streams microphone PCM through `talk.realtime.relay*` RPCs and sends `openclaw_agent_consult` tool calls back through `chat.send` for the larger configured OpenClaw model.
     - Stream tool calls + live tool output cards in Chat (agent events).
+
   </Accordion>
   <Accordion title="Channels, instances, sessions, dreams">
     - Channels: built-in plus bundled/external plugin channels status, QR login, and per-channel config (`channels.status`, `web.login.*`, `config.patch`).
     - Instances: presence list + refresh (`system-presence`).
     - Sessions: list + per-session model/thinking/fast/verbose/trace/reasoning overrides (`sessions.list`, `sessions.patch`).
     - Dreams: dreaming status, enable/disable toggle, and Dream Diary reader (`doctor.memory.status`, `doctor.memory.dreamDiary`, `config.patch`).
+
   </Accordion>
   <Accordion title="Cron, skills, nodes, exec approvals">
     - Cron jobs: list/add/edit/run/enable/disable + run history (`cron.*`).
     - Skills: status, enable/disable, install, API key updates (`skills.*`).
     - Nodes: list + caps (`node.list`).
     - Exec approvals: edit gateway or node allowlists + ask policy for `exec host=gateway/node` (`exec.approvals.*`).
+
   </Accordion>
   <Accordion title="Config">
     - View/edit `~/.openclaw/openclaw.json` (`config.get`, `config.set`).
@@ -117,11 +121,13 @@ Imported themes are stored only in the current browser profile. They are not wri
     - If a snapshot cannot safely round-trip raw text, Control UI forces Form mode and disables Raw mode for that snapshot.
     - Raw JSON editor "Reset to saved" preserves the raw-authored shape (formatting, comments, `$include` layout) instead of re-rendering a flattened snapshot, so external edits survive a reset when the snapshot can safely round-trip.
     - Structured SecretRef object values are rendered read-only in form text inputs to prevent accidental object-to-string corruption.
+
   </Accordion>
   <Accordion title="Debug, logs, update">
     - Debug: status/health/models snapshots + event log + manual RPC calls (`status`, `health`, `models.list`).
     - Logs: live tail of gateway file logs with filter/export (`logs.tail`).
     - Update: run a package/git update + restart (`update.run`) with a restart report, then poll `update.status` after reconnect to verify the running gateway version.
+
   </Accordion>
   <Accordion title="Cron jobs panel notes">
     - For isolated jobs, delivery defaults to announce summary. You can switch to none if you want internal-only runs.
@@ -132,6 +138,7 @@ Imported themes are stored only in the current browser profile. They are not wri
     - Form validation is inline with field-level errors; invalid values disable the save button until fixed.
     - Set `cron.webhookToken` to send a dedicated bearer token, if omitted the webhook is sent without an auth header.
     - Deprecated fallback: stored legacy jobs with `notify: true` can still use `cron.webhook` until migrated.
+
   </Accordion>
 </AccordionGroup>
 
@@ -150,6 +157,7 @@ Imported themes are stored only in the current browser profile. They are not wri
     - The chat header model and thinking pickers patch the active session immediately through `sessions.patch`; they are persistent session overrides, not one-turn-only send options.
     - The chat model picker requests the Gateway's configured model view. If `agents.defaults.models` is present, that allowlist drives the picker. Otherwise the picker shows explicit `models.providers.*.models` entries before falling back to the full catalog for fresh installs.
     - When fresh Gateway session usage reports show high context pressure, the chat composer area shows a context notice and, at recommended compaction levels, a compact button that runs the normal session compaction path. Stale token snapshots are hidden until the Gateway reports fresh usage again.
+
   </Accordion>
   <Accordion title="Talk mode (browser realtime)">
     Talk mode uses a registered realtime voice provider. Configure OpenAI with `talk.provider: "openai"` plus `talk.providers.openai.apiKey`, or configure Google with `talk.provider: "google"` plus `talk.providers.google.apiKey`; Voice Call realtime provider config can still be reused as the fallback. The browser never receives a standard provider API key. OpenAI receives an ephemeral Realtime client secret for WebRTC. Google Live receives a one-use constrained Live API auth token for a browser WebSocket session, with instructions and tool declarations locked into the token by the Gateway. Providers that only expose a backend realtime bridge run through the Gateway relay transport, so credentials and vendor sockets stay server-side while browser audio moves through authenticated Gateway RPCs. The Realtime session prompt is assembled by the Gateway; `talk.realtime.session` does not accept caller-provided instruction overrides.
@@ -164,11 +172,13 @@ Imported themes are stored only in the current browser profile. They are not wri
     - While a run is active, normal follow-ups queue. Click **Steer** on a queued message to inject that follow-up into the running turn.
     - Type `/stop` (or standalone abort phrases like `stop`, `stop action`, `stop run`, `stop openclaw`, `please stop`) to abort out-of-band.
     - `chat.abort` supports `{ sessionKey }` (no `runId`) to abort all active runs for that session.
+
   </Accordion>
   <Accordion title="Abort partial retention">
     - When a run is aborted, partial assistant text can still be shown in the UI.
     - Gateway persists aborted partial assistant text into transcript history when buffered output exists.
     - Persisted entries include abort metadata so transcript consumers can tell abort partials from normal completion output.
+
   </Accordion>
 </AccordionGroup>
 
@@ -325,6 +335,7 @@ Documented exceptions:
     - Successful trusted-proxy auth can admit **operator** Control UI sessions without device identity.
     - This does **not** extend to node-role Control UI sessions.
     - Same-host loopback reverse proxies still do not satisfy trusted-proxy auth; see [Trusted proxy auth](/gateway/trusted-proxy-auth).
+
   </Accordion>
 </AccordionGroup>
 
@@ -387,13 +398,13 @@ The Control UI is static files; the WebSocket target is configurable and can be 
   </Step>
   <Step title="Open with gatewayUrl">
     ```text
-    http://localhost:5173/?gatewayUrl=ws://<gateway-host>:18789
+    http://localhost:5173/?gatewayUrl=ws%3A%2F%2F<gateway-host>%3A18789
     ```
 
     Optional one-time auth (if needed):
 
     ```text
-    http://localhost:5173/?gatewayUrl=wss://<gateway-host>:18789#token=<gateway-token>
+    http://localhost:5173/?gatewayUrl=wss%3A%2F%2F<gateway-host>%3A18789#token=<gateway-token>
     ```
 
   </Step>
@@ -402,6 +413,7 @@ The Control UI is static files; the WebSocket target is configurable and can be 
 <AccordionGroup>
   <Accordion title="Notes">
     - `gatewayUrl` is stored in localStorage after load and removed from the URL.
+    - If you pass a full `ws://` or `wss://` endpoint via `gatewayUrl`, URL-encode the `gatewayUrl` value so the browser parses the query string correctly.
     - `token` should be passed via the URL fragment (`#token=...`) whenever possible. Fragments are not sent to the server, which avoids request-log and Referer leakage. Legacy `?token=` query params are still imported once for compatibility, but only as a fallback, and are stripped immediately after bootstrap.
     - `password` is kept in memory only.
     - When `gatewayUrl` is set, the UI does not fall back to config or environment credentials. Provide `token` (or `password`) explicitly. Missing explicit credentials is an error.
@@ -411,6 +423,7 @@ The Control UI is static files; the WebSocket target is configurable and can be 
     - Gateway startup may seed local origins such as `http://localhost:<port>` and `http://127.0.0.1:<port>` from the effective runtime bind and port, but remote browser origins still need explicit entries.
     - Do not use `gateway.controlUi.allowedOrigins: ["*"]` except for tightly controlled local testing. It means allow any browser origin, not "match whatever host I am using."
     - `gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback=true` enables Host-header origin fallback mode, but it is a dangerous security mode.
+
   </Accordion>
 </AccordionGroup>
 
