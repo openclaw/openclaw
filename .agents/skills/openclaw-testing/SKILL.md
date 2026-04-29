@@ -111,8 +111,10 @@ rerun after a focused patch.
 the manual "everything before release" umbrella. It resolves a target ref, then
 dispatches:
 
-- manual `CI` for the full normal CI graph, with release-only plugin prerelease
-  lanes enabled via `full_release_validation=true`
+- manual `CI` for the full normal CI graph, with Android enabled via
+  `include_android=true`
+- `Plugin Prerelease` for release-only plugin static checks, extension shards,
+  the release-only `agentic-plugins` shard, and plugin product Docker lanes
 - `OpenClaw Release Checks` for install smoke, cross-OS release checks, live and
   E2E checks, Docker release-path suites, OpenWebUI, QA Lab, fast Matrix, and
   Telegram release lanes
@@ -145,7 +147,7 @@ turns green.
 
 Standalone manual `CI` dispatches do not run the plugin prerelease suite, the
 extension batch sweep, or the release-only `agentic-plugins` Vitest shard. Those
-lanes are intentionally reserved for the Full Release Validation CI child so
+lanes are intentionally reserved for the separate `Plugin Prerelease` child so
 PRs, main pushes, and ad hoc broad CI checks do not spend Docker/package time or
 all-plugin runtime time on release-only product coverage.
 
@@ -160,9 +162,10 @@ only the failed parent verifier job; do not dispatch a new full umbrella unless
 the release evidence is stale.
 
 For bounded recovery after a focused fix, pass `-f rerun_group=<group>`.
-Supported umbrella groups are `all`, `ci`, `release-checks`, `install-smoke`,
-`cross-os`, `live-e2e`, `package`, `qa`, `qa-parity`, `qa-live`, and
-`npm-telegram`. Use the narrowest group that covers the failed box.
+Supported umbrella groups are `all`, `ci`, `plugin-prerelease`,
+`release-checks`, `install-smoke`, `cross-os`, `live-e2e`, `package`, `qa`,
+`qa-parity`, `qa-live`, and `npm-telegram`. Use the narrowest group that covers
+the failed box.
 
 ### Release Evidence
 

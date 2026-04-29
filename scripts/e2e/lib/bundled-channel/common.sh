@@ -17,15 +17,7 @@ bundled_channel_stage_dir() {
 }
 
 bundled_channel_install_package() {
-  local log_file="$1"
-  local label="${2:-mounted OpenClaw package}"
-  local package_tgz="${OPENCLAW_CURRENT_PACKAGE_TGZ:?missing OPENCLAW_CURRENT_PACKAGE_TGZ}"
-  echo "Installing $label..."
-  if ! npm install -g "$package_tgz" --no-fund --no-audit >"$log_file" 2>&1; then
-    echo "npm install -g failed for $label" >&2
-    cat "$log_file" >&2 || true
-    exit 1
-  fi
+  openclaw_e2e_install_package "$@"
 }
 
 bundled_channel_find_external_dep_package() {

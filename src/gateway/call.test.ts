@@ -95,8 +95,14 @@ vi.mock("./client.js", () => ({
   },
 }));
 
-const { __testing, buildGatewayConnectionDetails, callGateway, callGatewayCli, callGatewayScoped } =
-  await import("./call.js");
+const {
+  __testing,
+  buildGatewayConnectionDetails,
+  callGateway,
+  callGatewayCli,
+  callGatewayScoped,
+  isGatewayTransportError,
+} = await import("./call.js");
 
 class StubGatewayClient {
   constructor(opts: {
@@ -820,6 +826,13 @@ describe("callGateway error details", () => {
     expect(err?.message).toContain("Gateway target: ws://127.0.0.1:18789");
     expect(err?.message).toContain("Source: local loopback");
     expect(err?.message).toContain("Bind: loopback");
+    expect(isGatewayTransportError(err)).toBe(true);
+    expect(err).toMatchObject({
+      name: "GatewayTransportError",
+      kind: "closed",
+      code: 1006,
+      reason: "no close reason",
+    });
   });
 
   it("includes connection details on timeout", async () => {
@@ -839,6 +852,27 @@ describe("callGateway error details", () => {
     expect(errMessage).toContain("Gateway target: ws://127.0.0.1:18789");
     expect(errMessage).toContain("Source: local loopback");
     expect(errMessage).toContain("Bind: loopback");
+  });
+
+  it("marks wrapper timeouts as typed gateway transport errors", async () => {
+    startMode = "silent";
+    setLocalLoopbackGatewayConfig();
+
+    vi.useFakeTimers();
+    let err: unknown;
+    const promise = callGateway({ method: "health", timeoutMs: 5 }).catch((caught) => {
+      err = caught;
+    });
+
+    await vi.advanceTimersByTimeAsync(5);
+    await promise;
+
+    expect(isGatewayTransportError(err)).toBe(true);
+    expect(err).toMatchObject({
+      name: "GatewayTransportError",
+      kind: "timeout",
+      timeoutMs: 5,
+    });
   });
 
   it("keeps the default wrapper timeout aligned with configured handshake timeout", async () => {

@@ -8,7 +8,7 @@ run_update_scenario() {
   state_script_b64="$(docker_e2e_test_state_shell_b64 bundled-channel-update empty)"
 
   echo "Running bundled channel runtime deps Docker update E2E..."
-  run_logged_print bundled-channel-update timeout "$DOCKER_UPDATE_RUN_TIMEOUT" docker run --rm \
+  run_logged_print_heartbeat bundled-channel-update 30 timeout "$DOCKER_UPDATE_RUN_TIMEOUT" docker run --rm \
     -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
     -e OPENCLAW_BUNDLED_CHANNEL_UPDATE_BASELINE_VERSION="$UPDATE_BASELINE_VERSION" \
     -e "OPENCLAW_BUNDLED_CHANNEL_UPDATE_TARGETS=${OPENCLAW_BUNDLED_CHANNEL_UPDATE_TARGETS:-telegram,discord,slack,feishu,memory-lancedb,acpx}" \

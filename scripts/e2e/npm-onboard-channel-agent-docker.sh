@@ -38,17 +38,15 @@ prepare_package_tgz() {
 prepare_package_tgz
 
 docker_e2e_package_mount_args "$PACKAGE_TGZ"
-docker_e2e_harness_mount_args
 run_log="$(docker_e2e_run_log npm-onboard-channel-agent)"
 OPENCLAW_TEST_STATE_SCRIPT_B64="$(docker_e2e_test_state_shell_b64 npm-onboard-channel-agent empty)"
 
 echo "Running npm tarball onboard/channel/agent Docker E2E ($CHANNEL)..."
-if ! docker run --rm \
+if ! docker_e2e_run_with_harness \
   -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
   -e OPENCLAW_NPM_ONBOARD_CHANNEL="$CHANNEL" \
   -e "OPENCLAW_TEST_STATE_SCRIPT_B64=$OPENCLAW_TEST_STATE_SCRIPT_B64" \
   "${DOCKER_E2E_PACKAGE_ARGS[@]}" \
-  "${DOCKER_E2E_HARNESS_ARGS[@]}" \
   -i "$IMAGE_NAME" bash -s >"$run_log" 2>&1 <<'EOF'
 set -euo pipefail
 
@@ -103,32 +101,11 @@ dump_debug_logs() {
 }
 trap 'status=$?; dump_debug_logs "$status"; exit "$status"' ERR
 
-echo "Installing mounted OpenClaw package..."
-package_tgz="${OPENCLAW_CURRENT_PACKAGE_TGZ:?missing OPENCLAW_CURRENT_PACKAGE_TGZ}"
-npm install -g "$package_tgz" --no-fund --no-audit >/tmp/openclaw-install.log 2>&1
+openclaw_e2e_install_package /tmp/openclaw-install.log
 
 command -v openclaw >/dev/null
-package_root="$(npm root -g)/openclaw"
-test -d "$package_root/dist/extensions/telegram"
-test -d "$package_root/dist/extensions/discord"
-
-assert_dep_absent() {
-  local sentinel="$1"
-  if find "$package_root" "$HOME/.openclaw" -path "*/node_modules/$sentinel/package.json" -print -quit 2>/dev/null | grep -q .; then
-    echo "$sentinel should not be installed before channel activation repair" >&2
-    find "$package_root" "$HOME/.openclaw" -path "*/node_modules/$sentinel/package.json" -print 2>/dev/null >&2 || true
-    exit 1
-  fi
-}
-
-assert_dep_present() {
-  local sentinel="$1"
-  if ! find "$package_root" "$HOME/.openclaw" -path "*/node_modules/$sentinel/package.json" -print -quit 2>/dev/null | grep -q .; then
-    echo "$sentinel was not installed on demand" >&2
-    find "$package_root" "$HOME/.openclaw" -maxdepth 6 -type d -name node_modules -print 2>/dev/null >&2 || true
-    exit 1
-  fi
-}
+package_root="$(openclaw_e2e_package_root)"
+openclaw_e2e_assert_package_extensions "$package_root" telegram discord
 
 mock_pid="$(openclaw_e2e_start_mock_openai "$MOCK_PORT" /tmp/openclaw-mock-openai.log)"
 openclaw_e2e_wait_mock_openai "$MOCK_PORT"
@@ -229,7 +206,7 @@ cfg.plugins = {
 fs.writeFileSync(configPath, `${JSON.stringify(cfg, null, 2)}\n`);
 NODE
 
-assert_dep_absent "$DEP_SENTINEL"
+openclaw_e2e_assert_dep_absent "$DEP_SENTINEL" "$package_root" "$HOME/.openclaw"
 
 echo "Configuring $CHANNEL..."
 openclaw channels add --channel "$CHANNEL" --token "$CHANNEL_TOKEN" >/tmp/openclaw-channel-add.log 2>&1
@@ -251,7 +228,7 @@ NODE
 
 echo "Running doctor after channel activation..."
 openclaw doctor --repair --non-interactive >/tmp/openclaw-doctor.log 2>&1
-assert_dep_present "$DEP_SENTINEL"
+openclaw_e2e_assert_dep_present "$DEP_SENTINEL" "$package_root" "$HOME/.openclaw"
 
 echo "Running local agent turn against mocked OpenAI..."
 openclaw agent --local \

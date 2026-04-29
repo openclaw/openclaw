@@ -6,6 +6,8 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Plugin SDK: mark remaining legacy alias exports and diffs tool/config aliases with deprecation metadata, and add a guard so future legacy alias comments require `@deprecated` tags. Thanks @vincentkoc.
+- CLI/QR/dependencies: internalize small terminal progress and QR wrapper helpers while keeping the real QR encoder dependency direct, reducing the default runtime dependency graph without changing QR output behavior. Thanks @vincentkoc.
 - Channels: add Yuanbao channel docs entrance so the Tencent Yuanbao bot appears in the channel listing and sidebar navigation. (#73443) Thanks @loongfay.
 - Active Memory: add optional per-conversation `allowedChatIds` and `deniedChatIds` filters so operators can enable recall only for selected direct, group, or channel conversations while keeping broad sessions skipped. (#67977) Thanks @quengh.
 - Active Memory: return bounded partial recall summaries when the hidden memory sub-agent times out, including the default temporary-transcript path, so useful recovered context is not discarded. (#73219) Thanks @joeykrug.
@@ -14,10 +16,15 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Ollama: compose caller abort signals with guarded-fetch timeouts for native `/api/chat` streams, so `/stop` and early cancellation still interrupt local Ollama requests that also carry provider timeout budgets. Refs #74133. Thanks @obviyus.
+- CLI/logs: fall back to the configured Gateway file log when implicit loopback Gateway connections close or time out before or during `logs.tail`, so `openclaw logs` still works while diagnosing local-model Gateway disconnects. Refs #74078. Thanks @sakalaboator.
+- MCP/plugins: stringify non-array plugin tool results with chat-content coercion instead of default object stringification, so MCP callers receive useful JSON/text content from plugin tools. Thanks @vincentkoc.
+- Active Memory/QMD: run QMD boot refresh through a one-shot subprocess path, preserve interactive file watching, and align watcher dependency/build ignores with QMD's scanner so gateway startup avoids arming long-lived QMD watchers. Thanks @codexGW.
 - Channels/Discord: remove Discord-owned queued-run timeout replies through the shared channel lifecycle queue while preserving message ordering and compatibility timeout constants, so long Discord turns stay governed by session/tool/runtime lifecycle instead of channel fallback errors. Thanks @codexGW.
 - Agents/tools: clamp `process.poll` waits to 30 seconds, advertise that cap in the tool schema, and honor abort signals while waiting, so long command polls cannot pin agent responsiveness after cancellation. Thanks @vincentkoc.
 - Plugin SDK: add tracked Discord component-message helpers and a Telegram account-resolution compatibility facade, so existing plugins using those subpaths resolve while new plugins stay on generic channel SDK contracts. Thanks @vincentkoc.
 - Shared labels: preserve Unicode combining marks and NFC-equivalent accented text in group/channel slug normalization so non-Latin labels no longer lose meaningful characters. Fixes #58932; carries forward #58942 and #58995. Thanks @fengqing-git, @Starhappysh, and @koen666.
+- Channels/Telegram: include probed video width and height when sending regular Telegram videos, so portrait clips render with the correct orientation instead of being stretched by clients. (#18915) Thanks @storyarcade.
 - Docs/Hetzner: clarify that SSH tunnel access requires `AllowTcpForwarding local` before running `ssh -L`, so hardened VPS sshd configs do not block loopback Gateway access. Fixes #54557; carries forward #54564; refs #54954. Thanks @satishkc7, @blackstrype, and @Aftabbs.
 - Gateway/shutdown: report structured shutdown warnings and HTTP close timeout warnings through `ShutdownResult` while preserving lifecycle hook hardening. Carries forward #41296. Thanks @edenfunf.
 - Plugins/QA: prebuild the private QA channel runtime before plugin gauntlet source runs so wrapper CPU/RSS measurements are not polluted by private QA dist rebuild work. Thanks @vincentkoc.
@@ -27,6 +34,7 @@ Docs: https://docs.openclaw.ai
 - CLI/update: tolerate stale memory-runtime import failures during best-effort CLI process teardown, so `openclaw update` replacing hashed runtime chunks before the finalizer runs no longer surfaces as exit-time `Cannot find module` noise. Thanks @vincentkoc.
 - CLI/channels logs: reuse the rolling log-file resolver so `openclaw channels logs` falls back to the active dated log across date boundaries without reading unrelated custom log files. Fixes #42875; carries forward #42904 and #43043. Thanks @ethanclaw and @wdskuki.
 - CLI/update: skip tracked plugins disabled in config during post-update plugin sync before npm, ClawHub, or marketplace update checks, preserving their install records without failing the update. Fixes #73880. Thanks @islandpreneur007.
+- Control UI: fix Peak Error Hours showing incorrect hourly rates when the browser's timezone observes DST, by storing hourly message counts with UTC date keys and using DST-aware `Date.getHours()` for local conversion. Also extract `accumulateMessageCounts` helper to reduce duplicated daily/hourly aggregation logic. (#49396) Thanks @konanok.
 - iMessage: normalize known leading attributedBody corruption markers on sent-message echo text keys so delayed reflected echoes with U+FFFD/U+FFFE/U+FFFF/FEFF prefixes are dropped without collapsing interior text. Fixes #59973; carries forward #59980 and #62191. Thanks @neeravmakwana and @maguilar631697.
 - Security/audit: recognize dangerous node command IDs as valid `gateway.nodes.denyCommands` entries, so audit only warns on real typos or unsupported patterns. (#56923) Thanks @chziyue.
 - Telegram/exec approvals: stop treating general Telegram chat allowlists and `defaultTo` routes as native exec approvers; Telegram now uses explicit `execApprovals.approvers` or owner identity from `commands.ownerAllowFrom`, matching the first-pairing owner bootstrap path. Thanks @pashpashpash.

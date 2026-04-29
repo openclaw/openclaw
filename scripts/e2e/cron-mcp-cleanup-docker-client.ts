@@ -127,13 +127,13 @@ async function runCronCleanupScenario(params: {
     enabled: true,
     schedule: { kind: "every", everyMs: 60_000 },
     sessionTarget: "isolated",
-    wakeMode: "next-heartbeat",
+    wakeMode: "now",
     payload: {
       kind: "agentTurn",
       message: "Use available context and then stop.",
       timeoutSeconds: 90,
       lightContext: true,
-      toolsAllow: ["bundle-mcp"],
+      toolsAllow: ["cronCleanupProbe__cleanup_probe"],
     },
     delivery: { mode: "none" },
   });

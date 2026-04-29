@@ -7,9 +7,51 @@ import {
   connectMcpClient,
   extractTextFromGatewayPayload,
   type ClaudeChannelNotification,
+  type GatewayRpcClient,
   maybeApprovePendingBridgePairing,
   waitFor,
 } from "./mcp-channels-harness.ts";
+
+function summarizeSessionRows(rows: Array<Record<string, unknown>> | undefined) {
+  return (rows ?? []).map((entry) => ({
+    key: entry.key,
+    channel: entry.channel,
+    deliveryContext: entry.deliveryContext,
+    lastChannel: entry.lastChannel,
+    lastTo: entry.lastTo,
+    lastAccountId: entry.lastAccountId,
+    lastThreadId: entry.lastThreadId,
+  }));
+}
+
+async function waitForGatewaySeededConversation(gateway: GatewayRpcClient) {
+  let lastList: { sessions?: Array<Record<string, unknown>> } | undefined;
+  try {
+    return await waitFor(
+      "seeded conversation in gateway sessions.list",
+      async () => {
+        lastList = await gateway.request<{ sessions?: Array<Record<string, unknown>> }>(
+          "sessions.list",
+          { limit: 50, includeDerivedTitles: true, includeLastMessage: true },
+        );
+        return lastList.sessions?.find((entry) => entry.key === "agent:main:main");
+      },
+      60_000,
+    );
+  } catch (error) {
+    throw new Error(
+      `gateway sessions.list did not include seeded conversation: ${JSON.stringify(
+        {
+          count: lastList?.sessions?.length ?? 0,
+          sessions: summarizeSessionRows(lastList?.sessions),
+        },
+        null,
+        2,
+      )}`,
+      { cause: error },
+    );
+  }
+}
 
 async function main() {
   const gatewayUrl = process.env.GW_URL?.trim();
@@ -36,6 +78,18 @@ async function main() {
     const callTool = <T>(params: Parameters<typeof mcp.callTool>[0]) =>
       mcp.callTool(params, undefined, { timeout: 240_000 }) as Promise<T>;
 
+    const gatewayConversation = await waitForGatewaySeededConversation(gateway);
+    assert(
+      (gatewayConversation.deliveryContext as { channel?: unknown } | undefined)?.channel ===
+        "imessage",
+      "expected seeded gateway deliveryContext channel",
+    );
+    assert(
+      (gatewayConversation.deliveryContext as { to?: unknown } | undefined)?.to === "+15551234567",
+      "expected seeded gateway deliveryContext target",
+    );
+
+    let lastMcpConversationList: unknown;
     const conversation = await waitFor(
       "seeded conversation in conversations_list",
       async () => {
@@ -43,14 +97,27 @@ async function main() {
           structuredContent?: { conversations?: Array<Record<string, unknown>> };
         }>({
           name: "conversations_list",
-          arguments: {},
+          arguments: {
+            includeDerivedTitles: false,
+            includeLastMessage: false,
+          },
         });
+        lastMcpConversationList = listed;
         return listed.structuredContent?.conversations?.find(
           (entry) => entry.sessionKey === "agent:main:main",
         );
       },
       240_000,
-    );
+    ).catch((error) => {
+      throw new Error(
+        `timeout waiting for seeded MCP conversation: ${JSON.stringify(
+          lastMcpConversationList,
+          null,
+          2,
+        )}`,
+        { cause: error },
+      );
+    });
     assert(conversation.channel === "imessage", "expected seeded channel");
     assert(conversation.to === "+15551234567", "expected seeded target");
 

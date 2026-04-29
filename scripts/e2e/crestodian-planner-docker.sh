@@ -16,16 +16,14 @@ cleanup() {
 trap cleanup EXIT
 
 docker_e2e_build_or_reuse "$IMAGE_NAME" crestodian-planner
-docker_e2e_harness_mount_args
 OPENCLAW_TEST_STATE_SCRIPT_B64="$(docker_e2e_test_state_shell_b64 crestodian-planner empty)"
 
 echo "Running in-container Crestodian planner fallback smoke..."
 # Harness files are mounted read-only; the app under test comes from /app/dist.
 set +e
-docker run --rm \
+docker_e2e_run_with_harness \
   --name "$CONTAINER_NAME" \
   -e "OPENCLAW_TEST_STATE_SCRIPT_B64=$OPENCLAW_TEST_STATE_SCRIPT_B64" \
-  "${DOCKER_E2E_HARNESS_ARGS[@]}" \
   "$IMAGE_NAME" \
   bash -lc "set -euo pipefail
     eval \"\$(printf '%s' \"\${OPENCLAW_TEST_STATE_SCRIPT_B64:?missing OPENCLAW_TEST_STATE_SCRIPT_B64}\" | base64 -d)\"
