@@ -74,6 +74,7 @@ Docs: https://docs.openclaw.ai
 - Slack/interactive replies: drop overlong Block Kit button URLs while preserving valid callback values, so malformed link buttons no longer make Slack reject the whole interactive reply. Thanks @slackapi.
 - Slack/commands: truncate native command argument-menu confirmation text to Slack's dialog limit, so long plugin arg names no longer make fallback buttons render invalid Block Kit payloads. Thanks @slackapi.
 - Slack/exec approvals: cap native approval metadata context to Slack's element and text limits, so large approval details no longer make Slack reject the approval card. Thanks @slackapi.
+- Slack/exec approvals: cap native approval update fallback text to Slack's message limit while preserving the rendered approval blocks, so long commands no longer make resolved or expired approval cards stay stale after `chat.update` rejects `msg_too_long`. Thanks @slackapi.
 - Slack/commands: cap native command argument-menu fallback rows to Slack's message block limit, so large plugin choice lists no longer make Slack reject the generated menu. Thanks @slackapi.
 - Slack/commands: drop fallback command argument buttons whose encoded values exceed Slack's button-value limit, so one oversized plugin choice no longer makes Slack reject the whole menu. Thanks @slackapi.
 - Slack/messages: merge message-tool presentation and interactive blocks on Slack sends, so buttons and selects are no longer dropped when a structured message body is also present. Thanks @slackapi.

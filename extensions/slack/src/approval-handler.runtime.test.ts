@@ -1,10 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { slackApprovalNativeRuntime } from "./approval-handler.runtime.js";
 
 type SlackPayload = {
   text: string;
   blocks?: unknown;
 };
+const SLACK_TEXT_LIMIT = 8000;
 
 function findSlackActionsBlock(blocks: Array<{ type?: string; elements?: unknown[] }>) {
   return blocks.find((block) => block.type === "actions");
@@ -112,6 +113,53 @@ describe("slackApprovalNativeRuntime", () => {
     expect(
       (payload.blocks as Array<{ type?: string }>).some((block) => block.type === "actions"),
     ).toBe(false);
+  });
+
+  it("caps resolved update fallback text while preserving approval blocks", async () => {
+    const blocks = [
+      {
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text: "*Command*\n```short preview```",
+        },
+      },
+    ];
+    const chatUpdate = vi.fn(async (_payload: { text: string; blocks: typeof blocks }) => ({}));
+
+    await slackApprovalNativeRuntime.transport.updateEntry?.({
+      cfg: {} as never,
+      accountId: "default",
+      context: {
+        app: {
+          client: {
+            chat: {
+              update: chatUpdate,
+            },
+          },
+        },
+        config: {},
+      } as never,
+      entry: {
+        channelId: "C123",
+        messageTs: "1712345678.999999",
+      },
+      payload: {
+        text: `*Exec approval: Allowed once*\n\n*Command*\n${"a".repeat(9000)}`,
+        blocks,
+      },
+      phase: "resolved",
+    });
+
+    expect(chatUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "C123",
+        ts: "1712345678.999999",
+        text: expect.stringMatching(/…$/),
+        blocks,
+      }),
+    );
+    expect(chatUpdate.mock.calls[0]?.[0].text).toHaveLength(SLACK_TEXT_LIMIT);
   });
 
   it("keeps pending metadata context within Slack Block Kit limits", async () => {

@@ -17,8 +17,10 @@ import {
   shouldHandleSlackExecApprovalRequest,
   normalizeSlackApproverId,
 } from "./exec-approvals.js";
+import { SLACK_TEXT_LIMIT } from "./limits.js";
 import { resolveSlackReplyBlocks } from "./reply-blocks.js";
 import { sendMessageSlack } from "./send.js";
+import { truncateSlackText } from "./truncate.js";
 
 type SlackBlock = Block | KnownBlock;
 type SlackPendingApproval = {
@@ -229,7 +231,7 @@ async function updateMessage(params: {
     await params.app.client.chat.update({
       channel: params.channelId,
       ts: params.messageTs,
-      text: params.text,
+      text: truncateSlackText(params.text, SLACK_TEXT_LIMIT),
       blocks: params.blocks,
     });
   } catch (err) {
