@@ -23,6 +23,6 @@ describe("QQBot debug logging", () => {
 
     debugLog("prefix", "line one\nline two");
 
-    expect(logSpy).toHaveBeenCalledWith("prefix", "line one line two");
+    expect(logSpy).toHaveBeenCalledWith("prefix line one line two");
   });
 });

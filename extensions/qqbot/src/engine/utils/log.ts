@@ -35,27 +35,27 @@ export function sanitizeDebugLogValue(value: unknown): string {
   return `${sanitized.slice(0, MAX_LOG_VALUE_CHARS)}...`;
 }
 
-function sanitizeDebugLogArgs(args: unknown[]): string[] {
-  return args.map(sanitizeDebugLogValue);
+function formatDebugLogArgs(args: unknown[]): string {
+  return args.map(sanitizeDebugLogValue).join(" ");
 }
 
 /** Debug-level log; only outputs when QQBOT_DEBUG is enabled. */
 export function debugLog(...args: unknown[]): void {
   if (isDebug()) {
-    console.log(...sanitizeDebugLogArgs(args));
+    console.log(formatDebugLogArgs(args).replace(/[\r\n]/g, " "));
   }
 }
 
 /** Debug-level warning; only outputs when QQBOT_DEBUG is enabled. */
 export function debugWarn(...args: unknown[]): void {
   if (isDebug()) {
-    console.warn(...sanitizeDebugLogArgs(args));
+    console.warn(formatDebugLogArgs(args).replace(/[\r\n]/g, " "));
   }
 }
 
 /** Debug-level error; only outputs when QQBOT_DEBUG is enabled. */
 export function debugError(...args: unknown[]): void {
   if (isDebug()) {
-    console.error(...sanitizeDebugLogArgs(args));
+    console.error(formatDebugLogArgs(args).replace(/[\r\n]/g, " "));
   }
 }
