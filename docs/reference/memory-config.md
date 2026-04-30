@@ -165,6 +165,39 @@ For custom OpenAI-compatible endpoints or overriding provider defaults:
 }
 ```
 
+### Example: oMLX (Apple Silicon, MLX-native)
+
+[oMLX](https://github.com/jundot/omlx) is a local MLX inference server for
+Apple Silicon that exposes an OpenAI-compatible API on
+`http://localhost:8000/v1`. Configure it as an OpenAI-compatible endpoint:
+
+```json5
+{
+  agents: {
+    defaults: {
+      memorySearch: {
+        provider: "openai",
+        model: "jina-embeddings-v5-text-small-retrieval-mlx",
+        remote: {
+          baseUrl: "http://127.0.0.1:8000/v1",
+          apiKey: "<your-omlx-api-key>",
+        },
+      },
+    },
+  },
+}
+```
+
+<Warning>
+Use `provider: "openai"` (not `"ollama"`) for oMLX. oMLX speaks the OpenAI
+protocol, not Ollama's `/api/embeddings` protocol — pointing the `ollama`
+adapter at oMLX's port will fail with confusing errors.
+</Warning>
+
+After switching providers or models, run `openclaw memory index --force` to
+re-embed existing notes; embeddings from different models live in incompatible
+vector spaces.
+
 ---
 
 ## Provider-specific config
