@@ -1332,6 +1332,7 @@ export async function dispatchReplyFromConfig(
           },
         );
         if (tailDispatchResult?.handled) {
+          recordAgentDispatchCompleted("completed");
           return {
             queuedFinal: tailDispatchResult.queuedFinal,
             counts: tailDispatchResult.counts,

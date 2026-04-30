@@ -4024,6 +4024,8 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
 
   it("passes suppressUserDelivery to tail reply_dispatch when sendPolicy is deny", async () => {
     setNoAbort();
+    diagnosticMocks.logMessageDispatchStarted.mockClear();
+    diagnosticMocks.logMessageDispatchCompleted.mockClear();
     sessionStoreMocks.currentEntry = {
       sessionId: "s1",
       updatedAt: 0,
@@ -4048,7 +4050,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
 
     await dispatchReplyFromConfig({
       ctx,
-      cfg: emptyConfig,
+      cfg: { diagnostics: { enabled: true } } as OpenClawConfig,
       dispatcher,
       replyResolver: async () => ({ text: "agent reply" }),
     });
@@ -4061,6 +4063,14 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
         suppressReplyLifecycle: true,
       }),
       expect.any(Object),
+    );
+    expect(diagnosticMocks.logMessageDispatchStarted).toHaveBeenCalledTimes(1);
+    expect(diagnosticMocks.logMessageDispatchCompleted).toHaveBeenCalledWith(
+      expect.objectContaining({
+        outcome: "completed",
+        sessionKey: "test:session",
+        source: "replyResolver",
+      }),
     );
   });
 
