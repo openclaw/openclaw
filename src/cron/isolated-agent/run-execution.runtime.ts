@@ -2,6 +2,7 @@ export { resolveEffectiveModelFallbacks } from "../../agents/agent-scope.js";
 export { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 export { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 export { runWithModelFallback } from "../../agents/model-fallback.js";
+export { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
 export { isCliProvider } from "../../agents/model-selection-cli.js";
 export { normalizeVerboseLevel } from "../../auto-reply/thinking.shared.js";
 export { resolveSessionTranscriptPath } from "../../config/sessions/paths.js";
@@ -22,6 +23,13 @@ export async function getCliSessionId(
 ): Promise<ReturnType<typeof import("../../agents/cli-session.js").getCliSessionId>> {
   const runtime = await loadCronExecutionCliRuntime();
   return runtime.getCliSessionId(...args);
+}
+
+export async function getCliSessionBinding(
+  ...args: Parameters<typeof import("../../agents/cli-session.js").getCliSessionBinding>
+): Promise<ReturnType<typeof import("../../agents/cli-session.js").getCliSessionBinding>> {
+  const runtime = await loadCronExecutionCliRuntime();
+  return runtime.getCliSessionBinding(...args);
 }
 
 export async function runCliAgent(

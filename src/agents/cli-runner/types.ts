@@ -36,6 +36,7 @@ export type RunCliAgentParams = {
   /** Static portion of extraSystemPrompt (excluding per-message inbound metadata) for session reuse hashing. */
   extraSystemPromptStatic?: string;
   streamParams?: import("../command/types.js").AgentStreamParams;
+  disableTools?: boolean;
   ownerNumbers?: string[];
   cliSessionId?: string;
   cliSessionBinding?: CliSessionBinding;
@@ -47,8 +48,12 @@ export type RunCliAgentParams = {
   skillsSnapshot?: SkillSnapshot;
   messageChannel?: string;
   messageProvider?: string;
+  messageTo?: string;
+  messageThreadId?: string | number;
+  currentChannelId?: string;
   agentAccountId?: string;
   senderIsOwner?: boolean;
+  ownerOnlyToolAllowlist?: string[];
   abortSignal?: AbortSignal;
   onExecutionStarted?: () => void;
   replyOperation?: ReplyOperation;
@@ -97,4 +102,5 @@ export type PreparedCliRunContext = {
   authEpoch?: string;
   authEpochVersion: number;
   extraSystemPromptHash?: string;
+  mcpRoutingHash?: string;
 };

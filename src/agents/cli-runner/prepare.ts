@@ -3,6 +3,7 @@ import { ensureMcpLoopbackServer } from "../../gateway/mcp-http.js";
 import {
   createMcpLoopbackServerConfig,
   getActiveMcpLoopbackRuntime,
+  registerMcpLoopbackOwnerOnlyToolAllowlist,
 } from "../../gateway/mcp-http.loopback-runtime.js";
 import type {
   CliBackendAuthEpochMode,
@@ -57,6 +58,7 @@ const prepareDeps = {
   getActiveMcpLoopbackRuntime,
   ensureMcpLoopbackServer,
   createMcpLoopbackServerConfig,
+  registerMcpLoopbackOwnerOnlyToolAllowlist,
   resolveOpenClawReferencePaths: async (
     params: Parameters<typeof import("../docs-path.js").resolveOpenClawReferencePaths>[0],
   ) => (await import("../docs-path.js")).resolveOpenClawReferencePaths(params),
@@ -165,10 +167,22 @@ export async function prepareCliRunContext(
     config: params.config,
     agentId: params.agentId,
   });
-  let mcpLoopbackRuntime = backendResolved.bundleMcp
-    ? prepareDeps.getActiveMcpLoopbackRuntime()
+  const bundleMcpEnabled = backendResolved.bundleMcp && params.disableTools !== true;
+  const mcpRoutingHash = bundleMcpEnabled
+    ? hashCliSessionText(
+        JSON.stringify({
+          accountId: params.agentAccountId ?? "",
+          messageChannel: params.messageChannel ?? params.messageProvider ?? "",
+          messageTo: params.messageTo ?? "",
+          threadId: params.messageThreadId == null ? "" : String(params.messageThreadId),
+          currentChannelId: params.currentChannelId ?? params.messageTo ?? "",
+          senderIsOwner: params.senderIsOwner === true,
+          ownerOnlyToolAllowlist: params.ownerOnlyToolAllowlist ?? [],
+        }),
+      )
     : undefined;
-  if (backendResolved.bundleMcp && !mcpLoopbackRuntime) {
+  let mcpLoopbackRuntime = bundleMcpEnabled ? prepareDeps.getActiveMcpLoopbackRuntime() : undefined;
+  if (bundleMcpEnabled && !mcpLoopbackRuntime) {
     try {
       await prepareDeps.ensureMcpLoopbackServer();
     } catch (error) {
@@ -177,7 +191,7 @@ export async function prepareCliRunContext(
     mcpLoopbackRuntime = prepareDeps.getActiveMcpLoopbackRuntime();
   }
   const preparedBackend = await prepareCliBundleMcpConfig({
-    enabled: backendResolved.bundleMcp,
+    enabled: bundleMcpEnabled,
     mode: backendResolved.bundleMcpMode,
     backend: backendResolved.config,
     workspaceDir,
@@ -194,7 +208,12 @@ export async function prepareCliRunContext(
           OPENCLAW_MCP_AGENT_ID: sessionAgentId ?? "",
           OPENCLAW_MCP_ACCOUNT_ID: params.agentAccountId ?? "",
           OPENCLAW_MCP_SESSION_KEY: params.sessionKey ?? "",
+          OPENCLAW_MCP_RUN_ID: params.runId ?? "",
           OPENCLAW_MCP_MESSAGE_CHANNEL: params.messageChannel ?? params.messageProvider ?? "",
+          OPENCLAW_MCP_MESSAGE_TO: params.messageTo ?? "",
+          OPENCLAW_MCP_THREAD_ID:
+            params.messageThreadId == null ? "" : String(params.messageThreadId),
+          OPENCLAW_MCP_CURRENT_CHANNEL_ID: params.currentChannelId ?? params.messageTo ?? "",
         }
       : undefined,
     warn: (message) => cliBackendLog.warn(message),
@@ -207,6 +226,14 @@ export async function prepareCliRunContext(
     modelId,
     authProfileId: effectiveAuthProfileId,
   });
+  const unregisterOwnerOnlyToolAllowlist =
+    bundleMcpEnabled && params.ownerOnlyToolAllowlist?.length
+      ? prepareDeps.registerMcpLoopbackOwnerOnlyToolAllowlist({
+          sessionKey: params.sessionKey,
+          runId: params.runId,
+          tools: params.ownerOnlyToolAllowlist,
+        })
+      : undefined;
   const skipLocalCredentialEpoch = shouldSkipLocalCliCredentialEpoch({
     authEpochMode: backendResolved.authEpochMode,
     authProfileId: effectiveAuthProfileId,
@@ -223,12 +250,16 @@ export async function prepareCliRunContext(
       ? { ...preparedBackend.env, ...preparedExecution.env }
       : preparedBackend.env;
   const preparedBackendCleanup =
-    preparedBackend.cleanup || preparedExecution?.cleanup
+    preparedBackend.cleanup || preparedExecution?.cleanup || unregisterOwnerOnlyToolAllowlist
       ? async () => {
           try {
             await preparedExecution?.cleanup?.();
           } finally {
-            await preparedBackend.cleanup?.();
+            try {
+              await preparedBackend.cleanup?.();
+            } finally {
+              unregisterOwnerOnlyToolAllowlist?.();
+            }
           }
         }
       : undefined;
@@ -256,6 +287,7 @@ export async function prepareCliRunContext(
         extraSystemPromptHash,
         mcpConfigHash: preparedBackendFinal.mcpConfigHash,
         mcpResumeHash: preparedBackendFinal.mcpResumeHash,
+        mcpRoutingHash,
       })
     : params.cliSessionId
       ? { sessionId: params.cliSessionId }
@@ -343,7 +375,7 @@ export async function prepareCliRunContext(
         modelId,
         messageProvider: params.messageProvider,
         trigger: params.trigger,
-        channelId: params.messageChannel ?? params.messageProvider,
+        channelId: params.currentChannelId ?? params.messageChannel ?? params.messageProvider,
       },
       hookRunner,
     });
@@ -425,5 +457,6 @@ export async function prepareCliRunContext(
     authEpoch,
     authEpochVersion: CLI_AUTH_EPOCH_VERSION,
     extraSystemPromptHash,
+    mcpRoutingHash,
   };
 }

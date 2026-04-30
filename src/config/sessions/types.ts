@@ -78,6 +78,7 @@ export type CliSessionBinding = {
   extraSystemPromptHash?: string;
   mcpConfigHash?: string;
   mcpResumeHash?: string;
+  mcpRoutingHash?: string;
 };
 
 export type SessionCompactionCheckpointReason =

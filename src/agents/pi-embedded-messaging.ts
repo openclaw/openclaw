@@ -2,6 +2,7 @@ export type { MessagingToolSend } from "./pi-embedded-messaging.types.js";
 
 import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { isCoreMessageToolSendAction } from "./messaging-tool-send-actions.js";
 
 const CORE_MESSAGING_TOOLS = new Set(["sessions_send", "message"]);
 
@@ -23,7 +24,7 @@ export function isMessagingToolSendAction(
     return true;
   }
   if (toolName === "message") {
-    return action === "send" || action === "thread-reply";
+    return isCoreMessageToolSendAction(action);
   }
   const providerId = normalizeChannelId(toolName);
   if (!providerId) {

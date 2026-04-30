@@ -4,15 +4,19 @@ import {
   type IncomingMessage,
   type ServerResponse,
 } from "node:http";
+import { recordCliMessagingToolSend } from "../agents/cli-runner/messaging-tool-tracker.js";
+import { isCoreMessageToolSendAction } from "../agents/messaging-tool-send-actions.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { logDebug, logWarn } from "../logger.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { handleMcpJsonRpc } from "./mcp-http.handlers.js";
 import {
   clearActiveMcpLoopbackRuntimeByOwnerToken,
   createMcpLoopbackServerConfig,
   getActiveMcpLoopbackRuntime,
+  resolveMcpLoopbackOwnerOnlyToolAllowlist,
   setActiveMcpLoopbackRuntime,
 } from "./mcp-http.loopback-runtime.js";
 import { jsonRpcError, type JsonRpcRequest } from "./mcp-http.protocol.js";
@@ -20,6 +24,7 @@ import {
   readMcpHttpBody,
   resolveMcpRequestContext,
   validateMcpLoopbackRequest,
+  type McpRequestContext,
 } from "./mcp-http.request.js";
 import { McpLoopbackToolCache } from "./mcp-http.runtime.js";
 
@@ -42,6 +47,121 @@ function shouldLogMcpLoopbackTraffic(): boolean {
     isTruthyEnvValue(process.env.OPENCLAW_CLI_BACKEND_LOG_OUTPUT) ||
     isTruthyEnvValue(process.env.OPENCLAW_LIVE_CLI_BACKEND_DEBUG)
   );
+}
+
+function readStringField(record: Record<string, unknown>, key: string): string | undefined {
+  return normalizeOptionalString(record[key]);
+}
+
+function resolveMessageToolSentText(args: Record<string, unknown>): string | undefined {
+  return (
+    readStringField(args, "message") ??
+    readStringField(args, "text") ??
+    readStringField(args, "body") ??
+    readStringField(args, "content")
+  );
+}
+
+function pushMediaUrl(urls: string[], seen: Set<string>, value: unknown): void {
+  if (typeof value !== "string") {
+    return;
+  }
+  const trimmed = value.trim();
+  if (!trimmed || seen.has(trimmed)) {
+    return;
+  }
+  seen.add(trimmed);
+  urls.push(trimmed);
+}
+
+function resolveMessageToolSentMediaUrls(args: Record<string, unknown>): string[] {
+  const urls: string[] = [];
+  const seen = new Set<string>();
+  pushMediaUrl(urls, seen, args.media);
+  pushMediaUrl(urls, seen, args.mediaUrl);
+  pushMediaUrl(urls, seen, args.path);
+  pushMediaUrl(urls, seen, args.filePath);
+  if (Array.isArray(args.mediaUrls)) {
+    for (const mediaUrl of args.mediaUrls) {
+      pushMediaUrl(urls, seen, mediaUrl);
+    }
+  }
+  return urls;
+}
+
+function responseHasLogicalToolFailure(response: object): boolean {
+  if (!isRecord(response) || !isRecord(response.result)) {
+    return false;
+  }
+  const content = response.result.content;
+  if (!Array.isArray(content)) {
+    return false;
+  }
+  for (const block of content) {
+    if (!isRecord(block) || typeof block.text !== "string") {
+      continue;
+    }
+    try {
+      const parsed = JSON.parse(block.text) as unknown;
+      if (!isRecord(parsed)) {
+        continue;
+      }
+      const status = readStringField(parsed, "status");
+      if (status === "error" || status === "forbidden" || status === "timeout") {
+        return true;
+      }
+    } catch {
+      continue;
+    }
+  }
+  return false;
+}
+
+function recordMcpMessagingToolSend(params: {
+  requestContext: McpRequestContext;
+  toolName?: string;
+  args: Record<string, unknown>;
+  isError: boolean;
+}): void {
+  if (params.isError || (params.toolName !== "message" && params.toolName !== "sessions_send")) {
+    return;
+  }
+  if (params.toolName === "sessions_send") {
+    return;
+  }
+  if (params.args.dryRun === true) {
+    return;
+  }
+  const action = readStringField(params.args, "action") ?? "send";
+  if (!isCoreMessageToolSendAction(action)) {
+    return;
+  }
+  const provider =
+    readStringField(params.args, "provider") ??
+    readStringField(params.args, "channel") ??
+    params.requestContext.messageProvider ??
+    "message";
+  const to =
+    readStringField(params.args, "to") ??
+    readStringField(params.args, "target") ??
+    readStringField(params.args, "channelId") ??
+    params.requestContext.currentChannelId ??
+    params.requestContext.agentTo;
+  const accountId = readStringField(params.args, "accountId") ?? params.requestContext.accountId;
+  const threadId = readStringField(params.args, "threadId") ?? params.requestContext.agentThreadId;
+  recordCliMessagingToolSend({
+    sessionKey: params.requestContext.sessionKey,
+    runId: params.requestContext.runId,
+    target: {
+      tool: params.toolName,
+      provider,
+      ...(accountId ? { accountId } : {}),
+      ...(to ? { to } : {}),
+      ...(threadId ? { threadId } : {}),
+    },
+    text: resolveMessageToolSentText(params.args),
+    mediaUrls: resolveMessageToolSentMediaUrls(params.args),
+  });
 }
 
 function logMcpLoopbackTraffic(step: string, details: Record<string, unknown>): void {
@@ -112,7 +232,14 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
           sessionKey: requestContext.sessionKey,
           messageProvider: requestContext.messageProvider,
           accountId: requestContext.accountId,
+          agentTo: requestContext.agentTo,
+          agentThreadId: requestContext.agentThreadId,
+          currentChannelId: requestContext.currentChannelId,
           senderIsOwner: requestContext.senderIsOwner,
+          ownerOnlyToolAllowlist: resolveMcpLoopbackOwnerOnlyToolAllowlist({
+            sessionKey: requestContext.sessionKey,
+            runId: requestContext.runId,
+          }),
         });
 
         const messages = Array.isArray(parsed) ? parsed : [parsed];
@@ -141,8 +268,24 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
               message.method === "tools/call" && isRecord(message.params)
                 ? message.params.name
                 : undefined;
+            const toolArgs =
+              message.method === "tools/call" &&
+              isRecord(message.params) &&
+              isRecord(message.params.arguments)
+                ? message.params.arguments
+                : {};
             const isError =
               isRecord(response) && isRecord(response.result) && response.result.isError === true;
+            const hasLogicalFailure =
+              typeof toolName === "string" && toolName === "sessions_send"
+                ? responseHasLogicalToolFailure(response)
+                : false;
+            recordMcpMessagingToolSend({
+              requestContext,
+              toolName: typeof toolName === "string" ? toolName : undefined,
+              args: toolArgs,
+              isError: isError || hasLogicalFailure,
+            });
             logMcpLoopbackTraffic("response", {
               method: message.method,
               toolName: typeof toolName === "string" ? toolName : undefined,

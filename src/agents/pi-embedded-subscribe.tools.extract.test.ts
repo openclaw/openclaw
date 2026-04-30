@@ -60,4 +60,21 @@ describe("extractMessagingToolSend", () => {
     expect(result?.provider).toBe("telegram");
     expect(result?.to).toBe("telegram:123");
   });
+
+  it.each([
+    ["reply", "to"],
+    ["sendAttachment", "to"],
+    ["upload-file", "target"],
+    ["upload-file", "channelId"],
+  ] as const)("extracts %s message tool sends from %s", (action, targetField) => {
+    const result = extractMessagingToolSend("message", {
+      action,
+      channel: "telegram",
+      [targetField]: "123",
+    });
+
+    expect(result?.tool).toBe("message");
+    expect(result?.provider).toBe("telegram");
+    expect(result?.to).toBe("telegram:123");
+  });
 });

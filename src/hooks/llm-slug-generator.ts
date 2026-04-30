@@ -10,7 +10,10 @@ import {
   resolveAgentWorkspaceDir,
   resolveAgentDir,
 } from "../agents/agent-scope.js";
-import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
+import { resolveSessionAuthProfileOverride } from "../agents/auth-profiles/session-override.js";
+import { runCliAgent } from "../agents/cli-runner.js";
+import { resolveCliRuntimeExecutionProvider } from "../agents/model-runtime-aliases.js";
+import { isCliProvider, resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import { resolveAgentTimeoutMs } from "../agents/timeout.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -59,21 +62,56 @@ Reply with ONLY the slug, nothing else. Examples: "vendor-pitch", "api-design", 
     });
     const timeoutMs = resolveSlugGeneratorTimeoutMs(params.cfg);
 
-    const result = await runEmbeddedPiAgent({
-      sessionId: `slug-generator-${Date.now()}`,
-      sessionKey: "temp:slug-generator",
-      agentId,
-      sessionFile: tempSessionFile,
-      workspaceDir,
+    const sessionId = `slug-generator-${Date.now()}`;
+    const runId = `slug-gen-${Date.now()}`;
+    const cliExecutionProvider =
+      resolveCliRuntimeExecutionProvider({
+        provider,
+        cfg: params.cfg,
+        agentId,
+      }) ?? provider;
+    const sessionEntry = { sessionId, updatedAt: Date.now() };
+    const sessionStore = { "temp:slug-generator": sessionEntry };
+    const authProfileId = await resolveSessionAuthProfileOverride({
+      cfg: params.cfg,
+      provider: cliExecutionProvider,
       agentDir,
-      config: params.cfg,
-      prompt,
-      provider,
-      model,
-      timeoutMs,
-      runId: `slug-gen-${Date.now()}`,
-      cleanupBundleMcpOnRunEnd: true,
+      sessionEntry,
+      sessionStore,
+      sessionKey: "temp:slug-generator",
+      isNewSession: true,
     });
+    const result = isCliProvider(cliExecutionProvider, params.cfg)
+      ? await runCliAgent({
+          sessionId,
+          sessionKey: "temp:slug-generator",
+          agentId,
+          sessionFile: tempSessionFile,
+          workspaceDir,
+          config: params.cfg,
+          prompt,
+          provider: cliExecutionProvider,
+          model,
+          authProfileId,
+          timeoutMs,
+          runId,
+          cleanupCliLiveSessionOnRunEnd: true,
+        })
+      : await runEmbeddedPiAgent({
+          sessionId,
+          sessionKey: "temp:slug-generator",
+          agentId,
+          sessionFile: tempSessionFile,
+          workspaceDir,
+          agentDir,
+          config: params.cfg,
+          prompt,
+          provider,
+          model,
+          timeoutMs,
+          runId,
+          cleanupBundleMcpOnRunEnd: true,
+        });
 
     // Extract text from payloads
     if (result.payloads && result.payloads.length > 0) {

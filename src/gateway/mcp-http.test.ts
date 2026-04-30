@@ -1,4 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  drainCliMessagingToolSends,
+  resetCliMessagingToolSendsForTest,
+} from "../agents/cli-runner/messaging-tool-tracker.js";
 import { getFreePortBlockWithPermissionFallback } from "../test-utils/ports.js";
 
 type MockGatewayTool = {
@@ -69,6 +73,7 @@ import {
   ensureMcpLoopbackServer,
   startMcpLoopbackServer,
 } from "./mcp-http.js";
+import { registerMcpLoopbackOwnerOnlyToolAllowlist } from "./mcp-http.loopback-runtime.js";
 
 let server: Awaited<ReturnType<typeof startMcpLoopbackServer>> | undefined;
 
@@ -91,6 +96,7 @@ async function sendRaw(params: {
 beforeEach(() => {
   resolveGatewayScopedToolsMock.mockClear();
   runBeforeToolCallHookMock.mockClear();
+  resetCliMessagingToolSendsForTest();
   runBeforeToolCallHookMock.mockImplementation(
     async (args: { params: unknown }): Promise<MockBeforeToolCallHookResult> => ({
       blocked: false,
@@ -115,6 +121,7 @@ beforeEach(() => {
 afterEach(async () => {
   await server?.close();
   server = undefined;
+  resetCliMessagingToolSendsForTest();
 });
 
 describe("mcp loopback server", () => {
@@ -311,6 +318,56 @@ describe("mcp loopback server", () => {
     expect(names).not.toContain("owner_probe");
   });
 
+  it("allows scoped owner-only tools for registered non-owner loopback runs", async () => {
+    resolveGatewayScopedToolsMock.mockReturnValue({
+      agentId: "main",
+      tools: [
+        {
+          name: "message",
+          description: "send a message",
+          parameters: { type: "object", properties: {} },
+          execute: async () => ({
+            content: [{ type: "text", text: "ok" }],
+          }),
+        },
+        {
+          name: "cron",
+          description: "manage schedules",
+          parameters: { type: "object", properties: {} },
+          execute: async () => ({
+            content: [{ type: "text", text: "cron" }],
+          }),
+        },
+      ],
+    });
+    server = await startMcpLoopbackServer(0);
+    const runtime = getActiveMcpLoopbackRuntime();
+    registerMcpLoopbackOwnerOnlyToolAllowlist({
+      sessionKey: "agent:main:main",
+      runId: "run-cron-grant",
+      tools: ["cron"],
+    });
+
+    const response = await sendRaw({
+      port: server.port,
+      token: runtime ? resolveMcpLoopbackBearerToken(runtime, false) : undefined,
+      headers: {
+        "content-type": "application/json",
+        "x-session-key": "agent:main:main",
+        "x-openclaw-run-id": "run-cron-grant",
+      },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+    });
+    const payload = (await response.json()) as {
+      result?: { tools?: Array<{ name: string }> };
+    };
+    const names = (payload.result?.tools ?? []).map((tool) => tool.name);
+
+    expect(response.status).toBe(200);
+    expect(names).toContain("message");
+    expect(names).toContain("cron");
+  });
+
   it("keeps owner-only tools available to owner loopback callers", async () => {
     resolveGatewayScopedToolsMock.mockReturnValue({
       agentId: "main",
@@ -460,6 +517,370 @@ describe("mcp loopback server", () => {
     expect(execute).not.toHaveBeenCalled();
     expect(payload.result?.isError).toBe(true);
     expect(payload.result?.content?.[0]?.text).toBe("blocked by hook");
+  });
+
+  it("records successful message tool sends for CLI duplicate suppression", async () => {
+    const execute = vi.fn(async () => ({
+      content: [{ type: "text", text: "sent" }],
+    }));
+    resolveGatewayScopedToolsMock.mockReturnValue({
+      agentId: "main",
+      tools: [
+        {
+          name: "message",
+          description: "send a message",
+          parameters: { type: "object", properties: {} },
+          execute,
+        },
+      ],
+    });
+    server = await startMcpLoopbackServer(0);
+    const runtime = getActiveMcpLoopbackRuntime();
+
+    const response = await sendRaw({
+      port: server.port,
+      token: runtime ? resolveMcpLoopbackBearerToken(runtime, false) : undefined,
+      headers: {
+        "content-type": "application/json",
+        "x-session-key": "agent:main:telegram:chat123",
+        "x-openclaw-message-channel": "telegram",
+        "x-openclaw-message-to": "chat123",
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: {
+          name: "message",
+          arguments: {
+            action: "send",
+            message: "hello",
+            media: "file:///tmp/out.png",
+          },
+        },
+      }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(execute).toHaveBeenCalledOnce();
+    expect(drainCliMessagingToolSends("agent:main:telegram:chat123")).toEqual({
+      targets: [{ tool: "message", provider: "telegram", to: "chat123" }],
+      texts: ["hello"],
+      mediaUrls: ["file:///tmp/out.png"],
+    });
+  });
+
+  it("keeps message tool sends isolated per CLI run id", async () => {
+    resolveGatewayScopedToolsMock.mockReturnValue({
+      agentId: "main",
+      tools: [
+        {
+          name: "message",
+          description: "send a message",
+          parameters: { type: "object", properties: {} },
+          execute: vi.fn(async () => ({
+            content: [{ type: "text", text: "sent" }],
+          })),
+        },
+      ],
+    });
+    server = await startMcpLoopbackServer(0);
+    const activeServer = server;
+    const runtime = getActiveMcpLoopbackRuntime();
+
+    const sendMessage = async (runId: string, message: string) =>
+      sendRaw({
+        port: activeServer.port,
+        token: runtime ? resolveMcpLoopbackBearerToken(runtime, false) : undefined,
+        headers: {
+          "content-type": "application/json",
+          "x-session-key": "agent:main:telegram:chat123",
+          "x-openclaw-run-id": runId,
+          "x-openclaw-message-channel": "telegram",
+          "x-openclaw-message-to": "chat123",
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: runId,
+          method: "tools/call",
+          params: {
+            name: "message",
+            arguments: {
+              action: "send",
+              message,
+            },
+          },
+        }),
+      });
+
+    expect((await sendMessage("run-a", "from a")).status).toBe(200);
+    expect((await sendMessage("run-b", "from b")).status).toBe(200);
+
+    expect(drainCliMessagingToolSends("agent:main:telegram:chat123", "run-a")).toEqual({
+      targets: [{ tool: "message", provider: "telegram", to: "chat123" }],
+      texts: ["from a"],
+      mediaUrls: [],
+    });
+    expect(drainCliMessagingToolSends("agent:main:telegram:chat123", "run-b")).toEqual({
+      targets: [{ tool: "message", provider: "telegram", to: "chat123" }],
+      texts: ["from b"],
+      mediaUrls: [],
+    });
+  });
+
+  it("records attachment-style message tool sends for CLI duplicate suppression", async () => {
+    resolveGatewayScopedToolsMock.mockReturnValue({
+      agentId: "main",
+      tools: [
+        {
+          name: "message",
+          description: "send a message",
+          parameters: { type: "object", properties: {} },
+          execute: vi.fn(async () => ({
+            content: [{ type: "text", text: "uploaded" }],
+          })),
+        },
+      ],
+    });
+    server = await startMcpLoopbackServer(0);
+    const runtime = getActiveMcpLoopbackRuntime();
+
+    const response = await sendRaw({
+      port: server.port,
+      token: runtime ? resolveMcpLoopbackBearerToken(runtime, false) : undefined,
+      headers: {
+        "content-type": "application/json",
+        "x-session-key": "agent:main:telegram:chat123",
+        "x-openclaw-message-channel": "telegram",
+        "x-openclaw-message-to": "chat123",
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: {
+          name: "message",
+          arguments: {
+            action: "upload-file",
+            target: "chat123",
+            path: "file:///tmp/out.png",
+          },
+        },
+      }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(drainCliMessagingToolSends("agent:main:telegram:chat123")).toEqual({
+      targets: [{ tool: "message", provider: "telegram", to: "chat123" }],
+      texts: [],
+      mediaUrls: ["file:///tmp/out.png"],
+    });
+  });
+
+  it("uses channelId as the message target before falling back to request context", async () => {
+    resolveGatewayScopedToolsMock.mockReturnValue({
+      agentId: "main",
+      tools: [
+        {
+          name: "message",
+          description: "send a message",
+          parameters: { type: "object", properties: {} },
+          execute: vi.fn(async () => ({
+            content: [{ type: "text", text: "uploaded" }],
+          })),
+        },
+      ],
+    });
+    server = await startMcpLoopbackServer(0);
+    const runtime = getActiveMcpLoopbackRuntime();
+
+    const response = await sendRaw({
+      port: server.port,
+      token: runtime ? resolveMcpLoopbackBearerToken(runtime, false) : undefined,
+      headers: {
+        "content-type": "application/json",
+        "x-session-key": "agent:main:slack:C0",
+        "x-openclaw-run-id": "run-channel-id",
+        "x-openclaw-message-channel": "slack",
+        "x-openclaw-message-to": "C0",
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: {
+          name: "message",
+          arguments: {
+            action: "upload-file",
+            channelId: "C1",
+            path: "file:///tmp/out.png",
+          },
+        },
+      }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(drainCliMessagingToolSends("agent:main:slack:C0", "run-channel-id")).toEqual({
+      targets: [{ tool: "message", provider: "slack", to: "C1" }],
+      texts: [],
+      mediaUrls: ["file:///tmp/out.png"],
+    });
+  });
+
+  it("records sessions_send text for CLI duplicate suppression", async () => {
+    resolveGatewayScopedToolsMock.mockReturnValue({
+      agentId: "main",
+      tools: [
+        {
+          name: "sessions_send",
+          description: "send to a session",
+          parameters: { type: "object", properties: {} },
+          execute: vi.fn(async () => ({
+            content: [{ type: "text", text: "sent" }],
+          })),
+        },
+      ],
+    });
+    server = await startMcpLoopbackServer(0);
+    const runtime = getActiveMcpLoopbackRuntime();
+
+    const response = await sendRaw({
+      port: server.port,
+      token: runtime ? resolveMcpLoopbackBearerToken(runtime, false) : undefined,
+      headers: {
+        "content-type": "application/json",
+        "x-session-key": "agent:main:telegram:chat123",
+        "x-openclaw-run-id": "run-sessions-send",
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: {
+          name: "sessions_send",
+          arguments: {
+            sessionKey: "agent:helper:main",
+            message: "sent to helper",
+          },
+        },
+      }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(drainCliMessagingToolSends("agent:main:telegram:chat123", "run-sessions-send")).toEqual({
+      targets: [],
+      texts: [],
+      mediaUrls: [],
+    });
+  });
+
+  it("does not record message dry runs as delivered sends", async () => {
+    resolveGatewayScopedToolsMock.mockReturnValue({
+      agentId: "main",
+      tools: [
+        {
+          name: "message",
+          description: "send a message",
+          parameters: { type: "object", properties: {} },
+          execute: vi.fn(async () => ({
+            content: [{ type: "text", text: "dry run" }],
+          })),
+        },
+      ],
+    });
+    server = await startMcpLoopbackServer(0);
+    const runtime = getActiveMcpLoopbackRuntime();
+
+    const response = await sendRaw({
+      port: server.port,
+      token: runtime ? resolveMcpLoopbackBearerToken(runtime, false) : undefined,
+      headers: {
+        "content-type": "application/json",
+        "x-session-key": "agent:main:telegram:chat123",
+        "x-openclaw-run-id": "run-message-dry-run",
+        "x-openclaw-message-channel": "telegram",
+        "x-openclaw-message-to": "chat123",
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: {
+          name: "message",
+          arguments: {
+            action: "send",
+            dryRun: true,
+            message: "not actually sent",
+          },
+        },
+      }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(
+      drainCliMessagingToolSends("agent:main:telegram:chat123", "run-message-dry-run"),
+    ).toEqual({
+      targets: [],
+      texts: [],
+      mediaUrls: [],
+    });
+  });
+
+  it("does not record logically failed sessions_send calls", async () => {
+    resolveGatewayScopedToolsMock.mockReturnValue({
+      agentId: "main",
+      tools: [
+        {
+          name: "sessions_send",
+          description: "send to a session",
+          parameters: { type: "object", properties: {} },
+          execute: vi.fn(async () => ({
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify({
+                  status: "forbidden",
+                  error: "session is not visible",
+                }),
+              },
+            ],
+          })),
+        },
+      ],
+    });
+    server = await startMcpLoopbackServer(0);
+    const runtime = getActiveMcpLoopbackRuntime();
+
+    const response = await sendRaw({
+      port: server.port,
+      token: runtime ? resolveMcpLoopbackBearerToken(runtime, false) : undefined,
+      headers: {
+        "content-type": "application/json",
+        "x-session-key": "agent:main:telegram:chat123",
+        "x-openclaw-run-id": "run-sessions-send-failed",
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: {
+          name: "sessions_send",
+          arguments: {
+            sessionKey: "agent:hidden:main",
+            message: "not sent",
+          },
+        },
+      }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(
+      drainCliMessagingToolSends("agent:main:telegram:chat123", "run-sessions-send-failed"),
+    ).toEqual({
+      targets: [],
+      texts: [],
+      mediaUrls: [],
+    });
   });
 
   it("forwards the request abort signal to loopback tool execution", async () => {
@@ -648,6 +1069,9 @@ describe("createMcpLoopbackServerConfig", () => {
     expect(config.mcpServers?.openclaw?.url).toBe("http://127.0.0.1:23119/mcp");
     expect(config.mcpServers?.openclaw?.headers?.Authorization).toBe(
       "Bearer ${OPENCLAW_MCP_TOKEN}",
+    );
+    expect(config.mcpServers?.openclaw?.headers?.["x-openclaw-run-id"]).toBe(
+      "${OPENCLAW_MCP_RUN_ID}",
     );
     expect(config.mcpServers?.openclaw?.headers?.["x-openclaw-message-channel"]).toBe(
       "${OPENCLAW_MCP_MESSAGE_CHANNEL}",

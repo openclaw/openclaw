@@ -1,19 +1,26 @@
+import os from "node:os";
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
-const runEmbeddedPiAgentMock = vi.fn();
+const { resolveAgentEffectiveModelPrimaryMock, runEmbeddedPiAgentMock, runCliAgentMock } =
+  vi.hoisted(() => ({
+    resolveAgentEffectiveModelPrimaryMock: vi.fn<(cfg?: OpenClawConfig) => string | null>(
+      () => null,
+    ),
+    runEmbeddedPiAgentMock: vi.fn(),
+    runCliAgentMock: vi.fn(),
+  }));
 
 vi.mock("../agents/agent-scope.js", () => ({
   resolveDefaultAgentId: vi.fn(() => "main"),
-  resolveAgentWorkspaceDir: vi.fn(() => "/tmp/openclaw-agent"),
-  resolveAgentDir: vi.fn(() => "/tmp/openclaw-agent/.openclaw-agent"),
-  resolveAgentEffectiveModelPrimary: vi.fn((cfg: OpenClawConfig) => {
-    const model = cfg.agents?.defaults?.model;
-    if (typeof model === "string") {
-      return model;
-    }
-    return model?.primary;
-  }),
+  resolveAgentWorkspaceDir: vi.fn(() => path.join(os.tmpdir(), "openclaw-slug-workspace")),
+  resolveAgentDir: vi.fn(() => path.join(os.tmpdir(), "openclaw-slug-agent")),
+  resolveAgentEffectiveModelPrimary: resolveAgentEffectiveModelPrimaryMock,
+}));
+
+vi.mock("../agents/cli-runner.js", () => ({
+  runCliAgent: (...args: unknown[]) => runCliAgentMock(...args),
 }));
 
 vi.mock("../agents/pi-embedded.js", () => ({
@@ -24,6 +31,9 @@ import { generateSlugViaLLM } from "./llm-slug-generator.js";
 
 describe("generateSlugViaLLM", () => {
   beforeEach(() => {
+    resolveAgentEffectiveModelPrimaryMock.mockReset();
+    resolveAgentEffectiveModelPrimaryMock.mockReturnValue(null);
+    runCliAgentMock.mockReset();
     runEmbeddedPiAgentMock.mockReset();
     runEmbeddedPiAgentMock.mockResolvedValue({
       payloads: [{ text: "test-slug" }],
@@ -66,6 +76,14 @@ describe("generateSlugViaLLM", () => {
   });
 
   it("infers provider metadata for bare configured agent models", async () => {
+    resolveAgentEffectiveModelPrimaryMock.mockImplementation((cfg?: OpenClawConfig) => {
+      const model = cfg?.agents?.defaults?.model;
+      if (typeof model === "string") {
+        return model;
+      }
+      return model?.primary ?? null;
+    });
+
     await generateSlugViaLLM({
       sessionContent: "hello",
       cfg: {
@@ -102,5 +120,44 @@ describe("generateSlugViaLLM", () => {
         model: "gpt-5.5",
       }),
     );
+  });
+
+  it("uses runCliAgent for CLI-backed default models and preserves timeout resolution", async () => {
+    resolveAgentEffectiveModelPrimaryMock.mockReturnValue("claude-cli/opus");
+    runCliAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "Vendor Pitch" }],
+      meta: {
+        agentMeta: {
+          sessionId: "cli-session",
+          provider: "claude-cli",
+          model: "opus",
+        },
+      },
+    });
+
+    const slug = await generateSlugViaLLM({
+      sessionContent: "Discussed the vendor pitch and next steps.",
+      cfg: {
+        agents: {
+          defaults: {
+            cliBackends: {
+              "claude-cli": { command: "claude" },
+            },
+            timeoutSeconds: 500,
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    expect(runCliAgentMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "claude-cli",
+        model: "opus",
+        timeoutMs: 500_000,
+        cleanupCliLiveSessionOnRunEnd: true,
+      }),
+    );
+    expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+    expect(slug).toBe("vendor-pitch");
   });
 });

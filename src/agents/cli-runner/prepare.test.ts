@@ -93,6 +93,35 @@ function createSessionFile() {
   return { dir, sessionFile };
 }
 
+function makeMcpLoopbackServer() {
+  return {
+    port: 3210,
+    close: vi.fn(async () => undefined),
+  };
+}
+
+function makeMcpLoopbackServerConfig(port = 3210) {
+  return {
+    mcpServers: {
+      openclaw: {
+        type: "http",
+        url: `http://127.0.0.1:${port}/mcp`,
+        headers: {
+          Authorization: "Bearer ${OPENCLAW_MCP_TOKEN}",
+          "x-session-key": "${OPENCLAW_MCP_SESSION_KEY}",
+          "x-openclaw-run-id": "${OPENCLAW_MCP_RUN_ID}",
+          "x-openclaw-agent-id": "${OPENCLAW_MCP_AGENT_ID}",
+          "x-openclaw-account-id": "${OPENCLAW_MCP_ACCOUNT_ID}",
+          "x-openclaw-message-channel": "${OPENCLAW_MCP_MESSAGE_CHANNEL}",
+          "x-openclaw-message-to": "${OPENCLAW_MCP_MESSAGE_TO}",
+          "x-openclaw-thread-id": "${OPENCLAW_MCP_THREAD_ID}",
+          "x-openclaw-current-channel-id": "${OPENCLAW_MCP_CURRENT_CHANNEL_ID}",
+        },
+      },
+    },
+  };
+}
+
 function appendTranscriptEntry(
   sessionFile: string,
   entry: {
@@ -128,6 +157,9 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         contextFiles: [],
       })),
       resolveOpenClawReferencePaths: vi.fn(async () => ({ docsPath: null, sourcePath: null })),
+      getActiveMcpLoopbackRuntime: vi.fn(() => undefined),
+      ensureMcpLoopbackServer: vi.fn(async () => makeMcpLoopbackServer()),
+      createMcpLoopbackServerConfig: vi.fn(makeMcpLoopbackServerConfig),
     });
     mockGetGlobalHookRunner.mockReturnValue(null);
     mockBuildActiveVideoGenerationTaskPromptContextForSession.mockReturnValue(undefined);
@@ -499,6 +531,225 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
 
       expect(context.extraSystemPromptHash).toBe(hashCliSessionText(staticPrompt));
       expect(context.reusableCliSession).toEqual({ sessionId: "cli-session" });
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not prepare bundled MCP tools when tools are disabled", async () => {
+    const { dir, sessionFile } = createSessionFile();
+    const ensureMcpLoopbackServerMock = vi.fn(async () => makeMcpLoopbackServer());
+    try {
+      setCliRunnerPrepareTestDeps({
+        getActiveMcpLoopbackRuntime: vi.fn(() => ({
+          port: 3210,
+          ownerToken: "owner-token",
+          nonOwnerToken: "agent-token",
+        })),
+        ensureMcpLoopbackServer: ensureMcpLoopbackServerMock,
+        createMcpLoopbackServerConfig: vi.fn(makeMcpLoopbackServerConfig),
+      });
+
+      const context = await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "latest ask",
+        provider: "test-cli",
+        model: "test-model",
+        timeoutMs: 1_000,
+        runId: "run-test-no-tools",
+        disableTools: true,
+        config: {
+          agents: {
+            defaults: {
+              cliBackends: {
+                "test-cli": {
+                  command: "test-cli",
+                  bundleMcp: true,
+                  bundleMcpMode: "claude-config-file",
+                },
+              },
+            },
+          },
+        } as OpenClawConfig,
+      });
+
+      expect(ensureMcpLoopbackServerMock).not.toHaveBeenCalled();
+      expect(context.preparedBackend.env?.OPENCLAW_MCP_TOKEN).toBeUndefined();
+      expect(context.preparedBackend.mcpConfigHash).toBeUndefined();
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("resets bundled MCP CLI sessions when owner scope changes", async () => {
+    const { dir, sessionFile } = createSessionFile();
+    try {
+      setCliRunnerPrepareTestDeps({
+        getActiveMcpLoopbackRuntime: vi.fn(() => ({
+          port: 3210,
+          ownerToken: "owner-token",
+          nonOwnerToken: "agent-token",
+        })),
+        ensureMcpLoopbackServer: vi.fn(async () => makeMcpLoopbackServer()),
+        createMcpLoopbackServerConfig: vi.fn(makeMcpLoopbackServerConfig),
+      });
+      cliBackendsTesting.setDepsForTest({
+        resolvePluginSetupCliBackend: () => undefined,
+        resolveRuntimeCliBackends: () => [
+          {
+            pluginId: "test-plugin",
+            id: "test-cli",
+            config: {
+              command: "test-cli",
+              args: ["--print"],
+              systemPromptArg: "--system-prompt",
+              systemPromptWhen: "first" as const,
+              sessionMode: "existing" as const,
+              output: "text" as const,
+              input: "arg" as const,
+            },
+            bundleMcp: true,
+            bundleMcpMode: "claude-config-file",
+          },
+        ],
+      });
+
+      const ownerContext = await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionKey: "agent:main:test",
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "latest ask",
+        provider: "test-cli",
+        model: "test-model",
+        timeoutMs: 1_000,
+        runId: "run-test-owner-mcp",
+        senderIsOwner: true,
+        config: {
+          agents: {
+            defaults: {
+              cliBackends: {
+                "test-cli": {
+                  command: "test-cli",
+                  bundleMcp: true,
+                  bundleMcpMode: "claude-config-file",
+                },
+              },
+            },
+          },
+        } as OpenClawConfig,
+      });
+      const nonOwnerContext = await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionKey: "agent:main:test",
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "latest ask",
+        provider: "test-cli",
+        model: "test-model",
+        timeoutMs: 1_000,
+        runId: "run-test-non-owner-mcp",
+        senderIsOwner: false,
+        cliSessionBinding: {
+          sessionId: "cli-session",
+          mcpRoutingHash: ownerContext.mcpRoutingHash,
+        },
+        config: {
+          agents: {
+            defaults: {
+              cliBackends: {
+                "test-cli": {
+                  command: "test-cli",
+                  bundleMcp: true,
+                  bundleMcpMode: "claude-config-file",
+                },
+              },
+            },
+          },
+        } as OpenClawConfig,
+      });
+
+      expect(ownerContext.mcpRoutingHash).toBeTruthy();
+      expect(nonOwnerContext.mcpRoutingHash).toBeTruthy();
+      expect(nonOwnerContext.mcpRoutingHash).not.toBe(ownerContext.mcpRoutingHash);
+      expect(nonOwnerContext.reusableCliSession).toEqual({ invalidatedReason: "mcp" });
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("registers scoped owner-only tool grants for bundled MCP runs", async () => {
+    const { dir, sessionFile } = createSessionFile();
+    const cleanupGrant = vi.fn();
+    const registerGrant = vi.fn(() => cleanupGrant);
+    try {
+      setCliRunnerPrepareTestDeps({
+        getActiveMcpLoopbackRuntime: vi.fn(() => ({
+          port: 3210,
+          ownerToken: "owner-token",
+          nonOwnerToken: "agent-token",
+        })),
+        ensureMcpLoopbackServer: vi.fn(async () => makeMcpLoopbackServer()),
+        createMcpLoopbackServerConfig: vi.fn(makeMcpLoopbackServerConfig),
+        registerMcpLoopbackOwnerOnlyToolAllowlist: registerGrant,
+      });
+      cliBackendsTesting.setDepsForTest({
+        resolvePluginSetupCliBackend: () => undefined,
+        resolveRuntimeCliBackends: () => [
+          {
+            pluginId: "test-plugin",
+            id: "test-cli",
+            config: {
+              command: "test-cli",
+              args: ["--print"],
+              systemPromptArg: "--system-prompt",
+              systemPromptWhen: "first" as const,
+              sessionMode: "existing" as const,
+              output: "text" as const,
+              input: "arg" as const,
+            },
+            bundleMcp: true,
+            bundleMcpMode: "claude-config-file",
+          },
+        ],
+      });
+
+      const context = await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionKey: "agent:main:test",
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "latest ask",
+        provider: "test-cli",
+        model: "test-model",
+        timeoutMs: 1_000,
+        runId: "run-test-cron-grant",
+        senderIsOwner: false,
+        ownerOnlyToolAllowlist: ["cron"],
+        config: {
+          agents: {
+            defaults: {
+              cliBackends: {
+                "test-cli": {
+                  command: "test-cli",
+                  bundleMcp: true,
+                  bundleMcpMode: "claude-config-file",
+                },
+              },
+            },
+          },
+        } as OpenClawConfig,
+      });
+
+      expect(registerGrant).toHaveBeenCalledWith({
+        sessionKey: "agent:main:test",
+        runId: "run-test-cron-grant",
+        tools: ["cron"],
+      });
+      await context.preparedBackend.cleanup?.();
+      expect(cleanupGrant).toHaveBeenCalledTimes(1);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

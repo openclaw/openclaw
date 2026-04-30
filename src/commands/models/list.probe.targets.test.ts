@@ -55,6 +55,7 @@ vi.mock("../../agents/model-selection.js", () => {
     normalizeProviderId,
     findNormalizedProviderValue: (record: Record<string, unknown> | undefined, provider: string) =>
       Object.entries(record ?? {}).find(([key]) => normalizeProviderId(key) === provider)?.[1],
+    isCliProvider: () => false,
     parseModelRef: (raw: string, defaultProvider: string) => {
       const [provider, ...modelParts] = raw.includes("/") ? raw.split("/") : [defaultProvider, raw];
       const model = modelParts.join("/");
@@ -74,6 +75,7 @@ vi.mock("./shared.js", () => ({
 }));
 
 vi.mock("../../agents/auth-profiles.js", () => ({
+  dedupeProfileIds: (profileIds: string[]) => [...new Set(profileIds)],
   ensureAuthProfileStore: (agentDir?: string) =>
     agentDir === "/tmp/coder-agent" && mockAgentStore ? mockAgentStore : mockStore,
   listProfilesForProvider: (store: AuthProfileStore, provider: string) =>

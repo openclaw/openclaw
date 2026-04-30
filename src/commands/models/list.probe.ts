@@ -5,20 +5,25 @@ import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/ag
 import {
   type AuthProfileCredential,
   type AuthProfileEligibilityReasonCode,
+  dedupeProfileIds,
   ensureAuthProfileStore,
   listProfilesForProvider,
   resolveAuthProfileDisplayLabel,
   resolveAuthProfileEligibility,
   resolveAuthProfileOrder,
 } from "../../agents/auth-profiles.js";
+import { runCliAgent } from "../../agents/cli-runner.js";
 import { describeFailoverError } from "../../agents/failover-error.js";
 import { hasUsableCustomProviderApiKey, resolveEnvApiKey } from "../../agents/model-auth.js";
 import { loadModelCatalog } from "../../agents/model-catalog.js";
+import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
 import {
   findNormalizedProviderValue,
+  isCliProvider,
   normalizeProviderId,
   parseModelRef,
 } from "../../agents/model-selection.js";
+import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import {
   resolveSessionTranscriptPath,
@@ -30,7 +35,12 @@ import { type SecretRefResolveCache, resolveSecretRefString } from "../../secret
 import { redactSecrets } from "../status-all/format.js";
 import { DEFAULT_PROVIDER, formatMs } from "./shared.js";
 
-const PROBE_PROMPT = "Reply with OK. Do not use tools.";
+const PROBE_PROMPT = "Reply with exactly OK and nothing else. Do not use tools.";
+
+function buildProbePrompt(maxTokens: number): string {
+  const suffix = maxTokens === 1 ? "" : "s";
+  return `${PROBE_PROMPT} Keep the reply to at most ${maxTokens} token${suffix}.`;
+}
 
 let embeddedRunnerModulePromise: Promise<typeof import("../../agents/pi-embedded.js")> | undefined;
 
@@ -272,23 +282,45 @@ export async function buildProbeTargets(params: {
       continue;
     }
 
-    const model = selectProbeModel({
-      provider: providerKey,
-      candidates,
-      catalog,
-    });
+    const defaultAgentId = resolveDefaultAgentId(cfg);
+    const cliExecutionProviderForProvider =
+      resolveCliRuntimeExecutionProvider({
+        provider: providerKey,
+        cfg,
+        agentId: defaultAgentId,
+      }) ?? providerKey;
+    const model =
+      selectProbeModel({
+        provider: providerKey,
+        candidates,
+        catalog,
+      }) ??
+      (cliExecutionProviderForProvider !== providerKey
+        ? selectProbeModel({
+            provider: cliExecutionProviderForProvider,
+            candidates,
+            catalog,
+          })
+        : null);
 
-    const profileIds = listProfilesForProvider(store, providerKey);
-    const explicitOrder = (() => {
-      return (
-        findNormalizedProviderValue(store.order, providerKey) ??
-        findNormalizedProviderValue(cfg?.auth?.order, providerKey)
-      );
-    })();
-    const allowedProfiles =
-      explicitOrder && explicitOrder.length > 0
-        ? new Set(resolveAuthProfileOrder({ cfg, store, provider: providerKey }))
-        : null;
+    const cliExecutionProvider = model
+      ? (resolveCliRuntimeExecutionProvider({
+          provider: model.provider,
+          cfg,
+          agentId: defaultAgentId,
+        }) ?? model.provider)
+      : cliExecutionProviderForProvider;
+    const runtimeProfileProviderKey = isCliProvider(cliExecutionProvider, cfg)
+      ? resolveProviderIdForAuth(cliExecutionProvider, { config: cfg })
+      : providerKey;
+    const canonicalProfileIds = listProfilesForProvider(store, providerKey);
+    const runtimeProfileIds =
+      runtimeProfileProviderKey !== providerKey
+        ? listProfilesForProvider(store, runtimeProfileProviderKey)
+        : [];
+    const runtimeProfileIdSet = new Set(runtimeProfileIds);
+    const canonicalProfileIdSet = new Set(canonicalProfileIds);
+    const profileIds = dedupeProfileIds([...canonicalProfileIds, ...runtimeProfileIds]);
     const filteredProfiles = profileFilter.size
       ? profileIds.filter((id) => profileFilter.has(id))
       : profileIds;
@@ -296,6 +328,17 @@ export async function buildProbeTargets(params: {
     if (filteredProfiles.length > 0) {
       for (const profileId of filteredProfiles) {
         const profile = store.profiles[profileId];
+        const profileProviderKey =
+          runtimeProfileIdSet.has(profileId) && !canonicalProfileIdSet.has(profileId)
+            ? runtimeProfileProviderKey
+            : providerKey;
+        const explicitOrder =
+          findNormalizedProviderValue(store.order, profileProviderKey) ??
+          findNormalizedProviderValue(cfg?.auth?.order, profileProviderKey);
+        const allowedProfiles =
+          explicitOrder && explicitOrder.length > 0
+            ? new Set(resolveAuthProfileOrder({ cfg, store, provider: profileProviderKey }))
+            : null;
         const mode = profile?.type;
         const label = resolveAuthProfileDisplayLabel({ cfg, store, profileId });
         if (explicitOrder && !explicitOrder.includes(profileId)) {
@@ -316,7 +359,7 @@ export async function buildProbeTargets(params: {
           const eligibility = resolveAuthProfileEligibility({
             cfg,
             store,
-            provider: providerKey,
+            provider: profileProviderKey,
             profileId,
           });
           const reasonCode = mapEligibilityReasonToProbeReasonCode(eligibility.reasonCode);
@@ -366,9 +409,17 @@ export async function buildProbeTargets(params: {
           });
           continue;
         }
+        const profileModel =
+          profileProviderKey !== providerKey
+            ? (selectProbeModel({
+                provider: profileProviderKey,
+                candidates,
+                catalog,
+              }) ?? model)
+            : model;
         targets.push({
           provider: providerKey,
-          model,
+          model: profileModel,
           profileId,
           label,
           source: "profile",
@@ -379,6 +430,21 @@ export async function buildProbeTargets(params: {
     }
 
     if (profileFilter.size > 0) {
+      continue;
+    }
+
+    if (
+      model &&
+      normalizeProviderId(model.provider) !== providerKey &&
+      isCliProvider(model.provider, cfg)
+    ) {
+      targets.push({
+        provider: providerKey,
+        model,
+        label: "CLI runtime",
+        source: "models.json",
+        mode: "cli",
+      });
       continue;
     }
 
@@ -448,6 +514,7 @@ async function probeTarget(params: {
   const model = target.model;
 
   const sessionId = `probe-${target.provider}-${crypto.randomUUID()}`;
+  const sessionKey = `agent:${agentId}:${sessionId}`;
   const sessionFile = resolveSessionTranscriptPath(sessionId, agentId);
   await fs.mkdir(sessionDir, { recursive: true });
 
@@ -464,29 +531,53 @@ async function probeTarget(params: {
     latencyMs: Date.now() - start,
   });
   try {
-    const { runEmbeddedPiAgent } = await loadEmbeddedRunnerModule();
-    await runEmbeddedPiAgent({
-      sessionId,
-      sessionFile,
-      agentId,
-      workspaceDir,
-      agentDir,
-      config: cfg,
-      prompt: PROBE_PROMPT,
-      provider: target.model.provider,
-      model: target.model.model,
-      authProfileId: target.profileId,
-      authProfileIdSource: target.profileId ? "user" : undefined,
-      timeoutMs,
-      runId: `probe-${crypto.randomUUID()}`,
-      lane: `auth-probe:${target.provider}:${target.profileId ?? target.source}`,
-      thinkLevel: "off",
-      reasoningLevel: "off",
-      verboseLevel: "off",
-      streamParams: { maxTokens },
-      disableTools: true,
-      cleanupBundleMcpOnRunEnd: true,
-    });
+    const cliExecutionProvider = target.model.provider;
+    if (isCliProvider(cliExecutionProvider, cfg)) {
+      await runCliAgent({
+        sessionId,
+        sessionKey,
+        sessionFile,
+        agentId,
+        workspaceDir,
+        config: cfg,
+        // CLI backends do not yet translate streamParams.maxTokens into
+        // backend-native argv, so keep auth probes explicitly tiny here too.
+        prompt: buildProbePrompt(maxTokens),
+        provider: cliExecutionProvider,
+        model: target.model.model,
+        authProfileId: target.profileId,
+        thinkLevel: "off",
+        timeoutMs,
+        runId: `probe-${crypto.randomUUID()}`,
+        streamParams: { maxTokens },
+        disableTools: true,
+        cleanupCliLiveSessionOnRunEnd: true,
+      });
+    } else {
+      const { runEmbeddedPiAgent } = await loadEmbeddedRunnerModule();
+      await runEmbeddedPiAgent({
+        sessionId,
+        sessionFile,
+        agentId,
+        workspaceDir,
+        agentDir,
+        config: cfg,
+        prompt: PROBE_PROMPT,
+        provider: target.model.provider,
+        model: target.model.model,
+        authProfileId: target.profileId,
+        authProfileIdSource: target.profileId ? "user" : undefined,
+        timeoutMs,
+        runId: `probe-${crypto.randomUUID()}`,
+        lane: `auth-probe:${target.provider}:${target.profileId ?? target.source}`,
+        thinkLevel: "off",
+        reasoningLevel: "off",
+        verboseLevel: "off",
+        streamParams: { maxTokens },
+        disableTools: true,
+        cleanupBundleMcpOnRunEnd: true,
+      });
+    }
     return buildResult("ok");
   } catch (err) {
     const described = describeFailoverError(err);

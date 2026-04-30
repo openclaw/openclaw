@@ -2,6 +2,7 @@ import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import { drainCliMessagingToolSends } from "./cli-runner/messaging-tool-tracker.js";
 import { loadCliSessionHistoryMessages } from "./cli-runner/session-history.js";
 import type { PreparedCliRunContext, RunCliAgentParams } from "./cli-runner/types.js";
 import { FailoverError, isFailoverError, resolveFailoverStatus } from "./failover-error.js";
@@ -123,6 +124,7 @@ export async function runPreparedCliAgent(
 ): Promise<EmbeddedPiRunResult> {
   const { executePreparedCliRun } = await import("./cli-runner/execute.runtime.js");
   const { params } = context;
+  drainCliMessagingToolSends(params.sessionKey, params.runId);
   const hookRunner = getGlobalHookRunner();
   const hasLlmInputHooks = hookRunner?.hasHooks("llm_input") === true;
   const hasLlmOutputHooks = hookRunner?.hasHooks("llm_output") === true;
@@ -233,9 +235,20 @@ export async function runPreparedCliAgent(
     const text = resultParams.output.text?.trim();
     const rawText = resultParams.output.rawText?.trim();
     const payloads = text ? [{ text }] : undefined;
+    const messagingToolSends = drainCliMessagingToolSends(params.sessionKey, params.runId);
 
     return {
       payloads,
+      ...(messagingToolSends.targets.length > 0 ||
+      messagingToolSends.texts.length > 0 ||
+      messagingToolSends.mediaUrls.length > 0
+        ? {
+            didSendViaMessagingTool: true,
+            messagingToolSentTargets: messagingToolSends.targets,
+            messagingToolSentTexts: messagingToolSends.texts,
+            messagingToolSentMediaUrls: messagingToolSends.mediaUrls,
+          }
+        : {}),
       meta: {
         durationMs: Date.now() - context.started,
         ...(resultParams.output.finalPromptText
@@ -293,6 +306,7 @@ export async function runPreparedCliAgent(
                   ...(context.preparedBackend.mcpResumeHash
                     ? { mcpResumeHash: context.preparedBackend.mcpResumeHash }
                     : {}),
+                  ...(context.mcpRoutingHash ? { mcpRoutingHash: context.mcpRoutingHash } : {}),
                 },
               }
             : {}),
@@ -403,13 +417,19 @@ export function buildRunClaudeCliAgentParams(params: RunClaudeCliAgentParams): R
     silentReplyPromptMode: params.silentReplyPromptMode,
     extraSystemPromptStatic: params.extraSystemPromptStatic,
     ownerNumbers: params.ownerNumbers,
+    disableTools: params.disableTools,
     // Legacy `claudeSessionId` callers predate the shared CLI session contract.
     // Ignore it here so the compatibility wrapper does not accidentally resume
     // an incompatible Claude session on the generic runner path.
     images: params.images,
     messageChannel: params.messageChannel,
     messageProvider: params.messageProvider,
+    messageTo: params.messageTo,
+    messageThreadId: params.messageThreadId,
+    currentChannelId: params.currentChannelId,
+    agentAccountId: params.agentAccountId,
     senderIsOwner: params.senderIsOwner,
+    ownerOnlyToolAllowlist: params.ownerOnlyToolAllowlist,
   };
 }
 

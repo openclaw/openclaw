@@ -10,6 +10,7 @@ import {
 } from "../shared/string-coerce.js";
 import { truncateUtf16Safe } from "../utils.js";
 import { collectTextContentBlocks } from "./content-blocks.js";
+import { isCoreMessageToolSendAction } from "./messaging-tool-send-actions.js";
 import type { MessagingToolSend } from "./pi-embedded-messaging.types.js";
 import { normalizeToolName } from "./tool-policy.js";
 
@@ -507,7 +508,7 @@ function resolveMessageToolTarget(args: Record<string, unknown>): string | undef
   if (toRaw) {
     return toRaw;
   }
-  return readStringValue(args.target);
+  return readStringValue(args.target) ?? readStringValue(args.channelId);
 }
 
 export function extractMessagingToolSend(
@@ -518,7 +519,7 @@ export function extractMessagingToolSend(
   const action = normalizeOptionalString(args.action) ?? "";
   const accountId = normalizeOptionalString(args.accountId);
   if (toolName === "message") {
-    if (action !== "send" && action !== "thread-reply") {
+    if (!isCoreMessageToolSendAction(action)) {
       return undefined;
     }
     const toRaw = resolveMessageToolTarget(args);

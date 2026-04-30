@@ -4,15 +4,29 @@ import {
   resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
+import { runCliAgent } from "../../agents/cli-runner.js";
+import {
+  clearCliSession,
+  getCliSessionBinding,
+  setCliSessionBinding,
+} from "../../agents/cli-session.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
+import { FailoverError } from "../../agents/failover-error.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
+import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
+import { isCliProvider } from "../../agents/model-selection.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import {
   buildAgentRuntimeDeliveryPlan,
   buildAgentRuntimeOutcomePlan,
 } from "../../agents/runtime-plan/build.js";
-import type { SessionEntry } from "../../config/sessions.js";
+import {
+  loadSessionStore,
+  resolveSessionStoreEntry,
+  type SessionEntry,
+  updateSessionStore,
+} from "../../config/sessions.js";
 import type { TypingMode } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
 import { emitAgentEvent, registerAgentRunContext } from "../../infra/agent-events.js";
@@ -23,6 +37,7 @@ import { stripHeartbeatToken } from "../heartbeat.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { runPreflightCompactionIfNeeded } from "./agent-runner-memory.js";
 import {
+  buildThreadingToolContext,
   resolveQueuedReplyExecutionConfig,
   resolveQueuedReplyRuntimeConfig,
   resolveModelFallbackOptions,
@@ -199,6 +214,30 @@ export function createFollowupRunner(params: {
     }
   };
 
+  const refreshActiveSessionEntryFromStore = (fallbackEntry?: SessionEntry) => {
+    if (!storePath || !sessionKey) {
+      return fallbackEntry;
+    }
+    try {
+      const latestStore = loadSessionStore(storePath, { skipCache: true });
+      const resolved = resolveSessionStoreEntry({
+        store: latestStore,
+        sessionKey,
+      });
+      const latestEntry = resolved.existing;
+      if (!latestEntry) {
+        return fallbackEntry;
+      }
+      if (sessionStore) {
+        sessionStore[resolved.normalizedKey] = latestEntry;
+        sessionStore[sessionKey] = latestEntry;
+      }
+      return latestEntry;
+    } catch {
+      return fallbackEntry;
+    }
+  };
+
   return async (queued: FollowupRun) => {
     const queuedImages = queued.images ?? opts?.images;
     const queuedImageOrder = queued.imageOrder ?? opts?.imageOrder;
@@ -240,8 +279,9 @@ export function createFollowupRunner(params: {
       let runResult: Awaited<ReturnType<typeof runEmbeddedPiAgent>>;
       let fallbackProvider = run.provider;
       let fallbackModel = run.model;
-      let activeSessionEntry =
-        (sessionKey ? sessionStore?.[sessionKey] : undefined) ?? sessionEntry;
+      let activeSessionEntry = refreshActiveSessionEntryFromStore(
+        (sessionKey ? sessionStore?.[sessionKey] : undefined) ?? sessionEntry,
+      );
       activeSessionEntry = await runPreflightCompactionIfNeeded({
         cfg: runtimeConfig,
         followupRun: effectiveQueued,
@@ -268,9 +308,119 @@ export function createFollowupRunner(params: {
           classifyResult: ({ result, provider, model }) =>
             outcomePlan.classifyRunResult({ result, provider, model }),
           run: async (provider, model, runOptions) => {
-            const authProfile = resolveRunAuthProfile(run, provider, { config: runtimeConfig });
+            const cliExecutionProvider =
+              resolveCliRuntimeExecutionProvider({
+                provider,
+                cfg: runtimeConfig,
+                agentId: run.agentId,
+                runtimeOverride: activeSessionEntry?.agentRuntimeOverride?.trim() || undefined,
+              }) ?? provider;
+            const authProfile = resolveRunAuthProfile(run, cliExecutionProvider, {
+              config: runtimeConfig,
+            });
             let attemptCompactionCount = 0;
             try {
+              if (isCliProvider(cliExecutionProvider, runtimeConfig)) {
+                const cliSessionBinding = getCliSessionBinding(
+                  activeSessionEntry,
+                  cliExecutionProvider,
+                );
+                const threadingContext = buildThreadingToolContext({
+                  sessionCtx: {
+                    OriginatingChannel: queued.originatingChannel,
+                    Provider: run.messageProvider,
+                    OriginatingTo: queued.originatingTo,
+                    To: queued.originatingTo,
+                    AccountId: run.agentAccountId,
+                    ChatType: queued.originatingChatType,
+                    MessageThreadId: queued.originatingThreadId,
+                  },
+                  config: runtimeConfig,
+                  hasRepliedRef: undefined,
+                });
+                const cliParams: Parameters<typeof runCliAgent>[0] = {
+                  sessionId: run.sessionId,
+                  sessionKey: run.sessionKey,
+                  agentId: run.agentId,
+                  trigger: "user",
+                  sessionFile: run.sessionFile,
+                  workspaceDir: run.workspaceDir,
+                  config: runtimeConfig,
+                  prompt: queued.prompt,
+                  transcriptPrompt: queued.transcriptPrompt,
+                  provider: cliExecutionProvider,
+                  model,
+                  thinkLevel: run.thinkLevel,
+                  timeoutMs: run.timeoutMs,
+                  runId,
+                  abortSignal: replyOperation.abortSignal,
+                  replyOperation,
+                  extraSystemPrompt: run.extraSystemPrompt,
+                  silentReplyPromptMode: run.silentReplyPromptMode,
+                  sourceReplyDeliveryMode: run.sourceReplyDeliveryMode,
+                  extraSystemPromptStatic: run.extraSystemPromptStatic,
+                  ownerNumbers: run.ownerNumbers,
+                  cliSessionId: cliSessionBinding?.sessionId,
+                  cliSessionBinding,
+                  authProfileId: authProfile.authProfileId,
+                  images: queuedImages,
+                  imageOrder: queuedImageOrder,
+                  skillsSnapshot: run.skillsSnapshot,
+                  bootstrapPromptWarningSignaturesSeen,
+                  bootstrapPromptWarningSignature:
+                    bootstrapPromptWarningSignaturesSeen[
+                      bootstrapPromptWarningSignaturesSeen.length - 1
+                    ],
+                  messageChannel: queued.originatingChannel ?? undefined,
+                  messageProvider: queued.originatingChannel ?? run.messageProvider,
+                  agentAccountId: run.agentAccountId,
+                  messageTo: queued.originatingTo,
+                  messageThreadId: queued.originatingThreadId,
+                  currentChannelId: threadingContext.currentChannelId ?? queued.originatingTo,
+                  senderIsOwner: run.senderIsOwner,
+                };
+                let cliResult: Awaited<ReturnType<typeof runCliAgent>>;
+                try {
+                  cliResult = await runCliAgent(cliParams);
+                } catch (err) {
+                  if (
+                    !(err instanceof FailoverError) ||
+                    err.reason !== "session_expired" ||
+                    !cliSessionBinding?.sessionId
+                  ) {
+                    throw err;
+                  }
+                  if (activeSessionEntry) {
+                    const fallbackEntry = activeSessionEntry;
+                    clearCliSession(activeSessionEntry, cliExecutionProvider);
+                    activeSessionEntry.updatedAt = Date.now();
+                    if (sessionKey && sessionStore) {
+                      sessionStore[sessionKey] = activeSessionEntry;
+                    }
+                    if (storePath && sessionKey) {
+                      await updateSessionStore(storePath, (store) => {
+                        const resolvedEntry = resolveSessionStoreEntry({ store, sessionKey });
+                        const entry = resolvedEntry.existing ?? fallbackEntry;
+                        clearCliSession(entry, cliExecutionProvider);
+                        entry.updatedAt = Date.now();
+                        store[resolvedEntry.normalizedKey] = entry;
+                        for (const legacyKey of resolvedEntry.legacyKeys) {
+                          delete store[legacyKey];
+                        }
+                      });
+                    }
+                  }
+                  cliResult = await runCliAgent({
+                    ...cliParams,
+                    cliSessionId: undefined,
+                    cliSessionBinding: undefined,
+                  });
+                }
+                bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
+                  cliResult.meta?.systemPromptReport,
+                );
+                return cliResult;
+              }
               const result = await runEmbeddedPiAgent({
                 allowGatewaySubagentBinding: true,
                 replyOperation,
@@ -402,6 +552,22 @@ export function createFollowupRunner(params: {
           cliSessionBinding: runResult.meta?.agentMeta?.cliSessionBinding,
           logLabel: "followup",
         });
+      }
+
+      const cliSessionBinding = runResult.meta?.agentMeta?.cliSessionBinding;
+      if (providerUsed && cliSessionBinding) {
+        const updatedEntry =
+          activeSessionEntry ??
+          (sessionKey ? sessionStore?.[sessionKey] : undefined) ??
+          sessionEntry;
+        if (updatedEntry) {
+          setCliSessionBinding(updatedEntry, providerUsed, cliSessionBinding);
+          updatedEntry.updatedAt = Date.now();
+          activeSessionEntry = updatedEntry;
+          if (sessionKey && sessionStore) {
+            sessionStore[sessionKey] = updatedEntry;
+          }
+        }
       }
 
       const payloadArray = runResult.payloads ?? [];

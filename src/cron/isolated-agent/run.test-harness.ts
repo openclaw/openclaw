@@ -45,6 +45,7 @@ export const resolveAgentModelFallbacksOverrideMock = createMock();
 export const resolveAgentSkillsFilterMock = createMock();
 export const getModelRefStatusMock = createMock();
 export const isCliProviderMock = createMock();
+export const resolveCliRuntimeExecutionProviderMock = createMock();
 export const resolveAllowedModelRefMock = createMock();
 export const resolveConfiguredModelRefMock = createMock();
 export const resolveHooksGmailModelMock = createMock();
@@ -53,6 +54,7 @@ export const runWithModelFallbackMock = createMock();
 export const runEmbeddedPiAgentMock = createMock();
 export const runCliAgentMock = createMock();
 export const lookupContextTokensMock = createMock();
+export const getCliSessionBindingMock = createMock();
 export const getCliSessionIdMock = createMock();
 export const updateSessionStoreMock = createMock();
 export const resolveCronSessionMock = createMock();
@@ -163,6 +165,14 @@ vi.mock("./run-model-selection.runtime.js", () => ({
 vi.mock("./run-execution.runtime.js", () => ({
   resolveEffectiveModelFallbacks: resolveEffectiveModelFallbacksMock,
   resolveBootstrapWarningSignaturesSeen: resolveBootstrapWarningSignaturesSeenMock,
+  getCliSessionBinding: (...args: unknown[]) => {
+    const binding = getCliSessionBindingMock(...args);
+    if (binding !== undefined) {
+      return binding;
+    }
+    const sessionId = getCliSessionIdMock(...args);
+    return sessionId ? { sessionId } : undefined;
+  },
   getCliSessionId: getCliSessionIdMock,
   runCliAgent: runCliAgentMock,
   resolveFastModeState: resolveFastModeStateMock,
@@ -170,6 +180,7 @@ vi.mock("./run-execution.runtime.js", () => ({
   LiveSessionModelSwitchError,
   runWithModelFallback: runWithModelFallbackMock,
   isCliProvider: isCliProviderMock,
+  resolveCliRuntimeExecutionProvider: resolveCliRuntimeExecutionProviderMock,
   runEmbeddedPiAgent: runEmbeddedPiAgentMock,
   countActiveDescendantRuns: countActiveDescendantRunsMock,
   listDescendantRunsForRequester: listDescendantRunsForRequesterMock,
@@ -345,6 +356,7 @@ function resetRunConfigMocks(): void {
 
 function resetRunExecutionMocks(): void {
   isCliProviderMock.mockReturnValue(false);
+  resolveCliRuntimeExecutionProviderMock.mockReturnValue(undefined);
   resolveBootstrapWarningSignaturesSeenMock.mockReturnValue(new Set());
   resolveFastModeStateMock.mockImplementation((params) => resolveFastModeStateImpl(params));
   resolveCronAgentLaneMock.mockReturnValue(undefined);
@@ -356,6 +368,8 @@ function resetRunExecutionMocks(): void {
   runEmbeddedPiAgentMock.mockReset();
   runEmbeddedPiAgentMock.mockResolvedValue(makeDefaultEmbeddedResult());
   runCliAgentMock.mockReset();
+  getCliSessionBindingMock.mockReset();
+  getCliSessionBindingMock.mockReturnValue(undefined);
   getCliSessionIdMock.mockReturnValue(undefined);
   countActiveDescendantRunsMock.mockReset();
   countActiveDescendantRunsMock.mockReturnValue(0);

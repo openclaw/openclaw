@@ -27,8 +27,12 @@ function logMcpLoopbackHttp(step: string, details: Record<string, unknown>): voi
 
 export type McpRequestContext = {
   sessionKey: string;
+  runId: string | undefined;
   messageProvider: string | undefined;
   accountId: string | undefined;
+  agentTo: string | undefined;
+  agentThreadId: string | undefined;
+  currentChannelId: string | undefined;
   senderIsOwner: boolean;
 };
 
@@ -170,9 +174,13 @@ export function resolveMcpRequestContext(
 ): McpRequestContext {
   return {
     sessionKey: resolveScopedSessionKey(cfg, getHeader(req, "x-session-key")),
+    runId: normalizeOptionalString(getHeader(req, "x-openclaw-run-id")),
     messageProvider:
       normalizeMessageChannel(getHeader(req, "x-openclaw-message-channel")) ?? undefined,
     accountId: normalizeOptionalString(getHeader(req, "x-openclaw-account-id")),
+    agentTo: normalizeOptionalString(getHeader(req, "x-openclaw-message-to")),
+    agentThreadId: normalizeOptionalString(getHeader(req, "x-openclaw-thread-id")),
+    currentChannelId: normalizeOptionalString(getHeader(req, "x-openclaw-current-channel-id")),
     senderIsOwner: auth.senderIsOwner,
   };
 }

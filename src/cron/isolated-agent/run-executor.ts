@@ -1,3 +1,5 @@
+import { clearCliSession, setCliSessionBinding } from "../../agents/cli-session.js";
+import { FailoverError } from "../../agents/failover-error.js";
 import type { SkillSnapshot } from "../../agents/skills.js";
 import { normalizeToolList } from "../../agents/tool-policy.js";
 import type { ThinkLevel, VerboseLevel } from "../../auto-reply/thinking.js";
@@ -9,14 +11,16 @@ import {
   resolveCurrentChannelTarget,
 } from "./channel-output-policy.js";
 import { resolveCronPayloadOutcome } from "./helpers.js";
+import { resolveSessionAuthProfileOverride } from "./run-auth-profile.runtime.js";
 import {
-  getCliSessionId,
+  getCliSessionBinding,
   isCliProvider,
   LiveSessionModelSwitchError,
   logWarn,
   normalizeVerboseLevel,
   registerAgentRunContext,
   resolveBootstrapWarningSignaturesSeen,
+  resolveCliRuntimeExecutionProvider,
   resolveSessionTranscriptPath,
   runCliAgent,
   runWithModelFallback,
@@ -93,6 +97,7 @@ export function createCronPromptExecutor(params: {
   agentPayload: AgentTurnPayload;
   liveSelection: CronLiveSelection;
   cronSession: MutableCronSession;
+  persistSessionEntry?: PersistCronSessionEntry;
   abortSignal?: AbortSignal;
   abortReason: () => string;
   onExecutionStarted?: () => void;
@@ -113,6 +118,10 @@ export function createCronPromptExecutor(params: {
   let fallbackProvider = params.liveSelection.provider;
   let fallbackModel = params.liveSelection.model;
   let runEndedAt = Date.now();
+  const activeCliSessionBindings = new Map<
+    string,
+    Awaited<ReturnType<typeof getCliSessionBinding>>
+  >();
   let bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
     params.cronSession.sessionEntry.systemPromptReport,
   );
@@ -131,11 +140,34 @@ export function createCronPromptExecutor(params: {
         }
         const bootstrapPromptWarningSignature =
           bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1];
-        if (isCliProvider(providerOverride, params.cfgWithAgentDefaults)) {
-          const cliSessionId = params.cronSession.isNewSession
-            ? undefined
-            : await getCliSessionId(params.cronSession.sessionEntry, providerOverride);
-          const result = await runCliAgent({
+        const cliExecutionProvider =
+          resolveCliRuntimeExecutionProvider({
+            provider: providerOverride,
+            cfg: params.cfgWithAgentDefaults,
+            agentId: params.agentId,
+            runtimeOverride:
+              params.cronSession.sessionEntry.agentRuntimeOverride?.trim() || undefined,
+          }) ?? providerOverride;
+        if (isCliProvider(cliExecutionProvider, params.cfgWithAgentDefaults)) {
+          const cliSessionBinding =
+            activeCliSessionBindings.get(cliExecutionProvider) ??
+            (params.cronSession.isNewSession
+              ? undefined
+              : await getCliSessionBinding(params.cronSession.sessionEntry, cliExecutionProvider));
+          const authProfileId =
+            cliExecutionProvider === providerOverride
+              ? params.liveSelection.authProfileId
+              : await resolveSessionAuthProfileOverride({
+                  cfg: params.cfgWithAgentDefaults,
+                  provider: cliExecutionProvider,
+                  agentDir: params.agentDir,
+                  sessionEntry: params.cronSession.sessionEntry,
+                  sessionStore: params.cronSession.store,
+                  sessionKey: params.agentSessionKey,
+                  isNewSession:
+                    params.cronSession.isNewSession && params.job.sessionTarget !== "isolated",
+                });
+          const cliParams: Parameters<typeof runCliAgent>[0] = {
             sessionId: params.cronSession.sessionEntry.sessionId,
             sessionKey: params.runSessionKey,
             agentId: params.agentId,
@@ -145,20 +177,65 @@ export function createCronPromptExecutor(params: {
             workspaceDir: params.workspaceDir,
             config: params.cfgWithAgentDefaults,
             prompt: promptText,
-            provider: providerOverride,
+            provider: cliExecutionProvider,
             model: modelOverride,
+            authProfileId,
             thinkLevel: params.thinkLevel,
             timeoutMs: params.timeoutMs,
             runId: params.cronSession.sessionEntry.sessionId,
-            cliSessionId,
+            cliSessionId: cliSessionBinding?.sessionId,
+            cliSessionBinding,
             skillsSnapshot: params.skillsSnapshot,
             messageChannel: params.messageChannel,
+            agentAccountId: params.resolvedDelivery.accountId,
+            messageTo: params.resolvedDelivery.to,
+            messageThreadId: params.resolvedDelivery.threadId,
+            currentChannelId: await resolveCurrentChannelTarget({
+              channel: params.messageChannel,
+              to: params.resolvedDelivery.to,
+              threadId: params.resolvedDelivery.threadId,
+            }),
             abortSignal: params.abortSignal,
             onExecutionStarted: params.onExecutionStarted,
             bootstrapPromptWarningSignaturesSeen,
             bootstrapPromptWarningSignature,
-            senderIsOwner: true,
-          });
+            senderIsOwner: false,
+            ownerOnlyToolAllowlist: resolveCronOwnerOnlyToolAllowlist(
+              params.agentPayload?.toolsAllow,
+            ),
+          };
+          let result: Awaited<ReturnType<typeof runCliAgent>>;
+          try {
+            result = await runCliAgent(cliParams);
+          } catch (err) {
+            if (
+              !(err instanceof FailoverError) ||
+              err.reason !== "session_expired" ||
+              !cliSessionBinding?.sessionId
+            ) {
+              throw err;
+            }
+            clearCliSession(params.cronSession.sessionEntry, cliExecutionProvider);
+            activeCliSessionBindings.delete(cliExecutionProvider);
+            params.cronSession.sessionEntry.updatedAt = Date.now();
+            await params.persistSessionEntry?.();
+            result = await runCliAgent({
+              ...cliParams,
+              cliSessionId: undefined,
+              cliSessionBinding: undefined,
+            });
+          }
+          if (result.meta.agentMeta?.cliSessionBinding) {
+            activeCliSessionBindings.set(
+              cliExecutionProvider,
+              result.meta.agentMeta.cliSessionBinding,
+            );
+            setCliSessionBinding(
+              params.cronSession.sessionEntry,
+              cliExecutionProvider,
+              result.meta.agentMeta.cliSessionBinding,
+            );
+          }
           bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
             result.meta?.systemPromptReport,
           );
@@ -322,6 +399,7 @@ export async function executeCronRun(params: {
     agentPayload: params.agentPayload,
     liveSelection: params.liveSelection,
     cronSession: params.cronSession,
+    persistSessionEntry: params.persistSessionEntry,
     abortSignal: params.abortSignal,
     abortReason: params.abortReason,
     onExecutionStarted: params.onExecutionStarted,

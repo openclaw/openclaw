@@ -37,6 +37,45 @@ function normalizeDeliveryTarget(channel: string, to: string): string {
   return normalizeTargetForProvider(channel, toTrimmed) ?? toTrimmed;
 }
 
+function targetLooksLikeThreadedDelivery(params: {
+  target: string;
+  base: string;
+  threadId: string;
+}): boolean {
+  if (!params.target.startsWith(params.base)) {
+    return false;
+  }
+  const suffix = params.target.slice(params.base.length);
+  return isDelimitedThreadSuffix(suffix, params.threadId);
+}
+
+function isDelimitedThreadSuffix(suffix: string, threadId: string): boolean {
+  if (!suffix) {
+    return false;
+  }
+  return suffix === `#${threadId}` || suffix === `:${threadId}` || suffix === `:topic:${threadId}`;
+}
+
+function targetIncludesThreadSuffix(params: {
+  target: string;
+  base: string;
+  threadId: string;
+}): boolean {
+  if (!params.target.startsWith(params.base)) {
+    return false;
+  }
+  return isDelimitedThreadSuffix(params.target.slice(params.base.length), params.threadId);
+}
+
+function targetEndsWithThreadSuffix(target: string, threadId: string): boolean {
+  const trimmed = target.trim();
+  return (
+    trimmed.endsWith(`#${threadId}`) ||
+    trimmed.endsWith(`:${threadId}`) ||
+    trimmed.endsWith(`:topic:${threadId}`)
+  );
+}
+
 type NormalizedSilentReplyText = {
   text: string | undefined;
   strippedTrailingSilentToken: boolean;
@@ -71,8 +110,8 @@ function normalizeSilentReplyText(text: string | undefined): NormalizedSilentRep
 }
 
 export function matchesMessagingToolDeliveryTarget(
-  target: { provider?: string; to?: string; accountId?: string },
-  delivery: { channel?: string; to?: string; accountId?: string },
+  target: { provider?: string; to?: string; accountId?: string; threadId?: string },
+  delivery: { channel?: string; to?: string; accountId?: string; threadId?: string | number },
 ): boolean {
   if (!delivery.channel || !delivery.to || !target.to) {
     return false;
@@ -85,11 +124,37 @@ export function matchesMessagingToolDeliveryTarget(
   if (delivery.accountId && target.accountId && target.accountId !== delivery.accountId) {
     return false;
   }
+  const deliveryThreadId =
+    delivery.threadId == null ? undefined : normalizeOptionalString(String(delivery.threadId));
+  const targetThreadId = normalizeOptionalString(target.threadId);
+  if (deliveryThreadId && targetThreadId && targetThreadId !== deliveryThreadId) {
+    return false;
+  }
   // Strip :topic:NNN from message targets and normalize Feishu/Lark prefixes on
   // both sides so cron duplicate suppression compares canonical IDs.
   const normalizedTargetTo = normalizeDeliveryTarget(channel, target.to.replace(/:topic:\d+$/, ""));
   const normalizedDeliveryTo = normalizeDeliveryTarget(channel, delivery.to);
-  return normalizedTargetTo === normalizedDeliveryTo;
+  if (normalizedTargetTo !== normalizedDeliveryTo) {
+    return Boolean(
+      deliveryThreadId &&
+      targetLooksLikeThreadedDelivery({
+        target: normalizedTargetTo,
+        base: normalizedDeliveryTo,
+        threadId: deliveryThreadId,
+      }),
+    );
+  }
+  return (
+    !deliveryThreadId ||
+    Boolean(targetThreadId) ||
+    targetIncludesThreadSuffix({
+      target: target.to.trim(),
+      base: delivery.to.trim(),
+      threadId: deliveryThreadId,
+    }) ||
+    (targetEndsWithThreadSuffix(target.to, deliveryThreadId) &&
+      targetEndsWithThreadSuffix(delivery.to, deliveryThreadId))
+  );
 }
 
 export function resolveCronDeliveryBestEffort(job: CronJob): boolean {

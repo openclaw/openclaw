@@ -55,6 +55,66 @@ describe("matchesMessagingToolDeliveryTarget", () => {
     ).toBe(true);
   });
 
+  it("requires matching thread ids when both sides carry a thread", () => {
+    expect(
+      matchesMessagingToolDeliveryTarget(
+        { provider: "slack", to: "C123", threadId: "1737500000.123456" },
+        { channel: "slack", to: "C123", threadId: "1737500000.123456" },
+      ),
+    ).toBe(true);
+    expect(
+      matchesMessagingToolDeliveryTarget(
+        { provider: "slack", to: "C123", threadId: "1737500000.999999" },
+        { channel: "slack", to: "C123", threadId: "1737500000.123456" },
+      ),
+    ).toBe(false);
+  });
+
+  it("does not treat a base-room send as delivery to a threaded target", () => {
+    expect(
+      matchesMessagingToolDeliveryTarget(
+        { provider: "topicchat", to: "room" },
+        { channel: "topicchat", to: "room#42", threadId: 42 },
+      ),
+    ).toBe(false);
+  });
+
+  it("matches channel formatted current target ids for threaded delivery", () => {
+    expect(
+      matchesMessagingToolDeliveryTarget(
+        { provider: "topicchat", to: "room#42", threadId: "42" },
+        { channel: "topicchat", to: "room", threadId: 42 },
+      ),
+    ).toBe(true);
+  });
+
+  it("matches exact threaded target ids when both to values include the thread suffix", () => {
+    expect(
+      matchesMessagingToolDeliveryTarget(
+        { provider: "topicchat", to: "room#42" },
+        { channel: "topicchat", to: "room#42", threadId: 42 },
+      ),
+    ).toBe(true);
+  });
+
+  it("does not match thread ids by substring inside the target", () => {
+    expect(
+      matchesMessagingToolDeliveryTarget(
+        { provider: "topicchat", to: "room123" },
+        { channel: "topicchat", to: "room123", threadId: 12 },
+      ),
+    ).toBe(false);
+  });
+
+  it("matches topic suffixes only when the thread id is delimiter-bound", () => {
+    expect(
+      matchesMessagingToolDeliveryTarget(
+        { provider: "telegram", to: "-1003597428309:topic:462" },
+        { channel: "telegram", to: "-1003597428309", threadId: 462 },
+      ),
+    ).toBe(true);
+  });
+
   it("matches when provider is 'message' (generic)", () => {
     expect(
       matchesMessagingToolDeliveryTarget(

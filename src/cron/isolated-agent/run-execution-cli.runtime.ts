@@ -1,1 +1,5 @@
-export { getCliSessionId, runCliAgent } from "../../agents/cli-runner.runtime.js";
+export {
+  getCliSessionBinding,
+  getCliSessionId,
+  runCliAgent,
+} from "../../agents/cli-runner.runtime.js";

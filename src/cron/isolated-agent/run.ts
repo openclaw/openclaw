@@ -179,8 +179,8 @@ function normalizeCronTraceTarget(
 }
 
 type MessagingToolTargetMatcher = (
-  target: { provider?: string; to?: string; accountId?: string },
-  delivery: { channel?: string; to?: string; accountId?: string },
+  target: { provider?: string; to?: string; accountId?: string; threadId?: string },
+  delivery: { channel?: string; to?: string; accountId?: string; threadId?: string | number },
 ) => boolean;
 
 function normalizeMessagingToolTarget(
@@ -199,6 +199,7 @@ function normalizeMessagingToolTarget(
       channel: resolvedDelivery.channel,
       to: resolvedDelivery.to,
       accountId: resolvedDelivery.accountId,
+      threadId: resolvedDelivery.threadId,
     })
       ? resolvedDelivery.channel
       : channel;
@@ -809,8 +810,13 @@ async function finalizeCronRun(params: {
   });
   prepared.cronSession.sessionEntry.contextTokens = contextTokens;
   if (isCliProvider(providerUsed, prepared.cfgWithAgentDefaults)) {
-    const cliSessionId = finalRunResult.meta?.agentMeta?.sessionId?.trim();
-    if (cliSessionId) {
+    const cliSessionBinding = finalRunResult.meta?.agentMeta?.cliSessionBinding;
+    const cliSessionId =
+      cliSessionBinding?.sessionId?.trim() || finalRunResult.meta?.agentMeta?.sessionId?.trim();
+    if (cliSessionBinding?.sessionId?.trim()) {
+      const { setCliSessionBinding } = await loadCliRunnerRuntime();
+      setCliSessionBinding(prepared.cronSession.sessionEntry, providerUsed, cliSessionBinding);
+    } else if (cliSessionId) {
       const { setCliSessionId } = await loadCliRunnerRuntime();
       setCliSessionId(prepared.cronSession.sessionEntry, providerUsed, cliSessionId);
     }
@@ -934,6 +940,7 @@ async function finalizeCronRun(params: {
         channel: prepared.resolvedDelivery.channel,
         to: prepared.resolvedDelivery.to,
         accountId: prepared.resolvedDelivery.accountId,
+        threadId: prepared.resolvedDelivery.threadId,
       }),
     );
   const deliveryResult = await dispatchCronDelivery({

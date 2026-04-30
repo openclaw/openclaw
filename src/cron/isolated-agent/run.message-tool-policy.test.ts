@@ -5,15 +5,20 @@ import type { MutableCronSession } from "./run-session-state.js";
 import {
   clearFastTestEnv,
   dispatchCronDeliveryMock,
+  getCliSessionBindingMock,
   getChannelPluginMock,
   isHeartbeatOnlyResponseMock,
+  isCliProviderMock,
   loadRunCronIsolatedAgentTurn,
   makeCronSession,
   mockRunCronFallbackPassthrough,
   resolveCronPayloadOutcomeMock,
   resetRunCronIsolatedAgentTurnHarness,
+  resolveCliRuntimeExecutionProviderMock,
   resolveCronDeliveryPlanMock,
   resolveDeliveryTargetMock,
+  resolveSessionAuthProfileOverrideMock,
+  runCliAgentMock,
   restoreFastTestEnv,
   runEmbeddedPiAgentMock,
 } from "./run.test-harness.js";
@@ -468,6 +473,137 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
       messageThreadId: 42,
       currentChannelId: "room#42",
     });
+  });
+
+  it("uses the configured CLI runtime for canonical cron providers", async () => {
+    mockRunCronFallbackPassthrough();
+    resolveCliRuntimeExecutionProviderMock.mockReturnValue("claude-cli");
+    resolveSessionAuthProfileOverrideMock.mockResolvedValue("anthropic:work");
+    isCliProviderMock.mockImplementation((provider: string) => provider === "claude-cli");
+    getCliSessionBindingMock.mockReturnValue({
+      sessionId: "existing-cli-session",
+      authProfileId: "anthropic:work",
+      systemPromptHash: "system-hash",
+      mcpConfigHash: "mcp-hash",
+    });
+    runCliAgentMock.mockResolvedValue({
+      payloads: [{ text: "sent" }],
+      meta: { agentMeta: { usage: { input: 10, output: 20 } } },
+    });
+    const abortController = new AbortController();
+    const executor = createMessageToolExecutor({
+      abortSignal: abortController.signal,
+      cfgWithAgentDefaults: {
+        agents: {
+          defaults: {
+            agentRuntime: { id: "claude-cli" },
+            cliBackends: {
+              "claude-cli": { command: "claude" },
+            },
+          },
+        },
+      } as never,
+      liveSelection: {
+        provider: "anthropic",
+        model: "claude-sonnet-4-6",
+        authProfileId: "anthropic:work",
+      },
+      resolvedDelivery: {
+        accountId: "ops",
+      },
+    });
+
+    await executor.runPrompt("send a message");
+
+    expect(resolveCliRuntimeExecutionProviderMock).toHaveBeenCalledWith({
+      provider: "anthropic",
+      cfg: expect.objectContaining({
+        agents: expect.objectContaining({
+          defaults: expect.objectContaining({
+            agentRuntime: { id: "claude-cli" },
+          }),
+        }),
+      }),
+      agentId: "default",
+    });
+    expect(runCliAgentMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "claude-cli",
+        model: "claude-sonnet-4-6",
+        authProfileId: "anthropic:work",
+        agentAccountId: "ops",
+        abortSignal: expect.any(AbortSignal),
+        senderIsOwner: false,
+      }),
+    );
+    expect(resolveSessionAuthProfileOverrideMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "claude-cli",
+        isNewSession: false,
+      }),
+    );
+    expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+  });
+
+  it("honors the cron session runtime override for canonical providers", async () => {
+    mockRunCronFallbackPassthrough();
+    resolveCliRuntimeExecutionProviderMock.mockReturnValue("claude-cli");
+    isCliProviderMock.mockImplementation((provider: string) => provider === "claude-cli");
+    getCliSessionBindingMock.mockReturnValue({
+      sessionId: "existing-cli-session",
+      authProfileId: "anthropic:work",
+      systemPromptHash: "system-hash",
+      mcpConfigHash: "mcp-hash",
+    });
+    runCliAgentMock.mockResolvedValue({
+      payloads: [{ text: "sent" }],
+      meta: { agentMeta: { usage: { input: 10, output: 20 } } },
+    });
+    const executor = createMessageToolExecutor({
+      cfgWithAgentDefaults: {
+        agents: {
+          defaults: {
+            cliBackends: {
+              "claude-cli": { command: "claude" },
+            },
+          },
+        },
+      } as never,
+      liveSelection: {
+        provider: "anthropic",
+        model: "claude-sonnet-4-6",
+      },
+      cronSession: makeCronSession({
+        isNewSession: false,
+        sessionEntry: {
+          sessionId: "test-session-id",
+          updatedAt: 0,
+          agentRuntimeOverride: "claude-cli",
+        },
+      }) as MutableCronSession,
+    });
+
+    await executor.runPrompt("send a message");
+
+    expect(resolveCliRuntimeExecutionProviderMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "anthropic",
+        runtimeOverride: "claude-cli",
+      }),
+    );
+    expect(runCliAgentMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "claude-cli",
+        model: "claude-sonnet-4-6",
+        cliSessionId: "existing-cli-session",
+        cliSessionBinding: expect.objectContaining({
+          sessionId: "existing-cli-session",
+          authProfileId: "anthropic:work",
+        }),
+        senderIsOwner: false,
+      }),
+    );
+    expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
   });
 
   it("lets channels build currentChannelId from split delivery fields", async () => {
