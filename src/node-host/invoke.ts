@@ -643,6 +643,10 @@ export async function handleInvoke(
       const resolved = filePath.startsWith("~")
         ? path.join(os.homedir(), filePath.slice(1))
         : filePath;
+      if (encoding === "base64" && !/^[A-Za-z0-9+/]*={0,2}$/.test(params.data)) {
+        await sendErrorResult(client, frame, "INVALID_REQUEST", "data is not valid base64");
+        return;
+      }
       const buf =
         encoding === "base64"
           ? Buffer.from(params.data, "base64")
