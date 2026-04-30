@@ -21429,6 +21429,15 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 description:
                   "Renewal cadence in minutes for Gmail watch subscriptions to prevent expiration. Set below provider expiration windows and monitor renew failures in logs.",
               },
+              excludeLabels: {
+                type: "array",
+                items: {
+                  type: "string",
+                },
+                title: "Gmail Hook Excluded Labels",
+                description:
+                  "Gmail labels excluded from webhook notifications before OpenClaw receives events. Defaults to SPAM, TRASH, DRAFT, and SENT; set an empty list only when every label should trigger.",
+              },
               allowUnsafeExternalContent: {
                 type: "boolean",
                 title: "Gmail Hook Allow Unsafe External Content",
@@ -28092,6 +28101,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     "hooks.gmail.renewEveryMinutes": {
       label: "Gmail Hook Renew Interval (min)",
       help: "Renewal cadence in minutes for Gmail watch subscriptions to prevent expiration. Set below provider expiration windows and monitor renew failures in logs.",
+      tags: ["advanced"],
+    },
+    "hooks.gmail.excludeLabels": {
+      label: "Gmail Hook Excluded Labels",
+      help: "Gmail labels excluded from webhook notifications before OpenClaw receives events. Defaults to SPAM, TRASH, DRAFT, and SENT; set an empty list only when every label should trigger.",
       tags: ["advanced"],
     },
     "hooks.gmail.allowUnsafeExternalContent": {

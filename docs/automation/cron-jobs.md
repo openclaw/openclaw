@@ -302,6 +302,7 @@ This writes `hooks.gmail` config, enables the Gmail preset, and uses Tailscale F
 ### Gateway auto-start
 
 When `hooks.enabled=true` and `hooks.gmail.account` is set, the Gateway starts `gog gmail watch serve` on boot and auto-renews the watch. Set `OPENCLAW_SKIP_GMAIL_WATCHER=1` to opt out.
+By default, the watcher excludes `SPAM`, `TRASH`, `DRAFT`, and `SENT` so drafts and sent mail do not trigger hook runs; override `hooks.gmail.excludeLabels` only if you need a different label set.
 
 ### Manual one-time setup
 

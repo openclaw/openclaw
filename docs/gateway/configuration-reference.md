@@ -618,6 +618,7 @@ Validation and safety notes:
       includeBody: true,
       maxBytes: 20000,
       renewEveryMinutes: 720,
+      excludeLabels: ["SPAM", "TRASH", "DRAFT", "SENT"],
       serve: { bind: "127.0.0.1", port: 8788, path: "/" },
       tailscale: { mode: "funnel", path: "/gmail-pubsub" },
       model: "openrouter/meta-llama/llama-3.3-70b-instruct:free",

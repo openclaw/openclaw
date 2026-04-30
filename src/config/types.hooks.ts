@@ -47,6 +47,8 @@ export type HooksGmailConfig = {
   includeBody?: boolean;
   maxBytes?: number;
   renewEveryMinutes?: number;
+  /** Gmail labels to exclude from webhook notifications. */
+  excludeLabels?: string[];
   /** DANGEROUS: Disable external content safety wrapping for Gmail hooks. */
   allowUnsafeExternalContent?: boolean;
   serve?: {
