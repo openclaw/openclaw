@@ -8,6 +8,10 @@ import {
   validateNodePresenceAlivePayload,
   validateTalkConfigResult,
   validateTalkRealtimeSessionParams,
+  validateTasksCancelParams,
+  validateTasksGetParams,
+  validateTasksListParams,
+  validateTasksListResult,
   validateWakeParams,
 } from "./index.js";
 
@@ -190,6 +194,56 @@ describe("validateModelsListParams", () => {
   it("rejects unknown model catalog views and extra fields", () => {
     expect(validateModelsListParams({ view: "available" })).toBe(false);
     expect(validateModelsListParams({ view: "configured", provider: "minimax" })).toBe(false);
+  });
+});
+
+describe("task ledger validators", () => {
+  const task = {
+    taskId: "task_123",
+    runtime: "subagent",
+    requesterSessionKey: "main:requester",
+    ownerKey: "main:owner",
+    scopeKind: "session",
+    childSessionKey: "main:child",
+    agentId: "main",
+    runId: "run_123",
+    task: "Review the diff",
+    status: "running",
+    deliveryStatus: "pending",
+    notifyPolicy: "state_changes",
+    createdAt: 100,
+  };
+
+  it("accepts supported task list filters", () => {
+    expect(
+      validateTasksListParams({
+        status: ["queued", "running"],
+        agentId: "main",
+        sessionKey: "main:child",
+        limit: 50,
+      }),
+    ).toBe(true);
+    expect(validateTasksListParams({ status: "failed" })).toBe(true);
+  });
+
+  it("rejects invalid task list filters", () => {
+    expect(validateTasksListParams({ status: "done" })).toBe(false);
+    expect(validateTasksListParams({ limit: 0 })).toBe(false);
+    expect(validateTasksListParams({ agentId: "main", runtime: "cli" })).toBe(false);
+  });
+
+  it("accepts task get and cancel params", () => {
+    expect(validateTasksGetParams({ taskId: "task_123" })).toBe(true);
+    expect(validateTasksCancelParams({ taskId: "task_123" })).toBe(true);
+  });
+
+  it("accepts task list results with run and session relationships", () => {
+    expect(
+      validateTasksListResult({
+        count: 1,
+        tasks: [task],
+      }),
+    ).toBe(true);
   });
 });
 

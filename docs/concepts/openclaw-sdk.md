@@ -37,6 +37,7 @@ resources.
 | `Run.cancel()`            | Ready   | Calls `sessions.abort` by run id, with session key when available.           |
 | `oc.sessions`             | Ready   | Creates, resolves, sends to, patches, compacts, and gets session handles.    |
 | `Session.send()`          | Ready   | Calls `sessions.send` and returns a `Run`.                                   |
+| `oc.tasks`                | Ready   | Lists, gets, and cancels Gateway task ledger records.                        |
 | `oc.models`               | Ready   | Calls `models.list` and the current `models.authStatus` status RPC.          |
 | `oc.tools`                | Partial | Lists tool catalog and effective tools; direct tool invocation is not wired. |
 | `oc.approvals`            | Ready   | Lists and resolves exec approvals through Gateway approval RPCs.             |
@@ -227,6 +228,23 @@ const approvals = await oc.approvals.list();
 await oc.approvals.respond("approval-id", { decision: "approve" });
 ```
 
+Task helpers expose the Gateway background-task ledger:
+
+```typescript
+const activeTasks = await oc.tasks.list({
+  status: ["queued", "running"],
+  agentId: "main",
+  sessionKey: "main",
+});
+
+const task = await oc.tasks.get("task-id");
+const cancelled = await oc.tasks.cancel("task-id");
+```
+
+`tasks.list` supports status, agent, session, and limit filters. Task records
+include stable task ids plus known run, agent, parent-task, flow, and child
+session relationships.
+
 ## Explicitly Unsupported Today
 
 The SDK includes names for the product model we want, but it does not silently
@@ -234,10 +252,6 @@ pretend Gateway RPCs exist. These calls currently throw explicit unsupported
 errors:
 
 ```typescript
-await oc.tasks.list();
-await oc.tasks.get("task-id");
-await oc.tasks.cancel("task-id");
-
 await oc.tools.invoke("tool-name", {});
 
 await oc.artifacts.list();

@@ -110,6 +110,80 @@ export type RunResult = {
   raw?: unknown;
 };
 
+export type TaskRuntime = "subagent" | "acp" | "cli" | "cron";
+
+export type TaskStatus =
+  | "queued"
+  | "running"
+  | "succeeded"
+  | "failed"
+  | "timed_out"
+  | "cancelled"
+  | "lost";
+
+export type TaskDeliveryStatus =
+  | "pending"
+  | "delivered"
+  | "session_queued"
+  | "failed"
+  | "parent_missing"
+  | "not_applicable";
+
+export type TaskNotifyPolicy = "done_only" | "state_changes" | "silent";
+
+export type TaskRecord = {
+  taskId: string;
+  runtime: TaskRuntime;
+  taskKind?: string;
+  sourceId?: string;
+  requesterSessionKey: string;
+  ownerKey: string;
+  scopeKind: "session" | "system";
+  childSessionKey?: string;
+  parentFlowId?: string;
+  parentTaskId?: string;
+  agentId?: string;
+  runId?: string;
+  label?: string;
+  task: string;
+  status: TaskStatus;
+  deliveryStatus: TaskDeliveryStatus;
+  notifyPolicy: TaskNotifyPolicy;
+  createdAt: number;
+  startedAt?: number;
+  endedAt?: number;
+  lastEventAt?: number;
+  cleanupAfter?: number;
+  error?: string;
+  progressSummary?: string;
+  terminalSummary?: string;
+  terminalOutcome?: "succeeded" | "blocked";
+};
+
+export type TasksListParams = {
+  status?: TaskStatus | TaskStatus[];
+  agentId?: string;
+  sessionKey?: string;
+  limit?: number;
+};
+
+export type TasksListResult = {
+  count: number;
+  tasks: TaskRecord[];
+};
+
+export type TasksGetResult = {
+  found: boolean;
+  task?: TaskRecord;
+};
+
+export type TasksCancelResult = {
+  found: boolean;
+  cancelled: boolean;
+  reason?: string;
+  task?: TaskRecord;
+};
+
 export type OpenClawEventType =
   | "run.created"
   | "run.queued"

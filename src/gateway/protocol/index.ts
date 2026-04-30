@@ -275,6 +275,20 @@ import {
   SessionsSendParamsSchema,
   type SessionsUsageParams,
   SessionsUsageParamsSchema,
+  type TaskRecord,
+  TaskRecordSchema,
+  type TasksCancelParams,
+  TasksCancelParamsSchema,
+  type TasksCancelResult,
+  TasksCancelResultSchema,
+  type TasksGetParams,
+  TasksGetParamsSchema,
+  type TasksGetResult,
+  TasksGetResultSchema,
+  type TasksListParams,
+  TasksListParamsSchema,
+  type TasksListResult,
+  TasksListResultSchema,
   type ShutdownEvent,
   ShutdownEventSchema,
   type SkillsBinsParams,
@@ -466,6 +480,12 @@ export const validateSessionsCompactionRestoreParams = ajv.compile<SessionsCompa
 );
 export const validateSessionsUsageParams =
   ajv.compile<SessionsUsageParams>(SessionsUsageParamsSchema);
+export const validateTasksListParams = ajv.compile<TasksListParams>(TasksListParamsSchema);
+export const validateTasksListResult = ajv.compile<TasksListResult>(TasksListResultSchema);
+export const validateTasksGetParams = ajv.compile<TasksGetParams>(TasksGetParamsSchema);
+export const validateTasksGetResult = ajv.compile<TasksGetResult>(TasksGetResultSchema);
+export const validateTasksCancelParams = ajv.compile<TasksCancelParams>(TasksCancelParamsSchema);
+export const validateTasksCancelResult = ajv.compile<TasksCancelResult>(TasksCancelResultSchema);
 export const validateConfigGetParams = ajv.compile<ConfigGetParams>(ConfigGetParamsSchema);
 export const validateConfigSetParams = ajv.compile<ConfigSetParams>(ConfigSetParamsSchema);
 export const validateConfigApplyParams = ajv.compile<ConfigApplyParams>(ConfigApplyParamsSchema);
@@ -747,6 +767,13 @@ export {
   SkillsDetailParamsSchema,
   SkillsDetailResultSchema,
   SkillsUpdateParamsSchema,
+  TaskRecordSchema,
+  TasksListParamsSchema,
+  TasksListResultSchema,
+  TasksGetParamsSchema,
+  TasksGetResultSchema,
+  TasksCancelParamsSchema,
+  TasksCancelResultSchema,
   CronJobSchema,
   CronListParamsSchema,
   CronStatusParamsSchema,
@@ -863,6 +890,13 @@ export type {
   SkillsDetailResult,
   SkillsInstallParams,
   SkillsUpdateParams,
+  TaskRecord,
+  TasksListParams,
+  TasksListResult,
+  TasksGetParams,
+  TasksGetResult,
+  TasksCancelParams,
+  TasksCancelResult,
   NodePairRejectParams,
   NodePairRemoveParams,
   NodePairVerifyParams,

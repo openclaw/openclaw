@@ -204,6 +204,15 @@ import {
 } from "./sessions.js";
 import { PresenceEntrySchema, SnapshotSchema, StateVersionSchema } from "./snapshot.js";
 import {
+  TaskRecordSchema,
+  TasksCancelParamsSchema,
+  TasksCancelResultSchema,
+  TasksGetParamsSchema,
+  TasksGetResultSchema,
+  TasksListParamsSchema,
+  TasksListResultSchema,
+} from "./tasks.js";
+import {
   WizardCancelParamsSchema,
   WizardNextParamsSchema,
   WizardNextResultSchema,
@@ -224,6 +233,13 @@ export const ProtocolSchemas = {
   PresenceEntry: PresenceEntrySchema,
   StateVersion: StateVersionSchema,
   Snapshot: SnapshotSchema,
+  TaskRecord: TaskRecordSchema,
+  TasksListParams: TasksListParamsSchema,
+  TasksListResult: TasksListResultSchema,
+  TasksGetParams: TasksGetParamsSchema,
+  TasksGetResult: TasksGetResultSchema,
+  TasksCancelParams: TasksCancelParamsSchema,
+  TasksCancelResult: TasksCancelResultSchema,
   ErrorShape: ErrorShapeSchema,
   AgentEvent: AgentEventSchema,
   MessageActionParams: MessageActionParamsSchema,

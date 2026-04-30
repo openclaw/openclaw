@@ -241,19 +241,61 @@ describe("OpenClaw SDK", () => {
     ).rejects.toThrow("timeoutMs must be a finite non-negative number");
   });
 
+  it("dispatches task ledger helpers to Gateway task RPCs", async () => {
+    const task = {
+      taskId: "task_123",
+      runtime: "subagent",
+      requesterSessionKey: "main:requester",
+      ownerKey: "main:owner",
+      scopeKind: "session",
+      childSessionKey: "main:child",
+      agentId: "main",
+      runId: "run_123",
+      task: "Review the diff",
+      status: "running",
+      deliveryStatus: "pending",
+      notifyPolicy: "state_changes",
+      createdAt: 100,
+    };
+    const transport = new FakeTransport({
+      "tasks.list": { count: 1, tasks: [task] },
+      "tasks.get": { found: true, task },
+      "tasks.cancel": { found: true, cancelled: true, task: { ...task, status: "cancelled" } },
+    });
+    const oc = new OpenClaw({ transport });
+
+    await expect(
+      oc.tasks.list({ status: ["queued", "running"], agentId: "main", sessionKey: "main:child" }),
+    ).resolves.toEqual({ count: 1, tasks: [task] });
+    await expect(oc.tasks.get("task_123")).resolves.toEqual({ found: true, task });
+    await expect(oc.tasks.cancel("task_123")).resolves.toMatchObject({
+      found: true,
+      cancelled: true,
+    });
+
+    expect(transport.calls).toEqual([
+      {
+        method: "tasks.list",
+        params: { status: ["queued", "running"], agentId: "main", sessionKey: "main:child" },
+        options: undefined,
+      },
+      {
+        method: "tasks.get",
+        params: { taskId: "task_123" },
+        options: undefined,
+      },
+      {
+        method: "tasks.cancel",
+        params: { taskId: "task_123" },
+        options: undefined,
+      },
+    ]);
+  });
+
   it("throws explicit unsupported errors for SDK namespaces without Gateway RPCs", async () => {
     const transport = new FakeTransport({});
     const oc = new OpenClaw({ transport });
 
-    await expect(oc.tasks.list()).rejects.toThrow(
-      "oc.tasks.list is not supported by the current OpenClaw Gateway yet",
-    );
-    await expect(oc.tasks.get("task_123")).rejects.toThrow(
-      "oc.tasks.get is not supported by the current OpenClaw Gateway yet",
-    );
-    await expect(oc.tasks.cancel("task_123")).rejects.toThrow(
-      "oc.tasks.cancel is not supported by the current OpenClaw Gateway yet",
-    );
     await expect(oc.tools.invoke("demo")).rejects.toThrow(
       "oc.tools.invoke is not supported by the current OpenClaw Gateway yet",
     );
