@@ -9,7 +9,11 @@ import { danger } from "../../globals.js";
 import { parseStrictPositiveInteger } from "../../infra/parse-finite-number.js";
 import { sanitizeAgentId } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
-import { addGatewayClientOptions, callGatewayFromCli } from "../gateway-rpc.js";
+import {
+  addGatewayClientOptions,
+  callGatewayFromCli,
+  type GatewayRpcOpts,
+} from "../gateway-rpc.js";
 import {
   applyExistingCronSchedulePatch,
   resolveCronEditScheduleRequest,
@@ -39,11 +43,8 @@ const assignIf = (
   }
 };
 
-async function loadCronJobForEditSchedulePatch(
-  opts: Record<string, unknown>,
-  id: string,
-): Promise<CronJob | undefined> {
-  // Schedule patches need the existing job; page defensively because gateway stores can be large.
+async function loadCronJobForEdit(opts: GatewayRpcOpts, id: string): Promise<CronJob | undefined> {
+  // Page defensively because gateway stores can be large.
   let offset = 0;
   for (let page = 0; page < CRON_EDIT_LOOKUP_MAX_PAGES; page += 1) {
     const listed = (await callGatewayFromCli("cron.list", opts, {
@@ -235,6 +236,16 @@ export function registerCronEditCommand(cron: Command) {
             patch.sessionKey = null;
           }
 
+          let existingJobLoaded = false;
+          let existingJob: CronJob | undefined;
+          const getExistingJob = async () => {
+            if (!existingJobLoaded) {
+              existingJob = await loadCronJobForEdit(opts, id);
+              existingJobLoaded = true;
+            }
+            return existingJob;
+          };
+
           const scheduleRequest = resolveCronEditScheduleRequest({
             at: opts.at,
             cron: opts.cron,
@@ -246,7 +257,7 @@ export function registerCronEditCommand(cron: Command) {
           if (scheduleRequest.kind === "direct") {
             patch.schedule = scheduleRequest.schedule;
           } else if (scheduleRequest.kind === "patch-existing-cron") {
-            const existing = await loadCronJobForEditSchedulePatch(opts, String(id));
+            const existing = await getExistingJob();
             if (!existing) {
               throw new Error(`unknown cron job id: ${id}`);
             }
@@ -323,7 +334,7 @@ export function registerCronEditCommand(cron: Command) {
             !Array.isArray(opts.tools) &&
             !opts.clearTools
           ) {
-            const existing = await loadCronJobForEditSchedulePatch(opts, String(id));
+            const existing = await getExistingJob();
             timeoutOnlyPayloadKind = existing?.payload.kind === "command" ? "command" : "agentTurn";
           }
           const hasAgentTurnPayloadField =
@@ -516,10 +527,7 @@ export function registerCronEditCommand(cron: Command) {
           let effectiveSessionIsMain = sessionTarget === "main";
           if (hasSystemEventPatch && !effectiveSessionIsMain && typeof opts.session !== "string") {
             try {
-              const listed = (await callGatewayFromCli("cron.list", opts, {
-                includeDisabled: true,
-              })) as { jobs?: CronJob[] } | null;
-              const existing = (listed?.jobs ?? []).find((job) => job.id === id);
+              const existing = await getExistingJob();
               if (existing?.sessionTarget === "main") {
                 effectiveSessionIsMain = true;
               }
