@@ -910,6 +910,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             description:
               "Best-effort cleanup policy for browser tabs opened by primary-agent sessions. Keep enabled to avoid stale sandbox or managed-browser tabs accumulating across long-lived gateways.",
           },
+          hyprlandCapture: {
+            type: "boolean",
+          },
         },
         additionalProperties: false,
         title: "Browser",
