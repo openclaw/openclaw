@@ -62,6 +62,14 @@ type ModelsJsonCostCache = {
 };
 
 let modelsJsonCostCache: ModelsJsonCostCache | null = null;
+const EMPTY_COST_INDEX = new Map<string, ModelCostConfig>();
+let configuredCostIndexCache = new WeakMap<
+  Record<string, ModelProviderConfig | undefined>,
+  {
+    normalizedEntries?: Map<string, ModelCostConfig>;
+    rawEntries?: Map<string, ModelCostConfig>;
+  }
+>();
 
 export function formatTokenCount(value?: number): string {
   if (value === undefined || !Number.isFinite(value)) {
@@ -171,7 +179,7 @@ function normalizeTieredPricing(raw: RawPricingTier[] | undefined): PricingTier[
 }
 
 function buildProviderCostIndex(
-  providers: Record<string, ModelProviderConfig> | undefined,
+  providers: Record<string, ModelProviderConfig | undefined> | undefined,
   options?: { allowPluginNormalization?: boolean },
 ): Map<string, ModelCostConfig> {
   const entries = new Map<string, ModelCostConfig>();
@@ -197,6 +205,28 @@ function buildProviderCostIndex(
     }
   }
   return entries;
+}
+
+function getConfiguredProviderCostIndex(
+  providers: Record<string, ModelProviderConfig | undefined> | undefined,
+  options?: { allowPluginNormalization?: boolean },
+): Map<string, ModelCostConfig> {
+  if (!providers) {
+    return EMPTY_COST_INDEX;
+  }
+  let cached = configuredCostIndexCache.get(providers);
+  if (!cached) {
+    cached = {};
+    configuredCostIndexCache.set(providers, cached);
+  }
+  if (options?.allowPluginNormalization === false) {
+    cached.rawEntries ??= buildProviderCostIndex(providers, {
+      allowPluginNormalization: false,
+    });
+    return cached.rawEntries;
+  }
+  cached.normalizedEntries ??= buildProviderCostIndex(providers);
+  return cached.normalizedEntries;
 }
 
 function loadModelsJsonCostIndex(options?: {
@@ -255,7 +285,7 @@ function findConfiguredProviderCost(params: {
   if (!key) {
     return undefined;
   }
-  return buildProviderCostIndex(params.config?.models?.providers, {
+  return getConfiguredProviderCostIndex(params.config?.models?.providers, {
     allowPluginNormalization: params.allowPluginNormalization,
   }).get(key);
 }
@@ -392,4 +422,5 @@ export function estimateUsageCost(params: {
 
 export function __resetUsageFormatCachesForTest(): void {
   modelsJsonCostCache = null;
+  configuredCostIndexCache = new WeakMap();
 }
