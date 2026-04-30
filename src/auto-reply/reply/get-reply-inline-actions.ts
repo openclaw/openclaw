@@ -1,5 +1,6 @@
 import { collectTextContentBlocks } from "../../agents/content-blocks.js";
 import { createOpenClawCodingTools } from "../../agents/pi-tools.js";
+import { resolveSandboxContext } from "../../agents/sandbox.js";
 import type { BlockReplyChunking } from "../../agents/pi-embedded-block-chunker.js";
 import type { SkillCommandSpec } from "../../agents/skills.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
@@ -265,12 +266,18 @@ export async function handleInlineActions(params: {
         sessionKey,
       });
       const targetSessionEntry = sessionStore?.[sessionKey] ?? sessionEntry;
+      const sandbox = await resolveSandboxContext({
+        config: cfg,
+        sessionKey: toolPolicySessionKey,
+        workspaceDir,
+      });
       const tools = createOpenClawCodingTools({
         config: cfg,
         agentId,
         agentDir,
         workspaceDir,
         sessionKey: toolPolicySessionKey,
+        sandbox,
         allowGatewaySubagentBinding: true,
         messageProvider: channel,
         agentAccountId: (ctx as { AccountId?: string }).AccountId,

@@ -13,11 +13,13 @@ const {
   createOpenClawCodingToolsMock,
   getChannelPluginMock,
   handleCommandsMock,
+  resolveSandboxContextMock,
 } = vi.hoisted(() => ({
   buildStatusReplyMock: vi.fn(),
   createOpenClawCodingToolsMock: vi.fn(),
   getChannelPluginMock: vi.fn(),
   handleCommandsMock: vi.fn(),
+  resolveSandboxContextMock: vi.fn(),
 }));
 
 type HandleInlineActionsInput = Parameters<
@@ -31,6 +33,10 @@ vi.mock("./commands.runtime.js", () => ({
 
 vi.mock("../../agents/pi-tools.js", () => ({
   createOpenClawCodingTools: (...args: unknown[]) => createOpenClawCodingToolsMock(...args),
+}));
+
+vi.mock("../../agents/sandbox.js", () => ({
+  resolveSandboxContext: (...args: unknown[]) => resolveSandboxContextMock(...args),
 }));
 
 vi.mock("../../channels/plugins/index.js", () => ({
@@ -153,9 +159,11 @@ describe("handleInlineActions", () => {
     handleCommandsMock.mockResolvedValue({ shouldContinue: true, reply: undefined });
     getChannelPluginMock.mockReset();
     createOpenClawCodingToolsMock.mockReset();
+    resolveSandboxContextMock.mockReset();
     buildStatusReplyMock.mockReset();
     buildStatusReplyMock.mockResolvedValue({ text: "status" });
     createOpenClawCodingToolsMock.mockReturnValue([]);
+    resolveSandboxContextMock.mockResolvedValue(null);
     getChannelPluginMock.mockImplementation((channelId?: string) =>
       channelId === "whatsapp"
         ? { commands: { skipWhenConfigEmpty: true } }
@@ -697,6 +705,13 @@ describe("handleInlineActions", () => {
   it("uses the canonical target session policy context for inline tool dispatch", async () => {
     const typing = createTypingController();
     const toolExecute = vi.fn(async () => ({ content: "spawned" }));
+    const sandbox = {
+      enabled: true,
+      workspaceDir: "/tmp/sandbox",
+      workspaceAccess: "ro",
+      tools: { allow: ["read"] },
+    };
+    resolveSandboxContextMock.mockResolvedValue(sandbox);
     createOpenClawCodingToolsMock.mockReturnValue([
       {
         name: "sessions_spawn",
@@ -775,9 +790,15 @@ describe("handleInlineActions", () => {
     );
 
     expect(result).toEqual({ kind: "reply", reply: { text: "spawned" } });
+    expect(resolveSandboxContextMock).toHaveBeenCalledWith({
+      config: { commands: { text: true } },
+      sessionKey: "agent:target:telegram:direct:target-session",
+      workspaceDir: "/tmp",
+    });
     expect(createOpenClawCodingToolsMock).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionKey: "agent:target:telegram:direct:target-session",
+        sandbox,
         groupId: "target-group",
         groupChannel: "#target",
         groupSpace: "target-space",
