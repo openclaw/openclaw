@@ -1,5 +1,81 @@
 import path from "node:path";
+import { redactToolPayloadText } from "../logging/redact.js";
 import { resolveStateDir } from "./paths.js";
+
+const SECRET_FLAG_NAMES = new Set([
+  "--token",
+  "--api-key",
+  "--apikey",
+  "--secret",
+  "--password",
+  "--passwd",
+  "--auth-token",
+  "--access-token",
+  "--refresh-token",
+  "--client-secret",
+  "--hook-token",
+  "--gateway-token",
+  "--bot-token",
+  "--webhook-secret",
+  "--service-account-token",
+  "--op-service-account-token",
+]);
+
+function parseFlagName(arg: string): string | null {
+  if (typeof arg !== "string" || !arg.startsWith("--")) {
+    return null;
+  }
+  const eq = arg.indexOf("=");
+  return (eq === -1 ? arg : arg.slice(0, eq)).toLowerCase();
+}
+
+// Redacts CLI argv before it lands in the persistent config-audit log.
+// Three layers, applied per element:
+//  1. `--flag=value` form for known secret flag names — mask the value half.
+//  2. value following a bare `--flag` form — emit `***` instead of the next arg.
+//  3. fall back to redactToolPayloadText for everything else, which catches
+//     `KEY=VALUE` env-style assignments, raw token shapes (sk-, ghp_, xox*,
+//     gsk_, AIza*, npm_, Telegram bot tokens, PEM blocks, Bearer headers,
+//     URL query secrets) using the shared redaction patterns.
+export function redactConfigAuditArgv(argv: readonly string[]): string[] {
+  const result: string[] = [];
+  for (let i = 0; i < argv.length; i++) {
+    const current = argv[i];
+    if (typeof current !== "string") {
+      result.push(current);
+      continue;
+    }
+    const currentFlag = parseFlagName(current);
+    if (currentFlag !== null && SECRET_FLAG_NAMES.has(currentFlag) && current.includes("=")) {
+      const eq = current.indexOf("=");
+      result.push(`${current.slice(0, eq + 1)}***`);
+      continue;
+    }
+    const previous = i > 0 ? argv[i - 1] : undefined;
+    const previousFlag = typeof previous === "string" ? parseFlagName(previous) : null;
+    if (
+      previousFlag !== null &&
+      SECRET_FLAG_NAMES.has(previousFlag) &&
+      typeof previous === "string" &&
+      !previous.includes("=")
+    ) {
+      result.push("***");
+      continue;
+    }
+    result.push(redactToolPayloadText(current));
+  }
+  return result;
+}
+
+export function snapshotConfigAuditProcessInfo(): ConfigAuditProcessInfo {
+  return {
+    pid: process.pid,
+    ppid: process.ppid,
+    cwd: process.cwd(),
+    argv: redactConfigAuditArgv(process.argv.slice(0, 8)),
+    execArgv: redactConfigAuditArgv(process.execArgv.slice(0, 8)),
+  };
+}
 
 const CONFIG_AUDIT_LOG_FILENAME = "config-audit.jsonl";
 
@@ -163,15 +239,13 @@ function resolveConfigAuditProcessInfo(
   processInfo?: ConfigAuditProcessInfo,
 ): ConfigAuditProcessInfo {
   if (processInfo) {
-    return processInfo;
+    return {
+      ...processInfo,
+      argv: redactConfigAuditArgv(processInfo.argv),
+      execArgv: redactConfigAuditArgv(processInfo.execArgv),
+    };
   }
-  return {
-    pid: process.pid,
-    ppid: process.ppid,
-    cwd: process.cwd(),
-    argv: process.argv.slice(0, 8),
-    execArgv: process.execArgv.slice(0, 8),
-  };
+  return snapshotConfigAuditProcessInfo();
 }
 
 export function resolveConfigAuditLogPath(env: NodeJS.ProcessEnv, homedir: () => string): string {

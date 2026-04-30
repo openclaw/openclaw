@@ -7,6 +7,7 @@ import {
   createConfigWriteAuditRecordBase,
   finalizeConfigWriteAuditRecord,
   formatConfigOverwriteLogMessage,
+  redactConfigAuditArgv,
   resolveConfigAuditLogPath,
 } from "./io.audit.js";
 
@@ -193,6 +194,95 @@ describe("config io audit helpers", () => {
       result: "rename",
       nextHash: "next-hash",
     });
+  });
+
+  it("redacts argv values that follow known secret flag names", () => {
+    const argv = [
+      "node",
+      "openclaw",
+      "gateway",
+      "--token",
+      "super-secret-gateway-token-12345",
+      "--api-key",
+      "sk-very-real-looking-openai-api-key-AB12CD34",
+      "--port",
+      "8080",
+    ];
+    const result = redactConfigAuditArgv(argv);
+    expect(result).toEqual([
+      "node",
+      "openclaw",
+      "gateway",
+      "--token",
+      "***",
+      "--api-key",
+      "***",
+      "--port",
+      "8080",
+    ]);
+  });
+
+  it("redacts the value half of `--flag=value` for secret flags", () => {
+    const argv = ["openclaw", "--token=ghp_realgithubtoken1234567890ABCD", "--port=8080"];
+    expect(redactConfigAuditArgv(argv)).toEqual(["openclaw", "--token=***", "--port=8080"]);
+  });
+
+  it("redacts standalone token shapes via the shared logging redaction patterns", () => {
+    const argv = [
+      "node",
+      "openclaw",
+      "ghp_realgithubtoken1234567890ABCD",
+      "AIzaSyD-very-real-looking-google-api-key-123",
+      "987654321:AAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    ];
+    const result = redactConfigAuditArgv(argv);
+    expect(result[0]).toBe("node");
+    expect(result[1]).toBe("openclaw");
+    for (const masked of result.slice(2)) {
+      expect(masked).not.toContain("ghp_realgithubtoken");
+      expect(masked).not.toContain("AIzaSyD-very-real-looking");
+      expect(masked).not.toMatch(/AAAAAAAAAAAAAA/);
+    }
+  });
+
+  it("leaves non-secret arguments untouched", () => {
+    const argv = ["node", "openclaw", "gateway", "--port", "8080", "--bind", "lan"];
+    expect(redactConfigAuditArgv(argv)).toEqual(argv);
+  });
+
+  it("redacts processInfo.argv when explicitly supplied to createConfigWriteAuditRecordBase", () => {
+    const base = createConfigWriteAuditRecordBase({
+      configPath: "/tmp/openclaw.json",
+      env: {} as NodeJS.ProcessEnv,
+      existsBefore: true,
+      previousHash: "prev",
+      nextHash: "next",
+      previousBytes: 1,
+      nextBytes: 2,
+      previousMetadata: {
+        dev: null,
+        ino: null,
+        mode: null,
+        nlink: null,
+        uid: null,
+        gid: null,
+      },
+      changedPathCount: 0,
+      hasMetaBefore: true,
+      hasMetaAfter: true,
+      gatewayModeBefore: "local",
+      gatewayModeAfter: "local",
+      suspicious: [],
+      now: "2026-04-30T00:00:00.000Z",
+      processInfo: {
+        pid: 1,
+        ppid: 1,
+        cwd: "/work",
+        argv: ["node", "openclaw", "--token", "leaked-but-not-anymore-12345"],
+        execArgv: [],
+      },
+    });
+    expect(base.argv).toEqual(["node", "openclaw", "--token", "***"]);
   });
 
   it("also accepts flattened audit record params from legacy call sites", async () => {
