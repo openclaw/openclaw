@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 
 type OpenAIThinkingBlock = {
@@ -19,6 +20,10 @@ type OpenAIReasoningSignature = {
 type DowngradeOpenAIReasoningBlocksOptions = {
   dropReplayableReasoning?: boolean;
 };
+
+const OPENAI_RESPONSES_ID_MAX_LENGTH = 64;
+const OPENAI_RESPONSES_CALL_ID_RE = /^call_[A-Za-z0-9_-]{1,59}$/;
+const OPENAI_RESPONSES_FUNCTION_CALL_ITEM_ID_RE = /^fc_[A-Za-z0-9_-]{1,61}$/;
 
 function parseOpenAIReasoningSignature(value: unknown): OpenAIReasoningSignature | null {
   if (!value) {
@@ -84,6 +89,192 @@ function splitOpenAIFunctionCallPairing(id: string): {
 
 function isOpenAIToolCallType(type: unknown): boolean {
   return type === "toolCall" || type === "toolUse" || type === "functionCall";
+}
+
+function shortOpenAIResponsesIdHash(id: string): string {
+  return createHash("sha256").update(id).digest("hex").slice(0, 10);
+}
+
+function sanitizeOpenAIResponsesIdTail(value: string): string {
+  return value.replace(/[^A-Za-z0-9_-]/g, "_").replace(/^_+|_+$/g, "");
+}
+
+function normalizeOpenAIResponsesIdPart(params: {
+  value: string;
+  prefix: "call_" | "fc_";
+  isValid: (value: string) => boolean;
+}): string {
+  const trimmed = params.value.trim();
+  if (params.isValid(trimmed)) {
+    return trimmed;
+  }
+
+  const rawTail = trimmed.startsWith(params.prefix) ? trimmed.slice(params.prefix.length) : trimmed;
+  const hash = shortOpenAIResponsesIdHash(trimmed || params.prefix);
+  const maxTailLength = OPENAI_RESPONSES_ID_MAX_LENGTH - params.prefix.length;
+  const hashSuffix = `_${hash}`;
+  const safeTail = sanitizeOpenAIResponsesIdTail(rawTail);
+  const clippedBase = safeTail.slice(0, Math.max(1, maxTailLength - hashSuffix.length));
+  const tail = `${clippedBase || "id"}${hashSuffix}`.slice(0, maxTailLength);
+  return `${params.prefix}${tail}`;
+}
+
+function normalizeOpenAIResponsesFunctionCallId(id: string): string {
+  const { callId, itemId } = splitOpenAIFunctionCallPairing(id);
+  const normalizedCallId = normalizeOpenAIResponsesIdPart({
+    value: callId,
+    prefix: "call_",
+    isValid: (value) => OPENAI_RESPONSES_CALL_ID_RE.test(value),
+  });
+
+  if (!itemId) {
+    return normalizedCallId;
+  }
+
+  const normalizedItemId = normalizeOpenAIResponsesIdPart({
+    value: itemId,
+    prefix: "fc_",
+    isValid: (value) => OPENAI_RESPONSES_FUNCTION_CALL_ITEM_ID_RE.test(value),
+  });
+  return `${normalizedCallId}|${normalizedItemId}`;
+}
+
+function shouldNormalizeOpenAIResponsesToolCallId(id: string): boolean {
+  const pairing = splitOpenAIFunctionCallPairing(id);
+  if (!OPENAI_RESPONSES_CALL_ID_RE.test(pairing.callId)) {
+    return true;
+  }
+  if (pairing.itemId === undefined) {
+    return false;
+  }
+  return !OPENAI_RESPONSES_FUNCTION_CALL_ITEM_ID_RE.test(pairing.itemId);
+}
+
+function createOpenAIResponsesToolCallIdResolver(): {
+  resolveAssistantId: (id: string) => string;
+  resolveToolResultId: (id: string) => string;
+} {
+  const rewrittenByOriginalId = new Map<string, string>();
+
+  return {
+    resolveAssistantId(id: string): string {
+      const rewritten = rewrittenByOriginalId.get(id);
+      if (rewritten) {
+        return rewritten;
+      }
+      if (!shouldNormalizeOpenAIResponsesToolCallId(id)) {
+        return id;
+      }
+      const normalized = normalizeOpenAIResponsesFunctionCallId(id);
+      rewrittenByOriginalId.set(id, normalized);
+      return normalized;
+    },
+    resolveToolResultId(id: string): string {
+      const rewritten = rewrittenByOriginalId.get(id);
+      if (rewritten) {
+        return rewritten;
+      }
+      if (!shouldNormalizeOpenAIResponsesToolCallId(id)) {
+        return id;
+      }
+      const normalized = normalizeOpenAIResponsesFunctionCallId(id);
+      rewrittenByOriginalId.set(id, normalized);
+      return normalized;
+    },
+  };
+}
+
+/**
+ * OpenAI Responses validates replayed `function_call.call_id`,
+ * `function_call.id`, and matching `function_call_output.call_id` values.
+ * Keep canonical ids unchanged, but deterministically rewrite overlong or
+ * malformed persisted ids before pi-ai splits `call_id|fc_id` pairs.
+ */
+export function normalizeOpenAIResponsesToolCallIds(messages: AgentMessage[]): AgentMessage[] {
+  let changed = false;
+  const resolver = createOpenAIResponsesToolCallIdResolver();
+  const rewrittenMessages: AgentMessage[] = [];
+
+  for (const msg of messages) {
+    if (!msg || typeof msg !== "object") {
+      rewrittenMessages.push(msg);
+      continue;
+    }
+
+    const role = (msg as { role?: unknown }).role;
+    if (role === "assistant") {
+      const assistantMsg = msg as Extract<AgentMessage, { role: "assistant" }>;
+      if (!Array.isArray(assistantMsg.content)) {
+        rewrittenMessages.push(msg);
+        continue;
+      }
+
+      let assistantChanged = false;
+      const nextContent = assistantMsg.content.map((block) => {
+        if (!block || typeof block !== "object") {
+          return block;
+        }
+        const toolCallBlock = block as OpenAIToolCallBlock;
+        if (!isOpenAIToolCallType(toolCallBlock.type) || typeof toolCallBlock.id !== "string") {
+          return block;
+        }
+
+        const nextId = resolver.resolveAssistantId(toolCallBlock.id);
+        if (nextId === toolCallBlock.id) {
+          return block;
+        }
+        assistantChanged = true;
+        return {
+          ...(block as unknown as Record<string, unknown>),
+          id: nextId,
+        } as typeof block;
+      });
+
+      if (!assistantChanged) {
+        rewrittenMessages.push(msg);
+        continue;
+      }
+      changed = true;
+      rewrittenMessages.push({ ...assistantMsg, content: nextContent } as AgentMessage);
+      continue;
+    }
+
+    if (role === "toolResult") {
+      const toolResult = msg as Extract<AgentMessage, { role: "toolResult" }> & {
+        toolUseId?: unknown;
+      };
+      let toolResultChanged = false;
+      const updates: Record<string, string> = {};
+
+      if (typeof toolResult.toolCallId === "string") {
+        const nextToolCallId = resolver.resolveToolResultId(toolResult.toolCallId);
+        if (nextToolCallId !== toolResult.toolCallId) {
+          updates.toolCallId = nextToolCallId;
+          toolResultChanged = true;
+        }
+      }
+
+      if (typeof toolResult.toolUseId === "string") {
+        const nextToolUseId = resolver.resolveToolResultId(toolResult.toolUseId);
+        if (nextToolUseId !== toolResult.toolUseId) {
+          updates.toolUseId = nextToolUseId;
+          toolResultChanged = true;
+        }
+      }
+
+      if (!toolResultChanged) {
+        rewrittenMessages.push(msg);
+        continue;
+      }
+      changed = true;
+      rewrittenMessages.push({ ...toolResult, ...updates } as AgentMessage);
+      continue;
+    }
+
+    rewrittenMessages.push(msg);
+  }
+
+  return changed ? rewrittenMessages : messages;
 }
 
 /**
