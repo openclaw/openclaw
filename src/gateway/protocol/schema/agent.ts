@@ -173,6 +173,9 @@ export const AgentParamsSchema = Type.Object(
     voiceWakeTrigger: Type.Optional(Type.String()),
     idempotencyKey: NonEmptyString,
     label: Type.Optional(SessionLabelString),
+    // Allow Paperclip and other third-party integrations to pass runtime context
+    // without breaking gateway validation. Gateway accepts but ignores this field.
+    paperclip: Type.Optional(Type.Unknown()),
   },
   { additionalProperties: false },
 );
