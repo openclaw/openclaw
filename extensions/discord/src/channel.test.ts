@@ -123,7 +123,7 @@ describe("discordPlugin outbound", () => {
     const hints = discordPlugin.agentPrompt?.messageToolHints?.({} as never) ?? [];
 
     expect(hints).toContain(
-      "- Discord mentions: link users with `<@USER_ID>` only. Do not use the legacy `<@!USER_ID>` nickname form. Link channels as `<#CHANNEL_ID>` and roles as `<@&ROLE_ID>`.",
+      "- Discord mentions: use canonical outbound syntax: users `<@USER_ID>`, channels `<#CHANNEL_ID>`, and roles `<@&ROLE_ID>`. Do not use the legacy `<@!USER_ID>` nickname form.",
     );
   });
 
