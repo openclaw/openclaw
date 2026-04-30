@@ -125,18 +125,18 @@ describe("google gemini cli migration", () => {
       },
     });
 
-    expect(result.defaultModel).toBe("google-gemini-cli/gemini-3-flash-preview");
+    expect(result.defaultModel).toBe("google/gemini-3.1-pro-preview");
     expect(result.configPatch).toMatchObject({
       agents: {
         defaults: {
           agentRuntime: { id: "google-gemini-cli" },
           models: {
             "openai/gpt-5.2": {},
-            "google-gemini-cli/gemini-3-flash-preview": {},
-            "google-gemini-cli/gemini-3-pro-preview": {},
-            "google-gemini-cli/gemini-3.1-pro-preview": {},
-            "google-gemini-cli/gemini-3.1-flash-preview": {},
-            "google-gemini-cli/gemini-3.1-flash-lite-preview": {},
+            "google/gemini-3.1-pro-preview": {},
+            "google/gemini-3.1-flash-preview": {},
+            "google/gemini-3.1-flash-lite-preview": {},
+            "google/gemini-3-pro-preview": {},
+            "google/gemini-3-flash-preview": {},
           },
         },
       },
@@ -174,7 +174,7 @@ describe("google gemini cli migration", () => {
     const result = await method.run(ctx);
 
     expect(runGeminiCliLogin).toHaveBeenCalledTimes(1);
-    expect(result.defaultModel).toBe("google-gemini-cli/gemini-3-flash-preview");
+    expect(result.defaultModel).toBe("google/gemini-3.1-pro-preview");
   });
 
   it("fails clearly when sign-in is declined", async () => {

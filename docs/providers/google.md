@@ -80,11 +80,11 @@ Choose your preferred auth method and follow the setup steps.
         - Once signed in, the local Gemini CLI session is reused automatically — no token to copy or paste.
       </Step>
       <Step title="Pick a model">
-        The wizard offers the Gemini model list (3 / 3.1, Pro / Flash / Flash Lite) and seeds them into your config. The default is `google-gemini-cli/gemini-3-flash-preview`.
+        The wizard offers the Gemini model list (3 / 3.1, Pro / Flash / Flash Lite) and seeds them into your config under canonical `google/*` refs. The default is `google/gemini-3.1-pro-preview`. The Gemini CLI runtime is selected separately through `agents.defaults.agentRuntime.id: "google-gemini-cli"`.
       </Step>
       <Step title="Verify the model is available">
         ```bash
-        openclaw models list --provider google-gemini-cli
+        openclaw models list --provider google
         ```
       </Step>
     </Steps>

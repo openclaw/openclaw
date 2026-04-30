@@ -2,17 +2,19 @@ import {
   type OpenClawConfig,
   type ProviderAuthResult,
 } from "openclaw/plugin-sdk/provider-auth";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { readGeminiCliCredentialsForSetup } from "./cli-auth-seam.js";
 
 export const GEMINI_CLI_BACKEND_ID = "google-gemini-cli";
-export const GEMINI_CLI_DEFAULT_MODEL_REF = `${GEMINI_CLI_BACKEND_ID}/gemini-3-flash-preview`;
+// Canonical `google/*` model refs. The Gemini CLI runtime is selected separately
+// through `agents.defaults.agentRuntime.id = "google-gemini-cli"` so onboarding
+// stays on the same model-ref contract as API-key and OAuth setups.
+export const GEMINI_CLI_DEFAULT_MODEL_REF = "google/gemini-3.1-pro-preview";
 export const GEMINI_CLI_DEFAULT_ALLOWLIST_REFS = [
   GEMINI_CLI_DEFAULT_MODEL_REF,
-  `${GEMINI_CLI_BACKEND_ID}/gemini-3-pro-preview`,
-  `${GEMINI_CLI_BACKEND_ID}/gemini-3.1-pro-preview`,
-  `${GEMINI_CLI_BACKEND_ID}/gemini-3.1-flash-preview`,
-  `${GEMINI_CLI_BACKEND_ID}/gemini-3.1-flash-lite-preview`,
+  "google/gemini-3.1-flash-preview",
+  "google/gemini-3.1-flash-lite-preview",
+  "google/gemini-3-pro-preview",
+  "google/gemini-3-flash-preview",
 ] as const;
 
 type AgentDefaultsModels = NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>["models"];
@@ -44,14 +46,6 @@ function selectGeminiCliRuntime(agentRuntime: AgentDefaultsRuntimePolicy | undef
 
 export function hasGeminiCliAuth(): boolean {
   return Boolean(readGeminiCliCredentialsForSetup());
-}
-
-export function isGeminiCliProviderRef(ref: unknown): boolean {
-  if (typeof ref !== "string") {
-    return false;
-  }
-  const lower = normalizeLowercaseStringOrEmpty(ref);
-  return lower.startsWith(`${GEMINI_CLI_BACKEND_ID}/`);
 }
 
 export function buildGoogleGeminiCliMigrationResult(
