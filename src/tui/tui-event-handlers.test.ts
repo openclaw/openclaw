@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../shared/assistant-error-format.js";
 import { createEventHandlers } from "./tui-event-handlers.js";
 import type { AgentEvent, BtwEvent, ChatEvent, TuiStateAccess } from "./tui-types.js";
 
@@ -751,6 +752,42 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(String(rendered)).toContain("HTTP 401");
     expect(String(rendered)).toContain("Missing scopes: model.request");
     expect(chatLog.dropAssistant).not.toHaveBeenCalledWith("run-error-envelope");
+  });
+
+  it("renders malformed streaming fragment text when chat final only has event errorMessage", () => {
+    const { state, chatLog, handleChatEvent } = createHandlersHarness({
+      state: { activeChatRunId: null },
+    });
+
+    handleChatEvent({
+      runId: "run-malformed-final",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+      message: { content: [] },
+      errorMessage: MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE,
+    });
+
+    expect(chatLog.finalizeAssistant).toHaveBeenCalledWith(
+      "LLM streaming response contained a malformed fragment. Please try again.",
+      "run-malformed-final",
+    );
+  });
+
+  it("renders malformed streaming fragment text for chat error events", () => {
+    const { state, chatLog, handleChatEvent } = createHandlersHarness({
+      state: { activeChatRunId: null },
+    });
+
+    handleChatEvent({
+      runId: "run-malformed-error",
+      sessionKey: state.currentSessionKey,
+      state: "error",
+      errorMessage: MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE,
+    });
+
+    expect(chatLog.addSystem).toHaveBeenCalledWith(
+      "run error: LLM streaming response contained a malformed fragment. Please try again.",
+    );
   });
 
   it("shows a concise /auth hint for local auth failures", () => {

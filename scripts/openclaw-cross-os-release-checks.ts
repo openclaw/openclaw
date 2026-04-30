@@ -91,6 +91,7 @@ export const CROSS_OS_GATEWAY_STATUS_COMMAND_TIMEOUT_MS =
   CROSS_OS_GATEWAY_STATUS_RPC_TIMEOUT_MS + 45_000;
 export const CROSS_OS_GATEWAY_READY_TIMEOUT_MS = 3 * 60_000;
 export const CROSS_OS_WINDOWS_GATEWAY_READY_TIMEOUT_MS = 5 * 60_000;
+export const CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS = 180;
 
 if (isMainModule()) {
   try {
@@ -2708,13 +2709,15 @@ function buildReleaseAgentTurnArgs(sessionId) {
     "Reply with exact ASCII text OK only.",
     "--thinking",
     "minimal",
+    "--timeout",
+    String(CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS),
     "--json",
   ];
 }
 
 export function shouldRetryCrossOsAgentTurnError(error) {
   const message = error instanceof Error ? error.message : String(error);
-  return /failed to (?:install|stage) bundled runtime deps|failed to stage bundled runtime deps after|Agent output did not contain the expected OK marker|model idle timeout|did not produce a response before the model idle timeout/u.test(
+  return /failed to (?:install|stage) bundled runtime deps|failed to stage bundled runtime deps after|Agent output did not contain the expected OK marker|model idle timeout|did not produce a response before the model idle timeout|gateway request timeout for agent|Command timed out|timed out and could not be terminated cleanly/u.test(
     message,
   );
 }

@@ -30,6 +30,7 @@ import {
   CROSS_OS_WINDOWS_GATEWAY_READY_TIMEOUT_MS,
   CROSS_OS_DASHBOARD_FETCH_TIMEOUT_MS,
   CROSS_OS_DASHBOARD_SMOKE_TIMEOUT_MS,
+  CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS,
   isImmutableReleaseRef,
   looksLikeReleaseVersionRef,
   normalizeRequestedRef,
@@ -120,6 +121,16 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
         ),
       ),
     ).toBe(true);
+    expect(
+      shouldRetryCrossOsAgentTurnError(
+        new Error("gateway request timeout for agent after 210000ms"),
+      ),
+    ).toBe(true);
+    expect(
+      shouldRetryCrossOsAgentTurnError(
+        new Error("Command timed out and could not be terminated cleanly"),
+      ),
+    ).toBe(true);
   });
 
   it("allows cross-OS provider smoke models to use faster CI overrides", () => {
@@ -150,6 +161,8 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     const source = readFileSync("scripts/openclaw-cross-os-release-checks.ts", "utf8");
 
     expect(source).toContain('"--thinking",\n    "minimal"');
+    expect(CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS).toBeLessThanOrEqual(180);
+    expect(source).toContain('"--timeout",\n    String(CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS)');
     expect(source.match(/buildReleaseAgentTurnArgs\(sessionId\)/g)?.length).toBeGreaterThanOrEqual(
       2,
     );

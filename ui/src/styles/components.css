@@ -4848,12 +4848,27 @@ td.data-table-key-col {
   position: fixed;
   inset: 0;
   z-index: 1000;
+  width: 100vw;
+  max-width: none;
+  height: 100dvh;
+  max-height: none;
+  margin: 0;
+  border: 0;
+  box-sizing: border-box;
   display: flex;
   align-items: flex-start;
   justify-content: center;
   padding-top: min(20vh, 160px);
+  padding-right: 0;
+  padding-bottom: 0;
+  padding-left: 0;
   background: rgba(0, 0, 0, 0.5);
+  color: var(--text);
   animation: fade-in 0.12s ease-out;
+}
+
+.cmd-palette-overlay::backdrop {
+  background: transparent;
 }
 
 .cmd-palette {
@@ -4864,6 +4879,19 @@ td.data-table-key-col {
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-lg);
   animation: scale-in 0.15s ease-out;
+}
+
+.cmd-palette__label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 
 .cmd-palette__input {

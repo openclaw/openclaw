@@ -2431,8 +2431,19 @@ export default definePluginEntry({
     let config = normalizePluginConfig(api.pluginConfig);
     const warnDeprecatedModelFallbackPolicy = (pluginConfig: unknown) => {
       if (hasDeprecatedModelFallbackPolicy(pluginConfig)) {
+        // Wording matters here: the previous text ("set config.modelFallback
+        // explicitly if you want a fallback model") read naturally as runtime
+        // failover (model A errors → switch to model B), but `getModelRef`
+        // only consults `modelFallback` as the *last candidate* in the
+        // resolution chain after `config.model`, the current run's model,
+        // and the agent's configured default have all resolved to nothing.
+        // Surface the chain-resolution semantics directly so operators
+        // don't waste debug cycles assuming runtime failover (#74587).
         api.logger.warn?.(
-          "active-memory: config.modelFallbackPolicy is deprecated and no longer changes runtime behavior; set config.modelFallback explicitly if you want a fallback model",
+          "active-memory: config.modelFallbackPolicy is deprecated and no longer changes runtime behavior. " +
+            "config.modelFallback is a chain-resolution last-resort (consulted only when config.model, " +
+            "the current run's model, and the agent's configured default all resolve to nothing) — " +
+            "it is NOT a runtime failover that substitutes a different model when the resolved model errors out.",
         );
       }
     };

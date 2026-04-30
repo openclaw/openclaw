@@ -1,8 +1,8 @@
-import type { Guild } from "@buape/carbon";
 import { resolveCommandAuthorizedFromAuthorizers } from "openclaw/plugin-sdk/command-auth-native";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-types";
 import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
+import type { Guild } from "../internal/discord.js";
 import {
   isDiscordGroupAllowedByPolicy,
   resolveDiscordChannelConfigWithFallback,
@@ -98,10 +98,7 @@ export async function authorizeDiscordVoiceIngress(params: {
 
   const { ownerAllowList, ownerAllowed } = resolveDiscordOwnerAccess({
     allowFrom:
-      params.ownerAllowFrom ??
-      params.discordConfig.allowFrom ??
-      params.discordConfig.dm?.allowFrom ??
-      [],
+      params.ownerAllowFrom ?? params.discordConfig.allowFrom ?? params.discordConfig.dm?.allowFrom,
     sender: params.sender,
     allowNameMatching: false,
   });
