@@ -1,24 +1,23 @@
 import { Type } from "typebox";
 import { NonEmptyString } from "./primitives.js";
 
-export const ArtifactQueryParamsSchema = Type.Object(
+const ArtifactQueryParamsProperties = {
+  sessionKey: Type.Optional(NonEmptyString),
+  runId: Type.Optional(NonEmptyString),
+  taskId: Type.Optional(NonEmptyString),
+};
+
+export const ArtifactQueryParamsSchema = Type.Object(ArtifactQueryParamsProperties, {
+  additionalProperties: false,
+});
+
+export const ArtifactGetParamsSchema = Type.Object(
   {
-    sessionKey: Type.Optional(NonEmptyString),
-    runId: Type.Optional(NonEmptyString),
-    taskId: Type.Optional(NonEmptyString),
+    ...ArtifactQueryParamsProperties,
+    artifactId: NonEmptyString,
   },
   { additionalProperties: false },
 );
-
-export const ArtifactGetParamsSchema = Type.Intersect([
-  ArtifactQueryParamsSchema,
-  Type.Object(
-    {
-      artifactId: NonEmptyString,
-    },
-    { additionalProperties: false },
-  ),
-]);
 
 export const ArtifactSummarySchema = Type.Object(
   {
