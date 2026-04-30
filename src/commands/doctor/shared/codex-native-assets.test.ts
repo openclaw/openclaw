@@ -115,7 +115,6 @@ describe("collectCodexNativeAssetWarnings", () => {
   it("points users at explicit Codex migration instead of auto-copying native assets", async () => {
     const root = await makeTempRoot();
     const codexHome = path.join(root, ".codex");
-    await writeFile(path.join(codexHome, "skills", "tweet-helper", "SKILL.md"));
     await writeFile(path.join(root, ".agents", "skills", "agent-helper", "SKILL.md"));
 
     const warnings = await collectCodexNativeAssetWarnings({
