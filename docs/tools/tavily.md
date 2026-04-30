@@ -1,16 +1,18 @@
 ---
-summary: "Tavily search and extract tools"
+summary: "Tavily search, extract, and web_fetch tools"
 read_when:
   - You want Tavily-backed web search
   - You need a Tavily API key
   - You want Tavily as a web_search provider
+  - You want Tavily as a web_fetch provider
   - You want content extraction from URLs
 title: "Tavily"
 ---
 
-OpenClaw can use **Tavily** in two ways:
+OpenClaw can use **Tavily** in three ways:
 
 - as the `web_search` provider
+- as the `web_fetch` provider (via `/extract`)
 - as explicit plugin tools: `tavily_search` and `tavily_extract`
 
 Tavily is a search API designed for AI applications, returning structured results
@@ -59,6 +61,43 @@ Notes:
 - `web_search` with Tavily supports `query` and `count` (up to 20 results).
 - For Tavily-specific controls like `search_depth`, `topic`, `include_answer`,
   or domain filters, use `tavily_search`.
+
+## Use Tavily as the `web_fetch` provider
+
+Tavily can also serve as the bundled `web_fetch` provider via the
+`/extract` endpoint:
+
+```json5
+{
+  tools: {
+    web: {
+      fetch: {
+        provider: "tavily",
+      },
+    },
+  },
+}
+```
+
+Tavily uses one account for both `/search` and `/extract`, so the same
+`plugins.entries.tavily.config.webSearch.apiKey` (or `TAVILY_API_KEY`) is used
+for `web_fetch`. If you need a separate key, set
+`plugins.entries.tavily.config.webFetch.apiKey` -- it takes precedence.
+
+Auto-detect order is `70` (Tavily) vs `50` (Firecrawl), so when both keys are
+present and no `tools.web.fetch.provider` is set, Firecrawl is selected.
+
+`web_fetch` mapping onto Tavily Extract:
+
+| Generic `web_fetch` arg   | Tavily Extract                                                         |
+| ------------------------- | ---------------------------------------------------------------------- |
+| `url`                     | `urls: [url]`                                                          |
+| `extractMode: "advanced"` | `extract_depth: "advanced"` (otherwise `basic`)                        |
+| `maxChars`                | post-truncates `rawContent` and `content`                              |
+| `proxy`, `storeInCache`   | ignored (Tavily has no equivalent; the client maintains its own cache) |
+
+Tavily-only knobs (`query`, `chunks_per_source`, `include_images`) stay
+accessible via the dedicated `tavily_extract` tool.
 
 ## Tavily plugin tools
 

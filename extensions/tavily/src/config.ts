@@ -16,8 +16,19 @@ type TavilySearchConfig =
     }
   | undefined;
 
+type TavilyFetchConfig =
+  | {
+      apiKey?: unknown;
+      baseUrl?: string;
+    }
+  | undefined;
+
 type PluginEntryConfig = {
   webSearch?: {
+    apiKey?: unknown;
+    baseUrl?: string;
+  };
+  webFetch?: {
     apiKey?: unknown;
     baseUrl?: string;
   };
@@ -28,6 +39,15 @@ export function resolveTavilySearchConfig(cfg?: OpenClawConfig): TavilySearchCon
   const pluginWebSearch = pluginConfig?.webSearch;
   if (pluginWebSearch && typeof pluginWebSearch === "object" && !Array.isArray(pluginWebSearch)) {
     return pluginWebSearch;
+  }
+  return undefined;
+}
+
+export function resolveTavilyFetchConfig(cfg?: OpenClawConfig): TavilyFetchConfig {
+  const pluginConfig = cfg?.plugins?.entries?.tavily?.config as PluginEntryConfig;
+  const pluginWebFetch = pluginConfig?.webFetch;
+  if (pluginWebFetch && typeof pluginWebFetch === "object" && !Array.isArray(pluginWebFetch)) {
+    return pluginWebFetch;
   }
   return undefined;
 }
@@ -43,7 +63,9 @@ function normalizeConfiguredSecret(value: unknown, path: string): string | undef
 
 export function resolveTavilyApiKey(cfg?: OpenClawConfig): string | undefined {
   const search = resolveTavilySearchConfig(cfg);
+  const fetch = resolveTavilyFetchConfig(cfg);
   return (
+    normalizeConfiguredSecret(fetch?.apiKey, "plugins.entries.tavily.config.webFetch.apiKey") ||
     normalizeConfiguredSecret(search?.apiKey, "plugins.entries.tavily.config.webSearch.apiKey") ||
     normalizeSecretInput(process.env.TAVILY_API_KEY) ||
     undefined
@@ -52,7 +74,9 @@ export function resolveTavilyApiKey(cfg?: OpenClawConfig): string | undefined {
 
 export function resolveTavilyBaseUrl(cfg?: OpenClawConfig): string {
   const search = resolveTavilySearchConfig(cfg);
+  const fetch = resolveTavilyFetchConfig(cfg);
   const configured =
+    (normalizeOptionalString(fetch?.baseUrl) ?? "") ||
     (normalizeOptionalString(search?.baseUrl) ?? "") ||
     normalizeSecretInput(process.env.TAVILY_BASE_URL) ||
     "";
