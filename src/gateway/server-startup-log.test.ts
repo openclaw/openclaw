@@ -76,10 +76,15 @@ describe("gateway startup log", () => {
     );
   });
 
-  it("does not warn about Control UI secure context for loopback, TLS, disabled UI, or disabled device auth", () => {
+  it("does not warn about Control UI secure context for loopback, TLS, trusted proxy, disabled UI, or disabled device auth", () => {
     const cases = [
       { cfg: {}, bindHost: "127.0.0.1", tlsEnabled: false },
       { cfg: {}, bindHost: "0.0.0.0", tlsEnabled: true },
+      {
+        cfg: { gateway: { auth: { mode: "trusted-proxy" as const } } },
+        bindHost: "0.0.0.0",
+        tlsEnabled: false,
+      },
       {
         cfg: { gateway: { controlUi: { enabled: false } } },
         bindHost: "0.0.0.0",

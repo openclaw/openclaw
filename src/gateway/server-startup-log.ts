@@ -68,7 +68,7 @@ function resolveControlUiSecureContextWarning(params: {
   if (!controlUiEnabled || controlUiConfig?.dangerouslyDisableDeviceAuth === true) {
     return null;
   }
-  if (params.tlsEnabled === true) {
+  if (params.tlsEnabled === true || params.cfg.gateway?.auth?.mode === "trusted-proxy") {
     return null;
   }
   const listenHosts = params.bindHosts?.length ? params.bindHosts : [params.bindHost];
