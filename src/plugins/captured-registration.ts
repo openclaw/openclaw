@@ -266,7 +266,7 @@ export function createCapturedPluginRegistration(params?: {
           sessionSchedulerJobs.push(job);
           return {
             id: job.id,
-            pluginId: "captured-plugin-registration",
+            pluginId,
             sessionKey: job.sessionKey,
             kind: job.kind,
           };
@@ -279,7 +279,7 @@ export function createCapturedPluginRegistration(params?: {
           });
           return {
             id: schedule.name ?? `captured:${schedule.sessionKey}`,
-            pluginId: "captured-plugin-registration",
+            pluginId,
             sessionKey: schedule.sessionKey,
             kind: "session-turn",
           };
