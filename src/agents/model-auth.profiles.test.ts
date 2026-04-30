@@ -988,6 +988,31 @@ describe("getApiKeyForModel", () => {
     }
   });
 
+  it("resolveEnvApiKey('google-vertex') accepts Unicode ADC fallback home paths", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-google-adc-home-"));
+    const homeDir = path.join(tempDir, "認証情報-home");
+    const fallbackDir = path.join(homeDir, ".config", "gcloud");
+    await fs.mkdir(fallbackDir, { recursive: true });
+    await fs.writeFile(
+      path.join(fallbackDir, "application_default_credentials.json"),
+      "{}",
+      "utf8",
+    );
+
+    try {
+      const resolved = resolveEnvApiKey("google-vertex", {
+        GOOGLE_CLOUD_LOCATION: "us-central1",
+        GOOGLE_CLOUD_PROJECT: "vertex-project",
+        HOME: homeDir,
+      } as NodeJS.ProcessEnv);
+
+      expect(resolved?.apiKey).toBe("gcp-vertex-credentials");
+      expect(resolved?.source).toBe("gcloud adc");
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("resolveEnvApiKey('google-vertex') keeps ADC fallback when manifest env candidates are empty", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-google-adc-candidates-"));
     const credentialsPath = path.join(tempDir, "adc.json");

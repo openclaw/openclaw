@@ -31,7 +31,7 @@ function expandAuthEvidencePath(rawPath: string, env: NodeJS.ProcessEnv): string
   if (!trimmed) {
     return undefined;
   }
-  const homeDir = normalizeOptionalSecretInput(env.HOME) ?? os.homedir();
+  const homeDir = normalizeOptionalPathInput(env.HOME) ?? os.homedir();
   return trimmed.replaceAll("${HOME}", homeDir);
 }
 
