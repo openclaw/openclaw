@@ -103,6 +103,34 @@ describe("cleanup path removals", () => {
     expect(logs).toContain("[dry-run] remove /tmp/openclaw-workspace-2");
   });
 
+  it("refuses to prune an unsafe state-dir root even when a workspace is inside it (#75052 security)", async () => {
+    // Regression: removeStateDirAroundWorkspaces must apply the same unsafe-target guard as
+    // removePath. Without the guard, OPENCLAW_STATE_DIR=$HOME with a workspace below HOME
+    // would enumerate and delete home directory children instead of refusing.
+    const runtime = createRuntimeMock();
+    const homeDir = path.resolve(process.env["HOME"] ?? os.homedir());
+    // A synthetic workspace path that is inside $HOME — triggers the pruning branch.
+    const workspaceInsideHome = path.join(homeDir, ".openclaw", "workspaces", "main");
+
+    await removeStateAndLinkedPaths(
+      {
+        stateDir: homeDir,
+        configPath: path.join(homeDir, ".openclaw.json"),
+        oauthDir: path.join(homeDir, ".openclaw-oauth"),
+        configInsideState: false,
+        oauthInsideState: false,
+      },
+      runtime,
+      { dryRun: false, workspaceDirsToPreserve: [workspaceInsideHome] },
+    );
+
+    // Must have logged a refusal, never removed anything.
+    const errors = runtime.error.mock.calls.map(([line]: [string]) => line);
+    expect(errors.some((e: string) => e.includes("Refusing to remove unsafe path"))).toBe(true);
+    // Home directory itself must still exist.
+    await expect(fs.access(homeDir)).resolves.toBeUndefined();
+  });
+
   it("prunes state dir contents around a preserved workspace, keeping other state data removed", async () => {
     // Regression for openclaw/openclaw#75052: uninstalling with state scope but not workspace
     // scope must remove state data (config, credentials) while preserving the workspace subtree.

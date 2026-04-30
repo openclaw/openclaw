@@ -143,14 +143,22 @@ async function removeStateDirAroundWorkspaces(
   runtime: RuntimeEnv,
   opts?: { dryRun?: boolean },
 ): Promise<void> {
+  // Guard must mirror removePath: refuse to prune an unsafe root even when
+  // workspace-preservation skips the full removePath(stateDir) call.
+  const resolvedStateDir = path.resolve(stateDir);
+  if (isUnsafeRemovalTarget(resolvedStateDir)) {
+    runtime.error(`Refusing to remove unsafe path: ${resolvedStateDir}`);
+    return;
+  }
+
   let entries: Dirent[];
   try {
-    entries = await fs.readdir(stateDir, { withFileTypes: true });
+    entries = await fs.readdir(resolvedStateDir, { withFileTypes: true });
   } catch {
     return;
   }
   for (const entry of entries) {
-    const entryPath = path.join(stateDir, entry.name);
+    const entryPath = path.join(resolvedStateDir, entry.name);
     const isAncestorOfPreserved = workspacesToPreserve.some((w) => isPathWithin(w, entryPath));
     const isPreservedItself = workspacesToPreserve.some((w) => isPathWithin(entryPath, w));
     if (isAncestorOfPreserved) {
