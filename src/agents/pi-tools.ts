@@ -37,6 +37,7 @@ import {
 import { applyDeferredFollowupToolDescriptions } from "./pi-tools.deferred-followup.js";
 import { filterToolsByMessageProvider } from "./pi-tools.message-provider-policy.js";
 import {
+  isToolAllowedByPolicies,
   resolveEffectiveToolPolicy,
   resolveGroupToolPolicy,
   resolveInheritedToolPolicyForSession,
@@ -606,6 +607,19 @@ export function createOpenClawCodingTools(options?: {
   const sandboxToolPolicyWithToolSearchControls =
     mergeToolSearchControlAllowlist(sandboxToolPolicy);
   const subagentPolicyWithToolSearchControls = mergeToolSearchControlAllowlist(subagentPolicy);
+  const processToolAvailable = isToolAllowedByPolicies("process", [
+    profilePolicyWithAlsoAllow,
+    providerProfilePolicyWithAlsoAllow,
+    globalPolicyWithToolSearchControls,
+    globalProviderPolicyWithToolSearchControls,
+    agentPolicyWithToolSearchControls,
+    agentProviderPolicyWithToolSearchControls,
+    groupPolicyWithToolSearchControls,
+    senderPolicyWithToolSearchControls,
+    sandboxToolPolicyWithToolSearchControls,
+    subagentPolicyWithToolSearchControls,
+    inheritedToolPolicy,
+  ]);
   options?.recordToolPrepStage?.("tool-policy");
   const execConfig = resolveExecConfig({ cfg: options?.config, agentId });
   const fsConfig = resolveToolFsConfig({ cfg: options?.config, agentId });
@@ -729,6 +743,7 @@ export function createOpenClawCodingTools(options?: {
         // even when the separate process follow-up tool is hidden, so long-running
         // commands cannot pin the agent turn indefinitely.
         allowBackground: true,
+        processToolAvailable,
         scopeKey,
         sessionKey: options?.sessionKey,
         mainKey: options?.config?.session?.mainKey,

@@ -28,6 +28,7 @@ export type ExecToolDefaults = {
   sandbox?: BashSandboxConfig;
   elevated?: ExecElevatedDefaults;
   allowBackground?: boolean;
+  processToolAvailable?: boolean;
   scopeKey?: string;
   sessionKey?: string;
   /** `session.mainKey` from the runtime config; passed through into

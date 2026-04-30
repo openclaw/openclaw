@@ -1228,6 +1228,7 @@ export function createExecTool(
     120_000,
   );
   const allowBackground = defaults?.allowBackground ?? true;
+  const processToolAvailable = defaults?.processToolAvailable ?? true;
   const defaultTimeoutSec =
     typeof defaults?.timeoutSec === "number" && defaults.timeoutSec > 0
       ? defaults.timeoutSec
@@ -1600,6 +1601,16 @@ export function createExecTool(
 
       const explicitTimeoutSec = typeof params.timeout === "number" ? params.timeout : null;
       const effectiveTimeout = explicitTimeoutSec ?? defaultTimeoutSec;
+      if (
+        !processToolAvailable &&
+        allowBackground &&
+        yieldWindow !== null &&
+        effectiveTimeout <= 0
+      ) {
+        throw new Error(
+          "exec cannot background a timeoutless command while the process tool is unavailable. Set timeout to a positive number or enable process for follow-up.",
+        );
+      }
       const getWarningText = () => (warnings.length ? `${warnings.join("\n")}\n\n` : "");
       const usePty = params.pty === true && !sandbox;
 
@@ -1664,7 +1675,11 @@ export function createExecTool(
                 type: "text",
                 text: `${getWarningText()}Command still running (session ${run.session.id}, pid ${
                   run.session.pid ?? "n/a"
-                }). Use process (list/poll/log/write/send-keys/submit/paste/kill/clear/remove) for follow-up.`,
+                }). ${
+                  processToolAvailable
+                    ? "Use process (list/poll/log/write/send-keys/submit/paste/kill/clear/remove) for follow-up."
+                    : "The process tool is unavailable; rely on completion wake notifications or the command timeout for follow-up."
+                }`,
               },
             ],
             details: {
