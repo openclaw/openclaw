@@ -397,6 +397,7 @@ export function createNodesTool(options?: {
                 encoding: pushEncoding,
                 mkdirs,
                 overwrite,
+                agentId,
               },
               idempotencyKey: crypto.randomUUID(),
             });

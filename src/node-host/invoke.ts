@@ -8,6 +8,7 @@ import {
   mergeExecApprovalsSocketDefaults,
   normalizeExecApprovals,
   readExecApprovalsSnapshot,
+  resolveExecApprovals,
   saveExecApprovals,
   type ExecAsk,
   type ExecApprovalsFile,
@@ -582,26 +583,27 @@ export async function handleInvoke(
 
   if (command === "file.write") {
     try {
-      const snapshot = readExecApprovalsSnapshot();
-      const security = snapshot.file.defaults?.security;
-      if (security !== "full") {
-        const allAgents = Object.values(snapshot.file.agents ?? {});
-        const hasPermission = allAgents.some((agent) =>
-          agent.allowlist?.some((e) => e.pattern === "file.write") || agent.security === "full",
+      const params = decodeParams<{
+        path?: string;
+        data?: string;
+        encoding?: string;
+        agentId?: string;
+        mkdirs?: boolean;
+        overwrite?: boolean;
+      }>(frame.paramsJSON);
+      const approvals = resolveExecApprovals(params.agentId);
+      const hasPermission =
+        approvals.agent.security === "full" ||
+        approvals.allowlist.some((e) => e.pattern === "file.write");
+      if (!hasPermission) {
+        await sendErrorResult(
+          client,
+          frame,
+          "PERMISSION_DENIED",
+          'file.write not in exec-approvals allowlist; add "file.write" to allowlist',
         );
-        if (!hasPermission) {
-          await sendErrorResult(
-            client,
-            frame,
-            "PERMISSION_DENIED",
-            'file.write not in exec-approvals allowlist; add "file.write" to allowlist',
-          );
-          return;
-        }
+        return;
       }
-      const params = decodeParams<{ path?: string; data?: string; encoding?: string }>(
-        frame.paramsJSON,
-      );
       const filePath = typeof params.path === "string" ? params.path.trim() : "";
       if (!filePath) {
         await sendErrorResult(client, frame, "INVALID_REQUEST", "path required");
