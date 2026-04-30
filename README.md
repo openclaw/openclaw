@@ -481,3 +481,4 @@ yuweuii
 yxjsxy
 zijiess
 clawtributors:hidden:end -->
+<!-- Documentation note: Technical fix for gateway state synchronization. -->
