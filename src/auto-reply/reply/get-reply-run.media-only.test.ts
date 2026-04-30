@@ -302,7 +302,7 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.followupRun.run.allowEmptyAssistantReplyAsSilent).toBe(true);
   });
 
-  it("does not propagate empty-assistant silence for direct runs", async () => {
+  it("keeps empty-assistant silence disabled for direct runs by default", async () => {
     await runPreparedReply(
       baseParams({
         ctx: {
@@ -323,6 +323,85 @@ describe("runPreparedReply media-only handling", () => {
           ChatType: "direct",
           OriginatingChannel: "slack",
           OriginatingTo: "D123",
+        },
+      }),
+    );
+
+    const call = vi.mocked(runReplyAgent).mock.calls.at(-1)?.[0];
+    expect(call?.followupRun.run.allowEmptyAssistantReplyAsSilent).toBe(false);
+  });
+
+  it.each(["direct", "dm"] as const)(
+    "propagates empty-assistant silence for %s runs with explicit direct silent replies",
+    async (chatType) => {
+      await runPreparedReply(
+        baseParams({
+          ctx: {
+            Body: "",
+            RawBody: "",
+            CommandBody: "",
+            ThreadHistoryBody: "Earlier direct message",
+            OriginatingChannel: "slack",
+            OriginatingTo: "D123",
+            ChatType: chatType,
+          },
+          sessionCtx: {
+            Body: "",
+            BodyStripped: "",
+            ThreadHistoryBody: "Earlier direct message",
+            MediaPath: "/tmp/input.png",
+            Provider: "slack",
+            ChatType: chatType,
+            OriginatingChannel: "slack",
+            OriginatingTo: "D123",
+          },
+          cfg: {
+            session: {},
+            channels: {},
+            agents: {
+              defaults: {
+                silentReply: {
+                  direct: "allow",
+                },
+              },
+            },
+          },
+        }),
+      );
+
+      const call = vi.mocked(runReplyAgent).mock.calls.at(-1)?.[0];
+      expect(call?.followupRun.run.allowEmptyAssistantReplyAsSilent).toBe(true);
+    },
+  );
+
+  it("does not borrow target-session silence for native commands sent from direct chats", async () => {
+    await runPreparedReply(
+      baseParams({
+        sessionKey: "agent:main:telegram:group:target",
+        ctx: {
+          Body: "",
+          RawBody: "",
+          CommandBody: "",
+          ThreadHistoryBody: "Earlier direct message",
+          OriginatingChannel: "telegram",
+          OriginatingTo: "D123",
+          ChatType: "direct",
+          CommandSource: "native",
+          SessionKey: "agent:main:telegram:direct:source",
+          CommandTargetSessionKey: "agent:main:telegram:group:target",
+        },
+        sessionCtx: {
+          Body: "",
+          BodyStripped: "",
+          ThreadHistoryBody: "Earlier direct message",
+          MediaPath: "/tmp/input.png",
+          Provider: "telegram",
+          ChatType: "direct",
+          OriginatingChannel: "telegram",
+          OriginatingTo: "D123",
+          CommandSource: "native",
+          SessionKey: "agent:main:telegram:direct:source",
+          CommandTargetSessionKey: "agent:main:telegram:group:target",
         },
       }),
     );

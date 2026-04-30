@@ -42,6 +42,7 @@ import { attachEmitterListener, closeInboundMonitorSocket } from "./lifecycle.js
 import { downloadInboundMedia } from "./media.js";
 import { DisconnectReason, isJidGroup, saveMediaBuffer } from "./runtime-api.js";
 import { createWebSendApi } from "./send-api.js";
+import { normalizeWhatsAppSendResult } from "./send-result.js";
 import type { WebInboundMessage, WebListenerCloseReason } from "./types.js";
 
 const LOGGED_OUT_STATUS = DisconnectReason?.loggedOut ?? 401;
@@ -622,13 +623,15 @@ export async function attachWebInboxToSocket(
       }
     };
     const reply = async (text: string, options?: MiscMessageGenerationOptions) => {
-      await sendTrackedMessage(chatJid, { text }, options);
+      const result = await sendTrackedMessage(chatJid, { text }, options);
+      return normalizeWhatsAppSendResult(result, "text");
     };
     const sendMedia = async (
       payload: AnyMessageContent,
       options?: MiscMessageGenerationOptions,
     ) => {
-      await sendTrackedMessage(chatJid, payload, options);
+      const result = await sendTrackedMessage(chatJid, payload, options);
+      return normalizeWhatsAppSendResult(result, "media");
     };
     const timestamp = inbound.messageTimestampMs;
     const mentionedJids = extractMentionedJids(msg.message as proto.IMessage | undefined);

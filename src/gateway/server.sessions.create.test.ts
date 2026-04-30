@@ -6,7 +6,7 @@ import {
   setupGatewaySessionsTestHarness,
   sessionStoreEntry,
   directSessionReq,
-} from "./test/server-sessions-helpers.js";
+} from "./test/server-sessions.test-helpers.js";
 
 const { createSessionStoreDir, openClient } = setupGatewaySessionsTestHarness();
 

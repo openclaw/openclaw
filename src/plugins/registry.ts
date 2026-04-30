@@ -24,6 +24,11 @@ import {
   NODE_SYSTEM_NOTIFY_COMMAND,
   NODE_SYSTEM_RUN_COMMANDS,
 } from "../infra/node-commands.js";
+import {
+  createPluginStateKeyedStore,
+  type OpenKeyedStoreOptions,
+  type PluginStateKeyedStore,
+} from "../plugin-state/plugin-state-store.js";
 import { normalizePluginGatewayMethodScope } from "../shared/gateway-method-policy.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
@@ -230,6 +235,14 @@ const constrainLegacyPromptInjectionHook = (
 };
 
 export { createEmptyPluginRegistry } from "./registry-empty.js";
+
+export function resolvePluginPath(input: string, rootDir: string | undefined): string {
+  const trimmed = input.trim();
+  if (!trimmed || path.isAbsolute(trimmed) || trimmed.startsWith("~")) {
+    return resolveUserPath(input);
+  }
+  return rootDir ? path.resolve(rootDir, trimmed) : resolveUserPath(input);
+}
 
 const ACTIVE_PLUGIN_HOOK_REGISTRATIONS_KEY = Symbol.for("openclaw.activePluginHookRegistrations");
 const activePluginHookRegistrations = resolveGlobalSingleton<
@@ -1944,6 +1957,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
   });
 
   const pluginRuntimeById = new Map<string, PluginRuntime>();
+  const pluginRuntimeRecordById = new Map<string, PluginRecord>();
 
   const resolvePluginRuntime = (pluginId: string): PluginRuntime => {
     const cached = pluginRuntimeById.get(pluginId);
@@ -1952,6 +1966,23 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     }
     const runtime = new Proxy(registryParams.runtime, {
       get(target, prop, receiver) {
+        if (prop === "state") {
+          const baseState = Reflect.get(target, prop, receiver);
+          return {
+            ...baseState,
+            openKeyedStore: <T>(options: OpenKeyedStoreOptions): PluginStateKeyedStore<T> => {
+              const record =
+                pluginRuntimeRecordById.get(pluginId) ??
+                registry.plugins.find((entry) => entry.id === pluginId);
+              if (record?.origin !== "bundled") {
+                throw new Error(
+                  "openKeyedStore is only available for bundled plugins in this release.",
+                );
+              }
+              return createPluginStateKeyedStore<T>(pluginId, options);
+            },
+          } satisfies PluginRuntime["state"];
+        }
         if (prop !== "subagent") {
           return Reflect.get(target, prop, receiver);
         }
@@ -1984,6 +2015,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
   ): OpenClawPluginApi => {
     const registrationMode = params.registrationMode ?? "full";
     const registrationCapabilities = resolvePluginRegistrationCapabilities(registrationMode);
+    pluginRuntimeRecordById.set(record.id, record);
     return buildPluginApi({
       id: record.id,
       name: record.name,
@@ -1996,7 +2028,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       pluginConfig: params.pluginConfig,
       runtime: resolvePluginRuntime(record.id),
       logger: normalizeLogger(registryParams.logger),
-      resolvePath: (input: string) => resolveUserPath(input),
+      resolvePath: (input: string) => resolvePluginPath(input, record.rootDir),
       handlers: {
         ...(registrationCapabilities.capabilityHandlers
           ? {

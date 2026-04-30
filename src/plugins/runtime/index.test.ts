@@ -10,6 +10,15 @@ import { requestHeartbeatNow } from "../../infra/heartbeat-wake.js";
 import * as execModule from "../../process/exec.js";
 import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { VERSION } from "../../version.js";
+
+const runtimeModelAuthMocks = vi.hoisted(() => ({
+  getApiKeyForModel: vi.fn(),
+  getRuntimeAuthForModel: vi.fn(),
+  resolveApiKeyForProvider: vi.fn(),
+}));
+
+vi.mock("./runtime-model-auth.runtime.js", () => runtimeModelAuthMocks);
+
 import {
   clearGatewaySubagentRuntime,
   createPluginRuntime,
@@ -107,6 +116,9 @@ function expectRunCommandOutcome(params: {
 describe("plugin runtime command execution", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+    runtimeModelAuthMocks.getApiKeyForModel.mockReset();
+    runtimeModelAuthMocks.getRuntimeAuthForModel.mockReset();
+    runtimeModelAuthMocks.resolveApiKeyForProvider.mockReset();
     resetConfigRuntimeState();
     clearGatewaySubagentRuntime();
   });
@@ -289,6 +301,57 @@ describe("plugin runtime command execution", () => {
     const runtime = createPluginRuntime();
     // Wrappers should NOT be the same reference as the raw functions
     expect(runtime.modelAuth.getApiKeyForModel).not.toBe(rawGetApiKey);
+  });
+
+  it("modelAuth wrappers preserve workspace scope while stripping credential steering", async () => {
+    const runtime = createPluginRuntime();
+    const model = {
+      id: "workspace-cloud/model",
+      provider: "workspace-cloud",
+      api: "openai-responses",
+      baseUrl: "https://workspace-cloud.example/v1",
+    };
+    const cfg = { plugins: { allow: ["workspace-cloud"] } } as OpenClawConfig;
+    runtimeModelAuthMocks.getApiKeyForModel.mockResolvedValue({
+      apiKey: "model-key",
+      source: "workspace cloud credentials",
+      mode: "api-key",
+    });
+    runtimeModelAuthMocks.resolveApiKeyForProvider.mockResolvedValue({
+      apiKey: "provider-key",
+      source: "workspace cloud credentials",
+      mode: "api-key",
+    });
+
+    await expect(
+      runtime.modelAuth.getApiKeyForModel({
+        model: model as never,
+        cfg,
+        workspaceDir: "/tmp/workspace",
+        agentDir: "/tmp/agent",
+        store: { version: 1, profiles: {} },
+      } as never),
+    ).resolves.toMatchObject({ apiKey: "model-key" });
+    await expect(
+      runtime.modelAuth.resolveApiKeyForProvider({
+        provider: "workspace-cloud",
+        cfg,
+        workspaceDir: "/tmp/workspace",
+        agentDir: "/tmp/agent",
+        store: { version: 1, profiles: {} },
+      } as never),
+    ).resolves.toMatchObject({ apiKey: "provider-key" });
+
+    expect(runtimeModelAuthMocks.getApiKeyForModel).toHaveBeenCalledWith({
+      model,
+      cfg,
+      workspaceDir: "/tmp/workspace",
+    });
+    expect(runtimeModelAuthMocks.resolveApiKeyForProvider).toHaveBeenCalledWith({
+      provider: "workspace-cloud",
+      cfg,
+      workspaceDir: "/tmp/workspace",
+    });
   });
 
   it("keeps subagent unavailable by default even after gateway initialization", async () => {

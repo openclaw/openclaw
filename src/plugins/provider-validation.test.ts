@@ -101,6 +101,7 @@ describe("normalizeRegisteredProvider", () => {
               modelAllowlist: {
                 allowedKeys: [" demo/model ", "demo/model"],
                 initialSelections: [" demo/model "],
+                loadCatalog: true,
                 message: " Demo models ",
                 loadCatalog: true,
               },
@@ -141,6 +142,7 @@ describe("normalizeRegisteredProvider", () => {
               modelAllowlist: {
                 allowedKeys: ["demo/model"],
                 initialSelections: ["demo/model"],
+                loadCatalog: true,
                 message: "Demo models",
                 loadCatalog: true,
               },

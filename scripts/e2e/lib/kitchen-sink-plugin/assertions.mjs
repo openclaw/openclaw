@@ -87,11 +87,20 @@ function readConfig() {
 
 function configureRuntime() {
   const pluginId = process.env.KITCHEN_SINK_ID;
+  const personality = process.env.KITCHEN_SINK_PERSONALITY;
   const { configPath, config } = readConfig();
   config.plugins = config.plugins || {};
   config.plugins.entries = config.plugins.entries || {};
   config.plugins.entries[pluginId] = {
     ...config.plugins.entries[pluginId],
+    ...(personality
+      ? {
+          config: {
+            ...config.plugins.entries[pluginId]?.config,
+            personality,
+          },
+        }
+      : {}),
     hooks: {
       ...config.plugins.entries[pluginId]?.hooks,
       allowConversationAccess: true,
@@ -123,6 +132,39 @@ const expectMissing = (listValue, expected, field) => {
     throw new Error(`${field} unexpectedly included ${expected}: ${JSON.stringify(listValue)}`);
   }
 };
+
+function assertExpectedDiagnostics(surfaceMode, errorMessages) {
+  const expectedErrorMessages = new Set([
+    "only bundled plugins can register agent tool result middleware",
+    'agent harness "kitchen-sink-agent-harness" registration missing required runtime methods',
+    'channel "kitchen-sink-channel-probe" registration missing required config helpers',
+    "cli registration missing explicit commands metadata",
+    "only bundled plugins can register Codex app-server extension factories",
+    'compaction provider "kitchen-sink-compaction-provider" registration missing summarize',
+    "context engine registration missing id",
+    "http route registration missing or invalid auth: /kitchen-sink/http-route",
+    "plugin must own memory slot or declare contracts.memoryEmbeddingProviders for adapter: kitchen-sink-memory-embedding-provider",
+    "memory prompt supplement registration missing builder",
+  ]);
+  if (surfaceMode !== "full" && surfaceMode !== "adversarial") {
+    if (errorMessages.size > 0) {
+      throw new Error(
+        `unexpected kitchen-sink diagnostic errors: ${[...errorMessages].join(", ")}`,
+      );
+    }
+    return;
+  }
+  for (const message of errorMessages) {
+    if (!expectedErrorMessages.has(message)) {
+      throw new Error(`unexpected kitchen-sink diagnostic error: ${message}`);
+    }
+  }
+  for (const message of expectedErrorMessages) {
+    if (!errorMessages.has(message)) {
+      throw new Error(`missing expected kitchen-sink diagnostic error: ${message}`);
+    }
+  }
+}
 
 function assertRealPathInside(parentPath, childPath, label) {
   const parentRealPath = fs.realpathSync(parentPath);
@@ -181,8 +223,10 @@ function assertInstalled() {
     );
   }
 
-  expectIncludes(inspect.plugin?.channelIds, "kitchen-sink-channel", "channels");
-  expectIncludes(inspect.plugin?.providerIds, "kitchen-sink-provider", "providers");
+  if (surfaceMode !== "adversarial") {
+    expectIncludes(inspect.plugin?.channelIds, "kitchen-sink-channel", "channels");
+    expectIncludes(inspect.plugin?.providerIds, "kitchen-sink-provider", "providers");
+  }
 
   const diagnostics = [
     ...(list.diagnostics || []),
@@ -193,7 +237,7 @@ function assertInstalled() {
     diagnostics.filter((diag) => diag?.level === "error").map((diag) => String(diag.message || "")),
   );
 
-  if (surfaceMode === "full") {
+  if (surfaceMode === "full" || surfaceMode === "conformance") {
     const toolNames = Array.isArray(inspect.tools)
       ? inspect.tools.flatMap((entry) => (Array.isArray(entry?.names) ? entry.names : []))
       : [];
@@ -232,8 +276,13 @@ function assertInstalled() {
     }
     expectMissing(inspect.plugin?.agentHarnessIds, "kitchen-sink-agent-harness", "agent harnesses");
     expectIncludes(inspect.services, "kitchen-sink-service", "services");
-    expectIncludes(inspect.commands, "kitchen-sink-command", "commands");
-    expectIncludes(toolNames, "kitchen-sink-tool", "tools");
+    if (surfaceMode === "full") {
+      expectIncludes(inspect.commands, "kitchen-sink-command", "commands");
+      expectIncludes(toolNames, "kitchen-sink-tool", "tools");
+    } else {
+      expectIncludes(inspect.commands, "kitchen", "commands");
+      expectIncludes(toolNames, "kitchen_sink_text", "tools");
+    }
     if (
       (inspect.plugin?.hookCount || 0) < 30 ||
       !Array.isArray(inspect.typedHooks) ||
@@ -243,32 +292,8 @@ function assertInstalled() {
         `expected kitchen-sink typed hooks to load, got hookCount=${inspect.plugin?.hookCount} typedHooks=${inspect.typedHooks?.length}`,
       );
     }
-
-    const expectedErrorMessages = new Set([
-      "only bundled plugins can register agent tool result middleware",
-      'agent harness "kitchen-sink-agent-harness" registration missing required runtime methods',
-      'channel "kitchen-sink-channel-probe" registration missing required config helpers',
-      "cli registration missing explicit commands metadata",
-      "only bundled plugins can register Codex app-server extension factories",
-      'compaction provider "kitchen-sink-compaction-provider" registration missing summarize',
-      "context engine registration missing id",
-      "http route registration missing or invalid auth: /kitchen-sink/http-route",
-      "plugin must own memory slot or declare contracts.memoryEmbeddingProviders for adapter: kitchen-sink-memory-embedding-provider",
-      "memory prompt supplement registration missing builder",
-    ]);
-    for (const message of errorMessages) {
-      if (!expectedErrorMessages.has(message)) {
-        throw new Error(`unexpected kitchen-sink diagnostic error: ${message}`);
-      }
-    }
-    for (const message of expectedErrorMessages) {
-      if (!errorMessages.has(message)) {
-        throw new Error(`missing expected kitchen-sink diagnostic error: ${message}`);
-      }
-    }
-  } else if (errorMessages.size > 0) {
-    throw new Error(`unexpected kitchen-sink diagnostic errors: ${[...errorMessages].join(", ")}`);
   }
+  assertExpectedDiagnostics(surfaceMode, errorMessages);
 
   const indexPath = path.join(process.env.HOME, ".openclaw", "plugins", "installs.json");
   const index = readJson(indexPath);
