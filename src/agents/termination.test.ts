@@ -94,6 +94,14 @@ describe("ReplyPattern", () => {
   it("does not fire when pattern does not match", () => {
     expect(new ReplyPattern(/DONE/i).check(state({ replyText: "still going" }))[0]).toBe(false);
   });
+
+  it("global-flag regex does not alternate true/false on repeated checks", () => {
+    const cond = new ReplyPattern(/DONE/gi);
+    const s = state({ replyText: "Task DONE." });
+    expect(cond.check(s)[0]).toBe(true);
+    expect(cond.check(s)[0]).toBe(true); // would be false without lastIndex reset
+    expect(cond.check(s)[0]).toBe(true);
+  });
 });
 
 // ─── CustomCondition ─────────────────────────────────────────────────────────
