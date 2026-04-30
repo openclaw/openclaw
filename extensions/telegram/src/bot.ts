@@ -171,7 +171,11 @@ export function createTelegramBot(opts: TelegramBotOptions): TelegramBotInstance
     // causing "signals[0] must be an instance of AbortSignal" errors).
     finalFetch = (input: TelegramFetchInput, init?: TelegramFetchInit) => {
       const controller = new AbortController();
-      const abortWith = (signal: AbortSignal) => controller.abort(signal.reason);
+      // grammY's TelegramFetchInit['signal'] uses undici's AbortSignal, which is
+      // structurally distinct from lib.dom's AbortSignal in tsgo strict checks.
+      // Cast through unknown to read the .reason field both shapes share at runtime.
+      const abortWith = (signal: unknown) =>
+        controller.abort((signal as { reason?: unknown }).reason);
       const shutdownSignal = opts.fetchAbortSignal;
       const onShutdown = () => {
         if (shutdownSignal) {
