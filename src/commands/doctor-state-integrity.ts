@@ -22,7 +22,6 @@ import {
 } from "../config/sessions/paths.js";
 import { loadSessionStore } from "../config/sessions/store-load.js";
 import { updateSessionStore } from "../config/sessions/store.js";
-import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { resolveMemoryBackendConfig } from "../memory-host-sdk/engine-storage.js";
@@ -872,7 +871,7 @@ export async function noteStateIntegrity(
 
     const wedgedSubagentSessions = entries.filter(([, entry]) =>
       isSubagentRecoveryWedgedEntry(entry),
-    ) as Array<[string, SessionEntry]>;
+    );
     if (wedgedSubagentSessions.length > 0) {
       const wedgedCount = countLabel(wedgedSubagentSessions.length, "wedged subagent session");
       warnings.push(

@@ -4,14 +4,29 @@ Docs: https://docs.openclaw.ai
 
 ## Unreleased
 
+### Changes
+
+- Messages/docs: clarify that `BodyForAgent` is the primary inbound model text while `Body` is the legacy envelope fallback, and add Signal coverage so channel hardening patches target the real prompt path. Refs #66198. Thanks @defonota3box.
+- Control UI/Usage: add UTC quarter-hour token buckets for the Usage Mosaic and reuse them for hour filtering, keeping the legacy session-span fallback for older summaries. (#74337) Thanks @konanok.
+
 ### Fixes
 
+- Plugins/runtime-deps: accept already materialized package-level runtime-deps supersets as converged, so later lazy plugin activation no longer prunes and relaunches `pnpm install` after gateway startup pre-staging. Fixes #75283. Thanks @brokemac79.
+- TTS/providers: keep bundled speech-provider compat fallback available when plugins are globally disabled, so cold gateway and CLI startup can still resolve fallback speech providers instead of leaving explicit TTS provider selection with no registered providers. Refs #75265. Thanks @sliekens.
+- Discord: collapse repeated native slash-command deploy rate-limit startup logs into one non-fatal warning while keeping per-request REST timing in verbose output. Thanks @discord.
+- Providers/OpenAI Codex: preserve existing wrapped Codex streams during OpenAI attribution so PI OAuth bearer injection reaches ChatGPT/Codex Responses, and strip native Codex-only unsupported payload fields without touching custom compatible endpoints. (#75111) Thanks @keshavbotagent.
+- Agents/tool-result guard: use the resolved runtime context token budget for non-context-engine tool-result overflow checks, so long tool-heavy sessions no longer compact early when `contextTokens` is larger than native `contextWindow`. Fixes #74917. Thanks @kAIborg24.
+- Gateway/systemd: exit with sysexits 78 for supervised lock and `EADDRINUSE` conflicts so `RestartPreventExitStatus=78` stops `Restart=always` restart loops instead of repeatedly reloading plugins against an occupied port. Fixes #75115. Thanks @yhyatt.
+- Agents/runtime: skip blank visible user prompts at the embedded-runner boundary before provider submission while still allowing internal runtime-only turns and media-only prompts, so Telegram/group sessions no longer leak raw empty-input provider errors when replay history exists. Fixes #74137. Thanks @yelog, @Gracker, and @nhaener.
+- Agents/Codex: isolate local Codex app-server `CODEX_HOME` and `HOME` per agent and add a deliberate Codex migration path with selectable skill copies, so personal Codex CLI skills, plugins, config, and hooks no longer leak into OpenClaw agents unless the operator migrates them into the workspace. Thanks @pashpashpash.
+- Plugins/runtime-deps: replace stale symlinked mirror target roots before writing runtime-mirror temp files and skip rewriting already materialized hardlinks, so cross-version container upgrades no longer crash-loop on read-only image-layer paths while warm mirrors do less churn. Fixes #75108; refs #75069. Thanks @coletebou and @xiaohuaxi.
 - Auto-reply/group chats: fall back to automatic source delivery when a channel precomputes message-tool-only replies but the `message` tool is unavailable, so Discord/Slack-style group turns do not silently complete without a visible reply. Fixes #74868. Thanks @kagura-agent.
 - Browser/gateway: share one browser control runtime across the HTTP control server and `browser.request`, and refresh browser profile config from the source snapshot, so CLI status/start honors configured `browser.executablePath`, `headless`, and `noSandbox` instead of falling back to stale auto-detection. Fixes #75087; repairs #73617. Thanks @civiltox and @martingarramon.
 - Agents/subagents: bound automatic orphan recovery with persisted recovery attempts and a wedged-session tombstone, and teach task maintenance/doctor to reconcile those sessions so restart loops no longer require manual `sessions.json` surgery. Fixes #74864. Thanks @solosage1.
 - Plugins/runtime-deps: keep bundled provider policy config loading from staging plugin runtime dependencies, so config reads no longer fail on locked-down `/var/lib/openclaw/plugin-runtime-deps` directories. Fixes #74971. Thanks @eurojojo.
 - Memory/runtime-deps: retain the native `node-llama-cpp` runtime only when local memory search is configured, so packaged installs can repair local embeddings without relying on unreachable global npm installs. Fixes #74777. Thanks @LLagoon3.
 - Gateway/startup: skip pre-bind web-fetch provider discovery for credential-free `tools.web.fetch` config, so Docker/Kubernetes gateways bind even when optional fetch limits are present. Fixes #74896. Thanks @KoykL.
+- Signal: match group allowlists against inbound Signal group ids as well as sender ids, and process explicitly configured Signal groups without requiring mentions unless `requireMention` is set. Fixes #53308. Thanks @minupla and @juan-flores077.
 - Signal: bound `signal-cli` installer release and archive downloads with explicit timeouts, declared and streamed size checks, and partial-file cleanup. Fixes #54153. Thanks @jinduwang1001-max and @juan-flores077.
 - Slack: require bot-authored room messages with `allowBots=true` to come from an explicitly channel-allowlisted bot or from a room where an explicit Slack owner is present, so broad bot relays cannot run unattended. Fixes #59284. Thanks @andrewhong-translucent.
 - Signal: derive `getAttachment` HTTP response caps from `channels.signal.mediaMaxMb` with base64 headroom, so inbound photos and videos no longer drop behind the 1 MiB RPC default. Fixes #73564. Thanks @heyhudson.
@@ -20,6 +35,13 @@ Docs: https://docs.openclaw.ai
 - Models/OpenAI Codex: restore `openai-codex/gpt-5.4-mini` for ChatGPT/Codex OAuth PI runs after live OAuth proof, and align the manifest, forward-compat metadata, docs, and regression tests so stale cron and heartbeat configs resolve again. Fixes #74451. Thanks @0xCyda, @hclsys, and @Marvae.
 - Plugins/runtime-deps: always write a dependency map in generated runtime-deps install manifests, so npm does not crash or prune staged bundled-plugin packages when the plan is empty. Fixes #74949. Thanks @hclsys.
 - Telegram: use durable message edits for streaming previews instead of native draft state, so generated replies no longer flicker through draft-to-message transitions that look like duplicates. (#75073) Thanks @obviyus.
+- Telegram: echo preflighted DM voice-note transcripts back to the originating chat, including Telegram DM topic thread metadata, instead of only echoing later media-understanding transcripts. Fixes #75084. Thanks @M-Lietz.
+- Telegram: clamp low long-polling client timeouts so configured `timeoutSeconds` values below the `getUpdates` poll window no longer force a fresh HTTPS connection every few seconds. Fixes #75114. Thanks @hpinho77.
+- Web search: describe `web_search` as using the configured provider instead of hard-coding Brave when DuckDuckGo or another provider is active. Fixes #75088. Thanks @sun-rongyang.
+- Infra/tmp: tolerate concurrent temp-dir permission repairs by rechecking directories that another process already tightened, so parallel ACP subprocess startup no longer throws `Unsafe fallback OpenClaw temp dir`. Fixes #66867. Thanks @Kane808-AI and @jarvisz8.
+- Agents/compaction: add an opt-in `agents.defaults.compaction.midTurnPrecheck` mid-turn precheck that detects tool-loop context pressure and triggers compaction before the next tool call instead of waiting for end-of-turn. (#73499) Thanks @marchpure and @haoxingjun.
+- Gateway/approvals: let loopback token/password-backed native approval clients resolve exec approvals without attaching stale paired Gateway identities, while remote and unauthenticated approval clients keep normal device identity behavior. (#74472)
+- Gateway/config: include rejected validation paths in foreground and service last-known-good recovery logs plus main-agent notices, so unsupported direct edits explain which key caused restore instead of looking like silent reversion. Fixes #75060. Thanks @amknight.
 
 ## 2026.4.29
 
@@ -129,6 +151,7 @@ Docs: https://docs.openclaw.ai
 - ACP/resolver: fall through to thread-bound session resolution when an explicit `--session` token cannot be resolved while preserving the bad-token diagnostic when no thread binding exists, so Discord slash commands that auto-fill the current thread ID as the positional ACP target no longer return "Unable to resolve session target" errors. Fixes #66299. Thanks @hclsys, @kindomLee, and @martingarramon.
 - Agents/sessions: emit a terminal lifecycle backstop when embedded timeout/error turns return without `agent_end`, so Gateway sessions no longer stay stuck in `running` after failover surfaces a timeout. Fixes #74607. Thanks @millerc79.
 - Gateway/diagnostics: include stuck-session reason hints and recovery skip causes in warnings, so operators can tell whether a lane is waiting on active work, queued work, or stale bookkeeping. Thanks @vincentkoc.
+- Providers/DeepSeek: expose native DeepSeek V4 `xhigh` and `max` thinking levels through the provider `resolveThinkingProfile` hook so `/think xhigh|max` applies the intended effort instead of falling back to base levels. (#73008) Thanks @ai-hpc.
 - Agents/Codex: bound embedded-run cleanup, trajectory flushing, and command-lane task timeouts after runtime failures, so Discord and other chat sessions return to idle instead of staying stuck in processing. Thanks @vincentkoc.
 - Heartbeat/exec: consume successful metadata-only async exec completions silently so Telegram and other chat surfaces no longer ask users for missing command logs after `No session found`. Fixes #74595. Thanks @gkoch02.
 - Web fetch: add a documented `tools.web.fetch.ssrfPolicy.allowIpv6UniqueLocalRange` opt-in and thread it through cache keys and DNS/IP checks so trusted fake-IP proxy stacks using `fc00::/7` can work without broad private-network access. Fixes #74351. Thanks @jeffrey701.
@@ -139,7 +162,7 @@ Docs: https://docs.openclaw.ai
 - Sandbox/Docker: tolerate Docker daemon unavailability when sandbox mode is off, so doctor and preflight checks no longer fail on installs that do not run the Docker daemon. Fixes #73671. Thanks @kaseonedge.
 - Control UI/mobile: persist mobile chat settings through Lit-managed state and route mobile navigation through the same view-state path so chat panel toggles survive transitions on small viewports. Thanks @BunsDev.
 - Control UI/exports: align sidebar trigger affordances across the resizable divider, mobile layout, and exported-HTML transcript template so the sidebar toggle and exported transcript sidebar render with consistent hit areas and styling. Thanks @BunsDev.
-- Control UI/chat: disable the page refresh affordance while a chat run is active so accidental refreshes do not abort an in-flight reply. Thanks @BunsDev.
+- Control UI/chat: disable the page refresh affordance while a chat run is active so accidental refreshes do not abort an in-flight reply. Thanks @Angfr95 and @BunsDev.
 - Memory/LanceDB: return real memory records from `openclaw ltm list` (with optional `--limit` and createdAt ordering) instead of an empty placeholder, so the CLI surface matches the documented LTM listing contract. (#67952) Thanks @zhangyue19921010.
 - Media: include redacted per-attempt resize failures and resolved model input capabilities in vision-pipeline errors so ARM64 image failures are diagnosable without closing the remaining routing investigation. Refs #74552. Thanks @1yihui.
 - Control UI/i18n: route zh-CN agent, debug, channel-refresh, and exec-approval copy through the locale source while preserving the English `Cron Jobs` agent tab label and the security-audit command styling. Carries forward #39692 repair context. Thanks @hepeng154833488 and @vincentkoc.

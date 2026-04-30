@@ -101,10 +101,6 @@ function createCapabilityProviderFallbackLoadOptions(params: {
   return loadOptions;
 }
 
-function arePluginsGloballyDisabled(cfg: OpenClawConfig | undefined): boolean {
-  return cfg?.plugins?.enabled === false;
-}
-
 function findProviderById<K extends CapabilityProviderRegistryKey>(
   entries: PluginRegistry[K],
   providerId: string,
@@ -225,10 +221,6 @@ export function resolvePluginCapabilityProvider<K extends CapabilityProviderRegi
   cfg?: OpenClawConfig;
   installBundledRuntimeDeps?: boolean;
 }): CapabilityProviderForKey<K> | undefined {
-  if (arePluginsGloballyDisabled(params.cfg)) {
-    return undefined;
-  }
-
   const activeRegistry = resolveRuntimePluginRegistry();
   const activeProvider = findProviderById(activeRegistry?.[params.key] ?? [], params.providerId);
   if (activeProvider) {
@@ -263,10 +255,6 @@ export function resolvePluginCapabilityProviders<K extends CapabilityProviderReg
   cfg?: OpenClawConfig;
   installBundledRuntimeDeps?: boolean;
 }): CapabilityProviderForKey<K>[] {
-  if (arePluginsGloballyDisabled(params.cfg)) {
-    return [];
-  }
-
   const activeRegistry = resolveRuntimePluginRegistry();
   const activeProviders = activeRegistry?.[params.key] ?? [];
   if (

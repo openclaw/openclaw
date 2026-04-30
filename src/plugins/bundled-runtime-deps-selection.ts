@@ -152,7 +152,7 @@ function readBundledPluginLocalMemoryEmbeddingRuntimeDeps(value: unknown): Runti
         "openclaw.plugin.json runtimeDependencies.localMemoryEmbedding must contain strings",
       );
     }
-    return { ...parseInstallableRuntimeDepSpec(spec), pluginIds: [] };
+    return Object.assign(parseInstallableRuntimeDepSpec(spec), { pluginIds: [] });
   });
 }
 

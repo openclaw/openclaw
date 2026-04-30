@@ -22,10 +22,10 @@ export async function startBrowserControlServiceFromConfig(): Promise<BrowserSer
   }
 
   const cfg = getRuntimeConfig();
-  if (!isDefaultBrowserPluginEnabled(cfg)) {
+  const browserCfg = loadBrowserConfigForRuntimeRefresh();
+  if (!isDefaultBrowserPluginEnabled(browserCfg)) {
     return null;
   }
-  const browserCfg = loadBrowserConfigForRuntimeRefresh();
   const resolved = resolveBrowserConfig(browserCfg.browser, browserCfg);
   if (!resolved.enabled) {
     return null;

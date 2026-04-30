@@ -194,7 +194,9 @@ Validation` or from the `main`/release workflow ref so workflow logic and
     `openclaw/releases-private/.github/workflows/openclaw-npm-dist-tags.yml`
     for security, because `npm dist-tag add` still needs `NPM_TOKEN` while the
     public repo keeps OIDC-only publish
-  - public `macOS Release` is validation-only
+  - public `macOS Release` is validation-only; when a tag lives only on a
+    release branch but the workflow is dispatched from `main`, set
+    `public_release_branch=release/YYYY.M.D`
   - real private mac publish must pass successful private mac
     `preflight_run_id` and `validate_run_id`
   - the real publish paths promote prepared artifacts instead of rebuilding
