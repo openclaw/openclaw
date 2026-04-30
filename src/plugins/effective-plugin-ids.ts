@@ -45,6 +45,7 @@ function collectBundledChannelOwnerPluginIds(params: {
   config: OpenClawConfig;
   channelIds: readonly string[];
   env: NodeJS.ProcessEnv;
+  bundledPluginsDir?: string;
 }): string[] {
   const plugins = normalizePluginsConfig(params.config.plugins);
   const channelIds = new Set(
@@ -55,7 +56,7 @@ function collectBundledChannelOwnerPluginIds(params: {
   if (channelIds.size === 0) {
     return [];
   }
-  const bundledDir = resolveBundledPluginsDir(params.env);
+  const bundledDir = params.bundledPluginsDir ?? resolveBundledPluginsDir(params.env);
   if (!bundledDir) {
     return [];
   }
@@ -126,6 +127,7 @@ export function resolveEffectivePluginIds(params: {
   config: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   workspaceDir?: string;
+  bundledPluginsDir?: string;
 }): string[] {
   const autoEnabled = applyPluginAutoEnable({
     config: params.config,
@@ -150,6 +152,7 @@ export function resolveEffectivePluginIds(params: {
     config: effectiveConfig,
     channelIds: configuredChannelIds,
     env: params.env,
+    ...(params.bundledPluginsDir ? { bundledPluginsDir: params.bundledPluginsDir } : {}),
   })) {
     ids.add(pluginId);
   }

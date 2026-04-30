@@ -98,6 +98,13 @@ export type CronRunOutcome = {
   sessionKey?: string;
 };
 
+export type CronAgentExecutionStarted = {
+  jobId: string;
+  agentId?: string;
+  sessionId?: string;
+  sessionKey?: string;
+};
+
 export type CronFailureAlert = {
   after?: number;
   channel?: CronMessageChannel;
@@ -147,7 +154,7 @@ export type CronJobState = {
   lastRunAtMs?: number;
   /** Preferred execution outcome field. */
   lastRunStatus?: CronRunStatus;
-  /** Back-compat alias for lastRunStatus. */
+  /** @deprecated Use lastRunStatus. */
   lastStatus?: "ok" | "error" | "skipped";
   lastError?: string;
   /** Classified reason for the last error (when available). */

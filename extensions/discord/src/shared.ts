@@ -1,19 +1,25 @@
 import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
+import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import { formatAllowFromLowercase } from "openclaw/plugin-sdk/allow-from";
 import { adaptScopedAccountAccessor } from "openclaw/plugin-sdk/channel-config-helpers";
 import { createScopedChannelConfigAdapter } from "openclaw/plugin-sdk/channel-config-helpers";
 import type { ChannelDoctorAdapter } from "openclaw/plugin-sdk/channel-contract";
 import { inspectDiscordAccount } from "./account-inspect.js";
 import {
+  isDiscordAccountEnabledForRuntime,
   listDiscordAccountIds,
+  mergeDiscordAccountConfig,
   resolveDefaultDiscordAccountId,
   resolveDiscordAccount,
+  resolveDiscordAccountAllowFrom,
+  resolveDiscordAccountDisabledReason,
   type ResolvedDiscordAccount,
 } from "./accounts.js";
 import { getChatChannelMeta, type ChannelPlugin } from "./channel-api.js";
 import { DiscordChannelConfigSchema } from "./config-schema.js";
 import { normalizeCompatibilityConfig } from "./doctor-contract.js";
 import { DISCORD_LEGACY_CONFIG_RULES } from "./doctor-shared.js";
+import type { OpenClawConfig } from "./runtime-api.js";
 import {
   collectRuntimeConfigAssignments,
   secretTargetRegistryEntries,
@@ -28,6 +34,10 @@ import { deriveLegacySessionChatType } from "./session-contract.js";
 export const DISCORD_CHANNEL = "discord" as const;
 
 type DiscordDoctorModule = typeof import("./doctor.js");
+type DiscordConfigAccessorAccount = {
+  allowFrom: string[] | undefined;
+  defaultTo: string | undefined;
+};
 
 let discordDoctorModulePromise: Promise<DiscordDoctorModule> | undefined;
 
@@ -37,7 +47,7 @@ async function loadDiscordDoctorModule(): Promise<DiscordDoctorModule> {
 }
 
 const discordDoctor: ChannelDoctorAdapter = {
-  dmAllowFromMode: "topOrNested",
+  dmAllowFromMode: "topOnly",
   groupModel: "route",
   groupAllowFromFallbackToAllowFrom: false,
   warnOnEmptyGroupSenderAllowlist: false,
@@ -54,16 +64,34 @@ const discordDoctor: ChannelDoctorAdapter = {
     },
 };
 
-export const discordConfigAdapter = createScopedChannelConfigAdapter<ResolvedDiscordAccount>({
+function resolveDiscordConfigAccessorAccount(params: {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+}): DiscordConfigAccessorAccount {
+  const accountId = normalizeAccountId(
+    params.accountId ?? resolveDefaultDiscordAccountId(params.cfg),
+  );
+  const config = mergeDiscordAccountConfig(params.cfg, accountId);
+  return {
+    allowFrom: resolveDiscordAccountAllowFrom({ cfg: params.cfg, accountId }),
+    defaultTo: config.defaultTo,
+  };
+}
+
+export const discordConfigAdapter = createScopedChannelConfigAdapter<
+  ResolvedDiscordAccount,
+  DiscordConfigAccessorAccount
+>({
   sectionKey: DISCORD_CHANNEL,
   listAccountIds: listDiscordAccountIds,
   resolveAccount: adaptScopedAccountAccessor(resolveDiscordAccount),
+  resolveAccessorAccount: resolveDiscordConfigAccessorAccount,
   inspectAccount: adaptScopedAccountAccessor(inspectDiscordAccount),
   defaultAccountId: resolveDefaultDiscordAccountId,
   clearBaseFields: ["token", "name"],
-  resolveAllowFrom: (account: ResolvedDiscordAccount) => account.config.dm?.allowFrom,
+  resolveAllowFrom: (account) => account.allowFrom,
   formatAllowFrom: (allowFrom) => formatAllowFromLowercase({ allowFrom }),
-  resolveDefaultTo: (account: ResolvedDiscordAccount) => account.config.defaultTo,
+  resolveDefaultTo: (account) => account.defaultTo,
 });
 
 export function createDiscordPluginBase(params: {
@@ -119,6 +147,8 @@ export function createDiscordPluginBase(params: {
       ...discordConfigAdapter,
       hasConfiguredState: ({ env }) =>
         typeof env?.DISCORD_BOT_TOKEN === "string" && env.DISCORD_BOT_TOKEN.trim().length > 0,
+      isEnabled: (account, cfg) => isDiscordAccountEnabledForRuntime(account, cfg),
+      disabledReason: (account, cfg) => resolveDiscordAccountDisabledReason(account, cfg),
       isConfigured: (account) => Boolean(account.token?.trim()),
       describeAccount: (account) =>
         describeAccountSnapshot({

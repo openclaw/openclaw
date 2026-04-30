@@ -216,11 +216,41 @@ For fast iteration, run the gateway under the file watcher:
 pnpm gateway:watch
 ```
 
-This maps to:
+By default, this starts or restarts a tmux session named
+`openclaw-gateway-watch-main` (or a profile/port-specific variant such as
+`openclaw-gateway-watch-dev-19001`) and auto-attaches from interactive terminals.
+Non-interactive shells, CI, and agent exec calls stay detached and print attach
+instructions instead. Attach manually when needed:
+
+```bash
+tmux attach -t openclaw-gateway-watch-main
+```
+
+The tmux pane runs the raw watcher:
 
 ```bash
 node scripts/watch-node.mjs gateway --force
 ```
+
+Use foreground mode when tmux is not wanted:
+
+```bash
+pnpm gateway:watch:raw
+# or
+OPENCLAW_GATEWAY_WATCH_TMUX=0 pnpm gateway:watch
+```
+
+Disable auto-attach while keeping tmux management:
+
+```bash
+OPENCLAW_GATEWAY_WATCH_ATTACH=0 pnpm gateway:watch
+```
+
+The tmux wrapper carries common non-secret runtime selectors such as
+`OPENCLAW_PROFILE`, `OPENCLAW_CONFIG_PATH`, `OPENCLAW_STATE_DIR`,
+`OPENCLAW_GATEWAY_PORT`, and `OPENCLAW_SKIP_CHANNELS` into the pane. Put
+provider credentials in your normal profile/config, or use raw foreground mode
+for one-off ephemeral secrets.
 
 The watcher restarts on build-relevant files under `src/`, extension source files,
 extension `package.json` and `openclaw.plugin.json` metadata, `tsconfig.json`,
@@ -229,8 +259,9 @@ gateway without forcing a `tsdown` rebuild; source and config changes still
 rebuild `dist` first.
 
 Add any gateway CLI flags after `gateway:watch` and they will be passed through on
-each restart. Re-running the same watch command for the same repo/flag set now
-replaces the older watcher instead of leaving duplicate watcher parents behind.
+each restart. Re-running the same watch command respawns the named tmux pane, and
+the raw watcher still keeps its single-watcher lock so duplicate watcher parents
+are replaced instead of piling up.
 
 ## Dev profile + dev gateway (--dev)
 

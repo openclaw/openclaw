@@ -216,8 +216,9 @@ Validation` or from the `main`/release workflow ref so workflow logic and
   before the release publish path
 - If the release work touched CI planning, extension timing manifests, or
   extension test matrices, regenerate and review the planner-owned
-  `checks-node-extensions` workflow matrix outputs from `.github/workflows/ci.yml`
-  before approval so release notes do not describe a stale CI layout
+  `plugin-prerelease-extension-shard` matrix outputs from
+  `.github/workflows/plugin-prerelease.yml` before approval so release notes do
+  not describe a stale CI layout
 - Stable macOS release readiness also includes the updater surfaces:
   - the GitHub release must end up with the packaged `.zip`, `.dmg`, and `.dSYM.zip`
   - `appcast.xml` on `main` must point at the new stable zip after publish
@@ -267,6 +268,11 @@ Use `release_profile` to select live/provider breadth:
 ref once as `release-package-under-test` and reuses that artifact in both
 release-path Docker checks and Package Acceptance. This keeps all
 package-facing boxes on the same bytes and avoids repeated package builds.
+The cross-OS OpenAI install smoke uses `OPENCLAW_CROSS_OS_OPENAI_MODEL` when the
+repo/org variable is set, otherwise `openai/gpt-5.4-mini`, because this lane is
+proving package install, onboarding, gateway startup, and one live agent turn
+rather than benchmarking the slowest default model. The broader live provider
+matrix remains the place for model-specific coverage.
 
 Use these variants depending on release stage:
 
@@ -306,10 +312,11 @@ ids, so after a child workflow is rerun successfully, rerun only the failed
 `Verify full validation` parent job.
 
 For bounded recovery, pass `rerun_group` to the umbrella. `all` is the real
-release-candidate run, `ci` runs only the normal CI child, `release-checks` runs
-every release box, and the narrower release groups are `install-smoke`,
-`cross-os`, `live-e2e`, `package`, `qa`, `qa-parity`, `qa-live`, and
-`npm-telegram` when the standalone package Telegram lane is supplied.
+release-candidate run, `ci` runs only the normal CI child, `plugin-prerelease`
+runs only the release-only plugin child, `release-checks` runs every release
+box, and the narrower release groups are `install-smoke`, `cross-os`,
+`live-e2e`, `package`, `qa`, `qa-parity`, `qa-live`, and `npm-telegram` when the
+standalone package Telegram lane is supplied.
 
 ### Vitest
 
@@ -345,18 +352,26 @@ Docker environments instead of only source-level tests.
 Release Docker coverage includes:
 
 - full install smoke with the slow Bun global install smoke enabled
+- root Dockerfile smoke image preparation/reuse by target SHA, with QR,
+  root/gateway, and installer/Bun smoke jobs running as separate install-smoke
+  shards
 - repository E2E lanes
 - release-path Docker chunks: `core`, `package-update-openai`,
-  `package-update-anthropic`, `package-update-core`, `plugins-runtime-core`,
+  `package-update-anthropic`, `package-update-core`, `plugins-runtime-plugins`,
+  `plugins-runtime-services`,
   `plugins-runtime-install-a`, `plugins-runtime-install-b`,
+  `plugins-runtime-install-c`, `plugins-runtime-install-d`,
+  `plugins-runtime-install-e`, `plugins-runtime-install-f`,
+  `plugins-runtime-install-g`, `plugins-runtime-install-h`,
   `bundled-channels-core`, `bundled-channels-update-a`,
-  `bundled-channels-update-b`, and `bundled-channels-contracts`
-- OpenWebUI coverage inside the `plugins-runtime-core` chunk when requested
+  `bundled-channels-update-discord`, `bundled-channels-update-b`, and
+  `bundled-channels-contracts`
+- OpenWebUI coverage inside the `plugins-runtime-services` chunk when requested
 - split bundled-channel dependency lanes across channel-smoke, update-target,
   and setup/runtime contract chunks instead of one large bundled-channel job
 - split bundled plugin install/uninstall lanes
   `bundled-plugin-install-uninstall-0` through
-  `bundled-plugin-install-uninstall-7`
+  `bundled-plugin-install-uninstall-23`
 - live/E2E provider suites and Docker live model coverage when release checks
   include live suites
 

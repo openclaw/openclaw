@@ -3,7 +3,9 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveBundledRuntimeDependencyInstallRoot } from "./bundled-runtime-deps.js";
+import { materializeBundledRuntimeMirrorFile } from "./bundled-runtime-mirror.js";
 import { prepareBundledPluginRuntimeRoot } from "./bundled-runtime-root.js";
+import { writeGeneratedRuntimeDepsManifest } from "./test-helpers/bundled-runtime-deps-fixtures.js";
 
 const tempRoots: string[] = [];
 
@@ -36,6 +38,47 @@ function isBigIntStatOptions(options: unknown): boolean {
 }
 
 describe("prepareBundledPluginRuntimeRoot", () => {
+  it("keeps existing materialized root chunks when copy refresh fails", () => {
+    const root = makeTempRoot();
+    const source = path.join(root, "source.js");
+    const target = path.join(root, "mirror", "source.js");
+    fs.writeFileSync(source, "export const value = 'new';\n", "utf8");
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, "export const value = 'old';\n", "utf8");
+    vi.spyOn(fs, "linkSync").mockImplementation(() => {
+      throw new Error("EXDEV");
+    });
+    vi.spyOn(fs, "copyFileSync").mockImplementation(() => {
+      throw new Error("ENOSPC");
+    });
+
+    expect(() => materializeBundledRuntimeMirrorFile(source, target)).toThrow("ENOSPC");
+    expect(fs.readFileSync(target, "utf8")).toBe("export const value = 'old';\n");
+  });
+
+  it("reuses existing hardlinked mirror files without rewriting them", () => {
+    const root = makeTempRoot();
+    const source = path.join(root, "source.js");
+    const target = path.join(root, "mirror", "source.js");
+    fs.writeFileSync(source, "export const value = 'stable';\n", "utf8");
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.linkSync(source, target);
+    const initialTargetStat = fs.statSync(target, { bigint: true });
+
+    const linkSpy = vi.spyOn(fs, "linkSync");
+    const copySpy = vi.spyOn(fs, "copyFileSync");
+    const removeSpy = vi.spyOn(fs, "rmSync");
+
+    materializeBundledRuntimeMirrorFile(source, target);
+
+    const reusedTargetStat = fs.statSync(target, { bigint: true });
+    expect(reusedTargetStat.dev).toBe(initialTargetStat.dev);
+    expect(reusedTargetStat.ino).toBe(initialTargetStat.ino);
+    expect(linkSpy).not.toHaveBeenCalled();
+    expect(copySpy).not.toHaveBeenCalled();
+    expect(removeSpy).not.toHaveBeenCalled();
+  });
+
   it("materializes root JavaScript chunks in external mirrors", () => {
     const packageRoot = makeTempRoot();
     const stageDir = makeTempRoot();
@@ -66,6 +109,11 @@ describe("prepareBundledPluginRuntimeRoot", () => {
     fs.writeFileSync(
       path.join(packageRoot, "dist", "config-runtime.js"),
       "import JSON5 from 'json5'; export const parse = JSON5.parse;\n",
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(packageRoot, "dist", "string-runtime.js"),
+      `const text = 'not an import: from "zod"'; export const marker = text;\n`,
       "utf8",
     );
     fs.writeFileSync(
@@ -105,6 +153,7 @@ describe("prepareBundledPluginRuntimeRoot", () => {
       "utf8",
     );
     fs.writeFileSync(path.join(depRoot, "index.js"), "export const marker = 'stage-ok';\n", "utf8");
+    writeGeneratedRuntimeDepsManifest(installRoot, ["playwright-core@1.0.0"]);
 
     const staleMirrorChunk = path.join(installRoot, "dist", "pw-ai.js");
     fs.mkdirSync(path.dirname(staleMirrorChunk), { recursive: true });
@@ -136,8 +185,166 @@ describe("prepareBundledPluginRuntimeRoot", () => {
       false,
     );
     expect(fs.lstatSync(path.join(installRoot, "dist", "config-runtime.js")).isSymbolicLink()).toBe(
-      true,
+      false,
     );
+    expect(fs.lstatSync(path.join(installRoot, "dist", "string-runtime.js")).isSymbolicLink()).toBe(
+      false,
+    );
+  });
+
+  it("reuses prepared root mirrors across bundled plugins", () => {
+    const packageRoot = makeTempRoot();
+    const stageDir = makeTempRoot();
+    const env = { ...process.env, OPENCLAW_PLUGIN_STAGE_DIR: stageDir };
+    const rootChunk = path.join(packageRoot, "dist", "shared-runtime.js");
+    const externalChunk = path.join(packageRoot, "dist", "external-runtime.js");
+    fs.mkdirSync(path.join(packageRoot, "dist", "extensions"), { recursive: true });
+    fs.writeFileSync(
+      path.join(packageRoot, "package.json"),
+      JSON.stringify({ name: "openclaw", version: "2026.4.27", type: "module" }),
+      "utf8",
+    );
+    fs.writeFileSync(rootChunk, "export const shared = 'root';\n", "utf8");
+    fs.writeFileSync(externalChunk, "import zod from 'zod'; export const schema = zod;\n", "utf8");
+    const installRoot = resolveBundledRuntimeDependencyInstallRoot(
+      path.join(packageRoot, "dist", "extensions", "alpha"),
+      { env },
+    );
+
+    for (const pluginId of ["alpha", "beta"]) {
+      const pluginRoot = path.join(packageRoot, "dist", "extensions", pluginId);
+      fs.mkdirSync(pluginRoot, { recursive: true });
+      fs.writeFileSync(
+        path.join(pluginRoot, "index.js"),
+        `import { shared } from "../../shared-runtime.js"; export default { id: ${JSON.stringify(pluginId)}, shared };\n`,
+        "utf8",
+      );
+      fs.writeFileSync(
+        path.join(pluginRoot, "package.json"),
+        JSON.stringify(
+          {
+            name: `@openclaw/${pluginId}`,
+            version: "1.0.0",
+            type: "module",
+            dependencies: { [`${pluginId}-runtime`]: "1.0.0" },
+            openclaw: { extensions: ["./index.js"] },
+          },
+          null,
+          2,
+        ),
+        "utf8",
+      );
+      const pluginInstallRoot = resolveBundledRuntimeDependencyInstallRoot(pluginRoot, { env });
+      fs.mkdirSync(path.join(pluginInstallRoot, "node_modules", `${pluginId}-runtime`), {
+        recursive: true,
+      });
+      fs.writeFileSync(
+        path.join(pluginInstallRoot, "node_modules", `${pluginId}-runtime`, "package.json"),
+        JSON.stringify({ name: `${pluginId}-runtime`, version: "1.0.0", type: "module" }),
+        "utf8",
+      );
+    }
+    writeGeneratedRuntimeDepsManifest(installRoot, ["alpha-runtime@1.0.0", "beta-runtime@1.0.0"]);
+
+    const realReaddirSync = fs.readdirSync.bind(fs);
+    const readdirPaths: string[] = [];
+    vi.spyOn(fs, "readdirSync").mockImplementation(((target, options) => {
+      const targetPath = target.toString();
+      if (
+        targetPath === path.join(packageRoot, "dist") &&
+        new Error().stack?.includes("mirrorBundledRuntimeDistRootEntries")
+      ) {
+        readdirPaths.push(targetPath);
+      }
+      return realReaddirSync(target, options as never);
+    }) as typeof fs.readdirSync);
+
+    for (const pluginId of ["alpha", "beta"]) {
+      const pluginRoot = path.join(packageRoot, "dist", "extensions", pluginId);
+      prepareBundledPluginRuntimeRoot({
+        pluginId,
+        pluginRoot,
+        modulePath: path.join(pluginRoot, "index.js"),
+        env,
+      });
+    }
+
+    expect(fs.lstatSync(path.join(installRoot, "dist", "shared-runtime.js")).isSymbolicLink()).toBe(
+      false,
+    );
+    expect(
+      fs.lstatSync(path.join(installRoot, "dist", "external-runtime.js")).isSymbolicLink(),
+    ).toBe(false);
+    expect(readdirPaths).toHaveLength(1);
+  });
+
+  it("does not memoize source-checkout dist mirrors", () => {
+    const packageRoot = makeTempRoot();
+    const stageDir = makeTempRoot();
+    const env = { ...process.env, OPENCLAW_PLUGIN_STAGE_DIR: stageDir };
+    fs.mkdirSync(path.join(packageRoot, ".git"), { recursive: true });
+    fs.mkdirSync(path.join(packageRoot, "src"), { recursive: true });
+    fs.mkdirSync(path.join(packageRoot, "extensions"), { recursive: true });
+    const pluginRoot = path.join(packageRoot, "dist", "extensions", "alpha");
+    fs.mkdirSync(pluginRoot, { recursive: true });
+    fs.writeFileSync(
+      path.join(packageRoot, "package.json"),
+      JSON.stringify({ name: "openclaw", version: "2026.4.27", type: "module" }),
+      "utf8",
+    );
+    fs.writeFileSync(path.join(packageRoot, "dist", "shared-runtime.js"), "export {};\n", "utf8");
+    fs.writeFileSync(
+      path.join(pluginRoot, "index.js"),
+      `import "../../shared-runtime.js"; export default { id: "alpha" };\n`,
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(pluginRoot, "package.json"),
+      JSON.stringify(
+        {
+          name: "@openclaw/alpha",
+          version: "1.0.0",
+          type: "module",
+          dependencies: { "alpha-runtime": "1.0.0" },
+          openclaw: { extensions: ["./index.js"] },
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+    const installRoot = resolveBundledRuntimeDependencyInstallRoot(pluginRoot, { env });
+    fs.mkdirSync(path.join(installRoot, "node_modules", "alpha-runtime"), { recursive: true });
+    fs.writeFileSync(
+      path.join(installRoot, "node_modules", "alpha-runtime", "package.json"),
+      JSON.stringify({ name: "alpha-runtime", version: "1.0.0", type: "module" }),
+      "utf8",
+    );
+    writeGeneratedRuntimeDepsManifest(installRoot, ["alpha-runtime@1.0.0"]);
+
+    const realReaddirSync = fs.readdirSync.bind(fs);
+    const readdirPaths: string[] = [];
+    vi.spyOn(fs, "readdirSync").mockImplementation(((target, options) => {
+      const targetPath = target.toString();
+      if (
+        targetPath === path.join(packageRoot, "dist") &&
+        new Error().stack?.includes("mirrorBundledRuntimeDistRootEntries")
+      ) {
+        readdirPaths.push(targetPath);
+      }
+      return realReaddirSync(target, options as never);
+    }) as typeof fs.readdirSync);
+
+    for (let index = 0; index < 2; index += 1) {
+      prepareBundledPluginRuntimeRoot({
+        pluginId: "alpha",
+        pluginRoot,
+        modulePath: path.join(pluginRoot, "index.js"),
+        env,
+      });
+    }
+
+    expect(readdirPaths).toHaveLength(2);
   });
 
   it("does not copy staged runtime mirror dist files onto themselves", () => {
@@ -179,6 +386,7 @@ describe("prepareBundledPluginRuntimeRoot", () => {
       JSON.stringify({ name: "qqbot-runtime", version: "1.0.0", type: "module" }),
       "utf8",
     );
+    writeGeneratedRuntimeDepsManifest(installRoot, ["qqbot-runtime@1.0.0"]);
 
     const prepared = prepareBundledPluginRuntimeRoot({
       pluginId: "qqbot",
@@ -262,6 +470,7 @@ describe("prepareBundledPluginRuntimeRoot", () => {
       JSON.stringify({ name: "qqbot-runtime", version: "1.0.0", type: "module" }),
       "utf8",
     );
+    writeGeneratedRuntimeDepsManifest(installRoot, ["qqbot-runtime@1.0.0"]);
 
     const prepared = prepareBundledPluginRuntimeRoot({
       pluginId: "qqbot",
@@ -327,6 +536,7 @@ describe("prepareBundledPluginRuntimeRoot", () => {
       JSON.stringify({ name: "qqbot-runtime", version: "1.0.0", type: "module" }),
       "utf8",
     );
+    writeGeneratedRuntimeDepsManifest(installRoot, ["qqbot-runtime@1.0.0"]);
 
     const lockPath = path.join(installRoot, ".openclaw-runtime-mirror.lock");
     const fingerprintLockStates: Array<{ source: "runtime" | "canonical"; locked: boolean }> = [];
@@ -389,6 +599,7 @@ describe("prepareBundledPluginRuntimeRoot", () => {
       JSON.stringify({ name: "whatsapp-runtime", version: "1.0.0", type: "module" }),
       "utf8",
     );
+    writeGeneratedRuntimeDepsManifest(installRoot, ["whatsapp-runtime@1.0.0"]);
 
     const prepared = prepareBundledPluginRuntimeRoot({
       pluginId: "whatsapp",
@@ -448,6 +659,7 @@ describe("prepareBundledPluginRuntimeRoot", () => {
       JSON.stringify({ name: "whatsapp-runtime", version: "1.0.0", type: "module" }),
       "utf8",
     );
+    writeGeneratedRuntimeDepsManifest(installRoot, ["whatsapp-runtime@1.0.0"]);
 
     const prepared = prepareBundledPluginRuntimeRoot({
       pluginId: "whatsapp",

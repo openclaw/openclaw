@@ -7,64 +7,17 @@ import {
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { loadPluginManifestRegistryForPluginRegistry } from "./plugin-registry.js";
 
-type ManifestSuppressionCache = Map<string, readonly ManifestModelCatalogSuppressionEntry[]>;
-
-let cacheWithoutConfig = new WeakMap<NodeJS.ProcessEnv, ManifestSuppressionCache>();
-let cacheByConfig = new WeakMap<
-  OpenClawConfig,
-  WeakMap<NodeJS.ProcessEnv, ManifestSuppressionCache>
->();
-
-function resolveSuppressionCache(params: {
-  config?: OpenClawConfig;
-  env: NodeJS.ProcessEnv;
-}): ManifestSuppressionCache {
-  if (!params.config) {
-    let cache = cacheWithoutConfig.get(params.env);
-    if (!cache) {
-      cache = new Map();
-      cacheWithoutConfig.set(params.env, cache);
-    }
-    return cache;
-  }
-  let envCaches = cacheByConfig.get(params.config);
-  if (!envCaches) {
-    envCaches = new WeakMap();
-    cacheByConfig.set(params.config, envCaches);
-  }
-  let cache = envCaches.get(params.env);
-  if (!cache) {
-    cache = new Map();
-    envCaches.set(params.env, cache);
-  }
-  return cache;
-}
-
-function cacheKey(params: { workspaceDir?: string }): string {
-  return params.workspaceDir ?? "";
-}
-
 function listManifestModelCatalogSuppressions(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env: NodeJS.ProcessEnv;
 }): readonly ManifestModelCatalogSuppressionEntry[] {
-  const cache = resolveSuppressionCache({
-    config: params.config,
-    env: params.env,
-  });
-  const key = cacheKey(params);
-  const cached = cache.get(key);
-  if (cached) {
-    return cached;
-  }
   const registry = loadPluginManifestRegistryForPluginRegistry({
     config: params.config,
     workspaceDir: params.workspaceDir,
     env: params.env,
   });
   const planned = planManifestModelCatalogSuppressions({ registry });
-  cache.set(key, planned.suppressions);
   return planned.suppressions;
 }
 
@@ -147,13 +100,64 @@ function manifestSuppressionMatchesConditions(params: {
 }
 
 export function clearManifestModelSuppressionCacheForTest(): void {
-  cacheWithoutConfig = new WeakMap<NodeJS.ProcessEnv, ManifestSuppressionCache>();
-  cacheByConfig = new WeakMap<
-    OpenClawConfig,
-    WeakMap<NodeJS.ProcessEnv, ManifestSuppressionCache>
-  >();
+  // Manifest suppressions are read fresh. Keep the test hook as a no-op.
 }
 
+export function buildManifestBuiltInModelSuppressionResolver(params: {
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+}) {
+  const suppressions = listManifestModelCatalogSuppressions({
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env: params.env ?? process.env,
+  });
+
+  return (input: {
+    provider?: string | null;
+    id?: string | null;
+    baseUrl?: string | null;
+    unconditionalOnly?: boolean;
+  }) => {
+    const provider = normalizeLowercaseStringOrEmpty(input.provider);
+    const modelId = normalizeLowercaseStringOrEmpty(input.id);
+    if (!provider || !modelId) {
+      return undefined;
+    }
+    const mergeKey = buildModelCatalogMergeKey(provider, modelId);
+    const suppression = suppressions.find(
+      (entry) =>
+        entry.mergeKey === mergeKey &&
+        (!input.unconditionalOnly || !entry.when) &&
+        manifestSuppressionMatchesConditions({
+          suppression: entry,
+          provider,
+          baseUrl: input.baseUrl,
+          config: params.config,
+        }),
+    );
+    if (!suppression) {
+      return undefined;
+    }
+    return {
+      suppress: true,
+      errorMessage: buildManifestSuppressionError({
+        provider,
+        modelId,
+        reason: suppression.reason,
+      }),
+    };
+  };
+}
+
+/**
+ * Resolves whether a built-in model should be suppressed based on manifest declarations.
+ *
+ * Note: This function instantiates a fresh resolver on every call, which incurs a full
+ * filesystem scan of the manifest registry. For hot paths (like building the model catalog),
+ * instantiate and reuse `buildManifestBuiltInModelSuppressionResolver` instead.
+ */
 export function resolveManifestBuiltInModelSuppression(params: {
   provider?: string | null;
   id?: string | null;
@@ -161,36 +165,17 @@ export function resolveManifestBuiltInModelSuppression(params: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   baseUrl?: string | null;
+  unconditionalOnly?: boolean;
 }) {
-  const provider = normalizeLowercaseStringOrEmpty(params.provider);
-  const modelId = normalizeLowercaseStringOrEmpty(params.id);
-  if (!provider || !modelId) {
-    return undefined;
-  }
-  const mergeKey = buildModelCatalogMergeKey(provider, modelId);
-  const suppression = listManifestModelCatalogSuppressions({
+  const resolver = buildManifestBuiltInModelSuppressionResolver({
     config: params.config,
     workspaceDir: params.workspaceDir,
-    env: params.env ?? process.env,
-  }).find(
-    (entry) =>
-      entry.mergeKey === mergeKey &&
-      manifestSuppressionMatchesConditions({
-        suppression: entry,
-        provider,
-        baseUrl: params.baseUrl,
-        config: params.config,
-      }),
-  );
-  if (!suppression) {
-    return undefined;
-  }
-  return {
-    suppress: true,
-    errorMessage: buildManifestSuppressionError({
-      provider,
-      modelId,
-      reason: suppression.reason,
-    }),
-  };
+    env: params.env,
+  });
+  return resolver({
+    provider: params.provider,
+    id: params.id,
+    baseUrl: params.baseUrl,
+    unconditionalOnly: params.unconditionalOnly,
+  });
 }

@@ -299,6 +299,46 @@ describe("task-flow-registry", () => {
         status: "blocked",
         blockedTaskId: "task-blocked",
         blockedSummary: "Writable session required.",
+        endedAt: 200,
+        updatedAt: 200,
+      });
+
+      const delivered = syncFlowFromTask({
+        taskId: "task-blocked",
+        parentFlowId: mirrored.flowId,
+        status: "succeeded",
+        terminalOutcome: "blocked",
+        notifyPolicy: "done_only",
+        label: "Fix permissions",
+        task: "Fix permissions",
+        lastEventAt: 250,
+        endedAt: 200,
+        terminalSummary: "Writable session required.",
+      });
+      expect(delivered).toMatchObject({
+        flowId: mirrored.flowId,
+        status: "blocked",
+        endedAt: 200,
+        updatedAt: 200,
+      });
+
+      const terminalCreated = createTaskFlowForTask({
+        task: {
+          ownerKey: "agent:main:main",
+          taskId: "task-failed",
+          notifyPolicy: "done_only",
+          status: "failed",
+          label: "Fail permissions",
+          task: "Fail permissions",
+          createdAt: 100,
+          lastEventAt: 300,
+          endedAt: 200,
+        },
+      });
+      expect(terminalCreated).toMatchObject({
+        status: "failed",
+        endedAt: 200,
+        updatedAt: 200,
       });
 
       const managed = createManagedTaskFlow({
