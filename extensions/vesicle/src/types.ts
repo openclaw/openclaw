@@ -62,6 +62,18 @@ export type ResolvedVesicleAccount = {
   baseUrl?: string;
 };
 
+export type VesicleInboundMessage = {
+  messageGuid: string;
+  chatGuid: string;
+  isGroup?: boolean;
+  sender: string;
+  service?: string;
+  date?: number;
+  text: string;
+  isFromMe?: boolean;
+  rowId?: number | null;
+};
+
 export type VesicleCapabilities = {
   text?: boolean;
   attachments?: boolean;
@@ -103,3 +115,4 @@ export type VesicleErrorEnvelope = {
 
 export const DEFAULT_SEND_TIMEOUT_MS = 30_000;
 export const DEFAULT_PROBE_TIMEOUT_MS = 10_000;
+export const DEFAULT_WEBHOOK_PATH = "/vesicle-webhook";

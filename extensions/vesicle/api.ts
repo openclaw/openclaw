@@ -9,6 +9,15 @@ export { vesiclePlugin } from "./src/channel.js";
 export { type VesicleProbe, probeVesicle } from "./src/probe.js";
 export { type VesicleSendResult, sendMessageVesicle } from "./src/send.js";
 export {
+  handleVesicleWebhookRequest,
+  parseVesicleWebhookPayload,
+  registerVesicleWebhookTarget,
+  resolveConfiguredVesicleWebhookSecret,
+  resolveVesicleWebhookPath,
+  signVesicleWebhookBody,
+  verifyVesicleWebhookSignature,
+} from "./src/webhook.js";
+export {
   inferVesicleTargetChatType,
   looksLikeVesicleExplicitTargetId,
   normalizeVesicleMessagingTarget,

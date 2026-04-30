@@ -14,6 +14,7 @@ import {
   type ResolvedVesicleAccount,
 } from "./accounts.js";
 import { VesicleChannelConfigSchema } from "./config-schema.js";
+import { startVesicleGatewayAccount } from "./gateway.js";
 import type { VesicleProbe } from "./probe.js";
 import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
 import { sendMessageVesicle } from "./send.js";
@@ -98,6 +99,9 @@ export const vesiclePlugin = createChatChannelPlugin<ResolvedVesicleAccount, Ves
       },
     },
     status: vesicleStatus,
+    gateway: {
+      startAccount: startVesicleGatewayAccount,
+    },
   },
   outbound: {
     base: {
