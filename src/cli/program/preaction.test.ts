@@ -1,6 +1,6 @@
 import { Command } from "commander";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { repoInstallSpec } from "../../../test/helpers/bundled-plugin-paths.js";
+import { repoInstallSpec } from "openclaw/plugin-sdk/test-fixtures";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { loggingState } from "../../logging/state.js";
 import { setCommandJsonMode } from "./json-mode.js";
 
@@ -48,15 +48,6 @@ vi.mock("../plugin-registry.js", () => ({
   ensurePluginRegistryLoaded: ensurePluginRegistryLoadedMock,
 }));
 
-const mockedModuleIds = [
-  "../../globals.js",
-  "../../runtime.js",
-  "../banner.js",
-  "../cli-name.js",
-  "./config-guard.js",
-  "../plugin-registry.js",
-];
-
 let registerPreActionHooks: typeof import("./preaction.js").registerPreActionHooks;
 let originalProcessArgv: string[];
 let originalProcessTitle: string;
@@ -68,13 +59,6 @@ let originalForceStderr: boolean;
 
 beforeAll(async () => {
   ({ registerPreActionHooks } = await import("./preaction.js"));
-});
-
-afterAll(() => {
-  for (const id of mockedModuleIds) {
-    vi.doUnmock(id);
-  }
-  vi.resetModules();
 });
 
 beforeEach(() => {
@@ -135,6 +119,12 @@ describe("registerPreActionHooks", () => {
   function buildProgram() {
     const program = new Command().name("openclaw");
     program
+      .command("agent")
+      .requiredOption("-m, --message <text>")
+      .option("--local")
+      .option("--json")
+      .action(() => {});
+    program
       .command("status")
       .option("--json")
       .action(() => {});
@@ -155,6 +145,10 @@ describe("registerPreActionHooks", () => {
     program.command("onboard").action(() => {});
     const channels = program.command("channels");
     channels.command("add").action(() => {});
+    channels
+      .command("send")
+      .option("--json")
+      .action(() => {});
     program
       .command("plugins")
       .command("install")
@@ -220,23 +214,50 @@ describe("registerPreActionHooks", () => {
       runtime: runtimeMock,
       commandPath: ["status"],
     });
-    expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({ scope: "channels" });
+    expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
     expect(processTitleSetSpy).toHaveBeenCalledWith("openclaw-status");
 
     vi.clearAllMocks();
     await runPreAction({
-      parseArgv: ["message", "send"],
-      processArgv: ["node", "openclaw", "message", "send"],
+      parseArgv: ["agents", "list"],
+      processArgv: ["node", "openclaw", "agents", "list"],
     });
 
     expect(setVerboseMock).toHaveBeenCalledWith(false);
     expect(process.env.NODE_NO_WARNINGS).toBe("1");
     expect(ensureConfigReadyMock).toHaveBeenCalledWith({
       runtime: runtimeMock,
-      commandPath: ["message", "send"],
+      commandPath: ["agents", "list"],
     });
     expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({ scope: "all" });
     processTitleSetSpy.mockRestore();
+  });
+
+  it("loads plugins for text local agent runs", async () => {
+    await runPreAction({
+      parseArgv: ["agent"],
+      processArgv: ["node", "openclaw", "agent", "--local", "--message", "hi"],
+    });
+
+    expect(ensureConfigReadyMock).toHaveBeenCalledWith({
+      runtime: runtimeMock,
+      commandPath: ["agent", "hi"],
+    });
+    expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({ scope: "all" });
+  });
+
+  it("loads plugins for json local agent runs", async () => {
+    await runPreAction({
+      parseArgv: ["agent"],
+      processArgv: ["node", "openclaw", "agent", "--local", "--message", "hi", "--json"],
+    });
+
+    expect(ensureConfigReadyMock).toHaveBeenCalledWith({
+      runtime: runtimeMock,
+      commandPath: ["agent", "hi"],
+      suppressDoctorStdout: true,
+    });
+    expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({ scope: "all" });
   });
 
   it("keeps setup alias and channels add manifest-first", async () => {
@@ -261,6 +282,16 @@ describe("registerPreActionHooks", () => {
       runtime: runtimeMock,
       commandPath: ["channels", "add"],
     });
+    expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
+  });
+
+  it("lets configure own config validation and plugin loading", async () => {
+    await runPreAction({
+      parseArgv: ["configure"],
+      processArgv: ["node", "openclaw", "configure"],
+    });
+
+    expect(ensureConfigReadyMock).not.toHaveBeenCalled();
     expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
   });
 
@@ -381,8 +412,8 @@ describe("registerPreActionHooks", () => {
 
   it("routes logs to stderr in --json mode so stdout stays clean", async () => {
     await runPreAction({
-      parseArgv: ["agents", "list"],
-      processArgv: ["node", "openclaw", "agents", "list", "--json"],
+      parseArgv: ["channels", "send"],
+      processArgv: ["node", "openclaw", "channels", "send", "--json"],
     });
 
     expect(routeLogsToStderrMock).toHaveBeenCalledOnce();
@@ -406,6 +437,26 @@ describe("registerPreActionHooks", () => {
     });
 
     expect(routeLogsToStderrMock).not.toHaveBeenCalled();
+  });
+
+  it("does not preload plugins for agents list JSON output", async () => {
+    await runPreAction({
+      parseArgv: ["agents", "list"],
+      processArgv: ["node", "openclaw", "agents", "list", "--json"],
+    });
+
+    expect(routeLogsToStderrMock).toHaveBeenCalledOnce();
+    expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
+  });
+
+  it("does not preload plugins for remote agent JSON output", async () => {
+    await runPreAction({
+      parseArgv: ["agent"],
+      processArgv: ["node", "openclaw", "agent", "--message", "hi", "--json"],
+    });
+
+    expect(routeLogsToStderrMock).toHaveBeenCalledOnce();
+    expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
   });
 
   it("bypasses config guard for config validate", async () => {
@@ -451,8 +502,8 @@ describe("registerPreActionHooks", () => {
     });
 
     await runPreAction({
-      parseArgv: ["agents", "list"],
-      processArgv: ["node", "openclaw", "agents", "list", "--json"],
+      parseArgv: ["channels", "send"],
+      processArgv: ["node", "openclaw", "channels", "send", "--json"],
     });
 
     expect(ensurePluginRegistryLoadedMock).toHaveBeenCalled();

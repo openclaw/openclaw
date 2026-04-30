@@ -1,6 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveRetryConfig, retryAsync } from "./retry.js";
 
+const randomMocks = vi.hoisted(() => ({
+  generateSecureFraction: vi.fn(),
+}));
+
+vi.mock("./secure-random.js", () => ({
+  generateSecureFraction: randomMocks.generateSecureFraction,
+}));
+
 type NumberRetryCase = {
   name: string;
   fn: ReturnType<typeof vi.fn>;
@@ -71,6 +79,7 @@ afterEach(() => {
 beforeEach(() => {
   vi.clearAllTimers();
   vi.useRealTimers();
+  randomMocks.generateSecureFraction.mockReset();
 });
 
 describe("retryAsync", () => {
@@ -153,6 +162,19 @@ describe("retryAsync", () => {
     );
   });
 
+  it("retries immediately when the resolved delay is zero", async () => {
+    const fn = vi.fn().mockRejectedValueOnce(new Error("boom")).mockResolvedValueOnce("ok");
+    await expect(
+      retryAsync(fn, {
+        attempts: 2,
+        minDelayMs: 0,
+        maxDelayMs: 0,
+        jitter: 0,
+      }),
+    ).resolves.toBe("ok");
+    expect(fn).toHaveBeenCalledTimes(2);
+  });
+
   it("clamps attempts to at least 1", async () => {
     const fn = vi.fn().mockRejectedValue(new Error("boom"));
     await expect(retryAsync(fn, { attempts: 0, minDelayMs: 0, maxDelayMs: 0 })).rejects.toThrow(
@@ -180,6 +202,30 @@ describe("retryAsync", () => {
   ])("$name", async ({ params, expectedDelay }) => {
     const delays = await runRetryAfterCase(params);
     expect(delays[0]).toBe(expectedDelay);
+  });
+
+  it("uses secure jitter when configured", async () => {
+    vi.useFakeTimers();
+    randomMocks.generateSecureFraction.mockReturnValue(1);
+    const fn = vi.fn().mockRejectedValueOnce(new Error("boom")).mockResolvedValueOnce("ok");
+    const delays: number[] = [];
+
+    try {
+      const promise = retryAsync(fn, {
+        attempts: 2,
+        minDelayMs: 100,
+        maxDelayMs: 200,
+        jitter: 0.5,
+        onRetry: (info) => delays.push(info.delayMs),
+      });
+      await vi.runAllTimersAsync();
+      await expect(promise).resolves.toBe("ok");
+      expect(delays).toEqual([150]);
+      expect(randomMocks.generateSecureFraction).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
   });
 });
 

@@ -1,6 +1,7 @@
 import { html, nothing } from "lit";
 import { formatDurationCompact } from "../../../../src/infra/format-time/format-duration.ts";
 import { t } from "../../i18n/index.ts";
+import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
 import {
   formatCost,
   formatDayLabel,
@@ -218,7 +219,8 @@ function renderDailyChartCompact(
             const isSelected = selectedDays.includes(d.date);
             const label = formatDayLabel(d.date);
             // Shorter label for many days (just day number)
-            const shortLabel = daily.length > 20 ? String(parseInt(d.date.slice(8), 10)) : label;
+            const shortLabel =
+              daily.length > 20 ? String(Number.parseInt(d.date.slice(8), 10)) : label;
             const labelClass =
               daily.length > 20 ? "daily-bar-label daily-bar-label--compact" : "daily-bar-label";
             const segments =
@@ -283,7 +285,8 @@ function renderDailyChartCompact(
                 <div class="${labelClass}">${shortLabel}</div>
                 <div class="daily-bar-tooltip">
                   <strong>${formatFullDate(d.date)}</strong><br />
-                  ${formatTokens(d.totalTokens)} ${t("usage.metrics.tokens").toLowerCase()}<br />
+                  ${formatTokens(d.totalTokens)}
+                  ${normalizeLowercaseStringOrEmpty(t("usage.metrics.tokens"))}<br />
                   ${formatCost(d.totalCost)}
                   ${breakdownLines.length
                     ? html`${breakdownLines.map((line) => html`<div>${line}</div>`)}`
@@ -494,7 +497,7 @@ function renderUsageInsights(
     ? Math.round(totals.totalTokens / aggregates.messages.total)
     : 0;
   const avgCost = aggregates.messages.total ? totals.totalCost / aggregates.messages.total : 0;
-  const cacheBase = totals.input + totals.cacheRead;
+  const cacheBase = totals.input + totals.cacheRead + totals.cacheWrite;
   const cacheHitRate = cacheBase > 0 ? totals.cacheRead / cacheBase : 0;
   const cacheHitLabel =
     cacheBase > 0 ? `${(cacheHitRate * 100).toFixed(1)}%` : t("usage.common.emptyValue");
@@ -527,7 +530,7 @@ function renderUsageInsights(
       return {
         label: formatDayLabel(day.date),
         value: `${(rate * 100).toFixed(2)}%`,
-        sub: `${day.errors} ${t("usage.overview.errors").toLowerCase()} · ${day.messages} ${t("usage.overview.messagesAbbrev")} · ${formatTokens(day.tokens)}`,
+        sub: `${day.errors} ${normalizeLowercaseStringOrEmpty(t("usage.overview.errors"))} · ${day.messages} ${t("usage.overview.messagesAbbrev")} · ${formatTokens(day.tokens)}`,
         rate,
       };
     })
@@ -570,7 +573,7 @@ function renderUsageInsights(
             title: t("usage.overview.messages"),
             hint: t("usage.overview.messagesHint"),
             value: aggregates.messages.total,
-            sub: `${aggregates.messages.user} ${t("usage.overview.user").toLowerCase()} · ${aggregates.messages.assistant} ${t("usage.overview.assistant").toLowerCase()}`,
+            sub: `${aggregates.messages.user} ${normalizeLowercaseStringOrEmpty(t("usage.overview.user"))} · ${aggregates.messages.assistant} ${normalizeLowercaseStringOrEmpty(t("usage.overview.assistant"))}`,
             className: "usage-summary-card--hero",
           })}
           ${renderSummaryStat({
@@ -609,7 +612,7 @@ function renderUsageInsights(
             title: t("usage.overview.errorRate"),
             hint: errorHint,
             value: `${errorRatePct.toFixed(2)}%`,
-            sub: `${aggregates.messages.errors} ${t("usage.overview.errors").toLowerCase()} · ${avgDurationLabel} ${t("usage.overview.avgSession")}`,
+            sub: `${aggregates.messages.errors} ${normalizeLowercaseStringOrEmpty(t("usage.overview.errors"))} · ${avgDurationLabel} ${t("usage.overview.avgSession")}`,
             tone: errorRatePct > 5 ? "bad" : errorRatePct > 1 ? "warn" : "good",
             className: "usage-summary-card--medium",
           })}
@@ -617,7 +620,7 @@ function renderUsageInsights(
             title: t("usage.overview.avgCost"),
             hint: costHint,
             value: formatCost(avgCost, 4),
-            sub: `${formatCost(totals.totalCost)} ${t("usage.breakdown.total").toLowerCase()}`,
+            sub: `${formatCost(totals.totalCost)} ${normalizeLowercaseStringOrEmpty(t("usage.breakdown.total"))}`,
             className: "usage-summary-card--compact",
           })}
           ${renderSummaryStat({
@@ -848,7 +851,7 @@ function renderSessionsCard(
             ${isTokenMode ? formatTokens(avgValue) : formatCost(avgValue)}
             ${t("usage.sessions.avg")}
           </span>
-          <span>${totalErrors} ${t("usage.overview.errors").toLowerCase()}</span>
+          <span>${totalErrors} ${normalizeLowercaseStringOrEmpty(t("usage.overview.errors"))}</span>
         </div>
         <div class="chart-toggle small">
           <button

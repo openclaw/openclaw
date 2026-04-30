@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createDelegatedSetupWizardStatusResolvers } from "./setup-wizard-binary.js";
 import type { ChannelSetupDmPolicy } from "./setup-wizard-types.js";
 import type { ChannelSetupWizard } from "./setup-wizard.js";
@@ -16,8 +16,8 @@ type ResolveGroupAllowlistParams = Parameters<
 >[0];
 
 export function createDelegatedResolveConfigured(loadWizard: () => Promise<ChannelSetupWizard>) {
-  return async ({ cfg }: ResolveConfiguredParams) =>
-    await (await loadWizard()).status.resolveConfigured({ cfg });
+  return async ({ cfg, accountId }: ResolveConfiguredParams) =>
+    await (await loadWizard()).status.resolveConfigured({ cfg, accountId });
 }
 
 export function createDelegatedPrepare(loadWizard: () => Promise<ChannelSetupWizard>) {

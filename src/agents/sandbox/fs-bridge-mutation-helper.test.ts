@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -6,6 +7,7 @@ import { withTempDir } from "../../test-helpers/temp-dir.js";
 import {
   buildPinnedWritePlan,
   SANDBOX_PINNED_MUTATION_PYTHON,
+  SANDBOX_PINNED_MUTATION_PYTHON_CANDIDATES,
 } from "./fs-bridge-mutation-helper.js";
 
 function runMutation(args: string[], input?: string) {
@@ -16,7 +18,15 @@ function runMutation(args: string[], input?: string) {
   });
 }
 
-function runWritePlan(args: string[], input?: string) {
+function runMutationWithSource(source: string, args: string[], input?: string) {
+  return spawnSync("python3", ["-c", source, ...args], {
+    input,
+    encoding: "utf8",
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+}
+
+function runWritePlan(args: string[], input?: string, env?: NodeJS.ProcessEnv) {
   const plan = buildPinnedWritePlan({
     check: {
       target: {
@@ -38,12 +48,22 @@ function runWritePlan(args: string[], input?: string) {
     mkdir: args[4] === "1",
   });
 
-  return spawnSync("sh", ["-c", plan.script, "openclaw-sandbox-fs", ...(plan.args ?? [])], {
+  return spawnSync("/bin/sh", ["-c", plan.script, "openclaw-sandbox-fs", ...(plan.args ?? [])], {
     input,
     encoding: "utf8",
     stdio: ["pipe", "pipe", "pipe"],
+    env,
   });
 }
+
+const hasAbsolutePythonCandidate = SANDBOX_PINNED_MUTATION_PYTHON_CANDIDATES.some((candidate) =>
+  existsSync(candidate),
+);
+
+const FORCED_EXDEV_MUTATION_PYTHON = SANDBOX_PINNED_MUTATION_PYTHON.replace(
+  "        os.rename(src_basename, dst_basename, src_dir_fd=src_parent_fd, dst_dir_fd=dst_parent_fd)",
+  "        raise OSError(errno.EXDEV, 'forced EXDEV for test')\n        os.rename(src_basename, dst_basename, src_dir_fd=src_parent_fd, dst_dir_fd=dst_parent_fd)",
+);
 
 describe("sandbox pinned mutation helper", () => {
   it("writes through a pinned directory fd", async () => {
@@ -61,6 +81,42 @@ describe("sandbox pinned mutation helper", () => {
   });
 
   it.runIf(process.platform !== "win32")(
+    "reads through a pinned directory fd and rejects hardlinked files",
+    async () => {
+      await withTempDir({ prefix: "openclaw-mutation-helper-" }, async (root) => {
+        const workspace = path.join(root, "workspace");
+        const nested = path.join(workspace, "nested");
+        await fs.mkdir(nested, { recursive: true });
+        await fs.writeFile(path.join(workspace, "read.txt"), "hello", "utf8");
+
+        const readResult = runMutation(["read", workspace, "", "read.txt"]);
+        expect(readResult.status).toBe(0);
+        expect(readResult.stdout).toBe("hello");
+
+        const hardlinkedFile = path.join(nested, "hardlinked.txt");
+        await fs.link(path.join(workspace, "read.txt"), hardlinkedFile);
+
+        const hardlinkResult = runMutation(["read", workspace, "nested", "hardlinked.txt"]);
+        expect(hardlinkResult.status).not.toBe(0);
+        expect(hardlinkResult.stderr).toMatch(/hardlinked file/i);
+      });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")("rejects non-regular files while reading", async () => {
+    await withTempDir({ prefix: "openclaw-mutation-helper-" }, async (root) => {
+      const workspace = path.join(root, "workspace");
+      await fs.mkdir(workspace, { recursive: true });
+      await fs.mkdir(path.join(workspace, "folder"), { recursive: true });
+
+      const result = runMutation(["read", workspace, "", "folder"]);
+
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toMatch(/only regular files are allowed/i);
+    });
+  });
+
+  it.runIf(process.platform !== "win32")(
     "preserves stdin payload bytes when the pinned write plan runs through sh",
     async () => {
       await withTempDir({ prefix: "openclaw-mutation-helper-" }, async (root) => {
@@ -70,6 +126,7 @@ describe("sandbox pinned mutation helper", () => {
         const result = runWritePlan(
           ["write", workspace, "nested/deeper", "note.txt", "1"],
           "hello",
+          hasAbsolutePythonCandidate ? { PATH: "" } : undefined,
         );
 
         expect(result.status).toBe(0);
@@ -180,6 +237,40 @@ describe("sandbox pinned mutation helper", () => {
           fs.readFile(path.join(destRoot, "moved", "nested", "file.txt"), "utf8"),
         ).resolves.toBe("payload");
         await expect(fs.stat(path.join(sourceRoot, "dir"))).rejects.toThrow();
+      });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "rejects hardlinked files during rename EXDEV fallback",
+    async () => {
+      await withTempDir({ prefix: "openclaw-mutation-helper-" }, async (root) => {
+        const sourceRoot = path.join(root, "source");
+        const destRoot = path.join(root, "dest");
+        const outsideRoot = path.join(root, "outside");
+        await fs.mkdir(sourceRoot, { recursive: true });
+        await fs.mkdir(destRoot, { recursive: true });
+        await fs.mkdir(outsideRoot, { recursive: true });
+        await fs.writeFile(path.join(outsideRoot, "secret.txt"), "classified", "utf8");
+        await fs.link(path.join(outsideRoot, "secret.txt"), path.join(sourceRoot, "linked.txt"));
+
+        const result = runMutationWithSource(FORCED_EXDEV_MUTATION_PYTHON, [
+          "rename",
+          sourceRoot,
+          "",
+          "linked.txt",
+          destRoot,
+          "",
+          "copied.txt",
+          "1",
+        ]);
+
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toMatch(/hardlinked file/i);
+        await expect(fs.stat(path.join(destRoot, "copied.txt"))).rejects.toThrow();
+        await expect(fs.readFile(path.join(outsideRoot, "secret.txt"), "utf8")).resolves.toBe(
+          "classified",
+        );
       });
     },
   );

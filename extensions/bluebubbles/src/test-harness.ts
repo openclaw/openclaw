@@ -1,5 +1,11 @@
 import type { Mock } from "vitest";
 import { afterEach, beforeEach, vi } from "vitest";
+import {
+  normalizeBlueBubblesAccountsMap,
+  normalizeBlueBubblesPrivateNetworkAliases,
+  resolveBlueBubblesEffectiveAllowPrivateNetworkFromConfig,
+  resolveBlueBubblesPrivateNetworkConfigValue as resolveBlueBubblesPrivateNetworkConfigValueFromConfig,
+} from "./accounts-normalization.js";
 import { _setFetchGuardForTesting } from "./types.js";
 
 export const BLUE_BUBBLES_PRIVATE_API_STATUS = {
@@ -31,9 +37,32 @@ export function resolveBlueBubblesAccountFromConfig(params: {
   cfg?: { channels?: { bluebubbles?: Record<string, unknown> } };
   accountId?: string;
 }) {
-  const config = params.cfg?.channels?.bluebubbles ?? {};
+  const baseConfig =
+    normalizeBlueBubblesPrivateNetworkAliases(params.cfg?.channels?.bluebubbles ?? {}) ?? {};
+  const accounts = normalizeBlueBubblesAccountsMap(
+    baseConfig.accounts as Record<string, Record<string, unknown> | undefined> | undefined,
+  );
+  const accountId = params.accountId ?? "default";
+  const accountConfig =
+    normalizeBlueBubblesPrivateNetworkAliases(accounts?.[accountId] ?? {}) ?? {};
+  const config: Record<string, unknown> = {
+    ...baseConfig,
+    ...accountConfig,
+    network:
+      typeof baseConfig.network === "object" &&
+      baseConfig.network &&
+      !Array.isArray(baseConfig.network) &&
+      typeof accountConfig.network === "object" &&
+      accountConfig.network &&
+      !Array.isArray(accountConfig.network)
+        ? {
+            ...(baseConfig.network as Record<string, unknown>),
+            ...(accountConfig.network as Record<string, unknown>),
+          }
+        : (accountConfig.network ?? baseConfig.network),
+  };
   return {
-    accountId: params.accountId ?? "default",
+    accountId,
     enabled: config.enabled !== false,
     configured: Boolean(config.serverUrl && config.password),
     config,
@@ -43,20 +72,30 @@ export function resolveBlueBubblesAccountFromConfig(params: {
 export function createBlueBubblesAccountsMockModule() {
   return {
     resolveBlueBubblesAccount: vi.fn(resolveBlueBubblesAccountFromConfig),
+    resolveBlueBubblesEffectiveAllowPrivateNetwork: vi.fn(
+      resolveBlueBubblesEffectiveAllowPrivateNetworkFromConfig,
+    ),
+    resolveBlueBubblesPrivateNetworkConfigValue: vi.fn(
+      resolveBlueBubblesPrivateNetworkConfigValueFromConfig,
+    ),
   };
 }
 
 type BlueBubblesProbeMockModule = {
+  fetchBlueBubblesServerInfo: Mock<() => Promise<Record<string, unknown> | null>>;
   getCachedBlueBubblesPrivateApiStatus: Mock<() => boolean | null>;
   isBlueBubblesPrivateApiStatusEnabled: Mock<(status: boolean | null) => boolean>;
+  isMacOS26OrHigher: Mock<(accountId?: string) => boolean>;
 };
 
 export function createBlueBubblesProbeMockModule(): BlueBubblesProbeMockModule {
   return {
+    fetchBlueBubblesServerInfo: vi.fn().mockResolvedValue(null),
     getCachedBlueBubblesPrivateApiStatus: vi
       .fn()
       .mockReturnValue(BLUE_BUBBLES_PRIVATE_API_STATUS.unknown),
     isBlueBubblesPrivateApiStatusEnabled: vi.fn((status: boolean | null) => status === true),
+    isMacOS26OrHigher: vi.fn().mockReturnValue(false),
   };
 }
 

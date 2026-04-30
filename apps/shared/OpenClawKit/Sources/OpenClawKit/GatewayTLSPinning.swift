@@ -35,6 +35,25 @@ public enum GatewayTLSStore {
         _ = GenericPasswordKeychainStore.saveString(value, service: self.keychainService, account: stableID)
     }
 
+    @discardableResult
+    public static func clearFingerprint(stableID: String) -> Bool {
+        let removedKeychain = GenericPasswordKeychainStore.delete(
+            service: self.keychainService,
+            account: stableID)
+        self.clearLegacyFingerprint(stableID: stableID)
+        return removedKeychain
+    }
+
+    @discardableResult
+    public static func clearAllFingerprints() -> Bool {
+        let removedKeychain = SecItemDelete([
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: self.keychainService,
+        ] as CFDictionary)
+        self.clearAllLegacyFingerprints()
+        return removedKeychain == errSecSuccess || removedKeychain == errSecItemNotFound
+    }
+
     // MARK: - Migration
 
     /// On first Keychain read for a given stableID, move any legacy UserDefaults
@@ -47,11 +66,24 @@ public enum GatewayTLSStore {
             !existing.isEmpty
         else { return }
         if GenericPasswordKeychainStore.loadString(service: self.keychainService, account: stableID) == nil {
-            guard GenericPasswordKeychainStore.saveString(existing, service: self.keychainService, account: stableID) else {
+            guard GenericPasswordKeychainStore.saveString(existing, service: self.keychainService, account: stableID)
+            else {
                 return
             }
         }
         defaults.removeObject(forKey: legacyKey)
+    }
+
+    private static func clearLegacyFingerprint(stableID: String) {
+        guard let defaults = UserDefaults(suiteName: self.legacySuiteName) else { return }
+        defaults.removeObject(forKey: self.legacyKeyPrefix + stableID)
+    }
+
+    private static func clearAllLegacyFingerprints() {
+        guard let defaults = UserDefaults(suiteName: self.legacySuiteName) else { return }
+        for key in defaults.dictionaryRepresentation().keys where key.hasPrefix(self.legacyKeyPrefix) {
+            defaults.removeObject(forKey: key)
+        }
     }
 }
 
@@ -77,8 +109,8 @@ public final class GatewayTLSPinningSession: NSObject, WebSocketSessioning, URLS
     public func urlSession(
         _ session: URLSession,
         didReceive challenge: URLAuthenticationChallenge,
-        completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
-    ) {
+        completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void)
+    {
         guard challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust,
               let trust = challenge.protectionSpace.serverTrust
         else {
@@ -86,7 +118,7 @@ public final class GatewayTLSPinningSession: NSObject, WebSocketSessioning, URLS
             return
         }
 
-        let expected = params.expectedFingerprint.map(normalizeFingerprint)
+        let expected = self.params.expectedFingerprint.map(normalizeFingerprint)
         if let fingerprint = certificateFingerprint(trust) {
             if let expected {
                 if fingerprint == expected {
@@ -96,7 +128,7 @@ public final class GatewayTLSPinningSession: NSObject, WebSocketSessioning, URLS
                 }
                 return
             }
-            if params.allowTOFU {
+            if self.params.allowTOFU {
                 if let storeKey = params.storeKey {
                     GatewayTLSStore.saveFingerprint(fingerprint, stableID: storeKey)
                 }
@@ -106,7 +138,7 @@ public final class GatewayTLSPinningSession: NSObject, WebSocketSessioning, URLS
         }
 
         let ok = SecTrustEvaluateWithError(trust, nil)
-        if ok || !params.required {
+        if ok || !self.params.required {
             completionHandler(.useCredential, URLCredential(trust: trust))
         } else {
             completionHandler(.cancelAuthenticationChallenge, nil)

@@ -1,11 +1,11 @@
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const callGatewayMock = vi.fn();
 const configState = vi.hoisted(() => ({
   value: {} as Record<string, unknown>,
 }));
 vi.mock("../../config/config.js", () => ({
-  loadConfig: () => configState.value,
+  getRuntimeConfig: () => configState.value,
   resolveGatewayPort: () => 18789,
 }));
 vi.mock("../../gateway/call.js", () => ({
@@ -15,28 +15,19 @@ vi.mock("../../gateway/call.js", () => ({
 let callGatewayTool: typeof import("./gateway.js").callGatewayTool;
 let resolveGatewayOptions: typeof import("./gateway.js").resolveGatewayOptions;
 
-async function loadFreshGatewayToolModuleForTest() {
-  vi.resetModules();
-  vi.doMock("../../config/config.js", () => ({
-    loadConfig: () => configState.value,
-    resolveGatewayPort: () => 18789,
-  }));
-  vi.doMock("../../gateway/call.js", () => ({
-    callGateway: (...args: unknown[]) => callGatewayMock(...args),
-  }));
-  ({ callGatewayTool, resolveGatewayOptions } = await import("./gateway.js"));
-}
-
 describe("gateway tool defaults", () => {
   const envSnapshot = {
     openclaw: process.env.OPENCLAW_GATEWAY_TOKEN,
   };
 
-  beforeEach(async () => {
+  beforeAll(async () => {
+    ({ callGatewayTool, resolveGatewayOptions } = await import("./gateway.js"));
+  });
+
+  beforeEach(() => {
     callGatewayMock.mockClear();
     configState.value = {};
     delete process.env.OPENCLAW_GATEWAY_TOKEN;
-    await loadFreshGatewayToolModuleForTest();
   });
 
   afterAll(() => {

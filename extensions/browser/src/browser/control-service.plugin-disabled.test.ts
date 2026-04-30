@@ -17,10 +17,11 @@ const mocks = vi.hoisted(() => ({
   })),
 }));
 
-vi.mock("../config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/config.js")>();
+vi.mock("../config/config.js", async () => {
+  const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
   return {
     ...actual,
+    getRuntimeConfig: mocks.loadConfig,
     loadConfig: mocks.loadConfig,
   };
 });
@@ -42,15 +43,18 @@ vi.mock("./runtime-lifecycle.js", () => ({
   stopBrowserRuntime: vi.fn(async () => {}),
 }));
 
-let startBrowserControlServiceFromConfig: typeof import("../control-service.js").startBrowserControlServiceFromConfig;
+vi.mock("./server-context.js", () => ({
+  createBrowserRouteContext: vi.fn(),
+}));
+
+const { startBrowserControlServiceFromConfig } = await import("../control-service.js");
+vi.doUnmock("./server-context.js");
 
 describe("startBrowserControlServiceFromConfig", () => {
-  beforeEach(async () => {
+  beforeEach(() => {
     mocks.ensureBrowserControlAuth.mockClear();
     mocks.createBrowserRuntimeState.mockClear();
     mocks.loadConfig.mockClear();
-    vi.resetModules();
-    ({ startBrowserControlServiceFromConfig } = await import("../control-service.js"));
   });
 
   it("does not start the default service when the browser plugin is disabled", async () => {

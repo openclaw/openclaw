@@ -1,14 +1,24 @@
-import { describe, expect, it, vi } from "vitest";
-import { createNonExitingTypedRuntimeEnv } from "../../../test/helpers/plugins/runtime-env.js";
 import {
+  createNonExitingRuntimeEnv,
   createPluginSetupWizardConfigure,
   createPluginSetupWizardStatus,
   createTestWizardPrompter,
   runSetupWizardConfigure,
-} from "../../../test/helpers/plugins/setup-wizard.js";
+} from "openclaw/plugin-sdk/plugin-test-runtime";
+import { describe, expect, it, vi } from "vitest";
 
 vi.mock("./probe.js", () => ({
   probeFeishu: vi.fn(async () => ({ ok: false, error: "mocked" })),
+}));
+
+vi.mock("./app-registration.js", () => ({
+  initAppRegistration: vi.fn(async () => {
+    throw new Error("mocked: scan-to-create not available");
+  }),
+  beginAppRegistration: vi.fn(),
+  pollAppRegistration: vi.fn(),
+  printQrCode: vi.fn(async () => {}),
+  getAppOwnerOpenId: vi.fn(async () => undefined),
 }));
 
 import { feishuPlugin } from "./channel.js";
@@ -57,20 +67,18 @@ async function getStatusWithEnvRefs(params: { appIdKey: string; appSecretKey: st
 
 const feishuConfigure = createPluginSetupWizardConfigure(feishuPlugin);
 const feishuGetStatus = createPluginSetupWizardStatus(feishuPlugin);
-type FeishuConfigureRuntime = Parameters<typeof feishuConfigure>[0]["runtime"];
 
 describe("feishu setup wizard", () => {
   it("does not throw when config appId/appSecret are SecretRef objects", async () => {
     const text = vi
       .fn()
       .mockResolvedValueOnce("cli_from_prompt")
-      .mockResolvedValueOnce("secret_from_prompt")
-      .mockResolvedValueOnce("oc_group_1");
+      .mockResolvedValueOnce("secret_from_prompt");
     const prompter = createTestWizardPrompter({
       text,
       confirm: vi.fn(async () => true),
       select: vi.fn(
-        async ({ initialValue }: { initialValue?: string }) => initialValue ?? "allowlist",
+        async ({ initialValue }: { initialValue?: string }) => initialValue ?? "bot",
       ) as never,
     });
 
@@ -86,7 +94,7 @@ describe("feishu setup wizard", () => {
           },
         } as never,
         prompter,
-        runtime: createNonExitingTypedRuntimeEnv<FeishuConfigureRuntime>(),
+        runtime: createNonExitingRuntimeEnv(),
       }),
     ).resolves.toBeTruthy();
   });

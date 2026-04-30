@@ -1,6 +1,7 @@
-import { ChannelType } from "@buape/carbon";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { ChannelType } from "../internal/discord.js";
+import { EMPTY_DISCORD_TEST_CONFIG } from "../test-support/config.js";
 type MaybeCreateDiscordAutoThreadFn = typeof import("./threading.js").maybeCreateDiscordAutoThread;
 
 const { generateThreadTitleMock } = vi.hoisted(() => ({
@@ -37,6 +38,7 @@ function createBaseParams(
     channelType: ChannelType.GuildText,
     baseText: "test",
     combinedBody: "test",
+    cfg: EMPTY_DISCORD_TEST_CONFIG,
     ...overrides,
   };
 }
@@ -46,13 +48,15 @@ async function flushAsyncWork() {
   await Promise.resolve();
 }
 
-beforeEach(async () => {
-  vi.resetModules();
+beforeAll(async () => {
+  ({ maybeCreateDiscordAutoThread } = await import("./threading.js"));
+});
+
+beforeEach(() => {
   postMock.mockReset();
   getMock.mockReset();
   patchMock.mockReset();
   generateThreadTitleMock.mockReset();
-  ({ maybeCreateDiscordAutoThread } = await import("./threading.js"));
 });
 
 describe("maybeCreateDiscordAutoThread", () => {

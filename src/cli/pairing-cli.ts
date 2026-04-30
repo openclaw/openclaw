@@ -1,14 +1,23 @@
 import type { Command } from "commander";
 import { normalizeChannelId } from "../channels/plugins/index.js";
 import { listPairingChannels, notifyPairingApproved } from "../channels/plugins/pairing.js";
-import { loadConfig } from "../config/config.js";
-import { resolvePairingIdLabel } from "../pairing/pairing-labels.js";
 import {
-  approveChannelPairingCode,
-  listChannelPairingRequests,
-  type PairingChannel,
-} from "../pairing/pairing-store.js";
+  formatCommandOwnerFromChannelSender,
+  hasConfiguredCommandOwners,
+} from "../commands/doctor-command-owner.js";
+import {
+  getRuntimeConfig,
+  readConfigFileSnapshotForWrite,
+  replaceConfigFile,
+} from "../config/config.js";
+import { resolvePairingIdLabel } from "../pairing/pairing-labels.js";
+import { approveChannelPairingCode, listChannelPairingRequests } from "../pairing/pairing-store.js";
+import type { PairingChannel } from "../pairing/pairing-store.types.js";
 import { defaultRuntime } from "../runtime.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeStringifiedOptionalString,
+} from "../shared/string-coerce.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { getTerminalTableWidth, renderTable } from "../terminal/table.js";
 import { theme } from "../terminal/theme.js";
@@ -16,15 +25,7 @@ import { formatCliCommand } from "./command-format.js";
 
 /** Parse channel, allowing extension channels not in core registry. */
 function parseChannel(raw: unknown, channels: PairingChannel[]): PairingChannel {
-  const value = (
-    typeof raw === "string"
-      ? raw
-      : typeof raw === "number" || typeof raw === "boolean"
-        ? String(raw)
-        : ""
-  )
-    .trim()
-    .toLowerCase();
+  const value = normalizeLowercaseStringOrEmpty(normalizeStringifiedOptionalString(raw) ?? "");
   if (!value) {
     throw new Error("Channel required");
   }
@@ -45,8 +46,36 @@ function parseChannel(raw: unknown, channels: PairingChannel[]): PairingChannel 
 }
 
 async function notifyApproved(channel: PairingChannel, id: string) {
-  const cfg = loadConfig();
+  const cfg = getRuntimeConfig();
   await notifyPairingApproved({ channelId: channel, id, cfg });
+}
+
+async function maybeBootstrapCommandOwnerFromPairing(params: {
+  channel: PairingChannel;
+  id: string;
+}): Promise<{ ownerEntry: string | null; bootstrapped: boolean }> {
+  const ownerEntry = formatCommandOwnerFromChannelSender(params);
+  if (!ownerEntry) {
+    return { ownerEntry: null, bootstrapped: false };
+  }
+
+  const { snapshot, writeOptions } = await readConfigFileSnapshotForWrite();
+  if (hasConfiguredCommandOwners(snapshot.sourceConfig)) {
+    return { ownerEntry, bootstrapped: false };
+  }
+
+  const nextConfig = structuredClone(snapshot.sourceConfig);
+  nextConfig.commands = {
+    ...nextConfig.commands,
+    ownerAllowFrom: [ownerEntry],
+  };
+  await replaceConfigFile({
+    nextConfig,
+    snapshot,
+    writeOptions,
+    afterWrite: { mode: "auto" },
+  });
+  return { ownerEntry, bootstrapped: true };
 }
 
 export function registerPairingCli(program: Command) {
@@ -75,7 +104,7 @@ export function registerPairingCli(program: Command) {
         );
       }
       const channel = parseChannel(channelRaw, channels);
-      const accountId = String(opts.account ?? "").trim();
+      const accountId = normalizeStringifiedOptionalString(opts.account) ?? "";
       const requests = accountId
         ? await listChannelPairingRequests(channel, process.env, accountId)
         : await listChannelPairingRequests(channel);
@@ -144,7 +173,7 @@ export function registerPairingCli(program: Command) {
         );
       }
       const channel = parseChannel(channelRaw, channels);
-      const accountId = String(opts.account ?? "").trim();
+      const accountId = normalizeStringifiedOptionalString(opts.account) ?? "";
       const approved = accountId
         ? await approveChannelPairingCode({
             channel,
@@ -162,6 +191,15 @@ export function registerPairingCli(program: Command) {
       defaultRuntime.log(
         `${theme.success("Approved")} ${theme.muted(channel)} sender ${theme.command(approved.id)}.`,
       );
+      const ownerBootstrap = await maybeBootstrapCommandOwnerFromPairing({
+        channel,
+        id: approved.id,
+      });
+      if (ownerBootstrap.bootstrapped && ownerBootstrap.ownerEntry) {
+        defaultRuntime.log(
+          `${theme.success("Command owner configured")} ${theme.command(ownerBootstrap.ownerEntry)} ${theme.muted("(commands.ownerAllowFrom was empty).")}`,
+        );
+      }
 
       if (!opts.notify) {
         return;

@@ -1,7 +1,8 @@
 import { withProgress } from "../cli/progress.js";
-import { loadConfig } from "../config/config.js";
+import { getRuntimeConfig } from "../config/config.js";
 import { describeGatewayServiceRestart, resolveGatewayService } from "../daemon/service.js";
 import { isNonFatalSystemdInstallProbeError } from "../daemon/systemd.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { note } from "../terminal/note.js";
 import { confirm, select } from "./configure.shared.js";
@@ -98,7 +99,7 @@ export async function maybeInstallDaemon(params: {
       async (progress) => {
         progress.setLabel("Preparing Gateway service…");
 
-        const cfg = loadConfig();
+        const cfg = getRuntimeConfig();
         const tokenResolution = await resolveGatewayInstallToken({
           config: cfg,
           env: process.env,
@@ -134,7 +135,7 @@ export async function maybeInstallDaemon(params: {
           });
           progress.setLabel("Gateway service installed.");
         } catch (err) {
-          installError = err instanceof Error ? err.message : String(err);
+          installError = formatErrorMessage(err);
           progress.setLabel("Gateway service install failed.");
         }
       },

@@ -1,14 +1,17 @@
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
 
 export const XAI_BASE_URL = "https://api.x.ai/v1";
-export const XAI_DEFAULT_MODEL_ID = "grok-4";
-export const XAI_DEFAULT_MODEL_REF = `xai/${XAI_DEFAULT_MODEL_ID}`;
+export const XAI_DEFAULT_IMAGE_MODEL = "grok-imagine-image";
+export const XAI_IMAGE_MODELS = ["grok-imagine-image", "grok-imagine-image-pro"] as const;
 export const XAI_DEFAULT_CONTEXT_WINDOW = 256_000;
 export const XAI_LARGE_CONTEXT_WINDOW = 2_000_000;
 export const XAI_CODE_CONTEXT_WINDOW = 256_000;
 export const XAI_DEFAULT_MAX_TOKENS = 64_000;
 export const XAI_LEGACY_CONTEXT_WINDOW = 131_072;
 export const XAI_LEGACY_MAX_TOKENS = 8_192;
+export const XAI_DEFAULT_MODEL_ID = "grok-4";
+export const XAI_DEFAULT_MODEL_REF = `xai/${XAI_DEFAULT_MODEL_ID}`;
 
 type XaiCost = ModelDefinitionConfig["cost"];
 
@@ -200,9 +203,12 @@ export function buildXaiCatalogModels(): ModelDefinitionConfig[] {
   return XAI_MODEL_CATALOG.map((entry) => toModelDefinition(entry));
 }
 
-export function resolveXaiCatalogEntry(modelId: string): ModelDefinitionConfig | undefined {
-  const lower = modelId.trim().toLowerCase();
-  const exact = XAI_MODEL_CATALOG.find((entry) => entry.id.toLowerCase() === lower);
+export function resolveXaiCatalogEntry(modelId: string) {
+  const trimmed = modelId.trim();
+  const lower = normalizeOptionalLowercaseString(modelId) ?? "";
+  const exact = XAI_MODEL_CATALOG.find(
+    (entry) => normalizeOptionalLowercaseString(entry.id) === lower,
+  );
   if (exact) {
     return toModelDefinition(exact);
   }
@@ -211,8 +217,8 @@ export function resolveXaiCatalogEntry(modelId: string): ModelDefinitionConfig |
   }
   if (lower.startsWith("grok-code-fast")) {
     return toModelDefinition({
-      id: modelId.trim(),
-      name: modelId.trim(),
+      id: trimmed,
+      name: trimmed,
       reasoning: true,
       input: ["text"],
       contextWindow: XAI_CODE_CONTEXT_WINDOW,
@@ -234,8 +240,8 @@ export function resolveXaiCatalogEntry(modelId: string): ModelDefinitionConfig |
           ? { input: 5, output: 25, cacheRead: 1.25, cacheWrite: 0 }
           : XAI_GROK_4_COST;
     return toModelDefinition({
-      id: modelId.trim(),
-      name: modelId.trim(),
+      id: trimmed,
+      name: trimmed,
       reasoning: lower.includes("mini"),
       input: ["text"],
       contextWindow: XAI_LEGACY_CONTEXT_WINDOW,
@@ -249,8 +255,8 @@ export function resolveXaiCatalogEntry(modelId: string): ModelDefinitionConfig |
     lower.startsWith("grok-4-fast")
   ) {
     return toModelDefinition({
-      id: modelId.trim(),
-      name: modelId.trim(),
+      id: trimmed,
+      name: trimmed,
       reasoning: !lower.includes("non-reasoning"),
       input: ["text", "image"],
       contextWindow: XAI_LARGE_CONTEXT_WINDOW,

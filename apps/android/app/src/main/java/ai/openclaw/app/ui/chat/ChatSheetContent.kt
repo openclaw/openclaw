@@ -1,5 +1,18 @@
 package ai.openclaw.app.ui.chat
 
+import ai.openclaw.app.MainViewModel
+import ai.openclaw.app.chat.ChatSessionEntry
+import ai.openclaw.app.chat.OutgoingAttachment
+import ai.openclaw.app.ui.mobileAccent
+import ai.openclaw.app.ui.mobileAccentBorderStrong
+import ai.openclaw.app.ui.mobileBorderStrong
+import ai.openclaw.app.ui.mobileCallout
+import ai.openclaw.app.ui.mobileCaption1
+import ai.openclaw.app.ui.mobileCaption2
+import ai.openclaw.app.ui.mobileCardSurface
+import ai.openclaw.app.ui.mobileDanger
+import ai.openclaw.app.ui.mobileDangerSoft
+import ai.openclaw.app.ui.mobileText
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
@@ -29,24 +42,34 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import ai.openclaw.app.MainViewModel
-import ai.openclaw.app.chat.ChatSessionEntry
-import ai.openclaw.app.chat.OutgoingAttachment
-import ai.openclaw.app.ui.mobileAccent
-import ai.openclaw.app.ui.mobileAccentBorderStrong
-import ai.openclaw.app.ui.mobileBorder
-import ai.openclaw.app.ui.mobileBorderStrong
-import ai.openclaw.app.ui.mobileCallout
-import ai.openclaw.app.ui.mobileCardSurface
-import ai.openclaw.app.ui.mobileCaption1
-import ai.openclaw.app.ui.mobileCaption2
-import ai.openclaw.app.ui.mobileDanger
-import ai.openclaw.app.ui.mobileDangerSoft
-import ai.openclaw.app.ui.mobileText
-import ai.openclaw.app.ui.mobileTextSecondary
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+
+internal fun resolvePendingAssistantAutoSend(
+  pendingPrompt: String?,
+  healthOk: Boolean,
+  pendingRunCount: Int,
+): String? {
+  val prompt = pendingPrompt?.trim()?.ifEmpty { null } ?: return null
+  if (!healthOk || pendingRunCount > 0) return null
+  return prompt
+}
+
+internal suspend fun dispatchPendingAssistantAutoSend(
+  pendingPrompt: String?,
+  healthOk: Boolean,
+  pendingRunCount: Int,
+  dispatch: suspend (String) -> Boolean,
+): Boolean {
+  val prompt =
+    resolvePendingAssistantAutoSend(
+      pendingPrompt = pendingPrompt,
+      healthOk = healthOk,
+      pendingRunCount = pendingRunCount,
+    ) ?: return false
+  return dispatch(prompt)
+}
 
 @Composable
 fun ChatSheetContent(viewModel: MainViewModel) {
@@ -60,9 +83,28 @@ fun ChatSheetContent(viewModel: MainViewModel) {
   val streamingAssistantText by viewModel.chatStreamingAssistantText.collectAsState()
   val pendingToolCalls by viewModel.chatPendingToolCalls.collectAsState()
   val sessions by viewModel.chatSessions.collectAsState()
+  val chatDraft by viewModel.chatDraft.collectAsState()
+  val pendingAssistantAutoSend by viewModel.pendingAssistantAutoSend.collectAsState()
 
   LaunchedEffect(Unit) {
     viewModel.loadChat(mainSessionKey)
+  }
+
+  LaunchedEffect(pendingAssistantAutoSend, healthOk, pendingRunCount, thinkingLevel) {
+    val accepted =
+      dispatchPendingAssistantAutoSend(
+        pendingPrompt = pendingAssistantAutoSend,
+        healthOk = healthOk,
+        pendingRunCount = pendingRunCount,
+      ) { prompt ->
+        viewModel.sendChatAwaitAcceptance(
+          message = prompt,
+          thinking = thinkingLevel,
+          attachments = emptyList(),
+        )
+      }
+    if (!accepted) return@LaunchedEffect
+    viewModel.clearPendingAssistantAutoSend()
   }
 
   val context = LocalContext.current
@@ -118,10 +160,12 @@ fun ChatSheetContent(viewModel: MainViewModel) {
 
     Row(modifier = Modifier.fillMaxWidth().imePadding()) {
       ChatComposer(
+        draftText = chatDraft,
         healthOk = healthOk,
         thinkingLevel = thinkingLevel,
         pendingRunCount = pendingRunCount,
         attachments = attachments,
+        onDraftApplied = viewModel::clearChatDraft,
         onPickImages = { pickImages.launch("image/*") },
         onRemoveAttachment = { id -> attachments.removeAll { it.id == id } },
         onSetThinkingLevel = { level -> viewModel.setChatThinkingLevel(level) },

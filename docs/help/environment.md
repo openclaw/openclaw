@@ -4,10 +4,8 @@ read_when:
   - You need to know which env vars are loaded, and in what order
   - You are debugging missing API keys in the Gateway
   - You are documenting provider auth or deployment environments
-title: "Environment Variables"
+title: "Environment variables"
 ---
-
-# Environment variables
 
 OpenClaw pulls environment variables from multiple sources. The rule is **never override existing values**.
 
@@ -18,6 +16,8 @@ OpenClaw pulls environment variables from multiple sources. The rule is **never 
 3. **Global `.env`** at `~/.openclaw/.env` (aka `$OPENCLAW_STATE_DIR/.env`; does not override).
 4. **Config `env` block** in `~/.openclaw/openclaw.json` (applied only if missing).
 5. **Optional login-shell import** (`env.shellEnv.enabled` or `OPENCLAW_LOAD_SHELL_ENV=1`), applied only for missing expected keys.
+
+On Ubuntu fresh installs that use the default state dir, OpenClaw also treats `~/.config/openclaw/gateway.env` as a compatibility fallback after the global `.env`. If both files exist and disagree, OpenClaw keeps `~/.openclaw/.env` and prints a warning.
 
 If the config file is missing entirely, step 4 is skipped; shell import still runs if enabled.
 
@@ -127,7 +127,7 @@ When set, `OPENCLAW_HOME` replaces the system home directory (`$HOME` / `os.home
 <key>EnvironmentVariables</key>
 <dict>
   <key>OPENCLAW_HOME</key>
-  <string>/Users/kira</string>
+  <string>/Users/user</string>
 </dict>
 ```
 
@@ -155,6 +155,18 @@ openclaw gateway run
 
 Do not rely on writing only to `~/.openclaw/.env` for this variable; Node reads
 `NODE_EXTRA_CA_CERTS` at process startup.
+
+## Legacy environment variables
+
+OpenClaw only reads `OPENCLAW_*` environment variables. The legacy
+`CLAWDBOT_*` and `MOLTBOT_*` prefixes from earlier releases are silently
+ignored.
+
+If any are still set on the Gateway process at startup, OpenClaw emits a
+single Node deprecation warning (`OPENCLAW_LEGACY_ENV_VARS`) listing the
+detected prefixes and the total count. Rename each value by replacing the
+legacy prefix with `OPENCLAW_` (for example `CLAWDBOT_GATEWAY_TOKEN` →
+`OPENCLAW_GATEWAY_TOKEN`); the old names take no effect.
 
 ## Related
 

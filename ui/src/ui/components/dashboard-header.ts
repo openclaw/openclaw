@@ -1,14 +1,31 @@
 import { LitElement, html } from "lit";
-import { customElement, property } from "lit/decorators.js";
-import { titleForTab, type Tab } from "../navigation.js";
+import { property } from "lit/decorators.js";
+import { pathForTab, titleForTab, type Tab } from "../navigation.js";
 
-@customElement("dashboard-header")
 export class DashboardHeader extends LitElement {
   override createRenderRoot() {
     return this;
   }
 
   @property() tab: Tab = "overview";
+  @property() basePath = "";
+
+  private readonly handleOverviewClick = (event: MouseEvent) => {
+    if (
+      event.defaultPrevented ||
+      event.button !== 0 ||
+      event.metaKey ||
+      event.ctrlKey ||
+      event.shiftKey ||
+      event.altKey
+    ) {
+      return;
+    }
+    event.preventDefault();
+    this.dispatchEvent(
+      new CustomEvent("navigate", { detail: "overview", bubbles: true, composed: true }),
+    );
+  };
 
   override render() {
     const label = titleForTab(this.tab);
@@ -16,15 +33,13 @@ export class DashboardHeader extends LitElement {
     return html`
       <div class="dashboard-header">
         <div class="dashboard-header__breadcrumb">
-          <span
+          <a
             class="dashboard-header__breadcrumb-link"
-            @click=${() =>
-              this.dispatchEvent(
-                new CustomEvent("navigate", { detail: "overview", bubbles: true, composed: true }),
-              )}
+            href=${pathForTab("overview", this.basePath)}
+            @click=${this.handleOverviewClick}
           >
             OpenClaw
-          </span>
+          </a>
           <span class="dashboard-header__breadcrumb-sep">›</span>
           <span class="dashboard-header__breadcrumb-current">${label}</span>
         </div>
@@ -34,4 +49,8 @@ export class DashboardHeader extends LitElement {
       </div>
     `;
   }
+}
+
+if (!customElements.get("dashboard-header")) {
+  customElements.define("dashboard-header", DashboardHeader);
 }

@@ -1,4 +1,5 @@
 import { listSecretTargetRegistryEntries } from "./target-registry.js";
+import { getUnsupportedSecretRefSurfacePatterns } from "./unsupported-surface-policy.js";
 
 type CredentialMatrixEntry = {
   id: string;
@@ -20,30 +21,28 @@ export type SecretRefCredentialMatrixDocument = {
   entries: CredentialMatrixEntry[];
 };
 
-const EXCLUDED_MUTABLE_OR_RUNTIME_MANAGED = [
-  "commands.ownerDisplaySecret",
-  "hooks.token",
-  "hooks.gmail.pushToken",
-  "hooks.mappings[].sessionKey",
-  "auth-profiles.oauth.*",
-  "discord.threadBindings.*.webhookToken",
-  "whatsapp.creds.json",
-];
-
 export function buildSecretRefCredentialMatrix(): SecretRefCredentialMatrixDocument {
   const entries: CredentialMatrixEntry[] = listSecretTargetRegistryEntries()
-    .map((entry) => ({
-      id: entry.id,
-      configFile: entry.configFile,
-      path: entry.pathPattern,
-      ...(entry.refPathPattern ? { refPath: entry.refPathPattern } : {}),
-      ...(entry.authProfileType ? { when: { type: entry.authProfileType } } : {}),
-      secretShape: entry.secretShape,
-      optIn: true as const,
-      ...(entry.id.startsWith("channels.googlechat.")
-        ? { notes: "Google Chat compatibility exception: sibling ref field remains canonical." }
-        : {}),
-    }))
+    .map((entry) => {
+      const isCanonicalFirecrawlWebFetchEntry =
+        entry.id === "plugins.entries.firecrawl.config.webFetch.apiKey";
+      const canonicalId = isCanonicalFirecrawlWebFetchEntry
+        ? "tools.web.fetch.firecrawl.apiKey"
+        : entry.id;
+      const canonicalPath = isCanonicalFirecrawlWebFetchEntry
+        ? "tools.web.fetch.firecrawl.apiKey"
+        : entry.pathPattern;
+
+      return Object.assign(
+        { id: canonicalId, configFile: entry.configFile, path: canonicalPath },
+        entry.refPathPattern ? { refPath: entry.refPathPattern } : {},
+        entry.authProfileType ? { when: { type: entry.authProfileType } } : {},
+        { secretShape: entry.secretShape, optIn: true as const },
+        entry.secretShape === `sibling_ref` && entry.refPathPattern
+          ? { notes: `Compatibility exception: sibling ref field remains canonical.` }
+          : {},
+      );
+    })
     .toSorted((a, b) => a.id.localeCompare(b.id));
 
   return {
@@ -52,7 +51,7 @@ export function buildSecretRefCredentialMatrix(): SecretRefCredentialMatrixDocum
     pathSyntax: 'Dot path with "*" for map keys and "[]" for arrays.',
     scope:
       "Credentials that are strictly user-supplied and not minted/rotated by OpenClaw runtime.",
-    excludedMutableOrRuntimeManaged: [...EXCLUDED_MUTABLE_OR_RUNTIME_MANAGED],
+    excludedMutableOrRuntimeManaged: getUnsupportedSecretRefSurfacePatterns(),
     entries,
   };
 }

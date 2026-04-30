@@ -1,7 +1,11 @@
 import "./test-helpers.js";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { installWebAutoReplyUnitTestHooks, makeSessionStore } from "./auto-reply.test-harness.js";
+import {
+  createAcceptedWhatsAppSendResult,
+  installWebAutoReplyUnitTestHooks,
+  makeSessionStore,
+} from "./auto-reply.test-harness.js";
 
 const updateLastRouteInBackgroundMock = vi.hoisted(() => vi.fn());
 let awaitBackgroundTasks: typeof import("./auto-reply/monitor/last-route.js").awaitBackgroundTasks;
@@ -9,8 +13,10 @@ let buildMentionConfig: typeof import("./auto-reply/mentions.js").buildMentionCo
 let createEchoTracker: typeof import("./auto-reply/monitor/echo.js").createEchoTracker;
 let createWebOnMessageHandler: typeof import("./auto-reply/monitor/on-message.js").createWebOnMessageHandler;
 
-vi.mock("./auto-reply/monitor/last-route.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./auto-reply/monitor/last-route.js")>();
+vi.mock("./auto-reply/monitor/last-route.js", async () => {
+  const actual = await vi.importActual<typeof import("./auto-reply/monitor/last-route.js")>(
+    "./auto-reply/monitor/last-route.js",
+  );
   return {
     ...actual,
     updateLastRouteInBackground: (...args: unknown[]) => updateLastRouteInBackgroundMock(...args),
@@ -90,8 +96,8 @@ function buildInboundMessage(params: {
     senderName: params.senderName,
     selfE164: params.selfE164,
     sendComposing: vi.fn().mockResolvedValue(undefined),
-    reply: vi.fn().mockResolvedValue(undefined),
-    sendMedia: vi.fn().mockResolvedValue(undefined),
+    reply: vi.fn().mockResolvedValue(createAcceptedWhatsAppSendResult("text", "r1")),
+    sendMedia: vi.fn().mockResolvedValue(createAcceptedWhatsAppSendResult("media", "m1")),
   };
 }
 

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WorkspaceBootstrapFile } from "./workspace.js";
 
 vi.mock("./workspace.js", () => ({
@@ -22,11 +22,13 @@ describe("getOrLoadBootstrapFiles", () => {
 
   const mockLoad = () => vi.mocked(workspaceModule.loadWorkspaceBootstrapFiles);
 
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeAll(async () => {
     ({ clearAllBootstrapSnapshots, getOrLoadBootstrapFiles } =
       await import("./bootstrap-cache.js"));
     workspaceModule = await import("./workspace.js");
+  });
+
+  beforeEach(() => {
     clearAllBootstrapSnapshots();
     mockLoad().mockResolvedValue(files);
   });
@@ -46,12 +48,29 @@ describe("getOrLoadBootstrapFiles", () => {
     expect(mockLoad()).toHaveBeenCalledTimes(1);
   });
 
-  it("returns cached result on second call", async () => {
-    await getOrLoadBootstrapFiles({ workspaceDir: "/ws", sessionKey: "session-1" });
+  it("refreshes from disk on second call while preserving unchanged object identity", async () => {
+    const refreshedFiles = [makeFile("AGENTS.md", "# Agent"), makeFile("SOUL.md", "# Soul")];
+    mockLoad().mockResolvedValueOnce(files).mockResolvedValueOnce(refreshedFiles);
+
+    const first = await getOrLoadBootstrapFiles({ workspaceDir: "/ws", sessionKey: "session-1" });
     const result = await getOrLoadBootstrapFiles({ workspaceDir: "/ws", sessionKey: "session-1" });
 
-    expect(result).toBe(files);
-    expect(mockLoad()).toHaveBeenCalledTimes(1);
+    expect(first).toBe(files);
+    expect(result).toBe(first);
+    expect(result).not.toBe(refreshedFiles);
+    expect(mockLoad()).toHaveBeenCalledTimes(2);
+  });
+
+  it("replaces cached result when workspace bootstrap contents change", async () => {
+    const updatedFiles = [makeFile("AGENTS.md", "# Agent v2"), makeFile("SOUL.md", "# Soul")];
+    mockLoad().mockResolvedValueOnce(files).mockResolvedValueOnce(updatedFiles);
+
+    const first = await getOrLoadBootstrapFiles({ workspaceDir: "/ws", sessionKey: "session-1" });
+    const result = await getOrLoadBootstrapFiles({ workspaceDir: "/ws", sessionKey: "session-1" });
+
+    expect(first).toBe(files);
+    expect(result).toBe(updatedFiles);
+    expect(mockLoad()).toHaveBeenCalledTimes(2);
   });
 
   it("different session keys get independent caches", async () => {
@@ -75,11 +94,13 @@ describe("clearBootstrapSnapshot", () => {
 
   const mockLoad = () => vi.mocked(workspaceModule.loadWorkspaceBootstrapFiles);
 
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeAll(async () => {
     ({ clearAllBootstrapSnapshots, clearBootstrapSnapshot, getOrLoadBootstrapFiles } =
       await import("./bootstrap-cache.js"));
     workspaceModule = await import("./workspace.js");
+  });
+
+  beforeEach(() => {
     clearAllBootstrapSnapshots();
     mockLoad().mockResolvedValue([makeFile("AGENTS.md", "content")]);
   });
@@ -100,12 +121,13 @@ describe("clearBootstrapSnapshot", () => {
 
   it("does not affect other sessions", async () => {
     await getOrLoadBootstrapFiles({ workspaceDir: "/ws", sessionKey: "sk1" });
-    await getOrLoadBootstrapFiles({ workspaceDir: "/ws", sessionKey: "sk2" });
+    const first = await getOrLoadBootstrapFiles({ workspaceDir: "/ws", sessionKey: "sk2" });
 
     clearBootstrapSnapshot("sk1");
 
-    // sk2 should still be cached.
-    await getOrLoadBootstrapFiles({ workspaceDir: "/ws", sessionKey: "sk2" });
-    expect(mockLoad()).toHaveBeenCalledTimes(2); // sk1 x1, sk2 x1
+    // sk2 should still preserve its cached snapshot identity after refresh.
+    const second = await getOrLoadBootstrapFiles({ workspaceDir: "/ws", sessionKey: "sk2" });
+    expect(second).toBe(first);
+    expect(mockLoad()).toHaveBeenCalledTimes(3); // sk1 x1, sk2 x2
   });
 });

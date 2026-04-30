@@ -1,5 +1,6 @@
 import { html, nothing } from "lit";
 import { icons } from "../icons.ts";
+import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
 import type { ConfigUiHints } from "../types.ts";
 import { matchesNodeSearch, parseConfigSearchQuery, renderNode } from "./config-form.node.ts";
 import { hintForPath, humanize, schemaType, type JsonSchema } from "./config-form.shared.ts";
@@ -8,6 +9,7 @@ export type ConfigFormProps = {
   schema: JsonSchema | null;
   uiHints: ConfigUiHints;
   value: Record<string, unknown> | null;
+  rawAvailable?: boolean;
   disabled?: boolean;
   unsupportedPaths?: string[];
   searchQuery?: string;
@@ -341,9 +343,9 @@ function matchesSearch(params: {
   const meta = SECTION_META[params.key];
   const sectionMetaMatches =
     q &&
-    (params.key.toLowerCase().includes(q) ||
-      (meta?.label ? meta.label.toLowerCase().includes(q) : false) ||
-      (meta?.description ? meta.description.toLowerCase().includes(q) : false));
+    (normalizeLowercaseStringOrEmpty(params.key).includes(q) ||
+      (meta?.label ? normalizeLowercaseStringOrEmpty(meta.label).includes(q) : false) ||
+      (meta?.description ? normalizeLowercaseStringOrEmpty(meta.description).includes(q) : false));
 
   if (sectionMetaMatches && criteria.tags.length === 0) {
     return true;
@@ -436,26 +438,32 @@ export function renderConfigForm(props: ConfigFormProps) {
     sectionKey: string;
     label: string;
     description: string;
+    showHeader: boolean;
     node: JsonSchema;
     nodeValue: unknown;
     path: Array<string | number>;
   }) => html`
     <section class="config-section-card" id=${params.id}>
-      <div class="config-section-card__header">
-        <span class="config-section-card__icon">${getSectionIcon(params.sectionKey)}</span>
-        <div class="config-section-card__titles">
-          <h3 class="config-section-card__title">${params.label}</h3>
-          ${params.description
-            ? html`<p class="config-section-card__desc">${params.description}</p>`
-            : nothing}
-        </div>
-      </div>
+      ${params.showHeader
+        ? html`
+            <div class="config-section-card__header">
+              <span class="config-section-card__icon">${getSectionIcon(params.sectionKey)}</span>
+              <div class="config-section-card__titles">
+                <h3 class="config-section-card__title">${params.label}</h3>
+                ${params.description
+                  ? html`<p class="config-section-card__desc">${params.description}</p>`
+                  : nothing}
+              </div>
+            </div>
+          `
+        : nothing}
       <div class="config-section-card__content">
         ${renderNode({
           schema: params.node,
           value: params.nodeValue,
           path: params.path,
           hints: props.uiHints,
+          rawAvailable: props.rawAvailable ?? true,
           unsupported,
           disabled: props.disabled ?? false,
           showLabel: false,
@@ -487,6 +495,7 @@ export function renderConfigForm(props: ConfigFormProps) {
               sectionKey,
               label,
               description,
+              showHeader: false,
               node,
               nodeValue: scopedValue,
               path: [sectionKey, subsectionKey],
@@ -503,6 +512,7 @@ export function renderConfigForm(props: ConfigFormProps) {
               sectionKey: key,
               label: meta.label,
               description: meta.description,
+              showHeader: activeSection == null,
               node,
               nodeValue: value[key],
               path: [key],

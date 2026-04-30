@@ -1,23 +1,15 @@
+import { assertOkOrThrowProviderError } from "openclaw/plugin-sdk/provider-http";
 import {
   normalizeApplyTextNormalization,
   normalizeLanguageCode,
   normalizeSeed,
   requireInRange,
 } from "openclaw/plugin-sdk/speech";
-
-const DEFAULT_ELEVENLABS_BASE_URL = "https://api.elevenlabs.io";
-
-function isValidVoiceId(voiceId: string): boolean {
-  return /^[a-zA-Z0-9]{10,40}$/.test(voiceId);
-}
-
-function normalizeElevenLabsBaseUrl(baseUrl?: string): string {
-  const trimmed = baseUrl?.trim();
-  if (!trimmed) {
-    return DEFAULT_ELEVENLABS_BASE_URL;
-  }
-  return trimmed.replace(/\/+$/, "");
-}
+import {
+  fetchWithSsrFGuard,
+  ssrfPolicyFromHttpBaseUrlAllowedHostname,
+} from "openclaw/plugin-sdk/ssrf-runtime";
+import { isValidElevenLabsVoiceId, normalizeElevenLabsBaseUrl } from "./shared.js";
 
 function assertElevenLabsVoiceSettings(settings: {
   stability: number;
@@ -32,6 +24,14 @@ function assertElevenLabsVoiceSettings(settings: {
   requireInRange(settings.speed, 0.5, 2, "speed");
 }
 
+function resolveElevenLabsAcceptHeader(outputFormat: string): string | undefined {
+  const normalized = outputFormat.trim().toLowerCase();
+  if (!normalized || normalized.startsWith("mp3_")) {
+    return "audio/mpeg";
+  }
+  return undefined;
+}
+
 export async function elevenLabsTTS(params: {
   text: string;
   apiKey: string;
@@ -42,6 +42,7 @@ export async function elevenLabsTTS(params: {
   seed?: number;
   applyTextNormalization?: "auto" | "on" | "off";
   languageCode?: string;
+  latencyTier?: number;
   voiceSettings: {
     stability: number;
     similarityBoost: number;
@@ -61,32 +62,32 @@ export async function elevenLabsTTS(params: {
     seed,
     applyTextNormalization,
     languageCode,
+    latencyTier,
     voiceSettings,
     timeoutMs,
   } = params;
-  if (!isValidVoiceId(voiceId)) {
+  if (!isValidElevenLabsVoiceId(voiceId)) {
     throw new Error("Invalid voiceId format");
   }
   assertElevenLabsVoiceSettings(voiceSettings);
   const normalizedLanguage = normalizeLanguageCode(languageCode);
   const normalizedNormalization = normalizeApplyTextNormalization(applyTextNormalization);
   const normalizedSeed = normalizeSeed(seed);
+  const normalizedBaseUrl = normalizeElevenLabsBaseUrl(baseUrl);
+  const url = new URL(`${normalizedBaseUrl}/v1/text-to-speech/${voiceId}`);
+  if (outputFormat) {
+    url.searchParams.set("output_format", outputFormat);
+  }
+  const acceptHeader = resolveElevenLabsAcceptHeader(outputFormat);
 
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
-
-  try {
-    const url = new URL(`${normalizeElevenLabsBaseUrl(baseUrl)}/v1/text-to-speech/${voiceId}`);
-    if (outputFormat) {
-      url.searchParams.set("output_format", outputFormat);
-    }
-
-    const response = await fetch(url.toString(), {
+  const { response, release } = await fetchWithSsrFGuard({
+    url: url.toString(),
+    init: {
       method: "POST",
       headers: {
         "xi-api-key": apiKey,
         "Content-Type": "application/json",
-        Accept: "audio/mpeg",
+        ...(acceptHeader ? { Accept: acceptHeader } : {}),
       },
       body: JSON.stringify({
         text,
@@ -94,6 +95,7 @@ export async function elevenLabsTTS(params: {
         seed: normalizedSeed,
         apply_text_normalization: normalizedNormalization,
         language_code: normalizedLanguage,
+        latency_optimization_level: latencyTier,
         voice_settings: {
           stability: voiceSettings.stability,
           similarity_boost: voiceSettings.similarityBoost,
@@ -102,15 +104,16 @@ export async function elevenLabsTTS(params: {
           speed: voiceSettings.speed,
         },
       }),
-      signal: controller.signal,
-    });
-
-    if (!response.ok) {
-      throw new Error(`ElevenLabs API error (${response.status})`);
-    }
+    },
+    timeoutMs,
+    policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(normalizedBaseUrl),
+    auditContext: "elevenlabs.tts",
+  });
+  try {
+    await assertOkOrThrowProviderError(response, "ElevenLabs API error");
 
     return Buffer.from(await response.arrayBuffer());
   } finally {
-    clearTimeout(timeout);
+    await release();
   }
 }

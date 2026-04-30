@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBindMode } from "../config/types.gateway.js";
+import { dashboardCommand } from "./dashboard.js";
 
 const mocks = vi.hoisted(() => ({
   readConfigFileSnapshot: vi.fn(),
@@ -29,7 +30,6 @@ const runtime = {
   error: vi.fn(),
   exit: vi.fn(),
 };
-let dashboardCommand: typeof import("./dashboard.js").dashboardCommand;
 
 function mockSnapshot(params?: {
   token?: string;
@@ -62,9 +62,7 @@ function mockSnapshot(params?: {
 }
 
 describe("dashboardCommand bind selection", () => {
-  beforeEach(async () => {
-    vi.resetModules();
-    ({ dashboardCommand } = await import("./dashboard.js"));
+  beforeEach(() => {
     mocks.readConfigFileSnapshot.mockClear();
     mocks.resolveGatewayPort.mockClear();
     mocks.resolveControlUiLinks.mockClear();
@@ -87,6 +85,7 @@ describe("dashboardCommand bind selection", () => {
       bind: "loopback",
       customBindHost: undefined,
       basePath: undefined,
+      tlsEnabled: false,
     });
   });
 
@@ -100,6 +99,7 @@ describe("dashboardCommand bind selection", () => {
       bind: "custom",
       customBindHost: "10.0.0.5",
       basePath: undefined,
+      tlsEnabled: false,
     });
   });
 
@@ -113,6 +113,7 @@ describe("dashboardCommand bind selection", () => {
       bind: "tailnet",
       customBindHost: undefined,
       basePath: undefined,
+      tlsEnabled: false,
     });
   });
 });

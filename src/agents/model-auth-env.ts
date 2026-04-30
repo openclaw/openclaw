@@ -1,9 +1,16 @@
-import { getEnvApiKey } from "@mariozechner/pi-ai";
+import fs from "node:fs";
+import os from "node:os";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getShellEnvAppliedKeys } from "../infra/shell-env.js";
-import { hasAnthropicVertexAvailableAuth } from "../plugin-sdk/anthropic-vertex.js";
+import { resolvePluginSetupProvider } from "../plugins/setup-registry.js";
+import type { ProviderAuthEvidence } from "../secrets/provider-env-vars.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
-import { PROVIDER_ENV_API_KEY_CANDIDATES } from "./model-auth-env-vars.js";
+import {
+  resolveProviderEnvApiKeyCandidates,
+  resolveProviderEnvAuthEvidence,
+} from "./model-auth-env-vars.js";
 import { GCP_VERTEX_CREDENTIALS_MARKER } from "./model-auth-markers.js";
+import { resolveProviderIdForAuth } from "./provider-auth-aliases.js";
 import { normalizeProviderIdForAuth } from "./provider-id.js";
 
 export type EnvApiKeyResult = {
@@ -11,11 +18,100 @@ export type EnvApiKeyResult = {
   source: string;
 };
 
+export type EnvApiKeyLookupOptions = {
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  aliasMap?: Readonly<Record<string, string>>;
+  candidateMap?: Readonly<Record<string, readonly string[]>>;
+  authEvidenceMap?: Readonly<Record<string, readonly ProviderAuthEvidence[]>>;
+};
+
+function expandAuthEvidencePath(rawPath: string, env: NodeJS.ProcessEnv): string | undefined {
+  const trimmed = rawPath.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  const homeDir = normalizeOptionalPathInput(env.HOME) ?? os.homedir();
+  const appDataDir = normalizeOptionalPathInput(env.APPDATA);
+  if (trimmed.includes("${APPDATA}") && !appDataDir) {
+    return undefined;
+  }
+  return trimmed.replaceAll("${HOME}", homeDir).replaceAll("${APPDATA}", appDataDir ?? "");
+}
+
+function normalizeOptionalPathInput(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function hasRequiredAuthEvidenceEnv(
+  evidence: ProviderAuthEvidence,
+  env: NodeJS.ProcessEnv,
+): boolean {
+  const hasEnv = (key: string) => Boolean(normalizeOptionalSecretInput(env[key]));
+  if (evidence.requiresAnyEnv?.length && !evidence.requiresAnyEnv.some(hasEnv)) {
+    return false;
+  }
+  if (evidence.requiresAllEnv?.length && !evidence.requiresAllEnv.every(hasEnv)) {
+    return false;
+  }
+  return true;
+}
+
+function hasLocalFileAuthEvidence(evidence: ProviderAuthEvidence, env: NodeJS.ProcessEnv): boolean {
+  if (evidence.fileEnvVar) {
+    const explicitPath = normalizeOptionalPathInput(env[evidence.fileEnvVar]);
+    if (explicitPath) {
+      return fs.existsSync(explicitPath);
+    }
+  }
+  for (const rawPath of evidence.fallbackPaths ?? []) {
+    const expandedPath = expandAuthEvidencePath(rawPath, env);
+    if (expandedPath && fs.existsSync(expandedPath)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function resolveAuthEvidence(
+  evidence: readonly ProviderAuthEvidence[] | undefined,
+  env: NodeJS.ProcessEnv,
+): EnvApiKeyResult | null {
+  for (const entry of evidence ?? []) {
+    if (entry.type !== "local-file-with-env") {
+      continue;
+    }
+    if (!hasRequiredAuthEvidenceEnv(entry, env) || !hasLocalFileAuthEvidence(entry, env)) {
+      continue;
+    }
+    return {
+      apiKey: entry.credentialMarker,
+      source: entry.source ?? "local auth evidence",
+    };
+  }
+  return null;
+}
+
 export function resolveEnvApiKey(
   provider: string,
   env: NodeJS.ProcessEnv = process.env,
+  options: EnvApiKeyLookupOptions = {},
 ): EnvApiKeyResult | null {
-  const normalized = normalizeProviderIdForAuth(provider);
+  const normalizedProvider = normalizeProviderIdForAuth(provider);
+  const normalized = options.aliasMap
+    ? (options.aliasMap[normalizedProvider] ?? normalizedProvider)
+    : resolveProviderIdForAuth(provider, { env });
+  const lookupParams = {
+    config: options.config,
+    workspaceDir: options.workspaceDir,
+    env,
+  };
+  const candidateMap = options.candidateMap ?? resolveProviderEnvApiKeyCandidates(lookupParams);
+  const authEvidenceMap = options.authEvidenceMap ?? resolveProviderEnvAuthEvidence(lookupParams);
   const applied = new Set(getShellEnvAppliedKeys());
   const pick = (envVar: string): EnvApiKeyResult | null => {
     const value = normalizeOptionalSecretInput(env[envVar]);
@@ -26,8 +122,8 @@ export function resolveEnvApiKey(
     return { apiKey: value, source };
   };
 
-  const candidates = PROVIDER_ENV_API_KEY_CANDIDATES[normalized];
-  if (candidates) {
+  const candidates = Object.hasOwn(candidateMap, normalized) ? candidateMap[normalized] : undefined;
+  if (Array.isArray(candidates)) {
     for (const envVar of candidates) {
       const resolved = pick(envVar);
       if (resolved) {
@@ -36,21 +132,33 @@ export function resolveEnvApiKey(
     }
   }
 
-  if (normalized === "google-vertex") {
-    const envKey = getEnvApiKey(normalized);
-    if (!envKey) {
-      return null;
-    }
-    return { apiKey: envKey, source: "gcloud adc" };
+  const evidence = Object.hasOwn(authEvidenceMap, normalized)
+    ? authEvidenceMap[normalized]
+    : undefined;
+  const authEvidence = resolveAuthEvidence(evidence, env);
+  if (authEvidence) {
+    return authEvidence;
   }
 
-  if (normalized === "anthropic-vertex") {
-    // Vertex AI uses GCP credentials (SA JSON or ADC), not API keys.
-    // Return a sentinel so the model resolver still treats this provider as available.
-    if (hasAnthropicVertexAvailableAuth(env)) {
-      return { apiKey: GCP_VERTEX_CREDENTIALS_MARKER, source: "gcloud adc" };
-    }
+  if (Array.isArray(candidates)) {
     return null;
+  }
+
+  const setupProvider = resolvePluginSetupProvider({
+    provider: normalized,
+    env,
+  });
+  if (setupProvider?.resolveConfigApiKey) {
+    const resolved = setupProvider.resolveConfigApiKey({
+      provider: normalized,
+      env,
+    });
+    if (resolved?.trim()) {
+      return {
+        apiKey: resolved,
+        source: resolved === GCP_VERTEX_CREDENTIALS_MARKER ? "gcloud adc" : "env",
+      };
+    }
   }
 
   return null;

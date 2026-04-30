@@ -4,7 +4,7 @@ read_when:
   - Setting up OpenClaw on Oracle Cloud
   - Looking for low-cost VPS hosting for OpenClaw
   - Want 24/7 OpenClaw on a small server
-title: "Oracle Cloud (Platform)"
+title: "Oracle Cloud (platform)"
 ---
 
 # OpenClaw on Oracle Cloud (OCI)
@@ -18,7 +18,7 @@ Oracle’s free tier can be a great fit for OpenClaw (especially if you already 
 - ARM architecture (most things work, but some binaries may be x86-only)
 - Capacity and signup can be finicky
 
-## Cost Comparison (2026)
+## Cost comparison (2026)
 
 | Provider     | Plan            | Specs                  | Price/mo | Notes                 |
 | ------------ | --------------- | ---------------------- | -------- | --------------------- |
@@ -123,8 +123,10 @@ openclaw doctor --generate-gateway-token
 openclaw config set gateway.tailscale.mode serve
 openclaw config set gateway.trustedProxies '["127.0.0.1"]'
 
-systemctl --user restart openclaw-gateway
+systemctl --user restart openclaw-gateway.service
 ```
+
+`gateway.trustedProxies=["127.0.0.1"]` here is only for the local Tailscale Serve proxy's forwarded-IP/local-client handling. It is **not** `gateway.auth.mode: "trusted-proxy"`. Diff viewer routes keep fail-closed behavior in this setup: raw `127.0.0.1` viewer requests without forwarded proxy headers can return `Diff not found`. Use `mode=file` / `mode=both` for attachments, or intentionally enable remote viewers and set `plugins.entries.diffs.config.viewerBaseUrl` (or pass a proxy `baseUrl`) if you need shareable viewer links.
 
 ## 7) Verify
 
@@ -133,7 +135,7 @@ systemctl --user restart openclaw-gateway
 openclaw --version
 
 # Check daemon status
-systemctl --user status openclaw-gateway
+systemctl --user status openclaw-gateway.service
 
 # Check Tailscale Serve
 tailscale serve status
@@ -191,14 +193,14 @@ This setup often removes the _need_ for extra host-based firewall rules purely t
 | SSH key-only auth  | No          | Tailscale authenticates via your tailnet                                     |
 | IPv6 hardening     | Usually not | Depends on your VCN/subnet settings; verify what’s actually assigned/exposed |
 
-### Still Recommended
+### Still recommended
 
 - **Credential permissions:** `chmod 700 ~/.openclaw`
 - **Security audit:** `openclaw security audit`
 - **System updates:** `sudo apt update && sudo apt upgrade` regularly
 - **Monitor Tailscale:** Review devices in [Tailscale admin console](https://login.tailscale.com/admin)
 
-### Verify Security Posture
+### Verify security posture
 
 ```bash
 # Confirm no public ports listening
@@ -251,7 +253,7 @@ sudo tailscale up --ssh --hostname=openclaw --reset
 ```bash
 openclaw gateway status
 openclaw doctor --non-interactive
-journalctl --user -u openclaw-gateway -n 50
+journalctl --user -u openclaw-gateway.service -n 50
 ```
 
 ### Cannot reach Control UI
@@ -264,7 +266,7 @@ tailscale serve status
 curl http://localhost:18789
 
 # Restart if needed
-systemctl --user restart openclaw-gateway
+systemctl --user restart openclaw-gateway.service
 ```
 
 ### ARM binary issues
@@ -283,18 +285,18 @@ Most npm packages work fine. For binaries, look for `linux-arm64` or `aarch64` r
 
 All state lives in:
 
-- `~/.openclaw/` — config, credentials, session data
+- `~/.openclaw/` — `openclaw.json`, per-agent `auth-profiles.json`, channel/provider state, and session data
 - `~/.openclaw/workspace/` — workspace (SOUL.md, memory, artifacts)
 
 Back up periodically:
 
 ```bash
-tar -czvf openclaw-backup.tar.gz ~/.openclaw ~/.openclaw/workspace
+openclaw backup create
 ```
 
 ---
 
-## See Also
+## Related
 
 - [Gateway remote access](/gateway/remote) — other remote access patterns
 - [Tailscale integration](/gateway/tailscale) — full Tailscale docs

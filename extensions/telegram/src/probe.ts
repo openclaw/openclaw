@@ -1,5 +1,6 @@
 import type { BaseProbeResult } from "openclaw/plugin-sdk/channel-contract";
-import type { TelegramNetworkConfig } from "openclaw/plugin-sdk/telegram-core";
+import type { TelegramNetworkConfig } from "openclaw/plugin-sdk/config-types";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { fetchWithTimeout } from "openclaw/plugin-sdk/text-runtime";
 import { resolveTelegramApiBase, resolveTelegramFetch } from "./fetch.js";
 import { makeProxyFetch } from "./proxy.js";
@@ -22,6 +23,7 @@ export type TelegramProbeOptions = {
   network?: TelegramNetworkConfig;
   accountId?: string;
   apiRoot?: string;
+  includeWebhookInfo?: boolean;
 };
 
 const probeFetcherCache = new Map<string, typeof fetch>();
@@ -101,6 +103,7 @@ export async function probeTelegram(
   const timeoutBudgetMs = Math.max(1, Math.floor(timeoutMs));
   const deadlineMs = started + timeoutBudgetMs;
   const options = resolveProbeOptions(proxyOrOptions);
+  const includeWebhookInfo = options?.includeWebhookInfo !== false;
   const fetcher = resolveProbeFetcher(token, options);
   const apiBase = resolveTelegramApiBase(options?.apiRoot);
   const base = `${apiBase}/bot${token}`;
@@ -183,29 +186,31 @@ export async function probeTelegram(
           : null,
     };
 
-    // Try to fetch webhook info, but don't fail health if it errors.
-    try {
-      const webhookRemainingBudgetMs = resolveRemainingBudgetMs();
-      if (webhookRemainingBudgetMs > 0) {
-        const webhookRes = await fetchWithTimeout(
-          `${base}/getWebhookInfo`,
-          {},
-          Math.max(1, Math.min(timeoutBudgetMs, webhookRemainingBudgetMs)),
-          fetcher,
-        );
-        const webhookJson = (await webhookRes.json()) as {
-          ok?: boolean;
-          result?: { url?: string; has_custom_certificate?: boolean };
-        };
-        if (webhookRes.ok && webhookJson?.ok) {
-          result.webhook = {
-            url: webhookJson.result?.url ?? null,
-            hasCustomCert: webhookJson.result?.has_custom_certificate ?? null,
+    if (includeWebhookInfo) {
+      // Try to fetch webhook info, but don't fail health if it errors.
+      try {
+        const webhookRemainingBudgetMs = resolveRemainingBudgetMs();
+        if (webhookRemainingBudgetMs > 0) {
+          const webhookRes = await fetchWithTimeout(
+            `${base}/getWebhookInfo`,
+            {},
+            Math.max(1, Math.min(timeoutBudgetMs, webhookRemainingBudgetMs)),
+            fetcher,
+          );
+          const webhookJson = (await webhookRes.json()) as {
+            ok?: boolean;
+            result?: { url?: string; has_custom_certificate?: boolean };
           };
+          if (webhookRes.ok && webhookJson?.ok) {
+            result.webhook = {
+              url: webhookJson.result?.url ?? null,
+              hasCustomCert: webhookJson.result?.has_custom_certificate ?? null,
+            };
+          }
         }
+      } catch {
+        // ignore webhook errors for probe
       }
-    } catch {
-      // ignore webhook errors for probe
     }
 
     result.ok = true;
@@ -217,7 +222,7 @@ export async function probeTelegram(
     return {
       ...result,
       status: err instanceof Response ? err.status : result.status,
-      error: err instanceof Error ? err.message : String(err),
+      error: formatErrorMessage(err),
       elapsedMs: Date.now() - started,
     };
   }

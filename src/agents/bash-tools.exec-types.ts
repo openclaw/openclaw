@@ -1,11 +1,15 @@
+import type { ExecApprovalDecision } from "../infra/exec-approvals.js";
 import type { ExecAsk, ExecHost, ExecSecurity, ExecTarget } from "../infra/exec-approvals.js";
 import type { SafeBinProfileFixture } from "../infra/exec-safe-bin-policy.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
+import type { EmbeddedFullAccessBlockedReason } from "./pi-embedded-runner/types.js";
 
 export type ExecToolDefaults = {
+  hasCronTool?: boolean;
   host?: ExecTarget;
   security?: ExecSecurity;
   ask?: ExecAsk;
+  trigger?: string;
   node?: string;
   pathPrepend?: string[];
   safeBins?: string[];
@@ -15,6 +19,10 @@ export type ExecToolDefaults = {
   agentId?: string;
   backgroundMs?: number;
   timeoutSec?: number;
+  approvalWarningText?: string;
+  approvalFollowupText?: string;
+  approvalFollowup?: ExecApprovalFollowupFactory;
+  approvalFollowupMode?: "agent" | "direct";
   approvalRunningNoticeMs?: number;
   sandbox?: BashSandboxConfig;
   elevated?: ExecElevatedDefaults;
@@ -30,10 +38,31 @@ export type ExecToolDefaults = {
   cwd?: string;
 };
 
+export type ExecApprovalFollowupOutcome = {
+  status: "completed" | "failed";
+  exitCode: number | null;
+  timedOut: boolean;
+  aggregated: string;
+  reason?: string;
+};
+
+export type ExecApprovalFollowupContext = {
+  approvalId: string;
+  sessionId: string;
+  trigger?: string;
+  outcome: ExecApprovalFollowupOutcome;
+};
+
+export type ExecApprovalFollowupFactory = (
+  context: ExecApprovalFollowupContext,
+) => string | undefined | Promise<string | undefined>;
+
 export type ExecElevatedDefaults = {
   enabled: boolean;
   allowed: boolean;
   defaultLevel: "on" | "off" | "ask" | "full";
+  fullAccessAvailable?: boolean;
+  fullAccessBlockedReason?: EmbeddedFullAccessBlockedReason;
 };
 
 export type ExecToolDetails =
@@ -50,6 +79,7 @@ export type ExecToolDetails =
       exitCode: number | null;
       durationMs: number;
       aggregated: string;
+      timedOut?: boolean;
       cwd?: string;
     }
   | {
@@ -57,6 +87,7 @@ export type ExecToolDetails =
       approvalId: string;
       approvalSlug: string;
       expiresAtMs: number;
+      allowedDecisions?: readonly ExecApprovalDecision[];
       host: ExecHost;
       command: string;
       cwd?: string;
@@ -69,7 +100,9 @@ export type ExecToolDetails =
         | "initiating-platform-disabled"
         | "initiating-platform-unsupported"
         | "no-approval-route";
+      channel?: string;
       channelLabel?: string;
+      accountId?: string;
       sentApproverDms?: boolean;
       host: ExecHost;
       command: string;

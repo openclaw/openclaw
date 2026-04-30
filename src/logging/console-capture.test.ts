@@ -1,7 +1,4 @@
-import crypto from "node:crypto";
-import os from "node:os";
-import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   enableConsoleCapture,
   resetLogger,
@@ -10,6 +7,7 @@ import {
   setLoggerOverride,
 } from "../logging.js";
 import { defaultRuntime } from "../runtime.js";
+import { createSuiteLogPathTracker } from "./log-test-helpers.js";
 import { loggingState } from "./state.js";
 import {
   captureConsoleSnapshot,
@@ -18,6 +16,11 @@ import {
 } from "./test-helpers/console-snapshot.js";
 
 let snapshot: ConsoleSnapshot;
+const logPathTracker = createSuiteLogPathTracker("openclaw-log-");
+
+beforeAll(async () => {
+  await logPathTracker.setup();
+});
 
 beforeEach(() => {
   snapshot = captureConsoleSnapshot();
@@ -39,7 +42,13 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+afterAll(async () => {
+  await logPathTracker.cleanup();
+});
+
 describe("enableConsoleCapture", () => {
+  const secret = "sk-testsecret1234567890abcd";
+
   it("swallows EIO from stderr writes", () => {
     setLoggerOverride({ level: "info", file: tempLogPath() });
     vi.spyOn(process.stderr, "write").mockImplementation(() => {
@@ -77,20 +86,6 @@ describe("enableConsoleCapture", () => {
     );
     vi.useRealTimers();
   });
-
-  it.each(["DiscordMessageListener", "DiscordReactionListener", "DiscordReactionRemoveListener"])(
-    "suppresses discord EventQueue slow listener duplicates for %s",
-    (listener) => {
-      setLoggerOverride({ level: "info", file: tempLogPath() });
-      const warn = vi.fn();
-      console.warn = warn;
-      enableConsoleCapture();
-      console.warn(
-        `[EventQueue] Slow listener detected: ${listener} took 12.3 seconds for event MESSAGE_CREATE`,
-      );
-      expect(warn).not.toHaveBeenCalled();
-    },
-  );
 
   it("does not double-prefix timestamps", () => {
     setLoggerOverride({ level: "info", file: tempLogPath() });
@@ -130,6 +125,50 @@ describe("enableConsoleCapture", () => {
     expect(stdoutWrite).toHaveBeenCalledWith('{\n  "ok": true\n}\n');
   });
 
+  it("redacts credentials before forwarding console output", () => {
+    setLoggerOverride({ level: "info", file: tempLogPath() });
+    const log = vi.fn();
+    console.log = log;
+    enableConsoleCapture();
+
+    console.log("apiKey:", secret);
+
+    expect(log).toHaveBeenCalledTimes(1);
+    const line = String(log.mock.calls[0]?.[0] ?? "");
+    expect(line).toContain("apiKey:");
+    expect(line).not.toContain(secret);
+  });
+
+  it("redacts credentials before writing forced stderr console output", () => {
+    setLoggerOverride({ level: "info", file: tempLogPath() });
+    const stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    routeLogsToStderr();
+    enableConsoleCapture();
+
+    console.error(`Authorization: Bearer ${secret}`);
+
+    expect(stderrWrite).toHaveBeenCalledTimes(1);
+    const line = String(stderrWrite.mock.calls[0]?.[0] ?? "");
+    expect(line).toContain("Authorization: Bearer");
+    expect(line).not.toContain(secret);
+  });
+
+  it("redacts credentials when timestamp prefixing console output", () => {
+    setLoggerOverride({ level: "info", file: tempLogPath() });
+    const warn = vi.fn();
+    console.warn = warn;
+    setConsoleTimestampPrefix(true);
+    enableConsoleCapture();
+
+    console.warn(`token=${secret}`);
+
+    expect(warn).toHaveBeenCalledTimes(1);
+    const line = String(warn.mock.calls[0]?.[0] ?? "");
+    expect(line).toMatch(/^(?:\d{2}:\d{2}:\d{2}|\d{4}-\d{2}-\d{2}T)/);
+    expect(line).toContain("token=");
+    expect(line).not.toContain(secret);
+  });
+
   it.each([
     { name: "stdout", stream: process.stdout },
     { name: "stderr", stream: process.stderr },
@@ -151,7 +190,7 @@ describe("enableConsoleCapture", () => {
 });
 
 function tempLogPath() {
-  return path.join(os.tmpdir(), `openclaw-log-${crypto.randomUUID()}.log`);
+  return logPathTracker.nextPath();
 }
 
 function eioError() {

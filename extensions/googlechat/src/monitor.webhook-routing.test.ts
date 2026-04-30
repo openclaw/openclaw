@@ -1,13 +1,18 @@
 import { EventEmitter } from "node:events";
 import type { IncomingMessage } from "node:http";
-import { createEmptyPluginRegistry } from "openclaw/plugin-sdk/testing";
-import { setActivePluginRegistry } from "openclaw/plugin-sdk/testing";
+import {
+  createEmptyPluginRegistry,
+  setActivePluginRegistry,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
+import { createMockServerResponse } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createMockServerResponse } from "../../../test/helpers/plugins/mock-http-response.js";
 import type { OpenClawConfig, PluginRuntime } from "../runtime-api.js";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
 import { verifyGoogleChatRequest } from "./auth.js";
-import { handleGoogleChatWebhookRequest, registerGoogleChatWebhookTarget } from "./monitor.js";
+import {
+  handleGoogleChatWebhookRequest,
+  registerGoogleChatWebhookTarget,
+} from "./monitor-routing.js";
 
 vi.mock("./auth.js", () => ({
   verifyGoogleChatRequest: vi.fn(),
@@ -85,13 +90,15 @@ const baseAccount = (accountId: string) =>
 function registerTwoTargets() {
   const sinkA = vi.fn();
   const sinkB = vi.fn();
+  const logA = vi.fn();
+  const logB = vi.fn();
   const core = {} as PluginRuntime;
   const config = {} as OpenClawConfig;
 
   const unregisterA = registerGoogleChatWebhookTarget({
     account: baseAccount("A"),
     config,
-    runtime: {},
+    runtime: { log: logA },
     core,
     path: "/googlechat",
     statusSink: sinkA,
@@ -100,7 +107,7 @@ function registerTwoTargets() {
   const unregisterB = registerGoogleChatWebhookTarget({
     account: baseAccount("B"),
     config,
-    runtime: {},
+    runtime: { log: logB },
     core,
     path: "/googlechat",
     statusSink: sinkB,
@@ -108,6 +115,8 @@ function registerTwoTargets() {
   });
 
   return {
+    logA,
+    logB,
     sinkA,
     sinkB,
     unregister: () => {
@@ -150,43 +159,6 @@ describe("Google Chat webhook routing", () => {
     setActivePluginRegistry(createEmptyPluginRegistry());
   });
 
-  it("registers and unregisters plugin HTTP route at path boundaries", () => {
-    const registry = createEmptyPluginRegistry();
-    setActivePluginRegistry(registry);
-    const unregisterA = registerGoogleChatWebhookTarget({
-      account: baseAccount("A"),
-      config: {} as OpenClawConfig,
-      runtime: {},
-      core: {} as PluginRuntime,
-      path: "/googlechat",
-      statusSink: vi.fn(),
-      mediaMaxMb: 5,
-    });
-    const unregisterB = registerGoogleChatWebhookTarget({
-      account: baseAccount("B"),
-      config: {} as OpenClawConfig,
-      runtime: {},
-      core: {} as PluginRuntime,
-      path: "/googlechat",
-      statusSink: vi.fn(),
-      mediaMaxMb: 5,
-    });
-
-    expect(registry.httpRoutes).toHaveLength(1);
-    expect(registry.httpRoutes[0]).toEqual(
-      expect.objectContaining({
-        pluginId: "googlechat",
-        path: "/googlechat",
-        source: "googlechat-webhook",
-      }),
-    );
-
-    unregisterA();
-    expect(registry.httpRoutes).toHaveLength(1);
-    unregisterB();
-    expect(registry.httpRoutes).toHaveLength(0);
-  });
-
   it("rejects ambiguous routing when multiple targets on the same path verify successfully", async () => {
     vi.mocked(verifyGoogleChatRequest).mockResolvedValue({ ok: true });
 
@@ -211,7 +183,7 @@ describe("Google Chat webhook routing", () => {
   it("routes to the single verified target when earlier targets fail verification", async () => {
     mockSecondVerifierSuccess();
 
-    const { sinkA, sinkB, unregister } = registerTwoTargets();
+    const { logA, logB, sinkA, sinkB, unregister } = registerTwoTargets();
 
     try {
       await expectVerifiedRoute({
@@ -224,6 +196,8 @@ describe("Google Chat webhook routing", () => {
         sinkB,
         expectedSink: "B",
       });
+      expect(logA).not.toHaveBeenCalled();
+      expect(logB).not.toHaveBeenCalled();
     } finally {
       unregister();
     }

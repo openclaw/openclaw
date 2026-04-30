@@ -3,6 +3,7 @@ import { SENSITIVE_URL_HINT_TAG } from "../shared/net/redact-sensitive-url.js";
 import { buildConfigSchema, lookupConfigSchema } from "./schema.js";
 import { applyDerivedTags, CONFIG_TAGS, deriveTagsForPath } from "./schema.tags.js";
 import { ToolsSchema } from "./zod-schema.agent-runtime.js";
+import { OpenClawSchema } from "./zod-schema.js";
 
 describe("config schema", () => {
   type SchemaInput = NonNullable<Parameters<typeof buildConfigSchema>[0]>;
@@ -94,10 +95,18 @@ describe("config schema", () => {
   it("exports schema + hints", () => {
     const res = baseSchema;
     const schema = res.schema as { properties?: Record<string, unknown> };
+    const gatewaySchema = schema.properties?.gateway as
+      | { properties?: Record<string, unknown> }
+      | undefined;
+    const gatewayPortSchema = gatewaySchema?.properties?.port as
+      | { title?: string; description?: string }
+      | undefined;
     expect(schema.properties?.gateway).toBeTruthy();
     expect(schema.properties?.agents).toBeTruthy();
     expect(schema.properties?.acp).toBeTruthy();
     expect(schema.properties?.$schema).toBeUndefined();
+    expect(gatewayPortSchema?.title).toBe("Gateway Port");
+    expect(gatewayPortSchema?.description).toContain("TCP port used by the gateway listener");
     expect(res.uiHints.gateway?.label).toBe("Gateway");
     expect(res.uiHints["gateway.auth.token"]?.sensitive).toBe(true);
     expect(res.uiHints["channels.defaults.groupPolicy"]?.label).toBeTruthy();
@@ -125,6 +134,7 @@ describe("config schema", () => {
         }
       | undefined;
     expect(serversNode?.additionalProperties?.properties?.headers).toBeTruthy();
+    expect(serversNode?.additionalProperties?.properties?.transport).toBeTruthy();
   });
 
   it("merges plugin ui hints", () => {
@@ -256,6 +266,19 @@ describe("config schema", () => {
     });
   });
 
+  it("accepts experimental tool flags in the runtime zod schema", () => {
+    const parsed = ToolsSchema.parse({
+      experimental: {
+        planTool: true,
+      },
+    });
+    if (!parsed) {
+      throw new Error("expected parsed tools config");
+    }
+
+    expect(parsed?.experimental?.planTool).toBe(true);
+  });
+
   it("accepts web fetch maxResponseBytes in the runtime zod schema", () => {
     const parsed = ToolsSchema.parse({
       web: {
@@ -266,6 +289,62 @@ describe("config schema", () => {
     });
 
     expect(parsed?.web?.fetch?.maxResponseBytes).toBe(2_000_000);
+  });
+
+  it("accepts WhatsApp Web Baileys socket timing in the runtime zod schema", () => {
+    const parsed = OpenClawSchema.parse({
+      web: {
+        whatsapp: {
+          keepAliveIntervalMs: 15_000,
+          connectTimeoutMs: 60_000,
+          defaultQueryTimeoutMs: 90_000,
+        },
+      },
+    });
+
+    expect(parsed.web?.whatsapp).toEqual({
+      keepAliveIntervalMs: 15_000,
+      connectTimeoutMs: 60_000,
+      defaultQueryTimeoutMs: 90_000,
+    });
+  });
+
+  it("accepts web fetch ssrfPolicy in the runtime zod schema", () => {
+    const parsed = ToolsSchema.parse({
+      web: {
+        fetch: {
+          ssrfPolicy: {
+            allowRfc2544BenchmarkRange: true,
+            allowIpv6UniqueLocalRange: true,
+          },
+        },
+      },
+    });
+
+    expect(parsed?.web?.fetch?.ssrfPolicy).toEqual({
+      allowRfc2544BenchmarkRange: true,
+      allowIpv6UniqueLocalRange: true,
+    });
+  });
+
+  it("rejects allowPrivateNetwork on media-understanding request config", () => {
+    expect(() =>
+      ToolsSchema.parse({
+        media: {
+          image: {
+            models: [
+              {
+                provider: "openai",
+                model: "gpt-4.1-mini",
+                request: {
+                  allowPrivateNetwork: true,
+                },
+              },
+            ],
+          },
+        },
+      }),
+    ).toThrow();
   });
 
   it("rejects unknown keys inside web fetch firecrawl config", () => {
@@ -329,7 +408,13 @@ describe("config schema", () => {
     const lookup = lookupConfigSchema(baseSchema, "agents.list.0.runtime");
     expect(lookup?.path).toBe("agents.list.0.runtime");
     expect(lookup?.hintPath).toBe("agents.list[].runtime");
-    expect(lookup?.schema).toEqual({});
+    // The shallow lookup schema carries field docs, but should not expose
+    // nested composition keywords (allOf, oneOf, etc.).
+    expect(lookup?.schema).not.toHaveProperty("allOf");
+    expect(lookup?.schema).not.toHaveProperty("oneOf");
+    expect(lookup?.schema).not.toHaveProperty("anyOf");
+    expect(lookup?.schema).toHaveProperty("title", "Agent Runtime");
+    expect(lookup?.schema).toHaveProperty("description");
   });
 
   it("matches wildcard ui hints for concrete lookup paths", () => {
@@ -337,6 +422,10 @@ describe("config schema", () => {
     expect(lookup?.path).toBe("agents.list.0.identity.avatar");
     expect(lookup?.hintPath).toBe("agents.list.*.identity.avatar");
     expect(lookup?.hint?.help).toContain("workspace-relative path");
+    expect(lookup?.schema).toMatchObject({
+      title: "Identity Avatar",
+      description: expect.stringContaining("Agent avatar"),
+    });
   });
 
   it("normalizes bracketed lookup paths", () => {

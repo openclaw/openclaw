@@ -3,47 +3,62 @@ import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createCliRuntimeCapture } from "./test-runtime-capture.js";
+import { registerSecretsCli } from "./secrets-cli.js";
 
-const callGatewayFromCli = vi.fn();
-const runSecretsAudit = vi.fn();
-const resolveSecretsAuditExitCode = vi.fn();
-const runSecretsConfigureInteractive = vi.fn();
-const runSecretsApply = vi.fn();
-const confirm = vi.fn();
+const mocks = await vi.hoisted(async () => {
+  const { createCliRuntimeMock } = await import("./test-runtime-mock.js");
+  const runtime = createCliRuntimeMock(vi);
+  return {
+    callGatewayFromCli: vi.fn(),
+    runSecretsAudit: vi.fn(),
+    resolveSecretsAuditExitCode: vi.fn(),
+    runSecretsConfigureInteractive: vi.fn(),
+    runSecretsApply: vi.fn(),
+    confirm: vi.fn(),
+    ...runtime,
+  };
+});
 
-const { defaultRuntime, runtimeLogs, runtimeErrors, resetRuntimeCapture } =
-  createCliRuntimeCapture();
+const {
+  callGatewayFromCli,
+  runSecretsAudit,
+  resolveSecretsAuditExitCode,
+  runSecretsConfigureInteractive,
+  runSecretsApply,
+  confirm,
+  defaultRuntime,
+  runtimeLogs,
+  runtimeErrors,
+} = mocks;
 
 vi.mock("./gateway-rpc.js", () => ({
   addGatewayClientOptions: (cmd: Command) => cmd,
   callGatewayFromCli: (method: string, opts: unknown, params?: unknown, extra?: unknown) =>
-    callGatewayFromCli(method, opts, params, extra),
+    mocks.callGatewayFromCli(method, opts, params, extra),
 }));
 
 vi.mock("../runtime.js", () => ({
-  defaultRuntime,
+  defaultRuntime: mocks.defaultRuntime,
 }));
 
 vi.mock("../secrets/audit.js", () => ({
-  runSecretsAudit: (options: unknown) => runSecretsAudit(options),
+  runSecretsAudit: (options: unknown) => mocks.runSecretsAudit(options),
   resolveSecretsAuditExitCode: (report: unknown, check: boolean) =>
-    resolveSecretsAuditExitCode(report, check),
+    mocks.resolveSecretsAuditExitCode(report, check),
 }));
 
 vi.mock("../secrets/configure.js", () => ({
-  runSecretsConfigureInteractive: (options: unknown) => runSecretsConfigureInteractive(options),
+  runSecretsConfigureInteractive: (options: unknown) =>
+    mocks.runSecretsConfigureInteractive(options),
 }));
 
 vi.mock("../secrets/apply.js", () => ({
-  runSecretsApply: (options: unknown) => runSecretsApply(options),
+  runSecretsApply: (options: unknown) => mocks.runSecretsApply(options),
 }));
 
 vi.mock("@clack/prompts", () => ({
-  confirm: (options: unknown) => confirm(options),
+  confirm: (options: unknown) => mocks.confirm(options),
 }));
-
-const { registerSecretsCli } = await import("./secrets-cli.js");
 
 function createManualSecretsPlan() {
   return {
@@ -126,13 +141,19 @@ describe("secrets CLI", () => {
   };
 
   beforeEach(() => {
-    resetRuntimeCapture();
+    runtimeLogs.length = 0;
+    runtimeErrors.length = 0;
     callGatewayFromCli.mockReset();
     runSecretsAudit.mockReset();
     resolveSecretsAuditExitCode.mockReset();
     runSecretsConfigureInteractive.mockReset();
     runSecretsApply.mockReset();
     confirm.mockReset();
+    defaultRuntime.log.mockClear();
+    defaultRuntime.error.mockClear();
+    defaultRuntime.writeStdout.mockClear();
+    defaultRuntime.writeJson.mockClear();
+    defaultRuntime.exit.mockClear();
   });
 
   it("calls secrets.reload and prints human output", async () => {

@@ -1,26 +1,33 @@
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
-import { loadConfig } from "../config/config.js";
+import { extractTextFromChatContent } from "../shared/chat-content.js";
 import {
+  captureSubagentCompletionReplyUsing,
+  readLatestSubagentOutputWithRetryUsing,
+} from "./subagent-announce-capture.js";
+import {
+  callGateway,
+  getRuntimeConfig,
   loadSessionStore,
   resolveAgentIdFromSessionKey,
   resolveStorePath,
-} from "../config/sessions.js";
-import { callGateway } from "../gateway/call.js";
-import { extractTextFromChatContent } from "../shared/chat-content.js";
+} from "./subagent-announce.runtime.js";
+import { assistantCallsSessionsYield, isSessionsYieldToolResult } from "./subagent-yield-output.js";
 import { readLatestAssistantReply } from "./tools/agent-step.js";
-import { sanitizeTextContent, extractAssistantText } from "./tools/sessions-helpers.js";
-import { isAnnounceSkip } from "./tools/sessions-send-helpers.js";
+import { extractAssistantText, sanitizeTextContent } from "./tools/session-message-text.js";
+import { isAnnounceSkip } from "./tools/sessions-send-tokens.js";
 
 const FAST_TEST_RETRY_INTERVAL_MS = 8;
 
 type SubagentAnnounceOutputDeps = {
   callGateway: typeof callGateway;
-  loadConfig: typeof loadConfig;
+  getRuntimeConfig: typeof getRuntimeConfig;
+  readLatestAssistantReply: typeof readLatestAssistantReply;
 };
 
 const defaultSubagentAnnounceOutputDeps: SubagentAnnounceOutputDeps = {
   callGateway,
-  loadConfig,
+  getRuntimeConfig,
+  readLatestAssistantReply,
 };
 
 let subagentAnnounceOutputDeps: SubagentAnnounceOutputDeps = defaultSubagentAnnounceOutputDeps;
@@ -40,6 +47,7 @@ type SubagentOutputSnapshot = {
   latestRawText?: string;
   assistantFragments: string[];
   toolCallCount: number;
+  waitingForContinuation?: boolean;
 };
 
 export type AgentWaitResult = {
@@ -47,12 +55,44 @@ export type AgentWaitResult = {
   startedAt?: number;
   endedAt?: number;
   error?: string;
+  stopReason?: string;
+  livenessState?: string;
+  yielded?: boolean;
 };
 
 export type SubagentRunOutcome = {
   status: "ok" | "error" | "timeout" | "unknown";
   error?: string;
+  startedAt?: number;
+  endedAt?: number;
+  elapsedMs?: number;
 };
+
+function readFiniteNumber(value: number | undefined): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+export function withSubagentOutcomeTiming(
+  outcome: SubagentRunOutcome,
+  timing: {
+    startedAt?: number;
+    endedAt?: number;
+  },
+): SubagentRunOutcome {
+  const startedAt = readFiniteNumber(timing.startedAt) ?? readFiniteNumber(outcome.startedAt);
+  const endedAt = readFiniteNumber(timing.endedAt) ?? readFiniteNumber(outcome.endedAt);
+  const nextTiming: Pick<SubagentRunOutcome, "startedAt" | "endedAt" | "elapsedMs"> = {};
+  if (typeof startedAt === "number") {
+    nextTiming.startedAt = startedAt;
+  }
+  if (typeof endedAt === "number") {
+    nextTiming.endedAt = endedAt;
+  }
+  if (typeof startedAt === "number" && typeof endedAt === "number") {
+    nextTiming.elapsedMs = Math.max(0, endedAt - startedAt);
+  }
+  return { ...outcome, ...nextTiming };
+}
 
 function extractToolResultText(content: unknown): string {
   if (typeof content === "string") {
@@ -117,17 +157,10 @@ function extractSubagentOutputText(message: unknown): string {
   const role = (message as { role?: unknown }).role;
   const content = (message as { content?: unknown }).content;
   if (role === "assistant") {
-    const assistantText = extractAssistantText(message);
-    if (assistantText) {
-      return assistantText;
-    }
     if (typeof content === "string") {
       return sanitizeTextContent(content);
     }
-    if (Array.isArray(content)) {
-      return extractInlineTextContent(content);
-    }
-    return "";
+    return extractAssistantText(message) ?? "";
   }
   if (role === "toolResult" || role === "tool") {
     return extractToolResultText((message as ToolResultMessage).content);
@@ -171,6 +204,7 @@ function summarizeSubagentOutputHistory(messages: Array<unknown>): SubagentOutpu
     assistantFragments: [],
     toolCallCount: 0,
   };
+  let previousAssistantCalledYield = false;
   for (const message of messages) {
     if (!message || typeof message !== "object") {
       continue;
@@ -178,25 +212,50 @@ function summarizeSubagentOutputHistory(messages: Array<unknown>): SubagentOutpu
     const role = (message as { role?: unknown }).role;
     if (role === "assistant") {
       snapshot.toolCallCount += countAssistantToolCalls((message as { content?: unknown }).content);
+      if (assistantCallsSessionsYield(message)) {
+        snapshot.latestAssistantText = undefined;
+        snapshot.latestRawText = undefined;
+        snapshot.latestSilentText = undefined;
+        snapshot.assistantFragments = [];
+        snapshot.waitingForContinuation = true;
+        previousAssistantCalledYield = true;
+        continue;
+      }
       const text = extractSubagentOutputText(message).trim();
       if (!text) {
+        previousAssistantCalledYield = false;
         continue;
       }
       if (isAnnounceSkip(text) || isSilentReplyText(text, SILENT_REPLY_TOKEN)) {
         snapshot.latestSilentText = text;
         snapshot.latestAssistantText = undefined;
         snapshot.assistantFragments = [];
+        snapshot.waitingForContinuation = false;
+        previousAssistantCalledYield = false;
         continue;
       }
       snapshot.latestSilentText = undefined;
       snapshot.latestAssistantText = text;
       snapshot.assistantFragments.push(text);
+      snapshot.waitingForContinuation = false;
+      previousAssistantCalledYield = false;
+      continue;
+    }
+    if (isSessionsYieldToolResult(message, previousAssistantCalledYield)) {
+      snapshot.latestAssistantText = undefined;
+      snapshot.latestRawText = undefined;
+      snapshot.latestSilentText = undefined;
+      snapshot.assistantFragments = [];
+      snapshot.waitingForContinuation = true;
+      previousAssistantCalledYield = false;
       continue;
     }
     const text = extractSubagentOutputText(message).trim();
     if (text) {
       snapshot.latestRawText = text;
+      snapshot.waitingForContinuation = false;
     }
+    previousAssistantCalledYield = false;
   }
   return snapshot;
 }
@@ -228,6 +287,9 @@ function selectSubagentOutputText(
   snapshot: SubagentOutputSnapshot,
   outcome?: SubagentRunOutcome,
 ): string | undefined {
+  if (snapshot.waitingForContinuation) {
+    return undefined;
+  }
   if (snapshot.latestSilentText) {
     return snapshot.latestSilentText;
   }
@@ -245,16 +307,23 @@ export async function readSubagentOutput(
   sessionKey: string,
   outcome?: SubagentRunOutcome,
 ): Promise<string | undefined> {
-  const history = await subagentAnnounceOutputDeps.callGateway<{ messages?: Array<unknown> }>({
+  const history = await subagentAnnounceOutputDeps.callGateway({
     method: "chat.history",
     params: { sessionKey, limit: 100 },
   });
   const messages = Array.isArray(history?.messages) ? history.messages : [];
-  const selected = selectSubagentOutputText(summarizeSubagentOutputHistory(messages), outcome);
+  const snapshot = summarizeSubagentOutputHistory(messages);
+  const selected = selectSubagentOutputText(snapshot, outcome);
   if (selected?.trim()) {
     return selected;
   }
-  const latestAssistant = await readLatestAssistantReply({ sessionKey, limit: 100 });
+  if (snapshot.waitingForContinuation) {
+    return undefined;
+  }
+  const latestAssistant = await subagentAnnounceOutputDeps.readLatestAssistantReply({
+    sessionKey,
+    limit: 100,
+  });
   return latestAssistant?.trim() ? latestAssistant : undefined;
 }
 
@@ -263,24 +332,13 @@ export async function readLatestSubagentOutputWithRetry(params: {
   maxWaitMs: number;
   outcome?: SubagentRunOutcome;
 }): Promise<string | undefined> {
-  const retryIntervalMs = isFastTestMode() ? FAST_TEST_RETRY_INTERVAL_MS : 100;
-  const maxWaitMs = Math.max(0, Math.min(params.maxWaitMs, 15_000));
-  let waitedMs = 0;
-  let result: string | undefined;
-  while (waitedMs < maxWaitMs) {
-    result = await readSubagentOutput(params.sessionKey, params.outcome);
-    if (result?.trim()) {
-      return result;
-    }
-    const remainingMs = maxWaitMs - waitedMs;
-    if (remainingMs <= 0) {
-      break;
-    }
-    const sleepMs = Math.min(retryIntervalMs, remainingMs);
-    await new Promise((resolve) => setTimeout(resolve, sleepMs));
-    waitedMs += sleepMs;
-  }
-  return result;
+  return await readLatestSubagentOutputWithRetryUsing({
+    sessionKey: params.sessionKey,
+    maxWaitMs: params.maxWaitMs,
+    outcome: params.outcome,
+    retryIntervalMs: isFastTestMode() ? FAST_TEST_RETRY_INTERVAL_MS : 100,
+    readSubagentOutput,
+  });
 }
 
 export async function waitForSubagentRunOutcome(
@@ -288,7 +346,7 @@ export async function waitForSubagentRunOutcome(
   timeoutMs: number,
 ): Promise<AgentWaitResult> {
   const waitMs = Math.max(0, Math.floor(timeoutMs));
-  return await subagentAnnounceOutputDeps.callGateway<AgentWaitResult>({
+  return await subagentAnnounceOutputDeps.callGateway({
     method: "agent.wait",
     params: {
       runId,
@@ -309,33 +367,36 @@ export function applySubagentWaitOutcome(params: {
     startedAt: params.startedAt,
     endedAt: params.endedAt,
   };
-  const waitError = typeof params.wait?.error === "string" ? params.wait.error : undefined;
-  if (params.wait?.status === "timeout") {
-    next.outcome = { status: "timeout" };
-  } else if (params.wait?.status === "error") {
-    next.outcome = { status: "error", error: waitError };
-  } else if (params.wait?.status === "ok") {
-    next.outcome = { status: "ok" };
-  }
-  if (typeof params.wait?.startedAt === "number" && !next.startedAt) {
+  if (typeof params.wait?.startedAt === "number" && typeof next.startedAt !== "number") {
     next.startedAt = params.wait.startedAt;
   }
-  if (typeof params.wait?.endedAt === "number" && !next.endedAt) {
+  if (typeof params.wait?.endedAt === "number" && typeof next.endedAt !== "number") {
     next.endedAt = params.wait.endedAt;
   }
+  const waitError = typeof params.wait?.error === "string" ? params.wait.error : undefined;
+  let outcome = next.outcome;
+  if (params.wait?.status === "timeout") {
+    outcome = { status: "timeout" };
+  } else if (params.wait?.status === "error") {
+    outcome = { status: "error", error: waitError };
+  } else if (params.wait?.status === "ok") {
+    outcome = { status: "ok" };
+  }
+  next.outcome = outcome ? withSubagentOutcomeTiming(outcome, next) : undefined;
   return next;
 }
 
 export async function captureSubagentCompletionReply(
   sessionKey: string,
+  options?: { waitForReply?: boolean; outcome?: SubagentRunOutcome },
 ): Promise<string | undefined> {
-  const immediate = await readSubagentOutput(sessionKey);
-  if (immediate?.trim()) {
-    return immediate;
-  }
-  return await readLatestSubagentOutputWithRetry({
+  return await captureSubagentCompletionReplyUsing({
     sessionKey,
+    waitForReply: options?.waitForReply,
     maxWaitMs: isFastTestMode() ? 50 : 1_500,
+    retryIntervalMs: isFastTestMode() ? FAST_TEST_RETRY_INTERVAL_MS : 100,
+    readSubagentOutput: async (nextSessionKey) =>
+      await readSubagentOutput(nextSessionKey, options?.outcome),
   });
 }
 
@@ -500,7 +561,7 @@ export async function buildCompactAnnounceStatsLine(params: {
   startedAt?: number;
   endedAt?: number;
 }) {
-  const cfg = subagentAnnounceOutputDeps.loadConfig();
+  const cfg = subagentAnnounceOutputDeps.getRuntimeConfig();
   const agentId = resolveAgentIdFromSessionKey(params.sessionKey);
   const storePath = resolveStorePath(cfg.session?.store, { agentId });
   let entry = loadSessionStore(storePath)[params.sessionKey];

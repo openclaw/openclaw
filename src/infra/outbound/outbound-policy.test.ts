@@ -1,5 +1,4 @@
-import { Container, Separator, TextDisplay } from "@buape/carbon";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { vi } from "vitest";
 import type { ChannelMessageActionName } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -9,38 +8,36 @@ let buildCrossContextDecoration: typeof import("./outbound-policy.js").buildCros
 let enforceCrossContextPolicy: typeof import("./outbound-policy.js").enforceCrossContextPolicy;
 let shouldApplyCrossContextMarker: typeof import("./outbound-policy.js").shouldApplyCrossContextMarker;
 
-class TestDiscordUiContainer extends Container {}
-
 const mocks = vi.hoisted(() => ({
-  getChannelMessageAdapter: vi.fn((channel: string) =>
-    channel === "discord"
+  getChannelPlugin: vi.fn((channel: string) =>
+    channel === "richchat"
       ? {
-          supportsComponentsV2: true,
-          buildCrossContextComponents: ({
-            originLabel,
-            message,
-          }: {
-            originLabel: string;
-            message: string;
-          }) => {
-            const trimmed = message.trim();
-            const components: Array<TextDisplay | Separator> = [];
-            if (trimmed) {
-              components.push(new TextDisplay(message));
-              components.push(new Separator({ divider: true, spacing: "small" }));
-            }
-            components.push(new TextDisplay(`*From ${originLabel}*`));
-            return [new TestDiscordUiContainer(components)];
+          messaging: {
+            buildCrossContextPresentation: ({
+              originLabel,
+              message,
+            }: {
+              originLabel: string;
+              message: string;
+            }) => {
+              const trimmed = message.trim();
+              return {
+                blocks: [
+                  ...(trimmed ? [{ type: "text" as const, text: message }] : []),
+                  { type: "context" as const, text: `From ${originLabel}` },
+                ],
+              };
+            },
           },
         }
-      : { supportsComponentsV2: false },
+      : undefined,
   ),
   normalizeTargetForProvider: vi.fn((channel: string, raw: string) => {
     const trimmed = raw.trim();
     if (!trimmed) {
       return undefined;
     }
-    if (channel === "slack") {
+    if (channel === "workspace") {
       return trimmed.replace(/^#/, "");
     }
     return trimmed;
@@ -53,18 +50,31 @@ const mocks = vi.hoisted(() => ({
   ),
 }));
 
-const slackConfig = {
+vi.mock("../../channels/plugins/index.js", () => ({
+  getChannelPlugin: mocks.getChannelPlugin,
+}));
+
+vi.mock("./target-normalization.js", () => ({
+  normalizeTargetForProvider: mocks.normalizeTargetForProvider,
+}));
+
+vi.mock("./target-resolver.js", () => ({
+  formatTargetDisplay: mocks.formatTargetDisplay,
+  lookupDirectoryDisplay: mocks.lookupDirectoryDisplay,
+}));
+
+const workspaceConfig = {
   channels: {
-    slack: {
-      botToken: "xoxb-test",
-      appToken: "xapp-test",
+    workspace: {
+      botToken: "workspace-test",
+      appToken: "workspace-app-test",
     },
   },
 } as OpenClawConfig;
 
-const discordConfig = {
+const richChatConfig = {
   channels: {
-    discord: {},
+    richchat: {},
   },
 } as OpenClawConfig;
 
@@ -96,19 +106,7 @@ function expectCrossContextPolicyResult(params: {
 }
 
 describe("outbound policy helpers", () => {
-  beforeEach(async () => {
-    vi.resetModules();
-    vi.clearAllMocks();
-    vi.doMock("./channel-adapters.js", () => ({
-      getChannelMessageAdapter: mocks.getChannelMessageAdapter,
-    }));
-    vi.doMock("./target-normalization.js", () => ({
-      normalizeTargetForProvider: mocks.normalizeTargetForProvider,
-    }));
-    vi.doMock("./target-resolver.js", () => ({
-      formatTargetDisplay: mocks.formatTargetDisplay,
-      lookupDirectoryDisplay: mocks.lookupDirectoryDisplay,
-    }));
+  beforeAll(async () => {
     ({
       applyCrossContextDecoration,
       buildCrossContextDecoration,
@@ -117,92 +115,95 @@ describe("outbound policy helpers", () => {
     } = await import("./outbound-policy.js"));
   });
 
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
   it.each([
     {
       cfg: {
-        ...slackConfig,
+        ...workspaceConfig,
         tools: {
           message: { crossContext: { allowAcrossProviders: true } },
         },
       } as OpenClawConfig,
-      channel: "telegram",
+      channel: "forum",
       action: "send" as const,
-      to: "telegram:@ops",
+      to: "forum:@ops",
       currentChannelId: "C12345678",
-      currentChannelProvider: "slack",
+      currentChannelProvider: "workspace",
       expected: "allow" as const,
     },
     {
-      cfg: slackConfig,
-      channel: "telegram",
+      cfg: workspaceConfig,
+      channel: "forum",
       action: "send" as const,
-      to: "telegram:@ops",
+      to: "forum:@ops",
       currentChannelId: "C12345678",
-      currentChannelProvider: "slack",
-      expected: /target provider "telegram" while bound to "slack"/,
+      currentChannelProvider: "workspace",
+      expected: /target provider "forum" while bound to "workspace"/,
     },
     {
       cfg: {
-        ...slackConfig,
+        ...workspaceConfig,
         tools: {
           message: { crossContext: { allowWithinProvider: false } },
         },
       } as OpenClawConfig,
-      channel: "slack",
+      channel: "workspace",
       action: "send" as const,
       to: "C999",
       currentChannelId: "C123",
-      currentChannelProvider: "slack",
+      currentChannelProvider: "workspace",
       expected: /target="C999" while bound to "C123"/,
     },
     {
       cfg: {
-        ...slackConfig,
+        ...workspaceConfig,
         tools: {
           message: { crossContext: { allowWithinProvider: false } },
         },
       } as OpenClawConfig,
-      channel: "slack",
+      channel: "workspace",
       action: "upload-file" as const,
       to: "C999",
       currentChannelId: "C123",
-      currentChannelProvider: "slack",
+      currentChannelProvider: "workspace",
       expected: /target="C999" while bound to "C123"/,
     },
   ])("enforces cross-context policy for %j", (params) => {
     expectCrossContextPolicyResult(params);
   });
 
-  it("uses components when available and preferred", async () => {
+  it("uses presentation when available and preferred", async () => {
     const decoration = await buildCrossContextDecoration({
-      cfg: discordConfig,
-      channel: "discord",
+      cfg: richChatConfig,
+      channel: "richchat",
       target: "123",
-      toolContext: { currentChannelId: "C12345678", currentChannelProvider: "discord" },
+      toolContext: { currentChannelId: "C12345678", currentChannelProvider: "richchat" },
     });
 
     expect(decoration).not.toBeNull();
     const applied = applyCrossContextDecoration({
       message: "hello",
       decoration: decoration!,
-      preferComponents: true,
+      preferPresentation: true,
     });
 
-    expect(applied.usedComponents).toBe(true);
-    expect(applied.componentsBuilder).toBeDefined();
-    expect(applied.componentsBuilder?.("hello").length).toBeGreaterThan(0);
+    expect(applied.usedPresentation).toBe(true);
+    expect(applied.presentation?.blocks.length).toBeGreaterThan(0);
     expect(applied.message).toBe("hello");
   });
 
   it("returns null when decoration is skipped and falls back to text markers", async () => {
     await expect(
       buildCrossContextDecoration({
-        cfg: discordConfig,
-        channel: "discord",
+        cfg: richChatConfig,
+        channel: "richchat",
         target: "123",
         toolContext: {
           currentChannelId: "C12345678",
-          currentChannelProvider: "discord",
+          currentChannelProvider: "richchat",
           skipCrossContextDecoration: true,
         },
       }),
@@ -211,11 +212,11 @@ describe("outbound policy helpers", () => {
     const applied = applyCrossContextDecoration({
       message: "hello",
       decoration: { prefix: "[from ops] ", suffix: " [cc]" },
-      preferComponents: true,
+      preferPresentation: true,
     });
     expect(applied).toEqual({
       message: "[from ops] hello [cc]",
-      usedComponents: false,
+      usedPresentation: false,
     });
   });
 

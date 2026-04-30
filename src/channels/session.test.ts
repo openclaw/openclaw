@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MsgContext } from "../auto-reply/templating.js";
 
 const recordSessionMetaFromInboundMock = vi.fn((_args?: unknown) => Promise.resolve(undefined));
@@ -21,9 +21,11 @@ describe("recordInboundSession", () => {
     OriginatingTo: "demo-channel:1234",
   };
 
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeAll(async () => {
     ({ recordInboundSession } = await import("./session.js"));
+  });
+
+  beforeEach(() => {
     recordSessionMetaFromInboundMock.mockClear();
     updateLastRouteMock.mockClear();
   });
@@ -129,5 +131,32 @@ describe("recordInboundSession", () => {
       ownerRecipient: "1234",
       senderRecipient: "9999",
     });
+  });
+
+  it("forwards session creation policy to last-route updates", async () => {
+    await recordInboundSession({
+      storePath: "/tmp/openclaw-session-store.json",
+      sessionKey: "agent:main:demo-channel:1234:thread:42",
+      ctx,
+      createIfMissing: false,
+      updateLastRoute: {
+        sessionKey: "agent:main:main",
+        channel: "demo-channel",
+        to: "demo-channel:1234",
+      },
+      onRecordError: vi.fn(),
+    });
+
+    expect(recordSessionMetaFromInboundMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        createIfMissing: false,
+      }),
+    );
+    expect(updateLastRouteMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:main:main",
+        createIfMissing: false,
+      }),
+    );
   });
 });

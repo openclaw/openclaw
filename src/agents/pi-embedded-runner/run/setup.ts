@@ -1,15 +1,23 @@
-import type { Api, Model } from "@mariozechner/pi-ai";
-import type { OpenClawConfig } from "../../../config/config.js";
-import type { PluginHookBeforeAgentStartResult } from "../../../plugins/types.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import type { ProviderRuntimeModel } from "../../../plugins/provider-runtime-model.types.js";
+import type {
+  PluginHookBeforeAgentStartResult,
+  PluginHookBeforeModelResolveAttachment,
+  PluginHookBeforeModelResolveEvent,
+} from "../../../plugins/types.js";
 import {
   CONTEXT_WINDOW_HARD_MIN_TOKENS,
   CONTEXT_WINDOW_WARN_BELOW_TOKENS,
   evaluateContextWindowGuard,
+  formatContextWindowBlockMessage,
+  formatContextWindowWarningMessage,
   resolveContextWindowInfo,
+  type ContextWindowInfo,
 } from "../../context-window-guard.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import { FailoverError } from "../../failover-error.js";
 import { log } from "../logger.js";
+import { readPiModelContextTokens } from "../model-context-tokens.js";
 
 type HookContext = {
   agentId?: string;
@@ -24,7 +32,7 @@ type HookContext = {
 type HookRunnerLike = {
   hasHooks(hookName: string): boolean;
   runBeforeModelResolve(
-    input: { prompt: string },
+    input: PluginHookBeforeModelResolveEvent,
     context: HookContext,
   ): Promise<{ providerOverride?: string; modelOverride?: string } | undefined>;
   runBeforeAgentStart(
@@ -35,6 +43,7 @@ type HookRunnerLike = {
 
 export async function resolveHookModelSelection(params: {
   prompt: string;
+  attachments?: PluginHookBeforeModelResolveAttachment[];
   provider: string;
   modelId: string;
   hookRunner?: HookRunnerLike | null;
@@ -53,10 +62,10 @@ export async function resolveHookModelSelection(params: {
   // fields if present. New hook takes precedence when both are set.
   if (hookRunner?.hasHooks("before_model_resolve")) {
     try {
-      modelResolveOverride = await hookRunner.runBeforeModelResolve(
-        { prompt: params.prompt },
-        params.hookContext,
-      );
+      const event: PluginHookBeforeModelResolveEvent = params.attachments
+        ? { prompt: params.prompt, attachments: params.attachments }
+        : { prompt: params.prompt };
+      modelResolveOverride = await hookRunner.runBeforeModelResolve(event, params.hookContext);
     } catch (hookErr) {
       log.warn(`before_model_resolve hook failed: ${String(hookErr)}`);
     }
@@ -95,16 +104,32 @@ export async function resolveHookModelSelection(params: {
   };
 }
 
+export function buildBeforeModelResolveAttachments(
+  images: readonly { mimeType?: string }[] | undefined,
+): PluginHookBeforeModelResolveAttachment[] | undefined {
+  if (!images?.length) {
+    return undefined;
+  }
+  return images.map((img) => ({
+    kind: "image",
+    mimeType: img.mimeType,
+  }));
+}
+
 export function resolveEffectiveRuntimeModel(params: {
   cfg: OpenClawConfig | undefined;
   provider: string;
   modelId: string;
-  runtimeModel: Model<Api>;
-}) {
+  runtimeModel: ProviderRuntimeModel;
+}): {
+  ctxInfo: ContextWindowInfo;
+  effectiveModel: ProviderRuntimeModel;
+} {
   const ctxInfo = resolveContextWindowInfo({
     cfg: params.cfg,
     provider: params.provider,
     modelId: params.modelId,
+    modelContextTokens: readPiModelContextTokens(params.runtimeModel),
     modelContextWindow: params.runtimeModel.contextWindow,
     defaultTokens: DEFAULT_CONTEXT_TOKENS,
   });
@@ -120,19 +145,33 @@ export function resolveEffectiveRuntimeModel(params: {
     warnBelowTokens: CONTEXT_WINDOW_WARN_BELOW_TOKENS,
     hardMinTokens: CONTEXT_WINDOW_HARD_MIN_TOKENS,
   });
+  const runtimeBaseUrl =
+    typeof (params.runtimeModel as { baseUrl?: unknown }).baseUrl === "string"
+      ? (params.runtimeModel as { baseUrl: string }).baseUrl
+      : undefined;
   if (ctxGuard.shouldWarn) {
     log.warn(
-      `low context window: ${params.provider}/${params.modelId} ctx=${ctxGuard.tokens} (warn<${CONTEXT_WINDOW_WARN_BELOW_TOKENS}) source=${ctxGuard.source}`,
+      formatContextWindowWarningMessage({
+        provider: params.provider,
+        modelId: params.modelId,
+        guard: ctxGuard,
+        runtimeBaseUrl,
+      }),
     );
   }
   if (ctxGuard.shouldBlock) {
+    const message = formatContextWindowBlockMessage({
+      guard: ctxGuard,
+      runtimeBaseUrl,
+    });
     log.error(
-      `blocked model (context window too small): ${params.provider}/${params.modelId} ctx=${ctxGuard.tokens} (min=${CONTEXT_WINDOW_HARD_MIN_TOKENS}) source=${ctxGuard.source}`,
+      `blocked model (context window too small): ${params.provider}/${params.modelId} ctx=${ctxGuard.tokens} (min=${CONTEXT_WINDOW_HARD_MIN_TOKENS}) source=${ctxGuard.source}; ${message}`,
     );
-    throw new FailoverError(
-      `Model context window too small (${ctxGuard.tokens} tokens). Minimum is ${CONTEXT_WINDOW_HARD_MIN_TOKENS}.`,
-      { reason: "unknown", provider: params.provider, model: params.modelId },
-    );
+    throw new FailoverError(message, {
+      reason: "unknown",
+      provider: params.provider,
+      model: params.modelId,
+    });
   }
 
   return {

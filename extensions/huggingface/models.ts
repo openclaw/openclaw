@@ -1,7 +1,9 @@
-import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
+import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-types";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 
 export const HUGGINGFACE_BASE_URL = "https://router.huggingface.co/v1";
 export const HUGGINGFACE_POLICY_SUFFIXES = ["cheapest", "fastest"] as const;
+export const HUGGINGFACE_DISCOVERY_TIMEOUT_MS = 30_000;
 
 const HUGGINGFACE_DEFAULT_COST = {
   input: 0,
@@ -71,7 +73,7 @@ export const HUGGINGFACE_MODEL_CATALOG: ModelDefinitionConfig[] = [
 ];
 
 export function isHuggingfacePolicyLocked(modelRef: string): boolean {
-  const ref = String(modelRef).trim();
+  const ref = modelRef.trim();
   return HUGGINGFACE_POLICY_SUFFIXES.some((suffix) => ref.endsWith(`:${suffix}`) || ref === suffix);
 }
 
@@ -90,7 +92,7 @@ export function buildHuggingfaceModelDefinition(
 }
 
 function isReasoningModelHeuristic(modelId: string): boolean {
-  const lower = modelId.toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(modelId);
   return (
     lower.includes("r1") ||
     lower.includes("reason") ||
@@ -123,7 +125,10 @@ function displayNameFromApiEntry(entry: HFModelEntry, inferredName: string): str
   return inferredName;
 }
 
-export async function discoverHuggingfaceModels(apiKey: string): Promise<ModelDefinitionConfig[]> {
+export async function discoverHuggingfaceModels(
+  apiKey: string,
+  timeoutMs = HUGGINGFACE_DISCOVERY_TIMEOUT_MS,
+): Promise<ModelDefinitionConfig[]> {
   if (process.env.VITEST === "true" || process.env.NODE_ENV === "test") {
     return HUGGINGFACE_MODEL_CATALOG.map(buildHuggingfaceModelDefinition);
   }
@@ -135,7 +140,7 @@ export async function discoverHuggingfaceModels(apiKey: string): Promise<ModelDe
 
   try {
     const response = await fetch(`${HUGGINGFACE_BASE_URL}/models`, {
-      signal: AbortSignal.timeout(10_000),
+      signal: AbortSignal.timeout(timeoutMs),
       headers: {
         Authorization: `Bearer ${trimmedKey}`,
         "Content-Type": "application/json",
