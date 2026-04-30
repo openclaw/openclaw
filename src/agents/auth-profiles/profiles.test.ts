@@ -192,6 +192,39 @@ describe("promoteAuthProfileInOrder", () => {
     });
   });
 
+  it("normalizes legacy OpenAI Codex OAuth field aliases on load", async () => {
+    await withAuthProfileTestState("openclaw-auth-codex-legacy-aliases-", ({ agentDir }) => {
+      fs.mkdirSync(agentDir, { recursive: true });
+      const expires = Date.now() + 60_000;
+      fs.writeFileSync(
+        path.join(agentDir, "auth-profiles.json"),
+        JSON.stringify({
+          version: AUTH_STORE_VERSION,
+          profiles: {
+            "openai-codex:default": {
+              type: "oauth",
+              provider: "openai-codex",
+              access_token: "legacy-access-token",
+              refreshToken: "legacy-refresh-token",
+              expires_at: String(expires),
+              account_id: "acct_legacy",
+            },
+          },
+        }),
+      );
+
+      const credential = loadPersistedAuthProfileStore(agentDir)?.profiles["openai-codex:default"];
+
+      expectOAuthCredentialFields(credential, {
+        provider: "openai-codex",
+        access: "legacy-access-token",
+        refresh: "legacy-refresh-token",
+        expires,
+        accountId: "acct_legacy",
+      });
+    });
+  });
+
   it("preserves access-only openai oauth credentials inline", async () => {
     await withAuthProfileTestState("openclaw-auth-profile-access-only-", ({ agentDir }) => {
       fs.mkdirSync(agentDir, { recursive: true });

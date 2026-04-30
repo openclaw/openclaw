@@ -115,6 +115,54 @@ function normalizeCommonCredentialFields(entry: Record<string, unknown>): Record
   return normalized;
 }
 
+function normalizeStringFieldAlias(
+  entry: Record<string, unknown>,
+  canonicalField: string,
+  aliases: readonly string[],
+): void {
+  if (canonicalField in entry) {
+    return;
+  }
+  for (const alias of aliases) {
+    const value = entry[alias];
+    if (typeof value === "string") {
+      entry[canonicalField] = value;
+      return;
+    }
+  }
+}
+
+function normalizeNumberFieldAlias(
+  entry: Record<string, unknown>,
+  canonicalField: string,
+  aliases: readonly string[],
+): void {
+  if (canonicalField in entry) {
+    return;
+  }
+  for (const alias of aliases) {
+    const value = entry[alias];
+    if (typeof value === "number" && Number.isFinite(value)) {
+      entry[canonicalField] = value;
+      return;
+    }
+    if (typeof value === "string" && value.trim().length > 0) {
+      const parsed = Number(value);
+      if (Number.isFinite(parsed)) {
+        entry[canonicalField] = parsed;
+        return;
+      }
+    }
+  }
+}
+
+function normalizeLegacyOpenAiCodexOAuthAliases(entry: Record<string, unknown>): void {
+  normalizeStringFieldAlias(entry, "access", ["access_token", "accessToken"]);
+  normalizeStringFieldAlias(entry, "refresh", ["refresh_token", "refreshToken"]);
+  normalizeNumberFieldAlias(entry, "expires", ["expires_at", "expiresAt"]);
+  normalizeStringFieldAlias(entry, "accountId", ["account_id", "accountID"]);
+}
+
 function normalizeRawCredentialEntry(raw: Record<string, unknown>): Partial<AuthProfileCredential> {
   const entry = { ...raw } as Record<string, unknown>;
   if (!("type" in entry) && typeof entry["mode"] === "string") {
@@ -132,6 +180,13 @@ function normalizeRawCredentialEntry(raw: Record<string, unknown>): Partial<Auth
   }
   normalizeSecretBackedField({ entry, valueField: "key", refField: "keyRef" });
   normalizeSecretBackedField({ entry, valueField: "token", refField: "tokenRef" });
+  if (
+    entry.type === "oauth" &&
+    typeof entry.provider === "string" &&
+    normalizeProviderId(entry.provider) === "openai-codex"
+  ) {
+    normalizeLegacyOpenAiCodexOAuthAliases(entry);
+  }
   if (entry.type === "api_key") {
     const normalized: Record<string, unknown> = {
       type: "api_key",
