@@ -447,6 +447,7 @@ export function startManagedGatewayConfigReloader(params: ManagedGatewayConfigRe
         phase: "reload",
         reason: `reload-${reason}`,
         configPath: snapshot.path,
+        issues: [...snapshot.issues, ...snapshot.legacyIssues],
       });
     },
     subscribeToWrites: params.subscribeToWrites,

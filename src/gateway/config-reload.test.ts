@@ -748,7 +748,7 @@ describe("startGatewayConfigReloader", () => {
       "valid-config",
     );
     expect(log.warn).toHaveBeenCalledWith(
-      "config reload restored last-known-good config after invalid-config",
+      "config reload restored last-known-good config after invalid-config; Rejected validation details: gateway.mode: Expected string.",
     );
 
     await reloader.stop();
