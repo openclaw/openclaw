@@ -8,6 +8,8 @@ Feishu currently uses `channels.feishu.streaming` for CardKit live streaming. Th
 
 This PR keeps the existing `streaming: true` behavior unchanged and adds a new explicit mode for the new semantics.
 
+`streaming` remains the top-level enable/disable switch for Feishu streaming delivery. `streamingMode` only applies when `streaming` is enabled.
+
 ## Changes
 
 - Add `channels.feishu.streamingMode` with supported values:
@@ -28,6 +30,17 @@ This PR keeps the existing `streaming: true` behavior unchanged and adds a new e
 - Update Feishu config schema, generated config metadata, docs, and tests.
 
 ## Example
+
+Behavior by configuration:
+
+| `streaming` | `streamingMode` | Behavior                                                                                                                                                |
+| ----------- | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `false`     | `"card"`        | Streaming is disabled. Feishu sends replies through the regular non-streaming path; the mode value is ignored.                                          |
+| `false`     | `"segment"`     | Streaming is disabled. Partial text is not accumulated and pause-point segment flushing is not enabled; the mode value is ignored.                      |
+| `true`      | `"card"`        | Existing CardKit streaming behavior. Feishu updates one live card and closes it with the final content.                                                 |
+| `true`      | `"segment"`     | New pause-point segment behavior. Feishu accumulates partial text and sends complete segments on tool start, idle, block, tool payload, or final reply. |
+
+Use segment delivery with:
 
 ```json5
 {
