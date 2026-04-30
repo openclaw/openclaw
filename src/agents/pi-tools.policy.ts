@@ -27,7 +27,11 @@ import {
   type SubagentSessionRole,
 } from "./subagent-capabilities.js";
 import { isToolAllowedByPolicies, isToolAllowedByPolicyName } from "./tool-policy-match.js";
-import { normalizeToolName } from "./tool-policy.js";
+import {
+  mergeAlsoAllowPolicy,
+  normalizeToolName,
+  resolveToolProfilePolicy,
+} from "./tool-policy.js";
 
 /**
  * Tools always denied for sub-agents regardless of depth.
@@ -426,12 +430,18 @@ export function resolveEffectiveToolPolicy(params: {
   const explicitProfileAlsoAllow =
     resolveExplicitProfileAlsoAllow(agentTools) ?? resolveExplicitProfileAlsoAllow(globalTools);
 
-  // Warn affected users about removed implicit grants (#47487).
+  // Warn affected users about removed implicit grants (#47487), but only when
+  // the active profile/explicit alsoAllow do not already grant those tools.
   if (profile) {
     const implicitGrants = detectImplicitProfileGrants({ globalTools, agentTools });
     if (implicitGrants) {
-      const alreadyCovered = new Set(explicitProfileAlsoAllow ?? []);
-      const uncovered = implicitGrants.filter((t) => !alreadyCovered.has(t));
+      const profilePolicy = mergeAlsoAllowPolicy(
+        resolveToolProfilePolicy(profile),
+        explicitProfileAlsoAllow,
+      );
+      const uncovered = implicitGrants.filter(
+        (toolName) => !isToolAllowedByPolicyName(toolName, profilePolicy),
+      );
       if (uncovered.length > 0) {
         logWarn(
           `tools policy: profile "${profile}"${agentId ? ` (agent "${agentId}")` : ""} has ` +
