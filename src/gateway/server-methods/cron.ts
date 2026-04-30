@@ -396,7 +396,7 @@ export const cronHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const p = params as { id?: string; jobId?: string; mode?: "due" | "force" };
+    const p = params as { id?: string; jobId?: string; mode?: "due" | "force"; asScheduled?: boolean };
     const jobId = p.id ?? p.jobId;
     if (!jobId) {
       respond(
@@ -408,7 +408,7 @@ export const cronHandlers: GatewayRequestHandlers = {
     }
     let result: Awaited<ReturnType<typeof context.cron.enqueueRun>>;
     try {
-      result = await context.cron.enqueueRun(jobId, p.mode ?? "force");
+      result = await context.cron.enqueueRun(jobId, p.mode ?? "force", { asScheduled: p.asScheduled });
     } catch (error) {
       if (isInvalidCronSessionTargetIdError(error)) {
         respond(true, { ok: true, ran: false, reason: "invalid-spec" }, undefined);

@@ -292,6 +292,7 @@ export async function executeCronRun(params: {
   timeoutMs: number;
   suppressExecNotifyOnExit: boolean;
   runStartedAt?: number;
+  asScheduled?: boolean;
 }): Promise<CronExecutionResult> {
   const resolvedVerboseLevel: VerboseLevel =
     normalizeVerboseLevel(params.cronSession.sessionEntry.verboseLevel) ??

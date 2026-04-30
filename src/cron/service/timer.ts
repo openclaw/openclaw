@@ -102,10 +102,12 @@ type StartupCatchupPlan = {
 export async function executeJobCoreWithTimeout(
   state: CronServiceState,
   job: CronJob,
+  abortSignal?: AbortSignal,
+  options?: { asScheduled?: boolean },
 ): Promise<Awaited<ReturnType<typeof executeJobCore>>> {
   const jobTimeoutMs = resolveCronJobTimeoutMs(job);
   if (typeof jobTimeoutMs !== "number") {
-    return await executeJobCore(state, job);
+    return await executeJobCore(state, job, abortSignal, { asScheduled: options?.asScheduled });
   }
 
   const runAbortController = new AbortController();
@@ -133,6 +135,7 @@ export async function executeJobCoreWithTimeout(
   };
   const corePromise = executeJobCore(state, job, runAbortController.signal, {
     onExecutionStarted: deferTimeoutUntilExecutionStart ? onExecutionStarted : undefined,
+    asScheduled: options?.asScheduled,
   });
   if (!deferTimeoutUntilExecutionStart) {
     startTimeout();
@@ -1308,6 +1311,7 @@ export async function executeJobCore(
   abortSignal?: AbortSignal,
   options?: {
     onExecutionStarted?: (info?: CronAgentExecutionStarted) => void;
+    asScheduled?: boolean;
   },
 ): Promise<
   CronRunOutcome &
@@ -1466,6 +1470,7 @@ async function executeDetachedCronJob(
   resolveAbortError: () => { status: "error"; error: string },
   options?: {
     onExecutionStarted?: (info?: CronAgentExecutionStarted) => void;
+    asScheduled?: boolean;
   },
 ): Promise<
   CronRunOutcome &
@@ -1487,6 +1492,7 @@ async function executeDetachedCronJob(
     message: job.payload.message,
     abortSignal,
     onExecutionStarted: options?.onExecutionStarted,
+    asScheduled: options?.asScheduled,
   });
 
   if (abortSignal?.aborted) {

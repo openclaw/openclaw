@@ -54,12 +54,12 @@ export class CronService implements CronServiceContract {
     return await ops.remove(this.state, id);
   }
 
-  async run(id: string, mode?: "due" | "force"): Promise<CronServiceRunResult> {
-    return await ops.run(this.state, id, mode);
+  async run(id: string, mode?: "due" | "force", options?: { asScheduled?: boolean }): Promise<CronServiceRunResult> {
+    return await ops.run(this.state, id, mode, options);
   }
 
-  async enqueueRun(id: string, mode?: "due" | "force"): Promise<CronServiceRunResult> {
-    const result = await ops.enqueueRun(this.state, id, mode);
+  async enqueueRun(id: string, mode?: "due" | "force", options?: { asScheduled?: boolean }): Promise<CronServiceRunResult> {
+    const result = await ops.enqueueRun(this.state, id, mode, options);
     if (result.ok && "runnable" in result) {
       throw new Error("cron enqueueRun returned unresolved runnable disposition");
     }

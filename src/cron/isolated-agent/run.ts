@@ -1013,6 +1013,7 @@ export async function runCronIsolatedAgentTurn(params: {
   sessionKey: string;
   agentId?: string;
   lane?: string;
+  asScheduled?: boolean;
 }): Promise<RunCronAgentTurnResult> {
   const abortSignal = params.abortSignal ?? params.signal;
   const isAborted = () => abortSignal?.aborted === true;
@@ -1023,62 +1024,97 @@ export async function runCronIsolatedAgentTurn(params: {
       : "cron: job execution timed out";
   };
   const isFastTestEnv = process.env.OPENCLAW_TEST_FAST === "1";
-  const prepared = await prepareCronRunContext({ input: params, isFastTestEnv });
-  if (!prepared.ok) {
-    return prepared.result;
-  }
-  const notifyExecutionStarted = () =>
-    params.onExecutionStarted?.({
-      jobId: params.job.id,
-      agentId: prepared.context.agentId,
-      sessionId: prepared.context.runSessionId,
-      sessionKey: prepared.context.runSessionKey,
-    });
+  
+  // Save original working directory for restoration
+  const originalCwd = process.cwd();
+  let cwdChanged = false;
+  
+  const restoreOriginalCwd = () => {
+    if (!cwdChanged) return;
+    try {
+      process.chdir(originalCwd);
+    } catch {
+      // Ignore chdir errors during cleanup
+    }
+  };
 
   try {
-    const { executeCronRun } = await loadCronExecutorRuntime();
-    const execution = await executeCronRun({
-      cfg: params.cfg,
-      cfgWithAgentDefaults: prepared.context.cfgWithAgentDefaults,
-      job: params.job,
-      agentId: prepared.context.agentId,
-      agentDir: prepared.context.agentDir,
-      agentSessionKey: prepared.context.agentSessionKey,
-      runSessionKey: prepared.context.runSessionKey,
-      workspaceDir: prepared.context.workspaceDir,
-      lane: params.lane,
-      resolvedDelivery: {
-        channel: prepared.context.resolvedDelivery.channel,
-        to: prepared.context.resolvedDelivery.to,
-        accountId: prepared.context.resolvedDelivery.accountId,
-        threadId: prepared.context.resolvedDelivery.threadId,
-      },
-      toolPolicy: prepared.context.toolPolicy,
-      skillsSnapshot: prepared.context.skillsSnapshot,
-      agentPayload: prepared.context.agentPayload,
-      agentVerboseDefault: prepared.context.agentCfg?.verboseDefault,
-      liveSelection: prepared.context.liveSelection,
-      cronSession: prepared.context.cronSession,
-      commandBody: prepared.context.commandBody,
-      persistSessionEntry: prepared.context.persistSessionEntry,
-      abortSignal,
-      onExecutionStarted: notifyExecutionStarted,
-      abortReason,
-      isAborted,
-      thinkLevel: prepared.context.thinkLevel,
-      timeoutMs: prepared.context.timeoutMs,
-      suppressExecNotifyOnExit: prepared.context.suppressExecNotifyOnExit,
-    });
-    if (isAborted()) {
-      return prepared.context.withRunSession({ status: "error", error: abortReason() });
+    const prepared = await prepareCronRunContext({ input: params, isFastTestEnv });
+    if (!prepared.ok) {
+      return prepared.result;
     }
-    return await finalizeCronRun({
-      prepared: prepared.context,
-      execution,
-      abortReason,
-      isAborted,
-    });
+    
+    // Change to workspace directory when running as scheduled
+    if (params.asScheduled && prepared.context.workspaceDir) {
+      try {
+        process.chdir(prepared.context.workspaceDir);
+        cwdChanged = true;
+      } catch (err) {
+        logWarn(`[cron:${params.job.id}] Failed to change to workspace directory: ${String(err)}`);
+      }
+    }
+    
+    const notifyExecutionStarted = () =>
+      params.onExecutionStarted?.({
+        jobId: params.job.id,
+        agentId: prepared.context.agentId,
+        sessionId: prepared.context.runSessionId,
+        sessionKey: prepared.context.runSessionKey,
+      });
+
+    try {
+      const { executeCronRun } = await loadCronExecutorRuntime();
+      const execution = await executeCronRun({
+        cfg: params.cfg,
+        cfgWithAgentDefaults: prepared.context.cfgWithAgentDefaults,
+        job: params.job,
+        agentId: prepared.context.agentId,
+        agentDir: prepared.context.agentDir,
+        agentSessionKey: prepared.context.agentSessionKey,
+        runSessionKey: prepared.context.runSessionKey,
+        workspaceDir: prepared.context.workspaceDir,
+        lane: params.lane,
+        resolvedDelivery: {
+          channel: prepared.context.resolvedDelivery.channel,
+          to: prepared.context.resolvedDelivery.to,
+          accountId: prepared.context.resolvedDelivery.accountId,
+          threadId: prepared.context.resolvedDelivery.threadId,
+        },
+        toolPolicy: prepared.context.toolPolicy,
+        skillsSnapshot: prepared.context.skillsSnapshot,
+        agentPayload: prepared.context.agentPayload,
+        agentVerboseDefault: prepared.context.agentCfg?.verboseDefault,
+        liveSelection: prepared.context.liveSelection,
+        cronSession: prepared.context.cronSession,
+        commandBody: prepared.context.commandBody,
+        persistSessionEntry: prepared.context.persistSessionEntry,
+        abortSignal,
+        onExecutionStarted: notifyExecutionStarted,
+        abortReason,
+        isAborted,
+        thinkLevel: prepared.context.thinkLevel,
+        timeoutMs: prepared.context.timeoutMs,
+        suppressExecNotifyOnExit: prepared.context.suppressExecNotifyOnExit,
+        asScheduled: params.asScheduled,
+      });
+      if (isAborted()) {
+        restoreOriginalCwd();
+        return prepared.context.withRunSession({ status: "error", error: abortReason() });
+      }
+      const result = await finalizeCronRun({
+        prepared: prepared.context,
+        execution,
+        abortReason,
+        isAborted,
+      });
+      restoreOriginalCwd();
+      return result;
+    } catch (err) {
+      restoreOriginalCwd();
+      return prepared.context.withRunSession({ status: "error", error: String(err) });
+    }
   } catch (err) {
-    return prepared.context.withRunSession({ status: "error", error: String(err) });
+    restoreOriginalCwd();
+    throw err;
   }
 }

@@ -160,6 +160,7 @@ export function registerCronSimpleCommands(cron: Command) {
       .description("Run a cron job now (debug)")
       .argument("<id>", "Job id")
       .option("--due", "Run only when due (default behavior in older versions)", false)
+      .option("--as-scheduled", "Run with scheduled execution environment (working directory, service environment, context loading)", false)
       .action(async (id, opts, command) => {
         try {
           if (command.getOptionValueSource("timeout") === "default") {
@@ -168,6 +169,7 @@ export function registerCronSimpleCommands(cron: Command) {
           const res = await callGatewayFromCli("cron.run", opts, {
             id,
             mode: opts.due ? "due" : "force",
+            asScheduled: opts.asScheduled,
           });
           printCronJson(res);
           const result = res as { ok?: boolean; ran?: boolean; enqueued?: boolean } | undefined;

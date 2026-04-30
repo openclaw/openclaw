@@ -95,6 +95,7 @@ export type CronServiceDeps = {
     message: string;
     abortSignal?: AbortSignal;
     onExecutionStarted?: (info?: CronAgentExecutionStarted) => void;
+    asScheduled?: boolean;
   }) => Promise<
     {
       summary?: string;

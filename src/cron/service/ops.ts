@@ -584,6 +584,7 @@ async function inspectManualRunPreflight(
   state: CronServiceState,
   id: string,
   mode?: "due" | "force",
+  options?: { asScheduled?: boolean },
 ): Promise<ManualRunPreflightResult> {
   return await locked(state, async () => {
     warnIfDisabled(state, "run");
@@ -615,8 +616,9 @@ async function inspectManualRunDisposition(
   state: CronServiceState,
   id: string,
   mode?: "due" | "force",
+  options?: { asScheduled?: boolean },
 ): Promise<ManualRunDisposition | { ok: false }> {
-  const result = await inspectManualRunPreflight(state, id, mode);
+  const result = await inspectManualRunPreflight(state, id, mode, options);
   if (!result.ok) {
     return result;
   }
@@ -630,8 +632,9 @@ async function prepareManualRun(
   state: CronServiceState,
   id: string,
   mode?: "due" | "force",
+  options?: { asScheduled?: boolean },
 ): Promise<PreparedManualRun> {
-  const preflight = await inspectManualRunPreflight(state, id, mode);
+  const preflight = await inspectManualRunPreflight(state, id, mode, options);
   if (!preflight.ok) {
     return preflight;
   }
@@ -676,6 +679,7 @@ async function finishPreparedManualRun(
   state: CronServiceState,
   prepared: Extract<PreparedManualRun, { ran: true }>,
   mode?: "due" | "force",
+  options?: { asScheduled?: boolean },
 ): Promise<void> {
   const executionJob = prepared.executionJob;
   const startedAt = prepared.startedAt;
@@ -684,7 +688,9 @@ async function finishPreparedManualRun(
 
   let coreResult: Awaited<ReturnType<typeof executeJobCoreWithTimeout>>;
   try {
-    coreResult = await executeJobCoreWithTimeout(state, executionJob);
+    coreResult = await executeJobCoreWithTimeout(state, executionJob, undefined, {
+      asScheduled: options?.asScheduled,
+    });
   } catch (err) {
     coreResult = { status: "error", error: normalizeCronRunErrorText(err) };
   }
@@ -767,16 +773,16 @@ async function finishPreparedManualRun(
   });
 }
 
-export async function run(state: CronServiceState, id: string, mode?: "due" | "force") {
-  const prepared = await prepareManualRun(state, id, mode);
+export async function run(state: CronServiceState, id: string, mode?: "due" | "force", options?: { asScheduled?: boolean }) {
+  const prepared = await prepareManualRun(state, id, mode, options);
   if (!prepared.ok || !prepared.ran) {
     return prepared;
   }
-  await finishPreparedManualRun(state, prepared, mode);
+  await finishPreparedManualRun(state, prepared, mode, options);
   return { ok: true, ran: true } as const;
 }
 
-export async function enqueueRun(state: CronServiceState, id: string, mode?: "due" | "force") {
+export async function enqueueRun(state: CronServiceState, id: string, mode?: "due" | "force", options?: { asScheduled?: boolean }) {
   const disposition = await inspectManualRunDisposition(state, id, mode);
   if (!disposition.ok || !("runnable" in disposition && disposition.runnable)) {
     return disposition;
@@ -786,7 +792,7 @@ export async function enqueueRun(state: CronServiceState, id: string, mode?: "du
   void enqueueCommandInLane(
     CommandLane.Cron,
     async () => {
-      const result = await run(state, id, mode);
+      const result = await run(state, id, mode, options);
       if (result.ok && "ran" in result && !result.ran) {
         state.deps.log.info(
           { jobId: id, runId, reason: result.reason },
