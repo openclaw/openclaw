@@ -3477,7 +3477,7 @@ describe("reply_dispatch hook", () => {
       cfg: {
         ...emptyConfig,
         session: {
-          sendPolicy: "deny",
+          sendPolicy: { default: "deny" },
         },
       },
       dispatcher: createDispatcher(),

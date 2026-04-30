@@ -68,7 +68,7 @@ describe("Ollama provider", () => {
       VITEST: "1",
       NODE_ENV: "test",
       ...params.env,
-    } satisfies NodeJS.ProcessEnv;
+    } as NodeJS.ProcessEnv;
 
     return resolveImplicitProviders({
       agentDir: params.agentDir,
@@ -100,7 +100,7 @@ describe("Ollama provider", () => {
       VITEST: "1",
       NODE_ENV: "test",
       ...params.env,
-    } satisfies NodeJS.ProcessEnv;
+    } as NodeJS.ProcessEnv;
     const result = await runProviderCatalog({
       provider,
       config: params.config ?? {},

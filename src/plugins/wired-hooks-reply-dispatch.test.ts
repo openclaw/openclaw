@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createHookRunnerWithRegistry } from "./hooks.test-helpers.js";
 
 const replyDispatchEvent = {
-  ctx: { SessionKey: "agent:test:session", BodyForAgent: "hello" },
+  ctx: { SessionKey: "agent:test:session", BodyForAgent: "hello", CommandAuthorized: false },
   sessionKey: "agent:test:session",
   inboundAudio: false,
   shouldRouteToOriginating: false,

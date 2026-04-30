@@ -10,7 +10,9 @@ const resolveAgentWorkspaceDir = vi.hoisted(() =>
   vi.fn((_cfg: OpenClawConfig, _agentId: string) => "/tmp/openclaw"),
 );
 const resolveMemorySearchConfig = vi.hoisted(() =>
-  vi.fn((_cfg: OpenClawConfig, _agentId: string) => ({ enabled: true })),
+  vi.fn<(cfg: OpenClawConfig, agentId: string) => { enabled: boolean } | null>(
+    (_cfg, _agentId) => ({ enabled: true }),
+  ),
 );
 const getMemorySearchManager = vi.hoisted(() => vi.fn());
 

@@ -16,6 +16,7 @@ const event = {
   ctx: {
     SessionKey: "agent:test:session",
     BodyForAgent: "hello",
+    CommandAuthorized: false,
   },
   runId: "run-1",
   sessionKey: "agent:test:session",

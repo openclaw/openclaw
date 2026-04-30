@@ -372,11 +372,13 @@ describe("run-node script", () => {
           args: string[],
           options: unknown,
         ) => {
-          kill: (signal?: string) => string;
+          kill: (signal?: string) => void;
           on: (event: "exit", cb: (code: number | null, signal: string | null) => void) => void;
         }
       >(() => ({
-        kill: (signal) => child.kill(String(signal ?? "SIGTERM")),
+        kill: (signal) => {
+          child.kill(String(signal ?? "SIGTERM"));
+        },
         on: (event, cb) => {
           child.on(event, cb);
         },

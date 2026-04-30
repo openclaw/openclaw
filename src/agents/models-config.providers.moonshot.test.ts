@@ -1,11 +1,12 @@
 import { describe, expect, it } from "vitest";
+import type { ModelProviderConfig } from "../config/types.models.js";
 import { applyProviderNativeStreamingUsageCompat } from "../plugin-sdk/provider-catalog-shared.js";
 import { resolveMissingProviderApiKey } from "./models-config.providers.secrets.js";
 
 const MOONSHOT_BASE_URL = "https://api.moonshot.ai/v1";
 const MOONSHOT_CN_BASE_URL = "https://api.moonshot.cn/v1";
 
-function buildMoonshotProvider() {
+function buildMoonshotProvider(): ModelProviderConfig {
   return {
     baseUrl: MOONSHOT_BASE_URL,
     api: "openai-completions",

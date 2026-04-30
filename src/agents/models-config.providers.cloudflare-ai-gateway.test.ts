@@ -24,8 +24,10 @@ function buildCloudflareAiGatewayCatalogProvider(params: {
     resolveApiKeyFromCredential(
       params.credential as Parameters<typeof resolveApiKeyFromCredential>[0],
     )?.apiKey;
-  const accountId = params.credential?.metadata?.accountId?.trim();
-  const gatewayId = params.credential?.metadata?.gatewayId?.trim();
+  const metadata =
+    params.credential && "metadata" in params.credential ? params.credential.metadata : undefined;
+  const accountId = metadata?.accountId?.trim();
+  const gatewayId = metadata?.gatewayId?.trim();
   if (!apiKey || !accountId || !gatewayId) {
     return null;
   }

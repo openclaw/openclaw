@@ -109,8 +109,8 @@ describe("StepFun provider catalog", () => {
       api: "openai-completions",
       apiKey: "STEPFUN_API_KEY",
     });
-    expect(standardProvider.models?.map((model) => model.id)).toEqual(EXPECTED_STANDARD_MODELS);
-    expect(planProvider.models?.map((model) => model.id)).toEqual(EXPECTED_PLAN_MODELS);
+    expect(standardProvider!.models?.map((model) => model.id)).toEqual(EXPECTED_STANDARD_MODELS);
+    expect(planProvider!.models?.map((model) => model.id)).toEqual(EXPECTED_PLAN_MODELS);
   });
 
   it("falls back to global endpoints for untagged StepFun auth profiles", () => {
