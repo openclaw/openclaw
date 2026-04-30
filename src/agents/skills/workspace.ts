@@ -455,13 +455,12 @@ function loadSkillEntries(
 
     const maxCandidatesPerRoot = Math.max(0, limits.maxCandidatesPerRoot);
     const maxSkillsLoadedPerSource = Math.max(0, limits.maxSkillsLoadedPerSource);
-    const maxCandidates = Math.min(maxCandidatesPerRoot, maxSkillsLoadedPerSource);
     const childDirScan = listChildDirectories(baseDir, {
       maxEntriesToScan: maxCandidatesPerRoot,
     });
     const childDirs = childDirScan.dirs;
     const suspicious = childDirScan.truncated;
-    const limitedChildren = childDirs.toSorted().slice(0, maxCandidates);
+    const limitedChildren = maxSkillsLoadedPerSource === 0 ? [] : childDirs.toSorted();
 
     if (suspicious) {
       skillsLogger.warn("Skills root looks suspiciously large, truncating discovery.", {
@@ -473,21 +472,37 @@ function loadSkillEntries(
         maxCandidatesPerRoot: limits.maxCandidatesPerRoot,
         maxSkillsLoadedPerSource: limits.maxSkillsLoadedPerSource,
       });
-    } else if (childDirs.length > maxCandidates) {
-      skillsLogger.warn("Skills root has many entries, truncating discovery.", {
-        dir: params.dir,
-        baseDir,
-        childDirCount: childDirs.length,
-        maxSkillsLoadedPerSource: limits.maxSkillsLoadedPerSource,
-      });
     }
 
     const loadedSkills: LoadedSkillRecord[] = [];
+    const loadCandidateSkill = ({ skillDir, name, skillMdRealPath }: CandidateSkillDir) => {
+      try {
+        const size = fs.statSync(skillMdRealPath).size;
+        if (size > limits.maxSkillFileBytes) {
+          skillsLogger.warn("Skipping skill due to oversized SKILL.md.", {
+            skill: name,
+            filePath: path.join(skillDir, "SKILL.md"),
+            size,
+            maxSkillFileBytes: limits.maxSkillFileBytes,
+          });
+          return;
+        }
+      } catch {
+        return;
+      }
+
+      loadedSkills.push(
+        ...loadContainedSkillRecords({
+          skillDir,
+          source: params.source,
+          maxSkillFileBytes: limits.maxSkillFileBytes,
+        }),
+      );
+    };
 
     // Consider immediate subfolders that look like skills (have SKILL.md) and are under size cap.
     // When an immediate subfolder does NOT have a SKILL.md, check one level deeper for grouped
     // skill directories (e.g. ~/.openclaw/skills/coze/koze-retrieval/SKILL.md).
-    const candidateDirs: CandidateSkillDir[] = [];
     for (const name of limitedChildren) {
       const skillDir = path.join(baseDir, name);
       const skillDirRealPath = resolveContainedSkillPath({
@@ -508,7 +523,7 @@ function loadSkillEntries(
           candidatePath: skillMd,
         });
         if (skillMdRealPath) {
-          candidateDirs.push({ skillDir, name, skillMdRealPath });
+          loadCandidateSkill({ skillDir, name, skillMdRealPath });
         }
       } else {
         // No SKILL.md here — check one level deeper for grouped skill directories.
@@ -551,47 +566,18 @@ function loadSkillEntries(
               candidatePath: nestedSkillMd,
             });
             if (nestedDirRealPath && nestedSkillMdRealPath) {
-              candidateDirs.push({
+              loadCandidateSkill({
                 skillDir: nestedDir,
                 name: `${name}/${nestedName}`,
                 skillMdRealPath: nestedSkillMdRealPath,
               });
             }
           }
-          if (candidateDirs.length >= maxSkillsLoadedPerSource) {
+          if (loadedSkills.length >= maxSkillsLoadedPerSource) {
             break;
           }
         }
       }
-      if (candidateDirs.length >= maxSkillsLoadedPerSource) {
-        break;
-      }
-    }
-
-    for (const { skillDir, name, skillMdRealPath } of candidateDirs) {
-      try {
-        const size = fs.statSync(skillMdRealPath).size;
-        if (size > limits.maxSkillFileBytes) {
-          skillsLogger.warn("Skipping skill due to oversized SKILL.md.", {
-            skill: name,
-            filePath: path.join(skillDir, "SKILL.md"),
-            size,
-            maxSkillFileBytes: limits.maxSkillFileBytes,
-          });
-          continue;
-        }
-      } catch {
-        continue;
-      }
-
-      loadedSkills.push(
-        ...loadContainedSkillRecords({
-          skillDir,
-          source: params.source,
-          maxSkillFileBytes: limits.maxSkillFileBytes,
-        }),
-      );
-
       if (loadedSkills.length >= maxSkillsLoadedPerSource) {
         break;
       }
