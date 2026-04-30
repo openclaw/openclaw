@@ -4,7 +4,7 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { SessionSendPolicyDecision } from "../../sessions/send-policy.js";
 import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
 
-const log = createSubsystemLogger("auto-reply", { prefix: "auto-reply" });
+const log = createSubsystemLogger("auto-reply");
 
 let visibleRepliesMigrationWarned = false;
 
