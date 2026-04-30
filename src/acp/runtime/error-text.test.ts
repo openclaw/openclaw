@@ -16,4 +16,18 @@ describe("formatAcpRuntimeErrorText", () => {
     expect(text).toContain("ACP error (ACP_TURN_FAILED): turn failed");
     expect(text).toContain("next:");
   });
+
+  it("redacts provider authentication failure bodies from turn failures", () => {
+    const text = formatAcpRuntimeErrorText(
+      new AcpRuntimeError(
+        "ACP_TURN_FAILED",
+        'Internal error: Failed to authenticate. API Error: 401 {"type":"error","error":{"type":"authentication_error","message":"Invalid authentication credentials"},"request_id":"req_abc"}',
+      ),
+    );
+    expect(text).toContain("ACP provider authentication failed");
+    expect(text).toContain('agentId="codex"');
+    expect(text).not.toContain("req_abc");
+    expect(text).not.toContain("authentication_error");
+    expect(text).not.toContain("Invalid authentication credentials");
+  });
 });
