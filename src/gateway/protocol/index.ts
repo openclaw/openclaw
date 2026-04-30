@@ -44,6 +44,17 @@ import {
   AgentsListResultSchema,
   type AgentWaitParams,
   AgentWaitParamsSchema,
+  type ArtifactSummary,
+  ArtifactSummarySchema,
+  type ArtifactsListParams,
+  ArtifactsListParamsSchema,
+  type ArtifactsListResult,
+  type ArtifactsGetParams,
+  ArtifactsGetParamsSchema,
+  type ArtifactsGetResult,
+  type ArtifactsDownloadParams,
+  ArtifactsDownloadParamsSchema,
+  type ArtifactsDownloadResult,
   type ChannelsStartParams,
   ChannelsStartParamsSchema,
   type ChannelsLogoutParams,
@@ -340,6 +351,12 @@ const ajv = new (AjvPkg as unknown as new (opts?: object) => import("ajv").defau
   removeAdditional: false,
 });
 
+export const validateArtifactsListParams =
+  ajv.compile<ArtifactsListParams>(ArtifactsListParamsSchema);
+export const validateArtifactsGetParams = ajv.compile<ArtifactsGetParams>(ArtifactsGetParamsSchema);
+export const validateArtifactsDownloadParams = ajv.compile<ArtifactsDownloadParams>(
+  ArtifactsDownloadParamsSchema,
+);
 export const validateCommandsListParams = ajv.compile<CommandsListParams>(CommandsListParamsSchema);
 export const validateConnectParams = ajv.compile<ConnectParams>(ConnectParamsSchema);
 export const validateRequestFrame = ajv.compile<RequestFrame>(RequestFrameSchema);
@@ -627,6 +644,10 @@ export function formatValidationErrors(errors: ErrorObject[] | null | undefined)
 }
 
 export {
+  ArtifactSummarySchema,
+  ArtifactsListParamsSchema,
+  ArtifactsGetParamsSchema,
+  ArtifactsDownloadParamsSchema,
   ConnectParamsSchema,
   HelloOkSchema,
   RequestFrameSchema,
@@ -775,6 +796,13 @@ export {
 };
 
 export type {
+  ArtifactSummary,
+  ArtifactsListParams,
+  ArtifactsListResult,
+  ArtifactsGetParams,
+  ArtifactsGetResult,
+  ArtifactsDownloadParams,
+  ArtifactsDownloadResult,
   GatewayFrame,
   ConnectParams,
   HelloOk,

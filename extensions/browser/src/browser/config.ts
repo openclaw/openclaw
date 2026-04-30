@@ -87,6 +87,7 @@ export type ResolvedBrowserConfig = {
   tabCleanup: ResolvedBrowserTabCleanupConfig;
   ssrfPolicy?: SsrFPolicy;
   extraArgs: string[];
+  hyprlandCapture?: boolean;
 };
 
 export type ResolvedBrowserTabCleanupConfig = {

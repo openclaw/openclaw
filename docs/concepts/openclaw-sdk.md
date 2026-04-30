@@ -25,30 +25,33 @@ resources.
 
 `@openclaw/sdk` ships with:
 
-| Surface                   | Status  | What it does                                                                 |
-| ------------------------- | ------- | ---------------------------------------------------------------------------- |
-| `OpenClaw`                | Ready   | Main client entry point. Owns transport, connection, requests, and events.   |
-| `GatewayClientTransport`  | Ready   | WebSocket transport backed by the Gateway client.                            |
-| `oc.agents`               | Ready   | Lists, creates, updates, deletes, and gets agent handles.                    |
-| `Agent.run()`             | Ready   | Starts a Gateway `agent` run and returns a `Run`.                            |
-| `oc.runs`                 | Ready   | Creates, gets, waits for, cancels, and streams runs.                         |
-| `Run.events()`            | Ready   | Streams normalized per-run events with replay for fast runs.                 |
-| `Run.wait()`              | Ready   | Calls `agent.wait` and returns a stable `RunResult`.                         |
-| `Run.cancel()`            | Ready   | Calls `sessions.abort` by run id, with session key when available.           |
-| `oc.sessions`             | Ready   | Creates, resolves, sends to, patches, compacts, and gets session handles.    |
-| `Session.send()`          | Ready   | Calls `sessions.send` and returns a `Run`.                                   |
-| `oc.models`               | Ready   | Calls `models.list` and the current `models.authStatus` status RPC.          |
-| `oc.tools`                | Partial | Lists tool catalog and effective tools; direct tool invocation is not wired. |
-| `oc.approvals`            | Ready   | Lists and resolves exec approvals through Gateway approval RPCs.             |
-| `oc.rawEvents()`          | Ready   | Exposes raw Gateway events for advanced consumers.                           |
-| `normalizeGatewayEvent()` | Ready   | Converts raw Gateway events into the stable SDK event shape.                 |
+| Surface                   | Status  | What it does                                                                         |
+| ------------------------- | ------- | ------------------------------------------------------------------------------------ |
+| `OpenClaw`                | Ready   | Main client entry point. Owns transport, connection, requests, and events.           |
+| `GatewayClientTransport`  | Ready   | WebSocket transport backed by the Gateway client.                                    |
+| `oc.agents`               | Ready   | Lists, creates, updates, deletes, and gets agent handles.                            |
+| `Agent.run()`             | Ready   | Starts a Gateway `agent` run and returns a `Run`.                                    |
+| `oc.runs`                 | Ready   | Creates, gets, waits for, cancels, and streams runs.                                 |
+| `Run.events()`            | Ready   | Streams normalized per-run events with replay for fast runs.                         |
+| `Run.wait()`              | Ready   | Calls `agent.wait` and returns a stable `RunResult`.                                 |
+| `Run.cancel()`            | Ready   | Calls `sessions.abort` by run id, with session key when available.                   |
+| `oc.sessions`             | Ready   | Creates, resolves, sends to, patches, compacts, and gets session handles.            |
+| `Session.send()`          | Ready   | Calls `sessions.send` and returns a `Run`.                                           |
+| `oc.models`               | Ready   | Calls `models.list` and the current `models.authStatus` status RPC.                  |
+| `oc.tools`                | Partial | Lists tool catalog and effective tools; direct tool invocation is not wired.         |
+| `oc.artifacts`            | Ready   | Lists, gets, and downloads session artifacts with cursor pagination and type filter. |
+| `oc.approvals`            | Ready   | Lists and resolves exec approvals through Gateway approval RPCs.                     |
+| `oc.rawEvents()`          | Ready   | Exposes raw Gateway events for advanced consumers.                                   |
+| `normalizeGatewayEvent()` | Ready   | Converts raw Gateway events into the stable SDK event shape.                         |
 
 The SDK also exports the core types used by those surfaces:
 `AgentRunParams`, `RunResult`, `RunStatus`, `OpenClawEvent`,
 `OpenClawEventType`, `GatewayEvent`, `OpenClawTransport`,
 `GatewayRequestOptions`, `SessionCreateParams`, `SessionSendParams`,
 `RuntimeSelection`, `EnvironmentSelection`, `WorkspaceSelection`,
-`ApprovalMode`, and related result types.
+`ApprovalMode`, `ArtifactSummary`, `ArtifactQuery`, `ArtifactsListParams`,
+`ArtifactsListResult`, `ArtifactsGetParams`, `ArtifactsGetResult`,
+`ArtifactsDownloadParams`, `ArtifactsDownloadResult`, and related result types.
 
 ## Connect To A Gateway
 
@@ -227,6 +230,48 @@ const approvals = await oc.approvals.list();
 await oc.approvals.respond("approval-id", { decision: "approve" });
 ```
 
+## Artifacts
+
+Artifact helpers read session transcripts for images, audio, and files.
+Query by `sessionKey`, `runId`, or `taskId`. Pagination uses opaque cursors.
+
+```typescript
+// First page of image artifacts (up to 50 by default; pass limit to override)
+const page1 = await oc.artifacts.list({
+  sessionKey: "agent:main:main",
+  types: ["image"],
+  limit: 10,
+});
+
+// Fetch the next page when more exist
+if (page1.nextCursor) {
+  const page2 = await oc.artifacts.list({
+    sessionKey: "agent:main:main",
+    types: ["image"],
+    limit: 10,
+    cursor: page1.nextCursor,
+  });
+}
+
+// Get a single artifact summary (no raw data)
+const { artifact } = await oc.artifacts.get({
+  sessionKey: "agent:main:main",
+  artifactId: page1.artifacts[0].id,
+});
+
+// Download raw bytes or a redirect URL
+const dl = await oc.artifacts.download({
+  sessionKey: "agent:main:main",
+  artifactId: artifact.id,
+});
+if (dl.encoding === "base64" && dl.data) {
+  const bytes = Buffer.from(dl.data, "base64");
+}
+if (dl.url) {
+  // Fetch from dl.url
+}
+```
+
 ## Explicitly Unsupported Today
 
 The SDK includes names for the product model we want, but it does not silently
@@ -239,10 +284,6 @@ await oc.tasks.get("task-id");
 await oc.tasks.cancel("task-id");
 
 await oc.tools.invoke("tool-name", {});
-
-await oc.artifacts.list();
-await oc.artifacts.get("artifact-id");
-await oc.artifacts.download("artifact-id");
 
 await oc.environments.list();
 await oc.environments.create({});

@@ -121,6 +121,9 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "talk.config",
     "agents.files.list",
     "agents.files.get",
+    "artifacts.list",
+    "artifacts.get",
+    "artifacts.download",
   ],
   [WRITE_SCOPE]: [
     "message.action",

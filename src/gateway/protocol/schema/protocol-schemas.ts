@@ -50,6 +50,15 @@ import {
   ToolsEffectiveResultSchema,
 } from "./agents-models-skills.js";
 import {
+  ArtifactSummarySchema,
+  ArtifactsListParamsSchema,
+  ArtifactsListResultSchema,
+  ArtifactsGetParamsSchema,
+  ArtifactsGetResultSchema,
+  ArtifactsDownloadParamsSchema,
+  ArtifactsDownloadResultSchema,
+} from "./artifacts.js";
+import {
   ChannelsStartParamsSchema,
   ChannelsLogoutParamsSchema,
   TalkConfigParamsSchema,
@@ -400,6 +409,13 @@ export const ProtocolSchemas = {
   UpdateRunParams: UpdateRunParamsSchema,
   TickEvent: TickEventSchema,
   ShutdownEvent: ShutdownEventSchema,
+  ArtifactSummary: ArtifactSummarySchema,
+  ArtifactsListParams: ArtifactsListParamsSchema,
+  ArtifactsListResult: ArtifactsListResultSchema,
+  ArtifactsGetParams: ArtifactsGetParamsSchema,
+  ArtifactsGetResult: ArtifactsGetResultSchema,
+  ArtifactsDownloadParams: ArtifactsDownloadParamsSchema,
+  ArtifactsDownloadResult: ArtifactsDownloadResultSchema,
 } satisfies Record<string, TSchema>;
 
 export const PROTOCOL_VERSION = 3 as const;
