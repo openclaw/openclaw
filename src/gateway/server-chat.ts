@@ -171,10 +171,7 @@ export function createAgentEventHandler({
   const pendingTerminalLifecycleErrors = new Map<string, NodeJS.Timeout>();
 
   const clearBufferedChatState = (clientRunId: string) => {
-    chatRunState.rawBuffers.delete(clientRunId);
-    chatRunState.buffers.delete(clientRunId);
-    chatRunState.deltaSentAt.delete(clientRunId);
-    chatRunState.deltaLastBroadcastLen.delete(clientRunId);
+    chatRunState.clearRun(clientRunId);
   };
 
   const clearPendingTerminalLifecycleError = (runId: string) => {
@@ -404,7 +401,9 @@ export function createAgentEventHandler({
     if (!mergedRawText) {
       return;
     }
+    const now = Date.now();
     chatRunState.rawBuffers.set(clientRunId, mergedRawText);
+    chatRunState.bufferUpdatedAt.set(clientRunId, now);
     const projected = projectLiveAssistantBufferedText(mergedRawText);
     const mergedText = projected.text;
     chatRunState.buffers.set(clientRunId, mergedText);
@@ -414,7 +413,6 @@ export function createAgentEventHandler({
     if (shouldHideHeartbeatChatOutput(clientRunId, sourceRunId)) {
       return;
     }
-    const now = Date.now();
     const last = chatRunState.deltaSentAt.get(clientRunId) ?? 0;
     if (now - last < 150) {
       return;
@@ -520,10 +518,7 @@ export function createAgentEventHandler({
     // suppressed the most recent chunk, leaving the client with stale text.
     // Only flush if the buffer has grown since the last broadcast to avoid duplicates.
     flushBufferedChatDeltaIfNeeded(sessionKey, clientRunId, sourceRunId, seq);
-    chatRunState.deltaLastBroadcastLen.delete(clientRunId);
-    chatRunState.rawBuffers.delete(clientRunId);
-    chatRunState.buffers.delete(clientRunId);
-    chatRunState.deltaSentAt.delete(clientRunId);
+    chatRunState.clearRun(clientRunId);
     const spawnedBy = resolveSpawnedBy(sessionKey);
     if (jobState === "done") {
       const payload = {
