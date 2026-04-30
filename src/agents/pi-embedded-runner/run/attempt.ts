@@ -1479,34 +1479,10 @@ export async function runEmbeddedAttempt(
             DEFAULT_CONTEXT_TOKENS,
         ),
       );
-      const toolResultMaxCharsForGuard = resolveLiveToolResultMaxChars({
-        contextWindowTokens: contextTokenBudgetForGuard,
-        cfg: params.config,
-        agentId: sessionAgentId,
-      });
-      const midTurnPrecheckEnabled =
-        params.config?.agents?.defaults?.compaction?.midTurnPrecheck?.enabled === true;
-      let pendingMidTurnPrecheckRequest: MidTurnPrecheckRequest | null = null;
-      const onMidTurnPrecheck = (request: MidTurnPrecheckRequest) => {
-        pendingMidTurnPrecheckRequest = request;
-      };
       if (!activeContextEngine || activeContextEngine.info.ownsCompaction !== true) {
         removeToolResultContextGuard = installToolResultContextGuard({
           agent: activeSession.agent,
           contextWindowTokens: contextTokenBudgetForGuard,
-          ...(midTurnPrecheckEnabled
-            ? {
-                midTurnPrecheck: {
-                  enabled: true,
-                  contextTokenBudget: contextTokenBudgetForGuard,
-                  reserveTokens: () => settingsManager.getCompactionReserveTokens(),
-                  toolResultMaxChars: toolResultMaxCharsForGuard,
-                  getSystemPrompt: () => systemPromptText,
-                  getPrePromptMessageCount: () => prePromptMessageCount,
-                  onMidTurnPrecheck,
-                },
-              }
-            : {}),
         });
       } else {
         removeToolResultContextGuard = installContextEngineLoopHook({
