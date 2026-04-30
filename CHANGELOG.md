@@ -2,6 +2,12 @@
 
 Docs: https://docs.openclaw.ai
 
+## Unreleased
+
+### Fixes
+
+- CLI/progress: suppress nested progress spinners and line clears while TUI input owns raw stdin, so Crestodian `/status` no longer disturbs the active input row. (#75003) Thanks @velvet-shark.
+
 ## 2026.4.29
 
 ### Highlights
