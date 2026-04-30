@@ -52,10 +52,8 @@ import { loadChannelOutboundAdapter } from "../../channels/plugins/outbound/load
 import { recordInboundSession } from "../../channels/session.js";
 import {
   buildChannelTurnContext,
-  dispatchAssembledChannelTurn,
   runChannelTurn,
   runPreparedChannelTurn,
-  runResolvedChannelTurn,
 } from "../../channels/turn/kernel.js";
 import {
   resolveChannelGroupPolicy,
@@ -174,10 +172,8 @@ export function createRuntimeChannel(): PluginRuntime["channel"] {
     },
     turn: {
       run: runChannelTurn,
-      runResolved: runResolvedChannelTurn,
       buildContext: buildChannelTurnContext,
       runPrepared: runPreparedChannelTurn,
-      dispatchAssembled: dispatchAssembledChannelTurn,
     },
     threadBindings: {
       setIdleTimeoutBySessionKey: ({ channelId, targetSessionKey, accountId, idleTimeoutMs }) =>
