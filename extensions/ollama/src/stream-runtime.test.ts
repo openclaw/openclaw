@@ -1950,3 +1950,80 @@ describe("createConfiguredOllamaStreamFn", () => {
     );
   });
 });
+
+describe("per-request baseUrl override (multi-provider routing fix)", () => {
+  it("routes to runtime model.baseUrl when model carries its own baseUrl", async () => {
+    // Regression test: when multiple ollama-compat providers share api="ollama",
+    // each call must route to the per-model baseUrl, not the first-registered
+    // provider's URL. The runtime model stamps its own baseUrl; that must win.
+    await withMockNdjsonFetch(
+      [
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"ok"},"done":false}',
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true}',
+      ],
+      async (fetchMock) => {
+        // Provider config resolves to "http://provider-host" but the runtime
+        // model carries its own baseUrl — the runtime value must win.
+        const streamFn = createConfiguredOllamaStreamFn({
+          model: {},
+          providerBaseUrl: "http://provider-host:11434/v1",
+        });
+        const stream = await Promise.resolve(
+          streamFn(
+            {
+              id: "qwen3:32b",
+              api: "ollama",
+              provider: "custom-ollama",
+              contextWindow: 131072,
+              // Runtime model has a DIFFERENT baseUrl — must route here
+              baseUrl: "http://model-host:11434/v1",
+            } as never,
+            {
+              messages: [{ role: "user", content: "hello" }],
+            } as never,
+            {} as never,
+          ),
+        );
+
+        await collectStreamEvents(stream);
+        const request = getGuardedFetchCall(fetchMock);
+        // Must use the runtime model's baseUrl, NOT the provider's
+        expect(request.url).toBe("http://model-host:11434/api/chat");
+      },
+    );
+  });
+
+  it("falls back to provider baseUrl when runtime model has no baseUrl", async () => {
+    await withMockNdjsonFetch(
+      [
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"ok"},"done":false}',
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true}',
+      ],
+      async (fetchMock) => {
+        const streamFn = createConfiguredOllamaStreamFn({
+          model: {},
+          providerBaseUrl: "http://provider-host:11434/v1",
+        });
+        const stream = await Promise.resolve(
+          streamFn(
+            {
+              id: "qwen3:32b",
+              api: "ollama",
+              provider: "custom-ollama",
+              contextWindow: 131072,
+              // No baseUrl on runtime model — must use provider baseUrl
+            } as never,
+            {
+              messages: [{ role: "user", content: "hello" }],
+            } as never,
+            {} as never,
+          ),
+        );
+
+        await collectStreamEvents(stream);
+        const request = getGuardedFetchCall(fetchMock);
+        expect(request.url).toBe("http://provider-host:11434/api/chat");
+      },
+    );
+  });
+});
