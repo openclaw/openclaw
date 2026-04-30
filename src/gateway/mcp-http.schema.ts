@@ -1,4 +1,3 @@
-import { logWarn } from "../logger.js";
 import { resolveGatewayScopedTools } from "./tool-resolution.js";
 
 export type McpLoopbackTool = ReturnType<typeof resolveGatewayScopedTools>["tools"][number];
@@ -42,9 +41,10 @@ function flattenUnionSchema(raw: Record<string, unknown>): Record<string, unknow
           mergedProps[key] = merged;
           continue;
         }
-        logWarn(
-          `mcp loopback: conflicting schema definitions for "${key}", keeping the first variant`,
-        );
+        // The MCP loopback exposes one schema per tool. Some local tools use
+        // TypeBox unions where repeated field names carry different labels or
+        // descriptions across variants. Keeping the first non-mergeable shape is
+        // the least surprising fallback, and avoids log spam during tool listing.
       }
     }
     requiredSets.push(
