@@ -30,6 +30,7 @@ const WHATSAPP_PERSONAL_NUMBER_INPUT = "+1 (555) 111-2222";
 const WHATSAPP_PERSONAL_NUMBER = "15551112222";
 const WHATSAPP_ACCESS_NOTE_TITLE = "WhatsApp DM access";
 const WHATSAPP_LOGIN_NOTE_TITLE = "WhatsApp";
+const WHATSAPP_NEXT_STEPS_NOTE_TITLE = "WhatsApp next steps";
 
 export function createWhatsAppRootAllowFromConfig(): WhatsAppSetupConfig {
   return {
@@ -196,6 +197,17 @@ export function expectWhatsAppLoginFollowup(harness: WizardPromptHarness): void 
     expect.stringContaining("openclaw channels login"),
     WHATSAPP_LOGIN_NOTE_TITLE,
   );
+}
+
+export function expectWhatsAppNextStepsNote(harness: WizardPromptHarness): void {
+  expect(harness.note).toHaveBeenCalledWith(
+    expect.stringContaining("openclaw message send --channel whatsapp"),
+    WHATSAPP_NEXT_STEPS_NOTE_TITLE,
+  );
+}
+
+export function expectNoWhatsAppNextStepsNote(harness: WizardPromptHarness): void {
+  expect(harness.note).not.toHaveBeenCalledWith(expect.anything(), WHATSAPP_NEXT_STEPS_NOTE_TITLE);
 }
 
 export function expectWhatsAppWorkAccountAccessNote(harness: WizardPromptHarness): void {

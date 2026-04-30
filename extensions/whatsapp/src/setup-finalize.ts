@@ -420,10 +420,12 @@ export async function finalizeWhatsAppSetup(params: {
     message: linked ? "WhatsApp already linked. Re-link now?" : "Link WhatsApp now (QR)?",
     initialValue: !linked,
   });
+  let linkSucceeded = linked && !wantsLink;
   if (wantsLink) {
     try {
       const { loginWeb } = await import("./login.js");
       await loginWeb(false, undefined, params.runtime, accountId);
+      linkSucceeded = true;
     } catch (error) {
       params.runtime.error(`WhatsApp login failed: ${String(error)}`);
       await params.prompter.note(
@@ -444,5 +446,20 @@ export async function finalizeWhatsAppSetup(params: {
     forceAllowFrom: params.forceAllowFrom,
     prompter: params.prompter,
   });
+
+  if (linkSucceeded) {
+    const sendCommand = formatCliCommand(
+      "openclaw message send --channel whatsapp --target +15551234567 --message hi",
+    );
+    await params.prompter.note(
+      [
+        "Send a WhatsApp message to your linked assistant number from one of the numbers in `allowFrom` to verify routing.",
+        `Or send outbound from the CLI: \`${sendCommand}\` (replace the target with one of your allowFrom numbers).`,
+        `Docs: ${formatDocsLink("/cli/message", "cli/message")}`,
+      ].join("\n"),
+      "WhatsApp next steps",
+    );
+  }
+
   return { cfg: next };
 }

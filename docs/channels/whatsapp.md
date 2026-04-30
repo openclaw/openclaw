@@ -107,6 +107,23 @@ openclaw pairing approve whatsapp <CODE>
     Pairing requests expire after 1 hour. Pending requests are capped at 3 per channel.
 
   </Step>
+
+  <Step title="Send your first message">
+
+    Verify routing in either direction. Onboarding will not auto-send anything.
+
+    Inbound (manual): from one of the numbers in your `allowFrom` list, message the linked WhatsApp account. The gateway should respond.
+
+    Outbound (CLI): replace the target with one of your `allowFrom` numbers.
+
+```bash
+openclaw message send --channel whatsapp \
+  --target +15551234567 --message "hi"
+```
+
+    See [Message](/cli/message) for `--account`, `--media`, presentation payloads, and other options.
+
+  </Step>
 </Steps>
 
 <Note>

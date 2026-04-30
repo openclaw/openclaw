@@ -299,6 +299,16 @@ openclaw message send --channel telegram --target @mychat \
   --media ./diagram.png --force-document
 ```
 
+Send a WhatsApp hello-world after onboarding:
+
+```bash
+openclaw message send --channel whatsapp \
+  --target +15551234567 --message "hi"
+```
+
+The target must be an E.164 number (or a group JID). For multi-account setups,
+add `--account <id>` to pick the linked account.
+
 ## Related
 
 - [CLI reference](/cli)
