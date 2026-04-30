@@ -1,142 +1,128 @@
 ---
-summary: "Public OpenClaw App SDK design for external apps, scripts, dashboards, CI jobs, and IDE extensions"
+summary: "Public OpenClaw App SDK for external apps, scripts, dashboards, CI jobs, and IDE extensions"
 title: "OpenClaw App SDK"
 sidebarTitle: "App SDK"
 read_when:
-  - You are designing or implementing a public OpenClaw app SDK
-  - You are comparing OpenClaw agent APIs with Cursor, Claude Agent SDK, OpenAI Agents, Google ADK, OpenCode, Codex, or ACP
-  - You need to decide whether a feature belongs in the public App SDK, Plugin SDK, Gateway protocol, ACP backend, or managed environment layer
+  - You are building an external app, script, dashboard, CI job, or IDE extension that talks to OpenClaw
+  - You are choosing between the App SDK and the Plugin SDK
+  - You are integrating with Gateway agent runs, sessions, events, approvals, models, or tools
 ---
 
-This page is a design proposal for the public **OpenClaw App SDK**. It is
-separate from the existing [Plugin SDK](/plugins/sdk-overview).
+The **OpenClaw App SDK** is the public client API for apps outside the
+OpenClaw process. Use `@openclaw/sdk` when a script, dashboard, CI job, IDE
+extension, or other external app wants to connect to the Gateway, start agent
+runs, stream events, wait for results, cancel work, or inspect Gateway
+resources.
 
 <Note>
-  Use `@openclaw/sdk` when an external app, script, dashboard, CI job, or IDE
-  extension wants to run and observe OpenClaw agents through the Gateway. Use
-  `openclaw/plugin-sdk/*` only when writing a plugin that runs inside OpenClaw.
+  The App SDK is different from the [Plugin SDK](/plugins/sdk-overview).
+  `@openclaw/sdk` talks to the Gateway from outside OpenClaw.
+  `openclaw/plugin-sdk/*` is only for plugins that run inside OpenClaw and
+  register providers, channels, tools, hooks, or trusted runtimes.
 </Note>
 
-The Plugin SDK is for code that runs inside OpenClaw and extends providers,
-channels, tools, hooks, and trusted runtimes. The App SDK should be for
-external applications, scripts, dashboards, CI jobs, IDE extensions, and
-automation systems that want to run and observe OpenClaw agents through a stable
-public API.
+## What Ships Today
 
-## Status
+`@openclaw/sdk` ships with:
 
-Draft architecture.
+| Surface                   | Status  | What it does                                                                 |
+| ------------------------- | ------- | ---------------------------------------------------------------------------- |
+| `OpenClaw`                | Ready   | Main client entry point. Owns transport, connection, requests, and events.   |
+| `GatewayClientTransport`  | Ready   | WebSocket transport backed by the Gateway client.                            |
+| `oc.agents`               | Ready   | Lists, creates, updates, deletes, and gets agent handles.                    |
+| `Agent.run()`             | Ready   | Starts a Gateway `agent` run and returns a `Run`.                            |
+| `oc.runs`                 | Ready   | Creates, gets, waits for, cancels, and streams runs.                         |
+| `Run.events()`            | Ready   | Streams normalized per-run events with replay for fast runs.                 |
+| `Run.wait()`              | Ready   | Calls `agent.wait` and returns a stable `RunResult`.                         |
+| `Run.cancel()`            | Ready   | Calls `sessions.abort` by run id, with session key when available.           |
+| `oc.sessions`             | Ready   | Creates, resolves, sends to, patches, compacts, and gets session handles.    |
+| `Session.send()`          | Ready   | Calls `sessions.send` and returns a `Run`.                                   |
+| `oc.models`               | Ready   | Calls `models.list` and the current `models.authStatus` status RPC.          |
+| `oc.tools`                | Partial | Lists tool catalog and effective tools; direct tool invocation is not wired. |
+| `oc.approvals`            | Ready   | Lists and resolves exec approvals through Gateway approval RPCs.             |
+| `oc.rawEvents()`          | Ready   | Exposes raw Gateway events for advanced consumers.                           |
+| `normalizeGatewayEvent()` | Ready   | Converts raw Gateway events into the stable SDK event shape.                 |
 
-This document captures the design direction from a comparative review of these
-agent SDK and runtime surfaces:
+The SDK also exports the core types used by those surfaces:
+`AgentRunParams`, `RunResult`, `RunStatus`, `OpenClawEvent`,
+`OpenClawEventType`, `GatewayEvent`, `OpenClawTransport`,
+`GatewayRequestOptions`, `SessionCreateParams`, `SessionSendParams`,
+`RuntimeSelection`, `EnvironmentSelection`, `WorkspaceSelection`,
+`ApprovalMode`, and related result types.
 
-| Project             | Useful lesson                                                                                                                                                              |
-| ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Cursor SDK cookbook | Best high-level product API: `Agent`, `Run`, local and cloud runtimes, streaming, cancellation, model discovery, repositories, artifacts, and cloud pull request flows.    |
-| Claude Agent SDK    | Strong bidirectional session client, interrupt and steer support, permission modes, hooks, custom tools, session stores, and resumable transcripts.                        |
-| OpenAI Agents SDK   | Strong workflow concepts: handoffs, guardrails, human approvals, tracing, run state, streaming result objects, and resume after interruptions.                             |
-| Google ADK          | Strong internal architecture: runner, session service, memory service, artifact service, credential service, plugins, event actions, and long running tool confirmations.  |
-| OpenCode            | Strong client/server shape: generated API client, REST plus SSE, sessions, workspaces, worktrees, permissions, questions, files, VCS, PTY, tools, agents, skills, and MCP. |
-| Codex               | Strong local runtime boundary: approvals, sandboxing, network policy, local and remote exec servers, structured protocol events, and thread aware app-server sessions.     |
-| ACP and acpx        | Strong interoperability layer for external coding harnesses with named sessions, prompt queues, cooperative cancellation, and runtime adapters.                            |
+## Connect To A Gateway
 
-The recommendation is to build a Cursor-simple public facade on top of an
-OpenCode-style generated Gateway client, while keeping Claude, OpenAI Agents,
-ADK, Codex, and ACP concepts as internal design references where they fit.
-
-## Goals
-
-- Give app developers a tiny high-level API for running OpenClaw agents.
-- Keep local-first OpenClaw as the default runtime.
-- Make cloud or managed environments an additive environment provider, not a
-  different agent API.
-- Preserve existing OpenClaw boundaries: Gateway owns public protocol, plugin
-  SDK owns in-process extensions, ACP owns external harness interop.
-- Support `stream`, `wait`, `cancel`, `resume`, `fork`, artifacts, approvals,
-  and background tasks as first-class operations.
-- Expose stable normalized events while preserving runtime-native raw events for
-  advanced consumers.
-- Make SDK permissions, secret forwarding, approvals, sandboxing, and remote
-  environments explicit.
-- Keep the public contract small enough to document, test, version, and
-  generate.
-
-## Non goals
-
-- Do not expose `openclaw/plugin-sdk/*` as the app SDK.
-- Do not make ACP the only runtime model.
-- Do not require a cloud service before the SDK is useful.
-- Do not clone Cursor, Claude, OpenAI, ADK, OpenCode, Codex, or ACP APIs
-  exactly.
-- Do not expose unbounded `any` event payloads as the only public contract.
-- Do not promise sandbox or network isolation for an external harness unless
-  the selected environment can actually enforce it.
-- Do not make plugin authors depend on app SDK objects inside plugin runtime
-  code.
-
-## Current OpenClaw fit
-
-OpenClaw already has most of the substrate:
-
-| Existing surface                                    | What it contributes                                                                                                        |
-| --------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| [Agent loop](/concepts/agent-loop)                  | `agent` and `agent.wait` run lifecycle, streaming, timeout, and session serialization.                                     |
-| [Agent runtimes](/concepts/agent-runtimes)          | Provider, model, runtime, and channel separation.                                                                          |
-| [ACP agents](/tools/acp-agents)                     | External harness sessions for Claude Code, Cursor, Gemini CLI, OpenCode, explicit Codex ACP, and similar tools.            |
-| [Background tasks](/automation/tasks)               | Detached activity ledger for ACP, subagents, cron, CLI operations, and async media jobs.                                   |
-| [Sub-agents](/tools/subagents)                      | Isolated background agent runs, optional forked context, delivery back to requester sessions.                              |
-| [Agent harness plugins](/plugins/sdk-agent-harness) | Trusted native runtime registration for embedded harnesses such as Codex.                                                  |
-| Gateway protocol schemas                            | Current typed method and event definitions for agent params, sessions, subscriptions, aborts, compaction, and checkpoints. |
-
-The gap is not agent execution. The gap is a stable, friendly public facade over
-these pieces.
-
-## Core model
-
-The app SDK should use a small set of durable nouns.
-
-| Noun          | Meaning                                                                                                                    |
-| ------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| `OpenClaw`    | Client entry point. Owns Gateway discovery, auth, low-level client access, and namespace factories.                        |
-| `Agent`       | Configured actor. Carries agent id, default model, default runtime, default tool policy, and app-facing helpers.           |
-| `Session`     | Durable transcript, routing, workspace, context, and runtime binding.                                                      |
-| `Run`         | One submitted turn or task. Streams events, waits for result, cancels, and exposes artifacts.                              |
-| `Task`        | Detached or background activity ledger entry. Covers subagents, ACP spawns, cron jobs, CLI runs, and async jobs.           |
-| `Artifact`    | Files, patches, diffs, media, logs, trajectories, pull requests, screenshots, and generated bundles.                       |
-| `Environment` | Where the run executes: local Gateway, local workspace, node host, ACP harness, managed runner, or future cloud workspace. |
-| `ToolSpace`   | The effective tool surface: OpenClaw tools, MCP servers, channel tools, app tools, approval rules, and tool metadata.      |
-| `Approval`    | Human or policy decision requested by a run, tool, environment, or harness.                                                |
-
-These nouns map cleanly to existing OpenClaw concepts but avoid leaking
-implementation-specific names such as PI runner internals, plugin harness
-registration, or ACP adapter details.
-
-## Product shape
-
-The high-level SDK should feel like this:
+Create a client with an explicit Gateway URL, or inject a custom transport for
+tests and embedded app runtimes.
 
 ```typescript
 import { OpenClaw } from "@openclaw/sdk";
 
-const oc = new OpenClaw({ gateway: "auto" });
+const oc = new OpenClaw({
+  url: "ws://127.0.0.1:14565",
+  token: process.env.OPENCLAW_GATEWAY_TOKEN,
+  requestTimeoutMs: 30_000,
+});
+
+await oc.connect();
+```
+
+`new OpenClaw({ gateway: "ws://..." })` is equivalent to `url`. The
+`gateway: "auto"` option is accepted by the constructor, but automatic Gateway
+discovery is not a separate SDK feature yet; pass `url` when the app does not
+already know how to discover the Gateway.
+
+For tests, pass an object that implements `OpenClawTransport`:
+
+```typescript
+const oc = new OpenClaw({
+  transport: {
+    async request(method, params) {
+      return { method, params };
+    },
+    async *events() {},
+  },
+});
+```
+
+## Run An Agent
+
+Use `oc.agents.get(id)` when the app wants an agent handle, then call
+`agent.run()`.
+
+```typescript
 const agent = await oc.agents.get("main");
 
 const run = await agent.run({
   input: "Review this pull request and suggest the smallest safe fix.",
   model: "openai/gpt-5.5",
+  sessionKey: "main",
+  timeoutMs: 30_000,
 });
 
 for await (const event of run.events()) {
-  if (event.type === "assistant.delta") {
-    process.stdout.write(event.text);
+  const data = event.data as { delta?: unknown };
+  if (event.type === "assistant.delta" && typeof data.delta === "string") {
+    process.stdout.write(data.delta);
   }
 }
 
-const result = await run.wait();
+const result = await run.wait({ timeoutMs: 120_000 });
 console.log(result.status);
 ```
 
-The same app should be able to use a durable session:
+Provider-qualified model refs such as `openai/gpt-5.5` are split into Gateway
+`provider` and `model` overrides. `timeoutMs` stays milliseconds in the SDK and
+is converted to Gateway timeout seconds for the `agent` RPC.
+
+`run.wait()` uses the Gateway `agent.wait` RPC. A wait deadline that expires
+while the run is still active returns `status: "accepted"` instead of pretending
+the run itself timed out. Runtime timeouts, aborted runs, and cancelled runs are
+normalized into `timed_out` or `cancelled`.
+
+## Create And Reuse Sessions
+
+Use sessions when the app wants durable transcript state.
 
 ```typescript
 const session = await oc.sessions.create({
@@ -148,227 +134,157 @@ const run = await session.send("Prepare release notes from the current diff.");
 await run.wait();
 ```
 
-Current implementation note: `@openclaw/sdk` starts with the Gateway-backed
-surface that exists today. Provider-qualified model refs such as
-`openai/gpt-5.5` are split into Gateway `provider` and `model` overrides.
-Per-run `workspace`, `runtime`, `environment`, and `approvals` selections are
-still design targets; the client throws when callers set them so requests do not
-silently execute with defaults. Task, artifact, environment, and generic tool
-invocation helpers are also scaffolded as future API shape and throw explicit
-unsupported errors until Gateway RPCs exist for them.
-
-And the same API should be able to use an external ACP harness:
+`Session.send()` calls `sessions.send` and returns a `Run`. Session handles also
+support:
 
 ```typescript
-const run = await oc.runs.create({
-  input: "Deep review this repository and return only high-risk findings.",
-  workspace: { cwd: process.cwd() },
-  runtime: { type: "acp", harness: "claude" },
-  mode: "task",
-});
+await session.abort(run.id);
+await session.patch({ label: "renamed-session" });
+await session.compact({ maxLines: 200 });
 ```
 
-Managed environments should not change the top-level API:
+## Stream Events
+
+The SDK normalizes raw Gateway events into a stable `OpenClawEvent` envelope:
 
 ```typescript
-const run = await agent.run({
-  input: "Run the full changed gate and summarize failures.",
-  workspace: { repo: "openclaw/openclaw", ref: "main" },
-  runtime: {
-    type: "managed",
-    provider: "testbox",
-    timeoutMinutes: 90,
-  },
-});
+type OpenClawEvent = {
+  version: 1;
+  id: string;
+  ts: number;
+  type: OpenClawEventType;
+  runId?: string;
+  sessionId?: string;
+  sessionKey?: string;
+  taskId?: string;
+  agentId?: string;
+  data: unknown;
+  raw?: GatewayEvent;
+};
 ```
 
-## Runtime selection
+Common event types include:
 
-The app SDK should expose runtime selection as a normalized union:
+| Event type            | Source Gateway event                        |
+| --------------------- | ------------------------------------------- |
+| `run.started`         | `agent` lifecycle start                     |
+| `run.completed`       | `agent` lifecycle end                       |
+| `run.failed`          | `agent` lifecycle error                     |
+| `run.cancelled`       | Aborted/cancelled lifecycle end             |
+| `run.timed_out`       | Timeout lifecycle end                       |
+| `assistant.delta`     | Assistant streaming delta                   |
+| `assistant.message`   | Assistant message                           |
+| `thinking.delta`      | Thinking or plan stream                     |
+| `tool.call.started`   | Tool/item/command start                     |
+| `tool.call.delta`     | Tool/item/command update                    |
+| `tool.call.completed` | Tool/item/command completion                |
+| `tool.call.failed`    | Tool/item/command failure or blocked status |
+| `approval.requested`  | Exec or plugin approval request             |
+| `approval.resolved`   | Exec or plugin approval resolution          |
+| `session.created`     | `sessions.changed` create                   |
+| `session.updated`     | `sessions.changed` update                   |
+| `session.compacted`   | `sessions.changed` compaction               |
+| `task.updated`        | Task update events                          |
+| `artifact.updated`    | Patch stream events                         |
+| `raw`                 | Any event without a stable SDK mapping yet  |
+
+`Run.events()` filters events to one run id and replays already-seen events for
+fast runs. That means the documented flow is safe:
 
 ```typescript
-type RuntimeSelection =
-  | "auto"
-  | { type: "embedded"; id: "pi" | "codex" | string }
-  | { type: "cli"; id: "claude-cli" | string }
-  | { type: "acp"; harness: "claude" | "cursor" | "gemini" | "opencode" | string }
-  | { type: "managed"; provider: "local" | "node" | "testbox" | "cloud" | string };
+const run = await agent.run("Summarize the latest session.");
+
+for await (const event of run.events()) {
+  if (event.type === "run.completed") {
+    break;
+  }
+}
 ```
 
-Rules:
+For app-wide streams, use `oc.events()`. For raw Gateway frames, use
+`oc.rawEvents()`.
 
-- `auto` follows OpenClaw runtime selection rules.
-- `embedded` targets trusted in-process harnesses registered through the plugin
-  SDK, such as `pi` or `codex`.
-- `cli` targets OpenClaw-owned CLI backend execution where available.
-- `acp` targets external harnesses through ACP/acpx.
-- `managed` targets an environment provider and may still run an embedded,
-  CLI, or ACP runtime inside that environment.
+## Models, Tools, And Approvals
 
-The runtime selection object should be descriptive. It should not be the place
-where secret handling, sandbox policy, or workspace provisioning hides.
-
-## Environment model
-
-The environment is the execution substrate. It should be explicit because local
-CLI runs, external harnesses, node hosts, and cloud workspaces have different
-safety and lifecycle properties.
+Model helpers map to current Gateway methods:
 
 ```typescript
-type EnvironmentSelection =
-  | { type: "local"; cwd?: string }
-  | { type: "gateway"; url?: string; cwd?: string }
-  | { type: "node"; nodeId: string; cwd?: string }
-  | { type: "managed"; provider: string; repo?: string; ref?: string }
-  | { type: "ephemeral"; provider: string; repo?: string; ref?: string };
+await oc.models.list();
+await oc.models.status({ probe: false }); // calls models.authStatus
 ```
 
-The environment owns:
+Tool helpers expose the Gateway catalog and effective tool view:
 
-- checkout or workspace preparation
-- process and file access
-- sandbox and network enforcement
-- environment variables and secret references
-- logs, traces, and artifacts
-- cleanup and retention
-- runtime availability
+```typescript
+await oc.tools.list();
+await oc.tools.effective({ sessionKey: "main" });
+```
 
-This separation makes managed agents a natural extension of the SDK. A managed
-agent is a normal run in a managed environment, not a special product fork.
+Approval helpers use the exec approval RPCs:
 
-The detailed namespace, event, result, approval, artifact, security, package,
-and environment provider contracts live in
-[OpenClaw App SDK API design](/reference/openclaw-sdk-api-design).
+```typescript
+const approvals = await oc.approvals.list();
+await oc.approvals.respond("approval-id", { decision: "approve" });
+```
 
-## Cookbook plan
+## Explicitly Unsupported Today
 
-The SDK should ship with a cookbook, not just reference docs.
+The SDK includes names for the product model we want, but it does not silently
+pretend Gateway RPCs exist. These calls currently throw explicit unsupported
+errors:
 
-Recommended examples:
+```typescript
+await oc.tasks.list();
+await oc.tasks.get("task-id");
+await oc.tasks.cancel("task-id");
 
-| Example                      | Shows                                                                                        |
-| ---------------------------- | -------------------------------------------------------------------------------------------- |
-| Quickstart                   | Create client, run an agent, stream output, wait for result.                                 |
-| Coding agent CLI             | Local workspace, model picker, cancellation, approvals, JSON output.                         |
-| Agent dashboard              | Sessions, runs, background tasks, artifacts, event replay, status filters.                   |
-| App builder                  | Agent edits a workspace while a preview server runs beside it.                               |
-| Pull request reviewer        | Run against a repository ref, collect diff comments and artifacts.                           |
-| Approval console             | Subscribe to approvals and answer them from a UI.                                            |
-| ACP harness runner           | Run Claude Code, Cursor, Gemini CLI, or OpenCode through ACP using the same `Run` API.       |
-| Managed environment provider | Minimal provider that prepares a workspace, streams events, saves artifacts, and cleans up.  |
-| Slack or Discord bridge      | External app receives events and posts progress summaries without becoming a channel plugin. |
-| Multi-agent research         | Spawn parallel runs, collect artifacts, and synthesize a final report.                       |
+await oc.tools.invoke("tool-name", {});
 
-Cookbook examples should use the high-level API first. Low-level generated
-client examples belong in an advanced section.
+await oc.artifacts.list();
+await oc.artifacts.get("artifact-id");
+await oc.artifacts.download("artifact-id");
 
-## Phased implementation
+await oc.environments.list();
+await oc.environments.create({});
+await oc.environments.status("environment-id");
+await oc.environments.delete("environment-id");
+```
 
-### Phase 0: RFC and vocabulary
+Per-run `workspace`, `runtime`, `environment`, and `approvals` fields are typed
+as future shape, but the current Gateway does not support those overrides on
+the `agent` RPC. If callers pass them, the SDK throws before submitting the run
+so work does not accidentally execute with default workspace, runtime,
+environment, or approval behavior.
 
-- Agree on public nouns and names.
-- Decide package names.
-- Define the first event taxonomy.
-- Mark the current Plugin SDK as intentionally separate in docs.
+## App SDK Versus Plugin SDK
 
-### Phase 1: Low-level generated client
+Use the App SDK when code lives outside OpenClaw:
 
-- Generate a TypeScript client from Gateway protocol schemas.
-- Cover `agent`, `agent.wait`, sessions, subscriptions, aborts, and tasks first.
-- Add smoke tests that generated methods match Gateway method names and schema
-  shapes.
-- Publish as experimental or internal package.
+- Node scripts that start or observe agent runs
+- CI jobs that call a Gateway
+- dashboards and admin panels
+- IDE extensions
+- external bridges that do not need to become channel plugins
+- integration tests with fake or real Gateway transports
 
-### Phase 2: High-level run API
+Use the Plugin SDK when code runs inside OpenClaw:
 
-- Add `OpenClaw`, `Agent`, `Session`, and `Run`.
-- Support `run.events()`, `run.wait()`, and `run.cancel()`.
-- Support local Gateway discovery and explicit Gateway URLs.
-- Support durable sessions and session send.
+- provider plugins
+- channel plugins
+- tool or lifecycle hooks
+- agent harness plugins
+- trusted runtime helpers
 
-### Phase 3: Normalized event projection
+App SDK code should import from `@openclaw/sdk`. Plugin code should import from
+documented `openclaw/plugin-sdk/*` subpaths. Do not mix the two contracts.
 
-- Add Gateway-side normalized event projection beside existing raw events.
-- Preserve raw runtime events where policy allows.
-- Add replay cursors and reconnect behavior.
-- Map PI, Codex, ACP, and task events into the stable taxonomy.
+## Related Docs
 
-### Phase 4: Artifacts and approvals
-
-- Add artifact listing and download.
-- Add approval subscription and response helpers.
-- Add question subscription and response helpers.
-- Add cookbook approval console.
-
-### Phase 5: Environment providers
-
-- Introduce local, node, and managed environment provider contracts.
-- Start with an environment that already exists operationally.
-- Add workspace preparation, logs, artifacts, timeout, cleanup, and retention.
-
-### Phase 6: Cloud style workflows
-
-- Add repository and branch oriented runs.
-- Add pull request artifacts.
-- Add run boards grouped by repo, branch, status, and assignee.
-- Add long-running managed sessions and retention policy.
-
-## Design choices to copy
-
-Copy these ideas:
-
-- From Cursor: `Agent` plus `Run`, local and cloud symmetry, model discovery,
-  artifacts, and cookbook-driven onboarding.
-- From Claude Agent SDK: bidirectional clients, interrupt, permissions, hooks,
-  custom tools, session stores, and resume semantics.
-- From OpenAI Agents: handoffs, guardrails, human approval resume, tracing, and
-  structured streamed result objects.
-- From Google ADK: services behind runner, event actions, memory, artifacts,
-  credential services, and plugin interception around run lifecycle.
-- From OpenCode: generated protocol client, REST plus SSE, sessions,
-  workspaces, questions, permissions, files, VCS, PTY, MCP, agents, and skills.
-- From Codex: explicit sandbox, approval, network, local and remote exec, and
-  app-server thread boundaries.
-- From ACP and acpx: adapter based external harness interoperability and named
-  prompt queues.
-
-## Design choices to avoid
-
-Avoid these traps:
-
-- A public SDK that is just a thin dump of Gateway internals.
-- A public SDK that imports Plugin SDK subpaths.
-- A public SDK where events are only `stream` plus `data`.
-- A cloud-first API that makes local OpenClaw feel like a legacy mode.
-- Runtime selection hidden in model id prefixes.
-- Secret forwarding hidden in environment maps.
-- ACP specific options at the top level of every run.
-- Sandbox flags that cannot be enforced by the chosen runtime.
-- One SDK object that tries to be provider plugin, channel plugin, app client,
-  and managed runner at once.
-
-## Open questions
-
-- Should the initial package live in this repo or a separate SDK repo?
-- Should the generated low-level client be published publicly before the
-  high-level wrapper stabilizes?
-- What is the first supported app auth mechanism: local token, admin token,
-  OAuth device flow, or signed app registration?
-- How much session message history should the SDK expose by default?
-- Should managed environments be configured only in Gateway config, or can SDK
-  callers request them directly with scoped tokens?
-- What retention rules apply to artifacts generated by local runs?
-- Which event payloads require redaction before app delivery?
-- Should `Run` cover normal chat turns and detached tasks, or should detached
-  background work always return a `Task` wrapper with a nested `Run`?
-
-## Related docs
-
+- [OpenClaw App SDK API design](/reference/openclaw-sdk-api-design)
+- [Gateway RPC reference](/reference/rpc)
 - [Agent loop](/concepts/agent-loop)
 - [Agent runtimes](/concepts/agent-runtimes)
-- [Session](/concepts/session)
-- [Sub-agents](/tools/subagents)
+- [Sessions](/concepts/session)
 - [Background tasks](/automation/tasks)
 - [ACP agents](/tools/acp-agents)
-- [Agent harness plugins](/plugins/sdk-agent-harness)
 - [Plugin SDK overview](/plugins/sdk-overview)

@@ -36,6 +36,14 @@
     "target": "Gateway 网关"
   },
   {
+    "source": "Gateway RPC reference",
+    "target": "Gateway RPC 参考"
+  },
+  {
+    "source": "Sessions",
+    "target": "会话"
+  },
+  {
     "source": "Pi",
     "target": "Pi"
   },
