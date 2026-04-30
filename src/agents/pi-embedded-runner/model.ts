@@ -111,10 +111,7 @@ function createEmptyPiDiscoveryStores(): {
     typeof PiAuthStorageClass.inMemory === "function"
       ? PiAuthStorageClass.inMemory({})
       : PiAuthStorageClass.create();
-  const modelRegistry =
-    typeof PiModelRegistryClass.inMemory === "function"
-      ? PiModelRegistryClass.inMemory(authStorage)
-      : PiModelRegistryClass.create(authStorage);
+  const modelRegistry = new PiModelRegistryClass(authStorage, "");
   return { authStorage, modelRegistry };
 }
 
@@ -183,6 +180,54 @@ function applyResolvedTransportFallback(params: {
   };
 }
 
+const ZERO_MODEL_COST = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+} satisfies Model<Api>["cost"];
+
+function isCostNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function normalizeModelCost(cost: unknown): Model<Api>["cost"] {
+  if (!cost || typeof cost !== "object" || Array.isArray(cost)) {
+    return { ...ZERO_MODEL_COST };
+  }
+  const raw = cost as Record<string, unknown>;
+  const input = isCostNumber(raw.input) ? raw.input : 0;
+  const output = isCostNumber(raw.output) ? raw.output : 0;
+  const cacheRead = isCostNumber(raw.cacheRead) ? raw.cacheRead : 0;
+  const cacheWrite = isCostNumber(raw.cacheWrite) ? raw.cacheWrite : 0;
+  if (
+    raw.input === input &&
+    raw.output === output &&
+    raw.cacheRead === cacheRead &&
+    raw.cacheWrite === cacheWrite
+  ) {
+    return cost as Model<Api>["cost"];
+  }
+  return {
+    ...raw,
+    input,
+    output,
+    cacheRead,
+    cacheWrite,
+  } as Model<Api>["cost"];
+}
+
+function normalizeResolvedModelCost<T extends Model<Api>>(model: T): T {
+  const normalizedCost = normalizeModelCost((model as { cost?: unknown }).cost);
+  if (normalizedCost === model.cost) {
+    return model;
+  }
+  return {
+    ...model,
+    cost: normalizedCost,
+  };
+}
+
 function normalizeResolvedModel(params: {
   provider: string;
   model: Model<Api>;
@@ -241,7 +286,7 @@ function normalizeResolvedModel(params: {
       runtimeHooks,
       model: compatNormalized ?? pluginNormalized ?? normalizedInputModel,
     });
-  return canonicalizeLegacyResolvedModel({
+  const resolvedModel = canonicalizeLegacyResolvedModel({
     provider: params.provider,
     model: normalizeResolvedProviderModel({
       provider: params.provider,
@@ -249,6 +294,7 @@ function normalizeResolvedModel(params: {
         fallbackTransportNormalized ?? compatNormalized ?? pluginNormalized ?? normalizedInputModel,
     }),
   });
+  return normalizeResolvedModelCost(resolvedModel);
 }
 
 function resolveProviderTransport(params: {

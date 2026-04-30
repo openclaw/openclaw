@@ -283,6 +283,43 @@ describe("resolveModel", () => {
     expect(result.model?.api).toBe("openai-completions");
   });
 
+  it("fills zero cost for configured provider models that omit cost", () => {
+    const cfg = {
+      models: {
+        providers: {
+          "sider-litellm-messages": {
+            baseUrl: "https://meter.example/llm",
+            api: "anthropic-messages",
+            models: [
+              {
+                id: "bothyouandme/claude-sonnet-4-6",
+                name: "Claude Sonnet 4.6",
+                reasoning: true,
+                input: ["text", "image"],
+                contextWindow: 1_050_000,
+                maxTokens: 128_000,
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest(
+      "sider-litellm-messages",
+      "bothyouandme/claude-sonnet-4-6",
+      "/tmp/agent",
+      cfg,
+    );
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "sider-litellm-messages",
+      id: "bothyouandme/claude-sonnet-4-6",
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    });
+  });
+
   it("defaults baseUrl-only local custom fallback models to chat completions", () => {
     const cfg = {
       agents: {
