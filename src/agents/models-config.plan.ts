@@ -12,6 +12,7 @@ import {
   resolveImplicitProviders,
   type ProviderConfig,
 } from "./models-config.providers.js";
+import { clearProviderRetryRunners } from "./provider-retry.js";
 
 type ModelsConfig = NonNullable<OpenClawConfig["models"]>;
 
@@ -98,6 +99,10 @@ export async function planOpenClawModelsJson(params: {
   const providers = await resolveProvidersForModelsJson({ cfg, agentDir, env });
 
   if (Object.keys(providers).length === 0) {
+    // Reload resolved to zero providers — normalizeProviders won't run, so the
+    // module-scoped retry runner registry must be cleared here. Otherwise old
+    // runners survive a "remove all providers" reload until process restart.
+    clearProviderRetryRunners();
     return { action: "skip" };
   }
 

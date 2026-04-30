@@ -660,6 +660,20 @@ function createOpenAIResponsesClient(
   });
 }
 
+// Builds the per-request options bag passed to OpenAI SDK stream-creating
+// methods. Signature mirrors upstream `main`, which derives a request-level
+// `timeout` from the model config; the timeout-resolution chain doesn't
+// exist on this PR's base, so the body is signal-only here. Keeping the
+// signature aligned means a future rebase resolves the helper definition
+// to main's timeout-aware version without touching the three call sites
+// in the wrappers below.
+function buildOpenAISdkRequestOptions(
+  _model: Model<Api>,
+  signal?: AbortSignal,
+): { signal?: AbortSignal } | undefined {
+  return signal ? { signal } : undefined;
+}
+
 export function createOpenAIResponsesTransportStreamFn(): StreamFn {
   return (model, context, options) => {
     const eventStream = createAssistantMessageEventStream();
@@ -711,7 +725,7 @@ export function createOpenAIResponsesTransportStreamFn(): StreamFn {
         const createStream = async () =>
           (await client.responses.create(
             params as never,
-            options?.signal ? { signal: options.signal } : undefined,
+            buildOpenAISdkRequestOptions(model, options?.signal),
           )) as unknown as AsyncIterable<unknown>;
         const retryRunner = getProviderRetryRunner(model.provider);
         const responseStream = retryRunner
@@ -870,7 +884,7 @@ export function createAzureOpenAIResponsesTransportStreamFn(): StreamFn {
         const createStream = async () =>
           (await client.responses.create(
             params as never,
-            options?.signal ? { signal: options.signal } : undefined,
+            buildOpenAISdkRequestOptions(model, options?.signal),
           )) as unknown as AsyncIterable<unknown>;
         const retryRunner = getProviderRetryRunner(model.provider);
         const responseStream = retryRunner
@@ -1002,9 +1016,10 @@ export function createOpenAICompletionsTransportStreamFn(): StreamFn {
           params = nextParams as typeof params;
         }
         const createStream = async () =>
-          (await client.chat.completions.create(params as never, {
-            signal: options?.signal,
-          })) as unknown as AsyncIterable<ChatCompletionChunk>;
+          (await client.chat.completions.create(
+            params as never,
+            buildOpenAISdkRequestOptions(model, options?.signal),
+          )) as unknown as AsyncIterable<ChatCompletionChunk>;
         const retryRunner = getProviderRetryRunner(model.provider);
         const responseStream = retryRunner
           ? await retryRunner(createStream, "completions", { signal: options?.signal })

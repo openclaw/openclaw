@@ -2701,6 +2701,47 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   description:
                     "Optional request overrides for model-provider requests, including extra headers, auth overrides, proxy routing, and TLS client settings. Use these only when your upstream or enterprise network path requires transport customization.",
                 },
+                retry: {
+                  type: "object",
+                  properties: {
+                    attempts: {
+                      type: "integer",
+                      minimum: 1,
+                      maximum: 9007199254740991,
+                      title: "Model Provider Retry Attempts",
+                      description:
+                        "Max retry attempts for transient provider errors (default: 3). Use higher values for backends with known maintenance windows.",
+                    },
+                    minDelayMs: {
+                      type: "integer",
+                      minimum: 0,
+                      maximum: 9007199254740991,
+                      title: "Model Provider Retry Min Delay (ms)",
+                      description:
+                        "Minimum delay in milliseconds between retry attempts (default: 1000). Exponential backoff starts from this value.",
+                    },
+                    maxDelayMs: {
+                      type: "integer",
+                      minimum: 0,
+                      maximum: 9007199254740991,
+                      title: "Model Provider Retry Max Delay (ms)",
+                      description:
+                        "Maximum delay cap in milliseconds between retry attempts (default: 30000). Bounds exponential backoff growth.",
+                    },
+                    jitter: {
+                      type: "number",
+                      minimum: 0,
+                      maximum: 1,
+                      title: "Model Provider Retry Jitter",
+                      description:
+                        "Jitter factor (0-1) applied to retry delays to avoid thundering herd on shared backends (default: 0.15).",
+                    },
+                  },
+                  additionalProperties: false,
+                  title: "Model Provider Retry Policy",
+                  description:
+                    "Optional retry policy for transient LLM provider failures (connection errors, 429/502/503/504). Omit to disable provider-level retry. Configure higher attempts and longer delays for self-hosted backends with scheduled maintenance windows.",
+                },
                 models: {
                   type: "array",
                   items: {
@@ -24837,6 +24878,31 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Model Provider Request TLS Skip Verify",
       help: "Skips upstream TLS certificate verification. Use only for controlled development environments.",
       tags: ["security", "models", "advanced"],
+    },
+    "models.providers.*.retry": {
+      label: "Model Provider Retry Policy",
+      help: "Optional retry policy for transient LLM provider failures (connection errors, 429/502/503/504). Omit to disable provider-level retry. Configure higher attempts and longer delays for self-hosted backends with scheduled maintenance windows.",
+      tags: ["reliability", "models"],
+    },
+    "models.providers.*.retry.attempts": {
+      label: "Model Provider Retry Attempts",
+      help: "Max retry attempts for transient provider errors (default: 3). Use higher values for backends with known maintenance windows.",
+      tags: ["reliability", "models"],
+    },
+    "models.providers.*.retry.minDelayMs": {
+      label: "Model Provider Retry Min Delay (ms)",
+      help: "Minimum delay in milliseconds between retry attempts (default: 1000). Exponential backoff starts from this value.",
+      tags: ["reliability", "models"],
+    },
+    "models.providers.*.retry.maxDelayMs": {
+      label: "Model Provider Retry Max Delay (ms)",
+      help: "Maximum delay cap in milliseconds between retry attempts (default: 30000). Bounds exponential backoff growth.",
+      tags: ["reliability", "performance", "models"],
+    },
+    "models.providers.*.retry.jitter": {
+      label: "Model Provider Retry Jitter",
+      help: "Jitter factor (0-1) applied to retry delays to avoid thundering herd on shared backends (default: 0.15).",
+      tags: ["reliability", "models"],
     },
     "models.providers.*.models": {
       label: "Model Provider Model List",
