@@ -529,6 +529,25 @@ describe("gateway hooks helpers", () => {
     ).not.toThrow();
   });
 
+  test("resolveHooksConfig ignores static session keys on wake mappings", () => {
+    expect(() =>
+      resolveHooksConfig({
+        hooks: {
+          enabled: true,
+          token: "secret",
+          mappings: [
+            {
+              match: { path: "wake" },
+              action: "wake",
+              textTemplate: "ping",
+              sessionKey: "agent:main:subagent:worker",
+            },
+          ],
+        },
+      } as OpenClawConfig),
+    ).not.toThrow();
+  });
+
   test("resolveHooksConfig treats '/' match.path as a catch-all for shadowing", () => {
     expect(() =>
       resolveHooksConfig({
