@@ -54,7 +54,7 @@ import {
   NON_ENV_SECRETREF_MARKER,
 } from "./model-auth-markers.js";
 import { ProviderAuthError, type ResolvedProviderAuth } from "./model-auth-runtime-shared.js";
-import { normalizeProviderId } from "./model-selection.js";
+import { normalizeProviderId, normalizeProviderIdForAuth } from "./model-selection.js";
 
 export {
   ensureAuthProfileStore,
@@ -371,6 +371,54 @@ function resolveProviderAuthOverride(
     return auth;
   }
   return undefined;
+}
+
+function isConfigProfileModeCompatible(params: {
+  configuredMode: string | undefined;
+  storedType: string | undefined;
+}): boolean {
+  if (!params.configuredMode || !params.storedType) {
+    return true;
+  }
+  if (params.configuredMode === params.storedType) {
+    return true;
+  }
+  return params.configuredMode === "oauth" && params.storedType === "token";
+}
+
+function buildAuthProfileModeMismatchHint(params: {
+  cfg: OpenClawConfig | undefined;
+  store: AuthProfileStore;
+  provider: string;
+}): string | null {
+  const profiles = params.cfg?.auth?.profiles;
+  if (!profiles) {
+    return null;
+  }
+  const providerAuthKey = normalizeProviderIdForAuth(params.provider);
+  for (const [profileId, profileConfig] of Object.entries(profiles)) {
+    if (normalizeProviderIdForAuth(profileConfig.provider) !== providerAuthKey) {
+      continue;
+    }
+    const credential = params.store.profiles[profileId];
+    if (!credential || normalizeProviderIdForAuth(credential.provider) !== providerAuthKey) {
+      continue;
+    }
+    if (
+      isConfigProfileModeCompatible({
+        configuredMode: profileConfig.mode,
+        storedType: credential.type,
+      })
+    ) {
+      continue;
+    }
+    return [
+      `Auth profile "${profileId}" for provider "${params.provider}" exists as ${credential.type}`,
+      `but auth.profiles.${profileId}.mode is "${profileConfig.mode}", so it is skipped.`,
+      `Update that config mode to "${credential.type}" or remove the stale auth.profiles override.`,
+    ].join(" ");
+  }
+  return null;
 }
 
 function shouldUseImplicitAwsSdkAuth(params: {
@@ -1285,14 +1333,22 @@ export async function resolveApiKeyForProvider(params: {
 
   const authStorePath = resolveAuthStorePathForDisplay(agentDir);
   const resolvedAgentDir = path.dirname(authStorePath);
+  const authProfileModeMismatchHint = buildAuthProfileModeMismatchHint({
+    cfg,
+    store,
+    provider,
+  });
   throw new ProviderAuthError(
     "missing-provider-auth",
     provider,
     [
       `No API key found for provider "${provider}".`,
+      authProfileModeMismatchHint,
       `Auth store: ${authStorePath} (agentDir: ${resolvedAgentDir}).`,
       `Configure auth for this agent (${formatCliCommand("openclaw agents add <id>")}) or copy only portable static auth profiles from the main agentDir.`,
-    ].join(" "),
+    ]
+      .filter(Boolean)
+      .join(" "),
   );
 }
 
