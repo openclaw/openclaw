@@ -1,6 +1,8 @@
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { notifyListeners, registerListener } from "../shared/listeners.js";
 
+export const HEARTBEAT_TRANSCRIPT_PROMPT = "[OpenClaw heartbeat poll]";
+
 export type HeartbeatIndicatorType = "ok" | "alert" | "error";
 
 export type HeartbeatEventPayload = {

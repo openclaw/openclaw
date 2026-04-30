@@ -13,6 +13,7 @@ import {
   createChannelDirectoryAdapter,
   createRuntimeDirectoryLiveAdapter,
 } from "openclaw/plugin-sdk/directory-runtime";
+import { HEARTBEAT_TRANSCRIPT_PROMPT } from "openclaw/plugin-sdk/heartbeat-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { resolveOutboundSendDep } from "openclaw/plugin-sdk/outbound-send-deps";
 import { buildOutboundBaseSessionKey, type RoutePeer } from "openclaw/plugin-sdk/routing";
@@ -140,6 +141,9 @@ function shouldTreatSlackDeliveredTextAsVisible(params: {
   kind: "tool" | "block" | "final";
   text?: string;
 }): boolean {
+  if (params.text?.trim() === HEARTBEAT_TRANSCRIPT_PROMPT) {
+    return false;
+  }
   return (
     params.kind === "block" && typeof params.text === "string" && params.text.trim().length > 0
   );
