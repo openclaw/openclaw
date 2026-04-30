@@ -355,7 +355,7 @@ export function buildGatewayCronService(params: {
       params.broadcast("cron", evt, { dropIfSlow: true });
       // Build hook event from CronEvent. The job snapshot is carried on the
       // internal event so it's available even for "removed" actions where
-      // getJob() would return undefined. `delivery` and `usage` are
+      // peekLoadedJob() would return undefined. `delivery` and `usage` are
       // intentionally omitted — they contain internal channel/token detail
       // that is not part of the public plugin SDK surface.
       // Resolve job snapshot from the event or live service so top-level
@@ -389,7 +389,7 @@ export function buildGatewayCronService(params: {
       };
       runCronChangedHook(hookEvt);
       if (evt.action === "finished") {
-        const job = evt.job ?? cron.getJob(evt.jobId);
+        const job = evt.job ?? cron.peekLoadedJob(evt.jobId);
         dispatchGatewayCronFinishedNotifications({
           evt,
           job,

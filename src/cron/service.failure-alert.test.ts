@@ -378,7 +378,7 @@ describe("CronService failure alerts", () => {
       }),
     );
 
-    const skippedJob = cron.getJob(job.id);
+    const skippedJob = await cron.getJob(job.id);
     expect(skippedJob?.state.consecutiveSkipped).toBe(2);
     expect(skippedJob?.state.consecutiveErrors).toBe(0);
 
@@ -421,7 +421,7 @@ describe("CronService failure alerts", () => {
     await cron.run(job.id, "force");
 
     expect(sendCronFailureAlert).not.toHaveBeenCalled();
-    const skippedJob = cron.getJob(job.id);
+    const skippedJob = await cron.getJob(job.id);
     expect(skippedJob?.state.consecutiveSkipped).toBe(2);
     expect(skippedJob?.state.consecutiveErrors).toBe(0);
 
