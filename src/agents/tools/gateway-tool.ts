@@ -51,6 +51,10 @@ const ALLOWED_GATEWAY_CONFIG_PATHS = [
   "channels.*.*.*.requireMention",
   "channels.*.*.*.*.requireMention",
   "channels.*.*.*.*.*.requireMention",
+  // Visible reply delivery mode — operators can let agents self-configure
+  // group/channel reply visibility without hand-editing openclaw.json.
+  "messages.visibleReplies",
+  "messages.groupChat.visibleReplies",
 ] as const;
 
 /** @internal Exposed for regression tests only; do not import from runtime code. */
