@@ -1,5 +1,4 @@
 import { parseDurationMs } from "../cli/parse-duration.js";
-import { HEARTBEAT_TRANSCRIPT_PROMPT } from "../infra/heartbeat-events.js";
 import { escapeRegExp } from "../shared/regexp.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { HEARTBEAT_TOKEN } from "./tokens.js";

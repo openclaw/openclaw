@@ -28,7 +28,7 @@ import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import { hasControlCommand } from "../command-detection.js";
 import { resolveEnvelopeFormatOptions } from "../envelope.js";
-import { HEARTBEAT_TRANSCRIPT_PROMPT } from "../heartbeat.js";
+import { HEARTBEAT_TRANSCRIPT_PROMPT } from "../../infra/heartbeat-events.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
 import {
   type ElevatedLevel,
