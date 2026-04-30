@@ -10,7 +10,10 @@ import {
   getActiveBundledRuntimeDepsInstallCount,
   waitForBundledRuntimeDepsInstallIdle,
 } from "./bundled-runtime-deps-activity.js";
-import { assertBundledRuntimeDepsInstalled } from "./bundled-runtime-deps-materialization.js";
+import {
+  assertBundledRuntimeDepsInstalled,
+  ensureNpmInstallExecutionManifest,
+} from "./bundled-runtime-deps-materialization.js";
 import {
   __testing as bundledRuntimeDepsTesting,
   createBundledRuntimeDependencyAliasMap,
@@ -543,6 +546,18 @@ describe("installBundledRuntimeDeps", () => {
         cwd: installRoot,
       }),
     );
+  });
+
+  it("always includes a dependencies field in the install manifest, even when specs are empty", () => {
+    const installRoot = makeTempDir();
+
+    ensureNpmInstallExecutionManifest(installRoot, []);
+
+    const written = JSON.parse(fs.readFileSync(path.join(installRoot, "package.json"), "utf8")) as {
+      dependencies?: unknown;
+    };
+    expect(written).toHaveProperty("dependencies");
+    expect(written.dependencies).toEqual({});
   });
 
   it("repairs external install roots from the complete generated dependency plan", async () => {
@@ -3404,6 +3419,78 @@ describe("ensureBundledPluginRuntimeDeps", () => {
       "sqlite-vec@0.1.9",
       "typebox@1.1.34",
     ]);
+  });
+
+  it("installs local memory embedding runtime deps only when local memory search is configured", () => {
+    const packageRoot = makeTempDir();
+    const pluginRoot = writeBundledPluginPackage({
+      packageRoot,
+      pluginId: "memory-core",
+      deps: { chokidar: "^5.0.0", typebox: "1.1.34" },
+      runtimeDependencies: {
+        localMemoryEmbedding: ["node-llama-cpp@3.18.1"],
+      },
+    });
+    const calls: BundledRuntimeDepsInstallParams[] = [];
+
+    const result = ensureBundledPluginRuntimeDeps({
+      env: {},
+      config: {
+        agents: {
+          defaults: {
+            memorySearch: { provider: "local" },
+          },
+        },
+      },
+      installDeps: (params) => {
+        calls.push(params);
+      },
+      pluginId: "memory-core",
+      pluginRoot,
+    });
+
+    expect(result.installedSpecs).toEqual([
+      "chokidar@^5.0.0",
+      "node-llama-cpp@3.18.1",
+      "typebox@1.1.34",
+    ]);
+    expect(calls[0]?.installSpecs).toEqual([
+      "chokidar@^5.0.0",
+      "node-llama-cpp@3.18.1",
+      "typebox@1.1.34",
+    ]);
+  });
+
+  it("does not install local memory embedding runtime deps for remote memory search", () => {
+    const packageRoot = makeTempDir();
+    const pluginRoot = writeBundledPluginPackage({
+      packageRoot,
+      pluginId: "memory-core",
+      deps: { chokidar: "^5.0.0", typebox: "1.1.34" },
+      runtimeDependencies: {
+        localMemoryEmbedding: ["node-llama-cpp@3.18.1"],
+      },
+    });
+    const calls: BundledRuntimeDepsInstallParams[] = [];
+
+    const result = ensureBundledPluginRuntimeDeps({
+      env: {},
+      config: {
+        agents: {
+          defaults: {
+            memorySearch: { provider: "openai" },
+          },
+        },
+      },
+      installDeps: (params) => {
+        calls.push(params);
+      },
+      pluginId: "memory-core",
+      pluginRoot,
+    });
+
+    expect(result.installedSpecs).toEqual(["chokidar@^5.0.0", "typebox@1.1.34"]);
+    expect(calls[0]?.installSpecs).toEqual(["chokidar@^5.0.0", "typebox@1.1.34"]);
   });
 
   it("repairs external staged deps even when packaged plugin-local deps are present", () => {

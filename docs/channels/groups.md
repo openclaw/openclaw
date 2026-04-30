@@ -61,6 +61,9 @@ To restore legacy automatic final replies for group/channel rooms:
 }
 ```
 
+The gateway hot-reloads `messages` config after the file is saved. Restart only
+when file watching or config reload is disabled in the deployment.
+
 To require visible output to go through the message tool for every source chat:
 
 ```json5
