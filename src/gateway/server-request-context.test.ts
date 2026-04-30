@@ -134,7 +134,7 @@ describe("createGatewayRequestContext", () => {
         connect: { device: { id: "device-2" }, role: "primary" },
         socket: unrelatedSocket,
       },
-    ]) as GatewayRequestContextParams["clients"];
+    ]) as unknown as GatewayRequestContextParams["clients"];
 
     const context = createGatewayRequestContext(
       makeContextParams({
