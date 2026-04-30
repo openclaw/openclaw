@@ -11,6 +11,7 @@ import {
   findLifecycleErrorAgentEvent,
 } from "./pi-embedded-subscribe.e2e-harness.js";
 import { subscribeEmbeddedPiSession } from "./pi-embedded-subscribe.js";
+import * as agentEvents from "../infra/agent-events.js";
 import { makeZeroUsageSnapshot } from "./usage.js";
 
 describe("subscribeEmbeddedPiSession", () => {
@@ -578,6 +579,48 @@ describe("subscribeEmbeddedPiSession", () => {
       .filter((value): value is string => typeof value === "string");
     expect(streamTexts.at(-1)).toBe("Reasoning:\n_Checking files done_");
     expect(onReasoningEnd).toHaveBeenCalledTimes(1);
+  });
+
+  it("extracts correct reasoning delta when appending to the same line", () => {
+    const emitAgentEventSpy = vi.spyOn(agentEvents, "emitAgentEvent").mockImplementation(() => {});
+    const { emit } = createSubscribedHarness({
+      runId: "run",
+      reasoningMode: "stream",
+      onReasoningStream: vi.fn(),
+    });
+
+    emit({
+      type: "message_update",
+      message: {
+        role: "assistant",
+        content: [{ type: "thinking", thinking: "Step 1" }],
+      },
+      assistantMessageEvent: {
+        type: "thinking_delta",
+        delta: "Step 1",
+      },
+    });
+
+    emit({
+      type: "message_update",
+      message: {
+        role: "assistant",
+        content: [{ type: "thinking", thinking: "Step 1 and Step 2" }],
+      },
+      assistantMessageEvent: {
+        type: "thinking_delta",
+        delta: " and Step 2",
+      },
+    });
+
+    const thinkingEvents = emitAgentEventSpy.mock.calls
+      .map((call) => call[0])
+      .filter((evt) => evt?.stream === "thinking");
+
+    expect(thinkingEvents.length).toBe(2);
+    expect(thinkingEvents[0]?.data?.delta).toBe("Reasoning:\n_Step 1_");
+    expect(thinkingEvents[1]?.data?.delta).toBe(" and Step 2_");
+    emitAgentEventSpy.mockRestore();
   });
 
   it("emits reasoning end once when native and tagged reasoning end overlap", () => {
