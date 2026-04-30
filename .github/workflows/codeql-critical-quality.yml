@@ -10,6 +10,7 @@ on:
         type: choice
         options:
           - all
+          - config-boundary
           - core-auth-secrets
           - channel-runtime-boundary
           - gateway-runtime-boundary
@@ -28,6 +29,7 @@ on:
       - "packages/plugin-package-contract/**"
       - "packages/plugin-sdk/**"
       - "packages/memory-host-sdk/**"
+      - "src/config/**"
       - "src/agents/*auth*.ts"
       - "src/agents/**/*auth*.ts"
       - "src/agents/auth-health*.ts"
@@ -101,6 +103,7 @@ jobs:
     timeout-minutes: 5
     outputs:
       channel: ${{ steps.detect.outputs.channel }}
+      config: ${{ steps.detect.outputs.config }}
       core_auth_secrets: ${{ steps.detect.outputs.core_auth_secrets }}
       gateway: ${{ steps.detect.outputs.gateway }}
       memory: ${{ steps.detect.outputs.memory }}
@@ -122,6 +125,7 @@ jobs:
           set -euo pipefail
 
           channel=false
+          config=false
           core_auth_secrets=false
           gateway=false
           memory=false
@@ -134,6 +138,7 @@ jobs:
 
           if [[ "${EVENT_NAME}" != "pull_request" ]]; then
             channel=true
+            config=true
             core_auth_secrets=true
             gateway=true
             memory=true
@@ -148,6 +153,7 @@ jobs:
               case "${file}" in
                 .github/codeql/*|.github/workflows/codeql-critical-quality.yml)
                   channel=true
+                  config=true
                   core_auth_secrets=true
                   gateway=true
                   memory=true
@@ -163,6 +169,9 @@ jobs:
                   ;;
                 src/channels/*)
                   channel=true
+                  ;;
+                src/config/*)
+                  config=true
                   ;;
                 src/gateway/protocol/*secret*.ts|src/gateway/server-methods/secrets*.ts)
                   core_auth_secrets=true
@@ -224,6 +233,7 @@ jobs:
 
           {
             echo "channel=${channel}"
+            echo "config=${config}"
             echo "core_auth_secrets=${core_auth_secrets}"
             echo "gateway=${gateway}"
             echo "memory=${memory}"
@@ -260,7 +270,8 @@ jobs:
 
   config-boundary:
     name: Critical Quality (config-boundary)
-    if: ${{ github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || inputs.profile == 'all') }}
+    needs: quality-shards
+    if: ${{ needs.quality-shards.outputs.config == 'true' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (github.event_name == 'pull_request' || github.event_name != 'workflow_dispatch' || inputs.profile == 'all' || inputs.profile == 'config-boundary') }}
     runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 25
     steps:
