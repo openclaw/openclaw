@@ -77,7 +77,10 @@ function hasInstalledRuntimeDepEntryFiles(packageDir: string, packageJson: JsonO
   if (mainPath !== packageDir && !mainPath.startsWith(`${packageDir}${path.sep}`)) {
     return false;
   }
-  return fs.existsSync(mainPath);
+  if (fs.existsSync(mainPath)) {
+    return true;
+  }
+  return [".js", ".json", ".node"].some((extension) => fs.existsSync(`${mainPath}${extension}`));
 }
 
 export function isRuntimeDepSatisfied(

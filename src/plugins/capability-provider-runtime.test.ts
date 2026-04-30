@@ -103,6 +103,7 @@ function expectBundledCompatLoadPath(params: {
     config: params.enablementCompat,
     onlyPluginIds: ["openai"],
     activate: false,
+    installBundledRuntimeDeps: false,
   });
 }
 
@@ -408,6 +409,7 @@ describe("resolvePluginCapabilityProviders", () => {
       }),
       onlyPluginIds: ["microsoft"],
       activate: false,
+      installBundledRuntimeDeps: false,
     });
   });
 
@@ -582,6 +584,7 @@ describe("resolvePluginCapabilityProviders", () => {
       config: expect.anything(),
       onlyPluginIds: [],
       activate: false,
+      installBundledRuntimeDeps: false,
     });
   });
 
@@ -626,6 +629,7 @@ describe("resolvePluginCapabilityProviders", () => {
       config: compatConfig,
       onlyPluginIds: ["google"],
       activate: false,
+      installBundledRuntimeDeps: false,
     });
   });
 
@@ -649,6 +653,7 @@ describe("resolvePluginCapabilityProviders", () => {
       config: expect.anything(),
       onlyPluginIds: [],
       activate: false,
+      installBundledRuntimeDeps: false,
     });
   });
 
@@ -786,6 +791,7 @@ describe("resolvePluginCapabilityProviders", () => {
       config: enablementCompat,
       onlyPluginIds: ["google"],
       activate: false,
+      installBundledRuntimeDeps: false,
     });
   });
 });

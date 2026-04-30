@@ -226,8 +226,13 @@ export function resolvePluginCapabilityProvider<K extends CapabilityProviderRegi
   });
   const loadOptions =
     compatConfig === undefined
-      ? { onlyPluginIds: pluginIds, activate: false }
-      : { config: compatConfig, onlyPluginIds: pluginIds, activate: false };
+      ? { onlyPluginIds: pluginIds, activate: false, installBundledRuntimeDeps: false }
+      : {
+          config: compatConfig,
+          onlyPluginIds: pluginIds,
+          activate: false,
+          installBundledRuntimeDeps: false,
+        };
   const registry = resolveRuntimePluginRegistry(loadOptions);
   return findProviderById(registry?.[params.key] ?? [], params.providerId);
 }
@@ -269,8 +274,13 @@ export function resolvePluginCapabilityProviders<K extends CapabilityProviderReg
   });
   const loadOptions =
     compatConfig === undefined
-      ? { onlyPluginIds: pluginIds, activate: false }
-      : { config: compatConfig, onlyPluginIds: pluginIds, activate: false };
+      ? { onlyPluginIds: pluginIds, activate: false, installBundledRuntimeDeps: false }
+      : {
+          config: compatConfig,
+          onlyPluginIds: pluginIds,
+          activate: false,
+          installBundledRuntimeDeps: false,
+        };
   const registry = resolveRuntimePluginRegistry(loadOptions);
   const loadedProviders = registry?.[params.key] ?? [];
   if (params.key !== "memoryEmbeddingProviders") {
