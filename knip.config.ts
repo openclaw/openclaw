@@ -17,6 +17,34 @@ const rootEntries = [
   "src/plugin-sdk/*.ts!",
 ] as const;
 
+const bundledPluginEntries = [
+  "*.ts!",
+  "index.ts!",
+  "setup-entry.ts!",
+  "{api,contract-api,helper-api,runtime-api,light-runtime-api,update-offset-runtime-api,channel-plugin-api,provider-plugin-api,setup-api}.ts!",
+  "subagent-hooks-api.ts!",
+  "src/{api,runtime-api,light-runtime-api,update-offset-runtime-api,channel-plugin-api,provider-plugin-api,doctor-contract,setup-surface}.ts!",
+  "src/subagent-hooks-api.ts!",
+] as const;
+
+const bundledPluginIgnoredRuntimeDependencies = [
+  "@agentclientprotocol/claude-agent-acp",
+  "@azure/identity",
+  "@clawdbot/lobster",
+  "@discordjs/opus",
+  "@homebridge/ciao",
+  "@matrix-org/matrix-sdk-crypto-wasm",
+  "@mozilla/readability",
+  "@openai/codex",
+  "@pierre/theme",
+  "@tloncorp/tlon-skill",
+  "@zed-industries/codex-acp",
+  "jiti",
+  "linkedom",
+  "openclaw",
+  "pdfjs-dist",
+] as const;
+
 const config = {
   ignoreFiles: [
     "scripts/**",
@@ -24,18 +52,24 @@ const config = {
     "src/test-utils/**",
     "**/test-helpers/**",
     "**/test-fixtures/**",
+    "**/test-support/**",
     "**/live-*.ts",
     "**/test-*.ts",
+    "**/vitest*.{ts,mjs}",
     "**/*test-helpers.ts",
     "**/*test-fixtures.ts",
     "**/*test-harness.ts",
     "**/*test-utils.ts",
+    "**/*test-support.ts",
+    "**/*test-shared.ts",
     "**/*mocks.ts",
     "**/*.e2e-mocks.ts",
     "**/*.e2e-*.ts",
+    "**/*.fixture-test-support.ts",
     "**/*.harness.ts",
     "**/*.job-fixtures.ts",
     "**/*.mock-harness.ts",
+    "**/*.menu-test-support.ts",
     "**/*.suite-helpers.ts",
     "**/*.test-setup.ts",
     "**/job-fixtures.ts",
@@ -48,6 +82,7 @@ const config = {
     "**/*.fixtures.ts",
     "**/*.mocks.ts",
     "**/*.mocks.shared.ts",
+    "**/*.route-test-support.ts",
     "**/*.shared-test.ts",
     "**/*.suite.ts",
     "**/*.test-runtime.ts",
@@ -72,11 +107,11 @@ const config = {
     bundledPluginFile("msteams", "src/conversation-store-memory.ts"),
     bundledPluginFile("msteams", "src/polls-store-memory.ts"),
     bundledPluginFile("voice-call", "src/providers/index.ts"),
-    bundledPluginFile("voice-call", "src/providers/tts-openai.ts"),
   ],
   workspaces: {
     ".": {
       entry: rootEntries,
+      ignoreDependencies: ["@openclaw/*", "sqlite-vec"],
       project: [
         "src/**/*.ts!",
         "scripts/**/*.{js,mjs,cjs,ts,mts,cts}!",
@@ -93,9 +128,11 @@ const config = {
       project: ["index.js!", "scripts/**/*.js!"],
     },
     [`${BUNDLED_PLUGIN_ROOT_DIR}/*`]: {
-      entry: ["index.ts!"],
+      // Bundled plugins often load their public surface via string specifiers in
+      // `index.ts` contracts, so Knip needs these convention-based entry files.
+      entry: bundledPluginEntries,
       project: ["index.ts!", "src/**/*.ts!"],
-      ignoreDependencies: ["openclaw"],
+      ignoreDependencies: bundledPluginIgnoredRuntimeDependencies,
     },
   },
 } as const;

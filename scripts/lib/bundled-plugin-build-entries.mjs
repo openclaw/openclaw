@@ -8,6 +8,7 @@ import {
 import { shouldBuildBundledCluster } from "./optional-bundled-clusters.mjs";
 
 const TOP_LEVEL_PUBLIC_SURFACE_EXTENSIONS = new Set([".ts", ".js", ".mts", ".cts", ".mjs", ".cjs"]);
+export const NON_PACKAGED_BUNDLED_PLUGIN_DIRS = new Set(["qa-channel", "qa-lab", "qa-matrix"]);
 const toPosixPath = (value) => value.replaceAll("\\", "/");
 
 function readBundledPluginPackageJson(packageJsonPath) {
@@ -70,6 +71,7 @@ function collectTopLevelPublicSurfaceEntries(pluginDir) {
       const normalizedName = dirent.name.toLowerCase();
       if (
         normalizedName.endsWith(".d.ts") ||
+        /^config-api\.(?:[cm]?[jt]s)$/u.test(normalizedName) ||
         normalizedName.includes(".test.") ||
         normalizedName.includes(".spec.") ||
         normalizedName.includes(".fixture.") ||
@@ -144,7 +146,9 @@ export function listBundledPluginBuildEntries(params = {}) {
 }
 
 export function listBundledPluginPackArtifacts(params = {}) {
-  const entries = collectBundledPluginBuildEntries(params);
+  const entries = collectBundledPluginBuildEntries(params).filter(
+    ({ id }) => !NON_PACKAGED_BUNDLED_PLUGIN_DIRS.has(id),
+  );
   const artifacts = new Set();
 
   for (const { id, hasManifest, hasPackageJson, sourceEntries } of entries) {

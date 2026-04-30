@@ -1,3 +1,4 @@
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import type { RuntimeEnv } from "../runtime-api.js";
 import { probeFeishu } from "./probe.js";
 import type { ResolvedFeishuAccount } from "./types.js";
@@ -33,13 +34,12 @@ export type FeishuMonitorBotIdentity = {
 };
 
 function isTimeoutErrorMessage(message: string | undefined): boolean {
-  return message?.toLowerCase().includes("timeout") || message?.toLowerCase().includes("timed out")
-    ? true
-    : false;
+  const lower = normalizeLowercaseStringOrEmpty(message);
+  return lower.includes("timeout") || lower.includes("timed out");
 }
 
 function isAbortErrorMessage(message: string | undefined): boolean {
-  return message?.toLowerCase().includes("aborted") ?? false;
+  return normalizeLowercaseStringOrEmpty(message).includes("aborted");
 }
 
 export async function fetchBotIdentityForMonitor(
@@ -59,11 +59,12 @@ export async function fetchBotIdentityForMonitor(
     return { botOpenId: result.botOpenId, botName: result.botName };
   }
 
-  if (options.abortSignal?.aborted || isAbortErrorMessage(result.error)) {
+  const probeError = result.error ?? undefined;
+  if (options.abortSignal?.aborted || isAbortErrorMessage(probeError)) {
     return {};
   }
 
-  if (isTimeoutErrorMessage(result.error)) {
+  if (isTimeoutErrorMessage(probeError)) {
     const error = options.runtime?.error ?? console.error;
     error(
       `feishu[${account.accountId}]: bot info probe timed out after ${timeoutMs}ms; continuing startup`,

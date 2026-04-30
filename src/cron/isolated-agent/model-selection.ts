@@ -1,14 +1,15 @@
-import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../agents/defaults.js";
-import { loadModelCatalog } from "../../agents/model-catalog.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { CronJob } from "../types.js";
 import {
+  DEFAULT_MODEL,
+  DEFAULT_PROVIDER,
   getModelRefStatus,
+  loadModelCatalog,
   normalizeModelSelection,
   resolveAllowedModelRef,
   resolveConfiguredModelRef,
   resolveHooksGmailModel,
-} from "../../agents/model-selection.js";
-import type { OpenClawConfig } from "../../config/config.js";
-import type { CronJob } from "../types.js";
+} from "./run-model-selection.runtime.js";
 
 type CronSessionModelOverrides = {
   modelOverride?: string;
@@ -34,12 +35,19 @@ export type ResolveCronModelSelectionResult =
       ok: true;
       provider: string;
       model: string;
-      warning?: string;
     }
   | {
       ok: false;
       error: string;
     };
+
+function formatCronPayloadModelRejection(modelOverride: string, error: string): string {
+  if (error.startsWith("model not allowed:")) {
+    const modelRef = error.slice("model not allowed:".length).trim();
+    return `cron payload.model '${modelOverride}' rejected by agents.defaults.models allowlist: ${modelRef}`;
+  }
+  return `cron payload.model '${modelOverride}' rejected: ${error}`;
+}
 
 export async function resolveCronModelSelection(
   params: ResolveCronModelSelectionParams,
@@ -111,15 +119,10 @@ export async function resolveCronModelSelection(
       defaultModel: resolvedDefault.model,
     });
     if ("error" in resolvedOverride) {
-      if (resolvedOverride.error.startsWith("model not allowed:")) {
-        return {
-          ok: true,
-          provider,
-          model,
-          warning: `cron: payload.model '${modelOverride}' not allowed, falling back to agent defaults`,
-        };
-      }
-      return { ok: false, error: resolvedOverride.error };
+      return {
+        ok: false,
+        error: formatCronPayloadModelRejection(modelOverride, resolvedOverride.error),
+      };
     }
     provider = resolvedOverride.ref.provider;
     model = resolvedOverride.ref.model;

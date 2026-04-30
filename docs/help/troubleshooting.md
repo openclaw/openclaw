@@ -3,10 +3,8 @@ summary: "Symptom first troubleshooting hub for OpenClaw"
 read_when:
   - OpenClaw is not working and you need the fastest path to a fix
   - You want a triage flow before diving into deep runbooks
-title: "General Troubleshooting"
+title: "General troubleshooting"
 ---
-
-# Troubleshooting
 
 If you only have 2 minutes, use this page as a triage front door.
 
@@ -28,10 +26,12 @@ Good output in one line:
 
 - `openclaw status` → shows configured channels and no obvious auth errors.
 - `openclaw status --all` → full report is present and shareable.
-- `openclaw gateway probe` → expected gateway target is reachable (`Reachable: yes`). `RPC: limited - missing scope: operator.read` is degraded diagnostics, not a connect failure.
-- `openclaw gateway status` → `Runtime: running` and `RPC probe: ok`.
+- `openclaw gateway probe` → expected gateway target is reachable (`Reachable: yes`). `Capability: ...` tells you what auth level the probe could prove, and `Read probe: limited - missing scope: operator.read` is degraded diagnostics, not a connect failure.
+- `openclaw gateway status` → `Runtime: running`, `Connectivity probe: ok`, and a plausible `Capability: ...` line. Use `--require-rpc` if you need read-scope RPC proof too.
 - `openclaw doctor` → no blocking config/service errors.
-- `openclaw channels status --probe` → channels report `connected` or `ready`.
+- `openclaw channels status --probe` → reachable gateway returns live per-account
+  transport state plus probe/audit results such as `works` or `audit ok`; if the
+  gateway is unreachable, the command falls back to config-only summaries.
 - `openclaw logs --follow` → steady activity, no repeating fatal errors.
 
 ## Anthropic long context 429
@@ -39,6 +39,21 @@ Good output in one line:
 If you see:
 `HTTP 429: rate_limit_error: Extra usage is required for long context requests`,
 go to [/gateway/troubleshooting#anthropic-429-extra-usage-required-for-long-context](/gateway/troubleshooting#anthropic-429-extra-usage-required-for-long-context).
+
+## Local OpenAI-compatible backend works directly but fails in OpenClaw
+
+If your local or self-hosted `/v1` backend answers small direct
+`/v1/chat/completions` probes but fails on `openclaw infer model run` or normal
+agent turns:
+
+1. If the error mentions `messages[].content` expecting a string, set
+   `models.providers.<provider>.models[].compat.requiresStringContent: true`.
+2. If the backend still fails only on OpenClaw agent turns, set
+   `models.providers.<provider>.models[].compat.supportsTools: false` and retry.
+3. If tiny direct calls still work but larger OpenClaw prompts crash the
+   backend, treat the remaining issue as an upstream model/server limitation and
+   continue in the deep runbook:
+   [/gateway/troubleshooting#local-openai-compatible-backend-passes-direct-probes-but-agent-runs-fail](/gateway/troubleshooting#local-openai-compatible-backend-passes-direct-probes-but-agent-runs-fail)
 
 ## Plugin install fails with missing openclaw extensions
 
@@ -100,8 +115,9 @@ flowchart TD
     Good output looks like:
 
     - `Runtime: running`
-    - `RPC probe: ok`
-    - Your channel shows connected/ready in `channels status --probe`
+    - `Connectivity probe: ok`
+    - `Capability: read-only`, `write-capable`, or `admin-capable`
+    - Your channel shows transport connected and, where supported, `works` or `audit ok` in `channels status --probe`
     - Sender appears approved (or DM policy is open/allowlist)
 
     Common log signatures:
@@ -130,13 +146,25 @@ flowchart TD
     Good output looks like:
 
     - `Dashboard: http://...` is shown in `openclaw gateway status`
-    - `RPC probe: ok`
+    - `Connectivity probe: ok`
+    - `Capability: read-only`, `write-capable`, or `admin-capable`
     - No auth loop in logs
 
     Common log signatures:
 
     - `device identity required` → HTTP/non-secure context cannot complete device auth.
+    - `origin not allowed` → browser `Origin` is not allowed for the Control UI
+      gateway target.
     - `AUTH_TOKEN_MISMATCH` with retry hints (`canRetryWithDeviceToken=true`) → one trusted device-token retry may occur automatically.
+    - That cached-token retry reuses the cached scope set stored with the paired
+      device token. Explicit `deviceToken` / explicit `scopes` callers keep
+      their requested scope set instead.
+    - On the async Tailscale Serve Control UI path, failed attempts for the same
+      `{scope, ip}` are serialized before the limiter records the failure, so a
+      second concurrent bad retry can already show `retry later`.
+    - `too many failed authentication attempts (retry later)` from a localhost
+      browser origin → repeated failures from that same `Origin` are temporarily
+      locked out; another localhost origin uses a separate bucket.
     - repeated `unauthorized` after that retry → wrong token/password, auth mode mismatch, or stale paired device token.
     - `gateway connect failed:` → UI is targeting the wrong URL/port or unreachable gateway.
 
@@ -161,12 +189,13 @@ flowchart TD
 
     - `Service: ... (loaded)`
     - `Runtime: running`
-    - `RPC probe: ok`
+    - `Connectivity probe: ok`
+    - `Capability: read-only`, `write-capable`, or `admin-capable`
 
     Common log signatures:
 
-    - `Gateway start blocked: set gateway.mode=local` → gateway mode is unset/remote.
-    - `refusing to bind gateway ... without auth` → non-loopback bind without token/password.
+    - `Gateway start blocked: set gateway.mode=local` or `existing config is missing gateway.mode` → gateway mode is remote, or the config file is missing the local-mode stamp and should be repaired.
+    - `refusing to bind gateway ... without auth` → non-loopback bind without a valid gateway auth path (token/password, or trusted-proxy where configured).
     - `another gateway instance is already listening` or `EADDRINUSE` → port already taken.
 
     Deep pages:
@@ -225,13 +254,16 @@ flowchart TD
 
     - `cron: scheduler disabled; jobs will not run automatically` → cron is disabled.
     - `heartbeat skipped` with `reason=quiet-hours` → outside configured active hours.
+    - `heartbeat skipped` with `reason=empty-heartbeat-file` → `HEARTBEAT.md` exists but only contains blank/header-only scaffolding.
+    - `heartbeat skipped` with `reason=no-tasks-due` → `HEARTBEAT.md` task mode is active but none of the task intervals are due yet.
+    - `heartbeat skipped` with `reason=alerts-disabled` → all heartbeat visibility is disabled (`showOk`, `showAlerts`, and `useIndicator` are all off).
     - `requests-in-flight` → main lane busy; heartbeat wake was deferred.
     - `unknown accountId` → heartbeat delivery target account does not exist.
 
     Deep pages:
 
     - [/gateway/troubleshooting#cron-and-heartbeat-delivery](/gateway/troubleshooting#cron-and-heartbeat-delivery)
-    - [/automation/troubleshooting](/automation/troubleshooting)
+    - [/automation/cron-jobs#troubleshooting](/automation/cron-jobs#troubleshooting)
     - [/gateway/heartbeat](/gateway/heartbeat)
 
   </Accordion>
@@ -278,11 +310,12 @@ flowchart TD
 
     - If `tools.exec.host` is unset, the default is `auto`.
     - `host=auto` resolves to `sandbox` when a sandbox runtime is active, `gateway` otherwise.
-    - On `gateway` and `node`, unset `tools.exec.security` defaults to `allowlist`.
-    - Unset `tools.exec.ask` defaults to `on-miss`.
-    - Result: ordinary host commands can now pause with `Approval required` instead of running immediately.
+    - `host=auto` is routing only; the no-prompt "YOLO" behavior comes from `security=full` plus `ask=off` on gateway/node.
+    - On `gateway` and `node`, unset `tools.exec.security` defaults to `full`.
+    - Unset `tools.exec.ask` defaults to `off`.
+    - Result: if you are seeing approvals, some host-local or per-session policy tightened exec away from the current defaults.
 
-    Restore the old gateway no-approval behavior:
+    Restore current default no-approval behavior:
 
     ```bash
     openclaw config set tools.exec.host gateway
@@ -293,8 +326,8 @@ flowchart TD
 
     Safer alternatives:
 
-    - Set only `tools.exec.host=gateway` if you just want stable host routing and still want approvals.
-    - Keep `security=allowlist` with `ask=on-miss` if you want host exec but still want review on allowlist misses.
+    - Set only `tools.exec.host=gateway` if you just want stable host routing.
+    - Use `security=allowlist` with `ask=on-miss` if you want host exec but still want review on allowlist misses.
     - Enable sandbox mode if you want `host=auto` to resolve back to `sandbox`.
 
     Common log signatures:
@@ -307,7 +340,7 @@ flowchart TD
 
     - [/tools/exec](/tools/exec)
     - [/tools/exec-approvals](/tools/exec-approvals)
-    - [/gateway/security#runtime-expectation-drift](/gateway/security#runtime-expectation-drift)
+    - [/gateway/security#what-the-audit-checks-high-level](/gateway/security#what-the-audit-checks-high-level)
 
   </Accordion>
 
@@ -330,8 +363,12 @@ flowchart TD
     - `unknown command "browser"` or `unknown command 'browser'` → `plugins.allow` is set and does not include `browser`.
     - `Failed to start Chrome CDP on port` → local browser launch failed.
     - `browser.executablePath not found` → configured binary path is wrong.
+    - `browser.cdpUrl must be http(s) or ws(s)` → the configured CDP URL uses an unsupported scheme.
+    - `browser.cdpUrl has invalid port` → the configured CDP URL has a bad or out-of-range port.
     - `No Chrome tabs found for profile="user"` → the Chrome MCP attach profile has no open local Chrome tabs.
-    - `Browser attachOnly is enabled ... not reachable` → attach-only profile has no live CDP target.
+    - `Remote CDP for profile "<name>" is not reachable` → the configured remote CDP endpoint is not reachable from this host.
+    - `Browser attachOnly is enabled ... not reachable` or `Browser attachOnly is enabled and CDP websocket ... is not reachable` → attach-only profile has no live CDP target.
+    - stale viewport / dark-mode / locale / offline overrides on attach-only or remote CDP profiles → run `openclaw browser stop --browser-profile <name>` to close the active control session and release emulation state without restarting the gateway.
 
     Deep pages:
 
@@ -341,6 +378,7 @@ flowchart TD
     - [/tools/browser-wsl2-windows-remote-cdp-troubleshooting](/tools/browser-wsl2-windows-remote-cdp-troubleshooting)
 
   </Accordion>
+
 </AccordionGroup>
 
 ## Related
@@ -349,4 +387,4 @@ flowchart TD
 - [Gateway Troubleshooting](/gateway/troubleshooting) — gateway-specific issues
 - [Doctor](/gateway/doctor) — automated health checks and repairs
 - [Channel Troubleshooting](/channels/troubleshooting) — channel connectivity issues
-- [Automation Troubleshooting](/automation/troubleshooting) — cron and heartbeat issues
+- [Automation Troubleshooting](/automation/cron-jobs#troubleshooting) — cron and heartbeat issues

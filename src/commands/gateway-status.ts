@@ -20,6 +20,7 @@ import { runGatewayStatusProbePass } from "./gateway-status/probe-run.js";
 
 let sshConfigModulePromise: Promise<typeof import("../infra/ssh-config.js")> | undefined;
 let sshTunnelModulePromise: Promise<typeof import("../infra/ssh-tunnel.js")> | undefined;
+let gatewayTlsModulePromise: Promise<typeof import("../infra/tls/gateway.js")> | undefined;
 
 function loadSshConfigModule() {
   sshConfigModulePromise ??= import("../infra/ssh-config.js");
@@ -29,6 +30,11 @@ function loadSshConfigModule() {
 function loadSshTunnelModule() {
   sshTunnelModulePromise ??= import("../infra/ssh-tunnel.js");
   return sshTunnelModulePromise;
+}
+
+function loadGatewayTlsModule() {
+  gatewayTlsModulePromise ??= import("../infra/tls/gateway.js");
+  return gatewayTlsModulePromise;
 }
 
 export async function gatewayStatusCommand(
@@ -47,7 +53,8 @@ export async function gatewayStatusCommand(
   const startedAt = Date.now();
   const cfg = await readBestEffortConfig();
   const rich = isRich() && opts.json !== true;
-  const overallTimeoutMs = parseTimeoutMs(opts.timeout, 3000);
+  const defaultTimeoutMs = Math.max(3000, cfg.gateway?.handshakeTimeoutMs ?? 0);
+  const overallTimeoutMs = parseTimeoutMs(opts.timeout, defaultTimeoutMs);
   const wideAreaDomain = resolveWideAreaDiscoveryDomain({
     configDomain: cfg.discovery?.wideArea?.domain,
   });
@@ -80,6 +87,13 @@ export async function gatewayStatusCommand(
     }
   }
 
+  const localTlsRuntime =
+    cfg.gateway?.tls?.enabled === true
+      ? await loadGatewayTlsModule().then(({ loadGatewayTlsRuntime }) =>
+          loadGatewayTlsRuntime(cfg.gateway?.tls),
+        )
+      : undefined;
+
   const probePass = await withProgress(
     {
       label: "Inspecting gateways…",
@@ -98,6 +112,9 @@ export async function gatewayStatusCommand(
         sshTarget,
         sshIdentity,
         loadSshTunnelModule,
+        localTlsFingerprint: localTlsRuntime?.enabled
+          ? localTlsRuntime.fingerprintSha256
+          : undefined,
       }),
   );
 
@@ -106,6 +123,10 @@ export async function gatewayStatusCommand(
     sshTarget: probePass.sshTarget,
     sshTunnelStarted: probePass.sshTunnelStarted,
     sshTunnelError: probePass.sshTunnelError,
+    localTlsLoadError:
+      localTlsRuntime && !localTlsRuntime.enabled && localTlsRuntime.required
+        ? (localTlsRuntime.error ?? "gateway tls is enabled but local TLS runtime could not load")
+        : null,
   });
   const primary = pickPrimaryProbedTarget(probePass.probed);
 

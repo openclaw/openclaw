@@ -1,14 +1,15 @@
-import type { OpenClawConfig } from "../../config/config.js";
 import {
   canonicalizeMainSessionAlias,
   resolveMainSessionKey,
 } from "../../config/sessions/main-session.js";
 import type { SessionAcpMeta } from "../../config/sessions/types.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   normalizeAgentId,
   normalizeMainKey,
   parseAgentSessionKey,
 } from "../../routing/session-key.js";
+import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { ACP_ERROR_CODES, AcpRuntimeError } from "../runtime/errors.js";
 import type { AcpSessionResolution } from "./manager.types.js";
 
@@ -58,7 +59,7 @@ export function canonicalizeAcpSessionKey(params: {
   if (!normalized) {
     return "";
   }
-  const lowered = normalized.toLowerCase();
+  const lowered = normalizeLowercaseStringOrEmpty(normalized);
   if (lowered === "global" || lowered === "unknown") {
     return lowered;
   }
@@ -78,7 +79,7 @@ export function canonicalizeAcpSessionKey(params: {
 }
 
 export function normalizeActorKey(sessionKey: string): string {
-  return sessionKey.trim().toLowerCase();
+  return normalizeLowercaseStringOrEmpty(sessionKey);
 }
 
 export function normalizeAcpErrorCode(code: string | undefined): AcpRuntimeError["code"] {

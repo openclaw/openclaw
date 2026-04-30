@@ -1,10 +1,6 @@
 package ai.openclaw.app.gateway
 
 import android.util.Log
-import java.util.Locale
-import java.util.UUID
-import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -30,6 +26,10 @@ import okhttp3.Request
 import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
+import java.util.Locale
+import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicBoolean
 
 data class GatewayClientInfo(
   val id: String,
@@ -64,6 +64,7 @@ data class GatewayConnectErrorDetails(
   val code: String?,
   val canRetryWithDeviceToken: Boolean,
   val recommendedNextStep: String?,
+  val reason: String? = null,
 )
 
 private data class SelectedConnectAuth(
@@ -76,8 +77,9 @@ private data class SelectedConnectAuth(
   val attemptedDeviceTokenRetry: Boolean,
 )
 
-private class GatewayConnectFailure(val gatewayError: GatewaySession.ErrorShape) :
-  IllegalStateException(gatewayError.message)
+private class GatewayConnectFailure(
+  val gatewayError: GatewaySession.ErrorShape,
+) : IllegalStateException(gatewayError.message)
 
 class GatewaySession(
   private val scope: CoroutineScope,
@@ -102,11 +104,18 @@ class GatewaySession(
     val timeoutMs: Long?,
   )
 
-  data class InvokeResult(val ok: Boolean, val payloadJson: String?, val error: ErrorShape?) {
+  data class InvokeResult(
+    val ok: Boolean,
+    val payloadJson: String?,
+    val error: ErrorShape?,
+  ) {
     companion object {
       fun ok(payloadJson: String?) = InvokeResult(ok = true, payloadJson = payloadJson, error = null)
-      fun error(code: String, message: String) =
-        InvokeResult(ok = false, payloadJson = null, error = ErrorShape(code = code, message = message))
+
+      fun error(
+        code: String,
+        message: String,
+      ) = InvokeResult(ok = false, payloadJson = null, error = ErrorShape(code = code, message = message))
     }
   }
 
@@ -116,11 +125,18 @@ class GatewaySession(
     val details: GatewayConnectErrorDetails? = null,
   )
 
+  data class RpcResult(
+    val ok: Boolean,
+    val payloadJson: String?,
+    val error: ErrorShape?,
+  )
+
   private val json = Json { ignoreUnknownKeys = true }
   private val writeLock = Mutex()
   private val pending = ConcurrentHashMap<String, CompletableDeferred<RpcResponse>>()
 
   @Volatile private var canvasHostUrl: String? = null
+
   @Volatile private var mainSessionKey: String? = null
 
   private data class DesiredConnection(
@@ -134,9 +150,13 @@ class GatewaySession(
 
   private var desired: DesiredConnection? = null
   private var job: Job? = null
+
   @Volatile private var currentConnection: Connection? = null
+
   @Volatile private var pendingDeviceTokenRetry = false
+
   @Volatile private var deviceTokenRetryBudgetUsed = false
+
   @Volatile private var reconnectPausedForAuthFailure = false
 
   fun connect(
@@ -177,25 +197,78 @@ class GatewaySession(
   }
 
   fun currentCanvasHostUrl(): String? = canvasHostUrl
+
   fun currentMainSessionKey(): String? = mainSessionKey
 
-  suspend fun sendNodeEvent(event: String, payloadJson: String?): Boolean {
+  suspend fun sendNodeEvent(
+    event: String,
+    payloadJson: String?,
+  ): Boolean {
     val conn = currentConnection ?: return false
-    val params =
-      buildJsonObject {
-        put("event", JsonPrimitive(event))
-        put("payloadJSON", JsonPrimitive(payloadJson ?: "{}"))
-      }
-    try {
-      conn.request("node.event", params, timeoutMs = 8_000)
-      return true
+    return try {
+      conn.request(
+        "node.event",
+        buildNodeEventParams(event = event, payloadJson = payloadJson),
+        timeoutMs = 8_000,
+      )
+      true
     } catch (err: Throwable) {
-      Log.w("OpenClawGateway", "node.event failed: ${err.message ?: err::class.java.simpleName}")
-      return false
+      Log.w("OpenClawGateway", "node.event failed: ${err::class.java.simpleName}")
+      false
     }
   }
 
-  suspend fun request(method: String, paramsJson: String?, timeoutMs: Long = 15_000): String {
+  suspend fun sendNodeEventDetailed(
+    event: String,
+    payloadJson: String?,
+    timeoutMs: Long = 8_000,
+  ): RpcResult {
+    val conn =
+      currentConnection
+        ?: return RpcResult(
+          ok = false,
+          payloadJson = null,
+          error = ErrorShape("UNAVAILABLE", "not connected"),
+        )
+    val params = buildNodeEventParams(event = event, payloadJson = payloadJson)
+    try {
+      val res = conn.request("node.event", params, timeoutMs = timeoutMs)
+      return RpcResult(ok = res.ok, payloadJson = res.payloadJson, error = res.error)
+    } catch (err: Throwable) {
+      Log.w("OpenClawGateway", "node.event failed: ${err::class.java.simpleName}")
+      return RpcResult(
+        ok = false,
+        payloadJson = null,
+        error = ErrorShape("UNAVAILABLE", "node.event failed"),
+      )
+    }
+  }
+
+  private fun buildNodeEventParams(
+    event: String,
+    payloadJson: String?,
+  ): JsonObject =
+    buildJsonObject {
+      put("event", JsonPrimitive(event))
+      put("payloadJSON", JsonPrimitive(payloadJson ?: "{}"))
+    }
+
+  suspend fun request(
+    method: String,
+    paramsJson: String?,
+    timeoutMs: Long = 15_000,
+  ): String {
+    val res = requestDetailed(method = method, paramsJson = paramsJson, timeoutMs = timeoutMs)
+    if (res.ok) return res.payloadJson ?: ""
+    val err = res.error
+    throw IllegalStateException("${err?.code ?: "UNAVAILABLE"}: ${err?.message ?: "request failed"}")
+  }
+
+  suspend fun requestDetailed(
+    method: String,
+    paramsJson: String?,
+    timeoutMs: Long = 15_000,
+  ): RpcResult {
     val conn = currentConnection ?: throw IllegalStateException("not connected")
     val params =
       if (paramsJson.isNullOrBlank()) {
@@ -204,9 +277,7 @@ class GatewaySession(
         json.parseToJsonElement(paramsJson)
       }
     val res = conn.request(method, params, timeoutMs)
-    if (res.ok) return res.payloadJson ?: ""
-    val err = res.error
-    throw IllegalStateException("${err?.code ?: "UNAVAILABLE"}: ${err?.message ?: "request failed"}")
+    return RpcResult(ok = res.ok, payloadJson = res.payloadJson, error = res.error)
   }
 
   suspend fun refreshNodeCanvasCapability(timeoutMs: Long = 8_000): Boolean {
@@ -231,7 +302,12 @@ class GatewaySession(
       return false
     }
     val payloadObj = response.payloadJson?.let(::parseJsonOrNull)?.asObjectOrNull()
-    val refreshedCapability = payloadObj?.get("canvasCapability").asStringOrNull()?.trim().orEmpty()
+    val refreshedCapability =
+      payloadObj
+        ?.get("canvasCapability")
+        .asStringOrNull()
+        ?.trim()
+        .orEmpty()
     if (refreshedCapability.isEmpty()) {
       Log.w("OpenClawGateway", "node.canvas.capability.refresh missing canvasCapability")
       return false
@@ -250,7 +326,12 @@ class GatewaySession(
     return true
   }
 
-  private data class RpcResponse(val id: String, val ok: Boolean, val payloadJson: String?, val error: ErrorShape?)
+  private data class RpcResponse(
+    val id: String,
+    val ok: Boolean,
+    val payloadJson: String?,
+    val error: ErrorShape?,
+  )
 
   private inner class Connection(
     private val endpoint: GatewayEndpoint,
@@ -268,16 +349,10 @@ class GatewaySession(
     private var socket: WebSocket? = null
     private val loggerTag = "OpenClawGateway"
 
-    val remoteAddress: String =
-      if (endpoint.host.contains(":")) {
-        "[${endpoint.host}]:${endpoint.port}"
-      } else {
-        "${endpoint.host}:${endpoint.port}"
-      }
+    val remoteAddress: String = formatGatewayAuthority(endpoint.host, endpoint.port)
 
     suspend fun connect() {
-      val scheme = if (tls != null) "wss" else "ws"
-      val url = "$scheme://${endpoint.host}:${endpoint.port}"
+      val url = buildGatewayWebSocketUrl(endpoint.host, endpoint.port, tls != null)
       val request = Request.Builder().url(url).build()
       socket = client.newWebSocket(request, Listener())
       try {
@@ -287,7 +362,11 @@ class GatewaySession(
       }
     }
 
-    suspend fun request(method: String, params: JsonElement?, timeoutMs: Long): RpcResponse {
+    suspend fun request(
+      method: String,
+      params: JsonElement?,
+      timeoutMs: Long,
+    ): RpcResponse {
       val id = UUID.randomUUID().toString()
       val deferred = CompletableDeferred<RpcResponse>()
       pending[id] = deferred
@@ -325,13 +404,16 @@ class GatewaySession(
     }
 
     private fun buildClient(): OkHttpClient {
-      val builder = OkHttpClient.Builder()
-        .writeTimeout(60, java.util.concurrent.TimeUnit.SECONDS)
-        .readTimeout(0, java.util.concurrent.TimeUnit.SECONDS)
-        .pingInterval(30, java.util.concurrent.TimeUnit.SECONDS)
-      val tlsConfig = buildGatewayTlsConfig(tls) { fingerprint ->
-        onTlsFingerprint?.invoke(tls?.stableId ?: endpoint.stableId, fingerprint)
-      }
+      val builder =
+        OkHttpClient
+          .Builder()
+          .writeTimeout(60, java.util.concurrent.TimeUnit.SECONDS)
+          .readTimeout(0, java.util.concurrent.TimeUnit.SECONDS)
+          .pingInterval(30, java.util.concurrent.TimeUnit.SECONDS)
+      val tlsConfig =
+        buildGatewayTlsConfig(tls) { fingerprint ->
+          onTlsFingerprint?.invoke(tls?.stableId ?: endpoint.stableId, fingerprint)
+        }
       if (tlsConfig != null) {
         builder.sslSocketFactory(tlsConfig.sslSocketFactory, tlsConfig.trustManager)
         builder.hostnameVerifier(tlsConfig.hostnameVerifier)
@@ -340,7 +422,10 @@ class GatewaySession(
     }
 
     private inner class Listener : WebSocketListener() {
-      override fun onOpen(webSocket: WebSocket, response: Response) {
+      override fun onOpen(
+        webSocket: WebSocket,
+        response: Response,
+      ) {
         scope.launch {
           try {
             val nonce = awaitConnectNonce()
@@ -352,11 +437,18 @@ class GatewaySession(
         }
       }
 
-      override fun onMessage(webSocket: WebSocket, text: String) {
+      override fun onMessage(
+        webSocket: WebSocket,
+        text: String,
+      ) {
         scope.launch { handleMessage(text) }
       }
 
-      override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+      override fun onFailure(
+        webSocket: WebSocket,
+        t: Throwable,
+        response: Response?,
+      ) {
         if (!connectDeferred.isCompleted) {
           connectDeferred.completeExceptionally(t)
         }
@@ -367,7 +459,11 @@ class GatewaySession(
         }
       }
 
-      override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+      override fun onClosed(
+        webSocket: WebSocket,
+        code: Int,
+        reason: String,
+      ) {
         if (!connectDeferred.isCompleted) {
           connectDeferred.completeExceptionally(IllegalStateException("Gateway closed: $reason"))
         }
@@ -418,17 +514,71 @@ class GatewaySession(
           deviceTokenRetryBudgetUsed = true
         } else if (
           selectedAuth.attemptedDeviceTokenRetry &&
-            shouldClearStoredDeviceTokenAfterRetry(error)
+          shouldClearStoredDeviceTokenAfterRetry(error)
         ) {
           deviceAuthStore.clearToken(identity.deviceId, options.role)
         }
         throw GatewayConnectFailure(error)
       }
-      handleConnectSuccess(res, identity.deviceId)
+      handleConnectSuccess(res, identity.deviceId, selectedAuth.authSource)
       connectDeferred.complete(Unit)
     }
 
-    private fun handleConnectSuccess(res: RpcResponse, deviceId: String) {
+    private fun shouldPersistBootstrapHandoffTokens(authSource: GatewayConnectAuthSource): Boolean {
+      if (authSource != GatewayConnectAuthSource.BOOTSTRAP_TOKEN) return false
+      if (isLoopbackGatewayHost(endpoint.host)) return true
+      return tls != null
+    }
+
+    private fun filteredBootstrapHandoffScopes(
+      role: String,
+      scopes: List<String>,
+    ): List<String>? =
+      when (role.trim()) {
+        "node" -> emptyList()
+        "operator" -> {
+          val allowedOperatorScopes =
+            setOf(
+              "operator.approvals",
+              "operator.read",
+              "operator.talk.secrets",
+              "operator.write",
+            )
+          scopes.filter { allowedOperatorScopes.contains(it) }.distinct().sorted()
+        }
+        else -> null
+      }
+
+    private fun persistBootstrapHandoffToken(
+      deviceId: String,
+      role: String,
+      token: String,
+      scopes: List<String>,
+    ) {
+      val filteredScopes = filteredBootstrapHandoffScopes(role, scopes) ?: return
+      deviceAuthStore.saveToken(deviceId, role, token, filteredScopes)
+    }
+
+    private fun persistIssuedDeviceToken(
+      authSource: GatewayConnectAuthSource,
+      deviceId: String,
+      role: String,
+      token: String,
+      scopes: List<String>,
+    ) {
+      if (authSource == GatewayConnectAuthSource.BOOTSTRAP_TOKEN) {
+        if (!shouldPersistBootstrapHandoffTokens(authSource)) return
+        persistBootstrapHandoffToken(deviceId, role, token, scopes)
+        return
+      }
+      deviceAuthStore.saveToken(deviceId, role, token, scopes)
+    }
+
+    private fun handleConnectSuccess(
+      res: RpcResponse,
+      deviceId: String,
+      authSource: GatewayConnectAuthSource,
+    ) {
       val payloadJson = res.payloadJson ?: throw IllegalStateException("connect failed: missing payload")
       val obj = json.parseToJsonElement(payloadJson).asObjectOrNull() ?: throw IllegalStateException("connect failed")
       pendingDeviceTokenRetry = false
@@ -438,14 +588,40 @@ class GatewaySession(
       val authObj = obj["auth"].asObjectOrNull()
       val deviceToken = authObj?.get("deviceToken").asStringOrNull()
       val authRole = authObj?.get("role").asStringOrNull() ?: options.role
+      val authScopes =
+        authObj
+          ?.get("scopes")
+          .asArrayOrNull()
+          ?.mapNotNull { it.asStringOrNull() }
+          ?: emptyList()
       if (!deviceToken.isNullOrBlank()) {
-        deviceAuthStore.saveToken(deviceId, authRole, deviceToken)
+        persistIssuedDeviceToken(authSource, deviceId, authRole, deviceToken, authScopes)
+      }
+      if (shouldPersistBootstrapHandoffTokens(authSource)) {
+        authObj
+          ?.get("deviceTokens")
+          .asArrayOrNull()
+          ?.mapNotNull { it.asObjectOrNull() }
+          ?.forEach { tokenEntry ->
+            val handoffToken = tokenEntry["deviceToken"].asStringOrNull()
+            val handoffRole = tokenEntry["role"].asStringOrNull()
+            val handoffScopes =
+              tokenEntry["scopes"]
+                .asArrayOrNull()
+                ?.mapNotNull { it.asStringOrNull() }
+                ?: emptyList()
+            if (!handoffToken.isNullOrBlank() && !handoffRole.isNullOrBlank()) {
+              persistBootstrapHandoffToken(deviceId, handoffRole, handoffToken, handoffScopes)
+            }
+          }
       }
       val rawCanvas = obj["canvasHostUrl"].asStringOrNull()
       canvasHostUrl = normalizeCanvasHostUrl(rawCanvas, endpoint, isTlsConnection = tls != null)
       val sessionDefaults =
-        obj["snapshot"].asObjectOrNull()
-          ?.get("sessionDefaults").asObjectOrNull()
+        obj["snapshot"]
+          .asObjectOrNull()
+          ?.get("sessionDefaults")
+          .asObjectOrNull()
       mainSessionKey = sessionDefaults?.get("mainSessionKey").asStringOrNull()
       onConnected(serverName, remoteAddress, mainSessionKey)
     }
@@ -566,6 +742,7 @@ class GatewaySession(
                 code = it["code"].asStringOrNull(),
                 canRetryWithDeviceToken = it["canRetryWithDeviceToken"].asBooleanOrNull() == true,
                 recommendedNextStep = it["recommendedNextStep"].asStringOrNull(),
+                reason = it["reason"].asStringOrNull(),
               )
             }
           ErrorShape(code, msg, details)
@@ -591,13 +768,12 @@ class GatewaySession(
       onEvent(event, payloadJson)
     }
 
-    private suspend fun awaitConnectNonce(): String {
-      return try {
+    private suspend fun awaitConnectNonce(): String =
+      try {
         withTimeout(2_000) { connectNonceDeferred.await() }
       } catch (err: Throwable) {
         throw IllegalStateException("connect challenge timeout", err)
       }
-    }
 
     private fun extractConnectNonce(payloadJson: String?): String? {
       if (payloadJson.isNullOrBlank()) return null
@@ -706,7 +882,7 @@ class GatewaySession(
         onDisconnected("Gateway error: ${err.message ?: err::class.java.simpleName}")
         if (
           err is GatewayConnectFailure &&
-            shouldPauseReconnectAfterAuthFailure(err.gatewayError)
+          shouldPauseReconnectAfterAuthFailure(err.gatewayError)
         ) {
           reconnectPausedForAuthFailure = true
           continue
@@ -717,26 +893,27 @@ class GatewaySession(
     }
   }
 
-  private suspend fun connectOnce(target: DesiredConnection) = withContext(Dispatchers.IO) {
-    val conn =
-      Connection(
-        target.endpoint,
-        target.token,
-        target.bootstrapToken,
-        target.password,
-        target.options,
-        target.tls,
-      )
-    currentConnection = conn
-    try {
-      conn.connect()
-      conn.awaitClose()
-    } finally {
-      currentConnection = null
-      canvasHostUrl = null
-      mainSessionKey = null
+  private suspend fun connectOnce(target: DesiredConnection) =
+    withContext(Dispatchers.IO) {
+      val conn =
+        Connection(
+          target.endpoint,
+          target.token,
+          target.bootstrapToken,
+          target.password,
+          target.options,
+          target.tls,
+        )
+      currentConnection = conn
+      try {
+        conn.connect()
+        conn.awaitClose()
+      } finally {
+        currentConnection = null
+        canvasHostUrl = null
+        mainSessionKey = null
+      }
     }
-  }
 
   private fun normalizeCanvasHostUrl(
     raw: String?,
@@ -747,19 +924,24 @@ class GatewaySession(
     val parsed = trimmed.takeIf { it.isNotBlank() }?.let { runCatching { java.net.URI(it) }.getOrNull() }
     val host = parsed?.host?.trim().orEmpty()
     val port = parsed?.port ?: -1
-    val scheme = parsed?.scheme?.trim().orEmpty().ifBlank { "http" }
+    val scheme =
+      parsed
+        ?.scheme
+        ?.trim()
+        .orEmpty()
+        .ifBlank { "http" }
     val suffix = buildUrlSuffix(parsed)
 
     // If raw URL is a non-loopback address and this connection uses TLS,
     // normalize scheme/port to the endpoint we actually connected to.
-    if (trimmed.isNotBlank() && host.isNotBlank() && !isLoopbackHost(host)) {
+    if (trimmed.isNotBlank() && host.isNotBlank() && !isLoopbackGatewayHost(host)) {
       val needsTlsRewrite =
         isTlsConnection &&
           (
             !scheme.equals("https", ignoreCase = true) ||
               (port > 0 && port != endpoint.port) ||
               (port <= 0 && endpoint.port != 443)
-            )
+          )
       if (needsTlsRewrite) {
         return buildCanvasUrl(host = host, scheme = "https", port = endpoint.port, suffix = suffix)
       }
@@ -779,9 +961,14 @@ class GatewaySession(
     return buildCanvasUrl(host = fallbackHost, scheme = fallbackScheme, port = fallbackPort, suffix = suffix)
   }
 
-  private fun buildCanvasUrl(host: String, scheme: String, port: Int, suffix: String): String {
+  private fun buildCanvasUrl(
+    host: String,
+    scheme: String,
+    port: Int,
+    suffix: String,
+  ): String {
     val loweredScheme = scheme.lowercase()
-    val formattedHost = if (host.contains(":")) "[${host}]" else host
+    val formattedHost = formatGatewayAuthorityHost(host)
     val portSuffix = if ((loweredScheme == "https" && port == 443) || (loweredScheme == "http" && port == 80)) "" else ":$port"
     return "$loweredScheme://$formattedHost$portSuffix$suffix"
   }
@@ -792,15 +979,6 @@ class GatewaySession(
     val query = uri.rawQuery?.takeIf { it.isNotBlank() }?.let { "?$it" } ?: ""
     val fragment = uri.rawFragment?.takeIf { it.isNotBlank() }?.let { "#$it" } ?: ""
     return "$path$query$fragment"
-  }
-
-  private fun isLoopbackHost(raw: String?): Boolean {
-    val host = raw?.trim()?.lowercase().orEmpty()
-    if (host.isEmpty()) return false
-    if (host == "localhost") return true
-    if (host == "::1") return true
-    if (host == "0.0.0.0" || host == "::") return true
-    return host.startsWith("127.")
   }
 
   private fun selectConnectAuth(
@@ -821,7 +999,7 @@ class GatewaySession(
       explicitGatewayToken
         ?: if (
           explicitPassword == null &&
-            (explicitBootstrapToken == null || storedToken != null)
+          (explicitBootstrapToken == null || storedToken != null)
         ) {
           storedToken
         } else {
@@ -868,8 +1046,8 @@ class GatewaySession(
       detailCode == "AUTH_TOKEN_MISMATCH"
   }
 
-  private fun shouldPauseReconnectAfterAuthFailure(error: ErrorShape): Boolean {
-    return when (error.details?.code) {
+  private fun shouldPauseReconnectAfterAuthFailure(error: ErrorShape): Boolean =
+    when (error.details?.code) {
       "AUTH_TOKEN_MISSING",
       "AUTH_BOOTSTRAP_TOKEN_INVALID",
       "AUTH_PASSWORD_MISSING",
@@ -877,28 +1055,47 @@ class GatewaySession(
       "AUTH_RATE_LIMITED",
       "PAIRING_REQUIRED",
       "CONTROL_UI_DEVICE_IDENTITY_REQUIRED",
-      "DEVICE_IDENTITY_REQUIRED" -> true
+      "DEVICE_IDENTITY_REQUIRED",
+      -> true
       "AUTH_TOKEN_MISMATCH" -> deviceTokenRetryBudgetUsed && !pendingDeviceTokenRetry
       else -> false
     }
-  }
 
-  private fun shouldClearStoredDeviceTokenAfterRetry(error: ErrorShape): Boolean {
-    return error.details?.code == "AUTH_DEVICE_TOKEN_MISMATCH"
-  }
+  private fun shouldClearStoredDeviceTokenAfterRetry(error: ErrorShape): Boolean = error.details?.code == "AUTH_DEVICE_TOKEN_MISMATCH"
 
   private fun isTrustedDeviceRetryEndpoint(
     endpoint: GatewayEndpoint,
     tls: GatewayTlsParams?,
   ): Boolean {
-    if (isLoopbackHost(endpoint.host)) {
+    if (isLoopbackGatewayHost(endpoint.host)) {
       return true
     }
     return tls?.expectedFingerprint?.trim()?.isNotEmpty() == true
   }
 }
 
+internal fun buildGatewayWebSocketUrl(
+  host: String,
+  port: Int,
+  useTls: Boolean,
+): String {
+  val scheme = if (useTls) "wss" else "ws"
+  return "$scheme://${formatGatewayAuthority(host, port)}"
+}
+
+internal fun formatGatewayAuthority(
+  host: String,
+  port: Int,
+): String = "${formatGatewayAuthorityHost(host)}:$port"
+
+private fun formatGatewayAuthorityHost(host: String): String {
+  val normalizedHost = host.trim().trim('[', ']')
+  return if (normalizedHost.contains(":")) "[$normalizedHost]" else normalizedHost
+}
+
 private fun JsonElement?.asObjectOrNull(): JsonObject? = this as? JsonObject
+
+private fun JsonElement?.asArrayOrNull(): JsonArray? = this as? JsonArray
 
 private fun JsonElement?.asStringOrNull(): String? =
   when (this) {

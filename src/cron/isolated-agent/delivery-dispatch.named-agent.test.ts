@@ -5,7 +5,7 @@ import { matchesMessagingToolDeliveryTarget } from "./delivery-dispatch.js";
 vi.mock("../../agents/subagent-announce.js", () => ({
   runSubagentAnnounceFlow: vi.fn(),
 }));
-vi.mock("../../agents/subagent-registry.js", () => ({
+vi.mock("../../agents/subagent-registry-read.js", () => ({
   countActiveDescendantRuns: vi.fn().mockReturnValue(0),
 }));
 
@@ -71,6 +71,24 @@ describe("matchesMessagingToolDeliveryTarget", () => {
         { channel: "telegram", to: "123456", accountId: "bot-b" },
       ),
     ).toBe(false);
+  });
+
+  it("matches when delivery has accountId and target omits it (tool fills accountId at exec)", () => {
+    expect(
+      matchesMessagingToolDeliveryTarget(
+        { provider: "message", to: "123456" },
+        { channel: "telegram", to: "123456", accountId: "bot-a" },
+      ),
+    ).toBe(true);
+  });
+
+  it("matches when delivery and target carry the same accountId", () => {
+    expect(
+      matchesMessagingToolDeliveryTarget(
+        { provider: "telegram", to: "123456", accountId: "bot-a" },
+        { channel: "telegram", to: "123456", accountId: "bot-a" },
+      ),
+    ).toBe(true);
   });
 });
 

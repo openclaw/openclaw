@@ -1,5 +1,4 @@
 import { DEFAULT_ACCOUNT_ID, type OpenClawConfig } from "openclaw/plugin-sdk/account-resolution";
-import { waitUntilAbort } from "openclaw/plugin-sdk/channel-lifecycle";
 import { registerPluginHttpRoute } from "openclaw/plugin-sdk/webhook-ingress";
 import { listAccountIds, resolveAccount } from "./accounts.js";
 import { dispatchSynologyChatInboundTurn } from "./inbound-turn.js";
@@ -17,6 +16,7 @@ type SynologyGatewayStartupIssueCode =
   | "disabled"
   | "missing-credentials"
   | "empty-allowlist"
+  | "empty-open-allowlist"
   | "inherited-shared-webhook-path"
   | "duplicate-webhook-path";
 type SynologyGatewayStartupIssue = {
@@ -59,10 +59,12 @@ function createUnknownArgsLogAdapter(
   if (!log) {
     return undefined;
   }
+  const formatArg = (value: unknown): string =>
+    typeof value === "string" ? value : value instanceof Error ? value.message : "";
   return {
-    info: (...args) => log.info?.(String(args[0] ?? "")),
-    warn: (...args) => log.warn?.(String(args[0] ?? "")),
-    error: (...args) => log.error?.(String(args[0] ?? "")),
+    info: (...args) => log.info?.(formatArg(args[0])),
+    warn: (...args) => log.warn?.(formatArg(args[0])),
+    error: (...args) => log.error?.(formatArg(args[0])),
   };
 }
 
@@ -93,6 +95,14 @@ export function collectSynologyGatewayStartupIssues(params: {
       buildStartupIssue(
         "empty-allowlist",
         `account ${accountId} has dmPolicy=allowlist but empty allowedUserIds; refusing to start route`,
+      ),
+    );
+  }
+  if (account.dmPolicy === "open" && account.allowedUserIds.length === 0) {
+    issues.push(
+      buildStartupIssue(
+        "empty-open-allowlist",
+        `account ${accountId} has dmPolicy=open but empty allowedUserIds; add allowedUserIds=["*"] for public DMs or set explicit user IDs`,
       ),
     );
   }

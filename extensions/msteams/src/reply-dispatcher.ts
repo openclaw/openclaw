@@ -1,3 +1,4 @@
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
 import {
   createChannelReplyPipeline,
   logTypingFailure,
@@ -31,6 +32,7 @@ export { pickInformativeStatusText } from "./reply-stream-controller.js";
 export function createMSTeamsReplyDispatcher(params: {
   cfg: OpenClawConfig;
   agentId: string;
+  sessionKey: string;
   accountId?: string;
   runtime: RuntimeEnv;
   log: MSTeamsMonitorLogger;
@@ -46,29 +48,67 @@ export function createMSTeamsReplyDispatcher(params: {
 }) {
   const core = getMSTeamsRuntime();
   const msteamsCfg = params.cfg.channels?.msteams;
-  const conversationType = params.conversationRef.conversation?.conversationType?.toLowerCase();
+  const conversationType = normalizeOptionalLowercaseString(
+    params.conversationRef.conversation?.conversationType,
+  );
   const isTypingSupported = conversationType === "personal" || conversationType === "groupchat";
+
+  /**
+   * Keepalive cadence for the typing indicator while the bot is running
+   * (including long tool chains). Bot Framework 1:1 TurnContext proxies
+   * expire after ~30s of inactivity; sending a typing activity every 8s
+   * keeps the proxy alive so the post-tool reply can still land via the
+   * turn context. Sits in the middle of the 5-10s range recommended in
+   * #59731.
+   */
+  const TYPING_KEEPALIVE_INTERVAL_MS = 8_000;
+
+  /**
+   * TTL ceiling for the typing keepalive loop. The default in
+   * createTypingCallbacks is 60s, which is too short for the Teams long tool
+   * chains described in #59731 (60s+ total runs are common). Give tool
+   * chains up to 10 minutes before auto-stopping the keepalive.
+   */
+  const TYPING_KEEPALIVE_MAX_DURATION_MS = 10 * 60_000;
+
+  // Forward reference: sendTypingIndicator is built before the stream
+  // controller exists, but the keepalive tick needs to check stream state so
+  // we don't overlay "..." typing on the visible streaming card. The ref is
+  // wired once the stream controller is constructed below.
+  const streamActiveRef: { current: () => boolean } = { current: () => false };
+
+  const rawSendTypingIndicator = async () => {
+    await withRevokedProxyFallback({
+      run: async () => {
+        await params.context.sendActivity({ type: "typing" });
+      },
+      onRevoked: async () => {
+        const baseRef = buildConversationReference(params.conversationRef);
+        await params.adapter.continueConversation(
+          params.appId,
+          { ...baseRef, activityId: undefined },
+          async (ctx) => {
+            await ctx.sendActivity({ type: "typing" });
+          },
+        );
+      },
+      onRevokedLog: () => {
+        params.log.debug?.("turn context revoked, sending typing via proactive messaging");
+      },
+    });
+  };
 
   const sendTypingIndicator = isTypingSupported
     ? async () => {
-        await withRevokedProxyFallback({
-          run: async () => {
-            await params.context.sendActivity({ type: "typing" });
-          },
-          onRevoked: async () => {
-            const baseRef = buildConversationReference(params.conversationRef);
-            await params.adapter.continueConversation(
-              params.appId,
-              { ...baseRef, activityId: undefined },
-              async (ctx) => {
-                await ctx.sendActivity({ type: "typing" });
-              },
-            );
-          },
-          onRevokedLog: () => {
-            params.log.debug?.("turn context revoked, sending typing via proactive messaging");
-          },
-        });
+        // While the streaming card is actively being updated the user
+        // already sees a live indicator in the stream — don't overlay a
+        // plain "..." typing on top of it. Between segments (tool chain)
+        // the stream is finalized, so typing indicators are appropriate
+        // and they are what keep the TurnContext alive. See #59731.
+        if (streamActiveRef.current()) {
+          return;
+        }
+        await rawSendTypingIndicator();
       }
     : async () => {};
 
@@ -79,6 +119,8 @@ export function createMSTeamsReplyDispatcher(params: {
     accountId: params.accountId,
     typing: {
       start: sendTypingIndicator,
+      keepaliveIntervalMs: TYPING_KEEPALIVE_INTERVAL_MS,
+      maxDurationMs: TYPING_KEEPALIVE_MAX_DURATION_MS,
       onStartError: (err) => {
         logTypingFailure({
           log: (message) => params.log.debug?.(message),
@@ -106,9 +148,13 @@ export function createMSTeamsReplyDispatcher(params: {
     feedbackLoopEnabled,
     log: params.log,
   });
+  // Wire the forward-declared gate used by sendTypingIndicator.
+  streamActiveRef.current = () => streamController.isStreamActive();
 
   const blockStreamingEnabled =
     typeof msteamsCfg?.blockStreaming === "boolean" ? msteamsCfg.blockStreaming : false;
+  const typingIndicatorEnabled =
+    typeof msteamsCfg?.typingIndicator === "boolean" ? msteamsCfg.typingIndicator : true;
 
   const pendingMessages: MSTeamsRenderedMessage[] = [];
 
@@ -134,6 +180,32 @@ export function createMSTeamsReplyDispatcher(params: {
     });
   };
 
+  const queueDeliveryFailureSystemEvent = (failure: {
+    failed: number;
+    total: number;
+    error: unknown;
+  }) => {
+    const classification = classifyMSTeamsSendError(failure.error);
+    const errorText = formatUnknownError(failure.error);
+    const failedAll = failure.failed >= failure.total;
+    const summary = failedAll
+      ? "the previous reply was not delivered"
+      : `${failure.failed} of ${failure.total} message blocks were not delivered`;
+    const sentences = [
+      `Microsoft Teams delivery failed: ${summary}.`,
+      `The user may not have received ${failedAll ? "that reply" : "the full reply"}.`,
+      `Error: ${errorText}.`,
+      classification.statusCode != null ? `Status: ${classification.statusCode}.` : undefined,
+      classification.kind === "transient" || classification.kind === "throttled"
+        ? "Retrying later may succeed."
+        : undefined,
+    ].filter(Boolean);
+    core.system.enqueueSystemEvent(sentences.join(" "), {
+      sessionKey: params.sessionKey,
+      contextKey: `msteams:delivery-failure:${params.conversationRef.conversation?.id ?? "unknown"}`,
+    });
+  };
+
   const flushPendingMessages = async () => {
     if (pendingMessages.length === 0) {
       return;
@@ -143,15 +215,17 @@ export function createMSTeamsReplyDispatcher(params: {
     let ids: string[];
     try {
       ids = await sendMessages(toSend);
-    } catch {
+    } catch (batchError) {
       ids = [];
       let failed = 0;
+      let lastFailedError: unknown = batchError;
       for (const msg of toSend) {
         try {
           const msgIds = await sendMessages([msg]);
           ids.push(...msgIds);
-        } catch {
+        } catch (msgError) {
           failed += 1;
+          lastFailedError = msgError;
           params.log.debug?.("individual message send failed, continuing with remaining blocks");
         }
       }
@@ -159,6 +233,11 @@ export function createMSTeamsReplyDispatcher(params: {
         params.log.warn?.(`failed to deliver ${failed} of ${total} message blocks`, {
           failed,
           total,
+        });
+        queueDeliveryFailureSystemEvent({
+          failed,
+          total,
+          error: lastFailedError,
         });
       }
     }
@@ -176,7 +255,16 @@ export function createMSTeamsReplyDispatcher(params: {
     humanDelay: core.channel.reply.resolveHumanDelayConfig(params.cfg, params.agentId),
     onReplyStart: async () => {
       await streamController.onReplyStart();
-      await typingCallbacks?.onReplyStart?.();
+      // Always start the typing keepalive loop when typing is enabled and
+      // supported by this conversation type. The sendTypingIndicator gate
+      // skips actual sends while the stream card is visually active, so
+      // during the first text segment the user only sees the streaming UI.
+      // Once the stream finalizes (between segments / during tool chains),
+      // the loop starts sending typing activities and keeps the Bot Framework
+      // TurnContext alive so the post-tool reply can still land. See #59731.
+      if (typingIndicatorEnabled) {
+        await typingCallbacks?.onReplyStart?.();
+      }
     },
     typingCallbacks,
     deliver: async (payload) => {
@@ -231,7 +319,7 @@ export function createMSTeamsReplyDispatcher(params: {
       })
       .then(() => {
         return streamController.finalize().catch((err) => {
-          params.log.debug?.("stream finalize failed", { error: String(err) });
+          params.log.debug?.("stream finalize failed", { error: formatUnknownError(err) });
         });
       })
       .finally(() => {

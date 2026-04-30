@@ -1,9 +1,15 @@
 import {
-  asObject,
-  readResponseTextLimited,
-  trimToUndefined,
-  truncateErrorDetail,
-} from "openclaw/plugin-sdk/speech";
+  assertOkOrThrowProviderError,
+  resolveProviderRequestHeaders,
+} from "openclaw/plugin-sdk/provider-http";
+import {
+  captureHttpExchange,
+  isDebugProxyGlobalFetchPatchInstalled,
+} from "openclaw/plugin-sdk/proxy-capture";
+import {
+  fetchWithSsrFGuard,
+  ssrfPolicyFromHttpBaseUrlAllowedHostname,
+} from "openclaw/plugin-sdk/ssrf-runtime";
 
 export const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
 
@@ -60,48 +66,16 @@ export function isValidOpenAIVoice(voice: string, baseUrl?: string): voice is Op
 export function resolveOpenAITtsInstructions(
   model: string,
   instructions?: string,
+  baseUrl?: string,
 ): string | undefined {
   const next = instructions?.trim();
-  return next && model.includes("gpt-4o-mini-tts") ? next : undefined;
-}
-
-function formatOpenAiErrorPayload(payload: unknown): string | undefined {
-  const root = asObject(payload);
-  const subject = asObject(root?.error) ?? root;
-  if (!subject) {
+  if (!next) {
     return undefined;
   }
-  const message =
-    trimToUndefined(subject.message) ??
-    trimToUndefined(subject.detail) ??
-    trimToUndefined(root?.message);
-  const type = trimToUndefined(subject.type);
-  const code = trimToUndefined(subject.code);
-  const metadata = [type ? `type=${type}` : undefined, code ? `code=${code}` : undefined]
-    .filter((value): value is string => Boolean(value))
-    .join(", ");
-  if (message && metadata) {
-    return `${truncateErrorDetail(message)} [${metadata}]`;
+  if (baseUrl !== undefined && isCustomOpenAIEndpoint(baseUrl)) {
+    return next;
   }
-  if (message) {
-    return truncateErrorDetail(message);
-  }
-  if (metadata) {
-    return `[${metadata}]`;
-  }
-  return undefined;
-}
-
-async function extractOpenAiErrorDetail(response: Response): Promise<string | undefined> {
-  const rawBody = trimToUndefined(await readResponseTextLimited(response));
-  if (!rawBody) {
-    return undefined;
-  }
-  try {
-    return formatOpenAiErrorPayload(JSON.parse(rawBody)) ?? truncateErrorDetail(rawBody);
-  } catch {
-    return truncateErrorDetail(rawBody);
-  }
+  return model.includes("gpt-4o-mini-tts") ? next : undefined;
 }
 
 export async function openaiTTS(params: {
@@ -112,12 +86,12 @@ export async function openaiTTS(params: {
   voice: string;
   speed?: number;
   instructions?: string;
-  responseFormat: "mp3" | "opus" | "pcm";
+  responseFormat: "mp3" | "opus" | "pcm" | "wav";
   timeoutMs: number;
 }): Promise<Buffer> {
   const { text, apiKey, baseUrl, model, voice, speed, instructions, responseFormat, timeoutMs } =
     params;
-  const effectiveInstructions = resolveOpenAITtsInstructions(model, instructions);
+  const effectiveInstructions = resolveOpenAITtsInstructions(model, instructions, baseUrl);
 
   if (!isValidOpenAIModel(model, baseUrl)) {
     throw new Error(`Invalid model: ${model}`);
@@ -126,41 +100,62 @@ export async function openaiTTS(params: {
     throw new Error(`Invalid voice: ${voice}`);
   }
 
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
-
-  try {
-    const response = await fetch(`${baseUrl}/audio/speech`, {
+  const requestHeaders = resolveProviderRequestHeaders({
+    provider: "openai",
+    baseUrl,
+    capability: "audio",
+    transport: "http",
+    defaultHeaders: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+  }) ?? {
+    Authorization: `Bearer ${apiKey}`,
+    "Content-Type": "application/json",
+  };
+  const requestBody = JSON.stringify({
+    model,
+    input: text,
+    voice,
+    response_format: responseFormat,
+    ...(speed != null && { speed }),
+    ...(effectiveInstructions != null && { instructions: effectiveInstructions }),
+  });
+  const requestUrl = `${baseUrl}/audio/speech`;
+  const debugProxyFetchPatchInstalled = isDebugProxyGlobalFetchPatchInstalled();
+  const { response, release } = await fetchWithSsrFGuard({
+    url: requestUrl,
+    init: {
       method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model,
-        input: text,
-        voice,
-        response_format: responseFormat,
-        ...(speed != null && { speed }),
-        ...(effectiveInstructions != null && { instructions: effectiveInstructions }),
-      }),
-      signal: controller.signal,
-    });
-
-    if (!response.ok) {
-      const detail = await extractOpenAiErrorDetail(response);
-      const requestId =
-        trimToUndefined(response.headers.get("x-request-id")) ??
-        trimToUndefined(response.headers.get("request-id"));
-      throw new Error(
-        `OpenAI TTS API error (${response.status})` +
-          (detail ? `: ${detail}` : "") +
-          (requestId ? ` [request_id=${requestId}]` : ""),
-      );
+      headers: requestHeaders,
+      body: requestBody,
+    },
+    timeoutMs,
+    policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(baseUrl),
+    capture: false,
+    pinDns: debugProxyFetchPatchInstalled ? false : undefined,
+    auditContext: "openai-tts",
+  });
+  try {
+    if (!debugProxyFetchPatchInstalled) {
+      captureHttpExchange({
+        url: requestUrl,
+        method: "POST",
+        requestHeaders,
+        requestBody,
+        response,
+        transport: "http",
+        meta: {
+          provider: "openai",
+          capability: "tts",
+        },
+      });
     }
+
+    await assertOkOrThrowProviderError(response, "OpenAI TTS API error");
 
     return Buffer.from(await response.arrayBuffer());
   } finally {
-    clearTimeout(timeout);
+    await release();
   }
 }

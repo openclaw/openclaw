@@ -1,5 +1,45 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { validateConfigObjectRaw } from "./validation.js";
+
+vi.mock("../channels/plugins/legacy-config.js", () => ({
+  collectChannelLegacyConfigRules: () => [],
+}));
+
+vi.mock("../plugins/doctor-contract-registry.js", () => ({
+  collectRelevantDoctorPluginIds: () => [],
+  listPluginDoctorLegacyConfigRules: () => [],
+}));
+
+vi.mock("../secrets/unsupported-surface-policy.js", async () => {
+  const { isRecord } = await import("../utils.js");
+
+  return {
+    collectUnsupportedSecretRefConfigCandidates: (raw: unknown) => {
+      if (!isRecord(raw)) {
+        return [];
+      }
+      const candidates: Array<{ path: string; value: unknown }> = [];
+
+      const hooks = isRecord(raw.hooks) ? raw.hooks : null;
+      if (hooks) {
+        candidates.push({ path: "hooks.token", value: hooks.token });
+      }
+
+      const channels = isRecord(raw.channels) ? raw.channels : null;
+      const discord = channels && isRecord(channels.discord) ? channels.discord : null;
+      const threadBindings =
+        discord && isRecord(discord.threadBindings) ? discord.threadBindings : null;
+      if (threadBindings) {
+        candidates.push({
+          path: "channels.discord.threadBindings.webhookToken",
+          value: threadBindings.webhookToken,
+        });
+      }
+
+      return candidates;
+    },
+  };
+});
 
 describe("config validation SecretRef policy guards", () => {
   it("surfaces a policy error for hooks.token SecretRef objects", () => {
@@ -56,6 +96,51 @@ describe("config validation SecretRef policy guards", () => {
     });
 
     expect(result.ok).toBe(true);
+  });
+
+  it("rejects legacy secretref-env markers on supported SecretRef credential paths", () => {
+    const result = validateConfigObjectRaw({
+      secrets: {
+        defaults: {
+          env: "gateway-env",
+        },
+      },
+      channels: {
+        discord: {
+          token: "secretref-env:DISCORD_BOT_TOKEN",
+        },
+      },
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      const issue = result.issues.find((entry) => entry.path === "channels.discord.token");
+      expect(issue).toBeDefined();
+      expect(issue?.message).toContain(
+        '"secretref-env:DISCORD_BOT_TOKEN" is a legacy SecretRef marker',
+      );
+      expect(issue?.message).toContain(
+        '{"source":"env","provider":"gateway-env","id":"DISCORD_BOT_TOKEN"}',
+      );
+      expect(issue?.message).toContain('Run "openclaw doctor --fix"');
+    }
+  });
+
+  it("rejects invalid legacy secretref-env markers that doctor cannot migrate", () => {
+    const result = validateConfigObjectRaw({
+      channels: {
+        discord: {
+          token: "secretref-env:not-valid",
+        },
+      },
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      const issue = result.issues.find((entry) => entry.path === "channels.discord.token");
+      expect(issue?.message).toContain('"secretref-env:not-valid" is a legacy SecretRef marker');
+      expect(issue?.message).toContain('{"source":"env","provider":"default","id":"ENV_VAR"}');
+    }
   });
 
   it("replaces derived unrecognized-key errors with policy guidance for discord thread binding webhookToken", () => {

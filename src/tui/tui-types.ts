@@ -1,4 +1,5 @@
 export type TuiOptions = {
+  local?: boolean;
   url?: string;
   token?: string;
   password?: string;
@@ -8,6 +9,13 @@ export type TuiOptions = {
   timeoutMs?: number;
   historyLimit?: number;
   message?: string;
+};
+
+export type TuiExitReason = "exit" | "return-to-crestodian";
+
+export type TuiResult = {
+  exitReason: TuiExitReason;
+  crestodianMessage?: string;
 };
 
 export type ChatEvent = {
@@ -39,8 +47,10 @@ export type ResponseUsageMode = "on" | "off" | "tokens" | "full";
 
 export type SessionInfo = {
   thinkingLevel?: string;
+  thinkingLevels?: Array<{ id: string; label: string }>;
   fastMode?: boolean;
   verboseLevel?: string;
+  traceLevel?: string;
   reasoningLevel?: string;
   model?: string;
   modelProvider?: string;
@@ -58,6 +68,14 @@ export type SessionScope = "per-sender" | "global";
 export type AgentSummary = {
   id: string;
   name?: string;
+};
+
+export type QueuedMessageMode = "steer" | "followUp";
+
+export type QueuedMessage = {
+  runId: string;
+  text: string;
+  mode: QueuedMessageMode;
 };
 
 export type GatewayStatusSummary = {
@@ -109,6 +127,7 @@ export type TuiStateAccess = {
   currentSessionId: string | null;
   activeChatRunId: string | null;
   pendingOptimisticUserMessage?: boolean;
+  queuedMessages?: QueuedMessage[];
   historyLoaded: boolean;
   sessionInfo: SessionInfo;
   initialSessionApplied: boolean;

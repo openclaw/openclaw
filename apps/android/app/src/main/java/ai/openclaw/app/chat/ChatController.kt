@@ -1,8 +1,6 @@
 package ai.openclaw.app.chat
 
 import ai.openclaw.app.gateway.GatewaySession
-import java.util.UUID
-import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -17,6 +15,8 @@ import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
+import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 
 class ChatController(
   private val scope: CoroutineScope,
@@ -130,11 +130,25 @@ class ChatController(
     thinkingLevel: String,
     attachments: List<OutgoingAttachment>,
   ) {
+    scope.launch {
+      sendMessageAwaitAcceptance(
+        message = message,
+        thinkingLevel = thinkingLevel,
+        attachments = attachments,
+      )
+    }
+  }
+
+  suspend fun sendMessageAwaitAcceptance(
+    message: String,
+    thinkingLevel: String,
+    attachments: List<OutgoingAttachment>,
+  ): Boolean {
     val trimmed = message.trim()
-    if (trimmed.isEmpty() && attachments.isEmpty()) return
+    if (trimmed.isEmpty() && attachments.isEmpty()) return false
     if (!_healthOk.value) {
       _errorText.value = "Gateway health not OK; cannot send"
-      return
+      return false
     }
 
     val runId = UUID.randomUUID().toString()
@@ -159,12 +173,12 @@ class ChatController(
       }
     _messages.value =
       _messages.value +
-        ChatMessage(
-          id = UUID.randomUUID().toString(),
-          role = "user",
-          content = userContent,
-          timestampMs = System.currentTimeMillis(),
-        )
+      ChatMessage(
+        id = UUID.randomUUID().toString(),
+        role = "user",
+        content = userContent,
+        timestampMs = System.currentTimeMillis(),
+      )
 
     armPendingRunTimeout(runId)
     synchronized(pendingRuns) {
@@ -177,45 +191,45 @@ class ChatController(
     pendingToolCallsById.clear()
     publishPendingToolCalls()
 
-    scope.launch {
-      try {
-        val params =
-          buildJsonObject {
-            put("sessionKey", JsonPrimitive(sessionKey))
-            put("message", JsonPrimitive(text))
-            put("thinking", JsonPrimitive(thinking))
-            put("timeoutMs", JsonPrimitive(30_000))
-            put("idempotencyKey", JsonPrimitive(runId))
-            if (attachments.isNotEmpty()) {
-              put(
-                "attachments",
-                JsonArray(
-                  attachments.map { att ->
-                    buildJsonObject {
-                      put("type", JsonPrimitive(att.type))
-                      put("mimeType", JsonPrimitive(att.mimeType))
-                      put("fileName", JsonPrimitive(att.fileName))
-                      put("content", JsonPrimitive(att.base64))
-                    }
-                  },
-                ),
-              )
-            }
-          }
-        val res = session.request("chat.send", params.toString())
-        val actualRunId = parseRunId(res) ?: runId
-        if (actualRunId != runId) {
-          clearPendingRun(runId)
-          armPendingRunTimeout(actualRunId)
-          synchronized(pendingRuns) {
-            pendingRuns.add(actualRunId)
-            _pendingRunCount.value = pendingRuns.size
+    return try {
+      val params =
+        buildJsonObject {
+          put("sessionKey", JsonPrimitive(sessionKey))
+          put("message", JsonPrimitive(text))
+          put("thinking", JsonPrimitive(thinking))
+          put("timeoutMs", JsonPrimitive(30_000))
+          put("idempotencyKey", JsonPrimitive(runId))
+          if (attachments.isNotEmpty()) {
+            put(
+              "attachments",
+              JsonArray(
+                attachments.map { att ->
+                  buildJsonObject {
+                    put("type", JsonPrimitive(att.type))
+                    put("mimeType", JsonPrimitive(att.mimeType))
+                    put("fileName", JsonPrimitive(att.fileName))
+                    put("content", JsonPrimitive(att.base64))
+                  }
+                },
+              ),
+            )
           }
         }
-      } catch (err: Throwable) {
+      val res = session.request("chat.send", params.toString())
+      val actualRunId = parseRunId(res) ?: runId
+      if (actualRunId != runId) {
         clearPendingRun(runId)
-        _errorText.value = err.message
+        armPendingRunTimeout(actualRunId)
+        synchronized(pendingRuns) {
+          pendingRuns.add(actualRunId)
+          _pendingRunCount.value = pendingRuns.size
+        }
       }
+      true
+    } catch (err: Throwable) {
+      clearPendingRun(runId)
+      _errorText.value = err.message
+      false
     }
   }
 
@@ -241,7 +255,10 @@ class ChatController(
     }
   }
 
-  fun handleGatewayEvent(event: String, payloadJson: String?) {
+  fun handleGatewayEvent(
+    event: String,
+    payloadJson: String?,
+  ) {
     when (event) {
       "tick" -> {
         scope.launch { pollHealthIfNeeded(force = false) }
@@ -265,7 +282,10 @@ class ChatController(
     }
   }
 
-  private suspend fun bootstrap(forceHealth: Boolean, refreshSessions: Boolean) {
+  private suspend fun bootstrap(
+    forceHealth: Boolean,
+    refreshSessions: Boolean,
+  ) {
     _errorText.value = null
     _healthOk.value = false
     clearPendingRuns()
@@ -284,7 +304,10 @@ class ChatController(
       val history = parseHistory(historyJson, sessionKey = key, previousMessages = _messages.value)
       _messages.value = history.messages
       _sessionId.value = history.sessionId
-      history.thinkingLevel?.trim()?.takeIf { it.isNotEmpty() }?.let { _thinkingLevel.value = it }
+      history.thinkingLevel
+        ?.trim()
+        ?.takeIf { it.isNotEmpty() }
+        ?.let { _thinkingLevel.value = it }
 
       pollHealthIfNeeded(force = forceHealth)
       if (refreshSessions) {
@@ -357,7 +380,10 @@ class ChatController(
             val history = parseHistory(historyJson, sessionKey = _sessionKey.value, previousMessages = _messages.value)
             _messages.value = history.messages
             _sessionId.value = history.sessionId
-            history.thinkingLevel?.trim()?.takeIf { it.isNotEmpty() }?.let { _thinkingLevel.value = it }
+            history.thinkingLevel
+              ?.trim()
+              ?.takeIf { it.isNotEmpty() }
+              ?.let { _thinkingLevel.value = it }
           } catch (_: Throwable) {
             // best-effort
           }
@@ -389,7 +415,7 @@ class ChatController(
 
         val ts = payload["ts"].asLongOrNull() ?: System.currentTimeMillis()
         if (phase == "start") {
-          val args = data?.get("args").asObjectOrNull()
+          val args = data.get("args").asObjectOrNull()
           pendingToolCallsById[toolCallId] =
             ChatPendingToolCall(
               toolCallId = toolCallId,
@@ -528,22 +554,24 @@ class ChatController(
     }
   }
 
-  private fun parseRunId(resJson: String): String? {
-    return try {
-      json.parseToJsonElement(resJson).asObjectOrNull()?.get("runId").asStringOrNull()
+  private fun parseRunId(resJson: String): String? =
+    try {
+      json
+        .parseToJsonElement(resJson)
+        .asObjectOrNull()
+        ?.get("runId")
+        .asStringOrNull()
     } catch (_: Throwable) {
       null
     }
-  }
 
-  private fun normalizeThinking(raw: String): String {
-    return when (raw.trim().lowercase()) {
+  private fun normalizeThinking(raw: String): String =
+    when (raw.trim().lowercase()) {
       "low" -> "low"
       "medium" -> "medium"
       "high" -> "high"
       else -> "off"
     }
-  }
 }
 
 internal data class MainSessionState(
@@ -568,7 +596,10 @@ internal fun applyMainSessionKey(
   )
 }
 
-internal fun reconcileMessageIds(previous: List<ChatMessage>, incoming: List<ChatMessage>): List<ChatMessage> {
+internal fun reconcileMessageIds(
+  previous: List<ChatMessage>,
+  incoming: List<ChatMessage>,
+): List<ChatMessage> {
   if (previous.isEmpty() || incoming.isEmpty()) return incoming
 
   val idsByKey = LinkedHashMap<String, ArrayDeque<String>>()
@@ -599,9 +630,15 @@ internal fun messageIdentityKey(message: ChatMessage): String? {
       listOf(
         part.type.trim().lowercase(),
         part.text?.trim().orEmpty(),
-        part.mimeType?.trim()?.lowercase().orEmpty(),
+        part.mimeType
+          ?.trim()
+          ?.lowercase()
+          .orEmpty(),
         part.fileName?.trim().orEmpty(),
-        part.base64?.hashCode()?.toString().orEmpty(),
+        part.base64
+          ?.hashCode()
+          ?.toString()
+          .orEmpty(),
       ).joinToString(separator = "\u001F")
     }
 

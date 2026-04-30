@@ -1,7 +1,10 @@
 import fs from "node:fs";
+import { SessionManager, type SessionEntry } from "@mariozechner/pi-coding-agent";
 import { deriveSessionTotalTokens, hasNonzeroUsage, normalizeUsage } from "../agents/usage.js";
 import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 import { hasInterSessionUserProvenance } from "../sessions/input-provenance.js";
+import { extractAssistantVisibleText } from "../shared/chat-message-content.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
 import { extractToolCallNames, hasToolCall } from "../utils/transcript-tools.js";
 import { stripEnvelope } from "./chat-sanitize.js";
@@ -101,6 +104,60 @@ export function readSessionMessages(
   }
 
   const lines = fs.readFileSync(filePath, "utf-8").split(/\r?\n/);
+  const hasTreeEntries = lines.some((line) => {
+    if (!line.trim()) {
+      return false;
+    }
+    try {
+      const parsed = JSON.parse(line) as { type?: unknown; id?: unknown; parentId?: unknown };
+      return parsed.type !== "session" && typeof parsed.id === "string" && "parentId" in parsed;
+    } catch {
+      return false;
+    }
+  });
+  let branchEntries: SessionEntry[] | null = null;
+  if (hasTreeEntries) {
+    try {
+      branchEntries = SessionManager.open(filePath).getBranch();
+    } catch {
+      branchEntries = null;
+    }
+  }
+
+  if (branchEntries) {
+    const messages: unknown[] = [];
+    let messageSeq = 0;
+    for (const entry of branchEntries) {
+      if (entry.type === "message" && entry.message) {
+        messageSeq += 1;
+        messages.push(
+          attachOpenClawTranscriptMeta(entry.message, {
+            ...(typeof entry.id === "string" ? { id: entry.id } : {}),
+            seq: messageSeq,
+          }),
+        );
+        continue;
+      }
+
+      if (entry.type === "compaction") {
+        const ts = typeof entry.timestamp === "string" ? Date.parse(entry.timestamp) : Number.NaN;
+        const timestamp = Number.isFinite(ts) ? ts : Date.now();
+        messageSeq += 1;
+        messages.push({
+          role: "system",
+          content: [{ type: "text", text: "Compaction" }],
+          timestamp,
+          __openclaw: {
+            kind: "compaction",
+            id: typeof entry.id === "string" ? entry.id : undefined,
+            seq: messageSeq,
+          },
+        });
+      }
+    }
+    return messages;
+  }
+
   const messages: unknown[] = [];
   let messageSeq = 0;
   for (const line of lines) {
@@ -605,7 +662,7 @@ function normalizeRole(role: string | undefined, isTool: boolean): SessionPrevie
   if (isTool) {
     return "tool";
   }
-  switch ((role ?? "").toLowerCase()) {
+  switch (normalizeLowercaseStringOrEmpty(role)) {
     case "user":
       return "user";
     case "assistant":
@@ -630,6 +687,15 @@ function truncatePreviewText(text: string, maxChars: number): string {
 }
 
 function extractPreviewText(message: TranscriptPreviewMessage): string | null {
+  const role = normalizeLowercaseStringOrEmpty(message.role);
+  if (role === "assistant") {
+    const assistantText = extractAssistantVisibleText(message);
+    if (assistantText) {
+      const normalized = stripInlineDirectiveTagsForDisplay(assistantText).text.trim();
+      return normalized ? normalized : null;
+    }
+    return null;
+  }
   if (typeof message.content === "string") {
     const normalized = stripInlineDirectiveTagsForDisplay(message.content).text.trim();
     return normalized ? normalized : null;
@@ -664,7 +730,7 @@ function extractMediaSummary(message: TranscriptPreviewMessage): string | null {
     return null;
   }
   for (const entry of message.content) {
-    const raw = typeof entry?.type === "string" ? entry.type.trim().toLowerCase() : "";
+    const raw = normalizeLowercaseStringOrEmpty(entry?.type);
     if (!raw || raw === "text" || raw === "toolcall" || raw === "tool_call") {
       continue;
     }

@@ -1,5 +1,5 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { sanitizeTerminalText } from "openclaw/plugin-sdk/testing";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import { sanitizeTerminalText } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import {
   describeIMessageEchoDropLog,
@@ -31,7 +31,7 @@ describe("resolveIMessageInboundDecision echo detection", () => {
       cfg,
       accountId: "default",
       opts: undefined,
-      allowFrom: [],
+      allowFrom: ["*"],
       groupAllowFrom: [],
       groupPolicy: "open",
       dmPolicy: "open",
@@ -119,6 +119,9 @@ describe("resolveIMessageInboundDecision echo detection", () => {
       resolveDecision({
         message: {
           id: 9641,
+          sender: "+15555550123",
+          chat_identifier: "+15555550123",
+          destination_caller_id: "+15555550123",
           text: "Do you want to report this issue?",
           created_at: createdAt,
           is_from_me: true,
@@ -127,12 +130,14 @@ describe("resolveIMessageInboundDecision echo detection", () => {
         bodyText: "Do you want to report this issue?",
         selfChatCache,
       }),
-    ).toEqual({ kind: "drop", reason: "from me" });
+    ).toMatchObject({ kind: "dispatch" });
 
     expect(
       resolveDecision({
         message: {
           id: 9642,
+          sender: "+15555550123",
+          chat_identifier: "+15555550123",
           text: "Do you want to report this issue?",
           created_at: createdAt,
         },
@@ -252,6 +257,9 @@ describe("resolveIMessageInboundDecision echo detection", () => {
     resolveDecision({
       message: {
         id: 9801,
+        sender: "+15555550123",
+        chat_identifier: "+15555550123",
+        destination_caller_id: "+15555550123",
         text: bodyText,
         created_at: createdAt,
         is_from_me: true,
@@ -265,6 +273,8 @@ describe("resolveIMessageInboundDecision echo detection", () => {
     resolveDecision({
       message: {
         id: 9802,
+        sender: "+15555550123",
+        chat_identifier: "+15555550123",
         text: bodyText,
         created_at: createdAt,
       },
@@ -293,7 +303,12 @@ describe("describeIMessageEchoDropLog", () => {
 
 describe("resolveIMessageInboundDecision command auth", () => {
   const cfg = {} as OpenClawConfig;
-  const resolveDmCommandDecision = (params: { messageId: number; storeAllowFrom: string[] }) =>
+  const resolveDmCommandDecision = (params: {
+    messageId: number;
+    storeAllowFrom: string[];
+    dmPolicy?: "open" | "pairing" | "allowlist" | "disabled";
+    allowFrom?: string[];
+  }) =>
     resolveIMessageInboundDecision({
       cfg,
       accountId: "default",
@@ -307,10 +322,10 @@ describe("resolveIMessageInboundDecision command auth", () => {
       opts: undefined,
       messageText: "/status",
       bodyText: "/status",
-      allowFrom: [],
+      allowFrom: params.allowFrom ?? [],
       groupAllowFrom: [],
       groupPolicy: "open",
-      dmPolicy: "open",
+      dmPolicy: params.dmPolicy ?? "open",
       storeAllowFrom: params.storeAllowFrom,
       historyLimit: 0,
       groupHistories: new Map(),
@@ -324,16 +339,13 @@ describe("resolveIMessageInboundDecision command auth", () => {
       storeAllowFrom: [],
     });
 
-    expect(decision.kind).toBe("dispatch");
-    if (decision.kind !== "dispatch") {
-      return;
-    }
-    expect(decision.commandAuthorized).toBe(false);
+    expect(decision).toEqual({ kind: "drop", reason: "dmPolicy blocked" });
   });
 
-  it("authorizes DM commands for senders in pairing-store allowlist", () => {
+  it("authorizes DM commands for senders in pairing-mode store allowlist", () => {
     const decision = resolveDmCommandDecision({
       messageId: 101,
+      dmPolicy: "pairing",
       storeAllowFrom: ["+15555550123"],
     });
 
