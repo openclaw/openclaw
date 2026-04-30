@@ -1,6 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SkillCommandSpec } from "../../agents/skills.js";
-import { createOpenClawCodingTools } from "../../agents/pi-tools.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { TemplateContext } from "../templating.js";
 import { clearInlineDirectives } from "./get-reply-directives-utils.js";
@@ -629,7 +628,7 @@ describe("handleInlineActions", () => {
     );
 
     expect(result).toEqual({ kind: "reply", reply: { text: "spawned" } });
-    expect(vi.mocked(createOpenClawCodingTools)).toHaveBeenCalledWith(
+    expect(createOpenClawCodingToolsMock).toHaveBeenCalledWith(
       expect.objectContaining({
         agentId: "named-worker",
       }),
@@ -687,7 +686,7 @@ describe("handleInlineActions", () => {
     );
 
     expect(result).toEqual({ kind: "reply", reply: { text: "updated" } });
-    expect(vi.mocked(createOpenClawCodingTools)).toHaveBeenCalledWith(
+    expect(createOpenClawCodingToolsMock).toHaveBeenCalledWith(
       expect.objectContaining({
         senderIsOwner: true,
       }),
@@ -776,7 +775,7 @@ describe("handleInlineActions", () => {
     );
 
     expect(result).toEqual({ kind: "reply", reply: { text: "spawned" } });
-    expect(vi.mocked(createOpenClawCodingTools)).toHaveBeenCalledWith(
+    expect(createOpenClawCodingToolsMock).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionKey: "agent:target:telegram:direct:target-session",
         groupId: "target-group",
