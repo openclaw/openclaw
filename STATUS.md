@@ -7,6 +7,19 @@
 
 ## Last Session
 
+- **Date**: 2026-04-30 (dashboard GitHub MCP hotfix)
+- **What changed**:
+  - **vcode1bot (2ndclaw)**: fixed Telegram outage by removing the Docker-based `github` MCP entry that was crash-looping the gateway with `spawn docker EACCES`; `filesystem` and `brave-search` remain active
+  - **Dashboard PR #59** (`hotfix/github-mcp-dashboard`): added a safe GitHub MCP quick setup preset, blocks Docker MCP commands, rejects token-looking args, installs the official GitHub MCP binary for agents, and maps saved `GITHUB_TOKEN` to `GITHUB_PERSONAL_ACCESS_TOKEN`
+  - **Production deploy**: manually deployed hotfix to Cloud Run revision `openclaw-dashboard-00234-xh7` (100% traffic), then squash-merged PR #59 back to `main` and pushed tag `v2026.4.30.hotfix-github-mcp.1`
+- **Validation**:
+  - Dashboard: `npx tsc --noEmit`, `npm run build`
+  - Runtime: `vcode1bot-openclaw-gateway-1` stayed `Up`; `https://app.agentglob.com/login` returned `HTTP/2 200`
+
+---
+
+## Last Session (prev)
+
 - **Date**: 2026-04-20 (vcode1bot coding upgrade)
 - **What changed**:
   - **vcode1bot (2ndclaw)**: upgraded to `venice/qwen3-coder-480b-a35b-instruct-turbo` (primary), added `filesystem` MCP (workspace r/w) and `brave-search` MCP (web search), added coding soul
@@ -15,7 +28,7 @@
 
 ---
 
-## Last Session (prev)
+## Last Session (prev 2)
 
 - **Date**: 2026-04-16 (CI runner fix)
 - **What changed**:
@@ -52,16 +65,17 @@
 
 ## Active Branches / PRs
 
-| Repo               | Branch                          | PR  | Status          | Owner   | Files / Areas Touched                    | Validation         | Next Concrete Step                       | Notes                                                                    |
-| ------------------ | ------------------------------- | --- | --------------- | ------- | ---------------------------------------- | ------------------ | ---------------------------------------- | ------------------------------------------------------------------------ |
-| openclaw-dashboard | codex/feat-widget-chat-v1       | #52 | merged+deployed | Codex   | Widget Chat V1 (widget tab, chat API/UI) | npm run build + CI | Monitor production behavior              | Merged to main; Cloud Run deploy run 24422489602 succeeded               |
-| openclaw-dashboard | codex/fix-port-allocation-drift | #55 | merged+deployed | Codex   | agent creation, port allocation          | npm run build + CI | Monitor new-agent deploy behavior        | skips ports already claimed in live server state before allocation       |
-| openclaw-dashboard | codex/fix-deploy-port-repair    | #56 | merged+deployed | Codex   | deploy route, port reservation repair    | npm run build + CI | Monitor first-deploy conflict recovery   | auto-repairs stale reserved ports for never-deployed agents              |
-| openclaw-dashboard | feat/ci-cd-pipeline             | #51 | merged          | Claude  | GitHub Actions, Cloud Run pipeline       | merged             | None                                     | CI/CD auto-deploy live                                                   |
-| openclaw           | fix/deploy-and-control-infra    | #7  | merged          | Claude  | docker-compose.yml                       | n/a                | None                                     | Adds OPENCLAW_SKIP_BROWSER_CONTROL_SERVER env passthrough; merged Apr 15 |
-| openclaw-dashboard | fix/control-deploy-infra        | #53 | merged          | Claude  | control, logs, deploy routes             | merged             | None                                     | Merged Apr 20                                                            |
-| openclaw-dashboard | feat/coding-capability-template | #57 | review          | Claude  | lib/agent-config-template.ts             | npm run build      | Merge to main (auto-deploys)             | coding=true → qwen3-coder model + filesystem + brave-search MCPs         |
-| unknown            | chore/staging-deploy-gcp        | #1  | open, stale     | unknown | GCP deploy workflow                      | unknown            | Verify ownership before reuse or cleanup | Treat as active until verified                                           |
+| Repo               | Branch                          | PR  | Status          | Owner   | Files / Areas Touched                    | Validation         | Next Concrete Step                       | Notes                                                                              |
+| ------------------ | ------------------------------- | --- | --------------- | ------- | ---------------------------------------- | ------------------ | ---------------------------------------- | ---------------------------------------------------------------------------------- |
+| openclaw-dashboard | codex/feat-widget-chat-v1       | #52 | merged+deployed | Codex   | Widget Chat V1 (widget tab, chat API/UI) | npm run build + CI | Monitor production behavior              | Merged to main; Cloud Run deploy run 24422489602 succeeded                         |
+| openclaw-dashboard | codex/fix-port-allocation-drift | #55 | merged+deployed | Codex   | agent creation, port allocation          | npm run build + CI | Monitor new-agent deploy behavior        | skips ports already claimed in live server state before allocation                 |
+| openclaw-dashboard | codex/fix-deploy-port-repair    | #56 | merged+deployed | Codex   | deploy route, port reservation repair    | npm run build + CI | Monitor first-deploy conflict recovery   | auto-repairs stale reserved ports for never-deployed agents                        |
+| openclaw-dashboard | feat/ci-cd-pipeline             | #51 | merged          | Claude  | GitHub Actions, Cloud Run pipeline       | merged             | None                                     | CI/CD auto-deploy live                                                             |
+| openclaw           | fix/deploy-and-control-infra    | #7  | merged          | Claude  | docker-compose.yml                       | n/a                | None                                     | Adds OPENCLAW_SKIP_BROWSER_CONTROL_SERVER env passthrough; merged Apr 15           |
+| openclaw-dashboard | fix/control-deploy-infra        | #53 | merged          | Claude  | control, logs, deploy routes             | merged             | None                                     | Merged Apr 20                                                                      |
+| openclaw-dashboard | feat/coding-capability-template | #57 | review          | Claude  | lib/agent-config-template.ts             | npm run build      | Merge to main (auto-deploys)             | coding=true → qwen3-coder model + filesystem + brave-search MCPs                   |
+| openclaw-dashboard | hotfix/github-mcp-dashboard     | #59 | merged+deployed | Codex   | Tools MCP UI, MCP API route              | tsc + npm build    | Rotate leaked GitHub PAT; monitor setup  | Prod revision `openclaw-dashboard-00234-xh7`; tag `v2026.4.30.hotfix-github-mcp.1` |
+| unknown            | chore/staging-deploy-gcp        | #1  | open, stale     | unknown | GCP deploy workflow                      | unknown            | Verify ownership before reuse or cleanup | Treat as active until verified                                                     |
 
 ---
 
