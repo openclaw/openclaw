@@ -1,5 +1,5 @@
 import { stripHeartbeatToken } from "./heartbeat.js";
-import { HEARTBEAT_TRANSCRIPT_PROMPT } from "./heartbeat.js";
+import { HEARTBEAT_TRANSCRIPT_PROMPT } from "../infra/heartbeat-events.js";
 
 const HEARTBEAT_TASK_PROMPT_PREFIX =
   "Run the following periodic tasks (only those due based on their intervals):";

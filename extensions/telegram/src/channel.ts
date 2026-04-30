@@ -281,7 +281,6 @@ function shouldTreatTelegramDeliveredTextAsVisible(params: {
   kind: "tool" | "block" | "final";
   text?: string;
 }): boolean {
-  void params.text;
   return params.kind !== "final";
 }
 
