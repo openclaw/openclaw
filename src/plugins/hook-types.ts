@@ -102,7 +102,9 @@ export type PluginHookName =
   | "cron_changed"
   | "before_dispatch"
   | "reply_dispatch"
-  | "before_install";
+  | "before_install"
+  | "before_assemble"
+  | "after_assemble";
 
 export const PLUGIN_HOOK_NAMES = [
   "before_model_resolve",
@@ -140,6 +142,8 @@ export const PLUGIN_HOOK_NAMES = [
   "before_dispatch",
   "reply_dispatch",
   "before_install",
+  "before_assemble",
+  "after_assemble",
 ] as const satisfies readonly PluginHookName[];
 
 type MissingPluginHookNames = Exclude<PluginHookName, (typeof PLUGIN_HOOK_NAMES)[number]>;
@@ -932,6 +936,42 @@ export type PluginHookHandlerMap = {
     event: PluginHookBeforeInstallEvent,
     ctx: PluginHookBeforeInstallContext,
   ) => Promise<PluginHookBeforeInstallResult | void> | PluginHookBeforeInstallResult | void;
+  before_assemble: (
+    event: PluginHookBeforeAssembleEvent,
+    ctx: PluginHookAgentContext,
+  ) => Promise<PluginHookBeforeAssembleResult | void> | PluginHookBeforeAssembleResult | void;
+  after_assemble: (
+    event: PluginHookAfterAssembleEvent,
+    ctx: PluginHookAgentContext,
+  ) => Promise<void> | void;
+};
+
+// before_assemble hook — allows plugins to modify the message list
+// before context is assembled for the LLM. Runs sequentially so
+// plugins can chain transformations. Returned messages replace
+// the active session state for this agent turn.
+export type PluginHookBeforeAssembleEvent = {
+  sessionId: string;
+  /** Current messages in the active session. */
+  messages: unknown[];
+  /** Path to the session JSONL transcript file. */
+  sessionFile?: string;
+};
+
+export type PluginHookBeforeAssembleResult = {
+  /** Modified messages to use for context assembly. */
+  messages?: unknown[];
+};
+
+// after_assemble hook — allows plugins to observe the final
+// assembled context just before it is sent to the LLM.
+// Runs in parallel (fire-and-forget).
+export type PluginHookAfterAssembleEvent = {
+  sessionId: string;
+  /** Final messages in the assembled context. */
+  assembledMessages: unknown[];
+  /** Path to the session JSONL transcript file. */
+  sessionFile?: string;
 };
 
 export type PluginHookRegistration<K extends PluginHookName = PluginHookName> = {

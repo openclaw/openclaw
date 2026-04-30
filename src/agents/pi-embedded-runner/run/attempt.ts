@@ -2594,6 +2594,34 @@ export async function runEmbeddedAttempt(
           }
           prePromptMessageCount = activeSession.messages.length;
 
+          // Run before_assemble hook to allow plugins to modify the message list.
+          if (hookRunner && hookAgentId) {
+            const beforeAssembleResult = await hookRunner
+              .runBeforeAssemble(
+                {
+                  sessionId: params.sessionId,
+                  messages: activeSession.messages,
+                  sessionFile: params.sessionFile,
+                },
+                {
+                  runId: params.runId,
+                  agentId: hookAgentId,
+                  sessionKey: params.sessionKey,
+                  sessionId: params.sessionId,
+                  workspaceDir: params.workspaceDir,
+                  messageProvider: params.messageProvider ?? undefined,
+                  trigger: params.trigger,
+                  channelId: params.messageChannel ?? params.messageProvider ?? undefined,
+                },
+              )
+              .catch((err) => {
+                log.warn(`before_assemble hook failed: ${String(err)}`);
+              });
+            if (beforeAssembleResult?.messages) {
+              activeSession.agent.state.messages = beforeAssembleResult.messages as AgentMessage[];
+            }
+          }
+
           const promptSubmission = resolveRuntimeContextPromptParts({
             effectivePrompt,
             transcriptPrompt: effectiveTranscriptPrompt,
@@ -2843,6 +2871,32 @@ export async function runEmbeddedAttempt(
               messages: btwSnapshotMessages,
               inFlightPrompt: promptSubmission.prompt,
             });
+            // Run after_assemble hook to allow plugins to observe the
+            // final context before it is sent to the LLM.
+            if (hookRunner && hookAgentId) {
+              hookRunner
+                .runAfterAssemble(
+                  {
+                    sessionId: params.sessionId,
+                    assembledMessages: activeSession.messages,
+                    sessionFile: params.sessionFile,
+                  },
+                  {
+                    runId: params.runId,
+                    agentId: hookAgentId,
+                    sessionKey: params.sessionKey,
+                    sessionId: params.sessionId,
+                    workspaceDir: params.workspaceDir,
+                    messageProvider: params.messageProvider ?? undefined,
+                    trigger: params.trigger,
+                    channelId: params.messageChannel ?? params.messageProvider ?? undefined,
+                  },
+                )
+                .catch((err) => {
+                  log.warn(`after_assemble hook failed: ${String(err)}`);
+                });
+            }
+
             if (promptSubmission.runtimeOnly) {
               await abortable(activeSession.prompt(promptSubmission.prompt));
             } else {

@@ -231,6 +231,8 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
 
+  extensions/aicm: {}
+
   extensions/alibaba:
     devDependencies:
       '@openclaw/plugin-sdk':

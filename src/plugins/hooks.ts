@@ -78,6 +78,9 @@ import type {
   PluginHookBeforeInstallContext,
   PluginHookBeforeInstallEvent,
   PluginHookBeforeInstallResult,
+  PluginHookBeforeAssembleEvent,
+  PluginHookBeforeAssembleResult,
+  PluginHookAfterAssembleEvent,
 } from "./hook-types.js";
 
 // Re-export types for consumers
@@ -144,6 +147,9 @@ export type {
   PluginHookBeforeInstallContext,
   PluginHookBeforeInstallEvent,
   PluginHookBeforeInstallResult,
+  PluginHookBeforeAssembleEvent,
+  PluginHookBeforeAssembleResult,
+  PluginHookAfterAssembleEvent,
 };
 
 export type HookRunnerLogger = {
@@ -1300,6 +1306,43 @@ export function createHookRunner(
   }
 
   // =========================================================================
+  // Context Assembly Hooks
+  // =========================================================================
+
+  /**
+   * Run before_assemble hook.
+   * Allows plugins to modify messages before context assembly.
+   * Runs sequentially; returned messages replace the active session state.
+   */
+  async function runBeforeAssemble(
+    event: PluginHookBeforeAssembleEvent,
+    ctx: PluginHookAgentContext,
+  ): Promise<PluginHookBeforeAssembleResult | undefined> {
+    return runModifyingHook<"before_assemble", PluginHookBeforeAssembleResult>(
+      "before_assemble",
+      event,
+      ctx,
+      {
+        mergeResults: (acc, next) => ({
+          messages: next.messages ?? acc?.messages,
+        }),
+      },
+    );
+  }
+
+  /**
+   * Run after_assemble hook.
+   * Allows plugins to observe the final assembled context.
+   * Runs in parallel (fire-and-forget).
+   */
+  async function runAfterAssemble(
+    event: PluginHookAfterAssembleEvent,
+    ctx: PluginHookAgentContext,
+  ): Promise<void> {
+    return runVoidHook("after_assemble", event, ctx);
+  }
+
+  // =========================================================================
   // Skill Install Hooks
   // =========================================================================
 
@@ -1393,6 +1436,9 @@ export function createHookRunner(
     // Gateway hooks
     runGatewayStart,
     runGatewayStop,
+    // Context assembly hooks
+    runBeforeAssemble,
+    runAfterAssemble,
     runHeartbeatPromptContribution,
     runCronChanged,
     // Install hooks
