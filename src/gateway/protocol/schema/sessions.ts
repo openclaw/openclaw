@@ -52,6 +52,12 @@ export const SessionsListParamsSchema = Type.Object(
      * Performs a file read per session - use `limit` to bound result set on large stores.
      */
     includeLastMessage: Type.Optional(Type.Boolean()),
+    /**
+     * Recover token/cost/model usage from transcripts when the session store row
+     * does not already contain it. This can require full transcript reads per
+     * row, so list callers must opt in deliberately.
+     */
+    includeTranscriptUsage: Type.Optional(Type.Boolean()),
     label: Type.Optional(SessionLabelString),
     spawnedBy: Type.Optional(NonEmptyString),
     agentId: Type.Optional(NonEmptyString),

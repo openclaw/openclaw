@@ -83,7 +83,7 @@ test("sessions.list surfaces transcript usage and model fallbacks from the trans
       modelProvider?: string;
       model?: string;
     }>;
-  }>(ws, "sessions.list", {});
+  }>(ws, "sessions.list", { includeTranscriptUsage: true });
 
   expect(listed.ok).toBe(true);
   const parent = listed.payload?.sessions.find((session) => session.key === "agent:main:main");

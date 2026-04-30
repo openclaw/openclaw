@@ -1299,6 +1299,7 @@ export function buildGatewaySessionRow(params: {
   now?: number;
   includeDerivedTitles?: boolean;
   includeLastMessage?: boolean;
+  includeTranscriptUsage?: boolean;
 }): GatewaySessionRow {
   const { cfg, storePath, store, key, entry } = params;
   const now = params.now ?? Date.now();
@@ -1399,7 +1400,8 @@ export function buildGatewaySessionRow(params: {
       entry,
     }) === undefined;
   const transcriptUsage =
-    needsTranscriptTotalTokens || needsTranscriptContextTokens || needsTranscriptEstimatedCostUsd
+    params.includeTranscriptUsage !== false &&
+    (needsTranscriptTotalTokens || needsTranscriptContextTokens || needsTranscriptEstimatedCostUsd)
       ? resolveTranscriptUsageFallback({
           cfg,
           key,
@@ -1618,6 +1620,7 @@ export function listSessionsFromStore(params: {
   const includeUnknown = opts.includeUnknown === true;
   const includeDerivedTitles = opts.includeDerivedTitles === true;
   const includeLastMessage = opts.includeLastMessage === true;
+  const includeTranscriptUsage = opts.includeTranscriptUsage === true;
   const spawnedBy = typeof opts.spawnedBy === "string" ? opts.spawnedBy : "";
   const label = normalizeOptionalString(opts.label) ?? "";
   const agentId = typeof opts.agentId === "string" ? normalizeAgentId(opts.agentId) : "";
@@ -1719,6 +1722,7 @@ export function listSessionsFromStore(params: {
       now,
       includeDerivedTitles,
       includeLastMessage,
+      includeTranscriptUsage,
     }),
   );
 

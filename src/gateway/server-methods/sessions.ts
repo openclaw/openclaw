@@ -667,7 +667,9 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       Date.now() - loadedCatalogAt,
     )} count=${result.count} includeDerivedTitles=${p.includeDerivedTitles === true} includeLastMessage=${
       p.includeLastMessage === true
-    } limit=${typeof p.limit === "number" ? p.limit : "none"}`;
+    } includeTranscriptUsage=${p.includeTranscriptUsage === true} limit=${
+      typeof p.limit === "number" ? p.limit : "none"
+    }`;
     if (totalMs >= 1000) {
       context.logGateway?.warn?.(timingMessage);
     } else {
