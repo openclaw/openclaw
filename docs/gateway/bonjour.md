@@ -162,7 +162,7 @@ The log includes browser state transitions and result‑set changes.
 ## When to disable Bonjour
 
 Disable Bonjour only when LAN multicast advertising is unavailable or harmful.
-The common case is a Gateway running behind Docker bridge networking, WSL, or a
+The common case is a Gateway running behind Docker bridge networking, WSL2, or a
 network policy that drops mDNS multicast. In those environments the Gateway is
 still reachable through its published URL, SSH, Tailnet, or wide-area DNS-SD,
 but LAN auto-discovery is not reliable.
@@ -248,6 +248,9 @@ If a node no longer auto-discovers the Gateway after Docker setup:
 - **Docker bridge networking**: Bonjour auto-disables in detected containers.
   Set `OPENCLAW_DISABLE_BONJOUR=0` only for host, macvlan, or another
   mDNS-capable network.
+- **WSL2**: Bonjour auto-disables inside WSL2 because its virtualized network
+  stack does not forward mDNS multicast to the Windows host. Use
+  `OPENCLAW_DISABLE_BONJOUR=0` only if you have configured a multicast bridge.
 - **Sleep / interface churn**: macOS may temporarily drop mDNS results; retry.
 - **Browse works but resolve fails**: keep machine names simple (avoid emojis or
   punctuation), then restart the Gateway. The service instance name derives from
@@ -267,7 +270,7 @@ sequences (e.g. spaces become `\032`).
 - `openclaw plugins enable bonjour` restores the default LAN discovery plugin.
 - `OPENCLAW_DISABLE_BONJOUR=1` disables LAN multicast advertising without changing plugin config; accepted truthy values are `1`, `true`, `yes`, and `on` (legacy: `OPENCLAW_DISABLE_BONJOUR`).
 - `OPENCLAW_DISABLE_BONJOUR=0` forces LAN multicast advertising on, including inside detected containers; accepted falsy values are `0`, `false`, `no`, and `off`.
-- When `OPENCLAW_DISABLE_BONJOUR` is unset, Bonjour advertises on normal hosts and auto-disables inside detected containers.
+- When `OPENCLAW_DISABLE_BONJOUR` is unset, Bonjour advertises on normal hosts and auto-disables inside detected containers and WSL2.
 - `gateway.bind` in `~/.openclaw/openclaw.json` controls the Gateway bind mode.
 - `OPENCLAW_SSH_PORT` overrides the SSH port when `sshPort` is advertised (legacy: `OPENCLAW_SSH_PORT`).
 - `OPENCLAW_TAILNET_DNS` publishes a MagicDNS hint in TXT when mDNS full mode is enabled (legacy: `OPENCLAW_TAILNET_DNS`).
