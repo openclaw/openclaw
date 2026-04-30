@@ -41,6 +41,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Channels/status: keep Telegram, Slack, and Google Chat read-only allowlist/default-target accessors on config-only paths, so status and channel summaries do not resolve SecretRef-backed runtime credentials. Thanks @eusine.
+- Active Memory: clarify the deprecated `modelFallbackPolicy` warning and config help so `modelFallback` is described as a chain-resolution last resort, not runtime failover. (#74602) Thanks @jeffrey701.
 - Channels/Discord: keep read-only allowlist/default-target accessors from resolving SecretRef-backed bot tokens, so status and channel summaries no longer fail when tokens are only available in gateway runtime. (#74737) Thanks @eusine.
 - Gateway/sessions: align session abort wait semantics across `chat`, `agent`, and `sessions` server methods so abort RPCs return after the targeted sessions actually halt instead of resolving early while runs are still draining. (#74751) Thanks @BunsDev.
 - Agents/output: drop copied inbound metadata-only assistant replay turns before provider replay instead of synthesizing a placeholder, so Telegram and other channels cannot receive `[assistant copied inbound metadata omitted]` as model output. Fixes #74745. Thanks @adamwdear and @Marvae.
