@@ -48,7 +48,7 @@ struct MacNodeModeCoordinatorTests {
         #expect(MacNodeModeCoordinator.shouldAutoRepairStaleTLSPin(url: url, failure: failure))
     }
 
-    @Test func `does not auto repair untrusted remote pin mismatch`() throws {
+    @Test func `auto repairs trusted public host pin mismatch`() throws {
         let url = try #require(URL(string: "wss://gateway.example.com"))
         let failure = GatewayTLSValidationFailure(
             kind: .pinMismatch,
@@ -57,6 +57,19 @@ struct MacNodeModeCoordinatorTests {
             expectedFingerprint: "old",
             observedFingerprint: "new",
             systemTrustOk: true)
+
+        #expect(MacNodeModeCoordinator.shouldAutoRepairStaleTLSPin(url: url, failure: failure))
+    }
+
+    @Test func `does not auto repair untrusted remote pin mismatch`() throws {
+        let url = try #require(URL(string: "wss://gateway.example.com"))
+        let failure = GatewayTLSValidationFailure(
+            kind: .pinMismatch,
+            host: "gateway.example.com",
+            storeKey: "gateway.example.com:443",
+            expectedFingerprint: "old",
+            observedFingerprint: "new",
+            systemTrustOk: false)
 
         #expect(!MacNodeModeCoordinator.shouldAutoRepairStaleTLSPin(url: url, failure: failure))
     }

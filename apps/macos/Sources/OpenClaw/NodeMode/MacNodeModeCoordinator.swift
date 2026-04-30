@@ -205,20 +205,15 @@ final class MacNodeModeCoordinator {
         guard failure.kind == .pinMismatch else { return false }
         guard url.scheme?.lowercased() == "wss" else { return false }
         guard failure.storeKey == nil || failure.storeKey == self.tlsPinStoreKey(for: url) else { return false }
-        guard let host = url.host?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(), !host.isEmpty
-        else { return false }
+        let host = url.host?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !host.isEmpty else { return false }
 
-        if LoopbackHost.isLoopback(host) {
-            return failure.systemTrustOk
-        }
-
-        // Tailscale Serve uses publicly trusted, rotating certificates for *.ts.net names.
-        // A stale legacy leaf pin should not leave the companion app half-connected forever.
-        if host == "ts.net" || host.hasSuffix(".ts.net") {
-            return failure.systemTrustOk
-        }
-
-        return false
+        // System trust is the primary defense against MitM; the pin is a secondary check.
+        // When the new cert chain is still system-trusted, a pin mismatch is overwhelmingly
+        // a legitimate cert rotation (e.g. Tailscale Serve, ACME-issued public gateways) and
+        // the companion app must not be left looping on a stale pin. Self-signed / private
+        // CA scenarios still take the strict path because systemTrustOk is false there.
+        return failure.systemTrustOk
     }
 
     private func autoRepairStaleTLSPinIfNeeded(error: Error, url: URL?) async -> Bool {
