@@ -6,6 +6,7 @@ import type { OpenClawConfig } from "../runtime-api.js";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
 import {
   deleteGoogleChatMessage,
+  isGoogleChatMessageResourceName,
   isGoogleChatThreadResourceName,
   sendGoogleChatMessage,
   updateGoogleChatMessage,
@@ -20,7 +21,13 @@ function resolveOutboundThread(
   if (isGoogleChatThreadResourceName(payloadReplyToId)) {
     return payloadReplyToId;
   }
-  return isGoogleChatThreadResourceName(inboundThreadId) ? inboundThreadId : undefined;
+  if (
+    isGoogleChatMessageResourceName(payloadReplyToId) &&
+    isGoogleChatThreadResourceName(inboundThreadId)
+  ) {
+    return inboundThreadId;
+  }
+  return undefined;
 }
 
 export async function deliverGoogleChatReply(params: {

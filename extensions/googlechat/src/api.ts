@@ -6,7 +6,10 @@ import { getGoogleChatAccessToken } from "./auth.js";
 import { isGoogleChatThreadResourceName } from "./thread-resource.js";
 import type { GoogleChatReaction } from "./types.js";
 
-export { isGoogleChatThreadResourceName } from "./thread-resource.js";
+export {
+  isGoogleChatMessageResourceName,
+  isGoogleChatThreadResourceName,
+} from "./thread-resource.js";
 
 const CHAT_API_BASE = "https://chat.googleapis.com/v1";
 const CHAT_UPLOAD_BASE = "https://chat.googleapis.com/upload/v1";
