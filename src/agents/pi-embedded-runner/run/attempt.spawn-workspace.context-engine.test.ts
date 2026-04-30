@@ -199,6 +199,42 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     }
   });
 
+  it("uses the resolved context token budget for non-owner tool-result guard installs", async () => {
+    await createContextEngineAttemptRunner({
+      contextEngine: createTestContextEngine({
+        assemble: async ({ messages }) => ({
+          messages,
+          estimatedTokens: 1,
+        }),
+        info: {
+          id: "non-owner-context-engine",
+          name: "Non-owner context engine",
+          version: "0.0.1",
+          ownsCompaction: false,
+        },
+      }),
+      sessionKey,
+      tempPaths,
+      attemptOverrides: {
+        contextTokenBudget: 4096,
+        model: {
+          api: "openai-completions",
+          provider: "openai",
+          compat: {},
+          contextWindow: 128,
+          maxTokens: 64,
+          input: ["text"],
+        } as never,
+      },
+    });
+
+    expect(hoisted.installToolResultContextGuardMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        contextWindowTokens: 4096,
+      }),
+    );
+  });
+
   it("marks inter-session transcriptPrompt before submitting the visible prompt", async () => {
     let seenPrompt: string | undefined;
 

@@ -1476,7 +1476,10 @@ export async function runEmbeddedAttempt(
           contextWindowTokens: Math.max(
             1,
             Math.floor(
-              params.model.contextWindow ?? params.model.maxTokens ?? DEFAULT_CONTEXT_TOKENS,
+              params.contextTokenBudget ??
+                params.model.contextWindow ??
+                params.model.maxTokens ??
+                DEFAULT_CONTEXT_TOKENS,
             ),
           ),
         });
