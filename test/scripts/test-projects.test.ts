@@ -481,7 +481,7 @@ describe("scripts/test-projects changed-target routing", () => {
     );
   });
 
-  it("narrows default-lane changed source files to include globs", () => {
+  it("narrows default-lane changed source files to affected tests", () => {
     const plans = buildVitestRunPlans(["--changed", "origin/main"], process.cwd(), () => [
       "packages/sdk/src/index.ts",
     ]);
