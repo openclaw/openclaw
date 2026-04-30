@@ -171,4 +171,73 @@ describe("applyExtraParamsToAgent Moonshot", () => {
 
     expect(payload.thinking).toEqual({ type: "disabled" });
   });
+
+  it("injects reasoning_content on assistant messages with tool_calls when thinking is enabled", () => {
+    const payload = runExtraParamsPayloadCase({
+      provider: "moonshot",
+      modelId: "kimi-k2.5",
+      thinkingLevel: "low",
+      payload: {
+        messages: [
+          { role: "user", content: "search" },
+          {
+            role: "assistant",
+            content: "",
+            tool_calls: [
+              { id: "call_1", type: "function", function: { name: "search", arguments: "{}" } },
+            ],
+          },
+          { role: "tool", tool_call_id: "call_1", content: "result" },
+        ],
+      },
+    });
+
+    const assistantMsg = (payload.messages as Array<Record<string, unknown>>)?.[1];
+    expect(assistantMsg?.reasoning_content).toBe("");
+  });
+
+  it("does not inject reasoning_content when thinking is disabled", () => {
+    const payload = runExtraParamsPayloadCase({
+      provider: "moonshot",
+      modelId: "kimi-k2.5",
+      thinkingLevel: "off",
+      payload: {
+        messages: [
+          {
+            role: "assistant",
+            content: "",
+            tool_calls: [
+              { id: "call_1", type: "function", function: { name: "search", arguments: "{}" } },
+            ],
+          },
+        ],
+      },
+    });
+
+    const assistantMsg = (payload.messages as Array<Record<string, unknown>>)?.[0];
+    expect(assistantMsg?.reasoning_content).toBeUndefined();
+  });
+
+  it("preserves existing reasoning_content on assistant tool call messages", () => {
+    const payload = runExtraParamsPayloadCase({
+      provider: "moonshot",
+      modelId: "kimi-k2.6",
+      thinkingLevel: "low",
+      payload: {
+        messages: [
+          {
+            role: "assistant",
+            content: "",
+            reasoning_content: "original reasoning",
+            tool_calls: [
+              { id: "call_1", type: "function", function: { name: "search", arguments: "{}" } },
+            ],
+          },
+        ],
+      },
+    });
+
+    const assistantMsg = (payload.messages as Array<Record<string, unknown>>)?.[0];
+    expect(assistantMsg?.reasoning_content).toBe("original reasoning");
+  });
 });
