@@ -87,6 +87,7 @@ import { filterToolsForVisionInputs } from "./vision-tools.js";
 
 const CODEX_DYNAMIC_TOOL_TIMEOUT_MS = 30_000;
 const CODEX_TURN_COMPLETION_IDLE_TIMEOUT_MS = 60_000;
+const CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS = 30 * 60_000;
 const CODEX_STEER_ALL_DEBOUNCE_MS = 500;
 
 type OpenClawCodingToolsOptions = NonNullable<
@@ -226,6 +227,7 @@ export async function runCodexAppServerAttempt(
       hookTimeoutSec?: number;
     };
     turnCompletionIdleTimeoutMs?: number;
+    turnTerminalIdleTimeoutMs?: number;
   } = {},
 ): Promise<EmbeddedRunAttemptResult> {
   const attemptStartedAt = Date.now();
@@ -471,8 +473,13 @@ export async function runCodexAppServerAttempt(
   const turnCompletionIdleTimeoutMs = resolveCodexTurnCompletionIdleTimeoutMs(
     options.turnCompletionIdleTimeoutMs,
   );
+  const turnTerminalIdleTimeoutMs = resolveCodexTurnTerminalIdleTimeoutMs(
+    options.turnTerminalIdleTimeoutMs,
+  );
   let turnCompletionIdleTimer: ReturnType<typeof setTimeout> | undefined;
   let turnCompletionIdleWatchArmed = false;
+  let turnTerminalIdleTimer: ReturnType<typeof setTimeout> | undefined;
+  let turnTerminalIdleWatchArmed = false;
   let turnCompletionLastActivityAt = Date.now();
   let turnCompletionLastActivityReason = "startup";
   let activeAppServerTurnRequests = 0;
@@ -481,6 +488,13 @@ export async function runCodexAppServerAttempt(
     if (turnCompletionIdleTimer) {
       clearTimeout(turnCompletionIdleTimer);
       turnCompletionIdleTimer = undefined;
+    }
+  };
+
+  const clearTurnTerminalIdleTimer = () => {
+    if (turnTerminalIdleTimer) {
+      clearTimeout(turnTerminalIdleTimer);
+      turnTerminalIdleTimer = undefined;
     }
   };
 
@@ -520,6 +534,42 @@ export async function runCodexAppServerAttempt(
     runAbortController.abort("turn_completion_idle_timeout");
   };
 
+  const fireTurnTerminalIdleTimeout = () => {
+    if (
+      completed ||
+      runAbortController.signal.aborted ||
+      !turnTerminalIdleWatchArmed ||
+      activeAppServerTurnRequests > 0
+    ) {
+      return;
+    }
+    const idleMs = Math.max(0, Date.now() - turnCompletionLastActivityAt);
+    if (idleMs < turnTerminalIdleTimeoutMs) {
+      scheduleTurnTerminalIdleWatch();
+      return;
+    }
+    timedOut = true;
+    turnCompletionIdleTimedOut = true;
+    turnCompletionIdleTimeoutMessage =
+      "codex app-server turn idle timed out waiting for turn/completed";
+    projector?.markTimedOut();
+    trajectoryRecorder?.recordEvent("turn.terminal_idle_timeout", {
+      threadId: thread.threadId,
+      turnId,
+      idleMs,
+      timeoutMs: turnTerminalIdleTimeoutMs,
+      lastActivityReason: turnCompletionLastActivityReason,
+    });
+    embeddedAgentLog.warn("codex app-server turn idle timed out waiting for terminal event", {
+      threadId: thread.threadId,
+      turnId,
+      idleMs,
+      timeoutMs: turnTerminalIdleTimeoutMs,
+      lastActivityReason: turnCompletionLastActivityReason,
+    });
+    runAbortController.abort("turn_terminal_idle_timeout");
+  };
+
   function scheduleTurnCompletionIdleWatch() {
     clearTurnCompletionIdleTimer();
     if (
@@ -536,6 +586,22 @@ export async function runCodexAppServerAttempt(
     turnCompletionIdleTimer.unref?.();
   }
 
+  function scheduleTurnTerminalIdleWatch() {
+    clearTurnTerminalIdleTimer();
+    if (
+      completed ||
+      runAbortController.signal.aborted ||
+      !turnTerminalIdleWatchArmed ||
+      activeAppServerTurnRequests > 0
+    ) {
+      return;
+    }
+    const elapsedMs = Math.max(0, Date.now() - turnCompletionLastActivityAt);
+    const delayMs = Math.max(1, turnTerminalIdleTimeoutMs - elapsedMs);
+    turnTerminalIdleTimer = setTimeout(fireTurnTerminalIdleTimeout, delayMs);
+    turnTerminalIdleTimer.unref?.();
+  }
+
   const touchTurnCompletionActivity = (reason: string, options?: { arm?: boolean }) => {
     turnCompletionLastActivityAt = Date.now();
     turnCompletionLastActivityReason = reason;
@@ -543,6 +609,7 @@ export async function runCodexAppServerAttempt(
       turnCompletionIdleWatchArmed = true;
     }
     scheduleTurnCompletionIdleWatch();
+    scheduleTurnTerminalIdleWatch();
   };
 
   const emitLifecycleStart = () => {
@@ -595,6 +662,7 @@ export async function runCodexAppServerAttempt(
         }
         completed = true;
         clearTurnCompletionIdleTimer();
+        clearTurnTerminalIdleTimer();
         resolveCompletion?.();
       }
     }
@@ -839,6 +907,7 @@ export async function runCodexAppServerAttempt(
     abort: () => runAbortController.abort("aborted"),
   };
   setActiveEmbeddedRun(params.sessionId, handle, params.sessionKey);
+  turnTerminalIdleWatchArmed = true;
   touchTurnCompletionActivity("turn:start");
 
   const timeout = setTimeout(
@@ -1005,6 +1074,7 @@ export async function runCodexAppServerAttempt(
     userInputBridge?.cancelPending();
     clearTimeout(timeout);
     clearTurnCompletionIdleTimer();
+    clearTurnTerminalIdleTimer();
     notificationCleanup();
     requestCleanup();
     nativeHookRelay?.unregister();
@@ -1305,6 +1375,16 @@ function resolveCodexTurnCompletionIdleTimeoutMs(value: number | undefined): num
   return Math.max(1, Math.floor(value));
 }
 
+function resolveCodexTurnTerminalIdleTimeoutMs(value: number | undefined): number {
+  if (value === undefined) {
+    return CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS;
+  }
+  if (!Number.isFinite(value)) {
+    return CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS;
+  }
+  return Math.max(1, Math.floor(value));
+}
+
 function readDynamicToolCallParams(
   value: JsonValue | undefined,
 ): CodexDynamicToolCallParams | undefined {
@@ -1417,6 +1497,7 @@ function handleApprovalRequest(params: {
 export const __testing = {
   CODEX_DYNAMIC_TOOL_TIMEOUT_MS,
   CODEX_TURN_COMPLETION_IDLE_TIMEOUT_MS,
+  CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS,
   buildCodexNativeHookRelayId,
   filterToolsForVisionInputs,
   handleDynamicToolCallWithTimeout,

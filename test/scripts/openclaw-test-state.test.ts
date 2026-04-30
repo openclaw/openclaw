@@ -109,6 +109,52 @@ describe("scripts/lib/openclaw-test-state", () => {
     }
   });
 
+  it("creates the upgrade survivor scenario", async () => {
+    const { stdout } = await execFileAsync(process.execPath, [
+      scriptPath,
+      "--",
+      "create",
+      "--label",
+      "upgrade-survivor",
+      "--scenario",
+      "upgrade-survivor",
+      "--json",
+    ]);
+    const payload = JSON.parse(stdout);
+    try {
+      expect(payload.scenario).toBe("upgrade-survivor");
+      expect(payload.config).toMatchObject({
+        update: {
+          channel: "stable",
+        },
+        gateway: {
+          auth: {
+            token: {
+              id: "GATEWAY_AUTH_TOKEN_REF",
+              source: "env",
+            },
+          },
+        },
+        channels: {
+          discord: {
+            enabled: true,
+            dm: {
+              policy: "allowlist",
+            },
+          },
+          telegram: {
+            enabled: true,
+          },
+          whatsapp: {
+            enabled: true,
+          },
+        },
+      });
+    } finally {
+      await fs.rm(payload.root, { recursive: true, force: true });
+    }
+  });
+
   it("renders a reusable Docker shell function", async () => {
     const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-test-state-function-"));
     const snippetFile = path.join(tempRoot, "state-function.sh");

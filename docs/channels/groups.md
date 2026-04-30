@@ -61,6 +61,9 @@ To restore legacy automatic final replies for group/channel rooms:
 }
 ```
 
+The gateway hot-reloads `messages` config after the file is saved. Restart only
+when file watching or config reload is disabled in the deployment.
+
 To require visible output to go through the message tool for every source chat:
 
 ```json5
@@ -254,6 +257,7 @@ Control how group/room messages are handled per channel:
   <Accordion title="Per-channel notes">
     - `groupPolicy` is separate from mention-gating (which requires @mentions).
     - WhatsApp/Telegram/Signal/iMessage/Microsoft Teams/Zalo: use `groupAllowFrom` (fallback: explicit `allowFrom`).
+    - Signal: `groupAllowFrom` can match either the inbound Signal group id or the sender phone/UUID.
     - DM pairing approvals (`*-allowFrom` store entries) apply to DM access only; group sender authorization stays explicit to group allowlists.
     - Discord: allowlist uses `channels.discord.guilds.<id>.channels`.
     - Slack: allowlist uses `channels.slack.channels`.
@@ -328,6 +332,7 @@ Replying to a bot message counts as an implicit mention when the channel support
     - Surfaces that provide explicit mentions still pass; patterns are a fallback.
     - Per-agent override: `agents.list[].groupChat.mentionPatterns` (useful when multiple agents share a group).
     - Mention gating is only enforced when mention detection is possible (native mentions or `mentionPatterns` are configured).
+    - Allowlisting a group or sender does not disable mention gating; set that group's `requireMention` to `false` when all messages should trigger.
     - Group chat prompt context carries the resolved silent-reply instruction every turn; workspace files should not duplicate `NO_REPLY` mechanics.
     - Groups where silent replies are allowed treat clean empty or reasoning-only model turns as silent, equivalent to `NO_REPLY`. Direct chats do the same only when direct silent replies are explicitly allowed; otherwise empty replies remain failed agent turns.
     - Discord defaults live in `channels.discord.guilds."*"` (overridable per guild/channel).
