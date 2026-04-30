@@ -18,6 +18,26 @@ vi.mock("./auth.js", () => ({
   verifyGoogleChatRequest: vi.fn(),
 }));
 
+type GoogleChatBuildContextParams = {
+  messageId?: string;
+  messageIdFull?: string;
+  reply: {
+    messageThreadId?: string;
+    replyToId?: string;
+    replyToIdFull?: string;
+  };
+};
+
+function createGoogleChatBuildContextMock() {
+  return vi.fn((params: GoogleChatBuildContextParams) => ({
+    MessageSid: params.messageId,
+    MessageSidFull: params.messageIdFull,
+    MessageThreadId: params.reply.messageThreadId,
+    ReplyToId: params.reply.replyToId,
+    ReplyToIdFull: params.reply.replyToIdFull,
+  }));
+}
+
 function createWebhookRequest(params: {
   authorization?: string;
   payload: unknown;
@@ -273,8 +293,8 @@ describe("Google Chat monitor inbound context", () => {
     vi.mocked(verifyGoogleChatRequest).mockResolvedValue({ ok: true });
     await import("./monitor.js");
 
-    const finalizeInboundContext = vi.fn((ctx) => ctx);
-    const dispatchReplyWithBufferedBlockDispatcher = vi.fn(async () => {});
+    const buildContext = createGoogleChatBuildContextMock();
+    const runResolved = vi.fn(async () => ({}));
     const core = {
       logging: { shouldLogVerbose: () => false },
       channel: {
@@ -304,8 +324,10 @@ describe("Google Chat monitor inbound context", () => {
         reply: {
           resolveEnvelopeFormatOptions: () => ({}),
           formatAgentEnvelope: ({ body }: { body: string }) => body,
-          finalizeInboundContext,
-          dispatchReplyWithBufferedBlockDispatcher,
+        },
+        turn: {
+          buildContext,
+          runResolved,
         },
         media: {
           saveMediaBuffer: vi.fn(),
@@ -357,20 +379,20 @@ describe("Google Chat monitor inbound context", () => {
       );
 
       expect(res.statusCode).toBe(200);
-      expect(finalizeInboundContext).toHaveBeenCalledWith(
+      expect(buildContext).toHaveBeenCalledWith(
         expect.objectContaining({
-          MessageSid: "spaces/AAA/messages/123",
-          MessageSidFull: "spaces/AAA/messages/123",
-          MessageThreadId: "spaces/AAA/threads/xyz",
-          ReplyToId: "spaces/AAA/threads/xyz",
-          ReplyToIdFull: "spaces/AAA/threads/xyz",
+          messageId: "spaces/AAA/messages/123",
+          messageIdFull: "spaces/AAA/messages/123",
+          reply: expect.objectContaining({
+            messageThreadId: "spaces/AAA/threads/xyz",
+            replyToId: "spaces/AAA/threads/xyz",
+            replyToIdFull: "spaces/AAA/threads/xyz",
+          }),
         }),
       );
-      expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledWith(
+      expect(runResolved).toHaveBeenCalledWith(
         expect.objectContaining({
-          ctx: expect.objectContaining({
-            MessageThreadId: "spaces/AAA/threads/xyz",
-          }),
+          resolveTurn: expect.any(Function),
         }),
       );
     } finally {
@@ -382,8 +404,8 @@ describe("Google Chat monitor inbound context", () => {
     vi.mocked(verifyGoogleChatRequest).mockResolvedValue({ ok: true });
     await import("./monitor.js");
 
-    const finalizeInboundContext = vi.fn((ctx) => ctx);
-    const dispatchReplyWithBufferedBlockDispatcher = vi.fn(async () => {});
+    const buildContext = createGoogleChatBuildContextMock();
+    const runResolved = vi.fn(async () => ({}));
     const core = {
       logging: { shouldLogVerbose: () => false },
       channel: {
@@ -413,8 +435,10 @@ describe("Google Chat monitor inbound context", () => {
         reply: {
           resolveEnvelopeFormatOptions: () => ({}),
           formatAgentEnvelope: ({ body }: { body: string }) => body,
-          finalizeInboundContext,
-          dispatchReplyWithBufferedBlockDispatcher,
+        },
+        turn: {
+          buildContext,
+          runResolved,
         },
         media: {
           saveMediaBuffer: vi.fn(),
@@ -463,13 +487,15 @@ describe("Google Chat monitor inbound context", () => {
       );
 
       expect(res.statusCode).toBe(200);
-      expect(finalizeInboundContext).toHaveBeenCalledWith(
+      expect(buildContext).toHaveBeenCalledWith(
         expect.objectContaining({
-          MessageSid: "spaces/DM/messages/789",
-          MessageSidFull: "spaces/DM/messages/789",
-          MessageThreadId: undefined,
-          ReplyToId: undefined,
-          ReplyToIdFull: undefined,
+          messageId: "spaces/DM/messages/789",
+          messageIdFull: "spaces/DM/messages/789",
+          reply: expect.objectContaining({
+            messageThreadId: undefined,
+            replyToId: undefined,
+            replyToIdFull: undefined,
+          }),
         }),
       );
     } finally {
@@ -485,9 +511,26 @@ describe("Google Chat delivery thread routing", () => {
     updateGoogleChatMessageMock.mockClear();
   });
 
-  function createPluginRuntime(
-    dispatchReplyWithBufferedBlockDispatcher: ReturnType<typeof vi.fn>,
-  ): PluginRuntime {
+  function createPluginRuntime(deliverPayload?: {
+    text: string;
+    replyToId: string;
+  }): PluginRuntime {
+    const buildContext = createGoogleChatBuildContextMock();
+    const runResolved = vi.fn(
+      async (params: {
+        resolveTurn: () => {
+          delivery: {
+            deliver: (payload: { text: string; replyToId: string }) => Promise<void>;
+          };
+        };
+      }) => {
+        if (deliverPayload) {
+          await params.resolveTurn().delivery.deliver(deliverPayload);
+        }
+        return {};
+      },
+    );
+
     return {
       logging: { shouldLogVerbose: () => false },
       channel: {
@@ -517,8 +560,10 @@ describe("Google Chat delivery thread routing", () => {
         reply: {
           resolveEnvelopeFormatOptions: () => ({}),
           formatAgentEnvelope: ({ body }: { body: string }) => body,
-          finalizeInboundContext: vi.fn((ctx) => ctx),
-          dispatchReplyWithBufferedBlockDispatcher,
+        },
+        turn: {
+          buildContext,
+          runResolved,
         },
         media: {
           saveMediaBuffer: vi.fn(),
@@ -557,19 +602,10 @@ describe("Google Chat delivery thread routing", () => {
     await import("./monitor.js");
 
     updateGoogleChatMessageMock.mockRejectedValueOnce(new Error("typing message disappeared"));
-    const dispatchReplyWithBufferedBlockDispatcher = vi.fn(
-      async (params: {
-        dispatcherOptions: {
-          deliver: (payload: { text: string; replyToId: string }) => Promise<void>;
-        };
-      }) => {
-        await params.dispatcherOptions.deliver({
-          text: "threaded reply",
-          replyToId: "spaces/AAA/messages/123",
-        });
-      },
-    );
-    const core = createPluginRuntime(dispatchReplyWithBufferedBlockDispatcher);
+    const core = createPluginRuntime({
+      text: "threaded reply",
+      replyToId: "spaces/AAA/messages/123",
+    });
 
     const unregister = registerGoogleChatWebhookTarget({
       account: accountConfig,
