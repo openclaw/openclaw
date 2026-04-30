@@ -506,6 +506,13 @@ describe("config schema", () => {
     });
   });
 
+  it("exposes auto emotion TTS config help", () => {
+    const lookup = lookupConfigSchema(baseSchema, "messages.tts.autoEmotion");
+    expect(lookup?.hint?.label).toBe("TTS Auto Emotion");
+    expect(lookup?.hint?.help).toContain("provider-specific speech controls");
+    expect(lookup?.hint?.tags).toContain("media");
+  });
+
   it("normalizes bracketed lookup paths", () => {
     const lookup = lookupConfigSchema(baseSchema, "agents.list[0].identity.avatar");
     expect(lookup?.path).toBe("agents.list.0.identity.avatar");

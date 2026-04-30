@@ -868,6 +868,10 @@ export const FIELD_LABELS: Record<string, string> = {
   "messages.tts.personas.*": "TTS Persona",
   "messages.tts.personas.*.prompt": "TTS Persona Prompt",
   "messages.tts.personas.*.providers": "TTS Persona Provider Bindings",
+  "messages.tts.autoEmotion": "TTS Auto Emotion",
+  "messages.tts.autoEmotion.enabled": "Enable TTS Auto Emotion",
+  "messages.tts.autoEmotion.fallback": "TTS Auto Emotion Fallback",
+  "messages.tts.autoEmotion.allowed": "TTS Auto Emotion Allowlist",
   "messages.tts.providers": "TTS Provider Settings",
   "messages.tts.providers.*": "TTS Provider Config",
   "messages.tts.providers.*.apiKey": "TTS Provider API Key", // pragma: allowlist secret

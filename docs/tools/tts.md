@@ -271,6 +271,7 @@ preset and adapt the provider block:
       provider: "openai",
       summaryModel: "openai/gpt-4.1-mini",
       modelOverrides: { enabled: true },
+      autoEmotion: { enabled: true, allowed: ["happy", "calm", "neutral", "sad", "surprised"] },
       providers: {
         openai: {
           apiKey: "${OPENAI_API_KEY}",
@@ -549,6 +550,26 @@ For each provider attempt, OpenClaw merges configs in this order:
 2. `messages.tts.personas.<persona>.providers.<id>`
 3. Trusted request overrides
 4. Allowed model-emitted TTS directive overrides
+5. `autoEmotion` provider-specific overrides, only when none of the earlier layers set an emotion-equivalent field
+
+### Automatic emotion selection
+
+`messages.tts.autoEmotion` can infer a conservative abstract emotion from the
+spoken text, then map it to the active provider's native controls:
+
+| Provider                 | Auto-emotion override                             |
+| ------------------------ | ------------------------------------------------- |
+| Volcengine               | `emotion`                                         |
+| Xiaomi MiMo              | `style`                                           |
+| OpenAI                   | `instructions`                                    |
+| ElevenLabs               | `voiceSettings.style` / `voiceSettings.stability` |
+| Microsoft / Azure Speech | `rate` / `pitch` / `volume` prosody               |
+
+Auto emotion is skipped when the effective provider attempt already has an
+explicit emotion-equivalent setting from provider config, persona provider
+bindings, trusted request overrides, or allowed model directives. Use persona
+provider bindings when a persona needs a stable provider-specific voice style;
+use `autoEmotion` only for lightweight context-sensitive variation.
 
 ### How providers use persona prompts
 
@@ -807,6 +828,9 @@ OpenAI and ElevenLabs output formats are fixed per channel as listed above.
     <ParamField path="modelOverrides" type="object">
       Allow the model to emit TTS directives. `enabled` defaults to `true`; `allowProvider` defaults to `false`.
     </ParamField>
+    <ParamField path="autoEmotion" type="object">
+      Conservative automatic emotion selection. Fields: `enabled`, `fallback`, `allowed`. Maps abstract emotions to provider-specific controls and yields to explicit provider/persona/request settings.
+    </ParamField>
     <ParamField path="providers.<id>" type="object">
       Provider-owned settings keyed by speech provider id. Legacy direct blocks (`messages.tts.openai`, `.elevenlabs`, `.microsoft`, `.edge`) are rewritten by `openclaw doctor --fix`; commit only `messages.tts.providers.<id>`.
     </ParamField>
@@ -829,6 +853,7 @@ OpenAI and ElevenLabs output formats are fixed per channel as listed above.
     <ParamField path="lang" type="string">SSML language code. Default `en-US`.</ParamField>
     <ParamField path="outputFormat" type="string">Azure `X-Microsoft-OutputFormat` for standard audio. Default `audio-24khz-48kbitrate-mono-mp3`.</ParamField>
     <ParamField path="voiceNoteOutputFormat" type="string">Azure `X-Microsoft-OutputFormat` for voice-note output. Default `ogg-24khz-16bit-mono-opus`.</ParamField>
+    <ParamField path="rate / pitch / volume" type="string">SSML prosody strings. Explicit values disable Azure auto-emotion prosody overrides for that attempt.</ParamField>
   </Accordion>
 
   <Accordion title="ElevenLabs">
@@ -836,7 +861,7 @@ OpenAI and ElevenLabs output formats are fixed per channel as listed above.
     <ParamField path="model" type="string">Model id (e.g. `eleven_multilingual_v2`, `eleven_v3`).</ParamField>
     <ParamField path="voiceId" type="string">ElevenLabs voice id.</ParamField>
     <ParamField path="voiceSettings" type="object">
-      `stability`, `similarityBoost`, `style` (each `0..1`), `useSpeakerBoost` (`true|false`), `speed` (`0.5..2.0`, `1.0` = normal).
+      `stability`, `similarityBoost`, `style` (each `0..1`), `useSpeakerBoost` (`true|false`), `speed` (`0.5..2.0`, `1.0` = normal). Explicit `style` or `stability` disables ElevenLabs auto-emotion overrides for that attempt.
     </ParamField>
     <ParamField path="applyTextNormalization" type='"auto" | "on" | "off"'>Text normalization mode.</ParamField>
     <ParamField path="languageCode" type="string">2-letter ISO 639-1 (e.g. `en`, `de`).</ParamField>
@@ -886,7 +911,7 @@ OpenAI and ElevenLabs output formats are fixed per channel as listed above.
     <ParamField path="voice" type="string">Microsoft neural voice name (e.g. `en-US-MichelleNeural`).</ParamField>
     <ParamField path="lang" type="string">Language code (e.g. `en-US`).</ParamField>
     <ParamField path="outputFormat" type="string">Microsoft output format. Default `audio-24khz-48kbitrate-mono-mp3`. Not all formats are supported by the bundled Edge-backed transport.</ParamField>
-    <ParamField path="rate / pitch / volume" type="string">Percent strings (e.g. `+10%`, `-5%`).</ParamField>
+    <ParamField path="rate / pitch / volume" type="string">Percent strings (e.g. `+10%`, `-5%`). Explicit values disable Microsoft auto-emotion prosody overrides for that attempt.</ParamField>
     <ParamField path="saveSubtitles" type="boolean">Write JSON subtitles alongside the audio file.</ParamField>
     <ParamField path="proxy" type="string">Proxy URL for Microsoft speech requests.</ParamField>
     <ParamField path="timeoutMs" type="number">Request timeout override (ms).</ParamField>
@@ -907,7 +932,7 @@ OpenAI and ElevenLabs output formats are fixed per channel as listed above.
     <ParamField path="apiKey" type="string">Falls back to `OPENAI_API_KEY`.</ParamField>
     <ParamField path="model" type="string">OpenAI TTS model id (e.g. `gpt-4o-mini-tts`).</ParamField>
     <ParamField path="voice" type="string">Voice name (e.g. `alloy`, `cedar`).</ParamField>
-    <ParamField path="instructions" type="string">Explicit OpenAI `instructions` field. When set, persona prompt fields are **not** auto-mapped.</ParamField>
+    <ParamField path="instructions" type="string">Explicit OpenAI `instructions` field. When set, persona prompt fields are **not** auto-mapped and auto emotion will not add instructions for that attempt.</ParamField>
     <ParamField path="extraBody / extra_body" type="Record<string, unknown>">Extra JSON fields merged into `/audio/speech` request bodies after generated OpenAI TTS fields. Use this for OpenAI-compatible endpoints such as Kokoro that require provider-specific keys like `lang`; unsafe prototype keys are ignored.</ParamField>
     <ParamField path="baseUrl" type="string">
       Override the OpenAI TTS endpoint. Resolution order: config → `OPENAI_TTS_BASE_URL` → `https://api.openai.com/v1`. Non-default values are treated as OpenAI-compatible TTS endpoints, so custom model and voice names are accepted.
@@ -930,7 +955,7 @@ OpenAI and ElevenLabs output formats are fixed per channel as listed above.
     <ParamField path="baseUrl" type="string">Override the Seed Speech TTS HTTP endpoint. Env: `VOLCENGINE_TTS_BASE_URL`.</ParamField>
     <ParamField path="voice" type="string">Voice type. Default `en_female_anna_mars_bigtts`. Env: `VOLCENGINE_TTS_VOICE`.</ParamField>
     <ParamField path="speedRatio" type="number">Provider-native speed ratio.</ParamField>
-    <ParamField path="emotion" type="string">Provider-native emotion tag.</ParamField>
+    <ParamField path="emotion" type="string">Provider-native emotion tag. Explicit values disable Volcengine auto-emotion overrides for that attempt.</ParamField>
     <ParamField path="appId / token / cluster" type="string" deprecated>Legacy Volcengine Speech Console fields. Env: `VOLCENGINE_TTS_APPID`, `VOLCENGINE_TTS_TOKEN`, `VOLCENGINE_TTS_CLUSTER` (default `volcano_tts`).</ParamField>
   </Accordion>
 
@@ -949,7 +974,7 @@ OpenAI and ElevenLabs output formats are fixed per channel as listed above.
     <ParamField path="model" type="string">Default `mimo-v2.5-tts`. Env: `XIAOMI_TTS_MODEL`. Also supports `mimo-v2-tts`.</ParamField>
     <ParamField path="voice" type="string">Default `mimo_default`. Env: `XIAOMI_TTS_VOICE`.</ParamField>
     <ParamField path="format" type='"mp3" | "wav"'>Default `mp3`. Env: `XIAOMI_TTS_FORMAT`.</ParamField>
-    <ParamField path="style" type="string">Optional natural-language style instruction sent as the user message; not spoken.</ParamField>
+    <ParamField path="style" type="string">Optional natural-language style instruction sent as the user message; not spoken. Explicit values disable Xiaomi auto-emotion style overrides for that attempt.</ParamField>
   </Accordion>
 </AccordionGroup>
 
