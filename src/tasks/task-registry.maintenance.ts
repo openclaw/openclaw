@@ -218,6 +218,14 @@ function isTimeoutCronError(error: string | undefined): boolean {
   return error === "cron: job execution timed out";
 }
 
+function isRecoverableLostCronTask(task: TaskRecord): boolean {
+  if (task.status !== "lost") {
+    return false;
+  }
+  const error = task.error?.trim().toLowerCase();
+  return !error || error.includes("backing session missing");
+}
+
 function mapCronTerminalStatus(status: unknown, error?: string): CronTerminalRecovery["status"] {
   if (status === "ok" || status === "skipped") {
     return "succeeded";
@@ -318,7 +326,7 @@ function resolveDurableCronTaskRecovery(
   task: TaskRecord,
   context: CronRecoveryContext,
 ): CronTerminalRecovery | undefined {
-  if (task.runtime !== "cron" || !isActiveTask(task)) {
+  if (task.runtime !== "cron" || (!isActiveTask(task) && !isRecoverableLostCronTask(task))) {
     return undefined;
   }
   const execution = parseCronExecutionId(task);

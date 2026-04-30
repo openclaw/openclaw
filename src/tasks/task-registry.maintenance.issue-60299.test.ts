@@ -256,6 +256,93 @@ describe("task-registry maintenance issue #60299", () => {
     });
   });
 
+  it("recovers terminal lost cron tasks from durable run logs", async () => {
+    const startedAt = Date.now() - GRACE_EXPIRED_MS;
+    const task = makeStaleTask({
+      runtime: "cron",
+      sourceId: "cron-job-terminal-lost-ok",
+      runId: `cron:cron-job-terminal-lost-ok:${startedAt}`,
+      status: "lost",
+      error: "backing session missing",
+      startedAt,
+      endedAt: startedAt + 60_000,
+      lastEventAt: startedAt + 60_000,
+      cleanupAfter: Date.now() + 60_000,
+    });
+
+    const { currentTasks } = createTaskRegistryMaintenanceHarness({
+      tasks: [task],
+      cronRunLogEntries: {
+        "cron-job-terminal-lost-ok": [
+          {
+            ts: startedAt + 1250,
+            jobId: "cron-job-terminal-lost-ok",
+            action: "finished",
+            status: "ok",
+            summary: "done",
+            runAtMs: startedAt,
+            durationMs: 1250,
+          },
+        ],
+      },
+    });
+
+    expect(reconcileInspectableTasks()).toEqual([
+      expect.objectContaining({
+        taskId: task.taskId,
+        status: "succeeded",
+        endedAt: startedAt + 1250,
+        terminalSummary: "done",
+      }),
+    ]);
+    expect(previewTaskRegistryMaintenance()).toMatchObject({ reconciled: 0, recovered: 1 });
+    expect(await runTaskRegistryMaintenance()).toMatchObject({ reconciled: 0, recovered: 1 });
+    expect(currentTasks.get(task.taskId)).toMatchObject({
+      status: "succeeded",
+      endedAt: startedAt + 1250,
+      terminalSummary: "done",
+    });
+  });
+
+  it("does not recover terminal lost cron tasks with non-backing-session errors", async () => {
+    const startedAt = Date.now() - GRACE_EXPIRED_MS;
+    const task = makeStaleTask({
+      runtime: "cron",
+      sourceId: "cron-job-terminal-lost-other-error",
+      runId: `cron:cron-job-terminal-lost-other-error:${startedAt}`,
+      status: "lost",
+      error: "operator marked lost",
+      startedAt,
+      endedAt: startedAt + 60_000,
+      lastEventAt: startedAt + 60_000,
+      cleanupAfter: Date.now() + 60_000,
+    });
+
+    const { currentTasks } = createTaskRegistryMaintenanceHarness({
+      tasks: [task],
+      cronRunLogEntries: {
+        "cron-job-terminal-lost-other-error": [
+          {
+            ts: startedAt + 1250,
+            jobId: "cron-job-terminal-lost-other-error",
+            action: "finished",
+            status: "ok",
+            summary: "done",
+            runAtMs: startedAt,
+            durationMs: 1250,
+          },
+        ],
+      },
+    });
+
+    expect(previewTaskRegistryMaintenance()).toMatchObject({ recovered: 0 });
+    expect(await runTaskRegistryMaintenance()).toMatchObject({ recovered: 0 });
+    expect(currentTasks.get(task.taskId)).toMatchObject({
+      status: "lost",
+      error: "operator marked lost",
+    });
+  });
+
   it("recovers interrupted cron tasks from durable cron job state when run logs are absent", async () => {
     const startedAt = Date.now() - GRACE_EXPIRED_MS;
     const task = makeStaleTask({
