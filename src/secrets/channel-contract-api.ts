@@ -25,6 +25,13 @@ function loadBundledChannelPublicArtifact(
   channelId: string,
   artifactBasenames: readonly string[],
 ): BundledChannelContractApi | undefined {
+  // Opt-in lazy mode: cold control-plane paths (CLI startup target-registry build,
+  // runtime config collectors iterating all bundled channels, security-surface
+  // scans) skip eager barrel materialization. Callers already handle `undefined`
+  // by falling through to bootstrap registry / metadata-only paths.
+  if (process.env.OPENCLAW_LAZY_BUNDLED_CHANNEL_ARTIFACTS === "1") {
+    return undefined;
+  }
   for (const artifactBasename of artifactBasenames) {
     try {
       return loadBundledPluginPublicArtifactModuleSync<BundledChannelContractApi>({
