@@ -38,6 +38,7 @@ describe("startGatewayEarlyRuntime", () => {
         warn: () => {},
       },
       nodeRegistry: {} as never,
+      clients: new Set(),
       broadcast: () => {},
       nodeSendToAllSubscribed: () => {},
       getPresenceVersion: () => 0,

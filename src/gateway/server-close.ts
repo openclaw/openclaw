@@ -186,6 +186,7 @@ export function createGatewayCloseHandler(params: {
   nodePresenceTimers: Map<string, ReturnType<typeof setInterval>>;
   broadcast: (event: string, payload: unknown, opts?: { dropIfSlow?: boolean }) => void;
   tickInterval: ReturnType<typeof setInterval>;
+  connectionPingInterval: ReturnType<typeof setInterval>;
   healthInterval: ReturnType<typeof setInterval>;
   dedupeCleanup: ReturnType<typeof setInterval>;
   mediaCleanup: ReturnType<typeof setInterval> | null;
@@ -310,6 +311,7 @@ export function createGatewayCloseHandler(params: {
         restartExpectedMs,
       });
       clearInterval(params.tickInterval);
+      clearInterval(params.connectionPingInterval);
       clearInterval(params.healthInterval);
       clearInterval(params.dedupeCleanup);
       if (params.mediaCleanup) {

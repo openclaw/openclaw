@@ -18,6 +18,7 @@ import { clearNodeWakeState } from "../server-methods/nodes-wake-state.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "../server-methods/types.js";
 import { formatError } from "../server-utils.js";
 import { logWs } from "../ws-log.js";
+import { recordConnectionPong } from "./connection-health.js";
 import { getHealthVersion, incrementPresenceVersion } from "./health-state.js";
 import type { PreauthConnectionBudget } from "./preauth-connection-budget.js";
 import { broadcastPresenceSnapshot } from "./presence-events.js";
@@ -336,6 +337,10 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       }
       logWsControl.warn(`error conn=${connId} remote=${remoteAddr ?? "?"}: ${formatError(err)}`);
       close();
+    });
+
+    socket.on("pong", (data) => {
+      recordConnectionPong(client, data);
     });
 
     const isNoisySwiftPmHelperClose = (userAgent: string | undefined, remote: string | undefined) =>

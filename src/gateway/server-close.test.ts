@@ -85,6 +85,7 @@ function createGatewayCloseTestDeps(
     nodePresenceTimers: new Map(),
     broadcast: vi.fn(),
     tickInterval: setInterval(() => undefined, 60_000),
+    connectionPingInterval: setInterval(() => undefined, 60_000),
     healthInterval: setInterval(() => undefined, 60_000),
     dedupeCleanup: setInterval(() => undefined, 60_000),
     mediaCleanup: null,

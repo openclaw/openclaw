@@ -243,6 +243,7 @@ function makeGatewayWsClient(
     socket: socket as unknown as GatewayWsClient["socket"],
     connect,
     connId,
+    connectionHealth: { connectedAtMs: Date.now() },
     usesSharedGatewayAuth: false,
   };
 }

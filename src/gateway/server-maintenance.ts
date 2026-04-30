@@ -12,9 +12,12 @@ import {
 } from "./server-constants.js";
 import type { DedupeEntry } from "./server-shared.js";
 import { formatError } from "./server-utils.js";
+import { CONNECTION_PING_INTERVAL_MS, pingGatewayClient } from "./server/connection-health.js";
 import { setBroadcastHealthUpdate } from "./server/health-state.js";
+import type { GatewayWsClient } from "./server/ws-types.js";
 
 export function startGatewayMaintenanceTimers(params: {
+  clients: Set<GatewayWsClient>;
   broadcast: (
     event: string,
     payload: unknown,
@@ -47,6 +50,7 @@ export function startGatewayMaintenanceTimers(params: {
   mediaCleanupTtlMs?: number;
 }): {
   tickInterval: ReturnType<typeof setInterval>;
+  connectionPingInterval: ReturnType<typeof setInterval>;
   healthInterval: ReturnType<typeof setInterval>;
   dedupeCleanup: ReturnType<typeof setInterval>;
   mediaCleanup: ReturnType<typeof setInterval> | null;
@@ -67,6 +71,13 @@ export function startGatewayMaintenanceTimers(params: {
     params.broadcast("tick", payload);
     params.nodeSendToAllSubscribed("tick", payload);
   }, TICK_INTERVAL_MS);
+
+  const connectionPingInterval = setInterval(() => {
+    const now = Date.now();
+    for (const client of params.clients) {
+      pingGatewayClient(client, now);
+    }
+  }, CONNECTION_PING_INTERVAL_MS);
 
   // periodic health refresh to keep cached snapshot warm
   const healthInterval = setInterval(() => {
@@ -165,7 +176,13 @@ export function startGatewayMaintenanceTimers(params: {
   }, 60_000);
 
   if (typeof params.mediaCleanupTtlMs !== "number") {
-    return { tickInterval, healthInterval, dedupeCleanup, mediaCleanup: null };
+    return {
+      tickInterval,
+      connectionPingInterval,
+      healthInterval,
+      dedupeCleanup,
+      mediaCleanup: null,
+    };
   }
 
   let mediaCleanupInFlight: Promise<void> | null = null;
@@ -192,5 +209,5 @@ export function startGatewayMaintenanceTimers(params: {
 
   void runMediaCleanup();
 
-  return { tickInterval, healthInterval, dedupeCleanup, mediaCleanup };
+  return { tickInterval, connectionPingInterval, healthInterval, dedupeCleanup, mediaCleanup };
 }

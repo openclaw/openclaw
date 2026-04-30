@@ -31,6 +31,9 @@ Notes:
 - Default `openclaw health` asks the running gateway for its health snapshot. When the
   gateway already has a fresh cached snapshot, it can return that cached payload and
   refresh in the background.
+- JSON output from an authenticated WebSocket health response includes a per-client
+  `connection` block with `connected`, `rttMs`, and `lastHeartbeatAt`. Those fields
+  describe the current Gateway connection, not the cached service snapshot.
 - `--verbose` forces a live probe, prints gateway connection details, and expands the
   human-readable output across all configured accounts and agents.
 - Output includes per-agent session stores when multiple agents are configured.

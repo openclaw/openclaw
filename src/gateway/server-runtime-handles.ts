@@ -9,6 +9,7 @@ type GatewayConfigReloaderHandle = {
 export type GatewayServerMutableState = {
   bonjourStop: (() => Promise<void>) | null;
   tickInterval: ReturnType<typeof setInterval>;
+  connectionPingInterval: ReturnType<typeof setInterval>;
   healthInterval: ReturnType<typeof setInterval>;
   dedupeCleanup: ReturnType<typeof setInterval>;
   mediaCleanup: ReturnType<typeof setInterval> | null;
@@ -37,6 +38,7 @@ export function createGatewayServerMutableState(): GatewayServerMutableState {
   return {
     bonjourStop: null as (() => Promise<void>) | null,
     tickInterval: noopInterval(),
+    connectionPingInterval: noopInterval(),
     healthInterval: noopInterval(),
     dedupeCleanup: noopInterval(),
     mediaCleanup: null as ReturnType<typeof setInterval> | null,
