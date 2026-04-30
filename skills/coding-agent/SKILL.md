@@ -99,6 +99,8 @@ bash pty:true workdir:~/Projects/myproject command:"codex exec 'Add error handli
 
 ## The Pattern: workdir + background + pty
 
+`exec background:true` is only for managing an interactive CLI process within the current turn. It is not a cross-turn commitment mechanism; if you promise a group chat a later delivery, use `sessions_spawn` or cron/explicit callback instead.
+
 For longer tasks, use background mode with PTY:
 
 ```bash
