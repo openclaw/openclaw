@@ -786,7 +786,6 @@ describe("capability cli", () => {
     expect(mocks.runtime.error).toHaveBeenCalledWith(
       expect.stringMatching(/No description returned for image/),
     );
-    vi.unstubAllEnvs();
   });
 
   it("fails image describe when no provider configured", async () => {
@@ -1308,7 +1307,6 @@ describe("capability cli", () => {
     expect(mocks.runtime.error).toHaveBeenCalledWith(
       expect.stringMatching(/No transcript returned for audio/),
     );
-    vi.unstubAllEnvs();
   });
 
   it("surfaces the underlying transcription failure for audio transcribe", async () => {

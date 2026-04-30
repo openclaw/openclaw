@@ -484,6 +484,22 @@ function providerHasGenericConfig(params: {
   );
 }
 
+/**
+ * Check if any provider with the given capability is configured.
+ * Used to provide helpful error messages when media understanding operations fail.
+ */
+function hasConfiguredCapabilityProvider(capability: string, cfg: OpenClawConfig): boolean {
+  const registry = buildMediaUnderstandingRegistry(undefined, cfg);
+  const providers = [...registry.values()].filter((p) => p.capabilities?.includes(capability));
+  return providers.some((p) =>
+    providerHasGenericConfig({
+      cfg,
+      providerId: p.id,
+      envVars: getProviderEnvVars(p.id, { config: cfg, includeUntrustedWorkspacePlugins: false }),
+    }),
+  );
+}
+
 async function writeOutputAsset(params: {
   buffer: Buffer;
   mimeType?: string;
@@ -965,17 +981,7 @@ async function runImageDescribe(params: {
           });
       if (!result.text) {
         // Provide more helpful error message if provider might not be configured
-        const registry = buildMediaUnderstandingRegistry(undefined, cfg);
-        const imageProviders = [...registry.values()]
-          .filter(p => p.capabilities?.includes("image"));
-        const hasConfiguredImageProvider = imageProviders.some(p =>
-          providerHasGenericConfig({
-            cfg,
-            providerId: p.id,
-            envVars: getProviderEnvVars(p.id, { config: cfg, includeUntrustedWorkspacePlugins: false }),
-          })
-        );
-        throw new Error(
+        const hasConfiguredImageProvider = hasConfiguredCapabilityProvider("image", cfg);
           hasConfiguredImageProvider
             ? `No description returned for image: ${resolvedPath}`
             : "No image-understanding provider available. Configure a provider like openai (OPENAI_API_KEY) first."
@@ -1028,17 +1034,7 @@ async function runAudioTranscribe(params: {
         envVars: getProviderEnvVars(p.id, { config: cfg, includeUntrustedWorkspacePlugins: false }),
       })
     );
-    throw new Error(
-      hasConfiguredAudioProvider
-        ? `No transcript returned for audio: ${path.resolve(params.file)}`
-        : "No audio-transcription provider available. Configure a provider like openai (OPENAI_API_KEY) or deepgram (DEEPGRAM_API_KEY) first."
-    );
-  }
-  return {
-    ok: true,
-    capability: "audio.transcribe",
-    transport: "local" as const,
-    attempts: [],
+    const hasConfiguredAudioProvider = hasConfiguredCapabilityProvider("audio", cfg);
     outputs: [{ path: path.resolve(params.file), text: result.text, kind: "audio.transcription" }],
   } satisfies CapabilityEnvelope;
 }
