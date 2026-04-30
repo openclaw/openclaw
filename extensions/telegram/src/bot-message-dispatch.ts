@@ -522,7 +522,13 @@ export const dispatchTelegramMessage = async ({
             laneName === "answer" || laneName === "reasoning"
               ? (preview) => {
                   if (laneName === "reasoning") {
-                    if (!archivedReasoningPreviewIds.includes(preview.messageId)) {
+                    // Overflow-chain splits mark their superseded chunk as
+                    // retain:true — those are completed reasoning pages that
+                    // should stay visible, not be deleted during cleanup.
+                    if (
+                      !preview.retain &&
+                      !archivedReasoningPreviewIds.includes(preview.messageId)
+                    ) {
                       archivedReasoningPreviewIds.push(preview.messageId);
                     }
                     return;

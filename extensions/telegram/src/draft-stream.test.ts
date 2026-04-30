@@ -684,6 +684,7 @@ describe("draft stream overflow chaining", () => {
     expect(onSupersededPreview).toHaveBeenCalledWith({
       messageId: 17,
       textSnapshot: "Hello world",
+      retain: true,
     });
   });
 });

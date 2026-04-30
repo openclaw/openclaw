@@ -58,6 +58,12 @@ type SupersededTelegramPreview = {
   textSnapshot: string;
   parseMode?: "HTML";
   visibleSinceMs?: number;
+  /**
+   * When true the message should be retained in the chat rather than
+   * scheduled for deletion.  Set on overflow-chain splits where the
+   * superseded chunk is the first page of a multi-page stream.
+   */
+  retain?: boolean;
 };
 
 function findRawFitLength(
@@ -139,6 +145,7 @@ export function createTelegramDraftStream(params: {
   let previewRevision = 0;
   let generation = 0;
   let rateLimitedUntilMs = 0;
+  let pendingForceNewMessage = false;
   type PreviewSendParams = {
     renderedText: string;
     renderedParseMode: "HTML" | undefined;
@@ -244,6 +251,11 @@ export function createTelegramDraftStream(params: {
         await new Promise<void>((r) => setTimeout(r, remaining));
       }
       rateLimitedUntilMs = 0;
+      if (pendingForceNewMessage) {
+        pendingForceNewMessage = false;
+        textBaseOffset = 0;
+        resetStreamToNewMessage();
+      }
     }
     const trimmed = text.trimEnd();
     if (!trimmed) {
@@ -280,6 +292,7 @@ export function createTelegramDraftStream(params: {
           params.onSupersededPreview?.({
             messageId: supersededMessageId,
             textSnapshot: supersededTextSnapshot,
+            retain: true,
           });
         }
         params.log?.(
@@ -408,6 +421,7 @@ export function createTelegramDraftStream(params: {
       params.warn?.(
         `telegram stream preview: forceNewMessage suppressed during 429 backoff (${remainingMs}ms remaining); lane rotation deferred`,
       );
+      pendingForceNewMessage = true;
       return;
     }
     textBaseOffset = 0;
