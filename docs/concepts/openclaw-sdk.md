@@ -50,6 +50,128 @@ The SDK also exports the core types used by those surfaces:
 `RuntimeSelection`, `EnvironmentSelection`, `WorkspaceSelection`,
 `ApprovalMode`, and related result types.
 
+## Happy Path for External App Clients
+
+For external app clients like OpenMeow, follow this happy path to validate the SDK is stable and ready for production use:
+
+### 1. Connect to Gateway
+```typescript
+import { OpenClaw } from "@openclaw/sdk";
+
+const oc = new OpenClaw({
+  url: "ws://127.0.0.1:14565",
+  token: process.env.OPENCLAW_GATEWAY_TOKEN,
+  requestTimeoutMs: 30_000,
+});
+
+await oc.connect();
+```
+
+### 2. Discover Agents and Models
+```typescript
+// List available agents
+const agents = await oc.agents.list();
+
+// List available models
+const models = await oc.models.list();
+
+// Get a specific agent
+const agent = await oc.agents.get("main");
+```
+
+### 3. Create or Resume a Session
+```typescript
+// Create a new session
+const session = await oc.sessions.create({
+  agentId: "main",
+  label: "my-session",
+});
+
+// Or get an existing session
+const existingSession = await oc.sessions.get("existing-session-key");
+```
+
+### 4. Send a Run
+```typescript
+// Send a message through a session
+const run = await session.send("Hello, world!");
+
+// Or run directly through an agent
+const directRun = await agent.run({
+  input: "Process this request",
+  sessionKey: "main",
+  timeoutMs: 30_000,
+});
+```
+
+### 5. Stream Normalized Events
+```typescript
+for await (const event of run.events()) {
+  switch (event.type) {
+    case "assistant.delta":
+      // Handle streaming text
+      const delta = (event.data as { delta?: string }).delta;
+      if (delta) process.stdout.write(delta);
+      break;
+    case "run.completed":
+      // Run finished successfully
+      console.log("Run completed");
+      break;
+    case "run.cancelled":
+      // Run was cancelled
+      console.log("Run cancelled");
+      break;
+    case "run.timed_out":
+      // Run timed out
+      console.log("Run timed out");
+      break;
+    case "approval.requested":
+      // Handle approval requests
+      console.log("Approval requested:", event.data);
+      break;
+  }
+}
+```
+
+### 6. Wait for a Result
+```typescript
+// Wait with a timeout (distinct from runtime timeout)
+const result = await run.wait({ timeoutMs: 60_000 });
+
+console.log(`Run ${result.runId} finished with status: ${result.status}`);
+if (result.error) {
+  console.error(`Error: ${result.error.message}`);
+}
+```
+
+### 7. Cancel/Stop an Active Run
+```typescript
+// Cancel a run
+await run.cancel();
+
+// Or cancel through the runs namespace
+await oc.runs.cancel(run.id, session.key);
+```
+
+### 8. Surface Approvals
+```typescript
+// List pending approvals
+const approvals = await oc.approvals.list();
+
+// Respond to an approval
+await oc.approvals.respond("approval-id", {
+  decision: "approve",
+  comment: "Looks good",
+});
+```
+
+### Key Stabilization Points
+
+- **`Run.wait()` semantics**: Clearly distinguishes wait deadline from runtime timeout. A wait timeout returns `status: "accepted"` if the run is still active.
+- **`Run.cancel()` reliability**: Uses `sessions.abort` with proper run ID and session key handling.
+- **Normalized run events**: Stable event types for UI state management with deterministic IDs for replay.
+- **Unsupported fields**: Explicit errors for future features like `workspace`, `runtime`, `environment`, and `approvals` per-run options.
+
 ## Connect To A Gateway
 
 Create a client with an explicit Gateway URL, or inject a custom transport for

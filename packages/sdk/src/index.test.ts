@@ -450,4 +450,213 @@ describe("OpenClaw SDK", () => {
       data: { phase: "end", stopReason: "timeout" },
     });
   });
+
+  it("handles wait with zero timeout correctly", async () => {
+    const transport = new FakeTransport({
+      "agent.wait": { status: "timeout", runId: "run_zero_timeout" },
+    });
+    const oc = new OpenClaw({ transport });
+
+    const result = await oc.runs.wait("run_zero_timeout", { timeoutMs: 0 });
+
+    expect(result).toMatchObject({
+      runId: "run_zero_timeout",
+      status: "accepted",
+    });
+    expect(transport.calls[0]?.params).toEqual({ runId: "run_zero_timeout", timeoutMs: 0 });
+  });
+
+  it("handles cancellation with session key", async () => {
+    const transport = new FakeTransport({
+      agent: { status: "accepted", runId: "run_with_session", sessionKey: "main" },
+      "sessions.abort": { ok: true, status: "aborted", abortedRunId: "run_with_session" },
+    });
+    const oc = new OpenClaw({ transport });
+
+    const run = await oc.runs.create({
+      input: "test",
+      idempotencyKey: "cancel-session-test",
+      sessionKey: "main",
+    });
+    await run.cancel();
+
+    expect(transport.calls[1]?.params).toEqual({ runId: "run_with_session", key: "main" });
+  });
+
+  it("handles cancellation without session key", async () => {
+    const transport = new FakeTransport({
+      agent: { status: "accepted", runId: "run_no_session" },
+      "sessions.abort": { ok: true, status: "aborted", abortedRunId: "run_no_session" },
+    });
+    const oc = new OpenClaw({ transport });
+
+    const run = await oc.runs.create({
+      input: "test",
+      idempotencyKey: "cancel-no-session-test",
+    });
+    await run.cancel();
+
+    expect(transport.calls[1]?.params).toEqual({ runId: "run_no_session" });
+  });
+
+  it("normalizes session events correctly", () => {
+    expect(
+      normalizeGatewayEvent({
+        event: "sessions.changed",
+        payload: { reason: "create", sessionKey: "new-session" },
+      }),
+    ).toMatchObject({
+      type: "session.created",
+      sessionKey: "new-session",
+    });
+
+    expect(
+      normalizeGatewayEvent({
+        event: "sessions.changed",
+        payload: { reason: "compact", sessionKey: "compacted-session" },
+      }),
+    ).toMatchObject({
+      type: "session.compacted",
+      sessionKey: "compacted-session",
+    });
+
+    expect(
+      normalizeGatewayEvent({
+        event: "sessions.changed",
+        payload: { reason: "update", sessionKey: "updated-session" },
+      }),
+    ).toMatchObject({
+      type: "session.updated",
+      sessionKey: "updated-session",
+    });
+  });
+
+  it("normalizes approval events correctly", () => {
+    expect(
+      normalizeGatewayEvent({
+        event: "exec.approval.requested",
+        payload: { approvalId: "approval-123", runId: "run_1" },
+      }),
+    ).toMatchObject({
+      type: "approval.requested",
+    });
+
+    expect(
+      normalizeGatewayEvent({
+        event: "exec.approval.resolved",
+        payload: { approvalId: "approval-123", decision: "approve" },
+      }),
+    ).toMatchObject({
+      type: "approval.resolved",
+    });
+
+    expect(
+      normalizeGatewayEvent({
+        event: "plugin.approval.requested",
+        payload: { approvalId: "plugin-approval-123", runId: "run_1" },
+      }),
+    ).toMatchObject({
+      type: "approval.requested",
+    });
+
+    expect(
+      normalizeGatewayEvent({
+        event: "plugin.approval.resolved",
+        payload: { approvalId: "plugin-approval-123", decision: "deny" },
+      }),
+    ).toMatchObject({
+      type: "approval.resolved",
+    });
+  });
+
+  it("handles task events correctly", () => {
+    expect(
+      normalizeGatewayEvent({
+        event: "task.updated",
+        payload: { taskId: "task-123", status: "running" },
+      }),
+    ).toMatchObject({
+      type: "task.updated",
+      taskId: "task-123",
+    });
+
+    expect(
+      normalizeGatewayEvent({
+        event: "tasks.changed",
+        payload: { taskId: "task-456", status: "completed" },
+      }),
+    ).toMatchObject({
+      type: "task.updated",
+      taskId: "task-456",
+    });
+  });
+
+  it("preserves event IDs for deterministic replay", () => {
+    const event1 = normalizeGatewayEvent({
+      event: "agent",
+      seq: 100,
+      payload: { runId: "run_1", stream: "lifecycle", ts: 1234567890, data: { phase: "start" } },
+    });
+
+    const event2 = normalizeGatewayEvent({
+      event: "agent",
+      seq: 100,
+      payload: { runId: "run_1", stream: "lifecycle", ts: 1234567890, data: { phase: "start" } },
+    });
+
+    expect(event1.id).toBe("100:agent:run_1:1234567890");
+    expect(event2.id).toBe("100:agent:run_1:1234567890");
+    expect(event1.id).toBe(event2.id);
+  });
+
+  it("handles raw events without mapping", () => {
+    const event = normalizeGatewayEvent({
+      event: "unknown.event",
+      payload: { custom: "data" },
+    });
+
+    expect(event.type).toBe("raw");
+    expect(event.data).toEqual({ custom: "data" });
+  });
+
+  it("throws on invalid timeout values", async () => {
+    const transport = new FakeTransport({});
+    const oc = new OpenClaw({ transport });
+
+    await expect(
+      oc.runs.create({
+        input: "test",
+        timeoutMs: -1,
+        idempotencyKey: "negative-timeout-test",
+      }),
+    ).rejects.toThrow("timeoutMs must be a finite non-negative number");
+
+    await expect(
+      oc.runs.create({
+        input: "test",
+        timeoutMs: Infinity,
+        idempotencyKey: "infinity-timeout-test",
+      }),
+    ).rejects.toThrow("timeoutMs must be a finite non-negative number");
+  });
+
+  it("handles wait with partial response data", async () => {
+    const transport = new FakeTransport({
+      "agent.wait": {
+        runId: "run_partial",
+        status: "ok",
+        output: { text: "partial response" },
+        startedAt: "2024-01-01T00:00:00Z",
+      },
+    });
+    const oc = new OpenClaw({ transport });
+
+    const result = await oc.runs.wait("run_partial");
+
+    expect(result).toMatchObject({
+      runId: "run_partial",
+      status: "completed",
+      startedAt: "2024-01-01T00:00:00Z",
+    });
+  });
 });
