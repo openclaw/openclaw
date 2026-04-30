@@ -282,15 +282,15 @@ export const AgentDefaultsSchema = z
     cursorSdk: z
       .object({
         runtime: z.union([z.literal("local"), z.literal("cloud")]).optional(),
-        model: z.string().optional(),
+        model: z.string().trim().min(1).optional(),
         cloud: z
           .object({
             repos: z
               .array(
                 z
                   .object({
-                    url: z.string(),
-                    startingRef: z.string().optional(),
+                    url: z.string().url(),
+                    startingRef: z.string().trim().min(1).optional(),
                   })
                   .strict(),
               )
@@ -301,7 +301,7 @@ export const AgentDefaultsSchema = z
           .optional(),
         local: z
           .object({
-            cwd: z.string().optional(),
+            cwd: z.string().trim().min(1).optional(),
           })
           .strict()
           .optional(),

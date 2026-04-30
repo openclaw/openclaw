@@ -1,11 +1,14 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { FailoverError, resolveFailoverStatus } from "./failover-error.js";
+import type { FailoverReason } from "./failover-error.js";
 import { resolveApiKeyForProvider } from "./model-auth.js";
 import type { EmbeddedPiRunResult } from "./pi-embedded-runner.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "./workspace-run.js";
 
 const log = createSubsystemLogger("agent/cursor-sdk");
+
+const DEFAULT_MODEL = "composer-2";
 
 export type RunCursorSdkAgentParams = {
   sessionId: string;
@@ -21,6 +24,60 @@ export type RunCursorSdkAgentParams = {
   runId: string;
   cursorRunId?: string;
 };
+
+async function resolveAgentApiKey(params: {
+  config?: OpenClawConfig;
+  provider: string;
+  model: string;
+}): Promise<string> {
+  try {
+    const auth = await resolveApiKeyForProvider({
+      provider: "cursor-sdk",
+      cfg: params.config,
+      agentDir: undefined,
+    });
+    return auth.apiKey;
+  } catch {
+    throw new FailoverError("No API key found for cursor-sdk provider.", {
+      reason: "auth",
+      provider: params.provider,
+      model: params.model,
+      status: resolveFailoverStatus("auth"),
+    });
+  }
+}
+
+function classifyCursorSdkError(err: unknown, elapsed: number, timeoutMs: number): FailoverReason {
+  const message = err instanceof Error ? err.message : "";
+
+  const sdkModule = loadedSdkModule;
+  if (sdkModule) {
+    if (err instanceof sdkModule.AuthenticationError) return "auth";
+    if (err instanceof sdkModule.RateLimitError) return "rate_limit";
+  }
+
+  if (elapsed >= timeoutMs || /timeout/i.test(message)) return "timeout";
+  if (/rate.?limit|429|too many requests/i.test(message)) return "rate_limit";
+  if (/auth|401|unauthorized|forbidden|403/i.test(message)) return "auth";
+  if (/billing|payment|quota|insufficient/i.test(message)) return "billing";
+
+  return "surface_error";
+}
+
+function collectAssistantText(event: { type: string }): string {
+  if (event.type !== "assistant") return "";
+  const msg = (event as { message?: { content?: Array<{ type: string; text?: string }> } }).message;
+  if (!msg?.content) return "";
+  let text = "";
+  for (const block of msg.content) {
+    if (block.type === "text" && block.text) {
+      text += block.text;
+    }
+  }
+  return text;
+}
+
+let loadedSdkModule: typeof import("@cursor/sdk") | undefined;
 
 export async function runCursorSdkAgent(
   params: RunCursorSdkAgentParams,
@@ -38,73 +95,55 @@ export async function runCursorSdkAgent(
     );
   }
   const workspaceDir = workspaceResolution.workspaceDir;
-  const modelId = (params.model ?? "composer-2").trim() || "composer-2";
+  const modelId = (params.model ?? DEFAULT_MODEL).trim() || DEFAULT_MODEL;
 
-  let apiKey: string;
-  try {
-    const auth = await resolveApiKeyForProvider({
-      provider: "cursor-sdk",
-      cfg: params.config,
-      agentDir: undefined,
-    });
-    apiKey = auth.apiKey;
-  } catch {
-    throw new FailoverError("No API key found for cursor-sdk provider.", {
-      reason: "auth",
-      provider: params.provider,
-      model: modelId,
-      status: resolveFailoverStatus("auth"),
-    });
-  }
+  const apiKey = await resolveAgentApiKey({
+    config: params.config,
+    provider: params.provider,
+    model: modelId,
+  });
+
+  const sdk = await import("@cursor/sdk");
+  loadedSdkModule = sdk;
+  const { Agent } = sdk;
 
   const cursorSdkConfig = params.config?.agents?.defaults?.cursorSdk;
   const runtime = cursorSdkConfig?.runtime ?? "local";
-
-  const { Agent } = await import("@cursor/sdk");
 
   log.info(
     `cursor-sdk exec: runtime=${runtime} model=${modelId} promptChars=${params.prompt.length} run=${params.runId}`,
   );
 
-  const agent =
+  const agentOptions =
     runtime === "cloud" && cursorSdkConfig?.cloud
-      ? await Agent.create({
+      ? {
           apiKey,
-          model: { id: modelId },
+          model: { id: modelId } as const,
           cloud: {
             repos: cursorSdkConfig.cloud.repos ?? [],
             autoCreatePR: cursorSdkConfig.cloud.autoCreatePR,
           },
-        })
-      : await Agent.create({
+        }
+      : {
           apiKey,
-          model: { id: modelId },
+          model: { id: modelId } as const,
           local: { cwd: cursorSdkConfig?.local?.cwd ?? workspaceDir },
-        });
+        };
+
+  const agent = await Agent.create(agentOptions);
 
   try {
     const run = await agent.send(params.prompt);
     let text = "";
 
     for await (const event of run.stream()) {
-      if (event.type === "assistant") {
-        for (const block of (
-          event as {
-            type: "assistant";
-            message: { content: Array<{ type: string; text?: string }> };
-          }
-        ).message.content) {
-          if (block.type === "text" && block.text) {
-            text += block.text;
-          }
-        }
-      }
+      text += collectAssistantText(event);
     }
 
     const result = await run.wait();
-    const trimmedText = text.trim() || (result as { result?: string }).result?.trim() || "";
+    const trimmedText = text.trim() || result.result?.trim() || "";
     const payloads = trimmedText ? [{ text: trimmedText }] : undefined;
-    const durationMs = (result as { durationMs?: number }).durationMs ?? Date.now() - started;
+    const durationMs = run.durationMs ?? Date.now() - started;
 
     log.info(
       `cursor-sdk done: runtime=${runtime} model=${modelId} durationMs=${durationMs} textLen=${trimmedText.length} run=${params.runId}`,
@@ -115,7 +154,7 @@ export async function runCursorSdkAgent(
       meta: {
         durationMs,
         agentMeta: {
-          sessionId: (run as { id?: string }).id ?? params.sessionId,
+          sessionId: run.id ?? params.sessionId,
           provider: params.provider,
           model: modelId,
         },
@@ -127,20 +166,18 @@ export async function runCursorSdkAgent(
       },
     };
   } catch (err: unknown) {
+    if (err instanceof FailoverError) throw err;
+
     const elapsed = Date.now() - started;
     const message = err instanceof Error ? err.message : String(err);
     log.error(`cursor-sdk error: ${message} run=${params.runId} elapsed=${elapsed}ms`);
 
-    if (err instanceof FailoverError) {
-      throw err;
-    }
-
-    const isTimeout = elapsed >= params.timeoutMs || /timeout/i.test(message);
+    const reason = classifyCursorSdkError(err, elapsed, params.timeoutMs);
     throw new FailoverError(`Cursor SDK agent failed: ${message}`, {
-      reason: isTimeout ? "timeout" : "surface_error",
+      reason,
       provider: params.provider,
       model: modelId,
-      status: resolveFailoverStatus(isTimeout ? "timeout" : "surface_error"),
+      status: resolveFailoverStatus(reason),
     });
   } finally {
     try {
