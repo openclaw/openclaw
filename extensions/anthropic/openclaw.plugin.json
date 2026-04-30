@@ -54,12 +54,12 @@
       "method": "cli",
       "choiceId": "anthropic-cli",
       "deprecatedChoiceIds": ["claude-cli"],
-      "choiceLabel": "Anthropic Claude CLI",
-      "choiceHint": "Reuse a local Claude CLI login on this host",
-      "assistantPriority": -20,
+      "choiceLabel": "Claude subscription (no API key needed)",
+      "choiceHint": "Runs Claude through the Claude CLI in headless mode using your Pro/Max plan",
+      "assistantPriority": -50,
       "groupId": "anthropic",
       "groupLabel": "Anthropic",
-      "groupHint": "Claude CLI + API key"
+      "groupHint": "Claude subscription + API key"
     },
     {
       "provider": "anthropic",
@@ -70,7 +70,7 @@
       "assistantPriority": 40,
       "groupId": "anthropic",
       "groupLabel": "Anthropic",
-      "groupHint": "Claude CLI + API key + token"
+      "groupHint": "Claude subscription + API key + token"
     },
     {
       "provider": "anthropic",
@@ -79,7 +79,7 @@
       "choiceLabel": "Anthropic API key",
       "groupId": "anthropic",
       "groupLabel": "Anthropic",
-      "groupHint": "Claude CLI + API key",
+      "groupHint": "Claude subscription + API key",
       "optionKey": "anthropicApiKey",
       "cliFlag": "--anthropic-api-key",
       "cliOption": "--anthropic-api-key <key>",
