@@ -886,7 +886,10 @@ export async function spawnSubagentDirect(
         childSessionKey,
       };
     }
-    modelApplied = true;
+    // Only mark modelApplied when the caller explicitly provided a model override.
+    // resolvedModel always has a value (falls back to the config default), so
+    // checking it alone would always return true even when no override was given.
+    modelApplied = Boolean(modelOverride?.trim());
   }
   if (requestThreadBinding) {
     const bindResult = await ensureThreadBindingForSubagentSpawn({

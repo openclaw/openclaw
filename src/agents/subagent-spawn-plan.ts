@@ -70,7 +70,7 @@ export function resolveSubagentModelAndThinkingPlan(params: {
   return {
     status: "ok" as const,
     resolvedModel,
-    modelApplied: Boolean(resolvedModel),
+    modelApplied: Boolean(params.modelOverride?.trim()),
     thinkingOverride: thinkingPlan.thinkingOverride,
     initialSessionPatch: {
       ...(resolvedModel
