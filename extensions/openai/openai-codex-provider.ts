@@ -6,6 +6,7 @@ import type {
 } from "openclaw/plugin-sdk/plugin-entry";
 import {
   CODEX_CLI_PROFILE_ID,
+  DEFAULT_OAUTH_REFRESH_MARGIN_MS,
   ensureAuthProfileStoreForLocalUpdate,
   listProfilesForProvider,
   type OAuthCredential,
@@ -33,7 +34,10 @@ import {
   OPENAI_CODEX_RESPONSES_BASE_URL,
 } from "./base-url.js";
 import { OPENAI_CODEX_DEFAULT_MODEL } from "./default-models.js";
-import { resolveCodexAuthIdentity } from "./openai-codex-auth-identity.js";
+import {
+  resolveCodexAccessTokenExpiry,
+  resolveCodexAuthIdentity,
+} from "./openai-codex-auth-identity.js";
 import { buildOpenAICodexProvider } from "./openai-codex-catalog.js";
 import { loginOpenAICodexDeviceCode } from "./openai-codex-device-code.js";
 import {
@@ -304,7 +308,46 @@ function withDefaultCodexContextMetadata(params: {
   };
 }
 
+// Cap the synthetic `expires` we write when short-circuiting refresh, so the
+// gateway periodically re-enters this path even when the JWT exp claim is
+// far in the future. This bounds exposure to two failure modes the JWT
+// itself can't reflect: (a) server-side token revocation, (b) external
+// rotation via `codex login` updating `~/.codex/auth.json` while OpenClaw
+// keeps using its mirrored copy. 30 minutes is conservative enough that an
+// operator-initiated re-login is picked up promptly without forcing an
+// HTTP refresh on every request.
+const CODEX_JWT_SHORTCIRCUIT_RECHECK_MS = 30 * 60 * 1000;
+
 async function refreshOpenAICodexOAuthCredential(cred: OAuthCredential) {
+  // Codex access tokens are typically JWTs whose `exp` claim is the source
+  // of truth. The cached `expires` field on the OAuth credential can lag
+  // the JWT (e.g. when a peer process consumed the refresh_token and
+  // rotated the access_token before the local mirror was written). When
+  // that drift hits, every request triggers an unconditional refresh, and
+  // concurrent gateway lanes race the same refresh_token — one rotates and
+  // the others 401 with `refresh_token_reused`.
+  //
+  // Short-circuit: if the cached access_token is a JWT whose own `exp`
+  // claim is beyond the standard refresh margin, skip the HTTP refresh and
+  // return the credential with `expires` corrected. The oauth manager's
+  // existing persistence path writes the corrected credential back so
+  // subsequent calls' `hasUsableOAuthCredential` short-circuits at the
+  // standard guard.
+  //
+  // The margin matches `DEFAULT_OAUTH_REFRESH_MARGIN_MS`; using anything
+  // smaller would cause the upstream `hasUsableOAuthCredential` guard to
+  // re-enter refresh on the next call, looping back through the
+  // short-circuit indefinitely.
+  const cachedAccessToken = typeof cred.access === "string" ? cred.access : "";
+  if (cachedAccessToken.length > 0) {
+    const jwtExpMs = resolveCodexAccessTokenExpiry(cachedAccessToken);
+    if (jwtExpMs && jwtExpMs - Date.now() > DEFAULT_OAUTH_REFRESH_MARGIN_MS) {
+      const recheckBoundary = Date.now() + CODEX_JWT_SHORTCIRCUIT_RECHECK_MS;
+      const correctedExpires = Math.min(jwtExpMs, recheckBoundary);
+      return { ...cred, expires: correctedExpires };
+    }
+  }
+
   try {
     const { refreshOpenAICodexToken } = await import("./openai-codex-provider.runtime.js");
     const refreshed = await refreshOpenAICodexToken(cred.refresh);
