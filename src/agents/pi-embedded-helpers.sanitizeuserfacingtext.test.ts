@@ -223,6 +223,25 @@ describe("sanitizeUserFacingText", () => {
     );
   });
 
+  it("strips inbound-metadata replay placeholders without trimming visible text", () => {
+    expect(sanitizeUserFacingText("[assistant copied inbound metadata omitted]")).toBe("");
+    expect(sanitizeUserFacingText("  [assistant copied inbound metadata omitted]\t")).toBe("");
+    expect(
+      sanitizeUserFacingText("Hello\n\n[assistant copied inbound metadata omitted]\nWorld\n"),
+    ).toBe("Hello\n\nWorld\n");
+    expect(
+      sanitizeUserFacingText(
+        "A\n[assistant copied inbound metadata omitted]\n[tool calls omitted]\nB",
+      ),
+    ).toBe("A\nB");
+  });
+
+  it("keeps ordinary inline mentions of the inbound-metadata placeholder", () => {
+    expect(
+      sanitizeUserFacingText("What does [assistant copied inbound metadata omitted] mean?"),
+    ).toBe("What does [assistant copied inbound metadata omitted] mean?");
+  });
+
   it("strips marked internal runtime context blocks but keeps real reply text", () => {
     const input = [
       INTERNAL_RUNTIME_CONTEXT_BEGIN,

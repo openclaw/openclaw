@@ -41,7 +41,8 @@ const MODEL_CAPACITY_ERROR_USER_MESSAGE =
 const OVERLOADED_ERROR_USER_MESSAGE =
   "The AI service is temporarily overloaded. Please try again in a moment.";
 const FINAL_TAG_RE = /<\s*\/?\s*final\s*>/gi;
-const TOOL_CALLS_OMITTED_PLACEHOLDER_LINE_RE = /^[ \t]*\[tool calls omitted\][ \t]*$/i;
+const TOOL_CALLS_OMITTED_PLACEHOLDER_LINE_RE =
+  /^[ \t]*\[(?:tool calls omitted|assistant copied inbound metadata omitted)\][ \t]*$/i;
 const ERROR_PREFIX_RE =
   /^(?:error|(?:[a-z][\w-]*\s+)?api\s*error|openai\s*error|anthropic\s*error|gateway\s*error|codex\s*error|request failed|failed|exception)(?:\s+\d{3})?[:\s-]+/i;
 const CONTEXT_OVERFLOW_ERROR_HEAD_RE =
@@ -400,8 +401,8 @@ export function sanitizeUserFacingText(text: unknown, opts?: { errorContext?: bo
   }
   const errorContext = opts?.errorContext ?? false;
   const stripped = stripInboundMetadata(stripInternalRuntimeContext(stripFinalTagsFromText(raw)));
-  // Replay repair may synthesize this placeholder to keep provider transcripts valid.
-  // It is internal scaffolding, so drop standalone placeholder lines before delivery
+  // Replay repair may synthesize these placeholders to keep provider transcripts valid.
+  // They are internal scaffolding, so drop standalone placeholder lines before delivery
   // while preserving ordinary inline mentions a user may be discussing.
   const withoutPlaceholder = stripToolCallsOmittedPlaceholderLines(stripped);
   const trimmed = withoutPlaceholder.trim();
