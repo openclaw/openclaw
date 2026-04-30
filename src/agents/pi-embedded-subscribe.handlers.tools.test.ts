@@ -6,11 +6,8 @@ import {
 } from "../infra/agent-events.js";
 import type { MessagingToolSend } from "./pi-embedded-messaging.types.js";
 import {
-  getToolStartDataSizeForTest,
   handleToolExecutionEnd,
   handleToolExecutionStart,
-  resetToolStartDataForTest,
-  sweepStaleToolStartDataForTest,
 } from "./pi-embedded-subscribe.handlers.tools.js";
 import type {
   ToolCallSummary,
@@ -75,11 +72,6 @@ function createTestContext(): {
 }
 
 describe("handleToolExecutionStart read path checks", () => {
-  afterEach(() => {
-    resetToolStartDataForTest();
-    vi.useRealTimers();
-  });
-
   it("does not warn when read tool uses file_path alias", async () => {
     const { ctx, warn, onBlockReplyFlush } = createTestContext();
 
@@ -144,26 +136,6 @@ describe("handleToolExecutionStart read path checks", () => {
     expect(ctx.state.itemStartedCount).toBe(2);
     expect(ctx.state.itemActiveIds.has("tool:tool-await-flush")).toBe(true);
     expect(ctx.state.itemActiveIds.has("command:tool-await-flush")).toBe(true);
-  });
-
-  it("sweeps tool start data when no matching tool end arrives", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-04-30T00:00:00Z"));
-    const { ctx } = createTestContext();
-
-    await handleToolExecutionStart(ctx, {
-      type: "tool_execution_start",
-      toolName: "exec",
-      toolCallId: "tool-stale",
-      args: { cmd: "sleep 999" },
-    });
-
-    expect(getToolStartDataSizeForTest()).toBe(1);
-
-    vi.setSystemTime(new Date("2026-04-30T00:31:00Z"));
-
-    expect(sweepStaleToolStartDataForTest()).toBe(1);
-    expect(getToolStartDataSizeForTest()).toBe(0);
   });
 });
 

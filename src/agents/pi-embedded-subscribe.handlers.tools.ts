@@ -78,59 +78,9 @@ type ToolStartRecord = {
 
 /** Track tool execution start data for after_tool_call hook. */
 const toolStartData = new Map<string, ToolStartRecord>();
-const TOOL_START_DATA_TTL_MS = 30 * 60_000;
-const TOOL_START_DATA_MAX_ENTRIES = 10_000;
 
 function buildToolStartKey(runId: string, toolCallId: string): string {
   return `${runId}:${toolCallId}`;
-}
-
-function sweepStaleToolStartData(
-  now = Date.now(),
-  maxAgeMs = TOOL_START_DATA_TTL_MS,
-  maxEntries = TOOL_START_DATA_MAX_ENTRIES,
-): number {
-  let swept = 0;
-  for (const [key, record] of toolStartData) {
-    if (now - record.startTime <= maxAgeMs) {
-      continue;
-    }
-    toolStartData.delete(key);
-    swept += 1;
-  }
-  if (toolStartData.size <= maxEntries) {
-    return swept;
-  }
-  const excess = toolStartData.size - maxEntries;
-  const ordered = [...toolStartData.entries()].toSorted(
-    (left, right) => left[1].startTime - right[1].startTime,
-  );
-  for (let i = 0; i < excess; i += 1) {
-    const key = ordered[i]?.[0];
-    if (!key) {
-      break;
-    }
-    if (toolStartData.delete(key)) {
-      swept += 1;
-    }
-  }
-  return swept;
-}
-
-export function sweepStaleToolStartDataForTest(
-  now = Date.now(),
-  maxAgeMs = TOOL_START_DATA_TTL_MS,
-  maxEntries = TOOL_START_DATA_MAX_ENTRIES,
-): number {
-  return sweepStaleToolStartData(now, maxAgeMs, maxEntries);
-}
-
-export function resetToolStartDataForTest(): void {
-  toolStartData.clear();
-}
-
-export function getToolStartDataSizeForTest(): number {
-  return toolStartData.size;
 }
 
 function isCronAddAction(args: unknown): boolean {
@@ -653,7 +603,6 @@ export function handleToolExecutionStart(
 
     // Track start time and args for after_tool_call hook.
     const startedAt = Date.now();
-    sweepStaleToolStartData(startedAt);
     toolStartData.set(buildToolStartKey(runId, toolCallId), { startTime: startedAt, args });
 
     if (toolName === "read") {
