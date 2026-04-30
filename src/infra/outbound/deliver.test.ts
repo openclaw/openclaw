@@ -1706,6 +1706,30 @@ describe("deliverOutboundPayloads", () => {
     expect(queueMocks.ackDelivery).not.toHaveBeenCalled();
   });
 
+  it("moves queue entry to failed/ when all bestEffort per-payload errors are permanent", async () => {
+    // Regression for openclaw/openclaw#74321: a permanent bestEffort error (e.g. "message is too
+    // long") should move the queue entry to failed/ immediately, not leave it in pending/ to replay.
+    const permanentError = new Error("message is too long in bestEffort path");
+    const sendMatrix = vi.fn().mockRejectedValue(permanentError);
+    const onError = vi.fn();
+    queueMocks.isPermanentDeliveryError.mockImplementation(() => true);
+
+    await deliverOutboundPayloads({
+      cfg: {},
+      channel: "matrix",
+      to: "!room:example",
+      payloads: [{ text: "a very long message" }],
+      deps: { matrix: sendMatrix },
+      bestEffort: true,
+      onError,
+    });
+
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(queueMocks.moveToFailed).toHaveBeenCalledWith("mock-queue-id");
+    expect(queueMocks.failDelivery).not.toHaveBeenCalled();
+    expect(queueMocks.ackDelivery).not.toHaveBeenCalled();
+  });
+
   it("passes normalized payload to onError", async () => {
     const sendMatrix = vi.fn().mockRejectedValue(new Error("boom"));
     const onError = vi.fn();
