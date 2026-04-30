@@ -108,13 +108,13 @@ describe("installClaudeCliViaNpm", () => {
 });
 
 describe("runClaudeCliLogin", () => {
-  it("returns true when claude /login exits 0", () => {
+  it("returns true when claude auth login exits 0", () => {
     const spawnSync = fakeSpawnSync(() => ({ status: 0 }));
     const runtime = createTestRuntime();
     expect(runClaudeCliLogin(runtime, { spawnSync, platform: "linux" })).toBe(true);
     expect(spawnSync).toHaveBeenCalledWith(
       "claude",
-      ["/login"],
+      ["auth", "login"],
       expect.objectContaining({ stdio: "inherit" }),
     );
   });

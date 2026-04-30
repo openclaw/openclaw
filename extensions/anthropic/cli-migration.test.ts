@@ -234,7 +234,7 @@ describe("anthropic cli migration", () => {
     );
   });
 
-  it("registered cli auth offers to run claude /login when CLI is installed but signed out", async () => {
+  it("registered cli auth offers to run claude auth login when CLI is installed but signed out", async () => {
     readClaudeCliCredentialsForSetup.mockReturnValueOnce(null);
     readClaudeCliCredentialsForSetup.mockReturnValueOnce({
       type: "oauth",
@@ -405,7 +405,7 @@ describe("anthropic cli migration", () => {
       [
         'Auth choice "anthropic-cli" requires Claude CLI installed and signed in on this host.',
         "Install Claude CLI: npm install -g @anthropic-ai/claude-code",
-        "Then sign in: claude /login",
+        "Then sign in: claude auth login",
       ].join("\n"),
     );
     expect(ctx.runtime.exit).toHaveBeenCalledWith(1);

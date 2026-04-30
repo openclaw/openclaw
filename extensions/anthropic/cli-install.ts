@@ -4,7 +4,7 @@ import type { WizardPrompter } from "openclaw/plugin-sdk/setup-runtime";
 
 export const CLAUDE_CLI_NPM_PACKAGE = "@anthropic-ai/claude-code";
 export const CLAUDE_CLI_BINARY_NAME = "claude";
-export const CLAUDE_CLI_LOGIN_COMMAND = "/login";
+export const CLAUDE_CLI_LOGIN_ARGS = ["auth", "login"] as const;
 
 const DETECT_TIMEOUT_MS = 5_000;
 
@@ -89,9 +89,10 @@ export function runClaudeCliLogin(
   deps: Partial<ClaudeCliInstallDeps> = {},
 ): boolean {
   const { spawnSync: spawnImpl } = { ...defaultDeps, ...deps };
-  runtime.log(`Running: ${CLAUDE_CLI_BINARY_NAME} ${CLAUDE_CLI_LOGIN_COMMAND}`);
+  const args = [...CLAUDE_CLI_LOGIN_ARGS];
+  runtime.log(`Running: ${CLAUDE_CLI_BINARY_NAME} ${args.join(" ")}`);
   try {
-    const result = spawnImpl(CLAUDE_CLI_BINARY_NAME, [CLAUDE_CLI_LOGIN_COMMAND], {
+    const result = spawnImpl(CLAUDE_CLI_BINARY_NAME, args, {
       stdio: "inherit",
       windowsHide: true,
     });

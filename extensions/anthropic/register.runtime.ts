@@ -432,14 +432,14 @@ async function runAnthropicCliMigration(ctx: ProviderAuthContext): Promise<Provi
       "Claude CLI sign-in",
     );
     const shouldLogin = await ctx.prompter.confirm({
-      message: `Run ${formatCliCommand("claude /login")} now to sign in?`,
+      message: `Run ${formatCliCommand("claude auth login")} now to sign in?`,
       initialValue: true,
     });
     if (!shouldLogin) {
       throw new Error(
         [
           "Claude CLI sign-in was declined.",
-          `Run ${formatCliCommand("claude /login")} manually, then re-run this setup.`,
+          `Run ${formatCliCommand("claude auth login")} manually, then re-run this setup.`,
         ].join("\n"),
       );
     }
@@ -449,7 +449,7 @@ async function runAnthropicCliMigration(ctx: ProviderAuthContext): Promise<Provi
       throw new Error(
         [
           "Claude CLI sign-in did not complete.",
-          `Run ${formatCliCommand("claude /login")} again, then re-run this setup.`,
+          `Run ${formatCliCommand("claude auth login")} again, then re-run this setup.`,
         ].join("\n"),
       );
     }
@@ -468,7 +468,7 @@ async function runAnthropicCliMigrationNonInteractive(ctx: {
       [
         'Auth choice "anthropic-cli" requires Claude CLI installed and signed in on this host.',
         `Install Claude CLI: npm install -g ${CLAUDE_CLI_NPM_PACKAGE}`,
-        `Then sign in: ${formatCliCommand("claude /login")}`,
+        `Then sign in: ${formatCliCommand("claude auth login")}`,
       ].join("\n"),
     );
     ctx.runtime.exit(1);
