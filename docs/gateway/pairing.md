@@ -36,11 +36,11 @@ Pending requests expire automatically after **5 minutes**.
 
 ```bash
 openclaw nodes pending
-openclaw nodes approve 
-openclaw nodes reject 
+openclaw nodes approve <requestId>
+openclaw nodes reject <requestId>
 openclaw nodes status
-openclaw nodes remove --node 
-openclaw nodes rename --node  --name "Living Room iPad"
+openclaw nodes remove --node <id|name|ip>
+openclaw nodes rename --node <id|name|ip> --name "Living Room iPad"
 ```
 
 `nodes status` shows paired/connected nodes and their capabilities.
