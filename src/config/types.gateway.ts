@@ -282,6 +282,18 @@ export type GatewayHttpResponsesConfig = {
    * Default: 8.
    */
   maxUrlParts?: number;
+  /**
+   * If true, append a `function_call` output item for every built-in agent
+   * tool invocation (e.g. `bash`, `read`, `grep`) to the response `output`.
+   * Default: false (existing response shape stays byte-identical).
+   *
+   * Audit-only: only the tool start event (`phase: "start"`) is captured.
+   * Tool results are not surfaced. Caller-provided client tools continue to
+   * route through the existing `pendingToolCalls` delegate path and are
+   * filtered out of the audit stream so the same tool never appears as both
+   * an audit item and a delegate item in one response.
+   */
+  exposeBuiltInToolCalls?: boolean;
   /** File inputs (input_file). */
   files?: GatewayHttpResponsesFilesConfig;
   /** Image inputs (input_image). */

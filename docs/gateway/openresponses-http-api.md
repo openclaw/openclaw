@@ -121,6 +121,50 @@ Provide tools with `tools: [{ type: "function", function: { name, description?, 
 If the agent decides to call a tool, the response returns a `function_call` output item.
 You then send a follow-up request with `function_call_output` to continue the turn.
 
+### Surfacing built-in agent tool calls (audit-only)
+
+By default, only **caller-provided client tools** appear as `function_call` items in
+the response `output`. Built-in tools the gateway-hosted agent runs itself
+(for example `bash`, `read`, `grep`) are executed inside the agent and do not
+show up in the response, so the default response shape stays byte-identical for
+clients that have not opted in.
+
+Set `gateway.http.endpoints.responses.exposeBuiltInToolCalls: true` to surface
+each built-in tool invocation as an additional `function_call` output item:
+
+```json5
+{
+  gateway: {
+    http: {
+      endpoints: {
+        responses: {
+          enabled: true,
+          exposeBuiltInToolCalls: true,
+        },
+      },
+    },
+  },
+}
+```
+
+Semantics:
+
+- **Audit-only.** Only the tool-start event (`phase: "start"`) is captured. Tool
+  results are not surfaced, and there is no way to feed a `function_call_output`
+  back for one of these calls — the agent has already executed them itself.
+- **Ordering.** In non-streaming responses, audit `function_call` items are
+  appended after the assistant `message` in the order the tool calls happened.
+  In streaming responses, each capture emits its own `response.output_item.added`
+  and `response.output_item.done` events at the next free `output_index`, and the
+  same items appear in the final `response.completed.response.output` array.
+- **Client-tool dedupe.** When a built-in tool name matches a tool that the
+  caller registered via `tools: [...]` (so it would normally route through the
+  delegate `pendingToolCalls` path), the audit capture is skipped. The same
+  call never shows up as both an audit item and a delegate item in one
+  response.
+- **Default off.** Existing callers that do not set this flag see exactly the
+  same response bytes they did before.
+
 ## Images (`input_image`)
 
 Supports base64 or URL sources:

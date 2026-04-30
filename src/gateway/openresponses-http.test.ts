@@ -192,6 +192,21 @@ function buildResponsesUrlPolicyConfig(maxUrlParts: number) {
   };
 }
 
+function buildExposeBuiltInToolCallsConfig() {
+  return {
+    gateway: {
+      http: {
+        endpoints: {
+          responses: {
+            enabled: true,
+            exposeBuiltInToolCalls: true,
+          },
+        },
+      },
+    },
+  };
+}
+
 async function expectInvalidRequest(
   res: Response,
   messagePattern: RegExp,
@@ -934,6 +949,260 @@ describe("OpenResponses HTTP API (e2e)", () => {
     ).toBe("Let me check that.");
     expect(response?.output?.[1]?.name).toBe("get_weather");
     expect(events.some((event) => event.data === "[DONE]")).toBe(true);
+  });
+
+  it("drops built-in tool calls from output by default (regression for #75074)", async () => {
+    // The agent emits a built-in `tool/start` event during the run (here for
+    // `bash`). With no `exposeBuiltInToolCalls` flag set, the OpenResponses
+    // endpoint must not surface that invocation in the response `output` —
+    // both before and after the opt-in surface lands. This locks the default
+    // shape so default-off remains byte-identical.
+    const port = enabledPort;
+    agentCommand.mockClear();
+    agentCommand.mockImplementationOnce((async (opts: unknown) => {
+      const runId = (opts as { runId?: string } | undefined)?.runId ?? "";
+      emitAgentEvent({
+        runId,
+        stream: "tool",
+        data: {
+          phase: "start",
+          name: "bash",
+          toolCallId: "tc_1",
+          args: { command: "grep -rn TODO src/" },
+        },
+      });
+      return { payloads: [{ text: "Found 3 TODOs in src/." }] };
+    }) as never);
+
+    const res = await postResponses(port, {
+      stream: false,
+      model: "openclaw",
+      input: "find every TODO in the repo",
+    });
+
+    expect(res.status).toBe(200);
+    const json = (await res.json()) as {
+      status?: string;
+      output?: Array<Record<string, unknown>>;
+    };
+    expect(json.status).toBe("completed");
+    // The agent ran `bash` but the response drops that built-in invocation:
+    // only the assistant `message` survives in `output`.
+    expect(json.output?.map((item) => item.type)).toEqual(["message"]);
+    await ensureResponseConsumed(res);
+  });
+
+  it("surfaces built-in tool calls as function_call output items when exposeBuiltInToolCalls is true (#75074)", async () => {
+    await writeGatewayConfig(buildExposeBuiltInToolCallsConfig());
+    const port = await getFreePort();
+    const server = await startServer(port, { openResponsesEnabled: true });
+    try {
+      agentCommand.mockClear();
+      agentCommand.mockImplementationOnce((async (opts: unknown) => {
+        const runId = (opts as { runId?: string } | undefined)?.runId ?? "";
+        emitAgentEvent({
+          runId,
+          stream: "tool",
+          data: {
+            phase: "start",
+            name: "bash",
+            toolCallId: "tc_1",
+            args: { command: "grep -rn TODO src/" },
+          },
+        });
+        emitAgentEvent({
+          runId,
+          stream: "tool",
+          data: {
+            phase: "start",
+            name: "read",
+            toolCallId: "tc_2",
+            args: { path: "src/index.ts" },
+          },
+        });
+        return { payloads: [{ text: "Found 3 TODOs and read src/index.ts." }] };
+      }) as never);
+
+      const res = await postResponses(port, {
+        stream: false,
+        model: "openclaw",
+        input: "find every TODO and then read src/index.ts",
+      });
+
+      expect(res.status).toBe(200);
+      const json = (await res.json()) as {
+        status?: string;
+        output?: Array<Record<string, unknown>>;
+      };
+      expect(json.status).toBe("completed");
+      expect(json.output?.map((item) => item.type)).toEqual([
+        "message",
+        "function_call",
+        "function_call",
+      ]);
+
+      const bashCall = json.output?.[1] as Record<string, unknown> | undefined;
+      expect(bashCall?.name).toBe("bash");
+      expect(bashCall?.call_id).toBe("tc_1");
+      expect(bashCall?.arguments).toBe(JSON.stringify({ command: "grep -rn TODO src/" }));
+      expect(bashCall?.status).toBe("completed");
+      expect(typeof bashCall?.id).toBe("string");
+      expect(String(bashCall?.id)).toMatch(/^call_/);
+
+      const readCall = json.output?.[2] as Record<string, unknown> | undefined;
+      expect(readCall?.name).toBe("read");
+      expect(readCall?.call_id).toBe("tc_2");
+      expect(readCall?.arguments).toBe(JSON.stringify({ path: "src/index.ts" }));
+      expect(readCall?.status).toBe("completed");
+
+      await ensureResponseConsumed(res);
+    } finally {
+      await server.close({ reason: "expose-built-in-tool-calls JSON test done" });
+    }
+  });
+
+  it("emits SSE output_item events for built-in tool calls at incrementing output_index (#75074)", async () => {
+    await writeGatewayConfig(buildExposeBuiltInToolCallsConfig());
+    const port = await getFreePort();
+    const server = await startServer(port, { openResponsesEnabled: true });
+    try {
+      agentCommand.mockClear();
+      agentCommand.mockImplementationOnce((async (opts: unknown) => {
+        const runId = (opts as { runId?: string } | undefined)?.runId ?? "";
+        emitAgentEvent({
+          runId,
+          stream: "tool",
+          data: {
+            phase: "start",
+            name: "bash",
+            toolCallId: "tc_a",
+            args: { command: "ls" },
+          },
+        });
+        emitAgentEvent({
+          runId,
+          stream: "tool",
+          data: {
+            phase: "start",
+            name: "grep",
+            toolCallId: "tc_b",
+            args: { pattern: "TODO" },
+          },
+        });
+        return buildAssistantDeltaResult({
+          opts,
+          emit: emitAgentEvent,
+          deltas: ["all", " done"],
+          text: "all done",
+        });
+      }) as never);
+
+      const res = await postResponses(port, {
+        stream: true,
+        model: "openclaw",
+        input: "audit the project",
+      });
+
+      expect(res.status).toBe(200);
+      const events = parseSseEvents(await res.text());
+
+      const auditAddedEvents = events
+        .filter((event) => event.event === "response.output_item.added")
+        .map(
+          (event) => JSON.parse(event.data) as { output_index: number; item?: { type?: string } },
+        )
+        .filter((event) => event.item?.type === "function_call");
+      const auditDoneEvents = events
+        .filter((event) => event.event === "response.output_item.done")
+        .map(
+          (event) => JSON.parse(event.data) as { output_index: number; item?: { type?: string } },
+        )
+        .filter((event) => event.item?.type === "function_call");
+
+      expect(auditAddedEvents.map((event) => event.output_index)).toEqual([1, 2]);
+      expect(auditDoneEvents.map((event) => event.output_index)).toEqual([1, 2]);
+
+      const completed = events.find((event) => event.event === "response.completed");
+      expect(completed).toBeTruthy();
+      const finalOutput = (
+        JSON.parse(completed?.data ?? "{}") as {
+          response?: { output?: Array<Record<string, unknown>> };
+        }
+      ).response?.output;
+      expect(finalOutput?.map((item) => item.type)).toEqual([
+        "message",
+        "function_call",
+        "function_call",
+      ]);
+      expect((finalOutput?.[1] as Record<string, unknown> | undefined)?.name).toBe("bash");
+      expect((finalOutput?.[1] as Record<string, unknown> | undefined)?.call_id).toBe("tc_a");
+      expect((finalOutput?.[2] as Record<string, unknown> | undefined)?.name).toBe("grep");
+      expect((finalOutput?.[2] as Record<string, unknown> | undefined)?.call_id).toBe("tc_b");
+      expect(events.some((event) => event.data === "[DONE]")).toBe(true);
+    } finally {
+      await server.close({ reason: "expose-built-in-tool-calls SSE test done" });
+    }
+  });
+
+  it("does not emit a duplicate audit function_call when the tool name matches a caller-provided client tool (#75074)", async () => {
+    await writeGatewayConfig(buildExposeBuiltInToolCallsConfig());
+    const port = await getFreePort();
+    const server = await startServer(port, { openResponsesEnabled: true });
+    try {
+      agentCommand.mockClear();
+      agentCommand.mockImplementationOnce((async (opts: unknown) => {
+        const runId = (opts as { runId?: string } | undefined)?.runId ?? "";
+        // The agent invokes the caller-provided `get_weather` client tool.
+        // The audit capture must skip it so the same call does not appear
+        // both as an audit `function_call` and as the delegate `function_call`.
+        emitAgentEvent({
+          runId,
+          stream: "tool",
+          data: {
+            phase: "start",
+            name: "get_weather",
+            toolCallId: "tc_dupe",
+            args: { city: "Taipei" },
+          },
+        });
+        return {
+          payloads: [{ text: "Let me check that." }],
+          meta: {
+            stopReason: "tool_calls",
+            pendingToolCalls: [
+              {
+                id: "call_delegate",
+                name: "get_weather",
+                arguments: '{"city":"Taipei"}',
+              },
+            ],
+          },
+        };
+      }) as never);
+
+      const res = await postResponses(port, {
+        stream: false,
+        model: "openclaw",
+        input: "check the weather",
+        tools: WEATHER_TOOL,
+      });
+
+      expect(res.status).toBe(200);
+      const json = (await res.json()) as {
+        status?: string;
+        output?: Array<Record<string, unknown>>;
+      };
+      expect(json.status).toBe("incomplete");
+      // Only the delegate function_call is emitted; the audit capture is skipped.
+      expect(json.output?.map((item) => item.type)).toEqual(["message", "function_call"]);
+      expect((json.output?.[1] as Record<string, unknown> | undefined)?.call_id).toBe(
+        "call_delegate",
+      );
+      expect((json.output?.[1] as Record<string, unknown> | undefined)?.name).toBe("get_weather");
+      await ensureResponseConsumed(res);
+    } finally {
+      await server.close({ reason: "expose-built-in-tool-calls dedupe test done" });
+    }
   });
 
   it("reuses the prior session when previous_response_id is provided", async () => {

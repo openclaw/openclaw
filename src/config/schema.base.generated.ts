@@ -22897,6 +22897,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                         minimum: 0,
                         maximum: 9007199254740991,
                       },
+                      exposeBuiltInToolCalls: {
+                        type: "boolean",
+                      },
                       files: {
                         type: "object",
                         properties: {
@@ -29103,5 +29106,5 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
   },
   version: "2026.4.27",
-  generatedAt: "2026-03-22T21:17:33.302Z",
+  generatedAt: "2026-04-30T13:26:26.989Z",
 };

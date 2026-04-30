@@ -15,7 +15,7 @@ import { createDefaultDeps } from "../cli/deps.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { agentCommandFromIngress } from "../commands/agent.js";
 import type { GatewayHttpResponsesConfig } from "../config/types.gateway.js";
-import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
+import { emitAgentEvent, onAgentEvent, type AgentEventPayload } from "../infra/agent-events.js";
 import { logWarn } from "../logger.js";
 import { renderFileContextBlock } from "../media/file-context.js";
 import {
@@ -370,6 +370,92 @@ function resolveStopReasonAndPendingToolCalls(meta: unknown): {
   return { stopReason: record.stopReason, pendingToolCalls: record.pendingToolCalls };
 }
 
+type CapturedBuiltInToolCall = {
+  /** Stable response-output item id, formatted as `call_<uuid>`. */
+  itemId: string;
+  /** Original tool call id from the agent event (mirrored as `call_id`). */
+  callId: string;
+  /** Tool name (e.g. `bash`, `grep`, `read`). */
+  name: string;
+  /** JSON-stringified arguments object, or `"{}"` when args are missing. */
+  arguments: string;
+};
+
+/**
+ * Inspect an agent event and, if it represents the *start* of a built-in
+ * (gateway-executed) tool invocation that the caller did not register as a
+ * client tool, return the data needed to surface it as a `function_call`
+ * output item on the OpenResponses HTTP response.
+ *
+ * Returns `null` for any event that should NOT be captured:
+ *  - events from a different run,
+ *  - non-tool streams,
+ *  - tool events that aren't the `start` phase,
+ *  - events whose tool name matches a caller-provided client tool (those go
+ *    through the existing `pendingToolCalls` delegate path so the same call
+ *    never appears as both an audit item and a delegate item),
+ *  - or events with a missing/empty tool name or `toolCallId`.
+ *
+ * This helper is pure and is therefore safe to call from inside the existing
+ * `onAgentEvent` listener for both the streaming and non-streaming paths.
+ */
+function tryCaptureBuiltInToolCall(params: {
+  evt: AgentEventPayload;
+  runId: string;
+  clientToolNames: ReadonlySet<string>;
+}): CapturedBuiltInToolCall | null {
+  const { evt, runId, clientToolNames } = params;
+  if (evt.runId !== runId) {
+    return null;
+  }
+  if (evt.stream !== "tool") {
+    return null;
+  }
+  const data = evt.data as Record<string, unknown> | undefined;
+  if (!data || data.phase !== "start") {
+    return null;
+  }
+  const name = typeof data.name === "string" ? data.name.trim() : "";
+  if (!name) {
+    return null;
+  }
+  if (clientToolNames.has(name)) {
+    return null;
+  }
+  const toolCallId = typeof data.toolCallId === "string" ? data.toolCallId.trim() : "";
+  if (!toolCallId) {
+    return null;
+  }
+  let serializedArgs = "{}";
+  try {
+    const raw = data.args;
+    if (typeof raw === "string") {
+      serializedArgs = raw;
+    } else if (raw !== undefined && raw !== null) {
+      serializedArgs = JSON.stringify(raw);
+    }
+  } catch {
+    serializedArgs = "{}";
+  }
+  return {
+    itemId: `call_${randomUUID()}`,
+    callId: toolCallId,
+    name,
+    arguments: serializedArgs,
+  };
+}
+
+function buildClientToolNameSet(tools: readonly ClientToolDefinition[]): ReadonlySet<string> {
+  const names = new Set<string>();
+  for (const tool of tools) {
+    const name = tool.function?.name?.trim();
+    if (name) {
+      names.add(name);
+    }
+  }
+  return names;
+}
+
 function createResponseResource(params: {
   id: string;
   model: string;
@@ -680,6 +766,35 @@ export async function handleOpenResponsesHttpRequest(
 
   if (!stream) {
     const stopWatchingDisconnect = watchClientDisconnect(req, res, abortController);
+    // Audit-only capture of built-in agent tool invocations during the run.
+    // The subscription is installed before `runResponsesAgentCommand` so we
+    // never miss an event, and torn down in `finally` so early returns/throws
+    // don't leak listeners.
+    const nonStreamExposeBuiltInToolCalls = opts.config?.exposeBuiltInToolCalls === true;
+    const nonStreamClientToolNames = buildClientToolNameSet(resolvedClientTools);
+    const nonStreamBuiltInItems: OutputItem[] = [];
+    let nonStreamUnsubscribe: () => void = () => {};
+    if (nonStreamExposeBuiltInToolCalls) {
+      nonStreamUnsubscribe = onAgentEvent((evt) => {
+        const captured = tryCaptureBuiltInToolCall({
+          evt,
+          runId: responseId,
+          clientToolNames: nonStreamClientToolNames,
+        });
+        if (!captured) {
+          return;
+        }
+        nonStreamBuiltInItems.push(
+          createFunctionCallOutputItem({
+            id: captured.itemId,
+            callId: captured.callId,
+            name: captured.name,
+            arguments: captured.arguments,
+            status: "completed",
+          }),
+        );
+      });
+    }
     try {
       const result = await runResponsesAgentCommand({
         message: prompt.message,
@@ -729,6 +844,11 @@ export async function handleOpenResponsesHttpRequest(
             }),
           );
         }
+        // Surface built-in tool invocations between the assistant message and
+        // the delegate function_call, mirroring the streaming output order.
+        for (const auditItem of nonStreamBuiltInItems) {
+          output.push(auditItem);
+        }
         output.push(
           createFunctionCallOutputItem({
             id: functionCallItemId,
@@ -769,6 +889,7 @@ export async function handleOpenResponsesHttpRequest(
             phase: "final_answer",
             status: "completed",
           }),
+          ...nonStreamBuiltInItems,
         ],
         usage,
       });
@@ -801,6 +922,7 @@ export async function handleOpenResponsesHttpRequest(
       rememberResponseSession();
       sendJson(res, 500, response);
     } finally {
+      nonStreamUnsubscribe();
       stopWatchingDisconnect();
     }
     return true;
@@ -819,6 +941,17 @@ export async function handleOpenResponsesHttpRequest(
   let stopWatchingDisconnect = () => {};
   let finalUsage: Usage | undefined;
   let finalizeRequested: { status: ResponseResource["status"]; text: string } | null = null;
+
+  // Audit-only capture of built-in agent tool invocations (bash/read/grep/...).
+  // Gated behind `exposeBuiltInToolCalls` so the default response shape stays
+  // byte-identical for callers that have not opted in.
+  const exposeBuiltInToolCalls = opts.config?.exposeBuiltInToolCalls === true;
+  const clientToolNames = buildClientToolNameSet(resolvedClientTools);
+  const streamBuiltInItems: OutputItem[] = [];
+  // Output indexes are reserved as we go: 0 is the assistant message, then
+  // each captured built-in tool call (and finally the delegate function_call,
+  // when the run ends with `stopReason === "tool_calls"`) takes the next slot.
+  let nextStreamOutputIndex = 1;
 
   const maybeFinalize = () => {
     if (closed) {
@@ -869,7 +1002,7 @@ export async function handleOpenResponsesHttpRequest(
       id: responseId,
       model,
       status: finalizeRequested.status,
-      output: [completedItem],
+      output: [completedItem, ...streamBuiltInItems],
       usage,
     });
 
@@ -949,6 +1082,48 @@ export async function handleOpenResponsesHttpRequest(
         content_index: 0,
         delta: content,
       });
+      return;
+    }
+
+    if (evt.stream === "tool") {
+      if (!exposeBuiltInToolCalls) {
+        return;
+      }
+      const captured = tryCaptureBuiltInToolCall({
+        evt,
+        runId: responseId,
+        clientToolNames,
+      });
+      if (!captured) {
+        return;
+      }
+      const auditOutputIndex = nextStreamOutputIndex;
+      nextStreamOutputIndex += 1;
+      const inProgressItem = createFunctionCallOutputItem({
+        id: captured.itemId,
+        callId: captured.callId,
+        name: captured.name,
+        arguments: captured.arguments,
+        status: "in_progress",
+      });
+      writeSseEvent(res, {
+        type: "response.output_item.added",
+        output_index: auditOutputIndex,
+        item: inProgressItem,
+      });
+      const completedAuditItem = createFunctionCallOutputItem({
+        id: captured.itemId,
+        callId: captured.callId,
+        name: captured.name,
+        arguments: captured.arguments,
+        status: "completed",
+      });
+      writeSseEvent(res, {
+        type: "response.output_item.done",
+        output_index: auditOutputIndex,
+        item: completedAuditItem,
+      });
+      streamBuiltInItems.push(completedAuditItem);
       return;
     }
 
@@ -1043,9 +1218,11 @@ export async function handleOpenResponsesHttpRequest(
           name: functionCall.name,
           arguments: functionCall.arguments,
         });
+        const delegateOutputIndex = nextStreamOutputIndex;
+        nextStreamOutputIndex += 1;
         writeSseEvent(res, {
           type: "response.output_item.added",
-          output_index: 1,
+          output_index: delegateOutputIndex,
           item: functionCallItem,
         });
         const completedFunctionCallItem = createFunctionCallOutputItem({
@@ -1057,7 +1234,7 @@ export async function handleOpenResponsesHttpRequest(
         });
         writeSseEvent(res, {
           type: "response.output_item.done",
-          output_index: 1,
+          output_index: delegateOutputIndex,
           item: completedFunctionCallItem,
         });
 
@@ -1065,7 +1242,7 @@ export async function handleOpenResponsesHttpRequest(
           id: responseId,
           model,
           status: "incomplete",
-          output: [completedItem, functionCallItem],
+          output: [completedItem, ...streamBuiltInItems, functionCallItem],
           usage,
         });
         closed = true;

@@ -4,6 +4,10 @@ Docs: https://docs.openclaw.ai
 
 ## Unreleased
 
+### Changes
+
+- Gateway/responses: add opt-in `gateway.http.endpoints.responses.exposeBuiltInToolCalls` flag so `/v1/responses` surfaces built-in agent tool invocations (e.g. `bash`, `read`, `grep`) as `function_call` output items in both JSON and SSE responses; default off keeps the existing response shape byte-identical. (#75074) Thanks @glow1128.
+
 ### Fixes
 
 - CLI/progress: suppress nested progress spinners and line clears while TUI input owns raw stdin, so Crestodian `/status` no longer disturbs the active input row. (#75003) Thanks @velvet-shark.
