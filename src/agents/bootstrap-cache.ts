@@ -6,6 +6,17 @@ type BootstrapSnapshot = {
 };
 
 const cache = new Map<string, BootstrapSnapshot>();
+const BOOTSTRAP_CACHE_MAX = 50;
+
+function evictOldestCacheEntries(): void {
+  while (cache.size > BOOTSTRAP_CACHE_MAX) {
+    const oldest = cache.keys().next().value;
+    if (oldest === undefined) {
+      break;
+    }
+    cache.delete(oldest);
+  }
+}
 
 function bootstrapFilesEqual(
   previous: WorkspaceBootstrapFile[],
@@ -43,6 +54,7 @@ export async function getOrLoadBootstrapFiles(params: {
     return existing.files;
   }
 
+  evictOldestCacheEntries();
   cache.set(params.sessionKey, { workspaceDir: params.workspaceDir, files });
   return files;
 }

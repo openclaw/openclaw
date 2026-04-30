@@ -174,6 +174,10 @@ export const AgentParamsSchema = Type.Object(
     voiceWakeTrigger: Type.Optional(Type.String()),
     idempotencyKey: NonEmptyString,
     label: Type.Optional(SessionLabelString),
+    // Paperclip wake payload — forwarded by the openclaw-gateway adapter.
+    // Accepted but not consumed by the gateway protocol; agents read it from
+    // the run context injected by the cron/heartbeat layer.
+    paperclip: Type.Optional(Type.Unknown()),
   },
   { additionalProperties: false },
 );
