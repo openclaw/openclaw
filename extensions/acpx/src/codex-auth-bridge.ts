@@ -205,12 +205,15 @@ for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
 }
 
 const originalParentPid = process.ppid;
+let orphanForceKillTimer;
 const parentWatch = setInterval(() => {
   if (originalParentPid > 1 && process.ppid === 1) {
     killChildTree("SIGTERM");
-    setTimeout(() => killChildTree("SIGKILL"), 1500).unref?.();
     clearInterval(parentWatch);
-    process.exit(0);
+    orphanForceKillTimer = setTimeout(() => {
+      killChildTree("SIGKILL");
+      process.exit(0);
+    }, 1500);
   }
 }, 1000);
 parentWatch.unref?.();
@@ -222,6 +225,10 @@ child.on("error", (error) => {
 
 child.on("exit", (code, signal) => {
   clearInterval(parentWatch);
+  if (orphanForceKillTimer) {
+    clearTimeout(orphanForceKillTimer);
+    orphanForceKillTimer = undefined;
+  }
   if (code !== null) {
     process.exit(code);
   }

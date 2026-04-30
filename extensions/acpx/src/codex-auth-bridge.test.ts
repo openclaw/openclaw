@@ -25,6 +25,36 @@ function quoteArg(value: string): string {
   return JSON.stringify(value);
 }
 
+function isPidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function sleep(ms: number): Promise<void> {
+  await new Promise<void>((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+async function waitForFileText(filePath: string, timeoutMs = 5000): Promise<string> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      return await fs.readFile(filePath, "utf8");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw error;
+      }
+    }
+    await sleep(100);
+  }
+  throw new Error(`Timed out waiting for ${filePath}`);
+}
+
 function restoreEnv(name: keyof typeof previousEnv): void {
   const value = previousEnv[name];
   if (value === undefined) {
@@ -160,6 +190,78 @@ describe("prepareAcpxCodexAuthConfig", () => {
     expect(wrapper).toContain("process.kill(-child.pid, signal)");
     expect(wrapper).toContain("process.ppid === 1");
     expect(wrapper).toContain('killChildTree("SIGKILL")');
+  });
+
+  it("keeps the wrapper alive long enough to SIGKILL orphaned children that ignore SIGTERM", async () => {
+    const root = await makeTempDir();
+    const stateDir = path.join(root, "state");
+    const generated = generatedCodexPaths(stateDir);
+    const childPidPath = path.join(root, "child.pid");
+    const signalLogPath = path.join(root, "signals.log");
+    const installedBinPath = path.join(root, "codex-acp-bin.js");
+    const launcherPath = path.join(root, "launch-wrapper.mjs");
+    let childPid = 0;
+
+    await fs.writeFile(
+      installedBinPath,
+      `import fs from "node:fs";
+import process from "node:process";
+
+fs.writeFileSync(${quoteArg(childPidPath)}, String(process.pid));
+process.on("SIGTERM", () => {
+  fs.appendFileSync(${quoteArg(signalLogPath)}, "SIGTERM\\n");
+});
+setInterval(() => {}, 1000);
+`,
+      "utf8",
+    );
+
+    const pluginConfig = resolveAcpxPluginConfig({
+      rawConfig: {},
+      workspaceDir: root,
+    });
+    await prepareAcpxCodexAuthConfig({
+      pluginConfig,
+      stateDir,
+      resolveInstalledCodexAcpBinPath: async () => installedBinPath,
+    });
+
+    await fs.writeFile(
+      launcherPath,
+      `import { spawn } from "node:child_process";
+const child = spawn(${quoteArg(process.execPath)}, [${quoteArg(generated.wrapperPath)}], {
+  cwd: ${quoteArg(root)},
+  env: process.env,
+  stdio: "ignore",
+});
+child.unref();
+setTimeout(() => process.exit(0), 1200);
+`,
+      "utf8",
+    );
+
+    try {
+      await execFileAsync(process.execPath, [launcherPath], { cwd: root });
+      childPid = Number((await waitForFileText(childPidPath)).trim());
+      expect(childPid).toBeGreaterThan(0);
+
+      await sleep(4000);
+
+      expect(isPidAlive(childPid)).toBe(false);
+      await expect(fs.readFile(signalLogPath, "utf8")).resolves.toContain("SIGTERM");
+    } finally {
+      if (childPid > 0 && isPidAlive(childPid)) {
+        try {
+          process.kill(-childPid, "SIGKILL");
+        } catch {
+          try {
+            process.kill(childPid, "SIGKILL");
+          } catch {
+            // Best-effort test cleanup.
+          }
+        }
+      }
+    }
   });
 
   it("falls back to the current Codex ACP package range when the local adapter is unavailable", async () => {

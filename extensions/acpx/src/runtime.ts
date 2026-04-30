@@ -528,7 +528,7 @@ export class AcpxRuntime implements AcpRuntime {
       ...this.processCleanup,
       rootPid: context.pid,
       rootCommand: context.command,
-      processes: context.processes.length > 0 ? context.processes : undefined,
+      processes: context.processes,
     });
   }
 

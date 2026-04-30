@@ -571,6 +571,45 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     expect(killed).toEqual([502, 501]);
   });
 
+  it("keeps close best-effort when cleanup cannot list processes", async () => {
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => ({
+        acpxRecordId: "agent:codex:acp:binding:test",
+        agentCommand: CODEX_ACP_WRAPPER_COMMAND,
+        pid: 551,
+      })),
+      save: vi.fn(async () => {}),
+    };
+    const listProcesses = vi.fn(async () => {
+      throw new Error("ps unavailable");
+    });
+    const { runtime, delegate } = makeRuntime(baseStore, {}, {
+      openclawProcessCleanup: {
+        listProcesses,
+        killProcess: vi.fn(),
+        isProcessAlive: () => false,
+        sleep: async () => {},
+        forceAfterMs: 0,
+      },
+    } as never);
+    const close = vi.spyOn(delegate, "close").mockResolvedValue(undefined);
+
+    await expect(
+      runtime.close({
+        handle: {
+          sessionKey: "agent:codex:acp:binding:test",
+          backend: "acpx",
+          runtimeSessionName: "agent:codex:acp:binding:test",
+          acpxRecordId: "agent:codex:acp:binding:test",
+        },
+        reason: "close-test",
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(close).toHaveBeenCalledOnce();
+    expect(listProcesses).toHaveBeenCalledOnce();
+  });
+
   it("does not clean a non-OpenClaw Codex app-server tree after close", async () => {
     const baseStore: TestSessionStore = {
       load: vi.fn(async () => ({
