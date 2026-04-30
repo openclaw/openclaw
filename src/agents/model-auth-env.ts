@@ -31,8 +31,16 @@ function expandAuthEvidencePath(rawPath: string, env: NodeJS.ProcessEnv): string
   if (!trimmed) {
     return undefined;
   }
-  const homeDir = normalizeOptionalSecretInput(env.HOME) ?? os.homedir();
+  const homeDir = normalizeOptionalPathInput(env.HOME) ?? os.homedir();
   return trimmed.replaceAll("${HOME}", homeDir);
+}
+
+function normalizeOptionalPathInput(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed ? trimmed : undefined;
 }
 
 function hasRequiredAuthEvidenceEnv(
@@ -51,7 +59,7 @@ function hasRequiredAuthEvidenceEnv(
 
 function hasLocalFileAuthEvidence(evidence: ProviderAuthEvidence, env: NodeJS.ProcessEnv): boolean {
   if (evidence.fileEnvVar) {
-    const explicitPath = normalizeOptionalSecretInput(env[evidence.fileEnvVar]);
+    const explicitPath = normalizeOptionalPathInput(env[evidence.fileEnvVar]);
     if (explicitPath) {
       return fs.existsSync(explicitPath);
     }
