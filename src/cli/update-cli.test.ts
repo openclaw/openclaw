@@ -2356,6 +2356,56 @@ describe("update-cli", () => {
     expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
   });
 
+  it("preserves caller gateway auth env when spawning updated restart verification", async () => {
+    const updatedRoot = createCaseDir("openclaw-updated-root");
+    const updatedEntrypoint = path.join(updatedRoot, "dist", "entry.js");
+    setupUpdatedRootRefresh({
+      entrypoints: [updatedEntrypoint],
+      gatewayUpdateImpl: async () =>
+        makeOkUpdateResult({
+          mode: "npm",
+          root: updatedRoot,
+          before: { version: "2026.4.26" },
+          after: { version: "2026.4.27" },
+        }),
+    });
+    prepareRestartScript.mockResolvedValue("/tmp/openclaw-restart-test.sh");
+    serviceLoaded.mockResolvedValue(true);
+    serviceReadCommand.mockResolvedValue({
+      programArguments: ["openclaw", "gateway", "run"],
+      environment: {
+        OPENCLAW_GATEWAY_TOKEN: "",
+        OPENCLAW_GATEWAY_PASSWORD: "",
+      },
+    });
+
+    await withEnvAsync(
+      {
+        OPENCLAW_GATEWAY_TOKEN: "shell-token",
+        OPENCLAW_GATEWAY_PASSWORD: "shell-password",
+      },
+      async () => {
+        await updateCommand({ yes: true, json: true });
+      },
+    );
+
+    expect(runCommandWithTimeout).toHaveBeenCalledWith(
+      [expect.stringMatching(/node/), updatedEntrypoint, "update", "--json"],
+      expect.objectContaining({
+        cwd: updatedRoot,
+        timeoutMs: 190_000,
+        env: expect.objectContaining({
+          OPENCLAW_GATEWAY_TOKEN: "shell-token",
+          OPENCLAW_GATEWAY_PASSWORD: "shell-password",
+          OPENCLAW_UPDATE_RESTART_VERIFY: "1",
+          OPENCLAW_UPDATE_RESTART_VERIFY_EXPECTED_VERSION: "2026.4.27",
+        }),
+      }),
+    );
+    expect(probeGateway).not.toHaveBeenCalled();
+    expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
+  });
+
   it("fails a JSON package update when updated restart verification reports the old gateway", async () => {
     const updatedRoot = createCaseDir("openclaw-updated-root");
     const updatedEntrypoint = path.join(updatedRoot, "dist", "entry.js");

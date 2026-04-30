@@ -105,6 +105,7 @@ const RESTART_VERIFY_ROOT_ENV = "OPENCLAW_UPDATE_RESTART_VERIFY_ROOT";
 const RESTART_VERIFY_MODE_ENV = "OPENCLAW_UPDATE_RESTART_VERIFY_MODE";
 const RESTART_VERIFY_EXPECTED_VERSION_ENV = "OPENCLAW_UPDATE_RESTART_VERIFY_EXPECTED_VERSION";
 const RESTART_VERIFY_GATEWAY_PORT_ENV = "OPENCLAW_UPDATE_RESTART_VERIFY_GATEWAY_PORT";
+const GATEWAY_AUTH_ENV_KEYS = ["OPENCLAW_GATEWAY_TOKEN", "OPENCLAW_GATEWAY_PASSWORD"] as const;
 const UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV =
   "OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE";
 const SERVICE_REFRESH_PATH_ENV_KEYS = [
@@ -329,6 +330,32 @@ function resolveUpdatedInstallCommandEnv(
   return disableUpdatedPackageCompileCacheEnv(resolveServiceRefreshEnv(env, invocationCwd));
 }
 
+function preserveCallerGatewayAuthEnv(
+  env: NodeJS.ProcessEnv,
+  callerEnv: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
+  const resolvedEnv = { ...env };
+  for (const key of GATEWAY_AUTH_ENV_KEYS) {
+    if (normalizeOptionalString(resolvedEnv[key])) {
+      continue;
+    }
+    const callerValue = callerEnv[key];
+    if (normalizeOptionalString(callerValue)) {
+      resolvedEnv[key] = callerValue;
+    }
+  }
+  return resolvedEnv;
+}
+
+function resolveRestartVerifyCommandEnv(params: {
+  serviceEnv?: NodeJS.ProcessEnv;
+  invocationCwd?: string;
+}): NodeJS.ProcessEnv {
+  return preserveCallerGatewayAuthEnv(
+    resolveUpdatedInstallCommandEnv(params.serviceEnv ?? process.env, params.invocationCwd),
+  );
+}
+
 type UpdateDryRunPreview = {
   dryRun: true;
   root: string;
@@ -541,10 +568,10 @@ async function verifyRestartedGatewayWithUpdatedInstall(params: {
   }
 
   // Package self-updates replace files on disk, but this process keeps old modules loaded.
-  const env = resolveUpdatedInstallCommandEnv(
-    params.serviceEnv ?? process.env,
-    params.invocationCwd,
-  );
+  const env = resolveRestartVerifyCommandEnv({
+    serviceEnv: params.serviceEnv,
+    invocationCwd: params.invocationCwd,
+  });
   const res = await runCommandWithTimeout([resolveNodeRunner(), ...args], {
     cwd: params.result.root,
     env: {
