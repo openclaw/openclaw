@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { createRunningTaskRun } from "./task-executor.js";
+import { createQueuedTaskRun, createRunningTaskRun } from "./task-executor.js";
 import { listTaskFlowAuditFindings } from "./task-flow-registry.audit.js";
 import {
   createManagedTaskFlow,
+  finishFlow,
   resetTaskFlowRegistryForTests,
   setFlowWaiting,
 } from "./task-flow-registry.js";
@@ -133,6 +134,44 @@ describe("task-flow-registry audit", () => {
           expect.objectContaining({
             code: "blocked_task_missing",
             flow: expect.objectContaining({ flowId: blocked.flowId }),
+          }),
+        ]),
+      );
+    });
+  });
+
+  it("reports unresolved residue on terminal managed flows with active linked tasks", async () => {
+    await withTaskFlowAuditStateDir(async () => {
+      const flow = createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/task-flow-audit",
+        goal: "Terminal residue",
+        status: "running",
+        createdAt: 1,
+        updatedAt: 100,
+      });
+      createQueuedTaskRun({
+        runtime: "subagent",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        parentFlowId: flow.flowId,
+        runId: "queued-residue",
+        task: "Queued child residue",
+      });
+      expect(
+        finishFlow({
+          flowId: flow.flowId,
+          expectedRevision: flow.revision,
+          updatedAt: 200,
+          endedAt: 200,
+        }),
+      ).toMatchObject({ applied: true });
+
+      expect(listTaskFlowAuditFindings({ now: 31 * 60_000 })).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            code: "terminal_residue_unresolved",
+            flow: expect.objectContaining({ flowId: flow.flowId }),
           }),
         ]),
       );

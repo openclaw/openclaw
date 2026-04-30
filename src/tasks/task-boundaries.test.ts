@@ -29,6 +29,7 @@ const TASK_FLOW_REGISTRY_ALLOWED_IMPORTERS = new Set([
   "tasks/task-flow-registry.audit.ts",
   "tasks/task-flow-registry.maintenance.ts",
   "tasks/task-flow-runtime-internal.ts",
+  "tasks/task-registry.ts",
 ]);
 
 const TASK_REGISTRY_ALLOWED_IMPORTERS = new Set([

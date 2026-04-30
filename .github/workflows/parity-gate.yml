@@ -42,6 +42,12 @@ jobs:
       # followthrough gate that expects a fast post-approval read within a 30s
       # agent.wait timeout.
       QA_PARITY_CONCURRENCY: "1"
+      # The mock provider itself is deterministic, but the parity pack runs a
+      # real gateway, filesystem tools, subagents, config restarts, and two full
+      # provider lanes on a shared CI runner. Keep per-turn waits long enough to
+      # absorb transient event-loop/CPU stalls without weakening the scenario
+      # assertions, which still require the exact tool-derived evidence.
+      OPENCLAW_QA_MOCK_TURN_TIMEOUT_FLOOR_MS: "120000"
       OPENCLAW_CI_OPENAI_MODEL: ${{ vars.OPENCLAW_CI_OPENAI_MODEL || 'openai/gpt-5.5' }}
       OPENCLAW_QA_TRANSPORT_READY_TIMEOUT_MS: "180000"
       OPENAI_API_KEY: ""

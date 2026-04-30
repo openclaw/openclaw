@@ -10,6 +10,7 @@ import {
   listTaskFlowRecords,
   requestFlowCancel,
   resetTaskFlowRegistryForTests,
+  resolveManagedFlowResidue,
   resumeFlow,
   setFlowWaiting,
   syncFlowFromTask,
@@ -365,6 +366,49 @@ describe("task-flow-registry", () => {
         status: "waiting",
         currentStep: "wait_for",
         waitJson: { kind: "external_event" },
+      });
+    });
+  });
+
+  it("records owner-approved residue disposition on terminal managed flows", async () => {
+    await withFlowRegistryTempDir(async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskFlowRegistryForTests();
+
+      const created = createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/residue-resolution",
+        goal: "Residue resolution",
+        status: "succeeded",
+        createdAt: 1,
+        updatedAt: 100,
+        endedAt: 100,
+      });
+
+      const resolved = resolveManagedFlowResidue({
+        flowId: created.flowId,
+        disposition: "interpreted_non_blocking",
+        reason: "owner approved",
+        updatedAt: 200,
+      });
+
+      expect(resolved).toMatchObject({
+        found: true,
+        applied: true,
+        flow: expect.objectContaining({
+          flowId: created.flowId,
+          revision: 1,
+          updatedAt: 200,
+          endedAt: 200,
+          stateJson: {
+            residueResolution: {
+              disposition: "interpreted_non_blocking",
+              linkedTaskIds: [],
+              reason: "owner approved",
+              resolvedAt: 200,
+            },
+          },
+        }),
       });
     });
   });

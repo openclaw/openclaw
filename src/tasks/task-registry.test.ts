@@ -2707,6 +2707,54 @@ describe("task-registry", () => {
     });
   });
 
+  it("cancels queued non-cli tasks before a child session starts", async () => {
+    await withTaskRegistryTempDir(async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      hoisted.cancelSessionMock.mockClear();
+      hoisted.killSubagentRunAdminMock.mockClear();
+
+      const task = createTaskRecord({
+        runtime: "subagent",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        requesterOrigin: {
+          channel: "notifychat",
+          to: "notifychat:123",
+        },
+        runId: "run-queued-no-child",
+        task: "Queued child not started",
+        status: "queued",
+        deliveryStatus: "pending",
+      });
+
+      const result = await cancelTaskById({
+        cfg: {} as never,
+        taskId: task.taskId,
+      });
+
+      expect(hoisted.cancelSessionMock).not.toHaveBeenCalled();
+      expect(hoisted.killSubagentRunAdminMock).not.toHaveBeenCalled();
+      expect(result).toMatchObject({
+        found: true,
+        cancelled: true,
+        task: expect.objectContaining({
+          taskId: task.taskId,
+          status: "cancelled",
+          error: "Cancelled queued task before child session start.",
+        }),
+      });
+      await waitForAssertion(() =>
+        expect(hoisted.sendMessageMock).toHaveBeenCalledWith(
+          expect.objectContaining({
+            channel: "notifychat",
+            to: "notifychat:123",
+            content: expect.stringContaining("Background task cancelled:"),
+          }),
+        ),
+      );
+    });
+  });
+
   it("cancels CLI-tracked tasks without childSessionKey", async () => {
     await withTaskRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;

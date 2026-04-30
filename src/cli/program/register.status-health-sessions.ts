@@ -1,7 +1,12 @@
 import type { Command } from "commander";
 import { commitmentsDismissCommand, commitmentsListCommand } from "../../commands/commitments.js";
 import { exportTrajectoryCommand } from "../../commands/export-trajectory.js";
-import { flowsCancelCommand, flowsListCommand, flowsShowCommand } from "../../commands/flows.js";
+import {
+  flowsCancelCommand,
+  flowsListCommand,
+  flowsResolveResidueCommand,
+  flowsShowCommand,
+} from "../../commands/flows.js";
 import { healthCommand } from "../../commands/health.js";
 import { sessionsCleanupCommand } from "../../commands/sessions-cleanup.js";
 import { sessionsCommand } from "../../commands/sessions.js";
@@ -391,7 +396,7 @@ export function registerStatusHealthSessionsCommands(program: Command) {
     .option("--severity <level>", "Filter by severity (warn, error)")
     .option(
       "--code <name>",
-      "Filter by finding code (stale_queued, stale_running, lost, delivery_failed, missing_cleanup, inconsistent_timestamps, restore_failed, stale_waiting, stale_blocked, cancel_stuck, missing_linked_tasks, blocked_task_missing)",
+      "Filter by finding code (stale_queued, stale_running, lost, delivery_failed, missing_cleanup, inconsistent_timestamps, restore_failed, stale_waiting, stale_blocked, cancel_stuck, missing_linked_tasks, blocked_task_missing, terminal_residue_unresolved)",
     )
     .option("--limit <n>", "Limit displayed findings")
     .action(async (opts, command) => {
@@ -414,6 +419,7 @@ export function registerStatusHealthSessionsCommands(program: Command) {
               | "cancel_stuck"
               | "missing_linked_tasks"
               | "blocked_task_missing"
+              | "terminal_residue_unresolved"
               | undefined,
             limit: parsePositiveIntOrUndefined(opts.limit),
           },
@@ -540,6 +546,30 @@ export function registerStatusHealthSessionsCommands(program: Command) {
         await flowsCancelCommand(
           {
             lookup,
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
+  tasksFlowCmd
+    .command("resolve-residue")
+    .description("Record an owner-approved residue disposition for a managed TaskFlow")
+    .argument("<lookup>", "Flow id or owner key")
+    .requiredOption(
+      "--disposition <name>",
+      "Residue disposition (currently: interpreted_non_blocking)",
+    )
+    .option("--reason <text>", "Human-readable reason")
+    .option("--json", "Output as JSON", false)
+    .action(async (lookup, opts) => {
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        await flowsResolveResidueCommand(
+          {
+            lookup,
+            disposition: opts.disposition as string,
+            reason: opts.reason as string | undefined,
+            json: Boolean(opts.json),
           },
           defaultRuntime,
         );

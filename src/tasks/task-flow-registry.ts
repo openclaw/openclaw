@@ -14,12 +14,25 @@ import type {
   TaskFlowSyncMode,
   JsonValue,
 } from "./task-flow-registry.types.js";
+import { mergeFlowStateJson } from "./task-flow-state-json.js";
+import type { TaskFlowSyncTask } from "./task-flow-sync.types.js";
 import type { TaskNotifyPolicy, TaskRecord } from "./task-registry.types.js";
 
 const log = createSubsystemLogger("tasks/task-flow-registry");
 const flows = new Map<string, TaskFlowRecord>();
 let restoreAttempted = false;
 let restoreFailureMessage: string | null = null;
+let linkedTasksResolver: (flowId: string) => TaskRecord[] = () => [];
+
+export function setTaskFlowLinkedTasksResolverForRuntime(
+  resolver: (flowId: string) => TaskRecord[],
+): void {
+  linkedTasksResolver = resolver;
+}
+
+function listLinkedTasksForFlowId(flowId: string): TaskRecord[] {
+  return linkedTasksResolver(flowId).map((task) => Object.assign({}, task));
+}
 
 type FlowRecordPatch = Omit<
   Partial<
@@ -163,6 +176,16 @@ function normalizeJsonBlob(value: JsonValue | null | undefined): JsonValue | und
   return value === undefined ? undefined : cloneStructuredValue(value);
 }
 
+function isTerminalFlowStatus(status: TaskFlowStatus): boolean {
+  return (
+    status === "succeeded" || status === "failed" || status === "cancelled" || status === "lost"
+  );
+}
+
+function isTaskTerminalStatusForResidue(status: TaskRecord["status"]): boolean {
+  return status !== "queued" && status !== "running";
+}
+
 function assertFlowOwnerKey(ownerKey: string): string {
   const normalized = normalizeOptionalString(ownerKey);
   if (!normalized) {
@@ -179,7 +202,7 @@ function assertControllerId(controllerId?: string | null): string {
   return normalized;
 }
 
-function resolveFlowBlockedSummary(
+export function resolveFlowBlockedSummary(
   task: Pick<TaskRecord, "status" | "terminalOutcome" | "terminalSummary" | "progressSummary">,
 ): string | undefined {
   if (task.status !== "succeeded" || task.terminalOutcome !== "blocked") {
@@ -585,22 +608,95 @@ export function requestFlowCancel(params: {
   });
 }
 
-export function syncFlowFromTask(
-  task: Pick<
-    TaskRecord,
-    | "parentFlowId"
-    | "status"
-    | "terminalOutcome"
-    | "notifyPolicy"
-    | "label"
-    | "task"
-    | "lastEventAt"
-    | "endedAt"
-    | "taskId"
-    | "terminalSummary"
-    | "progressSummary"
-  >,
-): TaskFlowRecord | null {
+export function resolveManagedFlowResidue(params: {
+  flowId: string;
+  disposition: string;
+  reason?: string | null;
+  expectedRevision?: number | null;
+  updatedAt?: number;
+}):
+  | {
+      found: true;
+      applied: true;
+      flow: TaskFlowRecord;
+      tasks: TaskRecord[];
+    }
+  | {
+      found: boolean;
+      applied: false;
+      reason: string;
+      flow?: TaskFlowRecord;
+      tasks?: TaskRecord[];
+    } {
+  ensureFlowRegistryReady();
+  const flowId = params.flowId.trim();
+  if (!flowId) {
+    return { found: false, applied: false, reason: "Flow not found." };
+  }
+  const flow = getTaskFlowById(flowId);
+  if (!flow) {
+    return { found: false, applied: false, reason: "Flow not found." };
+  }
+  const tasks = listLinkedTasksForFlowId(flowId);
+  if (flow.syncMode !== "managed") {
+    return { found: true, applied: false, reason: "Flow is not managed.", flow, tasks };
+  }
+  if (!isTerminalFlowStatus(flow.status)) {
+    return { found: true, applied: false, reason: "Flow is not terminal.", flow, tasks };
+  }
+  if (params.disposition !== "interpreted_non_blocking") {
+    return { found: true, applied: false, reason: "Disposition not implemented.", flow, tasks };
+  }
+
+  const updatedAt = params.updatedAt ?? Date.now();
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const current = getTaskFlowById(flowId);
+    if (!current) {
+      return { found: false, applied: false, reason: "Flow not found." };
+    }
+    const unresolvedTasks = listLinkedTasksForFlowId(flowId).filter(
+      (task) => !isTaskTerminalStatusForResidue(task.status),
+    );
+    const result = updateFlowRecordByIdExpectedRevision({
+      flowId,
+      expectedRevision: params.expectedRevision ?? current.revision,
+      patch: {
+        stateJson: mergeFlowStateJson(current.stateJson, {
+          residueResolution: {
+            disposition: "interpreted_non_blocking",
+            linkedTaskIds: unresolvedTasks.map((task) => task.taskId),
+            ...(normalizeOptionalString(params.reason)
+              ? { reason: normalizeOptionalString(params.reason)! }
+              : {}),
+            resolvedAt: updatedAt,
+          },
+        }),
+        updatedAt,
+        endedAt: updatedAt,
+      },
+    });
+    if (result.applied) {
+      return {
+        found: true,
+        applied: true,
+        flow: result.flow,
+        tasks: listLinkedTasksForFlowId(flowId),
+      };
+    }
+    if (result.reason === "not_found" || !result.current) {
+      break;
+    }
+  }
+  return {
+    found: true,
+    applied: false,
+    reason: "Could not update flow due to revision conflict.",
+    flow: getTaskFlowById(flowId) ?? flow,
+    tasks: listLinkedTasksForFlowId(flowId),
+  };
+}
+
+export function syncFlowFromTask(task: TaskFlowSyncTask): TaskFlowRecord | null {
   const flowId = task.parentFlowId?.trim();
   if (!flowId) {
     return null;
@@ -697,6 +793,7 @@ export function resetTaskFlowRegistryForTests(opts?: { persist?: boolean }) {
   flows.clear();
   restoreAttempted = false;
   restoreFailureMessage = null;
+  setTaskFlowLinkedTasksResolverForRuntime(() => []);
   resetTaskFlowRegistryRuntimeForTests();
   if (opts?.persist !== false) {
     persistFlowRegistry();

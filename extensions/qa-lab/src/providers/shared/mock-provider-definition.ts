@@ -32,7 +32,17 @@ export function createMockQaProviderDefinition(
       transport: "sse",
       openaiWsWarmup: false,
     }),
-    resolveTurnTimeoutMs: ({ fallbackMs }) => fallbackMs,
+    resolveTurnTimeoutMs: ({ fallbackMs }) => {
+      const rawFloorMs = process.env.OPENCLAW_QA_MOCK_TURN_TIMEOUT_FLOOR_MS;
+      if (!rawFloorMs) {
+        return fallbackMs;
+      }
+      const floorMs = Number(rawFloorMs);
+      if (!Number.isFinite(floorMs) || floorMs < 1) {
+        return fallbackMs;
+      }
+      return Math.max(fallbackMs, Math.floor(floorMs));
+    },
     buildGatewayModels: ({ providerBaseUrl }) => ({
       mode: "replace",
       providers: createMockProviderMap(params.mode, providerBaseUrl),

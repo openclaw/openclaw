@@ -1593,7 +1593,7 @@ jobs:
             exit 1
           }
 
-          case "${{ matrix.providers }}" in
+          case "$OPENCLAW_LIVE_PROVIDERS" in
             anthropic) require_any Anthropic ANTHROPIC_API_KEY ANTHROPIC_API_KEY_OLD ANTHROPIC_API_TOKEN ;;
             google) require_any Google GEMINI_API_KEY GOOGLE_API_KEY ;;
             minimax) require_any MiniMax MINIMAX_API_KEY ;;
@@ -1604,7 +1604,7 @@ jobs:
             zai) require_any Z.ai ZAI_API_KEY Z_AI_API_KEY ;;
             fireworks) require_any Fireworks FIREWORKS_API_KEY ;;
             *)
-              echo "Unhandled live model provider shard: ${{ matrix.providers }}" >&2
+              echo "Unhandled live model provider shard: $OPENCLAW_LIVE_PROVIDERS" >&2
               exit 1
               ;;
           esac

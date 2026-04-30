@@ -11,11 +11,13 @@ import {
   updateFlowRecordByIdExpectedRevision,
 } from "./task-flow-registry.js";
 import type { TaskFlowRecord } from "./task-flow-registry.types.js";
+import { getFlowResidueResolution, mergeFlowStateJson } from "./task-flow-state-json.js";
 
 const TASK_FLOW_RETENTION_MS = 7 * 24 * 60 * 60_000;
 
 export type TaskFlowRegistryMaintenanceSummary = {
   reconciled: number;
+  invariantStamped: number;
   pruned: number;
 };
 
@@ -31,6 +33,12 @@ function isTerminalFlow(flow: TaskFlowRecord): boolean {
 
 function hasActiveLinkedTasks(flowId: string): boolean {
   return listTasksForFlowId(flowId).some(
+    (task) => task.status === "queued" || task.status === "running",
+  );
+}
+
+function listActiveLinkedTasks(flowId: string) {
+  return listTasksForFlowId(flowId).filter(
     (task) => task.status === "queued" || task.status === "running",
   );
 }
@@ -57,6 +65,77 @@ function shouldFinalizeCancelledFlow(flow: TaskFlowRecord): boolean {
     return false;
   }
   return !hasActiveLinkedTasks(flow.flowId);
+}
+
+function shouldStampTerminalResidueInvariant(flow: TaskFlowRecord): boolean {
+  if (flow.syncMode !== "managed" || !isTerminalFlow(flow)) {
+    return false;
+  }
+  if (getFlowResidueResolution(flow)) {
+    return false;
+  }
+  const activeTasks = listActiveLinkedTasks(flow.flowId);
+  if (activeTasks.length === 0) {
+    return false;
+  }
+  const state = flow.stateJson;
+  const invariant =
+    state && typeof state === "object" && !Array.isArray(state) ? state.residueInvariant : null;
+  const activeTaskIds = activeTasks.map((task) => task.taskId).toSorted();
+  if (invariant && typeof invariant === "object" && !Array.isArray(invariant)) {
+    const status = "status" in invariant ? invariant.status : null;
+    const stampedActiveTaskIds = "activeTaskIds" in invariant ? invariant.activeTaskIds : null;
+    if (
+      status === "unresolved" &&
+      Array.isArray(stampedActiveTaskIds) &&
+      stampedActiveTaskIds.every((value) => typeof value === "string") &&
+      stampedActiveTaskIds.toSorted().join("\0") === activeTaskIds.join("\0")
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function stampTerminalResidueInvariant(flow: TaskFlowRecord, now: number): boolean {
+  let current = flow;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const activeTasks = listActiveLinkedTasks(current.flowId);
+    if (activeTasks.length === 0 || getFlowResidueResolution(current)) {
+      return false;
+    }
+    const stampedAt = Math.max(now, current.updatedAt, current.endedAt ?? now);
+    const result = updateFlowRecordByIdExpectedRevision({
+      flowId: current.flowId,
+      expectedRevision: current.revision,
+      patch: {
+        stateJson: mergeFlowStateJson(current.stateJson, {
+          residueInvariant: {
+            status: "unresolved",
+            activeTaskIds: activeTasks.map((task) => task.taskId),
+            activeTaskStatuses: activeTasks.map((task) => ({
+              taskId: task.taskId,
+              status: task.status,
+            })),
+            detectedAt: stampedAt,
+          },
+        }),
+        updatedAt: stampedAt,
+        endedAt: stampedAt,
+      },
+    });
+    if (result.applied) {
+      return true;
+    }
+    if (result.reason === "not_found" || !result.current) {
+      return false;
+    }
+    current = result.current;
+    if (!shouldStampTerminalResidueInvariant(current)) {
+      return false;
+    }
+  }
+  return false;
 }
 
 function finalizeCancelledFlow(flow: TaskFlowRecord, now: number): boolean {
@@ -130,6 +209,7 @@ export function getInspectableTaskFlowAuditSummary(): TaskFlowAuditSummary {
 export function previewTaskFlowRegistryMaintenance(): TaskFlowRegistryMaintenanceSummary {
   const now = Date.now();
   let reconciled = 0;
+  let invariantStamped = 0;
   let pruned = 0;
   for (const flow of listTaskFlowRecords()) {
     if (shouldRepairTerminalMirroredFlowTimestamp(flow)) {
@@ -140,16 +220,21 @@ export function previewTaskFlowRegistryMaintenance(): TaskFlowRegistryMaintenanc
       reconciled += 1;
       continue;
     }
+    if (shouldStampTerminalResidueInvariant(flow)) {
+      invariantStamped += 1;
+      continue;
+    }
     if (shouldPruneFlow(flow, now)) {
       pruned += 1;
     }
   }
-  return { reconciled, pruned };
+  return { reconciled, invariantStamped, pruned };
 }
 
 export async function runTaskFlowRegistryMaintenance(): Promise<TaskFlowRegistryMaintenanceSummary> {
   const now = Date.now();
   let reconciled = 0;
+  let invariantStamped = 0;
   let pruned = 0;
   for (const flow of listTaskFlowRecords()) {
     const current = getTaskFlowById(flow.flowId);
@@ -168,9 +253,15 @@ export async function runTaskFlowRegistryMaintenance(): Promise<TaskFlowRegistry
       }
       continue;
     }
+    if (shouldStampTerminalResidueInvariant(current)) {
+      if (stampTerminalResidueInvariant(current, now)) {
+        invariantStamped += 1;
+      }
+      continue;
+    }
     if (shouldPruneFlow(current, now) && deleteTaskFlowRecordById(current.flowId)) {
       pruned += 1;
     }
   }
-  return { reconciled, pruned };
+  return { reconciled, invariantStamped, pruned };
 }

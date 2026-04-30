@@ -15,6 +15,39 @@ describe("qa live timeout policy", () => {
     ).toBe(30_000);
   });
 
+  it("allows CI to floor mock turn timeouts when the gateway runner is saturated", () => {
+    const previous = process.env.OPENCLAW_QA_MOCK_TURN_TIMEOUT_FLOOR_MS;
+    process.env.OPENCLAW_QA_MOCK_TURN_TIMEOUT_FLOOR_MS = "120000";
+    try {
+      expect(
+        resolveQaLiveTurnTimeoutMs(
+          {
+            providerMode: "mock-openai",
+            primaryModel: "anthropic/claude-opus-4-6",
+            alternateModel: "anthropic/claude-sonnet-4-6",
+          },
+          30_000,
+        ),
+      ).toBe(120_000);
+      expect(
+        resolveQaLiveTurnTimeoutMs(
+          {
+            providerMode: "mock-openai",
+            primaryModel: "anthropic/claude-opus-4-6",
+            alternateModel: "anthropic/claude-sonnet-4-6",
+          },
+          180_000,
+        ),
+      ).toBe(180_000);
+    } finally {
+      if (previous === undefined) {
+        delete process.env.OPENCLAW_QA_MOCK_TURN_TIMEOUT_FLOOR_MS;
+      } else {
+        process.env.OPENCLAW_QA_MOCK_TURN_TIMEOUT_FLOOR_MS = previous;
+      }
+    }
+  });
+
   it("uses the higher gpt-5 live floor for openai heavy turns", () => {
     expect(
       resolveQaLiveTurnTimeoutMs(
