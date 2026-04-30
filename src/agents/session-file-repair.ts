@@ -119,7 +119,18 @@ function repairUserEntryWithBlankTextContent(entry: SessionMessageEntry): UserEn
   };
 }
 
-function isAssistantMessageEntry(entry: unknown): boolean {
+function isStreamErrorFallbackContent(content: unknown): boolean {
+  return (
+    Array.isArray(content) &&
+    content.length === 1 &&
+    typeof content[0] === "object" &&
+    content[0] !== null &&
+    (content[0] as { type?: unknown }).type === "text" &&
+    (content[0] as { text?: unknown }).text === STREAM_ERROR_FALLBACK_TEXT
+  );
+}
+
+function isTrailingAssistantRepairArtifact(entry: unknown): boolean {
   if (!entry || typeof entry !== "object") {
     return false;
   }
@@ -127,7 +138,14 @@ function isAssistantMessageEntry(entry: unknown): boolean {
   if (record.type !== "message" || !record.message || typeof record.message !== "object") {
     return false;
   }
-  return (record.message as { role?: unknown }).role === "assistant";
+  const message = record.message as { role?: unknown; content?: unknown; stopReason?: unknown };
+  if (message.role !== "assistant" || message.stopReason !== "error") {
+    return false;
+  }
+  return (
+    (Array.isArray(message.content) && message.content.length === 0) ||
+    isStreamErrorFallbackContent(message.content)
+  );
 }
 
 function buildRepairSummaryParts(params: {
@@ -223,12 +241,10 @@ export async function repairSessionFileIfNeeded(params: {
     }
   }
 
-  // Trim trailing assistant turns: a session JSONL that ends on role=assistant
-  // causes Anthropic (and Anthropic-compatible) APIs to reject the request with
-  // HTTP 400 "This model does not support assistant message prefill" (#75271).
-  // Keep popping until the last message entry is a non-assistant turn. A lone
-  // session header after trimming is treated as empty — caught below.
-  while (entries.length > 0 && isAssistantMessageEntry(entries[entries.length - 1])) {
+  // Drop only trailing assistant entries that this repair pass can prove are
+  // failed stream artifacts. Normal completed transcripts often end
+  // user -> assistant, so generic assistant-tail trimming would erase history.
+  while (entries.length > 0 && isTrailingAssistantRepairArtifact(entries[entries.length - 1])) {
     entries.pop();
     droppedTrailingAssistantMessages += 1;
   }
