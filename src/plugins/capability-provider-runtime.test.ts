@@ -103,7 +103,6 @@ function expectBundledCompatLoadPath(params: {
     config: params.enablementCompat,
     onlyPluginIds: ["openai"],
     activate: false,
-    installBundledRuntimeDeps: false,
   });
 }
 
@@ -409,7 +408,6 @@ describe("resolvePluginCapabilityProviders", () => {
       }),
       onlyPluginIds: ["microsoft"],
       activate: false,
-      installBundledRuntimeDeps: false,
     });
   });
 
@@ -584,7 +582,6 @@ describe("resolvePluginCapabilityProviders", () => {
       config: expect.anything(),
       onlyPluginIds: [],
       activate: false,
-      installBundledRuntimeDeps: false,
     });
   });
 
@@ -629,6 +626,33 @@ describe("resolvePluginCapabilityProviders", () => {
       config: compatConfig,
       onlyPluginIds: ["google"],
       activate: false,
+    });
+  });
+
+  it("honors explicit bundled runtime dependency install opt-out for fallback snapshots", () => {
+    const cfg = { plugins: { allow: ["custom-plugin"] } } as OpenClawConfig;
+    const enablementCompat = {
+      plugins: {
+        allow: ["custom-plugin", "openai"],
+        entries: { openai: { enabled: true } },
+      },
+    };
+    setBundledCapabilityFixture("mediaUnderstandingProviders");
+    mocks.withBundledPluginEnablementCompat.mockReturnValue(enablementCompat);
+    mocks.withBundledPluginVitestCompat.mockReturnValue(enablementCompat);
+
+    expectNoResolvedCapabilityProviders(
+      resolvePluginCapabilityProviders({
+        key: "mediaUnderstandingProviders",
+        cfg,
+        installBundledRuntimeDeps: false,
+      }),
+    );
+
+    expect(mocks.resolveRuntimePluginRegistry).toHaveBeenCalledWith({
+      config: enablementCompat,
+      onlyPluginIds: ["openai"],
+      activate: false,
       installBundledRuntimeDeps: false,
     });
   });
@@ -653,7 +677,6 @@ describe("resolvePluginCapabilityProviders", () => {
       config: expect.anything(),
       onlyPluginIds: [],
       activate: false,
-      installBundledRuntimeDeps: false,
     });
   });
 
@@ -791,7 +814,6 @@ describe("resolvePluginCapabilityProviders", () => {
       config: enablementCompat,
       onlyPluginIds: ["google"],
       activate: false,
-      installBundledRuntimeDeps: false,
     });
   });
 });
