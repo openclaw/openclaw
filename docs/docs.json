@@ -1211,6 +1211,7 @@
                       "plugins/sdk-subpaths",
                       "plugins/sdk-entrypoints",
                       "plugins/sdk-runtime",
+                      "plugins/sdk-channel-turn",
                       "plugins/sdk-agent-harness",
                       "plugins/sdk-setup",
                       "plugins/sdk-testing",

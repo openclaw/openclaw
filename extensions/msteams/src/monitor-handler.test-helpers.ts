@@ -91,8 +91,6 @@ export function installMSTeamsTestRuntime(options: MSTeamsTestRuntimeOptions = {
       },
       turn: {
         runPrepared: runPrepared as unknown as PluginRuntime["channel"]["turn"]["runPrepared"],
-        dispatchAssembled:
-          vi.fn() as unknown as PluginRuntime["channel"]["turn"]["dispatchAssembled"],
       },
     },
   } as unknown as PluginRuntime);
