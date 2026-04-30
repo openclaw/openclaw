@@ -96,15 +96,20 @@ describe("loadGeneratedBundledChannelEntry: structured warn for lock timeout", (
 
     expect(result).toBeUndefined();
     expect(warn).toHaveBeenCalledTimes(1);
-    expect(warn).toHaveBeenCalledWith(
-      expect.stringContaining("lock timeout"),
-      expect.objectContaining({
-        failureReason: "lock_timeout",
-        bundledChannelId: "alpha",
-        lockDir: FAKE_LOCK_DIR,
-        waitedMs: 300000,
-      }),
-    );
+    const [message, meta] = warn.mock.calls[0] as [string, Record<string, unknown>];
+    // The message preserves the upstream lock-timeout detail so pretty/compact
+    // console renderers (which drop structured meta) still see the diagnostic.
+    expect(message).toContain("failed to load bundled channel alpha");
+    expect(message).toContain("Timed out waiting for bundled runtime deps lock at");
+    expect(message).toContain(FAKE_LOCK_DIR);
+    expect(message).toContain("waited=300000ms");
+    expect(message).toContain("remove the lock directory and retry");
+    expect(meta).toMatchObject({
+      failureReason: "lock_timeout",
+      bundledChannelId: "alpha",
+      lockDir: FAKE_LOCK_DIR,
+      waitedMs: 300000,
+    });
   });
 
   it("emits flat string warn for non-lock-timeout module import errors", async () => {

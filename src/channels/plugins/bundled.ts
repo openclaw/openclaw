@@ -260,8 +260,11 @@ function loadGeneratedBundledChannelEntry(params: {
     const detail = formatErrorMessage(error);
     if (isRuntimeDepsLockTimeoutError(error)) {
       const lockTimeoutMeta = parseLockTimeoutErrorMeta(error);
+      // Keep the upstream detail (lockDir, owner, waited, recovery hint) in the
+      // message so pretty/compact console renderers — which drop structured meta —
+      // still surface the diagnostic context.
       log.warn(
-        `[channels] failed to load bundled channel ${params.metadata.manifest.id}: lock timeout`,
+        `[channels] failed to load bundled channel ${params.metadata.manifest.id}: ${detail}`,
         {
           failureReason: "lock_timeout",
           bundledChannelId: params.metadata.manifest.id,
