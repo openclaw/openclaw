@@ -37,6 +37,7 @@ import { normalizeInputProvenance, type InputProvenance } from "../../sessions/i
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
+import { isTranscriptOnlyOpenClawAssistantMessage } from "../../shared/chat-message-content.js";
 import {
   stripInlineDirectiveTagsForDisplay,
   sanitizeReplyDirectiveId,
@@ -1664,11 +1665,15 @@ export const chatHandlers: GatewayRequestHandlers = {
     const resolvedSessionModel = resolveSessionModelRef(cfg, entry, sessionAgentId);
     const localMessages =
       sessionId && storePath ? readSessionMessages(sessionId, storePath, entry?.sessionFile) : [];
+    // Filter out transcript-only assistant messages (delivery-mirror,
+    // gateway-injected). They are bookkeeping entries appended to the JSONL
+    // after a successful delivery; surfacing them to chat clients renders
+    // verbatim duplicates of the real assistant turn.
     const rawMessages = augmentChatHistoryWithCliSessionImports({
       entry,
       provider: resolvedSessionModel.provider,
       localMessages,
-    });
+    }).filter((message) => !isTranscriptOnlyOpenClawAssistantMessage(message));
     const hardMax = 1000;
     const defaultLimit = 200;
     const requested = typeof limit === "number" ? limit : defaultLimit;

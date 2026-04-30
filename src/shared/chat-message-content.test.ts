@@ -3,6 +3,7 @@ import {
   extractAssistantTextForPhase,
   extractAssistantVisibleText,
   extractFirstTextBlock,
+  isTranscriptOnlyOpenClawAssistantMessage,
   resolveAssistantMessagePhase,
 } from "./chat-message-content.js";
 
@@ -195,5 +196,125 @@ describe("resolveAssistantMessagePhase", () => {
         ],
       }),
     ).toBeUndefined();
+  });
+});
+
+describe("isTranscriptOnlyOpenClawAssistantMessage", () => {
+  it("returns true for delivery-mirror assistant messages", () => {
+    expect(
+      isTranscriptOnlyOpenClawAssistantMessage({
+        role: "assistant",
+        provider: "openclaw",
+        model: "delivery-mirror",
+        content: [{ type: "text", text: "hey" }],
+      }),
+    ).toBe(true);
+  });
+
+  it("returns true for gateway-injected assistant messages", () => {
+    expect(
+      isTranscriptOnlyOpenClawAssistantMessage({
+        role: "assistant",
+        provider: "openclaw",
+        model: "gateway-injected",
+        content: [{ type: "text", text: "synthetic" }],
+      }),
+    ).toBe(true);
+  });
+
+  it("trims whitespace around provider and model before comparing", () => {
+    expect(
+      isTranscriptOnlyOpenClawAssistantMessage({
+        role: "assistant",
+        provider: "  openclaw  ",
+        model: " delivery-mirror ",
+      }),
+    ).toBe(true);
+  });
+
+  it("returns false for real assistant messages from real providers", () => {
+    expect(
+      isTranscriptOnlyOpenClawAssistantMessage({
+        role: "assistant",
+        provider: "anthropic",
+        model: "claude-opus-4-7",
+        content: [{ type: "text", text: "hey" }],
+      }),
+    ).toBe(false);
+    expect(
+      isTranscriptOnlyOpenClawAssistantMessage({
+        role: "assistant",
+        provider: "openai",
+        model: "gpt-5.4",
+        content: [{ type: "text", text: "hey" }],
+      }),
+    ).toBe(false);
+  });
+
+  it("returns false when provider is openclaw but model is not a transcript-only marker", () => {
+    expect(
+      isTranscriptOnlyOpenClawAssistantMessage({
+        role: "assistant",
+        provider: "openclaw",
+        model: "some-other-model",
+      }),
+    ).toBe(false);
+  });
+
+  it("returns false for user messages even when shaped like a transcript-only marker", () => {
+    expect(
+      isTranscriptOnlyOpenClawAssistantMessage({
+        role: "user",
+        provider: "openclaw",
+        model: "delivery-mirror",
+        content: [{ type: "text", text: "hi" }],
+      }),
+    ).toBe(false);
+  });
+
+  it("returns false for tool, system, and other roles", () => {
+    expect(
+      isTranscriptOnlyOpenClawAssistantMessage({
+        role: "tool",
+        provider: "openclaw",
+        model: "delivery-mirror",
+      }),
+    ).toBe(false);
+    expect(
+      isTranscriptOnlyOpenClawAssistantMessage({
+        role: "system",
+        provider: "openclaw",
+        model: "delivery-mirror",
+      }),
+    ).toBe(false);
+  });
+
+  it("returns false for null, undefined, and non-object inputs", () => {
+    expect(isTranscriptOnlyOpenClawAssistantMessage(null)).toBe(false);
+    expect(isTranscriptOnlyOpenClawAssistantMessage(undefined)).toBe(false);
+    expect(isTranscriptOnlyOpenClawAssistantMessage("delivery-mirror")).toBe(false);
+    expect(isTranscriptOnlyOpenClawAssistantMessage(42)).toBe(false);
+  });
+
+  it("returns false when provider or model fields are missing or non-string", () => {
+    expect(
+      isTranscriptOnlyOpenClawAssistantMessage({
+        role: "assistant",
+        model: "delivery-mirror",
+      }),
+    ).toBe(false);
+    expect(
+      isTranscriptOnlyOpenClawAssistantMessage({
+        role: "assistant",
+        provider: "openclaw",
+      }),
+    ).toBe(false);
+    expect(
+      isTranscriptOnlyOpenClawAssistantMessage({
+        role: "assistant",
+        provider: 123,
+        model: "delivery-mirror",
+      }),
+    ).toBe(false);
   });
 });

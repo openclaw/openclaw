@@ -11,6 +11,7 @@ import { emitAgentEvent } from "../infra/agent-events.js";
 import { createInlineCodeState } from "../markdown/code-spans.js";
 import { coerceChatContentText } from "../shared/chat-content.js";
 import {
+  isTranscriptOnlyOpenClawAssistantMessage,
   parseAssistantTextSignature,
   resolveAssistantMessagePhase,
   type AssistantPhase,
@@ -40,15 +41,6 @@ import {
 
 function shouldSuppressAssistantVisibleOutput(message: AgentMessage | undefined): boolean {
   return resolveAssistantMessagePhase(message) === "commentary";
-}
-
-function isTranscriptOnlyOpenClawAssistantMessage(message: AgentMessage | undefined): boolean {
-  if (!message || message.role !== "assistant") {
-    return false;
-  }
-  const provider = normalizeOptionalString(message.provider) ?? "";
-  const model = normalizeOptionalString(message.model) ?? "";
-  return provider === "openclaw" && (model === "delivery-mirror" || model === "gateway-injected");
 }
 
 function isOpenAiResponsesAssistantMessage(message: AgentMessage | undefined): boolean {

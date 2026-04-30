@@ -205,3 +205,31 @@ export function extractAssistantVisibleText(message: unknown): string | undefine
   }
   return extractAssistantTextForPhase(message);
 }
+
+/**
+ * OpenClaw appends "transcript-only" assistant messages to the session JSONL as
+ * bookkeeping after a successful delivery (`delivery-mirror`) or when the
+ * gateway synthesizes a placeholder turn (`gateway-injected`). Both are tagged
+ * with provider `"openclaw"` and a reserved model id.
+ *
+ * Chat-surface consumers (TUI, web chat, `chat.history` responses) must filter
+ * these out before rendering. Otherwise they appear as duplicate assistant
+ * turns immediately after the real reply, since the mirror copies the visible
+ * text verbatim. Pi-embedded subscribers already use this discriminator at
+ * three call sites; this helper is the shared canonical home.
+ */
+export function isTranscriptOnlyOpenClawAssistantMessage(message: unknown): boolean {
+  if (!message || typeof message !== "object") {
+    return false;
+  }
+  const record = message as { role?: unknown; provider?: unknown; model?: unknown };
+  if (record.role !== "assistant") {
+    return false;
+  }
+  const provider = typeof record.provider === "string" ? record.provider.trim() : "";
+  if (provider !== "openclaw") {
+    return false;
+  }
+  const model = typeof record.model === "string" ? record.model.trim() : "";
+  return model === "delivery-mirror" || model === "gateway-injected";
+}
