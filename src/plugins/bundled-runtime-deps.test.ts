@@ -5,6 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ModelProviderConfig } from "../config/types.models.js";
 import {
   __testing as bundledRuntimeDepsActivityTesting,
   getActiveBundledRuntimeDepsInstallCount,
@@ -1178,6 +1179,168 @@ describe("scanBundledPluginRuntimeDeps config policy", () => {
     });
 
     expect(result.deps.map((dep) => `${dep.name}@${dep.version}`)).toEqual(expectedDeps);
+    expect(result.conflicts).toEqual([]);
+  });
+
+  it("adds local embedding runtime deps when scanning local memory search config", () => {
+    const packageRoot = makeTempDir();
+    writeBundledPluginPackage({
+      packageRoot,
+      pluginId: "memory-core",
+      deps: { chokidar: "^5.0.0" },
+    });
+
+    const result = scanBundledPluginRuntimeDeps({
+      packageRoot,
+      config: {
+        agents: {
+          defaults: {
+            memorySearch: {
+              provider: "local",
+            },
+          },
+        },
+      },
+    });
+
+    expect(result.deps.map((dep) => `${dep.name}@${dep.version}`)).toEqual([
+      "chokidar@^5.0.0",
+      "node-llama-cpp@3.18.1",
+    ]);
+    expect(result.conflicts).toEqual([]);
+  });
+
+  it("adds local embedding runtime deps for configured provider ids backed by local", () => {
+    const packageRoot = makeTempDir();
+    writeBundledPluginPackage({
+      packageRoot,
+      pluginId: "memory-core",
+      deps: { chokidar: "^5.0.0" },
+    });
+
+    const result = scanBundledPluginRuntimeDeps({
+      packageRoot,
+      config: {
+        models: {
+          providers: {
+            "local-gpu": {
+              api: "local",
+            } as unknown as ModelProviderConfig,
+          },
+        },
+        agents: {
+          defaults: {
+            memorySearch: {
+              provider: "local-gpu",
+            },
+          },
+        },
+      },
+    });
+
+    expect(result.deps.map((dep) => `${dep.name}@${dep.version}`)).toEqual([
+      "chokidar@^5.0.0",
+      "node-llama-cpp@3.18.1",
+    ]);
+    expect(result.conflicts).toEqual([]);
+  });
+
+  it("adds local embedding runtime deps for auto provider with an existing local model file", () => {
+    const packageRoot = makeTempDir();
+    const modelPath = path.join(packageRoot, "embedding-model.gguf");
+    fs.writeFileSync(modelPath, "");
+    writeBundledPluginPackage({
+      packageRoot,
+      pluginId: "memory-core",
+      deps: { chokidar: "^5.0.0" },
+    });
+
+    const result = scanBundledPluginRuntimeDeps({
+      packageRoot,
+      config: {
+        agents: {
+          defaults: {
+            memorySearch: {
+              provider: "auto",
+              local: {
+                modelPath,
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(result.deps.map((dep) => `${dep.name}@${dep.version}`)).toEqual([
+      "chokidar@^5.0.0",
+      "node-llama-cpp@3.18.1",
+    ]);
+    expect(result.conflicts).toEqual([]);
+  });
+
+  it("adds local embedding runtime deps for local fallback providers", () => {
+    const packageRoot = makeTempDir();
+    writeBundledPluginPackage({
+      packageRoot,
+      pluginId: "memory-core",
+      deps: { chokidar: "^5.0.0" },
+    });
+
+    const result = scanBundledPluginRuntimeDeps({
+      packageRoot,
+      config: {
+        agents: {
+          defaults: {
+            memorySearch: {
+              provider: "openai",
+              fallback: "local",
+            },
+          },
+        },
+      },
+    });
+
+    expect(result.deps.map((dep) => `${dep.name}@${dep.version}`)).toEqual([
+      "chokidar@^5.0.0",
+      "node-llama-cpp@3.18.1",
+    ]);
+    expect(result.conflicts).toEqual([]);
+  });
+
+  it("adds local embedding runtime deps for agent overrides that inherit local defaults", () => {
+    const packageRoot = makeTempDir();
+    writeBundledPluginPackage({
+      packageRoot,
+      pluginId: "memory-core",
+      deps: { chokidar: "^5.0.0" },
+    });
+
+    const result = scanBundledPluginRuntimeDeps({
+      packageRoot,
+      config: {
+        agents: {
+          defaults: {
+            memorySearch: {
+              enabled: false,
+              provider: "local",
+            },
+          },
+          list: [
+            {
+              id: "main",
+              memorySearch: {
+                enabled: true,
+              },
+            },
+          ],
+        },
+      },
+    });
+
+    expect(result.deps.map((dep) => `${dep.name}@${dep.version}`)).toEqual([
+      "chokidar@^5.0.0",
+      "node-llama-cpp@3.18.1",
+    ]);
     expect(result.conflicts).toEqual([]);
   });
 
@@ -3230,6 +3393,73 @@ describe("ensureBundledPluginRuntimeDeps", () => {
       },
     ]);
     expect(installRoot).not.toBe(pluginRoot);
+  });
+
+  it("adds local embedding runtime deps when memory search uses the local provider", () => {
+    const packageRoot = makeTempDir();
+    const pluginRoot = writeBundledPluginPackage({
+      packageRoot,
+      pluginId: "memory-core",
+      deps: { chokidar: "^5.0.0" },
+    });
+    const calls: BundledRuntimeDepsInstallParams[] = [];
+
+    const result = ensureBundledPluginRuntimeDeps({
+      env: {},
+      config: {
+        agents: {
+          defaults: {
+            memorySearch: {
+              provider: "local",
+            },
+          },
+        },
+      },
+      installDeps: (params) => {
+        calls.push(params);
+      },
+      pluginId: "memory-core",
+      pluginRoot,
+    });
+
+    expect(result).toEqual({
+      installedSpecs: ["chokidar@^5.0.0", "node-llama-cpp@3.18.1"],
+    });
+    expect(calls[0]?.installSpecs).toEqual(["chokidar@^5.0.0", "node-llama-cpp@3.18.1"]);
+  });
+
+  it("does not add local embedding runtime deps when local memory search is disabled", () => {
+    const packageRoot = makeTempDir();
+    const pluginRoot = writeBundledPluginPackage({
+      packageRoot,
+      pluginId: "memory-core",
+      deps: { chokidar: "^5.0.0" },
+    });
+    const calls: BundledRuntimeDepsInstallParams[] = [];
+
+    const result = ensureBundledPluginRuntimeDeps({
+      env: {},
+      config: {
+        agents: {
+          defaults: {
+            memorySearch: {
+              enabled: false,
+              provider: "local",
+            },
+          },
+        },
+      },
+      installDeps: (params) => {
+        calls.push(params);
+      },
+      pluginId: "memory-core",
+      pluginRoot,
+    });
+
+    expect(result).toEqual({
+      installedSpecs: ["chokidar@^5.0.0"],
+    });
+    expect(calls[0]?.installSpecs).toEqual(["chokidar@^5.0.0"]);
   });
 
   it("repairs package-level mirrors when an installed package entry file is missing", () => {

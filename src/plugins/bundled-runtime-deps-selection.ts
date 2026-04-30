@@ -3,6 +3,7 @@ import path from "node:path";
 import { normalizeProviderId } from "../agents/provider-id.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
+import { resolveUserPath } from "../utils.js";
 import { readRuntimeDepsJsonObject, type JsonObject } from "./bundled-runtime-deps-json.js";
 import {
   collectPackageRuntimeDeps,
@@ -17,6 +18,12 @@ import {
 } from "./config-normalization-shared.js";
 
 const MIRRORED_PACKAGE_RUNTIME_DEP_PLUGIN_ID = "openclaw-core";
+const MEMORY_CORE_PLUGIN_ID = "memory-core";
+const LOCAL_MEMORY_EMBEDDING_RUNTIME_DEP: RuntimeDepEntry = {
+  name: "node-llama-cpp",
+  version: "3.18.1",
+  pluginIds: [MEMORY_CORE_PLUGIN_ID],
+};
 
 export type RuntimeDepConflict = {
   name: string;
@@ -463,6 +470,114 @@ function shouldIncludeBundledPluginRuntimeDeps(params: {
   });
 }
 
+function readConfiguredProviderApiId(
+  config: OpenClawConfig,
+  providerId: string,
+): string | undefined {
+  const providers = config.models?.providers;
+  if (!providers) {
+    return undefined;
+  }
+  const normalizedProviderId = normalizeProviderId(providerId);
+  const providerConfig =
+    providers[providerId] ??
+    Object.entries(providers).find(
+      ([candidateId]) => normalizeProviderId(candidateId) === normalizedProviderId,
+    )?.[1];
+  const api = providerConfig?.api?.trim();
+  if (!api) {
+    return undefined;
+  }
+  const normalizedApi = normalizeProviderId(api);
+  return normalizedApi && normalizedApi !== normalizedProviderId ? normalizedApi : undefined;
+}
+
+function memoryEmbeddingProviderResolvesToLocal(
+  config: OpenClawConfig,
+  providerId: unknown,
+): boolean {
+  if (typeof providerId !== "string") {
+    return false;
+  }
+  const normalizedProviderId = normalizeProviderId(providerId);
+  if (normalizedProviderId === "local") {
+    return true;
+  }
+  return readConfiguredProviderApiId(config, providerId) === "local";
+}
+
+function canAutoSelectLocalMemorySearch(value: Record<string, unknown>): boolean {
+  const local = value.local;
+  if (!isRecord(local) || typeof local.modelPath !== "string") {
+    return false;
+  }
+  const modelPath = local.modelPath.trim();
+  if (!modelPath || /^(hf:|https?:)/i.test(modelPath)) {
+    return false;
+  }
+  try {
+    return fs.statSync(resolveUserPath(modelPath)).isFile();
+  } catch {
+    return false;
+  }
+}
+
+function isLocalMemorySearchConfig(config: OpenClawConfig, value: unknown): boolean {
+  if (!isRecord(value) || value.enabled === false) {
+    return false;
+  }
+  if (memoryEmbeddingProviderResolvesToLocal(config, value.provider)) {
+    return true;
+  }
+  if (memoryEmbeddingProviderResolvesToLocal(config, value.fallback)) {
+    return true;
+  }
+  const provider = normalizeOptionalLowercaseString(value.provider);
+  return (!provider || provider === "auto") && canAutoSelectLocalMemorySearch(value);
+}
+
+function mergeMemorySearchConfig(defaults: unknown, override: unknown): unknown {
+  if (!isRecord(defaults) && !isRecord(override)) {
+    return undefined;
+  }
+  const defaultLocal = isRecord(defaults) && isRecord(defaults.local) ? defaults.local : {};
+  const overrideLocal = isRecord(override) && isRecord(override.local) ? override.local : {};
+  return {
+    ...(isRecord(defaults) ? defaults : {}),
+    ...(isRecord(override) ? override : {}),
+    local: {
+      ...defaultLocal,
+      ...overrideLocal,
+    },
+  };
+}
+
+function isLocalMemorySearchConfigured(config: OpenClawConfig | undefined): boolean {
+  if (!config) {
+    return false;
+  }
+  const defaults = config.agents?.defaults?.memorySearch;
+  if (isLocalMemorySearchConfig(config, defaults)) {
+    return true;
+  }
+  return (config.agents?.list ?? []).some((agent) =>
+    isLocalMemorySearchConfig(config, mergeMemorySearchConfig(defaults, agent.memorySearch)),
+  );
+}
+
+function addRuntimeDepEntry(
+  versionMap: Map<string, Map<string, Set<string>>>,
+  dep: RuntimeDepEntry,
+): void {
+  const byVersion = versionMap.get(dep.name) ?? new Map<string, Set<string>>();
+  const pluginIds = byVersion.get(dep.version) ?? new Set<string>();
+  for (const pluginId of dep.pluginIds) {
+    pluginIds.add(pluginId);
+  }
+  byVersion.set(dep.version, pluginIds);
+  versionMap.set(dep.name, byVersion);
+}
+
 export function collectBundledPluginRuntimeDeps(params: {
   extensionsDir: string;
   config?: OpenClawConfig;
@@ -522,12 +637,19 @@ export function collectBundledPluginRuntimeDeps(params: {
       if (!dep) {
         continue;
       }
-      const byVersion = versionMap.get(dep.name) ?? new Map<string, Set<string>>();
-      const pluginIds = byVersion.get(dep.version) ?? new Set<string>();
-      pluginIds.add(pluginId);
-      byVersion.set(dep.version, pluginIds);
-      versionMap.set(dep.name, byVersion);
+      addRuntimeDepEntry(versionMap, {
+        name: dep.name,
+        version: dep.version,
+        pluginIds: [pluginId],
+      });
     }
+  }
+
+  if (
+    includedPluginIds.has(MEMORY_CORE_PLUGIN_ID) &&
+    isLocalMemorySearchConfigured(params.config)
+  ) {
+    addRuntimeDepEntry(versionMap, LOCAL_MEMORY_EMBEDDING_RUNTIME_DEP);
   }
 
   const deps: RuntimeDepEntry[] = [];
