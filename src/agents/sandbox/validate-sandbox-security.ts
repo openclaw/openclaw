@@ -152,22 +152,13 @@ export function getBlockedReasonForSourcePath(
 }
 
 function getBlockedHostPaths(): string[] {
-  const cacheKey = JSON.stringify({
-    home: process.env.HOME,
-    openclawHome: process.env.OPENCLAW_HOME,
-    osHome: os.homedir(),
-  });
-  if (blockedHostPathsCache?.key === cacheKey) {
-    return blockedHostPathsCache.paths;
-  }
   const blocked = new Set(BLOCKED_HOST_PATHS.map(normalizeHostPath));
   for (const home of getBlockedHomeRoots()) {
     for (const suffix of BLOCKED_HOME_SUBPATHS) {
       blocked.add(normalizeHostPath(path.posix.join(home, suffix)));
     }
   }
-  blockedHostPathsCache = { key: cacheKey, paths: [...blocked] };
-  return blockedHostPathsCache.paths;
+  return [...blocked];
 }
 
 function getBlockedHomeRoots(): string[] {
