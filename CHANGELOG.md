@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Memory/CLI: bound the `memory status --deep` embedding probe with an 8 s diagnostic budget so a slow or warming local provider can no longer inherit the 600 s batch-embedding timeout and stall the command, and wire a `log` progress fallback so non-TTY callers (CI logs, pipes, the ClawNanny diagnostic runner) still see "Probing vector..." / "Probing embeddings..." labels. When the budget is exceeded, the probe returns a parseable `timedOut: true` result and the rendered status reads `Embeddings: timeout` &mdash; distinct from the existing `unavailable` failure state &mdash; while indexing continues to use the longer batch budget. Fixes #74544.
 - Agents/subagents: bound automatic orphan recovery with persisted recovery attempts and a wedged-session tombstone, and teach task maintenance/doctor to reconcile those sessions so restart loops no longer require manual `sessions.json` surgery. Fixes #74864. Thanks @solosage1.
 - Gateway/startup: skip pre-bind web-fetch provider discovery for credential-free `tools.web.fetch` config, so Docker/Kubernetes gateways bind even when optional fetch limits are present. Fixes #74896. Thanks @KoykL.
 - Slack: require bot-authored room messages with `allowBots=true` to come from an explicitly channel-allowlisted bot or from a room where an explicit Slack owner is present, so broad bot relays cannot run unattended. Fixes #59284. Thanks @andrewhong-translucent.
