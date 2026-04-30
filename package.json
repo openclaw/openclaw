@@ -1631,7 +1631,6 @@
     "json5": "^2.2.3",
     "jszip": "^3.10.1",
     "markdown-it": "14.1.1",
-    "minimatch": "10.2.4",
     "openai": "^6.34.0",
     "proxy-agent": "^8.0.1",
     "qrcode": "1.5.4",

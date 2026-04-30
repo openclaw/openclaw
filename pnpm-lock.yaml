@@ -108,9 +108,6 @@ importers:
       markdown-it:
         specifier: 14.1.1
         version: 14.1.1
-      minimatch:
-        specifier: 10.2.4
-        version: 10.2.4
       openai:
         specifier: ^6.34.0
         version: 6.34.0(ws@8.20.0)(zod@4.3.6)

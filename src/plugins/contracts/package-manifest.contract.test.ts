@@ -47,7 +47,8 @@ const packageManifestContractTests: PackageManifestContractParams[] = [
   },
   {
     pluginId: "file-transfer",
-    mirroredRootRuntimeDeps: ["minimatch", "typebox"],
+    pluginLocalRuntimeDeps: ["minimatch"],
+    mirroredRootRuntimeDeps: ["typebox"],
   },
   {
     pluginId: "matrix",
