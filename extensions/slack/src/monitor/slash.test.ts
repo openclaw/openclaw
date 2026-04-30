@@ -8,6 +8,7 @@ vi.mock("./slash-commands.runtime.js", () => {
   const reportExternalCommand = { key: "reportexternal", nativeName: "reportexternal" };
   const reportLongCommand = { key: "reportlong", nativeName: "reportlong" };
   const reportLongButtonCommand = { key: "reportlongbutton", nativeName: "reportlongbutton" };
+  const reportHugeButtonCommand = { key: "reporthugebutton", nativeName: "reporthugebutton" };
   const unsafeConfirmCommand = { key: "unsafeconfirm", nativeName: "unsafeconfirm" };
   const longConfirmCommand = { key: "longconfirm", nativeName: "longconfirm" };
   const statusAliasCommand = { key: "status", nativeName: "status" };
@@ -76,6 +77,9 @@ vi.mock("./slash-commands.runtime.js", () => {
       if (normalized === "reportlongbutton") {
         return reportLongButtonCommand;
       }
+      if (normalized === "reporthugebutton") {
+        return reportHugeButtonCommand;
+      }
       if (normalized === "unsafeconfirm") {
         return unsafeConfirmCommand;
       }
@@ -125,6 +129,12 @@ vi.mock("./slash-commands.runtime.js", () => {
         args: [],
       },
       {
+        name: "reporthugebutton",
+        description: "ReportHugeButton",
+        acceptsArgs: true,
+        args: [],
+      },
+      {
         name: "unsafeconfirm",
         description: "UnsafeConfirm",
         acceptsArgs: true,
@@ -167,6 +177,15 @@ vi.mock("./slash-commands.runtime.js", () => {
             label: "Long button label ".repeat(8),
           },
         ]);
+      }
+      if (params.command?.key === "reporthugebutton") {
+        return resolvePeriodMenu(
+          params,
+          Array.from({ length: 250 }, (_v, i) => ({
+            value: `${String(i + 1)}-${"x".repeat(170)}`,
+            label: `Long button label ${i + 1}`,
+          })),
+        );
       }
       if (params.command?.key === "reportcompact") {
         return resolvePeriodMenu(params, baseReportPeriodChoices);
@@ -446,6 +465,7 @@ describe("Slack native command argument menus", () => {
   let reportExternalHandler: (args: unknown) => Promise<void>;
   let reportLongHandler: (args: unknown) => Promise<void>;
   let reportLongButtonHandler: (args: unknown) => Promise<void>;
+  let reportHugeButtonHandler: (args: unknown) => Promise<void>;
   let unsafeConfirmHandler: (args: unknown) => Promise<void>;
   let longConfirmHandler: (args: unknown) => Promise<void>;
   let agentStatusHandler: (args: unknown) => Promise<void>;
@@ -464,6 +484,11 @@ describe("Slack native command argument menus", () => {
       harness.commands,
       "/reportlongbutton",
       "/reportlongbutton",
+    );
+    reportHugeButtonHandler = requireHandler(
+      harness.commands,
+      "/reporthugebutton",
+      "/reporthugebutton",
     );
     unsafeConfirmHandler = requireHandler(harness.commands, "/unsafeconfirm", "/unsafeconfirm");
     longConfirmHandler = requireHandler(harness.commands, "/longconfirm", "/longconfirm");
@@ -599,6 +624,18 @@ describe("Slack native command argument menus", () => {
     expect(firstElement?.text?.text?.endsWith("…")).toBe(true);
     expect(firstElement?.value?.length).toBeGreaterThan(75);
     expect(firstElement?.confirm).toBeTruthy();
+  });
+
+  it("caps large button fallback menus to Slack's block limit", async () => {
+    const { respond } = await runCommandHandler(reportHugeButtonHandler);
+    expect(respond).toHaveBeenCalledTimes(1);
+    const payload = respond.mock.calls[0]?.[0] as {
+      blocks?: Array<{ type: string; elements?: unknown[] }>;
+    };
+    const actionBlocks = (payload.blocks ?? []).filter((block) => block.type === "actions");
+    expect(payload.blocks).toHaveLength(50);
+    expect(actionBlocks).toHaveLength(47);
+    expect(actionBlocks.at(-1)?.elements).toHaveLength(5);
   });
 
   it("shows an overflow menu when choices fit compact range", async () => {

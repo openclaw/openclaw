@@ -51,6 +51,7 @@ Docs: https://docs.openclaw.ai
 - Slack/interactive replies: drop overlong Block Kit button URLs while preserving valid callback values, so malformed link buttons no longer make Slack reject the whole interactive reply. Thanks @slackapi.
 - Slack/commands: truncate native command argument-menu confirmation text to Slack's dialog limit, so long plugin arg names no longer make fallback buttons render invalid Block Kit payloads. Thanks @slackapi.
 - Slack/exec approvals: cap native approval metadata context to Slack's element and text limits, so large approval details no longer make Slack reject the approval card. Thanks @slackapi.
+- Slack/commands: cap native command argument-menu fallback rows to Slack's message block limit, so large plugin choice lists no longer make Slack reject the generated menu. Thanks @slackapi.
 - Channels/WhatsApp: require Baileys outbound message ids before marking auto-replies delivered, so transcript text and ack reactions no longer make failed group replies look sent. Fixes #49225. Thanks @TinyTb.
 - CLI/update: scope packaged Node compile caches by OpenClaw version and install metadata, so global installs no longer reuse stale compiled chunks after package updates. Thanks @pashpashpash.
 - Channels/Voice call: keep pre-auth webhook in-flight limiting active when socket remote address metadata is missing, so slow-body requests from stripped-IP proxy paths still share the fallback bucket. (#74453) Thanks @davidangularme.

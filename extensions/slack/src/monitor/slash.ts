@@ -26,6 +26,7 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/text-runtime";
 import type { ResolvedSlackAccount } from "../accounts.js";
+import { SLACK_MAX_BLOCKS } from "../blocks-input.js";
 import { truncateSlackText } from "../truncate.js";
 import { resolveSlackAllowListMatch, resolveSlackUserAllowed } from "./allow-list.js";
 import { resolveSlackEffectiveAllowFrom } from "./auth.js";
@@ -57,6 +58,8 @@ const SLACK_COMMAND_ARG_SELECT_OPTION_VALUE_MAX = 75;
 const SLACK_COMMAND_ARG_BUTTON_TEXT_MAX = 75;
 const SLACK_COMMAND_ARG_CONFIRM_TEXT_MAX = 300;
 const SLACK_HEADER_TEXT_MAX = 150;
+const SLACK_COMMAND_ARG_CHROME_BLOCKS = 3;
+const SLACK_COMMAND_ARG_ACTION_BLOCKS_MAX = SLACK_MAX_BLOCKS - SLACK_COMMAND_ARG_CHROME_BLOCKS;
 let slashCommandsRuntimePromise: Promise<typeof import("./slash-commands.runtime.js")> | null =
   null;
 let slashDispatchRuntimePromise: Promise<typeof import("./slash-dispatch.runtime.js")> | null =
@@ -338,6 +341,7 @@ function buildSlackCommandArgMenuBlocks(params: {
     `Select one option to continue /${params.command} (${params.arg})`,
     3000,
   );
+  const visibleRows = rows.slice(0, SLACK_COMMAND_ARG_ACTION_BLOCKS_MAX);
   return [
     {
       type: "header",
@@ -351,7 +355,7 @@ function buildSlackCommandArgMenuBlocks(params: {
       type: "context",
       elements: [{ type: "mrkdwn", text: contextText }],
     },
-    ...rows,
+    ...visibleRows,
   ];
 }
 
