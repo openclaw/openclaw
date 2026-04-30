@@ -169,4 +169,89 @@ describe("detectStaleWorkspacePaths", () => {
     const findings = detectStaleWorkspacePaths(cfg, makeEnv({ pathExists: () => false }));
     expect(findings).toEqual([]);
   });
+
+  describe("Windows case-insensitive home prefix", () => {
+    // Windows treats `C:\Users\Alice` and `c:\users\alice` as the same path,
+    // and `os.userInfo().username` may report either case depending on how the
+    // account was provisioned. Comparisons against win-shaped prefixes must
+    // therefore be case-insensitive, otherwise a perfectly local Windows
+    // workspace gets flagged as a cross-OS stale path.
+
+    it("does not flag a Windows home with mismatched username case", () => {
+      const cfg = makeCfg({ defaults: "C:\\Users\\Alice\\.openclaw\\workspace" });
+      const findings = detectStaleWorkspacePaths(
+        cfg,
+        makeEnv({
+          platform: "win32",
+          homedir: "C:\\Users\\alice",
+          username: "alice",
+          pathExists: () => false,
+        }),
+      );
+      expect(findings).toEqual([]);
+    });
+
+    it("does not flag a Windows home with mismatched homedir case", () => {
+      const cfg = makeCfg({ defaults: "c:\\users\\alice\\.openclaw\\workspace" });
+      const findings = detectStaleWorkspacePaths(
+        cfg,
+        makeEnv({
+          platform: "win32",
+          homedir: "C:\\Users\\Alice",
+          username: "Alice",
+          pathExists: () => false,
+        }),
+      );
+      expect(findings).toEqual([]);
+    });
+
+    it("does not flag a Windows home with mismatched drive-letter case", () => {
+      const cfg = makeCfg({ defaults: "c:\\Users\\alice\\workspace" });
+      const findings = detectStaleWorkspacePaths(
+        cfg,
+        makeEnv({
+          platform: "win32",
+          homedir: "C:\\Users\\alice",
+          username: "alice",
+          pathExists: () => false,
+        }),
+      );
+      expect(findings).toEqual([]);
+    });
+
+    it("still flags a different Windows user even when our username case matches", () => {
+      const cfg = makeCfg({ defaults: "C:\\Users\\Bob\\workspace" });
+      const findings = detectStaleWorkspacePaths(
+        cfg,
+        makeEnv({
+          platform: "win32",
+          homedir: "C:\\Users\\alice",
+          username: "alice",
+          pathExists: () => false,
+        }),
+      );
+      expect(findings).toHaveLength(1);
+      expect(findings[0]).toMatchObject({
+        kind: "stale-home-prefix",
+        proposedRewrite: "~/workspace",
+      });
+    });
+
+    it("preserves Linux case sensitivity (Alice and alice are different users)", () => {
+      // Linux filesystems are case-sensitive, so `/home/Alice` on a host
+      // running as `alice` must still be flagged as cross-user stale.
+      const cfg = makeCfg({ defaults: "/home/Alice/workspace" });
+      const findings = detectStaleWorkspacePaths(
+        cfg,
+        makeEnv({
+          platform: "linux",
+          homedir: "/home/alice",
+          username: "alice",
+          pathExists: () => false,
+        }),
+      );
+      expect(findings).toHaveLength(1);
+      expect(findings[0].kind).toBe("stale-home-prefix");
+    });
+  });
 });

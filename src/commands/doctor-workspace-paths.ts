@@ -40,12 +40,15 @@ export type StaleWorkspacePathEnv = {
 type HomePrefixKind = "posix" | "win";
 
 // Ordered list of regexes matching a home-directory-shaped prefix.
-// Capture group 1 (when present) is the username segment.
+// Capture group 1 (when present) is the username segment. The Windows
+// pattern is case-insensitive because Windows path semantics are
+// case-insensitive (`C:\Users\Alice` and `c:\users\alice` resolve to the
+// same directory) and configs may carry either casing.
 const HOME_PREFIX_PATTERNS: Array<{ re: RegExp; kind: HomePrefixKind }> = [
   { re: /^\/home\/([^/]+)(?:\/|$)/, kind: "posix" },
   { re: /^\/Users\/([^/]+)(?:\/|$)/, kind: "posix" },
   { re: /^\/root(?:\/|$)/, kind: "posix" },
-  { re: /^[A-Za-z]:[\\/]Users[\\/]([^\\/]+)(?:[\\/]|$)/, kind: "win" },
+  { re: /^[A-Za-z]:[\\/]Users[\\/]([^\\/]+)(?:[\\/]|$)/i, kind: "win" },
 ];
 
 type HomePrefixMatch = {
@@ -147,8 +150,14 @@ export function detectStaleWorkspacePaths(
       if (env.pathExists(value)) {
         continue;
       }
-      const isOurUser = prefix.extractedUser === env.username;
-      const homeMatches = env.homedir.length > 0 && value.startsWith(env.homedir);
+      // Windows path semantics are case-insensitive, so when the matched
+      // prefix is win-shaped we lowercase both sides of the username and
+      // homedir-prefix comparisons. Posix prefixes keep strict equality
+      // because Linux filesystems are case-sensitive.
+      const caseFold = (s: string) => (prefix.kind === "win" ? s.toLowerCase() : s);
+      const isOurUser = caseFold(prefix.extractedUser) === caseFold(env.username);
+      const homeMatches =
+        env.homedir.length > 0 && caseFold(value).startsWith(caseFold(env.homedir));
       if (isOurUser && homeMatches) {
         // Our user, our home root, but the directory is missing locally.
         // Not a cross-OS stale case — the existing `doctor:workspace-status`
