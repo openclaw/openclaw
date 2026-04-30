@@ -1082,6 +1082,14 @@ export async function spawnSubagentDirect(
               bootstrapContextRunKind: "default" as const,
             }
           : {}),
+        ...(() => {
+          if (!resolvedModel) return {};
+          const { provider, model } = splitModelRef(resolvedModel);
+          return {
+            ...(provider ? { provider } : {}),
+            ...(model ? { model } : {}),
+          };
+        })(),
         ...publicSpawnedMetadata,
       },
       timeoutMs: resolveSubagentAgentGatewayTimeoutMs(runTimeoutSeconds),
