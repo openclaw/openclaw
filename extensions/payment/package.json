@@ -4,6 +4,10 @@
   "private": true,
   "description": "OpenClaw payment plugin (Stripe Link + mock providers)",
   "type": "module",
+  "scripts": {
+    "plugin:check": "pnpm dlx @openclaw/plugin-inspector@0.3.5 inspect --no-openclaw",
+    "plugin:ci": "pnpm dlx @openclaw/plugin-inspector@0.3.5 ci --no-openclaw --runtime --mock-sdk --allow-execute"
+  },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"
   },

@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "plugin": {
+    "id": "payment",
+    "priority": "high",
+    "seams": ["plugin-runtime"]
+  },
+  "capture": {
+    "mockSdk": true
+  }
+}
