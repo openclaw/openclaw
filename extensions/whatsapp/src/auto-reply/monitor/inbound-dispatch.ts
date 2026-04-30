@@ -4,6 +4,7 @@ import {
   normalizeWhatsAppOutboundPayload,
   normalizeWhatsAppPayloadTextPreservingIndentation,
 } from "../../outbound-media-contract.js";
+import type { WhatsAppReplyDeliveryResult } from "../deliver-reply.js";
 import type { WebInboundMsg } from "../types.js";
 import { formatGroupMembers } from "./group-members.js";
 import type { GroupHistoryEntry } from "./inbound-context.js";
@@ -283,7 +284,7 @@ export async function dispatchWhatsAppBufferedReply(params: {
     connectionId?: string;
     skipLog?: boolean;
     tableMode?: ReturnType<typeof resolveMarkdownTableMode>;
-  }) => Promise<void>;
+  }) => Promise<WhatsAppReplyDeliveryResult>;
   groupHistories: Map<string, GroupHistoryEntry[]>;
   groupHistoryKey: string;
   maxMediaBytes: number;
@@ -344,7 +345,7 @@ export async function dispatchWhatsAppBufferedReply(params: {
         if (!reply.hasMedia && !reply.text.trim()) {
           return;
         }
-        await params.deliverReply({
+        const delivery = await params.deliverReply({
           replyResult: normalizedDeliveryPayload,
           normalizedReplyResult: normalizedDeliveryPayload,
           msg: params.msg,
@@ -357,6 +358,21 @@ export async function dispatchWhatsAppBufferedReply(params: {
           skipLog: false,
           tableMode,
         });
+        if (!delivery.providerAccepted) {
+          params.replyLogger.warn(
+            {
+              correlationId: params.msg.id ?? null,
+              connectionId: params.connectionId,
+              conversationId: params.conversationId,
+              chatId: params.msg.chatId,
+              to: params.msg.from,
+              from: params.msg.to,
+              replyKind: info.kind,
+            },
+            "auto-reply was not accepted by WhatsApp provider",
+          );
+          return;
+        }
         didSendReply = true;
         const shouldLog = normalizedDeliveryPayload.text ? true : undefined;
         params.rememberSentText(normalizedDeliveryPayload.text, {
