@@ -55,7 +55,7 @@ describe("bundled runtime dependency Jiti aliases", () => {
         "./feature": "./features/feature.js",
       },
     });
-    writeFile(path.join(plainRoot, "esm/index.js"));
+    writeFile(path.join(plainRoot, "cjs/index.js"));
     writeFile(path.join(plainRoot, "features/feature.js"));
 
     const wildRoot = packageRoot(rootDir, "wild");
@@ -80,7 +80,34 @@ describe("bundled runtime dependency Jiti aliases", () => {
       "plain/feature": path.join(plainRoot, "features/feature.js"),
       "@scope/pkg": path.join(scopedRoot, "index.mjs"),
       "wild/sub/a": path.join(wildRoot, "dist/a.js"),
-      plain: path.join(plainRoot, "esm/index.js"),
+      plain: path.join(plainRoot, "cjs/index.js"),
+    });
+  });
+
+  it("prefers require-compatible conditional exports for CommonJS-only runtime deps", () => {
+    const rootDir = makeTempRoot();
+    writeJson(path.join(rootDir, "package.json"), {
+      dependencies: {
+        ws: "8.20.0",
+      },
+    });
+    const wsRoot = packageRoot(rootDir, "ws");
+    writeJson(path.join(wsRoot, "package.json"), {
+      exports: {
+        ".": {
+          browser: "./browser.js",
+          import: "./wrapper.mjs",
+          require: "./index.js",
+        },
+      },
+    });
+    writeFile(path.join(wsRoot, "wrapper.mjs"));
+    writeFile(path.join(wsRoot, "index.js"));
+
+    registerBundledRuntimeDependencyJitiAliases(rootDir);
+
+    expect(resolveBundledRuntimeDependencyJitiAliasMap()).toEqual({
+      ws: path.join(wsRoot, "index.js"),
     });
   });
 
