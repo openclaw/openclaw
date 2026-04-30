@@ -1,7 +1,11 @@
 import { rmSync } from "node:fs";
 import path from "node:path";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import type {
   SpeechProviderPlugin,
   SpeechProviderPrepareSynthesisContext,
@@ -27,6 +31,32 @@ const prepareSynthesisMock = vi.hoisted(() =>
 
 const listSpeechProvidersMock = vi.hoisted(() => vi.fn());
 const getSpeechProviderMock = vi.hoisted(() => vi.fn());
+const transcodeAudioBufferMock = vi.hoisted(() =>
+  // Default off: most tests rely on the synthesized buffer reaching the
+  // channel unchanged. Tests that exercise the pre-transcode branch override
+  // per-call via `transcodeAudioBufferMock.mockResolvedValueOnce(...)`.
+  // Typed as the helper's full return shape so per-call overrides aren't
+  // narrowed to the default's literal.
+  vi.fn<
+    () => Promise<
+      | { ok: true; buffer: Buffer }
+      | {
+          ok: false;
+          reason:
+            | "platform-unsupported"
+            | "invalid-extension"
+            | "noop-same-container"
+            | "no-recipe"
+            | "transcoder-failed";
+          detail?: string;
+        }
+    >
+  >(async () => ({ ok: false, reason: "platform-unsupported" })),
+);
+
+vi.mock("./audio-transcode.js", () => ({
+  transcodeAudioBuffer: transcodeAudioBufferMock,
+}));
 
 vi.mock("openclaw/plugin-sdk/channel-targets", () => ({
   normalizeChannelId: (channel: string | undefined) => channel?.trim().toLowerCase() ?? null,
@@ -36,6 +66,7 @@ vi.mock("openclaw/plugin-sdk/channel-targets", () => ({
       return {
         synthesisTarget: "audio-file",
         audioFileFormats: ["mp3", "caf", "audio/mpeg", "audio/x-caf"],
+        preferAudioFileFormat: "caf",
       };
     }
     if (normalized === "feishu" || normalized === "whatsapp") {
@@ -152,6 +183,7 @@ async function expectTtsPayloadResult(params: {
     expect(synthesizeMock).toHaveBeenCalledWith(expect.objectContaining({ target: params.target }));
     expect(result.audioAsVoice).toBe(params.audioAsVoice);
     expect(result.mediaUrl).toMatch(new RegExp(`voice-\\d+\\.${params.mediaExtension ?? "ogg"}$`));
+    expect(result.spokenText).toBe(params.text);
 
     mediaDir = result.mediaUrl ? path.dirname(result.mediaUrl) : undefined;
   } finally {
@@ -163,8 +195,10 @@ async function expectTtsPayloadResult(params: {
 
 describe("speech-core native voice-note routing", () => {
   afterEach(() => {
+    clearRuntimeConfigSnapshot();
     synthesizeMock.mockClear();
     prepareSynthesisMock.mockClear();
+    transcodeAudioBufferMock.mockClear();
     installSpeechProviders([createMockSpeechProvider()]);
   });
 
@@ -212,6 +246,114 @@ describe("speech-core native voice-note routing", () => {
       target: "audio-file",
       audioAsVoice: undefined,
     });
+  });
+
+  it("pre-transcodes BlueBubbles synthesized mp3 to opus-in-CAF when the host can satisfy preferAudioFileFormat", async () => {
+    transcodeAudioBufferMock.mockResolvedValueOnce({
+      ok: true,
+      buffer: Buffer.from("transcoded-caf"),
+    });
+    await expectTtsPayloadResult({
+      channel: "bluebubbles",
+      prefsName: "openclaw-speech-core-tts-bluebubbles-caf-transcode-test",
+      text: "This BlueBubbles reply should be pre-transcoded to a native voice-memo CAF.",
+      target: "audio-file",
+      audioAsVoice: true,
+      mediaExtension: "caf",
+      providerResult: {
+        audioBuffer: Buffer.from("mp3"),
+        outputFormat: "mp3",
+        fileExtension: ".mp3",
+        voiceCompatible: false,
+      },
+    });
+    expect(transcodeAudioBufferMock).toHaveBeenCalledWith(
+      expect.objectContaining({ sourceExtension: "mp3", targetExtension: "caf" }),
+    );
+  });
+
+  it("falls back to the original mp3 buffer when the host transcoder fails", async () => {
+    transcodeAudioBufferMock.mockResolvedValueOnce({
+      ok: false,
+      reason: "transcoder-failed",
+      detail: "exit-1",
+    });
+    // Even though the transcode failed, the original mp3 still satisfies
+    // BlueBubbles' audioFileFormats list, so the channel still flips
+    // audioAsVoice. The user gets the v2026.4.26 PCM-CAF behavior (a voice
+    // memo bubble, possibly with bad duration) instead of a regression — and
+    // the failure is logged via the call site in tts.ts so it isn't silent.
+    await expectTtsPayloadResult({
+      channel: "bluebubbles",
+      prefsName: "openclaw-speech-core-tts-bluebubbles-caf-fallback-test",
+      text: "This BlueBubbles reply should fall back to the original mp3.",
+      target: "audio-file",
+      audioAsVoice: true,
+      mediaExtension: "mp3",
+      providerResult: {
+        audioBuffer: Buffer.from("mp3"),
+        outputFormat: "mp3",
+        fileExtension: ".mp3",
+        voiceCompatible: false,
+      },
+    });
+  });
+
+  it("uses the active runtime snapshot when source config still contains TTS SecretRefs", async () => {
+    const sourceConfig = {
+      messages: {
+        tts: {
+          enabled: true,
+          provider: "mock",
+          providers: {
+            mock: {
+              apiKey: { source: "exec", provider: "mockexec", id: "minimax/tts/apiKey" },
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const runtimeConfig = {
+      messages: {
+        tts: {
+          enabled: true,
+          provider: "mock",
+          providers: {
+            mock: {
+              apiKey: "resolved-minimax-key",
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    installSpeechProviders([
+      createMockSpeechProvider("mock", {
+        isConfigured: ({ providerConfig }) => providerConfig.apiKey === "resolved-minimax-key",
+        resolveConfig: ({ rawConfig }) => {
+          const providers = rawConfig.providers as Record<string, { apiKey?: unknown }> | undefined;
+          return {
+            apiKey: providers?.mock?.apiKey,
+          };
+        },
+      }),
+    ]);
+    setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
+
+    const result = await synthesizeSpeech({
+      text: "Runtime snapshot TTS SecretRef",
+      cfg: sourceConfig,
+      disableFallback: true,
+    });
+
+    expect(result.success).toBe(true);
+    expect(synthesizeMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cfg: runtimeConfig,
+        providerConfig: expect.objectContaining({
+          apiKey: "resolved-minimax-key",
+        }),
+      }),
+    );
   });
 
   it.each(["feishu", "whatsapp"] as const)(

@@ -171,6 +171,15 @@ function renderLocalUserAvatarPreview(avatar: string | null | undefined) {
 }
 
 function resolveAssistantPreviewAvatarUrl(props: QuickSettingsProps): string | null {
+  const override = normalizeOptionalString(props.assistantAvatarOverride);
+  if (override) {
+    return resolveChatAvatarRenderUrl(override, {
+      identity: {
+        avatar: override,
+        avatarUrl: override,
+      },
+    });
+  }
   if (props.assistantAvatarStatus === "none" && props.assistantAvatarReason === "missing") {
     return null;
   }
@@ -198,7 +207,11 @@ function formatAssistantAvatarIssue(
   status: QuickSettingsProps["assistantAvatarStatus"],
   reason: string | null | undefined,
   _rendered: boolean,
+  hasOverride = false,
 ): string | null {
+  if (hasOverride) {
+    return null;
+  }
   if (status === "remote") {
     return "Remote URLs are blocked by Control UI image policy";
   }
@@ -219,11 +232,14 @@ function formatAssistantAvatarIssue(
 
 function renderAssistantAvatarPreview(props: QuickSettingsProps) {
   const assistantName = normalizeOptionalString(props.assistantName) ?? "Assistant";
+  const assistantAvatarOverride = normalizeOptionalString(props.assistantAvatarOverride);
   const assistantAvatarUrl = resolveAssistantPreviewAvatarUrl(props);
   if (assistantAvatarUrl) {
     return html`<img class="qs-assistant-avatar" src=${assistantAvatarUrl} alt=${assistantName} />`;
   }
-  const assistantAvatarText = resolveAssistantTextAvatar(props.assistantAvatar);
+  const assistantAvatarText = resolveAssistantTextAvatar(
+    assistantAvatarOverride ?? props.assistantAvatar,
+  );
   if (assistantAvatarText) {
     return html`<div
       class="qs-assistant-avatar qs-assistant-avatar--text"
@@ -376,7 +392,7 @@ function renderCardHeader(icon: TemplateResult, title: string, action?: Template
 
 function renderModelCard(props: QuickSettingsProps) {
   return html`
-    <div class="qs-card">
+    <div class="qs-card qs-card--model">
       ${renderCardHeader(icons.brain, "Model & Thinking")}
       <div class="qs-card__body">
         <div class="qs-row">
@@ -426,7 +442,7 @@ function renderChannelsCard(props: QuickSettingsProps) {
       : undefined;
 
   return html`
-    <div class="qs-card">
+    <div class="qs-card qs-card--channels">
       ${renderCardHeader(icons.send, "Channels", badge)}
       <div class="qs-card__body">
         ${props.channels.length === 0
@@ -460,7 +476,7 @@ function renderAutomationsCard(props: QuickSettingsProps) {
   const { cronJobCount, skillCount, mcpServerCount } = props.automation;
 
   return html`
-    <div class="qs-card">
+    <div class="qs-card qs-card--automations">
       ${renderCardHeader(icons.zap, "Automations")}
       <div class="qs-card__body">
         <div class="qs-row">
@@ -490,7 +506,7 @@ function renderSecurityCard(props: QuickSettingsProps) {
   const { gatewayAuth, execPolicy, deviceAuth } = props.security;
 
   return html`
-    <div class="qs-card">
+    <div class="qs-card qs-card--security">
       ${renderCardHeader(
         icons.eye,
         "Security",
@@ -523,9 +539,15 @@ function renderSecurityCard(props: QuickSettingsProps) {
 }
 
 function renderAppearanceCard(props: QuickSettingsProps) {
-  const themeOptions: ThemeOption[] = [...BUILTIN_THEME_OPTIONS, { id: "custom", label: "Custom" }];
+  const importedThemeName = props.hasCustomTheme
+    ? (props.customThemeLabel ?? "Imported theme")
+    : "Import";
+  const themeOptions: ThemeOption[] = [
+    ...BUILTIN_THEME_OPTIONS,
+    { id: "custom", label: importedThemeName },
+  ];
   return html`
-    <div class="qs-card">
+    <div class="qs-card qs-card--appearance">
       ${renderCardHeader(icons.spark, "Appearance")}
       <div class="qs-card__body">
         <div class="qs-row">
@@ -610,15 +632,19 @@ function renderPersonalCard(props: QuickSettingsProps) {
   const assistantName = normalizeOptionalString(props.assistantName) ?? "Assistant";
   const assistantAvatarUrl = resolveAssistantPreviewAvatarUrl(props);
   const assistantAvatarRendered = Boolean(
-    assistantAvatarUrl || resolveAssistantTextAvatar(props.assistantAvatar),
+    assistantAvatarUrl ||
+    resolveAssistantTextAvatar(props.assistantAvatarOverride ?? props.assistantAvatar),
   );
-  const assistantAvatarSource = formatAssistantAvatarSource(props.assistantAvatarSource);
+  const assistantAvatarOverride = normalizeOptionalString(props.assistantAvatarOverride);
+  const assistantAvatarSource = formatAssistantAvatarSource(
+    assistantAvatarOverride ?? props.assistantAvatarSource,
+  );
   const assistantAvatarIssue = formatAssistantAvatarIssue(
     props.assistantAvatarStatus ?? null,
     props.assistantAvatarReason,
     assistantAvatarRendered,
+    Boolean(assistantAvatarOverride),
   );
-  const assistantAvatarOverride = normalizeOptionalString(props.assistantAvatarOverride);
   const assistantAvatarSourceLabel = assistantAvatarOverride ? "UI override" : "IDENTITY.md";
   const canOverrideAssistantAvatar = Boolean(props.onAssistantAvatarOverrideChange);
   const assistantAvatarSubtitle = assistantAvatarOverride
@@ -976,10 +1002,6 @@ function renderConnectionFooter(props: QuickSettingsProps) {
   `;
 }
 
-function renderStack(...cards: TemplateResult[]) {
-  return html`<div class="qs-stack">${cards}</div>`;
-}
-
 // ── Main render ──
 
 export function renderQuickSettings(props: QuickSettingsProps) {
@@ -993,9 +1015,11 @@ export function renderQuickSettings(props: QuickSettingsProps) {
       </div>
 
       <div class="qs-grid">
-        ${renderStack(renderModelCard(props), renderSecurityCard(props))}
-        ${renderChannelsCard(props)} ${renderPersonalCard(props)}
-        ${renderStack(renderAppearanceCard(props), renderAutomationsCard(props))}
+        ${renderModelCard(props)} ${renderChannelsCard(props)} ${renderSecurityCard(props)}
+        ${renderPersonalCard(props)}
+        <div class="qs-side-stack">
+          ${renderAppearanceCard(props)} ${renderAutomationsCard(props)}
+        </div>
         ${renderPresetsCard(props)}
       </div>
 

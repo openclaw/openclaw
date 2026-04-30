@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PluginCandidate } from "./discovery.js";
+import { buildInstalledPluginIndexRecords } from "./installed-plugin-index-record-builder.js";
 import {
   loadInstalledPluginIndexInstallRecordsSync,
   writePersistedInstalledPluginIndexInstallRecords,
@@ -16,6 +17,7 @@ import {
   refreshInstalledPluginIndex,
 } from "./installed-plugin-index.js";
 import { recordPluginInstall } from "./installs.js";
+import type { PluginManifestRecord } from "./manifest-registry.js";
 import type { OpenClawPackageManifest } from "./manifest.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
@@ -47,11 +49,16 @@ function writeRuntimeEntry(rootDir: string) {
   );
 }
 
+function writeManifestlessClaudeBundle(rootDir: string, entries: readonly string[] = ["skills"]) {
+  for (const entry of entries) {
+    fs.mkdirSync(path.join(rootDir, entry), { recursive: true });
+    fs.writeFileSync(path.join(rootDir, entry, "README.md"), `# ${entry}\n`, "utf-8");
+  }
+}
+
 function hermeticEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   return {
     OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
-    OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE: "1",
-    OPENCLAW_DISABLE_PLUGIN_MANIFEST_CACHE: "1",
     OPENCLAW_VERSION: "2026.4.25",
     VITEST: "true",
     ...overrides,
@@ -224,6 +231,225 @@ describe("installed plugin index", () => {
     });
     expect(index.plugins[0]?.installRecord).toBeUndefined();
     expect(index.plugins[0]?.installRecordHash).toBeUndefined();
+  });
+
+  it("does not classify migration-provider-only plugins as gateway startup sidecars", () => {
+    const rootDir = makeTempDir();
+    writeRuntimeEntry(rootDir);
+    writePackageJson(rootDir, {
+      name: "@vendor/migration-plugin",
+      version: "1.0.0",
+    });
+    writePluginManifest(rootDir, {
+      id: "migration-plugin",
+      name: "Migration Plugin",
+      enabledByDefault: true,
+      configSchema: { type: "object" },
+      contracts: {
+        migrationProviders: ["legacy-import"],
+      },
+    });
+
+    const index = loadInstalledPluginIndex({
+      candidates: [
+        createPluginCandidate({
+          rootDir,
+          packageName: "@vendor/migration-plugin",
+          packageVersion: "1.0.0",
+        }),
+      ],
+      env: hermeticEnv(),
+    });
+
+    expect(index.plugins[0]).toMatchObject({
+      pluginId: "migration-plugin",
+      enabledByDefault: true,
+      startup: {
+        sidecar: false,
+      },
+    });
+  });
+
+  it("tags deprecated implicit startup sidecars for legacy plugins", () => {
+    const rootDir = makeTempDir();
+    writeRuntimeEntry(rootDir);
+    writePluginManifest(rootDir, {
+      id: "legacy-sidecar",
+      configSchema: { type: "object" },
+    });
+
+    const index = loadInstalledPluginIndex({
+      candidates: [
+        createPluginCandidate({
+          rootDir,
+        }),
+      ],
+      env: hermeticEnv(),
+    });
+
+    expect(index.plugins[0]).toMatchObject({
+      pluginId: "legacy-sidecar",
+      startup: {
+        sidecar: true,
+      },
+      compat: ["legacy-implicit-startup-sidecar"],
+    });
+  });
+
+  it("tolerates stale manifest records without normalized channels", () => {
+    const rootDir = makeTempDir();
+    writeRuntimeEntry(rootDir);
+    const manifestPath = path.join(rootDir, "openclaw.plugin.json");
+
+    const records = buildInstalledPluginIndexRecords({
+      candidates: [createPluginCandidate({ rootDir })],
+      registry: {
+        plugins: [
+          {
+            id: "stale-record",
+            providers: [],
+            cliBackends: [],
+            skills: [],
+            hooks: [],
+            origin: "global",
+            rootDir,
+            source: path.join(rootDir, "index.ts"),
+            manifestPath,
+          } as unknown as PluginManifestRecord,
+        ],
+        diagnostics: [],
+      },
+      diagnostics: [],
+      installRecords: {},
+    });
+
+    expect(records[0]).toMatchObject({
+      pluginId: "stale-record",
+      startup: {
+        sidecar: true,
+      },
+      compat: ["legacy-implicit-startup-sidecar"],
+    });
+  });
+
+  it("indexes manifestless Claude bundles without missing-manifest diagnostics", () => {
+    const rootDir = path.join(makeTempDir(), "workspace");
+    writeManifestlessClaudeBundle(rootDir);
+
+    const index = loadInstalledPluginIndex({
+      candidates: [
+        createPluginCandidate({
+          rootDir,
+          idHint: "workspace",
+          format: "bundle",
+          bundleFormat: "claude",
+          origin: "config",
+        }),
+      ],
+      env: hermeticEnv(),
+    });
+
+    expect(index.diagnostics).toEqual([]);
+    expect(index.plugins[0]).toMatchObject({
+      pluginId: "workspace",
+      manifestPath: path.join(rootDir, ".claude-plugin", "plugin.json"),
+      manifestHash: expect.stringMatching(/^[a-f0-9]{64}$/u),
+      source: rootDir,
+      format: "bundle",
+      bundleFormat: "claude",
+    });
+  });
+
+  it("changes manifestless Claude bundle hashes when derived metadata changes", () => {
+    const rootDir = path.join(makeTempDir(), "workspace");
+    writeManifestlessClaudeBundle(rootDir, ["skills"]);
+
+    const first = loadInstalledPluginIndex({
+      candidates: [
+        createPluginCandidate({
+          rootDir,
+          idHint: "workspace",
+          format: "bundle",
+          bundleFormat: "claude",
+          origin: "config",
+        }),
+      ],
+      env: hermeticEnv(),
+    });
+
+    writeManifestlessClaudeBundle(rootDir, ["commands"]);
+    const second = loadInstalledPluginIndex({
+      candidates: [
+        createPluginCandidate({
+          rootDir,
+          idHint: "workspace",
+          format: "bundle",
+          bundleFormat: "claude",
+          origin: "config",
+        }),
+      ],
+      env: hermeticEnv(),
+    });
+
+    expect(second.plugins[0]?.manifestHash).not.toBe(first.plugins[0]?.manifestHash);
+  });
+
+  it("does not classify or tag explicit startup opt-outs as deprecated implicit sidecars", () => {
+    const rootDir = makeTempDir();
+    writeRuntimeEntry(rootDir);
+    writePluginManifest(rootDir, {
+      id: "modern-inert",
+      activation: {
+        onStartup: false,
+      },
+      configSchema: { type: "object" },
+    });
+
+    const index = loadInstalledPluginIndex({
+      candidates: [
+        createPluginCandidate({
+          rootDir,
+        }),
+      ],
+      env: hermeticEnv(),
+    });
+
+    expect(index.plugins[0]).toMatchObject({
+      pluginId: "modern-inert",
+      startup: {
+        sidecar: false,
+      },
+      compat: [],
+    });
+  });
+
+  it("classifies explicit startup activation as a gateway startup sidecar", () => {
+    const rootDir = makeTempDir();
+    writeRuntimeEntry(rootDir);
+    writePluginManifest(rootDir, {
+      id: "explicit-startup-provider",
+      providers: ["demo"],
+      activation: {
+        onStartup: true,
+      },
+      configSchema: { type: "object" },
+    });
+
+    const index = loadInstalledPluginIndex({
+      candidates: [
+        createPluginCandidate({
+          rootDir,
+        }),
+      ],
+      env: hermeticEnv(),
+    });
+
+    expect(index.plugins[0]).toMatchObject({
+      pluginId: "explicit-startup-provider",
+      startup: {
+        sidecar: true,
+      },
+    });
   });
 
   it("keeps bundle format metadata needed for manifest reconstruction", () => {

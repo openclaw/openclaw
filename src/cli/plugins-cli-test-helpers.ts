@@ -1,6 +1,7 @@
 import { Command } from "commander";
 import type { Mock } from "vitest";
 import { vi } from "vitest";
+import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { createEmptyUninstallActions } from "../plugins/uninstall.js";
@@ -51,7 +52,6 @@ export const writePersistedInstalledPluginIndexInstallRecords: AsyncUnknownMock 
     );
   },
 );
-export const clearPluginManifestRegistryCache: UnknownMock = vi.fn();
 export const loadPluginManifestRegistry: UnknownMock = vi.fn();
 export const buildPluginSnapshotReport: UnknownMock = vi.fn();
 export const buildPluginRegistrySnapshotReport: UnknownMock = vi.fn();
@@ -117,6 +117,7 @@ vi.mock("../runtime.js", () => ({
 }));
 
 vi.mock("../config/config.js", () => ({
+  getRuntimeConfig: () => loadConfig(),
   loadConfig: () => loadConfig(),
   readConfigFileSnapshot: ((
     ...args: Parameters<(typeof import("../config/config.js"))["readConfigFileSnapshot"]>
@@ -209,7 +210,6 @@ vi.mock("../plugins/installed-plugin-index-records.js", async (importOriginal) =
 });
 
 vi.mock("../plugins/manifest-registry.js", () => ({
-  clearPluginManifestRegistryCache: () => clearPluginManifestRegistryCache(),
   loadPluginManifestRegistry: ((...args: unknown[]) =>
     invokeMock<unknown[], unknown>(loadPluginManifestRegistry, ...args)) as (
     ...args: unknown[]
@@ -479,8 +479,6 @@ vi.mock("../plugins/clawhub.js", () => ({
       installPluginFromClawHub,
       ...args,
     )) as (typeof import("../plugins/clawhub.js"))["installPluginFromClawHub"],
-  formatClawHubSpecifier: ({ name, version }: { name: string; version?: string }) =>
-    `clawhub:${name}${version ? `@${version}` : ""}`,
 }));
 
 vi.mock("../infra/clawhub.js", () => ({
@@ -525,7 +523,6 @@ export function resetPluginsCliTestState() {
   mockInstalledPluginIndexInstallRecords = {};
   loadInstalledPluginIndexInstallRecords.mockReset();
   writePersistedInstalledPluginIndexInstallRecords.mockReset();
-  clearPluginManifestRegistryCache.mockReset();
   loadPluginManifestRegistry.mockReset();
   buildPluginSnapshotReport.mockReset();
   buildPluginRegistrySnapshotReport.mockReset();
@@ -551,7 +548,7 @@ export function resetPluginsCliTestState() {
 
   loadConfig.mockReturnValue({} as OpenClawConfig);
   readConfigFileSnapshot.mockImplementation(async () => {
-    const config = loadConfig();
+    const config = getRuntimeConfig();
     return {
       path: "/tmp/openclaw-config.json5",
       exists: true,

@@ -3,12 +3,12 @@ import path from "node:path";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
-} from "openclaw/plugin-sdk/config-runtime";
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import {
   clearSessionStoreCacheForTest,
   loadSessionStore,
   updateSessionStore,
-} from "openclaw/plugin-sdk/config-runtime";
+} from "openclaw/plugin-sdk/session-store-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { buildTelegramMessageContextForTest } from "./bot-message-context.test-harness.js";
@@ -109,6 +109,14 @@ describe("Telegram direct session recreation after delete", () => {
         from: { id: 7463849194, first_name: "Alice" },
       },
       sessionRuntime: null,
+    });
+    expect(context).not.toBeNull();
+    await context?.turn.recordInboundSession({
+      storePath: context.turn.storePath,
+      sessionKey: String(context.ctxPayload.SessionKey),
+      ctx: context.ctxPayload as never,
+      updateLastRoute: context.turn.record.updateLastRoute,
+      onRecordError: context.turn.record.onRecordError,
     });
 
     const store = loadSessionStore(storePath, { skipCache: true });

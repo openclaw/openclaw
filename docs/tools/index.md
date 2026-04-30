@@ -140,10 +140,18 @@ Per-agent override: `agents.list[].tools.profile`.
 
 | Profile     | What it includes                                                                                                                                  |
 | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `full`      | No restriction (same as unset)                                                                                                                    |
+| `full`      | Unrestricted baseline for broader command/control access; same as leaving `tools.profile` unset                                                   |
 | `coding`    | `group:fs`, `group:runtime`, `group:web`, `group:sessions`, `group:memory`, `cron`, `image`, `image_generate`, `music_generate`, `video_generate` |
 | `messaging` | `group:messaging`, `sessions_list`, `sessions_history`, `sessions_send`, `session_status`                                                         |
 | `minimal`   | `session_status` only                                                                                                                             |
+
+<Note>
+`tools.profile: "messaging"` is intentionally narrow for channel-focused
+agents. It leaves out broader command/control tools such as filesystem, runtime,
+browser, canvas, nodes, cron, and gateway control. Use `tools.profile: "full"`
+as the unrestricted baseline for broader command/control access, then trim
+access with `tools.allow` / `tools.deny` when needed.
+</Note>
 
 `coding` includes lightweight web tools (`web_search`, `web_fetch`, `x_search`)
 but not the full browser-control tool. Browser automation can drive real
@@ -151,10 +159,24 @@ sessions and logged-in profiles, so add it explicitly with
 `tools.alsoAllow: ["browser"]` or a per-agent
 `agents.list[].tools.alsoAllow: ["browser"]`.
 
+<Note>
+Configuring `tools.exec` or `tools.fs` under a restrictive profile (`messaging`, `minimal`) does not implicitly widen the profile's allowlist. Add explicit `tools.alsoAllow` entries (for example `["exec", "process"]` for exec, or `["read", "write", "edit"]` for fs) when you want a restrictive profile to use those configured sections. OpenClaw logs a startup warning when a config section is present without a matching `alsoAllow` grant.
+</Note>
+
 The `coding` and `messaging` profiles also allow configured bundle MCP tools
 under the plugin key `bundle-mcp`. Add `tools.deny: ["bundle-mcp"]` when you
 want a profile to keep its normal built-ins but hide all configured MCP tools.
 The `minimal` profile does not include bundle MCP tools.
+
+Example (broadest tool surface by default):
+
+```json5
+{
+  tools: {
+    profile: "full",
+  },
+}
+```
 
 ### Tool groups
 

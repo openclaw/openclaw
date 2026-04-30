@@ -133,7 +133,7 @@ import {
   emitTrustedDiagnosticEvent,
   onInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
-} from "../../../src/infra/diagnostic-events.js";
+} from "openclaw/plugin-sdk/diagnostic-runtime";
 import type { OpenClawPluginServiceContext } from "../api.js";
 import { emitDiagnosticEvent } from "../api.js";
 import { createDiagnosticsOtelService } from "./service.js";
@@ -489,6 +489,60 @@ describe("diagnostics-otel service", () => {
     });
 
     unsubscribe();
+    await service.stop?.(ctx);
+  });
+
+  test("records liveness warning diagnostics", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { traces: true, metrics: true });
+
+    await service.start(ctx);
+    emitDiagnosticEvent({
+      type: "diagnostic.liveness.warning",
+      reasons: ["event_loop_delay", "cpu"],
+      intervalMs: 30_000,
+      eventLoopDelayP99Ms: 250,
+      eventLoopDelayMaxMs: 900,
+      eventLoopUtilization: 0.95,
+      cpuUserMs: 1200,
+      cpuSystemMs: 300,
+      cpuTotalMs: 1500,
+      cpuCoreRatio: 1.4,
+      active: 2,
+      waiting: 1,
+      queued: 4,
+    });
+    await flushDiagnosticEvents();
+
+    expect(telemetryState.counters.get("openclaw.liveness.warning")?.add).toHaveBeenCalledWith(1, {
+      "openclaw.liveness.reason": "event_loop_delay:cpu",
+    });
+    expect(
+      telemetryState.histograms.get("openclaw.liveness.event_loop_delay_p99_ms")?.record,
+    ).toHaveBeenCalledWith(250, {
+      "openclaw.liveness.reason": "event_loop_delay:cpu",
+    });
+    expect(
+      telemetryState.histograms.get("openclaw.liveness.cpu_core_ratio")?.record,
+    ).toHaveBeenCalledWith(1.4, {
+      "openclaw.liveness.reason": "event_loop_delay:cpu",
+    });
+    const livenessSpan = telemetryState.tracer.startSpan.mock.calls.find(
+      (call) => call[0] === "openclaw.liveness.warning",
+    );
+    expect(livenessSpan?.[1]).toMatchObject({
+      attributes: {
+        "openclaw.liveness.reason": "event_loop_delay:cpu",
+        "openclaw.liveness.active": 2,
+        "openclaw.liveness.queued": 4,
+      },
+    });
+    const span = telemetryState.spans.find((item) => item.name === "openclaw.liveness.warning");
+    expect(span?.setStatus).toHaveBeenCalledWith({
+      code: 2,
+      message: "event_loop_delay:cpu",
+    });
+
     await service.stop?.(ctx);
   });
 
@@ -1525,6 +1579,7 @@ describe("diagnostics-otel service", () => {
       api: "openai-responses",
       durationMs: 40,
       errorCategory: "ProviderError",
+      failureKind: "terminated",
       upstreamRequestIdHash: "sha256:123456abcdef",
     });
     await flushDiagnosticEvents();
@@ -1532,6 +1587,12 @@ describe("diagnostics-otel service", () => {
     const modelCall = telemetryState.tracer.startSpan.mock.calls.find(
       (call) => call[0] === "openclaw.model.call",
     );
+    expect(modelCall?.[1]).toEqual({
+      attributes: expect.objectContaining({
+        "openclaw.failureKind": "terminated",
+      }),
+      startTime: expect.any(Number),
+    });
     expect(modelCall?.[1]).toEqual({
       attributes: expect.not.objectContaining({
         "openclaw.upstreamRequestIdHash": expect.anything(),
@@ -1542,6 +1603,14 @@ describe("diagnostics-otel service", () => {
     expect(span?.addEvent).toHaveBeenCalledWith("openclaw.provider.request", {
       "openclaw.upstreamRequestIdHash": "sha256:123456abcdef",
     });
+    expect(
+      telemetryState.histograms.get("openclaw.model_call.duration_ms")?.record,
+    ).toHaveBeenCalledWith(
+      40,
+      expect.objectContaining({
+        "openclaw.failureKind": "terminated",
+      }),
+    );
     expect(
       telemetryState.histograms.get("openclaw.model_call.duration_ms")?.record,
     ).toHaveBeenCalledWith(

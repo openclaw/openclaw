@@ -35,6 +35,7 @@ const GATEWAY_TEST_ENV_KEYS = [
   "OPENCLAW_SKIP_BROWSER_CONTROL_SERVER",
   "OPENCLAW_SKIP_PROVIDERS",
   "OPENCLAW_BUNDLED_PLUGINS_DIR",
+  "OPENCLAW_DISABLE_BUNDLED_PLUGINS",
 ] as const;
 
 function nextGatewayId(prefix: string): string {
@@ -110,6 +111,7 @@ async function setupGatewayTempHome(params: { prefix: string; minimalGateway?: b
   const workspaceDir = path.join(tempHome, "openclaw");
   await fs.mkdir(workspaceDir, { recursive: true });
   process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = await createEmptyBundledPluginsDir(tempHome);
+  process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = "1";
   return { envSnapshot, tempHome, workspaceDir };
 }
 
@@ -296,7 +298,12 @@ module.exports = {
         expect(afterCount).toBe(beforeCount);
       } finally {
         await server.close({ reason: "http tools workspace test complete" });
-        await fs.rm(tempHome, { recursive: true, force: true });
+        await fs.rm(tempHome, {
+          recursive: true,
+          force: true,
+          maxRetries: 10,
+          retryDelay: 50,
+        });
         envSnapshot.restore();
       }
     },
@@ -318,6 +325,7 @@ module.exports = {
         "OPENCLAW_SKIP_BROWSER_CONTROL_SERVER",
         "OPENCLAW_SKIP_PROVIDERS",
         "OPENCLAW_BUNDLED_PLUGINS_DIR",
+        "OPENCLAW_DISABLE_BUNDLED_PLUGINS",
         "OPENCLAW_TEST_MINIMAL_GATEWAY",
       ]);
 
@@ -333,6 +341,7 @@ module.exports = {
       const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-wizard-home-"));
       process.env.HOME = tempHome;
       process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = await createEmptyBundledPluginsDir(tempHome);
+      process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = "1";
       delete process.env.OPENCLAW_STATE_DIR;
       delete process.env.OPENCLAW_CONFIG_PATH;
 
@@ -430,7 +439,12 @@ module.exports = {
         expect(resToken.ok).toBe(true);
       } finally {
         await server2.close({ reason: "wizard auth verify" });
-        await fs.rm(tempHome, { recursive: true, force: true });
+        await fs.rm(tempHome, {
+          recursive: true,
+          force: true,
+          maxRetries: 10,
+          retryDelay: 50,
+        });
         envSnapshot.restore();
       }
     },
@@ -496,7 +510,12 @@ module.exports = {
         expect(parsed.plugins?.entries?.discord).toBeUndefined();
       } finally {
         await server.close({ reason: "minimal gateway auto-enable verify" });
-        await fs.rm(tempHome, { recursive: true, force: true });
+        await fs.rm(tempHome, {
+          recursive: true,
+          force: true,
+          maxRetries: 10,
+          retryDelay: 50,
+        });
         envSnapshot.restore();
       }
     },

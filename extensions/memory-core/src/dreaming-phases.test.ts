@@ -1,20 +1,26 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { RequestScopedSubagentRuntimeError } from "openclaw/plugin-sdk/error-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core";
-import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-core";
+import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import {
   resolveMemoryCorePluginConfig,
   resolveMemoryLightDreamingConfig,
   resolveMemoryRemDreamingConfig,
 } from "openclaw/plugin-sdk/memory-core-host-status";
 import { describe, expect, it, vi } from "vitest";
-import { __testing, runDreamingSweepPhases } from "./dreaming-phases.js";
+import {
+  __testing,
+  filterRecallEntriesWithinLookback,
+  runDreamingSweepPhases,
+} from "./dreaming-phases.js";
+import { previewRemHarness } from "./rem-harness.js";
 import {
   rankShortTermPromotionCandidates,
   recordShortTermRecalls,
   resolveShortTermPhaseSignalStorePath,
+  type ShortTermRecallEntry,
 } from "./short-term-promotion.js";
 import { createMemoryCoreTestHarness } from "./test-helpers.js";
 
@@ -118,7 +124,7 @@ function createHarness(
 }
 
 function createMockNarrativeSubagent(response = "The archive hummed softly.") {
-  const run = vi.fn(async (_params: { sessionKey: string; message: string }) => ({
+  const run = vi.fn(async (_params: { sessionKey: string; message: string; model?: string }) => ({
     runId: "dream-run-1",
   }));
   const waitForRun = vi.fn(async () => ({ status: "ok" }));
@@ -249,12 +255,11 @@ describe("memory-core dreaming phases", () => {
       nowMs,
     });
 
-    expect(subagent.deleteSession).toHaveBeenCalledTimes(2);
-    expect(subagent.deleteSession).toHaveBeenNthCalledWith(1, { sessionKey: expectedSessionKey });
-    expect(subagent.deleteSession).toHaveBeenNthCalledWith(2, { sessionKey: expectedSessionKey });
+    expect(subagent.deleteSession).toHaveBeenCalledOnce();
+    expect(subagent.deleteSession).toHaveBeenCalledWith({ sessionKey: expectedSessionKey });
   });
 
-  it("swallows synchronous request-scoped cleanup failures after narrative fallback", async () => {
+  it("skips session cleanup after request-scoped narrative fallback", async () => {
     const workspaceDir = await createDreamingWorkspace();
     await writeDailyNote(workspaceDir, [
       `# ${DREAMING_TEST_DAY}`,
@@ -320,6 +325,12 @@ describe("memory-core dreaming phases", () => {
     const dreams = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8");
     expect(dreams).toContain("Move backups to S3 Glacier.");
     expect(logger.error).not.toHaveBeenCalled();
+    expect(logger.info).toHaveBeenCalledWith(expect.stringContaining("request-scoped"));
+    expect(logger.warn).not.toHaveBeenCalledWith(expect.stringContaining("request-scoped"));
+    expect(logger.warn).not.toHaveBeenCalledWith(
+      expect.stringContaining("narrative session cleanup failed"),
+    );
+    expect(subagent.deleteSession).not.toHaveBeenCalled();
   });
 
   it("does not re-ingest managed light dreaming blocks from daily notes", async () => {
@@ -2316,7 +2327,33 @@ describe("memory-core dreaming phases", () => {
   it("passes staged light-dreaming snippets into the narrative pipeline", async () => {
     const workspaceDir = await createDreamingWorkspace();
     const subagent = createMockNarrativeSubagent("The backup plan glowed like cold storage.");
-    const { beforeAgentReply } = createHarness(LIGHT_DREAMING_TEST_CONFIG, workspaceDir, subagent);
+    const { beforeAgentReply } = createHarness(
+      {
+        plugins: {
+          entries: {
+            "memory-core": {
+              config: {
+                dreaming: {
+                  enabled: true,
+                  timezone: "UTC",
+                  model: "anthropic/claude-sonnet-4-6",
+                  storage: { mode: "inline", separateReports: false },
+                  phases: {
+                    light: {
+                      enabled: true,
+                      limit: 20,
+                      lookbackDays: 2,
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      workspaceDir,
+      subagent,
+    );
 
     await withDreamingTestClock(async () => {
       await writeDailyNote(workspaceDir, [
@@ -2333,6 +2370,7 @@ describe("memory-core dreaming phases", () => {
     const firstRun = subagent.run.mock.calls[0]?.[0];
     expect(firstRun?.message).toContain("Move backups to S3 Glacier.");
     expect(firstRun?.message).toContain("Keep retention at 365 days.");
+    expect(firstRun?.model).toBe("anthropic/claude-sonnet-4-6");
     await expect(fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8")).resolves.toContain(
       "The backup plan glowed like cold storage.",
     );
@@ -2349,12 +2387,20 @@ describe("memory-core dreaming phases", () => {
               config: {
                 dreaming: {
                   enabled: true,
+                  execution: {
+                    defaults: {
+                      model: "openai/gpt-5.4",
+                    },
+                  },
                   phases: {
                     rem: {
                       enabled: true,
                       limit: 10,
                       lookbackDays: 7,
                       minPatternStrength: 0,
+                      execution: {
+                        model: "xai/grok-4.1-fast",
+                      },
                     },
                   },
                 },
@@ -2387,6 +2433,7 @@ describe("memory-core dreaming phases", () => {
     const firstRun = subagent.run.mock.calls[0]?.[0];
     expect(firstRun?.message).toContain("Move backups to S3 Glacier.");
     expect(firstRun?.message).toContain("Keep retention at 365 days.");
+    expect(firstRun?.model).toBe("xai/grok-4.1-fast");
     await expect(fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8")).resolves.toContain(
       "The traces braided themselves into a map.",
     );
@@ -2480,5 +2527,181 @@ describe("memory-core dreaming phases", () => {
     // With the fix, dailyCount should be 2 because the ingestion date changed.
     // Before the fix, it stayed at 1 because dayBucket was the file date.
     expect(after2[0]?.dailyCount).toBe(2);
+  });
+});
+
+describe("filterRecallEntriesWithinLookback", () => {
+  const NOW_MS = new Date("2026-04-15T12:00:00.000Z").getTime();
+  const LOOKBACK_DAYS = 3;
+  const STALE_LAST_RECALLED_AT = new Date("2026-03-01T00:00:00.000Z").toISOString();
+  const FRESH_RECALL_DAY = "2026-04-14";
+
+  function makeEntry(
+    overrides: Partial<ShortTermRecallEntry> & Pick<ShortTermRecallEntry, "key">,
+  ): ShortTermRecallEntry {
+    return {
+      key: overrides.key,
+      path: overrides.path ?? "src/example.ts",
+      startLine: overrides.startLine ?? 1,
+      endLine: overrides.endLine ?? 10,
+      source: "memory",
+      snippet: overrides.snippet ?? "example snippet",
+      recallCount: overrides.recallCount ?? 1,
+      dailyCount: overrides.dailyCount ?? 0,
+      groundedCount: overrides.groundedCount ?? 0,
+      totalScore: overrides.totalScore ?? 1,
+      maxScore: overrides.maxScore ?? 1,
+      firstRecalledAt: overrides.firstRecalledAt ?? STALE_LAST_RECALLED_AT,
+      lastRecalledAt: overrides.lastRecalledAt ?? STALE_LAST_RECALLED_AT,
+      queryHashes: overrides.queryHashes ?? [],
+      recallDays: overrides.recallDays ?? [],
+      conceptTags: overrides.conceptTags ?? [],
+      ...(overrides.claimHash !== undefined ? { claimHash: overrides.claimHash } : {}),
+      ...(overrides.promotedAt !== undefined ? { promotedAt: overrides.promotedAt } : {}),
+    };
+  }
+
+  it("keeps entries with stale lastRecalledAt when recallDays has a recent day", () => {
+    const entry = makeEntry({
+      key: "stale-last-recalled-fresh-day",
+      lastRecalledAt: STALE_LAST_RECALLED_AT,
+      recallDays: [FRESH_RECALL_DAY],
+    });
+    const result = filterRecallEntriesWithinLookback({
+      entries: [entry],
+      nowMs: NOW_MS,
+      lookbackDays: LOOKBACK_DAYS,
+    });
+    expect(result).toHaveLength(1);
+    expect(result[0]?.key).toBe("stale-last-recalled-fresh-day");
+  });
+
+  it("keeps entries with unparseable lastRecalledAt when recallDays has a recent day", () => {
+    const entry = makeEntry({
+      key: "bad-last-recalled-fresh-day",
+      lastRecalledAt: "not-a-date",
+      recallDays: [FRESH_RECALL_DAY],
+    });
+    const result = filterRecallEntriesWithinLookback({
+      entries: [entry],
+      nowMs: NOW_MS,
+      lookbackDays: LOOKBACK_DAYS,
+    });
+    expect(result).toHaveLength(1);
+    expect(result[0]?.key).toBe("bad-last-recalled-fresh-day");
+  });
+
+  it("drops entries whose lastRecalledAt and recallDays are both outside the window", () => {
+    const entry = makeEntry({
+      key: "stale-everything",
+      lastRecalledAt: STALE_LAST_RECALLED_AT,
+      recallDays: ["2026-03-02"],
+    });
+    const result = filterRecallEntriesWithinLookback({
+      entries: [entry],
+      nowMs: NOW_MS,
+      lookbackDays: LOOKBACK_DAYS,
+    });
+    expect(result).toHaveLength(0);
+  });
+
+  it("keeps entries with a recent lastRecalledAt even when recallDays is empty", () => {
+    const entry = makeEntry({
+      key: "fresh-last-recalled-no-days",
+      lastRecalledAt: new Date("2026-04-14T00:00:00.000Z").toISOString(),
+      recallDays: [],
+    });
+    const result = filterRecallEntriesWithinLookback({
+      entries: [entry],
+      nowMs: NOW_MS,
+      lookbackDays: LOOKBACK_DAYS,
+    });
+    expect(result).toHaveLength(1);
+    expect(result[0]?.key).toBe("fresh-last-recalled-no-days");
+  });
+});
+
+describe("previewRemHarness", () => {
+  it("ignores daily-named directories when collecting grounded inputs", async () => {
+    const workspaceDir = await createDreamingWorkspace();
+    const memoryDir = path.join(workspaceDir, "memory");
+    await fs.mkdir(path.join(memoryDir, "2026-04-14.md"), { recursive: true });
+    await fs.writeFile(path.join(memoryDir, "2026-04-15.md"), "# Day\n\nWorked on REM.\n", "utf-8");
+
+    const preview = await previewRemHarness({
+      workspaceDir,
+      grounded: true,
+      pluginConfig: {
+        dreaming: {
+          enabled: true,
+          phases: {
+            rem: { enabled: true, limit: 10 },
+          },
+        },
+      },
+    });
+
+    expect(preview.groundedInputPaths.map((entry) => path.basename(entry))).toEqual([
+      "2026-04-15.md",
+    ]);
+    expect(preview.grounded?.scannedFiles).toBe(1);
+  });
+
+  it("keeps grounded preview null when no grounded inputs exist", async () => {
+    const workspaceDir = await createDreamingWorkspace();
+
+    const preview = await previewRemHarness({
+      workspaceDir,
+      grounded: true,
+      pluginConfig: {
+        dreaming: {
+          enabled: true,
+          phases: {
+            rem: { enabled: true, limit: 10 },
+          },
+        },
+      },
+    });
+
+    expect(preview.groundedInputPaths).toEqual([]);
+    expect(preview.grounded).toBeNull();
+  });
+
+  it("skips REM preview when rem.limit=0 while still ranking deep candidates", async () => {
+    const workspaceDir = await createDreamingWorkspace();
+    const nowMs = new Date("2026-04-15T12:00:00.000Z").getTime();
+    await recordShortTermRecalls({
+      workspaceDir,
+      query: "outdoor plans",
+      nowMs,
+      results: [
+        {
+          path: "memory/2026-04-14.md",
+          startLine: 1,
+          endLine: 1,
+          score: 0.92,
+          snippet: "Always check weather before suggesting outdoor plans.",
+          source: "memory",
+        },
+      ],
+    });
+
+    const preview = await previewRemHarness({
+      workspaceDir,
+      nowMs,
+      pluginConfig: {
+        dreaming: {
+          enabled: true,
+          phases: {
+            rem: { enabled: true, limit: 0 },
+          },
+        },
+      },
+    });
+
+    expect(preview.remSkipped).toBe(true);
+    expect(preview.rem.candidateTruths).toEqual([]);
+    expect(preview.rem.bodyLines).toEqual([]);
+    expect(preview.deep.candidates[0]?.snippet).toContain("Always check weather");
   });
 });

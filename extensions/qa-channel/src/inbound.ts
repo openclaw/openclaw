@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { dispatchInboundReplyWithBase } from "openclaw/plugin-sdk/inbound-reply-dispatch";
 import {
   buildAgentMediaPayload,
@@ -81,6 +81,16 @@ export async function handleQaInbound(params: {
       id: target,
     },
   });
+  const isGroup = inbound.conversation.kind !== "direct";
+  const wasMentioned = isGroup
+    ? runtime.channel.mentions.matchesMentionPatterns(
+        inbound.text,
+        runtime.channel.mentions.buildMentionRegexes(
+          params.config as OpenClawConfig,
+          route.agentId,
+        ),
+      )
+    : undefined;
   const storePath = runtime.channel.session.resolveStorePath(params.config.session?.store, {
     agentId: route.agentId,
   });
@@ -111,6 +121,7 @@ export async function handleQaInbound(params: {
     SessionKey: route.sessionKey,
     AccountId: route.accountId ?? params.account.accountId,
     ChatType: inbound.conversation.kind === "direct" ? "direct" : "group",
+    WasMentioned: wasMentioned,
     ConversationLabel:
       inbound.threadTitle ||
       inbound.conversation.title ||

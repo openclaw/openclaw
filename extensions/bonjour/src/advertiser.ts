@@ -1,8 +1,16 @@
+import type { ChildProcess } from "node:child_process";
 import fs from "node:fs";
+import { createRequire } from "node:module";
+import os from "node:os";
 import type { PluginLogger } from "openclaw/plugin-sdk/plugin-entry";
 import { isTruthyEnvValue } from "openclaw/plugin-sdk/runtime-env";
 import { classifyCiaoProcessError, type CiaoProcessErrorClassification } from "./ciao.js";
 import { formatBonjourError } from "./errors.js";
+
+const nodeRequire = createRequire(import.meta.url);
+const childProcessModule = nodeRequire("node:child_process") as {
+  exec: typeof import("node:child_process").exec;
+};
 
 export type GatewayBonjourAdvertiser = {
   stop: () => Promise<void>;
@@ -61,6 +69,9 @@ type ServiceStateTracker = {
 type ConsoleLogFn = (...args: unknown[]) => void;
 type UncaughtExceptionHandler = (error: unknown) => boolean;
 type UnhandledRejectionHandler = (reason: unknown) => boolean;
+type ProcessUnhandledRejectionListener = (reason: unknown, promise: Promise<unknown>) => void;
+type ExecBridge = (command: string, options?: unknown, callback?: unknown) => ChildProcess;
+type ExecOptionsRecord = Record<string, unknown> & { windowsHide?: boolean };
 
 type BonjourAdvertiserDeps = {
   logger?: Pick<PluginLogger, "info" | "warn" | "debug">;
@@ -70,8 +81,17 @@ type BonjourAdvertiserDeps = {
 
 const WATCHDOG_INTERVAL_MS = 5_000;
 const REPAIR_DEBOUNCE_MS = 30_000;
-const STUCK_ANNOUNCING_MS = 8_000;
+// Real-world LAN announce phase typically takes 12-13s on Mac/iOS networks. The
+// previous 8s threshold was triggering false-positive teardowns on every gateway
+// restart in such environments. 20s gives healthy networks plenty of room while
+// still catching genuinely stuck advertisers (announce that never completes).
+// See https://github.com/openclaw/openclaw/issues/72481
+const STUCK_ANNOUNCING_MS = 20_000;
 const MAX_CONSECUTIVE_RESTARTS = 3;
+// A flapping advertiser can briefly reach "announced" between probing
+// failures, which resets the consecutive counter. Bound total restarts too.
+const RESTART_WINDOW_MS = 30 * 60_000;
+const MAX_RESTARTS_IN_WINDOW = 5;
 const BONJOUR_ANNOUNCED_STATE = "announced";
 const CIAO_SELF_PROBE_RETRY_FRAGMENT =
   "failed probing with reason: Error: Can't probe for a service which is announced already.";
@@ -83,7 +103,10 @@ const defaultLogger = {
 };
 
 const CIAO_MODULE_ID = "@homebridge/ciao";
+const CIAO_WINDOWS_SHELL_COMMANDS = new Set(['arp -a | findstr /C:"---"']);
 let ciaoModulePromise: Promise<CiaoModule> | null = null;
+let ciaoExecHidePatchDepth = 0;
+let restoreCiaoExecHidePatchOnce: (() => void) | null = null;
 
 async function loadCiaoModule(): Promise<CiaoModule> {
   ciaoModulePromise ??= import(CIAO_MODULE_ID) as Promise<CiaoModule>;
@@ -148,9 +171,50 @@ function isDisabledByEnv() {
   return false;
 }
 
+function resolveSystemMdnsHostname(): string | null {
+  let raw: string;
+  try {
+    raw = os.hostname();
+  } catch {
+    return null;
+  }
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const firstLabel =
+    trimmed
+      .replace(/\.local$/i, "")
+      .split(".")[0]
+      ?.trim() ?? "";
+  if (!/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$/.test(firstLabel)) {
+    return null;
+  }
+  return firstLabel;
+}
+
+const MAX_DNS_LABEL_BYTES = 63;
+const utf8Encoder = new TextEncoder();
+
+function truncateToDnsLabel(name: string, fallback = "OpenClaw"): string {
+  const encoded = utf8Encoder.encode(name);
+  if (encoded.byteLength <= MAX_DNS_LABEL_BYTES) {
+    return name;
+  }
+  for (let end = MAX_DNS_LABEL_BYTES; end > 0; end -= 1) {
+    try {
+      const decoded = new TextDecoder("utf-8", { fatal: true }).decode(encoded.subarray(0, end));
+      return decoded.replace(/-+$/, "").trim() || fallback;
+    } catch {
+      // Try the next shorter prefix until the byte slice ends on a UTF-8 boundary.
+    }
+  }
+  return fallback;
+}
+
 function safeServiceName(name: string) {
   const trimmed = name.trim();
-  return trimmed.length > 0 ? trimmed : "OpenClaw";
+  return trimmed.length > 0 ? truncateToDnsLabel(trimmed) : "OpenClaw";
 }
 
 function prettifyInstanceName(name: string) {
@@ -207,6 +271,83 @@ function installCiaoConsoleNoiseFilter(): () => void {
   };
 }
 
+function isExecOptionsRecord(value: unknown): value is ExecOptionsRecord {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function shouldHideCiaoWindowsShell(command: string): boolean {
+  return process.platform === "win32" && CIAO_WINDOWS_SHELL_COMMANDS.has(command.trim());
+}
+
+function installCiaoWindowsExecHidePatch(): () => void {
+  if (process.platform !== "win32") {
+    return () => {};
+  }
+
+  ciaoExecHidePatchDepth += 1;
+  if (!restoreCiaoExecHidePatchOnce) {
+    const previousExec = childProcessModule.exec as ExecBridge;
+    const wrapper = ((command: string, options?: unknown, callback?: unknown) => {
+      if (shouldHideCiaoWindowsShell(command)) {
+        if (typeof options === "function") {
+          return previousExec.call(childProcessModule, command, { windowsHide: true }, options);
+        }
+        if (options == null) {
+          return previousExec.call(childProcessModule, command, { windowsHide: true }, callback);
+        }
+        if (isExecOptionsRecord(options) && options.windowsHide === undefined) {
+          return previousExec.call(
+            childProcessModule,
+            command,
+            { ...options, windowsHide: true },
+            callback,
+          );
+        }
+      }
+      return previousExec.call(childProcessModule, command, options, callback);
+    }) as typeof childProcessModule.exec;
+    childProcessModule.exec = wrapper;
+    restoreCiaoExecHidePatchOnce = () => {
+      if (childProcessModule.exec === wrapper) {
+        childProcessModule.exec = previousExec as typeof childProcessModule.exec;
+      }
+    };
+  }
+
+  let active = true;
+  return () => {
+    if (!active) {
+      return;
+    }
+    active = false;
+    ciaoExecHidePatchDepth = Math.max(0, ciaoExecHidePatchDepth - 1);
+    if (ciaoExecHidePatchDepth > 0) {
+      return;
+    }
+    restoreCiaoExecHidePatchOnce?.();
+    restoreCiaoExecHidePatchOnce = null;
+  };
+}
+
+function installCiaoUnhandledRejectionListener(handler: UnhandledRejectionHandler): () => void {
+  const hadOtherListeners = process.listenerCount("unhandledRejection") > 0;
+  const listener: ProcessUnhandledRejectionListener = (reason) => {
+    if (handler(reason)) {
+      return;
+    }
+    if (hadOtherListeners) {
+      return;
+    }
+    queueMicrotask(() => {
+      throw reason instanceof Error ? reason : new Error(String(reason));
+    });
+  };
+  process.on("unhandledRejection", listener);
+  return () => {
+    process.off("unhandledRejection", listener);
+  };
+}
+
 export async function startGatewayBonjourAdvertiser(
   opts: GatewayBonjourAdvertiseOpts,
   deps: BonjourAdvertiserDeps = {},
@@ -220,10 +361,11 @@ export async function startGatewayBonjourAdvertiser(
     warn: deps.logger?.warn ?? defaultLogger.warn,
     debug: deps.logger?.debug ?? defaultLogger.debug,
   };
-  const { getResponder, Protocol } = await loadCiaoModule();
-  const restoreConsoleLog = installCiaoConsoleNoiseFilter();
+  const restoreCiaoExecHidePatch = installCiaoWindowsExecHidePatch();
+  let restoreConsoleLog: () => void = () => {};
   let requestCiaoRecovery: ((classification: CiaoProcessErrorClassification) => void) | undefined;
   let cleanupUnhandledRejection: (() => void) | undefined;
+  let cleanupDirectUnhandledRejection: (() => void) | undefined;
   let cleanupUncaughtException: (() => void) | undefined;
   let processHandlersCleaned = false;
 
@@ -232,36 +374,51 @@ export async function startGatewayBonjourAdvertiser(
       return;
     }
     processHandlersCleaned = true;
+    cleanupDirectUnhandledRejection?.();
     cleanupUncaughtException?.();
     cleanupUnhandledRejection?.();
   }
 
-  const handleCiaoProcessError = (reason: unknown): boolean => {
-    const classification = classifyCiaoProcessError(reason);
-    if (!classification) {
-      return false;
-    }
-
-    if (classification.kind === "cancellation") {
-      logger.debug(`bonjour: ignoring unhandled ciao rejection: ${classification.formatted}`);
-    } else {
-      const label =
-        classification.kind === "netmask-assertion" ? "netmask assertion" : "interface assertion";
-      logger.warn(`bonjour: suppressing ciao ${label}: ${classification.formatted}`);
-      requestCiaoRecovery?.(classification);
-    }
-    return true;
-  };
-  cleanupUnhandledRejection = deps.registerUnhandledRejectionHandler?.(handleCiaoProcessError);
-  cleanupUncaughtException = deps.registerUncaughtExceptionHandler?.(handleCiaoProcessError);
-
   try {
-    const hostnameRaw = process.env.OPENCLAW_MDNS_HOSTNAME?.trim() || "openclaw";
-    const hostname =
+    const { getResponder, Protocol } = await loadCiaoModule();
+    restoreConsoleLog = installCiaoConsoleNoiseFilter();
+    const handleCiaoProcessError = (reason: unknown): boolean => {
+      const classification = classifyCiaoProcessError(reason);
+      if (!classification) {
+        return false;
+      }
+
+      if (classification.kind === "cancellation") {
+        logger.warn(`bonjour: suppressing ciao cancellation: ${classification.formatted}`);
+        requestCiaoRecovery?.(classification);
+      } else if (classification.kind === "interface-enumeration-failure") {
+        // Restricted sandboxes can refuse os.networkInterfaces(); mDNS cannot
+        // function without it, so surface a single warning and skip recovery.
+        // Recovery would just re-enter the same failing syscall.
+        logger.warn(
+          `bonjour: disabling mDNS — networkInterfaces() unavailable in this environment: ${classification.formatted}`,
+        );
+      } else {
+        const label =
+          classification.kind === "netmask-assertion" ? "netmask assertion" : "interface assertion";
+        logger.warn(`bonjour: suppressing ciao ${label}: ${classification.formatted}`);
+        requestCiaoRecovery?.(classification);
+      }
+      return true;
+    };
+    cleanupDirectUnhandledRejection = installCiaoUnhandledRejectionListener(handleCiaoProcessError);
+    cleanupUnhandledRejection = deps.registerUnhandledRejectionHandler?.(handleCiaoProcessError);
+    cleanupUncaughtException = deps.registerUncaughtExceptionHandler?.(handleCiaoProcessError);
+
+    const hostnameRaw =
+      process.env.OPENCLAW_MDNS_HOSTNAME?.trim() || resolveSystemMdnsHostname() || "openclaw";
+    const hostname = truncateToDnsLabel(
       hostnameRaw
         .replace(/\.local$/i, "")
         .split(".")[0]
-        .trim() || "openclaw";
+        .trim() || "openclaw",
+      "openclaw",
+    );
     const instanceName =
       typeof opts.instanceName === "string" && opts.instanceName.trim()
         ? opts.instanceName.trim()
@@ -361,6 +518,28 @@ export async function startGatewayBonjourAdvertiser(
       }
     }
 
+    function handleAdvertiseFailure(
+      label: string,
+      svc: BonjourService,
+      err: unknown,
+      action: "failed" | "threw",
+    ) {
+      const classification = classifyCiaoProcessError(err);
+      if (classification) {
+        logger.warn(
+          `bonjour: advertise ${action} with ciao ${classification.kind} (${serviceSummary(
+            label,
+            svc,
+          )}): ${classification.formatted}`,
+        );
+        requestCiaoRecovery?.(classification);
+        return;
+      }
+      logger.warn(
+        `bonjour: advertise ${action} (${serviceSummary(label, svc)}): ${formatBonjourError(err)}`,
+      );
+    }
+
     function startAdvertising(services: Array<{ label: string; svc: BonjourService }>) {
       for (const { label, svc } of services) {
         try {
@@ -370,14 +549,10 @@ export async function startGatewayBonjourAdvertiser(
               logger.info(`bonjour: advertised ${serviceSummary(label, svc)}`);
             })
             .catch((err) => {
-              logger.warn(
-                `bonjour: advertise failed (${serviceSummary(label, svc)}): ${formatBonjourError(err)}`,
-              );
+              handleAdvertiseFailure(label, svc, err, "failed");
             });
         } catch (err) {
-          logger.warn(
-            `bonjour: advertise threw (${serviceSummary(label, svc)}): ${formatBonjourError(err)}`,
-          );
+          handleAdvertiseFailure(label, svc, err, "threw");
         }
       }
     }
@@ -392,10 +567,9 @@ export async function startGatewayBonjourAdvertiser(
     let recreatePromise: Promise<void> | null = null;
     let disabled = false;
     let consecutiveRestarts = 0;
+    const restartTimestamps: number[] = [];
     let cycle: BonjourCycle | null = createCycle();
     const stateTracker = new Map<string, ServiceStateTracker>();
-    attachConflictListeners(cycle.services);
-    startAdvertising(cycle.services);
 
     const updateStateTrackers = (services: Array<{ label: string; svc: BonjourService }>) => {
       const now = Date.now();
@@ -421,16 +595,32 @@ export async function startGatewayBonjourAdvertiser(
       }
       recreatePromise = (async () => {
         consecutiveRestarts += 1;
-        if (consecutiveRestarts > MAX_CONSECUTIVE_RESTARTS) {
+        const now = Date.now();
+        while (
+          restartTimestamps.length > 0 &&
+          now - (restartTimestamps[0] ?? 0) > RESTART_WINDOW_MS
+        ) {
+          restartTimestamps.shift();
+        }
+        restartTimestamps.push(now);
+        const tooManyConsecutive = consecutiveRestarts > MAX_CONSECUTIVE_RESTARTS;
+        const tooManyInWindow = restartTimestamps.length >= MAX_RESTARTS_IN_WINDOW;
+        if (tooManyConsecutive || tooManyInWindow) {
           disabled = true;
+          const detail = tooManyConsecutive
+            ? `${MAX_CONSECUTIVE_RESTARTS} failed restarts`
+            : `${MAX_RESTARTS_IN_WINDOW} restarts within ${Math.round(
+                RESTART_WINDOW_MS / 60_000,
+              )} minutes`;
           logger.warn(
-            `bonjour: disabling advertiser after ${MAX_CONSECUTIVE_RESTARTS} failed restarts (${reason}); set discovery.mdns.mode="off" or OPENCLAW_DISABLE_BONJOUR=1 to disable mDNS discovery`,
+            `bonjour: disabling advertiser after ${detail} (${reason}); set discovery.mdns.mode="off" or OPENCLAW_DISABLE_BONJOUR=1 to disable mDNS discovery`,
           );
           const previous = cycle;
           cycle = null;
           stateTracker.clear();
           await stopCycle(previous, { shutdownResponder: true });
           restoreConsoleLog();
+          restoreCiaoExecHidePatch();
           return;
         }
         logger.warn(`bonjour: restarting advertiser (${reason})`);
@@ -448,6 +638,8 @@ export async function startGatewayBonjourAdvertiser(
     requestCiaoRecovery = (classification) => {
       void recreateAdvertiser(`ciao ${classification.kind}: ${classification.formatted}`);
     };
+    attachConflictListeners(cycle.services);
+    startAdvertising(cycle.services);
 
     const lastRepairAttempt = new Map<string, number>();
     const watchdog = setInterval(() => {
@@ -529,11 +721,13 @@ export async function startGatewayBonjourAdvertiser(
         }
         await stopCycle(cycle, { shutdownResponder: true });
         restoreConsoleLog();
+        restoreCiaoExecHidePatch();
         cleanupProcessHandlers();
       },
     };
   } catch (err) {
     restoreConsoleLog();
+    restoreCiaoExecHidePatch();
     cleanupProcessHandlers();
     throw err;
   }

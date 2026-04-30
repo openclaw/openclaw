@@ -1,5 +1,5 @@
 import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace.js";
-import { loadConfig } from "../config/config.js";
+import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeOpenClawVersionBase } from "../config/version.js";
 import { listImportedBundledPluginFacadeIds } from "../plugin-sdk/facade-runtime.js";
@@ -22,6 +22,7 @@ import { loadOpenClawPlugins } from "./loader.js";
 import { loadPluginManifestRegistryForInstalledIndex } from "./manifest-registry-installed.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
+import { tracePluginLifecyclePhase } from "./plugin-lifecycle-trace.js";
 import {
   loadPluginRegistrySnapshotWithMetadata,
   type PluginRegistrySnapshotDiagnostic,
@@ -50,7 +51,7 @@ export type { PluginCapabilityKind, PluginInspectShape } from "./inspect-shape.j
 
 export type PluginCompatibilityNotice = {
   pluginId: string;
-  code: "legacy-before-agent-start" | "hook-only";
+  code: "legacy-before-agent-start" | "legacy-implicit-startup-sidecar" | "hook-only";
   compatCode: PluginCompatCode;
   severity: "warn" | "info";
   message: string;
@@ -121,6 +122,16 @@ function buildCompatibilityNoticesForInspect(
         "still uses legacy before_agent_start; keep regression coverage on this plugin, and prefer before_model_resolve/before_prompt_build for new work.",
     });
   }
+  if (inspect.plugin.compat?.includes("legacy-implicit-startup-sidecar")) {
+    warnings.push({
+      pluginId: inspect.plugin.id,
+      code: "legacy-implicit-startup-sidecar",
+      compatCode: "legacy-implicit-startup-sidecar",
+      severity: "warn",
+      message:
+        "relies on deprecated implicit startup loading; add activation.onStartup: true for startup work or activation.onStartup: false for startup-lazy plugins.",
+    });
+  }
   if (inspect.shape === "hook-only") {
     warnings.push({
       pluginId: inspect.plugin.id,
@@ -151,6 +162,7 @@ function resolveReportedPluginVersion(
 type PluginReportParams = {
   config?: OpenClawConfig;
   effectiveOnly?: boolean;
+  onlyPluginIds?: readonly string[];
   workspaceDir?: string;
   /** Use an explicit env when plugin roots should resolve independently from process.env. */
   env?: NodeJS.ProcessEnv;
@@ -177,6 +189,8 @@ function buildPluginRecordFromInstalledIndex(
     rootDir: plugin.rootDir,
     origin: plugin.origin,
     enabled: plugin.enabled,
+    compat: plugin.compat,
+    syntheticAuthRefs: [...(plugin.syntheticAuthRefs ?? manifest?.syntheticAuthRefs ?? [])],
     status: plugin.enabled ? "loaded" : "disabled",
     toolNames: [],
     hookNames: [],
@@ -192,6 +206,7 @@ function buildPluginRecordFromInstalledIndex(
     musicGenerationProviderIds: [],
     webFetchProviderIds: [],
     webSearchProviderIds: [],
+    migrationProviderIds: [],
     memoryEmbeddingProviderIds: [],
     agentHarnessIds: [],
     gatewayMethods: [],
@@ -209,12 +224,17 @@ function buildPluginRecordFromInstalledIndex(
 export function buildPluginRegistrySnapshotReport(
   params?: PluginReportParams,
 ): PluginRegistryStatusReport {
-  const config = params?.config ?? loadConfig();
-  const result = loadPluginRegistrySnapshotWithMetadata({
-    config,
-    env: params?.env,
-    workspaceDir: params?.workspaceDir,
-  });
+  const config = params?.config ?? getRuntimeConfig();
+  const result = tracePluginLifecyclePhase(
+    "plugin registry snapshot",
+    () =>
+      loadPluginRegistrySnapshotWithMetadata({
+        config,
+        env: params?.env,
+        workspaceDir: params?.workspaceDir,
+      }),
+    { surface: "status" },
+  );
   const manifestRegistry = loadPluginManifestRegistryForInstalledIndex({
     index: result.snapshot,
     config,
@@ -240,7 +260,7 @@ function buildPluginReport(
   loadModules: boolean,
 ): PluginStatusReport {
   const baseContext = resolvePluginRuntimeLoadContext({
-    config: params?.config ?? loadConfig(),
+    config: params?.config ?? getRuntimeConfig(),
     env: params?.env,
     logger: params?.logger,
     workspaceDir: params?.workspaceDir,
@@ -282,30 +302,42 @@ function buildPluginReport(
           workspaceDir,
           env: params?.env ?? process.env,
         })
-      : undefined;
+      : params?.onlyPluginIds === undefined
+        ? undefined
+        : [...params.onlyPluginIds];
 
   const registry = loadModules
-    ? loadOpenClawPlugins(
-        buildPluginRuntimeLoadOptions(context, {
-          config: runtimeCompatConfig,
-          activationSourceConfig: rawConfig,
-          workspaceDir,
-          env: params?.env,
-          loadModules,
-          activate: false,
-          cache: false,
-          onlyPluginIds,
-        }),
+    ? tracePluginLifecyclePhase(
+        "runtime plugin registry load",
+        () =>
+          loadOpenClawPlugins(
+            buildPluginRuntimeLoadOptions(context, {
+              config: runtimeCompatConfig,
+              activationSourceConfig: rawConfig,
+              workspaceDir,
+              env: params?.env,
+              loadModules,
+              activate: false,
+              cache: false,
+              onlyPluginIds,
+            }),
+          ),
+        { surface: "status", onlyPluginCount: onlyPluginIds?.length },
       )
-    : loadPluginMetadataRegistrySnapshot({
-        config: runtimeCompatConfig,
-        activationSourceConfig: rawConfig,
-        workspaceDir,
-        env: params?.env,
-        logger: params?.logger,
-        loadModules: false,
-        onlyPluginIds,
-      });
+    : tracePluginLifecyclePhase(
+        "plugin registry snapshot",
+        () =>
+          loadPluginMetadataRegistrySnapshot({
+            config: runtimeCompatConfig,
+            activationSourceConfig: rawConfig,
+            workspaceDir,
+            env: params?.env,
+            logger: params?.logger,
+            loadModules: false,
+            onlyPluginIds,
+          }),
+        { surface: "status", onlyPluginCount: onlyPluginIds?.length },
+      );
   const importedPluginIds = new Set([
     ...(loadModules
       ? registry.plugins
@@ -344,7 +376,7 @@ export function buildPluginInspectReport(params: {
   logger?: PluginLogger;
   report?: PluginStatusReport;
 }): PluginInspectReport | null {
-  const rawConfig = params.config ?? loadConfig();
+  const rawConfig = params.config ?? getRuntimeConfig();
   const config = resolvePluginRuntimeLoadContext({
     config: rawConfig,
     env: params.env,
@@ -474,7 +506,7 @@ export function buildAllPluginInspectReports(params?: {
   logger?: PluginLogger;
   report?: PluginStatusReport;
 }): PluginInspectReport[] {
-  const rawConfig = params?.config ?? loadConfig();
+  const rawConfig = params?.config ?? getRuntimeConfig();
   const report =
     params?.report ??
     buildPluginDiagnosticsReport({

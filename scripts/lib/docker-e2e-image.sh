@@ -10,6 +10,7 @@ ROOT_DIR="${ROOT_DIR:-$(cd "$DOCKER_E2E_LIB_DIR/../.." && pwd)}"
 source "$DOCKER_E2E_LIB_DIR/docker-e2e-logs.sh"
 source "$DOCKER_E2E_LIB_DIR/docker-build.sh"
 source "$DOCKER_E2E_LIB_DIR/docker-e2e-package.sh"
+source "$DOCKER_E2E_LIB_DIR/docker-e2e-container.sh"
 
 docker_e2e_resolve_image() {
   local default_image="$1"
@@ -49,13 +50,19 @@ docker_e2e_build_or_reuse() {
     echo "Reusing Docker image: $image_name"
     if ! docker image inspect "$image_name" >/dev/null 2>&1; then
       echo "Docker image not found locally; pulling: $image_name"
-      if ! docker pull "$image_name"; then
+      if docker pull "$image_name"; then
+        return 0
+      fi
+      if docker_build_on_missing_enabled; then
+        echo "Docker image not available; building because OPENCLAW_DOCKER_BUILD_ON_MISSING/OPENCLAW_TESTBOX allows fallback."
+      else
         echo "Docker image not found: $image_name" >&2
         echo "Build it first or unset OPENCLAW_SKIP_DOCKER_BUILD." >&2
         return 1
       fi
+    else
+      return 0
     fi
-    return 0
   fi
 
   echo "Building Docker image: $image_name"
@@ -74,4 +81,20 @@ docker_e2e_build_or_reuse() {
   fi
   build_args+=(-t "$image_name" -f "$dockerfile" "$context")
   docker_build_run "$label-build" "${build_args[@]}"
+}
+
+docker_e2e_test_state_shell_b64() {
+  local label="${1:?missing test-state label}"
+  local scenario="${2:-empty}"
+  node "$ROOT_DIR/scripts/lib/openclaw-test-state.mjs" shell \
+    --label "$label" \
+    --scenario "$scenario" |
+    base64 |
+    tr -d '\n'
+}
+
+docker_e2e_test_state_function_b64() {
+  node "$ROOT_DIR/scripts/lib/openclaw-test-state.mjs" shell-function |
+    base64 |
+    tr -d '\n'
 }

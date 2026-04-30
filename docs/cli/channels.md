@@ -12,7 +12,7 @@ Manage chat channel accounts and their runtime status on the Gateway.
 
 Related docs:
 
-- Channel guides: [Channels](/channels/index)
+- Channel guides: [Channels](/channels)
 - Gateway configuration: [Configuration](/gateway/configuration)
 
 ## Common commands
@@ -47,7 +47,9 @@ openclaw channels add --channel nostr --private-key "$NOSTR_PRIVATE_KEY"
 openclaw channels remove --channel telegram --delete
 ```
 
-Tip: `openclaw channels add --help` shows per-channel flags (token, private key, app token, signal-cli paths, etc).
+<Tip>
+`openclaw channels add --help` shows per-channel flags (token, private key, app token, signal-cli paths, etc).
+</Tip>
 
 Common non-interactive add surfaces include:
 
@@ -81,17 +83,16 @@ Routing behavior stays consistent:
 
 If your config was already in a mixed state (named accounts present and top-level single-account values still set), run `openclaw doctor --fix` to move account-scoped values into the promoted account chosen for that channel. Most channels promote into `accounts.default`; Matrix can preserve an existing named/default target instead.
 
-## Login / logout (interactive)
+## Login and logout (interactive)
 
 ```bash
 openclaw channels login --channel whatsapp
 openclaw channels logout --channel whatsapp
 ```
 
-Notes:
-
 - `channels login` supports `--verbose`.
-- `channels login` / `logout` can infer the channel when only one supported login target is configured.
+- `channels login` and `logout` can infer the channel when only one supported login target is configured.
+- Run `channels login` from a terminal on the gateway host. Agent `exec` blocks this interactive login flow; channel-native agent login tools, such as `whatsapp_login`, should be used from chat when available.
 
 ## Troubleshooting
 

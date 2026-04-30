@@ -5,6 +5,14 @@ import { describe, expect, it, vi } from "vitest";
 import { loadCliDotEnv } from "../cli/dotenv.js";
 import { loadDotEnv, loadWorkspaceDotEnvFile } from "./dotenv.js";
 
+const loggerMocks = vi.hoisted(() => ({
+  warn: vi.fn(),
+}));
+
+vi.mock("../logging/subsystem.js", () => ({
+  createSubsystemLogger: vi.fn(() => loggerMocks),
+}));
+
 const CREDENTIAL_AND_GATEWAY_ENV_KEYS = [
   "ANTHROPIC_API_KEY",
   "ANTHROPIC_API_KEY_SECONDARY",
@@ -152,14 +160,18 @@ describe("loadDotEnv", () => {
         vi.spyOn(process, "cwd").mockReturnValue(cwdDir);
         delete process.env.FOO;
         delete process.env.BAR;
-        const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+        loggerMocks.warn.mockClear();
 
         loadDotEnv({ quiet: true });
 
         expect(process.env.FOO).toBe("from-global");
         expect(process.env.BAR).toBe("from-gateway");
-        expect(warn).toHaveBeenCalledWith(expect.stringContaining("Conflicting values in"));
-        expect(warn).toHaveBeenCalledWith(expect.stringContaining("gateway.env"));
+        expect(loggerMocks.warn).toHaveBeenCalledWith(
+          expect.stringContaining("Conflicting values in"),
+          expect.objectContaining({
+            ignoredPath: expect.stringContaining("gateway.env"),
+          }),
+        );
       });
     });
   });
@@ -176,12 +188,12 @@ describe("loadDotEnv", () => {
         );
 
         vi.spyOn(process, "cwd").mockReturnValue(cwdDir);
-        const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+        loggerMocks.warn.mockClear();
 
         loadDotEnv({ quiet: true });
 
         expect(process.env.FOO).toBe("from-shell");
-        expect(warn).not.toHaveBeenCalled();
+        expect(loggerMocks.warn).not.toHaveBeenCalled();
       });
     });
   });
@@ -362,6 +374,20 @@ describe("loadDotEnv", () => {
         loadWorkspaceDotEnvFile(path.join(cwdDir, ".env"), { quiet: true });
 
         expectEnvUndefined(BUNDLED_TRUST_ROOT_ENV_KEYS);
+      });
+    });
+  });
+
+  it.each(["npm_execpath", "NPM_EXECPATH"])("blocks %s from workspace .env", async (key) => {
+    await withIsolatedEnvAndCwd(async () => {
+      await withDotEnvFixture(async ({ cwdDir }) => {
+        await writeEnvFile(path.join(cwdDir, ".env"), `${key}=./evil/npm-cli.js\n`);
+
+        delete process.env[key];
+
+        loadWorkspaceDotEnvFile(path.join(cwdDir, ".env"), { quiet: true });
+
+        expect(process.env[key]).toBeUndefined();
       });
     });
   });

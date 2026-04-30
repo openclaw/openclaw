@@ -99,11 +99,6 @@ vi.mock("../commands/onboarding-plugin-install.js", () => ({
   ensureOnboardingPluginInstalled,
 }));
 
-const clearPluginDiscoveryCache = vi.hoisted(() => vi.fn());
-vi.mock("../plugins/discovery.js", () => ({
-  clearPluginDiscoveryCache,
-}));
-
 const LOCAL_PROVIDER_ID = "local-provider";
 const LOCAL_PROVIDER_LABEL = "Local Provider";
 const LOCAL_AUTH_METHOD_ID = "local";
@@ -359,7 +354,15 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
     });
     expect(resolvePluginSetupProvider).toHaveBeenCalledWith({
       provider: LOCAL_PROVIDER_ID,
-      config: {},
+      config: {
+        plugins: {
+          entries: {
+            "local-provider-plugin": {
+              enabled: true,
+            },
+          },
+        },
+      },
       workspaceDir: "/tmp/workspace",
       env: undefined,
       pluginIds: ["local-provider-plugin"],
@@ -388,7 +391,6 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
         workspaceDir: "/tmp/workspace",
       }),
     );
-    expect(clearPluginDiscoveryCache).toHaveBeenCalledOnce();
     expect(resolvePluginProviders).toHaveBeenCalledTimes(2);
     expect(result?.config.agents?.defaults?.model).toEqual({
       primary: LOCAL_DEFAULT_MODEL,
@@ -412,7 +414,6 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
 
     const result = await applyAuthChoiceLoadedPluginProvider(buildParams());
 
-    expect(clearPluginDiscoveryCache).toHaveBeenCalledOnce();
     expect(result).toEqual({
       config: {
         plugins: {

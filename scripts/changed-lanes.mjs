@@ -2,6 +2,8 @@ import { execFileSync } from "node:child_process";
 import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import { booleanFlag, parseFlagArgs, stringFlag } from "./lib/arg-utils.mjs";
 
+const GIT_OUTPUT_MAX_BUFFER = 64 * 1024 * 1024;
+
 const DOCS_PATH_RE = /^(?:docs\/|README\.md$|AGENTS\.md$|.*\.mdx?$)/u;
 const APP_PATH_RE = /^(?:apps\/|Swabble\/|appcast\.xml$)/u;
 const EXTENSION_PATH_RE = /^extensions\/[^/]+(?:\/|$)/u;
@@ -92,9 +94,7 @@ export function detectChangedLanes(changedPaths, options = {}) {
     !packageJsonIsLiveDockerTooling &&
     !packageJsonIsTooling &&
     paths.some((changedPath) => RELEASE_METADATA_PATHS.has(changedPath)) &&
-    paths.every(
-      (changedPath) => RELEASE_METADATA_PATHS.has(changedPath) || DOCS_PATH_RE.test(changedPath),
-    )
+    paths.every((changedPath) => RELEASE_METADATA_PATHS.has(changedPath))
   ) {
     lanes.releaseMetadata = true;
     lanes.docs = paths.some((changedPath) => DOCS_PATH_RE.test(changedPath));
@@ -236,8 +236,8 @@ export function listChangedPathsFromGit(params) {
   return [
     ...new Set([
       ...rangePaths,
-      ...runGitNameOnlyDiff(["--cached", "--diff-filter=ACMR"], cwd),
-      ...runGitNameOnlyDiff(["--diff-filter=ACMR"], cwd),
+      ...runGitNameOnlyDiff(["--cached", "--diff-filter=ACMRD"], cwd),
+      ...runGitNameOnlyDiff(["--diff-filter=ACMRD"], cwd),
       ...runGitLsFiles(["--others", "--exclude-standard"], cwd),
     ]),
   ].toSorted((left, right) => left.localeCompare(right));
@@ -248,6 +248,7 @@ function runGitNameOnlyDiff(extraArgs, cwd = process.cwd()) {
     cwd,
     stdio: ["ignore", "pipe", "pipe"],
     encoding: "utf8",
+    maxBuffer: GIT_OUTPUT_MAX_BUFFER,
   });
   return output.split("\n").map(normalizeChangedPath).filter(Boolean);
 }
@@ -257,14 +258,16 @@ function runGitLsFiles(extraArgs, cwd = process.cwd()) {
     cwd,
     stdio: ["ignore", "pipe", "pipe"],
     encoding: "utf8",
+    maxBuffer: GIT_OUTPUT_MAX_BUFFER,
   });
   return output.split("\n").map(normalizeChangedPath).filter(Boolean);
 }
 
 export function listStagedChangedPaths() {
-  const output = execFileSync("git", ["diff", "--cached", "--name-only", "--diff-filter=ACMR"], {
+  const output = execFileSync("git", ["diff", "--cached", "--name-only", "--diff-filter=ACMRD"], {
     stdio: ["ignore", "pipe", "pipe"],
     encoding: "utf8",
+    maxBuffer: GIT_OUTPUT_MAX_BUFFER,
   });
   return output.split("\n").map(normalizeChangedPath).filter(Boolean);
 }

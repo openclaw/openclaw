@@ -1,9 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import JSZip from "jszip";
+import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import sharp from "sharp";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { importFreshModule } from "../../test/helpers/import-fresh.ts";
 import { isPathWithinBase } from "../../test/helpers/paths.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
 
@@ -304,6 +304,36 @@ describe("media store", () => {
           run: async (store) => {
             return await store.saveMediaBuffer(Buffer.from("hello"), "text/plain", "race-buffer");
           },
+        });
+      },
+    },
+    {
+      name: "rejects traversal media subdirs before saving buffers",
+      run: async () => {
+        await withTempStore(async (store, home) => {
+          const mediaDir = await store.ensureMediaDir();
+          const outsideDir = path.join(home, "outside-media");
+          const traversalSubdir = path.relative(mediaDir, outsideDir);
+
+          await expect(
+            store.saveMediaBuffer(Buffer.from("escape"), "text/plain", traversalSubdir),
+          ).rejects.toThrow("unsafe media subdir");
+          await expect(fs.stat(outsideDir)).rejects.toThrow();
+        });
+      },
+    },
+    {
+      name: "rejects traversal media subdirs before resolving IDs",
+      run: async () => {
+        await withTempStore(async (store, home) => {
+          const mediaDir = await store.ensureMediaDir();
+          const outsideDir = path.join(home, "outside-media-resolve");
+          await fs.mkdir(outsideDir, { recursive: true });
+          await fs.writeFile(path.join(outsideDir, "passwd"), "not media");
+
+          await expect(
+            store.resolveMediaBufferPath("passwd", path.relative(mediaDir, outsideDir)),
+          ).rejects.toThrow("unsafe media subdir");
         });
       },
     },

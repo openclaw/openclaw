@@ -45,10 +45,15 @@ export type DiagnosticStabilityEventRecord = {
   thresholdBytes?: number;
   rssGrowthBytes?: number;
   windowMs?: number;
+  eventLoopDelayP99Ms?: number;
+  eventLoopDelayMaxMs?: number;
+  eventLoopUtilization?: number;
+  cpuCoreRatio?: number;
   ageMs?: number;
   queueDepth?: number;
   queueSize?: number;
   waitMs?: number;
+  failureKind?: string;
   active?: number;
   waiting?: number;
   queued?: number;
@@ -234,6 +239,7 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       break;
     case "session.stuck":
       record.outcome = event.state;
+      assignReasonCode(record, event.reason);
       record.ageMs = event.ageMs;
       record.queueDepth = event.queueDepth;
       break;
@@ -265,6 +271,19 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       record.waiting = event.waiting;
       record.queued = event.queued;
       break;
+    case "diagnostic.liveness.warning":
+      record.level = "warning";
+      record.durationMs = event.intervalMs;
+      record.count = event.reasons.length;
+      assignReasonCode(record, event.reasons[0]);
+      record.eventLoopDelayP99Ms = event.eventLoopDelayP99Ms;
+      record.eventLoopDelayMaxMs = event.eventLoopDelayMaxMs;
+      record.eventLoopUtilization = event.eventLoopUtilization;
+      record.cpuCoreRatio = event.cpuCoreRatio;
+      record.active = event.active;
+      record.waiting = event.waiting;
+      record.queued = event.queued;
+      break;
     case "tool.loop":
       record.toolName = event.toolName;
       record.level = event.level;
@@ -285,6 +304,11 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       record.durationMs = event.durationMs;
       assignReasonCode(record, event.errorCategory);
       break;
+    case "tool.execution.blocked":
+      record.toolName = event.toolName;
+      record.outcome = "blocked";
+      assignReasonCode(record, event.deniedReason);
+      break;
     case "exec.process.completed":
       record.target = event.target;
       record.mode = event.mode;
@@ -293,6 +317,7 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       record.commandLength = event.commandLength;
       record.exitCode = event.exitCode;
       record.timedOut = event.timedOut;
+      record.failureKind = event.failureKind;
       assignReasonCode(record, event.failureKind);
       break;
     case "run.started":
@@ -355,6 +380,8 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       record.requestBytes = event.requestPayloadBytes;
       record.responseBytes = event.responseStreamBytes;
       record.timeToFirstByteMs = event.timeToFirstByteMs;
+      record.failureKind = event.failureKind;
+      record.memory = event.memory ? copyMemory(event.memory) : undefined;
       assignReasonCode(record, event.errorCategory);
       break;
     case "log.record":

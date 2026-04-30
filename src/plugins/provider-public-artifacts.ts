@@ -1,7 +1,6 @@
 import { normalizeProviderId } from "../agents/provider-id.js";
 import type { ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveBundledPluginsDir } from "./bundled-dir.js";
 import type {
   ProviderApplyConfigDefaultsContext,
   ProviderNormalizeConfigContext,
@@ -18,13 +17,6 @@ export type BundledProviderPolicySurface = {
   ) => OpenClawConfig | null | undefined;
   resolveConfigApiKey?: (ctx: ProviderResolveConfigApiKeyContext) => string | null | undefined;
 };
-
-const bundledProviderPolicySurfaceCache = new Map<string, BundledProviderPolicySurface | null>();
-
-function buildProviderPolicySurfaceCacheKey(providerId: string): string {
-  const bundledPluginsDir = resolveBundledPluginsDir();
-  return `${providerId}::${bundledPluginsDir ?? "<default>"}`;
-}
 
 function hasProviderPolicyHook(
   mod: Record<string, unknown>,
@@ -44,6 +36,7 @@ function tryLoadBundledProviderPolicySurface(
       const mod = loadBundledPluginPublicArtifactModuleSync<Record<string, unknown>>({
         dirName: pluginId,
         artifactBasename,
+        installRuntimeDeps: false,
       });
       if (hasProviderPolicyHook(mod)) {
         return mod;
@@ -61,10 +54,6 @@ function tryLoadBundledProviderPolicySurface(
   return null;
 }
 
-export function clearBundledProviderPolicySurfaceCache(): void {
-  bundledProviderPolicySurfaceCache.clear();
-}
-
 export function resolveBundledProviderPolicySurface(
   providerId: string,
 ): BundledProviderPolicySurface | null {
@@ -72,17 +61,5 @@ export function resolveBundledProviderPolicySurface(
   if (!normalizedProviderId) {
     return null;
   }
-  const cacheKey = buildProviderPolicySurfaceCacheKey(normalizedProviderId);
-  if (bundledProviderPolicySurfaceCache.has(cacheKey)) {
-    return bundledProviderPolicySurfaceCache.get(cacheKey) ?? null;
-  }
-
-  const surface = tryLoadBundledProviderPolicySurface(normalizedProviderId);
-  if (surface) {
-    bundledProviderPolicySurfaceCache.set(cacheKey, surface);
-    return surface;
-  }
-
-  bundledProviderPolicySurfaceCache.set(cacheKey, null);
-  return null;
+  return tryLoadBundledProviderPolicySurface(normalizedProviderId);
 }

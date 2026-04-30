@@ -14,6 +14,7 @@ export type SubagentRunRecord = {
   cleanup: "delete" | "keep";
   label?: string;
   model?: string;
+  agentDir?: string;
   workspaceDir?: string;
   runTimeoutSeconds?: number;
   spawnMode?: SpawnSubagentMode;
@@ -32,6 +33,7 @@ export type SubagentRunRecord = {
   lastAnnounceRetryAt?: number;
   lastAnnounceDeliveryError?: string;
   endedReason?: SubagentLifecycleEndedReason;
+  pauseReason?: "sessions_yield";
   wakeOnDescendantSettle?: boolean;
   frozenResultText?: string | null;
   frozenResultCapturedAt?: number;

@@ -10,7 +10,9 @@ title: "Zalo personal plugin"
 
 Zalo Personal support for OpenClaw via a plugin, using native `zca-js` to automate a normal Zalo user account.
 
-> **Warning:** Unofficial automation may lead to account suspension/ban. Use at your own risk.
+<Warning>
+Unofficial automation may lead to account suspension or ban. Use at your own risk.
+</Warning>
 
 ## Naming
 
@@ -31,6 +33,10 @@ No external `zca`/`openzca` CLI binary is required.
 ```bash
 openclaw plugins install @openclaw/zalouser
 ```
+
+If npm reports the OpenClaw-owned package as deprecated, that package version is
+from an older external package train; use a current packaged OpenClaw build or
+the local folder path until a newer npm package is published.
 
 Restart the Gateway afterwards.
 

@@ -13,6 +13,25 @@ const resolvePluginDiscoveryProvidersRuntime = vi.hoisted(() =>
         mode: "api-key" as const,
       }),
     },
+    {
+      id: "ollama",
+      label: "Ollama",
+      auth: [],
+      resolveSyntheticAuth: ({
+        provider,
+        providerConfig,
+      }: {
+        provider: string;
+        providerConfig?: { api?: string; baseUrl?: string };
+      }) =>
+        providerConfig?.api === "ollama" && providerConfig.baseUrl?.startsWith("http://10.")
+          ? {
+              apiKey: "ollama-local",
+              source: `models.providers.${provider} (synthetic local key)`,
+              mode: "api-key" as const,
+            }
+          : undefined,
+    },
   ]),
 );
 
@@ -21,9 +40,7 @@ vi.mock("./provider-hook-runtime.js", async (importOriginal) => {
   return {
     ...actual,
     __testing: {},
-    clearProviderRuntimeHookCache: vi.fn(),
     prepareProviderExtraParams: vi.fn(),
-    resetProviderRuntimeHookCacheForTest: vi.fn(),
     resolveProviderHookPlugin: vi.fn(),
     resolveProviderPluginsForHooks: vi.fn(() => []),
     resolveProviderRuntimePlugin,
@@ -39,7 +56,13 @@ vi.mock("./providers.js", () => ({
   resolveCatalogHookProviderPluginIds: vi.fn(() => []),
   resolveExternalAuthProfileCompatFallbackPluginIds: vi.fn(() => []),
   resolveExternalAuthProfileProviderPluginIds: vi.fn(() => []),
-  resolveOwningPluginIdsForProvider: vi.fn(() => ["anthropic-vertex"]),
+  resolveOwningPluginIdsForProvider: vi.fn(({ provider }: { provider: string }) =>
+    provider === "ollama"
+      ? ["ollama"]
+      : provider === "anthropic-vertex"
+        ? ["anthropic-vertex"]
+        : [],
+  ),
 }));
 
 import { resolveProviderSyntheticAuthWithPlugin } from "./provider-runtime.js";
@@ -62,5 +85,27 @@ describe("resolveProviderSyntheticAuthWithPlugin", () => {
     });
     expect(resolveProviderRuntimePlugin).not.toHaveBeenCalled();
     expect(resolvePluginDiscoveryProvidersRuntime).toHaveBeenCalled();
+  });
+
+  it("uses the configured provider api as the synthetic-auth hook owner", () => {
+    expect(
+      resolveProviderSyntheticAuthWithPlugin({
+        provider: "ollama-remote",
+        context: {
+          config: undefined,
+          provider: "ollama-remote",
+          providerConfig: {
+            api: "ollama",
+            baseUrl: "http://10.0.0.8:11434",
+            apiKey: "ollama-local",
+            models: [],
+          },
+        },
+      }),
+    ).toEqual({
+      apiKey: "ollama-local",
+      source: "models.providers.ollama-remote (synthetic local key)",
+      mode: "api-key",
+    });
   });
 });

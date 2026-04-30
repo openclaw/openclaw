@@ -130,6 +130,15 @@ Native `openclaw skills install` installs into the active workspace
 `./skills` under your current working directory (or falls back to the
 configured OpenClaw workspace). OpenClaw picks that up as
 `<workspace>/skills` on the next session.
+Configured skill roots also support one grouping level, such as
+`skills/<group>/<skill>/SKILL.md`, so related third-party skills can be
+kept under a shared folder without broad recursive scanning.
+
+ClawHub skill pages expose the latest security scan state before install,
+with scanner detail pages for VirusTotal, ClawScan, and static analysis.
+`openclaw skills install <slug>` remains only the install path; publishers
+recover false positives through the ClawHub dashboard or
+`clawhub skill rescan <slug>`.
 
 ## Security
 
@@ -286,10 +295,12 @@ metadata:
     - Node installs honor `skills.install.nodeManager` in `openclaw.json` (default: npm; options: npm/pnpm/yarn/bun). This only affects skill installs; the Gateway runtime should still be Node — Bun is not recommended for WhatsApp/Telegram.
     - Gateway-backed installer selection is preference-driven: when install specs mix kinds, OpenClaw prefers Homebrew when `skills.install.preferBrew` is enabled and `brew` exists, then `uv`, then the configured node manager, then other fallbacks like `go` or `download`.
     - If every install spec is `download`, OpenClaw surfaces all download options instead of collapsing to one preferred installer.
+
   </Accordion>
   <Accordion title="Per-installer details">
     - **Go installs:** if `go` is missing and `brew` is available, the gateway installs Go via Homebrew first and sets `GOBIN` to Homebrew's `bin` when possible.
     - **Download installs:** `url` (required), `archive` (`tar.gz` | `tar.bz2` | `zip`), `extract` (default: auto when archive detected), `stripComponents`, `targetDir` (default: `~/.openclaw/tools/<skillKey>`).
+
   </Accordion>
 </AccordionGroup>
 
@@ -322,6 +333,10 @@ under `skills.entries` in `~/.openclaw/openclaw.json`:
 
 <ParamField path="enabled" type="boolean">
   `false` disables the skill even if it is bundled or installed.
+  The bundled `coding-agent` skill is opt-in: set
+  `skills.entries.coding-agent.enabled: true` before exposing it to agents,
+  then make sure one of `claude`, `codex`, `opencode`, or `pi` is installed and
+  authenticated for its own CLI.
 </ParamField>
 <ParamField path="apiKey" type='string | { source, provider, id }'>
   Convenience for skills that declare `metadata.openclaw.primaryEnv`. Supports plaintext or SecretRef.

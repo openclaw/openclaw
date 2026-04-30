@@ -10,7 +10,7 @@
  */
 
 import crypto from "node:crypto";
-import { loadConfig } from "../config/config.js";
+import { getRuntimeConfig } from "../config/config.js";
 import {
   loadSessionStore,
   resolveAgentIdFromSessionKey,
@@ -29,6 +29,11 @@ import {
   loadRequesterSessionEntry,
 } from "./subagent-announce-delivery.js";
 import { resolveAnnounceOrigin } from "./subagent-announce-origin.js";
+import {
+  evaluateSubagentRecoveryGate,
+  markSubagentRecoveryAttempt,
+  markSubagentRecoveryWedged,
+} from "./subagent-recovery-state.js";
 import {
   finalizeInterruptedSubagentRun,
   replaceSubagentRunAfterSteer,
@@ -258,7 +263,7 @@ export async function recoverOrphanedSubagentSessions(params: {
       return result;
     }
 
-    const cfg = loadConfig();
+    const cfg = getRuntimeConfig();
     const storeCache = new Map<string, Record<string, SessionEntry>>();
 
     for (const [runId, runRecord] of activeRuns.entries()) {
@@ -266,6 +271,7 @@ export async function recoverOrphanedSubagentSessions(params: {
       if (!childSessionKey) {
         continue;
       }
+      const now = Date.now();
       if (resumedSessionKeys.has(childSessionKey)) {
         result.skipped++;
         continue;
@@ -301,6 +307,44 @@ export async function recoverOrphanedSubagentSessions(params: {
         // Check if this session was aborted by the restart
         if (!entry.abortedLastRun) {
           result.skipped++;
+          continue;
+        }
+
+        const recoveryGate = evaluateSubagentRecoveryGate(entry, now);
+        if (!recoveryGate.allowed) {
+          if (recoveryGate.shouldMarkWedged) {
+            try {
+              await updateSessionStore(storePath, (currentStore) => {
+                const current = currentStore[childSessionKey];
+                if (current) {
+                  markSubagentRecoveryWedged({
+                    entry: current,
+                    now,
+                    runId,
+                    reason: recoveryGate.reason,
+                  });
+                  currentStore[childSessionKey] = current;
+                }
+              });
+              markSubagentRecoveryWedged({
+                entry,
+                now,
+                runId,
+                reason: recoveryGate.reason,
+              });
+            } catch (err) {
+              log.warn(
+                `failed to persist wedged subagent recovery marker for ${childSessionKey}: ${String(err)}`,
+              );
+            }
+          }
+          log.warn(`skipping orphan recovery for ${childSessionKey}: ${recoveryGate.reason}`);
+          result.skipped++;
+          result.failedRuns.push({
+            runId,
+            childSessionKey,
+            error: recoveryGate.reason,
+          });
           continue;
         }
 
@@ -352,6 +396,12 @@ export async function recoverOrphanedSubagentSessions(params: {
               const current = currentStore[childSessionKey];
               if (current) {
                 current.abortedLastRun = false;
+                markSubagentRecoveryAttempt({
+                  entry: current,
+                  now: Date.now(),
+                  runId,
+                  attempt: recoveryGate.nextAttempt,
+                });
                 current.updatedAt = Date.now();
                 currentStore[childSessionKey] = current;
               }

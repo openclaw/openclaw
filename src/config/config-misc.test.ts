@@ -65,6 +65,28 @@ describe("plugins.slots.contextEngine", () => {
   });
 });
 
+describe("models.pricing", () => {
+  it("accepts the model pricing bootstrap toggle", () => {
+    for (const enabled of [true, false]) {
+      const result = OpenClawSchema.safeParse({
+        models: {
+          pricing: { enabled },
+        },
+      });
+      expect(result.success).toBe(true);
+    }
+  });
+
+  it("rejects non-boolean model pricing bootstrap values", () => {
+    const result = OpenClawSchema.safeParse({
+      models: {
+        pricing: { enabled: "false" },
+      },
+    });
+    expect(result.success).toBe(false);
+  });
+});
+
 describe("crestodian.rescue", () => {
   it("accepts documented rescue config", () => {
     const result = OpenClawSchema.safeParse({
@@ -387,6 +409,27 @@ describe("gateway.tools config", () => {
 });
 
 describe("gateway.channelHealthCheckMinutes", () => {
+  it("accepts preauth handshake timeout tuning", () => {
+    const res = validateConfigObject({
+      gateway: {
+        handshakeTimeoutMs: 30_000,
+      },
+    });
+    expect(res.ok).toBe(true);
+  });
+
+  it("rejects non-positive preauth handshake timeouts", () => {
+    const res = validateConfigObject({
+      gateway: {
+        handshakeTimeoutMs: 0,
+      },
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues[0]?.path).toBe("gateway.handshakeTimeoutMs");
+    }
+  });
+
   it("accepts zero to disable monitor", () => {
     const res = validateConfigObject({
       gateway: {
@@ -642,7 +685,7 @@ describe("model compat config schema", () => {
                   supportsUsageInStreaming: true,
                   supportsStrictMode: false,
                   requiresStringContent: true,
-                  thinkingFormat: "qwen",
+                  thinkingFormat: "zai",
                   requiresToolResultName: true,
                   requiresAssistantAfterToolResult: false,
                   requiresThinkingAsText: false,

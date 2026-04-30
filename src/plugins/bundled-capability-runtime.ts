@@ -26,10 +26,6 @@ const log = createSubsystemLogger("plugins");
 
 const CAPABILITY_VITEST_SHIM_ALIASES = [
   {
-    subpath: "llm-task",
-    target: new URL("./capability-runtime-vitest-shims/llm-task.ts", import.meta.url),
-  },
-  {
     subpath: "config-runtime",
     target: new URL("./capability-runtime-vitest-shims/config-runtime.ts", import.meta.url),
   },
@@ -158,6 +154,7 @@ function createCapabilityPluginRecord(params: {
     musicGenerationProviderIds: [],
     webFetchProviderIds: [],
     webSearchProviderIds: [],
+    migrationProviderIds: [],
     memoryEmbeddingProviderIds: [],
     agentHarnessIds: [],
     gatewayMethods: [],
@@ -228,12 +225,10 @@ export function loadBundledCapabilityRuntimeRegistry(params: {
   };
 
   const discovery = discoverOpenClawPlugins({
-    cache: false,
     env,
   });
   const manifestRegistry = loadPluginManifestRegistry({
     config: buildBundledCapabilityRuntimeConfig(params.pluginIds, env),
-    cache: false,
     env,
     candidates: discovery.candidates,
     diagnostics: discovery.diagnostics,
@@ -335,6 +330,7 @@ export function loadBundledCapabilityRuntimeRegistry(params: {
       );
       record.webFetchProviderIds.push(...captured.webFetchProviders.map((entry) => entry.id));
       record.webSearchProviderIds.push(...captured.webSearchProviders.map((entry) => entry.id));
+      record.migrationProviderIds.push(...captured.migrationProviders.map((entry) => entry.id));
       record.memoryEmbeddingProviderIds.push(
         ...captured.memoryEmbeddingProviders.map((entry) => entry.id),
       );
@@ -442,6 +438,15 @@ export function loadBundledCapabilityRuntimeRegistry(params: {
       );
       registry.webSearchProviders.push(
         ...captured.webSearchProviders.map((provider) => ({
+          pluginId: record.id,
+          pluginName: record.name,
+          provider,
+          source: record.source,
+          rootDir: record.rootDir,
+        })),
+      );
+      registry.migrationProviders.push(
+        ...captured.migrationProviders.map((provider) => ({
           pluginId: record.id,
           pluginName: record.name,
           provider,

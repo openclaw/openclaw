@@ -21,6 +21,7 @@ import { parseAgentSessionKey } from "./session-key.ts";
 import { normalizeOptionalString } from "./string-coerce.ts";
 import type { ThemeMode } from "./theme.ts";
 import type { SessionsListResult } from "./types.ts";
+import type { ChatQueueItem } from "./ui-types.ts";
 
 export { isCronSessionKey, parseSessionKey, resolveSessionDisplayName, resolveSessionOptionGroups };
 
@@ -32,6 +33,7 @@ type SessionDefaultsSnapshot = {
 type SessionSwitchHost = AppViewState & {
   chatStreamStartedAt: number | null;
   chatSideResultTerminalRuns: Set<string>;
+  resetChatInputHistoryNavigation(): void;
   resetToolStream(): void;
   resetChatScroll(): void;
 };
@@ -65,8 +67,27 @@ function resolveSidebarChatSessionKey(state: AppViewState): string {
   return "main";
 }
 
+function saveChatQueueForSession(state: AppViewState, sessionKey: string) {
+  const queueBySession = (state.chatQueueBySession ??= {});
+  if (state.chatQueue.length > 0) {
+    queueBySession[sessionKey] = [...state.chatQueue];
+    state.chatQueueBySession = { ...queueBySession };
+    return;
+  }
+  if (Object.prototype.hasOwnProperty.call(queueBySession, sessionKey)) {
+    delete queueBySession[sessionKey];
+    state.chatQueueBySession = { ...queueBySession };
+  }
+}
+
+function restoreChatQueueForSession(state: AppViewState, sessionKey: string): ChatQueueItem[] {
+  return [...(state.chatQueueBySession?.[sessionKey] ?? [])];
+}
+
 function resetChatStateForSessionSwitch(state: AppViewState, sessionKey: string) {
   const host = state as unknown as SessionSwitchHost;
+  const previousSessionKey = state.sessionKey;
+  saveChatQueueForSession(state, previousSessionKey);
   state.sessionKey = sessionKey;
   state.chatMessage = "";
   state.chatAttachments = [];
@@ -83,7 +104,8 @@ function resetChatStateForSessionSwitch(state: AppViewState, sessionKey: string)
   state.chatAvatarSource = null;
   state.chatAvatarStatus = null;
   state.chatAvatarReason = null;
-  state.chatQueue = [];
+  state.chatQueue = restoreChatQueueForSession(state, sessionKey);
+  host.resetChatInputHistoryNavigation();
   host.chatStreamStartedAt = null;
   state.chatRunId = null;
   host.chatSideResultTerminalRuns.clear();
@@ -200,6 +222,12 @@ export function renderChatControls(state: AppViewState) {
       ? t("chat.showCronSessionsHidden", { count: String(hiddenCronCount) })
       : t("chat.showCronSessions")
     : t("chat.hideCronSessions");
+  const refreshDisabled =
+    !state.connected ||
+    state.chatLoading ||
+    state.chatSending ||
+    Boolean(state.chatRunId) ||
+    state.chatStream !== null;
   const toolCallsIcon = html`
     <svg
       width="18"
@@ -253,7 +281,7 @@ export function renderChatControls(state: AppViewState) {
     <div class="chat-controls">
       <button
         class="btn btn--sm btn--icon"
-        ?disabled=${state.chatLoading || !state.connected}
+        ?disabled=${refreshDisabled}
         @click=${async () => {
           const app = state as unknown as ChatRefreshHost;
           app.chatManualRefreshInFlight = true;
@@ -359,11 +387,17 @@ export function renderChatControls(state: AppViewState) {
  */
 export function renderChatMobileToggle(state: AppViewState) {
   const sessionGroups = resolveSessionOptionGroups(state, state.sessionKey, state.sessionsResult);
+  const controlsDropdownId = "chat-mobile-controls-dropdown";
+  const mobileControlsOpen = state.chatMobileControlsOpen;
   const disableThinkingToggle = state.onboarding;
   const disableFocusToggle = state.onboarding;
   const showThinking = state.onboarding ? false : state.settings.chatShowThinking;
   const showToolCalls = state.onboarding ? true : state.settings.chatShowToolCalls;
   const focusActive = state.onboarding ? true : state.settings.chatFocusMode;
+  const hideCron = state.sessionsHideCron ?? true;
+  const hiddenCronCount = hideCron
+    ? countHiddenCronSessions(state.sessionKey, state.sessionsResult)
+    : 0;
   const toolCallsIcon = html`
     <svg
       width="18"
@@ -405,21 +439,14 @@ export function renderChatMobileToggle(state: AppViewState) {
         class="btn btn--sm btn--icon chat-controls-mobile-toggle"
         @click=${(e: Event) => {
           e.stopPropagation();
-          const btn = e.currentTarget as HTMLElement;
-          const dropdown = btn.nextElementSibling as HTMLElement;
-          if (dropdown) {
-            const isOpen = dropdown.classList.toggle("open");
-            if (isOpen) {
-              const close = () => {
-                dropdown.classList.remove("open");
-                document.removeEventListener("click", close);
-              };
-              setTimeout(() => document.addEventListener("click", close, { once: true }), 0);
-            }
-          }
+          state.setChatMobileControlsOpen(!mobileControlsOpen, {
+            trigger: e.currentTarget as HTMLElement,
+          });
         }}
-        title="Chat settings"
-        aria-label="Chat settings"
+        title=${t("chat.settings")}
+        aria-label=${t("chat.settings")}
+        aria-expanded=${mobileControlsOpen}
+        aria-controls=${controlsDropdownId}
       >
         <svg
           width="18"
@@ -438,7 +465,8 @@ export function renderChatMobileToggle(state: AppViewState) {
         </svg>
       </button>
       <div
-        class="chat-controls-dropdown"
+        id=${controlsDropdownId}
+        class="chat-controls-dropdown ${mobileControlsOpen ? "open" : ""}"
         @click=${(e: Event) => {
           e.stopPropagation();
         }}
@@ -521,6 +549,20 @@ export function renderChatMobileToggle(state: AppViewState) {
             >
               ${focusIcon}
             </button>
+            <button
+              class="btn btn--sm btn--icon ${hideCron ? "active" : ""}"
+              @click=${() => {
+                state.sessionsHideCron = !hideCron;
+              }}
+              aria-pressed=${hideCron}
+              title=${hideCron
+                ? hiddenCronCount > 0
+                  ? t("chat.showCronSessionsHidden", { count: String(hiddenCronCount) })
+                  : t("chat.showCronSessions")
+                : t("chat.hideCronSessions")}
+            >
+              ${renderCronFilterIcon(hiddenCronCount)}
+            </button>
           </div>
         </div>
       </div>
@@ -563,11 +605,11 @@ function countHiddenCronSessions(sessionKey: string, sessions: SessionsListResul
   return sessions.sessions.filter((s) => isCronSessionKey(s.key) && s.key !== sessionKey).length;
 }
 
-type ThemeModeOption = { id: ThemeMode; label: string; short: string };
+type ThemeModeOption = { id: ThemeMode; labelKey: string; short: string };
 const THEME_MODE_OPTIONS: ThemeModeOption[] = [
-  { id: "system", label: "System", short: "SYS" },
-  { id: "light", label: "Light", short: "LIGHT" },
-  { id: "dark", label: "Dark", short: "DARK" },
+  { id: "system", labelKey: "common.system", short: "SYS" },
+  { id: "light", labelKey: "common.light", short: "LIGHT" },
+  { id: "dark", labelKey: "common.dark", short: "DARK" },
 ];
 
 export function renderTopbarThemeModeToggle(state: AppViewState) {
@@ -589,23 +631,24 @@ export function renderTopbarThemeModeToggle(state: AppViewState) {
   };
 
   return html`
-    <div class="topbar-theme-mode" role="group" aria-label="Color mode">
-      ${THEME_MODE_OPTIONS.map(
-        (opt) => html`
+    <div class="topbar-theme-mode" role="group" aria-label=${t("common.colorMode")}>
+      ${THEME_MODE_OPTIONS.map((opt) => {
+        const label = t(opt.labelKey);
+        return html`
           <button
             type="button"
             class="topbar-theme-mode__btn ${opt.id === state.themeMode
               ? "topbar-theme-mode__btn--active"
               : ""}"
-            title=${opt.label}
-            aria-label="Color mode: ${opt.label}"
+            title=${label}
+            aria-label=${t("common.colorModeOption", { mode: label })}
             aria-pressed=${opt.id === state.themeMode}
             @click=${(e: Event) => applyMode(opt.id, e)}
           >
             ${modeIcon(opt.id)}
           </button>
-        `,
-      )}
+        `;
+      })}
     </div>
   `;
 }
@@ -621,8 +664,8 @@ export function renderSidebarConnectionStatus(state: AppViewState) {
       class="sidebar-version__status ${toneClass}"
       role="img"
       aria-live="polite"
-      aria-label="Gateway status: ${label}"
-      title="Gateway status: ${label}"
+      aria-label=${t("chat.gatewayStatus", { status: label })}
+      title=${t("chat.gatewayStatus", { status: label })}
     ></span>
   `;
 }

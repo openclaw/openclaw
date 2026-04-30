@@ -1,5 +1,5 @@
 import { ChannelType } from "discord-api-types/v10";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createMockCommandInteraction as createInteraction } from "./native-command.test-helpers.js";
 import { createNoopThreadBindingManager } from "./thread-bindings.js";
@@ -40,7 +40,7 @@ function createConfig(params?: { requireMention?: boolean }): OpenClawConfig {
     },
     channels: {
       discord: {
-        dm: { enabled: true, policy: "open" },
+        dm: { enabled: true, policy: "open", allowFrom: ["*"] },
         guilds: {
           guild1: {
             requireMention: true,
@@ -146,6 +146,9 @@ describe("discord native /status", () => {
     discordNativeCommandTesting.setDispatchReplyWithDispatcher(
       runtimeModuleMocks.dispatchReplyWithDispatcher as typeof import("openclaw/plugin-sdk/reply-dispatch-runtime").dispatchReplyWithDispatcher,
     );
+    discordNativeCommandTesting.setMatchPluginCommand(
+      (() => null) as typeof import("openclaw/plugin-sdk/plugin-runtime").matchPluginCommand,
+    );
     setDefaultRouteState();
   });
 
@@ -165,6 +168,37 @@ describe("discord native /status", () => {
       }),
     );
     expect(interaction.reply).not.toHaveBeenCalled();
+  });
+
+  it("prioritizes direct status replies over matching plugin commands", async () => {
+    const executePluginCommand = vi.fn(async () => ({ text: "plugin status" }));
+    discordNativeCommandTesting.setMatchPluginCommand((() => ({
+      command: {
+        name: "status",
+        description: "Plugin status",
+        pluginId: "status-plugin",
+        acceptsArgs: false,
+        handler: async () => ({ text: "plugin status" }),
+      },
+      args: undefined,
+    })) as typeof import("openclaw/plugin-sdk/plugin-runtime").matchPluginCommand);
+    discordNativeCommandTesting.setExecutePluginCommand(
+      executePluginCommand as typeof import("openclaw/plugin-sdk/plugin-runtime").executePluginCommand,
+    );
+    const cfg = createConfig();
+    const command = await createStatusCommand(cfg);
+    const interaction = createInteraction();
+
+    await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
+
+    expect(runtimeModuleMocks.resolveDirectStatusReplyForSession).toHaveBeenCalledTimes(1);
+    expect(executePluginCommand).not.toHaveBeenCalled();
+    expect(interaction.followUp).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: "status reply",
+        ephemeral: true,
+      }),
+    );
   });
 
   it("keeps every direct status chunk ephemeral", async () => {

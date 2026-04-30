@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   LIVE_TRANSPORT_BASELINE_STANDARD_SCENARIO_IDS,
@@ -134,6 +134,7 @@ describe("discord live qa runtime", () => {
 
     expect(next.plugins?.allow).toContain("discord");
     expect(next.plugins?.entries?.discord).toEqual({ enabled: true });
+    expect(next.messages?.groupChat?.visibleReplies).toBe("automatic");
     expect(next.channels?.discord).toEqual({
       enabled: true,
       defaultAccount: "sut",

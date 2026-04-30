@@ -11,6 +11,13 @@ export type { BrowserTab };
 export type ProfileRuntimeState = {
   profile: ResolvedBrowserProfile;
   running: RunningChrome | null;
+  ensureBrowserAvailable?: { key: string; promise: Promise<void> } | null;
+  managedLaunchFailure?: {
+    consecutiveFailures: number;
+    lastFailureAt: number;
+    cooldownUntil?: number;
+    lastError: string;
+  };
   /** Sticky tab selection when callers omit targetId (keeps snapshot+act consistent). */
   lastTargetId?: string | null;
   /** Stable, user-facing tab aliases scoped to this profile runtime. */
@@ -30,6 +37,7 @@ export type BrowserServerState = {
   resolved: ResolvedBrowserConfig;
   profiles: Map<string, ProfileRuntimeState>;
   stopTrackedTabCleanup?: () => void;
+  stopUnhandledRejectionHandler?: () => void;
 };
 
 type BrowserProfileActions = {

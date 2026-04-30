@@ -167,6 +167,7 @@ type AgentConfigEntry = {
   workspace?: string;
   agentDir?: string;
   model?: unknown;
+  agentRuntime?: unknown;
   skills?: string[];
   tools?: {
     profile?: string;
@@ -324,6 +325,25 @@ export function resolveAgentEmoji(
   return "";
 }
 
+function resolveAgentTextAvatar(
+  agent: { identity?: { emoji?: string; avatar?: string } },
+  agentIdentity?: AgentIdentityResult | null,
+): string | null {
+  const candidates = [
+    normalizeOptionalString(agent.identity?.emoji),
+    normalizeOptionalString(agent.identity?.avatar),
+    normalizeOptionalString(agentIdentity?.emoji),
+    normalizeOptionalString(agentIdentity?.avatar),
+  ];
+  for (const candidate of candidates) {
+    const textAvatar = resolveAssistantTextAvatar(candidate);
+    if (textAvatar) {
+      return textAvatar;
+    }
+  }
+  return null;
+}
+
 export function agentBadgeText(agentId: string, defaultId: string | null) {
   return defaultId && agentId === defaultId ? "default" : null;
 }
@@ -367,6 +387,7 @@ export function resolveAgentConfig(config: Record<string, unknown> | null, agent
 export type AgentContext = {
   workspace: string;
   model: string;
+  runtime: string;
   identityName: string;
   identityAvatar: string;
   skillsLabel: string;
@@ -394,23 +415,35 @@ export function buildAgentContext(
     : config.defaults?.model
       ? resolveModelLabel(config.defaults?.model)
       : resolveModelLabel(agent.model);
+  const runtime = resolveAgentRuntimeLabel(agent.agentRuntime);
   const identityName =
-    normalizeOptionalString(agentIdentity?.name) ||
     normalizeOptionalString(agent.identity?.name) ||
     normalizeOptionalString(agent.name) ||
+    normalizeOptionalString(agentIdentity?.name) ||
     config.entry?.name ||
     agent.id;
-  const identityAvatar = resolveAgentAvatarUrl(agent, agentIdentity) ? "custom" : "—";
+  const identityAvatar = resolveAgentAvatarUrl(agent, agentIdentity)
+    ? "custom"
+    : (resolveAgentTextAvatar(agent, agentIdentity) ?? "—");
   const skillFilter = Array.isArray(config.entry?.skills) ? config.entry?.skills : null;
   const skillCount = skillFilter?.length ?? null;
   return {
     workspace,
     model: modelLabel,
+    runtime,
     identityName,
     identityAvatar,
     skillsLabel: skillFilter ? `${skillCount} selected` : "all skills",
     isDefault: Boolean(defaultId && agent.id === defaultId),
   };
+}
+
+export function resolveAgentRuntimeLabel(
+  agentRuntime?: AgentsListResult["agents"][number]["agentRuntime"],
+): string {
+  const id = normalizeOptionalString(agentRuntime?.id) ?? "pi";
+  const fallback = normalizeOptionalString(agentRuntime?.fallback);
+  return fallback ? `${id} (fallback ${fallback})` : id;
 }
 
 export function resolveModelLabel(model?: unknown): string {
@@ -637,9 +670,11 @@ export function buildModelOptions(
   configForm: Record<string, unknown> | null,
   current?: string | null,
   catalog?: ModelCatalogEntry[],
+  selected?: string | null,
 ) {
   const seen = new Set<string>();
   const options: ConfiguredModelOption[] = [];
+  const selectedKey = selected ? normalizeLowercaseStringOrEmpty(selected) : null;
   const addOption = (value: string, label: string) => {
     const key = normalizeLowercaseStringOrEmpty(value);
     if (seen.has(key)) {
@@ -669,7 +704,16 @@ export function buildModelOptions(
   if (options.length === 0) {
     return nothing;
   }
-  return options.map((option) => html`<option value=${option.value}>${option.label}</option>`);
+  return options.map(
+    (option) => html`
+      <option
+        value=${option.value}
+        ?selected=${selectedKey === normalizeLowercaseStringOrEmpty(option.value)}
+      >
+        ${option.label}
+      </option>
+    `,
+  );
 }
 
 type CompiledPattern =

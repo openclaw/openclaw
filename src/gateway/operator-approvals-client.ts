@@ -1,12 +1,18 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveGatewayClientBootstrap } from "./client-bootstrap.js";
+import { startGatewayClientWhenEventLoopReady } from "./client-start-readiness.js";
 import { GatewayClient, type GatewayClientOptions } from "./client.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "./protocol/client-info.js";
 
 export async function createOperatorApprovalsGatewayClient(
   params: Pick<
     GatewayClientOptions,
-    "clientDisplayName" | "onClose" | "onConnectError" | "onEvent" | "onHelloOk"
+    | "clientDisplayName"
+    | "onClose"
+    | "onConnectError"
+    | "onEvent"
+    | "onHelloOk"
+    | "onReconnectPaused"
   > & {
     config: OpenClawConfig;
     gatewayUrl?: string;
@@ -22,6 +28,7 @@ export async function createOperatorApprovalsGatewayClient(
     url: bootstrap.url,
     token: bootstrap.auth.token,
     password: bootstrap.auth.password,
+    preauthHandshakeTimeoutMs: bootstrap.preauthHandshakeTimeoutMs,
     clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
     clientDisplayName: params.clientDisplayName,
     mode: GATEWAY_CLIENT_MODES.BACKEND,
@@ -29,6 +36,7 @@ export async function createOperatorApprovalsGatewayClient(
     onEvent: params.onEvent,
     onHelloOk: params.onHelloOk,
     onConnectError: params.onConnectError,
+    onReconnectPaused: params.onReconnectPaused,
     onClose: params.onClose,
   });
 }
@@ -79,7 +87,12 @@ export async function withOperatorApprovalsGatewayClient<T>(
   });
 
   try {
-    gatewayClient.start();
+    const readiness = await startGatewayClientWhenEventLoopReady(gatewayClient, {
+      clientOptions: { preauthHandshakeTimeoutMs: params.config.gateway?.handshakeTimeoutMs },
+    });
+    if (!readiness.ready) {
+      throw new Error("gateway event loop readiness timeout");
+    }
     await ready;
     return await run(gatewayClient);
   } finally {

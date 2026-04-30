@@ -46,6 +46,285 @@ describe("control UI routing", () => {
 
     const dreamsLink = app.querySelector<HTMLAnchorElement>('a.nav-item[href="/dreaming"]');
     expect(dreamsLink).not.toBeNull();
+  });
+
+  it("renders the dashboard breadcrumb as an overview link", async () => {
+    const app = mountApp("/channels");
+    await app.updateComplete;
+
+    const breadcrumb = app.querySelector<HTMLAnchorElement>(
+      "dashboard-header .dashboard-header__breadcrumb-link",
+    );
+    expect(breadcrumb).toBeInstanceOf(HTMLAnchorElement);
+    expect(breadcrumb?.getAttribute("href")).toBe("/overview");
+
+    breadcrumb?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    await app.updateComplete;
+
+    expect(app.tab).toBe("overview");
+    expect(window.location.pathname).toBe("/overview");
+  });
+
+  it("keeps the dashboard breadcrumb link inside the configured base path", async () => {
+    const app = mountApp("/ui/channels");
+    await app.updateComplete;
+
+    const breadcrumb = app.querySelector<HTMLAnchorElement>(
+      "dashboard-header .dashboard-header__breadcrumb-link",
+    );
+    expect(breadcrumb).toBeInstanceOf(HTMLAnchorElement);
+    expect(breadcrumb?.getAttribute("href")).toBe("/ui/overview");
+  });
+
+  it("renders the dreaming view on the /dreaming route", async () => {
+    const app = mountApp("/dreaming");
+    app.dreamingStatus = {
+      enabled: true,
+      timezone: "Europe/Madrid",
+      verboseLogging: false,
+      storageMode: "inline",
+      separateReports: false,
+      shortTermCount: 2,
+      recallSignalCount: 1,
+      dailySignalCount: 1,
+      groundedSignalCount: 0,
+      totalSignalCount: 2,
+      phaseSignalCount: 0,
+      lightPhaseHitCount: 0,
+      remPhaseHitCount: 0,
+      promotedTotal: 1,
+      promotedToday: 1,
+      shortTermEntries: [],
+      signalEntries: [],
+      promotedEntries: [],
+      phases: {
+        light: { enabled: true, cron: "", managedCronPresent: false, lookbackDays: 7, limit: 20 },
+        deep: {
+          enabled: true,
+          cron: "",
+          managedCronPresent: false,
+          limit: 20,
+          minScore: 0.75,
+          minRecallCount: 3,
+          minUniqueQueries: 2,
+          recencyHalfLifeDays: 7,
+        },
+        rem: {
+          enabled: true,
+          cron: "",
+          managedCronPresent: false,
+          lookbackDays: 7,
+          limit: 20,
+          minPatternStrength: 0.6,
+        },
+      },
+    };
+    app.dreamDiaryPath = "DREAMS.md";
+    app.dreamDiaryContent = [
+      "# Dream Diary",
+      "",
+      "<!-- openclaw:dreaming:diary:start -->",
+      "",
+      "---",
+      "",
+      "*January 1, 2026*",
+      "",
+      "What Happened",
+      "1. Stable operator rule surfaced.",
+      "",
+      "<!-- openclaw:dreaming:diary:end -->",
+    ].join("\n");
+    app.requestUpdate();
+    await app.updateComplete;
+
+    expect(app.tab).toBe("dreams");
+    expect(app.querySelector(".dreams__tab")).not.toBeNull();
+    expect(app.querySelector(".dreams__lobster")).not.toBeNull();
+  });
+
+  it("requires confirmation before sending dreaming restart patch", async () => {
+    const app = mountApp("/dreaming");
+    const request = vi.fn(async (method: string) => {
+      if (method === "config.schema.lookup") {
+        return {
+          schema: {
+            additionalProperties: true,
+          },
+          children: [{ key: "dreaming" }],
+        };
+      }
+      if (method === "config.patch") {
+        return { ok: true };
+      }
+      if (method === "config.get") {
+        return {
+          hash: "hash-2",
+          config: {
+            plugins: {
+              slots: {
+                memory: "memory-core",
+              },
+              entries: {
+                "memory-core": {
+                  config: {
+                    dreaming: {
+                      enabled: true,
+                    },
+                  },
+                },
+              },
+            },
+          },
+        };
+      }
+      if (method === "doctor.memory.status") {
+        return {
+          dreaming: {
+            enabled: true,
+            timezone: "UTC",
+            verboseLogging: false,
+            storageMode: "inline",
+            separateReports: false,
+            shortTermCount: 0,
+            recallSignalCount: 0,
+            dailySignalCount: 0,
+            groundedSignalCount: 0,
+            totalSignalCount: 0,
+            phaseSignalCount: 0,
+            lightPhaseHitCount: 0,
+            remPhaseHitCount: 0,
+            promotedTotal: 0,
+            promotedToday: 0,
+            shortTermEntries: [],
+            signalEntries: [],
+            promotedEntries: [],
+            phases: {
+              light: {
+                enabled: true,
+                cron: "",
+                managedCronPresent: false,
+                lookbackDays: 7,
+                limit: 20,
+              },
+              deep: {
+                enabled: true,
+                cron: "",
+                managedCronPresent: false,
+                limit: 20,
+                minScore: 0.75,
+                minRecallCount: 3,
+                minUniqueQueries: 2,
+                recencyHalfLifeDays: 7,
+              },
+              rem: {
+                enabled: true,
+                cron: "",
+                managedCronPresent: false,
+                lookbackDays: 7,
+                limit: 20,
+                minPatternStrength: 0.6,
+              },
+            },
+          },
+        };
+      }
+      return {};
+    });
+
+    app.client = {
+      request,
+      stop: vi.fn(),
+    } as unknown as NonNullable<typeof app.client>;
+    app.connected = true;
+    app.configSnapshot = {
+      hash: "hash-1",
+      config: {
+        plugins: {
+          slots: {
+            memory: "memory-core",
+          },
+          entries: {
+            "memory-core": {
+              config: {
+                dreaming: {
+                  enabled: true,
+                },
+              },
+            },
+          },
+        },
+      },
+    };
+    app.dreamingStatus = {
+      enabled: true,
+      timezone: "UTC",
+      verboseLogging: false,
+      storageMode: "inline",
+      separateReports: false,
+      shortTermCount: 0,
+      recallSignalCount: 0,
+      dailySignalCount: 0,
+      groundedSignalCount: 0,
+      totalSignalCount: 0,
+      phaseSignalCount: 0,
+      lightPhaseHitCount: 0,
+      remPhaseHitCount: 0,
+      promotedTotal: 0,
+      promotedToday: 0,
+      shortTermEntries: [],
+      signalEntries: [],
+      promotedEntries: [],
+      phases: {
+        light: { enabled: true, cron: "", managedCronPresent: false, lookbackDays: 7, limit: 20 },
+        deep: {
+          enabled: true,
+          cron: "",
+          managedCronPresent: false,
+          limit: 20,
+          minScore: 0.75,
+          minRecallCount: 3,
+          minUniqueQueries: 2,
+          recencyHalfLifeDays: 7,
+        },
+        rem: {
+          enabled: true,
+          cron: "",
+          managedCronPresent: false,
+          lookbackDays: 7,
+          limit: 20,
+          minPatternStrength: 0.6,
+        },
+      },
+    };
+    app.requestUpdate();
+    await app.updateComplete;
+
+    const toggle = app.querySelector<HTMLButtonElement>(".dreams__phase-toggle--on");
+    expect(toggle).not.toBeNull();
+    toggle?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    await app.updateComplete;
+
+    expect(request).not.toHaveBeenCalledWith("config.patch", expect.anything());
+    const confirmRestart = Array.from(app.querySelectorAll<HTMLButtonElement>("button")).find(
+      (button) => button.textContent?.trim() === "Confirm Restart",
+    );
+    expect(confirmRestart).not.toBeUndefined();
+    confirmRestart?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+
+    await nextFrame();
+    await app.updateComplete;
+
+    expect(request).toHaveBeenCalledWith(
+      "config.patch",
+      expect.objectContaining({
+        baseHash: "hash-1",
+      }),
+    );
+  });
+
+  it("renders the refreshed top navigation shell", async () => {
+    const app = mountApp("/chat");
+    await app.updateComplete;
 
     expect(app.querySelector(".topnav-shell")).not.toBeNull();
     expect(app.querySelector(".topnav-shell__content")).not.toBeNull();
@@ -114,6 +393,7 @@ describe("control UI routing", () => {
     }
 
     expect(toggle.classList.contains("topbar-nav-toggle")).toBe(true);
+    expect(toggle.classList.contains("sidebar-menu-trigger")).toBe(true);
     expect(actions.classList.contains("topnav-shell__actions")).toBe(true);
     expect(topShell.firstElementChild).toBe(toggle);
     expect(topShell.querySelector(".topbar-nav-toggle")).toBe(toggle);
@@ -166,6 +446,60 @@ describe("control UI routing", () => {
     expect(item.querySelector(".nav-item__text")).toBeNull();
     expect(app.querySelector(".sidebar-brand__copy")).toBeNull();
     expect(header.querySelector(".nav-collapse-toggle")).not.toBeNull();
+  });
+
+  it("closes mobile chat controls on Escape, outside pointerdown, and tab changes", async () => {
+    const app = mountApp("/chat");
+    await app.updateComplete;
+
+    const toggle = app.querySelector<HTMLButtonElement>(".chat-controls-mobile-toggle");
+    const dropdown = app.querySelector<HTMLElement>(".chat-controls-dropdown");
+    expect(toggle).not.toBeNull();
+    expect(dropdown).not.toBeNull();
+    if (!toggle || !dropdown) {
+      return;
+    }
+
+    toggle.focus();
+    toggle.click();
+    await app.updateComplete;
+
+    expect(app.chatMobileControlsOpen).toBe(true);
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    expect(dropdown.classList.contains("open")).toBe(true);
+
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    await app.updateComplete;
+    await nextFrame();
+
+    expect(app.chatMobileControlsOpen).toBe(false);
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(dropdown.classList.contains("open")).toBe(false);
+    expect(document.activeElement).toBe(toggle);
+
+    toggle.click();
+    await app.updateComplete;
+    app.requestUpdate();
+    await app.updateComplete;
+
+    const openDropdown = app.querySelector<HTMLElement>(".chat-controls-dropdown");
+    expect(app.chatMobileControlsOpen).toBe(true);
+    expect(openDropdown?.classList.contains("open")).toBe(true);
+
+    document.body.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, composed: true }));
+    await app.updateComplete;
+
+    const closedDropdown = app.querySelector<HTMLElement>(".chat-controls-dropdown");
+    expect(app.chatMobileControlsOpen).toBe(false);
+    expect(closedDropdown?.classList.contains("open")).toBe(false);
+
+    app.querySelector<HTMLButtonElement>(".chat-controls-mobile-toggle")?.click();
+    await app.updateComplete;
+    expect(app.chatMobileControlsOpen).toBe(true);
+
+    app.setTab("channels");
+    await app.updateComplete;
+    expect(app.chatMobileControlsOpen).toBe(false);
   });
 
   it("preserves session navigation and keeps focus mode scoped to chat", async () => {

@@ -15,7 +15,7 @@ type OllamaProviderPlugin = {
   docsPath: string;
   envVars: string[];
   auth: [];
-  resolveSyntheticAuth: (ctx: { providerConfig?: ModelProviderConfig }) =>
+  resolveSyntheticAuth: (ctx: { provider?: string; providerConfig?: ModelProviderConfig }) =>
     | {
         apiKey: string;
         source: string;
@@ -50,13 +50,13 @@ export const ollamaProviderDiscovery: OllamaProviderPlugin = {
   docsPath: "/providers/ollama",
   envVars: ["OLLAMA_API_KEY"],
   auth: [],
-  resolveSyntheticAuth: ({ providerConfig }) => {
+  resolveSyntheticAuth: ({ provider, providerConfig }) => {
     if (!shouldUseSyntheticOllamaAuth(providerConfig)) {
       return undefined;
     }
     return {
       apiKey: OLLAMA_DEFAULT_API_KEY,
-      source: "models.providers.ollama (synthetic local key)",
+      source: `models.providers.${provider ?? OLLAMA_PROVIDER_ID} (synthetic local key)`,
       mode: "api-key",
     };
   },

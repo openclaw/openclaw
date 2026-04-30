@@ -1,4 +1,4 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { request } from "node:http";
 import { createServer } from "node:net";
@@ -11,6 +11,7 @@ type GatewayBenchCase = {
   env?: Record<string, string>;
   id: string;
   name: string;
+  pluginActivationOnStartup?: boolean;
   pluginCount?: number;
 };
 
@@ -20,9 +21,12 @@ type ProbeResult = {
 };
 
 type GatewaySample = {
+  cpuCoreRatio: number | null;
+  cpuMs: number | null;
   exitCode: number | null;
   firstOutputMs: number | null;
   healthz: ProbeResult;
+  maxRssMb: number | null;
   outputTail: string;
   readyLogMs: number | null;
   readyz: ProbeResult;
@@ -44,7 +48,10 @@ type CaseResult = {
   samples: GatewaySample[];
   summary: {
     firstOutputMs: SummaryStats | null;
+    cpuCoreRatio: SummaryStats | null;
+    cpuMs: SummaryStats | null;
     healthzMs: SummaryStats | null;
+    maxRssMb: SummaryStats | null;
     readyLogMs: SummaryStats | null;
     readyzMs: SummaryStats | null;
     startupTrace: Record<string, SummaryStats>;
@@ -127,6 +134,24 @@ const GATEWAY_CASES: readonly GatewayBenchCase[] = [
     id: "fiftyPlugins",
     name: "gateway, 50 manifest plugins",
     env: { OPENCLAW_SKIP_CHANNELS: "1" },
+    pluginCount: 50,
+    config: BASE_CONFIG,
+  },
+  {
+    id: "fiftyPluginsFutureStrict",
+    name: "gateway, 50 manifest plugins with legacy startup fallback disabled",
+    env: {
+      OPENCLAW_DISABLE_LEGACY_IMPLICIT_STARTUP_SIDECARS: "1",
+      OPENCLAW_SKIP_CHANNELS: "1",
+    },
+    pluginCount: 50,
+    config: BASE_CONFIG,
+  },
+  {
+    id: "fiftyStartupLazyPlugins",
+    name: "gateway, 50 startup-lazy manifest plugins",
+    env: { OPENCLAW_SKIP_CHANNELS: "1" },
+    pluginActivationOnStartup: false,
     pluginCount: 50,
     config: BASE_CONFIG,
   },
@@ -248,9 +273,24 @@ function summarizeCase(benchCase: GatewayBenchCase, samples: GatewaySample[]): C
           .map((sample) => sample.firstOutputMs)
           .filter((value): value is number => typeof value === "number"),
       ),
+      cpuCoreRatio: summarizeNumbers(
+        samples
+          .map((sample) => sample.cpuCoreRatio)
+          .filter((value): value is number => typeof value === "number"),
+      ),
+      cpuMs: summarizeNumbers(
+        samples
+          .map((sample) => sample.cpuMs)
+          .filter((value): value is number => typeof value === "number"),
+      ),
       healthzMs: summarizeNumbers(
         samples
           .map((sample) => sample.healthz.ms)
+          .filter((value): value is number => typeof value === "number"),
+      ),
+      maxRssMb: summarizeNumbers(
+        samples
+          .map((sample) => sample.maxRssMb)
           .filter((value): value is number => typeof value === "number"),
       ),
       readyLogMs: summarizeNumbers(
@@ -275,11 +315,39 @@ function formatMs(value: number | null): string {
   return `${value.toFixed(1)}ms`;
 }
 
+function formatMb(value: number | null): string {
+  if (value == null) {
+    return "n/a";
+  }
+  return `${value.toFixed(1)}MB`;
+}
+
+function formatRatio(value: number | null): string {
+  if (value == null) {
+    return "n/a";
+  }
+  return value.toFixed(3);
+}
+
 function formatStats(stats: SummaryStats | null): string {
   if (!stats) {
     return "n/a";
   }
   return `p50=${formatMs(stats.p50)} avg=${formatMs(stats.avg)} min=${formatMs(stats.min)} max=${formatMs(stats.max)}`;
+}
+
+function formatMemoryStats(stats: SummaryStats | null): string {
+  if (!stats) {
+    return "n/a";
+  }
+  return `p50=${formatMb(stats.p50)} avg=${formatMb(stats.avg)} min=${formatMb(stats.min)} max=${formatMb(stats.max)}`;
+}
+
+function formatRatioStats(stats: SummaryStats | null): string {
+  if (!stats) {
+    return "n/a";
+  }
+  return `p50=${formatRatio(stats.p50)} avg=${formatRatio(stats.avg)} min=${formatRatio(stats.min)} max=${formatRatio(stats.max)}`;
 }
 
 async function getFreePort(): Promise<number> {
@@ -341,7 +409,7 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function writePluginFixtures(root: string, count: number): string[] {
+function writePluginFixtures(root: string, count: number, activationOnStartup?: boolean): string[] {
   const files: string[] = [];
   const pluginsDir = path.join(root, "plugins");
   mkdirSync(pluginsDir, { recursive: true });
@@ -353,7 +421,17 @@ function writePluginFixtures(root: string, count: number): string[] {
     writeFileSync(entry, `module.exports = { id: ${JSON.stringify(id)}, register() {} };\n`);
     writeFileSync(
       path.join(pluginDir, "openclaw.plugin.json"),
-      `${JSON.stringify({ id, configSchema: { type: "object", additionalProperties: false } }, null, 2)}\n`,
+      `${JSON.stringify(
+        {
+          id,
+          ...(activationOnStartup === undefined
+            ? {}
+            : { activation: { onStartup: activationOnStartup } }),
+          configSchema: { type: "object", additionalProperties: false },
+        },
+        null,
+        2,
+      )}\n`,
     );
     files.push(entry);
   }
@@ -361,7 +439,9 @@ function writePluginFixtures(root: string, count: number): string[] {
 }
 
 function writeConfig(root: string, benchCase: GatewayBenchCase): string {
-  const pluginPaths = benchCase.pluginCount ? writePluginFixtures(root, benchCase.pluginCount) : [];
+  const pluginPaths = benchCase.pluginCount
+    ? writePluginFixtures(root, benchCase.pluginCount, benchCase.pluginActivationOnStartup)
+    : [];
   const config = {
     ...benchCase.config,
     plugins: {
@@ -400,6 +480,7 @@ function sanitizedEnv(
     OPENCLAW_GATEWAY_STARTUP_TRACE: "1",
     OPENCLAW_HOME: root,
     OPENCLAW_LOCAL_CHECK: "0",
+    OPENCLAW_NO_RESPAWN: "1",
     OPENCLAW_STATE_DIR: path.join(root, "state"),
     OPENCLAW_TEST_DISABLE_UPDATE_CHECK: "1",
     ...benchCase.env,
@@ -440,12 +521,123 @@ function killProcessTree(child: ChildProcessWithoutNullStreams, signal: NodeJS.S
 }
 
 function collectStartupTrace(line: string, startupTrace: Record<string, number>): void {
-  const match = /startup trace: ([^ ]+) ([0-9.]+)ms total=([0-9.]+)ms/u.exec(line);
-  if (!match) {
+  const phaseMatch = /startup trace: ([^ ]+) ([0-9.]+)ms total=([0-9.]+)ms(?: (.*))?/u.exec(line);
+  if (phaseMatch) {
+    startupTrace[phaseMatch[1]] = Number(phaseMatch[2]);
+    startupTrace[`${phaseMatch[1]}.total`] = Number(phaseMatch[3]);
+    for (const metric of parseStartupTraceMetrics(phaseMatch[4] ?? "")) {
+      startupTrace[`${phaseMatch[1]}.${metric.key}`] = metric.value;
+    }
     return;
   }
-  startupTrace[match[1]] = Number(match[2]);
-  startupTrace[`${match[1]}.total`] = Number(match[3]);
+  const detailMatch = /startup trace: ([^ ]+) (.*)/u.exec(line);
+  if (!detailMatch) {
+    return;
+  }
+  for (const metric of parseStartupTraceMetrics(detailMatch[2])) {
+    startupTrace[`${detailMatch[1]}.${metric.key}`] = metric.value;
+  }
+}
+
+function hasGatewayReadyLog(line: string): boolean {
+  return /\[gateway\] (?:http server listening|ready \()/.test(line);
+}
+
+function parseStartupTraceMetrics(raw: string): Array<{ key: string; value: number }> {
+  const metrics: Array<{ key: string; value: number }> = [];
+  for (const part of raw.trim().split(/\s+/u)) {
+    const metricMatch = /^([A-Za-z][A-Za-z0-9]*)=([0-9.]+)(?:ms)?$/u.exec(part);
+    if (!metricMatch) {
+      continue;
+    }
+    const key = metricMatch[1];
+    const value = Number(metricMatch[2]);
+    if (!Number.isFinite(value) || (key !== "eventLoopMax" && !key.endsWith("Ms"))) {
+      continue;
+    }
+    metrics.push({ key, value });
+  }
+  return metrics;
+}
+
+function readProcessRssMb(pid: number | undefined): number | null {
+  if (!pid || process.platform === "win32") {
+    return null;
+  }
+  const result = spawnSync("ps", ["-o", "rss=", "-p", String(pid)], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+  if (result.status !== 0) {
+    return null;
+  }
+  const rssKb = Number.parseInt(result.stdout.trim(), 10);
+  return Number.isFinite(rssKb) && rssKb > 0 ? rssKb / 1024 : null;
+}
+
+function parsePsCpuTimeMs(raw: string): number | null {
+  const parts = raw.trim().split(":").map(Number);
+  if (parts.some((part) => !Number.isFinite(part) || part < 0)) {
+    return null;
+  }
+  if (parts.length === 2) {
+    return Math.round((parts[0] * 60 + parts[1]) * 1000);
+  }
+  if (parts.length === 3) {
+    return Math.round((parts[0] * 60 * 60 + parts[1] * 60 + parts[2]) * 1000);
+  }
+  return null;
+}
+
+function readProcessTreeCpuMs(rootPid: number | undefined): number | null {
+  if (!rootPid || process.platform === "win32") {
+    return null;
+  }
+  const result = spawnSync("ps", ["-eo", "pid=,ppid=,time="], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+  if (result.status !== 0) {
+    return null;
+  }
+
+  const childrenByParent = new Map<number, number[]>();
+  const cpuByPid = new Map<number, number>();
+  for (const line of result.stdout.split("\n")) {
+    const match = line.trim().match(/^(\d+)\s+(\d+)\s+(\S+)$/u);
+    if (!match) {
+      continue;
+    }
+    const pid = Number(match[1]);
+    const ppid = Number(match[2]);
+    const cpuMs = parsePsCpuTimeMs(match[3]);
+    if (!Number.isInteger(pid) || !Number.isInteger(ppid) || cpuMs === null) {
+      continue;
+    }
+    cpuByPid.set(pid, cpuMs);
+    const children = childrenByParent.get(ppid) ?? [];
+    children.push(pid);
+    childrenByParent.set(ppid, children);
+  }
+  if (!cpuByPid.has(rootPid)) {
+    return null;
+  }
+
+  let totalCpuMs = 0;
+  const seen = new Set<number>();
+  const stack = [rootPid];
+  while (stack.length > 0) {
+    const pid = stack.pop();
+    if (!pid || seen.has(pid)) {
+      continue;
+    }
+    seen.add(pid);
+    totalCpuMs += cpuByPid.get(pid) ?? 0;
+    for (const childPid of childrenByParent.get(pid) ?? []) {
+      stack.push(childPid);
+    }
+  }
+  return totalCpuMs;
 }
 
 async function runGatewaySample(options: {
@@ -462,6 +654,7 @@ async function runGatewaySample(options: {
   const startupTrace: Record<string, number> = {};
   const output: string[] = [];
   let firstOutputMs: number | null = null;
+  let maxRssMb: number | null = null;
   let readyLogMs: number | null = null;
   let childExited = false;
 
@@ -483,6 +676,16 @@ async function runGatewaySample(options: {
     ],
     { cwd: process.cwd(), detached: process.platform !== "win32", env },
   );
+  const cpuStartMs = readProcessTreeCpuMs(child.pid);
+  const sampleRss = () => {
+    const rssMb = readProcessRssMb(child.pid);
+    if (rssMb != null) {
+      maxRssMb = maxRssMb == null ? rssMb : Math.max(maxRssMb, rssMb);
+    }
+  };
+  sampleRss();
+  const rssTimer = setInterval(sampleRss, 100);
+  rssTimer.unref?.();
   const childExitPromise = new Promise<{ exitCode: number | null; signal: string | null }>(
     (resolve) => {
       child.once("exit", (exitCode, signal) => {
@@ -502,7 +705,7 @@ async function runGatewaySample(options: {
       output.splice(0, output.length - 20);
     }
     for (const line of text.split(/\r?\n/u)) {
-      if (line.includes("ready (") && readyLogMs == null) {
+      if (hasGatewayReadyLog(line) && readyLogMs == null) {
         readyLogMs = performance.now() - startAt;
       }
       collectStartupTrace(line, startupTrace);
@@ -527,14 +730,23 @@ async function runGatewaySample(options: {
       startAt,
     }),
   ]);
+  const readyAt = performance.now();
+  const cpuEndMs = readProcessTreeCpuMs(child.pid);
+  const cpuMs = cpuStartMs == null || cpuEndMs == null ? null : Math.max(0, cpuEndMs - cpuStartMs);
+  const cpuCoreRatio = cpuMs == null ? null : cpuMs / Math.max(1, readyAt - startAt);
   const exit = await stopChild(child);
+  clearInterval(rssTimer);
+  sampleRss();
   await childExitPromise.catch(() => null);
   rmSync(root, { force: true, maxRetries: 3, recursive: true, retryDelay: 100 });
 
   return {
+    cpuCoreRatio,
+    cpuMs,
     exitCode: exit.exitCode,
     firstOutputMs,
     healthz,
+    maxRssMb,
     outputTail: output.join("").split(/\r?\n/u).slice(-20).join("\n"),
     readyLogMs,
     readyz,
@@ -561,11 +773,11 @@ async function runCase(options: {
     if (index >= options.warmup) {
       samples.push(sample);
       console.log(
-        `[gateway-startup-bench] ${options.benchCase.id} run ${samples.length}/${options.runs}: healthz=${formatMs(sample.healthz.ms)} readyz=${formatMs(sample.readyz.ms)} readyLog=${formatMs(sample.readyLogMs)}`,
+        `[gateway-startup-bench] ${options.benchCase.id} run ${samples.length}/${options.runs}: healthz=${formatMs(sample.healthz.ms)} readyz=${formatMs(sample.readyz.ms)} readyLog=${formatMs(sample.readyLogMs)} cpu=${formatMs(sample.cpuMs)} cpuCore=${formatRatio(sample.cpuCoreRatio)} rss=${formatMb(sample.maxRssMb)}`,
       );
     } else {
       console.log(
-        `[gateway-startup-bench] ${options.benchCase.id} warmup ${index + 1}/${options.warmup}: healthz=${formatMs(sample.healthz.ms)} readyz=${formatMs(sample.readyz.ms)}`,
+        `[gateway-startup-bench] ${options.benchCase.id} warmup ${index + 1}/${options.warmup}: healthz=${formatMs(sample.healthz.ms)} readyz=${formatMs(sample.readyz.ms)} cpu=${formatMs(sample.cpuMs)} cpuCore=${formatRatio(sample.cpuCoreRatio)} rss=${formatMb(sample.maxRssMb)}`,
       );
     }
   }
@@ -575,9 +787,12 @@ async function runCase(options: {
 function printResult(result: CaseResult): void {
   console.log(`\n${result.name} (${result.id})`);
   console.log(`  first output: ${formatStats(result.summary.firstOutputMs)}`);
+  console.log(`  CPU:          ${formatStats(result.summary.cpuMs)}`);
+  console.log(`  CPU core:     ${formatRatioStats(result.summary.cpuCoreRatio)}`);
   console.log(`  /healthz:     ${formatStats(result.summary.healthzMs)}`);
   console.log(`  ready log:    ${formatStats(result.summary.readyLogMs)}`);
   console.log(`  /readyz:      ${formatStats(result.summary.readyzMs)}`);
+  console.log(`  max RSS:      ${formatMemoryStats(result.summary.maxRssMb)}`);
   const trace = Object.entries(result.summary.startupTrace)
     .filter(([name]) => !name.endsWith(".total"))
     .toSorted((a, b) => (b[1].avg ?? 0) - (a[1].avg ?? 0))

@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderQaMarkdownReport } from "../../report.js";
 import { __testing as liveTesting } from "./runtime.js";
@@ -106,6 +106,24 @@ describe("matrix live qa runtime", () => {
     }
   });
 
+  it("normalizes the Matrix QA canary timeout env", () => {
+    const previous = process.env.OPENCLAW_QA_MATRIX_CANARY_TIMEOUT_MS;
+    try {
+      delete process.env.OPENCLAW_QA_MATRIX_CANARY_TIMEOUT_MS;
+      expect(liveTesting.resolveMatrixQaCanaryTimeoutMs()).toBe(45_000);
+      process.env.OPENCLAW_QA_MATRIX_CANARY_TIMEOUT_MS = "90000";
+      expect(liveTesting.resolveMatrixQaCanaryTimeoutMs()).toBe(90_000);
+      process.env.OPENCLAW_QA_MATRIX_CANARY_TIMEOUT_MS = "nope";
+      expect(liveTesting.resolveMatrixQaCanaryTimeoutMs()).toBe(45_000);
+    } finally {
+      if (previous === undefined) {
+        delete process.env.OPENCLAW_QA_MATRIX_CANARY_TIMEOUT_MS;
+      } else {
+        process.env.OPENCLAW_QA_MATRIX_CANARY_TIMEOUT_MS = previous;
+      }
+    }
+  });
+
   it("injects a temporary Matrix account into the QA gateway config", () => {
     const baseCfg: OpenClawConfig = {
       plugins: {
@@ -148,6 +166,7 @@ describe("matrix live qa runtime", () => {
 
     expect(next.plugins?.allow).toContain("matrix");
     expect(next.plugins?.entries?.matrix).toEqual({ enabled: true });
+    expect(next.messages?.groupChat?.visibleReplies).toBe("automatic");
     expect(next.channels?.matrix).toEqual({
       enabled: true,
       defaultAccount: "sut",
@@ -491,24 +510,85 @@ describe("matrix live qa runtime", () => {
     expect(report).toContain("observed events: /tmp/observed.json");
   });
 
-  it("batches Matrix scenarios by config key while preserving stable in-group order", () => {
+  it("groups Matrix scenario execution by gateway config while preserving tail scenarios", () => {
     const scenarios = liveTesting.findMatrixQaScenarios([
-      "matrix-top-level-reply-shape",
-      "matrix-room-thread-reply-override",
       "matrix-thread-follow-up",
-      "matrix-room-quiet-streaming-preview",
-      "matrix-reaction-notification",
+      "matrix-e2ee-cli-encryption-setup-multi-account",
+      "matrix-thread-isolation",
+      "matrix-e2ee-cli-setup-then-gateway-reply",
+      "matrix-e2ee-cli-self-verification",
+      "matrix-e2ee-wrong-account-recovery-key",
     ]);
 
     expect(
-      liveTesting.scheduleMatrixQaScenariosByConfig(scenarios).map(({ scenario }) => scenario.id),
+      liveTesting
+        .scheduleMatrixQaScenariosInCatalogOrder(scenarios)
+        .map(({ scenario }) => scenario.id),
     ).toEqual([
       "matrix-thread-follow-up",
-      "matrix-top-level-reply-shape",
-      "matrix-reaction-notification",
-      "matrix-room-thread-reply-override",
-      "matrix-room-quiet-streaming-preview",
+      "matrix-thread-isolation",
+      "matrix-e2ee-cli-self-verification",
+      "matrix-e2ee-cli-encryption-setup-multi-account",
+      "matrix-e2ee-cli-setup-then-gateway-reply",
+      "matrix-e2ee-wrong-account-recovery-key",
     ]);
+  });
+
+  it("uses the scenario timeout for post-restart Matrix readiness", () => {
+    expect(
+      liveTesting.getMatrixQaScenarioRestartReadyTimeoutMs({
+        timeoutMs: 180_000,
+      }),
+    ).toBe(180_000);
+  });
+
+  it("retries Matrix gateway config patches after a stale config hash", async () => {
+    const patch = {
+      channels: {
+        matrix: {
+          enabled: true,
+        },
+      },
+    };
+    const gateway = {
+      call: vi
+        .fn()
+        .mockResolvedValueOnce({ hash: "hash-old" })
+        .mockRejectedValueOnce(
+          new Error("config changed since last load; re-run config.get and retry"),
+        )
+        .mockResolvedValueOnce({ hash: "hash-fresh" })
+        .mockResolvedValueOnce(undefined),
+    };
+
+    await liveTesting.patchMatrixQaGatewayConfig({
+      gateway: gateway as never,
+      patch,
+      restartDelayMs: 250,
+    });
+
+    expect(gateway.call).toHaveBeenNthCalledWith(1, "config.get", {}, { timeoutMs: 60_000 });
+    expect(gateway.call).toHaveBeenNthCalledWith(
+      2,
+      "config.patch",
+      {
+        baseHash: "hash-old",
+        raw: JSON.stringify(patch, null, 2),
+        restartDelayMs: 250,
+      },
+      { timeoutMs: 60_000 },
+    );
+    expect(gateway.call).toHaveBeenNthCalledWith(3, "config.get", {}, { timeoutMs: 60_000 });
+    expect(gateway.call).toHaveBeenNthCalledWith(
+      4,
+      "config.patch",
+      {
+        baseHash: "hash-fresh",
+        raw: JSON.stringify(patch, null, 2),
+        restartDelayMs: 250,
+      },
+      { timeoutMs: 60_000 },
+    );
   });
 
   it("treats only connected, healthy Matrix accounts as ready", () => {

@@ -83,12 +83,33 @@ function looksLikeAuthClose(code: number | undefined, reason: string | undefined
     return false;
   }
   const normalized = normalizeLowercaseStringOrEmpty(reason);
+  if (!normalized) {
+    return false;
+  }
+  // The restart probe runs against loopback only and only decides restart
+  // liveness, not authorization. Keep this allowlist exact so a local listener
+  // cannot satisfy the health check with broad device/auth-looking text.
   return (
-    normalized.includes("auth") ||
-    normalized.includes("token") ||
-    normalized.includes("password") ||
-    normalized.includes("scope") ||
-    normalized.includes("role")
+    normalized === "auth required" ||
+    normalized === "owner auth required" ||
+    normalized === "connect failed" ||
+    normalized === "device required" ||
+    normalized === "pairing required" ||
+    normalized.startsWith("pairing required:") ||
+    normalized.startsWith("unauthorized: gateway token missing") ||
+    normalized.startsWith("unauthorized: gateway token mismatch") ||
+    normalized.startsWith("unauthorized: gateway token not configured") ||
+    normalized.startsWith("unauthorized: gateway password missing") ||
+    normalized.startsWith("unauthorized: gateway password mismatch") ||
+    normalized.startsWith("unauthorized: gateway password not configured") ||
+    normalized.startsWith("unauthorized: bootstrap token invalid or expired") ||
+    normalized.startsWith("unauthorized: tailscale identity missing") ||
+    normalized.startsWith("unauthorized: tailscale proxy headers missing") ||
+    normalized.startsWith("unauthorized: tailscale identity check failed") ||
+    normalized.startsWith("unauthorized: tailscale identity mismatch") ||
+    normalized.startsWith("unauthorized: too many failed authentication attempts") ||
+    normalized.startsWith("unauthorized: device token mismatch") ||
+    normalized.startsWith("unauthorized: device token rejected")
   );
 }
 
@@ -101,6 +122,9 @@ function applyExpectedVersion(
   }
   if (snapshot.gatewayVersion === expectedVersion) {
     return { ...snapshot, expectedVersion };
+  }
+  if (snapshot.gatewayVersion == null) {
+    return { ...snapshot, healthy: false, expectedVersion };
   }
   return {
     ...snapshot,
@@ -213,8 +237,14 @@ async function confirmGatewayReachable(params: {
     timeoutMs: 3_000,
     includeDetails: params.includeHealthDetails === true,
   });
+  const reachedGateway =
+    probe.ok ||
+    looksLikeAuthClose(probe.close?.code, probe.close?.reason) ||
+    (probe.connectLatencyMs != null &&
+      probe.server?.version != null &&
+      probe.auth.capability === "connected_no_operator_scope");
   return {
-    reachable: probe.ok || looksLikeAuthClose(probe.close?.code, probe.close?.reason),
+    reachable: reachedGateway,
     gatewayVersion: probe.server?.version ?? null,
     activatedPluginErrors: readActivatedPluginErrors(probe.health),
     channelProbeErrors: readChannelProbeErrors(probe.health),

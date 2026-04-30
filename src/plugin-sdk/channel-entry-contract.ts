@@ -24,6 +24,7 @@ import {
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import { resolveLoaderPackageRoot } from "../plugins/sdk-alias.js";
 import type { AnyAgentTool, OpenClawPluginApi, PluginCommandContext } from "../plugins/types.js";
+import { toSafeImportPath } from "../shared/import-specifier.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 
 export type { AnyAgentTool, OpenClawPluginApi, PluginCommandContext };
@@ -99,9 +100,13 @@ export type BundledChannelEntryContract<TPlugin = ChannelPlugin> = {
   configSchema: ChannelEntryConfigSchema<TPlugin>;
   features?: BundledChannelEntryFeatures;
   register: (api: OpenClawPluginApi) => void;
-  loadChannelPlugin: () => TPlugin;
-  loadChannelSecrets?: () => ChannelPlugin["secrets"] | undefined;
-  loadChannelAccountInspector?: () => NonNullable<ChannelPlugin["config"]["inspectAccount"]>;
+  loadChannelPlugin: (options?: BundledEntryModuleLoadOptions) => TPlugin;
+  loadChannelSecrets?: (
+    options?: BundledEntryModuleLoadOptions,
+  ) => ChannelPlugin["secrets"] | undefined;
+  loadChannelAccountInspector?: (
+    options?: BundledEntryModuleLoadOptions,
+  ) => NonNullable<ChannelPlugin["config"]["inspectAccount"]>;
   setChannelRuntime?: (runtime: PluginRuntime) => void;
 };
 
@@ -370,12 +375,12 @@ function loadBundledEntryModuleSync(
     } catch {
       const jiti = getJiti(modulePath);
       getJitiEndMs = profile ? performance.now() : 0;
-      loaded = jiti(modulePath);
+      loaded = jiti(toSafeImportPath(modulePath));
     }
   } else {
     const jiti = getJiti(modulePath);
     getJitiEndMs = profile ? performance.now() : 0;
-    loaded = jiti(modulePath);
+    loaded = jiti(toSafeImportPath(modulePath));
   }
   if (profile) {
     const endMs = performance.now();
@@ -447,15 +452,22 @@ export function defineBundledChannelEntry<TPlugin = ChannelPlugin>({
     typeof configSchema === "function"
       ? configSchema()
       : ((configSchema ?? emptyChannelConfigSchema()) as ChannelEntryConfigSchema<TPlugin>);
-  const loadChannelPlugin = () => loadBundledEntryExportSync<TPlugin>(importMetaUrl, plugin);
+  const loadChannelPlugin = (options?: BundledEntryModuleLoadOptions) =>
+    loadBundledEntryExportSync<TPlugin>(importMetaUrl, plugin, options);
   const loadChannelSecrets = secrets
-    ? () => loadBundledEntryExportSync<ChannelPlugin["secrets"] | undefined>(importMetaUrl, secrets)
+    ? (options?: BundledEntryModuleLoadOptions) =>
+        loadBundledEntryExportSync<ChannelPlugin["secrets"] | undefined>(
+          importMetaUrl,
+          secrets,
+          options,
+        )
     : undefined;
   const loadChannelAccountInspector = accountInspect
-    ? () =>
+    ? (options?: BundledEntryModuleLoadOptions) =>
         loadBundledEntryExportSync<NonNullable<ChannelPlugin["config"]["inspectAccount"]>>(
           importMetaUrl,
           accountInspect,
+          options,
         )
     : undefined;
   const setChannelRuntime = runtime

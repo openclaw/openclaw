@@ -1,8 +1,8 @@
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   getProviderHttpMocks,
   installProviderHttpMockCleanup,
-} from "../../test/helpers/media-generation/provider-http-mocks.js";
+} from "openclaw/plugin-sdk/provider-http-test-mocks";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 const transcodeAudioBufferToOpusMock = vi.hoisted(() => vi.fn());
 
@@ -275,6 +275,54 @@ describe("Google speech provider", () => {
 
     expect(requestSequence).toHaveBeenCalledTimes(2);
     expect(result.audioBuffer.subarray(44)).toEqual(pcm);
+  });
+
+  it("retries once when Gemini TTS fetch aborts", async () => {
+    const pcm = Buffer.from([7, 0, 8, 0]);
+    const abortError = new Error("This operation was aborted");
+    abortError.name = "AbortError";
+    const requestSequence = vi
+      .fn()
+      .mockRejectedValueOnce(abortError)
+      .mockResolvedValueOnce({
+        response: googleTtsResponse(pcm),
+        release: vi.fn(async () => {}),
+      });
+    postJsonRequestMock.mockImplementation(requestSequence);
+    const provider = buildGoogleSpeechProvider();
+
+    const result = await provider.synthesize({
+      text: "Retry aborted fetch.",
+      cfg: {},
+      providerConfig: {
+        apiKey: "google-test-key",
+      },
+      target: "audio-file",
+      timeoutMs: 5_000,
+    });
+
+    expect(requestSequence).toHaveBeenCalledTimes(2);
+    expect(result.audioBuffer.subarray(44)).toEqual(pcm);
+  });
+
+  it("does not retry non-transient Gemini TTS request failures", async () => {
+    const requestSequence = vi.fn().mockRejectedValueOnce(new Error("invalid request"));
+    postJsonRequestMock.mockImplementation(requestSequence);
+    const provider = buildGoogleSpeechProvider();
+
+    await expect(
+      provider.synthesize({
+        text: "Do not retry this.",
+        cfg: {},
+        providerConfig: {
+          apiKey: "google-test-key",
+        },
+        target: "audio-file",
+        timeoutMs: 5_000,
+      }),
+    ).rejects.toThrow("invalid request");
+
+    expect(requestSequence).toHaveBeenCalledTimes(1);
   });
 
   it("falls back to GEMINI_API_KEY and configured Google API base URL", async () => {

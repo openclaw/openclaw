@@ -1,6 +1,10 @@
 {
   "id": "browser",
   "enabledByDefault": true,
+  "activation": {
+    "onStartup": true,
+    "onConfigPaths": ["browser"]
+  },
   "commandAliases": [{ "name": "browser" }],
   "skills": ["./skills"],
   "configSchema": {

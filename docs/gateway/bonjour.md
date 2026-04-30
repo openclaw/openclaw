@@ -137,9 +137,16 @@ The Gateway writes a rolling log file (printed on startup as
 `gateway log file: ...`). Look for `bonjour:` lines, especially:
 
 - `bonjour: advertise failed ...`
+- `bonjour: suppressing ciao cancellation ...`
 - `bonjour: ... name conflict resolved` / `hostname conflict resolved`
 - `bonjour: watchdog detected non-announced service ...`
 - `bonjour: disabling advertiser after ... failed restarts ...`
+
+Bonjour uses the system hostname for the advertised `.local` host when it is a
+valid DNS label. If the system hostname contains spaces, underscores, or another
+invalid DNS-label character, OpenClaw falls back to `openclaw.local`. Set
+`OPENCLAW_MDNS_HOSTNAME=<name>` before starting the Gateway when you need an
+explicit host label.
 
 ## Debugging on iOS node
 

@@ -27,7 +27,7 @@ the Gateway, then restart the Gateway to load it.
 <Steps>
   <Step title="Install the plugin">
     <Tabs>
-      <Tab title="From npm (recommended)">
+      <Tab title="From npm">
         ```bash
         openclaw plugins install @openclaw/voice-call
         ```
@@ -40,6 +40,10 @@ the Gateway, then restart the Gateway to load it.
         ```
       </Tab>
     </Tabs>
+
+    If npm reports the OpenClaw-owned package as deprecated, that package version
+    is from an older external package train; use a current packaged OpenClaw
+    build or the local folder path until a newer npm package is published.
 
     Restart the Gateway afterwards so the plugin loads.
 
@@ -90,6 +94,10 @@ If `enabled: true` but the selected provider is missing credentials,
 Gateway startup logs a setup-incomplete warning with the missing keys and
 skips starting the runtime. Commands, RPC calls, and agent tools still
 return the exact missing provider configuration when used.
+
+<Note>
+Voice-call credentials accept SecretRefs. `plugins.entries.voice-call.config.twilio.authToken` and `plugins.entries.voice-call.config.tts.providers.*.apiKey` resolve through the standard SecretRef surface; see [SecretRef credential surface](/reference/secretref-credential-surface).
+</Note>
 
 ```json5
 {
@@ -157,12 +165,14 @@ return the exact missing provider configuration when used.
     - On ngrok free tier, set `publicUrl` to the exact ngrok URL; signature verification is always enforced.
     - `tunnel.allowNgrokFreeTierLoopbackBypass: true` allows Twilio webhooks with invalid signatures **only** when `tunnel.provider="ngrok"` and `serve.bind` is loopback (ngrok local agent). Local dev only.
     - Ngrok free-tier URLs can change or add interstitial behaviour; if `publicUrl` drifts, Twilio signatures fail. Production: prefer a stable domain or a Tailscale funnel.
+
   </Accordion>
   <Accordion title="Streaming connection caps">
     - `streaming.preStartTimeoutMs` closes sockets that never send a valid `start` frame.
     - `streaming.maxPendingConnections` caps total unauthenticated pre-start sockets.
     - `streaming.maxPendingConnectionsPerIp` caps unauthenticated pre-start sockets per source IP.
     - `streaming.maxConnections` caps total open media stream sockets (pending + active).
+
   </Accordion>
   <Accordion title="Legacy config migrations">
     Older configs using `provider: "log"`, `twilio.from`, or legacy
