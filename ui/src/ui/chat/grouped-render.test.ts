@@ -1419,11 +1419,14 @@ describe("grouped chat rendering", () => {
       },
     );
 
-    const sidebarButton = container.querySelector<HTMLButtonElement>(".chat-tool-card__action-btn");
-    sidebarButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    const innerCardSummary = container.querySelector<HTMLButtonElement>(
+      ".chat-tools-inline .chat-tool-msg-summary",
+    );
+    innerCardSummary?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
     expect(container.querySelector(".chat-tool-card__preview-frame")).toBeNull();
-    expect(sidebarButton).not.toBeNull();
+    expect(container.querySelector(".chat-tool-card__action-btn")).toBeNull();
+    expect(innerCardSummary).not.toBeNull();
     expect(onOpenSidebar).toHaveBeenCalledWith(
       expect.objectContaining({
         kind: "tool",
@@ -1433,5 +1436,6 @@ describe("grouped chat rendering", () => {
         toolName: "canvas_render",
       }),
     );
+    expect(onOpenSidebar).not.toHaveBeenCalledWith(expect.objectContaining({ kind: "canvas" }));
   });
 });

@@ -137,6 +137,88 @@ describe("tool-cards", () => {
     expect(rawBody?.textContent).toContain('"kind":"canvas"');
   });
 
+  it("routes the collapsed summary click to the side panel for non-canvas cards", () => {
+    const container = document.createElement("div");
+    const onOpenSidebar = vi.fn();
+    const onToggleExpanded = vi.fn();
+    render(
+      renderToolCard(
+        {
+          id: "msg:6:call-6",
+          name: "browser.open",
+          args: { url: "https://example.com" },
+          inputText: '{\n  "url": "https://example.com"\n}',
+          outputText: "Opened page",
+        },
+        { expanded: false, onToggleExpanded, onOpenSidebar },
+      ),
+      container,
+    );
+
+    const summaryButton = container.querySelector<HTMLButtonElement>(".chat-tool-msg-summary");
+    expect(summaryButton).not.toBeNull();
+    expect(container.querySelector(".chat-tool-msg-body")).toBeNull();
+
+    summaryButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+
+    expect(onToggleExpanded).not.toHaveBeenCalled();
+    expect(onOpenSidebar).toHaveBeenCalledTimes(1);
+    expect(onOpenSidebar).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "tool",
+        toolName: "browser.open",
+        outputText: "Opened page",
+      }),
+    );
+  });
+
+  it("does not render an inline body when the sidebar handler is wired, even if expanded is forced true", () => {
+    const container = document.createElement("div");
+    const longOutput = "x".repeat(2000);
+    render(
+      renderToolCard(
+        {
+          id: "msg:6b:call-6b",
+          name: "fs.read",
+          args: { path: "/tmp/x" },
+          inputText: '{\n  "path": "/tmp/x"\n}',
+          outputText: longOutput,
+        },
+        { expanded: true, onToggleExpanded: vi.fn(), onOpenSidebar: vi.fn() },
+      ),
+      container,
+    );
+
+    expect(container.querySelector(".chat-tool-msg-body")).toBeNull();
+    expect(container.querySelector(".chat-tool-card--expanded")).toBeNull();
+    expect(container.textContent).not.toContain(longOutput);
+    expect(container.textContent).not.toContain("/tmp/x");
+  });
+
+  it("keeps the legacy inline expand toggle when no sidebar handler is provided", () => {
+    const container = document.createElement("div");
+    const onToggleExpanded = vi.fn();
+    render(
+      renderToolCard(
+        {
+          id: "msg:6c:call-6c",
+          name: "fs.read",
+          args: { path: "/tmp/y" },
+          inputText: '{\n  "path": "/tmp/y"\n}',
+          outputText: "ok",
+        },
+        { expanded: false, onToggleExpanded },
+      ),
+      container,
+    );
+
+    const summaryButton = container.querySelector<HTMLButtonElement>(".chat-tool-msg-summary");
+    summaryButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+
+    expect(onToggleExpanded).toHaveBeenCalledTimes(1);
+    expect(onToggleExpanded).toHaveBeenCalledWith("msg:6c:call-6c");
+  });
+
   it("opens assistant-surface canvas payloads in the sidebar when explicitly requested", () => {
     const container = document.createElement("div");
     const onOpenSidebar = vi.fn();

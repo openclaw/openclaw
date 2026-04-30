@@ -404,20 +404,36 @@ export function renderToolCard(
 ) {
   const hasOutput = Boolean(card.outputText?.trim());
   const previewLabel = hasOutput ? "Tool output" : "Tool call";
+  const hasCanvasPreview = card.preview?.kind === "canvas";
+  // Route the summary click to the side panel for non-canvas cards so the
+  // chat history isn't flooded with raw tool input/output. Canvas cards keep
+  // toggling inline so the embedded iframe stays visible. Callers without an
+  // onOpenSidebar handler (e.g. unit-test contexts) fall back to inline expand.
+  const sideOnlyClick = Boolean(opts.onOpenSidebar) && !hasCanvasPreview;
+  const previewSidebarContent =
+    hasCanvasPreview && card.preview
+      ? buildPreviewSidebarContent(card.preview, card.outputText)
+      : null;
+  const sidebarActionContent: SidebarContent =
+    previewSidebarContent ?? buildToolCardSidebarContent(card);
+  const handleSummaryClick = sideOnlyClick
+    ? () => opts.onOpenSidebar?.(sidebarActionContent)
+    : () => opts.onToggleExpanded(card.id);
+  const showInlineBody = !sideOnlyClick && opts.expanded;
 
   return html`
     <div
-      class="chat-tool-msg-collapse chat-tool-msg-collapse--manual ${opts.expanded
+      class="chat-tool-msg-collapse chat-tool-msg-collapse--manual ${showInlineBody
         ? "is-open"
         : ""}"
     >
       ${renderCollapsedToolSummary({
         label: previewLabel,
         name: card.name,
-        expanded: opts.expanded,
-        onToggleExpanded: () => opts.onToggleExpanded(card.id),
+        expanded: showInlineBody,
+        onToggleExpanded: handleSummaryClick,
       })}
-      ${opts.expanded
+      ${showInlineBody
         ? html`
             <div class="chat-tool-msg-body">
               ${renderExpandedToolCardContent(
