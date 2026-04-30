@@ -192,6 +192,96 @@ describe("runCapability local no-auth audio providers", () => {
     });
   });
 
+  it("prefers resolver env credentials over plugin-only media synthetic auth", async () => {
+    await withIsolatedAgentDir(async (agentDir) => {
+      await withEnvAsync({ ...AUTH_ENV, OPENAI_API_KEY: "env-openai-audio-key" }, async () => {
+        await withAudioFixture("openclaw-openai-audio-env-key", async ({ ctx, media, cache }) => {
+          const transcribeAudio = vi.fn(async (req: AudioTranscriptionRequest) => ({
+            text: `env:${req.apiKey}`,
+            model: req.model,
+          }));
+          const cfg = createAudioCfg({ provider: "openai", model: "whisper-1" });
+
+          const result = await runCapability({
+            capability: "audio",
+            cfg,
+            ctx,
+            attachments: cache,
+            media,
+            agentDir,
+            providerRegistry: buildProviderRegistry({
+              openai: createAudioProvider("openai", transcribeAudio, {
+                resolveSyntheticAuth: () => ({
+                  apiKey: CUSTOM_LOCAL_AUTH_MARKER,
+                  source: "openai plugin synthetic auth",
+                  mode: "api-key",
+                }),
+              }),
+            }),
+          });
+
+          expect(result.decision.outcome).toBe("success");
+          expect(result.outputs[0]?.text).toBe("env:env-openai-audio-key");
+          expect(transcribeAudio).toHaveBeenCalledTimes(1);
+          expect(transcribeAudio.mock.calls[0]?.[0].apiKey).toBe("env-openai-audio-key");
+        });
+      });
+    });
+  });
+
+  it("prefers stored auth profile credentials over plugin-only media synthetic auth", async () => {
+    await withIsolatedAgentDir(async (agentDir) => {
+      await withEnvAsync(AUTH_ENV, async () => {
+        await fs.writeFile(
+          path.join(agentDir, "auth-profiles.json"),
+          JSON.stringify({
+            version: 1,
+            profiles: {
+              "local-audio:default": {
+                type: "api_key",
+                provider: "local-audio",
+                key: "stored-local-audio-key",
+              },
+            },
+          }),
+        );
+        await withAudioFixture(
+          "openclaw-local-audio-stored-profile",
+          async ({ ctx, media, cache }) => {
+            const transcribeAudio = vi.fn(async (req: AudioTranscriptionRequest) => ({
+              text: `profile:${req.apiKey}`,
+              model: req.model,
+            }));
+            const cfg = createAudioCfg({ provider: "local-audio", model: "whisper-local" });
+
+            const result = await runCapability({
+              capability: "audio",
+              cfg,
+              ctx,
+              attachments: cache,
+              media,
+              agentDir,
+              providerRegistry: buildProviderRegistry({
+                "local-audio": createAudioProvider("local-audio", transcribeAudio, {
+                  resolveSyntheticAuth: () => ({
+                    apiKey: CUSTOM_LOCAL_AUTH_MARKER,
+                    source: "local-audio plugin synthetic auth",
+                    mode: "api-key",
+                  }),
+                }),
+              }),
+            });
+
+            expect(result.decision.outcome).toBe("success");
+            expect(result.outputs[0]?.text).toBe("profile:stored-local-audio-key");
+            expect(transcribeAudio).toHaveBeenCalledTimes(1);
+            expect(transcribeAudio.mock.calls[0]?.[0].apiKey).toBe("stored-local-audio-key");
+          },
+        );
+      });
+    });
+  });
+
   it("still rejects a remote audio provider without credentials", async () => {
     await withIsolatedAgentDir(async (agentDir) => {
       await withEnvAsync(AUTH_ENV, async () => {

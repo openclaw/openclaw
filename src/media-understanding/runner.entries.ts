@@ -443,19 +443,6 @@ async function resolveProviderExecutionAuth(params: {
     });
     return syntheticAuth?.apiKey?.trim() || undefined;
   };
-  const hasProfileSelection = Boolean(params.entry.profile || params.entry.preferredProfile);
-  if (!providerConfig && !hasProfileSelection) {
-    const syntheticApiKey = resolveMediaProviderSyntheticAuth();
-    if (syntheticApiKey) {
-      return {
-        apiKeys: collectProviderApiKeysForExecution({
-          provider: params.providerId,
-          primaryApiKey: syntheticApiKey,
-        }),
-        providerConfig,
-      };
-    }
-  }
   const { requireApiKey, resolveApiKeyForProvider } = await loadModelAuth();
   try {
     const auth = await resolveApiKeyForProvider({
