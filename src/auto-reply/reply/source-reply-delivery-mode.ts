@@ -6,6 +6,8 @@ import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
 export type SourceReplyDeliveryModeContext = {
   ChatType?: string;
   CommandSource?: "text" | "native";
+  /** Whether the bot was directly @mentioned (set by channel monitors for group/channel messages). */
+  WasMentioned?: boolean;
 };
 
 export function resolveSourceReplyDeliveryMode(params: {
@@ -31,6 +33,13 @@ export function resolveSourceReplyDeliveryMode(params: {
   } else {
     mode =
       params.cfg.messages?.visibleReplies === "message_tool" ? "message_tool_only" : "automatic";
+  }
+  // When the bot is directly @mentioned, always deliver replies automatically
+  // so users get a visible response to their mention. This override applies
+  // regardless of how "message_tool_only" was arrived at: config defaults,
+  // channel pre-resolution (Discord, Slack), or explicit requested modes.
+  if (params.ctx.WasMentioned === true && mode === "message_tool_only") {
+    mode = "automatic";
   }
   if (mode === "message_tool_only" && params.messageToolAvailable === false) {
     return "automatic";

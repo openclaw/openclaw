@@ -20,7 +20,7 @@ const globalToolOnlyReplyConfig = {
 } as const satisfies OpenClawConfig;
 
 describe("resolveSourceReplyDeliveryMode", () => {
-  it("defaults groups and channels to message-tool-only delivery", () => {
+  it("defaults groups and channels to message-tool-only delivery when not @mentioned", () => {
     expect(resolveSourceReplyDeliveryMode({ cfg: emptyConfig, ctx: { ChatType: "channel" } })).toBe(
       "message_tool_only",
     );
@@ -30,6 +30,32 @@ describe("resolveSourceReplyDeliveryMode", () => {
     expect(resolveSourceReplyDeliveryMode({ cfg: emptyConfig, ctx: { ChatType: "direct" } })).toBe(
       "automatic",
     );
+  });
+
+  it("returns automatic when bot is @mentioned in group or channel", () => {
+    expect(
+      resolveSourceReplyDeliveryMode({
+        cfg: emptyConfig,
+        ctx: { ChatType: "group", WasMentioned: true },
+      }),
+    ).toBe("automatic");
+    expect(
+      resolveSourceReplyDeliveryMode({
+        cfg: emptyConfig,
+        ctx: { ChatType: "channel", WasMentioned: true },
+      }),
+    ).toBe("automatic");
+    // Warning should not fire because mode is "automatic"
+    expect(loggerMocks.warn).not.toHaveBeenCalled();
+  });
+
+  it("returns message_tool_only when not mentioned even with explicit false", () => {
+    expect(
+      resolveSourceReplyDeliveryMode({
+        cfg: emptyConfig,
+        ctx: { ChatType: "group", WasMentioned: false },
+      }),
+    ).toBe("message_tool_only");
   });
 
   it("honors config and explicit requested mode", () => {
@@ -160,6 +186,24 @@ describe("resolveSourceReplyVisibilityPolicy", () => {
     });
   });
 
+  it("does not suppress delivery when bot is @mentioned in group", () => {
+    expect(
+      resolveSourceReplyVisibilityPolicy({
+        cfg: emptyConfig,
+        ctx: { ChatType: "group", WasMentioned: true },
+        sendPolicy: "allow",
+      }),
+    ).toMatchObject({
+      sourceReplyDeliveryMode: "automatic",
+      sendPolicyDenied: false,
+      suppressAutomaticSourceDelivery: false,
+      suppressDelivery: false,
+      suppressHookUserDelivery: false,
+      suppressHookReplyLifecycle: false,
+      suppressTyping: false,
+      deliverySuppressionReason: "",
+    });
+  });
   it("keeps native command replies visible in groups", () => {
     expect(
       resolveSourceReplyVisibilityPolicy({
