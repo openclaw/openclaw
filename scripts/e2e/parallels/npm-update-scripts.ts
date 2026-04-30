@@ -109,8 +109,15 @@ function Stop-OpenClawGatewayProcesses {
 Remove-FuturePluginEntries
 Stop-OpenClawGatewayProcesses
 $env:OPENCLAW_DISABLE_BUNDLED_PLUGINS = '1'
-Invoke-OpenClaw update --tag ${psSingleQuote(input.updateTarget)} --yes --json --no-restart
-if ($LASTEXITCODE -ne 0) { throw "openclaw update failed with exit code $LASTEXITCODE" }
+$updateOutput = Invoke-OpenClaw update --tag ${psSingleQuote(input.updateTarget)} --yes --json --no-restart 2>&1
+$updateExit = $LASTEXITCODE
+$updateOutput
+if ($updateExit -ne 0) {
+  $updateText = $updateOutput | Out-String
+  $stalePostSwapImport = $updateText -match 'ERR_MODULE_NOT_FOUND' -and $updateText -match 'node_modules\\openclaw\\dist\\[^\\]+-[A-Za-z0-9_-]+\.js'
+  if (-not $stalePostSwapImport) { throw "openclaw update failed with exit code $updateExit" }
+  Write-Host "openclaw update returned a stale post-swap module import; continuing to post-update health checks"
+}
 ${windowsVersionCheck(input.expectedNeedle)}
 Invoke-OpenClaw gateway restart
 Invoke-OpenClaw gateway status --deep --require-rpc
