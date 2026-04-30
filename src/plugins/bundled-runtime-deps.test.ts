@@ -10,7 +10,10 @@ import {
   getActiveBundledRuntimeDepsInstallCount,
   waitForBundledRuntimeDepsInstallIdle,
 } from "./bundled-runtime-deps-activity.js";
-import { assertBundledRuntimeDepsInstalled } from "./bundled-runtime-deps-materialization.js";
+import {
+  assertBundledRuntimeDepsInstalled,
+  ensureNpmInstallExecutionManifest,
+} from "./bundled-runtime-deps-materialization.js";
 import {
   __testing as bundledRuntimeDepsTesting,
   createBundledRuntimeDependencyAliasMap,
@@ -543,6 +546,18 @@ describe("installBundledRuntimeDeps", () => {
         cwd: installRoot,
       }),
     );
+  });
+
+  it("always includes a dependencies field in the install manifest, even when specs are empty", () => {
+    const installRoot = makeTempDir();
+
+    ensureNpmInstallExecutionManifest(installRoot, []);
+
+    const written = JSON.parse(fs.readFileSync(path.join(installRoot, "package.json"), "utf8")) as {
+      dependencies?: unknown;
+    };
+    expect(written).toHaveProperty("dependencies");
+    expect(written.dependencies).toEqual({});
   });
 
   it("repairs external install roots from the complete generated dependency plan", async () => {

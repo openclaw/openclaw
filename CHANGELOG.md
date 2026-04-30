@@ -6,7 +6,12 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Agents/subagents: bound automatic orphan recovery with persisted recovery attempts and a wedged-session tombstone, and teach task maintenance/doctor to reconcile those sessions so restart loops no longer require manual `sessions.json` surgery. Fixes #74864. Thanks @solosage1.
+- Gateway/startup: skip pre-bind web-fetch provider discovery for credential-free `tools.web.fetch` config, so Docker/Kubernetes gateways bind even when optional fetch limits are present. Fixes #74896. Thanks @KoykL.
+- Slack: require bot-authored room messages with `allowBots=true` to come from an explicitly channel-allowlisted bot or from a room where an explicit Slack owner is present, so broad bot relays cannot run unattended. Fixes #59284. Thanks @andrewhong-translucent.
 - CLI/progress: suppress nested progress spinners and line clears while TUI input owns raw stdin, so Crestodian `/status` no longer disturbs the active input row. (#75003) Thanks @velvet-shark.
+- Models/OpenAI Codex: restore `openai-codex/gpt-5.4-mini` for ChatGPT/Codex OAuth PI runs after live OAuth proof, and align the manifest, forward-compat metadata, docs, and regression tests so stale cron and heartbeat configs resolve again. Fixes #74451. Thanks @0xCyda, @hclsys, and @Marvae.
+- Plugins/runtime-deps: always write a dependency map in generated runtime-deps install manifests, so npm does not crash or prune staged bundled-plugin packages when the plan is empty. Fixes #74949. Thanks @hclsys.
 - Telegram: use durable message edits for streaming previews instead of native draft state, so generated replies no longer flicker through draft-to-message transitions that look like duplicates. (#75073) Thanks @obviyus.
 
 ## 2026.4.29
@@ -529,7 +534,7 @@ Docs: https://docs.openclaw.ai
 - Doctor/channels: suppress disabled bundled-plugin blocker warnings when a trusted external plugin owns the configured channel, so Lark/Feishu installs no longer get Feishu repair noise after switching to `openclaw-lark`. Fixes #56794. Thanks @wuji-tech-dev.
 - CLI/status: show skipped fast-path memory checks as `not checked` and report active custom memory plugin runtime status from `status --json --all` without requiring built-in `agents.defaults.memorySearch`, so plugins such as memory-lancedb-pro and memory-cms no longer look unavailable when their own runtime is healthy. Fixes #56968. Thanks @Tony-ooo and @aderius.
 - Gateway/channels: record and log unexpected clean channel monitor exits so channels that return without throwing no longer appear stopped with no error. Fixes #73099. Thanks @balaji1968-kingler.
-- Discord/group chats: keep group/channel replies private by default unless the agent explicitly uses the message tool, so always-on rooms can lurk without leaking automatic final, block, preview, or status-reaction output; `messages.groupChat.visibleReplies: "automatic"` restores legacy auto-posting. (#73046) Thanks @scoootscooob.
+- Group/channel chats (all channels): keep group/channel replies private by default unless the agent explicitly uses the message tool, so always-on rooms can lurk without leaking automatic final, block, preview, or status-reaction output; `messages.groupChat.visibleReplies: "automatic"` restores legacy auto-posting. (#73046) Thanks @scoootscooob.
 - Plugins/package: force nested bundled-plugin runtime dependency installs out of inherited npm dry-run mode during prepack and package smoke checks, so packed installs materialize required plugin modules instead of reporting missing bundled files. Refs #73128. Thanks @Adam-Researchh.
 - Discord: skip reaction events before REST channel fetch when notifications are off, guild reactions are disabled, or allowlist mode cannot match without channel overrides, reducing reconnect bursts that caused slow listener warnings. Fixes #73133. Thanks @isaacsummers.
 - Channels/Telegram: centralize polling update tracking so accepted offsets remain durable across restarts, same-process handler failures can still retry, and slow offset writes cannot overwrite newer accepted watermarks. Refs #73115. Thanks @vdruts.
