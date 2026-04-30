@@ -8,6 +8,7 @@ Docs: https://docs.openclaw.ai
 
 - Agents/subagents: bound automatic orphan recovery with persisted recovery attempts and a wedged-session tombstone, and teach task maintenance/doctor to reconcile those sessions so restart loops no longer require manual `sessions.json` surgery. Fixes #74864. Thanks @solosage1.
 - Plugins/runtime-deps: keep bundled provider policy config loading from staging plugin runtime dependencies, so config reads no longer fail on locked-down `/var/lib/openclaw/plugin-runtime-deps` directories. Fixes #74971. Thanks @eurojojo.
+- Memory/runtime-deps: retain the native `node-llama-cpp` runtime only when local memory search is configured, so packaged installs can repair local embeddings without relying on unreachable global npm installs. Fixes #74777. Thanks @LLagoon3.
 - Gateway/startup: skip pre-bind web-fetch provider discovery for credential-free `tools.web.fetch` config, so Docker/Kubernetes gateways bind even when optional fetch limits are present. Fixes #74896. Thanks @KoykL.
 - Slack: require bot-authored room messages with `allowBots=true` to come from an explicitly channel-allowlisted bot or from a room where an explicit Slack owner is present, so broad bot relays cannot run unattended. Fixes #59284. Thanks @andrewhong-translucent.
 - Signal: derive `getAttachment` HTTP response caps from `channels.signal.mediaMaxMb` with base64 headroom, so inbound photos and videos no longer drop behind the 1 MiB RPC default. Fixes #73564. Thanks @heyhudson.

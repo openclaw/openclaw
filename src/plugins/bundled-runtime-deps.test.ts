@@ -3421,6 +3421,78 @@ describe("ensureBundledPluginRuntimeDeps", () => {
     ]);
   });
 
+  it("installs local memory embedding runtime deps only when local memory search is configured", () => {
+    const packageRoot = makeTempDir();
+    const pluginRoot = writeBundledPluginPackage({
+      packageRoot,
+      pluginId: "memory-core",
+      deps: { chokidar: "^5.0.0", typebox: "1.1.34" },
+      runtimeDependencies: {
+        localMemoryEmbedding: ["node-llama-cpp@3.18.1"],
+      },
+    });
+    const calls: BundledRuntimeDepsInstallParams[] = [];
+
+    const result = ensureBundledPluginRuntimeDeps({
+      env: {},
+      config: {
+        agents: {
+          defaults: {
+            memorySearch: { provider: "local" },
+          },
+        },
+      },
+      installDeps: (params) => {
+        calls.push(params);
+      },
+      pluginId: "memory-core",
+      pluginRoot,
+    });
+
+    expect(result.installedSpecs).toEqual([
+      "chokidar@^5.0.0",
+      "node-llama-cpp@3.18.1",
+      "typebox@1.1.34",
+    ]);
+    expect(calls[0]?.installSpecs).toEqual([
+      "chokidar@^5.0.0",
+      "node-llama-cpp@3.18.1",
+      "typebox@1.1.34",
+    ]);
+  });
+
+  it("does not install local memory embedding runtime deps for remote memory search", () => {
+    const packageRoot = makeTempDir();
+    const pluginRoot = writeBundledPluginPackage({
+      packageRoot,
+      pluginId: "memory-core",
+      deps: { chokidar: "^5.0.0", typebox: "1.1.34" },
+      runtimeDependencies: {
+        localMemoryEmbedding: ["node-llama-cpp@3.18.1"],
+      },
+    });
+    const calls: BundledRuntimeDepsInstallParams[] = [];
+
+    const result = ensureBundledPluginRuntimeDeps({
+      env: {},
+      config: {
+        agents: {
+          defaults: {
+            memorySearch: { provider: "openai" },
+          },
+        },
+      },
+      installDeps: (params) => {
+        calls.push(params);
+      },
+      pluginId: "memory-core",
+      pluginRoot,
+    });
+
+    expect(result.installedSpecs).toEqual(["chokidar@^5.0.0", "typebox@1.1.34"]);
+    expect(calls[0]?.installSpecs).toEqual(["chokidar@^5.0.0", "typebox@1.1.34"]);
+  });
+
   it("repairs external staged deps even when packaged plugin-local deps are present", () => {
     const packageRoot = makeTempDir();
     const extensionsRoot = path.join(packageRoot, "dist", "extensions");
