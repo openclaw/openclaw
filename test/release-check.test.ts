@@ -72,6 +72,10 @@ describe("collectAppcastSparkleVersionErrors", () => {
 });
 
 describe("packed CLI smoke", () => {
+  it("keeps generated dynamic imports opaque to tsx's source lexer", () => {
+    expect(readFileSync("scripts/release-check.ts", "utf8")).not.toContain("import(");
+  });
+
   it("keeps the expected packaged CLI smoke command list", () => {
     expect(PACKED_CLI_SMOKE_COMMANDS).toEqual([
       ["--help"],
