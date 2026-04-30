@@ -19,8 +19,6 @@ import { describe, expect, it } from "vitest";
 import {
   DEFAULT_THRESHOLDS,
   DEFAULT_WEIGHTS,
-  type GSARDecision,
-  type GSARThresholds,
   type LabeledExample,
   calibrateThresholds,
   computeGroundednessScore,
@@ -65,15 +63,17 @@ describe("sensitivity — τ_proceed threshold", () => {
     // i.e., once we see "regenerate" we never go back to "proceed"
     let seenRegenerate = false;
     for (const d of decisions) {
-      if (d === "regenerate") seenRegenerate = true;
-      if (seenRegenerate) expect(d).not.toBe("proceed");
+      if (d === "regenerate") {
+        seenRegenerate = true;
+      }
+      if (seenRegenerate) {
+        expect(d).not.toBe("proceed");
+      }
     }
   });
 });
 
 describe("sensitivity — τ_regenerate threshold", () => {
-  const lowScore = computeGroundednessScore(p(1, 3, 0, 1)); // low-S partition
-
   it("decision transitions cleanly from regenerate → replan as τ_regenerate rises past S", () => {
     const sScore = computeGroundednessScore(p(1, 3, 0, 1));
     const decisions = [0.2, 0.25, 0.3, 0.4, 0.5].map((τ) =>
