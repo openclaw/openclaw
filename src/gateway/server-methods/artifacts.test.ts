@@ -155,6 +155,79 @@ describe("artifacts RPC handlers", () => {
     expect(payload.artifacts?.[0]).toMatchObject({ runId: "run-1" });
   });
 
+  it("resolves taskId queries through session lookup and filters artifacts by messageTaskId", async () => {
+    hoisted.loadSessionEntry.mockReturnValue({ sessionKey: "agent:main:main" });
+    hoisted.readSessionMessages.mockReturnValue([
+      {
+        role: "assistant",
+        content: [{ type: "image", data: "dGFyZ2V0", alt: "task-result.png" }],
+        __openclaw: { seq: 2, taskId: "task-1", messageTaskId: "task-1" },
+      },
+      {
+        role: "assistant",
+        content: [{ type: "image", data: "b3RoZXI=", alt: "other-task.png" }],
+        __openclaw: { seq: 3, taskId: "task-2", messageTaskId: "task-2" },
+      },
+      {
+        role: "assistant",
+        content: [{ type: "image", data: "dW50YWdnZWQ=", alt: "untagged.png" }],
+        __openclaw: { seq: 4 },
+      },
+    ]);
+
+    const list = createResponder();
+    await artifactsHandlers["artifacts.list"]?.({
+      req: { type: "req", id: "task-list", method: "artifacts.list", params: {} },
+      params: { taskId: "task-1" },
+      client: null,
+      isWebchatConnect: () => false,
+      respond: list.respond,
+      context: {} as never,
+    });
+
+    expect(list.calls[0]?.ok).toBe(true);
+    expect(hoisted.loadSessionEntry).toHaveBeenCalledWith("task-1");
+    const listPayload = list.calls[0]?.payload as { artifacts?: Array<Record<string, unknown>> };
+    expect(listPayload.artifacts).toHaveLength(1);
+    expect(listPayload.artifacts?.[0]).toMatchObject({
+      taskId: "task-1",
+      label: "task-result.png",
+    });
+
+    const artifactId = listPayload.artifacts?.[0]?.id as string | undefined;
+    expect(artifactId).toBeTruthy();
+
+    const get = createResponder();
+    await artifactsHandlers["artifacts.get"]?.({
+      req: { type: "req", id: "task-get", method: "artifacts.get", params: {} },
+      params: { taskId: "task-1", artifactId },
+      client: null,
+      isWebchatConnect: () => false,
+      respond: get.respond,
+      context: {} as never,
+    });
+    expect(get.calls[0]?.ok).toBe(true);
+    expect(get.calls[0]?.payload).toMatchObject({
+      artifact: { id: artifactId, taskId: "task-1", label: "task-result.png" },
+    });
+
+    const download = createResponder();
+    await artifactsHandlers["artifacts.download"]?.({
+      req: { type: "req", id: "task-download", method: "artifacts.download", params: {} },
+      params: { taskId: "task-1", artifactId },
+      client: null,
+      isWebchatConnect: () => false,
+      respond: download.respond,
+      context: {} as never,
+    });
+    expect(download.calls[0]?.ok).toBe(true);
+    expect(download.calls[0]?.payload).toMatchObject({
+      encoding: "base64",
+      data: "dGFyZ2V0",
+      artifact: { id: artifactId, taskId: "task-1", label: "task-result.png" },
+    });
+  });
+
   it("does not return untagged session artifacts for scoped runId queries", async () => {
     hoisted.resolveSessionKeyForRun.mockReturnValue("agent:main:main");
     const { calls, respond } = createResponder();
