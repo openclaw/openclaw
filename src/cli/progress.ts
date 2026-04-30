@@ -66,7 +66,7 @@ export function createCliProgress(options: ProgressOptions): ProgressReporter {
 
   const delayMs = typeof options.delayMs === "number" ? options.delayMs : DEFAULT_DELAY_MS;
   const canOsc = isTty && supportsOscProgress(process.env, isTty);
-  const stdinIsRaw = process.stdin.isRaw === true;
+  const stdinIsRaw = process.stdin.isRaw;
   const allowSpinner = shouldUseInteractiveProgressSpinner({
     fallback: options.fallback,
     streamIsTty: isTty,
