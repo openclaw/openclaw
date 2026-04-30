@@ -124,8 +124,7 @@ export const tasksHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const p = params as TasksListParams;
-    const cursor = parseCursor(p.cursor);
+    const cursor = parseCursor(params.cursor);
     if (cursor === null) {
       respond(
         false,
@@ -134,13 +133,13 @@ export const tasksHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const statusFilter = normalizeTaskStatusFilter(p.status);
-    const limit = Math.min(p.limit ?? DEFAULT_TASKS_LIST_LIMIT, MAX_TASKS_LIST_LIMIT);
+    const statusFilter = normalizeTaskStatusFilter(params.status);
+    const limit = Math.min(params.limit ?? DEFAULT_TASKS_LIST_LIMIT, MAX_TASKS_LIST_LIMIT);
     const filtered = listTaskRecords().filter((task) => {
       if (statusFilter && !statusFilter.has(task.status)) {
         return false;
       }
-      return taskMatchesAgent(task, p.agentId) && taskMatchesSession(task, p.sessionKey);
+      return taskMatchesAgent(task, params.agentId) && taskMatchesSession(task, params.sessionKey);
     });
     const page = filtered.slice(cursor, cursor + limit);
     const nextOffset = cursor + page.length;
