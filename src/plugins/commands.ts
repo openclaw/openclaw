@@ -335,11 +335,13 @@ export async function executePluginCommand(params: {
   // Lock registry during execution to prevent concurrent modifications
   setPluginCommandRegistryLocked(true);
   try {
-    const result = await command.handler(ctx);
+    const rawResult = await command.handler(ctx);
     logVerbose(
       `Plugin command /${command.name} executed successfully for ${senderId || "unknown"}`,
     );
-    return result;
+    // Plugins are third-party JS and may omit an explicit return; coerce nullish to
+    // an empty reply so callers can safely destructure without a TypeError.
+    return rawResult ?? {};
   } catch (err) {
     const error = err as Error;
     logVerbose(`Plugin command /${command.name} error: ${error.message}`);

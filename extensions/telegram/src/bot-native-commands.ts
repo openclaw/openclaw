@@ -1193,21 +1193,22 @@ export const registerTelegramNativeCommands = ({
           }
         }
 
-        const result = await nativeCommandRuntime.executePluginCommand({
-          command: match.command,
-          args: match.args,
-          senderId,
-          channel: "telegram",
-          isAuthorizedSender: commandAuthorized,
-          senderIsOwner,
-          sessionKey: route.sessionKey,
-          commandBody,
-          config: runtimeCfg,
-          from,
-          to,
-          accountId,
-          messageThreadId: threadSpec.id,
-        });
+        const result =
+          (await nativeCommandRuntime.executePluginCommand({
+            command: match.command,
+            args: match.args,
+            senderId,
+            channel: "telegram",
+            isAuthorizedSender: commandAuthorized,
+            senderIsOwner,
+            sessionKey: route.sessionKey,
+            commandBody,
+            config: runtimeCfg,
+            from,
+            to,
+            accountId,
+            messageThreadId: threadSpec.id,
+          })) ?? {};
 
         if (
           shouldSuppressLocalTelegramExecApprovalPrompt({

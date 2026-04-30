@@ -585,4 +585,11 @@ describe("registerTelegramNativeCommands", () => {
       }),
     );
   });
+
+  it("does not throw when a plugin handler returns undefined", async () => {
+    const { handler } = registerPlugCommand();
+    pluginCommandMocks.executePluginCommand.mockResolvedValue(undefined as never);
+
+    await expect(handler(createPrivateCommandContext())).resolves.not.toThrow();
+  });
 });

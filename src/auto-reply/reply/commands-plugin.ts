@@ -56,8 +56,9 @@ export const handlePluginCommand: CommandHandler = async (
         : undefined,
     threadParentId: normalizeOptionalString(params.ctx.ThreadParentId),
   });
-  const shouldContinue = result.continueAgent === true;
-  const { continueAgent: _continueAgent, ...reply } = result;
+  const safeResult = result ?? {};
+  const shouldContinue = safeResult.continueAgent === true;
+  const { continueAgent: _continueAgent, ...reply } = safeResult;
   void _continueAgent;
 
   return {

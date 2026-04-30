@@ -131,6 +131,24 @@ describe("handlePluginCommand", () => {
     });
   });
 
+  it("does not throw when plugin handler returns undefined", async () => {
+    matchPluginCommandMock.mockReturnValue({
+      command: { name: "silent" },
+      args: "",
+    });
+    executePluginCommandMock.mockResolvedValue(undefined);
+
+    const result = await handlePluginCommand(
+      buildPluginParams("/silent", {
+        commands: { text: true },
+        channels: { whatsapp: { allowFrom: ["*"] } },
+      } as OpenClawConfig),
+      true,
+    );
+
+    expect(result).toEqual({ shouldContinue: false, reply: undefined });
+  });
+
   it("enforces requiredScopes through the command handler path", async () => {
     const actualCommands = await vi.importActual<typeof import("../../plugins/commands.js")>(
       "../../plugins/commands.js",
