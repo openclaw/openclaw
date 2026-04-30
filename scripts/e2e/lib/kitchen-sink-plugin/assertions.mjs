@@ -134,6 +134,8 @@ const expectMissing = (listValue, expected, field) => {
   }
 };
 
+const INVALID_PROBE_DIAGNOSTIC_SURFACE_MODES = new Set(["full", "adversarial"]);
+
 function assertExpectedDiagnostics(surfaceMode, errorMessages) {
   const expectedErrorMessages = new Set([
     "only bundled plugins can register agent tool result middleware",
@@ -147,7 +149,7 @@ function assertExpectedDiagnostics(surfaceMode, errorMessages) {
     "plugin must own memory slot or declare contracts.memoryEmbeddingProviders for adapter: kitchen-sink-memory-embedding-provider",
     "memory prompt supplement registration missing builder",
   ]);
-  if (surfaceMode !== "full" && surfaceMode !== "adversarial") {
+  if (!INVALID_PROBE_DIAGNOSTIC_SURFACE_MODES.has(surfaceMode)) {
     if (errorMessages.size > 0) {
       throw new Error(
         `unexpected kitchen-sink diagnostic errors: ${[...errorMessages].join(", ")}`,
