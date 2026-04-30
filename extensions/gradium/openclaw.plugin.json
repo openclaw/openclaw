@@ -7,7 +7,8 @@
     "gradium": ["GRADIUM_API_KEY"]
   },
   "contracts": {
-    "speechProviders": ["gradium"]
+    "speechProviders": ["gradium"],
+    "realtimeTranscriptionProviders": ["gradium"]
   },
   "configSchema": {
     "type": "object",
