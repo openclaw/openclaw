@@ -248,6 +248,44 @@ describe("signal createSignalEventHandler inbound context", () => {
     expect(capture.ctx?.From).toBe("group:g1");
   });
 
+  it("keeps mention gating enabled for group-id allowlists by default", async () => {
+    const groupHistories = new Map();
+    const handler = createSignalEventHandler(
+      createBaseSignalEventHandlerDeps({
+        cfg: {
+          messages: {
+            inbound: { debounceMs: 0 },
+            groupChat: { mentionPatterns: ["@bot"] },
+          },
+          channels: {
+            signal: {
+              groupPolicy: "allowlist",
+              groupAllowFrom: ["g1"],
+            },
+          },
+        },
+        groupPolicy: "allowlist",
+        groupAllowFrom: ["g1"],
+        groupHistories,
+        historyLimit: 5,
+      }),
+    );
+
+    await handler(
+      createSignalReceiveEvent({
+        dataMessage: {
+          message: "hello without mention",
+          groupInfo: { groupId: "g1", groupName: "Test Group" },
+          attachments: [],
+        },
+      }),
+    );
+
+    expect(capture.ctx).toBeUndefined();
+    expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+    expect(groupHistories.get("g1")?.[0]?.body).toBe("hello without mention");
+  });
+
   it("blocks Signal groups whose id is not listed in groupAllowFrom", async () => {
     const handler = createSignalEventHandler(
       createBaseSignalEventHandlerDeps({

@@ -197,6 +197,7 @@ Groups:
 - `channels.signal.groupAllowFrom` controls which groups or senders can trigger group replies when `allowlist` is set; entries can be Signal group IDs (raw, `group:<id>`, or `signal:group:<id>`), sender phone numbers, or `uuid:<id>` values.
 - `channels.signal.groups["<group-id>" | "*"]` can override group behavior with `requireMention`, `tools`, and `toolsBySender`.
 - Use `channels.signal.accounts.<id>.groups` for per-account overrides in multi-account setups.
+- Allowlisting a Signal group does not disable mention gating. To process every message in an allowlisted group, set `channels.signal.groups["<group-id>"].requireMention=false` or use the `"*"` group default.
 - Runtime note: if `channels.signal` is completely missing, runtime falls back to `groupPolicy="allowlist"` for group checks (even if `channels.defaults.groupPolicy` is set).
 
 ## How it works (behavior)
