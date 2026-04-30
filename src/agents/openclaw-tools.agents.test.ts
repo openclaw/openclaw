@@ -34,8 +34,13 @@ describe("agents_list", () => {
   }
 
   function readAgentList(result: unknown) {
-    return (result as { details?: { agents?: Array<{ id: string; configured?: boolean }> } })
-      .details?.agents;
+    return (
+      result as {
+        details?: {
+          agents?: Array<{ id: string; configured?: boolean; name?: string; description?: string }>;
+        };
+      }
+    ).details?.agents;
   }
 
   it("defaults to the requester agent only", async () => {
@@ -144,5 +149,56 @@ describe("agents_list", () => {
     expect(agents?.map((agent) => agent.id)).toEqual(["research"]);
     const research = agents?.find((agent) => agent.id === "research");
     expect(research?.configured).toBe(false);
+  });
+
+  it("includes description when configured", async () => {
+    setConfigWithAgentList([
+      {
+        id: "main",
+        name: "Main Agent",
+        description: "Orchestrates all sub-agents",
+        subagents: {
+          allowAgents: ["*"],
+        },
+      },
+      {
+        id: "researcher",
+        name: "Research Agent",
+        description: "Web research, data gathering, and synthesis",
+      },
+    ]);
+
+    const tool = createTool();
+    const result = await tool.execute("call5", {});
+    const agents = readAgentList(result);
+    expect(agents).toHaveLength(2);
+    const mainAgent = agents?.find((agent) => agent.id === "main");
+    expect(mainAgent?.name).toBe("Main Agent");
+    expect(mainAgent?.description).toBe("Orchestrates all sub-agents");
+    const researchAgent = agents?.find((agent) => agent.id === "researcher");
+    expect(researchAgent?.name).toBe("Research Agent");
+    expect(researchAgent?.description).toBe("Web research, data gathering, and synthesis");
+  });
+
+  it("omits description when not configured", async () => {
+    setConfigWithAgentList([
+      {
+        id: "main",
+        name: "Main Agent",
+        subagents: {
+          allowAgents: ["*"],
+        },
+      },
+      {
+        id: "nodesc",
+        name: "No Description Agent",
+      },
+    ]);
+
+    const tool = createTool();
+    const result = await tool.execute("call6", {});
+    const agents = readAgentList(result);
+    const nodescAgent = agents?.find((agent) => agent.id === "nodesc");
+    expect(nodescAgent?.description).toBeUndefined();
   });
 });
