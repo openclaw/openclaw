@@ -211,6 +211,30 @@ Keep this file empty unless you want a tiny checklist. Keep it small.
     expect(isHeartbeatContentEffectivelyEmpty(content)).toBe(true);
   });
 
+  it("returns true for the current fenced heartbeat template body with docs Related links", () => {
+    const content = `\`\`\`markdown
+# Keep this file empty (or with only comments) to skip heartbeat API calls.
+
+# Add tasks below when you want the agent to check something periodically.
+\`\`\`
+
+## Related
+
+- [Heartbeat config](/gateway/config-agents)
+`;
+    expect(isHeartbeatContentEffectivelyEmpty(content)).toBe(true);
+  });
+
+  it("does not ignore non-docs tasks under a Related heading", () => {
+    const content = `# HEARTBEAT.md
+
+## Related
+
+- Check email
+`;
+    expect(isHeartbeatContentEffectivelyEmpty(content)).toBe(false);
+  });
+
   it("returns false when fenced heartbeat content includes a real task", () => {
     const content = `\`\`\`markdown
 # Keep this file empty when you want to skip.

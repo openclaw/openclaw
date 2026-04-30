@@ -26,10 +26,39 @@ export const DEFAULT_HEARTBEAT_ACK_MAX_CHARS = 300;
  * - Markdown ATX headers (`#`, `##`, ...)
  * - Markdown fence markers such as ``` or ```markdown
  * - Empty list item stubs (`- `, `- [ ]`, `* `, `+ `)
+ * - A trailing docs-only `## Related` section with local documentation links
  *
  * Note: A missing file returns false (not effectively empty) so the LLM can still
  * decide what to do. This function is only for when the file exists but has no content.
  */
+function stripTrailingDocsRelatedSection(content: string): string {
+  const lines = content.split("\n");
+  let relatedHeaderIndex = -1;
+
+  for (let i = 0; i < lines.length; i += 1) {
+    const trimmed = lines[i]?.trim() ?? "";
+    if (/^##\s+Related\s*$/i.test(trimmed)) {
+      relatedHeaderIndex = i;
+    }
+  }
+
+  if (relatedHeaderIndex < 0) {
+    return content;
+  }
+
+  const docsLocalLinkListItem = /^[-*+]\s+\[[^\]]+\]\(\/[A-Za-z0-9_./#?=-]+\)\s*$/;
+  const trailingLines = lines.slice(relatedHeaderIndex + 1);
+  const nonEmptyTrailingLines = trailingLines.map((line) => line.trim()).filter(Boolean);
+  if (nonEmptyTrailingLines.length === 0) {
+    return content;
+  }
+  if (!nonEmptyTrailingLines.every((line) => docsLocalLinkListItem.test(line))) {
+    return content;
+  }
+
+  return lines.slice(0, relatedHeaderIndex).join("\n");
+}
+
 export function isHeartbeatContentEffectivelyEmpty(content: string | undefined | null): boolean {
   if (content === undefined || content === null) {
     return false;
@@ -38,7 +67,7 @@ export function isHeartbeatContentEffectivelyEmpty(content: string | undefined |
     return false;
   }
 
-  const lines = content.split("\n");
+  const lines = stripTrailingDocsRelatedSection(content).split("\n");
   for (const line of lines) {
     const trimmed = line.trim();
     // Skip empty lines
