@@ -511,19 +511,60 @@ export async function runEmbeddedPiAgent(
         : ensureAuthProfileStore(agentDir, {
             allowKeychainPrompt: false,
           });
-      const preferredProfileId = params.authProfileId?.trim();
+      const requestedProfileId = params.authProfileId?.trim();
+      const resolvePluginHarnessPreferredProfileId = (): string | undefined => {
+        if (requestedProfileId) {
+          return requestedProfileId;
+        }
+        if (!pluginHarnessOwnsTransport) {
+          return undefined;
+        }
+        const runtimeAuthPlan = buildAgentRuntimeAuthPlan({
+          provider,
+          config: params.config,
+          workspaceDir: resolvedWorkspace,
+          harnessId: agentHarness.id,
+          harnessRuntime: agentHarness.id,
+          allowHarnessAuthProfileForwarding: true,
+        });
+        const harnessAuthProvider = runtimeAuthPlan.harnessAuthProvider;
+        if (!harnessAuthProvider) {
+          return undefined;
+        }
+        const harnessAuthStore = ensureAuthProfileStore(agentDir, {
+          allowKeychainPrompt: false,
+        });
+        return resolveAuthProfileOrder({
+          cfg: params.config,
+          store: harnessAuthStore,
+          provider: harnessAuthProvider,
+        })[0]?.trim();
+      };
+      const preferredProfileId = pluginHarnessOwnsTransport
+        ? resolvePluginHarnessPreferredProfileId()
+        : requestedProfileId;
       let lockedProfileId = params.authProfileIdSource === "user" ? preferredProfileId : undefined;
+      const canForwardPluginHarnessAuthProfile = (
+        profileId: string | undefined,
+      ): profileId is string => {
+        if (!pluginHarnessOwnsTransport || !profileId) {
+          return false;
+        }
+        const runtimeAuthPlan = buildAgentRuntimeAuthPlan({
+          provider,
+          authProfileProvider: profileId.split(":", 1)[0],
+          sessionAuthProfileId: profileId,
+          config: params.config,
+          workspaceDir: resolvedWorkspace,
+          harnessId: agentHarness.id,
+          harnessRuntime: agentHarness.id,
+          allowHarnessAuthProfileForwarding: true,
+        });
+        return runtimeAuthPlan.forwardedAuthProfileId === profileId;
+      };
       if (lockedProfileId) {
         if (pluginHarnessOwnsTransport) {
-          const runtimeAuthPlan = buildAgentRuntimeAuthPlan({
-            provider,
-            authProfileProvider: lockedProfileId.split(":", 1)[0],
-            sessionAuthProfileId: lockedProfileId,
-            config: params.config,
-            workspaceDir: resolvedWorkspace,
-            harnessId: agentHarness.id,
-          });
-          if (!runtimeAuthPlan.forwardedAuthProfileId) {
+          if (!canForwardPluginHarnessAuthProfile(lockedProfileId)) {
             lockedProfileId = undefined;
           }
         } else {
@@ -543,6 +584,12 @@ export async function runEmbeddedPiAgent(
           }
         }
       }
+      const forwardedPluginHarnessProfileId =
+        pluginHarnessOwnsTransport &&
+        !lockedProfileId &&
+        canForwardPluginHarnessAuthProfile(preferredProfileId)
+          ? preferredProfileId
+          : undefined;
       if (lockedProfileId && !pluginHarnessOwnsTransport) {
         const eligibility = resolveAuthProfileEligibility({
           cfg: params.config,
@@ -662,6 +709,8 @@ export async function runEmbeddedPiAgent(
         await initializeAuthProfile();
       } else if (lockedProfileId) {
         lastProfileId = lockedProfileId;
+      } else if (forwardedPluginHarnessProfileId) {
+        lastProfileId = forwardedPluginHarnessProfileId;
       }
       startupStages.mark("auth");
       const { sessionAgentId } = resolveSessionAgentIds({
