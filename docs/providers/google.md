@@ -78,6 +78,7 @@ Choose your preferred auth method and follow the setup steps.
         - If `gemini` is not on PATH, OpenClaw asks for confirmation and runs `npm install -g @google/gemini-cli` for you.
         - If Gemini CLI is installed but signed out, OpenClaw launches `gemini` interactively so you can complete the Google sign-in in your browser.
         - Once signed in, the local Gemini CLI session is reused automatically — no token to copy or paste.
+
       </Step>
       <Step title="Pick a model">
         The wizard offers the Gemini model list (3 / 3.1, Pro / Flash / Flash Lite) and seeds them into your config under canonical `google/*` refs. The default is `google/gemini-3.1-pro-preview`. The Gemini CLI runtime is selected separately through `agents.defaults.agentRuntime.id: "google-gemini-cli"`.

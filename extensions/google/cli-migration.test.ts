@@ -3,6 +3,7 @@ import type {
   ProviderAuthMethodNonInteractiveContext,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { EnsureGeminiCliReadyResult } from "./cli-install.js";
 
 const {
   readGeminiCliCredentialsForSetup,
@@ -12,7 +13,9 @@ const {
 } = vi.hoisted(() => ({
   readGeminiCliCredentialsForSetup: vi.fn(),
   readGeminiCliCredentialsForSetupNonInteractive: vi.fn(),
-  ensureGeminiCliInstalled: vi.fn(async () => ({ ok: true as const })),
+  ensureGeminiCliInstalled: vi.fn(
+    async (): Promise<EnsureGeminiCliReadyResult> => ({ ok: true }),
+  ),
   runGeminiCliLogin: vi.fn(() => true),
 }));
 
