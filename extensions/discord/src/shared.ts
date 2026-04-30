@@ -11,7 +11,6 @@ import {
   mergeDiscordAccountConfig,
   resolveDefaultDiscordAccountId,
   resolveDiscordAccount,
-  resolveDiscordAccountAllowFrom,
   resolveDiscordAccountDisabledReason,
   type ResolvedDiscordAccount,
 } from "./accounts.js";
@@ -73,7 +72,7 @@ function resolveDiscordConfigAccessorAccount(params: {
   );
   const config = mergeDiscordAccountConfig(params.cfg, accountId);
   return {
-    allowFrom: resolveDiscordAccountAllowFrom({ cfg: params.cfg, accountId }),
+    allowFrom: config.dm?.allowFrom,
     defaultTo: config.defaultTo,
   };
 }
