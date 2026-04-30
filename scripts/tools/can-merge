@@ -1,0 +1,275 @@
+#!/usr/bin/env bash
+# scripts/tools/can-merge
+# Lightweight gate for dev-phase PR merges.
+# Checks: open, not-draft, mergeable, CI passing, approval present.
+# Exits 0 if all gates pass, 1 if any gate fails (with reason on stderr).
+
+set -euo pipefail
+
+# ---- Config (can be overridden by env) ----
+REQUIRE_APPROVALS="${CAN_MERGE_REQUIRE_APPROVALS:-1}"   # minimum approvals required
+ALLOW_SELF_MERGE="${CAN_MERGE_ALLOW_SELF_MERGE:-false}" # allow author to self-merge
+VERBOSE="${CAN_MERGE_VERBOSE:-false}"
+FORMAT="${CAN_MERGE_FORMAT:-human}"  # human | json
+
+# ---- Helpers ----
+usage() {
+  cat <<USAGE
+Usage:
+  scripts/tools/can-merge <PR> [--verbose] [--format human|json]
+  scripts/tools/can-merge --detect  # detect PR from current git branch
+
+Checks whether a PR is ready for merge (dev-phase gate).
+
+Exit codes:
+  0  all gates passed — PR is ready to merge
+  1  one or more gates failed — reason printed to stderr
+  2  usage error or unexpected error
+
+Gates checked:
+  1. PR is open
+  2. PR is not a draft
+  3. PR is mergeable (no conflicts)
+  4. Required CI checks are passing (or no required checks)
+  5. Minimum approvals met (author self-approval configurable)
+
+Environment variables:
+  CAN_MERGE_REQUIRE_APPROVALS   Minimum approvals (default: 1)
+  CAN_MERGE_ALLOW_SELF_MERGE   Allow author self-merge (default: false)
+  CAN_MERGE_VERBOSE            Emit detailed gate output (default: false)
+  CAN_MERGE_FORMAT             Output format: human | json (default: human)
+USAGE
+}
+
+fail() {
+  echo "$*" >&2
+  exit 1
+}
+
+jq_req() {
+  local expr="$1"
+  local fallback="${2:-}"
+  local val
+  # Use jq --arg for null-safe extraction; expr // null returns $fb when null, then we fall back to shell
+  val=$(printf '%s' "$JSON" | jq -r --arg fb "$fallback" "($expr) as \$v | if \$v == null then \$fb else \$v end")
+  if [ -z "$val" ] || [ "$val" = "null" ]; then
+    echo "$fallback"
+  else
+    echo "$val"
+  fi
+}
+
+# Detect PR from current branch (gitpr-parse or gh pr parse)
+detect_pr() {
+  local branch
+  branch=$(git branch --show-current 2>/dev/null || git rev-parse --abbrev-ref HEAD 2>/dev/null || true)
+  if [ -z "$branch" ]; then
+    fail "Cannot detect current branch. Pass PR number explicitly."
+  fi
+
+  # Try gh pr view --head to find matching PR for this branch
+  local pr_json
+  pr_json=$(gh pr view "$branch" --json number,title 2>/dev/null || true)
+  if [ -z "$pr_json" ] || [ "$pr_json" = "null" ]; then
+    # Try matching by branch name pattern
+    local pr_num
+    pr_num=$(gh api "repos/{owner}/{repo}/pulls?state=open&head={owner}:${branch}" --jq '.[0].number' 2>/dev/null || true)
+    if [ -z "$pr_num" ] || [ "$pr_num" = "null" ]; then
+      fail "Cannot detect PR number from branch '$branch'. Pass PR number explicitly."
+    fi
+    echo "$pr_num"
+  else
+    echo "$pr_json" | jq -r '.number'
+  fi
+}
+
+# ---- Parse args ----
+PR=""
+DETECT=false
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -h|--help) usage; exit 0 ;;
+    --detect)  DETECT=true; shift ;;
+    --verbose) VERBOSE=true; shift ;;
+    --format)
+      FORMAT="$2"; shift 2 ;;
+    -*)
+      echo "Unknown option: $1" >&2
+      usage; exit 2 ;;
+    *)
+      if [ -n "$PR" ]; then
+        echo "Unexpected extra argument: $1" >&2
+        usage; exit 2
+      fi
+      PR="$1"; shift ;;
+  esac
+done
+
+if [ "$DETECT" = "true" ]; then
+  PR=$(detect_pr)
+fi
+
+if [ -z "$PR" ]; then
+  echo "PR number required." >&2
+  usage; exit 2
+fi
+
+# ---- Fetch PR metadata once ----
+JSON=$(gh pr view "$PR" --json state,isDraft,mergeable,mergeStateStatus,title,author,reviewRequests,reviews,headRefName 2>&1) \
+  || fail "Failed to fetch PR #$PR: $JSON"
+
+STATE=$(jq_req '.state')
+IS_DRAFT=$(jq_req '.isDraft')
+MERGEABLE=$(jq_req '.mergeable')
+MERGE_STATE=$(jq_req '.mergeStateStatus')
+AUTHOR=$(jq_req '.author.login')
+PR_TITLE=$(jq_req '.title')
+HEAD_REF=$(jq_req '.headRefName')
+
+# Who is the current gh identity?
+GH_USER=$(gh api user --jq .login 2>/dev/null) || GH_USER=""
+
+IS_SELF=false
+if [ "$GH_USER" = "$AUTHOR" ]; then
+  IS_SELF=true
+fi
+
+# ---- Gate 1: PR is open ----
+gate_open() {
+  if [ "$STATE" != "OPEN" ]; then
+    fail "GATE FAIL: PR #$PR is $STATE (not OPEN)"
+  fi
+  [ "$VERBOSE" = "true" ] && echo "[PASS] Gate 1: PR is OPEN"
+}
+
+# ---- Gate 2: Not draft ----
+gate_not_draft() {
+  if [ "$IS_DRAFT" = "true" ]; then
+    fail "GATE FAIL: PR #$PR is a draft"
+  fi
+  [ "$VERBOSE" = "true" ] && echo "[PASS] Gate 2: Not a draft"
+}
+
+# ---- Gate 3: Mergeable ----
+gate_mergeable() {
+  case "$MERGE_STATE" in
+    MERGEABLE)
+      : ok ;;
+    BLOCKED)
+      fail "GATE FAIL: PR #$PR is blocked (conflicts or requirements unmet)"
+      ;;
+    BEHIND)
+      fail "GATE FAIL: PR #$PR is behind main — rebase required"
+      ;;
+    DRAFT)
+      fail "GATE FAIL: PR #$PR is in DRAFT state"
+      ;;
+    UNSTABLE)
+      # UNSTABLE means CI is failing or there are conflicts — check below
+      if [ "$MERGEABLE" = "false" ]; then
+        fail "GATE FAIL: PR #$PR is not mergeable (conflicts)"
+      fi
+      ;;
+    *)
+      if [ "$MERGEABLE" = "false" ]; then
+        fail "GATE FAIL: PR #$PR is not mergeable"
+      fi
+      ;;
+  esac
+  [ "$VERBOSE" = "true" ] && echo "[PASS] Gate 3: PR is mergeable (state=$MERGE_STATE)"
+}
+
+# ---- Gate 4: Required CI checks passing ----
+gate_ci() {
+  local checks_json
+  checks_json=$(gh pr checks "$PR" --required --json name,bucket,state 2>/dev/null || echo '[]')
+
+  local total_required
+  total_required=$(printf '%s\n' "$checks_json" | jq 'length')
+  if [ "$total_required" -eq 0 ]; then
+    [ "$VERBOSE" = "true" ] && echo "[PASS] Gate 4: No required checks configured"
+    return 0
+  fi
+
+  local failed
+  failed=$(printf '%s\n' "$checks_json" | jq '[.[] | select(.bucket == "fail")] | length')
+  local pending
+  pending=$(printf '%s\n' "$checks_json" | jq '[.[] | select(.bucket == "pending")] | length')
+
+  if [ "$failed" -gt 0 ]; then
+    local failed_names
+    failed_names=$(printf '%s\n' "$checks_json" | jq -r '[.[] | select(.bucket == "fail") | .name] | join(", ")')
+    fail "GATE FAIL: PR #$PR has $failed failing required checks: $failed_names"
+  fi
+
+  if [ "$pending" -gt 0 ]; then
+    local pending_names
+    pending_names=$(printf '%s\n' "$checks_json" | jq -r '[.[] | select(.bucket == "pending") | .name] | join(", ")')
+    fail "GATE FAIL: PR #$PR has $pending pending required checks: $pending_names"
+  fi
+
+  [ "$VERBOSE" = "true" ] && echo "[PASS] Gate 4: All $total_required required CI checks passing"
+}
+
+# ---- Gate 5: Approvals ----
+gate_approvals() {
+  # Skip if self-merge allowed
+  if [ "$ALLOW_SELF_MERGE" = "true" ] && [ "$IS_SELF" = "true" ]; then
+    [ "$VERBOSE" = "true" ] && echo "[PASS] Gate 5: Skipped (self-merge allowed for author @$AUTHOR)"
+    return 0
+  fi
+
+  # Count approvals (AUTHORIZATION state)
+  local approvals
+  approvals=$(printf '%s\n' "$JSON" | jq '[.reviews[] | select(.state == "APPROVED")] | length')
+
+  # Also count review requests (approved reviewers)
+  local requested_reviewers
+  requested_reviewers=$(printf '%s\n' "$JSON" | jq '[.reviewRequests[].login] | length')
+
+  # If there are review requests, count approvals against those
+  if [ "$requested_reviewers" -gt 0 ]; then
+    if [ "$approvals" -lt "$REQUIRE_APPROVALS" ]; then
+      fail "GATE FAIL: PR #$PR has $approvals approval(s), need at least $REQUIRE_APPROVALS"
+    fi
+  else
+    # No review requests — use minimum approval threshold
+    if [ "$approvals" -lt "$REQUIRE_APPROVALS" ]; then
+      fail "GATE FAIL: PR #$PR has $approvals approval(s), need at least $REQUIRE_APPROVALS"
+    fi
+  fi
+
+  [ "$VERBOSE" = "true" ] && echo "[PASS] Gate 5: $approvals approval(s) present"
+}
+
+# ---- Run all gates ----
+gate_open
+gate_not_draft
+gate_mergeable
+gate_ci
+gate_approvals
+
+# ---- All passed ----
+if [ "$FORMAT" = "json" ]; then
+  cat <<EOF
+{
+  "pr": $PR,
+  "title": "$PR_TITLE",
+  "author": "$AUTHOR",
+  "head": "$HEAD_REF",
+  "state": "$STATE",
+  "mergeable": "$MERGEABLE",
+  "mergeStateStatus": "$MERGE_STATE",
+  "ready": true
+}
+EOF
+else
+  echo ""
+  echo "✅ PR #$PR \"$PR_TITLE\" — all gates passed."
+  echo "   Author: @$AUTHOR | Branch: $HEAD_REF | State: $MERGE_STATE"
+  echo ""
+  echo "   Ready to merge. Run: gh pr merge $PR"
+fi
+
+exit 0

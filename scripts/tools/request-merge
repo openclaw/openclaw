@@ -1,0 +1,165 @@
+#!/usr/bin/env bash
+# scripts/tools/request-merge
+# Runs can-merge gate, then posts a merge-request notification to Feishu.
+# Replaces prose SOP "走 scripts/tools/request-merge 通知人类".
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+CAN_MERGE="$SCRIPT_DIR/can-merge"
+
+usage() {
+  cat <<USAGE
+Usage:
+  scripts/tools/request-merge <PR> [--channel <chat-id>] [--allow-self-merge] [--dry-run]
+  scripts/tools/request-merge --detect [--channel <chat-id>] [--dry-run]
+
+Runs the can-merge gate; if all gates pass, posts a merge request to Feishu.
+
+Options:
+  --channel <chat-id>   Feishu chat ID to post to (default: from environment or hardcoded)
+  --allow-self-merge    Pass ALLOW_SELF_MERGE=true to can-merge
+  --dry-run             Run gate only, do not post to Feishu
+  --detect              Detect PR from current branch
+
+Environment variables:
+  FEISHU_BOT_TOKEN      Feishu app bot token (required for Feishu posting)
+  FEISHU_DEFAULT_CHANNEL  Default Feishu channel ID if --channel not specified
+USAGE
+}
+
+CHANNEL=""
+ALLOW_SELF_MERGE=false
+DRY_RUN=false
+DETECT=false
+PR=""
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -h|--help) usage; exit 0 ;;
+    --channel)
+      CHANNEL="$2"; shift 2 ;;
+    --allow-self-merge) ALLOW_SELF_MERGE=true; shift ;;
+    --dry-run) DRY_RUN=true; shift ;;
+    --detect)  DETECT=true; shift ;;
+    -*)
+      echo "Unknown option: $1" >&2
+      usage; exit 2 ;;
+    *)
+      if [ -n "$PR" ]; then
+        echo "Unexpected extra argument: $1" >&2
+        usage; exit 2
+      fi
+      PR="$1"; shift ;;
+  esac
+done
+
+if [ "$DETECT" = "true" ]; then
+  PR=$("$CAN_MERGE" --detect 2>&1) || fail "PR detection failed: $PR"
+fi
+
+if [ -z "$PR" ]; then
+  echo "PR number required." >&2
+  usage; exit 2
+fi
+
+# ---- Run can-merge gate ----
+export CAN_MERGE_ALLOW_SELF_MERGE="$ALLOW_SELF_MERGE"
+GATE_OUTPUT=$("$CAN_MERGE" --verbose "$PR" 2>&1) || {
+  echo ""
+  echo "❌ can-merge gate FAILED for PR #$PR"
+  echo "$GATE_OUTPUT"
+  echo ""
+  echo "Fix the gate failures before requesting a merge."
+  exit 1
+}
+
+# ---- Gather PR info for notification ----
+JSON=$(gh pr view "$PR" --json number,title,url,author,headRefName,baseRefName 2>/dev/null)
+PR_TITLE=$(echo "$JSON" | jq -r '.title')
+PR_URL=$(echo "$JSON" | jq -r '.url')
+AUTHOR=$(echo "$JSON" | jq -r '.author.login')
+HEAD_REF=$(echo "$JSON" | jq -r '.headRefName')
+BASE_REF=$(echo "$JSON" | jq -r '.baseRefName')
+
+GH_USER=$(gh api user --jq .login 2>/dev/null) || GH_USER=""
+REPO=$(gh repo view --json nameWithOwner --jq .nameWithOwner 2>/dev/null)
+
+# ---- Determine channel ----
+if [ -z "$CHANNEL" ]; then
+  CHANNEL="${FEISHU_DEFAULT_CHANNEL:-}"
+fi
+
+if [ -z "$CHANNEL" ]; then
+  echo "⚠️  No Feishu channel specified and no FEISHU_DEFAULT_CHANNEL set."
+  echo "   Feishu notification skipped. Gate passed — merge is unblocked."
+  echo ""
+  echo "$GATE_OUTPUT"
+  echo ""
+  echo "To post to Feishu, set FEISHU_DEFAULT_CHANNEL or pass --channel <chat-id>"
+  exit 0
+fi
+
+# ---- Build Feishu message ----
+FEISHU_MSG="【合并请求】PR #$PR 准备就绪
+
+▸ 标题：$PR_TITLE
+▸ 作者：@$AUTHOR
+▸ 仓库：$REPO
+▸ 分支：$HEAD_REF → $BASE_REF
+▸ 链接：[PR #$PR]($PR_URL)
+
+请确认后执行合并。
+
+> 🤖 由 scripts/tools/request-merge 自动发送"
+
+# ---- Post to Feishu ----
+if [ "$DRY_RUN" = "true" ]; then
+  echo "【DRY RUN】Would post to Feishu channel $CHANNEL:"
+  echo "$FEISHU_MSG"
+  exit 0
+fi
+
+TOKEN="${FEISHU_BOT_TOKEN:-}"
+if [ -z "$TOKEN" ]; then
+  echo "⚠️  FEISHU_BOT_TOKEN not set. Feishu notification skipped."
+  echo ""
+  echo "$GATE_OUTPUT"
+  echo ""
+  echo "Merge is unblocked — set FEISHU_BOT_TOKEN and re-run to notify humans."
+  exit 0
+fi
+
+FEISHU_API="https://open.feishu.cn/open-apis/bot/v2/hook/$(echo "$TOKEN" | jq -Rs '.')"
+
+RESPONSE=$(
+  curl -s -X POST \
+    -H "Content-Type: application/json" \
+    -d "$(cat <<EOF
+{
+  "msg_type": "text",
+  "content": {
+    "text": $(printf '%s' "$FEISHU_MSG" | jq -Rs .)
+  }
+}
+EOF
+)" \
+    "https://open.feishu.cn/open-apis/bot/v2/hook/$TOKEN" 2>&1
+) || {
+  echo "⚠️  Feishu notification failed: $RESPONSE"
+  echo "Gate passed — merge is unblocked. Notify humans manually."
+  exit 0
+}
+
+# Check Feishu response
+STATUS=$(echo "$RESPONSE" | jq -r '.code // .StatusCode // 0')
+if [ "$STATUS" = "0" ] || [ "$STATUS" = "200" ]; then
+  echo "✅ Feishu notification sent to channel $CHANNEL"
+  echo ""
+  echo "$GATE_OUTPUT"
+  exit 0
+else
+  echo "⚠️  Feishu notification returned non-ok status: $RESPONSE"
+  echo "Gate passed — merge is unblocked. Notify humans manually."
+  exit 0
+fi
