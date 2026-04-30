@@ -3,6 +3,7 @@ import { HEARTBEAT_RESPONSE_TOOL_NAME } from "../auto-reply/heartbeat-tool-respo
 import type { ModelCompatConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { DiagnosticTraceContext } from "../infra/diagnostic-trace-context.js";
+import { resolveExecDenyPathPatterns } from "../infra/exec-deny-path.js";
 import { resolveMergedSafeBinProfileFixtures } from "../infra/exec-safe-bin-runtime-policy.js";
 import { logWarn } from "../logger.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
@@ -215,6 +216,10 @@ function resolveExecConfig(params: { cfg?: OpenClawConfig; agentId?: string }) {
     node: agentExec?.node ?? globalExec?.node,
     pathPrepend: agentExec?.pathPrepend ?? globalExec?.pathPrepend,
     safeBins: agentExec?.safeBins ?? globalExec?.safeBins,
+    denyPathPatterns: resolveExecDenyPathPatterns({
+      global: globalExec?.denyPathPatterns,
+      agent: agentExec?.denyPathPatterns,
+    }),
     strictInlineEval: agentExec?.strictInlineEval ?? globalExec?.strictInlineEval,
     safeBinTrustedDirs: agentExec?.safeBinTrustedDirs ?? globalExec?.safeBinTrustedDirs,
     safeBinProfiles: resolveMergedSafeBinProfileFixtures({
@@ -565,6 +570,10 @@ export function createOpenClawCodingTools(options?: {
         node: options?.exec?.node ?? execConfig.node,
         pathPrepend: options?.exec?.pathPrepend ?? execConfig.pathPrepend,
         safeBins: options?.exec?.safeBins ?? execConfig.safeBins,
+        denyPathPatterns: resolveExecDenyPathPatterns({
+          global: execConfig.denyPathPatterns,
+          agent: options?.exec?.denyPathPatterns,
+        }),
         strictInlineEval: options?.exec?.strictInlineEval ?? execConfig.strictInlineEval,
         safeBinTrustedDirs: options?.exec?.safeBinTrustedDirs ?? execConfig.safeBinTrustedDirs,
         safeBinProfiles: options?.exec?.safeBinProfiles ?? execConfig.safeBinProfiles,

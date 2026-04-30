@@ -18,6 +18,11 @@ import {
   type ExecCommandSegment,
   type ExecSecurity,
 } from "../infra/exec-approvals.js";
+import {
+  evaluateExecDenyPathMatch,
+  formatExecDenyPathMessage,
+  resolveExecDenyPathPatterns,
+} from "../infra/exec-deny-path.js";
 import type { ExecHostRequest, ExecHostResponse, ExecHostRunResult } from "../infra/exec-host.js";
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
 import {
@@ -34,11 +39,6 @@ import { resolveSystemRunCommandRequest } from "../infra/system-run-command.js";
 import { logWarn } from "../logger.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
-import {
-  evaluateExecDenyPathMatch,
-  formatExecDenyPathMessage,
-  resolveExecDenyPathPatterns,
-} from "./exec-deny-path.js";
 import { evaluateSystemRunPolicy, resolveExecApprovalDecision } from "./exec-policy.js";
 import {
   applyOutputTruncation,
