@@ -8,6 +8,7 @@ import {
   validateArtifactsGetParams,
   validateArtifactsListParams,
 } from "../protocol/index.js";
+import { getTaskById } from "../../tasks/task-registry.js";
 import { resolveSessionKeyForRun } from "../server-session-key.js";
 import { loadSessionEntry, readSessionMessages } from "../session-utils.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
@@ -272,7 +273,14 @@ function resolveQuerySessionKey(query: ArtifactQuery): string | undefined {
     return resolveSessionKeyForRun(query.runId);
   }
   if (query.taskId) {
-    return resolveSessionKeyForRun(query.taskId);
+    const task = getTaskById(query.taskId);
+    if (task?.requesterSessionKey) {
+      return task.requesterSessionKey;
+    }
+    if (task?.runId) {
+      return resolveSessionKeyForRun(task.runId);
+    }
+    return undefined;
   }
   return undefined;
 }

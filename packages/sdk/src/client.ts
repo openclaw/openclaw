@@ -762,15 +762,15 @@ export class ArtifactsNamespace extends RpcNamespace {
     super(client, "artifacts");
   }
 
-  async list(params?: ArtifactQuery): Promise<ArtifactsListResult> {
+  async list(params: ArtifactQuery): Promise<ArtifactsListResult> {
     return await this.call("list", params);
   }
 
-  async get(id: string, params?: ArtifactQuery): Promise<ArtifactsGetResult> {
+  async get(id: string, params: ArtifactQuery): Promise<ArtifactsGetResult> {
     return await this.call("get", { ...asRecord(params), artifactId: id });
   }
 
-  async download(id: string, params?: ArtifactQuery): Promise<ArtifactsDownloadResult> {
+  async download(id: string, params: ArtifactQuery): Promise<ArtifactsDownloadResult> {
     return await this.call("download", { ...asRecord(params), artifactId: id });
   }
 }
