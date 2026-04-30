@@ -18,7 +18,11 @@ import {
   type MattermostPost,
   type MattermostUser,
 } from "./client.js";
-import { buildMattermostToolStatusText, createMattermostDraftStream } from "./draft-stream.js";
+import {
+  buildMattermostToolStatusText,
+  createMattermostDraftPreviewBoundaryController,
+  createMattermostDraftStream,
+} from "./draft-stream.js";
 import {
   computeInteractionCallbackUrl,
   createMattermostInteractionHandler,
@@ -1628,6 +1632,23 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           warn: logVerboseMessage,
         });
         let lastPartialText = "";
+        // When `streaming.mode === "block"`, the draft preview is split at
+        // turn boundaries (assistant-message start, reasoning end, tool start)
+        // so prior content stays visible instead of being overwritten in
+        // place. The boundary controller tracks whether the current preview
+        // post has any user-visible content yet, so we never call
+        // forceNewMessage() twice in a row without something between them
+        // (which would just produce empty preview posts).
+        const previewBoundary = createMattermostDraftPreviewBoundaryController({
+          draftStream,
+          splitAtBoundaries: account.previewStreamMode === "block",
+          onSplit: () => {
+            // Reset partial-text dedupe state so the next partial reply
+            // lands as a fresh post body rather than being filtered as a
+            // "prefix already sent" duplicate.
+            lastPartialText = "";
+          },
+        });
         const previewState: MattermostDraftPreviewState = {
           finalizedViaPreviewPost: false,
         };
@@ -1684,6 +1705,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           }
           lastPartialText = cleaned;
           draftStream.update(cleaned);
+          previewBoundary.markStreamedContent();
         };
 
         const { dispatcher, replyOptions, markDispatchIdle, markRunComplete } =
@@ -1818,18 +1840,36 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                             updateDraftFromPartial(payload.text);
                           },
                           onAssistantMessageStart: () => {
+                            // Boundary: a brand-new assistant message is
+                            // about to start. In block mode, split the
+                            // preview now so this message lands in its own
+                            // post and any prior thinking/tool/partial
+                            // content is preserved.
+                            previewBoundary.signalBoundary();
                             lastPartialText = "";
                           },
                           onReasoningEnd: () => {
+                            // Boundary: leaving the thinking phase. In
+                            // block mode, freeze the "Thinking…" preview
+                            // post and start a new post for whatever comes
+                            // next (partial reply, tool status, etc.).
+                            previewBoundary.signalBoundary();
                             lastPartialText = "";
                           },
                           onReasoningStream: async () => {
                             if (!lastPartialText) {
                               draftStream.update("Thinking…");
+                              previewBoundary.markStreamedContent();
                             }
                           },
                           onToolStart: async (payload) => {
+                            // Boundary: a tool is about to run. In block
+                            // mode, split before the tool status replaces
+                            // any partial reply / thinking content the
+                            // user may already have read.
+                            previewBoundary.signalBoundary();
                             draftStream.update(buildMattermostToolStatusText(payload));
+                            previewBoundary.markStreamedContent();
                           },
                         },
                       }),

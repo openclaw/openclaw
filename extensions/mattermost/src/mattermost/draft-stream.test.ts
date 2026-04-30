@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import type { MattermostClient } from "./client.js";
-import { buildMattermostToolStatusText, createMattermostDraftStream } from "./draft-stream.js";
+import {
+  buildMattermostToolStatusText,
+  createMattermostDraftPreviewBoundaryController,
+  createMattermostDraftStream,
+} from "./draft-stream.js";
 
 type RequestRecord = {
   path: string;
@@ -249,5 +253,119 @@ describe("buildMattermostToolStatusText", () => {
 
   it("falls back to a generic running tool status", () => {
     expect(buildMattermostToolStatusText({ name: "exec" })).toBe("Running `exec`…");
+  });
+});
+
+describe("createMattermostDraftPreviewBoundaryController", () => {
+  function createDraftStreamStub() {
+    return {
+      forceNewMessage: vi.fn(),
+    };
+  }
+
+  it("is a no-op when splitAtBoundaries is false", () => {
+    const draftStream = createDraftStreamStub();
+    const controller = createMattermostDraftPreviewBoundaryController({
+      draftStream,
+      splitAtBoundaries: false,
+    });
+
+    controller.markStreamedContent();
+    expect(controller.signalBoundary()).toBe(false);
+    expect(draftStream.forceNewMessage).not.toHaveBeenCalled();
+  });
+
+  it("does not split when no streamed content has been marked", () => {
+    const draftStream = createDraftStreamStub();
+    const controller = createMattermostDraftPreviewBoundaryController({
+      draftStream,
+      splitAtBoundaries: true,
+    });
+
+    expect(controller.signalBoundary()).toBe(false);
+    expect(draftStream.forceNewMessage).not.toHaveBeenCalled();
+  });
+
+  it("splits at boundary when streamed content has been marked", () => {
+    const draftStream = createDraftStreamStub();
+    const onSplit = vi.fn();
+    const controller = createMattermostDraftPreviewBoundaryController({
+      draftStream,
+      splitAtBoundaries: true,
+      onSplit,
+    });
+
+    controller.markStreamedContent();
+    expect(controller.signalBoundary()).toBe(true);
+    expect(draftStream.forceNewMessage).toHaveBeenCalledTimes(1);
+    expect(onSplit).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not split twice in a row without new content", () => {
+    const draftStream = createDraftStreamStub();
+    const controller = createMattermostDraftPreviewBoundaryController({
+      draftStream,
+      splitAtBoundaries: true,
+    });
+
+    controller.markStreamedContent();
+    expect(controller.signalBoundary()).toBe(true);
+    expect(controller.signalBoundary()).toBe(false);
+    expect(draftStream.forceNewMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("splits again after fresh content is marked", () => {
+    const draftStream = createDraftStreamStub();
+    const controller = createMattermostDraftPreviewBoundaryController({
+      draftStream,
+      splitAtBoundaries: true,
+    });
+
+    controller.markStreamedContent();
+    expect(controller.signalBoundary()).toBe(true);
+
+    controller.markStreamedContent();
+    expect(controller.signalBoundary()).toBe(true);
+
+    expect(draftStream.forceNewMessage).toHaveBeenCalledTimes(2);
+  });
+
+  it("reports whether it is splitting at boundaries", () => {
+    const draftStream = createDraftStreamStub();
+    const splitting = createMattermostDraftPreviewBoundaryController({
+      draftStream,
+      splitAtBoundaries: true,
+    });
+    const nonSplitting = createMattermostDraftPreviewBoundaryController({
+      draftStream,
+      splitAtBoundaries: false,
+    });
+
+    expect(splitting.isSplittingAtBoundaries()).toBe(true);
+    expect(nonSplitting.isSplittingAtBoundaries()).toBe(false);
+  });
+
+  it("models a thinking → tool → partial reply → final turn without overwrites", () => {
+    const draftStream = createDraftStreamStub();
+    const controller = createMattermostDraftPreviewBoundaryController({
+      draftStream,
+      splitAtBoundaries: true,
+    });
+
+    // Phase 1: "Thinking…" appears in the preview post.
+    controller.markStreamedContent();
+
+    // Phase 2: tool starts → boundary BEFORE the new tool status update.
+    expect(controller.signalBoundary()).toBe(true);
+    // Tool status is now in a fresh post.
+    controller.markStreamedContent();
+
+    // Phase 3: assistant message starts → boundary BEFORE partial reply.
+    expect(controller.signalBoundary()).toBe(true);
+    controller.markStreamedContent();
+
+    // Three distinct posts created (one initial, two splits) for the
+    // three phases. Only the two boundaries call forceNewMessage().
+    expect(draftStream.forceNewMessage).toHaveBeenCalledTimes(2);
   });
 });

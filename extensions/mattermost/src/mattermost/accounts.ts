@@ -12,6 +12,7 @@ import type {
   MattermostAccountConfig,
   MattermostChatMode,
   MattermostChatTypeKey,
+  MattermostPreviewStreamMode,
   MattermostReplyToMode,
 } from "../types.js";
 import { normalizeMattermostBaseUrl } from "./client.js";
@@ -36,7 +37,37 @@ export type ResolvedMattermostAccount = {
   chunkMode?: MattermostAccountConfig["chunkMode"];
   blockStreaming?: boolean;
   blockStreamingCoalesce?: MattermostAccountConfig["blockStreamingCoalesce"];
+  /**
+   * Effective draft preview stream mode for this account. Defaults to
+   * "partial" when not configured, matching the historical Mattermost
+   * behavior (single preview post edited in place). Use "block" to split
+   * the preview at turn boundaries so prior content stays visible.
+   */
+  previewStreamMode: MattermostPreviewStreamMode;
 };
+
+const DEFAULT_MATTERMOST_PREVIEW_STREAM_MODE: MattermostPreviewStreamMode = "partial";
+
+/**
+ * Resolve the effective Mattermost preview stream mode for an account config.
+ *
+ * Resolution order (highest precedence first):
+ * 1. `streaming.mode` on the account config ("partial" | "block")
+ * 2. Default: "partial" (historical edit-in-place behavior)
+ *
+ * Note: This setting only controls how the preview is shaped when it is
+ * created. To suppress the preview entirely, use `blockStreaming: true`
+ * on the account config. The two settings are intentionally orthogonal.
+ */
+export function resolveMattermostPreviewStreamMode(
+  config: Pick<MattermostAccountConfig, "streaming">,
+): MattermostPreviewStreamMode {
+  const explicit = config.streaming?.mode;
+  if (explicit === "partial" || explicit === "block") {
+    return explicit;
+  }
+  return DEFAULT_MATTERMOST_PREVIEW_STREAM_MODE;
+}
 
 const mattermostAccountHelpers = createAccountListHelpers("mattermost");
 
@@ -123,6 +154,7 @@ export function resolveMattermostAccount(params: {
     blockStreaming: resolveChannelStreamingBlockEnabled(merged) ?? merged.blockStreaming,
     blockStreamingCoalesce:
       resolveChannelStreamingBlockCoalesce(merged) ?? merged.blockStreamingCoalesce,
+    previewStreamMode: resolveMattermostPreviewStreamMode(merged),
   };
 }
 

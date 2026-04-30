@@ -36,6 +36,70 @@ export function buildMattermostToolStatusText(params: { name?: string; phase?: s
   return `Running${tool}…`;
 }
 
+/**
+ * Boundary controller for the Mattermost draft preview stream.
+ *
+ * In `"partial"` mode (the historical default) the draft preview lives in a
+ * single post that is edited in place across the whole turn. Every transition
+ * — thinking → partial reply → tool status → next partial reply — overwrites
+ * the same post, which causes prior content to disappear from the user's
+ * view at every transition.
+ *
+ * In `"block"` mode this controller is wired into the lifecycle hooks so
+ * that at each turn boundary (assistant-message start, reasoning end, tool
+ * start) `forceNewMessage()` is called on the underlying draft stream. That
+ * leaves the previous post frozen in the channel and starts a fresh post
+ * for the next chunk, so prior content stays visible.
+ *
+ * `markStreamedContent()` must be called whenever the caller pushes content
+ * into the draft stream that is user-visible. Boundary calls only fire
+ * `forceNewMessage()` when there is something to split off, otherwise the
+ * boundary is a no-op (we never want to leave behind an empty preview post).
+ */
+export type MattermostDraftPreviewBoundaryController = {
+  /** Mark that user-visible content has just been pushed to the stream. */
+  markStreamedContent: () => void;
+  /**
+   * Signal a turn boundary. In "block" mode and only when there is unsplit
+   * streamed content, calls `forceNewMessage()` on the underlying stream.
+   * Returns true if the boundary triggered an actual split.
+   */
+  signalBoundary: () => boolean;
+  /** Whether the controller is currently splitting at boundaries. */
+  isSplittingAtBoundaries: () => boolean;
+};
+
+export function createMattermostDraftPreviewBoundaryController(params: {
+  draftStream: Pick<MattermostDraftStream, "forceNewMessage">;
+  /** When true, boundary calls trigger forceNewMessage(). */
+  splitAtBoundaries: boolean;
+  /**
+   * Optional reset hook invoked after a successful split so the caller can
+   * reset any per-post state (e.g. cached partial text it dedupes against).
+   */
+  onSplit?: () => void;
+}): MattermostDraftPreviewBoundaryController {
+  let hasStreamedContentSinceBoundary = false;
+  return {
+    markStreamedContent: () => {
+      hasStreamedContentSinceBoundary = true;
+    },
+    signalBoundary: () => {
+      if (!params.splitAtBoundaries) {
+        return false;
+      }
+      if (!hasStreamedContentSinceBoundary) {
+        return false;
+      }
+      params.draftStream.forceNewMessage();
+      hasStreamedContentSinceBoundary = false;
+      params.onSplit?.();
+      return true;
+    },
+    isSplittingAtBoundaries: () => params.splitAtBoundaries,
+  };
+}
+
 export function createMattermostDraftStream(params: {
   client: MattermostClient;
   channelId: string;
