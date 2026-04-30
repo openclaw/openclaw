@@ -28,6 +28,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Plugin SDK/testing: lazy-load TypeScript from the plugin test-contract runtime and add release checks for critical SDK contract entrypoint imports and bundle size, so published packages fail preflight before shipping ESM-incompatible or oversized contract helpers. Thanks @vincentkoc.
 - Memory/LanceDB: validate the `openclaw ltm search --limit` CLI option so non-numeric, zero, or negative values fall back to the documented default of 5 with a warning instead of forwarding `NaN` to LanceDB. Thanks @PrincNL.
 - CLI/browser: preserve parent flags while lazy-loading browser subcommands, so `openclaw browser --json open` and `openclaw browser --json tabs` keep machine-readable output after reparsing. Fixes #74574. Thanks @devintegeritsm.
 - Plugins/runtime-deps: add `openclaw plugins deps` inspection and repair with script-free package-manager defaults shared across plugin installers, so operators can repair missing bundled runtime deps without corrupting JSON output or blocking unrelated conflict-free deps. Thanks @vincentkoc.
@@ -248,6 +249,14 @@ Docs: https://docs.openclaw.ai
 - Providers/GitHub Copilot: support the GUI/RPC wizard device-code auth flow so onboarding from non-TTY clients (gateway RPC bridge, GUI wizards) completes instead of returning empty profiles. Dangerous-state handling now distinguishes `access_denied` and `expired_token` from transport errors. (#73290) Thanks @indierawk2k2.
 
 ## 2026.4.27
+
+### Highlights
+
+- Codex Computer Use setup now ships with status/install commands, marketplace discovery, and fail-closed MCP checks for Codex-mode desktop control. Thanks @pash-openai.
+- DeepInfra joins the bundled provider set with model discovery, media generation/editing, TTS, embeddings, and provider-owned onboarding policy. Thanks @ats3v.
+- Tencent Yuanbao and QQBot support expand channel coverage with Yuanbao docs/catalog entries and QQBot group chat, streaming, media upload, and pipeline refactors. Thanks @loongfay and @cxyhhhhh.
+- Plugin startup and model catalogs move toward manifest-first metadata, reducing Gateway boot work and making provider rows/aliases/suppressions easier to audit. Thanks @shakkernerd.
+- Reliability fixes cover Telegram startup/sends, Slack socket/media stalls, gateway startup prewarm, session/history defaults, update sync, and Windows restart handoffs. Thanks @joerod26, @obviyus, @shivasymbl, @freerk, @bassboy2k, @jpreagan, @islandpreneur007, and @Thatgfsj.
 
 ### Changes
 
