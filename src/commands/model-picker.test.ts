@@ -308,6 +308,41 @@ describe("promptDefaultModel", () => {
     ]);
   });
 
+  it("does not surface a configured Claude alias as an option in another provider picker", async () => {
+    loadModelCatalog.mockResolvedValue([
+      { provider: "openai", id: "gpt-5.5", name: "GPT-5.5" },
+      { provider: "claude-cli", id: "claude-sonnet-4-6", name: "Claude Sonnet" },
+    ]);
+
+    const select = vi.fn(async (params) => params.initialValue as never);
+    const prompter = makePrompter({ select });
+    const config = {
+      agents: {
+        defaults: {
+          model: "sonnet",
+          models: {
+            "claude-cli/claude-sonnet-4-6": { alias: "sonnet" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = await promptDefaultModel({
+      config,
+      prompter,
+      allowKeep: false,
+      includeManual: false,
+      ignoreAllowlist: true,
+      preferredProvider: "openai",
+    });
+
+    const call = select.mock.calls[0]?.[0];
+    const optionValues = (call?.options ?? []).map((option: { value: string }) => option.value);
+    expect(optionValues).toEqual(["openai/gpt-5.5"]);
+    expect(call?.initialValue).toBe("openai/gpt-5.5");
+    expect(result.model).toBe("openai/gpt-5.5");
+  });
+
   it("uses configured provider models without loading the full catalog in replace mode", async () => {
     loadModelCatalog.mockResolvedValue([
       { provider: "openai", id: "gpt-5.5", name: "GPT-5.5" },
@@ -1270,6 +1305,39 @@ describe("runtime model picker visibility", () => {
       "anthropic/claude-sonnet-4-6",
       "google/gemini-3-pro-preview",
     ]);
+    expect(call?.initialValues).toEqual(["openai/gpt-5.5"]);
+  });
+
+  it("validates displayed allowlist options through catalog/configured model resolution", async () => {
+    loadModelCatalog.mockResolvedValue([
+      { provider: "openai", id: "gpt-5.5", name: "GPT-5.5" },
+      { provider: "claude-cli", id: "claude-sonnet-4-6", name: "Claude Sonnet" },
+    ]);
+
+    const multiselect = createSelectAllMultiselect();
+    const prompter = makePrompter({ multiselect });
+    const config = {
+      agents: {
+        defaults: {
+          models: {
+            "claude-cli/claude-sonnet-4-6": { alias: "sonnet" },
+            "openai/sonnet": { alias: "invalid-provider-alias-pair" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    await promptModelAllowlist({
+      config,
+      prompter,
+      preferredProvider: "openai",
+    });
+
+    const call = multiselect.mock.calls[0]?.[0];
+    const optionValues = (call?.options ?? []).map((option: { value: string }) => option.value);
+    expect(optionValues).toEqual(["openai/gpt-5.5"]);
+    expect(optionValues).not.toContain("claude-cli/claude-sonnet-4-6");
+    expect(optionValues).not.toContain("openai/sonnet");
     expect(call?.initialValues).toEqual(["openai/gpt-5.5"]);
   });
 });

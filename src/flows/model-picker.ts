@@ -798,12 +798,17 @@ export async function promptDefaultModel(
       literalPrefixProviders,
     });
   }
-  if (configuredKey && !seen.has(configuredKey)) {
+  if (
+    configuredKey &&
+    !seen.has(configuredKey) &&
+    (!preferredProvider || matchesPreferredProvider?.(resolved.provider))
+  ) {
     options.push({
       value: configuredKey,
       label: configuredLabel,
       hint: "current (not in catalog)",
     });
+    seen.add(configuredKey);
   }
 
   let initialValue: string | undefined = allowKeep ? KEEP_VALUE : configuredKey || undefined;
@@ -817,6 +822,10 @@ export async function promptDefaultModel(
     if (firstModel) {
       initialValue = modelKey(firstModel.provider, firstModel.id);
     }
+  }
+  const optionValues = new Set(options.map((option) => option.value));
+  if (initialValue && !optionValues.has(initialValue)) {
+    initialValue = options[0]?.value;
   }
 
   const selection = await params.prompter.select({
