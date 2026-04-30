@@ -736,7 +736,7 @@ Remove-Item -Path $scriptPath, $logPath, $donePath, $exitPath -Force -ErrorActio
     if (write.status !== 0) {
       throw new Error(`failed to write guest script ${scriptPath}: ${write.stderr.trim()}`);
     }
-    const chmod = run("prlctl", ["exec", vm, "/bin/chmod", "700", scriptPath], {
+    const chmod = run("prlctl", ["exec", vm, "/bin/chmod", "755", scriptPath], {
       check: false,
       quiet: true,
       timeoutMs: 30_000,
