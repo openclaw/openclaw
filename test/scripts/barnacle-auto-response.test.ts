@@ -105,11 +105,16 @@ function barnacleIssueContext(
 
 function barnacleGithub(
   files: ReturnType<typeof file>[],
-  options: { maintainerLogins?: string[]; repositoryRoles?: Record<string, string> } = {},
+  options: {
+    maintainerLogins?: string[];
+    removeLabelNotFound?: string[];
+    repositoryRoles?: Record<string, string>;
+  } = {},
 ) {
   const maintainerLogins = new Set(
     (options.maintainerLogins ?? []).map((login) => login.toLowerCase()),
   );
+  const removeLabelNotFound = new Set(options.removeLabelNotFound ?? []);
   const repositoryRoles = Object.fromEntries(
     Object.entries(options.repositoryRoles ?? {}).map(([login, role]) => [
       login.toLowerCase(),
@@ -147,6 +152,11 @@ function barnacleGithub(
         },
         removeLabel: async (params: { issue_number: number; name: string }) => {
           calls.removeLabel.push(params);
+          if (removeLabelNotFound.has(params.name)) {
+            const error = new Error("not found") as Error & { status: number };
+            error.status = 404;
+            throw error;
+          }
         },
         update: async (params: { issue_number: number; state?: string }) => {
           calls.update.push(params);
@@ -494,6 +504,32 @@ describe("barnacle-auto-response", () => {
 
   it("removes stale PR-limit labels from GitHub App-authored PRs", async () => {
     const { calls, github } = barnacleGithub([file("README.md")]);
+
+    await runBarnacleAutoResponse({
+      github,
+      context: barnacleContext(
+        {
+          user: {
+            login: "renovate[bot]",
+            type: "Bot",
+          },
+        },
+        ["r: too-many-prs"],
+      ),
+      core: {
+        info: () => undefined,
+      },
+    });
+
+    expect(calls.removeLabel).toContainEqual(expect.objectContaining({ name: "r: too-many-prs" }));
+    expect(calls.createComment).toEqual([]);
+    expect(calls.update).toEqual([]);
+  });
+
+  it("does not close GitHub App-authored PRs when stale PR-limit label removal returns 404", async () => {
+    const { calls, github } = barnacleGithub([file("README.md")], {
+      removeLabelNotFound: ["r: too-many-prs"],
+    });
 
     await runBarnacleAutoResponse({
       github,

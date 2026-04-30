@@ -808,12 +808,12 @@ async function removeLabels(github, context, issueNumber, labels, labelSet) {
         issue_number: issueNumber,
         name: label,
       });
-      labelSet.delete(label);
     } catch (error) {
       if (error?.status !== 404) {
         throw error;
       }
     }
+    labelSet.delete(label);
   }
 }
 
