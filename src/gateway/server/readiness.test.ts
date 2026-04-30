@@ -102,6 +102,7 @@ describe("createReadinessChecker", () => {
       expect(readiness()).toEqual({
         ready: false,
         failing: ["startup-sidecars"],
+        startupBlockedReason: "sidecars-pending",
         uptimeMs: 300_000,
       });
     });
@@ -119,6 +120,7 @@ describe("createReadinessChecker", () => {
       expect(readiness()).toEqual({
         ready: false,
         failing: ["startup-sidecars"],
+        startupBlockedReason: "sidecars-pending",
         uptimeMs: 300_000,
       });
       expect(manager.getRuntimeSnapshot).not.toHaveBeenCalled();

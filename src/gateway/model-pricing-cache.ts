@@ -1149,6 +1149,16 @@ export async function refreshGatewayModelPricingCache(params: {
   }
   const fetchImpl = params.fetchImpl ?? fetch;
   inFlightRefresh = (async () => {
+    // Attempt to warm from disk cache first. If a fresh cache exists, populate
+    // in-memory state immediately without any live network fetch, then schedule
+    // the next background refresh for when the cache TTL expires.
+    // Note: loadPricingCacheFromDisk() is a no-op in Vitest environments.
+    const warmedFromDisk = await warmFromDiskCacheIfFresh({ config: params.config, fetchImpl });
+    if (warmedFromDisk) {
+      scheduleRefresh({ config: params.config, fetchImpl });
+      return;
+    }
+
     const manifestMetadata = resolveModelPricingManifestMetadata({
       config: params.config,
       pluginLookUpTable: params.pluginLookUpTable,
@@ -1312,8 +1322,7 @@ async function warmFromDiskCacheIfFresh(params: {
     loadPricingCacheFromDisk("openrouter"),
     loadPricingCacheFromDisk("litellm"),
   ]);
-  const openrouterFresh =
-    openrouterCache !== null && now - openrouterCache.cachedAt < CACHE_TTL_MS;
+  const openrouterFresh = openrouterCache !== null && now - openrouterCache.cachedAt < CACHE_TTL_MS;
   const litellmFresh = litellmCache !== null && now - litellmCache.cachedAt < CACHE_TTL_MS;
   if (!openrouterFresh && !litellmFresh) {
     return false;
@@ -1358,33 +1367,13 @@ export function startGatewayModelPricingRefresh(params: {
     return () => {};
   }
   let stopped = false;
-  const fetchImpl = params.fetchImpl ?? fetch;
-  void (async () => {
+  queueMicrotask(() => {
     if (stopped) {
       return;
     }
-    // Attempt to warm from disk cache first. If cache is fresh, skip live fetch
-    // and schedule a background refresh for when the cache expires.
-    const warmedFromDisk = await warmFromDiskCacheIfFresh({ config: params.config, fetchImpl });
-    if (stopped) {
-      return;
-    }
-    if (warmedFromDisk) {
-      // Schedule the next live refresh at the remaining TTL window.
-      scheduleRefresh({ config: params.config, fetchImpl });
-      return;
-    }
-    // No fresh disk cache — proceed with live fetch as normal.
     void refreshGatewayModelPricingCache(params).catch((error: unknown) => {
       log.warn(`pricing bootstrap failed: ${String(error)}`);
     });
-  })().catch((error: unknown) => {
-    log.warn(`pricing disk cache warm failed: ${String(error)}`);
-    if (!stopped) {
-      void refreshGatewayModelPricingCache(params).catch((e: unknown) => {
-        log.warn(`pricing bootstrap fallback failed: ${String(e)}`);
-      });
-    }
   });
   return () => {
     stopped = true;

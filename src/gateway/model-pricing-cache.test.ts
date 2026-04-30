@@ -825,10 +825,10 @@ describe("model-pricing-cache", () => {
     expect(warnings).toEqual(
       expect.arrayContaining([
         expect.stringContaining(
-          "OpenRouter pricing fetch failed (timeout 60s): TimeoutError: The operation was aborted due to timeout",
+          "OpenRouter pricing fetch failed (timeout 10s): TimeoutError: The operation was aborted due to timeout",
         ),
         expect.stringContaining(
-          "LiteLLM pricing fetch failed (timeout 60s): TimeoutError: The operation was aborted due to timeout",
+          "LiteLLM pricing fetch failed (timeout 10s): TimeoutError: The operation was aborted due to timeout",
         ),
       ]),
     );
@@ -882,6 +882,142 @@ describe("model-pricing-cache", () => {
       cacheRead: 0.16,
       cacheWrite: 0,
     });
+  });
+});
+
+describe("pricing fetch timeout constant", () => {
+  it("uses a 10s fetch timeout (not the legacy 60s)", async () => {
+    const warnings: string[] = [];
+    loggingState.rawConsole = {
+      log: vi.fn(),
+      info: vi.fn(),
+      warn: vi.fn((message: string) => warnings.push(message)),
+      error: vi.fn(),
+    };
+    setLoggerOverride({ level: "silent", consoleLevel: "warn" });
+
+    const config = {
+      agents: { defaults: { model: { primary: "anthropic/claude-opus-4-6" } } },
+    } as unknown as OpenClawConfig;
+    const timeoutError = new DOMException(
+      "The operation was aborted due to timeout",
+      "TimeoutError",
+    );
+    const fetchImpl = withFetchPreconnect(async () => {
+      throw timeoutError;
+    });
+
+    await refreshGatewayModelPricingCache({ config, fetchImpl });
+
+    // Every timeout log must mention 10s — never 60s.
+    const timeoutWarnings = warnings.filter((w) => w.includes("timeout"));
+    expect(timeoutWarnings.length).toBeGreaterThan(0);
+    for (const warning of timeoutWarnings) {
+      expect(warning).toContain("10s");
+      expect(warning).not.toContain("60s");
+    }
+  });
+});
+
+describe("pricing circuit breaker", () => {
+  beforeEach(() => {
+    __resetGatewayModelPricingCacheForTest();
+  });
+
+  afterEach(() => {
+    __resetGatewayModelPricingCacheForTest();
+    loggingState.rawConsole = null;
+    resetLogger();
+  });
+
+  it("opens circuit after 3 consecutive fetch failures and skips subsequent fetches", async () => {
+    const warnings: string[] = [];
+    loggingState.rawConsole = {
+      log: vi.fn(),
+      info: vi.fn(),
+      warn: vi.fn((message: string) => warnings.push(message)),
+      error: vi.fn(),
+    };
+    setLoggerOverride({ level: "silent", consoleLevel: "warn" });
+
+    vi.useFakeTimers();
+    const now = new Date("2026-04-30T10:00:00Z");
+    vi.setSystemTime(now);
+
+    const config = {
+      agents: { defaults: { model: { primary: "anthropic/claude-opus-4-6" } } },
+    } as unknown as OpenClawConfig;
+    const fetchImpl = withFetchPreconnect(
+      vi.fn(async () => {
+        throw new Error("network error");
+      }),
+    );
+
+    // Three failures open the circuit.
+    await refreshGatewayModelPricingCache({ config, fetchImpl });
+    await refreshGatewayModelPricingCache({ config, fetchImpl });
+    await refreshGatewayModelPricingCache({ config, fetchImpl });
+
+    const fetchCallsAfterThree = (fetchImpl as ReturnType<typeof vi.fn>).mock.calls.length;
+
+    // 4th and 5th calls should be short-circuited.
+    await refreshGatewayModelPricingCache({ config, fetchImpl });
+    await refreshGatewayModelPricingCache({ config, fetchImpl });
+
+    // Fetch should not have been called again (circuit is open).
+    expect((fetchImpl as ReturnType<typeof vi.fn>).mock.calls.length).toBe(fetchCallsAfterThree);
+
+    // A "circuit open" warning should be logged.
+    expect(warnings.some((w) => w.includes("circuit open") || w.includes("circuit breaker"))).toBe(
+      true,
+    );
+
+    vi.useRealTimers();
+  });
+
+  it("resets circuit after the 10-minute cooldown and retries fetch", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-04-30T10:00:00Z"));
+
+    const config = {
+      agents: { defaults: { model: { primary: "anthropic/claude-opus-4-6" } } },
+    } as unknown as OpenClawConfig;
+    const fetchImpl = withFetchPreconnect(
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url =
+          typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+        if (url.includes("openrouter.ai")) {
+          return new Response(JSON.stringify({ data: [] }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+        return new Response(JSON.stringify({}), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }),
+    );
+
+    // First three calls fail to trip circuit.
+    const failImpl = withFetchPreconnect(async () => {
+      throw new Error("network error");
+    });
+    await refreshGatewayModelPricingCache({ config, fetchImpl: failImpl });
+    await refreshGatewayModelPricingCache({ config, fetchImpl: failImpl });
+    await refreshGatewayModelPricingCache({ config, fetchImpl: failImpl });
+
+    // Advance past 10-minute cooldown.
+    vi.setSystemTime(new Date("2026-04-30T10:11:00Z"));
+
+    const callsBefore = (fetchImpl as ReturnType<typeof vi.fn>).mock.calls.length;
+
+    // After cooldown, fetch should be attempted again.
+    await refreshGatewayModelPricingCache({ config, fetchImpl });
+
+    expect((fetchImpl as ReturnType<typeof vi.fn>).mock.calls.length).toBeGreaterThan(callsBefore);
+
+    vi.useRealTimers();
   });
 });
 

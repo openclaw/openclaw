@@ -3,6 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import { normalizeModelRef } from "../agents/model-selection.js";
 import { normalizeProviderId } from "../agents/provider-id.js";
+import { isVitestRuntimeEnv } from "../infra/env.js";
+import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 
 export type CachedPricingTier = {
@@ -104,7 +106,10 @@ type DiskCacheResult = {
 };
 
 function getPricingCacheDir(): string {
-  return path.join(os.homedir(), ".openclaw", "cache");
+  // Use the same home-dir resolution as the rest of openclaw: respects
+  // process.env.HOME and OPENCLAW_HOME overrides (important for test isolation).
+  const homeDir = resolveRequiredHomeDir(process.env, os.homedir);
+  return path.join(homeDir, ".openclaw", "cache");
 }
 
 function getPricingCacheFilePath(source: "openrouter" | "litellm"): string {
@@ -127,6 +132,10 @@ function isValidCachedModelPricing(value: unknown): value is CachedModelPricing 
 export async function loadPricingCacheFromDisk(
   source: "openrouter" | "litellm",
 ): Promise<DiskCacheResult | null> {
+  // Disk cache is disabled in test environments to prevent cross-test pollution.
+  if (isVitestRuntimeEnv()) {
+    return null;
+  }
   const filePath = getPricingCacheFilePath(source);
   try {
     const raw = await fs.promises.readFile(filePath, "utf8");
@@ -159,6 +168,10 @@ export async function savePricingCacheToDisk(
   pricing: Map<string, CachedModelPricing>,
   cachedAt: number,
 ): Promise<void> {
+  // Disk cache writes are suppressed in test environments.
+  if (isVitestRuntimeEnv()) {
+    return;
+  }
   const cacheDir = getPricingCacheDir();
   const filePath = getPricingCacheFilePath(source);
   const tmpPath = `${filePath}.tmp.${process.pid}`;
