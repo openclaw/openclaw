@@ -111,8 +111,6 @@ Stop-OpenClawGatewayProcesses
 $env:OPENCLAW_DISABLE_BUNDLED_PLUGINS = '1'
 Invoke-OpenClaw update --tag ${psSingleQuote(input.updateTarget)} --yes --json --no-restart
 if ($LASTEXITCODE -ne 0) { throw "openclaw update failed with exit code $LASTEXITCODE" }
-$version = Invoke-OpenClaw --version
-$version
 ${windowsVersionCheck(input.expectedNeedle)}
 Invoke-OpenClaw gateway restart
 Invoke-OpenClaw gateway status --deep --require-rpc
@@ -189,13 +187,13 @@ function posixVersionCheck(command: string, expectedNeedle: string): string {
     return `hash -r || true
 version_deadline=$((SECONDS + 60))
 while true; do
-  set +e
-  version="$(${command} --version 2>&1)"
-  version_status=$?
-  set -e
-  printf '%s\\n' "$version"
-  if [ "$version_status" -eq 0 ]; then
+  if version="$(${command} --version 2>&1)"; then
+    version_status=0
+    printf '%s\\n' "$version"
     break
+  else
+    version_status=$?
+    printf '%s\\n' "$version"
   fi
   if [ "$SECONDS" -ge "$version_deadline" ]; then
     exit "$version_status"
@@ -206,13 +204,13 @@ done`;
   return `hash -r || true
 version_deadline=$((SECONDS + 60))
 while true; do
-  set +e
-  version="$(${command} --version 2>&1)"
-  version_status=$?
-  set -e
-  printf '%s\\n' "$version"
-  if [ "$version_status" -eq 0 ]; then
+  if version="$(${command} --version 2>&1)"; then
+    version_status=0
+    printf '%s\\n' "$version"
     case "$version" in *${quotedNeedle}*) break ;; esac
+  else
+    version_status=$?
+    printf '%s\\n' "$version"
   fi
   if [ "$SECONDS" -ge "$version_deadline" ]; then
     if [ "$version_status" -ne 0 ]; then
@@ -227,7 +225,26 @@ done`;
 
 function windowsVersionCheck(expectedNeedle: string): string {
   if (!expectedNeedle) {
-    return "";
+    return `$versionDeadline = (Get-Date).AddSeconds(60)
+while ($true) {
+  $version = Invoke-OpenClaw --version
+  $version
+  if ($LASTEXITCODE -eq 0) { break }
+  if ((Get-Date) -ge $versionDeadline) { throw "openclaw --version failed with exit code $LASTEXITCODE" }
+  Start-Sleep -Seconds 2
+}`;
   }
-  return `if (($version | Out-String) -notlike ${psSingleQuote(`*${expectedNeedle}*`)}) { throw ${psSingleQuote(`version mismatch: expected ${expectedNeedle}`)} }`;
+  const expectedPattern = psSingleQuote(`*${expectedNeedle}*`);
+  const mismatch = psSingleQuote(`version mismatch: expected ${expectedNeedle}`);
+  return `$versionDeadline = (Get-Date).AddSeconds(60)
+while ($true) {
+  $version = Invoke-OpenClaw --version
+  $version
+  if ($LASTEXITCODE -eq 0 -and (($version | Out-String) -like ${expectedPattern})) { break }
+  if ((Get-Date) -ge $versionDeadline) {
+    if ($LASTEXITCODE -ne 0) { throw "openclaw --version failed with exit code $LASTEXITCODE" }
+    throw ${mismatch}
+  }
+  Start-Sleep -Seconds 2
+}`;
 }
