@@ -62,8 +62,17 @@ export function buildAnthropicCliBackend(): CliBackendPlugin {
       sessionArg: "--session-id",
       sessionMode: "always",
       sessionIdFields: [...CLAUDE_CLI_SESSION_ID_FIELDS],
-      systemPromptArg: "--append-system-prompt",
-      systemPromptMode: "append",
+      // --system-prompt REPLACES Anthropic's baked-in preamble (the
+      // ~10KB of `# System` / `# Doing tasks` / `# Tone and style` /
+      // model marketing / end-of-turn-summary instructions that come
+      // bundled in `@anthropic-ai/claude-code`). The replacement
+      // content is assembled at runtime from `systemPromptFiles`
+      // (resolved relative to the per-agent workspace dir — so
+      // claude-night reads `claude-night/IDENTITY.md` automatically),
+      // followed by any caller-supplied extraSystemPrompt.
+      systemPromptArg: "--system-prompt",
+      systemPromptFiles: ["IDENTITY.md", "SOUL.md"],
+      systemPromptMode: "replace",
       systemPromptWhen: "first",
       clearEnv: [...CLAUDE_CLI_CLEAR_ENV],
       reliability: {

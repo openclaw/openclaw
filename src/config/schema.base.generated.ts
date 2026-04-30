@@ -3746,6 +3746,12 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     systemPromptArg: {
                       type: "string",
                     },
+                    systemPromptFiles: {
+                      type: "array",
+                      items: {
+                        type: "string",
+                      },
+                    },
                     systemPromptFileConfigArg: {
                       type: "string",
                     },
@@ -5055,6 +5061,10 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 properties: {
                   every: {
                     type: "string",
+                  },
+                  anchor: {
+                    type: "string",
+                    enum: ["clock"],
                   },
                   activeHours: {
                     type: "object",
@@ -6379,6 +6389,10 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   properties: {
                     every: {
                       type: "string",
+                    },
+                    anchor: {
+                      type: "string",
+                      enum: ["clock"],
                     },
                     activeHours: {
                       type: "object",

@@ -393,4 +393,107 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it("reads systemPromptFiles from the workspace dir and concatenates them into the system prompt", async () => {
+    const { dir, sessionFile } = createSessionFile();
+    fs.writeFileSync(path.join(dir, "IDENTITY.md"), "## Identity\nI am the test agent.", "utf-8");
+    fs.writeFileSync(
+      path.join(dir, "SOUL.md"),
+      "## Values\nDirect, opinionated, no fluff.",
+      "utf-8",
+    );
+    try {
+      const config: OpenClawConfig = {
+        agents: {
+          defaults: {
+            cliBackends: {
+              "test-cli": {
+                command: "test-cli",
+                args: ["--print"],
+                systemPromptArg: "--system-prompt",
+                systemPromptFiles: ["IDENTITY.md", "SOUL.md"],
+                systemPromptMode: "replace",
+                systemPromptWhen: "first",
+                sessionMode: "existing",
+                output: "text",
+                input: "arg",
+              },
+            },
+          },
+        },
+      };
+
+      const context = await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionKey: "agent:main:test",
+        trigger: "user",
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "hello",
+        provider: "test-cli",
+        model: "test-model",
+        timeoutMs: 1_000,
+        runId: "run-system-prompt-files",
+        config,
+      });
+
+      expect(context.systemPrompt).toContain("I am the test agent.");
+      expect(context.systemPrompt).toContain("Direct, opinionated, no fluff.");
+      // IDENTITY content must precede SOUL content (declared order is preserved)
+      const identityIdx = context.systemPrompt.indexOf("I am the test agent.");
+      const soulIdx = context.systemPrompt.indexOf("Direct, opinionated, no fluff.");
+      expect(identityIdx).toBeGreaterThanOrEqual(0);
+      expect(soulIdx).toBeGreaterThan(identityIdx);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("warns and continues when a configured systemPromptFiles entry is missing", async () => {
+    const { dir, sessionFile } = createSessionFile();
+    fs.writeFileSync(path.join(dir, "IDENTITY.md"), "## Identity\npresent file", "utf-8");
+    // SOUL.md intentionally not written
+    try {
+      const config: OpenClawConfig = {
+        agents: {
+          defaults: {
+            cliBackends: {
+              "test-cli": {
+                command: "test-cli",
+                args: ["--print"],
+                systemPromptArg: "--system-prompt",
+                systemPromptFiles: ["IDENTITY.md", "SOUL.md"],
+                systemPromptMode: "replace",
+                systemPromptWhen: "first",
+                sessionMode: "existing",
+                output: "text",
+                input: "arg",
+              },
+            },
+          },
+        },
+      };
+
+      const context = await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionKey: "agent:main:test",
+        trigger: "user",
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "hello",
+        provider: "test-cli",
+        model: "test-model",
+        timeoutMs: 1_000,
+        runId: "run-missing-file",
+        config,
+      });
+
+      // Present file's content still made it through
+      expect(context.systemPrompt).toContain("present file");
+      // Missing file did not blow up the run
+      expect(context.systemPrompt).not.toContain("SOUL.md");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });

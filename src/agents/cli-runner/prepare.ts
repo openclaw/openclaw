@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { ensureMcpLoopbackServer } from "../../gateway/mcp-http.js";
 import {
   createMcpLoopbackServerConfig,
@@ -113,7 +115,35 @@ export async function prepareCliRunContext(
     });
     authCredential = authStore.profiles[effectiveAuthProfileId];
   }
-  const extraSystemPrompt = params.extraSystemPrompt?.trim() ?? "";
+  const callerExtraSystemPrompt = params.extraSystemPrompt?.trim() ?? "";
+  // Read configured systemPromptFiles relative to workspaceDir. Because
+  // workspaceDir is already resolved per-agent by resolveAgentWorkspaceDir
+  // (e.g. `<workspace>/claude-night/` for the claude-night agent,
+  // `<workspace>` for the default agent), per-agent override directories
+  // are honored automatically — no fallback wiring needed. File contents
+  // come first, then any caller-supplied extraSystemPrompt, joined by a
+  // blank line. Combined value flows through the existing
+  // extraSystemPrompt path: hashing, session reuse, --system-prompt[-file].
+  const fileSystemPromptParts: string[] = [];
+  const systemPromptFiles = backendResolved.config.systemPromptFiles ?? [];
+  for (const fileName of systemPromptFiles) {
+    const filePath = path.join(workspaceDir, fileName);
+    try {
+      const content = (await fs.readFile(filePath, "utf-8")).trim();
+      if (content) {
+        fileSystemPromptParts.push(content);
+      }
+    } catch (error) {
+      cliBackendLog.warn(
+        `systemPromptFiles: could not read ${fileName} from ${workspaceDir}: ${String(error)}`,
+      );
+    }
+  }
+  const fileSystemPrompt = fileSystemPromptParts.join("\n\n");
+  const extraSystemPrompt =
+    fileSystemPrompt && callerExtraSystemPrompt
+      ? `${fileSystemPrompt}\n\n${callerExtraSystemPrompt}`
+      : fileSystemPrompt || callerExtraSystemPrompt;
   // Use the static portion (excluding per-message inbound metadata) for session reuse hashing.
   // Per-message metadata (timestamps, message IDs) changes every turn and must not trigger session resets.
   const extraSystemPromptHash =

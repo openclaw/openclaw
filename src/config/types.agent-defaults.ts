@@ -127,6 +127,15 @@ export type CliBackendConfig = {
   sessionIdFields?: string[];
   /** Flag used to pass system prompt. */
   systemPromptArg?: string;
+  /**
+   * Files (relative to the agent dir) whose contents are concatenated and
+   * used as the system prompt content. Read once per call from the agent
+   * dir resolved by `resolveOpenClawAgentDir()`, so per-agent override
+   * directories (e.g. `claude-night/`) are honored automatically. Combined
+   * with any caller-supplied `extraSystemPrompt` (file content first, then
+   * caller content, joined by a blank line).
+   */
+  systemPromptFiles?: string[];
   /** Config override flag used to pass a system prompt file (e.g. -c). */
   systemPromptFileConfigArg?: string;
   /** Config override key used to pass a system prompt file. */
