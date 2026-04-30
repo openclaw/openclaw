@@ -237,6 +237,43 @@ describe("gateway bonjour advertiser", () => {
     await expect(started.stop()).resolves.toBeUndefined();
   });
 
+  it("auto-disables Bonjour in WSL2", async () => {
+    enableAdvertiserUnitMode();
+    process.env.WSL_DISTRO_NAME = "Ubuntu";
+
+    const started = await startAdvertiser({
+      gatewayPort: 18789,
+      sshPort: 2222,
+    });
+
+    expect(createService).not.toHaveBeenCalled();
+    await expect(started.stop()).resolves.toBeUndefined();
+
+    delete process.env.WSL_DISTRO_NAME;
+  });
+
+  it("honors explicit Bonjour opt-in inside WSL2", async () => {
+    enableAdvertiserUnitMode();
+    process.env.WSL_DISTRO_NAME = "Ubuntu";
+    process.env.OPENCLAW_DISABLE_BONJOUR = "0";
+
+    const destroy = vi.fn().mockResolvedValue(undefined);
+    const advertise = vi.fn().mockResolvedValue(undefined);
+    mockCiaoService({ advertise, destroy });
+
+    const started = await startAdvertiser({
+      gatewayPort: 18789,
+      sshPort: 2222,
+    });
+
+    expect(createService).toHaveBeenCalledTimes(1);
+
+    await started.stop();
+
+    delete process.env.WSL_DISTRO_NAME;
+    delete process.env.OPENCLAW_DISABLE_BONJOUR;
+  });
+
   it("honors explicit Bonjour opt-in inside detected containers", async () => {
     enableAdvertiserUnitMode();
     process.env.OPENCLAW_DISABLE_BONJOUR = "0";
