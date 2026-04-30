@@ -32,6 +32,7 @@ import {
   markAuthProfileGood,
   markAuthProfileUsed,
 } from "../auth-profiles.js";
+import { externalCliDiscoveryForProviderAuth } from "../auth-profiles/external-cli-discovery.js";
 import {
   resolveSessionKeyForRequest,
   resolveStoredSessionKeyForSessionId,
@@ -509,7 +510,11 @@ export async function runEmbeddedPiAgent(
       const authStore = pluginHarnessOwnsTransport
         ? createEmptyAuthProfileStore()
         : ensureAuthProfileStore(agentDir, {
-            allowKeychainPrompt: false,
+            externalCli: externalCliDiscoveryForProviderAuth({
+              cfg: params.config,
+              provider,
+              preferredProfile: params.authProfileId,
+            }),
           });
       const requestedProfileId = params.authProfileId?.trim();
       const resolvePluginHarnessPreferredProfileId = (): string | undefined => {

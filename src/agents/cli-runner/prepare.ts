@@ -12,6 +12,7 @@ import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
 import { resolveSessionAgentIds } from "../agent-scope.js";
+import { externalCliDiscoveryForProviderAuth } from "../auth-profiles/external-cli-discovery.js";
 import { loadAuthProfileStoreForRuntime } from "../auth-profiles/store.js";
 import type { AuthProfileCredential } from "../auth-profiles/types.js";
 import {
@@ -115,7 +116,10 @@ export async function prepareCliRunContext(
   if (effectiveAuthProfileId) {
     const authStore = loadAuthProfileStoreForRuntime(agentDir, {
       readOnly: true,
-      allowKeychainPrompt: false,
+      externalCli: externalCliDiscoveryForProviderAuth({
+        provider: params.provider,
+        profileId: effectiveAuthProfileId,
+      }),
     });
     authCredential = authStore.profiles[effectiveAuthProfileId];
   }
