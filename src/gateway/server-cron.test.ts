@@ -104,14 +104,28 @@ vi.mock("../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: getGlobalHookRunnerMock,
 }));
 
-vi.mock("../logging.js", () => ({
-  getChildLogger: vi.fn(() => ({
+vi.mock("../logging.js", () => {
+  const loggerBase = {
     debug: loggerDebugMock,
     info: loggerInfoMock,
     warn: loggerWarnMock,
     error: loggerErrorMock,
-  })),
-}));
+    isEnabled: vi.fn(() => true),
+  };
+  const logger = {
+    ...loggerBase,
+    child: vi.fn(() => logger),
+  };
+  return {
+    getChildLogger: vi.fn(() => ({
+      debug: loggerDebugMock,
+      info: loggerInfoMock,
+      warn: loggerWarnMock,
+      error: loggerErrorMock,
+    })),
+    createSubsystemLogger: vi.fn(() => logger),
+  };
+});
 
 import { readCronRunLogEntries, resolveCronRunLogPath } from "../cron/run-log.js";
 import { buildGatewayCronService } from "./server-cron.js";
