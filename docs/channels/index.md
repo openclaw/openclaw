@@ -21,11 +21,12 @@ Text is supported everywhere; media and reactions vary by channel.
 
 ## Supported channels
 
-- [BlueBubbles](/channels/bluebubbles) — **Recommended for iMessage**; uses the BlueBubbles macOS server REST API with full feature support (bundled plugin; edit, unsend, effects, reactions, group management — edit currently broken on macOS 26 Tahoe).
+- [Vesicle](/channels/vesicle) — Native iMessage bridge via Vesicle's REST API (bundled plugin; text send/probe first, native inbound webhook in progress).
+- [BlueBubbles](/channels/bluebubbles) — iMessage via the BlueBubbles macOS server REST API with full feature support (bundled plugin; edit, unsend, effects, reactions, group management — edit currently broken on macOS 26 Tahoe).
 - [Discord](/channels/discord) — Discord Bot API + Gateway; supports servers, channels, and DMs.
 - [Feishu](/channels/feishu) — Feishu/Lark bot via WebSocket (bundled plugin).
 - [Google Chat](/channels/googlechat) — Google Chat API app via HTTP webhook.
-- [iMessage (legacy)](/channels/imessage) — Legacy macOS integration via imsg CLI (deprecated, use BlueBubbles for new setups).
+- [iMessage (legacy)](/channels/imessage) — Legacy macOS integration via imsg CLI (deprecated; use Vesicle or BlueBubbles for new setups).
 - [IRC](/channels/irc) — Classic IRC servers; channels + DMs with pairing/allowlist controls.
 - [LINE](/channels/line) — LINE Messaging API bot (bundled plugin).
 - [Matrix](/channels/matrix) — Matrix protocol (bundled plugin).

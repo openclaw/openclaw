@@ -1,0 +1,12 @@
+{
+  "id": "vesicle",
+  "activation": {
+    "onStartup": false
+  },
+  "channels": ["vesicle"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

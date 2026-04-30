@@ -1,0 +1,75 @@
+{
+  "name": "@openclaw/vesicle",
+  "version": "2026.4.25",
+  "description": "OpenClaw Vesicle native iMessage channel plugin",
+  "type": "module",
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*",
+    "openclaw": "workspace:*"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.4.25"
+  },
+  "peerDependenciesMeta": {
+    "openclaw": {
+      "optional": true
+    }
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "setupEntry": "./setup-entry.ts",
+    "channel": {
+      "id": "vesicle",
+      "label": "Vesicle",
+      "selectionLabel": "Vesicle (native iMessage bridge)",
+      "detailLabel": "Vesicle",
+      "docsPath": "/channels/vesicle",
+      "docsLabel": "vesicle",
+      "blurb": "iMessage via Vesicle's native REST API.",
+      "aliases": [
+        "vsl"
+      ],
+      "preferOver": [
+        "bluebubbles",
+        "imessage"
+      ],
+      "systemImage": "message.badge.waveform",
+      "order": 70,
+      "cliAddOptions": [
+        {
+          "flags": "--server-url <url>",
+          "description": "Vesicle server URL"
+        },
+        {
+          "flags": "--auth-token <token>",
+          "description": "Vesicle bearer auth token"
+        },
+        {
+          "flags": "--webhook-path <path>",
+          "description": "Vesicle native webhook path"
+        },
+        {
+          "flags": "--webhook-secret <secret>",
+          "description": "Vesicle native webhook HMAC secret"
+        }
+      ]
+    },
+    "install": {
+      "npmSpec": "@openclaw/vesicle",
+      "defaultChoice": "npm",
+      "minHostVersion": ">=2026.4.25"
+    },
+    "compat": {
+      "pluginApi": ">=2026.4.25"
+    },
+    "build": {
+      "openclawVersion": "2026.4.25"
+    },
+    "release": {
+      "publishToClawHub": true,
+      "publishToNpm": true
+    }
+  }
+}
