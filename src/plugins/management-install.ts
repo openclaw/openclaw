@@ -52,19 +52,22 @@ function resolveInstallMode(force?: boolean): "install" | "update" {
   return force ? "update" : "install";
 }
 
-function resolvePluginInstallRecord(params: {
+export function resolvePluginInstallRecord(params: {
   request: PluginManagementInstallParams;
   result: Extract<InstallPluginResult, { ok: true }>;
 }): Omit<PluginInstallUpdate, "pluginId"> {
   if (params.request.source === "npm") {
+    const resolved = params.result.npmResolution;
+    const pinnedSpec =
+      params.request.pin && resolved?.name && resolved.version
+        ? `${resolved.name}@${resolved.version}`
+        : params.request.spec;
     return {
       source: "npm",
-      spec: params.request.pin
-        ? `${params.result.npmResolution?.name ?? params.request.spec}@${params.result.npmResolution?.version ?? params.result.version ?? "latest"}`
-        : params.request.spec,
+      spec: pinnedSpec,
       installPath: params.result.targetDir,
       version: params.result.version,
-      ...buildNpmResolutionInstallFields(params.result.npmResolution),
+      ...buildNpmResolutionInstallFields(resolved),
     };
   }
   if (params.request.source === "clawhub") {

@@ -237,4 +237,81 @@ describe("plugin management service", () => {
     expect(mocks.replaceConfigFile).toHaveBeenCalled();
     expect(mocks.refreshPluginRegistry).toHaveBeenCalled();
   });
+
+  it("preserves outcomes for dry-run with errors instead of dropping them", async () => {
+    mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue({
+      alpha: { source: "npm", spec: "alpha", installPath: "/config/extensions/alpha" },
+    });
+    mocks.updateNpmInstalledPlugins.mockResolvedValue({
+      config: { plugins: { installs: {} } },
+      changed: false,
+      outcomes: [{ pluginId: "alpha", status: "error", message: "registry timeout" }],
+    });
+
+    const result = await updateManagedPlugins({ all: true, dryRun: true });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        ok: true,
+        changed: false,
+        partialFailure: true,
+        outcomes: [{ pluginId: "alpha", status: "error", message: "registry timeout" }],
+      }),
+    );
+    expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
+    expect(mocks.writePersistedInstalledPluginIndexInstallRecords).not.toHaveBeenCalled();
+  });
+
+  it("forwards an npm spec id as a specOverride for the matching install", async () => {
+    mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue({
+      alpha: {
+        source: "npm",
+        spec: "@scope/alpha",
+        resolvedName: "@scope/alpha",
+        installPath: "/config/extensions/alpha",
+      },
+    });
+    mocks.updateNpmInstalledPlugins.mockResolvedValue({
+      config: { plugins: { installs: {} } },
+      changed: false,
+      outcomes: [{ pluginId: "alpha", status: "skipped", message: "already up to date" }],
+    });
+
+    await updateManagedPlugins({ id: "@scope/alpha@2.0.0", dryRun: true });
+
+    expect(mocks.updateNpmInstalledPlugins).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pluginIds: ["alpha"],
+        specOverrides: { alpha: "@scope/alpha@2.0.0" },
+      }),
+    );
+  });
+});
+
+describe("resolvePluginInstallRecord", () => {
+  it("only pins to name@version when npm resolution provides both", async () => {
+    const { resolvePluginInstallRecord } = await import("./management-install.js");
+
+    const pinned = resolvePluginInstallRecord({
+      request: { source: "npm", spec: "@scope/pkg@next", pin: true },
+      result: {
+        ok: true,
+        targetDir: "/extensions/pkg",
+        version: "1.2.3",
+        npmResolution: { name: "@scope/pkg", version: "1.2.3" },
+      } as never,
+    });
+    expect(pinned).toEqual(expect.objectContaining({ source: "npm", spec: "@scope/pkg@1.2.3" }));
+
+    const fallback = resolvePluginInstallRecord({
+      request: { source: "npm", spec: "@scope/pkg@next", pin: true },
+      result: {
+        ok: true,
+        targetDir: "/extensions/pkg",
+        version: "1.2.3",
+        npmResolution: { name: "@scope/pkg" },
+      } as never,
+    });
+    expect(fallback).toEqual(expect.objectContaining({ source: "npm", spec: "@scope/pkg@next" }));
+  });
 });

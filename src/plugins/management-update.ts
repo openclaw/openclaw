@@ -11,6 +11,7 @@ import {
   readPluginMutationSnapshot,
   refreshRegistryAfterPluginMutation,
 } from "./management-core.js";
+import { resolvePluginUpdateSelection } from "./plugins-update-selection.js";
 import { updateNpmInstalledPlugins } from "./update.js";
 
 export type PluginManagementUpdateParams = {
@@ -37,9 +38,15 @@ export async function updateManagedPlugins(params: PluginManagementUpdateParams)
     const installRecords = await loadInstalledPluginIndexInstallRecords();
     const cfgWithInstallRecords = withPluginInstallRecords(snapshot.config, installRecords);
     const logger = createMemoryLogger();
+    const selection = resolvePluginUpdateSelection({
+      installs: installRecords,
+      rawId: params.id,
+      all: params.all,
+    });
     const result = await updateNpmInstalledPlugins({
       config: cfgWithInstallRecords,
-      pluginIds: params.id ? [params.id] : undefined,
+      pluginIds: selection.pluginIds,
+      specOverrides: selection.specOverrides,
       dryRun: params.dryRun,
       dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
       timeoutMs: params.timeoutMs,
@@ -73,7 +80,7 @@ export async function updateManagedPlugins(params: PluginManagementUpdateParams)
       };
     }
 
-    if (hasErrors) {
+    if (hasErrors && !params.dryRun) {
       return pluginManagementFailure("unavailable", "one or more plugin updates failed", {
         logs: logger.messages,
       });
@@ -81,6 +88,7 @@ export async function updateManagedPlugins(params: PluginManagementUpdateParams)
     return {
       ok: true as const,
       changed: result.changed,
+      partialFailure: hasErrors,
       outcomes: result.outcomes,
       warnings: [],
       logs: logger.messages,
