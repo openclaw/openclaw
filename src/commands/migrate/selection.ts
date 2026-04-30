@@ -84,7 +84,7 @@ function resolveSelectedSkillItemIds(
   if (unknownRefs.length > 0 || ambiguousRefs.length > 0) {
     const available = items
       .map(formatMigrationSkillSelectionLabel)
-      .sort((a, b) => a.localeCompare(b));
+      .toSorted((a, b) => a.localeCompare(b));
     const parts: string[] = [];
     if (unknownRefs.length > 0) {
       parts.push(`No migratable skill matched ${formatSelectionRefList(unknownRefs)}.`);
