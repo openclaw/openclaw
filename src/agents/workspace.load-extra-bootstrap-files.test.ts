@@ -55,7 +55,7 @@ describe("loadExtraBootstrapFiles", () => {
     expect(files.map((file) => file.content)).toEqual(["a", "b"]);
   });
 
-  it("sorts literal paths deterministically before loading", async () => {
+  it("preserves configured literal path order before loading", async () => {
     const workspaceDir = await createWorkspaceDir("literal-order");
     const notesDir = path.join(workspaceDir, "notes");
     await fs.mkdir(notesDir, { recursive: true });
@@ -65,10 +65,10 @@ describe("loadExtraBootstrapFiles", () => {
     const files = await loadExtraBootstrapFiles(workspaceDir, ["notes/z.md", "notes/a.md"]);
 
     expect(files.map((file) => path.relative(workspaceDir, file.path))).toEqual([
-      path.join("notes", "a.md"),
       path.join("notes", "z.md"),
+      path.join("notes", "a.md"),
     ]);
-    expect(files.map((file) => file.content)).toEqual(["a", "z"]);
+    expect(files.map((file) => file.content)).toEqual(["z", "a"]);
   });
 
   it("keeps path-traversal attempts outside workspace excluded", async () => {

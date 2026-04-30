@@ -688,8 +688,17 @@ export async function loadExtraBootstrapFilesWithDiagnostics(
   }
   const resolvedDir = resolveUserPath(dir);
 
-  // Resolve glob patterns into concrete file paths
-  const resolvedPaths = new Set<string>();
+  // Resolve glob patterns into concrete file paths. Keep configured pattern order
+  // while sorting each glob expansion for deterministic results.
+  const resolvedPaths: string[] = [];
+  const seenPaths = new Set<string>();
+  const addResolvedPath = (candidate: string) => {
+    if (seenPaths.has(candidate)) {
+      return;
+    }
+    seenPaths.add(candidate);
+    resolvedPaths.push(candidate);
+  };
   for (const pattern of extraPatterns) {
     if (
       pattern.includes("*") ||
@@ -698,22 +707,26 @@ export async function loadExtraBootstrapFilesWithDiagnostics(
       pattern.includes("[")
     ) {
       try {
-        const matches = fs.glob(pattern, { cwd: resolvedDir });
-        for await (const m of matches) {
-          resolvedPaths.add(m);
+        const matches: string[] = [];
+        const globMatches = fs.glob(pattern, { cwd: resolvedDir });
+        for await (const m of globMatches) {
+          matches.push(m);
+        }
+        for (const match of matches.toSorted((a, b) => a.localeCompare(b))) {
+          addResolvedPath(match);
         }
       } catch {
         // glob not available or pattern error — fall back to literal
-        resolvedPaths.add(pattern);
+        addResolvedPath(pattern);
       }
     } else {
-      resolvedPaths.add(pattern);
+      addResolvedPath(pattern);
     }
   }
 
   const files: WorkspaceBootstrapFile[] = [];
   const diagnostics: ExtraBootstrapLoadDiagnostic[] = [];
-  for (const relPath of [...resolvedPaths].toSorted((a, b) => a.localeCompare(b))) {
+  for (const relPath of resolvedPaths) {
     const filePath = path.resolve(resolvedDir, relPath);
     const baseName = path.basename(relPath);
     const loaded = await readWorkspaceFileWithGuards({
