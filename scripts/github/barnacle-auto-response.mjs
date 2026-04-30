@@ -19,6 +19,12 @@ export const rules = [
       "Please use [our support server](https://discord.gg/clawd) and ask in #help or #users-helping-users to resolve this, or follow the stuck FAQ at https://docs.openclaw.ai/help/faq#im-stuck-whats-the-fastest-way-to-get-unstuck.",
   },
   {
+    label: "r: false-positive",
+    close: true,
+    message:
+      "Closing this because it looks like a false positive or reclassification-only report rather than an actionable OpenClaw bug. If this is still a real issue, please open a fresh report with concrete reproduction steps and current-version details.",
+  },
+  {
     label: "r: no-ci-pr",
     close: true,
     message:
@@ -63,6 +69,10 @@ export const managedLabelSpecs = {
   "r: support": {
     color: "0E8A16",
     description: "Auto-close: support requests belong in Discord or support docs.",
+  },
+  "r: false-positive": {
+    color: "D93F0B",
+    description: "Auto-close: false positive or reclassification-only report.",
   },
   "r: no-ci-pr": {
     color: "D93F0B",
