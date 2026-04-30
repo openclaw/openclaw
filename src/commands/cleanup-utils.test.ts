@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, test, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
@@ -101,30 +103,42 @@ describe("cleanup path removals", () => {
     expect(logs).toContain("[dry-run] remove /tmp/openclaw-workspace-2");
   });
 
-  it("skips state dir removal when a workspace inside it is not selected for deletion", async () => {
+  it("prunes state dir contents around a preserved workspace, keeping other state data removed", async () => {
     // Regression for openclaw/openclaw#75052: uninstalling with state scope but not workspace
-    // scope must not delete a workspace directory stored inside the state dir.
+    // scope must remove state data (config, credentials) while preserving the workspace subtree.
     const runtime = createRuntimeMock();
-    const tmpRoot = path.join(path.parse(process.cwd()).root, "tmp", "openclaw-cleanup");
-    const stateDir = path.join(tmpRoot, "state");
-    const workspaceInsideState = path.join(stateDir, "workspaces", "main");
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-75052-"));
+    try {
+      const stateDir = path.join(tmpDir, "state");
+      const workspaceInsideState = path.join(stateDir, "workspaces", "main");
+      // Populate state dir with config, credentials, and workspace
+      await fs.mkdir(path.join(stateDir, "workspaces", "main"), { recursive: true });
+      await fs.mkdir(path.join(stateDir, "credentials"), { recursive: true });
+      await fs.writeFile(path.join(stateDir, "openclaw.json"), "{}\n", "utf8");
+      await fs.writeFile(path.join(stateDir, "credentials", "token.json"), "{}\n", "utf8");
+      await fs.writeFile(path.join(workspaceInsideState, "agent.jsonl"), "{}\n", "utf8");
 
-    await removeStateAndLinkedPaths(
-      {
-        stateDir,
-        configPath: path.join(stateDir, "openclaw.json"),
-        oauthDir: path.join(tmpRoot, "oauth"),
-        configInsideState: true,
-        oauthInsideState: false,
-      },
-      runtime,
-      { dryRun: true, workspaceDirsToPreserve: [workspaceInsideState] },
-    );
+      await removeStateAndLinkedPaths(
+        {
+          stateDir,
+          configPath: path.join(stateDir, "openclaw.json"),
+          oauthDir: path.join(tmpDir, "oauth"),
+          configInsideState: true,
+          oauthInsideState: false,
+        },
+        runtime,
+        { dryRun: false, workspaceDirsToPreserve: [workspaceInsideState] },
+      );
 
-    const joinedLogs = runtime.log.mock.calls
-      .map(([line]) => line.replaceAll("\\", "/"))
-      .join("\n");
-    expect(joinedLogs).toContain("Skipping state dir removal");
-    expect(joinedLogs).not.toContain(`[dry-run] remove /tmp/openclaw-cleanup/state`);
+      // State-level items removed: config and credentials
+      await expect(fs.access(path.join(stateDir, "openclaw.json"))).rejects.toThrow();
+      await expect(fs.access(path.join(stateDir, "credentials"))).rejects.toThrow();
+      // Workspace preserved
+      await expect(
+        fs.access(path.join(workspaceInsideState, "agent.jsonl")),
+      ).resolves.toBeUndefined();
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
   });
 });

@@ -109,19 +109,19 @@ export async function removeStateAndLinkedPaths(
   runtime: RuntimeEnv,
   opts?: { dryRun?: boolean; workspaceDirsToPreserve?: readonly string[] },
 ): Promise<void> {
-  const hasWorkspaceInsideState = opts?.workspaceDirsToPreserve?.some((dir) =>
-    isPathWithin(dir, cleanup.stateDir),
-  );
-  if (hasWorkspaceInsideState) {
-    runtime.log(
-      `Skipping state dir removal — workspace directories inside ${cleanup.stateDir} were not selected for deletion.`,
-    );
-  } else {
+  const preserveList = opts?.workspaceDirsToPreserve ?? [];
+  const workspacesInsideState = preserveList.filter((dir) => isPathWithin(dir, cleanup.stateDir));
+
+  if (workspacesInsideState.length === 0) {
     await removePath(cleanup.stateDir, runtime, {
       dryRun: opts?.dryRun,
       label: cleanup.stateDir,
     });
+  } else {
+    // Prune state dir contents, skipping only entries that contain (or are) a preserved workspace.
+    await removeStateDirAroundWorkspaces(cleanup.stateDir, workspacesInsideState, runtime, opts);
   }
+
   if (!cleanup.configInsideState) {
     await removePath(cleanup.configPath, runtime, {
       dryRun: opts?.dryRun,
@@ -133,6 +133,33 @@ export async function removeStateAndLinkedPaths(
       dryRun: opts?.dryRun,
       label: cleanup.oauthDir,
     });
+  }
+}
+
+async function removeStateDirAroundWorkspaces(
+  stateDir: string,
+  workspacesToPreserve: readonly string[],
+  runtime: RuntimeEnv,
+  opts?: { dryRun?: boolean },
+): Promise<void> {
+  let entries: fs.Dirent[];
+  try {
+    entries = await fs.readdir(stateDir, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
+    const entryPath = path.join(stateDir, entry.name);
+    const isAncestorOfPreserved = workspacesToPreserve.some((w) => isPathWithin(w, entryPath));
+    const isPreservedItself = workspacesToPreserve.some((w) => isPathWithin(entryPath, w));
+    if (isAncestorOfPreserved) {
+      // Recurse into this directory to prune around the preserved workspace.
+      if (entry.isDirectory()) {
+        await removeStateDirAroundWorkspaces(entryPath, workspacesToPreserve, runtime, opts);
+      }
+    } else if (!isPreservedItself) {
+      await removePath(entryPath, runtime, { dryRun: opts?.dryRun, label: entryPath });
+    }
   }
 }
 
