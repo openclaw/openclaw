@@ -1740,6 +1740,40 @@ describe("deliverOutboundPayloads", () => {
     );
   });
 
+  it("passes outbound metadata into the message_sending hook", async () => {
+    hookMocks.runner.hasHooks.mockImplementation(
+      (hookName?: string) => hookName === "message_sending",
+    );
+    const sendMatrix = vi.fn().mockResolvedValue({ messageId: "m-meta", roomId: "!room:example" });
+    const metadata = {
+      arbiter_topic: "dev-command",
+      arbiter_bot_name: "HermesA8_bot",
+      arbiter_trace_id: "trace-1",
+      arbiter_idempotency_key: "idem-1",
+      arbiter_action_type: "send",
+    };
+
+    await deliverOutboundPayloads({
+      cfg: {},
+      channel: "matrix",
+      to: "!room:example",
+      payloads: [{ text: "hello" }],
+      deps: { matrix: sendMatrix },
+      metadata,
+    });
+
+    expect(hookMocks.runner.runMessageSending).toHaveBeenCalledWith(
+      expect.objectContaining({
+        metadata: expect.objectContaining({
+          ...metadata,
+          channel: "matrix",
+          mediaUrls: [],
+        }),
+      }),
+      expect.objectContaining({ channelId: "matrix" }),
+    );
+  });
+
   it("emits message_sent success for text-only deliveries", async () => {
     hookMocks.runner.hasHooks.mockReturnValue(true);
     const sendMatrix = vi.fn().mockResolvedValue({ messageId: "m1", roomId: "!room:example" });
