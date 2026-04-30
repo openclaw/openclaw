@@ -19,6 +19,14 @@ export type MemoryEmbeddingProbeResult = {
   cached?: boolean;
   checkedAtMs?: number;
   cacheExpiresAtMs?: number;
+  /**
+   * True when the probe was bounded by a diagnostic budget at the call site
+   * and did not complete in time. Distinct from a hard provider failure: a
+   * timed-out probe means the embedding backend may still be initializing or
+   * is unreachable, but indexing/search may succeed once the provider warms
+   * up. CLI surfaces should render this as "timeout" rather than "unavailable".
+   */
+  timedOut?: boolean;
 };
 
 export type MemorySyncProgressUpdate = {

@@ -84,6 +84,49 @@ type LoadedMemoryCommandConfig = {
   diagnostics: string[];
 };
 
+/**
+ * Diagnostic budget for `memory status --deep` embedding probe.  The
+ * underlying provider call (`embedBatchWithRetry(["ping"])`) can otherwise
+ * inherit the local-provider batch timeout of 10 minutes, which makes the
+ * status command unusable as a health check when the provider is slow to
+ * initialize.  Eight seconds is long enough for warm hosted providers and a
+ * ready local provider, while keeping the worst-case `memory status --deep`
+ * runtime bounded.  Indexing keeps the longer batch budget unchanged.
+ */
+const MEMORY_STATUS_DEEP_PROBE_BUDGET_MS = 8_000;
+
+/**
+ * Exported for unit testing — race a manager probe against a wall-clock
+ * budget.  See {@link MEMORY_STATUS_DEEP_PROBE_BUDGET_MS} for the production
+ * default and the rationale for bounding this call.
+ */
+export async function probeEmbeddingWithBudget(
+  manager: { probeEmbeddingAvailability(): Promise<MemoryEmbeddingProbeResult> },
+  budgetMs: number,
+): Promise<MemoryEmbeddingProbeResult> {
+  let timer: NodeJS.Timeout | undefined;
+  const timeoutPromise = new Promise<MemoryEmbeddingProbeResult>((resolve) => {
+    timer = setTimeout(() => {
+      resolve({
+        ok: false,
+        timedOut: true,
+        error: `Embedding probe exceeded ${budgetMs}ms diagnostic budget — provider may be initializing or unreachable`,
+      });
+    }, budgetMs);
+    // Don't keep the event loop alive solely for this timeout.
+    if (typeof timer.unref === "function") {
+      timer.unref();
+    }
+  });
+  try {
+    return await Promise.race([manager.probeEmbeddingAvailability(), timeoutPromise]);
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
+}
+
 function getMemoryCommandSecretTargetIds(): Set<string> {
   return new Set([
     "agents.defaults.memorySearch.remote.apiKey",
@@ -676,14 +719,41 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
         let indexError: string | undefined;
         const syncFn = manager.sync ? manager.sync.bind(manager) : undefined;
         if (deep) {
-          await withProgress({ label: "Checking memory…", total: 2 }, async (progress) => {
-            progress.setLabel("Probing vector…");
-            await manager.probeVectorAvailability();
-            progress.tick();
-            progress.setLabel("Probing embeddings…");
-            embeddingProbe = await manager.probeEmbeddingAvailability();
-            progress.tick();
-          });
+          await withProgress(
+            {
+              label: "Checking memory…",
+              total: 2,
+              // Without a non-spinner fallback, non-TTY callers (CI logs,
+              // pipes, the ClawNanny diagnostic runner) get a no-op reporter
+              // and therefore see no progress at all while a slow probe
+              // hangs.  Use "line" when --verbose is set (matches the
+              // indexing block below); otherwise fall back to "log" so each
+              // label change still shows up in non-TTY logs.
+              fallback: opts.verbose ? "line" : "log",
+            },
+            async (progress) => {
+              progress.setLabel("Probing vector…");
+              await manager.probeVectorAvailability();
+              progress.tick();
+              progress.setLabel("Probing embeddings…");
+              // Bound the embedding probe with a diagnostic budget shorter
+              // than the local-provider batch timeout (which defaults to
+              // 600s in manager-embedding-ops.ts).  When the cache misses
+              // and the provider is initializing, the underlying
+              // embedBatchWithRetry(["ping"]) call can otherwise block this
+              // command for the full batch window, which is unusable as a
+              // status check.  On timeout we surface a parseable
+              // `timedOut: true` result so the JSON output and the rendered
+              // "Embeddings: timeout" line stay distinguishable from a hard
+              // "unavailable" failure, and indexing keeps the longer
+              // batch-timeout budget for actual embedding work.
+              embeddingProbe = await probeEmbeddingWithBudget(
+                manager,
+                MEMORY_STATUS_DEEP_PROBE_BUDGET_MS,
+              );
+              progress.tick();
+            },
+          );
           if (opts.index && syncFn) {
             await withProgressTotals(
               {
@@ -834,7 +904,21 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
       `${label("Dreaming")} ${info(formatDreamingSummary(cfg))}`,
     ].filter(Boolean) as string[];
     if (embeddingProbe) {
-      const state = embeddingProbe.ok ? "ready" : "unavailable";
+      // Three rendered states:
+      //   ok       -> "ready"        (success color)
+      //   timedOut -> "timeout"      (warn color, distinct from "unavailable")
+      //   else     -> "unavailable"  (warn color)
+      // The timeout case is intentionally separated so users can tell a
+      // diagnostic-budget hit ("provider warming up; retry") apart from a
+      // hard provider failure ("misconfigured / unreachable").
+      let state: string;
+      if (embeddingProbe.ok) {
+        state = "ready";
+      } else if (embeddingProbe.timedOut) {
+        state = "timeout";
+      } else {
+        state = "unavailable";
+      }
       const stateColor = embeddingProbe.ok ? theme.success : theme.warn;
       lines.push(`${label("Embeddings")} ${colorize(rich, stateColor, state)}`);
       if (embeddingProbe.error) {
