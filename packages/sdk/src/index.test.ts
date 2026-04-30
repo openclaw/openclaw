@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { EventHub, OpenClaw, normalizeGatewayEvent } from "./index.js";
-import type { GatewayEvent, GatewayRequestOptions, OpenClawTransport } from "./types.js";
+import type {
+  GatewayEvent,
+  GatewayRequestOptions,
+  OpenClawEvent,
+  OpenClawTransport,
+} from "./types.js";
 
 type RequestCall = {
   method: string;
@@ -353,6 +358,209 @@ describe("OpenClaw SDK", () => {
     }
 
     expect(seen).toEqual(["run.started", "assistant.delta", "run.completed"]);
+  });
+
+  it("does not surface raw chat projection events in per-run streams", async () => {
+    const ts = 1_777_000_000_100;
+    const transport = new FakeTransport({
+      agent: (
+        _params: unknown,
+        _options: GatewayRequestOptions | undefined,
+        fake: FakeTransport,
+      ) => {
+        fake.emit({
+          event: "agent",
+          seq: 1,
+          payload: {
+            runId: "run_chat_projection",
+            stream: "lifecycle",
+            ts,
+            data: { phase: "start" },
+          },
+        });
+        fake.emit({
+          event: "agent",
+          seq: 2,
+          payload: {
+            runId: "run_chat_projection",
+            stream: "assistant",
+            ts: ts + 1,
+            data: { delta: "hello" },
+          },
+        });
+        fake.emit({
+          event: "chat",
+          seq: 3,
+          payload: {
+            runId: "run_chat_projection",
+            sessionKey: "chat-projection",
+            state: "delta",
+            message: {
+              role: "assistant",
+              content: [{ type: "text", text: "hello" }],
+              timestamp: ts + 2,
+            },
+          },
+        });
+        fake.emit({
+          event: "agent",
+          seq: 4,
+          payload: {
+            runId: "run_chat_projection",
+            stream: "lifecycle",
+            ts: ts + 3,
+            data: { phase: "end" },
+          },
+        });
+        fake.emit({
+          event: "chat",
+          seq: 5,
+          payload: {
+            runId: "run_chat_projection",
+            sessionKey: "chat-projection",
+            state: "final",
+            message: {
+              role: "assistant",
+              content: [{ type: "text", text: "hello" }],
+              timestamp: ts + 4,
+            },
+          },
+        });
+        return {
+          status: "accepted",
+          runId: "run_chat_projection",
+          sessionKey: "chat-projection",
+        };
+      },
+    });
+    const oc = new OpenClaw({ transport });
+
+    const run = await oc.runs.create({
+      input: "stream with chat projection",
+      idempotencyKey: "chat-projection-events",
+      sessionKey: "chat-projection",
+    });
+    const seen: OpenClawEvent[] = [];
+
+    for await (const event of run.events()) {
+      seen.push(event);
+      if (event.type === "run.completed") {
+        break;
+      }
+    }
+
+    expect(seen.map((event) => event.type)).toEqual([
+      "run.started",
+      "assistant.delta",
+      "run.completed",
+    ]);
+    expect(seen.map((event) => event.raw?.event)).toEqual(["agent", "agent", "agent"]);
+  });
+
+  it("normalizes chat-only projection events in per-run streams", async () => {
+    const ts = 1_777_000_000_200;
+    const transport = new FakeTransport({
+      agent: (
+        _params: unknown,
+        _options: GatewayRequestOptions | undefined,
+        fake: FakeTransport,
+      ) => {
+        fake.emit({
+          event: "chat",
+          seq: 1,
+          payload: {
+            runId: "run_chat_only",
+            sessionKey: "chat-only",
+            state: "delta",
+            message: {
+              role: "assistant",
+              content: [{ type: "text", text: "hello" }],
+              timestamp: ts,
+            },
+          },
+        });
+        fake.emit({
+          event: "chat",
+          seq: 2,
+          payload: {
+            runId: "run_chat_only",
+            sessionKey: "chat-only",
+            state: "delta",
+            message: {
+              role: "assistant",
+              content: [{ type: "text", text: "hello again" }],
+              timestamp: ts + 1,
+            },
+          },
+        });
+        fake.emit({
+          event: "chat",
+          seq: 3,
+          payload: {
+            runId: "run_chat_only",
+            sessionKey: "chat-only",
+            state: "final",
+            message: {
+              role: "assistant",
+              content: [{ type: "text", text: "hello again" }],
+              timestamp: ts + 2,
+            },
+          },
+        });
+        fake.emit({
+          event: "custom.debug",
+          seq: 4,
+          payload: {
+            runId: "run_chat_only",
+            ts: ts + 3,
+            data: { ok: true },
+          },
+        });
+        return { status: "accepted", runId: "run_chat_only", sessionKey: "chat-only" };
+      },
+    });
+    const oc = new OpenClaw({ transport });
+
+    const run = await oc.runs.create({
+      input: "stream with chat-only projection",
+      idempotencyKey: "chat-only-events",
+      sessionKey: "chat-only",
+    });
+    const iterator = run.events()[Symbol.asyncIterator]();
+
+    try {
+      const first = await iterator.next();
+      expect(first).toMatchObject({
+        done: false,
+        value: {
+          type: "assistant.delta",
+          data: { delta: "hello" },
+          raw: { event: "chat" },
+        },
+      });
+
+      const second = await iterator.next();
+      expect(second).toMatchObject({
+        done: false,
+        value: {
+          type: "assistant.delta",
+          data: { delta: "hello again" },
+          raw: { event: "chat" },
+        },
+      });
+
+      const third = await iterator.next();
+      expect(third).toMatchObject({
+        done: false,
+        value: {
+          type: "run.completed",
+          data: { phase: "end", outputText: "hello again" },
+          raw: { event: "chat" },
+        },
+      });
+    } finally {
+      await iterator.return?.();
+    }
   });
 
   it("creates a session and sends a message as a run", async () => {
