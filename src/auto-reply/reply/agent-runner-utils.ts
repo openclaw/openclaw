@@ -180,7 +180,7 @@ export function resolveAutoThreadingTargets(sessionCtx: TemplateContext): {
   implicitReplyToId: string | undefined;
 } {
   const currentMessageId = sessionCtx.MessageSidFull ?? sessionCtx.MessageSid;
-  const implicitReplyToId = normalizeOptionalString(sessionCtx.MessageThreadId) ?? currentMessageId;
+  const implicitReplyToId = currentMessageId;
   return { currentMessageId, implicitReplyToId };
 }
 
