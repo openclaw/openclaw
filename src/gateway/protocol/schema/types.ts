@@ -1,4 +1,13 @@
 import type { Static } from "typebox";
+import {
+  ArtifactSummarySchema,
+  ArtifactsListParamsSchema,
+  ArtifactsListResultSchema,
+  ArtifactsGetParamsSchema,
+  ArtifactsGetResultSchema,
+  ArtifactsDownloadParamsSchema,
+  ArtifactsDownloadResultSchema,
+} from "./artifacts.js";
 import { ProtocolSchemas } from "./protocol-schemas.js";
 
 type ProtocolSchemaName = keyof typeof ProtocolSchemas;
@@ -178,3 +187,10 @@ export type ChatEvent = SchemaType<"ChatEvent">;
 export type UpdateRunParams = SchemaType<"UpdateRunParams">;
 export type TickEvent = SchemaType<"TickEvent">;
 export type ShutdownEvent = SchemaType<"ShutdownEvent">;
+export type ArtifactSummary = Static<typeof ArtifactSummarySchema>;
+export type ArtifactsListParams = Static<typeof ArtifactsListParamsSchema>;
+export type ArtifactsListResult = Static<typeof ArtifactsListResultSchema>;
+export type ArtifactsGetParams = Static<typeof ArtifactsGetParamsSchema>;
+export type ArtifactsGetResult = Static<typeof ArtifactsGetResultSchema>;
+export type ArtifactsDownloadParams = Static<typeof ArtifactsDownloadParamsSchema>;
+export type ArtifactsDownloadResult = Static<typeof ArtifactsDownloadResultSchema>;

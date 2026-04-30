@@ -279,15 +279,6 @@ describe("OpenClaw SDK", () => {
     await expect(oc.tools.invoke("demo")).rejects.toThrow(
       "oc.tools.invoke is not supported by the current OpenClaw Gateway yet",
     );
-    await expect(oc.artifacts.list()).rejects.toThrow(
-      "oc.artifacts.list is not supported by the current OpenClaw Gateway yet",
-    );
-    await expect(oc.artifacts.get("artifact_123")).rejects.toThrow(
-      "oc.artifacts.get is not supported by the current OpenClaw Gateway yet",
-    );
-    await expect(oc.artifacts.download("artifact_123")).rejects.toThrow(
-      "oc.artifacts.download is not supported by the current OpenClaw Gateway yet",
-    );
     await expect(oc.environments.list()).rejects.toThrow(
       "oc.environments.list is not supported by the current OpenClaw Gateway yet",
     );
@@ -717,6 +708,91 @@ describe("OpenClaw SDK", () => {
       type: "run.timed_out",
       runId: "run_1",
       data: { phase: "end", stopReason: "timeout" },
+    });
+  });
+
+  it("lists, gets, and downloads artifacts via RPC", async () => {
+    const fakeArtifact = {
+      id: "artifact_abc123",
+      type: "image",
+      title: "screenshot.png",
+      mimeType: "image/png",
+      sizeBytes: 6,
+      sessionKey: "agent:main:main",
+      messageSeq: 1,
+      source: "session-transcript",
+      download: { mode: "bytes" },
+    };
+    const transport = new FakeTransport({
+      "artifacts.list": {
+        artifacts: [fakeArtifact],
+        total: 1,
+      },
+      "artifacts.get": { artifact: fakeArtifact },
+      "artifacts.download": {
+        artifact: fakeArtifact,
+        encoding: "base64",
+        data: "aGVsbG8=",
+      },
+    });
+    const oc = new OpenClaw({ transport });
+
+    const listResult = await oc.artifacts.list({ sessionKey: "agent:main:main" });
+    expect(listResult.artifacts).toHaveLength(1);
+    expect(listResult.total).toBe(1);
+    expect(listResult.artifacts[0].id).toBe("artifact_abc123");
+
+    const getResult = await oc.artifacts.get({
+      sessionKey: "agent:main:main",
+      artifactId: "artifact_abc123",
+    });
+    expect(getResult.artifact.id).toBe("artifact_abc123");
+
+    const dlResult = await oc.artifacts.download({
+      sessionKey: "agent:main:main",
+      artifactId: "artifact_abc123",
+    });
+    expect(dlResult.encoding).toBe("base64");
+    expect(dlResult.data).toBe("aGVsbG8=");
+
+    expect(transport.calls.map((c) => c.method)).toEqual([
+      "artifacts.list",
+      "artifacts.get",
+      "artifacts.download",
+    ]);
+    expect(transport.calls[0].params).toEqual({ sessionKey: "agent:main:main" });
+    expect(transport.calls[1].params).toEqual({
+      sessionKey: "agent:main:main",
+      artifactId: "artifact_abc123",
+    });
+    expect(transport.calls[2].params).toEqual({
+      sessionKey: "agent:main:main",
+      artifactId: "artifact_abc123",
+    });
+  });
+
+  it("passes cursor and types filter params for artifacts.list pagination", async () => {
+    const transport = new FakeTransport({
+      "artifacts.list": {
+        artifacts: [],
+        total: 0,
+        nextCursor: undefined,
+      },
+    });
+    const oc = new OpenClaw({ transport });
+
+    await oc.artifacts.list({
+      sessionKey: "agent:main:main",
+      cursor: "dGVzdA==",
+      limit: 10,
+      types: ["image"],
+    });
+
+    expect(transport.calls[0].params).toEqual({
+      sessionKey: "agent:main:main",
+      cursor: "dGVzdA==",
+      limit: 10,
+      types: ["image"],
     });
   });
 });

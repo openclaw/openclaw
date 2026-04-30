@@ -61,24 +61,49 @@ export type SDKMessage = {
 
 export type ArtifactSummary = {
   id: string;
-  runId?: string;
-  sessionId?: string;
-  type:
-    | "file"
-    | "patch"
-    | "diff"
-    | "log"
-    | "media"
-    | "screenshot"
-    | "trajectory"
-    | "pull_request"
-    | "workspace"
-    | (string & {});
-  title?: string;
+  type: "image" | "audio" | "file" | (string & {});
+  title: string;
   mimeType?: string;
   sizeBytes?: number;
-  createdAt?: string;
-  expiresAt?: string;
+  sessionKey?: string;
+  runId?: string;
+  taskId?: string;
+  messageSeq?: number;
+  source?: string;
+  download: { mode: "bytes" | "url" | "unsupported" };
+};
+
+export type ArtifactQuery = {
+  sessionKey?: string;
+  runId?: string;
+  taskId?: string;
+};
+
+export type ArtifactsListParams = ArtifactQuery & {
+  cursor?: string;
+  limit?: number;
+  types?: string[];
+};
+
+export type ArtifactsListResult = {
+  artifacts: ArtifactSummary[];
+  nextCursor?: string;
+  total?: number;
+};
+
+export type ArtifactsGetParams = ArtifactQuery & { artifactId: string };
+
+export type ArtifactsGetResult = {
+  artifact: ArtifactSummary;
+};
+
+export type ArtifactsDownloadParams = ArtifactQuery & { artifactId: string };
+
+export type ArtifactsDownloadResult = {
+  artifact: ArtifactSummary;
+  encoding?: "base64";
+  data?: string;
+  url?: string;
 };
 
 export type SDKError = {

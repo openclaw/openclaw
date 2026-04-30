@@ -4,6 +4,12 @@ import { normalizeGatewayEvent } from "./normalize.js";
 import { GatewayClientTransport, isConnectableTransport } from "./transport.js";
 import type {
   AgentRunParams,
+  ArtifactsDownloadParams,
+  ArtifactsDownloadResult,
+  ArtifactsGetParams,
+  ArtifactsGetResult,
+  ArtifactsListParams,
+  ArtifactsListResult,
   GatewayEvent,
   GatewayRequestOptions,
   OpenClawEvent,
@@ -758,19 +764,16 @@ export class ArtifactsNamespace extends RpcNamespace {
     super(client, "artifacts");
   }
 
-  async list(params?: unknown): Promise<unknown> {
-    void params;
-    return unsupportedGatewayApi("oc.artifacts.list");
+  async list(params?: ArtifactsListParams): Promise<ArtifactsListResult> {
+    return await this.call("list", params);
   }
 
-  async get(id: string): Promise<unknown> {
-    void id;
-    return unsupportedGatewayApi("oc.artifacts.get");
+  async get(params: ArtifactsGetParams): Promise<ArtifactsGetResult> {
+    return await this.call("get", params);
   }
 
-  async download(id: string): Promise<unknown> {
-    void id;
-    return unsupportedGatewayApi("oc.artifacts.download");
+  async download(params: ArtifactsDownloadParams): Promise<ArtifactsDownloadResult> {
+    return await this.call("download", params);
   }
 }
 
