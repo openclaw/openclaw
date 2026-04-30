@@ -629,6 +629,34 @@ describe("resolvePluginCapabilityProviders", () => {
     });
   });
 
+  it("honors explicit bundled runtime dependency install opt-out for fallback snapshots", () => {
+    const cfg = { plugins: { allow: ["custom-plugin"] } } as OpenClawConfig;
+    const enablementCompat = {
+      plugins: {
+        allow: ["custom-plugin", "openai"],
+        entries: { openai: { enabled: true } },
+      },
+    };
+    setBundledCapabilityFixture("mediaUnderstandingProviders");
+    mocks.withBundledPluginEnablementCompat.mockReturnValue(enablementCompat);
+    mocks.withBundledPluginVitestCompat.mockReturnValue(enablementCompat);
+
+    expectNoResolvedCapabilityProviders(
+      resolvePluginCapabilityProviders({
+        key: "mediaUnderstandingProviders",
+        cfg,
+        installBundledRuntimeDeps: false,
+      }),
+    );
+
+    expect(mocks.resolveRuntimePluginRegistry).toHaveBeenCalledWith({
+      config: enablementCompat,
+      onlyPluginIds: ["openai"],
+      activate: false,
+      installBundledRuntimeDeps: false,
+    });
+  });
+
   it.each([
     "imageGenerationProviders",
     "videoGenerationProviders",

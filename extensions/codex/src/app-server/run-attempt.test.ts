@@ -1089,6 +1089,31 @@ describe("runCodexAppServerAttempt", () => {
     await run;
   });
 
+  it("flushes pending default queued steering during normal turn cleanup", async () => {
+    const { requests, waitForMethod, completeTurn } = createStartedThreadHarness();
+
+    const run = runCodexAppServerAttempt(
+      createParams(path.join(tempDir, "session.jsonl"), path.join(tempDir, "workspace")),
+    );
+    await waitForMethod("turn/start");
+
+    expect(queueAgentHarnessMessage("session-1", "late steer", { debounceMs: 30_000 })).toBe(true);
+
+    await completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+
+    expect(requests.filter((entry) => entry.method === "turn/steer")).toEqual([
+      {
+        method: "turn/steer",
+        params: {
+          threadId: "thread-1",
+          expectedTurnId: "turn-1",
+          input: [{ type: "text", text: "late steer", text_elements: [] }],
+        },
+      },
+    ]);
+  });
+
   it("keeps legacy queue steering as separate turn/steer requests", async () => {
     const { requests, waitForMethod, completeTurn } = createStartedThreadHarness();
 

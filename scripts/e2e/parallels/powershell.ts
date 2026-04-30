@@ -55,9 +55,18 @@ export const windowsOpenClawResolver = String.raw`function Resolve-OpenClawComma
 function Invoke-OpenClaw {
   param([Parameter(ValueFromRemainingArguments = $true)][string[]] $OpenClawArgs)
   $command = Resolve-OpenClawCommand
-  if ($command.Kind -eq 'node') {
-    & node.exe $command.Path @OpenClawArgs
-  } else {
-    & $command.Path @OpenClawArgs
+  $previousErrorActionPreference = $ErrorActionPreference
+  $previousNativeErrorActionPreference = $PSNativeCommandUseErrorActionPreference
+  $ErrorActionPreference = 'Continue'
+  $PSNativeCommandUseErrorActionPreference = $false
+  try {
+    if ($command.Kind -eq 'node') {
+      & node.exe $command.Path @OpenClawArgs
+    } else {
+      & $command.Path @OpenClawArgs
+    }
+  } finally {
+    $ErrorActionPreference = $previousErrorActionPreference
+    $PSNativeCommandUseErrorActionPreference = $previousNativeErrorActionPreference
   }
 }`;

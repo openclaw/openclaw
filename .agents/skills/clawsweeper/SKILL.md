@@ -255,11 +255,26 @@ loop. The router:
 - never merges autofix PRs or draft PRs;
 - merges automerge PRs only when ClawSweeper passed the exact current head,
   checks are green, GitHub says mergeable, no human-review label is present,
-  the PR is not draft, and both merge gates are open.
+  the PR is not draft, required user-facing OpenClaw changelog entries are
+  present, and both merge gates are open.
 
 If ClawSweeper passes while merge gates are closed, it labels
 `clawsweeper:merge-ready` and comments instead of merging. `@clawsweeper stop`
 adds `clawsweeper:human-review`.
+
+When Peter asks Codex to create a PR and enable ClawSweeper automerge, do not
+leave his local OpenClaw checkout on the PR branch. After the PR is created,
+pushed, and the `@clawsweeper automerge` request is posted or otherwise
+confirmed, return the local checkout to `main` and fast-forward it when the
+working tree is clean:
+
+```bash
+git switch main
+git pull --ff-only
+```
+
+If unrelated local edits or an in-progress rebase prevent switching, report the
+blocker instead of stashing, deleting, or overwriting work.
 
 Repair caps:
 
@@ -270,13 +285,17 @@ CLAWSWEEPER_MAX_REPAIRS_PER_HEAD=1
 
 ## Security Boundary
 
-Do not stage security-sensitive work for ClawSweeper Repair. Route vulnerability
-reports, CVE/GHSA/advisory work, leaked secrets/tokens/keys, plaintext secret
-storage, SSRF, XSS, CSRF, RCE, auth bypass, privilege escalation, and sensitive
-data exposure to central OpenClaw security handling.
+Do not stage unapproved security-sensitive work for ClawSweeper Repair. Route
+vulnerability reports, CVE/GHSA/advisory work, leaked secrets/tokens/keys,
+plaintext secret storage, SSRF, XSS, CSRF, RCE, auth bypass, privilege
+escalation, and sensitive data exposure to central OpenClaw security handling.
 
-For adopted automerge jobs, trust deterministic ClawSweeper security markers,
-labels, and job frontmatter; do not infer security handling from vague prose.
+For PRs explicitly opted into `clawsweeper:autofix` or
+`clawsweeper:automerge`, security-sensitive review findings may dispatch
+bounded repair, but merge remains blocked until a later exact-head review is
+clean and the normal merge gates pass. Trust deterministic ClawSweeper security
+markers, labels, and job frontmatter; do not infer security handling from vague
+prose.
 
 ## Monitoring
 

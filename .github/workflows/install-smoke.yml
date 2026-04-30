@@ -114,7 +114,7 @@ jobs:
           ref: ${{ inputs.ref || github.ref }}
 
       - name: Set up Blacksmith Docker Builder
-        uses: useblacksmith/setup-docker-builder@ac083cc84672d01c60d5e8561d0a939b697de542 # v1
+        uses: useblacksmith/setup-docker-builder@722e97d12b1d06a961800dd6c05d79d951ad3c80 # v1
         with:
           max-cache-size-mb: 800000
 
@@ -245,7 +245,7 @@ jobs:
 
       - name: Set up Blacksmith Docker Builder
         if: steps.existing.outputs.exists != 'true'
-        uses: useblacksmith/setup-docker-builder@ac083cc84672d01c60d5e8561d0a939b697de542 # v1
+        uses: useblacksmith/setup-docker-builder@722e97d12b1d06a961800dd6c05d79d951ad3c80 # v1
         with:
           max-cache-size-mb: 800000
 
@@ -414,7 +414,7 @@ jobs:
         run: timeout 300s docker pull "$IMAGE_REF"
 
       - name: Set up Blacksmith Docker Builder
-        uses: useblacksmith/setup-docker-builder@ac083cc84672d01c60d5e8561d0a939b697de542 # v1
+        uses: useblacksmith/setup-docker-builder@722e97d12b1d06a961800dd6c05d79d951ad3c80 # v1
         with:
           max-cache-size-mb: 800000
 
@@ -507,7 +507,7 @@ jobs:
           ref: ${{ inputs.ref || github.ref }}
 
       - name: Set up Blacksmith Docker Builder
-        uses: useblacksmith/setup-docker-builder@ac083cc84672d01c60d5e8561d0a939b697de542 # v1
+        uses: useblacksmith/setup-docker-builder@722e97d12b1d06a961800dd6c05d79d951ad3c80 # v1
         with:
           max-cache-size-mb: 800000
 

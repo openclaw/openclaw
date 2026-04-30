@@ -91,14 +91,20 @@ export function materializeBundledRuntimeMirrorFile(sourcePath: string, targetPa
     // Missing targets are expected before the mirror file is materialized.
   }
   fs.mkdirSync(path.dirname(targetPath), { recursive: true, mode: 0o755 });
-  fs.rmSync(targetPath, { recursive: true, force: true });
+  removeBundledRuntimeMirrorPathIfTypeChanged(targetPath, "file");
+  const tempPath = createBundledRuntimeMirrorTempPath(targetPath);
   try {
-    fs.linkSync(sourcePath, targetPath);
-    return;
-  } catch {
-    fs.copyFileSync(sourcePath, targetPath);
+    try {
+      fs.linkSync(sourcePath, tempPath);
+    } catch {
+      fs.copyFileSync(sourcePath, tempPath);
+      chmodBundledRuntimeMirrorFileReadable(sourcePath, tempPath);
+    }
+    fs.renameSync(tempPath, targetPath);
+  } catch (error) {
+    fs.rmSync(tempPath, { force: true });
+    throw error;
   }
-  chmodBundledRuntimeMirrorFileReadable(sourcePath, targetPath);
 }
 
 function chmodBundledRuntimeMirrorFileReadable(sourcePath: string, targetPath: string): void {

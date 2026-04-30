@@ -1,15 +1,22 @@
 ---
-summary: "Reference design for the proposed public OpenClaw app SDK API, event taxonomy, artifacts, approvals, and package structure"
-title: "OpenClaw SDK API design"
+summary: "Reference design for the public OpenClaw App SDK API, event taxonomy, artifacts, approvals, and package structure"
+title: "OpenClaw App SDK API design"
+sidebarTitle: "App SDK API design"
 read_when:
   - You are implementing the proposed public OpenClaw app SDK
   - You need the draft namespace, event, result, artifact, approval, or security contract for the app SDK
-  - You are comparing Gateway protocol resources with the high-level OpenClaw SDK wrapper
+  - You are comparing Gateway protocol resources with the high-level OpenClaw App SDK wrapper
 ---
 
-This page is the detailed API reference design for the proposed public
-[OpenClaw SDK](/concepts/openclaw-sdk). It is intentionally separate from the
-[plugin SDK](/plugins/sdk-overview).
+This page is the detailed API reference design for the public
+[OpenClaw App SDK](/concepts/openclaw-sdk). It is intentionally separate from
+the [Plugin SDK](/plugins/sdk-overview).
+
+<Note>
+  `@openclaw/sdk` is the external app/client package for talking to the
+  Gateway. `openclaw/plugin-sdk/*` is the in-process plugin authoring contract.
+  Do not import Plugin SDK subpaths from apps that only need to run agents.
+</Note>
 
 The public app SDK should be built in two layers:
 
@@ -368,13 +375,13 @@ Benefits:
 
 - protocol drift is visible
 - tests can compare generated methods with Gateway exports
-- app SDK stays independent from plugin SDK internals
+- App SDK stays independent from Plugin SDK internals
 - low-level consumers still have full protocol access
 - high-level consumers get the small product API
 
 ## Related docs
 
-- [OpenClaw SDK design](/concepts/openclaw-sdk)
+- [OpenClaw App SDK](/concepts/openclaw-sdk)
 - [Gateway RPC reference](/reference/rpc)
 - [Agent loop](/concepts/agent-loop)
 - [Agent runtimes](/concepts/agent-runtimes)
