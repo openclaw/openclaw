@@ -329,8 +329,118 @@ describe("runCodexAppServerAttempt", () => {
     nativeHookRelayTesting.clearNativeHookRelaysForTests();
     resetAgentEventsForTest();
     resetGlobalHookRunner();
+    vi.useRealTimers();
     vi.restoreAllMocks();
     await fs.rm(tempDir, { recursive: true, force: true });
+  });
+
+  it("returns a failed dynamic tool response when an app-server tool call exceeds the deadline", async () => {
+    vi.useFakeTimers();
+    let capturedSignal: AbortSignal | undefined;
+    const onTimeout = vi.fn();
+    const response = __testing.handleDynamicToolCallWithTimeout({
+      call: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-timeout",
+        namespace: null,
+        tool: "message",
+        arguments: { action: "send", text: "hello" },
+      },
+      toolBridge: {
+        handleToolCall: vi.fn((_call, options) => {
+          capturedSignal = options?.signal;
+          return new Promise<never>(() => undefined);
+        }),
+      },
+      signal: new AbortController().signal,
+      timeoutMs: 1,
+      onTimeout,
+    });
+
+    await vi.advanceTimersByTimeAsync(1);
+
+    await expect(response).resolves.toEqual({
+      success: false,
+      contentItems: [
+        { type: "inputText", text: "OpenClaw dynamic tool call timed out after 1ms." },
+      ],
+    });
+    expect(capturedSignal?.aborted).toBe(true);
+    expect(onTimeout).toHaveBeenCalledTimes(1);
+  });
+
+  it("releases the session when Codex never completes after a dynamic tool response", async () => {
+    let handleRequest:
+      | ((request: { id: string; method: string; params?: unknown }) => Promise<unknown>)
+      | undefined;
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/start") {
+        return threadStartResult("thread-1");
+      }
+      if (method === "turn/start") {
+        return turnStartResult("turn-1", "inProgress");
+      }
+      return {};
+    });
+    __testing.setCodexAppServerClientFactoryForTests(
+      async () =>
+        ({
+          request,
+          addNotificationHandler: () => () => undefined,
+          addRequestHandler: (
+            handler: (request: {
+              id: string;
+              method: string;
+              params?: unknown;
+            }) => Promise<unknown>,
+          ) => {
+            handleRequest = handler;
+            return () => undefined;
+          },
+        }) as never,
+    );
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.timeoutMs = 60_000;
+
+    const run = runCodexAppServerAttempt(params, { turnCompletionIdleTimeoutMs: 5 });
+    await vi.waitFor(() => expect(handleRequest).toBeTypeOf("function"), { interval: 1 });
+
+    await expect(
+      handleRequest?.({
+        id: "request-tool-1",
+        method: "item/tool/call",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          callId: "call-1",
+          namespace: null,
+          tool: "message",
+          arguments: { action: "send", text: "already sent" },
+        },
+      }),
+    ).resolves.toMatchObject({
+      success: false,
+      contentItems: [{ type: "inputText", text: "Unknown OpenClaw tool: message" }],
+    });
+
+    await expect(run).resolves.toMatchObject({
+      aborted: true,
+      timedOut: true,
+      promptError: "codex app-server turn idle timed out waiting for turn/completed",
+    });
+    await vi.waitFor(
+      () =>
+        expect(request).toHaveBeenCalledWith("turn/interrupt", {
+          threadId: "thread-1",
+          turnId: "turn-1",
+        }),
+      { interval: 1 },
+    );
+    expect(queueAgentHarnessMessage("session-1", "after timeout")).toBe(false);
   });
 
   it("applies before_prompt_build to Codex developer instructions and turn input", async () => {
@@ -526,6 +636,65 @@ describe("runCodexAppServerAttempt", () => {
     );
   });
 
+  it("forwards Codex app-server verbose tool summaries and completed output", async () => {
+    const onToolResult = vi.fn();
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const harness = createStartedThreadHarness();
+    const params = createParams(sessionFile, workspaceDir);
+    params.verboseLevel = "full";
+    params.onToolResult = onToolResult;
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+    await harness.notify({
+      method: "item/started",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          type: "dynamicToolCall",
+          id: "tool-1",
+          namespace: null,
+          tool: "read",
+          arguments: { path: "README.md" },
+          status: "inProgress",
+          contentItems: null,
+          success: null,
+          durationMs: null,
+        },
+      },
+    });
+    await harness.notify({
+      method: "item/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          type: "dynamicToolCall",
+          id: "tool-1",
+          namespace: null,
+          tool: "read",
+          arguments: { path: "README.md" },
+          status: "completed",
+          contentItems: [{ type: "inputText", text: "file contents" }],
+          success: true,
+          durationMs: 12,
+        },
+      },
+    });
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+
+    expect(onToolResult).toHaveBeenCalledTimes(2);
+    expect(onToolResult).toHaveBeenNthCalledWith(1, {
+      text: "📖 Read: `from README.md`",
+    });
+    expect(onToolResult).toHaveBeenNthCalledWith(2, {
+      text: "📖 Read: `from README.md`\n```txt\nfile contents\n```",
+    });
+  });
+
   it("registers native hook relay config for an enabled Codex turn and cleans it up", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
@@ -564,6 +733,71 @@ describe("runCodexAppServerAttempt", () => {
     );
     const relayId = extractRelayIdFromThreadRequest(startRequest?.params);
     expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toBeUndefined();
+  });
+
+  it("reuses the Codex native hook relay id across runs for the same session", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const firstHarness = createStartedThreadHarness();
+
+    const firstRun = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir), {
+      nativeHookRelay: {
+        enabled: true,
+        events: ["pre_tool_use"],
+      },
+    });
+    await firstHarness.waitForMethod("turn/start");
+    await firstHarness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await firstRun;
+
+    const firstStartRequest = firstHarness.requests.find(
+      (request) => request.method === "thread/start",
+    );
+    const firstRelayId = extractRelayIdFromThreadRequest(firstStartRequest?.params);
+    expect(
+      nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(firstRelayId),
+    ).toBeUndefined();
+
+    const secondHarness = createResumeHarness();
+    const secondParams = createParams(sessionFile, workspaceDir);
+    secondParams.runId = "run-2";
+    const secondRun = runCodexAppServerAttempt(secondParams, {
+      nativeHookRelay: {
+        enabled: true,
+        events: ["pre_tool_use"],
+      },
+    });
+    await secondHarness.waitForMethod("turn/start");
+
+    const resumeRequest = secondHarness.requests.find(
+      (request) => request.method === "thread/resume",
+    );
+    const secondRelayId = extractRelayIdFromThreadRequest(resumeRequest?.params);
+    expect(secondRelayId).toBe(firstRelayId);
+    expect(
+      nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(firstRelayId),
+    ).toMatchObject({
+      runId: "run-2",
+      allowedEvents: ["pre_tool_use"],
+    });
+
+    await secondHarness.completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
+    await secondRun;
+    expect(
+      nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(firstRelayId),
+    ).toBeUndefined();
+  });
+
+  it("builds deterministic opaque Codex native hook relay ids", () => {
+    const relayId = __testing.buildCodexNativeHookRelayId({
+      agentId: "dev-codex",
+      sessionId: "cu-pr-relay-smoke",
+      sessionKey: "agent:dev-codex:cu-pr-relay-smoke",
+    });
+
+    expect(relayId).toBe("codex-8810b5252975550c887ff0def512b25e944bac39");
+    expect(relayId).not.toContain("dev-codex");
+    expect(relayId).not.toContain("cu-pr-relay-smoke");
   });
 
   it("sends clearing Codex native hook config when the relay is disabled", async () => {
@@ -820,6 +1054,106 @@ describe("runCodexAppServerAttempt", () => {
         },
       ]),
     );
+  });
+
+  it("batches default queued steering before sending turn/steer", async () => {
+    const { requests, waitForMethod, completeTurn } = createStartedThreadHarness();
+
+    const run = runCodexAppServerAttempt(
+      createParams(path.join(tempDir, "session.jsonl"), path.join(tempDir, "workspace")),
+    );
+    await waitForMethod("turn/start");
+
+    expect(queueAgentHarnessMessage("session-1", "first", { debounceMs: 5 })).toBe(true);
+    expect(queueAgentHarnessMessage("session-1", "second", { debounceMs: 5 })).toBe(true);
+
+    await vi.waitFor(
+      () =>
+        expect(requests.filter((entry) => entry.method === "turn/steer")).toEqual([
+          {
+            method: "turn/steer",
+            params: {
+              threadId: "thread-1",
+              expectedTurnId: "turn-1",
+              input: [
+                { type: "text", text: "first", text_elements: [] },
+                { type: "text", text: "second", text_elements: [] },
+              ],
+            },
+          },
+        ]),
+      { interval: 1 },
+    );
+
+    await completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+  });
+
+  it("flushes pending default queued steering during normal turn cleanup", async () => {
+    const { requests, waitForMethod, completeTurn } = createStartedThreadHarness();
+
+    const run = runCodexAppServerAttempt(
+      createParams(path.join(tempDir, "session.jsonl"), path.join(tempDir, "workspace")),
+    );
+    await waitForMethod("turn/start");
+
+    expect(queueAgentHarnessMessage("session-1", "late steer", { debounceMs: 30_000 })).toBe(true);
+
+    await completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+
+    expect(requests.filter((entry) => entry.method === "turn/steer")).toEqual([
+      {
+        method: "turn/steer",
+        params: {
+          threadId: "thread-1",
+          expectedTurnId: "turn-1",
+          input: [{ type: "text", text: "late steer", text_elements: [] }],
+        },
+      },
+    ]);
+  });
+
+  it("keeps legacy queue steering as separate turn/steer requests", async () => {
+    const { requests, waitForMethod, completeTurn } = createStartedThreadHarness();
+
+    const run = runCodexAppServerAttempt(
+      createParams(path.join(tempDir, "session.jsonl"), path.join(tempDir, "workspace")),
+    );
+    await waitForMethod("turn/start");
+
+    expect(queueAgentHarnessMessage("session-1", "first", { steeringMode: "one-at-a-time" })).toBe(
+      true,
+    );
+    expect(queueAgentHarnessMessage("session-1", "second", { steeringMode: "one-at-a-time" })).toBe(
+      true,
+    );
+
+    await vi.waitFor(
+      () =>
+        expect(requests.filter((entry) => entry.method === "turn/steer")).toEqual([
+          {
+            method: "turn/steer",
+            params: {
+              threadId: "thread-1",
+              expectedTurnId: "turn-1",
+              input: [{ type: "text", text: "first", text_elements: [] }],
+            },
+          },
+          {
+            method: "turn/steer",
+            params: {
+              threadId: "thread-1",
+              expectedTurnId: "turn-1",
+              input: [{ type: "text", text: "second", text_elements: [] }],
+            },
+          },
+        ]),
+      { interval: 1 },
+    );
+
+    await completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
   });
 
   it("routes MCP approval elicitations through the native bridge", async () => {

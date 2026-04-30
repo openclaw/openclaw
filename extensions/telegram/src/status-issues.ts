@@ -12,6 +12,7 @@ import {
 
 const TELEGRAM_POLLING_CONNECT_GRACE_MS = 120_000;
 const TELEGRAM_POLLING_STALE_TRANSPORT_MS = 30 * 60_000;
+const TELEGRAM_WEBHOOK_CONNECT_GRACE_MS = 120_000;
 
 type TelegramAccountStatus = {
   accountId?: unknown;
@@ -124,6 +125,40 @@ function collectTelegramPollingRuntimeIssues(params: {
   }
 }
 
+function collectTelegramWebhookRuntimeIssues(params: {
+  account: TelegramAccountStatus;
+  accountId: string;
+  issues: ChannelStatusIssue[];
+  now: number;
+}) {
+  const { account, accountId, issues, now } = params;
+  if (account.running !== true || asString(account.mode) !== "webhook") {
+    return;
+  }
+
+  if (account.connected !== false) {
+    return;
+  }
+
+  const lastStartAt = asFiniteNumber(account.lastStartAt);
+  const withinStartupGrace =
+    lastStartAt != null && now - lastStartAt < TELEGRAM_WEBHOOK_CONNECT_GRACE_MS;
+  if (withinStartupGrace) {
+    return;
+  }
+
+  issues.push({
+    channel: "telegram",
+    accountId,
+    kind: "runtime",
+    message: appendTelegramRuntimeError(
+      "Telegram webhook listener is running but setWebhook has not completed since startup",
+      account.lastError,
+    ),
+    fix: `Run: ${formatCliCommand("openclaw channels status --probe")} (or restart the gateway). Check the webhook URL, secret, TLS/proxy reachability, and Telegram setWebhook logs if it persists.`,
+  });
+}
+
 function readTelegramGroupMembershipAuditSummary(
   value: unknown,
 ): TelegramGroupMembershipAuditSummary {
@@ -174,12 +209,19 @@ export function collectTelegramStatusIssues(
     if (!accountId) {
       continue;
     }
+    const now = Date.now();
 
     collectTelegramPollingRuntimeIssues({
       account,
       accountId,
       issues,
-      now: Date.now(),
+      now,
+    });
+    collectTelegramWebhookRuntimeIssues({
+      account,
+      accountId,
+      issues,
+      now,
     });
 
     if (account.allowUnmentionedGroups === true) {

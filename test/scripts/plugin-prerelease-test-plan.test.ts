@@ -100,17 +100,37 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
       }),
     );
     expect(script).toContain("npm:@openclaw/kitchen-sink@latest");
+    expect(script).toContain("npm-latest-conformance");
+    expect(script).toContain("npm-latest-adversarial");
     expect(script).toContain("npm:@openclaw/kitchen-sink@beta");
     expect(script).toContain("clawhub:openclaw-kitchen-sink@latest");
     expect(script).toContain("clawhub:openclaw-kitchen-sink@beta");
     expect(script).toContain("scripts/e2e/lib/kitchen-sink-plugin/sweep.sh");
     expect(sweepScript).toContain('plugins install "$KITCHEN_SINK_SPEC"');
+    expect(sweepScript).toContain("KITCHEN_SINK_PERSONALITY");
     expect(sweepScript).toContain('plugins uninstall "$KITCHEN_SINK_SPEC" --force');
+    const successScenario = sweepScript.slice(
+      sweepScript.indexOf("run_success_scenario()"),
+      sweepScript.indexOf("run_failure_scenario()"),
+    );
+    expect(successScenario.indexOf("configure_kitchen_sink_runtime")).toBeLessThan(
+      successScenario.indexOf('plugins install "$KITCHEN_SINK_SPEC"'),
+    );
+    expect(successScenario.indexOf('plugins install "$KITCHEN_SINK_SPEC"')).toBeLessThan(
+      successScenario.indexOf('plugins enable "$KITCHEN_SINK_ID"'),
+    );
     expect(sweepScript).toContain("run_failure_scenario");
     expect(assertionsScript).toContain("record.source !== source");
     expect(assertionsScript).toContain("record.clawhubPackage !== packageName");
     expect(assertionsScript).toContain("assertClawHubExternalInstallContract");
     expect(assertionsScript).toContain("expectedErrorMessages");
+    expect(assertionsScript).toContain(
+      'const INVALID_PROBE_DIAGNOSTIC_SURFACE_MODES = new Set(["full", "adversarial"]);',
+    );
+    expect(assertionsScript).toContain("!INVALID_PROBE_DIAGNOSTIC_SURFACE_MODES.has(surfaceMode)");
+    expect(assertionsScript).not.toContain(
+      'const INVALID_PROBE_DIAGNOSTIC_SURFACE_MODES = new Set(["full", "conformance"',
+    );
     expect(readFileSync("scripts/e2e/lib/clawhub-fixture-server.cjs", "utf8")).toContain(
       'from "openclaw/plugin-sdk/plugin-entry"',
     );
@@ -192,6 +212,14 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     expect(manifestEnv).not.toHaveProperty("OPENCLAW_CI_FULL_RELEASE_VALIDATION");
     expect(manifestScript).toContain("includeReleaseOnlyPluginShards: false");
     expect(manifestScript).not.toContain("plugin-prerelease-test-plan.mjs");
+    expect(workflow.jobs["check-shard"].strategy.matrix.include).toContainEqual({
+      check_name: "check-dependencies",
+      task: "dependencies",
+      runner: "ubuntu-24.04",
+    });
+    expect(
+      workflow.jobs["check-shard"].steps.find((step) => step.name === "Run check shard").run,
+    ).toContain("pnpm deadcode:ci");
     expect(normalCiScript).toContain(
       'dispatch_and_wait ci.yml -f target_ref="$TARGET_SHA" -f include_android=true',
     );
@@ -277,6 +305,36 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
       "plugin-prerelease-extension-shard",
       "plugin-prerelease-docker-suite",
     ]);
+  });
+
+  it("keeps release-check reruns independent while cancelling superseded umbrella runs", () => {
+    const releaseChecksWorkflow = parse(
+      readFileSync(".github/workflows/openclaw-release-checks.yml", "utf8"),
+    );
+    const fullReleaseWorkflow = readFullReleaseValidationWorkflow();
+
+    expect(releaseChecksWorkflow.concurrency).toEqual({
+      group:
+        "openclaw-release-checks-${{ inputs.expected_sha || inputs.ref }}-${{ inputs.rerun_group }}",
+      "cancel-in-progress": false,
+    });
+    expect(fullReleaseWorkflow.concurrency).toEqual({
+      group: "full-release-validation-${{ inputs.ref }}-${{ inputs.rerun_group }}",
+      "cancel-in-progress": false,
+    });
+    expect(releaseChecksWorkflow.jobs.resolve_target["runs-on"]).toBe("ubuntu-24.04");
+    expect(releaseChecksWorkflow.jobs.prepare_release_package["runs-on"]).toBe("ubuntu-24.04");
+    expect(releaseChecksWorkflow.jobs.summary["runs-on"]).toBe("ubuntu-24.04");
+    for (const jobName of [
+      "resolve_target",
+      "normal_ci",
+      "plugin_prerelease",
+      "release_checks",
+      "npm_telegram",
+      "summary",
+    ]) {
+      expect(fullReleaseWorkflow.jobs[jobName]["runs-on"]).toBe("ubuntu-24.04");
+    }
   });
 
   it("keeps the live-ish availability check redacted", () => {

@@ -1384,6 +1384,22 @@ describe("active-memory plugin", () => {
     expect(api.logger.warn).toHaveBeenCalledWith(
       expect.stringContaining("config.modelFallbackPolicy is deprecated"),
     );
+    // #74587: deprecation warning must spell out the chain-resolution
+    // semantics so operators don't read it as a promise of runtime failover.
+    // The previous wording ("set config.modelFallback if you want a fallback
+    // model") cost real users hours of debug time before they hit the source
+    // and saw `getModelRef` only walks candidates once.
+    const warnCalls = (api.logger.warn as ReturnType<typeof vi.fn>).mock.calls;
+    const deprecationMessage = warnCalls
+      .map(([first]) => (typeof first === "string" ? first : ""))
+      .find((message) => message.includes("config.modelFallbackPolicy is deprecated"));
+    expect(deprecationMessage).toBeDefined();
+    // Positive: the warning describes chain-resolution last-resort behavior.
+    expect(deprecationMessage).toContain("chain-resolution");
+    expect(deprecationMessage).toContain("last-resort");
+    // Negative: the warning explicitly disclaims runtime failover, since
+    // that's the wrong mental model the previous wording invited.
+    expect(deprecationMessage).toMatch(/NOT a runtime failover/i);
   });
 
   it("does not use a built-in fallback model even when default-remote is configured", async () => {
@@ -3145,7 +3161,7 @@ describe("active-memory plugin", () => {
     __testing.setSetupGraceTimeoutMsForTests(0);
     api.pluginConfig = {
       agents: ["main"],
-      timeoutMs: 1,
+      timeoutMs: 50,
       logging: true,
       circuitBreakerMaxTimeouts: 1,
       circuitBreakerCooldownMs: 60_000,

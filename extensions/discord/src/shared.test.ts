@@ -110,4 +110,50 @@ describe("discordConfigAdapter", () => {
       "account-legacy",
     ]);
   });
+
+  it("coerces numeric allowFrom entries at the config boundary", () => {
+    const cfg = {
+      channels: {
+        discord: {
+          accounts: {
+            default: {
+              allowFrom: [123456789],
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(discordConfigAdapter.resolveAllowFrom?.({ cfg, accountId: "default" })).toEqual([
+      "123456789",
+    ]);
+  });
+
+  it("keeps read-only accessors from resolving token SecretRefs", () => {
+    const cfg = {
+      secrets: {
+        providers: {
+          discord_token: {
+            source: "file",
+            path: "/tmp/openclaw-missing-discord-token",
+            mode: "singleValue",
+          },
+        },
+      },
+      channels: {
+        discord: {
+          token: { source: "file", provider: "discord_token", id: "value" },
+          allowFrom: ["1128540374256849009"],
+          defaultTo: "1498959610751750304",
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(discordConfigAdapter.resolveAllowFrom?.({ cfg, accountId: "default" })).toEqual([
+      "1128540374256849009",
+    ]);
+    expect(discordConfigAdapter.resolveDefaultTo?.({ cfg, accountId: "default" })).toBe(
+      "1498959610751750304",
+    );
+  });
 });
