@@ -28,6 +28,7 @@ on:
       - "src/gateway/server-methods/**"
       - "src/gateway/server-methods.ts"
       - "src/gateway/server-methods-list.ts"
+      - "src/model-catalog/**"
       - "src/plugin-sdk/**"
       - "src/plugins/**"
   schedule:
@@ -55,6 +56,7 @@ jobs:
       gateway: ${{ steps.detect.outputs.gateway }}
       plugin: ${{ steps.detect.outputs.plugin }}
       plugin_sdk_package: ${{ steps.detect.outputs.plugin_sdk_package }}
+      provider: ${{ steps.detect.outputs.provider }}
     steps:
       - name: Detect PR shard paths
         id: detect
@@ -69,11 +71,13 @@ jobs:
           gateway=false
           plugin=false
           plugin_sdk_package=false
+          provider=false
 
           if [[ "${EVENT_NAME}" != "pull_request" ]]; then
             gateway=true
             plugin=true
             plugin_sdk_package=true
+            provider=true
           else
             while IFS= read -r file; do
               case "${file}" in
@@ -81,14 +85,26 @@ jobs:
                   gateway=true
                   plugin=true
                   plugin_sdk_package=true
+                  provider=true
                   ;;
                 src/gateway/method-scopes.ts|src/gateway/protocol/*|src/gateway/server-methods/*|src/gateway/server-methods.ts|src/gateway/server-methods-list.ts)
                   gateway=true
                   ;;
-                src/plugin-sdk/*|src/plugins/*)
+                src/plugin-sdk/*)
+                  plugin=true
+                  plugin_sdk_package=true
+                  ;;
+                src/plugins/provider-contract-public-artifacts.ts|src/plugins/provider-public-artifacts.ts|src/plugins/web-provider-public-artifacts*.ts)
+                  plugin=true
+                  provider=true
+                  ;;
+                src/model-catalog/*|src/plugins/*provider*.ts|src/plugins/capability-provider-runtime.ts|src/plugins/compaction-provider.ts|src/plugins/memory-embedding-provider*.ts|src/plugins/memory-embedding-providers*.ts|src/plugins/migration-provider-runtime.ts|src/plugins/synthetic-auth.runtime.ts|src/plugins/web-fetch-providers*.ts|src/plugins/web-search-providers*.ts)
+                  provider=true
+                  ;;
+                src/plugins/activation-planner.ts|src/plugins/api-builder.ts|src/plugins/bundled-*.ts|src/plugins/captured-registration.ts|src/plugins/config-*.ts|src/plugins/discovery.ts|src/plugins/effective-plugin-ids.ts|src/plugins/externalized-bundled-plugins.ts|src/plugins/installed-plugin-index*.ts|src/plugins/loader*.ts|src/plugins/manifest*.ts|src/plugins/module-export.ts|src/plugins/package-entrypoints.ts|src/plugins/plugin-registry*.ts|src/plugins/public-surface*.ts|src/plugins/registry.ts|src/plugins/registry-types.ts|src/plugins/runtime|src/plugins/runtime/*|src/plugins/runtime-state.ts|src/plugins/runtime.ts|src/plugins/sdk-alias.ts|src/plugins/source-loader.ts|src/plugins/types.ts|src/plugins/validation-diagnostics.ts)
                   plugin=true
                   ;;
-                packages/plugin-package-contract/*|packages/plugin-sdk/*|src/plugin-sdk/*)
+                packages/plugin-package-contract/*|packages/plugin-sdk/*)
                   plugin_sdk_package=true
                   ;;
               esac
@@ -99,6 +115,7 @@ jobs:
             echo "gateway=${gateway}"
             echo "plugin=${plugin}"
             echo "plugin_sdk_package=${plugin_sdk_package}"
+            echo "provider=${provider}"
           } >> "${GITHUB_OUTPUT}"
 
   core-auth-secrets:
@@ -302,7 +319,8 @@ jobs:
 
   provider-runtime-boundary:
     name: Critical Quality (provider-runtime-boundary)
-    if: ${{ github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || inputs.profile == 'all' || inputs.profile == 'provider-runtime-boundary') }}
+    needs: quality-shards
+    if: ${{ needs.quality-shards.outputs.provider == 'true' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (github.event_name == 'pull_request' || github.event_name != 'workflow_dispatch' || inputs.profile == 'all' || inputs.profile == 'provider-runtime-boundary') }}
     runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 25
     steps:
