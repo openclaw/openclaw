@@ -634,7 +634,7 @@ describe("callGateway url resolution", () => {
     await vi.waitFor(() => {
       expect(eventLoopReadyState.calls).toHaveLength(1);
     });
-    expect(eventLoopReadyState.calls[0]?.maxWaitMs).toBe(10_000);
+    expect(eventLoopReadyState.calls[0]?.maxWaitMs).toBe(30_000);
     expect(lastClientOptions?.clientName).toBe(GATEWAY_CLIENT_NAMES.CLI);
     expect(startCalls).toBe(0);
 
@@ -965,6 +965,24 @@ describe("callGateway error details", () => {
     expect(eventLoopReadyState.calls[0]?.maxWaitMs).toBe(5);
     expect(lastClientOptions).not.toBeNull();
     expect(startCalls).toBe(0);
+  });
+
+  it("uses a 30s default wrapper timeout", async () => {
+    startMode = "silent";
+    setLocalLoopbackGatewayConfig();
+
+    vi.useFakeTimers();
+    let errMessage = "";
+    const promise = callGateway({ method: "health" }).catch((caught) => {
+      errMessage = caught instanceof Error ? caught.message : String(caught);
+    });
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(errMessage).toBe("");
+    await vi.advanceTimersByTimeAsync(20_000);
+    await promise;
+
+    expect(errMessage).toContain("gateway timeout after 30000ms");
   });
 
   it("keeps the default wrapper timeout aligned with configured handshake timeout", async () => {

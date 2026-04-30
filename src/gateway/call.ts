@@ -368,6 +368,8 @@ type ResolvedGatewayCallContext = {
   remotePasswordFallback?: GatewayRemoteCredentialFallback;
 };
 
+const DEFAULT_GATEWAY_CALL_TIMEOUT_MS = 30_000;
+
 function resolveGatewayCallTimeout(
   timeoutValue: unknown,
   configuredHandshakeTimeoutMs?: number | null,
@@ -389,9 +391,10 @@ function resolveGatewayCallTimeout(
   const timeoutMs =
     typeof timeoutValue === "number" && Number.isFinite(timeoutValue)
       ? timeoutValue
-      : typeof resolvedHandshakeTimeoutMs === "number" && resolvedHandshakeTimeoutMs > 10_000
+      : typeof resolvedHandshakeTimeoutMs === "number" &&
+          resolvedHandshakeTimeoutMs > DEFAULT_GATEWAY_CALL_TIMEOUT_MS
         ? resolvedHandshakeTimeoutMs
-        : 10_000;
+        : DEFAULT_GATEWAY_CALL_TIMEOUT_MS;
   const safeTimerTimeoutMs = resolveSafeTimeoutDelayMs(timeoutMs);
   return { timeoutMs, safeTimerTimeoutMs };
 }
