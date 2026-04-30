@@ -476,6 +476,17 @@ export function resolveModelRefFromString(params: {
   if (aliasMatch) {
     return { ref: aliasMatch.ref, alias: aliasMatch.alias };
   }
+  const slash = model.indexOf("/");
+  if (slash > 0 && slash === model.lastIndexOf("/")) {
+    const provider = normalizeProviderId(model.slice(0, slash).trim());
+    const alias = model.slice(slash + 1).trim();
+    const providerAliasMatch = params.aliasIndex?.byAlias.get(
+      normalizeLowercaseStringOrEmpty(alias),
+    );
+    if (provider && providerAliasMatch?.ref.provider === provider) {
+      return { ref: providerAliasMatch.ref, alias: providerAliasMatch.alias };
+    }
+  }
   const parsed = parseModelRefWithCompatAlias({
     cfg: params.cfg,
     raw: model,
