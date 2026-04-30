@@ -66,10 +66,29 @@ type SecretResolutionSource =
   | WebSearchCredentialResolutionSource
   | WebFetchCredentialResolutionSource;
 
-function hasNestedObjectFields(record: Record<string, unknown>): boolean {
-  for (const value of Object.values(record)) {
-    if (value !== null && typeof value === "object") {
+// Field-name allowlist used by the disabled-tool fast path. Matches keys that
+// commonly hold credentials so we still run discovery (and emit inactive
+// SecretRef warnings) when a disabled tool surface still references one.
+// Keep narrow: SSRF policy, location, mode, etc. are non-credential nested
+// objects and must not block the fast path.
+const CREDENTIAL_FIELD_NAMES = new Set(["apikey", "key", "token", "secret", "password"]);
+
+function hasCredentialBearingValue(
+  record: Record<string, unknown>,
+  defaults: SecretDefaults | undefined,
+): boolean {
+  for (const [rawKey, value] of Object.entries(record)) {
+    const key = rawKey.toLowerCase();
+    if (CREDENTIAL_FIELD_NAMES.has(key) && value != null && value !== "") {
       return true;
+    }
+    if (hasConfiguredSecretRef(value, defaults)) {
+      return true;
+    }
+    if (value !== null && typeof value === "object" && !Array.isArray(value)) {
+      if (hasCredentialBearingValue(value as Record<string, unknown>, defaults)) {
+        return true;
+      }
     }
   }
   return false;
@@ -560,19 +579,21 @@ export async function resolveRuntimeWebTools(params: {
   const fetch = isRecord(sourceWeb?.fetch) ? (sourceWeb.fetch as FetchConfig) : undefined;
   // Provider discovery must not block gateway startup when a tool surface is
   // explicitly disabled and has nothing to resolve. We still run discovery
-  // when the tool config carries credentials (nested objects such as
-  // `firecrawl: { apiKey: ... }`) so SecretRef warnings remain accurate, and
-  // when any plugin owns a scoped config for that surface.
+  // when the tool config carries a credential field (`apiKey`, `token`, ...) or
+  // a SecretRef-shaped value so the inactive-surface SecretRef warnings
+  // remain accurate, and when any plugin owns a scoped config for that
+  // surface. Non-credential nested options (e.g. `ssrfPolicy`,
+  // `openaiCodex`, `userLocation`) do not need provider discovery.
   const searchSurfaceCanSkip =
     isRecord(search) &&
     search.enabled === false &&
     !hasPluginWebSearchConfig &&
-    !hasNestedObjectFields(search);
+    !hasCredentialBearingValue(search, defaults);
   const fetchSurfaceCanSkip =
     isRecord(fetch) &&
     fetch.enabled === false &&
     !hasPluginWebFetchConfig &&
-    !hasNestedObjectFields(fetch);
+    !hasCredentialBearingValue(fetch, defaults);
   if (!search && !fetch && !hasPluginWebSearchConfig && !hasPluginWebFetchConfig) {
     return {
       search: {

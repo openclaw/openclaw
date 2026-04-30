@@ -496,6 +496,80 @@ describe("runtime web tools resolution", () => {
     expect(metadata.fetch.providerSource).toBeDefined();
   });
 
+  it("skips fetch discovery when disabled fetch only has non-credential nested config (ssrfPolicy)", async () => {
+    const { metadata } = await runRuntimeWebTools({
+      config: asConfig({
+        tools: {
+          web: {
+            fetch: {
+              enabled: false,
+              ssrfPolicy: {
+                allowRfc2544BenchmarkRange: true,
+                allowIpv6UniqueLocalRange: false,
+              },
+            },
+          },
+        },
+        plugins: { enabled: true, allow: [], entries: {} },
+      }),
+    });
+
+    expect(metadata.fetch.providerSource).toBe("none");
+    expect(resolveBundledWebFetchProvidersFromPublicArtifactsMock).not.toHaveBeenCalled();
+    expect(resolveBundledExplicitWebFetchProvidersFromPublicArtifactsMock).not.toHaveBeenCalled();
+    expect(resolvePluginWebFetchProvidersMock).not.toHaveBeenCalled();
+  });
+
+  it("skips search discovery when disabled search only has non-credential nested config (openaiCodex/userLocation)", async () => {
+    const { metadata } = await runRuntimeWebTools({
+      config: asConfig({
+        tools: {
+          web: {
+            search: {
+              enabled: false,
+              openaiCodex: {
+                enabled: true,
+                mode: "auto",
+                userLocation: { country: "US", region: "CA" },
+              },
+            },
+          },
+        },
+        plugins: { enabled: true, allow: [], entries: {} },
+      }),
+    });
+
+    expect(metadata.search.providerSource).toBe("none");
+    expect(resolveBundledWebSearchProvidersFromPublicArtifactsMock).not.toHaveBeenCalled();
+    expect(resolveBundledExplicitWebSearchProvidersFromPublicArtifactsMock).not.toHaveBeenCalled();
+    expect(resolvePluginWebSearchProvidersMock).not.toHaveBeenCalled();
+  });
+
+  it("still runs search discovery when disabled search has a literal apiKey", async () => {
+    const { metadata } = await runRuntimeWebTools({
+      config: asConfig({
+        tools: {
+          web: {
+            search: {
+              enabled: false,
+              apiKey: { source: "env", provider: "default", id: "DISABLED_SEARCH_API_KEY" },
+            },
+          },
+        },
+        plugins: { enabled: true, allow: [], entries: {} },
+      }),
+    });
+
+    // SecretRef'd apiKey on a disabled tool should still trigger discovery
+    // so the inactive-surface warning fires accurately.
+    expect(
+      resolveBundledWebSearchProvidersFromPublicArtifactsMock.mock.calls.length +
+        resolveBundledExplicitWebSearchProvidersFromPublicArtifactsMock.mock.calls.length +
+        resolvePluginWebSearchProvidersMock.mock.calls.length,
+    ).toBeGreaterThan(0);
+    expect(metadata.search.providerSource).toBeDefined();
+  });
+
   it("auto-selects a keyless provider when no credentials are configured", async () => {
     const { metadata } = await runRuntimeWebTools({
       config: asConfig({
