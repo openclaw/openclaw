@@ -31,6 +31,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Channels/Feishu: retry file-typed iOS video resource downloads as `media` after a Feishu/Lark HTTP 502 and preserve the original 502 when the fallback also fails. Fixes #49855; carries forward #50164 and #73986. Thanks @alex-xuweilong.
 - Plugins/tokenjuice: compile the bundled plugin against tokenjuice 0.7.0's published OpenClaw host types instead of a local compatibility shim, so package contract drift fails in OpenClaw validation before release. Thanks @vincentkoc.
 - OAuth/secrets: ignore root-level Google OAuth `client_secret_*.json` downloads so local client-secret files do not appear as commit candidates. (#74689) Thanks @jeongdulee.
 - Memory: mirror `sqlite-vec` into packaged bundled-plugin runtime deps for the default memory plugin, so builtin vector search does not lose its SQLite extension after upgrading to 2026.4.27. Fixes #74692. Thanks @mozi1924.
