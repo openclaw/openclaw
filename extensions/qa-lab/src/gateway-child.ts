@@ -247,6 +247,18 @@ function isRetryableGatewayCallError(details: string): boolean {
   );
 }
 
+function createQaGatewayChildLogCollector() {
+  const chunks: Buffer[] = [];
+  return {
+    push(chunk: Buffer) {
+      chunks.push(Buffer.from(chunk));
+    },
+    text() {
+      return Buffer.concat(chunks).toString("utf8").trim();
+    },
+  };
+}
+
 async function fetchLocalGatewayHealth(params: {
   baseUrl: string;
   healthPath: "/readyz" | "/healthz";
@@ -307,6 +319,7 @@ export const __testing = {
   resolveQaOwnerPluginIdsForProviderIds,
   resolveQaBundledPluginSourceDir,
   resolveQaRuntimeHostVersion,
+  createQaGatewayChildLogCollector,
   createQaBundledPluginsDir,
   stopQaGatewayChildProcessTree,
 };
@@ -574,13 +587,13 @@ export async function startQaGatewayChild(params: {
   };
   const stdout: Buffer[] = [];
   const stderr: Buffer[] = [];
+  const output = createQaGatewayChildLogCollector();
   const stdoutLogPath = path.join(tempRoot, "gateway.stdout.log");
   const stderrLogPath = path.join(tempRoot, "gateway.stderr.log");
   const stdoutLog = createWriteStream(stdoutLogPath, { flags: "a" });
   const stderrLog = createWriteStream(stderrLogPath, { flags: "a" });
 
-  const logs = () =>
-    `${Buffer.concat(stdout).toString("utf8")}\n${Buffer.concat(stderr).toString("utf8")}`.trim();
+  const logs = () => output.text();
   const keepTemp = process.env.OPENCLAW_QA_KEEP_TEMP === "1";
   let gatewayPort = 0;
   let baseUrl = "";
@@ -667,11 +680,13 @@ export async function startQaGatewayChild(params: {
       attemptChild.stdout.on("data", (chunk) => {
         const buffer = Buffer.from(chunk);
         stdout.push(buffer);
+        output.push(buffer);
         stdoutLog.write(buffer);
       });
       attemptChild.stderr.on("data", (chunk) => {
         const buffer = Buffer.from(chunk);
         stderr.push(buffer);
+        output.push(buffer);
         stderrLog.write(buffer);
       });
       child = attemptChild;
@@ -760,11 +775,13 @@ export async function startQaGatewayChild(params: {
       nextChild.stdout.on("data", (chunk) => {
         const buffer = Buffer.from(chunk);
         stdout.push(buffer);
+        output.push(buffer);
         stdoutLog.write(buffer);
       });
       nextChild.stderr.on("data", (chunk) => {
         const buffer = Buffer.from(chunk);
         stderr.push(buffer);
+        output.push(buffer);
         stderrLog.write(buffer);
       });
 
