@@ -501,6 +501,115 @@ describe("readSessionMessages", () => {
     expect(typeof marker.timestamp).toBe("number");
   });
 
+  test("uses transcript entry timestamps for branch messages without inner timestamps", () => {
+    const sessionId = "test-session-branch-wrapper-timestamp";
+    const sessionFile = path.join(tmpDir, `${sessionId}.jsonl`);
+    const answerTimestamp = "2026-04-27T00:00:03.000Z";
+    const lines = [
+      {
+        type: "session",
+        version: 3,
+        id: sessionId,
+        cwd: tmpDir,
+        timestamp: "2026-04-27T00:00:00.000Z",
+      },
+      {
+        type: "message",
+        id: "prompt",
+        parentId: null,
+        timestamp: "2026-04-27T00:00:01.000Z",
+        message: { role: "user", content: "Hello", timestamp: 1 },
+      },
+      {
+        type: "message",
+        id: "answer",
+        parentId: "prompt",
+        timestamp: answerTimestamp,
+        message: { role: "assistant", content: "Hi there" },
+      },
+    ];
+    fs.writeFileSync(sessionFile, lines.map((line) => JSON.stringify(line)).join("\n"), "utf-8");
+
+    const out = readSessionMessages(sessionId, storePath, sessionFile);
+    const answer = out[1] as { timestamp?: number; __openclaw?: { id?: string; seq?: number } };
+
+    expect(answer.timestamp).toBe(Date.parse(answerTimestamp));
+    expect(answer.__openclaw).toMatchObject({ id: "answer", seq: 2 });
+  });
+
+  test("preserves inner message timestamps over transcript entry timestamps", () => {
+    const sessionId = "test-session-preserve-inner-timestamp";
+    const sessionFile = path.join(tmpDir, `${sessionId}.jsonl`);
+    const lines = [
+      {
+        type: "session",
+        version: 3,
+        id: sessionId,
+        cwd: tmpDir,
+        timestamp: "2026-04-27T00:00:00.000Z",
+      },
+      {
+        type: "message",
+        id: "answer",
+        parentId: null,
+        timestamp: "2026-04-27T00:00:03.000Z",
+        message: { role: "assistant", content: "Hi there", timestamp: 123 },
+      },
+    ];
+    fs.writeFileSync(sessionFile, lines.map((line) => JSON.stringify(line)).join("\n"), "utf-8");
+
+    const out = readSessionMessages(sessionId, storePath, sessionFile);
+    const answer = out[0] as { timestamp?: number };
+
+    expect(answer.timestamp).toBe(123);
+  });
+
+  test("uses transcript entry timestamps for legacy message records", () => {
+    const sessionId = "test-session-legacy-wrapper-timestamp";
+    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    const answerTimestamp = "2026-04-27T00:00:04.000Z";
+    const lines = [
+      JSON.stringify({ type: "session", version: 1, id: sessionId }),
+      JSON.stringify({
+        timestamp: answerTimestamp,
+        message: { role: "assistant", content: "Legacy reply" },
+      }),
+    ];
+    fs.writeFileSync(transcriptPath, lines.join("\n"), "utf-8");
+
+    const out = readSessionMessages(sessionId, storePath);
+    const answer = out[0] as { timestamp?: number; __openclaw?: { seq?: number } };
+
+    expect(answer.timestamp).toBe(Date.parse(answerTimestamp));
+    expect(answer.__openclaw).toMatchObject({ seq: 1 });
+  });
+
+  test("uses load time as the last-resort timestamp for records without timestamps", () => {
+    vi.useFakeTimers();
+    try {
+      const loadedAt = Date.parse("2026-04-29T12:00:00.000Z");
+      vi.setSystemTime(loadedAt);
+
+      const sessionId = "test-session-load-time-timestamp";
+      const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
+      const lines = [
+        JSON.stringify({ type: "session", version: 1, id: sessionId }),
+        JSON.stringify({ message: { role: "assistant", content: "Untimed reply" } }),
+        JSON.stringify({ type: "compaction", id: "comp-no-time", summary: "Untimed compaction" }),
+      ];
+      fs.writeFileSync(transcriptPath, lines.join("\n"), "utf-8");
+
+      const out = readSessionMessages(sessionId, storePath);
+      const answer = out[0] as { timestamp?: number };
+      const marker = out[1] as { timestamp?: number };
+
+      expect(answer.timestamp).toBe(loadedAt);
+      expect(marker.timestamp).toBe(loadedAt);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   test("reads only the active branch when transcript rewrites abandon older entries", () => {
     const sessionId = "test-session-active-branch";
     const sessionFile = path.join(tmpDir, `${sessionId}.jsonl`);

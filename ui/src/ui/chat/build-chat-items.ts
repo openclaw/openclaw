@@ -3,9 +3,11 @@ import { extractTextCached } from "./message-extract.ts";
 import { normalizeMessage } from "./message-normalizer.ts";
 import { normalizeRoleForGrouping } from "./role-normalizer.ts";
 import { messageMatchesSearchQuery } from "./search-match.ts";
+import { trimCommittedStreamPrefix } from "./stream-prefix.ts";
 import { extractToolCards, extractToolPreview } from "./tool-cards.ts";
 
 const CHAT_HISTORY_RENDER_LIMIT = 200;
+const UNKNOWN_TIMESTAMP = Number.NaN;
 
 export type BuildChatItemsProps = {
   sessionKey: string;
@@ -68,7 +70,6 @@ function extractChatMessagePreview(toolMessage: unknown): {
   text: string | null;
   timestamp: number | null;
 } | null {
-  const normalized = normalizeMessage(toolMessage);
   const cards = extractToolCards(toolMessage, "preview");
   for (let index = cards.length - 1; index >= 0; index--) {
     const card = cards[index];
@@ -76,7 +77,7 @@ function extractChatMessagePreview(toolMessage: unknown): {
       return {
         preview: card.preview,
         text: card.outputText ?? null,
-        timestamp: normalized.timestamp ?? null,
+        timestamp: readMessageTimestamp(toolMessage),
       };
     }
   }
@@ -92,7 +93,15 @@ function extractChatMessagePreview(toolMessage: unknown): {
   if (preview?.kind !== "canvas") {
     return null;
   }
-  return { preview, text: text ?? null, timestamp: normalized.timestamp ?? null };
+  return { preview, text: text ?? null, timestamp: readMessageTimestamp(toolMessage) };
+}
+
+function readMessageTimestamp(message: unknown): number | null {
+  if (!message || typeof message !== "object") {
+    return null;
+  }
+  const timestamp = (message as Record<string, unknown>).timestamp;
+  return typeof timestamp === "number" && Number.isFinite(timestamp) ? timestamp : null;
 }
 
 function findNearestAssistantMessageIndex(
@@ -111,7 +120,7 @@ function findNearestAssistantMessageIndex(
       }
       return {
         index,
-        timestamp: normalizeMessage(item.message).timestamp ?? null,
+        timestamp: readMessageTimestamp(item.message),
       };
     })
     .filter(Boolean) as Array<{ index: number; timestamp: number | null }>;
@@ -165,7 +174,7 @@ function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup> {
     const normalized = normalizeMessage(item.message);
     const role = normalizeRoleForGrouping(normalized.role);
     const senderLabel = role.toLowerCase() === "user" ? (normalized.senderLabel ?? null) : null;
-    const timestamp = normalized.timestamp || Date.now();
+    const timestamp = readMessageTimestamp(item.message) ?? UNKNOWN_TIMESTAMP;
 
     if (
       !currentGroup ||
@@ -207,7 +216,7 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
       message: {
         role: "system",
         content: `Showing last ${CHAT_HISTORY_RENDER_LIMIT} messages (${historyStart} hidden).`,
-        timestamp: Date.now(),
+        timestamp: UNKNOWN_TIMESTAMP,
       },
     });
   }
@@ -217,14 +226,19 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
     const raw = msg as Record<string, unknown>;
     const marker = raw.__openclaw as Record<string, unknown> | undefined;
     if (marker && marker.kind === "compaction") {
+      const timestamp = readMessageTimestamp(msg);
+      const markerSeq =
+        typeof marker.seq === "number" && Number.isFinite(marker.seq) ? marker.seq : null;
       items.push({
         kind: "divider",
         key:
           typeof marker.id === "string"
             ? `divider:compaction:${marker.id}`
-            : `divider:compaction:${normalized.timestamp}:${i}`,
+            : markerSeq != null
+              ? `divider:compaction:seq:${markerSeq}`
+              : `divider:compaction:${timestamp ?? "unknown"}:${i}`,
         label: "Compaction",
-        timestamp: normalized.timestamp ?? Date.now(),
+        timestamp: timestamp ?? UNKNOWN_TIMESTAMP,
       });
       continue;
     }
@@ -291,12 +305,13 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
 
   if (props.stream !== null) {
     const key = `stream:${props.sessionKey}:${props.streamStartedAt ?? "live"}`;
-    if (props.stream.trim().length > 0) {
+    const streamText = trimCommittedStreamPrefix(props.stream, segments);
+    if (streamText.trim().length > 0) {
       items.push({
         kind: "stream",
         key,
-        text: props.stream,
-        startedAt: props.streamStartedAt ?? Date.now(),
+        text: streamText,
+        startedAt: props.streamStartedAt ?? UNKNOWN_TIMESTAMP,
       });
     } else {
       items.push({ kind: "reading-indicator", key });
@@ -308,6 +323,7 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
 
 function messageKey(message: unknown, index: number): string {
   const m = message as Record<string, unknown>;
+  const transcriptKey = openClawTranscriptKey(m);
   const toolCallId = typeof m.toolCallId === "string" ? m.toolCallId : "";
   if (toolCallId) {
     const role = typeof m.role === "string" ? m.role : "unknown";
@@ -318,6 +334,9 @@ function messageKey(message: unknown, index: number): string {
     const messageId = typeof m.messageId === "string" ? m.messageId : "";
     if (messageId) {
       return `tool:${role}:${toolCallId}:${messageId}`;
+    }
+    if (transcriptKey) {
+      return `tool:${role}:${toolCallId}:transcript:${transcriptKey}`;
     }
     const timestamp = typeof m.timestamp === "number" ? m.timestamp : null;
     if (timestamp != null) {
@@ -333,10 +352,28 @@ function messageKey(message: unknown, index: number): string {
   if (messageId) {
     return `msg:${messageId}`;
   }
+  if (transcriptKey) {
+    return `msg:transcript:${transcriptKey}`;
+  }
   const timestamp = typeof m.timestamp === "number" ? m.timestamp : null;
   const role = typeof m.role === "string" ? m.role : "unknown";
   if (timestamp != null) {
     return `msg:${role}:${timestamp}:${index}`;
   }
   return `msg:${role}:${index}`;
+}
+
+function openClawTranscriptKey(message: Record<string, unknown>): string | null {
+  const meta = message.__openclaw;
+  if (!meta || typeof meta !== "object" || Array.isArray(meta)) {
+    return null;
+  }
+  const record = meta as Record<string, unknown>;
+  if (typeof record.id === "string" && record.id) {
+    return `id:${record.id}`;
+  }
+  if (typeof record.seq === "number" && Number.isFinite(record.seq)) {
+    return `seq:${record.seq}`;
+  }
+  return null;
 }

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { MessageGroup } from "../types/chat-types.ts";
 import { buildChatItems, type BuildChatItemsProps } from "./build-chat-items.ts";
 
@@ -25,6 +25,133 @@ function firstMessageContent(group: MessageGroup): unknown[] {
 }
 
 describe("buildChatItems", () => {
+  it("uses stable unknown timestamps for history messages that do not carry one", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-04-29T12:00:00Z"));
+      const first = messageGroups({
+        messages: [
+          {
+            role: "assistant",
+            content: "No persisted timestamp.",
+          },
+        ],
+      });
+
+      vi.setSystemTime(new Date("2026-04-29T12:05:00Z"));
+      const second = messageGroups({
+        messages: [
+          {
+            role: "assistant",
+            content: "No persisted timestamp.",
+          },
+        ],
+      });
+
+      expect(Number.isNaN(first[0]?.timestamp)).toBe(true);
+      expect(Number.isNaN(second[0]?.timestamp)).toBe(true);
+      expect(first[0]?.key).toBe(second[0]?.key);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps compaction divider keys stable when the divider has no timestamp", () => {
+    vi.useFakeTimers();
+    try {
+      const messages = [
+        {
+          role: "system",
+          content: "Compacted",
+          __openclaw: { kind: "compaction" },
+        },
+      ];
+      vi.setSystemTime(new Date("2026-04-29T12:00:00Z"));
+      const first = buildChatItems(createProps({ messages }));
+
+      vi.setSystemTime(new Date("2026-04-29T12:05:00Z"));
+      const second = buildChatItems(createProps({ messages }));
+
+      expect(first[0]).toMatchObject({ kind: "divider", key: "divider:compaction:unknown:0" });
+      expect(second[0]).toMatchObject({ kind: "divider", key: "divider:compaction:unknown:0" });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("uses transcript metadata before fallback timestamps for stable keys", () => {
+    const first = buildChatItems(
+      createProps({
+        messages: [
+          {
+            role: "assistant",
+            content: "Loaded without a persisted timestamp.",
+            timestamp: 1_000,
+            __openclaw: { seq: 7 },
+          },
+          {
+            role: "system",
+            content: "Compacted",
+            timestamp: 1_000,
+            __openclaw: { kind: "compaction", seq: 8 },
+          },
+        ],
+      }),
+    );
+    const second = buildChatItems(
+      createProps({
+        messages: [
+          {
+            role: "assistant",
+            content: "Loaded without a persisted timestamp.",
+            timestamp: 2_000,
+            __openclaw: { seq: 7 },
+          },
+          {
+            role: "system",
+            content: "Compacted",
+            timestamp: 2_000,
+            __openclaw: { kind: "compaction", seq: 8 },
+          },
+        ],
+      }),
+    );
+
+    expect(first[0]).toMatchObject({ kind: "group", key: "group:assistant:msg:transcript:seq:7" });
+    expect(second[0]).toMatchObject({
+      kind: "group",
+      key: "group:assistant:msg:transcript:seq:7",
+    });
+    expect(first[1]).toMatchObject({ kind: "divider", key: "divider:compaction:seq:8" });
+    expect(second[1]).toMatchObject({ kind: "divider", key: "divider:compaction:seq:8" });
+  });
+
+  it("renders only the live stream suffix after committed stream segments", () => {
+    const items = buildChatItems(
+      createProps({
+        streamSegments: [{ text: "Before tool. ", ts: 100 }],
+        stream: "Before tool. After tool.",
+        streamStartedAt: 200,
+      }),
+    );
+
+    const streams = items.filter((item) => item.kind === "stream");
+    expect(streams).toEqual([
+      {
+        kind: "stream",
+        key: "stream-seg:main:0",
+        text: "Before tool. ",
+        startedAt: 100,
+      },
+      {
+        kind: "stream",
+        key: "stream:main:200",
+        text: "After tool.",
+        startedAt: 200,
+      },
+    ]);
+  });
+
   it("keeps consecutive user messages from different senders in separate groups", () => {
     const groups = messageGroups({
       messages: [

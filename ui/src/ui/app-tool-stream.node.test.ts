@@ -71,6 +71,31 @@ describe("app-tool-stream fallback lifecycle handling", () => {
     }
   });
 
+  it("commits only the uncommitted stream suffix at tool boundaries", () => {
+    const host = createHost({
+      chatRunId: "run-1",
+      chatStream: "Before tool. After tool.",
+      chatStreamStartedAt: 100,
+      chatStreamSegments: [{ text: "Before tool. ", ts: 100 }],
+    });
+
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 1, "tool", {
+        phase: "start",
+        toolCallId: "tool-1",
+        name: "shell",
+      }),
+    );
+
+    expect(host.chatStream).toBeNull();
+    expect(host.chatStreamStartedAt).toBeNull();
+    expect(host.chatStreamSegments).toEqual([
+      { text: "Before tool. ", ts: 100 },
+      { text: "After tool.", ts: expect.any(Number) },
+    ]);
+  });
+
   it("accepts session-scoped fallback lifecycle events when no run is active", () => {
     vi.useFakeTimers();
     const host = createHost();

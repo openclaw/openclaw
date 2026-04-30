@@ -29,6 +29,17 @@ type SessionTitleFieldsCacheEntry = SessionTitleFields & {
 const sessionTitleFieldsCache = new Map<string, SessionTitleFieldsCacheEntry>();
 const MAX_SESSION_TITLE_FIELDS_CACHE_ENTRIES = 5000;
 
+function parseTranscriptTimestampMs(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
 function readSessionTitleFieldsCacheKey(
   filePath: string,
   opts?: { includeInterSession?: boolean },
@@ -73,6 +84,8 @@ function setCachedSessionTitleFields(cacheKey: string, stat: fs.Stats, value: Se
 export function attachOpenClawTranscriptMeta(
   message: unknown,
   meta: Record<string, unknown>,
+  fallbackTimestamp?: unknown,
+  lastResortTimestamp?: number,
 ): unknown {
   if (!message || typeof message !== "object" || Array.isArray(message)) {
     return message;
@@ -82,8 +95,13 @@ export function attachOpenClawTranscriptMeta(
     record.__openclaw && typeof record.__openclaw === "object" && !Array.isArray(record.__openclaw)
       ? (record.__openclaw as Record<string, unknown>)
       : {};
+  const timestamp =
+    parseTranscriptTimestampMs(record.timestamp) ??
+    parseTranscriptTimestampMs(fallbackTimestamp) ??
+    lastResortTimestamp;
   return {
     ...record,
+    ...(timestamp !== undefined ? { timestamp } : {}),
     __openclaw: {
       ...existing,
       ...meta,
@@ -104,6 +122,7 @@ export function readSessionMessages(
   }
 
   const lines = fs.readFileSync(filePath, "utf-8").split(/\r?\n/);
+  const loadedAt = Date.now();
   const hasTreeEntries = lines.some((line) => {
     if (!line.trim()) {
       return false;
@@ -131,17 +150,21 @@ export function readSessionMessages(
       if (entry.type === "message" && entry.message) {
         messageSeq += 1;
         messages.push(
-          attachOpenClawTranscriptMeta(entry.message, {
-            ...(typeof entry.id === "string" ? { id: entry.id } : {}),
-            seq: messageSeq,
-          }),
+          attachOpenClawTranscriptMeta(
+            entry.message,
+            {
+              ...(typeof entry.id === "string" ? { id: entry.id } : {}),
+              seq: messageSeq,
+            },
+            entry.timestamp,
+            loadedAt,
+          ),
         );
         continue;
       }
 
       if (entry.type === "compaction") {
-        const ts = typeof entry.timestamp === "string" ? Date.parse(entry.timestamp) : Number.NaN;
-        const timestamp = Number.isFinite(ts) ? ts : Date.now();
+        const timestamp = parseTranscriptTimestampMs(entry.timestamp) ?? loadedAt;
         messageSeq += 1;
         messages.push({
           role: "system",
@@ -169,10 +192,15 @@ export function readSessionMessages(
       if (parsed?.message) {
         messageSeq += 1;
         messages.push(
-          attachOpenClawTranscriptMeta(parsed.message, {
-            ...(typeof parsed.id === "string" ? { id: parsed.id } : {}),
-            seq: messageSeq,
-          }),
+          attachOpenClawTranscriptMeta(
+            parsed.message,
+            {
+              ...(typeof parsed.id === "string" ? { id: parsed.id } : {}),
+              seq: messageSeq,
+            },
+            parsed.timestamp,
+            loadedAt,
+          ),
         );
         continue;
       }
@@ -180,8 +208,7 @@ export function readSessionMessages(
       // Compaction entries are not "message" records, but they're useful context for debugging.
       // Emit a lightweight synthetic message that the Web UI can render as a divider.
       if (parsed?.type === "compaction") {
-        const ts = typeof parsed.timestamp === "string" ? Date.parse(parsed.timestamp) : Number.NaN;
-        const timestamp = Number.isFinite(ts) ? ts : Date.now();
+        const timestamp = parseTranscriptTimestampMs(parsed.timestamp) ?? loadedAt;
         messageSeq += 1;
         messages.push({
           role: "system",
