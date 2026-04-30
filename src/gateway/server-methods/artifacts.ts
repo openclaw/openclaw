@@ -47,8 +47,14 @@ function asNonEmptyString(value: unknown): string | undefined {
 
 function normalizeArtifactType(value: string): string {
   const normalized = value.trim().toLowerCase();
-  if (normalized === "image" || normalized === "audio" || normalized === "file") {
-    return normalized;
+  if (normalized === "image" || normalized === "input_image" || normalized === "image_url") {
+    return "image";
+  }
+  if (normalized === "audio" || normalized === "input_audio") {
+    return "audio";
+  }
+  if (normalized === "file" || normalized === "input_file") {
+    return "file";
   }
   return "file";
 }
@@ -71,6 +77,30 @@ function estimateBase64Size(value: string | undefined): number | undefined {
     return Buffer.from(value, "base64").byteLength;
   } catch {
     return undefined;
+  }
+}
+
+function mediaUrlValue(value: unknown): string | undefined {
+  if (typeof value === "string") {
+    return asNonEmptyString(value);
+  }
+  const record = asRecord(value);
+  return asNonEmptyString(record?.url);
+}
+
+function isSafeDownloadUrl(value: string): boolean {
+  const trimmed = value.trim();
+  if (!trimmed || /^data:/i.test(trimmed)) {
+    return false;
+  }
+  if (trimmed.startsWith("/")) {
+    return !trimmed.startsWith("//") && trimmed.startsWith("/api/");
+  }
+  try {
+    const parsed = new URL(trimmed);
+    return parsed.protocol === "http:" || parsed.protocol === "https:";
+  } catch {
+    return false;
   }
 }
 
@@ -116,20 +146,19 @@ function resolveBlockDownload(block: Record<string, unknown>): {
   const data = asNonEmptyString(block.data);
   const content = asNonEmptyString(block.content);
   const url = asNonEmptyString(block.url) ?? asNonEmptyString(block.openUrl);
+  const imageUrl = mediaUrlValue(block.image_url);
+  const audioUrl = asNonEmptyString(block.audio_url);
   const source = asRecord(block.source);
   const sourceData = asNonEmptyString(source?.data);
   const sourceUrl = asNonEmptyString(source?.url);
-  const dataUrl = [url, sourceUrl, data, content, sourceData].find(
+  const dataUrl = [url, sourceUrl, imageUrl, audioUrl, data, content, sourceData].find(
     (value) => typeof value === "string" && /^data:/i.test(value),
   );
   const base64 =
     (dataUrl ? base64FromDataUrl(dataUrl) : undefined) ?? data ?? sourceData ?? content;
-  const remoteUrl =
-    url && !/^data:/i.test(url)
-      ? url
-      : sourceUrl && !/^data:/i.test(sourceUrl)
-        ? sourceUrl
-        : undefined;
+  const remoteUrl = [url, sourceUrl, imageUrl, audioUrl].find(
+    (value) => typeof value === "string" && isSafeDownloadUrl(value),
+  );
   const mimeType =
     asNonEmptyString(block.mimeType) ??
     asNonEmptyString(block.media_type) ??
@@ -152,10 +181,20 @@ function resolveBlockDownload(block: Record<string, unknown>): {
 
 function isArtifactBlock(block: Record<string, unknown>): boolean {
   const type = asNonEmptyString(block.type)?.toLowerCase();
-  if (type === "image" || type === "audio" || type === "file") {
+  if (
+    type === "image" ||
+    type === "audio" ||
+    type === "file" ||
+    type === "input_image" ||
+    type === "input_audio" ||
+    type === "input_file" ||
+    type === "image_url"
+  ) {
     return true;
   }
-  return Boolean(block.url || block.openUrl || block.data || block.source);
+  return Boolean(
+    block.url || block.openUrl || block.data || block.source || block.image_url || block.audio_url,
+  );
 }
 
 export function collectArtifactsFromMessages(params: {
@@ -175,10 +214,10 @@ export function collectArtifactsFromMessages(params: {
     const messageSeq = resolveMessageSeq(msg, messageFallbackSeq);
     const messageRunId = resolveMessageRunId(msg);
     const messageTaskId = resolveMessageTaskId(msg);
-    if (params.runId && messageRunId && messageRunId !== params.runId) {
+    if (params.runId && messageRunId !== params.runId) {
       continue;
     }
-    if (params.taskId && messageTaskId && messageTaskId !== params.taskId) {
+    if (params.taskId && messageTaskId !== params.taskId) {
       continue;
     }
     const content = Array.isArray(msg.content) ? msg.content : [];
@@ -208,12 +247,8 @@ export function collectArtifactsFromMessages(params: {
         ...(download.mimeType ? { mimeType: download.mimeType } : {}),
         ...(download.sizeBytes !== undefined ? { sizeBytes: download.sizeBytes } : {}),
         sessionKey: params.sessionKey,
-        ...(messageRunId ? { runId: messageRunId } : params.runId ? { runId: params.runId } : {}),
-        ...(messageTaskId
-          ? { taskId: messageTaskId }
-          : params.taskId
-            ? { taskId: params.taskId }
-            : {}),
+        ...(messageRunId ? { runId: messageRunId } : {}),
+        ...(messageTaskId ? { taskId: messageTaskId } : {}),
         messageSeq,
         source: "session-transcript",
         download: { mode: download.mode },

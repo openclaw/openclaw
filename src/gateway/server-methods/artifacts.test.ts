@@ -131,6 +131,13 @@ describe("artifacts RPC handlers", () => {
 
   it("resolves runId queries through the gateway run-to-session lookup", async () => {
     hoisted.resolveSessionKeyForRun.mockReturnValue("agent:main:main");
+    hoisted.readSessionMessages.mockReturnValue([
+      {
+        role: "assistant",
+        content: [{ type: "image", data: "aGVsbG8=", alt: "run-result.png" }],
+        __openclaw: { seq: 2, runId: "run-1" },
+      },
+    ]);
     const { calls, respond } = createResponder();
 
     await artifactsHandlers["artifacts.list"]?.({
@@ -146,6 +153,79 @@ describe("artifacts RPC handlers", () => {
     expect(hoisted.resolveSessionKeyForRun).toHaveBeenCalledWith("run-1");
     const payload = calls[0]?.payload as { artifacts?: Array<Record<string, unknown>> };
     expect(payload.artifacts?.[0]).toMatchObject({ runId: "run-1" });
+  });
+
+  it("does not return untagged session artifacts for scoped runId queries", async () => {
+    hoisted.resolveSessionKeyForRun.mockReturnValue("agent:main:main");
+    const { calls, respond } = createResponder();
+
+    await artifactsHandlers["artifacts.list"]?.({
+      req: { type: "req", id: "run-scope", method: "artifacts.list", params: {} },
+      params: { runId: "run-1" },
+      client: null,
+      isWebchatConnect: () => false,
+      respond,
+      context: {} as never,
+    });
+
+    expect(calls[0]?.ok).toBe(true);
+    expect(calls[0]?.payload).toEqual({ artifacts: [] });
+  });
+
+  it("discovers transcript image_url data blocks", async () => {
+    hoisted.readSessionMessages.mockReturnValue([
+      {
+        role: "user",
+        content: [
+          {
+            type: "input_image",
+            image_url: "data:image/png;base64,aGVsbG8=",
+            alt: "uploaded.png",
+          },
+        ],
+        __openclaw: { seq: 3 },
+      },
+    ]);
+    const { calls, respond } = createResponder();
+
+    await artifactsHandlers["artifacts.list"]?.({
+      req: { type: "req", id: "image-url", method: "artifacts.list", params: {} },
+      params: { sessionKey: "agent:main:main" },
+      client: null,
+      isWebchatConnect: () => false,
+      respond,
+      context: {} as never,
+    });
+
+    expect(calls[0]?.ok).toBe(true);
+    const payload = calls[0]?.payload as { artifacts?: Array<Record<string, unknown>> };
+    expect(payload.artifacts).toHaveLength(1);
+    expect(payload.artifacts?.[0]).toMatchObject({
+      type: "image",
+      title: "uploaded.png",
+      mimeType: "image/png",
+      sizeBytes: 5,
+      download: { mode: "bytes" },
+    });
+  });
+
+  it("treats unsafe artifact URLs as unsupported downloads", async () => {
+    const artifacts = collectArtifactsFromMessages({
+      sessionKey: "agent:main:main",
+      messages: [
+        {
+          role: "assistant",
+          content: [{ type: "file", title: "secret.txt", url: "file:///etc/passwd" }],
+          __openclaw: { seq: 4 },
+        },
+      ],
+    });
+
+    expect(artifacts[0]).toMatchObject({
+      title: "secret.txt",
+      download: { mode: "unsupported" },
+    });
+    expect(artifacts[0]).not.toHaveProperty("url");
   });
 
   it("returns typed errors for missing query scope and missing artifacts", async () => {
