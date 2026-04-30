@@ -1811,8 +1811,10 @@ export function filterAndSortSessionEntries(params: {
   store: Record<string, SessionEntry>;
   opts: import("./protocol/index.js").SessionsListParams;
   now: number;
+  rowContext?: SessionListRowContext;
 }): [string, SessionEntry][] {
   const { store, opts, now } = params;
+  const rowContext = params.rowContext;
   const includeGlobal = opts.includeGlobal === true;
   const includeUnknown = opts.includeUnknown === true;
   const spawnedBy = typeof opts.spawnedBy === "string" ? opts.spawnedBy : "";
@@ -1854,7 +1856,9 @@ export function filterAndSortSessionEntries(params: {
       if (key === "unknown" || key === "global") {
         return false;
       }
-      const latest = getSessionDisplaySubagentRunByChildSessionKey(key);
+      const latest = rowContext
+        ? rowContext.subagentRuns.getDisplaySubagentRun(key)
+        : getSessionDisplaySubagentRunByChildSessionKey(key);
       if (latest) {
         const latestControllerSessionKey =
           normalizeOptionalString(latest.controllerSessionKey) ||
@@ -1862,7 +1866,9 @@ export function filterAndSortSessionEntries(params: {
         return (
           latestControllerSessionKey === spawnedBy &&
           shouldKeepSubagentRunChildLink(latest, {
-            activeDescendants: countActiveDescendantRuns(key),
+            activeDescendants: rowContext
+              ? rowContext.subagentRuns.countActiveDescendantRuns(key)
+              : countActiveDescendantRuns(key),
             now,
           })
         );
@@ -1917,7 +1923,7 @@ export function listSessionsFromStore(params: {
   const includeDerivedTitles = opts.includeDerivedTitles === true;
   const includeLastMessage = opts.includeLastMessage === true;
 
-  const entries = filterAndSortSessionEntries({ store, opts, now });
+  const entries = filterAndSortSessionEntries({ store, opts, now, rowContext });
 
   const sessions = entries.map(([key, entry], index) => {
     const includeTranscriptFields = index < sessionListTranscriptFieldRows;
@@ -1971,7 +1977,7 @@ export async function listSessionsFromStoreAsync(params: {
   const includeDerivedTitles = opts.includeDerivedTitles === true;
   const includeLastMessage = opts.includeLastMessage === true;
 
-  const entries = filterAndSortSessionEntries({ store, opts, now });
+  const entries = filterAndSortSessionEntries({ store, opts, now, rowContext });
 
   const sessions: GatewaySessionRow[] = [];
   for (let i = 0; i < entries.length; i++) {
