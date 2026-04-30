@@ -476,9 +476,7 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
     });
     mockedBuildAgentRuntimePlan.mockReturnValueOnce(runtimePlan);
     mockedGetApiKeyForModel.mockRejectedValueOnce(new Error("generic auth should be skipped"));
-    mockedResolveAuthProfileOrder.mockImplementation(({ provider }) =>
-      provider === "openai-codex" ? ["openai-codex:default"] : [],
-    );
+    mockedResolveAuthProfileOrder.mockReturnValueOnce(["openai-codex:default"]);
 
     try {
       await runEmbeddedPiAgent({
