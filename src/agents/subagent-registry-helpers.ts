@@ -74,6 +74,25 @@ export function logAnnounceGiveUp(entry: SubagentRunRecord, reason: "retry-limit
   );
 }
 
+export async function deleteSubagentSessionWithRetry(params: {
+  callGateway: (request: {
+    method: string;
+    params?: Record<string, unknown>;
+    timeoutMs?: number;
+  }) => Promise<unknown>;
+  sessionKey: string;
+}): Promise<void> {
+  await params.callGateway({
+    method: "sessions.delete",
+    params: {
+      key: params.sessionKey,
+      deleteTranscript: true,
+      emitLifecycleHooks: false,
+    },
+    timeoutMs: 10_000,
+  });
+}
+
 function findSessionEntryByKey(store: Record<string, SessionEntry>, sessionKey: string) {
   const direct = store[sessionKey];
   if (direct) {
