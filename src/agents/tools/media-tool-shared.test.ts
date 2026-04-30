@@ -1,6 +1,13 @@
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const normalizeProviderModelIdWithRuntime = vi.hoisted(() => vi.fn());
+
+vi.mock("../provider-model-normalization.runtime.js", () => ({
+  normalizeProviderModelIdWithRuntime,
+}));
+
 import { resolveMediaToolLocalRoots, resolveModelFromRegistry } from "./media-tool-shared.js";
 
 function normalizeHostPath(value: string): string {
@@ -53,6 +60,10 @@ describe("resolveMediaToolLocalRoots", () => {
 });
 
 describe("resolveModelFromRegistry", () => {
+  beforeEach(() => {
+    normalizeProviderModelIdWithRuntime.mockReset();
+  });
+
   it("normalizes provider and model refs before registry lookup", () => {
     const foundModel = { provider: "ollama", id: "qwen3.5:397b-cloud" };
     const { calls, registry } = createModelRegistryStub(() => foundModel);
@@ -64,6 +75,7 @@ describe("resolveModelFromRegistry", () => {
     });
 
     expect(calls).toEqual([["ollama", "qwen3.5:397b-cloud"]]);
+    expect(normalizeProviderModelIdWithRuntime).not.toHaveBeenCalled();
     expect(result).toBe(foundModel);
   });
 
