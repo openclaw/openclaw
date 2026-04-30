@@ -460,7 +460,22 @@ describe("telegram forwarded bursts", () => {
         expect(runtimeError).not.toHaveBeenCalled();
         const payload = replySpy.mock.calls[0][0];
         expect(payload.Body).toContain("Look at this");
+        expect(payload.BodyForAgent).toBe("Look at this");
         expect(payload.MediaPaths).toHaveLength(1);
+        expect(payload.UntrustedStructuredContext).toEqual([
+          expect.objectContaining({
+            payload: expect.objectContaining({
+              item_index: 1,
+              body_line: 1,
+              from: "A",
+            }),
+          }),
+          expect.objectContaining({
+            payload: expect.not.objectContaining({
+              body_line: expect.any(Number),
+            }),
+          }),
+        ]);
       } finally {
         fetchSpy.mockRestore();
       }
