@@ -608,6 +608,7 @@ public struct AgentParams: Codable, Sendable {
     public let besteffortdeliver: Bool?
     public let lane: String?
     public let cleanupbundlemcponrunend: Bool?
+    public let paperclip: AnyCodable?
     public let modelrun: Bool?
     public let promptmode: AnyCodable?
     public let extrasystemprompt: String?
@@ -644,6 +645,7 @@ public struct AgentParams: Codable, Sendable {
         besteffortdeliver: Bool?,
         lane: String?,
         cleanupbundlemcponrunend: Bool?,
+        paperclip: AnyCodable?,
         modelrun: Bool?,
         promptmode: AnyCodable?,
         extrasystemprompt: String?,
@@ -679,6 +681,7 @@ public struct AgentParams: Codable, Sendable {
         self.besteffortdeliver = besteffortdeliver
         self.lane = lane
         self.cleanupbundlemcponrunend = cleanupbundlemcponrunend
+        self.paperclip = paperclip
         self.modelrun = modelrun
         self.promptmode = promptmode
         self.extrasystemprompt = extrasystemprompt
@@ -716,6 +719,7 @@ public struct AgentParams: Codable, Sendable {
         case besteffortdeliver = "bestEffortDeliver"
         case lane
         case cleanupbundlemcponrunend = "cleanupBundleMcpOnRunEnd"
+        case paperclip
         case modelrun = "modelRun"
         case promptmode = "promptMode"
         case extrasystemprompt = "extraSystemPrompt"
