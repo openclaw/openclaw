@@ -446,6 +446,7 @@ const McpServerSchema = z
       })
       .strict()
       .optional(),
+    injectCallerContext: z.boolean().optional(),
   })
   .superRefine((data, ctx) => {
     // transport "stdio" requires a non-empty command — URL-only servers must use "sse" or "streamable-http"

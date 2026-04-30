@@ -80,6 +80,7 @@ import { ensureSystemPromptCacheBoundary } from "../system-prompt-cache-boundary
 import { buildSystemPromptReport } from "../system-prompt-report.js";
 import { appendModelIdentitySystemPrompt, buildModelIdentityPromptLine } from "../system-prompt.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
+import { mergedBundleMcpLayerWantsCallerContextInjection } from "../bundle-mcp-config.js";
 import { prepareCliBundleMcpConfig } from "./bundle-mcp.js";
 import { prepareClaudeCliSkillsPlugin } from "./claude-skills-plugin.js";
 import { buildCliAgentSystemPrompt, normalizeCliModel } from "./helpers.js";
@@ -437,6 +438,42 @@ export async function prepareCliRunContext(
     mcpLoopbackRuntime = prepareDeps.getActiveMcpLoopbackRuntime();
   }
   const mcpDeliveryCaptureEnabled = bundleMcpEnabled && Boolean(mcpLoopbackRuntime);
+  // Gate placeholder env on bundleMcpEnabled (NOT raw backendResolved.bundleMcp) so a
+  // disabled-tools run never exposes OPENCLAW_MCP_SESSION_KEY / caller IDs for opted-in
+  // MCP servers — bundle MCP is fully suppressed in that mode.
+  const needsMcpPlaceholderEnv =
+    bundleMcpEnabled &&
+    (Boolean(mcpLoopbackRuntime) ||
+      mergedBundleMcpLayerWantsCallerContextInjection({
+        workspaceDir,
+        cfg: params.config,
+      }));
+  const mcpPlaceholderEnv: Record<string, string> | undefined = needsMcpPlaceholderEnv
+    ? {
+        ...(mcpLoopbackRuntime
+          ? {
+              OPENCLAW_MCP_TOKEN: prepareDeps.resolveMcpLoopbackBearerToken(
+                mcpLoopbackRuntime,
+                params.senderIsOwner === true,
+              ),
+            }
+          : {}),
+        OPENCLAW_MCP_AGENT_ID: sessionAgentId ?? "",
+        OPENCLAW_MCP_ACCOUNT_ID: params.agentAccountId ?? "",
+        OPENCLAW_MCP_SESSION_KEY: params.sessionKey ?? "",
+        OPENCLAW_MCP_SESSION_ID: params.sessionId,
+        OPENCLAW_MCP_MESSAGE_CHANNEL: params.messageChannel ?? params.messageProvider ?? "",
+        OPENCLAW_MCP_CURRENT_CHANNEL_ID: params.currentChannelId ?? "",
+        OPENCLAW_MCP_CURRENT_THREAD_TS: params.currentThreadTs ?? "",
+        OPENCLAW_MCP_CURRENT_MESSAGE_ID:
+          params.currentMessageId != null ? String(params.currentMessageId) : "",
+        OPENCLAW_MCP_CURRENT_INBOUND_AUDIO: params.currentInboundAudio === true ? "true" : "",
+        OPENCLAW_MCP_INBOUND_EVENT_KIND: params.currentInboundEventKind ?? "",
+        OPENCLAW_MCP_SOURCE_REPLY_DELIVERY_MODE: params.sourceReplyDeliveryMode ?? "",
+        OPENCLAW_MCP_REQUIRE_EXPLICIT_MESSAGE_TARGET: requireExplicitMessageTarget ? "true" : "",
+        OPENCLAW_MCP_CLI_CAPTURE_KEY: "",
+      }
+    : undefined;
   const preparedBackend = await prepareCliBundleMcpConfig({
     enabled: bundleMcpEnabled,
     mode: backendResolved.bundleMcpMode,
@@ -446,28 +483,7 @@ export async function prepareCliRunContext(
     additionalConfig: mcpLoopbackRuntime
       ? prepareDeps.createMcpLoopbackServerConfig(mcpLoopbackRuntime.port)
       : undefined,
-    env: mcpLoopbackRuntime
-      ? {
-          OPENCLAW_MCP_TOKEN: prepareDeps.resolveMcpLoopbackBearerToken(
-            mcpLoopbackRuntime,
-            params.senderIsOwner === true,
-          ),
-          OPENCLAW_MCP_AGENT_ID: sessionAgentId ?? "",
-          OPENCLAW_MCP_ACCOUNT_ID: params.agentAccountId ?? "",
-          OPENCLAW_MCP_SESSION_KEY: params.sessionKey ?? "",
-          OPENCLAW_MCP_SESSION_ID: params.sessionId,
-          OPENCLAW_MCP_MESSAGE_CHANNEL: params.messageChannel ?? params.messageProvider ?? "",
-          OPENCLAW_MCP_CURRENT_CHANNEL_ID: params.currentChannelId ?? "",
-          OPENCLAW_MCP_CURRENT_THREAD_TS: params.currentThreadTs ?? "",
-          OPENCLAW_MCP_CURRENT_MESSAGE_ID:
-            params.currentMessageId != null ? String(params.currentMessageId) : "",
-          OPENCLAW_MCP_CURRENT_INBOUND_AUDIO: params.currentInboundAudio === true ? "true" : "",
-          OPENCLAW_MCP_INBOUND_EVENT_KIND: params.currentInboundEventKind ?? "",
-          OPENCLAW_MCP_SOURCE_REPLY_DELIVERY_MODE: params.sourceReplyDeliveryMode ?? "",
-          OPENCLAW_MCP_REQUIRE_EXPLICIT_MESSAGE_TARGET: requireExplicitMessageTarget ? "true" : "",
-          OPENCLAW_MCP_CLI_CAPTURE_KEY: "",
-        }
-      : undefined,
+    env: mcpPlaceholderEnv,
     warn: (message) => cliBackendLog.warn(message),
   });
   const prepareExecutionContext = {
