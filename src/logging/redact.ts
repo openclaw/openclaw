@@ -19,6 +19,10 @@ const DEFAULT_REDACT_PATTERNS: string[] = [
   String.raw`/[?&](?:access[-_]?token|auth[-_]?token|hook[-_]?token|refresh[-_]?token|api[-_]?key|client[-_]?secret|token|key|secret|password|pass|passwd|auth|signature)=([^&\s"'<>]+)/gi`,
   // JSON fields.
   String.raw`"(?:apiKey|token|secret|password|passwd|accessToken|refreshToken)"\s*:\s*"([^"]+)"`,
+  // HTTP client diagnostics often stringify request config objects using
+  // JSON or util.inspect-style fields rather than env/CLI syntax.
+  String.raw`(^|[\s,{])["']?(?:api[-_]key|access[-_]token|refresh[-_]token|authToken|auth[-_]token|clientSecret|client[-_]secret|appSecret|app[-_]secret)["']?\s*[:=]\s*(["'])([^"'\r\n]+)\2`,
+  String.raw`(^|[\s,{])["']?(?:authorization|proxy-authorization|cookie|set-cookie|x-api-key|x-auth-token)["']?\s*[:=]\s*(["'])([^"'\r\n]+)\2`,
   // CLI flags.
   String.raw`--(?:api[-_]?key|hook[-_]?token|token|secret|password|passwd)\s+(["']?)([^\s"']+)\1`,
   // Authorization headers.
@@ -26,7 +30,7 @@ const DEFAULT_REDACT_PATTERNS: string[] = [
   String.raw`\bBearer\s+([A-Za-z0-9._\-+=]{18,})\b`,
   // Standalone token assignments in CLI or HTTP diagnostics. URL query params
   // are handled above so non-secret params survive and long values stay hinted.
-  String.raw`(^|[\s,;])(?:access_token|refresh_token|api[-_]?key|token|secret|password|passwd)=([^\s&#]+)`,
+  String.raw`(^|[\s,;])(?:access_token|refresh_token|auth[-_]?token|api[-_]?key|client[-_]?secret|app[-_]?secret|token|secret|password|passwd)=([^\s&#]+)`,
   // PEM blocks.
   String.raw`-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]+?-----END [A-Z ]*PRIVATE KEY-----`,
   // Common token prefixes.
