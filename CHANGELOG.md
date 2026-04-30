@@ -332,6 +332,7 @@ Docs: https://docs.openclaw.ai
 ### Changes
 
 - Sandbox/Docker: add opt-in `sandbox.docker.gpus` passthrough for Docker sandbox containers so local GPU workloads can run inside sandboxed agents when the host Docker runtime supports `--gpus`. Fixes #57976; carries forward #58124. Thanks @cyan-ember.
+- WhatsApp: add opt-in `channels.whatsapp.commentaryDelivery = "live"` for text-only live assistant commentary while preserving default-off delivery and message-tool-only source suppression. Carries forward #57484. Thanks @tristanmanchester.
 - iOS/Gateway: add an authenticated `node.presence.alive` protocol event and `node.list` last-seen fields so background iOS wakes can mark paired nodes recently alive without treating them as connected. Carries forward #63123. Thanks @ngutman.
 - Android: publish authenticated `node.presence.alive` events after node connect and background transitions so paired Android nodes retain durable last-seen metadata after disconnects. Carries forward #63123. Thanks @ngutman.
 - Gateway/chat: accept non-image attachments through `chat.send` by staging them as agent-readable media paths, while keeping unsupported RPC attachment paths explicit instead of silently dropping files. Fixes #48123. (#67572) Thanks @samzong.

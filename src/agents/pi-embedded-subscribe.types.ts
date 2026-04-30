@@ -1,6 +1,6 @@
 import type { AgentSession } from "@mariozechner/pi-coding-agent";
-import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import type { ReasoningLevel, ThinkLevel, VerboseLevel } from "../auto-reply/thinking.js";
+import type { BlockReplyContext, ReplyPayload } from "../auto-reply/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HookRunner } from "../plugins/hooks.js";
 import type { AgentInternalEvent } from "./internal-events.js";
@@ -13,6 +13,7 @@ export type SubscribeEmbeddedPiSessionParams = {
   session: AgentSession;
   runId: string;
   initialReplayState?: EmbeddedRunReplayState;
+  abortSignal?: AbortSignal;
   hookRunner?: HookRunner;
   verboseLevel?: VerboseLevel;
   reasoningMode?: ReasoningLevel;
@@ -25,9 +26,11 @@ export type SubscribeEmbeddedPiSessionParams = {
   /** Called when a thinking/reasoning block ends (</think> tag processed). */
   onReasoningEnd?: () => void | Promise<void>;
   onBlockReply?: (payload: BlockReplyPayload) => void | Promise<void>;
+  onCommentaryReply?: (payload: ReplyPayload, context?: BlockReplyContext) => void | Promise<void>;
   /** Flush pending block replies (e.g., before tool execution to preserve message boundaries). */
   onBlockReplyFlush?: () => void | Promise<void>;
   blockReplyBreak?: "text_end" | "message_end";
+  blockReplyTimeoutMs?: number;
   blockReplyChunking?: BlockReplyChunking;
   onPartialReply?: (payload: { text?: string; mediaUrls?: string[] }) => void | Promise<void>;
   onAssistantMessageStart?: () => void | Promise<void>;

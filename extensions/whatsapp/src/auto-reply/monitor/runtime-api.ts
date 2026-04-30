@@ -19,10 +19,13 @@ export {
 } from "openclaw/plugin-sdk/reply-history";
 export { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 export {
+  COMMENTARY_REPLY_TIMEOUT_MS,
   dispatchReplyWithBufferedBlockDispatcher,
   finalizeInboundContext,
+  normalizeReplyPayloadDirectives,
   resolveChunkMode,
   resolveTextChunkLimit,
+  type BlockReplyContext,
   type getReplyFromConfig,
   type ReplyPayload,
 } from "openclaw/plugin-sdk/reply-runtime";

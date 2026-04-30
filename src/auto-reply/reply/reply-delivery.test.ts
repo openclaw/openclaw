@@ -205,6 +205,45 @@ describe("createBlockReplyDeliveryHandler", () => {
     expect(normalized.payload.replyToCurrent).toBeUndefined();
   });
 
+  it("parses camelCase directive aliases only when alias normalization is enabled", () => {
+    const normalized = normalizeReplyPayloadDirectives({
+      payload: { text: "   [[replyToCurrent]]hello" },
+      trimLeadingWhitespace: true,
+      parseMode: "auto",
+      normalizeDirectiveAliases: true,
+    });
+
+    expect(normalized.payload).toMatchObject({
+      text: "hello",
+      replyToCurrent: true,
+    });
+
+    const unchanged = normalizeReplyPayloadDirectives({
+      payload: { text: "   [[replyToCurrent]]hello" },
+      trimLeadingWhitespace: true,
+      parseMode: "auto",
+    });
+    expect(unchanged.payload.replyToCurrent).toBeUndefined();
+    expect(unchanged.payload.text).toBe("[[replyToCurrent]]hello");
+  });
+
+  it("keeps markdown image extraction working with directive alias normalization", () => {
+    const normalized = normalizeReplyPayloadDirectives({
+      payload: { text: "   [[replyToCurrent]]See ![chart](https://example.com/chart.png)" },
+      trimLeadingWhitespace: true,
+      parseMode: "auto",
+      extractMarkdownImages: true,
+      normalizeDirectiveAliases: true,
+    });
+
+    expect(normalized.payload).toMatchObject({
+      text: "See",
+      mediaUrl: "https://example.com/chart.png",
+      mediaUrls: ["https://example.com/chart.png"],
+      replyToCurrent: true,
+    });
+  });
+
   it("passes normalized media block replies through media path normalization", async () => {
     const blockReplyPipeline = {
       enqueue: vi.fn(),

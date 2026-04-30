@@ -12,6 +12,10 @@ import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { hasOrphanReasoningCloseBoundary } from "../shared/text/reasoning-tags.js";
 import { EmbeddedBlockChunker } from "./pi-embedded-block-chunker.js";
 import {
+  resolveAssistantCommentaryDeltaText,
+  type AssistantOutputEntry,
+} from "./pi-embedded-commentary.js";
+import {
   isMessagingToolDuplicateNormalized,
   normalizeTextForComparison,
 } from "./pi-embedded-helpers.js";
@@ -32,6 +36,7 @@ import type {
   EmbeddedPiSubscribeState,
 } from "./pi-embedded-subscribe.handlers.types.js";
 import { isPromiseLike } from "./pi-embedded-subscribe.promise.js";
+import { appendRawStream } from "./pi-embedded-subscribe.raw-stream.js";
 import { filterToolResultMediaUrls } from "./pi-embedded-subscribe.tools.js";
 import type { SubscribeEmbeddedPiSessionParams } from "./pi-embedded-subscribe.types.js";
 import {
@@ -53,6 +58,8 @@ const STREAM_STRIPPED_BLOCK_TAG_NAMES = [
   "antml:thought",
 ] as const;
 const log = createSubsystemLogger("agent/embedded");
+const MAX_TRACKED_DELIVERED_COMMENTARY_SEGMENTS = 500;
+const MAX_STORED_DELIVERED_COMMENTARY_TEXT_LENGTH = 8_000;
 
 function isPotentialTrailingBlockTagFragment(fragment: string): boolean {
   if (!fragment.startsWith("<") || fragment.includes(">")) {
@@ -125,6 +132,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
   const initialPendingToolMediaUrls = collectPendingMediaFromInternalEvents(params.internalEvents);
   const state: EmbeddedPiSubscribeState = {
     assistantTexts: [],
+    assistantOutputs: [],
     toolMetas: [],
     toolMetaById: new Map(),
     toolSummaryById: new Set(),
@@ -161,6 +169,8 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     lastReasoningSent: undefined,
     pendingAssistantUsage: undefined,
     assistantUsageCommitted: false,
+    currentAssistantFallbackMessageId: undefined,
+    nextAssistantFallbackMessageId: 0,
     compactionInFlight: false,
     lastCompactionTokensAfter: undefined,
     pendingCompactionRetry: 0,
@@ -185,6 +195,13 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     pendingAssistantReplyDirectives: undefined,
     deterministicApprovalPromptPending: false,
     deterministicApprovalPromptSent: false,
+    deliveredCommentarySegmentIds: new Set(),
+    deliveredCommentarySegmentTexts: new Map(),
+    deliveredCommentarySegmentTextLengths: new Map(),
+    pendingCommentarySegmentIds: new Set(),
+    commentaryAbortControllers: new Set(),
+    commentaryGeneration: 0,
+    commentaryQueueVersion: 0,
   };
   const usageTotals = {
     input: 0,
@@ -206,6 +223,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
   const pendingMessagingTexts = state.pendingMessagingTexts;
   const pendingMessagingTargets = state.pendingMessagingTargets;
   const pendingBlockReplyTasks = new Set<Promise<void>>();
+  let commentaryDeliveryQueue = Promise.resolve();
   const replyDirectiveAccumulator = createStreamingDirectiveAccumulator();
   const partialReplyDirectiveAccumulator = createStreamingDirectiveAccumulator();
   const shouldAllowSilentTurnText = (text: string | undefined) =>
@@ -278,6 +296,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     state.lastAssistantTextTrimmed = undefined;
     state.assistantTextBaseline = nextAssistantTextBaseline;
     state.pendingAssistantReplyDirectives = undefined;
+    state.currentAssistantFallbackMessageId = undefined;
   };
 
   const rememberAssistantText = (text: string) => {
@@ -855,6 +874,229 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     });
   };
 
+  const resolveCurrentAssistantFallbackMessageId = () => {
+    if (!state.currentAssistantFallbackMessageId) {
+      state.currentAssistantFallbackMessageId = `stream-${state.nextAssistantFallbackMessageId}`;
+      state.nextAssistantFallbackMessageId += 1;
+    }
+    return state.currentAssistantFallbackMessageId;
+  };
+
+  const createCommentaryAbortError = (message: string, reason?: unknown): Error => {
+    const error = new Error(message);
+    error.name = "AbortError";
+    if (reason !== undefined) {
+      Object.defineProperty(error, "cause", {
+        value: reason,
+        enumerable: false,
+        configurable: true,
+        writable: true,
+      });
+    }
+    return error;
+  };
+
+  const abortCommentaryDelivery = (reason?: unknown) => {
+    state.commentaryGeneration += 1;
+    state.commentaryQueueVersion += 1;
+    for (const controller of state.commentaryAbortControllers) {
+      controller.abort(createCommentaryAbortError("Commentary delivery aborted", reason));
+    }
+    state.commentaryAbortControllers.clear();
+    state.pendingCommentarySegmentIds.clear();
+    commentaryDeliveryQueue = Promise.resolve();
+  };
+
+  const rememberDeliveredCommentarySegment = (segmentId: string, deliveredText: string) => {
+    if (state.deliveredCommentarySegmentIds.has(segmentId)) {
+      state.deliveredCommentarySegmentIds.delete(segmentId);
+    }
+    while (state.deliveredCommentarySegmentIds.size >= MAX_TRACKED_DELIVERED_COMMENTARY_SEGMENTS) {
+      const oldestSegmentId = state.deliveredCommentarySegmentIds.values().next().value;
+      if (!oldestSegmentId) {
+        break;
+      }
+      state.deliveredCommentarySegmentIds.delete(oldestSegmentId);
+      state.deliveredCommentarySegmentTexts.delete(oldestSegmentId);
+      state.deliveredCommentarySegmentTextLengths.delete(oldestSegmentId);
+    }
+    state.deliveredCommentarySegmentIds.add(segmentId);
+    state.deliveredCommentarySegmentTexts.set(
+      segmentId,
+      deliveredText.slice(0, MAX_STORED_DELIVERED_COMMENTARY_TEXT_LENGTH),
+    );
+    state.deliveredCommentarySegmentTextLengths.set(segmentId, deliveredText.length);
+  };
+
+  const queueLatestCommentaryDeltaIfNeeded = (segmentId: string) => {
+    const latestSegment = state.assistantOutputs.find(
+      (entry) => entry.segmentId === segmentId && entry.phase === "commentary",
+    );
+    if (!latestSegment) {
+      return;
+    }
+    const deliveredText = state.deliveredCommentarySegmentTexts.get(segmentId);
+    const deliveredTextLength = state.deliveredCommentarySegmentTextLengths.get(segmentId);
+    const unsentText = resolveAssistantCommentaryDeltaText({
+      currentText: latestSegment.text,
+      deliveredText,
+      deliveredTextLength,
+    });
+    if (!unsentText) {
+      return;
+    }
+    queueCommentaryDelivery(
+      {
+        ...latestSegment,
+        text: unsentText,
+      },
+      {
+        allowRedelivery: Boolean(deliveredText),
+        deliveredText: latestSegment.text,
+      },
+    );
+  };
+
+  const queueCommentaryDelivery = (
+    segment: AssistantOutputEntry,
+    options?: { allowRedelivery?: boolean; deliveredText?: string },
+  ) => {
+    const appendCommentaryRawStream = (reason: string, extra?: Record<string, unknown>) => {
+      appendRawStream({
+        ts: Date.now(),
+        event: "assistant_commentary_delivery",
+        runId: params.runId,
+        sessionId: (params.session as { id?: string }).id,
+        reason,
+        segmentId: segment.segmentId,
+        phase: segment.phase,
+        textLength: segment.text.length,
+        ...extra,
+      });
+    };
+    if (params.silentExpected) {
+      appendCommentaryRawStream("skip_silent_expected");
+      return;
+    }
+    if (!params.onCommentaryReply) {
+      appendCommentaryRawStream("skip_no_callback");
+      return;
+    }
+    if (
+      state.pendingCommentarySegmentIds.has(segment.segmentId) ||
+      (!options?.allowRedelivery && state.deliveredCommentarySegmentIds.has(segment.segmentId))
+    ) {
+      appendCommentaryRawStream("skip_pending_or_delivered", {
+        pending: state.pendingCommentarySegmentIds.has(segment.segmentId),
+        delivered: state.deliveredCommentarySegmentIds.has(segment.segmentId),
+        allowRedelivery: options?.allowRedelivery ?? false,
+      });
+      return;
+    }
+    const generation = state.commentaryGeneration;
+    const abortController = new AbortController();
+    let removeUpstreamAbort: (() => void) | undefined;
+    if (params.abortSignal) {
+      const upstreamAbort = () => {
+        abortController.abort(params.abortSignal?.reason);
+      };
+      if (params.abortSignal.aborted) {
+        upstreamAbort();
+      } else {
+        params.abortSignal.addEventListener("abort", upstreamAbort, { once: true });
+        removeUpstreamAbort = () => {
+          params.abortSignal?.removeEventListener("abort", upstreamAbort);
+        };
+      }
+    }
+    state.pendingCommentarySegmentIds.add(segment.segmentId);
+    state.commentaryAbortControllers.add(abortController);
+    state.commentaryQueueVersion += 1;
+    let deliverySucceeded = false;
+    appendCommentaryRawStream("queued", {
+      generation,
+      queueVersion: state.commentaryQueueVersion,
+      timeoutMs: params.blockReplyTimeoutMs,
+    });
+    commentaryDeliveryQueue = commentaryDeliveryQueue
+      .then(async () => {
+        if (generation !== state.commentaryGeneration || abortController.signal.aborted) {
+          appendCommentaryRawStream("skip_stale_or_aborted_before_send", {
+            generation,
+            currentGeneration: state.commentaryGeneration,
+            aborted: abortController.signal.aborted,
+          });
+          return;
+        }
+        appendCommentaryRawStream("send_start", {
+          generation,
+          timeoutMs: params.blockReplyTimeoutMs,
+        });
+        await params.onCommentaryReply?.(
+          { text: segment.text },
+          {
+            abortSignal: abortController.signal,
+            timeoutMs: params.blockReplyTimeoutMs,
+          },
+        );
+        if (generation !== state.commentaryGeneration || abortController.signal.aborted) {
+          appendCommentaryRawStream("skip_stale_or_aborted_after_send", {
+            generation,
+            currentGeneration: state.commentaryGeneration,
+            aborted: abortController.signal.aborted,
+          });
+          return;
+        }
+        rememberDeliveredCommentarySegment(
+          segment.segmentId,
+          options?.deliveredText ?? segment.text,
+        );
+        deliverySucceeded = true;
+        appendCommentaryRawStream("send_success", { generation });
+      })
+      .catch((err) => {
+        if (abortController.signal.aborted || generation !== state.commentaryGeneration) {
+          appendCommentaryRawStream("send_error_ignored", {
+            generation,
+            currentGeneration: state.commentaryGeneration,
+            aborted: abortController.signal.aborted,
+            error: String(err),
+          });
+          return;
+        }
+        appendCommentaryRawStream("send_error", {
+          generation,
+          error: String(err),
+        });
+        log.warn(`commentary reply callback failed: ${String(err)}`);
+      })
+      .finally(() => {
+        removeUpstreamAbort?.();
+        state.commentaryAbortControllers.delete(abortController);
+        if (generation === state.commentaryGeneration) {
+          state.pendingCommentarySegmentIds.delete(segment.segmentId);
+          if (deliverySucceeded) {
+            queueLatestCommentaryDeltaIfNeeded(segment.segmentId);
+          }
+        }
+      });
+  };
+
+  const waitForCommentaryDeliveryRound = async () => {
+    const queueVersion = state.commentaryQueueVersion;
+    const queue = commentaryDeliveryQueue;
+    await queue;
+    return (
+      queueVersion === state.commentaryQueueVersion && state.pendingCommentarySegmentIds.size === 0
+    );
+  };
+
+  const waitForCommentaryDelivery = async () => {
+    while (!(await waitForCommentaryDeliveryRound())) {
+      // Keep draining until no newer commentary work was queued during the wait.
+    }
+  };
+
   const resetForCompactionRetry = () => {
     state.hadDeterministicSideEffect =
       state.hadDeterministicSideEffect === true ||
@@ -884,6 +1126,8 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     state.deterministicApprovalPromptSent = false;
     state.replayState = mergeEmbeddedRunReplayState(state.replayState, params.initialReplayState);
     state.livenessState = "working";
+    state.assistantOutputs.length = 0;
+    abortCommentaryDelivery(createCommentaryAbortError("Commentary delivery aborted on retry"));
     resetAssistantMessageState(0);
   };
 
@@ -928,6 +1172,11 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     getUsageTotals,
     getCompactionCount: () => compactionCount,
     getLastCompactionTokensAfter: () => state.lastCompactionTokensAfter,
+    resolveCurrentAssistantFallbackMessageId,
+    queueCommentaryDelivery,
+    waitForCommentaryDeliveryRound,
+    waitForCommentaryDelivery,
+    abortCommentaryDelivery,
   };
 
   const sessionUnsubscribe = params.session.subscribe(createEmbeddedPiSessionEventHandler(ctx));
@@ -962,11 +1211,15 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
         log.warn(`unsubscribe: compaction abort failed runId=${params.runId} err=${String(err)}`);
       }
     }
+    abortCommentaryDelivery(
+      createCommentaryAbortError("Commentary delivery aborted on unsubscribe"),
+    );
     sessionUnsubscribe();
   };
 
   return {
     assistantTexts,
+    assistantOutputs: state.assistantOutputs,
     toolMetas,
     unsubscribe,
     setTerminalLifecycleMeta: (meta: {
@@ -1010,6 +1263,14 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
       completedCount: state.itemCompletedCount,
       activeCount: state.itemActiveIds.size,
     }),
+    deliveredCommentarySegmentIds: () => Array.from(state.deliveredCommentarySegmentIds),
+    getDeliveredCommentarySegmentTexts: () => new Map(state.deliveredCommentarySegmentTexts),
+    getDeliveredCommentarySegmentTextLengths: () =>
+      new Map(state.deliveredCommentarySegmentTextLengths),
+    getPendingCommentaryDeliveryCount: () => state.pendingCommentarySegmentIds.size,
+    waitForCommentaryDeliveryRound,
+    waitForCommentaryDelivery,
+    abortCommentaryDelivery,
     waitForCompactionRetry: () => {
       // Reject after unsubscribe so callers treat it as cancellation, not success
       if (state.unsubscribed) {

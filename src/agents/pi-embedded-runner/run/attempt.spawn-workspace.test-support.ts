@@ -83,6 +83,7 @@ type AttemptSpawnWorkspaceHoisted = {
 export function createSubscriptionMock(): SubscriptionMock {
   return {
     assistantTexts: [] as string[],
+    assistantOutputs: [],
     toolMetas: [] as Array<{ toolName: string; meta?: string }>,
     unsubscribe: () => {},
     setTerminalLifecycleMeta: () => {},
@@ -105,6 +106,13 @@ export function createSubscriptionMock(): SubscriptionMock {
     getItemLifecycle: () => ({ startedCount: 0, completedCount: 0, activeCount: 0 }),
     isCompacting: () => false,
     isCompactionInFlight: () => false,
+    deliveredCommentarySegmentIds: () => [],
+    getDeliveredCommentarySegmentTexts: () => new Map(),
+    getDeliveredCommentarySegmentTextLengths: () => new Map(),
+    getPendingCommentaryDeliveryCount: () => 0,
+    waitForCommentaryDeliveryRound: async () => true,
+    waitForCommentaryDelivery: async () => {},
+    abortCommentaryDelivery: () => {},
   };
 }
 

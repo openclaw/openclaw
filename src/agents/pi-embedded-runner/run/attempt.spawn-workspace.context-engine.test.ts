@@ -490,9 +490,11 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
   });
 
   it("forwards silentExpected to the embedded subscription", async () => {
+    const abortController = new AbortController();
     const params = buildEmbeddedSubscriptionParams({
       session: {} as never,
       runId: "run-context-engine-forwarding",
+      abortSignal: abortController.signal,
       hookRunner: undefined,
       verboseLevel: undefined,
       reasoningMode: "off",
@@ -519,6 +521,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
 
     expect(params.silentExpected).toBe(true);
     expect(params.sessionKey).toBe(sessionKey);
+    expect(params.abortSignal).toBe(abortController.signal);
   });
 
   it("skips maintenance when afterTurn fails", async () => {

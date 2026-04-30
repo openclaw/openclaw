@@ -6,6 +6,7 @@ import type { SessionSystemPromptReport } from "../../../config/sessions/types.j
 import type { ContextEngine, ContextEnginePromptCacheInfo } from "../../../context-engine/types.js";
 import type { DiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
 import type { PluginHookBeforeAgentStartResult } from "../../../plugins/hook-before-agent-start.types.js";
+import type { AssistantOutputEntry } from "../../pi-embedded-commentary.js";
 import type { MessagingToolSend } from "../../pi-embedded-messaging.types.js";
 import type { AgentRuntimePlan } from "../../runtime-plan/types.js";
 import type { ToolErrorSummary } from "../../tool-error-summary.js";
@@ -86,6 +87,10 @@ export type EmbeddedRunAttemptResult = {
   finalPromptText?: string;
   messagesSnapshot: AgentMessage[];
   assistantTexts: string[];
+  assistantOutputs?: AssistantOutputEntry[];
+  deliveredCommentarySegmentIds?: string[];
+  deliveredCommentarySegmentTexts?: ReadonlyMap<string, string>;
+  deliveredCommentarySegmentTextLengths?: ReadonlyMap<string, number>;
   toolMetas: Array<{ toolName: string; meta?: string }>;
   lastAssistant: AssistantMessage | undefined;
   currentAttemptAssistant?: AssistantMessage | undefined;

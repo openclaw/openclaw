@@ -242,6 +242,7 @@ export function isRetryableWhatsAppOutboundError(error: unknown): boolean {
 
 export async function sendWhatsAppOutboundWithRetry<T>(params: {
   send: () => Promise<T>;
+  abortSignal?: AbortSignal;
   onRetry?: (params: {
     attempt: number;
     maxAttempts: number;
@@ -254,9 +255,11 @@ export async function sendWhatsAppOutboundWithRetry<T>(params: {
   const maxAttempts = params.maxAttempts ?? 3;
   let lastError: unknown;
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    throwIfWhatsAppOutboundAborted(params.abortSignal);
     try {
       return await params.send();
     } catch (error) {
+      throwIfWhatsAppOutboundAborted(params.abortSignal);
       lastError = error;
       const errorText = formatError(error);
       const isLastAttempt = attempt === maxAttempts;
@@ -271,8 +274,47 @@ export async function sendWhatsAppOutboundWithRetry<T>(params: {
         error,
         errorText,
       });
-      await sleep(backoffMs);
+      await sleepWithWhatsAppOutboundAbort(backoffMs, params.abortSignal);
     }
   }
   throw lastError;
+}
+
+function createWhatsAppOutboundAbortError(signal?: AbortSignal): Error {
+  const reason = signal?.reason;
+  if (reason instanceof Error) {
+    return reason;
+  }
+  const error = new Error("WhatsApp outbound send aborted");
+  error.name = "AbortError";
+  return error;
+}
+
+function throwIfWhatsAppOutboundAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) {
+    throw createWhatsAppOutboundAbortError(signal);
+  }
+}
+
+async function sleepWithWhatsAppOutboundAbort(ms: number, signal?: AbortSignal): Promise<void> {
+  throwIfWhatsAppOutboundAborted(signal);
+  if (!signal) {
+    await sleep(ms);
+    return;
+  }
+  let abortListener: (() => void) | undefined;
+  try {
+    await Promise.race([
+      sleep(ms),
+      new Promise<never>((_, reject) => {
+        abortListener = () => reject(createWhatsAppOutboundAbortError(signal));
+        signal.addEventListener("abort", abortListener, { once: true });
+      }),
+    ]);
+  } finally {
+    if (abortListener) {
+      signal.removeEventListener("abort", abortListener);
+    }
+  }
+  throwIfWhatsAppOutboundAborted(signal);
 }

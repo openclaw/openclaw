@@ -1,6 +1,31 @@
 // Shared agent/reply runtime helpers for channel plugins. Keep channel plugins
 // off direct src/auto-reply imports by routing common reply primitives here.
 
+import {
+  normalizeReplyPayloadDirectives as normalizeInternalReplyPayloadDirectives,
+  type ReplyDirectiveParseMode,
+} from "../auto-reply/reply/reply-delivery.js";
+import type { ReplyPayload as SdkReplyPayload } from "./reply-payload.js";
+
+export type { ReplyDirectiveParseMode };
+
+export function normalizeReplyPayloadDirectives(params: {
+  payload: SdkReplyPayload;
+  currentMessageId?: string;
+  silentToken?: string;
+  trimLeadingWhitespace?: boolean;
+  parseMode?: ReplyDirectiveParseMode;
+  extractMarkdownImages?: boolean;
+  normalizeDirectiveAliases?: boolean;
+}): { payload: SdkReplyPayload; isSilent: boolean } {
+  const normalized = normalizeInternalReplyPayloadDirectives(params);
+  const { trustedLocalMedia: _trustedLocalMedia, ...payload } = normalized.payload;
+  return {
+    payload,
+    isSilent: normalized.isSilent,
+  };
+}
+
 export {
   chunkMarkdownText,
   chunkMarkdownTextWithMode,
@@ -28,6 +53,7 @@ export {
 } from "../auto-reply/heartbeat.js";
 export { resolveHeartbeatReplyPayload } from "../auto-reply/heartbeat-reply-payload.js";
 export { getReplyFromConfig } from "../auto-reply/reply/get-reply.js";
+export { COMMENTARY_REPLY_TIMEOUT_MS } from "../auto-reply/types.js";
 export { HEARTBEAT_TOKEN, isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 export { isAbortRequestText } from "../auto-reply/reply/abort.js";
 export { isBtwRequestText } from "../auto-reply/reply/btw-command.js";

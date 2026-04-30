@@ -11,6 +11,13 @@ import type { TypingSignaler } from "./typing-mode.js";
 
 export type ReplyDirectiveParseMode = "always" | "auto" | "never";
 
+function normalizeDirectiveAliases(text: string): string {
+  return text
+    .replaceAll("[[replyToCurrent]]", "[[reply_to_current]]")
+    .replace(/\[\[\s*replyTo\s*:/g, "[[reply_to:")
+    .replaceAll("[[audioAsVoice]]", "[[audio_as_voice]]");
+}
+
 export function normalizeReplyPayloadDirectives(params: {
   payload: ReplyPayload;
   currentMessageId?: string;
@@ -18,10 +25,12 @@ export function normalizeReplyPayloadDirectives(params: {
   trimLeadingWhitespace?: boolean;
   parseMode?: ReplyDirectiveParseMode;
   extractMarkdownImages?: boolean;
+  normalizeDirectiveAliases?: boolean;
 }): { payload: ReplyPayload; isSilent: boolean } {
   const parseMode = params.parseMode ?? "always";
   const silentToken = params.silentToken ?? SILENT_REPLY_TOKEN;
-  const sourceText = params.payload.text ?? "";
+  const rawSourceText = params.payload.text ?? "";
+  const sourceText = params.trimLeadingWhitespace ? rawSourceText.trimStart() : rawSourceText;
 
   const shouldParse =
     parseMode === "always" ||
@@ -30,9 +39,13 @@ export function normalizeReplyPayloadDirectives(params: {
         /media:/i.test(sourceText) ||
         (params.extractMarkdownImages === true && /!\[[^\]]*]\(/.test(sourceText)) ||
         sourceText.includes(silentToken)));
+  const parseSourceText =
+    shouldParse && params.normalizeDirectiveAliases
+      ? normalizeDirectiveAliases(sourceText)
+      : sourceText;
 
   const parsed = shouldParse
-    ? parseReplyDirectives(sourceText, {
+    ? parseReplyDirectives(parseSourceText, {
         currentMessageId: params.currentMessageId,
         silentToken,
         extractMarkdownImages: params.extractMarkdownImages,
@@ -83,6 +96,7 @@ export function createBlockReplyDeliveryHandler(params: {
   replyThreading?: ReplyThreadingPolicy;
   normalizeStreamingText: (payload: ReplyPayload) => { text?: string; skip: boolean };
   applyReplyToMode: (payload: ReplyPayload) => ReplyPayload;
+  normalizeDirectiveAliases?: boolean;
   normalizeMediaPaths?: (payload: ReplyPayload) => Promise<ReplyPayload>;
   typingSignals: TypingSignaler;
   blockStreamingEnabled: boolean;
@@ -125,6 +139,7 @@ export function createBlockReplyDeliveryHandler(params: {
       silentToken: SILENT_REPLY_TOKEN,
       trimLeadingWhitespace: true,
       parseMode: "auto",
+      normalizeDirectiveAliases: params.normalizeDirectiveAliases,
     });
 
     const mediaNormalizedPayload = params.normalizeMediaPaths

@@ -10,6 +10,10 @@ type CapturedReplyPayload = {
   isError?: boolean;
   mediaUrl?: string;
   mediaUrls?: string[];
+  audioAsVoice?: boolean;
+  replyToCurrent?: boolean;
+  replyToId?: string;
+  replyToTag?: boolean;
 };
 
 const { dispatchReplyWithBufferedBlockDispatcherMock } = vi.hoisted(() => ({
@@ -20,6 +24,7 @@ const { dispatchReplyWithBufferedBlockDispatcherMock } = vi.hoisted(() => ({
 }));
 
 vi.mock("./runtime-api.js", () => ({
+  COMMENTARY_REPLY_TIMEOUT_MS: 15_000,
   dispatchReplyWithBufferedBlockDispatcher: dispatchReplyWithBufferedBlockDispatcherMock,
   finalizeInboundContext: <T extends Record<string, unknown>>(ctx: T) => ({
     ...ctx,
@@ -46,6 +51,61 @@ vi.mock("./runtime-api.js", () => ({
   },
   resolveInboundLastRouteSessionKey: (params: { sessionKey: string }) => params.sessionKey,
   resolveMarkdownTableMode: () => undefined,
+  normalizeReplyPayloadDirectives: (params: {
+    payload: CapturedReplyPayload;
+    trimLeadingWhitespace?: boolean;
+    extractMarkdownImages?: boolean;
+    normalizeDirectiveAliases?: boolean;
+  }) => {
+    const rawText = params.payload.text;
+    let text = params.trimLeadingWhitespace ? rawText?.trimStart() : rawText;
+    const isSilent = text?.trim() === "[[silent]]";
+    const parsed: CapturedReplyPayload = { ...params.payload };
+
+    if (params.normalizeDirectiveAliases && text) {
+      text = text
+        .replaceAll("[[replyToCurrent]]", "[[reply_to_current]]")
+        .replaceAll("[[audioAsVoice]]", "[[audio_as_voice]]")
+        .replace(/\[\[\s*replyTo\s*:/g, "[[reply_to:");
+    }
+
+    if (text) {
+      if (/\[\[reply_to_current]]/.test(text)) {
+        parsed.replyToCurrent = true;
+        parsed.replyToTag = true;
+        text = text.replace(/\[\[reply_to_current]]/g, "");
+      }
+      text = text.replace(/\[\[reply_to:([^\]]+)]]/g, (_match, id: string) => {
+        parsed.replyToId = id;
+        parsed.replyToTag = true;
+        return "";
+      });
+      if (/\[\[audio_as_voice]]/.test(text)) {
+        parsed.audioAsVoice = true;
+        text = text.replace(/\[\[audio_as_voice]]/g, "");
+      }
+      text = text.replace(/^\s*MEDIA:\s+\S+.*$/gim, (match) => {
+        parsed.mediaUrls = [
+          ...(parsed.mediaUrls ?? []),
+          match.trim().slice("MEDIA:".length).trim(),
+        ];
+        parsed.mediaUrl = parsed.mediaUrl ?? parsed.mediaUrls[0];
+        return "";
+      });
+      if (params.extractMarkdownImages) {
+        text = text.replace(/!\[[^\]]*]\(([^)]+)\)/g, (_match, url: string) => {
+          parsed.mediaUrls = [...(parsed.mediaUrls ?? []), url];
+          parsed.mediaUrl = parsed.mediaUrl ?? url;
+          return "";
+        });
+      }
+    }
+
+    return {
+      payload: { ...parsed, text: isSilent || !text?.trim() ? undefined : text.trim() },
+      isSilent,
+    };
+  },
   resolveSendableOutboundReplyParts: (payload: {
     text?: string;
     mediaUrls?: string[];
@@ -137,6 +197,21 @@ function getCapturedOnError() {
       };
     }
   )?.dispatcherOptions?.onError;
+}
+
+function getCapturedReplyOptions() {
+  return (
+    capturedDispatchParams as {
+      replyOptions?: {
+        disableBlockStreaming?: boolean;
+        blockReplyTimeoutMs?: number;
+        onCommentaryReply?: (
+          payload: CapturedReplyPayload,
+          context?: { abortSignal?: AbortSignal; timeoutMs?: number },
+        ) => Promise<void> | void;
+      };
+    }
+  )?.replyOptions;
 }
 
 type BufferedReplyParams = Parameters<typeof dispatchWhatsAppBufferedReply>[0];
@@ -610,6 +685,170 @@ describe("whatsapp inbound dispatch", () => {
         }
       )?.replyOptions?.disableBlockStreaming,
     ).toBeUndefined();
+  });
+
+  it("does not pass a live commentary callback by default", async () => {
+    await dispatchBufferedReply();
+
+    expect(getCapturedReplyOptions()?.onCommentaryReply).toBeUndefined();
+    expect(getCapturedReplyOptions()?.blockReplyTimeoutMs).toBeUndefined();
+  });
+
+  it("passes a live commentary callback when WhatsApp commentary delivery is enabled", async () => {
+    const deliverReply = vi.fn(async () => acceptedDeliveryResult());
+    const rememberSentText = vi.fn();
+
+    await dispatchBufferedReply({
+      cfg: {
+        channels: {
+          whatsapp: {
+            blockStreaming: true,
+            commentaryDelivery: "live",
+          },
+        },
+      } as never,
+      deliverReply,
+      rememberSentText,
+    });
+
+    const replyOptions = getCapturedReplyOptions();
+    expect(replyOptions?.onCommentaryReply).toBeTypeOf("function");
+    expect(replyOptions?.blockReplyTimeoutMs).toBe(15_000);
+
+    const abortController = new AbortController();
+    await replyOptions?.onCommentaryReply?.(
+      { text: "   [[replyToCurrent]]working on it" },
+      { abortSignal: abortController.signal, timeoutMs: 123 },
+    );
+
+    expect(deliverReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replyResult: { text: "working on it" },
+        abortSignal: abortController.signal,
+        timeoutMs: 123,
+        skipLog: true,
+      }),
+    );
+    expect(rememberSentText).toHaveBeenCalledWith(
+      "working on it",
+      expect.objectContaining({ combinedBodySessionKey: "agent:main:whatsapp:direct:+1000" }),
+    );
+  });
+
+  it("strips media, audio, and reply directives from live commentary delivery", async () => {
+    const deliverReply = vi.fn(async () => acceptedDeliveryResult());
+    const rememberSentText = vi.fn();
+
+    await dispatchBufferedReply({
+      cfg: { channels: { whatsapp: { commentaryDelivery: "live" } } } as never,
+      deliverReply,
+      rememberSentText,
+    });
+
+    const onCommentaryReply = getCapturedReplyOptions()?.onCommentaryReply;
+    expect(onCommentaryReply).toBeTypeOf("function");
+
+    const cases: CapturedReplyPayload[] = [
+      { text: "working\nMEDIA: https://example.com/generated.jpg" },
+      { text: "working ![preview](https://example.com/generated.jpg)" },
+      { text: "[[audioAsVoice]] working" },
+      { text: "[[replyToCurrent]] working" },
+      { text: "[[replyTo:message-123]] working" },
+      {
+        text: "working",
+        mediaUrl: "https://example.com/generated.jpg",
+        mediaUrls: ["https://example.com/generated.jpg"],
+        audioAsVoice: true,
+        replyToCurrent: true,
+        replyToId: "message-123",
+        replyToTag: true,
+      },
+    ];
+
+    for (const payload of cases) {
+      deliverReply.mockClear();
+      rememberSentText.mockClear();
+
+      await onCommentaryReply?.(payload);
+
+      expect(deliverReply).toHaveBeenCalledTimes(1);
+      expect(deliverReply).toHaveBeenCalledWith(
+        expect.objectContaining({
+          replyResult: { text: "working" },
+          skipLog: true,
+        }),
+      );
+      expect(rememberSentText).toHaveBeenCalledWith(
+        "working",
+        expect.objectContaining({ combinedBodySessionKey: "agent:main:whatsapp:direct:+1000" }),
+      );
+    }
+  });
+
+  it("suppresses media-only live commentary after stripping directives", async () => {
+    const deliverReply = vi.fn(async () => acceptedDeliveryResult());
+    const rememberSentText = vi.fn();
+
+    await dispatchBufferedReply({
+      cfg: { channels: { whatsapp: { commentaryDelivery: "live" } } } as never,
+      deliverReply,
+      rememberSentText,
+    });
+
+    const onCommentaryReply = getCapturedReplyOptions()?.onCommentaryReply;
+
+    await onCommentaryReply?.({ text: "MEDIA: https://example.com/generated.jpg" });
+    await onCommentaryReply?.({ text: "![preview](https://example.com/generated.jpg)" });
+    await onCommentaryReply?.({
+      mediaUrl: "https://example.com/generated.jpg",
+      mediaUrls: ["https://example.com/generated.jpg"],
+      audioAsVoice: true,
+      replyToCurrent: true,
+      replyToId: "message-123",
+      replyToTag: true,
+    });
+
+    expect(deliverReply).not.toHaveBeenCalled();
+    expect(rememberSentText).not.toHaveBeenCalled();
+  });
+
+  it("lets per-account WhatsApp commentary delivery override the channel default", async () => {
+    await dispatchBufferedReply({
+      cfg: {
+        channels: {
+          whatsapp: {
+            commentaryDelivery: "live",
+            accounts: {
+              default: {
+                commentaryDelivery: "off",
+              },
+            },
+          },
+        },
+      } as never,
+    });
+
+    expect(getCapturedReplyOptions()?.onCommentaryReply).toBeUndefined();
+  });
+
+  it("suppresses invisible live commentary payloads", async () => {
+    const deliverReply = vi.fn(async () => acceptedDeliveryResult());
+    const rememberSentText = vi.fn();
+
+    await dispatchBufferedReply({
+      cfg: { channels: { whatsapp: { commentaryDelivery: "live" } } } as never,
+      deliverReply,
+      rememberSentText,
+    });
+
+    await getCapturedReplyOptions()?.onCommentaryReply?.({ text: "   " });
+    await getCapturedReplyOptions()?.onCommentaryReply?.({
+      text: "Reasoning:\n_hidden_",
+      isReasoning: true,
+    });
+
+    expect(deliverReply).not.toHaveBeenCalled();
+    expect(rememberSentText).not.toHaveBeenCalled();
   });
 
   it("treats block-only turns as visible replies instead of silent turns", async () => {

@@ -443,6 +443,13 @@ describe("dispatchTelegramMessage draft streaming", () => {
         }),
       }),
     );
+    expect(
+      (
+        dispatchReplyWithBufferedBlockDispatcher.mock.calls[0]?.[0] as {
+          replyOptions?: { onCommentaryReply?: unknown };
+        }
+      )?.replyOptions?.onCommentaryReply,
+    ).toBeUndefined();
     expect(editMessageTelegram).not.toHaveBeenCalled();
     expect(draftStream.clear).toHaveBeenCalledTimes(1);
   });

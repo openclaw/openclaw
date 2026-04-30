@@ -563,6 +563,45 @@ describe("runEmbeddedPiAgent", () => {
     expect(disposeSessionMcpRuntimeMock).toHaveBeenCalledWith("session:test");
   });
 
+  it("forwards live commentary delivery callbacks into the selected attempt backend", async () => {
+    const sessionFile = nextSessionFile();
+    const cfg = createEmbeddedPiRunnerOpenAiConfig(["mock-1"]);
+    const sessionKey = nextSessionKey();
+    const onCommentaryReply = vi.fn();
+
+    runEmbeddedAttemptMock.mockResolvedValueOnce(
+      makeEmbeddedRunnerAttempt({
+        assistantTexts: ["ok"],
+        lastAssistant: buildEmbeddedRunnerAssistant({
+          content: [{ type: "text", text: "ok" }],
+        }),
+      }),
+    );
+
+    await runEmbeddedPiAgent({
+      sessionId: "session:test",
+      sessionKey,
+      sessionFile,
+      workspaceDir,
+      config: cfg,
+      prompt: "hello",
+      provider: "openai",
+      model: "mock-1",
+      timeoutMs: 5_000,
+      agentDir,
+      runId: nextRunId("commentary-forwarding"),
+      enqueue: immediateEnqueue,
+      onCommentaryReply,
+      blockReplyTimeoutMs: 1234,
+    });
+
+    expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(1);
+    expect(runEmbeddedAttemptMock.mock.calls[0]?.[0]).toMatchObject({
+      onCommentaryReply,
+      blockReplyTimeoutMs: 1234,
+    });
+  });
+
   it("retries a planning-only GPT turn once with an act-now steer", async () => {
     const sessionFile = nextSessionFile();
     const cfg = createEmbeddedPiRunnerOpenAiConfig(["gpt-5.4"]);
