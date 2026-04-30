@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Models: suppress explicitly configured openai-codex/gpt-5.4-mini inline entries so a stale models config written by `openclaw doctor --fix` cannot bypass the manifest capability block and cause repeated assistant-turn failures when the runtime switches to that model on ChatGPT-backed Codex accounts. Conditional suppressions (e.g. qwen Coding Plan endpoint guards) remain bypassable by explicit user configuration. (#74451) Thanks @0xCyda, @hclsys, and @Marvae.
 - Dependencies: refresh workspace runtime, plugin, and tooling packages, including ACP, Pi, AWS SDK, TypeBox, pnpm, oxlint, oxfmt, jsdom, pdfjs, ciao, and tokenjuice, while keeping patched ACP behavior and lint gates current. Thanks @mariozechner.
 - Messages/queue: make `steer` drain all pending Pi steering messages at the next model boundary, keep legacy one-at-a-time steering as `queue`, and add a dedicated steering queue docs page. Thanks @vincentkoc.
 - Messages/queue: default active-run queueing to `steer` with a 500ms followup fallback debounce, and document the queue modes, precedence, and drop policies on the command queue page. Thanks @vincentkoc.
@@ -30,7 +31,10 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- CLI/status: resolve read-only channel setup runtime fallback from the packaged OpenClaw dist root, so `status --all`, `status --deep`, channel, and doctor paths do not crash when an external channel plugin needs setup metadata. Fixes #74693. Thanks @giangthb.
+- Google Meet: block managed Chrome intro/test speech until browser health proves the participant is in-call, and expose `speechReady` diagnostics so login, admission, permission, and audio-bridge blockers no longer look like successful speech. Refs #72478. Thanks @DougButdorf.
 - CLI/update: scope packaged Node compile caches by OpenClaw version and install metadata, so global installs no longer reuse stale compiled chunks after package updates. Thanks @pashpashpash.
+- Channels/Voice call: keep pre-auth webhook in-flight limiting active when socket remote address metadata is missing, so slow-body requests from stripped-IP proxy paths still share the fallback bucket. (#74453) Thanks @davidangularme.
 - Plugin SDK/testing: lazy-load TypeScript from the plugin test-contract runtime and add release checks for critical SDK contract entrypoint imports and bundle size, so published packages fail preflight before shipping ESM-incompatible or oversized contract helpers. Thanks @vincentkoc.
 - Channels/Microsoft Teams: treat configured `19:...@thread.tacv2` and legacy `19:...@thread.skype` team/channel IDs as already resolved during startup, avoiding false `channels unresolved` warnings while preserving Graph name lookup for display-name entries. Fixes #74683. Thanks @dseravalli.
 - CLI/browser: preserve parent flags while lazy-loading browser subcommands, so `openclaw browser --json open` and `openclaw browser --json tabs` keep machine-readable output after reparsing. Fixes #74574. Thanks @devintegeritsm.
