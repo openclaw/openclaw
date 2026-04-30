@@ -73,6 +73,24 @@ export function resetClaudeLiveSessionsForTest(): void {
 }
 
 export function shouldUseClaudeLiveSession(context: PreparedCliRunContext): boolean {
+  // Live-session mode (#69679 "keep claude cli sessions warm") keeps a long-
+  // running claude subprocess across turns but spawns it WITHOUT --resume and
+  // never feeds it the on-disk jsonl history (`writeTurnInput` only sends the
+  // current prompt, see line 594). Conversation context lives only in the
+  // subprocess's in-memory state. Gateway restarts, idle closes, and live-
+  // pool fingerprint mismatches therefore wipe the entire conversation on
+  // claude's side; the on-disk jsonl bound to the session entry is orphaned.
+  //
+  // For a single-user, low-throughput agent like Lares, that trade is
+  // strictly bad: per-turn cold-start of `-p --resume <uuid>` is invisible,
+  // restart-resilience is critical, and prompt-cache hit rates are higher
+  // when claude actually reads the same jsonl every turn.
+  //
+  // Opt back in by exporting `OPENCLAW_ENABLE_CLAUDE_LIVE_SESSION=1` if you
+  // want the warm-pool behavior despite the trade-offs above.
+  if (process.env.OPENCLAW_ENABLE_CLAUDE_LIVE_SESSION !== "1") {
+    return false;
+  }
   return (
     context.backendResolved.id === "claude-cli" &&
     context.preparedBackend.backend.liveSession === "claude-stdio" &&
