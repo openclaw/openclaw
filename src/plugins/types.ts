@@ -1103,7 +1103,6 @@ export type ProviderPluginWizardSetup = {
     initialSelections?: string[];
     loadCatalog?: boolean;
     message?: string;
-    loadCatalog?: boolean;
   };
   /**
    * Optional default-model prompt policy for this auth/setup choice.
