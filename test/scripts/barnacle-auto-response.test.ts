@@ -192,6 +192,7 @@ describe("barnacle-auto-response", () => {
     expect(managedLabelSpecs["r: skill"].description).not.toContain("Clawdhub");
     expect(managedLabelSpecs.dirty.description).toContain("dirty/unrelated");
     expect(managedLabelSpecs["r: support"].description).toContain("support requests");
+    expect(managedLabelSpecs["r: false-positive"].description).toContain("false positive");
     expect(managedLabelSpecs["r: third-party-extension"].description).toContain("ClawHub");
     expect(managedLabelSpecs["r: too-many-prs"].description).toContain("ten active PRs");
 
@@ -392,6 +393,29 @@ describe("barnacle-auto-response", () => {
 
     expect(calls.createComment).toEqual([]);
     expect(calls.update).toEqual([]);
+  });
+
+  it("closes issues tagged as false positives", async () => {
+    const { calls, github } = barnacleGithub([]);
+
+    await runBarnacleAutoResponse({
+      github,
+      context: barnacleIssueContext({}, ["r: false-positive"], {
+        action: "labeled",
+        label: { name: "r: false-positive" },
+        sender: { login: "maintainer", type: "User" },
+      }),
+      core: {
+        info: () => undefined,
+      },
+    });
+
+    expect(calls.createComment).toContainEqual(
+      expect.objectContaining({
+        body: expect.stringContaining("false positive"),
+      }),
+    );
+    expect(calls.update).toContainEqual(expect.objectContaining({ state: "closed" }));
   });
 
   it("does not respond to maintainer comments on contributor items", async () => {
