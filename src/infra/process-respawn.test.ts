@@ -4,6 +4,7 @@ import { SUPERVISOR_HINT_ENV_VARS } from "./supervisor-markers.js";
 
 const spawnMock = vi.hoisted(() => vi.fn());
 const triggerOpenClawRestartMock = vi.hoisted(() => vi.fn());
+const isContainerEnvironmentMock = vi.hoisted(() => vi.fn(() => false));
 
 vi.mock("node:child_process", async () => {
   const { mockNodeBuiltinModule } = await import("openclaw/plugin-sdk/test-node-mocks");
@@ -16,6 +17,9 @@ vi.mock("node:child_process", async () => {
 });
 vi.mock("./restart.js", () => ({
   triggerOpenClawRestart: (...args: unknown[]) => triggerOpenClawRestartMock(...args),
+}));
+vi.mock("./container-environment.js", () => ({
+  isContainerEnvironment: () => isContainerEnvironmentMock(),
 }));
 
 import {
@@ -44,6 +48,8 @@ afterEach(() => {
   process.execArgv = [...originalExecArgv];
   spawnMock.mockClear();
   triggerOpenClawRestartMock.mockClear();
+  isContainerEnvironmentMock.mockReset();
+  isContainerEnvironmentMock.mockReturnValue(false);
   if (originalPlatformDescriptor) {
     Object.defineProperty(process, "platform", originalPlatformDescriptor);
   }
@@ -203,6 +209,21 @@ describe("restartGatewayProcessWithFreshPid", () => {
 
     expect(result.mode).toBe("disabled");
     expect(result.detail).toContain("Scheduled Task");
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it("returns disabled in containers so PID 1 stays alive for in-process restart", () => {
+    delete process.env.OPENCLAW_NO_RESPAWN;
+    clearSupervisorHints();
+    setPlatform("linux");
+    isContainerEnvironmentMock.mockReturnValue(true);
+
+    const result = restartGatewayProcessWithFreshPid();
+
+    expect(result).toEqual({
+      mode: "disabled",
+      detail: "container: use in-process restart to keep PID 1 alive",
+    });
     expect(spawnMock).not.toHaveBeenCalled();
   });
 

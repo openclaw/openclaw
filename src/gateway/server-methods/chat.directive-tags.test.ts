@@ -998,6 +998,36 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     );
   });
 
+  it("chat.send broadcasts final replies for telegram-shaped session keys", async () => {
+    createTranscriptFixture("openclaw-chat-send-telegram-final-");
+    mockState.finalText = "telegram ok";
+    const respond = vi.fn();
+    const context = createChatContext();
+    const sessionKey = "agent:main:telegram:direct:123456";
+
+    const payload = await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-telegram-final",
+      sessionKey,
+    });
+
+    expect(payload).toEqual(
+      expect.objectContaining({
+        runId: "idem-telegram-final",
+        sessionKey,
+        state: "final",
+        message: expect.any(Object),
+      }),
+    );
+    expect(extractFirstTextBlock(payload)).toBe("telegram ok");
+    expect(context.nodeSendToSession).toHaveBeenCalledWith(
+      sessionKey,
+      "chat",
+      expect.objectContaining({ sessionKey, state: "final" }),
+    );
+  });
+
   it("chat.send keeps explicit delivery routes for channel-scoped sessions", async () => {
     createTranscriptFixture("openclaw-chat-send-origin-routing-");
     mockState.finalText = "ok";
@@ -2357,7 +2387,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(JSON.stringify(transcriptUpdate)).not.toContain("[[audio_as_voice]]");
   });
 
-  it("offloads image attachments for text-only session models", async () => {
+  it("routes text-only image offloads into media-understanding fields", async () => {
     createTranscriptFixture("openclaw-chat-send-text-only-attachments-");
     mockState.finalText = "ok";
     mockState.sessionEntry = {
@@ -2394,10 +2424,14 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     });
 
     expect(mockState.lastDispatchImages).toBeUndefined();
-    expect(mockState.lastDispatchImageOrder).toEqual(["offloaded"]);
-    expect(mockState.lastDispatchCtx?.Body).toMatch(
-      /^describe image\n\[media attached: media:\/\/inbound\//,
-    );
+    expect(mockState.lastDispatchImageOrder).toBeUndefined();
+    expect(mockState.lastDispatchCtx?.Body).toBe("describe image");
+    expect(mockState.lastDispatchCtx?.Body).not.toContain("media://");
+    expect(mockState.lastDispatchCtx?.MediaPath).toBe("/tmp/1.png");
+    expect(mockState.lastDispatchCtx?.MediaPaths).toEqual(["/tmp/1.png"]);
+    expect(mockState.lastDispatchCtx?.MediaType).toBe("image/png");
+    expect(mockState.lastDispatchCtx?.MediaTypes).toEqual(["image/png"]);
+    expect(mockState.lastDispatchCtx?.MediaStaged).toBe(true);
     expect(mockState.savedMediaCalls).toEqual([
       expect.objectContaining({ contentType: "image/png", subdir: "inbound" }),
     ]);
@@ -2557,10 +2591,14 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     });
 
     expect(mockState.lastDispatchImages).toBeUndefined();
-    expect(mockState.lastDispatchImageOrder).toEqual(["offloaded"]);
-    expect(mockState.lastDispatchCtx?.Body).toMatch(
-      /^describe image\n\[media attached: media:\/\/inbound\//,
-    );
+    expect(mockState.lastDispatchImageOrder).toBeUndefined();
+    expect(mockState.lastDispatchCtx?.Body).toBe("describe image");
+    expect(mockState.lastDispatchCtx?.Body).not.toContain("media://");
+    expect(mockState.lastDispatchCtx?.MediaPath).toBe("/tmp/1.png");
+    expect(mockState.lastDispatchCtx?.MediaPaths).toEqual(["/tmp/1.png"]);
+    expect(mockState.lastDispatchCtx?.MediaType).toBe("image/png");
+    expect(mockState.lastDispatchCtx?.MediaTypes).toEqual(["image/png"]);
+    expect(mockState.lastDispatchCtx?.MediaStaged).toBe(true);
     expect(mockState.savedMediaCalls).toEqual([
       expect.objectContaining({ contentType: "image/png", subdir: "inbound" }),
     ]);

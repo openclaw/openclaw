@@ -57,6 +57,7 @@ an unavailable backend.
     - Other target harness adapters may still be fetched on demand with `npx` the first time you use them.
     - Vendor auth still has to exist on the host for that harness.
     - If the host has no npm or network access, first-run adapter fetches fail until caches are pre-warmed or the adapter is installed another way.
+
   </Accordion>
   <Accordion title="Runtime prerequisites">
     ACP launches a real external harness process. OpenClaw owns routing,
@@ -141,11 +142,14 @@ Quick `/acp` flow from chat:
 <AccordionGroup>
   <Accordion title="Lifecycle details">
     - Spawn creates or resumes an ACP runtime session, records ACP metadata in the OpenClaw session store, and may create a background task when the run is parent-owned.
+    - Parent-owned ACP sessions are treated as background work even when the runtime session is persistent; completion and cross-surface delivery go through the parent task notifier rather than acting like a normal user-facing chat session.
+    - Task maintenance closes terminal or orphaned parent-owned one-shot ACP sessions. Persistent ACP sessions are preserved while an active conversation binding remains; stale persistent sessions without an active binding are closed so they cannot be silently resumed after the owning task is done or its task record is gone.
     - Bound follow-up messages go directly to the ACP session until the binding is closed, unfocused, reset, or expired.
     - Gateway commands stay local. `/acp ...`, `/status`, and `/unfocus` are never sent as normal prompt text to a bound ACP harness.
     - `cancel` aborts the active turn when the backend supports cancellation; it does not delete the binding or session metadata.
     - `close` ends the ACP session from OpenClaw's point of view and removes the binding. A harness may still keep its own upstream history if it supports resume.
     - Idle runtime workers are eligible for cleanup after `acp.runtime.ttlMinutes`; stored session metadata remains available for `/acp sessions`.
+
   </Accordion>
   <Accordion title="Native Codex routing rules">
     Natural-language triggers that should route to the **native Codex
@@ -176,6 +180,7 @@ Quick `/acp` flow from chat:
     - `openai/*` plus `agentRuntime.id: "codex"` — native Codex app-server embedded runtime.
     - `/codex ...` — native Codex conversation control.
     - `/acp ...` or `runtime: "acp"` — explicit ACP/acpx control.
+
   </Accordion>
   <Accordion title="ACP-routing natural-language triggers">
     Triggers that should route to the ACP runtime:
@@ -276,6 +281,7 @@ Examples:
     - On Discord, `spawnAcpSessions` is only required when OpenClaw needs to create a child thread for `--thread auto|here` — not for `--bind here`.
     - If you spawn to a different ACP agent without `--cwd`, OpenClaw inherits the **target agent's** workspace by default. Missing inherited paths (`ENOENT`/`ENOTDIR`) fall back to the backend default; other access errors (e.g. `EACCES`) surface as spawn errors.
     - Gateway management commands stay local in bound conversations — `/acp ...` commands are handled by OpenClaw even when normal follow-up text routes to the bound ACP session; `/status` and `/unfocus` also stay local whenever command handling is enabled for that surface.
+
   </Accordion>
   <Accordion title="Thread-bound sessions">
     When thread bindings are enabled for a channel adapter:
@@ -303,6 +309,7 @@ Examples:
     - Any channel adapter that exposes session/thread binding capability.
     - Current built-in support: **Discord** threads/channels, **Telegram** topics (forum topics in groups/supergroups and DM topics).
     - Plugin channels can add support through the same binding interface.
+
   </Accordion>
 </AccordionGroup>
 
@@ -323,22 +330,23 @@ top-level `bindings[]` entries.
 - **Telegram forum topic:** `match.channel="telegram"` + `match.peer.id="<chatId>:topic:<topicId>"`
 - **BlueBubbles DM/group:** `match.channel="bluebubbles"` + `match.peer.id="<handle|chat_id:*|chat_guid:*|chat_identifier:*>"`. Prefer `chat_id:*` or `chat_identifier:*` for stable group bindings.
 - **iMessage DM/group:** `match.channel="imessage"` + `match.peer.id="<handle|chat_id:*|chat_guid:*|chat_identifier:*>"`. Prefer `chat_id:*` for stable group bindings.
-  </ParamField>
-  <ParamField path="bindings[].agentId" type="string">
+
+</ParamField>
+<ParamField path="bindings[].agentId" type="string">
   The owning OpenClaw agent id.
-  </ParamField>
-  <ParamField path="bindings[].acp.mode" type='"persistent" | "oneshot"'>
+</ParamField>
+<ParamField path="bindings[].acp.mode" type='"persistent" | "oneshot"'>
   Optional ACP override.
-  </ParamField>
-  <ParamField path="bindings[].acp.label" type="string">
+</ParamField>
+<ParamField path="bindings[].acp.label" type="string">
   Optional operator-facing label.
-  </ParamField>
-  <ParamField path="bindings[].acp.cwd" type="string">
+</ParamField>
+<ParamField path="bindings[].acp.cwd" type="string">
   Optional runtime working directory.
-  </ParamField>
-  <ParamField path="bindings[].acp.backend" type="string">
+</ParamField>
+<ParamField path="bindings[].acp.backend" type="string">
   Optional backend override.
-  </ParamField>
+</ParamField>
 
 ### Runtime defaults per agent
 
@@ -714,7 +722,8 @@ OpenClaw sandbox.
 - OpenClaw's sandbox policy does **not** wrap ACP harness execution.
 - OpenClaw still enforces ACP feature gates, allowed agents, session ownership, channel bindings, and Gateway delivery policy.
 - Use `runtime: "subagent"` for sandbox-enforced OpenClaw-native work.
-  </Warning>
+
+</Warning>
 
 Current limitations:
 

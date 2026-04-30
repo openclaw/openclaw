@@ -49,6 +49,13 @@ describe("normalizeDiscordOutboundTarget", () => {
   it("trims whitespace", () => {
     expect(normalizeDiscordOutboundTarget("  123  ")).toEqual({ ok: true, to: "channel:123" });
   });
+
+  it("normalizes bare IDs in allowFrom to user: targets", () => {
+    expect(normalizeDiscordOutboundTarget("1470130713209602050", ["1470130713209602050"])).toEqual({
+      ok: true,
+      to: "user:1470130713209602050",
+    });
+  });
 });
 
 describe("discordOutbound", () => {
@@ -70,6 +77,38 @@ describe("discordOutbound", () => {
       text: "hello",
       result,
     });
+  });
+
+  it("sanitizes internal runtime scaffolding before Discord delivery", () => {
+    expect(
+      discordOutbound.sanitizeText?.({
+        text: "<previous_response>null</previous_response>visible",
+        payload: { text: "<previous_response>null</previous_response>visible" },
+      }),
+    ).toBe("visible");
+  });
+
+  it("uses allowFrom to disambiguate bare numeric DM delivery targets", () => {
+    expect(
+      discordOutbound.resolveTarget?.({
+        to: "1470130713209602050",
+        allowFrom: ["1470130713209602050"],
+      }),
+    ).toEqual({
+      ok: true,
+      to: "user:1470130713209602050",
+    });
+  });
+
+  it("preserves Discord-native angle markup while stripping internal scaffolding", () => {
+    expect(
+      discordOutbound.sanitizeText?.({
+        text: "soon <t:1710000000:R> run </deploy:123> <previous_response>null</previous_response>",
+        payload: {
+          text: "soon <t:1710000000:R> run </deploy:123> <previous_response>null</previous_response>",
+        },
+      }),
+    ).toBe("soon <t:1710000000:R> run </deploy:123> ");
   });
 
   it("forwards explicit formatting options to Discord text sends", async () => {

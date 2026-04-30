@@ -217,6 +217,12 @@ Choose your preferred auth method and follow the setup steps.
     It does not select or auto-enable the bundled Codex app-server harness.
     </Note>
 
+    <Warning>
+    `openai-codex/gpt-5.4-mini` is not a supported Codex OAuth route. Use
+    `openai/gpt-5.4-mini` with an OpenAI API key, or use
+    `openai-codex/gpt-5.5` with Codex OAuth.
+    </Warning>
+
     ### Config example
 
     ```json5

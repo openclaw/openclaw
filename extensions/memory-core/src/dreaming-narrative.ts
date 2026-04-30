@@ -1045,3 +1045,53 @@ export async function generateAndAppendDreamNarrative(params: {
     });
   }
 }
+
+// ── Detached narrative concurrency limit ───────────────────────────────
+//
+// Cron-driven dreaming detaches narrative generation across light, REM, and
+// deep phases for every workspace, so a 10-workspace cron sweep used to fire
+// 30 concurrent narrative subagents at once. Each one holds the session
+// write-lock while it runs and burns a model slot, which caused lock
+// contention (>30 s) and cascading narrative timeouts (#73198).
+//
+// `runDetachedDreamNarrative` wraps `generateAndAppendDreamNarrative` with a
+// FIFO queue capped at `DETACHED_NARRATIVE_CONCURRENCY` so the total in-flight
+// detached narratives across phases/workspaces stays bounded.
+const DETACHED_NARRATIVE_CONCURRENCY = 3;
+
+let activeDetachedNarratives = 0;
+const detachedNarrativeQueue: Array<() => void> = [];
+
+function releaseDetachedNarrativeSlot(): void {
+  activeDetachedNarratives -= 1;
+  detachedNarrativeQueue.shift()?.();
+}
+
+async function acquireDetachedNarrativeSlot(): Promise<void> {
+  if (activeDetachedNarratives >= DETACHED_NARRATIVE_CONCURRENCY) {
+    await new Promise<void>((resolve) => {
+      detachedNarrativeQueue.push(resolve);
+    });
+  }
+  activeDetachedNarratives += 1;
+}
+
+export function runDetachedDreamNarrative(
+  params: Parameters<typeof generateAndAppendDreamNarrative>[0],
+): void {
+  queueMicrotask(() => {
+    void (async () => {
+      await acquireDetachedNarrativeSlot();
+      try {
+        await generateAndAppendDreamNarrative(params);
+      } catch {
+        // Detached narratives intentionally swallow errors — callers (cron
+        // sweeps) cannot recover, and surfacing here would only cause noisy
+        // unhandled rejections. Logging happens inside
+        // generateAndAppendDreamNarrative.
+      } finally {
+        releaseDetachedNarrativeSlot();
+      }
+    })();
+  });
+}

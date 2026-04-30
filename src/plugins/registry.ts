@@ -24,9 +24,17 @@ import {
   NODE_SYSTEM_NOTIFY_COMMAND,
   NODE_SYSTEM_RUN_COMMANDS,
 } from "../infra/node-commands.js";
+import {
+  createPluginStateKeyedStore,
+  type OpenKeyedStoreOptions,
+  type PluginStateKeyedStore,
+} from "../plugin-state/plugin-state-store.js";
 import { normalizePluginGatewayMethodScope } from "../shared/gateway-method-policy.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import {
   getDetachedTaskLifecycleRuntimeRegistration,
   registerDetachedTaskLifecycleRuntime,
@@ -46,7 +54,7 @@ import {
   registerPluginCommand,
   validatePluginCommandDefinition,
 } from "./command-registration.js";
-import { clearPluginCommandsForPlugin } from "./command-registry-state.js";
+import { clearPluginCommandsForPlugin, pluginCommands } from "./command-registry-state.js";
 import {
   getRegisteredCompactionProvider,
   registerCompactionProvider,
@@ -802,13 +810,22 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
   };
 
   const registerAgentHarness = (record: PluginRecord, harness: AgentHarness) => {
-    const id = harness.id.trim();
+    const id = normalizeOptionalString((harness as Partial<AgentHarness> | undefined)?.id) ?? "";
     if (!id) {
       pushDiagnostic({
         level: "error",
         pluginId: record.id,
         source: record.source,
         message: "agent harness registration missing id",
+      });
+      return;
+    }
+    if (typeof harness.supports !== "function" || typeof harness.runAttempt !== "function") {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `agent harness "${id}" registration missing required runtime methods`,
       });
       return;
     }
@@ -1329,6 +1346,15 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       });
       return;
     }
+    if (allowReservedCommandNames && record.id !== normalizeLowercaseStringOrEmpty(name)) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `command registration failed: Reserved command ownership requires plugin id "${record.id}" to match reserved command name "${normalizeLowercaseStringOrEmpty(name)}"`,
+      });
+      return;
+    }
 
     // For snapshot (non-activating) loads, record the command locally without touching the
     // global plugin command registry so running gateway commands stay intact.
@@ -1350,11 +1376,17 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
         return;
       }
     } else {
-      const result = registerPluginCommand(record.id, command, {
-        pluginName: record.name,
-        pluginRoot: record.rootDir,
-        allowReservedCommandNames,
-      });
+      const { ownership: _ownership, ...commandForRegistration } = command;
+      void _ownership;
+      const result = registerPluginCommand(
+        record.id,
+        allowReservedCommandNames ? commandForRegistration : command,
+        {
+          pluginName: record.name,
+          pluginRoot: record.rootDir,
+          allowReservedCommandNames,
+        },
+      );
       if (!result.ok) {
         pushDiagnostic({
           level: "error",
@@ -1363,6 +1395,12 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
           message: `command registration failed: ${result.error}`,
         });
         return;
+      }
+      if (allowReservedCommandNames) {
+        const registeredCommand = pluginCommands.get(`/${name.toLowerCase()}`);
+        if (registeredCommand?.pluginId === record.id) {
+          registeredCommand.ownership = "reserved";
+        }
       }
     }
 
@@ -1822,7 +1860,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     record: PluginRecord,
     hookName: K,
     handler: PluginHookHandlerMap[K],
-    opts?: { priority?: number },
+    opts?: { priority?: number; timeoutMs?: number },
     policy?: PluginTypedHookPolicy,
   ) => {
     if (!isPluginHookName(hookName)) {
@@ -1884,6 +1922,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       hookName,
       handler: effectiveHandler,
       priority: opts?.priority,
+      ...(opts?.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : {}),
       source: record.source,
     } as TypedPluginHookRegistration);
   };
@@ -1910,6 +1949,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
   });
 
   const pluginRuntimeById = new Map<string, PluginRuntime>();
+  const pluginRuntimeRecordById = new Map<string, PluginRecord>();
 
   const resolvePluginRuntime = (pluginId: string): PluginRuntime => {
     const cached = pluginRuntimeById.get(pluginId);
@@ -1918,6 +1958,23 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     }
     const runtime = new Proxy(registryParams.runtime, {
       get(target, prop, receiver) {
+        if (prop === "state") {
+          const baseState = Reflect.get(target, prop, receiver);
+          return {
+            ...baseState,
+            openKeyedStore: <T>(options: OpenKeyedStoreOptions): PluginStateKeyedStore<T> => {
+              const record =
+                pluginRuntimeRecordById.get(pluginId) ??
+                registry.plugins.find((entry) => entry.id === pluginId);
+              if (record?.origin !== "bundled") {
+                throw new Error(
+                  "openKeyedStore is only available for bundled plugins in this release.",
+                );
+              }
+              return createPluginStateKeyedStore<T>(pluginId, options);
+            },
+          } satisfies PluginRuntime["state"];
+        }
         if (prop !== "subagent") {
           return Reflect.get(target, prop, receiver);
         }
@@ -1950,6 +2007,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
   ): OpenClawPluginApi => {
     const registrationMode = params.registrationMode ?? "full";
     const registrationCapabilities = resolvePluginRegistrationCapabilities(registrationMode);
+    pluginRuntimeRecordById.set(record.id, record);
     return buildPluginApi({
       id: record.id,
       name: record.name,
@@ -2030,35 +2088,84 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                 registerConversationBindingResolvedHandler(record, handler),
               registerCommand: (command) => registerCommand(record, command),
               registerContextEngine: (id, factory) => {
-                if (id === defaultSlotIdForKey("contextEngine")) {
+                const normalizedId = normalizeOptionalString(id) ?? "";
+                if (!normalizedId) {
                   pushDiagnostic({
                     level: "error",
                     pluginId: record.id,
                     source: record.source,
-                    message: `context engine id reserved by core: ${id}`,
+                    message: "context engine registration missing id",
                   });
                   return;
                 }
-                const result = registerContextEngineForOwner(id, factory, `plugin:${record.id}`, {
-                  allowSameOwnerRefresh: true,
-                });
+                if (typeof factory !== "function") {
+                  pushDiagnostic({
+                    level: "error",
+                    pluginId: record.id,
+                    source: record.source,
+                    message: `context engine "${normalizedId}" registration missing factory`,
+                  });
+                  return;
+                }
+                if (normalizedId === defaultSlotIdForKey("contextEngine")) {
+                  pushDiagnostic({
+                    level: "error",
+                    pluginId: record.id,
+                    source: record.source,
+                    message: `context engine id reserved by core: ${normalizedId}`,
+                  });
+                  return;
+                }
+                const result = registerContextEngineForOwner(
+                  normalizedId,
+                  factory,
+                  `plugin:${record.id}`,
+                  {
+                    allowSameOwnerRefresh: true,
+                  },
+                );
                 if (!result.ok) {
                   pushDiagnostic({
                     level: "error",
                     pluginId: record.id,
                     source: record.source,
-                    message: `context engine already registered: ${id} (${result.existingOwner})`,
+                    message: `context engine already registered: ${normalizedId} (${result.existingOwner})`,
                   });
                   return;
                 }
-                if (!record.contextEngineIds?.includes(id)) {
-                  record.contextEngineIds = [...(record.contextEngineIds ?? []), id];
+                if (!record.contextEngineIds?.includes(normalizedId)) {
+                  record.contextEngineIds = [...(record.contextEngineIds ?? []), normalizedId];
                 }
               },
               registerCompactionProvider: (
                 provider: Parameters<OpenClawPluginApi["registerCompactionProvider"]>[0],
               ) => {
-                const existing = getRegisteredCompactionProvider(provider.id);
+                const id = normalizeOptionalString(
+                  (
+                    provider as Partial<
+                      Parameters<OpenClawPluginApi["registerCompactionProvider"]>[0]
+                    > | null
+                  )?.id,
+                );
+                if (!id) {
+                  pushDiagnostic({
+                    level: "error",
+                    pluginId: record.id,
+                    source: record.source,
+                    message: "compaction provider registration missing id",
+                  });
+                  return;
+                }
+                if (typeof provider?.summarize !== "function") {
+                  pushDiagnostic({
+                    level: "error",
+                    pluginId: record.id,
+                    source: record.source,
+                    message: `compaction provider "${id}" registration missing summarize`,
+                  });
+                  return;
+                }
+                const existing = getRegisteredCompactionProvider(id);
                 if (existing) {
                   const ownerDetail = existing.ownerPluginId
                     ? ` (owner: ${existing.ownerPluginId})`
@@ -2067,7 +2174,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                     level: "error",
                     pluginId: record.id,
                     source: record.source,
-                    message: `compaction provider already registered: ${provider.id}${ownerDetail}`,
+                    message: `compaction provider already registered: ${id}${ownerDetail}`,
                   });
                   return;
                 }
@@ -2160,6 +2267,15 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                 registerMemoryPromptSection(builder);
               },
               registerMemoryPromptSupplement: (builder) => {
+                if (typeof builder !== "function") {
+                  pushDiagnostic({
+                    level: "error",
+                    pluginId: record.id,
+                    source: record.source,
+                    message: "memory prompt supplement registration missing builder",
+                  });
+                  return;
+                }
                 registerMemoryPromptSupplement(record.id, builder);
               },
               registerMemoryCorpusSupplement: (supplement) => {

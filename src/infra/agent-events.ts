@@ -159,6 +159,12 @@ export function registerAgentRunContext(runId: string, context: AgentRunContext)
   if (context.isHeartbeat !== undefined && existing.isHeartbeat !== context.isHeartbeat) {
     existing.isHeartbeat = context.isHeartbeat;
   }
+  if (context.registeredAt !== undefined) {
+    existing.registeredAt = context.registeredAt;
+  }
+  if (context.lastActiveAt !== undefined) {
+    existing.lastActiveAt = context.lastActiveAt;
+  }
 }
 
 export function getAgentRunContext(runId: string) {
@@ -209,7 +215,14 @@ export function emitAgentEvent(event: Omit<AgentEventPayload, "seq" | "ts">) {
   const isControlUiVisible = context?.isControlUiVisible ?? true;
   const eventSessionKey =
     typeof event.sessionKey === "string" && event.sessionKey.trim() ? event.sessionKey : undefined;
-  const sessionKey = isControlUiVisible ? (eventSessionKey ?? context?.sessionKey) : undefined;
+  // Hidden channel-routed runs should not leak live assistant/tool traffic into
+  // Control UI, but lifecycle events still need the session key so gateway
+  // listeners can persist terminal session state even if run-context lookup is
+  // unavailable by the time the terminal event arrives. Terminal failures are
+  // emitted on the lifecycle stream with `phase: "error"`; the separate error
+  // stream remains redacted for hidden runs because it is observational only.
+  const preserveSessionKey = isControlUiVisible || event.stream === "lifecycle";
+  const sessionKey = preserveSessionKey ? (eventSessionKey ?? context?.sessionKey) : undefined;
   const enriched: AgentEventPayload = {
     ...event,
     sessionKey,

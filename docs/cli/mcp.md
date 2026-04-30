@@ -65,6 +65,7 @@ Use [`openclaw acp`](/cli/acp) instead when OpenClaw should host the coding runt
     - one-shot agent entry points such as `openclaw agent` and `openclaw infer model run` retire any bundled MCP runtimes they open when the reply completes, so repeated scripted runs do not accumulate stdio MCP child processes
     - stdio MCP servers launched by OpenClaw (bundled or user-configured) are torn down as a process tree on shutdown, so child subprocesses started by the server do not survive after the parent stdio client exits
     - deleting or resetting a session disposes that session's MCP clients through the shared runtime cleanup path, so there are no lingering stdio connections tied to a removed session
+
   </Accordion>
 </AccordionGroup>
 
@@ -203,6 +204,7 @@ Current event types:
 - the queue is live-only; it starts when the MCP bridge starts
 - `events_poll` and `events_wait` do not replay older Gateway history by themselves
 - durable backlog should be read with `messages_read`
+
 </Warning>
 
 ### Claude channel notifications
@@ -360,6 +362,7 @@ Those saved definitions are for runtimes that OpenClaw launches or configures la
     - runtime adapters decide which transport shapes they actually support at execution time
     - embedded Pi exposes configured MCP tools in normal `coding` and `messaging` tool profiles; `minimal` still hides them, and `tools.deny: ["bundle-mcp"]` disables them explicitly
     - session-scoped bundled MCP runtimes are reaped after `mcp.sessionIdleTtlMs` milliseconds of idle time (default 10 minutes; set `0` to disable) and one-shot embedded runs clean them up at run end
+
   </Accordion>
 </AccordionGroup>
 

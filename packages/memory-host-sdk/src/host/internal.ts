@@ -16,10 +16,12 @@ import {
   CHARS_PER_TOKEN_ESTIMATE,
   detectMime,
   estimateStringChars,
-  resolveCanonicalRootMemoryFile,
   runTasksWithConcurrency,
+} from "./openclaw-runtime-io.js";
+import {
+  resolveCanonicalRootMemoryFile,
   shouldSkipRootMemoryAuxiliaryPath,
-} from "./openclaw-runtime.js";
+} from "./openclaw-runtime-memory.js";
 
 export { hashText } from "./hash.js";
 import { hashText } from "./hash.js";
@@ -86,7 +88,7 @@ export function isMemoryPath(relPath: string): boolean {
   if (!normalized) {
     return false;
   }
-  if (normalized === CANONICAL_ROOT_MEMORY_FILENAME || normalized === "dreams.md") {
+  if (normalized === CANONICAL_ROOT_MEMORY_FILENAME || normalized.toLowerCase() === "dreams.md") {
     return true;
   }
   return normalized.startsWith("memory/");
