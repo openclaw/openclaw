@@ -146,20 +146,72 @@ function redactProxyValidationResult(result: ProxyValidationResult): ProxyValida
   };
 }
 
+function formatProxyCheckLine(check: ProxyValidationResult["checks"][number]): string {
+  const icon = check.ok ? "✓" : "✗";
+  const paddedKind = check.kind.padEnd(7, " ");
+  const status = check.status === undefined ? "" : ` HTTP ${check.status}`;
+  return `  ${icon} ${paddedKind} ${check.url}${status}`;
+}
+
+function formatProxyValidationNextSteps(result: ProxyValidationResult): string[] {
+  if (result.ok) {
+    return [];
+  }
+  if (result.config.errors.length > 0) {
+    return [
+      "Fix proxy.proxyUrl, OPENCLAW_PROXY_URL, or --proxy-url so it uses a reachable http:// proxy.",
+    ];
+  }
+  if (result.checks.some((check) => !check.ok && check.kind === "allowed")) {
+    return [
+      "Confirm the proxy is reachable from this deployment context and permits the allowed destinations.",
+    ];
+  }
+  if (result.checks.some((check) => !check.ok && check.kind === "denied")) {
+    return [
+      "Update the proxy ACL so denied destinations are blocked, or pass the expected --denied-url values.",
+    ];
+  }
+  return [
+    "Review the failed checks above and update proxy configuration or validation destinations.",
+  ];
+}
+
 function formatProxyValidationText(result: ProxyValidationResult): string {
   const redactedProxyUrl = redactProxyUrl(result.config.proxyUrl);
   const lines = [
-    `Proxy validation: ${result.ok ? "passed" : "failed"}`,
-    `Effective proxy: ${redactedProxyUrl ?? "not configured"} (${result.config.source})`,
+    `Proxy validation ${result.ok ? "passed" : "failed"}`,
+    "",
+    "Proxy",
+    `  Source: ${result.config.source}`,
+    `  URL:    ${redactedProxyUrl ?? "not configured"}`,
   ];
-  for (const error of result.config.errors) {
-    lines.push(`- ERROR: ${error}`);
+
+  if (result.config.errors.length > 0) {
+    lines.push("", "Problems");
+    for (const error of result.config.errors) {
+      lines.push(`  - ${error}`);
+    }
   }
-  for (const check of result.checks) {
-    const status = check.status === undefined ? "" : ` status=${check.status}`;
-    const error = check.error ? ` error=${check.error}` : "";
-    lines.push(`- ${check.ok ? "PASS" : "FAIL"} ${check.kind} ${check.url}${status}${error}`);
+
+  if (result.checks.length > 0) {
+    lines.push("", "Checks");
+    for (const check of result.checks) {
+      lines.push(formatProxyCheckLine(check));
+      if (check.error) {
+        lines.push(`    ${check.error}`);
+      }
+    }
   }
+
+  const nextSteps = formatProxyValidationNextSteps(result);
+  if (nextSteps.length > 0) {
+    lines.push("", "Next steps");
+    for (const nextStep of nextSteps) {
+      lines.push(`  ${nextStep}`);
+    }
+  }
+
   return `${lines.join("\n")}\n`;
 }
 

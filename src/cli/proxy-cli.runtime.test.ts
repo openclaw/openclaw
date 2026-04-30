@@ -125,9 +125,12 @@ describe("proxy cli runtime", () => {
       timeoutMs: 1234,
     });
     expect(process.stdout.write).toHaveBeenCalledWith(
-      "Proxy validation: passed\n" +
-        "Effective proxy: http://config-proxy.example:3128/ (config)\n" +
-        "- PASS allowed https://example.com/ status=200\n",
+      "Proxy validation passed\n\n" +
+        "Proxy\n" +
+        "  Source: config\n" +
+        "  URL:    http://config-proxy.example:3128/\n\n" +
+        "Checks\n" +
+        "  ✓ allowed https://example.com/ HTTP 200\n",
     );
     expect(process.exitCode).toBeUndefined();
   });
@@ -148,8 +151,10 @@ describe("proxy cli runtime", () => {
     await runProxyValidateCommand({});
 
     expect(process.stdout.write).toHaveBeenCalledWith(
-      "Proxy validation: passed\n" +
-        "Effective proxy: http://redacted:redacted@proxy.example:3128/ (config)\n",
+      "Proxy validation passed\n\n" +
+        "Proxy\n" +
+        "  Source: config\n" +
+        "  URL:    http://redacted:redacted@proxy.example:3128/\n",
     );
   });
 
@@ -202,9 +207,14 @@ describe("proxy cli runtime", () => {
     await runProxyValidateCommand({});
 
     expect(process.stdout.write).toHaveBeenCalledWith(
-      "Proxy validation: failed\n" +
-        "Effective proxy: <invalid proxy URL> (env)\n" +
-        "- ERROR: proxy URL must use http://\n",
+      "Proxy validation failed\n\n" +
+        "Proxy\n" +
+        "  Source: env\n" +
+        "  URL:    <invalid proxy URL>\n\n" +
+        "Problems\n" +
+        "  - proxy URL must use http://\n\n" +
+        "Next steps\n" +
+        "  Fix proxy.proxyUrl, OPENCLAW_PROXY_URL, or --proxy-url so it uses a reachable http:// proxy.\n",
     );
   });
 
@@ -239,6 +249,50 @@ describe("proxy cli runtime", () => {
         2,
       )}\n`,
     );
+  });
+
+  it("prints actionable check failure output", async () => {
+    runProxyValidationMock.mockResolvedValueOnce({
+      ok: false,
+      config: {
+        enabled: true,
+        proxyUrl: "http://proxy.example:3128",
+        source: "config",
+        errors: [],
+      },
+      checks: [
+        {
+          kind: "allowed",
+          url: "http://target.example/allowed",
+          ok: true,
+          status: 200,
+        },
+        {
+          kind: "denied",
+          url: "http://target.example/allowed",
+          ok: false,
+          status: 200,
+          error: "Denied destination was reachable through the proxy",
+        },
+      ],
+    });
+    const { runProxyValidateCommand } = await import("./proxy-cli.runtime.js");
+
+    await runProxyValidateCommand({});
+
+    expect(process.stdout.write).toHaveBeenCalledWith(
+      "Proxy validation failed\n\n" +
+        "Proxy\n" +
+        "  Source: config\n" +
+        "  URL:    http://proxy.example:3128/\n\n" +
+        "Checks\n" +
+        "  ✓ allowed http://target.example/allowed HTTP 200\n" +
+        "  ✗ denied  http://target.example/allowed HTTP 200\n" +
+        "    Denied destination was reachable through the proxy\n\n" +
+        "Next steps\n" +
+        "  Update the proxy ACL so denied destinations are blocked, or pass the expected --denied-url values.\n",
+    );
+    expect(process.exitCode).toBe(1);
   });
 
   it("prints proxy validation JSON and sets exit code on failure", async () => {
