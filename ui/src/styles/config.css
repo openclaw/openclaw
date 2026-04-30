@@ -1316,6 +1316,21 @@
   border-color: var(--border);
 }
 
+@media (hover: none) and (pointer: coarse) {
+  .config-search__input,
+  .settings-theme-import__input,
+  .config-raw-field textarea,
+  .cfg-input,
+  .cfg-input--sm,
+  .cfg-textarea,
+  .cfg-textarea--sm,
+  .cfg-number__input,
+  .cfg-select {
+    /* iOS Safari: inputs < 16px trigger auto-zoom on focus */
+    font-size: 16px;
+  }
+}
+
 /* Segmented Control */
 .cfg-segmented {
   display: inline-flex;

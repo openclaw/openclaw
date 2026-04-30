@@ -23,4 +23,12 @@ describe("agent fallback chip styles", () => {
     expect(css).toContain("outline-offset: 2px;");
     expect(css).toContain(".agent-chip-input .chip-remove:disabled");
   });
+
+  it("keeps touch-primary field controls large enough to avoid iOS focus zoom", () => {
+    const css = readFileSync(path.join(process.cwd(), "ui/src/styles/components.css"), "utf8");
+
+    expect(css).toMatch(
+      /@media \(hover: none\) and \(pointer: coarse\) \{[\s\S]*\.field input,[\s\S]*\.field textarea,[\s\S]*\.field select \{[\s\S]*font-size: 16px;/,
+    );
+  });
 });

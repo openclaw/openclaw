@@ -565,6 +565,14 @@
   box-sizing: border-box;
 }
 
+@media (hover: none) and (pointer: coarse) {
+  .chat-compose .chat-compose__field textarea,
+  .agent-chat__input > textarea {
+    /* iOS Safari: inputs < 16px trigger auto-zoom on focus */
+    font-size: 16px;
+  }
+}
+
 .agent-chat__input > textarea:focus-visible {
   box-shadow: none;
 }

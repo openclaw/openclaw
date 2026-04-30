@@ -28,4 +28,15 @@ describe("chat layout styles", () => {
     expect(css).toContain("font-size: 20px;");
     expect(css).toContain("place-items: center;");
   });
+
+  it("keeps chat textareas at 16px without misplaced stylelint suppression", () => {
+    const css = readLayoutCss();
+
+    expect(css).toContain("font-size: 14px;");
+    expect(css).toContain("font-size: 0.92rem;");
+    expect(css).toMatch(
+      /@media \(hover: none\) and \(pointer: coarse\) \{[\s\S]*\.chat-compose \.chat-compose__field textarea,[\s\S]*\.agent-chat__input > textarea \{[\s\S]*font-size: 16px;/,
+    );
+    expect(css).not.toContain("stylelint-disable-next-line declaration-property-allowed-list");
+  });
 });
