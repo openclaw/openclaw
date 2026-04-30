@@ -31,6 +31,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../../shared/string-coerce.js";
+import { shouldAttemptTtsPayload } from "../../tts/tts-config.js";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
@@ -580,6 +581,39 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
   if (!params.media) {
     // Use path/filePath if media not set, then fall back to parsed directives
     params.media = mergedMediaUrls[0] || undefined;
+  }
+
+  // Tagged TTS hook: the auto-reply dispatch path runs maybeApplyTtsToPayload
+  // (see src/auto-reply/reply/dispatch-from-config.ts), but messages sent
+  // through this tool flow (e.g. agents using mcp__openclaw__message in
+  // cron-driven workflows) historically bypassed it, so
+  // [[tts:text]]...[[/tts:text]] markup landed in chat as plain text and no
+  // audio was synthesized. Run the same hook here when no media is attached
+  // so the message tool honors the same tagged-TTS contract as auto-reply.
+  if (
+    !params.media &&
+    mergedMediaUrls.length === 0 &&
+    shouldAttemptTtsPayload({ cfg, agentId, channelId: channel, accountId: accountId ?? undefined })
+  ) {
+    const { maybeApplyTtsToPayload } = await import("../../tts/tts.runtime.js");
+    const ttsApplied = await maybeApplyTtsToPayload({
+      payload: { text: message },
+      cfg,
+      channel,
+      kind: "final",
+    });
+    if (ttsApplied.mediaUrl) {
+      message = ttsApplied.text ?? "";
+      params.message = message;
+      params.media = ttsApplied.mediaUrl;
+      if (ttsApplied.audioAsVoice) {
+        params.asVoice = true;
+      }
+    } else if (ttsApplied.text !== undefined && ttsApplied.text !== message) {
+      // No audio synthesized but directives were stripped — keep visible text in sync.
+      message = ttsApplied.text;
+      params.message = message;
+    }
   }
 
   message = await maybeApplyCrossContextMarker({
