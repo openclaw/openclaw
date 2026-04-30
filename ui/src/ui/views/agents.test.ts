@@ -187,6 +187,147 @@ describe("renderAgents", () => {
     );
   });
 
+  it("uses catalog display names for configured model aliases", async () => {
+    const container = document.createElement("div");
+
+    render(
+      renderAgents(
+        createProps({
+          selectedAgentId: "alpha",
+          config: {
+            form: {
+              agents: {
+                defaults: {
+                  model: { primary: "anthropic/claude-sonnet-4-6" },
+                  models: {
+                    "anthropic/claude-opus-4-7": { alias: "opus" },
+                    "anthropic/claude-sonnet-4-6": { alias: "sonnet" },
+                  },
+                },
+                list: [{ id: "alpha" }],
+              },
+            },
+            loading: false,
+            saving: false,
+            dirty: false,
+          },
+          modelCatalog: [
+            { provider: "anthropic", id: "claude-opus-4-7", name: "Claude Opus 4.7" },
+            { provider: "anthropic", id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6" },
+          ],
+        }),
+      ),
+      container,
+    );
+
+    const select = await vi.waitFor(() => {
+      const element = container.querySelector<HTMLSelectElement>(".agent-model-fields select");
+      expect(element).toBeTruthy();
+      return element;
+    });
+    const labelsByValue = new Map(
+      Array.from(select?.options ?? []).map((option) => [option.value, option.textContent?.trim()]),
+    );
+
+    expect(labelsByValue.get("anthropic/claude-opus-4-7")).toBe("Claude Opus 4.7");
+    expect(labelsByValue.get("anthropic/claude-sonnet-4-6")).toBe("Claude Sonnet 4.6");
+  });
+
+  it("keeps custom configured aliases while replacing raw model ids with catalog names", async () => {
+    const container = document.createElement("div");
+
+    render(
+      renderAgents(
+        createProps({
+          selectedAgentId: "alpha",
+          config: {
+            form: {
+              agents: {
+                defaults: {
+                  model: { primary: "anthropic/claude-sonnet-4-6" },
+                  models: {
+                    "anthropic/claude-sonnet-4-6": { alias: "daily-driver" },
+                  },
+                },
+                list: [{ id: "alpha" }],
+              },
+            },
+            loading: false,
+            saving: false,
+            dirty: false,
+          },
+          modelCatalog: [
+            { provider: "anthropic", id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6" },
+          ],
+        }),
+      ),
+      container,
+    );
+
+    const select = await vi.waitFor(() => {
+      const element = container.querySelector<HTMLSelectElement>(".agent-model-fields select");
+      expect(element).toBeTruthy();
+      return element;
+    });
+    const option = Array.from(select?.options ?? []).find(
+      (candidate) => candidate.value === "anthropic/claude-sonnet-4-6",
+    );
+
+    expect(option?.textContent?.trim()).toBe("daily-driver (Claude Sonnet 4.6)");
+  });
+
+  it("disambiguates duplicate catalog display names by provider", async () => {
+    const container = document.createElement("div");
+
+    render(
+      renderAgents(
+        createProps({
+          selectedAgentId: "alpha",
+          config: {
+            form: {
+              agents: {
+                defaults: {
+                  model: { primary: "anthropic/claude-sonnet-4-6" },
+                  models: {
+                    "anthropic/claude-sonnet-4-6": { alias: "sonnet" },
+                    "openrouter/anthropic/claude-sonnet-4-6": {},
+                  },
+                },
+                list: [{ id: "alpha" }],
+              },
+            },
+            loading: false,
+            saving: false,
+            dirty: false,
+          },
+          modelCatalog: [
+            { provider: "anthropic", id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6" },
+            {
+              provider: "openrouter",
+              id: "anthropic/claude-sonnet-4-6",
+              name: "Claude Sonnet 4.6",
+            },
+          ],
+        }),
+      ),
+      container,
+    );
+
+    const select = await vi.waitFor(() => {
+      const element = container.querySelector<HTMLSelectElement>(".agent-model-fields select");
+      expect(element).toBeTruthy();
+      return element;
+    });
+    const labelsByValue = new Map(
+      Array.from(select?.options ?? []).map((option) => [option.value, option.textContent?.trim()]),
+    );
+
+    expect(labelsByValue.get("anthropic/claude-sonnet-4-6")).toBe("Claude Sonnet 4.6 · anthropic");
+    expect(labelsByValue.get("openrouter/anthropic/claude-sonnet-4-6")).toBe(
+      "Claude Sonnet 4.6 · openrouter",
+    );
+  });
+
   it("remounts overview model controls when switching selected agents", async () => {
     const container = document.createElement("div");
     const configForm = {
