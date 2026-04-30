@@ -8,6 +8,8 @@ import { extractToolCards, extractToolPreview } from "./tool-cards.ts";
 
 const CHAT_HISTORY_RENDER_LIMIT = 200;
 const UNKNOWN_TIMESTAMP = Number.NaN;
+const MAX_FALLBACK_TIMESTAMPS = 1_000;
+const fallbackTimestampsByKey = new Map<string, number>();
 
 export type BuildChatItemsProps = {
   sessionKey: string;
@@ -104,6 +106,27 @@ function readMessageTimestamp(message: unknown): number | null {
   return typeof timestamp === "number" && Number.isFinite(timestamp) ? timestamp : null;
 }
 
+export function resetChatItemFallbackTimestampsForTests() {
+  fallbackTimestampsByKey.clear();
+}
+
+function fallbackTimestampForKey(key: string): number {
+  const existing = fallbackTimestampsByKey.get(key);
+  if (typeof existing === "number") {
+    return existing;
+  }
+  const timestamp = Date.now();
+  fallbackTimestampsByKey.set(key, timestamp);
+  while (fallbackTimestampsByKey.size > MAX_FALLBACK_TIMESTAMPS) {
+    const oldest = fallbackTimestampsByKey.keys().next().value;
+    if (typeof oldest !== "string") {
+      break;
+    }
+    fallbackTimestampsByKey.delete(oldest);
+  }
+  return timestamp;
+}
+
 function findNearestAssistantMessageIndex(
   items: ChatItem[],
   toolTimestamp: number | null,
@@ -157,15 +180,50 @@ function findNearestAssistantMessageIndex(
   return assistantEntries[assistantEntries.length - 1]?.index ?? null;
 }
 
-function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup> {
+function readObject(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function readNonEmptyString(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function readSameTurnGroupKey(message: unknown): string | null {
+  const raw = readObject(message);
+  if (!raw) {
+    return null;
+  }
+  const local = readObject(raw.__openclaw_local);
+  const localRunId = readNonEmptyString(local?.runId);
+  if (localRunId) {
+    return `local-run:${localRunId}`;
+  }
+  const meta = readObject(raw.__openclaw);
+  for (const key of ["turnId", "turn_id", "runId", "run_id", "requestId", "request_id"]) {
+    const value = readNonEmptyString(meta?.[key] ?? raw[key]);
+    if (value) {
+      return `${key}:${value}`;
+    }
+  }
+  return null;
+}
+
+function groupMessages(
+  items: ChatItem[],
+  fallbackKeyPrefix: string,
+): Array<ChatItem | MessageGroup> {
   const result: Array<ChatItem | MessageGroup> = [];
   let currentGroup: MessageGroup | null = null;
+  let currentGroupTurnKey: string | null = null;
 
   for (const item of items) {
     if (item.kind !== "message") {
       if (currentGroup) {
         result.push(currentGroup);
         currentGroup = null;
+        currentGroupTurnKey = null;
       }
       result.push(item);
       continue;
@@ -174,12 +232,21 @@ function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup> {
     const normalized = normalizeMessage(item.message);
     const role = normalizeRoleForGrouping(normalized.role);
     const senderLabel = role.toLowerCase() === "user" ? (normalized.senderLabel ?? null) : null;
-    const timestamp = readMessageTimestamp(item.message) ?? UNKNOWN_TIMESTAMP;
+    const timestamp =
+      readMessageTimestamp(item.message) ??
+      fallbackTimestampForKey(`${fallbackKeyPrefix}:${item.key}`);
+    const isUserGroup = role.toLowerCase() === "user";
+    const turnKey = isUserGroup ? readSameTurnGroupKey(item.message) : null;
+    const canJoinCurrentUserGroup =
+      isUserGroup &&
+      turnKey !== null &&
+      currentGroupTurnKey !== null &&
+      turnKey === currentGroupTurnKey;
 
     if (
       !currentGroup ||
       currentGroup.role !== role ||
-      (role.toLowerCase() === "user" && currentGroup.senderLabel !== senderLabel)
+      (isUserGroup && (currentGroup.senderLabel !== senderLabel || !canJoinCurrentUserGroup))
     ) {
       if (currentGroup) {
         result.push(currentGroup);
@@ -193,6 +260,7 @@ function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup> {
         timestamp,
         isStreaming: false,
       };
+      currentGroupTurnKey = turnKey;
     } else {
       currentGroup.messages.push({ message: item.message, key: item.key });
     }
@@ -229,16 +297,17 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
       const timestamp = readMessageTimestamp(msg);
       const markerSeq =
         typeof marker.seq === "number" && Number.isFinite(marker.seq) ? marker.seq : null;
+      const key =
+        typeof marker.id === "string"
+          ? `divider:compaction:${marker.id}`
+          : markerSeq != null
+            ? `divider:compaction:seq:${markerSeq}`
+            : `divider:compaction:${timestamp ?? "unknown"}:${i}`;
       items.push({
         kind: "divider",
-        key:
-          typeof marker.id === "string"
-            ? `divider:compaction:${marker.id}`
-            : markerSeq != null
-              ? `divider:compaction:seq:${markerSeq}`
-              : `divider:compaction:${timestamp ?? "unknown"}:${i}`,
+        key,
         label: "Compaction",
-        timestamp: timestamp ?? UNKNOWN_TIMESTAMP,
+        timestamp: timestamp ?? fallbackTimestampForKey(`divider:${props.sessionKey}:${key}`),
       });
       continue;
     }
@@ -311,14 +380,14 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
         kind: "stream",
         key,
         text: streamText,
-        startedAt: props.streamStartedAt ?? UNKNOWN_TIMESTAMP,
+        startedAt: props.streamStartedAt ?? fallbackTimestampForKey(key),
       });
     } else {
       items.push({ kind: "reading-indicator", key });
     }
   }
 
-  return groupMessages(items);
+  return groupMessages(items, `message:${props.sessionKey}`);
 }
 
 function messageKey(message: unknown, index: number): string {

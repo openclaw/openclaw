@@ -1,6 +1,10 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { MessageGroup } from "../types/chat-types.ts";
-import { buildChatItems, type BuildChatItemsProps } from "./build-chat-items.ts";
+import {
+  buildChatItems,
+  resetChatItemFallbackTimestampsForTests,
+  type BuildChatItemsProps,
+} from "./build-chat-items.ts";
 
 function createProps(overrides: Partial<BuildChatItemsProps> = {}): BuildChatItemsProps {
   return {
@@ -25,10 +29,15 @@ function firstMessageContent(group: MessageGroup): unknown[] {
 }
 
 describe("buildChatItems", () => {
-  it("uses stable unknown timestamps for history messages that do not carry one", () => {
+  beforeEach(() => {
+    resetChatItemFallbackTimestampsForTests();
+  });
+
+  it("uses stable fallback timestamps for history messages that do not carry one", () => {
     vi.useFakeTimers();
     try {
-      vi.setSystemTime(new Date("2026-04-29T12:00:00Z"));
+      const fallbackTimestamp = Date.UTC(2026, 3, 29, 12, 0);
+      vi.setSystemTime(fallbackTimestamp);
       const first = messageGroups({
         messages: [
           {
@@ -48,8 +57,8 @@ describe("buildChatItems", () => {
         ],
       });
 
-      expect(Number.isNaN(first[0]?.timestamp)).toBe(true);
-      expect(Number.isNaN(second[0]?.timestamp)).toBe(true);
+      expect(first[0]?.timestamp).toBe(fallbackTimestamp);
+      expect(second[0]?.timestamp).toBe(fallbackTimestamp);
       expect(first[0]?.key).toBe(second[0]?.key);
     } finally {
       vi.useRealTimers();
@@ -66,7 +75,8 @@ describe("buildChatItems", () => {
           __openclaw: { kind: "compaction" },
         },
       ];
-      vi.setSystemTime(new Date("2026-04-29T12:00:00Z"));
+      const fallbackTimestamp = Date.UTC(2026, 3, 29, 12, 0);
+      vi.setSystemTime(fallbackTimestamp);
       const first = buildChatItems(createProps({ messages }));
 
       vi.setSystemTime(new Date("2026-04-29T12:05:00Z"));
@@ -74,6 +84,8 @@ describe("buildChatItems", () => {
 
       expect(first[0]).toMatchObject({ kind: "divider", key: "divider:compaction:unknown:0" });
       expect(second[0]).toMatchObject({ kind: "divider", key: "divider:compaction:unknown:0" });
+      expect(first[0]).toMatchObject({ kind: "divider", timestamp: fallbackTimestamp });
+      expect(second[0]).toMatchObject({ kind: "divider", timestamp: fallbackTimestamp });
     } finally {
       vi.useRealTimers();
     }
@@ -172,6 +184,64 @@ describe("buildChatItems", () => {
 
     expect(groups).toHaveLength(2);
     expect(groups.map((group) => group.senderLabel)).toEqual(["Iris", "Joaquin De Rojas"]);
+  });
+
+  it("keeps consecutive user messages from distinct sends in separate groups", () => {
+    const firstTimestamp = Date.UTC(2026, 3, 29, 23, 42);
+    const secondTimestamp = Date.UTC(2026, 3, 29, 23, 44);
+    const groups = messageGroups({
+      messages: [
+        {
+          role: "user",
+          content: "okay, check if ai-pulse health is fine",
+          timestamp: firstTimestamp,
+          __openclaw: { id: "user-1142", seq: 413 },
+        },
+        {
+          role: "user",
+          content: "okay, check if ai-pulse health is fine",
+          timestamp: secondTimestamp,
+          __openclaw: { id: "user-1144", seq: 415 },
+        },
+      ],
+    });
+
+    expect(groups).toHaveLength(2);
+    expect(groups.map((group) => group.messages)).toEqual([
+      [{ message: expect.any(Object), key: "msg:transcript:id:user-1142" }],
+      [{ message: expect.any(Object), key: "msg:transcript:id:user-1144" }],
+    ]);
+    expect(groups.map((group) => group.timestamp)).toEqual([firstTimestamp, secondTimestamp]);
+  });
+
+  it("groups multi-part user messages when they share a same-turn marker", () => {
+    const groups = messageGroups({
+      messages: [
+        {
+          role: "user",
+          content: [{ type: "text", text: "text part" }],
+          timestamp: 1000,
+          __openclaw_local: {
+            localId: "local:run-user:user-text",
+            runId: "run-user",
+            kind: "user",
+          },
+        },
+        {
+          role: "user",
+          content: [{ type: "image", source: { type: "url", url: "/image.png" } }],
+          timestamp: 1000,
+          __openclaw_local: {
+            localId: "local:run-user:user-image",
+            runId: "run-user",
+            kind: "user",
+          },
+        },
+      ],
+    });
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0]?.messages).toHaveLength(2);
   });
 
   it("attaches lifted canvas previews to the nearest assistant turn", () => {
