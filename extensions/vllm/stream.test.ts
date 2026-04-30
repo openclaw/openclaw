@@ -1,7 +1,11 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type { Context, Model } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
-import { createVllmQwenThinkingWrapper, wrapVllmProviderStream } from "./stream.js";
+import {
+  createVllmProviderThinkingWrapper,
+  createVllmQwenThinkingWrapper,
+  wrapVllmProviderStream,
+} from "./stream.js";
 
 function capturePayload(params: {
   format: "chat-template" | "top-level";
@@ -105,6 +109,80 @@ describe("createVllmQwenThinkingWrapper", () => {
   });
 });
 
+describe("createVllmProviderThinkingWrapper", () => {
+  function captureProviderPayload(params: {
+    thinkingLevel?: "off" | "low" | "medium" | "high" | "xhigh" | "max";
+    initialPayload?: Record<string, unknown>;
+    model?: Partial<Model<"openai-completions">>;
+  }): Record<string, unknown> {
+    let captured: Record<string, unknown> = {};
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      const payload = { ...params.initialPayload };
+      options?.onPayload?.(payload, _model);
+      captured = payload;
+      return {} as ReturnType<StreamFn>;
+    };
+
+    const wrapped = createVllmProviderThinkingWrapper({
+      baseStreamFn,
+      thinkingLevel: params.thinkingLevel ?? "high",
+    });
+    void wrapped(
+      {
+        api: "openai-completions",
+        provider: "vllm",
+        id: "nemotron-3-super",
+        reasoning: true,
+        ...params.model,
+      } as Model<"openai-completions">,
+      { messages: [] } as Context,
+      {},
+    );
+
+    return captured;
+  }
+
+  it("injects Nemotron 3 chat-template kwargs when thinking is off", () => {
+    expect(captureProviderPayload({ thinkingLevel: "off" })).toEqual({
+      chat_template_kwargs: {
+        enable_thinking: false,
+        force_nonempty_content: true,
+      },
+    });
+  });
+
+  it("does not inject Nemotron 3 chat-template kwargs when thinking is enabled", () => {
+    expect(captureProviderPayload({ thinkingLevel: "low" })).toEqual({});
+  });
+
+  it("preserves existing Nemotron 3 chat-template kwargs over defaults", () => {
+    expect(
+      captureProviderPayload({
+        thinkingLevel: "off",
+        initialPayload: {
+          chat_template_kwargs: {
+            enable_thinking: true,
+          },
+        },
+      }),
+    ).toEqual({
+      chat_template_kwargs: {
+        enable_thinking: true,
+        force_nonempty_content: true,
+      },
+    });
+  });
+
+  it("skips non-Nemotron vLLM models", () => {
+    expect(
+      captureProviderPayload({
+        thinkingLevel: "off",
+        model: { id: "Qwen/Qwen3-8B" },
+      }),
+    ).toEqual({});
+  });
+});
+
 describe("wrapVllmProviderStream", () => {
   it("registers when vLLM Qwen thinking format params are configured", () => {
     expect(
@@ -162,6 +240,38 @@ describe("wrapVllmProviderStream", () => {
           api: "openai-completions",
           provider: "openai",
           id: "gpt-5.4",
+        } as Model<"openai-completions">,
+        streamFn: undefined,
+      } as never),
+    ).toBeUndefined();
+  });
+
+  it("registers for vLLM Nemotron when thinking is off", () => {
+    expect(
+      wrapVllmProviderStream({
+        provider: "vllm",
+        modelId: "nemotron-3-super",
+        extraParams: {},
+        thinkingLevel: "off",
+        model: {
+          api: "openai-completions",
+          provider: "vllm",
+          id: "nemotron-3-super",
+        } as Model<"openai-completions">,
+        streamFn: undefined,
+      } as never),
+    ).toBeTypeOf("function");
+
+    expect(
+      wrapVllmProviderStream({
+        provider: "vllm",
+        modelId: "nemotron-3-super",
+        extraParams: {},
+        thinkingLevel: "low",
+        model: {
+          api: "openai-completions",
+          provider: "vllm",
+          id: "nemotron-3-super",
         } as Model<"openai-completions">,
         streamFn: undefined,
       } as never),

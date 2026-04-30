@@ -1,4 +1,3 @@
-import { getRuntimeConfigSnapshot } from "openclaw/plugin-sdk/config-runtime";
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { registerMemoryCli } from "./src/cli.js";
 import { registerDreamingCommand } from "./src/dreaming-command.js";
@@ -41,23 +40,27 @@ export default definePluginEntry({
     });
 
     api.registerTool(
-      (ctx) =>
-        createMemorySearchTool({
-          config: ctx.runtimeConfig ?? ctx.config,
-          getConfig: () => getRuntimeConfigSnapshot() ?? ctx.runtimeConfig ?? ctx.config,
+      (ctx) => {
+        const getConfig = () => ctx.getRuntimeConfig?.() ?? ctx.runtimeConfig ?? ctx.config;
+        return createMemorySearchTool({
+          config: getConfig(),
+          getConfig,
           agentSessionKey: ctx.sessionKey,
           sandboxed: ctx.sandboxed,
-        }),
+        });
+      },
       { names: ["memory_search"] },
     );
 
     api.registerTool(
-      (ctx) =>
-        createMemoryGetTool({
-          config: ctx.runtimeConfig ?? ctx.config,
-          getConfig: () => getRuntimeConfigSnapshot() ?? ctx.runtimeConfig ?? ctx.config,
+      (ctx) => {
+        const getConfig = () => ctx.getRuntimeConfig?.() ?? ctx.runtimeConfig ?? ctx.config;
+        return createMemoryGetTool({
+          config: getConfig(),
+          getConfig,
           agentSessionKey: ctx.sessionKey,
-        }),
+        });
+      },
       { names: ["memory_get"] },
     );
 

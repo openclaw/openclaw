@@ -3,6 +3,7 @@ import { summarizeMigrationItems } from "openclaw/plugin-sdk/migration";
 import {
   archiveMigrationItem,
   copyMigrationFileItem,
+  withCachedMigrationConfigRuntime,
   writeMigrationReport,
 } from "openclaw/plugin-sdk/migration-runtime";
 import type {
@@ -23,6 +24,11 @@ export async function applyClaudePlan(params: {
 }): Promise<MigrationApplyResult> {
   const plan = params.plan ?? (await buildClaudePlan(params.ctx));
   const reportDir = params.ctx.reportDir ?? path.join(params.ctx.stateDir, "migration", "claude");
+  const runtime = withCachedMigrationConfigRuntime(
+    params.ctx.runtime ?? params.runtime,
+    params.ctx.config,
+  );
+  const applyCtx = { ...params.ctx, runtime };
   const items: MigrationItem[] = [];
   for (const item of plan.items) {
     if (item.status !== "planned") {
@@ -30,12 +36,7 @@ export async function applyClaudePlan(params: {
       continue;
     }
     if (item.kind === "config") {
-      items.push(
-        await applyConfigItem(
-          { ...params.ctx, runtime: params.ctx.runtime ?? params.runtime },
-          item,
-        ),
-      );
+      items.push(await applyConfigItem(applyCtx, item));
     } else if (item.kind === "manual") {
       items.push(applyManualItem(item));
     } else if (item.action === "archive") {

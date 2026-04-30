@@ -10,6 +10,8 @@ import {
   resolvePublicAgentAvatarSource,
 } from "../../agents/identity-avatar.js";
 import type { AgentInternalEvent } from "../../agents/internal-events.js";
+import { resolveTrustedGroupId } from "../../agents/pi-tools.policy.js";
+import { resolveSandboxConfigForAgent } from "../../agents/sandbox/config.js";
 import {
   normalizeSpawnedRunMetadata,
   resolveIngressWorkspaceOverrideForSpawnedRun,
@@ -24,7 +26,6 @@ import {
   shouldApplyStartupContext,
 } from "../../auto-reply/reply/startup-context.js";
 import { agentCommandFromIngress } from "../../commands/agent.js";
-import { loadConfig } from "../../config/config.js";
 import {
   evaluateSessionFreshness,
   mergeSessionEntry,
@@ -59,8 +60,16 @@ import {
   normalizeAgentId,
 } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
-import { normalizeInputProvenance, type InputProvenance } from "../../sessions/input-provenance.js";
+import {
+  annotateInterSessionPromptText,
+  normalizeInputProvenance,
+  type InputProvenance,
+} from "../../sessions/input-provenance.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
+import {
+  parseRawSessionConversationRef,
+  parseThreadSessionSuffix,
+} from "../../sessions/session-key-utils.js";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -76,11 +85,16 @@ import {
   INTERNAL_MESSAGE_CHANNEL,
   isDeliverableMessageChannel,
   isGatewayMessageChannel,
+  isInternalNonDeliveryChannel,
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
 import { resolveAssistantIdentity } from "../assistant-identity.js";
 import { registerChatAbortController, resolveAgentRunExpiresAtMs } from "../chat-abort.js";
-import { MediaOffloadError, parseMessageWithAttachments } from "../chat-attachments.js";
+import {
+  MediaOffloadError,
+  parseMessageWithAttachments,
+  resolveChatAttachmentMaxBytes,
+} from "../chat-attachments.js";
 import { resolveAssistantAvatarUrl } from "../control-ui-shared.js";
 import { ADMIN_SCOPE } from "../method-scopes.js";
 import { GATEWAY_CLIENT_CAPS, hasGatewayClientCap } from "../protocol/client-info.js";
@@ -171,6 +185,87 @@ function resolveSessionRuntimeWorkspace(params: {
     runtimeWorkspaceDir: workspaceOverride ?? resolveAgentWorkspaceDir(params.cfg, sessionAgentId),
     isCanonicalWorkspace: !workspaceOverride,
   };
+}
+
+function shouldSkipStartupContextForSpawnedSandbox(params: {
+  cfg: OpenClawConfig;
+  sessionKey: string;
+  spawnedBy?: string;
+}): boolean {
+  if (!params.spawnedBy) {
+    return false;
+  }
+  const agentId = resolveAgentIdFromSessionKey(params.sessionKey);
+  const sandboxCfg = resolveSandboxConfigForAgent(params.cfg, agentId);
+  if (sandboxCfg.mode === "off") {
+    return false;
+  }
+  if (sandboxCfg.mode === "non-main") {
+    const mainSessionKey = resolveAgentMainSessionKey({
+      cfg: params.cfg,
+      agentId,
+    });
+    if (params.sessionKey.trim() === mainSessionKey.trim()) {
+      return false;
+    }
+  }
+  return sandboxCfg.workspaceAccess !== "rw";
+}
+
+type TrustedGroupMetadata = {
+  groupId?: string;
+  groupChannel?: string;
+  groupSpace?: string;
+};
+
+function normalizeTrustedGroupMetadata(value?: {
+  groupId?: unknown;
+  groupChannel?: unknown;
+  groupSpace?: unknown;
+  space?: unknown;
+}): TrustedGroupMetadata {
+  return {
+    groupId: normalizeOptionalString(value?.groupId),
+    groupChannel: normalizeOptionalString(value?.groupChannel),
+    groupSpace: normalizeOptionalString(value?.groupSpace ?? value?.space),
+  };
+}
+
+function resolveSessionKeyGroupId(sessionKey: string): string | undefined {
+  const { baseSessionKey } = parseThreadSessionSuffix(sessionKey);
+  const conversation = parseRawSessionConversationRef(baseSessionKey ?? sessionKey);
+  if (!conversation || (conversation.kind !== "group" && conversation.kind !== "channel")) {
+    return undefined;
+  }
+  return conversation.rawId;
+}
+
+function resolveTrustedGroupMetadata(params: {
+  sessionKey: string;
+  spawnedBy?: string;
+  stored: TrustedGroupMetadata;
+  inherited?: TrustedGroupMetadata;
+}): TrustedGroupMetadata {
+  return {
+    groupId:
+      params.stored.groupId ??
+      params.inherited?.groupId ??
+      resolveSessionKeyGroupId(params.sessionKey) ??
+      (params.spawnedBy ? resolveSessionKeyGroupId(params.spawnedBy) : undefined),
+    groupChannel: params.stored.groupChannel ?? params.inherited?.groupChannel,
+    groupSpace: params.stored.groupSpace ?? params.inherited?.groupSpace,
+  };
+}
+
+function requestGroupMatchesTrusted(params: {
+  requestGroupId?: string;
+  trustedGroupId?: string;
+}): boolean {
+  const requestGroupId = params.requestGroupId?.trim();
+  if (!requestGroupId) {
+    return true;
+  }
+  return Boolean(params.trustedGroupId && requestGroupId === params.trustedGroupId);
 }
 
 function emitSessionsChanged(
@@ -384,6 +479,12 @@ function dispatchAgentRunFromGateway(params: {
     });
 }
 
+function yieldAfterAgentAcceptedAck(): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, 10);
+  });
+}
+
 export const agentHandlers: GatewayRequestHandlers = {
   agent: async ({ params, respond, context, client, isWebchatConnect }) => {
     const p = params;
@@ -429,6 +530,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       promptMode?: "full" | "minimal" | "none";
       bootstrapContextMode?: "full" | "lightweight";
       bootstrapContextRunKind?: "default" | "heartbeat" | "cron";
+      acpTurnSource?: "manual_spawn";
       internalEvents?: AgentInternalEvent[];
       idempotencyKey: string;
       timeout?: number;
@@ -443,6 +545,7 @@ export const agentHandlers: GatewayRequestHandlers = {
     const allowModelOverride = resolveAllowModelOverrideFromClient(client);
     const canResetSession = resolveCanResetSessionFromClient(client);
     const requestedModelOverride = Boolean(request.provider || request.model);
+    const isRawModelRun = request.modelRun === true || request.promptMode === "none";
     if (requestedModelOverride && !allowModelOverride) {
       respond(
         false,
@@ -456,7 +559,7 @@ export const agentHandlers: GatewayRequestHandlers = {
     }
     const providerOverride = allowModelOverride ? request.provider : undefined;
     const modelOverride = allowModelOverride ? request.model : undefined;
-    const cfg = loadConfig();
+    const cfg = context.getRuntimeConfig();
     const idem = request.idempotencyKey;
     const normalizedSpawned = normalizeSpawnedRunMetadata({
       groupId: request.groupId,
@@ -480,6 +583,9 @@ export const agentHandlers: GatewayRequestHandlers = {
       typeof request.bestEffortDeliver === "boolean" ? request.bestEffortDeliver : undefined;
 
     let message = (request.message ?? "").trim();
+    if (!isRawModelRun) {
+      message = annotateInterSessionPromptText(message, inputProvenance);
+    }
     let images: Array<{ type: "image"; data: string; mimeType: string }> = [];
     let imageOrder: PromptImageOrderEntry[] = [];
     if (normalizedAttachments.length > 0) {
@@ -498,7 +604,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       }
       const effectiveProvider = providerOverride || baseProvider;
       const effectiveModel = modelOverride || baseModel;
-      const supportsImages = await resolveGatewayModelSupportsImages({
+      const supportsInlineImages = await resolveGatewayModelSupportsImages({
         loadGatewayModelCatalog: context.loadGatewayModelCatalog,
         provider: effectiveProvider,
         model: effectiveModel,
@@ -506,9 +612,13 @@ export const agentHandlers: GatewayRequestHandlers = {
 
       try {
         const parsed = await parseMessageWithAttachments(message, normalizedAttachments, {
-          maxBytes: 5_000_000,
+          maxBytes: resolveChatAttachmentMaxBytes(cfg),
           log: context.logGateway,
-          supportsImages,
+          supportsInlineImages,
+          // agent.run does not yet wire a ctx.MediaPaths stage path, so reject
+          // non-image attachments explicitly (UnsupportedAttachmentError)
+          // instead of saving them where the agent cannot reach them.
+          acceptNonImage: false,
         });
         message = parsed.message.trim();
         images = parsed.images;
@@ -532,7 +642,10 @@ export const agentHandlers: GatewayRequestHandlers = {
       }
     }
 
-    const isKnownGatewayChannel = (value: string): boolean => isGatewayMessageChannel(value);
+    // Accept internal non-delivery sources (heartbeat, cron, webhook) as valid
+    // channel hints so subagent spawns from those parent runs are not rejected.
+    const isKnownGatewayChannel = (value: string): boolean =>
+      isGatewayMessageChannel(value) || isInternalNonDeliveryChannel(value);
     const channelHints = [request.channel, request.replyChannel]
       .filter((value): value is string => typeof value === "string")
       .map((value) => value.trim())
@@ -761,7 +874,7 @@ export const agentHandlers: GatewayRequestHandlers = {
     // Channel messages (Discord, Telegram, etc.) get timestamps via envelope
     // formatting in a separate code path — they never reach this handler.
     // See: https://github.com/openclaw/openclaw/issues/3658
-    if (!skipTimestampInjection) {
+    if (!skipTimestampInjection && !isRawModelRun && inputProvenance?.kind !== "inter_session") {
       message = injectTimestamp(message, timestampOptsFromConfig(cfg));
     }
 
@@ -812,24 +925,55 @@ export const agentHandlers: GatewayRequestHandlers = {
           : normalizeOptionalString(entry.pluginOwnerId);
       const sessionAgent = resolveAgentIdFromSessionKey(canonicalKey);
       spawnedByValue = canonicalizeSpawnedByForAgent(cfg, sessionAgent, entry?.spawnedBy);
-      let inheritedGroup:
-        | { groupId?: string; groupChannel?: string; groupSpace?: string }
-        | undefined;
-      if (spawnedByValue && (!resolvedGroupId || !resolvedGroupChannel || !resolvedGroupSpace)) {
+      const storedGroup = normalizeTrustedGroupMetadata(entry);
+      let inheritedGroup: TrustedGroupMetadata | undefined;
+      if (
+        spawnedByValue &&
+        (!storedGroup.groupId || !storedGroup.groupChannel || !storedGroup.groupSpace)
+      ) {
         try {
           const parentEntry = loadSessionEntry(spawnedByValue)?.entry;
-          inheritedGroup = {
+          inheritedGroup = normalizeTrustedGroupMetadata({
             groupId: parentEntry?.groupId,
             groupChannel: parentEntry?.groupChannel,
             groupSpace: parentEntry?.space,
-          };
+          });
         } catch {
           inheritedGroup = undefined;
         }
       }
-      resolvedGroupId = resolvedGroupId || inheritedGroup?.groupId;
-      resolvedGroupChannel = resolvedGroupChannel || inheritedGroup?.groupChannel;
-      resolvedGroupSpace = resolvedGroupSpace || inheritedGroup?.groupSpace;
+      const trustedGroup = resolveTrustedGroupMetadata({
+        sessionKey: canonicalKey,
+        spawnedBy: spawnedByValue,
+        stored: storedGroup,
+        inherited: inheritedGroup,
+      });
+      const validatedGroup = trustedGroup.groupId
+        ? resolveTrustedGroupId({
+            groupId: trustedGroup.groupId,
+            sessionKey: canonicalKey,
+            spawnedBy: spawnedByValue,
+          })
+        : undefined;
+      if (validatedGroup?.dropped) {
+        resolvedGroupId = undefined;
+        resolvedGroupChannel = undefined;
+        resolvedGroupSpace = undefined;
+      } else {
+        const trustRequestSelectors =
+          Boolean(trustedGroup.groupId) &&
+          requestGroupMatchesTrusted({
+            requestGroupId: normalizedSpawned.groupId,
+            trustedGroupId: trustedGroup.groupId,
+          });
+        resolvedGroupId = trustedGroup.groupId;
+        resolvedGroupChannel =
+          trustedGroup.groupChannel ??
+          (trustRequestSelectors ? normalizedSpawned.groupChannel : undefined);
+        resolvedGroupSpace =
+          trustedGroup.groupSpace ??
+          (trustRequestSelectors ? normalizedSpawned.groupSpace : undefined);
+      }
       const deliveryFields = normalizeSessionDeliveryFields(entry);
       // When the session has no delivery context yet (e.g. a freshly-spawned subagent
       // with deliver: false), seed it from the request's channel/to/threadId params.
@@ -883,9 +1027,9 @@ export const agentHandlers: GatewayRequestHandlers = {
         spawnedWorkspaceDir: entry?.spawnedWorkspaceDir,
         spawnDepth: entry?.spawnDepth,
         channel: entry?.channel ?? request.channel?.trim(),
-        groupId: resolvedGroupId ?? entry?.groupId,
-        groupChannel: resolvedGroupChannel ?? entry?.groupChannel,
-        space: resolvedGroupSpace ?? entry?.space,
+        groupId: resolvedGroupId,
+        groupChannel: resolvedGroupChannel,
+        space: resolvedGroupSpace,
         ...(pluginOwnerId ? { pluginOwnerId } : {}),
         cliSessionIds: entry?.cliSessionIds,
         cliSessionBindings: entry?.cliSessionBindings,
@@ -1096,117 +1240,157 @@ export const agentHandlers: GatewayRequestHandlers = {
       },
     });
     respond(true, accepted, undefined, { runId });
+    // Give the accepted frame one event-loop turn to flush before the runner
+    // starts potentially heavy synchronous prompt/context setup. The dispatch
+    // is scheduled out of this request handler so immediate agent.wait calls
+    // can reach the gateway before the pre-turn runner monopolizes the loop.
+    void (async () => {
+      await yieldAfterAgentAcceptedAck();
 
-    let dispatched = false;
-    try {
-      if (resolvedSessionKey) {
-        await reactivateCompletedSubagentSession({
-          sessionKey: resolvedSessionKey,
-          runId,
-        });
-      }
-
-      if (requestedSessionKey && resolvedSessionKey && isNewSession) {
-        emitSessionsChanged(context, {
-          sessionKey: resolvedSessionKey,
-          reason: "create",
-        });
-      }
-      if (resolvedSessionKey) {
-        emitSessionsChanged(context, {
-          sessionKey: resolvedSessionKey,
-          reason: "send",
-        });
-      }
-
-      if (shouldPrependStartupContext && resolvedSessionKey) {
-        const { runtimeWorkspaceDir } = resolveSessionRuntimeWorkspace({
-          cfg: cfgForAgent ?? cfg,
-          sessionKey: resolvedSessionKey,
-          sessionEntry,
-          spawnedBy: spawnedByValue,
-        });
-        const startupContextPrelude = await buildSessionStartupContextPrelude({
-          workspaceDir: runtimeWorkspaceDir,
-          cfg: cfgForAgent ?? cfg,
-        });
-        if (startupContextPrelude) {
-          message = `${startupContextPrelude}\n\n${message}`;
+      let dispatched = false;
+      try {
+        if (resolvedSessionKey) {
+          await reactivateCompletedSubagentSession({
+            sessionKey: resolvedSessionKey,
+            runId,
+          });
         }
-      }
 
-      const resolvedThreadId = explicitThreadId ?? deliveryPlan.resolvedThreadId;
-      const ingressAgentId =
-        agentId &&
-        (!resolvedSessionKey || resolveAgentIdFromSessionKey(resolvedSessionKey) === agentId)
-          ? agentId
-          : undefined;
+        if (requestedSessionKey && resolvedSessionKey && isNewSession) {
+          emitSessionsChanged(context, {
+            sessionKey: resolvedSessionKey,
+            reason: "create",
+          });
+        }
+        if (resolvedSessionKey) {
+          emitSessionsChanged(context, {
+            sessionKey: resolvedSessionKey,
+            reason: "send",
+          });
+        }
 
-      dispatchAgentRunFromGateway({
-        ingressOpts: {
-          message,
-          images,
-          imageOrder,
-          agentId: ingressAgentId,
-          provider: providerOverride,
-          model: modelOverride,
-          to: resolvedTo,
-          sessionId: resolvedSessionId,
-          sessionKey: resolvedSessionKey,
-          thinking: request.thinking,
-          deliver,
-          deliveryTargetMode,
-          channel: resolvedChannel,
-          accountId: resolvedAccountId,
-          threadId: resolvedThreadId,
-          runContext: {
-            messageChannel: originMessageChannel,
+        if (shouldPrependStartupContext && resolvedSessionKey) {
+          const startupCfg = cfgForAgent ?? cfg;
+          if (
+            !shouldSkipStartupContextForSpawnedSandbox({
+              cfg: startupCfg,
+              sessionKey: resolvedSessionKey,
+              spawnedBy: spawnedByValue,
+            })
+          ) {
+            const { runtimeWorkspaceDir } = resolveSessionRuntimeWorkspace({
+              cfg: startupCfg,
+              sessionKey: resolvedSessionKey,
+              sessionEntry,
+              spawnedBy: spawnedByValue,
+            });
+            const startupContextPrelude = await buildSessionStartupContextPrelude({
+              workspaceDir: runtimeWorkspaceDir,
+              cfg: startupCfg,
+            });
+            if (startupContextPrelude) {
+              message = `${startupContextPrelude}\n\n${message}`;
+            }
+          }
+        }
+        if (!isRawModelRun) {
+          message = annotateInterSessionPromptText(message, inputProvenance);
+        }
+
+        const resolvedThreadId = explicitThreadId ?? deliveryPlan.resolvedThreadId;
+        const ingressAgentId =
+          agentId &&
+          (!resolvedSessionKey || resolveAgentIdFromSessionKey(resolvedSessionKey) === agentId)
+            ? agentId
+            : undefined;
+
+        dispatchAgentRunFromGateway({
+          ingressOpts: {
+            message,
+            images,
+            imageOrder,
+            agentId: ingressAgentId,
+            provider: providerOverride,
+            model: modelOverride,
+            to: resolvedTo,
+            sessionId: resolvedSessionId,
+            sessionKey: resolvedSessionKey,
+            thinking: request.thinking,
+            deliver,
+            deliveryTargetMode,
+            channel: resolvedChannel,
             accountId: resolvedAccountId,
+            threadId: resolvedThreadId,
+            runContext: {
+              messageChannel: originMessageChannel,
+              accountId: resolvedAccountId,
+              groupId: resolvedGroupId,
+              groupChannel: resolvedGroupChannel,
+              groupSpace: resolvedGroupSpace,
+              currentThreadTs: resolvedThreadId != null ? String(resolvedThreadId) : undefined,
+            },
             groupId: resolvedGroupId,
             groupChannel: resolvedGroupChannel,
             groupSpace: resolvedGroupSpace,
-            currentThreadTs: resolvedThreadId != null ? String(resolvedThreadId) : undefined,
-          },
-          groupId: resolvedGroupId,
-          groupChannel: resolvedGroupChannel,
-          groupSpace: resolvedGroupSpace,
-          spawnedBy: spawnedByValue,
-          timeout: request.timeout?.toString(),
-          bestEffortDeliver,
-          messageChannel: originMessageChannel,
-          runId,
-          lane: request.lane,
-          cleanupBundleMcpOnRunEnd: request.cleanupBundleMcpOnRunEnd === true,
-          modelRun: request.modelRun === true,
-          promptMode: request.promptMode,
-          extraSystemPrompt: request.extraSystemPrompt,
-          bootstrapContextMode: request.bootstrapContextMode,
-          bootstrapContextRunKind: request.bootstrapContextRunKind,
-          internalEvents: request.internalEvents,
-          inputProvenance,
-          abortSignal: activeRunAbort.controller.signal,
-          // Internal-only: allow workspace override for spawned subagent runs.
-          workspaceDir: resolveIngressWorkspaceOverrideForSpawnedRun({
             spawnedBy: spawnedByValue,
-            workspaceDir: sessionEntry?.spawnedWorkspaceDir,
-          }),
-          senderIsOwner,
-          allowModelOverride,
-        },
-        runId,
-        idempotencyKey: idem,
-        abortController: activeRunAbort.controller,
-        respond,
-        context,
-      });
-      dispatched = true;
-    } finally {
-      if (!dispatched) {
-        activeRunAbort.cleanup();
+            timeout: request.timeout?.toString(),
+            bestEffortDeliver,
+            messageChannel: originMessageChannel,
+            runId,
+            lane: request.lane,
+            modelRun: request.modelRun === true,
+            promptMode: request.promptMode,
+            extraSystemPrompt: request.extraSystemPrompt,
+            bootstrapContextMode: request.bootstrapContextMode,
+            bootstrapContextRunKind: request.bootstrapContextRunKind,
+            acpTurnSource: request.acpTurnSource,
+            internalEvents: request.internalEvents,
+            inputProvenance,
+            abortSignal: activeRunAbort.controller.signal,
+            // Internal-only: allow workspace override for spawned subagent runs.
+            workspaceDir: resolveIngressWorkspaceOverrideForSpawnedRun({
+              spawnedBy: spawnedByValue,
+              workspaceDir: sessionEntry?.spawnedWorkspaceDir,
+            }),
+            senderIsOwner,
+            allowModelOverride,
+          },
+          runId,
+          idempotencyKey: idem,
+          abortController: activeRunAbort.controller,
+          respond,
+          context,
+        });
+        dispatched = true;
+      } catch (err) {
+        const error = errorShape(ErrorCodes.UNAVAILABLE, String(err));
+        const payload = {
+          runId,
+          status: "error" as const,
+          summary: String(err),
+        };
+        setGatewayDedupeEntry({
+          dedupe: context.dedupe,
+          key: `agent:${idem}`,
+          entry: {
+            ts: Date.now(),
+            ok: false,
+            payload,
+            error,
+          },
+        });
+        respond(false, payload, error, {
+          runId,
+          error: formatForLog(err),
+        });
+      } finally {
+        if (!dispatched) {
+          activeRunAbort.cleanup();
+        }
       }
-    }
+    })();
   },
-  "agent.identity.get": ({ params, respond }) => {
+  "agent.identity.get": ({ params, respond, context }) => {
     if (!validateAgentIdentityParams(params)) {
       respond(
         false,
@@ -1250,7 +1434,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       }
       agentId = resolved;
     }
-    const cfg = loadConfig();
+    const cfg = context.getRuntimeConfig();
     const identity = resolveAssistantIdentity({ cfg, agentId });
     const avatarValue =
       resolveAssistantAvatarUrl({
@@ -1307,6 +1491,9 @@ export const agentHandlers: GatewayRequestHandlers = {
         startedAt: cachedGatewaySnapshot.startedAt,
         endedAt: cachedGatewaySnapshot.endedAt,
         error: cachedGatewaySnapshot.error,
+        stopReason: cachedGatewaySnapshot.stopReason,
+        livenessState: cachedGatewaySnapshot.livenessState,
+        yielded: cachedGatewaySnapshot.yielded,
       });
       return;
     }
@@ -1361,6 +1548,9 @@ export const agentHandlers: GatewayRequestHandlers = {
       startedAt: snapshot.startedAt,
       endedAt: snapshot.endedAt,
       error: snapshot.error,
+      stopReason: snapshot.stopReason,
+      livenessState: snapshot.livenessState,
+      yielded: snapshot.yielded,
     });
   },
 };

@@ -16,6 +16,7 @@ import {
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 import { resolveAgentConfig, resolveAgentIdFromSessionKey } from "./agent-scope.js";
 import type { AnyAgentTool } from "./pi-tools.types.js";
+import { normalizeProviderId } from "./provider-id.js";
 import { pickSandboxToolPolicy } from "./sandbox-tool-policy.js";
 import type { SandboxToolPolicy } from "./sandbox.js";
 import {
@@ -143,7 +144,49 @@ type ToolPolicyConfig = {
 };
 
 function normalizeProviderKey(value: string): string {
-  return normalizeLowercaseStringOrEmpty(value);
+  const normalized = normalizeLowercaseStringOrEmpty(value);
+  const slashIndex = normalized.indexOf("/");
+  if (slashIndex <= 0) {
+    return normalizeProviderId(normalized);
+  }
+  const provider = normalizeProviderId(normalized.slice(0, slashIndex));
+  const modelId = normalized.slice(slashIndex + 1);
+  return modelId ? `${provider}/${modelId}` : provider;
+}
+
+function isCanonicalProviderKey(value: string): boolean {
+  return normalizeLowercaseStringOrEmpty(value) === normalizeProviderKey(value);
+}
+
+function buildProviderToolPolicyLookup(
+  entries: Array<[string, ToolPolicyConfig]>,
+): Map<string, ToolPolicyConfig> {
+  const lookup = new Map<
+    string,
+    {
+      canonical: boolean;
+      value: ToolPolicyConfig;
+    }
+  >();
+  for (const [key, value] of entries) {
+    const normalized = normalizeProviderKey(key);
+    if (!normalized) {
+      continue;
+    }
+    const canonical = isCanonicalProviderKey(key);
+    const existing = lookup.get(normalized);
+    // Alias and canonical keys can normalize to the same provider. Prefer the
+    // canonical entry so mixed legacy/canonical configs do not depend on
+    // Object.entries insertion order.
+    if (!existing || (canonical && !existing.canonical)) {
+      lookup.set(normalized, { canonical, value });
+    }
+  }
+  const resolved = new Map<string, ToolPolicyConfig>();
+  for (const [key, entry] of lookup) {
+    resolved.set(key, entry.value);
+  }
+  return resolved;
 }
 
 function collectUniqueStrings(values: Array<string | null | undefined>): string[] {
@@ -236,6 +279,51 @@ export function resolveGroupContextFromSessionKey(sessionKey?: string | null): {
   };
 }
 
+type GroupToolPolicyContext = ReturnType<typeof resolveGroupContextFromSessionKey>;
+
+function resolveTrustedGroupIdFromContexts(params: {
+  groupId?: string | null;
+  sessionContext: GroupToolPolicyContext;
+  spawnedContext: GroupToolPolicyContext;
+}): {
+  groupId: string | null | undefined;
+  dropped: boolean;
+} {
+  const callerGroupId = (params.groupId ?? "").trim();
+  if (!callerGroupId) {
+    return { groupId: params.groupId, dropped: false };
+  }
+  const trustedGroupIds = collectUniqueStrings([
+    ...(params.sessionContext.groupIds ?? []),
+    ...(params.spawnedContext.groupIds ?? []),
+  ]);
+  // Fail closed when no server-derived session/spawn context can vouch for the
+  // caller group id. Non-group sessions must not opt into group-scoped tool
+  // policy by supplying an arbitrary groupId.
+  if (trustedGroupIds.length === 0) {
+    return { groupId: null, dropped: true };
+  }
+  if (trustedGroupIds.includes(callerGroupId)) {
+    return { groupId: params.groupId, dropped: false };
+  }
+  return { groupId: null, dropped: true };
+}
+
+export function resolveTrustedGroupId(params: {
+  groupId?: string | null;
+  sessionKey?: string | null;
+  spawnedBy?: string | null;
+}): {
+  groupId: string | null | undefined;
+  dropped: boolean;
+} {
+  return resolveTrustedGroupIdFromContexts({
+    groupId: params.groupId,
+    sessionContext: resolveGroupContextFromSessionKey(params.sessionKey),
+    spawnedContext: resolveGroupContextFromSessionKey(params.spawnedBy),
+  });
+}
+
 function resolveProviderToolPolicy(params: {
   byProvider?: Record<string, ToolPolicyConfig>;
   modelProvider?: string;
@@ -251,19 +339,14 @@ function resolveProviderToolPolicy(params: {
     return undefined;
   }
 
-  const lookup = new Map<string, ToolPolicyConfig>();
-  for (const [key, value] of entries) {
-    const normalized = normalizeProviderKey(key);
-    if (!normalized) {
-      continue;
-    }
-    lookup.set(normalized, value);
-  }
+  const lookup = buildProviderToolPolicyLookup(entries);
 
   const normalizedProvider = normalizeProviderKey(provider);
   const rawModelId = normalizeOptionalLowercaseString(params.modelId);
-  const fullModelId =
-    rawModelId && !rawModelId.includes("/") ? `${normalizedProvider}/${rawModelId}` : rawModelId;
+  // Model IDs can contain provider-like prefixes (for example OpenRouter refs);
+  // keep them inside the selected provider scope instead of treating them as a
+  // byProvider override.
+  const fullModelId = rawModelId ? `${normalizedProvider}/${rawModelId}` : undefined;
 
   const candidates = [...(fullModelId ? [fullModelId] : []), normalizedProvider];
 
@@ -383,15 +466,22 @@ export function resolveGroupToolPolicy(params: {
   }
   const sessionContext = resolveGroupContextFromSessionKey(params.sessionKey);
   const spawnedContext = resolveGroupContextFromSessionKey(params.spawnedBy);
+  const trustedGroup = resolveTrustedGroupIdFromContexts({
+    groupId: params.groupId,
+    sessionContext,
+    spawnedContext,
+  });
+  // Keep server-derived ids first so a caller cannot use a trusted parent
+  // candidate to skip a more-specific session group policy.
   const groupIds = collectUniqueStrings([
-    ...buildScopedGroupIdCandidates(params.groupId),
     ...(sessionContext.groupIds ?? []),
     ...(spawnedContext.groupIds ?? []),
+    ...buildScopedGroupIdCandidates(trustedGroup.groupId),
   ]);
   if (groupIds.length === 0) {
     return undefined;
   }
-  const channelRaw = params.messageProvider ?? sessionContext.channel ?? spawnedContext.channel;
+  const channelRaw = sessionContext.channel ?? spawnedContext.channel ?? params.messageProvider;
   const channel = normalizeMessageChannel(channelRaw);
   if (!channel) {
     return undefined;
@@ -406,8 +496,8 @@ export function resolveGroupToolPolicy(params: {
     const toolsConfig = plugin?.groups?.resolveToolPolicy?.({
       cfg: params.config,
       groupId,
-      groupChannel: params.groupChannel,
-      groupSpace: params.groupSpace,
+      groupChannel: trustedGroup.dropped ? null : params.groupChannel,
+      groupSpace: trustedGroup.dropped ? null : params.groupSpace,
       accountId: params.accountId,
       senderId: params.senderId,
       senderName: params.senderName,

@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { handleSlackAction, slackActionRuntime } from "./action-runtime.js";
 import { parseSlackBlocksInput } from "./blocks-input.js";
@@ -115,7 +115,7 @@ describe("handleSlackAction", () => {
     { name: "raw channel id", channelId: "C1" },
     { name: "channel: prefixed id", channelId: "channel:C1" },
   ])("adds reactions for $name", async ({ channelId }) => {
-    await handleSlackAction(
+    const result = await handleSlackAction(
       {
         action: "react",
         channelId,
@@ -130,6 +130,10 @@ describe("handleSlackAction", () => {
       "✅",
       expect.objectContaining({ cfg: expect.any(Object) }),
     );
+    expect(JSON.parse((result.content?.[0] as { type: "text"; text: string }).text)).toEqual({
+      ok: true,
+      added: "✅",
+    });
   });
 
   it("removes reactions on empty emoji", async () => {
@@ -512,6 +516,24 @@ describe("handleSlackAction", () => {
     );
 
     expectLastSlackSend("First", "1111111111.111111");
+    await sendSecondMessageAndExpectNoThread({ cfg, context });
+  });
+
+  it("replyToMode=first normalizes channel target when accounting explicit threadTs", async () => {
+    const { cfg, context, hasRepliedRef } = createReplyToFirstScenario();
+
+    await handleSlackAction(
+      {
+        action: "sendMessage",
+        to: "#c123",
+        content: "Explicit",
+        threadTs: "9999999999.999999",
+      },
+      cfg,
+      context,
+    );
+
+    expect(hasRepliedRef.value).toBe(true);
     await sendSecondMessageAndExpectNoThread({ cfg, context });
   });
 

@@ -5,15 +5,20 @@ import { getModel, type Api, type Model } from "@mariozechner/pi-ai";
 import { AuthStorage, ModelRegistry } from "@mariozechner/pi-coding-agent";
 import OpenAI from "openai";
 import type { ResolvedTtsConfig } from "openclaw/plugin-sdk/agent-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { encodePngRgba, fillPixel } from "openclaw/plugin-sdk/media-runtime";
-import { describe, expect, it } from "vitest";
 import {
   registerProviderPlugin,
   requireRegisteredProvider,
-} from "../../test/helpers/plugins/provider-registration.js";
-import { runRealtimeSttLiveTest } from "../../test/helpers/stt-live-audio.js";
+} from "openclaw/plugin-sdk/plugin-test-runtime";
+import { runRealtimeSttLiveTest } from "openclaw/plugin-sdk/provider-test-contracts";
+import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import {
+  isOverloadedErrorMessage,
+  isServerErrorMessage,
+  isTimeoutErrorMessage,
+} from "openclaw/plugin-sdk/test-env";
+import { describe, expect, it } from "vitest";
 import plugin from "./index.js";
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY ?? "";
@@ -99,8 +104,23 @@ function createReferencePng(): Buffer {
   return encodePngRgba(buf, width, height);
 }
 
+function formatLiveOpenAIError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function resolveLiveOpenAISkipReason(error: unknown): string | null {
+  const message = formatLiveOpenAIError(error);
+  if (isTimeoutErrorMessage(message) || /timed out|operation was aborted/i.test(message)) {
+    return "provider timeout";
+  }
+  if (isOverloadedErrorMessage(message) || isServerErrorMessage(message)) {
+    return "provider outage";
+  }
+  return null;
+}
+
 function createLiveConfig(): OpenClawConfig {
-  const cfg = loadConfig();
+  const cfg = getRuntimeConfig();
   return {
     ...cfg,
     models: {
@@ -149,6 +169,10 @@ function createLiveTtsConfig(): ResolvedTtsConfig {
 
 async function createTempAgentDir(): Promise<string> {
   return await fs.mkdtemp(path.join(os.tmpdir(), "openai-plugin-live-"));
+}
+
+async function removeTempAgentDir(agentDir: string): Promise<void> {
+  await fs.rm(agentDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 }
 
 function normalizeTranscriptForMatch(value: string): string {
@@ -223,8 +247,11 @@ describeLive("openai plugin live", () => {
     });
     const response = await client.responses.create({
       model: normalized?.id ?? LIVE_MODEL_ID,
-      input: "Reply with exactly OK.",
-      max_output_tokens: 16,
+      instructions: "Return exactly OK and no other text.",
+      input: "Return exactly OK.",
+      max_output_tokens: 64,
+      reasoning: { effort: "none" },
+      text: { verbosity: "low" },
     });
 
     expect(response.output_text.trim()).toMatch(/^OK[.!]?$/);
@@ -274,7 +301,7 @@ describeLive("openai plugin live", () => {
     const ttsConfig = createLiveTtsConfig();
 
     const synthesized = await speechProvider.synthesize({
-      text: "OpenClaw integration test OK.",
+      text: "Speech transcription check okay.",
       cfg,
       providerConfig: ttsConfig.providerConfigs.openai ?? {},
       target: "audio-file",
@@ -292,8 +319,8 @@ describeLive("openai plugin live", () => {
     const text = (transcription?.text ?? "").toLowerCase();
     const collapsedText = text.replace(/[\s-]+/g, "");
     expect(text.length).toBeGreaterThan(0);
-    expect(collapsedText).toContain("openclaw");
-    expect(text).toMatch(/\bok\b/);
+    expect(collapsedText).toContain("speech");
+    expect(collapsedText).toContain("check");
   }, 45_000);
 
   it("opens OpenAI realtime STT before sending audio", async () => {
@@ -349,11 +376,12 @@ describeLive("openai plugin live", () => {
         silenceDurationMs: 500,
       },
       audio,
+      expectedNormalizedText: /openai.*realtime.*transcription/,
     });
 
     const normalized = transcripts.join(" ").toLowerCase();
     const compact = normalizeTranscriptForMatch(normalized);
-    expect(compact).toContain("openclaw");
+    expect(compact).toContain("openai");
     expect(normalized).toContain("transcription");
     expect(partials.length + transcripts.length).toBeGreaterThan(0);
   }, 180_000);
@@ -383,7 +411,7 @@ describeLive("openai plugin live", () => {
       expect(generated.images[0]?.mimeType).toBe("image/png");
       expect(generated.images[0]?.buffer.byteLength).toBeGreaterThan(1_000);
     } finally {
-      await fs.rm(agentDir, { recursive: true, force: true });
+      await removeTempAgentDir(agentDir);
     }
   }, 240_000);
 
@@ -420,7 +448,7 @@ describeLive("openai plugin live", () => {
       expect(edited.images[0]?.mimeType).toBe("image/png");
       expect(edited.images[0]?.buffer.byteLength).toBeGreaterThan(1_000);
     } finally {
-      await fs.rm(agentDir, { recursive: true, force: true });
+      await removeTempAgentDir(agentDir);
     }
   }, 240_000);
 
@@ -432,22 +460,36 @@ describeLive("openai plugin live", () => {
     const agentDir = await createTempAgentDir();
 
     try {
-      const description = await mediaProvider.describeImage?.({
-        buffer: createReferencePng(),
-        fileName: "reference.png",
-        mime: "image/png",
-        prompt: "Reply with one lowercase word for the dominant center color.",
-        timeoutMs: 60_000,
-        agentDir,
-        cfg,
-        authStore: EMPTY_AUTH_STORE,
-        model: LIVE_VISION_MODEL,
-        provider: "openai",
-      });
+      let description:
+        | Awaited<ReturnType<NonNullable<typeof mediaProvider.describeImage>>>
+        | undefined;
+      try {
+        description = await mediaProvider.describeImage?.({
+          buffer: createReferencePng(),
+          fileName: "reference.png",
+          mime: "image/png",
+          prompt: "Reply with one lowercase word for the dominant center color.",
+          timeoutMs: 45_000,
+          agentDir,
+          cfg,
+          authStore: EMPTY_AUTH_STORE,
+          model: LIVE_VISION_MODEL,
+          provider: "openai",
+        });
+      } catch (err) {
+        const skipReason = resolveLiveOpenAISkipReason(err);
+        if (skipReason) {
+          console.warn(
+            `[live:openai] image description skipped: ${skipReason}: ${formatLiveOpenAIError(err)}`,
+          );
+          return;
+        }
+        throw err;
+      }
 
       expect((description?.text ?? "").toLowerCase()).toContain("orange");
     } finally {
-      await fs.rm(agentDir, { recursive: true, force: true });
+      await removeTempAgentDir(agentDir);
     }
-  }, 120_000);
+  }, 240_000);
 });

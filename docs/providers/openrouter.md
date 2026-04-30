@@ -4,6 +4,7 @@ read_when:
   - You want a single API key for many LLMs
   - You want to run models via OpenRouter in OpenClaw
   - You want to use OpenRouter for image generation
+  - You want to use OpenRouter for video generation
 title: "OpenRouter"
 ---
 
@@ -53,12 +54,10 @@ available providers and models, see [/concepts/model-providers](/concepts/model-
 
 Bundled fallback examples:
 
-| Model ref                            | Notes                         |
-| ------------------------------------ | ----------------------------- |
-| `openrouter/auto`                    | OpenRouter automatic routing  |
-| `openrouter/moonshotai/kimi-k2.6`    | Kimi K2.6 via MoonshotAI      |
-| `openrouter/openrouter/healer-alpha` | OpenRouter Healer Alpha route |
-| `openrouter/openrouter/hunter-alpha` | OpenRouter Hunter Alpha route |
+| Model ref                         | Notes                        |
+| --------------------------------- | ---------------------------- |
+| `openrouter/auto`                 | OpenRouter automatic routing |
+| `openrouter/moonshotai/kimi-k2.6` | Kimi K2.6 via MoonshotAI     |
 
 ## Image generation
 
@@ -79,6 +78,33 @@ OpenRouter can also back the `image_generate` tool. Use an OpenRouter image mode
 ```
 
 OpenClaw sends image requests to OpenRouter's chat completions image API with `modalities: ["image", "text"]`. Gemini image models receive supported `aspectRatio` and `resolution` hints through OpenRouter's `image_config`. Use `agents.defaults.imageGenerationModel.timeoutMs` for slower OpenRouter image models; the `image_generate` tool's per-call `timeoutMs` parameter still wins.
+
+## Video generation
+
+OpenRouter can also back the `video_generate` tool through its asynchronous `/videos` API. Use an OpenRouter video model under `agents.defaults.videoGenerationModel`:
+
+```json5
+{
+  env: { OPENROUTER_API_KEY: "sk-or-..." },
+  agents: {
+    defaults: {
+      videoGenerationModel: {
+        primary: "openrouter/google/veo-3.1-fast",
+      },
+    },
+  },
+}
+```
+
+OpenClaw submits text-to-video and image-to-video jobs to OpenRouter, polls
+the returned `polling_url`, and downloads the completed video from
+OpenRouter's `unsigned_urls` or the documented job content endpoint.
+Reference images are sent as first/last frame images by default; images
+tagged with `reference_image` are sent as OpenRouter input references. The
+bundled `google/veo-3.1-fast` default advertises the currently supported 4/6/8
+second durations, `720P`/`1080P` resolutions, and `16:9`/`9:16` aspect
+ratios. Video-to-video is not registered for OpenRouter because the upstream
+video generation API currently accepts text and image references.
 
 ## Text-to-speech
 
@@ -136,7 +162,9 @@ does **not** inject those OpenRouter-specific headers or Anthropic cache markers
   <Accordion title="Thinking / reasoning injection">
     On supported non-`auto` routes, OpenClaw maps the selected thinking level to
     OpenRouter proxy reasoning payloads. Unsupported model hints and
-    `openrouter/auto` skip that reasoning injection.
+    `openrouter/auto` skip that reasoning injection. Hunter Alpha also skips
+    proxy reasoning for stale configured model refs because OpenRouter could
+    return final answer text in reasoning fields for that retired route.
   </Accordion>
 
   <Accordion title="OpenAI-only request shaping">

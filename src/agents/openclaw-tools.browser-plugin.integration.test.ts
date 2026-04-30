@@ -192,4 +192,76 @@ describe("createOpenClawTools browser plugin integration", () => {
 
     expect(capturedRuntimeConfig).toBe(resolvedRunConfig);
   });
+
+  it("exposes a live runtime config getter to plugin tool factories", () => {
+    const sourceConfig = {
+      plugins: {
+        allow: ["memory-core"],
+      },
+    } as OpenClawConfig;
+    const firstRuntimeConfig = {
+      plugins: {
+        allow: ["memory-core"],
+        entries: { "memory-core": { enabled: true } },
+      },
+    } as OpenClawConfig;
+    const nextRuntimeConfig = {
+      plugins: {
+        allow: ["memory-core"],
+        entries: { "memory-core": { enabled: false } },
+      },
+    } as OpenClawConfig;
+    let getRuntimeConfig: (() => OpenClawConfig | undefined) | undefined;
+    hoisted.resolvePluginTools.mockImplementation((params: unknown) => {
+      getRuntimeConfig = (
+        params as { context?: { getRuntimeConfig?: () => OpenClawConfig | undefined } }
+      ).context?.getRuntimeConfig;
+      return [];
+    });
+    activateSecretsRuntimeSnapshot({
+      sourceConfig,
+      config: firstRuntimeConfig,
+      authStores: [],
+      warnings: [],
+      webTools: {
+        search: {
+          providerSource: "none",
+          diagnostics: [],
+        },
+        fetch: {
+          providerSource: "none",
+          diagnostics: [],
+        },
+        diagnostics: [],
+      },
+    });
+
+    resolveOpenClawPluginToolsForOptions({
+      options: { config: sourceConfig },
+      resolvedConfig: sourceConfig,
+    });
+
+    expect(getRuntimeConfig?.()).toStrictEqual(firstRuntimeConfig);
+
+    activateSecretsRuntimeSnapshot({
+      sourceConfig,
+      config: nextRuntimeConfig,
+      authStores: [],
+      warnings: [],
+      webTools: {
+        search: {
+          providerSource: "none",
+          diagnostics: [],
+        },
+        fetch: {
+          providerSource: "none",
+          diagnostics: [],
+        },
+        diagnostics: [],
+      },
+    });
+
+    expect(getRuntimeConfig?.()).toStrictEqual(nextRuntimeConfig);
+    expect(getRuntimeConfig?.()?.plugins?.entries?.["memory-core"]?.enabled).toBe(false);
+  });
 });

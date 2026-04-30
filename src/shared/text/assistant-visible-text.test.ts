@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   sanitizeAssistantVisibleText,
   sanitizeAssistantVisibleTextWithProfile,
+  stripToolCallXmlTags,
   stripAssistantInternalScaffolding,
 } from "./assistant-visible-text.js";
 import { stripModelSpecialTokens } from "./model-special-tokens.js";
@@ -504,6 +505,17 @@ describe("stripAssistantInternalScaffolding", () => {
   });
 });
 
+describe("stripToolCallXmlTags", () => {
+  it("strips plural function/tool wrapper XML only when the opt-in flag is enabled", () => {
+    const input =
+      'prefix <function_calls><invoke name="find">secret</invoke></function_calls> suffix';
+    expect(stripToolCallXmlTags(input)).toBe(input);
+    expect(stripToolCallXmlTags(input, { stripFunctionCallsXmlPayloads: true })).toBe(
+      "prefix  suffix",
+    );
+  });
+});
+
 describe("sanitizeAssistantVisibleText", () => {
   it("strips minimax, tool XML, downgraded tool markers, and think tags in one pass", () => {
     const input = [
@@ -532,6 +544,18 @@ describe("sanitizeAssistantVisibleText", () => {
   it("drops malformed reasoning before orphan close tags when final text follows", () => {
     expect(sanitizeAssistantVisibleText("private chain of thought </think> Visible answer")).toBe(
       "Visible answer",
+    );
+  });
+
+  it("recovers fully wrapped unclosed reasoning tags that would otherwise deliver empty text", () => {
+    expect(sanitizeAssistantVisibleText("<think>Visible answer from a malformed local model")).toBe(
+      "Visible answer from a malformed local model",
+    );
+  });
+
+  it("keeps unclosed trailing reasoning hidden when visible text already exists", () => {
+    expect(sanitizeAssistantVisibleText("Visible prefix <think>private reasoning tail")).toBe(
+      "Visible prefix",
     );
   });
 });

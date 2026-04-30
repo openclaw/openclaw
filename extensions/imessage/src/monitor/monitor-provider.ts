@@ -6,20 +6,13 @@ import {
 } from "openclaw/plugin-sdk/channel-inbound";
 import { createChannelPairingChallengeIssuer } from "openclaw/plugin-sdk/channel-pairing";
 import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
-import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
-import {
-  resolveOpenProviderRuntimeGroupPolicy,
-  resolveDefaultGroupPolicy,
-  warnMissingProviderGroupPolicyFallbackOnce,
-} from "openclaw/plugin-sdk/config-runtime";
-import { readSessionUpdatedAt, resolveStorePath } from "openclaw/plugin-sdk/config-runtime";
 import {
   readChannelAllowFromStore,
   upsertChannelPairingRequest,
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { recordInboundSession } from "openclaw/plugin-sdk/conversation-runtime";
 import { normalizeScpRemoteHost } from "openclaw/plugin-sdk/host-runtime";
-import { waitForTransportReady } from "openclaw/plugin-sdk/infra-runtime";
+import { runPreparedInboundReplyTurn } from "openclaw/plugin-sdk/inbound-reply-dispatch";
 import { isInboundPathAllowed, kindFromMime } from "openclaw/plugin-sdk/media-runtime";
 import {
   clearHistoryEntriesIfEnabled,
@@ -29,9 +22,18 @@ import {
 import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-runtime";
 import { dispatchInboundMessage } from "openclaw/plugin-sdk/reply-runtime";
 import { createReplyDispatcher } from "openclaw/plugin-sdk/reply-runtime";
+import { settleReplyDispatcher } from "openclaw/plugin-sdk/reply-runtime";
+import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { danger, logVerbose, shouldLogVerbose, warn } from "openclaw/plugin-sdk/runtime-env";
+import {
+  resolveOpenProviderRuntimeGroupPolicy,
+  resolveDefaultGroupPolicy,
+  warnMissingProviderGroupPolicyFallbackOnce,
+} from "openclaw/plugin-sdk/runtime-group-policy";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
+import { readSessionUpdatedAt, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-runtime";
+import { waitForTransportReady } from "openclaw/plugin-sdk/transport-ready-runtime";
 import { resolveIMessageAccount } from "../accounts.js";
 import { createIMessageRpcClient, type IMessageRpcClient } from "../client.js";
 import { DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS } from "../constants.js";
@@ -116,7 +118,7 @@ async function waitForWatchSubscribeRetryDelay(params: {
 
 export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): Promise<void> {
   const runtime = resolveRuntime(opts);
-  const cfg = opts.config ?? loadConfig();
+  const cfg = opts.config ?? getRuntimeConfig();
   const accountInfo = resolveIMessageAccount({
     cfg,
     accountId: opts.accountId,
@@ -395,36 +397,6 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       allowFrom,
       normalizeEntry: normalizeIMessageHandle,
     });
-    await recordInboundSession({
-      storePath,
-      sessionKey: ctxPayload.SessionKey ?? decision.route.sessionKey,
-      ctx: ctxPayload,
-      updateLastRoute:
-        !decision.isGroup && updateTarget
-          ? {
-              sessionKey: decision.route.mainSessionKey,
-              channel: "imessage",
-              to: updateTarget,
-              accountId: decision.route.accountId,
-              mainDmOwnerPin:
-                pinnedMainDmOwner && decision.senderNormalized
-                  ? {
-                      ownerRecipient: pinnedMainDmOwner,
-                      senderRecipient: decision.senderNormalized,
-                      onSkip: ({ ownerRecipient, senderRecipient }) => {
-                        logVerbose(
-                          `imessage: skip main-session last route for ${senderRecipient} (pinned owner ${ownerRecipient})`,
-                        );
-                      },
-                    }
-                  : undefined,
-            }
-          : undefined,
-      onRecordError: (err) => {
-        logVerbose(`imessage: failed updating session meta: ${String(err)}`);
-      },
-    });
-
     if (shouldLogVerbose()) {
       const preview = truncateUtf16Safe(ctxPayload.Body ?? "", 200).replace(/\n/g, "\\n");
       logVerbose(
@@ -467,18 +439,55 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       },
     });
 
-    const { queuedFinal } = await dispatchInboundMessage({
-      ctx: ctxPayload,
-      cfg,
-      dispatcher,
-      replyOptions: {
-        disableBlockStreaming:
-          typeof accountInfo.config.blockStreaming === "boolean"
-            ? !accountInfo.config.blockStreaming
+    const { dispatchResult } = await runPreparedInboundReplyTurn({
+      channel: "imessage",
+      accountId: decision.route.accountId,
+      routeSessionKey: decision.route.sessionKey,
+      storePath,
+      ctxPayload,
+      recordInboundSession,
+      record: {
+        updateLastRoute:
+          !decision.isGroup && updateTarget
+            ? {
+                sessionKey: decision.route.mainSessionKey,
+                channel: "imessage",
+                to: updateTarget,
+                accountId: decision.route.accountId,
+                mainDmOwnerPin:
+                  pinnedMainDmOwner && decision.senderNormalized
+                    ? {
+                        ownerRecipient: pinnedMainDmOwner,
+                        senderRecipient: decision.senderNormalized,
+                        onSkip: ({ ownerRecipient, senderRecipient }) => {
+                          logVerbose(
+                            `imessage: skip main-session last route for ${senderRecipient} (pinned owner ${ownerRecipient})`,
+                          );
+                        },
+                      }
+                    : undefined,
+              }
             : undefined,
-        onModelSelected,
+        onRecordError: (err) => {
+          logVerbose(`imessage: failed updating session meta: ${String(err)}`);
+        },
       },
+      onPreDispatchFailure: () => settleReplyDispatcher({ dispatcher }),
+      runDispatch: () =>
+        dispatchInboundMessage({
+          ctx: ctxPayload,
+          cfg,
+          dispatcher,
+          replyOptions: {
+            disableBlockStreaming:
+              typeof accountInfo.config.blockStreaming === "boolean"
+                ? !accountInfo.config.blockStreaming
+                : undefined,
+            onModelSelected,
+          },
+        }),
     });
+    const queuedFinal = dispatchResult.queuedFinal;
 
     if (!queuedFinal) {
       if (decision.isGroup && decision.historyKey) {

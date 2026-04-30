@@ -23,7 +23,7 @@ vi.mock("openclaw/plugin-sdk/outbound-media", () => ({
   loadOutboundMediaFromUrl: mockState.loadOutboundMediaFromUrl,
 }));
 
-vi.mock("openclaw/plugin-sdk/config-runtime", () => ({
+vi.mock("openclaw/plugin-sdk/markdown-table-runtime", () => ({
   resolveMarkdownTableMode: mockState.resolveMarkdownTableMode,
 }));
 

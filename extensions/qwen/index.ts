@@ -40,13 +40,6 @@ function resolveConfiguredQwenBaseUrl(
   return undefined;
 }
 
-function isQwen36PlusUnsupportedForConfig(params: {
-  config: Parameters<typeof resolveConfiguredQwenBaseUrl>[0];
-  baseUrl?: string;
-}): boolean {
-  return isQwenCodingPlanBaseUrl(params.baseUrl ?? resolveConfiguredQwenBaseUrl(params.config));
-}
-
 export default defineSingleProviderPluginEntry({
   id: PROVIDER_ID,
   name: "Qwen Provider",
@@ -175,21 +168,6 @@ export default defineSingleProviderPluginEntry({
       return models && models.length !== providerConfig.models?.length
         ? { ...providerConfig, models }
         : undefined;
-    },
-    suppressBuiltInModel: (ctx) => {
-      const provider = normalizeProviderId(ctx.provider);
-      if (
-        (provider !== PROVIDER_ID && provider !== LEGACY_PROVIDER_ID) ||
-        ctx.modelId !== QWEN_36_PLUS_MODEL_ID ||
-        !isQwen36PlusUnsupportedForConfig({ config: ctx.config, baseUrl: ctx.baseUrl })
-      ) {
-        return undefined;
-      }
-      return {
-        suppress: true,
-        errorMessage:
-          "Unknown model: qwen/qwen3.6-plus. qwen3.6-plus is not supported on the Qwen Coding Plan endpoint; use a Standard pay-as-you-go Qwen endpoint or choose qwen/qwen3.5-plus.",
-      };
     },
   },
   register(api) {

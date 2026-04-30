@@ -9,7 +9,6 @@ vi.mock("../plugins/provider-hook-runtime.js", () => ({
   },
   prepareProviderExtraParams: () => undefined,
   resolveProviderExtraParamsForTransport: () => undefined,
-  resetProviderRuntimeHookCacheForTest: () => {},
   wrapProviderStreamFn: (params: { context: { streamFn?: StreamFn } }) => params.context.streamFn,
 }));
 
@@ -417,7 +416,9 @@ function createTestOpenAIProviderWrapper(
   if (withDefaultTransport) {
     streamFn = createOpenAIDefaultTransportWrapper(streamFn);
   }
-  streamFn = createOpenAIAttributionHeadersWrapper(streamFn);
+  streamFn = createOpenAIAttributionHeadersWrapper(streamFn, {
+    codexNativeTransportStreamFn: params.context.streamFn,
+  });
 
   if (resolveOpenAIFastMode(params.context.extraParams)) {
     streamFn = createOpenAIFastModeWrapper(streamFn);
@@ -467,7 +468,7 @@ describe("applyExtraParamsToAgent", () => {
     };
   }
 
-  function buildAnthropicModelConfig(modelKey: string, params: Record<string, unknown>) {
+  function buildModelConfig(modelKey: string, params: Record<string, unknown>) {
     return {
       agents: {
         defaults: {
@@ -478,6 +479,40 @@ describe("applyExtraParamsToAgent", () => {
       },
     };
   }
+
+  it("passes agentDir and workspaceDir to provider stream wrappers", () => {
+    let capturedContext: WrapProviderStreamFnParams["context"] | undefined;
+    extraParamsTesting.setProviderRuntimeDepsForTest({
+      prepareProviderExtraParams: () => undefined,
+      wrapProviderStreamFn: (params) => {
+        capturedContext = params.context;
+        return params.context.streamFn;
+      },
+    });
+
+    const agent = { streamFn: (() => ({}) as ReturnType<StreamFn>) as StreamFn };
+    const model = {
+      api: "openai-codex-responses",
+      provider: "openai-codex",
+      id: "gpt-5.4",
+    } as Model<"openai-codex-responses">;
+
+    applyExtraParamsToAgent(
+      agent,
+      undefined,
+      "openai-codex",
+      "gpt-5.4",
+      undefined,
+      "high",
+      "cass",
+      "/tmp/openclaw-workspace",
+      model,
+      "/tmp/openclaw-agent",
+    );
+
+    expect(capturedContext?.agentDir).toBe("/tmp/openclaw-agent");
+    expect(capturedContext?.workspaceDir).toBe("/tmp/openclaw-workspace");
+  });
 
   function runResponsesPayloadMutationCase(params: {
     applyProvider: string;
@@ -784,6 +819,60 @@ describe("applyExtraParamsToAgent", () => {
     expect(payload.parallel_tool_calls).toBe(false);
   });
 
+  it("uses canonical model config keys for provider-prefixed model ids", () => {
+    const payload = runParallelToolCallsPayloadMutationCase({
+      applyProvider: "openrouter",
+      applyModelId: "openrouter/auto",
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "openrouter/auto": {
+                params: {
+                  parallel_tool_calls: false,
+                },
+              },
+            },
+          },
+        },
+      },
+      model: {
+        api: "openai-completions",
+        provider: "openrouter",
+        id: "openrouter/auto",
+      } as Model<"openai-completions">,
+    });
+
+    expect(payload.parallel_tool_calls).toBe(false);
+  });
+
+  it("keeps legacy double-prefixed model config fallback for provider-prefixed model ids", () => {
+    const payload = runParallelToolCallsPayloadMutationCase({
+      applyProvider: "openrouter",
+      applyModelId: "openrouter/auto",
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "openrouter/openrouter/auto": {
+                params: {
+                  parallel_tool_calls: false,
+                },
+              },
+            },
+          },
+        },
+      },
+      model: {
+        api: "openai-completions",
+        provider: "openrouter",
+        id: "openrouter/auto",
+      } as Model<"openai-completions">,
+    });
+
+    expect(payload.parallel_tool_calls).toBe(false);
+  });
+
   it("strips store from proxied openai-completions payloads", () => {
     const payload = runResponsesPayloadMutationCase({
       applyProvider: "google",
@@ -891,85 +980,6 @@ describe("applyExtraParamsToAgent", () => {
     expect(payload.chat_template_kwargs).toEqual({
       enable_thinking: false,
       force_nonempty_content: true,
-    });
-  });
-
-  it("injects vLLM Nemotron chat_template_kwargs when thinking is off", () => {
-    const payload = runResponsesPayloadMutationCase({
-      applyProvider: "vllm",
-      applyModelId: "nemotron-3-super",
-      model: {
-        api: "openai-completions",
-        provider: "vllm",
-        id: "nemotron-3-super",
-        baseUrl: "http://127.0.0.1:8000/v1",
-      } as Model<"openai-completions">,
-      payload: {
-        messages: [],
-      },
-      thinkingLevel: "off",
-    });
-
-    expect(payload.chat_template_kwargs).toEqual({
-      enable_thinking: false,
-      force_nonempty_content: true,
-    });
-  });
-
-  it("does not inject vLLM Nemotron chat_template_kwargs when thinking is enabled", () => {
-    const payload = runResponsesPayloadMutationCase({
-      applyProvider: "vllm",
-      applyModelId: "nemotron-3-super",
-      model: {
-        api: "openai-completions",
-        provider: "vllm",
-        id: "nemotron-3-super",
-        baseUrl: "http://127.0.0.1:8000/v1",
-      } as Model<"openai-completions">,
-      payload: {
-        messages: [],
-      },
-      thinkingLevel: "low",
-    });
-
-    expect(payload).not.toHaveProperty("chat_template_kwargs");
-  });
-
-  it("lets extra_body override generated vLLM Nemotron chat_template_kwargs", () => {
-    const payload = runResponsesPayloadMutationCase({
-      applyProvider: "vllm",
-      applyModelId: "nemotron-3-super",
-      cfg: {
-        agents: {
-          defaults: {
-            models: {
-              "vllm/nemotron-3-super": {
-                params: {
-                  extra_body: {
-                    chat_template_kwargs: {
-                      enable_thinking: true,
-                    },
-                  },
-                },
-              },
-            },
-          },
-        },
-      },
-      model: {
-        api: "openai-completions",
-        provider: "vllm",
-        id: "nemotron-3-super",
-        baseUrl: "http://127.0.0.1:8000/v1",
-      } as Model<"openai-completions">,
-      payload: {
-        messages: [],
-      },
-      thinkingLevel: "off",
-    });
-
-    expect(payload.chat_template_kwargs).toEqual({
-      enable_thinking: true,
     });
   });
 
@@ -2491,7 +2501,7 @@ describe("applyExtraParamsToAgent", () => {
 
   it("adds Anthropic 1M beta header when context1m is enabled for Opus/Sonnet", () => {
     const { calls, agent } = createOptionsCaptureAgent();
-    const cfg = buildAnthropicModelConfig("anthropic/claude-opus-4-6", { context1m: true });
+    const cfg = buildModelConfig("anthropic/claude-opus-4-6", { context1m: true });
 
     applyExtraParamsToAgent(agent, cfg, "anthropic", "claude-opus-4-6");
 
@@ -2518,7 +2528,7 @@ describe("applyExtraParamsToAgent", () => {
   });
 
   it("does not add Anthropic 1M beta header when context1m is not enabled", () => {
-    const cfg = buildAnthropicModelConfig("anthropic/claude-opus-4-6", {
+    const cfg = buildModelConfig("anthropic/claude-opus-4-6", {
       temperature: 0.2,
     });
     const headers = runAnthropicHeaderCase({
@@ -2575,7 +2585,7 @@ describe("applyExtraParamsToAgent", () => {
   });
 
   it("merges existing anthropic-beta headers with configured betas", () => {
-    const cfg = buildAnthropicModelConfig("anthropic/claude-sonnet-4-5", {
+    const cfg = buildModelConfig("anthropic/claude-sonnet-4-5", {
       context1m: true,
       anthropicBeta: ["files-api-2025-04-14"],
     });
@@ -2595,7 +2605,7 @@ describe("applyExtraParamsToAgent", () => {
   });
 
   it("ignores context1m for non-Opus/Sonnet Anthropic models", () => {
-    const cfg = buildAnthropicModelConfig("anthropic/claude-haiku-3-5", { context1m: true });
+    const cfg = buildModelConfig("anthropic/claude-haiku-3-5", { context1m: true });
     const headers = runAnthropicHeaderCase({
       cfg,
       modelId: "claude-haiku-3-5",

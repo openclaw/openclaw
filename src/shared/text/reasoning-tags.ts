@@ -71,6 +71,7 @@ export function stripReasoningTagsFromText(
   let result = "";
   let lastIndex = 0;
   let thinkingDepth = 0;
+  let firstUnclosedContentIndex: number | undefined;
 
   for (const match of cleaned.matchAll(THINKING_TAG_RE)) {
     const idx = match.index ?? 0;
@@ -95,8 +96,12 @@ export function stripReasoningTagsFromText(
       }
       result += cleaned.slice(lastIndex, idx);
       thinkingDepth = 1;
+      firstUnclosedContentIndex = idx + match[0].length;
     } else if (isClose) {
       thinkingDepth -= 1;
+      if (thinkingDepth === 0) {
+        firstUnclosedContentIndex = undefined;
+      }
     } else {
       thinkingDepth += 1;
     }
@@ -108,5 +113,16 @@ export function stripReasoningTagsFromText(
     result += cleaned.slice(lastIndex);
   }
 
-  return applyTrim(result, trimMode);
+  const trimmedResult = applyTrim(result, trimMode);
+  if (
+    mode === "strict" &&
+    thinkingDepth > 0 &&
+    !trimmedResult &&
+    firstUnclosedContentIndex !== undefined &&
+    cleaned.trim()
+  ) {
+    return applyTrim(cleaned.slice(firstUnclosedContentIndex), trimMode);
+  }
+
+  return trimmedResult;
 }

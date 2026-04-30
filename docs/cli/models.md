@@ -47,10 +47,20 @@ Notes:
 - `models list` is read-only: it reads config, auth profiles, existing catalog
   state, and provider-owned catalog rows, but it does not rewrite
   `models.json`.
+- The `Auth` column is provider-level and read-only. It is computed from local
+  auth profile metadata, env markers, configured provider keys, local-provider
+  markers, AWS Bedrock env/profile markers, and plugin synthetic-auth metadata;
+  it does not load provider runtime, read keychain secrets, call provider
+  APIs, or prove exact per-model execution readiness.
 - `models list --all --provider <id>` can include provider-owned static catalog
   rows from plugin manifests or bundled provider catalog metadata even when you
   have not authenticated with that provider yet. Those rows still show as
   unavailable until matching auth is configured.
+- Broad `models list --all` merges manifest catalog rows over registry rows
+  without loading provider runtime supplement hooks. Provider-filtered manifest
+  fast paths use only providers marked `static`; providers marked `refreshable`
+  stay registry/cache-backed and append manifest rows as supplements, while
+  providers marked `runtime` stay on registry/runtime discovery.
 - `models list` keeps native model metadata and runtime caps distinct. In table
   output, `Ctx` shows `contextTokens/contextWindow` when an effective runtime
   cap differs from the native context window; JSON rows include `contextTokens`
@@ -110,6 +120,10 @@ Options:
 - `--probe-concurrency <n>`
 - `--probe-max-tokens <n>`
 - `--agent <id>` (configured agent id; overrides `OPENCLAW_AGENT_DIR`/`PI_CODING_AGENT_DIR`)
+
+`--json` keeps stdout reserved for the JSON payload. Auth-profile, provider,
+and startup diagnostics are routed to stderr so scripts can pipe stdout directly
+into tools such as `jq`.
 
 Probe status buckets:
 

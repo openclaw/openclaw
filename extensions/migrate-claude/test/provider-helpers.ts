@@ -37,15 +37,63 @@ export function makeConfigRuntime(
   config: OpenClawConfig,
   onWrite?: (next: OpenClawConfig) => void,
 ): NonNullable<MigrationProviderContext["runtime"]> {
+  const commitConfig = (next: OpenClawConfig) => {
+    for (const key of Object.keys(config) as Array<keyof OpenClawConfig>) {
+      delete config[key];
+    }
+    Object.assign(config, next);
+    onWrite?.(next);
+  };
+
   return {
     config: {
-      loadConfig: () => config,
-      writeConfigFile: async (next: OpenClawConfig) => {
-        for (const key of Object.keys(config) as Array<keyof OpenClawConfig>) {
-          delete config[key];
-        }
-        Object.assign(config, next);
-        onWrite?.(next);
+      current: () => config,
+      mutateConfigFile: async ({
+        afterWrite,
+        mutate,
+      }: {
+        afterWrite?: unknown;
+        mutate: (draft: OpenClawConfig, context: unknown) => Promise<unknown> | void;
+      }) => {
+        const next = structuredClone(config);
+        const result = await mutate(next, {
+          snapshot: {
+            path: "/tmp/openclaw.json",
+            exists: true,
+            raw: "{}",
+            parsed: {},
+            valid: true,
+            issues: [],
+            warnings: [],
+            legacyIssues: [],
+            config: next,
+            resolved: next,
+            runtimeConfig: next,
+            sourceConfig: next,
+          },
+          previousHash: "test",
+        });
+        commitConfig(next);
+        return {
+          nextConfig: next,
+          afterWrite,
+          followUp: { mode: "auto", requiresRestart: false },
+          result,
+        };
+      },
+      replaceConfigFile: async ({
+        afterWrite,
+        nextConfig,
+      }: {
+        afterWrite?: unknown;
+        nextConfig: OpenClawConfig;
+      }) => {
+        commitConfig(nextConfig);
+        return {
+          nextConfig,
+          afterWrite,
+          followUp: { mode: "auto", requiresRestart: false },
+        };
       },
     },
   } as NonNullable<MigrationProviderContext["runtime"]>;

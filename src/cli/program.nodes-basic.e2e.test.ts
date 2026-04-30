@@ -424,6 +424,35 @@ describe("cli program (nodes basics)", () => {
     );
   });
 
+  it("runs nodes remove and calls node.pair.remove", async () => {
+    callGateway.mockImplementation(async (...args: unknown[]) => {
+      const opts = (args[0] ?? {}) as { method?: string };
+      if (opts.method === "node.list") {
+        return {
+          nodes: [{ nodeId: "ios-node", displayName: "iOS Node", paired: true }],
+        };
+      }
+      if (opts.method === "node.pair.list") {
+        return {
+          pending: [],
+          paired: [{ nodeId: "ios-node", displayName: "iOS Node" }],
+        };
+      }
+      if (opts.method === "node.pair.remove") {
+        return { nodeId: "ios-node" };
+      }
+      return { ok: true };
+    });
+
+    await runProgram(["nodes", "remove", "--node", "iOS Node"]);
+    expect(callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "node.pair.remove",
+        params: { nodeId: "ios-node" },
+      }),
+    );
+  });
+
   it("runs nodes invoke and calls node.invoke", async () => {
     mockGatewayWithIosNodeListAnd("node.invoke", {
       ok: true,

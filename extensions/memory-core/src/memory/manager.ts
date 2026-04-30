@@ -36,6 +36,7 @@ import {
   getOrCreateManagedCacheEntry,
   resolveSingletonManagedCache,
 } from "./manager-cache.js";
+import { closeMemoryDatabase } from "./manager-db.js";
 import { MemoryManagerEmbeddingOps } from "./manager-embedding-ops.js";
 import {
   resolveMemoryPrimaryProviderRequest,
@@ -61,12 +62,23 @@ const VECTOR_TABLE = "chunks_vec";
 const FTS_TABLE = "chunks_fts";
 const EMBEDDING_CACHE_TABLE = "embedding_cache";
 const MEMORY_INDEX_MANAGER_CACHE_KEY = Symbol.for("openclaw.memoryIndexManagerCache");
+export const EMBEDDING_PROBE_CACHE_TTL_MS = 30_000;
 const log = createSubsystemLogger("memory");
 type MemoryIndexManagerPurpose = "default" | "status" | "cli";
 
 const { cache: INDEX_CACHE, pending: INDEX_CACHE_PENDING } =
   resolveSingletonManagedCache<MemoryIndexManager>(MEMORY_INDEX_MANAGER_CACHE_KEY);
+
+type EmbeddingProbeCacheEntry = {
+  result: MemoryEmbeddingProbeResult;
+  checkedAtMs: number;
+  expireAtMs: number;
+};
+
+const EMBEDDING_PROBE_CACHE = new Map<string, EmbeddingProbeCacheEntry>();
+
 export async function closeAllMemoryIndexManagers(): Promise<void> {
+  EMBEDDING_PROBE_CACHE.clear();
   await closeManagedCacheEntries({
     cache: INDEX_CACHE,
     pending: INDEX_CACHE_PENDING,
@@ -368,7 +380,10 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
           boostFallbackRanking: true,
         },
         sourceFilterList,
-      ).catch(() => []);
+      ).catch((err) => {
+        log.warn(`memory search: FTS keyword query failed: ${formatErrorMessage(err)}`);
+        return [];
+      });
       const resultSets =
         fullQueryResults.length > 0
           ? [fullQueryResults]
@@ -386,7 +401,12 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
                     candidates,
                     { boostFallbackRanking: true },
                     sourceFilterList,
-                  ).catch(() => []),
+                  ).catch((err) => {
+                    log.warn(
+                      `memory search: FTS per-keyword query failed for "${term}": ${formatErrorMessage(err)}`,
+                    );
+                    return [];
+                  }),
                 );
               })(),
             );
@@ -415,13 +435,23 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     // If FTS isn't available, hybrid mode cannot use keyword search; degrade to vector-only.
     const keywordResults =
       hybrid.enabled && this.fts.enabled && this.fts.available
-        ? await this.searchKeyword(cleaned, candidates, undefined, sourceFilterList).catch(() => [])
+        ? await this.searchKeyword(cleaned, candidates, undefined, sourceFilterList).catch(
+            (err) => {
+              log.warn(
+                `memory search: FTS hybrid keyword query failed: ${formatErrorMessage(err)}`,
+              );
+              return [];
+            },
+          )
         : [];
 
     const queryVec = await this.embedQueryWithTimeout(cleaned);
     const hasVector = queryVec.some((v) => v !== 0);
     const vectorResults = hasVector
-      ? await this.searchVector(queryVec, candidates, sourceFilterList).catch(() => [])
+      ? await this.searchVector(queryVec, candidates, sourceFilterList).catch((err) => {
+          log.warn(`memory search: vector query failed: ${formatErrorMessage(err)}`);
+          return [];
+        })
       : [];
 
     if (!hybrid.enabled || !this.fts.enabled || !this.fts.available) {
@@ -694,6 +724,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       },
       runSync: (nextParams) => this.runSync(nextParams),
       openDatabase: () => this.openDatabase(),
+      closeDatabase: (db) => closeMemoryDatabase(db),
       resetVectorState: () => this.resetVectorState(),
       ensureSchema: () => this.ensureSchema(),
       readMeta: () => this.readMeta() ?? undefined,
@@ -816,21 +847,54 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     return this.ensureVectorReady();
   }
 
+  private cacheProbeResult(result: MemoryEmbeddingProbeResult): MemoryEmbeddingProbeResult {
+    const checkedAtMs = Date.now();
+    EMBEDDING_PROBE_CACHE.set(this.cacheKey, {
+      result,
+      checkedAtMs,
+      expireAtMs: checkedAtMs + EMBEDDING_PROBE_CACHE_TTL_MS,
+    });
+    return result;
+  }
+
+  getCachedEmbeddingAvailability(): MemoryEmbeddingProbeResult | null {
+    const cached = EMBEDDING_PROBE_CACHE.get(this.cacheKey);
+    if (!cached) {
+      return null;
+    }
+    const nowMs = Date.now();
+    if (nowMs >= cached.expireAtMs) {
+      EMBEDDING_PROBE_CACHE.delete(this.cacheKey);
+      return null;
+    }
+    return {
+      ...cached.result,
+      checked: true,
+      cached: true,
+      checkedAtMs: cached.checkedAtMs,
+      cacheExpiresAtMs: cached.expireAtMs,
+    };
+  }
+
   async probeEmbeddingAvailability(): Promise<MemoryEmbeddingProbeResult> {
+    const cached = this.getCachedEmbeddingAvailability();
+    if (cached) {
+      return cached;
+    }
     await this.ensureProviderInitialized();
     // FTS-only mode: embeddings not available but search still works
     if (!this.provider) {
-      return {
+      return this.cacheProbeResult({
         ok: false,
         error: this.providerUnavailableReason ?? "No embedding provider available (FTS-only mode)",
-      };
+      });
     }
     try {
       await this.embedBatchWithRetry(["ping"]);
-      return { ok: true };
+      return this.cacheProbeResult({ ok: true });
     } catch (err) {
       const message = formatErrorMessage(err);
-      return { ok: false, error: message };
+      return this.cacheProbeResult({ ok: false, error: message });
     }
   }
 
@@ -862,7 +926,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       this.sessionUnsubscribe = null;
     }
     await awaitPendingManagerWork({ pendingSync, pendingProviderInit });
-    this.db.close();
+    closeMemoryDatabase(this.db);
     INDEX_CACHE.delete(this.cacheKey);
   }
 }

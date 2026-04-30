@@ -10,7 +10,7 @@ const runtimeMocks = vi.hoisted(() => ({
     threadId: "thread-2",
   })),
   listAgentIds: vi.fn(() => ["main"]),
-  loadConfig: vi.fn(() => ({})),
+  getRuntimeConfig: vi.fn(() => ({})),
   loadSessionEntry: vi.fn(() => ({
     cfg: {},
     canonicalKey: "main:abc",
@@ -29,7 +29,9 @@ const runtimeMocks = vi.hoisted(() => ({
       model: "gpt-4.1",
     },
   })),
+  getActivePluginChannelRegistryVersion: vi.fn(() => 1),
   getActivePluginRegistryVersion: vi.fn(() => 1),
+  resolveRuntimeConfigCacheKey: vi.fn(() => "runtime:1:test"),
   resolveEffectiveToolInventory: vi.fn(() => ({
     agentId: "main",
     profile: "coding",
@@ -67,7 +69,7 @@ function createInvokeParams(params: Record<string, unknown>) {
       await toolsEffectiveHandlers["tools.effective"]({
         params,
         respond: respond as never,
-        context: {} as never,
+        context: { getRuntimeConfig: () => ({}) } as never,
         client: null,
         req: { type: "req", id: "req-1", method: "tools.effective" },
         isWebchatConnect: () => false,
@@ -80,6 +82,7 @@ describe("tools.effective handler", () => {
     vi.clearAllMocks();
     __testing.resetToolsEffectiveCacheForTest();
     __testing.resetToolsEffectiveNowForTest();
+    runtimeMocks.getActivePluginChannelRegistryVersion.mockReturnValue(1);
     runtimeMocks.getActivePluginRegistryVersion.mockReturnValue(1);
   });
 
@@ -179,6 +182,18 @@ describe("tools.effective handler", () => {
 
     expect(runtimeMocks.resolveEffectiveToolInventory).toHaveBeenCalledTimes(1);
     expect((first.respond.mock.calls[0] as RespondCall | undefined)?.[0]).toBe(true);
+    expect((second.respond.mock.calls[0] as RespondCall | undefined)?.[0]).toBe(true);
+  });
+
+  it("invalidates the cache when only the channel registry version changes", async () => {
+    const first = createInvokeParams({ sessionKey: "main:abc" });
+    await first.invoke();
+
+    runtimeMocks.getActivePluginChannelRegistryVersion.mockReturnValue(2);
+    const second = createInvokeParams({ sessionKey: "main:abc" });
+    await second.invoke();
+
+    expect(runtimeMocks.resolveEffectiveToolInventory).toHaveBeenCalledTimes(2);
     expect((second.respond.mock.calls[0] as RespondCall | undefined)?.[0]).toBe(true);
   });
 
@@ -304,7 +319,7 @@ describe("tools.effective handler", () => {
     await toolsEffectiveHandlers["tools.effective"]({
       params: { sessionKey: "main:abc" },
       respond: respond as never,
-      context: {} as never,
+      context: { getRuntimeConfig: () => ({}) } as never,
       client: {
         connect: { scopes: ["operator.admin"] },
       } as never,

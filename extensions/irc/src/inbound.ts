@@ -4,19 +4,19 @@ import {
   resolveEffectiveAllowFromLists,
 } from "openclaw/plugin-sdk/channel-policy";
 import { resolveControlCommandGate } from "openclaw/plugin-sdk/command-auth";
-import {
-  GROUP_POLICY_BLOCKED_LABEL,
-  isDangerousNameMatchingEnabled,
-  resolveAllowlistProviderRuntimeGroupPolicy,
-  resolveDefaultGroupPolicy,
-  warnMissingProviderGroupPolicyFallbackOnce,
-  type OpenClawConfig,
-} from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
 import {
   deliverFormattedTextWithAttachments,
   type OutboundReplyPayload,
 } from "openclaw/plugin-sdk/reply-payload";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
+import {
+  GROUP_POLICY_BLOCKED_LABEL,
+  resolveAllowlistProviderRuntimeGroupPolicy,
+  resolveDefaultGroupPolicy,
+  warnMissingProviderGroupPolicyFallbackOnce,
+} from "openclaw/plugin-sdk/runtime-group-policy";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -207,36 +207,34 @@ export async function handleIrcInbound(params: {
       runtime.log?.(`irc: drop DM sender=${senderDisplay} (dmPolicy=disabled)`);
       return;
     }
-    if (dmPolicy !== "open") {
-      const dmAllowed = resolveIrcAllowlistMatch({
-        allowFrom: effectiveAllowFrom,
-        message,
-        allowNameMatching,
-      }).allowed;
-      if (!dmAllowed) {
-        if (dmPolicy === "pairing") {
-          await pairing.issueChallenge({
-            senderId: normalizeLowercaseStringOrEmpty(senderDisplay),
-            senderIdLine: `Your IRC id: ${senderDisplay}`,
-            meta: { name: message.senderNick || undefined },
-            sendPairingReply: async (text) => {
-              await deliverIrcReply({
-                payload: { text },
-                cfg: config,
-                target: message.senderNick,
-                accountId: account.accountId,
-                sendReply: params.sendReply,
-                statusSink,
-              });
-            },
-            onReplyError: (err) => {
-              runtime.error?.(`irc: pairing reply failed for ${senderDisplay}: ${String(err)}`);
-            },
-          });
-        }
-        runtime.log?.(`irc: drop DM sender ${senderDisplay} (dmPolicy=${dmPolicy})`);
-        return;
+    const dmAllowed = resolveIrcAllowlistMatch({
+      allowFrom: effectiveAllowFrom,
+      message,
+      allowNameMatching,
+    }).allowed;
+    if (!dmAllowed) {
+      if (dmPolicy === "pairing") {
+        await pairing.issueChallenge({
+          senderId: normalizeLowercaseStringOrEmpty(senderDisplay),
+          senderIdLine: `Your IRC id: ${senderDisplay}`,
+          meta: { name: message.senderNick || undefined },
+          sendPairingReply: async (text) => {
+            await deliverIrcReply({
+              payload: { text },
+              cfg: config,
+              target: message.senderNick,
+              accountId: account.accountId,
+              sendReply: params.sendReply,
+              statusSink,
+            });
+          },
+          onReplyError: (err) => {
+            runtime.error?.(`irc: pairing reply failed for ${senderDisplay}: ${String(err)}`);
+          },
+        });
       }
+      runtime.log?.(`irc: drop DM sender ${senderDisplay} (dmPolicy=${dmPolicy})`);
+      return;
     }
   }
 

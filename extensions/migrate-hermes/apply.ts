@@ -3,6 +3,7 @@ import { markMigrationItemSkipped, summarizeMigrationItems } from "openclaw/plug
 import {
   archiveMigrationItem,
   copyMigrationFileItem,
+  withCachedMigrationConfigRuntime,
   writeMigrationReport,
 } from "openclaw/plugin-sdk/migration-runtime";
 import type {
@@ -20,31 +21,6 @@ import { resolveTargets } from "./targets.js";
 
 const HERMES_REASON_BLOCKED_BY_APPLY_CONFLICT = "blocked by earlier apply conflict";
 
-function withCachedConfigRuntime(
-  runtime: MigrationProviderContext["runtime"] | undefined,
-  fallbackConfig: MigrationProviderContext["config"],
-): MigrationProviderContext["runtime"] | undefined {
-  if (!runtime?.config.writeConfigFile) {
-    return runtime;
-  }
-  let cachedConfig: MigrationProviderContext["config"] | undefined;
-  const loadConfig = () => {
-    cachedConfig ??= structuredClone(runtime.config.loadConfig?.() ?? fallbackConfig);
-    return cachedConfig;
-  };
-  return {
-    ...runtime,
-    config: {
-      ...runtime.config,
-      loadConfig,
-      writeConfigFile: async (next, options) => {
-        cachedConfig = structuredClone(next);
-        await runtime.config.writeConfigFile(next, options);
-      },
-    },
-  };
-}
-
 export async function applyHermesPlan(params: {
   ctx: MigrationProviderContext;
   plan?: MigrationPlan;
@@ -54,7 +30,10 @@ export async function applyHermesPlan(params: {
   const reportDir = params.ctx.reportDir ?? path.join(params.ctx.stateDir, "migration", "hermes");
   const targets = resolveTargets(params.ctx);
   const items: MigrationItem[] = [];
-  const runtime = withCachedConfigRuntime(params.ctx.runtime ?? params.runtime, params.ctx.config);
+  const runtime = withCachedMigrationConfigRuntime(
+    params.ctx.runtime ?? params.runtime,
+    params.ctx.config,
+  );
   const applyCtx = { ...params.ctx, runtime };
   let blockedByApplyConflict = false;
   for (const item of plan.items) {

@@ -431,6 +431,7 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
       applySnapshot(host, hello);
       void loadControlUiBootstrapConfig(
         host as unknown as Parameters<typeof loadControlUiBootstrapConfig>[0],
+        { applyIdentity: false },
       );
       // Process any pending abort from before the disconnect.
       if (host.pendingAbort) {
@@ -584,7 +585,7 @@ function isEventForDifferentActiveRun(
   payload: ChatEventPayload | undefined,
   activeRunId: string | null,
 ): boolean {
-  return Boolean(activeRunId && payload?.runId && payload.runId !== activeRunId);
+  return Boolean(activeRunId && payload && payload.runId !== activeRunId);
 }
 
 function handleChatGatewayEvent(host: GatewayHost, payload: ChatEventPayload | undefined) {
@@ -613,23 +614,24 @@ function handleChatGatewayEvent(host: GatewayHost, payload: ChatEventPayload | u
   const deferredReloadHost = host as GatewayHostWithDeferredSessionMessageReload;
   const deferredSessionKey = deferredReloadHost.pendingSessionMessageReloadSessionKey?.trim();
   const payloadSessionKey = payload?.sessionKey?.trim();
-  const shouldReplayDeferredSessionMessageReload = Boolean(
+  const finalEventNeedsHistoryReload =
+    state === "final" && shouldReloadHistoryForFinalEvent(payload);
+  const shouldResolveDeferredSessionMessageReload = Boolean(
     deferredSessionKey &&
     payloadSessionKey &&
     deferredSessionKey === payloadSessionKey &&
     isTerminalChatState(state) &&
+    !terminalEventIsForDifferentActiveRun &&
     payloadSessionKey === host.sessionKey &&
     !host.chatRunId,
   );
-  if (deferredSessionKey && payloadSessionKey && deferredSessionKey === payloadSessionKey) {
+  const shouldReplayDeferredSessionMessageReload =
+    shouldResolveDeferredSessionMessageReload &&
+    (state !== "final" || finalEventNeedsHistoryReload);
+  if (shouldResolveDeferredSessionMessageReload) {
     deferredReloadHost.pendingSessionMessageReloadSessionKey = null;
   }
-  if (
-    state === "final" &&
-    !historyReloaded &&
-    !terminalEventIsForDifferentActiveRun &&
-    shouldReloadHistoryForFinalEvent(payload)
-  ) {
+  if (finalEventNeedsHistoryReload && !historyReloaded && !terminalEventIsForDifferentActiveRun) {
     void loadChatHistory(host as unknown as ChatState);
     return;
   }

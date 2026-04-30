@@ -100,6 +100,7 @@ describe("timeout-triggered compaction", () => {
     );
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
     expect(result.meta.error).toBeUndefined();
+    expect(result.meta.agentMeta?.compactionTokensAfter).toBe(80_000);
   });
 
   it("retries the prompt after successful timeout compaction", async () => {

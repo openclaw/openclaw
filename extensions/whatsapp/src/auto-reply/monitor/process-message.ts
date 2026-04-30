@@ -3,6 +3,7 @@ import {
   removeAckReactionHandleAfterReply,
   type AckReactionHandle,
 } from "openclaw/plugin-sdk/channel-feedback";
+import { recordInboundSession } from "openclaw/plugin-sdk/conversation-runtime";
 import {
   createInternalHookEvent,
   deriveInboundMessageHookContext,
@@ -12,6 +13,7 @@ import {
   toPluginMessageReceivedEvent,
   triggerInternalHook,
 } from "openclaw/plugin-sdk/hook-runtime";
+import { runPreparedInboundReplyTurn } from "openclaw/plugin-sdk/inbound-reply-dispatch";
 import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
 import { resolveBatchedReplyThreadingPolicy } from "openclaw/plugin-sdk/reply-reference";
 import { getPrimaryIdentityId, getSelfIdentity, getSenderIdentity } from "../../identity.js";
@@ -51,7 +53,6 @@ import {
   formatInboundEnvelope,
   logVerbose,
   normalizeE164,
-  recordSessionMetaFromInbound,
   resolveChannelContextVisibilityMode,
   resolveInboundSessionEnvelopeContext,
   resolvePinnedMainDmOwnerFromAllowlist,
@@ -453,43 +454,51 @@ export async function processMessage(params: {
     warn: params.replyLogger.warn.bind(params.replyLogger),
   });
 
-  const metaTask = recordSessionMetaFromInbound({
+  const { dispatchResult: didSendReply } = await runPreparedInboundReplyTurn({
+    channel: "whatsapp",
+    accountId: params.route.accountId,
+    routeSessionKey: params.route.sessionKey,
     storePath,
-    sessionKey: params.route.sessionKey,
-    ctx: ctxPayload,
-  }).catch((err) => {
-    params.replyLogger.warn(
-      {
-        error: formatError(err),
-        storePath,
-        sessionKey: params.route.sessionKey,
+    ctxPayload,
+    recordInboundSession,
+    record: {
+      onRecordError: (err) => {
+        params.replyLogger.warn(
+          {
+            error: formatError(err),
+            storePath,
+            sessionKey: params.route.sessionKey,
+          },
+          "failed updating session meta",
+        );
       },
-      "failed updating session meta",
-    );
-  });
-  trackBackgroundTask(params.backgroundTasks, metaTask);
-
-  const didSendReply = await dispatchWhatsAppBufferedReply({
-    cfg: params.cfg,
-    connectionId: params.connectionId,
-    context: ctxPayload,
-    conversationId,
-    deliverReply: deliverWebReply,
-    groupHistories: params.groupHistories,
-    groupHistoryKey: params.groupHistoryKey,
-    maxMediaBytes: params.maxMediaBytes,
-    maxMediaTextChunkLimit: params.maxMediaTextChunkLimit,
-    msg: params.msg,
-    onModelSelected,
-    rememberSentText: params.rememberSentText,
-    replyLogger: params.replyLogger,
-    replyPipeline: {
-      ...replyPipeline,
-      responsePrefix,
+      trackSessionMetaTask: (task) => {
+        trackBackgroundTask(params.backgroundTasks, task);
+      },
     },
-    replyResolver: params.replyResolver,
-    route: params.route,
-    shouldClearGroupHistory,
+    runDispatch: () =>
+      dispatchWhatsAppBufferedReply({
+        cfg: params.cfg,
+        connectionId: params.connectionId,
+        context: ctxPayload,
+        conversationId,
+        deliverReply: deliverWebReply,
+        groupHistories: params.groupHistories,
+        groupHistoryKey: params.groupHistoryKey,
+        maxMediaBytes: params.maxMediaBytes,
+        maxMediaTextChunkLimit: params.maxMediaTextChunkLimit,
+        msg: params.msg,
+        onModelSelected,
+        rememberSentText: params.rememberSentText,
+        replyLogger: params.replyLogger,
+        replyPipeline: {
+          ...replyPipeline,
+          responsePrefix,
+        },
+        replyResolver: params.replyResolver,
+        route: params.route,
+        shouldClearGroupHistory,
+      }),
   });
   removeAckReactionHandleAfterReply({
     removeAfterReply: Boolean(params.cfg.messages?.removeAckAfterReply && didSendReply),

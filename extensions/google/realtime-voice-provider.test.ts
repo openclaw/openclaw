@@ -1,3 +1,4 @@
+import { REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ } from "openclaw/plugin-sdk/realtime-voice";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { buildGoogleRealtimeVoiceProvider } from "./realtime-voice-provider.js";
 
@@ -19,7 +20,7 @@ type MockGoogleLiveConnectParams = {
   };
 };
 
-const { connectMock, session } = vi.hoisted(() => {
+const { connectMock, createTokenMock, session } = vi.hoisted(() => {
   const session: MockGoogleLiveSession = {
     close: vi.fn(),
     sendClientContent: vi.fn(),
@@ -27,11 +28,17 @@ const { connectMock, session } = vi.hoisted(() => {
     sendToolResponse: vi.fn(),
   };
   const connectMock = vi.fn(async (_params: MockGoogleLiveConnectParams) => session);
-  return { connectMock, session };
+  const createTokenMock = vi.fn(async (_params: unknown) => ({
+    name: "auth_tokens/browser-session",
+  }));
+  return { connectMock, createTokenMock, session };
 });
 
 vi.mock("./google-genai-runtime.js", () => ({
   createGoogleGenAI: vi.fn(() => ({
+    authTokens: {
+      create: createTokenMock,
+    },
     live: {
       connect: connectMock,
     },
@@ -49,6 +56,7 @@ function lastConnectParams(): MockGoogleLiveConnectParams {
 describe("buildGoogleRealtimeVoiceProvider", () => {
   beforeEach(() => {
     connectMock.mockClear();
+    createTokenMock.mockClear();
     session.close.mockClear();
     session.sendClientContent.mockClear();
     session.sendRealtimeInput.mockClear();
@@ -222,6 +230,88 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
     expect(lastConnectParams().config).not.toHaveProperty("temperature");
   });
 
+  it("creates constrained browser sessions for Google Live Talk", async () => {
+    const provider = buildGoogleRealtimeVoiceProvider();
+
+    const session = await provider.createBrowserSession?.({
+      providerConfig: {
+        apiKey: "gemini-key",
+        model: "gemini-live-2.5-flash-preview",
+        voice: "Puck",
+        temperature: 0.4,
+      },
+      instructions: "Speak briefly.",
+      tools: [
+        {
+          type: "function",
+          name: "openclaw_agent_consult",
+          description: "Ask OpenClaw",
+          parameters: {
+            type: "object",
+            properties: {
+              question: { type: "string" },
+            },
+            required: ["question"],
+          },
+        },
+      ],
+    });
+
+    expect(createTokenMock).toHaveBeenCalledTimes(1);
+    expect(createTokenMock.mock.calls[0]?.[0]).toMatchObject({
+      config: {
+        uses: 1,
+        liveConnectConstraints: {
+          model: "gemini-live-2.5-flash-preview",
+          config: {
+            responseModalities: ["AUDIO"],
+            temperature: 0.4,
+            systemInstruction: "Speak briefly.",
+            speechConfig: {
+              voiceConfig: {
+                prebuiltVoiceConfig: {
+                  voiceName: "Puck",
+                },
+              },
+            },
+            tools: [
+              {
+                functionDeclarations: [
+                  {
+                    name: "openclaw_agent_consult",
+                    behavior: "NON_BLOCKING",
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      },
+    });
+    expect(session).toMatchObject({
+      provider: "google",
+      transport: "json-pcm-websocket",
+      protocol: "google-live-bidi",
+      clientSecret: "auth_tokens/browser-session",
+      websocketUrl:
+        "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContentConstrained",
+      audio: {
+        inputEncoding: "pcm16",
+        inputSampleRateHz: 16000,
+        outputEncoding: "pcm16",
+        outputSampleRateHz: 24000,
+      },
+      initialMessage: {
+        setup: {
+          model: "models/gemini-live-2.5-flash-preview",
+          generationConfig: {
+            responseModalities: ["AUDIO"],
+          },
+        },
+      },
+    });
+  });
+
   it("waits for setup completion before draining audio and firing ready", async () => {
     const provider = buildGoogleRealtimeVoiceProvider();
     const onReady = vi.fn();
@@ -279,6 +369,31 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
     bridge.sendAudio(silence20ms);
 
     expect(session.sendRealtimeInput).toHaveBeenCalledWith({ audioStreamEnd: true });
+  });
+
+  it("accepts PCM16 24 kHz audio without the telephony mu-law hop", async () => {
+    const provider = buildGoogleRealtimeVoiceProvider();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "gemini-key" },
+      audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+    });
+
+    await bridge.connect();
+    lastConnectParams().callbacks.onopen();
+    lastConnectParams().callbacks.onmessage({ setupComplete: { sessionId: "session-1" } });
+
+    bridge.sendAudio(Buffer.alloc(480));
+
+    expect(session.sendRealtimeInput).toHaveBeenCalledWith({
+      audio: {
+        data: expect.any(String),
+        mimeType: "audio/pcm;rate=16000",
+      },
+    });
+    const sent = Buffer.from(session.sendRealtimeInput.mock.calls[0]?.[0].audio.data, "base64");
+    expect(sent).toHaveLength(320);
   });
 
   it("can disable automatic VAD for manual activity signaling experiments", async () => {
@@ -353,6 +468,38 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
     expect(onAudio).toHaveBeenCalledTimes(1);
     expect(onAudio.mock.calls[0]?.[0]).toBeInstanceOf(Buffer);
     expect(onAudio.mock.calls[0]?.[0]).toHaveLength(80);
+  });
+
+  it("can keep Google PCM output as PCM16 24 kHz audio", async () => {
+    const provider = buildGoogleRealtimeVoiceProvider();
+    const onAudio = vi.fn();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "gemini-key" },
+      audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
+      onAudio,
+      onClearAudio: vi.fn(),
+    });
+    const pcm24k = Buffer.alloc(480);
+
+    await bridge.connect();
+    lastConnectParams().callbacks.onmessage({
+      setupComplete: { sessionId: "session-1" },
+      serverContent: {
+        modelTurn: {
+          parts: [
+            {
+              inlineData: {
+                mimeType: "audio/L16;codec=pcm;rate=24000",
+                data: pcm24k.toString("base64"),
+              },
+            },
+          ],
+        },
+      },
+    });
+
+    expect(onAudio).toHaveBeenCalledTimes(1);
+    expect(onAudio.mock.calls[0]?.[0]).toEqual(pcm24k);
   });
 
   it("does not forward Google thought text as assistant transcript", async () => {

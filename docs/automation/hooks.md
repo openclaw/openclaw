@@ -33,23 +33,23 @@ openclaw hooks info session-memory
 
 ## Event types
 
-| Event                    | When it fires                                    |
-| ------------------------ | ------------------------------------------------ |
-| `command:new`            | `/new` command issued                            |
-| `command:reset`          | `/reset` command issued                          |
-| `command:stop`           | `/stop` command issued                           |
-| `command`                | Any command event (general listener)             |
-| `session:compact:before` | Before compaction summarizes history             |
-| `session:compact:after`  | After compaction completes                       |
-| `session:patch`          | When session properties are modified             |
-| `agent:bootstrap`        | Before workspace bootstrap files are injected    |
-| `gateway:startup`        | After channels start and hooks are loaded        |
-| `gateway:shutdown`       | When gateway shutdown begins                     |
-| `gateway:pre-restart`    | Before an expected gateway restart               |
-| `message:received`       | Inbound message from any channel                 |
-| `message:transcribed`    | After audio transcription completes              |
-| `message:preprocessed`   | After all media and link understanding completes |
-| `message:sent`           | Outbound message delivered                       |
+| Event                    | When it fires                                              |
+| ------------------------ | ---------------------------------------------------------- |
+| `command:new`            | `/new` command issued                                      |
+| `command:reset`          | `/reset` command issued                                    |
+| `command:stop`           | `/stop` command issued                                     |
+| `command`                | Any command event (general listener)                       |
+| `session:compact:before` | Before compaction summarizes history                       |
+| `session:compact:after`  | After compaction completes                                 |
+| `session:patch`          | When session properties are modified                       |
+| `agent:bootstrap`        | Before workspace bootstrap files are injected              |
+| `gateway:startup`        | After channels start and hooks are loaded                  |
+| `gateway:shutdown`       | When gateway shutdown begins                               |
+| `gateway:pre-restart`    | Before an expected gateway restart                         |
+| `message:received`       | Inbound message from any channel                           |
+| `message:transcribed`    | After audio transcription completes                        |
+| `message:preprocessed`   | After media and link preprocessing completes or is skipped |
+| `message:sent`           | Outbound message delivered                                 |
 
 ## Writing hooks
 

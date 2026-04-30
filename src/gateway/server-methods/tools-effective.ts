@@ -1,6 +1,7 @@
 import type { EffectiveToolInventoryResult } from "../../agents/tools-effective-inventory.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logDebug, logWarn } from "../../logger.js";
+import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { ADMIN_SCOPE } from "../method-scopes.js";
 import {
@@ -11,12 +12,13 @@ import {
 } from "../protocol/index.js";
 import {
   deliveryContextFromSession,
+  getActivePluginChannelRegistryVersion,
   getActivePluginRegistryVersion,
   listAgentIds,
-  loadConfig,
   loadSessionEntry,
   resolveEffectiveToolInventory,
   resolveReplyToMode,
+  resolveRuntimeConfigCacheKey,
   resolveSessionAgentId,
   resolveSessionModelRef,
 } from "./tools-effective.runtime.js";
@@ -28,7 +30,6 @@ const TOOLS_EFFECTIVE_SLOW_LOG_MS = 250;
 const TOOLS_EFFECTIVE_CACHE_LIMIT = 128;
 
 let nowForToolsEffectiveCache = () => Date.now();
-let configFingerprintCache = new WeakMap<OpenClawConfig, string>();
 
 type TrustedToolsEffectiveContext = {
   cfg: OpenClawConfig;
@@ -76,25 +77,6 @@ function resolveRequestedAgentIdOrRespondError(params: {
   return requestedAgentId;
 }
 
-function hashCacheString(value: string): string {
-  let hash = 5381;
-  for (let i = 0; i < value.length; i += 1) {
-    hash = (hash * 33) ^ value.charCodeAt(i);
-  }
-  return `${value.length}:${(hash >>> 0).toString(36)}`;
-}
-
-function configFingerprint(cfg: OpenClawConfig): string {
-  const existing = configFingerprintCache.get(cfg);
-  if (existing) {
-    return existing;
-  }
-  const serialized = JSON.stringify(cfg);
-  const fingerprint = hashCacheString(serialized);
-  configFingerprintCache.set(cfg, fingerprint);
-  return fingerprint;
-}
-
 function optionalCacheString(value: string | undefined | null): string {
   return value?.trim() ?? "";
 }
@@ -106,8 +88,9 @@ function buildToolsEffectiveCacheKey(params: {
   const context = params.context;
   return JSON.stringify({
     v: 1,
-    config: configFingerprint(context.cfg),
+    config: resolveRuntimeConfigCacheKey(context.cfg),
     pluginRegistry: getActivePluginRegistryVersion(),
+    channelRegistry: getActivePluginChannelRegistryVersion(),
     sessionKey: params.sessionKey,
     agentId: context.agentId,
     senderIsOwner: context.senderIsOwner,
@@ -266,11 +249,11 @@ function resolveTrustedToolsEffectiveContext(params: {
     currentChannelId: delivery?.to,
     currentThreadTs:
       delivery?.threadId != null
-        ? String(delivery.threadId)
+        ? stringifyRouteThreadId(delivery.threadId)
         : loaded.entry.lastThreadId != null
-          ? String(loaded.entry.lastThreadId)
+          ? stringifyRouteThreadId(loaded.entry.lastThreadId)
           : loaded.entry.origin?.threadId != null
-            ? String(loaded.entry.origin.threadId)
+            ? stringifyRouteThreadId(loaded.entry.origin.threadId)
             : undefined,
     groupId: loaded.entry.groupId,
     groupChannel: loaded.entry.groupChannel,
@@ -288,7 +271,7 @@ function resolveTrustedToolsEffectiveContext(params: {
 }
 
 export const toolsEffectiveHandlers: GatewayRequestHandlers = {
-  "tools.effective": async ({ params, respond, client }) => {
+  "tools.effective": async ({ params, respond, client, context }) => {
     if (!validateToolsEffectiveParams(params)) {
       respond(
         false,
@@ -300,7 +283,7 @@ export const toolsEffectiveHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const cfg = loadConfig();
+    const cfg = context.getRuntimeConfig();
     const requestedAgentId = resolveRequestedAgentIdOrRespondError({
       rawAgentId: params.agentId,
       cfg,
@@ -343,7 +326,6 @@ export const __testing = {
   resetToolsEffectiveCacheForTest() {
     toolsEffectiveCache.clear();
     toolsEffectiveInflight.clear();
-    configFingerprintCache = new WeakMap<OpenClawConfig, string>();
   },
   setToolsEffectiveNowForTest(now: () => number) {
     nowForToolsEffectiveCache = now;

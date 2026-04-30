@@ -8,17 +8,18 @@ import { parseClawHubPluginSpec } from "../infra/clawhub.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { type BundledPluginSource, findBundledPluginSource } from "../plugins/bundled-sources.js";
 import { installPluginFromClawHub } from "../plugins/clawhub.js";
+import { resolveDefaultPluginExtensionsDir } from "../plugins/install-paths.js";
 import type { InstallSafetyOverrides } from "../plugins/install-security-scan.js";
 import {
   PLUGIN_INSTALL_ERROR_CODE,
   installPluginFromNpmSpec,
   installPluginFromPath,
 } from "../plugins/install.js";
-import { clearPluginManifestRegistryCache } from "../plugins/manifest-registry.js";
 import {
   installPluginFromMarketplace,
   resolveMarketplaceInstallShortcut,
 } from "../plugins/marketplace.js";
+import { tracePluginLifecyclePhaseAsync } from "../plugins/plugin-lifecycle-trace.js";
 import { validateJsonSchemaValue } from "../plugins/schema-validator.js";
 import { defaultRuntime } from "../runtime.js";
 import { theme } from "../terminal/theme.js";
@@ -109,8 +110,6 @@ async function installBundledPluginSource(params: {
   bundledSource: BundledPluginSource;
   warning: string;
 }) {
-  const existing = params.snapshot.config.plugins?.load?.paths ?? [];
-  const mergedPaths = Array.from(new Set([...existing, params.bundledSource.localPath]));
   const existingEntry = params.snapshot.config.plugins?.entries?.[params.bundledSource.pluginId];
   const shouldEnable = hasValidBundledPluginConfig({
     bundledSource: params.bundledSource,
@@ -124,16 +123,7 @@ async function installBundledPluginSource(params: {
     : `Installed bundled plugin "${params.bundledSource.pluginId}" without enabling it because it requires configuration first. Configure it, then run \`openclaw plugins enable ${params.bundledSource.pluginId}\`.`;
   await persistPluginInstall({
     snapshot: {
-      config: {
-        ...configBase,
-        plugins: {
-          ...configBase.plugins,
-          load: {
-            ...configBase.plugins?.load,
-            paths: mergedPaths,
-          },
-        },
-      },
+      config: configBase,
       baseHash: params.snapshot.baseHash,
     },
     pluginId: params.bundledSource.pluginId,
@@ -271,11 +261,13 @@ async function tryInstallPluginOrHookPackFromNpmSpec(params: {
   pin?: boolean;
   safetyOverrides: InstallSafetyOverrides;
   allowBundledFallback: boolean;
+  extensionsDir: string;
 }): Promise<{ ok: true } | { ok: false }> {
   const result = await installPluginFromNpmSpec({
     ...params.safetyOverrides,
     mode: params.installMode,
     spec: params.spec,
+    extensionsDir: params.extensionsDir,
     logger: createPluginInstallLogger(),
   });
   if (!result.ok) {
@@ -314,7 +306,6 @@ async function tryInstallPluginOrHookPackFromNpmSpec(params: {
     return { ok: false };
   }
 
-  clearPluginManifestRegistryCache();
   const installRecord = resolvePinnedNpmInstallRecordForCli(
     params.spec,
     Boolean(params.pin),
@@ -402,7 +393,11 @@ async function loadConfigFromSnapshotForInstall(
 export async function loadConfigForInstall(
   request: PluginInstallRequestContext,
 ): Promise<ConfigSnapshotForInstallPersist> {
-  const snapshot = await readConfigFileSnapshot();
+  const snapshot = await tracePluginLifecyclePhaseAsync(
+    "config read",
+    () => readConfigFileSnapshot(),
+    { command: "install" },
+  );
   if (snapshot.valid) {
     return {
       config: snapshot.sourceConfig,
@@ -422,7 +417,11 @@ export async function runPluginInstallCommand(params: {
   };
 }) {
   const shorthand = !params.opts.marketplace
-    ? await resolveMarketplaceInstallShortcut(params.raw)
+    ? await tracePluginLifecyclePhaseAsync(
+        "marketplace shortcut resolution",
+        () => resolveMarketplaceInstallShortcut(params.raw),
+        { command: "install" },
+      )
     : null;
   if (shorthand?.ok === false) {
     defaultRuntime.error(shorthand.error);
@@ -468,6 +467,7 @@ export async function runPluginInstallCommand(params: {
   const cfg = snapshot.config;
   const installMode = resolveInstallMode(opts.force);
   const safetyOverrides = resolveInstallSafetyOverrides(opts);
+  const extensionsDir = resolveDefaultPluginExtensionsDir();
 
   if (opts.marketplace) {
     const result = await installPluginFromMarketplace({
@@ -475,6 +475,7 @@ export async function runPluginInstallCommand(params: {
       marketplace: opts.marketplace,
       mode: installMode,
       plugin: raw,
+      extensionsDir,
       logger: createPluginInstallLogger(),
     });
     if (!result.ok) {
@@ -482,7 +483,6 @@ export async function runPluginInstallCommand(params: {
       return defaultRuntime.exit(1);
     }
 
-    clearPluginManifestRegistryCache();
     await persistPluginInstall({
       snapshot,
       pluginId: result.pluginId,
@@ -508,6 +508,7 @@ export async function runPluginInstallCommand(params: {
         mode: installMode,
         path: resolved,
         dryRun: true,
+        extensionsDir,
         logger: createPluginInstallLogger(),
       });
       if (!probe.ok) {
@@ -561,6 +562,7 @@ export async function runPluginInstallCommand(params: {
       ...safetyOverrides,
       mode: installMode,
       path: resolved,
+      extensionsDir,
       logger: createPluginInstallLogger(),
     });
     if (!result.ok) {
@@ -583,7 +585,6 @@ export async function runPluginInstallCommand(params: {
       return defaultRuntime.exit(1);
     }
 
-    clearPluginManifestRegistryCache();
     const source: "archive" | "path" = resolveArchiveKind(resolved) ? "archive" : "path";
     await persistPluginInstall({
       snapshot,
@@ -616,6 +617,7 @@ export async function runPluginInstallCommand(params: {
       pin: opts.pin,
       safetyOverrides,
       allowBundledFallback: false,
+      extensionsDir,
     });
     if (!npmPrefixResult.ok) {
       return defaultRuntime.exit(1);
@@ -644,12 +646,21 @@ export async function runPluginInstallCommand(params: {
     findBundledSource: (lookup) => findBundledPluginSource({ lookup }),
   });
   if (bundledPreNpmPlan) {
-    await installBundledPluginSource({
-      snapshot,
-      rawSpec: raw,
-      bundledSource: bundledPreNpmPlan.bundledSource,
-      warning: bundledPreNpmPlan.warning,
-    });
+    await tracePluginLifecyclePhaseAsync(
+      "install execution",
+      () =>
+        installBundledPluginSource({
+          snapshot,
+          rawSpec: raw,
+          bundledSource: bundledPreNpmPlan.bundledSource,
+          warning: bundledPreNpmPlan.warning,
+        }),
+      {
+        command: "install",
+        source: "bundled",
+        pluginId: bundledPreNpmPlan.bundledSource.pluginId,
+      },
+    );
     return;
   }
 
@@ -659,6 +670,7 @@ export async function runPluginInstallCommand(params: {
       ...safetyOverrides,
       mode: installMode,
       spec: raw,
+      extensionsDir,
       logger: createPluginInstallLogger(),
     });
     if (!result.ok) {
@@ -666,7 +678,6 @@ export async function runPluginInstallCommand(params: {
       return defaultRuntime.exit(1);
     }
 
-    clearPluginManifestRegistryCache();
     await persistPluginInstall({
       snapshot,
       pluginId: result.pluginId,
@@ -692,10 +703,10 @@ export async function runPluginInstallCommand(params: {
       ...safetyOverrides,
       mode: installMode,
       spec: preferredClawHubSpec,
+      extensionsDir,
       logger: createPluginInstallLogger(),
     });
     if (clawhubResult.ok) {
-      clearPluginManifestRegistryCache();
       await persistPluginInstall({
         snapshot,
         pluginId: clawhubResult.pluginId,
@@ -727,6 +738,7 @@ export async function runPluginInstallCommand(params: {
     pin: opts.pin,
     safetyOverrides,
     allowBundledFallback: true,
+    extensionsDir,
   });
   if (!npmResult.ok) {
     return defaultRuntime.exit(1);

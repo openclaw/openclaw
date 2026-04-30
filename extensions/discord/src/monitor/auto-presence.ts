@@ -1,4 +1,3 @@
-import type { Activity, UpdatePresenceData } from "@buape/carbon/gateway";
 import {
   clearExpiredCooldowns,
   ensureAuthProfileStore,
@@ -10,8 +9,9 @@ import {
 import type {
   DiscordAccountConfig,
   DiscordAutoPresenceConfig,
-} from "openclaw/plugin-sdk/config-runtime";
+} from "openclaw/plugin-sdk/config-types";
 import { warn } from "openclaw/plugin-sdk/runtime-env";
+import type { Activity, UpdatePresenceData } from "../internal/gateway.js";
 import { resolveDiscordPresenceUpdate } from "./presence.js";
 
 const DEFAULT_CUSTOM_ACTIVITY_TYPE = 4;

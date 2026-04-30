@@ -19,6 +19,28 @@ function migrateLegacyConfigForTest(raw: unknown): {
     : { config: next as OpenClawConfig, changes };
 }
 
+describe("legacy session maintenance migrate", () => {
+  it("removes deprecated session.maintenance.rotateBytes", () => {
+    const res = migrateLegacyConfigForTest({
+      session: {
+        maintenance: {
+          mode: "enforce",
+          pruneAfter: "30d",
+          maxEntries: 500,
+          rotateBytes: "10mb",
+        },
+      },
+    });
+
+    expect(res.config?.session?.maintenance).toEqual({
+      mode: "enforce",
+      pruneAfter: "30d",
+      maxEntries: 500,
+    });
+    expect(res.changes).toContain("Removed deprecated session.maintenance.rotateBytes.");
+  });
+});
+
 describe("legacy migrate audio transcription", () => {
   it("does not rewrite removed routing.transcribeAudio migrations", () => {
     const res = migrateLegacyConfigForTest({
@@ -259,6 +281,58 @@ describe("legacy migrate sandbox scope aliases", () => {
 
     expect(res.changes).toEqual([]);
     expect(res.config).toBeNull();
+  });
+});
+
+describe("legacy migrate MCP server type aliases", () => {
+  it("moves CLI-native http type to OpenClaw streamable HTTP transport", () => {
+    const res = migrateLegacyConfigForTest({
+      mcp: {
+        servers: {
+          silo: {
+            type: "http",
+            url: "https://example.com/mcp",
+          },
+          legacySse: {
+            type: "sse",
+            url: "https://example.com/sse",
+          },
+        },
+      },
+    });
+
+    expect(res.changes).toContain(
+      'Moved mcp.servers.silo.type "http" → transport "streamable-http".',
+    );
+    expect(res.changes).toContain('Moved mcp.servers.legacySse.type "sse" → transport "sse".');
+    expect(res.config?.mcp?.servers?.silo).toEqual({
+      url: "https://example.com/mcp",
+      transport: "streamable-http",
+    });
+    expect(res.config?.mcp?.servers?.legacySse).toEqual({
+      url: "https://example.com/sse",
+      transport: "sse",
+    });
+  });
+
+  it("removes CLI-native type when canonical transport is already set", () => {
+    const res = migrateLegacyConfigForTest({
+      mcp: {
+        servers: {
+          mixed: {
+            type: "http",
+            transport: "sse",
+            url: "https://example.com/mcp",
+          },
+        },
+      },
+    });
+
+    expect(res.changes).toContain('Removed mcp.servers.mixed.type (transport "sse" already set).');
+    expect(res.config?.mcp?.servers?.mixed).toEqual({
+      url: "https://example.com/mcp",
+      transport: "sse",
+    });
   });
 });
 

@@ -64,35 +64,4 @@ describe("media-understanding CLI audio entry", () => {
       expect.any(Object),
     );
   });
-
-  it("expands legacy {input} aliases to the media path", async () => {
-    let mediaPath = "";
-    await withAudioFixture("openclaw-cli-audio-input-alias", async ({ ctx, cache }) => {
-      mediaPath = ctx.MediaPath;
-      await runCliEntry({
-        capability: "audio",
-        entry: {
-          type: "cli",
-          command: "mock-transcriber",
-          args: ["{input}", "--input={input}"],
-        },
-        cfg: {
-          tools: {
-            media: {
-              audio: {},
-            },
-          },
-        } as OpenClawConfig,
-        ctx,
-        attachmentIndex: 0,
-        cache,
-      });
-    });
-
-    expect(runExecMock).toHaveBeenCalledWith(
-      "mock-transcriber",
-      [mediaPath, `--input=${mediaPath}`],
-      expect.any(Object),
-    );
-  });
 });

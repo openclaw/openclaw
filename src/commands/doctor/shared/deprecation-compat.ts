@@ -112,6 +112,18 @@ export const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     tests: ["src/commands/doctor/shared/legacy-config-migrate.test.ts"],
   }),
   deprecatedCompatRecord({
+    code: "doctor-mcp-server-type-alias",
+    owner: "config",
+    introduced: "2026-04-27",
+    source: "mcp.servers.*.type",
+    migration: "src/commands/doctor/shared/legacy-config-migrations.runtime.mcp.ts",
+    replacement: "mcp.servers.*.transport",
+    docsPath: "/cli/mcp",
+    tests: ["src/commands/doctor/shared/legacy-config-migrate.test.ts"],
+    notes:
+      "OpenClaw stores transport names; CLI backends receive their own type fields through runtime adapters.",
+  }),
+  deprecatedCompatRecord({
     code: "doctor-gateway-bind-host-aliases",
     owner: "gateway",
     introduced: "2026-04-26",
@@ -170,6 +182,18 @@ export const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     replacement: "messages.tts.providers.<provider> and microsoft instead of edge",
     docsPath: "/tools/tts",
     tests: ["src/commands/doctor/shared/legacy-config-migrate.test.ts"],
+  }),
+  deprecatedCompatRecord({
+    code: "doctor-tts-enabled-auto-mode",
+    owner: "tts",
+    introduced: "2026-04-29",
+    source:
+      "messages.tts.enabled, agents.*.tts.enabled, channels.*.tts.enabled, and voice-call plugin tts.enabled",
+    migration: "src/commands/doctor/shared/legacy-config-migrations.runtime.tts.ts",
+    replacement:
+      'messages/agents/channels/plugins TTS auto mode, for example auto: "always" or auto: "off"',
+    docsPath: "/tools/tts",
+    tests: ["src/commands/doctor/shared/legacy-config-migrate.provider-shapes.test.ts"],
   }),
   deprecatedCompatRecord({
     code: "doctor-plugin-install-config-ledger",

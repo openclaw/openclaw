@@ -20,12 +20,16 @@ are not supported.
 LINE ships as a bundled plugin in current OpenClaw releases, so normal
 packaged builds do not need a separate install.
 
-If you are on an older build or a custom install that excludes LINE, install it
-manually:
+If you are on an older build or a custom install that excludes LINE, install a
+current npm package when one is published:
 
 ```bash
 openclaw plugins install @openclaw/line
 ```
+
+If npm reports the OpenClaw-owned package as deprecated or missing, use a
+current packaged OpenClaw build or a local checkout until the npm package train
+catches up.
 
 Local checkout (when running from a git repo):
 
@@ -143,6 +147,9 @@ LINE IDs are case-sensitive. Valid IDs look like:
 - Streaming responses are buffered; LINE receives full chunks with a loading
   animation while the agent works.
 - Media downloads are capped by `channels.line.mediaMaxMb` (default 10).
+- Inbound media is saved under `~/.openclaw/media/inbound/` before it is passed
+  to the agent, matching the shared media store used by other bundled channel
+  plugins.
 
 ## Channel data (rich messages)
 

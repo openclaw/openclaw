@@ -153,7 +153,7 @@ Use explicit config when:
   <Accordion title="Nemotron 3 thinking controls">
     vLLM/Nemotron 3 can use chat-template kwargs to control whether reasoning is
     returned as hidden reasoning or visible answer text. When an OpenClaw session
-    uses `vllm/nemotron-3-*` with thinking off, OpenClaw sends:
+    uses `vllm/nemotron-3-*` with thinking off, the bundled vLLM plugin sends:
 
     ```json
     {

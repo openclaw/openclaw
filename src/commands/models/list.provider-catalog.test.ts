@@ -205,9 +205,32 @@ describe("loadProviderCatalogModelsForList", () => {
     expect(providerDiscoveryMocks.loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledWith({
       config: baseParams.cfg,
       env: baseParams.env,
-      cache: true,
     });
     expect(providerDiscoveryMocks.resolveOwningPluginIdsForProvider).not.toHaveBeenCalled();
+  });
+
+  it("falls back to manifest ownership when the plugin index is derived", async () => {
+    providerDiscoveryMocks.loadPluginRegistrySnapshotWithMetadata.mockReturnValueOnce({
+      source: "derived",
+      snapshot: {
+        plugins: [],
+      },
+      diagnostics: [],
+    });
+
+    await expect(
+      resolveProviderCatalogPluginIdsForFilter({
+        cfg: baseParams.cfg,
+        env: baseParams.env,
+        providerFilter: "moonshot",
+      }),
+    ).resolves.toEqual(["moonshot"]);
+
+    expect(providerDiscoveryMocks.resolveOwningPluginIdsForProvider).toHaveBeenCalledWith({
+      provider: "moonshot",
+      config: baseParams.cfg,
+      env: baseParams.env,
+    });
   });
 
   it("does not fall back to legacy manifest ownership for disabled persisted plugin owners", async () => {

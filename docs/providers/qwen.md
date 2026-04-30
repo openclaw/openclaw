@@ -76,7 +76,10 @@ Choose your plan type and follow the setup steps.
     <Note>
     Legacy `modelstudio-*` auth-choice ids and `modelstudio/...` model refs still
     work as compatibility aliases, but new setup flows should prefer the canonical
-    `qwen-*` auth-choice ids and `qwen/...` model refs.
+    `qwen-*` auth-choice ids and `qwen/...` model refs. If you define an exact
+    custom `models.providers.modelstudio` entry with another `api` value, that
+    custom provider owns `modelstudio/...` refs instead of the Qwen compatibility
+    alias.
     </Note>
 
   </Tab>
@@ -122,7 +125,10 @@ Choose your plan type and follow the setup steps.
     <Note>
     Legacy `modelstudio-*` auth-choice ids and `modelstudio/...` model refs still
     work as compatibility aliases, but new setup flows should prefer the canonical
-    `qwen-*` auth-choice ids and `qwen/...` model refs.
+    `qwen-*` auth-choice ids and `qwen/...` model refs. If you define an exact
+    custom `models.providers.modelstudio` entry with another `api` value, that
+    custom provider owns `modelstudio/...` refs instead of the Qwen compatibility
+    alias.
     </Note>
 
   </Tab>
@@ -228,6 +234,12 @@ See [Video Generation](/tools/video-generation) for shared tool parameters, prov
     If the Coding Plan endpoints return an "unsupported model" error for
     `qwen3.6-plus`, switch to Standard (pay-as-you-go) instead of the Coding Plan
     endpoint/key pair.
+
+    OpenClaw's bundled Qwen catalog does not advertise `qwen3.6-plus` on Coding
+    Plan endpoints, but explicitly configured `qwen/qwen3.6-plus` entries under
+    `models.providers.qwen.models` are honored on Coding Plan baseUrls so you
+    can opt that model in if Aliyun enables it on your subscription. The
+    upstream API still decides whether the call succeeds.
 
   </Accordion>
 

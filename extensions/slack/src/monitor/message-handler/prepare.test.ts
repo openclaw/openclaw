@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import type { App } from "@slack/bolt";
 import { expectChannelInboundContextContract as expectInboundContextContract } from "openclaw/plugin-sdk/channel-contract-testing";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import {
   registerSessionBindingAdapter,
   unregisterSessionBindingAdapter,
@@ -148,6 +148,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
     followUpTs: string;
     currentTs: string;
     channelsConfig?: Parameters<typeof createInboundSlackCtx>[0]["channelsConfig"];
+    allowFrom?: string[];
     resolveChannelName?: (channelId: string) => Promise<{
       name?: string;
       type?: SlackMessageEvent["channel_type"];
@@ -189,7 +190,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
       replyToMode: "all",
       channelsConfig: params.channelsConfig,
     });
-    ctx.allowFrom = ["u-owner"];
+    ctx.allowFrom = params.allowFrom ?? ["u-owner"];
     ctx.resolveUserName = async (id: string) => ({
       name: id === params.user ? params.userName : "Owner",
     });
@@ -680,6 +681,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
       replyTs: "300.500",
       followUpTs: "300.800",
       currentTs: "301.000",
+      allowFrom: ["*"],
     });
 
     expectThreadContextAllowsHumanHistory(
@@ -1591,7 +1593,7 @@ describe("slack thread.requireExplicitMention", () => {
     const ctx = createCtxWithExplicitMention(true);
     const { storePath } = storeFixture.makeTmpStorePath();
     vi.spyOn(
-      await import("openclaw/plugin-sdk/config-runtime"),
+      await import("openclaw/plugin-sdk/session-store-runtime"),
       "resolveStorePath",
     ).mockReturnValue(storePath);
     const account = createSlackTestAccount();
@@ -1618,7 +1620,7 @@ describe("slack thread.requireExplicitMention", () => {
     const ctx = createCtxWithExplicitMention(true);
     const { storePath } = storeFixture.makeTmpStorePath();
     vi.spyOn(
-      await import("openclaw/plugin-sdk/config-runtime"),
+      await import("openclaw/plugin-sdk/session-store-runtime"),
       "resolveStorePath",
     ).mockReturnValue(storePath);
     const account = createSlackTestAccount();
@@ -1645,7 +1647,7 @@ describe("slack thread.requireExplicitMention", () => {
     const ctx = createCtxWithExplicitMention(false);
     const { storePath } = storeFixture.makeTmpStorePath();
     vi.spyOn(
-      await import("openclaw/plugin-sdk/config-runtime"),
+      await import("openclaw/plugin-sdk/session-store-runtime"),
       "resolveStorePath",
     ).mockReturnValue(storePath);
     const account = createSlackTestAccount();

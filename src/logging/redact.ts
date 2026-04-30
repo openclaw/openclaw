@@ -24,6 +24,9 @@ const DEFAULT_REDACT_PATTERNS: string[] = [
   // Authorization headers.
   String.raw`Authorization\s*[:=]\s*Bearer\s+([A-Za-z0-9._\-+=]+)`,
   String.raw`\bBearer\s+([A-Za-z0-9._\-+=]{18,})\b`,
+  // Standalone token assignments in CLI or HTTP diagnostics. URL query params
+  // are handled above so non-secret params survive and long values stay hinted.
+  String.raw`(^|[\s,;])(?:access_token|refresh_token|api[-_]?key|token|secret|password|passwd)=([^\s&#]+)`,
   // PEM blocks.
   String.raw`-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]+?-----END [A-Z ]*PRIVATE KEY-----`,
   // Common token prefixes.
@@ -160,6 +163,22 @@ export function redactToolDetail(detail: string): string {
     return detail;
   }
   return redactSensitiveText(detail, resolved);
+}
+
+// Forces tools-mode regardless of `logging.redactSensitive` (which governs log
+// output, not UI surfaces), and merges user `logging.redactPatterns` with the
+// built-in defaults so both apply.
+export function redactToolPayloadText(text: string): string {
+  if (!text) {
+    return text;
+  }
+  const cfg = readLoggingConfig();
+  const userPatterns = cfg?.redactPatterns;
+  const patterns =
+    userPatterns && userPatterns.length > 0
+      ? [...userPatterns, ...DEFAULT_REDACT_PATTERNS]
+      : undefined;
+  return redactSensitiveText(text, { mode: "tools", patterns });
 }
 
 export function getDefaultRedactPatterns(): string[] {

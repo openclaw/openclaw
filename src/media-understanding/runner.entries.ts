@@ -27,8 +27,7 @@ import {
   CLI_OUTPUT_MAX_BUFFER,
   DEFAULT_TIMEOUT_SECONDS,
   MIN_AUDIO_FILE_BYTES,
-  resolveDefaultMediaModel,
-} from "./defaults.js";
+} from "./defaults.constants.js";
 import { MediaUnderstandingSkipError } from "./errors.js";
 import { fileExists } from "./fs.js";
 import { describeImageWithModel } from "./image-runtime.js";
@@ -393,7 +392,7 @@ function resolveEntryRunOptions(params: {
   return { maxBytes, maxChars, timeoutMs, prompt };
 }
 
-function resolveAudioRequestOverrides(config: MediaUnderstandingConfig | undefined): {
+function resolveMediaRequestOverrides(config: MediaUnderstandingConfig | undefined): {
   prompt?: string;
   language?: string;
 } {
@@ -405,15 +404,6 @@ function resolveAudioRequestOverrides(config: MediaUnderstandingConfig | undefin
     prompt: overrides._requestPromptOverride,
     language: overrides._requestLanguageOverride,
   };
-}
-
-function applyCliArgTemplate(part: string, ctx: MsgContext): string {
-  const templated = applyTemplate(part, ctx);
-  const mediaPath = ctx.MediaPath;
-  if (!mediaPath || !templated.includes("{input}")) {
-    return templated;
-  }
-  return templated.replace(/\{input\}/g, mediaPath);
 }
 
 async function resolveProviderExecutionAuth(params: {
@@ -580,6 +570,7 @@ export async function runProviderEntry(params: {
       maxBytes,
       timeoutMs,
     });
+    const requestOverrides = resolveMediaRequestOverrides(params.config);
     const provider = getMediaUnderstandingProvider(providerId, params.providerRegistry);
     const imageInput = {
       buffer: media.buffer,
@@ -587,7 +578,7 @@ export async function runProviderEntry(params: {
       mime: media.mime,
       model: modelId,
       provider: providerId,
-      prompt,
+      prompt: requestOverrides.prompt ?? prompt,
       timeoutMs,
       profile: entry.profile,
       preferredProfile: entry.preferredProfile,
@@ -619,7 +610,7 @@ export async function runProviderEntry(params: {
       throw new Error(`Audio transcription provider "${providerId}" not available.`);
     }
     const transcribeAudio = provider.transcribeAudio;
-    const requestOverrides = resolveAudioRequestOverrides(params.config);
+    const requestOverrides = resolveMediaRequestOverrides(params.config);
     const media = await params.cache.getBuffer({
       attachmentIndex: params.attachmentIndex,
       maxBytes,
@@ -640,7 +631,7 @@ export async function runProviderEntry(params: {
     });
     const model =
       entry.model?.trim() ||
-      resolveDefaultMediaModel({
+      (await import("./defaults.js")).resolveDefaultMediaModel({
         cfg,
         providerId,
         capability: "audio",
@@ -745,7 +736,7 @@ export async function runCliEntry(params: {
   if (!command) {
     throw new Error(`CLI entry missing command for ${capability}`);
   }
-  const requestOverrides = resolveAudioRequestOverrides(params.config);
+  const requestOverrides = resolveMediaRequestOverrides(params.config);
   const { maxBytes, maxChars, timeoutMs, prompt } = resolveEntryRunOptions({
     capability,
     entry,
@@ -783,7 +774,7 @@ export async function runCliEntry(params: {
     MaxChars: maxChars,
   };
   const argv = [command, ...args].map((part, index) =>
-    index === 0 ? part : applyCliArgTemplate(part, templCtx),
+    index === 0 ? part : applyTemplate(part, templCtx),
   );
   try {
     if (shouldLogVerbose()) {

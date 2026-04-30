@@ -230,9 +230,21 @@ describe("stripReasoningTagsFromText", () => {
   describe("strict vs preserve mode", () => {
     it.each([
       {
-        name: "applies strict mode to unclosed tags",
+        name: "keeps strict mode from leaking unclosed trailing reasoning after visible text",
         input: "Before <think>unclosed content after",
         expected: "Before",
+        opts: { mode: "strict" as const },
+      },
+      {
+        name: "recovers fully wrapped unclosed tags that would otherwise deliver empty text",
+        input: "<think>Answer after malformed opening tag",
+        expected: "Answer after malformed opening tag",
+        opts: { mode: "strict" as const },
+      },
+      {
+        name: "does not recover fully closed reasoning-only blocks in strict mode",
+        input: "<think>hidden reasoning only</think>",
+        expected: "",
         opts: { mode: "strict" as const },
       },
       {
