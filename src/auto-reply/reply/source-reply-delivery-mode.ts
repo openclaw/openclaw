@@ -32,9 +32,10 @@ export function resolveSourceReplyDeliveryMode(params: {
       visibleRepliesMigrationWarned = true;
       log.warn(
         `Group/channel replies are private by default since 2026.4.27. ` +
-          `To restore automatic posting to all group chats, add ` +
-          `"messages": { "groupChat": { "visibleReplies": "automatic" } } to openclaw.json and restart the gateway. ` +
-          `See https://github.com/openclaw/openclaw/issues/74876`,
+          `To restore automatic posting to all group chats, set ` +
+          `messages.groupChat.visibleReplies to "automatic" in openclaw.json and save the config. ` +
+          `The gateway hot-reloads messages config; a manual restart is only needed if file watching/reload is disabled. ` +
+          `Relates to https://github.com/openclaw/openclaw/issues/74876`,
       );
     }
     return configuredMode === "automatic" ? "automatic" : "message_tool_only";
