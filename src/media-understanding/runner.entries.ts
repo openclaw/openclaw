@@ -443,7 +443,8 @@ async function resolveProviderExecutionAuth(params: {
     });
     return syntheticAuth?.apiKey?.trim() || undefined;
   };
-  if (!providerConfig) {
+  const hasProfileSelection = Boolean(params.entry.profile || params.entry.preferredProfile);
+  if (!providerConfig && !hasProfileSelection) {
     const syntheticApiKey = resolveMediaProviderSyntheticAuth();
     if (syntheticApiKey) {
       return {

@@ -344,6 +344,51 @@ describe("runCapability local no-auth audio providers", () => {
     });
   });
 
+  it("does not let plugin-only synthetic auth override an explicit missing profile", async () => {
+    await withIsolatedAgentDir(async (agentDir) => {
+      await withEnvAsync(AUTH_ENV, async () => {
+        await withAudioFixture(
+          "openclaw-local-audio-plugin-missing-profile",
+          async ({ ctx, media, cache }) => {
+            const transcribeAudio = vi.fn(async () => ({
+              text: "should not run",
+              model: "whisper-local",
+            }));
+            const cfg = createAudioCfg({
+              provider: "local-audio",
+              model: "whisper-local",
+              entry: { profile: "missing-profile" },
+            });
+
+            const result = await runCapability({
+              capability: "audio",
+              cfg,
+              ctx,
+              attachments: cache,
+              media,
+              agentDir,
+              providerRegistry: buildProviderRegistry({
+                "local-audio": createAudioProvider("local-audio", transcribeAudio, {
+                  resolveSyntheticAuth: () => ({
+                    apiKey: CUSTOM_LOCAL_AUTH_MARKER,
+                    source: "local-audio plugin synthetic auth",
+                    mode: "api-key",
+                  }),
+                }),
+              }),
+            });
+
+            expect(result.decision.outcome).toBe("failed");
+            expect(result.decision.attachments[0]?.attempts[0]?.reason).toContain(
+              'No credentials found for profile "missing-profile"',
+            );
+            expect(transcribeAudio).not.toHaveBeenCalled();
+          },
+        );
+      });
+    });
+  });
+
   it("does not let media synthetic auth override an explicit missing profile", async () => {
     await withIsolatedAgentDir(async (agentDir) => {
       await withEnvAsync(AUTH_ENV, async () => {
