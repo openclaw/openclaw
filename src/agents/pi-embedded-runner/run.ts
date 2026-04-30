@@ -162,6 +162,8 @@ type ApiKeyInfo = ResolvedProviderAuth;
 
 const MAX_SAME_MODEL_IDLE_TIMEOUT_RETRIES = 1;
 const EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS = 30_000;
+const MID_TURN_PRECHECK_CONTINUATION_PROMPT =
+  "Continue from the current transcript after the latest tool result. Do not repeat the original user request, and do not rerun completed tools unless the transcript shows they are still needed.";
 type EmbeddedRunAttemptForRunner = Awaited<ReturnType<typeof runEmbeddedAttemptWithBackend>>;
 
 function resolveEmbeddedRunLaneTimeoutMs(timeoutMs: number): number | undefined {
@@ -705,6 +707,7 @@ export async function runEmbeddedPiAgent(
       let planningOnlyRetryInstruction: string | null = null;
       let reasoningOnlyRetryInstruction: string | null = null;
       let emptyResponseRetryInstruction: string | null = null;
+      let nextAttemptPromptOverride: string | null = null;
       const ackExecutionFastPathInstruction = resolveAckExecutionFastPathInstruction({
         provider,
         modelId,
@@ -909,7 +912,9 @@ export async function runEmbeddedPiAgent(
           await fs.mkdir(resolvedWorkspace, { recursive: true });
 
           const basePrompt =
-            provider === "anthropic" ? scrubAnthropicRefusalMagic(params.prompt) : params.prompt;
+            nextAttemptPromptOverride ??
+            (provider === "anthropic" ? scrubAnthropicRefusalMagic(params.prompt) : params.prompt);
+          nextAttemptPromptOverride = null;
           const promptAdditions = [
             ackExecutionFastPathInstruction,
             planningOnlyRetryInstruction,
@@ -1147,10 +1152,15 @@ export async function runEmbeddedPiAgent(
             (attempt.toolMetas?.length ?? 0) === 0 &&
             (attempt.assistantTexts?.length ?? 0) === 0;
           if (preflightRecovery?.handled) {
+            const retryingFromTranscript = preflightRecovery.source === "mid-turn";
             log.info(
               `[context-overflow-precheck] early recovery route=${preflightRecovery.route} ` +
-                `completed for ${provider}/${modelId}; retrying prompt`,
+                `completed for ${provider}/${modelId}; ` +
+                (retryingFromTranscript ? "retrying from current transcript" : "retrying prompt"),
             );
+            if (retryingFromTranscript) {
+              nextAttemptPromptOverride = MID_TURN_PRECHECK_CONTINUATION_PROMPT;
+            }
             continue;
           }
           const requestedSelection = shouldSwitchToLiveModel({
@@ -1331,6 +1341,9 @@ export async function runEmbeddedPiAgent(
               log.warn(
                 `context overflow persisted after in-attempt compaction (attempt ${overflowCompactionAttempts}/${MAX_OVERFLOW_COMPACTION_ATTEMPTS}); retrying prompt without additional compaction for ${provider}/${modelId}`,
               );
+              if (preflightRecovery?.source === "mid-turn") {
+                nextAttemptPromptOverride = MID_TURN_PRECHECK_CONTINUATION_PROMPT;
+              }
               continue;
             }
             // Attempt explicit overflow compaction only when this attempt did not
@@ -1458,6 +1471,9 @@ export async function runEmbeddedPiAgent(
                 }
                 autoCompactionCount += 1;
                 log.info(`auto-compaction succeeded for ${provider}/${modelId}; retrying prompt`);
+                if (preflightRecovery?.source === "mid-turn") {
+                  nextAttemptPromptOverride = MID_TURN_PRECHECK_CONTINUATION_PROMPT;
+                }
                 continue;
               }
               log.warn(
@@ -1496,6 +1512,9 @@ export async function runEmbeddedPiAgent(
                   log.info(
                     `[context-overflow-recovery] Truncated ${truncResult.truncatedCount} tool result(s); retrying prompt`,
                   );
+                  if (preflightRecovery?.source === "mid-turn") {
+                    nextAttemptPromptOverride = MID_TURN_PRECHECK_CONTINUATION_PROMPT;
+                  }
                   continue;
                 }
                 log.warn(
