@@ -93,6 +93,7 @@ cat ~/.openclaw/openclaw.json
   <Accordion title="State and integrity">
     - Session lock file inspection and stale lock cleanup.
     - Session transcript repair for duplicated prompt-rewrite branches created by affected 2026.4.24 builds.
+    - Wedged subagent restart-recovery tombstone detection, with `--fix` support for clearing stale aborted recovery flags so startup does not keep treating the child as restart-aborted.
     - State integrity and permissions checks (sessions, transcripts, state dir).
     - Config file permission checks (chmod 600) when running locally.
     - Model auth health: checks OAuth expiry, can refresh expiring tokens, and reports auth-profile cooldown/disabled states.
