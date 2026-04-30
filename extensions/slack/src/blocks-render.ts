@@ -21,6 +21,11 @@ const SLACK_ACTION_BLOCK_ELEMENTS_MAX = 25;
 
 export type SlackBlock = Block | KnownBlock;
 
+export type SlackInteractiveBlockRenderOptions = {
+  buttonIndexOffset?: number;
+  selectIndexOffset?: number;
+};
+
 function buildSlackReplyButtonActionId(buttonIndex: number, choiceIndex: number): string {
   return `${SLACK_REPLY_BUTTON_ACTION_ID}:${String(buttonIndex)}:${String(choiceIndex + 1)}`;
 }
@@ -45,11 +50,49 @@ function isWithinSlackLimit(value: string, maxLength: number): boolean {
   return value.length <= maxLength;
 }
 
-export function buildSlackInteractiveBlocks(interactive?: InteractiveReply): SlackBlock[] {
+function readSlackBlockId(block: SlackBlock): string | undefined {
+  const value = (block as { block_id?: unknown }).block_id;
+  return typeof value === "string" ? value : undefined;
+}
+
+function readSlackOpenClawBlockIndex(blockId: string, prefix: string): number | undefined {
+  if (!blockId.startsWith(prefix)) {
+    return undefined;
+  }
+  const value = Number.parseInt(blockId.slice(prefix.length), 10);
+  return Number.isSafeInteger(value) && value > 0 ? value : undefined;
+}
+
+export function resolveSlackInteractiveBlockOffsets(
+  blocks?: readonly SlackBlock[],
+): SlackInteractiveBlockRenderOptions {
+  let buttonIndexOffset = 0;
+  let selectIndexOffset = 0;
+  for (const block of blocks ?? []) {
+    const blockId = readSlackBlockId(block);
+    if (!blockId) {
+      continue;
+    }
+    buttonIndexOffset = Math.max(
+      buttonIndexOffset,
+      readSlackOpenClawBlockIndex(blockId, "openclaw_reply_buttons_") ?? 0,
+    );
+    selectIndexOffset = Math.max(
+      selectIndexOffset,
+      readSlackOpenClawBlockIndex(blockId, "openclaw_reply_select_") ?? 0,
+    );
+  }
+  return { buttonIndexOffset, selectIndexOffset };
+}
+
+export function buildSlackInteractiveBlocks(
+  interactive?: InteractiveReply,
+  options: SlackInteractiveBlockRenderOptions = {},
+): SlackBlock[] {
   const initialState = {
     blocks: [] as SlackBlock[],
-    buttonIndex: 0,
-    selectIndex: 0,
+    buttonIndex: options.buttonIndexOffset ?? 0,
+    selectIndex: options.selectIndexOffset ?? 0,
   };
   return reduceInteractiveReply(interactive, initialState, (state, block) => {
     if (block.type === "text") {
