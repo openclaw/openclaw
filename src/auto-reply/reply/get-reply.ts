@@ -39,7 +39,10 @@ import { hasInboundMedia } from "./inbound-media.js";
 import { emitPreAgentMessageHooks } from "./message-preprocess-hooks.js";
 import { createFastTestModelSelectionState } from "./model-selection.js";
 import { initSessionState } from "./session.js";
-import { resolveStoredModelOverride } from "./stored-model-override.js";
+import {
+  isStaleHeartbeatAutoFallbackOverride,
+  resolveStoredModelOverride,
+} from "./stored-model-override.js";
 import { createTypingController } from "./typing.js";
 
 type ResetCommandAction = "new" | "reset";
@@ -363,11 +366,29 @@ export async function getReplyFromConfig(
       sessionCtx.ParentSessionKey,
     defaultProvider,
   });
-  if (storedModelOverride?.model && !hasResolvedHeartbeatModelOverride) {
+  const staleHeartbeatAutoFallbackOverride = isStaleHeartbeatAutoFallbackOverride({
+    isHeartbeat: opts?.isHeartbeat === true,
+    hasResolvedHeartbeatModelOverride,
+    sessionEntry,
+    storedOverride: storedModelOverride,
+    defaultProvider,
+    defaultModel,
+  });
+  if (
+    storedModelOverride?.model &&
+    !hasResolvedHeartbeatModelOverride &&
+    !staleHeartbeatAutoFallbackOverride
+  ) {
     provider = storedModelOverride.provider ?? defaultProvider;
     model = storedModelOverride.model;
   }
-  if (!hasResolvedHeartbeatModelOverride && !hasSessionModelOverride && channelModelOverride) {
+  const hasEffectiveSessionModelOverride =
+    hasSessionModelOverride && !staleHeartbeatAutoFallbackOverride;
+  if (
+    !hasResolvedHeartbeatModelOverride &&
+    !hasEffectiveSessionModelOverride &&
+    channelModelOverride
+  ) {
     const resolved = resolveModelRefFromString({
       raw: channelModelOverride.model,
       defaultProvider,
