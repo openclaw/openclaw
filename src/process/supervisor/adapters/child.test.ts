@@ -320,7 +320,7 @@ describe("createChildAdapter", () => {
     ).resolves.toBeDefined();
     // Emit the async EPIPE after adapter creation — must not propagate.
     const err = new Error("EPIPE: write EPIPE");
-    (err as NodeJS.errnoException).code = "EPIPE";
+    (err as NodeJS.ErrnoException).code = "EPIPE";
     stub.child.stdin!.emit("error", err);
     // Verify the adapter is still usable after the async error.
     expect(stub.child.stdin!.destroyed).toBe(false);
