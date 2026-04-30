@@ -201,7 +201,7 @@ export type PluginManifestSetupProviderAuthEvidence = {
   type: "local-file-with-env";
   /** Optional env var containing an explicit credential file path. */
   fileEnvVar?: string;
-  /** Optional fallback credential file paths. Supports `${HOME}` only. */
+  /** Optional fallback credential file paths. Supports `${HOME}` and `${APPDATA}`. */
   fallbackPaths?: string[];
   /** At least one of these env vars must be non-empty when provided. */
   requiresAnyEnv?: string[];
