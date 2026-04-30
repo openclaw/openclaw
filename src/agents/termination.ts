@@ -22,8 +22,11 @@ export type TerminationState = {
   startedAt: number;
 };
 
+/** Allows check() to return either a value or a promise — sync conditions stay fast. */
+export type Awaitable<T> = T | PromiseLike<T>;
+
 export abstract class TerminationCondition {
-  abstract check(state: TerminationState): readonly [boolean, string | null];
+  abstract check(state: TerminationState): Awaitable<readonly [boolean, string | null]>;
 
   /** Reset any internal state between loop runs. */
   reset(): void {}
@@ -46,9 +49,9 @@ export class OrCondition extends TerminationCondition {
     super();
   }
 
-  check(state: TerminationState): readonly [boolean, string | null] {
+  async check(state: TerminationState): Promise<readonly [boolean, string | null]> {
     for (const cond of this.conditions) {
-      const [stop, reason] = cond.check(state);
+      const [stop, reason] = await cond.check(state);
       if (stop) return [true, reason];
     }
     return [false, null];
@@ -64,10 +67,10 @@ export class AndCondition extends TerminationCondition {
     super();
   }
 
-  check(state: TerminationState): readonly [boolean, string | null] {
+  async check(state: TerminationState): Promise<readonly [boolean, string | null]> {
     const reasons: string[] = [];
     for (const cond of this.conditions) {
-      const [stop, reason] = cond.check(state);
+      const [stop, reason] = await cond.check(state);
       if (!stop) return [false, null];
       if (reason) reasons.push(reason);
     }

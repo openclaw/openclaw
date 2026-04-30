@@ -126,7 +126,7 @@ export async function runSessionsSendA2AFlow(params: {
         latestReply = replyText;
         incomingMessage = replyText;
         if (termination) {
-          const [stop] = termination.check({ turn, replyText, startedAt: loopStartedAt });
+          const [stop] = await termination.check({ turn, replyText, startedAt: loopStartedAt });
           if (stop) break;
         }
         const swap = currentSessionKey;
