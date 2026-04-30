@@ -833,8 +833,9 @@ export default definePluginEntry({
           .action(async (opts) => {
             const timeoutSeconds = Number.parseInt(String(opts.timeout), 10);
             if (!Number.isFinite(timeoutSeconds) || timeoutSeconds <= 0) {
-              console.error(`Invalid timeout value: ${opts.timeout}. Must be a positive integer!`);
-              process.exit(1);
+              throw new Error(
+                `Invalid timeout value: ${timeoutSeconds}. Must be a positive integer!`,
+              );
             }
             const { rowCount, indexed } = await db.reindex(timeoutSeconds);
             if (!indexed) {
