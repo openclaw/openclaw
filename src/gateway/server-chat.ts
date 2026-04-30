@@ -16,6 +16,9 @@ import { persistGatewaySessionLifecycleEvent } from "./server-chat.persist-sessi
 import { deriveGatewaySessionLifecycleSnapshot } from "./session-lifecycle-state.js";
 import { loadSessionEntry } from "./session-utils.js";
 import { formatForLog } from "./ws-log.js";
+import { createInternalHookEvent, triggerInternalHook } from "../hooks/internal-hooks.js";
+import { toInternalMessageSentContext } from "../hooks/message-hook-mappers.js";
+import { fireAndForgetHook } from "../hooks/fire-and-forget.js";
 
 function resolveHeartbeatAckMaxChars(): number {
   try {
@@ -788,6 +791,27 @@ export function createAgentEventHandler({
       };
       broadcast("chat", payload);
       nodeSendToSession(sessionKey, "chat", payload);
+
+      // Fire internal message:sent hook for AE capture (webchat bypasses deliverOutboundPayloads)
+      if (text && !shouldSuppressSilent) {
+        const internalEvent = createInternalHookEvent(
+          "message",
+          "sent",
+          sessionKey,
+          toInternalMessageSentContext({
+            to: sessionKey,
+            content: text,
+            success: true,
+            channelId: "webchat",
+            conversationId: sessionKey,
+            messageId: clientRunId,
+          }),
+        );
+        fireAndForgetHook(
+          triggerInternalHook(internalEvent),
+          "emitChatFinal: message:sent internal hook failed",
+        );
+      }
       return;
     }
     const payload = {

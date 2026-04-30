@@ -947,7 +947,7 @@ async function deliverOutboundPayloadsCore(
   };
   const normalizedPayloads = normalizePayloadsForChannelDelivery(outboundPayloadPlan, handler);
   const hookRunner = getGlobalHookRunner();
-  const sessionKeyForInternalHooks = params.mirror?.sessionKey ?? params.session?.key;
+  const sessionKeyForInternalHooks = params.mirror?.sessionKey ?? params.session?.key ?? params.session?.policyKey;
   const mirrorIsGroup = params.mirror?.isGroup;
   const mirrorGroupId = params.mirror?.groupId;
   const { emitMessageSent, hasMessageSentHooks } = createMessageSentEmitter({
