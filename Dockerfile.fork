@@ -82,6 +82,8 @@ RUN apt-get update && \
     apt-get update && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
       google-cloud-cli && \
+    find /usr/lib/google-cloud-sdk -type d -name __pycache__ -prune -exec rm -rf {} + 2>/dev/null || true && \
+    find /usr/lib/google-cloud-sdk -type f -name '*.pyc' -delete 2>/dev/null || true && \
     rm -rf /var/lib/apt/lists/* /usr/share/man/* /usr/share/doc/*
 
 WORKDIR /app
