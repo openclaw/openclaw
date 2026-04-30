@@ -255,7 +255,8 @@ loop. The router:
 - never merges autofix PRs or draft PRs;
 - merges automerge PRs only when ClawSweeper passed the exact current head,
   checks are green, GitHub says mergeable, no human-review label is present,
-  the PR is not draft, and both merge gates are open.
+  the PR is not draft, required user-facing OpenClaw changelog entries are
+  present, and both merge gates are open.
 
 If ClawSweeper passes while merge gates are closed, it labels
 `clawsweeper:merge-ready` and comments instead of merging. `@clawsweeper stop`
