@@ -301,20 +301,59 @@ actor MacComputerUseMcpHost {
     private func handleTermination(sessionId: String, process: Process, gateway: GatewayNodeSession) async {
         guard let active = self.sessions.removeValue(forKey: sessionId) else { return }
         let ok = active.closeRequested || process.terminationStatus == 0
+        let signal = Self.signalName(
+            for: process.terminationStatus,
+            reason: process.terminationReason)
         await gateway.sendMcpSessionClosed(NodeMcpSessionClosedParams(
             sessionid: active.sessionId,
             nodeid: active.nodeId,
             ok: ok,
             exitcode: AnyCodable(Int(process.terminationStatus)),
-            signal: process.terminationReason == .uncaughtSignal
-                ? AnyCodable(Int(process.terminationStatus))
-                : nil,
+            signal: signal.map { AnyCodable($0) },
             error: ok
                 ? nil
                 : [
                     "code": AnyCodable("PROCESS_EXITED"),
                     "message": AnyCodable("MCP backend exited with status \(process.terminationStatus)"),
                 ]))
+    }
+
+    private static func signalName(for status: Int32, reason: Process.TerminationReason) -> String? {
+        guard reason == .uncaughtSignal else { return nil }
+        switch Int(status) {
+        case 1: return "SIGHUP"
+        case 2: return "SIGINT"
+        case 3: return "SIGQUIT"
+        case 4: return "SIGILL"
+        case 5: return "SIGTRAP"
+        case 6: return "SIGABRT"
+        case 7: return "SIGEMT"
+        case 8: return "SIGFPE"
+        case 9: return "SIGKILL"
+        case 10: return "SIGBUS"
+        case 11: return "SIGSEGV"
+        case 12: return "SIGSYS"
+        case 13: return "SIGPIPE"
+        case 14: return "SIGALRM"
+        case 15: return "SIGTERM"
+        case 16: return "SIGURG"
+        case 17: return "SIGSTOP"
+        case 18: return "SIGTSTP"
+        case 19: return "SIGCONT"
+        case 20: return "SIGCHLD"
+        case 21: return "SIGTTIN"
+        case 22: return "SIGTTOU"
+        case 23: return "SIGIO"
+        case 24: return "SIGXCPU"
+        case 25: return "SIGXFSZ"
+        case 26: return "SIGVTALRM"
+        case 27: return "SIGPROF"
+        case 28: return "SIGWINCH"
+        case 29: return "SIGINFO"
+        case 30: return "SIGUSR1"
+        case 31: return "SIGUSR2"
+        default: return "SIG\(status)"
+        }
     }
 
     private static func openResult(
