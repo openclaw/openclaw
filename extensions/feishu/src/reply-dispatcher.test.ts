@@ -21,6 +21,16 @@ const addTypingIndicatorMock = vi.hoisted(() => vi.fn(async () => ({ messageId: 
 const removeTypingIndicatorMock = vi.hoisted(() => vi.fn(async () => {}));
 const streamingInstances = vi.hoisted((): StreamingSessionStub[] => []);
 
+function createDeferred<T = void>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
 function mergeStreamingText(
   previousText: string | undefined,
   nextText: string | undefined,
@@ -383,6 +393,34 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(sendMessageFeishuMock).toHaveBeenCalledTimes(2);
     expect(sendMessageFeishuMock).toHaveBeenLastCalledWith(
       expect.objectContaining({ text: "今日热点新闻如下。" }),
+    );
+  });
+
+  it("serializes segment flushes so final text cannot overtake an in-flight partial", async () => {
+    setupSegmentStreamingConfig();
+    const firstSegmentSent = createDeferred();
+    sendMessageFeishuMock.mockImplementationOnce(async () => firstSegmentSent.promise);
+    const { result, options } = createDispatcherHarness();
+
+    await options.onReplyStart?.();
+    result.replyOptions.onPartialReply?.({ text: "第一段。" });
+    const toolStartFlush = result.replyOptions.onToolStart?.();
+    const finalDelivery = options.deliver({ text: "第一段。\n\n第二段。" }, { kind: "final" });
+    await vi.waitFor(() => expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1));
+
+    expect(sendMessageFeishuMock).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ text: "第一段。" }),
+    );
+
+    firstSegmentSent.resolve();
+    await toolStartFlush;
+    await finalDelivery;
+
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(2);
+    expect(sendMessageFeishuMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ text: "第二段。" }),
     );
   });
 

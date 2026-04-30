@@ -21,6 +21,7 @@ This PR keeps the existing `streaming: true` behavior unchanged and adds a new e
   - partial model output is accumulated
   - accumulated text is flushed on tool start, idle, block, tool payload, or final reply
   - duplicate final text after an idle flush is suppressed
+  - segment sends are serialized so final/tool payloads cannot overtake an in-flight partial flush
   - each flushed segment independently uses `renderMode: "auto"`
   - mentions are attached only to the first text segment
   - reasoning preview callbacks stay disabled because segment mode does not use live cards
@@ -62,6 +63,17 @@ Result:
 
 - 3 test files passed
 - 83 tests passed
+
+After fixing segment ordering/deduplication, also ran:
+
+```bash
+pnpm test extensions/feishu/src/reply-dispatcher.test.ts
+```
+
+Result:
+
+- 1 test file passed
+- 49 tests passed
 
 Also ran:
 

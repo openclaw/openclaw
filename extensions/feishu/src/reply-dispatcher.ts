@@ -238,6 +238,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   let segmentDeliveredText = "";
   let segmentLastPartial = "";
   let segmentMentionTargetsDelivered = false;
+  let segmentDeliveryQueue: Promise<void> = Promise.resolve();
 
   const formatReasoningPrefix = (thinking: string): string => {
     if (!thinking) {
@@ -553,7 +554,21 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     );
   };
 
-  const flushSegment = async (reason: string, nextText?: string): Promise<boolean> => {
+  const enqueueSegmentDelivery = <T>(operation: () => Promise<T>): Promise<T> => {
+    const queued = segmentDeliveryQueue.then(operation, operation);
+    segmentDeliveryQueue = queued.then(
+      () => undefined,
+      () => undefined,
+    );
+    return queued;
+  };
+
+  const sendTextSegmentInOrder = (text: string, infoKind?: string) =>
+    enqueueSegmentDelivery(async () => {
+      await sendTextSegment(text, infoKind);
+    });
+
+  const flushSegmentNow = async (reason: string, nextText?: string): Promise<boolean> => {
     if (!segmentStreamingEnabled && reason !== "final" && reason !== "block") {
       return false;
     }
@@ -571,6 +586,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     }
     return true;
   };
+
+  const flushSegment = (reason: string, nextText?: string): Promise<boolean> =>
+    enqueueSegmentDelivery(() => flushSegmentNow(reason, nextText));
 
   const { dispatcher, replyOptions, markDispatchIdle } =
     core.channel.reply.createReplyDispatcherWithTyping({
@@ -617,7 +635,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           if (info?.kind === "tool") {
             await flushSegment("tool");
             if (shouldDeliverText) {
-              await sendTextSegment(text, "tool");
+              await sendTextSegmentInOrder(text, "tool");
             }
             if (hasMedia) {
               await sendMediaReplies(payload);
