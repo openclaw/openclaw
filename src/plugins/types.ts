@@ -1101,6 +1101,7 @@ export type ProviderPluginWizardSetup = {
   modelAllowlist?: {
     allowedKeys?: string[];
     initialSelections?: string[];
+    loadCatalog?: boolean;
     message?: string;
   };
   /**
@@ -1214,6 +1215,21 @@ export type ProviderPlugin = {
    */
   staticCatalog?: ProviderPluginCatalog;
   /**
+   * Show catalog row labels as the literal `<provider>/<entry.id>`
+   * composition instead of the canonical (deduped) key.
+   *
+   * `modelKey` strips a duplicate `<provider>/` prefix so storage and
+   * lookups stay stable. This flag only changes the picker label — the
+   * option value and persisted config remain canonical.
+   *
+   * Set when the leading `<provider>/` segment in the native model id is
+   * a meaningful vendor namespace (e.g. NVIDIA's `nvidia/nemotron-...`
+   * alongside `moonshotai/kimi-k2.5`).
+   */
+  preserveLiteralProviderPrefix?: boolean;
+  /**
+   * @deprecated Use catalog.
+   *
    * Legacy alias for catalog.
    * Kept for compatibility with existing provider plugins.
    */
@@ -1838,6 +1854,27 @@ export type OpenClawPluginGatewayMethod = {
 // Plugin Commands
 // =============================================================================
 
+export type PluginCommandDiagnosticsSession = {
+  /** Stable host session key when available. */
+  sessionKey?: string;
+  /** Ephemeral OpenClaw session id when available. */
+  sessionId?: string;
+  /** Transcript file for this OpenClaw session when available. */
+  sessionFile?: string;
+  /** Embedded agent harness selected for this session. */
+  agentHarnessId?: string;
+  /** Channel/provider for this session when available. */
+  channel?: string;
+  /** Provider channel id when available. */
+  channelId?: ChannelId;
+  /** Account id for multi-account channels when available. */
+  accountId?: string;
+  /** Thread/topic id when available. */
+  messageThreadId?: string | number;
+  /** Parent conversation id for thread-capable channels when available. */
+  threadParentId?: string;
+};
+
 /**
  * Context passed to plugin command handlers.
  */
@@ -1850,6 +1887,8 @@ export type PluginCommandContext = {
   channelId?: ChannelId;
   /** Whether the sender is on the allowlist */
   isAuthorizedSender: boolean;
+  /** Whether the sender is an owner for owner-only command surfaces. */
+  senderIsOwner?: boolean;
   /** Gateway client scopes for internal control-plane callers */
   gatewayClientScopes?: string[];
   /** Stable host session key for the active conversation when available. */
@@ -1874,6 +1913,14 @@ export type PluginCommandContext = {
   messageThreadId?: string | number;
   /** Parent conversation id for thread-capable channels */
   threadParentId?: string;
+  /** Sensitive diagnostics-only session inventory for owner-gated commands. */
+  diagnosticsSessions?: PluginCommandDiagnosticsSession[];
+  /** Internal diagnostics-only marker that exec approval already authorized upload. */
+  diagnosticsUploadApproved?: boolean;
+  /** Internal diagnostics-only marker to preview upload effects without exposing ids. */
+  diagnosticsPreviewOnly?: boolean;
+  /** Internal diagnostics-only marker for owner-private routed confirmations. */
+  diagnosticsPrivateRouted?: boolean;
   requestConversationBinding: (
     params?: PluginConversationBindingRequestParams,
   ) => Promise<PluginConversationBindingRequestResult>;
@@ -2063,6 +2110,12 @@ export type OpenClawPluginDefinition = {
   name?: string;
   description?: string;
   version?: string;
+  /**
+   * @deprecated Declare exclusive plugin kind in `openclaw.plugin.json` via
+   * manifest `kind`. Runtime-exported `kind` is kept as a compatibility
+   * fallback for older plugins and may require loading plugin runtime on
+   * metadata-only command paths.
+   */
   kind?: PluginKind | PluginKind[];
   configSchema?: OpenClawPluginConfigSchema;
   reload?: OpenClawPluginReloadRegistration;
@@ -2412,7 +2465,7 @@ export type OpenClawPluginApi = {
   on: <K extends PluginHookName>(
     hookName: K,
     handler: PluginHookHandlerMap[K],
-    opts?: { priority?: number },
+    opts?: { priority?: number; timeoutMs?: number },
   ) => void;
 };
 

@@ -290,6 +290,47 @@ describe("barnacle-auto-response", () => {
     );
   });
 
+  it("does not close automation PRs for the active PR limit", async () => {
+    for (const automationPullRequest of [
+      { head: { ref: "clawsweeper/openclaw-openclaw-73880" }, login: "app/openclaw-clawsweeper" },
+      { headRefName: "clawsweeper/openclaw-openclaw-73880", login: "app/openclaw-clawsweeper" },
+      {
+        head: { ref: "clownfish/ghcrawl-156993-autonomous-smoke" },
+        login: "app/openclaw-clownfish",
+      },
+      { headRefName: "clownfish/ghcrawl-156993-autonomous-smoke", login: "app/openclaw-clownfish" },
+    ]) {
+      const { calls, github } = barnacleGithub([]);
+      const { login, ...pullRequest } = automationPullRequest;
+
+      await runBarnacleAutoResponse({
+        github,
+        context: barnacleContext(
+          {
+            ...pullRequest,
+            user: {
+              login,
+            },
+          },
+          ["r: too-many-prs"],
+        ),
+        core: {
+          info: () => undefined,
+        },
+      });
+
+      expect(calls.removeLabel).toContainEqual(
+        expect.objectContaining({ name: "r: too-many-prs" }),
+      );
+      expect(calls.createComment).not.toContainEqual(
+        expect.objectContaining({
+          body: expect.stringContaining("more than 10 active PRs"),
+        }),
+      );
+      expect(calls.update).not.toContainEqual(expect.objectContaining({ state: "closed" }));
+    }
+  });
+
   it("still adds candidate labels to broad contributor PRs", async () => {
     const { calls, github } = barnacleGithub([
       file("ui/src/app.ts"),

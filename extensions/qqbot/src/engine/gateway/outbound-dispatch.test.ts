@@ -136,6 +136,16 @@ function makeRuntime(params: {
         resolveEffectiveMessagesConfig: vi.fn(() => ({})),
         resolveEnvelopeFormatOptions: vi.fn(() => ({})),
       },
+      session: {
+        resolveStorePath: vi.fn(() => "/tmp/openclaw/qqbot-sessions.json"),
+        recordInboundSession: vi.fn(async () => undefined),
+      },
+      turn: {
+        runPrepared: vi.fn(async (rawParams: unknown) => {
+          const params = rawParams as { runDispatch: () => Promise<unknown> };
+          return { dispatchResult: await params.runDispatch() };
+        }),
+      },
       text: {
         chunkMarkdownText: (text: string) => [text],
       },

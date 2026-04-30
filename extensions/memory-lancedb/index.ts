@@ -149,6 +149,7 @@ function resolveAutoCaptureStartIndex(
 // ============================================================================
 
 const TABLE_NAME = "memories";
+const DEFAULT_AUTO_RECALL_TIMEOUT_MS = 15_000;
 
 class MemoryDB {
   private db: LanceDB.Connection | null = null;
@@ -255,6 +256,11 @@ class MemoryDB {
     await this.ensureInitialized();
     return this.table!.countRows();
   }
+
+  async getTable(): Promise<LanceDB.Table> {
+    await this.ensureInitialized();
+    return this.table!;
+  }
 }
 
 // ============================================================================
@@ -262,7 +268,7 @@ class MemoryDB {
 // ============================================================================
 
 type Embeddings = {
-  embed(text: string): Promise<number[]>;
+  embed(text: string, options?: { timeoutMs?: number }): Promise<number[]>;
 };
 
 class OpenAiCompatibleEmbeddings implements Embeddings {
@@ -277,7 +283,7 @@ class OpenAiCompatibleEmbeddings implements Embeddings {
     this.client = new OpenAI({ apiKey, baseURL: baseUrl });
   }
 
-  async embed(text: string): Promise<number[]> {
+  async embed(text: string, options?: { timeoutMs?: number }): Promise<number[]> {
     const params: OpenAI.EmbeddingCreateParams = {
       model: this.model,
       input: text,
@@ -292,6 +298,7 @@ class OpenAiCompatibleEmbeddings implements Embeddings {
     // transport and normalize the response ourselves.
     const response = await this.client.post<EmbeddingCreateResponse>("/embeddings", {
       body: params,
+      ...(options?.timeoutMs ? { timeout: options.timeoutMs, maxRetries: 0 } : {}),
     });
     return normalizeEmbeddingVector(response.data?.[0]?.embedding);
   }
@@ -353,6 +360,32 @@ class ProviderAdapterEmbeddings implements Embeddings {
   }
 }
 
+async function runWithTimeout<T>(params: {
+  timeoutMs: number;
+  task: () => Promise<T>;
+}): Promise<{ status: "ok"; value: T } | { status: "timeout" }> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const TIMEOUT = Symbol("timeout");
+  const timeoutPromise = new Promise<typeof TIMEOUT>((resolve) => {
+    timeout = setTimeout(() => resolve(TIMEOUT), params.timeoutMs);
+    timeout.unref?.();
+  });
+  const taskPromise = params.task();
+  taskPromise.catch(() => undefined);
+
+  try {
+    const result = await Promise.race([taskPromise, timeoutPromise]);
+    if (result === TIMEOUT) {
+      return { status: "timeout" };
+    }
+    return { status: "ok", value: result };
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
+}
+
 function createEmbeddings(api: OpenClawPluginApi, cfg: MemoryConfig): Embeddings {
   const { provider, model, dimensions, apiKey, baseUrl } = cfg.embedding;
   if (provider === "openai" && apiKey) {
@@ -405,6 +438,7 @@ const MEMORY_TRIGGERS = [
   /my\s+\w+\s+is|is\s+my/i,
   /i (like|prefer|hate|love|want|need)/i,
   /always|never|important/i,
+  /记住|记下|我(喜欢|偏好|讨厌|爱|想要|需要)|我的.*是|决定|总是|从不|重要/i,
 ];
 
 const PROMPT_INJECTION_PATTERNS = [
@@ -503,7 +537,19 @@ export default definePluginEntry({
   configSchema: memoryConfigSchema,
 
   register(api: OpenClawPluginApi) {
-    const cfg = memoryConfigSchema.parse(api.pluginConfig);
+    let cfg: MemoryConfig;
+    try {
+      cfg = memoryConfigSchema.parse(api.pluginConfig);
+    } catch (error) {
+      api.registerService({
+        id: "memory-lancedb",
+        start: () => {
+          const message = error instanceof Error ? error.message : String(error);
+          api.logger.warn(`memory-lancedb: disabled until configured (${message})`);
+        },
+      });
+      return;
+    }
     const dbPath = cfg.dbPath!;
     const resolvedDbPath = dbPath.includes("://") ? dbPath : api.resolvePath(dbPath);
     const { model, dimensions } = cfg.embedding;
@@ -776,6 +822,74 @@ export default definePluginEntry({
           });
 
         memory
+          .command("query")
+          .description("Query memories (non-vector search)")
+          .option("--cols <columns>", "Columns to select, comma-separated")
+          .option("--filter <condition>", "Filter condition")
+          .option("--limit <n>", "Limit number of results", "10")
+          .option("--order-by <order>", "Order by column and direction (e.g., createdAt:desc)")
+          .action(async (opts) => {
+            const table = await db.getTable();
+            let query = table.query();
+            let sortColAdded = false;
+            let sortColName: string | undefined;
+            if (opts.cols) {
+              const columns = (opts.cols as string).split(",").map((c: string) => c.trim());
+              if (opts.orderBy) {
+                const [sortCol] = opts.orderBy.split(":");
+                sortColName = sortCol;
+                if (!columns.includes(sortCol)) {
+                  columns.push(sortCol);
+                  sortColAdded = true;
+                }
+              }
+              query = query.select(columns);
+            } else {
+              query = query.select(["id", "text", "importance", "category", "createdAt"]);
+            }
+            if (opts.filter) {
+              const filterCondition = String(opts.filter);
+              if (filterCondition.length > 200) {
+                throw new Error("Filter condition exceeds maximum length of 200 characters");
+              }
+              if (!/^[a-zA-Z0-9_\-\s='"><!.,()%*]+$/.test(filterCondition)) {
+                throw new Error("Filter condition contains invalid characters");
+              }
+              query = query.where(filterCondition);
+            }
+            const limit = Number.parseInt(opts.limit, 10);
+            if (Number.isNaN(limit) || limit <= 0) {
+              throw new Error("Invalid limit: must be a positive integer");
+            }
+
+            // Fetch all filtered rows first if we need to order them in memory
+            if (!opts.orderBy) {
+              query = query.limit(limit);
+            }
+            let rows = await query.toArray();
+            if (opts.orderBy) {
+              const [col, dir] = opts.orderBy.split(":");
+              const direction = dir?.toLowerCase() === "desc" ? -1 : 1;
+              rows.sort((a, b) => {
+                if (a[col] < b[col]) {
+                  return -1 * direction;
+                }
+                if (a[col] > b[col]) {
+                  return 1 * direction;
+                }
+                return 0;
+              });
+              rows = rows.slice(0, limit);
+              if (sortColAdded && sortColName) {
+                for (const row of rows) {
+                  delete row[sortColName];
+                }
+              }
+            }
+            console.log(JSON.stringify(rows, null, 2));
+          });
+
+        memory
           .command("stats")
           .description("Show memory statistics")
           .action(async () => {
@@ -806,8 +920,22 @@ export default definePluginEntry({
             event.prompt,
           currentCfg.recallMaxChars,
         );
-        const vector = await embeddings.embed(recallQuery);
-        const results = await db.search(vector, 3, 0.3);
+        const recall = await runWithTimeout({
+          timeoutMs: DEFAULT_AUTO_RECALL_TIMEOUT_MS,
+          task: async () => {
+            const vector = await embeddings.embed(recallQuery, {
+              timeoutMs: DEFAULT_AUTO_RECALL_TIMEOUT_MS,
+            });
+            return await db.search(vector, 3, 0.3);
+          },
+        });
+        if (recall.status === "timeout") {
+          api.logger.warn?.(
+            `memory-lancedb: auto-recall timed out after ${DEFAULT_AUTO_RECALL_TIMEOUT_MS}ms; skipping memory injection to avoid stalling agent startup`,
+          );
+          return undefined;
+        }
+        const results = recall.value;
 
         if (results.length === 0) {
           return undefined;

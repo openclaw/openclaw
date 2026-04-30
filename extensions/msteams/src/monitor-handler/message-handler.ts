@@ -11,7 +11,11 @@ import {
   shouldIncludeSupplementalContext,
 } from "openclaw/plugin-sdk/context-visibility-runtime";
 import { evaluateSenderGroupAccessForPolicy } from "openclaw/plugin-sdk/group-access";
-import { dispatchReplyFromConfigWithSettledDispatcher } from "openclaw/plugin-sdk/inbound-reply-dispatch";
+import {
+  dispatchReplyFromConfigWithSettledDispatcher,
+  hasFinalInboundReplyDispatch,
+  resolveInboundReplyDispatchCounts,
+} from "openclaw/plugin-sdk/inbound-reply-dispatch";
 import {
   buildPendingHistoryContextFromMap,
   clearHistoryEntriesIfEnabled,
@@ -793,15 +797,6 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       ...mediaPayload,
     });
 
-    await core.channel.session.recordInboundSession({
-      storePath,
-      sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
-      ctx: ctxPayload,
-      onRecordError: (err) => {
-        logVerboseMessage(`msteams: failed updating session meta: ${formatUnknownError(err)}`);
-      },
-    });
-
     logVerboseMessage(`msteams inbound: from=${ctxPayload.From} preview="${preview}"`);
 
     const sharePointSiteId = msteamsCfg?.sharePointSiteId;
@@ -845,18 +840,40 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
 
     log.info("dispatching to agent", { sessionKey: route.sessionKey });
     try {
-      const { queuedFinal, counts } = await dispatchReplyFromConfigWithSettledDispatcher({
-        cfg,
+      const { dispatchResult } = await core.channel.turn.runPrepared({
+        channel: "msteams",
+        accountId: route.accountId,
+        routeSessionKey: route.sessionKey,
+        storePath,
         ctxPayload,
-        dispatcher,
-        onSettled: () => markDispatchIdle(),
-        replyOptions,
-        configOverride,
+        recordInboundSession: core.channel.session.recordInboundSession,
+        record: {
+          onRecordError: (err) => {
+            logVerboseMessage(`msteams: failed updating session meta: ${formatUnknownError(err)}`);
+          },
+        },
+        onPreDispatchFailure: () =>
+          core.channel.reply.settleReplyDispatcher({
+            dispatcher,
+            onSettled: () => markDispatchIdle(),
+          }),
+        runDispatch: () =>
+          dispatchReplyFromConfigWithSettledDispatcher({
+            cfg,
+            ctxPayload,
+            dispatcher,
+            onSettled: () => markDispatchIdle(),
+            replyOptions,
+            configOverride,
+          }),
       });
+      const queuedFinal = dispatchResult?.queuedFinal ?? false;
+      const counts = resolveInboundReplyDispatchCounts(dispatchResult);
+      const hasFinalResponse = hasFinalInboundReplyDispatch(dispatchResult);
 
       log.info("dispatch complete", { queuedFinal, counts });
 
-      if (!queuedFinal) {
+      if (!hasFinalResponse) {
         if (isRoomish && historyKey) {
           clearHistoryEntriesIfEnabled({
             historyMap: conversationHistories,

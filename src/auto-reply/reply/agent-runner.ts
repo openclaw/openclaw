@@ -6,6 +6,8 @@ import { resolveModelAuthMode } from "../../agents/model-auth.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import { queueEmbeddedPiMessage } from "../../agents/pi-embedded-runner/runs.js";
 import { deriveContextPromptTokens, hasNonzeroUsage, normalizeUsage } from "../../agents/usage.js";
+import { enqueueCommitmentExtraction } from "../../commitments/runtime.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import {
   loadSessionStore,
   resolveSessionPluginStatusLines,
@@ -15,6 +17,7 @@ import {
 } from "../../config/sessions.js";
 import type { TypingMode } from "../../config/types.js";
 import { resolveSessionTranscriptCandidates } from "../../gateway/session-utils.fs.js";
+import { logVerbose } from "../../globals.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { emitTrustedDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import {
@@ -60,11 +63,13 @@ import { createAudioAsVoiceBuffer, createBlockReplyPipeline } from "./block-repl
 import { resolveEffectiveBlockStreamingConfig } from "./block-streaming.js";
 import { createFollowupRunner } from "./followup-runner.js";
 import { resolveOriginMessageProvider, resolveOriginMessageTo } from "./origin-routing.js";
+import { drainPendingToolTasks } from "./pending-tool-task-drain.js";
 import { readPostCompactionContext } from "./post-compaction-context.js";
 import { resolveActiveRunQueueAction } from "./queue-policy.js";
 import {
   enqueueFollowupRun,
   refreshQueuedFollowupSession,
+  resolvePiSteeringModeForQueueMode,
   type FollowupRun,
   type QueueSettings,
 } from "./queue.js";
@@ -790,6 +795,71 @@ function buildInlineRawTracePayload(params: {
   };
 }
 
+function joinCommitmentAssistantText(payloads: ReplyPayload[]): string {
+  return payloads
+    .filter((payload) => !payload.isError && !payload.isReasoning && !payload.isCompactionNotice)
+    .map((payload) => payload.text?.trim())
+    .filter((text): text is string => Boolean(text))
+    .join("\n")
+    .trim();
+}
+
+function enqueueCommitmentExtractionForTurn(params: {
+  cfg: OpenClawConfig;
+  commandBody: string;
+  isHeartbeat: boolean;
+  followupRun: FollowupRun;
+  sessionCtx: TemplateContext;
+  sessionKey?: string;
+  replyToChannel?: string;
+  payloads: ReplyPayload[];
+  runId: string;
+}): void {
+  if (params.isHeartbeat) {
+    return;
+  }
+  const userText =
+    params.commandBody.trim() ||
+    params.sessionCtx.BodyStripped?.trim() ||
+    params.sessionCtx.BodyForCommands?.trim() ||
+    params.sessionCtx.CommandBody?.trim() ||
+    params.sessionCtx.RawBody?.trim() ||
+    params.sessionCtx.Body?.trim() ||
+    "";
+  const assistantText = joinCommitmentAssistantText(params.payloads);
+  const sessionKey = params.sessionKey ?? params.followupRun.run.sessionKey;
+  const channel =
+    params.replyToChannel ??
+    params.followupRun.run.messageProvider ??
+    params.sessionCtx.Surface ??
+    params.sessionCtx.Provider;
+  if (!userText || !assistantText || !sessionKey || !channel) {
+    return;
+  }
+  const to = resolveOriginMessageTo({
+    originatingTo: params.sessionCtx.OriginatingTo,
+    to: params.sessionCtx.To,
+  });
+  enqueueCommitmentExtraction({
+    cfg: params.cfg,
+    agentId: params.followupRun.run.agentId,
+    sessionKey,
+    channel,
+    ...(params.sessionCtx.AccountId ? { accountId: params.sessionCtx.AccountId } : {}),
+    ...(to ? { to } : {}),
+    ...(params.sessionCtx.MessageThreadId !== undefined
+      ? { threadId: String(params.sessionCtx.MessageThreadId) }
+      : {}),
+    ...(params.followupRun.run.senderId ? { senderId: params.followupRun.run.senderId } : {}),
+    userText,
+    assistantText,
+    ...(params.sessionCtx.MessageSidFull || params.sessionCtx.MessageSid
+      ? { sourceMessageId: params.sessionCtx.MessageSidFull ?? params.sessionCtx.MessageSid }
+      : {}),
+    sourceRunId: params.runId,
+  });
+}
+
 function refreshSessionEntryFromStore(params: {
   storePath?: string;
   sessionKey?: string;
@@ -929,7 +999,10 @@ export async function runReplyAgent(params: {
     const steerSessionId =
       (sessionKey ? replyRunRegistry.resolveSessionId(sessionKey) : undefined) ??
       followupRun.run.sessionId;
-    const steered = queueEmbeddedPiMessage(steerSessionId, followupRun.prompt);
+    const steered = queueEmbeddedPiMessage(steerSessionId, followupRun.prompt, {
+      steeringMode: resolvePiSteeringModeForQueueMode(resolvedQueue.mode),
+      ...(resolvedQueue.debounceMs !== undefined ? { debounceMs: resolvedQueue.debounceMs } : {}),
+    });
     if (steered && !shouldFollowup) {
       await touchActiveSessionEntry();
       typing.cleanup();
@@ -1230,7 +1303,10 @@ export async function runReplyAgent(params: {
       blockReplyPipeline.stop();
     }
     if (pendingToolTasks.size > 0) {
-      await Promise.allSettled(pendingToolTasks);
+      await drainPendingToolTasks({
+        tasks: pendingToolTasks,
+        onTimeout: logVerbose,
+      });
     }
 
     const usage = runResult.meta?.agentMeta?.usage;
@@ -1311,7 +1387,6 @@ export async function runReplyAgent(params: {
       systemPromptReport: runResult.meta?.systemPromptReport,
       cliSessionId,
       cliSessionBinding,
-      usageIsContextSnapshot: isCliProvider(providerUsed, cfg),
     });
 
     // Drain any late tool/block deliveries before deciding there's "nothing to send".
@@ -1374,6 +1449,18 @@ export async function runReplyAgent(params: {
         ? appendUnscheduledReminderNote(replyPayloads)
         : replyPayloads;
 
+    enqueueCommitmentExtractionForTurn({
+      cfg,
+      commandBody,
+      isHeartbeat,
+      followupRun,
+      sessionCtx,
+      sessionKey,
+      replyToChannel,
+      payloads: replyPayloads,
+      runId,
+    });
+
     await signalTypingIfNeeded(guardedReplyPayloads, typingSignals);
 
     if (isDiagnosticsEnabled(cfg) && hasNonzeroUsage(usage)) {
@@ -1432,7 +1519,9 @@ export async function runReplyAgent(params: {
       (sessionKey ? activeSessionStore?.[sessionKey]?.responseUsage : undefined);
     const responseUsageMode = resolveResponseUsageMode(responseUsageRaw);
     if (responseUsageMode !== "off" && hasNonzeroUsage(usage)) {
-      const authMode = resolveModelAuthMode(providerUsed, cfg);
+      const authMode = resolveModelAuthMode(providerUsed, cfg, undefined, {
+        workspaceDir: followupRun.run.workspaceDir,
+      });
       const showCost = authMode === "api-key";
       const costConfig = showCost
         ? resolveModelCostConfig({
@@ -1561,7 +1650,7 @@ export async function runReplyAgent(params: {
         })
           .then((contextContent) => {
             if (contextContent) {
-              enqueueSystemEvent(contextContent, { sessionKey });
+              enqueueSystemEvent(contextContent, { sessionKey, trusted: true });
             }
           })
           .catch(() => {
@@ -1595,7 +1684,9 @@ export async function runReplyAgent(params: {
       authMode:
         runResult.meta?.requestShaping?.authMode ??
         (cfg?.models?.providers && providerUsed in cfg.models.providers
-          ? (resolveModelAuthMode(providerUsed, cfg) ?? undefined)
+          ? (resolveModelAuthMode(providerUsed, cfg, undefined, {
+              workspaceDir: followupRun.run.workspaceDir,
+            }) ?? undefined)
           : undefined),
       thinking:
         runResult.meta?.requestShaping?.thinking ??

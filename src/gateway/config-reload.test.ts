@@ -245,6 +245,14 @@ describe("buildGatewayReloadPlan", () => {
     );
   });
 
+  it("requires restart when model pricing bootstrap changes", () => {
+    const plan = buildGatewayReloadPlan(["models.pricing.enabled"]);
+    expect(plan.restartGateway).toBe(true);
+    expect(plan.restartReasons).toContain("models.pricing.enabled");
+    expect(plan.restartHeartbeat).toBe(false);
+    expect(plan.hotReasons).toEqual([]);
+  });
+
   it("restarts heartbeat when agents.defaults.models allowlist changes", () => {
     const plan = buildGatewayReloadPlan(["agents.defaults.models"]);
     expect(plan.restartGateway).toBe(false);

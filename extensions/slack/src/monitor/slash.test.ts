@@ -7,6 +7,7 @@ vi.mock("./slash-commands.runtime.js", () => {
   const reportCompactCommand = { key: "reportcompact", nativeName: "reportcompact" };
   const reportExternalCommand = { key: "reportexternal", nativeName: "reportexternal" };
   const reportLongCommand = { key: "reportlong", nativeName: "reportlong" };
+  const reportLongButtonCommand = { key: "reportlongbutton", nativeName: "reportlongbutton" };
   const unsafeConfirmCommand = { key: "unsafeconfirm", nativeName: "unsafeconfirm" };
   const statusAliasCommand = { key: "status", nativeName: "status" };
   const periodArg = { name: "period", description: "period" };
@@ -71,6 +72,9 @@ vi.mock("./slash-commands.runtime.js", () => {
       if (normalized === "reportlong") {
         return reportLongCommand;
       }
+      if (normalized === "reportlongbutton") {
+        return reportLongButtonCommand;
+      }
       if (normalized === "unsafeconfirm") {
         return unsafeConfirmCommand;
       }
@@ -111,6 +115,12 @@ vi.mock("./slash-commands.runtime.js", () => {
         args: [],
       },
       {
+        name: "reportlongbutton",
+        description: "ReportLongButton",
+        acceptsArgs: true,
+        args: [],
+      },
+      {
         name: "unsafeconfirm",
         description: "UnsafeConfirm",
         acceptsArgs: true,
@@ -138,6 +148,14 @@ vi.mock("./slash-commands.runtime.js", () => {
         return resolvePeriodMenu(params, [
           ...fullReportPeriodChoices,
           { value: "x".repeat(90), label: "long" },
+        ]);
+      }
+      if (params.command?.key === "reportlongbutton") {
+        return resolvePeriodMenu(params, [
+          {
+            value: "x".repeat(170),
+            label: "Long button label ".repeat(8),
+          },
         ]);
       }
       if (params.command?.key === "reportcompact") {
@@ -408,6 +426,7 @@ describe("Slack native command argument menus", () => {
   let reportCompactHandler: (args: unknown) => Promise<void>;
   let reportExternalHandler: (args: unknown) => Promise<void>;
   let reportLongHandler: (args: unknown) => Promise<void>;
+  let reportLongButtonHandler: (args: unknown) => Promise<void>;
   let unsafeConfirmHandler: (args: unknown) => Promise<void>;
   let agentStatusHandler: (args: unknown) => Promise<void>;
   let argMenuHandler: (args: unknown) => Promise<void>;
@@ -421,6 +440,11 @@ describe("Slack native command argument menus", () => {
     reportCompactHandler = requireHandler(harness.commands, "/reportcompact", "/reportcompact");
     reportExternalHandler = requireHandler(harness.commands, "/reportexternal", "/reportexternal");
     reportLongHandler = requireHandler(harness.commands, "/reportlong", "/reportlong");
+    reportLongButtonHandler = requireHandler(
+      harness.commands,
+      "/reportlongbutton",
+      "/reportlongbutton",
+    );
     unsafeConfirmHandler = requireHandler(harness.commands, "/unsafeconfirm", "/unsafeconfirm");
     agentStatusHandler = requireHandler(harness.commands, "/agentstatus", "/agentstatus");
     argMenuHandler = requireHandler(harness.actions, /^openclaw_cmdarg/, "arg-menu action");
@@ -539,9 +563,20 @@ describe("Slack native command argument menus", () => {
     expect(element?.confirm).toBeTruthy();
   });
 
-  it("falls back to buttons when static_select value limit would be exceeded", async () => {
+  it("uses static_select when encoded values fit Slack option limits", async () => {
     const firstElement = await getFirstActionElementFromCommand(reportLongHandler);
+    expect(firstElement?.type).toBe("static_select");
+    expect(firstElement?.confirm).toBeTruthy();
+  });
+
+  it("truncates button labels when static_select value limit would be exceeded", async () => {
+    const firstElement = (await getFirstActionElementFromCommand(reportLongButtonHandler)) as
+      | { type?: string; text?: { text?: string }; value?: string; confirm?: unknown }
+      | undefined;
     expect(firstElement?.type).toBe("button");
+    expect(firstElement?.text?.text).toHaveLength(75);
+    expect(firstElement?.text?.text?.endsWith("…")).toBe(true);
+    expect(firstElement?.value?.length).toBeGreaterThan(150);
     expect(firstElement?.confirm).toBeTruthy();
   });
 
@@ -976,7 +1011,7 @@ describe("slack slash commands access groups", () => {
 
   it("still treats D-prefixed channel ids as DMs when lookup fails", async () => {
     const harness = createPolicyHarness({
-      allowFrom: [],
+      allowFrom: ["*"],
       channelId: "D123",
       channelName: "notdirectmessage",
       resolveChannelName: async () => ({}),
@@ -996,12 +1031,12 @@ describe("slack slash commands access groups", () => {
     const dispatchArg = dispatchMock.mock.calls[0]?.[0] as {
       ctx?: { CommandAuthorized?: boolean };
     };
-    expect(dispatchArg?.ctx?.CommandAuthorized).toBe(false);
+    expect(dispatchArg?.ctx?.CommandAuthorized).toBe(true);
   });
 
   it("computes CommandAuthorized for DM slash commands when dmPolicy is open", async () => {
     const harness = createPolicyHarness({
-      allowFrom: ["U_OWNER"],
+      allowFrom: ["*"],
       channelId: "D999",
       channelName: "directmessage",
       resolveChannelName: async () => ({ name: "directmessage", type: "im" }),
@@ -1020,7 +1055,7 @@ describe("slack slash commands access groups", () => {
     const dispatchArg = dispatchMock.mock.calls[0]?.[0] as {
       ctx?: { CommandAuthorized?: boolean };
     };
-    expect(dispatchArg?.ctx?.CommandAuthorized).toBe(false);
+    expect(dispatchArg?.ctx?.CommandAuthorized).toBe(true);
   });
 
   it("classifies MPIM slash commands as group chat context", async () => {

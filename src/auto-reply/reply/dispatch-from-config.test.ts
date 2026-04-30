@@ -1,5 +1,9 @@
 import { beforeAll, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import {
+  clearApprovalNativeRouteStateForTest,
+  createApprovalNativeRouteReporter,
+} from "../../infra/approval-native-route-coordinator.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
 import type {
   AcpRuntime,
@@ -701,7 +705,14 @@ describe("dispatchReplyFromConfig", () => {
       }),
       outbound: {
         deliveryMode: "direct",
-        shouldSuppressLocalPayloadPrompt: ({ payload }: { payload: ReplyPayload }) =>
+        shouldSuppressLocalPayloadPrompt: ({
+          payload,
+          hint,
+        }: {
+          payload: ReplyPayload;
+          hint?: { nativeRouteActive?: boolean };
+        }) =>
+          hint?.nativeRouteActive === true &&
           Boolean(
             payload.channelData &&
             typeof payload.channelData === "object" &&
@@ -719,6 +730,7 @@ describe("dispatchReplyFromConfig", () => {
         },
       ]),
     );
+    clearApprovalNativeRouteStateForTest();
     acpManagerRuntimeMocks.getAcpSessionManager.mockReset();
     acpManagerRuntimeMocks.getAcpSessionManager.mockReturnValue(createMockAcpSessionManager());
     resetInboundDedupe();
@@ -2581,7 +2593,7 @@ describe("dispatchReplyFromConfig", () => {
     expect(replyResolver).toHaveBeenCalledTimes(1);
   });
 
-  it("suppresses local discord exec approval tool prompts when discord approvals are enabled", async () => {
+  it("keeps local discord exec approval tool prompts when the native runtime is inactive", async () => {
     setNoAbort();
     const cfg = {
       channels: {
@@ -2616,10 +2628,65 @@ describe("dispatchReplyFromConfig", () => {
 
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
-    expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
+    expect(dispatcher.sendToolResult).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "Approval required." }),
+    );
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
       expect.objectContaining({ text: "done" }),
     );
+  });
+
+  it("suppresses local discord exec approval tool prompts when the native runtime is active", async () => {
+    setNoAbort();
+    const cfg = {
+      channels: {
+        discord: {
+          enabled: true,
+          execApprovals: {
+            enabled: true,
+            approvers: ["123"],
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const reporter = createApprovalNativeRouteReporter({
+      handledKinds: new Set(["exec"]),
+      channel: "discord",
+      channelLabel: "Discord",
+      accountId: "default",
+      requestGateway: async <T>() => ({ ok: true }) as T,
+    });
+    reporter.start();
+    try {
+      const dispatcher = createDispatcher();
+      const ctx = buildTestCtx({
+        Provider: "discord",
+        Surface: "discord",
+        AccountId: "default",
+      });
+      const replyResolver = vi.fn(async (_ctx: MsgContext, options?: GetReplyOptions) => {
+        await options?.onToolResult?.({
+          text: "Approval required.",
+          channelData: {
+            execApproval: {
+              approvalId: "12345678-1234-1234-1234-123456789012",
+              approvalSlug: "12345678",
+              allowedDecisions: ["allow-once", "allow-always", "deny"],
+            },
+          },
+        });
+        return { text: "done" } as ReplyPayload;
+      });
+
+      await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+      expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
+      expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
+        expect.objectContaining({ text: "done" }),
+      );
+    } finally {
+      await reporter.stop();
+    }
   });
 
   it("deduplicates same-agent inbound replies across main and direct session keys", async () => {
@@ -2822,6 +2889,34 @@ describe("dispatchReplyFromConfig", () => {
 
     expect(internalHookMocks.createInternalHookEvent).not.toHaveBeenCalled();
     expect(internalHookMocks.triggerInternalHook).not.toHaveBeenCalled();
+  });
+
+  it("falls back to CommandTargetSessionKey for internal hook when SessionKey is empty", async () => {
+    setNoAbort();
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "discord",
+      Surface: "discord",
+      CommandBody: "hello",
+      MessageSid: "msg-99",
+    });
+    (ctx as MsgContext).SessionKey = undefined;
+    (ctx as MsgContext).CommandTargetSessionKey = "agent:main:discord:guild:123";
+
+    const replyResolver = async () => ({ text: "reply" }) satisfies ReplyPayload;
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(internalHookMocks.createInternalHookEvent).toHaveBeenCalledWith(
+      "message",
+      "received",
+      "agent:main:discord:guild:123",
+      expect.objectContaining({
+        content: "hello",
+        messageId: "msg-99",
+      }),
+    );
+    expect(internalHookMocks.triggerInternalHook).toHaveBeenCalledTimes(1);
   });
 
   it("emits diagnostics when enabled", async () => {
@@ -3891,7 +3986,10 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       sendPolicy: "deny",
     };
     const dispatcher = createDispatcher();
-    const replyResolver = vi.fn(async () => ({ text: "agent reply" }) satisfies ReplyPayload);
+    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      expect(opts?.suppressTyping).toBe(true);
+      return { text: "agent reply" } satisfies ReplyPayload;
+    });
     const ctx = buildTestCtx({ SessionKey: "test:session" });
 
     await dispatchReplyFromConfig({
@@ -3941,6 +4039,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
         isTailDispatch: true,
         sendPolicy: "deny",
         suppressUserDelivery: true,
+        suppressReplyLifecycle: true,
       }),
       expect.any(Object),
     );
@@ -4220,8 +4319,11 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       itemEvent: vi.fn(),
       planUpdate: vi.fn(),
       toolResult: vi.fn(),
+      typingStart: vi.fn(async () => {}),
     };
     const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      expect(opts?.suppressTyping).toBe(false);
+      await opts?.onReplyStart?.();
       await opts?.onPartialReply?.({ text: "draft leak" });
       await opts?.onReasoningStream?.({ text: "reasoning leak" });
       await opts?.onAssistantMessageStart?.();
@@ -4244,6 +4346,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
         onPartialReply: callbacks.partial,
         onReasoningStream: callbacks.reasoning,
         onAssistantMessageStart: callbacks.assistantStart,
+        onReplyStart: callbacks.typingStart,
         onBlockReplyQueued: callbacks.blockQueued,
         onToolStart: callbacks.toolStart,
         onItemEvent: callbacks.itemEvent,
@@ -4257,12 +4360,17 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
     expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
     expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
-    for (const callback of Object.values(callbacks)) {
+    expect(callbacks.typingStart).toHaveBeenCalledTimes(1);
+    for (const [name, callback] of Object.entries(callbacks)) {
+      if (name === "typingStart") {
+        continue;
+      }
       expect(callback).not.toHaveBeenCalled();
     }
     expect(hookMocks.runner.runReplyDispatch).toHaveBeenCalledWith(
       expect.objectContaining({
         suppressUserDelivery: true,
+        suppressReplyLifecycle: false,
         sourceReplyDeliveryMode: "message_tool_only",
         sendPolicy: "allow",
       }),
@@ -4275,6 +4383,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
       expect(opts?.sourceReplyDeliveryMode).toBe("message_tool_only");
+      expect(opts?.suppressTyping).toBe(false);
       return { text: "final reply" } satisfies ReplyPayload;
     });
 
@@ -4291,6 +4400,35 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(replyResolver).toHaveBeenCalledTimes(1);
     expect(result.queuedFinal).toBe(false);
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+  });
+
+  it("keeps native command replies visible in group/channel turns", async () => {
+    setNoAbort();
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      expect(opts?.sourceReplyDeliveryMode).toBe("automatic");
+      expect(opts?.suppressTyping).toBe(false);
+      return { text: "status reply" } satisfies ReplyPayload;
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        ChatType: "group",
+        CommandSource: "native",
+        CommandAuthorized: true,
+        WasMentioned: true,
+        SessionKey: "test:telegram:group:G1",
+      }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    expect(replyResolver).toHaveBeenCalledTimes(1);
+    expect(result.queuedFinal).toBe(true);
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "status reply" }),
+    );
   });
 
   it("allows config to keep group/channel source delivery automatic", async () => {

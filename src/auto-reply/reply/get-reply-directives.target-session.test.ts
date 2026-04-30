@@ -34,6 +34,33 @@ function makeTypingController() {
 
 function parseInlineDirectivesForTest(body: string) {
   const normalized = body.trim();
+  if (normalized === "/reasoning stream") {
+    return {
+      cleaned: "",
+      hasThinkDirective: false,
+      hasVerboseDirective: false,
+      hasTraceDirective: false,
+      traceLevel: undefined,
+      rawTraceLevel: undefined,
+      hasFastDirective: false,
+      hasReasoningDirective: true,
+      reasoningLevel: "stream",
+      rawReasoningLevel: "stream",
+      hasElevatedDirective: false,
+      hasExecDirective: false,
+      hasModelDirective: false,
+      hasQueueDirective: false,
+      hasStatusDirective: false,
+      queueReset: false,
+      thinkLevel: undefined,
+      verboseLevel: undefined,
+      fastMode: undefined,
+      elevatedLevel: undefined,
+      rawElevatedLevel: undefined,
+      rawModelDirective: undefined,
+      execSecurity: undefined,
+    };
+  }
   if (normalized === "/trace on") {
     return {
       cleaned: "",
@@ -89,7 +116,11 @@ function parseInlineDirectivesForTest(body: string) {
 async function resolveHelloWithModelDefaults(params: {
   defaultThinking: "off" | "low";
   defaultReasoning: "on";
+  body?: string;
   sessionEntry?: SessionEntry;
+  agentCfg?: { reasoningDefault?: "off" | "on" | "stream" };
+  commandAuthorized?: boolean;
+  ctx?: Parameters<typeof buildTestCtx>[0];
 }) {
   const resolveDefaultThinkingLevel = vi.fn(async () => params.defaultThinking);
   const resolveDefaultReasoningLevel = vi.fn(async () => params.defaultReasoning);
@@ -105,19 +136,20 @@ async function resolveHelloWithModelDefaults(params: {
 
   const result = await resolveReplyDirectives({
     ctx: buildTestCtx({
-      Body: "hello",
-      CommandBody: "hello",
+      Body: params.body ?? "hello",
+      CommandBody: params.body ?? "hello",
+      ...params.ctx,
     }),
     cfg: {},
     agentId: "main",
     agentDir: "/tmp/main-agent",
     workspaceDir: "/tmp",
-    agentCfg: {},
+    agentCfg: params.agentCfg ?? {},
     sessionCtx: {
-      Body: "hello",
-      BodyStripped: "hello",
-      BodyForAgent: "hello",
-      CommandBody: "hello",
+      Body: params.body ?? "hello",
+      BodyStripped: params.body ?? "hello",
+      BodyForAgent: params.body ?? "hello",
+      CommandBody: params.body ?? "hello",
       Provider: "whatsapp",
     } as TemplateContext,
     sessionEntry: params.sessionEntry ?? makeSessionEntry(),
@@ -128,7 +160,8 @@ async function resolveHelloWithModelDefaults(params: {
     groupResolution: undefined,
     isGroup: false,
     triggerBodyNormalized: "hello",
-    commandAuthorized: false,
+    resetTriggered: false,
+    commandAuthorized: params.commandAuthorized ?? false,
     defaultProvider: "openai",
     defaultModel: "gpt-4o-mini",
     aliasIndex: { byAlias: new Map(), byKey: new Map() },
@@ -168,13 +201,13 @@ vi.mock("../commands-text-routing.js", () => ({
 }));
 
 vi.mock("./commands-context.js", () => ({
-  buildCommandContext: vi.fn(() => ({
+  buildCommandContext: vi.fn((params: { commandAuthorized?: boolean }) => ({
     surface: "whatsapp",
     channel: "whatsapp",
     channelId: "whatsapp",
     ownerList: [],
     senderIsOwner: false,
-    isAuthorizedSender: false,
+    isAuthorizedSender: params.commandAuthorized === true,
     senderId: undefined,
     abortKey: "abort-key",
     rawBodyNormalized: "hello",
@@ -239,6 +272,7 @@ describe("resolveReplyDirectives", () => {
       allowedModelKeys: new Set<string>(),
       allowedModelCatalog: [],
       resetModelOverride: false,
+      resolveThinkingCatalog: vi.fn(async () => []),
       resolveDefaultThinkingLevel: vi.fn(async () => "off"),
       resolveDefaultReasoningLevel: vi.fn(async () => "off"),
     });
@@ -301,7 +335,8 @@ describe("resolveReplyDirectives", () => {
       groupResolution: undefined,
       isGroup: false,
       triggerBodyNormalized: "hello",
-      commandAuthorized: false,
+      resetTriggered: false,
+      commandAuthorized: true,
       defaultProvider: "openai",
       defaultModel: "gpt-4o-mini",
       aliasIndex: { byAlias: new Map(), byKey: new Map() },
@@ -392,6 +427,7 @@ describe("resolveReplyDirectives", () => {
       groupResolution: undefined,
       isGroup: false,
       triggerBodyNormalized: "/trace on",
+      resetTriggered: false,
       commandAuthorized: true,
       defaultProvider: "openai",
       defaultModel: "gpt-4o-mini",
@@ -459,5 +495,186 @@ describe("resolveReplyDirectives", () => {
       }),
     });
     expect(resolveDefaultReasoningLevel).not.toHaveBeenCalled();
+  });
+
+  it("does not re-enable model reasoning when agentCfg reasoningDefault is explicitly off", async () => {
+    const { result, resolveDefaultReasoningLevel } = await resolveHelloWithModelDefaults({
+      defaultThinking: "off",
+      defaultReasoning: "on",
+      agentCfg: { reasoningDefault: "off" },
+    });
+
+    expect(result).toEqual({
+      kind: "continue",
+      result: expect.objectContaining({
+        resolvedThinkLevel: "off",
+        resolvedReasoningLevel: "off",
+      }),
+    });
+    expect(resolveDefaultReasoningLevel).not.toHaveBeenCalled();
+  });
+
+  it("does not expose configured reasoning defaults to untrusted senders", async () => {
+    const { result, resolveDefaultReasoningLevel } = await resolveHelloWithModelDefaults({
+      defaultThinking: "off",
+      defaultReasoning: "on",
+      agentCfg: { reasoningDefault: "stream" },
+    });
+
+    expect(result).toEqual({
+      kind: "continue",
+      result: expect.objectContaining({
+        resolvedReasoningLevel: "off",
+      }),
+    });
+    expect(resolveDefaultReasoningLevel).not.toHaveBeenCalled();
+  });
+
+  it("ignores inline reasoning directives from untrusted senders", async () => {
+    const { result, resolveDefaultReasoningLevel } = await resolveHelloWithModelDefaults({
+      body: "/reasoning stream",
+      defaultThinking: "off",
+      defaultReasoning: "on",
+    });
+
+    expect(result).toEqual({
+      kind: "continue",
+      result: expect.objectContaining({
+        resolvedReasoningLevel: "off",
+      }),
+    });
+    expect(resolveDefaultReasoningLevel).not.toHaveBeenCalled();
+  });
+
+  it("does not expose session reasoning state to untrusted senders", async () => {
+    const { result, resolveDefaultReasoningLevel } = await resolveHelloWithModelDefaults({
+      defaultThinking: "off",
+      defaultReasoning: "on",
+      sessionEntry: makeSessionEntry({ reasoningLevel: "stream" }),
+    });
+
+    expect(result).toEqual({
+      kind: "continue",
+      result: expect.objectContaining({
+        resolvedReasoningLevel: "off",
+      }),
+    });
+    expect(resolveDefaultReasoningLevel).not.toHaveBeenCalled();
+  });
+
+  it("allows session reasoning state for authorized senders", async () => {
+    const { result, resolveDefaultReasoningLevel } = await resolveHelloWithModelDefaults({
+      defaultThinking: "off",
+      defaultReasoning: "on",
+      sessionEntry: makeSessionEntry({ reasoningLevel: "stream" }),
+      commandAuthorized: true,
+    });
+
+    expect(result).toEqual({
+      kind: "continue",
+      result: expect.objectContaining({
+        resolvedReasoningLevel: "stream",
+      }),
+    });
+    expect(resolveDefaultReasoningLevel).not.toHaveBeenCalled();
+  });
+
+  it("allows configured reasoning defaults for operator gateway clients", async () => {
+    const { result, resolveDefaultReasoningLevel } = await resolveHelloWithModelDefaults({
+      defaultThinking: "off",
+      defaultReasoning: "on",
+      agentCfg: { reasoningDefault: "stream" },
+      ctx: { GatewayClientScopes: ["operator.admin"] },
+    });
+
+    expect(result).toEqual({
+      kind: "continue",
+      result: expect.objectContaining({
+        resolvedReasoningLevel: "stream",
+      }),
+    });
+    expect(resolveDefaultReasoningLevel).not.toHaveBeenCalled();
+  });
+
+  it("allows configured reasoning defaults for authorized senders", async () => {
+    const { result, resolveDefaultReasoningLevel } = await resolveHelloWithModelDefaults({
+      defaultThinking: "off",
+      defaultReasoning: "on",
+      agentCfg: { reasoningDefault: "stream" },
+      commandAuthorized: true,
+    });
+
+    expect(result).toEqual({
+      kind: "continue",
+      result: expect.objectContaining({
+        resolvedReasoningLevel: "stream",
+      }),
+    });
+    expect(resolveDefaultReasoningLevel).not.toHaveBeenCalled();
+  });
+
+  it("keeps consumed text reset triggers empty after directive cleanup", async () => {
+    const sessionCtx = {
+      Body: "",
+      BodyStripped: "",
+      BodyForAgent: "",
+      BodyForCommands: "new session",
+      CommandBody: "new session",
+      Provider: "slack",
+      Surface: "slack",
+    } as TemplateContext;
+
+    const result = await resolveReplyDirectives({
+      ctx: buildTestCtx({
+        Body: "new session",
+        BodyForAgent: "new session",
+        BodyForCommands: "new session",
+        CommandBody: "new session",
+        CommandAuthorized: true,
+        Provider: "slack",
+        Surface: "slack",
+      }),
+      cfg: {
+        session: {
+          resetTriggers: ["/new", "/reset", "new session"],
+        },
+      },
+      agentId: "main",
+      agentDir: "/tmp/main-agent",
+      workspaceDir: "/tmp",
+      agentCfg: {},
+      sessionCtx,
+      sessionEntry: makeSessionEntry(),
+      sessionStore: {
+        "agent:main:slack:C123": makeSessionEntry(),
+      },
+      sessionKey: "agent:main:slack:C123",
+      storePath: "/tmp/sessions.json",
+      sessionScope: "per-sender",
+      groupResolution: undefined,
+      isGroup: false,
+      triggerBodyNormalized: "new session",
+      resetTriggered: true,
+      commandAuthorized: true,
+      defaultProvider: "openai",
+      defaultModel: "gpt-4o-mini",
+      aliasIndex: { byAlias: new Map(), byKey: new Map() },
+      provider: "openai",
+      model: "gpt-4o-mini",
+      hasResolvedHeartbeatModelOverride: false,
+      typing: makeTypingController(),
+      opts: undefined,
+      skillFilter: undefined,
+    });
+
+    expect(result).toEqual({
+      kind: "continue",
+      result: expect.objectContaining({
+        cleanedBody: "",
+      }),
+    });
+    expect(sessionCtx.Body).toBe("");
+    expect(sessionCtx.BodyForAgent).toBe("");
+    expect(sessionCtx.BodyStripped).toBe("");
   });
 });

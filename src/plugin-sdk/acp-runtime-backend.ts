@@ -90,6 +90,7 @@ export async function tryDispatchAcpReplyHook(
     sessionTtsAuto: event.sessionTtsAuto,
     ttsChannel: event.ttsChannel,
     suppressUserDelivery: event.suppressUserDelivery,
+    suppressReplyLifecycle: event.suppressReplyLifecycle === true || event.sendPolicy === "deny",
     sourceReplyDeliveryMode: event.sourceReplyDeliveryMode,
     shouldRouteToOriginating: event.shouldRouteToOriginating,
     originatingChannel: event.originatingChannel,

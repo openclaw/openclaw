@@ -209,7 +209,7 @@ export function createBackspaceDeduper(params?: { dedupeWindowMs?: number; now?:
   let lastBackspaceAt = -1;
 
   return (data: string): string => {
-    if (!matchesKey(data, Key.backspace)) {
+    if (data !== "\x08" && !matchesKey(data, Key.backspace)) {
       return data;
     }
     const ts = now();
@@ -549,6 +549,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
           local: isLocalMode,
           provider: sessionInfo.modelProvider,
           model: sessionInfo.model,
+          thinkingLevels: sessionInfo.thinkingLevels,
         }),
         process.cwd(),
       ),
@@ -899,7 +900,13 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     abortActive,
   } = sessionActions;
 
-  const { handleChatEvent, handleAgentEvent, handleBtwEvent } = createEventHandlers({
+  const {
+    handleChatEvent,
+    handleAgentEvent,
+    handleBtwEvent,
+    pauseStreamingWatchdog,
+    reconnectStreamingWatchdog,
+  } = createEventHandlers({
     chatLog,
     btw,
     tui,
@@ -1069,6 +1076,9 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     pairingHintShown = false;
     const reconnected = wasDisconnected;
     wasDisconnected = false;
+    if (reconnected) {
+      reconnectStreamingWatchdog();
+    }
     setConnectionStatus(isLocalMode ? "local ready" : "connected");
     void (async () => {
       await refreshAgents();
@@ -1092,6 +1102,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     isConnected = false;
     wasDisconnected = true;
     historyLoaded = false;
+    pauseStreamingWatchdog();
     const disconnectState = isLocalMode
       ? {
           connectionStatus: `local runtime stopped${reason ? `: ${reason}` : ""}`,

@@ -135,6 +135,10 @@ export const sharedVitestConfig = {
         find: "openclaw/extension-api",
         replacement: path.join(repoRoot, "src", "extensionAPI.ts"),
       },
+      {
+        find: "@openclaw/qa-channel/api.js",
+        replacement: path.join(repoRoot, "extensions", "qa-channel", "api.ts"),
+      },
       ...sourcePluginSdkSubpaths.map((subpath) => ({
         find: `openclaw/plugin-sdk/${subpath}`,
         replacement: path.join(repoRoot, "src", "plugin-sdk", `${subpath}.ts`),
@@ -313,7 +317,6 @@ export const sharedVitestConfig = {
         "src/entry.ts",
         "src/index.ts",
         "src/runtime.ts",
-        "src/channel-web.ts",
         "src/logging.ts",
         "src/cli/**",
         "src/commands/**",
@@ -359,7 +362,6 @@ export const sharedVitestConfig = {
         "src/tui/**",
         "src/wizard/**",
         "src/browser/**",
-        "src/channels/web/**",
         "src/webchat/**",
         "src/gateway/server.ts",
         "src/gateway/client.ts",
