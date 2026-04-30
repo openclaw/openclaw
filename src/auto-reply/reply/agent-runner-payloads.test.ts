@@ -171,6 +171,18 @@ describe("buildReplyPayloads media filter integration", () => {
     expect(replyPayloads).toHaveLength(0);
   });
 
+  it("suppresses final text for a WhatsApp DM after a same-chat message tool send", async () => {
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      payloads: [{ text: "private final text" }],
+      messageProvider: "whatsapp",
+      originatingTo: "+15551234567",
+      messagingToolSentTargets: [{ tool: "message", provider: "whatsapp", to: "+15551234567" }],
+    });
+
+    expect(replyPayloads).toHaveLength(0);
+  });
+
   it("suppresses same-target replies when message tool target provider is generic", async () => {
     await expectSameTargetRepliesSuppressed({ provider: "message", to: "ou_abc123" });
   });

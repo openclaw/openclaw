@@ -1,7 +1,10 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
-import { extractMessagingToolSend } from "./pi-embedded-subscribe.tools.js";
+import {
+  extractMessagingToolSend,
+  extractMessagingToolSendFromResult,
+} from "./pi-embedded-subscribe.tools.js";
 
 function normalizeTelegramMessagingTargetForTest(raw: string): string | undefined {
   const trimmed = raw.trim();
@@ -59,5 +62,27 @@ describe("extractMessagingToolSend", () => {
     expect(result?.tool).toBe("message");
     expect(result?.provider).toBe("telegram");
     expect(result?.to).toBe("telegram:123");
+  });
+
+  it("extracts the actual send target from successful message tool result details", () => {
+    const result = extractMessagingToolSendFromResult(
+      "message",
+      {
+        action: "send",
+        message: "visible reply",
+      },
+      {
+        details: {
+          channel: "telegram",
+          to: "123",
+        },
+      },
+    );
+
+    expect(result).toEqual({
+      tool: "message",
+      provider: "telegram",
+      to: "telegram:123",
+    });
   });
 });
