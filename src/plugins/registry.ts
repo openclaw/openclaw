@@ -236,6 +236,14 @@ const constrainLegacyPromptInjectionHook = (
 
 export { createEmptyPluginRegistry } from "./registry-empty.js";
 
+export function resolvePluginPath(input: string, rootDir: string | undefined): string {
+  const trimmed = input.trim();
+  if (!trimmed || path.isAbsolute(trimmed) || trimmed.startsWith("~")) {
+    return resolveUserPath(input);
+  }
+  return rootDir ? path.resolve(rootDir, trimmed) : resolveUserPath(input);
+}
+
 const ACTIVE_PLUGIN_HOOK_REGISTRATIONS_KEY = Symbol.for("openclaw.activePluginHookRegistrations");
 const activePluginHookRegistrations = resolveGlobalSingleton<
   Map<string, Array<{ event: string; handler: Parameters<typeof registerInternalHook>[1] }>>
@@ -2020,7 +2028,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       pluginConfig: params.pluginConfig,
       runtime: resolvePluginRuntime(record.id),
       logger: normalizeLogger(registryParams.logger),
-      resolvePath: (input: string) => resolveUserPath(input),
+      resolvePath: (input: string) => resolvePluginPath(input, record.rootDir),
       handlers: {
         ...(registrationCapabilities.capabilityHandlers
           ? {

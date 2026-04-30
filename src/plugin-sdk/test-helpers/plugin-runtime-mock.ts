@@ -157,9 +157,16 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
         }
         throw err;
       }
-      const dispatchResult = await params.runDispatch();
+      const admission = params.admission ?? { kind: "dispatch" as const };
+      const dispatchResult =
+        admission.kind === "observeOnly"
+          ? (params.observeOnlyDispatchResult ?? {
+              queuedFinal: false,
+              counts: { tool: 0, block: 0, final: 0 },
+            })
+          : await params.runDispatch();
       return {
-        admission: params.admission ?? { kind: "dispatch" as const },
+        admission,
         dispatched: true,
         ctxPayload: params.ctxPayload,
         routeSessionKey: params.routeSessionKey,
@@ -617,8 +624,24 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       },
       turn: {
         run: runChannelTurnMock,
+        runResolved: vi.fn(
+          async (params: Parameters<PluginRuntime["channel"]["turn"]["runResolved"]>[0]) =>
+            await runChannelTurnMock({
+              channel: params.channel,
+              accountId: params.accountId,
+              raw: params.raw,
+              log: params.log,
+              adapter: {
+                ingest: (raw) =>
+                  typeof params.input === "function" ? params.input(raw) : params.input,
+                resolveTurn: params.resolveTurn,
+              },
+            }),
+        ) as unknown as PluginRuntime["channel"]["turn"]["runResolved"],
         buildContext: buildChannelTurnContextMock,
         runPrepared: runPreparedChannelTurnMock,
+        dispatchAssembled:
+          dispatchAssembledChannelTurnMock as unknown as PluginRuntime["channel"]["turn"]["dispatchAssembled"],
       },
       threadBindings: {
         setIdleTimeoutBySessionKey:

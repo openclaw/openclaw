@@ -46,6 +46,7 @@ export function writeBundledPluginRuntimeDepsPackage(params: {
   deps: Record<string, string>;
   enabledByDefault?: boolean;
   channels?: string[];
+  providers?: string[];
 }): string {
   const pluginRoot = path.join(params.packageRoot, "dist", "extensions", params.pluginId);
   fs.mkdirSync(pluginRoot, { recursive: true });
@@ -59,6 +60,7 @@ export function writeBundledPluginRuntimeDepsPackage(params: {
       id: params.pluginId,
       enabledByDefault: params.enabledByDefault === true,
       ...(params.channels ? { channels: params.channels } : {}),
+      ...(params.providers ? { providers: params.providers } : {}),
     }),
   );
   return pluginRoot;

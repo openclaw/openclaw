@@ -52,7 +52,7 @@ function resolveRuntimePackageImportTarget(exportsField: unknown): string | null
   if (Object.prototype.hasOwnProperty.call(record, ".")) {
     return resolveRuntimePackageImportTarget(record["."]);
   }
-  for (const condition of ["import", "node", "default"] as const) {
+  for (const condition of ["require", "node", "default", "import"] as const) {
     const resolved = resolveRuntimePackageImportTarget(record[condition]);
     if (resolved) {
       return resolved;

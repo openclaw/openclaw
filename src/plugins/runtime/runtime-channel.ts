@@ -54,6 +54,8 @@ import {
   buildChannelTurnContext,
   runChannelTurn,
   runPreparedChannelTurn,
+  runResolvedChannelTurn,
+  dispatchAssembledChannelTurn,
 } from "../../channels/turn/kernel.js";
 import {
   resolveChannelGroupPolicy,
@@ -172,8 +174,10 @@ export function createRuntimeChannel(): PluginRuntime["channel"] {
     },
     turn: {
       run: runChannelTurn,
+      runResolved: runResolvedChannelTurn,
       buildContext: buildChannelTurnContext,
       runPrepared: runPreparedChannelTurn,
+      dispatchAssembled: dispatchAssembledChannelTurn,
     },
     threadBindings: {
       setIdleTimeoutBySessionKey: ({ channelId, targetSessionKey, accountId, idleTimeoutMs }) =>
