@@ -17,7 +17,6 @@ import {
   all,
   any,
   type TerminationCondition,
-  type TerminationState,
 } from "./termination.js";
 
 // ─── simulation harness ──────────────────────────────────────────────────────
@@ -401,13 +400,18 @@ describe("multi-provider tournament — behavioral proof", () => {
 
   it("tournament ranking: Claude providers use fewer turns than OpenAI providers", async () => {
     const results = await Promise.all(
-      (Object.keys(responses) as Provider[]).map(async (p) => ({
-        provider: p,
-        ...(await runProvider(p)),
-      })),
+      (Object.keys(responses) as Provider[]).map(async (p) => {
+        const r = await runProvider(p);
+        return {
+          provider: p,
+          turnsUsed: r.turnsUsed,
+          exitReason: r.exitReason,
+          replies: r.replies,
+        };
+      }),
     );
 
-    const byTurns = results.sort((a, b) => a.turnsUsed - b.turnsUsed);
+    const byTurns = results.toSorted((a, b) => a.turnsUsed - b.turnsUsed);
 
     // Anthropic providers occupy the top 2 spots
     expect(byTurns[0].provider).toMatch(/claude/);

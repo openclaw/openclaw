@@ -20,13 +20,7 @@ import {
   type ClaimPartition,
   type EvidenceWeights,
 } from "./gsar.js";
-import {
-  MaxIterations,
-  TextMention,
-  TimeLimit,
-  type TerminationCondition,
-  type TerminationState,
-} from "./termination.js";
+import { MaxIterations, TextMention, TimeLimit, type TerminationCondition } from "./termination.js";
 
 // ─── weight maps ─────────────────────────────────────────────────────────────
 
