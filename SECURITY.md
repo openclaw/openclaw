@@ -6,7 +6,7 @@ This policy does two things: it gives researchers a clear disclosure path, and i
 
 The fastest useful reports show a current, reproducible boundary bypass with demonstrated impact. Scanner output, prompt-injection-only chains, or reports that rely on hostile users sharing one trusted gateway are usually not security vulnerabilities under this model.
 
-Security work is shared across a number of OpenClaw maintainers, including engineers and security researchers from organizations such as NVIDIA. See the [maintainer list](CONTRIBUTING.md#maintainers).
+Security work is shared across a number of OpenClaw maintainers, including engineers and security researchers from organizations such as NVIDIA and Tencent. See the [maintainer list](CONTRIBUTING.md#maintainers).
 
 ## Report a Security Issue
 
