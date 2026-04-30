@@ -36,6 +36,8 @@ execution:
     requiredProvider: openai
     pluginSpec: npm:@openclaw/kitchen-sink@latest
     pluginId: openclaw-kitchen-sink-fixture
+    pluginPersonality: conformance
+    adversarialPersonality: adversarial
     channelId: kitchen-sink-channel
     channelAccountId: local
     textProviderId: kitchen-sink-llm
@@ -52,6 +54,17 @@ execution:
     agentTurnTimeoutMs: 120000
     outboundTimeoutMs: 60000
     livePrompt: "Kitchen Sink OpenAI marker. Reply exactly: KITCHEN-SINK-OPENAI-OK"
+    expectedAdversarialDiagnostics:
+      - only bundled plugins can register agent tool result middleware
+      - agent harness "kitchen-sink-agent-harness" registration missing required runtime methods
+      - channel "kitchen-sink-channel-probe" registration missing required config helpers
+      - cli registration missing explicit commands metadata
+      - only bundled plugins can register Codex app-server extension factories
+      - compaction provider "kitchen-sink-compaction-provider" registration missing summarize
+      - context engine registration missing id
+      - http route registration missing or invalid auth: /kitchen-sink/http-route
+      - "plugin must own memory slot or declare contracts.memoryEmbeddingProviders for adapter: kitchen-sink-memory-embedding-provider"
+      - memory prompt supplement registration missing builder
 ```
 
 ```yaml qa-flow
@@ -84,6 +97,10 @@ steps:
               cfg.plugins.entries[config.pluginId] = {
                 ...(cfg.plugins.entries[config.pluginId] || {}),
                 enabled: true,
+                config: {
+                  ...(cfg.plugins.entries[config.pluginId]?.config || {}),
+                  personality: config.pluginPersonality,
+                },
                 hooks: {
                   ...(cfg.plugins.entries[config.pluginId]?.hooks || {}),
                   allowConversationAccess: true,
@@ -152,6 +169,10 @@ steps:
           expr: "config.expectedToolAny.some((tool) => inspectFacts.tools.includes(tool))"
           message:
             expr: "`Kitchen Sink tools missing from inspect output: ${JSON.stringify(inspectFacts.tools)}`"
+      - assert:
+          expr: "inspectFacts.diagnostics.length === 0"
+          message:
+            expr: "`Kitchen Sink conformance personality emitted diagnostics: ${JSON.stringify(inspectFacts.diagnostics)}`"
     detailsExpr: inspectFacts
 
   - name: restarts gateway with Kitchen Sink configured
@@ -174,6 +195,10 @@ steps:
                   cfg.plugins.entries[config.pluginId] = {
                     ...(cfg.plugins.entries[config.pluginId] || {}),
                     enabled: true,
+                    config: {
+                      ...(cfg.plugins.entries[config.pluginId]?.config || {}),
+                      personality: config.pluginPersonality,
+                    },
                     hooks: {
                       ...(cfg.plugins.entries[config.pluginId]?.hooks || {}),
                       allowConversationAccess: true,
@@ -325,4 +350,62 @@ steps:
           message:
             expr: "`Gateway RSS exceeded Kitchen Sink anomaly threshold: ${JSON.stringify(perfEvidence)}`"
     detailsExpr: perfEvidence
+
+  - name: verifies adversarial diagnostics personality
+    actions:
+      - call: env.gateway.restartAfterStateMutation
+        args:
+          - lambda:
+              async: true
+              params: [ctx]
+              expr: |-
+                (async () => {
+                  const raw = await fs.readFile(ctx.configPath, "utf8").catch(() => "{}");
+                  const cfg = JSON.parse(raw || "{}");
+                  cfg.plugins = cfg.plugins || {};
+                  cfg.plugins.allow = [...new Set([...(cfg.plugins.allow || []), config.pluginId])];
+                  cfg.plugins.entries = cfg.plugins.entries || {};
+                  cfg.plugins.entries[config.pluginId] = {
+                    ...(cfg.plugins.entries[config.pluginId] || {}),
+                    enabled: true,
+                    config: {
+                      ...(cfg.plugins.entries[config.pluginId]?.config || {}),
+                      personality: config.adversarialPersonality,
+                    },
+                    hooks: {
+                      ...(cfg.plugins.entries[config.pluginId]?.hooks || {}),
+                      allowConversationAccess: true,
+                    },
+                  };
+                  await fs.writeFile(ctx.configPath, `${JSON.stringify(cfg, null, 2)}\n`, "utf8");
+                })()
+      - call: waitForGatewayHealthy
+        args:
+          - ref: env
+          - 120000
+      - call: runQaCli
+        saveAs: adversarialInspect
+        args:
+          - ref: env
+          - - plugins
+            - inspect
+            - expr: config.pluginId
+            - --json
+          - json: true
+            timeoutMs: 60000
+      - set: adversarialDiagnostics
+        value:
+          expr: |-
+            (adversarialInspect.diagnostics ?? [])
+              .filter((entry) => entry?.level === "error")
+              .map((entry) => String(entry.message ?? ""))
+      - assert:
+          expr: "config.expectedAdversarialDiagnostics.every((message) => adversarialDiagnostics.includes(message))"
+          message:
+            expr: "`Kitchen Sink adversarial diagnostics missing expected messages: ${JSON.stringify({ expected: config.expectedAdversarialDiagnostics, actual: adversarialDiagnostics })}`"
+      - assert:
+          expr: "adversarialDiagnostics.every((message) => config.expectedAdversarialDiagnostics.includes(message))"
+          message:
+            expr: "`Kitchen Sink adversarial diagnostics contained unexpected messages: ${JSON.stringify(adversarialDiagnostics)}`"
+    detailsExpr: "{ diagnostics: adversarialDiagnostics }"
 ```

@@ -13,7 +13,7 @@ fi
 
 attempts="${OPENCLAW_LIVE_COMMAND_ATTEMPTS:-2}"
 delay_seconds="${OPENCLAW_LIVE_COMMAND_RETRY_DELAY_SECONDS:-10}"
-retry_pattern="${OPENCLAW_LIVE_COMMAND_RETRY_PATTERN:-ECONNRESET|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|fetch failed|TLS connection|socket hang up|UND_ERR|\\b429\\b|\\b529\\b}"
+retry_pattern="${OPENCLAW_LIVE_COMMAND_RETRY_PATTERN:-ECONNRESET|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|fetch failed|TLS connection|socket hang up|UND_ERR|gateway request timeout|model idle timeout|did not produce a response before the model idle timeout|\\b429\\b|\\b529\\b}"
 
 if ! [[ "$attempts" =~ ^[1-9][0-9]*$ ]]; then
   echo "OPENCLAW_LIVE_COMMAND_ATTEMPTS must be a positive integer, got: $attempts" >&2

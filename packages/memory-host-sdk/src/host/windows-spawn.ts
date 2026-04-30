@@ -257,6 +257,7 @@ export function resolveWindowsSpawnProgram(
   params: ResolveWindowsSpawnProgramParams,
 ): WindowsSpawnProgram {
   const candidate = resolveWindowsSpawnProgramCandidate(params);
+
   if (candidate.resolution !== "unresolved-wrapper") {
     return {
       command: candidate.command,

@@ -51,6 +51,23 @@ function sanitizeModelWarningValue(value: string): string {
   return sanitizeForLog(stripped.slice(0, controlBoundary));
 }
 
+function mergeModelCatalogEntries(params: {
+  primary: readonly ModelCatalogEntry[];
+  secondary: readonly ModelCatalogEntry[];
+}): ModelCatalogEntry[] {
+  const merged = [...params.primary];
+  const seen = new Set(merged.map((entry) => modelKey(entry.provider, entry.id)));
+  for (const entry of params.secondary) {
+    const key = modelKey(entry.provider, entry.id);
+    if (seen.has(key)) {
+      continue;
+    }
+    merged.push(entry);
+    seen.add(key);
+  }
+  return merged;
+}
+
 export function inferUniqueProviderFromConfiguredModels(params: {
   cfg: OpenClawConfig;
   model: string;
@@ -565,7 +582,11 @@ export function buildAllowedModelSetWithFallbacks(params: {
     cfg: params.cfg,
     defaultProvider: params.defaultProvider,
   });
-  const catalog = params.catalog.map((entry) => applyModelCatalogMetadata({ entry, metadata }));
+  const configuredCatalog = buildConfiguredModelCatalog({ cfg: params.cfg });
+  const catalog = mergeModelCatalogEntries({
+    primary: params.catalog,
+    secondary: configuredCatalog,
+  }).map((entry) => applyModelCatalogMetadata({ entry, metadata }));
   const rawAllowlist = (() => {
     const modelMap = params.cfg.agents?.defaults?.models ?? {};
     return Object.keys(modelMap);

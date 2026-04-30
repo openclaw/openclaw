@@ -74,6 +74,7 @@ describe("probeGatewayMemoryStatus", () => {
       checked: true,
       ready: true,
       error: undefined,
+      skipped: false,
     });
 
     expect(callGateway).toHaveBeenCalledWith({
@@ -84,7 +85,9 @@ describe("probeGatewayMemoryStatus", () => {
     });
   });
 
-  it("treats outer gateway timeouts as inconclusive", async () => {
+  it("treats outer gateway timeouts as inconclusive (skipped: false)", async () => {
+    // A transport timeout must NOT be treated as a skipped probe. It is a real
+    // diagnostic signal and the renderer should warn for key-optional providers.
     callGateway.mockRejectedValue(
       new Error("gateway timeout after 8000ms\nGateway target: ws://127.0.0.1:18789"),
     );
@@ -93,6 +96,29 @@ describe("probeGatewayMemoryStatus", () => {
       checked: false,
       ready: false,
       error: expect.stringContaining("gateway memory probe timed out"),
+      skipped: false,
+    });
+  });
+
+  it("propagates checked: false and skipped: true when gateway skipped the embedding probe", async () => {
+    // Gateway returns checked: false when called with probe: false and no cached
+    // availability data (SKIPPED_MEMORY_EMBEDDING_PROBE shape). The adapter must
+    // also set skipped: true so renderers can distinguish this from a transport
+    // timeout (which also returns checked: false but skipped: false).
+    callGateway.mockResolvedValue({
+      embedding: {
+        ok: false,
+        checked: false,
+        error:
+          "memory embedding readiness not checked; run `openclaw memory status --deep` to probe",
+      },
+    });
+
+    await expect(probeGatewayMemoryStatus({ cfg })).resolves.toEqual({
+      checked: false,
+      ready: false,
+      error: expect.stringContaining("not checked"),
+      skipped: true,
     });
   });
 
@@ -103,6 +129,7 @@ describe("probeGatewayMemoryStatus", () => {
       checked: true,
       ready: false,
       error: "gateway memory probe unavailable: gateway request timeout for doctor.memory.status",
+      skipped: false,
     });
   });
 
@@ -113,6 +140,7 @@ describe("probeGatewayMemoryStatus", () => {
       checked: true,
       ready: false,
       error: "gateway memory probe unavailable: gateway closed (1006): no close reason",
+      skipped: false,
     });
   });
 });

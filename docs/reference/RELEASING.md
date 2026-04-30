@@ -268,6 +268,11 @@ Use `release_profile` to select live/provider breadth:
 ref once as `release-package-under-test` and reuses that artifact in both
 release-path Docker checks and Package Acceptance. This keeps all
 package-facing boxes on the same bytes and avoids repeated package builds.
+The cross-OS OpenAI install smoke uses `OPENCLAW_CROSS_OS_OPENAI_MODEL` when the
+repo/org variable is set, otherwise `openai/gpt-5.4-mini`, because this lane is
+proving package install, onboarding, gateway startup, and one live agent turn
+rather than benchmarking the slowest default model. The broader live provider
+matrix remains the place for model-specific coverage.
 
 Use these variants depending on release stage:
 
@@ -347,6 +352,9 @@ Docker environments instead of only source-level tests.
 Release Docker coverage includes:
 
 - full install smoke with the slow Bun global install smoke enabled
+- root Dockerfile smoke image preparation/reuse by target SHA, with QR,
+  root/gateway, and installer/Bun smoke jobs running as separate install-smoke
+  shards
 - repository E2E lanes
 - release-path Docker chunks: `core`, `package-update-openai`,
   `package-update-anthropic`, `package-update-core`, `plugins-runtime-plugins`,
