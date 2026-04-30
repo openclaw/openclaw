@@ -125,6 +125,14 @@ describe("resolveSourceReplyDeliveryMode", () => {
         messageToolAvailable: false,
       }),
     ).toBe("automatic");
+    expect(
+      resolveSourceReplyDeliveryMode({
+        cfg: emptyConfig,
+        ctx: { ChatType: "channel" },
+        requested: "message_tool_only",
+        messageToolAvailable: false,
+      }),
+    ).toBe("automatic");
     expect(loggerMocks.warn).not.toHaveBeenCalled();
   });
 
@@ -300,6 +308,20 @@ describe("resolveSourceReplyVisibilityPolicy", () => {
       suppressAutomaticSourceDelivery: false,
       suppressDelivery: false,
       suppressHookUserDelivery: false,
+      deliverySuppressionReason: "",
+    });
+    expect(
+      resolveSourceReplyVisibilityPolicy({
+        cfg: emptyConfig,
+        ctx: { ChatType: "channel" },
+        requested: "message_tool_only",
+        sendPolicy: "allow",
+        messageToolAvailable: false,
+      }),
+    ).toMatchObject({
+      sourceReplyDeliveryMode: "automatic",
+      suppressAutomaticSourceDelivery: false,
+      suppressDelivery: false,
       deliverySuppressionReason: "",
     });
   });

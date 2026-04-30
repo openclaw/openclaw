@@ -24,35 +24,35 @@ export function resolveSourceReplyDeliveryMode(params: {
   requested?: SourceReplyDeliveryMode;
   messageToolAvailable?: boolean;
 }): SourceReplyDeliveryMode {
-  if (params.requested) {
-    return params.requested;
-  }
-  if (params.ctx.CommandSource === "native") {
-    return "automatic";
-  }
-  const chatType = normalizeChatType(params.ctx.ChatType);
   let mode: SourceReplyDeliveryMode;
-  if (chatType === "group" || chatType === "channel") {
-    const configuredMode =
-      params.cfg.messages?.groupChat?.visibleReplies ?? params.cfg.messages?.visibleReplies;
-    mode = configuredMode === "automatic" ? "automatic" : "message_tool_only";
-    if (
-      mode === "message_tool_only" &&
-      configuredMode === undefined &&
-      params.messageToolAvailable !== false &&
-      !visibleRepliesPrivateDefaultWarned
-    ) {
-      visibleRepliesPrivateDefaultWarned = true;
-      log.warn(
-        `Group/channel replies are private by default since 2026.4.27. ` +
-          `To restore automatic room posting, set messages.groupChat.visibleReplies to "automatic" in openclaw.json and save the config. ` +
-          `The gateway hot-reloads messages config; restart only if file watching/reload is disabled. ` +
-          `Relates to https://github.com/openclaw/openclaw/issues/74876`,
-      );
-    }
+  if (params.requested) {
+    mode = params.requested;
+  } else if (params.ctx.CommandSource === "native") {
+    mode = "automatic";
   } else {
-    mode =
-      params.cfg.messages?.visibleReplies === "message_tool" ? "message_tool_only" : "automatic";
+    const chatType = normalizeChatType(params.ctx.ChatType);
+    if (chatType === "group" || chatType === "channel") {
+      const configuredMode =
+        params.cfg.messages?.groupChat?.visibleReplies ?? params.cfg.messages?.visibleReplies;
+      mode = configuredMode === "automatic" ? "automatic" : "message_tool_only";
+      if (
+        mode === "message_tool_only" &&
+        configuredMode === undefined &&
+        params.messageToolAvailable !== false &&
+        !visibleRepliesPrivateDefaultWarned
+      ) {
+        visibleRepliesPrivateDefaultWarned = true;
+        log.warn(
+          `Group/channel replies are private by default since 2026.4.27. ` +
+            `To restore automatic room posting, set messages.groupChat.visibleReplies to "automatic" in openclaw.json and save the config. ` +
+            `The gateway hot-reloads messages config; restart only if file watching/reload is disabled. ` +
+            `Relates to https://github.com/openclaw/openclaw/issues/74876`,
+        );
+      }
+    } else {
+      mode =
+        params.cfg.messages?.visibleReplies === "message_tool" ? "message_tool_only" : "automatic";
+    }
   }
   if (mode === "message_tool_only" && params.messageToolAvailable === false) {
     return "automatic";
