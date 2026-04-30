@@ -244,3 +244,25 @@ After the source edit: run `pnpm build`, rebuild the container image, and redepl
 Reload command: rebuild image, then `docker compose up -d --no-deps openclaw-openclaw-gateway-1` (or equivalent local deploy script from `scripts/`).
 
 Expected verification: `docker exec openclaw-openclaw-gateway-1 node dist/index.js status --all 2>&1 | grep -i discord` shows no `unresolved SecretRef`; the Discord row should show `token:config` in the notes column.
+
+---
+
+## Fix log
+
+### Fix 1: docker-compose.yml — plugin-runtime-deps volume + extra_hosts (2026-04-30)
+- Added `OPENCLAW_PLUGIN_STAGE_DIR: /var/lib/openclaw/plugin-runtime-deps` env var to `openclaw-gateway` and `openclaw-cli`
+- Added `openclaw-plugin-runtime-deps:/var/lib/openclaw/plugin-runtime-deps` volume mount to both services
+- Added `extra_hosts: ["host.docker.internal:host-gateway"]` to `openclaw-gateway`
+- Added `openclaw-plugin-runtime-deps:` named volume to volumes block
+- **Result:** Plugin staging now succeeds (18 deps installed in 20s). CPU utilization dropped from 99.9% to ~30%. Event loop delay max dropped from 80s to 11s. Gateway `ready` in 32s.
+- Commit: `72207b4c9f`
+
+### Fix 2: openrouter-image-generation plugin manifest (2026-04-30)
+- Replaced `providerAuthEnvVars: { "openrouter": [...] }` with `setup.providers[].envVars` + `providerAuthChoices` in `/home/ubuntu/.openclaw/workspace/plugins/openrouter-image-generation/openclaw.plugin.json`
+- Refreshed plugin registry (`plugins registry --refresh`) and restarted gateway
+- **Result:** `providerAuthEnvVars deprecated` warning gone from `doctor` output
+- File tracked by workspace git (not repo git)
+
+### Fix 3: Discord SecretRef — pending
+- Root cause confirmed: upstream fix `e4ca4c7fbf` not in container build 4.27 (authored 2026-04-30, will ship in 4.28+)
+- Fix in progress: patching `extensions/discord/src/shared.ts` and rebuilding image
