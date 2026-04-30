@@ -87,10 +87,10 @@ describe("PDF document extractor", () => {
     expect(typeof params.standardFontDataUrl).toBe("string");
 
     const expectedStandardFontDataUrl =
-      path.join(path.dirname(require.resolve("pdfjs-dist/package.json")), "standard_fonts") +
-      path.sep;
+      path.join(path.dirname(require.resolve("pdfjs-dist/package.json")), "standard_fonts") + "/";
     expect(params.standardFontDataUrl).toBe(expectedStandardFontDataUrl);
     expect(path.isAbsolute(params.standardFontDataUrl)).toBe(true);
+    expect(params.standardFontDataUrl.endsWith("/")).toBe(true);
     expect(params.standardFontDataUrl.startsWith("file://")).toBe(false);
     expect(existsSync(params.standardFontDataUrl)).toBe(true);
     expect(existsSync(path.join(params.standardFontDataUrl, "LiberationSans-Regular.ttf"))).toBe(

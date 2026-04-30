@@ -80,7 +80,7 @@ function resolvePdfJsStandardFontDataPath(): string {
   if (!pdfJsStandardFontDataPath) {
     const pdfJsPackageJsonPath = require.resolve("pdfjs-dist/package.json");
     pdfJsStandardFontDataPath =
-      path.join(path.dirname(pdfJsPackageJsonPath), "standard_fonts") + path.sep;
+      path.join(path.dirname(pdfJsPackageJsonPath), "standard_fonts") + "/";
   }
   return pdfJsStandardFontDataPath;
 }
