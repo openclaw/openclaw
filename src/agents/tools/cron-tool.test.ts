@@ -891,6 +891,59 @@ describe("cron tool", () => {
     });
   });
 
+  it("infers delivery.to when the caller set delivery.channel but left delivery.to empty", async () => {
+    // Regression: when the model emits `{ mode: "announce", channel: "slack" }`
+    // with no `to`, the inference gate must still populate `to` from the
+    // session key. Previously `hasTarget = channel || to` treated the channel
+    // as a complete target and skipped inference, leaving `to` unset and
+    // forcing downstream delivery to fall back to the session store's
+    // `lastTo` — which routes the announce to whichever peer the host last
+    // spoke with, often the wrong one.
+    callGatewayMock.mockResolvedValueOnce({ ok: true });
+    const delivery = await executeAddAndReadDelivery({
+      callId: "call-channel-only",
+      agentSessionKey: "agent:main:slack:channel:general",
+      delivery: { mode: "announce", channel: "slack" },
+    });
+    expect(delivery).toEqual({
+      mode: "announce",
+      channel: "slack",
+      to: "general",
+    });
+  });
+
+  it("keeps caller-provided delivery.to when it is set, even if channel is also set", async () => {
+    callGatewayMock.mockResolvedValueOnce({ ok: true });
+    const delivery = await executeAddAndReadDelivery({
+      callId: "call-explicit-to",
+      agentSessionKey: "agent:main:slack:channel:general",
+      delivery: { mode: "announce", channel: "slack", to: "random" },
+    });
+    // to="random" is explicit — inference must not overwrite it.
+    expect(delivery).toEqual({
+      mode: "announce",
+      channel: "slack",
+      to: "random",
+    });
+  });
+
+  it("infers delivery.to when the caller sets only channel with no mode", async () => {
+    // Some models emit bare `{ channel: "..." }` without a mode. The default
+    // gate accepts that as announce-mode (mode === ""), so inference should
+    // still run and fill in `to`.
+    callGatewayMock.mockResolvedValueOnce({ ok: true });
+    const delivery = await executeAddAndReadDelivery({
+      callId: "call-bare-channel",
+      agentSessionKey: "agent:main:discord:dm:buddy",
+      delivery: { channel: "discord" },
+    });
+    expect(delivery).toEqual({
+      mode: "announce",
+      channel: "discord",
+      to: "buddy",
+    });
+  });
+
   it("fails fast when webhook mode is missing delivery.to", async () => {
     const tool = createTestCronTool({ agentSessionKey: "agent:main:discord:dm:buddy" });
 
