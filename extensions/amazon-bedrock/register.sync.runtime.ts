@@ -528,6 +528,7 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
         { id: "low" },
         { id: "medium" },
         { id: "high" },
+        ...(isOpus47BedrockModelRef(modelId.trim()) ? [{ id: "xhigh" as const }] : []),
         ...(claude46ModelRe.test(modelId.trim()) ? [{ id: "adaptive" as const }] : []),
       ],
       defaultLevel: claude46ModelRe.test(modelId.trim()) ? "adaptive" : undefined,

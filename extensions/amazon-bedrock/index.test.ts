@@ -253,6 +253,26 @@ describe("amazon-bedrock provider plugin", () => {
     });
   });
 
+  it("exposes xhigh thinking for Claude Opus 4.7 Bedrock inference profiles", async () => {
+    const provider = await registerSingleProviderPlugin(amazonBedrockPlugin);
+
+    for (const modelId of [
+      "us.anthropic.claude-opus-4-7",
+      "eu.anthropic.claude-opus-4.7",
+      "anthropic.claude-opus-4-7-20260219",
+    ]) {
+      expect(
+        provider.resolveThinkingProfile?.({ provider: "amazon-bedrock", modelId } as never),
+      ).toMatchObject({ levels: expect.arrayContaining([{ id: "xhigh" }]) });
+    }
+    expect(
+      provider.resolveThinkingProfile?.({
+        provider: "amazon-bedrock",
+        modelId: "us.anthropic.claude-opus-4-6-v1",
+      } as never),
+    ).toMatchObject({ levels: expect.not.arrayContaining([{ id: "xhigh" }]) });
+  });
+
   it("owns Anthropic-style replay policy for Claude Bedrock models", async () => {
     const provider = await registerSingleProviderPlugin(amazonBedrockPlugin);
 
