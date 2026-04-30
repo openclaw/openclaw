@@ -10,9 +10,11 @@ import {
   type GoogleMeetCalendarLookupResult,
 } from "./calendar.js";
 import type { GoogleMeetConfig, GoogleMeetMode, GoogleMeetTransport } from "./config.js";
+import { hasCreateSpaceConfigInput, resolveCreateSpaceConfig } from "./create.js";
 import {
   buildGoogleMeetPreflightReport,
   createGoogleMeetSpace,
+  endGoogleMeetActiveConference,
   fetchGoogleMeetArtifacts,
   fetchGoogleMeetAttendance,
   fetchLatestGoogleMeetConferenceRecord,
@@ -159,6 +161,8 @@ type CreateOptions = {
   clientId?: string;
   clientSecret?: string;
   expiresAt?: string;
+  accessType?: string;
+  entryPointAccess?: string;
   join?: boolean;
   transport?: GoogleMeetTransport;
   mode?: GoogleMeetMode;
@@ -1367,6 +1371,14 @@ export function registerGoogleMeetCli(params: {
     .option("--client-id <id>", "OAuth client id override")
     .option("--client-secret <secret>", "OAuth client secret override")
     .option("--expires-at <ms>", "Cached access token expiry as unix epoch milliseconds")
+    .option(
+      "--access-type <type>",
+      "Google Meet SpaceConfig accessType for API create: OPEN, TRUSTED, or RESTRICTED",
+    )
+    .option(
+      "--entry-point-access <type>",
+      "Google Meet SpaceConfig entryPointAccess for API create: ALL or CREATOR_APP_ONLY",
+    )
     .option("--no-join", "Only create the meeting URL; do not join it")
     .option("--transport <transport>", "Join transport: chrome, chrome-node, or twilio")
     .option(
@@ -1380,6 +1392,11 @@ export function registerGoogleMeetCli(params: {
     .option("--json", "Print JSON output", false)
     .action(async (options: CreateOptions) => {
       if (!hasCreateOAuth(params.config, options)) {
+        if (hasCreateSpaceConfigInput(options as Record<string, unknown>)) {
+          throw new Error(
+            "Google Meet access policy options require OAuth/API room creation. Configure Google Meet OAuth or remove --access-type/--entry-point-access.",
+          );
+        }
         const rt = await params.ensureRuntime();
         const result = await rt.createViaBrowser();
         const join =
@@ -1423,7 +1440,10 @@ export function registerGoogleMeetCli(params: {
       const token = await resolveGoogleMeetAccessToken(
         resolveCreateTokenOptions(params.config, options),
       );
-      const result = await createGoogleMeetSpace({ accessToken: token.accessToken });
+      const result = await createGoogleMeetSpace({
+        accessToken: token.accessToken,
+        config: resolveCreateSpaceConfig(options as Record<string, unknown>),
+      });
       const join =
         options.join !== false
           ? await (
@@ -1461,6 +1481,39 @@ export function registerGoogleMeetCli(params: {
       } else {
         writeStdoutLine("joined: no (run `openclaw googlemeet join %s`)", result.meetingUri);
       }
+    });
+
+  root
+    .command("end-active-conference")
+    .description("End the active conference for a Google Meet space")
+    .argument("[meeting]", "Meet URL, meeting code, or spaces/{id}")
+    .option("--access-token <token>", "Access token override")
+    .option("--refresh-token <token>", "Refresh token override")
+    .option("--client-id <id>", "OAuth client id override")
+    .option("--client-secret <secret>", "OAuth client secret override")
+    .option("--expires-at <ms>", "Cached access token expiry as unix epoch milliseconds")
+    .option("--json", "Print JSON output", false)
+    .action(async (meeting: string | undefined, options: ResolveSpaceOptions & JsonOptions) => {
+      const token = await resolveGoogleMeetAccessToken(
+        resolveOAuthTokenOptions(params.config, options),
+      );
+      const result = await endGoogleMeetActiveConference({
+        accessToken: token.accessToken,
+        meeting: resolveMeetingInput(params.config, meeting ?? options.meeting),
+      });
+      if (options.json) {
+        writeStdoutJson({
+          ...result,
+          tokenSource: token.refreshed ? "refresh-token" : "cached-access-token",
+        });
+        return;
+      }
+      writeStdoutLine("space: %s", result.space);
+      writeStdoutLine("ended: yes");
+      writeStdoutLine(
+        "token source: %s",
+        token.refreshed ? "refresh-token" : "cached-access-token",
+      );
     });
 
   root

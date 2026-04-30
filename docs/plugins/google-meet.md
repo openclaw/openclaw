@@ -125,6 +125,24 @@ Create a new meeting and join it:
 openclaw googlemeet create --transport chrome-node --mode realtime
 ```
 
+For API-created rooms, use Google Meet `SpaceConfig.accessType` when you want
+the room's no-knock policy to be explicit instead of inherited from the Google
+account defaults:
+
+```bash
+openclaw googlemeet create --access-type OPEN --transport chrome-node --mode realtime
+```
+
+`OPEN` lets anyone with the Meet URL join without knocking. `TRUSTED` lets the
+host organization's trusted users, invited external users, and dial-in users
+join without knocking. `RESTRICTED` limits no-knock entry to invitees. These
+settings only apply to the official Google Meet API creation path, so OAuth
+credentials must be configured.
+
+If you authenticated Google Meet before this option was available, rerun
+`openclaw googlemeet auth login --json` after adding the
+`meetings.space.settings` scope to your Google OAuth consent screen.
+
 Create only the URL without joining:
 
 ```bash
@@ -504,6 +522,7 @@ In Google Cloud Console:
 4. Add the scopes OpenClaw requests:
    - `https://www.googleapis.com/auth/meetings.space.created`
    - `https://www.googleapis.com/auth/meetings.space.readonly`
+   - `https://www.googleapis.com/auth/meetings.space.settings`
    - `https://www.googleapis.com/auth/meetings.conference.media.readonly`
 5. Create an OAuth client ID.
    - Application type: **Web application**.
@@ -517,6 +536,8 @@ In Google Cloud Console:
 
 `meetings.space.created` is required by Google Meet `spaces.create`.
 `meetings.space.readonly` lets OpenClaw resolve Meet URLs/codes to spaces.
+`meetings.space.settings` lets OpenClaw pass `SpaceConfig` settings such as
+`accessType` during API room creation.
 `meetings.conference.media.readonly` is for Meet Media API preflight and media
 work; Google may require Developer Preview enrollment for actual Media API use.
 If you only need browser-based Chrome joins, skip OAuth entirely.
@@ -708,6 +729,21 @@ openclaw googlemeet artifacts --conference-record conferenceRecords/abc123 --jso
 openclaw googlemeet attendance --conference-record conferenceRecords/abc123 --json
 ```
 
+End an active conference for an API-created space when you want to close the
+room after the call:
+
+```bash
+openclaw googlemeet end-active-conference https://meet.google.com/abc-defg-hij
+```
+
+This calls Google Meet `spaces.endActiveConference` and requires OAuth with the
+`meetings.space.created` scope for a space the authorized account can manage.
+OpenClaw accepts a Meet URL, meeting code, or `spaces/{id}` input and resolves it
+to the API space resource before ending the active conference.
+It is separate from `googlemeet leave`: `leave` stops OpenClaw's local/session
+participation, while `end-active-conference` asks Google Meet to end the active
+conference for the space.
+
 Write a readable report:
 
 ```bash
@@ -763,6 +799,26 @@ Agents can also create the same bundle through the `google_meet` tool:
 ```
 
 Set `"dryRun": true` to return only the export manifest and skip file writes.
+
+Agents can also create an API-backed room with an explicit access policy:
+
+```json
+{
+  "action": "create",
+  "transport": "chrome-node",
+  "mode": "realtime",
+  "accessType": "OPEN"
+}
+```
+
+And they can end the active conference for a known room:
+
+```json
+{
+  "action": "end_active_conference",
+  "meeting": "https://meet.google.com/abc-defg-hij"
+}
+```
 
 Run the guarded live smoke against a real retained meeting:
 
@@ -1502,6 +1558,8 @@ argument list, and do not point it at scripts from untrusted locations.
 `googlemeet speak` triggers the active realtime audio bridge for a Chrome
 session. `googlemeet leave` stops that bridge. For Twilio sessions delegated
 through the Voice Call plugin, `leave` also hangs up the underlying voice call.
+Use `googlemeet end-active-conference` when you also want to close the active
+Google Meet conference for an API-managed space.
 
 ## Related
 

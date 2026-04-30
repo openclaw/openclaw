@@ -22,6 +22,7 @@ import {
 } from "./src/config.js";
 import {
   buildGoogleMeetPreflightReport,
+  endGoogleMeetActiveConference,
   fetchGoogleMeetArtifacts,
   fetchGoogleMeetAttendance,
   fetchLatestGoogleMeetConferenceRecord,
@@ -201,6 +202,7 @@ const GoogleMeetToolSchema = Type.Object({
       "export",
       "recover_current_tab",
       "leave",
+      "end_active_conference",
       "speak",
       "test_speech",
     ],
@@ -210,6 +212,19 @@ const GoogleMeetToolSchema = Type.Object({
   join: Type.Optional(
     Type.Boolean({
       description: "For action=create, set false to create the URL without joining.",
+    }),
+  ),
+  accessType: Type.Optional(
+    Type.String({
+      enum: ["OPEN", "TRUSTED", "RESTRICTED"],
+      description:
+        "For action=create with Google Meet OAuth, configure who can join without knocking.",
+    }),
+  ),
+  entryPointAccess: Type.Optional(
+    Type.String({
+      enum: ["ALL", "CREATOR_APP_ONLY"],
+      description: "For action=create with Google Meet OAuth, configure allowed join entry points.",
     }),
   ),
   url: Type.Optional(Type.String({ description: "Explicit https://meet.google.com/... URL" })),
@@ -343,6 +358,7 @@ type GoogleMeetGatewayToolAction =
   | "recover_current_tab"
   | "setup_status"
   | "leave"
+  | "end_active_conference"
   | "speak"
   | "test_speech";
 
@@ -354,6 +370,8 @@ function googleMeetGatewayMethodForToolAction(action: GoogleMeetGatewayToolActio
       return "googlemeet.setup";
     case "test_speech":
       return "googlemeet.testSpeech";
+    case "end_active_conference":
+      return "googlemeet.endActiveConference";
     default:
       return `googlemeet.${action}`;
   }
@@ -843,6 +861,25 @@ export default definePluginEntry({
     );
 
     api.registerGatewayMethod(
+      "googlemeet.endActiveConference",
+      async ({ params, respond }: GatewayRequestHandlerOptions) => {
+        try {
+          const raw = asParamRecord(params);
+          const token = await resolveGoogleMeetTokenFromParams(config, raw);
+          respond(
+            true,
+            await endGoogleMeetActiveConference({
+              accessToken: token.accessToken,
+              meeting: resolveMeetingInput(config, raw.meeting),
+            }),
+          );
+        } catch (err) {
+          sendError(respond, err);
+        }
+      },
+    );
+
+    api.registerGatewayMethod(
       "googlemeet.speak",
       async ({ params, respond }: GatewayRequestHandlerOptions) => {
         try {
@@ -998,6 +1035,15 @@ export default definePluginEntry({
                 throw new Error("sessionId required");
               }
               return json(await callGoogleMeetGatewayFromTool({ config, action: "leave", raw }));
+            }
+            case "end_active_conference": {
+              return json(
+                await callGoogleMeetGatewayFromTool({
+                  config,
+                  action: "end_active_conference",
+                  raw,
+                }),
+              );
             }
             case "speak": {
               const sessionId = normalizeOptionalString(raw.sessionId);

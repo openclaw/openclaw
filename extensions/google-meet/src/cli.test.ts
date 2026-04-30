@@ -324,6 +324,64 @@ describe("google-meet CLI", () => {
     }
   });
 
+  it("ends an active conference for a Meet space", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
+      const url = requestUrl(input);
+      if (url.pathname === "/v2/spaces/abc-defg-hij") {
+        return jsonResponse({
+          name: "spaces/space-resource-123",
+          meetingCode: "abc-defg-hij",
+          meetingUri: "https://meet.google.com/abc-defg-hij",
+        });
+      }
+      if (url.pathname === "/v2/spaces/space-resource-123:endActiveConference") {
+        return jsonResponse({});
+      }
+      return new Response("not found", { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const stdout = captureStdout();
+    try {
+      await setupCli({}).parseAsync(
+        [
+          "googlemeet",
+          "end-active-conference",
+          "https://meet.google.com/abc-defg-hij",
+          "--access-token",
+          "token",
+          "--expires-at",
+          String(Date.now() + 120_000),
+          "--json",
+        ],
+        { from: "user" },
+      );
+      expect(JSON.parse(stdout.output())).toMatchObject({
+        space: "spaces/space-resource-123",
+        ended: true,
+        tokenSource: "cached-access-token",
+      });
+      expect(fetchMock).toHaveBeenCalledWith(
+        "https://meet.googleapis.com/v2/spaces/space-resource-123:endActiveConference",
+        expect.objectContaining({ method: "POST", body: "{}" }),
+      );
+    } finally {
+      stdout.restore();
+    }
+  });
+
+  it("rejects access policy flags when create would use browser fallback", async () => {
+    await expect(
+      setupCli({
+        runtime: {
+          createViaBrowser: vi.fn(async () => {
+            throw new Error("browser fallback should not run");
+          }),
+        },
+      }).parseAsync(["googlemeet", "create", "--access-type", "OPEN"], { from: "user" }),
+    ).rejects.toThrow("access policy options require OAuth/API room creation");
+  });
+
   it("prints the latest conference record", async () => {
     stubMeetArtifactsApi();
     const stdout = captureStdout();
