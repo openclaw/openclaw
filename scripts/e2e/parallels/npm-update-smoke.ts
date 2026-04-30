@@ -446,6 +446,7 @@ class NpmUpdateSmoke {
       macosVm,
       script,
       "openclaw-parallels-npm-update-macos",
+      macosExecArgs,
     );
     try {
       const status = await this.runStreamingToJobLog(
@@ -725,9 +726,14 @@ Remove-Item -Path $scriptPath, $logPath, $donePath, $exitPath -Force -ErrorActio
     }
   }
 
-  private writeGuestScript(vm: string, script: string, prefix: string): string {
+  private writeGuestScript(
+    vm: string,
+    script: string,
+    prefix: string,
+    execArgs: string[] = [],
+  ): string {
     const scriptPath = `/tmp/${prefix}-${process.pid}-${Date.now()}.sh`;
-    const write = run("prlctl", ["exec", vm, "/usr/bin/tee", scriptPath], {
+    const write = run("prlctl", ["exec", vm, ...execArgs, "/usr/bin/tee", scriptPath], {
       check: false,
       input: script,
       quiet: true,
@@ -736,7 +742,7 @@ Remove-Item -Path $scriptPath, $logPath, $donePath, $exitPath -Force -ErrorActio
     if (write.status !== 0) {
       throw new Error(`failed to write guest script ${scriptPath}: ${write.stderr.trim()}`);
     }
-    const chmod = run("prlctl", ["exec", vm, "/bin/chmod", "755", scriptPath], {
+    const chmod = run("prlctl", ["exec", vm, ...execArgs, "/bin/chmod", "700", scriptPath], {
       check: false,
       quiet: true,
       timeoutMs: 30_000,
