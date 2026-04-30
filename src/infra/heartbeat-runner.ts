@@ -1092,9 +1092,9 @@ export async function runHeartbeatOnce(opts: {
     return { status: "skipped", reason: HEARTBEAT_SKIP_LANES_BUSY };
   }
 
-  // Phase 2: Stronger heartbeat deferral.
-  // If the session was updated very recently (e.g., within the last 30 seconds),
-  // defer the heartbeat to avoid interrupting potential follow-up user turns or final delivery.
+  // Phase 2: Stronger heartbeat deferral while a final delivery replay is pending.
+  // Plain `updatedAt` changes are normal for heartbeat sessions and should not
+  // suppress heartbeat runs; only defer when final delivery recovery is active.
   const { entry: recentSessionEntry } = resolveHeartbeatSession(
     cfg,
     agentId,
@@ -1103,6 +1103,7 @@ export async function runHeartbeatOnce(opts: {
   );
   const HEARTBEAT_DEFER_WINDOW_MS = 30_000;
   if (
+    recentSessionEntry?.pendingFinalDelivery === true &&
     recentSessionEntry?.updatedAt &&
     startedAt - recentSessionEntry.updatedAt < HEARTBEAT_DEFER_WINDOW_MS
   ) {
