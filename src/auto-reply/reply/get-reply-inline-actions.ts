@@ -1,7 +1,7 @@
 import { collectTextContentBlocks } from "../../agents/content-blocks.js";
+import { createOpenClawCodingTools } from "../../agents/pi-tools.js";
 import type { BlockReplyChunking } from "../../agents/pi-embedded-block-chunker.js";
 import type { SkillCommandSpec } from "../../agents/skills.js";
-import { applyOwnerOnlyToolPolicy } from "../../agents/tool-policy.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -33,15 +33,14 @@ import { extractExplicitGroupId } from "./group-id.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
 import type { createModelSelectionState } from "./model-selection.js";
 import { extractInlineSimpleCommand } from "./reply-inline.js";
+import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
 import type { TypingController } from "./typing.js";
 
 type SkillCommandsRuntime = typeof import("../skill-commands.runtime.js");
-type OpenClawToolsRuntime = typeof import("../../agents/openclaw-tools.runtime.js");
 type AbortCutoffRuntime = typeof import("./abort-cutoff.runtime.js");
 type CommandsRuntime = typeof import("./commands.runtime.js");
 
 let skillCommandsRuntimePromise: Promise<SkillCommandsRuntime> | undefined;
-let openClawToolsRuntimePromise: Promise<OpenClawToolsRuntime> | undefined;
 let abortCutoffRuntimePromise: Promise<AbortCutoffRuntime> | undefined;
 let commandsRuntimePromise: Promise<CommandsRuntime> | undefined;
 let builtinSlashCommands: Set<string> | null = null;
@@ -49,11 +48,6 @@ let builtinSlashCommands: Set<string> | null = null;
 function loadSkillCommandsRuntime(): Promise<SkillCommandsRuntime> {
   skillCommandsRuntimePromise ??= import("../skill-commands.runtime.js");
   return skillCommandsRuntimePromise;
-}
-
-function loadOpenClawToolsRuntime(): Promise<OpenClawToolsRuntime> {
-  openClawToolsRuntimePromise ??= import("../../agents/openclaw-tools.runtime.js");
-  return openClawToolsRuntimePromise;
 }
 
 function loadAbortCutoffRuntime(): Promise<AbortCutoffRuntime> {
@@ -265,25 +259,37 @@ export async function handleInlineActions(params: {
         resolveGatewayMessageChannel(ctx.Surface) ??
         resolveGatewayMessageChannel(ctx.Provider) ??
         undefined;
-
-      const { createOpenClawTools } = await loadOpenClawToolsRuntime();
-      const tools = createOpenClawTools({
-        agentSessionKey: sessionKey,
-        agentChannel: channel,
-        agentAccountId: (ctx as { AccountId?: string }).AccountId,
-        agentTo: ctx.OriginatingTo ?? ctx.To,
-        agentThreadId: ctx.MessageThreadId ?? undefined,
-        agentGroupId: extractExplicitGroupId(ctx.From),
-        requesterAgentIdOverride: agentId,
+      const toolPolicySessionKey = resolveRuntimePolicySessionKey({
+        cfg,
+        ctx,
+        sessionKey,
+      });
+      const targetSessionEntry = sessionStore?.[sessionKey] ?? sessionEntry;
+      const tools = createOpenClawCodingTools({
+        config: cfg,
+        agentId,
         agentDir,
         workspaceDir,
-        config: cfg,
+        sessionKey: toolPolicySessionKey,
         allowGatewaySubagentBinding: true,
+        messageProvider: channel,
+        agentAccountId: (ctx as { AccountId?: string }).AccountId,
+        messageTo: ctx.OriginatingTo ?? ctx.To,
+        messageThreadId: ctx.MessageThreadId ?? undefined,
+        groupId: targetSessionEntry?.groupId ?? extractExplicitGroupId(ctx.From) ?? undefined,
+        groupChannel: targetSessionEntry?.groupChannel ?? undefined,
+        groupSpace: targetSessionEntry?.space ?? undefined,
+        spawnedBy: targetSessionEntry?.spawnedBy ?? undefined,
+        senderId: command.senderId,
+        senderName: ctx.SenderName,
+        senderUsername: ctx.SenderUsername,
+        senderE164: ctx.SenderE164,
         senderIsOwner: command.senderIsOwner,
+        modelProvider: provider,
+        modelId: model,
       });
-      const authorizedTools = applyOwnerOnlyToolPolicy(tools, command.senderIsOwner);
 
-      const tool = authorizedTools.find((candidate) => candidate.name === dispatch.toolName);
+      const tool = tools.find((candidate) => candidate.name === dispatch.toolName);
       if (!tool) {
         typing.cleanup();
         return { kind: "reply", reply: { text: `❌ Tool not available: ${dispatch.toolName}` } };
