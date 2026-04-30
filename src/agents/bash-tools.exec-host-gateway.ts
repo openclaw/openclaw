@@ -1,4 +1,5 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
+import { formatErrorMessage } from "../infra/errors.js";
 import {
   addDurableCommandApproval,
   type ExecAsk,
@@ -17,6 +18,8 @@ import {
   detectInterpreterInlineEvalArgv,
 } from "../infra/exec-inline-eval.js";
 import type { SafeBinProfile } from "../infra/exec-safe-bin-policy.js";
+import { logWarn } from "../logger.js";
+import { isActionSinkPolicyDeniedError } from "../security/action-sink-runtime.js";
 import { markBackgrounded, tail } from "./bash-process-registry.js";
 import {
   buildExecApprovalRequesterContext,
@@ -386,11 +389,29 @@ export async function processGatewayAllowlist(
           scopeKey: params.scopeKey,
           sessionKey: params.notifySessionKey ?? params.sessionKey,
           timeoutSec: effectiveTimeout,
+          actionSinkApproval: {
+            source: "exec-approval",
+            approvalId,
+          },
         });
-      } catch {
+      } catch (err) {
+        const message = formatErrorMessage(err);
+        if (isActionSinkPolicyDeniedError(err)) {
+          const denialKind =
+            err.decision === "requireApproval" ? "policy-approval-required" : "policy-denied";
+          logWarn(
+            `exec gateway policy denied after approval (id=${approvalId}, reason=${err.reasonCode}): ${message}`,
+          );
+          await sendExecApprovalFollowupResult(
+            followupTarget,
+            `Exec denied (gateway id=${approvalId}, ${denialKind}:${err.reasonCode}): ${params.command}\n\nPolicy reason: ${message}`,
+          );
+          return;
+        }
+        logWarn(`exec gateway spawn failed (id=${approvalId}): ${message}`);
         await sendExecApprovalFollowupResult(
           followupTarget,
-          `Exec denied (gateway id=${approvalId}, spawn-failed): ${params.command}`,
+          `Exec denied (gateway id=${approvalId}, spawn-failed): ${params.command}\n\nSpawn error: ${message}`,
         );
         return;
       }

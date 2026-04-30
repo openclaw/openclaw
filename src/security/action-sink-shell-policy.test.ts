@@ -42,4 +42,24 @@ describe("shell command classifier", () => {
       classifyShellCommand({ command: "curl -X POST https://example.test" }).riskTags,
     ).toContain("network_write");
   });
+
+  it("does not classify loopback-only curl checks as external network", () => {
+    const checks = [
+      "curl -fsS http://127.0.0.1:3001/api/health | head -c 300",
+      "curl -fsS http://localhost:18789/api/health",
+      "curl -g -fsS 'http://[::1]:18789/api/health'",
+    ];
+
+    for (const command of checks) {
+      expect(classifyShellCommand({ command }).riskTags).not.toContain("network_write");
+    }
+  });
+
+  it("keeps mixed loopback and external curl commands classified as external network", () => {
+    expect(
+      classifyShellCommand({
+        command: "curl -fsS http://127.0.0.1:3001/api/health https://example.test",
+      }).riskTags,
+    ).toContain("network_write");
+  });
 });

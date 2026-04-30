@@ -41,6 +41,43 @@ type CreateAcpxRuntimeServiceParams = {
   runtimeFactory?: (params: AcpxRuntimeFactoryParams) => AcpxRuntimeLike;
 };
 
+const DEFAULT_CODEX_ACP_COMMAND = "npx @zed-industries/codex-acp@^0.11.1";
+const SAFE_CODEX_MODEL_ID_RE = /^[A-Za-z0-9._:/@+-]+$/;
+
+function formatCodexModelConfigArg(model: string): string | null {
+  const normalized = model.trim();
+  if (!normalized || !SAFE_CODEX_MODEL_ID_RE.test(normalized)) {
+    return null;
+  }
+  return `-c model=\\"${normalized}\\"`;
+}
+
+function resolveAgentCommandOverrides(params: {
+  pluginConfig: ResolvedAcpxPluginConfig;
+  logger?: PluginLogger;
+}): Record<string, string> {
+  const overrides = { ...params.pluginConfig.agents };
+  const configuredCodexModel = params.pluginConfig.agentModels.codex;
+  if (!configuredCodexModel) {
+    return overrides;
+  }
+  if (overrides.codex) {
+    params.logger?.warn(
+      'acpx.agentModels.codex ignored because acpx.agents.codex is explicitly configured; include -c model=\\"...\\" in the custom command',
+    );
+    return overrides;
+  }
+  const modelConfigArg = formatCodexModelConfigArg(configuredCodexModel);
+  if (!modelConfigArg) {
+    params.logger?.warn(
+      `acpx.agentModels.codex ignored because the model id is not safe for a shell command: ${configuredCodexModel}`,
+    );
+    return overrides;
+  }
+  overrides.codex = `${DEFAULT_CODEX_ACP_COMMAND} ${modelConfigArg}`;
+  return overrides;
+}
+
 function createDefaultRuntime(params: AcpxRuntimeFactoryParams): AcpxRuntimeLike {
   return new AcpxRuntime({
     cwd: params.pluginConfig.cwd,
@@ -48,7 +85,10 @@ function createDefaultRuntime(params: AcpxRuntimeFactoryParams): AcpxRuntimeLike
       stateDir: params.pluginConfig.stateDir,
     }),
     agentRegistry: createAgentRegistry({
-      overrides: params.pluginConfig.agents,
+      overrides: resolveAgentCommandOverrides({
+        pluginConfig: params.pluginConfig,
+        logger: params.logger,
+      }),
     }),
     probeAgent: params.pluginConfig.probeAgent,
     mcpServers: toAcpMcpServers(params.pluginConfig.mcpServers),

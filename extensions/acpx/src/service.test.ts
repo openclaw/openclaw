@@ -34,6 +34,7 @@ vi.mock("./codex-auth-bridge.js", () => ({
 }));
 
 import { getAcpRuntimeBackend } from "../runtime-api.js";
+import { createAgentRegistry } from "./runtime.js";
 import { createAcpxRuntimeService } from "./service.js";
 
 const tempDirs: string[] = [];
@@ -47,6 +48,7 @@ async function makeTempDir(): Promise<string> {
 afterEach(async () => {
   runtimeRegistry.clear();
   prepareAcpxCodexAuthConfigMock.mockClear();
+  vi.mocked(createAgentRegistry).mockClear();
   delete process.env.OPENCLAW_SKIP_ACPX_RUNTIME;
   delete process.env.OPENCLAW_SKIP_ACPX_RUNTIME_PROBE;
   for (const dir of tempDirs.splice(0)) {
@@ -297,6 +299,29 @@ describe("createAcpxRuntimeService", () => {
       expect(ctx.logger.warn).toHaveBeenCalledWith(
         'embedded acpx runtime backend probe failed: probe failed ({"code":"ACP_CLOSED","agent":"codex"}; stdin closed)',
       );
+    });
+
+    await service.stop?.(ctx);
+  });
+
+  it("injects the configured Codex model into the embedded ACP command", async () => {
+    process.env.OPENCLAW_SKIP_ACPX_RUNTIME_PROBE = "1";
+    const workspaceDir = await makeTempDir();
+    const ctx = createServiceContext(workspaceDir);
+    const service = createAcpxRuntimeService({
+      pluginConfig: {
+        agentModels: {
+          codex: "gpt-5.4",
+        },
+      },
+    });
+
+    await service.start(ctx);
+
+    expect(createAgentRegistry).toHaveBeenCalledWith({
+      overrides: {
+        codex: 'npx @zed-industries/codex-acp@^0.11.1 -c model=\\"gpt-5.4\\"',
+      },
     });
 
     await service.stop?.(ctx);

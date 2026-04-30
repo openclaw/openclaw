@@ -79,6 +79,18 @@ describe("markdownToTelegramHtml", () => {
     expect(res).toBe('<a href="https://example.com"><b>bold</b></a>');
   });
 
+  it("leaves unsupported markdown link targets as plain text", () => {
+    expect(markdownToTelegramHtml("see [docs](README.md)")).toBe("see docs");
+    expect(markdownToTelegramHtml("email [support](mailto:support@example.com)")).toBe(
+      "email support",
+    );
+  });
+
+  it("preserves Telegram deep links as HTML anchors", () => {
+    const res = markdownToTelegramHtml("[profile](tg://user?id=123)");
+    expect(res).toBe('<a href="tg://user?id=123">profile</a>');
+  });
+
   it("wraps punctuated file references in code tags", () => {
     const res = markdownToTelegramHtml("See README.md. Also (backup.sh).");
     expect(res).toContain("<code>README.md</code>.");

@@ -34,6 +34,7 @@ export type AcpxPluginConfig = {
   strictWindowsCmdWrapper?: boolean;
   timeoutSeconds?: number;
   queueOwnerTtlSeconds?: number;
+  agentModels?: Record<string, string>;
   mcpServers?: Record<string, McpServerConfig>;
   agents?: Record<string, { command: string }>;
 };
@@ -49,6 +50,7 @@ export type ResolvedAcpxPluginConfig = {
   strictWindowsCmdWrapper: boolean;
   timeoutSeconds?: number;
   queueOwnerTtlSeconds: number;
+  agentModels: Record<string, string>;
   legacyCompatibilityConfig: {
     strictWindowsCmdWrapper?: boolean;
     queueOwnerTtlSeconds?: number;
@@ -106,6 +108,9 @@ export const AcpxPluginConfigSchema = z.strictObject({
   queueOwnerTtlSeconds: z
     .number({ error: "queueOwnerTtlSeconds must be a number >= 0" })
     .min(0, { error: "queueOwnerTtlSeconds must be a number >= 0" })
+    .optional(),
+  agentModels: z
+    .record(z.string(), nonEmptyTrimmedString("agentModels.<id> must be a non-empty string"))
     .optional(),
   mcpServers: z.record(z.string(), McpServerConfigSchema).optional(),
   agents: z

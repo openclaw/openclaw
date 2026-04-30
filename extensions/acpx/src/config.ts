@@ -259,6 +259,12 @@ export function resolveAcpxPluginConfig(params: {
       entry.command.trim(),
     ]),
   );
+  const agentModels = Object.fromEntries(
+    Object.entries(normalized.agentModels ?? {}).map(([name, model]) => [
+      normalizeLowercaseStringOrEmpty(name),
+      model.trim(),
+    ]),
+  );
 
   // Lowercase probeAgent so lookups match the registry keys built above, which
   // also go through normalizeLowercaseStringOrEmpty. Without this, a user who
@@ -279,6 +285,7 @@ export function resolveAcpxPluginConfig(params: {
       normalized.strictWindowsCmdWrapper ?? DEFAULT_STRICT_WINDOWS_CMD_WRAPPER,
     timeoutSeconds: normalized.timeoutSeconds ?? DEFAULT_ACPX_TIMEOUT_SECONDS,
     queueOwnerTtlSeconds: normalized.queueOwnerTtlSeconds ?? DEFAULT_QUEUE_OWNER_TTL_SECONDS,
+    agentModels,
     legacyCompatibilityConfig: {
       strictWindowsCmdWrapper: normalized.strictWindowsCmdWrapper,
       queueOwnerTtlSeconds: normalized.queueOwnerTtlSeconds,

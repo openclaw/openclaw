@@ -560,6 +560,10 @@ export async function runExecProcess(opts: {
   sessionKey?: string;
   notifyDeliveryContext?: DeliveryContext;
   timeoutSec: number | null;
+  actionSinkApproval?: {
+    source: "exec-approval";
+    approvalId: string;
+  };
   onUpdate?: (partialResult: AgentToolResult<ExecToolDetails>) => void;
 }): Promise<ExecProcessHandle> {
   await enforceActionSinkPolicy({
@@ -574,6 +578,7 @@ export async function runExecProcess(opts: {
       execCommand: opts.execCommand,
       cwd: opts.workdir,
       sandbox: Boolean(opts.sandbox),
+      ...(opts.actionSinkApproval ? { actionSinkApproval: opts.actionSinkApproval } : {}),
     },
   });
 

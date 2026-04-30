@@ -33,8 +33,11 @@ describe("exec approval followup", () => {
   it("tells the agent to continue the task before replying when the command succeeds", () => {
     const prompt = buildExecApprovalFollowupPrompt("Exec finished (gateway id=req-1, code 0)\nok");
 
+    expect(prompt).toContain("already approved returned a result");
     expect(prompt).toContain("continue from this result before replying to the user");
     expect(prompt).toContain("Continue the task if needed, then reply to the user");
+    expect(prompt).not.toContain("already approved has completed");
+    expect(prompt).not.toContain("If it succeeded");
   });
 
   it("keeps followups internal when no external route is available", async () => {
@@ -154,6 +157,47 @@ describe("exec approval followup", () => {
     );
   });
 
+  it("omits structured command output from direct delivery when session resume fails", async () => {
+    vi.mocked(callGatewayTool).mockRejectedValueOnce(
+      new Error(
+        "ActionSinkPolicyDeniedError: Completion/status claim requires review and QA evidence",
+      ),
+    );
+
+    const structuredOutput = JSON.stringify({
+      query: { team: "MCH", project: null, state: null, first: 1 },
+      cache: {
+        policy: "no-store",
+        reason:
+          "Linear is the authoritative task board; this read route intentionally avoids a shared server cache.",
+      },
+      columns: [{ id: "2d2eeaa4-5644-446f-975f-6338ff25fda9", name: "Todo" }],
+      issues: [{ identifier: "MCH-120", state: { name: "Todo" } }],
+    });
+
+    await sendExecApprovalFollowup({
+      approvalId: "req-structured-resume-failed",
+      sessionKey: "agent:main:telegram:-100123",
+      turnSourceChannel: "telegram",
+      turnSourceTo: "-100123",
+      turnSourceAccountId: "default",
+      turnSourceThreadId: "789",
+      resultText: `Exec finished (gateway id=req-structured-resume-failed, session=sess_1, code 0)\n${structuredOutput}`,
+    });
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content:
+          "Automatic session resume failed, so sending the status directly.\n\nCommand finished, but the session follow-up could not be resumed.\n\nStructured command output was omitted from Telegram.",
+        idempotencyKey: "exec-approval-followup:req-structured-resume-failed",
+      }),
+    );
+    const content = vi.mocked(sendMessage).mock.calls[0]?.[0]?.content ?? "";
+    expect(content).not.toContain('"columns"');
+    expect(content).not.toContain('"cache"');
+    expect(content).not.toContain("MCH-120");
+  });
+
   it("uses a generic summary when a no-session completion has no user-visible output", async () => {
     await sendExecApprovalFollowup({
       approvalId: "req-no-session-empty",
@@ -190,6 +234,28 @@ describe("exec approval followup", () => {
         content:
           "Automatic session resume failed, so sending the status directly.\n\nCommand did not run: approval timed out.",
         idempotencyKey: "exec-approval-followup:req-denied-resume-failed",
+      }),
+    );
+  });
+
+  it("uses specific spawn-failed copy when session resume fails", async () => {
+    vi.mocked(callGatewayTool).mockRejectedValueOnce(new Error("session missing"));
+
+    await sendExecApprovalFollowup({
+      approvalId: "req-spawn-resume-failed",
+      sessionKey: "agent:main:telegram:-100123",
+      turnSourceChannel: "telegram",
+      turnSourceTo: "-100123",
+      turnSourceAccountId: "default",
+      turnSourceThreadId: "789",
+      resultText: "Exec denied (gateway id=req-spawn-resume-failed, spawn-failed): uname -a",
+    });
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content:
+          "Automatic session resume failed, so sending the status directly.\n\nCommand did not run: spawn failed before the shell started.",
+        idempotencyKey: "exec-approval-followup:req-spawn-resume-failed",
       }),
     );
   });

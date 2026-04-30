@@ -46,6 +46,13 @@
         "type": "number",
         "minimum": 0
       },
+      "agentModels": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
       "probeAgent": {
         "type": "string",
         "minLength": 1
@@ -129,6 +136,11 @@
     "queueOwnerTtlSeconds": {
       "label": "Queue Owner TTL Seconds",
       "help": "Reserved compatibility field for the older embedded ACPX queue-owner path. Accepted for compatibility and logged as ignored.",
+      "advanced": true
+    },
+    "agentModels": {
+      "label": "Agent Models",
+      "help": "Optional per-agent ACP runtime model ids used when sessions_spawn(runtime=\"acp\") does not pass an explicit model.",
       "advanced": true
     },
     "probeAgent": {

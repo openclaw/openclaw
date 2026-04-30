@@ -211,10 +211,11 @@ function shouldRemoveRuntimeDepsLock(
     return !isAlive(owner.pid);
   }
 
-  return (
-    typeof owner.createdAtMs === "number" &&
-    nowMs - owner.createdAtMs > BUNDLED_RUNTIME_DEPS_LOCK_STALE_MS
-  );
+  if (typeof owner.createdAtMs !== "number") {
+    return true;
+  }
+
+  return nowMs - owner.createdAtMs > BUNDLED_RUNTIME_DEPS_LOCK_STALE_MS;
 }
 
 export const __testing = {

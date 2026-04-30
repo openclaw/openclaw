@@ -54,23 +54,66 @@ function formatUnknownError(error: unknown): string {
   }
 }
 
+function hasSessionFollowupFailure(error: unknown): boolean {
+  return error !== null && error !== undefined;
+}
+
+function looksLikeStructuredCommandOutput(text: string): boolean {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return false;
+  }
+
+  const startsStructured =
+    (trimmed.startsWith("{") && trimmed.endsWith("}")) ||
+    (trimmed.startsWith("[") && trimmed.endsWith("]"));
+  if (startsStructured) {
+    try {
+      const parsed = JSON.parse(trimmed) as unknown;
+      return parsed !== null && typeof parsed === "object";
+    } catch {
+      // Fall through to the looser structural checks below.
+    }
+  }
+
+  const structuredKeyHits =
+    trimmed.match(/"(?:cache|columns|query|issues|data|_meta|result|items|nodes|edges)"\s*:/gi)
+      ?.length ?? 0;
+  if (structuredKeyHits >= 2) {
+    return true;
+  }
+
+  const structuralTokens = trimmed.match(/[{}[\]:,]/g)?.length ?? 0;
+  return trimmed.length > 700 && structuralTokens > 50 && /"[^"]+"\s*:/.test(trimmed);
+}
+
+function formatStructuredOutputOmittedText(channel?: string): string {
+  const target =
+    normalizeMessageChannel(channel) === "telegram" ? "Telegram" : "the direct follow-up";
+  return [
+    "Command finished, but the session follow-up could not be resumed.",
+    "",
+    `Structured command output was omitted from ${target}.`,
+  ].join("\n");
+}
+
 export function buildExecApprovalFollowupPrompt(resultText: string): string {
   const trimmed = resultText.trim();
   if (isExecDeniedResultText(trimmed)) {
     return buildExecDeniedFollowupPrompt(trimmed);
   }
   return [
-    "An async command the user already approved has completed.",
+    "An async command the user already approved returned a result.",
     "Do not run the command again.",
     "If the task requires more steps, continue from this result before replying to the user.",
     "Only ask the user for help if you are actually blocked.",
     "",
-    "Exact completion details:",
+    "Exact result details:",
     trimmed,
     "",
     "Continue the task if needed, then reply to the user in a helpful way.",
-    "If it succeeded, share the relevant output.",
-    "If it failed, explain what went wrong.",
+    "If the shell exit code is 0, share the relevant output.",
+    "If the shell exit code is non-zero or a signal is present, explain what went wrong.",
   ].join("\n");
 }
 
@@ -80,7 +123,7 @@ function shouldSuppressExecDeniedFollowup(sessionKey: string | undefined): boole
 
 function formatDirectExecApprovalFollowupText(
   resultText: string,
-  opts: { allowDenied?: boolean } = {},
+  opts: { allowDenied?: boolean; sessionError?: unknown; channel?: string } = {},
 ): string | null {
   const parsed = parseExecApprovalResultText(resultText);
   if (parsed.kind === "other" && !parsed.raw) {
@@ -92,6 +135,13 @@ function formatDirectExecApprovalFollowupText(
 
   if (parsed.kind === "finished") {
     const metadata = normalizeLowercaseStringOrEmpty(parsed.metadata);
+    if (
+      hasSessionFollowupFailure(opts.sessionError) &&
+      looksLikeStructuredCommandOutput(parsed.body)
+    ) {
+      return formatStructuredOutputOmittedText(opts.channel);
+    }
+
     const body = sanitizeUserFacingText(parsed.body, {
       errorContext: !metadata.includes("code 0"),
     }).trim();
@@ -109,8 +159,22 @@ function formatDirectExecApprovalFollowupText(
   }
 
   if (parsed.kind === "completed") {
+    if (
+      hasSessionFollowupFailure(opts.sessionError) &&
+      looksLikeStructuredCommandOutput(parsed.body)
+    ) {
+      return formatStructuredOutputOmittedText(opts.channel);
+    }
+
     const body = sanitizeUserFacingText(parsed.body, { errorContext: true }).trim();
     return body || "Background command finished.";
+  }
+
+  if (
+    hasSessionFollowupFailure(opts.sessionError) &&
+    looksLikeStructuredCommandOutput(parsed.raw)
+  ) {
+    return formatStructuredOutputOmittedText(opts.channel);
   }
 
   return sanitizeUserFacingText(parsed.raw, { errorContext: true }).trim() || null;
@@ -168,6 +232,8 @@ async function sendDirectFollowupFallback(params: {
 }): Promise<boolean> {
   const directText = formatDirectExecApprovalFollowupText(params.resultText, {
     allowDenied: canDirectSendDeniedFollowup(params.sessionError),
+    channel: params.deliveryTarget.channel,
+    sessionError: params.sessionError,
   });
   if (!params.deliveryTarget.deliver || !directText) {
     return false;

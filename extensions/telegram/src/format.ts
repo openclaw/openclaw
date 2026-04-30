@@ -23,6 +23,10 @@ function escapeHtmlAttr(text: string): string {
   return escapeHtml(text).replace(/"/g, "&quot;");
 }
 
+function isTelegramSafeLinkHref(href: string): boolean {
+  return /^(?:https?:\/\/|tg:\/\/)/i.test(href);
+}
+
 /**
  * File extensions that share TLDs and commonly appear in code/documentation.
  * These are wrapped in <code> tags to prevent Telegram from generating
@@ -45,6 +49,10 @@ function buildTelegramLink(link: MarkdownLinkSpan, text: string) {
   // Suppress auto-linkified file references (e.g. README.md → http://README.md)
   const label = text.slice(link.start, link.end);
   if (isAutoLinkedFileRef(href, label)) {
+    return null;
+  }
+  // Telegram rejects unsupported anchor href schemes in HTML parse mode.
+  if (!isTelegramSafeLinkHref(href)) {
     return null;
   }
   const safeHref = escapeHtmlAttr(href);

@@ -307,6 +307,70 @@ describe("processGatewayAllowlist", () => {
     );
   });
 
+  it("carries the granted exec approval into Action Sink execution", async () => {
+    resolveApprovalDecisionOrUndefinedMock.mockResolvedValue("allow-once");
+    createExecApprovalDecisionStateMock.mockReturnValue({
+      baseDecision: { timedOut: false },
+      approvedByAsk: true,
+      deniedReason: null,
+    });
+    runExecProcessMock.mockResolvedValue({
+      session: { id: "sess-approved" },
+      promise: Promise.resolve({
+        aggregated: "ok",
+        timedOut: false,
+        exitCode: 0,
+      }),
+    });
+
+    const result = await runGatewayAllowlist({
+      command: "curl -fsS https://example.test",
+    });
+
+    expect(result.pendingResult?.details.status).toBe("approval-pending");
+    await vi.waitFor(() => {
+      expect(runExecProcessMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          command: "curl -fsS https://example.test",
+          actionSinkApproval: {
+            source: "exec-approval",
+            approvalId: "req-1",
+          },
+        }),
+      );
+    });
+  });
+
+  it("reports post-approval Action Sink denials as policy denials, not spawn failures", async () => {
+    const { ActionSinkPolicyDeniedError } = await import("../security/action-sink-runtime.js");
+    resolveApprovalDecisionOrUndefinedMock.mockResolvedValue("allow-once");
+    createExecApprovalDecisionStateMock.mockReturnValue({
+      baseDecision: { timedOut: false },
+      approvedByAsk: true,
+      deniedReason: null,
+    });
+    runExecProcessMock.mockRejectedValue(
+      new ActionSinkPolicyDeniedError({
+        decision: "requireApproval",
+        policyId: "shellRisk",
+        reasonCode: "shell_risk",
+        reason: "External network shell command requires approval",
+      }),
+    );
+
+    const result = await runGatewayAllowlist({
+      command: "curl -fsS https://example.test",
+    });
+
+    expect(result.pendingResult?.details.status).toBe("approval-pending");
+    await vi.waitFor(() => {
+      expect(sendExecApprovalFollowupResultMock).toHaveBeenCalledWith(
+        null,
+        "Exec denied (gateway id=req-1, policy-approval-required:shell_risk): curl -fsS https://example.test\n\nPolicy reason: External network shell command requires approval",
+      );
+    });
+  });
+
   it("denies timed-out inline-eval requests instead of auto-running them", async () => {
     const result = await runTimedOutStrictInlineEval({
       security: "full",

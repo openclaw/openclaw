@@ -65,6 +65,9 @@ async function prewarmConfiguredPrimaryModel(params: {
   cfg: OpenClawConfig;
   log: { warn: (msg: string) => void };
 }): Promise<void> {
+  if (isTruthyEnvValue(process.env.OPENCLAW_SKIP_STARTUP_MODEL_PREWARM)) {
+    return;
+  }
   const { resolveAgentModelPrimaryValue } = await import("../config/model-input.js");
   const explicitPrimary = resolveAgentModelPrimaryValue(params.cfg.agents?.defaults?.model)?.trim();
   if (!explicitPrimary) {

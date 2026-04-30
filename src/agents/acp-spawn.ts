@@ -6,6 +6,7 @@ import {
   type AcpSpawnRuntimeCloseHandle,
 } from "../acp/control-plane/spawn.js";
 import { isAcpEnabledByPolicy, resolveAcpAgentPolicyError } from "../acp/policy.js";
+import { getAcpRuntimeBackend } from "../acp/runtime/registry.js";
 import {
   resolveAcpSessionCwd,
   resolveAcpThreadSessionDetailLines,
@@ -84,6 +85,12 @@ import { countActiveRunsForSession, getSubagentRunByChildSessionKey } from "./su
 import { resolveInternalSessionKey, resolveMainSessionAlias } from "./tools/sessions-helpers.js";
 
 const log = createSubsystemLogger("agents/acp-spawn");
+const DEFAULT_ACP_SPAWN_BACKEND_READY_TIMEOUT_MS = 30_000;
+const DEFAULT_ACP_SPAWN_BACKEND_RETRY_DELAY_MS = 500;
+const ACP_BACKEND_READINESS_ERROR_CODES = new Set([
+  "ACP_BACKEND_MISSING",
+  "ACP_BACKEND_UNAVAILABLE",
+]);
 
 export const ACP_SPAWN_MODES = ["run", "session"] as const;
 export type SpawnAcpMode = (typeof ACP_SPAWN_MODES)[number];
@@ -208,6 +215,10 @@ type AcpSpawnInitializedRuntime = {
   sessionStore: Record<string, SessionEntry>;
   storePath: string;
 };
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
 
 type AcpSpawnRequesterState = {
   parentSessionKey?: string;
@@ -425,6 +436,101 @@ function summarizeError(err: unknown): string {
     return err;
   }
   return "error";
+}
+
+function readNonNegativeIntegerMsFromEnv(name: string): number | undefined {
+  const raw = process.env[name];
+  if (raw == null || raw.trim() === "") {
+    return undefined;
+  }
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return undefined;
+  }
+  return Math.floor(parsed);
+}
+
+function readConfiguredAcpxTimeoutMs(cfg: OpenClawConfig): number | undefined {
+  const pluginConfig = cfg.plugins?.entries?.acpx?.config;
+  const timeoutSeconds = pluginConfig?.timeoutSeconds;
+  const parsed =
+    typeof timeoutSeconds === "number"
+      ? timeoutSeconds
+      : typeof timeoutSeconds === "string"
+        ? Number(timeoutSeconds)
+        : undefined;
+  if (parsed == null || !Number.isFinite(parsed) || parsed < 0) {
+    return undefined;
+  }
+  return Math.floor(parsed * 1000);
+}
+
+function resolveConfiguredAcpxAgentModel(params: {
+  cfg: OpenClawConfig;
+  targetAgentId: string;
+}): string | undefined {
+  if (normalizeOptionalLowercaseString(params.cfg.acp?.backend) !== "acpx") {
+    return undefined;
+  }
+  const pluginConfig = params.cfg.plugins?.entries?.acpx?.config;
+  const agentModels = pluginConfig?.agentModels;
+  if (!isRecord(agentModels)) {
+    return undefined;
+  }
+  const model = agentModels[normalizeAgentId(params.targetAgentId)];
+  return normalizeOptionalString(typeof model === "string" ? model : undefined);
+}
+
+function resolveAcpSpawnRuntimeModel(params: {
+  cfg: OpenClawConfig;
+  targetAgentId: string;
+  requestedModel?: string;
+}): string | undefined {
+  return (
+    normalizeOptionalString(params.requestedModel) ??
+    resolveConfiguredAcpxAgentModel({
+      cfg: params.cfg,
+      targetAgentId: params.targetAgentId,
+    })
+  );
+}
+
+function resolveAcpSpawnBackendReadyWait(cfg: OpenClawConfig): {
+  timeoutMs: number;
+  retryDelayMs: number;
+} {
+  return {
+    timeoutMs:
+      readNonNegativeIntegerMsFromEnv("OPENCLAW_ACP_SPAWN_BACKEND_READY_TIMEOUT_MS") ??
+      readConfiguredAcpxTimeoutMs(cfg) ??
+      DEFAULT_ACP_SPAWN_BACKEND_READY_TIMEOUT_MS,
+    retryDelayMs:
+      readNonNegativeIntegerMsFromEnv("OPENCLAW_ACP_SPAWN_BACKEND_RETRY_DELAY_MS") ??
+      DEFAULT_ACP_SPAWN_BACKEND_RETRY_DELAY_MS,
+  };
+}
+
+function isAcpBackendReadinessError(err: unknown): boolean {
+  const code =
+    typeof err === "object" && err != null && "code" in err
+      ? (err as { code?: unknown }).code
+      : undefined;
+  return typeof code === "string" && ACP_BACKEND_READINESS_ERROR_CODES.has(code);
+}
+
+async function delay(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function probeConfiguredAcpRuntimeBackend(cfg: OpenClawConfig): Promise<void> {
+  const backend = getAcpRuntimeBackend(cfg.acp?.backend);
+  const runtime = backend?.runtime as
+    | { probeAvailability?: () => Promise<void> | void }
+    | undefined;
+  if (!runtime || typeof runtime.probeAvailability !== "function") {
+    return;
+  }
+  await runtime.probeAvailability();
 }
 
 function createAcpSpawnFailure(params: {
@@ -868,6 +974,53 @@ async function initializeAcpSpawnRuntime(params: {
   };
 }
 
+async function initializeAcpSpawnRuntimeWhenBackendReady(
+  params: Parameters<typeof initializeAcpSpawnRuntime>[0],
+): Promise<AcpSpawnInitializedRuntime> {
+  const { timeoutMs, retryDelayMs } = resolveAcpSpawnBackendReadyWait(params.cfg);
+  const startedAt = Date.now();
+  let attempts = 0;
+
+  for (;;) {
+    attempts += 1;
+    try {
+      const initialized = await initializeAcpSpawnRuntime(params);
+      if (attempts > 1) {
+        log.info(
+          `ACP runtime backend became ready for ${params.sessionKey} after ${attempts} attempts.`,
+        );
+      }
+      return initialized;
+    } catch (err) {
+      if (!isAcpBackendReadinessError(err) || timeoutMs <= 0) {
+        throw err;
+      }
+      const elapsedMs = Date.now() - startedAt;
+      if (elapsedMs >= timeoutMs) {
+        throw new Error(
+          `ACP runtime backend did not become ready within ${timeoutMs}ms: ${summarizeError(err)}`,
+        );
+      }
+      try {
+        await probeConfiguredAcpRuntimeBackend(params.cfg);
+      } catch (probeError) {
+        log.warn(
+          `ACP runtime backend readiness probe failed for ${params.sessionKey}: ${summarizeError(
+            probeError,
+          )}`,
+        );
+      }
+      const nextDelayMs = Math.max(1, Math.min(retryDelayMs, timeoutMs - elapsedMs));
+      log.warn(
+        `ACP runtime backend is not ready for ${params.sessionKey}; retrying in ${nextDelayMs}ms: ${summarizeError(
+          err,
+        )}`,
+      );
+      await delay(nextDelayMs);
+    }
+  }
+}
+
 async function bindPreparedAcpThread(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
@@ -1182,13 +1335,17 @@ export async function spawnAcpDirect(
       timeoutMs: 10_000,
     });
     sessionCreated = true;
-    const initializedSession = await initializeAcpSpawnRuntime({
+    const initializedSession = await initializeAcpSpawnRuntimeWhenBackendReady({
       cfg,
       sessionKey,
       targetAgentId,
       runtimeMode,
       resumeSessionId: params.resumeSessionId,
-      model: params.model,
+      model: resolveAcpSpawnRuntimeModel({
+        cfg,
+        targetAgentId,
+        requestedModel: params.model,
+      }),
       cwd: runtimeCwd,
     });
     initializedRuntime = initializedSession.runtimeCloseHandle;

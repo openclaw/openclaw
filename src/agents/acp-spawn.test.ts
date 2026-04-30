@@ -51,6 +51,7 @@ const hoisted = vi.hoisted(() => {
   const closeSessionMock = vi.fn();
   const initializeSessionMock = vi.fn();
   const getAcpSessionManagerMock = vi.fn();
+  const getAcpRuntimeBackendMock = vi.fn();
   const startAcpSpawnParentStreamRelayMock = vi.fn();
   const resolveAcpSpawnStreamLogPathMock = vi.fn();
   const loadSessionStoreMock = vi.fn();
@@ -80,6 +81,7 @@ const hoisted = vi.hoisted(() => {
     closeSessionMock,
     initializeSessionMock,
     getAcpSessionManagerMock,
+    getAcpRuntimeBackendMock,
     startAcpSpawnParentStreamRelayMock,
     resolveAcpSpawnStreamLogPathMock,
     loadSessionStoreMock,
@@ -100,6 +102,10 @@ const hoisted = vi.hoisted(() => {
 
 vi.mock("../acp/control-plane/manager.js", () => ({
   getAcpSessionManager: hoisted.getAcpSessionManagerMock,
+}));
+
+vi.mock("../acp/runtime/registry.js", () => ({
+  getAcpRuntimeBackend: hoisted.getAcpRuntimeBackendMock,
 }));
 
 vi.mock("../acp/control-plane/spawn.js", () => ({
@@ -540,6 +546,7 @@ describe("spawnAcpDirect", () => {
       runtimeClosed: true,
       metaCleared: false,
     });
+    hoisted.getAcpRuntimeBackendMock.mockReset().mockReturnValue(null);
     hoisted.getAcpSessionManagerMock.mockReset().mockReturnValue({
       initializeSession: async (params: AcpInitializeSessionInput) =>
         await hoisted.initializeSessionMock(params),
@@ -655,6 +662,7 @@ describe("spawnAcpDirect", () => {
   });
 
   afterEach(() => {
+    vi.unstubAllEnvs();
     sessionBindingServiceTesting.resetSessionBindingAdaptersForTests();
   });
 
@@ -716,6 +724,39 @@ describe("spawnAcpDirect", () => {
     expect(transcriptCalls[1]?.threadId).toBe("child-thread");
   });
 
+  it("waits for ACP backend readiness when initialization races gateway startup", async () => {
+    vi.stubEnv("OPENCLAW_ACP_SPAWN_BACKEND_READY_TIMEOUT_MS", "50");
+    vi.stubEnv("OPENCLAW_ACP_SPAWN_BACKEND_RETRY_DELAY_MS", "1");
+    hoisted.initializeSessionMock.mockRejectedValueOnce(
+      Object.assign(
+        new Error("ACP runtime backend is currently unavailable. Try again in a moment."),
+        {
+          code: "ACP_BACKEND_UNAVAILABLE",
+        },
+      ),
+    );
+    const probeAvailability = vi.fn(async () => {});
+    hoisted.getAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: { probeAvailability },
+      healthy: () => false,
+    });
+
+    const result = await spawnAcpDirect(
+      {
+        task: "Investigate flaky tests",
+        agentId: "codex",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+      },
+    );
+
+    expectAcceptedSpawn(result);
+    expect(probeAvailability).toHaveBeenCalledOnce();
+    expect(hoisted.initializeSessionMock).toHaveBeenCalledTimes(2);
+  });
+
   it("passes model override into ACP session initialization", async () => {
     const result = await spawnAcpDirect(
       {
@@ -735,6 +776,45 @@ describe("spawnAcpDirect", () => {
         agent: "codex",
         runtimeOptions: {
           model: "openai-codex/gpt-5.4",
+        },
+      }),
+    );
+  });
+
+  it("uses acpx configured agent model when the spawn request does not override model", async () => {
+    replaceSpawnConfig({
+      ...hoisted.state.cfg,
+      plugins: {
+        entries: {
+          acpx: {
+            enabled: true,
+            config: {
+              agentModels: {
+                codex: "gpt-5.4",
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const result = await spawnAcpDirect(
+      {
+        task: "Investigate flaky tests",
+        agentId: "codex",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+      },
+    );
+
+    expectAcceptedSpawn(result);
+    expect(hoisted.initializeSessionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: expect.stringMatching(/^agent:codex:acp:/),
+        agent: "codex",
+        runtimeOptions: {
+          model: "gpt-5.4",
         },
       }),
     );

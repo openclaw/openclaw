@@ -46,6 +46,8 @@ const { activateGatewayScheduledServices, startGatewayRuntimeServices } =
 describe("server-runtime-services", () => {
   beforeEach(() => {
     vi.useRealTimers();
+    delete process.env.OPENCLAW_SKIP_HEARTBEAT;
+    delete process.env.OPENCLAW_SKIP_DELIVERY_RECOVERY;
     hoisted.heartbeatRunner.stop.mockClear();
     hoisted.heartbeatRunner.updateConfig.mockClear();
     hoisted.startHeartbeatRunner.mockClear();
@@ -130,6 +132,56 @@ describe("server-runtime-services", () => {
 
     services.heartbeatRunner.stop();
     expect(hoisted.heartbeatRunner.stop).not.toHaveBeenCalled();
+  });
+
+  it("can skip heartbeat while keeping cron and delivery recovery active", async () => {
+    vi.useFakeTimers();
+    process.env.OPENCLAW_SKIP_HEARTBEAT = "1";
+    const cron = { start: vi.fn(async () => undefined) };
+
+    const services = activateGatewayScheduledServices({
+      minimalTestGateway: false,
+      cfgAtStart: {} as never,
+      deps: {} as never,
+      sessionDeliveryRecoveryMaxEnqueuedAt: 123,
+      cron,
+      logCron: { error: vi.fn() },
+      log: createLog(),
+    });
+
+    expect(hoisted.startHeartbeatRunner).not.toHaveBeenCalled();
+    expect(cron.start).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1_250);
+    await vi.dynamicImportSettled();
+    expect(hoisted.recoverPendingDeliveries).toHaveBeenCalledTimes(1);
+    expect(hoisted.recoverPendingRestartContinuationDeliveries).toHaveBeenCalledTimes(1);
+
+    services.heartbeatRunner.stop();
+    expect(hoisted.heartbeatRunner.stop).not.toHaveBeenCalled();
+  });
+
+  it("can skip delivery recovery while keeping heartbeat and cron active", async () => {
+    vi.useFakeTimers();
+    process.env.OPENCLAW_SKIP_DELIVERY_RECOVERY = "1";
+    const cron = { start: vi.fn(async () => undefined) };
+
+    const services = activateGatewayScheduledServices({
+      minimalTestGateway: false,
+      cfgAtStart: {} as never,
+      deps: {} as never,
+      sessionDeliveryRecoveryMaxEnqueuedAt: 123,
+      cron,
+      logCron: { error: vi.fn() },
+      log: createLog(),
+    });
+
+    expect(hoisted.startHeartbeatRunner).toHaveBeenCalledTimes(1);
+    expect(cron.start).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1_250);
+    await vi.dynamicImportSettled();
+    expect(hoisted.recoverPendingDeliveries).not.toHaveBeenCalled();
+    expect(hoisted.recoverPendingRestartContinuationDeliveries).not.toHaveBeenCalled();
+    expect(services.heartbeatRunner).toBe(hoisted.heartbeatRunner);
   });
 });
 

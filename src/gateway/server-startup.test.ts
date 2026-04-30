@@ -75,6 +75,7 @@ describe("gateway startup primary model warmup", () => {
   });
 
   beforeEach(() => {
+    delete process.env.OPENCLAW_SKIP_STARTUP_MODEL_PREWARM;
     ensureOpenClawModelsJsonMock.mockClear();
     resolveModelMock.mockClear();
     resolveModelAsyncMock.mockClear();
@@ -114,6 +115,27 @@ describe("gateway startup primary model warmup", () => {
 
     expect(ensureOpenClawModelsJsonMock).not.toHaveBeenCalled();
     expect(resolveModelMock).not.toHaveBeenCalled();
+  });
+
+  it("skips warmup when startup model prewarm is disabled", async () => {
+    process.env.OPENCLAW_SKIP_STARTUP_MODEL_PREWARM = "1";
+
+    await prewarmConfiguredPrimaryModel({
+      cfg: {
+        agents: {
+          defaults: {
+            model: {
+              primary: "openai-codex/gpt-5.4",
+            },
+          },
+        },
+      } as OpenClawConfig,
+      log: { warn: vi.fn() },
+    });
+
+    expect(ensureOpenClawModelsJsonMock).not.toHaveBeenCalled();
+    expect(resolveModelMock).not.toHaveBeenCalled();
+    expect(resolveModelAsyncMock).not.toHaveBeenCalled();
   });
 
   it("skips static warmup for configured CLI backends", async () => {

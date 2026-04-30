@@ -1,5 +1,5 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { isVitestRuntimeEnv } from "../infra/env.js";
+import { isTruthyEnvValue, isVitestRuntimeEnv } from "../infra/env.js";
 import { startHeartbeatRunner, type HeartbeatRunner } from "../infra/heartbeat-runner.js";
 import type { ChannelHealthMonitor } from "./channel-health-monitor.js";
 import { startChannelHealthMonitor } from "./channel-health-monitor.js";
@@ -125,19 +125,23 @@ export function activateGatewayScheduledServices(params: {
   if (params.minimalTestGateway) {
     return { heartbeatRunner: createNoopHeartbeatRunner() };
   }
-  const heartbeatRunner = startHeartbeatRunner({ cfg: params.cfgAtStart });
+  const heartbeatRunner = isTruthyEnvValue(process.env.OPENCLAW_SKIP_HEARTBEAT)
+    ? createNoopHeartbeatRunner()
+    : startHeartbeatRunner({ cfg: params.cfgAtStart });
   startGatewayCronWithLogging({
     cron: params.cron,
     logCron: params.logCron,
   });
-  recoverPendingOutboundDeliveries({
-    cfg: params.cfgAtStart,
-    log: params.log,
-  });
-  recoverPendingSessionDeliveries({
-    deps: params.deps,
-    log: params.log,
-    maxEnqueuedAt: params.sessionDeliveryRecoveryMaxEnqueuedAt,
-  });
+  if (!isTruthyEnvValue(process.env.OPENCLAW_SKIP_DELIVERY_RECOVERY)) {
+    recoverPendingOutboundDeliveries({
+      cfg: params.cfgAtStart,
+      log: params.log,
+    });
+    recoverPendingSessionDeliveries({
+      deps: params.deps,
+      log: params.log,
+      maxEnqueuedAt: params.sessionDeliveryRecoveryMaxEnqueuedAt,
+    });
+  }
   return { heartbeatRunner };
 }

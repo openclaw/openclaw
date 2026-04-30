@@ -75,7 +75,22 @@ describe("formatExecDeniedUserMessage", () => {
       "Exec denied (gateway id=req-1, approval-request-failed): uname -a",
       "Command did not run: approval request failed.",
     ],
-    ["Exec denied (gateway id=req-1, spawn-failed): uname -a", "Command did not run."],
+    [
+      "Exec denied (gateway id=req-1, spawn-failed): uname -a",
+      "Command did not run: spawn failed before the shell started.",
+    ],
+    [
+      "Exec denied (gateway id=req-1, invoke-failed): uname -a",
+      "Command did not run: remote exec invocation failed before the shell started.",
+    ],
+    [
+      "Exec denied (gateway id=req-1, policy-approval-required:shell_risk): curl https://example.test",
+      "Command did not run: Action Sink policy still requires approval before execution.",
+    ],
+    [
+      "Exec denied (gateway id=req-1, policy-denied:protected_worktree): git reset --hard",
+      "Command did not run: blocked by Action Sink policy.",
+    ],
   ] as const)("maps denied metadata to safe copy", (input, expected) => {
     expect(formatExecDeniedUserMessage(input)).toBe(expected);
   });

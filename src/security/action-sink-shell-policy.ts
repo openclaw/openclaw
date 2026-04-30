@@ -41,12 +41,39 @@ const SAFE_COMMANDS = new Set([
 const MUTATOR_RE =
   /(^|\s)(rm|mv|cp|chmod|chown|mkdir|rmdir|touch|tee|install|rsync|sed\s+-i|perl\s+-pi|python3?|node|ruby|perl|npm|pnpm|yarn|bun|make|git\s+(add|commit|push|reset|checkout|switch|merge|rebase|tag|clean|apply|am)|trash)(\s|$)/;
 const NETWORK_RE =
-  /(^|\s)(curl|wget|gh|linear|aws|gcloud|az|kubectl|vercel|netlify|flyctl|railway|docker|ssh|scp|rsync|zoho)(\s|$)/;
+  /(^|\s)(gh|linear|aws|gcloud|az|kubectl|vercel|netlify|flyctl|railway|docker|ssh|scp|rsync|zoho)(\s|$)/;
+const HTTP_CLIENT_RE = /(^|\s)(curl|wget)(\s|$)/;
+const URL_RE = /https?:\/\/[^\s'"`<>|)]+/gi;
 const INLINE_RE = /(^|\s)(node|python3?|ruby|perl)\s+(-e|--eval)\b/;
 const SHELL_WRAPPER_RE = /(^|\s)(sh|bash|zsh|fish|cmd|powershell|pwsh)\s+(-c|\/c)\b/;
 
 function add(tags: Set<ShellRiskTag>, tag: ShellRiskTag): void {
   tags.add(tag);
+}
+
+function isLoopbackHostname(hostname: string): boolean {
+  const normalized = hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  return (
+    normalized === "localhost" || normalized === "::1" || /^127(?:\.\d{1,3}){0,3}$/.test(normalized)
+  );
+}
+
+function stripUrlTrailingPunctuation(value: string): string {
+  return value.replace(/[.,;:]+$/g, "");
+}
+
+function commandOnlyUsesLoopbackHttp(command: string): boolean {
+  const urls = command.match(URL_RE) ?? [];
+  if (urls.length === 0) {
+    return false;
+  }
+  return urls.every((rawUrl) => {
+    try {
+      return isLoopbackHostname(new URL(stripUrlTrailingPunctuation(rawUrl)).hostname);
+    } catch {
+      return false;
+    }
+  });
 }
 
 export function classifyShellCommand(input: {
@@ -88,6 +115,9 @@ export function classifyShellCommand(input: {
     add(tags, "shell_wrapper");
   }
   if (NETWORK_RE.test(command)) {
+    add(tags, "network_write");
+  }
+  if (HTTP_CLIENT_RE.test(command) && !commandOnlyUsesLoopbackHttp(command)) {
     add(tags, "network_write");
   }
   if (

@@ -88,8 +88,17 @@ export function formatExecDeniedUserMessage(resultText: string): string | null {
   if (metadata.includes("approval-request-failed")) {
     return "Command did not run: approval request failed.";
   }
-  if (metadata.includes("spawn-failed") || metadata.includes("invoke-failed")) {
-    return "Command did not run.";
+  if (metadata.includes("policy-approval-required")) {
+    return "Command did not run: Action Sink policy still requires approval before execution.";
+  }
+  if (metadata.includes("policy-denied")) {
+    return "Command did not run: blocked by Action Sink policy.";
+  }
+  if (metadata.includes("spawn-failed")) {
+    return "Command did not run: spawn failed before the shell started.";
+  }
+  if (metadata.includes("invoke-failed")) {
+    return "Command did not run: remote exec invocation failed before the shell started.";
   }
   return "Command did not run.";
 }

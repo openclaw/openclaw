@@ -1,6 +1,6 @@
 import path from "node:path";
 import { auditPolicyDecision } from "./action-sink-audit.js";
-import type { ActionSinkPolicyConfig } from "./action-sink-policy-config.js";
+import type { ActionSinkPolicyConfig, ExternalAllowlistRule } from "./action-sink-policy-config.js";
 import {
   createMissionControlActionSinkPolicyFixture,
   parseActionSinkPolicyConfig,
@@ -42,6 +42,16 @@ function createShellRiskPolicyModule(): PolicyModule {
       if (!shell.riskTags.includes("network_write")) {
         return undefined;
       }
+      if (
+        typeof request.context?.actionSinkApproval === "object" &&
+        request.context.actionSinkApproval !== null &&
+        (request.context.actionSinkApproval as Record<string, unknown>).source ===
+          "exec-approval" &&
+        typeof (request.context.actionSinkApproval as Record<string, unknown>).approvalId ===
+          "string"
+      ) {
+        return undefined;
+      }
       return policyResult({
         policyId: "shellRisk",
         decision: "requireApproval",
@@ -73,6 +83,30 @@ function expectedEvidenceFromRequest(request: PolicyRequest): {
   };
 }
 
+function parseExternalAllowlistEnv(value = process.env.OPENCLAW_ACTION_SINK_EXTERNAL_ALLOWLIST) {
+  if (!value?.trim()) {
+    return [];
+  }
+  return value
+    .split(",")
+    .map((entry): ExternalAllowlistRule | null => {
+      const [targetPattern, actionTypes] = entry.split("|", 2);
+      const target = targetPattern?.trim();
+      if (!target) {
+        return null;
+      }
+      const parsedActionTypes = actionTypes
+        ?.split("+")
+        .map((item) => item.trim())
+        .filter(Boolean) as ExternalAllowlistRule["actionTypes"];
+      return {
+        targetPattern: target,
+        ...(parsedActionTypes?.length ? { actionTypes: parsedActionTypes } : {}),
+      };
+    })
+    .filter((rule): rule is ExternalAllowlistRule => rule != null);
+}
+
 export function createDefaultActionSinkPolicyConfig(): ActionSinkPolicyConfig {
   const fixture = createMissionControlActionSinkPolicyFixture();
   return parseActionSinkPolicyConfig({
@@ -85,6 +119,7 @@ export function createDefaultActionSinkPolicyConfig(): ActionSinkPolicyConfig {
       evidenceGate: "enforce",
       shellRisk: "enforce",
     },
+    externalAllowlist: [...fixture.externalAllowlist, ...parseExternalAllowlistEnv()],
   });
 }
 
@@ -161,12 +196,32 @@ export async function evaluateConfiguredActionSinkPolicy(
   return result;
 }
 
+export class ActionSinkPolicyDeniedError extends Error {
+  readonly name = "ActionSinkPolicyDeniedError";
+  readonly decision: PolicyResult["decision"];
+  readonly policyId: string;
+  readonly reasonCode: PolicyResult["reasonCode"];
+
+  constructor(result: PolicyResult) {
+    super(result.reason);
+    this.decision = result.decision;
+    this.policyId = result.policyId;
+    this.reasonCode = result.reasonCode;
+  }
+}
+
+export function isActionSinkPolicyDeniedError(
+  error: unknown,
+): error is ActionSinkPolicyDeniedError {
+  return error instanceof ActionSinkPolicyDeniedError;
+}
+
 function throwIfPolicyDenied(result: PolicyResult): void {
   if (result.decision === "block") {
-    throw new Error(result.reason);
+    throw new ActionSinkPolicyDeniedError(result);
   }
   if (result.decision === "requireApproval") {
-    throw new Error(result.reason);
+    throw new ActionSinkPolicyDeniedError(result);
   }
 }
 

@@ -684,6 +684,50 @@ describe("createTelegramBot", () => {
       expect(payload.Body).toContain("hello world");
     });
   });
+  it("answers private inbound messages that contain only a URL", async () => {
+    createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+
+    await handler({
+      message: {
+        chat: { id: 1234, type: "private" },
+        text: "https://example.com/a?b=1",
+        entities: [{ type: "url", offset: 0, length: 25 }],
+        date: 1736380800,
+        message_id: 11,
+        from: { id: 9, first_name: "Ada", username: "ada_bot" },
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    const payload = replySpy.mock.calls[0][0];
+    expect(payload.Body).toContain("https://example.com/a?b=1");
+    expect(payload.BodyForAgent).toBe("https://example.com/a?b=1");
+  });
+  it("answers private inbound messages with Telegram text_link entities", async () => {
+    createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+
+    await handler({
+      message: {
+        chat: { id: 1234, type: "private" },
+        text: "check site",
+        entities: [{ type: "text_link", offset: 6, length: 4, url: "https://example.com/docs" }],
+        date: 1736380800,
+        message_id: 12,
+        from: { id: 9, first_name: "Ada", username: "ada_bot" },
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    const payload = replySpy.mock.calls[0][0];
+    expect(payload.Body).toContain("check [site](https://example.com/docs)");
+    expect(payload.BodyForAgent).toBe("check [site](https://example.com/docs)");
+  });
   it("handles pairing DM flows for new and already-pending requests", async () => {
     const cases = [
       {

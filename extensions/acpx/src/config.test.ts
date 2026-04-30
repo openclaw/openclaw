@@ -16,6 +16,7 @@ describe("embedded acpx plugin config", () => {
     expect(resolved.permissionMode).toBe("approve-reads");
     expect(resolved.nonInteractivePermissions).toBe("fail");
     expect(resolved.timeoutSeconds).toBe(120);
+    expect(resolved.agentModels).toEqual({});
     expect(resolved.agents).toEqual({});
   });
 
@@ -55,6 +56,21 @@ describe("embedded acpx plugin config", () => {
     expect(resolved.agents).toEqual({
       claude: "claude --acp",
       codex: "codex custom-acp",
+    });
+  });
+
+  it("accepts per-agent runtime model overrides", () => {
+    const resolved = resolveAcpxPluginConfig({
+      rawConfig: {
+        agentModels: {
+          Codex: " gpt-5.4 ",
+        },
+      },
+      workspaceDir: "/tmp/openclaw-acpx",
+    });
+
+    expect(resolved.agentModels).toEqual({
+      codex: "gpt-5.4",
     });
   });
 
@@ -135,6 +151,7 @@ describe("embedded acpx plugin config", () => {
         timeoutSeconds: expect.objectContaining({
           default: 120,
         }),
+        agentModels: expect.any(Object),
         agents: expect.any(Object),
         mcpServers: expect.any(Object),
         openClawToolsMcpBridge: expect.any(Object),

@@ -766,6 +766,10 @@ describe("ensureBundledPluginRuntimeDeps", () => {
     ).toBe(false);
   });
 
+  it("removes runtime-deps install locks when owner metadata is unreadable", () => {
+    expect(bundledRuntimeDepsTesting.shouldRemoveRuntimeDepsLock({}, Date.now())).toBe(true);
+  });
+
   it("removes stale runtime-deps install locks before repairing deps", () => {
     const packageRoot = makeTempDir();
     const pluginRoot = path.join(packageRoot, "dist", "extensions", "openai");
