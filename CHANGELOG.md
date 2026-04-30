@@ -36,7 +36,6 @@ Docs: https://docs.openclaw.ai
 - Web search: describe `web_search` as using the configured provider instead of hard-coding Brave when DuckDuckGo or another provider is active. Fixes #75088. Thanks @sun-rongyang.
 - Infra/tmp: tolerate concurrent temp-dir permission repairs by rechecking directories that another process already tightened, so parallel ACP subprocess startup no longer throws `Unsafe fallback OpenClaw temp dir`. Fixes #66867. Thanks @Kane808-AI and @jarvisz8.
 - Agents/compaction: add an opt-in `agents.defaults.compaction.midTurnPrecheck` mid-turn precheck that detects tool-loop context pressure and triggers compaction before the next tool call instead of waiting for end-of-turn. (#73499) Thanks @marchpure and @haoxingjun.
-- Gateway/approvals: let loopback token/password-backed native approval clients resolve exec approvals without attaching stale paired Gateway identities, while remote and unauthenticated approval clients keep normal device identity behavior. (#74472)
 
 ## 2026.4.29
 
