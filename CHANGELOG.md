@@ -31,6 +31,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Bonjour/Gateway: cap flapping advertiser restarts in a sliding window, so mDNS probing/name-conflict loops disable discovery instead of churning indefinitely on constrained hosts. Refs #74209 and #74242. Thanks @ndj888 and @Sanjays2402.
 - Plugins/runtime-deps: verify staged package entry files before reusing mirrored runtime roots, so browser-control repairs incomplete `ajv`/MCP SDK installs after update instead of failing after restart on a missing `ajv/dist/ajv.js`. Refs #74630. Thanks @spickeringlr.
 - Channels/Feishu: retry file-typed iOS video resource downloads as `media` after a Feishu/Lark HTTP 502 and preserve the original 502 when the fallback also fails. Fixes #49855; carries forward #50164 and #73986. Thanks @alex-xuweilong.
 - Providers/Amazon Bedrock: expose the full Claude Opus 4.7 thinking profile (`xhigh`, `adaptive`, and `max`) for Bedrock model refs, while keeping Opus/Sonnet 4.6 on adaptive-by-default, so `/think` menus and validation match the Anthropic transport behavior. Fixes #74701. Thanks @prasad-yashdeep, @sparkleHazard, @Sanjays2402, and @hclsys.
