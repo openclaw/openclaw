@@ -25,11 +25,10 @@ import {
   toInternalMessageReceivedContext,
   triggerInternalHook,
 } from "openclaw/plugin-sdk/hook-runtime";
-import { runPreparedInboundReplyTurn } from "openclaw/plugin-sdk/inbound-reply-dispatch";
+import { runInboundReplyTurn } from "openclaw/plugin-sdk/inbound-reply-dispatch";
 import { kindFromMime } from "openclaw/plugin-sdk/media-runtime";
 import {
   buildPendingHistoryContextFromMap,
-  clearHistoryEntriesIfEnabled,
   recordPendingHistoryEntryIfEnabled,
 } from "openclaw/plugin-sdk/reply-history";
 import { dispatchInboundMessage } from "openclaw/plugin-sdk/reply-runtime";
@@ -289,86 +288,87 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       },
     });
 
-    const { dispatchResult } = await runPreparedInboundReplyTurn({
+    await runInboundReplyTurn({
       channel: "signal",
       accountId: route.accountId,
-      routeSessionKey: route.sessionKey,
-      storePath,
-      ctxPayload,
-      recordInboundSession,
-      record: {
-        updateLastRoute: !entry.isGroup
-          ? {
-              sessionKey: route.mainSessionKey,
-              channel: "signal",
-              to: entry.senderRecipient,
-              accountId: route.accountId,
-              mainDmOwnerPin: (() => {
-                const pinnedOwner = resolvePinnedMainDmOwnerFromAllowlist({
-                  dmScope: deps.cfg.session?.dmScope,
-                  allowFrom: deps.allowFrom,
-                  normalizeEntry: normalizeSignalAllowRecipient,
-                });
-                if (!pinnedOwner) {
-                  return undefined;
-                }
-                return {
-                  ownerRecipient: pinnedOwner,
-                  senderRecipient: entry.senderRecipient,
-                  onSkip: ({ ownerRecipient, senderRecipient }) => {
-                    logVerbose(
-                      `signal: skip main-session last route for ${senderRecipient} (pinned owner ${ownerRecipient})`,
-                    );
-                  },
-                };
-              })(),
-            }
-          : undefined,
-        onRecordError: (err) => {
-          logVerbose(`signal: failed updating session meta: ${String(err)}`);
-        },
-      },
-      onPreDispatchFailure: () =>
-        settleReplyDispatcher({
-          dispatcher,
-          onSettled: () => markDispatchIdle(),
+      raw: entry,
+      adapter: {
+        ingest: () => ({
+          id: entry.messageId ?? `${entry.timestamp ?? Date.now()}`,
+          timestamp: entry.timestamp,
+          rawText: entry.bodyText,
+          raw: entry,
         }),
-      runDispatch: async () => {
-        try {
-          return await dispatchInboundMessage({
-            ctx: ctxPayload,
-            cfg: deps.cfg,
-            dispatcher,
-            replyOptions: {
-              ...replyOptions,
-              disableBlockStreaming:
-                typeof deps.blockStreaming === "boolean" ? !deps.blockStreaming : undefined,
-              onModelSelected,
+        resolveTurn: () => ({
+          channel: "signal",
+          accountId: route.accountId,
+          routeSessionKey: route.sessionKey,
+          storePath,
+          ctxPayload,
+          recordInboundSession,
+          record: {
+            updateLastRoute: !entry.isGroup
+              ? {
+                  sessionKey: route.mainSessionKey,
+                  channel: "signal",
+                  to: entry.senderRecipient,
+                  accountId: route.accountId,
+                  mainDmOwnerPin: (() => {
+                    const pinnedOwner = resolvePinnedMainDmOwnerFromAllowlist({
+                      dmScope: deps.cfg.session?.dmScope,
+                      allowFrom: deps.allowFrom,
+                      normalizeEntry: normalizeSignalAllowRecipient,
+                    });
+                    if (!pinnedOwner) {
+                      return undefined;
+                    }
+                    return {
+                      ownerRecipient: pinnedOwner,
+                      senderRecipient: entry.senderRecipient,
+                      onSkip: ({ ownerRecipient, senderRecipient }) => {
+                        logVerbose(
+                          `signal: skip main-session last route for ${senderRecipient} (pinned owner ${ownerRecipient})`,
+                        );
+                      },
+                    };
+                  })(),
+                }
+              : undefined,
+            onRecordError: (err) => {
+              logVerbose(`signal: failed updating session meta: ${String(err)}`);
             },
-          });
-        } finally {
-          markDispatchIdle();
-        }
+          },
+          history: {
+            isGroup: entry.isGroup,
+            historyKey,
+            historyMap: deps.groupHistories,
+            limit: deps.historyLimit,
+          },
+          onPreDispatchFailure: () =>
+            settleReplyDispatcher({
+              dispatcher,
+              onSettled: () => markDispatchIdle(),
+            }),
+          runDispatch: async () => {
+            try {
+              return await dispatchInboundMessage({
+                ctx: ctxPayload,
+                cfg: deps.cfg,
+                dispatcher,
+                replyOptions: {
+                  ...replyOptions,
+                  disableBlockStreaming:
+                    typeof deps.blockStreaming === "boolean" ? !deps.blockStreaming : undefined,
+                  onModelSelected,
+                },
+              });
+            } finally {
+              markDispatchIdle();
+            }
+          },
+        }),
       },
     });
-    const queuedFinal = dispatchResult?.queuedFinal ?? false;
-    if (!queuedFinal) {
-      if (entry.isGroup && historyKey) {
-        clearHistoryEntriesIfEnabled({
-          historyMap: deps.groupHistories,
-          historyKey,
-          limit: deps.historyLimit,
-        });
-      }
-      return;
-    }
-    if (entry.isGroup && historyKey) {
-      clearHistoryEntriesIfEnabled({
-        historyMap: deps.groupHistories,
-        historyKey,
-        limit: deps.historyLimit,
-      });
-    }
   }
 
   const { debouncer: inboundDebouncer } = createChannelInboundDebouncer<SignalInboundEntry>({

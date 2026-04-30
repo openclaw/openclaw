@@ -10,6 +10,7 @@ import {
   getActiveBundledRuntimeDepsInstallCount,
   waitForBundledRuntimeDepsInstallIdle,
 } from "./bundled-runtime-deps-activity.js";
+import { assertBundledRuntimeDepsInstalled } from "./bundled-runtime-deps-materialization.js";
 import {
   __testing as bundledRuntimeDepsTesting,
   createBundledRuntimeDependencyAliasMap,
@@ -886,6 +887,33 @@ describe("installBundledRuntimeDeps", () => {
     );
   });
 
+  it("accepts extensionless package main entries resolved by Node", () => {
+    const installRoot = makeTempDir();
+    spawnSyncMock.mockImplementation((_command, _args, options) => {
+      const packageDir = path.join(String(options?.cwd ?? ""), "node_modules", "jszip");
+      fs.mkdirSync(path.join(packageDir, "lib"), { recursive: true });
+      fs.writeFileSync(
+        path.join(packageDir, "package.json"),
+        JSON.stringify({ name: "jszip", version: "3.10.1", main: "./lib/index" }),
+      );
+      fs.writeFileSync(path.join(packageDir, "lib", "index.js"), "export default {};\n");
+      return {
+        pid: 123,
+        output: [],
+        stdout: "",
+        stderr: "",
+        signal: null,
+        status: 0,
+      };
+    });
+
+    installBundledRuntimeDeps({
+      installRoot,
+      missingSpecs: ["jszip@^3.10.1"],
+      env: {},
+    });
+  });
+
   it("cleans an owned isolated execution root after copying node_modules back", () => {
     const installRoot = makeTempDir();
     const installExecutionRoot = path.join(installRoot, ".openclaw-install-stage");
@@ -1037,6 +1065,27 @@ describe("scanBundledPluginRuntimeDeps config policy", () => {
       deps: { "telegram-runtime": "2.0.0" },
       channels: ["telegram"],
     });
+    writeBundledPluginPackage({
+      packageRoot,
+      pluginId: "amazon-bedrock",
+      deps: { "bedrock-runtime": "3.0.0" },
+      enabledByDefault: true,
+      providers: ["amazon-bedrock"],
+    });
+    writeBundledPluginPackage({
+      packageRoot,
+      pluginId: "anthropic",
+      deps: { "anthropic-runtime": "4.0.0" },
+      modelSupport: { modelPrefixes: ["claude-"] },
+      providers: ["anthropic"],
+    });
+    writeBundledPluginPackage({
+      packageRoot,
+      pluginId: "openai",
+      deps: { "openai-runtime": "5.0.0" },
+      modelSupport: { modelPrefixes: ["gpt-", "o1", "o3", "o4"] },
+      providers: ["openai", "openai-codex"],
+    });
     return packageRoot;
   }
 
@@ -1134,6 +1183,55 @@ describe("scanBundledPluginRuntimeDeps config policy", () => {
       includeConfiguredChannels: true,
       expectedDeps: ["alpha-runtime@1.0.0"],
     },
+    {
+      name: "includes configured model provider deps",
+      config: { agents: { defaults: { model: "amazon-bedrock/claude-opus-4-7" } } },
+      includeConfiguredChannels: false,
+      expectedDeps: ["alpha-runtime@1.0.0", "bedrock-runtime@3.0.0"],
+    },
+    {
+      name: "includes configured bare model owner deps from model support",
+      config: { agents: { defaults: { model: "gpt-5.5" } } },
+      includeConfiguredChannels: false,
+      expectedDeps: ["alpha-runtime@1.0.0", "openai-runtime@5.0.0"],
+    },
+    {
+      name: "includes configured bare fallback model owner deps from model support",
+      config: {
+        agents: {
+          defaults: { model: { primary: "unknown-model", fallbacks: ["claude-sonnet-4-6"] } },
+        },
+      },
+      includeConfiguredChannels: false,
+      expectedDeps: ["alpha-runtime@1.0.0", "anthropic-runtime@4.0.0"],
+    },
+    {
+      name: "includes configured model provider deps from manifest provider aliases",
+      config: { agents: { defaults: { model: "openai-codex/gpt-5.5" } } },
+      includeConfiguredChannels: false,
+      expectedDeps: ["alpha-runtime@1.0.0", "openai-runtime@5.0.0"],
+    },
+    {
+      name: "includes configured model provider deps from aliases",
+      config: { models: { providers: { "aws-bedrock": { baseUrl: "", models: [] } } } },
+      includeConfiguredChannels: false,
+      expectedDeps: ["alpha-runtime@1.0.0", "bedrock-runtime@3.0.0"],
+    },
+    {
+      name: "includes configured subagent model provider deps",
+      config: { agents: { defaults: { subagents: { model: "bedrock/claude-sonnet-4-6" } } } },
+      includeConfiguredChannels: false,
+      expectedDeps: ["alpha-runtime@1.0.0", "bedrock-runtime@3.0.0"],
+    },
+    {
+      name: "keeps configured provider deps behind restrictive allowlists",
+      config: {
+        plugins: { allow: ["alpha"] },
+        agents: { defaults: { model: "amazon-bedrock/claude-opus-4-7" } },
+      },
+      includeConfiguredChannels: false,
+      expectedDeps: ["alpha-runtime@1.0.0"],
+    },
   ];
 
   it.each(cases)("$name", ({ config, includeConfiguredChannels, expectedDeps }) => {
@@ -1228,6 +1326,20 @@ describe("scanBundledPluginRuntimeDeps config policy", () => {
     expect(result.deps.map((dep) => `${dep.name}@${dep.version}`)).toEqual(["alpha-runtime@1.0.0"]);
     expect(result.missing).toEqual([]);
     expect(result.conflicts).toEqual([]);
+  });
+
+  it("accepts staged runtime deps whose package main relies on Node extension resolution", () => {
+    const installRoot = makeTempDir();
+    const packageDir = path.join(installRoot, "node_modules", "jszip");
+    fs.mkdirSync(path.join(packageDir, "lib"), { recursive: true });
+    fs.writeFileSync(
+      path.join(packageDir, "package.json"),
+      JSON.stringify({ name: "jszip", version: "3.10.1", main: "./lib/index" }),
+      "utf8",
+    );
+    fs.writeFileSync(path.join(packageDir, "lib", "index.js"), "export default {};\n", "utf8");
+
+    expect(() => assertBundledRuntimeDepsInstalled(installRoot, ["jszip@^3.10.1"])).not.toThrow();
   });
 
   it("reports staged package-level runtime deps as missing when the version is stale", () => {
@@ -3196,6 +3308,102 @@ describe("ensureBundledPluginRuntimeDeps", () => {
       },
     ]);
     expect(installRoot).not.toBe(pluginRoot);
+  });
+
+  it("repairs package-level mirrors when an installed package entry file is missing", () => {
+    const packageRoot = makeTempDir();
+    const stageDir = makeTempDir();
+    fs.writeFileSync(
+      path.join(packageRoot, "package.json"),
+      JSON.stringify({
+        name: "openclaw",
+        version: "2026.4.27",
+        dependencies: { ajv: "8.20.0" },
+        openclaw: {
+          bundle: {
+            mirroredRootRuntimeDependencies: ["ajv"],
+          },
+        },
+      }),
+    );
+    const pluginRoot = writeBundledPluginPackage({
+      packageRoot,
+      pluginId: "browser",
+      deps: {},
+      enabledByDefault: true,
+    });
+    const env = { OPENCLAW_PLUGIN_STAGE_DIR: stageDir };
+    const installRoot = resolveBundledRuntimeDependencyInstallRoot(pluginRoot, { env });
+    writeGeneratedRuntimeDepsManifest(installRoot, ["ajv@8.20.0"]);
+    const ajvRoot = path.join(installRoot, "node_modules", "ajv");
+    fs.mkdirSync(ajvRoot, { recursive: true });
+    fs.writeFileSync(
+      path.join(ajvRoot, "package.json"),
+      JSON.stringify({ name: "ajv", version: "8.20.0", main: "dist/ajv.js" }),
+    );
+
+    const calls: BundledRuntimeDepsInstallParams[] = [];
+    const result = ensureBundledPluginRuntimeDeps({
+      env,
+      pluginId: "browser",
+      pluginRoot,
+      installDeps: (params) => {
+        calls.push(params);
+      },
+    });
+
+    expect(result.installedSpecs).toEqual(["ajv@8.20.0"]);
+    expect(calls).toEqual([
+      {
+        installRoot,
+        missingSpecs: ["ajv@8.20.0"],
+        installSpecs: ["ajv@8.20.0"],
+      },
+    ]);
+  });
+
+  it("mirrors sqlite-vec into the packaged default memory runtime deps", () => {
+    const packageRoot = makeTempDir();
+    fs.writeFileSync(
+      path.join(packageRoot, "package.json"),
+      JSON.stringify({
+        name: "openclaw",
+        version: "2026.4.27",
+        dependencies: {
+          "sqlite-vec": "0.1.9",
+        },
+        openclaw: {
+          bundle: {
+            mirroredRootRuntimeDependencies: ["sqlite-vec"],
+          },
+        },
+      }),
+    );
+    const pluginRoot = writeBundledPluginPackage({
+      packageRoot,
+      pluginId: "memory-core",
+      deps: { chokidar: "^5.0.0", typebox: "1.1.34" },
+    });
+    const calls: BundledRuntimeDepsInstallParams[] = [];
+
+    const result = ensureBundledPluginRuntimeDeps({
+      env: {},
+      config: {},
+      installDeps: (params) => {
+        calls.push(params);
+      },
+      pluginId: "memory-core",
+      pluginRoot,
+    });
+
+    expect(result).toEqual({
+      installedSpecs: ["chokidar@^5.0.0", "sqlite-vec@0.1.9", "typebox@1.1.34"],
+    });
+    expect(calls[0]?.installSpecs).toEqual([
+      "chokidar@^5.0.0",
+      "sqlite-vec@0.1.9",
+      "typebox@1.1.34",
+    ]);
   });
 
   it("repairs external staged deps even when packaged plugin-local deps are present", () => {

@@ -137,6 +137,7 @@ USER.md
 .agent/*.json
 !.agent/workflows/
 /local/
+/client_secret_*.json
 package-lock.json
 .claude/
 .agent/

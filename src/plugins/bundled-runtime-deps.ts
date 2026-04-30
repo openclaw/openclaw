@@ -49,6 +49,7 @@ import {
   createBundledRuntimeDepsPluginIdNormalizer,
   isBundledPluginConfiguredForRuntimeDeps,
   normalizePluginIdSet,
+  resolveBundledRuntimeDepsConfiguredModelOwnerPluginIds,
   type BundledPluginRuntimeDepsManifestCache,
   type RuntimeDepConflict,
 } from "./bundled-runtime-deps-selection.js";
@@ -309,6 +310,11 @@ export function ensureBundledPluginRuntimeDeps(params: {
       plugins,
       pluginId: params.pluginId,
       pluginDir: params.pluginRoot,
+      configuredModelOwnerPluginIds: resolveBundledRuntimeDepsConfiguredModelOwnerPluginIds({
+        config: params.config,
+        extensionsDir,
+        manifestCache,
+      }),
       manifestCache,
     })
   ) {

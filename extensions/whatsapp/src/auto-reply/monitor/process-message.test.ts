@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { WhatsAppSendResult } from "../../inbound/send-result.js";
 
 // Hoisted mocks used across tests so vi.mock factories can reference them.
 const { resolvePolicyMock, buildContextMock, runMessageReceivedMock, trackBackgroundTaskMock } =
@@ -8,6 +9,16 @@ const { resolvePolicyMock, buildContextMock, runMessageReceivedMock, trackBackgr
     runMessageReceivedMock: vi.fn(async () => undefined),
     trackBackgroundTaskMock: vi.fn(),
   }));
+
+function acceptedSendResult(kind: "media" | "text", id: string): WhatsAppSendResult {
+  return {
+    kind,
+    messageId: id,
+    messageIds: [id],
+    keys: [{ id }],
+    providerAccepted: true,
+  };
+}
 
 vi.mock("../../inbound-policy.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../inbound-policy.js")>();
@@ -169,8 +180,8 @@ const baseMsg = {
   chatType: "group" as const,
   body: "hi",
   sendComposing: async () => {},
-  reply: async () => {},
-  sendMedia: async () => {},
+  reply: async () => acceptedSendResult("text", "r1"),
+  sendMedia: async () => acceptedSendResult("media", "m1"),
 };
 
 const baseRoute = {

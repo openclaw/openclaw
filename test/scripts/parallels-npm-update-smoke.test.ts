@@ -13,6 +13,16 @@ describe("parallels npm update smoke", () => {
     expect(script).toContain("await this.server?.stop()");
   });
 
+  it("runs Windows updates through a detached done-file runner", () => {
+    const script = readFileSync(SCRIPT_PATH, "utf8");
+
+    expect(script).toContain("openclaw-parallels-npm-update-windows");
+    expect(script).toContain("runStreaming");
+    expect(script).toContain("__OPENCLAW_BACKGROUND_EXIT__");
+    expect(script).toContain("__OPENCLAW_BACKGROUND_DONE__");
+    expect(script).toContain("Windows update timed out");
+  });
+
   it("scrubs future plugin entries before invoking old same-guest updaters", () => {
     const script = readFileSync(UPDATE_SCRIPTS_PATH, "utf8");
 

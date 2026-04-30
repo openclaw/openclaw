@@ -371,8 +371,27 @@ console.log(resolveUbuntuVmName("Ubuntu missing"));
     expect(script).toContain("guestPowerShellBackground");
     expect(script).toContain("Join-Path $env:TEMP");
     expect(script).toContain("__OPENCLAW_BACKGROUND_DONE__");
+    expect(script).toContain("__OPENCLAW_BACKGROUND_EXIT__");
     expect(script).toContain("__OPENCLAW_LOG_OFFSET__");
+    expect(script).toContain("result.status !== 0 && result.status !== 124");
     expect(script).toContain('start "" /min powershell.exe');
+  });
+
+  it("returns timed-out host command status when check is disabled", () => {
+    const result = JSON.parse(
+      runTsEval(`
+import { run } from "./${TS_PATHS.hostCommand}";
+const result = run(process.execPath, ["-e", "process.stdout.write('partial'); setTimeout(() => {}, 1000);"], {
+  check: false,
+  quiet: true,
+  timeoutMs: 50,
+});
+console.log(JSON.stringify(result));
+`),
+    ) as { status: number; stdout: string };
+
+    expect(result.status).toBe(124);
+    expect(result.stdout).toEqual(expect.any(String));
   });
 
   it("runs the Windows agent turn through the detached done-file runner", () => {
@@ -398,6 +417,8 @@ console.log(resolveUbuntuVmName("Ubuntu missing"));
     expect(powershell).toContain("windowsOpenClawResolver");
     expect(powershell).toContain("Resolve-OpenClawCommand");
     expect(powershell).toContain("npm\\node_modules\\openclaw\\openclaw.mjs");
+    expect(powershell).toContain("$ErrorActionPreference = 'Continue'");
+    expect(powershell).toContain("$PSNativeCommandUseErrorActionPreference = $false");
     expect(windows).toContain("windowsOpenClawResolver");
     expect(windows).toContain("Invoke-OpenClaw gateway");
     expect(windows).not.toContain("Join-Path $env:APPDATA 'npm\\\\openclaw.cmd'");

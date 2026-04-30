@@ -61,6 +61,7 @@ import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { buildReplyPromptBodies } from "./prompt-prelude.js";
 import { resolveActiveRunQueueAction } from "./queue-policy.js";
 import { resolveQueueSettings } from "./queue/settings-runtime.js";
+import { isSteeringQueueMode } from "./queue/steering.js";
 import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
 import { resolveBareSessionResetPromptState } from "./session-reset-prompt.js";
 import { resolveBareResetBootstrapFileAccess } from "./session-reset-prompt.js";
@@ -855,7 +856,7 @@ export async function runPreparedReply(
     };
   };
   let { activeSessionId, isActive, isStreaming } = resolveQueueBusyState();
-  const shouldSteer = resolvedQueue.mode === "steer" || resolvedQueue.mode === "steer-backlog";
+  const shouldSteer = isSteeringQueueMode(resolvedQueue.mode);
   const shouldFollowup =
     resolvedQueue.mode === "followup" ||
     resolvedQueue.mode === "collect" ||

@@ -39,12 +39,34 @@ stop_openclaw_gateway_processes() {
   OPENCLAW_DISABLE_BUNDLED_PLUGINS=1 /opt/homebrew/bin/openclaw gateway stop || true
   pkill -f 'openclaw.*gateway' >/dev/null 2>&1 || true
 }
+start_openclaw_gateway() {
+  if /opt/homebrew/bin/openclaw gateway restart; then
+    return
+  fi
+  pkill -f 'openclaw.*gateway' >/dev/null 2>&1 || true
+  rm -f /tmp/openclaw-parallels-macos-gateway.log
+  nohup env OPENCLAW_HOME="$HOME" OPENCLAW_STATE_DIR="$HOME/.openclaw" OPENCLAW_CONFIG_PATH="$HOME/.openclaw/openclaw.json" ${input.auth.apiKeyEnv}=${shellQuote(
+    input.auth.apiKeyValue,
+  )} /opt/homebrew/bin/openclaw gateway run --bind loopback --port 18789 --force >/tmp/openclaw-parallels-macos-gateway.log 2>&1 </dev/null &
+}
+wait_for_gateway() {
+  deadline=$((SECONDS + 240))
+  while [ "$SECONDS" -lt "$deadline" ]; do
+    if /opt/homebrew/bin/openclaw gateway status --deep --require-rpc --timeout 15000; then
+      return
+    fi
+    sleep 2
+  done
+  cat /tmp/openclaw-parallels-macos-gateway.log >&2 || true
+  echo "gateway did not become ready after update" >&2
+  exit 1
+}
 scrub_future_plugin_entries
 stop_openclaw_gateway_processes
 OPENCLAW_DISABLE_BUNDLED_PLUGINS=1 /opt/homebrew/bin/openclaw update --tag ${shellQuote(input.updateTarget)} --yes --json
 ${posixVersionCheck("/opt/homebrew/bin/openclaw", input.expectedNeedle)}
-/opt/homebrew/bin/openclaw gateway restart
-/opt/homebrew/bin/openclaw gateway status --deep --require-rpc
+start_openclaw_gateway
+wait_for_gateway
 /opt/homebrew/bin/openclaw models set ${shellQuote(input.auth.modelId)}
 /opt/homebrew/bin/openclaw config set agents.defaults.skipBootstrap true --strict-json
 ${posixAgentWorkspaceScript("Parallels npm update smoke test assistant.")}
@@ -122,12 +144,33 @@ stop_openclaw_gateway_processes() {
   OPENCLAW_DISABLE_BUNDLED_PLUGINS=1 openclaw gateway stop || true
   pkill -f 'openclaw.*gateway' >/dev/null 2>&1 || true
 }
+start_openclaw_gateway() {
+  pkill -f "openclaw gateway run" >/dev/null 2>&1 || true
+  rm -f /tmp/openclaw-parallels-linux-gateway.log
+  setsid sh -lc ${shellQuote(
+    `exec env OPENCLAW_HOME=/root OPENCLAW_STATE_DIR=/root/.openclaw OPENCLAW_CONFIG_PATH=/root/.openclaw/openclaw.json OPENCLAW_DISABLE_BONJOUR=1 ${input.auth.apiKeyEnv}=${shellQuote(
+      input.auth.apiKeyValue,
+    )} openclaw gateway run --bind loopback --port 18789 --force >/tmp/openclaw-parallels-linux-gateway.log 2>&1`,
+  )} >/dev/null 2>&1 < /dev/null &
+}
+wait_for_gateway() {
+  deadline=$((SECONDS + 240))
+  while [ "$SECONDS" -lt "$deadline" ]; do
+    if openclaw gateway status --deep --require-rpc --timeout 15000; then
+      return
+    fi
+    sleep 2
+  done
+  cat /tmp/openclaw-parallels-linux-gateway.log >&2 || true
+  echo "gateway did not become ready after update" >&2
+  exit 1
+}
 scrub_future_plugin_entries
 stop_openclaw_gateway_processes
 OPENCLAW_DISABLE_BUNDLED_PLUGINS=1 openclaw update --tag ${shellQuote(input.updateTarget)} --yes --json
 ${posixVersionCheck("openclaw", input.expectedNeedle)}
-openclaw gateway restart
-openclaw gateway status --deep --require-rpc
+start_openclaw_gateway
+wait_for_gateway
 openclaw models set ${shellQuote(input.auth.modelId)}
 openclaw config set agents.defaults.skipBootstrap true --strict-json
 ${posixAgentWorkspaceScript("Parallels npm update smoke test assistant.")}
