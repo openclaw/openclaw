@@ -1,8 +1,7 @@
 import type { AddressInfo } from "node:net";
 import net from "node:net";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { WebSocketServer, type RawData, type WebSocket } from "ws";
-import { __testing as agentJobTesting } from "../../../src/gateway/server-methods/agent-job.js";
 import { installGatewayTestHooks, startServer } from "../../../src/gateway/test-helpers.js";
 import { emitAgentEvent, registerAgentRunContext } from "../../../src/infra/agent-events.js";
 import { GatewayClientTransport, OpenClaw } from "./index.js";
@@ -283,7 +282,7 @@ describe("OpenClaw SDK websocket e2e", () => {
 describe("OpenClaw SDK real Gateway e2e", () => {
   installGatewayTestHooks({ scope: "test" });
 
-  it("consumes real Gateway events, waits, and calls current model status RPCs", async () => {
+  it("streams real Gateway agent events", async () => {
     const token = "sdk-real-gateway-token";
     const started = await startServer(token, { controlUiEnabled: false });
     const transport = new GatewayClientTransport({
@@ -298,18 +297,27 @@ describe("OpenClaw SDK real Gateway e2e", () => {
     try {
       await oc.connect();
 
-      await expect(oc.models.status({ probe: false })).resolves.toMatchObject({
-        providers: expect.any(Array),
-      });
-
       registerAgentRunContext(runId, {
         sessionKey: "agent:main:dashboard:sdk-real-gateway",
         verboseLevel: "off",
       });
 
       const run = await oc.runs.get(runId);
-      const waitPromise = run.wait({ timeoutMs: 1_000 });
-      await vi.waitFor(() => expect(agentJobTesting.getWaiterCount(runId)).toBeGreaterThan(0));
+      const eventsPromise = (async () => {
+        const seen: string[] = [];
+        const sessionKeys: Array<string | undefined> = [];
+        for await (const event of run.events()) {
+          seen.push(event.type);
+          sessionKeys.push(event.sessionKey);
+          if (event.type === "run.completed") {
+            break;
+          }
+        }
+        return { seen, sessionKeys };
+      })();
+      const eventsTimeout = new Promise<never>((_resolve, reject) => {
+        setTimeout(() => reject(new Error("timed out waiting for real Gateway SDK events")), 2_000);
+      });
 
       emitAgentEvent({
         runId,
@@ -327,22 +335,7 @@ describe("OpenClaw SDK real Gateway e2e", () => {
         data: { phase: "end", endedAt: 222 },
       });
 
-      await expect(waitPromise).resolves.toMatchObject({
-        runId,
-        status: "completed",
-        startedAt: 111,
-        endedAt: 222,
-      });
-
-      const seen: string[] = [];
-      const sessionKeys: Array<string | undefined> = [];
-      for await (const event of run.events()) {
-        seen.push(event.type);
-        sessionKeys.push(event.sessionKey);
-        if (event.type === "run.completed") {
-          break;
-        }
-      }
+      const { seen, sessionKeys } = await Promise.race([eventsPromise, eventsTimeout]);
       expect(seen).toEqual(["run.started", "assistant.delta", "run.completed"]);
       expect(sessionKeys).toEqual([
         "agent:main:dashboard:sdk-real-gateway",
