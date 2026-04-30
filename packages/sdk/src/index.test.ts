@@ -255,8 +255,23 @@ describe("OpenClaw SDK", () => {
     await expect(oc.artifacts.list()).rejects.toThrow(
       "oc.artifacts.list is not supported by the current OpenClaw Gateway yet",
     );
+    await expect(oc.artifacts.get("artifact_123")).rejects.toThrow(
+      "oc.artifacts.get is not supported by the current OpenClaw Gateway yet",
+    );
+    await expect(oc.artifacts.download("artifact_123")).rejects.toThrow(
+      "oc.artifacts.download is not supported by the current OpenClaw Gateway yet",
+    );
     await expect(oc.environments.list()).rejects.toThrow(
       "oc.environments.list is not supported by the current OpenClaw Gateway yet",
+    );
+    await expect(oc.environments.create({ provider: "testbox" })).rejects.toThrow(
+      "oc.environments.create is not supported by the current OpenClaw Gateway yet",
+    );
+    await expect(oc.environments.status("environment_123")).rejects.toThrow(
+      "oc.environments.status is not supported by the current OpenClaw Gateway yet",
+    );
+    await expect(oc.environments.delete("environment_123")).rejects.toThrow(
+      "oc.environments.delete is not supported by the current OpenClaw Gateway yet",
     );
     expect(transport.calls).toEqual([]);
   });
