@@ -100,13 +100,24 @@
   },
   "providerAuthChoices": [
     {
+      "provider": "google-gemini-cli",
+      "method": "cli",
+      "choiceId": "google-gemini-subscription",
+      "choiceLabel": "Gemini subscription (no API key needed)",
+      "choiceHint": "Runs Gemini through the Gemini CLI in headless mode using your Google account",
+      "assistantPriority": -50,
+      "groupId": "google",
+      "groupLabel": "Google",
+      "groupHint": "Gemini subscription + API key + OAuth"
+    },
+    {
       "provider": "google",
       "method": "api-key",
       "choiceId": "gemini-api-key",
       "choiceLabel": "Google Gemini API key",
       "groupId": "google",
       "groupLabel": "Google",
-      "groupHint": "Gemini API key + OAuth",
+      "groupHint": "Gemini subscription + API key + OAuth",
       "optionKey": "geminiApiKey",
       "cliFlag": "--gemini-api-key",
       "cliOption": "--gemini-api-key <key>",
@@ -120,7 +131,7 @@
       "choiceHint": "Google OAuth with project-aware token payload",
       "groupId": "google",
       "groupLabel": "Google",
-      "groupHint": "Gemini API key + OAuth"
+      "groupHint": "Gemini subscription + API key + OAuth"
     }
   ],
   "uiHints": {

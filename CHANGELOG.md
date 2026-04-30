@@ -2,6 +2,12 @@
 
 Docs: https://docs.openclaw.ai
 
+## Unreleased
+
+### Changes
+
+- Onboarding/Google: add a "Gemini subscription (no API key needed)" auth choice on the existing `google-gemini-cli` provider, surfaced ahead of the API key and OAuth paths so users with a Google subscription see the headless `gemini` CLI flow as a first-class option in `openclaw onboard`. The wizard auto-detects whether `gemini` is on PATH, offers to run `npm install -g @google/gemini-cli` after explicit confirmation, and launches the interactive `gemini` sign-in flow when the local CLI is installed but signed out. Onboarding seeds canonical `google/*` model refs and selects the Gemini CLI runtime through `agents.defaults.agentRuntime.id` so new configs follow the same model-ref contract as API-key and OAuth setups. The web dashboard's chat model picker and thinking-level selector keep working with the new runtime. Thanks @toto-elgringo.
+
 ## 2026.4.29
 
 ### Highlights

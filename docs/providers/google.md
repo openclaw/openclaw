@@ -63,6 +63,41 @@ Choose your preferred auth method and follow the setup steps.
 
   </Tab>
 
+  <Tab title="Gemini subscription (Advanced/Pro)">
+    **Best for:** running Gemini on your existing Google subscription without a separate API key. OpenClaw drives the official Gemini CLI in headless mode using your local sign-in.
+
+    <Steps>
+      <Step title="Run onboarding">
+        ```bash
+        openclaw onboard
+        # choose: Gemini subscription (no API key needed)
+        ```
+
+        The wizard handles install + login for you:
+
+        - If `gemini` is not on PATH, OpenClaw asks for confirmation and runs `npm install -g @google/gemini-cli` for you.
+        - If Gemini CLI is installed but signed out, OpenClaw launches `gemini` interactively so you can complete the Google sign-in in your browser.
+        - Once signed in, the local Gemini CLI session is reused automatically — no token to copy or paste.
+
+      </Step>
+      <Step title="Pick a model">
+        The wizard offers the Gemini model list (3 / 3.1, Pro / Flash / Flash Lite) and seeds them into your config under canonical `google/*` refs. The default is `google/gemini-3.1-pro-preview`. The Gemini CLI runtime is selected separately through `agents.defaults.agentRuntime.id: "google-gemini-cli"`.
+      </Step>
+      <Step title="Verify the model is available">
+        ```bash
+        openclaw models list --provider google
+        ```
+      </Step>
+    </Steps>
+
+    Once configured, you can switch models live from the OpenClaw web dashboard's chat model selector. The thinking-level selector next to it is also wired up for Gemini CLI runs — pick `off` / `minimal` / `low` / `medium` / `high` per session and OpenClaw injects the directive into the system prompt for the next turn.
+
+    <Warning>
+    Gemini CLI integration is unofficial. Some users have reported Google account restrictions after using third-party CLI tools. Use a non-critical Google account if you want to be cautious, and check Google's terms of service.
+    </Warning>
+
+  </Tab>
+
   <Tab title="Gemini CLI (OAuth)">
     **Best for:** reusing an existing Gemini CLI login via PKCE OAuth instead of a separate API key.
 
