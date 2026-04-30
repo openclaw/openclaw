@@ -35,7 +35,8 @@ class FakeTransport implements OpenClawTransport {
     this.calls.push({ method, params, options });
     const response = this.responses[method];
     if (typeof response === "function") {
-      return (await response(params, options, this)) as T;
+      const value = await response(params, options, this);
+      return value as T;
     }
     return response as T;
   }
