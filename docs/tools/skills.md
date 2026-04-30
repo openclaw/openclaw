@@ -33,8 +33,9 @@ Codex CLI's native `$CODEX_HOME/skills` directory is not one of these OpenClaw
 skill roots. In Codex harness mode, local app-server launches use isolated
 per-agent Codex homes, so personal Codex CLI skills are not loaded implicitly.
 Use `openclaw migrate codex --dry-run` to inventory them and
-`openclaw migrate apply codex --yes` to copy selected skill directories into the
-current OpenClaw agent workspace.
+`openclaw migrate codex` to choose skill directories with an interactive
+checkbox prompt before copying them into the current OpenClaw agent workspace.
+For non-interactive runs, repeat `--skill <name>` for the exact skills to copy.
 
 ## Per-agent vs shared skills
 
