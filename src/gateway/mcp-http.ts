@@ -144,6 +144,7 @@ function recordMcpMessagingToolSend(params: {
   const to =
     readStringField(params.args, "to") ??
     readStringField(params.args, "target") ??
+    readStringField(params.args, "channelId") ??
     params.requestContext.currentChannelId ??
     params.requestContext.agentTo;
   const accountId = readStringField(params.args, "accountId") ?? params.requestContext.accountId;

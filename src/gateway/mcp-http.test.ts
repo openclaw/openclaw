@@ -677,6 +677,56 @@ describe("mcp loopback server", () => {
     });
   });
 
+  it("uses channelId as the message target before falling back to request context", async () => {
+    resolveGatewayScopedToolsMock.mockReturnValue({
+      agentId: "main",
+      tools: [
+        {
+          name: "message",
+          description: "send a message",
+          parameters: { type: "object", properties: {} },
+          execute: vi.fn(async () => ({
+            content: [{ type: "text", text: "uploaded" }],
+          })),
+        },
+      ],
+    });
+    server = await startMcpLoopbackServer(0);
+    const runtime = getActiveMcpLoopbackRuntime();
+
+    const response = await sendRaw({
+      port: server.port,
+      token: runtime ? resolveMcpLoopbackBearerToken(runtime, false) : undefined,
+      headers: {
+        "content-type": "application/json",
+        "x-session-key": "agent:main:slack:C0",
+        "x-openclaw-run-id": "run-channel-id",
+        "x-openclaw-message-channel": "slack",
+        "x-openclaw-message-to": "C0",
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: {
+          name: "message",
+          arguments: {
+            action: "upload-file",
+            channelId: "C1",
+            path: "file:///tmp/out.png",
+          },
+        },
+      }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(drainCliMessagingToolSends("agent:main:slack:C0", "run-channel-id")).toEqual({
+      targets: [{ tool: "message", provider: "slack", to: "C1" }],
+      texts: [],
+      mediaUrls: ["file:///tmp/out.png"],
+    });
+  });
+
   it("records sessions_send text for CLI duplicate suppression", async () => {
     resolveGatewayScopedToolsMock.mockReturnValue({
       agentId: "main",

@@ -65,6 +65,7 @@ describe("extractMessagingToolSend", () => {
     ["reply", "to"],
     ["sendAttachment", "to"],
     ["upload-file", "target"],
+    ["upload-file", "channelId"],
   ] as const)("extracts %s message tool sends from %s", (action, targetField) => {
     const result = extractMessagingToolSend("message", {
       action,

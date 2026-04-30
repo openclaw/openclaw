@@ -508,7 +508,7 @@ function resolveMessageToolTarget(args: Record<string, unknown>): string | undef
   if (toRaw) {
     return toRaw;
   }
-  return readStringValue(args.target);
+  return readStringValue(args.target) ?? readStringValue(args.channelId);
 }
 
 export function extractMessagingToolSend(
