@@ -1,17 +1,24 @@
 ---
-summary: "Design proposal for a public OpenClaw app SDK for agent runs, sessions, tasks, artifacts, and managed environments"
-title: "OpenClaw SDK design"
+summary: "Public OpenClaw App SDK design for external apps, scripts, dashboards, CI jobs, and IDE extensions"
+title: "OpenClaw App SDK"
+sidebarTitle: "App SDK"
 read_when:
   - You are designing or implementing a public OpenClaw app SDK
   - You are comparing OpenClaw agent APIs with Cursor, Claude Agent SDK, OpenAI Agents, Google ADK, OpenCode, Codex, or ACP
-  - You need to decide whether a feature belongs in the public app SDK, plugin SDK, Gateway protocol, ACP backend, or managed environment layer
+  - You need to decide whether a feature belongs in the public App SDK, Plugin SDK, Gateway protocol, ACP backend, or managed environment layer
 ---
 
-This page is a design proposal for a future public **OpenClaw app SDK**. It is
-separate from the existing [plugin SDK](/plugins/sdk-overview).
+This page is a design proposal for the public **OpenClaw App SDK**. It is
+separate from the existing [Plugin SDK](/plugins/sdk-overview).
 
-The plugin SDK is for code that runs inside OpenClaw and extends providers,
-channels, tools, hooks, and trusted runtimes. The app SDK should be for
+<Note>
+  Use `@openclaw/sdk` when an external app, script, dashboard, CI job, or IDE
+  extension wants to run and observe OpenClaw agents through the Gateway. Use
+  `openclaw/plugin-sdk/*` only when writing a plugin that runs inside OpenClaw.
+</Note>
+
+The Plugin SDK is for code that runs inside OpenClaw and extends providers,
+channels, tools, hooks, and trusted runtimes. The App SDK should be for
 external applications, scripts, dashboards, CI jobs, IDE extensions, and
 automation systems that want to run and observe OpenClaw agents through a stable
 public API.
@@ -231,7 +238,7 @@ agent is a normal run in a managed environment, not a special product fork.
 
 The detailed namespace, event, result, approval, artifact, security, package,
 and environment provider contracts live in
-[OpenClaw SDK API design](/reference/openclaw-sdk-api-design).
+[OpenClaw App SDK API design](/reference/openclaw-sdk-api-design).
 
 ## Cookbook plan
 
@@ -262,7 +269,7 @@ client examples belong in an advanced section.
 - Agree on public nouns and names.
 - Decide package names.
 - Define the first event taxonomy.
-- Mark the current plugin SDK as intentionally separate in docs.
+- Mark the current Plugin SDK as intentionally separate in docs.
 
 ### Phase 1: Low-level generated client
 
@@ -330,7 +337,7 @@ Copy these ideas:
 Avoid these traps:
 
 - A public SDK that is just a thin dump of Gateway internals.
-- A public SDK that imports plugin SDK subpaths.
+- A public SDK that imports Plugin SDK subpaths.
 - A public SDK where events are only `stream` plus `data`.
 - A cloud-first API that makes local OpenClaw feel like a legacy mode.
 - Runtime selection hidden in model id prefixes.

@@ -12,6 +12,14 @@
     "target": "OpenAI provider"
   },
   {
+    "source": "OpenClaw App SDK",
+    "target": "OpenClaw 应用 SDK"
+  },
+  {
+    "source": "OpenClaw App SDK API design",
+    "target": "OpenClaw 应用 SDK API 设计"
+  },
+  {
     "source": "Azure Speech",
     "target": "Azure Speech"
   },
