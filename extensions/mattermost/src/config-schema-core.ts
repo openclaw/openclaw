@@ -78,6 +78,23 @@ const MattermostNetworkSchema = z
   .strict()
   .optional();
 
+/**
+ * Draft preview streaming mode for Mattermost.
+ * - "partial": single preview post, edited in place (historical default)
+ * - "block": new preview post per boundary, prior content stays visible
+ *
+ * To disable preview streaming entirely, use `blockStreaming: true`. A
+ * future change may add an explicit "off" mode here for symmetry.
+ */
+const MattermostPreviewStreamModeSchema = z.enum(["partial", "block"]);
+
+const MattermostStreamingSchema = z
+  .object({
+    mode: MattermostPreviewStreamModeSchema.optional(),
+  })
+  .strict()
+  .optional();
+
 const MattermostAccountSchemaBase = z
   .object({
     name: z.string().optional(),
@@ -99,6 +116,7 @@ const MattermostAccountSchemaBase = z
     chunkMode: z.enum(["length", "newline"]).optional(),
     blockStreaming: z.boolean().optional(),
     blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
+    streaming: MattermostStreamingSchema,
     replyToMode: z.enum(["off", "first", "all", "batched"]).optional(),
     responsePrefix: z.string().optional(),
     actions: z

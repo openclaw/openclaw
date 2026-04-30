@@ -79,4 +79,43 @@ describe("MattermostConfigSchema", () => {
     });
     expect(result.success).toBe(false);
   });
+
+  it("accepts streaming.mode='block'", () => {
+    const result = MattermostConfigSchema.safeParse({
+      streaming: { mode: "block" },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts streaming.mode='partial'", () => {
+    const result = MattermostConfigSchema.safeParse({
+      streaming: { mode: "partial" },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts streaming.mode on a per-account override", () => {
+    const result = MattermostConfigSchema.safeParse({
+      accounts: {
+        main: {
+          streaming: { mode: "block" },
+        },
+      },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects unknown streaming.mode values", () => {
+    const result = MattermostConfigSchema.safeParse({
+      streaming: { mode: "firehose" },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects unknown properties on streaming", () => {
+    const result = MattermostConfigSchema.safeParse({
+      streaming: { mode: "block", unknownProp: "bad" },
+    });
+    expect(result.success).toBe(false);
+  });
 });

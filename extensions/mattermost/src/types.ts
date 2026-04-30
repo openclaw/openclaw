@@ -4,6 +4,28 @@ import type { SecretInput } from "./secret-input.js";
 export type MattermostReplyToMode = "off" | "first" | "all" | "batched";
 export type MattermostChatTypeKey = "direct" | "channel" | "group";
 
+/**
+ * Mattermost draft preview streaming mode.
+ * - "partial": one preview post is created and edited in place across the
+ *              whole turn (thinking → tool status → partial reply → final).
+ *              This is the historical Mattermost behavior since v2026.4.20
+ *              and remains the default for backward compatibility, but it
+ *              causes prior preview content to disappear at every transition.
+ * - "block":   a fresh preview post is created at each turn boundary
+ *              (assistant-message start, reasoning end, tool start) so prior
+ *              content stays visible. Recommended when you want streaming
+ *              previews without losing content at every transition.
+ *
+ * To disable preview streaming entirely, set `blockStreaming: true` on
+ * the account config. A future change may add `"off"` here for symmetry.
+ */
+export type MattermostPreviewStreamMode = "partial" | "block";
+
+export type MattermostStreamingConfig = {
+  /** Draft preview mode. Default: "partial" (historical behavior). */
+  mode?: MattermostPreviewStreamMode;
+};
+
 export type MattermostChatMode = "oncall" | "onmessage" | "onchar";
 type MattermostNetworkConfig = {
   /** Dangerous opt-in for self-hosted Mattermost on trusted private/internal hosts. */
@@ -55,6 +77,13 @@ export type MattermostAccountConfig = {
   blockStreaming?: boolean;
   /** Merge streamed block replies before sending. */
   blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
+  /**
+   * Draft preview streaming controls. When `mode` is set to `"block"`, the
+   * Mattermost draft preview is split at turn boundaries (assistant-message
+   * start, reasoning end, tool start) so prior content stays visible instead
+   * of being overwritten in place. See PR #75252 for context.
+   */
+  streaming?: MattermostStreamingConfig;
   /** Outbound response prefix override for this channel/account. */
   responsePrefix?: string;
   /**

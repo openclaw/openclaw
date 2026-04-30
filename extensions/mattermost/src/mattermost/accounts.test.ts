@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../../runtime-api.js";
 import {
   resolveDefaultMattermostAccountId,
   resolveMattermostAccount,
+  resolveMattermostPreviewStreamMode,
   resolveMattermostReplyToMode,
 } from "./accounts.js";
 
@@ -134,5 +135,61 @@ describe("resolveMattermostReplyToMode", () => {
       native: true,
       callbackPath: "/hooks/work",
     });
+  });
+});
+
+describe("resolveMattermostPreviewStreamMode", () => {
+  it("defaults to 'partial' when streaming.mode is not set", () => {
+    expect(resolveMattermostPreviewStreamMode({})).toBe("partial");
+  });
+
+  it("returns 'block' when streaming.mode is explicitly 'block'", () => {
+    expect(resolveMattermostPreviewStreamMode({ streaming: { mode: "block" } })).toBe("block");
+  });
+
+  it("returns 'partial' when streaming.mode is explicitly 'partial'", () => {
+    expect(resolveMattermostPreviewStreamMode({ streaming: { mode: "partial" } })).toBe("partial");
+  });
+
+  it("falls back to default when streaming exists but mode is undefined", () => {
+    expect(resolveMattermostPreviewStreamMode({ streaming: {} })).toBe("partial");
+  });
+
+  it("surfaces previewStreamMode through resolveMattermostAccount", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        mattermost: {
+          streaming: { mode: "block" },
+        },
+      },
+    };
+
+    const account = resolveMattermostAccount({ cfg, accountId: "default" });
+    expect(account.previewStreamMode).toBe("block");
+  });
+
+  it("defaults previewStreamMode to 'partial' when no streaming config is present", () => {
+    const account = resolveMattermostAccount({ cfg: {}, accountId: "default" });
+    expect(account.previewStreamMode).toBe("partial");
+  });
+
+  it("allows accounts to override channel-wide streaming.mode", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        mattermost: {
+          streaming: { mode: "partial" },
+          accounts: {
+            alerts: {
+              streaming: { mode: "block" },
+            },
+          },
+        },
+      },
+    };
+
+    const def = resolveMattermostAccount({ cfg, accountId: "default" });
+    const alerts = resolveMattermostAccount({ cfg, accountId: "alerts" });
+    expect(def.previewStreamMode).toBe("partial");
+    expect(alerts.previewStreamMode).toBe("block");
   });
 });

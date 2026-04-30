@@ -103,6 +103,11 @@ vi.mock("./client.js", async () => {
 vi.mock("./draft-stream.js", () => ({
   buildMattermostToolStatusText: () => "Working",
   createMattermostDraftStream: mockState.createMattermostDraftStream,
+  createMattermostDraftPreviewBoundaryController: () => ({
+    markStreamedContent: vi.fn(),
+    signalBoundary: vi.fn(() => false),
+    isSplittingAtBoundaries: vi.fn(() => false),
+  }),
 }));
 
 vi.mock("./monitor-resources.js", () => ({
