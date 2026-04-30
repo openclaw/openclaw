@@ -65,9 +65,12 @@ const MarkdownConfigSchema = z
 // Message render mode: auto (default) = detect markdown, raw = plain text, card = always card
 const RenderModeSchema = z.enum(["auto", "raw", "card"]).optional();
 
-// Streaming card mode: when enabled, card replies use Feishu's Card Kit streaming API
-// for incremental text display with a "Thinking..." placeholder
+// Streaming toggle: when enabled, Feishu can use a streaming delivery strategy.
 const StreamingModeSchema = z.boolean().optional();
+// Streaming delivery mode:
+// - card (default): use Feishu's Card Kit streaming API for live card updates
+// - segment: collect model text between pause points, then send each segment
+const StreamingDeliveryModeSchema = z.enum(["card", "segment"]).optional();
 
 const BlockStreamingCoalesceSchema = z
   .object({
@@ -194,6 +197,7 @@ const FeishuSharedConfigShape = {
   heartbeat: ChannelHeartbeatVisibilitySchema,
   renderMode: RenderModeSchema,
   streaming: StreamingModeSchema,
+  streamingMode: StreamingDeliveryModeSchema,
   tools: FeishuToolsConfigSchema,
   actions: ChannelActionsSchema,
   replyInThread: ReplyInThreadSchema,

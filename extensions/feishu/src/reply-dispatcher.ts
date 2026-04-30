@@ -216,7 +216,10 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   const tableMode = core.channel.text.resolveMarkdownTableMode({ cfg, channel: "feishu" });
   const renderMode = account.config?.renderMode ?? "auto";
   const streamingEnabled = account.config?.streaming !== false && renderMode !== "raw";
-  const reasoningPreviewEnabled = streamingEnabled && params.allowReasoningPreview === true;
+  const streamingMode = account.config?.streamingMode ?? "card";
+  const segmentStreamingEnabled = streamingEnabled && streamingMode === "segment";
+  const cardStreamingEnabled = streamingEnabled && !segmentStreamingEnabled;
+  const reasoningPreviewEnabled = cardStreamingEnabled && params.allowReasoningPreview === true;
 
   let streaming: FeishuStreamingSession | null = null;
   let streamText = "";
@@ -231,6 +234,10 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   let streamingClosedForReply = false;
   let streamingCloseErroredForReply = false;
   type StreamTextUpdateMode = "snapshot" | "delta";
+  let segmentAccumulatedText = "";
+  let segmentDeliveredText = "";
+  let segmentLastPartial = "";
+  let segmentMentionTargetsDelivered = false;
 
   const formatReasoningPrefix = (thinking: string): string => {
     if (!thinking) {
@@ -318,7 +325,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
 
   const startStreaming = () => {
     if (
-      !streamingEnabled ||
+      !cardStreamingEnabled ||
       streamingStartPromise ||
       streaming ||
       isStreamingStartBackedOff(account.accountId)
@@ -449,6 +456,122 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     });
   };
 
+  const rememberSegmentPartialText = (nextText: string) => {
+    if (!nextText || nextText === segmentLastPartial) {
+      return;
+    }
+    segmentLastPartial = nextText;
+    segmentAccumulatedText = mergeStreamingText(segmentAccumulatedText, nextText);
+  };
+
+  const resolveUndeliveredSegmentText = (nextText: string): string => {
+    if (!nextText) {
+      return "";
+    }
+    if (!segmentDeliveredText) {
+      return nextText;
+    }
+    if (nextText === segmentDeliveredText || segmentDeliveredText.includes(nextText)) {
+      return "";
+    }
+    if (nextText.startsWith(segmentDeliveredText)) {
+      return nextText.slice(segmentDeliveredText.length).replace(/^\s+/, "");
+    }
+    const merged = mergeStreamingText(segmentDeliveredText, nextText);
+    if (merged && merged !== segmentDeliveredText && merged.startsWith(segmentDeliveredText)) {
+      return merged.slice(segmentDeliveredText.length).replace(/^\s+/, "");
+    }
+    return nextText;
+  };
+
+  const markSegmentTextDelivered = (fullText: string, segmentText: string) => {
+    if (fullText && (!segmentDeliveredText || fullText.startsWith(segmentDeliveredText))) {
+      segmentDeliveredText = fullText;
+      return;
+    }
+    segmentDeliveredText = mergeStreamingText(segmentDeliveredText, segmentText);
+  };
+
+  const takeMentionTargetsForSegment = (): MentionTarget[] | undefined => {
+    if (segmentMentionTargetsDelivered) {
+      return undefined;
+    }
+    segmentMentionTargetsDelivered = true;
+    return mentionTargets;
+  };
+
+  const sendTextSegment = async (text: string, infoKind?: string) => {
+    if (!text) {
+      return;
+    }
+    const useCard = renderMode === "card" || (renderMode === "auto" && shouldUseCard(text));
+    const segmentMentionTargets = takeMentionTargetsForSegment();
+
+    if (useCard) {
+      const cardHeader = resolveCardHeader(agentId, identity);
+      const cardNote = resolveCardNote(agentId, identity, prefixContext.prefixContext);
+      await sendChunkedTextReply({
+        text,
+        useCard: true,
+        infoKind,
+        sendChunk: async ({ chunk, isFirst }) => {
+          await sendStructuredCardFeishu({
+            cfg,
+            to: chatId,
+            text: chunk,
+            replyToMessageId: sendReplyToMessageId,
+            replyInThread: effectiveReplyInThread,
+            mentions: isFirst ? segmentMentionTargets : undefined,
+            accountId,
+            header: cardHeader,
+            note: cardNote,
+          });
+        },
+      });
+    } else {
+      await sendChunkedTextReply({
+        text,
+        useCard: false,
+        infoKind,
+        sendChunk: async ({ chunk, isFirst }) => {
+          await sendMessageFeishu({
+            cfg,
+            to: chatId,
+            text: chunk,
+            replyToMessageId: sendReplyToMessageId,
+            replyInThread: effectiveReplyInThread,
+            mentions: isFirst ? segmentMentionTargets : undefined,
+            accountId,
+          });
+        },
+      });
+    }
+    params.runtime.log?.(
+      `feishu[${account.accountId}] segment flush reason=${infoKind ?? "unknown"} mode=${
+        useCard ? "card" : "text"
+      } chars=${text.length}`,
+    );
+  };
+
+  const flushSegment = async (reason: string, nextText?: string): Promise<boolean> => {
+    if (!segmentStreamingEnabled && reason !== "final" && reason !== "block") {
+      return false;
+    }
+    if (nextText) {
+      segmentAccumulatedText = mergeStreamingText(segmentAccumulatedText, nextText);
+    }
+    const segmentText = resolveUndeliveredSegmentText(segmentAccumulatedText);
+    if (!segmentText) {
+      return false;
+    }
+    await sendTextSegment(segmentText, reason);
+    markSegmentTextDelivered(segmentAccumulatedText, segmentText);
+    if (reason === "final") {
+      deliveredFinalTexts.add(segmentAccumulatedText);
+    }
+    return true;
+  };
+
   const { dispatcher, replyOptions, markDispatchIdle } =
     core.channel.reply.createReplyDispatcherWithTyping({
       responsePrefix: prefixContext.responsePrefix,
@@ -458,7 +581,11 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         deliveredFinalTexts.clear();
         streamingClosedForReply = false;
         streamingCloseErroredForReply = false;
-        if (streamingEnabled && renderMode === "card") {
+        segmentAccumulatedText = "";
+        segmentDeliveredText = "";
+        segmentLastPartial = "";
+        segmentMentionTargetsDelivered = false;
+        if (cardStreamingEnabled && renderMode === "card") {
           startStreaming();
         }
         await typingCallbacks?.onReplyStart?.();
@@ -477,7 +604,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           hasText &&
           streamingClosedForReply &&
           !streamingCloseErroredForReply &&
-          streamingEnabled &&
+          cardStreamingEnabled &&
           useCard;
         const shouldDeliverText =
           hasText && !skipTextForDuplicateFinal && !skipTextForClosedStreamingFinal;
@@ -486,11 +613,33 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           return;
         }
 
+        if (segmentStreamingEnabled) {
+          if (info?.kind === "tool") {
+            await flushSegment("tool");
+            if (shouldDeliverText) {
+              await sendTextSegment(text, "tool");
+            }
+            if (hasMedia) {
+              await sendMediaReplies(payload);
+            }
+            return;
+          }
+
+          if (shouldDeliverText) {
+            await flushSegment(info?.kind ?? "final", text);
+          }
+
+          if (hasMedia) {
+            await sendMediaReplies(payload);
+          }
+          return;
+        }
+
         if (shouldDeliverText) {
           if (info?.kind === "block") {
             // Drop internal block chunks unless we can safely consume them as
             // streaming-card fallback content.
-            if (!(streamingEnabled && useCard)) {
+            if (!(cardStreamingEnabled && useCard)) {
               return;
             }
             startStreaming();
@@ -499,7 +648,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             }
           }
 
-          if (info?.kind === "final" && streamingEnabled && useCard) {
+          if (info?.kind === "final" && cardStreamingEnabled && useCard) {
             startStreaming();
             if (streamingStartPromise) {
               await streamingStartPromise;
@@ -576,11 +725,19 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         params.runtime.error?.(
           `feishu[${account.accountId}] ${info.kind} reply failed: ${String(error)}`,
         );
-        await closeStreaming({ markClosedForReply: false });
+        if (segmentStreamingEnabled) {
+          await flushSegment("error");
+        } else {
+          await closeStreaming({ markClosedForReply: false });
+        }
         typingCallbacks?.onIdle?.();
       },
       onIdle: async () => {
-        await closeStreaming();
+        if (segmentStreamingEnabled) {
+          await flushSegment("idle");
+        } else {
+          await closeStreaming();
+        }
         typingCallbacks?.onIdle?.();
       },
       onCleanup: () => {
@@ -606,6 +763,10 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             if (!cleaned) {
               return;
             }
+            if (segmentStreamingEnabled) {
+              rememberSegmentPartialText(cleaned);
+              return;
+            }
             queueStreamingUpdate(cleaned, {
               dedupeWithLastPartial: true,
               mode: "snapshot",
@@ -623,23 +784,27 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         : undefined,
       onReasoningEnd: reasoningPreviewEnabled ? () => {} : undefined,
       onToolStart: streamingEnabled
-        ? (payload: { name?: string; phase?: string }) => {
+        ? async (payload?: { name?: string; phase?: string }) => {
+            if (segmentStreamingEnabled) {
+              await flushSegment("toolStart");
+              return;
+            }
             updateStreamingStatusLine(
-              `🔧 **Using: ${payload.name ?? payload.phase ?? "tool"}...**`,
+              `🔧 **Using: ${payload?.name ?? payload?.phase ?? "tool"}...**`,
             );
           }
         : undefined,
-      onAssistantMessageStart: streamingEnabled
+      onAssistantMessageStart: cardStreamingEnabled
         ? () => {
             updateStreamingStatusLine("");
           }
         : undefined,
-      onCompactionStart: streamingEnabled
+      onCompactionStart: cardStreamingEnabled
         ? () => {
             updateStreamingStatusLine("📦 **Compacting context...**");
           }
         : undefined,
-      onCompactionEnd: streamingEnabled
+      onCompactionEnd: cardStreamingEnabled
         ? () => {
             updateStreamingStatusLine("");
           }

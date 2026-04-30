@@ -4112,6 +4112,10 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
         streaming: {
           type: "boolean",
         },
+        streamingMode: {
+          type: "string",
+          enum: ["card", "segment"],
+        },
         tools: {
           type: "object",
           properties: {
@@ -4739,6 +4743,10 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
               },
               streaming: {
                 type: "boolean",
+              },
+              streamingMode: {
+                type: "string",
+                enum: ["card", "segment"],
               },
               tools: {
                 type: "object",

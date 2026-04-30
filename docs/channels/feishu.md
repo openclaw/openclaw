@@ -272,14 +272,15 @@ Feishu/Lark supports streaming replies via interactive cards. When enabled, the 
 {
   channels: {
     feishu: {
-      streaming: true, // enable streaming card output (default: true)
+      streaming: true, // enable streaming delivery (default: true)
+      streamingMode: "card", // "card" (default) or "segment"
       blockStreaming: true, // enable block-level streaming (default: true)
     },
   },
 }
 ```
 
-Set `streaming: false` to send the complete reply in one message.
+Set `streaming: false` to send the complete reply in one message. Set `streamingMode: "segment"` to collect model text while it is actively streaming and flush each accumulated segment when the model pauses for a tool call, idle, blocking event, or final reply. Each segment still uses `renderMode: "auto"` independently, so plain text segments can be sent as text while markdown-heavy segments can be sent as cards.
 
 ### Quota optimization
 
@@ -427,7 +428,8 @@ Full configuration: [Gateway configuration](/gateway/configuration)
 | `channels.feishu.groups.<chat_id>.enabled`        | Enable/disable a specific group                                                  | `true`           |
 | `channels.feishu.textChunkLimit`                  | Message chunk size                                                               | `2000`           |
 | `channels.feishu.mediaMaxMb`                      | Media size limit                                                                 | `30`             |
-| `channels.feishu.streaming`                       | Streaming card output                                                            | `true`           |
+| `channels.feishu.streaming`                       | Enable streaming delivery                                                        | `true`           |
+| `channels.feishu.streamingMode`                   | Streaming delivery mode (`card` or `segment`)                                    | `card`           |
 | `channels.feishu.blockStreaming`                  | Block-level streaming                                                            | `true`           |
 | `channels.feishu.typingIndicator`                 | Send typing reactions                                                            | `true`           |
 | `channels.feishu.resolveSenderNames`              | Resolve sender display names                                                     | `true`           |

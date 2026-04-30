@@ -52,6 +52,13 @@ vi.mock("./accounts.js", () => ({
   resolveFeishuAccount: resolveFeishuAccountMock,
   resolveFeishuRuntimeAccount: resolveFeishuAccountMock,
 }));
+vi.mock("./reply-dispatcher-runtime-api.js", () => ({
+  createReplyPrefixContext: vi.fn(() => ({
+    responsePrefix: undefined,
+    responsePrefixContextProvider: undefined,
+    prefixContext: {},
+  })),
+}));
 vi.mock("./runtime.js", () => ({ getFeishuRuntime: getFeishuRuntimeMock }));
 vi.mock("./send.js", () => ({
   sendMessageFeishu: sendMessageFeishuMock,
@@ -159,6 +166,25 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     });
 
     return createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
+  }
+
+  function setFeishuAccountConfig(config: Record<string, unknown>) {
+    resolveFeishuAccountMock.mockReturnValue({
+      accountId: "main",
+      appId: "app_id",
+      appSecret: "app_secret",
+      domain: "feishu",
+      config,
+    });
+  }
+
+  function setupSegmentStreamingConfig(overrides: Record<string, unknown> = {}) {
+    setFeishuAccountConfig({
+      renderMode: "auto",
+      streaming: true,
+      streamingMode: "segment",
+      ...overrides,
+    });
   }
 
   function createRuntimeLogger() {
@@ -314,6 +340,145 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(streamingInstances[0].close).toHaveBeenCalledTimes(1);
     expect(sendMessageFeishuMock).not.toHaveBeenCalled();
     expect(sendMarkdownCardFeishuMock).not.toHaveBeenCalled();
+  });
+
+  it("uses streaming session when streamingMode is explicitly card", async () => {
+    setFeishuAccountConfig({
+      renderMode: "auto",
+      streaming: true,
+      streamingMode: "card",
+    });
+    const { options } = createDispatcherHarness({
+      runtime: createRuntimeLogger(),
+    });
+
+    await options.deliver({ text: "```ts\nconst x = 1\n```" }, { kind: "final" });
+    await options.onIdle?.();
+
+    expect(streamingInstances).toHaveLength(1);
+    expect(streamingInstances[0].start).toHaveBeenCalledTimes(1);
+    expect(streamingInstances[0].close).toHaveBeenCalledTimes(1);
+    expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
+  });
+
+  it("segments partial text at tool start when streamingMode is segment", async () => {
+    setupSegmentStreamingConfig();
+    const { result, options } = createDispatcherHarness();
+
+    await options.onReplyStart?.();
+    result.replyOptions.onPartialReply?.({ text: "今天是 2026 年 4 月 30 日。" });
+    await result.replyOptions.onToolStart?.();
+
+    expect(streamingInstances).toHaveLength(0);
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
+    expect(sendMessageFeishuMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ text: "今天是 2026 年 4 月 30 日。" }),
+    );
+
+    await options.deliver(
+      { text: "今天是 2026 年 4 月 30 日。\n\n今日热点新闻如下。" },
+      { kind: "final" },
+    );
+
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(2);
+    expect(sendMessageFeishuMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ text: "今日热点新闻如下。" }),
+    );
+  });
+
+  it("runs auto rendering independently for each segment", async () => {
+    setupSegmentStreamingConfig();
+    const { result, options } = createDispatcherHarness();
+
+    await options.onReplyStart?.();
+    result.replyOptions.onPartialReply?.({ text: "先给一句普通说明。" });
+    await result.replyOptions.onToolStart?.();
+    await options.deliver(
+      {
+        text: "先给一句普通说明。\n\n```ts\nconst answer = 42\n```",
+      },
+      { kind: "final" },
+    );
+
+    expect(streamingInstances).toHaveLength(0);
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
+    expect(sendMessageFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "先给一句普通说明。" }),
+    );
+    expect(sendStructuredCardFeishuMock).toHaveBeenCalledTimes(1);
+    expect(sendStructuredCardFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "```ts\nconst answer = 42\n```" }),
+    );
+  });
+
+  it("flushes segment partial text on idle and suppresses an identical later final", async () => {
+    setupSegmentStreamingConfig();
+    const { result, options } = createDispatcherHarness();
+
+    await options.onReplyStart?.();
+    result.replyOptions.onPartialReply?.({ text: "idle streamed reply" });
+    await options.onIdle?.();
+    await options.deliver({ text: "idle streamed reply" }, { kind: "final" });
+
+    expect(streamingInstances).toHaveLength(0);
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
+    expect(sendMessageFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "idle streamed reply" }),
+    );
+  });
+
+  it("keeps segment tool payloads separate from assistant text segmentation", async () => {
+    setupSegmentStreamingConfig();
+    const { result, options } = createDispatcherHarness();
+
+    await options.onReplyStart?.();
+    result.replyOptions.onPartialReply?.({ text: "日期。" });
+    await options.deliver({ text: "Using web_search..." }, { kind: "tool" });
+    await options.deliver({ text: "日期。\n\n新闻。" }, { kind: "final" });
+
+    expect(streamingInstances).toHaveLength(0);
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(3);
+    expect(sendMessageFeishuMock).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ text: "日期。" }),
+    );
+    expect(sendMessageFeishuMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ text: "Using web_search..." }),
+    );
+    expect(sendMessageFeishuMock).toHaveBeenNthCalledWith(
+      3,
+      expect.objectContaining({ text: "新闻。" }),
+    );
+  });
+
+  it("sends segment mention targets only with the first text segment", async () => {
+    setupSegmentStreamingConfig();
+    const mentions = [{ openId: "ou_1", name: "User", key: "@_user_1" }];
+    const { result, options } = createDispatcherHarness({
+      mentionTargets: mentions,
+    });
+
+    await options.onReplyStart?.();
+    result.replyOptions.onPartialReply?.({ text: "第一段。" });
+    await result.replyOptions.onToolStart?.();
+    await options.deliver({ text: "第一段。\n\n第二段。" }, { kind: "final" });
+
+    expect(sendMessageFeishuMock).toHaveBeenNthCalledWith(1, expect.objectContaining({ mentions }));
+    expect(sendMessageFeishuMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ mentions: undefined }),
+    );
+  });
+
+  it("omits reasoning preview callbacks for segment streaming", () => {
+    setupSegmentStreamingConfig();
+    const { result } = createDispatcherHarness({
+      allowReasoningPreview: true,
+    });
+
+    expect(result.replyOptions.onReasoningStream).toBeUndefined();
+    expect(result.replyOptions.onReasoningEnd).toBeUndefined();
   });
 
   it("closes streaming with block text when final reply is missing", async () => {
