@@ -10,6 +10,7 @@ on:
         type: choice
         options:
           - all
+          - core-auth-secrets
           - channel-runtime-boundary
           - gateway-runtime-boundary
           - memory-runtime-boundary
@@ -27,6 +28,16 @@ on:
       - "packages/plugin-package-contract/**"
       - "packages/plugin-sdk/**"
       - "packages/memory-host-sdk/**"
+      - "src/agents/*auth*.ts"
+      - "src/agents/**/*auth*.ts"
+      - "src/agents/auth-health*.ts"
+      - "src/agents/auth-profiles"
+      - "src/agents/auth-profiles/**"
+      - "src/agents/bash-tools.exec-host-shared.ts"
+      - "src/agents/sandbox"
+      - "src/agents/sandbox/**"
+      - "src/agents/sandbox.ts"
+      - "src/agents/sandbox-*.ts"
       - "src/channels/**"
       - "src/auto-reply/reply/post-compaction-context.ts"
       - "src/auto-reply/reply/queue/**"
@@ -36,6 +47,16 @@ on:
       - "src/commands/doctor-session-*.ts"
       - "src/commands/session-store-targets.ts"
       - "src/commands/sessions*.ts"
+      - "src/cron/service/jobs.ts"
+      - "src/cron/stagger.ts"
+      - "src/gateway/*auth*.ts"
+      - "src/gateway/**/*auth*.ts"
+      - "src/gateway/*secret*.ts"
+      - "src/gateway/**/*secret*.ts"
+      - "src/gateway/protocol/**/*secret*.ts"
+      - "src/gateway/resolve-configured-secret-input-string*.ts"
+      - "src/gateway/security-path*.ts"
+      - "src/gateway/server-methods/secrets*.ts"
       - "src/gateway/server-startup-memory.ts"
       - "src/gateway/method-scopes.ts"
       - "src/gateway/protocol/**"
@@ -45,6 +66,7 @@ on:
       - "src/infra/diagnostic-*.ts"
       - "src/infra/diagnostics-timeline.ts"
       - "src/infra/outbound/**"
+      - "src/infra/secret-file*.ts"
       - "src/infra/session-delivery-queue*.ts"
       - "src/logging/diagnostic*.ts"
       - "src/memory/**"
@@ -54,6 +76,8 @@ on:
       - "src/plugin-sdk/**"
       - "src/plugins/**"
       - "src/process/**"
+      - "src/secrets/**"
+      - "src/security/**"
   schedule:
     - cron: "30 6 * * *"
 
@@ -77,6 +101,7 @@ jobs:
     timeout-minutes: 5
     outputs:
       channel: ${{ steps.detect.outputs.channel }}
+      core_auth_secrets: ${{ steps.detect.outputs.core_auth_secrets }}
       gateway: ${{ steps.detect.outputs.gateway }}
       memory: ${{ steps.detect.outputs.memory }}
       mcp_process: ${{ steps.detect.outputs.mcp_process }}
@@ -97,6 +122,7 @@ jobs:
           set -euo pipefail
 
           channel=false
+          core_auth_secrets=false
           gateway=false
           memory=false
           mcp_process=false
@@ -108,6 +134,7 @@ jobs:
 
           if [[ "${EVENT_NAME}" != "pull_request" ]]; then
             channel=true
+            core_auth_secrets=true
             gateway=true
             memory=true
             mcp_process=true
@@ -121,6 +148,7 @@ jobs:
               case "${file}" in
                 .github/codeql/*|.github/workflows/codeql-critical-quality.yml)
                   channel=true
+                  core_auth_secrets=true
                   gateway=true
                   memory=true
                   mcp_process=true
@@ -135,6 +163,13 @@ jobs:
                   ;;
                 src/channels/*)
                   channel=true
+                  ;;
+                src/gateway/protocol/*secret*.ts|src/gateway/server-methods/secrets*.ts)
+                  core_auth_secrets=true
+                  gateway=true
+                  ;;
+                src/agents/*auth*.ts|src/agents/auth-health*.ts|src/agents/auth-profiles|src/agents/auth-profiles/*|src/agents/bash-tools.exec-host-shared.ts|src/agents/sandbox|src/agents/sandbox.ts|src/agents/sandbox-*.ts|src/agents/sandbox/*|src/cron/service/jobs.ts|src/cron/stagger.ts|src/gateway/*auth*.ts|src/gateway/*secret*.ts|src/gateway/resolve-configured-secret-input-string*.ts|src/gateway/security-path*.ts|src/infra/secret-file*.ts|src/secrets/*|src/security/*)
+                  core_auth_secrets=true
                   ;;
                 src/gateway/method-scopes.ts|src/gateway/protocol/*|src/gateway/server-methods/*|src/gateway/server-methods.ts|src/gateway/server-methods-list.ts)
                   gateway=true
@@ -189,6 +224,7 @@ jobs:
 
           {
             echo "channel=${channel}"
+            echo "core_auth_secrets=${core_auth_secrets}"
             echo "gateway=${gateway}"
             echo "memory=${memory}"
             echo "mcp_process=${mcp_process}"
@@ -201,7 +237,8 @@ jobs:
 
   core-auth-secrets:
     name: Critical Quality (core-auth-secrets)
-    if: ${{ github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || inputs.profile == 'all') }}
+    needs: quality-shards
+    if: ${{ needs.quality-shards.outputs.core_auth_secrets == 'true' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (github.event_name == 'pull_request' || github.event_name != 'workflow_dispatch' || inputs.profile == 'all' || inputs.profile == 'core-auth-secrets') }}
     runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 25
     steps:
