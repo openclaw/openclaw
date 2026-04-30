@@ -62,6 +62,8 @@ const MAX_TOOL_FAILURE_CHARS = 240;
 const MAX_COMPACTION_SUMMARY_CHARS = 16_000;
 const MAX_FILE_OPS_SECTION_CHARS = 2_000;
 const MAX_FILE_OPS_LIST_CHARS = 900;
+const MAX_EXACT_PATH_LITERALS_SECTION_CHARS = 2_400;
+const MAX_PATH_EXTRACTION_DEPTH = 8;
 const SUMMARY_TRUNCATED_MARKER = "\n\n[Compaction summary truncated to fit budget]";
 const DEFAULT_RECENT_TURNS_PRESERVE = 3;
 const DEFAULT_QUALITY_GUARD_MAX_RETRIES = 1;
@@ -181,6 +183,7 @@ function assembleSuffix(parts: {
   preservedTurnsSection?: string;
   toolFailureSection?: string;
   fileOpsSummary?: string;
+  exactPathLiteralsSection?: string;
   workspaceContext?: string;
 }): string {
   let suffix = "";
@@ -188,6 +191,7 @@ function assembleSuffix(parts: {
   suffix = appendSummarySection(suffix, parts.preservedTurnsSection ?? "");
   suffix = appendSummarySection(suffix, parts.toolFailureSection ?? "");
   suffix = appendSummarySection(suffix, parts.fileOpsSummary ?? "");
+  suffix = appendSummarySection(suffix, parts.exactPathLiteralsSection ?? "");
   suffix = appendSummarySection(suffix, parts.workspaceContext ?? "");
   // Ensure leading separator so suffix does not merge with body (e.g. when body
   // ends without newline: "...## Exact identifiers## Tool Failures").
@@ -459,6 +463,117 @@ function formatFileOperations(readFiles: string[], modifiedFiles: string[]): str
   }
   const combined = `\n\n${sections.join("\n\n")}`;
   return capCompactionSummary(combined, MAX_FILE_OPS_SECTION_CHARS);
+}
+
+function sanitizePathLiteral(value: string): string {
+  return value
+    .trim()
+    .replace(/^[("'`[{<]+/, "")
+    .replace(/[)\]"'`,;:.!?<>]+$/, "");
+}
+
+function extractPathLiteralsFromText(text: string): string[] {
+  const posixMatches = text.match(/\/(?:[^\s"'`<>{}[\]|,;:()]+\/)+[^\s"'`<>{}[\]|,;:()]+/g) ?? [];
+  const windowsMatches =
+    text.match(/\b[A-Za-z]:\\(?:[^\s"'`<>{}[\]|,;()]+\\)+[^\s"'`<>{}[\]|,;()]+/g) ?? [];
+  return [...posixMatches, ...windowsMatches]
+    .map((value) => sanitizePathLiteral(value))
+    .filter((value) => value.length > 0 && !value.startsWith("//"));
+}
+
+function collectPathLiteralsFromAllowedValue(
+  value: unknown,
+  addPath: (pathLiteral: string) => void,
+  depth = 0,
+  seen = new WeakSet<object>(),
+): void {
+  if (depth > MAX_PATH_EXTRACTION_DEPTH || value === null || value === undefined) {
+    return;
+  }
+  if (typeof value === "string") {
+    for (const pathLiteral of extractPathLiteralsFromText(value)) {
+      addPath(pathLiteral);
+    }
+    return;
+  }
+  if (typeof value !== "object") {
+    return;
+  }
+  if (seen.has(value)) {
+    return;
+  }
+  seen.add(value);
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      collectPathLiteralsFromAllowedValue(item, addPath, depth + 1, seen);
+    }
+    return;
+  }
+  for (const [key, nestedValue] of Object.entries(value)) {
+    if (key === "details") {
+      continue;
+    }
+    collectPathLiteralsFromAllowedValue(nestedValue, addPath, depth + 1, seen);
+  }
+}
+
+function collectExactPathLiterals(params: {
+  messages: AgentMessage[];
+  readFiles: string[];
+  modifiedFiles: string[];
+  previousSummary?: string;
+}): string[] {
+  const seen = new Set<string>();
+  const paths: string[] = [];
+  const addPath = (pathLiteral: string) => {
+    const normalized = sanitizePathLiteral(pathLiteral);
+    if (!normalized || seen.has(normalized)) {
+      return;
+    }
+    seen.add(normalized);
+    paths.push(normalized);
+  };
+
+  for (const pathLiteral of [...params.modifiedFiles, ...params.readFiles].toSorted()) {
+    addPath(pathLiteral);
+  }
+  if (params.previousSummary) {
+    for (const pathLiteral of extractPathLiteralsFromText(params.previousSummary)) {
+      addPath(pathLiteral);
+    }
+  }
+  for (const message of params.messages) {
+    collectPathLiteralsFromAllowedValue((message as { content?: unknown }).content, addPath);
+  }
+  return paths;
+}
+
+function formatExactPathLiterals(paths: string[]): string {
+  if (paths.length === 0) {
+    return "";
+  }
+  const openTag = "\n\n<exact-path-literals>\n";
+  const closeTag = "\n</exact-path-literals>";
+  const lines: string[] = [];
+  let usedChars = openTag.length + closeTag.length;
+
+  for (let i = 0; i < paths.length; i += 1) {
+    const line = `${paths[i]}\n`;
+    const remaining = paths.length - i - 1;
+    const overflowLine = remaining > 0 ? `...and ${remaining} more\n` : "";
+    const projected = usedChars + line.length + overflowLine.length;
+    if (projected > MAX_EXACT_PATH_LITERALS_SECTION_CHARS) {
+      const overflow = `...and ${paths.length - i} more\n`;
+      if (usedChars + overflow.length <= MAX_EXACT_PATH_LITERALS_SECTION_CHARS) {
+        lines.push(overflow);
+      }
+      break;
+    }
+    lines.push(line);
+    usedChars += line.length;
+  }
+
+  return lines.length > 0 ? `${openTag}${lines.join("")}${closeTag}` : "";
 }
 
 function capCompactionSummary(summary: string, maxChars = MAX_COMPACTION_SUMMARY_CHARS): string {
@@ -816,6 +931,13 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
     }
     const { readFiles, modifiedFiles } = computeFileLists(preparation.fileOps);
     const fileOpsSummary = formatFileOperations(readFiles, modifiedFiles);
+    const exactPathLiterals = collectExactPathLiterals({
+      messages: [...baseMessagesToSummarize, ...baseTurnPrefixMessages],
+      readFiles,
+      modifiedFiles,
+      previousSummary: preparation.previousSummary,
+    });
+    const exactPathLiteralsSection = formatExactPathLiterals(exactPathLiterals);
     const toolFailures = collectToolFailures([
       ...baseMessagesToSummarize,
       ...baseTurnPrefixMessages,
@@ -878,6 +1000,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
               preservedTurnsSection,
               toolFailureSection,
               fileOpsSummary,
+              exactPathLiteralsSection,
               workspaceContext,
             });
             const summary = capCompactionSummaryPreservingSuffix(providerResult, suffix);
@@ -1162,6 +1285,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         preservedTurnsSection,
         toolFailureSection,
         fileOpsSummary,
+        exactPathLiteralsSection,
         workspaceContext,
       });
       const bodyToCap = lastHistorySummary || summary;
@@ -1209,6 +1333,8 @@ export const __testing = {
   capCompactionSummary,
   capCompactionSummaryPreservingSuffix,
   formatFileOperations,
+  collectExactPathLiterals,
+  formatExactPathLiterals,
   computeAdaptiveChunkRatio,
   isOversizedForSummary,
   readWorkspaceContextForSummary,
@@ -1220,5 +1346,6 @@ export const __testing = {
   MAX_COMPACTION_SUMMARY_CHARS,
   MAX_FILE_OPS_SECTION_CHARS,
   MAX_FILE_OPS_LIST_CHARS,
+  MAX_EXACT_PATH_LITERALS_SECTION_CHARS,
   SUMMARY_TRUNCATED_MARKER,
 } as const;
