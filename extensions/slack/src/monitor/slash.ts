@@ -56,6 +56,7 @@ const SLACK_COMMAND_ARG_SELECT_OPTIONS_MAX = 100;
 const SLACK_COMMAND_ARG_SELECT_OPTION_TEXT_MAX = 75;
 const SLACK_COMMAND_ARG_SELECT_OPTION_VALUE_MAX = 75;
 const SLACK_COMMAND_ARG_BUTTON_TEXT_MAX = 75;
+const SLACK_COMMAND_ARG_BUTTON_VALUE_MAX = 2000;
 const SLACK_COMMAND_ARG_CONFIRM_TEXT_MAX = 300;
 const SLACK_HEADER_TEXT_MAX = 150;
 const SLACK_COMMAND_ARG_CHROME_BLOCKS = 3;
@@ -299,21 +300,24 @@ function buildSlackCommandArgMenuBlocks(params: {
           },
         ]
       : encodedChoices.length <= SLACK_COMMAND_ARG_BUTTON_ROW_SIZE || !canUseStaticSelect
-        ? chunkItems(encodedChoices, SLACK_COMMAND_ARG_BUTTON_ROW_SIZE).map(
-            (choices, rowIndex) => ({
-              type: "actions",
-              elements: choices.map((choice, colIndex) => ({
-                type: "button",
-                action_id: `${SLACK_COMMAND_ARG_ACTION_ID}_${rowIndex}_${colIndex}`,
-                text: {
-                  type: "plain_text",
-                  text: truncateSlackText(choice.label, SLACK_COMMAND_ARG_BUTTON_TEXT_MAX),
-                },
-                value: choice.value,
-                confirm: buildSlackArgMenuConfirm({ command: params.command, arg: params.arg }),
-              })),
-            }),
-          )
+        ? chunkItems(
+            encodedChoices.filter(
+              (choice) => choice.value.length <= SLACK_COMMAND_ARG_BUTTON_VALUE_MAX,
+            ),
+            SLACK_COMMAND_ARG_BUTTON_ROW_SIZE,
+          ).map((choices, rowIndex) => ({
+            type: "actions",
+            elements: choices.map((choice, colIndex) => ({
+              type: "button",
+              action_id: `${SLACK_COMMAND_ARG_ACTION_ID}_${rowIndex}_${colIndex}`,
+              text: {
+                type: "plain_text",
+                text: truncateSlackText(choice.label, SLACK_COMMAND_ARG_BUTTON_TEXT_MAX),
+              },
+              value: choice.value,
+              confirm: buildSlackArgMenuConfirm({ command: params.command, arg: params.arg }),
+            })),
+          }))
         : chunkItems(encodedChoices, SLACK_COMMAND_ARG_SELECT_OPTIONS_MAX).map(
             (choices, index) => ({
               type: "actions",
