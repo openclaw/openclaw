@@ -186,7 +186,10 @@ export function buildSlackInteractiveBlocks(
   }).blocks;
 }
 
-export function buildSlackPresentationBlocks(presentation?: MessagePresentation): SlackBlock[] {
+export function buildSlackPresentationBlocks(
+  presentation?: MessagePresentation,
+  options: SlackInteractiveBlockRenderOptions = {},
+): SlackBlock[] {
   if (!presentation) {
     return [];
   }
@@ -229,6 +232,6 @@ export function buildSlackPresentationBlocks(presentation?: MessagePresentation)
       (block) => block.type === "buttons" || block.type === "select",
     ),
   });
-  blocks.push(...buildSlackInteractiveBlocks(interactive));
+  blocks.push(...buildSlackInteractiveBlocks(interactive, options));
   return blocks;
 }

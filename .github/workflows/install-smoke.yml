@@ -54,7 +54,6 @@ jobs:
       run_bun_global_install_smoke: ${{ steps.manifest.outputs.run_bun_global_install_smoke }}
       target_sha: ${{ steps.manifest.outputs.target_sha }}
       dockerfile_image: ${{ steps.manifest.outputs.dockerfile_image }}
-      dockerfile_cache_scope: ${{ steps.manifest.outputs.dockerfile_cache_scope }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -81,7 +80,6 @@ jobs:
           target_sha="$(git rev-parse HEAD)"
           owner="$(printf '%s' "${GITHUB_REPOSITORY_OWNER:-openclaw}" | tr '[:upper:]' '[:lower:]')"
           dockerfile_image="ghcr.io/${owner}/openclaw-dockerfile-smoke:${target_sha}"
-          dockerfile_cache_scope="openclaw-dockerfile-smoke"
           if [ "$event_name" = "schedule" ]; then
             run_bun_global_install_smoke=true
           elif [ "$event_name" = "workflow_dispatch" ] || [ "$event_name" = "workflow_call" ]; then
@@ -97,7 +95,6 @@ jobs:
             echo "run_bun_global_install_smoke=$run_bun_global_install_smoke"
             echo "target_sha=$target_sha"
             echo "dockerfile_image=$dockerfile_image"
-            echo "dockerfile_cache_scope=$dockerfile_cache_scope"
           } >> "$GITHUB_OUTPUT"
 
   install-smoke-fast:
@@ -254,14 +251,11 @@ jobs:
       - name: Build and push root Dockerfile smoke image
         if: steps.existing.outputs.exists != 'true'
         env:
-          CACHE_SCOPE: ${{ needs.preflight.outputs.dockerfile_cache_scope }}
           IMAGE_REF: ${{ needs.preflight.outputs.dockerfile_image }}
         run: |
           timeout 45m docker buildx build \
             --progress=plain \
             --push \
-            --cache-from "type=gha,scope=${CACHE_SCOPE}" \
-            --cache-to "type=gha,scope=${CACHE_SCOPE},mode=max" \
             --build-arg OPENCLAW_EXTENSIONS=matrix \
             -t "$IMAGE_REF" \
             -f ./Dockerfile \
