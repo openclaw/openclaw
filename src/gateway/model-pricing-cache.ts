@@ -85,6 +85,38 @@ const log = createSubsystemLogger("gateway").child("model-pricing");
 let refreshTimer: ReturnType<typeof setTimeout> | null = null;
 let inFlightRefresh: Promise<void> | null = null;
 
+// ---------------------------------------------------------------------------
+// Circuit breaker — prevents hammering degraded external pricing services
+// ---------------------------------------------------------------------------
+const CIRCUIT_BREAKER_FAILURE_THRESHOLD = 3;
+const CIRCUIT_BREAKER_OPEN_DURATION_MS = 10 * 60_000; // 10 minutes
+
+let consecutiveFetchFailures = 0;
+let circuitOpenUntil = 0;
+
+function isPricingCircuitOpen(): boolean {
+  return Date.now() < circuitOpenUntil;
+}
+
+function recordPricingFetchSuccess(): void {
+  consecutiveFetchFailures = 0;
+}
+
+function recordPricingFetchFailure(): void {
+  consecutiveFetchFailures++;
+  if (consecutiveFetchFailures >= CIRCUIT_BREAKER_FAILURE_THRESHOLD) {
+    circuitOpenUntil = Date.now() + CIRCUIT_BREAKER_OPEN_DURATION_MS;
+    log.warn(
+      `pricing: circuit breaker opened after ${consecutiveFetchFailures} consecutive failures — pausing fetches for 10 min`,
+    );
+  }
+}
+
+function resetPricingCircuitBreakerForTest(): void {
+  consecutiveFetchFailures = 0;
+  circuitOpenUntil = 0;
+}
+
 function clearRefreshTimer(): void {
   if (!refreshTimer) {
     return;
@@ -1148,6 +1180,16 @@ export async function refreshGatewayModelPricingCache(params: {
       return;
     }
 
+    // Circuit breaker — skip live fetch when too many consecutive failures.
+    if (isPricingCircuitOpen()) {
+      const remainingSec = Math.ceil((circuitOpenUntil - Date.now()) / 1000);
+      log.warn(
+        `pricing: circuit open — skipping live fetch (${remainingSec}s remaining), using cached data`,
+      );
+      scheduleRefresh({ config: params.config, fetchImpl });
+      return;
+    }
+
     // Fetch both pricing catalogs in parallel.  Each source is
     // independently optional — a failure in one does not block the other.
     let openRouterFailed = false;
@@ -1218,6 +1260,7 @@ export async function refreshGatewayModelPricingCache(params: {
     // single-source outage from silently dropping pricing for models that
     // depended on the failed source.
     if (openRouterFailed || litellmFailed) {
+      recordPricingFetchFailure();
       const existingMeta = getGatewayModelPricingCacheMetaState();
       if (nextPricing.size === 0 && existingMeta.size > 0) {
         // Both sources failed — retain the entire existing cache.
@@ -1238,6 +1281,9 @@ export async function refreshGatewayModelPricingCache(params: {
           }
         }
       }
+    } else {
+      // Both sources succeeded — reset failure counter.
+      recordPricingFetchSuccess();
     }
 
     const nowCachedAt = Date.now();
@@ -1358,4 +1404,5 @@ export function __resetGatewayModelPricingCacheForTest(): void {
   clearGatewayModelPricingCacheState();
   clearRefreshTimer();
   inFlightRefresh = null;
+  resetPricingCircuitBreakerForTest();
 }
