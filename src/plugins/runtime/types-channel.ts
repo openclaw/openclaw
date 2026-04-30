@@ -153,8 +153,12 @@ export type PluginRuntimeChannel = {
   };
   turn: {
     run: typeof import("../../channels/turn/kernel.js").runChannelTurn;
+    /** @deprecated Prefer `run(...)`. */
+    runResolved: typeof import("../../channels/turn/kernel.js").runResolvedChannelTurn;
     buildContext: typeof import("../../channels/turn/kernel.js").buildChannelTurnContext;
     runPrepared: typeof import("../../channels/turn/kernel.js").runPreparedChannelTurn;
+    /** @deprecated Prefer `run(...)` or `runPrepared(...)`. */
+    dispatchAssembled: typeof import("../../channels/turn/kernel.js").dispatchAssembledChannelTurn;
   };
   threadBindings: {
     setIdleTimeoutBySessionKey: (params: {

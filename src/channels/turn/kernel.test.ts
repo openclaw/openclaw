@@ -342,6 +342,50 @@ describe("channel turn kernel", () => {
     expect(result.dispatchResult.queuedFinal).toBe(true);
   });
 
+  it("suppresses prepared dispatch for observe-only full turns", async () => {
+    const events: string[] = [];
+    const onFinalize = vi.fn();
+    const runDispatch = vi.fn(async () => {
+      events.push("custom-dispatch");
+      return {
+        queuedFinal: true,
+        counts: { tool: 0, block: 0, final: 1 },
+      };
+    });
+    const result = await runChannelTurn({
+      channel: "test",
+      raw: { id: "msg-1", text: "hello" },
+      adapter: {
+        ingest: () => ({ id: "msg-1", rawText: "hello" }),
+        preflight: () => ({ kind: "observeOnly", reason: "broadcast-observer" }),
+        resolveTurn: () => ({
+          channel: "test",
+          routeSessionKey: "agent:observer:test:peer",
+          storePath: "/tmp/sessions.json",
+          ctxPayload: createCtx({ SessionKey: "agent:observer:test:peer" }),
+          recordInboundSession: createRecordInboundSession(events),
+          runDispatch,
+        }),
+        onFinalize,
+      },
+    });
+
+    expect(result.admission).toEqual({ kind: "observeOnly", reason: "broadcast-observer" });
+    expect(result.dispatched).toBe(true);
+    expect(events).toEqual(["record"]);
+    expect(runDispatch).not.toHaveBeenCalled();
+    if (!result.dispatched) {
+      throw new Error("expected dispatch");
+    }
+    expect(hasFinalChannelTurnDispatch(result.dispatchResult)).toBe(false);
+    expect(onFinalize).toHaveBeenCalledWith(
+      expect.objectContaining({
+        admission: { kind: "observeOnly", reason: "broadcast-observer" },
+        dispatched: true,
+      }),
+    );
+  });
+
   it("finalizes failed dispatches before rethrowing", async () => {
     const onFinalize = vi.fn();
     const dispatchError = new Error("dispatch failed");
