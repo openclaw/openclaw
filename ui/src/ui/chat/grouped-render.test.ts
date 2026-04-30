@@ -1426,7 +1426,11 @@ describe("grouped chat rendering", () => {
     expect(sidebarButton).not.toBeNull();
     expect(onOpenSidebar).toHaveBeenCalledWith(
       expect.objectContaining({
-        kind: "markdown",
+        kind: "tool",
+        outputIsJson: true,
+        outputText: expect.stringContaining('"kind": "canvas"'),
+        rawText: expect.stringContaining('"target":"tool_card"'),
+        toolName: "canvas_render",
       }),
     );
   });
