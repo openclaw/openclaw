@@ -145,6 +145,31 @@ describe("loadDotEnv", () => {
     });
   });
 
+  it("loads ~/.openclaw/gateway.env so service-install commands inherit user-defined keys", async () => {
+    await withIsolatedEnvAndCwd(async () => {
+      await withDotEnvFixture(async ({ base, cwdDir }) => {
+        process.env.HOME = base;
+        const defaultStateDir = path.join(base, ".openclaw");
+        process.env.OPENCLAW_STATE_DIR = defaultStateDir;
+        await writeEnvFile(path.join(defaultStateDir, ".env"), "ALPHA=from-state-env\n");
+        await writeEnvFile(
+          path.join(defaultStateDir, "gateway.env"),
+          ["GATEWAY_AUTH_TOKEN=from-state-gateway", "ALPHA=from-state-gateway"].join("\n"),
+        );
+
+        vi.spyOn(process, "cwd").mockReturnValue(cwdDir);
+        delete process.env.GATEWAY_AUTH_TOKEN;
+        delete process.env.ALPHA;
+        loggerMocks.warn.mockClear();
+
+        loadDotEnv({ quiet: true });
+
+        expect(process.env.GATEWAY_AUTH_TOKEN).toBe("from-state-gateway");
+        expect(process.env.ALPHA).toBe("from-state-env");
+      });
+    });
+  });
+
   it("loads the Ubuntu gateway.env compatibility fallback after ~/.openclaw/.env", async () => {
     await withIsolatedEnvAndCwd(async () => {
       await withDotEnvFixture(async ({ base, cwdDir }) => {

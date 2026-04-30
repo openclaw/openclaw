@@ -258,9 +258,15 @@ export function loadGlobalRuntimeDotEnvFiles(opts?: { quiet?: boolean; stateEnvP
   const hasExplicitNonDefaultStateDir =
     process.env.OPENCLAW_STATE_DIR?.trim() !== undefined &&
     path.resolve(stateEnvPath) !== path.resolve(defaultStateEnvPath);
+  const stateGatewayEnvPath = path.join(path.dirname(stateEnvPath), "gateway.env");
   const parsedFiles = [
     readDotEnvFile({
       filePath: stateEnvPath,
+      shouldBlockKey: shouldBlockRuntimeDotEnvKey,
+      quiet,
+    }),
+    readDotEnvFile({
+      filePath: stateGatewayEnvPath,
       shouldBlockKey: shouldBlockRuntimeDotEnvKey,
       quiet,
     }),
