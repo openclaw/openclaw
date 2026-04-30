@@ -19,7 +19,7 @@ export function createTavilyWebFetchProvider(): WebFetchProviderPlugin {
       parameters: {},
       execute: async (args) => {
         const url = typeof args.url === "string" ? args.url : "";
-        const extractDepth = args.extractMode === "advanced" ? "advanced" : "basic";
+        const format = args.extractMode === "text" ? "text" : "markdown";
         const maxChars =
           typeof args.maxChars === "number" && Number.isFinite(args.maxChars)
             ? Math.floor(args.maxChars)
@@ -27,7 +27,8 @@ export function createTavilyWebFetchProvider(): WebFetchProviderPlugin {
         const payload = await runTavilyExtract({
           cfg: config,
           urls: [url],
-          extractDepth,
+          format,
+          extractDepth: "advanced",
         });
         if (maxChars === undefined) {
           return payload;

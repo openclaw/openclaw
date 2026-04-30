@@ -282,34 +282,36 @@ describe("tavily tools", () => {
     expect(applied.plugins?.entries?.tavily?.enabled).toBe(true);
   });
 
-  it("maps generic web_fetch args into Tavily extract params and translates extractMode", async () => {
+  it("maps generic web_fetch args into Tavily extract params and translates extractMode to format", async () => {
     const provider = createTavilyWebFetchProvider();
-    const basicTool = provider.createTool({
+    const markdownTool = provider.createTool({
       config: { test: true } as unknown as OpenClawConfig,
     });
-    const advancedTool = provider.createTool({
+    const textTool = provider.createTool({
       config: {} as OpenClawConfig,
     });
-    if (!basicTool || !advancedTool) {
+    if (!markdownTool || !textTool) {
       throw new Error("Expected tool definitions");
     }
 
-    await basicTool.execute({ url: "https://example.com" });
+    await markdownTool.execute({ url: "https://example.com" });
     expect(runTavilyExtract).toHaveBeenLastCalledWith({
       cfg: { test: true },
       urls: ["https://example.com"],
-      extractDepth: "basic",
+      format: "markdown",
+      extractDepth: "advanced",
     });
 
-    await advancedTool.execute({
+    await textTool.execute({
       url: "https://example.com",
-      extractMode: "advanced",
+      extractMode: "text",
       proxy: "stealth",
       storeInCache: false,
     });
     expect(runTavilyExtract).toHaveBeenLastCalledWith({
       cfg: {},
       urls: ["https://example.com"],
+      format: "text",
       extractDepth: "advanced",
     });
   });

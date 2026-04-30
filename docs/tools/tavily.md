@@ -84,20 +84,10 @@ Tavily uses one account for both `/search` and `/extract`, so the same
 for `web_fetch`. If you need a separate key, set
 `plugins.entries.tavily.config.webFetch.apiKey` -- it takes precedence.
 
-Auto-detect order is `70` (Tavily) vs `50` (Firecrawl), so when both keys are
-present and no `tools.web.fetch.provider` is set, Firecrawl is selected.
-
-`web_fetch` mapping onto Tavily Extract:
-
-| Generic `web_fetch` arg   | Tavily Extract                                                         |
-| ------------------------- | ---------------------------------------------------------------------- |
-| `url`                     | `urls: [url]`                                                          |
-| `extractMode: "advanced"` | `extract_depth: "advanced"` (otherwise `basic`)                        |
-| `maxChars`                | post-truncates `rawContent` and `content`                              |
-| `proxy`, `storeInCache`   | ignored (Tavily has no equivalent; the client maintains its own cache) |
-
-Tavily-only knobs (`query`, `chunks_per_source`, `include_images`) stay
-accessible via the dedicated `tavily_extract` tool.
+Tavily-only knobs (`query`, `chunks_per_source`, `include_images`,
+`include_favicon`, `timeout`, `include_usage`) stay accessible via the
+dedicated `tavily_extract` tool. `web_fetch` is single-URL by the OpenClaw
+contract -- use `tavily_extract` for multi-URL batches (up to 20 per call).
 
 ## Tavily plugin tools
 
