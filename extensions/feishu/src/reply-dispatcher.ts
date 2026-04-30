@@ -239,6 +239,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   let segmentLastPartial = "";
   let segmentMentionTargetsDelivered = false;
   let segmentDeliveryQueue: Promise<void> = Promise.resolve();
+  let segmentReplyStarted = false;
 
   const formatReasoningPrefix = (thinking: string): string => {
     if (!thinking) {
@@ -596,13 +597,17 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       responsePrefixContextProvider: prefixContext.responsePrefixContextProvider,
       humanDelay: core.channel.reply.resolveHumanDelayConfig(cfg, agentId),
       onReplyStart: async () => {
-        deliveredFinalTexts.clear();
         streamingClosedForReply = false;
         streamingCloseErroredForReply = false;
-        segmentAccumulatedText = "";
-        segmentDeliveredText = "";
-        segmentLastPartial = "";
-        segmentMentionTargetsDelivered = false;
+        if (!segmentReplyStarted) {
+          segmentReplyStarted = true;
+          deliveredFinalTexts.clear();
+          segmentAccumulatedText = "";
+          segmentDeliveredText = "";
+          segmentLastPartial = "";
+          segmentMentionTargetsDelivered = false;
+          segmentDeliveryQueue = Promise.resolve();
+        }
         if (cardStreamingEnabled && renderMode === "card") {
           startStreaming();
         }
@@ -617,6 +622,11 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           hasText && (renderMode === "card" || (renderMode === "auto" && shouldUseCard(text)));
         const skipTextForDuplicateFinal =
           info?.kind === "final" && hasText && deliveredFinalTexts.has(text);
+        const skipTextForDeliveredSegmentFinal =
+          segmentStreamingEnabled &&
+          info?.kind === "final" &&
+          hasText &&
+          !resolveUndeliveredSegmentText(text);
         const skipTextForClosedStreamingFinal =
           info?.kind === "final" &&
           hasText &&
@@ -625,7 +635,10 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           cardStreamingEnabled &&
           useCard;
         const shouldDeliverText =
-          hasText && !skipTextForDuplicateFinal && !skipTextForClosedStreamingFinal;
+          hasText &&
+          !skipTextForDuplicateFinal &&
+          !skipTextForDeliveredSegmentFinal &&
+          !skipTextForClosedStreamingFinal;
 
         if (!shouldDeliverText && !hasMedia) {
           return;

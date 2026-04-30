@@ -424,6 +424,65 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     );
   });
 
+  it("skips later final payloads already delivered by segment partial flushes", async () => {
+    setupSegmentStreamingConfig();
+    const { result, options } = createDispatcherHarness();
+
+    await options.onReplyStart?.();
+    result.replyOptions.onPartialReply?.({ text: "先查 session。" });
+    await result.replyOptions.onToolStart?.();
+    result.replyOptions.onPartialReply?.({ text: "先查 session。\n\n再看日志。" });
+    await result.replyOptions.onToolStart?.();
+
+    await options.deliver({ text: "查完了。" }, { kind: "final" });
+    await options.deliver({ text: "再看日志。" }, { kind: "final" });
+    await options.deliver({ text: "先查 session。" }, { kind: "final" });
+
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(3);
+    expect(sendMessageFeishuMock).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ text: "先查 session。" }),
+    );
+    expect(sendMessageFeishuMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ text: "再看日志。" }),
+    );
+    expect(sendMessageFeishuMock).toHaveBeenNthCalledWith(
+      3,
+      expect.objectContaining({ text: "查完了。" }),
+    );
+  });
+
+  it("keeps delivered segment state when reply start fires more than once in the same turn", async () => {
+    setupSegmentStreamingConfig();
+    const { result, options } = createDispatcherHarness();
+
+    await options.onReplyStart?.();
+    result.replyOptions.onPartialReply?.({ text: "先看日志。" });
+    await result.replyOptions.onToolStart?.();
+    await options.onReplyStart?.();
+    result.replyOptions.onPartialReply?.({ text: "先看日志。\n\n再看 session。" });
+    await result.replyOptions.onToolStart?.();
+
+    await options.deliver({ text: "总结。" }, { kind: "final" });
+    await options.deliver({ text: "再看 session。" }, { kind: "final" });
+    await options.deliver({ text: "先看日志。" }, { kind: "final" });
+
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(3);
+    expect(sendMessageFeishuMock).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ text: "先看日志。" }),
+    );
+    expect(sendMessageFeishuMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ text: "再看 session。" }),
+    );
+    expect(sendMessageFeishuMock).toHaveBeenNthCalledWith(
+      3,
+      expect.objectContaining({ text: "总结。" }),
+    );
+  });
+
   it("runs auto rendering independently for each segment", async () => {
     setupSegmentStreamingConfig();
     const { result, options } = createDispatcherHarness();

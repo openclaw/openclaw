@@ -94,7 +94,7 @@ pnpm test extensions/feishu/src/reply-dispatcher.test.ts
 Result:
 
 - 1 test file passed
-- 49 tests passed
+- 51 tests passed
 
 Also ran:
 
