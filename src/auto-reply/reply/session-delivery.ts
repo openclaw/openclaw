@@ -1,11 +1,11 @@
 import type { SessionEntry } from "../../config/sessions.js";
 import { buildAgentMainSessionKey } from "../../routing/session-key.js";
-import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "../../shared/string-coerce.js";
+  isDirectSessionKey,
+  isMainSessionKey,
+  parseAgentSessionKey,
+} from "../../sessions/session-key-utils.js";
+import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import {
   deliveryContextFromSession,
   deliveryContextKey,
@@ -33,58 +33,6 @@ function resolveSessionKeyChannelHint(sessionKey?: string): string | undefined {
     return undefined;
   }
   return normalizeMessageChannel(head);
-}
-
-function isMainSessionKey(sessionKey?: string): boolean {
-  const parsed = parseAgentSessionKey(sessionKey);
-  if (!parsed) {
-    return normalizeLowercaseStringOrEmpty(sessionKey) === "main";
-  }
-  return normalizeLowercaseStringOrEmpty(parsed.rest) === "main";
-}
-
-const DIRECT_SESSION_MARKERS = new Set(["direct", "dm"]);
-const THREAD_SESSION_MARKERS = new Set(["thread", "topic"]);
-
-function hasStrictDirectSessionTail(parts: string[], markerIndex: number): boolean {
-  const peerId = normalizeOptionalString(parts[markerIndex + 1]);
-  if (!peerId) {
-    return false;
-  }
-  const tail = parts.slice(markerIndex + 2);
-  if (tail.length === 0) {
-    return true;
-  }
-  return (
-    tail.length === 2 &&
-    THREAD_SESSION_MARKERS.has(tail[0] ?? "") &&
-    Boolean(normalizeOptionalString(tail[1]))
-  );
-}
-
-function isDirectSessionKey(sessionKey?: string): boolean {
-  const raw = normalizeLowercaseStringOrEmpty(sessionKey);
-  if (!raw) {
-    return false;
-  }
-  const scoped = parseAgentSessionKey(raw)?.rest ?? raw;
-  const parts = scoped.split(":").filter(Boolean);
-  if (parts.length < 2) {
-    return false;
-  }
-  if (DIRECT_SESSION_MARKERS.has(parts[0] ?? "")) {
-    return hasStrictDirectSessionTail(parts, 0);
-  }
-  const channel = normalizeMessageChannel(parts[0]);
-  if (!channel || !isDeliverableMessageChannel(channel)) {
-    return false;
-  }
-  if (DIRECT_SESSION_MARKERS.has(parts[1] ?? "")) {
-    return hasStrictDirectSessionTail(parts, 1);
-  }
-  return Boolean(normalizeOptionalString(parts[1])) && DIRECT_SESSION_MARKERS.has(parts[2] ?? "")
-    ? hasStrictDirectSessionTail(parts, 2)
-    : false;
 }
 
 function isExternalRoutingChannel(channel?: string): channel is string {
