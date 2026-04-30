@@ -1,6 +1,27 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+
+const loggerMocks = vi.hoisted(() => ({
+  warn: vi.fn(),
+}));
+
+vi.mock("../../logging/subsystem.js", () => ({
+  createSubsystemLogger: () => ({
+    subsystem: "auto-reply",
+    isEnabled: () => false,
+    trace: vi.fn(),
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: loggerMocks.warn,
+    error: vi.fn(),
+    fatal: vi.fn(),
+    raw: vi.fn(),
+    child: vi.fn(),
+  }),
+}));
+
 import {
+  resetVisibleRepliesPrivateDefaultWarningForTest,
   resolveSourceReplyDeliveryMode,
   resolveSourceReplyVisibilityPolicy,
 } from "./source-reply-delivery-mode.js";
@@ -19,6 +40,11 @@ const globalToolOnlyReplyConfig = {
   },
 } as const satisfies OpenClawConfig;
 
+beforeEach(() => {
+  loggerMocks.warn.mockClear();
+  resetVisibleRepliesPrivateDefaultWarningForTest();
+});
+
 describe("resolveSourceReplyDeliveryMode", () => {
   it("defaults groups and channels to message-tool-only delivery", () => {
     expect(resolveSourceReplyDeliveryMode({ cfg: emptyConfig, ctx: { ChatType: "channel" } })).toBe(
@@ -29,6 +55,10 @@ describe("resolveSourceReplyDeliveryMode", () => {
     );
     expect(resolveSourceReplyDeliveryMode({ cfg: emptyConfig, ctx: { ChatType: "direct" } })).toBe(
       "automatic",
+    );
+    expect(loggerMocks.warn).toHaveBeenCalledTimes(1);
+    expect(loggerMocks.warn).toHaveBeenCalledWith(
+      expect.stringContaining("Group/channel replies are private by default"),
     );
   });
 
@@ -77,6 +107,42 @@ describe("resolveSourceReplyDeliveryMode", () => {
         ctx: { ChatType: "group", CommandSource: "native" },
       }),
     ).toBe("automatic");
+    expect(loggerMocks.warn).not.toHaveBeenCalled();
+  });
+
+  it("falls back to automatic when message tool is unavailable", () => {
+    expect(
+      resolveSourceReplyDeliveryMode({
+        cfg: emptyConfig,
+        ctx: { ChatType: "group" },
+        messageToolAvailable: false,
+      }),
+    ).toBe("automatic");
+    expect(
+      resolveSourceReplyDeliveryMode({
+        cfg: globalToolOnlyReplyConfig,
+        ctx: { ChatType: "direct" },
+        messageToolAvailable: false,
+      }),
+    ).toBe("automatic");
+    expect(loggerMocks.warn).not.toHaveBeenCalled();
+  });
+
+  it("keeps message-tool-only delivery when message tool availability is unknown", () => {
+    expect(
+      resolveSourceReplyDeliveryMode({
+        cfg: emptyConfig,
+        ctx: { ChatType: "group" },
+        messageToolAvailable: true,
+      }),
+    ).toBe("message_tool_only");
+    expect(
+      resolveSourceReplyDeliveryMode({
+        cfg: emptyConfig,
+        ctx: { ChatType: "channel" },
+      }),
+    ).toBe("message_tool_only");
+    expect(loggerMocks.warn).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -218,6 +284,23 @@ describe("resolveSourceReplyVisibilityPolicy", () => {
       suppressHookUserDelivery: true,
       suppressHookReplyLifecycle: true,
       suppressTyping: false,
+    });
+  });
+
+  it("keeps delivery automatic when message-tool-only mode cannot send visibly", () => {
+    expect(
+      resolveSourceReplyVisibilityPolicy({
+        cfg: emptyConfig,
+        ctx: { ChatType: "group" },
+        sendPolicy: "allow",
+        messageToolAvailable: false,
+      }),
+    ).toMatchObject({
+      sourceReplyDeliveryMode: "automatic",
+      suppressAutomaticSourceDelivery: false,
+      suppressDelivery: false,
+      suppressHookUserDelivery: false,
+      deliverySuppressionReason: "",
     });
   });
 });
