@@ -1,4 +1,3 @@
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveDefaultPluginExtensionsDir } from "./install-paths.js";
 import { commitPluginInstallRecordsWithConfig } from "./install-record-commit.js";
 import {
@@ -14,7 +13,7 @@ import {
   readPluginMutationSnapshot,
   refreshRegistryAfterPluginMutation,
 } from "./management-core.js";
-import type { PluginRecord } from "./registry.js";
+import { resolvePluginUninstallId } from "./plugins-uninstall-selection.js";
 import { buildPluginSnapshotReport } from "./status.js";
 import {
   applyPluginUninstallDirectoryRemoval,
@@ -28,28 +27,6 @@ export type PluginManagementUninstallParams = {
   keepFiles?: boolean;
   dryRun?: boolean;
 };
-
-function resolvePluginUninstallId<TPlugin extends Pick<PluginRecord, "id" | "name">>(params: {
-  rawId: string;
-  config: OpenClawConfig;
-  plugins: TPlugin[];
-}): { pluginId: string; plugin?: TPlugin } {
-  const rawId = params.rawId.trim();
-  const plugin = params.plugins.find((entry) => entry.id === rawId || entry.name === rawId);
-  if (plugin) {
-    return { pluginId: plugin.id, plugin };
-  }
-  for (const [pluginId, install] of Object.entries(params.config.plugins?.installs ?? {})) {
-    if (
-      install.spec === rawId ||
-      install.resolvedSpec === rawId ||
-      install.resolvedName === rawId
-    ) {
-      return { pluginId };
-    }
-  }
-  return { pluginId: rawId };
-}
 
 export async function uninstallManagedPlugin(params: PluginManagementUninstallParams) {
   if (!params.dryRun && !params.force) {
@@ -66,8 +43,7 @@ export async function uninstallManagedPlugin(params: PluginManagementUninstallPa
       config: cfg,
       plugins: report.plugins,
     });
-    const channelIds =
-      selection.plugin?.status === "loaded" ? selection.plugin.channelIds : undefined;
+    const channelIds = selection.plugin?.channelIds;
     const plan = planPluginUninstall({
       config: cfg,
       pluginId: selection.pluginId,

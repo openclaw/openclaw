@@ -1,3 +1,4 @@
+import { getRuntimeConfig } from "../config/config.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { enablePluginInConfig } from "./enable.js";
 import { loadInstalledPluginIndexInstallRecords } from "./installed-plugin-index-records.js";
@@ -17,6 +18,7 @@ import {
   buildPluginCompatibilityNotices,
   buildPluginDiagnosticsReport,
   buildPluginInspectReport,
+  buildPluginRegistrySnapshotReport,
   buildPluginSnapshotReport,
   type PluginInspectReport,
 } from "./status.js";
@@ -36,7 +38,9 @@ export type PluginManagementListParams = {
 };
 
 export function listManagedPlugins(params: PluginManagementListParams = {}) {
-  const cfg = params.diagnostics ? buildPluginDiagnosticsReport() : buildPluginSnapshotReport();
+  const cfg = params.diagnostics
+    ? buildPluginDiagnosticsReport()
+    : buildPluginRegistrySnapshotReport();
   const plugins = params.enabled ? cfg.plugins.filter((plugin) => plugin.enabled) : cfg.plugins;
   const registry =
     "registrySource" in cfg && "registryDiagnostics" in cfg
@@ -100,7 +104,7 @@ export function doctorManagedPlugins() {
 }
 
 export async function inspectManagedPluginRegistry() {
-  const inspection = await inspectPluginRegistry();
+  const inspection = await inspectPluginRegistry({ config: getRuntimeConfig() });
   return {
     ok: true as const,
     state: inspection.state,

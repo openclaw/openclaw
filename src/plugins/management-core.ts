@@ -79,6 +79,9 @@ export function installFailureKind(code: string | undefined): PluginManagementEr
   if (code === "npm_package_not_found") {
     return "not-found";
   }
+  if (code === "security_scan_failed" || code === "unknown_host_version") {
+    return "unavailable";
+  }
   return "invalid-request";
 }
 

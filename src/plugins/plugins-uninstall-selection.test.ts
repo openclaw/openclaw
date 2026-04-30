@@ -26,6 +26,47 @@ describe("resolvePluginUninstallId", () => {
     expect(result.pluginId).toBe("linkmind-context");
   });
 
+  it("accepts the marketplace plugin alias as an uninstall target", () => {
+    const result = resolvePluginUninstallId({
+      rawId: "official/linkmind-context",
+      config: {
+        plugins: {
+          entries: { "linkmind-context": { enabled: true } },
+          installs: {
+            "linkmind-context": {
+              source: "marketplace",
+              spec: "linkmind-context",
+              marketplacePlugin: "official/linkmind-context",
+            },
+          },
+        },
+      } as OpenClawConfig,
+      plugins: [{ id: "linkmind-context", name: "linkmind-context" }],
+    });
+
+    expect(result.pluginId).toBe("linkmind-context");
+  });
+
+  it("keeps loaded plugin metadata when resolving by install alias", () => {
+    const result = resolvePluginUninstallId({
+      rawId: "official/linkmind-context",
+      config: {
+        plugins: {
+          installs: {
+            "linkmind-context": {
+              source: "marketplace",
+              spec: "linkmind-context",
+              marketplacePlugin: "official/linkmind-context",
+            },
+          },
+        },
+      } as OpenClawConfig,
+      plugins: [{ id: "linkmind-context", name: "linkmind-context", channelIds: ["linkmind"] }],
+    });
+
+    expect(result.plugin?.channelIds).toEqual(["linkmind"]);
+  });
+
   it("accepts a versionless ClawHub spec when the install was pinned", () => {
     const result = resolvePluginUninstallId({
       rawId: "clawhub:linkmind-context",

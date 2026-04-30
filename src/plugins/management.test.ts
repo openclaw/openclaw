@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
+  getRuntimeConfig: vi.fn(),
   readConfigFileSnapshotForWrite: vi.fn(),
   replaceConfigFile: vi.fn(),
   loadInstalledPluginIndexInstallRecords: vi.fn(),
@@ -8,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   refreshPluginRegistry: vi.fn(),
   resolveDefaultPluginExtensionsDir: vi.fn(),
   buildPluginSnapshotReport: vi.fn(),
+  buildPluginRegistrySnapshotReport: vi.fn(),
   buildPluginDiagnosticsReport: vi.fn(),
   buildPluginCompatibilityNotices: vi.fn(),
   buildPluginInspectReport: vi.fn(),
@@ -20,6 +22,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../config/config.js", () => ({
+  getRuntimeConfig: mocks.getRuntimeConfig,
   readConfigFileSnapshotForWrite: mocks.readConfigFileSnapshotForWrite,
   replaceConfigFile: mocks.replaceConfigFile,
 }));
@@ -49,6 +52,7 @@ vi.mock("./install-paths.js", async (importOriginal) => {
 
 vi.mock("./status.js", () => ({
   buildPluginSnapshotReport: mocks.buildPluginSnapshotReport,
+  buildPluginRegistrySnapshotReport: mocks.buildPluginRegistrySnapshotReport,
   buildPluginDiagnosticsReport: mocks.buildPluginDiagnosticsReport,
   buildPluginCompatibilityNotices: mocks.buildPluginCompatibilityNotices,
   buildPluginInspectReport: mocks.buildPluginInspectReport,
@@ -110,9 +114,16 @@ describe("plugin management service", () => {
     mocks.writePersistedInstalledPluginIndexInstallRecords.mockResolvedValue(undefined);
     mocks.refreshPluginRegistry.mockResolvedValue({ plugins: [], diagnostics: [] });
     mocks.resolveDefaultPluginExtensionsDir.mockReturnValue("/config/extensions");
+    mocks.getRuntimeConfig.mockReturnValue({});
     mocks.buildPluginSnapshotReport.mockReturnValue({
       plugins: [{ id: "demo", name: "demo", status: "loaded", channelIds: [] }],
       diagnostics: [],
+    });
+    mocks.buildPluginRegistrySnapshotReport.mockReturnValue({
+      plugins: [{ id: "demo", name: "demo", status: "loaded", channelIds: [] }],
+      diagnostics: [],
+      registrySource: "persisted",
+      registryDiagnostics: [],
     });
     mocks.buildPluginDiagnosticsReport.mockReturnValue({ plugins: [], diagnostics: [] });
     mocks.buildPluginCompatibilityNotices.mockReturnValue([]);
@@ -173,6 +184,40 @@ describe("plugin management service", () => {
     expect(mocks.planPluginUninstall).toHaveBeenCalledWith(
       expect.objectContaining({
         extensionsDir: "/config/extensions",
+      }),
+    );
+  });
+
+  it("passes channel ids from disabled plugins when uninstalling", async () => {
+    mocks.readConfigFileSnapshotForWrite.mockResolvedValue(
+      configSnapshot({
+        plugins: {
+          installs: {
+            demo: { source: "npm", spec: "demo", installPath: "/config/extensions/demo" },
+          },
+        },
+      }),
+    );
+    mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue({
+      demo: { source: "npm", spec: "demo", installPath: "/config/extensions/demo" },
+    });
+    mocks.buildPluginSnapshotReport.mockReturnValue({
+      plugins: [
+        {
+          id: "demo",
+          name: "demo",
+          status: "disabled",
+          channelIds: ["demo-prod", "demo-dev"],
+        },
+      ],
+      diagnostics: [],
+    });
+
+    await uninstallManagedPlugin({ id: "demo", force: true });
+
+    expect(mocks.planPluginUninstall).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channelIds: ["demo-prod", "demo-dev"],
       }),
     );
   });
