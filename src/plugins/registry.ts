@@ -147,6 +147,7 @@ import type {
   OpenClawPluginHttpRouteParams,
   OpenClawPluginHookOptions,
   OpenClawPluginNodeHostCommand,
+  OpenClawPluginNodeInvokePolicy,
   OpenClawPluginReloadRegistration,
   OpenClawPluginSecurityAuditCollector,
   MediaUnderstandingProviderPlugin,
@@ -1248,6 +1249,57 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     });
   };
 
+  const registerNodeInvokePolicy = (
+    record: PluginRecord,
+    policy: OpenClawPluginNodeInvokePolicy,
+    pluginConfig?: Record<string, unknown>,
+  ) => {
+    const commands = Array.isArray(policy.commands)
+      ? policy.commands.map((command) => command.trim()).filter(Boolean)
+      : [];
+    if (commands.length === 0) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: "node invoke policy registration missing commands",
+      });
+      return;
+    }
+    if (typeof policy.handle !== "function") {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `node invoke policy registration missing handler: ${commands.join(", ")}`,
+      });
+      return;
+    }
+    registry.nodeInvokePolicies ??= [];
+    for (const command of commands) {
+      const existing = registry.nodeInvokePolicies.find((entry) =>
+        entry.policy.commands.includes(command),
+      );
+      if (existing) {
+        pushDiagnostic({
+          level: "error",
+          pluginId: record.id,
+          source: record.source,
+          message: `node invoke policy already registered for ${command} (${existing.pluginId})`,
+        });
+        return;
+      }
+    }
+    registry.nodeInvokePolicies.push({
+      pluginId: record.id,
+      pluginName: record.name,
+      policy: { ...policy, commands },
+      pluginConfig,
+      source: record.source,
+      rootDir: record.rootDir,
+    });
+  };
+
   const registerSecurityAuditCollector = (
     record: PluginRecord,
     collector: OpenClawPluginSecurityAuditCollector,
@@ -2076,6 +2128,8 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
               registerTextTransforms: (transforms) => registerTextTransforms(record, transforms),
               registerReload: (registration) => registerReload(record, registration),
               registerNodeHostCommand: (command) => registerNodeHostCommand(record, command),
+              registerNodeInvokePolicy: (policy) =>
+                registerNodeInvokePolicy(record, policy, params.pluginConfig),
               registerSecurityAuditCollector: (collector) =>
                 registerSecurityAuditCollector(record, collector),
               registerInteractiveHandler: (registration) => {
