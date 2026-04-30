@@ -836,6 +836,25 @@ describe("registerPluginCommand", () => {
     expectUnsupportedBindingApiResult(result);
   });
 
+  it("normalizes undefined plugin command results to an empty reply object", async () => {
+    const result = await executePluginCommand({
+      command: {
+        name: "noop",
+        description: "No-op command",
+        acceptsArgs: false,
+        handler: (async () => undefined) as never,
+        pluginId: "demo-plugin",
+      },
+      channel: "whatsapp",
+      senderId: "U123",
+      isAuthorizedSender: true,
+      commandBody: "/noop",
+      config: {} as never,
+    });
+
+    expect(result).toEqual({});
+  });
+
   it("passes host session identity through to the plugin command context", async () => {
     let receivedCtx:
       | {

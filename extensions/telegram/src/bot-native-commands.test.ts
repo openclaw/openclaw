@@ -27,7 +27,7 @@ type PlugCommandHarnessParams = {
   cfg?: OpenClawConfig;
   command?: Record<string, unknown>;
   args?: string;
-  result?: Record<string, unknown>;
+  result?: unknown;
   registerOverrides?: Partial<Parameters<typeof registerTelegramNativeCommands>[0]>;
 };
 
@@ -46,9 +46,8 @@ function primePlugCommand(params: PlugCommandHarnessParams = {}) {
     },
     args: params.args,
   } as never);
-  pluginCommandMocks.executePluginCommand.mockResolvedValue(
-    (params.result ?? { text: "ok" }) as never,
-  );
+  const result = Object.hasOwn(params, "result") ? params.result : { text: "ok" };
+  pluginCommandMocks.executePluginCommand.mockResolvedValue(result as never);
 }
 
 function registerPlugCommand(params: PlugCommandHarnessParams = {}) {
@@ -263,6 +262,21 @@ describe("registerTelegramNativeCommands", () => {
     expect(callbackData).toEqual(["tgcmd:/fast status", "tgcmd:/fast on", "tgcmd:/fast off"]);
     expect(parseTelegramNativeCommandCallbackData("tgcmd:/fast status")).toBe("/fast status");
     expect(parseTelegramNativeCommandCallbackData("tgcmd:fast status")).toBeNull();
+  });
+
+  it("treats undefined plugin command results as a no-op Telegram reply", async () => {
+    const { handler, sendMessage } = registerPlugCommand({
+      result: undefined,
+    });
+
+    await handler(createPrivateCommandContext());
+
+    expect(sendMessage).not.toHaveBeenCalledWith(123, "Command not found.");
+    expect(deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replies: [{}],
+      }),
+    );
   });
 
   it("passes agent-scoped media roots for plugin command replies with media", async () => {

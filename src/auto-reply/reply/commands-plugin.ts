@@ -5,7 +5,11 @@
  * This handler is called before built-in command handlers.
  */
 
-import { matchPluginCommand, executePluginCommand } from "../../plugins/commands.js";
+import {
+  matchPluginCommand,
+  executePluginCommand,
+  normalizePluginCommandResult,
+} from "../../plugins/commands.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import type { CommandHandler, CommandHandlerResult } from "./commands-types.js";
 
@@ -56,8 +60,9 @@ export const handlePluginCommand: CommandHandler = async (
         : undefined,
     threadParentId: normalizeOptionalString(params.ctx.ThreadParentId),
   });
-  const shouldContinue = result.continueAgent === true;
-  const { continueAgent: _continueAgent, ...reply } = result;
+  const normalizedResult = normalizePluginCommandResult(result);
+  const shouldContinue = normalizedResult.continueAgent === true;
+  const { continueAgent: _continueAgent, ...reply } = normalizedResult;
   void _continueAgent;
 
   return {

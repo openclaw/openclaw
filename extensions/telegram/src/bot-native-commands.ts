@@ -147,6 +147,13 @@ function resolveTelegramProgressPlaceholder(command: {
   return text ? text : null;
 }
 
+function normalizeTelegramPluginCommandResult(result: unknown): TelegramNativeReplyPayload {
+  if (result && typeof result === "object" && !Array.isArray(result)) {
+    return result as TelegramNativeReplyPayload;
+  }
+  return {};
+}
+
 function resolveTelegramCommandMenuModelContext(params: {
   cfg: OpenClawConfig;
   agentId: string;
@@ -1193,21 +1200,23 @@ export const registerTelegramNativeCommands = ({
           }
         }
 
-        const result = await nativeCommandRuntime.executePluginCommand({
-          command: match.command,
-          args: match.args,
-          senderId,
-          channel: "telegram",
-          isAuthorizedSender: commandAuthorized,
-          senderIsOwner,
-          sessionKey: route.sessionKey,
-          commandBody,
-          config: runtimeCfg,
-          from,
-          to,
-          accountId,
-          messageThreadId: threadSpec.id,
-        });
+        const result = normalizeTelegramPluginCommandResult(
+          await nativeCommandRuntime.executePluginCommand({
+            command: match.command,
+            args: match.args,
+            senderId,
+            channel: "telegram",
+            isAuthorizedSender: commandAuthorized,
+            senderIsOwner,
+            sessionKey: route.sessionKey,
+            commandBody,
+            config: runtimeCfg,
+            from,
+            to,
+            accountId,
+            messageThreadId: threadSpec.id,
+          }),
+        );
 
         if (
           shouldSuppressLocalTelegramExecApprovalPrompt({

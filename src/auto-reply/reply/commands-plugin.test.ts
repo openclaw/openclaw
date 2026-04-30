@@ -9,6 +9,8 @@ const executePluginCommandMock = vi.hoisted(() => vi.fn());
 vi.mock("../../plugins/commands.js", () => ({
   matchPluginCommand: matchPluginCommandMock,
   executePluginCommand: executePluginCommandMock,
+  normalizePluginCommandResult: (result: unknown) =>
+    result && typeof result === "object" && !Array.isArray(result) ? result : {},
 }));
 
 function buildPluginParams(
@@ -128,6 +130,27 @@ describe("handlePluginCommand", () => {
     expect(result).toEqual({
       shouldContinue: true,
       reply: { text: "from plugin" },
+    });
+  });
+
+  it("treats undefined plugin command results as a no-op reply", async () => {
+    matchPluginCommandMock.mockReturnValue({
+      command: { name: "noop" },
+      args: "",
+    });
+    executePluginCommandMock.mockResolvedValue(undefined);
+
+    const result = await handlePluginCommand(
+      buildPluginParams("/noop", {
+        commands: { text: true },
+        channels: { whatsapp: { allowFrom: ["*"] } },
+      } as OpenClawConfig),
+      true,
+    );
+
+    expect(result).toEqual({
+      shouldContinue: false,
+      reply: undefined,
     });
   });
 

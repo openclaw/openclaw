@@ -339,7 +339,7 @@ export async function executePluginCommand(params: {
     logVerbose(
       `Plugin command /${command.name} executed successfully for ${senderId || "unknown"}`,
     );
-    return result;
+    return normalizePluginCommandResult(result);
   } catch (err) {
     const error = err as Error;
     logVerbose(`Plugin command /${command.name} error: ${error.message}`);
@@ -348,6 +348,13 @@ export async function executePluginCommand(params: {
   } finally {
     setPluginCommandRegistryLocked(false);
   }
+}
+
+export function normalizePluginCommandResult(result: unknown): PluginCommandResult {
+  if (result && typeof result === "object" && !Array.isArray(result)) {
+    return result as PluginCommandResult;
+  }
+  return {};
 }
 
 /**
