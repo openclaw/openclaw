@@ -27,6 +27,7 @@ import {
   type getReplyFromConfig,
   type LoadConfigFn,
   type ReplyPayload,
+  type SourceReplyDeliveryMode,
   type resolveAgentRoute,
 } from "./inbound-dispatch.runtime.js";
 
@@ -304,6 +305,8 @@ export async function dispatchWhatsAppBufferedReply(params: {
   replyResolver: typeof getReplyFromConfig;
   route: ReturnType<typeof resolveAgentRoute>;
   shouldClearGroupHistory: boolean;
+  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  allowSuppressedFinalReplyFallback?: boolean;
 }) {
   const textLimit = params.maxMediaTextChunkLimit ?? resolveTextChunkLimit(params.cfg, "whatsapp");
   const chunkMode = resolveChunkMode(params.cfg, "whatsapp", params.route.accountId);
@@ -317,95 +320,115 @@ export async function dispatchWhatsAppBufferedReply(params: {
   let didSendReply = false;
   let didLogHeartbeatStrip = false;
 
-  const { queuedFinal, counts } = await dispatchReplyWithBufferedBlockDispatcher({
-    ctx: params.context,
-    cfg: params.cfg,
-    replyResolver: params.replyResolver,
-    dispatcherOptions: {
-      ...params.replyPipeline,
-      onHeartbeatStrip: () => {
-        if (!didLogHeartbeatStrip) {
-          didLogHeartbeatStrip = true;
-          logVerbose("Stripped stray HEARTBEAT_OK token from web reply");
-        }
-      },
-      deliver: async (payload: ReplyPayload, info: { kind: ReplyLifecycleKind }) => {
-        const deliveryPayload = resolveWhatsAppDeliverablePayload(payload, info);
-        if (!deliveryPayload) {
-          return;
-        }
-        const normalizedOutboundPayload = normalizeWhatsAppOutboundPayload(deliveryPayload, {
-          normalizeText: normalizeWhatsAppPayloadTextPreservingIndentation,
-        });
-        const normalizedDeliveryPayload =
-          deliveryPayload.text === undefined
-            ? { ...normalizedOutboundPayload, text: undefined }
-            : normalizedOutboundPayload;
-        const reply = resolveSendableOutboundReplyParts(normalizedDeliveryPayload);
-        if (!reply.hasMedia && !reply.text.trim()) {
-          return;
-        }
-        const delivery = await params.deliverReply({
-          replyResult: normalizedDeliveryPayload,
-          normalizedReplyResult: normalizedDeliveryPayload,
-          msg: params.msg,
-          mediaLocalRoots,
-          maxMediaBytes: params.maxMediaBytes,
-          textLimit,
-          chunkMode,
-          replyLogger: params.replyLogger,
-          connectionId: params.connectionId,
-          skipLog: false,
-          tableMode,
-        });
-        if (!delivery.providerAccepted) {
-          params.replyLogger.warn(
-            {
-              correlationId: params.msg.id ?? null,
-              connectionId: params.connectionId,
-              conversationId: params.conversationId,
-              chatId: params.msg.chatId,
-              to: params.msg.from,
-              from: params.msg.to,
-              replyKind: info.kind,
-            },
-            "auto-reply was not accepted by WhatsApp provider",
-          );
-          return;
-        }
-        didSendReply = true;
-        const shouldLog = normalizedDeliveryPayload.text ? true : undefined;
-        params.rememberSentText(normalizedDeliveryPayload.text, {
-          combinedBody: params.context.Body as string | undefined,
-          combinedBodySessionKey: params.route.sessionKey,
-          logVerboseMessage: shouldLog,
-        });
-        const fromDisplay =
-          params.msg.chatType === "group" ? params.conversationId : (params.msg.from ?? "unknown");
-        if (shouldLogVerbose()) {
-          const preview = normalizedDeliveryPayload.text != null ? reply.text : "<media>";
-          logVerbose(`Reply body: ${preview}${reply.hasMedia ? " (media)" : ""} -> ${fromDisplay}`);
-        }
-      },
-      onReplyStart: params.msg.sendComposing,
-      onError: (err, info) => {
-        logWhatsAppReplyDeliveryError({
-          err,
-          info,
+  const deliverOutboundPayload = async (
+    payload: ReplyPayload,
+    info: { kind: ReplyLifecycleKind },
+  ): Promise<void> => {
+    const deliveryPayload = resolveWhatsAppDeliverablePayload(payload, info);
+    if (!deliveryPayload) {
+      return;
+    }
+    const normalizedOutboundPayload = normalizeWhatsAppOutboundPayload(deliveryPayload, {
+      normalizeText: normalizeWhatsAppPayloadTextPreservingIndentation,
+    });
+    const normalizedDeliveryPayload =
+      deliveryPayload.text === undefined
+        ? { ...normalizedOutboundPayload, text: undefined }
+        : normalizedOutboundPayload;
+    const reply = resolveSendableOutboundReplyParts(normalizedDeliveryPayload);
+    if (!reply.hasMedia && !reply.text.trim()) {
+      return;
+    }
+    const delivery = await params.deliverReply({
+      replyResult: normalizedDeliveryPayload,
+      normalizedReplyResult: normalizedDeliveryPayload,
+      msg: params.msg,
+      mediaLocalRoots,
+      maxMediaBytes: params.maxMediaBytes,
+      textLimit,
+      chunkMode,
+      replyLogger: params.replyLogger,
+      connectionId: params.connectionId,
+      skipLog: false,
+      tableMode,
+    });
+    if (!delivery.providerAccepted) {
+      params.replyLogger.warn(
+        {
+          correlationId: params.msg.id ?? null,
           connectionId: params.connectionId,
           conversationId: params.conversationId,
-          msg: params.msg,
-          replyLogger: params.replyLogger,
-        });
-      },
-    },
-    replyOptions: {
-      disableBlockStreaming,
-      onModelSelected: params.onModelSelected,
-    },
-  });
+          chatId: params.msg.chatId,
+          to: params.msg.from,
+          from: params.msg.to,
+          replyKind: info.kind,
+        },
+        "auto-reply was not accepted by WhatsApp provider",
+      );
+      return;
+    }
+    didSendReply = true;
+    const shouldLog = normalizedDeliveryPayload.text ? true : undefined;
+    params.rememberSentText(normalizedDeliveryPayload.text, {
+      combinedBody: params.context.Body as string | undefined,
+      combinedBodySessionKey: params.route.sessionKey,
+      logVerboseMessage: shouldLog,
+    });
+    const fromDisplay =
+      params.msg.chatType === "group" ? params.conversationId : (params.msg.from ?? "unknown");
+    if (shouldLogVerbose()) {
+      const preview = normalizedDeliveryPayload.text != null ? reply.text : "<media>";
+      logVerbose(`Reply body: ${preview}${reply.hasMedia ? " (media)" : ""} -> ${fromDisplay}`);
+    }
+  };
 
-  const didQueueVisibleReply = hasVisibleInboundReplyDispatch({ queuedFinal, counts });
+  const { queuedFinal, counts, suppressedFinalReplies } =
+    await dispatchReplyWithBufferedBlockDispatcher({
+      ctx: params.context,
+      cfg: params.cfg,
+      replyResolver: params.replyResolver,
+      dispatcherOptions: {
+        ...params.replyPipeline,
+        onHeartbeatStrip: () => {
+          if (!didLogHeartbeatStrip) {
+            didLogHeartbeatStrip = true;
+            logVerbose("Stripped stray HEARTBEAT_OK token from web reply");
+          }
+        },
+        deliver: deliverOutboundPayload,
+        onReplyStart: params.msg.sendComposing,
+        onError: (err, info) => {
+          logWhatsAppReplyDeliveryError({
+            err,
+            info,
+            connectionId: params.connectionId,
+            conversationId: params.conversationId,
+            msg: params.msg,
+            replyLogger: params.replyLogger,
+          });
+        },
+      },
+      replyOptions: {
+        disableBlockStreaming,
+        onModelSelected: params.onModelSelected,
+        ...(params.sourceReplyDeliveryMode
+          ? { sourceReplyDeliveryMode: params.sourceReplyDeliveryMode }
+          : {}),
+      },
+    });
+
+  if (
+    !didSendReply &&
+    params.allowSuppressedFinalReplyFallback === true &&
+    suppressedFinalReplies?.length
+  ) {
+    for (const reply of suppressedFinalReplies) {
+      await deliverOutboundPayload(reply, { kind: "final" });
+    }
+  }
+
+  const didQueueVisibleReply =
+    didSendReply || hasVisibleInboundReplyDispatch({ queuedFinal, counts });
   if (!didQueueVisibleReply) {
     if (params.shouldClearGroupHistory) {
       params.groupHistories.set(params.groupHistoryKey, []);

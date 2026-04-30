@@ -807,6 +807,41 @@ describe("handleToolExecutionEnd derived tool events", () => {
 });
 
 describe("messaging tool media URL tracking", () => {
+  it("commits same-chat message target from successful tool result when args omit target", async () => {
+    const { ctx } = createTestContext();
+
+    const startEvt: ToolExecutionStartEvent = {
+      type: "tool_execution_start",
+      toolName: "message",
+      toolCallId: "tool-current-chat",
+      args: { action: "send", message: "visible reply" },
+    };
+    await handleToolExecutionStart(ctx, startEvt);
+
+    const endEvt: ToolExecutionEndEvent = {
+      type: "tool_execution_end",
+      toolName: "message",
+      toolCallId: "tool-current-chat",
+      isError: false,
+      result: {
+        details: {
+          channel: "whatsapp",
+          to: "+15551234567",
+        },
+      },
+    };
+    await handleToolExecutionEnd(ctx, endEvt);
+
+    expect(ctx.state.messagingToolSentTargets).toEqual([
+      {
+        tool: "message",
+        provider: "whatsapp",
+        to: "+15551234567",
+      },
+    ]);
+    expect(ctx.state.pendingMessagingTargets.has("tool-current-chat")).toBe(false);
+  });
+
   it("tracks media arg from messaging tool as pending", async () => {
     const { ctx } = createTestContext();
 

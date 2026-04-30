@@ -62,6 +62,7 @@ import type { BlockReplyContext } from "../get-reply-options.types.js";
 import { getReplyPayloadMetadata, type ReplyPayload } from "../reply-payload.js";
 import type { FinalizedMsgContext } from "../templating.js";
 import { normalizeVerboseLevel } from "../thinking.js";
+import { isSilentReplyText } from "../tokens.js";
 import { resolveConversationBindingContextFromMessage } from "./conversation-binding-input.js";
 import {
   createInternalHookEvent,
@@ -90,6 +91,20 @@ let ttsRuntimePromise: Promise<typeof import("../../tts/tts.runtime.js")> | null
 let runtimePluginsPromise: Promise<typeof import("./runtime-plugins.runtime.js")> | null = null;
 let replyMediaPathsRuntimePromise: Promise<typeof import("./reply-media-paths.runtime.js")> | null =
   null;
+
+function isFallbackEligibleSuppressedFinalReply(reply: ReplyPayload): boolean {
+  if (reply.isReasoning === true || reply.isError === true) {
+    return false;
+  }
+  const parts = resolveSendableOutboundReplyParts(reply);
+  if (!parts.hasContent) {
+    return false;
+  }
+  if (!parts.hasMedia && reply.text && isSilentReplyText(reply.text)) {
+    return false;
+  }
+  return true;
+}
 
 function loadRouteReplyRuntime() {
   routeReplyRuntimePromise ??= import("./route-reply.runtime.js");
@@ -1304,6 +1319,10 @@ export async function dispatchReplyFromConfig(
     }
 
     const replies = replyResult ? (Array.isArray(replyResult) ? replyResult : [replyResult]) : [];
+    const suppressedFinalReplies =
+      suppressAutomaticSourceDelivery && !sourceReplyPolicy.sendPolicyDenied
+        ? replies.filter(isFallbackEligibleSuppressedFinalReply)
+        : undefined;
 
     let queuedFinal = false;
     let routedFinalCount = 0;
@@ -1387,7 +1406,11 @@ export async function dispatchReplyFromConfig(
       pluginFallbackReason ? { reason: pluginFallbackReason } : undefined,
     );
     markIdle("message_completed");
-    return { queuedFinal, counts };
+    return {
+      queuedFinal,
+      counts,
+      ...(suppressedFinalReplies?.length ? { suppressedFinalReplies } : {}),
+    };
   } catch (err) {
     if (inboundDedupeClaim.status === "claimed") {
       if (inboundDedupeReplayUnsafe) {

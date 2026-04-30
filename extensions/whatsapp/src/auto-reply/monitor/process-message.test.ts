@@ -2,13 +2,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WhatsAppSendResult } from "../../inbound/send-result.js";
 
 // Hoisted mocks used across tests so vi.mock factories can reference them.
-const { resolvePolicyMock, buildContextMock, runMessageReceivedMock, trackBackgroundTaskMock } =
-  vi.hoisted(() => ({
-    resolvePolicyMock: vi.fn(),
-    buildContextMock: vi.fn(),
-    runMessageReceivedMock: vi.fn(async () => undefined),
-    trackBackgroundTaskMock: vi.fn(),
-  }));
+const {
+  resolvePolicyMock,
+  buildContextMock,
+  dispatchBufferedReplyMock,
+  runMessageReceivedMock,
+  trackBackgroundTaskMock,
+} = vi.hoisted(() => ({
+  resolvePolicyMock: vi.fn(),
+  buildContextMock: vi.fn(),
+  dispatchBufferedReplyMock: vi.fn(async () => false),
+  runMessageReceivedMock: vi.fn(async () => undefined),
+  trackBackgroundTaskMock: vi.fn(),
+}));
 
 function acceptedSendResult(kind: "media" | "text", id: string): WhatsAppSendResult {
   return {
@@ -34,10 +40,7 @@ vi.mock("./inbound-dispatch.js", async (importOriginal) => {
   return {
     ...actual,
     buildWhatsAppInboundContext: buildContextMock,
-    dispatchWhatsAppBufferedReply: async () => ({
-      queuedFinal: false,
-      counts: { tool: 0, block: 0, final: 0 },
-    }),
+    dispatchWhatsAppBufferedReply: dispatchBufferedReplyMock,
     resolveWhatsAppDmRouteTarget: () => null,
     resolveWhatsAppResponsePrefix: () => undefined,
     updateWhatsAppMainLastRoute: () => {},
@@ -145,6 +148,7 @@ function makeAccount(groups: Record<string, { systemPrompt?: string }> = {}): {
   accountId: string;
   authDir: string;
   groups: Record<string, { systemPrompt?: string }>;
+  dmVisibleReplies?: "automatic" | "message_tool";
 } {
   return { accountId: "default", authDir: "/tmp/wa-test-auth", groups };
 }
@@ -194,11 +198,11 @@ const baseRoute = {
   matchedBy: "default",
 };
 
-function callProcessMessage(overrides: { cfg?: unknown } = {}) {
+function callProcessMessage(overrides: { cfg?: unknown; msg?: unknown; route?: unknown } = {}) {
   return processMessage({
     cfg: (overrides.cfg ?? {}) as never,
-    msg: baseMsg as never,
-    route: baseRoute as never,
+    msg: (overrides.msg ?? baseMsg) as never,
+    route: (overrides.route ?? baseRoute) as never,
     groupHistoryKey: "whatsapp:default:group:123@g.us",
     groupHistories: new Map(),
     groupMemberNames: new Map(),
@@ -222,6 +226,7 @@ function callProcessMessage(overrides: { cfg?: unknown } = {}) {
 describe("processMessage group system prompt wiring", () => {
   beforeEach(() => {
     buildContextMock.mockReset();
+    dispatchBufferedReplyMock.mockClear();
     resolvePolicyMock.mockReset();
     runMessageReceivedMock.mockClear();
     trackBackgroundTaskMock.mockClear();
@@ -351,5 +356,80 @@ describe("processMessage group system prompt wiring", () => {
     expect(trackBackgroundTaskMock).toHaveBeenCalledTimes(1);
     expect(trackBackgroundTaskMock.mock.calls[0]?.[0]).toBeInstanceOf(Set);
     expect(trackBackgroundTaskMock.mock.calls[0]?.[1]).toBeInstanceOf(Promise);
+  });
+
+  it("passes message-tool-only source delivery for configured direct chats", async () => {
+    resolvePolicyMock.mockReturnValue(
+      makePolicy({
+        ...makeAccount(),
+        dmVisibleReplies: "message_tool",
+      }),
+    );
+
+    await callProcessMessage({
+      msg: {
+        ...baseMsg,
+        from: "+15550002222",
+        conversationId: "+15550002222",
+        chatId: "+15550002222",
+        chatType: "direct",
+      },
+      route: {
+        ...baseRoute,
+        sessionKey: "agent:main:whatsapp:direct:+15550002222",
+        mainSessionKey: "agent:main:whatsapp:direct:+15550002222",
+      },
+    });
+
+    expect(dispatchBufferedReplyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sourceReplyDeliveryMode: "message_tool_only",
+        allowSuppressedFinalReplyFallback: true,
+      }),
+    );
+  });
+
+  it("keeps default direct chat source delivery automatic", async () => {
+    resolvePolicyMock.mockReturnValue(makePolicy(makeAccount()));
+
+    await callProcessMessage({
+      msg: {
+        ...baseMsg,
+        from: "+15550002222",
+        conversationId: "+15550002222",
+        chatId: "+15550002222",
+        chatType: "direct",
+      },
+      route: {
+        ...baseRoute,
+        sessionKey: "agent:main:whatsapp:direct:+15550002222",
+        mainSessionKey: "agent:main:whatsapp:direct:+15550002222",
+      },
+    });
+
+    expect(dispatchBufferedReplyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sourceReplyDeliveryMode: undefined,
+        allowSuppressedFinalReplyFallback: false,
+      }),
+    );
+  });
+
+  it("does not apply DM visible reply mode to group chats", async () => {
+    resolvePolicyMock.mockReturnValue(
+      makePolicy({
+        ...makeAccount(),
+        dmVisibleReplies: "message_tool",
+      }),
+    );
+
+    await callProcessMessage();
+
+    expect(dispatchBufferedReplyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sourceReplyDeliveryMode: undefined,
+        allowSuppressedFinalReplyFallback: false,
+      }),
+    );
   });
 });

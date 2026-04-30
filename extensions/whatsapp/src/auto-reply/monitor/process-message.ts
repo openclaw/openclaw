@@ -214,6 +214,10 @@ export async function processMessage(params: {
     selfE164: self.e164 ?? null,
   });
   const account = inboundPolicy.account;
+  const sourceReplyDeliveryMode =
+    params.msg.chatType === "direct" && account.dmVisibleReplies === "message_tool"
+      ? ("message_tool_only" as const)
+      : undefined;
   const contextVisibilityMode = resolveChannelContextVisibilityMode({
     cfg: params.cfg,
     channel: "whatsapp",
@@ -511,6 +515,9 @@ export async function processMessage(params: {
             replyResolver: params.replyResolver,
             route: params.route,
             shouldClearGroupHistory,
+            sourceReplyDeliveryMode,
+            allowSuppressedFinalReplyFallback:
+              params.msg.chatType === "direct" && sourceReplyDeliveryMode === "message_tool_only",
           }),
       }),
     },

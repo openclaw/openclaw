@@ -361,7 +361,7 @@ function buildMessagingSection(params: {
   return [
     "## Messaging",
     messageToolOnly
-      ? "- Reply in current session → private by default for this source channel; use `message(action=send)` for visible channel output."
+      ? "- Reply in current session → visible output for this source channel requires `message(action=send)`; ordinary final assistant text is private by default."
       : "- Reply in current session → automatically routes to the source channel (Signal, Telegram, etc.)",
     "- Cross-session messaging → use sessions_send(sessionKey, message)",
     subagentOrchestrationGuidance,
@@ -377,7 +377,7 @@ function buildMessagingSection(params: {
             : "- For `action=send`, include `target` and `message`.",
           `- If multiple channels are configured, pass \`channel\` (${params.messageChannelOptions}).`,
           messageToolOnly
-            ? "- If you use `message` (`action=send`) to deliver visible output, do not repeat that visible content in your final answer; final answers are private in this mode."
+            ? "- After using `message(action=send)` for visible output, do not repeat that content in your final answer. Do not rely on final assistant text for user-visible delivery in this mode."
             : `- If you use \`message\` (\`action=send\`) to deliver your user-visible reply, respond with ONLY: ${SILENT_REPLY_TOKEN} (avoid duplicate replies).`,
           showGenericInlineButtonHint
             ? params.inlineButtonsEnabled

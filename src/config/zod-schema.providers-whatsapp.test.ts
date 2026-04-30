@@ -20,6 +20,7 @@ describe("WhatsApp prompt config Zod validation", () => {
 
   it("validates direct-level systemPrompt", () => {
     const config = {
+      dmVisibleReplies: "message_tool",
       direct: {
         "+15551234567": {
           systemPrompt: "This is a VIP direct chat",
@@ -30,6 +31,7 @@ describe("WhatsApp prompt config Zod validation", () => {
     const result = WhatsAppConfigSchema.safeParse(config);
     expect(result.success).toBe(true);
     if (result.success) {
+      expect(result.data.dmVisibleReplies).toBe("message_tool");
       expect(result.data.direct?.["+15551234567"]?.systemPrompt).toBe("This is a VIP direct chat");
     }
   });
@@ -48,6 +50,7 @@ describe("WhatsApp prompt config Zod validation", () => {
       },
       accounts: {
         work: {
+          dmVisibleReplies: "message_tool",
           groups: {
             "456@g.us": {
               systemPrompt: "Project team",
@@ -67,6 +70,7 @@ describe("WhatsApp prompt config Zod validation", () => {
     if (result.success) {
       expect(result.data.groups?.["*"]?.systemPrompt).toBe("Default group prompt");
       expect(result.data.direct?.["+15551234567"]?.systemPrompt).toBe("Direct VIP");
+      expect(result.data.accounts?.work?.dmVisibleReplies).toBe("message_tool");
       expect(result.data.accounts?.work?.groups?.["456@g.us"]?.systemPrompt).toBe("Project team");
       expect(result.data.accounts?.work?.direct?.["*"]?.systemPrompt).toBe("Work direct default");
     }

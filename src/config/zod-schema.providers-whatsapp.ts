@@ -82,6 +82,7 @@ function buildWhatsAppCommonShape(params: { useDefaults: boolean }) {
     contextVisibility: ContextVisibilityModeSchema.optional(),
     historyLimit: z.number().int().min(0).optional(),
     dmHistoryLimit: z.number().int().min(0).optional(),
+    dmVisibleReplies: z.enum(["automatic", "message_tool"]).optional(),
     dms: z.record(z.string(), DmConfigSchema.optional()).optional(),
     textChunkLimit: z.number().int().positive().optional(),
     chunkMode: z.enum(["length", "newline"]).optional(),

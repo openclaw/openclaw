@@ -17,5 +17,6 @@ export {
   type getReplyFromConfig,
   type LoadConfigFn,
   type ReplyPayload,
+  type SourceReplyDeliveryMode,
   type resolveAgentRoute,
 } from "./runtime-api.js";

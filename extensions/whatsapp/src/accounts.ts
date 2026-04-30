@@ -35,6 +35,7 @@ export type ResolvedWhatsAppAccount = {
   groupPolicy?: GroupPolicy;
   dmPolicy?: DmPolicy;
   historyLimit?: number;
+  dmVisibleReplies?: WhatsAppAccountConfig["dmVisibleReplies"];
   textChunkLimit?: number;
   chunkMode?: "length" | "newline";
   mediaMaxMb?: number;
@@ -146,6 +147,7 @@ export function resolveWhatsAppAccount(params: {
     groupAllowFrom: merged.groupAllowFrom,
     groupPolicy: merged.groupPolicy,
     historyLimit: merged.historyLimit,
+    dmVisibleReplies: merged.dmVisibleReplies,
     textChunkLimit: merged.textChunkLimit,
     chunkMode: merged.chunkMode,
     mediaMaxMb: merged.mediaMaxMb,

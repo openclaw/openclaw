@@ -510,6 +510,12 @@ function resolveMessageToolTarget(args: Record<string, unknown>): string | undef
   return readStringValue(args.target);
 }
 
+function readObject(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
 export function extractMessagingToolSend(
   toolName: string,
   args: Record<string, unknown>,
@@ -551,4 +557,47 @@ export function extractMessagingToolSend(
         to,
       }
     : undefined;
+}
+
+export function extractMessagingToolSendFromResult(
+  toolName: string,
+  args: Record<string, unknown>,
+  result: unknown,
+): MessagingToolSend | undefined {
+  const resultObject = readObject(result);
+  const details = readObject(resultObject?.details) ?? resultObject;
+  if (!details) {
+    return undefined;
+  }
+  const toRaw = readStringValue(details.to);
+  if (!toRaw) {
+    return undefined;
+  }
+  const channelRaw =
+    readStringValue(details.channel) ??
+    readStringValue(details.provider) ??
+    readStringValue(args.channel) ??
+    readStringValue(args.provider);
+  const providerId = channelRaw ? normalizeChannelId(channelRaw) : normalizeChannelId(toolName);
+  const provider =
+    providerId ??
+    normalizeOptionalLowercaseString(channelRaw) ??
+    (toolName === "message" ? "message" : undefined);
+  if (!provider) {
+    return undefined;
+  }
+  const to = normalizeTargetForProvider(provider, toRaw);
+  if (!to) {
+    return undefined;
+  }
+  const accountId =
+    normalizeOptionalString(details.accountId) ?? normalizeOptionalString(args.accountId);
+  const threadId = readStringValue(details.threadId) ?? readStringValue(args.threadId);
+  return {
+    tool: toolName,
+    provider,
+    ...(accountId ? { accountId } : {}),
+    to,
+    ...(threadId ? { threadId } : {}),
+  };
 }

@@ -42,13 +42,16 @@ describe("whatsapp config schema", () => {
   it("accepts historyLimit overrides per account", () => {
     const res = WhatsAppConfigSchema.safeParse({
       historyLimit: 9,
-      accounts: { work: { historyLimit: 4 } },
+      dmVisibleReplies: "message_tool",
+      accounts: { work: { historyLimit: 4, dmVisibleReplies: "automatic" } },
     });
 
     expect(res.success).toBe(true);
     if (res.success) {
       expect(res.data.historyLimit).toBe(9);
+      expect(res.data.dmVisibleReplies).toBe("message_tool");
       expect(res.data.accounts?.work?.historyLimit).toBe(4);
+      expect(res.data.accounts?.work?.dmVisibleReplies).toBe("automatic");
     }
   });
 

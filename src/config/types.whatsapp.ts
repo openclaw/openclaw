@@ -76,6 +76,12 @@ type WhatsAppSharedConfig = {
   historyLimit?: number;
   /** Max DM turns to keep as history context. */
   dmHistoryLimit?: number;
+  /**
+   * Controls how WhatsApp direct chats produce visible replies.
+   * - "automatic": normal final replies are posted to WhatsApp
+   * - "message_tool": visible replies should use message(action=send), with a WhatsApp DM safety fallback
+   */
+  dmVisibleReplies?: "automatic" | "message_tool";
   /** Per-DM history overrides keyed by user ID. */
   dms?: Record<string, DmConfig>;
   /** Outbound text chunk size (chars). Default: 4000. */

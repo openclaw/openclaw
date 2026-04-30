@@ -29,6 +29,7 @@ import { isPromiseLike } from "./pi-embedded-subscribe.promise.js";
 import {
   extractToolResultMediaArtifact,
   extractMessagingToolSend,
+  extractMessagingToolSendFromResult,
   extractToolErrorMessage,
   extractToolResultText,
   filterToolResultMediaUrls,
@@ -862,6 +863,10 @@ export async function handleToolExecutionEnd(
   }
 
   // Commit messaging tool text on success, discard on error.
+  const startArgs =
+    startData?.args && typeof startData.args === "object"
+      ? (startData.args as Record<string, unknown>)
+      : {};
   const pendingText = ctx.state.pendingMessagingTexts.get(toolCallId);
   const pendingTarget = ctx.state.pendingMessagingTargets.get(toolCallId);
   if (pendingText) {
@@ -873,22 +878,21 @@ export async function handleToolExecutionEnd(
       ctx.trimMessagingToolSent();
     }
   }
-  if (pendingTarget) {
-    ctx.state.pendingMessagingTargets.delete(toolCallId);
-    if (!isToolError) {
-      ctx.state.messagingToolSentTargets.push(pendingTarget);
-      ctx.trimMessagingToolSent();
-    }
-  }
+  ctx.state.pendingMessagingTargets.delete(toolCallId);
   const pendingMediaUrls = ctx.state.pendingMessagingMediaUrls.get(toolCallId) ?? [];
   ctx.state.pendingMessagingMediaUrls.delete(toolCallId);
-  const startArgs =
-    startData?.args && typeof startData.args === "object"
-      ? (startData.args as Record<string, unknown>)
-      : {};
   const isMessagingSend =
     pendingMediaUrls.length > 0 ||
     (isMessagingTool(toolName) && isMessagingToolSendAction(toolName, startArgs));
+  const resultTarget =
+    pendingTarget ??
+    (!isToolError && isMessagingSend
+      ? extractMessagingToolSendFromResult(toolName, startArgs, result)
+      : undefined);
+  if (resultTarget && !isToolError) {
+    ctx.state.messagingToolSentTargets.push(resultTarget);
+    ctx.trimMessagingToolSent();
+  }
   if (!isToolError && isMessagingSend) {
     const committedMediaUrls = [
       ...pendingMediaUrls,

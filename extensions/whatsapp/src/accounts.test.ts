@@ -86,6 +86,7 @@ describe("resolveWhatsAppAuthDir", () => {
                 defaultTo: "+15550003333",
                 reactionLevel: "extensive",
                 historyLimit: 42,
+                dmVisibleReplies: "message_tool",
                 mediaMaxMb: 12,
               },
               work: {
@@ -105,6 +106,7 @@ describe("resolveWhatsAppAuthDir", () => {
     expect(resolved.defaultTo).toBe("+15550003333");
     expect(resolved.reactionLevel).toBe("extensive");
     expect(resolved.historyLimit).toBe(42);
+    expect(resolved.dmVisibleReplies).toBe("message_tool");
     expect(resolved.mediaMaxMb).toBe(12);
   });
 
@@ -116,15 +118,18 @@ describe("resolveWhatsAppAuthDir", () => {
             dmPolicy: "open",
             allowFrom: ["*"],
             groupPolicy: "disabled",
+            dmVisibleReplies: "automatic",
             accounts: {
               default: {
                 dmPolicy: "allowlist",
                 allowFrom: ["+15550001111"],
                 groupPolicy: "open",
+                dmVisibleReplies: "message_tool",
               },
               work: {
                 authDir: "/tmp/work",
                 dmPolicy: "pairing",
+                dmVisibleReplies: "automatic",
               },
             },
           },
@@ -136,6 +141,7 @@ describe("resolveWhatsAppAuthDir", () => {
     expect(resolved.dmPolicy).toBe("pairing");
     expect(resolved.allowFrom).toEqual(["+15550001111"]);
     expect(resolved.groupPolicy).toBe("open");
+    expect(resolved.dmVisibleReplies).toBe("automatic");
   });
 
   it("does not inherit default-account authDir for named accounts", () => {

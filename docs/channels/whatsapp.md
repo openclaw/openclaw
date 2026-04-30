@@ -49,6 +49,7 @@ catches up.
   channels: {
     whatsapp: {
       dmPolicy: "pairing",
+      dmVisibleReplies: "automatic",
       allowFrom: ["+15551234567"],
       groupPolicy: "allowlist",
       groupAllowFrom: ["+15551234567"],
@@ -221,6 +222,42 @@ content and identifiers.
     - pairings are persisted in channel allow-store and merged with configured `allowFrom`
     - if no allowlist is configured, the linked self number is allowed by default
     - OpenClaw never auto-pairs outbound `fromMe` DMs (messages you send to yourself from the linked device)
+
+  </Tab>
+
+  <Tab title="DM visible replies">
+    Direct chats default to `channels.whatsapp.dmVisibleReplies: "automatic"`.
+    In that mode, normal assistant final replies are posted back to WhatsApp at the end of the turn.
+
+    Set `"message_tool"` when you want direct chats to behave more like groups: the agent is prompted to send visible output with `message(action=send)` so intermediate updates can appear live in the chat.
+
+    ```json5
+    {
+      channels: {
+        whatsapp: {
+          dmVisibleReplies: "message_tool",
+        },
+      },
+    }
+    ```
+
+    Per-account override:
+
+    ```json5
+    {
+      channels: {
+        whatsapp: {
+          accounts: {
+            work: {
+              dmVisibleReplies: "message_tool",
+            },
+          },
+        },
+      },
+    }
+    ```
+
+    WhatsApp DMs keep a safety fallback in `"message_tool"` mode: if the model does not send to the same chat with `message(action=send)` and still returns a normal final text/media reply, OpenClaw posts that final reply once. Silent replies, empty replies, and error payloads do not trigger the fallback. Sends to another target do not count as the same-chat visible reply.
 
   </Tab>
 
@@ -623,7 +660,7 @@ Important behavior:
 - `channels.whatsapp.groups` is both a per-group config map and the chat-level group allowlist. At either the root or account scope, `groups["*"]` means "all groups are admitted" for that scope.
 - Only add a wildcard group `systemPrompt` when you already want that scope to admit all groups. If you still want only a fixed set of group IDs to be eligible, do not use `groups["*"]` for the prompt default. Instead, repeat the prompt on each explicitly allowlisted group entry.
 - Group admission and sender authorization are separate checks. `groups["*"]` widens the set of groups that can reach group handling, but it does not by itself authorize every sender in those groups. Sender access is still controlled separately by `channels.whatsapp.groupPolicy` and `channels.whatsapp.groupAllowFrom`.
-- `channels.whatsapp.direct` does not have the same side effect for DMs. `direct["*"]` only provides a default direct-chat config after a DM is already admitted by `dmPolicy` plus `allowFrom` or pairing-store rules.
+- `channels.whatsapp.direct` does not have the same side effect for DMs. `direct["*"]` only provides a default direct-chat config after a DM is already admitted by `dmPolicy` plus `allowFrom` or pairing-store rules. Use `dmVisibleReplies` for direct-chat delivery mode; `direct` remains the per-peer prompt map.
 
 Example:
 
@@ -674,7 +711,7 @@ Primary reference:
 High-signal WhatsApp fields:
 
 - access: `dmPolicy`, `allowFrom`, `groupPolicy`, `groupAllowFrom`, `groups`
-- delivery: `textChunkLimit`, `chunkMode`, `mediaMaxMb`, `sendReadReceipts`, `ackReaction`, `reactionLevel`
+- delivery: `dmVisibleReplies`, `textChunkLimit`, `chunkMode`, `mediaMaxMb`, `sendReadReceipts`, `ackReaction`, `reactionLevel`
 - multi-account: `accounts.<id>.enabled`, `accounts.<id>.authDir`, account-level overrides
 - operations: `configWrites`, `debounceMs`, `web.enabled`, `web.heartbeatSeconds`, `web.reconnect.*`, `web.whatsapp.*`
 - session behavior: `session.dmScope`, `historyLimit`, `dmHistoryLimit`, `dms.<id>.historyLimit`
