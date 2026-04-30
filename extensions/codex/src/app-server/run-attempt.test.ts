@@ -334,6 +334,40 @@ describe("runCodexAppServerAttempt", () => {
     await fs.rm(tempDir, { recursive: true, force: true });
   });
 
+  it("defaults Codex dynamic tools to the native-first profile", () => {
+    const tools = [
+      "read",
+      "write",
+      "edit",
+      "apply_patch",
+      "exec",
+      "process",
+      "update_plan",
+      "web_search",
+      "message",
+      "sessions_spawn",
+    ].map((name) => ({ name }));
+
+    expect(__testing.applyCodexDynamicToolProfile(tools, {}).map((tool) => tool.name)).toEqual([
+      "web_search",
+      "message",
+      "sessions_spawn",
+    ]);
+  });
+
+  it("allows Codex dynamic tool filtering to opt back into OpenClaw compatibility", () => {
+    const tools = ["read", "exec", "message", "custom_tool"].map((name) => ({ name }));
+
+    expect(
+      __testing
+        .applyCodexDynamicToolProfile(tools, {
+          codexDynamicToolsProfile: "openclaw-compat",
+          codexDynamicToolsExclude: ["custom_tool"],
+        })
+        .map((tool) => tool.name),
+    ).toEqual(["read", "exec", "message"]);
+  });
+
   it("returns a failed dynamic tool response when an app-server tool call exceeds the deadline", async () => {
     vi.useFakeTimers();
     let capturedSignal: AbortSignal | undefined;
