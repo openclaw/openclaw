@@ -483,15 +483,6 @@ export const OpenClawSchema = z
           )
           .optional(),
         extraArgs: z.array(z.string()).optional(),
-        tabCleanup: z
-          .object({
-            enabled: z.boolean().optional(),
-            idleMinutes: z.number().int().nonnegative().optional(),
-            maxTabsPerSession: z.number().int().nonnegative().optional(),
-            sweepMinutes: z.number().int().positive().optional(),
-          })
-          .strict()
-          .optional(),
       })
       .strict()
       .optional(),
