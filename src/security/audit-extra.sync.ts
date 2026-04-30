@@ -565,7 +565,7 @@ export function collectHooksHardeningFindings(
     const prefixesConstrained = allowedPrefixes.length > 0;
     const enabledSeverity = prefixesConstrained ? "info" : remoteExposure ? "critical" : "warn";
     const enabledDetail = prefixesConstrained
-      ? `hooks.allowRequestSessionKey=true with allowedSessionKeyPrefixes=${JSON.stringify(allowedPrefixes)}. Hook token holders can pick any session key matching one of those prefixes; double-check the prefixes can only target intended sessions.`
+      ? `hooks.allowRequestSessionKey=true with hooks.allowedSessionKeyPrefixes=${JSON.stringify(allowedPrefixes)}. Hook token holders can pick any session key matching one of those prefixes; double-check the prefixes can only target intended sessions.`
       : "hooks.allowRequestSessionKey=true allows `/hooks/agent` callers to choose the session key. Treat hook token holders as full-trust unless you also restrict prefixes.";
     findings.push({
       checkId: "hooks.request_session_key_enabled",
