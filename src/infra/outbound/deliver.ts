@@ -37,6 +37,8 @@ import {
   ackDelivery,
   enqueueDelivery,
   failDelivery,
+  isPermanentDeliveryError,
+  moveToFailed,
   withActiveDeliveryClaim,
 } from "./delivery-queue.js";
 import type { OutboundDeliveryFormattingOptions } from "./formatting.js";
@@ -901,7 +903,12 @@ async function deliverOutboundPayloadsWithQueueCleanup(
       if (isAbortError(err)) {
         await ackDelivery(queueId).catch(() => {});
       } else {
-        await failDelivery(queueId, formatErrorMessage(err)).catch(() => {});
+        const errMsg = formatErrorMessage(err);
+        if (isPermanentDeliveryError(errMsg)) {
+          await moveToFailed(queueId).catch(() => {});
+        } else {
+          await failDelivery(queueId, errMsg).catch(() => {});
+        }
       }
     }
     throw err;

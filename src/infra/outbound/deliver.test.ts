@@ -41,6 +41,8 @@ const queueMocks = vi.hoisted(() => ({
   enqueueDelivery: vi.fn(async () => "mock-queue-id"),
   ackDelivery: vi.fn(async () => {}),
   failDelivery: vi.fn(async () => {}),
+  moveToFailed: vi.fn(async () => {}),
+  isPermanentDeliveryError: vi.fn((_msg: string) => false),
   withActiveDeliveryClaim: vi.fn<
     (
       entryId: string,
@@ -81,6 +83,8 @@ vi.mock("./delivery-queue.js", () => ({
   enqueueDelivery: queueMocks.enqueueDelivery,
   ackDelivery: queueMocks.ackDelivery,
   failDelivery: queueMocks.failDelivery,
+  moveToFailed: queueMocks.moveToFailed,
+  isPermanentDeliveryError: queueMocks.isPermanentDeliveryError,
   withActiveDeliveryClaim: queueMocks.withActiveDeliveryClaim,
 }));
 vi.mock("../../logging/subsystem.js", () => ({
@@ -279,6 +283,10 @@ describe("deliverOutboundPayloads", () => {
     queueMocks.ackDelivery.mockResolvedValue(undefined);
     queueMocks.failDelivery.mockClear();
     queueMocks.failDelivery.mockResolvedValue(undefined);
+    queueMocks.moveToFailed.mockClear();
+    queueMocks.moveToFailed.mockResolvedValue(undefined);
+    queueMocks.isPermanentDeliveryError.mockClear();
+    queueMocks.isPermanentDeliveryError.mockImplementation((_msg: string) => false);
     queueMocks.withActiveDeliveryClaim.mockClear();
     queueMocks.withActiveDeliveryClaim.mockImplementation(async (_entryId, fn) => ({
       status: "claimed",
@@ -1673,6 +1681,29 @@ describe("deliverOutboundPayloads", () => {
     expect(queueMocks.ackDelivery).toHaveBeenCalledWith("mock-queue-id");
     expect(queueMocks.failDelivery).not.toHaveBeenCalled();
     expect(sendMatrix).not.toHaveBeenCalled();
+  });
+
+  it("moves queue entry to failed/ immediately when the first-send error is permanent", async () => {
+    // Regression for openclaw/openclaw#74321: permanent errors (e.g. "message is too long",
+    // auth failures) must not land in pending/ on first send; they go to failed/ directly
+    // so the recovery loop never retries them.
+    const permanentError = new Error("message is too long — cannot be delivered");
+    const sendMatrix = vi.fn().mockRejectedValue(permanentError);
+    queueMocks.isPermanentDeliveryError.mockImplementation(() => true);
+
+    await expect(
+      deliverOutboundPayloads({
+        cfg: {},
+        channel: "matrix",
+        to: "!room:example",
+        payloads: [{ text: "a very long message" }],
+        deps: { matrix: sendMatrix },
+      }),
+    ).rejects.toThrow("message is too long");
+
+    expect(queueMocks.moveToFailed).toHaveBeenCalledWith("mock-queue-id");
+    expect(queueMocks.failDelivery).not.toHaveBeenCalled();
+    expect(queueMocks.ackDelivery).not.toHaveBeenCalled();
   });
 
   it("passes normalized payload to onError", async () => {
