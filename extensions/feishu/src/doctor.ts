@@ -54,20 +54,23 @@ type FeishuSessionEntry = {
   sessionFile?: unknown;
 };
 
+type FeishuDoctorSessionEntry = {
+  key: string;
+  storePath: string;
+  agentId: string;
+  entry: FeishuSessionEntry;
+};
+
 export type FeishuDoctorInspection = {
   stateDir: string;
   feishuStateDir: string;
   findings: FeishuDoctorFinding[];
-  sessionEntries: Array<{
-    key: string;
-    storePath: string;
-    agentId: string;
-    entry: FeishuSessionEntry;
-  }>;
+  sessionEntries: FeishuDoctorSessionEntry[];
 };
 
 export type FeishuDoctorRepairReport = {
   backupDir: string;
+  stateDirRepairAttempted: boolean;
   rebuiltStateDir: boolean;
   removedSessionEntries: number;
   touchedSessionStores: number;
@@ -81,6 +84,16 @@ function timestampForPath(now = new Date()): string {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function toFeishuSessionEntry(value: unknown): FeishuSessionEntry {
+  if (!isRecord(value)) {
+    return {};
+  }
+  return {
+    sessionId: value.sessionId,
+    sessionFile: value.sessionFile,
+  };
 }
 
 function countLabel(count: number, singular: string, plural = `${singular}s`): string {
@@ -418,6 +431,46 @@ function collectFeishuSessionFindings(params: {
   return findings;
 }
 
+function hasCorruptFeishuStateJsonFinding(inspection: FeishuDoctorInspection): boolean {
+  return inspection.findings.some((finding) => finding.kind === "corrupt-state-json");
+}
+
+function sessionEntryId(storePath: string, key: string): string {
+  return `${path.resolve(storePath)}\0${key}`;
+}
+
+function collectRepairSessionEntries(
+  inspection: FeishuDoctorInspection,
+): FeishuDoctorSessionEntry[] {
+  const entriesById = new Map<string, FeishuDoctorSessionEntry>();
+  for (const entry of inspection.sessionEntries) {
+    entriesById.set(sessionEntryId(entry.storePath, entry.key), entry);
+  }
+
+  const repairEntries: FeishuDoctorSessionEntry[] = [];
+  const seen = new Set<string>();
+  for (const finding of inspection.findings) {
+    if (finding.kind === "corrupt-state-json") {
+      continue;
+    }
+
+    const id = sessionEntryId(finding.storePath, finding.sessionKey);
+    if (seen.has(id)) {
+      continue;
+    }
+    const entry = entriesById.get(id);
+    if (entry) {
+      repairEntries.push(entry);
+      seen.add(id);
+    }
+  }
+
+  return repairEntries.toSorted(
+    (left, right) =>
+      left.storePath.localeCompare(right.storePath) || left.key.localeCompare(right.key),
+  );
+}
+
 export function inspectFeishuDoctorState(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
@@ -436,17 +489,18 @@ export function inspectFeishuDoctorState(params: {
       if (!isFeishuSessionStoreKey(key)) {
         continue;
       }
+      const sessionEntry = toFeishuSessionEntry(entry);
       sessionEntries.push({
         key,
         storePath: target.storePath,
         agentId: target.agentId,
-        entry,
+        entry: sessionEntry,
       });
       findings.push(
         ...collectFeishuSessionFindings({
           sessionKey: key,
           storePath: target.storePath,
-          entry,
+          entry: sessionEntry,
         }),
       );
     }
@@ -564,17 +618,20 @@ async function repairFeishuDoctorState(params: {
   const backupDir = ensureBackupDir(inspection.stateDir, now);
   const archiveTimestamp = timestampForPath(now);
   const warnings: string[] = [];
+  const stateDirRepairAttempted = hasCorruptFeishuStateJsonFinding(inspection);
 
   let rebuiltStateDir = false;
-  try {
-    rebuiltStateDir = movePathToBackup({
-      sourcePath: inspection.feishuStateDir,
-      backupDir,
-      relativeTarget: FEISHU_STATE_DIR,
-    });
-    fs.mkdirSync(inspection.feishuStateDir, { recursive: true, mode: 0o700 });
-  } catch (error) {
-    warnings.push(`- Failed to rebuild Feishu local state: ${String(error)}`);
+  if (stateDirRepairAttempted) {
+    try {
+      rebuiltStateDir = movePathToBackup({
+        sourcePath: inspection.feishuStateDir,
+        backupDir,
+        relativeTarget: FEISHU_STATE_DIR,
+      });
+      fs.mkdirSync(inspection.feishuStateDir, { recursive: true, mode: 0o700 });
+    } catch (error) {
+      warnings.push(`- Failed to rebuild Feishu local state: ${String(error)}`);
+    }
   }
 
   const entriesByStore = new Map<
@@ -584,7 +641,7 @@ async function repairFeishuDoctorState(params: {
       entries: Array<{ key: string; entry: FeishuSessionEntry }>;
     }
   >();
-  for (const entry of inspection.sessionEntries) {
+  for (const entry of collectRepairSessionEntries(inspection)) {
     const existing = entriesByStore.get(entry.storePath);
     if (existing) {
       existing.entries.push({ key: entry.key, entry: entry.entry });
@@ -640,6 +697,7 @@ async function repairFeishuDoctorState(params: {
 
   return {
     backupDir,
+    stateDirRepairAttempted,
     rebuiltStateDir,
     removedSessionEntries,
     touchedSessionStores,
@@ -651,24 +709,41 @@ async function repairFeishuDoctorState(params: {
 function formatPreviewWarning(inspection: FeishuDoctorInspection): string {
   const previewFindings = inspection.findings.slice(0, 5).map(formatFinding);
   const remaining = inspection.findings.length - previewFindings.length;
+  const repairActions: string[] = [];
+  if (hasCorruptFeishuStateJsonFinding(inspection)) {
+    repairActions.push(`archive ${formatDisplayPath(inspection.feishuStateDir)}`);
+  }
+  const repairSessionEntries = collectRepairSessionEntries(inspection);
+  if (repairSessionEntries.length > 0) {
+    repairActions.push(
+      `archive artifacts and remove ${countLabel(
+        repairSessionEntries.length,
+        "flagged Feishu-scoped session entry",
+        "flagged Feishu-scoped session entries",
+      )}`,
+    );
+  }
+  const repairSummary =
+    repairActions.length > 0 ? repairActions.join(" and ") : "apply targeted Feishu state cleanup";
   return [
     "- Feishu local channel state may need repair.",
     ...previewFindings,
     ...(remaining > 0 ? [`- ...and ${remaining} more Feishu state finding(s).`] : []),
-    `- Repair will archive ${formatDisplayPath(inspection.feishuStateDir)} and ${countLabel(
-      inspection.sessionEntries.length,
-      "Feishu-scoped session entry",
-      "Feishu-scoped session entries",
-    )}, while preserving Feishu App ID/secret config.`,
+    `- Repair will ${repairSummary}, while preserving Feishu App ID/secret config and healthy session entries.`,
     '- Run "openclaw doctor --fix" to rebuild Feishu local state.',
   ].join("\n");
 }
 
 function formatRepairChange(report: FeishuDoctorRepairReport): string {
+  const stateRepairStatus = report.stateDirRepairAttempted
+    ? report.rebuiltStateDir
+      ? "yes"
+      : "no existing state"
+    : "not needed";
   return [
     "Feishu local state repaired.",
     `- Backup dir: ${formatDisplayPath(report.backupDir)}`,
-    `- Rebuilt Feishu runtime state: ${report.rebuiltStateDir ? "yes" : "no existing state"}`,
+    `- Rebuilt Feishu runtime state: ${stateRepairStatus}`,
     `- Removed ${countLabel(
       report.removedSessionEntries,
       "Feishu-scoped session entry",

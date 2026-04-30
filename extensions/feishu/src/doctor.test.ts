@@ -164,7 +164,50 @@ describe("Feishu doctor state repair", () => {
     expect(result.warningNotes.join("\n")).toContain("openclaw doctor --fix");
   });
 
-  it("archives Feishu state and direct Feishu sessions while preserving config and other sessions", async () => {
+  it("rebuilds corrupt Feishu state without deleting healthy Feishu sessions", async () => {
+    const feishuDedupDir = path.join(stateDir(), "feishu", "dedup");
+    fs.mkdirSync(feishuDedupDir, { recursive: true });
+    fs.writeFileSync(path.join(feishuDedupDir, "default.json"), "{");
+
+    const transcriptPath = writeTranscript("sess-ok", [
+      sessionHeader("sess-ok"),
+      userMessage("hello"),
+    ]);
+    const targetStorePath = writeStore({
+      "agent:main:feishu:direct:ou_user": {
+        sessionId: "sess-ok",
+        sessionFile: "sess-ok.jsonl",
+        updatedAt: Date.now(),
+      },
+    });
+
+    const result = await runFeishuDoctorSequence({
+      cfg: feishuConfig(),
+      env: process.env,
+      shouldRepair: true,
+    });
+
+    expect(result.warningNotes).toEqual([]);
+    expect(result.changeNotes.join("\n")).toContain("Rebuilt Feishu runtime state: yes");
+    expect(result.changeNotes.join("\n")).toContain("Removed 0 Feishu-scoped session entries");
+
+    const store = loadSessionStore(targetStorePath, { skipCache: true });
+    expect(store["agent:main:feishu:direct:ou_user"]).toBeDefined();
+    expect(fs.existsSync(transcriptPath)).toBe(true);
+
+    expect(fs.existsSync(path.join(stateDir(), "feishu"))).toBe(true);
+    expect(fs.existsSync(path.join(stateDir(), "feishu", "dedup", "default.json"))).toBe(false);
+
+    const backups = listBackupDirs();
+    expect(backups).toHaveLength(1);
+    const backupDir = path.join(stateDir(), "backups", backups[0] ?? "");
+    expect(fs.existsSync(path.join(backupDir, "feishu", "dedup", "default.json"))).toBe(true);
+    expect(fs.existsSync(path.join(backupDir, "session-stores", "main", "sessions.json"))).toBe(
+      false,
+    );
+  });
+
+  it("archives only unhealthy Feishu direct sessions while preserving state, config, and other sessions", async () => {
     const feishuDedupDir = path.join(stateDir(), "feishu", "dedup");
     fs.mkdirSync(feishuDedupDir, { recursive: true });
     fs.writeFileSync(path.join(feishuDedupDir, "default.json"), JSON.stringify({ msg1: 1 }));
@@ -204,15 +247,16 @@ describe("Feishu doctor state repair", () => {
 
     expect(result.warningNotes).toEqual([]);
     expect(result.changeNotes.join("\n")).toContain("Feishu local state repaired");
+    expect(result.changeNotes.join("\n")).toContain("Rebuilt Feishu runtime state: not needed");
     expect(result.changeNotes.join("\n")).toContain("Preserved Feishu App ID/secret config");
 
     expect(fs.existsSync(path.join(stateDir(), "feishu"))).toBe(true);
-    expect(fs.existsSync(path.join(stateDir(), "feishu", "dedup", "default.json"))).toBe(false);
+    expect(fs.existsSync(path.join(stateDir(), "feishu", "dedup", "default.json"))).toBe(true);
 
     const backups = listBackupDirs();
     expect(backups).toHaveLength(1);
     const backupDir = path.join(stateDir(), "backups", backups[0] ?? "");
-    expect(fs.existsSync(path.join(backupDir, "feishu", "dedup", "default.json"))).toBe(true);
+    expect(fs.existsSync(path.join(backupDir, "feishu", "dedup", "default.json"))).toBe(false);
     expect(fs.existsSync(path.join(backupDir, "session-stores", "main", "sessions.json"))).toBe(
       true,
     );
