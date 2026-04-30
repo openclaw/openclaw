@@ -379,8 +379,6 @@ describe("cron method validation", () => {
     ).rejects.toThrow("DB write failed");
     expect(respond).not.toHaveBeenCalled();
   });
-});
-
   // Issue #74459: Validate cron expression BEFORE applying to disabled jobs
   it("rejects invalid cron expression on disabled job update BEFORE applying patch (#74459)", async () => {
     const disabledJob = createCronJob({ enabled: false });
@@ -392,7 +390,7 @@ describe("cron method validation", () => {
       params: {
         id: disabledJob.id,
         patch: {
-          schedule: { kind: "cron", expr: "* * * 13 *" },  // Invalid: month 13
+          schedule: { kind: "cron", expr: "* * * 13 *" }, // Invalid: month 13
         },
       } as never,
       respond: respond as never,
@@ -422,8 +420,8 @@ describe("cron method validation", () => {
       req: {} as never,
       params: {
         name: "invalid-disabled-cron",
-        enabled: false,  // Creating disabled job with invalid cron
-        schedule: { kind: "cron", expr: "0 0 * * 8" },  // Invalid: day of week 8
+        enabled: false, // Creating disabled job with invalid cron
+        schedule: { kind: "cron", expr: "0 0 * * 8" }, // Invalid: day of week 8
         sessionTarget: "isolated",
         wakeMode: "next-heartbeat",
         payload: { kind: "agentTurn", message: "ping" },
@@ -455,7 +453,7 @@ describe("cron method validation", () => {
       params: {
         id: disabledJob.id,
         patch: {
-          schedule: { kind: "cron", expr: "0 0 * * *" },  // Valid expression
+          schedule: { kind: "cron", expr: "0 0 * * *" }, // Valid expression
         },
       } as never,
       respond: respond as never,

@@ -29,15 +29,14 @@ export function validateCronExpression(
   expr: unknown,
   tz?: unknown,
 ): CronExpressionValidationResult {
-  const exprRaw = normalizeOptionalString(expr) ?? "";
-  if (!exprRaw) {
+  if (typeof expr !== "string") {
     return {
       ok: false,
       message: "cron expression is required",
     };
   }
 
-  const exprTrimmed = exprRaw.trim();
+  const exprTrimmed = expr.trim();
   if (!exprTrimmed) {
     return {
       ok: false,
@@ -53,9 +52,7 @@ export function validateCronExpression(
     return { ok: true };
   } catch (error) {
     const errorMessage =
-      error instanceof Error
-        ? error.message
-        : `Invalid cron expression: ${String(error)}`;
+      error instanceof Error ? error.message : `Invalid cron expression: ${String(error)}`;
     return {
       ok: false,
       message: errorMessage,
