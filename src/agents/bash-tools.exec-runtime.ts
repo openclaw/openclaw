@@ -27,10 +27,7 @@ import { logWarn } from "../logger.js";
 import type { ManagedRun } from "../process/supervisor/index.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
 import type { RunExit, TerminationReason } from "../process/supervisor/types.js";
-import {
-  normalizeDeliveryContext,
-  type DeliveryContext,
-} from "../utils/delivery-context.shared.js";
+import { normalizeDeliveryContext, type DeliveryContext } from "../utils/delivery-context.js";
 import {
   addSession,
   appendOutput,
@@ -38,7 +35,6 @@ import {
   markExited,
   // tail,
 } from "./bash-process-registry.js";
-import { renderExecUpdateText } from "./bash-tools.exec-output.js";
 import {
   buildDockerExecArgs,
   chunkString,
@@ -514,8 +510,6 @@ export function emitExecSystemEvent(
     })
   );
 }
-export { renderExecUpdateText } from "./bash-tools.exec-output.js";
-
 function joinExecFailureOutput(aggregated: string, reason: string) {
   return aggregated ? `${aggregated}\n\n${reason}` : reason;
 }
@@ -705,6 +699,7 @@ export async function runExecProcess(opts: {
       return;
     }
     const tailText = session.tail || session.aggregated;
+    const warningText = opts.warnings.length ? `${opts.warnings.join("\n")}\n\n` : "";
     // Note: opts.onUpdate() is provided by pi-agent-core's agent-loop and
     // internally pushes Promise.resolve(emit(event)) into an updateEvents
     // array.  Because emit → processEvents is async, any failure (e.g.
@@ -715,9 +710,7 @@ export async function runExecProcess(opts: {
     // signal (Layer 2) — both of which prevent this call from ever being
     // reached after the agent run has ended.
     opts.onUpdate({
-      content: [
-        { type: "text", text: renderExecUpdateText({ tailText, warnings: opts.warnings }) },
-      ],
+      content: [{ type: "text", text: warningText + (tailText || "") }],
       details: {
         status: "running",
         sessionId,
