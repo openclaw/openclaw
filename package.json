@@ -1518,6 +1518,7 @@
     "test:docker:session-runtime-context": "bash scripts/e2e/session-runtime-context-docker.sh",
     "test:docker:timings": "node scripts/docker-e2e-timings.mjs",
     "test:docker:update-channel-switch": "bash scripts/e2e/update-channel-switch-docker.sh",
+    "test:docker:upgrade-survivor": "bash scripts/e2e/upgrade-survivor-docker.sh",
     "test:e2e": "node scripts/run-vitest.mjs run --config test/vitest/vitest.e2e.config.ts",
     "test:e2e:openshell": "OPENCLAW_E2E_OPENSHELL=1 node scripts/run-vitest.mjs run --config test/vitest/vitest.e2e.config.ts extensions/openshell/src/backend.e2e.test.ts",
     "test:extension": "node scripts/test-extension.mjs",

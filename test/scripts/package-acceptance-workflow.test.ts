@@ -41,6 +41,7 @@ describe("package acceptance workflow", () => {
     expect(workflow).toContain("suite_profile:");
     expect(workflow).toContain("npm-onboard-channel-agent gateway-network config-reload");
     expect(workflow).toContain("npm-onboard-channel-agent doctor-switch");
+    expect(workflow).toContain("update-channel-switch upgrade-survivor");
     expect(workflow).toContain("bundled-channel-deps-compat");
     expect(workflow).toContain("plugins-offline plugin-update");
     expect(workflow).toContain("include_release_path_suites=true");
