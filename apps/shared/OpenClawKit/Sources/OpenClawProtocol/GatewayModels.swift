@@ -3384,6 +3384,174 @@ public struct CommandsListResult: Codable, Sendable {
     }
 }
 
+public struct PluginsListParams: Codable, Sendable {
+    public let enabled: Bool?
+    public let diagnostics: Bool?
+
+    public init(
+        enabled: Bool?,
+        diagnostics: Bool?)
+    {
+        self.enabled = enabled
+        self.diagnostics = diagnostics
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case enabled
+        case diagnostics
+    }
+}
+
+public struct PluginsInspectParams: Codable, Sendable {
+    public let id: String
+
+    public init(
+        id: String)
+    {
+        self.id = id
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+    }
+}
+
+public struct PluginsDoctorParams: Codable, Sendable {}
+
+public struct PluginsRegistryStatusParams: Codable, Sendable {}
+
+public struct PluginsRegistryRefreshParams: Codable, Sendable {}
+
+public struct PluginsInstallParams: Codable, Sendable {
+    public let source: String
+    public let path: String?
+    public let spec: String?
+    public let force: Bool?
+    public let link: Bool?
+    public let pin: Bool?
+    public let dangerouslyforceunsafeinstall: Bool?
+    public let timeoutms: Int?
+
+    public init(
+        source: String,
+        path: String?,
+        spec: String?,
+        force: Bool?,
+        link: Bool?,
+        pin: Bool?,
+        dangerouslyforceunsafeinstall: Bool?,
+        timeoutms: Int?)
+    {
+        self.source = source
+        self.path = path
+        self.spec = spec
+        self.force = force
+        self.link = link
+        self.pin = pin
+        self.dangerouslyforceunsafeinstall = dangerouslyforceunsafeinstall
+        self.timeoutms = timeoutms
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case source
+        case path
+        case spec
+        case force
+        case link
+        case pin
+        case dangerouslyforceunsafeinstall = "dangerouslyForceUnsafeInstall"
+        case timeoutms = "timeoutMs"
+    }
+}
+
+public struct PluginsUpdateParams: Codable, Sendable {
+    public let id: String?
+    public let all: Bool?
+    public let dryrun: Bool?
+    public let dangerouslyforceunsafeinstall: Bool?
+    public let allowintegritydrift: Bool?
+    public let timeoutms: Int?
+
+    public init(
+        id: String?,
+        all: Bool?,
+        dryrun: Bool?,
+        dangerouslyforceunsafeinstall: Bool?,
+        allowintegritydrift: Bool?,
+        timeoutms: Int?)
+    {
+        self.id = id
+        self.all = all
+        self.dryrun = dryrun
+        self.dangerouslyforceunsafeinstall = dangerouslyforceunsafeinstall
+        self.allowintegritydrift = allowintegritydrift
+        self.timeoutms = timeoutms
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case all
+        case dryrun = "dryRun"
+        case dangerouslyforceunsafeinstall = "dangerouslyForceUnsafeInstall"
+        case allowintegritydrift = "allowIntegrityDrift"
+        case timeoutms = "timeoutMs"
+    }
+}
+
+public struct PluginsUninstallParams: Codable, Sendable {
+    public let id: String
+    public let force: Bool?
+    public let keepfiles: Bool?
+    public let dryrun: Bool?
+
+    public init(
+        id: String,
+        force: Bool?,
+        keepfiles: Bool?,
+        dryrun: Bool?)
+    {
+        self.id = id
+        self.force = force
+        self.keepfiles = keepfiles
+        self.dryrun = dryrun
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case force
+        case keepfiles = "keepFiles"
+        case dryrun = "dryRun"
+    }
+}
+
+public struct PluginsEnableParams: Codable, Sendable {
+    public let id: String
+
+    public init(
+        id: String)
+    {
+        self.id = id
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+    }
+}
+
+public struct PluginsDisableParams: Codable, Sendable {
+    public let id: String
+
+    public init(
+        id: String)
+    {
+        self.id = id
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+    }
+}
+
 public struct SkillsStatusParams: Codable, Sendable {
     public let agentid: String?
 

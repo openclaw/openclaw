@@ -43,6 +43,16 @@ describe("method scope resolution", () => {
     ["nativeHook.invoke", ["operator.admin"]],
     ["wizard.start", ["operator.admin"]],
     ["update.run", ["operator.admin"]],
+    ["plugins.doctor", ["operator.admin"]],
+    ["plugins.list", ["operator.admin"]],
+    ["plugins.inspect", ["operator.admin"]],
+    ["plugins.registry.status", ["operator.admin"]],
+    ["plugins.registry.refresh", ["operator.admin"]],
+    ["plugins.install", ["operator.admin"]],
+    ["plugins.update", ["operator.admin"]],
+    ["plugins.uninstall", ["operator.admin"]],
+    ["plugins.enable", ["operator.admin"]],
+    ["plugins.disable", ["operator.admin"]],
   ])("resolves least-privilege scopes for %s", (method, expected) => {
     expect(resolveLeastPrivilegeOperatorScopesForMethod(method)).toEqual(expected);
   });

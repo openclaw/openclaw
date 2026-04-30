@@ -24,6 +24,7 @@ import { nativeHookRelayHandlers } from "./server-methods/native-hook-relay.js";
 import { nodePendingHandlers } from "./server-methods/nodes-pending.js";
 import { nodeHandlers } from "./server-methods/nodes.js";
 import { pluginHostHookHandlers } from "./server-methods/plugin-host-hooks.js";
+import { pluginManagementHandlers } from "./server-methods/plugins.js";
 import { pushHandlers } from "./server-methods/push.js";
 import { sendHandlers } from "./server-methods/send.js";
 import { sessionsHandlers } from "./server-methods/sessions.js";
@@ -41,7 +42,17 @@ import { voicewakeHandlers } from "./server-methods/voicewake.js";
 import { webHandlers } from "./server-methods/web.js";
 import { wizardHandlers } from "./server-methods/wizard.js";
 
-const CONTROL_PLANE_WRITE_METHODS = new Set(["config.apply", "config.patch", "update.run"]);
+const CONTROL_PLANE_WRITE_METHODS = new Set([
+  "config.apply",
+  "config.patch",
+  "update.run",
+  "plugins.registry.refresh",
+  "plugins.install",
+  "plugins.update",
+  "plugins.uninstall",
+  "plugins.enable",
+  "plugins.disable",
+]);
 function authorizeGatewayMethod(method: string, client: GatewayRequestOptions["client"]) {
   if (!client?.connect) {
     return null;
@@ -90,6 +101,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...modelsAuthStatusHandlers,
   ...nativeHookRelayHandlers,
   ...pluginHostHookHandlers,
+  ...pluginManagementHandlers,
   ...configHandlers,
   ...wizardHandlers,
   ...talkHandlers,

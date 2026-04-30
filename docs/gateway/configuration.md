@@ -612,11 +612,12 @@ when they need the broader config map, defaults, or links to dedicated
 subsystem references.
 
 <Note>
-Control-plane writes (`config.apply`, `config.patch`, `update.run`) are
-rate-limited to 3 requests per 60 seconds per `deviceId+clientIp`. Restart
-requests coalesce and then enforce a 30-second cooldown between restart cycles.
-`update.status` is read-only but admin-scoped because the restart sentinel can
-include update step summaries and command output tails.
+Control-plane writes (`config.apply`, `config.patch`, `update.run`, and
+mutating `plugins.*` management methods) are rate-limited to 3 requests per 60
+seconds per `deviceId+clientIp`. Restart requests coalesce and then enforce a
+30-second cooldown between restart cycles. `update.status` is read-only but
+admin-scoped because the restart sentinel can include update step summaries and
+command output tails.
 </Note>
 
 Example partial patch:

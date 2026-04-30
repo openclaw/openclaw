@@ -155,6 +155,26 @@ import {
   PluginApprovalRequestParamsSchema,
   type PluginApprovalResolveParams,
   PluginApprovalResolveParamsSchema,
+  type PluginsDisableParams,
+  PluginsDisableParamsSchema,
+  type PluginsDoctorParams,
+  PluginsDoctorParamsSchema,
+  type PluginsEnableParams,
+  PluginsEnableParamsSchema,
+  type PluginsInspectParams,
+  PluginsInspectParamsSchema,
+  type PluginsInstallParams,
+  PluginsInstallParamsSchema,
+  type PluginsListParams,
+  PluginsListParamsSchema,
+  type PluginsRegistryRefreshParams,
+  PluginsRegistryRefreshParamsSchema,
+  type PluginsRegistryStatusParams,
+  PluginsRegistryStatusParamsSchema,
+  type PluginsUninstallParams,
+  PluginsUninstallParamsSchema,
+  type PluginsUpdateParams,
+  PluginsUpdateParamsSchema,
   type PluginsUiDescriptorsParams,
   PluginsUiDescriptorsParamsSchema,
   ErrorCodes,
@@ -572,6 +592,31 @@ export const validatePluginApprovalResolveParams = ajv.compile<PluginApprovalRes
 export const validatePluginsUiDescriptorsParams = ajv.compile<PluginsUiDescriptorsParams>(
   PluginsUiDescriptorsParamsSchema,
 );
+export const validatePluginsListParams = ajv.compile<PluginsListParams>(PluginsListParamsSchema);
+export const validatePluginsInspectParams = ajv.compile<PluginsInspectParams>(
+  PluginsInspectParamsSchema,
+);
+export const validatePluginsDoctorParams =
+  ajv.compile<PluginsDoctorParams>(PluginsDoctorParamsSchema);
+export const validatePluginsRegistryStatusParams = ajv.compile<PluginsRegistryStatusParams>(
+  PluginsRegistryStatusParamsSchema,
+);
+export const validatePluginsRegistryRefreshParams = ajv.compile<PluginsRegistryRefreshParams>(
+  PluginsRegistryRefreshParamsSchema,
+);
+export const validatePluginsInstallParams = ajv.compile<PluginsInstallParams>(
+  PluginsInstallParamsSchema,
+);
+export const validatePluginsUpdateParams =
+  ajv.compile<PluginsUpdateParams>(PluginsUpdateParamsSchema);
+export const validatePluginsUninstallParams = ajv.compile<PluginsUninstallParams>(
+  PluginsUninstallParamsSchema,
+);
+export const validatePluginsEnableParams =
+  ajv.compile<PluginsEnableParams>(PluginsEnableParamsSchema);
+export const validatePluginsDisableParams = ajv.compile<PluginsDisableParams>(
+  PluginsDisableParamsSchema,
+);
 export const validateExecApprovalsNodeGetParams = ajv.compile<ExecApprovalsNodeGetParams>(
   ExecApprovalsNodeGetParamsSchema,
 );
@@ -737,6 +782,16 @@ export {
   CommandsListParamsSchema,
   CommandsListResultSchema,
   PluginsUiDescriptorsParamsSchema,
+  PluginsListParamsSchema,
+  PluginsInspectParamsSchema,
+  PluginsDoctorParamsSchema,
+  PluginsRegistryStatusParamsSchema,
+  PluginsRegistryRefreshParamsSchema,
+  PluginsInstallParamsSchema,
+  PluginsUpdateParamsSchema,
+  PluginsUninstallParamsSchema,
+  PluginsEnableParamsSchema,
+  PluginsDisableParamsSchema,
   ModelsListParamsSchema,
   SkillsStatusParamsSchema,
   ToolsCatalogParamsSchema,
@@ -850,6 +905,16 @@ export type {
   CommandsListParams,
   CommandsListResult,
   CommandEntry,
+  PluginsListParams,
+  PluginsInspectParams,
+  PluginsDoctorParams,
+  PluginsRegistryStatusParams,
+  PluginsRegistryRefreshParams,
+  PluginsInstallParams,
+  PluginsUpdateParams,
+  PluginsUninstallParams,
+  PluginsEnableParams,
+  PluginsDisableParams,
   SkillsStatusParams,
   ToolsCatalogParams,
   ToolsCatalogResult,

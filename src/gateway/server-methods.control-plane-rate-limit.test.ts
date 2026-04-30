@@ -131,6 +131,28 @@ describe("gateway control-plane write rate limit", () => {
     expect(handlerCalls).toHaveBeenCalledTimes(4);
   });
 
+  it("rate-limits plugin management writes", async () => {
+    const handlerCalls = vi.fn();
+    const handler: GatewayRequestHandler = (opts) => {
+      handlerCalls(opts);
+      opts.respond(true, undefined, undefined);
+    };
+    const context = buildContext();
+    const client = buildClient();
+
+    await runRequest({ method: "plugins.install", context, client, handler });
+    await runRequest({ method: "plugins.install", context, client, handler });
+    await runRequest({ method: "plugins.install", context, client, handler });
+    const blocked = await runRequest({ method: "plugins.install", context, client, handler });
+
+    expect(handlerCalls).toHaveBeenCalledTimes(3);
+    expect(blocked).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ code: "UNAVAILABLE" }),
+    );
+  });
+
   it("blocks startup-gated methods before dispatch", async () => {
     const handlerCalls = vi.fn();
     const handler: GatewayRequestHandler = (opts) => {
