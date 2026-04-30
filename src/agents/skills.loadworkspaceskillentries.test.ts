@@ -521,11 +521,38 @@ describe("loadWorkspaceSkillEntries", () => {
         warn.mock.calls
           .map(([line]) => String(line))
           .some((line) =>
-            line.includes(
-              "Nested skills directory looks suspiciously large, truncating discovery.",
-            ),
+            line.includes("Nested skills directory has many entries, truncating discovery."),
           ),
       ).toBe(true);
+    });
+
+    it("does not spend nested candidate budget on ignored raw entries", async () => {
+      const workspaceDir = await createTempWorkspaceDir();
+      const groupDir = path.join(workspaceDir, "skills", "group");
+      await fs.mkdir(groupDir, { recursive: true });
+      for (let i = 0; i < 50; i += 1) {
+        await fs.writeFile(path.join(groupDir, `ignored-${String(i).padStart(2, "0")}.txt`), "");
+      }
+      for (const name of ["valid-a", "valid-b", "valid-c"]) {
+        await writeSkill({
+          dir: path.join(groupDir, name),
+          name,
+          description: `${name} nested under a group`,
+        });
+      }
+
+      const names = loadTestWorkspaceSkillEntries(workspaceDir, {
+        config: {
+          skills: {
+            limits: {
+              maxCandidatesPerRoot: 2,
+              maxSkillsLoadedPerSource: 10,
+            },
+          },
+        },
+      }).map((entry) => entry.skill.name);
+
+      expect(names.filter((name) => name.startsWith("valid-"))).toEqual(["valid-a", "valid-b"]);
     });
   });
 });
