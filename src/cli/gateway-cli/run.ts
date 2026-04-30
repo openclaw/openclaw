@@ -850,7 +850,7 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
       }
       const { maybeExplainGatewayServiceStop } = await import("./shared.js");
       await maybeExplainGatewayServiceStop();
-      defaultRuntime.exit(isHealthyGatewayLockError(err) ? 0 : 1);
+      defaultRuntime.exit(isHealthyGatewayLockError(err) ? EXIT_CONFIG_ERROR : 1);
       return;
     }
     await maybeWriteGatewayStartupFailureBundle(err);

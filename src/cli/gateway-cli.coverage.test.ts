@@ -386,7 +386,7 @@ describe("gateway-cli coverage", () => {
         );
         await expect(
           runGatewayCommand(["gateway", "--token", "test-token", "--allow-unconfigured"]),
-        ).rejects.toThrow("__exit__:0");
+        ).rejects.toThrow("__exit__:78");
 
         expect(startGatewayServer).toHaveBeenCalled();
         expect(runtimeErrors.join("\n")).toContain("Gateway failed to start:");
