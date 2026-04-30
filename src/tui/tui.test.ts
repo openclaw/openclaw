@@ -17,6 +17,7 @@ import {
   resolveLocalAuthSpawnCwd,
   resolveLocalAuthSpawnOptions,
   resolveTuiSessionKey,
+  shouldApplyInitializationStatus,
   stopTuiSafely,
 } from "./tui.js";
 
@@ -195,6 +196,29 @@ describe("isBusyActivityStatus", () => {
     expect(isBusyActivityStatus("idle")).toBe(false);
     expect(isBusyActivityStatus("")).toBe(false);
     expect(isBusyActivityStatus("pairing required: run openclaw devices list")).toBe(false);
+  });
+});
+
+describe("shouldApplyInitializationStatus", () => {
+  // Regression for clawsweeper review on PR #75120: `onConnected` previously
+  // unconditionally set activityStatus to `initializing` after
+  // `reconnectStreamingWatchdog()` ran, which clobbered streaming state
+  // restored on reconnect (active tracked run → status flipped to
+  // `initializing` then `idle`).
+  it("applies the initialization loader when current status is idle", () => {
+    expect(shouldApplyInitializationStatus("idle")).toBe(true);
+    expect(shouldApplyInitializationStatus("")).toBe(true);
+  });
+
+  it("preserves an active streaming status restored on reconnect", () => {
+    expect(shouldApplyInitializationStatus("streaming")).toBe(false);
+  });
+
+  it("preserves other busy statuses", () => {
+    expect(shouldApplyInitializationStatus("sending")).toBe(false);
+    expect(shouldApplyInitializationStatus("waiting")).toBe(false);
+    expect(shouldApplyInitializationStatus("running")).toBe(false);
+    expect(shouldApplyInitializationStatus(INITIALIZATION_ACTIVITY_STATUS)).toBe(false);
   });
 });
 

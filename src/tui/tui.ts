@@ -209,6 +209,17 @@ export function isBusyActivityStatus(status: string): boolean {
   return BUSY_ACTIVITY_STATUSES.has(status);
 }
 
+/**
+ * Decide whether the post-connect initialization loader should take over
+ * the activity status on `onConnected`. We deliberately *skip* this when
+ * the status is already busy — e.g. `streaming` after a reconnect where
+ * `reconnectStreamingWatchdog()` restored an active tracked run — so we
+ * don't clobber genuine in-flight work with the init spinner.
+ */
+export function shouldApplyInitializationStatus(currentStatus: string): boolean {
+  return !isBusyActivityStatus(currentStatus);
+}
+
 export function resolveGatewayDisconnectState(reason?: string): {
   connectionStatus: string;
   activityStatus: string;
@@ -1109,7 +1120,14 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     // `local ready | idle` for the entire warm-up window — up to a minute on
     // slow first connects of a Terminal hatch — even though the auto-message
     // hasn't been able to start yet.
-    setActivityStatus(INITIALIZATION_ACTIVITY_STATUS);
+    //
+    // On reconnect, however, `reconnectStreamingWatchdog()` may have already
+    // restored a busy status (e.g. `streaming` for an active tracked run).
+    // Only flip to the initialization loader when the current status is not
+    // already busy, so we don't clobber streaming state mid-run.
+    if (shouldApplyInitializationStatus(activityStatus)) {
+      setActivityStatus(INITIALIZATION_ACTIVITY_STATUS);
+    }
     void (async () => {
       try {
         await refreshAgents();
