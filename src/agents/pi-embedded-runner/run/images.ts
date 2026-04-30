@@ -414,8 +414,21 @@ export async function loadImageFromRef(
  * @param model The model object with input capability array
  * @returns True if the model supports image input
  */
-export function modelSupportsImages(model: { input?: string[] }): boolean {
-  return model.input?.includes("image") ?? false;
+export function modelSupportsImages(model: {
+  id?: string;
+  name?: string;
+  provider?: string;
+  providerId?: string;
+  input?: string[];
+}): boolean {
+  if (model.input?.includes("image")) {
+    return true;
+  }
+  const provider = (model.provider ?? model.providerId ?? "").toLowerCase();
+  const modelNames = [model.id, model.name]
+    .map((value) => value?.trim().toLowerCase())
+    .filter((value): value is string => Boolean(value));
+  return provider === "openai-codex" && modelNames.some((value) => value.startsWith("gpt-5.5"));
 }
 
 /**
