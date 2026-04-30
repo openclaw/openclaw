@@ -11,6 +11,7 @@ import {
   type InstalledPluginIndex,
 } from "./installed-plugin-index.js";
 import { loadPluginLookUpTable } from "./plugin-lookup-table.js";
+import { resolvePluginPath } from "./plugin-paths.js";
 import {
   DISABLE_PERSISTED_PLUGIN_REGISTRY_ENV,
   createPluginRegistryIdNormalizer,
@@ -32,7 +33,6 @@ import {
   resolveProviderOwners,
   resolveSetupProviderOwners,
 } from "./plugin-registry.js";
-import { resolvePluginPath } from "./registry.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
 const tempDirs: string[] = [];
@@ -714,7 +714,7 @@ describe("plugin registry facade", () => {
 });
 
 describe("resolvePluginPath", () => {
-  const rootDir = "/plugins/my-extension";
+  const rootDir = path.resolve("plugins", "my-extension");
 
   it("resolves '.' to plugin rootDir", () => {
     expect(resolvePluginPath(".", rootDir)).toBe(rootDir);
@@ -725,12 +725,15 @@ describe("resolvePluginPath", () => {
   });
 
   it("passes absolute paths through unchanged", () => {
-    expect(resolvePluginPath("/tmp/absolute", rootDir)).toBe("/tmp/absolute");
+    const absolutePath = path.resolve("tmp", "absolute");
+    expect(resolvePluginPath(absolutePath, rootDir)).toBe(absolutePath);
   });
 
   it("passes home-relative paths through resolveUserPath", () => {
     const result = resolvePluginPath("~/logs/ws.log", rootDir);
-    expect(result).toMatch(/^\/.*logs\/ws\.log$/);
+    expect(path.basename(result)).toBe("ws.log");
+    expect(path.basename(path.dirname(result))).toBe("logs");
+    expect(path.isAbsolute(result)).toBe(true);
     expect(result).not.toContain("~");
   });
 

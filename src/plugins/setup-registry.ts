@@ -7,6 +7,7 @@ import { buildPluginApi } from "./api-builder.js";
 import { collectPluginConfigContractMatches } from "./config-contracts.js";
 import { getCachedPluginJitiLoader, type PluginJitiLoaderCache } from "./jiti-loader-cache.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
+import { resolvePluginPath } from "./plugin-paths.js";
 import { loadPluginManifestRegistryForPluginRegistry } from "./plugin-registry.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import { listSetupCliBackendIds, listSetupProviderIds } from "./setup-descriptors.js";
@@ -272,7 +273,7 @@ function buildSetupPluginApi(params: {
     config: {} as OpenClawConfig,
     runtime: EMPTY_RUNTIME,
     logger: NOOP_LOGGER,
-    resolvePath: (input) => input,
+    resolvePath: (input) => resolvePluginPath(input, params.record.rootDir),
     handlers: params.handlers,
   });
 }

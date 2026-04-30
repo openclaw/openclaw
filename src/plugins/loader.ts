@@ -119,6 +119,7 @@ import {
 } from "./memory-state.js";
 import { unwrapDefaultModuleExport } from "./module-export.js";
 import { withProfile } from "./plugin-load-profile.js";
+import { resolvePluginPath } from "./plugin-paths.js";
 import {
   createPluginIdScopeSet,
   hasExplicitPluginIdScope,
@@ -426,6 +427,8 @@ function restorePluginRegistry(registry: PluginRegistry, snapshot: PluginRegistr
   registry.gatewayMethodScopes = snapshot.gatewayMethodScopes;
 }
 
+const lateSafePluginApiMethods = new Set<PropertyKey>(["resolvePath"]);
+
 function createGuardedPluginRegistrationApi(api: OpenClawPluginApi): {
   api: OpenClawPluginApi;
   close: () => void;
@@ -439,7 +442,7 @@ function createGuardedPluginRegistrationApi(api: OpenClawPluginApi): {
           return value;
         }
         return (...args: unknown[]) => {
-          if (closed) {
+          if (closed && !lateSafePluginApiMethods.has(prop)) {
             return undefined;
           }
           return Reflect.apply(value, target, args);
@@ -2445,7 +2448,7 @@ export async function loadOpenClawPluginCliRegistry(
       pluginConfig: validatedConfig.value,
       runtime: {} as PluginRuntime,
       logger,
-      resolvePath: (input) => resolveUserPath(input),
+      resolvePath: (input) => resolvePluginPath(input, record.rootDir),
       handlers: {
         registerCli: (registrar, opts) => registerCli(record, registrar, opts),
       },

@@ -941,6 +941,50 @@ describe("loadOpenClawPlugins", () => {
     expect(registry.plugins.find((entry) => entry.id === plugin.id)?.status).toBe("loaded");
   });
 
+  it("keeps resolvePath available to registered services after registration closes", async () => {
+    useNoBundledPlugins();
+    const resolvedMarker = path.join(makeTempDir(), "resolved-path.txt");
+    const plugin = writePlugin({
+      id: "service-resolve-path",
+      filename: "service-resolve-path.cjs",
+      body: `module.exports = { id: "service-resolve-path", register(api) {
+  api.registerService({
+    id: "service-resolve-path",
+    start() {
+      require("node:fs").writeFileSync(
+        ${JSON.stringify(resolvedMarker)},
+        String(api.resolvePath(".")),
+        "utf-8"
+      );
+    },
+  });
+} };`,
+    });
+
+    const registry = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: { allow: [plugin.id] },
+    });
+    const service = registry.services.find((entry) => entry.pluginId === plugin.id)?.service;
+
+    expect(service).toBeDefined();
+    if (!service) {
+      throw new Error("service was not registered");
+    }
+
+    await Promise.resolve(
+      service.start({
+        config: {},
+        stateDir: makeTempDir(),
+        logger: { info() {}, warn() {}, error() {}, debug() {} },
+      } as Parameters<typeof service.start>[0]),
+    );
+
+    expect(fs.realpathSync(fs.readFileSync(resolvedMarker, "utf-8"))).toBe(
+      fs.realpathSync(plugin.dir),
+    );
+  });
+
   it("refreshes bundled plugin-sdk aliases without deleting the shared alias directory", () => {
     const distRoot = makeTempDir();
     const pluginSdkDir = path.join(distRoot, "plugin-sdk");
