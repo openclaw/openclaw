@@ -32,7 +32,7 @@ import {
 
 type AssistantAttachmentAvailability =
   | { status: "checking" }
-  | { status: "available" }
+  | { status: "available"; mediaTicket?: string }
   | { status: "unavailable"; reason: string; checkedAt: number };
 
 const assistantAttachmentAvailabilityCache = new Map<string, AssistantAttachmentAvailability>();
@@ -107,6 +107,7 @@ type ImageRenderOptions = {
   localMediaPreviewRoots?: readonly string[];
   basePath?: string;
   authToken?: string | null;
+  onRequestUpdate?: () => void;
 };
 
 type RenderableImageBlock = ImageBlock & {
@@ -691,8 +692,20 @@ function resolveRenderableMessageImages(
     if (isLocalImage && !canProxyLocalImage) {
       return [];
     }
+    const availability = canProxyLocalImage
+      ? resolveAssistantAttachmentAvailability(
+          img.url,
+          opts?.localMediaPreviewRoots ?? [],
+          opts?.basePath,
+          opts?.authToken,
+          opts?.onRequestUpdate,
+        )
+      : { status: "available" as const };
+    if (availability.status !== "available") {
+      return [];
+    }
     const displayUrl = canProxyLocalImage
-      ? buildAssistantAttachmentUrl(img.url, opts?.basePath, opts?.authToken)
+      ? buildAssistantAttachmentUrl(img.url, opts?.basePath, availability.mediaTicket)
       : img.url;
     return [{ ...img, displayUrl }];
   });
@@ -844,7 +857,7 @@ function isLocalAttachmentPreviewAllowed(
 function buildAssistantAttachmentUrl(
   source: string,
   basePath?: string,
-  authToken?: string | null,
+  mediaTicket?: string | null,
 ): string {
   if (!isLocalAssistantAttachmentSource(source)) {
     return source;
@@ -852,9 +865,9 @@ function buildAssistantAttachmentUrl(
   const normalizedBasePath =
     basePath && basePath !== "/" ? (basePath.endsWith("/") ? basePath.slice(0, -1) : basePath) : "";
   const params = new URLSearchParams({ source });
-  const normalizedToken = authToken?.trim();
-  if (normalizedToken) {
-    params.set("token", normalizedToken);
+  const normalizedMediaTicket = mediaTicket?.trim();
+  if (normalizedMediaTicket) {
+    params.set("mediaTicket", normalizedMediaTicket);
   }
   return `${normalizedBasePath}/__openclaw__/assistant-media?${params.toString()}`;
 }
@@ -947,12 +960,8 @@ async function resolveManagedOutgoingImageBlobUrl(
   return pending;
 }
 
-function buildAssistantAttachmentMetaUrl(
-  source: string,
-  basePath?: string,
-  authToken?: string | null,
-): string {
-  const attachmentUrl = buildAssistantAttachmentUrl(source, basePath, authToken);
+function buildAssistantAttachmentMetaUrl(source: string, basePath?: string): string {
+  const attachmentUrl = buildAssistantAttachmentUrl(source, basePath);
   return `${attachmentUrl}${attachmentUrl.includes("?") ? "&" : "?"}meta=1`;
 }
 
@@ -984,18 +993,27 @@ function resolveAssistantAttachmentAvailability(
   }
   assistantAttachmentAvailabilityCache.set(cacheKey, { status: "checking" });
   if (typeof fetch === "function") {
-    void fetch(buildAssistantAttachmentMetaUrl(source, basePath, authToken), {
+    const headers = new Headers({ Accept: "application/json" });
+    if (normalizedAuthToken) {
+      headers.set("Authorization", `Bearer ${normalizedAuthToken}`);
+    }
+    void fetch(buildAssistantAttachmentMetaUrl(source, basePath), {
       method: "GET",
-      headers: { Accept: "application/json" },
+      headers,
       credentials: "same-origin",
     })
       .then(async (res) => {
         const payload = (await res.json().catch(() => null)) as {
           available?: boolean;
+          mediaTicket?: string;
           reason?: string;
         } | null;
         if (payload?.available === true) {
-          assistantAttachmentAvailabilityCache.set(cacheKey, { status: "available" });
+          const mediaTicket = payload.mediaTicket?.trim();
+          assistantAttachmentAvailabilityCache.set(cacheKey, {
+            status: "available",
+            ...(mediaTicket ? { mediaTicket } : {}),
+          });
         } else {
           assistantAttachmentAvailabilityCache.set(cacheKey, {
             status: "unavailable",
@@ -1070,7 +1088,7 @@ function renderAssistantAttachments(
         );
         const attachmentUrl =
           availability.status === "available"
-            ? buildAssistantAttachmentUrl(attachment.url, basePath, authToken)
+            ? buildAssistantAttachmentUrl(attachment.url, basePath, availability.mediaTicket)
             : null;
         if (attachment.kind === "image") {
           if (!attachmentUrl) {
@@ -1288,6 +1306,7 @@ function renderGroupedMessage(
     localMediaPreviewRoots: opts.localMediaPreviewRoots ?? [],
     basePath: opts.basePath,
     authToken: opts.assistantAttachmentAuthToken,
+    onRequestUpdate: opts.onRequestUpdate,
   };
   const images = resolveRenderableMessageImages(extractImages(message), imageRenderOptions);
   const hasImages = images.length > 0;
