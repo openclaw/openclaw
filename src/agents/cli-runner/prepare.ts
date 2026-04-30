@@ -42,6 +42,7 @@ import { resolveSkillsPromptForRun } from "../skills.js";
 import { resolveSystemPromptOverride } from "../system-prompt-override.js";
 import { buildSystemPromptReport } from "../system-prompt-report.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
+import { mergedBundleMcpLayerWantsCallerContextInjection } from "../bundle-mcp-config.js";
 import { prepareCliBundleMcpConfig } from "./bundle-mcp.js";
 import { buildSystemPrompt, normalizeCliModel } from "./helpers.js";
 import { cliBackendLog } from "./log.js";
@@ -184,6 +185,29 @@ export async function prepareCliRunContext(
     }
     mcpLoopbackRuntime = prepareDeps.getActiveMcpLoopbackRuntime();
   }
+  const needsMcpPlaceholderEnv =
+    backendResolved.bundleMcp &&
+    (Boolean(mcpLoopbackRuntime) ||
+      mergedBundleMcpLayerWantsCallerContextInjection({
+        workspaceDir,
+        cfg: params.config,
+      }));
+  const mcpPlaceholderEnv: Record<string, string> | undefined = needsMcpPlaceholderEnv
+    ? {
+        ...(mcpLoopbackRuntime
+          ? {
+              OPENCLAW_MCP_TOKEN:
+                params.senderIsOwner === true
+                  ? mcpLoopbackRuntime.ownerToken
+                  : mcpLoopbackRuntime.nonOwnerToken,
+            }
+          : {}),
+        OPENCLAW_MCP_AGENT_ID: sessionAgentId ?? "",
+        OPENCLAW_MCP_ACCOUNT_ID: params.agentAccountId ?? "",
+        OPENCLAW_MCP_SESSION_KEY: params.sessionKey ?? "",
+        OPENCLAW_MCP_MESSAGE_CHANNEL: params.messageChannel ?? params.messageProvider ?? "",
+      }
+    : undefined;
   const preparedBackend = await prepareCliBundleMcpConfig({
     enabled: bundleMcpEnabled,
     mode: backendResolved.bundleMcpMode,
@@ -193,18 +217,7 @@ export async function prepareCliRunContext(
     additionalConfig: mcpLoopbackRuntime
       ? prepareDeps.createMcpLoopbackServerConfig(mcpLoopbackRuntime.port)
       : undefined,
-    env: mcpLoopbackRuntime
-      ? {
-          OPENCLAW_MCP_TOKEN:
-            params.senderIsOwner === true
-              ? mcpLoopbackRuntime.ownerToken
-              : mcpLoopbackRuntime.nonOwnerToken,
-          OPENCLAW_MCP_AGENT_ID: sessionAgentId ?? "",
-          OPENCLAW_MCP_ACCOUNT_ID: params.agentAccountId ?? "",
-          OPENCLAW_MCP_SESSION_KEY: params.sessionKey ?? "",
-          OPENCLAW_MCP_MESSAGE_CHANNEL: params.messageChannel ?? params.messageProvider ?? "",
-        }
-      : undefined,
+    env: mcpPlaceholderEnv,
     warn: (message) => cliBackendLog.warn(message),
   });
   const preparedExecution = await backendResolved.prepareExecution?.({

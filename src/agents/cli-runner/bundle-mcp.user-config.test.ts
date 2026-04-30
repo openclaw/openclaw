@@ -44,6 +44,83 @@ describe("prepareCliBundleMcpConfig user mcp.servers", () => {
     };
     expect(raw.mcpServers?.omi?.type).toBe("sse");
     expect(raw.mcpServers?.omi?.url).toBe("https://api.omi.me/v1/mcp/sse");
+    expect(raw.mcpServers?.omi?.headers?.Authorization).toBe("Bearer test-token");
+    expect(raw.mcpServers?.omi?.headers?.["x-openclaw-agent-id"]).toBeUndefined();
+
+    await prepared.cleanup?.();
+  });
+
+  it("merges caller placeholder headers when mcp.servers.<name>.injectCallerContext is true", async () => {
+    const workspaceDir = await cliBundleMcpHarness.tempHarness.createTempDir(
+      "openclaw-cli-bundle-mcp-caller-context-",
+    );
+
+    const prepared = await prepareCliBundleMcpConfig({
+      enabled: true,
+      mode: "claude-config-file",
+      backend: {
+        command: "node",
+        args: ["./fake-claude.mjs"],
+      },
+      workspaceDir,
+      config: {
+        plugins: { enabled: false },
+        mcp: {
+          servers: {
+            omi: {
+              type: "sse",
+              url: "https://api.omi.me/v1/mcp/sse",
+              headers: { Authorization: "Bearer test-token" },
+              injectCallerContext: true,
+            },
+          },
+        },
+      },
+    });
+
+    const configFlagIndex = prepared.backend.args?.indexOf("--mcp-config") ?? -1;
+    const generatedConfigPath = prepared.backend.args?.[configFlagIndex + 1];
+    const raw = JSON.parse(await fs.readFile(generatedConfigPath as string, "utf-8")) as {
+      mcpServers?: Record<string, { headers?: Record<string, string> }>;
+    };
+    expect(raw.mcpServers?.omi?.headers?.["x-openclaw-agent-id"]).toBe("${OPENCLAW_MCP_AGENT_ID}");
+
+    await prepared.cleanup?.();
+  });
+
+  it("does not inject caller headers when mcp.servers.<name>.injectCallerContext is false", async () => {
+    const workspaceDir = await cliBundleMcpHarness.tempHarness.createTempDir(
+      "openclaw-cli-bundle-mcp-no-caller-context-",
+    );
+
+    const prepared = await prepareCliBundleMcpConfig({
+      enabled: true,
+      mode: "claude-config-file",
+      backend: {
+        command: "node",
+        args: ["./fake-claude.mjs"],
+      },
+      workspaceDir,
+      config: {
+        plugins: { enabled: false },
+        mcp: {
+          servers: {
+            omi: {
+              type: "sse",
+              url: "https://api.omi.me/v1/mcp/sse",
+              injectCallerContext: false,
+            },
+          },
+        },
+      },
+    });
+
+    const configFlagIndex = prepared.backend.args?.indexOf("--mcp-config") ?? -1;
+    const generatedConfigPath = prepared.backend.args?.[configFlagIndex + 1];
+    const raw = JSON.parse(await fs.readFile(generatedConfigPath as string, "utf-8")) as {
+      mcpServers?: Record<string, { headers?: Record<string, string> }>;
+    };
+    expect(raw.mcpServers?.omi?.headers?.["x-openclaw-agent-id"]).toBeUndefined();
 
     await prepared.cleanup?.();
   });
@@ -214,9 +291,12 @@ describe("prepareCliBundleMcpConfig user mcp.servers", () => {
       "utf-8",
     );
 
-    const env = captureEnv(["HOME"]);
+    const env = captureEnv(["HOME", "USERPROFILE", "OPENCLAW_HOME", "OPENCLAW_STATE_DIR"]);
     try {
       process.env.HOME = cliBundleMcpHarness.bundleProbeHomeDir;
+      process.env.USERPROFILE = cliBundleMcpHarness.bundleProbeHomeDir;
+      process.env.OPENCLAW_HOME = cliBundleMcpHarness.bundleProbeHomeDir;
+      delete process.env.OPENCLAW_STATE_DIR;
       const prepared = await prepareCliBundleMcpConfig({
         enabled: true,
         mode: "claude-config-file",

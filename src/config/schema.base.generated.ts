@@ -23601,6 +23601,12 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     ],
                   },
                 },
+                injectCallerContext: {
+                  type: "boolean",
+                  title: "MCP Server Inject Caller Context",
+                  description:
+                    "When true, bundled CLI MCP adds OpenClaw caller HTTP headers (x-openclaw-agent-id, x-session-key, x-openclaw-account-id, x-openclaw-message-channel) to this server’s remote URL, using OPENCLAW_MCP_* placeholders. Default off.",
+                },
               },
               additionalProperties: {},
             },
@@ -27523,6 +27529,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     "mcp.servers": {
       label: "MCP Servers",
       help: "Named MCP server definitions. OpenClaw stores them in its own config and runtime adapters decide which transports are supported at execution time.",
+      tags: ["advanced"],
+    },
+    "mcp.servers.*.injectCallerContext": {
+      label: "MCP Server Inject Caller Context",
+      help: "When true, bundle MCP merges caller identity headers onto this HTTP/SSE server only.",
       tags: ["advanced"],
     },
     "mcp.sessionIdleTtlMs": {

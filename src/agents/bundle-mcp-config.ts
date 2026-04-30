@@ -6,6 +6,7 @@ import {
   type BundleMcpDiagnostic,
   type BundleMcpServerConfig,
 } from "../plugins/bundle-mcp.js";
+import { isRecord } from "../utils.js";
 
 export type MergedBundleMcpConfig = {
   config: BundleMcpConfig;
@@ -73,4 +74,19 @@ export function loadMergedBundleMcpConfig(params: {
     },
     diagnostics: bundleMcp.diagnostics,
   };
+}
+
+/** True if the merged bundle + OpenClaw `mcp.servers` layer has any server with `injectCallerContext: true`. */
+export function mergedBundleMcpLayerWantsCallerContextInjection(params: {
+  workspaceDir: string;
+  cfg?: OpenClawConfig;
+}): boolean {
+  const { config } = loadMergedBundleMcpConfig({
+    workspaceDir: params.workspaceDir,
+    cfg: params.cfg,
+    mapConfiguredServer: toCliBundleMcpServerConfig,
+  });
+  return Object.values(config.mcpServers).some(
+    (server) => isRecord(server) && server.injectCallerContext === true,
+  );
 }

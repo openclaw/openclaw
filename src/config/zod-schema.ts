@@ -229,6 +229,8 @@ const McpServerSchema = z
         z.union([z.string().register(sensitive), z.number(), z.boolean()]).register(sensitive),
       )
       .optional(),
+    connectionTimeoutMs: z.number().finite().min(0).optional(),
+    injectCallerContext: z.boolean().optional(),
   })
   .catchall(z.unknown());
 

@@ -41,6 +41,8 @@ describe("prepareCliBundleMcpConfig gemini", () => {
     expect(raw.mcp?.allowed).toEqual(["openclaw"]);
     expect(raw.mcpServers?.openclaw?.url).toBe("http://127.0.0.1:23119/mcp");
     expect(raw.mcpServers?.openclaw?.headers?.Authorization).toBe("Bearer loopback-token-123");
+    expect(raw.mcpServers?.openclaw?.headers?.["x-openclaw-agent-id"]).toBeUndefined();
+    expect(raw.mcpServers?.openclaw?.headers?.["x-session-key"]).toBeUndefined();
 
     await prepared.cleanup?.();
   });
@@ -89,6 +91,47 @@ describe("prepareCliBundleMcpConfig gemini", () => {
     expect(raw.mcpServers?.context7?.transport).toBeUndefined();
     expect(raw.mcpServers?.context7?.url).toBe("https://mcp.context7.com/mcp");
     expect(raw.mcpServers?.context7?.headers?.Authorization).toBe("Bearer ctx7-test");
+    expect(raw.mcpServers?.context7?.headers?.["x-openclaw-agent-id"]).toBeUndefined();
+
+    await prepared.cleanup?.();
+  });
+
+  it("resolves injected caller headers when the openclaw server opts in", async () => {
+    const prepared = await prepareCliBundleMcpConfig({
+      enabled: true,
+      mode: "gemini-system-settings",
+      backend: {
+        command: "gemini",
+        args: ["--prompt", "{prompt}"],
+      },
+      workspaceDir: "/tmp/openclaw-bundle-mcp-gemini-caller",
+      config: { plugins: { enabled: false } },
+      additionalConfig: {
+        mcpServers: {
+          openclaw: {
+            type: "http",
+            url: "http://127.0.0.1:23119/mcp",
+            injectCallerContext: true,
+            headers: {
+              Authorization: "Bearer ${OPENCLAW_MCP_TOKEN}",
+            },
+          },
+        },
+      },
+      env: {
+        OPENCLAW_MCP_TOKEN: "loopback-token-123",
+        OPENCLAW_MCP_AGENT_ID: "agent-main",
+        OPENCLAW_MCP_SESSION_KEY: "sess-1",
+      },
+    });
+
+    const raw = JSON.parse(
+      await fs.readFile(prepared.env?.GEMINI_CLI_SYSTEM_SETTINGS_PATH as string, "utf-8"),
+    ) as {
+      mcpServers?: Record<string, { headers?: Record<string, string> }>;
+    };
+    expect(raw.mcpServers?.openclaw?.headers?.["x-openclaw-agent-id"]).toBe("agent-main");
+    expect(raw.mcpServers?.openclaw?.headers?.["x-session-key"]).toBe("sess-1");
 
     await prepared.cleanup?.();
   });

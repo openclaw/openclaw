@@ -9,6 +9,7 @@ import { extractMcpServerMap, type BundleMcpConfig } from "../../plugins/bundle-
 import type { CliBundleMcpMode } from "../../plugins/types.js";
 import { loadMergedBundleMcpConfig, toCliBundleMcpServerConfig } from "../bundle-mcp-config.js";
 import { isRecord } from "./bundle-mcp-adapter-shared.js";
+import { applyBundleMcpCallerContext } from "./bundle-mcp-caller-context.js";
 import { findClaudeMcpConfigPath, injectClaudeMcpConfigArgs } from "./bundle-mcp-claude.js";
 import { injectCodexMcpConfigArgs } from "./bundle-mcp-codex.js";
 import { writeGeminiSystemSettings } from "./bundle-mcp-gemini.js";
@@ -184,6 +185,8 @@ export async function prepareCliBundleMcpConfig(params: {
   if (params.additionalConfig) {
     mergedConfig = applyMergePatch(mergedConfig, params.additionalConfig) as BundleMcpConfig;
   }
+
+  mergedConfig = applyBundleMcpCallerContext(mergedConfig);
 
   return await prepareModeSpecificBundleMcpConfig({
     mode,

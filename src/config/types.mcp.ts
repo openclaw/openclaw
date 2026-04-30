@@ -17,6 +17,13 @@ export type McpServerConfig = {
   headers?: Record<string, string | number | boolean>;
   /** Optional connection timeout in milliseconds. */
   connectionTimeoutMs?: number;
+  /**
+   * When true, bundle MCP merges OpenClaw caller HTTP headers onto this server’s
+   * remote (`url`) transport: `x-openclaw-agent-id`, `x-openclaw-account-id`,
+   * `x-openclaw-message-channel`, and `x-session-key`, using `OPENCLAW_MCP_*`
+   * placeholders. Default off (omit or false).
+   */
+  injectCallerContext?: boolean;
   [key: string]: unknown;
 };
 

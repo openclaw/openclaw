@@ -55,9 +55,12 @@ export function createEnabledBundleProbeConfig(): OpenClawConfig {
 export async function prepareBundleProbeCliConfig(params?: {
   additionalConfig?: Parameters<typeof prepareCliBundleMcpConfig>[0]["additionalConfig"];
 }) {
-  const env = captureEnv(["HOME"]);
+  const env = captureEnv(["HOME", "USERPROFILE", "OPENCLAW_HOME", "OPENCLAW_STATE_DIR"]);
   try {
     process.env.HOME = bundleProbeHomeDir;
+    process.env.USERPROFILE = bundleProbeHomeDir;
+    process.env.OPENCLAW_HOME = bundleProbeHomeDir;
+    delete process.env.OPENCLAW_STATE_DIR;
     return await prepareCliBundleMcpConfig({
       enabled: true,
       mode: "claude-config-file",

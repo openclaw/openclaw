@@ -1,63 +1,43 @@
-import { describe, expect, it, vi } from "vitest";
-import { loadMergedBundleMcpConfig, toCliBundleMcpServerConfig } from "./bundle-mcp-config.js";
+import { describe, expect, it } from "vitest";
+import { mergedBundleMcpLayerWantsCallerContextInjection } from "./bundle-mcp-config.js";
 
-const mocks = vi.hoisted(() => ({
-  bundleMcp: {
-    config: {
-      mcpServers: {
-        bundleProbe: {
-          command: "node",
-          args: ["./servers/probe.mjs"],
-        },
-      },
-    },
-    diagnostics: [],
-  },
-}));
-
-vi.mock("../plugins/bundle-mcp.js", () => ({
-  loadEnabledBundleMcpConfig: () => mocks.bundleMcp,
-}));
-
-describe("loadMergedBundleMcpConfig", () => {
-  it("lets OpenClaw mcp.servers override bundle defaults while preserving raw transport shape", () => {
-    const merged = loadMergedBundleMcpConfig({
-      workspaceDir: "/workspace",
-      cfg: {
-        plugins: {
-          entries: {
-            "bundle-probe": { enabled: true },
-          },
-        },
-        mcp: {
-          servers: {
-            bundleProbe: {
-              transport: "streamable-http",
-              url: "https://mcp.example.com/mcp",
+describe("mergedBundleMcpLayerWantsCallerContextInjection", () => {
+  it("is true when OpenClaw mcp.servers opts in", () => {
+    expect(
+      mergedBundleMcpLayerWantsCallerContextInjection({
+        workspaceDir: "/tmp/openclaw-bundle-mcp-caller-probe-nonexistent",
+        cfg: {
+          plugins: { enabled: false },
+          mcp: {
+            servers: {
+              remote: {
+                type: "sse",
+                url: "https://example.com/mcp",
+                injectCallerContext: true,
+              },
             },
           },
         },
-      },
-    });
-
-    expect(merged.config.mcpServers.bundleProbe).toEqual({
-      transport: "streamable-http",
-      url: "https://mcp.example.com/mcp",
-    });
+      }),
+    ).toBe(true);
   });
 
-  it("maps OpenClaw transports to downstream CLI types when requested", () => {
+  it("is false when no server sets injectCallerContext true", () => {
     expect(
-      toCliBundleMcpServerConfig({
-        transport: "streamable-http",
-        url: "https://mcp.example.com/mcp",
+      mergedBundleMcpLayerWantsCallerContextInjection({
+        workspaceDir: "/tmp/openclaw-bundle-mcp-caller-probe-nonexistent",
+        cfg: {
+          plugins: { enabled: false },
+          mcp: {
+            servers: {
+              remote: {
+                type: "sse",
+                url: "https://example.com/mcp",
+              },
+            },
+          },
+        },
       }),
-    ).toEqual({
-      type: "http",
-      url: "https://mcp.example.com/mcp",
-    });
-    expect(toCliBundleMcpServerConfig({ type: "sse", transport: "streamable-http" })).toEqual({
-      type: "sse",
-    });
+    ).toBe(false);
   });
 });
