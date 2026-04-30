@@ -131,11 +131,17 @@ function createTaskRegistryMaintenanceHarness(params: {
         status: patch.status,
         endedAt: patch.endedAt,
         lastEventAt: patch.lastEventAt ?? patch.endedAt,
-        ...(patch.error !== undefined ? { error: patch.error } : {}),
         ...(patch.terminalSummary !== undefined
           ? { terminalSummary: patch.terminalSummary ?? undefined }
           : {}),
       } satisfies TaskRecord;
+      if (Object.prototype.hasOwnProperty.call(patch, "error")) {
+        if (patch.error === undefined) {
+          delete next.error;
+        } else {
+          next.error = patch.error;
+        }
+      }
       currentTasks.set(patch.taskId, next);
       return next;
     },
@@ -287,7 +293,8 @@ describe("task-registry maintenance issue #60299", () => {
       },
     });
 
-    expect(reconcileInspectableTasks()).toEqual([
+    const reconciled = reconcileInspectableTasks();
+    expect(reconciled).toEqual([
       expect.objectContaining({
         taskId: task.taskId,
         status: "succeeded",
@@ -295,13 +302,16 @@ describe("task-registry maintenance issue #60299", () => {
         terminalSummary: "done",
       }),
     ]);
+    expect(reconciled[0]).not.toHaveProperty("error");
     expect(previewTaskRegistryMaintenance()).toMatchObject({ reconciled: 0, recovered: 1 });
     expect(await runTaskRegistryMaintenance()).toMatchObject({ reconciled: 0, recovered: 1 });
-    expect(currentTasks.get(task.taskId)).toMatchObject({
+    const recoveredTask = currentTasks.get(task.taskId);
+    expect(recoveredTask).toMatchObject({
       status: "succeeded",
       endedAt: startedAt + 1250,
       terminalSummary: "done",
     });
+    expect(recoveredTask).not.toHaveProperty("error");
   });
 
   it("does not recover terminal lost cron tasks with non-backing-session errors", async () => {

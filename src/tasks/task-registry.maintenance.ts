@@ -636,7 +636,7 @@ function markTaskRecovered(task: TaskRecord, recovery: CronTerminalRecovery): Ta
       status: recovery.status,
       endedAt: recovery.endedAt,
       lastEventAt: recovery.lastEventAt,
-      ...(recovery.error !== undefined ? { error: recovery.error } : {}),
+      error: recovery.error,
       ...(recovery.terminalSummary !== undefined
         ? { terminalSummary: recovery.terminalSummary }
         : {}),
@@ -651,11 +651,14 @@ function projectTaskRecovered(task: TaskRecord, recovery: CronTerminalRecovery):
     status: recovery.status,
     endedAt: recovery.endedAt,
     lastEventAt: recovery.lastEventAt,
-    ...(recovery.error !== undefined ? { error: recovery.error } : {}),
+    error: recovery.error,
     ...(recovery.terminalSummary !== undefined
       ? { terminalSummary: recovery.terminalSummary }
       : {}),
   };
+  if (recovery.error === undefined) {
+    delete projected.error;
+  }
   return {
     ...projected,
     ...(typeof projected.cleanupAfter === "number"
