@@ -1,9 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { AgentMessage, ThinkingLevel } from "@mariozechner/pi-agent-core";
 import type { ExtensionAPI, ExtensionContext, FileOperations } from "@mariozechner/pi-coding-agent";
 import { extractSections } from "../../auto-reply/reply/post-compaction-context.js";
-import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import { openBoundaryFile } from "../../infra/boundary-file-read.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { isAbortError } from "../../infra/unhandled-rejections.js";
@@ -178,7 +177,7 @@ async function summarizeViaLLM(params: {
   customInstructions?: string;
   summarizationInstructions?: Parameters<typeof summarizeInStages>[0]["summarizationInstructions"];
   previousSummary?: string;
-  thinkingLevel?: ThinkLevel;
+  thinkingLevel?: ThinkingLevel;
   completionOptions?: CompactionSummaryCompletionOptions;
 }): Promise<string> {
   const messages = prependPreviousSummaryForRedistill({

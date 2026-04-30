@@ -622,17 +622,45 @@ describe("compaction-safeguard runtime registry", () => {
         defaults: {
           params: {
             chat_template_kwargs: {
-              enable_thinking: false,
-              preserve_thinking: true,
+              enable_thinking: true,
+              source: "default",
             },
             extra_body: {
-              top_k: 20,
+              top_k: 10,
+            },
+          },
+          models: {
+            "vllm/Qwen/Qwen3-8B": {
+              params: {
+                chat_template_kwargs: {
+                  enable_thinking: true,
+                  source: "model",
+                },
+                extra_body: {
+                  top_k: 20,
+                },
+              },
             },
           },
           compaction: {
             mode: "safeguard",
           },
         },
+        list: [
+          {
+            id: "research",
+            params: {
+              chat_template_kwargs: {
+                enable_thinking: false,
+                preserve_thinking: true,
+                source: "agent",
+              },
+              extra_body: {
+                top_k: 30,
+              },
+            },
+          },
+        ],
       },
     } as OpenClawConfig;
 
@@ -641,6 +669,7 @@ describe("compaction-safeguard runtime registry", () => {
       sessionManager,
       provider: "vllm",
       modelId: "Qwen/Qwen3-8B",
+      agentId: "research",
       model: {
         api: "openai-completions",
         provider: "vllm",
@@ -658,11 +687,47 @@ describe("compaction-safeguard runtime registry", () => {
       chat_template_kwargs: {
         enable_thinking: false,
         preserve_thinking: true,
+        source: "agent",
       },
       extra_body: {
-        top_k: 20,
+        top_k: 30,
       },
     });
+  });
+
+  it("maps OpenClaw thinking levels before storing compaction summary runtime", () => {
+    for (const [thinkingLevel, expected] of [
+      ["max", "xhigh"],
+      ["adaptive", "medium"],
+    ] as const) {
+      const sessionManager = {} as unknown as Parameters<
+        typeof buildEmbeddedExtensionFactories
+      >[0]["sessionManager"];
+
+      buildEmbeddedExtensionFactories({
+        cfg: {
+          agents: {
+            defaults: {
+              compaction: {
+                mode: "safeguard",
+              },
+            },
+          },
+        } as OpenClawConfig,
+        sessionManager,
+        provider: "vllm",
+        modelId: "Qwen/Qwen3-8B",
+        thinkingLevel,
+        model: {
+          api: "openai-completions",
+          provider: "vllm",
+          id: "Qwen/Qwen3-8B",
+          contextWindow: 200_000,
+        } as Parameters<typeof buildEmbeddedExtensionFactories>[0]["model"],
+      });
+
+      expect(getCompactionSafeguardRuntime(sessionManager)?.thinkingLevel).toBe(expected);
+    }
   });
 });
 

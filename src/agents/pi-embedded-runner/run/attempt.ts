@@ -1392,6 +1392,7 @@ export async function runEmbeddedAttempt(
         modelId: params.modelId,
         model: params.model,
         thinkingLevel: params.thinkLevel,
+        agentId: sessionAgentId,
         workspaceDir: effectiveWorkspace,
         agentDir,
       });

@@ -1,5 +1,5 @@
+import type { ThinkingLevel } from "@mariozechner/pi-agent-core";
 import type { Api, Model } from "@mariozechner/pi-ai";
-import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { AgentCompactionIdentifierPolicy } from "../../config/types.agent-defaults.js";
 import { createSessionManagerRuntimeRegistry } from "./session-manager-runtime-registry.js";
 
@@ -18,7 +18,7 @@ export type CompactionSafeguardRuntimeValue = {
   /** Resolved agent/provider params to apply to built-in LLM summary requests. */
   extraParams?: Record<string, unknown>;
   /** Resolved thinking level to use for built-in LLM summary requests. */
-  thinkingLevel?: ThinkLevel;
+  thinkingLevel?: ThinkingLevel;
   recentTurnsPreserve?: number;
   qualityGuardEnabled?: boolean;
   qualityGuardMaxRetries?: number;

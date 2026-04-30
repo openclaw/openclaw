@@ -843,6 +843,7 @@ export async function compactEmbeddedPiSessionDirect(
         modelId,
         model,
         thinkingLevel: thinkLevel,
+        agentId: sessionAgentId,
         workspaceDir: effectiveWorkspace,
         agentDir,
       });

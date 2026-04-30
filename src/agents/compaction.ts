@@ -1,11 +1,10 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { AgentMessage, ThinkingLevel } from "@mariozechner/pi-agent-core";
 import type { SimpleStreamOptions } from "@mariozechner/pi-ai";
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 import {
   estimateTokens,
   generateSummary as piGenerateSummary,
 } from "@mariozechner/pi-coding-agent";
-import type { ThinkLevel } from "../auto-reply/thinking.js";
 import type { AgentCompactionIdentifierPolicy } from "../config/types.agent-defaults.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { retryAsync } from "../infra/retry.js";
@@ -58,7 +57,7 @@ type GenerateSummaryCompat = {
     signal?: AbortSignal,
     customInstructions?: string,
     previousSummary?: string,
-    thinkingLevel?: ThinkLevel,
+    thinkingLevel?: ThinkingLevel,
     completionOptions?: CompactionSummaryCompletionOptions,
   ): Promise<string>;
   (
@@ -70,7 +69,7 @@ type GenerateSummaryCompat = {
     signal?: AbortSignal,
     customInstructions?: string,
     previousSummary?: string,
-    thinkingLevel?: ThinkLevel,
+    thinkingLevel?: ThinkingLevel,
     completionOptions?: CompactionSummaryCompletionOptions,
   ): Promise<string>;
 };
@@ -309,7 +308,7 @@ async function summarizeChunks(params: {
   customInstructions?: string;
   summarizationInstructions?: CompactionSummarizationInstructions;
   previousSummary?: string;
-  thinkingLevel?: ThinkLevel;
+  thinkingLevel?: ThinkingLevel;
   completionOptions?: CompactionSummaryCompletionOptions;
 }): Promise<string> {
   if (params.messages.length === 0) {
@@ -362,7 +361,7 @@ function generateSummary(
   signal: AbortSignal,
   customInstructions?: string,
   previousSummary?: string,
-  thinkingLevel?: ThinkLevel,
+  thinkingLevel?: ThinkingLevel,
   completionOptions?: CompactionSummaryCompletionOptions,
 ): Promise<string> {
   if (piGenerateSummary.length >= 8 || thinkingLevel || completionOptions) {
@@ -406,7 +405,7 @@ export async function summarizeWithFallback(params: {
   customInstructions?: string;
   summarizationInstructions?: CompactionSummarizationInstructions;
   previousSummary?: string;
-  thinkingLevel?: ThinkLevel;
+  thinkingLevel?: ThinkingLevel;
   completionOptions?: CompactionSummaryCompletionOptions;
 }): Promise<string> {
   const { messages, contextWindow } = params;
@@ -472,7 +471,7 @@ export async function summarizeInStages(params: {
   customInstructions?: string;
   summarizationInstructions?: CompactionSummarizationInstructions;
   previousSummary?: string;
-  thinkingLevel?: ThinkLevel;
+  thinkingLevel?: ThinkingLevel;
   parts?: number;
   minMessagesForSplit?: number;
   completionOptions?: CompactionSummaryCompletionOptions;

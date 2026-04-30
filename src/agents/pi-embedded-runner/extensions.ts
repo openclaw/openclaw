@@ -17,6 +17,7 @@ import { ensurePiCompactionReserveTokens } from "../pi-settings.js";
 import { resolveTranscriptPolicy } from "../transcript-policy.js";
 import { isCacheTtlEligibleProvider, readLastCacheTtlTimestamp } from "./cache-ttl.js";
 import { resolvePreparedExtraParams } from "./extra-params.js";
+import { mapThinkingLevel } from "./utils.js";
 
 type PiToolResultEvent = {
   threadId?: string;
@@ -141,6 +142,7 @@ export function buildEmbeddedExtensionFactories(params: {
   modelId: string;
   model: ProviderRuntimeModel | undefined;
   thinkingLevel?: ThinkLevel;
+  agentId?: string;
   workspaceDir?: string;
   agentDir?: string;
 }): ExtensionFactory[] {
@@ -165,11 +167,12 @@ export function buildEmbeddedExtensionFactories(params: {
       qualityGuardEnabled: qualityGuardCfg?.enabled ?? true,
       qualityGuardMaxRetries: qualityGuardCfg?.maxRetries,
       model: params.model,
-      thinkingLevel: params.thinkingLevel,
+      thinkingLevel: mapThinkingLevel(params.thinkingLevel),
       extraParams: resolvePreparedExtraParams({
         cfg: params.cfg,
         provider: params.provider,
         modelId: params.modelId,
+        agentId: params.agentId,
         thinkingLevel: params.thinkingLevel,
         workspaceDir: params.workspaceDir,
         agentDir: params.agentDir,
