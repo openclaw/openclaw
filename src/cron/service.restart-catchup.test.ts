@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { CronConfig } from "../config/types.cron.js";
 import { CronService } from "./service.js";
 import { setupCronServiceSuite } from "./service.test-harness.js";
+import type { CronEvent } from "./service/state.js";
 import { createCronServiceState } from "./service/state.js";
 import { runMissedJobs } from "./service/timer.js";
 
@@ -23,15 +24,26 @@ describe("CronService restart catch-up", () => {
     enqueueSystemEvent: ReturnType<typeof vi.fn>;
     requestHeartbeatNow: ReturnType<typeof vi.fn>;
     cronConfig?: CronConfig;
+    onEvent?: ReturnType<typeof vi.fn>;
+    nowMs?: () => number;
+    runIsolatedAgentJob?: ReturnType<typeof vi.fn>;
+    startupDeferredMissedAgentJobDelayMs?: number;
   }) {
     return new CronService({
       storePath: params.storePath,
       cronEnabled: true,
       cronConfig: params.cronConfig,
       log: noopLogger,
+      ...(params.nowMs ? { nowMs: params.nowMs } : {}),
       enqueueSystemEvent: params.enqueueSystemEvent as never,
       requestHeartbeatNow: params.requestHeartbeatNow as never,
-      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })) as never,
+      runIsolatedAgentJob:
+        (params.runIsolatedAgentJob as never) ??
+        (vi.fn(async () => ({ status: "ok" as const })) as never),
+      onEvent: params.onEvent as ((evt: CronEvent) => void) | undefined,
+      ...(params.startupDeferredMissedAgentJobDelayMs !== undefined
+        ? { startupDeferredMissedAgentJobDelayMs: params.startupDeferredMissedAgentJobDelayMs }
+        : {}),
     });
   }
 
@@ -56,12 +68,14 @@ describe("CronService restart catch-up", () => {
       cron: CronService;
       enqueueSystemEvent: ReturnType<typeof vi.fn>;
       requestHeartbeatNow: ReturnType<typeof vi.fn>;
+      onEvent: ReturnType<typeof vi.fn>;
     }) => Promise<void>,
     cronConfig?: CronConfig,
   ) {
     const store = await makeStorePath();
     const enqueueSystemEvent = vi.fn();
     const requestHeartbeatNow = vi.fn();
+    const onEvent = vi.fn();
 
     await writeStoreJobs(store.storePath, jobs);
 
@@ -70,11 +84,12 @@ describe("CronService restart catch-up", () => {
       enqueueSystemEvent,
       requestHeartbeatNow,
       cronConfig,
+      onEvent,
     });
 
     try {
       await cron.start();
-      await run({ cron, enqueueSystemEvent, requestHeartbeatNow });
+      await run({ cron, enqueueSystemEvent, requestHeartbeatNow, onEvent });
     } finally {
       cron.stop();
       await store.cleanup();
@@ -120,7 +135,56 @@ describe("CronService restart catch-up", () => {
     );
   });
 
-  it("replays interrupted recurring job on first restart (#60495)", async () => {
+  it("defers overdue isolated agent-turn jobs during gateway startup", async () => {
+    const store = await makeStorePath();
+    const startNow = Date.parse("2025-12-13T17:00:00.000Z");
+    const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
+    const enqueueSystemEvent = vi.fn();
+    const requestHeartbeatNow = vi.fn();
+
+    await writeStoreJobs(store.storePath, [
+      {
+        id: "startup-isolated-agent",
+        name: "startup isolated agent",
+        enabled: true,
+        createdAtMs: startNow - 120_000,
+        updatedAtMs: startNow - 120_000,
+        schedule: { kind: "every", everyMs: 60_000, anchorMs: startNow - 120_000 },
+        sessionTarget: "isolated",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "agentTurn", message: "do work" },
+        state: { nextRunAtMs: startNow - 60_000 },
+      },
+    ]);
+
+    const cron = createRestartCronService({
+      storePath: store.storePath,
+      enqueueSystemEvent,
+      requestHeartbeatNow,
+      runIsolatedAgentJob,
+      nowMs: () => startNow,
+      startupDeferredMissedAgentJobDelayMs: 120_000,
+    });
+
+    try {
+      await cron.start();
+
+      expect(runIsolatedAgentJob).not.toHaveBeenCalled();
+      expect(enqueueSystemEvent).not.toHaveBeenCalled();
+      expect(requestHeartbeatNow).not.toHaveBeenCalled();
+
+      const listedJobs = await cron.list({ includeDisabled: true });
+      const updated = listedJobs.find((job) => job.id === "startup-isolated-agent");
+      expect(updated?.state.lastStatus).toBeUndefined();
+      expect(updated?.state.runningAtMs).toBeUndefined();
+      expect(updated?.state.nextRunAtMs).toBe(startNow + 120_000);
+    } finally {
+      cron.stop();
+      await store.cleanup();
+    }
+  });
+
+  it("marks interrupted recurring jobs failed instead of replaying them on startup", async () => {
     const dueAt = Date.parse("2025-12-13T16:00:00.000Z");
     const staleRunningAt = Date.parse("2025-12-13T16:30:00.000Z");
 
@@ -142,23 +206,32 @@ describe("CronService restart catch-up", () => {
           },
         },
       ],
-      async ({ cron, enqueueSystemEvent, requestHeartbeatNow }) => {
+      async ({ cron, enqueueSystemEvent, requestHeartbeatNow, onEvent }) => {
         expect(noopLogger.warn).toHaveBeenCalledWith(
           expect.objectContaining({ jobId: "restart-stale-running" }),
-          "cron: clearing stale running marker on startup",
+          "cron: marking interrupted running job failed on startup",
         );
 
-        expect(enqueueSystemEvent).toHaveBeenCalledWith(
-          "resume stale marker",
-          expect.objectContaining({ agentId: undefined }),
-        );
-        expect(requestHeartbeatNow).toHaveBeenCalled();
+        expect(enqueueSystemEvent).not.toHaveBeenCalled();
+        expect(requestHeartbeatNow).not.toHaveBeenCalled();
 
         const listedJobs = await cron.list({ includeDisabled: true });
         const updated = listedJobs.find((job) => job.id === "restart-stale-running");
         expect(updated?.state.runningAtMs).toBeUndefined();
-        expect(updated?.state.lastStatus).toBe("ok");
-        expect(updated?.state.lastRunAtMs).toBe(Date.parse("2025-12-13T17:00:00.000Z"));
+        expect(updated?.state.lastStatus).toBe("error");
+        expect(updated?.state.lastRunStatus).toBe("error");
+        expect(updated?.state.lastRunAtMs).toBe(staleRunningAt);
+        expect(updated?.state.lastError).toBe("cron: job interrupted by gateway restart");
+        expect(updated?.state.nextRunAtMs).toBeGreaterThan(Date.parse("2025-12-13T17:00:00.000Z"));
+        expect(onEvent).toHaveBeenCalledWith(
+          expect.objectContaining({
+            action: "finished",
+            jobId: "restart-stale-running",
+            status: "error",
+            error: "cron: job interrupted by gateway restart",
+            runAtMs: staleRunningAt,
+          }),
+        );
       },
     );
   });
@@ -199,7 +272,7 @@ describe("CronService restart catch-up", () => {
     );
   });
 
-  it("does not replay interrupted one-shot jobs on startup", async () => {
+  it("marks interrupted one-shot jobs failed and disabled on startup", async () => {
     const dueAt = Date.parse("2025-12-13T16:00:00.000Z");
     const staleRunningAt = Date.parse("2025-12-13T16:30:00.000Z");
 
@@ -221,13 +294,28 @@ describe("CronService restart catch-up", () => {
           },
         },
       ],
-      async ({ cron, enqueueSystemEvent, requestHeartbeatNow }) => {
+      async ({ cron, enqueueSystemEvent, requestHeartbeatNow, onEvent }) => {
         expect(enqueueSystemEvent).not.toHaveBeenCalled();
         expect(requestHeartbeatNow).not.toHaveBeenCalled();
 
         const listedJobs = await cron.list({ includeDisabled: true });
         const updated = listedJobs.find((job) => job.id === "restart-stale-one-shot");
+        expect(updated?.enabled).toBe(false);
         expect(updated?.state.runningAtMs).toBeUndefined();
+        expect(updated?.state.lastStatus).toBe("error");
+        expect(updated?.state.lastRunStatus).toBe("error");
+        expect(updated?.state.lastRunAtMs).toBe(staleRunningAt);
+        expect(updated?.state.nextRunAtMs).toBeUndefined();
+        expect(updated?.state.lastError).toBe("cron: job interrupted by gateway restart");
+        expect(onEvent).toHaveBeenCalledWith(
+          expect.objectContaining({
+            action: "finished",
+            jobId: "restart-stale-one-shot",
+            status: "error",
+            error: "cron: job interrupted by gateway restart",
+            runAtMs: staleRunningAt,
+          }),
+        );
       },
     );
   });
