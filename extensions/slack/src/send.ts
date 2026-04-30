@@ -109,8 +109,22 @@ function getErrorCode(err: unknown): string | undefined {
   if (!err || typeof err !== "object") {
     return undefined;
   }
-  const code = (err as { code?: unknown }).code;
-  return typeof code === "string" ? code : undefined;
+  const obj = err as { code?: unknown; original?: unknown };
+  const code = obj.code;
+  if (typeof code !== "string") {
+    return undefined;
+  }
+  // @slack/web-api wraps network errors as slack_webapi_request_error and stores
+  // the underlying error in .original (attachOriginalToWebAPIRequestError defaults
+  // to true). Unwrap one level so callers can match the real network error code
+  // (EPIPE, ECONNRESET, etc.) instead of always seeing the wrapper code.
+  if (code === "slack_webapi_request_error" && obj.original && typeof obj.original === "object") {
+    const originalCode = (obj.original as { code?: unknown }).code;
+    if (typeof originalCode === "string") {
+      return originalCode;
+    }
+  }
+  return code;
 }
 
 function classifyTransientSlackSendError(err: unknown): string | undefined {

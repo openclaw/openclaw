@@ -122,6 +122,33 @@ describe("sendMessageSlack transient delivery retry", () => {
     expect(client.chat.postMessage).toHaveBeenCalledTimes(2);
   });
 
+  it("retries @slack/web-api-wrapped transient errors (EPIPE wrapped as slack_webapi_request_error)", async () => {
+    vi.useFakeTimers();
+    const client = createSlackSendTestClient();
+    // Simulate @slack/web-api wrapping a raw EPIPE as slack_webapi_request_error
+    // with the original error stored under .original (attachOriginalToWebAPIRequestError=true)
+    const epipeWrapped = Object.assign(new Error("A request error occurred: write EPIPE"), {
+      code: "slack_webapi_request_error",
+      original: Object.assign(new Error("write EPIPE"), { code: "EPIPE" }),
+    });
+    client.chat.postMessage
+      .mockRejectedValueOnce(epipeWrapped)
+      .mockResolvedValueOnce({ ts: "171234.569" });
+
+    const sendPromise = sendMessageSlack("channel:C123", "hello", {
+      cfg: {},
+      token: "xoxb-test",
+      client,
+    });
+    await vi.advanceTimersByTimeAsync(500);
+
+    await expect(sendPromise).resolves.toEqual({
+      messageId: "171234.569",
+      channelId: "C123",
+    });
+    expect(client.chat.postMessage).toHaveBeenCalledTimes(2);
+  });
+
   it("surfaces socket not-ready send failures after retry exhaustion", async () => {
     vi.useFakeTimers();
     const client = createSlackSendTestClient();
