@@ -191,6 +191,33 @@ describe("proxy cli runtime", () => {
     );
   });
 
+  it("prints actionable disabled proxy config output", async () => {
+    runProxyValidationMock.mockResolvedValueOnce({
+      ok: false,
+      config: {
+        enabled: false,
+        proxyUrl: "http://proxy.example:3128",
+        source: "config",
+        errors: ["proxy validation requires proxy.enabled to be true for configured proxy URLs"],
+      },
+      checks: [],
+    });
+    const { runProxyValidateCommand } = await import("./proxy-cli.runtime.js");
+
+    await runProxyValidateCommand({});
+
+    expect(process.stdout.write).toHaveBeenCalledWith(
+      "Proxy validation failed\n\n" +
+        "Proxy\n" +
+        "  Source: config\n" +
+        "  URL:    http://proxy.example:3128/\n\n" +
+        "Problems\n" +
+        "  - proxy validation requires proxy.enabled to be true for configured proxy URLs\n\n" +
+        "Next steps\n" +
+        "  Set proxy.enabled=true for configured proxy URLs, or pass --proxy-url for an explicit one-off validation.\n",
+    );
+  });
+
   it("redacts malformed proxy URLs in text output", async () => {
     runProxyValidationMock.mockResolvedValueOnce({
       ok: false,

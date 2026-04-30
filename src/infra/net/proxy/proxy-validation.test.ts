@@ -62,6 +62,77 @@ describe("proxy validation", () => {
     });
   });
 
+  it("reports disabled proxy config when a config URL is present but proxy routing is disabled", async () => {
+    const fetchCheck = vi.fn();
+
+    const result = await runProxyValidation({
+      config: {
+        enabled: false,
+        proxyUrl: "http://config-proxy.example:3128",
+      },
+      env: {},
+      fetchCheck,
+    });
+
+    expect(fetchCheck).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      ok: false,
+      config: {
+        enabled: false,
+        proxyUrl: "http://config-proxy.example:3128",
+        source: "config",
+        errors: ["proxy validation requires proxy.enabled to be true for configured proxy URLs"],
+      },
+      checks: [],
+    });
+  });
+
+  it("reports disabled proxy config when only OPENCLAW_PROXY_URL is present", async () => {
+    const fetchCheck = vi.fn();
+
+    const result = await runProxyValidation({
+      config: {},
+      env: {
+        OPENCLAW_PROXY_URL: "http://env-proxy.example:3128",
+      },
+      fetchCheck,
+    });
+
+    expect(fetchCheck).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      ok: false,
+      config: {
+        enabled: false,
+        proxyUrl: "http://env-proxy.example:3128",
+        source: "env",
+        errors: ["proxy validation requires proxy.enabled to be true for OPENCLAW_PROXY_URL"],
+      },
+      checks: [],
+    });
+  });
+
+  it("allows explicit proxy URL overrides even when config proxy routing is disabled", async () => {
+    const fetchCheck = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: true, status: 200 })
+      .mockRejectedValueOnce(new Error("blocked"));
+
+    const result = await runProxyValidation({
+      proxyUrlOverride: "http://override-proxy.example:3128",
+      config: {
+        enabled: false,
+        proxyUrl: "http://config-proxy.example:3128",
+      },
+      env: {},
+      allowedUrls: ["https://example.com/"],
+      deniedUrls: ["http://127.0.0.1/"],
+      fetchCheck,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(fetchCheck).toHaveBeenCalled();
+  });
+
   it("reports missing URL when proxy validation is enabled without an effective URL", () => {
     const result = resolveProxyValidationConfig({
       config: { enabled: true },

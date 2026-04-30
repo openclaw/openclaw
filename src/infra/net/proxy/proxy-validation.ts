@@ -86,6 +86,24 @@ function validateProxyUrl(value: string | undefined): string[] {
   return [];
 }
 
+function validateProxyEnabled(source: ProxyValidationConfigSource, enabled: boolean): string[] {
+  if (enabled || source === "override" || source === "missing" || source === "disabled") {
+    return [];
+  }
+  if (source === "env") {
+    return ["proxy validation requires proxy.enabled to be true for OPENCLAW_PROXY_URL"];
+  }
+  return ["proxy validation requires proxy.enabled to be true for configured proxy URLs"];
+}
+
+function validateResolvedProxy(
+  source: ProxyValidationConfigSource,
+  enabled: boolean,
+  value: string | undefined,
+): string[] {
+  return [...validateProxyUrl(value), ...validateProxyEnabled(source, enabled)];
+}
+
 export function resolveProxyValidationConfig(
   options: ResolveProxyValidationConfigOptions,
 ): ProxyValidationResolvedConfig {
@@ -95,7 +113,7 @@ export function resolveProxyValidationConfig(
       enabled: true,
       proxyUrl: overrideUrl,
       source: "override",
-      errors: validateProxyUrl(overrideUrl),
+      errors: validateResolvedProxy("override", true, overrideUrl),
     };
   }
 
@@ -105,7 +123,7 @@ export function resolveProxyValidationConfig(
       enabled: options.config?.enabled === true,
       proxyUrl: configUrl,
       source: "config",
-      errors: validateProxyUrl(configUrl),
+      errors: validateResolvedProxy("config", options.config?.enabled === true, configUrl),
     };
   }
 
@@ -115,7 +133,7 @@ export function resolveProxyValidationConfig(
       enabled: options.config?.enabled === true,
       proxyUrl: envUrl,
       source: "env",
-      errors: validateProxyUrl(envUrl),
+      errors: validateResolvedProxy("env", options.config?.enabled === true, envUrl),
     };
   }
 
