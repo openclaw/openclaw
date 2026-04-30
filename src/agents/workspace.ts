@@ -146,7 +146,11 @@ export type WorkspaceBootstrapFile = {
   missing: boolean;
 };
 
-export type ExtraBootstrapLoadDiagnosticCode = "missing" | "security" | "io";
+export type ExtraBootstrapLoadDiagnosticCode =
+  | "invalid-bootstrap-filename"
+  | "missing"
+  | "security"
+  | "io";
 
 export type ExtraBootstrapLoadDiagnostic = {
   path: string;
@@ -704,6 +708,7 @@ export async function loadExtraBootstrapFiles(
 export async function loadExtraBootstrapFilesWithDiagnostics(
   dir: string,
   extraPatterns: string[],
+  options: { allowArbitraryBasenames?: boolean } = {},
 ): Promise<{
   files: WorkspaceBootstrapFile[];
   diagnostics: ExtraBootstrapLoadDiagnostic[];
@@ -754,6 +759,14 @@ export async function loadExtraBootstrapFilesWithDiagnostics(
   for (const relPath of resolvedPaths) {
     const filePath = path.resolve(resolvedDir, relPath);
     const baseName = path.basename(relPath);
+    if (!options.allowArbitraryBasenames && !VALID_BOOTSTRAP_NAMES.has(baseName)) {
+      diagnostics.push({
+        path: filePath,
+        reason: "invalid-bootstrap-filename",
+        detail: `unsupported bootstrap basename: ${baseName}`,
+      });
+      continue;
+    }
     const loaded = await readWorkspaceFileWithGuards({
       filePath,
       workspaceDir: resolvedDir,

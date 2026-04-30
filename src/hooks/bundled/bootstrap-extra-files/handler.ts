@@ -48,21 +48,31 @@ const bootstrapExtraFilesHook: HookHandler = async (event) => {
   }
 
   const typedConfig = hookConfig as Record<string, unknown>;
-  const patterns = [
-    ...new Set([
-      ...resolveExtraBootstrapPatterns(typedConfig),
-      ...resolveSessionBootstrapPatterns(typedConfig, context.sessionKey),
-    ]),
-  ];
-  if (patterns.length === 0) {
+  const globalPatterns = resolveExtraBootstrapPatterns(typedConfig);
+  const sessionPatterns = resolveSessionBootstrapPatterns(typedConfig, context.sessionKey);
+  if (globalPatterns.length === 0 && sessionPatterns.length === 0) {
     return;
   }
 
   try {
-    const { files: extras, diagnostics } = await loadExtraBootstrapFilesWithDiagnostics(
+    const globalResult = await loadExtraBootstrapFilesWithDiagnostics(
       context.workspaceDir,
-      patterns,
+      globalPatterns,
     );
+    const sessionResult = await loadExtraBootstrapFilesWithDiagnostics(
+      context.workspaceDir,
+      sessionPatterns,
+      { allowArbitraryBasenames: true },
+    );
+    const seenExtraPaths = new Set<string>();
+    const extras = [...globalResult.files, ...sessionResult.files].filter((file) => {
+      if (seenExtraPaths.has(file.path)) {
+        return false;
+      }
+      seenExtraPaths.add(file.path);
+      return true;
+    });
+    const diagnostics = [...globalResult.diagnostics, ...sessionResult.diagnostics];
     if (diagnostics.length > 0) {
       log.debug("skipped extra bootstrap candidates", {
         skipped: diagnostics.length,

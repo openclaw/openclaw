@@ -202,9 +202,9 @@ Extracts the last 15 user/assistant messages and saves to `<workspace>/memory/YY
 }
 ```
 
-Paths resolve relative to workspace. Matching files are loaded even when their basename is not one of the default workspace bootstrap filenames.
+Paths resolve relative to workspace. Global `paths`/`patterns`/`files` keep the default bootstrap filename allowlist, so broad globs do not inject arbitrary workspace files.
 
-Use `sessions` to add extra bootstrap files only for an exact `sessionKey`. Session-specific paths are combined with the global `paths`/`patterns`/`files` list and then filtered through the normal session bootstrap allowlist.
+Use `sessions` to add extra bootstrap files only for an exact `sessionKey`. Session-specific paths may use custom filenames, are loaded in addition to the global list, and are then filtered through the normal session bootstrap allowlist.
 
 <a id="command-logger"></a>
 

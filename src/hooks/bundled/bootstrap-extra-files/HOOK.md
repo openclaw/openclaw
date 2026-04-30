@@ -53,5 +53,5 @@ workspace root.
 - `sessions` (object): exact `sessionKey` to extra path list map. Matching session paths are loaded in addition to the global list.
 
 All paths are resolved from the workspace and must stay inside it (including realpath checks).
-Matching files are loaded even when their basename is not one of the default workspace
-bootstrap filenames.
+Global `paths`/`patterns`/`files` keep the default bootstrap filename allowlist.
+Matching `sessions` entries may use custom filenames for the exact session they target.
