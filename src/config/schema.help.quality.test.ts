@@ -469,6 +469,7 @@ const ENUM_EXPECTATIONS: Record<string, string[]> = {
 const TOOLS_HOOKS_TARGET_KEYS = [
   "hooks.gmail.account",
   "hooks.gmail.allowUnsafeExternalContent",
+  "hooks.gmail.excludeLabels",
   "hooks.gmail.hookUrl",
   "hooks.gmail.includeBody",
   "hooks.gmail.label",

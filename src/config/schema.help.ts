@@ -1588,6 +1588,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Maximum Gmail payload bytes processed per event when includeBody is enabled. Keep conservative limits to reduce oversized message processing cost and risk.",
   "hooks.gmail.renewEveryMinutes":
     "Renewal cadence in minutes for Gmail watch subscriptions to prevent expiration. Set below provider expiration windows and monitor renew failures in logs.",
+  "hooks.gmail.excludeLabels":
+    "Gmail labels excluded from webhook notifications before OpenClaw receives events. Defaults to SPAM, TRASH, DRAFT, and SENT; set an empty list only when every label should trigger.",
   "hooks.gmail.serve.bind":
     "Bind address for the local Gmail callback HTTP server used when serving hooks directly. Keep loopback-only unless external ingress is intentionally required.",
   "hooks.gmail.serve.port":
