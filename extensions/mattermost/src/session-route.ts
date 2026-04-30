@@ -1,18 +1,18 @@
 import {
   buildChannelOutboundSessionRoute,
-  resolveThreadSessionKeys,
+  buildThreadAwareOutboundSessionRoute,
   stripChannelTargetPrefix,
   stripTargetKindPrefix,
   type ChannelOutboundSessionRouteParams,
 } from "openclaw/plugin-sdk/core";
-import { normalizeOutboundThreadId } from "openclaw/plugin-sdk/routing";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 
 export function resolveMattermostOutboundSessionRoute(params: ChannelOutboundSessionRouteParams) {
   let trimmed = stripChannelTargetPrefix(params.target, "mattermost");
   if (!trimmed) {
     return null;
   }
-  const lower = trimmed.toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(trimmed);
   const resolvedKind = params.resolvedTarget?.kind;
   const isUser =
     resolvedKind === "user" ||
@@ -39,14 +39,12 @@ export function resolveMattermostOutboundSessionRoute(params: ChannelOutboundSes
     from: isUser ? `mattermost:${rawId}` : `mattermost:channel:${rawId}`,
     to: isUser ? `user:${rawId}` : `channel:${rawId}`,
   });
-  const threadId = normalizeOutboundThreadId(params.replyToId ?? params.threadId);
-  const threadKeys = resolveThreadSessionKeys({
-    baseSessionKey: baseRoute.baseSessionKey,
-    threadId,
+  return buildThreadAwareOutboundSessionRoute({
+    route: baseRoute,
+    replyToId: params.replyToId,
+    threadId: params.threadId,
+    currentSessionKey: params.currentSessionKey,
+    canRecoverCurrentThread: ({ route }) =>
+      route.chatType !== "direct" || (params.cfg.session?.dmScope ?? "main") !== "main",
   });
-  return {
-    ...baseRoute,
-    sessionKey: threadKeys.sessionKey,
-    ...(threadId !== undefined ? { threadId } : {}),
-  };
 }

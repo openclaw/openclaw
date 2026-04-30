@@ -1,8 +1,12 @@
-import { Type } from "@sinclair/typebox";
-import { jsonResult, readNumberParam, readStringParam } from "openclaw/plugin-sdk/agent-runtime";
-import { optionalStringEnum } from "openclaw/plugin-sdk/core";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-runtime";
+import {
+  jsonResult,
+  readNumberParam,
+  readStringParam,
+} from "openclaw/plugin-sdk/provider-web-search";
+import { Type } from "typebox";
 import { runTavilySearch } from "./tavily-client.js";
+import { optionalStringEnum } from "./tavily-tool-schema.js";
 
 const TavilySearchToolSchema = Type.Object(
   {

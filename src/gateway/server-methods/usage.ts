@@ -1,10 +1,10 @@
 import fs from "node:fs";
-import { loadConfig } from "../../config/config.js";
 import {
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
 } from "../../config/sessions/paths.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { loadProviderUsageSummary } from "../../infra/provider-usage.js";
 import type {
   CostUsageSummary,
@@ -14,12 +14,16 @@ import type {
 } from "../../infra/session-cost-usage.js";
 import {
   loadCostUsageSummary,
+  loadSessionLogs,
   loadSessionCostSummary,
   loadSessionUsageTimeSeries,
   discoverAllSessions,
+  resolveExistingUsageSessionFile,
   type DiscoveredSession,
 } from "../../infra/session-cost-usage.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
+import { resolvePreferredSessionKeyForSessionIdMatches } from "../../sessions/session-id-resolution.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import {
   buildUsageAggregateTail,
   mergeUsageDailyLatency,
@@ -44,18 +48,13 @@ import {
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 
 const COST_USAGE_CACHE_TTL_MS = 30_000;
+const COST_USAGE_CACHE_MAX = 256;
 const DAY_MS = 24 * 60 * 60 * 1000;
-const INVALID_SPECIFIC_DATE_INTERPRETATION_MESSAGE =
-  "specific mode requires a valid timeZone or utcOffset";
-const INVALID_DATE_RANGE_MESSAGE = "invalid date range for the requested date interpretation";
 
 type DateRange = { startMs: number; endMs: number };
-type DateParts = { year: number; monthIndex: number; day: number };
-type DateTimeParts = DateParts & { hour: number; minute: number; second: number };
 type DateInterpretation =
   | { mode: "utc" | "gateway" }
-  | { mode: "specific"; utcOffsetMinutes: number }
-  | { mode: "specific"; timeZone: string };
+  | { mode: "specific"; utcOffsetMinutes: number };
 
 type CostUsageCacheEntry = {
   summary?: CostUsageSummary;
@@ -64,29 +63,39 @@ type CostUsageCacheEntry = {
 };
 
 const costUsageCache = new Map<string, CostUsageCacheEntry>();
-const timeZoneDateTimeFormatterCache = new Map<string, Intl.DateTimeFormat>();
 
-const hasSpecificTimeZone = (
-  interpretation: DateInterpretation,
-): interpretation is { mode: "specific"; timeZone: string } =>
-  interpretation.mode === "specific" && "timeZone" in interpretation;
+function findCostUsageCacheEvictionKey(): string | undefined {
+  for (const [key, entry] of costUsageCache) {
+    if (!entry.inFlight) {
+      return key;
+    }
+  }
+  return costUsageCache.keys().next().value;
+}
 
-const hasSpecificUtcOffset = (
-  interpretation: DateInterpretation,
-): interpretation is { mode: "specific"; utcOffsetMinutes: number } =>
-  interpretation.mode === "specific" && "utcOffsetMinutes" in interpretation;
+// Keep the cache bounded while preserving in-flight request coalescing when a
+// settled entry is available to evict.
+function setCostUsageCache(cacheKey: string, entry: CostUsageCacheEntry): void {
+  if (!costUsageCache.has(cacheKey) && costUsageCache.size >= COST_USAGE_CACHE_MAX) {
+    const evictKey = findCostUsageCacheEvictionKey();
+    if (evictKey !== undefined) {
+      costUsageCache.delete(evictKey);
+    }
+  }
+  costUsageCache.set(cacheKey, entry);
+}
 
 function resolveSessionUsageFileOrRespond(
   key: string,
   respond: RespondFn,
+  config: OpenClawConfig,
 ): {
-  config: ReturnType<typeof loadConfig>;
+  config: OpenClawConfig;
   entry: SessionEntry | undefined;
   agentId: string | undefined;
   sessionId: string;
   sessionFile: string;
 } | null {
-  const config = loadConfig();
   const { entry, storePath } = loadSessionEntry(key);
 
   // For discovered sessions (not in store), try using key as sessionId directly
@@ -127,14 +136,6 @@ const parseDateParts = (
   if (!Number.isFinite(year) || !Number.isFinite(monthIndex) || !Number.isFinite(day)) {
     return undefined;
   }
-  const normalized = new Date(Date.UTC(year, monthIndex, day));
-  if (
-    normalized.getUTCFullYear() !== year ||
-    normalized.getUTCMonth() !== monthIndex ||
-    normalized.getUTCDate() !== day
-  ) {
-    return undefined;
-  }
   return { year, monthIndex, day };
 };
 
@@ -166,202 +167,18 @@ const parseUtcOffsetToMinutes = (raw: unknown): number | undefined => {
   return totalMinutes;
 };
 
-const resolveTimeZoneName = (raw: unknown): string | undefined => {
-  if (typeof raw !== "string") {
-    return undefined;
-  }
-  const trimmed = raw.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  try {
-    new Intl.DateTimeFormat("en-US", { timeZone: trimmed }).format(new Date());
-    return trimmed;
-  } catch {
-    return undefined;
-  }
-};
-
-const getTimeZoneDateTimeFormatter = (timeZone: string): Intl.DateTimeFormat => {
-  let formatter = timeZoneDateTimeFormatterCache.get(timeZone);
-  if (!formatter) {
-    formatter = new Intl.DateTimeFormat("en-US", {
-      timeZone,
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-      second: "2-digit",
-      hourCycle: "h23",
-    });
-    timeZoneDateTimeFormatterCache.set(timeZone, formatter);
-  }
-  return formatter;
-};
-
-const parseDateTimePartsInTimeZone = (date: Date, timeZone: string): DateTimeParts | undefined => {
-  try {
-    const parts = getTimeZoneDateTimeFormatter(timeZone).formatToParts(date);
-    const map: Record<string, string> = {};
-    for (const part of parts) {
-      if (part.type !== "literal") {
-        map[part.type] = part.value;
-      }
-    }
-    const year = Number(map.year);
-    const month = Number(map.month);
-    const day = Number(map.day);
-    const hour = Number(map.hour);
-    const minute = Number(map.minute);
-    const second = Number(map.second);
-    if (
-      !Number.isFinite(year) ||
-      !Number.isFinite(month) ||
-      !Number.isFinite(day) ||
-      !Number.isFinite(hour) ||
-      !Number.isFinite(minute) ||
-      !Number.isFinite(second)
-    ) {
-      return undefined;
-    }
-    return {
-      year,
-      monthIndex: month - 1,
-      day,
-      hour,
-      minute,
-      second,
-    };
-  } catch {
-    return undefined;
-  }
-};
-
-const addDaysToDateParts = (parts: DateParts, days: number): DateParts => {
-  const shifted = new Date(Date.UTC(parts.year, parts.monthIndex, parts.day + days));
-  return {
-    year: shifted.getUTCFullYear(),
-    monthIndex: shifted.getUTCMonth(),
-    day: shifted.getUTCDate(),
-  };
-};
-
-const getTimeZoneStartOfDayMs = (parts: DateParts, timeZone: string): number | undefined => {
-  const targetUtcMidnight = Date.UTC(parts.year, parts.monthIndex, parts.day);
-  let candidateMs = targetUtcMidnight;
-  for (let attempt = 0; attempt < 4; attempt += 1) {
-    const zoned = parseDateTimePartsInTimeZone(new Date(candidateMs), timeZone);
-    if (!zoned) {
-      return undefined;
-    }
-    const offsetMs =
-      Date.UTC(zoned.year, zoned.monthIndex, zoned.day, zoned.hour, zoned.minute, zoned.second) -
-      candidateMs;
-    const nextCandidateMs = targetUtcMidnight - offsetMs;
-    if (nextCandidateMs === candidateMs) {
-      break;
-    }
-    candidateMs = nextCandidateMs;
-  }
-  const resolved = parseDateTimePartsInTimeZone(new Date(candidateMs), timeZone);
-  if (
-    !resolved ||
-    resolved.year !== parts.year ||
-    resolved.monthIndex !== parts.monthIndex ||
-    resolved.day !== parts.day ||
-    resolved.hour !== 0 ||
-    resolved.minute !== 0 ||
-    resolved.second !== 0
-  ) {
-    return undefined;
-  }
-  return candidateMs;
-};
-
-const getDatePartsForInstant = (
-  date: Date,
-  interpretation: DateInterpretation,
-): DateParts | undefined => {
-  if (interpretation.mode === "gateway") {
-    return {
-      year: date.getFullYear(),
-      monthIndex: date.getMonth(),
-      day: date.getDate(),
-    };
-  }
-  if (interpretation.mode === "utc") {
-    return {
-      year: date.getUTCFullYear(),
-      monthIndex: date.getUTCMonth(),
-      day: date.getUTCDate(),
-    };
-  }
-  if (hasSpecificTimeZone(interpretation)) {
-    const parts = parseDateTimePartsInTimeZone(date, interpretation.timeZone);
-    if (!parts) {
-      return undefined;
-    }
-    return {
-      year: parts.year,
-      monthIndex: parts.monthIndex,
-      day: parts.day,
-    };
-  }
-  if (!hasSpecificUtcOffset(interpretation)) {
-    return undefined;
-  }
-  const shifted = new Date(date.getTime() + interpretation.utcOffsetMinutes * 60 * 1000);
-  return {
-    year: shifted.getUTCFullYear(),
-    monthIndex: shifted.getUTCMonth(),
-    day: shifted.getUTCDate(),
-  };
-};
-
-const getStartOfDayMs = (
-  parts: DateParts,
-  interpretation: DateInterpretation = { mode: "utc" },
-): number | undefined => {
-  if (interpretation.mode === "gateway") {
-    const ms = new Date(parts.year, parts.monthIndex, parts.day).getTime();
-    return Number.isNaN(ms) ? undefined : ms;
-  }
-  if (interpretation.mode === "utc") {
-    const ms = Date.UTC(parts.year, parts.monthIndex, parts.day);
-    return Number.isNaN(ms) ? undefined : ms;
-  }
-  if (hasSpecificTimeZone(interpretation)) {
-    return getTimeZoneStartOfDayMs(parts, interpretation.timeZone);
-  }
-  if (!hasSpecificUtcOffset(interpretation)) {
-    return undefined;
-  }
-  const ms = Date.UTC(parts.year, parts.monthIndex, parts.day);
-  if (Number.isNaN(ms)) {
-    return undefined;
-  }
-  return ms - interpretation.utcOffsetMinutes * 60 * 1000;
-};
-
 const resolveDateInterpretation = (params: {
   mode?: unknown;
-  timeZone?: unknown;
   utcOffset?: unknown;
-}): DateInterpretation | undefined => {
+}): DateInterpretation => {
   if (params.mode === "gateway") {
     return { mode: "gateway" };
   }
   if (params.mode === "specific") {
-    const timeZone = resolveTimeZoneName(params.timeZone);
-    if (timeZone) {
-      return { mode: "specific", timeZone };
-    }
     const utcOffsetMinutes = parseUtcOffsetToMinutes(params.utcOffset);
     if (utcOffsetMinutes !== undefined) {
       return { mode: "specific", utcOffsetMinutes };
     }
-    return undefined;
   }
   // Backward compatibility: when mode is missing (or invalid), keep current UTC interpretation.
   return { mode: "utc" };
@@ -379,16 +196,29 @@ const parseDateToMs = (
   if (!parts) {
     return undefined;
   }
-  return getStartOfDayMs(parts, interpretation);
+  const { year, monthIndex, day } = parts;
+  if (interpretation.mode === "gateway") {
+    const ms = new Date(year, monthIndex, day).getTime();
+    return Number.isNaN(ms) ? undefined : ms;
+  }
+  if (interpretation.mode === "specific") {
+    const ms = Date.UTC(year, monthIndex, day) - interpretation.utcOffsetMinutes * 60 * 1000;
+    return Number.isNaN(ms) ? undefined : ms;
+  }
+  const ms = Date.UTC(year, monthIndex, day);
+  return Number.isNaN(ms) ? undefined : ms;
 };
 
 const getTodayStartMs = (now: Date, interpretation: DateInterpretation): number => {
-  const today = getDatePartsForInstant(now, interpretation);
-  if (today) {
-    const startMs = getStartOfDayMs(today, interpretation);
-    if (startMs !== undefined) {
-      return startMs;
-    }
+  if (interpretation.mode === "gateway") {
+    return new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  }
+  if (interpretation.mode === "specific") {
+    const shifted = new Date(now.getTime() + interpretation.utcOffsetMinutes * 60 * 1000);
+    return (
+      Date.UTC(shifted.getUTCFullYear(), shifted.getUTCMonth(), shifted.getUTCDate()) -
+      interpretation.utcOffsetMinutes * 60 * 1000
+    );
   }
   return Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
 };
@@ -410,91 +240,36 @@ const parseDays = (raw: unknown): number | undefined => {
  * Get date range from params (startDate/endDate or days).
  * Falls back to last 30 days if not provided.
  */
-const parseDateRange = (
-  params: {
-    startDate?: unknown;
-    endDate?: unknown;
-    days?: unknown;
-    mode?: unknown;
-    timeZone?: unknown;
-    utcOffset?: unknown;
-  },
-  interpretation: DateInterpretation | undefined = resolveDateInterpretation(params),
-): DateRange | undefined => {
-  if (!interpretation) {
-    return undefined;
-  }
+const parseDateRange = (params: {
+  startDate?: unknown;
+  endDate?: unknown;
+  days?: unknown;
+  mode?: unknown;
+  utcOffset?: unknown;
+}): DateRange => {
   const now = new Date();
-  const todayParts = getDatePartsForInstant(now, interpretation);
+  const interpretation = resolveDateInterpretation(params);
+  const todayStartMs = getTodayStartMs(now, interpretation);
+  const todayEndMs = todayStartMs + DAY_MS - 1;
 
-  const hasExplicitDateRange = params.startDate !== undefined || params.endDate !== undefined;
-  const startParts = parseDateParts(params.startDate);
-  const endParts = parseDateParts(params.endDate);
-  if (hasExplicitDateRange) {
-    if (!startParts || !endParts) {
-      return undefined;
-    }
-    const startMs = getStartOfDayMs(startParts, interpretation);
-    const endExclusiveMs = getStartOfDayMs(addDaysToDateParts(endParts, 1), interpretation);
-    if (startMs !== undefined && endExclusiveMs !== undefined) {
-      return { startMs, endMs: endExclusiveMs - 1 };
-    }
-    return undefined;
+  const startMs = parseDateToMs(params.startDate, interpretation);
+  const endMs = parseDateToMs(params.endDate, interpretation);
+
+  if (startMs !== undefined && endMs !== undefined) {
+    // endMs should be end of day
+    return { startMs, endMs: endMs + DAY_MS - 1 };
   }
 
   const days = parseDays(params.days);
   if (days !== undefined) {
     const clampedDays = Math.max(1, days);
-    if (!todayParts) {
-      return undefined;
-    }
-    const startParts = addDaysToDateParts(todayParts, -(clampedDays - 1));
-    const startMs = getStartOfDayMs(startParts, interpretation);
-    const endExclusiveMs = getStartOfDayMs(addDaysToDateParts(todayParts, 1), interpretation);
-    if (startMs !== undefined && endExclusiveMs !== undefined) {
-      return { startMs, endMs: endExclusiveMs - 1 };
-    }
-    return undefined;
+    const start = todayStartMs - (clampedDays - 1) * DAY_MS;
+    return { startMs: start, endMs: todayEndMs };
   }
 
-  const todayStartMs = getTodayStartMs(now, interpretation);
-  const todayEndMs = todayStartMs + DAY_MS - 1;
-
-  if (todayParts) {
-    const defaultStartParts = addDaysToDateParts(todayParts, -29);
-    const defaultStartMs = getStartOfDayMs(defaultStartParts, interpretation);
-    const endExclusiveMs = getStartOfDayMs(addDaysToDateParts(todayParts, 1), interpretation);
-    if (defaultStartMs !== undefined && endExclusiveMs !== undefined) {
-      return { startMs: defaultStartMs, endMs: endExclusiveMs - 1 };
-    }
-    return undefined;
-  }
-
-  // Default to last 30 days.
-  return { startMs: todayStartMs - 29 * DAY_MS, endMs: todayEndMs };
-};
-
-const resolveUsageRequestContext = (params: {
-  startDate?: unknown;
-  endDate?: unknown;
-  days?: unknown;
-  mode?: unknown;
-  timeZone?: unknown;
-  utcOffset?: unknown;
-}): { interpretation: DateInterpretation; range: DateRange } | { error: string } => {
-  const interpretation = resolveDateInterpretation(params);
-  if (params.mode === "specific" && !interpretation) {
-    return { error: INVALID_SPECIFIC_DATE_INTERPRETATION_MESSAGE };
-  }
-  const effectiveInterpretation = interpretation ?? { mode: "utc" as const };
-  const range = parseDateRange(params, effectiveInterpretation);
-  if (!range) {
-    return { error: INVALID_DATE_RANGE_MESSAGE };
-  }
-  return {
-    interpretation: effectiveInterpretation,
-    range,
-  };
+  // Default to last 30 days
+  const defaultStartMs = todayStartMs - 29 * DAY_MS;
+  return { startMs: defaultStartMs, endMs: todayEndMs };
 };
 
 type DiscoveredSessionWithAgent = DiscoveredSession & { agentId: string };
@@ -502,17 +277,32 @@ type DiscoveredSessionWithAgent = DiscoveredSession & { agentId: string };
 function buildStoreBySessionId(
   store: Record<string, SessionEntry>,
 ): Map<string, { key: string; entry: SessionEntry }> {
-  const storeBySessionId = new Map<string, { key: string; entry: SessionEntry }>();
+  const matchesBySessionId = new Map<string, Array<[string, SessionEntry]>>();
   for (const [key, entry] of Object.entries(store)) {
-    if (entry?.sessionId) {
-      storeBySessionId.set(entry.sessionId, { key, entry });
+    if (!entry?.sessionId) {
+      continue;
+    }
+    const matches = matchesBySessionId.get(entry.sessionId) ?? [];
+    matches.push([key, entry]);
+    matchesBySessionId.set(entry.sessionId, matches);
+  }
+
+  const storeBySessionId = new Map<string, { key: string; entry: SessionEntry }>();
+  for (const [sessionId, matches] of matchesBySessionId) {
+    const preferredKey = resolvePreferredSessionKeyForSessionIdMatches(matches, sessionId);
+    if (!preferredKey) {
+      continue;
+    }
+    const preferredEntry = store[preferredKey];
+    if (preferredEntry) {
+      storeBySessionId.set(sessionId, { key: preferredKey, entry: preferredEntry });
     }
   }
   return storeBySessionId;
 }
 
 async function discoverAllSessionsForUsage(params: {
-  config: ReturnType<typeof loadConfig>;
+  config: OpenClawConfig;
   startMs: number;
   endMs: number;
 }): Promise<DiscoveredSessionWithAgent[]> {
@@ -524,7 +314,7 @@ async function discoverAllSessionsForUsage(params: {
         startMs: params.startMs,
         endMs: params.endMs,
       });
-      return sessions.map((session) => ({ ...session, agentId: agent.id }));
+      return sessions.map((session) => Object.assign({}, session, { agentId: agent.id }));
     }),
   );
   return results.flat().toSorted((a, b) => b.mtime - a.mtime);
@@ -533,16 +323,9 @@ async function discoverAllSessionsForUsage(params: {
 async function loadCostUsageSummaryCached(params: {
   startMs: number;
   endMs: number;
-  config: ReturnType<typeof loadConfig>;
-  dayKeyInterpretation: DateInterpretation;
+  config: OpenClawConfig;
 }): Promise<CostUsageSummary> {
-  const interpretationKey =
-    params.dayKeyInterpretation.mode === "specific"
-      ? hasSpecificTimeZone(params.dayKeyInterpretation)
-        ? `specific-tz:${params.dayKeyInterpretation.timeZone}`
-        : `specific:${params.dayKeyInterpretation.utcOffsetMinutes}`
-      : params.dayKeyInterpretation.mode;
-  const cacheKey = `${params.startMs}-${params.endMs}-${interpretationKey}`;
+  const cacheKey = `${params.startMs}-${params.endMs}`;
   const now = Date.now();
   const cached = costUsageCache.get(cacheKey);
   if (cached?.summary && cached.updatedAt && now - cached.updatedAt < COST_USAGE_CACHE_TTL_MS) {
@@ -561,10 +344,9 @@ async function loadCostUsageSummaryCached(params: {
     startMs: params.startMs,
     endMs: params.endMs,
     config: params.config,
-    dayKeyInterpretation: params.dayKeyInterpretation,
   })
     .then((summary) => {
-      costUsageCache.set(cacheKey, { summary, updatedAt: Date.now() });
+      setCostUsageCache(cacheKey, { summary, updatedAt: Date.now() });
       return summary;
     })
     .catch((err) => {
@@ -577,12 +359,12 @@ async function loadCostUsageSummaryCached(params: {
       const current = costUsageCache.get(cacheKey);
       if (current?.inFlight === inFlight) {
         current.inFlight = undefined;
-        costUsageCache.set(cacheKey, current);
+        setCostUsageCache(cacheKey, current);
       }
     });
 
   entry.inFlight = inFlight;
-  costUsageCache.set(cacheKey, entry);
+  setCostUsageCache(cacheKey, entry);
 
   if (entry.summary) {
     return entry.summary;
@@ -611,34 +393,19 @@ export const usageHandlers: GatewayRequestHandlers = {
     const summary = await loadProviderUsageSummary();
     respond(true, summary, undefined);
   },
-  "usage.cost": async ({ respond, params }) => {
-    const resolved = resolveUsageRequestContext({
+  "usage.cost": async ({ respond, params, context }) => {
+    const config = context.getRuntimeConfig();
+    const { startMs, endMs } = parseDateRange({
       startDate: params?.startDate,
       endDate: params?.endDate,
       days: params?.days,
       mode: params?.mode,
-      timeZone: params?.timeZone,
       utcOffset: params?.utcOffset,
     });
-    if ("error" in resolved) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, resolved.error));
-      return;
-    }
-
-    const config = loadConfig();
-    const {
-      interpretation: dayKeyInterpretation,
-      range: { startMs, endMs },
-    } = resolved;
-    const summary = await loadCostUsageSummaryCached({
-      startMs,
-      endMs,
-      config,
-      dayKeyInterpretation,
-    });
+    const summary = await loadCostUsageSummaryCached({ startMs, endMs, config });
     respond(true, summary, undefined);
   },
-  "sessions.usage": async ({ respond, params }) => {
+  "sessions.usage": async ({ respond, params, context }) => {
     if (!validateSessionsUsageParams(params)) {
       respond(
         false,
@@ -652,26 +419,16 @@ export const usageHandlers: GatewayRequestHandlers = {
     }
 
     const p = params;
-    const resolved = resolveUsageRequestContext({
+    const config = context.getRuntimeConfig();
+    const { startMs, endMs } = parseDateRange({
       startDate: p.startDate,
       endDate: p.endDate,
       mode: p.mode,
-      timeZone: p.timeZone,
       utcOffset: p.utcOffset,
     });
-    if ("error" in resolved) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, resolved.error));
-      return;
-    }
-
-    const config = loadConfig();
-    const {
-      interpretation: dayKeyInterpretation,
-      range: { startMs, endMs },
-    } = resolved;
     const limit = typeof p.limit === "number" && Number.isFinite(p.limit) ? p.limit : 50;
     const includeContextWeight = p.includeContextWeight ?? false;
-    const specificKey = typeof p.key === "string" ? p.key.trim() : null;
+    const specificKey = normalizeOptionalString(p.key) ?? null;
 
     // Load session store for named sessions
     const { storePath, store } = loadCombinedSessionStoreForGateway(config);
@@ -709,13 +466,18 @@ export const usageHandlers: GatewayRequestHandlers = {
       const sessionId = storeEntry?.sessionId ?? keyRest;
 
       // Resolve the session file path
-      let sessionFile: string;
+      let sessionFile: string | undefined;
       try {
         const pathOpts = resolveSessionFilePathOptions({
           storePath: storePath !== "(multiple)" ? storePath : undefined,
           agentId: agentIdFromKey,
         });
-        sessionFile = resolveSessionFilePath(sessionId, storeEntry, pathOpts);
+        sessionFile = resolveExistingUsageSessionFile({
+          sessionId,
+          sessionEntry: storeEntry,
+          sessionFile: resolveSessionFilePath(sessionId, storeEntry, pathOpts),
+          agentId: agentIdFromKey,
+        });
       } catch {
         respond(
           false,
@@ -725,20 +487,22 @@ export const usageHandlers: GatewayRequestHandlers = {
         return;
       }
 
-      try {
-        const stats = fs.statSync(sessionFile);
-        if (stats.isFile()) {
-          mergedEntries.push({
-            key: resolvedStoreKey,
-            sessionId,
-            sessionFile,
-            label: storeEntry?.label,
-            updatedAt: storeEntry?.updatedAt ?? stats.mtimeMs,
-            storeEntry,
-          });
+      if (sessionFile) {
+        try {
+          const stats = fs.statSync(sessionFile);
+          if (stats.isFile()) {
+            mergedEntries.push({
+              key: resolvedStoreKey,
+              sessionId,
+              sessionFile,
+              label: storeEntry?.label,
+              updatedAt: storeEntry?.updatedAt ?? stats.mtimeMs,
+              storeEntry,
+            });
+          }
+        } catch {
+          // File doesn't exist - no results for this key
         }
-      } catch {
-        // File doesn't exist - no results for this key
       }
     } else {
       // Full discovery for list view
@@ -875,7 +639,6 @@ export const usageHandlers: GatewayRequestHandlers = {
         agentId,
         startMs,
         endMs,
-        dayKeyInterpretation,
       });
 
       if (usage) {
@@ -1054,22 +817,22 @@ export const usageHandlers: GatewayRequestHandlers = {
           .toSorted((a, b) => b.count - a.count),
       },
       byModel: Array.from(byModelMap.values()).toSorted((a, b) => {
-        const costDiff = b.totals.totalCost - a.totals.totalCost;
+        const costDiff = (b.totals?.totalCost ?? 0) - (a.totals?.totalCost ?? 0);
         if (costDiff !== 0) {
           return costDiff;
         }
-        return b.totals.totalTokens - a.totals.totalTokens;
+        return (b.totals?.totalTokens ?? 0) - (a.totals?.totalTokens ?? 0);
       }),
       byProvider: Array.from(byProviderMap.values()).toSorted((a, b) => {
-        const costDiff = b.totals.totalCost - a.totals.totalCost;
+        const costDiff = (b.totals?.totalCost ?? 0) - (a.totals?.totalCost ?? 0);
         if (costDiff !== 0) {
           return costDiff;
         }
-        return b.totals.totalTokens - a.totals.totalTokens;
+        return (b.totals?.totalTokens ?? 0) - (a.totals?.totalTokens ?? 0);
       }),
       byAgent: Array.from(byAgentMap.entries())
         .map(([id, totals]) => ({ agentId: id, totals }))
-        .toSorted((a, b) => b.totals.totalCost - a.totals.totalCost),
+        .toSorted((a, b) => (b.totals?.totalCost ?? 0) - (a.totals?.totalCost ?? 0)),
       ...tail,
     };
 
@@ -1084,8 +847,8 @@ export const usageHandlers: GatewayRequestHandlers = {
 
     respond(true, result, undefined);
   },
-  "sessions.usage.timeseries": async ({ respond, params }) => {
-    const key = typeof params?.key === "string" ? params.key.trim() : null;
+  "sessions.usage.timeseries": async ({ respond, params, context }) => {
+    const key = normalizeOptionalString(params?.key) ?? null;
     if (!key) {
       respond(
         false,
@@ -1095,7 +858,7 @@ export const usageHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    const resolved = resolveSessionUsageFileOrRespond(key, respond);
+    const resolved = resolveSessionUsageFileOrRespond(key, respond, context.getRuntimeConfig());
     if (!resolved) {
       return;
     }
@@ -1121,8 +884,8 @@ export const usageHandlers: GatewayRequestHandlers = {
 
     respond(true, timeseries, undefined);
   },
-  "sessions.usage.logs": async ({ respond, params }) => {
-    const key = typeof params?.key === "string" ? params.key.trim() : null;
+  "sessions.usage.logs": async ({ respond, params, context }) => {
+    const key = normalizeOptionalString(params?.key) ?? null;
     if (!key) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "key is required for logs"));
       return;
@@ -1133,13 +896,12 @@ export const usageHandlers: GatewayRequestHandlers = {
         ? Math.min(params.limit, 1000)
         : 200;
 
-    const resolved = resolveSessionUsageFileOrRespond(key, respond);
+    const resolved = resolveSessionUsageFileOrRespond(key, respond, context.getRuntimeConfig());
     if (!resolved) {
       return;
     }
     const { config, entry, agentId, sessionId, sessionFile } = resolved;
 
-    const { loadSessionLogs } = await import("../../infra/session-cost-usage.js");
     const logs = await loadSessionLogs({
       sessionId,
       sessionEntry: entry,

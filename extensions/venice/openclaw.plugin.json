@@ -1,5 +1,9 @@
 {
   "id": "venice",
+  "activation": {
+    "onStartup": false
+  },
+  "enabledByDefault": true,
   "providers": ["venice"],
   "providerAuthEnvVars": {
     "venice": ["VENICE_API_KEY"]

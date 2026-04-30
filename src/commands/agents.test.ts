@@ -1,8 +1,6 @@
-import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveStateDir } from "../config/paths.js";
 import {
   applyAgentBindings,
   applyAgentConfig,
@@ -45,9 +43,7 @@ describe("agents helpers", () => {
     const work = summaries.find((summary) => summary.id === "work");
 
     expect(main).toBeTruthy();
-    expect(main?.workspace).toBe(
-      path.join(resolveStateDir(process.env, os.homedir), "workspace-main"),
-    );
+    expect(main?.workspace).toBe(path.resolve("/main-ws/main"));
     expect(main?.bindings).toBe(1);
     expect(main?.model).toBe("anthropic/claude");
     expect(main?.agentDir.endsWith(path.join("agents", "main", "agent"))).toBe(true);
@@ -79,6 +75,39 @@ describe("agents helpers", () => {
     expect(work?.workspace).toBe("/new-ws");
     expect(work?.agentDir).toBe("/state/work/agent");
     expect(work?.model).toBe("anthropic/claude");
+  });
+
+  it("applyAgentConfig merges identity with existing", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        list: [{ id: "work", identity: { name: "Old", theme: "chill", emoji: "🐢" } }],
+      },
+    };
+
+    const next = applyAgentConfig(cfg, {
+      agentId: "work",
+      identity: { name: "New", emoji: "🦀" },
+    });
+
+    const work = next.agents?.list?.find((agent) => agent.id === "work");
+    expect(work?.identity?.name).toBe("New");
+    expect(work?.identity?.emoji).toBe("🦀");
+    expect(work?.identity?.theme).toBe("chill");
+  });
+
+  it("applyAgentConfig skips identity when not provided", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        list: [{ id: "work", identity: { name: "Keep", emoji: "🐢" } }],
+      },
+    };
+
+    const next = applyAgentConfig(cfg, { agentId: "work", name: "Renamed" });
+
+    const work = next.agents?.list?.find((agent) => agent.id === "work");
+    expect(work?.name).toBe("Renamed");
+    expect(work?.identity?.name).toBe("Keep");
+    expect(work?.identity?.emoji).toBe("🐢");
   });
 
   it("applyAgentBindings skips duplicates and reports conflicts", () => {
@@ -167,6 +196,35 @@ describe("agents helpers", () => {
     ]);
 
     expect(result.added).toHaveLength(1);
+    expect(result.conflicts).toHaveLength(0);
+    expect(result.config.bindings).toHaveLength(2);
+  });
+
+  it("applyAgentBindings keeps distinct bindings when persisted match fields contain pipes", () => {
+    const cfg: OpenClawConfig = {};
+
+    const result = applyAgentBindings(cfg, [
+      {
+        agentId: "main",
+        match: {
+          channel: "discord",
+          peer: { kind: "direct", id: "a|b" },
+          accountId: "default",
+        },
+      },
+      {
+        agentId: "main",
+        match: {
+          channel: "discord",
+          peer: { kind: "direct", id: "a" },
+          guildId: "b",
+          accountId: "|default",
+        },
+      },
+    ]);
+
+    expect(result.added).toHaveLength(2);
+    expect(result.skipped).toHaveLength(0);
     expect(result.conflicts).toHaveLength(0);
     expect(result.config.bindings).toHaveLength(2);
   });

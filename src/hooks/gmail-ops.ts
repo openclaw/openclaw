@@ -1,13 +1,13 @@
 import { spawn } from "node:child_process";
 import { formatCliCommand } from "../cli/command-format.js";
 import {
+  getRuntimeConfig,
   type OpenClawConfig,
   CONFIG_PATH,
-  loadConfig,
   readConfigFileSnapshot,
+  replaceConfigFile,
   resolveGatewayPort,
   validateConfigObjectWithPlugins,
-  writeConfigFile,
 } from "../config/config.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { defaultRuntime } from "../runtime.js";
@@ -23,6 +23,7 @@ import {
 } from "./gmail-setup-utils.js";
 import {
   buildDefaultHookUrl,
+  buildGogWatchServeLogArgs,
   buildGogWatchServeArgs,
   buildGogWatchStartArgs,
   buildTopicPath,
@@ -236,7 +237,10 @@ export async function runGmailSetup(opts: GmailSetupOptions) {
   if (!validated.ok) {
     throw new Error(`Config validation failed: ${validated.issues[0]?.message ?? "invalid"}`);
   }
-  await writeConfigFile(validated.config);
+  await replaceConfigFile({
+    nextConfig: validated.config,
+    afterWrite: { mode: "auto" },
+  });
 
   const summary = {
     projectId,
@@ -254,7 +258,7 @@ export async function runGmailSetup(opts: GmailSetupOptions) {
   };
 
   if (opts.json) {
-    defaultRuntime.log(JSON.stringify(summary, null, 2));
+    defaultRuntime.writeJson(summary);
     return;
   }
 
@@ -270,7 +274,7 @@ export async function runGmailSetup(opts: GmailSetupOptions) {
 
 export async function runGmailService(opts: GmailRunOptions) {
   await ensureDependency("gog", ["gogcli"]);
-  const config = loadConfig();
+  const config = getRuntimeConfig();
 
   const overrides: GmailHookOverrides = {
     account: opts.account,
@@ -353,7 +357,7 @@ export async function runGmailService(opts: GmailRunOptions) {
 
 function spawnGogServe(cfg: GmailHookRuntimeConfig) {
   const args = buildGogWatchServeArgs(cfg);
-  defaultRuntime.log(`Starting gog ${args.join(" ")}`);
+  defaultRuntime.log(`Starting gog ${buildGogWatchServeLogArgs(cfg).join(" ")}`);
   return spawn("gog", args, { stdio: "inherit" });
 }
 

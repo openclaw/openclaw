@@ -3,6 +3,7 @@
  * This bypasses pi-ai's content type system which does not have a "document" type.
  */
 
+import { normalizeProviderTransportWithPlugin } from "../../plugins/provider-runtime.js";
 import { isRecord } from "../../utils.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
 
@@ -10,6 +11,8 @@ type PdfInput = {
   base64: string;
   filename?: string;
 };
+
+const NATIVE_PDF_PROVIDER_FETCH_TIMEOUT_MS = 120_000;
 
 // ---------------------------------------------------------------------------
 // Anthropic – native PDF via Messages API
@@ -73,6 +76,7 @@ export async function anthropicAnalyzePdf(params: {
       max_tokens: params.maxTokens ?? 4096,
       messages: [{ role: "user", content }],
     }),
+    signal: AbortSignal.timeout(NATIVE_PDF_PROVIDER_FETCH_TIMEOUT_MS),
   });
 
   if (!res.ok) {
@@ -137,9 +141,18 @@ export async function geminiAnalyzePdf(params: {
   }
   parts.push({ text: params.prompt });
 
-  const baseUrl = (params.baseUrl ?? "https://generativelanguage.googleapis.com")
-    .replace(/\/+$/, "")
-    .replace(/\/v1beta$/, "");
+  const transport = normalizeProviderTransportWithPlugin({
+    provider: "google",
+    context: {
+      provider: "google",
+      api: "google-generative-ai",
+      baseUrl: params.baseUrl,
+    },
+  }) ?? { baseUrl: params.baseUrl };
+  const baseUrl = (transport.baseUrl ?? "https://generativelanguage.googleapis.com/v1beta").replace(
+    /\/v1beta$/i,
+    "",
+  );
   const url = `${baseUrl}/v1beta/models/${encodeURIComponent(params.modelId)}:generateContent?key=${encodeURIComponent(apiKey)}`;
 
   const res = await fetch(url, {
@@ -148,6 +161,7 @@ export async function geminiAnalyzePdf(params: {
     body: JSON.stringify({
       contents: [{ role: "user", parts }],
     }),
+    signal: AbortSignal.timeout(NATIVE_PDF_PROVIDER_FETCH_TIMEOUT_MS),
   });
 
   if (!res.ok) {

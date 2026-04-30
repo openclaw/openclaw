@@ -1,11 +1,11 @@
 package ai.openclaw.app.node
 
 import ai.openclaw.app.protocol.OpenClawCalendarCommand
+import ai.openclaw.app.protocol.OpenClawCallLogCommand
+import ai.openclaw.app.protocol.OpenClawCameraCommand
 import ai.openclaw.app.protocol.OpenClawCanvasA2UICommand
 import ai.openclaw.app.protocol.OpenClawCanvasCommand
-import ai.openclaw.app.protocol.OpenClawCameraCommand
 import ai.openclaw.app.protocol.OpenClawCapability
-import ai.openclaw.app.protocol.OpenClawCallLogCommand
 import ai.openclaw.app.protocol.OpenClawContactsCommand
 import ai.openclaw.app.protocol.OpenClawDeviceCommand
 import ai.openclaw.app.protocol.OpenClawLocationCommand
@@ -20,6 +20,7 @@ data class NodeRuntimeFlags(
   val locationEnabled: Boolean,
   val sendSmsAvailable: Boolean,
   val readSmsAvailable: Boolean,
+  val smsSearchPossible: Boolean,
   val callLogAvailable: Boolean,
   val voiceWakeEnabled: Boolean,
   val motionActivityAvailable: Boolean,
@@ -33,6 +34,7 @@ enum class InvokeCommandAvailability {
   LocationEnabled,
   SendSmsAvailable,
   ReadSmsAvailable,
+  RequestableSmsSearchAvailable,
   CallLogAvailable,
   MotionActivityAvailable,
   MotionPedometerAvailable,
@@ -199,7 +201,7 @@ object InvokeCommandRegistry {
       ),
       InvokeCommandSpec(
         name = OpenClawSmsCommand.Search.rawValue,
-        availability = InvokeCommandAvailability.ReadSmsAvailable,
+        availability = InvokeCommandAvailability.RequestableSmsSearchAvailable,
       ),
       InvokeCommandSpec(
         name = OpenClawCallLogCommand.Search.rawValue,
@@ -219,8 +221,8 @@ object InvokeCommandRegistry {
 
   fun find(command: String): InvokeCommandSpec? = byNameInternal[command]
 
-  fun advertisedCapabilities(flags: NodeRuntimeFlags): List<String> {
-    return capabilityManifest
+  fun advertisedCapabilities(flags: NodeRuntimeFlags): List<String> =
+    capabilityManifest
       .filter { spec ->
         when (spec.availability) {
           NodeCapabilityAvailability.Always -> true
@@ -231,12 +233,10 @@ object InvokeCommandRegistry {
           NodeCapabilityAvailability.VoiceWakeEnabled -> flags.voiceWakeEnabled
           NodeCapabilityAvailability.MotionAvailable -> flags.motionActivityAvailable || flags.motionPedometerAvailable
         }
-      }
-      .map { it.name }
-  }
+      }.map { it.name }
 
-  fun advertisedCommands(flags: NodeRuntimeFlags): List<String> {
-    return all
+  fun advertisedCommands(flags: NodeRuntimeFlags): List<String> =
+    all
       .filter { spec ->
         when (spec.availability) {
           InvokeCommandAvailability.Always -> true
@@ -244,12 +244,11 @@ object InvokeCommandRegistry {
           InvokeCommandAvailability.LocationEnabled -> flags.locationEnabled
           InvokeCommandAvailability.SendSmsAvailable -> flags.sendSmsAvailable
           InvokeCommandAvailability.ReadSmsAvailable -> flags.readSmsAvailable
+          InvokeCommandAvailability.RequestableSmsSearchAvailable -> flags.smsSearchPossible
           InvokeCommandAvailability.CallLogAvailable -> flags.callLogAvailable
           InvokeCommandAvailability.MotionActivityAvailable -> flags.motionActivityAvailable
           InvokeCommandAvailability.MotionPedometerAvailable -> flags.motionPedometerAvailable
           InvokeCommandAvailability.DebugBuild -> flags.debugBuild
         }
-      }
-      .map { it.name }
-  }
+      }.map { it.name }
 }

@@ -5,10 +5,10 @@ describe("parseLogLine", () => {
   it("parses structured JSON log lines", () => {
     const line = JSON.stringify({
       time: "2026-01-09T01:38:41.523Z",
-      0: '{"subsystem":"gateway/channels/whatsapp"}',
+      0: '{"subsystem":"gateway/channels/demo-channel"}',
       1: "connected",
       _meta: {
-        name: '{"subsystem":"gateway/channels/whatsapp"}',
+        name: '{"subsystem":"gateway/channels/demo-channel"}',
         logLevelName: "INFO",
       },
     });
@@ -18,8 +18,8 @@ describe("parseLogLine", () => {
     expect(parsed).not.toBeNull();
     expect(parsed?.time).toBe("2026-01-09T01:38:41.523Z");
     expect(parsed?.level).toBe("info");
-    expect(parsed?.subsystem).toBe("gateway/channels/whatsapp");
-    expect(parsed?.message).toBe('{"subsystem":"gateway/channels/whatsapp"} connected');
+    expect(parsed?.subsystem).toBe("gateway/channels/demo-channel");
+    expect(parsed?.message).toBe('{"subsystem":"gateway/channels/demo-channel"} connected');
     expect(parsed?.raw).toBe(line);
   });
 

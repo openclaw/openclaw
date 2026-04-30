@@ -11,7 +11,7 @@ title: "Azure"
 
 This guide sets up an Azure Linux VM with the Azure CLI, applies Network Security Group (NSG) hardening, configures Azure Bastion for SSH access, and installs OpenClaw.
 
-## What you'll do
+## What you will do
 
 - Create Azure networking (VNet, subnets, NSG) and compute resources with the Azure CLI
 - Apply Network Security Group rules so VM SSH is allowed only from Azure Bastion
@@ -309,3 +309,9 @@ This removes the resource group and everything inside it (VM, VNet, NSG, Bastion
 - Pair local devices as nodes: [Nodes](/nodes)
 - Configure the Gateway: [Gateway configuration](/gateway/configuration)
 - For more details on OpenClaw Azure deployment with the GitHub Copilot model provider: [OpenClaw on Azure with GitHub Copilot](https://github.com/johnsonshi/openclaw-azure-github-copilot)
+
+## Related
+
+- [Install overview](/install)
+- [GCP](/install/gcp)
+- [DigitalOcean](/install/digitalocean)

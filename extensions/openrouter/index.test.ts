@@ -1,101 +1,221 @@
-import OpenAI from "openai";
-import { describe, expect, it } from "vitest";
-import { createTestPluginApi } from "../../test/helpers/extensions/plugin-api.js";
-import plugin from "./index.js";
+import {
+  registerProviderPlugin,
+  registerSingleProviderPlugin,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
+import { expectPassthroughReplayPolicy } from "openclaw/plugin-sdk/provider-test-contracts";
+import { describe, expect, it, vi } from "vitest";
+import openrouterPlugin from "./index.js";
+import {
+  buildOpenrouterProvider,
+  isOpenRouterProxyReasoningUnsupportedModel,
+} from "./provider-catalog.js";
 
-const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY ?? "";
-const LIVE_MODEL_ID =
-  process.env.OPENCLAW_LIVE_OPENROUTER_PLUGIN_MODEL?.trim() || "openai/gpt-5.4-nano";
-const liveEnabled = OPENROUTER_API_KEY.trim().length > 0 && process.env.OPENCLAW_LIVE_TEST === "1";
-const describeLive = liveEnabled ? describe : describe.skip;
+describe("openrouter provider hooks", () => {
+  it("registers OpenRouter speech alongside model and media providers", async () => {
+    const { providers, speechProviders, mediaProviders, imageProviders, videoProviders } =
+      await registerProviderPlugin({
+        plugin: openrouterPlugin,
+        id: "openrouter",
+        name: "OpenRouter Provider",
+      });
 
-function registerOpenRouterPlugin() {
-  const providers: unknown[] = [];
-  const speechProviders: unknown[] = [];
-  const mediaProviders: unknown[] = [];
-  const imageProviders: unknown[] = [];
-
-  plugin.register(
-    createTestPluginApi({
-      id: "openrouter",
-      name: "OpenRouter Provider",
-      source: "test",
-      config: {},
-      runtime: {} as never,
-      registerProvider: (provider) => {
-        providers.push(provider);
-      },
-      registerSpeechProvider: (provider) => {
-        speechProviders.push(provider);
-      },
-      registerMediaUnderstandingProvider: (provider) => {
-        mediaProviders.push(provider);
-      },
-      registerImageGenerationProvider: (provider) => {
-        imageProviders.push(provider);
-      },
-    }),
-  );
-
-  return { providers, speechProviders, mediaProviders, imageProviders };
-}
-
-describe("openrouter plugin", () => {
-  it("registers the expected provider surfaces", () => {
-    const { providers, speechProviders, mediaProviders, imageProviders } =
-      registerOpenRouterPlugin();
-
-    expect(providers).toHaveLength(1);
-    expect(
-      providers.map(
-        (provider) =>
-          // oxlint-disable-next-line typescript/no-explicit-any
-          (provider as any).id,
-      ),
-    ).toEqual(["openrouter"]);
-    expect(speechProviders).toHaveLength(0);
-    expect(mediaProviders).toHaveLength(0);
-    expect(imageProviders).toHaveLength(0);
+    expect(providers).toEqual([expect.objectContaining({ id: "openrouter" })]);
+    expect(speechProviders).toEqual([expect.objectContaining({ id: "openrouter" })]);
+    expect(mediaProviders).toEqual([expect.objectContaining({ id: "openrouter" })]);
+    expect(imageProviders).toEqual([expect.objectContaining({ id: "openrouter" })]);
+    expect(videoProviders).toEqual([expect.objectContaining({ id: "openrouter" })]);
   });
-});
 
-describeLive("openrouter plugin live", () => {
-  it("registers an OpenRouter provider that can complete a live request", async () => {
-    const { providers } = registerOpenRouterPlugin();
-    const provider =
-      // oxlint-disable-next-line typescript/no-explicit-any
-      providers.find((entry) => (entry as any).id === "openrouter");
+  it("includes Kimi K2.6 in the bundled catalog", () => {
+    expect(buildOpenrouterProvider().models?.map((model) => model.id)).toContain(
+      "moonshotai/kimi-k2.6",
+    );
+  });
 
-    expect(provider).toBeDefined();
+  it("does not include retired stealth models in the bundled catalog", () => {
+    expect(buildOpenrouterProvider().models?.map((model) => model.id)).not.toEqual(
+      expect.arrayContaining(["openrouter/hunter-alpha", "openrouter/healer-alpha"]),
+    );
+  });
 
-    // oxlint-disable-next-line typescript/no-explicit-any
-    const resolved = (provider as any).resolveDynamicModel?.({
-      provider: "openrouter",
-      modelId: LIVE_MODEL_ID,
-      modelRegistry: {
-        find() {
-          return null;
-        },
-      },
+  it("keeps stale Hunter Alpha configs out of OpenRouter proxy reasoning", () => {
+    expect(isOpenRouterProxyReasoningUnsupportedModel("openrouter/hunter-alpha")).toBe(true);
+    expect(isOpenRouterProxyReasoningUnsupportedModel("openrouter/hunter-alpha:free")).toBe(true);
+    expect(isOpenRouterProxyReasoningUnsupportedModel("openrouter/healer-alpha")).toBe(false);
+  });
+
+  it("owns passthrough-gemini replay policy for Gemini-backed models", async () => {
+    await expectPassthroughReplayPolicy({
+      plugin: openrouterPlugin,
+      providerId: "openrouter",
+      modelId: "gemini-2.5-pro",
+      sanitizeThoughtSignatures: true,
     });
+    await expectPassthroughReplayPolicy({
+      plugin: openrouterPlugin,
+      providerId: "openrouter",
+      modelId: "openai/gpt-5.4",
+    });
+  });
 
-    expect(resolved).toMatchObject({
-      provider: "openrouter",
-      id: LIVE_MODEL_ID,
-      api: "openai-completions",
+  it("owns native reasoning output mode", async () => {
+    const provider = await registerSingleProviderPlugin(openrouterPlugin);
+
+    expect(
+      provider.resolveReasoningOutputMode?.({
+        provider: "openrouter",
+        modelApi: "openai-completions",
+        modelId: "openai/gpt-5.4",
+      } as never),
+    ).toBe("native");
+  });
+
+  it("canonicalizes stale OpenRouter /v1 config and runtime metadata", async () => {
+    const provider = await registerSingleProviderPlugin(openrouterPlugin);
+
+    expect(
+      provider.normalizeConfig?.({
+        provider: "openrouter",
+        providerConfig: {
+          api: "openai-completions",
+          baseUrl: "https://openrouter.ai/v1/",
+          models: [],
+        },
+      } as never),
+    ).toMatchObject({
       baseUrl: "https://openrouter.ai/api/v1",
     });
 
-    const client = new OpenAI({
-      apiKey: OPENROUTER_API_KEY,
-      baseURL: resolved?.baseUrl,
-    });
-    const response = await client.chat.completions.create({
-      model: resolved?.id ?? LIVE_MODEL_ID,
-      messages: [{ role: "user", content: "Reply with exactly OK." }],
-      max_tokens: 16,
+    expect(
+      provider.normalizeResolvedModel?.({
+        provider: "openrouter",
+        model: {
+          provider: "openrouter",
+          id: "openai/gpt-5.4",
+          name: "openai/gpt-5.4",
+          api: "openai-completions",
+          baseUrl: "https://openrouter.ai/v1",
+          reasoning: true,
+          input: ["text", "image"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 200_000,
+          maxTokens: 8192,
+        },
+      } as never),
+    ).toMatchObject({
+      baseUrl: "https://openrouter.ai/api/v1",
     });
 
-    expect(response.choices[0]?.message?.content?.trim()).toMatch(/^OK[.!]?$/);
-  }, 30_000);
+    expect(
+      provider.normalizeResolvedModel?.({
+        provider: "openrouter",
+        model: {
+          provider: "openrouter",
+          id: "openrouter/hunter-alpha",
+          name: "Hunter Alpha",
+          api: "openai-completions",
+          baseUrl: "https://openrouter.ai/api/v1",
+          reasoning: true,
+          input: ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 1_048_576,
+          maxTokens: 65_536,
+        },
+      } as never),
+    ).toMatchObject({
+      reasoning: false,
+    });
+
+    expect(
+      provider.normalizeTransport?.({
+        provider: "openrouter",
+        api: "openai-completions",
+        baseUrl: "https://openrouter.ai/v1",
+      } as never),
+    ).toEqual({
+      api: "openai-completions",
+      baseUrl: "https://openrouter.ai/api/v1",
+    });
+  });
+
+  it("injects provider routing into compat before applying stream wrappers", async () => {
+    const provider = await registerSingleProviderPlugin(openrouterPlugin);
+    const baseStreamFn = vi.fn(
+      (..._args: Parameters<import("@mariozechner/pi-agent-core").StreamFn>) =>
+        ({ async *[Symbol.asyncIterator]() {} }) as never,
+    );
+
+    const wrapped = provider.wrapStreamFn?.({
+      provider: "openrouter",
+      modelId: "openai/gpt-5.4",
+      extraParams: {
+        provider: {
+          order: ["moonshot"],
+        },
+      },
+      streamFn: baseStreamFn,
+      thinkingLevel: "high",
+    } as never);
+
+    void wrapped?.(
+      {
+        provider: "openrouter",
+        api: "openai-completions",
+        id: "openai/gpt-5.4",
+        compat: {},
+      } as never,
+      { messages: [] } as never,
+      {},
+    );
+
+    expect(baseStreamFn).toHaveBeenCalledOnce();
+    const firstCall = baseStreamFn.mock.calls[0];
+    const firstModel = firstCall?.[0];
+    expect(firstModel).toMatchObject({
+      compat: {
+        openRouterRouting: {
+          order: ["moonshot"],
+        },
+      },
+    });
+  });
+
+  it("does not inject OpenRouter reasoning for Hunter Alpha", async () => {
+    const provider = await registerSingleProviderPlugin(openrouterPlugin);
+    let capturedPayload: Record<string, unknown> | undefined;
+    const baseStreamFn = vi.fn(
+      (
+        ...args: Parameters<import("@mariozechner/pi-agent-core").StreamFn>
+      ): ReturnType<import("@mariozechner/pi-agent-core").StreamFn> => {
+        void args[2]?.onPayload?.({}, args[0]);
+        return { async *[Symbol.asyncIterator]() {} } as never;
+      },
+    );
+
+    const wrapped = provider.wrapStreamFn?.({
+      provider: "openrouter",
+      modelId: "openrouter/hunter-alpha",
+      streamFn: baseStreamFn,
+      thinkingLevel: "high",
+    } as never);
+
+    void wrapped?.(
+      {
+        provider: "openrouter",
+        api: "openai-completions",
+        id: "openrouter/hunter-alpha",
+        compat: {},
+      } as never,
+      { messages: [] } as never,
+      {
+        onPayload: (payload: unknown) => {
+          capturedPayload = payload as Record<string, unknown>;
+          return payload;
+        },
+      } as never,
+    );
+
+    expect(capturedPayload).toEqual({});
+    expect(baseStreamFn).toHaveBeenCalledOnce();
+  });
 });

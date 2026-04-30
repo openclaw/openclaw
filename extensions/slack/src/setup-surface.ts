@@ -1,3 +1,4 @@
+import { adaptScopedAccountAccessor } from "openclaw/plugin-sdk/channel-config-helpers";
 import {
   noteChannelLookupFailure,
   noteChannelLookupSummary,
@@ -6,13 +7,18 @@ import {
   parseMentionOrPrefixedId,
   promptLegacyChannelAllowFromForAccount,
   type WizardPrompter,
-} from "openclaw/plugin-sdk/setup";
+} from "openclaw/plugin-sdk/setup-runtime";
 import type {
   ChannelSetupWizard,
   ChannelSetupWizardAllowFromEntry,
-} from "openclaw/plugin-sdk/setup";
+} from "openclaw/plugin-sdk/setup-runtime";
 import { formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
-import { resolveDefaultSlackAccountId, resolveSlackAccount } from "./accounts.js";
+import {
+  resolveDefaultSlackAccountId,
+  resolveSlackAccount,
+  resolveSlackAccountAllowFrom,
+  type ResolvedSlackAccount,
+} from "./accounts.js";
 import { resolveSlackChannelAllowlist } from "./resolve-channels.js";
 import { resolveSlackUserAllowlist } from "./resolve-users.js";
 import { createSlackSetupWizardBase } from "./setup-core.js";
@@ -58,15 +64,15 @@ async function promptSlackAllowFrom(params: {
       normalizeId: (id) => id.toUpperCase(),
     });
 
-  return await promptLegacyChannelAllowFromForAccount({
+  return await promptLegacyChannelAllowFromForAccount<ResolvedSlackAccount>({
     cfg: params.cfg,
     channel,
     prompter: params.prompter,
     accountId: params.accountId,
     defaultAccountId: resolveDefaultSlackAccountId(params.cfg),
-    resolveAccount: (cfg, accountId) => resolveSlackAccount({ cfg, accountId }),
-    resolveExisting: (_account, cfg) =>
-      cfg.channels?.slack?.allowFrom ?? cfg.channels?.slack?.dm?.allowFrom ?? [],
+    resolveAccount: adaptScopedAccountAccessor(resolveSlackAccount),
+    resolveExisting: (account, cfg) =>
+      resolveSlackAccountAllowFrom({ cfg, accountId: account.accountId }) ?? [],
     resolveToken: (account) => account.userToken ?? account.botToken ?? "",
     noteTitle: "Slack allowlist",
     noteLines: [

@@ -10,14 +10,11 @@ import {
   withTempTelegramHeartbeatSandbox,
 } from "./heartbeat-runner.test-utils.js";
 
-// Avoid pulling optional runtime deps during isolated runs.
-vi.mock("jiti", () => ({ createJiti: () => () => ({}) }));
-
 beforeEach(() => {
   setupTelegramHeartbeatPluginRuntimeForTests();
 });
 
-describe("heartbeat transcript pruning", () => {
+describe("heartbeat transcript append-only (#39609)", () => {
   async function createTranscriptWithContent(transcriptPath: string, sessionId: string) {
     const header = {
       type: "session",
@@ -43,13 +40,12 @@ describe("heartbeat transcript pruning", () => {
         cacheWriteTokens: number;
       };
     };
-    expectPruned: boolean;
   }) {
     await withTempTelegramHeartbeatSandbox(
       async ({ tmpDir, storePath, replySpy }) => {
         const sessionKey = resolveMainSessionKey(undefined);
         const transcriptPath = path.join(tmpDir, `${params.sessionId}.jsonl`);
-        const originalContent = await createTranscriptWithContent(transcriptPath, params.sessionId);
+        await createTranscriptWithContent(transcriptPath, params.sessionId);
         const originalSize = (await fs.stat(transcriptPath)).size;
 
         await seedSessionStore(storePath, sessionKey, {
@@ -73,41 +69,39 @@ describe("heartbeat transcript pruning", () => {
           agentId: undefined,
           reason: "test",
           cfg,
-          deps: { sendTelegram: vi.fn() },
+          deps: {
+            sendTelegram: vi.fn(),
+            getReplyFromConfig: replySpy,
+          },
         });
 
         const finalSize = (await fs.stat(transcriptPath)).size;
-        if (params.expectPruned) {
-          const finalContent = await fs.readFile(transcriptPath, "utf-8");
-          expect(finalContent).toBe(originalContent);
-          expect(finalSize).toBe(originalSize);
-          return;
-        }
+        // Transcript must never be truncated — entries are append-only now.
+        // HEARTBEAT_OK entries stay in the file and are filtered at context
+        // build time instead of being removed via fs.truncate (#39609).
         expect(finalSize).toBeGreaterThanOrEqual(originalSize);
       },
       { prefix: "openclaw-hb-prune-" },
     );
   }
 
-  it("prunes transcript when heartbeat returns HEARTBEAT_OK", async () => {
+  it("does not truncate transcript when heartbeat returns HEARTBEAT_OK", async () => {
     await runTranscriptScenario({
-      sessionId: "test-session-prune",
+      sessionId: "test-session-no-prune",
       reply: {
         text: "HEARTBEAT_OK",
         usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
       },
-      expectPruned: true,
     });
   });
 
-  it("does not prune transcript when heartbeat returns meaningful content", async () => {
+  it("does not truncate transcript when heartbeat returns meaningful content", async () => {
     await runTranscriptScenario({
-      sessionId: "test-session-no-prune",
+      sessionId: "test-session-content",
       reply: {
         text: "Alert: Something needs your attention!",
         usage: { inputTokens: 10, outputTokens: 20, cacheReadTokens: 0, cacheWriteTokens: 0 },
       },
-      expectPruned: false,
     });
   });
 });

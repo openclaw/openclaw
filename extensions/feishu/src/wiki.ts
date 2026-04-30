@@ -153,19 +153,16 @@ async function renameNode(client: Lark.Client, spaceId: string, nodeToken: strin
 
 export function registerFeishuWikiTools(api: OpenClawPluginApi) {
   if (!api.config) {
-    api.logger.debug?.("feishu_wiki: No config available, skipping wiki tools");
     return;
   }
 
   const accounts = listEnabledFeishuAccounts(api.config);
   if (accounts.length === 0) {
-    api.logger.debug?.("feishu_wiki: No Feishu accounts configured, skipping wiki tools");
     return;
   }
 
   const toolsCfg = resolveAnyEnabledFeishuToolsConfig(accounts);
   if (!toolsCfg.wiki) {
-    api.logger.debug?.("feishu_wiki: wiki tool disabled in config");
     return;
   }
 
@@ -217,7 +214,6 @@ export function registerFeishuWikiTools(api: OpenClawPluginApi) {
               case "rename":
                 return jsonToolResult(await renameNode(client, p.space_id, p.node_token, p.title));
               default:
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any -- exhaustive check fallback
                 return unknownToolActionResult((p as { action?: unknown }).action);
             }
           } catch (err) {
@@ -228,6 +224,4 @@ export function registerFeishuWikiTools(api: OpenClawPluginApi) {
     },
     { name: "feishu_wiki" },
   );
-
-  api.logger.info?.(`feishu_wiki: Registered feishu_wiki tool`);
 }

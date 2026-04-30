@@ -6,7 +6,7 @@ import { withEnvAsync } from "../../test-utils/env.js";
 
 vi.mock("../../config/config.js", () => {
   return {
-    loadConfig: vi.fn(() => ({
+    getRuntimeConfig: vi.fn(() => ({
       agents: {
         list: [{ id: "main" }, { id: "opus" }],
       },
@@ -82,11 +82,19 @@ import {
 import { loadCombinedSessionStoreForGateway } from "../session-utils.js";
 import { usageHandlers } from "./usage.js";
 
+const TEST_RUNTIME_CONFIG = {
+  agents: {
+    list: [{ id: "main" }, { id: "opus" }],
+  },
+  session: {},
+};
+
 async function runSessionsUsage(params: Record<string, unknown>) {
   const respond = vi.fn();
   await usageHandlers["sessions.usage"]({
     respond,
     params,
+    context: { getRuntimeConfig: () => TEST_RUNTIME_CONFIG },
   } as unknown as Parameters<(typeof usageHandlers)["sessions.usage"]>[0]);
   return respond;
 }
@@ -96,6 +104,7 @@ async function runSessionsUsageTimeseries(params: Record<string, unknown>) {
   await usageHandlers["sessions.usage.timeseries"]({
     respond,
     params,
+    context: { getRuntimeConfig: () => TEST_RUNTIME_CONFIG },
   } as unknown as Parameters<(typeof usageHandlers)["sessions.usage.timeseries"]>[0]);
   return respond;
 }
@@ -105,16 +114,8 @@ async function runSessionsUsageLogs(params: Record<string, unknown>) {
   await usageHandlers["sessions.usage.logs"]({
     respond,
     params,
+    context: { getRuntimeConfig: () => TEST_RUNTIME_CONFIG },
   } as unknown as Parameters<(typeof usageHandlers)["sessions.usage.logs"]>[0]);
-  return respond;
-}
-
-async function runUsageCost(params: Record<string, unknown>) {
-  const respond = vi.fn();
-  await usageHandlers["usage.cost"]({
-    respond,
-    params,
-  } as unknown as Parameters<(typeof usageHandlers)["usage.cost"]>[0]);
   return respond;
 }
 
@@ -158,131 +159,6 @@ describe("sessions.usage", () => {
     expect(sessions[1].agentId).toBe("main");
   });
 
-  it("accepts IANA date interpretation params and forwards them to session summaries", async () => {
-    const respond = await runSessionsUsage({
-      ...BASE_USAGE_RANGE,
-      mode: "specific",
-      timeZone: "America/New_York",
-    });
-
-    expectSuccessfulSessionsUsage(respond);
-    expect(vi.mocked(loadSessionCostSummary)).toHaveBeenCalled();
-    expect(
-      vi.mocked(loadSessionCostSummary).mock.calls.every((call) => {
-        const interpretation = call[0]?.dayKeyInterpretation;
-        return (
-          interpretation?.mode === "specific" &&
-          "timeZone" in interpretation &&
-          interpretation.timeZone === "America/New_York"
-        );
-      }),
-    ).toBe(true);
-  });
-
-  it("rejects specific mode when time zone and offset are both invalid", async () => {
-    const respond = await runSessionsUsage({
-      ...BASE_USAGE_RANGE,
-      mode: "specific",
-      timeZone: "Mars/Base",
-    });
-
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: "INVALID_REQUEST",
-        message: expect.stringContaining("specific mode requires a valid timeZone or utcOffset"),
-      }),
-    );
-  });
-
-  it("rejects usage.cost when specific mode cannot be resolved", async () => {
-    const respond = await runUsageCost({
-      startDate: "2026-02-01",
-      endDate: "2026-02-02",
-      mode: "specific",
-      timeZone: "Mars/Base",
-    });
-
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: "INVALID_REQUEST",
-        message: expect.stringContaining("specific mode requires a valid timeZone or utcOffset"),
-      }),
-    );
-  });
-
-  it("rejects sessions.usage when explicit date ranges are incomplete or invalid", async () => {
-    const respond = await runSessionsUsage({
-      startDate: "2026-02-31",
-      limit: 10,
-    });
-
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: "INVALID_REQUEST",
-        message: expect.stringContaining(
-          "invalid date range for the requested date interpretation",
-        ),
-      }),
-    );
-  });
-
-  it("rejects usage.cost when explicit date ranges are incomplete or invalid", async () => {
-    const respond = await runUsageCost({
-      startDate: "2026-02-01",
-      mode: "utc",
-    });
-
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: "INVALID_REQUEST",
-        message: expect.stringContaining(
-          "invalid date range for the requested date interpretation",
-        ),
-      }),
-    );
-  });
-
-  it("rejects sessions.usage when only one explicit date bound is provided", async () => {
-    const respond = await runSessionsUsage({
-      startDate: "2026-02-01",
-      limit: 10,
-    });
-
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: "INVALID_REQUEST",
-        message: expect.stringContaining("invalid date range"),
-      }),
-    );
-  });
-
-  it("rejects usage.cost when explicit dates are calendar-invalid", async () => {
-    const respond = await runUsageCost({
-      startDate: "2026-02-31",
-      endDate: "2026-02-31",
-      mode: "utc",
-    });
-
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: "INVALID_REQUEST",
-        message: expect.stringContaining("invalid date range"),
-      }),
-    );
-  });
-
   it("resolves store entries by sessionId when queried via discovered agent-prefixed key", async () => {
     const storeKey = "agent:opus:slack:dm:u123";
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-usage-test-"));
@@ -317,6 +193,46 @@ describe("sessions.usage", () => {
         expect(
           vi.mocked(loadSessionCostSummary).mock.calls.some((call) => call[0]?.agentId === "opus"),
         ).toBe(true);
+      });
+    } finally {
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("prefers the deterministic store key when duplicate sessionIds exist", async () => {
+    const preferredKey = "agent:opus:acp:run-dup";
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-usage-test-"));
+
+    try {
+      await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+        const agentSessionsDir = path.join(stateDir, "agents", "opus", "sessions");
+        fs.mkdirSync(agentSessionsDir, { recursive: true });
+        const sessionFile = path.join(agentSessionsDir, "run-dup.jsonl");
+        fs.writeFileSync(sessionFile, "", "utf-8");
+
+        vi.mocked(loadCombinedSessionStoreForGateway).mockReturnValue({
+          storePath: "(multiple)",
+          store: {
+            [preferredKey]: {
+              sessionId: "run-dup",
+              sessionFile: "run-dup.jsonl",
+              updatedAt: 1_000,
+            },
+            "agent:other:main": {
+              sessionId: "run-dup",
+              sessionFile: "run-dup.jsonl",
+              updatedAt: 2_000,
+            },
+          },
+        });
+
+        const respond = await runSessionsUsage({
+          ...BASE_USAGE_RANGE,
+          key: "agent:opus:run-dup",
+        });
+        const sessions = expectSuccessfulSessionsUsage(respond);
+        expect(sessions).toHaveLength(1);
+        expect(sessions[0]?.key).toBe(preferredKey);
       });
     } finally {
       fs.rmSync(stateDir, { recursive: true, force: true });

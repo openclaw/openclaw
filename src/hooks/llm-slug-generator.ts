@@ -9,15 +9,24 @@ import {
   resolveDefaultAgentId,
   resolveAgentWorkspaceDir,
   resolveAgentDir,
-  resolveAgentEffectiveModelPrimary,
 } from "../agents/agent-scope.js";
-import { DEFAULT_PROVIDER, DEFAULT_MODEL } from "../agents/defaults.js";
-import { parseModelRef } from "../agents/model-selection.js";
+import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
-import type { OpenClawConfig } from "../config/config.js";
+import { resolveAgentTimeoutMs } from "../agents/timeout.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 
 const log = createSubsystemLogger("llm-slug-generator");
+const DEFAULT_SLUG_GENERATOR_TIMEOUT_MS = 15_000;
+
+function resolveSlugGeneratorTimeoutMs(cfg: OpenClawConfig): number {
+  const configuredTimeoutSeconds = cfg.agents?.defaults?.timeoutSeconds;
+  if (typeof configuredTimeoutSeconds !== "number" || !Number.isFinite(configuredTimeoutSeconds)) {
+    return DEFAULT_SLUG_GENERATOR_TIMEOUT_MS;
+  }
+  return resolveAgentTimeoutMs({ cfg });
+}
 
 /**
  * Generate a short 1-2 word filename slug from session content using LLM
@@ -44,11 +53,11 @@ ${params.sessionContent.slice(0, 2000)}
 
 Reply with ONLY the slug, nothing else. Examples: "vendor-pitch", "api-design", "bug-fix"`;
 
-    // Resolve model from agent config instead of using hardcoded defaults
-    const modelRef = resolveAgentEffectiveModelPrimary(params.cfg, agentId);
-    const parsed = modelRef ? parseModelRef(modelRef, DEFAULT_PROVIDER) : null;
-    const provider = parsed?.provider ?? DEFAULT_PROVIDER;
-    const model = parsed?.model ?? DEFAULT_MODEL;
+    const { provider, model } = resolveDefaultModelForAgent({
+      cfg: params.cfg,
+      agentId,
+    });
+    const timeoutMs = resolveSlugGeneratorTimeoutMs(params.cfg);
 
     const result = await runEmbeddedPiAgent({
       sessionId: `slug-generator-${Date.now()}`,
@@ -61,8 +70,9 @@ Reply with ONLY the slug, nothing else. Examples: "vendor-pitch", "api-design", 
       prompt,
       provider,
       model,
-      timeoutMs: 15_000, // 15 second timeout
+      timeoutMs,
       runId: `slug-gen-${Date.now()}`,
+      cleanupBundleMcpOnRunEnd: true,
     });
 
     // Extract text from payloads
@@ -70,9 +80,7 @@ Reply with ONLY the slug, nothing else. Examples: "vendor-pitch", "api-design", 
       const text = result.payloads[0]?.text;
       if (text) {
         // Clean up the response - extract just the slug
-        const slug = text
-          .trim()
-          .toLowerCase()
+        const slug = normalizeLowercaseStringOrEmpty(text)
           .replace(/[^a-z0-9-]/g, "-")
           .replace(/-+/g, "-")
           .replace(/^-|-$/g, "")

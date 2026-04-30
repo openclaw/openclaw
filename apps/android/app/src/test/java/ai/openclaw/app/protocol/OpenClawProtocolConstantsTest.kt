@@ -87,12 +87,13 @@ class OpenClawProtocolConstantsTest {
   }
 
   @Test
-  fun callLogCommandsUseStableStrings() {
-    assertEquals("callLog.search", OpenClawCallLogCommand.Search.rawValue)
+  fun smsCommandsUseStableStrings() {
+    assertEquals("sms.send", OpenClawSmsCommand.Send.rawValue)
+    assertEquals("sms.search", OpenClawSmsCommand.Search.rawValue)
   }
 
   @Test
-  fun smsCommandsUseStableStrings() {
-    assertEquals("sms.search", OpenClawSmsCommand.Search.rawValue)
+  fun callLogCommandsUseStableStrings() {
+    assertEquals("callLog.search", OpenClawCallLogCommand.Search.rawValue)
   }
 }

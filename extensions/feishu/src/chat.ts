@@ -1,4 +1,5 @@
 import type * as Lark from "@larksuiteoapi/node-sdk";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { OpenClawPluginApi } from "../runtime-api.js";
 import { listEnabledFeishuAccounts } from "./accounts.js";
 import { FeishuChatSchema, type FeishuChatParams } from "./chat-schema.js";
@@ -122,20 +123,17 @@ export async function getFeishuMemberInfo(
 
 export function registerFeishuChatTools(api: OpenClawPluginApi) {
   if (!api.config) {
-    api.logger.debug?.("feishu_chat: No config available, skipping chat tools");
     return;
   }
 
   const accounts = listEnabledFeishuAccounts(api.config);
   if (accounts.length === 0) {
-    api.logger.debug?.("feishu_chat: No Feishu accounts configured, skipping chat tools");
     return;
   }
 
   const firstAccount = accounts[0];
   const toolsCfg = resolveToolsConfig(firstAccount.config.tools);
   if (!toolsCfg.chat) {
-    api.logger.debug?.("feishu_chat: chat tool disabled in config");
     return;
   }
 
@@ -181,12 +179,10 @@ export function registerFeishuChatTools(api: OpenClawPluginApi) {
               return json({ error: `Unknown action: ${String(p.action)}` });
           }
         } catch (err) {
-          return json({ error: err instanceof Error ? err.message : String(err) });
+          return json({ error: formatErrorMessage(err) });
         }
       },
     },
     { name: "feishu_chat" },
   );
-
-  api.logger.info?.("feishu_chat: Registered feishu_chat tool");
 }

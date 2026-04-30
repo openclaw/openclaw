@@ -1,5 +1,5 @@
-import { afterEach, type Mock, describe, expect, it, vi } from "vitest";
-import { withFetchPreconnect } from "../../../test/helpers/extensions/fetch-mock.js";
+import { withFetchPreconnect } from "openclaw/plugin-sdk/test-env";
+import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
 import { probeTelegram, resetTelegramProbeFetcherCacheForTests } from "./probe.js";
 
 const resolveTelegramFetch = vi.hoisted(() => vi.fn());
@@ -173,6 +173,18 @@ describe("probeTelegram retry logic", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1); // Should not retry
   });
 
+  it("can skip webhook info when caller only needs bot identity", async () => {
+    const fetchMock = installFetchMock();
+    mockGetMeSuccess(fetchMock);
+
+    const result = await probeTelegram(token, timeoutMs, { includeWebhookInfo: false });
+
+    expect(result.ok).toBe(true);
+    expect(result.webhook).toBeUndefined();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("https://api.telegram.org/bottest-token/getMe");
+  });
+
   it("uses resolver-scoped Telegram fetch with probe network options", async () => {
     const fetchMock = installFetchMock();
     mockGetMeSuccess(fetchMock);
@@ -192,7 +204,6 @@ describe("probeTelegram retry logic", () => {
         autoSelectFamily: false,
         dnsResultOrder: "ipv4first",
       },
-      apiRoot: undefined,
     });
   });
 

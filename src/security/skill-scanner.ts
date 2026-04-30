@@ -27,6 +27,7 @@ export type SkillScanSummary = {
 };
 
 export type SkillScanOptions = {
+  excludeTestFiles?: boolean;
   includeFiles?: string[];
   maxFiles?: number;
   maxFileBytes?: number;
@@ -51,6 +52,8 @@ const DEFAULT_MAX_SCAN_FILES = 500;
 const DEFAULT_MAX_FILE_BYTES = 1024 * 1024;
 const FILE_SCAN_CACHE_MAX = 5000;
 const DIR_ENTRY_CACHE_MAX = 5000;
+const TEST_DIRECTORY_NAMES = new Set(["__fixtures__", "__mocks__", "__tests__", "test", "tests"]);
+const TEST_FILE_NAME_PATTERN = /\.(?:mock|spec|test)\.[^.]+$/i;
 
 type FileScanCacheEntry = {
   size: number;
@@ -173,6 +176,7 @@ const LINE_RULES: LineRule[] = [
 ];
 
 const STANDARD_PORTS = new Set([80, 443, 8080, 8443, 3000]);
+const NETWORK_SEND_CONTEXT_PATTERN = /\bfetch\s*\(|\bpost\s*\(|\.\s*post\s*\(|http\.request\s*\(/i;
 
 const SOURCE_RULES: SourceRule[] = [
   {
@@ -180,7 +184,7 @@ const SOURCE_RULES: SourceRule[] = [
     severity: "warn",
     message: "File read combined with network send — possible data exfiltration",
     pattern: /readFileSync|readFile/,
-    requiresContext: /\bfetch\b|\bpost\b|http\.request/i,
+    requiresContext: NETWORK_SEND_CONTEXT_PATTERN,
   },
   {
     ruleId: "obfuscated-code",
@@ -200,7 +204,7 @@ const SOURCE_RULES: SourceRule[] = [
     message:
       "Environment variable access combined with network send — possible credential harvesting",
     pattern: /process\.env/,
-    requiresContext: /\bfetch\b|\bpost\b|http\.request/i,
+    requiresContext: NETWORK_SEND_CONTEXT_PATTERN,
   },
 ];
 
@@ -240,7 +244,7 @@ export function scanSource(source: string, filePath: string): SkillScanFinding[]
 
       // Special handling for suspicious-network: check port
       if (rule.ruleId === "suspicious-network") {
-        const port = parseInt(match[1], 10);
+        const port = Number.parseInt(match[1], 10);
         if (STANDARD_PORTS.has(port)) {
           continue;
         }
@@ -314,13 +318,26 @@ export function scanSource(source: string, filePath: string): SkillScanFinding[]
 
 function normalizeScanOptions(opts?: SkillScanOptions): Required<SkillScanOptions> {
   return {
+    excludeTestFiles: opts?.excludeTestFiles ?? false,
     includeFiles: opts?.includeFiles ?? [],
     maxFiles: Math.max(1, opts?.maxFiles ?? DEFAULT_MAX_SCAN_FILES),
     maxFileBytes: Math.max(1, opts?.maxFileBytes ?? DEFAULT_MAX_FILE_BYTES),
   };
 }
 
-async function walkDirWithLimit(dirPath: string, maxFiles: number): Promise<string[]> {
+function isExcludedTestDirectoryName(name: string): boolean {
+  return TEST_DIRECTORY_NAMES.has(name);
+}
+
+function isExcludedTestFileName(name: string): boolean {
+  return TEST_FILE_NAME_PATTERN.test(name);
+}
+
+async function walkDirWithLimit(
+  dirPath: string,
+  maxFiles: number,
+  excludeTestFiles: boolean,
+): Promise<string[]> {
   const files: string[] = [];
   const stack: string[] = [dirPath];
 
@@ -337,6 +354,13 @@ async function walkDirWithLimit(dirPath: string, maxFiles: number): Promise<stri
       }
       // Skip hidden dirs and node_modules
       if (entry.name.startsWith(".") || entry.name === "node_modules") {
+        continue;
+      }
+      if (
+        excludeTestFiles &&
+        ((entry.kind === "dir" && isExcludedTestDirectoryName(entry.name)) ||
+          (entry.kind === "file" && isExcludedTestFileName(entry.name)))
+      ) {
         continue;
       }
 
@@ -439,7 +463,7 @@ async function collectScannableFiles(dirPath: string, opts: Required<SkillScanOp
     return forcedFiles.slice(0, opts.maxFiles);
   }
 
-  const walkedFiles = await walkDirWithLimit(dirPath, opts.maxFiles);
+  const walkedFiles = await walkDirWithLimit(dirPath, opts.maxFiles, opts.excludeTestFiles);
   const seen = new Set(forcedFiles.map((f) => path.resolve(f)));
   const out = [...forcedFiles];
   for (const walkedFile of walkedFiles) {

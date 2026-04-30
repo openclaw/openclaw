@@ -6,8 +6,14 @@ import { resolveAgentConfig } from "../agents/agent-scope.js";
 import { loadAuthProfileStoreForSecretsRuntime } from "../agents/auth-profiles.js";
 import { AUTH_STORE_VERSION } from "../agents/auth-profiles/constants.js";
 import { resolveAuthStorePath } from "../agents/auth-profiles/paths.js";
+import { coercePersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
-import { resolveStateDir, type OpenClawConfig } from "../config/config.js";
+import {
+  replaceConfigFile,
+  resolveStateDir,
+  type ConfigFileSnapshot,
+  type OpenClawConfig,
+} from "../config/config.js";
 import type { ConfigWriteOptions } from "../config/io.js";
 import type { SecretProviderConfig } from "../config/types.secrets.js";
 import { normalizeAgentId } from "../routing/session-key.js";
@@ -48,6 +54,7 @@ type ApplyWrite = {
 
 type ProjectedState = {
   nextConfig: OpenClawConfig;
+  configSnapshot: ConfigFileSnapshot;
   configPath: string;
   configWriteOptions: ConfigWriteOptions;
   authStoreByPath: Map<string, Record<string, unknown>>;
@@ -255,6 +262,7 @@ async function projectPlanState(params: {
     changedFiles,
     enabled: options.scrubEnv,
   });
+  const checkFullRuntime = params.write ? changedFiles.size > 0 : params.allowExecInDryRun;
 
   const validation = await validateProjectedSecretsState({
     env: params.env,
@@ -263,10 +271,12 @@ async function projectPlanState(params: {
     authStoreByPath,
     write: params.write,
     allowExecInDryRun: params.allowExecInDryRun,
+    checkFullRuntime,
   });
 
   return {
     nextConfig,
+    configSnapshot: snapshot,
     configPath,
     configWriteOptions: writeOptions,
     authStoreByPath,
@@ -306,7 +316,7 @@ function applyConfigTargetMutations(params: {
         scrubbedValues,
       });
       if (authStoreChanged) {
-        const agentId = String(target.agentId ?? "").trim();
+        const agentId = (target.agentId ?? "").trim();
         if (!agentId) {
           throw new Error(`Missing required agentId for auth-profiles target ${target.path}.`);
         }
@@ -382,11 +392,13 @@ function scrubAuthStoresForProviderTargets(params: {
     if (!parsed || !isRecord(parsed.profiles)) {
       continue;
     }
-    const nextStore = structuredClone(parsed) as Record<string, unknown> & {
-      profiles: Record<string, unknown>;
-    };
+    const nextStore = structuredClone(parsed);
+    const profiles = nextStore.profiles;
+    if (!isRecord(profiles)) {
+      continue;
+    }
     let mutated = false;
-    for (const profile of iterateAuthProfileCredentials(nextStore.profiles)) {
+    for (const profile of iterateAuthProfileCredentials(profiles)) {
       const provider = normalizeProviderId(profile.provider);
       if (!params.providerTargets.has(provider)) {
         continue;
@@ -424,13 +436,11 @@ function ensureMutableAuthStore(
   store: Record<string, unknown> | undefined,
 ): MutableAuthProfileStore {
   const next: Record<string, unknown> = store ? structuredClone(store) : {};
-  if (!isRecord(next.profiles)) {
-    next.profiles = {};
-  }
+  const profiles = isRecord(next.profiles) ? next.profiles : {};
   if (typeof next.version !== "number" || !Number.isFinite(next.version)) {
     next.version = AUTH_STORE_VERSION;
   }
-  return next as MutableAuthProfileStore;
+  return { ...next, profiles };
 }
 
 function resolveAuthStoreForTarget(params: {
@@ -439,7 +449,7 @@ function resolveAuthStoreForTarget(params: {
   stateDir: string;
   authStoreByPath: Map<string, Record<string, unknown>>;
 }): { path: string; store: MutableAuthProfileStore } {
-  const agentId = String(params.target.agentId ?? "").trim();
+  const agentId = (params.target.agentId ?? "").trim();
   if (!agentId) {
     throw new Error(`Missing required agentId for auth-profiles target ${params.target.path}.`);
   }
@@ -453,10 +463,6 @@ function resolveAuthStoreForTarget(params: {
   const store = ensureMutableAuthStore(isRecord(loaded) ? loaded : undefined);
   params.authStoreByPath.set(authStorePath, store);
   return { path: authStorePath, store };
-}
-
-function asConfigPathRoot(store: MutableAuthProfileStore): OpenClawConfig {
-  return store as unknown as OpenClawConfig;
 }
 
 function resolveAuthStorePathForAgent(params: {
@@ -505,7 +511,7 @@ function ensureAuthProfileContainer(params: {
       isNonEmptyString(params.target.authProfileProvider)
     ) {
       const wroteProvider = setPathCreateStrict(
-        asConfigPathRoot(params.store),
+        params.store,
         [...profilePathSegments, "provider"],
         params.target.authProfileProvider,
       );
@@ -518,13 +524,13 @@ function ensureAuthProfileContainer(params: {
       `Auth profile target ${params.target.path} is missing auth profile type metadata.`,
     );
   }
-  const provider = String(params.target.authProfileProvider ?? "").trim();
+  const provider = (params.target.authProfileProvider ?? "").trim();
   if (!provider) {
     throw new Error(
       `Cannot create auth profile "${profileId}" for ${params.target.path} without authProfileProvider.`,
     );
   }
-  const wroteProfile = setPathCreateStrict(asConfigPathRoot(params.store), profilePathSegments, {
+  const wroteProfile = setPathCreateStrict(params.store, profilePathSegments, {
     type: expectedType,
     provider,
   });
@@ -565,12 +571,8 @@ function applyAuthProfileTargetMutation(params: {
     if (!refPathSegments) {
       throw new Error(`Missing sibling ref path for auth-profiles target ${params.target.path}.`);
     }
-    const wroteRef = setPathCreateStrict(
-      asConfigPathRoot(store),
-      refPathSegments,
-      params.target.ref,
-    );
-    const deletedPlaintext = deletePathStrict(asConfigPathRoot(store), targetPathSegments);
+    const wroteRef = setPathCreateStrict(store, refPathSegments, params.target.ref);
+    const deletedPlaintext = deletePathStrict(store, targetPathSegments);
     changed = changed || wroteRef || deletedPlaintext;
     return changed;
   }
@@ -578,11 +580,7 @@ function applyAuthProfileTargetMutation(params: {
   if (isNonEmptyString(previous)) {
     params.scrubbedValues.add(previous.trim());
   }
-  const wroteRef = setPathCreateStrict(
-    asConfigPathRoot(store),
-    targetPathSegments,
-    params.target.ref,
-  );
+  const wroteRef = setPathCreateStrict(store, targetPathSegments, params.target.ref);
   changed = changed || wroteRef;
   return changed;
 }
@@ -655,6 +653,7 @@ async function validateProjectedSecretsState(params: {
   authStoreByPath: Map<string, Record<string, unknown>>;
   write: boolean;
   allowExecInDryRun: boolean;
+  checkFullRuntime: boolean;
 }): Promise<{ refsChecked: number; skippedExecRefs: number; resolvabilityComplete: boolean }> {
   const cache = {};
   let refsChecked = 0;
@@ -691,17 +690,24 @@ async function validateProjectedSecretsState(params: {
   for (const [authStorePath, store] of params.authStoreByPath.entries()) {
     authStoreLookup.set(resolveUserPath(authStorePath), store);
   }
-  if (params.write || params.allowExecInDryRun) {
+  if (params.checkFullRuntime) {
     await prepareSecretsRuntimeSnapshot({
       config: params.nextConfig,
       env: params.env,
+      // Dry-run preflight only needs auth-store materialization when this plan
+      // actually touches auth-profile state. Write mode keeps the stricter
+      // whole-runtime check.
+      includeAuthStoreRefs: params.write || params.authStoreByPath.size > 0,
       loadAuthStore: (agentDir?: string) => {
         const storePath = resolveUserPath(resolveAuthStorePath(agentDir));
         const override = authStoreLookup.get(storePath);
         if (override) {
-          return structuredClone(override) as unknown as ReturnType<
-            typeof loadAuthProfileStoreForSecretsRuntime
-          >;
+          return (
+            coercePersistedAuthProfileStore(structuredClone(override)) ?? {
+              version: AUTH_STORE_VERSION,
+              profiles: {},
+            }
+          );
         }
         return loadAuthProfileStoreForSecretsRuntime(agentDir);
       },
@@ -824,7 +830,13 @@ export async function runSecretsApply(params: {
   }
 
   try {
-    await io.writeConfigFile(projected.nextConfig, projected.configWriteOptions);
+    await replaceConfigFile({
+      nextConfig: projected.nextConfig,
+      snapshot: projected.configSnapshot,
+      writeOptions: projected.configWriteOptions,
+      io,
+      afterWrite: { mode: "auto" },
+    });
     for (const write of writes) {
       writeTextFileAtomic(write.path, write.content, write.mode);
     }
@@ -853,3 +865,18 @@ export async function runSecretsApply(params: {
     warnings: projected.warnings,
   };
 }
+
+export const __testing = {
+  async projectConfigForTest(params: {
+    plan: SecretsApplyPlan;
+    env?: NodeJS.ProcessEnv;
+  }): Promise<OpenClawConfig> {
+    const projected = await projectPlanState({
+      plan: params.plan,
+      env: params.env ?? process.env,
+      write: false,
+      allowExecInDryRun: false,
+    });
+    return projected.nextConfig;
+  },
+};

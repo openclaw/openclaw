@@ -8,6 +8,9 @@ ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 APP_ROOT="$ROOT_DIR/dist/OpenClaw.app"
 BUILD_ROOT="$ROOT_DIR/apps/macos/.build"
 PRODUCT="OpenClaw"
+MLX_TTS_HELPER_PRODUCT="openclaw-mlx-tts"
+MLX_TTS_HELPER_ROOT="$ROOT_DIR/apps/macos-mlx-tts"
+MLX_TTS_HELPER_BUILD_ROOT="$MLX_TTS_HELPER_ROOT/.build"
 BUNDLE_ID="${BUNDLE_ID:-ai.openclaw.mac.debug}"
 PKG_VERSION="$(cd "$ROOT_DIR" && node -p "require('./package.json').version" 2>/dev/null || echo "0.0.0")"
 BUILD_TS=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
@@ -47,6 +50,14 @@ build_path_for_arch() {
 
 bin_for_arch() {
   echo "$(build_path_for_arch "$1")/$BUILD_CONFIG/$PRODUCT"
+}
+
+helper_build_path_for_arch() {
+  echo "$MLX_TTS_HELPER_BUILD_ROOT/$1"
+}
+
+helper_bin_for_arch() {
+  echo "$(helper_build_path_for_arch "$1")/$BUILD_CONFIG/$MLX_TTS_HELPER_PRODUCT"
 }
 
 sparkle_framework_for_arch() {
@@ -114,8 +125,12 @@ merge_framework_machos() {
   done < <(find "$primary" -type f -print0)
 }
 
-echo "📦 Ensuring deps (pnpm install)"
-(cd "$ROOT_DIR" && pnpm install --no-frozen-lockfile --config.node-linker=hoisted)
+if [[ "${SKIP_PNPM_INSTALL:-0}" != "1" ]]; then
+  echo "📦 Ensuring deps (pnpm install)"
+  (cd "$ROOT_DIR" && pnpm install --no-frozen-lockfile --config.node-linker=hoisted)
+else
+  echo "📦 Skipping pnpm install (SKIP_PNPM_INSTALL=1)"
+fi
 
 if [[ -z "${APP_BUILD:-}" ]]; then
   APP_BUILD="$GIT_BUILD_NUMBER"
@@ -155,6 +170,7 @@ echo "🔨 Building $PRODUCT ($BUILD_CONFIG) [${BUILD_ARCHS[*]}]"
 for arch in "${BUILD_ARCHS[@]}"; do
   BUILD_PATH="$(build_path_for_arch "$arch")"
   swift build -c "$BUILD_CONFIG" --product "$PRODUCT" --build-path "$BUILD_PATH" --arch "$arch" -Xlinker -rpath -Xlinker @executable_path/../Frameworks
+  swift build --package-path "$MLX_TTS_HELPER_ROOT" -c "$BUILD_CONFIG" --product "$MLX_TTS_HELPER_PRODUCT" --build-path "$(helper_build_path_for_arch "$arch")" --arch "$arch"
 done
 
 BIN_PRIMARY="$(bin_for_arch "$PRIMARY_ARCH")"
@@ -200,6 +216,18 @@ chmod +x "$APP_ROOT/Contents/MacOS/OpenClaw"
 # SwiftPM outputs ad-hoc signed binaries; strip the signature before install_name_tool to avoid warnings.
 /usr/bin/codesign --remove-signature "$APP_ROOT/Contents/MacOS/OpenClaw" 2>/dev/null || true
 
+echo "🚚 Copying MLX TTS helper"
+cp "$(helper_bin_for_arch "$PRIMARY_ARCH")" "$APP_ROOT/Contents/MacOS/$MLX_TTS_HELPER_PRODUCT"
+if [[ "${#BUILD_ARCHS[@]}" -gt 1 ]]; then
+  HELPER_BIN_INPUTS=()
+  for arch in "${BUILD_ARCHS[@]}"; do
+    HELPER_BIN_INPUTS+=("$(helper_bin_for_arch "$arch")")
+  done
+  /usr/bin/lipo -create "${HELPER_BIN_INPUTS[@]}" -output "$APP_ROOT/Contents/MacOS/$MLX_TTS_HELPER_PRODUCT"
+fi
+chmod +x "$APP_ROOT/Contents/MacOS/$MLX_TTS_HELPER_PRODUCT"
+/usr/bin/codesign --remove-signature "$APP_ROOT/Contents/MacOS/$MLX_TTS_HELPER_PRODUCT" 2>/dev/null || true
+
 SPARKLE_FRAMEWORK_PRIMARY="$(sparkle_framework_for_arch "$PRIMARY_ARCH")"
 if [ -d "$SPARKLE_FRAMEWORK_PRIMARY" ]; then
   echo "✨ Embedding Sparkle.framework"
@@ -240,6 +268,17 @@ if [ -f "$MODEL_CATALOG_SRC" ]; then
   cp "$MODEL_CATALOG_SRC" "$MODEL_CATALOG_DEST"
 else
   echo "WARN: model catalog missing at $MODEL_CATALOG_SRC (continuing)" >&2
+fi
+
+echo "📦 Copying Control UI assets"
+CONTROL_UI_SRC="$ROOT_DIR/dist/control-ui"
+CONTROL_UI_DEST="$APP_ROOT/Contents/Resources/control-ui"
+if [ -d "$CONTROL_UI_SRC" ] && [ -f "$CONTROL_UI_SRC/index.html" ]; then
+  rm -rf "$CONTROL_UI_DEST"
+  cp -R "$CONTROL_UI_SRC" "$CONTROL_UI_DEST"
+else
+  echo "ERROR: Control UI assets missing at $CONTROL_UI_SRC. Run pnpm ui:build first." >&2
+  exit 1
 fi
 
 echo "📦 Copying OpenClawKit resources"

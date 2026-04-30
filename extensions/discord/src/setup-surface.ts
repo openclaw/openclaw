@@ -1,21 +1,17 @@
 import {
+  type ChannelSetupWizard,
   type OpenClawConfig,
   type WizardPrompter,
-  type ChannelSetupWizard,
 } from "openclaw/plugin-sdk/setup-runtime";
 import { formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
+import { resolveDiscordAccountAllowFrom } from "./accounts.js";
 import { resolveDiscordChannelAllowlist } from "./resolve-channels.js";
 import { resolveDiscordUserAllowlist } from "./resolve-users.js";
 import {
   resolveDefaultDiscordSetupAccountId,
   resolveDiscordSetupAccountConfig,
 } from "./setup-account-state.js";
-import {
-  createDiscordSetupWizardBase,
-  DISCORD_TOKEN_HELP_LINES,
-  parseDiscordAllowFromId,
-  setDiscordGuildChannelAllowlist,
-} from "./setup-core.js";
+import { createDiscordSetupWizardBase, parseDiscordAllowFromId } from "./setup-core.js";
 import {
   promptLegacyChannelAllowFromForAccount,
   resolveEntriesWithOptionalToken,
@@ -54,8 +50,11 @@ async function promptDiscordAllowFrom(params: {
 }): Promise<OpenClawConfig> {
   return await promptLegacyChannelAllowFromForAccount({
     cfg: params.cfg,
+    channel,
     prompter: params.prompter,
     accountId: params.accountId,
+    defaultAccountId: resolveDefaultDiscordSetupAccountId(params.cfg),
+    resolveAccount: (cfg, accountId) => resolveDiscordSetupAccountConfig({ cfg, accountId }),
     noteTitle: "Discord allowlist",
     noteLines: [
       "Allowlist Discord DMs by username (we resolve to user ids).",
@@ -70,11 +69,10 @@ async function promptDiscordAllowFrom(params: {
     placeholder: "@alice, 123456789012345678",
     parseId: parseDiscordAllowFromId,
     invalidWithoutTokenNote: "Bot token missing; use numeric user ids (or mention form) only.",
-    resolveExisting: (accountId, cfg) => {
-      const account = resolveDiscordSetupAccountConfig({ cfg, accountId }).config;
-      return account.allowFrom ?? account.dm?.allowFrom ?? [];
-    },
-    resolveToken: (accountId) => resolveDiscordToken(params.cfg, { accountId }).token,
+    resolveExisting: (account, cfg) =>
+      resolveDiscordAccountAllowFrom({ cfg, accountId: account.accountId }) ?? [],
+    resolveToken: (account) =>
+      resolveDiscordToken(params.cfg, { accountId: account.accountId }).token,
     resolveEntries: async ({ token, entries }) =>
       (
         await resolveDiscordUserAllowlist({
