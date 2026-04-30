@@ -251,21 +251,21 @@ describe("redactSensitiveText", () => {
   });
 
   it("masks HuggingFace tokens (hf_ prefix)", () => {
-    const input = "export HF_TOKEN=hf_ABCDEFghijklmnopqrstuv";
+    const input = "hf_ABCDEFghijklmnopqrstuv";
     const output = redactSensitiveText(input, {
       mode: "tools",
       patterns: defaults,
     });
-    expect(output).toContain("hf_ABC…stuv");
+    expect(output).toBe("hf_ABC…stuv");
   });
 
   it("masks Replicate tokens (r8_ prefix)", () => {
-    const input = "REPLICATE_API_TOKEN=r8_ABCDEFghijklmnopqrstuv";
+    const input = "r8_ABCDEFghijklmnopqrstuv";
     const output = redactSensitiveText(input, {
       mode: "tools",
       patterns: defaults,
     });
-    expect(output).toContain("r8_ABC…stuv");
+    expect(output).toBe("r8_ABC…stuv");
   });
 
   it("skips redaction when mode is off", () => {
