@@ -1,8 +1,6 @@
 export type CursorSdkModule = {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  AuthenticationError: new (...args: any[]) => Error;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  RateLimitError: new (...args: any[]) => Error;
+  AuthenticationError: new (message: string) => Error;
+  RateLimitError: new (message: string) => Error;
 };
 
 export type CursorSdkErrorReason = "auth" | "rate_limit" | "billing" | "timeout" | "unclassified";

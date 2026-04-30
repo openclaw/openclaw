@@ -93,8 +93,7 @@ export async function runCursorSdkAttempt(
           local: { cwd: config.local?.cwd ?? params.workspaceDir },
         };
 
-  // eslint-disable-next-line @typescript-eslint/await-thenable -- Agent.create returns a Promise via dynamic import
-  const agent = await Agent.create(agentOptions);
+  const agent = await Promise.resolve(Agent.create(agentOptions));
 
   try {
     const run = await agent.send(params.prompt);
