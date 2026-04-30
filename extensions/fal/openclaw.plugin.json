@@ -1,5 +1,8 @@
 {
   "id": "fal",
+  "activation": {
+    "onStartup": false
+  },
   "enabledByDefault": true,
   "providers": ["fal"],
   "providerAuthEnvVars": {
@@ -13,7 +16,7 @@
       "choiceLabel": "fal API key",
       "groupId": "fal",
       "groupLabel": "fal",
-      "groupHint": "Image generation",
+      "groupHint": "Image and video generation",
       "onboardingScopes": ["image-generation"],
       "optionKey": "falApiKey",
       "cliFlag": "--fal-api-key",

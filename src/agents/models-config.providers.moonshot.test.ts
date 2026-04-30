@@ -1,20 +1,39 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { ModelProviderConfig } from "../config/types.models.js";
 import { applyProviderNativeStreamingUsageCompat } from "../plugin-sdk/provider-catalog-shared.js";
-import { resetProviderRuntimeHookCacheForTest } from "../plugins/provider-runtime.js";
+import { resolveMissingProviderApiKey } from "./models-config.providers.secret-helpers.js";
 
-async function loadSecretsModule() {
-  vi.doUnmock("../plugins/manifest-registry.js");
-  vi.doUnmock("../secrets/provider-env-vars.js");
-  vi.resetModules();
-  return import("./models-config.providers.secrets.js");
-}
+vi.mock("../plugins/setup-registry.js", () => ({
+  resolvePluginSetupProvider: () => undefined,
+}));
 
-beforeEach(() => {
-  resetProviderRuntimeHookCacheForTest();
-  vi.doUnmock("../plugins/manifest-registry.js");
-  vi.doUnmock("../secrets/provider-env-vars.js");
+vi.mock("../infra/shell-env.js", () => ({
+  getShellEnvAppliedKeys: () => [],
+}));
+
+vi.mock("./provider-auth-aliases.js", () => ({
+  resolveProviderAuthAliasMap: () => ({}),
+  resolveProviderIdForAuth: (provider: string) => provider.trim().toLowerCase(),
+}));
+
+vi.mock("./model-auth-env-vars.js", () => {
+  const candidates = {
+    moonshot: ["MOONSHOT_API_KEY"],
+  } as const;
+  return {
+    PROVIDER_ENV_API_KEY_CANDIDATES: candidates,
+    listKnownProviderEnvApiKeyNames: () => [...new Set(Object.values(candidates).flat())],
+    resolveProviderEnvApiKeyCandidates: () => candidates,
+    resolveProviderEnvAuthEvidence: () => ({}),
+  };
 });
+
+vi.mock("../plugin-sdk/provider-http.js", () => ({
+  resolveProviderRequestCapabilities: (params: { provider: string; baseUrl?: string }) => ({
+    supportsNativeStreamingUsageCompat:
+      params.provider === "moonshot" && params.baseUrl === "https://api.moonshot.cn/v1",
+  }),
+}));
 
 const MOONSHOT_BASE_URL = "https://api.moonshot.ai/v1";
 const MOONSHOT_CN_BASE_URL = "https://api.moonshot.cn/v1";
@@ -25,8 +44,8 @@ function buildMoonshotProvider(): ModelProviderConfig {
     api: "openai-completions",
     models: [
       {
-        id: "kimi-k2.5",
-        name: "Kimi K2.5",
+        id: "kimi-k2.6",
+        name: "Kimi K2.6",
         reasoning: false,
         input: ["text", "image"],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -70,8 +89,7 @@ describe("moonshot implicit provider (#33637)", () => {
     ).toBeUndefined();
   });
 
-  it("includes moonshot when MOONSHOT_API_KEY is configured", async () => {
-    const { resolveMissingProviderApiKey } = await loadSecretsModule();
+  it("includes moonshot when MOONSHOT_API_KEY is configured", () => {
     const provider = resolveMissingProviderApiKey({
       providerKey: "moonshot",
       provider: buildMoonshotProvider(),

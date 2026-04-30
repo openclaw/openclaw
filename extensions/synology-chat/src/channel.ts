@@ -20,7 +20,6 @@ import {
 } from "openclaw/plugin-sdk/channel-policy";
 import { attachChannelToResult } from "openclaw/plugin-sdk/channel-send-result";
 import { createEmptyChannelDirectoryAdapter } from "openclaw/plugin-sdk/directory-runtime";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { listAccountIds, resolveAccount } from "./accounts.js";
 import { synologyChatApprovalAuth } from "./approval-auth.js";
 import { sendMessage, sendFileUrl } from "./client.js";
@@ -35,6 +34,10 @@ import { synologyChatSetupAdapter, synologyChatSetupWizard } from "./setup-surfa
 import type { ResolvedSynologyChatAccount } from "./types.js";
 
 const CHANNEL_ID = "synology-chat";
+
+function normalizeLowercaseStringOrEmpty(value: unknown): string {
+  return typeof value === "string" ? value.trim().toLowerCase() : "";
+}
 
 const resolveSynologyChatDmPolicy = createScopedDmSecurityResolver<ResolvedSynologyChatAccount>({
   channelKey: CHANNEL_ID,
@@ -113,11 +116,16 @@ const collectSynologyChatSecurityWarnings =
       "- Synology Chat: dangerouslyAllowInheritedWebhookPath=true opts a named account into a shared inherited webhook path. Prefer an explicit per-account webhookPath.",
     (account) =>
       account.dmPolicy === "open" &&
+      account.allowedUserIds.length === 0 &&
+      '- Synology Chat: dmPolicy="open" with empty allowedUserIds blocks all senders. Add allowedUserIds=["*"] for public DMs or set explicit user IDs.',
+    (account) =>
+      account.dmPolicy === "open" &&
+      account.allowedUserIds.includes("*") &&
       '- Synology Chat: dmPolicy="open" allows any user to message the bot. Consider "allowlist" for production use.',
     (account) =>
       account.dmPolicy === "allowlist" &&
       account.allowedUserIds.length === 0 &&
-      '- Synology Chat: dmPolicy="allowlist" with empty allowedUserIds blocks all senders. Add users or set dmPolicy="open".',
+      '- Synology Chat: dmPolicy="allowlist" with empty allowedUserIds blocks all senders. Add users or set dmPolicy="open" with allowedUserIds=["*"].',
   );
 
 type SynologyChatOutboundResult = {

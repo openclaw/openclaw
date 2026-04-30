@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadBundledPluginPublicArtifactModuleSync } from "../plugins/public-surface-loader.js";
 import type { ResolverContext, SecretDefaults } from "./runtime-shared.js";
 import type { SecretTargetRegistryEntry } from "./target-registry-types.js";
@@ -30,6 +30,7 @@ function loadBundledChannelPublicArtifact(
       return loadBundledPluginPublicArtifactModuleSync<BundledChannelContractApi>({
         dirName: channelId,
         artifactBasename,
+        installRuntimeDeps: false,
       });
     } catch (error) {
       if (

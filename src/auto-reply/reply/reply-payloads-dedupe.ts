@@ -1,7 +1,13 @@
 import { isMessagingToolDuplicate } from "../../agents/pi-embedded-helpers.js";
-import type { MessagingToolSend } from "../../agents/pi-embedded-runner.js";
-import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
+import type { MessagingToolSend } from "../../agents/pi-embedded-messaging.types.js";
+import { getChannelPlugin } from "../../channels/plugins/index.js";
+import { normalizeAnyChannelId } from "../../channels/registry.js";
 import { normalizeTargetForProvider } from "../../infra/outbound/target-normalization.js";
+import {
+  channelRouteTargetsMatchExact,
+  stringifyRouteThreadId,
+  type ChannelRouteTargetInput,
+} from "../../plugin-sdk/channel-route.js";
 import { normalizeOptionalAccountId } from "../../routing/account-id.js";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -17,7 +23,12 @@ export function filterMessagingToolDuplicates(params: {
   if (sentTexts.length === 0) {
     return payloads;
   }
-  return payloads.filter((payload) => !isMessagingToolDuplicate(payload.text ?? "", sentTexts));
+  return payloads.filter((payload) => {
+    if (payload.mediaUrl || payload.mediaUrls?.length) {
+      return true;
+    }
+    return !isMessagingToolDuplicate(payload.text ?? "", sentTexts);
+  });
 }
 
 export function filterMessagingToolMediaDuplicates(params: {
@@ -56,11 +67,10 @@ export function filterMessagingToolMediaDuplicates(params: {
     if (!stripSingle && (!mediaUrls || filteredUrls?.length === mediaUrls.length)) {
       return payload;
     }
-    return {
-      ...payload,
+    return Object.assign({}, payload, {
       mediaUrl: stripSingle ? undefined : mediaUrl,
       mediaUrls: filteredUrls?.length ? filteredUrls : undefined,
-    };
+    });
   });
 }
 
@@ -70,7 +80,7 @@ function normalizeProviderForComparison(value?: string): string | undefined {
     return undefined;
   }
   const lowered = normalizeLowercaseStringOrEmpty(trimmed);
-  const normalizedChannel = normalizeChannelId(trimmed);
+  const normalizedChannel = normalizeAnyChannelId(trimmed);
   if (normalizedChannel) {
     return normalizedChannel;
   }
@@ -78,14 +88,11 @@ function normalizeProviderForComparison(value?: string): string | undefined {
 }
 
 function normalizeThreadIdForComparison(value?: string): string | undefined {
-  const trimmed = normalizeOptionalString(value);
-  if (!trimmed) {
+  const normalized = stringifyRouteThreadId(value);
+  if (!normalized) {
     return undefined;
   }
-  if (/^-?\d+$/.test(trimmed)) {
-    return String(Number.parseInt(trimmed, 10));
-  }
-  return normalizeLowercaseStringOrEmpty(trimmed);
+  return /^-?\d+$/.test(normalized) ? String(Number.parseInt(normalized, 10)) : normalized;
 }
 
 function resolveTargetProviderForComparison(params: {
@@ -97,6 +104,29 @@ function resolveTargetProviderForComparison(params: {
     return params.currentProvider;
   }
   return targetProvider;
+}
+
+type SuppressionRouteTarget = ChannelRouteTargetInput & {
+  channel: string;
+  to: string;
+};
+
+function normalizeRouteTargetForSuppression(params: {
+  provider: string;
+  rawTarget?: string;
+  accountId?: string;
+  threadId?: string;
+}): SuppressionRouteTarget | null {
+  const to = normalizeTargetForProvider(params.provider, params.rawTarget);
+  if (!to) {
+    return null;
+  }
+  return {
+    channel: params.provider,
+    to,
+    ...(params.accountId ? { accountId: params.accountId } : {}),
+    ...(params.threadId != null ? { threadId: params.threadId } : {}),
+  };
 }
 
 function targetsMatchForSuppression(params: {
@@ -126,10 +156,7 @@ export function shouldSuppressMessagingToolReplies(params: {
   if (!provider) {
     return false;
   }
-  const originTarget = normalizeTargetForProvider(provider, params.originatingTo);
-  if (!originTarget) {
-    return false;
-  }
+  const originRawTarget = normalizeOptionalString(params.originatingTo);
   const originAccount = normalizeOptionalAccountId(params.accountId);
   const sentTargets = params.messagingToolSentTargets ?? [];
   if (sentTargets.length === 0) {
@@ -143,18 +170,36 @@ export function shouldSuppressMessagingToolReplies(params: {
     if (targetProvider !== provider) {
       return false;
     }
-    const targetKey = normalizeTargetForProvider(targetProvider, target.to);
-    if (!targetKey) {
-      return false;
-    }
     const targetAccount = normalizeOptionalAccountId(target.accountId);
     if (originAccount && targetAccount && originAccount !== targetAccount) {
       return false;
     }
+    const targetRaw = normalizeOptionalString(target.to);
+    const routeAccount = originAccount ?? targetAccount;
+    const originRoute = normalizeRouteTargetForSuppression({
+      provider,
+      rawTarget: originRawTarget,
+      accountId: routeAccount,
+    });
+    if (!originRoute) {
+      return false;
+    }
+    const targetRoute = normalizeRouteTargetForSuppression({
+      provider: targetProvider,
+      rawTarget: targetRaw,
+      accountId: routeAccount,
+      threadId: target.threadId,
+    });
+    if (!targetRoute) {
+      return false;
+    }
+    if (channelRouteTargetsMatchExact({ left: originRoute, right: targetRoute })) {
+      return true;
+    }
     return targetsMatchForSuppression({
       provider,
-      originTarget,
-      targetKey,
+      originTarget: originRoute.to,
+      targetKey: targetRoute.to,
       targetThreadId: target.threadId,
     });
   });

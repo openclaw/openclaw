@@ -1,8 +1,8 @@
 import { resolveChannelApprovalCapability } from "../channels/plugins/approvals.js";
-import type { ChannelPlugin } from "../channels/plugins/types.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { ChannelRuntimeSurface } from "../channels/plugins/channel-runtime-surface.types.js";
+import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import type { PluginRuntime } from "../plugins/runtime/types.js";
 import {
   CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY,
   createChannelApprovalHandlerFromCapability,
@@ -12,6 +12,7 @@ import {
   getChannelRuntimeContext,
   watchChannelRuntimeContexts,
 } from "./channel-runtime-context.js";
+import { isExecApprovalChannelRuntimeTerminalStartError } from "./exec-approval-channel-runtime.js";
 
 type ApprovalBootstrapHandler = ChannelApprovalHandler;
 const APPROVAL_HANDLER_BOOTSTRAP_RETRY_MS = 1_000;
@@ -20,7 +21,7 @@ export async function startChannelApprovalHandlerBootstrap(params: {
   plugin: Pick<ChannelPlugin, "id" | "meta" | "approvalCapability">;
   cfg: OpenClawConfig;
   accountId: string;
-  channelRuntime?: PluginRuntime["channel"];
+  channelRuntime?: ChannelRuntimeSurface;
   logger?: ReturnType<typeof createSubsystemLogger>;
 }): Promise<() => Promise<void>> {
   const capability = resolveChannelApprovalCapability(params.plugin);
@@ -117,6 +118,10 @@ export async function startChannelApprovalHandlerBootstrap(params: {
       await startHandlerForContext(context, generation);
     } catch (error) {
       if (generation === activeGeneration) {
+        if (isExecApprovalChannelRuntimeTerminalStartError(error)) {
+          logger.error(`native approval handler disabled: ${String(error)}`);
+          return;
+        }
         logger.error(`failed to start native approval handler: ${String(error)}`);
         scheduleRetryForContext(context, generation);
       }
@@ -155,7 +160,11 @@ export async function startChannelApprovalHandlerBootstrap(params: {
   if (existingContext !== undefined) {
     clearRetryTimer();
     invalidateActiveHandler();
-    await startHandlerForContext(existingContext, activeGeneration);
+    const generation = activeGeneration;
+    spawn(
+      "failed to start native approval handler",
+      startHandlerForRegisteredContext(existingContext, generation),
+    );
   }
 
   return async () => {

@@ -1,23 +1,13 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import {
-  renderBundledRootHelpText,
-  writeCliStartupMetadata,
-} from "../../scripts/write-cli-startup-metadata.ts";
+import { writeCliStartupMetadata } from "../../scripts/write-cli-startup-metadata.ts";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 describe("write-cli-startup-metadata", () => {
   const { createTempDir } = createScriptTestHarness();
 
-  it("captures bundled root help text from the CLI program", async () => {
-    const rootHelpText = await renderBundledRootHelpText();
-
-    expect(rootHelpText).toContain("Usage:");
-    expect(rootHelpText).toContain("openclaw");
-  });
-
-  it("writes startup metadata with populated root help text", async () => {
+  it("writes startup metadata with populated root help text when dist falls back to source rendering", async () => {
     const tempRoot = createTempDir("openclaw-startup-metadata-");
     const distDir = path.join(tempRoot, "dist");
     const extensionsDir = path.join(tempRoot, "extensions");
@@ -42,10 +32,13 @@ describe("write-cli-startup-metadata", () => {
     await writeCliStartupMetadata({ distDir, outputPath, extensionsDir });
 
     const written = JSON.parse(readFileSync(outputPath, "utf8")) as {
+      browserHelpText: string;
       channelOptions: string[];
       rootHelpText: string;
     };
     expect(written.channelOptions).toContain("matrix");
+    expect(written.browserHelpText).toContain("Usage:");
+    expect(written.browserHelpText).toContain("openclaw browser");
     expect(written.rootHelpText).toContain("Usage:");
     expect(written.rootHelpText).toContain("openclaw");
   });

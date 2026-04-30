@@ -2,19 +2,26 @@ import {
   type ChannelDoctorAdapter,
   type ChannelDoctorEmptyAllowlistAccountContext,
 } from "openclaw/plugin-sdk/channel-contract";
-import { type OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { inspectTelegramAccount } from "./account-inspect.js";
 import { listTelegramAccountIds, resolveTelegramAccount } from "./accounts.js";
-import { isNumericTelegramUserId, normalizeTelegramAllowFromEntry } from "./allow-from.js";
+import { isNumericTelegramSenderUserId, normalizeTelegramAllowFromEntry } from "./allow-from.js";
 import { lookupTelegramChatId } from "./api-fetch.js";
+import { hasTelegramBotEndpointApiRoot, normalizeTelegramApiRoot } from "./api-root.js";
 import {
   legacyConfigRules as TELEGRAM_LEGACY_CONFIG_RULES,
   normalizeCompatibilityConfig as normalizeTelegramCompatibilityConfig,
 } from "./doctor-contract.js";
 
-type TelegramAllowFromUsernameHit = { path: string; entry: string };
+type TelegramAllowFromInvalidHit = { path: string; entry: string };
+type TelegramApiRootBotEndpointHit = {
+  path: string;
+  pathSegments: string[];
+  value: string;
+  normalized: string;
+};
 type DoctorAllowFromList = Array<string | number>;
 type DoctorAccountRecord = Record<string, unknown>;
 
@@ -40,13 +47,21 @@ function hasAllowFromEntries(values?: DoctorAllowFromList): boolean {
 
 function collectTelegramAccountScopes(
   cfg: OpenClawConfig,
-): Array<{ prefix: string; account: Record<string, unknown> }> {
-  const scopes: Array<{ prefix: string; account: Record<string, unknown> }> = [];
+): Array<{ prefix: string; pathSegments: string[]; account: Record<string, unknown> }> {
+  const scopes: Array<{
+    prefix: string;
+    pathSegments: string[];
+    account: Record<string, unknown>;
+  }> = [];
   const telegram = asObjectRecord((cfg.channels as Record<string, unknown> | undefined)?.telegram);
   if (!telegram) {
     return scopes;
   }
-  scopes.push({ prefix: "channels.telegram", account: telegram });
+  scopes.push({
+    prefix: "channels.telegram",
+    pathSegments: ["channels", "telegram"],
+    account: telegram,
+  });
   const accounts = asObjectRecord(telegram.accounts);
   if (!accounts) {
     return scopes;
@@ -54,7 +69,11 @@ function collectTelegramAccountScopes(
   for (const key of Object.keys(accounts)) {
     const account = asObjectRecord(accounts[key]);
     if (account) {
-      scopes.push({ prefix: `channels.telegram.accounts.${key}`, account });
+      scopes.push({
+        prefix: `channels.telegram.accounts.${key}`,
+        pathSegments: ["channels", "telegram", "accounts", key],
+        account,
+      });
     }
   }
   return scopes;
@@ -101,17 +120,17 @@ function collectTelegramAllowFromLists(
   return refs;
 }
 
-export function scanTelegramAllowFromUsernameEntries(
+export function scanTelegramInvalidAllowFromEntries(
   cfg: OpenClawConfig,
-): TelegramAllowFromUsernameHit[] {
-  const hits: TelegramAllowFromUsernameHit[] = [];
+): TelegramAllowFromInvalidHit[] {
+  const hits: TelegramAllowFromInvalidHit[] = [];
   const scanList = (pathLabel: string, list: unknown) => {
     if (!Array.isArray(list)) {
       return;
     }
     for (const entry of list) {
       const normalized = normalizeTelegramAllowFromEntry(entry);
-      if (!normalized || normalized === "*" || isNumericTelegramUserId(normalized)) {
+      if (!normalized || normalized === "*" || isNumericTelegramSenderUserId(normalized)) {
         continue;
       }
       hits.push({ path: pathLabel, entry: normalizeOptionalString(String(entry)) ?? "" });
@@ -126,8 +145,8 @@ export function scanTelegramAllowFromUsernameEntries(
   return hits;
 }
 
-export function collectTelegramAllowFromUsernameWarnings(params: {
-  hits: TelegramAllowFromUsernameHit[];
+export function collectTelegramInvalidAllowFromWarnings(params: {
+  hits: TelegramAllowFromInvalidHit[];
   doctorFixCommand: string;
 }): string[] {
   if (params.hits.length === 0) {
@@ -135,18 +154,112 @@ export function collectTelegramAllowFromUsernameWarnings(params: {
   }
   const sampleEntry = sanitizeForLog(params.hits[0]?.entry ?? "@");
   return [
-    `- Telegram allowFrom contains ${params.hits.length} non-numeric entries (e.g. ${sampleEntry}); Telegram authorization requires numeric sender IDs.`,
-    `- Run "${params.doctorFixCommand}" to auto-resolve @username entries to numeric IDs (requires a Telegram bot token).`,
+    `- Telegram allowFrom contains ${params.hits.length} invalid sender entries (e.g. ${sampleEntry}); Telegram authorization requires positive numeric sender user IDs.`,
+    `- Run "${params.doctorFixCommand}" to auto-resolve @username entries to numeric IDs (requires a Telegram bot token). Move negative chat IDs under channels.telegram.groups instead of allowFrom.`,
   ];
+}
+
+export function scanTelegramBotEndpointApiRoots(
+  cfg: OpenClawConfig,
+): TelegramApiRootBotEndpointHit[] {
+  const hits: TelegramApiRootBotEndpointHit[] = [];
+  for (const scope of collectTelegramAccountScopes(cfg)) {
+    const value = scope.account.apiRoot;
+    if (typeof value !== "string" || !hasTelegramBotEndpointApiRoot(value)) {
+      continue;
+    }
+    hits.push({
+      path: `${scope.prefix}.apiRoot`,
+      pathSegments: [...scope.pathSegments, "apiRoot"],
+      value,
+      normalized: normalizeTelegramApiRoot(value),
+    });
+  }
+  return hits;
+}
+
+export function collectTelegramApiRootWarnings(params: {
+  hits: TelegramApiRootBotEndpointHit[];
+  doctorFixCommand: string;
+}): string[] {
+  if (params.hits.length === 0) {
+    return [];
+  }
+  const samplePath = sanitizeForLog(params.hits[0]?.path ?? "channels.telegram.apiRoot");
+  return [
+    `- ${samplePath} points at a full Telegram bot endpoint; apiRoot must be the Bot API root only. This can make startup calls like deleteWebhook, deleteMyCommands, and setMyCommands fail with 404 even when direct curl commands work.`,
+    `- Run "${params.doctorFixCommand}" to remove the trailing /bot<TOKEN> path from Telegram apiRoot.`,
+  ];
+}
+
+export function maybeRepairTelegramApiRoots(cfg: OpenClawConfig): {
+  config: OpenClawConfig;
+  changes: string[];
+} {
+  const hits = scanTelegramBotEndpointApiRoots(cfg);
+  if (hits.length === 0) {
+    return { config: cfg, changes: [] };
+  }
+
+  const next = structuredClone(cfg);
+  const apply = (path: string[], normalized: string) => {
+    let target: Record<string, unknown> | null = next as Record<string, unknown>;
+    for (const segment of path.slice(0, -1)) {
+      target = asObjectRecord(target?.[segment]);
+      if (!target) {
+        return;
+      }
+    }
+    target[path[path.length - 1] ?? "apiRoot"] = normalized;
+  };
+
+  for (const hit of hits) {
+    apply(hit.pathSegments, hit.normalized);
+  }
+  return {
+    config: next,
+    changes: hits.map(
+      (hit) => `- ${sanitizeForLog(hit.path)}: removed trailing /bot<TOKEN> from Telegram apiRoot.`,
+    ),
+  };
+}
+
+async function repairTelegramConfig(params: { cfg: OpenClawConfig }): Promise<{
+  config: OpenClawConfig;
+  changes: string[];
+}> {
+  const apiRootRepair = maybeRepairTelegramApiRoots(params.cfg);
+  const allowFromRepair = await maybeRepairTelegramAllowFromUsernames(apiRootRepair.config);
+  return {
+    config: allowFromRepair.config,
+    changes: [...apiRootRepair.changes, ...allowFromRepair.changes],
+  };
 }
 
 export async function maybeRepairTelegramAllowFromUsernames(cfg: OpenClawConfig): Promise<{
   config: OpenClawConfig;
   changes: string[];
 }> {
-  const hits = scanTelegramAllowFromUsernameEntries(cfg);
+  const hits = scanTelegramInvalidAllowFromEntries(cfg);
   if (hits.length === 0) {
     return { config: cfg, changes: [] };
+  }
+
+  const usernameHits = hits.filter((hit) => {
+    const normalized = normalizeTelegramAllowFromEntry(hit.entry);
+    return normalized.length > 0 && !/\s/.test(normalized) && !normalized.startsWith("-");
+  });
+
+  if (usernameHits.length === 0) {
+    return {
+      config: cfg,
+      changes: hits
+        .slice(0, 5)
+        .map(
+          (hit) =>
+            `- ${sanitizeForLog(hit.path)}: invalid sender entry ${sanitizeForLog(hit.entry)}; allowFrom requires positive numeric Telegram user IDs. Move group chat IDs under channels.telegram.groups.`,
+        ),
+    };
   }
 
   const { getChannelsCommandSecretTargetIds, resolveCommandSecretRefsViaGateway } =
@@ -205,8 +318,8 @@ export async function maybeRepairTelegramAllowFromUsernames(cfg: OpenClawConfig)
     if (!normalized || normalized === "*") {
       return null;
     }
-    if (isNumericTelegramUserId(normalized) || /\s/.test(normalized)) {
-      return isNumericTelegramUserId(normalized) ? normalized : null;
+    if (isNumericTelegramSenderUserId(normalized) || /\s/.test(normalized)) {
+      return isNumericTelegramSenderUserId(normalized) ? normalized : null;
     }
     const username = normalized.startsWith("@") ? normalized : `@${normalized}`;
     for (const accountId of resolverAccountIds) {
@@ -247,7 +360,7 @@ export async function maybeRepairTelegramAllowFromUsernames(cfg: OpenClawConfig)
       if (!normalized) {
         continue;
       }
-      if (normalized === "*" || isNumericTelegramUserId(normalized)) {
+      if (normalized === "*" || isNumericTelegramSenderUserId(normalized)) {
         out.push(normalized);
         continue;
       }
@@ -359,12 +472,17 @@ export function collectTelegramEmptyAllowlistExtraWarnings(
 export const telegramDoctor: ChannelDoctorAdapter = {
   legacyConfigRules: TELEGRAM_LEGACY_CONFIG_RULES,
   normalizeCompatibilityConfig: normalizeTelegramCompatibilityConfig,
-  collectPreviewWarnings: ({ cfg, doctorFixCommand }) =>
-    collectTelegramAllowFromUsernameWarnings({
-      hits: scanTelegramAllowFromUsernameEntries(cfg),
+  collectPreviewWarnings: ({ cfg, doctorFixCommand }) => [
+    ...collectTelegramInvalidAllowFromWarnings({
+      hits: scanTelegramInvalidAllowFromEntries(cfg),
       doctorFixCommand,
     }),
-  repairConfig: async ({ cfg }) => await maybeRepairTelegramAllowFromUsernames(cfg),
+    ...collectTelegramApiRootWarnings({
+      hits: scanTelegramBotEndpointApiRoots(cfg),
+      doctorFixCommand,
+    }),
+  ],
+  repairConfig: async ({ cfg }) => await repairTelegramConfig({ cfg }),
   collectEmptyAllowlistExtraWarnings: collectTelegramEmptyAllowlistExtraWarnings,
   shouldSkipDefaultEmptyGroupAllowlistWarning: (params) => params.channelName === "telegram",
 };

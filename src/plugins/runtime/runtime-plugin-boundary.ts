@@ -1,14 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
-import { createJiti } from "jiti";
-import { loadConfig } from "../../config/config.js";
+import { getRuntimeConfig } from "../../config/config.js";
+import { getCachedPluginJitiLoader, type PluginJitiLoaderCache } from "../jiti-loader-cache.js";
 import { loadPluginManifestRegistry } from "../manifest-registry.js";
-import {
-  buildPluginLoaderJitiOptions,
-  resolvePluginSdkAliasFile,
-  resolvePluginSdkScopedAliasMap,
-  shouldPreferNativeJiti,
-} from "../sdk-alias.js";
+import { shouldPreferNativeJiti } from "../sdk-alias.js";
 
 type PluginRuntimeRecord = {
   origin?: string;
@@ -25,7 +20,7 @@ type CachedPluginBoundaryLoaderParams = {
 
 export function readPluginBoundaryConfigSafely() {
   try {
-    return loadConfig();
+    return getRuntimeConfig();
   } catch {
     return {};
   }
@@ -37,7 +32,6 @@ export function resolvePluginRuntimeRecord(
 ): PluginRuntimeRecord | null {
   const manifestRegistry = loadPluginManifestRegistry({
     config: readPluginBoundaryConfigSafely(),
-    cache: true,
   });
   const record = manifestRegistry.plugins.find((plugin) => plugin.id === pluginId);
   if (!record?.source) {
@@ -59,7 +53,6 @@ export function resolvePluginRuntimeRecordByEntryBaseNames(
 ): PluginRuntimeRecord | null {
   const manifestRegistry = loadPluginManifestRegistry({
     config: readPluginBoundaryConfigSafely(),
-    cache: true,
   });
   const matches = manifestRegistry.plugins.filter((plugin) => {
     if (!plugin?.source) {
@@ -119,50 +112,32 @@ export function resolvePluginRuntimeModulePath(
   return null;
 }
 
-export function getPluginBoundaryJiti(
-  modulePath: string,
-  loaders: Map<boolean, ReturnType<typeof createJiti>>,
-) {
+export function getPluginBoundaryJiti(modulePath: string, loaders: PluginJitiLoaderCache) {
   const tryNative = shouldPreferNativeJiti(modulePath);
-  const cached = loaders.get(tryNative);
-  if (cached) {
-    return cached;
-  }
-  const pluginSdkAlias = resolvePluginSdkAliasFile({
-    srcFile: "root-alias.cjs",
-    distFile: "root-alias.cjs",
+  return getCachedPluginJitiLoader({
+    cache: loaders,
     modulePath,
-  });
-  const aliasMap = {
-    ...(pluginSdkAlias
-      ? {
-          "openclaw/plugin-sdk": pluginSdkAlias,
-          "@openclaw/plugin-sdk": pluginSdkAlias,
-        }
-      : {}),
-    ...resolvePluginSdkScopedAliasMap({ modulePath }),
-  };
-  const loader = createJiti(import.meta.url, {
-    ...buildPluginLoaderJitiOptions(aliasMap),
+    importerUrl: import.meta.url,
+    jitiFilename: import.meta.url,
     tryNative,
   });
-  loaders.set(tryNative, loader);
-  return loader;
 }
 
+// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Dynamic plugin boundary loaders use caller-supplied module types.
 export function loadPluginBoundaryModuleWithJiti<TModule>(
   modulePath: string,
-  loaders: Map<boolean, ReturnType<typeof createJiti>>,
+  loaders: PluginJitiLoaderCache,
 ): TModule {
   return getPluginBoundaryJiti(modulePath, loaders)(modulePath) as TModule;
 }
 
+// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Dynamic plugin boundary loaders use caller-supplied module types.
 export function createCachedPluginBoundaryModuleLoader<TModule>(
   params: CachedPluginBoundaryLoaderParams,
 ): () => TModule | null {
   let cachedModulePath: string | null = null;
   let cachedModule: TModule | null = null;
-  const loaders = new Map<boolean, ReturnType<typeof createJiti>>();
+  const loaders: PluginJitiLoaderCache = new Map();
 
   return () => {
     const missingLabel = params.missingLabel ?? `${params.pluginId} plugin runtime`;

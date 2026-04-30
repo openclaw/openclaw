@@ -1,4 +1,4 @@
-import type { PluginRegistry } from "./registry.js";
+import type { PluginRegistry } from "./registry-types.js";
 
 export function createEmptyPluginRegistry(): PluginRegistry {
   return {
@@ -10,6 +10,7 @@ export function createEmptyPluginRegistry(): PluginRegistry {
     channelSetups: [],
     providers: [],
     cliBackends: [],
+    textTransforms: [],
     speechProviders: [],
     realtimeTranscriptionProviders: [],
     realtimeVoiceProviders: [],
@@ -19,16 +20,29 @@ export function createEmptyPluginRegistry(): PluginRegistry {
     musicGenerationProviders: [],
     webFetchProviders: [],
     webSearchProviders: [],
+    migrationProviders: [],
+    codexAppServerExtensionFactories: [],
+    agentToolResultMiddlewares: [],
     memoryEmbeddingProviders: [],
+    agentHarnesses: [],
     gatewayHandlers: {},
     gatewayMethodScopes: {},
     httpRoutes: [],
     cliRegistrars: [],
     reloads: [],
     nodeHostCommands: [],
+    nodeInvokePolicies: [],
     securityAuditCollectors: [],
     services: [],
+    gatewayDiscoveryServices: [],
     commands: [],
+    sessionExtensions: [],
+    trustedToolPolicies: [],
+    toolMetadata: [],
+    controlUiDescriptors: [],
+    runtimeLifecycles: [],
+    agentEventSubscriptions: [],
+    sessionSchedulerJobs: [],
     conversationBindingResolvedHandlers: [],
     diagnostics: [],
   };

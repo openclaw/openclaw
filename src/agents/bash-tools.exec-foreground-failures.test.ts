@@ -8,7 +8,7 @@ const isWin = process.platform === "win32";
 const defaultShell = isWin
   ? undefined
   : process.env.OPENCLAW_TEST_SHELL || resolveShellFromPath("bash") || process.env.SHELL || "sh";
-const longDelayCmd = isWin ? "Start-Sleep -Milliseconds 200" : "sleep 0.2";
+const longDelayCmd = isWin ? "Start-Sleep -Seconds 5" : "sleep 5";
 
 describe("exec foreground failures", () => {
   let envSnapshot: ReturnType<typeof captureEnv>;
@@ -49,5 +49,33 @@ describe("exec foreground failures", () => {
       aggregated: "",
     });
     expect((result.details as { durationMs?: number }).durationMs).toEqual(expect.any(Number));
+  });
+
+  it("rejects invalid host values before launching a command", async () => {
+    const tool = createExecTool({
+      security: "full",
+      ask: "off",
+      allowBackground: false,
+    });
+    for (const testCase of [
+      {
+        host: "spark-ff13",
+        message: 'Invalid exec host "spark-ff13". Allowed values: auto, sandbox, gateway, node.',
+      },
+      {
+        host: 42,
+        message:
+          "Invalid exec host value type number. Allowed values: auto, sandbox, gateway, node.",
+      },
+    ]) {
+      const malformedArgs = {
+        command: "echo should-not-run",
+        host: testCase.host,
+      } as unknown as Parameters<typeof tool.execute>[1];
+
+      await expect(tool.execute("call-invalid-host", malformedArgs)).rejects.toThrow(
+        testCase.message,
+      );
+    }
   });
 });

@@ -1,6 +1,11 @@
+import {
+  createRequestCaptureJsonFetch,
+  installPinnedHostnameTestHooks,
+} from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
-import { createRequestCaptureJsonFetch } from "../../test/helpers/plugins/media-understanding.js";
 import { describeQwenVideo } from "./media-understanding-provider.js";
+
+installPinnedHostnameTestHooks();
 
 describe("describeQwenVideo", () => {
   it("builds the expected OpenAI-compatible video payload", async () => {

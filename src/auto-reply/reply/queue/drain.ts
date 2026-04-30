@@ -1,3 +1,4 @@
+import { channelRouteCompactKey } from "../../../plugin-sdk/channel-route.js";
 import { defaultRuntime } from "../../../runtime.js";
 import { resolveGlobalMap } from "../../../shared/global-singleton.js";
 import {
@@ -59,6 +60,72 @@ function resolveOriginRoutingMetadata(items: FollowupRun[]): OriginRoutingMetada
   };
 }
 
+// Keep this key aligned with the fields that affect per-message authorization or
+// exec-context propagation in collect-mode batching. Display-only sender fields
+// stay out of the key so profile/name drift does not force conservative splits.
+// Fields like authProfileId, elevatedLevel, ownerNumbers, and config are
+// intentionally excluded because they are session-level or not consulted in
+// per-message authorization checks.
+export function resolveFollowupAuthorizationKey(run: FollowupRun["run"]): string {
+  return JSON.stringify([
+    run.senderId ?? "",
+    run.senderE164 ?? "",
+    run.senderIsOwner === true,
+    run.execOverrides?.host ?? "",
+    run.execOverrides?.security ?? "",
+    run.execOverrides?.ask ?? "",
+    run.execOverrides?.node ?? "",
+    run.bashElevated?.enabled === true,
+    run.bashElevated?.allowed === true,
+    run.bashElevated?.defaultLevel ?? "",
+  ]);
+}
+
+function splitCollectItemsByAuthorization(items: FollowupRun[]): FollowupRun[][] {
+  if (items.length <= 1) {
+    return items.length === 0 ? [] : [items];
+  }
+
+  const groups: FollowupRun[][] = [];
+  let currentGroup: FollowupRun[] = [];
+  let currentKey: string | undefined;
+
+  for (const item of items) {
+    const itemKey = resolveFollowupAuthorizationKey(item.run);
+    if (currentGroup.length === 0 || itemKey === currentKey) {
+      currentGroup.push(item);
+      currentKey = itemKey;
+      continue;
+    }
+
+    groups.push(currentGroup);
+    currentGroup = [item];
+    currentKey = itemKey;
+  }
+
+  if (currentGroup.length > 0) {
+    groups.push(currentGroup);
+  }
+
+  return groups;
+}
+
+function renderCollectItem(item: FollowupRun, idx: number): string {
+  const senderLabel =
+    item.run.senderName ?? item.run.senderUsername ?? item.run.senderId ?? item.run.senderE164;
+  const senderSuffix = senderLabel ? ` (from ${senderLabel})` : "";
+  return `---\nQueued #${idx + 1}${senderSuffix}\n${item.prompt}`.trim();
+}
+
+function collectQueuedImages(items: FollowupRun[]): Pick<FollowupRun, "images" | "imageOrder"> {
+  const images = items.flatMap((item) => item.images ?? []);
+  const imageOrder = items.flatMap((item) => item.imageOrder ?? []);
+  return {
+    ...(images.length > 0 ? { images } : {}),
+    ...(imageOrder.length > 0 ? { imageOrder } : {}),
+  };
+}
+
 function resolveCrossChannelKey(item: FollowupRun): { cross?: true; key?: string } {
   const { originatingChannel: channel, originatingTo: to, originatingAccountId: accountId } = item;
   const threadId = item.originatingThreadId;
@@ -68,11 +135,8 @@ function resolveCrossChannelKey(item: FollowupRun): { cross?: true; key?: string
   if (!isRoutableChannel(channel) || !to) {
     return { cross: true };
   }
-  // Support both number (Telegram topic IDs) and string (Slack thread_ts) thread IDs.
-  const threadKey = threadId != null && threadId !== "" ? String(threadId) : "";
-  return {
-    key: [channel, to, accountId || "", threadKey].join("|"),
-  };
+  const key = channelRouteCompactKey({ channel, to, accountId, threadId });
+  return key ? { key } : { cross: true };
 }
 
 export function scheduleFollowupDrain(
@@ -108,6 +172,18 @@ export function scheduleFollowupDrain(
             run: effectiveRunFollowup,
           });
           if (collectDrainResult === "empty") {
+            const summaryOnlyPrompt = previewQueueSummaryPrompt({ state: queue, noun: "message" });
+            const run = queue.lastRun;
+            if (summaryOnlyPrompt && run) {
+              await effectiveRunFollowup({
+                prompt: summaryOnlyPrompt,
+                run,
+                enqueuedAt: Date.now(),
+                ...collectQueuedImages(queue.items),
+              });
+              clearQueueSummaryState(queue);
+              continue;
+            }
             break;
           }
           if (collectDrainResult === "drained") {
@@ -116,28 +192,47 @@ export function scheduleFollowupDrain(
 
           const items = queue.items.slice();
           const summary = previewQueueSummaryPrompt({ state: queue, noun: "message" });
-          const run = items.at(-1)?.run ?? queue.lastRun;
-          if (!run) {
-            break;
+          const authGroups = splitCollectItemsByAuthorization(items);
+          if (authGroups.length === 0) {
+            const run = queue.lastRun;
+            if (!summary || !run) {
+              break;
+            }
+            await effectiveRunFollowup({
+              prompt: summary,
+              run,
+              enqueuedAt: Date.now(),
+            });
+            clearQueueSummaryState(queue);
+            continue;
           }
 
-          const routing = resolveOriginRoutingMetadata(items);
+          let pendingSummary = summary;
+          for (const groupItems of authGroups) {
+            const run = groupItems.at(-1)?.run ?? queue.lastRun;
+            if (!run) {
+              break;
+            }
 
-          const prompt = buildCollectPrompt({
-            title: "[Queued messages while agent was busy]",
-            items,
-            summary,
-            renderItem: (item, idx) => `---\nQueued #${idx + 1}\n${item.prompt}`.trim(),
-          });
-          await effectiveRunFollowup({
-            prompt,
-            run,
-            enqueuedAt: Date.now(),
-            ...routing,
-          });
-          queue.items.splice(0, items.length);
-          if (summary) {
-            clearQueueSummaryState(queue);
+            const routing = resolveOriginRoutingMetadata(groupItems);
+            const prompt = buildCollectPrompt({
+              title: "[Queued messages while agent was busy]",
+              items: groupItems,
+              summary: pendingSummary,
+              renderItem: renderCollectItem,
+            });
+            await effectiveRunFollowup({
+              prompt,
+              run,
+              enqueuedAt: Date.now(),
+              ...routing,
+              ...collectQueuedImages(groupItems),
+            });
+            queue.items.splice(0, groupItems.length);
+            if (pendingSummary) {
+              clearQueueSummaryState(queue);
+              pendingSummary = undefined;
+            }
           }
           continue;
         }
@@ -158,6 +253,7 @@ export function scheduleFollowupDrain(
                 originatingTo: item.originatingTo,
                 originatingAccountId: item.originatingAccountId,
                 originatingThreadId: item.originatingThreadId,
+                ...collectQueuedImages([item]),
               });
             }))
           ) {

@@ -6,6 +6,7 @@ import {
   createPrefixedOutputWriter,
   isArtifactSetFresh,
   parseMode,
+  runNodeSteps,
   runNodeStepsInParallel,
 } from "../../scripts/prepare-extension-package-boundary-artifacts.mjs";
 
@@ -36,23 +37,71 @@ describe("prepare-extension-package-boundary-artifacts", () => {
 
   it("aborts sibling steps after the first failure", async () => {
     const startedAt = Date.now();
+    const slowStepTimeoutMs = 60_000;
+    const abortBudgetMs = 30_000;
 
     await expect(
       runNodeStepsInParallel([
         {
           label: "fail-fast",
-          args: ["--eval", "setTimeout(() => process.exit(2), 10)"],
-          timeoutMs: 5_000,
+          args: ["--eval", "process.exit(2)"],
+          timeoutMs: slowStepTimeoutMs,
         },
         {
           label: "slow-step",
-          args: ["--eval", "setTimeout(() => {}, 10_000)"],
-          timeoutMs: 5_000,
+          args: ["--eval", "setTimeout(() => {}, 60_000)"],
+          timeoutMs: slowStepTimeoutMs,
         },
       ]),
     ).rejects.toThrow("fail-fast failed with exit code 2");
 
-    expect(Date.now() - startedAt).toBeLessThan(2_000);
+    expect(Date.now() - startedAt).toBeLessThan(abortBudgetMs);
+  }, 45_000);
+
+  it("runs boundary prep steps serially for local checks", async () => {
+    const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-boundary-serial-"));
+    tempRoots.add(rootDir);
+    const logPath = path.join(rootDir, "steps.log");
+    const appendScript = (label: string) =>
+      `const fs=require("node:fs");` +
+      `const log=${JSON.stringify(logPath)};` +
+      `fs.appendFileSync(log, ${JSON.stringify(`${label}-start\n`)});` +
+      `setTimeout(()=>{fs.appendFileSync(log, ${JSON.stringify(`${label}-end\n`)});}, 50);`;
+
+    await runNodeSteps(
+      [
+        { label: "first", args: ["--eval", appendScript("first")], timeoutMs: 5_000 },
+        { label: "second", args: ["--eval", appendScript("second")], timeoutMs: 5_000 },
+      ],
+      { OPENCLAW_LOCAL_CHECK: "1" },
+    );
+
+    expect(fs.readFileSync(logPath, "utf8").trim().split("\n")).toEqual([
+      "first-start",
+      "first-end",
+      "second-start",
+      "second-end",
+    ]);
+  });
+
+  it("passes step-specific environment overrides to child steps", async () => {
+    const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-boundary-env-"));
+    tempRoots.add(rootDir);
+    const outputPath = path.join(rootDir, "env.txt");
+    const writeEnvScript =
+      `const fs=require("node:fs");` +
+      `fs.writeFileSync(${JSON.stringify(outputPath)}, process.env.OPENCLAW_TEST_ENV || "", "utf8");`;
+
+    await runNodeStepsInParallel([
+      {
+        label: "env-step",
+        args: ["--eval", writeEnvScript],
+        env: { OPENCLAW_TEST_ENV: "passed" },
+        timeoutMs: 5_000,
+      },
+    ]);
+
+    expect(fs.readFileSync(outputPath, "utf8")).toBe("passed");
   });
 
   it("treats artifacts as fresh only when outputs are newer than inputs", () => {

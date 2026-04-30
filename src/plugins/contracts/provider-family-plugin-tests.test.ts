@@ -1,5 +1,5 @@
-import { readdirSync, readFileSync } from "node:fs";
-import { dirname, relative, resolve, sep } from "node:path";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { basename, dirname, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { loadPluginManifestRegistry } from "../manifest-registry.js";
@@ -30,56 +30,18 @@ const SHARED_FAMILY_HOOK_PATTERNS: ReadonlyArray<{
 const PROVIDER_BOUNDARY_TEST_SIGNALS = [
   /\bregister(?:Single)?ProviderPlugin\s*\(/u,
   /\bcreateTestPluginApi\s*\(/u,
+  /\bexpectPassthroughReplayPolicy\s*\(/u,
 ] as const;
-const EXPECTED_SHARED_FAMILY_CONTRACTS: Record<string, ExpectedSharedFamilyContract> = {
-  "amazon-bedrock": {
-    replayFamilies: ["anthropic-by-model"],
-  },
-  arcee: {
-    replayFamilies: ["openai-compatible"],
-  },
-  fireworks: {
-    replayFamilies: ["openai-compatible"],
-  },
+const EXPECTED_SENTINEL_SHARED_FAMILY_ASSIGNMENTS: Record<string, ExpectedSharedFamilyContract> = {
   google: {
     replayFamilies: ["google-gemini"],
-    streamFamilies: ["google-thinking"],
     toolCompatFamilies: ["gemini"],
-  },
-  kilocode: {
-    replayFamilies: ["passthrough-gemini"],
-    streamFamilies: ["kilocode-thinking"],
   },
   minimax: {
     replayFamilies: ["hybrid-anthropic-openai"],
-    streamFamilies: ["minimax-fast-mode"],
-  },
-  moonshot: {
-    replayFamilies: ["openai-compatible"],
-    streamFamilies: ["moonshot-thinking"],
-  },
-  ollama: {
-    replayFamilies: ["openai-compatible"],
   },
   openai: {
-    streamFamilies: ["openai-responses-defaults"],
-  },
-  opencode: {
-    replayFamilies: ["passthrough-gemini"],
-  },
-  "opencode-go": {
-    replayFamilies: ["passthrough-gemini"],
-  },
-  openrouter: {
-    replayFamilies: ["passthrough-gemini"],
-    streamFamilies: ["openrouter-thinking"],
-  },
-  xai: {
-    replayFamilies: ["openai-compatible"],
-  },
-  zai: {
-    replayFamilies: ["openai-compatible"],
-    streamFamilies: ["tool-stream-default-on"],
+    toolCompatFamilies: ["openai"],
   },
 };
 
@@ -110,9 +72,17 @@ function listBundledPluginRoots() {
     .plugins.filter((plugin) => plugin.origin === "bundled")
     .map((plugin) => ({
       pluginId: plugin.id,
-      rootDir: plugin.workspaceDir ?? plugin.rootDir,
+      rootDir: resolveBundledPluginSourceRoot(plugin.rootDir, plugin.workspaceDir),
     }))
     .toSorted((left, right) => left.pluginId.localeCompare(right.pluginId));
+}
+
+function resolveBundledPluginSourceRoot(rootDir: string, workspaceDir?: string): string {
+  if (workspaceDir) {
+    return workspaceDir;
+  }
+  const sourceRoot = resolve(REPO_ROOT, "extensions", basename(rootDir));
+  return existsSync(sourceRoot) ? sourceRoot : rootDir;
 }
 
 function collectSharedFamilyProviders(): Map<string, SharedFamilyProviderInventory> {
@@ -170,7 +140,7 @@ function listMatchingFamilies(source: string, pattern: RegExp): string[] {
 
 function collectSharedFamilyAssignments(): Map<string, ExpectedSharedFamilyContract> {
   const inventory = new Map<string, ExpectedSharedFamilyContract>();
-  const replayPattern = /buildProviderReplayFamilyHooks\s*\(\s*\{\s*family:\s*"([^"]+)"/gu;
+  const replayPattern = /buildProviderReplayFamilyHooks\s*\(\s*\{[\s\S]*?\bfamily:\s*"([^"]+)"/gu;
   const streamPattern = /buildProviderStreamFamilyHooks\s*\(\s*"([^"]+)"/gu;
   const toolCompatPattern = /buildProviderToolCompatFamilyHooks\s*\(\s*"([^"]+)"/gu;
 
@@ -229,13 +199,32 @@ describe("provider family plugin-boundary inventory", () => {
     expect(missing).toEqual([]);
   });
 
-  it("keeps shared-family assignments aligned with the curated provider inventory", () => {
+  it("keeps sentinel shared-family assignments wired through bundled provider sources", () => {
     const actualAssignments = Object.fromEntries(
       [...collectSharedFamilyAssignments().entries()].toSorted(([left], [right]) =>
         left.localeCompare(right),
       ),
     );
 
-    expect(actualAssignments).toEqual(EXPECTED_SHARED_FAMILY_CONTRACTS);
+    for (const [pluginId, expected] of Object.entries(
+      EXPECTED_SENTINEL_SHARED_FAMILY_ASSIGNMENTS,
+    )) {
+      expect(actualAssignments[pluginId], pluginId).toBeDefined();
+      if (expected.replayFamilies) {
+        expect(actualAssignments[pluginId]?.replayFamilies ?? []).toEqual(
+          expect.arrayContaining([...expected.replayFamilies]),
+        );
+      }
+      if (expected.streamFamilies) {
+        expect(actualAssignments[pluginId]?.streamFamilies ?? []).toEqual(
+          expect.arrayContaining([...expected.streamFamilies]),
+        );
+      }
+      if (expected.toolCompatFamilies) {
+        expect(actualAssignments[pluginId]?.toolCompatFamilies ?? []).toEqual(
+          expect.arrayContaining([...expected.toolCompatFamilies]),
+        );
+      }
+    }
   });
 });

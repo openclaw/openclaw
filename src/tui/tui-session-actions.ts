@@ -8,7 +8,7 @@ import {
 } from "../routing/session-key.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import type { ChatLog } from "./components/chat-log.js";
-import type { GatewayAgentsList, GatewayChatClient } from "./gateway-chat.js";
+import type { TuiAgentsList, TuiBackend } from "./tui-backend.js";
 import { asString, extractTextFromMessage, isCommandMessage } from "./tui-formatters.js";
 import type { SessionInfo, TuiOptions, TuiStateAccess } from "./tui-types.js";
 
@@ -17,7 +17,7 @@ type SessionActionBtwPresenter = {
 };
 
 type SessionActionContext = {
-  client: GatewayChatClient;
+  client: TuiBackend;
   chatLog: ChatLog;
   btw: SessionActionBtwPresenter;
   tui: TUI;
@@ -38,6 +38,7 @@ type SessionInfoDefaults = {
   model?: string | null;
   modelProvider?: string | null;
   contextTokens?: number | null;
+  thinkingLevels?: Array<{ id: string; label: string }>;
 };
 
 type SessionInfoEntry = SessionInfo & {
@@ -66,7 +67,7 @@ export function createSessionActions(context: SessionActionContext) {
   let refreshSessionInfoPromise: Promise<void> = Promise.resolve();
   let lastSessionDefaults: SessionInfoDefaults | null = null;
 
-  const applyAgentsResult = (result: GatewayAgentsList) => {
+  const applyAgentsResult = (result: TuiAgentsList) => {
     state.agentDefaultId = normalizeAgentId(result.defaultId);
     state.sessionMainKey = normalizeMainKey(result.mainKey);
     state.sessionScope = result.scope ?? state.sessionScope;
@@ -126,6 +127,8 @@ export function createSessionActions(context: SessionActionContext) {
     return resolveSessionInfoModelSelection({
       currentProvider: state.sessionInfo.modelProvider,
       currentModel: state.sessionInfo.model,
+      defaultProvider: lastSessionDefaults?.modelProvider,
+      defaultModel: lastSessionDefaults?.model,
       entryProvider: entry?.modelProvider,
       entryModel: entry?.model,
       overrideProvider: entry?.providerOverride,
@@ -166,11 +169,17 @@ export function createSessionActions(context: SessionActionContext) {
     if (entry?.thinkingLevel !== undefined) {
       next.thinkingLevel = entry.thinkingLevel;
     }
+    if (entry?.thinkingLevels !== undefined || defaults?.thinkingLevels !== undefined) {
+      next.thinkingLevels = entry?.thinkingLevels ?? defaults?.thinkingLevels;
+    }
     if (entry?.fastMode !== undefined) {
       next.fastMode = entry.fastMode;
     }
     if (entry?.verboseLevel !== undefined) {
       next.verboseLevel = entry.verboseLevel;
+    }
+    if (entry?.traceLevel !== undefined) {
+      next.traceLevel = entry.traceLevel;
     }
     if (entry?.reasoningLevel !== undefined) {
       next.reasoningLevel = entry.reasoningLevel;
@@ -292,11 +301,13 @@ export function createSessionActions(context: SessionActionContext) {
         thinkingLevel?: string;
         fastMode?: boolean;
         verboseLevel?: string;
+        traceLevel?: string;
       };
       state.currentSessionId = typeof record.sessionId === "string" ? record.sessionId : null;
       state.sessionInfo.thinkingLevel = record.thinkingLevel ?? state.sessionInfo.thinkingLevel;
       state.sessionInfo.fastMode = record.fastMode ?? state.sessionInfo.fastMode;
       state.sessionInfo.verboseLevel = record.verboseLevel ?? state.sessionInfo.verboseLevel;
+      state.sessionInfo.traceLevel = record.traceLevel ?? state.sessionInfo.traceLevel;
       const showTools = (state.sessionInfo.verboseLevel ?? "off") !== "off";
       chatLog.clearAll();
       btw.clear();
@@ -363,6 +374,7 @@ export function createSessionActions(context: SessionActionContext) {
     updateAgentFromSessionKey(nextKey);
     state.currentSessionKey = nextKey;
     state.activeChatRunId = null;
+    setActivityStatus("idle");
     state.currentSessionId = null;
     // Session keys can move backwards in updatedAt ordering; drop previous session freshness
     // so refresh data for the newly selected session isn't rejected as stale.

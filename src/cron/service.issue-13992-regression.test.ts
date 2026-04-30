@@ -98,6 +98,22 @@ describe("issue #13992 regression - cron jobs skip execution", () => {
     expect(job.state.nextRunAtMs).toBeGreaterThan(now);
   });
 
+  it("should repair nextRunAtMs=0 during maintenance", () => {
+    const now = Date.now();
+
+    const job = createCronSystemEventJob(now, {
+      state: {
+        nextRunAtMs: 0,
+      },
+    });
+
+    const state = createMockCronStateForJobs({ jobs: [job], nowMs: now });
+    recomputeNextRunsForMaintenance(state);
+
+    expect(typeof job.state.nextRunAtMs).toBe("number");
+    expect(job.state.nextRunAtMs).toBeGreaterThan(now);
+  });
+
   it("should clear nextRunAtMs for disabled jobs during maintenance", () => {
     const now = Date.now();
     const futureTime = now + 3600_000;

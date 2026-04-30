@@ -1,11 +1,14 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  collectTelegramAllowFromUsernameWarnings,
+  collectTelegramInvalidAllowFromWarnings,
+  collectTelegramApiRootWarnings,
   collectTelegramEmptyAllowlistExtraWarnings,
   collectTelegramGroupPolicyWarnings,
+  maybeRepairTelegramApiRoots,
   maybeRepairTelegramAllowFromUsernames,
-  scanTelegramAllowFromUsernameEntries,
+  scanTelegramBotEndpointApiRoots,
+  scanTelegramInvalidAllowFromEntries,
   telegramDoctor,
 } from "./doctor.js";
 
@@ -14,12 +17,9 @@ const listTelegramAccountIdsMock = vi.hoisted(() => vi.fn());
 const inspectTelegramAccountMock = vi.hoisted(() => vi.fn());
 const lookupTelegramChatIdMock = vi.hoisted(() => vi.fn());
 
-vi.mock("openclaw/plugin-sdk/runtime", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/runtime")>(
-    "openclaw/plugin-sdk/runtime",
-  );
+vi.mock("openclaw/plugin-sdk/runtime-secret-resolution", () => {
   return {
-    ...actual,
+    getChannelsCommandSecretTargetIds: () => ["channels"],
     resolveCommandSecretRefsViaGateway: resolveCommandSecretRefsViaGatewayMock,
   };
 });
@@ -155,14 +155,14 @@ describe("telegram doctor", () => {
     ).toEqual(["Moved channels.telegram.streamMode → channels.telegram.streaming.mode (block)."]);
   });
 
-  it("finds username allowFrom entries across scopes", () => {
-    const hits = scanTelegramAllowFromUsernameEntries({
+  it("finds invalid allowFrom entries across scopes", () => {
+    const hits = scanTelegramInvalidAllowFromEntries({
       channels: {
         telegram: {
           allowFrom: ["@top"],
           accounts: {
             work: {
-              allowFrom: ["tg:@work"],
+              allowFrom: ["tg:@work", -1001234567890],
               groups: { "-100123": { topics: { "99": { allowFrom: ["@topic"] } } } },
             },
           },
@@ -173,6 +173,7 @@ describe("telegram doctor", () => {
     expect(hits).toEqual([
       { path: "channels.telegram.allowFrom", entry: "@top" },
       { path: "channels.telegram.accounts.work.allowFrom", entry: "tg:@work" },
+      { path: "channels.telegram.accounts.work.allowFrom", entry: "-1001234567890" },
       {
         path: "channels.telegram.accounts.work.groups.-100123.topics.99.allowFrom",
         entry: "@topic",
@@ -218,6 +219,21 @@ describe("telegram doctor", () => {
 
     expect(result.config.channels?.telegram?.allowFrom).toEqual(["111"]);
     expect(result.changes[0]).toContain("@testuser");
+  });
+
+  it("surfaces negative chat ids as invalid allowFrom sender entries", async () => {
+    const result = await maybeRepairTelegramAllowFromUsernames({
+      channels: {
+        telegram: {
+          allowFrom: [-1001234567890],
+        },
+      },
+    } as unknown as OpenClawConfig);
+
+    expect(result.config.channels?.telegram?.allowFrom).toEqual([-1001234567890]);
+    expect(result.changes).toEqual([
+      "- channels.telegram.allowFrom: invalid sender entry -1001234567890; allowFrom requires positive numeric Telegram user IDs. Move group chat IDs under channels.telegram.groups.",
+    ]);
   });
 
   it("warns when @username entries cannot be resolved because configured tokens are unavailable", async () => {
@@ -266,13 +282,77 @@ describe("telegram doctor", () => {
     ]);
   });
 
-  it("formats username repair warnings", () => {
-    const warnings = collectTelegramAllowFromUsernameWarnings({
+  it("formats invalid allowFrom warnings", () => {
+    const warnings = collectTelegramInvalidAllowFromWarnings({
       hits: [{ path: "channels.telegram.allowFrom", entry: "@top" }],
       doctorFixCommand: "openclaw doctor --fix",
     });
 
-    expect(warnings[0]).toContain("non-numeric entries");
+    expect(warnings[0]).toContain("invalid sender entries");
     expect(warnings[1]).toContain("openclaw doctor --fix");
+  });
+
+  it("warns and repairs Telegram apiRoot values that include the bot endpoint", () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          apiRoot: "https://api.telegram.org/bot123456:ABC",
+          accounts: {
+            work: {
+              apiRoot: "https://proxy.example.test/custom/bot234567:DEF/",
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const hits = scanTelegramBotEndpointApiRoots(cfg);
+    expect(hits.map((hit) => hit.path)).toEqual([
+      "channels.telegram.apiRoot",
+      "channels.telegram.accounts.work.apiRoot",
+    ]);
+    expect(
+      collectTelegramApiRootWarnings({ hits, doctorFixCommand: "openclaw doctor --fix" }),
+    ).toContain(
+      "- channels.telegram.apiRoot points at a full Telegram bot endpoint; apiRoot must be the Bot API root only. This can make startup calls like deleteWebhook, deleteMyCommands, and setMyCommands fail with 404 even when direct curl commands work.",
+    );
+
+    const repaired = maybeRepairTelegramApiRoots(cfg);
+    expect(repaired.config.channels?.telegram?.apiRoot).toBe("https://api.telegram.org");
+    expect(repaired.config.channels?.telegram?.accounts?.work?.apiRoot).toBe(
+      "https://proxy.example.test/custom",
+    );
+    expect(repaired.changes).toEqual([
+      "- channels.telegram.apiRoot: removed trailing /bot<TOKEN> from Telegram apiRoot.",
+      "- channels.telegram.accounts.work.apiRoot: removed trailing /bot<TOKEN> from Telegram apiRoot.",
+    ]);
+  });
+
+  it("wires apiRoot preview warnings and repair through the doctor adapter", async () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          apiRoot: "https://api.telegram.org/bot123456:ABC",
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(
+      await telegramDoctor.collectPreviewWarnings?.({
+        cfg,
+        doctorFixCommand: "openclaw doctor --fix",
+      }),
+    ).toContain(
+      "- channels.telegram.apiRoot points at a full Telegram bot endpoint; apiRoot must be the Bot API root only. This can make startup calls like deleteWebhook, deleteMyCommands, and setMyCommands fail with 404 even when direct curl commands work.",
+    );
+
+    const repaired = await telegramDoctor.repairConfig?.({
+      cfg,
+      doctorFixCommand: "openclaw doctor --fix",
+    });
+    expect(repaired?.config.channels?.telegram?.apiRoot).toBe("https://api.telegram.org");
+    expect(repaired?.changes).toEqual([
+      "- channels.telegram.apiRoot: removed trailing /bot<TOKEN> from Telegram apiRoot.",
+    ]);
   });
 });

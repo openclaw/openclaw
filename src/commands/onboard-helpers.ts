@@ -1,13 +1,12 @@
-import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { inspect } from "node:util";
 import { cancel, isCancel } from "@clack/prompts";
 import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../agents/workspace.js";
-import type { OpenClawConfig } from "../config/config.js";
-import { CONFIG_PATH } from "../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
-import { resolveSessionTranscriptsDirForAgent } from "../config/sessions.js";
+import { resolveConfigPath } from "../config/paths.js";
+import { resolveSessionTranscriptsDirForAgent } from "../config/sessions/paths.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveControlUiLinks } from "../gateway/control-ui-links.js";
 import { normalizeControlUiBasePath } from "../gateway/control-ui-shared.js";
 import { probeGateway } from "../gateway/probe.js";
@@ -22,9 +21,10 @@ import { runCommandWithTimeout } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { stylePromptTitle } from "../terminal/prompt-style.js";
-import { CONFIG_DIR, shortenHomeInString, shortenHomePath, sleep } from "../utils.js";
+import { resolveConfigDir, shortenHomeInString, shortenHomePath, sleep } from "../utils.js";
 import { VERSION } from "../version.js";
 import type { NodeManagerChoice, OnboardMode, ResetScope } from "./onboard-types.js";
+export { randomToken } from "./random-token.js";
 
 export { detectBinary };
 export { detectBrowserOpenSupport, openUrl, openUrlInBackground, resolveBrowserOpenCommand };
@@ -67,10 +67,6 @@ export function summarizeExistingConfig(config: OpenClawConfig): string {
     rows.push(shortenHomeInString(`skills.nodeManager: ${config.skills.install.nodeManager}`));
   }
   return rows.length ? rows.join("\n") : "No key settings detected.";
-}
-
-export function randomToken(): string {
-  return crypto.randomBytes(24).toString("hex");
 }
 
 export function normalizeGatewayTokenInput(value: unknown): string {
@@ -209,11 +205,11 @@ export async function moveToTrash(pathname: string, runtime: RuntimeEnv): Promis
 }
 
 export async function handleReset(scope: ResetScope, workspaceDir: string, runtime: RuntimeEnv) {
-  await moveToTrash(CONFIG_PATH, runtime);
+  await moveToTrash(resolveConfigPath(), runtime);
   if (scope === "config") {
     return;
   }
-  await moveToTrash(path.join(CONFIG_DIR, "credentials"), runtime);
+  await moveToTrash(path.join(resolveConfigDir(), "credentials"), runtime);
   await moveToTrash(resolveSessionTranscriptsDirForAgent(), runtime);
   if (scope === "full") {
     await moveToTrash(workspaceDir, runtime);

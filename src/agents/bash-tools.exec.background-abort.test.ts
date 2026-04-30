@@ -1,12 +1,90 @@
 import { afterEach, beforeAll, beforeEach, expect, test, vi } from "vitest";
 import { killProcessTree } from "../process/kill-tree.js";
 
-const BACKGROUND_HOLD_CMD = 'node -e "setTimeout(() => {}, 5000)"';
-const ABORT_SETTLE_MS = process.platform === "win32" ? 200 : 25;
-const ABORT_WAIT_TIMEOUT_MS = process.platform === "win32" ? 1_500 : 1_200;
-const POLL_INTERVAL_MS = 15;
-const FINISHED_WAIT_TIMEOUT_MS = process.platform === "win32" ? 8_000 : 3_000;
-const BACKGROUND_TIMEOUT_SEC = process.platform === "win32" ? 0.2 : 0.05;
+const supervisorMockState = vi.hoisted(() => ({
+  cancelReasons: [] as Array<"manual-cancel" | "overall-timeout">,
+  spawnInputs: [] as Array<{ timeoutMs?: number }>,
+}));
+
+vi.mock("../process/supervisor/index.js", () => {
+  let counter = 0;
+  return {
+    getProcessSupervisor: () => ({
+      spawn: async (input: { timeoutMs?: number }) => {
+        supervisorMockState.spawnInputs.push(input);
+        const runId = `mock-run-${++counter}`;
+        let settled = false;
+        let settle = (_reason: "manual-cancel" | "overall-timeout", _timedOut: boolean) => {};
+        const waitPromise = new Promise<{
+          reason: "manual-cancel" | "overall-timeout";
+          exitCode: number | null;
+          exitSignal: NodeJS.Signals | number | null;
+          durationMs: number;
+          stdout: string;
+          stderr: string;
+          timedOut: boolean;
+          noOutputTimedOut: boolean;
+        }>((resolve) => {
+          settle = (reason, timedOut) => {
+            if (settled) {
+              return;
+            }
+            settled = true;
+            resolve({
+              reason,
+              exitCode: null,
+              exitSignal: null,
+              durationMs: input.timeoutMs ?? 0,
+              stdout: "",
+              stderr: "",
+              timedOut,
+              noOutputTimedOut: false,
+            });
+          };
+          if (input.timeoutMs !== undefined) {
+            setTimeout(() => settle("overall-timeout", true), 12);
+          }
+        });
+        return {
+          runId,
+          startedAtMs: Date.now(),
+          stdin: undefined,
+          wait: () => waitPromise,
+          cancel: () => {
+            supervisorMockState.cancelReasons.push("manual-cancel");
+            settle("manual-cancel", false);
+          },
+        };
+      },
+      cancel: vi.fn(),
+      cancelScope: vi.fn(),
+      reconcileOrphans: vi.fn(),
+      getRecord: vi.fn(),
+    }),
+  };
+});
+
+vi.mock("../infra/shell-env.js", () => ({
+  getShellPathFromLoginShell: vi.fn(() => null),
+  resolveShellEnvFallbackTimeoutMs: vi.fn(() => 0),
+}));
+
+vi.mock("./bash-tools.exec-host-gateway.js", () => ({
+  processGatewayAllowlist: vi.fn(async () => ({})),
+}));
+
+vi.mock("./bash-tools.exec-host-node.js", () => ({
+  executeNodeHostCommand: vi.fn(async () => {
+    throw new Error("node host not expected in background abort tests");
+  }),
+}));
+
+const BACKGROUND_HOLD_CMD =
+  process.platform === "win32" ? 'node -e "setTimeout(() => {}, 1000)"' : "exec sleep 1";
+const ABORT_SETTLE_MS = process.platform === "win32" ? 200 : 0;
+const POLL_INTERVAL_MS = process.platform === "win32" ? 15 : 5;
+const FINISHED_WAIT_TIMEOUT_MS = process.platform === "win32" ? 8_000 : 1_000;
+const BACKGROUND_TIMEOUT_SEC = process.platform === "win32" ? 0.2 : 0.02;
 const TEST_EXEC_DEFAULTS = {
   host: "gateway" as const,
   security: "full" as const,
@@ -31,6 +109,8 @@ beforeAll(async () => {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  supervisorMockState.cancelReasons.length = 0;
+  supervisorMockState.spawnInputs.length = 0;
 });
 
 afterEach(() => {
@@ -77,21 +157,14 @@ async function expectBackgroundSessionSurvivesAbort(params: {
   const sessionId = (result.details as { sessionId: string }).sessionId;
 
   abortController.abort();
-  const startedAt = Date.now();
-  await expect
-    .poll(
-      () => {
-        const running = getSession(sessionId);
-        const finished = getFinishedSession(sessionId);
-        return Date.now() - startedAt >= ABORT_SETTLE_MS && !finished && running?.exited === false;
-      },
-      { timeout: ABORT_WAIT_TIMEOUT_MS, interval: POLL_INTERVAL_MS },
-    )
-    .toBe(true);
+  if (ABORT_SETTLE_MS > 0) {
+    await new Promise((resolve) => setTimeout(resolve, ABORT_SETTLE_MS));
+  }
 
   const running = getSession(sessionId);
   const finished = getFinishedSession(sessionId);
   try {
+    expect(supervisorMockState.cancelReasons).toEqual([]);
     expect(finished).toBeUndefined();
     expect(running?.exited).toBe(false);
   } finally {
@@ -104,12 +177,18 @@ async function expectBackgroundSessionTimesOut(params: {
   executeParams: ExecToolExecuteParams;
   signal?: AbortSignal;
   abortAfterStart?: boolean;
+  expectedTimeoutSec?: number;
 }) {
   const abortController = new AbortController();
   const signal = params.signal ?? abortController.signal;
   const result = await params.tool.execute("toolcall", params.executeParams, signal);
   expect(result.details.status).toBe("running");
   const sessionId = (result.details as { sessionId: string }).sessionId;
+  if (typeof params.expectedTimeoutSec === "number") {
+    expect(supervisorMockState.spawnInputs.at(-1)?.timeoutMs).toBe(
+      Math.floor(params.expectedTimeoutSec * 1000),
+    );
+  }
 
   if (params.abortAfterStart) {
     abortController.abort();
@@ -150,34 +229,39 @@ test("background exec still times out after tool signal abort", async () => {
       timeout: BACKGROUND_TIMEOUT_SEC,
     },
     abortAfterStart: true,
+    expectedTimeoutSec: BACKGROUND_TIMEOUT_SEC,
   });
 });
 
-test("background exec without explicit timeout ignores default timeout", async () => {
+test("background exec without explicit timeout applies default timeout", async () => {
   const tool = createTestExecTool({
     allowBackground: true,
     backgroundMs: 0,
     timeoutSec: BACKGROUND_TIMEOUT_SEC,
   });
-  const result = await tool.execute("toolcall", { command: BACKGROUND_HOLD_CMD, background: true });
+  await expectBackgroundSessionTimesOut({
+    tool,
+    executeParams: { command: BACKGROUND_HOLD_CMD, background: true },
+    expectedTimeoutSec: BACKGROUND_TIMEOUT_SEC,
+  });
+});
+
+test("background exec with timeout zero bypasses default timeout", async () => {
+  const tool = createTestExecTool({
+    allowBackground: true,
+    backgroundMs: 0,
+    timeoutSec: BACKGROUND_TIMEOUT_SEC,
+  });
+  const result = await tool.execute("toolcall", {
+    command: BACKGROUND_HOLD_CMD,
+    background: true,
+    timeout: 0,
+  });
   expect(result.details.status).toBe("running");
   const sessionId = (result.details as { sessionId: string }).sessionId;
-  const waitMs = Math.max(ABORT_SETTLE_MS + 80, BACKGROUND_TIMEOUT_SEC * 1000 + 80);
-
-  const startedAt = Date.now();
-  await expect
-    .poll(
-      () => {
-        const running = getSession(sessionId);
-        const finished = getFinishedSession(sessionId);
-        return Date.now() - startedAt >= waitMs && !finished && running?.exited === false;
-      },
-      {
-        timeout: waitMs + ABORT_WAIT_TIMEOUT_MS,
-        interval: POLL_INTERVAL_MS,
-      },
-    )
-    .toBe(true);
+  expect(supervisorMockState.spawnInputs.at(-1)?.timeoutMs).toBeUndefined();
+  expect(getFinishedSession(sessionId)).toBeUndefined();
+  expect(getSession(sessionId)?.exited).toBe(false);
 
   cleanupRunningSession(sessionId);
 });
@@ -191,5 +275,22 @@ test("yielded background exec still times out", async () => {
       yieldMs: 5,
       timeout: BACKGROUND_TIMEOUT_SEC,
     },
+    expectedTimeoutSec: BACKGROUND_TIMEOUT_SEC,
+  });
+});
+
+test("yieldMs exec without explicit timeout applies default timeout", async () => {
+  const tool = createTestExecTool({
+    allowBackground: true,
+    backgroundMs: 10,
+    timeoutSec: BACKGROUND_TIMEOUT_SEC,
+  });
+  await expectBackgroundSessionTimesOut({
+    tool,
+    executeParams: {
+      command: BACKGROUND_HOLD_CMD,
+      yieldMs: 5,
+    },
+    expectedTimeoutSec: BACKGROUND_TIMEOUT_SEC,
   });
 });

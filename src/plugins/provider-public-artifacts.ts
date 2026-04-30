@@ -1,12 +1,12 @@
 import { normalizeProviderId } from "../agents/provider-id.js";
-import type { OpenClawConfig } from "../config/config.js";
 import type { ModelProviderConfig } from "../config/types.js";
-import { loadBundledPluginPublicArtifactModuleSync } from "./public-surface-loader.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
   ProviderApplyConfigDefaultsContext,
   ProviderNormalizeConfigContext,
   ProviderResolveConfigApiKeyContext,
-} from "./types.js";
+} from "./provider-config-context.types.js";
+import { loadBundledPluginPublicArtifactModuleSync } from "./public-surface-loader.js";
 
 const PROVIDER_POLICY_ARTIFACT_CANDIDATES = ["provider-policy-api.js"] as const;
 
@@ -17,8 +17,6 @@ export type BundledProviderPolicySurface = {
   ) => OpenClawConfig | null | undefined;
   resolveConfigApiKey?: (ctx: ProviderResolveConfigApiKeyContext) => string | null | undefined;
 };
-
-const bundledProviderPolicySurfaceCache = new Map<string, BundledProviderPolicySurface | null>();
 
 function hasProviderPolicyHook(
   mod: Record<string, unknown>,
@@ -55,10 +53,6 @@ function tryLoadBundledProviderPolicySurface(
   return null;
 }
 
-export function clearBundledProviderPolicySurfaceCache(): void {
-  bundledProviderPolicySurfaceCache.clear();
-}
-
 export function resolveBundledProviderPolicySurface(
   providerId: string,
 ): BundledProviderPolicySurface | null {
@@ -66,16 +60,5 @@ export function resolveBundledProviderPolicySurface(
   if (!normalizedProviderId) {
     return null;
   }
-  if (bundledProviderPolicySurfaceCache.has(normalizedProviderId)) {
-    return bundledProviderPolicySurfaceCache.get(normalizedProviderId) ?? null;
-  }
-
-  const surface = tryLoadBundledProviderPolicySurface(normalizedProviderId);
-  if (surface) {
-    bundledProviderPolicySurfaceCache.set(normalizedProviderId, surface);
-    return surface;
-  }
-
-  bundledProviderPolicySurfaceCache.set(normalizedProviderId, null);
-  return null;
+  return tryLoadBundledProviderPolicySurface(normalizedProviderId);
 }

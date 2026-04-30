@@ -1,30 +1,18 @@
 import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
 import { isDangerousNetworkMode, normalizeNetworkMode } from "../agents/sandbox/network-mode.js";
-/**
- * Synchronous security audit collector functions.
- *
- * These functions analyze config-based security properties without I/O.
- */
-export {
-  collectAttackSurfaceSummaryFindings,
-  collectSmallModelRiskFindings,
-} from "./audit-extra.summary.js";
 import { resolveSandboxToolPolicyForAgent } from "../agents/sandbox/tool-policy.js";
 import type { SandboxToolPolicy } from "../agents/sandbox/types.js";
 import { getBlockedBindReason } from "../agents/sandbox/validate-sandbox-security.js";
 import { isToolAllowedByPolicies } from "../agents/tool-policy-match.js";
 import { resolveToolProfilePolicy } from "../agents/tool-policy.js";
 import { formatCliCommand } from "../cli/command-format.js";
-import type { OpenClawConfig } from "../config/config.js";
-import {
-  resolveAgentModelFallbackValues,
-  resolveAgentModelPrimaryValue,
-} from "../config/model-input.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AgentToolsConfig } from "../config/types.tools.js";
 import { resolveGatewayAuth } from "../gateway/auth.js";
 import { resolveAllowedAgentIds } from "../gateway/hooks-policy.js";
 import {
   DEFAULT_DANGEROUS_NODE_COMMANDS,
+  listDangerousPluginNodeCommands,
   resolveNodeCommandAllowlist,
 } from "../gateway/node-command-policy.js";
 import {
@@ -32,7 +20,14 @@ import {
   normalizeOptionalString,
   normalizeStringifiedOptionalString,
 } from "../shared/string-coerce.js";
+import { collectAuditModelRefs } from "./audit-model-refs.js";
 import { pickSandboxToolPolicy } from "./audit-tool-policy.js";
+
+/**
+ * Synchronous security audit collector functions.
+ *
+ * These functions analyze config-based security properties without I/O.
+ */
 
 export type SecurityAuditFinding = {
   checkId: string;
@@ -60,61 +55,6 @@ function isProbablySyncedPath(p: string): boolean {
 function looksLikeEnvRef(value: string): boolean {
   const v = value.trim();
   return v.startsWith("${") && v.endsWith("}");
-}
-
-type ModelRef = { id: string; source: string };
-
-function addModel(models: ModelRef[], raw: unknown, source: string) {
-  if (typeof raw !== "string") {
-    return;
-  }
-  const id = raw.trim();
-  if (!id) {
-    return;
-  }
-  models.push({ id, source });
-}
-
-function collectModels(cfg: OpenClawConfig): ModelRef[] {
-  const out: ModelRef[] = [];
-  addModel(
-    out,
-    resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model),
-    "agents.defaults.model.primary",
-  );
-  for (const fallback of resolveAgentModelFallbackValues(cfg.agents?.defaults?.model)) {
-    addModel(out, fallback, "agents.defaults.model.fallbacks");
-  }
-  addModel(
-    out,
-    resolveAgentModelPrimaryValue(cfg.agents?.defaults?.imageModel),
-    "agents.defaults.imageModel.primary",
-  );
-  for (const fallback of resolveAgentModelFallbackValues(cfg.agents?.defaults?.imageModel)) {
-    addModel(out, fallback, "agents.defaults.imageModel.fallbacks");
-  }
-
-  const list = Array.isArray(cfg.agents?.list) ? cfg.agents?.list : [];
-  for (const agent of list ?? []) {
-    if (!agent || typeof agent !== "object") {
-      continue;
-    }
-    const id =
-      typeof (agent as { id?: unknown }).id === "string" ? (agent as { id: string }).id : "";
-    const model = (agent as { model?: unknown }).model;
-    if (typeof model === "string") {
-      addModel(out, model, `agents.list.${id}.model`);
-    } else if (model && typeof model === "object") {
-      addModel(out, (model as { primary?: unknown }).primary, `agents.list.${id}.model.primary`);
-      const fallbacks = (model as { fallbacks?: unknown }).fallbacks;
-      if (Array.isArray(fallbacks)) {
-        for (const fallback of fallbacks) {
-          addModel(out, fallback, `agents.list.${id}.model.fallbacks`);
-        }
-      }
-    }
-  }
-  return out;
 }
 
 function isGatewayRemotelyExposed(cfg: OpenClawConfig): boolean {
@@ -191,6 +131,12 @@ function listKnownNodeCommands(cfg: OpenClawConfig): Set<string> {
       if (normalized) {
         out.add(normalized);
       }
+    }
+  }
+  for (const cmd of DEFAULT_DANGEROUS_NODE_COMMANDS) {
+    const normalized = normalizeNodeCommand(cmd);
+    if (normalized) {
+      out.add(normalized);
     }
   }
   return out;
@@ -845,44 +791,8 @@ export function collectSandboxDangerousConfigFindings(cfg: OpenClawConfig): Secu
     }
   }
 
-  const browserExposurePaths: string[] = [];
-  const defaultBrowser = resolveSandboxConfigForAgent(cfg).browser;
-  if (
-    defaultBrowser.enabled &&
-    normalizeOptionalLowercaseString(defaultBrowser.network) === "bridge" &&
-    !defaultBrowser.cdpSourceRange?.trim()
-  ) {
-    browserExposurePaths.push("agents.defaults.sandbox.browser");
-  }
-  for (const entry of agents) {
-    if (!entry || typeof entry !== "object" || typeof entry.id !== "string") {
-      continue;
-    }
-    const browser = resolveSandboxConfigForAgent(cfg, entry.id).browser;
-    if (!browser.enabled) {
-      continue;
-    }
-    if (normalizeOptionalLowercaseString(browser.network) !== "bridge") {
-      continue;
-    }
-    if (browser.cdpSourceRange?.trim()) {
-      continue;
-    }
-    browserExposurePaths.push(`agents.list.${entry.id}.sandbox.browser`);
-  }
-  if (browserExposurePaths.length > 0) {
-    findings.push({
-      checkId: "sandbox.browser_cdp_bridge_unrestricted",
-      severity: "warn",
-      title: "Sandbox browser CDP may be reachable by peer containers",
-      detail:
-        "These sandbox browser configs use Docker bridge networking with no CDP source restriction:\n" +
-        browserExposurePaths.map((entry) => `- ${entry}`).join("\n"),
-      remediation:
-        "Set sandbox.browser.network to a dedicated bridge network (recommended default: openclaw-sandbox-browser), " +
-        "or set sandbox.browser.cdpSourceRange (for example 172.21.0.1/32) to restrict container-edge CDP ingress.",
-    });
-  }
+  // CDP source range is now auto-derived at runtime from the Docker network gateway
+  // for all bridge-like networks, so an unset cdpSourceRange is no longer a security gap.
 
   return findings;
 }
@@ -959,9 +869,10 @@ export function collectNodeDangerousAllowCommandFindings(
   }
 
   const deny = new Set((cfg.gateway?.nodes?.denyCommands ?? []).map(normalizeNodeCommand));
-  const dangerousAllowed = DEFAULT_DANGEROUS_NODE_COMMANDS.filter(
-    (cmd) => allow.has(cmd) && !deny.has(cmd),
-  );
+  const dangerousAllowed = [
+    ...DEFAULT_DANGEROUS_NODE_COMMANDS,
+    ...listDangerousPluginNodeCommands(),
+  ].filter((cmd) => allow.has(cmd) && !deny.has(cmd));
   if (dangerousAllowed.length === 0) {
     return findings;
   }
@@ -972,7 +883,7 @@ export function collectNodeDangerousAllowCommandFindings(
     title: "Dangerous node commands explicitly enabled",
     detail:
       `gateway.nodes.allowCommands includes: ${dangerousAllowed.join(", ")}. ` +
-      "These commands can trigger high-impact device actions (camera/screen/contacts/calendar/reminders/SMS).",
+      "These commands can trigger high-impact device actions or read node files (camera/screen/contacts/calendar/reminders/SMS/file).",
     remediation:
       "Remove these entries from gateway.nodes.allowCommands (recommended). " +
       "If you keep them, treat gateway auth as full operator access and keep gateway exposure local/tailnet-only.",
@@ -1019,7 +930,7 @@ export function collectMinimalProfileOverrideFindings(cfg: OpenClawConfig): Secu
 
 export function collectModelHygieneFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
-  const models = collectModels(cfg);
+  const models = collectAuditModelRefs(cfg);
   if (models.length === 0) {
     return findings;
   }

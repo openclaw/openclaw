@@ -1,3 +1,4 @@
+import { getRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { tryLoadActivatedBundledPluginPublicSurfaceModuleSync } from "../../plugin-sdk/facade-runtime.js";
 import {
   parseRawSessionConversationRef,
@@ -49,6 +50,9 @@ type BundledSessionKeyModule = {
 };
 
 const SESSION_KEY_API_ARTIFACT_BASENAME = "session-key-api.js";
+type SessionConversationResolutionOptions = {
+  bundledFallback?: boolean;
+};
 
 type NormalizedSessionConversationResolution = ResolvedSessionConversation & {
   hasExplicitParentConversationCandidates: boolean;
@@ -140,17 +144,20 @@ function resolveBundledSessionConversationFallback(params: {
   kind: "group" | "channel";
   rawId: string;
 }): NormalizedSessionConversationResolution | null {
+  if (isBundledSessionConversationFallbackDisabled(params.channel)) {
+    return null;
+  }
   const dirName = normalizeResolvedChannel(params.channel);
-  let resolveSessionConversation: BundledSessionKeyModule["resolveSessionConversation"];
+  let loaded: BundledSessionKeyModule | null = null;
   try {
-    resolveSessionConversation =
-      tryLoadActivatedBundledPluginPublicSurfaceModuleSync<BundledSessionKeyModule>({
-        dirName,
-        artifactBasename: SESSION_KEY_API_ARTIFACT_BASENAME,
-      })?.resolveSessionConversation;
+    loaded = tryLoadActivatedBundledPluginPublicSurfaceModuleSync<BundledSessionKeyModule>({
+      dirName,
+      artifactBasename: SESSION_KEY_API_ARTIFACT_BASENAME,
+    });
   } catch {
     return null;
   }
+  const resolveSessionConversation = loaded?.resolveSessionConversation;
   if (typeof resolveSessionConversation !== "function") {
     return null;
   }
@@ -163,10 +170,27 @@ function resolveBundledSessionConversationFallback(params: {
   );
 }
 
+function isBundledSessionConversationFallbackDisabled(channel: string): boolean {
+  const snapshot = getRuntimeConfigSnapshot();
+  if (!snapshot?.plugins) {
+    return false;
+  }
+  if (snapshot.plugins.enabled === false) {
+    return true;
+  }
+  const entry = snapshot.plugins.entries?.[normalizeResolvedChannel(channel)];
+  return !!entry && typeof entry === "object" && entry.enabled === false;
+}
+
+function shouldProbeBundledSessionConversationFallback(rawId: string): boolean {
+  return rawId.includes(":");
+}
+
 function resolveSessionConversationResolution(params: {
   channel: string;
   kind: "group" | "channel";
   rawId: string;
+  bundledFallback?: boolean;
 }): ResolvedSessionConversation | null {
   const rawId = params.rawId.trim();
   if (!rawId) {
@@ -180,13 +204,19 @@ function resolveSessionConversationResolution(params: {
       rawId,
     }),
   );
+  const shouldTryBundledFallback =
+    params.bundledFallback !== false &&
+    !messaging &&
+    shouldProbeBundledSessionConversationFallback(rawId);
   const resolved =
     pluginResolved ??
-    resolveBundledSessionConversationFallback({
-      channel: params.channel,
-      kind: params.kind,
-      rawId,
-    }) ??
+    (shouldTryBundledFallback
+      ? resolveBundledSessionConversationFallback({
+          channel: params.channel,
+          kind: params.kind,
+          rawId,
+        })
+      : null) ??
     buildGenericConversationResolution(rawId);
   if (!resolved) {
     return null;
@@ -214,6 +244,7 @@ export function resolveSessionConversation(params: {
   channel: string;
   kind: "group" | "channel";
   rawId: string;
+  bundledFallback?: boolean;
 }): ResolvedSessionConversation | null {
   return resolveSessionConversationResolution(params);
 }
@@ -224,13 +255,17 @@ function buildBaseSessionKey(raw: RawSessionConversationRef, id: string): string
 
 export function resolveSessionConversationRef(
   sessionKey: string | undefined | null,
+  opts: SessionConversationResolutionOptions = {},
 ): ResolvedSessionConversationRef | null {
   const raw = parseRawSessionConversationRef(sessionKey);
   if (!raw) {
     return null;
   }
 
-  const resolved = resolveSessionConversation(raw);
+  const resolved = resolveSessionConversation({
+    ...raw,
+    bundledFallback: opts.bundledFallback,
+  });
   if (!resolved) {
     return null;
   }
@@ -249,8 +284,9 @@ export function resolveSessionConversationRef(
 
 export function resolveSessionThreadInfo(
   sessionKey: string | undefined | null,
+  opts: SessionConversationResolutionOptions = {},
 ): ParsedThreadSessionSuffix {
-  const resolved = resolveSessionConversationRef(sessionKey);
+  const resolved = resolveSessionConversationRef(sessionKey, opts);
   if (!resolved) {
     return parseThreadSessionSuffix(sessionKey);
   }

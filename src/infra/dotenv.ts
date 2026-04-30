@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import dotenv from "dotenv";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveConfigDir } from "../utils.js";
 import { resolveRequiredHomeDir } from "./home-dir.js";
 import {
@@ -10,41 +11,89 @@ import {
   normalizeEnvVarKey,
 } from "./host-env-security.js";
 
+const logger = createSubsystemLogger("infra:dotenv");
+
 const BLOCKED_WORKSPACE_DOTENV_KEYS = new Set([
   "ALL_PROXY",
   "ANTHROPIC_API_KEY",
   "ANTHROPIC_OAUTH_TOKEN",
+  "BROWSER_EXECUTABLE_PATH",
+  "CLAWHUB_AUTH_TOKEN",
+  "CLAWHUB_CONFIG_PATH",
+  "CLAWHUB_TOKEN",
+  "CLAWHUB_URL",
   "HTTP_PROXY",
   "HTTPS_PROXY",
+  "IRC_HOST",
+  "MATTERMOST_URL",
+  "MATRIX_HOMESERVER",
+  "MINIMAX_API_HOST",
   "NODE_TLS_REJECT_UNAUTHORIZED",
   "NO_PROXY",
+  "NPM_EXECPATH",
+  "OPENAI_API_KEY",
+  "OPENAI_API_KEYS",
   "OPENCLAW_AGENT_DIR",
+  "OPENCLAW_ALLOW_INSECURE_PRIVATE_WS",
+  "OPENCLAW_ALLOW_PROJECT_LOCAL_BIN",
+  "OPENCLAW_BROWSER_EXECUTABLE_PATH",
+  "OPENCLAW_BROWSER_CONTROL_MODULE",
   "OPENCLAW_BUNDLED_HOOKS_DIR",
   "OPENCLAW_BUNDLED_PLUGINS_DIR",
   "OPENCLAW_BUNDLED_SKILLS_DIR",
+  "OPENCLAW_CACHE_TRACE",
+  "OPENCLAW_CACHE_TRACE_FILE",
+  "OPENCLAW_CACHE_TRACE_MESSAGES",
+  "OPENCLAW_CACHE_TRACE_PROMPT",
+  "OPENCLAW_CACHE_TRACE_SYSTEM",
   "OPENCLAW_CONFIG_PATH",
   "OPENCLAW_GATEWAY_PASSWORD",
+  "OPENCLAW_GATEWAY_PORT",
   "OPENCLAW_GATEWAY_SECRET",
   "OPENCLAW_GATEWAY_TOKEN",
+  "OPENCLAW_GATEWAY_URL",
   "OPENCLAW_HOME",
   "OPENCLAW_LIVE_ANTHROPIC_KEY",
   "OPENCLAW_LIVE_ANTHROPIC_KEYS",
   "OPENCLAW_LIVE_GEMINI_KEY",
   "OPENCLAW_LIVE_OPENAI_KEY",
+  "OPENCLAW_MPM_CATALOG_PATHS",
+  "OPENCLAW_NODE_EXEC_FALLBACK",
+  "OPENCLAW_NODE_EXEC_HOST",
   "OPENCLAW_OAUTH_DIR",
   "OPENCLAW_PINNED_PYTHON",
   "OPENCLAW_PINNED_WRITE_PYTHON",
+  "OPENCLAW_PLUGIN_CATALOG_PATHS",
   "OPENCLAW_PROFILE",
+  "OPENCLAW_RAW_STREAM",
+  "OPENCLAW_RAW_STREAM_PATH",
+  "OPENCLAW_SHOW_SECRETS",
+  "OPENCLAW_SKIP_BROWSER_CONTROL_SERVER",
   "OPENCLAW_STATE_DIR",
   "OPENCLAW_TEST_TAILSCALE_BINARY",
-  "OPENAI_API_KEY",
-  "OPENAI_API_KEYS",
   "PI_CODING_AGENT_DIR",
+  "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH",
+  "SYNOLOGY_CHAT_INCOMING_URL",
+  "SYNOLOGY_NAS_HOST",
   "UV_PYTHON",
 ]);
 
-const BLOCKED_WORKSPACE_DOTENV_SUFFIXES = ["_BASE_URL"];
-const BLOCKED_WORKSPACE_DOTENV_PREFIXES = ["ANTHROPIC_API_KEY_", "OPENAI_API_KEY_"];
+// Block endpoint redirection for any service without overfitting per-provider names.
+// `_HOMESERVER` covers Matrix's per-account scoped keys (MATRIX_<ACCOUNT>_HOMESERVER)
+// in addition to the bare MATRIX_HOMESERVER listed above.
+const BLOCKED_WORKSPACE_DOTENV_SUFFIXES = ["_API_HOST", "_BASE_URL", "_HOMESERVER"];
+const BLOCKED_WORKSPACE_DOTENV_PREFIXES = [
+  "ANTHROPIC_API_KEY_",
+  "CLAWHUB_",
+  "OPENAI_API_KEY_",
+  // Workspace .env is untrusted; reserve the full OpenClaw runtime namespace
+  // for shell/global config so new OPENCLAW_* controls are fail-closed by default.
+  "OPENCLAW_",
+  "OPENCLAW_CLAWHUB_",
+  "OPENCLAW_DISABLE_",
+  "OPENCLAW_SKIP_",
+  "OPENCLAW_UPDATE_",
+];
 
 function shouldBlockWorkspaceRuntimeDotEnvKey(key: string): boolean {
   return isDangerousHostEnvVarName(key) || isDangerousHostEnvOverrideVarName(key);
@@ -92,7 +141,7 @@ function readDotEnvFile(params: {
       const code =
         error && typeof error === "object" && "code" in error ? String(error.code) : undefined;
       if (code !== "ENOENT") {
-        console.warn(`[dotenv] Failed to read ${params.filePath}: ${String(error)}`);
+        logger.warn(`Failed to read ${params.filePath}: ${String(error)}`, { error });
       }
     }
     return null;
@@ -103,7 +152,7 @@ function readDotEnvFile(params: {
     parsed = dotenv.parse(content);
   } catch (error) {
     if (!params.quiet) {
-      console.warn(`[dotenv] Failed to parse ${params.filePath}: ${String(error)}`);
+      logger.warn(`Failed to parse ${params.filePath}: ${String(error)}`, { error });
     }
     return null;
   }
@@ -191,8 +240,9 @@ function loadParsedDotEnvFiles(files: LoadedDotEnvFile[]) {
     if (keys.length === 0) {
       continue;
     }
-    console.warn(
-      `[dotenv] Conflicting values in ${conflict.keptPath} and ${conflict.ignoredPath} for ${keys.join(", ")}; keeping ${conflict.keptPath}.`,
+    logger.warn(
+      `Conflicting values in ${conflict.keptPath} and ${conflict.ignoredPath} for ${keys.join(", ")}; keeping ${conflict.keptPath}.`,
+      { keptPath: conflict.keptPath, ignoredPath: conflict.ignoredPath, keys },
     );
   }
 }

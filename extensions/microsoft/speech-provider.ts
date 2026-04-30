@@ -6,12 +6,21 @@ import {
   generateSecMsGecToken,
 } from "node-edge-tts/dist/drm.js";
 import { isVoiceCompatibleAudio } from "openclaw/plugin-sdk/media-runtime";
+import { assertOkOrThrowProviderError } from "openclaw/plugin-sdk/provider-http";
+import {
+  captureHttpExchange,
+  isDebugProxyGlobalFetchPatchInstalled,
+} from "openclaw/plugin-sdk/proxy-capture";
 import type {
   SpeechProviderConfig,
   SpeechProviderPlugin,
   SpeechVoiceOption,
 } from "openclaw/plugin-sdk/speech";
 import { asBoolean, asFiniteNumber, asObject, trimToUndefined } from "openclaw/plugin-sdk/speech";
+import {
+  fetchWithSsrFGuard,
+  ssrfPolicyFromHttpBaseUrlAllowedHostname,
+} from "openclaw/plugin-sdk/ssrf-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { edgeTTS, inferEdgeExtension } from "./tts.js";
 
@@ -50,8 +59,8 @@ function normalizeMicrosoftProviderConfig(
   const providers = asObject(rawConfig.providers);
   const rawEdge = asObject(rawConfig.edge);
   const rawMicrosoft = asObject(rawConfig.microsoft);
-  const rawProvider = asObject(providers?.microsoft);
-  const raw = { ...rawEdge, ...rawMicrosoft, ...rawProvider };
+  const rawProviderMicrosoft = asObject(providers?.microsoft);
+  const raw = { ...rawEdge, ...rawMicrosoft, ...rawProviderMicrosoft };
   const outputFormat = trimToUndefined(raw.outputFormat);
   return {
     enabled: asBoolean(raw.enabled) ?? true,
@@ -129,32 +138,52 @@ const DEFAULT_CHINESE_EDGE_VOICE = "zh-CN-XiaoxiaoNeural";
 const DEFAULT_CHINESE_EDGE_LANG = "zh-CN";
 
 export async function listMicrosoftVoices(): Promise<SpeechVoiceOption[]> {
-  const response = await fetch(
+  const url =
     "https://speech.platform.bing.com/consumer/speech/synthesize/readaloud/voices/list" +
-      `?trustedclienttoken=${TRUSTED_CLIENT_TOKEN}`,
-    {
-      headers: buildMicrosoftVoiceHeaders(),
+    `?trustedclienttoken=${TRUSTED_CLIENT_TOKEN}`;
+  const headers = buildMicrosoftVoiceHeaders();
+  const { response, release } = await fetchWithSsrFGuard({
+    url,
+    init: {
+      headers,
     },
-  );
-  if (!response.ok) {
-    throw new Error(`Microsoft voices API error (${response.status})`);
+    policy: ssrfPolicyFromHttpBaseUrlAllowedHostname("https://speech.platform.bing.com"),
+    auditContext: "microsoft.speech.voices",
+  });
+  try {
+    if (!isDebugProxyGlobalFetchPatchInstalled()) {
+      captureHttpExchange({
+        url,
+        method: "GET",
+        requestHeaders: headers,
+        response,
+        transport: "http",
+        meta: {
+          provider: "microsoft",
+          capability: "speech-voices",
+        },
+      });
+    }
+    await assertOkOrThrowProviderError(response, "Microsoft voices API error");
+    const voices = (await response.json()) as MicrosoftVoiceListEntry[];
+    return Array.isArray(voices)
+      ? voices
+          .map((voice) => ({
+            id: voice.ShortName?.trim() ?? "",
+            name: trimToUndefined(voice.FriendlyName) ?? trimToUndefined(voice.ShortName),
+            category: voice.VoiceTag?.ContentCategories?.find((value) => value.trim().length > 0),
+            description: formatMicrosoftVoiceDescription(voice),
+            locale: trimToUndefined(voice.Locale),
+            gender: trimToUndefined(voice.Gender),
+            personalities: voice.VoiceTag?.VoicePersonalities?.filter(
+              (value): value is string => value.trim().length > 0,
+            ),
+          }))
+          .filter((voice) => voice.id.length > 0)
+      : [];
+  } finally {
+    await release();
   }
-  const voices = (await response.json()) as MicrosoftVoiceListEntry[];
-  return Array.isArray(voices)
-    ? voices
-        .map((voice) => ({
-          id: voice.ShortName?.trim() ?? "",
-          name: trimToUndefined(voice.FriendlyName) ?? trimToUndefined(voice.ShortName),
-          category: voice.VoiceTag?.ContentCategories?.find((value) => value.trim().length > 0),
-          description: formatMicrosoftVoiceDescription(voice),
-          locale: trimToUndefined(voice.Locale),
-          gender: trimToUndefined(voice.Gender),
-          personalities: voice.VoiceTag?.VoicePersonalities?.filter(
-            (value): value is string => value.trim().length > 0,
-          ),
-        }))
-        .filter((voice) => voice.id.length > 0)
-    : [];
 }
 
 export function buildMicrosoftSpeechProvider(): SpeechProviderPlugin {

@@ -7,13 +7,19 @@ import JSON5 from "json5";
 
 type RestoreEntry = { key: string; value: string | undefined };
 
-const LIVE_EXTERNAL_AUTH_DIRS = [".claude", ".codex", ".gemini", ".minimax"] as const;
-const LIVE_EXTERNAL_AUTH_FILES = [".claude.json"] as const;
+const LIVE_EXTERNAL_AUTH_DIRS = [".claude/backups", ".gemini", ".minimax"] as const;
+const LIVE_EXTERNAL_AUTH_FILES = [
+  ".claude.json",
+  ".claude/.credentials.json",
+  ".claude/settings.json",
+  ".claude/settings.local.json",
+  ".codex/auth.json",
+  ".codex/config.toml",
+] as const;
 const requireFromHere = createRequire(import.meta.url);
 
-type LegacyConfigCompatApi = typeof import(
-  "../src/commands/doctor/shared/legacy-config-migrate.js"
-);
+type LegacyConfigCompatApi =
+  typeof import("../src/commands/doctor/shared/legacy-config-migrate.js");
 type ConfigValidationApi = typeof import("../src/config/validation.js");
 
 let cachedLegacyConfigCompatApi: LegacyConfigCompatApi | undefined;
@@ -53,7 +59,9 @@ function loadLegacyConfigCompatApi(): LegacyConfigCompatApi {
 }
 
 function loadConfigValidationApi(): ConfigValidationApi {
-  cachedConfigValidationApi ??= requireFromHere("../src/config/validation.js") as ConfigValidationApi;
+  cachedConfigValidationApi ??= requireFromHere(
+    "../src/config/validation.js",
+  ) as ConfigValidationApi;
   return cachedConfigValidationApi;
 }
 
@@ -258,6 +266,15 @@ function copyFileIfExists(sourcePath: string, targetPath: string): void {
   if (!fs.existsSync(sourcePath)) {
     return;
   }
+  let stat: fs.Stats;
+  try {
+    stat = fs.statSync(sourcePath);
+  } catch {
+    return;
+  }
+  if (!stat.isFile()) {
+    return;
+  }
   ensureParentDir(targetPath);
   fs.copyFileSync(sourcePath, targetPath);
 }
@@ -381,6 +398,10 @@ function stageLiveTestState(params: {
   }
 
   copyDirIfExists(path.join(realStateDir, "credentials"), path.join(tempStateDir, "credentials"));
+  copyDirIfExists(
+    path.join(realStateDir, "external-plugins"),
+    path.join(tempStateDir, "external-plugins"),
+  );
   copyLiveAuthProfiles(realStateDir, tempStateDir);
 
   for (const authDir of LIVE_EXTERNAL_AUTH_DIRS) {

@@ -9,6 +9,7 @@ const originalBundledDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
 const originalDisableBundledPlugins = process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
 const originalVitest = process.env.VITEST;
 const originalArgv1 = process.argv[1];
+const originalExecArgv = [...process.execArgv];
 
 function makeRepoRoot(prefix: string): string {
   return makeTrackedTempDir(prefix, tempDirs);
@@ -68,9 +69,12 @@ function expectResolvedBundledDir(params: {
   bundledDirOverride?: string;
   disableBundledPlugins?: string;
   vitest?: string;
+  execArgv?: readonly string[];
 }) {
   vi.spyOn(process, "cwd").mockReturnValue(params.cwd);
   process.argv[1] = params.argv1 ?? "/usr/bin/env";
+  process.execArgv.length = 0;
+  process.execArgv.push(...(params.execArgv ?? []));
   if (params.vitest === undefined) {
     delete process.env.VITEST;
   } else {
@@ -99,13 +103,15 @@ function expectResolvedBundledDirFromRoot(params: {
   bundledDirOverride?: string;
   vitest?: string;
   cwd?: string;
+  execArgv?: readonly string[];
 }) {
   expectResolvedBundledDir({
     cwd: params.cwd ?? params.repoRoot,
     expectedDir: path.join(params.repoRoot, params.expectedRelativeDir),
-    ...(params.argv1 ? { argv1: params.argv1 } : {}),
+    argv1: params.argv1 ?? path.join(params.repoRoot, "openclaw.mjs"),
     ...(params.bundledDirOverride ? { bundledDirOverride: params.bundledDirOverride } : {}),
     ...(params.vitest !== undefined ? { vitest: params.vitest } : {}),
+    ...(params.execArgv ? { execArgv: params.execArgv } : {}),
   });
 }
 
@@ -153,6 +159,8 @@ afterEach(() => {
     process.env.VITEST = originalVitest;
   }
   process.argv[1] = originalArgv1;
+  process.execArgv.length = 0;
+  process.execArgv.push(...originalExecArgv);
   cleanupTrackedTempDirs(tempDirs);
 });
 
@@ -194,7 +202,7 @@ describe("resolveBundledPluginsDir", () => {
       },
     ],
     [
-      "prefers source extensions under vitest to avoid stale staged plugins",
+      "does not prefer source extensions from VITEST alone",
       {
         prefix: "openclaw-bundled-dir-vitest-",
         hasExtensions: true,
@@ -202,8 +210,23 @@ describe("resolveBundledPluginsDir", () => {
         hasDistExtensions: true,
       },
       {
-        expectedRelativeDir: "extensions",
+        expectedRelativeDir: path.join("dist-runtime", "extensions"),
         vitest: "true",
+      },
+    ],
+    [
+      "prefers source extensions during tsx-driven source execution",
+      {
+        prefix: "openclaw-bundled-dir-tsx-",
+        hasExtensions: true,
+        hasSrc: true,
+        hasDistRuntimeExtensions: true,
+        hasDistExtensions: true,
+        hasGitCheckout: true,
+      },
+      {
+        expectedRelativeDir: "extensions",
+        execArgv: ["--import", "tsx"],
       },
     ],
     [
@@ -225,11 +248,14 @@ describe("resolveBundledPluginsDir", () => {
       seedBundledPluginTree(repoRoot, path.join("dist-runtime", "extensions"));
     } else if (expectation.expectedRelativeDir === path.join("dist", "extensions")) {
       seedBundledPluginTree(repoRoot, path.join("dist", "extensions"));
+    } else if (expectation.expectedRelativeDir === "extensions") {
+      seedBundledPluginTree(repoRoot, "extensions");
     }
     expectResolvedBundledDirFromRoot({
       repoRoot,
       expectedRelativeDir: expectation.expectedRelativeDir,
       ...("vitest" in expectation ? { vitest: expectation.vitest } : {}),
+      ...("execArgv" in expectation ? { execArgv: [...expectation.execArgv] } : {}),
     });
   });
 
@@ -246,6 +272,7 @@ describe("resolveBundledPluginsDir", () => {
     fs.mkdirSync(path.join(repoRoot, "dist-runtime", "extensions", "discord"), {
       recursive: true,
     });
+    seedBundledPluginTree(repoRoot, "extensions");
 
     expectResolvedBundledDirFromRoot({
       repoRoot,
@@ -270,6 +297,141 @@ describe("resolveBundledPluginsDir", () => {
     expect(bundledDir).toBeTruthy();
     expect(fs.existsSync(bundledDir ?? "")).toBe(true);
     expect(fs.readdirSync(bundledDir ?? "")).toEqual([]);
+  });
+
+  it("ignores an existing override under an argv1-derived fake package root", () => {
+    const installedRoot = createOpenClawRoot({
+      prefix: "openclaw-bundled-dir-argv-override-reject-",
+      hasDistExtensions: true,
+    });
+    seedBundledPluginTree(installedRoot, path.join("dist", "extensions"));
+
+    vi.spyOn(process, "cwd").mockReturnValue(installedRoot);
+    process.argv[1] = path.join(installedRoot, "openclaw.mjs");
+    process.execArgv.length = 0;
+    delete process.env.VITEST;
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = path.join(installedRoot, "dist", "extensions");
+    delete process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
+
+    const bundledDir = resolveBundledPluginsDir();
+
+    expect(bundledDir).toBeDefined();
+    expect(fs.realpathSync(bundledDir!)).not.toBe(
+      fs.realpathSync(path.join(installedRoot, "dist", "extensions")),
+    );
+  });
+
+  it("does not let VITEST relax existing override trust checks", () => {
+    const overrideRoot = makeRepoRoot("openclaw-bundled-dir-vitest-override-reject-");
+    seedBundledPluginTree(overrideRoot, "extensions", "memory-core");
+
+    vi.spyOn(process, "cwd").mockReturnValue(overrideRoot);
+    process.argv[1] = "/usr/bin/env";
+    process.execArgv.length = 0;
+    process.env.VITEST = "true";
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = path.join(overrideRoot, "extensions");
+    delete process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR;
+    delete process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
+
+    const bundledDir = resolveBundledPluginsDir();
+
+    expect(bundledDir).toBeDefined();
+    expect(fs.realpathSync(bundledDir!)).not.toBe(
+      fs.realpathSync(path.join(overrideRoot, "extensions")),
+    );
+  });
+
+  it("does not let VITEST add cwd to bundled plugin resolution candidates", () => {
+    const cwdRepoRoot = createOpenClawRoot({
+      prefix: "openclaw-bundled-dir-vitest-cwd-",
+      hasExtensions: true,
+      hasSrc: true,
+      hasGitCheckout: true,
+    });
+    seedBundledPluginTree(cwdRepoRoot, "extensions", "memory-core");
+
+    vi.spyOn(process, "cwd").mockReturnValue(cwdRepoRoot);
+    process.argv[1] = "/usr/bin/env";
+    process.execArgv.length = 0;
+    process.env.VITEST = "true";
+    delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+    delete process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
+
+    const bundledDir = resolveBundledPluginsDir();
+
+    expect(bundledDir).toBeDefined();
+    expect(fs.realpathSync(bundledDir!)).not.toBe(
+      fs.realpathSync(path.join(cwdRepoRoot, "extensions")),
+    );
+  });
+
+  it("falls back from a missing override instead of returning an untrusted future path", () => {
+    vi.spyOn(process, "cwd").mockReturnValue(makeRepoRoot("openclaw-bundled-dir-missing-cwd-"));
+    process.argv[1] = "/usr/bin/env";
+    process.execArgv.length = 0;
+    delete process.env.VITEST;
+    const missingOverride = path.join(
+      makeRepoRoot("openclaw-bundled-dir-missing-override-"),
+      "extensions",
+    );
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = missingOverride;
+    delete process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
+
+    const bundledDir = resolveBundledPluginsDir();
+
+    expect(bundledDir).toBeDefined();
+    expect(path.resolve(bundledDir!)).not.toBe(path.resolve(missingOverride));
+  });
+
+  it("falls back to argv root when an existing rejected override is unrelated", () => {
+    const installedRoot = createOpenClawRoot({
+      prefix: "openclaw-bundled-dir-rejected-override-argv-",
+      hasDistExtensions: true,
+    });
+    seedBundledPluginTree(installedRoot, path.join("dist", "extensions"));
+    const overrideRoot = makeRepoRoot("openclaw-bundled-dir-rejected-override-");
+    seedBundledPluginTree(overrideRoot, "extensions", "memory-core");
+
+    vi.spyOn(process, "cwd").mockReturnValue(makeRepoRoot("openclaw-bundled-dir-rejected-cwd-"));
+    process.argv[1] = path.join(installedRoot, "openclaw.mjs");
+    process.execArgv.length = 0;
+    delete process.env.VITEST;
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = path.join(overrideRoot, "extensions");
+    delete process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
+
+    const bundledDir = resolveBundledPluginsDir();
+
+    expect(fs.realpathSync(bundledDir ?? "")).toBe(
+      fs.realpathSync(path.join(installedRoot, "dist", "extensions")),
+    );
+  });
+
+  it("does not resolve bundled plugins from cwd when argv1 is not a package root", () => {
+    const cwdRepoRoot = createOpenClawRoot({
+      prefix: "openclaw-bundled-dir-untrusted-cwd-",
+      hasExtensions: true,
+      hasSrc: true,
+      hasGitCheckout: true,
+    });
+    fs.mkdirSync(path.join(cwdRepoRoot, "extensions", "memory-core"), { recursive: true });
+    fs.writeFileSync(
+      path.join(cwdRepoRoot, "extensions", "memory-core", "runtime-api.js"),
+      "export const marker = 'untrusted-cwd';\n",
+      "utf8",
+    );
+    vi.spyOn(process, "cwd").mockReturnValue(cwdRepoRoot);
+    process.argv[1] = "/usr/bin/env";
+    process.execArgv.length = 0;
+    delete process.env.VITEST;
+    delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+    delete process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
+
+    const bundledDir = resolveBundledPluginsDir();
+
+    expect(bundledDir).toBeDefined();
+    expect(fs.realpathSync(bundledDir!)).not.toBe(
+      fs.realpathSync(path.join(cwdRepoRoot, "extensions")),
+    );
   });
 
   it.each([

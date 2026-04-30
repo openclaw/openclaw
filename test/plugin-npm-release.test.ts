@@ -1,5 +1,6 @@
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
+import { bundledPluginFile, bundledPluginRoot } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   collectPublishablePluginPackages,
@@ -12,7 +13,6 @@ import {
   resolveSelectedPublishablePluginPackages,
   type PublishablePluginPackage,
 } from "../scripts/lib/plugin-npm-release.ts";
-import { bundledPluginFile, bundledPluginRoot } from "./helpers/bundled-plugin-paths.js";
 import { cleanupTempDirs, makeTempRepoRoot, writeJsonFile } from "./helpers/temp-repo.js";
 
 const tempDirs: string[] = [];
@@ -133,7 +133,7 @@ describe("collectPublishablePluginPackages", () => {
     mkdirSync(join(repoDir, "extensions", "demo-plugin"), { recursive: true });
     writeJsonFile(join(repoDir, "extensions", "demo-plugin", "package.json"), {
       name: "@openclaw/demo-plugin",
-      version: "2026.4.9",
+      version: "2026.4.10",
       openclaw: {
         extensions: ["./index.ts"],
         install: {
@@ -150,7 +150,7 @@ describe("collectPublishablePluginPackages", () => {
         extensionId: "demo-plugin",
         packageDir: "extensions/demo-plugin",
         packageName: "@openclaw/demo-plugin",
-        version: "2026.4.9",
+        version: "2026.4.10",
         channel: "stable",
         publishTag: "latest",
         installNpmSpec: "@openclaw/demo-plugin",

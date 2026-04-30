@@ -3,9 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
 import { withEnv } from "../test-utils/env.js";
-import { clearPluginDiscoveryCache } from "./discovery.js";
 import { clearPluginLoaderCache, loadOpenClawPlugins } from "./loader.js";
-import { clearPluginManifestRegistryCache } from "./manifest-registry.js";
 import { resetPluginRuntimeStateForTest } from "./runtime.js";
 
 export type TempPlugin = { dir: string; file: string; id: string };
@@ -33,12 +31,45 @@ export function mkdirSafe(dir: string) {
 const fixtureRoot = mkdtempSafe(path.join(os.tmpdir(), "openclaw-plugin-"));
 let tempDirIndex = 0;
 const prevBundledDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+const prevDisableBundledPlugins = process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
+const prevPluginStageDir = process.env.OPENCLAW_PLUGIN_STAGE_DIR;
 
 export const EMPTY_PLUGIN_SCHEMA = {
   type: "object",
   additionalProperties: false,
   properties: {},
 };
+
+export function inlineChannelPluginEntryFactorySource(): string {
+  return `function defineChannelPluginEntry(options) {
+  return {
+    id: options.id,
+    name: options.name,
+    description: options.description,
+    configSchema: { schema: { type: "object" } },
+    channelPlugin: options.plugin,
+    setChannelRuntime: options.setRuntime,
+    register(api) {
+      if (api.registrationMode === "cli-metadata") {
+        options.registerCliMetadata?.(api);
+        return;
+      }
+      api.registerChannel({ plugin: options.plugin });
+      options.setRuntime?.(api.runtime);
+      if (api.registrationMode === "discovery") {
+        options.registerCliMetadata?.(api);
+        return;
+      }
+      if (api.registrationMode !== "full") {
+        return;
+      }
+      options.registerCliMetadata?.(api);
+      options.registerFull?.(api);
+    },
+  };
+}
+`;
+}
 
 export function makeTempDir() {
   const dir = path.join(fixtureRoot, `case-${tempDirIndex++}`);
@@ -73,7 +104,8 @@ export function writePlugin(params: {
 }
 
 export function useNoBundledPlugins() {
-  process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
+  process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = "1";
+  delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
 }
 
 export function loadBundleFixture(params: {
@@ -107,14 +139,22 @@ export function loadBundleFixture(params: {
 
 export function resetPluginLoaderTestStateForTest() {
   clearPluginLoaderCache();
-  clearPluginDiscoveryCache();
-  clearPluginManifestRegistryCache();
   resetPluginRuntimeStateForTest();
   resetDiagnosticEventsForTest();
   if (prevBundledDir === undefined) {
     delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
   } else {
     process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = prevBundledDir;
+  }
+  if (prevDisableBundledPlugins === undefined) {
+    delete process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
+  } else {
+    process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = prevDisableBundledPlugins;
+  }
+  if (prevPluginStageDir === undefined) {
+    delete process.env.OPENCLAW_PLUGIN_STAGE_DIR;
+  } else {
+    process.env.OPENCLAW_PLUGIN_STAGE_DIR = prevPluginStageDir;
   }
 }
 
@@ -123,5 +163,10 @@ export function cleanupPluginLoaderFixturesForTest() {
     fs.rmSync(fixtureRoot, { recursive: true, force: true });
   } catch {
     // ignore cleanup failures in tests
+  }
+  if (prevDisableBundledPlugins === undefined) {
+    delete process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
+  } else {
+    process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = prevDisableBundledPlugins;
   }
 }

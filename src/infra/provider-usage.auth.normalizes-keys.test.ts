@@ -10,7 +10,7 @@ import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 
 vi.mock("../agents/auth-profiles.js", () => {
   const normalizeProvider = (provider?: string | null): string =>
-    String(provider ?? "")
+    (provider ?? "")
       .trim()
       .toLowerCase()
       .replace(/^z-ai$/, "zai");
@@ -122,6 +122,8 @@ vi.mock("../agents/auth-profiles.js", () => {
   return {
     clearRuntimeAuthProfileStoreSnapshots: () => {},
     ensureAuthProfileStore: (agentDir?: string) => readStore(agentDir),
+    hasAnyAuthProfileStoreSource: (agentDir?: string) =>
+      Boolean(agentDir && nodeFs.existsSync(path.join(agentDir, "auth-profiles.json"))),
     dedupeProfileIds,
     listProfilesForProvider,
     resolveApiKeyForProfile,
@@ -135,7 +137,6 @@ const providerRuntimeMocks = vi.hoisted(() => ({
     buildProviderAuthDoctorHintWithPlugin: vi.fn(() => undefined),
     buildProviderMissingAuthMessageWithPlugin: vi.fn(() => undefined),
     buildProviderUnknownModelHintWithPlugin: vi.fn(() => undefined),
-    clearProviderRuntimeHookCache: vi.fn(() => {}),
     createProviderEmbeddingProvider: vi.fn(() => undefined),
     formatProviderAuthProfileApiKeyWithPlugin: vi.fn(() => undefined),
     normalizeProviderResolvedModelWithPlugin: vi.fn(() => undefined),
@@ -143,9 +144,7 @@ const providerRuntimeMocks = vi.hoisted(() => ({
     prepareProviderExtraParams: vi.fn(() => undefined),
     prepareProviderRuntimeAuth: vi.fn(async () => undefined),
     refreshProviderOAuthCredentialWithPlugin: vi.fn(async () => undefined),
-    resetProviderRuntimeHookCacheForTest: vi.fn(() => {}),
     resolveProviderBinaryThinking: vi.fn(() => undefined),
-    resolveProviderBuiltInModelSuppression: vi.fn(() => undefined),
     resolveProviderCacheTtlEligibility: vi.fn(() => undefined),
     resolveProviderCapabilitiesWithPlugin: vi.fn(() => undefined),
     resolveProviderDefaultThinkingLevel: vi.fn(() => undefined),

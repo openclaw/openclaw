@@ -19,6 +19,7 @@ export const handlePluginCommand: CommandHandler = async (
   allowTextCommands,
 ): Promise<CommandHandlerResult | null> => {
   const { command, cfg } = params;
+  const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
 
   if (!allowTextCommands) {
     return null;
@@ -38,9 +39,11 @@ export const handlePluginCommand: CommandHandler = async (
     channel: command.channel,
     channelId: command.channelId,
     isAuthorizedSender: command.isAuthorizedSender,
+    senderIsOwner: command.senderIsOwner,
     gatewayClientScopes: params.ctx.GatewayClientScopes,
     sessionKey: params.sessionKey,
-    sessionId: params.sessionEntry?.sessionId,
+    sessionId: targetSessionEntry?.sessionId,
+    sessionFile: targetSessionEntry?.sessionFile,
     commandBody: command.commandBodyNormalized,
     config: cfg,
     from: command.from,
@@ -53,9 +56,12 @@ export const handlePluginCommand: CommandHandler = async (
         : undefined,
     threadParentId: normalizeOptionalString(params.ctx.ThreadParentId),
   });
+  const shouldContinue = result.continueAgent === true;
+  const { continueAgent: _continueAgent, ...reply } = result;
+  void _continueAgent;
 
   return {
-    shouldContinue: false,
-    reply: result,
+    shouldContinue,
+    reply: Object.keys(reply).length > 0 ? reply : undefined,
   };
 };

@@ -6,9 +6,7 @@ read_when:
 title: "Hooks"
 ---
 
-# Hooks
-
-Hooks are small scripts that run when something happens inside the Gateway. They are automatically discovered from directories and can be inspected with `openclaw hooks`.
+Hooks are small scripts that run when something happens inside the Gateway. They can be discovered from directories and inspected with `openclaw hooks`. The Gateway loads internal hooks only after you enable hooks or configure at least one hook entry, hook pack, legacy handler, or extra hook directory.
 
 There are two kinds of hooks in OpenClaw:
 
@@ -35,21 +33,23 @@ openclaw hooks info session-memory
 
 ## Event types
 
-| Event                    | When it fires                                    |
-| ------------------------ | ------------------------------------------------ |
-| `command:new`            | `/new` command issued                            |
-| `command:reset`          | `/reset` command issued                          |
-| `command:stop`           | `/stop` command issued                           |
-| `command`                | Any command event (general listener)             |
-| `session:compact:before` | Before compaction summarizes history             |
-| `session:compact:after`  | After compaction completes                       |
-| `session:patch`          | When session properties are modified             |
-| `agent:bootstrap`        | Before workspace bootstrap files are injected    |
-| `gateway:startup`        | After channels start and hooks are loaded        |
-| `message:received`       | Inbound message from any channel                 |
-| `message:transcribed`    | After audio transcription completes              |
-| `message:preprocessed`   | After all media and link understanding completes |
-| `message:sent`           | Outbound message delivered                       |
+| Event                    | When it fires                                              |
+| ------------------------ | ---------------------------------------------------------- |
+| `command:new`            | `/new` command issued                                      |
+| `command:reset`          | `/reset` command issued                                    |
+| `command:stop`           | `/stop` command issued                                     |
+| `command`                | Any command event (general listener)                       |
+| `session:compact:before` | Before compaction summarizes history                       |
+| `session:compact:after`  | After compaction completes                                 |
+| `session:patch`          | When session properties are modified                       |
+| `agent:bootstrap`        | Before workspace bootstrap files are injected              |
+| `gateway:startup`        | After channels start and hooks are loaded                  |
+| `gateway:shutdown`       | When gateway shutdown begins                               |
+| `gateway:pre-restart`    | Before an expected gateway restart                         |
+| `message:received`       | Inbound message from any channel                           |
+| `message:transcribed`    | After audio transcription completes                        |
+| `message:preprocessed`   | After media and link preprocessing completes or is skipped |
+| `message:sent`           | Outbound message delivered                                 |
 
 ## Writing hooks
 
@@ -108,7 +108,7 @@ const handler = async (event) => {
 export default handler;
 ```
 
-Each event includes: `type`, `action`, `sessionKey`, `timestamp`, `messages` (push to send to user), and `context` (event-specific data).
+Each event includes: `type`, `action`, `sessionKey`, `timestamp`, `messages` (push to send to user), and `context` (event-specific data). Agent and tool plugin hook contexts can also include `trace`, a read-only W3C-compatible diagnostic trace context that plugins may pass into structured logs for OTEL correlation.
 
 ### Event context highlights
 
@@ -128,6 +128,13 @@ Each event includes: `type`, `action`, `sessionKey`, `timestamp`, `messages` (pu
 
 **Compaction events**: `session:compact:before` includes `messageCount`, `tokenCount`. `session:compact:after` adds `compactedCount`, `summaryLength`, `tokensBefore`, `tokensAfter`.
 
+`command:stop` observes the user issuing `/stop`; it is cancellation/command
+lifecycle, not an agent-finalization gate. Plugins that need to inspect a
+natural final answer and ask the agent for one more pass should use the typed
+plugin hook `before_agent_finalize` instead. See [Plugin hooks](/plugins/hooks).
+
+**Gateway lifecycle events**: `gateway:shutdown` includes `reason` and `restartExpectedMs` and fires when gateway shutdown begins. `gateway:pre-restart` includes the same context but only fires when shutdown is part of an expected restart and a finite `restartExpectedMs` value is supplied. During shutdown, each lifecycle hook wait is best-effort and bounded so shutdown continues if a handler stalls.
+
 ## Hook discovery
 
 Hooks are discovered from these directories, in order of increasing override precedence:
@@ -138,6 +145,8 @@ Hooks are discovered from these directories, in order of increasing override pre
 4. **Workspace hooks**: `<workspace>/hooks/` (per-agent, disabled by default until explicitly enabled)
 
 Workspace hooks can add new hook names but cannot override bundled, managed, or plugin-provided hooks with the same name.
+
+The Gateway skips internal hook discovery on startup until internal hooks are configured. Enable a bundled or managed hook with `openclaw hooks enable <name>`, install a hook pack, or set `hooks.internal.enabled=true` to opt in. When you enable one named hook, the Gateway loads only that hook's handler; `hooks.internal.enabled=true`, extra hook directories, and legacy handlers opt into broad discovery.
 
 ### Hook packs
 
@@ -164,9 +173,13 @@ Enable any bundled hook:
 openclaw hooks enable <hook-name>
 ```
 
+<a id="session-memory"></a>
+
 ### session-memory details
 
-Extracts the last 15 user/assistant messages, generates a descriptive filename slug via LLM, and saves to `<workspace>/memory/YYYY-MM-DD-slug.md`. Requires `workspace.dir` to be configured.
+Extracts the last 15 user/assistant messages, generates a descriptive filename slug via LLM, and saves to `<workspace>/memory/YYYY-MM-DD-slug.md` using the host local date. Requires `workspace.dir` to be configured.
+
+<a id="bootstrap-extra-files"></a>
 
 ### bootstrap-extra-files config
 
@@ -187,11 +200,26 @@ Extracts the last 15 user/assistant messages, generates a descriptive filename s
 
 Paths resolve relative to workspace. Only recognized bootstrap basenames are loaded (`AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`, `BOOTSTRAP.md`, `MEMORY.md`).
 
+<a id="command-logger"></a>
+
+### command-logger details
+
+Logs every slash command to `~/.openclaw/logs/commands.log`.
+
+<a id="boot-md"></a>
+
+### boot-md details
+
+Runs `BOOT.md` from the active workspace when the gateway starts.
+
 ## Plugin hooks
 
-Plugins can register hooks through the Plugin SDK for deeper integration: intercepting tool calls, modifying prompts, controlling message flow, and more. The Plugin SDK exposes 28 hooks covering model resolution, agent lifecycle, message flow, tool execution, subagent coordination, and gateway lifecycle.
+Plugins can register typed hooks through the Plugin SDK for deeper integration:
+intercepting tool calls, modifying prompts, controlling message flow, and more.
+Use plugin hooks when you need `before_tool_call`, `before_agent_reply`,
+`before_install`, or other in-process lifecycle hooks.
 
-For the complete plugin hook reference including `before_tool_call`, `before_agent_reply`, `before_install`, and all other plugin hooks, see [Plugin Architecture](/plugins/architecture#provider-runtime-hooks).
+For the complete plugin hook reference, see [Plugin hooks](/plugins/hooks).
 
 ## Configuration
 
@@ -299,5 +327,5 @@ Check for missing binaries (PATH), environment variables, config values, or OS c
 
 - [CLI Reference: hooks](/cli/hooks)
 - [Webhooks](/automation/cron-jobs#webhooks)
-- [Plugin Architecture](/plugins/architecture#provider-runtime-hooks) — full plugin hook reference
+- [Plugin hooks](/plugins/hooks) — in-process plugin lifecycle hooks
 - [Configuration](/gateway/configuration-reference#hooks)

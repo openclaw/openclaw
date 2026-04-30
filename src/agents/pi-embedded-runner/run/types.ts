@@ -4,12 +4,16 @@ import type { AuthStorage, ModelRegistry } from "@mariozechner/pi-coding-agent";
 import type { ThinkLevel } from "../../../auto-reply/thinking.js";
 import type { SessionSystemPromptReport } from "../../../config/sessions/types.js";
 import type { ContextEngine, ContextEnginePromptCacheInfo } from "../../../context-engine/types.js";
-import type { PluginHookBeforeAgentStartResult } from "../../../plugins/types.js";
-import type { MessagingToolSend } from "../../pi-embedded-messaging.js";
+import type { DiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
+import type { PluginHookBeforeAgentStartResult } from "../../../plugins/hook-before-agent-start.types.js";
+import type { MessagingToolSend } from "../../pi-embedded-messaging.types.js";
+import type { AgentRuntimePlan } from "../../runtime-plan/types.js";
 import type { ToolErrorSummary } from "../../tool-error-summary.js";
 import type { NormalizedUsage } from "../../usage.js";
+import type { EmbeddedRunReplayMetadata, EmbeddedRunReplayState } from "../replay-state.js";
+import type { EmbeddedRunLivenessState } from "../types.js";
 import type { RunEmbeddedPiAgentParams } from "./params.js";
-import type { PreemptiveCompactionRoute } from "./preemptive-compaction.js";
+import type { PreemptiveCompactionRoute } from "./preemptive-compaction.types.js";
 
 type EmbeddedRunAttemptBase = Omit<
   RunEmbeddedPiAgentParams,
@@ -17,6 +21,7 @@ type EmbeddedRunAttemptBase = Omit<
 >;
 
 export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
+  initialReplayState?: EmbeddedRunReplayState;
   /** Pluggable context engine for ingest/assemble/compact lifecycle. */
   contextEngine?: ContextEngine;
   /** Resolved model context window in tokens for assemble/compact budgeting. */
@@ -29,6 +34,10 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   authProfileIdSource?: "auto" | "user";
   provider: string;
   modelId: string;
+  /** Session-pinned embedded harness id. Prevents runtime hot-switching. */
+  agentHarnessId?: string;
+  /** OpenClaw-owned runtime policy prepared by the orchestrator for this attempt. */
+  runtimePlan?: AgentRuntimePlan;
   model: Model<Api>;
   authStorage: AuthStorage;
   modelRegistry: ModelRegistry;
@@ -38,7 +47,11 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
 
 export type EmbeddedRunAttemptResult = {
   aborted: boolean;
+  /** True when the abort originated from the caller-provided abortSignal. */
+  externalAbort: boolean;
   timedOut: boolean;
+  /** True when the no-response LLM idle watchdog caused the timeout. */
+  idleTimedOut: boolean;
   /** True if the timeout occurred while compaction was in progress or pending. */
   timedOutDuringCompaction: boolean;
   promptError: unknown;
@@ -63,35 +76,47 @@ export type EmbeddedRunAttemptResult = {
         handled?: false;
       };
   sessionIdUsed: string;
+  sessionFileUsed?: string;
+  diagnosticTrace?: DiagnosticTraceContext;
+  agentHarnessId?: string;
+  agentHarnessResultClassification?: "empty" | "reasoning-only" | "planning-only";
   bootstrapPromptWarningSignaturesSeen?: string[];
   bootstrapPromptWarningSignature?: string;
   systemPromptReport?: SessionSystemPromptReport;
+  finalPromptText?: string;
   messagesSnapshot: AgentMessage[];
   assistantTexts: string[];
   toolMetas: Array<{ toolName: string; meta?: string }>;
   lastAssistant: AssistantMessage | undefined;
+  currentAttemptAssistant?: AssistantMessage | undefined;
   lastToolError?: ToolErrorSummary;
   didSendViaMessagingTool: boolean;
   didSendDeterministicApprovalPrompt?: boolean;
   messagingToolSentTexts: string[];
   messagingToolSentMediaUrls: string[];
   messagingToolSentTargets: MessagingToolSend[];
+  toolMediaUrls?: string[];
+  toolAudioAsVoice?: boolean;
   successfulCronAdds?: number;
   cloudCodeAssistFormatError: boolean;
   attemptUsage?: NormalizedUsage;
   promptCache?: ContextEnginePromptCacheInfo;
   compactionCount?: number;
+  compactionTokensAfter?: number;
   /** Client tool call detected (OpenResponses hosted tools). */
   clientToolCall?: { name: string; params: Record<string, unknown> };
   /** True when sessions_yield tool was called during this attempt. */
   yieldDetected?: boolean;
-  replayMetadata: {
-    hadPotentialSideEffects: boolean;
-    replaySafe: boolean;
-  };
+  replayMetadata: EmbeddedRunReplayMetadata;
   itemLifecycle: {
     startedCount: number;
     completedCount: number;
     activeCount: number;
   };
+  setTerminalLifecycleMeta?: (meta: {
+    replayInvalid?: boolean;
+    livenessState?: EmbeddedRunLivenessState;
+    stopReason?: string;
+    yielded?: boolean;
+  }) => void;
 };

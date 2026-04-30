@@ -1,8 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.js";
 import { resolveGatewayInstallToken } from "./gateway-install-token.js";
 
 const readConfigFileSnapshotMock = vi.hoisted(() => vi.fn());
+const readConfigFileSnapshotForWriteMock = vi.hoisted(() => vi.fn());
 const replaceConfigFileMock = vi.hoisted(() => vi.fn());
 const resolveSecretInputRefMock = vi.hoisted(() =>
   vi.fn((): { ref: unknown } => ({ ref: undefined })),
@@ -28,8 +29,9 @@ const resolveSecretRefValuesMock = vi.hoisted(() => vi.fn());
 const secretRefKeyMock = vi.hoisted(() => vi.fn(() => "env:default:OPENCLAW_GATEWAY_TOKEN"));
 const randomTokenMock = vi.hoisted(() => vi.fn(() => "generated-token"));
 
-vi.mock("../config/config.js", () => ({
+vi.mock("./gateway-install-token.persist.runtime.js", () => ({
   readConfigFileSnapshot: readConfigFileSnapshotMock,
+  readConfigFileSnapshotForWrite: readConfigFileSnapshotForWriteMock,
   replaceConfigFile: replaceConfigFileMock,
 }));
 
@@ -54,7 +56,7 @@ vi.mock("../secrets/resolve.js", () => ({
   resolveSecretRefValues: resolveSecretRefValuesMock,
 }));
 
-vi.mock("./onboard-helpers.js", () => ({
+vi.mock("./random-token.js", () => ({
   randomToken: randomTokenMock,
 }));
 
@@ -62,6 +64,10 @@ describe("resolveGatewayInstallToken", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     readConfigFileSnapshotMock.mockResolvedValue({ exists: false, valid: true, config: {} });
+    readConfigFileSnapshotForWriteMock.mockImplementation(async () => ({
+      snapshot: await readConfigFileSnapshotMock(),
+      writeOptions: {},
+    }));
     resolveSecretInputRefMock.mockReturnValue({ ref: undefined });
     hasConfiguredSecretInputMock.mockImplementation((value: unknown) => {
       if (typeof value === "string") {
@@ -184,17 +190,23 @@ describe("resolveGatewayInstallToken", () => {
     });
 
     expect(result.warnings.some((message) => message.includes("saving to config"))).toBeTruthy();
-    expect(replaceConfigFileMock).toHaveBeenCalledWith({
-      baseHash: undefined,
-      nextConfig: expect.objectContaining({
-        gateway: {
-          auth: {
-            mode: "token",
-            token: "generated-token",
+    expect(replaceConfigFileMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        nextConfig: expect.objectContaining({
+          gateway: {
+            auth: {
+              mode: "token",
+              token: "generated-token",
+            },
           },
-        },
+        }),
+        writeOptions: expect.objectContaining({
+          baseSnapshot: expect.any(Object),
+          skipRuntimeSnapshotRefresh: true,
+        }),
+        afterWrite: { mode: "auto" },
       }),
-    });
+    );
   });
 
   it("drops generated plaintext when config changes to SecretRef before persist", async () => {

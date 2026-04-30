@@ -1,8 +1,8 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createDirectoryTestRuntime,
   expectDirectorySurface,
-} from "../../../test/helpers/plugins/directory.ts";
+} from "openclaw/plugin-sdk/channel-test-helpers";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
 import {
   googlechatDirectoryAdapter,
@@ -60,6 +60,31 @@ function resolveGoogleChatAccountImpl(params: { cfg: OpenClawConfig; accountId?:
     config,
     credentialSource: serviceAccount ? ("inline" as const) : ("none" as const),
   };
+}
+
+function mockGoogleChatOutboundSpaceResolution() {
+  resolveGoogleChatOutboundSpaceMock.mockImplementation(async ({ target }: { target: string }) => {
+    const normalized = normalizeGoogleChatTarget(target);
+    if (!normalized) {
+      throw new Error("Missing Google Chat target.");
+    }
+    return normalized.toLowerCase().startsWith("users/")
+      ? `spaces/DM-${normalized.slice("users/".length)}`
+      : normalized.replace(/\/messages\/.+$/, "");
+  });
+}
+
+function mockGoogleChatMediaLoaders() {
+  loadOutboundMediaFromUrlMock.mockImplementation(async (mediaUrl: string) => ({
+    buffer: Buffer.from("default-bytes"),
+    fileName: mediaUrl.split("/").pop() || "attachment",
+    contentType: "application/octet-stream",
+  }));
+  fetchRemoteMediaMock.mockImplementation(async () => ({
+    buffer: Buffer.from("remote-bytes"),
+    fileName: "remote.png",
+    contentType: "image/png",
+  }));
 }
 
 vi.mock("./channel.runtime.js", () => {
@@ -136,48 +161,14 @@ vi.mock("./channel.deps.runtime.js", () => {
 });
 
 resolveGoogleChatAccountMock.mockImplementation(resolveGoogleChatAccountImpl);
-resolveGoogleChatOutboundSpaceMock.mockImplementation(async ({ target }: { target: string }) => {
-  const normalized = normalizeGoogleChatTarget(target);
-  if (!normalized) {
-    throw new Error("Missing Google Chat target.");
-  }
-  return normalized.toLowerCase().startsWith("users/")
-    ? `spaces/DM-${normalized.slice("users/".length)}`
-    : normalized.replace(/\/messages\/.+$/, "");
-});
-loadOutboundMediaFromUrlMock.mockImplementation(async (mediaUrl: string) => ({
-  buffer: Buffer.from("default-bytes"),
-  fileName: mediaUrl.split("/").pop() || "attachment",
-  contentType: "application/octet-stream",
-}));
-fetchRemoteMediaMock.mockImplementation(async () => ({
-  buffer: Buffer.from("remote-bytes"),
-  fileName: "remote.png",
-  contentType: "image/png",
-}));
+mockGoogleChatOutboundSpaceResolution();
+mockGoogleChatMediaLoaders();
 
 afterEach(() => {
   vi.clearAllMocks();
   resolveGoogleChatAccountMock.mockImplementation(resolveGoogleChatAccountImpl);
-  resolveGoogleChatOutboundSpaceMock.mockImplementation(async ({ target }: { target: string }) => {
-    const normalized = normalizeGoogleChatTarget(target);
-    if (!normalized) {
-      throw new Error("Missing Google Chat target.");
-    }
-    return normalized.toLowerCase().startsWith("users/")
-      ? `spaces/DM-${normalized.slice("users/".length)}`
-      : normalized.replace(/\/messages\/.+$/, "");
-  });
-  loadOutboundMediaFromUrlMock.mockImplementation(async (mediaUrl: string) => ({
-    buffer: Buffer.from("default-bytes"),
-    fileName: mediaUrl.split("/").pop() || "attachment",
-    contentType: "application/octet-stream",
-  }));
-  fetchRemoteMediaMock.mockImplementation(async () => ({
-    buffer: Buffer.from("remote-bytes"),
-    fileName: "remote.png",
-    contentType: "image/png",
-  }));
+  mockGoogleChatOutboundSpaceResolution();
+  mockGoogleChatMediaLoaders();
 });
 
 function createGoogleChatCfg(): OpenClawConfig {

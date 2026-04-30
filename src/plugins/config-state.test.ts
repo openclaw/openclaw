@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   createPluginActivationSource,
   normalizePluginsConfig,
@@ -55,15 +55,27 @@ describe("normalizePluginsConfig", () => {
   });
 
   it.each([
+    [{}, undefined],
+    [{ slots: { contextEngine: "lossless-claw" } }, "lossless-claw"],
+    [{ slots: { contextEngine: "none" } }, null],
+    [{ slots: { contextEngine: "  cortex  " } }, "cortex"],
+    [{ slots: { contextEngine: "" } }, undefined],
+  ] as const)("preserves contextEngine slot for %o (#64170)", (config, expected) => {
+    expect(normalizePluginsConfig(config).slots.contextEngine).toBe(expected);
+  });
+
+  it.each([
     {
       name: "normalizes plugin hook policy flags",
       entry: {
         hooks: {
           allowPromptInjection: false,
+          allowConversationAccess: true,
         },
       },
       expectedHooks: {
         allowPromptInjection: false,
+        allowConversationAccess: true,
       },
     },
     {
@@ -71,7 +83,8 @@ describe("normalizePluginsConfig", () => {
       entry: {
         hooks: {
           allowPromptInjection: "nope",
-        } as unknown as { allowPromptInjection: boolean },
+          allowConversationAccess: "nope",
+        } as unknown as { allowPromptInjection: boolean; allowConversationAccess: boolean },
       },
       expectedHooks: undefined,
     },
@@ -84,12 +97,12 @@ describe("normalizePluginsConfig", () => {
       name: "normalizes plugin subagent override policy settings",
       subagent: {
         allowModelOverride: true,
-        allowedModels: [" anthropic/claude-sonnet-4-6 ", "", "openai/gpt-5.4"],
+        allowedModels: [" anthropic/claude-sonnet-4-6 ", "", "openai/gpt-5.5"],
       },
       expected: {
         allowModelOverride: true,
         hasAllowedModelsConfig: true,
-        allowedModels: ["anthropic/claude-sonnet-4-6", "openai/gpt-5.4"],
+        allowedModels: ["anthropic/claude-sonnet-4-6", "openai/gpt-5.5"],
       },
     },
     {
@@ -140,6 +153,29 @@ describe("normalizePluginsConfig", () => {
     expect(result.entries.openai?.enabled).toBe(true);
     expect(result.entries.google?.enabled).toBe(true);
     expect(result.entries.minimax?.enabled).toBe(false);
+  });
+
+  it("reuses the bundled alias scan during one config normalization", async () => {
+    vi.resetModules();
+    const bundledPluginMetadata = await import("./bundled-plugin-metadata.js");
+    const listBundledMetadata = vi.spyOn(bundledPluginMetadata, "listBundledPluginMetadata");
+    const { normalizePluginsConfig: normalizeFreshPluginsConfig } =
+      await import("./config-state.js");
+
+    const result = normalizeFreshPluginsConfig({
+      allow: ["unknown-plugin-one", "unknown-plugin-two"],
+      deny: ["unknown-plugin-three"],
+      entries: {
+        "unknown-plugin-four": {
+          enabled: true,
+        },
+      },
+    });
+
+    expect(result.allow).toEqual(["unknown-plugin-one", "unknown-plugin-two"]);
+    expect(result.deny).toEqual(["unknown-plugin-three"]);
+    expect(result.entries["unknown-plugin-four"]?.enabled).toBe(true);
+    expect(listBundledMetadata).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -432,6 +468,32 @@ describe("resolveEffectivePluginActivationState", () => {
       reason: "enabled by effective config",
     });
   });
+
+  it("treats an explicitly selected workspace context engine as explicit activation", () => {
+    const rawConfig = {
+      plugins: {
+        slots: {
+          contextEngine: "lossless-claw",
+        },
+      },
+    };
+
+    expect(
+      resolveEffectivePluginActivationState({
+        id: "lossless-claw",
+        origin: "workspace",
+        config: normalizePluginsConfig(rawConfig.plugins),
+        rootConfig: rawConfig,
+        activationSource: createPluginActivationSource({ config: rawConfig }),
+      }),
+    ).toEqual({
+      enabled: true,
+      activated: true,
+      explicitlyEnabled: true,
+      source: "explicit",
+      reason: "selected context engine slot",
+    });
+  });
 });
 
 describe("resolveEnableState", () => {
@@ -522,6 +584,20 @@ describe("resolveEnableState", () => {
       expected: {
         enabled: false,
         reason: "workspace plugin (disabled by default)",
+      },
+    });
+  });
+
+  it("keeps an explicitly selected workspace context engine enabled when omitted from plugins.allow", () => {
+    expectNormalizedEnableState({
+      id: "lossless-claw",
+      origin: "workspace",
+      config: {
+        allow: ["telegram"],
+        slots: { contextEngine: "lossless-claw" },
+      },
+      expected: {
+        enabled: true,
       },
     });
   });

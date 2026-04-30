@@ -88,6 +88,12 @@ export type ExecApprovalFollowupTarget = {
   turnSourceTo?: string;
   turnSourceAccountId?: string;
   turnSourceThreadId?: string | number;
+  direct?: boolean;
+};
+
+export type ExecApprovalFollowupResultDeps = {
+  sendExecApprovalFollowup?: typeof sendExecApprovalFollowup;
+  logWarn?: typeof logWarn;
 };
 
 export type DefaultExecApprovalRequestArgs = {
@@ -317,6 +323,7 @@ export function buildExecApprovalFollowupTarget(
     turnSourceTo: params.turnSourceTo,
     turnSourceAccountId: params.turnSourceAccountId,
     turnSourceThreadId: params.turnSourceThreadId,
+    direct: params.direct,
   };
 }
 
@@ -397,8 +404,11 @@ export function buildHeadlessExecApprovalDeniedMessage(params: {
 export async function sendExecApprovalFollowupResult(
   target: ExecApprovalFollowupTarget,
   resultText: string,
+  deps: ExecApprovalFollowupResultDeps = {},
 ): Promise<void> {
-  await sendExecApprovalFollowup({
+  const send = deps.sendExecApprovalFollowup ?? sendExecApprovalFollowup;
+  const warn = deps.logWarn ?? logWarn;
+  await send({
     approvalId: target.approvalId,
     sessionKey: target.sessionKey,
     turnSourceChannel: target.turnSourceChannel,
@@ -406,13 +416,14 @@ export async function sendExecApprovalFollowupResult(
     turnSourceAccountId: target.turnSourceAccountId,
     turnSourceThreadId: target.turnSourceThreadId,
     resultText,
+    direct: target.direct,
   }).catch((error) => {
     const message = formatErrorMessage(error);
     const key = `${target.approvalId}:${message}`;
     if (!rememberExecApprovalFollowupFailureKey(key)) {
       return;
     }
-    logWarn(`exec approval followup dispatch failed (id=${target.approvalId}): ${message}`);
+    warn(`exec approval followup dispatch failed (id=${target.approvalId}): ${message}`);
   });
 }
 

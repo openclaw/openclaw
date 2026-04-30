@@ -5,13 +5,13 @@ import {
   type NormalizedLocation,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { normalizeCommandBody } from "openclaw/plugin-sdk/command-surface";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import type {
   TelegramDirectConfig,
   TelegramGroupConfig,
   TelegramTopicConfig,
-} from "openclaw/plugin-sdk/config-runtime";
+} from "openclaw/plugin-sdk/config-types";
+import { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/context-visibility-runtime";
 import {
   buildPendingHistoryContextFromMap,
   type HistoryEntry,
@@ -25,6 +25,7 @@ import { isSenderAllowed, normalizeAllowFrom } from "./bot-access.js";
 import type {
   TelegramMediaRef,
   TelegramMessageContextOptions,
+  TelegramMessageContextSessionRuntimeOverrides,
 } from "./bot-message-context.types.js";
 import {
   buildGroupLabel,
@@ -42,6 +43,49 @@ import { resolveTelegramGroupPromptSettings } from "./group-config-helpers.js";
 type FinalizedTelegramInboundContext = ReturnType<
   typeof import("./bot-message-context.session.runtime.js").finalizeInboundContext
 >;
+
+type TelegramMessageContextSessionRuntime =
+  typeof import("./bot-message-context.session.runtime.js");
+
+const sessionRuntimeMethods = [
+  "finalizeInboundContext",
+  "readSessionUpdatedAt",
+  "recordInboundSession",
+  "resolveInboundLastRouteSessionKey",
+  "resolvePinnedMainDmOwnerFromAllowlist",
+  "resolveStorePath",
+] as const satisfies readonly (keyof TelegramMessageContextSessionRuntime)[];
+
+function hasCompleteSessionRuntime(
+  runtime: TelegramMessageContextSessionRuntimeOverrides | undefined,
+): runtime is TelegramMessageContextSessionRuntime {
+  return Boolean(
+    runtime && sessionRuntimeMethods.every((method) => typeof runtime[method] === "function"),
+  );
+}
+
+async function loadTelegramMessageContextSessionRuntime(
+  runtime: TelegramMessageContextSessionRuntimeOverrides | undefined,
+): Promise<TelegramMessageContextSessionRuntime> {
+  if (hasCompleteSessionRuntime(runtime)) {
+    return runtime;
+  }
+  return {
+    ...(await import("./bot-message-context.session.runtime.js")),
+    ...runtime,
+  };
+}
+
+export async function resolveTelegramMessageContextStorePath(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  sessionRuntime?: TelegramMessageContextSessionRuntimeOverrides;
+}): Promise<string> {
+  const sessionRuntime = await loadTelegramMessageContextSessionRuntime(params.sessionRuntime);
+  return sessionRuntime.resolveStorePath(params.cfg.session?.store, {
+    agentId: params.agentId,
+  });
+}
 
 export async function buildTelegramInboundContextPayload(params: {
   cfg: OpenClawConfig;
@@ -67,14 +111,27 @@ export async function buildTelegramInboundContextPayload(params: {
   topicConfig?: TelegramTopicConfig;
   stickerCacheHit: boolean;
   effectiveWasMentioned: boolean;
+  audioTranscribedMediaIndex?: number;
   commandAuthorized: boolean;
   locationData?: NormalizedLocation;
   options?: TelegramMessageContextOptions;
   dmAllowFrom?: Array<string | number>;
   effectiveGroupAllow?: NormalizedAllowFrom;
+  topicName?: string;
+  sessionRuntime?: TelegramMessageContextSessionRuntimeOverrides;
 }): Promise<{
   ctxPayload: FinalizedTelegramInboundContext;
   skillFilter: string[] | undefined;
+  turn: {
+    storePath: string;
+    recordInboundSession: TelegramMessageContextSessionRuntime["recordInboundSession"];
+    record: {
+      updateLastRoute?: Parameters<
+        TelegramMessageContextSessionRuntime["recordInboundSession"]
+      >[0]["updateLastRoute"];
+      onRecordError: (err: unknown) => void;
+    };
+  };
 }> {
   const {
     cfg,
@@ -100,11 +157,14 @@ export async function buildTelegramInboundContextPayload(params: {
     topicConfig,
     stickerCacheHit,
     effectiveWasMentioned,
+    audioTranscribedMediaIndex,
     commandAuthorized,
     locationData,
     options,
     dmAllowFrom,
     effectiveGroupAllow,
+    topicName,
+    sessionRuntime: sessionRuntimeOverride,
   } = params;
   const replyTarget = describeReplyTarget(msg);
   const forwardOrigin = normalizeForwardedContext(msg);
@@ -173,14 +233,29 @@ export async function buildTelegramInboundContextPayload(params: {
           : ""
       }]\n`
     : "";
+  const buildReplySupplementalLines = (params: { body?: string }) => {
+    const lines: string[] = [];
+    const forwardAnnotation = replyForwardAnnotation.trimEnd();
+    if (forwardAnnotation) {
+      lines.push(forwardAnnotation);
+    }
+    if (params.body) {
+      lines.push(params.body);
+    }
+    return lines.length > 0 ? `\n${lines.join("\n")}` : "";
+  };
   const replySuffix = visibleReplyTarget
     ? visibleReplyTarget.kind === "quote"
       ? `\n\n[Quoting ${visibleReplyTarget.sender}${
           visibleReplyTarget.id ? ` id:${visibleReplyTarget.id}` : ""
-        }]\n${replyForwardAnnotation}"${visibleReplyTarget.body}"\n[/Quoting]`
+        }]${buildReplySupplementalLines({
+          body: visibleReplyTarget.body ? `"${visibleReplyTarget.body}"` : undefined,
+        })}\n[/Quoting]`
       : `\n\n[Replying to ${visibleReplyTarget.sender}${
           visibleReplyTarget.id ? ` id:${visibleReplyTarget.id}` : ""
-        }]\n${replyForwardAnnotation}${visibleReplyTarget.body}\n[/Replying]`
+        }]${buildReplySupplementalLines({
+          body: visibleReplyTarget.body,
+        })}\n[/Replying]`
     : "";
   const forwardPrefix = visibleForwardOrigin
     ? `[Forwarded from ${visibleForwardOrigin.from}${
@@ -194,9 +269,11 @@ export async function buildTelegramInboundContextPayload(params: {
   const conversationLabel = isGroup
     ? (groupLabel ?? `group:${chatId}`)
     : buildSenderLabel(msg, senderId || chatId);
-  const sessionRuntime = await import("./bot-message-context.session.runtime.js");
-  const storePath = sessionRuntime.resolveStorePath(cfg.session?.store, {
+  const sessionRuntime = await loadTelegramMessageContextSessionRuntime(sessionRuntimeOverride);
+  const storePath = await resolveTelegramMessageContextStorePath({
+    cfg,
     agentId: route.agentId,
+    sessionRuntime: sessionRuntimeOverride,
   });
   const envelopeOptions = resolveEnvelopeFormatOptions(cfg);
   const previousTimestamp = sessionRuntime.readSessionUpdatedAt({
@@ -279,6 +356,12 @@ export async function buildTelegramInboundContextPayload(params: {
     ReplyToBody: visibleReplyTarget?.body,
     ReplyToSender: visibleReplyTarget?.sender,
     ReplyToIsQuote: visibleReplyTarget?.kind === "quote" ? true : undefined,
+    ReplyToIsExternal: visibleReplyTarget?.source === "external_reply" ? true : undefined,
+    ReplyToQuoteText: visibleReplyTarget?.quoteText,
+    ReplyToQuotePosition: visibleReplyTarget?.quotePosition,
+    ReplyToQuoteEntities: visibleReplyTarget?.quoteEntities,
+    ReplyToQuoteSourceText: visibleReplyTarget?.quoteSourceText,
+    ReplyToQuoteSourceEntities: visibleReplyTarget?.quoteSourceEntities,
     ReplyToForwardedFrom: visibleReplyTarget?.forwardedFrom?.from,
     ReplyToForwardedFromType: visibleReplyTarget?.forwardedFrom?.fromType,
     ReplyToForwardedFromId: visibleReplyTarget?.forwardedFrom?.fromId,
@@ -307,6 +390,9 @@ export async function buildTelegramInboundContextPayload(params: {
       contextMedia.length > 0
         ? (contextMedia.map((m) => m.contentType).filter(Boolean) as string[])
         : undefined,
+    ...(audioTranscribedMediaIndex !== undefined
+      ? { MediaTranscribedIndexes: [audioTranscribedMediaIndex] }
+      : {}),
     Sticker: allMedia[0]?.stickerMetadata,
     StickerMediaIncluded: allMedia[0]?.stickerMetadata ? !stickerCacheHit : undefined,
     ...(locationData ? toLocationContext(locationData) : undefined),
@@ -314,6 +400,7 @@ export async function buildTelegramInboundContextPayload(params: {
     CommandSource: options?.commandSource,
     MessageThreadId: threadSpec.id,
     IsForum: isForum,
+    TopicName: isForum && topicName ? topicName : undefined,
     OriginatingChannel: "telegram" as const,
     OriginatingTo: `telegram:${chatId}`,
   });
@@ -338,45 +425,37 @@ export async function buildTelegramInboundContextPayload(params: {
       ? String(dmThreadId)
       : undefined;
 
-  await sessionRuntime.recordInboundSession({
-    storePath,
-    sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
-    ctx: ctxPayload,
-    updateLastRoute:
-      !isGroup || updateLastRouteThreadId != null
-        ? {
-            sessionKey: updateLastRouteSessionKey,
-            channel: "telegram",
-            to:
-              isGroup && updateLastRouteThreadId != null
-                ? `telegram:${chatId}:topic:${updateLastRouteThreadId}`
-                : `telegram:${chatId}`,
-            accountId: route.accountId,
-            threadId: updateLastRouteThreadId,
-            mainDmOwnerPin:
-              !isGroup &&
-              updateLastRouteSessionKey === route.mainSessionKey &&
-              pinnedMainDmOwner &&
-              senderId
-                ? {
-                    ownerRecipient: pinnedMainDmOwner,
-                    senderRecipient: senderId,
-                    onSkip: ({ ownerRecipient, senderRecipient }) => {
-                      logVerbose(
-                        `telegram: skip main-session last route for ${senderRecipient} (pinned owner ${ownerRecipient})`,
-                      );
-                    },
-                  }
-                : undefined,
-          }
-        : undefined,
-    onRecordError: (err) => {
-      logVerbose(`telegram: failed updating session meta: ${String(err)}`);
-    },
-  });
+  const updateLastRoute =
+    !isGroup || updateLastRouteThreadId != null
+      ? {
+          sessionKey: updateLastRouteSessionKey,
+          channel: "telegram" as const,
+          to:
+            isGroup && updateLastRouteThreadId != null
+              ? `telegram:${chatId}:topic:${updateLastRouteThreadId}`
+              : `telegram:${chatId}`,
+          accountId: route.accountId,
+          threadId: updateLastRouteThreadId,
+          mainDmOwnerPin:
+            !isGroup &&
+            updateLastRouteSessionKey === route.mainSessionKey &&
+            pinnedMainDmOwner &&
+            senderId
+              ? {
+                  ownerRecipient: pinnedMainDmOwner,
+                  senderRecipient: senderId,
+                  onSkip: (skipParams: { ownerRecipient: string; senderRecipient: string }) => {
+                    logVerbose(
+                      `telegram: skip main-session last route for ${skipParams.senderRecipient} (pinned owner ${skipParams.ownerRecipient})`,
+                    );
+                  },
+                }
+              : undefined,
+        }
+      : undefined;
 
   if (visibleReplyTarget && shouldLogVerbose()) {
-    const preview = visibleReplyTarget.body.replace(/\s+/g, " ").slice(0, 120);
+    const preview = (visibleReplyTarget.body ?? "").replace(/\s+/g, " ").slice(0, 120);
     logVerbose(
       `telegram reply-context: replyToId=${visibleReplyTarget.id} replyToSender=${visibleReplyTarget.sender} replyToBody="${preview}"`,
     );
@@ -400,5 +479,15 @@ export async function buildTelegramInboundContextPayload(params: {
   return {
     ctxPayload,
     skillFilter,
+    turn: {
+      storePath,
+      recordInboundSession: sessionRuntime.recordInboundSession,
+      record: {
+        updateLastRoute,
+        onRecordError: (err) => {
+          logVerbose(`telegram: failed updating session meta: ${String(err)}`);
+        },
+      },
+    },
   };
 }

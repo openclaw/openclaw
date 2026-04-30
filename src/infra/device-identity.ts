@@ -56,8 +56,8 @@ function fingerprintPublicKey(publicKeyPem: string): string {
 
 function generateIdentity(): DeviceIdentity {
   const { publicKey, privateKey } = crypto.generateKeyPairSync("ed25519");
-  const publicKeyPem = publicKey.export({ type: "spki", format: "pem" }).toString();
-  const privateKeyPem = privateKey.export({ type: "pkcs8", format: "pem" }).toString();
+  const publicKeyPem = publicKey.export({ type: "spki", format: "pem" });
+  const privateKeyPem = privateKey.export({ type: "pkcs8", format: "pem" });
   const deviceId = fingerprintPublicKey(publicKeyPem);
   return { deviceId, publicKeyPem, privateKeyPem };
 }
@@ -120,6 +120,37 @@ export function loadOrCreateDeviceIdentity(
     // best-effort
   }
   return identity;
+}
+
+export function loadDeviceIdentityIfPresent(
+  filePath: string = resolveDefaultIdentityPath(),
+): DeviceIdentity | null {
+  try {
+    if (!fs.existsSync(filePath)) {
+      return null;
+    }
+    const raw = fs.readFileSync(filePath, "utf8");
+    const parsed = JSON.parse(raw) as StoredIdentity;
+    if (
+      parsed?.version !== 1 ||
+      typeof parsed.deviceId !== "string" ||
+      typeof parsed.publicKeyPem !== "string" ||
+      typeof parsed.privateKeyPem !== "string"
+    ) {
+      return null;
+    }
+    const derivedId = fingerprintPublicKey(parsed.publicKeyPem);
+    if (!derivedId || derivedId !== parsed.deviceId) {
+      return null;
+    }
+    return {
+      deviceId: parsed.deviceId,
+      publicKeyPem: parsed.publicKeyPem,
+      privateKeyPem: parsed.privateKeyPem,
+    };
+  } catch {
+    return null;
+  }
 }
 
 export function signDevicePayload(privateKeyPem: string, payload: string): string {

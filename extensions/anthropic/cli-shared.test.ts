@@ -2,30 +2,23 @@ import { describe, expect, it } from "vitest";
 import { buildAnthropicCliBackend } from "./cli-backend.js";
 import {
   CLAUDE_CLI_CLEAR_ENV,
-  CLAUDE_CLI_HOST_MANAGED_ENV,
   normalizeClaudeBackendConfig,
   normalizeClaudePermissionArgs,
   normalizeClaudeSettingSourcesArgs,
+  resolveClaudePermissionMode,
 } from "./cli-shared.js";
 
 describe("normalizeClaudePermissionArgs", () => {
-  it("injects bypassPermissions when args omit permission flags", () => {
+  it("leaves args alone when they omit permission flags", () => {
     expect(
       normalizeClaudePermissionArgs(["-p", "--output-format", "stream-json", "--verbose"]),
-    ).toEqual([
-      "-p",
-      "--output-format",
-      "stream-json",
-      "--verbose",
-      "--permission-mode",
-      "bypassPermissions",
-    ]);
+    ).toEqual(["-p", "--output-format", "stream-json", "--verbose"]);
   });
 
-  it("removes legacy skip-permissions and injects bypassPermissions", () => {
+  it("removes legacy skip-permissions without adding bypassPermissions", () => {
     expect(
       normalizeClaudePermissionArgs(["-p", "--dangerously-skip-permissions", "--verbose"]),
-    ).toEqual(["-p", "--verbose", "--permission-mode", "bypassPermissions"]);
+    ).toEqual(["-p", "--verbose"]);
   });
 
   it("keeps explicit permission-mode overrides", () => {
@@ -40,10 +33,14 @@ describe("normalizeClaudePermissionArgs", () => {
     ]);
   });
 
-  it("treats a bare permission-mode flag as malformed and falls back to bypassPermissions", () => {
+  it("drops malformed permission-mode flags in both split and equals forms", () => {
     expect(
       normalizeClaudePermissionArgs(["-p", "--permission-mode", "--output-format", "stream-json"]),
-    ).toEqual(["-p", "--output-format", "stream-json", "--permission-mode", "bypassPermissions"]);
+    ).toEqual(["-p", "--output-format", "stream-json"]);
+    expect(normalizeClaudePermissionArgs(["-p", "--permission-mode="])).toEqual(["-p"]);
+    expect(normalizeClaudePermissionArgs(["-p", "--permission-mode=--output-format"])).toEqual([
+      "-p",
+    ]);
   });
 });
 
@@ -108,6 +105,74 @@ describe("normalizeClaudeBackendConfig", () => {
       "--permission-mode",
       "bypassPermissions",
     ]);
+    expect(normalized.output).toBe("jsonl");
+    expect(normalized.liveSession).toBe("claude-stdio");
+    expect(normalized.input).toBe("stdin");
+  });
+
+  it("derives Claude bypass from OpenClaw YOLO policy and disables it for safer policy", () => {
+    expect(resolveClaudePermissionMode({ backendId: "claude-cli" })).toEqual({
+      mode: "bypassPermissions",
+      overrideExisting: false,
+    });
+    expect(
+      resolveClaudePermissionMode({
+        backendId: "claude-cli",
+        config: { tools: { exec: { security: "allowlist", ask: "on-miss" } } },
+      }),
+    ).toEqual({ overrideExisting: false });
+  });
+
+  it("derives Claude bypass from per-agent OpenClaw exec policy", () => {
+    expect(
+      resolveClaudePermissionMode({
+        backendId: "claude-cli",
+        agentId: "safe-agent",
+        config: {
+          tools: { exec: { security: "full", ask: "off" } },
+          agents: {
+            list: [
+              {
+                id: "safe-agent",
+                tools: { exec: { security: "allowlist", ask: "on-miss" } },
+              },
+            ],
+          },
+        },
+      }),
+    ).toEqual({ overrideExisting: false });
+    expect(
+      resolveClaudePermissionMode({
+        backendId: "claude-cli",
+        agentId: "yolo-agent",
+        config: {
+          tools: { exec: { security: "allowlist", ask: "on-miss" } },
+          agents: {
+            list: [
+              {
+                id: "yolo-agent",
+                tools: { exec: { security: "full", ask: "off" } },
+              },
+            ],
+          },
+        },
+      }),
+    ).toEqual({
+      mode: "bypassPermissions",
+      overrideExisting: false,
+    });
+  });
+
+  it("does not infer live stdio when explicit transport overrides are incompatible", () => {
+    const normalized = normalizeClaudeBackendConfig({
+      command: "claude",
+      output: "json",
+      input: "arg",
+    });
+
+    expect(normalized.output).toBe("json");
+    expect(normalized.liveSession).toBeUndefined();
+    expect(normalized.input).toBe("arg");
   });
 
   it("is wired through the anthropic cli backend normalize hook", () => {
@@ -122,26 +187,33 @@ describe("normalizeClaudeBackendConfig", () => {
       resumeArgs: ["-p", "--output-format", "stream-json", "--verbose", "--resume", "{sessionId}"],
     });
 
-    expect(normalized?.args).toContain("--permission-mode");
-    expect(normalized?.args).toContain("bypassPermissions");
     expect(normalized?.args).toContain("--setting-sources");
     expect(normalized?.args).toContain("user");
-    expect(normalized?.resumeArgs).toContain("--permission-mode");
-    expect(normalized?.resumeArgs).toContain("bypassPermissions");
+    expect(normalized?.args).toContain("--permission-mode");
+    expect(normalized?.args).toContain("bypassPermissions");
     expect(normalized?.resumeArgs).toContain("--setting-sources");
     expect(normalized?.resumeArgs).toContain("user");
+    expect(normalized?.resumeArgs).toContain("--permission-mode");
+    expect(normalized?.resumeArgs).toContain("bypassPermissions");
+    expect(normalized?.liveSession).toBe("claude-stdio");
   });
 
-  it("marks claude cli as host-managed, restricts setting sources, and clears inherited env overrides", () => {
+  it("leaves claude cli subscription-managed, restricts setting sources, and clears inherited env overrides", () => {
     const backend = buildAnthropicCliBackend();
 
-    expect(backend.config.env).toEqual(CLAUDE_CLI_HOST_MANAGED_ENV);
+    expect(backend.config.env).toBeUndefined();
+    expect(backend.config.liveSession).toBe("claude-stdio");
+    expect(backend.config.output).toBe("jsonl");
+    expect(backend.config.input).toBe("stdin");
     expect(backend.config.args).toContain("--setting-sources");
     expect(backend.config.args).toContain("user");
     expect(backend.config.resumeArgs).toContain("--setting-sources");
     expect(backend.config.resumeArgs).toContain("user");
     expect(backend.config.clearEnv).toEqual([...CLAUDE_CLI_CLEAR_ENV]);
+    expect(backend.config.clearEnv).toContain("ANTHROPIC_API_TOKEN");
     expect(backend.config.clearEnv).toContain("ANTHROPIC_BASE_URL");
+    expect(backend.config.clearEnv).toContain("ANTHROPIC_CUSTOM_HEADERS");
+    expect(backend.config.clearEnv).toContain("ANTHROPIC_OAUTH_TOKEN");
     expect(backend.config.clearEnv).toContain("CLAUDE_CONFIG_DIR");
     expect(backend.config.clearEnv).toContain("CLAUDE_CODE_USE_BEDROCK");
     expect(backend.config.clearEnv).toContain("CLAUDE_CODE_OAUTH_TOKEN");

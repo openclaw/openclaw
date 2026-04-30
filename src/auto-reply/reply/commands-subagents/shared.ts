@@ -307,6 +307,7 @@ export type FocusTargetResolution = {
 export async function resolveFocusTargetSession(params: {
   runs: SubagentRunRecord[];
   token: string;
+  requesterKey?: string;
 }): Promise<FocusTargetResolution | null> {
   const subagentMatch = resolveSubagentTarget(params.runs, params.token);
   if (subagentMatch.entry) {
@@ -326,6 +327,8 @@ export async function resolveFocusTargetSession(params: {
   }
 
   const attempts: Array<Record<string, string>> = [];
+  const requesterKey = normalizeOptionalString(params.requesterKey);
+  const spawnedBy = requesterKey && isSubagentSessionKey(requesterKey) ? requesterKey : undefined;
   attempts.push({ key: token });
   if (looksLikeSessionId(token)) {
     attempts.push({ sessionId: token });
@@ -334,9 +337,9 @@ export async function resolveFocusTargetSession(params: {
 
   for (const attempt of attempts) {
     try {
-      const resolved = await callGateway<{ key?: string }>({
+      const resolved = await callGateway({
         method: "sessions.resolve",
-        params: attempt,
+        params: spawnedBy ? { ...attempt, spawnedBy } : attempt,
       });
       const key = normalizeOptionalString(resolved?.key) ?? "";
       if (!key) {

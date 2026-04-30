@@ -22,6 +22,10 @@ can affect bundled plugins and third-party plugins.
 
 ## Boundary Rules
 
+- Host loads plugins; plugins should not reach through the SDK into arbitrary
+  host internals.
+- Prefer a small versioned host/kernel seam plus narrow documented SDK
+  entrypoints over broad convenience barrels.
 - Prefer narrow, purpose-built subpaths over broad convenience re-exports.
 - Do not expose implementation convenience from `src/channels/**`,
   `src/agents/**`, `src/plugins/**`, or other internals unless you are
@@ -41,6 +45,9 @@ can affect bundled plugins and third-party plugins.
   `api.ts` or `runtime-api.ts` plus generic SDK capabilities. Do not add a
   provider-named `src/plugin-sdk/<id>.ts` seam just to make core aware of a
   bundled channel's private helpers.
+- Resolver/facade loader tests are the exception to broad source API coverage:
+  use generated tiny plugin fixtures for `api.js` / `runtime-api.js` fallback
+  behavior. Do not point those tests at real bundled plugin source APIs.
 - For provider work, prefer family-level seams over provider-specific seams.
   Shared helpers should describe a reusable behavior such as replay policy,
   tool-schema compat, payload normalization, stream-wrapper composition, or
@@ -52,6 +59,12 @@ can affect bundled plugins and third-party plugins.
 - Keep transport/runtime policy and plugin-facing helpers aligned. If the same
   behavior is used in plugin registration and in core runtime paths, expose one
   shared helper instead of letting the two paths drift.
+- SDK subpaths should help callers resolve one capability or runtime need at a
+  time. Do not grow new surfaces that require broad runtime registry access as
+  the default path.
+- If a proposed SDK export mainly exists to let setup/config/control-plane code
+  execute plugin runtime, that is usually a boundary smell. Prefer metadata or
+  descriptor-driven control-plane seams first.
 
 ## Verification
 

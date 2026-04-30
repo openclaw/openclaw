@@ -6,7 +6,6 @@ import { materializeGatewayAuthSecretRefs } from "../gateway/auth-config-utils.j
 import { assertExplicitGatewayAuthModeWhenBothConfigured } from "../gateway/auth-mode-policy.js";
 import { isLoopbackHost, isSecureWebSocketUrl } from "../gateway/net.js";
 import { issueDeviceBootstrapToken } from "../infra/device-bootstrap.js";
-import { normalizeHostname } from "../infra/net/hostname.js";
 import {
   pickMatchingExternalInterfaceAddress,
   safeNetworkInterfaces,
@@ -75,18 +74,10 @@ function describeSecureMobilePairingFix(source?: string): string {
   return (
     "Tailscale and public mobile pairing require a secure gateway URL (wss://) or Tailscale Serve/Funnel." +
     sourceNote +
-    " Fix: use a private LAN host/address, prefer gateway.tailscale.mode=serve, or set " +
+    " Fix: use a private LAN IP address, prefer gateway.tailscale.mode=serve, or set " +
     "gateway.remote.url / plugins.entries.device-pair.config.publicUrl to a wss:// URL. " +
-    "ws:// is only valid for localhost, private LAN, or the Android emulator."
+    "ws:// is only valid for localhost, private LAN IP addresses, or the Android emulator."
   );
-}
-
-function isPrivateLanHostname(host: string): boolean {
-  const normalized = normalizeHostname(host);
-  if (!normalized) {
-    return false;
-  }
-  return normalized.endsWith(".local") || (!normalized.includes(".") && !normalized.includes(":"));
 }
 
 function isPrivateLanIpHost(host: string): boolean {
@@ -111,12 +102,7 @@ function isPrivateLanIpHost(host: string): boolean {
 }
 
 function isMobilePairingCleartextAllowedHost(host: string): boolean {
-  return (
-    isLoopbackHost(host) ||
-    host === "10.0.2.2" ||
-    isPrivateLanIpHost(host) ||
-    isPrivateLanHostname(host)
-  );
+  return isLoopbackHost(host) || host === "10.0.2.2" || isPrivateLanIpHost(host);
 }
 
 function validateMobilePairingUrl(url: string, source?: string): string | null {
@@ -142,13 +128,34 @@ type ResolveAuthLabelResult = {
   error?: string;
 };
 
+const GATEWAY_SCHEME_WITHOUT_AUTHORITY_RE = /^(?:https?|wss?):(?!\/\/)/i;
+const SCHEME_LIKE_PATH_RE = /^[A-Za-z][A-Za-z0-9+.-]*:\//;
+
 function normalizeUrl(raw: string, schemeFallback: "ws" | "wss"): string | null {
   const trimmed = raw.trim();
   if (!trimmed) {
     return null;
   }
+  if (GATEWAY_SCHEME_WITHOUT_AUTHORITY_RE.test(trimmed)) {
+    return null;
+  }
+  const parsedUrl = parseNormalizedGatewayUrl(trimmed);
+  if (parsedUrl) {
+    return parsedUrl;
+  }
+  if (trimmed.includes("://") || SCHEME_LIKE_PATH_RE.test(trimmed)) {
+    return null;
+  }
+  const withoutPath = normalizeOptionalString(trimmed.split("/", 1)[0]) ?? "";
+  return withoutPath ? parseNormalizedGatewayUrl(`${schemeFallback}://${withoutPath}`) : null;
+}
+
+function parseNormalizedGatewayUrl(raw: string): string | null {
   try {
-    const parsed = new URL(trimmed);
+    const parsed = new URL(raw);
+    if (parsed.username || parsed.password) {
+      return null;
+    }
     const scheme = parsed.protocol.replace(":", "");
     if (!scheme) {
       return null;
@@ -164,14 +171,8 @@ function normalizeUrl(raw: string, schemeFallback: "ws" | "wss"): string | null 
     const port = parsed.port ? `:${parsed.port}` : "";
     return `${resolvedScheme}://${host}${port}`;
   } catch {
-    // Fall through to host:port parsing.
-  }
-
-  const withoutPath = trimmed.split("/")[0] ?? "";
-  if (!withoutPath) {
     return null;
   }
-  return `${schemeFallback}://${withoutPath}`;
 }
 
 function resolveScheme(
@@ -284,10 +285,11 @@ async function resolveGatewayUrl(
   }
 
   const remoteUrlRaw = cfg.gateway?.remote?.url;
-  const remoteUrl =
-    typeof remoteUrlRaw === "string" && remoteUrlRaw.trim()
-      ? normalizeUrl(remoteUrlRaw, scheme)
-      : null;
+  const hasRemoteUrl = typeof remoteUrlRaw === "string" && remoteUrlRaw.trim();
+  const remoteUrl = hasRemoteUrl ? normalizeUrl(remoteUrlRaw, scheme) : null;
+  if (hasRemoteUrl && !remoteUrl) {
+    return { error: "Configured gateway.remote.url is invalid." };
+  }
   if (opts.preferRemoteUrl && remoteUrl) {
     return { url: remoteUrl, source: "gateway.remote.url" };
   }

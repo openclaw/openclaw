@@ -7,6 +7,7 @@ import { captureEnv } from "../test-utils/env.js";
 import { sanitizeBinaryOutput } from "./shell-utils.js";
 
 const isWin = process.platform === "win32";
+const FOREGROUND_TEST_YIELD_MS = 120_000;
 type GetShellPathFromLoginShell = typeof import("../infra/shell-env.js").getShellPathFromLoginShell;
 const shellEnvMocks = vi.hoisted(() => ({
   getShellPathFromLoginShell: vi.fn<GetShellPathFromLoginShell>(() => "/custom/bin:/opt/bin"),
@@ -29,6 +30,48 @@ vi.mock("../infra/exec-approvals.js", async () => {
   );
   return { ...mod, resolveExecApprovals: () => createExecApprovals() };
 });
+
+vi.mock("../process/supervisor/index.js", () => ({
+  getProcessSupervisor: () => ({
+    spawn: async (input: {
+      argv?: string[];
+      env?: NodeJS.ProcessEnv;
+      onStdout?: (chunk: string) => void;
+    }) => {
+      const command = input.argv?.at(-1) ?? "";
+      const env = input.env ?? {};
+      if (command.includes("OPENCLAW_SHELL")) {
+        input.onStdout?.(env.OPENCLAW_SHELL ?? "");
+      } else if (command.includes("SSLKEYLOGFILE")) {
+        input.onStdout?.(env.SSLKEYLOGFILE ?? "");
+      } else if (command.includes("$PATH")) {
+        input.onStdout?.(env.PATH ?? "");
+      } else if (command === "echo ok") {
+        input.onStdout?.("ok\n");
+      }
+      return {
+        runId: "mock-path-run",
+        startedAtMs: Date.now(),
+        stdin: undefined,
+        wait: async () => ({
+          reason: "exit" as const,
+          exitCode: 0,
+          exitSignal: null,
+          durationMs: 0,
+          stdout: "",
+          stderr: "",
+          timedOut: false,
+          noOutputTimedOut: false,
+        }),
+        cancel: vi.fn(),
+      };
+    },
+    cancel: vi.fn(),
+    cancelScope: vi.fn(),
+    reconcileOrphans: vi.fn(),
+    getRecord: vi.fn(),
+  }),
+}));
 
 let createExecTool: typeof import("./bash-tools.exec.js").createExecTool;
 
@@ -111,7 +154,10 @@ describe("exec PATH login shell merge", () => {
     shellPathMock.mockReturnValue("/custom/bin:/opt/bin");
 
     const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
-    const result = await tool.execute("call1", { command: "echo $PATH" });
+    const result = await tool.execute("call1", {
+      command: "echo $PATH",
+      yieldMs: FOREGROUND_TEST_YIELD_MS,
+    });
     const entries = normalizePathEntries(result.content.find((c) => c.type === "text")?.text);
 
     expect(entries).toEqual(["/custom/bin", "/opt/bin", "/usr/bin"]);
@@ -126,6 +172,7 @@ describe("exec PATH login shell merge", () => {
     const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
     const result = await tool.execute("call-openclaw-shell", {
       command: 'printf "%s" "${OPENCLAW_SHELL:-}"',
+      yieldMs: FOREGROUND_TEST_YIELD_MS,
     });
     const value = normalizeText(result.content.find((c) => c.type === "text")?.text);
 
@@ -190,7 +237,10 @@ describe("exec PATH login shell merge", () => {
       );
 
       const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
-      const result = await tool.execute("call1", { command: "echo $PATH" });
+      const result = await tool.execute("call1", {
+        command: "echo $PATH",
+        yieldMs: FOREGROUND_TEST_YIELD_MS,
+      });
       const entries = normalizePathEntries(result.content.find((c) => c.type === "text")?.text);
 
       expect(entries).toEqual(["/usr/bin"]);
@@ -245,6 +295,7 @@ describe("exec host env validation", () => {
       const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
       const result = await tool.execute("call1", {
         command: "printf '%s' \"${SSLKEYLOGFILE:-}\"",
+        yieldMs: FOREGROUND_TEST_YIELD_MS,
       });
       const output = normalizeText(result.content.find((c) => c.type === "text")?.text);
       expect(output).not.toContain("/tmp/openclaw-ssl-keys.log");
@@ -262,6 +313,7 @@ describe("exec host env validation", () => {
 
     const result = await tool.execute("call1", {
       command: "echo ok",
+      yieldMs: FOREGROUND_TEST_YIELD_MS,
     });
     expect(normalizeText(result.content.find((c) => c.type === "text")?.text)).toBe("ok");
   });

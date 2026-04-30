@@ -1,41 +1,25 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import {
+  validateConfigObjectRawWithPlugins,
+  validateConfigObjectWithPlugins,
+} from "./validation.js";
 
-const mockLoadPluginManifestRegistry = vi.hoisted(() => vi.fn());
+const mockLoadPluginManifestRegistry = vi.hoisted(() =>
+  vi.fn(
+    (): PluginManifestRegistry => ({
+      diagnostics: [],
+      plugins: [],
+    }),
+  ),
+);
 
-let validateConfigObjectWithPlugins: typeof import("./validation.js").validateConfigObjectWithPlugins;
-let validateConfigObjectRawWithPlugins: typeof import("./validation.js").validateConfigObjectRawWithPlugins;
-
-vi.mock("../plugins/manifest-registry.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../plugins/manifest-registry.js")>();
+function createTelegramSchemaRegistry(): PluginManifestRegistry {
   return {
-    ...actual,
-    loadPluginManifestRegistry: (...args: unknown[]) => mockLoadPluginManifestRegistry(...args),
-    resolveManifestContractPluginIds: () => [],
-  };
-});
-
-vi.mock("../plugins/doctor-contract-registry.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../plugins/doctor-contract-registry.js")>();
-  return {
-    ...actual,
-    listPluginDoctorLegacyConfigRules: () => [],
-    applyPluginDoctorCompatibilityMigrations: () => ({ next: null, changes: [] }),
-  };
-});
-
-async function loadValidationModule() {
-  vi.resetModules();
-  ({ validateConfigObjectWithPlugins, validateConfigObjectRawWithPlugins } =
-    await import("./validation.js"));
-}
-
-function setupTelegramSchemaWithDefault() {
-  mockLoadPluginManifestRegistry.mockReturnValue({
     diagnostics: [],
     plugins: [
-      {
+      createPluginManifestRecord({
         id: "telegram",
-        origin: "bundled",
         channels: ["telegram"],
         channelCatalogMeta: {
           id: "telegram",
@@ -62,21 +46,17 @@ function setupTelegramSchemaWithDefault() {
             uiHints: {},
           },
         },
-      },
+      }),
     ],
-  });
+  };
 }
 
-function setupPluginSchemaWithRequiredDefault() {
-  mockLoadPluginManifestRegistry.mockReturnValue({
+function createPluginConfigSchemaRegistry(): PluginManifestRegistry {
+  return {
     diagnostics: [],
     plugins: [
-      {
+      createPluginManifestRecord({
         id: "opik",
-        origin: "bundled",
-        channels: [],
-        providers: [],
-        kind: ["tool"],
         configSchema: {
           type: "object",
           properties: {
@@ -88,15 +68,89 @@ function setupPluginSchemaWithRequiredDefault() {
           required: ["workspace"],
           additionalProperties: true,
         },
-      },
+      }),
     ],
-  });
+  };
 }
+
+function createCompatPluginConfigSchemaRegistry(): PluginManifestRegistry {
+  return {
+    diagnostics: [],
+    plugins: [
+      createPluginManifestRecord({
+        id: "opik",
+        configSchema: {
+          type: "object",
+          additionalProperties: true,
+        },
+      }),
+      createPluginManifestRecord({
+        id: "brave-search",
+        contracts: {
+          webSearchProviders: ["brave"],
+        },
+      }),
+    ],
+  };
+}
+
+function createPluginManifestRecord(
+  overrides: Partial<PluginManifestRecord> & Pick<PluginManifestRecord, "id">,
+): PluginManifestRecord {
+  return {
+    channels: [],
+    cliBackends: [],
+    hooks: [],
+    manifestPath: `/tmp/${overrides.id}/openclaw.plugin.json`,
+    origin: "bundled",
+    providers: [],
+    rootDir: `/tmp/${overrides.id}`,
+    skills: [],
+    source: `/tmp/${overrides.id}/index.js`,
+    ...overrides,
+  };
+}
+
+vi.mock("../plugins/manifest-registry.js", () => ({
+  loadPluginManifestRegistry: () => mockLoadPluginManifestRegistry(),
+  resolveManifestContractPluginIds: () => [],
+}));
+
+vi.mock("../plugins/plugin-registry.js", () => ({
+  loadPluginManifestRegistryForPluginRegistry: () => mockLoadPluginManifestRegistry(),
+}));
+
+vi.mock("../plugins/doctor-contract-registry.js", () => ({
+  collectRelevantDoctorPluginIds: () => [],
+  listPluginDoctorLegacyConfigRules: () => [],
+  applyPluginDoctorCompatibilityMigrations: () => ({ next: null, changes: [] }),
+}));
+
+vi.mock("../channels/plugins/legacy-config.js", () => ({
+  collectChannelLegacyConfigRules: () => [],
+}));
+
+vi.mock("./zod-schema.js", () => ({
+  OpenClawSchema: {
+    safeParse: (raw: unknown) => ({ success: true, data: raw }),
+  },
+}));
+
+function setupTelegramSchemaWithDefault() {
+  mockLoadPluginManifestRegistry.mockReturnValue(createTelegramSchemaRegistry());
+}
+
+function setupPluginSchemaWithRequiredDefault() {
+  mockLoadPluginManifestRegistry.mockReturnValue(createPluginConfigSchemaRegistry());
+}
+
+beforeEach(() => {
+  mockLoadPluginManifestRegistry.mockClear();
+});
 
 describe("validateConfigObjectWithPlugins channel metadata (applyDefaults: true)", () => {
   it("applies bundled channel defaults from plugin-owned schema metadata", async () => {
     setupTelegramSchemaWithDefault();
-    await loadValidationModule();
 
     const result = validateConfigObjectWithPlugins({
       channels: {
@@ -123,7 +177,6 @@ describe("validateConfigObjectRawWithPlugins channel metadata", () => {
     // writeConfigFile (io.ts), which uses persistCandidate (the pre-validation
     // merge-patched value) instead of validated.config.
     setupTelegramSchemaWithDefault();
-    await loadValidationModule();
 
     const result = validateConfigObjectRawWithPlugins({
       channels: {
@@ -145,7 +198,6 @@ describe("validateConfigObjectRawWithPlugins channel metadata", () => {
 describe("validateConfigObjectRawWithPlugins plugin config defaults", () => {
   it("does not inject plugin AJV defaults in raw mode for plugin-owned config", async () => {
     setupPluginSchemaWithRequiredDefault();
-    await loadValidationModule();
 
     const result = validateConfigObjectRawWithPlugins({
       plugins: {
@@ -161,5 +213,79 @@ describe("validateConfigObjectRawWithPlugins plugin config defaults", () => {
     if (result.ok) {
       expect(result.config.plugins?.entries?.opik?.config).toBeUndefined();
     }
+  });
+});
+
+describe("validateConfigObjectWithPlugins bundled allowlist compatibility", () => {
+  it("reuses the manifest registry loaded for compatibility during plugin validation", () => {
+    mockLoadPluginManifestRegistry.mockReturnValue(createCompatPluginConfigSchemaRegistry());
+
+    const result = validateConfigObjectWithPlugins({
+      plugins: {
+        allow: ["opik"],
+        entries: {
+          opik: {
+            enabled: true,
+          },
+        },
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(mockLoadPluginManifestRegistry).toHaveBeenCalledOnce();
+  });
+
+  it("uses a provided plugin metadata snapshot during plugin validation", () => {
+    const result = validateConfigObjectWithPlugins(
+      {
+        plugins: {
+          allow: ["opik"],
+          entries: {
+            opik: {
+              enabled: true,
+            },
+          },
+        },
+      },
+      {
+        pluginMetadataSnapshot: {
+          manifestRegistry: createPluginConfigSchemaRegistry(),
+        },
+      },
+    );
+
+    expect(result.ok).toBe(true);
+    expect(mockLoadPluginManifestRegistry).not.toHaveBeenCalled();
+    if (result.ok) {
+      expect(result.config.plugins?.entries?.opik?.config).toEqual({
+        workspace: "default-workspace",
+      });
+    }
+  });
+
+  it("loads a plugin metadata snapshot once during plugin validation", () => {
+    const loadPluginMetadataSnapshot = vi.fn((_config: unknown) => ({
+      manifestRegistry: createPluginConfigSchemaRegistry(),
+    }));
+
+    const result = validateConfigObjectWithPlugins(
+      {
+        plugins: {
+          allow: ["opik"],
+          entries: {
+            opik: {
+              enabled: true,
+            },
+          },
+        },
+      },
+      {
+        loadPluginMetadataSnapshot,
+      },
+    );
+
+    expect(result.ok).toBe(true);
+    expect(loadPluginMetadataSnapshot).toHaveBeenCalledOnce();
+    expect(mockLoadPluginManifestRegistry).not.toHaveBeenCalled();
   });
 });

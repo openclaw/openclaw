@@ -2,14 +2,14 @@ import { resolveAgentConfig } from "../agents/agent-scope.js";
 import { resolveSandboxConfigForAgent } from "../agents/sandbox.js";
 import { resolveSandboxToolPolicyForAgent } from "../agents/sandbox/tool-policy.js";
 import { normalizeAnyChannelId } from "../channels/registry.js";
-import type { OpenClawConfig } from "../config/config.js";
-import { loadConfig } from "../config/config.js";
+import { getRuntimeConfig } from "../config/config.js";
 import {
   loadSessionStore,
   resolveAgentMainSessionKey,
   resolveMainSessionKey,
   resolveStorePath,
 } from "../config/sessions.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   buildAgentMainSessionKey,
   normalizeAgentId,
@@ -137,7 +137,7 @@ export async function sandboxExplainCommand(
   opts: SandboxExplainOptions,
   runtime: RuntimeEnv,
 ): Promise<void> {
-  const cfg = loadConfig();
+  const cfg = getRuntimeConfig();
 
   const defaultAgentId = resolveAgentIdFromSessionKey(resolveMainSessionKey(cfg));
   const resolvedAgentId = normalizeAgentId(

@@ -1,20 +1,22 @@
-import { lookupContextTokens } from "../agents/context.js";
+import { resolveAgentRuntimeMetadata } from "../agents/agent-runtime-metadata.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
-import { loadConfig } from "../config/config.js";
-import { loadSessionStore, resolveFreshSessionTotalTokens } from "../config/sessions.js";
-import { classifySessionKey } from "../gateway/session-utils.js";
+import { getRuntimeConfig } from "../config/config.js";
+import { loadSessionStore, resolveSessionTotalTokens } from "../config/sessions.js";
 import { info } from "../globals.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { isRich, theme } from "../terminal/theme.js";
 import { resolveSessionStoreTargetsOrExit } from "./session-store-targets.js";
 import {
+  resolveSessionDisplayModelRef,
+  resolveSessionDisplayDefaults,
+  resolveSessionDisplayModel,
+} from "./sessions-display-model.js";
+import {
   formatSessionAgeCell,
   formatSessionFlagsCell,
   formatSessionKeyCell,
   formatSessionModelCell,
-  resolveSessionDisplayDefaults,
-  resolveSessionDisplayModel,
   SESSION_AGE_PAD,
   SESSION_KEY_PAD,
   SESSION_MODEL_PAD,
@@ -25,11 +27,13 @@ import {
 type SessionRow = SessionDisplayRow & {
   agentId: string;
   kind: "direct" | "group" | "global" | "unknown";
+  agentRuntime: ReturnType<typeof resolveAgentRuntimeMetadata>;
 };
 
 const AGENT_PAD = 10;
 const KIND_PAD = 6;
 const TOKENS_PAD = 20;
+let contextLookupRuntimePromise: Promise<typeof import("../agents/context.js")> | null = null;
 
 const formatKTokens = (value: number) => `${(value / 1000).toFixed(value >= 10_000 ? 0 : 1)}k`;
 
@@ -67,6 +71,28 @@ const formatTokensCell = (
   return colorByPct(padded, pct, rich);
 };
 
+async function lookupContextTokensForDisplay(model: string): Promise<number | undefined> {
+  contextLookupRuntimePromise ??= import("../agents/context.js");
+  const { lookupContextTokens } = await contextLookupRuntimePromise;
+  return lookupContextTokens(model, { allowAsyncLoad: false });
+}
+
+function classifySessionKey(key: string, entry?: { chatType?: string | null }): SessionRow["kind"] {
+  if (key === "global") {
+    return "global";
+  }
+  if (key === "unknown") {
+    return "unknown";
+  }
+  if (entry?.chatType === "group" || entry?.chatType === "channel") {
+    return "group";
+  }
+  if (key.includes(":group:") || key.includes(":channel:")) {
+    return "group";
+  }
+  return "direct";
+}
+
 const formatKindCell = (kind: SessionRow["kind"], rich: boolean) => {
   const label = kind.padEnd(KIND_PAD);
   if (!rich) {
@@ -89,11 +115,12 @@ export async function sessionsCommand(
   runtime: RuntimeEnv,
 ) {
   const aggregateAgents = opts.allAgents === true;
-  const cfg = loadConfig();
+  const cfg = getRuntimeConfig();
   const displayDefaults = resolveSessionDisplayDefaults(cfg);
+  const configuredContextTokens = cfg.agents?.defaults?.contextTokens;
   const configContextTokens =
-    cfg.agents?.defaults?.contextTokens ??
-    lookupContextTokens(displayDefaults.model) ??
+    configuredContextTokens ??
+    (await lookupContextTokensForDisplay(displayDefaults.model)) ??
     DEFAULT_CONTEXT_TOKENS;
   const targets = resolveSessionStoreTargetsOrExit({
     cfg,
@@ -110,7 +137,7 @@ export async function sessionsCommand(
 
   let activeMinutes: number | undefined;
   if (opts.active !== undefined) {
-    const parsed = Number.parseInt(String(opts.active), 10);
+    const parsed = Number.parseInt(opts.active, 10);
     if (Number.isNaN(parsed) || parsed <= 0) {
       runtime.error("--active must be a positive integer (minutes)");
       runtime.exit(1);
@@ -122,11 +149,14 @@ export async function sessionsCommand(
   const rows = targets
     .flatMap((target) => {
       const store = loadSessionStore(target.storePath);
-      return toSessionDisplayRows(store).map((row) => ({
-        ...row,
-        agentId: parseAgentSessionKey(row.key)?.agentId ?? target.agentId,
-        kind: classifySessionKey(row.key, store[row.key]),
-      }));
+      return toSessionDisplayRows(store).map((row) => {
+        const agentId = parseAgentSessionKey(row.key)?.agentId ?? target.agentId;
+        return Object.assign({}, row, {
+          agentId,
+          agentRuntime: resolveAgentRuntimeMetadata(cfg, agentId),
+          kind: classifySessionKey(row.key, store[row.key]),
+        });
+      });
     })
     .filter((row) => {
       if (activeMinutes === undefined) {
@@ -153,18 +183,25 @@ export async function sessionsCommand(
       allAgents: aggregateAgents ? true : undefined,
       count: rows.length,
       activeMinutes: activeMinutes ?? null,
-      sessions: rows.map((r) => {
-        const model = resolveSessionDisplayModel(cfg, r, displayDefaults);
-        return {
-          ...r,
-          totalTokens: resolveFreshSessionTotalTokens(r) ?? null,
-          totalTokensFresh:
-            typeof r.totalTokens === "number" ? r.totalTokensFresh !== false : false,
-          contextTokens:
-            r.contextTokens ?? lookupContextTokens(model) ?? configContextTokens ?? null,
-          model,
-        };
-      }),
+      sessions: await Promise.all(
+        rows.map(async (r) => {
+          const modelRef = resolveSessionDisplayModelRef(cfg, r);
+          return {
+            ...r,
+            totalTokens: resolveSessionTotalTokens(r) ?? null,
+            totalTokensFresh:
+              typeof r.totalTokens === "number" ? r.totalTokensFresh !== false : false,
+            contextTokens:
+              r.contextTokens ??
+              configuredContextTokens ??
+              (await lookupContextTokensForDisplay(modelRef.model)) ??
+              configContextTokens ??
+              null,
+            modelProvider: modelRef.provider,
+            model: modelRef.model,
+          };
+        }),
+      ),
     });
     return;
   }
@@ -200,9 +237,13 @@ export async function sessionsCommand(
   runtime.log(rich ? theme.heading(header) : header);
 
   for (const row of rows) {
-    const model = resolveSessionDisplayModel(cfg, row, displayDefaults);
-    const contextTokens = row.contextTokens ?? lookupContextTokens(model) ?? configContextTokens;
-    const total = resolveFreshSessionTotalTokens(row);
+    const model = resolveSessionDisplayModel(cfg, row);
+    const contextTokens =
+      row.contextTokens ??
+      configuredContextTokens ??
+      (await lookupContextTokensForDisplay(model)) ??
+      configContextTokens;
+    const total = resolveSessionTotalTokens(row);
 
     const line = [
       ...(showAgentColumn

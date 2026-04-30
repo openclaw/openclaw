@@ -1,4 +1,4 @@
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 import { ChatSendSessionKeyString, InputProvenanceSchema, NonEmptyString } from "./primitives.js";
 
 export const LogsTailParamsSchema = Type.Object(
@@ -72,6 +72,7 @@ export const ChatEventSchema = Type.Object(
   {
     runId: NonEmptyString,
     sessionKey: NonEmptyString,
+    spawnedBy: Type.Optional(NonEmptyString),
     seq: Type.Integer({ minimum: 0 }),
     state: Type.Union([
       Type.Literal("delta"),
@@ -81,6 +82,15 @@ export const ChatEventSchema = Type.Object(
     ]),
     message: Type.Optional(Type.Unknown()),
     errorMessage: Type.Optional(Type.String()),
+    errorKind: Type.Optional(
+      Type.Union([
+        Type.Literal("refusal"),
+        Type.Literal("timeout"),
+        Type.Literal("rate_limit"),
+        Type.Literal("context_length"),
+        Type.Literal("unknown"),
+      ]),
+    ),
     usage: Type.Optional(Type.Unknown()),
     stopReason: Type.Optional(Type.String()),
   },

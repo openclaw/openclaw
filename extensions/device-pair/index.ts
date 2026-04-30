@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -11,7 +11,8 @@ import {
   issueDeviceBootstrapToken,
   listDevicePairing,
   PAIRING_SETUP_BOOTSTRAP_PROFILE,
-  renderQrPngBase64,
+  renderQrPngDataUrl,
+  writeQrPngTempFile,
   revokeDeviceBootstrapToken,
   resolveGatewayBindUrl,
   resolveGatewayPort,
@@ -34,20 +35,6 @@ import {
   buildMissingPairingScopeReply,
   resolvePairingCommandAuthState,
 } from "./pair-command-auth.js";
-
-async function renderQrDataUrl(data: string): Promise<string> {
-  const pngBase64 = await renderQrPngBase64(data);
-  return `data:image/png;base64,${pngBase64}`;
-}
-
-async function writeQrPngTempFile(data: string): Promise<string> {
-  const pngBase64 = await renderQrPngBase64(data);
-  const tmpRoot = resolvePreferredOpenClawTmpDir();
-  const qrDir = await mkdtemp(path.join(tmpRoot, "device-pair-qr-"));
-  const filePath = path.join(qrDir, "pair-qr.png");
-  await writeFile(filePath, Buffer.from(pngBase64, "base64"));
-  return filePath;
-}
 
 function formatDurationMinutes(expiresAtMs: number): string {
   const msRemaining = Math.max(0, expiresAtMs - Date.now());
@@ -142,22 +129,34 @@ const QR_CHANNEL_SENDERS: Record<string, QrChannelSender> = {
   },
 };
 
+const GATEWAY_SCHEME_WITHOUT_AUTHORITY_RE = /^(?:https?|wss?):(?!\/\/)/i;
+const SCHEME_LIKE_PATH_RE = /^[A-Za-z][A-Za-z0-9+.-]*:\//;
+
 function normalizeUrl(raw: string, schemeFallback: "ws" | "wss"): string | null {
   const candidate = normalizeOptionalString(raw);
   if (!candidate) {
+    return null;
+  }
+  if (GATEWAY_SCHEME_WITHOUT_AUTHORITY_RE.test(candidate)) {
     return null;
   }
   const parsedUrl = parseNormalizedGatewayUrl(candidate);
   if (parsedUrl) {
     return parsedUrl;
   }
+  if (candidate.includes("://") || SCHEME_LIKE_PATH_RE.test(candidate)) {
+    return null;
+  }
   const hostPort = normalizeOptionalString(candidate.split("/", 1)[0]) ?? "";
-  return hostPort ? `${schemeFallback}://${hostPort}` : null;
+  return hostPort ? parseNormalizedGatewayUrl(`${schemeFallback}://${hostPort}`) : null;
 }
 
 function parseNormalizedGatewayUrl(raw: string): string | null {
   try {
     const parsed = new URL(raw);
+    if (parsed.username || parsed.password) {
+      return null;
+    }
     const scheme = parsed.protocol.slice(0, -1);
     const normalizedScheme = scheme === "http" ? "ws" : scheme === "https" ? "wss" : scheme;
     if (!(normalizedScheme === "ws" || normalizedScheme === "wss")) {
@@ -229,8 +228,8 @@ function pickMatchingIPv4(predicate: (address: string) => boolean): string | nul
     }
     for (const entry of entries) {
       const family = entry?.family;
-      // Check for IPv4 (string "IPv4" on Node 18+, number 4 on older)
-      const isIpv4 = family === "IPv4" || String(family) === "4";
+      // Keep the numeric check for older Node runtimes that reported family as 4.
+      const isIpv4 = family === "IPv4" || (family as unknown) === 4;
       if (!entry || entry.internal || !isIpv4) {
         continue;
       }
@@ -322,6 +321,12 @@ async function resolveGatewayUrl(api: OpenClawPluginApi): Promise<ResolveUrlResu
     return { error: "Configured publicUrl is invalid." };
   }
 
+  const configuredRemoteUrl = normalizeOptionalString(cfg.gateway?.remote?.url);
+  const remoteUrl = configuredRemoteUrl ? normalizeUrl(configuredRemoteUrl, scheme) : null;
+  if (configuredRemoteUrl && !remoteUrl) {
+    return { error: "Configured gateway.remote.url is invalid." };
+  }
+
   const tailscaleMode = cfg.gateway?.tailscale?.mode ?? "off";
   if (tailscaleMode === "serve" || tailscaleMode === "funnel") {
     const host = await resolveTailnetHost();
@@ -331,12 +336,8 @@ async function resolveGatewayUrl(api: OpenClawPluginApi): Promise<ResolveUrlResu
     return { url: `wss://${host}`, source: `gateway.tailscale.mode=${tailscaleMode}` };
   }
 
-  const remoteUrl = normalizeOptionalString(cfg.gateway?.remote?.url);
   if (remoteUrl) {
-    const url = normalizeUrl(remoteUrl, scheme);
-    if (url) {
-      return { url, source: "gateway.remote.url" };
-    }
+    return { url: remoteUrl, source: "gateway.remote.url" };
   }
 
   const bindResult = resolveGatewayBindUrl({
@@ -653,9 +654,7 @@ export default definePluginEntry({
               autoNotifyArmed = await armPairNotifyOnce({ api, ctx });
             } catch (err) {
               api.logger.warn?.(
-                `device-pair: failed to arm one-shot pairing notify (${String(
-                  (err as Error)?.message ?? err,
-                )})`,
+                `device-pair: failed to arm one-shot pairing notify (${(err as Error)?.message ?? err})`,
               );
             }
           }
@@ -673,7 +672,13 @@ export default definePluginEntry({
           if (target && canSendQrPngToChannel(channel)) {
             let qrFilePath: string | undefined;
             try {
-              qrFilePath = await writeQrPngTempFile(setupCode);
+              qrFilePath = (
+                await writeQrPngTempFile(setupCode, {
+                  tmpRoot: resolvePreferredOpenClawTmpDir(),
+                  dirPrefix: "device-pair-qr-",
+                  fileName: "pair-qr.png",
+                })
+              ).filePath;
               const sent = await sendQrPngToSupportedChannel({
                 api,
                 ctx,
@@ -693,9 +698,7 @@ export default definePluginEntry({
               }
             } catch (err) {
               api.logger.warn?.(
-                `device-pair: QR image send failed channel=${channel}, falling back (${String(
-                  (err as Error)?.message ?? err,
-                )})`,
+                `device-pair: QR image send failed channel=${channel}, falling back (${(err as Error)?.message ?? err})`,
               );
               await revokeDeviceBootstrapToken({ token: payload.bootstrapToken }).catch(() => {});
               payload = await issueSetupPayload(urlResult.url);
@@ -713,12 +716,10 @@ export default definePluginEntry({
           if (channel === "webchat") {
             let qrDataUrl: string;
             try {
-              qrDataUrl = await renderQrDataUrl(setupCode);
+              qrDataUrl = await renderQrPngDataUrl(setupCode);
             } catch (err) {
               api.logger.warn?.(
-                `device-pair: webchat QR render failed, falling back (${String(
-                  (err as Error)?.message ?? err,
-                )})`,
+                `device-pair: webchat QR render failed, falling back (${(err as Error)?.message ?? err})`,
               );
               await revokeDeviceBootstrapToken({ token: payload.bootstrapToken }).catch(() => {});
               payload = await issueSetupPayload(urlResult.url);
@@ -738,9 +739,9 @@ export default definePluginEntry({
                   autoNotifyArmed,
                   expiresAtMs: payload.expiresAtMs,
                 }),
-                "",
-                `![OpenClaw pairing QR](${qrDataUrl})`,
               ].join("\n"),
+              mediaUrl: qrDataUrl,
+              sensitiveMedia: true,
             };
           }
 
@@ -791,9 +792,7 @@ export default definePluginEntry({
             return { text: encodeSetupCode(payload) };
           } catch (err) {
             api.logger.warn?.(
-              `device-pair: telegram split send failed, falling back to single message (${String(
-                (err as Error)?.message ?? err,
-              )})`,
+              `device-pair: telegram split send failed, falling back to single message (${(err as Error)?.message ?? err})`,
             );
           }
         }

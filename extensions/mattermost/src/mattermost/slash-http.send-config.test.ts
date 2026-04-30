@@ -1,6 +1,7 @@
 import { ServerResponse, type IncomingMessage } from "node:http";
 import { PassThrough } from "node:stream";
-import type { OpenClawConfig, RuntimeEnv } from "openclaw/plugin-sdk/mattermost";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedMattermostAccount } from "./accounts.js";
 
@@ -54,7 +55,7 @@ vi.mock("./runtime-api.js", () => {
     isRequestBodyLimitError: vi.fn(() => false),
     logTypingFailure: vi.fn(),
     formatInboundFromLabel: vi.fn(() => ""),
-    rawDataToString: vi.fn((value: unknown) => String(value ?? "")),
+    rawDataToString: vi.fn((value: unknown) => (typeof value === "string" ? value : "")),
     readRequestBodyWithLimit: mockState.readRequestBodyWithLimit,
     resolveThreadSessionKeys: vi.fn((params: { baseSessionKey: string }) => ({
       sessionKey: params.baseSessionKey,

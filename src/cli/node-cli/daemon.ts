@@ -94,12 +94,12 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
 
   const config = await loadNodeHostConfig();
   const { host, port } = resolveNodeDefaults(opts, config);
-  if (!Number.isFinite(port ?? NaN) || (port ?? 0) <= 0) {
+  if (!Number.isFinite(port ?? Number.NaN) || (port ?? 0) <= 0) {
     fail("Invalid port");
     return;
   }
 
-  const runtimeRaw = opts.runtime ? String(opts.runtime) : DEFAULT_NODE_DAEMON_RUNTIME;
+  const runtimeRaw = opts.runtime ? opts.runtime : DEFAULT_NODE_DAEMON_RUNTIME;
   if (!isNodeDaemonRuntime(runtimeRaw)) {
     fail('Invalid --runtime (use "node" or "bun")');
     return;

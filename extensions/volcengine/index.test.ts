@@ -1,5 +1,7 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it } from "vitest";
-import { registerSingleProviderPlugin } from "../../test/helpers/plugins/plugin-registration.js";
 import plugin from "./index.js";
 import { DOUBAO_CODING_MODEL_CATALOG, DOUBAO_MODEL_CATALOG } from "./models.js";
 
@@ -31,5 +33,15 @@ describe("volcengine plugin", () => {
         contextWindow: DOUBAO_CODING_MODEL_CATALOG[0].contextWindow,
       }),
     );
+  });
+
+  it("declares its coding provider auth alias in the manifest", () => {
+    const pluginJson = JSON.parse(
+      readFileSync(resolve(import.meta.dirname, "openclaw.plugin.json"), "utf-8"),
+    );
+
+    expect(pluginJson.providerAuthAliases).toEqual({
+      "volcengine-plan": "volcengine",
+    });
   });
 });
