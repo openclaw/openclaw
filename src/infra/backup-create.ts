@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import {
   buildBackupArchiveBasename,
@@ -13,6 +12,7 @@ import {
 import { isPathWithin } from "../commands/cleanup-utils.js";
 import { resolveHomeDir, resolveUserPath } from "../utils.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
+import { resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir.js";
 
 type TarRuntime = typeof import("tar");
 
@@ -350,7 +350,7 @@ export async function createBackupArchive(
   }
 
   await fs.mkdir(path.dirname(outputPath), { recursive: true });
-  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backup-"));
+  const tempDir = await fs.mkdtemp(path.join(resolvePreferredOpenClawTmpDir(), "openclaw-backup-"));
   const manifestPath = path.join(tempDir, "manifest.json");
   const tempArchivePath = buildTempArchivePath(outputPath);
   try {

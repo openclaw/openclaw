@@ -195,4 +195,40 @@ describe("createBackupArchive", () => {
       },
     );
   });
+
+  it("does not include duplicate manifest.json when TMPDIR is inside the state directory", async () => {
+    // Regression for openclaw/openclaw#75007: when the LaunchAgent sets TMPDIR=~/.openclaw/tmp
+    // (which is inside the state dir), backup-create used os.tmpdir() for the temp dir, causing
+    // tar to pick up the temp manifest.json as part of the payload AND as an explicit entry.
+    // Fix: use resolvePreferredOpenClawTmpDir() which always returns a path outside the payload.
+    await withOpenClawTestState(
+      { layout: "state-only", prefix: "openclaw-backup-tmpdir-", scenario: "minimal" },
+      async (state) => {
+        const outputDir = state.path("backups");
+        await fs.mkdir(outputDir, { recursive: true });
+
+        // Simulate TMPDIR pointing inside the state dir — the bug scenario.
+        const fakeInternalTmpDir = state.path("tmp");
+        await fs.mkdir(fakeInternalTmpDir, { recursive: true });
+        const origTmpdir = process.env["TMPDIR"];
+        process.env["TMPDIR"] = fakeInternalTmpDir;
+        try {
+          const result = await createBackupArchive({
+            output: outputDir,
+            includeWorkspace: false,
+            nowMs: Date.UTC(2026, 3, 30, 12, 0, 0),
+          });
+          const entries = await listArchiveEntries(result.archivePath);
+          const manifestEntries = entries.filter((e) => e.endsWith("manifest.json"));
+          expect(manifestEntries).toHaveLength(1);
+        } finally {
+          if (origTmpdir === undefined) {
+            delete process.env["TMPDIR"];
+          } else {
+            process.env["TMPDIR"] = origTmpdir;
+          }
+        }
+      },
+    );
+  });
 });
