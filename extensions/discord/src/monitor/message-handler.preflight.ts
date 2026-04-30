@@ -420,7 +420,6 @@ export async function preflightDiscordMessage(
     senderLabel: sender.label,
   });
 
-
   const threadOwnerId = threadChannel
     ? (resolveDiscordChannelInfoSafe(threadChannel).ownerId ?? channelInfo?.ownerId)
     : undefined;
@@ -614,6 +613,7 @@ export async function preflightDiscordMessage(
     enqueueSystemEvent(systemText, {
       sessionKey: effectiveRoute.sessionKey,
       contextKey: `discord:system:${messageChannelId}:${message.id}`,
+      trusted: true,
     });
     return null;
   }
