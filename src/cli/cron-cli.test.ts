@@ -568,6 +568,9 @@ describe("cron cli", () => {
     expect(defaultRuntime.error).toHaveBeenCalledWith(
       expect.stringContaining("No --agent specified"),
     );
+    expect(defaultRuntime.error).toHaveBeenCalledWith(
+      expect.stringContaining("default agent (main)"),
+    );
   });
 
   it("keeps the missing --agent warning off cron add JSON stdout", async () => {

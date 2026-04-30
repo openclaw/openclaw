@@ -235,7 +235,7 @@ export function registerCronAddCommand(cron: Command) {
           if (payload.kind === "agentTurn" && !agentId) {
             defaultRuntime.error(
               theme.warn(
-                "No --agent specified; the job will run with the default agent. " +
+                "No --agent specified; the job will run with the default agent (main). " +
                   "Specify --agent to choose a specific agent.",
               ),
             );
