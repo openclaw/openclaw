@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { Dirent, Stats } from "node:fs";
+import type { Stats } from "node:fs";
 import { constants as fsConstants } from "node:fs";
 import type { FileHandle } from "node:fs/promises";
 import fs from "node:fs/promises";
@@ -391,26 +391,12 @@ export async function statPathWithinRoot(params: {
 export async function readdirWithinRoot(params: {
   rootDir: string;
   relativePath?: string;
-  withFileTypes?: false;
-}): Promise<string[]>;
-export async function readdirWithinRoot(params: {
-  rootDir: string;
-  relativePath?: string;
-  withFileTypes: true;
-}): Promise<Dirent[]>;
-export async function readdirWithinRoot(params: {
-  rootDir: string;
-  relativePath?: string;
-  withFileTypes?: boolean;
-}): Promise<string[] | Dirent[]> {
+}): Promise<string[]> {
   const { resolved } = await resolvePinnedPathWithinRoot({
     rootDir: params.rootDir,
     relativePath: params.relativePath ?? ".",
     allowRoot: true,
   });
-  if (params.withFileTypes === true) {
-    return await fs.readdir(resolved, { withFileTypes: true });
-  }
   return (await fs.readdir(resolved)).sort();
 }
 

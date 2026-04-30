@@ -428,13 +428,6 @@ describe("fs-safe", () => {
       "a.txt",
       "b.txt",
     ]);
-
-    const dirents = await readdirWithinRoot({
-      rootDir: root,
-      relativePath: "nested",
-      withFileTypes: true,
-    });
-    expect(dirents.map((entry) => entry.name).sort()).toEqual(["a.txt", "b.txt"]);
   });
 
   it("renames paths within root safely", async () => {
