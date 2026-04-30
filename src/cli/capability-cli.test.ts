@@ -589,6 +589,41 @@ describe("capability cli", () => {
     expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
   });
 
+  it("lowercases case-mismatched model ref before local dispatch (#73715)", async () => {
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: [
+        "capability",
+        "model",
+        "run",
+        "--model",
+        "anthropic/CLAUDE-OPUS-4-7",
+        "--prompt",
+        "hello",
+        "--json",
+      ],
+    });
+
+    expect(mocks.prepareSimpleCompletionModelForAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        modelRef: "anthropic/claude-opus-4-7",
+      }),
+    );
+  });
+
+  it("lowercases case-mismatched bare model ref before local dispatch (#73715)", async () => {
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: ["capability", "model", "run", "--model", "GPT-5.4", "--prompt", "hello", "--json"],
+    });
+
+    expect(mocks.prepareSimpleCompletionModelForAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        modelRef: "gpt-5.4",
+      }),
+    );
+  });
+
   it.each(["", "   ", "\n\t"])(
     "rejects empty model run prompts before local dispatch (%j)",
     async (prompt) => {

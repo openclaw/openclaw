@@ -549,11 +549,15 @@ function resolveModelRefOverride(raw: string | undefined): { provider?: string; 
   }
   const slash = trimmed.indexOf("/");
   if (slash <= 0 || slash === trimmed.length - 1) {
-    return { model: trimmed };
+    // Bare model id (no provider prefix). Canonical model ids are lowercase
+    // throughout the codebase, so normalize here to match the case-insensitive
+    // behavior of the provider half and avoid case-mismatch dispatch failures
+    // (#73715).
+    return { model: trimmed.toLowerCase() };
   }
   return {
     provider: trimmed.slice(0, slash),
-    model: trimmed.slice(slash + 1),
+    model: trimmed.slice(slash + 1).toLowerCase(),
   };
 }
 
@@ -631,6 +635,12 @@ async function runModelRun(params: {
 }) {
   const cfg = getRuntimeConfig();
   const agentId = resolveDefaultAgentId(cfg);
+  // Canonicalize the user-typed --model to lowercase to match the
+  // case-insensitive provider half and avoid case-mismatch dispatch failures
+  // (#73715). Canonical model ids in OpenClaw's catalog are lowercase, and
+  // auth profile suffixes are also lowercase by convention, so a whole-string
+  // lower() is safe.
+  const modelRef = params.model?.trim().toLowerCase() || undefined;
   const imageFiles = await readModelRunImageFiles(params.files);
   const messageContent =
     imageFiles.length > 0
@@ -647,7 +657,7 @@ async function runModelRun(params: {
     const prepared = await prepareSimpleCompletionModelForAgent({
       cfg,
       agentId,
-      modelRef: params.model,
+      modelRef,
       allowMissingApiKeyModes: ["aws-sdk"],
       skipPiDiscovery: true,
     });
@@ -709,7 +719,7 @@ async function runModelRun(params: {
     } satisfies CapabilityEnvelope;
   }
 
-  const { provider, model } = resolveModelRefOverride(params.model);
+  const { provider, model } = resolveModelRefOverride(modelRef);
   // Provider/model overrides require trusted-operator scope. Use the backend
   // shared-secret lane so local gateway smokes do not depend on paired CLI device scopes.
   const hasModelOverride = Boolean(provider || model);
