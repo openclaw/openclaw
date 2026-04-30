@@ -477,18 +477,18 @@ describe("chat slash menu accessibility", () => {
     inputDraft(container, "/");
     container = renderChatView({ draft, onDraftChange });
 
-    const combobox = container.querySelector<HTMLElement>(".agent-chat__composer-combobox");
+    const wrapper = container.querySelector<HTMLElement>(".agent-chat__composer-combobox");
     const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
     const listbox = container.querySelector<HTMLElement>("#chat-slash-menu-listbox");
     const activeId = textarea?.getAttribute("aria-activedescendant");
 
-    expect(combobox?.hasAttribute("role")).toBe(false);
-    expect(combobox?.hasAttribute("aria-expanded")).toBe(false);
-    expect(combobox?.hasAttribute("aria-haspopup")).toBe(false);
-    expect(combobox?.hasAttribute("aria-controls")).toBe(false);
-    expect(textarea?.getAttribute("role")).toBe("combobox");
-    expect(textarea?.getAttribute("aria-expanded")).toBe("true");
-    expect(textarea?.getAttribute("aria-haspopup")).toBe("listbox");
+    expect(wrapper?.hasAttribute("role")).toBe(false);
+    expect(wrapper?.hasAttribute("aria-expanded")).toBe(false);
+    expect(wrapper?.hasAttribute("aria-haspopup")).toBe(false);
+    expect(wrapper?.hasAttribute("aria-controls")).toBe(false);
+    expect(textarea?.hasAttribute("role")).toBe(false);
+    expect(textarea?.hasAttribute("aria-expanded")).toBe(false);
+    expect(textarea?.hasAttribute("aria-haspopup")).toBe(false);
     expect(textarea?.getAttribute("aria-controls")).toBe("chat-slash-menu-listbox");
     expect(textarea?.getAttribute("aria-autocomplete")).toBe("list");
     expect(listbox?.getAttribute("role")).toBe("listbox");
@@ -566,8 +566,8 @@ describe("chat slash menu accessibility", () => {
 
     expect(container.querySelector(".slash-menu")).toBeNull();
     expect(
-      container.querySelector<HTMLTextAreaElement>("textarea")?.getAttribute("aria-expanded"),
-    ).toBe("false");
+      container.querySelector<HTMLTextAreaElement>("textarea")?.hasAttribute("aria-expanded"),
+    ).toBe(false);
     expect(
       container
         .querySelector<HTMLElement>(".agent-chat__composer-combobox")

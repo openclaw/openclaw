@@ -1218,9 +1218,6 @@ export function renderChat(props: ChatProps) {
             .value=${props.draft}
             dir=${detectTextDirection(props.draft)}
             ?disabled=${!props.connected}
-            role="combobox"
-            aria-haspopup="listbox"
-            aria-expanded=${slashMenuVisible}
             aria-autocomplete="list"
             aria-controls=${ifDefined(slashMenuVisible ? SLASH_MENU_LISTBOX_ID : undefined)}
             aria-activedescendant=${ifDefined(activeSlashMenuOptionId ?? undefined)}
