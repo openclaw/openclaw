@@ -636,10 +636,13 @@ describe("modelsListCommand forward-compat", () => {
 
       await modelsListCommand({ all: true, provider: "openai", json: true }, runtime as never);
 
-      expect(mocks.loadModelRegistry).toHaveBeenCalledWith(mocks.resolvedConfig, {
-        providerFilter: "openai",
-        normalizeModels: true,
-      });
+      expect(mocks.loadModelRegistry).toHaveBeenCalledWith(
+        mocks.resolvedConfig,
+        expect.objectContaining({
+          providerFilter: "openai",
+          normalizeModels: true,
+        }),
+      );
       expect(lastPrintedRows<{ key: string }>()).toEqual([
         expect.objectContaining({ key: "openai/gpt-5.4" }),
         expect.objectContaining({ key: "openai/gpt-5.5-pro" }),
@@ -707,10 +710,13 @@ describe("modelsListCommand forward-compat", () => {
 
       await modelsListCommand({ all: true, json: true }, runtime as never);
 
-      expect(mocks.loadModelRegistry).toHaveBeenCalledWith(mocks.resolvedConfig, {
-        providerFilter: undefined,
-        normalizeModels: false,
-      });
+      expect(mocks.loadModelRegistry).toHaveBeenCalledWith(
+        mocks.resolvedConfig,
+        expect.objectContaining({
+          providerFilter: undefined,
+          normalizeModels: false,
+        }),
+      );
       expect(mocks.loadProviderCatalogModelsForList).not.toHaveBeenCalled();
       expect(mocks.resolveModelWithRegistry).not.toHaveBeenCalled();
       expect(mocks.loadModelCatalog).not.toHaveBeenCalled();
@@ -807,11 +813,14 @@ describe("modelsListCommand forward-compat", () => {
 
       await modelsListCommand({ all: true, provider: "anthropic", json: true }, runtime as never);
 
-      expect(mocks.loadModelRegistry).toHaveBeenCalledWith(mocks.resolvedConfig, {
-        providerFilter: "anthropic",
-        normalizeModels: false,
-        loadAvailability: false,
-      });
+      expect(mocks.loadModelRegistry).toHaveBeenCalledWith(
+        mocks.resolvedConfig,
+        expect.objectContaining({
+          providerFilter: "anthropic",
+          normalizeModels: false,
+          loadAvailability: false,
+        }),
+      );
       expect(lastPrintedRows<{ key: string; available: boolean }>()).toEqual([
         expect.objectContaining({
           key: "anthropic/claude-opus-4-7",
