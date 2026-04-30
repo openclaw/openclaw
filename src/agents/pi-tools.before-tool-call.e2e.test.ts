@@ -757,6 +757,35 @@ describe("before_tool_call requireApproval handling", () => {
     );
   });
 
+  it("returns pending approval id without waiting in request-only mode", async () => {
+    hookRunner.runBeforeToolCall.mockResolvedValue({
+      requireApproval: {
+        title: "Sensitive",
+        description: "Sensitive op",
+        pluginId: "sage",
+      },
+    });
+
+    mockCallGateway.mockResolvedValueOnce({ id: "server-id-request-only", status: "accepted" });
+
+    const result = await runBeforeToolCallHook({
+      toolName: "bash",
+      params: { command: "rm -rf" },
+      ctx: { agentId: "main", sessionKey: "main" },
+      approvalMode: "request-only",
+    });
+
+    expect(result.blocked).toBe(true);
+    expect(result).toMatchObject({
+      deniedReason: "plugin-approval",
+      reason: "Sensitive op",
+      approvalId: "server-id-request-only",
+    });
+    expect(mockCallGateway.mock.calls.map(([method]) => method)).toEqual([
+      "plugin.approval.request",
+    ]);
+  });
+
   it("blocks on deny decision", async () => {
     hookRunner.runBeforeToolCall.mockResolvedValue({
       requireApproval: {

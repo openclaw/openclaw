@@ -249,9 +249,6 @@ describe("OpenClaw SDK", () => {
     await expect(oc.tasks.cancel("task_123")).rejects.toThrow(
       "oc.tasks.cancel is not supported by the current OpenClaw Gateway yet",
     );
-    await expect(oc.tools.invoke("demo")).rejects.toThrow(
-      "oc.tools.invoke is not supported by the current OpenClaw Gateway yet",
-    );
     await expect(oc.artifacts.list()).rejects.toThrow(
       "oc.artifacts.list is not supported by the current OpenClaw Gateway yet",
     );
@@ -274,6 +271,66 @@ describe("OpenClaw SDK", () => {
       "oc.environments.delete is not supported by the current OpenClaw Gateway yet",
     );
     expect(transport.calls).toEqual([]);
+  });
+
+  it("invokes tools through the Gateway tools.invoke method", async () => {
+    const transport = new FakeTransport({
+      "tools.invoke": (params) => ({
+        ok: true,
+        toolName:
+          typeof params === "object" && params !== null
+            ? (params as { name?: unknown }).name
+            : "unknown",
+        output: { received: params },
+      }),
+    });
+    const oc = new OpenClaw({ transport });
+
+    const noArgs = await oc.tools.invoke("demo");
+    const scoped = await oc.tools.invoke("demo", {
+      args: { input: "confirmed" },
+      sessionKey: "agent:main:main",
+      confirm: true,
+      idempotencyKey: "invoke-1",
+      timeoutMs: 123,
+    });
+
+    expect(noArgs).toMatchObject({
+      ok: true,
+      toolName: "demo",
+      output: { received: { name: "demo" } },
+    });
+    expect(scoped).toMatchObject({
+      ok: true,
+      toolName: "demo",
+      output: {
+        received: {
+          name: "demo",
+          args: { input: "confirmed" },
+          sessionKey: "agent:main:main",
+          confirm: true,
+          idempotencyKey: "invoke-1",
+        },
+      },
+    });
+    expect(transport.calls).toEqual([
+      {
+        method: "tools.invoke",
+        params: { name: "demo" },
+        options: undefined,
+      },
+      {
+        method: "tools.invoke",
+        params: {
+          name: "demo",
+          args: { input: "confirmed" },
+          sessionKey: "agent:main:main",
+          confirm: true,
+          idempotencyKey: "invoke-1",
+        },
+        options: { timeoutMs: 123 },
+      },
+    ]);
   });
 
   it("cancels runs and checks model auth status through current Gateway methods", async () => {

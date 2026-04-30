@@ -30,6 +30,19 @@ vi.mock("../config/io.js", () => ({
 }));
 
 vi.mock("../config/sessions.js", () => ({
+  resolveAgentIdFromSessionKey: (sessionKey?: string | null) => {
+    const parts = (sessionKey ?? "").split(":");
+    return parts[0] === "agent" && parts[1] ? parts[1] : "main";
+  },
+  resolveAgentMainSessionKey: (params: {
+    cfg?: { session?: { mainKey?: string } };
+    agentId: string;
+  }) => {
+    const agentId = params.agentId.trim().toLowerCase() || "main";
+    const mainKeyRaw = (params.cfg?.session?.mainKey ?? "main").trim().toLowerCase();
+    const mainKey = mainKeyRaw || "main";
+    return `agent:${agentId}:${mainKey}`;
+  },
   resolveMainSessionKey: (params?: {
     session?: { scope?: string; mainKey?: string };
     agents?: { list?: Array<{ id?: string; default?: boolean }> };

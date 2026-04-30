@@ -48,6 +48,8 @@ import {
   ToolsEffectiveGroupSchema,
   ToolsEffectiveParamsSchema,
   ToolsEffectiveResultSchema,
+  ToolsInvokeParamsSchema,
+  ToolsInvokeResultSchema,
 } from "./agents-models-skills.js";
 import {
   ChannelsStartParamsSchema,
@@ -351,6 +353,8 @@ export const ProtocolSchemas = {
   ToolsEffectiveEntry: ToolsEffectiveEntrySchema,
   ToolsEffectiveGroup: ToolsEffectiveGroupSchema,
   ToolsEffectiveResult: ToolsEffectiveResultSchema,
+  ToolsInvokeParams: ToolsInvokeParamsSchema,
+  ToolsInvokeResult: ToolsInvokeResultSchema,
   SkillsBinsParams: SkillsBinsParamsSchema,
   SkillsBinsResult: SkillsBinsResultSchema,
   SkillsSearchParams: SkillsSearchParamsSchema,

@@ -375,6 +375,53 @@ export const ToolsEffectiveParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+export const ToolsInvokeParamsSchema = Type.Object(
+  {
+    name: NonEmptyString,
+    args: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
+    sessionKey: Type.Optional(NonEmptyString),
+    agentId: Type.Optional(NonEmptyString),
+    confirm: Type.Optional(Type.Boolean()),
+    idempotencyKey: Type.Optional(NonEmptyString),
+  },
+  { additionalProperties: false },
+);
+
+export const ToolsInvokeErrorSchema = Type.Object(
+  {
+    type: Type.Union([
+      Type.Literal("invalid_request"),
+      Type.Literal("not_found"),
+      Type.Literal("approval_required"),
+      Type.Literal("tool_call_blocked"),
+      Type.Literal("tool_error"),
+    ]),
+    message: Type.String(),
+  },
+  { additionalProperties: false },
+);
+
+export const ToolsInvokeResultSchema = Type.Union([
+  Type.Object(
+    {
+      ok: Type.Literal(true),
+      toolName: NonEmptyString,
+      output: Type.Optional(Type.Unknown()),
+    },
+    { additionalProperties: false },
+  ),
+  Type.Object(
+    {
+      ok: Type.Literal(false),
+      toolName: Type.Optional(NonEmptyString),
+      requiresApproval: Type.Optional(Type.Boolean()),
+      approvalId: Type.Optional(NonEmptyString),
+      error: ToolsInvokeErrorSchema,
+    },
+    { additionalProperties: false },
+  ),
+]);
+
 export const ToolCatalogProfileSchema = Type.Object(
   {
     id: Type.Union([

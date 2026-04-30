@@ -199,3 +199,35 @@ export type SessionTarget = {
 };
 
 export type RunCreateParams = AgentRunParams;
+
+export type ToolInvokeParams = {
+  args?: JsonObject;
+  sessionKey?: string;
+  agentId?: string;
+  confirm?: boolean;
+  idempotencyKey?: string;
+  timeoutMs?: number;
+};
+
+export type ToolInvokeResult =
+  | {
+      ok: true;
+      toolName: string;
+      output?: unknown;
+    }
+  | {
+      ok: false;
+      toolName?: string;
+      requiresApproval?: boolean;
+      approvalId?: string;
+      error: {
+        type:
+          | "invalid_request"
+          | "not_found"
+          | "approval_required"
+          | "tool_call_blocked"
+          | "tool_error"
+          | (string & {});
+        message: string;
+      };
+    };

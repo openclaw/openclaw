@@ -442,7 +442,7 @@ enumeration of `src/gateway/server-methods/*.ts`.
 
   <Accordion title="Automation, skills, and tools">
     - Automation: `wake` schedules an immediate or next-heartbeat wake text injection; `cron.list`, `cron.status`, `cron.add`, `cron.update`, `cron.remove`, `cron.run`, `cron.runs` manage scheduled work.
-    - Skills and tools: `commands.list`, `skills.*`, `tools.catalog`, `tools.effective`.
+    - Skills and tools: `commands.list`, `skills.*`, `tools.catalog`, `tools.effective`, `tools.invoke`.
 
   </Accordion>
 </AccordionGroup>
@@ -500,6 +500,18 @@ enumeration of `src/gateway/server-methods/*.ts`.
     caller-supplied auth or delivery context.
   - The response is session-scoped and reflects what the active conversation can use right now,
     including core, plugin, and channel tools.
+- Operators may call `tools.invoke` (`operator.write`) to invoke one runtime-effective tool through
+  the Gateway policy pipeline.
+  - Request shape: `{ name, args?, sessionKey?, agentId?, confirm?, idempotencyKey? }`.
+  - Omit `sessionKey` to use the default main session, or pass `agentId` to target that agent's main
+    session. When both `sessionKey` and `agentId` are present, the Gateway rejects mismatches.
+  - The RPC reuses the same direct-invocation Gateway tool allow/deny filtering as
+    `/tools/invoke`.
+  - The response is typed as `{ ok: true, toolName, output? }` on success or
+    `{ ok: false, toolName?, requiresApproval?, approvalId?, error }` for application-level refusal.
+  - Without `confirm: true`, plugin approval requests return `requiresApproval: true` without
+    executing the tool. With `confirm: true`, the Gateway follows the existing plugin approval wait
+    semantics before execution.
 - Operators may call `skills.status` (`operator.read`) to fetch the visible
   skill inventory for an agent.
   - `agentId` is optional; omit it to read the default agent workspace.

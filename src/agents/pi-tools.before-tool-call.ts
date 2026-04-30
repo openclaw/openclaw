@@ -48,9 +48,11 @@ type HookOutcome =
       deniedReason?: HookBlockedReason;
       reason: string;
       params?: unknown;
+      approvalId?: string;
     }
   | { blocked: false; params: unknown };
 type PluginApprovalRequest = NonNullable<PluginHookBeforeToolCallResult["requireApproval"]>;
+type PluginApprovalMode = "wait" | "request-only";
 
 const log = createSubsystemLogger("agents/tools");
 const BEFORE_TOOL_CALL_WRAPPED = Symbol("beforeToolCallWrapped");
@@ -139,6 +141,7 @@ async function requestPluginToolApproval(params: {
   signal?: AbortSignal;
   baseParams: unknown;
   overrideParams?: unknown;
+  approvalMode?: PluginApprovalMode;
 }): Promise<HookOutcome> {
   const approval = params.approval;
   const safeOnResolution = (resolution: PluginApprovalResolution): void => {
@@ -207,6 +210,16 @@ async function requestPluginToolApproval(params: {
         };
       }
     } else {
+      if (params.approvalMode === "request-only") {
+        return {
+          blocked: true,
+          kind: "failure",
+          deniedReason: "plugin-approval",
+          reason: approval.description || "Plugin approval required",
+          params: params.baseParams,
+          approvalId: id,
+        };
+      }
       // Wait for the decision, but abort early if the agent run is cancelled
       // so the user isn't blocked for the full approval timeout.
       const waitPromise: Promise<{
@@ -399,6 +412,7 @@ export async function runBeforeToolCallHook(args: {
   toolCallId?: string;
   ctx?: HookContext;
   signal?: AbortSignal;
+  approvalMode?: PluginApprovalMode;
 }): Promise<HookOutcome> {
   const toolName = normalizeToolName(args.toolName || "tool");
   const params = args.params;
@@ -509,6 +523,7 @@ export async function runBeforeToolCallHook(args: {
         signal: args.signal,
         baseParams: params,
         overrideParams: trustedPolicyResult.params,
+        approvalMode: args.approvalMode,
       });
     }
     const policyAdjustedParams = trustedPolicyResult?.params ?? params;
@@ -545,6 +560,7 @@ export async function runBeforeToolCallHook(args: {
         signal: args.signal,
         baseParams: policyAdjustedParams,
         overrideParams: hookResult.params,
+        approvalMode: args.approvalMode,
       });
     }
 

@@ -100,6 +100,7 @@ async function createFakeGateway(port = 0): Promise<FakeGateway> {
               "sessions.send",
               "tools.catalog",
               "tools.effective",
+              "tools.invoke",
             ],
             events: ["agent", "sessions.changed"],
           },
@@ -437,6 +438,7 @@ describe("OpenClaw SDK websocket e2e", () => {
         "models.authStatus",
         "tools.catalog",
         "tools.effective",
+        "tools.invoke",
         "exec.approval.list",
         "exec.approval.resolve",
       ]);

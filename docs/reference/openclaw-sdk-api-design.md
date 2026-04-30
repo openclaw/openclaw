@@ -58,7 +58,7 @@ oc.models.list();
 oc.models.status(); // Gateway models.authStatus
 
 oc.tools.list();
-oc.tools.invoke(...); // future API: current SDK throws unsupported
+oc.tools.invoke(...); // Gateway tools.invoke
 
 oc.artifacts.list({ runId }); // future API: current SDK throws unsupported
 oc.artifacts.get(artifactId); // future API: current SDK throws unsupported

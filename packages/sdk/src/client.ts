@@ -14,6 +14,8 @@ import type {
   SessionCreateParams,
   SessionSendParams,
   SessionTarget,
+  ToolInvokeParams,
+  ToolInvokeResult,
 } from "./types.js";
 
 const MAX_REPLAY_RUNS = 100;
@@ -157,6 +159,30 @@ function buildAgentParams(params: AgentRunParams): Record<string, unknown> {
     ...(params.label ? { label: params.label } : {}),
     idempotencyKey: params.idempotencyKey ?? randomUUID(),
   };
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function buildToolInvokeParams(
+  name: string,
+  params?: ToolInvokeParams,
+): { gatewayParams: Record<string, unknown>; timeoutMs?: number } {
+  const toolName = name.trim();
+  if (!toolName) {
+    throw new Error("tool name is required");
+  }
+  if (params === undefined) {
+    return { gatewayParams: { name: toolName } };
+  }
+  if (!isPlainRecord(params)) {
+    throw new Error("tools.invoke params must be an object when provided");
+  }
+  const timeoutMs =
+    typeof params.timeoutMs === "number" ? normalizeTimeoutMs(params.timeoutMs) : undefined;
+  const { timeoutMs: _timeoutMs, ...gatewayParams } = params;
+  return { gatewayParams: { name: toolName, ...gatewayParams }, timeoutMs };
 }
 
 function unsupportedGatewayApi(api: string): never {
@@ -618,10 +644,13 @@ export class ToolsNamespace extends RpcNamespace {
     return await this.call("effective", params);
   }
 
-  async invoke(name: string, params?: unknown): Promise<unknown> {
-    void name;
-    void params;
-    return unsupportedGatewayApi("oc.tools.invoke");
+  async invoke(name: string, params?: ToolInvokeParams): Promise<ToolInvokeResult> {
+    const { gatewayParams, timeoutMs } = buildToolInvokeParams(name, params);
+    return await this.call<ToolInvokeResult>(
+      "invoke",
+      gatewayParams,
+      timeoutMs !== undefined ? { timeoutMs } : undefined,
+    );
   }
 }
 

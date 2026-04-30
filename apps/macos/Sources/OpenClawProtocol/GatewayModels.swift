@@ -3644,6 +3644,40 @@ public struct ToolsEffectiveResult: Codable, Sendable {
     }
 }
 
+public struct ToolsInvokeParams: Codable, Sendable {
+    public let name: String
+    public let args: [String: AnyCodable]?
+    public let sessionkey: String?
+    public let agentid: String?
+    public let confirm: Bool?
+    public let idempotencykey: String?
+
+    public init(
+        name: String,
+        args: [String: AnyCodable]?,
+        sessionkey: String?,
+        agentid: String?,
+        confirm: Bool?,
+        idempotencykey: String?)
+    {
+        self.name = name
+        self.args = args
+        self.sessionkey = sessionkey
+        self.agentid = agentid
+        self.confirm = confirm
+        self.idempotencykey = idempotencykey
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case name
+        case args
+        case sessionkey = "sessionKey"
+        case agentid = "agentId"
+        case confirm
+        case idempotencykey = "idempotencyKey"
+    }
+}
+
 public struct SkillsBinsParams: Codable, Sendable {}
 
 public struct SkillsBinsResult: Codable, Sendable {

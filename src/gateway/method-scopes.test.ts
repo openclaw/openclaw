@@ -43,6 +43,7 @@ describe("method scope resolution", () => {
     ["nativeHook.invoke", ["operator.admin"]],
     ["wizard.start", ["operator.admin"]],
     ["update.run", ["operator.admin"]],
+    ["tools.invoke", ["operator.write"]],
   ])("resolves least-privilege scopes for %s", (method, expected) => {
     expect(resolveLeastPrivilegeOperatorScopesForMethod(method)).toEqual(expected);
   });

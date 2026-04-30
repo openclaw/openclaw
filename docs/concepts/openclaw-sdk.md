@@ -218,7 +218,18 @@ Tool helpers expose the Gateway catalog and effective tool view:
 ```typescript
 await oc.tools.list();
 await oc.tools.effective({ sessionKey: "main" });
+await oc.tools.invoke("tool-name", {
+  args: { path: "README.md" },
+  sessionKey: "main",
+  confirm: true,
+});
 ```
+
+`oc.tools.invoke()` calls the Gateway `tools.invoke` RPC. By default, plugin
+approval requests are returned as a typed `{ ok: false, requiresApproval: true,
+approvalId, error }` result instead of executing through an approval wait.
+Pass `confirm: true` when the app wants the Gateway to run the normal plugin
+approval wait path before execution.
 
 Approval helpers use the exec approval RPCs:
 
@@ -237,8 +248,6 @@ errors:
 await oc.tasks.list();
 await oc.tasks.get("task-id");
 await oc.tasks.cancel("task-id");
-
-await oc.tools.invoke("tool-name", {});
 
 await oc.artifacts.list();
 await oc.artifacts.get("artifact-id");

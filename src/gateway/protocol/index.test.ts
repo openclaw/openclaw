@@ -8,6 +8,8 @@ import {
   validateNodePresenceAlivePayload,
   validateTalkConfigResult,
   validateTalkRealtimeSessionParams,
+  validateToolsInvokeParams,
+  validateToolsInvokeResult,
   validateWakeParams,
 } from "./index.js";
 
@@ -190,6 +192,42 @@ describe("validateModelsListParams", () => {
   it("rejects unknown model catalog views and extra fields", () => {
     expect(validateModelsListParams({ view: "available" })).toBe(false);
     expect(validateModelsListParams({ view: "configured", provider: "minimax" })).toBe(false);
+  });
+});
+
+describe("validateToolsInvokeParams", () => {
+  it("accepts SDK-facing tool invocation params and result shapes", () => {
+    expect(
+      validateToolsInvokeParams({
+        name: "demo",
+        args: { input: "hello" },
+        sessionKey: "agent:main:main",
+        agentId: "main",
+        confirm: true,
+        idempotencyKey: "invoke-1",
+      }),
+    ).toBe(true);
+    expect(
+      validateToolsInvokeResult({
+        ok: false,
+        toolName: "demo",
+        requiresApproval: true,
+        approvalId: "plugin:approval-1",
+        error: { type: "approval_required", message: "Needs approval" },
+      }),
+    ).toBe(true);
+  });
+
+  it("rejects caller-supplied auth context params", () => {
+    expect(
+      validateToolsInvokeParams({
+        name: "demo",
+        senderIsOwner: true,
+      }),
+    ).toBe(false);
+    expect(formatValidationErrors(validateToolsInvokeParams.errors)).toContain(
+      "unexpected property 'senderIsOwner'",
+    );
   });
 });
 
