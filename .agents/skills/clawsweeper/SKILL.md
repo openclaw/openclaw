@@ -285,13 +285,17 @@ CLAWSWEEPER_MAX_REPAIRS_PER_HEAD=1
 
 ## Security Boundary
 
-Do not stage security-sensitive work for ClawSweeper Repair. Route vulnerability
-reports, CVE/GHSA/advisory work, leaked secrets/tokens/keys, plaintext secret
-storage, SSRF, XSS, CSRF, RCE, auth bypass, privilege escalation, and sensitive
-data exposure to central OpenClaw security handling.
+Do not stage unapproved security-sensitive work for ClawSweeper Repair. Route
+vulnerability reports, CVE/GHSA/advisory work, leaked secrets/tokens/keys,
+plaintext secret storage, SSRF, XSS, CSRF, RCE, auth bypass, privilege
+escalation, and sensitive data exposure to central OpenClaw security handling.
 
-For adopted automerge jobs, trust deterministic ClawSweeper security markers,
-labels, and job frontmatter; do not infer security handling from vague prose.
+For PRs explicitly opted into `clawsweeper:autofix` or
+`clawsweeper:automerge`, security-sensitive review findings may dispatch
+bounded repair, but merge remains blocked until a later exact-head review is
+clean and the normal merge gates pass. Trust deterministic ClawSweeper security
+markers, labels, and job frontmatter; do not infer security handling from vague
+prose.
 
 ## Monitoring
 
