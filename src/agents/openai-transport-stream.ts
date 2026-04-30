@@ -54,6 +54,7 @@ import { mergeTransportMetadata, sanitizeTransportPayloadText } from "./transpor
 
 const DEFAULT_AZURE_OPENAI_API_VERSION = "2024-12-01-preview";
 const OPENAI_CODEX_RESPONSES_EMPTY_INPUT_TEXT = " ";
+const OPENAI_CODEX_RESPONSES_DEFAULT_INSTRUCTIONS = "Follow the user request.";
 const log = createSubsystemLogger("openai-transport");
 
 type BaseStreamOptions = {
@@ -933,6 +934,12 @@ function buildOpenAICodexResponsesInstructions(context: Context): string | undef
   return sanitizeTransportPayloadText(stripSystemPromptCacheBoundary(context.systemPrompt));
 }
 
+function resolveOpenAICodexResponsesInstructions(context: Context): string {
+  return (
+    buildOpenAICodexResponsesInstructions(context) ?? OPENAI_CODEX_RESPONSES_DEFAULT_INSTRUCTIONS
+  );
+}
+
 function ensureOpenAICodexResponsesInput(messages: ResponseInput, context: Context): void {
   if (messages.length > 0 || !context.systemPrompt) {
     return;
@@ -978,7 +985,7 @@ export function buildOpenAIResponsesParams(
     stream: true,
     prompt_cache_key: cacheRetention === "none" ? undefined : options?.sessionId,
     prompt_cache_retention: getPromptCacheRetention(model.baseUrl, cacheRetention),
-    ...(isCodexResponses ? { instructions: buildOpenAICodexResponsesInstructions(context) } : {}),
+    ...(isCodexResponses ? { instructions: resolveOpenAICodexResponsesInstructions(context) } : {}),
     ...(metadata ? { metadata } : {}),
   };
   if (options?.maxTokens) {

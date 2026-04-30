@@ -1801,6 +1801,13 @@ export async function runEmbeddedAttempt(
             `(${params.provider}/${params.modelId})`,
         );
       }
+      if (params.resolvedApiKey?.trim()) {
+        const previousGetApiKey = activeSession.agent.getApiKey;
+        const runProvider = params.provider;
+        const runApiKey = params.resolvedApiKey;
+        activeSession.agent.getApiKey = async (provider) =>
+          provider === runProvider ? runApiKey : await previousGetApiKey?.(provider);
+      }
       prepStages.mark("stream-setup");
       emitPrepStageSummary("stream-ready");
 
