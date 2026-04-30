@@ -589,6 +589,7 @@ Common registration methods:
 | Method                                  | What it registers           |
 | --------------------------------------- | --------------------------- |
 | `registerProvider`                      | Model provider (LLM)        |
+| `registerStatusProvider`                | TUI footer status provider  |
 | `registerChannel`                       | Chat channel                |
 | `registerTool`                          | Agent tool                  |
 | `registerHook` / `on(...)`              | Lifecycle hooks             |

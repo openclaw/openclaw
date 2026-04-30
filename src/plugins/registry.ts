@@ -442,6 +442,26 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
   };
 
   const registerStatusProvider = (record: PluginRecord, provider: PluginStatusProvider) => {
+    const id = provider.id.trim();
+    if (!id) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: "status provider registration missing id",
+      });
+      return;
+    }
+    const existing = registry.statusProviders.find((entry) => entry.provider.id === id);
+    if (existing) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `status provider already registered: ${id} (${existing.pluginId})`,
+      });
+      return;
+    }
     registry.statusProviders.push({
       pluginId: record.id,
       provider,

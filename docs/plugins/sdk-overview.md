@@ -84,6 +84,7 @@ methods:
 | Method                                           | What it registers                     |
 | ------------------------------------------------ | ------------------------------------- |
 | `api.registerProvider(...)`                      | Text inference (LLM)                  |
+| `api.registerStatusProvider(...)`                | TUI footer status contribution        |
 | `api.registerAgentHarness(...)`                  | Experimental low-level agent executor |
 | `api.registerCliBackend(...)`                    | Local CLI inference backend           |
 | `api.registerChannel(...)`                       | Messaging channel                     |
