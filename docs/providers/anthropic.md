@@ -8,7 +8,7 @@ title: "Anthropic"
 Anthropic builds the **Claude** model family. OpenClaw supports two auth routes:
 
 - **API key** — direct Anthropic API access with usage-based billing (`anthropic/*` models)
-- **Claude CLI** — reuse an existing Claude CLI login on the same host
+- **Claude subscription (Pro/Max)** — reuse your local Claude CLI login and run Claude through `claude -p` in headless mode. No API key, no extra billing on top of your subscription.
 
 <Warning>
 Anthropic staff told us OpenClaw-style Claude CLI usage is allowed again, so
@@ -67,24 +67,24 @@ Anthropic's current public docs:
 
   </Tab>
 
-  <Tab title="Claude CLI">
-    **Best for:** reusing an existing Claude CLI login without a separate API key.
+  <Tab title="Claude subscription (Pro/Max)">
+    **Best for:** running Claude on your existing Pro/Max plan without a separate API key. OpenClaw drives the official Claude CLI in headless mode (`claude -p`) using your subscription session.
 
     <Steps>
-      <Step title="Ensure Claude CLI is installed and logged in">
-        Verify with:
-
-        ```bash
-        claude --version
-        ```
-      </Step>
       <Step title="Run onboarding">
         ```bash
         openclaw onboard
-        # choose: Claude CLI
+        # choose: Claude subscription (no API key needed)
         ```
 
-        OpenClaw detects and reuses the existing Claude CLI credentials.
+        The wizard takes care of everything:
+
+        - If `claude` is not on PATH, OpenClaw asks for confirmation and runs `npm install -g @anthropic-ai/claude-code` for you.
+        - If Claude CLI is installed but signed out, OpenClaw runs `claude /login` interactively so you can sign in with your Anthropic account.
+        - Once installed and signed in, the existing Claude CLI session is reused automatically — no token to copy or paste.
+      </Step>
+      <Step title="Pick a model">
+        The wizard offers the Claude model list (Opus / Sonnet / Haiku) and seeds them into your config. The default is `anthropic/claude-opus-4-7`.
       </Step>
       <Step title="Verify the model is available">
         ```bash
@@ -92,6 +92,8 @@ Anthropic's current public docs:
         ```
       </Step>
     </Steps>
+
+    Once configured, you can switch models live from the OpenClaw web dashboard's chat model selector — every Claude model you allowed during onboarding shows up there. The thinking-level selector next to it is also wired up: choose `off` / `minimal` / `low` / `medium` / `high` per session and OpenClaw injects the directive into the Claude CLI system prompt for the next turn.
 
     <Note>
     Setup and runtime details for the Claude CLI backend are in [CLI Backends](/gateway/cli-backends).

@@ -2,13 +2,19 @@ import type {
   ProviderAuthContext,
   ProviderAuthMethodNonInteractiveContext,
 } from "openclaw/plugin-sdk/plugin-entry";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { readClaudeCliCredentialsForSetup, readClaudeCliCredentialsForSetupNonInteractive } =
-  vi.hoisted(() => ({
-    readClaudeCliCredentialsForSetup: vi.fn(),
-    readClaudeCliCredentialsForSetupNonInteractive: vi.fn(),
-  }));
+const {
+  readClaudeCliCredentialsForSetup,
+  readClaudeCliCredentialsForSetupNonInteractive,
+  ensureClaudeCliInstalled,
+  runClaudeCliLogin,
+} = vi.hoisted(() => ({
+  readClaudeCliCredentialsForSetup: vi.fn(),
+  readClaudeCliCredentialsForSetupNonInteractive: vi.fn(),
+  ensureClaudeCliInstalled: vi.fn(async () => ({ ok: true as const })),
+  runClaudeCliLogin: vi.fn(() => true),
+}));
 
 vi.mock("./cli-auth-seam.js", async (importActual) => {
   const actual = await importActual<typeof import("./cli-auth-seam.js")>();
@@ -16,6 +22,15 @@ vi.mock("./cli-auth-seam.js", async (importActual) => {
     ...actual,
     readClaudeCliCredentialsForSetup,
     readClaudeCliCredentialsForSetupNonInteractive,
+  };
+});
+
+vi.mock("./cli-install.js", async (importActual) => {
+  const actual = await importActual<typeof import("./cli-install.js")>();
+  return {
+    ...actual,
+    ensureClaudeCliInstalled,
+    runClaudeCliLogin,
   };
 });
 
@@ -78,6 +93,15 @@ function createProviderAuthMethodNonInteractiveContext(
 }
 
 describe("anthropic cli migration", () => {
+  beforeEach(() => {
+    ensureClaudeCliInstalled.mockReset();
+    ensureClaudeCliInstalled.mockResolvedValue({ ok: true });
+    runClaudeCliLogin.mockReset();
+    runClaudeCliLogin.mockReturnValue(true);
+    readClaudeCliCredentialsForSetup.mockReset();
+    readClaudeCliCredentialsForSetupNonInteractive.mockReset();
+  });
+
   it("detects local Claude CLI auth", () => {
     readClaudeCliCredentialsForSetup.mockReturnValue({ type: "oauth" });
 
@@ -197,16 +221,52 @@ describe("anthropic cli migration", () => {
     });
   });
 
-  it("registered cli auth tells users to run claude auth login when local auth is missing", async () => {
+  it("registered cli auth blocks setup when Claude CLI install was declined", async () => {
     readClaudeCliCredentialsForSetup.mockReturnValue(null);
+    ensureClaudeCliInstalled.mockResolvedValueOnce({
+      ok: false,
+      reason: "Claude CLI install was declined.",
+    });
     const method = await resolveAnthropicCliAuthMethod();
 
     await expect(method.run(createProviderAuthContext())).rejects.toThrow(
-      [
-        "Claude CLI is not authenticated on this host.",
-        "Run claude auth login first, then re-run this setup.",
-      ].join("\n"),
+      "Claude CLI install was declined.",
     );
+  });
+
+  it("registered cli auth offers to run claude /login when CLI is installed but signed out", async () => {
+    readClaudeCliCredentialsForSetup.mockReturnValueOnce(null);
+    readClaudeCliCredentialsForSetup.mockReturnValueOnce({
+      type: "oauth",
+      provider: "anthropic",
+      access: "after-login-access",
+      refresh: "after-login-refresh",
+      expires: Date.now() + 60_000,
+    });
+    ensureClaudeCliInstalled.mockResolvedValueOnce({ ok: true });
+    runClaudeCliLogin.mockReturnValueOnce(true);
+    const method = await resolveAnthropicCliAuthMethod();
+    const ctx = createProviderAuthContext();
+    ctx.prompter = createTestWizardPrompter({ confirm: vi.fn(async () => true) });
+
+    const result = await method.run(ctx);
+
+    expect(runClaudeCliLogin).toHaveBeenCalledTimes(1);
+    expect(result.profiles?.[0]?.credential).toMatchObject({
+      type: "oauth",
+      access: "after-login-access",
+    });
+  });
+
+  it("registered cli auth fails clearly when sign-in is declined", async () => {
+    readClaudeCliCredentialsForSetup.mockReturnValue(null);
+    ensureClaudeCliInstalled.mockResolvedValueOnce({ ok: true });
+    const method = await resolveAnthropicCliAuthMethod();
+    const ctx = createProviderAuthContext();
+    ctx.prompter = createTestWizardPrompter({ confirm: vi.fn(async () => false) });
+
+    await expect(method.run(ctx)).rejects.toThrow(/Claude CLI sign-in was declined/);
+    expect(runClaudeCliLogin).not.toHaveBeenCalled();
   });
 
   it("registered cli auth returns the same migration result as the builder", async () => {
@@ -343,8 +403,9 @@ describe("anthropic cli migration", () => {
     await expect(method.runNonInteractive?.(ctx)).resolves.toBeNull();
     expect(ctx.runtime.error).toHaveBeenCalledWith(
       [
-        'Auth choice "anthropic-cli" requires Claude CLI auth on this host.',
-        "Run claude auth login first.",
+        'Auth choice "anthropic-cli" requires Claude CLI installed and signed in on this host.',
+        "Install Claude CLI: npm install -g @anthropic-ai/claude-code",
+        "Then sign in: claude /login",
       ].join("\n"),
     );
     expect(ctx.runtime.exit).toHaveBeenCalledWith(1);

@@ -29,6 +29,11 @@ import { fetchClaudeUsage } from "openclaw/plugin-sdk/provider-usage";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import * as claudeCliAuth from "./cli-auth-seam.js";
 import { buildAnthropicCliBackend } from "./cli-backend.js";
+import {
+  CLAUDE_CLI_NPM_PACKAGE,
+  ensureClaudeCliInstalled,
+  runClaudeCliLogin,
+} from "./cli-install.js";
 import { buildAnthropicCliMigrationResult } from "./cli-migration.js";
 import {
   CLAUDE_CLI_BACKEND_ID,
@@ -409,14 +414,45 @@ function resolveClaudeCliSyntheticAuth() {
 }
 
 async function runAnthropicCliMigration(ctx: ProviderAuthContext): Promise<ProviderAuthResult> {
-  const credential = claudeCliAuth.readClaudeCliCredentialsForSetup();
+  const installed = await ensureClaudeCliInstalled({
+    prompter: ctx.prompter,
+    runtime: ctx.runtime,
+  });
+  if (!installed.ok) {
+    throw new Error(installed.reason);
+  }
+
+  let credential = claudeCliAuth.readClaudeCliCredentialsForSetup();
   if (!credential) {
-    throw new Error(
+    await ctx.prompter.note(
       [
-        "Claude CLI is not authenticated on this host.",
-        `Run ${formatCliCommand("claude auth login")} first, then re-run this setup.`,
+        "Claude CLI is installed but not signed in to your Anthropic account.",
+        "OpenClaw needs an active Claude subscription session to run requests through your plan.",
       ].join("\n"),
+      "Claude CLI sign-in",
     );
+    const shouldLogin = await ctx.prompter.confirm({
+      message: `Run ${formatCliCommand("claude /login")} now to sign in?`,
+      initialValue: true,
+    });
+    if (!shouldLogin) {
+      throw new Error(
+        [
+          "Claude CLI sign-in was declined.",
+          `Run ${formatCliCommand("claude /login")} manually, then re-run this setup.`,
+        ].join("\n"),
+      );
+    }
+    runClaudeCliLogin(ctx.runtime);
+    credential = claudeCliAuth.readClaudeCliCredentialsForSetup();
+    if (!credential) {
+      throw new Error(
+        [
+          "Claude CLI sign-in did not complete.",
+          `Run ${formatCliCommand("claude /login")} again, then re-run this setup.`,
+        ].join("\n"),
+      );
+    }
   }
   return buildAnthropicCliMigrationResult(ctx.config, credential);
 }
@@ -430,8 +466,9 @@ async function runAnthropicCliMigrationNonInteractive(ctx: {
   if (!credential) {
     ctx.runtime.error(
       [
-        'Auth choice "anthropic-cli" requires Claude CLI auth on this host.',
-        `Run ${formatCliCommand("claude auth login")} first.`,
+        'Auth choice "anthropic-cli" requires Claude CLI installed and signed in on this host.',
+        `Install Claude CLI: npm install -g ${CLAUDE_CLI_NPM_PACKAGE}`,
+        `Then sign in: ${formatCliCommand("claude /login")}`,
       ].join("\n"),
     );
     ctx.runtime.exit(1);
@@ -488,21 +525,21 @@ export function buildAnthropicProvider(): ProviderPlugin {
     auth: [
       {
         id: "cli",
-        label: "Claude CLI",
-        hint: "Reuse a local Claude CLI login and run Anthropic models through the Claude CLI runtime",
+        label: "Claude subscription (no API key)",
+        hint: "Use your Claude Pro/Max subscription via the Claude CLI in headless mode",
         kind: "custom",
         wizard: {
           choiceId: "anthropic-cli",
-          choiceLabel: "Anthropic Claude CLI",
-          choiceHint: "Reuse a local Claude CLI login on this host",
-          assistantPriority: -20,
+          choiceLabel: "Claude subscription (no API key needed)",
+          choiceHint: "Runs Claude through the Claude CLI in headless mode using your Pro/Max plan",
+          assistantPriority: -50,
           groupId: "anthropic",
           groupLabel: "Anthropic",
-          groupHint: "Claude CLI + API key",
+          groupHint: "Claude subscription + API key",
           modelAllowlist: {
             allowedKeys: [...CLAUDE_CLI_CANONICAL_ALLOWLIST_REFS],
             initialSelections: [CLAUDE_CLI_CANONICAL_DEFAULT_MODEL_REF],
-            message: "Claude CLI models",
+            message: "Claude models",
           },
         },
         run: async (ctx: ProviderAuthContext) => await runAnthropicCliMigration(ctx),
@@ -525,7 +562,7 @@ export function buildAnthropicProvider(): ProviderPlugin {
           assistantPriority: 40,
           groupId: "anthropic",
           groupLabel: "Anthropic",
-          groupHint: "Claude CLI + API key + token",
+          groupHint: "Claude subscription + API key + token",
         },
         run: async (ctx: ProviderAuthContext) => await runAnthropicSetupTokenAuth(ctx),
         runNonInteractive: async (ctx: ProviderAuthMethodNonInteractiveContext) =>
@@ -547,7 +584,7 @@ export function buildAnthropicProvider(): ProviderPlugin {
           choiceLabel: "Anthropic API key",
           groupId: "anthropic",
           groupLabel: "Anthropic",
-          groupHint: "Claude CLI + API key",
+          groupHint: "Claude subscription + API key",
         },
       }),
     ],

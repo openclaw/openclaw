@@ -2,6 +2,12 @@
 
 Docs: https://docs.openclaw.ai
 
+## Unreleased
+
+### Changes
+
+- Onboarding/Anthropic: rename the Claude CLI auth choice to "Claude subscription (no API key needed)" and surface it ahead of API key paths, so users with Pro/Max plans see the headless `claude -p` flow as a first-class option in `openclaw onboard`. The wizard now auto-detects whether `claude` is on PATH, offers to run `npm install -g @anthropic-ai/claude-code` after explicit confirmation, and runs `claude /login` interactively when the local CLI is installed but signed out. The web dashboard's chat model picker and thinking-level selector keep working with the new runtime so users can switch Claude model and effort live per session.
+
 ## 2026.4.29
 
 ### Highlights

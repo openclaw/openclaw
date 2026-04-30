@@ -6,7 +6,7 @@ const manifestAuthChoices = vi.hoisted(() => [
     providerId: "anthropic",
     methodId: "cli",
     choiceId: "anthropic-cli",
-    choiceLabel: "Anthropic Claude CLI",
+    choiceLabel: "Claude subscription (no API key needed)",
     deprecatedChoiceIds: ["claude-cli"],
   },
   {
@@ -47,7 +47,8 @@ describe("auth choice legacy aliases", () => {
     expect(normalizeLegacyOnboardAuthChoice("claude-cli", { env })).toBe("anthropic-cli");
     expect(resolveDeprecatedAuthChoiceReplacement("claude-cli", { env })).toEqual({
       normalized: "anthropic-cli",
-      message: 'Auth choice "claude-cli" is deprecated; using Anthropic Claude CLI setup instead.',
+      message:
+        'Auth choice "claude-cli" is deprecated; using Claude subscription (no API key needed) setup instead.',
     });
     expect(formatDeprecatedNonInteractiveAuthChoiceError("claude-cli", { env })).toBe(
       'Auth choice "claude-cli" is deprecated.\nUse "--auth-choice anthropic-cli".',
