@@ -13,6 +13,11 @@ import { truncateSlackText } from "./truncate.js";
 
 const SLACK_SECTION_TEXT_MAX = 3000;
 const SLACK_PLAIN_TEXT_MAX = 75;
+const SLACK_OPTION_VALUE_MAX = 75;
+const SLACK_BUTTON_VALUE_MAX = 2000;
+const SLACK_BUTTON_URL_MAX = 3000;
+const SLACK_STATIC_SELECT_OPTIONS_MAX = 100;
+const SLACK_ACTION_BLOCK_ELEMENTS_MAX = 25;
 
 export type SlackBlock = Block | KnownBlock;
 
@@ -34,6 +39,10 @@ function resolveSlackButtonStyle(
     return "primary";
   }
   return undefined;
+}
+
+function isWithinSlackLimit(value: string, maxLength: number): boolean {
+  return value.length <= maxLength;
 }
 
 export function buildSlackInteractiveBlocks(interactive?: InteractiveReply): SlackBlock[] {
@@ -58,26 +67,36 @@ export function buildSlackInteractiveBlocks(interactive?: InteractiveReply): Sla
       return state;
     }
     if (block.type === "buttons") {
-      const elements = block.buttons.flatMap((button, choiceIndex) => {
-        if (!button.value && !button.url) {
-          return [];
-        }
-        const style = resolveSlackButtonStyle(button.style);
-        return [
-          {
-            type: "button" as const,
-            action_id: buildSlackReplyButtonActionId(state.buttonIndex + 1, choiceIndex),
-            text: {
-              type: "plain_text" as const,
-              text: truncateSlackText(button.label, SLACK_PLAIN_TEXT_MAX),
-              emoji: true,
+      const elements = block.buttons
+        .flatMap((button, choiceIndex) => {
+          const value =
+            button.value && isWithinSlackLimit(button.value, SLACK_BUTTON_VALUE_MAX)
+              ? button.value
+              : undefined;
+          const url =
+            button.url && isWithinSlackLimit(button.url, SLACK_BUTTON_URL_MAX)
+              ? button.url
+              : undefined;
+          if (!value && !url) {
+            return [];
+          }
+          const style = resolveSlackButtonStyle(button.style);
+          return [
+            {
+              type: "button" as const,
+              action_id: buildSlackReplyButtonActionId(state.buttonIndex + 1, choiceIndex),
+              text: {
+                type: "plain_text" as const,
+                text: truncateSlackText(button.label, SLACK_PLAIN_TEXT_MAX),
+                emoji: true,
+              },
+              ...(value ? { value } : {}),
+              ...(url ? { url } : {}),
+              ...(style ? { style } : {}),
             },
-            ...(button.value ? { value: button.value } : {}),
-            ...(button.url ? { url: button.url } : {}),
-            ...(style ? { style } : {}),
-          },
-        ];
-      });
+          ];
+        })
+        .slice(0, SLACK_ACTION_BLOCK_ELEMENTS_MAX);
       if (elements.length === 0) {
         return state;
       }
@@ -88,7 +107,10 @@ export function buildSlackInteractiveBlocks(interactive?: InteractiveReply): Sla
       });
       return state;
     }
-    if (block.options.length === 0) {
+    const options = block.options
+      .filter((option) => isWithinSlackLimit(option.value, SLACK_OPTION_VALUE_MAX))
+      .slice(0, SLACK_STATIC_SELECT_OPTIONS_MAX);
+    if (options.length === 0) {
       return state;
     }
     state.blocks.push({
@@ -106,7 +128,7 @@ export function buildSlackInteractiveBlocks(interactive?: InteractiveReply): Sla
             ),
             emoji: true,
           },
-          options: block.options.map((option, _choiceIndex) => ({
+          options: options.map((option, _choiceIndex) => ({
             text: {
               type: "plain_text",
               text: truncateSlackText(option.label, SLACK_PLAIN_TEXT_MAX),

@@ -211,6 +211,10 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     },
     route: { id: "tasks-list" },
   },
+  {
+    commandPath: ["tools"],
+    policy: { loadPlugins: "never", ensureCliPath: false, networkProxy: "bypass" },
+  },
   { commandPath: ["acp"], policy: { networkProxy: "bypass" } },
   { commandPath: ["approvals"], policy: { networkProxy: "bypass" } },
   { commandPath: ["backup"], policy: { bypassConfigGuard: true, networkProxy: "bypass" } },

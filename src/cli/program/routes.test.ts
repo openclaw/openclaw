@@ -17,14 +17,6 @@ vi.mock("../config-cli.js", () => ({
   runConfigUnset: runConfigUnsetMock,
 }));
 
-vi.mock("../../commands/models.js", () => ({
-  modelsListCommand: modelsListCommandMock,
-  modelsStatusCommand: modelsStatusCommandMock,
-}));
-vi.mock("../../commands/models/list.js", () => ({
-  modelsListCommand: modelsListCommandMock,
-  modelsStatusCommand: modelsStatusCommandMock,
-}));
 vi.mock("../../commands/models/list.list-command.js", () => ({
   modelsListCommand: modelsListCommandMock,
 }));

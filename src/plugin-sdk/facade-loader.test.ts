@@ -4,6 +4,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   clearBundledRuntimeDependencyNodePaths,
+  ensureBundledPluginRuntimeDeps,
   resolveBundledRuntimeDependencyInstallRoot,
 } from "../plugins/bundled-runtime-deps.js";
 import { shouldExpectNativeJitiForJavaScriptTestRuntime } from "../test-utils/jiti-runtime.js";
@@ -90,6 +91,24 @@ function createBundledPluginFixture(params: {
   return { bundledPluginsDir, pluginId, pluginRoot };
 }
 
+function createPackageSourcePluginFixture(params: {
+  prefix: string;
+  marker: string;
+}): TrustedBundledPluginFixture {
+  const bundledPluginsDir = path.join(packageRoot, "extensions");
+  const pluginId = nextTrustedPluginId(params.prefix);
+  const pluginRoot = path.join(bundledPluginsDir, pluginId);
+  fs.mkdirSync(pluginRoot, { recursive: true });
+  trustedBundledPluginFixtureRoots.push(pluginRoot);
+  writeFixturePackageJson(pluginRoot, pluginId);
+  fs.writeFileSync(
+    path.join(pluginRoot, "api.ts"),
+    `export const marker = ${JSON.stringify(params.marker)};\n`,
+    "utf8",
+  );
+  return { bundledPluginsDir, pluginId, pluginRoot };
+}
+
 function createThrowingPluginFixture(prefix: string): TrustedBundledPluginFixture {
   const bundledPluginsDir = createTrustedBundledPluginsRoot();
   const pluginId = nextTrustedPluginId(prefix);
@@ -162,6 +181,18 @@ function writeStagedRuntimeDepPackage(params: {
   fs.writeFileSync(path.join(depRoot, "index.js"), params.source ?? "export {};\n", "utf8");
 }
 
+function concreteRuntimeDepVersionForTest(version: string): string {
+  return version.startsWith("^") || version.startsWith("~") ? version.slice(1) : version;
+}
+
+function parseRuntimeDepSpecForTest(spec: string): { name: string; version: string } {
+  const atIndex = spec.lastIndexOf("@");
+  return {
+    name: spec.slice(0, atIndex),
+    version: spec.slice(atIndex + 1),
+  };
+}
+
 function createPackagedBundledPluginDirWithStagedRuntimeDep(params: {
   marker: string;
   prefix: string;
@@ -209,14 +240,24 @@ function createPackagedBundledPluginDirWithStagedRuntimeDep(params: {
   const installRoot = resolveBundledRuntimeDependencyInstallRoot(pluginRoot, {
     env,
   });
-  writeStagedRuntimeDepPackage({
-    installRoot,
-    name: STAGED_RUNTIME_DEP_NAME,
-    version: "1.0.0",
-    source: `export const marker = ${JSON.stringify(params.marker)};\n`,
+  ensureBundledPluginRuntimeDeps({
+    env,
+    pluginId,
+    pluginRoot,
+    installDeps: ({ installRoot: runtimeInstallRoot, installSpecs = [] }) => {
+      for (const spec of installSpecs) {
+        const dep = parseRuntimeDepSpecForTest(spec);
+        writeStagedRuntimeDepPackage({
+          installRoot: runtimeInstallRoot,
+          name: dep.name,
+          version: concreteRuntimeDepVersionForTest(dep.version),
+          ...(dep.name === STAGED_RUNTIME_DEP_NAME
+            ? { source: `export const marker = ${JSON.stringify(params.marker)};\n` }
+            : {}),
+        });
+      }
+    },
   });
-  writeStagedRuntimeDepPackage({ installRoot, name: "semver", version: "7.7.4" });
-  writeStagedRuntimeDepPackage({ installRoot, name: "tslog", version: "4.10.2" });
 
   return {
     bundledPluginsDir,
@@ -286,16 +327,20 @@ describe("plugin-sdk facade loader", () => {
   });
 
   it("falls back to package source surfaces when an override dir lacks a bundled plugin", () => {
+    const fixture = createPackageSourcePluginFixture({
+      prefix: "openclaw-facade-loader-source-fallback-",
+      marker: "source-fallback",
+    });
     process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = createTempDirSync("openclaw-facade-loader-empty-");
 
     const loaded = loadBundledPluginPublicSurfaceModuleSync<{
-      emptyPluginConfigSchema: unknown;
+      marker: string;
     }>({
-      dirName: "diagnostics-prometheus",
+      dirName: fixture.pluginId,
       artifactBasename: "api.js",
     });
 
-    expect(loaded.emptyPluginConfigSchema).toEqual(expect.any(Function));
+    expect(loaded.marker).toBe("source-fallback");
   });
 
   it("keeps bundled facade loads disabled when bundled plugins are disabled", () => {

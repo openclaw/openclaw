@@ -9,6 +9,45 @@ function createInvokeSpy() {
 }
 
 describe("handleSlackMessageAction", () => {
+  it("merges presentation and interactive blocks when sending", async () => {
+    const invoke = createInvokeSpy();
+
+    await handleSlackMessageAction({
+      providerId: "slack",
+      ctx: {
+        action: "send",
+        cfg: {},
+        params: {
+          to: "channel:C1",
+          message: "Deploy?",
+          presentation: {
+            blocks: [{ type: "text", text: "Deploy summary" }],
+          },
+          interactive: {
+            blocks: [
+              {
+                type: "buttons",
+                buttons: [{ label: "Approve", value: "approve" }],
+              },
+            ],
+          },
+        },
+      } as never,
+      invoke: invoke as never,
+    });
+
+    const action = invoke.mock.calls[0]?.[0] as {
+      blocks?: Array<{ type?: string; elements?: Array<{ value?: string }> }>;
+    };
+    expect(action.blocks).toEqual([
+      expect.objectContaining({ type: "section" }),
+      expect.objectContaining({
+        type: "actions",
+        elements: [expect.objectContaining({ value: "approve" })],
+      }),
+    ]);
+  });
+
   it("maps upload-file to the internal uploadFile action", async () => {
     const invoke = createInvokeSpy();
 

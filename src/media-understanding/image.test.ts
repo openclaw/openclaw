@@ -296,6 +296,35 @@ describe("describeImageWithModel", () => {
     expect(completeMock).toHaveBeenCalledOnce();
   });
 
+  it("reports the resolved model input when an image model is text-only", async () => {
+    discoverModelsMock.mockReturnValue({
+      find: vi.fn(() => ({
+        provider: "lmstudio",
+        id: "text-only",
+        api: "openai-completions",
+        input: ["text"],
+        baseUrl: "http://127.0.0.1:1234",
+      })),
+    });
+
+    await expect(
+      describeImageWithModel({
+        cfg: {},
+        agentDir: "/tmp/openclaw-agent",
+        provider: "lmstudio",
+        model: "text-only",
+        buffer: Buffer.from("png-bytes"),
+        fileName: "image.png",
+        mime: "image/png",
+        prompt: "Describe the image.",
+        timeoutMs: 1000,
+      }),
+    ).rejects.toThrow(
+      "Model does not support images: lmstudio/text-only (resolved lmstudio/text-only input: text)",
+    );
+    expect(completeMock).not.toHaveBeenCalled();
+  });
+
   it("passes image prompt as system instructions for codex image requests", async () => {
     discoverModelsMock.mockReturnValue({
       find: vi.fn(() => ({
@@ -551,6 +580,29 @@ describe("describeImageWithModel", () => {
     await assertion;
     const [, , options] = completeMock.mock.calls[0] ?? [];
     expect(options?.signal?.aborted).toBe(true);
+    expect(options?.timeoutMs).toBe(25);
+  });
+
+  it("rejects when image runtime setup exceeds the request timeout", async () => {
+    vi.useFakeTimers();
+    ensureOpenClawModelsJsonMock.mockImplementationOnce(() => new Promise(() => {}));
+
+    const result = describeImageWithModel({
+      cfg: {},
+      agentDir: "/tmp/openclaw-agent",
+      provider: "openai",
+      model: "gpt-5.4-mini",
+      buffer: Buffer.from("png-bytes"),
+      fileName: "image.png",
+      mime: "image/png",
+      prompt: "Describe the image.",
+      timeoutMs: 25,
+    });
+
+    const assertion = expect(result).rejects.toThrow("image description timed out after 25ms");
+    await vi.advanceTimersByTimeAsync(25);
+    await assertion;
+    expect(completeMock).not.toHaveBeenCalled();
   });
 
   it("normalizes deprecated google flash ids before lookup and keeps profile auth selection", async () => {
