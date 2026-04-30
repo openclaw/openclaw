@@ -12,6 +12,7 @@ on:
           - all
           - channel-runtime-boundary
           - gateway-runtime-boundary
+          - memory-runtime-boundary
           - mcp-process-runtime-boundary
           - plugin-boundary
           - plugin-sdk-package-contract
@@ -25,13 +26,17 @@ on:
       - ".github/workflows/codeql-critical-quality.yml"
       - "packages/plugin-package-contract/**"
       - "packages/plugin-sdk/**"
+      - "packages/memory-host-sdk/**"
       - "src/channels/**"
       - "src/auto-reply/reply/post-compaction-context.ts"
       - "src/auto-reply/reply/queue/**"
       - "src/auto-reply/reply/startup-context.ts"
+      - "src/commands/doctor-cron-dreaming-payload-migration.ts"
+      - "src/commands/doctor-memory-search.ts"
       - "src/commands/doctor-session-*.ts"
       - "src/commands/session-store-targets.ts"
       - "src/commands/sessions*.ts"
+      - "src/gateway/server-startup-memory.ts"
       - "src/gateway/method-scopes.ts"
       - "src/gateway/protocol/**"
       - "src/gateway/server-methods/**"
@@ -42,6 +47,8 @@ on:
       - "src/infra/outbound/**"
       - "src/infra/session-delivery-queue*.ts"
       - "src/logging/diagnostic*.ts"
+      - "src/memory/**"
+      - "src/memory-host-sdk/**"
       - "src/mcp/**"
       - "src/model-catalog/**"
       - "src/plugin-sdk/**"
@@ -71,6 +78,7 @@ jobs:
     outputs:
       channel: ${{ steps.detect.outputs.channel }}
       gateway: ${{ steps.detect.outputs.gateway }}
+      memory: ${{ steps.detect.outputs.memory }}
       mcp_process: ${{ steps.detect.outputs.mcp_process }}
       plugin: ${{ steps.detect.outputs.plugin }}
       plugin_sdk_package: ${{ steps.detect.outputs.plugin_sdk_package }}
@@ -90,6 +98,7 @@ jobs:
 
           channel=false
           gateway=false
+          memory=false
           mcp_process=false
           plugin=false
           plugin_sdk_package=false
@@ -100,6 +109,7 @@ jobs:
           if [[ "${EVENT_NAME}" != "pull_request" ]]; then
             channel=true
             gateway=true
+            memory=true
             mcp_process=true
             plugin=true
             plugin_sdk_package=true
@@ -112,6 +122,7 @@ jobs:
                 .github/codeql/*|.github/workflows/codeql-critical-quality.yml)
                   channel=true
                   gateway=true
+                  memory=true
                   mcp_process=true
                   plugin=true
                   plugin_sdk_package=true
@@ -128,6 +139,9 @@ jobs:
                 src/gateway/method-scopes.ts|src/gateway/protocol/*|src/gateway/server-methods/*|src/gateway/server-methods.ts|src/gateway/server-methods-list.ts)
                   gateway=true
                   ;;
+                packages/memory-host-sdk/*|src/commands/doctor-cron-dreaming-payload-migration.ts|src/commands/doctor-memory-search.ts|src/gateway/server-startup-memory.ts|src/memory/*|src/memory-host-sdk/*)
+                  memory=true
+                  ;;
                 src/infra/outbound/base-session-key.ts|src/infra/outbound/delivery-queue*.ts|src/infra/outbound/outbound-session.ts|src/infra/outbound/session-binding*.ts|src/infra/outbound/session-context.ts|src/infra/outbound/targets-session.ts)
                   mcp_process=true
                   session_diagnostics=true
@@ -140,6 +154,11 @@ jobs:
                   plugin_sdk_package=true
                   plugin_sdk_reply=true
                   ;;
+                src/plugin-sdk/memory-*.ts|src/plugin-sdk/memory-core-host-*.ts)
+                  memory=true
+                  plugin=true
+                  plugin_sdk_package=true
+                  ;;
                 src/plugin-sdk/*)
                   plugin=true
                   plugin_sdk_package=true
@@ -147,6 +166,13 @@ jobs:
                 src/plugins/provider-contract-public-artifacts.ts|src/plugins/provider-public-artifacts.ts|src/plugins/web-provider-public-artifacts*.ts)
                   plugin=true
                   provider=true
+                  ;;
+                src/plugins/memory-embedding-provider*.ts|src/plugins/memory-embedding-providers*.ts)
+                  memory=true
+                  provider=true
+                  ;;
+                src/plugins/memory-*.ts)
+                  memory=true
                   ;;
                 src/model-catalog/*|src/plugins/*provider*.ts|src/plugins/capability-provider-runtime.ts|src/plugins/compaction-provider.ts|src/plugins/memory-embedding-provider*.ts|src/plugins/memory-embedding-providers*.ts|src/plugins/migration-provider-runtime.ts|src/plugins/synthetic-auth.runtime.ts|src/plugins/web-fetch-providers*.ts|src/plugins/web-search-providers*.ts)
                   provider=true
@@ -164,6 +190,7 @@ jobs:
           {
             echo "channel=${channel}"
             echo "gateway=${gateway}"
+            echo "memory=${memory}"
             echo "mcp_process=${mcp_process}"
             echo "plugin=${plugin}"
             echo "plugin_sdk_package=${plugin_sdk_package}"
@@ -309,7 +336,8 @@ jobs:
 
   memory-runtime-boundary:
     name: Critical Quality (memory-runtime-boundary)
-    if: ${{ github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || inputs.profile == 'all') }}
+    needs: quality-shards
+    if: ${{ needs.quality-shards.outputs.memory == 'true' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (github.event_name == 'pull_request' || github.event_name != 'workflow_dispatch' || inputs.profile == 'all' || inputs.profile == 'memory-runtime-boundary') }}
     runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 25
     steps:
