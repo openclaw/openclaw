@@ -339,13 +339,17 @@ export function registerLogsCli(program: Command) {
         if (opts.follow && followRetryAttempt < MAX_FOLLOW_RETRIES && isTransientFollowError(err)) {
           followRetryAttempt += 1;
           const backoffMs = computeBackoff(FOLLOW_BACKOFF_POLICY, followRetryAttempt);
-          errorLine(
-            colorize(
-              rich,
-              theme.warn,
-              `[logs] gateway disconnected, reconnecting in ${Math.round(backoffMs / 1_000)}s...`,
-            ),
-          );
+          if (
+            !errorLine(
+              colorize(
+                rich,
+                theme.warn,
+                `[logs] gateway disconnected, reconnecting in ${Math.round(backoffMs / 1_000)}s...`,
+              ),
+            )
+          ) {
+            return;
+          }
           await delay(backoffMs);
           continue;
         }
