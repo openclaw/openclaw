@@ -39,6 +39,8 @@ type CopilotModelWireEntry = {
   model?: unknown;
   name?: unknown;
   capabilities?: {
+    family?: unknown;
+    type?: unknown;
     limits?: {
       max_context_window_tokens?: unknown;
       max_output_tokens?: unknown;
@@ -85,6 +87,34 @@ export function mapCopilotWireModel(entry: CopilotModelWireEntry): ModelDefiniti
         (endpoint): endpoint is string => typeof endpoint === "string",
       )
     : [];
+
+  // Skip embedding-only entries: the Copilot /models endpoint also lists
+  // embedding models (e.g. text-embedding-3-small) consumed by the embedding
+  // provider. They expose /v1/embeddings (or no chat endpoints) and would
+  // fail if surfaced as chat models in the catalog.
+  const family = typeof entry.capabilities?.family === "string" ? entry.capabilities.family : "";
+  const capabilityType =
+    typeof entry.capabilities?.type === "string" ? entry.capabilities.type : "";
+  const looksLikeEmbedding =
+    /embedding/i.test(id) ||
+    /embedding/i.test(family) ||
+    capabilityType.toLowerCase() === "embeddings";
+  const declaresEmbeddingEndpoint = endpoints.some((ep) => ep.toLowerCase().includes("embedding"));
+  const declaresChatEndpoint = endpoints.some((ep) => {
+    const lower = ep.toLowerCase();
+    return (
+      lower.includes("chat") ||
+      lower.includes("responses") ||
+      lower.includes("messages") ||
+      lower.includes("completion")
+    );
+  });
+  if (declaresEmbeddingEndpoint && !declaresChatEndpoint) {
+    return null;
+  }
+  if (looksLikeEmbedding && !declaresChatEndpoint) {
+    return null;
+  }
   const reasoningEfforts = Array.isArray(supports.reasoning_effort)
     ? supports.reasoning_effort
     : [];

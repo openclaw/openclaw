@@ -208,6 +208,30 @@ describe("github-copilot plugin", () => {
     }
   });
 
+  it("skips embedding-only Copilot catalog entries", () => {
+    expect(
+      mapCopilotWireModel({
+        id: "text-embedding-3-small",
+        capabilities: { limits: {}, supports: {} },
+        supported_endpoints: ["/v1/embeddings"],
+      }),
+    ).toBeNull();
+    expect(
+      mapCopilotWireModel({
+        id: "text-embedding-ada-002",
+        capabilities: { limits: {}, supports: {} },
+        supported_endpoints: [],
+      }),
+    ).toBeNull();
+    expect(
+      mapCopilotWireModel({
+        id: "some-model",
+        capabilities: { family: "embedding", limits: {}, supports: {} },
+        supported_endpoints: [],
+      }),
+    ).toBeNull();
+  });
+
   it("fetches Copilot /models during catalog discovery", async () => {
     mocks.resolveCopilotApiToken.mockResolvedValueOnce({
       token: "copilot_api_token",
