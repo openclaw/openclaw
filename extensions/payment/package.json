@@ -1,0 +1,15 @@
+{
+  "name": "@openclaw/payment-plugin",
+  "version": "2026.4.25",
+  "private": true,
+  "description": "OpenClaw payment plugin (Stripe Link + mock providers)",
+  "type": "module",
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
