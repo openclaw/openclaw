@@ -1008,5 +1008,20 @@ describe("failover-error", () => {
       const outer = { message: "", error: inner };
       expect(collectErrorChainMessages(outer)).toEqual(["prompt is too long"]);
     });
+
+    it("redacts nested secrets by default but keeps a raw option for classifier-only callers", () => {
+      const secret = "Authorization: Bearer sk-test-super-secret-token-that-should-never-leak";
+      const inner = new Error(secret);
+      const outer = new Error("request failed", { cause: inner });
+
+      expect(collectErrorChainMessages(outer)).toEqual([
+        "request failed",
+        expect.not.stringContaining("sk-test-super-secret-token-that-should-never-leak"),
+      ]);
+      expect(collectErrorChainMessages(outer, { redact: false })).toEqual([
+        "request failed",
+        secret,
+      ]);
+    });
   });
 });

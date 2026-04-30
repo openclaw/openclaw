@@ -2223,6 +2223,47 @@ describe("runAgentTurnWithFallback", () => {
     }
   });
 
+  it("does not surface raw nested secrets in verbose external error replies", async () => {
+    state.runEmbeddedPiAgentMock.mockRejectedValueOnce(
+      new Error("request failed", {
+        cause: new Error("Authorization: Bearer sk-test-super-secret-token-that-should-never-leak"),
+      }),
+    );
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      commandBody: "hello",
+      followupRun: createFollowupRun(),
+      sessionCtx: {
+        Provider: "whatsapp",
+        MessageSid: "msg",
+      } as unknown as TemplateContext,
+      opts: {},
+      typingSignals: createMockTypingSignaler(),
+      blockReplyPipeline: null,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      applyReplyToMode: (payload) => payload,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => false,
+      pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure: async () => false,
+      resetSessionAfterRoleOrderingConflict: async () => false,
+      isHeartbeat: false,
+      sessionKey: "main",
+      getActiveSessionEntry: () => undefined,
+      resolvedVerboseLevel: "on",
+    });
+
+    expect(result.kind).toBe("final");
+    if (result.kind === "final") {
+      expect(result.payload.text).toContain("⚠️ Agent failed before reply:");
+      expect(result.payload.text).not.toContain(
+        "sk-test-super-secret-token-that-should-never-leak",
+      );
+    }
+  });
+
   it.each(["group", "channel"] as const)(
     "keeps raw runner failure boilerplate out of Discord %s chats",
     async (chatType) => {

@@ -1,4 +1,5 @@
 import { readErrorName } from "../infra/errors.js";
+import { redactSensitiveText } from "../logging/redact.js";
 import {
   classifyFailoverSignal,
   inferSignalStatus,
@@ -192,12 +193,11 @@ function getErrorMessage(err: unknown): string {
 
 /**
  * Collects non-empty message strings from `err` and nested `.cause` / `.error`
- * links (depth-first: node, then `error`, then `cause`). Use this when a signal
- * may appear on an inner wrapper (e.g. generic outer message + overflow in
- * `cause`). For failover classification, `describeFailoverError` / `coerceToFailoverError`
- * still use structured signal classification, not the full joined list.
+ * links (depth-first: node, then `error`, then `cause`). By default the
+ * returned strings are redacted because callers often surface them in logs or
+ * user-visible text. Opt into raw strings only for internal-only classifiers.
  */
-export function collectErrorChainMessages(err: unknown): string[] {
+export function collectErrorChainMessages(err: unknown, options?: { redact?: boolean }): string[] {
   const out: string[] = [];
   const seen = new Set<object>();
 
@@ -211,7 +211,10 @@ export function collectErrorChainMessages(err: unknown): string[] {
 
     const direct = readDirectErrorMessage(e);
     if (direct) {
-      out.push(direct);
+      const value = options?.redact === false ? direct : redactSensitiveText(direct);
+      if (value) {
+        out.push(value);
+      }
     }
 
     if (!e || typeof e !== "object") {

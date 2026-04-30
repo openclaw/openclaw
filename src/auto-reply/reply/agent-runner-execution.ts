@@ -129,13 +129,13 @@ function buildErrorClassificationInput(err: unknown): {
   message: string;
   candidates: string[];
 } {
-  const chainMessages = collectErrorChainMessages(err);
   const fallbackMessage = formatErrorMessage(err);
+  const chainMessages = collectErrorChainMessages(err, { redact: false });
   const candidates = Array.from(
     new Set([fallbackMessage, ...chainMessages].filter((value) => value.length > 0)),
   );
   return {
-    message: chainMessages.length > 0 ? chainMessages.join("\n") : fallbackMessage,
+    message: fallbackMessage,
     candidates,
   };
 }

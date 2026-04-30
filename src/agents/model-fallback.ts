@@ -966,7 +966,11 @@ export async function runWithModelFallback<T>(params: {
       // that may have a smaller context window and fail worse.
       const primaryReason = describeFailoverError(err).reason;
       const overflowCandidates = Array.from(
-        new Set([formatErrorMessage(err), ...collectErrorChainMessages(err)].filter(Boolean)),
+        new Set(
+          [formatErrorMessage(err), ...collectErrorChainMessages(err, { redact: false })].filter(
+            Boolean,
+          ),
+        ),
       );
       if (
         !primaryReason &&

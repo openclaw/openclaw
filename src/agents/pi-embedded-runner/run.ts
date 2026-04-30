@@ -1293,7 +1293,7 @@ export async function runEmbeddedPiAgent(
                     new Set(
                       [
                         formatErrorMessage(promptError),
-                        ...collectErrorChainMessages(promptError),
+                        ...collectErrorChainMessages(promptError, { redact: false }),
                       ].filter((value) => value.length > 0),
                     ),
                   );
