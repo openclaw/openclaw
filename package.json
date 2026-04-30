@@ -1754,6 +1754,7 @@
         "markdown-it",
         "openai",
         "semver",
+        "sqlite-vec",
         "tar",
         "tslog",
         "typebox",

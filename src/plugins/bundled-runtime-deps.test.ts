@@ -3198,6 +3198,50 @@ describe("ensureBundledPluginRuntimeDeps", () => {
     expect(installRoot).not.toBe(pluginRoot);
   });
 
+  it("mirrors sqlite-vec into the packaged default memory runtime deps", () => {
+    const packageRoot = makeTempDir();
+    fs.writeFileSync(
+      path.join(packageRoot, "package.json"),
+      JSON.stringify({
+        name: "openclaw",
+        version: "2026.4.27",
+        dependencies: {
+          "sqlite-vec": "0.1.9",
+        },
+        openclaw: {
+          bundle: {
+            mirroredRootRuntimeDependencies: ["sqlite-vec"],
+          },
+        },
+      }),
+    );
+    const pluginRoot = writeBundledPluginPackage({
+      packageRoot,
+      pluginId: "memory-core",
+      deps: { chokidar: "^5.0.0", typebox: "1.1.34" },
+    });
+    const calls: BundledRuntimeDepsInstallParams[] = [];
+
+    const result = ensureBundledPluginRuntimeDeps({
+      env: {},
+      config: {},
+      installDeps: (params) => {
+        calls.push(params);
+      },
+      pluginId: "memory-core",
+      pluginRoot,
+    });
+
+    expect(result).toEqual({
+      installedSpecs: ["chokidar@^5.0.0", "sqlite-vec@0.1.9", "typebox@1.1.34"],
+    });
+    expect(calls[0]?.installSpecs).toEqual([
+      "chokidar@^5.0.0",
+      "sqlite-vec@0.1.9",
+      "typebox@1.1.34",
+    ]);
+  });
+
   it("repairs external staged deps even when packaged plugin-local deps are present", () => {
     const packageRoot = makeTempDir();
     const extensionsRoot = path.join(packageRoot, "dist", "extensions");
