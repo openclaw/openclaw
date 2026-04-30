@@ -980,7 +980,7 @@ describe("openai transport stream", () => {
     expect(params.input?.[0]).toMatchObject({ role: "developer" });
   });
 
-  it("uses top-level instructions for Codex responses without dropping parity fields", () => {
+  it("uses top-level instructions for Codex responses and strips unsupported ChatGPT params", () => {
     const params = buildOpenAIResponsesParams(
       {
         id: "gpt-5.4",
@@ -1020,15 +1020,49 @@ describe("openai transport stream", () => {
       false,
     );
     expect(params.prompt_cache_key).toBe("session-123");
-    expect(params.prompt_cache_retention).toBeUndefined();
-    expect(params.metadata).toEqual({
-      openclaw_session_id: "session-123",
-      openclaw_turn_id: "turn-123",
-    });
     expect(params.store).toBe(false);
-    expect(params.max_output_tokens).toBe(1024);
-    expect(params.temperature).toBe(0.2);
-    expect(params.service_tier).toBe("auto");
+    expect(params).not.toHaveProperty("metadata");
+    expect(params).not.toHaveProperty("max_output_tokens");
+    expect(params).not.toHaveProperty("prompt_cache_retention");
+    expect(params).not.toHaveProperty("service_tier");
+    expect(params).not.toHaveProperty("temperature");
+  });
+
+  it("sanitizes Codex responses params after payload hooks mutate them", () => {
+    const payload = {
+      model: "gpt-5.4",
+      input: [],
+      stream: true,
+      max_output_tokens: 1024,
+      metadata: { openclaw_session_id: "session-123" },
+      prompt_cache_key: "session-123",
+      prompt_cache_retention: "24h",
+      service_tier: "auto",
+      temperature: 0.2,
+    };
+
+    const sanitized = __testing.sanitizeOpenAICodexResponsesParams(
+      {
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        api: "openai-codex-responses",
+        provider: "openai-codex",
+        baseUrl: "https://chatgpt.com/backend-api",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-codex-responses">,
+      payload,
+    );
+
+    expect(sanitized.prompt_cache_key).toBe("session-123");
+    expect(sanitized).not.toHaveProperty("metadata");
+    expect(sanitized).not.toHaveProperty("max_output_tokens");
+    expect(sanitized).not.toHaveProperty("prompt_cache_retention");
+    expect(sanitized).not.toHaveProperty("service_tier");
+    expect(sanitized).not.toHaveProperty("temperature");
   });
 
   it("adds minimal user input for Codex responses when only the system prompt is present", () => {
