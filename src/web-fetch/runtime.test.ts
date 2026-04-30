@@ -201,7 +201,7 @@ describe("web fetch runtime", () => {
     expect(resolved?.provider.id).toBe("firecrawl");
   });
 
-  it("keeps non-sandboxed web fetch on bundled providers even when runtime providers are preferred", () => {
+  it("uses runtime providers for non-sandboxed web fetch when runtime providers are preferred", () => {
     const bundled = createFirecrawlProvider({
       getConfiguredCredentialValue: () => "bundled-key",
     });
@@ -215,6 +215,24 @@ describe("web fetch runtime", () => {
       preferRuntimeProviders: true,
     });
 
-    expect(resolved?.provider.id).toBe("firecrawl");
+    expect(resolved?.provider.id).toBe("thirdparty");
+  });
+
+  it("resolves an explicitly configured non-bundled provider from plugin providers", () => {
+    const bundled = createFirecrawlProvider({
+      getConfiguredCredentialValue: () => "bundled-key",
+    });
+    const external = createThirdPartyFetchProvider();
+    resolvePluginWebFetchProvidersMock.mockReturnValue([bundled, external]);
+
+    const resolved = resolveWebFetchDefinition({
+      config: {
+        tools: { web: { fetch: { provider: "thirdparty" } } },
+      } as OpenClawConfig,
+      sandboxed: false,
+      preferRuntimeProviders: false,
+    });
+
+    expect(resolved?.provider.id).toBe("thirdparty");
   });
 });

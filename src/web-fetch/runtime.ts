@@ -4,7 +4,10 @@ import type {
   PluginWebFetchProviderEntry,
   WebFetchProviderToolDefinition,
 } from "../plugins/types.js";
-import { resolvePluginWebFetchProviders } from "../plugins/web-fetch-providers.runtime.js";
+import {
+  resolvePluginWebFetchProviders,
+  resolveRuntimeWebFetchProviders,
+} from "../plugins/web-fetch-providers.runtime.js";
 import { sortWebFetchProvidersForAutoDetect } from "../plugins/web-fetch-providers.shared.js";
 import { getActiveRuntimeWebToolsMetadata } from "../secrets/runtime-web-tools-state.js";
 import type { RuntimeWebFetchMetadata } from "../secrets/runtime-web-tools.types.js";
@@ -81,7 +84,6 @@ export function listWebFetchProviders(params?: {
   return resolvePluginWebFetchProviders({
     config: params?.config,
     bundledAllowlistCompat: true,
-    origin: "bundled",
   });
 }
 
@@ -104,7 +106,6 @@ export function resolveWebFetchProviderId(params: {
       resolvePluginWebFetchProviders({
         config: params.config,
         bundledAllowlistCompat: true,
-        origin: "bundled",
       }),
   );
   const raw =
@@ -146,11 +147,21 @@ export function resolveWebFetchDefinition(
     | undefined;
   const runtimeWebFetch = options?.runtimeWebFetch ?? getActiveRuntimeWebToolsMetadata()?.fetch;
   const providers = sortWebFetchProvidersForAutoDetect(
-    resolvePluginWebFetchProviders({
-      config: options?.config,
-      bundledAllowlistCompat: true,
-      origin: "bundled",
-    }),
+    options?.sandboxed
+      ? resolvePluginWebFetchProviders({
+          config: options?.config,
+          bundledAllowlistCompat: true,
+          origin: "bundled",
+        })
+      : options?.preferRuntimeProviders
+        ? resolveRuntimeWebFetchProviders({
+            config: options?.config,
+            bundledAllowlistCompat: true,
+          })
+        : resolvePluginWebFetchProviders({
+            config: options?.config,
+            bundledAllowlistCompat: true,
+          }),
   );
   return resolveWebProviderDefinition({
     config: options?.config,
