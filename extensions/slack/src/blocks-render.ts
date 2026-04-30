@@ -15,6 +15,7 @@ const SLACK_SECTION_TEXT_MAX = 3000;
 const SLACK_PLAIN_TEXT_MAX = 75;
 const SLACK_OPTION_VALUE_MAX = 75;
 const SLACK_BUTTON_VALUE_MAX = 2000;
+const SLACK_BUTTON_URL_MAX = 3000;
 const SLACK_STATIC_SELECT_OPTIONS_MAX = 100;
 const SLACK_ACTION_BLOCK_ELEMENTS_MAX = 25;
 
@@ -72,7 +73,11 @@ export function buildSlackInteractiveBlocks(interactive?: InteractiveReply): Sla
             button.value && isWithinSlackLimit(button.value, SLACK_BUTTON_VALUE_MAX)
               ? button.value
               : undefined;
-          if (!value && !button.url) {
+          const url =
+            button.url && isWithinSlackLimit(button.url, SLACK_BUTTON_URL_MAX)
+              ? button.url
+              : undefined;
+          if (!value && !url) {
             return [];
           }
           const style = resolveSlackButtonStyle(button.style);
@@ -86,7 +91,7 @@ export function buildSlackInteractiveBlocks(interactive?: InteractiveReply): Sla
                 emoji: true,
               },
               ...(value ? { value } : {}),
-              ...(button.url ? { url: button.url } : {}),
+              ...(url ? { url } : {}),
               ...(style ? { style } : {}),
             },
           ];

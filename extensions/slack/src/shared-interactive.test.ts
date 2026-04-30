@@ -164,6 +164,34 @@ describe("buildSlackInteractiveBlocks", () => {
     expect(buttonBlock.elements?.[1]).not.toHaveProperty("value");
   });
 
+  it("drops Slack button URLs beyond Block Kit limits", () => {
+    const validUrl = `https://example.com/${"a".repeat(2980)}`;
+    const longUrl = `https://example.com/${"b".repeat(2981)}`;
+    const blocks = buildSlackInteractiveBlocks({
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [
+            { label: "Allowed", url: validUrl },
+            { label: "Too long", url: longUrl },
+            { label: "Fallback action", value: "fallback", url: longUrl },
+          ],
+        },
+      ],
+    });
+
+    const buttonBlock = blocks[0] as {
+      elements?: Array<{ value?: string; url?: string }>;
+    };
+
+    expect(validUrl).toHaveLength(3000);
+    expect(longUrl).toHaveLength(3001);
+    expect(buttonBlock.elements).toHaveLength(2);
+    expect(buttonBlock.elements?.[0]?.url).toBe(validUrl);
+    expect(buttonBlock.elements?.[1]?.value).toBe("fallback");
+    expect(buttonBlock.elements?.[1]).not.toHaveProperty("url");
+  });
+
   it("caps Slack actions blocks at the Block Kit element limit", () => {
     const blocks = buildSlackInteractiveBlocks({
       blocks: [
