@@ -732,6 +732,81 @@ describe("createTelegramBot", () => {
     }
   });
 
+  it("preserves forwarded attribution when flushing long text fragments", async () => {
+    loadConfig.mockReturnValue({
+      agents: {
+        defaults: {
+          envelopeTimezone: "utc",
+        },
+      },
+      channels: {
+        telegram: { dmPolicy: "open", allowFrom: ["*"] },
+      },
+    });
+
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    replySpy.mockImplementation(async () => ({ text: "ok" }));
+
+    try {
+      createTelegramBot({ token: "tok", testTimings: TELEGRAM_TEST_TIMINGS });
+      const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+      const longForwardedText = `${"forwarded long text ".repeat(210)}tail`;
+
+      await handler({
+        message: {
+          chat: { id: 42, type: "private" },
+          text: longForwardedText,
+          date: 1736380800,
+          message_id: 401,
+          from: { id: 777, first_name: "N" },
+          forward_origin: {
+            type: "user",
+            date: 500,
+            sender_user: {
+              id: 999,
+              first_name: "Bob",
+              last_name: "Smith",
+              username: "bobsmith",
+              is_bot: false,
+            },
+          },
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({}),
+      });
+
+      expect(replySpy).not.toHaveBeenCalled();
+
+      const textFragmentFlushCallIndex = setTimeoutSpy.mock.calls.findLastIndex(
+        (call) => call[1] === TELEGRAM_TEST_TIMINGS.textFragmentGapMs,
+      );
+      expect(textFragmentFlushCallIndex).toBeGreaterThanOrEqual(0);
+      clearTimeout(
+        setTimeoutSpy.mock.results[textFragmentFlushCallIndex]?.value as ReturnType<
+          typeof setTimeout
+        >,
+      );
+      const flushTextFragment = setTimeoutSpy.mock.calls[textFragmentFlushCallIndex]?.[0] as
+        | (() => Promise<void>)
+        | undefined;
+
+      await flushTextFragment?.();
+
+      expect(replySpy).toHaveBeenCalledTimes(1);
+      const payload = replySpy.mock.calls[0]?.[0];
+      expect(payload.BodyForAgent).toBe(longForwardedText);
+      expect(payload.RawBody).toBe(longForwardedText);
+      expect(payload.ForwardedFrom).toBe("Bob Smith (@bobsmith)");
+      expect(payload.ForwardedFromType).toBe("user");
+      expect(payload.ForwardedFromId).toBe("999");
+      expect(payload.ForwardedFromUsername).toBe("bobsmith");
+      expect(payload.ForwardedDate).toBe(500000);
+      expect(payload.Body).toContain("[Forwarded from Bob Smith (@bobsmith)");
+    } finally {
+      setTimeoutSpy.mockRestore();
+    }
+  });
+
   it("redacts forwarded batch attribution blocked by group context visibility", async () => {
     loadConfig.mockReturnValue({
       agents: {

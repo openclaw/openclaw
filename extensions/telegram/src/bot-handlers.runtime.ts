@@ -202,7 +202,26 @@ export const registerTelegramHandlers = ({
     text: string;
     date?: number;
     from?: Message["from"];
+    stripForwardMetadata?: boolean;
   }): Message => {
+    const baseMessage = params.base as Message & {
+      forward_origin?: unknown;
+      forward_from?: unknown;
+      forward_from_chat?: unknown;
+      forward_sender_name?: unknown;
+      forward_date?: unknown;
+    };
+    if (!params.stripForwardMetadata) {
+      return {
+        ...baseMessage,
+        ...(params.from ? { from: params.from } : {}),
+        text: params.text,
+        caption: undefined,
+        caption_entities: undefined,
+        entities: undefined,
+        ...(params.date != null ? { date: params.date } : {}),
+      };
+    }
     const {
       forward_origin: _forwardOrigin,
       forward_from: _forwardFrom,
@@ -210,12 +229,7 @@ export const registerTelegramHandlers = ({
       forward_sender_name: _forwardSenderName,
       forward_date: _forwardDate,
       ...baseWithoutForwardMetadata
-    } = params.base as Message & {
-      forward_from?: unknown;
-      forward_from_chat?: unknown;
-      forward_sender_name?: unknown;
-      forward_date?: unknown;
-    };
+    } = baseMessage;
     return {
       ...baseWithoutForwardMetadata,
       ...(params.from ? { from: params.from } : {}),
@@ -338,6 +352,7 @@ export const registerTelegramHandlers = ({
         base: first.msg,
         text: combinedText,
         date: last.msg.date ?? first.msg.date,
+        stripForwardMetadata: true,
       });
       const messageIdOverride = last.msg.message_id ? String(last.msg.message_id) : undefined;
       const syntheticCtx = buildSyntheticContext(baseCtx, syntheticMessage);
