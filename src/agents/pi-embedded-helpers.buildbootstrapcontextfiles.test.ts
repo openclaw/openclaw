@@ -190,6 +190,34 @@ describe("buildBootstrapContextFiles", () => {
     expect(result[0]?.content.startsWith("[MISSING]")).toBe(true);
   });
 
+  it("preserves load-bearing tool-use guidance from the AGENTS.md template at the small-model bootstrap budget", async () => {
+    // Regression for #75187: at agents.defaults.bootstrapMaxChars=1500 (typical
+    // small/mid-model trim) the trimmer reserves a marker plus tail, so only the
+    // first ~1k characters of the template's head survive. The auto-generated
+    // workspace AGENTS.md must keep tool-dispatch guidance, Red Lines, and
+    // External vs Internal action policy inside that head window so small models
+    // get the rules they need to emit structured tool calls.
+    const templatePath = path.resolve("docs", "reference", "templates", "AGENTS.md");
+    const raw = await fs.readFile(templatePath, "utf-8");
+    const stripped = raw.startsWith("---")
+      ? raw.slice(raw.indexOf("\n---", 3) + "\n---".length).replace(/^\s+/, "")
+      : raw;
+
+    const files = [makeFile({ name: DEFAULT_AGENTS_FILENAME, content: stripped })];
+    const [result] = buildBootstrapContextFiles(files, { maxChars: 1500 });
+
+    expect(result?.content).toBeTruthy();
+    const injected = result?.content ?? "";
+    // Truncation marker proves we're in the small-budget head/tail path the
+    // issue describes, not just returning the file untrimmed.
+    expect(injected).toContain("[...truncated, read AGENTS.md for full content");
+    // The three load-bearing sections must all survive head-truncation.
+    expect(injected).toContain("## Tools");
+    expect(injected).toContain("Tool dispatch:");
+    expect(injected).toContain("## Red Lines");
+    expect(injected).toContain("## External vs Internal");
+  });
+
   it("skips files with missing or invalid paths and emits warnings", () => {
     const malformedMissingPath = {
       name: "SKILL-SECURITY.md",
