@@ -299,7 +299,11 @@ Compatibility notes for stricter OpenAI-compatible backends:
   but it intentionally skips prior session transcript, AGENTS/bootstrap context,
   context-engine assembly, tools, and bundled MCP servers.
 
-  If that succeeds but normal OpenClaw agent turns fail, first try
+  If that succeeds but normal OpenClaw agent turns fail, first reduce the
+  always-injected bootstrap set with `agents.defaults.bootstrapTier: "minimal"`.
+  This keeps the essential workspace rules and identity files while omitting
+  heavier persona, heartbeat, and memory bootstrap files from ordinary turns.
+  If the model still struggles, try
   `agents.defaults.experimental.localModelLean: true` to drop heavyweight
   default tools like `browser`, `cron`, and `message`; this is an experimental
   flag, not a stable default-mode setting. See

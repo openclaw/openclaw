@@ -34,6 +34,10 @@ for weaker local-model setups. It trims heavyweight default tools like
 `browser`, `cron`, and `message` so the prompt shape is smaller and less brittle
 for small-context or stricter OpenAI-compatible backends.
 
+This is separate from the stable `agents.defaults.bootstrapTier: "minimal"`
+setting, which trims always-injected workspace bootstrap files before changing
+the tool surface.
+
 That is intentionally **not** the normal path. If your backend handles the full
 runtime cleanly, leave this off.
 

@@ -10,6 +10,7 @@ import { runCommandWithTimeout } from "../process/exec.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../routing/session-key.js";
 import { readStringValue } from "../shared/string-coerce.js";
 import { resolveUserPath } from "../utils.js";
+import type { BootstrapTier } from "./pi-embedded-helpers.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR } from "./workspace-default.js";
 import { resolveWorkspaceTemplateDir } from "./workspace-templates.js";
 export {
@@ -666,7 +667,7 @@ export async function loadWorkspaceBootstrapFiles(dir: string): Promise<Workspac
   return result;
 }
 
-const MINIMAL_BOOTSTRAP_ALLOWLIST = new Set([
+const SESSION_REDUCED_BOOTSTRAP_ALLOWLIST = new Set([
   DEFAULT_AGENTS_FILENAME,
   DEFAULT_TOOLS_FILENAME,
   DEFAULT_SOUL_FILENAME,
@@ -674,14 +675,26 @@ const MINIMAL_BOOTSTRAP_ALLOWLIST = new Set([
   DEFAULT_USER_FILENAME,
 ]);
 
+const MINIMAL_BOOTSTRAP_ALLOWLIST = new Set([
+  DEFAULT_AGENTS_FILENAME,
+  DEFAULT_TOOLS_FILENAME,
+  DEFAULT_IDENTITY_FILENAME,
+  DEFAULT_USER_FILENAME,
+  DEFAULT_BOOTSTRAP_FILENAME,
+]);
+
 export function filterBootstrapFilesForSession(
   files: WorkspaceBootstrapFile[],
   sessionKey?: string,
+  bootstrapTier: BootstrapTier = "standard",
 ): WorkspaceBootstrapFile[] {
+  if (bootstrapTier === "minimal") {
+    return files.filter((file) => MINIMAL_BOOTSTRAP_ALLOWLIST.has(file.name));
+  }
   if (!sessionKey || (!isSubagentSessionKey(sessionKey) && !isCronSessionKey(sessionKey))) {
     return files;
   }
-  return files.filter((file) => MINIMAL_BOOTSTRAP_ALLOWLIST.has(file.name));
+  return files.filter((file) => SESSION_REDUCED_BOOTSTRAP_ALLOWLIST.has(file.name));
 }
 
 export async function loadExtraBootstrapFiles(

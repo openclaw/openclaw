@@ -390,6 +390,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.contextInjection": "Context Injection",
   "agents.defaults.bootstrapMaxChars": "Bootstrap Max Chars",
   "agents.defaults.bootstrapTotalMaxChars": "Bootstrap Total Max Chars",
+  "agents.defaults.bootstrapTier": "Bootstrap Tier",
   "agents.defaults.experimental": "Experimental Agent Flags",
   "agents.defaults.experimental.localModelLean": "Enable Lean Local Model Mode (Experimental)",
   "agents.defaults.bootstrapPromptTruncationWarning": "Bootstrap Prompt Truncation Warning",

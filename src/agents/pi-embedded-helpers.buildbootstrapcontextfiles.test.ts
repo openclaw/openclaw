@@ -11,6 +11,7 @@ import {
   ensureSessionHeader,
   resolveBootstrapMaxChars,
   resolveBootstrapPromptTruncationWarningMode,
+  resolveBootstrapTier,
   resolveBootstrapTotalMaxChars,
 } from "./pi-embedded-helpers.js";
 import type { WorkspaceBootstrapFile } from "./workspace.js";
@@ -267,6 +268,28 @@ describe("bootstrap limit resolvers", () => {
       } as OpenClawConfig;
       expect(resolver.resolve(cfg)).toBe(resolver.defaultValue);
     }
+  });
+});
+
+describe("bootstrap tier resolver", () => {
+  it("returns standard when unset", () => {
+    expect(resolveBootstrapTier()).toBe("standard");
+  });
+
+  it("uses minimal when configured", () => {
+    const cfg = {
+      agents: { defaults: { bootstrapTier: "minimal" } },
+    } as OpenClawConfig;
+
+    expect(resolveBootstrapTier(cfg)).toBe("minimal");
+  });
+
+  it("falls back to standard for unrecognized runtime values", () => {
+    const cfg = {
+      agents: { defaults: { bootstrapTier: "full" } },
+    } as unknown as OpenClawConfig;
+
+    expect(resolveBootstrapTier(cfg)).toBe("standard");
   });
 });
 
