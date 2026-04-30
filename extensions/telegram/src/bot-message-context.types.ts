@@ -17,6 +17,19 @@ export type TelegramMediaRef = {
   stickerMetadata?: StickerMetadata;
 };
 
+export type TelegramUntrustedStructuredContextEntry = {
+  label: string;
+  source?: string;
+  type?: string;
+  payload: unknown;
+};
+
+export type TelegramForwardedBatchContextEntry = {
+  context: TelegramUntrustedStructuredContextEntry;
+  senderId?: string;
+  senderUsername?: string;
+};
+
 export type TelegramMessageContextOptions = {
   commandSource?: "text" | "native";
   forceWasMentioned?: boolean;
@@ -24,6 +37,8 @@ export type TelegramMessageContextOptions = {
   receivedAtMs?: number;
   ingressBuffer?: "inbound-debounce" | "text-fragment";
   promptContextMinTimestampMs?: number;
+  untrustedStructuredContext?: TelegramUntrustedStructuredContextEntry[];
+  forwardedBatchContext?: TelegramForwardedBatchContextEntry[];
 };
 
 export type TelegramPromptContextEntry = NonNullable<

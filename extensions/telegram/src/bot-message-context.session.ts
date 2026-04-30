@@ -331,6 +331,20 @@ export async function buildTelegramInboundContextPayload(params: {
     return [includeForwarded ? visibleEntry : stripReplyChainForwarded(visibleEntry)];
   });
   const visibleForwardOrigin = includeForwardOrigin ? forwardOrigin : null;
+  const visibleForwardedBatchContext = (options?.forwardedBatchContext ?? [])
+    .filter((entry) =>
+      shouldIncludeGroupSupplementalContext({
+        kind: "forwarded",
+        senderId: entry.senderId,
+        senderUsername: entry.senderUsername,
+      }),
+    )
+    .map((entry) => entry.context);
+  const untrustedStructuredContext = [
+    ...promptContext,
+    ...(options?.untrustedStructuredContext ?? []),
+    ...visibleForwardedBatchContext,
+  ];
   const replySuffix =
     visibleReplyChain.length > 0
       ? `\n\n[Reply chain - nearest first]\n${visibleReplyChain
@@ -529,7 +543,8 @@ export async function buildTelegramInboundContextPayload(params: {
           }
         : undefined,
       groupSystemPrompt: isGroup || (!isGroup && groupConfig) ? groupSystemPrompt : undefined,
-      untrustedContext: promptContext.length > 0 ? promptContext : undefined,
+      untrustedContext:
+        untrustedStructuredContext.length > 0 ? untrustedStructuredContext : undefined,
     },
     contextVisibility: contextVisibilityMode,
     extra: {
