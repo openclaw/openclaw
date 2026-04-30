@@ -22,6 +22,7 @@ Docs: https://docs.openclaw.ai
 - Telegram: use durable message edits for streaming previews instead of native draft state, so generated replies no longer flicker through draft-to-message transitions that look like duplicates. (#75073) Thanks @obviyus.
 - Telegram: echo preflighted DM voice-note transcripts back to the originating chat, including Telegram DM topic thread metadata, instead of only echoing later media-understanding transcripts. Fixes #75084. Thanks @M-Lietz.
 - Web search: describe `web_search` as using the configured provider instead of hard-coding Brave when DuckDuckGo or another provider is active. Fixes #75088. Thanks @sun-rongyang.
+- Infra/tmp: tolerate concurrent temp-dir permission repairs by rechecking directories that another process already tightened, so parallel ACP subprocess startup no longer throws `Unsafe fallback OpenClaw temp dir`. Fixes #66867. Thanks @Kane808-AI and @jarvisz8.
 
 ## 2026.4.29
 
