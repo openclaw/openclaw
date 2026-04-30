@@ -69,6 +69,8 @@ export type FilePolicyDecision =
       reason: string;
       askable: boolean;
       askMode?: FilePolicyAskMode;
+      maxBytes?: number;
+      followSymlinks?: boolean;
     };
 
 type NodeFilePolicyConfig = {
@@ -252,6 +254,12 @@ export function evaluateFilePolicy(input: {
   const nodeConfig = resolved.entry;
   const askMode = normalizeAskMode(nodeConfig.ask);
 
+  const maxBytes =
+    typeof nodeConfig.maxBytes === "number" && Number.isFinite(nodeConfig.maxBytes)
+      ? Math.max(1, Math.floor(nodeConfig.maxBytes))
+      : undefined;
+  const followSymlinks = nodeConfig.followSymlinks === true;
+
   // 1. Deny patterns always win.
   const denyPatterns = normalizeGlobs(nodeConfig.denyPaths);
   if (matchesAny(input.path, denyPatterns)) {
@@ -261,14 +269,10 @@ export function evaluateFilePolicy(input: {
       reason: "path matches a denyPaths pattern",
       askable: false,
       askMode,
+      maxBytes,
+      followSymlinks,
     };
   }
-
-  const maxBytes =
-    typeof nodeConfig.maxBytes === "number" && Number.isFinite(nodeConfig.maxBytes)
-      ? Math.max(1, Math.floor(nodeConfig.maxBytes))
-      : undefined;
-  const followSymlinks = nodeConfig.followSymlinks === true;
 
   // 2. ask=always: prompt every time even if matched.
   if (askMode === "always") {
@@ -293,6 +297,8 @@ export function evaluateFilePolicy(input: {
       reason: `path does not match any allow${input.kind === "read" ? "Read" : "Write"}Paths pattern`,
       askable: true,
       askMode,
+      maxBytes,
+      followSymlinks,
     };
   }
 
@@ -305,6 +311,8 @@ export function evaluateFilePolicy(input: {
         : `path does not match any allow${input.kind === "read" ? "Read" : "Write"}Paths pattern`,
     askable: false,
     askMode,
+    maxBytes,
+    followSymlinks,
   };
 }
 

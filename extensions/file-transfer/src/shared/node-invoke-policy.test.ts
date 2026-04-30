@@ -101,6 +101,7 @@ describe("file-transfer node invoke policy", () => {
           "node-1": {
             ask: "on-miss",
             allowReadPaths: ["/allowed/**"],
+            maxBytes: 256,
           },
         },
       },
@@ -121,7 +122,7 @@ describe("file-transfer node invoke policy", () => {
       params: {
         path: "/tmp/new.txt",
         followSymlinks: false,
-        maxBytes: 8 * 1024 * 1024,
+        maxBytes: 256,
       },
     });
   });
@@ -257,6 +258,85 @@ describe("file-transfer node invoke policy", () => {
     expect(invokeNode).toHaveBeenCalledTimes(2);
     expect(invokeNode).toHaveBeenNthCalledWith(1, {
       params: expect.objectContaining({ preflightOnly: true }),
+    });
+    expect(invokeNode).toHaveBeenNthCalledWith(2, {
+      params: expect.not.objectContaining({ preflightOnly: true }),
+    });
+  });
+
+  it("checks every dir.fetch preflight entry before requesting the archive", async () => {
+    const policy = createFileTransferNodeInvokePolicy();
+    const { ctx, invokeNode } = createCtx({
+      command: "dir.fetch",
+      params: { path: "/home/me" },
+      pluginConfig: {
+        nodes: {
+          "node-1": {
+            allowReadPaths: ["/home/me", "/home/me/**"],
+            denyPaths: ["**/.ssh/**"],
+          },
+        },
+      },
+    });
+    invokeNode.mockResolvedValueOnce({
+      ok: true,
+      payload: {
+        ok: true,
+        path: "/home/me",
+        entries: ["ok.txt", ".ssh/id_rsa"],
+        fileCount: 2,
+        preflightOnly: true,
+      },
+    });
+
+    const result = await policy.handle(ctx);
+
+    expect(result).toMatchObject({
+      ok: false,
+      code: "PATH_POLICY_DENIED",
+      details: { path: "/home/me/.ssh/id_rsa" },
+    });
+    expect(invokeNode).toHaveBeenCalledTimes(1);
+    expect(invokeNode).toHaveBeenCalledWith({
+      params: expect.objectContaining({ path: "/home/me", preflightOnly: true }),
+    });
+  });
+
+  it("continues dir.fetch after preflight without forwarding caller preflightOnly", async () => {
+    const policy = createFileTransferNodeInvokePolicy();
+    const { ctx, invokeNode } = createCtx({
+      command: "dir.fetch",
+      params: { path: "/tmp/project", preflightOnly: true },
+    });
+    invokeNode
+      .mockResolvedValueOnce({
+        ok: true,
+        payload: {
+          ok: true,
+          path: "/tmp/project",
+          entries: ["a.txt", "sub/b.txt"],
+          fileCount: 2,
+          preflightOnly: true,
+        },
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        payload: {
+          ok: true,
+          path: "/tmp/project",
+          tarBase64: Buffer.from("archive").toString("base64"),
+          tarBytes: 7,
+          sha256: "c".repeat(64),
+          fileCount: 2,
+        },
+      });
+
+    const result = await policy.handle(ctx);
+
+    expect(result).toMatchObject({ ok: true });
+    expect(invokeNode).toHaveBeenCalledTimes(2);
+    expect(invokeNode).toHaveBeenNthCalledWith(1, {
+      params: expect.objectContaining({ path: "/tmp/project", preflightOnly: true }),
     });
     expect(invokeNode).toHaveBeenNthCalledWith(2, {
       params: expect.not.objectContaining({ preflightOnly: true }),

@@ -195,7 +195,7 @@ async function requestApproval(input: {
       return {
         ok: true,
         followSymlinks: decision.ok ? decision.followSymlinks : false,
-        maxBytes: decision.ok ? decision.maxBytes : undefined,
+        maxBytes: decision.maxBytes,
       };
     }
   }
@@ -211,7 +211,7 @@ async function requestApproval(input: {
   return {
     ok: true,
     followSymlinks: decision.ok ? decision.followSymlinks : false,
-    maxBytes: decision.ok ? decision.maxBytes : undefined,
+    maxBytes: decision.maxBytes,
   };
 }
 
@@ -248,6 +248,31 @@ function readResultPayload(result: { payload?: unknown }): Record<string, unknow
   return result.payload && typeof result.payload === "object" && !Array.isArray(result.payload)
     ? (result.payload as Record<string, unknown>)
     : null;
+}
+
+function joinRemotePolicyPath(root: string, relPath: string): string {
+  const rel = relPath.replace(/\\/gu, "/").replace(/^\.\//u, "");
+  if (!rel || rel === ".") {
+    return root;
+  }
+  const sep = root.includes("\\") && !root.includes("/") ? "\\" : "/";
+  const cleanRoot = root.replace(/[\\/]$/u, "");
+  const prefix = cleanRoot || sep;
+  return `${prefix}${prefix.endsWith(sep) ? "" : sep}${rel.split("/").join(sep)}`;
+}
+
+function policyDeniedResult(input: {
+  op: FileTransferAuditOp;
+  code: string;
+  message: string;
+  details?: Record<string, unknown>;
+}): OpenClawPluginNodeInvokePolicyResult {
+  return {
+    ok: false,
+    code: input.code,
+    message: `${input.op} ${input.code}: ${input.message}`,
+    ...(input.details ? { details: input.details } : {}),
+  };
 }
 
 async function runWritePreflight(input: {
@@ -337,6 +362,102 @@ async function runWritePreflight(input: {
   };
 }
 
+async function runDirFetchPreflight(input: {
+  ctx: OpenClawPluginNodeInvokePolicyContext;
+  op: FileTransferAuditOp;
+  params: Record<string, unknown>;
+  requestedPath: string;
+  startedAt: number;
+}): Promise<OpenClawPluginNodeInvokePolicyResult | null> {
+  const nodeDisplayName = input.ctx.node?.displayName;
+  const preflight = await input.ctx.invokeNode({
+    params: {
+      ...input.params,
+      preflightOnly: true,
+    },
+  });
+  if (!preflight.ok) {
+    await appendFileTransferAudit({
+      op: input.op,
+      nodeId: input.ctx.nodeId,
+      nodeDisplayName,
+      requestedPath: input.requestedPath,
+      decision: "error",
+      errorCode: preflight.code,
+      errorMessage: preflight.message,
+      durationMs: Date.now() - input.startedAt,
+    });
+    return {
+      ok: false,
+      code: preflight.code,
+      message: `${input.op} failed: ${preflight.message}`,
+      details: preflight.details,
+      unavailable: true,
+    };
+  }
+
+  const payload = readResultPayload(preflight);
+  if (payload?.ok === false) {
+    await appendFileTransferAudit({
+      op: input.op,
+      nodeId: input.ctx.nodeId,
+      nodeDisplayName,
+      requestedPath: input.requestedPath,
+      canonicalPath: typeof payload.canonicalPath === "string" ? payload.canonicalPath : undefined,
+      decision: "error",
+      errorCode: typeof payload.code === "string" ? payload.code : undefined,
+      errorMessage: typeof payload.message === "string" ? payload.message : undefined,
+      durationMs: Date.now() - input.startedAt,
+    });
+    return preflight;
+  }
+
+  const canonicalPath =
+    payload && typeof payload.path === "string" && payload.path
+      ? payload.path
+      : input.requestedPath;
+  const entries = Array.isArray(payload?.entries)
+    ? payload.entries.filter(
+        (entry): entry is string => typeof entry === "string" && entry.length > 0,
+      )
+    : [];
+  const candidates = [
+    canonicalPath,
+    ...entries.map((entry) => joinRemotePolicyPath(canonicalPath, entry)),
+  ];
+  for (const candidate of candidates) {
+    const policy = evaluateFilePolicy({
+      nodeId: input.ctx.nodeId,
+      nodeDisplayName,
+      kind: "read",
+      path: candidate,
+      pluginConfig: input.ctx.pluginConfig,
+    });
+    if (policy.ok) {
+      continue;
+    }
+    await appendFileTransferAudit({
+      op: input.op,
+      nodeId: input.ctx.nodeId,
+      nodeDisplayName,
+      requestedPath: input.requestedPath,
+      canonicalPath: candidate,
+      decision: "denied:policy",
+      errorCode: policy.code,
+      reason: policy.reason,
+      durationMs: Date.now() - input.startedAt,
+    });
+    return policyDeniedResult({
+      op: input.op,
+      code: "PATH_POLICY_DENIED",
+      message: `directory entry ${candidate} is not allowed by policy: ${policy.reason}`,
+      details: { path: candidate, reason: policy.reason },
+    });
+  }
+
+  return null;
+}
+
 async function handleFileTransferInvoke(
   ctx: OpenClawPluginNodeInvokePolicyContext,
 ): Promise<OpenClawPluginNodeInvokePolicyResult> {
@@ -373,6 +494,17 @@ async function handleFileTransferInvoke(
   });
   if (command === "file.write") {
     const preflightDeny = await runWritePreflight({
+      ctx,
+      op,
+      params: forwardedParams,
+      requestedPath,
+      startedAt,
+    });
+    if (preflightDeny) {
+      return preflightDeny;
+    }
+  } else if (command === "dir.fetch") {
+    const preflightDeny = await runDirFetchPreflight({
       ctx,
       op,
       params: forwardedParams,
