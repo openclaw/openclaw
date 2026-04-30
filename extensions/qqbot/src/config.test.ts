@@ -176,11 +176,41 @@ describe("qqbot config", () => {
     expect(resolved.name).toBe("Bot Two");
   });
 
-  it("rejects unresolved SecretRefs on runtime resolution", () => {
+  it("resolves env SecretRefs on runtime resolution", () => {
     const cfg = makeQqbotSecretRefConfig();
+    const previous = process.env.QQBOT_CLIENT_SECRET;
+
+    process.env.QQBOT_CLIENT_SECRET = "resolved-secret";
+    try {
+      const resolved = resolveQQBotAccount(cfg, DEFAULT_ACCOUNT_ID);
+
+      expect(resolved.clientSecret).toBe("resolved-secret");
+      expect(resolved.secretSource).toBe("config");
+    } finally {
+      if (previous === undefined) {
+        delete process.env.QQBOT_CLIENT_SECRET;
+      } else {
+        process.env.QQBOT_CLIENT_SECRET = previous;
+      }
+    }
+  });
+
+  it("rejects unresolved non-env SecretRefs on runtime resolution", () => {
+    const cfg = {
+      channels: {
+        qqbot: {
+          appId: "123456",
+          clientSecret: {
+            source: "file",
+            provider: "default",
+            id: "/qqbot/clientSecret",
+          },
+        },
+      },
+    } as OpenClawConfig;
 
     expect(() => resolveQQBotAccount(cfg, DEFAULT_ACCOUNT_ID)).toThrow(
-      'channels.qqbot.clientSecret: unresolved SecretRef "env:default:QQBOT_CLIENT_SECRET"',
+      'channels.qqbot.clientSecret: unresolved SecretRef "file:default:/qqbot/clientSecret"',
     );
   });
 
