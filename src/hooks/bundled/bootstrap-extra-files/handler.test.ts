@@ -157,10 +157,14 @@ describe("bootstrap-extra-files hook", () => {
     const event = createHookEvent("agent", "bootstrap", sessionKey, context);
     await handler(event);
 
+    expect(context.bootstrapFiles.map((file) => file.content)).toEqual([
+      "root agents",
+      "zeus bootstrap",
+      "zeus tools",
+    ]);
     expect(context.bootstrapFiles.filter((file) => file.content === "zeus bootstrap")).toHaveLength(
       1,
     );
-    expect(context.bootstrapFiles.map((file) => file.content)).toContain("zeus tools");
   });
 
   it("keeps session-specific paths inside the workspace boundary", async () => {
