@@ -132,6 +132,42 @@ vi.mock("./runtime-api.js", async () => {
 });
 
 function createRuntimeCore(cfg: OpenClawConfig) {
+  const runPrepared = vi.fn(
+    async (turn: {
+      storePath: string;
+      routeSessionKey: string;
+      ctxPayload: { SessionKey?: string };
+      recordInboundSession: (params: unknown) => Promise<void>;
+      record?: {
+        groupResolution?: unknown;
+        createIfMissing?: boolean;
+        updateLastRoute?: unknown;
+        onRecordError?: (err: unknown) => void;
+      };
+      runDispatch: () => Promise<{
+        queuedFinal: boolean;
+        counts: { tool: number; block: number; final: number };
+      }>;
+    }) => {
+      await turn.recordInboundSession({
+        storePath: turn.storePath,
+        sessionKey: turn.ctxPayload.SessionKey ?? turn.routeSessionKey,
+        ctx: turn.ctxPayload,
+        groupResolution: turn.record?.groupResolution,
+        createIfMissing: turn.record?.createIfMissing,
+        updateLastRoute: turn.record?.updateLastRoute,
+        onRecordError: turn.record?.onRecordError ?? (() => undefined),
+      });
+      const dispatchResult = await turn.runDispatch();
+      return {
+        admission: { kind: "dispatch" as const },
+        dispatched: true,
+        ctxPayload: turn.ctxPayload,
+        routeSessionKey: turn.routeSessionKey,
+        dispatchResult,
+      };
+    },
+  );
   return {
     config: {
       current: () => cfg,
@@ -212,7 +248,11 @@ function createRuntimeCore(cfg: OpenClawConfig) {
       },
       session: {
         resolveStorePath: () => "/tmp/openclaw-test-sessions.json",
+        recordInboundSession: vi.fn(async () => {}),
         updateLastRoute: vi.fn(async () => {}),
+      },
+      turn: {
+        runPrepared,
       },
       text: {
         chunkMarkdownTextWithMode: (text: string) => [text],

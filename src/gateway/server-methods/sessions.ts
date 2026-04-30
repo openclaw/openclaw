@@ -64,6 +64,7 @@ import {
   validateSessionsResolveParams,
   validateSessionsSendParams,
 } from "../protocol/index.js";
+import { resolveSessionKeyForRun } from "../server-session-key.js";
 import {
   getSessionCompactionCheckpoint,
   listSessionCompactionCheckpoints,
@@ -103,10 +104,44 @@ import { assertValidParams } from "./validation.js";
 type SessionsRuntimeModule = typeof import("./sessions.runtime.js");
 
 let sessionsRuntimeModulePromise: Promise<SessionsRuntimeModule> | undefined;
+let loggedSlowSessionsListCatalog = false;
+
+const SESSIONS_LIST_MODEL_CATALOG_TIMEOUT_MS = 750;
 
 function loadSessionsRuntimeModule(): Promise<SessionsRuntimeModule> {
   sessionsRuntimeModulePromise ??= import("./sessions.runtime.js");
   return sessionsRuntimeModulePromise;
+}
+
+async function loadOptionalSessionsListModelCatalog(
+  context: GatewayRequestContext,
+): Promise<Awaited<ReturnType<GatewayRequestContext["loadGatewayModelCatalog"]>> | undefined> {
+  let timeout: NodeJS.Timeout | undefined;
+  const timedOut = Symbol("sessions-list-model-catalog-timeout");
+  const timeoutPromise = new Promise<typeof timedOut>((resolve) => {
+    timeout = setTimeout(() => resolve(timedOut), SESSIONS_LIST_MODEL_CATALOG_TIMEOUT_MS);
+    timeout.unref?.();
+  });
+  try {
+    const result = await Promise.race([
+      context.loadGatewayModelCatalog().catch(() => undefined),
+      timeoutPromise,
+    ]);
+    if (result === timedOut) {
+      if (!loggedSlowSessionsListCatalog) {
+        loggedSlowSessionsListCatalog = true;
+        context.logGateway.debug(
+          `sessions.list continuing without model catalog after ${SESSIONS_LIST_MODEL_CATALOG_TIMEOUT_MS}ms`,
+        );
+      }
+      return undefined;
+    }
+    return Array.isArray(result) ? result : undefined;
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
 }
 
 function requireSessionKey(key: unknown, respond: RespondFn): string | null {
@@ -613,8 +648,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     const p = params;
     const cfg = context.getRuntimeConfig();
     const { storePath, store } = loadCombinedSessionStoreForGateway(cfg);
-    const loadedCatalog = await context.loadGatewayModelCatalog().catch(() => undefined);
-    const modelCatalog = Array.isArray(loadedCatalog) ? loadedCatalog : undefined;
+    const modelCatalog = await loadOptionalSessionsListModelCatalog(context);
     const result = listSessionsFromStore({
       cfg,
       storePath,
@@ -1260,7 +1294,16 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
     const p = params;
-    const key = requireSessionKey(p.key, respond);
+    const requestedRunId = readStringValue(p.runId);
+    const keyCandidate =
+      p.key ??
+      (requestedRunId ? context.chatAbortControllers.get(requestedRunId)?.sessionKey : undefined) ??
+      (requestedRunId ? resolveSessionKeyForRun(requestedRunId) : undefined);
+    if (!keyCandidate && requestedRunId) {
+      respond(true, { ok: true, abortedRunId: null, status: "no-active-run" });
+      return;
+    }
+    const key = requireSessionKey(keyCandidate, respond);
     if (!key) {
       return;
     }
@@ -1269,14 +1312,14 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       context,
       requestedKey: key,
       canonicalKey,
-      runId: readStringValue(p.runId),
+      runId: requestedRunId,
     });
     let abortedRunId: string | null = null;
     await chatHandlers["chat.abort"]({
       req,
       params: {
         sessionKey: abortSessionKey,
-        runId: readStringValue(p.runId),
+        runId: requestedRunId,
       },
       respond: (ok, payload, error, meta) => {
         if (!ok) {

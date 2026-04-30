@@ -119,6 +119,29 @@ export function createMatrixHandlerTestHarness(
       counts: { final: 0, block: 0, tool: 0 },
     }));
   const enqueueSystemEvent = options.enqueueSystemEvent ?? vi.fn();
+  const runPrepared = vi.fn(
+    async (
+      turn: Parameters<MatrixMonitorHandlerParams["core"]["channel"]["turn"]["runPrepared"]>[0],
+    ) => {
+      await turn.recordInboundSession({
+        storePath: turn.storePath,
+        sessionKey: turn.ctxPayload.SessionKey ?? turn.routeSessionKey,
+        ctx: turn.ctxPayload,
+        groupResolution: turn.record?.groupResolution,
+        createIfMissing: turn.record?.createIfMissing,
+        updateLastRoute: turn.record?.updateLastRoute,
+        onRecordError: turn.record?.onRecordError ?? (() => undefined),
+      });
+      const dispatchResult = await turn.runDispatch();
+      return {
+        admission: { kind: "dispatch" as const },
+        dispatched: true,
+        ctxPayload: turn.ctxPayload,
+        routeSessionKey: turn.routeSessionKey,
+        dispatchResult,
+      };
+    },
+  );
   const dmPolicy = options.dmPolicy ?? "open";
   const allowFrom = options.allowFrom ?? (dmPolicy === "open" ? ["*"] : []);
   const cfgForHandler =
@@ -204,6 +227,9 @@ export function createMatrixHandlerTestHarness(
                 }
               }
             }),
+        },
+        turn: {
+          runPrepared,
         },
         reactions: {
           shouldAckReaction: options.shouldAckReaction ?? (() => false),

@@ -4,17 +4,15 @@
 # Sourced by scripts/e2e/bundled-channel-runtime-deps-docker.sh.
 
 run_update_scenario() {
-  local state_script_b64
-  state_script_b64="$(docker_e2e_test_state_shell_b64 bundled-channel-update empty)"
-
   echo "Running bundled channel runtime deps Docker update E2E..."
-  run_logged_print bundled-channel-update timeout "$DOCKER_UPDATE_RUN_TIMEOUT" docker run --rm \
-    -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
+  run_bundled_channel_container_with_state_heartbeat \
+    bundled-channel-update \
+    30 \
+    "$DOCKER_UPDATE_RUN_TIMEOUT" \
+    bundled-channel-update \
     -e OPENCLAW_BUNDLED_CHANNEL_UPDATE_BASELINE_VERSION="$UPDATE_BASELINE_VERSION" \
     -e "OPENCLAW_BUNDLED_CHANNEL_UPDATE_TARGETS=${OPENCLAW_BUNDLED_CHANNEL_UPDATE_TARGETS:-telegram,discord,slack,feishu,memory-lancedb,acpx}" \
-    -e "OPENCLAW_TEST_STATE_SCRIPT_B64=$state_script_b64" \
     "${DOCKER_E2E_PACKAGE_ARGS[@]}" \
-    "${DOCKER_E2E_HARNESS_ARGS[@]}" \
     -i "$IMAGE_NAME" bash -s <<'EOF'
 set -euo pipefail
 
@@ -49,45 +47,12 @@ assert_no_unknown_stage_roots() {
 
 package_tgz="${OPENCLAW_CURRENT_PACKAGE_TGZ:?missing OPENCLAW_CURRENT_PACKAGE_TGZ}"
 update_target="file:$package_tgz"
-candidate_version="$(node - <<'NODE' "$package_tgz"
-const { execFileSync } = require("node:child_process");
-const raw = execFileSync("tar", ["-xOf", process.argv[2], "package/package.json"], {
-  encoding: "utf8",
-});
-process.stdout.write(String(JSON.parse(raw).version));
-NODE
-)"
+candidate_version="$(node scripts/e2e/lib/bundled-channel/package-version-from-tgz.mjs "$package_tgz")"
 
 assert_update_ok() {
   local json_file="$1"
   local expected_before="$2"
-  node - <<'NODE' "$json_file" "$expected_before" "$candidate_version"
-const fs = require("node:fs");
-const payload = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
-const expectedBefore = process.argv[3];
-const expectedAfter = process.argv[4];
-if (payload.status !== "ok") {
-  throw new Error(`expected update status ok, got ${JSON.stringify(payload.status)}`);
-}
-if (expectedBefore && (payload.before?.version ?? null) !== expectedBefore) {
-  throw new Error(
-    `expected before.version ${expectedBefore}, got ${JSON.stringify(payload.before?.version)}`,
-  );
-}
-if ((payload.after?.version ?? null) !== expectedAfter) {
-  throw new Error(
-    `expected after.version ${expectedAfter}, got ${JSON.stringify(payload.after?.version)}`,
-  );
-}
-const steps = Array.isArray(payload.steps) ? payload.steps : [];
-const doctor = steps.find((step) => step?.name === "openclaw doctor");
-if (!doctor) {
-  throw new Error("missing openclaw doctor step");
-}
-if (Number(doctor.exitCode ?? 1) !== 0) {
-  throw new Error(`openclaw doctor step failed: ${JSON.stringify(doctor)}`);
-}
-NODE
+  node scripts/e2e/lib/bundled-channel/assert-update-result.mjs "$json_file" "$expected_before" "$candidate_version"
 }
 
 run_update_and_capture() {

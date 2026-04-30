@@ -52,6 +52,10 @@
     "target": "Agent loop"
   },
   {
+    "source": "Steering queue",
+    "target": "Steering queue"
+  },
+  {
     "source": "Models",
     "target": "Models"
   },
@@ -142,6 +146,26 @@
   {
     "source": "Moonshot AI",
     "target": "Moonshot AI"
+  },
+  {
+    "source": "Model providers",
+    "target": "模型提供商"
+  },
+  {
+    "source": "Model Providers",
+    "target": "模型提供商"
+  },
+  {
+    "source": "NVIDIA",
+    "target": "NVIDIA"
+  },
+  {
+    "source": "NVIDIA API key",
+    "target": "NVIDIA API key"
+  },
+  {
+    "source": "Provider directory",
+    "target": "提供商目录"
   },
   {
     "source": "Additional bundled variants",
@@ -262,6 +286,38 @@
   {
     "source": "Memory Wiki",
     "target": "Memory Wiki"
+  },
+  {
+    "source": "Memory overview",
+    "target": "记忆概览"
+  },
+  {
+    "source": "Active memory",
+    "target": "主动记忆"
+  },
+  {
+    "source": "Commitments",
+    "target": "跟进承诺"
+  },
+  {
+    "source": "Inferred Commitments",
+    "target": "推断式跟进承诺"
+  },
+  {
+    "source": "Inferred commitments",
+    "target": "推断式跟进承诺"
+  },
+  {
+    "source": "Heartbeat",
+    "target": "Heartbeat"
+  },
+  {
+    "source": "Scheduled tasks",
+    "target": "定时任务"
+  },
+  {
+    "source": "Configuration reference",
+    "target": "配置参考"
   },
   {
     "source": "wiki",

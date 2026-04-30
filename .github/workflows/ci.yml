@@ -8,11 +8,6 @@ on:
         required: false
         default: ""
         type: string
-      full_release_validation:
-        description: Run release-only CI lanes. Reserved for Full Release Validation.
-        required: false
-        default: false
-        type: boolean
       include_android:
         description: Run Android lanes for this manual CI dispatch.
         required: false
@@ -59,9 +54,9 @@ jobs:
       run_checks_fast_core: ${{ steps.manifest.outputs.run_checks_fast_core }}
       run_checks_fast: ${{ steps.manifest.outputs.run_checks_fast }}
       checks_fast_core_matrix: ${{ steps.manifest.outputs.checks_fast_core_matrix }}
+      run_plugin_contracts_shards: ${{ steps.manifest.outputs.run_plugin_contracts_shards }}
+      plugin_contracts_matrix: ${{ steps.manifest.outputs.plugin_contracts_matrix }}
       channel_contracts_matrix: ${{ steps.manifest.outputs.channel_contracts_matrix }}
-      run_checks_node_extensions: ${{ steps.manifest.outputs.run_checks_node_extensions }}
-      checks_node_extensions_matrix: ${{ steps.manifest.outputs.checks_node_extensions_matrix }}
       run_checks: ${{ steps.manifest.outputs.run_checks }}
       checks_matrix: ${{ steps.manifest.outputs.checks_matrix }}
       run_checks_node_core_nondist: ${{ steps.manifest.outputs.run_checks_node_core_nondist }}
@@ -70,10 +65,6 @@ jobs:
       checks_node_core_dist_matrix: ${{ steps.manifest.outputs.checks_node_core_dist_matrix }}
       run_check: ${{ steps.manifest.outputs.run_check }}
       run_check_additional: ${{ steps.manifest.outputs.run_check_additional }}
-      run_plugin_prerelease_suite: ${{ steps.manifest.outputs.run_plugin_prerelease_suite }}
-      plugin_prerelease_ref: ${{ steps.manifest.outputs.plugin_prerelease_ref }}
-      plugin_prerelease_static_matrix: ${{ steps.manifest.outputs.plugin_prerelease_static_matrix }}
-      plugin_prerelease_docker_lanes: ${{ steps.manifest.outputs.plugin_prerelease_docker_lanes }}
       run_build_smoke: ${{ steps.manifest.outputs.run_build_smoke }}
       run_check_docs: ${{ steps.manifest.outputs.run_check_docs }}
       run_control_ui_i18n: ${{ steps.manifest.outputs.run_control_ui_i18n }}
@@ -132,7 +123,7 @@ jobs:
           OPENCLAW_CI_DOCS_CHANGED: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.docs_scope.outputs.docs_changed }}
           OPENCLAW_CI_RUN_NODE: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_node || 'false' }}
           OPENCLAW_CI_RUN_MACOS: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_macos || 'false' }}
-          OPENCLAW_CI_RUN_ANDROID: ${{ github.event_name == 'workflow_dispatch' && (inputs.full_release_validation || inputs.include_android) && 'true' || steps.changed_scope.outputs.run_android || 'false' }}
+          OPENCLAW_CI_RUN_ANDROID: ${{ github.event_name == 'workflow_dispatch' && inputs.include_android && 'true' || steps.changed_scope.outputs.run_android || 'false' }}
           OPENCLAW_CI_RUN_WINDOWS: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_windows || 'false' }}
           OPENCLAW_CI_RUN_NODE_FAST_ONLY: ${{ github.event_name == 'workflow_dispatch' && 'false' || steps.changed_scope.outputs.run_node_fast_only || 'false' }}
           OPENCLAW_CI_RUN_NODE_FAST_PLUGIN_CONTRACTS: ${{ github.event_name == 'workflow_dispatch' && 'false' || steps.changed_scope.outputs.run_node_fast_plugin_contracts || 'false' }}
@@ -140,10 +131,6 @@ jobs:
           OPENCLAW_CI_RUN_SKILLS_PYTHON: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_skills_python || 'false' }}
           OPENCLAW_CI_RUN_CONTROL_UI_I18N: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_control_ui_i18n || 'false' }}
           OPENCLAW_CI_CHECKOUT_REVISION: ${{ steps.checkout_ref.outputs.sha }}
-          OPENCLAW_CI_EVENT_NAME: ${{ github.event_name }}
-          OPENCLAW_CI_FULL_RELEASE_VALIDATION: ${{ github.event_name == 'workflow_dispatch' && inputs.full_release_validation && 'true' || 'false' }}
-          OPENCLAW_CI_PR_HEAD_REPOSITORY: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name || github.repository }}
-          OPENCLAW_CI_PR_HEAD_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || '' }}
           OPENCLAW_CI_REPOSITORY: ${{ github.repository }}
         run: |
           node --input-type=module <<'EOF'
@@ -154,10 +141,6 @@ jobs:
           import {
             createChannelContractTestShards,
           } from "./scripts/lib/channel-contract-test-plan.mjs";
-          import {
-            createExtensionTestShards,
-            DEFAULT_EXTENSION_TEST_SHARD_COUNT,
-          } from "./scripts/lib/extension-test-plan.mjs";
 
           const parseBoolean = (value, fallback = false) => {
             if (value === undefined) return fallback;
@@ -166,6 +149,24 @@ jobs:
             if (normalized === "false" || normalized === "0" || normalized === "") return false;
             return fallback;
           };
+
+          const { createPluginContractTestShards } = await import(
+            "./scripts/lib/plugin-contract-test-plan.mjs"
+          ).catch((error) => {
+            if (error?.code !== "ERR_MODULE_NOT_FOUND") {
+              throw error;
+            }
+            return {
+              createPluginContractTestShards: () => [
+                {
+                  checkName: "checks-fast-contracts-plugins-legacy",
+                  includePatterns: ["src/plugins/contracts/**/*.test.ts"],
+                  runtime: "node",
+                  task: "contracts-plugins",
+                },
+              ],
+            };
+          });
 
           const createMatrix = (include) => ({ include });
           const outputPath = process.env.GITHUB_OUTPUT;
@@ -180,7 +181,7 @@ jobs:
             runNode && parseBoolean(process.env.OPENCLAW_CI_RUN_NODE_FAST_PLUGIN_CONTRACTS);
           const runNodeFastCiRouting =
             runNode && parseBoolean(process.env.OPENCLAW_CI_RUN_NODE_FAST_CI_ROUTING);
-          const runChecksFastCore = runNodeFull || runNodeFastPluginContracts || runNodeFastCiRouting;
+          const runPluginContractShards = runNodeFull || runNodeFastPluginContracts;
           const runMacos =
             parseBoolean(process.env.OPENCLAW_CI_RUN_MACOS) && !docsOnly && isCanonicalRepository;
           const runAndroid =
@@ -193,83 +194,13 @@ jobs:
           const runSkillsPython = parseBoolean(process.env.OPENCLAW_CI_RUN_SKILLS_PYTHON) && !docsOnly;
           const runControlUiI18n =
             parseBoolean(process.env.OPENCLAW_CI_RUN_CONTROL_UI_I18N) && !docsOnly;
-          const isFullReleaseValidationCiRun =
-            process.env.OPENCLAW_CI_EVENT_NAME === "workflow_dispatch" &&
-            parseBoolean(process.env.OPENCLAW_CI_FULL_RELEASE_VALIDATION);
-          const trustedPluginPrereleaseRef =
-            process.env.OPENCLAW_CI_EVENT_NAME !== "pull_request" ||
-            process.env.OPENCLAW_CI_PR_HEAD_REPOSITORY === process.env.OPENCLAW_CI_REPOSITORY;
-          const pluginPrereleaseRef =
-            process.env.OPENCLAW_CI_EVENT_NAME === "pull_request" && trustedPluginPrereleaseRef
-              ? process.env.OPENCLAW_CI_PR_HEAD_SHA
-              : process.env.OPENCLAW_CI_CHECKOUT_REVISION;
-          let runPluginPrereleaseSuite =
-            isFullReleaseValidationCiRun && runNodeFull && isCanonicalRepository;
-          const runReleaseOnlyPluginSuites =
-            isFullReleaseValidationCiRun && runNodeFull && isCanonicalRepository;
-          let pluginPrereleasePlan = { staticChecks: [], dockerLanes: [] };
-          if (runPluginPrereleaseSuite) {
-            try {
-              const { assertPluginPrereleaseTestPlanComplete } = await import(
-                "./scripts/lib/plugin-prerelease-test-plan.mjs"
-              );
-              pluginPrereleasePlan = assertPluginPrereleaseTestPlanComplete();
-            } catch (error) {
-              const errorCode =
-                error && typeof error === "object" && "code" in error ? error.code : "";
-              const moduleUrl =
-                error && typeof error === "object" && "url" in error ? String(error.url) : "";
-              if (
-                errorCode === "ERR_MODULE_NOT_FOUND" &&
-                moduleUrl.endsWith("/scripts/lib/plugin-prerelease-test-plan.mjs")
-              ) {
-                console.warn(
-                  "Plugin prerelease plan unavailable in target ref; skipping plugin prerelease suite.",
-                );
-                runPluginPrereleaseSuite = false;
-              } else {
-                throw error;
-              }
-            }
-          }
-          const extensionTestShardCount = isCanonicalRepository
-            ? DEFAULT_EXTENSION_TEST_SHARD_COUNT
-            : Math.max(DEFAULT_EXTENSION_TEST_SHARD_COUNT, 36);
-          const extensionShardMatrix = createMatrix(
-            runReleaseOnlyPluginSuites
-              ? createExtensionTestShards({
-                  shardCount: extensionTestShardCount,
-                }).map((shard) => ({
-                  check_name: shard.checkName,
-                  extensions_csv: shard.extensionIds.join(","),
-                  runner: isCanonicalRepository && [0, 1, 2, 3].includes(shard.index)
-                    ? "blacksmith-8vcpu-ubuntu-2404"
-                    : isCanonicalRepository
-                      ? "blacksmith-4vcpu-ubuntu-2404"
-                      : "ubuntu-24.04",
-                  shard_index: shard.index + 1,
-                  task: "extensions-batch",
-                }))
-              : [],
-          );
           const checksFastCoreTasks = [];
           if (runNodeFull) {
             checksFastCoreTasks.push(
               { check_name: "checks-fast-bundled", runtime: "node", task: "bundled" },
-              {
-                check_name: "checks-fast-contracts-plugins",
-                runtime: "node",
-                task: "contracts-plugins",
-              },
             );
           } else {
-            if (runNodeFastPluginContracts) {
-              checksFastCoreTasks.push({
-                check_name: "checks-fast-contracts-plugins",
-                runtime: "node",
-                task: runNodeFastCiRouting ? "contracts-plugins-ci-routing" : "contracts-plugins",
-              });
-            } else if (runNodeFastCiRouting) {
+            if (runNodeFastCiRouting) {
               checksFastCoreTasks.push({
                 check_name: "checks-fast-ci-routing",
                 runtime: "node",
@@ -280,7 +211,7 @@ jobs:
 
           const nodeTestShards = runNodeFull
             ? createNodeTestShards({
-                includeReleaseOnlyPluginShards: runReleaseOnlyPluginSuites,
+                includeReleaseOnlyPluginShards: false,
               }).map((shard) => ({
                 check_name: shard.checkName,
                 runtime: "node",
@@ -304,14 +235,16 @@ jobs:
             run_skills_python: runSkillsPython,
             run_windows: runWindows,
             run_build_artifacts: runNodeFull,
-            run_checks_fast_core: runChecksFastCore,
+            run_checks_fast_core: checksFastCoreTasks.length > 0,
             run_checks_fast: runNodeFull,
             checks_fast_core_matrix: createMatrix(checksFastCoreTasks),
+            run_plugin_contracts_shards: runPluginContractShards,
+            plugin_contracts_matrix: createMatrix(
+              runPluginContractShards ? createPluginContractTestShards() : [],
+            ),
             channel_contracts_matrix: createMatrix(
               runNodeFull ? createChannelContractTestShards() : [],
             ),
-            run_checks_node_extensions: runReleaseOnlyPluginSuites,
-            checks_node_extensions_matrix: extensionShardMatrix,
             run_checks: runNodeFull,
             checks_matrix: createMatrix(
               runNodeFull
@@ -326,20 +259,6 @@ jobs:
             checks_node_core_dist_matrix: createMatrix(nodeTestDistShards),
             run_check: runNodeFull,
             run_check_additional: runNodeFull,
-            run_plugin_prerelease_suite: runPluginPrereleaseSuite,
-            plugin_prerelease_ref: runPluginPrereleaseSuite ? pluginPrereleaseRef : "",
-            plugin_prerelease_static_matrix: createMatrix(
-              runPluginPrereleaseSuite
-                ? pluginPrereleasePlan.staticChecks.map((check) => ({
-                    check_name: check.checkName,
-                    command: check.command,
-                    task: check.check,
-                  }))
-                : [],
-            ),
-            plugin_prerelease_docker_lanes: runPluginPrereleaseSuite
-              ? pluginPrereleasePlan.dockerLanes.join(" ")
-              : "",
             run_build_smoke: runNodeFull,
             run_check_docs: docsChanged,
             run_control_ui_i18n: runControlUiI18n,
@@ -824,6 +743,112 @@ jobs:
               ;;
           esac
 
+  checks-fast-plugin-contracts-shard:
+    permissions:
+      contents: read
+    name: ${{ matrix.checkName }}
+    needs: [preflight]
+    if: needs.preflight.outputs.run_plugin_contracts_shards == 'true'
+    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.preflight.outputs.plugin_contracts_matrix) }}
+    steps:
+      - name: Checkout
+        shell: bash
+        env:
+          CHECKOUT_REPO: ${{ github.repository }}
+          CHECKOUT_SHA: ${{ needs.preflight.outputs.checkout_revision }}
+          CHECKOUT_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          workdir="$GITHUB_WORKSPACE"
+          auth_header="$(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+
+          reset_checkout_dir() {
+            mkdir -p "$workdir"
+            find "$workdir" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+          }
+
+          checkout_attempt() {
+            local attempt="$1"
+
+            reset_checkout_dir
+            git init "$workdir" >/dev/null
+            git config --global --add safe.directory "$workdir"
+            git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}"
+            git -C "$workdir" config gc.auto 0
+
+            timeout --signal=TERM 30s git -C "$workdir" \
+              -c protocol.version=2 \
+              -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
+              fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
+              "+${CHECKOUT_SHA}:refs/remotes/origin/ci-target" || return 1
+
+            git -C "$workdir" checkout --force --detach "$CHECKOUT_SHA" || return 1
+            test -f "$workdir/.github/actions/setup-node-env/action.yml" || return 1
+            echo "checkout attempt ${attempt}/5 succeeded"
+          }
+
+          for attempt in 1 2 3 4 5; do
+            if checkout_attempt "$attempt"; then
+              exit 0
+            fi
+            echo "checkout attempt ${attempt}/5 failed"
+            sleep $((attempt * 5))
+          done
+
+          echo "checkout failed after 5 attempts" >&2
+          exit 1
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+
+      - name: Run plugin contract shard
+        env:
+          OPENCLAW_CONTRACT_INCLUDE_PATTERNS_JSON: ${{ toJson(matrix.includePatterns) }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          include_file="$RUNNER_TEMP/plugin-contract-include.json"
+          INCLUDE_FILE="$include_file" node --input-type=module <<'EOF'
+          import { writeFileSync } from "node:fs";
+
+          const includePatterns = JSON.parse(process.env.OPENCLAW_CONTRACT_INCLUDE_PATTERNS_JSON ?? "[]");
+          if (!Array.isArray(includePatterns) || includePatterns.length === 0) {
+            console.error("Missing plugin contract include patterns");
+            process.exit(1);
+          }
+          writeFileSync(process.env.INCLUDE_FILE, JSON.stringify(includePatterns), "utf8");
+          EOF
+          OPENCLAW_VITEST_INCLUDE_FILE="$include_file" pnpm test:contracts:plugins
+
+  checks-fast-plugin-contracts:
+    permissions:
+      contents: read
+    name: checks-fast-contracts-plugins
+    needs: [preflight, checks-fast-plugin-contracts-shard]
+    if: ${{ !cancelled() && always() && needs.preflight.outputs.run_plugin_contracts_shards == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Verify plugin contract shards
+        env:
+          SHARD_RESULT: ${{ needs.checks-fast-plugin-contracts-shard.result }}
+        run: |
+          if [ "$SHARD_RESULT" = "cancelled" ]; then
+            echo "Plugin contract shards were cancelled, usually because a newer commit superseded this run." >&2
+            exit 1
+          fi
+          if [ "$SHARD_RESULT" != "success" ]; then
+            echo "Plugin contract shards failed: $SHARD_RESULT" >&2
+            exit 1
+          fi
+
   checks-fast-channel-contracts-shard:
     permissions:
       contents: read
@@ -994,97 +1019,6 @@ jobs:
 
       - name: Run protocol check
         run: pnpm protocol:check
-
-  checks-node-extensions-shard:
-    permissions:
-      contents: read
-    name: ${{ matrix.check_name }}
-    needs: [preflight]
-    if: needs.preflight.outputs.run_checks_node_extensions == 'true'
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 60
-    strategy:
-      fail-fast: false
-      matrix: ${{ fromJson(needs.preflight.outputs.checks_node_extensions_matrix) }}
-    steps:
-      - name: Checkout
-        shell: bash
-        env:
-          CHECKOUT_REPO: ${{ github.repository }}
-          CHECKOUT_SHA: ${{ needs.preflight.outputs.checkout_revision }}
-          CHECKOUT_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-
-          workdir="$GITHUB_WORKSPACE"
-          auth_header="$(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
-
-          reset_checkout_dir() {
-            mkdir -p "$workdir"
-            find "$workdir" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
-          }
-
-          checkout_attempt() {
-            local attempt="$1"
-
-            reset_checkout_dir
-            git init "$workdir" >/dev/null
-            git config --global --add safe.directory "$workdir"
-            git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}"
-            git -C "$workdir" config gc.auto 0
-
-            timeout --signal=TERM 30s git -C "$workdir" \
-              -c protocol.version=2 \
-              -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
-              fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
-              "+${CHECKOUT_SHA}:refs/remotes/origin/ci-target" || return 1
-
-            git -C "$workdir" checkout --force --detach "$CHECKOUT_SHA" || return 1
-            test -f "$workdir/.github/actions/setup-node-env/action.yml" || return 1
-            echo "checkout attempt ${attempt}/5 succeeded"
-          }
-
-          for attempt in 1 2 3 4 5; do
-            if checkout_attempt "$attempt"; then
-              exit 0
-            fi
-            echo "checkout attempt ${attempt}/5 failed"
-            sleep $((attempt * 5))
-          done
-
-          echo "checkout failed after 5 attempts" >&2
-          exit 1
-
-      - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
-        with:
-          install-bun: "false"
-
-      - name: Run extension shard
-        env:
-          NODE_OPTIONS: --max-old-space-size=6144
-          OPENCLAW_EXTENSION_BATCH_PARALLEL: 2
-          OPENCLAW_VITEST_MAX_WORKERS: 1
-          OPENCLAW_EXTENSION_BATCH: ${{ matrix.extensions_csv }}
-        run: pnpm test:extensions:batch -- "$OPENCLAW_EXTENSION_BATCH"
-
-  checks-node-extensions:
-    permissions:
-      contents: read
-    name: checks-node-extensions
-    needs: [preflight, checks-node-extensions-shard]
-    if: ${{ !cancelled() && always() && needs.preflight.outputs.run_checks_node_extensions == 'true' }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    steps:
-      - name: Verify extension shards
-        env:
-          SHARD_RESULT: ${{ needs.checks-node-extensions-shard.result }}
-        run: |
-          if [ "$SHARD_RESULT" != "success" ]; then
-            echo "Extension shard checks failed: $SHARD_RESULT" >&2
-            exit 1
-          fi
 
   checks:
     permissions:
@@ -1384,6 +1318,9 @@ jobs:
           - check_name: check-lint
             task: lint
             runner: blacksmith-16vcpu-ubuntu-2404
+          - check_name: check-dependencies
+            task: dependencies
+            runner: ubuntu-24.04
           - check_name: check-policy-guards
             task: policy-guards
             runner: ubuntu-24.04
@@ -1459,12 +1396,21 @@ jobs:
               pnpm check:no-conflict-markers
               pnpm tool-display:check
               pnpm check:host-env-policy:swift
+              pnpm dup:check:coverage
               ;;
             prod-types)
               pnpm tsgo:prod
               ;;
             lint)
               pnpm lint --threads=8
+              ;;
+            dependencies)
+              if pnpm run --silent 2>/dev/null | grep -q '^  deadcode:dependencies$'; then
+                pnpm deadcode:dependencies
+                pnpm deadcode:unused-files
+              else
+                pnpm deadcode:ci
+              fi
               ;;
             policy-guards)
               pnpm lint:webhook:no-low-level-body-read
@@ -1696,91 +1642,6 @@ jobs:
             echo "Gateway topology check failed: $GATEWAY_RESULT" >&2
             exit 1
           fi
-
-  plugin-prerelease-static-shard:
-    permissions:
-      contents: read
-    name: ${{ matrix.check_name }}
-    needs: [preflight]
-    if: needs.preflight.outputs.run_plugin_prerelease_suite == 'true'
-    runs-on: blacksmith-8vcpu-ubuntu-2404
-    timeout-minutes: 45
-    strategy:
-      fail-fast: false
-      matrix: ${{ fromJson(needs.preflight.outputs.plugin_prerelease_static_matrix) }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          ref: ${{ needs.preflight.outputs.checkout_revision }}
-          fetch-depth: 1
-          fetch-tags: false
-          persist-credentials: false
-          submodules: false
-
-      - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
-        with:
-          install-bun: "false"
-
-      - name: Run plugin prerelease static shard
-        env:
-          PLUGIN_PRERELEASE_COMMAND: ${{ matrix.command }}
-          PLUGIN_PRERELEASE_TASK: ${{ matrix.task }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          echo "Running ${PLUGIN_PRERELEASE_TASK}: ${PLUGIN_PRERELEASE_COMMAND}"
-          bash -c "$PLUGIN_PRERELEASE_COMMAND"
-
-  plugin-prerelease-docker-suite:
-    name: plugin-prerelease-docker-suite
-    needs: [preflight]
-    if: needs.preflight.outputs.run_plugin_prerelease_suite == 'true'
-    permissions:
-      actions: read
-      contents: read
-      packages: write
-      pull-requests: read
-    uses: ./.github/workflows/openclaw-live-and-e2e-checks-reusable.yml
-    with:
-      ref: ${{ needs.preflight.outputs.plugin_prerelease_ref }}
-      include_repo_e2e: false
-      include_release_path_suites: false
-      include_openwebui: false
-      docker_lanes: ${{ needs.preflight.outputs.plugin_prerelease_docker_lanes }}
-      include_live_suites: false
-      live_models_only: false
-
-  plugin-prerelease-suite:
-    permissions:
-      contents: read
-    name: plugin-prerelease-suite
-    needs: [preflight, plugin-prerelease-static-shard, plugin-prerelease-docker-suite]
-    if: ${{ !cancelled() && always() && needs.preflight.outputs.run_plugin_prerelease_suite == 'true' }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    steps:
-      - name: Verify plugin prerelease suite
-        env:
-          DOCKER_RESULT: ${{ needs.plugin-prerelease-docker-suite.result }}
-          STATIC_RESULT: ${{ needs.plugin-prerelease-static-shard.result }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          failed=0
-          for result in \
-            "plugin-prerelease-static=${STATIC_RESULT}" \
-            "plugin-prerelease-docker=${DOCKER_RESULT}"
-          do
-            name="${result%%=*}"
-            status="${result#*=}"
-            if [ "$status" != "success" ]; then
-              echo "::error::${name} ended with ${status}"
-              failed=1
-            fi
-          done
-          exit "$failed"
 
   build-smoke:
     permissions:

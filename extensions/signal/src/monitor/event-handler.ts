@@ -25,6 +25,7 @@ import {
   toInternalMessageReceivedContext,
   triggerInternalHook,
 } from "openclaw/plugin-sdk/hook-runtime";
+import { runPreparedInboundReplyTurn } from "openclaw/plugin-sdk/inbound-reply-dispatch";
 import { kindFromMime } from "openclaw/plugin-sdk/media-runtime";
 import {
   buildPendingHistoryContextFromMap,
@@ -34,6 +35,7 @@ import {
 import { dispatchInboundMessage } from "openclaw/plugin-sdk/reply-runtime";
 import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-runtime";
 import { createReplyDispatcherWithTyping } from "openclaw/plugin-sdk/reply-runtime";
+import { settleReplyDispatcher } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { danger, logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import {
@@ -232,42 +234,6 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       OriginatingTo: signalTo,
     });
 
-    await recordInboundSession({
-      storePath,
-      sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
-      ctx: ctxPayload,
-      updateLastRoute: !entry.isGroup
-        ? {
-            sessionKey: route.mainSessionKey,
-            channel: "signal",
-            to: entry.senderRecipient,
-            accountId: route.accountId,
-            mainDmOwnerPin: (() => {
-              const pinnedOwner = resolvePinnedMainDmOwnerFromAllowlist({
-                dmScope: deps.cfg.session?.dmScope,
-                allowFrom: deps.allowFrom,
-                normalizeEntry: normalizeSignalAllowRecipient,
-              });
-              if (!pinnedOwner) {
-                return undefined;
-              }
-              return {
-                ownerRecipient: pinnedOwner,
-                senderRecipient: entry.senderRecipient,
-                onSkip: ({ ownerRecipient, senderRecipient }) => {
-                  logVerbose(
-                    `signal: skip main-session last route for ${senderRecipient} (pinned owner ${ownerRecipient})`,
-                  );
-                },
-              };
-            })(),
-          }
-        : undefined,
-      onRecordError: (err) => {
-        logVerbose(`signal: failed updating session meta: ${String(err)}`);
-      },
-    });
-
     if (shouldLogVerbose()) {
       const preview = body.slice(0, 200).replace(/\\n/g, "\\\\n");
       logVerbose(`signal inbound: from=${ctxPayload.From} len=${body.length} preview="${preview}"`);
@@ -323,18 +289,69 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       },
     });
 
-    const { queuedFinal } = await dispatchInboundMessage({
-      ctx: ctxPayload,
-      cfg: deps.cfg,
-      dispatcher,
-      replyOptions: {
-        ...replyOptions,
-        disableBlockStreaming:
-          typeof deps.blockStreaming === "boolean" ? !deps.blockStreaming : undefined,
-        onModelSelected,
+    const { dispatchResult } = await runPreparedInboundReplyTurn({
+      channel: "signal",
+      accountId: route.accountId,
+      routeSessionKey: route.sessionKey,
+      storePath,
+      ctxPayload,
+      recordInboundSession,
+      record: {
+        updateLastRoute: !entry.isGroup
+          ? {
+              sessionKey: route.mainSessionKey,
+              channel: "signal",
+              to: entry.senderRecipient,
+              accountId: route.accountId,
+              mainDmOwnerPin: (() => {
+                const pinnedOwner = resolvePinnedMainDmOwnerFromAllowlist({
+                  dmScope: deps.cfg.session?.dmScope,
+                  allowFrom: deps.allowFrom,
+                  normalizeEntry: normalizeSignalAllowRecipient,
+                });
+                if (!pinnedOwner) {
+                  return undefined;
+                }
+                return {
+                  ownerRecipient: pinnedOwner,
+                  senderRecipient: entry.senderRecipient,
+                  onSkip: ({ ownerRecipient, senderRecipient }) => {
+                    logVerbose(
+                      `signal: skip main-session last route for ${senderRecipient} (pinned owner ${ownerRecipient})`,
+                    );
+                  },
+                };
+              })(),
+            }
+          : undefined,
+        onRecordError: (err) => {
+          logVerbose(`signal: failed updating session meta: ${String(err)}`);
+        },
+      },
+      onPreDispatchFailure: () =>
+        settleReplyDispatcher({
+          dispatcher,
+          onSettled: () => markDispatchIdle(),
+        }),
+      runDispatch: async () => {
+        try {
+          return await dispatchInboundMessage({
+            ctx: ctxPayload,
+            cfg: deps.cfg,
+            dispatcher,
+            replyOptions: {
+              ...replyOptions,
+              disableBlockStreaming:
+                typeof deps.blockStreaming === "boolean" ? !deps.blockStreaming : undefined,
+              onModelSelected,
+            },
+          });
+        } finally {
+          markDispatchIdle();
+        }
       },
     });
-    markDispatchIdle();
+    const queuedFinal = dispatchResult?.queuedFinal ?? false;
     if (!queuedFinal) {
       if (entry.isGroup && historyKey) {
         clearHistoryEntriesIfEnabled({
@@ -474,7 +491,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     ]
       .filter(Boolean)
       .join(":");
-    enqueueSystemEvent(text, { sessionKey: route.sessionKey, contextKey });
+    enqueueSystemEvent(text, { sessionKey: route.sessionKey, contextKey, trusted: false });
     return true;
   }
 
