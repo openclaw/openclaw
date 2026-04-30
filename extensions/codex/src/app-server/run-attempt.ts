@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
 import {
@@ -28,6 +29,7 @@ import {
   registerNativeHookRelay,
   setActiveEmbeddedRun,
   supportsModelTools,
+  runAgentCleanupStep,
   type AgentMessage,
   type EmbeddedRunAttemptParams,
   type EmbeddedRunAttemptResult,
@@ -682,7 +684,15 @@ export async function runCodexAppServerAttempt(
     notificationCleanup();
     requestCleanup();
     nativeHookRelay?.unregister();
-    await trajectoryRecorder?.flush();
+    await runAgentCleanupStep({
+      runId: params.runId,
+      sessionId: params.sessionId,
+      step: "codex-trajectory-flush-startup-failure",
+      log: embeddedAgentLog,
+      cleanup: async () => {
+        await trajectoryRecorder?.flush();
+      },
+    });
     params.abortSignal?.removeEventListener("abort", abortFromUpstream);
     throw error;
   }
@@ -886,7 +896,15 @@ export async function runCodexAppServerAttempt(
         aborted: runAbortController.signal.aborted,
       });
     }
-    await trajectoryRecorder?.flush();
+    await runAgentCleanupStep({
+      runId: params.runId,
+      sessionId: params.sessionId,
+      step: "codex-trajectory-flush",
+      log: embeddedAgentLog,
+      cleanup: async () => {
+        await trajectoryRecorder?.flush();
+      },
+    });
     userInputBridge?.cancelPending();
     clearTimeout(timeout);
     clearTurnCompletionIdleTimer();
@@ -992,6 +1010,11 @@ function createCodexNativeHookRelay(params: {
   }
   return registerNativeHookRelay({
     provider: "codex",
+    relayId: buildCodexNativeHookRelayId({
+      agentId: params.agentId,
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+    }),
     ...(params.agentId ? { agentId: params.agentId } : {}),
     sessionId: params.sessionId,
     ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
@@ -1003,6 +1026,20 @@ function createCodexNativeHookRelay(params: {
       timeoutMs: params.options?.gatewayTimeoutMs,
     },
   });
+}
+
+function buildCodexNativeHookRelayId(params: {
+  agentId: string | undefined;
+  sessionId: string;
+  sessionKey: string | undefined;
+}): string {
+  const hash = createHash("sha256");
+  hash.update("openclaw:codex:native-hook-relay:v1");
+  hash.update("\0");
+  hash.update(params.agentId?.trim() || "");
+  hash.update("\0");
+  hash.update(params.sessionKey?.trim() || params.sessionId);
+  return `codex-${hash.digest("hex").slice(0, 40)}`;
 }
 
 function interruptCodexTurnBestEffort(
@@ -1079,7 +1116,9 @@ async function buildDynamicTools(input: DynamicToolBuildParams) {
         : undefined,
     modelApi: params.model.api,
     modelContextWindowTokens: params.model.contextWindow,
-    modelAuthMode: resolveModelAuthMode(params.model.provider, params.config),
+    modelAuthMode: resolveModelAuthMode(params.model.provider, params.config, undefined, {
+      workspaceDir: input.effectiveWorkspace,
+    }),
     currentChannelId: params.currentChannelId,
     currentThreadTs: params.currentThreadTs,
     currentMessageId: params.currentMessageId,
@@ -1280,6 +1319,7 @@ function handleApprovalRequest(params: {
 export const __testing = {
   CODEX_DYNAMIC_TOOL_TIMEOUT_MS,
   CODEX_TURN_COMPLETION_IDLE_TIMEOUT_MS,
+  buildCodexNativeHookRelayId,
   filterToolsForVisionInputs,
   handleDynamicToolCallWithTimeout,
   ...createCodexAppServerClientFactoryTestHooks((factory) => {

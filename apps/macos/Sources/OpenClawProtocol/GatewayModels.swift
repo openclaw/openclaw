@@ -1851,11 +1851,11 @@ public struct SessionsMessagesUnsubscribeParams: Codable, Sendable {
 }
 
 public struct SessionsAbortParams: Codable, Sendable {
-    public let key: String
+    public let key: String?
     public let runid: String?
 
     public init(
-        key: String,
+        key: String?,
         runid: String?)
     {
         self.key = key

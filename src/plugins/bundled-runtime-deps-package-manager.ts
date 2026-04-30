@@ -1,6 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
-import { createNpmProjectInstallEnv } from "../infra/npm-install-env.js";
+import {
+  createSafeNpmInstallArgs,
+  createSafeNpmInstallEnv,
+} from "../infra/safe-package-install.js";
 
 export type BundledRuntimeDepsNpmRunner = {
   command: string;
@@ -21,11 +24,13 @@ export function createBundledRuntimeDepsInstallEnv(
   options: { cacheDir?: string } = {},
 ): NodeJS.ProcessEnv {
   const nextEnv: NodeJS.ProcessEnv = {
-    ...createNpmProjectInstallEnv(env, options),
+    ...createSafeNpmInstallEnv(env, {
+      ...options,
+      legacyPeerDeps: true,
+      packageLock: true,
+    }),
     npm_config_audit: "false",
     npm_config_fund: "false",
-    npm_config_legacy_peer_deps: "true",
-    npm_config_package_lock: "true",
   };
   for (const key of Object.keys(nextEnv)) {
     if (key.toLowerCase() === NPM_EXECPATH_ENV_KEY) {
@@ -36,7 +41,7 @@ export function createBundledRuntimeDepsInstallEnv(
 }
 
 export function createBundledRuntimeDepsInstallArgs(): string[] {
-  return ["install", "--ignore-scripts", "--no-audit", "--no-fund", "--omit=dev"];
+  return [...createSafeNpmInstallArgs({ noAudit: true, noFund: true }), "--omit=dev"];
 }
 
 function createBundledRuntimeDepsPnpmInstallArgs(params: { storeDir: string }): string[] {

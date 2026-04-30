@@ -236,15 +236,17 @@ function appendDirectoryFingerprint(hash, rootDir, currentDir = rootDir) {
   }
 }
 
-function createInstalledRuntimeClosureFingerprint(rootNodeModulesDir, dependencyNames) {
+function createInstalledRuntimeClosureFingerprint(records) {
   const hash = createHash("sha256");
-  for (const depName of [...dependencyNames].toSorted((left, right) => left.localeCompare(right))) {
-    const depRoot = dependencyNodeModulesPath(rootNodeModulesDir, depName);
-    if (depRoot === null || !fs.existsSync(depRoot)) {
+  for (const record of [...records].toSorted(
+    (left, right) =>
+      left.name.localeCompare(right.name) || left.realRoot.localeCompare(right.realRoot),
+  )) {
+    if (!fs.existsSync(record.realRoot)) {
       return null;
     }
-    hash.update(`package:${depName}:${fs.realpathSync(depRoot)}\n`);
-    appendDirectoryFingerprint(hash, depRoot);
+    hash.update(`package:${record.name}:${record.realRoot}\n`);
+    appendDirectoryFingerprint(hash, record.realRoot);
   }
   return hash.digest("hex");
 }
@@ -266,8 +268,5 @@ export function resolveInstalledRuntimeClosureFingerprint(params) {
   if (resolution === null) {
     return null;
   }
-  return createInstalledRuntimeClosureFingerprint(
-    params.rootNodeModulesDir,
-    selectRuntimeDependencyRootsToCopy(resolution).map((record) => record.name),
-  );
+  return createInstalledRuntimeClosureFingerprint(selectRuntimeDependencyRootsToCopy(resolution));
 }

@@ -132,6 +132,16 @@ describe("package artifact reuse", () => {
     );
     expect(workflow).toContain("OPENCLAW_LIVE_COMMAND: ${{ matrix.command }}");
     expect(workflow).toContain("live_suite_filter:");
+    expect(workflow).toContain("validate_live_suite_filter:");
+    expect(workflow).toContain("LIVE_SUITE_FILTER: ${{ inputs.live_suite_filter }}");
+    expect(workflow).toContain(
+      "live_suite_filter '${LIVE_SUITE_FILTER}' does not match any runnable suite",
+    );
+    expect(workflow).toContain('add_profile_suite docker-live-models "minimum stable full"');
+    expect(workflow).toContain(
+      'add_profile_suite native-live-src-gateway-core "minimum stable full"',
+    );
+    expect(workflow).toContain('add_profile_suite live-cli-backend-docker "stable full"');
     expect(workflow).toContain(
       "inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id",
     );
@@ -319,6 +329,12 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain(
       "live_suite_filter: ${{ needs.resolve_target.outputs.live_suite_filter }}",
     );
+    expect(workflow).toContain(
+      "contains(fromJSON('[\"all\",\"cross-os\",\"package\"]'), needs.resolve_target.outputs.rerun_group) || (needs.resolve_target.outputs.rerun_group == 'live-e2e' && needs.resolve_target.outputs.live_suite_filter == '')",
+    );
+    expect(workflow).toContain(
+      "contains(fromJSON('[\"all\",\"live-e2e\"]'), needs.resolve_target.outputs.rerun_group) && needs.resolve_target.outputs.live_suite_filter == ''",
+    );
     expect(workflow).toContain("- live-e2e");
     expect(workflow).toContain("- qa-live");
   });
@@ -410,6 +426,10 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain("### Slowest jobs: ${label}");
     expect(workflow).toContain("### Longest queues: ${label}");
     expect(workflow).toContain("| Job | Result | Queue minutes | Run minutes |");
-    expect(workflow).toContain('gh run view "$run_id" --json createdAt,jobs');
+    expect(workflow).toContain(
+      'gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/jobs?per_page=100"',
+    );
+    expect(workflow).toContain("(.started_at | ts) - (.created_at | ts)");
+    expect(workflow).not.toContain('gh run view "$run_id" --json createdAt,jobs');
   });
 });

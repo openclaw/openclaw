@@ -4,6 +4,7 @@ import { dirname } from "node:path";
 import { performance } from "node:perf_hooks";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isDiagnosticFlagEnabled } from "./diagnostic-flags.js";
+import { isTruthyEnvValue } from "./env.js";
 
 export const OPENCLAW_DIAGNOSTICS_TIMELINE_SCHEMA_VERSION = "openclaw.diagnostics.v1";
 
@@ -74,7 +75,8 @@ export function isDiagnosticsTimelineEnabled(options: DiagnosticsTimelineOptions
   const { config, env } = resolveDiagnosticsTimelineOptions(options);
   return (
     (isDiagnosticFlagEnabled("timeline", config, env) ||
-      isDiagnosticFlagEnabled("diagnostics.timeline", config, env)) &&
+      isDiagnosticFlagEnabled("diagnostics.timeline", config, env) ||
+      isTruthyEnvValue(env.OPENCLAW_DIAGNOSTICS)) &&
     typeof env.OPENCLAW_DIAGNOSTICS_TIMELINE_PATH === "string" &&
     env.OPENCLAW_DIAGNOSTICS_TIMELINE_PATH.trim().length > 0
   );

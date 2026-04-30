@@ -187,6 +187,9 @@ describe("qa scenario catalog", () => {
           requiredProvider?: string;
           pluginSpec?: string;
           pluginId?: string;
+          pluginPersonality?: string;
+          adversarialPersonality?: string;
+          expectedAdversarialDiagnostics?: string[];
         }
       | undefined;
 
@@ -195,12 +198,18 @@ describe("qa scenario catalog", () => {
     expect(config?.requiredProvider).toBe("openai");
     expect(config?.pluginSpec).toBe("npm:@openclaw/kitchen-sink@latest");
     expect(config?.pluginId).toBe("openclaw-kitchen-sink-fixture");
+    expect(config?.pluginPersonality).toBe("conformance");
+    expect(config?.adversarialPersonality).toBe("adversarial");
+    expect(config?.expectedAdversarialDiagnostics).toContain(
+      "only bundled plugins can register agent tool result middleware",
+    );
     expect(scenario.execution.flow?.steps.map((step) => step.name)).toEqual([
       "installs and inspects the Kitchen Sink plugin",
       "restarts gateway with Kitchen Sink configured",
       "exercises command inventory and MCP tool surfaces",
       "runs live OpenAI turn with Kitchen Sink loaded",
       "records gateway CPU RSS and log anomaly evidence",
+      "verifies adversarial diagnostics personality",
     ]);
   });
 

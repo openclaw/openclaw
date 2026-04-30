@@ -15,7 +15,9 @@ import {
   hasAvailableAuthForProvider,
   resolveApiKeyForProvider,
   resolveEnvApiKey,
+  resolveModelAuthMode,
 } from "./model-auth.js";
+import { hasAuthForModelProvider } from "./model-provider-auth.js";
 
 async function expectVertexAdcEnvApiKey(params: {
   provider: string;
@@ -90,9 +92,21 @@ vi.mock("./provider-auth-aliases.js", () => ({
 }));
 
 vi.mock("./model-auth-env-vars.js", () => {
+  const hasAllowedPlugin = (config: unknown, pluginId: string): boolean => {
+    if (!config || typeof config !== "object") {
+      return false;
+    }
+    const plugins = (config as { plugins?: unknown }).plugins;
+    if (!plugins || typeof plugins !== "object") {
+      return false;
+    }
+    const allow = (plugins as { allow?: unknown }).allow;
+    return Array.isArray(allow) && allow.includes(pluginId);
+  };
   const candidates = {
     anthropic: ["ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"],
     google: ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
+    "google-vertex": ["GOOGLE_CLOUD_API_KEY"],
     "demo-local": ["DEMO_LOCAL_API_KEY"],
     huggingface: ["HUGGINGFACE_HUB_TOKEN", "HF_TOKEN"],
     "minimax-portal": ["MINIMAX_OAUTH_TOKEN", "MINIMAX_API_KEY"],
@@ -109,6 +123,35 @@ vi.mock("./model-auth-env-vars.js", () => {
     PROVIDER_ENV_API_KEY_CANDIDATES: candidates,
     listKnownProviderEnvApiKeyNames: () => [...new Set(Object.values(candidates).flat())],
     resolveProviderEnvApiKeyCandidates: () => candidates,
+    resolveProviderEnvAuthEvidence: (params?: { config?: OpenClawConfig }) => {
+      const evidence = {
+        "google-vertex": [
+          {
+            type: "local-file-with-env",
+            fileEnvVar: "GOOGLE_APPLICATION_CREDENTIALS",
+            fallbackPaths: ["${HOME}/.config/gcloud/application_default_credentials.json"],
+            requiresAnyEnv: ["GOOGLE_CLOUD_PROJECT", "GCLOUD_PROJECT"],
+            requiresAllEnv: ["GOOGLE_CLOUD_LOCATION"],
+            credentialMarker: "gcp-vertex-credentials",
+            source: "gcloud adc",
+          },
+        ],
+      } satisfies Record<string, readonly unknown[]>;
+      if (!hasAllowedPlugin(params?.config, "workspace-cloud")) {
+        return evidence;
+      }
+      return {
+        ...evidence,
+        "workspace-cloud": [
+          {
+            type: "local-file-with-env",
+            fileEnvVar: "WORKSPACE_CLOUD_CREDENTIALS",
+            credentialMarker: "workspace-cloud-local-credentials",
+            source: "workspace cloud credentials",
+          },
+        ],
+      };
+    },
   };
 });
 
@@ -420,6 +463,95 @@ describe("getApiKeyForModel", () => {
       expect(resolved.source).toContain("OPENAI_API_KEY");
       expect(resolved.profileId).toBeUndefined();
     });
+  });
+
+  it("uses trusted workspace manifest auth evidence in runtime auth checks", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-cloud-auth-"));
+    const credentialsPath = path.join(tempDir, "credentials.json");
+    await fs.writeFile(credentialsPath, "{}", "utf8");
+
+    const cfg: OpenClawConfig = {
+      plugins: {
+        allow: ["workspace-cloud"],
+      },
+    };
+
+    try {
+      await withEnvAsync({ WORKSPACE_CLOUD_CREDENTIALS: credentialsPath }, async () => {
+        const store = { version: 1 as const, profiles: {} };
+        const resolved = await resolveApiKeyForProvider({
+          provider: "workspace-cloud",
+          cfg,
+          store,
+        });
+
+        expect(resolved).toEqual({
+          apiKey: "workspace-cloud-local-credentials",
+          source: "workspace cloud credentials",
+          mode: "api-key",
+        });
+        expect(resolveModelAuthMode("workspace-cloud", cfg, store)).toBe("api-key");
+        await expect(
+          hasAvailableAuthForProvider({
+            provider: "workspace-cloud",
+            cfg,
+            store,
+          }),
+        ).resolves.toBe(true);
+      });
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("ignores untrusted workspace manifest auth evidence in runtime auth checks", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-cloud-auth-"));
+    const credentialsPath = path.join(tempDir, "credentials.json");
+    await fs.writeFile(credentialsPath, "{}", "utf8");
+
+    try {
+      await withEnvAsync({ WORKSPACE_CLOUD_CREDENTIALS: credentialsPath }, async () => {
+        const store = { version: 1 as const, profiles: {} };
+        expect(resolveModelAuthMode("workspace-cloud", { plugins: {} }, store)).toBe("unknown");
+        await expect(
+          hasAvailableAuthForProvider({
+            provider: "workspace-cloud",
+            cfg: { plugins: {} },
+            store,
+          }),
+        ).resolves.toBe(false);
+      });
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("uses the same trusted workspace manifest auth evidence in provider auth checks", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-cloud-auth-"));
+    const credentialsPath = path.join(tempDir, "credentials.json");
+    await fs.writeFile(credentialsPath, "{}", "utf8");
+    const store = { version: 1 as const, profiles: {} };
+
+    try {
+      await withEnvAsync({ WORKSPACE_CLOUD_CREDENTIALS: credentialsPath }, async () => {
+        expect(
+          hasAuthForModelProvider({
+            provider: "workspace-cloud",
+            cfg: { plugins: { allow: ["workspace-cloud"] } },
+            store,
+          }),
+        ).toBe(true);
+        expect(
+          hasAuthForModelProvider({
+            provider: "workspace-cloud",
+            cfg: { plugins: {} },
+            store,
+          }),
+        ).toBe(false);
+      });
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
   });
 
   it("hasAvailableAuthForProvider('google') accepts GOOGLE_API_KEY fallback", async () => {
@@ -812,7 +944,7 @@ describe("getApiKeyForModel", () => {
     } as NodeJS.ProcessEnv);
 
     expect(resolved?.apiKey).toBe("google-cloud-api-key");
-    expect(resolved?.source).toBe("gcloud adc");
+    expect(resolved?.source).toBe("env: GOOGLE_CLOUD_API_KEY");
   });
 
   it("resolveEnvApiKey('google-vertex') accepts ADC credentials from the provided env snapshot", async () => {
@@ -847,6 +979,31 @@ describe("getApiKeyForModel", () => {
       expect(resolved?.source).toBe("gcloud adc");
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("resolveEnvApiKey('google-vertex') rejects missing explicit ADC path before fallback paths", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-google-adc-home-"));
+    const fallbackDir = path.join(homeDir, ".config", "gcloud");
+    const missingCredentialsPath = path.join(homeDir, "missing-adc.json");
+    await fs.mkdir(fallbackDir, { recursive: true });
+    await fs.writeFile(
+      path.join(fallbackDir, "application_default_credentials.json"),
+      "{}",
+      "utf8",
+    );
+
+    try {
+      const resolved = resolveEnvApiKey("google-vertex", {
+        GOOGLE_APPLICATION_CREDENTIALS: missingCredentialsPath,
+        GOOGLE_CLOUD_LOCATION: "us-central1",
+        GOOGLE_CLOUD_PROJECT: "vertex-project",
+        HOME: homeDir,
+      } as NodeJS.ProcessEnv);
+
+      expect(resolved).toBeNull();
+    } finally {
+      await fs.rm(homeDir, { recursive: true, force: true });
     }
   });
 

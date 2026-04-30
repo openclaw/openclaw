@@ -1268,8 +1268,18 @@ export async function handleFeishuMessage(params: {
         }
 
         const agentSessionKey = buildBroadcastSessionKey(route.sessionKey, route.agentId, agentId);
+        const agentStorePath = core.channel.session.resolveStorePath(cfg.session?.store, {
+          agentId,
+        });
+        const agentRecord = {
+          onRecordError: (err: unknown) => {
+            log(
+              `feishu[${account.accountId}]: failed to record broadcast inbound session ${agentSessionKey}: ${String(err)}`,
+            );
+          },
+        };
         const allowReasoningPreview = resolveFeishuReasoningPreviewEnabled({
-          storePath: core.channel.session.resolveStorePath(cfg.session?.store, { agentId }),
+          storePath: agentStorePath,
           sessionKey: agentSessionKey,
         });
         const agentCtx = await buildCtxPayloadForAgent(
@@ -1302,15 +1312,30 @@ export async function handleFeishuMessage(params: {
           log(
             `feishu[${account.accountId}]: broadcast active dispatch agent=${agentId} (session=${agentSessionKey})`,
           );
-          await core.channel.reply.withReplyDispatcher({
-            dispatcher,
-            onSettled: () => markDispatchIdle(),
-            run: () =>
-              core.channel.reply.dispatchReplyFromConfig({
-                ctx: agentCtx,
-                cfg,
+          await core.channel.turn.runPrepared({
+            channel: "feishu",
+            accountId: route.accountId,
+            routeSessionKey: agentSessionKey,
+            storePath: agentStorePath,
+            ctxPayload: agentCtx,
+            recordInboundSession: core.channel.session.recordInboundSession,
+            record: agentRecord,
+            onPreDispatchFailure: () =>
+              core.channel.reply.settleReplyDispatcher({
                 dispatcher,
-                replyOptions,
+                onSettled: () => markDispatchIdle(),
+              }),
+            runDispatch: () =>
+              core.channel.reply.withReplyDispatcher({
+                dispatcher,
+                onSettled: () => markDispatchIdle(),
+                run: () =>
+                  core.channel.reply.dispatchReplyFromConfig({
+                    ctx: agentCtx,
+                    cfg,
+                    dispatcher,
+                    replyOptions,
+                  }),
               }),
           });
         } else {
@@ -1331,13 +1356,23 @@ export async function handleFeishuMessage(params: {
           log(
             `feishu[${account.accountId}]: broadcast observer dispatch agent=${agentId} (session=${agentSessionKey})`,
           );
-          await core.channel.reply.withReplyDispatcher({
-            dispatcher: noopDispatcher,
-            run: () =>
-              core.channel.reply.dispatchReplyFromConfig({
-                ctx: agentCtx,
-                cfg,
+          await core.channel.turn.runPrepared({
+            channel: "feishu",
+            accountId: route.accountId,
+            routeSessionKey: agentSessionKey,
+            storePath: agentStorePath,
+            ctxPayload: agentCtx,
+            recordInboundSession: core.channel.session.recordInboundSession,
+            record: agentRecord,
+            runDispatch: () =>
+              core.channel.reply.withReplyDispatcher({
                 dispatcher: noopDispatcher,
+                run: () =>
+                  core.channel.reply.dispatchReplyFromConfig({
+                    ctx: agentCtx,
+                    cfg,
+                    dispatcher: noopDispatcher,
+                  }),
               }),
           });
         }
@@ -1385,10 +1420,11 @@ export async function handleFeishuMessage(params: {
       );
 
       const identity = resolveAgentOutboundIdentity(cfg, route.agentId);
+      const storePath = core.channel.session.resolveStorePath(cfg.session?.store, {
+        agentId: route.agentId,
+      });
       const allowReasoningPreview = resolveFeishuReasoningPreviewEnabled({
-        storePath: core.channel.session.resolveStorePath(cfg.session?.store, {
-          agentId: route.agentId,
-        }),
+        storePath,
         sessionKey: route.sessionKey,
       });
       const { dispatcher, replyOptions, markDispatchIdle } = createFeishuReplyDispatcher({
@@ -1409,19 +1445,41 @@ export async function handleFeishuMessage(params: {
       });
 
       log(`feishu[${account.accountId}]: dispatching to agent (session=${route.sessionKey})`);
-      const { queuedFinal, counts } = await core.channel.reply.withReplyDispatcher({
-        dispatcher,
-        onSettled: () => {
-          markDispatchIdle();
+      const { dispatchResult } = await core.channel.turn.runPrepared({
+        channel: "feishu",
+        accountId: route.accountId,
+        routeSessionKey: route.sessionKey,
+        storePath,
+        ctxPayload,
+        recordInboundSession: core.channel.session.recordInboundSession,
+        record: {
+          onRecordError: (err) => {
+            log(
+              `feishu[${account.accountId}]: failed to record inbound session ${route.sessionKey}: ${String(err)}`,
+            );
+          },
         },
-        run: () =>
-          core.channel.reply.dispatchReplyFromConfig({
-            ctx: ctxPayload,
-            cfg,
+        onPreDispatchFailure: () =>
+          core.channel.reply.settleReplyDispatcher({
             dispatcher,
-            replyOptions,
+            onSettled: () => markDispatchIdle(),
+          }),
+        runDispatch: () =>
+          core.channel.reply.withReplyDispatcher({
+            dispatcher,
+            onSettled: () => {
+              markDispatchIdle();
+            },
+            run: () =>
+              core.channel.reply.dispatchReplyFromConfig({
+                ctx: ctxPayload,
+                cfg,
+                dispatcher,
+                replyOptions,
+              }),
           }),
       });
+      const { queuedFinal, counts } = dispatchResult;
 
       if (isGroup && historyKey && chatHistories) {
         clearHistoryEntriesIfEnabled({
