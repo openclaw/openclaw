@@ -1054,6 +1054,35 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     });
   });
 
+  it("mirrors custom-session cron deliveries into the destination session transcript", async () => {
+    vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
+    vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);
+
+    const params = makeBaseParams({ synthesizedText: "hello from cron" });
+    params.job.sessionTarget = "session:dest-session-id";
+    params.agentSessionKey = "agent:main:session:dest-session-id";
+
+    const state = await dispatchCronDelivery(params);
+
+    expect(state.result).toBeUndefined();
+    expect(state.delivered).toBe(true);
+    expect(buildOutboundSessionContext).toHaveBeenCalledWith({
+      cfg: params.cfgWithAgentDefaults,
+      agentId: "main",
+      sessionKey: "dest-session-id",
+    });
+    expect(deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mirror: {
+          sessionKey: "dest-session-id",
+          agentId: "main",
+          text: "hello from cron",
+          idempotencyKey: expect.stringContaining("test-job"),
+        },
+      }),
+    );
+  });
+
   it("passes threaded telegram delivery through to the outbound adapter", async () => {
     vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
     vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);

@@ -29,6 +29,7 @@ import {
 import { shouldAttemptTtsPayload } from "../../tts/tts-config.js";
 import { createCronExecutionId } from "../run-id.js";
 import { hasScheduledNextRunAtMs } from "../service/jobs.js";
+import { resolveCronDeliverySessionKey } from "../session-target.js";
 import type { CronJob, CronRunTelemetry } from "../types.js";
 import type { DeliveryTargetResolution } from "./delivery-target.js";
 import { pickLastNonEmptyTextFromPayloads, pickSummaryFromOutput } from "./helpers.js";
@@ -642,10 +643,12 @@ export async function dispatchCronDelivery(
         delivered = true;
         return null;
       }
+      const deliverySessionKey =
+        resolveCronDeliverySessionKey(params.job) ?? params.agentSessionKey;
       const deliverySession = buildOutboundSessionContext({
         cfg: params.cfgWithAgentDefaults,
         agentId: params.agentId,
-        sessionKey: params.agentSessionKey,
+        sessionKey: deliverySessionKey,
       });
 
       // Track bestEffort partial failures so we can log them and avoid
@@ -669,6 +672,12 @@ export async function dispatchCronDelivery(
           threadId: delivery.threadId,
           payloads: payloadsForDelivery,
           session: deliverySession,
+          mirror: {
+            sessionKey: deliverySessionKey,
+            agentId: params.agentId,
+            text: outputText || synthesizedText || undefined,
+            idempotencyKey: deliveryIdempotencyKey,
+          },
           identity,
           bestEffort: params.deliveryBestEffort,
           deps: createOutboundSendDeps(params.deps),
