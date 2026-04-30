@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { capturePluginRegistration } from "./captured-registration.js";
+import {
+  capturePluginRegistration,
+  createCapturedPluginRegistration,
+} from "./captured-registration.js";
 import type { AnyAgentTool } from "./types.js";
 
 describe("captured plugin registration", () => {
@@ -89,5 +92,25 @@ describe("captured plugin registration", () => {
     expect(captured.agentToolResultMiddlewares).toHaveLength(1);
     expect(captured.agentToolResultMiddlewares[0]?.runtimes).toEqual(["codex"]);
     expect(captured.api.registerMemoryEmbeddingProvider).toBeTypeOf("function");
+  });
+
+  it("returns the configured plugin id from captured scheduler handles", async () => {
+    const captured = createCapturedPluginRegistration({
+      id: "custom-captured-plugin",
+    });
+
+    const jobHandle = captured.api.registerSessionSchedulerJob({
+      id: "custom-job",
+      sessionKey: "agent:main:main",
+      kind: "monitor",
+    });
+    const scheduledHandle = await captured.api.scheduleSessionTurn({
+      sessionKey: "agent:main:main",
+      message: "wake",
+      name: "custom-turn",
+    });
+
+    expect(jobHandle.pluginId).toBe("custom-captured-plugin");
+    expect(scheduledHandle?.pluginId).toBe("custom-captured-plugin");
   });
 });
