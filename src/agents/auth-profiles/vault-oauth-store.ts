@@ -285,9 +285,10 @@ function vaultDataToCredential(data: VaultKvData): OAuthCredential | null {
 /**
  * Serialises a credential back to the new nested format for writing to Vault.
  */
-function credentialToVaultData(credential: OAuthCredential, _profileId: string): VaultKvData {
+function credentialToVaultData(credential: OAuthCredential, profileId: string): VaultKvData {
   return {
     OPENAI_API_KEY: null,
+    profile_id: profileId,
     last_refresh: new Date().toISOString(),
     tokens: {
       access_token: credential.access,

@@ -180,7 +180,7 @@ export function createRuntimeSecretsActivator(params: {
         // that vault-backed credentials are available for the overlay when the
         // first request arrives. Failures are non-fatal: the gateway will retry
         // on the first auth overlay call (and log the miss).
-        await readVaultOAuthCredential().catch(() => undefined);
+        await readVaultOAuthCredential(loadAuthStore?.()).catch(() => undefined);
         const prepared = await prepareRuntimeSecretsSnapshot({
           config: pruneSkippedStartupSecretSurfaces(config),
           ...(loadAuthStore ? { loadAuthStore } : {}),
