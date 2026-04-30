@@ -254,6 +254,8 @@ export async function promptAuthConfig(
     const allowlistSelection = await promptModelAllowlist({
       config: next,
       prompter,
+      workspaceDir: resolveDefaultAgentWorkspaceDir(),
+      env: process.env,
       allowedKeys: modelPrompt?.allowedKeys,
       initialSelections: modelPrompt?.initialSelections,
       message: modelPrompt?.message,

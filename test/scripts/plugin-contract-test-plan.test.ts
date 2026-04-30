@@ -1,4 +1,4 @@
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { createPluginContractTestShards } from "../../scripts/lib/plugin-contract-test-plan.mjs";
@@ -27,6 +27,18 @@ function listContractTests(rootDir = "src/plugins/contracts"): string[] {
 }
 
 describe("scripts/lib/plugin-contract-test-plan.mjs", () => {
+  it("keeps manual CI compatible with legacy target refs", () => {
+    const workflow = readFileSync(".github/workflows/ci.yml", "utf8");
+
+    expect(workflow).toContain(
+      'await import(\n            "./scripts/lib/plugin-contract-test-plan.mjs"',
+    );
+    expect(workflow).toContain("checks-fast-contracts-plugins-legacy");
+    expect(workflow).not.toContain(
+      "createPluginContractTestShards: () => [\n              createPluginContractTestShards",
+    );
+  });
+
   it("splits plugin contracts into focused shards", () => {
     const suffixes = ["a", "b", "c", "d"];
 

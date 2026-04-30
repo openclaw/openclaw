@@ -11,6 +11,7 @@ const ROOT_SECTIONS = [
   "logging",
   "cli",
   "update",
+  "commitments",
   "browser",
   "ui",
   "auth",

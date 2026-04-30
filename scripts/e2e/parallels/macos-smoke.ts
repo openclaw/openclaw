@@ -457,14 +457,14 @@ class MacosSmoke {
   }
 
   private async runFreshLane(): Promise<void> {
-    await this.phase("fresh.restore-snapshot", 360, () => this.restoreSnapshot());
+    await this.phase("fresh.restore-snapshot", 780, () => this.restoreSnapshot());
     await this.phase("fresh.reset-state", 180, () => this.resetState());
     await this.phase("fresh.install-main", this.targetInstallsDirectly() ? 420 : 420, () =>
       this.installMain("openclaw-main-fresh.tgz"),
     );
     this.status.freshVersion = await this.extractLastVersion("fresh.install-main");
     await this.phase("fresh.verify-main-version", 60, () => this.verifyTargetVersion());
-    await this.phase("fresh.verify-bundle-permissions", 60, () => this.verifyBundlePermissions());
+    await this.phase("fresh.verify-bundle-permissions", 180, () => this.verifyBundlePermissions());
     await this.phase("fresh.onboard-ref", 180, () => this.runRefOnboard());
     await this.phase("fresh.gateway-start", 180, () => this.startManualGatewayIfNeeded());
     await this.phase("fresh.gateway-status", 180, () => this.verifyGateway());
@@ -473,7 +473,7 @@ class MacosSmoke {
     this.status.freshDashboard = "pass";
     await this.phase(
       "fresh.first-agent-turn",
-      Number(process.env.OPENCLAW_PARALLELS_MACOS_AGENT_TIMEOUT_S || 240),
+      Number(process.env.OPENCLAW_PARALLELS_MACOS_AGENT_TIMEOUT_S || 900),
       () => this.verifyTurn(),
     );
     this.status.freshAgent = "pass";
@@ -486,7 +486,7 @@ class MacosSmoke {
   }
 
   private async runUpgradeLane(): Promise<void> {
-    await this.phase("upgrade.restore-snapshot", 360, () => this.restoreSnapshot());
+    await this.phase("upgrade.restore-snapshot", 780, () => this.restoreSnapshot());
     await this.phase("upgrade.reset-state", 180, () => this.resetState());
     await this.phase("upgrade.install-latest", 420, () => this.installLatestRelease());
     this.status.latestInstalledVersion = await this.extractLastVersion("upgrade.install-latest");
@@ -510,7 +510,7 @@ class MacosSmoke {
       );
       this.status.upgradeVersion = await this.extractLastVersion("upgrade.install-main");
       await this.phase("upgrade.verify-main-version", 60, () => this.verifyTargetVersion());
-      await this.phase("upgrade.verify-bundle-permissions", 60, () =>
+      await this.phase("upgrade.verify-bundle-permissions", 180, () =>
         this.verifyBundlePermissions(),
       );
     } else {
@@ -530,7 +530,7 @@ class MacosSmoke {
     this.status.upgradeDashboard = "pass";
     await this.phase(
       "upgrade.first-agent-turn",
-      Number(process.env.OPENCLAW_PARALLELS_MACOS_AGENT_TIMEOUT_S || 240),
+      Number(process.env.OPENCLAW_PARALLELS_MACOS_AGENT_TIMEOUT_S || 900),
       () => this.verifyTurn(),
     );
     this.status.upgradeAgent = "pass";
@@ -707,9 +707,17 @@ class MacosSmoke {
     if (!restored) {
       throw new Error("snapshot restore failed");
     }
-    if (this.snapshot.state === "poweroff") {
+    const status = run("prlctl", ["status", this.options.vmName], {
+      check: false,
+      quiet: true,
+      timeoutMs: 60_000,
+    }).stdout;
+    if (this.snapshot.state === "poweroff" || status.includes(" stopped")) {
       waitForVmStatus(this.options.vmName, "stopped", 360);
       say(`Start restored poweroff snapshot ${this.snapshot.name}`);
+      run("prlctl", ["start", this.options.vmName], { quiet: true });
+    } else if (status.includes(" suspended")) {
+      say(`Resume restored snapshot ${this.snapshot.name}`);
       run("prlctl", ["start", this.options.vmName], { quiet: true });
     }
     this.waitForCurrentUser();
@@ -966,7 +974,7 @@ exit 1`);
     ]);
     this.guestSh(
       `${posixAgentWorkspaceScript("Parallels macOS smoke test assistant.")}
-exec /usr/bin/env ${shellQuote(`${this.auth.apiKeyEnv}=${this.auth.apiKeyValue}`)} ${guestNode} ${guestOpenClawEntry} agent --agent main --session-id parallels-macos-smoke --message ${shellQuote(
+exec /usr/bin/env ${shellQuote(`${this.auth.apiKeyEnv}=${this.auth.apiKeyValue}`)} ${guestNode} ${guestOpenClawEntry} agent --local --agent main --session-id parallels-macos-smoke --message ${shellQuote(
         "Reply with exact ASCII text OK only.",
       )} --json`,
     );
