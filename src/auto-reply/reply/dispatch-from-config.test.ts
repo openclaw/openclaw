@@ -4427,6 +4427,77 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     );
   });
 
+  it("falls back when group-scoped tool policy removes the message tool", async () => {
+    setNoAbort();
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      expect(opts?.sourceReplyDeliveryMode).toBe("automatic");
+      return { text: "group policy fallback" } satisfies ReplyPayload;
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        ChatType: "channel",
+        Provider: "discord",
+        Surface: "discord",
+        SessionKey: "agent:main:discord:group:C1",
+      }),
+      cfg: {
+        channels: {
+          discord: {
+            groups: {
+              C1: { tools: { allow: ["read"] } },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    expect(replyResolver).toHaveBeenCalledTimes(1);
+    expect(result.queuedFinal).toBe(true);
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "group policy fallback" }),
+    );
+  });
+
+  it("falls back when sandbox tool policy removes the message tool", async () => {
+    setNoAbort();
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      expect(opts?.sourceReplyDeliveryMode).toBe("automatic");
+      return { text: "sandbox policy fallback" } satisfies ReplyPayload;
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        ChatType: "channel",
+        SessionKey: "agent:main:discord:group:C1",
+      }),
+      cfg: {
+        agents: {
+          defaults: {
+            sandbox: { mode: "all" },
+          },
+        },
+        tools: {
+          sandbox: {
+            tools: { allow: ["read"] },
+          },
+        },
+      } as OpenClawConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    expect(replyResolver).toHaveBeenCalledTimes(1);
+    expect(result.queuedFinal).toBe(true);
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "sandbox policy fallback" }),
+    );
+  });
+
   it("falls back when a channel precomputed message-tool-only delivery but the message tool is unavailable", async () => {
     setNoAbort();
     const dispatcher = createDispatcher();
