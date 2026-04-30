@@ -300,24 +300,6 @@ function readProviderKey(config: OpenClawConfig, provider: ProviderUnderTest): u
   return pluginConfig?.webSearch?.apiKey;
 }
 
-function expectInactiveWebFetchProviderSecretRef(params: {
-  resolveSpy: ReturnType<typeof vi.spyOn>;
-  metadata: Awaited<ReturnType<typeof runRuntimeWebTools>>["metadata"];
-  context: Awaited<ReturnType<typeof runRuntimeWebTools>>["context"];
-}) {
-  expect(params.resolveSpy).not.toHaveBeenCalled();
-  expect(params.metadata.fetch.selectedProvider).toBeUndefined();
-  expect(params.metadata.fetch.selectedProviderKeySource).toBeUndefined();
-  expect(params.context.warnings).toEqual(
-    expect.arrayContaining([
-      expect.objectContaining({
-        code: "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
-        path: "plugins.entries.firecrawl.config.webFetch.apiKey",
-      }),
-    ]),
-  );
-}
-
 describe("runtime web tools resolution", () => {
   beforeAll(async () => {
     secretResolve = await import("./resolve.js");
