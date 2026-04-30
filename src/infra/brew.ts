@@ -20,6 +20,20 @@ type BrewResolutionOptions = {
   env?: NodeJS.ProcessEnv;
 };
 
+function resolveBrewFromPath(pathEnv = process.env.PATH): string | undefined {
+  for (const dir of (pathEnv ?? "").split(path.delimiter)) {
+    const trimmed = dir.trim();
+    if (!trimmed || !path.isAbsolute(trimmed)) {
+      continue;
+    }
+    const candidate = path.join(trimmed, "brew");
+    if (isExecutable(candidate)) {
+      return candidate;
+    }
+  }
+  return undefined;
+}
+
 export function resolveBrewPathDirs(opts?: BrewResolutionOptions): string[] {
   const homeDir = opts?.homeDir ?? os.homedir();
 
@@ -38,6 +52,11 @@ export function resolveBrewPathDirs(opts?: BrewResolutionOptions): string[] {
 
 export function resolveBrewExecutable(opts?: BrewResolutionOptions): string | undefined {
   const homeDir = opts?.homeDir ?? os.homedir();
+
+  const pathBrew = resolveBrewFromPath();
+  if (pathBrew) {
+    return pathBrew;
+  }
 
   const candidates: string[] = [];
 
