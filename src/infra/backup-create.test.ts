@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import * as tar from "tar";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { backupVerifyCommand } from "../commands/backup-verify.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -11,6 +11,13 @@ import {
   formatBackupCreateSummary,
   type BackupCreateResult,
 } from "./backup-create.js";
+
+const tmpDirMocks = vi.hoisted(() => ({
+  resolvePreferredOpenClawTmpDir: vi.fn<() => string>(),
+}));
+vi.mock("./tmp-openclaw-dir.js", () => ({
+  resolvePreferredOpenClawTmpDir: tmpDirMocks.resolvePreferredOpenClawTmpDir,
+}));
 
 function makeResult(overrides: Partial<BackupCreateResult> = {}): BackupCreateResult {
   return {
@@ -131,6 +138,15 @@ describe("buildExtensionsNodeModulesFilter", () => {
 });
 
 describe("createBackupArchive", () => {
+  beforeEach(async () => {
+    // Default: resolve to the real preferred tmp dir so non-containment tests work normally.
+    const real =
+      await vi.importActual<typeof import("./tmp-openclaw-dir.js")>("./tmp-openclaw-dir.js");
+    tmpDirMocks.resolvePreferredOpenClawTmpDir.mockImplementation(
+      real.resolvePreferredOpenClawTmpDir,
+    );
+  });
+
   it("omits installed plugin node_modules from the real archive while keeping plugin files", async () => {
     await withOpenClawTestState(
       {
@@ -196,38 +212,30 @@ describe("createBackupArchive", () => {
     );
   });
 
-  it("does not include duplicate manifest.json when TMPDIR is inside the state directory", async () => {
-    // Regression for openclaw/openclaw#75007: when the LaunchAgent sets TMPDIR=~/.openclaw/tmp
-    // (which is inside the state dir), backup-create used os.tmpdir() for the temp dir, causing
-    // tar to pick up the temp manifest.json as part of the payload AND as an explicit entry.
-    // Fix: use resolvePreferredOpenClawTmpDir() which always returns a path outside the payload.
+  it("does not include duplicate manifest.json when preferred temp root is inside the state directory", async () => {
+    // Regression for openclaw/openclaw#75007: when resolvePreferredOpenClawTmpDir() returns a
+    // path inside the backup payload (e.g. its fallback resolves under ~/.openclaw/tmp due to
+    // TMPDIR env), the containment guard must switch to os.tmpdir() so the staging dir stays
+    // outside the archived sources and manifest.json is not packed twice.
     await withOpenClawTestState(
       { layout: "state-only", prefix: "openclaw-backup-tmpdir-", scenario: "minimal" },
       async (state) => {
         const outputDir = state.path("backups");
         await fs.mkdir(outputDir, { recursive: true });
 
-        // Simulate TMPDIR pointing inside the state dir — the bug scenario.
+        // Force resolvePreferredOpenClawTmpDir to return a path inside the state dir payload.
         const fakeInternalTmpDir = state.path("tmp");
         await fs.mkdir(fakeInternalTmpDir, { recursive: true });
-        const origTmpdir = process.env["TMPDIR"];
-        process.env["TMPDIR"] = fakeInternalTmpDir;
-        try {
-          const result = await createBackupArchive({
-            output: outputDir,
-            includeWorkspace: false,
-            nowMs: Date.UTC(2026, 3, 30, 12, 0, 0),
-          });
-          const entries = await listArchiveEntries(result.archivePath);
-          const manifestEntries = entries.filter((e) => e.endsWith("manifest.json"));
-          expect(manifestEntries).toHaveLength(1);
-        } finally {
-          if (origTmpdir === undefined) {
-            delete process.env["TMPDIR"];
-          } else {
-            process.env["TMPDIR"] = origTmpdir;
-          }
-        }
+        tmpDirMocks.resolvePreferredOpenClawTmpDir.mockReturnValue(fakeInternalTmpDir);
+
+        const result = await createBackupArchive({
+          output: outputDir,
+          includeWorkspace: false,
+          nowMs: Date.UTC(2026, 3, 30, 12, 0, 0),
+        });
+        const entries = await listArchiveEntries(result.archivePath);
+        const manifestEntries = entries.filter((e) => e.endsWith("manifest.json"));
+        expect(manifestEntries).toHaveLength(1);
       },
     );
   });

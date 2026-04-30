@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import {
   buildBackupArchiveBasename,
@@ -295,6 +296,17 @@ export function buildExtensionsNodeModulesFilter(stateDir: string): (filePath: s
   };
 }
 
+function resolveSafeBackupTempRoot(assets: readonly BackupAsset[]): string {
+  const preferred = resolvePreferredOpenClawTmpDir();
+  const insidePayload = assets.some((asset) => isPathWithin(preferred, asset.sourcePath));
+  if (!insidePayload) {
+    return preferred;
+  }
+  // Fallback: preferred temp root is inside a backup source (e.g. TMPDIR=~/.openclaw/tmp).
+  // Use the system temp dir directly to keep staging outside the archived payload.
+  return os.tmpdir();
+}
+
 export async function createBackupArchive(
   opts: BackupCreateOptions = {},
 ): Promise<BackupCreateResult> {
@@ -350,7 +362,8 @@ export async function createBackupArchive(
   }
 
   await fs.mkdir(path.dirname(outputPath), { recursive: true });
-  const tempDir = await fs.mkdtemp(path.join(resolvePreferredOpenClawTmpDir(), "openclaw-backup-"));
+  const tempRoot = resolveSafeBackupTempRoot(result.assets);
+  const tempDir = await fs.mkdtemp(path.join(tempRoot, "openclaw-backup-"));
   const manifestPath = path.join(tempDir, "manifest.json");
   const tempArchivePath = buildTempArchivePath(outputPath);
   try {
