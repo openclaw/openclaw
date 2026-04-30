@@ -1101,6 +1101,19 @@ describe("short-term promotion", () => {
     ).toBe(false);
   });
 
+  it("treats Light Sleep theme echoes as contaminated even without status/recalls", () => {
+    expect(
+      __testing.isContaminatedDreamingSnippet(
+        "Candidate: Reflections: Theme: `memory/2026-04-13.md` kept surfacing across 271 memories.; confidence: 1.00; evidence: memory/2026-04-13.md:73-76, memory/2026-04-13.md:53-56; note: reflection",
+      ),
+    ).toBe(true);
+    expect(
+      __testing.isContaminatedDreamingSnippet(
+        "Reflections: Theme: `kept` kept surfacing across 64 memories.",
+      ),
+    ).toBe(true);
+  });
+
   it("treats transcript-style dreaming prompt echoes as contaminated", () => {
     expect(
       __testing.isContaminatedDreamingSnippet(

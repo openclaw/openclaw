@@ -40,6 +40,13 @@ const PHASE_SIGNAL_HALF_LIFE_DAYS = 14;
 const DREAMING_TRANSCRIPT_PROMPT_LINE_RE =
   /\[[^\]]*dreaming-narrative[^\]]*]\s*(?:User|Assistant):\s*Write a dream diary entry from these memory fragments:?/i;
 const DREAMING_DIFF_PREFIX_RE = /@@\s*-\d+(?:,\d+)?\s+[-*+]\s+/iy;
+// Light Sleep and Deep Sleep phases write `- Theme: \`X\` kept surfacing across
+// N memories.` lines into daily notes. Without filtering, the next dreaming
+// cycle re-ingests those rows as fresh candidates and promotes them again,
+// growing a self-referential feedback loop in MEMORY.md. Match the unique
+// "kept surfacing across N memories" signature so we can drop them even when
+// the snippet does not yet carry a status:staged or recalls field.
+const DREAMING_THEME_SIGNATURE_RE = /\bkept surfacing across\s+\d+\s+memor(?:y|ies)\b/i;
 const inProcessShortTermLocks = new Map<string, Promise<void>>();
 const ensuredShortTermDirs = new Map<string, Promise<void>>();
 
@@ -285,6 +292,9 @@ function isContaminatedDreamingSnippet(raw: string): boolean {
   }
 
   const hasNarrativeLead = hasDreamingNarrativeLead(snippet);
+  if (hasNarrativeLead && DREAMING_THEME_SIGNATURE_RE.test(snippet)) {
+    return true;
+  }
   const hasConfidence = /\bconfidence:\s*\d/i.test(snippet);
   const hasEvidence = /\bevidence:\s*(?:memory\/\.dreams\/session-corpus\/|memory\/)/i.test(
     snippet,
