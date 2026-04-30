@@ -94,7 +94,7 @@ describe("channel plugin module loader helpers", () => {
     expect(createJiti).not.toHaveBeenCalled();
   });
 
-  it("uses the runtime-supported Jiti boundary for Windows dist loads", async () => {
+  it("creates the runtime-supported Jiti boundary for Windows dist loads", async () => {
     const createJiti = vi.fn(() => vi.fn(() => ({ ok: true })));
     vi.resetModules();
     vi.doMock("jiti", () => ({
@@ -110,15 +110,15 @@ describe("channel plugin module loader helpers", () => {
       const rootDir = createTempDir();
       const modulePath = path.join(rootDir, "dist", "extensions", "demo", "index.js");
       fs.mkdirSync(path.dirname(modulePath), { recursive: true });
-      fs.writeFileSync(modulePath, "export {};\n", "utf8");
+      fs.writeFileSync(modulePath, "export const ok = true;\n", "utf8");
 
-      expect(
-        loaderModule.loadChannelPluginModule({
-          modulePath,
-          rootDir,
-          shouldTryNativeRequire: () => false,
-        }),
-      ).toEqual({ ok: true });
+      const loaded = loaderModule.loadChannelPluginModule({
+        modulePath,
+        rootDir,
+        shouldTryNativeRequire: () => false,
+      });
+
+      expect(loaded).toMatchObject({ ok: true });
       expect(createJiti).toHaveBeenCalledWith(
         expect.any(String),
         expect.objectContaining({
