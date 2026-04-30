@@ -95,6 +95,46 @@ export function assertPathIsNotSymlink(targetPath, label) {
   }
 }
 
+function isPathInside(parentPath, childPath) {
+  const relativePath = path.relative(parentPath, childPath);
+  return (
+    relativePath.length > 0 && !relativePath.startsWith("..") && !path.isAbsolute(relativePath)
+  );
+}
+
+export function removeLegacyBundledRuntimeDepsSymlink(targetPath, repoRoot) {
+  let stats;
+  try {
+    stats = fs.lstatSync(targetPath);
+  } catch (error) {
+    if (error?.code === "ENOENT") {
+      return false;
+    }
+    throw error;
+  }
+  if (!stats.isSymbolicLink()) {
+    return false;
+  }
+
+  const legacyRuntimeDepsRoot = path.resolve(repoRoot, ".local", "bundled-plugin-runtime-deps");
+  let linkedPath;
+  try {
+    linkedPath = fs.readlinkSync(targetPath);
+  } catch {
+    return false;
+  }
+  const resolvedLinkedPath = path.resolve(path.dirname(targetPath), linkedPath);
+  if (
+    path.basename(resolvedLinkedPath) !== "node_modules" ||
+    !isPathInside(legacyRuntimeDepsRoot, resolvedLinkedPath)
+  ) {
+    return false;
+  }
+
+  removePathIfExists(targetPath);
+  return true;
+}
+
 export function replaceDirAtomically(targetPath, sourcePath) {
   assertPathIsNotSymlink(targetPath, "replace runtime deps");
   const targetParentDir = path.dirname(targetPath);
