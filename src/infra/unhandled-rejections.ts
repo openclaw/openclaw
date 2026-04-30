@@ -122,6 +122,7 @@ const TRANSIENT_NETWORK_MESSAGE_SNIPPETS = [
   "ssl routines",
   "packet length too long",
   "write eproto",
+  "ciao probing cancelled",
 ];
 
 const TRANSIENT_SQLITE_MESSAGE_SNIPPETS = [
