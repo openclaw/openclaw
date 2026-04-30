@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createCliProgress } from "./progress.js";
+import { createCliProgress, shouldUseInteractiveProgressSpinner } from "./progress.js";
 
 describe("cli progress", () => {
   it("logs progress when non-tty and fallback=log", () => {
@@ -42,5 +42,23 @@ describe("cli progress", () => {
     progress.done();
 
     expect(write).not.toHaveBeenCalled();
+  });
+
+  it("does not use readline-backed spinners while raw TUI input is active", () => {
+    expect(
+      shouldUseInteractiveProgressSpinner({
+        streamIsTty: true,
+        stdinIsRaw: true,
+      }),
+    ).toBe(false);
+  });
+
+  it("keeps the normal interactive spinner for regular tty commands", () => {
+    expect(
+      shouldUseInteractiveProgressSpinner({
+        streamIsTty: true,
+        stdinIsRaw: false,
+      }),
+    ).toBe(true);
   });
 });

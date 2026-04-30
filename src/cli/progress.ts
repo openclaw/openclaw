@@ -33,6 +33,15 @@ export type ProgressTotalsUpdate = {
   label?: string;
 };
 
+export function shouldUseInteractiveProgressSpinner(params: {
+  fallback?: ProgressOptions["fallback"];
+  streamIsTty?: boolean;
+  stdinIsRaw?: boolean;
+}): boolean {
+  const spinnerRequested = params.fallback === undefined || params.fallback === "spinner";
+  return spinnerRequested && params.streamIsTty === true && params.stdinIsRaw !== true;
+}
+
 const noopReporter: ProgressReporter = {
   setLabel: () => {},
   setPercent: () => {},
@@ -57,7 +66,11 @@ export function createCliProgress(options: ProgressOptions): ProgressReporter {
 
   const delayMs = typeof options.delayMs === "number" ? options.delayMs : DEFAULT_DELAY_MS;
   const canOsc = isTty && supportsOscProgress(process.env, isTty);
-  const allowSpinner = isTty && (options.fallback === undefined || options.fallback === "spinner");
+  const allowSpinner = shouldUseInteractiveProgressSpinner({
+    fallback: options.fallback,
+    streamIsTty: isTty,
+    stdinIsRaw: process.stdin.isRaw,
+  });
   const allowLine = isTty && options.fallback === "line";
 
   let started = false;
