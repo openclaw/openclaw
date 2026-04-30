@@ -321,7 +321,7 @@ describe("runCapability proxy fetch passthrough", () => {
     expect(seenRequest?.allowPrivateNetwork).toBe(true);
   });
 
-  it("uses synthetic local auth for loopback audio without resolving provider credentials", async () => {
+  it("uses synthetic local auth for RFC1918 audio without resolving provider credentials", async () => {
     const modelAuth = await import("../agents/model-auth.js");
 
     let seenApiKey: string | undefined;
@@ -352,14 +352,11 @@ describe("runCapability proxy fetch passthrough", () => {
             media: {
               audio: {
                 enabled: true,
-                request: {
-                  allowPrivateNetwork: true,
-                },
                 models: [
                   {
                     provider: "openai",
                     model: "whisper-1",
-                    baseUrl: "http://127.0.0.1:8000/v1",
+                    baseUrl: "http://192.168.1.100:8000/v1",
                   },
                 ],
               },
