@@ -4,6 +4,7 @@ Docs: https://docs.openclaw.ai
 
 ## Unreleased
 
+
 ### Highlights
 
 - Google Meet/Voice Call: make Twilio dial-in joins speak through the realtime Gemini voice bridge with paced audio streaming, backpressure-aware buffering, barge-in queue clearing, and no TwiML fallback during realtime speech, giving Meet participants a much snappier OpenClaw voice agent. (#77064) Thanks @scoootscooob.
@@ -60,6 +61,9 @@ Docs: https://docs.openclaw.ai
 - Plugins/ClawHub: annotate 429 errors from ClawHub with the reset window from `RateLimit-Reset`/`Retry-After` and append a `Sign in for higher rate limits.` hint when the request was unauthenticated, so users can see when downloads will recover and how to lift the cap. Thanks @romneyda.
 - Plugins/runtime state: add `registerIfAbsent` for atomic keyed-store dedupe claims that return whether a plugin successfully claimed a key without overwriting an existing live value. Thanks @amknight.
 - Plugin SDK: add plugin-owned `SessionEntry` slot projection and scoped trusted-policy session extension reads. (#75609; replaces part of #73384/#74483) Thanks @100yenadmin.
+
+
+- Infra: add root-scoped fs-safe stat, directory-list, and rename helpers with pinned directory-parent handling for future file operations. (#73442) Thanks @jesse-merhi.
 
 ### Fixes
 
