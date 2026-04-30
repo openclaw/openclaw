@@ -4,6 +4,10 @@ Docs: https://docs.openclaw.ai
 
 ## Unreleased
 
+### Changes
+
+- Memory/sessions: index growing session transcripts incrementally by reusing unchanged chunk embeddings and only embedding new content, reducing O(n) full reindex overhead for long-running conversations. (#75179) Thanks @wr-web.
+
 ### Fixes
 
 - CLI/progress: suppress nested progress spinners and line clears while TUI input owns raw stdin, so Crestodian `/status` no longer disturbs the active input row. (#75003) Thanks @velvet-shark.

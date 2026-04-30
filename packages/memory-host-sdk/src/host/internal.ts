@@ -47,6 +47,11 @@ export type MemoryChunk = {
   embeddingInput?: EmbeddingInput;
 };
 
+export type ChunkWithOffset = MemoryChunk & {
+  startOffset: number;
+  endOffset: number;
+};
+
 export type MultimodalMemoryChunk = {
   chunk: MemoryChunk;
   structuredInputBytes: number;
@@ -455,6 +460,127 @@ export function chunkMarkdown(
       }
       current.push({ line: segment, lineNo });
       currentChars += lineSize;
+    }
+  }
+  flush();
+  return chunks;
+}
+
+/**
+ * Like chunkMarkdown but also records character offsets for each chunk.
+ * Uses the same weighted sizing and surrogate-safe splitting as chunkMarkdown
+ * so Unicode chunk boundaries stay consistent. Offsets enable incremental
+ * indexing where only new/changed chunks need re-processing.
+ */
+export function chunkMarkdownWithOffset(
+  content: string,
+  chunking: { tokens: number; overlap: number },
+): ChunkWithOffset[] {
+  const lines = content.split("\n");
+  if (lines.length === 0) {
+    return [];
+  }
+  const maxChars = Math.max(32, chunking.tokens * CHARS_PER_TOKEN_ESTIMATE);
+  const overlapChars = Math.max(0, chunking.overlap * CHARS_PER_TOKEN_ESTIMATE);
+  const chunks: ChunkWithOffset[] = [];
+
+  let current: Array<{ line: string; lineNo: number }> = [];
+  let currentChars = 0;
+  let currentRawChars = 0;
+  let charOffset = 0;
+
+  const flush = () => {
+    if (current.length === 0) {
+      return;
+    }
+    const firstEntry = current[0];
+    const lastEntry = current[current.length - 1];
+    if (!firstEntry || !lastEntry) {
+      return;
+    }
+    const text = current.map((entry) => entry.line).join("\n");
+    const startLine = firstEntry.lineNo;
+    const endLine = lastEntry.lineNo;
+    const startOffset = charOffset;
+    const endOffset = charOffset + Math.max(0, currentRawChars - 2);
+    chunks.push({
+      startLine,
+      endLine,
+      text,
+      hash: hashText(text),
+      embeddingInput: buildTextEmbeddingInput(text),
+      startOffset,
+      endOffset,
+    });
+    charOffset += Math.max(0, currentRawChars);
+  };
+
+  const carryOverlap = () => {
+    if (overlapChars <= 0 || current.length === 0) {
+      current = [];
+      currentChars = 0;
+      currentRawChars = 0;
+      return;
+    }
+    let acc = 0;
+    let rawAcc = 0;
+    const kept: Array<{ line: string; lineNo: number }> = [];
+    for (let i = current.length - 1; i >= 0; i -= 1) {
+      const entry = current[i];
+      if (!entry) {
+        continue;
+      }
+      acc += estimateStringChars(entry.line) + 1;
+      rawAcc += entry.line.length + 1;
+      kept.unshift(entry);
+      if (acc >= overlapChars) {
+        break;
+      }
+    }
+    charOffset -= rawAcc;
+    current = kept;
+    currentChars = acc;
+    currentRawChars = rawAcc;
+  };
+
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i] ?? "";
+    const lineNo = i + 1;
+    const segments: string[] = [];
+    if (line.length === 0) {
+      segments.push("");
+    } else {
+      for (let start = 0; start < line.length; start += maxChars) {
+        const coarse = line.slice(start, start + maxChars);
+        if (estimateStringChars(coarse) > maxChars) {
+          const fineStep = Math.max(1, chunking.tokens);
+          for (let j = 0; j < coarse.length; ) {
+            let end = Math.min(j + fineStep, coarse.length);
+            if (end < coarse.length) {
+              const code = coarse.charCodeAt(end - 1);
+              if (code >= 0xd800 && code <= 0xdbff) {
+                end += 1;
+              }
+            }
+            segments.push(coarse.slice(j, end));
+            j = end;
+          }
+        } else {
+          segments.push(coarse);
+        }
+      }
+    }
+    let isFirstSegmentOfLine = true;
+    for (const segment of segments) {
+      const lineSize = estimateStringChars(segment) + 1;
+      if (currentChars + lineSize > maxChars && current.length > 0) {
+        flush();
+        carryOverlap();
+      }
+      current.push({ line: segment, lineNo });
+      currentChars += lineSize;
+      currentRawChars += isFirstSegmentOfLine ? segment.length + 1 : segment.length;
+      isFirstSegmentOfLine = false;
     }
   }
   flush();

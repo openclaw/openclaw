@@ -208,6 +208,11 @@ export abstract class MemoryManagerSyncOps {
     options: { source: MemorySource; content?: string },
   ): Promise<void>;
 
+  protected abstract indexSessionFileIncremental(
+    entry: MemoryIndexEntry & { content: string; lineMap?: number[] },
+    options: { source: MemorySource; content: string },
+  ): Promise<void>;
+
   protected resetVectorState(): void {
     this.vectorReady = null;
     this.vector.available = null;
@@ -881,7 +886,14 @@ export abstract class MemoryManagerSyncOps {
         this.resetSessionDelta(absPath, entry.size);
         return;
       }
-      await this.indexFile(entry, { source: "sessions", content: entry.content });
+      if (params.needsFullReindex) {
+        await this.indexFile(entry, { source: "sessions", content: entry.content });
+      } else {
+        await this.indexSessionFileIncremental(entry, {
+          source: "sessions",
+          content: entry.content,
+        });
+      }
       this.resetSessionDelta(absPath, entry.size);
       if (params.progress) {
         params.progress.completed += 1;

@@ -3,8 +3,18 @@ import { hasNonTextEmbeddingParts } from "./embedding-inputs.js";
 import { resolveEmbeddingMaxInputTokens } from "./embedding-model-limits.js";
 import type { EmbeddingProvider } from "./embeddings.js";
 import { hashText } from "./hash.js";
-import type { MemoryChunk } from "./internal.js";
+import type { ChunkWithOffset, MemoryChunk } from "./internal.js";
 
+export function enforceEmbeddingMaxInputTokens(
+  provider: EmbeddingProvider,
+  chunks: ChunkWithOffset[],
+  hardMaxInputTokens?: number,
+): ChunkWithOffset[];
+export function enforceEmbeddingMaxInputTokens(
+  provider: EmbeddingProvider,
+  chunks: MemoryChunk[],
+  hardMaxInputTokens?: number,
+): MemoryChunk[];
 export function enforceEmbeddingMaxInputTokens(
   provider: EmbeddingProvider,
   chunks: MemoryChunk[],
@@ -27,14 +37,24 @@ export function enforceEmbeddingMaxInputTokens(
       continue;
     }
 
+    const hasOffset = "startOffset" in chunk && "endOffset" in chunk;
+    let offsetCursor = hasOffset
+      ? (chunk as unknown as ChunkWithOffset).startOffset
+      : 0;
     for (const text of splitTextToUtf8ByteLimit(chunk.text, maxInputTokens)) {
-      out.push({
+      const splitChunk: MemoryChunk = {
         startLine: chunk.startLine,
         endLine: chunk.endLine,
         text,
         hash: hashText(text),
         embeddingInput: { text },
-      });
+      };
+      if (hasOffset) {
+        (splitChunk as ChunkWithOffset).startOffset = offsetCursor;
+        (splitChunk as ChunkWithOffset).endOffset = offsetCursor + text.length - 1;
+      }
+      offsetCursor += text.length;
+      out.push(splitChunk);
     }
   }
 
