@@ -5025,6 +5025,21 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     description:
                       "Quality-audit retry settings for safeguard compaction summaries. Safeguard mode enables this by default; set enabled: false to skip summary audits and regeneration.",
                   },
+                  midTurnPrecheck: {
+                    type: "object",
+                    properties: {
+                      enabled: {
+                        type: "boolean",
+                        title: "Compaction Mid-turn Precheck Enabled",
+                        description:
+                          "Enable structured mid-turn context pressure checks for Pi tool loops. Default: false. Keep disabled unless long tool-heavy sessions hit context overflow before normal turn-end compaction can run.",
+                      },
+                    },
+                    additionalProperties: false,
+                    title: "Compaction Mid-turn Precheck",
+                    description:
+                      "Optional Pi tool-loop precheck that detects context pressure after a tool result is appended and before the next model call. When enabled, OpenClaw reuses existing precheck recovery to truncate tool results or compact before retrying.",
+                  },
                   postIndexSync: {
                     type: "string",
                     enum: ["off", "async", "await"],
@@ -27250,6 +27265,16 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Compaction Quality Guard Max Retries",
       help: "Maximum number of regeneration retries after a failed safeguard summary quality audit. Use small values to bound extra latency and token cost.",
       tags: ["performance"],
+    },
+    "agents.defaults.compaction.midTurnPrecheck": {
+      label: "Compaction Mid-turn Precheck",
+      help: "Optional Pi tool-loop precheck that detects context pressure after a tool result is appended and before the next model call. When enabled, OpenClaw reuses existing precheck recovery to truncate tool results or compact before retrying.",
+      tags: ["advanced"],
+    },
+    "agents.defaults.compaction.midTurnPrecheck.enabled": {
+      label: "Compaction Mid-turn Precheck Enabled",
+      help: "Enable structured mid-turn context pressure checks for Pi tool loops. Default: false. Keep disabled unless long tool-heavy sessions hit context overflow before normal turn-end compaction can run.",
+      tags: ["advanced"],
     },
     "agents.defaults.compaction.postIndexSync": {
       label: "Compaction Post-Index Sync",
