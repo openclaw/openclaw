@@ -32,6 +32,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Feishu/Bitable: clean up newly created placeholder rows whose fields contain only default empty values while preserving meaningful link, attachment, user, number, boolean, and location values during create-app cleanup. (#73920) Carries forward #40602. Thanks @boat2moon.
+- macOS app: keep attach-only mode and the Debug Settings launchd toggle marker-only, so launching with `--attach-only`/`--no-launchd` no longer uninstalls the Gateway LaunchAgent or drops active sessions. (#72174) Thanks @DolencLuka.
 - Bonjour/Gateway: cap flapping advertiser restarts in a sliding window, so mDNS probing/name-conflict loops disable discovery instead of churning indefinitely on constrained hosts. Refs #74209 and #74242. Thanks @ndj888 and @Sanjays2402.
 - Plugins/runtime-deps: verify staged package entry files before reusing mirrored runtime roots, so browser-control repairs incomplete `ajv`/MCP SDK installs after update instead of failing after restart on a missing `ajv/dist/ajv.js`. Refs #74630. Thanks @spickeringlr.
 - Heartbeat: resolve `responsePrefix` template variables with the selected provider, model, and thinking context before delivering alerts or suppressing prefixed `HEARTBEAT_OK` replies. Fixes #43064; repairs #43065; supersedes #46858. Thanks @yweiii and @JunJD.
