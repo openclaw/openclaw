@@ -21,6 +21,7 @@ import {
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
 import {
   type AuthProfileStore,
+  externalCliDiscoveryForProviderAuth,
   ensureAuthProfileStore,
   listProfilesForProvider,
   resolveApiKeyForProfile,
@@ -496,14 +497,8 @@ function resolveScopedAuthProfileStore(params: {
   profileId?: string;
   preferredProfile?: string;
 }): AuthProfileStore {
-  const profileIds = [params.profileId, params.preferredProfile]
-    .map((value) => value?.trim())
-    .filter((value): value is string => Boolean(value));
   return ensureAuthProfileStore(params.agentDir, {
-    allowKeychainPrompt: false,
-    config: params.cfg,
-    externalCliProviderIds: [params.provider],
-    ...(profileIds.length > 0 ? { externalCliProfileIds: profileIds } : {}),
+    externalCli: externalCliDiscoveryForProviderAuth(params),
   });
 }
 
