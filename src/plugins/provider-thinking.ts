@@ -1,4 +1,9 @@
 import { normalizeProviderId } from "../agents/provider-id.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
+import { listBundledPluginMetadata } from "./bundled-plugin-metadata.js";
 import type {
   ProviderDefaultThinkingPolicyContext,
   ProviderThinkingProfile,
@@ -8,6 +13,7 @@ import type {
 type ThinkingProviderPlugin = {
   id: string;
   aliases?: string[];
+  hookAliases?: string[];
   isBinaryThinking?: (ctx: ProviderThinkingPolicyContext) => boolean | undefined;
   supportsXHighThinking?: (ctx: ProviderThinkingPolicyContext) => boolean | undefined;
   resolveThinkingProfile?: (
@@ -18,7 +24,13 @@ type ThinkingProviderPlugin = {
   ) => "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive" | null | undefined;
 };
 
+type BundledThinkingCompat = {
+  supportedReasoningEfforts?: readonly string[];
+};
+
 const PLUGIN_REGISTRY_STATE = Symbol.for("openclaw.pluginRegistryState");
+
+const runtimeThinkingCompatCache = new Map<string, BundledThinkingCompat | null>();
 
 type ThinkingRegistryState = {
   activeRegistry?: {
@@ -36,7 +48,9 @@ function matchesProviderId(provider: ThinkingProviderPlugin, providerId: string)
   if (normalizeProviderId(provider.id) === normalized) {
     return true;
   }
-  return (provider.aliases ?? []).some((alias) => normalizeProviderId(alias) === normalized);
+  return [...(provider.aliases ?? []), ...(provider.hookAliases ?? [])].some(
+    (alias) => normalizeProviderId(alias) === normalized,
+  );
 }
 
 function resolveActiveThinkingProvider(providerId: string): ThinkingProviderPlugin | undefined {
@@ -52,6 +66,51 @@ function resolveActiveThinkingProvider(providerId: string): ThinkingProviderPlug
   return undefined;
 }
 
+function findBundledThinkingCompat(
+  providerId: string,
+  modelId: string,
+): BundledThinkingCompat | null {
+  const normalizedProviderId = normalizeProviderId(providerId);
+  const normalizedModelId = normalizeOptionalLowercaseString(modelId);
+  if (!normalizedProviderId || !normalizedModelId) {
+    return null;
+  }
+
+  const cacheKey = `${normalizedProviderId}\u0000${normalizedModelId}`;
+  const cached = runtimeThinkingCompatCache.get(cacheKey);
+  if (cached !== undefined) {
+    return cached;
+  }
+
+  for (const entry of listBundledPluginMetadata({ includeChannelConfigs: false })) {
+    const providerCatalog = entry.manifest.modelCatalog?.providers?.[normalizedProviderId];
+    const models = providerCatalog?.models;
+    if (!Array.isArray(models)) {
+      continue;
+    }
+    const match = models.find((model) => {
+      const candidateId = normalizeOptionalLowercaseString(
+        typeof model?.id === "string" ? model.id : undefined,
+      );
+      return candidateId === normalizedModelId;
+    }) as { compat?: BundledThinkingCompat } | undefined;
+    const compat = match?.compat ?? null;
+    runtimeThinkingCompatCache.set(cacheKey, compat);
+    return compat;
+  }
+
+  runtimeThinkingCompatCache.set(cacheKey, null);
+  return null;
+}
+
+function resetBundledThinkingCompatCacheForTest(): void {
+  runtimeThinkingCompatCache.clear();
+}
+
+export const __testing = {
+  resetBundledThinkingCompatCacheForTest,
+} as const;
+
 type ThinkingHookParams<TContext> = {
   provider: string;
   context: TContext;
@@ -66,7 +125,16 @@ export function resolveProviderBinaryThinking(
 export function resolveProviderXHighThinking(
   params: ThinkingHookParams<ProviderThinkingPolicyContext>,
 ) {
-  return resolveActiveThinkingProvider(params.provider)?.supportsXHighThinking?.(params.context);
+  const runtime = resolveActiveThinkingProvider(params.provider)?.supportsXHighThinking?.(params.context);
+  if (runtime !== undefined) {
+    return runtime;
+  }
+  const compat = findBundledThinkingCompat(params.provider, params.context.modelId);
+  return compat?.supportedReasoningEfforts?.some(
+    (effort) => normalizeOptionalString(effort)?.toLowerCase() === "xhigh",
+  )
+    ? true
+    : undefined;
 }
 
 export function resolveProviderThinkingProfile(
