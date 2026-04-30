@@ -3,7 +3,7 @@
 - Problem: OpenClaw lacks a Cursor SDK agent backend — users cannot delegate tasks to Cursor's local or cloud agent runtimes.
 - Why it matters: The Cursor SDK (`@cursor/sdk`) provides a TypeScript-native interface for Cursor agents with local and cloud execution modes, expanding the agent backend ecosystem alongside Claude CLI and Codex CLI.
 - What changed: Added `cursor-sdk` as a core provider with `runCursorSdkAgent()`, typed config (`CursorSdkBackendConfig`), Zod validation, `CURSOR_API_KEY` env resolution, dispatch branches in all three execution paths (chat reply, agent command, cron), and SDK-aware error classification (`AuthenticationError` → auth, `RateLimitError` → rate_limit).
-- What did NOT change (scope boundary): No existing providers, CLI backends, embedded Pi runner, auth profiles, or plugin system were modified. The auth integration uses the env-var pipeline only; a full onboarding wizard plugin is out of scope for this PR.
+- What did NOT change (scope boundary): No existing providers, CLI backends, embedded Pi runner, auth profiles, or plugin system were modified. The auth integration uses the env-var pipeline only; a full onboarding wizard plugin is out of scope for this PR. The Cursor SDK agent already has its full built-in harness (codebase indexing, file editing, terminal, MCP servers, subagents) — same as how Claude CLI ships with its own tools.
 
 ## Change Type (select all)
 
