@@ -20,6 +20,7 @@ const mocks = vi.hoisted(() => ({
     warn: vi.fn(),
     debug: vi.fn(),
   },
+  isWSL2Sync: vi.fn().mockReturnValue(false),
 }));
 const {
   createService,
@@ -48,6 +49,10 @@ function enableAdvertiserUnitMode(hostname = "test-host") {
   process.env.NODE_ENV = "development";
   vi.spyOn(os, "hostname").mockReturnValue(hostname);
   process.env.OPENCLAW_MDNS_HOSTNAME = hostname;
+  // Clear WSL env vars so tests run consistently regardless of host environment
+  delete process.env.WSL_DISTRO_NAME;
+  delete process.env.WSL_INTEROP;
+  delete process.env.WSLENV;
 }
 
 function mockCiaoService(params?: {
@@ -85,6 +90,14 @@ function mockCiaoService(params?: {
   getResponder.mockReturnValue(params?.responder ?? { createService, shutdown });
   return { advertise, destroy, on };
 }
+
+vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
+  const actual = await vi.importActual("openclaw/plugin-sdk/runtime-env");
+  return {
+    ...actual,
+    isWSL2Sync: mocks.isWSL2Sync,
+  };
+});
 
 vi.mock("@homebridge/ciao", () => {
   return {
@@ -239,7 +252,7 @@ describe("gateway bonjour advertiser", () => {
 
   it("auto-disables Bonjour in WSL2", async () => {
     enableAdvertiserUnitMode();
-    process.env.WSL_DISTRO_NAME = "Ubuntu";
+    mocks.isWSL2Sync.mockReturnValue(true);
 
     const started = await startAdvertiser({
       gatewayPort: 18789,
@@ -249,12 +262,12 @@ describe("gateway bonjour advertiser", () => {
     expect(createService).not.toHaveBeenCalled();
     await expect(started.stop()).resolves.toBeUndefined();
 
-    delete process.env.WSL_DISTRO_NAME;
+    mocks.isWSL2Sync.mockReturnValue(false);
   });
 
   it("honors explicit Bonjour opt-in inside WSL2", async () => {
     enableAdvertiserUnitMode();
-    process.env.WSL_DISTRO_NAME = "Ubuntu";
+    mocks.isWSL2Sync.mockReturnValue(true);
     process.env.OPENCLAW_DISABLE_BONJOUR = "0";
 
     const destroy = vi.fn().mockResolvedValue(undefined);
@@ -270,7 +283,7 @@ describe("gateway bonjour advertiser", () => {
 
     await started.stop();
 
-    delete process.env.WSL_DISTRO_NAME;
+    mocks.isWSL2Sync.mockReturnValue(false);
     delete process.env.OPENCLAW_DISABLE_BONJOUR;
   });
 
