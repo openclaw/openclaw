@@ -28,7 +28,7 @@ Only clients that explicitly call `node.pair.*` use this flow.
 2. The Gateway stores a **pending request** and emits `node.pair.requested`.
 3. You approve or reject the request (CLI or UI).
 4. On approval, the Gateway issues a **new token** (tokens are rotated on re‑pair).
-5. The node reconnects using the token and is now “paired”.
+5. The node reconnects using the token and is now "paired".
 
 Pending requests expire automatically after **5 minutes**.
 
@@ -36,11 +36,11 @@ Pending requests expire automatically after **5 minutes**.
 
 ```bash
 openclaw nodes pending
-openclaw nodes approve <requestId>
-openclaw nodes reject <requestId>
+openclaw nodes approve 
+openclaw nodes reject 
 openclaw nodes status
-openclaw nodes remove --node <id|name|ip>
-openclaw nodes rename --node <id|name|ip> --name "Living Room iPad"
+openclaw nodes remove --node 
+openclaw nodes rename --node  --name "Living Room iPad"
 ```
 
 `nodes status` shows paired/connected nodes and their capabilities.
@@ -118,7 +118,7 @@ The macOS app can optionally attempt a **silent approval** when:
 - the request is marked `silent`, and
 - the app can verify an SSH connection to the gateway host using the same user.
 
-If silent approval fails, it falls back to the normal “Approve/Reject” prompt.
+If silent approval fails, it falls back to the normal "Approve/Reject" prompt.
 
 ## Trusted-CIDR device auto-approval
 
@@ -197,7 +197,29 @@ Security notes:
 
 - The transport is **stateless**; it does not store membership.
 - If the Gateway is offline or pairing is disabled, nodes cannot pair.
-- If the Gateway is in remote mode, pairing still happens against the remote Gateway’s store.
+- If the Gateway is in remote mode, pairing still happens against the remote Gateway's store.
+
+## Troubleshooting
+
+**Commands dropped before pairing approval**
+
+If a node connects and its commands are not visible after pairing is approved,
+the commands were likely dropped during the pending state (see
+[Node command gating](#node-command-gating-2026331)). Dropped commands are not
+replayed. Re-trigger the command after pairing is approved. Use
+`openclaw nodes status` to confirm the node is in `paired/connected` state
+before retrying.
+
+**Pending requests not appearing**
+
+If `openclaw nodes pending` returns no results but the node is connected,
+confirm that the node role is `node` and that `node.pair.*` is in use. WS
+handshake device pairing does not create entries in the pending pairing store.
+
+**Token not accepted after re-pair**
+
+Tokens are rotated on every approval. If a node reconnects with a stale token
+after a re-pair, reject and re-approve the request to issue a fresh token.
 
 ## Related
 
