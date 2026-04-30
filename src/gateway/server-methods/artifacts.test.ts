@@ -1,0 +1,180 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { artifactsHandlers, collectArtifactsFromMessages } from "./artifacts.js";
+
+const hoisted = vi.hoisted(() => ({
+  loadSessionEntry: vi.fn(),
+  readSessionMessages: vi.fn(),
+  resolveSessionKeyForRun: vi.fn(),
+}));
+
+vi.mock("../session-utils.js", async () => {
+  const actual = await vi.importActual<typeof import("../session-utils.js")>("../session-utils.js");
+  return {
+    ...actual,
+    loadSessionEntry: hoisted.loadSessionEntry,
+    readSessionMessages: hoisted.readSessionMessages,
+  };
+});
+
+vi.mock("../server-session-key.js", async () => {
+  const actual = await vi.importActual<typeof import("../server-session-key.js")>(
+    "../server-session-key.js",
+  );
+  return {
+    ...actual,
+    resolveSessionKeyForRun: hoisted.resolveSessionKeyForRun,
+  };
+});
+
+function createResponder() {
+  const calls: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
+  return {
+    calls,
+    respond: (ok: boolean, payload?: unknown, error?: unknown) => {
+      calls.push({ ok, payload, error });
+    },
+  };
+}
+
+describe("artifacts RPC handlers", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    hoisted.loadSessionEntry.mockReturnValue({
+      storePath: "/tmp/sessions.json",
+      entry: { sessionId: "sess-main", sessionFile: "/tmp/sess-main.jsonl" },
+    });
+    hoisted.readSessionMessages.mockReturnValue([
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "see attached" },
+          {
+            type: "image",
+            data: "aGVsbG8=",
+            mimeType: "image/png",
+            alt: "result.png",
+          },
+        ],
+        __openclaw: { seq: 2 },
+      },
+    ]);
+  });
+
+  it("lists stable transcript artifact summaries by sessionKey", () => {
+    const { calls, respond } = createResponder();
+
+    artifactsHandlers["artifacts.list"]?.({
+      req: { id: 1, method: "artifacts.list", params: {} },
+      params: { sessionKey: "agent:main:main" },
+      client: null,
+      isWebchatConnect: () => false,
+      respond,
+      context: {} as never,
+    });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.ok).toBe(true);
+    const payload = calls[0]?.payload as { artifacts?: Array<Record<string, unknown>> };
+    expect(payload.artifacts).toHaveLength(1);
+    expect(payload.artifacts?.[0]).toMatchObject({
+      type: "image",
+      title: "result.png",
+      mimeType: "image/png",
+      sizeBytes: 5,
+      sessionKey: "agent:main:main",
+      messageSeq: 2,
+      source: "session-transcript",
+      download: { mode: "bytes" },
+    });
+    expect(payload.artifacts?.[0]?.id).toMatch(/^artifact_/);
+    expect(payload.artifacts?.[0]).not.toHaveProperty("data");
+  });
+
+  it("gets and downloads an inline artifact", () => {
+    const listed = collectArtifactsFromMessages({
+      sessionKey: "agent:main:main",
+      messages: hoisted.readSessionMessages(),
+    });
+    const artifactId = listed[0]?.id;
+    expect(artifactId).toBeTruthy();
+
+    const get = createResponder();
+    artifactsHandlers["artifacts.get"]?.({
+      req: { id: 1, method: "artifacts.get", params: {} },
+      params: { sessionKey: "agent:main:main", artifactId },
+      client: null,
+      isWebchatConnect: () => false,
+      respond: get.respond,
+      context: {} as never,
+    });
+    expect(get.calls[0]?.ok).toBe(true);
+    expect(get.calls[0]?.payload).toMatchObject({
+      artifact: { id: artifactId, download: { mode: "bytes" } },
+    });
+
+    const download = createResponder();
+    artifactsHandlers["artifacts.download"]?.({
+      req: { id: 1, method: "artifacts.download", params: {} },
+      params: { sessionKey: "agent:main:main", artifactId },
+      client: null,
+      isWebchatConnect: () => false,
+      respond: download.respond,
+      context: {} as never,
+    });
+    expect(download.calls[0]?.ok).toBe(true);
+    expect(download.calls[0]?.payload).toMatchObject({
+      encoding: "base64",
+      data: "aGVsbG8=",
+      artifact: { id: artifactId },
+    });
+  });
+
+  it("resolves runId queries through the gateway run-to-session lookup", () => {
+    hoisted.resolveSessionKeyForRun.mockReturnValue("agent:main:main");
+    const { calls, respond } = createResponder();
+
+    artifactsHandlers["artifacts.list"]?.({
+      req: { id: 1, method: "artifacts.list", params: {} },
+      params: { runId: "run-1" },
+      client: null,
+      isWebchatConnect: () => false,
+      respond,
+      context: {} as never,
+    });
+
+    expect(calls[0]?.ok).toBe(true);
+    expect(hoisted.resolveSessionKeyForRun).toHaveBeenCalledWith("run-1");
+    const payload = calls[0]?.payload as { artifacts?: Array<Record<string, unknown>> };
+    expect(payload.artifacts?.[0]).toMatchObject({ runId: "run-1" });
+  });
+
+  it("returns typed errors for missing query scope and missing artifacts", () => {
+    const missingScope = createResponder();
+    artifactsHandlers["artifacts.list"]?.({
+      req: { id: 1, method: "artifacts.list", params: {} },
+      params: {},
+      client: null,
+      isWebchatConnect: () => false,
+      respond: missingScope.respond,
+      context: {} as never,
+    });
+    expect(missingScope.calls[0]?.ok).toBe(false);
+    expect(missingScope.calls[0]?.error).toMatchObject({
+      details: { type: "artifact_query_unsupported" },
+    });
+
+    const notFound = createResponder();
+    artifactsHandlers["artifacts.get"]?.({
+      req: { id: 1, method: "artifacts.get", params: {} },
+      params: { sessionKey: "agent:main:main", artifactId: "artifact_missing" },
+      client: null,
+      isWebchatConnect: () => false,
+      respond: notFound.respond,
+      context: {} as never,
+    });
+    expect(notFound.calls[0]?.ok).toBe(false);
+    expect(notFound.calls[0]?.error).toMatchObject({
+      details: { type: "artifact_not_found", artifactId: "artifact_missing" },
+    });
+  });
+});
