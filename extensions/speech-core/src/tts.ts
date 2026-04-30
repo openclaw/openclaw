@@ -1290,6 +1290,7 @@ function applyAutoEmotionProviderOverride(params: {
   providerId: string;
   config: ResolvedTtsConfig;
   providerConfig: SpeechProviderConfig;
+  personaProviderConfig?: SpeechProviderConfig;
   providerOverrides?: SpeechProviderOverrides;
 }): SpeechProviderOverrides | undefined {
   if (!params.config.autoEmotion?.enabled) {
@@ -1298,7 +1299,10 @@ function applyAutoEmotionProviderOverride(params: {
   if (
     hasExplicitAutoEmotionOverride({
       providerId: params.providerId,
-      providerConfig: resolveRawProviderConfig(params.config.rawConfig, params.providerId),
+      providerConfig: {
+        ...resolveRawProviderConfig(params.config.rawConfig, params.providerId),
+        ...params.personaProviderConfig,
+      },
       providerOverrides: params.providerOverrides,
     })
   ) {
@@ -1571,6 +1575,7 @@ export async function synthesizeSpeech(params: {
           providerId: resolvedProvider.provider.id,
           config,
           providerConfig: resolvedProvider.providerConfig,
+          personaProviderConfig: resolvedProvider.personaProviderConfig,
           providerOverrides: params.overrides?.providerOverrides?.[resolvedProvider.provider.id],
         }),
         persona: resolvedProvider.synthesisPersona,

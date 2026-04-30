@@ -28,7 +28,7 @@ export type TtsAutoEmotionConfig = {
   enabled?: boolean;
   /** Emotion to use when no heuristic matches or the selected emotion is not allowed. */
   fallback?: string;
-  /** Optional allowlist of provider emotion ids that automatic selection may emit. */
+  /** Optional allowlist of abstract emotion ids that automatic selection may emit. */
   allowed?: string[];
 };
 
