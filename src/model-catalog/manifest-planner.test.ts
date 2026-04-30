@@ -143,6 +143,63 @@ describe("manifest model catalog planner", () => {
     ]);
   });
 
+  // Regression for https://github.com/openclaw/openclaw/issues/73876.
+  // The user-facing complaint is that copying a model id from OpenRouter
+  // (which uses "moonshotai/kimi-k2.6" as the org slug) and dropping the
+  // "openrouter/" prefix to hit the direct API failed with "Unknown
+  // model: moonshotai/kimi-k2.6". The OpenAI plugin already shipped the
+  // alias pattern (azure-openai-responses → openai); applying it to the
+  // moonshot manifest lets the org-slug name resolve to moonshot's
+  // existing catalog without renaming the canonical provider id (which
+  // would break operators whose configs already say "moonshot/...").
+  it("plans moonshotai alias rows from the moonshot provider catalog", () => {
+    const plan = planManifestModelCatalogRows({
+      providerFilter: "moonshotai",
+      registry: {
+        plugins: [
+          {
+            id: "moonshot",
+            providers: ["moonshot"],
+            modelCatalog: {
+              aliases: {
+                moonshotai: {
+                  provider: "moonshot",
+                },
+              },
+              discovery: {
+                moonshot: "static",
+              },
+              providers: {
+                moonshot: {
+                  api: "openai-completions",
+                  baseUrl: "https://api.moonshot.ai/v1",
+                  models: [{ id: "kimi-k2.6", name: "Kimi K2.6" }],
+                },
+              },
+            },
+          },
+        ],
+      },
+    });
+
+    expect(plan.entries).toEqual([
+      expect.objectContaining({
+        pluginId: "moonshot",
+        provider: "moonshotai",
+        discovery: "static",
+      }),
+    ]);
+    expect(plan.rows).toEqual([
+      expect.objectContaining({
+        provider: "moonshotai",
+        id: "kimi-k2.6",
+        ref: "moonshotai/kimi-k2.6",
+        api: "openai-completions",
+        baseUrl: "https://api.moonshot.ai/v1",
+      }),
+    ]);
+  });
+
   it("keeps alias provider rows out of unfiltered broad planning", () => {
     const plan = planManifestModelCatalogRows({
       registry: {
