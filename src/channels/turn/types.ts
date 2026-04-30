@@ -2,6 +2,7 @@ import type { GetReplyOptions } from "../../auto-reply/get-reply-options.types.j
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { DispatchFromConfigResult } from "../../auto-reply/reply/dispatch-from-config.types.js";
 import type { GetReplyFromConfig } from "../../auto-reply/reply/get-reply.types.js";
+import type { HistoryEntry } from "../../auto-reply/reply/history.js";
 import type { DispatchReplyWithBufferedBlockDispatcher } from "../../auto-reply/reply/provider-dispatcher.types.js";
 import type { ReplyDispatcherWithTypingOptions } from "../../auto-reply/reply/reply-dispatcher.js";
 import type { ReplyDispatchKind } from "../../auto-reply/reply/reply-dispatcher.types.js";
@@ -133,6 +134,7 @@ export type SupplementalContextFacts = {
     fromType?: string;
     fromId?: string;
     date?: number;
+    senderAllowed?: boolean;
   };
   thread?: {
     id?: string;
@@ -189,6 +191,13 @@ export type ChannelTurnRecordOptions = {
   trackSessionMetaTask?: (task: Promise<unknown>) => void;
 };
 
+export type ChannelTurnHistoryFinalizeOptions = {
+  isGroup?: boolean;
+  historyKey?: string;
+  historyMap?: Map<string, HistoryEntry[]>;
+  limit?: number;
+};
+
 export type ChannelTurnDispatcherOptions = Omit<
   ReplyDispatcherWithTypingOptions,
   "deliver" | "onError"
@@ -209,6 +218,7 @@ export type AssembledChannelTurn = {
   replyOptions?: Omit<GetReplyOptions, "onBlockReply">;
   replyResolver?: GetReplyFromConfig;
   record?: ChannelTurnRecordOptions;
+  history?: ChannelTurnHistoryFinalizeOptions;
   admission?: Extract<ChannelTurnAdmission, { kind: "dispatch" | "observeOnly" }>;
   log?: (event: ChannelTurnLogEvent) => void;
   messageId?: string;
@@ -222,6 +232,7 @@ export type PreparedChannelTurn<TDispatchResult = DispatchFromConfigResult> = {
   ctxPayload: FinalizedMsgContext;
   recordInboundSession: RecordInboundSession;
   record?: ChannelTurnRecordOptions;
+  history?: ChannelTurnHistoryFinalizeOptions;
   onPreDispatchFailure?: (err: unknown) => void | Promise<void>;
   runDispatch: () => Promise<TDispatchResult>;
   admission?: Extract<ChannelTurnAdmission, { kind: "dispatch" | "observeOnly" }>;
