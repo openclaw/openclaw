@@ -163,6 +163,75 @@ function unsupportedGatewayApi(api: string): never {
   throw new Error(`${api} is not supported by the current OpenClaw Gateway yet`);
 }
 
+type ChatProjection = {
+  state: "delta" | "final";
+  payload: Record<string, unknown>;
+};
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
+}
+
+function readChatProjection(event: OpenClawEvent): ChatProjection | undefined {
+  if (event.type !== "raw" || event.raw?.event !== "chat") {
+    return undefined;
+  }
+  const payload = asRecord(event.raw.payload);
+  if (payload.state !== "delta" && payload.state !== "final") {
+    return undefined;
+  }
+  return { state: payload.state, payload };
+}
+
+function readChatProjectionText(payload: Record<string, unknown>): string | undefined {
+  const content = asRecord(payload.message).content;
+  if (typeof content === "string") {
+    return content;
+  }
+  if (!Array.isArray(content)) {
+    return undefined;
+  }
+  const text = content
+    .map((part) => {
+      const record = asRecord(part);
+      return record.type === "text" && typeof record.text === "string" ? record.text : "";
+    })
+    .join("");
+  return text.length > 0 ? text : undefined;
+}
+
+function isAssistantRunEvent(event: OpenClawEvent): boolean {
+  return event.type === "assistant.delta" || event.type === "assistant.message";
+}
+
+function isTerminalRunEvent(event: OpenClawEvent): boolean {
+  return (
+    event.type === "run.completed" ||
+    event.type === "run.failed" ||
+    event.type === "run.cancelled" ||
+    event.type === "run.timed_out"
+  );
+}
+
+function normalizeChatProjectionEvent(
+  event: OpenClawEvent,
+  projection: ChatProjection,
+): OpenClawEvent {
+  const text = readChatProjectionText(projection.payload);
+  if (projection.state === "delta") {
+    return {
+      ...event,
+      type: "assistant.delta",
+      data: text === undefined ? event.data : { delta: text },
+    };
+  }
+  return {
+    ...event,
+    type: "run.completed",
+    data: { phase: "end", ...(text === undefined ? {} : { outputText: text }) },
+  };
+}
+
 export class OpenClaw {
   readonly agents: AgentsNamespace;
   readonly sessions: SessionsNamespace;
@@ -262,23 +331,47 @@ export class OpenClaw {
     filter?: (event: OpenClawEvent) => boolean,
   ): AsyncIterable<OpenClawEvent> {
     await this.connect();
-    const matches = (event: OpenClawEvent) => {
-      if (event.runId !== runId) {
-        return false;
+    const replayEvents = this.replaySnapshot(runId);
+    let hasCanonicalAssistantEvent = replayEvents.some(isAssistantRunEvent);
+    let hasTerminalEvent = replayEvents.some(isTerminalRunEvent);
+    const toRunStreamEvent = (event: OpenClawEvent): OpenClawEvent | undefined => {
+      const projection = readChatProjection(event);
+      if (projection?.state === "delta") {
+        return hasCanonicalAssistantEvent
+          ? undefined
+          : normalizeChatProjectionEvent(event, projection);
       }
-      return filter ? filter(event) : true;
+      if (projection?.state === "final") {
+        if (hasTerminalEvent) {
+          return undefined;
+        }
+        hasTerminalEvent = true;
+        return normalizeChatProjectionEvent(event, projection);
+      }
+      if (isAssistantRunEvent(event)) {
+        hasCanonicalAssistantEvent = true;
+      }
+      if (isTerminalRunEvent(event)) {
+        hasTerminalEvent = true;
+      }
+      return event;
     };
+    const matches = (event: OpenClawEvent) => event.runId === runId;
     const liveSource = this.normalizedEvents.stream(matches, { replay: true });
     const live = liveSource[Symbol.asyncIterator]();
     let nextLive = live.next();
     const seen = new Set<string>();
     try {
-      for (const event of this.replaySnapshot(runId)) {
-        if (!matches(event) || seen.has(event.id)) {
+      for (const event of replayEvents) {
+        if (seen.has(event.id)) {
           continue;
         }
         seen.add(event.id);
-        yield event;
+        const runEvent = toRunStreamEvent(event);
+        if (!runEvent || (filter && !filter(runEvent))) {
+          continue;
+        }
+        yield runEvent;
       }
       while (true) {
         const next = await nextLive;
@@ -290,7 +383,11 @@ export class OpenClaw {
           continue;
         }
         seen.add(next.value.id);
-        yield next.value;
+        const runEvent = toRunStreamEvent(next.value);
+        if (!runEvent || (filter && !filter(runEvent))) {
+          continue;
+        }
+        yield runEvent;
       }
     } finally {
       await live.return?.();
