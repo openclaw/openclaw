@@ -302,6 +302,53 @@ describe("bundle manifest parsing", () => {
     });
   });
 
+  it("detects Link-style Codex bundles with skills and MCP servers", () => {
+    const rootDir = makeTempDir();
+    setupBundleFixture({
+      rootDir,
+      dirs: [".codex-plugin", "skills/create-payment-credential"],
+      textFiles: {
+        ".mcp.json": JSON.stringify({
+          mcpServers: {
+            link: {
+              command: "pnpx",
+              args: ["@stripe/link-cli", "--mcp"],
+            },
+          },
+        }),
+      },
+      manifestRelativePath: CODEX_BUNDLE_MANIFEST_RELATIVE_PATH,
+      manifest: {
+        name: "link",
+        version: "0.2.1",
+        description: "Secure, one-time-use payment credentials from Link",
+        homepage: "https://link.com/agents",
+        repository: "https://github.com/stripe/link-cli",
+        skills: "./skills/",
+        mcpServers: "./.mcp.json",
+        interface: {
+          displayName: "Link",
+          category: "Finance",
+        },
+      },
+    });
+
+    expectBundleManifest({
+      rootDir,
+      bundleFormat: "codex",
+      expected: {
+        id: "link",
+        name: "link",
+        version: "0.2.1",
+        description: "Secure, one-time-use payment credentials from Link",
+        bundleFormat: "codex",
+        skills: ["./skills/"],
+        hooks: [],
+        capabilities: expect.arrayContaining(["skills", "mcpServers"]),
+      },
+    });
+  });
+
   it.each([
     {
       name: "accepts JSON5 Codex bundle manifests",
