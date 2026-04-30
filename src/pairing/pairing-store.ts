@@ -30,8 +30,48 @@ export type { PairingChannel } from "./pairing-store.types.js";
 
 const PAIRING_CODE_LENGTH = 8;
 const PAIRING_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-const PAIRING_PENDING_TTL_MS = 60 * 60 * 1000;
-const PAIRING_PENDING_MAX = 3;
+const DEFAULT_PAIRING_PENDING_TTL_MS = 60 * 60 * 1000;
+const DEFAULT_PAIRING_PENDING_MAX = 3;
+// Parsed once at module load so the rest of the file can reference a plain
+// number constant. Operators running high-volume bot deployments sometimes
+// need to raise these limits (for example: a user pairing multiple devices
+// or slow manual code entry). Environment variables are preferred over
+// config schema here so the override stays out of user-visible settings —
+// it's an operator tuning knob, not a normal configuration.
+const PAIRING_PENDING_TTL_MS = resolvePairingEnvIntOrDefault(
+  "OPENCLAW_PAIRING_PENDING_TTL_MINUTES",
+  DEFAULT_PAIRING_PENDING_TTL_MS,
+  { minute: true, minValue: 1, maxValue: 24 * 60 * 7 },
+);
+const PAIRING_PENDING_MAX = resolvePairingEnvIntOrDefault(
+  "OPENCLAW_PAIRING_PENDING_MAX",
+  DEFAULT_PAIRING_PENDING_MAX,
+  { minute: false, minValue: 1, maxValue: 1000 },
+);
+
+/**
+ * Reads an integer from an environment variable, clamped to [minValue,
+ * maxValue]. When `minute` is true the value is interpreted as minutes and
+ * converted to milliseconds before returning. An unset, empty, or
+ * unparseable value falls back to `defaultValue` without throwing, so
+ * misconfigured deployments degrade to stock behavior instead of crashing
+ * the pairing flow.
+ */
+export function resolvePairingEnvIntOrDefault(
+  envName: string,
+  defaultValue: number,
+  opts: { minute: boolean; minValue: number; maxValue: number },
+): number {
+  const raw = process.env[envName];
+  if (typeof raw !== "string") return defaultValue;
+  const trimmed = raw.trim();
+  if (trimmed.length === 0) return defaultValue;
+  const parsed = Number.parseInt(trimmed, 10);
+  if (!Number.isFinite(parsed) || parsed < opts.minValue || parsed > opts.maxValue) {
+    return defaultValue;
+  }
+  return opts.minute ? parsed * 60 * 1000 : parsed;
+}
 const PAIRING_STORE_LOCK_OPTIONS = {
   retries: {
     retries: 10,
