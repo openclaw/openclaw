@@ -6,10 +6,12 @@ import { resolveSlackAccount } from "./accounts.js";
 import { buildSlackBlocksFallbackText } from "./blocks-fallback.js";
 import { validateSlackBlocksArray } from "./blocks-input.js";
 import { createSlackWebClient, getSlackWriteClient } from "./client.js";
+import { SLACK_TEXT_LIMIT } from "./limits.js";
 import { resolveSlackMedia } from "./monitor/media.js";
 import type { SlackMediaResult } from "./monitor/media.js";
 import { sendMessageSlack } from "./send.js";
 import { resolveSlackBotToken } from "./token.js";
+import { truncateSlackText } from "./truncate.js";
 
 export type SlackActionClientOpts = {
   cfg?: OpenClawConfig;
@@ -234,7 +236,9 @@ export async function editSlackMessage(
   await client.chat.update({
     channel: channelId,
     ts: messageId,
-    text: trimmedContent || (blocks ? buildSlackBlocksFallbackText(blocks) : " "),
+    text:
+      trimmedContent ||
+      (blocks ? truncateSlackText(buildSlackBlocksFallbackText(blocks), SLACK_TEXT_LIMIT) : " "),
     ...(blocks ? { blocks } : {}),
   });
 }
