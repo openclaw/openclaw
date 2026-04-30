@@ -45,8 +45,8 @@ type RegistryEntry = {
   containerName: string;
 };
 
-type RegistryFile<T extends RegistryEntry> = {
-  entries: T[];
+type RegistryFile = {
+  entries: RegistryEntry[];
 };
 
 // Schemas are shared between the per-entry files (live writes) and the
@@ -101,7 +101,7 @@ async function readEntryFile<T extends RegistryEntry>(
   return parsed ?? null;
 }
 
-async function writeEntryFile<T extends RegistryEntry>(dir: string, entry: T): Promise<void> {
+async function writeEntryFile(dir: string, entry: RegistryEntry): Promise<void> {
   await fs.mkdir(dir, { recursive: true });
   await writeJsonAtomic(entryFilePath(dir, entry.containerName), entry, { trailingNewline: true });
 }
@@ -148,10 +148,7 @@ async function readAllEntries<T extends RegistryEntry>(dir: string): Promise<T[]
 
 // ── One-shot migration from monolithic file → per-entry files ──────────
 
-async function migrateMonolithicIfNeeded<T extends RegistryEntry>(
-  oldPath: string,
-  newDir: string,
-): Promise<void> {
+async function migrateMonolithicIfNeeded(oldPath: string, newDir: string): Promise<void> {
   let raw: string;
   try {
     raw = await fs.readFile(oldPath, "utf-8");
@@ -160,7 +157,7 @@ async function migrateMonolithicIfNeeded<T extends RegistryEntry>(
     // fresh install). Nothing to do.
     return;
   }
-  const parsed = safeParseJsonWithSchema(RegistryFileSchema, raw) as RegistryFile<T> | null;
+  const parsed = safeParseJsonWithSchema(RegistryFileSchema, raw) as RegistryFile | null;
   if (!parsed || parsed.entries.length === 0) {
     // Corrupt or empty — drop it (and its stale lock) so we don't re-attempt
     // migration every read.
@@ -185,10 +182,7 @@ async function migrateMonolithicIfNeeded<T extends RegistryEntry>(
 // ── Public API: Container Registry ─────────────────────────────────────
 
 export async function readRegistry(): Promise<SandboxRegistry> {
-  await migrateMonolithicIfNeeded<SandboxRegistryEntry>(
-    SANDBOX_REGISTRY_PATH,
-    SANDBOX_CONTAINERS_DIR,
-  );
+  await migrateMonolithicIfNeeded(SANDBOX_REGISTRY_PATH, SANDBOX_CONTAINERS_DIR);
   const entries = await readAllEntries<SandboxRegistryEntry>(SANDBOX_CONTAINERS_DIR);
   return { entries: entries.map(normalizeSandboxRegistryEntry) };
 }
@@ -202,19 +196,13 @@ export async function readRegistry(): Promise<SandboxRegistry> {
 export async function readRegistryEntry(
   containerName: string,
 ): Promise<SandboxRegistryEntry | null> {
-  await migrateMonolithicIfNeeded<SandboxRegistryEntry>(
-    SANDBOX_REGISTRY_PATH,
-    SANDBOX_CONTAINERS_DIR,
-  );
+  await migrateMonolithicIfNeeded(SANDBOX_REGISTRY_PATH, SANDBOX_CONTAINERS_DIR);
   const entry = await readEntryFile<SandboxRegistryEntry>(SANDBOX_CONTAINERS_DIR, containerName);
   return entry ? normalizeSandboxRegistryEntry(entry) : null;
 }
 
 export async function updateRegistry(entry: SandboxRegistryEntry): Promise<void> {
-  await migrateMonolithicIfNeeded<SandboxRegistryEntry>(
-    SANDBOX_REGISTRY_PATH,
-    SANDBOX_CONTAINERS_DIR,
-  );
+  await migrateMonolithicIfNeeded(SANDBOX_REGISTRY_PATH, SANDBOX_CONTAINERS_DIR);
   const existing = await readEntryFile<SandboxRegistryEntry>(
     SANDBOX_CONTAINERS_DIR,
     entry.containerName,
@@ -238,18 +226,12 @@ export async function removeRegistryEntry(containerName: string): Promise<void> 
 // ── Public API: Browser Registry ───────────────────────────────────────
 
 export async function readBrowserRegistry(): Promise<SandboxBrowserRegistry> {
-  await migrateMonolithicIfNeeded<SandboxBrowserRegistryEntry>(
-    SANDBOX_BROWSER_REGISTRY_PATH,
-    SANDBOX_BROWSERS_DIR,
-  );
+  await migrateMonolithicIfNeeded(SANDBOX_BROWSER_REGISTRY_PATH, SANDBOX_BROWSERS_DIR);
   return { entries: await readAllEntries<SandboxBrowserRegistryEntry>(SANDBOX_BROWSERS_DIR) };
 }
 
 export async function updateBrowserRegistry(entry: SandboxBrowserRegistryEntry): Promise<void> {
-  await migrateMonolithicIfNeeded<SandboxBrowserRegistryEntry>(
-    SANDBOX_BROWSER_REGISTRY_PATH,
-    SANDBOX_BROWSERS_DIR,
-  );
+  await migrateMonolithicIfNeeded(SANDBOX_BROWSER_REGISTRY_PATH, SANDBOX_BROWSERS_DIR);
   const existing = await readEntryFile<SandboxBrowserRegistryEntry>(
     SANDBOX_BROWSERS_DIR,
     entry.containerName,
