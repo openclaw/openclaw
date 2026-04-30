@@ -44,10 +44,10 @@ import {
   findModelInCatalog,
   loadModelCatalog,
   modelSupportsVision,
-  resolveAgentConfig,
   resolveAgentDir,
   resolveDefaultModelForAgent,
 } from "./bot-message-dispatch.agent.runtime.js";
+import { resolveConfigReasoningDefault } from "openclaw/plugin-sdk/agent-config-helpers";
 import { pruneStickerMediaFromContext } from "./bot-message-dispatch.media.js";
 import {
   generateTopicLabel,
@@ -213,14 +213,7 @@ function resolveTelegramReasoningLevel(params: {
 }): TelegramReasoningLevel {
   const { cfg, sessionKey, agentId, telegramDeps } = params;
 
-  // Resolve config-driven default using the shared normalized resolver so that
-  // agent IDs are matched case-insensitively (matching routing behaviour).
-  // Precedence: per-agent reasoningDefault → global agents.defaults.reasoningDefault → "off".
-  const agentDefault = resolveAgentConfig(cfg, agentId)?.reasoningDefault;
-  const globalDefault = cfg.agents?.defaults?.reasoningDefault;
-  const rawDefault = agentDefault ?? globalDefault;
-  const configDefault: TelegramReasoningLevel =
-    rawDefault === "on" || rawDefault === "stream" || rawDefault === "off" ? rawDefault : "off";
+  const configDefault: TelegramReasoningLevel = resolveConfigReasoningDefault(cfg, agentId);
 
   if (!sessionKey) {
     return configDefault;

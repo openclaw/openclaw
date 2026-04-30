@@ -1,5 +1,6 @@
-import { loadSessionStore, resolveAgentConfig, resolveSessionStoreEntry } from "./bot-runtime-api.js";
+import { loadSessionStore, resolveSessionStoreEntry } from "./bot-runtime-api.js";
 import type { ClawdbotConfig } from "./bot-runtime-api.js";
+import { resolveConfigReasoningDefault } from "openclaw/plugin-sdk/agent-config-helpers";
 
 export function resolveFeishuReasoningPreviewEnabled(params: {
   cfg: ClawdbotConfig;
@@ -7,14 +8,7 @@ export function resolveFeishuReasoningPreviewEnabled(params: {
   storePath: string;
   sessionKey?: string;
 }): boolean {
-  // Resolve config-driven default using the shared normalized resolver so that
-  // agent IDs are matched case-insensitively (matching routing behaviour).
-  // Precedence: per-agent reasoningDefault → global agents.defaults.reasoningDefault → "off".
-  const agentDefault = resolveAgentConfig(params.cfg, params.agentId)?.reasoningDefault;
-  const globalDefault = params.cfg.agents?.defaults?.reasoningDefault;
-  const rawDefault = agentDefault ?? globalDefault;
-  const configDefault =
-    rawDefault === "on" || rawDefault === "stream" || rawDefault === "off" ? rawDefault : "off";
+  const configDefault = resolveConfigReasoningDefault(params.cfg, params.agentId);
 
   if (!params.sessionKey) {
     // Feishu preview only supports the "stream" variant; "on" (block-mode) has no preview equivalent.
