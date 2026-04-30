@@ -83,7 +83,7 @@ node_modules/.bin/vitest run --config test/vitest/vitest.extension-feishu.config
 Result:
 
 - 3 test files passed
-- 83 tests passed
+- 86 tests passed
 
 After fixing segment ordering/deduplication, also ran:
 
