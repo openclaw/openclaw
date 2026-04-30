@@ -983,6 +983,39 @@ describe("applyExtraParamsToAgent", () => {
     });
   });
 
+  it("continues to pass global chat_template_kwargs through normal openai-completions streams", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "vllm",
+      applyModelId: "Qwen/Qwen3-8B",
+      cfg: {
+        agents: {
+          defaults: {
+            params: {
+              chat_template_kwargs: {
+                enable_thinking: false,
+                preserve_thinking: true,
+              },
+            },
+          },
+        },
+      },
+      model: {
+        api: "openai-completions",
+        provider: "vllm",
+        id: "Qwen/Qwen3-8B",
+        baseUrl: "http://127.0.0.1:8000/v1",
+      } as Model<"openai-completions">,
+      payload: {
+        messages: [],
+      },
+    });
+
+    expect(payload.chat_template_kwargs).toEqual({
+      enable_thinking: false,
+      preserve_thinking: true,
+    });
+  });
+
   it("warns and skips invalid chat_template_kwargs params", () => {
     const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => {});
     try {

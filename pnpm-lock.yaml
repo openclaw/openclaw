@@ -34,6 +34,9 @@ patchedDependencies:
   '@agentclientprotocol/claude-agent-acp@0.31.1':
     hash: e8b472d71289ac8de9813c57d79abac524889ca96f279f6f3ad08043434f6615
     path: patches/@agentclientprotocol__claude-agent-acp@0.31.1.patch
+  '@mariozechner/pi-coding-agent@0.70.6':
+    hash: 888ae4119f46aed51e6763efe8cb23a11ce468d7d8f0e5a974c12d9c5cfd2b08
+    path: patches/@mariozechner__pi-coding-agent@0.70.6.patch
   '@whiskeysockets/baileys@7.0.0-rc.9':
     hash: 23ec8efe1484afa57c51b96955ba331d1467521a8e676a18c2690da7e70a6201
     path: patches/@whiskeysockets__baileys@7.0.0-rc.9.patch
@@ -59,7 +62,7 @@ importers:
         version: 0.70.6(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))(ws@8.20.0)(zod@4.3.6)
       '@mariozechner/pi-coding-agent':
         specifier: 0.70.6
-        version: 0.70.6(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))(ws@8.20.0)(zod@4.3.6)
+        version: 0.70.6(patch_hash=888ae4119f46aed51e6763efe8cb23a11ce468d7d8f0e5a974c12d9c5cfd2b08)(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))(ws@8.20.0)(zod@4.3.6)
       '@mariozechner/pi-tui':
         specifier: 0.70.6
         version: 0.70.6
@@ -392,7 +395,7 @@ importers:
     dependencies:
       '@mariozechner/pi-coding-agent':
         specifier: 0.70.6
-        version: 0.70.6(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))(ws@8.20.0)(zod@4.3.6)
+        version: 0.70.6(patch_hash=888ae4119f46aed51e6763efe8cb23a11ce468d7d8f0e5a974c12d9c5cfd2b08)(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))(ws@8.20.0)(zod@4.3.6)
       '@openai/codex':
         specifier: 0.125.0
         version: 0.125.0
@@ -9552,7 +9555,7 @@ snapshots:
       - ws
       - zod
 
-  '@mariozechner/pi-coding-agent@0.70.6(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))(ws@8.20.0)(zod@4.3.6)':
+  '@mariozechner/pi-coding-agent@0.70.6(patch_hash=888ae4119f46aed51e6763efe8cb23a11ce468d7d8f0e5a974c12d9c5cfd2b08)(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))(ws@8.20.0)(zod@4.3.6)':
     dependencies:
       '@mariozechner/jiti': 2.6.5
       '@mariozechner/pi-agent-core': 0.70.6(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))(ws@8.20.0)(zod@4.3.6)

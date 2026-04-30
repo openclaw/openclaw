@@ -1391,6 +1391,9 @@ export async function runEmbeddedAttempt(
         provider: params.provider,
         modelId: params.modelId,
         model: params.model,
+        thinkingLevel: params.thinkLevel,
+        workspaceDir: effectiveWorkspace,
+        agentDir,
       });
       const resourceLoader = new DefaultResourceLoader({
         cwd: resolvedWorkspace,

@@ -1,9 +1,11 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { SimpleStreamOptions } from "@mariozechner/pi-ai";
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 import {
   estimateTokens,
   generateSummary as piGenerateSummary,
 } from "@mariozechner/pi-coding-agent";
+import type { ThinkLevel } from "../auto-reply/thinking.js";
 import type { AgentCompactionIdentifierPolicy } from "../config/types.agent-defaults.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { retryAsync } from "../infra/retry.js";
@@ -45,6 +47,8 @@ export type CompactionSummarizationInstructions = {
   identifierInstructions?: string;
 };
 
+export type CompactionSummaryCompletionOptions = Pick<SimpleStreamOptions, "onPayload">;
+
 type GenerateSummaryCompat = {
   (
     currentMessages: AgentMessage[],
@@ -54,6 +58,8 @@ type GenerateSummaryCompat = {
     signal?: AbortSignal,
     customInstructions?: string,
     previousSummary?: string,
+    thinkingLevel?: ThinkLevel,
+    completionOptions?: CompactionSummaryCompletionOptions,
   ): Promise<string>;
   (
     currentMessages: AgentMessage[],
@@ -64,6 +70,8 @@ type GenerateSummaryCompat = {
     signal?: AbortSignal,
     customInstructions?: string,
     previousSummary?: string,
+    thinkingLevel?: ThinkLevel,
+    completionOptions?: CompactionSummaryCompletionOptions,
   ): Promise<string>;
 };
 
@@ -301,6 +309,8 @@ async function summarizeChunks(params: {
   customInstructions?: string;
   summarizationInstructions?: CompactionSummarizationInstructions;
   previousSummary?: string;
+  thinkingLevel?: ThinkLevel;
+  completionOptions?: CompactionSummaryCompletionOptions;
 }): Promise<string> {
   if (params.messages.length === 0) {
     return params.previousSummary ?? DEFAULT_SUMMARY_FALLBACK;
@@ -326,6 +336,8 @@ async function summarizeChunks(params: {
           params.signal,
           effectiveInstructions,
           summary,
+          params.thinkingLevel,
+          params.completionOptions,
         ),
       {
         attempts: 3,
@@ -350,8 +362,10 @@ function generateSummary(
   signal: AbortSignal,
   customInstructions?: string,
   previousSummary?: string,
+  thinkingLevel?: ThinkLevel,
+  completionOptions?: CompactionSummaryCompletionOptions,
 ): Promise<string> {
-  if (piGenerateSummary.length >= 8) {
+  if (piGenerateSummary.length >= 8 || thinkingLevel || completionOptions) {
     return generateSummaryCompat(
       currentMessages,
       model,
@@ -361,6 +375,8 @@ function generateSummary(
       signal,
       customInstructions,
       previousSummary,
+      thinkingLevel,
+      completionOptions,
     );
   }
   return generateSummaryCompat(
@@ -390,6 +406,8 @@ export async function summarizeWithFallback(params: {
   customInstructions?: string;
   summarizationInstructions?: CompactionSummarizationInstructions;
   previousSummary?: string;
+  thinkingLevel?: ThinkLevel;
+  completionOptions?: CompactionSummaryCompletionOptions;
 }): Promise<string> {
   const { messages, contextWindow } = params;
 
@@ -454,8 +472,10 @@ export async function summarizeInStages(params: {
   customInstructions?: string;
   summarizationInstructions?: CompactionSummarizationInstructions;
   previousSummary?: string;
+  thinkingLevel?: ThinkLevel;
   parts?: number;
   minMessagesForSplit?: number;
+  completionOptions?: CompactionSummaryCompletionOptions;
 }): Promise<string> {
   const { messages } = params;
   if (messages.length === 0) {

@@ -1733,7 +1733,8 @@
     },
     "patchedDependencies": {
       "@whiskeysockets/baileys@7.0.0-rc.9": "patches/@whiskeysockets__baileys@7.0.0-rc.9.patch",
-      "@agentclientprotocol/claude-agent-acp@0.31.1": "patches/@agentclientprotocol__claude-agent-acp@0.31.1.patch"
+      "@agentclientprotocol/claude-agent-acp@0.31.1": "patches/@agentclientprotocol__claude-agent-acp@0.31.1.patch",
+      "@mariozechner/pi-coding-agent@0.70.6": "patches/@mariozechner__pi-coding-agent@0.70.6.patch"
     }
   },
   "openclaw": {
