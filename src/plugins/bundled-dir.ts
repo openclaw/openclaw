@@ -7,6 +7,8 @@ import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { resolveUserPath } from "../utils.js";
 
 const DISABLED_BUNDLED_PLUGINS_DIR = path.join(os.tmpdir(), "openclaw-empty-bundled-plugins");
+const TEST_TRUST_BUNDLED_PLUGINS_DIR_ENV = "OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR";
+let bundledPluginsDirOverrideForTest: string | undefined;
 
 export function areBundledPluginsDisabled(env: NodeJS.ProcessEnv = process.env): boolean {
   const raw = normalizeOptionalLowercaseString(env.OPENCLAW_DISABLE_BUNDLED_PLUGINS);
@@ -26,6 +28,20 @@ function isSourceCheckoutRoot(packageRoot: string): boolean {
   );
 }
 
+function isTruthyEnvValue(value: string | undefined): boolean {
+  const normalized = value?.trim().toLowerCase();
+  return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
+}
+
+function shouldTrustTestBundledPluginsDirOverride(env: NodeJS.ProcessEnv): boolean {
+  const isVitestProcess = Boolean(env.VITEST) || Boolean(process.env.VITEST);
+  return (
+    isVitestProcess &&
+    (isTruthyEnvValue(env[TEST_TRUST_BUNDLED_PLUGINS_DIR_ENV]) ||
+      isTruthyEnvValue(process.env[TEST_TRUST_BUNDLED_PLUGINS_DIR_ENV]))
+  );
+}
+
 function hasUsableBundledPluginTree(pluginsDir: string): boolean {
   if (!fs.existsSync(pluginsDir)) {
     return false;
@@ -40,22 +56,6 @@ function hasUsableBundledPluginTree(pluginsDir: string): boolean {
         fs.existsSync(path.join(pluginDir, "package.json")) ||
         fs.existsSync(path.join(pluginDir, "openclaw.plugin.json"))
       );
-    });
-  } catch {
-    return false;
-  }
-}
-
-function hasBundledPluginOverrideEntries(pluginsDir: string): boolean {
-  if (!fs.existsSync(pluginsDir)) {
-    return false;
-  }
-  try {
-    return fs.readdirSync(pluginsDir, { withFileTypes: true }).some((entry) => {
-      if (entry.name === ".DS_Store") {
-        return false;
-      }
-      return entry.isDirectory() || entry.isFile() || entry.isSymbolicLink();
     });
   } catch {
     return false;
@@ -86,15 +86,6 @@ function trustedBundledPluginRootsForPackageRoot(packageRoot: string): string[] 
   return roots;
 }
 
-function isBareExtensionsOverride(resolvedOverride: string): boolean {
-  const parentDir = path.dirname(resolvedOverride);
-  if (path.basename(resolvedOverride) !== "extensions") {
-    return false;
-  }
-  const parentName = path.basename(parentDir);
-  return parentName !== "dist" && parentName !== "dist-runtime";
-}
-
 function resolveTrustedExistingOverride(resolvedOverride: string): string | null {
   const realOverride = safeRealpathSync(resolvedOverride);
   if (!realOverride) {
@@ -107,16 +98,10 @@ function resolveTrustedExistingOverride(resolvedOverride: string): string | null
     .flatMap((packageRoot) => trustedBundledPluginRootsForPackageRoot(packageRoot))
     .map((trustedRoot) => safeRealpathSync(trustedRoot))
     .filter((entry): entry is string => Boolean(entry));
-  const isTrustedPackageRootOverride = trustedRoots.some((trustedRoot) =>
-    pathContains(trustedRoot, realOverride),
-  );
-  if (isTrustedPackageRootOverride && hasUsableBundledPluginTree(realOverride)) {
-    return realOverride;
-  }
-  if (isBareExtensionsOverride(realOverride) && hasUsableBundledPluginTree(realOverride)) {
+  if (!trustedRoots.some((trustedRoot) => pathContains(trustedRoot, realOverride))) {
     return null;
   }
-  if (!hasBundledPluginOverrideEntries(realOverride)) {
+  if (!hasUsableBundledPluginTree(realOverride)) {
     return null;
   }
   return realOverride;
@@ -204,11 +189,18 @@ export function resolveBundledPluginsDir(env: NodeJS.ProcessEnv = process.env): 
     return resolveDisabledBundledPluginsDir();
   }
 
+  if (bundledPluginsDirOverrideForTest) {
+    return bundledPluginsDirOverrideForTest;
+  }
+
   const override = env.OPENCLAW_BUNDLED_PLUGINS_DIR?.trim();
   let rejectedExistingOverride: string | null = null;
   if (override) {
     const resolvedOverride = resolveUserPath(override, env);
     if (fs.existsSync(resolvedOverride)) {
+      if (shouldTrustTestBundledPluginsDirOverride(env)) {
+        return path.resolve(resolvedOverride);
+      }
       const trustedOverride = resolveTrustedExistingOverride(resolvedOverride);
       if (trustedOverride) {
         return trustedOverride;
@@ -278,4 +270,11 @@ export function resolveBundledPluginsDir(env: NodeJS.ProcessEnv = process.env): 
   }
 
   return undefined;
+}
+
+export function setBundledPluginsDirOverrideForTest(dir: string | undefined): void {
+  if (process.env.VITEST !== "true" && process.env.NODE_ENV !== "test") {
+    throw new Error("setBundledPluginsDirOverrideForTest is only available in tests");
+  }
+  bundledPluginsDirOverrideForTest = dir;
 }
