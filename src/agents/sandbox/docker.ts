@@ -261,8 +261,17 @@ export async function ensureDockerImage(image: string) {
     return;
   }
   if (image === DEFAULT_SANDBOX_IMAGE) {
-    await execDocker(["pull", "debian:bookworm-slim"]);
-    await execDocker(["tag", "debian:bookworm-slim", DEFAULT_SANDBOX_IMAGE]);
+    // Build from debian:bookworm-slim with python3 included.
+    // The sandbox write/edit tools use python3 as a pinned mutation helper;
+    // the bare debian image does not include it, causing those tools to fail.
+    const dockerfile = [
+      "FROM debian:bookworm-slim",
+      "RUN apt-get update -qq \\",
+      "    && apt-get install -y --no-install-recommends python3 \\",
+      "    && apt-get clean \\",
+      "    && rm -rf /var/lib/apt/lists/*",
+    ].join("\n");
+    await execDocker(["build", "-t", DEFAULT_SANDBOX_IMAGE, "-"], { input: dockerfile });
     return;
   }
   throw new Error(`Sandbox image not found: ${image}. Build or pull it first.`);
