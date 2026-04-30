@@ -1013,6 +1013,27 @@ describe("agent event handler", () => {
     resetAgentRunContextForTest();
   });
 
+  it("keeps aborted chat run markers through terminal lifecycle cleanup", () => {
+    const { broadcast, chatRunState, handler } = createHarness();
+    chatRunState.registry.add("run-aborted", {
+      sessionKey: "session-aborted",
+      clientRunId: "client-aborted",
+    });
+    chatRunState.abortedRuns.set("client-aborted", 1_000);
+
+    handler({
+      runId: "run-aborted",
+      seq: 2,
+      stream: "lifecycle",
+      ts: 1_500,
+      data: { phase: "end", aborted: true, stopReason: "rpc" },
+    });
+
+    expect(chatRunState.abortedRuns.has("client-aborted")).toBe(true);
+    expect(chatRunState.registry.peek("run-aborted")).toBeUndefined();
+    expect(chatBroadcastCalls(broadcast)).toHaveLength(0);
+  });
+
   it("keeps live session setting metadata at the top level for lifecycle updates", () => {
     vi.mocked(loadGatewaySessionRow).mockReturnValue({
       key: "session-finished",

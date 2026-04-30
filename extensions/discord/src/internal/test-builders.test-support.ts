@@ -24,6 +24,40 @@ export type FakeRestClient = RequestClient & {
   enqueueResponse: (value: unknown) => void;
 };
 
+export function createDeferred<T>() {
+  let resolve: ((value: T) => void) | undefined;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve: resolve! };
+}
+
+export function createJsonResponse(body: unknown, init?: ResponseInit): Response {
+  return new Response(JSON.stringify(body), {
+    status: 200,
+    ...init,
+  });
+}
+
+export function createAbortableFetchMock() {
+  let receivedSignal: AbortSignal | undefined;
+  const fetch = vi.fn(
+    (_input: string | URL | Request, init?: RequestInit) =>
+      new Promise<Response>((_resolve, reject) => {
+        receivedSignal = init?.signal ?? undefined;
+        init?.signal?.addEventListener("abort", () => {
+          reject(new DOMException("The operation was aborted.", "AbortError"));
+        });
+      }),
+  );
+  return {
+    fetch,
+    get receivedSignal() {
+      return receivedSignal;
+    },
+  };
+}
+
 export function createInternalTestClient(commands: BaseCommand[] = []): Client {
   return new Client(
     {

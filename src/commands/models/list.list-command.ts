@@ -3,6 +3,7 @@ import type { ModelRegistry } from "@mariozechner/pi-coding-agent";
 import { parseModelRef } from "../../agents/model-selection.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
+import { createModelListAuthIndex } from "./list.auth-index.js";
 import { resolveConfiguredEntries } from "./list.configured.js";
 import { formatErrorWithStack } from "./list.errors.js";
 import { printModelTable } from "./list.table.js";
@@ -64,17 +65,26 @@ export async function modelsListCommand(
   if (providerFilter === null) {
     return;
   }
-  const [{ loadAuthProfileStoreWithoutExternalProfiles }, { resolveOpenClawAgentDir }] =
-    await Promise.all([
-      import("../../agents/auth-profiles/store.js"),
-      import("../../agents/agent-paths.js"),
-    ]);
+  const [
+    { loadAuthProfileStoreWithoutExternalProfiles },
+    { resolveOpenClawAgentDir },
+    { resolveAgentWorkspaceDir, resolveDefaultAgentId },
+    { resolveDefaultAgentWorkspaceDir },
+  ] = await Promise.all([
+    import("../../agents/auth-profiles/store.js"),
+    import("../../agents/agent-paths.js"),
+    import("../../agents/agent-scope.js"),
+    import("../../agents/workspace.js"),
+  ]);
   const { resolvedConfig: cfg } = await loadModelsConfigWithSource({
     commandName: "models list",
     runtime,
   });
   const authStore = loadAuthProfileStoreWithoutExternalProfiles();
   const agentDir = resolveOpenClawAgentDir();
+  const workspaceDir =
+    resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg)) ?? resolveDefaultAgentWorkspaceDir();
+  const authIndex = createModelListAuthIndex({ cfg, authStore, workspaceDir });
 
   let modelRegistry: ModelRegistry | undefined;
   let registryModels: Model<Api>[] = [];
@@ -101,6 +111,7 @@ export async function modelsListCommand(
       providerFilter,
       normalizeModels: opts?.normalizeModels ?? Boolean(providerFilter),
       loadAvailability: opts?.loadAvailability,
+      workspaceDir,
     });
     modelRegistry = loaded.registry;
     registryModels = loaded.models;
@@ -113,7 +124,10 @@ export async function modelsListCommand(
       await loadRegistryState();
     } else if (!opts.all && opts.local) {
       const { loadConfiguredListModelRegistry } = await loadRegistryLoadModule();
-      const loaded = loadConfiguredListModelRegistry(cfg, entries, { providerFilter });
+      const loaded = loadConfiguredListModelRegistry(cfg, entries, {
+        providerFilter,
+        workspaceDir,
+      });
       modelRegistry = loaded.registry;
       discoveredKeys = loaded.discoveredKeys;
       availableKeys = loaded.availableKeys;
@@ -126,7 +140,7 @@ export async function modelsListCommand(
   const buildRowContext = (skipRuntimeModelSuppression: boolean) => ({
     cfg,
     agentDir,
-    authStore,
+    authIndex,
     availableKeys,
     configuredByKey,
     discoveredKeys,

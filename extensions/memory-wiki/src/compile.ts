@@ -28,8 +28,10 @@ import {
   renderWikiMarkdown,
   toWikiPageSummary,
   type WikiClaim,
+  type WikiClaimEvidence,
   type WikiPageKind,
   type WikiPageSummary,
+  type WikiRelationship,
   WIKI_RELATED_END_MARKER,
   WIKI_RELATED_START_MARKER,
 } from "./markdown.js";
@@ -218,6 +220,106 @@ const DASHBOARD_PAGES: DashboardPageDefinition[] = [
       ].join("\n");
     },
   },
+  {
+    id: "report.person-agent-directory",
+    title: "Person Agent Directory",
+    relativePath: "reports/person-agent-directory.md",
+    buildBody: ({ config, pages, now }) => {
+      const matches = pages
+        .filter((page) => page.kind !== "report" && isPersonLikePage(page))
+        .toSorted((left, right) => left.title.localeCompare(right.title));
+      if (matches.length === 0) {
+        return "- No person-like entity pages with agent cards yet.";
+      }
+      const lines = [`- People with routing metadata: ${matches.length}`];
+      for (const page of matches) {
+        const freshness = assessPageFreshness(page, now);
+        lines.push(`- ${formatPersonDirectoryLine(config, page, freshness)}`);
+      }
+      return lines.join("\n");
+    },
+  },
+  {
+    id: "report.relationship-graph",
+    title: "Relationship Graph",
+    relativePath: "reports/relationship-graph.md",
+    buildBody: ({ config, pages }) => {
+      const relationships = pages
+        .flatMap((page) => page.relationships.map((relationship) => ({ page, relationship })))
+        .toSorted((left, right) => {
+          const leftTitle = left.relationship.targetTitle ?? left.relationship.targetId ?? "";
+          const rightTitle = right.relationship.targetTitle ?? right.relationship.targetId ?? "";
+          return `${left.page.title} ${leftTitle}`.localeCompare(
+            `${right.page.title} ${rightTitle}`,
+          );
+        });
+      if (relationships.length === 0) {
+        return "- No structured relationships yet.";
+      }
+      return [
+        `- Structured relationships: ${relationships.length}`,
+        "",
+        ...relationships.map(
+          ({ page, relationship }) => `- ${formatRelationshipLine(config, page, relationship)}`,
+        ),
+      ].join("\n");
+    },
+  },
+  {
+    id: "report.provenance-coverage",
+    title: "Provenance Coverage",
+    relativePath: "reports/provenance-coverage.md",
+    buildBody: ({ config, pages }) => {
+      const evidenceEntries = pages.flatMap((page) =>
+        page.claims.flatMap((claim) =>
+          claim.evidence.map((evidence) => ({ page, claim, evidence })),
+        ),
+      );
+      const missingEvidence = pages.flatMap((page) =>
+        page.claims
+          .filter((claim) => claim.evidence.length === 0)
+          .map((claim) => ({ page, claim })),
+      );
+      if (evidenceEntries.length === 0 && missingEvidence.length === 0) {
+        return "- No structured claims with provenance coverage yet.";
+      }
+      const kindCounts = countBy(
+        evidenceEntries.map(({ evidence }) => evidence.kind ?? "unspecified"),
+      );
+      const sourceCounts = countBy(
+        evidenceEntries.map(({ evidence }) => evidence.sourceId ?? evidence.path ?? "inline"),
+      );
+      const lines = [
+        `- Evidence entries: ${evidenceEntries.length}`,
+        `- Claims missing evidence: ${missingEvidence.length}`,
+        "",
+        "### Evidence Classes",
+        ...formatCountLines(kindCounts),
+        "",
+        "### Top Evidence Sources",
+        ...formatCountLines(sourceCounts).slice(0, 20),
+      ];
+      if (missingEvidence.length > 0) {
+        lines.push("", "### Missing Evidence");
+        for (const { page, claim } of missingEvidence) {
+          lines.push(`- ${formatPageLink(config, page)}: ${formatClaimIdentityForPage(claim)}`);
+        }
+      }
+      return lines.join("\n");
+    },
+  },
+  {
+    id: "report.privacy-review",
+    title: "Privacy Review",
+    relativePath: "reports/privacy-review.md",
+    buildBody: ({ config, pages }) => {
+      const entries = collectPrivacyReviewEntries(config, pages);
+      if (entries.length === 0) {
+        return "- No non-public privacy tiers flagged right now.";
+      }
+      return [`- Privacy review entries: ${entries.length}`, "", ...entries].join("\n");
+    },
+  },
 ];
 
 export type CompileMemoryWikiResult = {
@@ -292,6 +394,165 @@ function formatFreshnessLabel(freshness: WikiFreshness): string {
       return freshness.reason;
   }
   throw new Error("Unsupported wiki freshness level");
+}
+
+function formatListPreview(values: readonly string[], maxItems = 3): string | null {
+  if (values.length === 0) {
+    return null;
+  }
+  const shown = values.slice(0, maxItems).join(", ");
+  return values.length > maxItems ? `${shown}, +${values.length - maxItems}` : shown;
+}
+
+function formatMaybeDetail(label: string, value: string | null | undefined): string | null {
+  return value ? `${label} ${value}` : null;
+}
+
+function isPersonLikePage(page: WikiPageSummary): boolean {
+  const entityType = normalizeLowercaseStringOrEmpty(page.entityType);
+  const pageType = normalizeLowercaseStringOrEmpty(page.pageType);
+  return (
+    Boolean(page.personCard) ||
+    entityType === "person" ||
+    entityType === "maintainer" ||
+    pageType === "person" ||
+    pageType === "maintainer"
+  );
+}
+
+function formatPersonDirectoryLine(
+  config: ResolvedMemoryWikiConfig,
+  page: WikiPageSummary,
+  freshness: WikiFreshness,
+): string {
+  const card = page.personCard;
+  const details = [
+    formatMaybeDetail("id", page.canonicalId ?? card?.canonicalId ?? page.id),
+    formatMaybeDetail("aliases", formatListPreview(page.aliases)),
+    formatMaybeDetail("handles", formatListPreview(card?.handles ?? [])),
+    formatMaybeDetail("lane", card?.lane),
+    formatMaybeDetail("ask", formatListPreview(card?.askFor ?? [])),
+    formatMaybeDetail(
+      "best",
+      formatListPreview([...page.bestUsedFor, ...(card?.bestUsedFor ?? [])]),
+    ),
+    formatMaybeDetail("privacy", page.privacyTier ?? card?.privacyTier),
+    formatMaybeDetail("refreshed", page.lastRefreshedAt ?? card?.lastRefreshedAt),
+    formatMaybeDetail("freshness", formatFreshnessLabel(freshness)),
+  ].filter(Boolean);
+  return `${formatPageLink(config, page)}${details.length > 0 ? `: ${details.join("; ")}` : ""}`;
+}
+
+function formatRelationshipTarget(
+  config: ResolvedMemoryWikiConfig,
+  relationship: WikiRelationship,
+) {
+  if (relationship.targetPath && relationship.targetTitle) {
+    return formatWikiLink({
+      renderMode: config.vault.renderMode,
+      relativePath: relationship.targetPath,
+      title: relationship.targetTitle,
+    });
+  }
+  return relationship.targetTitle ?? relationship.targetId ?? relationship.targetPath ?? "unknown";
+}
+
+function formatRelationshipLine(
+  config: ResolvedMemoryWikiConfig,
+  page: WikiPageSummary,
+  relationship: WikiRelationship,
+): string {
+  const details = [
+    relationship.kind ?? "related",
+    typeof relationship.weight === "number" ? `weight ${relationship.weight.toFixed(2)}` : null,
+    typeof relationship.confidence === "number"
+      ? `confidence ${relationship.confidence.toFixed(2)}`
+      : null,
+    relationship.evidenceKind ? `evidence ${relationship.evidenceKind}` : null,
+    relationship.privacyTier ? `privacy ${relationship.privacyTier}` : null,
+    relationship.note,
+  ].filter(Boolean);
+  return `${formatPageLink(config, page)} -> ${formatRelationshipTarget(config, relationship)}${
+    details.length > 0 ? ` (${details.join(", ")})` : ""
+  }`;
+}
+
+function countBy(values: readonly string[]): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const value of values) {
+    counts.set(value, (counts.get(value) ?? 0) + 1);
+  }
+  return counts;
+}
+
+function formatCountLines(counts: Map<string, number>): string[] {
+  const lines = [...counts]
+    .toSorted((left, right) => {
+      if (left[1] !== right[1]) {
+        return right[1] - left[1];
+      }
+      return left[0].localeCompare(right[0]);
+    })
+    .map(([label, count]) => `- ${label}: ${count}`);
+  return lines.length > 0 ? lines : ["- None"];
+}
+
+function formatClaimIdentityForPage(claim: Pick<WikiClaim, "id" | "text">): string {
+  return claim.id ? `\`${claim.id}\`: ${claim.text}` : claim.text;
+}
+
+function isReviewablePrivacyTier(value: string | undefined): boolean {
+  const tier = normalizeLowercaseStringOrEmpty(value);
+  return tier !== "" && tier !== "public";
+}
+
+function formatEvidencePrivacyDetails(evidence: WikiClaimEvidence): string {
+  return [
+    evidence.kind ? `kind ${evidence.kind}` : null,
+    evidence.sourceId ? `source ${evidence.sourceId}` : null,
+    evidence.path ? `path ${evidence.path}` : null,
+    evidence.lines ? `lines ${evidence.lines}` : null,
+  ]
+    .filter(Boolean)
+    .join(", ");
+}
+
+function collectPrivacyReviewEntries(
+  config: ResolvedMemoryWikiConfig,
+  pages: WikiPageSummary[],
+): string[] {
+  const entries: string[] = [];
+  for (const page of pages) {
+    if (isReviewablePrivacyTier(page.privacyTier)) {
+      entries.push(`- ${formatPageLink(config, page)}: page privacy ${page.privacyTier}`);
+    }
+    if (isReviewablePrivacyTier(page.personCard?.privacyTier)) {
+      entries.push(
+        `- ${formatPageLink(config, page)}: person card privacy ${page.personCard?.privacyTier}`,
+      );
+    }
+    for (const relationship of page.relationships) {
+      if (isReviewablePrivacyTier(relationship.privacyTier)) {
+        entries.push(
+          `- ${formatPageLink(config, page)}: relationship privacy ${
+            relationship.privacyTier
+          } -> ${formatRelationshipTarget(config, relationship)}`,
+        );
+      }
+    }
+    for (const claim of page.claims) {
+      for (const evidence of claim.evidence) {
+        if (!isReviewablePrivacyTier(evidence.privacyTier)) {
+          continue;
+        }
+        const detail = formatEvidencePrivacyDetails(evidence);
+        entries.push(
+          `- ${formatPageLink(config, page)}: evidence privacy ${evidence.privacyTier} on ${formatClaimIdentityForPage(claim)}${detail ? ` (${detail})` : ""}`,
+        );
+      }
+    }
+  }
+  return entries;
 }
 
 function formatClaimIdentity(claim: WikiClaimHealth): string {
@@ -740,12 +1001,23 @@ type AgentDigestPage = {
   title: string;
   kind: WikiPageKind;
   path: string;
+  pageType?: string;
+  entityType?: string;
+  canonicalId?: string;
+  aliases: string[];
   sourceIds: string[];
   questions: string[];
   contradictions: string[];
   confidence?: number;
+  privacyTier?: string;
+  personCard?: WikiPageSummary["personCard"];
+  bestUsedFor: string[];
+  notEnoughFor: string[];
+  relationshipCount: number;
+  topRelationships: WikiRelationship[];
   freshnessLevel: WikiFreshnessLevel;
   lastTouchedAt?: string;
+  lastRefreshedAt?: string;
   claimCount: number;
   topClaims: AgentDigestClaim[];
 };
@@ -878,13 +1150,24 @@ function buildAgentDigest(params: {
           title: page.title,
           kind: page.kind,
           path: page.relativePath,
+          aliases: [...page.aliases],
           sourceIds: [...page.sourceIds],
           questions: [...page.questions],
           contradictions: [...page.contradictions],
+          bestUsedFor: [...page.bestUsedFor],
+          notEnoughFor: [...page.notEnoughFor],
+          relationshipCount: page.relationships.length,
+          topRelationships: page.relationships.slice(0, 5),
         },
+        page.pageType ? { pageType: page.pageType } : {},
+        page.entityType ? { entityType: page.entityType } : {},
+        page.canonicalId ? { canonicalId: page.canonicalId } : {},
         typeof page.confidence === "number" ? { confidence: page.confidence } : {},
+        page.privacyTier ? { privacyTier: page.privacyTier } : {},
+        page.personCard ? { personCard: page.personCard } : {},
         { freshnessLevel: pageFreshness.level },
         pageFreshness.lastTouchedAt ? { lastTouchedAt: pageFreshness.lastTouchedAt } : {},
+        page.lastRefreshedAt ? { lastRefreshedAt: page.lastRefreshedAt } : {},
         {
           claimCount: page.claims.length,
           topClaims: sortClaims(page)
@@ -931,10 +1214,24 @@ function buildClaimsDigestLines(params: { pages: WikiPageSummary[] }): string[] 
           pageTitle: page.title,
           pageKind: page.kind,
           pagePath: page.relativePath,
+          pageType: page.pageType,
+          entityType: page.entityType,
+          canonicalId: page.canonicalId,
+          aliases: page.aliases,
           text: claim.text,
           status: normalizeClaimStatus(claim.status),
           confidence: claim.confidence,
           sourceIds: page.sourceIds,
+          evidenceKinds: [...new Set(claim.evidence.flatMap((entry) => entry.kind ?? []))],
+          privacyTiers: [
+            ...new Set(
+              [
+                page.privacyTier,
+                page.personCard?.privacyTier,
+                ...claim.evidence.map((entry) => entry.privacyTier),
+              ].flatMap((entry) => entry ?? []),
+            ),
+          ],
           evidenceCount: claim.evidence.length,
           missingEvidence: claim.evidence.length === 0,
           evidence: claim.evidence,

@@ -9,7 +9,6 @@ import {
 } from "@mariozechner/pi-coding-agent";
 import { isAcpRuntimeSpawnAvailable } from "../../../acp/runtime/availability.js";
 import { filterHeartbeatPairs } from "../../../auto-reply/heartbeat-filter.js";
-import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
 import { getRuntimeConfig } from "../../../config/config.js";
 import { emitTrustedDiagnosticEvent } from "../../../infra/diagnostic-events.js";
 import {
@@ -36,7 +35,6 @@ import {
 import { getPluginToolMeta } from "../../../plugins/tools.js";
 import { isAcpSessionKey, isSubagentSessionKey } from "../../../routing/session-key.js";
 import { annotateInterSessionPromptText } from "../../../sessions/input-provenance.js";
-import { normalizeOptionalLowercaseString } from "../../../shared/string-coerce.js";
 import { normalizeOptionalString } from "../../../shared/string-coerce.js";
 import {
   buildTrajectoryArtifacts,
@@ -71,7 +69,6 @@ import {
 import { createCacheTrace } from "../../cache-trace.js";
 import {
   listChannelSupportedActions,
-  resolveChannelMessageToolCapabilities,
   resolveChannelMessageToolHints,
   resolveChannelReactionGuidance,
 } from "../../channel-tools.js";
@@ -122,6 +119,8 @@ import {
 import { wrapStreamFnTextTransforms } from "../../plugin-text-transforms.js";
 import { describeProviderRequestRoutingSummary } from "../../provider-attribution.js";
 import { registerProviderStreamForModel } from "../../provider-stream.js";
+import { runAgentCleanupStep } from "../../run-cleanup-timeout.js";
+import { collectRuntimeChannelCapabilities } from "../../runtime-capabilities.js";
 import {
   logAgentRuntimeToolDiagnostics,
   normalizeAgentRuntimeTools,
@@ -763,7 +762,9 @@ export async function runEmbeddedAttempt(
               modelCompat: extractModelCompat(params.model),
               modelApi: params.model.api,
               modelContextWindowTokens: params.model.contextWindow,
-              modelAuthMode: resolveModelAuthMode(params.model.provider, params.config),
+              modelAuthMode: resolveModelAuthMode(params.model.provider, params.config, undefined, {
+                workspaceDir: effectiveWorkspace,
+              }),
               currentChannelId: params.currentChannelId,
               currentThreadTs: params.currentThreadTs,
               currentMessageId: params.currentMessageId,
@@ -1006,35 +1007,11 @@ export async function runEmbeddedAttempt(
 
     const machineName = await getMachineDisplayName();
     const runtimeChannel = normalizeMessageChannel(params.messageChannel ?? params.messageProvider);
-    let runtimeCapabilities = runtimeChannel
-      ? (resolveChannelCapabilities({
-          cfg: params.config,
-          channel: runtimeChannel,
-          accountId: params.agentAccountId,
-        }) ?? [])
-      : undefined;
-    const promptCapabilities =
-      runtimeChannel && params.config
-        ? resolveChannelMessageToolCapabilities({
-            cfg: params.config,
-            channel: runtimeChannel,
-            accountId: params.agentAccountId,
-          })
-        : [];
-    if (promptCapabilities.length > 0) {
-      runtimeCapabilities ??= [];
-      const seenCapabilities = new Set(
-        runtimeCapabilities.map((cap) => normalizeOptionalLowercaseString(cap)).filter(Boolean),
-      );
-      for (const capability of promptCapabilities) {
-        const normalizedCapability = normalizeOptionalLowercaseString(capability);
-        if (!normalizedCapability || seenCapabilities.has(normalizedCapability)) {
-          continue;
-        }
-        seenCapabilities.add(normalizedCapability);
-        runtimeCapabilities.push(capability);
-      }
-    }
+    const runtimeCapabilities = collectRuntimeChannelCapabilities({
+      cfg: params.config,
+      channel: runtimeChannel,
+      accountId: params.agentAccountId,
+    });
     const reactionGuidance =
       runtimeChannel && params.config
         ? resolveChannelReactionGuidance({
@@ -2179,7 +2156,10 @@ export async function runEmbeddedAttempt(
         cancel: (reason?: "user_abort" | "restart" | "superseded") => void;
       } = {
         kind: "embedded",
-        queueMessage: async (text: string) => {
+        queueMessage: async (text: string, options) => {
+          if (options?.steeringMode) {
+            activeSession.agent.steeringMode = options.steeringMode;
+          }
           await activeSession.steer(text);
         },
         isStreaming: () => activeSession.isStreaming,
@@ -3325,7 +3305,15 @@ export async function runEmbeddedAttempt(
           promptError: promptError ? formatErrorMessage(promptError) : undefined,
         });
       }
-      await trajectoryRecorder?.flush();
+      await runAgentCleanupStep({
+        runId: params.runId,
+        sessionId: params.sessionId,
+        step: "pi-trajectory-flush",
+        log,
+        cleanup: async () => {
+          await trajectoryRecorder?.flush();
+        },
+      });
       // Always tear down the session (and release the lock) before we leave this attempt.
       //
       // BUGFIX: Wait for the agent to be truly idle before flushing pending tool results.

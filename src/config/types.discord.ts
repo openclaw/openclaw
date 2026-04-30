@@ -241,6 +241,8 @@ export type DiscordAccountConfig = {
   /** If false, do not start this Discord account. Default: true. */
   enabled?: boolean;
   token?: SecretInput;
+  /** Optional Discord application/client ID. Set this when REST application lookup is blocked. */
+  applicationId?: string;
   /** HTTP(S) proxy URL for Discord gateway WebSocket connections. */
   proxy?: string;
   /** Timeout for Discord /gateway/bot metadata lookup before falling back to the default gateway URL. Default: 30000. */

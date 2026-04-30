@@ -2,7 +2,6 @@ import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
-import { Module } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -11,6 +10,7 @@ import {
   getActiveBundledRuntimeDepsInstallCount,
   waitForBundledRuntimeDepsInstallIdle,
 } from "./bundled-runtime-deps-activity.js";
+import { assertBundledRuntimeDepsInstalled } from "./bundled-runtime-deps-materialization.js";
 import {
   __testing as bundledRuntimeDepsTesting,
   createBundledRuntimeDependencyAliasMap,
@@ -29,6 +29,11 @@ import {
   scanBundledPluginRuntimeDeps,
   type BundledRuntimeDepsInstallParams,
 } from "./bundled-runtime-deps.js";
+import {
+  writeBundledPluginRuntimeDepsPackage as writeBundledPluginPackage,
+  writeGeneratedRuntimeDepsManifest,
+  writeInstalledRuntimeDepPackage as writeInstalledPackage,
+} from "./test-helpers/bundled-runtime-deps-fixtures.js";
 
 vi.mock("node:child_process", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:child_process")>()),
@@ -44,65 +49,6 @@ function makeTempDir(): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-runtime-deps-test-"));
   tempDirs.push(dir);
   return dir;
-}
-
-function writeInstalledPackage(rootDir: string, packageName: string, version: string): void {
-  const packageDir = path.join(rootDir, "node_modules", ...packageName.split("/"));
-  fs.mkdirSync(packageDir, { recursive: true });
-  fs.writeFileSync(
-    path.join(packageDir, "package.json"),
-    JSON.stringify({ name: packageName, version }),
-    "utf8",
-  );
-}
-
-function writeGeneratedRuntimeDepsManifest(rootDir: string, specs: readonly string[]): void {
-  const dependencies = Object.fromEntries(
-    [...specs]
-      .toSorted((left, right) => left.localeCompare(right))
-      .map((spec) => {
-        const atIndex = spec.lastIndexOf("@");
-        return [spec.slice(0, atIndex), spec.slice(atIndex + 1)];
-      }),
-  );
-  fs.mkdirSync(rootDir, { recursive: true });
-  fs.writeFileSync(
-    path.join(rootDir, "package.json"),
-    `${JSON.stringify(
-      {
-        name: "openclaw-runtime-deps-install",
-        private: true,
-        dependencies,
-      },
-      null,
-      2,
-    )}\n`,
-    "utf8",
-  );
-}
-
-function writeBundledPluginPackage(params: {
-  packageRoot: string;
-  pluginId: string;
-  deps: Record<string, string>;
-  enabledByDefault?: boolean;
-  channels?: string[];
-}): string {
-  const pluginRoot = path.join(params.packageRoot, "dist", "extensions", params.pluginId);
-  fs.mkdirSync(pluginRoot, { recursive: true });
-  fs.writeFileSync(
-    path.join(pluginRoot, "package.json"),
-    JSON.stringify({ dependencies: params.deps }),
-  );
-  fs.writeFileSync(
-    path.join(pluginRoot, "openclaw.plugin.json"),
-    JSON.stringify({
-      id: params.pluginId,
-      enabledByDefault: params.enabledByDefault === true,
-      ...(params.channels ? { channels: params.channels } : {}),
-    }),
-  );
-  return pluginRoot;
 }
 
 function statfsFixture(params: {
@@ -180,6 +126,8 @@ describe("resolveBundledRuntimeDepsNpmRunner", () => {
         { cacheDir: "/opt/openclaw/runtime-cache" },
       ),
     ).toEqual({
+      COREPACK_ENABLE_DOWNLOAD_PROMPT: "0",
+      NPM_CONFIG_IGNORE_SCRIPTS: "true",
       PATH: "/usr/bin:/bin",
       npm_config_audit: "false",
       npm_config_cache: "/opt/openclaw/runtime-cache",
@@ -939,6 +887,33 @@ describe("installBundledRuntimeDeps", () => {
     );
   });
 
+  it("accepts extensionless package main entries resolved by Node", () => {
+    const installRoot = makeTempDir();
+    spawnSyncMock.mockImplementation((_command, _args, options) => {
+      const packageDir = path.join(String(options?.cwd ?? ""), "node_modules", "jszip");
+      fs.mkdirSync(path.join(packageDir, "lib"), { recursive: true });
+      fs.writeFileSync(
+        path.join(packageDir, "package.json"),
+        JSON.stringify({ name: "jszip", version: "3.10.1", main: "./lib/index" }),
+      );
+      fs.writeFileSync(path.join(packageDir, "lib", "index.js"), "export default {};\n");
+      return {
+        pid: 123,
+        output: [],
+        stdout: "",
+        stderr: "",
+        signal: null,
+        status: 0,
+      };
+    });
+
+    installBundledRuntimeDeps({
+      installRoot,
+      missingSpecs: ["jszip@^3.10.1"],
+      env: {},
+    });
+  });
+
   it("cleans an owned isolated execution root after copying node_modules back", () => {
     const installRoot = makeTempDir();
     const installExecutionRoot = path.join(installRoot, ".openclaw-install-stage");
@@ -1090,6 +1065,27 @@ describe("scanBundledPluginRuntimeDeps config policy", () => {
       deps: { "telegram-runtime": "2.0.0" },
       channels: ["telegram"],
     });
+    writeBundledPluginPackage({
+      packageRoot,
+      pluginId: "amazon-bedrock",
+      deps: { "bedrock-runtime": "3.0.0" },
+      enabledByDefault: true,
+      providers: ["amazon-bedrock"],
+    });
+    writeBundledPluginPackage({
+      packageRoot,
+      pluginId: "anthropic",
+      deps: { "anthropic-runtime": "4.0.0" },
+      modelSupport: { modelPrefixes: ["claude-"] },
+      providers: ["anthropic"],
+    });
+    writeBundledPluginPackage({
+      packageRoot,
+      pluginId: "openai",
+      deps: { "openai-runtime": "5.0.0" },
+      modelSupport: { modelPrefixes: ["gpt-", "o1", "o3", "o4"] },
+      providers: ["openai", "openai-codex"],
+    });
     return packageRoot;
   }
 
@@ -1187,6 +1183,55 @@ describe("scanBundledPluginRuntimeDeps config policy", () => {
       includeConfiguredChannels: true,
       expectedDeps: ["alpha-runtime@1.0.0"],
     },
+    {
+      name: "includes configured model provider deps",
+      config: { agents: { defaults: { model: "amazon-bedrock/claude-opus-4-7" } } },
+      includeConfiguredChannels: false,
+      expectedDeps: ["alpha-runtime@1.0.0", "bedrock-runtime@3.0.0"],
+    },
+    {
+      name: "includes configured bare model owner deps from model support",
+      config: { agents: { defaults: { model: "gpt-5.5" } } },
+      includeConfiguredChannels: false,
+      expectedDeps: ["alpha-runtime@1.0.0", "openai-runtime@5.0.0"],
+    },
+    {
+      name: "includes configured bare fallback model owner deps from model support",
+      config: {
+        agents: {
+          defaults: { model: { primary: "unknown-model", fallbacks: ["claude-sonnet-4-6"] } },
+        },
+      },
+      includeConfiguredChannels: false,
+      expectedDeps: ["alpha-runtime@1.0.0", "anthropic-runtime@4.0.0"],
+    },
+    {
+      name: "includes configured model provider deps from manifest provider aliases",
+      config: { agents: { defaults: { model: "openai-codex/gpt-5.5" } } },
+      includeConfiguredChannels: false,
+      expectedDeps: ["alpha-runtime@1.0.0", "openai-runtime@5.0.0"],
+    },
+    {
+      name: "includes configured model provider deps from aliases",
+      config: { models: { providers: { "aws-bedrock": { baseUrl: "", models: [] } } } },
+      includeConfiguredChannels: false,
+      expectedDeps: ["alpha-runtime@1.0.0", "bedrock-runtime@3.0.0"],
+    },
+    {
+      name: "includes configured subagent model provider deps",
+      config: { agents: { defaults: { subagents: { model: "bedrock/claude-sonnet-4-6" } } } },
+      includeConfiguredChannels: false,
+      expectedDeps: ["alpha-runtime@1.0.0", "bedrock-runtime@3.0.0"],
+    },
+    {
+      name: "keeps configured provider deps behind restrictive allowlists",
+      config: {
+        plugins: { allow: ["alpha"] },
+        agents: { defaults: { model: "amazon-bedrock/claude-opus-4-7" } },
+      },
+      includeConfiguredChannels: false,
+      expectedDeps: ["alpha-runtime@1.0.0"],
+    },
   ];
 
   it.each(cases)("$name", ({ config, includeConfiguredChannels, expectedDeps }) => {
@@ -1281,6 +1326,20 @@ describe("scanBundledPluginRuntimeDeps config policy", () => {
     expect(result.deps.map((dep) => `${dep.name}@${dep.version}`)).toEqual(["alpha-runtime@1.0.0"]);
     expect(result.missing).toEqual([]);
     expect(result.conflicts).toEqual([]);
+  });
+
+  it("accepts staged runtime deps whose package main relies on Node extension resolution", () => {
+    const installRoot = makeTempDir();
+    const packageDir = path.join(installRoot, "node_modules", "jszip");
+    fs.mkdirSync(path.join(packageDir, "lib"), { recursive: true });
+    fs.writeFileSync(
+      path.join(packageDir, "package.json"),
+      JSON.stringify({ name: "jszip", version: "3.10.1", main: "./lib/index" }),
+      "utf8",
+    );
+    fs.writeFileSync(path.join(packageDir, "lib", "index.js"), "export default {};\n", "utf8");
+
+    expect(() => assertBundledRuntimeDepsInstalled(installRoot, ["jszip@^3.10.1"])).not.toThrow();
   });
 
   it("reports staged package-level runtime deps as missing when the version is stale", () => {
@@ -3251,6 +3310,102 @@ describe("ensureBundledPluginRuntimeDeps", () => {
     expect(installRoot).not.toBe(pluginRoot);
   });
 
+  it("repairs package-level mirrors when an installed package entry file is missing", () => {
+    const packageRoot = makeTempDir();
+    const stageDir = makeTempDir();
+    fs.writeFileSync(
+      path.join(packageRoot, "package.json"),
+      JSON.stringify({
+        name: "openclaw",
+        version: "2026.4.27",
+        dependencies: { ajv: "8.20.0" },
+        openclaw: {
+          bundle: {
+            mirroredRootRuntimeDependencies: ["ajv"],
+          },
+        },
+      }),
+    );
+    const pluginRoot = writeBundledPluginPackage({
+      packageRoot,
+      pluginId: "browser",
+      deps: {},
+      enabledByDefault: true,
+    });
+    const env = { OPENCLAW_PLUGIN_STAGE_DIR: stageDir };
+    const installRoot = resolveBundledRuntimeDependencyInstallRoot(pluginRoot, { env });
+    writeGeneratedRuntimeDepsManifest(installRoot, ["ajv@8.20.0"]);
+    const ajvRoot = path.join(installRoot, "node_modules", "ajv");
+    fs.mkdirSync(ajvRoot, { recursive: true });
+    fs.writeFileSync(
+      path.join(ajvRoot, "package.json"),
+      JSON.stringify({ name: "ajv", version: "8.20.0", main: "dist/ajv.js" }),
+    );
+
+    const calls: BundledRuntimeDepsInstallParams[] = [];
+    const result = ensureBundledPluginRuntimeDeps({
+      env,
+      pluginId: "browser",
+      pluginRoot,
+      installDeps: (params) => {
+        calls.push(params);
+      },
+    });
+
+    expect(result.installedSpecs).toEqual(["ajv@8.20.0"]);
+    expect(calls).toEqual([
+      {
+        installRoot,
+        missingSpecs: ["ajv@8.20.0"],
+        installSpecs: ["ajv@8.20.0"],
+      },
+    ]);
+  });
+
+  it("mirrors sqlite-vec into the packaged default memory runtime deps", () => {
+    const packageRoot = makeTempDir();
+    fs.writeFileSync(
+      path.join(packageRoot, "package.json"),
+      JSON.stringify({
+        name: "openclaw",
+        version: "2026.4.27",
+        dependencies: {
+          "sqlite-vec": "0.1.9",
+        },
+        openclaw: {
+          bundle: {
+            mirroredRootRuntimeDependencies: ["sqlite-vec"],
+          },
+        },
+      }),
+    );
+    const pluginRoot = writeBundledPluginPackage({
+      packageRoot,
+      pluginId: "memory-core",
+      deps: { chokidar: "^5.0.0", typebox: "1.1.34" },
+    });
+    const calls: BundledRuntimeDepsInstallParams[] = [];
+
+    const result = ensureBundledPluginRuntimeDeps({
+      env: {},
+      config: {},
+      installDeps: (params) => {
+        calls.push(params);
+      },
+      pluginId: "memory-core",
+      pluginRoot,
+    });
+
+    expect(result).toEqual({
+      installedSpecs: ["chokidar@^5.0.0", "sqlite-vec@0.1.9", "typebox@1.1.34"],
+    });
+    expect(calls[0]?.installSpecs).toEqual([
+      "chokidar@^5.0.0",
+      "sqlite-vec@0.1.9",
+      "typebox@1.1.34",
+    ]);
+  });
+
   it("repairs external staged deps even when packaged plugin-local deps are present", () => {
     const packageRoot = makeTempDir();
     const extensionsRoot = path.join(packageRoot, "dist", "extensions");
@@ -3535,225 +3690,5 @@ describe("ensureBundledPluginRuntimeDeps", () => {
     });
     expect(installCalls).toHaveLength(2);
     expect(fs.existsSync(path.join(pluginRoot, "node_modules", "zod", "package.json"))).toBe(true);
-  });
-});
-
-describe("mirrored root runtime dependency drift guard", () => {
-  // Intentionally not mirrored at runtime: build-only / type-only / TUI-only
-  // tooling and packages that resolve transitively through other mirrored deps.
-  // If you change this set, document why in the comment beside the entry.
-  const KNOWN_UNMIRRORED_BARE_IMPORTS = new Set<string>([
-    "@mariozechner/pi-tui", // TUI mode runs from npm-global, not the gateway runtime mirror
-    "chalk", // available transitively via mirrored deps
-    "file-type", // available transitively via mirrored deps
-    "global-agent", // proxy bootstrap, only loaded when HTTP_PROXY is set
-    "ipaddr.js", // available transitively via mirrored deps
-    "proxy-agent", // available transitively via mirrored deps
-    "qrcode", // type-only import in src/media/qr-runtime.ts
-    "typescript", // CLI/dev only (api-baseline, jiti-runtime-api)
-  ]);
-
-  function locateRepoRoot(): string {
-    let dir = path.resolve(import.meta.dirname);
-    for (let depth = 0; depth < 10; depth += 1) {
-      const candidate = path.join(dir, "package.json");
-      if (fs.existsSync(candidate)) {
-        try {
-          const data = JSON.parse(fs.readFileSync(candidate, "utf8")) as { name?: string };
-          if (data.name === "openclaw") {
-            return dir;
-          }
-        } catch {
-          // fall through
-        }
-      }
-      const parent = path.dirname(dir);
-      if (parent === dir) {
-        break;
-      }
-      dir = parent;
-    }
-    throw new Error("could not locate openclaw repo root from test file");
-  }
-
-  function readPackageJsonDeps(packageJsonPath: string): Set<string> {
-    const out = new Set<string>();
-    if (!fs.existsSync(packageJsonPath)) {
-      return out;
-    }
-    let parsed: {
-      dependencies?: Record<string, string>;
-      optionalDependencies?: Record<string, string>;
-    };
-    try {
-      parsed = JSON.parse(fs.readFileSync(packageJsonPath, "utf8"));
-    } catch {
-      return out;
-    }
-    for (const name of Object.keys(parsed.dependencies ?? {})) {
-      out.add(name);
-    }
-    for (const name of Object.keys(parsed.optionalDependencies ?? {})) {
-      out.add(name);
-    }
-    return out;
-  }
-
-  function readMirroredRootRuntimeDeps(repoRoot: string): Set<string> {
-    const parsed = JSON.parse(fs.readFileSync(path.join(repoRoot, "package.json"), "utf8")) as {
-      openclaw?: {
-        bundle?: {
-          mirroredRootRuntimeDependencies?: unknown;
-        };
-      };
-    };
-    const deps = parsed.openclaw?.bundle?.mirroredRootRuntimeDependencies;
-    return new Set(Array.isArray(deps) ? deps.filter((dep) => typeof dep === "string") : []);
-  }
-
-  function collectExtensionOwnedDeps(repoRoot: string): Set<string> {
-    const out = new Set<string>();
-    const extensionsDir = path.join(repoRoot, "extensions");
-    if (!fs.existsSync(extensionsDir)) {
-      return out;
-    }
-    for (const entry of fs.readdirSync(extensionsDir, { withFileTypes: true })) {
-      if (!entry.isDirectory()) {
-        continue;
-      }
-      for (const name of readPackageJsonDeps(
-        path.join(extensionsDir, entry.name, "package.json"),
-      )) {
-        out.add(name);
-      }
-    }
-    return out;
-  }
-
-  function walkCoreSourceFiles(repoRoot: string): string[] {
-    const srcDir = path.join(repoRoot, "src");
-    const files: string[] = [];
-    const queue: string[] = [srcDir];
-    while (queue.length > 0) {
-      const current = queue.shift();
-      if (!current) {
-        continue;
-      }
-      for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
-        const full = path.join(current, entry.name);
-        if (entry.isDirectory()) {
-          if (entry.name === "node_modules" || entry.name.startsWith(".")) {
-            continue;
-          }
-          queue.push(full);
-          continue;
-        }
-        if (!entry.isFile()) {
-          continue;
-        }
-        if (
-          /\.test\.tsx?$/u.test(entry.name) ||
-          /\.e2e\.test\.tsx?$/u.test(entry.name) ||
-          /\.test-helpers?\.tsx?$/u.test(entry.name) ||
-          /\.test-fixture\.tsx?$/u.test(entry.name) ||
-          entry.name.endsWith(".d.ts") ||
-          !/\.(?:ts|tsx|cjs|mjs|js)$/u.test(entry.name)
-        ) {
-          continue;
-        }
-        files.push(full);
-      }
-    }
-    return files;
-  }
-
-  function packageNameFromBareSpecifier(specifier: string): string | null {
-    if (
-      specifier.startsWith(".") ||
-      specifier.startsWith("/") ||
-      specifier.startsWith("node:") ||
-      specifier.startsWith("#")
-    ) {
-      return null;
-    }
-    const [first, second] = specifier.split("/");
-    if (!first) {
-      return null;
-    }
-    return first.startsWith("@") && second ? `${first}/${second}` : first;
-  }
-
-  // Match value imports (`import x from 'y'`, `import 'y'`, `require('y')`,
-  // `import('y')`) but skip `import type` to avoid noise from type-only imports.
-  const VALUE_IMPORT_PATTERNS = [
-    /(?:^|[;\n])\s*import\s+(?!type\b)(?:[^'"()]+?\s+from\s+)?["']([^"']+)["']/g,
-    /\brequire\s*\(\s*["']([^"']+)["']\s*\)/g,
-    /\bimport\s*\(\s*["']([^"']+)["']\s*\)/g,
-  ] as const;
-
-  it("every value-imported root-package dep in src/ is mirrored or owned by an extension", () => {
-    const repoRoot = locateRepoRoot();
-    const rootDeps = readPackageJsonDeps(path.join(repoRoot, "package.json"));
-    const extensionDeps = collectExtensionOwnedDeps(repoRoot);
-    const mirroredCore = readMirroredRootRuntimeDeps(repoRoot);
-    const nodeBuiltins = new Set<string>(Module.builtinModules);
-
-    const violations = new Map<string, string>();
-    for (const file of walkCoreSourceFiles(repoRoot)) {
-      const source = fs.readFileSync(file, "utf8");
-      const specifiers = new Set<string>();
-      for (const pattern of VALUE_IMPORT_PATTERNS) {
-        for (const match of source.matchAll(pattern)) {
-          if (match[1]) {
-            specifiers.add(match[1]);
-          }
-        }
-      }
-      for (const specifier of specifiers) {
-        const packageName = packageNameFromBareSpecifier(specifier);
-        if (!packageName) {
-          continue;
-        }
-        if (nodeBuiltins.has(packageName)) {
-          continue;
-        }
-        if (packageName === "openclaw" || packageName.startsWith("@openclaw/")) {
-          continue;
-        }
-        if (mirroredCore.has(packageName) || extensionDeps.has(packageName)) {
-          continue;
-        }
-        if (KNOWN_UNMIRRORED_BARE_IMPORTS.has(packageName)) {
-          continue;
-        }
-        if (!rootDeps.has(packageName)) {
-          // Not a root runtime dep; not our concern (could be a peer/dev import
-          // that resolves through some other path; the mirror does not own it).
-          continue;
-        }
-        if (!violations.has(packageName)) {
-          violations.set(packageName, path.relative(repoRoot, file).replaceAll(path.sep, "/"));
-        }
-      }
-    }
-
-    if (violations.size > 0) {
-      const summary = [...violations.entries()]
-        .toSorted(([left], [right]) => left.localeCompare(right))
-        .map(([packageName, filePath]) => `  - ${packageName} (e.g. ${filePath})`)
-        .join("\n");
-      throw new Error(
-        [
-          "Bare imports found in src/ that are root-package runtime deps but are neither",
-          "in package.json openclaw.bundle.mirroredRootRuntimeDependencies nor declared by any extension's package.json.",
-          "These will be missing from the runtime-deps mirror at gateway start and Node",
-          "will fail to resolve them. Either add the package to openclaw.bundle.mirroredRootRuntimeDependencies,",
-          "declare it under an owning extension's dependencies, or add it to",
-          "KNOWN_UNMIRRORED_BARE_IMPORTS in this test with a comment explaining why.",
-          "",
-          summary,
-        ].join("\n"),
-      );
-    }
   });
 });

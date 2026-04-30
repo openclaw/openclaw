@@ -1,19 +1,13 @@
-import path from "node:path";
-import { agentCommandFromIngress } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-types";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
-import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { resolveDiscordAccountAllowFrom } from "../accounts.js";
-import { ChannelType, type Client, ReadyListener } from "../internal/discord.js";
+import { type Client, ReadyListener } from "../internal/discord.js";
 import type { VoicePlugin } from "../internal/voice.js";
 import { formatMention } from "../mentions.js";
-import { normalizeDiscordSlug } from "../monitor/allow-list.js";
-import { authorizeDiscordVoiceIngress } from "./access.js";
 import { decodeOpusStream, writeVoiceWavFile } from "./audio.js";
 import {
   beginVoiceCapture,
@@ -24,9 +18,7 @@ import {
   isVoiceCaptureActive,
   scheduleVoiceCaptureFinalize,
   stopVoiceCaptureState,
-  type VoiceCaptureState,
 } from "./capture-state.js";
-import { formatVoiceIngressPrompt } from "./prompt.js";
 import {
   analyzeVoiceReceiveError,
   createVoiceReceiveRecoveryState,
@@ -36,46 +28,21 @@ import {
   finishVoiceDecryptRecovery,
   noteVoiceDecryptFailure,
   resetVoiceReceiveRecoveryState,
-  type VoiceReceiveRecoveryState,
 } from "./receive-recovery.js";
 import { loadDiscordVoiceSdk } from "./sdk-runtime.js";
+import { processDiscordVoiceSegment } from "./segment.js";
+import {
+  CAPTURE_FINALIZE_GRACE_MS,
+  isVoiceChannel,
+  logVoiceVerbose,
+  MIN_SEGMENT_SECONDS,
+  VOICE_CONNECT_READY_TIMEOUT_MS,
+  type VoiceOperationResult,
+  type VoiceSessionEntry,
+} from "./session.js";
 import { DiscordVoiceSpeakerContextResolver } from "./speaker-context.js";
-import { synthesizeVoiceReplyAudio, transcribeVoiceAudio } from "./tts.js";
-
-const MIN_SEGMENT_SECONDS = 0.35;
-const CAPTURE_FINALIZE_GRACE_MS = 1_200;
-const VOICE_CONNECT_READY_TIMEOUT_MS = 15_000;
-const PLAYBACK_READY_TIMEOUT_MS = 60_000;
-const SPEAKING_READY_TIMEOUT_MS = 60_000;
 
 const logger = createSubsystemLogger("discord/voice");
-
-const logVoiceVerbose = (message: string) => {
-  logVerbose(`discord voice: ${message}`);
-};
-
-type VoiceOperationResult = {
-  ok: boolean;
-  message: string;
-  channelId?: string;
-  guildId?: string;
-};
-
-type VoiceSessionEntry = {
-  guildId: string;
-  guildName?: string;
-  channelId: string;
-  channelName?: string;
-  sessionChannelId: string;
-  route: ReturnType<typeof resolveAgentRoute>;
-  connection: import("@discordjs/voice").VoiceConnection;
-  player: import("@discordjs/voice").AudioPlayer;
-  playbackQueue: Promise<void>;
-  processingQueue: Promise<void>;
-  capture: VoiceCaptureState;
-  receiveRecovery: VoiceReceiveRecoveryState;
-  stop: () => void;
-};
 
 export class DiscordVoiceManager {
   private sessions = new Map<string, VoiceSessionEntry>();
@@ -98,7 +65,10 @@ export class DiscordVoiceManager {
     this.botUserId = params.botUserId;
     this.voiceEnabled = params.discordConfig.voice?.enabled !== false;
     this.ownerAllowFrom =
-      resolveDiscordAccountAllowFrom({ cfg: params.cfg, accountId: params.accountId }) ?? [];
+      resolveDiscordAccountAllowFrom({ cfg: params.cfg, accountId: params.accountId }) ??
+      params.discordConfig.allowFrom ??
+      params.discordConfig.dm?.allowFrom ??
+      [];
     this.speakerContext = new DiscordVoiceSpeakerContextResolver({
       client: params.client,
       ownerAllowFrom: this.ownerAllowFrom,
@@ -492,123 +462,22 @@ export class DiscordVoiceManager {
     userId: string;
     durationSeconds: number;
   }) {
-    const { entry, wavPath, userId, durationSeconds } = params;
-    logVoiceVerbose(
-      `segment processing (${durationSeconds.toFixed(2)}s): guild ${entry.guildId} channel ${entry.channelId}`,
-    );
-    if (!entry.guildName) {
-      const guild = await this.params.client.fetchGuild(entry.guildId).catch(() => null);
-      if (guild && typeof guild.name === "string" && guild.name.trim()) {
-        entry.guildName = guild.name;
-      }
-    }
-    const speaker = await this.speakerContext.resolveContext(entry.guildId, userId);
-    const speakerIdentity = await this.speakerContext.resolveIdentity(entry.guildId, userId);
-    const access = await authorizeDiscordVoiceIngress({
+    await processDiscordVoiceSegment({
+      ...params,
       cfg: this.params.cfg,
       discordConfig: this.params.discordConfig,
-      guildName: entry.guildName,
-      guildId: entry.guildId,
-      channelId: entry.channelId,
-      channelName: entry.channelName,
-      channelSlug: entry.channelName ? normalizeDiscordSlug(entry.channelName) : "",
-      channelLabel: formatMention({ channelId: entry.channelId }),
-      memberRoleIds: speakerIdentity.memberRoleIds,
       ownerAllowFrom: this.ownerAllowFrom,
-      sender: {
-        id: speakerIdentity.id,
-        name: speakerIdentity.name,
-        tag: speakerIdentity.tag,
+      runtime: this.params.runtime,
+      speakerContext: this.speakerContext,
+      fetchGuildName: async (guildId) => {
+        const guild = await this.params.client.fetchGuild(guildId).catch(() => null);
+        return guild && typeof guild.name === "string" && guild.name.trim()
+          ? guild.name
+          : undefined;
       },
-    });
-    if (!access.ok) {
-      logVoiceVerbose(
-        `segment unauthorized: guild ${entry.guildId} channel ${entry.channelId} user ${userId} reason=${access.message}`,
-      );
-      return;
-    }
-    const transcript = await transcribeVoiceAudio({
-      cfg: this.params.cfg,
-      agentId: entry.route.agentId,
-      filePath: wavPath,
-    });
-    if (!transcript) {
-      logVoiceVerbose(
-        `transcription empty: guild ${entry.guildId} channel ${entry.channelId} user ${userId}`,
-      );
-      return;
-    }
-    logVoiceVerbose(
-      `transcription ok (${transcript.length} chars): guild ${entry.guildId} channel ${entry.channelId}`,
-    );
-
-    const prompt = formatVoiceIngressPrompt(transcript, speaker.label);
-    const modelOverride = normalizeOptionalString(this.params.discordConfig.voice?.model);
-
-    const result = await agentCommandFromIngress(
-      {
-        message: prompt,
-        sessionKey: entry.route.sessionKey,
-        agentId: entry.route.agentId,
-        messageChannel: "discord",
-        senderIsOwner: speaker.senderIsOwner,
-        allowModelOverride: Boolean(modelOverride),
-        model: modelOverride,
-        deliver: false,
+      enqueuePlayback: (entry, task) => {
+        this.enqueuePlayback(entry, task);
       },
-      this.params.runtime,
-    );
-
-    const replyText = (result.payloads ?? [])
-      .map((payload) => payload.text)
-      .filter((text) => typeof text === "string" && text.trim())
-      .join("\n")
-      .trim();
-
-    if (!replyText) {
-      logVoiceVerbose(
-        `reply empty: guild ${entry.guildId} channel ${entry.channelId} user ${userId}`,
-      );
-      return;
-    }
-    logVoiceVerbose(
-      `reply ok (${replyText.length} chars): guild ${entry.guildId} channel ${entry.channelId}`,
-    );
-
-    const voiceReplyAudio = await synthesizeVoiceReplyAudio({
-      cfg: this.params.cfg,
-      override: this.params.discordConfig.voice?.tts,
-      replyText,
-      speakerLabel: speaker.label,
-    });
-    if (voiceReplyAudio.status === "empty") {
-      logVoiceVerbose(
-        `tts skipped (empty): guild ${entry.guildId} channel ${entry.channelId} user ${userId}`,
-      );
-      return;
-    }
-    if (voiceReplyAudio.status === "failed") {
-      logger.warn(`discord voice: TTS failed: ${voiceReplyAudio.error ?? "unknown error"}`);
-      return;
-    }
-    logVoiceVerbose(
-      `tts ok (${voiceReplyAudio.speakText.length} chars): guild ${entry.guildId} channel ${entry.channelId}`,
-    );
-
-    this.enqueuePlayback(entry, async () => {
-      logVoiceVerbose(
-        `playback start: guild ${entry.guildId} channel ${entry.channelId} file ${path.basename(voiceReplyAudio.audioPath)}`,
-      );
-      const voiceSdk = loadDiscordVoiceSdk();
-      const resource = voiceSdk.createAudioResource(voiceReplyAudio.audioPath);
-      entry.player.play(resource);
-      await voiceSdk
-        .entersState(entry.player, voiceSdk.AudioPlayerStatus.Playing, PLAYBACK_READY_TIMEOUT_MS)
-        .catch(() => undefined);
-      await voiceSdk
-        .entersState(entry.player, voiceSdk.AudioPlayerStatus.Idle, SPEAKING_READY_TIMEOUT_MS)
-        .catch(() => undefined);
-      logVoiceVerbose(`playback done: guild ${entry.guildId} channel ${entry.channelId}`);
     });
   }
 
@@ -719,8 +588,4 @@ export class DiscordVoiceReadyListener extends ReadyListener {
       .autoJoin()
       .catch((err) => logger.warn(`discord voice: autoJoin failed: ${formatErrorMessage(err)}`));
   }
-}
-
-function isVoiceChannel(type: ChannelType) {
-  return type === ChannelType.GuildVoice || type === ChannelType.GuildStageVoice;
 }

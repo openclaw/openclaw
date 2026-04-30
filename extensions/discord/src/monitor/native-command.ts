@@ -1,9 +1,5 @@
 import { ApplicationCommandOptionType } from "discord-api-types/v10";
-import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
-import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
-import { resolveChannelStreamingBlockEnabled } from "openclaw/plugin-sdk/channel-streaming";
 import { resolveNativeCommandSessionTargets } from "openclaw/plugin-sdk/command-auth-native";
-import { resolveDirectStatusReplyForSession } from "openclaw/plugin-sdk/command-status-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { buildPairingReply } from "openclaw/plugin-sdk/conversation-runtime";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
@@ -17,12 +13,9 @@ import {
   type ChatCommandDefinition,
   type NativeCommandSpec,
 } from "openclaw/plugin-sdk/native-command-registry";
-import * as pluginRuntime from "openclaw/plugin-sdk/plugin-runtime";
 import { resolveChunkMode, resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
-import { dispatchReplyWithDispatcher } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import { createSubsystemLogger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import {
   resolveDiscordAccountAllowFrom,
   resolveDiscordAccountDmPolicy,
@@ -46,21 +39,24 @@ import {
 import { resolveDiscordChannelTopicSafe } from "./channel-access.js";
 import { resolveDiscordDmCommandAccess } from "./dm-command-auth.js";
 import { handleDiscordDmCommandDecision } from "./dm-command-decision.js";
+import { dispatchDiscordNativeAgentReply } from "./native-command-agent-reply.js";
 import {
   resolveDiscordGuildNativeCommandAuthorized,
   resolveDiscordNativeAutocompleteAuthorized,
   resolveDiscordNativeCommandAllowlistAccess,
   resolveDiscordNativeGroupDmAccess,
 } from "./native-command-auth.js";
+import {
+  shouldBypassConfiguredAcpEnsure,
+  shouldBypassConfiguredAcpGuildGuards,
+} from "./native-command-bypass.js";
 import { buildDiscordNativeCommandContext } from "./native-command-context.js";
 import type { DispatchDiscordCommandInteractionResult } from "./native-command-dispatch.js";
 import {
   deliverDiscordInteractionReply,
   hasRenderableReplyPayload,
-  isDiscordUnknownInteraction,
   safeDiscordInteractionCall,
 } from "./native-command-reply.js";
-import { resolveDiscordNativeInteractionRouteState } from "./native-command-route.js";
 import { maybeDeliverDiscordDirectStatus } from "./native-command-status.js";
 import {
   buildDiscordCommandArgMenu,
@@ -78,67 +74,14 @@ import {
   buildDiscordCommandOptions,
   truncateDiscordCommandDescription,
 } from "./native-command.options.js";
+import { nativeCommandRuntime } from "./native-command.runtime.js";
 import type { DiscordCommandArgs, DiscordConfig } from "./native-command.types.js";
 import { resolveDiscordNativeInteractionChannelContext } from "./native-interaction-channel-context.js";
 import { resolveDiscordSenderIdentity } from "./sender-identity.js";
 import type { ThreadBindingManager } from "./thread-bindings.js";
 
 const log = createSubsystemLogger("discord/native-command");
-let matchPluginCommandImpl = pluginRuntime.matchPluginCommand;
-let executePluginCommandImpl = pluginRuntime.executePluginCommand;
-let dispatchReplyWithDispatcherImpl = dispatchReplyWithDispatcher;
-let resolveDirectStatusReplyForSessionImpl = resolveDirectStatusReplyForSession;
-let resolveDiscordNativeInteractionRouteStateImpl = resolveDiscordNativeInteractionRouteState;
-
-export const __testing = {
-  setMatchPluginCommand(
-    next: typeof pluginRuntime.matchPluginCommand,
-  ): typeof pluginRuntime.matchPluginCommand {
-    const previous = matchPluginCommandImpl;
-    matchPluginCommandImpl = next;
-    return previous;
-  },
-  setExecutePluginCommand(
-    next: typeof pluginRuntime.executePluginCommand,
-  ): typeof pluginRuntime.executePluginCommand {
-    const previous = executePluginCommandImpl;
-    executePluginCommandImpl = next;
-    return previous;
-  },
-  setDispatchReplyWithDispatcher(
-    next: typeof dispatchReplyWithDispatcher,
-  ): typeof dispatchReplyWithDispatcher {
-    const previous = dispatchReplyWithDispatcherImpl;
-    dispatchReplyWithDispatcherImpl = next;
-    return previous;
-  },
-  setResolveDirectStatusReplyForSession(
-    next: typeof resolveDirectStatusReplyForSession,
-  ): typeof resolveDirectStatusReplyForSession {
-    const previous = resolveDirectStatusReplyForSessionImpl;
-    resolveDirectStatusReplyForSessionImpl = next;
-    return previous;
-  },
-  setResolveDiscordNativeInteractionRouteState(
-    next: typeof resolveDiscordNativeInteractionRouteState,
-  ): typeof resolveDiscordNativeInteractionRouteState {
-    const previous = resolveDiscordNativeInteractionRouteStateImpl;
-    resolveDiscordNativeInteractionRouteStateImpl = next;
-    return previous;
-  },
-};
-
-function shouldBypassConfiguredAcpEnsure(commandName: string): boolean {
-  const normalized = normalizeLowercaseStringOrEmpty(commandName);
-  // Recovery slash commands still need configured ACP readiness so stale dead
-  // bindings are recreated before /new or /reset dispatches through them.
-  return normalized === "acp";
-}
-
-function shouldBypassConfiguredAcpGuildGuards(commandName: string): boolean {
-  const normalized = normalizeLowercaseStringOrEmpty(commandName);
-  return normalized === "new" || normalized === "reset";
-}
+export { __testing } from "./native-command.runtime.js";
 
 export function createDiscordNativeCommand(params: {
   command: NativeCommandSpec;
@@ -160,7 +103,7 @@ export function createDiscordNativeCommand(params: {
   } = params;
   const fallbackCommandDefinition = createNativeCommandDefinition(command);
   const commandDefinition =
-    matchPluginCommandImpl(`/${command.name}`) !== null
+    nativeCommandRuntime.matchPluginCommand(`/${command.name}`) !== null
       ? fallbackCommandDefinition
       : (findCommandByNativeName(command.name, "discord", {
           includeBundledChannelFallback: false,
@@ -366,10 +309,10 @@ async function dispatchDiscordCommandInteraction(params: {
       })
     : null;
   let nativeRouteStatePromise:
-    | ReturnType<typeof resolveDiscordNativeInteractionRouteStateImpl>
+    | ReturnType<typeof nativeCommandRuntime.resolveDiscordNativeInteractionRouteState>
     | undefined;
   const getNativeRouteState = () =>
-    (nativeRouteStatePromise ??= resolveDiscordNativeInteractionRouteStateImpl({
+    (nativeRouteStatePromise ??= nativeCommandRuntime.resolveDiscordNativeInteractionRouteState({
       cfg,
       accountId,
       guildId: interaction.guild?.id ?? undefined,
@@ -560,7 +503,7 @@ async function dispatchDiscordCommandInteraction(params: {
     return { accepted: true };
   }
 
-  const pluginMatch = matchPluginCommandImpl(prompt);
+  const pluginMatch = nativeCommandRuntime.matchPluginCommand(prompt);
   if (pluginMatch && commandName !== "status") {
     if (suppressReplies) {
       return { accepted: true };
@@ -569,7 +512,7 @@ async function dispatchDiscordCommandInteraction(params: {
     const messageThreadId = !isDirectMessage && isThreadChannel ? channelId : undefined;
     const pluginThreadParentId = !isDirectMessage && isThreadChannel ? threadParentId : undefined;
     const { effectiveRoute } = await getNativeRouteState();
-    const pluginReply = await executePluginCommandImpl({
+    const pluginReply = await nativeCommandRuntime.executePluginCommand({
       command: pluginMatch.command,
       args: pluginMatch.args,
       senderId: sender.id,
@@ -652,7 +595,7 @@ async function dispatchDiscordCommandInteraction(params: {
   const directStatusResult = await maybeDeliverDiscordDirectStatus({
     commandName,
     suppressReplies,
-    resolveDirectStatusReplyForSession: resolveDirectStatusReplyForSessionImpl,
+    resolveDirectStatusReplyForSession: nativeCommandRuntime.resolveDirectStatusReplyForSession,
     cfg,
     discordConfig,
     accountId,
@@ -704,82 +647,21 @@ async function dispatchDiscordCommandInteraction(params: {
     sender: { id: sender.id, name: sender.name, tag: sender.tag },
   });
 
-  const { onModelSelected, ...replyPipeline } = createChannelReplyPipeline({
+  await dispatchDiscordNativeAgentReply({
     cfg,
-    agentId: effectiveRoute.agentId,
-    channel: "discord",
-    accountId: effectiveRoute.accountId,
-  });
-  const blockStreamingEnabled = resolveChannelStreamingBlockEnabled(discordConfig);
-
-  let didReply = false;
-  const dispatchResult = await dispatchReplyWithDispatcherImpl({
-    ctx: ctxPayload,
-    cfg,
-    dispatcherOptions: {
-      ...replyPipeline,
-      humanDelay: resolveHumanDelayConfig(cfg, effectiveRoute.agentId),
-      deliver: async (payload) => {
-        if (suppressReplies) {
-          return;
-        }
-        try {
-          await deliverDiscordInteractionReply({
-            interaction,
-            payload,
-            mediaLocalRoots,
-            textLimit: resolveTextChunkLimit(cfg, "discord", accountId, {
-              fallbackLimit: 2000,
-            }),
-            maxLinesPerMessage: resolveDiscordMaxLinesPerMessage({ cfg, discordConfig, accountId }),
-            preferFollowUp: preferFollowUp || didReply,
-            responseEphemeral,
-            chunkMode: resolveChunkMode(cfg, "discord", accountId),
-          });
-        } catch (error) {
-          if (isDiscordUnknownInteraction(error)) {
-            logVerbose("discord: interaction reply skipped (interaction expired)");
-            return;
-          }
-          throw error;
-        }
-        didReply = true;
-      },
-      onError: (err, info) => {
-        const message = err instanceof Error ? (err.stack ?? err.message) : String(err);
-        log.error(`discord slash ${info.kind} reply failed: ${message}`);
-      },
-    },
-    replyOptions: {
-      skillFilter: channelConfig?.skills,
-      disableBlockStreaming:
-        typeof blockStreamingEnabled === "boolean" ? !blockStreamingEnabled : undefined,
-      onModelSelected,
-    },
+    discordConfig,
+    accountId,
+    interaction,
+    ctxPayload,
+    effectiveRoute,
+    channelConfig,
+    mediaLocalRoots,
+    preferFollowUp,
+    responseEphemeral,
+    suppressReplies,
+    log,
   });
 
-  // Fallback: if the agent turn produced no deliverable replies (for example,
-  // a skill only used message.send side effects), close the interaction with
-  // a minimal acknowledgment so Discord does not stay in a pending state.
-  if (
-    !suppressReplies &&
-    !didReply &&
-    dispatchResult.counts.final === 0 &&
-    dispatchResult.counts.block === 0 &&
-    dispatchResult.counts.tool === 0
-  ) {
-    await safeDiscordInteractionCall("interaction empty fallback", async () => {
-      const payload = {
-        content: "✅ Done.",
-        ephemeral: true,
-      };
-      if (preferFollowUp) {
-        await interaction.followUp(payload);
-        return;
-      }
-      await interaction.reply(payload);
-    });
-  }
   return { accepted: true, effectiveRoute };
 }
 

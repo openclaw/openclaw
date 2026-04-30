@@ -9,29 +9,25 @@ import { resolveControlCommandGate } from "openclaw/plugin-sdk/command-auth-nati
 import { hasControlCommand } from "openclaw/plugin-sdk/command-detection";
 import { shouldHandleTextCommands } from "openclaw/plugin-sdk/command-surface";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
-import {
-  recordPendingHistoryEntryIfEnabled,
-  type HistoryEntry,
-} from "openclaw/plugin-sdk/reply-history";
-import { getChildLogger, logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { recordPendingHistoryEntryIfEnabled } from "openclaw/plugin-sdk/reply-history";
+import { getChildLogger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import { logDebug } from "openclaw/plugin-sdk/text-runtime";
 import { resolveDefaultDiscordAccountId } from "../accounts.js";
 import { ChannelType, MessageType, type User } from "../internal/discord.js";
 import {
-  isDiscordGroupAllowedByPolicy,
-  normalizeDiscordSlug,
-  resolveDiscordChannelConfigWithFallback,
   resolveDiscordGuildEntry,
   resolveDiscordMemberAccessState,
   resolveDiscordOwnerAccess,
   resolveDiscordShouldRequireMention,
-  resolveGroupDmAllow,
 } from "./allow-list.js";
 import { resolveDiscordChannelInfoSafe, resolveDiscordChannelNameSafe } from "./channel-access.js";
-import { resolveDiscordSystemLocation, resolveTimestampMs } from "./format.js";
+import { resolveDiscordSystemLocation } from "./format.js";
 import { resolveDiscordDmPreflightAccess } from "./message-handler.dm-preflight.js";
 import { hydrateDiscordMessageIfNeeded } from "./message-handler.hydration.js";
+import { resolveDiscordPreflightChannelAccess } from "./message-handler.preflight-channel-access.js";
+import { resolveDiscordPreflightChannelContext } from "./message-handler.preflight-channel-context.js";
+import { buildDiscordMessagePreflightContext } from "./message-handler.preflight-context.js";
 import {
   isBoundThreadBotSystemMessage,
   isDiscordThreadChannelMessage,
@@ -40,6 +36,18 @@ import {
   resolvePreflightMentionRequirement,
   shouldIgnoreBoundThreadWebhookMessage,
 } from "./message-handler.preflight-helpers.js";
+import { buildDiscordPreflightHistoryEntry } from "./message-handler.preflight-history.js";
+import {
+  logDiscordPreflightChannelConfig,
+  logDiscordPreflightInboundSummary,
+} from "./message-handler.preflight-logging.js";
+import { resolveDiscordPreflightPluralKitInfo } from "./message-handler.preflight-pluralkit.js";
+import {
+  isPreflightAborted,
+  loadPreflightAudioRuntime,
+  loadSystemEventsRuntime,
+} from "./message-handler.preflight-runtime.js";
+import { resolveDiscordPreflightThreadContext } from "./message-handler.preflight-thread.js";
 import type {
   DiscordMessagePreflightContext,
   DiscordMessagePreflightParams,
@@ -61,35 +69,6 @@ export {
   resolvePreflightMentionRequirement,
   shouldIgnoreBoundThreadWebhookMessage,
 } from "./message-handler.preflight-helpers.js";
-
-let pluralkitRuntimePromise: Promise<typeof import("../pluralkit.js")> | undefined;
-let preflightAudioRuntimePromise: Promise<typeof import("./preflight-audio.js")> | undefined;
-let systemEventsRuntimePromise: Promise<typeof import("./system-events.js")> | undefined;
-let discordThreadingRuntimePromise: Promise<typeof import("./threading.js")> | undefined;
-
-async function loadPluralKitRuntime() {
-  pluralkitRuntimePromise ??= import("../pluralkit.js");
-  return await pluralkitRuntimePromise;
-}
-
-async function loadPreflightAudioRuntime() {
-  preflightAudioRuntimePromise ??= import("./preflight-audio.js");
-  return await preflightAudioRuntimePromise;
-}
-
-async function loadSystemEventsRuntime() {
-  systemEventsRuntimePromise ??= import("./system-events.js");
-  return await systemEventsRuntimePromise;
-}
-
-async function loadDiscordThreadingRuntime() {
-  discordThreadingRuntimePromise ??= import("./threading.js");
-  return await discordThreadingRuntimePromise;
-}
-
-function isPreflightAborted(abortSignal?: AbortSignal): boolean {
-  return Boolean(abortSignal?.aborted);
-}
 
 export async function preflightDiscordMessage(
   params: DiscordMessagePreflightParams,
@@ -131,23 +110,14 @@ export async function preflightDiscordMessage(
 
   const pluralkitConfig = params.discordConfig?.pluralkit;
   const webhookId = resolveDiscordWebhookId(message);
-  const shouldCheckPluralKit = Boolean(pluralkitConfig?.enabled) && !webhookId;
-  let pluralkitInfo: Awaited<
-    ReturnType<typeof import("../pluralkit.js").fetchPluralKitMessageInfo>
-  > = null;
-  if (shouldCheckPluralKit) {
-    try {
-      const { fetchPluralKitMessageInfo } = await loadPluralKitRuntime();
-      pluralkitInfo = await fetchPluralKitMessageInfo({
-        messageId: message.id,
-        config: pluralkitConfig,
-      });
-      if (isPreflightAborted(params.abortSignal)) {
-        return null;
-      }
-    } catch (err) {
-      logVerbose(`discord: pluralkit lookup failed for ${message.id}: ${String(err)}`);
-    }
+  const pluralkitInfo = await resolveDiscordPreflightPluralKitInfo({
+    message,
+    webhookId,
+    config: pluralkitConfig,
+    abortSignal: params.abortSignal,
+  });
+  if (isPreflightAborted(params.abortSignal)) {
+    return null;
   }
   const sender = resolveDiscordSenderIdentity({
     author,
@@ -270,30 +240,19 @@ export async function preflightDiscordMessage(
           "channel" in message ? (message as { channel?: unknown }).channel : undefined,
         )
       : undefined);
-  const { resolveDiscordThreadChannel, resolveDiscordThreadParentInfo } =
-    await loadDiscordThreadingRuntime();
-  const earlyThreadChannel = resolveDiscordThreadChannel({
+  const threadContext = await resolveDiscordPreflightThreadContext({
+    client: params.client,
     isGuildMessage,
     message,
     channelInfo,
     messageChannelId,
+    abortSignal: params.abortSignal,
   });
-  let earlyThreadParentId: string | undefined;
-  let earlyThreadParentName: string | undefined;
-  let earlyThreadParentType: ChannelType | undefined;
-  if (earlyThreadChannel) {
-    const parentInfo = await resolveDiscordThreadParentInfo({
-      client: params.client,
-      threadChannel: earlyThreadChannel,
-      channelInfo,
-    });
-    if (isPreflightAborted(params.abortSignal)) {
-      return null;
-    }
-    earlyThreadParentId = parentInfo.id;
-    earlyThreadParentName = parentInfo.name;
-    earlyThreadParentType = parentInfo.type;
+  if (!threadContext) {
+    return null;
   }
+  const { earlyThreadChannel, earlyThreadParentId, earlyThreadParentName, earlyThreadParentType } =
+    threadContext;
 
   // Routing inputs are payload-derived, but config must come from the boundary
   // snapshot already threaded into the monitor path.
@@ -393,114 +352,53 @@ export async function preflightDiscordMessage(
   const threadParentId = earlyThreadParentId;
   const threadParentName = earlyThreadParentName;
   const threadParentType = earlyThreadParentType;
-  const threadName = threadChannel?.name;
-  const configChannelName = threadParentName ?? channelName;
-  const configChannelSlug = configChannelName ? normalizeDiscordSlug(configChannelName) : "";
-  const displayChannelName = threadName ?? channelName;
-  const displayChannelSlug = displayChannelName ? normalizeDiscordSlug(displayChannelName) : "";
-  const guildSlug =
-    guildInfo?.slug ||
-    (params.data.guild?.name ? normalizeDiscordSlug(params.data.guild.name) : "");
-
-  const threadChannelSlug = channelName ? normalizeDiscordSlug(channelName) : "";
-  const threadParentSlug = threadParentName ? normalizeDiscordSlug(threadParentName) : "";
-
-  const channelConfig = isGuildMessage
-    ? resolveDiscordChannelConfigWithFallback({
-        guildInfo,
-        channelId: messageChannelId,
-        channelName,
-        channelSlug: threadChannelSlug,
-        parentId: threadParentId ?? undefined,
-        parentName: threadParentName ?? undefined,
-        parentSlug: threadParentSlug,
-        scope: threadChannel ? "thread" : "channel",
-      })
-    : null;
-  const channelMatchMeta = formatAllowlistMatchMeta(channelConfig);
-  if (shouldLogVerbose()) {
-    const channelConfigSummary = channelConfig
-      ? `allowed=${channelConfig.allowed} enabled=${channelConfig.enabled ?? "unset"} requireMention=${channelConfig.requireMention ?? "unset"} ignoreOtherMentions=${channelConfig.ignoreOtherMentions ?? "unset"} matchKey=${channelConfig.matchKey ?? "none"} matchSource=${channelConfig.matchSource ?? "none"} users=${channelConfig.users?.length ?? 0} roles=${channelConfig.roles?.length ?? 0} skills=${channelConfig.skills?.length ?? 0}`
-      : "none";
-    logDebug(
-      `[discord-preflight] channelConfig=${channelConfigSummary} channelMatchMeta=${channelMatchMeta} channelId=${messageChannelId}`,
-    );
-  }
-  if (isGuildMessage && channelConfig?.enabled === false) {
-    logDebug(`[discord-preflight] drop: channel disabled`);
-    logVerbose(
-      `Blocked discord channel ${messageChannelId} (channel disabled, ${channelMatchMeta})`,
-    );
-    return null;
-  }
-
-  const groupDmAllowed =
-    isGroupDm &&
-    resolveGroupDmAllow({
-      channels: params.groupDmChannels,
-      channelId: messageChannelId,
-      channelName: displayChannelName,
-      channelSlug: displayChannelSlug,
-    });
-  if (isGroupDm && !groupDmAllowed) {
-    return null;
-  }
-
-  const channelAllowlistConfigured =
-    Boolean(guildInfo?.channels) && Object.keys(guildInfo?.channels ?? {}).length > 0;
-  const channelAllowed = channelConfig?.allowed !== false;
-  if (
-    isGuildMessage &&
-    !isDiscordGroupAllowedByPolicy({
-      groupPolicy: params.groupPolicy,
-      guildAllowlisted: Boolean(guildInfo),
-      channelAllowlistConfigured,
-      channelAllowed,
-    })
-  ) {
-    if (params.groupPolicy === "disabled") {
-      logDebug(`[discord-preflight] drop: groupPolicy disabled`);
-      logVerbose(`discord: drop guild message (groupPolicy: disabled, ${channelMatchMeta})`);
-    } else if (!channelAllowlistConfigured) {
-      logDebug(`[discord-preflight] drop: groupPolicy allowlist, no channel allowlist configured`);
-      logVerbose(
-        `discord: drop guild message (groupPolicy: allowlist, no channel allowlist, ${channelMatchMeta})`,
-      );
-    } else {
-      logDebug(
-        `[discord] Ignored message from channel ${messageChannelId} (not in guild allowlist). Add to guilds.<guildId>.channels to enable.`,
-      );
-      logVerbose(
-        `Blocked discord channel ${messageChannelId} not in guild channel allowlist (groupPolicy: allowlist, ${channelMatchMeta})`,
-      );
-    }
-    return null;
-  }
-
-  if (isGuildMessage && channelConfig?.allowed === false) {
-    logDebug(`[discord-preflight] drop: channelConfig.allowed===false`);
-    logVerbose(
-      `Blocked discord channel ${messageChannelId} not in guild channel allowlist (${channelMatchMeta})`,
-    );
-    return null;
-  }
-  if (isGuildMessage) {
-    logDebug(`[discord-preflight] pass: channel allowed`);
-    logVerbose(`discord: allow channel ${messageChannelId} (${channelMatchMeta})`);
-  }
-
-  const textForHistory = resolveDiscordMessageText(message, {
-    includeForwarded: true,
+  const {
+    threadName,
+    configChannelName,
+    configChannelSlug,
+    displayChannelName,
+    displayChannelSlug,
+    guildSlug,
+    channelConfig,
+  } = resolveDiscordPreflightChannelContext({
+    isGuildMessage,
+    messageChannelId,
+    channelName,
+    guildName: params.data.guild?.name,
+    guildInfo,
+    threadChannel,
+    threadParentId,
+    threadParentName,
   });
-  const historyEntry =
-    isGuildMessage && params.historyLimit > 0 && textForHistory
-      ? ({
-          sender: sender.label,
-          body: textForHistory,
-          timestamp: resolveTimestampMs(message.timestamp),
-          messageId: message.id,
-        } satisfies HistoryEntry)
-      : undefined;
+  const channelMatchMeta = formatAllowlistMatchMeta(channelConfig);
+  logDiscordPreflightChannelConfig({
+    channelConfig,
+    channelMatchMeta,
+    channelId: messageChannelId,
+  });
+  const channelAccess = resolveDiscordPreflightChannelAccess({
+    isGuildMessage,
+    isGroupDm,
+    groupPolicy: params.groupPolicy,
+    groupDmChannels: params.groupDmChannels,
+    messageChannelId,
+    displayChannelName,
+    displayChannelSlug,
+    guildInfo,
+    channelConfig,
+    channelMatchMeta,
+  });
+  if (!channelAccess.allowed) {
+    return null;
+  }
+  const { channelAllowlistConfigured, channelAllowed } = channelAccess;
+
+  const historyEntry = buildDiscordPreflightHistoryEntry({
+    isGuildMessage,
+    historyLimit: params.historyLimit,
+    message,
+    senderLabel: sender.label,
+  });
 
   const threadOwnerId = threadChannel
     ? (resolveDiscordChannelInfoSafe(threadChannel).ownerId ?? channelInfo?.ownerId)
@@ -561,11 +459,15 @@ export async function preflightDiscordMessage(
     senderIsPluralKit: sender.isPluralKit,
     transcript: preflightTranscript,
   });
-  if (shouldLogVerbose()) {
-    logVerbose(
-      `discord: inbound id=${message.id} guild=${params.data.guild_id ?? "dm"} channel=${messageChannelId} mention=${wasMentioned ? "yes" : "no"} type=${isDirectMessage ? "dm" : isGroupDm ? "group-dm" : "guild"} content=${messageText ? "yes" : "no"}`,
-    );
-  }
+  logDiscordPreflightInboundSummary({
+    messageId: message.id,
+    guildId: params.data.guild_id ?? undefined,
+    channelId: messageChannelId,
+    wasMentioned,
+    isDirectMessage,
+    isGroupDm,
+    hasContent: Boolean(messageText),
+  });
 
   const allowTextCommands = shouldHandleTextCommands({
     cfg: params.cfg,
@@ -716,21 +618,8 @@ export async function preflightDiscordMessage(
   logDebug(
     `[discord-preflight] success: route=${effectiveRoute.agentId} sessionKey=${effectiveRoute.sessionKey}`,
   );
-  return {
-    cfg: params.cfg,
-    discordConfig: params.discordConfig,
-    accountId: params.accountId,
-    token: params.token,
-    runtime: params.runtime,
-    botUserId: params.botUserId,
-    abortSignal: params.abortSignal,
-    guildHistories: params.guildHistories,
-    historyLimit: params.historyLimit,
-    mediaMaxBytes: params.mediaMaxBytes,
-    textLimit: params.textLimit,
-    replyToMode: params.replyToMode,
-    ackReactionScope: params.ackReactionScope,
-    groupPolicy: params.groupPolicy,
+  return buildDiscordMessagePreflightContext({
+    preflightParams: params,
     data,
     client: params.client,
     message,
@@ -774,7 +663,5 @@ export async function preflightDiscordMessage(
     effectiveWasMentioned,
     canDetectMention,
     historyEntry,
-    threadBindings: params.threadBindings,
-    discordRestFetch: params.discordRestFetch,
-  };
+  });
 }

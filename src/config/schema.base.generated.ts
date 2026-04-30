@@ -871,6 +871,45 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
               type: "string",
             },
           },
+          tabCleanup: {
+            type: "object",
+            properties: {
+              enabled: {
+                type: "boolean",
+                title: "Browser Tab Cleanup Enabled",
+                description:
+                  "Enables cleanup of idle tracked browser tabs for primary-agent sessions. Disable only when external tooling owns tab lifecycle completely.",
+              },
+              idleMinutes: {
+                type: "integer",
+                minimum: 0,
+                maximum: 9007199254740991,
+                title: "Browser Tab Cleanup Idle Minutes",
+                description:
+                  "Minutes of inactivity before a tracked primary-agent browser tab is eligible for closure. Set 0 to disable idle-time cleanup while keeping the per-session tab cap.",
+              },
+              maxTabsPerSession: {
+                type: "integer",
+                minimum: 0,
+                maximum: 9007199254740991,
+                title: "Browser Tab Cleanup Max Tabs Per Session",
+                description:
+                  "Maximum tracked browser tabs kept per primary-agent session. Oldest inactive tabs are closed first. Set 0 to disable the cap.",
+              },
+              sweepMinutes: {
+                type: "integer",
+                exclusiveMinimum: 0,
+                maximum: 9007199254740991,
+                title: "Browser Tab Cleanup Sweep Minutes",
+                description:
+                  "Minutes between browser tab cleanup sweeps. Keep this modest so idle tabs are reclaimed without adding frequent background work.",
+              },
+            },
+            additionalProperties: false,
+            title: "Browser Tab Cleanup",
+            description:
+              "Best-effort cleanup policy for browser tabs opened by primary-agent sessions. Keep enabled to avoid stale sandbox or managed-browser tabs accumulating across long-lived gateways.",
+          },
         },
         additionalProperties: false,
         title: "Browser",
@@ -8637,6 +8676,12 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                         title: "Web Fetch Allow RFC 2544 Benchmark Range",
                         description:
                           "Allow RFC 2544 benchmark-range IPs (198.18.0.0/15) for fake-IP proxy compatibility such as Clash or Surge.",
+                      },
+                      allowIpv6UniqueLocalRange: {
+                        type: "boolean",
+                        title: "Web Fetch Allow IPv6 Unique Local Range",
+                        description:
+                          "Allow IPv6 Unique Local Addresses (fc00::/7) for trusted fake-IP proxy compatibility such as sing-box, Clash, or Surge.",
                       },
                     },
                     additionalProperties: false,
@@ -18971,7 +19016,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 ],
                 title: "Queue Mode",
                 description:
-                  'Queue behavior mode: "steer", "followup", "collect", "steer-backlog", "steer+backlog", "queue", or "interrupt". Keep conservative modes unless you intentionally need aggressive interruption/backlog semantics.',
+                  'Queue behavior mode. Use "steer" to inject all queued steering messages at the next model boundary; "queue" is legacy one-at-a-time steering; "followup" runs later; "collect" batches later; "steer-backlog" (alias "steer+backlog") does both; "interrupt" aborts the active run.',
               },
               byChannel: {
                 type: "object",
@@ -19308,7 +19353,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 maximum: 9007199254740991,
                 title: "Queue Debounce (ms)",
                 description:
-                  "Global queue debounce window in milliseconds before processing buffered inbound messages. Use higher values to coalesce rapid bursts, or lower values for reduced response latency.",
+                  "Global followup queue debounce window in milliseconds before draining buffered inbound messages. Default is 500ms; higher values coalesce bursts, lower values reduce latency.",
               },
               debounceMsByChannel: {
                 type: "object",
@@ -19330,7 +19375,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 maximum: 9007199254740991,
                 title: "Queue Capacity",
                 description:
-                  "Maximum number of queued inbound items retained before drop policy applies. Keep caps bounded in noisy channels so memory usage remains predictable.",
+                  "Maximum number of queued inbound items retained before drop policy applies. Default is 20; keep caps bounded in noisy channels so memory usage remains predictable.",
               },
               drop: {
                 anyOf: [
@@ -19349,13 +19394,13 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 ],
                 title: "Queue Drop Strategy",
                 description:
-                  'Drop strategy when queue cap is exceeded: "old", "new", or "summarize". Use summarize when preserving intent matters, or old/new when deterministic dropping is preferred.',
+                  'Drop strategy when queue cap is exceeded. "summarize" drops oldest entries but preserves compact summaries; "old" drops oldest without summaries; "new" rejects the newest item. Use "summarize" for long-running chats where context matters.',
               },
             },
             additionalProperties: false,
             title: "Inbound Queue",
             description:
-              "Inbound message queue strategy used to buffer bursts before processing turns. Tune this for busy channels where sequential processing or batching behavior matters.",
+              "Inbound message queue strategy for messages that arrive while a session run is active. Default mode is steer, with followup fallback when steering is unavailable.",
           },
           inbound: {
             type: "object",
@@ -21059,6 +21104,29 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
         title: "Cron",
         description:
           "Global scheduler settings for stored cron jobs, run concurrency, delivery fallback, and run-session retention. Keep defaults unless you are scaling job volume or integrating external webhook receivers.",
+      },
+      commitments: {
+        type: "object",
+        properties: {
+          enabled: {
+            type: "boolean",
+            title: "Commitments Enabled",
+            description:
+              "Enable hidden LLM extraction, storage, and heartbeat delivery for inferred follow-up commitments. Default: false.",
+          },
+          maxPerDay: {
+            type: "integer",
+            exclusiveMinimum: 0,
+            maximum: 9007199254740991,
+            title: "Commitments per Day",
+            description:
+              "Maximum inferred follow-up commitments delivered per agent session in a rolling day. Default: 3.",
+          },
+        },
+        additionalProperties: false,
+        title: "Commitments",
+        description:
+          "Inferred follow-up commitment controls for automatically detecting check-ins from conversation turns and delivering them through heartbeat runs.",
       },
       hooks: {
         type: "object",
@@ -24293,6 +24361,21 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "How often beta-channel checks run in hours (default: 1).",
       tags: ["performance"],
     },
+    commitments: {
+      label: "Commitments",
+      help: "Inferred follow-up commitment controls for automatically detecting check-ins from conversation turns and delivering them through heartbeat runs.",
+      tags: ["advanced"],
+    },
+    "commitments.enabled": {
+      label: "Commitments Enabled",
+      help: "Enable hidden LLM extraction, storage, and heartbeat delivery for inferred follow-up commitments. Default: false.",
+      tags: ["advanced"],
+    },
+    "commitments.maxPerDay": {
+      label: "Commitments per Day",
+      help: "Maximum inferred follow-up commitments delivered per agent session in a rolling day. Default: 3.",
+      tags: ["performance"],
+    },
     "diagnostics.enabled": {
       label: "Diagnostics Enabled",
       help: "Master toggle for diagnostics instrumentation output in logs and telemetry wiring paths. Defaults to enabled; set false only in tightly constrained environments.",
@@ -25715,6 +25798,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     "tools.web.fetch.ssrfPolicy.allowRfc2544BenchmarkRange": {
       label: "Web Fetch Allow RFC 2544 Benchmark Range",
       help: "Allow RFC 2544 benchmark-range IPs (198.18.0.0/15) for fake-IP proxy compatibility such as Clash or Surge.",
+      tags: ["access", "tools"],
+    },
+    "tools.web.fetch.ssrfPolicy.allowIpv6UniqueLocalRange": {
+      label: "Web Fetch Allow IPv6 Unique Local Range",
+      help: "Allow IPv6 Unique Local Addresses (fc00::/7) for trusted fake-IP proxy compatibility such as sing-box, Clash, or Surge.",
       tags: ["access", "tools"],
     },
     "gateway.controlUi.basePath": {
@@ -28253,12 +28341,12 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "messages.queue": {
       label: "Inbound Queue",
-      help: "Inbound message queue strategy used to buffer bursts before processing turns. Tune this for busy channels where sequential processing or batching behavior matters.",
+      help: "Inbound message queue strategy for messages that arrive while a session run is active. Default mode is steer, with followup fallback when steering is unavailable.",
       tags: ["advanced"],
     },
     "messages.queue.mode": {
       label: "Queue Mode",
-      help: 'Queue behavior mode: "steer", "followup", "collect", "steer-backlog", "steer+backlog", "queue", or "interrupt". Keep conservative modes unless you intentionally need aggressive interruption/backlog semantics.',
+      help: 'Queue behavior mode. Use "steer" to inject all queued steering messages at the next model boundary; "queue" is legacy one-at-a-time steering; "followup" runs later; "collect" batches later; "steer-backlog" (alias "steer+backlog") does both; "interrupt" aborts the active run.',
       tags: ["advanced"],
     },
     "messages.queue.byChannel": {
@@ -28268,7 +28356,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "messages.queue.debounceMs": {
       label: "Queue Debounce (ms)",
-      help: "Global queue debounce window in milliseconds before processing buffered inbound messages. Use higher values to coalesce rapid bursts, or lower values for reduced response latency.",
+      help: "Global followup queue debounce window in milliseconds before draining buffered inbound messages. Default is 500ms; higher values coalesce bursts, lower values reduce latency.",
       tags: ["performance"],
     },
     "messages.queue.debounceMsByChannel": {
@@ -28278,12 +28366,12 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "messages.queue.cap": {
       label: "Queue Capacity",
-      help: "Maximum number of queued inbound items retained before drop policy applies. Keep caps bounded in noisy channels so memory usage remains predictable.",
+      help: "Maximum number of queued inbound items retained before drop policy applies. Default is 20; keep caps bounded in noisy channels so memory usage remains predictable.",
       tags: ["advanced"],
     },
     "messages.queue.drop": {
       label: "Queue Drop Strategy",
-      help: 'Drop strategy when queue cap is exceeded: "old", "new", or "summarize". Use summarize when preserving intent matters, or old/new when deterministic dropping is preferred.',
+      help: 'Drop strategy when queue cap is exceeded. "summarize" drops oldest entries but preserves compact summaries; "old" drops oldest without summaries; "new" rejects the newest item. Use "summarize" for long-running chats where context matters.',
       tags: ["advanced"],
     },
     "messages.inbound": {

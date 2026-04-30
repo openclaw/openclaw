@@ -15,6 +15,7 @@ import {
 } from "discord-api-types/v10";
 import * as ws from "ws";
 import { Plugin, type Client } from "./client.js";
+import { canResumeAfterGatewayClose, isFatalGatewayCloseCode } from "./gateway-close-codes.js";
 import { dispatchVoiceGatewayEvent, mapGatewayDispatchData } from "./gateway-dispatch.js";
 import { sharedGatewayIdentifyLimiter } from "./gateway-identify-limiter.js";
 import { GatewayHeartbeatTimers, GatewayReconnectTimer } from "./gateway-lifecycle.js";
@@ -68,26 +69,6 @@ function decodeGatewayMessage(incoming: unknown): GatewayReceivePayload | null {
   } catch {
     return null;
   }
-}
-
-function isFatalGatewayCloseCode(code: GatewayCloseCodes): boolean {
-  return (
-    code === GatewayCloseCodes.AuthenticationFailed ||
-    code === GatewayCloseCodes.InvalidShard ||
-    code === GatewayCloseCodes.ShardingRequired ||
-    code === GatewayCloseCodes.InvalidAPIVersion ||
-    code === GatewayCloseCodes.InvalidIntents ||
-    code === GatewayCloseCodes.DisallowedIntents
-  );
-}
-
-function canResumeAfterGatewayClose(code: GatewayCloseCodes): boolean {
-  return (
-    code !== GatewayCloseCodes.NotAuthenticated &&
-    code !== GatewayCloseCodes.InvalidSeq &&
-    code !== GatewayCloseCodes.SessionTimedOut &&
-    code !== GatewayCloseCodes.AlreadyAuthenticated
-  );
 }
 
 export class GatewayPlugin extends Plugin {

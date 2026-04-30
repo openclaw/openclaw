@@ -3,7 +3,9 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveBundledRuntimeDependencyInstallRoot } from "./bundled-runtime-deps.js";
+import { materializeBundledRuntimeMirrorFile } from "./bundled-runtime-mirror.js";
 import { prepareBundledPluginRuntimeRoot } from "./bundled-runtime-root.js";
+import { writeGeneratedRuntimeDepsManifest } from "./test-helpers/bundled-runtime-deps-fixtures.js";
 
 const tempRoots: string[] = [];
 
@@ -35,22 +37,25 @@ function isBigIntStatOptions(options: unknown): boolean {
   );
 }
 
-function writeGeneratedRuntimeDepsManifest(rootDir: string, specs: readonly string[]): void {
-  const dependencies = Object.fromEntries(
-    specs.map((spec) => {
-      const atIndex = spec.lastIndexOf("@");
-      return [spec.slice(0, atIndex), spec.slice(atIndex + 1)];
-    }),
-  );
-  fs.mkdirSync(rootDir, { recursive: true });
-  fs.writeFileSync(
-    path.join(rootDir, "package.json"),
-    JSON.stringify({ name: "openclaw-runtime-deps-install", private: true, dependencies }),
-    "utf8",
-  );
-}
-
 describe("prepareBundledPluginRuntimeRoot", () => {
+  it("keeps existing materialized root chunks when copy refresh fails", () => {
+    const root = makeTempRoot();
+    const source = path.join(root, "source.js");
+    const target = path.join(root, "mirror", "source.js");
+    fs.writeFileSync(source, "export const value = 'new';\n", "utf8");
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, "export const value = 'old';\n", "utf8");
+    vi.spyOn(fs, "linkSync").mockImplementation(() => {
+      throw new Error("EXDEV");
+    });
+    vi.spyOn(fs, "copyFileSync").mockImplementation(() => {
+      throw new Error("ENOSPC");
+    });
+
+    expect(() => materializeBundledRuntimeMirrorFile(source, target)).toThrow("ENOSPC");
+    expect(fs.readFileSync(target, "utf8")).toBe("export const value = 'old';\n");
+  });
+
   it("materializes root JavaScript chunks in external mirrors", () => {
     const packageRoot = makeTempRoot();
     const stageDir = makeTempRoot();

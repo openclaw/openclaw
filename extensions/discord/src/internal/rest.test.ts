@@ -1,14 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { serializeRequestBody } from "./rest-body.js";
 import { RequestClient } from "./rest.js";
-
-function createDeferred<T>() {
-  let resolve: ((value: T) => void) | undefined;
-  const promise = new Promise<T>((res) => {
-    resolve = res;
-  });
-  return { promise, resolve: resolve! };
-}
+import { createDeferred, createJsonResponse } from "./test-builders.test-support.js";
 
 describe("RequestClient", () => {
   afterEach(() => {
@@ -19,7 +12,7 @@ describe("RequestClient", () => {
     const firstResponse = createDeferred<Response>();
     const queuedResponses = [
       firstResponse.promise,
-      Promise.resolve(new Response(JSON.stringify({ ok: true }), { status: 200 })),
+      Promise.resolve(createJsonResponse({ ok: true })),
     ];
     const fetchSpy = vi.fn(async () => {
       const response = queuedResponses.shift();
@@ -39,7 +32,7 @@ describe("RequestClient", () => {
     expect(client.queueSize).toBe(2);
     await expect(client.get("/users/@me")).rejects.toThrow(/queue is full/);
 
-    firstResponse.resolve(new Response(JSON.stringify({ id: "u1" }), { status: 200 }));
+    firstResponse.resolve(createJsonResponse({ id: "u1" }));
 
     await expect(first).resolves.toEqual({ id: "u1" });
     await expect(second).resolves.toEqual({ ok: true });
@@ -65,16 +58,20 @@ describe("RequestClient", () => {
     await vi.waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(2));
 
     channelResponse.resolve(
-      new Response(JSON.stringify({ id: "channel" }), {
-        status: 200,
-        headers: { "X-RateLimit-Bucket": "channel-messages", "X-RateLimit-Remaining": "1" },
-      }),
+      createJsonResponse(
+        { id: "channel" },
+        {
+          headers: { "X-RateLimit-Bucket": "channel-messages", "X-RateLimit-Remaining": "1" },
+        },
+      ),
     );
     guildResponse.resolve(
-      new Response(JSON.stringify({ id: "guild" }), {
-        status: 200,
-        headers: { "X-RateLimit-Bucket": "guild-roles", "X-RateLimit-Remaining": "1" },
-      }),
+      createJsonResponse(
+        { id: "guild" },
+        {
+          headers: { "X-RateLimit-Bucket": "guild-roles", "X-RateLimit-Remaining": "1" },
+        },
+      ),
     );
 
     await expect(Promise.all([channel, guild])).resolves.toEqual([
@@ -86,10 +83,12 @@ describe("RequestClient", () => {
   it("prunes idle route buckets and mappings after Discord bucket remapping", async () => {
     const client = new RequestClient("test-token", {
       fetch: async () =>
-        new Response(JSON.stringify({ id: "first" }), {
-          status: 200,
-          headers: { "X-RateLimit-Bucket": "channel-messages" },
-        }),
+        createJsonResponse(
+          { id: "first" },
+          {
+            headers: { "X-RateLimit-Bucket": "channel-messages" },
+          },
+        ),
     });
 
     await expect(client.get("/channels/c1/messages")).resolves.toEqual({ id: "first" });
@@ -105,25 +104,29 @@ describe("RequestClient", () => {
     vi.setSystemTime(0);
     const responses = [
       Promise.resolve(
-        new Response(JSON.stringify({ id: "first" }), {
-          status: 200,
-          headers: {
-            "X-RateLimit-Bucket": "channel-messages",
-            "X-RateLimit-Limit": "1",
-            "X-RateLimit-Remaining": "0",
-            "X-RateLimit-Reset-After": "0.1",
+        createJsonResponse(
+          { id: "first" },
+          {
+            headers: {
+              "X-RateLimit-Bucket": "channel-messages",
+              "X-RateLimit-Limit": "1",
+              "X-RateLimit-Remaining": "0",
+              "X-RateLimit-Reset-After": "0.1",
+            },
           },
-        }),
+        ),
       ),
       Promise.resolve(
-        new Response(JSON.stringify({ id: "second" }), {
-          status: 200,
-          headers: {
-            "X-RateLimit-Bucket": "channel-messages",
-            "X-RateLimit-Limit": "1",
-            "X-RateLimit-Remaining": "1",
+        createJsonResponse(
+          { id: "second" },
+          {
+            headers: {
+              "X-RateLimit-Bucket": "channel-messages",
+              "X-RateLimit-Limit": "1",
+              "X-RateLimit-Remaining": "1",
+            },
           },
-        }),
+        ),
       ),
     ];
     const fetchSpy = vi.fn(async () => {
@@ -176,10 +179,13 @@ describe("RequestClient", () => {
     const client = new RequestClient("test-token", {
       queueRequests: false,
       fetch: async () =>
-        new Response(JSON.stringify({ message: "Forbidden", code: 50013 }), {
-          status: 403,
-          headers: { "X-RateLimit-Bucket": "permissions" },
-        }),
+        createJsonResponse(
+          { message: "Forbidden", code: 50013 },
+          {
+            status: 403,
+            headers: { "X-RateLimit-Bucket": "permissions" },
+          },
+        ),
     });
 
     await expect(client.get("/channels/c1/messages")).rejects.toMatchObject({ status: 403 });
