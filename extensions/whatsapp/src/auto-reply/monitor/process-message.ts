@@ -13,7 +13,7 @@ import {
   toPluginMessageReceivedEvent,
   triggerInternalHook,
 } from "openclaw/plugin-sdk/hook-runtime";
-import { runPreparedInboundReplyTurn } from "openclaw/plugin-sdk/inbound-reply-dispatch";
+import { runInboundReplyTurn } from "openclaw/plugin-sdk/inbound-reply-dispatch";
 import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
 import { resolveBatchedReplyThreadingPolicy } from "openclaw/plugin-sdk/reply-reference";
 import { getPrimaryIdentityId, getSelfIdentity, getSenderIdentity } from "../../identity.js";
@@ -454,52 +454,68 @@ export async function processMessage(params: {
     warn: params.replyLogger.warn.bind(params.replyLogger),
   });
 
-  const { dispatchResult: didSendReply } = await runPreparedInboundReplyTurn({
+  const turnResult = await runInboundReplyTurn({
     channel: "whatsapp",
     accountId: params.route.accountId,
-    routeSessionKey: params.route.sessionKey,
-    storePath,
-    ctxPayload,
-    recordInboundSession,
-    record: {
-      onRecordError: (err) => {
-        params.replyLogger.warn(
-          {
-            error: formatError(err),
-            storePath,
-            sessionKey: params.route.sessionKey,
-          },
-          "failed updating session meta",
-        );
-      },
-      trackSessionMetaTask: (task) => {
-        trackBackgroundTask(params.backgroundTasks, task);
-      },
-    },
-    runDispatch: () =>
-      dispatchWhatsAppBufferedReply({
-        cfg: params.cfg,
-        connectionId: params.connectionId,
-        context: ctxPayload,
-        conversationId,
-        deliverReply: deliverWebReply,
-        groupHistories: params.groupHistories,
-        groupHistoryKey: params.groupHistoryKey,
-        maxMediaBytes: params.maxMediaBytes,
-        maxMediaTextChunkLimit: params.maxMediaTextChunkLimit,
-        msg: params.msg,
-        onModelSelected,
-        rememberSentText: params.rememberSentText,
-        replyLogger: params.replyLogger,
-        replyPipeline: {
-          ...replyPipeline,
-          responsePrefix,
-        },
-        replyResolver: params.replyResolver,
-        route: params.route,
-        shouldClearGroupHistory,
+    raw: params.msg,
+    adapter: {
+      ingest: () => ({
+        id: params.msg.id ?? `${conversationId}:${Date.now()}`,
+        timestamp: params.msg.timestamp,
+        rawText: ctxPayload.RawBody ?? "",
+        textForAgent: ctxPayload.BodyForAgent,
+        textForCommands: ctxPayload.CommandBody,
+        raw: params.msg,
       }),
+      resolveTurn: () => ({
+        channel: "whatsapp",
+        accountId: params.route.accountId,
+        routeSessionKey: params.route.sessionKey,
+        storePath,
+        ctxPayload,
+        recordInboundSession,
+        record: {
+          onRecordError: (err) => {
+            params.replyLogger.warn(
+              {
+                error: formatError(err),
+                storePath,
+                sessionKey: params.route.sessionKey,
+              },
+              "failed updating session meta",
+            );
+          },
+          trackSessionMetaTask: (task) => {
+            trackBackgroundTask(params.backgroundTasks, task);
+          },
+        },
+        runDispatch: () =>
+          dispatchWhatsAppBufferedReply({
+            cfg: params.cfg,
+            connectionId: params.connectionId,
+            context: ctxPayload,
+            conversationId,
+            deliverReply: deliverWebReply,
+            groupHistories: params.groupHistories,
+            groupHistoryKey: params.groupHistoryKey,
+            maxMediaBytes: params.maxMediaBytes,
+            maxMediaTextChunkLimit: params.maxMediaTextChunkLimit,
+            msg: params.msg,
+            onModelSelected,
+            rememberSentText: params.rememberSentText,
+            replyLogger: params.replyLogger,
+            replyPipeline: {
+              ...replyPipeline,
+              responsePrefix,
+            },
+            replyResolver: params.replyResolver,
+            route: params.route,
+            shouldClearGroupHistory,
+          }),
+      }),
+    },
   });
+  const didSendReply = turnResult.dispatched ? turnResult.dispatchResult : false;
   removeAckReactionHandleAfterReply({
     removeAfterReply: Boolean(params.cfg.messages?.removeAckAfterReply && didSendReply),
     ackReaction,

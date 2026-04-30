@@ -339,6 +339,7 @@ type PluginRegistrySnapshot = {
     cliRegistrars: PluginRegistry["cliRegistrars"];
     reloads: NonNullable<PluginRegistry["reloads"]>;
     nodeHostCommands: NonNullable<PluginRegistry["nodeHostCommands"]>;
+    nodeInvokePolicies: NonNullable<PluginRegistry["nodeInvokePolicies"]>;
     securityAuditCollectors: NonNullable<PluginRegistry["securityAuditCollectors"]>;
     services: PluginRegistry["services"];
     commands: PluginRegistry["commands"];
@@ -378,6 +379,7 @@ function snapshotPluginRegistry(registry: PluginRegistry): PluginRegistrySnapsho
       cliRegistrars: [...registry.cliRegistrars],
       reloads: [...(registry.reloads ?? [])],
       nodeHostCommands: [...(registry.nodeHostCommands ?? [])],
+      nodeInvokePolicies: [...(registry.nodeInvokePolicies ?? [])],
       securityAuditCollectors: [...(registry.securityAuditCollectors ?? [])],
       services: [...registry.services],
       commands: [...registry.commands],
@@ -416,6 +418,7 @@ function restorePluginRegistry(registry: PluginRegistry, snapshot: PluginRegistr
   registry.cliRegistrars = snapshot.arrays.cliRegistrars;
   registry.reloads = snapshot.arrays.reloads;
   registry.nodeHostCommands = snapshot.arrays.nodeHostCommands;
+  registry.nodeInvokePolicies = snapshot.arrays.nodeInvokePolicies;
   registry.securityAuditCollectors = snapshot.arrays.securityAuditCollectors;
   registry.services = snapshot.arrays.services;
   registry.commands = snapshot.arrays.commands;

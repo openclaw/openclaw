@@ -295,60 +295,62 @@ async function processMessageWithPipeline(params: {
     accountId: route.accountId,
   });
 
-  await core.channel.turn.runResolved({
+  await core.channel.turn.run({
     channel: "googlechat",
     accountId: route.accountId,
     raw: message,
-    input: {
-      id: message.name ?? spaceId,
-      timestamp: event.eventTime ? Date.parse(event.eventTime) : undefined,
-      rawText: rawBody,
-      textForAgent: rawBody,
-      textForCommands: rawBody,
-      raw: message,
+    adapter: {
+      ingest: () => ({
+        id: message.name ?? spaceId,
+        timestamp: event.eventTime ? Date.parse(event.eventTime) : undefined,
+        rawText: rawBody,
+        textForAgent: rawBody,
+        textForCommands: rawBody,
+        raw: message,
+      }),
+      resolveTurn: () => ({
+        cfg: config,
+        channel: "googlechat",
+        accountId: route.accountId,
+        agentId: route.agentId,
+        routeSessionKey: route.sessionKey,
+        storePath,
+        ctxPayload,
+        recordInboundSession: core.channel.session.recordInboundSession,
+        dispatchReplyWithBufferedBlockDispatcher:
+          core.channel.reply.dispatchReplyWithBufferedBlockDispatcher,
+        delivery: {
+          deliver: async (payload) => {
+            await deliverGoogleChatReply({
+              payload,
+              account,
+              spaceId,
+              runtime,
+              core,
+              config,
+              statusSink,
+              typingMessageName,
+            });
+            // Only use typing message for first delivery
+            typingMessageName = undefined;
+          },
+          onError: (err, info) => {
+            runtime.error?.(
+              `[${account.accountId}] Google Chat ${info.kind} reply failed: ${String(err)}`,
+            );
+          },
+        },
+        dispatcherOptions: replyPipeline,
+        replyOptions: {
+          onModelSelected,
+        },
+        record: {
+          onRecordError: (err) => {
+            runtime.error?.(`googlechat: failed updating session meta: ${String(err)}`);
+          },
+        },
+      }),
     },
-    resolveTurn: () => ({
-      cfg: config,
-      channel: "googlechat",
-      accountId: route.accountId,
-      agentId: route.agentId,
-      routeSessionKey: route.sessionKey,
-      storePath,
-      ctxPayload,
-      recordInboundSession: core.channel.session.recordInboundSession,
-      dispatchReplyWithBufferedBlockDispatcher:
-        core.channel.reply.dispatchReplyWithBufferedBlockDispatcher,
-      delivery: {
-        deliver: async (payload) => {
-          await deliverGoogleChatReply({
-            payload,
-            account,
-            spaceId,
-            runtime,
-            core,
-            config,
-            statusSink,
-            typingMessageName,
-          });
-          // Only use typing message for first delivery
-          typingMessageName = undefined;
-        },
-        onError: (err, info) => {
-          runtime.error?.(
-            `[${account.accountId}] Google Chat ${info.kind} reply failed: ${String(err)}`,
-          );
-        },
-      },
-      dispatcherOptions: replyPipeline,
-      replyOptions: {
-        onModelSelected,
-      },
-      record: {
-        onRecordError: (err) => {
-          runtime.error?.(`googlechat: failed updating session meta: ${String(err)}`);
-        },
-      },
-    }),
   });
 }
 

@@ -11,10 +11,13 @@ import {
   shouldIncludeSupplementalContext,
 } from "openclaw/plugin-sdk/context-visibility-runtime";
 import { evaluateSenderGroupAccessForPolicy } from "openclaw/plugin-sdk/group-access";
-import { dispatchReplyFromConfigWithSettledDispatcher } from "openclaw/plugin-sdk/inbound-reply-dispatch";
+import {
+  dispatchReplyFromConfigWithSettledDispatcher,
+  hasFinalInboundReplyDispatch,
+  resolveInboundReplyDispatchCounts,
+} from "openclaw/plugin-sdk/inbound-reply-dispatch";
 import {
   buildPendingHistoryContextFromMap,
-  clearHistoryEntriesIfEnabled,
   DEFAULT_GROUP_HISTORY_LIMIT,
   recordPendingHistoryEntryIfEnabled,
   type HistoryEntry,
@@ -836,59 +839,70 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
 
     log.info("dispatching to agent", { sessionKey: route.sessionKey });
     try {
-      const { dispatchResult } = await core.channel.turn.runPrepared({
+      const turnResult = await core.channel.turn.run({
         channel: "msteams",
         accountId: route.accountId,
-        routeSessionKey: route.sessionKey,
-        storePath,
-        ctxPayload,
-        recordInboundSession: core.channel.session.recordInboundSession,
-        record: {
-          onRecordError: (err) => {
-            logVerboseMessage(`msteams: failed updating session meta: ${formatUnknownError(err)}`);
-          },
-        },
-        onPreDispatchFailure: () =>
-          core.channel.reply.settleReplyDispatcher({
-            dispatcher,
-            onSettled: () => markDispatchIdle(),
+        raw: context,
+        adapter: {
+          ingest: () => ({
+            id: activity.id ?? `${teamsFrom}:${Date.now()}`,
+            timestamp: timestamp?.getTime(),
+            rawText: rawBody,
+            textForAgent: bodyForAgent,
+            textForCommands: commandBody,
+            raw: activity,
           }),
-        runDispatch: () =>
-          dispatchReplyFromConfigWithSettledDispatcher({
-            cfg,
+          resolveTurn: () => ({
+            channel: "msteams",
+            accountId: route.accountId,
+            routeSessionKey: route.sessionKey,
+            storePath,
             ctxPayload,
-            dispatcher,
-            onSettled: () => markDispatchIdle(),
-            replyOptions,
-            configOverride,
+            recordInboundSession: core.channel.session.recordInboundSession,
+            record: {
+              onRecordError: (err) => {
+                logVerboseMessage(
+                  `msteams: failed updating session meta: ${formatUnknownError(err)}`,
+                );
+              },
+            },
+            history: {
+              isGroup: isRoomish,
+              historyKey,
+              historyMap: conversationHistories,
+              limit: historyLimit,
+            },
+            onPreDispatchFailure: () =>
+              core.channel.reply.settleReplyDispatcher({
+                dispatcher,
+                onSettled: () => markDispatchIdle(),
+              }),
+            runDispatch: () =>
+              dispatchReplyFromConfigWithSettledDispatcher({
+                cfg,
+                ctxPayload,
+                dispatcher,
+                onSettled: () => markDispatchIdle(),
+                replyOptions,
+                configOverride,
+              }),
           }),
+        },
       });
+      const dispatchResult = turnResult.dispatched ? turnResult.dispatchResult : undefined;
       const queuedFinal = dispatchResult?.queuedFinal ?? false;
-      const counts = dispatchResult?.counts ?? { tool: 0, block: 0, final: 0 };
+      const counts = resolveInboundReplyDispatchCounts(dispatchResult);
+      const hasFinalResponse = hasFinalInboundReplyDispatch(dispatchResult);
 
       log.info("dispatch complete", { queuedFinal, counts });
 
-      if (!queuedFinal) {
-        if (isRoomish && historyKey) {
-          clearHistoryEntriesIfEnabled({
-            historyMap: conversationHistories,
-            historyKey,
-            limit: historyLimit,
-          });
-        }
+      if (!hasFinalResponse) {
         return;
       }
       const finalCount = counts.final;
       logVerboseMessage(
         `msteams: delivered ${finalCount} reply${finalCount === 1 ? "" : "ies"} to ${teamsTo}`,
       );
-      if (isRoomish && historyKey) {
-        clearHistoryEntriesIfEnabled({
-          historyMap: conversationHistories,
-          historyKey,
-          limit: historyLimit,
-        });
-      }
     } catch (err) {
       log.error("dispatch failed", { error: formatUnknownError(err) });
       runtime.error?.(`msteams dispatch failed: ${formatUnknownError(err)}`);

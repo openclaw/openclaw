@@ -7,16 +7,16 @@ import {
 import { inspectSlackAccount } from "./account-inspect.js";
 import {
   listSlackAccountIds,
+  resolveSlackConfigAccessorAccount,
   resolveDefaultSlackAccountId,
   resolveSlackAccount,
-  resolveSlackAccountAllowFrom,
+  type SlackConfigAccessorAccount,
   type ResolvedSlackAccount,
 } from "./accounts.js";
 import { getChatChannelMeta, type ChannelPlugin } from "./channel-api.js";
 import { SlackChannelConfigSchema } from "./config-schema.js";
 import { slackDoctor } from "./doctor.js";
 import { isSlackInteractiveRepliesEnabled } from "./interactive-replies.js";
-import type { OpenClawConfig } from "./runtime-api.js";
 import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
 import { slackSecurityAdapter } from "./security.js";
 import { SLACK_CHANNEL } from "./setup-shared.js";
@@ -38,22 +38,6 @@ export function isSlackPluginAccountConfigured(account: ResolvedSlackAccount): b
     return Boolean(account.config.signingSecret?.trim());
   }
   return Boolean(account.appToken?.trim());
-}
-
-type SlackConfigAccessorAccount = {
-  allowFrom: string[] | undefined;
-  defaultTo: string | undefined;
-};
-
-function resolveSlackConfigAccessorAccount(params: {
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-}): SlackConfigAccessorAccount {
-  const account = resolveSlackAccount(params);
-  return {
-    allowFrom: resolveSlackAccountAllowFrom({ cfg: params.cfg, accountId: account.accountId }),
-    defaultTo: account.config.defaultTo,
-  };
 }
 
 export const slackConfigAdapter = createScopedChannelConfigAdapter<
