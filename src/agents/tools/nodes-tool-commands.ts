@@ -132,7 +132,7 @@ export async function executeNodeCommandAction(params: {
       // file-transfer.
       if (dedicatedAction && POLICY_REDIRECT_INVOKE_COMMANDS.has(invokeCommandNormalized)) {
         throw new Error(
-          `invokeCommand "${invokeCommand}" enforces a path-allowlist policy and cannot be invoked via the generic nodes.invoke surface; use action="${dedicatedAction}"`,
+          `invokeCommand "${invokeCommand}" enforces a path-allowlist policy and cannot be invoked via the generic nodes.invoke surface; use the dedicated file-transfer tool "${dedicatedAction}"`,
         );
       }
       if (dedicatedAction && !params.allowMediaInvokeCommands) {
