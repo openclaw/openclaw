@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { getTaskById } from "../../tasks/task-registry.js";
+import { getTaskSessionLookupByIdForStatus } from "../../tasks/task-status-access.js";
 import {
   ErrorCodes,
   errorShape,
@@ -9,7 +9,6 @@ import {
   validateArtifactsGetParams,
   validateArtifactsListParams,
 } from "../protocol/index.js";
-import { getTaskById } from "../../tasks/task-registry.js";
 import { resolveSessionKeyForRun } from "../server-session-key.js";
 import { loadSessionEntry, readSessionMessages } from "../session-utils.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
@@ -279,7 +278,7 @@ function resolveQuerySessionKey(query: ArtifactQuery): string | undefined {
     return resolveSessionKeyForRun(query.runId);
   }
   if (query.taskId) {
-    const task = getTaskById(query.taskId);
+    const task = getTaskSessionLookupByIdForStatus(query.taskId);
     const requesterSessionKey = asNonEmptyString(task?.requesterSessionKey);
     if (requesterSessionKey) {
       return requesterSessionKey;

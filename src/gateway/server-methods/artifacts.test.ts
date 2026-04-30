@@ -2,10 +2,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { artifactsHandlers, collectArtifactsFromMessages } from "./artifacts.js";
 
 const hoisted = vi.hoisted(() => ({
-  getTaskById: vi.fn(),
+  getTaskSessionLookupByIdForStatus: vi.fn(),
   loadSessionEntry: vi.fn(),
   readSessionMessages: vi.fn(),
   resolveSessionKeyForRun: vi.fn(),
+}));
+
+vi.mock("../../tasks/task-status-access.js", () => ({
+  getTaskSessionLookupByIdForStatus: hoisted.getTaskSessionLookupByIdForStatus,
 }));
 
 vi.mock("../session-utils.js", async () => {
@@ -27,16 +31,6 @@ vi.mock("../server-session-key.js", async () => {
   };
 });
 
-vi.mock("../../tasks/task-registry.js", async () => {
-  const actual = await vi.importActual<typeof import("../../tasks/task-registry.js")>(
-    "../../tasks/task-registry.js",
-  );
-  return {
-    ...actual,
-    getTaskById: hoisted.getTaskById,
-  };
-});
-
 function createResponder() {
   const calls: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
   return {
@@ -50,7 +44,7 @@ function createResponder() {
 describe("artifacts RPC handlers", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    hoisted.getTaskById.mockReturnValue(undefined);
+    hoisted.getTaskSessionLookupByIdForStatus.mockReturnValue(undefined);
     hoisted.loadSessionEntry.mockReturnValue({
       storePath: "/tmp/sessions.json",
       entry: { sessionId: "sess-main", sessionFile: "/tmp/sess-main.jsonl" },
@@ -167,9 +161,8 @@ describe("artifacts RPC handlers", () => {
     expect(payload.artifacts?.[0]).toMatchObject({ runId: "run-1" });
   });
 
-  it("resolves taskId queries through the task registry and filters artifacts by messageTaskId", async () => {
-    hoisted.getTaskById.mockReturnValue({
-      taskId: "task-1",
+  it("resolves taskId queries through task status access and filters artifacts by messageTaskId", async () => {
+    hoisted.getTaskSessionLookupByIdForStatus.mockReturnValue({
       requesterSessionKey: "agent:main:main",
       runId: "run-for-task-1",
     });
@@ -202,7 +195,7 @@ describe("artifacts RPC handlers", () => {
     });
 
     expect(list.calls[0]?.ok).toBe(true);
-    expect(hoisted.getTaskById).toHaveBeenCalledWith("task-1");
+    expect(hoisted.getTaskSessionLookupByIdForStatus).toHaveBeenCalledWith("task-1");
     expect(hoisted.resolveSessionKeyForRun).not.toHaveBeenCalled();
     expect(hoisted.loadSessionEntry).toHaveBeenCalledWith("agent:main:main");
     const listPayload = list.calls[0]?.payload as { artifacts?: Array<Record<string, unknown>> };
