@@ -2305,6 +2305,49 @@ describe("ensureBundledPluginRuntimeDeps", () => {
     expect(result).toEqual({ installedSpecs: [] });
   });
 
+  it("accepts generated package-level runtime-deps supersets without reinstalling", () => {
+    const packageRoot = makeTempDir();
+    const stageDir = makeTempDir();
+    fs.writeFileSync(
+      path.join(packageRoot, "package.json"),
+      JSON.stringify({ name: "openclaw", version: "2026.4.29" }),
+    );
+    const alphaRoot = writeBundledPluginPackage({
+      packageRoot,
+      pluginId: "alpha",
+      deps: { "alpha-runtime": "1.0.0" },
+      enabledByDefault: true,
+    });
+    writeBundledPluginPackage({
+      packageRoot,
+      pluginId: "tokenjuice",
+      deps: { tokenjuice: "0.7.0" },
+      enabledByDefault: true,
+    });
+    const env = { OPENCLAW_PLUGIN_STAGE_DIR: stageDir };
+    const installRoot = resolveBundledRuntimeDependencyInstallRoot(alphaRoot, { env });
+    writeInstalledPackage(installRoot, "alpha-runtime", "1.0.0");
+    writeInstalledPackage(installRoot, "tokenjuice", "0.7.0");
+    writeGeneratedRuntimeDepsManifest(installRoot, ["alpha-runtime@1.0.0", "tokenjuice@0.7.0"]);
+
+    const result = ensureBundledPluginRuntimeDeps({
+      env,
+      config: {
+        plugins: {
+          allow: ["alpha"],
+          entries: { alpha: { enabled: true } },
+        },
+      },
+      pluginId: "alpha",
+      pluginRoot: alphaRoot,
+      installDeps: () => {
+        throw new Error("compatible runtime deps superset should not reinstall");
+      },
+    });
+
+    expect(result).toEqual({ installedSpecs: [] });
+  });
+
   it("drops stale package versions from the next package-level plan", () => {
     const packageRoot = makeTempDir();
     const stageDir = makeTempDir();
