@@ -49,6 +49,8 @@ export type SessionAcpMeta = {
   state: "idle" | "running" | "error";
   lastActivityAt: number;
   lastError?: string;
+  /** OS process PID of the ACP adapter/child agent process, if available. */
+  pid?: number;
 };
 
 export type AcpSessionRuntimeOptions = {

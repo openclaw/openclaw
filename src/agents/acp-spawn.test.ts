@@ -2655,6 +2655,69 @@ describe("spawnAcpDirect", () => {
     );
   });
 
+  it("includes pid in spawn result when the runtime handle exposes one", async () => {
+    hoisted.initializeSessionMock.mockImplementationOnce(async (argsUnknown: unknown) => {
+      const args = argsUnknown as AcpInitializeSessionInput;
+      const runtimeSessionName = `${args.sessionKey}:runtime`;
+      return {
+        runtime: {
+          close: vi.fn().mockResolvedValue(undefined),
+        },
+        handle: {
+          sessionKey: args.sessionKey,
+          backend: "acpx",
+          runtimeSessionName,
+          agentSessionId: "codex-inner-1",
+          backendSessionId: "acpx-1",
+          pid: 42_789,
+        },
+        meta: {
+          backend: "acpx",
+          agent: args.agent,
+          runtimeSessionName,
+          identity: {
+            state: "pending",
+            source: "ensure",
+            acpxSessionId: "acpx-1",
+            agentSessionId: "codex-inner-1",
+            lastUpdatedAt: Date.now(),
+          },
+          mode: args.mode,
+          state: "idle",
+          lastActivityAt: Date.now(),
+        },
+      };
+    });
+
+    const result = await spawnAcpDirect(
+      {
+        task: "Investigate flaky tests",
+        agentId: "codex",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+      },
+    );
+
+    const accepted = expectAcceptedSpawn(result);
+    expect(accepted.pid).toBe(42_789);
+  });
+
+  it("omits pid from spawn result when the runtime handle does not expose one", async () => {
+    const result = await spawnAcpDirect(
+      {
+        task: "Investigate flaky tests",
+        agentId: "codex",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+      },
+    );
+
+    const accepted = expectAcceptedSpawn(result);
+    expect(accepted).not.toHaveProperty("pid");
+  });
+
   it("disposes pre-registered parent relay when initial ACP dispatch fails", async () => {
     const relayHandle = createRelayHandle();
     hoisted.startAcpSpawnParentStreamRelayMock.mockReturnValueOnce(relayHandle);

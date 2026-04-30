@@ -148,6 +148,7 @@ type SpawnAcpResultFields = {
   inlineDelivery?: boolean;
   streamLogPath?: string;
   note?: string;
+  pid?: number;
 };
 
 type SpawnAcpAcceptedResult = SpawnAcpResultFields & {
@@ -1289,6 +1290,7 @@ export async function spawnAcpDirect(
   let binding: SessionBindingRecord | null = null;
   let sessionCreated = false;
   let initializedRuntime: AcpSpawnRuntimeCloseHandle | undefined;
+  let initializedPid: number | undefined;
   try {
     await callGateway({
       method: "sessions.patch",
@@ -1313,6 +1315,7 @@ export async function spawnAcpDirect(
       cwd: runtimeCwd,
     });
     initializedRuntime = initializedSession.runtimeCloseHandle;
+    initializedPid = initializedSession.initialized.handle.pid;
 
     if (preparedBinding) {
       ({ binding } = await bindPreparedAcpThread({
@@ -1463,6 +1466,7 @@ export async function spawnAcpDirect(
       runId: childRunId,
       mode: spawnMode,
       ...(streamLogPath ? { streamLogPath } : {}),
+      ...(typeof initializedPid === "number" ? { pid: initializedPid } : {}),
       note: spawnMode === "session" ? ACP_SPAWN_SESSION_ACCEPTED_NOTE : ACP_SPAWN_ACCEPTED_NOTE,
     };
   }
@@ -1496,6 +1500,7 @@ export async function spawnAcpDirect(
     runId: childRunId,
     mode: spawnMode,
     ...(deliveryPlan.useInlineDelivery ? { inlineDelivery: true } : {}),
+    ...(typeof initializedPid === "number" ? { pid: initializedPid } : {}),
     note: spawnMode === "session" ? ACP_SPAWN_SESSION_ACCEPTED_NOTE : ACP_SPAWN_ACCEPTED_NOTE,
   };
 }

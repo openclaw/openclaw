@@ -93,6 +93,8 @@ export type AcpSessionStatus = {
   runtimeStatus?: AcpRuntimeStatus;
   lastActivityAt: number;
   lastError?: string;
+  /** OS process PID of the ACP adapter/child agent process, if available. */
+  pid?: number;
 };
 
 export type AcpManagerObservabilitySnapshot = {

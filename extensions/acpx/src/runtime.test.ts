@@ -517,6 +517,95 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     expect(baseStore.load).toHaveBeenCalledOnce();
   });
 
+  it("extracts pid from the delegate ensureSession result", async () => {
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => undefined),
+      save: vi.fn(async () => {}),
+    };
+    const { runtime, delegate } = makeRuntime(baseStore);
+    vi.spyOn(delegate, "ensureSession").mockResolvedValue({
+      sessionKey: "agent:claude:acp:test",
+      backend: "acpx",
+      runtimeSessionName: "claude",
+      pid: 99_123,
+    } as never);
+
+    const result = await runtime.ensureSession({
+      sessionKey: "agent:claude:acp:test",
+      agent: "claude",
+      mode: "persistent",
+    });
+
+    expect(result.pid).toBe(99_123);
+    expect(result.sessionKey).toBe("agent:claude:acp:test");
+    expect(result.backend).toBe("acpx");
+    expect(result.runtimeSessionName).toBe("claude");
+  });
+
+  it("omits pid from ensureSession result when delegate does not expose one", async () => {
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => undefined),
+      save: vi.fn(async () => {}),
+    };
+    const { runtime, delegate } = makeRuntime(baseStore);
+    vi.spyOn(delegate, "ensureSession").mockResolvedValue({
+      sessionKey: "agent:claude:acp:test",
+      backend: "acpx",
+      runtimeSessionName: "claude",
+    });
+
+    const result = await runtime.ensureSession({
+      sessionKey: "agent:claude:acp:test",
+      agent: "claude",
+      mode: "persistent",
+    });
+
+    expect(result).not.toHaveProperty("pid");
+  });
+
+  it("extracts pid from the delegate getStatus result", async () => {
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => undefined),
+      save: vi.fn(async () => {}),
+    };
+    const { runtime, delegate } = makeRuntime(baseStore);
+    vi.spyOn(delegate, "getStatus").mockResolvedValue({
+      summary: "running",
+      pid: 55_432,
+    } as never);
+    const handle: Parameters<NonNullable<AcpRuntime["getStatus"]>>[0]["handle"] = {
+      sessionKey: "agent:claude:acp:test",
+      backend: "acpx",
+      runtimeSessionName: "claude-session",
+    };
+
+    const status = await runtime.getStatus({ handle });
+
+    expect(status.pid).toBe(55_432);
+    expect(status.summary).toBe("running");
+  });
+
+  it("extracts pid from the delegate getStatus details when not at the top level", async () => {
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => undefined),
+      save: vi.fn(async () => {}),
+    };
+    const { runtime, delegate } = makeRuntime(baseStore);
+    vi.spyOn(delegate, "getStatus").mockResolvedValue({
+      summary: "running",
+      details: { pid: 33_211 },
+    });
+    const handle: Parameters<NonNullable<AcpRuntime["getStatus"]>>[0]["handle"] = {
+      sessionKey: "agent:claude:acp:test",
+      backend: "acpx",
+      runtimeSessionName: "claude-session",
+    };
+
+    const status = await runtime.getStatus({ handle });
+
+    expect(status.pid).toBe(33_211);
+  });
+
   it("routes openclaw ensureSession through the bridge-safe delegate when MCP servers are configured", async () => {
     const baseStore: TestSessionStore = {
       load: vi.fn(async () => undefined),
