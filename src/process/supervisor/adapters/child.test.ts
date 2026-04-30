@@ -274,6 +274,35 @@ describe("createChildAdapter", () => {
     });
   });
 
+  it("does not crash when stdin emits an async EPIPE after spawn (shell-wrapped missing binary)", async () => {
+    const stub = createStubChild(11111);
+    // Simulate the real Linux shell-wrapper shape: stdin is initially writable
+    // but the shell emits EPIPE asynchronously after exec fails.
+    Object.defineProperty(stub.child.stdin!, "writable", { value: true, configurable: true });
+    spawnWithFallbackMock.mockResolvedValue({
+      child: stub.child,
+      usedFallback: false,
+    });
+    // Should not throw — the adapter swallows the async error.
+    await expect(
+      createChildAdapter({
+        argv: [
+          "/bin/sh",
+          "-c",
+          'echo 1000 > /proc/self/oom_score_adj 2>/dev/null; exec "$0" "$@"',
+          "nonexistent-binary",
+        ],
+        input: "",
+      }),
+    ).resolves.toBeDefined();
+    // Emit the async EPIPE after adapter creation — must not propagate.
+    const err = new Error("EPIPE: write EPIPE");
+    (err as NodeJS.errnoException).code = "EPIPE";
+    stub.child.stdin!.emit("error", err);
+    // Verify the adapter is still usable after the async error.
+    expect(stub.child.stdin!.destroyed).toBe(false);
+  });
+
   it("disables detached mode in service-managed runtime", async () => {
     process.env.OPENCLAW_SERVICE_MARKER = "openclaw";
 
