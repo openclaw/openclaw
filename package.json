@@ -326,6 +326,10 @@
       "types": "./dist/plugin-sdk/infra-runtime.d.ts",
       "default": "./dist/plugin-sdk/infra-runtime.js"
     },
+    "./plugin-sdk/resolve-system-bin": {
+      "types": "./dist/plugin-sdk/resolve-system-bin.d.ts",
+      "default": "./dist/plugin-sdk/resolve-system-bin.js"
+    },
     "./plugin-sdk/runtime-config-snapshot": {
       "types": "./dist/plugin-sdk/runtime-config-snapshot.d.ts",
       "default": "./dist/plugin-sdk/runtime-config-snapshot.js"

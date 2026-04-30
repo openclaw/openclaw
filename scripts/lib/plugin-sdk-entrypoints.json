@@ -64,6 +64,7 @@
   "system-event-runtime",
   "transport-ready-runtime",
   "infra-runtime",
+  "resolve-system-bin",
   "runtime-config-snapshot",
   "runtime-group-policy",
   "model-session-runtime",

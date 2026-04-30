@@ -35,7 +35,7 @@ vi.mock("node:child_process", () => {
   };
 });
 
-vi.mock("openclaw/plugin-sdk/infra-runtime", () => ({
+vi.mock("openclaw/plugin-sdk/resolve-system-bin", () => ({
   resolveSystemBin: mockResolveSystemBin,
 }));
 

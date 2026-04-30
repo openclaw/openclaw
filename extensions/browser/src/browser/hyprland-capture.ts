@@ -1,6 +1,6 @@
 import { execFile, execFileSync, spawn } from "node:child_process";
 import { promisify } from "node:util";
-import { resolveSystemBin } from "openclaw/plugin-sdk/infra-runtime";
+import { resolveSystemBin } from "openclaw/plugin-sdk/resolve-system-bin";
 
 const execFileAsync = promisify(execFile);
 

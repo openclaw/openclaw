@@ -472,7 +472,13 @@ export const OpenClawSchema = z
           })
           .strict()
           .optional(),
-        hyprlandCapture: z.boolean().optional(),
+        hyprlandCapture: z
+          .boolean()
+          .optional()
+          .meta({ title: "Hyprland Viewport Capture" })
+          .describe(
+            "Enables a Hyprland/Wayland fallback for viewport screenshots using grim and a virtual hyprctl output. Only activates when HYPRLAND_INSTANCE_SIGNATURE is set and the browser profile is not headless. Requires grim and hyprctl to be installed.",
+          ),
       })
       .strict()
       .optional(),
