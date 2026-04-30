@@ -46,6 +46,7 @@ export type TavilyExtractParams = {
   extractDepth?: string;
   chunksPerSource?: number;
   includeImages?: boolean;
+  format?: string;
   timeoutSeconds?: number;
 };
 
@@ -225,6 +226,7 @@ export async function runTavilyExtract(
       extractDepth: params.extractDepth,
       chunksPerSource: params.chunksPerSource,
       includeImages: params.includeImages,
+      format: params.format,
     }),
   );
   const cached = readCache(EXTRACT_CACHE, cacheKey);
@@ -244,6 +246,9 @@ export async function runTavilyExtract(
   }
   if (params.includeImages) {
     body.include_images = true;
+  }
+  if (params.format) {
+    body.format = params.format;
   }
 
   const start = Date.now();
