@@ -47,6 +47,7 @@ import {
   isWebchatClient,
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
+import { setSafeTimeout } from "../../utils/timer-delay.js";
 import {
   abortChatRunById,
   type ChatAbortControllerEntry,
@@ -190,6 +191,7 @@ export {
 export const CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES = 128 * 1024;
 const CHAT_HISTORY_OVERSIZED_PLACEHOLDER = "[chat.history omitted: message too large]";
 const MANAGED_OUTGOING_IMAGE_PATH_PREFIX = "/api/chat/media/outgoing/";
+const DEFAULT_WEBCHAT_CHAT_SEND_TERMINAL_TIMEOUT_MS = 30_000;
 let chatHistoryPlaceholderEmitCount = 0;
 const chatHistoryManagedImageCleanupState = new Map<string, Promise<void>>();
 const CHANNEL_AGNOSTIC_SESSION_SCOPES = new Set([
@@ -1640,6 +1642,31 @@ function broadcastChatError(params: {
   params.context.agentRunSeq.delete(params.runId);
 }
 
+function resolveWebchatChatSendTerminalTimeoutMs(params: {
+  client?: { mode?: string | null; id?: string | null } | null;
+  requestedTimeoutMs?: number;
+  resolvedAgentTimeoutMs: number;
+}): number | null {
+  if (!isWebchatClient(params.client)) {
+    return null;
+  }
+  if (
+    typeof params.requestedTimeoutMs === "number" &&
+    Number.isFinite(params.requestedTimeoutMs) &&
+    params.requestedTimeoutMs > 0
+  ) {
+    return Math.max(1, Math.floor(params.requestedTimeoutMs));
+  }
+  return Math.min(
+    Math.max(1, Math.floor(params.resolvedAgentTimeoutMs)),
+    DEFAULT_WEBCHAT_CHAT_SEND_TERMINAL_TIMEOUT_MS,
+  );
+}
+
+function formatWebchatChatSendTerminalTimeout(timeoutMs: number): string {
+  return `chat.send timed out after ${timeoutMs}ms without an assistant final event`;
+}
+
 export const chatHandlers: GatewayRequestHandlers = {
   "chat.history": async ({ params, respond, context }) => {
     if (!validateChatHistoryParams(params)) {
@@ -2097,6 +2124,63 @@ export const chatHandlers: GatewayRequestHandlers = {
         mainKey: cfg.session?.mainKey,
         sessionKey,
       });
+      const terminalTimeoutMs = resolveWebchatChatSendTerminalTimeoutMs({
+        client: clientInfo,
+        requestedTimeoutMs: p.timeoutMs,
+        resolvedAgentTimeoutMs: timeoutMs,
+      });
+      let chatSendTerminalClosed = false;
+      let chatSendTerminalTimedOut = false;
+      let chatSendTerminalTimer: NodeJS.Timeout | null = null;
+      const clearChatSendTerminalTimer = () => {
+        if (!chatSendTerminalTimer) {
+          return;
+        }
+        clearTimeout(chatSendTerminalTimer);
+        chatSendTerminalTimer = null;
+      };
+      const closeChatSendTerminal = () => {
+        if (chatSendTerminalClosed) {
+          return false;
+        }
+        chatSendTerminalClosed = true;
+        clearChatSendTerminalTimer();
+        return true;
+      };
+      const broadcastChatSendTerminalTimeout = (summary: string) => {
+        chatSendTerminalTimedOut = true;
+        if (!closeChatSendTerminal()) {
+          return;
+        }
+        activeRunAbort.controller.abort(new Error(summary));
+        context.chatAbortedRuns.set(clientRunId, Date.now());
+        context.chatRunBuffers.delete(clientRunId);
+        context.chatDeltaSentAt.delete(clientRunId);
+        context.chatDeltaLastBroadcastLen.delete(clientRunId);
+        activeRunAbort.cleanup();
+        context.removeChatRun(clientRunId, clientRunId, sessionKey);
+        const error = errorShape(ErrorCodes.UNAVAILABLE, summary);
+        setGatewayDedupeEntry({
+          dedupe: context.dedupe,
+          key: `chat:${clientRunId}`,
+          entry: {
+            ts: Date.now(),
+            ok: false,
+            payload: {
+              runId: clientRunId,
+              status: "error" as const,
+              summary,
+            },
+            error,
+          },
+        });
+        broadcastChatError({
+          context,
+          runId: clientRunId,
+          sessionKey,
+          errorMessage: summary,
+        });
+      };
       // Inject timestamp so agents know the current date/time.
       // Only BodyForAgent gets the timestamp — Body stays raw for UI display.
       // See: https://github.com/moltbot/moltbot/issues/3658
@@ -2168,6 +2252,17 @@ export const chatHandlers: GatewayRequestHandlers = {
           if (!transcriptPath) {
             return;
           }
+          if (!fs.existsSync(transcriptPath)) {
+            const ensured = ensureTranscriptFile({
+              transcriptPath,
+              sessionId: resolvedSessionId,
+            });
+            if (!ensured.ok) {
+              context.logGateway.warn(
+                `webchat user transcript file create failed: ${ensured.error ?? "unknown error"}`,
+              );
+            }
+          }
           const persistedImages = await persistedImagesPromise;
           emitSessionTranscriptUpdate({
             sessionFile: transcriptPath,
@@ -2181,6 +2276,23 @@ export const chatHandlers: GatewayRequestHandlers = {
         })();
         await userTranscriptUpdatePromise;
       };
+      if (terminalTimeoutMs !== null) {
+        chatSendTerminalTimer = setSafeTimeout(() => {
+          void (async () => {
+            await emitUserTranscriptUpdate().catch((transcriptErr) => {
+              context.logGateway.warn(
+                `webchat user transcript update failed before terminal timeout: ${formatForLog(
+                  transcriptErr,
+                )}`,
+              );
+            });
+            broadcastChatSendTerminalTimeout(
+              formatWebchatChatSendTerminalTimeout(terminalTimeoutMs),
+            );
+          })();
+        }, terminalTimeoutMs);
+        chatSendTerminalTimer.unref?.();
+      }
       let transcriptMediaRewriteDone = false;
       const rewriteUserTranscriptMedia = async () => {
         if (transcriptMediaRewriteDone) {
@@ -2352,6 +2464,9 @@ export const chatHandlers: GatewayRequestHandlers = {
       })
         .then(async () => {
           await rewriteUserTranscriptMedia();
+          if (chatSendTerminalTimedOut) {
+            return;
+          }
           if (!agentRunStarted) {
             await emitUserTranscriptUpdate();
             const btwReplies = deliveredReplies
@@ -2363,6 +2478,9 @@ export const chatHandlers: GatewayRequestHandlers = {
               .join("\n\n")
               .trim();
             if (btwReplies.length > 0 && btwText) {
+              if (!closeChatSendTerminal()) {
+                return;
+              }
               broadcastSideResult({
                 context,
                 payload: {
@@ -2509,6 +2627,9 @@ export const chatHandlers: GatewayRequestHandlers = {
                   };
                 }
               }
+              if (!closeChatSendTerminal()) {
+                return;
+              }
               broadcastChatFinal({
                 context,
                 runId: clientRunId,
@@ -2518,6 +2639,9 @@ export const chatHandlers: GatewayRequestHandlers = {
             }
           } else {
             void emitUserTranscriptUpdate();
+            if (!closeChatSendTerminal()) {
+              return;
+            }
           }
           if (!context.chatAbortedRuns.has(clientRunId)) {
             setGatewayDedupeEntry({
@@ -2542,6 +2666,9 @@ export const chatHandlers: GatewayRequestHandlers = {
               `webchat user transcript update failed after error: ${formatForLog(transcriptErr)}`,
             );
           });
+          if (!closeChatSendTerminal()) {
+            return;
+          }
           const error = errorShape(ErrorCodes.UNAVAILABLE, String(err));
           setGatewayDedupeEntry({
             dedupe: context.dedupe,
@@ -2565,6 +2692,7 @@ export const chatHandlers: GatewayRequestHandlers = {
           });
         })
         .finally(() => {
+          clearChatSendTerminalTimer();
           activeRunAbort.cleanup();
           context.removeChatRun(clientRunId, clientRunId, sessionKey);
         });

@@ -64,6 +64,7 @@ const mockState = vi.hoisted(() => ({
   saveMediaError: null as Error | null,
   savedMediaCalls: [] as Array<{ contentType?: string; subdir?: string; size: number }>,
   saveMediaWait: null as Promise<void> | null,
+  dispatchWaitsForAbort: false,
   activeSaveMediaCalls: 0,
   maxActiveSaveMediaCalls: 0,
   sandboxWorkspace: null as { workspaceDir: string; containerWorkdir?: string } | null,
@@ -164,6 +165,7 @@ vi.mock("../../auto-reply/dispatch.js", () => ({
       };
       replyOptions?: {
         onAgentRunStart?: (runId: string) => void;
+        abortSignal?: AbortSignal;
         images?: Array<{ mimeType: string; data: string }>;
         imageOrder?: string[];
       };
@@ -176,6 +178,17 @@ vi.mock("../../auto-reply/dispatch.js", () => ({
       }
       if (mockState.triggerAgentRunStart) {
         params.replyOptions?.onAgentRunStart?.(mockState.agentRunId);
+      }
+      if (mockState.dispatchWaitsForAbort) {
+        await new Promise<never>((_resolve, reject) => {
+          const signal = params.replyOptions?.abortSignal;
+          const rejectAbort = () => reject(new Error("test dispatch aborted"));
+          if (signal?.aborted) {
+            rejectAbort();
+            return;
+          }
+          signal?.addEventListener("abort", rejectAbort, { once: true });
+        });
       }
       if (mockState.dispatchedReplies.length > 0) {
         for (const reply of mockState.dispatchedReplies) {
@@ -323,6 +336,12 @@ function createTranscriptFixture(prefix: string) {
     "utf-8",
   );
   mockState.transcriptPath = transcriptPath;
+  return dir;
+}
+
+function createMissingTranscriptFixture(prefix: string) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  mockState.transcriptPath = path.join(dir, "sess.jsonl");
   return dir;
 }
 
@@ -513,6 +532,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     mockState.saveMediaError = null;
     mockState.savedMediaCalls = [];
     mockState.saveMediaWait = null;
+    mockState.dispatchWaitsForAbort = false;
     mockState.activeSaveMediaCalls = 0;
     mockState.maxActiveSaveMediaCalls = 0;
     bindingMocks.resolveByConversation.mockReset();
@@ -1927,6 +1947,93 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       context.broadcast as unknown as ReturnType<typeof vi.fn>
     ).mock.calls.find((call) => call[0] === "chat" && call[1]?.state === "final")?.[1];
     expect(finalBroadcast).toBeUndefined();
+  });
+
+  it("broadcasts a terminal error and creates the transcript when a webchat agent run times out", async () => {
+    createMissingTranscriptFixture("openclaw-chat-send-webchat-terminal-timeout-");
+    mockState.triggerAgentRunStart = true;
+    mockState.agentRunId = "run-webchat-timeout";
+    mockState.dispatchWaitsForAbort = true;
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-webchat-timeout",
+      message: "hello from webchat timeout",
+      requestParams: { timeoutMs: 5 },
+      client: {
+        connect: {
+          caps: [],
+          client: {
+            id: GATEWAY_CLIENT_NAMES.WEBCHAT,
+            mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+            displayName: "Webchat",
+            version: "1.0.0",
+          },
+        },
+      },
+      waitFor: "none",
+    });
+
+    await waitForAssertion(() => {
+      expect(context.broadcast).toHaveBeenCalledWith(
+        "chat",
+        expect.objectContaining({
+          runId: "idem-webchat-timeout",
+          sessionKey: "main",
+          state: "error",
+          errorMessage: expect.stringContaining("timed out after 5ms"),
+        }),
+      );
+    });
+    expect(context.chatAbortControllers.has("idem-webchat-timeout")).toBe(false);
+    expect(context.removeChatRun).toHaveBeenCalledWith(
+      "idem-webchat-timeout",
+      "idem-webchat-timeout",
+      "main",
+    );
+    expect(context.dedupe.get("chat:idem-webchat-timeout")).toMatchObject({
+      ok: false,
+      payload: {
+        runId: "idem-webchat-timeout",
+        status: "error",
+        summary: expect.stringContaining("timed out after 5ms"),
+      },
+    });
+    let userUpdate:
+      | {
+          sessionFile: string;
+          sessionKey?: string;
+          message?: unknown;
+          messageId?: string;
+        }
+      | undefined;
+    await waitForAssertion(() => {
+      userUpdate = mockState.emittedTranscriptUpdates.find(
+        (update) =>
+          typeof update.message === "object" &&
+          update.message !== null &&
+          (update.message as { role?: unknown }).role === "user",
+      );
+      expect(userUpdate).toBeTruthy();
+      expect(fs.existsSync(userUpdate?.sessionFile ?? "")).toBe(true);
+    });
+    const header = JSON.parse(fs.readFileSync(userUpdate!.sessionFile, "utf-8").split("\n")[0]);
+    expect(header).toMatchObject({
+      type: "session",
+      id: mockState.sessionId,
+    });
+    expect(userUpdate).toMatchObject({
+      sessionFile: expect.any(String),
+      sessionKey: "main",
+      message: {
+        role: "user",
+        content: "hello from webchat timeout",
+        timestamp: expect.any(Number),
+      },
+    });
   });
 
   it("adds persisted media paths to the user transcript update", async () => {
