@@ -146,10 +146,13 @@ describe("scripts/lib/openclaw-test-state", () => {
 
   it("keeps onboard Docker temp homes on the shared test-state helper", async () => {
     const scriptText = await fs.readFile(onboardDockerScriptPath, "utf8");
+    const scenarioText = await fs.readFile("scripts/e2e/lib/onboard/scenario.sh", "utf8");
 
     expect(scriptText).toContain("OPENCLAW_TEST_STATE_FUNCTION_B64");
-    expect(scriptText).toContain("set_isolated_openclaw_env local-basic");
-    expect(scriptText).toContain("run_wizard_cmd channels channels");
+    expect(scriptText).toContain("scripts/e2e/lib/onboard/scenario.sh");
+    expect(scenarioText).toContain("set_isolated_openclaw_env local-basic");
+    expect(scenarioText).toContain("run_wizard_cmd channels channels");
     expect(scriptText).not.toContain("make_home");
+    expect(scenarioText).not.toContain("make_home");
   });
 });

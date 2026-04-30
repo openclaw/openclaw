@@ -1,5 +1,4 @@
 import fs from "node:fs";
-import { isDeepStrictEqual } from "node:util";
 import type { probeGatewayMemoryStatus } from "../commands/doctor-gateway-health.js";
 import type { DoctorOptions, DoctorPrompter } from "../commands/doctor-prompter.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -52,16 +51,8 @@ function isTruthyEnvValue(value: string | undefined): boolean {
   return normalized !== "" && normalized !== "0" && normalized !== "false" && normalized !== "no";
 }
 
-function omitDoctorWriteMetadata(cfg: OpenClawConfig): OpenClawConfig {
-  const { meta: _meta, wizard: _wizard, ...rest } = cfg;
-  return rest;
-}
-
-export function shouldSkipLegacyUpdateDoctorMetadataWrite(params: {
+export function shouldSkipLegacyUpdateDoctorConfigWrite(params: {
   env: NodeJS.ProcessEnv;
-  hasPendingConfigWrite?: boolean;
-  before: OpenClawConfig;
-  after: OpenClawConfig;
 }): boolean {
   if (!isTruthyEnvValue(params.env.OPENCLAW_UPDATE_IN_PROGRESS)) {
     return false;
@@ -69,13 +60,7 @@ export function shouldSkipLegacyUpdateDoctorMetadataWrite(params: {
   if (isTruthyEnvValue(params.env[UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV])) {
     return false;
   }
-  if (params.hasPendingConfigWrite === true) {
-    return false;
-  }
-  return isDeepStrictEqual(
-    omitDoctorWriteMetadata(params.before),
-    omitDoctorWriteMetadata(params.after),
-  );
+  return true;
 }
 
 function createDoctorHealthContribution(params: {
@@ -480,7 +465,7 @@ async function runGatewayHealthChecks(ctx: DoctorHealthFlowContext): Promise<voi
         cfg: ctx.cfg,
         timeoutMs: ctx.options.nonInteractive === true ? 3000 : 10_000,
       })
-    : { checked: false, ready: false };
+    : { checked: false, ready: false, skipped: false };
 }
 
 async function runMemorySearchHealthContribution(ctx: DoctorHealthFlowContext): Promise<void> {
@@ -493,7 +478,7 @@ async function runMemorySearchHealthContribution(ctx: DoctorHealthFlowContext): 
     });
   }
   await noteMemorySearchHealth(ctx.cfg, {
-    gatewayMemoryProbe: ctx.gatewayMemoryProbe ?? { checked: false, ready: false },
+    gatewayMemoryProbe: ctx.gatewayMemoryProbe ?? { checked: false, ready: false, skipped: false },
   });
   if (ctx.options.deep === true) {
     await noteMemoryRecallHealth(ctx.cfg);
@@ -534,15 +519,8 @@ async function runWriteConfigHealth(ctx: DoctorHealthFlowContext): Promise<void>
       command: "doctor",
       mode: resolveDoctorMode(ctx.cfg),
     });
-    if (
-      shouldSkipLegacyUpdateDoctorMetadataWrite({
-        env: ctx.env ?? process.env,
-        hasPendingConfigWrite: ctx.configResult.shouldWriteConfig === true,
-        before: ctx.cfgForPersistence,
-        after: ctx.cfg,
-      })
-    ) {
-      ctx.runtime.log("Skipping doctor metadata-only config write during legacy update handoff.");
+    if (shouldSkipLegacyUpdateDoctorConfigWrite({ env: ctx.env ?? process.env })) {
+      ctx.runtime.log("Skipping doctor config write during legacy update handoff.");
       return;
     }
     await replaceConfigFile({

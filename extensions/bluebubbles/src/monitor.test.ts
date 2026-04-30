@@ -408,11 +408,11 @@ describe("BlueBubbles webhook monitor", () => {
       expect(sendMessageBlueBubbles).not.toHaveBeenCalled();
     });
 
-    it("allows all DMs when dmPolicy=open", async () => {
+    it("allows wildcard DMs when dmPolicy=open", async () => {
       setupWebhookTarget({
         account: createMockAccount({
           dmPolicy: "open",
-          allowFrom: [],
+          allowFrom: ["*"],
         }),
       });
 
@@ -483,6 +483,7 @@ describe("BlueBubbles webhook monitor", () => {
         account: createMockAccount({
           groupPolicy: "allowlist",
           dmPolicy: "open",
+          allowFrom: [],
         }),
       });
 
@@ -1876,7 +1877,7 @@ describe("BlueBubbles webhook monitor", () => {
       expect(mockDispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
     });
 
-    it("does not auto-authorize DM control commands in open mode without allowlists", async () => {
+    it("drops DM control commands in open mode without allowlists", async () => {
       mockHasControlCommand.mockReturnValue(true);
 
       setupWebhookTarget({
@@ -1894,12 +1895,7 @@ describe("BlueBubbles webhook monitor", () => {
 
       await dispatchWebhookPayload(payload);
 
-      expect(mockDispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalled();
-      const latestDispatch =
-        mockDispatchReplyWithBufferedBlockDispatcher.mock.calls[
-          mockDispatchReplyWithBufferedBlockDispatcher.mock.calls.length - 1
-        ]?.[0];
-      expect(latestDispatch?.ctx?.CommandAuthorized).toBe(false);
+      expect(mockDispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
     });
   });
 

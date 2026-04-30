@@ -56,10 +56,12 @@ type TelegramQaScenarioRun = {
   input: string;
   expectedTextIncludes?: string[];
   matchText?: string;
+  replyToLatestSutMessage?: boolean;
 };
 
 type TelegramQaScenarioDefinition = LiveTransportScenarioDefinition<TelegramQaScenarioId> & {
   buildRun: (sutUsername: string) => TelegramQaScenarioRun;
+  defaultEnabled?: boolean;
 };
 
 type TelegramObservedMessage = {
@@ -271,11 +273,13 @@ const TELEGRAM_QA_SCENARIOS: TelegramQaScenarioDefinition[] = [
   {
     id: "telegram-mentioned-message-reply",
     title: "Telegram mentioned message gets a reply",
+    defaultEnabled: false,
     timeoutMs: 45_000,
     buildRun: (sutUsername) => ({
       allowAnySutReply: true,
       expectReply: true,
       input: `@${sutUsername} Telegram QA mention routing check. Reply with a short acknowledgement.`,
+      replyToLatestSutMessage: true,
     }),
   },
   {
@@ -613,11 +617,24 @@ async function flushTelegramUpdates(token: string) {
   throw new Error("timed out after 15000ms draining Telegram updates");
 }
 
-async function sendGroupMessage(token: string, groupId: string, text: string) {
+async function sendGroupMessage(
+  token: string,
+  groupId: string,
+  text: string,
+  opts: { replyToMessageId?: number } = {},
+) {
   return await callTelegramApi<TelegramSendMessageResult>(token, "sendMessage", {
     chat_id: groupId,
     text,
     disable_notification: true,
+    ...(opts.replyToMessageId !== undefined
+      ? {
+          reply_parameters: {
+            message_id: opts.replyToMessageId,
+            allow_sending_without_reply: true,
+          },
+        }
+      : {}),
   });
 }
 
@@ -820,10 +837,14 @@ function buildObservedMessagesArtifact(params: {
 }
 
 function findScenario(ids?: string[]) {
+  const scenarios =
+    ids && ids.length > 0
+      ? TELEGRAM_QA_SCENARIOS
+      : TELEGRAM_QA_SCENARIOS.filter((scenario) => scenario.defaultEnabled !== false);
   return selectLiveTransportScenarios({
     ids,
     laneLabel: "Telegram",
-    scenarios: TELEGRAM_QA_SCENARIOS,
+    scenarios,
   });
 }
 
@@ -1228,6 +1249,7 @@ export async function runTelegramQaLive(params: {
     try {
       await waitForTelegramChannelRunning(gatewayHarness.gateway, sutAccountId);
       assertLeaseHealthy();
+      let latestSutMessageId: number | undefined;
       try {
         writeTelegramQaProgress(progressEnabled, "canary start");
         const canaryTiming = await runCanary({
@@ -1238,6 +1260,7 @@ export async function runTelegramQaLive(params: {
           timeoutMs: resolveTelegramQaCanaryTimeoutMs(),
           observedMessages,
         });
+        latestSutMessageId = canaryTiming.responseMessageId;
         scenarioResults.push({
           id: "telegram-canary",
           title: "Telegram canary",
@@ -1291,6 +1314,9 @@ export async function runTelegramQaLive(params: {
               runtimeEnv.driverToken,
               runtimeEnv.groupId,
               scenarioRun.input,
+              scenarioRun.replyToLatestSutMessage
+                ? { replyToMessageId: latestSutMessageId }
+                : undefined,
             );
             const requestStartedAt = new Date(requestStartedAtMs).toISOString();
             const matched = await waitForObservedMessage({
@@ -1333,6 +1359,7 @@ export async function runTelegramQaLive(params: {
               responseMessageId: redactPublicMetadata ? undefined : matched.message.messageId,
             } satisfies TelegramQaScenarioResult;
             scenarioResults.push(result);
+            latestSutMessageId = matched.message.messageId;
             writeTelegramQaProgress(
               progressEnabled,
               `scenario pass ${scenarioIndexLabel}: ${scenarioIdForLog}`,

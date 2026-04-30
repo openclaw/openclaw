@@ -789,6 +789,9 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
             },
           ],
         },
+        applicationId: {
+          type: "string",
+        },
         proxy: {
           type: "string",
         },
@@ -2152,6 +2155,9 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                   },
                 ],
               },
+              applicationId: {
+                type: "string",
+              },
               proxy: {
                 type: "string",
               },
@@ -3489,10 +3495,6 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
         label: "Discord Thread Parent Inheritance",
         help: "If true, Discord thread sessions inherit the parent channel transcript (default: false).",
       },
-      "inboundWorker.runTimeoutMs": {
-        label: "Discord Inbound Worker Timeout (ms)",
-        help: "Optional queued Discord inbound worker timeout in ms. This is separate from Carbon listener timeouts; defaults to 1800000 and can be disabled with 0. Set per account via channels.discord.accounts.<id>.inboundWorker.runTimeoutMs.",
-      },
       "eventQueue.listenerTimeout": {
         label: "Discord EventQueue Listener Timeout (ms)",
         help: "Canonical Discord listener timeout control in ms for gateway normalization/enqueue handlers. Default is 120000 in OpenClaw; set per account via channels.discord.accounts.<id>.eventQueue.listenerTimeout.",
@@ -3625,6 +3627,10 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
         label: "Discord Bot Token",
         help: "Discord bot token used for gateway and REST API authentication for this provider account. Keep this secret out of committed config and rotate immediately after any leak.",
         sensitive: true,
+      },
+      applicationId: {
+        label: "Discord Application ID",
+        help: "Optional Discord application/client ID. Set this when hosted environments cannot reach Discord's application lookup endpoint during startup.",
       },
     },
     unsupportedSecretRefSurfacePatterns: [
