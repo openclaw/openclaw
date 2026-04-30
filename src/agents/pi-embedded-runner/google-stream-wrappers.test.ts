@@ -154,11 +154,13 @@ describe("sanitizeGoogleThinkingPayload — gemini-2.5-pro zero budget", () => {
 describe("createGoogleThinkingPayloadWrapper — Google API shape coverage (#38327)", () => {
   // The wrapper's payload-sanitize step previously gated on a single
   // `model.api === "google-generative-ai"` string. That guard left
-  // `google-vertex`, `google-gemini-cli`, and OpenAI-completions-shaped Vertex
-  // routes uncovered, so embedded-runner streams hit the unhandled negative
-  // `thinkingBudget` and crashed with "Cannot convert undefined or null to
-  // object" (issue #38327, still reproducing on v2026.4.21+ per fxstein's
-  // forensic notes on the issue).
+  // `google-vertex` and `google-gemini-cli` routes uncovered, so
+  // embedded-runner streams hit the unhandled negative `thinkingBudget`
+  // and crashed with "Cannot convert undefined or null to object"
+  // (issue #38327, still reproducing on v2026.4.21+ per fxstein's
+  // forensic notes on the issue). OpenAI-completions-shaped Vertex
+  // routes (`Vertex Model Garden / OpenAI-compatible API`) remain out
+  // of scope of this guard widening.
   async function runWrapper(model: { api: string; id: string; provider?: string }) {
     let captured: Record<string, unknown> | undefined;
     const baseStreamFn = vi.fn(async function* (_model: unknown, _ctx: unknown, options: unknown) {
