@@ -73,6 +73,7 @@ import {
   ensureMcpLoopbackServer,
   startMcpLoopbackServer,
 } from "./mcp-http.js";
+import { registerMcpLoopbackOwnerOnlyToolAllowlist } from "./mcp-http.loopback-runtime.js";
 
 let server: Awaited<ReturnType<typeof startMcpLoopbackServer>> | undefined;
 
@@ -315,6 +316,56 @@ describe("mcp loopback server", () => {
     expect(names).toContain("message");
     expect(names).not.toContain("cron");
     expect(names).not.toContain("owner_probe");
+  });
+
+  it("allows scoped owner-only tools for registered non-owner loopback runs", async () => {
+    resolveGatewayScopedToolsMock.mockReturnValue({
+      agentId: "main",
+      tools: [
+        {
+          name: "message",
+          description: "send a message",
+          parameters: { type: "object", properties: {} },
+          execute: async () => ({
+            content: [{ type: "text", text: "ok" }],
+          }),
+        },
+        {
+          name: "cron",
+          description: "manage schedules",
+          parameters: { type: "object", properties: {} },
+          execute: async () => ({
+            content: [{ type: "text", text: "cron" }],
+          }),
+        },
+      ],
+    });
+    server = await startMcpLoopbackServer(0);
+    const runtime = getActiveMcpLoopbackRuntime();
+    registerMcpLoopbackOwnerOnlyToolAllowlist({
+      sessionKey: "agent:main:main",
+      runId: "run-cron-grant",
+      tools: ["cron"],
+    });
+
+    const response = await sendRaw({
+      port: server.port,
+      token: runtime ? resolveMcpLoopbackBearerToken(runtime, false) : undefined,
+      headers: {
+        "content-type": "application/json",
+        "x-session-key": "agent:main:main",
+        "x-openclaw-run-id": "run-cron-grant",
+      },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+    });
+    const payload = (await response.json()) as {
+      result?: { tools?: Array<{ name: string }> };
+    };
+    const names = (payload.result?.tools ?? []).map((tool) => tool.name);
+
+    expect(response.status).toBe(200);
+    expect(names).toContain("message");
+    expect(names).toContain("cron");
   });
 
   it("keeps owner-only tools available to owner loopback callers", async () => {

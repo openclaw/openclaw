@@ -200,6 +200,9 @@ export function createCronPromptExecutor(params: {
             bootstrapPromptWarningSignaturesSeen,
             bootstrapPromptWarningSignature,
             senderIsOwner: false,
+            ownerOnlyToolAllowlist: resolveCronOwnerOnlyToolAllowlist(
+              params.agentPayload?.toolsAllow,
+            ),
           };
           let result: Awaited<ReturnType<typeof runCliAgent>>;
           try {

@@ -36,6 +36,7 @@ export class McpLoopbackToolCache {
     agentThreadId: string | undefined;
     currentChannelId: string | undefined;
     senderIsOwner: boolean | undefined;
+    ownerOnlyToolAllowlist: string[] | undefined;
   }): CachedScopedTools {
     const cacheKey = [
       params.sessionKey,
@@ -45,6 +46,7 @@ export class McpLoopbackToolCache {
       params.agentThreadId ?? "",
       params.currentChannelId ?? "",
       params.senderIsOwner === true ? "owner" : "non-owner",
+      params.ownerOnlyToolAllowlist?.join(",") ?? "",
     ].join("\u0000");
     const now = Date.now();
     const cached = this.#entries.get(cacheKey);
@@ -64,7 +66,11 @@ export class McpLoopbackToolCache {
       surface: "loopback",
       excludeToolNames: NATIVE_TOOL_EXCLUDE,
     });
-    const tools = applyOwnerOnlyToolPolicy(next.tools, params.senderIsOwner === true);
+    const tools = applyOwnerOnlyToolPolicy(
+      next.tools,
+      params.senderIsOwner === true,
+      params.ownerOnlyToolAllowlist,
+    );
     const nextEntry: CachedScopedTools = {
       agentId: next.agentId,
       tools,

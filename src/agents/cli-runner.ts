@@ -429,6 +429,7 @@ export function buildRunClaudeCliAgentParams(params: RunClaudeCliAgentParams): R
     currentChannelId: params.currentChannelId,
     agentAccountId: params.agentAccountId,
     senderIsOwner: params.senderIsOwner,
+    ownerOnlyToolAllowlist: params.ownerOnlyToolAllowlist,
   };
 }
 

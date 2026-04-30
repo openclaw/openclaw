@@ -3,6 +3,7 @@ import { ensureMcpLoopbackServer } from "../../gateway/mcp-http.js";
 import {
   createMcpLoopbackServerConfig,
   getActiveMcpLoopbackRuntime,
+  registerMcpLoopbackOwnerOnlyToolAllowlist,
 } from "../../gateway/mcp-http.loopback-runtime.js";
 import type {
   CliBackendAuthEpochMode,
@@ -57,6 +58,7 @@ const prepareDeps = {
   getActiveMcpLoopbackRuntime,
   ensureMcpLoopbackServer,
   createMcpLoopbackServerConfig,
+  registerMcpLoopbackOwnerOnlyToolAllowlist,
   resolveOpenClawReferencePaths: async (
     params: Parameters<typeof import("../docs-path.js").resolveOpenClawReferencePaths>[0],
   ) => (await import("../docs-path.js")).resolveOpenClawReferencePaths(params),
@@ -175,6 +177,7 @@ export async function prepareCliRunContext(
           threadId: params.messageThreadId == null ? "" : String(params.messageThreadId),
           currentChannelId: params.currentChannelId ?? params.messageTo ?? "",
           senderIsOwner: params.senderIsOwner === true,
+          ownerOnlyToolAllowlist: params.ownerOnlyToolAllowlist ?? [],
         }),
       )
     : undefined;
@@ -223,6 +226,14 @@ export async function prepareCliRunContext(
     modelId,
     authProfileId: effectiveAuthProfileId,
   });
+  const unregisterOwnerOnlyToolAllowlist =
+    bundleMcpEnabled && params.ownerOnlyToolAllowlist?.length
+      ? prepareDeps.registerMcpLoopbackOwnerOnlyToolAllowlist({
+          sessionKey: params.sessionKey,
+          runId: params.runId,
+          tools: params.ownerOnlyToolAllowlist,
+        })
+      : undefined;
   const skipLocalCredentialEpoch = shouldSkipLocalCliCredentialEpoch({
     authEpochMode: backendResolved.authEpochMode,
     authProfileId: effectiveAuthProfileId,
@@ -239,12 +250,16 @@ export async function prepareCliRunContext(
       ? { ...preparedBackend.env, ...preparedExecution.env }
       : preparedBackend.env;
   const preparedBackendCleanup =
-    preparedBackend.cleanup || preparedExecution?.cleanup
+    preparedBackend.cleanup || preparedExecution?.cleanup || unregisterOwnerOnlyToolAllowlist
       ? async () => {
           try {
             await preparedExecution?.cleanup?.();
           } finally {
-            await preparedBackend.cleanup?.();
+            try {
+              await preparedBackend.cleanup?.();
+            } finally {
+              unregisterOwnerOnlyToolAllowlist?.();
+            }
           }
         }
       : undefined;

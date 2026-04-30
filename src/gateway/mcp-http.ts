@@ -16,6 +16,7 @@ import {
   clearActiveMcpLoopbackRuntimeByOwnerToken,
   createMcpLoopbackServerConfig,
   getActiveMcpLoopbackRuntime,
+  resolveMcpLoopbackOwnerOnlyToolAllowlist,
   setActiveMcpLoopbackRuntime,
 } from "./mcp-http.loopback-runtime.js";
 import { jsonRpcError, type JsonRpcRequest } from "./mcp-http.protocol.js";
@@ -234,6 +235,10 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
           agentThreadId: requestContext.agentThreadId,
           currentChannelId: requestContext.currentChannelId,
           senderIsOwner: requestContext.senderIsOwner,
+          ownerOnlyToolAllowlist: resolveMcpLoopbackOwnerOnlyToolAllowlist({
+            sessionKey: requestContext.sessionKey,
+            runId: requestContext.runId,
+          }),
         });
 
         const messages = Array.isArray(parsed) ? parsed : [parsed];

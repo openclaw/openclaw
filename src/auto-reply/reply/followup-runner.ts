@@ -356,6 +356,8 @@ export function createFollowupRunner(params: {
                   abortSignal: replyOperation.abortSignal,
                   replyOperation,
                   extraSystemPrompt: run.extraSystemPrompt,
+                  silentReplyPromptMode: run.silentReplyPromptMode,
+                  sourceReplyDeliveryMode: run.sourceReplyDeliveryMode,
                   extraSystemPromptStatic: run.extraSystemPromptStatic,
                   ownerNumbers: run.ownerNumbers,
                   cliSessionId: cliSessionBinding?.sessionId,

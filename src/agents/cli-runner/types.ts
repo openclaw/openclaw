@@ -53,6 +53,7 @@ export type RunCliAgentParams = {
   currentChannelId?: string;
   agentAccountId?: string;
   senderIsOwner?: boolean;
+  ownerOnlyToolAllowlist?: string[];
   abortSignal?: AbortSignal;
   onExecutionStarted?: () => void;
   replyOperation?: ReplyOperation;

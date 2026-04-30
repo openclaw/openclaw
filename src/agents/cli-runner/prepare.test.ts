@@ -680,6 +680,81 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
     }
   });
 
+  it("registers scoped owner-only tool grants for bundled MCP runs", async () => {
+    const { dir, sessionFile } = createSessionFile();
+    const cleanupGrant = vi.fn();
+    const registerGrant = vi.fn(() => cleanupGrant);
+    try {
+      setCliRunnerPrepareTestDeps({
+        getActiveMcpLoopbackRuntime: vi.fn(() => ({
+          port: 3210,
+          ownerToken: "owner-token",
+          nonOwnerToken: "agent-token",
+        })),
+        ensureMcpLoopbackServer: vi.fn(async () => makeMcpLoopbackServer()),
+        createMcpLoopbackServerConfig: vi.fn(makeMcpLoopbackServerConfig),
+        registerMcpLoopbackOwnerOnlyToolAllowlist: registerGrant,
+      });
+      cliBackendsTesting.setDepsForTest({
+        resolvePluginSetupCliBackend: () => undefined,
+        resolveRuntimeCliBackends: () => [
+          {
+            pluginId: "test-plugin",
+            id: "test-cli",
+            config: {
+              command: "test-cli",
+              args: ["--print"],
+              systemPromptArg: "--system-prompt",
+              systemPromptWhen: "first" as const,
+              sessionMode: "existing" as const,
+              output: "text" as const,
+              input: "arg" as const,
+            },
+            bundleMcp: true,
+            bundleMcpMode: "claude-config-file",
+          },
+        ],
+      });
+
+      const context = await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionKey: "agent:main:test",
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "latest ask",
+        provider: "test-cli",
+        model: "test-model",
+        timeoutMs: 1_000,
+        runId: "run-test-cron-grant",
+        senderIsOwner: false,
+        ownerOnlyToolAllowlist: ["cron"],
+        config: {
+          agents: {
+            defaults: {
+              cliBackends: {
+                "test-cli": {
+                  command: "test-cli",
+                  bundleMcp: true,
+                  bundleMcpMode: "claude-config-file",
+                },
+              },
+            },
+          },
+        } as OpenClawConfig,
+      });
+
+      expect(registerGrant).toHaveBeenCalledWith({
+        sessionKey: "agent:main:test",
+        runId: "run-test-cron-grant",
+        tools: ["cron"],
+      });
+      await context.preparedBackend.cleanup?.();
+      expect(cleanupGrant).toHaveBeenCalledTimes(1);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("applies direct-run prepend system context helpers on the CLI path", async () => {
     const { dir, sessionFile } = createSessionFile();
     try {

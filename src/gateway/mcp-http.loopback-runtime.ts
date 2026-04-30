@@ -1,17 +1,41 @@
+import { normalizeToolList } from "../agents/tool-policy.js";
+
 export type McpLoopbackRuntime = {
   port: number;
   ownerToken: string;
   nonOwnerToken: string;
 };
 
-let activeRuntime: McpLoopbackRuntime | undefined;
+type ActiveMcpLoopbackRuntime = McpLoopbackRuntime & {
+  ownerOnlyToolAllowlists: Map<string, string[]>;
+};
+
+let activeRuntime: ActiveMcpLoopbackRuntime | undefined;
+
+function buildOwnerOnlyGrantKey(params: {
+  sessionKey: string | undefined;
+  runId: string | undefined;
+}): string | undefined {
+  const sessionKey = params.sessionKey?.trim();
+  const runId = params.runId?.trim();
+  if (!sessionKey || !runId) {
+    return undefined;
+  }
+  return `${sessionKey}\u0000${runId}`;
+}
 
 export function getActiveMcpLoopbackRuntime(): McpLoopbackRuntime | undefined {
-  return activeRuntime ? { ...activeRuntime } : undefined;
+  return activeRuntime
+    ? {
+        port: activeRuntime.port,
+        ownerToken: activeRuntime.ownerToken,
+        nonOwnerToken: activeRuntime.nonOwnerToken,
+      }
+    : undefined;
 }
 
 export function setActiveMcpLoopbackRuntime(runtime: McpLoopbackRuntime): void {
-  activeRuntime = { ...runtime };
+  activeRuntime = { ...runtime, ownerOnlyToolAllowlists: new Map() };
 }
 
 export function resolveMcpLoopbackBearerToken(
@@ -25,6 +49,34 @@ export function clearActiveMcpLoopbackRuntimeByOwnerToken(ownerToken: string): v
   if (activeRuntime?.ownerToken === ownerToken) {
     activeRuntime = undefined;
   }
+}
+
+export function registerMcpLoopbackOwnerOnlyToolAllowlist(params: {
+  sessionKey: string | undefined;
+  runId: string | undefined;
+  tools: readonly string[] | undefined;
+}): () => void {
+  const key = buildOwnerOnlyGrantKey(params);
+  const tools = normalizeToolList(params.tools ? [...params.tools] : undefined);
+  if (!activeRuntime || !key || tools.length === 0) {
+    return () => undefined;
+  }
+  activeRuntime.ownerOnlyToolAllowlists.set(key, tools);
+  return () => {
+    activeRuntime?.ownerOnlyToolAllowlists.delete(key);
+  };
+}
+
+export function resolveMcpLoopbackOwnerOnlyToolAllowlist(params: {
+  sessionKey: string | undefined;
+  runId: string | undefined;
+}): string[] | undefined {
+  const key = buildOwnerOnlyGrantKey(params);
+  if (!activeRuntime || !key) {
+    return undefined;
+  }
+  const tools = activeRuntime.ownerOnlyToolAllowlists.get(key);
+  return tools?.length ? [...tools] : undefined;
 }
 
 export function createMcpLoopbackServerConfig(port: number) {
