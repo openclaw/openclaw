@@ -451,11 +451,32 @@ export class NodeRegistry {
 
   handleMcpSessionClosed(params: NodeMcpClosedResult): boolean {
     const active = this.activeMcpSessions.get(params.sessionId);
-    if (!active || active.nodeId !== params.nodeId) {
+    const pending = this.pendingMcpOpens.get(params.sessionId);
+    const matchesActive = active?.nodeId === params.nodeId;
+    const matchesPending = pending?.nodeId === params.nodeId;
+    if (!matchesActive && !matchesPending) {
       return false;
     }
-    this.activeMcpSessions.delete(params.sessionId);
-    active.onClosed?.(params);
+    if (matchesPending && pending) {
+      clearTimeout(pending.timer);
+      this.pendingMcpOpens.delete(params.sessionId);
+      pending.resolve({
+        sessionId: params.sessionId,
+        nodeId: params.nodeId,
+        serverId: pending.serverId,
+        ok: false,
+        error: params.error ?? {
+          code: "SESSION_CLOSED",
+          message: "node MCP session closed before open completed",
+        },
+      });
+    }
+    if (matchesActive && active) {
+      this.activeMcpSessions.delete(params.sessionId);
+      if (!matchesPending) {
+        active.onClosed?.(params);
+      }
+    }
     return true;
   }
 

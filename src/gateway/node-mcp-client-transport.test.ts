@@ -329,6 +329,61 @@ describe("NodeMcpClientTransport", () => {
     }
   });
 
+  it("settles pending opens when the node closes before open completes", async () => {
+    const registry = new NodeRegistry();
+    const { client, sent } = createNodeClient({
+      mcpServers: [{ id: "computer-use", status: "ready" }],
+    });
+    registry.register(client, {});
+    const transport = new NodeMcpClientTransport(registry, {
+      nodeId: "mac-node",
+      serverId: "computer-use",
+      sessionId: "session-closed-before-open",
+      openTimeoutMs: 1000,
+    });
+
+    const start = transport.start();
+    expect(sent).toEqual([
+      {
+        event: "node.mcp.session.open",
+        payload: {
+          sessionId: "session-closed-before-open",
+          nodeId: "mac-node",
+          serverId: "computer-use",
+          timeoutMs: 1000,
+        },
+      },
+    ]);
+
+    expect(
+      registry.handleMcpSessionClosed({
+        sessionId: "session-closed-before-open",
+        nodeId: "mac-node",
+        ok: false,
+        error: { code: "PROCESS_EXITED", message: "native host exited during startup" },
+      }),
+    ).toBe(true);
+
+    await expect(start).rejects.toThrow("native host exited during startup");
+    expect(
+      registry.handleMcpSessionOpenResult({
+        sessionId: "session-closed-before-open",
+        nodeId: "mac-node",
+        serverId: "computer-use",
+        ok: true,
+      }),
+    ).toBe(false);
+    expect(
+      registry.handleMcpSessionOutput({
+        sessionId: "session-closed-before-open",
+        nodeId: "mac-node",
+        seq: 0,
+        stream: "stdout",
+        dataBase64: Buffer.from('{"jsonrpc":"2.0","method":"stale"}\n').toString("base64"),
+      }),
+    ).toBe(false);
+  });
+
   it("allows permission-missing MCP servers to open through the native host", async () => {
     const registry = new NodeRegistry();
     const { client, sent } = createNodeClient({
