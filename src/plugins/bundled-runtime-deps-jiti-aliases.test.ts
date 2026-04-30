@@ -146,6 +146,37 @@ describe("bundled runtime dependency Jiti aliases", () => {
     });
   });
 
+  it("falls back to import-only conditional exports for staged runtime deps", () => {
+    const rootDir = makeTempRoot();
+    writeJson(path.join(rootDir, "package.json"), {
+      dependencies: {
+        "import-only": "1.0.0",
+      },
+    });
+    const importOnlyRoot = packageRoot(rootDir, "import-only");
+    writeJson(path.join(importOnlyRoot, "package.json"), {
+      exports: {
+        ".": {
+          types: "./dist/index.d.ts",
+          import: "./dist/index.js",
+        },
+        "./provider": {
+          types: "./dist/provider.d.ts",
+          import: "./dist/provider.js",
+        },
+      },
+    });
+    writeFile(path.join(importOnlyRoot, "dist/index.js"));
+    writeFile(path.join(importOnlyRoot, "dist/provider.js"));
+
+    registerBundledRuntimeDependencyJitiAliases(rootDir);
+
+    expect(resolveBundledRuntimeDependencyJitiAliasMap()).toEqual({
+      "import-only/provider": path.join(importOnlyRoot, "dist/provider.js"),
+      "import-only": path.join(importOnlyRoot, "dist/index.js"),
+    });
+  });
+
   it("ignores missing, private, and escaping export targets", () => {
     const rootDir = makeTempRoot();
     writeJson(path.join(rootDir, "package.json"), {
