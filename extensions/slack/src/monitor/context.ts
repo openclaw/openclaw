@@ -98,6 +98,11 @@ export type SlackMonitorContext = {
     threadTs?: string;
     status: string;
   }) => Promise<void>;
+  setSlackThreadTitle: (params: {
+    channelId: string;
+    threadTs?: string;
+    title: string;
+  }) => Promise<void>;
 };
 
 export function createSlackMonitorContext(params: {
@@ -295,6 +300,29 @@ export function createSlackMonitorContext(params: {
     }
   };
 
+  const setSlackThreadTitle = async (p: {
+    channelId: string;
+    threadTs?: string;
+    title: string;
+  }) => {
+    const title = p.title.trim();
+    if (!p.threadTs || !title) {
+      return;
+    }
+    try {
+      await params.app.client.assistant.threads.setTitle({
+        token: params.botToken,
+        channel_id: p.channelId,
+        thread_ts: p.threadTs,
+        title,
+      });
+    } catch (err) {
+      logVerbose(
+        `slack title update failed for channel ${p.channelId}: ${formatErrorMessage(err)}`,
+      );
+    }
+  };
+
   const isChannelAllowed = (p: {
     channelId?: string;
     channelName?: string;
@@ -443,5 +471,6 @@ export function createSlackMonitorContext(params: {
     resolveChannelName,
     resolveUserName,
     setSlackThreadStatus,
+    setSlackThreadTitle,
   };
 }

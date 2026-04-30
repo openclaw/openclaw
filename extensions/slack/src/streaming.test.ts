@@ -109,6 +109,38 @@ describe("slack plan message fallback", () => {
     );
   });
 
+  it("can post the plan message inside an existing assistant thread", async () => {
+    const apiCall = vi.fn(async (method: string) => ({
+      ok: true,
+      ts: method === "chat.postMessage" ? "171234.150" : undefined,
+    }));
+    const client = { apiCall };
+
+    const session = await startSlackPlanMessage({
+      client: client as never,
+      channel: "D123",
+      threadTs: "171234.001",
+      chunks: [
+        {
+          type: "task_update",
+          id: "reading_message",
+          title: "Reading message",
+          status: "in_progress",
+        },
+      ],
+    });
+
+    expect(session.messageTs).toBe("171234.150");
+    expect(apiCall).toHaveBeenCalledWith(
+      "chat.postMessage",
+      expect.objectContaining({
+        channel: "D123",
+        thread_ts: "171234.001",
+        text: "Thinking...\n- now: Reading message",
+      }),
+    );
+  });
+
   it("can render a plain text progress message for DM-safe fallback", async () => {
     const apiCall = vi.fn(async (method: string) => ({
       ok: true,

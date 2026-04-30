@@ -407,6 +407,33 @@ function hasSlackAudioInput(message: PreparedSlackMessage["message"]): boolean {
   });
 }
 
+function resolveSlackAssistantThreadTitleUpdate(params: {
+  isDirectMessage: boolean;
+  message: PreparedSlackMessage["message"];
+}): { threadTs: string; title: string } | undefined {
+  if (!params.isDirectMessage) {
+    return undefined;
+  }
+  const messageText = typeof params.message.text === "string" ? params.message.text.trim() : "";
+  if (!messageText) {
+    return undefined;
+  }
+  const messageTs = params.message.ts;
+  const incomingThreadTs = params.message.thread_ts;
+  if (typeof messageTs !== "string" || messageTs.length === 0) {
+    return undefined;
+  }
+  // Only title the root assistant thread message. Follow-up replies should not
+  // keep overwriting the History label with the latest turn.
+  if (incomingThreadTs && incomingThreadTs !== messageTs) {
+    return undefined;
+  }
+  return {
+    threadTs: incomingThreadTs ?? messageTs,
+    title: messageText,
+  };
+}
+
 export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessage) {
   const { ctx, account, message, route } = prepared;
   const cfg = ctx.cfg;
@@ -424,6 +451,17 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     message,
     replyToMode: effectiveReplyToMode,
   });
+  const assistantThreadTitleUpdate = resolveSlackAssistantThreadTitleUpdate({
+    isDirectMessage: prepared.isDirectMessage,
+    message,
+  });
+  if (assistantThreadTitleUpdate) {
+    await ctx.setSlackThreadTitle({
+      channelId: message.channel,
+      threadTs: assistantThreadTitleUpdate.threadTs,
+      title: assistantThreadTitleUpdate.title,
+    });
+  }
 
   // Resolve agent identity for Slack chat:write.customize overrides.
   const outboundIdentity = resolveAgentOutboundIdentity(cfg, route.agentId);
@@ -716,6 +754,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       progressPlanMessageSession = await startSlackPlanMessage({
         client: ctx.app.client,
         channel: message.channel,
+        ...(streamThreadHint ? { threadTs: streamThreadHint } : {}),
         chunks: initialChunks,
         renderMode: "plan",
       });

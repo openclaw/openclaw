@@ -125,6 +125,7 @@ export type StopSlackChunkStreamParams = {
 export type StartSlackPlanMessageParams = {
   client: WebClient;
   channel: string;
+  threadTs?: string;
   chunks?: SlackStreamChunk[];
   renderMode?: "plan" | "text";
 };
@@ -483,7 +484,7 @@ export async function stopSlackChunkStream(params: StopSlackChunkStreamParams): 
 export async function startSlackPlanMessage(
   params: StartSlackPlanMessageParams,
 ): Promise<SlackPlanMessageSession> {
-  const { client, channel, chunks } = params;
+  const { client, channel, threadTs, chunks } = params;
   const apiClient = client as SlackApiClient;
   const session: SlackPlanMessageSession = {
     client,
@@ -496,6 +497,7 @@ export async function startSlackPlanMessage(
   };
   const response = await apiClient.apiCall("chat.postMessage", {
     channel,
+    ...(threadTs ? { thread_ts: threadTs } : {}),
     text: buildSlackPlanMessageText(session),
     ...(session.renderMode === "plan" ? { blocks: buildSlackPlanMessageBlocks(session) } : {}),
   });

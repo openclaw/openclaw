@@ -22,6 +22,7 @@ const appendSlackChunkStreamMock = vi.fn(async () => {});
 const stopSlackChunkStreamMock = vi.fn(async () => {});
 const deliverRepliesMock = vi.fn(async () => {});
 const setSlackThreadStatusMock = vi.fn(async () => {});
+const setSlackThreadTitleMock = vi.fn(async () => {});
 
 let dispatchPreparedSlackMessage: typeof import("./dispatch.js").dispatchPreparedSlackMessage;
 
@@ -264,6 +265,7 @@ function createPreparedSlackMessage(params?: {
   replyToMode?: "off" | "all";
   isDirectMessage?: boolean;
   replyTarget?: string;
+  text?: string;
 }) {
   return {
     ctx: {
@@ -288,6 +290,7 @@ function createPreparedSlackMessage(params?: {
       channelHistories: new Map(),
       allowFrom: [],
       setSlackThreadStatus: setSlackThreadStatusMock,
+      setSlackThreadTitle: setSlackThreadTitleMock,
     },
     account: {
       accountId: "default",
@@ -297,6 +300,7 @@ function createPreparedSlackMessage(params?: {
       channel: params?.channel ?? "C123",
       ts: "171234.111",
       thread_ts: params?.threadTs,
+      text: params?.text ?? "Can you access twenty?",
       user: "U123",
     },
     route: {
@@ -333,13 +337,14 @@ describe("dispatchPreparedSlackMessage progress plan routing", () => {
     stopSlackChunkStreamMock.mockClear();
     deliverRepliesMock.mockClear();
     setSlackThreadStatusMock.mockClear();
+    setSlackThreadTitleMock.mockClear();
   });
 
-  it("renders top-level direct message progress as a plan message on the main DM timeline", async () => {
+  it("renders direct message progress as a plan message inside the existing assistant thread", async () => {
     await dispatchPreparedSlackMessage(
       createPreparedSlackMessage({
         channel: "D123",
-        threadTs: undefined,
+        threadTs: "171234.001",
         replyToMode: "off",
         isDirectMessage: true,
         replyTarget: "user:U123",
@@ -349,10 +354,11 @@ describe("dispatchPreparedSlackMessage progress plan routing", () => {
     expect(startSlackPlanMessageMock).toHaveBeenCalledWith(
       expect.objectContaining({
         channel: "D123",
+        threadTs: "171234.001",
         chunks: [
           expect.objectContaining({
             type: "task_update",
-            taskId: "reading_message",
+            id: "reading_message",
             title: "Reading message",
             status: "in_progress",
           }),
@@ -361,13 +367,36 @@ describe("dispatchPreparedSlackMessage progress plan routing", () => {
       }),
     );
     expect(startSlackChunkStreamMock).not.toHaveBeenCalled();
-    expect(setSlackThreadStatusMock).not.toHaveBeenCalled();
+    expect(setSlackThreadStatusMock).toHaveBeenCalledWith({
+      channelId: "D123",
+      threadTs: "171234.001",
+      status: "",
+    });
     expect(deliverRepliesMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        replyThreadTs: undefined,
+        replyThreadTs: "171234.001",
         replyToMode: "off",
       }),
     );
+    expect(setSlackThreadTitleMock).not.toHaveBeenCalled();
+  });
+
+  it("sets the assistant thread title from the first direct-message prompt", async () => {
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        channel: "D123",
+        threadTs: "171234.111",
+        replyToMode: "off",
+        isDirectMessage: true,
+        replyTarget: "user:U123",
+      }),
+    );
+
+    expect(setSlackThreadTitleMock).toHaveBeenCalledWith({
+      channelId: "D123",
+      threadTs: "171234.111",
+      title: "Can you access twenty?",
+    });
   });
 
   it("keeps threaded room progress on Slack's native plan stream surface", async () => {
