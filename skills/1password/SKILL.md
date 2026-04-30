@@ -57,8 +57,7 @@ op read op://app-prod/db/password
 
 ### Desktop app integration
 
-Direct exec. **Do not wrap in tmux** — the desktop app communicates with the CLI over a per-user Unix domain socket (on macOS:
-`~/Library/Group Containers/2BUA8C4S2C.com.1password/t/`) that is reliably reachable from the gateway's exec environment but not from arbitrary tmux subshells, which run with a different environment context.
+Direct exec. **Do not wrap in tmux** — the desktop app integration uses a per-user IPC channel that is established for the gateway's exec environment but is not always reliably reachable from tmux subshells, which run with a different environment context. The transport differs per platform (XPC via the 1Password Browser Helper on macOS, a Unix domain socket on Linux, a named pipe on Windows); the practical rule for an agent is the same on all three: run `op` directly. On macOS, a useful symptom indicator is the 1Password integration group container at `~/Library/Group Containers/2BUA8C4S2C.com.1password/t/`.
 
 ```bash
 op vault list      # may trigger Touch ID / Windows Hello / system auth on first call
@@ -69,7 +68,7 @@ If a call returns `1Password CLI couldn't connect to the 1Password desktop app`,
 
 ### Standalone signin (no app, interactive password)
 
-This is the only mode where tmux helps. `op signin` prints an `eval`-style export that authenticates subsequent commands in the same shell; the gateway's per-command shells lose that state, so a persistent tmux pane keeps the session token alive across calls.
+This is the only mode where tmux helps. `op signin` prints an `eval`-style export setting an `OP_SESSION_*` token; later commands in the same shell are authenticated by that env var. The gateway's per-command shells lose that state between calls, so a persistent tmux pane keeps the session token alive — but only if the export is actually applied with `eval`. Sending `op signin` as a plain command leaves stdout printed to the pane and `op whoami` will fail.
 
 ```bash
 SOCKET_DIR="${OPENCLAW_TMUX_SOCKET_DIR:-${TMPDIR:-/tmp}/openclaw-tmux-sockets}"
@@ -78,7 +77,7 @@ SOCKET="$SOCKET_DIR/openclaw-op.sock"
 SESSION="op-auth-$(date +%Y%m%d-%H%M%S)"
 
 tmux -S "$SOCKET" new -d -s "$SESSION" -n shell
-tmux -S "$SOCKET" send-keys -t "$SESSION":0.0 -- "op signin --account my.1password.com" Enter
+tmux -S "$SOCKET" send-keys -t "$SESSION":0.0 -- 'eval "$(op signin --account my.1password.com)"' Enter
 tmux -S "$SOCKET" send-keys -t "$SESSION":0.0 -- "op whoami" Enter
 tmux -S "$SOCKET" send-keys -t "$SESSION":0.0 -- "op vault list" Enter
 tmux -S "$SOCKET" capture-pane -p -J -t "$SESSION":0.0 -S -200
