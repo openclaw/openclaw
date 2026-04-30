@@ -19,7 +19,7 @@ vi.mock("../plugins/capability-provider-runtime.js", async () => {
 });
 
 vi.mock("../plugins/providers.js", async (importOriginal) => ({
-  ...((await importOriginal()) as typeof import("../plugins/providers.js")),
+  ...(await importOriginal()),
   resolveOwningPluginIdsForProvider: () => [],
 }));
 
