@@ -8,9 +8,13 @@ import {
 import { createChannelPluginBase, type ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import { getChatChannelMeta } from "openclaw/plugin-sdk/channel-plugin-common";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
-import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/routing";
+import {
+  DEFAULT_ACCOUNT_ID,
+  normalizeAccountId as normalizeRoutingAccountId,
+} from "openclaw/plugin-sdk/routing";
 import { inspectTelegramAccount } from "./account-inspect.js";
 import {
+  mergeTelegramAccountConfig,
   listTelegramAccountIds,
   resolveDefaultTelegramAccountId,
   resolveTelegramAccount,
@@ -99,17 +103,40 @@ function isBlockedByMultiBotGuard(cfg: OpenClawConfig, accountId: string): boole
   return !resolveNormalizedAccountEntry(accounts, accountId, normalizeAccountId);
 }
 
-export const telegramConfigAdapter = createScopedChannelConfigAdapter<ResolvedTelegramAccount>({
+type TelegramConfigAccessorAccount = {
+  allowFrom: Array<string | number> | undefined;
+  defaultTo: string | number | null | undefined;
+};
+
+function resolveTelegramConfigAccessorAccount(params: {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+}): TelegramConfigAccessorAccount {
+  const accountId = normalizeRoutingAccountId(
+    params.accountId ?? resolveDefaultTelegramAccountId(params.cfg),
+  );
+  const config = mergeTelegramAccountConfig(params.cfg, accountId);
+  return {
+    allowFrom: config.allowFrom,
+    defaultTo: config.defaultTo,
+  };
+}
+
+export const telegramConfigAdapter = createScopedChannelConfigAdapter<
+  ResolvedTelegramAccount,
+  TelegramConfigAccessorAccount
+>({
   sectionKey: TELEGRAM_CHANNEL,
   listAccountIds: listTelegramAccountIds,
   resolveAccount: adaptScopedAccountAccessor(resolveTelegramAccount),
+  resolveAccessorAccount: resolveTelegramConfigAccessorAccount,
   inspectAccount: adaptScopedAccountAccessor(inspectTelegramAccount),
   defaultAccountId: resolveDefaultTelegramAccountId,
   clearBaseFields: ["botToken", "tokenFile", "name"],
-  resolveAllowFrom: (account: ResolvedTelegramAccount) => account.config.allowFrom,
+  resolveAllowFrom: (account) => account.allowFrom,
   formatAllowFrom: (allowFrom) =>
     formatAllowFromLowercase({ allowFrom, stripPrefixRe: /^(telegram|tg):/i }),
-  resolveDefaultTo: (account: ResolvedTelegramAccount) => account.config.defaultTo,
+  resolveDefaultTo: (account) => account.defaultTo,
 });
 
 export function createTelegramPluginBase(params: {

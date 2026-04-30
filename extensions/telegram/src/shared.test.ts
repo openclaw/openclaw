@@ -166,4 +166,49 @@ describe("createTelegramPluginBase config duplicate token guard", () => {
     expect(await telegramPluginBase.config.isConfigured!(account, cfg)).toBe(false);
     expect(telegramPluginBase.config.unconfiguredReason?.(account, cfg)).toContain("unavailable");
   });
+
+  it("resolves allowFrom without dereferencing SecretRef bot tokens", () => {
+    const cfg = {
+      secrets: {
+        providers: {
+          filemain: { source: "file", path: "/tmp/openclaw-test-secrets.json" },
+        },
+      },
+      channels: {
+        telegram: {
+          botToken: { source: "file", provider: "filemain", id: "/telegram/botToken" },
+          allowFrom: ["8197233951"],
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(telegramPluginBase.config.resolveAllowFrom?.({ cfg, accountId: "default" })).toEqual([
+      "8197233951",
+    ]);
+  });
+
+  it("resolves named account allowFrom without dereferencing SecretRef bot tokens", () => {
+    const cfg = {
+      secrets: {
+        providers: {
+          filemain: { source: "file", path: "/tmp/openclaw-test-secrets.json" },
+        },
+      },
+      channels: {
+        telegram: {
+          allowFrom: ["top"],
+          accounts: {
+            ops: {
+              botToken: { source: "file", provider: "filemain", id: "/telegram/opsToken" },
+              allowFrom: ["ops"],
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(telegramPluginBase.config.resolveAllowFrom?.({ cfg, accountId: "ops" })).toEqual([
+      "ops",
+    ]);
+  });
 });
