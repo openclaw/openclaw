@@ -1,8 +1,8 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { FailoverError, resolveFailoverStatus } from "./failover-error.js";
-import type { FailoverReason } from "./failover-error.js";
 import { resolveApiKeyForProvider } from "./model-auth.js";
+import type { FailoverReason } from "./pi-embedded-helpers/types.js";
 import type { EmbeddedPiRunResult } from "./pi-embedded-runner.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "./workspace-run.js";
 
@@ -36,6 +36,9 @@ async function resolveAgentApiKey(params: {
       cfg: params.config,
       agentDir: undefined,
     });
+    if (!auth.apiKey) {
+      throw new Error("Resolved auth has no apiKey");
+    }
     return auth.apiKey;
   } catch {
     throw new FailoverError("No API key found for cursor-sdk provider.", {
@@ -61,7 +64,7 @@ function classifyCursorSdkError(err: unknown, elapsed: number, timeoutMs: number
   if (/auth|401|unauthorized|forbidden|403/i.test(message)) return "auth";
   if (/billing|payment|quota|insufficient/i.test(message)) return "billing";
 
-  return "surface_error";
+  return "unclassified";
 }
 
 function collectAssistantText(event: { type: string }): string {
@@ -169,7 +172,9 @@ export async function runCursorSdkAgent(
     if (err instanceof FailoverError) throw err;
 
     const elapsed = Date.now() - started;
-    const message = err instanceof Error ? err.message : String(err);
+    let message = "Unknown error";
+    if (err instanceof Error) message = err.message;
+    else if (typeof err === "string") message = err;
     log.error(`cursor-sdk error: ${message} run=${params.runId} elapsed=${elapsed}ms`);
 
     const reason = classifyCursorSdkError(err, elapsed, params.timeoutMs);
