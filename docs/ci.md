@@ -335,12 +335,12 @@ The pull request guard stays light: it only starts for changes under `.github/ac
 
 ### Critical Quality categories
 
-`CodeQL Critical Quality` is the matching non-security shard. It runs only error-severity, non-security JavaScript/TypeScript quality queries over narrow high-value surfaces on the smaller Blacksmith Linux runner. Its pull request guard is intentionally smaller than the scheduled profile: non-draft PRs only run the matching `channel-runtime-boundary`, `gateway-runtime-boundary`, `provider-runtime-boundary`, `plugin-boundary`, and `plugin-sdk-package-contract` shards for channel runtime, gateway protocol/server-method, provider runtime/model catalog, plugin loader, Plugin SDK, or package-contract changes. CodeQL config and quality workflow changes run all five PR quality shards.
+`CodeQL Critical Quality` is the matching non-security shard. It runs only error-severity, non-security JavaScript/TypeScript quality queries over narrow high-value surfaces on the smaller Blacksmith Linux runner. Its pull request guard is intentionally smaller than the scheduled profile: non-draft PRs only run the matching `channel-runtime-boundary`, `gateway-runtime-boundary`, `mcp-process-runtime-boundary`, `provider-runtime-boundary`, `plugin-boundary`, and `plugin-sdk-package-contract` shards for channel runtime, gateway protocol/server-method, MCP/process/outbound delivery, provider runtime/model catalog, plugin loader, Plugin SDK, or package-contract changes. CodeQL config and quality workflow changes run all six PR quality shards.
 
 Manual dispatch accepts:
 
 ```
-profile=all|channel-runtime-boundary|gateway-runtime-boundary|plugin-boundary|plugin-sdk-package-contract|plugin-sdk-reply-runtime|provider-runtime-boundary|session-diagnostics-boundary
+profile=all|channel-runtime-boundary|gateway-runtime-boundary|mcp-process-runtime-boundary|plugin-boundary|plugin-sdk-package-contract|plugin-sdk-reply-runtime|provider-runtime-boundary|session-diagnostics-boundary
 ```
 
 The narrow profiles are teaching/iteration hooks for running one quality shard in isolation.
