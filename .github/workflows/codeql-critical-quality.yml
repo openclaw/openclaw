@@ -12,6 +12,7 @@ on:
           - all
           - channel-runtime-boundary
           - gateway-runtime-boundary
+          - mcp-process-runtime-boundary
           - plugin-boundary
           - plugin-sdk-package-contract
           - plugin-sdk-reply-runtime
@@ -30,9 +31,12 @@ on:
       - "src/gateway/server-methods/**"
       - "src/gateway/server-methods.ts"
       - "src/gateway/server-methods-list.ts"
+      - "src/infra/outbound/**"
+      - "src/mcp/**"
       - "src/model-catalog/**"
       - "src/plugin-sdk/**"
       - "src/plugins/**"
+      - "src/process/**"
   schedule:
     - cron: "30 6 * * *"
 
@@ -57,6 +61,7 @@ jobs:
     outputs:
       channel: ${{ steps.detect.outputs.channel }}
       gateway: ${{ steps.detect.outputs.gateway }}
+      mcp_process: ${{ steps.detect.outputs.mcp_process }}
       plugin: ${{ steps.detect.outputs.plugin }}
       plugin_sdk_package: ${{ steps.detect.outputs.plugin_sdk_package }}
       provider: ${{ steps.detect.outputs.provider }}
@@ -73,6 +78,7 @@ jobs:
 
           channel=false
           gateway=false
+          mcp_process=false
           plugin=false
           plugin_sdk_package=false
           provider=false
@@ -80,6 +86,7 @@ jobs:
           if [[ "${EVENT_NAME}" != "pull_request" ]]; then
             channel=true
             gateway=true
+            mcp_process=true
             plugin=true
             plugin_sdk_package=true
             provider=true
@@ -89,6 +96,7 @@ jobs:
                 .github/codeql/*|.github/workflows/codeql-critical-quality.yml)
                   channel=true
                   gateway=true
+                  mcp_process=true
                   plugin=true
                   plugin_sdk_package=true
                   provider=true
@@ -98,6 +106,9 @@ jobs:
                   ;;
                 src/gateway/method-scopes.ts|src/gateway/protocol/*|src/gateway/server-methods/*|src/gateway/server-methods.ts|src/gateway/server-methods-list.ts)
                   gateway=true
+                  ;;
+                src/infra/outbound/*|src/mcp/*|src/process/*)
+                  mcp_process=true
                   ;;
                 src/plugin-sdk/*)
                   plugin=true
@@ -123,6 +134,7 @@ jobs:
           {
             echo "channel=${channel}"
             echo "gateway=${gateway}"
+            echo "mcp_process=${mcp_process}"
             echo "plugin=${plugin}"
             echo "plugin_sdk_package=${plugin_sdk_package}"
             echo "provider=${provider}"
@@ -242,7 +254,8 @@ jobs:
 
   mcp-process-runtime-boundary:
     name: Critical Quality (mcp-process-runtime-boundary)
-    if: ${{ github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || inputs.profile == 'all') }}
+    needs: quality-shards
+    if: ${{ needs.quality-shards.outputs.mcp_process == 'true' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (github.event_name == 'pull_request' || github.event_name != 'workflow_dispatch' || inputs.profile == 'all' || inputs.profile == 'mcp-process-runtime-boundary') }}
     runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 25
     steps:
