@@ -446,6 +446,37 @@ describe("loadWorkspaceSkillEntries", () => {
       expect(names).toEqual(expect.arrayContaining(["direct-skill", "grouped-skill"]));
     });
 
+    it("does not count invalid grouped candidates against the loaded skill cap", async () => {
+      const workspaceDir = await createTempWorkspaceDir();
+      for (const nestedName of ["a", "b"]) {
+        const invalidDir = path.join(workspaceDir, "skills", "00-group", nestedName);
+        await fs.mkdir(invalidDir, { recursive: true });
+        await fs.writeFile(
+          path.join(invalidDir, "SKILL.md"),
+          `---\nname: ${nestedName}\n---\n\n# Invalid\n`,
+          "utf-8",
+        );
+      }
+      await writeSkill({
+        dir: path.join(workspaceDir, "skills", "01-valid"),
+        name: "valid-skill",
+        description: "Valid sibling after invalid grouped candidates",
+      });
+
+      const names = loadTestWorkspaceSkillEntries(workspaceDir, {
+        config: {
+          skills: {
+            limits: {
+              maxCandidatesPerRoot: 10,
+              maxSkillsLoadedPerSource: 1,
+            },
+          },
+        },
+      }).map((entry) => entry.skill.name);
+
+      expect(names).toEqual(["valid-skill"]);
+    });
+
     it("does not descend more than two levels (skills/a/b/c/SKILL.md is ignored)", async () => {
       const workspaceDir = await createTempWorkspaceDir();
       await writeSkill({
