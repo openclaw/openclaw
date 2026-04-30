@@ -24,7 +24,7 @@ export type GatewayClientTimingEvent = {
   errorCode?: string;
 };
 
-const KNOWN_TIMING_STAGES = new Set<string>([
+const KNOWN_TIMING_STAGES = new Set<GatewayClientTimingStage>([
   "executeGatewayRequestWithScopes_entered",
   "event_loop_ready",
   "ws_open",
@@ -37,6 +37,15 @@ const KNOWN_TIMING_STAGES = new Set<string>([
   "command_complete",
 ]);
 
+function isGatewayClientTimingStage(value: string): value is GatewayClientTimingStage {
+  for (const known of KNOWN_TIMING_STAGES) {
+    if (known === value) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export function isGatewayClientTimingDebugEnabled(
   env: NodeJS.ProcessEnv = process.env,
 ): boolean {
@@ -44,16 +53,16 @@ export function isGatewayClientTimingDebugEnabled(
 }
 
 function resolveErrorCode(err: Error): string | undefined {
-  const withGateway = err as Error & { gatewayCode?: unknown };
-  if (typeof withGateway.gatewayCode === "string" && withGateway.gatewayCode.trim()) {
-    return withGateway.gatewayCode.trim();
+  const gatewayCode = Reflect.get(err, "gatewayCode");
+  if (typeof gatewayCode === "string" && gatewayCode.trim()) {
+    return gatewayCode.trim();
   }
-  const withCode = err as Error & { code?: unknown };
-  if (typeof withCode.code === "number" && Number.isFinite(withCode.code)) {
-    return String(withCode.code);
+  const code = Reflect.get(err, "code");
+  if (typeof code === "number" && Number.isFinite(code)) {
+    return String(code);
   }
-  if (typeof withCode.code === "string" && withCode.code.trim()) {
-    return withCode.code.trim();
+  if (typeof code === "string" && code.trim()) {
+    return code.trim();
   }
   return undefined;
 }
@@ -62,7 +71,7 @@ export function sanitizeGatewayClientTimingPayload(
   input: Record<string, unknown>,
 ): GatewayClientTimingEvent | null {
   const stage = input.stage;
-  if (typeof stage !== "string" || !KNOWN_TIMING_STAGES.has(stage)) {
+  if (typeof stage !== "string" || !isGatewayClientTimingStage(stage)) {
     return null;
   }
   const elapsedMs = input.elapsedMs;
@@ -82,7 +91,7 @@ export function sanitizeGatewayClientTimingPayload(
     return null;
   }
   const out: GatewayClientTimingEvent = {
-    stage: stage as GatewayClientTimingStage,
+    stage,
     elapsedMs: Math.round(elapsedMs),
     ok,
     method,

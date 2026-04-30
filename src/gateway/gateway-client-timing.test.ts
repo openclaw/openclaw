@@ -38,12 +38,12 @@ describe("gateway-client-timing", () => {
     expect(session).toBeDefined();
     session?.emit("request_send", true);
     expect(spy).toHaveBeenCalledTimes(1);
-    const line = String(spy.mock.calls[0]?.[0] ?? "");
+    const line = spy.mock.calls[0]?.[0] ?? "";
     expect(line).toContain("gateway.client.timing");
     const jsonPart = line.slice(line.indexOf("{"));
     const parsed = JSON.parse(jsonPart) as Record<string, unknown>;
-    expect(Object.keys(parsed).sort()).toEqual(
-      ["elapsedMs", "method", "ok", "requestKind", "stage"].sort(),
+    expect(Object.keys(parsed).toSorted()).toEqual(
+      ["elapsedMs", "method", "ok", "requestKind", "stage"].toSorted(),
     );
     expect(parsed.stage).toBe("request_send");
     expect(parsed.method).toBe("cron.list");
@@ -78,7 +78,7 @@ describe("gateway-client-timing", () => {
       process.env,
     );
     expect(spy).toHaveBeenCalledTimes(1);
-    const line = String(spy.mock.calls[0]?.[0] ?? "");
+    const line = spy.mock.calls[0]?.[0] ?? "";
     expect(line).not.toContain(token);
     expect(line).not.toContain(winPath);
     expect(line).not.toContain(url);
