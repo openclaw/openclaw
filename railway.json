@@ -1,7 +1,8 @@
 {
   "$schema": "https://railway.com/railway.schema.json",
   "build": {
-    "builder": "RAILPACK"
+    "builder": "RAILPACK",
+    "dockerfilePath": null
   },
   "deploy": {
     "startCommand": "node openclaw.mjs",
