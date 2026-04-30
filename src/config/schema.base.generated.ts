@@ -147,9 +147,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             type: "integer",
             exclusiveMinimum: 0,
             maximum: 9007199254740991,
-            title: "Session Liveness Threshold (ms)",
+            title: "Stuck Session Warning Threshold (ms)",
             description:
-              "No-progress age threshold in milliseconds for classifying long processing sessions as long-running, stalled, or stuck. Reply, tool, status, block, and ACP progress reset the timer; repeated stuck diagnostics back off while unchanged.",
+              "Age threshold in milliseconds for emitting stuck-session warnings while a session remains in processing state. Increase for long multi-tool turns to reduce false positives; decrease for faster hang detection.",
           },
           otel: {
             type: "object",
@@ -1279,65 +1279,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
         description:
           "Authentication profile root used for multi-profile provider credentials and cooldown-based failover ordering. Keep profiles minimal and explicit so automatic failover behavior stays auditable.",
       },
-      accessGroups: {
-        type: "object",
-        propertyNames: {
-          type: "string",
-          minLength: 1,
-        },
-        additionalProperties: {
-          oneOf: [
-            {
-              type: "object",
-              properties: {
-                type: {
-                  type: "string",
-                  const: "discord.channelAudience",
-                },
-                guildId: {
-                  type: "string",
-                  minLength: 1,
-                },
-                channelId: {
-                  type: "string",
-                  minLength: 1,
-                },
-                membership: {
-                  type: "string",
-                  const: "canViewChannel",
-                },
-              },
-              required: ["type", "guildId", "channelId"],
-              additionalProperties: false,
-            },
-            {
-              type: "object",
-              properties: {
-                type: {
-                  type: "string",
-                  const: "message.senders",
-                },
-                members: {
-                  type: "object",
-                  propertyNames: {
-                    type: "string",
-                    minLength: 1,
-                  },
-                  additionalProperties: {
-                    type: "array",
-                    items: {
-                      type: "string",
-                      minLength: 1,
-                    },
-                  },
-                },
-              },
-              required: ["type", "members"],
-              additionalProperties: false,
-            },
-          ],
-        },
-      },
       acp: {
         type: "object",
         properties: {
@@ -1687,16 +1628,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   title: "Model Provider Inject num_ctx (OpenAI Compat)",
                   description:
                     "Controls whether OpenClaw injects `options.num_ctx` for Ollama providers configured with the OpenAI-compatible adapter (`openai-completions`). Default is true. Set false only if your proxy/upstream rejects unknown `options` payload fields.",
-                },
-                params: {
-                  type: "object",
-                  propertyNames: {
-                    type: "string",
-                  },
-                  additionalProperties: {},
-                  title: "Model Provider Runtime Parameters",
-                  description:
-                    "Provider-specific runtime parameters interpreted by provider plugins. Keep keys documented by the provider, and prefer explicit provider docs over ad hoc shared assumptions.",
                 },
                 headers: {
                   type: "object",
@@ -4213,22 +4144,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     reliability: {
                       type: "object",
                       properties: {
-                        outputLimits: {
-                          type: "object",
-                          properties: {
-                            maxTurnRawChars: {
-                              type: "integer",
-                              minimum: 1024,
-                              maximum: 67108864,
-                            },
-                            maxTurnLines: {
-                              type: "integer",
-                              minimum: 100,
-                              maximum: 100000,
-                            },
-                          },
-                          additionalProperties: false,
-                        },
                         watchdog: {
                           type: "object",
                           properties: {
@@ -20708,6 +20623,14 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             description:
               'Controls typing behavior timing: "never", "instant", "thinking", or "message" based emission points. Keep conservative modes in high-volume channels to avoid unnecessary typing noise.',
           },
+          parentForkMaxTokens: {
+            type: "integer",
+            minimum: 0,
+            maximum: 9007199254740991,
+            title: "Session Parent Fork Max Tokens",
+            description:
+              "Maximum parent-session token count allowed for thread/session inheritance forking. If the parent exceeds this, OpenClaw starts a fresh thread session instead of forking; set 0 to disable this protection.",
+          },
           mainKey: {
             type: "string",
             title: "Session Main Key",
@@ -20816,23 +20739,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             description:
               "Controls cross-session send permissions using allow/deny rules evaluated against channel, chatType, and key prefixes. Use this to fence where session tools can deliver messages in complex environments.",
           },
-          writeLock: {
-            type: "object",
-            properties: {
-              acquireTimeoutMs: {
-                type: "integer",
-                exclusiveMinimum: 0,
-                maximum: 9007199254740991,
-                title: "Session Write Lock Acquire Timeout",
-                description:
-                  "Milliseconds to wait while acquiring a session transcript write lock before reporting the session as busy. Default: 60000; raise for slow disks or long prep/cleanup, lower only when quick failure is preferred.",
-              },
-            },
-            additionalProperties: false,
-            title: "Session Write Lock",
-            description:
-              "Groups session transcript write-lock acquisition controls. Tune only when legitimate transcript prep, cleanup, compaction, or mirror work contends longer than the default wait.",
-          },
           agentToAgent: {
             type: "object",
             properties: {
@@ -20872,19 +20778,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 title: "Thread Binding Max Age (hours)",
                 description:
                   "Optional hard max age in hours for thread-bound sessions across providers/channels (0 disables hard cap). Default: 0.",
-              },
-              spawnSessions: {
-                type: "boolean",
-                title: "Thread-Bound Session Spawns",
-                description:
-                  "Global default gate for creating thread-bound work sessions from sessions_spawn and ACP thread spawns. Default: true when thread bindings are enabled.",
-              },
-              defaultSpawnContext: {
-                type: "string",
-                enum: ["isolated", "fork"],
-                title: "Thread Spawn Context",
-                description:
-                  'Default native subagent context for thread-bound spawns. Use "fork" to start from the requester transcript or "isolated" for a clean child. Default: "fork".',
               },
             },
             additionalProperties: false,
@@ -21828,55 +21721,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                         },
                       ],
                     },
-                    artifactKind: {
-                      anyOf: [
-                        {
-                          type: "string",
-                          const: "legacy-zip",
-                        },
-                        {
-                          type: "string",
-                          const: "npm-pack",
-                        },
-                      ],
-                    },
-                    artifactFormat: {
-                      anyOf: [
-                        {
-                          type: "string",
-                          const: "zip",
-                        },
-                        {
-                          type: "string",
-                          const: "tgz",
-                        },
-                      ],
-                    },
-                    npmIntegrity: {
-                      type: "string",
-                    },
-                    npmShasum: {
-                      type: "string",
-                    },
-                    npmTarballName: {
-                      type: "string",
-                    },
-                    clawpackSha256: {
-                      type: "string",
-                    },
-                    clawpackSpecVersion: {
-                      type: "integer",
-                      minimum: 0,
-                      maximum: 9007199254740991,
-                    },
-                    clawpackManifestSha256: {
-                      type: "string",
-                    },
-                    clawpackSize: {
-                      type: "integer",
-                      minimum: 0,
-                      maximum: 9007199254740991,
-                    },
                     gitUrl: {
                       type: "string",
                     },
@@ -22325,11 +22169,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 title: "Allow External Control UI Embed URLs",
                 description:
                   "DANGEROUS toggle that allows hosted embeds to load absolute external http(s) URLs. Keep this off unless your Control UI intentionally embeds trusted third-party pages; hosted /__openclaw__/canvas and /__openclaw__/a2ui documents do not need it.",
-              },
-              chatMessageMaxWidth: {
-                title: "Control UI Chat Message Max Width",
-                description:
-                  'Optional CSS max-width for grouped Control UI chat messages, for example "960px", "82%", or "min(1280px, 82%)". Values are validated against a constrained width grammar before reaching the browser.',
               },
               allowedOrigins: {
                 type: "array",
@@ -24586,8 +24425,8 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       tags: ["observability"],
     },
     "diagnostics.stuckSessionWarnMs": {
-      label: "Session Liveness Threshold (ms)",
-      help: "No-progress age threshold in milliseconds for classifying long processing sessions as long-running, stalled, or stuck. Reply, tool, status, block, and ACP progress reset the timer; repeated stuck diagnostics back off while unchanged.",
+      label: "Stuck Session Warning Threshold (ms)",
+      help: "Age threshold in milliseconds for emitting stuck-session warnings while a session remains in processing state. Increase for long multi-tool turns to reduce false positives; decrease for faster hang detection.",
       tags: ["observability", "storage"],
     },
     "diagnostics.otel.enabled": {
@@ -26026,11 +25865,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "DANGEROUS toggle that allows hosted embeds to load absolute external http(s) URLs. Keep this off unless your Control UI intentionally embeds trusted third-party pages; hosted /__openclaw__/canvas and /__openclaw__/a2ui documents do not need it.",
       tags: ["security", "access", "network", "advanced"],
     },
-    "gateway.controlUi.chatMessageMaxWidth": {
-      label: "Control UI Chat Message Max Width",
-      help: 'Optional CSS max-width for grouped Control UI chat messages, for example "960px", "82%", or "min(1280px, 82%)". Values are validated against a constrained width grammar before reaching the browser.',
-      tags: ["advanced"],
-    },
     "gateway.controlUi.allowedOrigins": {
       label: "Control UI Allowed Origins",
       help: 'Allowed browser origins for Control UI/WebChat websocket connections (full origins only, e.g. https://control.example.com). Required for non-loopback Control UI deployments unless dangerous Host-header fallback is explicitly enabled. Setting ["*"] means allow any browser origin and should be avoided outside tightly controlled local testing.',
@@ -27085,11 +26919,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "Controls whether OpenClaw injects `options.num_ctx` for Ollama providers configured with the OpenAI-compatible adapter (`openai-completions`). Default is true. Set false only if your proxy/upstream rejects unknown `options` payload fields.",
       tags: ["models"],
     },
-    "models.providers.*.params": {
-      label: "Model Provider Runtime Parameters",
-      help: "Provider-specific runtime parameters interpreted by provider plugins. Keep keys documented by the provider, and prefer explicit provider docs over ad hoc shared assumptions.",
-      tags: ["models"],
-    },
     "models.providers.*.headers": {
       label: "Model Provider Headers",
       help: "Static HTTP headers merged into provider requests for tenant routing, proxy auth, or custom gateway requirements. Use this sparingly and keep sensitive header values in secrets.",
@@ -27909,6 +27738,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: 'Controls typing behavior timing: "never", "instant", "thinking", or "message" based emission points. Keep conservative modes in high-volume channels to avoid unnecessary typing noise.',
       tags: ["storage"],
     },
+    "session.parentForkMaxTokens": {
+      label: "Session Parent Fork Max Tokens",
+      help: "Maximum parent-session token count allowed for thread/session inheritance forking. If the parent exceeds this, OpenClaw starts a fresh thread session instead of forking; set 0 to disable this protection.",
+      tags: ["security", "auth", "performance", "storage"],
+    },
     "session.mainKey": {
       label: "Session Main Key",
       help: 'Overrides the canonical main session key used for continuity when dmScope or routing logic points to "main". Use a stable value only if you intentionally need custom session anchoring.',
@@ -27959,16 +27793,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "Matches the raw, unnormalized session-key prefix for exact full-key policy targeting. Use this when normalized keyPrefix is too broad and you need agent-prefixed or transport-specific precision.",
       tags: ["access", "storage"],
     },
-    "session.writeLock": {
-      label: "Session Write Lock",
-      help: "Groups session transcript write-lock acquisition controls. Tune only when legitimate transcript prep, cleanup, compaction, or mirror work contends longer than the default wait.",
-      tags: ["storage"],
-    },
-    "session.writeLock.acquireTimeoutMs": {
-      label: "Session Write Lock Acquire Timeout",
-      help: "Milliseconds to wait while acquiring a session transcript write lock before reporting the session as busy. Default: 60000; raise for slow disks or long prep/cleanup, lower only when quick failure is preferred.",
-      tags: ["performance", "storage"],
-    },
     "session.agentToAgent": {
       label: "Session Agent-to-Agent",
       help: "Groups controls for inter-agent session exchanges, including loop prevention limits on reply chaining. Keep defaults unless you run advanced agent-to-agent automation with strict turn caps.",
@@ -27998,16 +27822,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Thread Binding Max Age (hours)",
       help: "Optional hard max age in hours for thread-bound sessions across providers/channels (0 disables hard cap). Default: 0.",
       tags: ["performance", "storage"],
-    },
-    "session.threadBindings.spawnSessions": {
-      label: "Thread-Bound Session Spawns",
-      help: "Global default gate for creating thread-bound work sessions from sessions_spawn and ACP thread spawns. Default: true when thread bindings are enabled.",
-      tags: ["storage"],
-    },
-    "session.threadBindings.defaultSpawnContext": {
-      label: "Thread Spawn Context",
-      help: 'Default native subagent context for thread-bound spawns. Use "fork" to start from the requester transcript or "isolated" for a clean child. Default: "fork".',
-      tags: ["storage"],
     },
     "session.maintenance": {
       label: "Session Maintenance",
@@ -29341,6 +29155,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       tags: ["advanced", "url-secret"],
     },
   },
-  version: "2026.5.2",
+  version: "2026.4.30",
   generatedAt: "2026-03-22T21:17:33.302Z",
 };
