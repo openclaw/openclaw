@@ -10,6 +10,7 @@ on:
         type: choice
         options:
           - all
+          - gateway-runtime-boundary
           - plugin-boundary
           - plugin-sdk-package-contract
           - plugin-sdk-reply-runtime
@@ -22,6 +23,11 @@ on:
       - ".github/workflows/codeql-critical-quality.yml"
       - "packages/plugin-package-contract/**"
       - "packages/plugin-sdk/**"
+      - "src/gateway/method-scopes.ts"
+      - "src/gateway/protocol/**"
+      - "src/gateway/server-methods/**"
+      - "src/gateway/server-methods.ts"
+      - "src/gateway/server-methods-list.ts"
       - "src/plugin-sdk/**"
       - "src/plugins/**"
   schedule:
@@ -86,7 +92,7 @@ jobs:
 
   gateway-runtime-boundary:
     name: Critical Quality (gateway-runtime-boundary)
-    if: ${{ github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || inputs.profile == 'all') }}
+    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (github.event_name == 'pull_request' || github.event_name != 'workflow_dispatch' || inputs.profile == 'all' || inputs.profile == 'gateway-runtime-boundary') }}
     runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 25
     steps:
