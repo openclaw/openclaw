@@ -43,14 +43,6 @@ async function expectInitialForumSend(
   );
 }
 
-function expectDmMessagePreviewViaSendMessage(
-  api: ReturnType<typeof createMockDraftApi>,
-  text = "Hello",
-): void {
-  expect(api.sendMessage).toHaveBeenCalledWith(123, text, { message_thread_id: 42 });
-  expect(api.editMessageText).not.toHaveBeenCalled();
-}
-
 function createForceNewMessageHarness(params: { throttleMs?: number } = {}) {
   const api = createMockDraftApi();
   api.sendMessage
