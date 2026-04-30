@@ -3000,6 +3000,56 @@ describe("handleFeishuMessage command authorization", () => {
     expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(1);
   });
 
+  it("processes same message_id with different audio file_key as distinct events (#75057)", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          dmPolicy: "open",
+        },
+      },
+    } as ClawdbotConfig;
+
+    const eventA: FeishuMessageEvent = {
+      sender: {
+        sender_id: {
+          open_id: "ou-audio-dedupe",
+        },
+      },
+      message: {
+        message_id: "msg-audio-reuse-id",
+        chat_id: "oc-dm",
+        chat_type: "p2p",
+        message_type: "audio",
+        content: JSON.stringify({
+          file_key: "audio_file_key_aaa",
+        }),
+      },
+    };
+
+    const eventB: FeishuMessageEvent = {
+      sender: {
+        sender_id: {
+          open_id: "ou-audio-dedupe",
+        },
+      },
+      message: {
+        message_id: "msg-audio-reuse-id",
+        chat_id: "oc-dm",
+        chat_type: "p2p",
+        message_type: "audio",
+        content: JSON.stringify({
+          file_key: "audio_file_key_bbb",
+        }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event: eventA });
+    await dispatchMessage({ cfg, event: eventB });
+    expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(2);
+  });
+
   it("skips empty-text messages with no media to prevent blank user turns in session (#74634)", async () => {
     // Feishu can deliver { "text": "" } events (empty-text or media-stripped
     // messages). Writing blank user content to the session causes downstream

@@ -25,7 +25,8 @@ import {
   normalizeFeishuCommandProbeBody,
   normalizeMentions,
   parseMergeForwardContent,
-  parseMessageContent,
+  parseMediaKeys,
+parseMessageContent,
   resolveFeishuGroupSession,
   resolveFeishuMediaList,
   toMessageResourceType,
@@ -380,6 +381,22 @@ function filterFetchedGroupContextMessages<
   }).items;
 }
 
+const MEDIA_TYPES_FOR_DEDUPE = new Set(["image", "audio", "file", "video", "media", "sticker"]);
+
+function computeMediaAwareDedupeKey(
+  messageId: string | undefined | null,
+  messageType: string | undefined | null,
+  content: string | undefined | null,
+): string | undefined {
+  const id = messageId?.trim();
+  if (!id) return undefined;
+  if (!messageType || !MEDIA_TYPES_FOR_DEDUPE.has(messageType)) return id;
+  if (!content) return id;
+  const keys = parseMediaKeys(content, messageType);
+  const mediaKey = keys.fileKey || keys.imageKey;
+  return mediaKey ? `${id}:${mediaKey}` : id;
+}
+
 export async function handleFeishuMessage(params: {
   cfg: ClawdbotConfig;
   event: FeishuMessageEvent;
@@ -409,15 +426,16 @@ export async function handleFeishuMessage(params: {
   const error = runtime?.error ?? console.error;
 
   const messageId = event.message.message_id;
+  const dedupeKey = computeMediaAwareDedupeKey(messageId, event.message.message_type, event.message.content);
   if (
     !(await finalizeFeishuMessageProcessing({
-      messageId,
+      messageId: dedupeKey,
       namespace: account.accountId,
       log,
       claimHeld: processingClaimHeld,
     }))
   ) {
-    log(`feishu: skipping duplicate message ${messageId}`);
+    log(`feishu: skipping duplicate message ${dedupeKey}`);
     return;
   }
 

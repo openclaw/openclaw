@@ -1,5 +1,6 @@
 import type { ClawdbotConfig, HistoryEntry, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
 import type { FeishuMessageEvent } from "./event-types.js";
+import { parseMediaKeys } from "./bot-content.js";
 import { isMentionForwardRequest } from "./mention.js";
 import {
   releaseFeishuMessageProcessing,
@@ -10,6 +11,35 @@ import type { FeishuChatType } from "./types.js";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+const MEDIA_MESSAGE_TYPES = new Set(["image", "audio", "file", "video", "media", "sticker"]);
+
+/**
+ * Compute a media-aware dedupe key. For media messages, includes the file_key
+ * or image_key so that the same message_id with different attachments is not
+ * incorrectly deduplicated. For text and other non-media types, returns the
+ * plain messageId (preserving existing behavior).
+ */
+function computeFeishuDedupeKey(event: FeishuMessageEvent): string | undefined {
+  const messageId = event.message.message_id?.trim();
+  if (!messageId) {
+    return undefined;
+  }
+  const messageType = event.message.message_type?.trim();
+  if (!messageType || !MEDIA_MESSAGE_TYPES.has(messageType)) {
+    return messageId;
+  }
+  const content = event.message.content;
+  if (!content) {
+    return messageId;
+  }
+  const keys = parseMediaKeys(content, messageType);
+  const mediaKey = keys.fileKey || keys.imageKey;
+  if (!mediaKey) {
+    return messageId;
+  }
+  return `${messageId}:${mediaKey}`;
 }
 
 function readString(value: unknown): string | undefined {
@@ -116,15 +146,15 @@ function dedupeFeishuDebounceEntriesByMessageId(
   const seen = new Set<string>();
   const deduped: FeishuMessageEvent[] = [];
   for (const entry of entries) {
-    const messageId = entry.message.message_id?.trim();
-    if (!messageId) {
+    const key = computeFeishuDedupeKey(entry);
+    if (!key) {
       deduped.push(entry);
       continue;
     }
-    if (seen.has(messageId)) {
+    if (seen.has(key)) {
       continue;
     }
-    seen.add(messageId);
+    seen.add(key);
     deduped.push(entry);
   }
   return deduped;
@@ -219,20 +249,20 @@ export function createFeishuMessageReceiveHandler({
 
   const recordSuppressedMessageIds = async (
     entries: FeishuMessageEvent[],
-    dispatchMessageId?: string,
+    dispatchDedupeKey?: string,
   ) => {
-    const keepMessageId = dispatchMessageId?.trim();
-    const suppressedIds = new Set(
+    const keepKey = dispatchDedupeKey?.trim();
+    const suppressedKeys = new Set(
       entries
-        .map((entry) => entry.message.message_id?.trim())
-        .filter((id): id is string => Boolean(id) && (!keepMessageId || id !== keepMessageId)),
+        .map((entry) => computeFeishuDedupeKey(entry))
+        .filter((key): key is string => Boolean(key) && (!keepKey || key !== keepKey)),
     );
-    for (const messageId of suppressedIds) {
+    for (const key of suppressedKeys) {
       try {
-        await recordProcessedMessage(messageId, accountId, log);
+        await recordProcessedMessage(key, accountId, log);
       } catch (err) {
         error(
-          `feishu[${accountId}]: failed to record merged dedupe id ${messageId}: ${String(err)}`,
+          `feishu[${accountId}]: failed to record merged dedupe id ${key}: ${String(err)}`,
         );
       }
     }
@@ -269,7 +299,8 @@ export function createFeishuMessageReceiveHandler({
       const dedupedEntries = dedupeFeishuDebounceEntriesByMessageId(entries);
       const freshEntries: FeishuMessageEvent[] = [];
       for (const entry of dedupedEntries) {
-        if (!(await hasProcessedMessage(entry.message.message_id, accountId, log))) {
+        const key = computeFeishuDedupeKey(entry);
+        if (!(await hasProcessedMessage(key, accountId, log))) {
           freshEntries.push(entry);
         }
       }
@@ -277,7 +308,7 @@ export function createFeishuMessageReceiveHandler({
       if (!dispatchEntry) {
         return;
       }
-      await recordSuppressedMessageIds(dedupedEntries, dispatchEntry.message.message_id);
+      await recordSuppressedMessageIds(dedupedEntries, computeFeishuDedupeKey(dispatchEntry));
       const combinedText = freshEntries
         .map((entry) => resolveDebounceText(entry))
         .filter(Boolean)
@@ -302,7 +333,7 @@ export function createFeishuMessageReceiveHandler({
     },
     onError: (err, entries) => {
       for (const entry of entries) {
-        releaseFeishuMessageProcessing(entry.message.message_id, accountId);
+        releaseFeishuMessageProcessing(computeFeishuDedupeKey(entry), accountId);
       }
       error(`feishu[${accountId}]: inbound debounce flush failed: ${String(err)}`);
     },
@@ -314,9 +345,9 @@ export function createFeishuMessageReceiveHandler({
       error(`feishu[${accountId}]: ignoring malformed message event payload`);
       return;
     }
-    const messageId = event.message?.message_id?.trim();
-    if (!tryBeginFeishuMessageProcessing(messageId, accountId)) {
-      log(`feishu[${accountId}]: dropping duplicate event for message ${messageId}`);
+    const dedupeKey = computeFeishuDedupeKey(event);
+    if (!tryBeginFeishuMessageProcessing(dedupeKey, accountId)) {
+      log(`feishu[${accountId}]: dropping duplicate event for message ${dedupeKey}`);
       return;
     }
     const processMessage = async () => {
@@ -324,7 +355,7 @@ export function createFeishuMessageReceiveHandler({
     };
     if (fireAndForget) {
       void processMessage().catch((err) => {
-        releaseFeishuMessageProcessing(messageId, accountId);
+        releaseFeishuMessageProcessing(dedupeKey, accountId);
         error(`feishu[${accountId}]: error handling message: ${String(err)}`);
       });
       return;
@@ -332,7 +363,7 @@ export function createFeishuMessageReceiveHandler({
     try {
       await processMessage();
     } catch (err) {
-      releaseFeishuMessageProcessing(messageId, accountId);
+      releaseFeishuMessageProcessing(dedupeKey, accountId);
       error(`feishu[${accountId}]: error handling message: ${String(err)}`);
     }
   };
