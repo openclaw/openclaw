@@ -903,7 +903,7 @@ describe("installBundledRuntimeDeps", () => {
     );
   });
 
-  it("accepts extensionless package main entries resolved by Node", () => {
+  it("accepts package-manager-installed deps without revalidating entry files", () => {
     const installRoot = makeTempDir();
     spawnSyncMock.mockImplementation((_command, _args, options) => {
       const packageDir = path.join(String(options?.cwd ?? ""), "node_modules", "jszip");
@@ -1344,7 +1344,7 @@ describe("scanBundledPluginRuntimeDeps config policy", () => {
     expect(result.conflicts).toEqual([]);
   });
 
-  it("accepts staged runtime deps whose package main relies on Node extension resolution", () => {
+  it("accepts staged runtime deps without revalidating package entry files", () => {
     const installRoot = makeTempDir();
     const packageDir = path.join(installRoot, "node_modules", "jszip");
     fs.mkdirSync(path.join(packageDir, "lib"), { recursive: true });
@@ -3541,7 +3541,7 @@ describe("ensureBundledPluginRuntimeDeps", () => {
     expect(installRoot).not.toBe(pluginRoot);
   });
 
-  it("repairs package-level mirrors when an installed package entry file is missing", () => {
+  it("trusts package-manager materialized mirrors when manifest and package version match", () => {
     const packageRoot = makeTempDir();
     const stageDir = makeTempDir();
     fs.writeFileSync(
@@ -3583,14 +3583,8 @@ describe("ensureBundledPluginRuntimeDeps", () => {
       },
     });
 
-    expect(result.installedSpecs).toEqual(["ajv@8.20.0"]);
-    expect(calls).toEqual([
-      {
-        installRoot,
-        missingSpecs: ["ajv@8.20.0"],
-        installSpecs: ["ajv@8.20.0"],
-      },
-    ]);
+    expect(result.installedSpecs).toEqual([]);
+    expect(calls).toEqual([]);
   });
 
   it("mirrors sqlite-vec into the packaged default memory runtime deps", () => {
