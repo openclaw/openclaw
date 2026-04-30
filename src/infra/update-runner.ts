@@ -105,6 +105,7 @@ export type UpdateStepInfo = {
 export type UpdateStepCompletion = UpdateStepInfo & {
   durationMs: number;
   exitCode: number | null;
+  stdoutTail?: string | null;
   stderrTail?: string | null;
 };
 
@@ -388,12 +389,14 @@ async function runStep(opts: RunStepOptions): Promise<UpdateStepResult> {
   const result = await runCommand(argv, { cwd, timeoutMs, env });
   const durationMs = Date.now() - started;
 
+  const stdoutTail = trimLogTail(result.stdout, MAX_LOG_CHARS);
   const stderrTail = trimLogTail(result.stderr, MAX_LOG_CHARS);
 
   progress?.onStepComplete?.({
     ...stepInfo,
     durationMs,
     exitCode: result.code,
+    stdoutTail,
     stderrTail,
   });
 
@@ -403,8 +406,8 @@ async function runStep(opts: RunStepOptions): Promise<UpdateStepResult> {
     cwd,
     durationMs,
     exitCode: result.code,
-    stdoutTail: trimLogTail(result.stdout, MAX_LOG_CHARS),
-    stderrTail: trimLogTail(result.stderr, MAX_LOG_CHARS),
+    stdoutTail,
+    stderrTail,
   };
 }
 

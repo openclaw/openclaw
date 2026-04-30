@@ -1617,13 +1617,25 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     });
     if (result.reason === "dirty") {
       defaultRuntime.error(theme.error("Update blocked: local files are edited in this checkout."));
+      const cleanStep = result.steps.find((step) => step.name === "clean check");
+      const dirtyTail = cleanStep?.stdoutTail?.trim();
+      if (dirtyTail) {
+        defaultRuntime.log(theme.warn("Uncommitted or untracked entries:"));
+        for (const line of dirtyTail.split("\n").slice(0, 10)) {
+          if (line.trim()) {
+            defaultRuntime.log(`  ${theme.muted(line)}`);
+          }
+        }
+      }
       defaultRuntime.log(
         theme.warn(
           "Git-based updates need a clean working tree before they can switch commits, fetch, or rebase.",
         ),
       );
       defaultRuntime.log(
-        theme.muted("Commit, stash, or discard the local changes, then rerun `openclaw update`."),
+        theme.muted(
+          "Commit, stash (`git stash -u` to include untracked), or discard the local changes, then rerun `openclaw update`.",
+        ),
       );
     }
     if (result.reason === "not-git-install") {

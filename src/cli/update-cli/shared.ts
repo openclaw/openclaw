@@ -171,6 +171,7 @@ export async function runUpdateStep(params: {
     timeoutMs: params.timeoutMs,
   });
   const durationMs = Date.now() - started;
+  const stdoutTail = trimLogTail(res.stdout, MAX_LOG_CHARS);
   const stderrTail = trimLogTail(res.stderr, MAX_LOG_CHARS);
 
   params.progress?.onStepComplete?.({
@@ -180,6 +181,7 @@ export async function runUpdateStep(params: {
     total: 0,
     durationMs,
     exitCode: res.code,
+    stdoutTail,
     stderrTail,
   });
 
@@ -189,7 +191,7 @@ export async function runUpdateStep(params: {
     cwd: params.cwd ?? process.cwd(),
     durationMs,
     exitCode: res.code,
-    stdoutTail: trimLogTail(res.stdout, MAX_LOG_CHARS),
+    stdoutTail,
     stderrTail,
   };
 }

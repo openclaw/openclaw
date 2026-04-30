@@ -2111,9 +2111,38 @@ describe("update-cli", () => {
       "Git-based updates need a clean working tree before they can switch commits, fetch, or rebase.",
     );
     expect(logs.join("\n")).toContain(
-      "Commit, stash, or discard the local changes, then rerun `openclaw update`.",
+      "Commit, stash (`git stash -u` to include untracked), or discard the local changes, then rerun `openclaw update`.",
     );
     expect(defaultRuntime.exit).toHaveBeenCalledWith(0);
+  });
+  it("lists the offending entries when the worktree is dirty", async () => {
+    vi.mocked(defaultRuntime.log).mockClear();
+    vi.mocked(defaultRuntime.error).mockClear();
+    vi.mocked(defaultRuntime.exit).mockClear();
+    vi.mocked(runGatewayUpdate).mockResolvedValue({
+      status: "skipped",
+      mode: "git",
+      reason: "dirty",
+      steps: [
+        {
+          name: "clean check",
+          command: "git -C /repo status --porcelain",
+          cwd: "/repo",
+          durationMs: 5,
+          exitCode: 0,
+          stdoutTail: "?? 2026-04-29T06-12-16.838Z-openclaw-backup.tar.gz\n M src/foo.ts\n",
+          stderrTail: "",
+        },
+      ],
+      durationMs: 100,
+    } satisfies UpdateRunResult);
+
+    await updateCommand({ channel: "dev" });
+
+    const logs = vi.mocked(defaultRuntime.log).mock.calls.map((call) => String(call[0]));
+    expect(logs.join("\n")).toContain("Uncommitted or untracked entries:");
+    expect(logs.join("\n")).toContain("2026-04-29T06-12-16.838Z-openclaw-backup.tar.gz");
+    expect(logs.join("\n")).toContain("src/foo.ts");
   });
   it.each([
     {

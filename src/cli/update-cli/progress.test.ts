@@ -1,6 +1,20 @@
 import { describe, expect, it } from "vitest";
-import type { UpdateRunResult } from "../../infra/update-runner.js";
-import { inferUpdateFailureHints } from "./progress.js";
+import type { UpdateRunResult, UpdateStepCompletion } from "../../infra/update-runner.js";
+import { inferUpdateFailureHints, resolveStepDisplay } from "./progress.js";
+
+function makeStep(overrides: Partial<UpdateStepCompletion>): UpdateStepCompletion {
+  return {
+    name: "clean check",
+    command: "git -C . status --porcelain",
+    index: 0,
+    total: 1,
+    durationMs: 1,
+    exitCode: 0,
+    stdoutTail: "",
+    stderrTail: "",
+    ...overrides,
+  };
+}
 
 function makeResult(
   stepName: string,
@@ -24,6 +38,40 @@ function makeResult(
     durationMs: 1,
   };
 }
+
+describe("resolveStepDisplay", () => {
+  it("treats an empty clean-check stdout as a clean working tree", () => {
+    const display = resolveStepDisplay(makeStep({ stdoutTail: "" }));
+    expect(display).toEqual({ label: "Working directory is clean", outcome: "ok" });
+  });
+
+  it("treats whitespace-only clean-check stdout as a clean working tree", () => {
+    const display = resolveStepDisplay(makeStep({ stdoutTail: "\n  \t\n" }));
+    expect(display.outcome).toBe("ok");
+    expect(display.label).toBe("Working directory is clean");
+  });
+
+  it("flags clean-check stdout with porcelain entries as dirty even when exit code is 0", () => {
+    const display = resolveStepDisplay(
+      makeStep({ stdoutTail: "?? 2026-04-29T06-12-16.838Z-openclaw-backup.tar.gz\n" }),
+    );
+    expect(display).toEqual({
+      label: "Working directory has uncommitted changes",
+      outcome: "warn",
+    });
+  });
+
+  it("does not apply the dirty override to other steps", () => {
+    const display = resolveStepDisplay(makeStep({ name: "git fetch", stdoutTail: "fetched main" }));
+    expect(display.outcome).toBe("ok");
+    expect(display.label).toBe("Fetching latest changes");
+  });
+
+  it("marks non-zero exit codes as failures", () => {
+    const display = resolveStepDisplay(makeStep({ name: "git fetch", exitCode: 1 }));
+    expect(display.outcome).toBe("fail");
+  });
+});
 
 describe("inferUpdateFailureHints", () => {
   it("returns a package-manager bootstrap hint for pnpm npm-bootstrap failures", () => {

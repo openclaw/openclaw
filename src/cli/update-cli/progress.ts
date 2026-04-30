@@ -2,7 +2,7 @@ import { spinner } from "@clack/prompts";
 import { formatDurationPrecise } from "../../infra/format-time/format-duration.ts";
 import type {
   UpdateRunResult,
-  UpdateStepInfo,
+  UpdateStepCompletion,
   UpdateStepProgress,
 } from "../../infra/update-runner.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -36,8 +36,34 @@ const STEP_LABELS: Record<string, string> = {
   "global install": "Installing global package",
 };
 
-function getStepLabel(step: UpdateStepInfo): string {
+function getStepLabel(step: { name: string }): string {
   return STEP_LABELS[step.name] ?? step.name;
+}
+
+export type StepDisplayOutcome = "ok" | "warn" | "fail";
+
+export type StepDisplay = {
+  label: string;
+  outcome: StepDisplayOutcome;
+};
+
+type StepDisplayInput = Pick<UpdateStepCompletion, "name" | "exitCode"> & {
+  stdoutTail?: string | null;
+};
+
+export function resolveStepDisplay(step: StepDisplayInput): StepDisplay {
+  // `git status --porcelain` exits 0 whether the tree is clean or dirty.
+  // Treat any non-empty stdout as a dirty tree so we don't claim success.
+  if (step.name === "clean check" && step.exitCode === 0) {
+    const dirty = (step.stdoutTail ?? "").trim().length > 0;
+    if (dirty) {
+      return { label: "Working directory has uncommitted changes", outcome: "warn" };
+    }
+  }
+  if (step.exitCode === 0) {
+    return { label: getStepLabel(step), outcome: "ok" };
+  }
+  return { label: getStepLabel(step), outcome: "fail" };
 }
 
 export function inferUpdateFailureHints(result: UpdateRunResult): string[] {
@@ -126,14 +152,28 @@ export function createUpdateProgress(enabled: boolean): ProgressController {
         return;
       }
 
-      const label = getStepLabel(step);
+      const display = resolveStepDisplay(step);
       const duration = theme.muted(`(${formatDurationPrecise(step.durationMs)})`);
-      const icon = step.exitCode === 0 ? theme.success("\u2713") : theme.error("\u2717");
+      const icon =
+        display.outcome === "ok"
+          ? theme.success("\u2713")
+          : display.outcome === "warn"
+            ? theme.warn("\u2717")
+            : theme.error("\u2717");
 
-      currentSpinner.stop(`${icon} ${label} ${duration}`);
+      currentSpinner.stop(`${icon} ${display.label} ${duration}`);
       currentSpinner = null;
 
-      if (step.exitCode !== 0 && step.stderrTail) {
+      if (display.outcome === "warn" && step.stdoutTail) {
+        const lines = step.stdoutTail.split("\n").slice(0, 10);
+        for (const line of lines) {
+          if (line.trim()) {
+            defaultRuntime.log(`    ${theme.warn(line)}`);
+          }
+        }
+      }
+
+      if (display.outcome === "fail" && step.stderrTail) {
         const lines = step.stderrTail.split("\n").slice(-10);
         for (const line of lines) {
           if (line.trim()) {
@@ -155,12 +195,15 @@ export function createUpdateProgress(enabled: boolean): ProgressController {
   };
 }
 
-function formatStepStatus(exitCode: number | null): string {
-  if (exitCode === 0) {
+function formatStepStatus(outcome: StepDisplayOutcome | "pending"): string {
+  if (outcome === "ok") {
     return theme.success("\u2713");
   }
-  if (exitCode === null) {
+  if (outcome === "pending") {
     return theme.warn("?");
+  }
+  if (outcome === "warn") {
+    return theme.warn("\u2717");
   }
   return theme.error("\u2717");
 }
@@ -202,11 +245,24 @@ export function printResult(result: UpdateRunResult, opts: PrintResultOptions): 
     defaultRuntime.log("");
     defaultRuntime.log(theme.heading("Steps:"));
     for (const step of result.steps) {
-      const status = formatStepStatus(step.exitCode);
+      const display =
+        step.exitCode === null
+          ? { label: step.name, outcome: "pending" as const }
+          : resolveStepDisplay(step);
+      const status = formatStepStatus(display.outcome);
       const duration = theme.muted(`(${formatDurationPrecise(step.durationMs)})`);
-      defaultRuntime.log(`  ${status} ${step.name} ${duration}`);
+      defaultRuntime.log(`  ${status} ${display.label} ${duration}`);
 
-      if (step.exitCode !== 0 && step.stderrTail) {
+      if (display.outcome === "warn" && step.stdoutTail) {
+        const lines = step.stdoutTail.split("\n").slice(0, 5);
+        for (const line of lines) {
+          if (line.trim()) {
+            defaultRuntime.log(`      ${theme.warn(line)}`);
+          }
+        }
+      }
+
+      if (display.outcome === "fail" && step.stderrTail) {
         const lines = step.stderrTail.split("\n").slice(0, 5);
         for (const line of lines) {
           if (line.trim()) {
