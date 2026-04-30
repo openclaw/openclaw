@@ -24,11 +24,11 @@ import {
 
 type Turn = { reply: string; delayMs?: number };
 
-function runLoop(
+async function runLoop(
   condition: TerminationCondition,
   turns: Turn[],
   maxTurns = turns.length,
-): { turnsUsed: number; exitReason: string | null; replies: string[] } {
+): Promise<{ turnsUsed: number; exitReason: string | null; replies: string[] }> {
   condition.reset();
   const startedAt = Date.now() - (turns[0]?.delayMs ?? 0);
   const replies: string[] = [];
@@ -38,11 +38,10 @@ function runLoop(
   for (let i = 0; i < maxTurns && i < turns.length; i++) {
     const turn = i + 1;
     const { reply, delayMs = 0 } = turns[i];
-    // Simulate elapsed time by back-dating startedAt
     const effectiveStartedAt = startedAt - delayMs;
     replies.push(reply);
     turnsUsed = turn;
-    const [stop, reason] = condition.check({
+    const [stop, reason] = await condition.check({
       turn,
       replyText: reply,
       startedAt: effectiveStartedAt,
@@ -65,8 +64,8 @@ describe("three-way OR — first soft condition wins, hard limit is last resort"
     new MaxIterations(10),
   );
 
-  it("TextMention fires first when present in early turn", () => {
-    const result = runLoop(cond, [
+  it("TextMention fires first when present in early turn", async () => {
+    const result = await runLoop(cond, [
       { reply: "Researching..." },
       { reply: "Task complete. DONE" },
       { reply: "Never reached" },
@@ -75,8 +74,8 @@ describe("three-way OR — first soft condition wins, hard limit is last resort"
     expect(result.exitReason).toBe("text_mention:DONE");
   });
 
-  it("ReplyPattern fires when TextMention never appears", () => {
-    const result = runLoop(cond, [
+  it("ReplyPattern fires when TextMention never appears", async () => {
+    const result = await runLoop(cond, [
       { reply: "Searching..." },
       { reply: "Compiling..." },
       { reply: "Task complete — here is the result." },
@@ -86,8 +85,8 @@ describe("three-way OR — first soft condition wins, hard limit is last resort"
     expect(result.exitReason).toBe("reply_pattern:task complete");
   });
 
-  it("falls back to MaxIterations when neither soft condition ever fires", () => {
-    const result = runLoop(
+  it("falls back to MaxIterations when neither soft condition ever fires", async () => {
+    const result = await runLoop(
       cond,
       Array.from({ length: 12 }, (_, i) => ({ reply: `Turn ${i + 1} still running...` })),
       12,
@@ -100,13 +99,13 @@ describe("three-way OR — first soft condition wins, hard limit is last resort"
 // ─── 2. AND requires simultaneous satisfaction ───────────────────────────────
 
 describe("AND — both conditions must fire on the same state", () => {
-  it("prevents premature exit: agent says DONE at turn 1 but AND requires ≥3 turns", () => {
+  it("prevents premature exit: agent says DONE at turn 1 but AND requires ≥3 turns", async () => {
     // Real pattern: cheap models say DONE immediately without doing the work.
     // AND with a minimum-turn guard catches this.
     const minEffort = new CustomCondition((s) => [s.turn >= 3, "min_effort"]);
     const cond = new TextMention("DONE").and(minEffort);
 
-    const result = runLoop(cond, [
+    const result = await runLoop(cond, [
       { reply: "DONE" }, // says DONE on turn 1 — would exit with OR
       { reply: "DONE" }, // says DONE on turn 2 — still blocked
       { reply: "Full analysis complete. DONE" }, // turn 3 — both fire
@@ -116,14 +115,14 @@ describe("AND — both conditions must fire on the same state", () => {
     expect(result.exitReason).toContain("AND");
   });
 
-  it("all() with three conditions: must satisfy all three simultaneously", () => {
+  it("all() with three conditions: must satisfy all three simultaneously", async () => {
     const cond = all(
       new TextMention("DONE"),
       new CustomCondition((s) => [s.turn >= 2, "min_2_turns"]),
       new CustomCondition((s) => [s.replyText.length > 50, "substantial_reply"]),
     );
 
-    const result = runLoop(cond, [
+    const result = await runLoop(cond, [
       { reply: "DONE" }, // fails: turn 1, short
       { reply: "DONE x" }, // fails: turn 2, too short
       { reply: "DONE — " + "a".repeat(60) }, // passes: turn 3, long enough
@@ -143,8 +142,8 @@ describe("deep nesting — (A | B) & (C | D)", () => {
   );
   const cond = naturalDone.and(safetyReached);
 
-  it("fires when natural completion AND min turns are both satisfied", () => {
-    const result = runLoop(cond, [
+  it("fires when natural completion AND min turns are both satisfied", async () => {
+    const result = await runLoop(cond, [
       { reply: "Working..." },
       { reply: "Still going..." },
       { reply: "Still going..." },
@@ -153,8 +152,8 @@ describe("deep nesting — (A | B) & (C | D)", () => {
     expect(result.turnsUsed).toBe(4);
   });
 
-  it("does not fire when model signals done too early (before min turns)", () => {
-    const result = runLoop(cond, [
+  it("does not fire when model signals done too early (before min turns)", async () => {
+    const result = await runLoop(cond, [
       { reply: "DONE" }, // naturalDone fires but min_turns has not
       { reply: "DONE" },
       { reply: "DONE" },
@@ -163,8 +162,8 @@ describe("deep nesting — (A | B) & (C | D)", () => {
     expect(result.turnsUsed).toBe(4);
   });
 
-  it("fires at MaxIterations when model never signals done", () => {
-    const result = runLoop(
+  it("fires at MaxIterations when model never signals done", async () => {
+    const result = await runLoop(
       cond,
       Array.from({ length: 12 }, (_, i) => ({ reply: `Turn ${i + 1}...` })),
       12,
@@ -178,10 +177,10 @@ describe("deep nesting — (A | B) & (C | D)", () => {
     expect(result.exitReason).toBeNull(); // loop exhausted, no condition fired
   });
 
-  it("MaxIterations alone as fallback when combined with OR", () => {
+  it("MaxIterations alone as fallback when combined with OR", async () => {
     // The correct real-world pattern: wrap the deep expression with OR MaxIterations
     const safe = cond.or(new MaxIterations(10));
-    const result = runLoop(
+    const result = await runLoop(
       safe,
       Array.from({ length: 12 }, (_, i) => ({ reply: `Turn ${i + 1}...` })),
       12,
@@ -194,20 +193,20 @@ describe("deep nesting — (A | B) & (C | D)", () => {
 // ─── 4. TimeLimit racing with TextMention ────────────────────────────────────
 
 describe("TimeLimit racing with TextMention", () => {
-  it("TextMention wins when reply arrives before deadline", () => {
+  it("TextMention wins when reply arrives before deadline", async () => {
     const cond = new TextMention("DONE").or(new TimeLimit(5));
     // startedAt = 1s ago (fast reply)
-    const result = runLoop(cond, [
+    const result = await runLoop(cond, [
       { reply: "Thinking...", delayMs: 1000 },
       { reply: "DONE", delayMs: 1000 },
     ]);
     expect(result.exitReason).toBe("text_mention:DONE");
   });
 
-  it("TimeLimit wins when reply never signals done and time runs out", () => {
+  it("TimeLimit wins when reply never signals done and time runs out", async () => {
     const cond = new TextMention("DONE").or(new TimeLimit(1));
     // All turns simulate 3s elapsed → TimeLimit fires immediately
-    const result = runLoop(cond, [
+    const result = await runLoop(cond, [
       { reply: "Still working...", delayMs: 3000 },
       { reply: "Still working...", delayMs: 3000 },
       { reply: "Still working...", delayMs: 3000 },
@@ -220,9 +219,9 @@ describe("TimeLimit racing with TextMention", () => {
 // ─── 5. Adversarial providers ───────────────────────────────────────────────
 
 describe("adversarial provider patterns", () => {
-  it("oscillating DONE: provider alternates done/not-done — OR fires on first DONE", () => {
+  it("oscillating DONE: provider alternates done/not-done — OR fires on first DONE", async () => {
     const cond = new TextMention("DONE").or(new MaxIterations(10));
-    const result = runLoop(cond, [
+    const result = await runLoop(cond, [
       { reply: "Searching..." },
       { reply: "DONE" }, // fires here
       { reply: "Actually, let me reconsider..." },
@@ -231,12 +230,12 @@ describe("adversarial provider patterns", () => {
     expect(result.turnsUsed).toBe(2);
   });
 
-  it("oscillating DONE with AND minimum guard: waits for stable completion", () => {
+  it("oscillating DONE with AND minimum guard: waits for stable completion", async () => {
     // Require DONE AND have been running ≥3 turns — oscillating model gets past the guard
     const cond = new TextMention("DONE")
       .and(new CustomCondition((s) => [s.turn >= 3, "min_effort"]))
       .or(new MaxIterations(10));
-    const result = runLoop(cond, [
+    const result = await runLoop(cond, [
       { reply: "Searching..." },
       { reply: "DONE" }, // turn 2: DONE but min_effort not met
       { reply: "Actually still working..." },
@@ -246,9 +245,9 @@ describe("adversarial provider patterns", () => {
     expect(result.exitReason).toContain("AND");
   });
 
-  it("never-done provider: always hits MaxIterations regardless of soft conditions", () => {
+  it("never-done provider: always hits MaxIterations regardless of soft conditions", async () => {
     const cond = new TextMention("DONE").or(new MaxIterations(5));
-    const result = runLoop(cond, [
+    const result = await runLoop(cond, [
       { reply: "Thinking..." },
       { reply: "Analyzing..." },
       { reply: "Processing..." },
@@ -264,12 +263,12 @@ describe("adversarial provider patterns", () => {
 // ─── 6. Real agent recipe patterns ──────────────────────────────────────────
 
 describe("real agent recipe patterns", () => {
-  it("fire-and-forget notification: stop the moment a message is sent", () => {
+  it("fire-and-forget notification: stop the moment a message is sent", async () => {
     // ToolCalled equivalent in reply-text context: reply contains "[sent]"
     const messageSent = new ReplyPattern(/\[sent\]/i);
     const cond = messageSent.or(new MaxIterations(3));
 
-    const result = runLoop(cond, [
+    const result = await runLoop(cond, [
       { reply: "Composing message..." },
       { reply: "Message delivered. [sent]" },
       { reply: "Never reached" },
@@ -278,13 +277,13 @@ describe("real agent recipe patterns", () => {
     expect(result.exitReason).toMatch(/reply_pattern/);
   });
 
-  it("research chain: exit when summarized AND minimum turns, fallback to limit", () => {
+  it("research chain: exit when summarized AND minimum turns, fallback to limit", async () => {
     const cond = new TextMention("FINAL ANSWER")
       .and(new CustomCondition((s) => [s.turn >= 3, "min_research_turns"]))
       .or(new MaxIterations(20));
 
     // good researcher: does minimum work, then answers
-    const good = runLoop(cond, [
+    const good = await runLoop(cond, [
       { reply: "Searching web..." },
       { reply: "Cross-referencing sources..." },
       { reply: "FINAL ANSWER: The result is X." },
@@ -292,7 +291,7 @@ describe("real agent recipe patterns", () => {
     expect(good.turnsUsed).toBe(3);
 
     // lazy researcher: answers immediately — blocked by AND
-    const lazy = runLoop(cond, [
+    const lazy = await runLoop(cond, [
       { reply: "FINAL ANSWER: I think it's X." }, // blocked: min_research_turns
       { reply: "FINAL ANSWER: I think it's X." }, // blocked: min_research_turns
       { reply: "FINAL ANSWER: Based on research, it's X." }, // passes
@@ -300,7 +299,7 @@ describe("real agent recipe patterns", () => {
     expect(lazy.turnsUsed).toBe(3);
 
     // lost researcher: never reaches FINAL ANSWER → hits MaxIterations
-    const lost = runLoop(
+    const lost = await runLoop(
       cond,
       Array.from({ length: 25 }, (_, i) => ({ reply: `Searching... turn ${i + 1}` })),
       25,
@@ -309,11 +308,11 @@ describe("real agent recipe patterns", () => {
     expect(lost.exitReason).toBe("max_iterations");
   });
 
-  it("quality gate: reply must be substantial AND contain completion signal", () => {
+  it("quality gate: reply must be substantial AND contain completion signal", async () => {
     const substantial = new CustomCondition((s) => [s.replyText.length >= 100, "substantial"]);
     const cond = new TextMention("DONE").and(substantial).or(new MaxIterations(5));
 
-    const oneWord = runLoop(cond, [
+    const oneWord = await runLoop(cond, [
       { reply: "DONE" }, // short, blocked
       { reply: "DONE" }, // short, blocked
       { reply: "DONE — " + "a".repeat(100) }, // long enough + DONE
@@ -368,43 +367,45 @@ describe("multi-provider tournament — behavioral proof", () => {
 
   const cond = () => new TextMention("DONE").or(new MaxIterations(5));
 
-  function runProvider(provider: Provider) {
+  async function runProvider(provider: Provider) {
     const c = cond();
-    return runLoop(
+    return await runLoop(
       c,
       responses[provider].map((r) => ({ reply: r })),
     );
   }
 
-  it("Claude Sonnet exits at turn 2 (natural completion)", () => {
-    const r = runProvider("claude-3-7-sonnet");
+  it("Claude Sonnet exits at turn 2 (natural completion)", async () => {
+    const r = await runProvider("claude-3-7-sonnet");
     expect(r.turnsUsed).toBe(2);
     expect(r.exitReason).toBe("text_mention:DONE");
   });
 
-  it("Claude Haiku exits at turn 3 (natural completion, slightly later)", () => {
-    const r = runProvider("claude-3-5-haiku");
+  it("Claude Haiku exits at turn 3 (natural completion, slightly later)", async () => {
+    const r = await runProvider("claude-3-5-haiku");
     expect(r.turnsUsed).toBe(3);
     expect(r.exitReason).toBe("text_mention:DONE");
   });
 
-  it("GPT-4o hits the hard limit at turn 5", () => {
-    const r = runProvider("gpt-4o");
+  it("GPT-4o hits the hard limit at turn 5", async () => {
+    const r = await runProvider("gpt-4o");
     expect(r.turnsUsed).toBe(5);
     expect(r.exitReason).toBe("max_iterations");
   });
 
-  it("GPT-4o-mini hits the hard limit at turn 5", () => {
-    const r = runProvider("gpt-4o-mini");
+  it("GPT-4o-mini hits the hard limit at turn 5", async () => {
+    const r = await runProvider("gpt-4o-mini");
     expect(r.turnsUsed).toBe(5);
     expect(r.exitReason).toBe("max_iterations");
   });
 
-  it("tournament ranking: Claude providers use fewer turns than OpenAI providers", () => {
-    const results = (Object.keys(responses) as Provider[]).map((p) => ({
-      provider: p,
-      ...runProvider(p),
-    }));
+  it("tournament ranking: Claude providers use fewer turns than OpenAI providers", async () => {
+    const results = await Promise.all(
+      (Object.keys(responses) as Provider[]).map(async (p) => ({
+        provider: p,
+        ...(await runProvider(p)),
+      })),
+    );
 
     const byTurns = results.sort((a, b) => a.turnsUsed - b.turnsUsed);
 
@@ -422,42 +423,44 @@ describe("multi-provider tournament — behavioral proof", () => {
     expect(claudeMax).toBeLessThan(gptMin);
   });
 
-  it("with flat MaxIterations only: all four providers are indistinguishable", () => {
+  it("with flat MaxIterations only: all four providers are indistinguishable", async () => {
     const flatCond = () => new MaxIterations(5);
-    const results = (Object.keys(responses) as Provider[]).map((p) => {
-      const c = flatCond();
-      return runLoop(
-        c,
-        responses[p].map((r) => ({ reply: r })),
-      );
-    });
+    const results = await Promise.all(
+      (Object.keys(responses) as Provider[]).map(async (p) => {
+        const c = flatCond();
+        return await runLoop(
+          c,
+          responses[p].map((r) => ({ reply: r })),
+        );
+      }),
+    );
 
     // Every provider burns all 5 turns — the behavioral difference is invisible
     expect(results.every((r) => r.turnsUsed === 5)).toBe(true);
   });
 
-  it("cost table: turns used per provider with flat vs algebra", () => {
+  it("cost table: turns used per provider with flat vs algebra", async () => {
     const providers = Object.keys(responses) as Provider[];
-    const flat = providers.map((p) => {
-      const c = new MaxIterations(5);
-      return {
-        provider: p,
-        turns: runLoop(
+    const flat = await Promise.all(
+      providers.map(async (p) => {
+        const c = new MaxIterations(5);
+        const r = await runLoop(
           c,
-          responses[p].map((r) => ({ reply: r })),
-        ).turnsUsed,
-      };
-    });
-    const algebra = providers.map((p) => {
-      const c = new TextMention("DONE").or(new MaxIterations(5));
-      return {
-        provider: p,
-        turns: runLoop(
+          responses[p].map((reply) => ({ reply })),
+        );
+        return { provider: p, turns: r.turnsUsed };
+      }),
+    );
+    const algebra = await Promise.all(
+      providers.map(async (p) => {
+        const c = new TextMention("DONE").or(new MaxIterations(5));
+        const r = await runLoop(
           c,
-          responses[p].map((r) => ({ reply: r })),
-        ).turnsUsed,
-      };
-    });
+          responses[p].map((reply) => ({ reply })),
+        );
+        return { provider: p, turns: r.turnsUsed };
+      }),
+    );
 
     const totalFlat = flat.reduce((s, r) => s + r.turns, 0);
     const totalAlgebra = algebra.reduce((s, r) => s + r.turns, 0);
@@ -483,9 +486,11 @@ describe("multi-provider tournament — behavioral proof", () => {
 // ─── 8. Edge cases ───────────────────────────────────────────────────────────
 
 describe("edge cases", () => {
-  it("empty reply does not crash TextMention or ReplyPattern", () => {
+  it("empty reply does not crash TextMention or ReplyPattern", async () => {
     const cond = new TextMention("DONE").or(new MaxIterations(3));
-    expect(() => cond.check({ turn: 1, replyText: "", startedAt: Date.now() })).not.toThrow();
+    await expect(
+      cond.check({ turn: 1, replyText: "", startedAt: Date.now() }),
+    ).resolves.toBeDefined();
   });
 
   it("MaxIterations(1) fires on the very first turn", () => {
@@ -495,27 +500,26 @@ describe("edge cases", () => {
     expect(reason).toBe("max_iterations");
   });
 
-  it("deeply nested chain of .or() calls is still correct", () => {
+  it("deeply nested chain of .or() calls is still correct", async () => {
     const cond = new MaxIterations(2)
       .or(new MaxIterations(4))
       .or(new MaxIterations(6))
       .or(new MaxIterations(8));
-    // Should fire at 2 (innermost first)
-    expect(cond.check({ turn: 2, replyText: "", startedAt: Date.now() })[0]).toBe(true);
-    expect(cond.check({ turn: 1, replyText: "", startedAt: Date.now() })[0]).toBe(false);
+    expect((await cond.check({ turn: 2, replyText: "", startedAt: Date.now() }))[0]).toBe(true);
+    expect((await cond.check({ turn: 1, replyText: "", startedAt: Date.now() }))[0]).toBe(false);
   });
 
-  it("reset() clears TimeLimit state so it can be reused across loop runs", () => {
+  it("reset() clears TimeLimit state so it can be reused across loop runs", async () => {
     const timeLimit = new TimeLimit(1);
     const cond = new TextMention("DONE").or(timeLimit);
 
     // First run: time limit fires
-    const r1 = runLoop(cond, [{ reply: "slow", delayMs: 3000 }]);
+    const r1 = await runLoop(cond, [{ reply: "slow", delayMs: 3000 }]);
     expect(r1.exitReason).toBe("time_limit");
 
     // Second run after reset: time limit does NOT fire immediately
     cond.reset();
-    const r2 = runLoop(cond, [{ reply: "DONE" }]);
+    const r2 = await runLoop(cond, [{ reply: "DONE" }]);
     expect(r2.exitReason).toBe("text_mention:DONE");
   });
 });

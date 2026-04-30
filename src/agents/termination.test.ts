@@ -9,6 +9,7 @@ import {
   TimeLimit,
   all,
   any,
+  type TerminationCondition,
   type TerminationState,
 } from "./termination.js";
 
@@ -69,7 +70,6 @@ describe("TimeLimit", () => {
 
   it("fires when duration has elapsed", () => {
     const cond = new TimeLimit(1);
-    // startedAt 2 seconds ago
     const [stop, reason] = cond.check(state({ startedAt: Date.now() - 2000 }));
     expect(stop).toBe(true);
     expect(reason).toBe("time_limit");
@@ -77,9 +77,8 @@ describe("TimeLimit", () => {
 
   it("resets internal state between runs", () => {
     const cond = new TimeLimit(1);
-    cond.check(state({ startedAt: Date.now() - 2000 })); // fire once
+    cond.check(state({ startedAt: Date.now() - 2000 }));
     cond.reset();
-    // After reset, startedAt is re-latched from state on next check
     expect(cond.check(state({ startedAt: Date.now() }))[0]).toBe(false);
   });
 });
@@ -110,23 +109,23 @@ describe("CustomCondition", () => {
 // ─── OrCondition / .or() ─────────────────────────────────────────────────────
 
 describe("OrCondition", () => {
-  it("stops when the first condition fires", () => {
+  it("stops when the first condition fires", async () => {
     const cond = new TextMention("DONE").or(new MaxIterations(10));
-    const [stop, reason] = cond.check(state({ turn: 2, replyText: "DONE" }));
+    const [stop, reason] = await cond.check(state({ turn: 2, replyText: "DONE" }));
     expect(stop).toBe(true);
     expect(reason).toBe("text_mention:DONE");
   });
 
-  it("stops when the second condition fires", () => {
+  it("stops when the second condition fires", async () => {
     const cond = new TextMention("DONE").or(new MaxIterations(5));
-    const [stop, reason] = cond.check(state({ turn: 5, replyText: "still working" }));
+    const [stop, reason] = await cond.check(state({ turn: 5, replyText: "still working" }));
     expect(stop).toBe(true);
     expect(reason).toBe("max_iterations");
   });
 
-  it("does not stop when neither fires", () => {
+  it("does not stop when neither fires", async () => {
     const cond = new TextMention("DONE").or(new MaxIterations(10));
-    expect(cond.check(state({ turn: 3, replyText: "still working" }))[0]).toBe(false);
+    expect((await cond.check(state({ turn: 3, replyText: "still working" })))[0]).toBe(false);
   });
 
   it("functional any() alias works", () => {
@@ -137,15 +136,14 @@ describe("OrCondition", () => {
 // ─── AndCondition / .and() ───────────────────────────────────────────────────
 
 describe("AndCondition", () => {
-  it("does not stop when only one condition fires", () => {
+  it("does not stop when only one condition fires", async () => {
     const cond = new TextMention("DONE").and(new MaxIterations(5));
-    // TextMention fires but MaxIterations has not
-    expect(cond.check(state({ turn: 2, replyText: "DONE" }))[0]).toBe(false);
+    expect((await cond.check(state({ turn: 2, replyText: "DONE" })))[0]).toBe(false);
   });
 
-  it("stops when both conditions fire", () => {
+  it("stops when both conditions fire", async () => {
     const cond = new TextMention("DONE").and(new MaxIterations(5));
-    const [stop, reason] = cond.check(state({ turn: 5, replyText: "DONE" }));
+    const [stop, reason] = await cond.check(state({ turn: 5, replyText: "DONE" }));
     expect(stop).toBe(true);
     expect(reason).toContain("AND");
   });
@@ -158,37 +156,29 @@ describe("AndCondition", () => {
 // ─── Composite nesting ───────────────────────────────────────────────────────
 
 describe("nested composition", () => {
-  it("(A | B) & C — stops only when (A or B) AND C", () => {
+  it("(A | B) & C — stops only when (A or B) AND C", async () => {
     const cond = new TextMention("DONE").or(new ReplyPattern(/summary/i)).and(new MaxIterations(5));
-    // A fires but C has not
-    expect(cond.check(state({ turn: 2, replyText: "DONE" }))[0]).toBe(false);
-    // A fires AND C fires
-    expect(cond.check(state({ turn: 5, replyText: "DONE" }))[0]).toBe(true);
-    // Neither A nor B fires, C fires — still false
-    expect(cond.check(state({ turn: 5, replyText: "still going" }))[0]).toBe(false);
+    expect((await cond.check(state({ turn: 2, replyText: "DONE" })))[0]).toBe(false);
+    expect((await cond.check(state({ turn: 5, replyText: "DONE" })))[0]).toBe(true);
+    expect((await cond.check(state({ turn: 5, replyText: "still going" })))[0]).toBe(false);
   });
 });
 
 // ─── Anthropic vs OpenAI behavioral proof ────────────────────────────────────
 //
-// This section simulates the real behavioral difference between Claude (Anthropic)
-// and GPT (OpenAI) in a multi-turn A2A loop:
+// Claude naturally signals completion early ("DONE" / synthesis with no follow-up)
+// GPT keeps running toward the hard limit without a natural completion signal.
 //
-//   - Claude naturally signals completion early ("DONE" / synthesis with no follow-up)
-//   - GPT keeps running toward the hard limit without a natural completion signal
-//
-// With a flat MaxIterations(5), both providers burn the full budget.
-// With TextMention("DONE").or(MaxIterations(5)), Claude exits at the natural turn,
-// saving turns — which directly maps to API calls, latency, and cost.
+// With flat MaxIterations(5), both providers burn the full budget.
+// With TextMention("DONE").or(MaxIterations(5)), Claude exits at the natural turn.
 
 type MockProvider = "anthropic" | "openai";
 
-function simulateA2ATurns(
+async function simulateA2ATurns(
   provider: MockProvider,
-  termination: { check: (s: TerminationState) => readonly [boolean, string | null]; reset(): void },
+  termination: TerminationCondition,
   maxTurns: number,
-): { turnsUsed: number; exitReason: string | null } {
-  // Claude signals completion at turn 2; GPT keeps running
+): Promise<{ turnsUsed: number; exitReason: string | null }> {
   const replies: Record<MockProvider, string[]> = {
     anthropic: [
       "Let me look into that.",
@@ -215,7 +205,7 @@ function simulateA2ATurns(
   for (let turn = 1; turn <= maxTurns; turn++) {
     const replyText = providerReplies[turn - 1] ?? "";
     turnsUsed = turn;
-    const [stop, reason] = termination.check({ turn, replyText, startedAt });
+    const [stop, reason] = await termination.check({ turn, replyText, startedAt });
     if (stop) {
       exitReason = reason;
       break;
@@ -228,42 +218,37 @@ function simulateA2ATurns(
 describe("Anthropic vs OpenAI — termination algebra behavioral proof", () => {
   const MAX = 5;
 
-  it("flat MaxIterations: both providers burn the full budget", () => {
+  it("flat MaxIterations: both providers burn the full budget", async () => {
     const cond = new MaxIterations(MAX);
-    const anthropic = simulateA2ATurns("anthropic", cond, MAX);
-    const openai = simulateA2ATurns("openai", cond, MAX);
+    const anthropic = await simulateA2ATurns("anthropic", cond, MAX);
+    const openai = await simulateA2ATurns("openai", cond, MAX);
 
     expect(anthropic.turnsUsed).toBe(MAX);
     expect(openai.turnsUsed).toBe(MAX);
-    // Both waste turns even after the task is naturally done
   });
 
-  it("TextMention('DONE').or(MaxIterations): Claude exits early, GPT hits the hard limit", () => {
+  it("TextMention('DONE').or(MaxIterations): Claude exits early, GPT hits the hard limit", async () => {
     const cond = new TextMention("DONE").or(new MaxIterations(MAX));
-    const anthropic = simulateA2ATurns("anthropic", cond, MAX);
-    const openai = simulateA2ATurns("openai", cond, MAX);
+    const anthropic = await simulateA2ATurns("anthropic", cond, MAX);
+    const openai = await simulateA2ATurns("openai", cond, MAX);
 
-    // Claude naturally signals completion at turn 2
     expect(anthropic.turnsUsed).toBe(2);
     expect(anthropic.exitReason).toBe("text_mention:DONE");
 
-    // GPT never signals, hits the hard limit at turn 5
     expect(openai.turnsUsed).toBe(MAX);
     expect(openai.exitReason).toBe("max_iterations");
 
-    // Claude used fewer turns — directly fewer API calls and lower cost
     expect(anthropic.turnsUsed).toBeLessThan(openai.turnsUsed);
   });
 
-  it("algebra saves turns proportionally to how naturally the model completes", () => {
+  it("algebra saves turns proportionally to how naturally the model completes", async () => {
     const cond = new TextMention("DONE").or(new MaxIterations(MAX));
-    const anthropic = simulateA2ATurns("anthropic", cond, MAX);
-    const openai = simulateA2ATurns("openai", cond, MAX);
+    const anthropic = await simulateA2ATurns("anthropic", cond, MAX);
+    const openai = await simulateA2ATurns("openai", cond, MAX);
 
     const savedTurns = openai.turnsUsed - anthropic.turnsUsed;
     const savingPct = (savedTurns / MAX) * 100;
 
-    // 3 turns saved out of 5 = 60% reduction for Claude
     expect(savedTurns).toBe(3);
     expect(savingPct).toBe(60);
   });
