@@ -160,6 +160,7 @@ vi.mock("../tasks/runtime-internal.js", () => ({
   listTasksForOwnerKey: hoisted.listTasksForOwnerKeyMock,
 }));
 
+const { emitAgentEvent, resetAgentEventsForTest } = await import("../infra/agent-events.js");
 const { isSpawnAcpAcceptedResult, spawnAcpDirect } = await import("./acp-spawn.js");
 type SpawnRequest = Parameters<typeof spawnAcpDirect>[0];
 type SpawnContext = Parameters<typeof spawnAcpDirect>[1];
@@ -665,6 +666,7 @@ describe("spawnAcpDirect", () => {
 
   afterEach(() => {
     sessionBindingServiceTesting.resetSessionBindingAdaptersForTests();
+    resetAgentEventsForTest();
   });
 
   it("spawns ACP session, binds a new thread, and dispatches initial task", async () => {
@@ -725,6 +727,88 @@ describe("spawnAcpDirect", () => {
     expect(transcriptCalls).toHaveLength(2);
     expect(transcriptCalls[0]?.threadId).toBeUndefined();
     expect(transcriptCalls[1]?.threadId).toBe("child-thread");
+  });
+
+  it("closes one-shot ACP runtime when its lifecycle ends", async () => {
+    const runtimeCloseMock = vi.fn().mockResolvedValue(undefined);
+    hoisted.initializeSessionMock.mockImplementationOnce(async (argsUnknown: unknown) => {
+      const args = argsUnknown as AcpInitializeSessionInput;
+      return {
+        runtime: {
+          close: runtimeCloseMock,
+        },
+        handle: {
+          sessionKey: args.sessionKey,
+          backend: "acpx",
+          runtimeSessionName: `${args.sessionKey}:runtime`,
+        },
+        meta: {
+          backend: "acpx",
+          agent: args.agent,
+          runtimeSessionName: `${args.sessionKey}:runtime`,
+          mode: args.mode,
+          state: "idle",
+          lastActivityAt: Date.now(),
+        },
+      };
+    });
+
+    const result = await spawnAcpDirect(createSpawnRequest({ mode: "run" }), {
+      agentSessionKey: "agent:main:main",
+    });
+    const accepted = expectAcceptedSpawn(result);
+
+    emitAgentEvent({
+      runId: accepted.runId,
+      stream: "lifecycle",
+      data: { phase: "end" },
+      sessionKey: accepted.childSessionKey,
+    });
+
+    await vi.waitFor(() => {
+      expect(runtimeCloseMock).toHaveBeenCalledWith(
+        expect.objectContaining({ reason: "run-complete" }),
+      );
+      expect(hoisted.closeSessionMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionKey: accepted.childSessionKey,
+          reason: "run-complete",
+          allowBackendUnavailable: true,
+          requireAcpSession: false,
+        }),
+      );
+    });
+  });
+
+  it("passes initialized runtime handle to cleanup when ACP dispatch fails", async () => {
+    hoisted.callGatewayMock.mockImplementation(async (argsUnknown: unknown) => {
+      const args = argsUnknown as { method?: string };
+      if (args.method === "sessions.patch") {
+        return { ok: true };
+      }
+      if (args.method === "agent") {
+        throw new Error("dispatch unavailable");
+      }
+      return {};
+    });
+
+    const result = await spawnAcpDirect(createSpawnRequest({ mode: "run" }), {
+      agentSessionKey: "agent:main:main",
+    });
+
+    const failed = expectFailedSpawn(result, "error");
+    expect(failed.errorCode).toBe("dispatch_failed");
+    expect(hoisted.cleanupFailedAcpSpawnMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        shouldDeleteSession: true,
+        deleteTranscript: true,
+        runtimeCloseHandle: expect.objectContaining({
+          handle: expect.objectContaining({
+            sessionKey: expect.stringMatching(/^agent:codex:acp:/),
+          }),
+        }),
+      }),
+    );
   });
 
   it("allows ACP resume IDs recorded for the requester session", async () => {
