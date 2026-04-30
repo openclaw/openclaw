@@ -13,7 +13,9 @@ import {
 } from "./backup-create.js";
 
 const tmpDirMocks = vi.hoisted(() => ({
-  resolvePreferredOpenClawTmpDir: vi.fn<() => string>(),
+  resolvePreferredOpenClawTmpDir: vi.fn<() => string>(() =>
+    process.platform === "win32" ? "C:\\openclaw-test-tmp" : "/tmp/openclaw-test",
+  ),
 }));
 vi.mock("./tmp-openclaw-dir.js", () => ({
   resolvePreferredOpenClawTmpDir: tmpDirMocks.resolvePreferredOpenClawTmpDir,
