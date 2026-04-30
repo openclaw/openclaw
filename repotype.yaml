@@ -20,6 +20,15 @@ files:
     requiredSections:
       - "#"  # Must have at least one heading
 
+  # Plugin-packaged skills (extensions/*/skills/*/SKILL.md) — same schema
+  - id: extension-skill-readme
+    glob: "extensions/*/skills/*/SKILL.md"
+    schema:
+      kind: frontmatter
+      schema: schemas/skill.frontmatter.schema.json
+    requiredSections:
+      - "#"
+
   # Package files
   - id: package-json
     glob: "packages/*/package.json"
