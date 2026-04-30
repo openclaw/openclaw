@@ -115,6 +115,11 @@ export async function hasCompletedBootstrapTurn(sessionFile: string): Promise<bo
         ) {
           return !compactedAfterLatestAssistant;
         }
+        // Already-configured workspaces may never write a full-bootstrap marker.
+        // A flushed assistant message is enough to prove a safe continuation turn.
+        if (record?.type === "message" && record.message?.role === "assistant") {
+          return !compactedAfterLatestAssistant;
+        }
       }
 
       return false;
