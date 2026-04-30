@@ -629,6 +629,50 @@ describe("cron cli", () => {
     expect(callGatewayFromCli.mock.calls.some((call) => call[0] === "cron.update")).toBe(true);
   });
 
+  it("paginates cron edit existing-session lookups for systemEvent warnings", async () => {
+    resetGatewayMock();
+    callGatewayFromCli.mockImplementation(
+      async (method: string, _opts: unknown, params?: unknown) => {
+        if (method === "cron.status") {
+          return { enabled: true };
+        }
+        if (method === "cron.list") {
+          const offset = (params as { offset?: number }).offset ?? 0;
+          if (offset === 0) {
+            return {
+              jobs: [createCronJob("first-page", "First Page")],
+              hasMore: true,
+              nextOffset: 200,
+            };
+          }
+          return {
+            jobs: [{ ...createCronJob("job-1", "Target Job"), sessionTarget: "main" }],
+            hasMore: false,
+            nextOffset: null,
+          };
+        }
+        return { ok: true, params };
+      },
+    );
+
+    const program = buildProgram();
+    const stderr = await captureStderrDuring(() =>
+      program.parseAsync(["cron", "edit", "job-1", "--system-event", "./run.sh"], {
+        from: "user",
+      }),
+    );
+
+    const listParams = callGatewayFromCli.mock.calls
+      .filter((call) => call[0] === "cron.list")
+      .map((call) => call[2]);
+    expect(listParams).toEqual([
+      { includeDisabled: true, limit: 200, offset: 0 },
+      { includeDisabled: true, limit: 200, offset: 200 },
+    ]);
+    expect(stderr).toContain("--system-event on --session main does not execute shell commands");
+    expect(callGatewayFromCli.mock.calls.some((call) => call[0] === "cron.update")).toBe(true);
+  });
+
   it("sets and clears lightContext on cron edit", async () => {
     const setPatch = await runCronEditAndGetPatch(["--light-context", "--message", "hello"]);
     expect(setPatch?.patch?.payload?.lightContext).toBe(true);
