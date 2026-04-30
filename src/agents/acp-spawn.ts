@@ -947,11 +947,10 @@ async function initializeAcpSpawnRuntime(params: {
     mode: params.runtimeMode,
     resumeSessionId: params.resumeSessionId,
     runtimeOptions:
-      params.model || params.thinking || params.runTimeoutSeconds
+      params.model || params.thinking
         ? {
             ...(params.model ? { model: params.model } : {}),
             ...(params.thinking ? { thinking: params.thinking } : {}),
-            ...(params.runTimeoutSeconds ? { timeoutSeconds: params.runTimeoutSeconds } : {}),
           }
         : undefined,
     cwd: params.cwd,
