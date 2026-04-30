@@ -34,6 +34,8 @@ function createBundledSkill(params: {
   bins: string[];
   os?: string[];
   installLabel: string;
+  primaryEnv?: string;
+  envMissing?: string[];
 }): {
   name: string;
   description: string;
@@ -56,7 +58,9 @@ function createBundledSkill(params: {
   missing: { bins: string[]; anyBins: string[]; env: string[]; config: string[]; os: string[] };
   configChecks: [];
   install: Array<{ id: string; kind: string; label: string; bins: string[] }>;
+  primaryEnv?: string;
 } {
+  const env = params.envMissing ?? [];
   return {
     name: params.name,
     description: params.description,
@@ -69,10 +73,11 @@ function createBundledSkill(params: {
     disabled: false,
     blockedByAllowlist: false,
     eligible: false,
-    requirements: { bins: params.bins, anyBins: [], env: [], config: [], os: params.os ?? [] },
-    missing: { bins: params.bins, anyBins: [], env: [], config: [], os: params.os ?? [] },
+    requirements: { bins: params.bins, anyBins: [], env, config: [], os: params.os ?? [] },
+    missing: { bins: params.bins, anyBins: [], env, config: [], os: params.os ?? [] },
     configChecks: [],
     install: [{ id: "brew", kind: "brew", label: params.installLabel, bins: params.bins }],
+    ...(params.primaryEnv ? { primaryEnv: params.primaryEnv } : {}),
   };
 }
 
@@ -185,5 +190,63 @@ describe("setupSkills", () => {
 
     const brewNote = notes.find((n) => n.title === "Homebrew recommended");
     expect(brewNote).toBeDefined();
+  });
+
+  it("does not prompt for an API key when the user skips installing the binary deps for that skill", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    mockMissingBrewStatus([
+      createBundledSkill({
+        name: "openai-whisper",
+        description: "Local whisper CLI (no API key)",
+        bins: ["whisper"],
+        installLabel: "Install OpenAI Whisper (brew)",
+      }),
+      createBundledSkill({
+        name: "openai-whisper-api",
+        description: "OpenAI Whisper API",
+        bins: ["curl"],
+        installLabel: "Install curl (brew)",
+        primaryEnv: "OPENAI_API_KEY",
+        envMissing: ["OPENAI_API_KEY"],
+      }),
+    ]);
+
+    const { prompter } = createPrompter({ multiselect: ["openai-whisper"] });
+    await setupSkills({} as OpenClawConfig, "/tmp/ws", runtime, prompter);
+
+    const confirmCalls = (
+      prompter.confirm as unknown as { mock: { calls: Array<[{ message: string }]> } }
+    ).mock.calls;
+    const askedForApiKey = confirmCalls.some(([arg]) => arg.message.includes("Set OPENAI_API_KEY"));
+    expect(askedForApiKey).toBe(false);
+  });
+
+  it("still prompts for an API key when the user opts to install the matching skill", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    mockMissingBrewStatus([
+      createBundledSkill({
+        name: "openai-whisper-api",
+        description: "OpenAI Whisper API",
+        bins: ["curl"],
+        installLabel: "Install curl (brew)",
+        primaryEnv: "OPENAI_API_KEY",
+        envMissing: ["OPENAI_API_KEY"],
+      }),
+    ]);
+
+    const { prompter } = createPrompter({ multiselect: ["openai-whisper-api"] });
+    await setupSkills({} as OpenClawConfig, "/tmp/ws", runtime, prompter);
+
+    const confirmCalls = (
+      prompter.confirm as unknown as { mock: { calls: Array<[{ message: string }]> } }
+    ).mock.calls;
+    const askedForApiKey = confirmCalls.some(([arg]) => arg.message.includes("Set OPENAI_API_KEY"));
+    expect(askedForApiKey).toBe(true);
   });
 });
