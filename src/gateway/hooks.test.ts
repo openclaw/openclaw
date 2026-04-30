@@ -278,14 +278,14 @@ describe("gateway hooks helpers", () => {
     expect(
       resolveHookSessionKey({
         hooksConfig: resolved,
-        source: "mapping",
+        source: "mapping-static",
         sessionKey: "agent:main:acp:svc",
       }),
     ).toMatchObject({ ok: false });
     expect(
       resolveHookSessionKey({
         hooksConfig: resolved,
-        source: "mapping",
+        source: "mapping-static",
         sessionKey: "cron:daily",
       }),
     ).toMatchObject({ ok: false });

@@ -161,7 +161,10 @@ describe("hooks mapping", () => {
     expect(mappings[0]?.matchPath).toBe("gmail");
   });
 
-  it("rejects static mapping sessionKey targeting reserved internal namespaces", () => {
+  it.each([
+    "agent:main:subagent:worker",
+    "agent:main:subagent:{{worker",
+  ])("rejects static mapping sessionKey targeting reserved internal namespace %s", (sessionKey) => {
     expect(() =>
       resolveHookMappings({
         mappings: [
@@ -170,7 +173,7 @@ describe("hooks mapping", () => {
             match: { path: "gmail" },
             action: "agent",
             messageTemplate: "Subject: {{messages[0].subject}}",
-            sessionKey: "agent:main:subagent:worker",
+            sessionKey,
           },
         ],
       }),

@@ -200,7 +200,7 @@ function normalizeHookMapping(
   const action = mapping.action ?? "agent";
   const wakeMode = mapping.wakeMode ?? "now";
   const sessionKey = mapping.sessionKey?.trim() || undefined;
-  if (sessionKey && !sessionKey.includes("{{")) {
+  if (sessionKey && !hasHookTemplateExpressions(sessionKey)) {
     const reservedSessionPrefix = resolveReservedHookSessionKeyPrefix(sessionKey);
     if (reservedSessionPrefix) {
       throw new Error(
