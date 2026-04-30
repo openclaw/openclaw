@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import type {
   OpenClawPluginNodeInvokePolicy,
   OpenClawPluginNodeInvokePolicyContext,
@@ -10,6 +11,8 @@ const FILE_FETCH_DEFAULT_MAX_BYTES = 8 * 1024 * 1024;
 const FILE_FETCH_HARD_MAX_BYTES = 16 * 1024 * 1024;
 const DIR_FETCH_DEFAULT_MAX_BYTES = 8 * 1024 * 1024;
 const DIR_FETCH_HARD_MAX_BYTES = 16 * 1024 * 1024;
+const DIR_FETCH_ARCHIVE_LIST_TIMEOUT_MS = 30_000;
+const DIR_FETCH_ARCHIVE_LIST_MAX_OUTPUT_BYTES = 32 * 1024 * 1024;
 
 type FileTransferCommand = "file.fetch" | "dir.list" | "dir.fetch" | "file.write";
 
@@ -280,6 +283,215 @@ function validateDirFetchPreflightEntry(
   return { ok: true };
 }
 
+function normalizeTarEntryPath(entry: string): string | null {
+  const normalized = entry.replace(/\\/gu, "/").replace(/^\.\//u, "").replace(/\/$/u, "");
+  return normalized.length > 0 ? normalized : null;
+}
+
+async function listDirFetchArchiveEntries(
+  payload: Record<string, unknown> | null,
+): Promise<{ ok: true; entries: string[] } | { ok: false; code: string; reason: string }> {
+  const tarBase64 = typeof payload?.tarBase64 === "string" ? payload.tarBase64 : "";
+  if (!tarBase64) {
+    return {
+      ok: false,
+      code: "ARCHIVE_ENTRIES_MISSING",
+      reason: "dir.fetch archive did not return tarBase64",
+    };
+  }
+  const tarBuffer = Buffer.from(tarBase64, "base64");
+  return await new Promise<
+    { ok: true; entries: string[] } | { ok: false; code: string; reason: string }
+  >((resolve) => {
+    const tarBin = process.platform !== "win32" ? "/usr/bin/tar" : "tar";
+    const child = spawn(tarBin, ["-tzf", "-"], { stdio: ["pipe", "pipe", "pipe"] });
+    let stdout = "";
+    let stderr = "";
+    let aborted = false;
+    const watchdog = setTimeout(() => {
+      aborted = true;
+      try {
+        child.kill("SIGKILL");
+      } catch {
+        /* gone */
+      }
+      resolve({
+        ok: false,
+        code: "ARCHIVE_ENTRIES_UNREADABLE",
+        reason: "tar -tzf timed out",
+      });
+    }, DIR_FETCH_ARCHIVE_LIST_TIMEOUT_MS);
+    child.stdout.on("data", (chunk: Buffer) => {
+      stdout += chunk.toString();
+      if (stdout.length > DIR_FETCH_ARCHIVE_LIST_MAX_OUTPUT_BYTES) {
+        aborted = true;
+        clearTimeout(watchdog);
+        try {
+          child.kill("SIGKILL");
+        } catch {
+          /* gone */
+        }
+        resolve({
+          ok: false,
+          code: "ARCHIVE_ENTRIES_UNREADABLE",
+          reason: "tar -tzf output too large",
+        });
+      }
+    });
+    child.stderr.on("data", (chunk: Buffer) => {
+      stderr += chunk.toString();
+    });
+    child.on("close", (code) => {
+      clearTimeout(watchdog);
+      if (aborted) {
+        return;
+      }
+      if (code !== 0) {
+        resolve({
+          ok: false,
+          code: "ARCHIVE_ENTRIES_UNREADABLE",
+          reason: `tar -tzf exited ${code}: ${stderr.slice(0, 200)}`,
+        });
+        return;
+      }
+      resolve({
+        ok: true,
+        entries: stdout
+          .split("\n")
+          .map(normalizeTarEntryPath)
+          .filter((entry): entry is string => entry !== null),
+      });
+    });
+    child.on("error", (error) => {
+      clearTimeout(watchdog);
+      if (!aborted) {
+        resolve({
+          ok: false,
+          code: "ARCHIVE_ENTRIES_UNREADABLE",
+          reason: `tar -tzf error: ${String(error)}`,
+        });
+      }
+    });
+    child.stdin.end(tarBuffer);
+  });
+}
+
+async function validateDirFetchEntries(input: {
+  ctx: OpenClawPluginNodeInvokePolicyContext;
+  op: FileTransferAuditOp;
+  requestedPath: string;
+  canonicalPath: string;
+  entries: unknown;
+  startedAt: number;
+  phase: "preflight" | "archive";
+}): Promise<OpenClawPluginNodeInvokePolicyResult | null> {
+  const nodeDisplayName = input.ctx.node?.displayName;
+  const missingCode =
+    input.phase === "preflight" ? "PREFLIGHT_ENTRIES_MISSING" : "ARCHIVE_ENTRIES_MISSING";
+  const invalidCode =
+    input.phase === "preflight" ? "PREFLIGHT_ENTRY_INVALID" : "ARCHIVE_ENTRY_INVALID";
+  if (!Array.isArray(input.entries)) {
+    await appendFileTransferAudit({
+      op: input.op,
+      nodeId: input.ctx.nodeId,
+      nodeDisplayName,
+      requestedPath: input.requestedPath,
+      canonicalPath: input.canonicalPath,
+      decision: "error",
+      errorCode: missingCode,
+      reason: `dir.fetch ${input.phase} did not return entries`,
+      durationMs: Date.now() - input.startedAt,
+    });
+    return policyDeniedResult({
+      op: input.op,
+      code: missingCode,
+      message: `dir.fetch ${input.phase} did not return entries; refusing archive transfer`,
+      details: { path: input.canonicalPath },
+    });
+  }
+
+  const entries: string[] = [];
+  for (const entry of input.entries) {
+    if (typeof entry !== "string" || entry.length === 0) {
+      await appendFileTransferAudit({
+        op: input.op,
+        nodeId: input.ctx.nodeId,
+        nodeDisplayName,
+        requestedPath: input.requestedPath,
+        canonicalPath: input.canonicalPath,
+        decision: "denied:policy",
+        errorCode: invalidCode,
+        reason: "entry is not a non-empty string",
+        durationMs: Date.now() - input.startedAt,
+      });
+      return policyDeniedResult({
+        op: input.op,
+        code: invalidCode,
+        message: `directory ${input.phase} entry is invalid: entry is not a non-empty string`,
+        details: { path: input.canonicalPath, reason: "entry is not a non-empty string" },
+      });
+    }
+    const entryValidation = validateDirFetchPreflightEntry(entry);
+    if (!entryValidation.ok) {
+      const candidate = joinRemotePolicyPath(input.canonicalPath, entry);
+      await appendFileTransferAudit({
+        op: input.op,
+        nodeId: input.ctx.nodeId,
+        nodeDisplayName,
+        requestedPath: input.requestedPath,
+        canonicalPath: candidate,
+        decision: "denied:policy",
+        errorCode: invalidCode,
+        reason: entryValidation.reason,
+        durationMs: Date.now() - input.startedAt,
+      });
+      return policyDeniedResult({
+        op: input.op,
+        code: invalidCode,
+        message: `directory ${input.phase} entry ${entry} is invalid: ${entryValidation.reason}`,
+        details: { path: candidate, reason: entryValidation.reason },
+      });
+    }
+    entries.push(entry);
+  }
+
+  const candidates = [
+    input.canonicalPath,
+    ...entries.map((entry) => joinRemotePolicyPath(input.canonicalPath, entry)),
+  ];
+  for (const candidate of candidates) {
+    const policy = evaluateFilePolicy({
+      nodeId: input.ctx.nodeId,
+      nodeDisplayName,
+      kind: "read",
+      path: candidate,
+      pluginConfig: input.ctx.pluginConfig,
+    });
+    if (policy.ok) {
+      continue;
+    }
+    await appendFileTransferAudit({
+      op: input.op,
+      nodeId: input.ctx.nodeId,
+      nodeDisplayName,
+      requestedPath: input.requestedPath,
+      canonicalPath: candidate,
+      decision: "denied:policy",
+      errorCode: policy.code,
+      reason: policy.reason,
+      durationMs: Date.now() - input.startedAt,
+    });
+    return policyDeniedResult({
+      op: input.op,
+      code: "PATH_POLICY_DENIED",
+      message: `directory ${input.phase} entry ${candidate} is not allowed by policy: ${policy.reason}`,
+      details: { path: candidate, reason: policy.reason },
+    });
+  }
+
+  return null;
+}
+
 function policyDeniedResult(input: {
   op: FileTransferAuditOp;
   code: string;
@@ -522,104 +734,15 @@ async function runDirFetchPreflight(input: {
     payload && typeof payload.path === "string" && payload.path
       ? payload.path
       : input.requestedPath;
-  if (!Array.isArray(payload?.entries)) {
-    await appendFileTransferAudit({
-      op: input.op,
-      nodeId: input.ctx.nodeId,
-      nodeDisplayName,
-      requestedPath: input.requestedPath,
-      canonicalPath,
-      decision: "error",
-      errorCode: "PREFLIGHT_ENTRIES_MISSING",
-      reason: "dir.fetch preflight did not return entries",
-      durationMs: Date.now() - input.startedAt,
-    });
-    return policyDeniedResult({
-      op: input.op,
-      code: "PREFLIGHT_ENTRIES_MISSING",
-      message: "dir.fetch preflight did not return entries; refusing archive transfer",
-      details: { path: canonicalPath },
-    });
-  }
-  const entries: string[] = [];
-  for (const entry of payload.entries) {
-    if (typeof entry !== "string" || entry.length === 0) {
-      await appendFileTransferAudit({
-        op: input.op,
-        nodeId: input.ctx.nodeId,
-        nodeDisplayName,
-        requestedPath: input.requestedPath,
-        canonicalPath,
-        decision: "denied:policy",
-        errorCode: "PREFLIGHT_ENTRY_INVALID",
-        reason: "entry is not a non-empty string",
-        durationMs: Date.now() - input.startedAt,
-      });
-      return policyDeniedResult({
-        op: input.op,
-        code: "PREFLIGHT_ENTRY_INVALID",
-        message: "directory entry is invalid: entry is not a non-empty string",
-        details: { path: canonicalPath, reason: "entry is not a non-empty string" },
-      });
-    }
-    const entryValidation = validateDirFetchPreflightEntry(entry);
-    if (!entryValidation.ok) {
-      const candidate = joinRemotePolicyPath(canonicalPath, entry);
-      await appendFileTransferAudit({
-        op: input.op,
-        nodeId: input.ctx.nodeId,
-        nodeDisplayName,
-        requestedPath: input.requestedPath,
-        canonicalPath: candidate,
-        decision: "denied:policy",
-        errorCode: "PREFLIGHT_ENTRY_INVALID",
-        reason: entryValidation.reason,
-        durationMs: Date.now() - input.startedAt,
-      });
-      return policyDeniedResult({
-        op: input.op,
-        code: "PREFLIGHT_ENTRY_INVALID",
-        message: `directory entry ${entry} is invalid: ${entryValidation.reason}`,
-        details: { path: candidate, reason: entryValidation.reason },
-      });
-    }
-    entries.push(entry);
-  }
-  const candidates = [
+  return await validateDirFetchEntries({
+    ctx: input.ctx,
+    op: input.op,
+    requestedPath: input.requestedPath,
     canonicalPath,
-    ...entries.map((entry) => joinRemotePolicyPath(canonicalPath, entry)),
-  ];
-  for (const candidate of candidates) {
-    const policy = evaluateFilePolicy({
-      nodeId: input.ctx.nodeId,
-      nodeDisplayName,
-      kind: "read",
-      path: candidate,
-      pluginConfig: input.ctx.pluginConfig,
-    });
-    if (policy.ok) {
-      continue;
-    }
-    await appendFileTransferAudit({
-      op: input.op,
-      nodeId: input.ctx.nodeId,
-      nodeDisplayName,
-      requestedPath: input.requestedPath,
-      canonicalPath: candidate,
-      decision: "denied:policy",
-      errorCode: policy.code,
-      reason: policy.reason,
-      durationMs: Date.now() - input.startedAt,
-    });
-    return policyDeniedResult({
-      op: input.op,
-      code: "PATH_POLICY_DENIED",
-      message: `directory entry ${candidate} is not allowed by policy: ${policy.reason}`,
-      details: { path: candidate, reason: policy.reason },
-    });
-  }
-
-  return null;
+    entries: payload?.entries,
+    startedAt: input.startedAt,
+    phase: "preflight",
+  });
 }
 
 async function handleFileTransferInvoke(
@@ -755,6 +878,40 @@ async function handleFileTransferInvoke(
         code: "SYMLINK_TARGET_DENIED",
         message: `${op} SYMLINK_TARGET_DENIED: requested path resolved to ${canonicalPath} which is not allowed by policy`,
       };
+    }
+  }
+  if (command === "dir.fetch") {
+    const archiveEntries = await listDirFetchArchiveEntries(payload);
+    if (!archiveEntries.ok) {
+      await appendFileTransferAudit({
+        op,
+        nodeId: ctx.nodeId,
+        nodeDisplayName,
+        requestedPath,
+        canonicalPath,
+        decision: "error",
+        errorCode: archiveEntries.code,
+        reason: archiveEntries.reason,
+        durationMs: Date.now() - startedAt,
+      });
+      return policyDeniedResult({
+        op,
+        code: archiveEntries.code,
+        message: `${archiveEntries.reason}; refusing archive transfer`,
+        details: { path: canonicalPath, reason: archiveEntries.reason },
+      });
+    }
+    const archiveDeny = await validateDirFetchEntries({
+      ctx,
+      op,
+      requestedPath,
+      canonicalPath,
+      entries: archiveEntries.entries,
+      startedAt,
+      phase: "archive",
+    });
+    if (archiveDeny) {
+      return archiveDeny;
     }
   }
 

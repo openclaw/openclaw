@@ -88,10 +88,10 @@ async function preflightDu(dirPath: string, maxBytes: number): Promise<boolean> 
   });
 }
 
-async function countTarEntries(tarBuffer: Buffer): Promise<number> {
+async function listTarEntries(tarBuffer: Buffer): Promise<string[]> {
   // Async spawn so a slow `tar -tzf` doesn't park the node-host event
   // loop for up to 10s. Other in-flight requests continue to be served.
-  return new Promise((resolve) => {
+  return new Promise<string[]>((resolve) => {
     const child = spawn("tar", ["-tzf", "-"], { stdio: ["pipe", "pipe", "ignore"] });
     let stdoutBuf = "";
     let aborted = false;
@@ -102,7 +102,7 @@ async function countTarEntries(tarBuffer: Buffer): Promise<number> {
       } catch {
         /* gone */
       }
-      resolve(0);
+      resolve([]);
     }, 10_000);
     child.stdout.on("data", (chunk: Buffer) => {
       stdoutBuf += chunk.toString();
@@ -115,7 +115,7 @@ async function countTarEntries(tarBuffer: Buffer): Promise<number> {
           /* gone */
         }
         clearTimeout(watchdog);
-        resolve(0);
+        resolve([]);
       }
     });
     child.on("close", (code) => {
@@ -124,16 +124,19 @@ async function countTarEntries(tarBuffer: Buffer): Promise<number> {
         return;
       }
       if (code !== 0) {
-        resolve(0);
+        resolve([]);
         return;
       }
-      const lines = stdoutBuf.split("\n").filter((l) => l.trim().length > 0 && l !== "./");
-      resolve(lines.length);
+      const lines = stdoutBuf
+        .split("\n")
+        .map((line) => line.replace(/\\/gu, "/").replace(/^\.\//u, "").replace(/\/$/u, ""))
+        .filter((line) => line.length > 0);
+      resolve(lines);
     });
     child.on("error", () => {
       clearTimeout(watchdog);
       if (!aborted) {
-        resolve(0);
+        resolve([]);
       }
     });
     child.stdin.end(tarBuffer);
@@ -364,7 +367,7 @@ export async function handleDirFetch(params: DirFetchParams): Promise<DirFetchRe
   const sha256 = crypto.createHash("sha256").update(tarBuffer).digest("hex");
   const tarBase64 = tarBuffer.toString("base64");
   const tarBytes = tarBuffer.byteLength;
-  const fileCount = await countTarEntries(tarBuffer);
+  const entries = await listTarEntries(tarBuffer);
 
   return {
     ok: true,
@@ -372,6 +375,7 @@ export async function handleDirFetch(params: DirFetchParams): Promise<DirFetchRe
     tarBase64,
     tarBytes,
     sha256,
-    fileCount,
+    fileCount: entries.length,
+    entries,
   };
 }

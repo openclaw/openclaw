@@ -110,6 +110,8 @@ describe("handleDirFetch — happy path", () => {
     // file count covers the regular files we created (3); BSD tar may also
     // list directory entries, so be generous.
     expect(r.fileCount).toBeGreaterThanOrEqual(3);
+    expect(r.entries).toEqual(expect.arrayContaining(["a.txt", "b.txt", "sub", "sub/c.txt"]));
+    expect(r.fileCount).toBe(r.entries?.length);
   });
 });
 

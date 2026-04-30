@@ -1,5 +1,9 @@
+import { spawn } from "node:child_process";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import type { OpenClawPluginNodeInvokePolicyContext } from "openclaw/plugin-sdk/plugin-entry";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createFileTransferNodeInvokePolicy } from "./node-invoke-policy.js";
 
 vi.mock("./audit.js", () => ({
@@ -13,6 +17,44 @@ vi.mock("./policy.js", async (importOriginal) => {
     persistAllowAlways: vi.fn(async () => undefined),
   };
 });
+
+const tmpRoots: string[] = [];
+const testUnlessWindows = process.platform === "win32" ? it.skip : it;
+
+afterEach(async () => {
+  await Promise.all(tmpRoots.map((tmpRoot) => fs.rm(tmpRoot, { recursive: true, force: true })));
+  tmpRoots.length = 0;
+});
+
+async function tarEntries(entries: Record<string, string>): Promise<string> {
+  const tmpRoot = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "node-policy-tar-")));
+  tmpRoots.push(tmpRoot);
+  for (const [relPath, contents] of Object.entries(entries)) {
+    const absPath = path.join(tmpRoot, relPath);
+    await fs.mkdir(path.dirname(absPath), { recursive: true });
+    await fs.writeFile(absPath, contents);
+  }
+  return await new Promise<string>((resolve, reject) => {
+    const tarBin = process.platform !== "win32" ? "/usr/bin/tar" : "tar";
+    const child = spawn(tarBin, ["-czf", "-", "-C", tmpRoot, "."], {
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    const chunks: Buffer[] = [];
+    let stderr = "";
+    child.stdout.on("data", (chunk: Buffer) => chunks.push(chunk));
+    child.stderr.on("data", (chunk: Buffer) => {
+      stderr += chunk.toString();
+    });
+    child.on("close", (code) => {
+      if (code !== 0) {
+        reject(new Error(`tar exited ${code}: ${stderr}`));
+        return;
+      }
+      resolve(Buffer.concat(chunks).toString("base64"));
+    });
+    child.on("error", reject);
+  });
+}
 
 function createCtx(overrides: {
   command?: string;
@@ -403,11 +445,114 @@ describe("file-transfer node invoke policy", () => {
     expect(invokeNode).toHaveBeenCalledTimes(1);
   });
 
-  it("continues dir.fetch after preflight without forwarding caller preflightOnly", async () => {
+  testUnlessWindows(
+    "continues dir.fetch after preflight without forwarding caller preflightOnly",
+    async () => {
+      const policy = createFileTransferNodeInvokePolicy();
+      const tarBase64 = await tarEntries({
+        "a.txt": "a",
+        "sub/b.txt": "b",
+      });
+      const { ctx, invokeNode } = createCtx({
+        command: "dir.fetch",
+        params: { path: "/tmp/project", preflightOnly: true },
+      });
+      invokeNode
+        .mockResolvedValueOnce({
+          ok: true,
+          payload: {
+            ok: true,
+            path: "/tmp/project",
+            entries: ["a.txt", "sub/b.txt"],
+            fileCount: 2,
+            preflightOnly: true,
+          },
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          payload: {
+            ok: true,
+            path: "/tmp/project",
+            tarBase64,
+            tarBytes: 7,
+            sha256: "c".repeat(64),
+            fileCount: 2,
+            entries: ["a.txt", "sub/b.txt"],
+          },
+        });
+
+      const result = await policy.handle(ctx);
+
+      expect(result).toMatchObject({ ok: true });
+      expect(invokeNode).toHaveBeenCalledTimes(2);
+      expect(invokeNode).toHaveBeenNthCalledWith(1, {
+        params: expect.objectContaining({ path: "/tmp/project", preflightOnly: true }),
+      });
+      expect(invokeNode).toHaveBeenNthCalledWith(2, {
+        params: expect.not.objectContaining({ preflightOnly: true }),
+      });
+    },
+  );
+
+  testUnlessWindows(
+    "checks final dir.fetch archive entries before returning the archive",
+    async () => {
+      const policy = createFileTransferNodeInvokePolicy();
+      const tarBase64 = await tarEntries({
+        "ok.txt": "ok",
+        ".ssh/id_rsa": "secret",
+      });
+      const { ctx, invokeNode } = createCtx({
+        command: "dir.fetch",
+        params: { path: "/home/me" },
+        pluginConfig: {
+          nodes: {
+            "node-1": {
+              allowReadPaths: ["/home/me", "/home/me/**"],
+              denyPaths: ["**/.ssh/**"],
+            },
+          },
+        },
+      });
+      invokeNode
+        .mockResolvedValueOnce({
+          ok: true,
+          payload: {
+            ok: true,
+            path: "/home/me",
+            entries: ["ok.txt"],
+            fileCount: 1,
+            preflightOnly: true,
+          },
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          payload: {
+            ok: true,
+            path: "/home/me",
+            tarBase64,
+            tarBytes: 7,
+            sha256: "c".repeat(64),
+            fileCount: 2,
+          },
+        });
+
+      const result = await policy.handle(ctx);
+
+      expect(result).toMatchObject({
+        ok: false,
+        code: "PATH_POLICY_DENIED",
+        details: { path: "/home/me/.ssh/id_rsa" },
+      });
+      expect(invokeNode).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it("rejects final dir.fetch archive responses without readable archive entries", async () => {
     const policy = createFileTransferNodeInvokePolicy();
     const { ctx, invokeNode } = createCtx({
       command: "dir.fetch",
-      params: { path: "/tmp/project", preflightOnly: true },
+      params: { path: "/tmp/project" },
     });
     invokeNode
       .mockResolvedValueOnce({
@@ -415,8 +560,8 @@ describe("file-transfer node invoke policy", () => {
         payload: {
           ok: true,
           path: "/tmp/project",
-          entries: ["a.txt", "sub/b.txt"],
-          fileCount: 2,
+          entries: ["a.txt"],
+          fileCount: 1,
           preflightOnly: true,
         },
       })
@@ -425,22 +570,15 @@ describe("file-transfer node invoke policy", () => {
         payload: {
           ok: true,
           path: "/tmp/project",
-          tarBase64: Buffer.from("archive").toString("base64"),
           tarBytes: 7,
           sha256: "c".repeat(64),
-          fileCount: 2,
+          fileCount: 1,
         },
       });
 
     const result = await policy.handle(ctx);
 
-    expect(result).toMatchObject({ ok: true });
+    expect(result).toMatchObject({ ok: false, code: "ARCHIVE_ENTRIES_MISSING" });
     expect(invokeNode).toHaveBeenCalledTimes(2);
-    expect(invokeNode).toHaveBeenNthCalledWith(1, {
-      params: expect.objectContaining({ path: "/tmp/project", preflightOnly: true }),
-    });
-    expect(invokeNode).toHaveBeenNthCalledWith(2, {
-      params: expect.not.objectContaining({ preflightOnly: true }),
-    });
   });
 });
