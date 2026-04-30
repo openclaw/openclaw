@@ -7,6 +7,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Auto-reply/group chats: fall back to automatic source delivery when a channel precomputes message-tool-only replies but the `message` tool is unavailable, so Discord/Slack-style group turns do not silently complete without a visible reply. Fixes #74868. Thanks @kagura-agent.
+- Browser/gateway: share one browser control runtime across the HTTP control server and `browser.request`, and refresh browser profile config from the source snapshot, so CLI status/start honors configured `browser.executablePath`, `headless`, and `noSandbox` instead of falling back to stale auto-detection. Fixes #75087; repairs #73617. Thanks @civiltox and @martingarramon.
 - Agents/subagents: bound automatic orphan recovery with persisted recovery attempts and a wedged-session tombstone, and teach task maintenance/doctor to reconcile those sessions so restart loops no longer require manual `sessions.json` surgery. Fixes #74864. Thanks @solosage1.
 - Plugins/runtime-deps: keep bundled provider policy config loading from staging plugin runtime dependencies, so config reads no longer fail on locked-down `/var/lib/openclaw/plugin-runtime-deps` directories. Fixes #74971. Thanks @eurojojo.
 - Memory/runtime-deps: retain the native `node-llama-cpp` runtime only when local memory search is configured, so packaged installs can repair local embeddings without relying on unreachable global npm installs. Fixes #74777. Thanks @LLagoon3.
