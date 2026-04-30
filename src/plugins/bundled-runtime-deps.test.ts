@@ -3198,6 +3198,58 @@ describe("ensureBundledPluginRuntimeDeps", () => {
     expect(installRoot).not.toBe(pluginRoot);
   });
 
+  it("repairs package-level mirrors when an installed package entry file is missing", () => {
+    const packageRoot = makeTempDir();
+    const stageDir = makeTempDir();
+    fs.writeFileSync(
+      path.join(packageRoot, "package.json"),
+      JSON.stringify({
+        name: "openclaw",
+        version: "2026.4.27",
+        dependencies: { ajv: "8.20.0" },
+        openclaw: {
+          bundle: {
+            mirroredRootRuntimeDependencies: ["ajv"],
+          },
+        },
+      }),
+    );
+    const pluginRoot = writeBundledPluginPackage({
+      packageRoot,
+      pluginId: "browser",
+      deps: {},
+      enabledByDefault: true,
+    });
+    const env = { OPENCLAW_PLUGIN_STAGE_DIR: stageDir };
+    const installRoot = resolveBundledRuntimeDependencyInstallRoot(pluginRoot, { env });
+    writeGeneratedRuntimeDepsManifest(installRoot, ["ajv@8.20.0"]);
+    const ajvRoot = path.join(installRoot, "node_modules", "ajv");
+    fs.mkdirSync(ajvRoot, { recursive: true });
+    fs.writeFileSync(
+      path.join(ajvRoot, "package.json"),
+      JSON.stringify({ name: "ajv", version: "8.20.0", main: "dist/ajv.js" }),
+    );
+
+    const calls: BundledRuntimeDepsInstallParams[] = [];
+    const result = ensureBundledPluginRuntimeDeps({
+      env,
+      pluginId: "browser",
+      pluginRoot,
+      installDeps: (params) => {
+        calls.push(params);
+      },
+    });
+
+    expect(result.installedSpecs).toEqual(["ajv@8.20.0"]);
+    expect(calls).toEqual([
+      {
+        installRoot,
+        missingSpecs: ["ajv@8.20.0"],
+        installSpecs: ["ajv@8.20.0"],
+      },
+    ]);
+  });
+
   it("mirrors sqlite-vec into the packaged default memory runtime deps", () => {
     const packageRoot = makeTempDir();
     fs.writeFileSync(
