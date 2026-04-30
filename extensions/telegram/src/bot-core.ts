@@ -185,6 +185,9 @@ const TELEGRAM_TIMEOUT_FALLBACK_METHODS = new Set([
   "setmycommands",
   "setwebhook",
 ]);
+const TELEGRAM_SEND_CHAT_ACTION_COALESCE_MS = 4_500;
+const TELEGRAM_API_OK_TRUE = { ok: true as const, result: true };
+
 function shouldRetryTimedOutTelegramControlRequest(method: string | null): boolean {
   return method !== null && TELEGRAM_TIMEOUT_FALLBACK_METHODS.has(method);
 }
@@ -379,6 +382,44 @@ export function createTelegramBotCore(
 
   const bot = new botRuntime.Bot(opts.token, client ? { client } : undefined);
   bot.api.config.use(botRuntime.apiThrottler());
+  const activeChatActions = new Map<string, { inFlight: boolean; lastCompletedAt: number }>();
+  bot.api.config.use(async (prev, method, payload, signal) => {
+    if (method !== "sendChatAction" || !payload || typeof payload !== "object") {
+      return await prev(method, payload, signal);
+    }
+    const record = payload as Record<string, unknown>;
+    const chatId = record.chat_id;
+    if (typeof chatId !== "string" && typeof chatId !== "number") {
+      return await prev(method, payload, signal);
+    }
+    const action = typeof record.action === "string" ? record.action : "typing";
+    const threadId =
+      typeof record.message_thread_id === "string" || typeof record.message_thread_id === "number"
+        ? record.message_thread_id
+        : "root";
+    const key = `${chatId}:${threadId}:${action}`;
+    const now = Date.now();
+    const existing = activeChatActions.get(key);
+    if (
+      existing &&
+      (existing.inFlight || now - existing.lastCompletedAt < TELEGRAM_SEND_CHAT_ACTION_COALESCE_MS)
+    ) {
+      runtime.log?.(
+        `[telegram/latency] dropped sendChatAction chat=${chatId} thread=${threadId} action=${action} reason=${
+          existing.inFlight ? "in-flight" : "coalesced"
+        }`,
+      );
+      return TELEGRAM_API_OK_TRUE as Awaited<ReturnType<typeof prev>>;
+    }
+    const state = { inFlight: true, lastCompletedAt: existing?.lastCompletedAt ?? 0 };
+    activeChatActions.set(key, state);
+    try {
+      return await prev(method, payload, signal);
+    } finally {
+      state.inFlight = false;
+      state.lastCompletedAt = Date.now();
+    }
+  });
   // Catch all errors from bot middleware to prevent unhandled rejections
   bot.catch((err) => {
     runtime.error?.(danger(`telegram bot error: ${formatUncaughtError(err)}`));

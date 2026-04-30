@@ -182,6 +182,40 @@ describe("createTelegramBot", () => {
     expect(useSpy).toHaveBeenCalledWith("throttler");
   });
 
+  it("keeps duplicate Telegram chat actions out of the throttler queue", async () => {
+    createTelegramBot({ token: "tok" });
+    const chatActionTransformer = useSpy.mock.calls
+      .map(([arg]) => arg)
+      .find(
+        (arg): arg is Extract<typeof arg, (...args: never[]) => unknown> =>
+          typeof arg === "function",
+      );
+    expect(chatActionTransformer).toBeDefined();
+    if (!chatActionTransformer) {
+      return;
+    }
+
+    let releaseFirst!: (value: { ok: true; result: true }) => void;
+    const firstCall = new Promise<{ ok: true; result: true }>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const prev = vi.fn(() => firstCall);
+    const payload = {
+      chat_id: -1003826723328,
+      message_thread_id: 22684,
+      action: "typing",
+    };
+
+    const first = chatActionTransformer(prev, "sendChatAction", payload, undefined);
+    const second = await chatActionTransformer(prev, "sendChatAction", payload, undefined);
+
+    expect(prev).toHaveBeenCalledTimes(1);
+    expect(second).toEqual({ ok: true, result: true });
+
+    releaseFirst({ ok: true, result: true });
+    await first;
+  });
+
   it("logs middleware errors through grammY catch without rethrowing", () => {
     const runtime = {
       error: vi.fn(),
