@@ -47,9 +47,9 @@ import {
   type GetPluginCommandSpecs,
 } from "./provider.commands.js";
 import { logDiscordResolvedConfig } from "./provider.config-log.js";
+import { formatDiscordDeployErrorDetails } from "./provider.deploy-errors.js";
 import {
   clearDiscordNativeCommands,
-  formatDiscordDeployErrorDetails,
   runDiscordCommandDeployInBackground,
 } from "./provider.deploy.js";
 import { createDiscordProviderInteractionSurface } from "./provider.interactions.js";

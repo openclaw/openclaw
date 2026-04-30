@@ -797,6 +797,52 @@ describe("monitorDiscordProvider", () => {
     ).toBe(true);
   });
 
+  it("logs repeated native command deploy rate limits as one concise warning", async () => {
+    const runtime = baseRuntime();
+    const rateLimitError = createRateLimitError(
+      new Response(null, {
+        status: 429,
+      }),
+      {
+        message: "You are being rate limited.",
+        retry_after: 0,
+        global: false,
+      },
+    );
+    clientDeployCommandsMock.mockRejectedValue(rateLimitError);
+
+    await monitorDiscordProvider({
+      config: baseConfig(),
+      runtime,
+    });
+
+    await vi.waitFor(() => expect(clientDeployCommandsMock).toHaveBeenCalledTimes(3));
+    const warningMessages = vi
+      .mocked(runtime.log)
+      .mock.calls.map((call) => String(call[0]))
+      .filter((message) => message.includes("native slash command deploy rate limited"));
+    expect(warningMessages).toHaveLength(1);
+    expect(warningMessages[0]).toContain("retry after 0s");
+    expect(warningMessages[0]).toContain("Message send/receive is unaffected.");
+    expect(warningMessages[0]).not.toContain("body=");
+    expect(runtime.error).not.toHaveBeenCalledWith(
+      expect.stringContaining("native-slash-command-deploy-rest"),
+    );
+  });
+
+  it("formats Discord deploy rate limits without raw response bodies", () => {
+    const details = providerTesting.formatDiscordDeployErrorDetails({
+      status: 429,
+      rawBody: {
+        message: "You are being rate limited.",
+        retry_after: 3.172,
+        global: false,
+      },
+    });
+
+    expect(details).toBe(" (status=429, retryAfter=3.2s, scope=route)");
+  });
+
   it("formats rejected Discord deploy entries with command details", () => {
     const details = providerTesting.formatDiscordDeployErrorDetails({
       status: 400,
