@@ -19,6 +19,7 @@ export type BuildChatItemsProps = {
   stream: string | null;
   streamStartedAt: number | null;
   showToolCalls: boolean;
+  assistantName?: string | null;
   searchOpen?: boolean;
   searchQuery?: string;
 };
@@ -210,6 +211,51 @@ function readSameTurnGroupKey(message: unknown): string | null {
   return null;
 }
 
+function readMessageText(message: unknown): string {
+  return normalizeMessage(message)
+    .content.reduce<string[]>((lines, item) => {
+      if (item.type === "text" && typeof item.text === "string") {
+        lines.push(item.text);
+      }
+      return lines;
+    }, [])
+    .join("\n")
+    .trim();
+}
+
+function readGatewaySessionMarkerLabel(
+  message: unknown,
+  assistantName: string | null | undefined,
+): { kind: "new-session" | "session-reset"; label: string } | null {
+  const raw = readObject(message);
+  if (!raw || raw.provider !== "openclaw" || raw.model !== "gateway-injected") {
+    return null;
+  }
+  const text = readMessageText(message)
+    .replace(/^✅\s*/u, "")
+    .replace(/\.$/u, "")
+    .trim()
+    .toLowerCase();
+  const name = assistantName?.trim() || "Assistant";
+  if (text === "new session started") {
+    return { kind: "new-session", label: `${name} New Session` };
+  }
+  if (text === "session reset") {
+    return { kind: "session-reset", label: `${name} Session Reset` };
+  }
+  return null;
+}
+
+function markerDividerKey(message: unknown, index: number, kind: string): string {
+  const raw = message as Record<string, unknown>;
+  const transcriptKey = openClawTranscriptKey(raw);
+  if (transcriptKey) {
+    return `divider:${kind}:transcript:${transcriptKey}`;
+  }
+  const timestamp = readMessageTimestamp(message);
+  return `divider:${kind}:${timestamp ?? "unknown"}:${index}`;
+}
+
 function groupMessages(
   items: ChatItem[],
   fallbackKeyPrefix: string,
@@ -293,6 +339,19 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
     const normalized = normalizeMessage(msg);
     const raw = msg as Record<string, unknown>;
     const marker = raw.__openclaw as Record<string, unknown> | undefined;
+    const sessionMarker = readGatewaySessionMarkerLabel(msg, props.assistantName);
+    if (sessionMarker) {
+      const timestamp = readMessageTimestamp(msg);
+      const key = markerDividerKey(msg, i, sessionMarker.kind);
+      items.push({
+        kind: "divider",
+        key,
+        label: sessionMarker.label,
+        timestamp: timestamp ?? fallbackTimestampForKey(`divider:${props.sessionKey}:${key}`),
+      });
+      continue;
+    }
+
     if (marker && marker.kind === "compaction") {
       const timestamp = readMessageTimestamp(msg);
       const markerSeq =

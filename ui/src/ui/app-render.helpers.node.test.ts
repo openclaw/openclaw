@@ -503,6 +503,7 @@ describe("switchChatSession", () => {
         { id: "att-1", mimeType: "image/png", dataUrl: "data:image/png;base64,AAA" },
       ],
       chatMessages: [{ role: "assistant", content: "old" }],
+      chatDeferredMessages: [{ role: "assistant", content: "queued old" }],
       chatToolMessages: [{ id: "tool-1" }],
       chatStreamSegments: [{ text: "segment", ts: 1 }],
       chatThinkingLevel: "high",
@@ -544,6 +545,7 @@ describe("switchChatSession", () => {
     await Promise.resolve();
 
     expect(state.chatQueue).toEqual([]);
+    expect(state.chatDeferredMessages).toEqual([]);
     expect(state.chatQueueBySession.main).toEqual([
       { id: "queued", text: "message B", createdAt: 1 },
     ]);

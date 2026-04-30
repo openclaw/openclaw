@@ -167,6 +167,83 @@ describe("handleChatEvent", () => {
     ]);
   });
 
+  it("preserves distinct deferred finals with the same visible text", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-user",
+      chatStream: "Working...",
+      chatStreamStartedAt: 123,
+    });
+    const first: ChatEventPayload = {
+      runId: "run-announce-a",
+      sessionKey: "main",
+      state: "final",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Done" }],
+      },
+    };
+    const second: ChatEventPayload = {
+      runId: "run-announce-b",
+      sessionKey: "main",
+      state: "final",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Done" }],
+      },
+    };
+
+    expect(handleChatEvent(state, first)).toBe("final");
+    expect(handleChatEvent(state, second)).toBe("final");
+    expect(state.chatDeferredMessages).toEqual([first.message, second.message]);
+
+    expect(
+      handleChatEvent(state, {
+        runId: "run-user",
+        sessionKey: "main",
+        state: "final",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Main answer" }],
+        },
+      }),
+    ).toBe("final");
+    expect(state.chatMessages).toEqual([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Main answer" }],
+      },
+      first.message,
+      second.message,
+    ]);
+  });
+
+  it("dedupes repeated deferred finals from the same run", () => {
+    const state = createActiveStreamingState();
+    const first: ChatEventPayload = {
+      runId: "run-announce",
+      sessionKey: "main",
+      state: "final",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Done" }],
+      },
+    };
+    const replay: ChatEventPayload = {
+      runId: "run-announce",
+      sessionKey: "main",
+      state: "final",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Done" }],
+      },
+    };
+
+    expect(handleChatEvent(state, first)).toBe("final");
+    expect(handleChatEvent(state, replay)).toBe("final");
+    expect(state.chatDeferredMessages).toEqual([first.message]);
+  });
+
   it("drops NO_REPLY final payload from another run without clearing active stream", () => {
     const state = createActiveStreamingState();
     const payload = createOtherRunNoReplyFinalPayload();
@@ -212,7 +289,7 @@ describe("handleChatEvent", () => {
     expect(state.chatStream).toBe("Alpha");
   });
 
-  it("keeps only the uncommitted suffix when cumulative deltas follow tool segments", () => {
+  it("keeps the cumulative stream snapshot when deltas follow tool segments", () => {
     const state = createState({
       sessionKey: "main",
       chatRunId: "run-1",
@@ -231,7 +308,44 @@ describe("handleChatEvent", () => {
     };
 
     expect(handleChatEvent(state, payload)).toBe("delta");
-    expect(state.chatStream).toBe("After tool.");
+    expect(state.chatStream).toBe("Before tool. After tool.");
+  });
+
+  it("does not double-trim streamed text that repeats the committed prefix", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: null,
+      chatStreamStartedAt: 100,
+      chatStreamSegments: [{ text: "Done. ", ts: 100 }],
+    });
+
+    expect(
+      handleChatEvent(state, {
+        runId: "run-1",
+        sessionKey: "main",
+        state: "delta",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Done. Done again." }],
+        },
+      }),
+    ).toBe("delta");
+    expect(state.chatStream).toBe("Done. Done again.");
+
+    expect(
+      handleChatEvent(state, {
+        runId: "run-1",
+        sessionKey: "main",
+        state: "final",
+      }),
+    ).toBe("final");
+    expect(state.chatMessages).toMatchObject([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Done. Done again." }],
+      },
+    ]);
   });
 
   it("persists committed stream segments when final event carries no message", () => {

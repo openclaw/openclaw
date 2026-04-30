@@ -138,6 +138,57 @@ describe("buildChatItems", () => {
     expect(second[1]).toMatchObject({ kind: "divider", key: "divider:compaction:seq:8" });
   });
 
+  it("renders gateway-injected new-session acknowledgements as assistant session dividers", () => {
+    const items = buildChatItems(
+      createProps({
+        assistantName: "Jarvis",
+        messages: [
+          {
+            role: "assistant",
+            content: [{ type: "text", text: "✅ New session started." }],
+            provider: "openclaw",
+            model: "gateway-injected",
+            timestamp: 1_000,
+            __openclaw: { id: "session-marker-1" },
+          },
+        ],
+      }),
+    );
+
+    expect(items).toEqual([
+      {
+        kind: "divider",
+        key: "divider:new-session:transcript:id:session-marker-1",
+        label: "Jarvis New Session",
+        timestamp: 1_000,
+      },
+    ]);
+  });
+
+  it("keeps normal assistant messages that happen to mention a new session", () => {
+    const groups = messageGroups({
+      assistantName: "Jarvis",
+      messages: [
+        {
+          role: "assistant",
+          content: "New session started.",
+          timestamp: 1_000,
+        },
+      ],
+    });
+
+    expect(groups).toHaveLength(1);
+    const group = groups[0];
+    if (!group) {
+      throw new Error("expected a message group");
+    }
+    const entry = group.messages[0];
+    if (!entry) {
+      throw new Error("expected a message entry");
+    }
+    expect((entry.message as { content?: unknown }).content).toBe("New session started.");
+  });
+
   it("renders only the live stream suffix after committed stream segments", () => {
     const items = buildChatItems(
       createProps({

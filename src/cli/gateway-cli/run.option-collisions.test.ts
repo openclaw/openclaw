@@ -114,6 +114,10 @@ vi.mock("../../infra/restart-sentinel.js", () => ({
   writeRestartSentinel: (payload: unknown) => writeRestartSentinel(payload),
 }));
 
+vi.mock("../../infra/supervisor-markers.js", () => ({
+  detectRespawnSupervisor: () => null,
+}));
+
 vi.mock("../../logging/console.js", () => ({
   setConsoleSubsystemFilter: (filters: string[]) => setConsoleSubsystemFilter(filters),
   setConsoleTimestampPrefix: () => undefined,
@@ -317,8 +321,16 @@ describe("gateway run option collisions", () => {
     });
     startGatewayServer.mockRejectedValueOnce(err);
 
-    await runGatewayCli(["gateway", "run", "--allow-unconfigured"]);
+    let exitError: unknown;
+    try {
+      await runGatewayCli(["gateway", "run", "--allow-unconfigured"]);
+    } catch (err) {
+      exitError = err;
+    }
 
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(0);
+    expect(exitError).toBeInstanceOf(Error);
+    expect((exitError as Error).message).toBe("__exit__:0");
     expect(writeDiagnosticStabilityBundleForFailureSync).not.toHaveBeenCalled();
   });
 

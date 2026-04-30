@@ -28,6 +28,7 @@ const CHAT_ERROR_AUTH_DISPLAY_TEXT =
 const CHAT_ERROR_GENERIC_DISPLAY_TEXT = "Assistant turn failed before producing a reply.";
 const chatHistoryRequestVersions = new WeakMap<object, number>();
 const chatLocalMutationVersions = new WeakMap<object, number>();
+const deferredMessageSignatures = new WeakMap<object, string>();
 
 function beginChatHistoryRequest(state: ChatState): number {
   const key = state as object;
@@ -282,34 +283,95 @@ function messageDisplaySignature(message: unknown): string | null {
   }
 }
 
-function appendUniqueDisplayMessages(messages: unknown[], additions: unknown[]): unknown[] {
-  if (additions.length === 0) {
+function readPlainObject(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function identityPart(value: unknown): string | null {
+  if (typeof value === "string" && value.trim()) {
+    return value.trim();
+  }
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return String(value);
+  }
+  return null;
+}
+
+function deferredMessageIdentitySignature(message: unknown, runId?: unknown): string | null {
+  const raw = readPlainObject(message);
+  if (!raw) {
+    const fallbackRunId = identityPart(runId);
+    return fallbackRunId ? `run:${fallbackRunId}` : null;
+  }
+  const role = normalizeLowercaseStringOrEmpty(raw.role) || "unknown";
+  const meta = readPlainObject(raw.__openclaw);
+  const candidates: Array<[string, unknown]> = [
+    ["openclaw.id", meta?.id],
+    ["openclaw.seq", meta?.seq],
+    ["id", raw.id],
+    ["messageId", raw.messageId],
+    ["message_id", raw.message_id],
+    ["openclaw.runId", meta?.runId ?? meta?.run_id],
+    ["runId", raw.runId ?? raw.run_id],
+    ["payload.runId", runId],
+  ];
+  for (const [kind, value] of candidates) {
+    const part = identityPart(value);
+    if (part) {
+      return `${role}:${kind}:${part}`;
+    }
+  }
+  return null;
+}
+
+function deferredIdentityForQueuedMessage(message: unknown): string | null {
+  if (!message || typeof message !== "object") {
+    return null;
+  }
+  return deferredMessageSignatures.get(message) ?? deferredMessageIdentitySignature(message);
+}
+
+function appendDeferredChatMessages(messages: unknown[], queued: unknown[]): unknown[] {
+  if (queued.length === 0) {
     return messages;
   }
-  const signatures = new Set<string>();
+  const identities = new Set<string>();
   for (const message of messages) {
-    const signature = messageDisplaySignature(message);
+    const signature = deferredMessageIdentitySignature(message);
     if (signature) {
-      signatures.add(signature);
+      identities.add(signature);
     }
   }
   const next = [...messages];
-  for (const message of additions) {
-    const signature = messageDisplaySignature(message);
-    if (signature && signatures.has(signature)) {
+  for (const message of queued) {
+    const signature = deferredIdentityForQueuedMessage(message);
+    if (signature && identities.has(signature)) {
       continue;
     }
     if (signature) {
-      signatures.add(signature);
+      identities.add(signature);
     }
     next.push(message);
   }
   return next;
 }
 
-function queueDeferredChatMessage(state: ChatState, message: unknown) {
+function queueDeferredChatMessage(state: ChatState, message: unknown, runId?: unknown) {
   const queued = Array.isArray(state.chatDeferredMessages) ? state.chatDeferredMessages : [];
-  state.chatDeferredMessages = appendUniqueDisplayMessages(queued, [message]);
+  const signature = deferredMessageIdentitySignature(message, runId);
+  if (message && typeof message === "object" && signature) {
+    deferredMessageSignatures.set(message, signature);
+  }
+  if (signature) {
+    for (const queuedMessage of queued) {
+      if (deferredIdentityForQueuedMessage(queuedMessage) === signature) {
+        return;
+      }
+    }
+  }
+  state.chatDeferredMessages = [...queued, message];
 }
 
 function flushDeferredChatMessages(state: ChatState) {
@@ -317,7 +379,7 @@ function flushDeferredChatMessages(state: ChatState) {
   if (queued.length === 0) {
     return;
   }
-  const next = appendUniqueDisplayMessages(state.chatMessages, queued);
+  const next = appendDeferredChatMessages(state.chatMessages, queued);
   state.chatDeferredMessages = [];
   if (next !== state.chatMessages) {
     state.chatMessages = next;
@@ -854,7 +916,7 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     if (payload.state === "final") {
       const finalMessage = normalizeFinalAssistantMessage(payload.message);
       if (finalMessage && !isAssistantSilentReply(finalMessage)) {
-        queueDeferredChatMessage(state, finalMessage);
+        queueDeferredChatMessage(state, finalMessage, payload.runId);
       }
       return "final";
     }
@@ -864,7 +926,7 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
   if (payload.state === "delta") {
     const next = extractText(payload.message);
     if (typeof next === "string" && !isSilentReplyStream(next)) {
-      state.chatStream = trimCommittedStreamPrefix(next, currentStreamSegments(state));
+      state.chatStream = next;
     }
   } else if (payload.state === "final") {
     const finalMessage = normalizeFinalAssistantMessage(payload.message);
