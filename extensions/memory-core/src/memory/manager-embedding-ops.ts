@@ -357,7 +357,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       Math.random(),
       EMBEDDING_RETRY_MAX_DELAY_MS,
     );
-    log.warn(`memory embeddings rate limited; ${action} in ${waitMs}ms`);
+    log.warn(`memory embeddings rate limited or transient failure; ${action} in ${waitMs}ms`);
     await new Promise((resolve) => setTimeout(resolve, waitMs));
   }
 
@@ -370,17 +370,28 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     });
   }
 
-  protected async embedQueryWithTimeout(text: string): Promise<number[]> {
+  protected async embedQueryWithRetry(text: string): Promise<number[]> {
     if (!this.provider) {
       throw new Error("Cannot embed query in FTS-only mode (no embedding provider)");
     }
-    const timeoutMs = this.resolveEmbeddingTimeout("query");
-    log.debug("memory embeddings: query start", { provider: this.provider.id, timeoutMs });
-    return await this.withTimeout(
-      this.provider.embedQuery(text),
-      timeoutMs,
-      `memory embeddings query timed out after ${Math.round(timeoutMs / 1000)}s`,
-    );
+    const provider = this.provider;
+    return await runMemoryEmbeddingRetryLoop({
+      run: async () => {
+        const timeoutMs = this.resolveEmbeddingTimeout("query");
+        log.debug("memory embeddings: query start", { provider: provider.id, timeoutMs });
+        return await this.withTimeout(
+          provider.embedQuery(text),
+          timeoutMs,
+          `memory embeddings query timed out after ${Math.round(timeoutMs / 1000)}s`,
+        );
+      },
+      isRetryable: isRetryableMemoryEmbeddingError,
+      waitForRetry: async (delayMs) => {
+        await this.waitForEmbeddingRetry(delayMs, "retrying query");
+      },
+      maxAttempts: EMBEDDING_RETRY_MAX_ATTEMPTS,
+      baseDelayMs: EMBEDDING_RETRY_BASE_DELAY_MS,
+    });
   }
 
   protected async withTimeout<T>(

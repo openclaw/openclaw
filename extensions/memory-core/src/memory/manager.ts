@@ -446,7 +446,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
           )
         : [];
 
-    const queryVec = await this.embedQueryWithTimeout(cleaned);
+    const queryVec = await this.embedQueryWithRetry(cleaned);
     const hasVector = queryVec.some((v) => v !== 0);
     const vectorResults = hasVector
       ? await this.searchVector(queryVec, candidates, sourceFilterList).catch((err) => {
