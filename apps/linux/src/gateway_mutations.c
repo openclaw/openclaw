@@ -241,15 +241,93 @@ gchar* mutation_cron_run(const gchar *job_id,
     return rid;
 }
 
-gchar* mutation_cron_add(JsonNode *params,
+/*
+ * Append the shared cron job field block into an existing JsonBuilder. The
+ * caller is responsible for begin/end of the surrounding object so that the
+ * same helper serves both the add root and the update patch sub-object.
+ *
+ * Optional-field semantics:
+ *   - description / agentId / payload omitted when their backing string is
+ *     NULL or empty. Validation of "must have a prompt" lives at the call
+ *     site (for example the create UI), not here.
+ */
+static void mutation_build_cron_job_fields(JsonBuilder *b,
+                                           const GatewayCronJobMutationFields *fields) {
+    json_builder_set_member_name(b, "name");
+    json_builder_add_string_value(b, fields->name);
+
+    if (fields->description && *fields->description != '\0') {
+        json_builder_set_member_name(b, "description");
+        json_builder_add_string_value(b, fields->description);
+    }
+    if (fields->agent_id && *fields->agent_id != '\0') {
+        json_builder_set_member_name(b, "agentId");
+        json_builder_add_string_value(b, fields->agent_id);
+    }
+
+    json_builder_set_member_name(b, "schedule");
+    json_builder_begin_object(b);
+    json_builder_set_member_name(b, "kind");
+    json_builder_add_string_value(b, fields->schedule_kind);
+    json_builder_set_member_name(b, "expr");
+    json_builder_add_string_value(b, fields->schedule_expr);
+    json_builder_end_object(b);
+
+    json_builder_set_member_name(b, "sessionTarget");
+    json_builder_add_string_value(b, fields->session_target);
+
+    json_builder_set_member_name(b, "wakeMode");
+    json_builder_add_string_value(b, fields->wake_mode);
+
+    if (fields->prompt && *fields->prompt != '\0') {
+        json_builder_set_member_name(b, "payload");
+        json_builder_begin_object(b);
+        json_builder_set_member_name(b, "kind");
+        json_builder_add_string_value(b, "agentTurn");
+        json_builder_set_member_name(b, "message");
+        json_builder_add_string_value(b, fields->prompt);
+        json_builder_end_object(b);
+    }
+}
+
+gchar* mutation_cron_add(const GatewayCronJobMutationFields *fields,
                          GatewayRpcCallback cb, gpointer data) {
+    g_return_val_if_fail(fields != NULL, NULL);
+
+    JsonBuilder *b = json_builder_new();
+    json_builder_begin_object(b);
+    mutation_build_cron_job_fields(b, fields);
+    json_builder_set_member_name(b, "enabled");
+    json_builder_add_boolean_value(b, TRUE);
+    json_builder_end_object(b);
+    JsonNode *params = json_builder_get_root(b);
+    g_object_unref(b);
+
     gchar *rid = gateway_rpc_request("cron.add", params, 0, cb, data);
+    json_node_unref(params);
     return rid;
 }
 
-gchar* mutation_cron_update(JsonNode *params,
+gchar* mutation_cron_update(const gchar *id,
+                            const GatewayCronJobMutationFields *fields,
                             GatewayRpcCallback cb, gpointer data) {
+    g_return_val_if_fail(id != NULL, NULL);
+    g_return_val_if_fail(fields != NULL, NULL);
+
+    JsonBuilder *b = json_builder_new();
+    json_builder_begin_object(b);
+    json_builder_set_member_name(b, "id");
+    json_builder_add_string_value(b, id);
+    json_builder_set_member_name(b, "patch");
+    json_builder_begin_object(b);
+    mutation_build_cron_job_fields(b, fields);
+    json_builder_end_object(b);
+    json_builder_end_object(b);
+    JsonNode *params = json_builder_get_root(b);
+    g_object_unref(b);
+
     gchar *rid = gateway_rpc_request("cron.update", params, 0, cb, data);
+    json_node_unref(params);
     return rid;
 }
 
