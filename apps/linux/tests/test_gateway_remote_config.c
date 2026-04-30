@@ -124,6 +124,49 @@ static void test_ssh_target_rejects_leading_dash(void) {
     g_assert_null(host);
 }
 
+/*
+ * Regression: the optional "ssh " prefix must not allow an argv-
+ * smuggling payload through. After stripping the prefix the parser
+ * must re-validate that the functional head of the target does not
+ * begin with '-'; otherwise OpenSSH would parse the trailing
+ * "[user@]host" positional as another option flag.
+ */
+static void test_ssh_target_rejects_leading_dash_after_ssh_prefix(void) {
+    gchar *user = NULL, *host = NULL; gint port = 0;
+    g_assert_false(gateway_remote_config_parse_ssh_target(
+        "ssh -oProxyCommand=evil@host", &user, &host, &port));
+    g_assert_null(user);
+    g_assert_null(host);
+}
+
+/*
+ * Same shape as above but with extra whitespace/tabs after the "ssh "
+ * prefix — the parser already skips those, so the argv-smuggling
+ * guard must run on the post-skip head, not the immediate post-prefix
+ * head.
+ */
+static void test_ssh_target_rejects_leading_dash_after_ssh_prefix_with_extra_whitespace(void) {
+    gchar *user = NULL, *host = NULL; gint port = 0;
+    g_assert_false(gateway_remote_config_parse_ssh_target(
+        "ssh    \t-oProxyJump=evil@host", &user, &host, &port));
+    g_assert_null(user);
+    g_assert_null(host);
+}
+
+/*
+ * Regression: dash-leading user with a clean host (no "ssh " prefix)
+ * must also be rejected. The pre-fix parser only checked the host
+ * component, leaving the user free to carry "-oProxyCommand=…" into
+ * argv via the user@host concatenation.
+ */
+static void test_ssh_target_rejects_leading_dash_user(void) {
+    gchar *user = NULL, *host = NULL; gint port = 0;
+    g_assert_false(gateway_remote_config_parse_ssh_target(
+        "-bad@host", &user, &host, &port));
+    g_assert_null(user);
+    g_assert_null(host);
+}
+
 static void test_ssh_target_rejects_whitespace(void) {
     gchar *user = NULL, *host = NULL; gint port = 0;
     g_assert_false(gateway_remote_config_parse_ssh_target(
@@ -359,6 +402,12 @@ int main(int argc, char **argv) {
     g_test_add_func("/remote_cfg/ssh/strips_ssh_prefix", test_ssh_target_strips_ssh_prefix);
     g_test_add_func("/remote_cfg/ssh/rejects_empty_user", test_ssh_target_rejects_empty_user);
     g_test_add_func("/remote_cfg/ssh/rejects_leading_dash", test_ssh_target_rejects_leading_dash);
+    g_test_add_func("/remote_cfg/ssh/rejects_leading_dash_after_ssh_prefix",
+                    test_ssh_target_rejects_leading_dash_after_ssh_prefix);
+    g_test_add_func("/remote_cfg/ssh/rejects_leading_dash_after_ssh_prefix_with_extra_whitespace",
+                    test_ssh_target_rejects_leading_dash_after_ssh_prefix_with_extra_whitespace);
+    g_test_add_func("/remote_cfg/ssh/rejects_leading_dash_user",
+                    test_ssh_target_rejects_leading_dash_user);
     g_test_add_func("/remote_cfg/ssh/rejects_whitespace", test_ssh_target_rejects_whitespace);
     g_test_add_func("/remote_cfg/ssh/rejects_invalid_port", test_ssh_target_rejects_invalid_port);
     g_test_add_func("/remote_cfg/ssh/rejects_empty_port_suffix", test_ssh_target_rejects_empty_port_suffix);

@@ -111,6 +111,60 @@ static void test_build_rejects_leading_dash_host(void) {
     g_assert_null(remote_tunnel_command_build(&spec));
 }
 
+/*
+ * argv-smuggling regression. A dash-leading user component is just as
+ * dangerous as a dash-leading host: both feed the trailing
+ * "[user@]host" argv positional and either would let OpenSSH parse
+ * the destination as another option flag. The pre-fix builder only
+ * checked the host, so a payload like ssh_user="-oProxyCommand=…",
+ * ssh_host="example.com" rendered to argv as "-oProxyCommand=…@example.com"
+ * and was happily executed.
+ */
+static void test_build_rejects_leading_dash_user(void) {
+    RemoteTunnelCommandSpec spec = {
+        .ssh_user = "-oProxyCommand=evil",
+        .ssh_host = "example.com",
+        .local_port = 18789,
+        .remote_port = 18789,
+    };
+    g_assert_null(remote_tunnel_command_build(&spec));
+}
+
+/*
+ * Same invariant, different payload shape. Locks the rule against
+ * narrow bypasses where only one specific dash-leading prefix is
+ * filtered.
+ */
+static void test_build_rejects_dash_user_when_host_clean(void) {
+    RemoteTunnelCommandSpec spec = {
+        .ssh_user = "-i/tmp/x",
+        .ssh_host = "example.com",
+        .local_port = 18789,
+        .remote_port = 18789,
+    };
+    g_assert_null(remote_tunnel_command_build(&spec));
+}
+
+/*
+ * Positive control: a normal user/host pair must still build, and
+ * the trailing argv positional must be exactly "user@host" so that
+ * the rendered-destination guard cannot regress into rejecting
+ * legitimate inputs.
+ */
+static void test_build_accepts_normal_user_host(void) {
+    RemoteTunnelCommandSpec spec = {
+        .ssh_user = "alice",
+        .ssh_host = "example.com",
+        .local_port = 18789,
+        .remote_port = 18789,
+    };
+    g_auto(GStrv) argv = remote_tunnel_command_build(&spec);
+    g_assert_nonnull(argv);
+    gssize last = 0;
+    while (argv[last + 1]) last++;
+    g_assert_cmpstr(argv[last], ==, "alice@example.com");
+}
+
 static void test_build_rejects_invalid_ports(void) {
     RemoteTunnelCommandSpec spec = {
         .ssh_host = "host.example",
@@ -131,6 +185,9 @@ int main(int argc, char **argv) {
     g_test_add_func("/remote_tunnel_command/build_default_port_omits_p", test_build_default_port_omits_p);
     g_test_add_func("/remote_tunnel_command/rejects_missing_host", test_build_rejects_missing_host);
     g_test_add_func("/remote_tunnel_command/rejects_leading_dash_host", test_build_rejects_leading_dash_host);
+    g_test_add_func("/remote_tunnel_command/rejects_leading_dash_user", test_build_rejects_leading_dash_user);
+    g_test_add_func("/remote_tunnel_command/rejects_dash_user_when_host_clean", test_build_rejects_dash_user_when_host_clean);
+    g_test_add_func("/remote_tunnel_command/accepts_normal_user_host", test_build_accepts_normal_user_host);
     g_test_add_func("/remote_tunnel_command/rejects_invalid_ports", test_build_rejects_invalid_ports);
     return g_test_run();
 }
