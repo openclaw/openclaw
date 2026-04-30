@@ -41,18 +41,58 @@ Some OpenAI-compatible embedding endpoints require asymmetric labels such as
 for indexed chunks. Configure those with `memorySearch.queryInputType` and
 `memorySearch.documentInputType`; see the [Memory configuration reference](/reference/memory-config#provider-specific-config).
 
+### Using oMLX (Apple Silicon, MLX-native)
+
+[oMLX](https://github.com/jundot/omlx) is a local inference server optimized
+for Apple Silicon. It auto-discovers embedding models in its model directory
+and serves them via an OpenAI-compatible API on `http://localhost:8000/v1`,
+making it a strong Ollama alternative for Mac users on M-series chips.
+
+To use an oMLX-hosted embedding model (e.g.
+`jina-embeddings-v5-text-small-retrieval-mlx`):
+
+```json5
+{
+  agents: {
+    defaults: {
+      memorySearch: {
+        enabled: true,
+        provider: "openai",
+        model: "jina-embeddings-v5-text-small-retrieval-mlx",
+        remote: {
+          baseUrl: "http://127.0.0.1:8000/v1",
+          apiKey: "<your-omlx-api-key>",
+        },
+      },
+    },
+  },
+}
+```
+
+<Tip>
+Use `provider: "openai"` (not `"ollama"`) for oMLX. Although oMLX is
+positionally similar to Ollama as a local runtime, it speaks the OpenAI
+protocol, not Ollama's `/api/embeddings` protocol. The OpenAI adapter handles
+any OpenAI-compatible endpoint, including local oMLX.
+</Tip>
+
+After switching providers or models, run `openclaw memory index --force` to
+re-embed existing notes in the new vector space — embeddings from different
+models are not interchangeable.
+
 ## Supported providers
 
-| Provider       | ID               | Needs API key | Notes                                                |
-| -------------- | ---------------- | ------------- | ---------------------------------------------------- |
-| Bedrock        | `bedrock`        | No            | Auto-detected when the AWS credential chain resolves |
-| Gemini         | `gemini`         | Yes           | Supports image/audio indexing                        |
-| GitHub Copilot | `github-copilot` | No            | Auto-detected, uses Copilot subscription             |
-| Local          | `local`          | No            | GGUF model, ~0.6 GB download                         |
-| Mistral        | `mistral`        | Yes           | Auto-detected                                        |
-| Ollama         | `ollama`         | No            | Local, must set explicitly                           |
-| OpenAI         | `openai`         | Yes           | Auto-detected, fast                                  |
-| Voyage         | `voyage`         | Yes           | Auto-detected                                        |
+| Provider       | ID               | Needs API key | Notes                                                       |
+| -------------- | ---------------- | ------------- | ----------------------------------------------------------- |
+| Bedrock        | `bedrock`        | No            | Auto-detected when the AWS credential chain resolves        |
+| Gemini         | `gemini`         | Yes           | Supports image/audio indexing                               |
+| GitHub Copilot | `github-copilot` | No            | Auto-detected, uses Copilot subscription                    |
+| Local          | `local`          | No            | GGUF model, ~0.6 GB download                                |
+| Mistral        | `mistral`        | Yes           | Auto-detected                                               |
+| Ollama         | `ollama`         | No            | Local, must set explicitly                                  |
+| OpenAI         | `openai`         | Yes           | Auto-detected, fast                                         |
+| oMLX           | `openai`         | Local key     | Apple Silicon MLX server; use `openai` adapter with custom `baseUrl` |
+| Voyage         | `voyage`         | Yes           | Auto-detected                                               |
 
 ## How search works
 
