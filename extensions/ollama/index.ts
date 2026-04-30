@@ -147,6 +147,7 @@ export default definePluginEntry({
     api.registerWebSearchProvider(createOllamaWebSearchProvider());
     api.registerProvider({
       id: OLLAMA_PROVIDER_ID,
+      aliases: ["remote-ollama"],
       label: "Ollama",
       docsPath: "/providers/ollama",
       envVars: ["OLLAMA_API_KEY"],
