@@ -39,4 +39,29 @@ describe("resolveAuthProfileFailureReason", () => {
       }),
     ).toBeNull();
   });
+
+  it("does not punish profile for client-side / non-auth failure reasons", () => {
+    // Regression: a single Anthropic 400 "assistant message prefill" 400 from
+    // one model used to mark the only github-copilot profile failed, cascading
+    // into "all profiles unavailable" across every fallback model.
+    for (const reason of ["format", "overloaded", "model_not_found", "unknown"] as const) {
+      expect(
+        resolveAuthProfileFailureReason({
+          failoverReason: reason,
+          policy: "shared",
+        }),
+      ).toBeNull();
+    }
+  });
+
+  it("records genuine auth-health signals", () => {
+    for (const reason of ["auth", "auth_permanent", "session_expired"] as const) {
+      expect(
+        resolveAuthProfileFailureReason({
+          failoverReason: reason,
+          policy: "shared",
+        }),
+      ).toBe(reason);
+    }
+  });
 });
