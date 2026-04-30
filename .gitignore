@@ -138,7 +138,7 @@ USER.md
 !.agent/workflows/
 /local/
 /client_secret_*.json
-package-lock.json
+# package-lock.json
 .claude/
 .agent/
 skills-lock.json
@@ -166,7 +166,7 @@ dist/protocol.schema.json
 .dev-state
 docs/superpowers
 .superpowers/
-.gitignore
+# .gitignore
 test/config-form.analyze.telegram.test.ts
 ui/src/ui/theme-variants.browser.test.ts
 ui/src/ui/__screenshots__
