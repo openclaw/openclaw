@@ -724,11 +724,10 @@ describe("server-channels auto restart", () => {
     expect(manager.isHealthMonitorEnabled("discord", DEFAULT_ACCOUNT_ID)).toBe(false);
   });
 
-  it("does not crash when channelLogs entry is missing during async promise chain (config-reload race)", async () => {
-    // Regression for openclaw/openclaw#75168: channelLogs[channelId] can be undefined
-    // during config-reload races while a prior startChannelInternal promise chain is
-    // still in flight.  The optional-chain guards (log?.error?.()) must prevent a
-    // TypeError("Cannot read properties of undefined (reading 'error')").
+  it("does not crash when channelLogs entry is missing before channel startup (deferred-channel race)", async () => {
+    // Regression for openclaw/openclaw#75168: a deferred channel plugin loaded after
+    // channelLogs is built can start with channelLogs[channelId] === undefined.
+    // The optional-chain guards (log?.error?.()) must prevent a TypeError.
     let channelExited = false;
     const startAccount = vi.fn(async () => {
       channelExited = true;
@@ -737,14 +736,10 @@ describe("server-channels auto restart", () => {
     installTestRegistry(createTestPlugin({ startAccount }));
 
     const log = createSubsystemLogger("gateway/server-channels-test");
-    // Use a Proxy so we can make channelLogs["discord"] return undefined after start.
-    let logMissing = false;
-    const channelLogs = new Proxy({} as Record<ChannelId, SubsystemLogger>, {
-      get(target, prop) {
-        if (logMissing) return undefined;
-        return target[prop as ChannelId] ?? log;
-      },
-    });
+    // channelLogs intentionally has no "discord" entry — simulates a deferred channel
+    // plugin that was registered after the map was built (the exact condition that
+    // triggers the crash on unpatched main).
+    const channelLogs = {} as Record<ChannelId, SubsystemLogger>;
     const runtime = runtimeForLogger(log);
     const channelRuntimeEnvs = { discord: runtime } as unknown as Record<ChannelId, RuntimeEnv>;
     const manager = createChannelManager({
@@ -753,14 +748,8 @@ describe("server-channels auto restart", () => {
       channelRuntimeEnvs,
     });
 
-    await manager.startChannels();
-    // Simulate config-reload: channel log is evicted from the map while
-    // the .catch()/.then() handlers are still pending.
-    logMissing = true;
-
-    // Advance timers so the rejection handler and restart backoff fire.
-    // Must not throw TypeError.
-    await expect(vi.advanceTimersByTimeAsync(50)).resolves.not.toThrow();
+    // Must not throw TypeError("Cannot read properties of undefined (reading 'error')").
+    await expect(manager.startChannels()).resolves.not.toThrow();
     expect(channelExited).toBe(true);
   });
 

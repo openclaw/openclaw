@@ -1064,6 +1064,13 @@ export async function startGatewayServer(
           logDiagnostics: false,
         }));
         runtimeState.gatewayMethods = listActiveGatewayMethods(baseGatewayMethods);
+        for (const plugin of listChannelPlugins()) {
+          if (!(plugin.id in channelLogs)) {
+            const logger = logChannels.child(plugin.id);
+            channelLogs[plugin.id] = logger;
+            channelRuntimeEnvs[plugin.id] = runtimeForLogger(logger);
+          }
+        }
       }
     }
 
