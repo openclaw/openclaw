@@ -47,6 +47,19 @@ type RuntimeReplaceConfigFileParams = {
   afterWrite: RuntimeConfigAfterWrite;
   writeOptions?: RuntimeWriteConfigOptions;
 };
+export type PluginRuntimeThinkingPolicyRequest = {
+  provider?: string | null;
+  model?: string | null;
+  catalog?: import("../../auto-reply/thinking.js").ThinkingCatalogEntry[];
+};
+export type PluginRuntimeThinkingPolicyLevel = {
+  id: import("../../auto-reply/thinking.js").ThinkLevel;
+  label: string;
+};
+export type PluginRuntimeThinkingPolicy = {
+  levels: PluginRuntimeThinkingPolicyLevel[];
+  defaultLevel?: import("../../auto-reply/thinking.js").ThinkLevel | null;
+};
 
 /** Structured logger surface injected into runtime-backed plugin helpers. */
 export type RuntimeLogger = {
@@ -116,6 +129,12 @@ export type PluginRuntimeCore = {
       model: string;
       catalog?: import("../../agents/model-catalog.types.js").ModelCatalogEntry[];
     }) => import("../../auto-reply/thinking.js").ThinkLevel;
+    normalizeThinkingLevel: (
+      raw?: string | null,
+    ) => import("../../auto-reply/thinking.js").ThinkLevel | undefined;
+    resolveThinkingPolicy: (
+      params: PluginRuntimeThinkingPolicyRequest,
+    ) => PluginRuntimeThinkingPolicy;
     runEmbeddedAgent: import("../../agents/pi-embedded-runtime.types.js").RunEmbeddedAgentFn;
     runEmbeddedPiAgent: import("../../agents/pi-embedded-runtime.types.js").RunEmbeddedPiAgentFn;
     resolveAgentTimeoutMs: typeof import("../../agents/timeout.js").resolveAgentTimeoutMs;
@@ -208,20 +227,25 @@ export type PluginRuntimeCore = {
   };
   state: {
     resolveStateDir: typeof import("../../config/paths.js").resolveStateDir;
+    openKeyedStore: <T>(
+      options: import("../../plugin-state/plugin-state-store.types.js").OpenKeyedStoreOptions,
+    ) => import("../../plugin-state/plugin-state-store.types.js").PluginStateKeyedStore<T>;
   };
   tasks: {
     runs: PluginRuntimeTaskRuns;
     flows: PluginRuntimeTaskFlows;
+    managedFlows: import("./runtime-taskflow.types.js").PluginRuntimeTaskFlow;
     /** @deprecated Use runtime.tasks.flows for DTO-based TaskFlow access. */
     flow: import("./runtime-taskflow.types.js").PluginRuntimeTaskFlow;
   };
   /** @deprecated Use runtime.tasks.flows for DTO-based TaskFlow access. */
   taskFlow: import("./runtime-taskflow.types.js").PluginRuntimeTaskFlow;
   modelAuth: {
-    /** Resolve auth for a model. Only provider/model and optional cfg are used. */
+    /** Resolve auth for a model. Only provider/model, optional cfg, and workspaceDir are used. */
     getApiKeyForModel: (params: {
       model: import("@mariozechner/pi-ai").Model<import("@mariozechner/pi-ai").Api>;
       cfg?: import("../../config/types.openclaw.js").OpenClawConfig;
+      workspaceDir?: string;
     }) => Promise<import("../../agents/model-auth-runtime-shared.js").ResolvedProviderAuth>;
     /** Resolve request-ready auth for a model, including provider runtime exchanges. */
     getRuntimeAuthForModel: (params: {
@@ -229,10 +253,11 @@ export type PluginRuntimeCore = {
       cfg?: import("../../config/types.openclaw.js").OpenClawConfig;
       workspaceDir?: string;
     }) => Promise<import("./model-auth-types.js").ResolvedProviderRuntimeAuth>;
-    /** Resolve auth for a provider by name. Only provider and optional cfg are used. */
+    /** Resolve auth for a provider by name. Only provider, optional cfg, and workspaceDir are used. */
     resolveApiKeyForProvider: (params: {
       provider: string;
       cfg?: import("../../config/types.openclaw.js").OpenClawConfig;
+      workspaceDir?: string;
     }) => Promise<import("../../agents/model-auth-runtime-shared.js").ResolvedProviderAuth>;
   };
 };

@@ -1,5 +1,5 @@
 import { setTimeout as sleep } from "node:timers/promises";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { QaBusState } from "./bus-state.js";
 import { getQaProvider } from "./providers/index.js";
@@ -90,6 +90,7 @@ export function createQaChannelGatewayConfig(params: {
     messages: {
       groupChat: {
         mentionPatterns: ["\\b@?openclaw\\b"],
+        visibleReplies: "automatic",
       },
     },
   };

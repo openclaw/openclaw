@@ -1,8 +1,8 @@
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
+import { createStartAccountContext } from "openclaw/plugin-sdk/channel-test-helpers";
+import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { PluginRuntime } from "../../../src/plugins/runtime/types.js";
-import { createStartAccountContext } from "../../../test/helpers/plugins/start-account-context.js";
 import type { ResolvedDiscordAccount } from "./accounts.js";
 import type { OpenClawConfig } from "./runtime-api.js";
 import * as sendModule from "./send.js";
@@ -489,6 +489,8 @@ describe("discordPlugin security", () => {
 
     expect(result.policy).toBe("allowlist");
     expect(result.allowFrom).toEqual(["  discord:<@!123456789>  "]);
+    expect(result.policyPath).toBe("channels.discord.dmPolicy");
+    expect(result.allowFromPath).toBe("channels.discord.");
     expect(result.normalizeEntry?.("  discord:<@!123456789>  ")).toBe("123456789");
     expect(result.normalizeEntry?.("  user:987654321  ")).toBe("987654321");
   });

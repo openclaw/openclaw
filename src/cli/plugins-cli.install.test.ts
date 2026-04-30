@@ -1,13 +1,12 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, it } from "vitest";
-import { installedPluginRoot } from "../../test/helpers/bundled-plugin-paths.js";
+import { installedPluginRoot } from "openclaw/plugin-sdk/test-fixtures";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   applyExclusiveSlotSelection,
-  buildPluginDiagnosticsReport,
-  clearPluginManifestRegistryCache,
+  buildPluginSnapshotReport,
   enablePluginInConfig,
   installHooksFromNpmSpec,
   installHooksFromPath,
@@ -30,9 +29,16 @@ import {
 } from "./plugins-cli-test-helpers.js";
 
 const CLI_STATE_ROOT = "/tmp/openclaw-state";
+const ORIGINAL_OPENCLAW_STATE_DIR = process.env.OPENCLAW_STATE_DIR;
+const PROFILE_STATE_ROOT = "/tmp/openclaw-ledger-profile";
 
 function cliInstallPath(pluginId: string): string {
   return installedPluginRoot(CLI_STATE_ROOT, pluginId);
+}
+
+function useProfileExtensionsDir(): string {
+  process.env.OPENCLAW_STATE_DIR = PROFILE_STATE_ROOT;
+  return path.join(PROFILE_STATE_ROOT, "extensions");
 }
 
 function createEnabledPluginConfig(pluginId: string): OpenClawConfig {
@@ -227,6 +233,14 @@ describe("plugins cli install", () => {
     resetPluginsCliTestState();
   });
 
+  afterEach(() => {
+    if (ORIGINAL_OPENCLAW_STATE_DIR === undefined) {
+      delete process.env.OPENCLAW_STATE_DIR;
+    } else {
+      process.env.OPENCLAW_STATE_DIR = ORIGINAL_OPENCLAW_STATE_DIR;
+    }
+  });
+
   it("shows the force overwrite option in install help", async () => {
     const { Command } = await import("commander");
     const { registerPluginsCli } = await import("./plugins-cli.js");
@@ -273,6 +287,22 @@ describe("plugins cli install", () => {
       }),
     );
     expect(writeConfigFile).not.toHaveBeenCalled();
+  });
+
+  it("passes the active profile extensions dir to marketplace installs", async () => {
+    const extensionsDir = useProfileExtensionsDir();
+
+    await expect(
+      runPluginsCommand(["plugins", "install", "alpha", "--marketplace", "local/repo"]),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(installPluginFromMarketplace).toHaveBeenCalledWith(
+      expect.objectContaining({
+        extensionsDir,
+        marketplace: "local/repo",
+        plugin: "alpha",
+      }),
+    );
   });
 
   it("fails closed for unrelated invalid config before installer side effects", async () => {
@@ -332,7 +362,7 @@ describe("plugins cli install", () => {
       marketplacePlugin: "alpha",
     });
     enablePluginInConfig.mockReturnValue({ config: enabledCfg });
-    buildPluginDiagnosticsReport.mockReturnValue({
+    buildPluginSnapshotReport.mockReturnValue({
       plugins: [{ id: "alpha", kind: "provider" }],
       diagnostics: [],
     });
@@ -343,7 +373,6 @@ describe("plugins cli install", () => {
 
     await runPluginsCommand(["plugins", "install", "alpha", "--marketplace", "local/repo"]);
 
-    expect(clearPluginManifestRegistryCache).toHaveBeenCalledTimes(1);
     expect(writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledWith({
       alpha: expect.objectContaining({
         source: "marketplace",
@@ -421,14 +450,43 @@ describe("plugins cli install", () => {
     expect(installPluginFromNpmSpec).not.toHaveBeenCalled();
   });
 
+  it("passes the active profile extensions dir to ClawHub installs", async () => {
+    const extensionsDir = useProfileExtensionsDir();
+    const cfg = createEmptyPluginConfig();
+    const enabledCfg = createEnabledPluginConfig("demo");
+
+    loadConfig.mockReturnValue(cfg);
+    parseClawHubPluginSpec.mockReturnValue({ name: "demo" });
+    installPluginFromClawHub.mockResolvedValue(
+      createClawHubInstallResult({
+        pluginId: "demo",
+        packageName: "demo",
+        version: "1.2.3",
+        channel: "official",
+      }),
+    );
+    enablePluginInConfig.mockReturnValue({ config: enabledCfg });
+    applyExclusiveSlotSelection.mockReturnValue({
+      config: enabledCfg,
+      warnings: [],
+    });
+
+    await runPluginsCommand(["plugins", "install", "clawhub:demo"]);
+
+    expect(installPluginFromClawHub).toHaveBeenCalledWith(
+      expect.objectContaining({
+        extensionsDir,
+        spec: "clawhub:demo",
+      }),
+    );
+  });
+
   it("does not persist incomplete config entries for config-gated bundled installs", async () => {
     const cfg = {
       plugins: {
         entries: {
           "memory-lancedb": {
-            config: {
-              embedding: {},
-            },
+            config: {},
           },
         },
         load: {
@@ -442,9 +500,7 @@ describe("plugins cli install", () => {
 
     const writtenConfig = writeConfigFile.mock.calls.at(-1)?.[0] as OpenClawConfig;
     expect(writtenConfig.plugins?.entries?.["memory-lancedb"]).toBeUndefined();
-    expect(writtenConfig.plugins?.load?.paths).toEqual(
-      expect.arrayContaining(["/existing/plugin", expect.stringContaining("memory-lancedb")]),
-    );
+    expect(writtenConfig.plugins?.load?.paths).toEqual(["/existing/plugin"]);
     expect(writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledWith({
       "memory-lancedb": expect.objectContaining({
         source: "path",
@@ -455,6 +511,32 @@ describe("plugins cli install", () => {
     expect(enablePluginInConfig).not.toHaveBeenCalled();
     expect(applyExclusiveSlotSelection).not.toHaveBeenCalled();
     expect(runtimeLogs.some((line) => line.includes("requires configuration first"))).toBe(true);
+  });
+
+  it("enables config-gated bundled installs when provider-backed config is explicit", async () => {
+    const cfg = {
+      plugins: {
+        entries: {
+          "memory-lancedb": {
+            config: {
+              embedding: {
+                provider: "openai",
+                model: "text-embedding-3-small",
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const enabledCfg = createEnabledPluginConfig("memory-lancedb");
+    loadConfig.mockReturnValue(cfg);
+    enablePluginInConfig.mockReturnValue({ config: enabledCfg });
+
+    await runPluginsCommand(["plugins", "install", "memory-lancedb"]);
+
+    expect(enablePluginInConfig).toHaveBeenCalled();
+    expect(writeConfigFile).toHaveBeenCalledWith(enabledCfg);
+    expect(runtimeLogs.some((line) => line.includes("requires configuration first"))).toBe(false);
   });
 
   it("passes force through as overwrite mode for ClawHub installs", async () => {
@@ -662,6 +744,30 @@ describe("plugins cli install", () => {
       }),
     });
     expect(writeConfigFile).toHaveBeenCalledWith(enabledCfg);
+  });
+
+  it("passes the active profile extensions dir to npm installs", async () => {
+    const extensionsDir = useProfileExtensionsDir();
+    const cfg = createEmptyPluginConfig();
+    const enabledCfg = createEnabledPluginConfig("demo");
+
+    loadConfig.mockReturnValue(cfg);
+    installPluginFromNpmSpec.mockResolvedValue(createNpmPluginInstallResult("demo"));
+    enablePluginInConfig.mockReturnValue({ config: enabledCfg });
+    recordPluginInstall.mockReturnValue(enabledCfg);
+    applyExclusiveSlotSelection.mockReturnValue({
+      config: enabledCfg,
+      warnings: [],
+    });
+
+    await runPluginsCommand(["plugins", "install", "npm:demo"]);
+
+    expect(installPluginFromNpmSpec).toHaveBeenCalledWith(
+      expect.objectContaining({
+        extensionsDir,
+        spec: "demo",
+      }),
+    );
   });
 
   it("passes npm: prefix installs through npm options without ClawHub lookup", async () => {
@@ -903,6 +1009,41 @@ describe("plugins cli install", () => {
       }),
     );
   });
+
+  it("passes the active profile extensions dir to local path installs", async () => {
+    const extensionsDir = useProfileExtensionsDir();
+    const localPluginDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-local-plugin-"));
+    const cfg = createEmptyPluginConfig();
+    const enabledCfg = createEnabledPluginConfig("demo");
+
+    loadConfig.mockReturnValue(cfg);
+    installPluginFromPath.mockResolvedValue({
+      ok: true,
+      pluginId: "demo",
+      targetDir: path.join(extensionsDir, "demo"),
+      version: "1.2.3",
+      extensions: ["./dist/index.js"],
+    });
+    enablePluginInConfig.mockReturnValue({ config: enabledCfg });
+    recordPluginInstall.mockReturnValue(enabledCfg);
+    applyExclusiveSlotSelection.mockReturnValue({
+      config: enabledCfg,
+      warnings: [],
+    });
+
+    try {
+      await runPluginsCommand(["plugins", "install", localPluginDir]);
+    } finally {
+      fs.rmSync(localPluginDir, { recursive: true, force: true });
+    }
+
+    expect(installPluginFromPath).toHaveBeenCalledWith(
+      expect.objectContaining({
+        extensionsDir,
+        path: localPluginDir,
+      }),
+    );
+  });
   it("passes force through as overwrite mode for npm installs", async () => {
     primeNpmPluginFallback();
 
@@ -936,6 +1077,31 @@ describe("plugins cli install", () => {
     expect(runtimeErrors.at(-1)).toContain(
       "Use `openclaw plugins update <id-or-npm-spec>` to upgrade the tracked plugin, or rerun install with `--force` to replace it.",
     );
+    expect(runtimeErrors.at(-1)).not.toContain("Also not a valid hook pack");
+  });
+
+  it("does not append hook-pack fallback details for managed extensions boundary failures", async () => {
+    const localPluginDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-local-plugin-"));
+
+    loadConfig.mockReturnValue({} as OpenClawConfig);
+    installPluginFromPath.mockResolvedValue({
+      ok: false,
+      error: "Invalid path: must stay within extensions directory",
+    });
+    installHooksFromPath.mockResolvedValue({
+      ok: false,
+      error: "package.json missing openclaw.hooks",
+    });
+
+    try {
+      await expect(runPluginsCommand(["plugins", "install", localPluginDir])).rejects.toThrow(
+        "__exit__:1",
+      );
+    } finally {
+      fs.rmSync(localPluginDir, { recursive: true, force: true });
+    }
+
+    expect(runtimeErrors.at(-1)).toBe("Invalid path: must stay within extensions directory");
     expect(runtimeErrors.at(-1)).not.toContain("Also not a valid hook pack");
   });
 

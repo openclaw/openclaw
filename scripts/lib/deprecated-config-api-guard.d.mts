@@ -1,3 +1,1 @@
-export function collectDeprecatedInternalConfigApiViolations(options?: {
-  repoRoot?: string;
-}): string[];
+export { collectDeprecatedInternalConfigApiViolations } from "./config-boundary-guard.mjs";

@@ -219,7 +219,7 @@ const BROAD_CHANGED_FALLBACK_PATTERNS = [
 ];
 const PRECISE_SOURCE_TEST_TARGETS = new Map([
   [
-    "test/helpers/plugins/tts-contract-suites.ts",
+    "src/plugins/contracts/tts-contract-suites.ts",
     [
       "src/plugins/contracts/core-extension-facade-boundary.test.ts",
       "src/plugins/contracts/tts.contract.test.ts",
@@ -230,7 +230,13 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ["scripts/github/barnacle-auto-response.mjs", ["test/scripts/barnacle-auto-response.test.ts"]],
   ["scripts/changed-lanes.mjs", ["test/scripts/changed-lanes.test.ts"]],
   ["scripts/check-changed.mjs", ["test/scripts/changed-lanes.test.ts"]],
+  ["scripts/check-deadcode-unused-files.mjs", ["test/scripts/check-deadcode-unused-files.test.ts"]],
+  [
+    "scripts/deadcode-unused-files.allowlist.mjs",
+    ["test/scripts/check-deadcode-unused-files.test.ts"],
+  ],
   ["scripts/lib/live-docker-stage.sh", ["test/scripts/live-docker-stage.test.ts"]],
+  ["scripts/lib/openclaw-test-state.mjs", ["test/scripts/openclaw-test-state.test.ts"]],
   ["scripts/lib/vitest-local-scheduling.mjs", ["test/scripts/vitest-local-scheduling.test.ts"]],
   [
     "scripts/run-vitest.mjs",
@@ -241,28 +247,100 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
     ],
   ],
   ["scripts/run-oxlint.mjs", ["test/scripts/run-oxlint.test.ts"]],
+  ["scripts/run-node.mjs", ["src/infra/run-node.test.ts"]],
   ["scripts/ci-run-timings.mjs", ["test/scripts/ci-run-timings.test.ts"]],
   ["scripts/test-extension-batch.mjs", ["test/scripts/test-extension.test.ts"]],
   ["scripts/lib/extension-test-plan.mjs", ["test/scripts/test-extension.test.ts"]],
   ["scripts/lib/vitest-batch-runner.mjs", ["test/scripts/test-extension.test.ts"]],
   ["scripts/lib/ci-node-test-plan.mjs", ["test/scripts/ci-node-test-plan.test.ts"]],
+  [
+    "scripts/lib/docker-e2e-scenarios.mjs",
+    ["test/scripts/docker-e2e-plan.test.ts", "test/scripts/plugin-prerelease-test-plan.test.ts"],
+  ],
+  [
+    "scripts/lib/plugin-prerelease-test-plan.mjs",
+    ["test/scripts/plugin-prerelease-test-plan.test.ts"],
+  ],
+  [
+    "scripts/e2e/kitchen-sink-plugin-docker.sh",
+    ["test/scripts/plugin-prerelease-test-plan.test.ts"],
+  ],
   ["scripts/lib/vitest-shard-timings.mjs", ["test/scripts/vitest-shard-timings.test.ts"]],
+  [
+    "scripts/plugin-prerelease-liveish-matrix.mjs",
+    ["test/scripts/plugin-prerelease-test-plan.test.ts"],
+  ],
   ["scripts/test-projects.mjs", ["test/scripts/test-projects.test.ts"]],
   ["scripts/test-projects.test-support.d.mts", ["test/scripts/test-projects.test.ts"]],
   ["scripts/test-projects.test-support.mjs", ["test/scripts/test-projects.test.ts"]],
+  ["scripts/blacksmith-testbox-state.mjs", ["test/scripts/blacksmith-testbox-state.test.ts"]],
+  ["scripts/blacksmith-testbox-runner.mjs", ["test/scripts/blacksmith-testbox-runner.test.ts"]],
+  ["scripts/testbox-sync-sanity.mjs", ["test/scripts/testbox-sync-sanity.test.ts"]],
 ]);
 const TOOLING_TEST_TARGETS = new Map([
   ["test/scripts/barnacle-auto-response.test.ts", ["test/scripts/barnacle-auto-response.test.ts"]],
   ["test/scripts/changed-lanes.test.ts", ["test/scripts/changed-lanes.test.ts"]],
+  [
+    "test/scripts/check-deadcode-unused-files.test.ts",
+    ["test/scripts/check-deadcode-unused-files.test.ts"],
+  ],
   ["test/scripts/live-docker-stage.test.ts", ["test/scripts/live-docker-stage.test.ts"]],
+  ["test/scripts/openclaw-test-state.test.ts", ["test/scripts/openclaw-test-state.test.ts"]],
+  [
+    "test/scripts/plugin-prerelease-test-plan.test.ts",
+    ["test/scripts/plugin-prerelease-test-plan.test.ts"],
+  ],
   ["test/scripts/test-projects.test.ts", ["test/scripts/test-projects.test.ts"]],
+  [
+    "test/scripts/blacksmith-testbox-runner.test.ts",
+    ["test/scripts/blacksmith-testbox-runner.test.ts"],
+  ],
+  [
+    "test/scripts/blacksmith-testbox-state.test.ts",
+    ["test/scripts/blacksmith-testbox-state.test.ts"],
+  ],
+  ["test/scripts/testbox-sync-sanity.test.ts", ["test/scripts/testbox-sync-sanity.test.ts"]],
   [
     "test/scripts/vitest-local-scheduling.test.ts",
     ["test/scripts/vitest-local-scheduling.test.ts"],
   ],
 ]);
+const GROUP_VISIBLE_REPLY_TEST_TARGETS = [
+  "src/auto-reply/reply/dispatch-acp.test.ts",
+  "src/auto-reply/reply/dispatch-from-config.test.ts",
+  "src/auto-reply/reply/followup-runner.test.ts",
+  "src/auto-reply/reply/groups.test.ts",
+  "extensions/discord/src/monitor/message-handler.process.test.ts",
+  "extensions/slack/src/monitor.tool-result.test.ts",
+];
+const GROUP_VISIBLE_REPLY_PROMPT_TEST_TARGETS = [
+  "src/agents/system-prompt.test.ts",
+  ...GROUP_VISIBLE_REPLY_TEST_TARGETS,
+];
 const SOURCE_TEST_TARGETS = new Map([
   ...PRECISE_SOURCE_TEST_TARGETS,
+  ["src/test-utils/openclaw-test-state.ts", ["src/test-utils/openclaw-test-state.test.ts"]],
+  [
+    "src/plugin-sdk/test-helpers/directory-ids.ts",
+    [
+      "extensions/discord/src/directory-contract.test.ts",
+      "extensions/slack/src/directory-contract.test.ts",
+      "extensions/telegram/src/directory-contract.test.ts",
+    ],
+  ],
+  [
+    "src/plugin-sdk/channel-reply-pipeline.ts",
+    ["src/plugins/contracts/plugin-sdk-subpaths.test.ts", ...GROUP_VISIBLE_REPLY_TEST_TARGETS],
+  ],
+  ["src/plugin-sdk/reply-runtime.ts", ["src/plugins/contracts/plugin-sdk-subpaths.test.ts"]],
+  [
+    "test/helpers/channels/directory-ids.ts",
+    [
+      "extensions/discord/src/directory-contract.test.ts",
+      "extensions/slack/src/directory-contract.test.ts",
+      "extensions/telegram/src/directory-contract.test.ts",
+    ],
+  ],
   ["extensions/google-meet/index.ts", ["extensions/google-meet/index.test.ts"]],
   ["extensions/google-meet/src/cli.ts", ["extensions/google-meet/src/cli.test.ts"]],
   ["extensions/google-meet/src/create.ts", ["extensions/google-meet/index.test.ts"]],
@@ -283,9 +361,15 @@ const SOURCE_TEST_TARGETS = new Map([
   ],
   ["src/memory-host-sdk/host/embeddings.ts", ["src/memory-host-sdk/host/embeddings.test.ts"]],
   [
-    "src/auto-reply/reply/dispatch-from-config.ts",
-    ["src/auto-reply/reply/dispatch-from-config.test.ts"],
+    "src/plugin-sdk/test-helpers/directory-ids.ts",
+    [
+      "extensions/discord/src/directory-contract.test.ts",
+      "extensions/slack/src/directory-contract.test.ts",
+      "extensions/telegram/src/directory-contract.test.ts",
+    ],
   ],
+  ["src/auto-reply/reply/dispatch-from-config.ts", GROUP_VISIBLE_REPLY_TEST_TARGETS],
+  ["src/auto-reply/reply/source-reply-delivery-mode.ts", GROUP_VISIBLE_REPLY_TEST_TARGETS],
   [
     "src/auto-reply/reply/effective-reply-route.ts",
     [
@@ -293,6 +377,12 @@ const SOURCE_TEST_TARGETS = new Map([
       "src/auto-reply/reply/dispatch-from-config.test.ts",
     ],
   ],
+  ["src/auto-reply/reply/get-reply-run.ts", ["src/auto-reply/reply/followup-runner.test.ts"]],
+  ["src/auto-reply/reply/groups.ts", GROUP_VISIBLE_REPLY_TEST_TARGETS],
+  ["src/auto-reply/get-reply-options.types.ts", GROUP_VISIBLE_REPLY_TEST_TARGETS],
+  ["src/agents/system-prompt.ts", GROUP_VISIBLE_REPLY_PROMPT_TEST_TARGETS],
+  ["src/config/types.messages.ts", GROUP_VISIBLE_REPLY_TEST_TARGETS],
+  ["src/config/zod-schema.core.ts", GROUP_VISIBLE_REPLY_TEST_TARGETS],
   ["src/auto-reply/reply/commands-acp.ts", ["src/auto-reply/reply/commands-acp.test.ts"]],
   [
     "src/auto-reply/reply/dispatch-acp-command-bypass.ts",

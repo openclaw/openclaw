@@ -93,7 +93,11 @@ const embeddedPiRunStreamingMock = vi.fn<typeof piEmbedded.isEmbeddedPiRunStream
   (_sessionId: string) => false,
 );
 const queueEmbeddedPiMessageMock = vi.fn<typeof piEmbedded.queueEmbeddedPiMessage>(
-  (_sessionId: string, _text: string) => false,
+  (
+    _sessionId: string,
+    _text: string,
+    _options?: Parameters<typeof piEmbedded.queueEmbeddedPiMessage>[2],
+  ) => false,
 );
 const waitForEmbeddedPiRunEndMock = vi.fn<typeof piEmbedded.waitForEmbeddedPiRunEnd>(
   async (_sessionId: string, _timeoutMs?: number) => true,
@@ -327,8 +331,11 @@ describe("subagent announce formatting", () => {
           isActive: Boolean(sessionId && embeddedRunMock.isEmbeddedPiRunActive(sessionId)),
         };
       },
-      queueEmbeddedPiMessage: (sessionId: string, text: string) =>
-        embeddedRunMock.queueEmbeddedPiMessage(sessionId, text),
+      queueEmbeddedPiMessage: (
+        sessionId: string,
+        text: string,
+        options?: Parameters<typeof piEmbedded.queueEmbeddedPiMessage>[2],
+      ) => embeddedRunMock.queueEmbeddedPiMessage(sessionId, text, options),
     });
     subagentAnnounceTesting.setDepsForTest({
       callGateway: async <T = Record<string, unknown>>(
@@ -356,8 +363,8 @@ describe("subagent announce formatting", () => {
       .mockImplementation((sessionId) => embeddedRunMock.isEmbeddedPiRunStreaming(sessionId));
     queueEmbeddedPiMessageSpy
       .mockReset()
-      .mockImplementation((sessionId, text) =>
-        embeddedRunMock.queueEmbeddedPiMessage(sessionId, text),
+      .mockImplementation((sessionId, text, options) =>
+        embeddedRunMock.queueEmbeddedPiMessage(sessionId, text, options),
       );
     waitForEmbeddedPiRunEndSpy
       .mockReset()
@@ -983,6 +990,62 @@ describe("subagent announce formatting", () => {
     const call = agentSpy.mock.calls[0]?.[0] as { params?: Record<string, unknown> };
     expect(call?.params?.channel).toBe("discord");
     expect(call?.params?.to).toBe("channel:thread-bound-1");
+  });
+
+  it("does not use a child bound destination when completion requester conversation is missing", async () => {
+    sessionStore = {
+      "agent:main:subagent:test": {
+        sessionId: "child-session-bound-missing-requester",
+      },
+      "agent:main:main": {
+        sessionId: "requester-session-bound-missing-requester",
+      },
+    };
+    chatHistoryMock.mockResolvedValueOnce({
+      messages: [{ role: "assistant", content: [{ type: "text", text: "bound answer: 2" }] }],
+    });
+    registerSessionBindingAdapter({
+      channel: "discord",
+      accountId: "acct-1",
+      listBySession: (targetSessionKey: string) =>
+        targetSessionKey === "agent:main:subagent:test"
+          ? [
+              {
+                bindingId: "discord:acct-1:thread-bound-1",
+                targetSessionKey,
+                targetKind: "subagent",
+                conversation: {
+                  channel: "discord",
+                  accountId: "acct-1",
+                  conversationId: "thread-bound-1",
+                  parentConversationId: "parent-main",
+                },
+                status: "active",
+                boundAt: Date.now(),
+              },
+            ]
+          : [],
+      resolveByConversation: () => null,
+    });
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-session-bound-missing-requester",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      requesterOrigin: { channel: "discord", accountId: "acct-1" },
+      ...defaultOutcomeAnnounce,
+      expectsCompletionMessage: true,
+      spawnMode: "session",
+    });
+
+    expect(didAnnounce).toBe(true);
+    expect(sendSpy).not.toHaveBeenCalled();
+    expect(agentSpy).toHaveBeenCalledTimes(1);
+    const call = agentSpy.mock.calls[0]?.[0] as { params?: Record<string, unknown> };
+    expect(call?.params?.deliver).toBe(false);
+    expect(call?.params?.to).toBeUndefined();
+    expect(call?.params?.threadId).toBeUndefined();
   });
 
   it("does not duplicate to main channel when two active bound sessions complete from the same requester channel", async () => {

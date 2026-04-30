@@ -20,6 +20,7 @@ vi.mock("../../logger.js", () => ({
 }));
 
 const { createRuntimeConfig } = await import("./runtime-config.js");
+const deprecatedConfigCode = "runtime-config-load-write";
 
 describe("createRuntimeConfig", () => {
   beforeEach(() => {
@@ -41,7 +42,7 @@ describe("createRuntimeConfig", () => {
     expect(configApi.loadConfig()).toBe(runtimeConfig);
     expect(getRuntimeConfigMock).toHaveBeenCalledTimes(2);
     expect(logWarnMock).toHaveBeenCalledWith(
-      "plugin runtime config.loadConfig() is deprecated; use config.current().",
+      `plugin runtime config.loadConfig() is deprecated (${deprecatedConfigCode}); use config.current().`,
     );
   });
 
@@ -52,7 +53,7 @@ describe("createRuntimeConfig", () => {
     await configApi.writeConfigFile(nextConfig);
 
     expect(logWarnMock).toHaveBeenCalledWith(
-      "plugin runtime config.writeConfigFile() is deprecated; use config.mutateConfigFile(...) or config.replaceConfigFile(...).",
+      `plugin runtime config.writeConfigFile() is deprecated (${deprecatedConfigCode}); use config.mutateConfigFile(...) or config.replaceConfigFile(...).`,
     );
     expect(replaceConfigFileMock).toHaveBeenCalledWith({
       nextConfig,

@@ -29,9 +29,10 @@ export async function getSharedCodexAppServerClient(options?: {
   startOptions?: CodexAppServerStartOptions;
   timeoutMs?: number;
   authProfileId?: string;
+  agentDir?: string;
 }): Promise<CodexAppServerClient> {
   const state = getSharedCodexAppServerClientState();
-  const agentDir = resolveOpenClawAgentDir();
+  const agentDir = options?.agentDir ?? resolveOpenClawAgentDir();
   const requestedStartOptions =
     options?.startOptions ?? resolveCodexAppServerRuntimeOptions().start;
   const managedStartOptions = await resolveManagedCodexAppServerStartOptions(requestedStartOptions);
@@ -42,6 +43,7 @@ export async function getSharedCodexAppServerClient(options?: {
   });
   const key = codexAppServerStartOptionsKey(startOptions, {
     authProfileId: options?.authProfileId,
+    agentDir,
   });
   if (state.key && state.key !== key) {
     clearSharedCodexAppServerClient();
@@ -59,6 +61,7 @@ export async function getSharedCodexAppServerClient(options?: {
           client,
           agentDir,
           authProfileId: options?.authProfileId,
+          startOptions,
         });
         return client;
       } catch (error) {
@@ -87,8 +90,9 @@ export async function createIsolatedCodexAppServerClient(options?: {
   timeoutMs?: number;
   authProfileId?: string;
   signal?: AbortSignal;
+  agentDir?: string;
 }): Promise<CodexAppServerClient> {
-  const agentDir = resolveOpenClawAgentDir();
+  const agentDir = options?.agentDir ?? resolveOpenClawAgentDir();
   const requestedStartOptions =
     options?.startOptions ?? resolveCodexAppServerRuntimeOptions().start;
   const managedStartOptions = await resolveManagedCodexAppServerStartOptions(requestedStartOptions);
@@ -114,6 +118,7 @@ export async function createIsolatedCodexAppServerClient(options?: {
         client,
         agentDir,
         authProfileId: options?.authProfileId,
+        startOptions,
       }),
       options?.signal,
       abortMessage,

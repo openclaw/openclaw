@@ -25,6 +25,10 @@ vi.mock("../config/config.js", () => ({
   getRuntimeConfig: () => cfg,
 }));
 
+vi.mock("../config/io.js", () => ({
+  getRuntimeConfig: () => cfg,
+}));
+
 vi.mock("../config/sessions.js", () => ({
   resolveMainSessionKey: (params?: {
     session?: { scope?: string; mainKey?: string };

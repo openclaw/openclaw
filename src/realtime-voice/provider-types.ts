@@ -90,13 +90,62 @@ export type RealtimeVoiceBrowserSessionCreateRequest = {
   voice?: string;
 };
 
-export type RealtimeVoiceBrowserSession = {
+export type RealtimeVoiceBrowserAudioContract = {
+  inputEncoding: "pcm16" | "g711_ulaw";
+  inputSampleRateHz: number;
+  outputEncoding: "pcm16" | "g711_ulaw";
+  outputSampleRateHz: number;
+};
+
+export type RealtimeVoiceBrowserWebRtcSdpSession = {
   provider: RealtimeVoiceProviderId;
+  transport?: "webrtc-sdp";
   clientSecret: string;
+  offerUrl?: string;
+  offerHeaders?: Record<string, string>;
   model?: string;
   voice?: string;
   expiresAt?: number;
 };
+
+export type RealtimeVoiceBrowserJsonPcmWebSocketSession = {
+  provider: RealtimeVoiceProviderId;
+  transport: "json-pcm-websocket";
+  protocol: string;
+  clientSecret: string;
+  websocketUrl: string;
+  audio: RealtimeVoiceBrowserAudioContract;
+  initialMessage?: unknown;
+  model?: string;
+  voice?: string;
+  expiresAt?: number;
+};
+
+export type RealtimeVoiceBrowserGatewayRelaySession = {
+  provider: RealtimeVoiceProviderId;
+  transport: "gateway-relay";
+  relaySessionId: string;
+  audio: RealtimeVoiceBrowserAudioContract;
+  model?: string;
+  voice?: string;
+  expiresAt?: number;
+};
+
+export type RealtimeVoiceBrowserManagedRoomSession = {
+  provider: RealtimeVoiceProviderId;
+  transport: "managed-room";
+  roomUrl: string;
+  token?: string;
+  model?: string;
+  voice?: string;
+  expiresAt?: number;
+};
+
+export type RealtimeVoiceBrowserSession =
+  | RealtimeVoiceBrowserWebRtcSdpSession
+  | RealtimeVoiceBrowserJsonPcmWebSocketSession
+  | RealtimeVoiceBrowserGatewayRelaySession
+  | RealtimeVoiceBrowserManagedRoomSession;
 
 export type RealtimeVoiceBridge = {
   supportsToolResultContinuation?: boolean;

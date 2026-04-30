@@ -9,6 +9,7 @@ import {
   TurnCoverage,
   type FunctionDeclaration,
   type FunctionResponse,
+  type LiveConnectConfig,
   type LiveServerContent,
   type LiveServerMessage,
   type LiveServerToolCall,
@@ -19,6 +20,8 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-onboard";
 import type {
   RealtimeVoiceAudioFormat,
   RealtimeVoiceBridge,
+  RealtimeVoiceBrowserSession,
+  RealtimeVoiceBrowserSessionCreateRequest,
   RealtimeVoiceBridgeCreateRequest,
   RealtimeVoiceProviderConfig,
   RealtimeVoiceProviderPlugin,
@@ -40,8 +43,13 @@ const GOOGLE_REALTIME_DEFAULT_MODEL = "gemini-2.5-flash-native-audio-preview-12-
 const GOOGLE_REALTIME_DEFAULT_VOICE = "Kore";
 const GOOGLE_REALTIME_DEFAULT_API_VERSION = "v1beta";
 const GOOGLE_REALTIME_INPUT_SAMPLE_RATE = 16_000;
+const GOOGLE_REALTIME_BROWSER_API_VERSION = "v1alpha";
+const GOOGLE_REALTIME_BROWSER_WEBSOCKET_URL =
+  "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContentConstrained";
 const MAX_PENDING_AUDIO_CHUNKS = 320;
 const DEFAULT_AUDIO_STREAM_END_SILENCE_MS = 700;
+const GOOGLE_REALTIME_BROWSER_SESSION_TTL_MS = 30 * 60 * 1000;
+const GOOGLE_REALTIME_BROWSER_NEW_SESSION_TTL_MS = 60 * 1000;
 
 type GoogleRealtimeSensitivity = "low" | "high";
 type GoogleRealtimeThinkingLevel = "minimal" | "low" | "medium" | "high";
@@ -66,8 +74,10 @@ type GoogleRealtimeVoiceProviderConfig = {
   thinkingBudget?: number;
 };
 
-type GoogleRealtimeVoiceBridgeConfig = RealtimeVoiceBridgeCreateRequest & {
+type GoogleRealtimeLiveConfig = {
   apiKey: string;
+  instructions?: string;
+  tools?: RealtimeVoiceTool[];
   model?: string;
   voice?: string;
   temperature?: number;
@@ -83,6 +93,8 @@ type GoogleRealtimeVoiceBridgeConfig = RealtimeVoiceBridgeCreateRequest & {
   thinkingLevel?: GoogleRealtimeThinkingLevel;
   thinkingBudget?: number;
 };
+
+type GoogleRealtimeVoiceBridgeConfig = RealtimeVoiceBridgeCreateRequest & GoogleRealtimeLiveConfig;
 
 type GoogleLiveSession = {
   sendClientContent: (params: {
@@ -258,7 +270,7 @@ function mapTurnCoverage(value: GoogleRealtimeTurnCoverage | undefined): TurnCov
   }
 }
 
-function buildThinkingConfig(config: GoogleRealtimeVoiceBridgeConfig): ThinkingConfig | undefined {
+function buildThinkingConfig(config: GoogleRealtimeLiveConfig): ThinkingConfig | undefined {
   if (config.thinkingLevel) {
     return { thinkingLevel: config.thinkingLevel.toUpperCase() as ThinkingConfig["thinkingLevel"] };
   }
@@ -269,7 +281,7 @@ function buildThinkingConfig(config: GoogleRealtimeVoiceBridgeConfig): ThinkingC
 }
 
 function buildRealtimeInputConfig(
-  config: GoogleRealtimeVoiceBridgeConfig,
+  config: GoogleRealtimeLiveConfig,
 ): RealtimeInputConfig | undefined {
   const startSensitivity = mapStartSensitivity(config.startSensitivity);
   const endSensitivity = mapEndSensitivity(config.endSensitivity);
@@ -308,6 +320,51 @@ function buildFunctionDeclarations(tools: RealtimeVoiceTool[] | undefined): Func
     }
     return declaration;
   });
+}
+
+function buildGoogleLiveConnectConfig(config: GoogleRealtimeLiveConfig): LiveConnectConfig {
+  const functionDeclarations = buildFunctionDeclarations(config.tools);
+  return {
+    responseModalities: [Modality.AUDIO],
+    ...(typeof config.temperature === "number" && config.temperature > 0
+      ? { temperature: config.temperature }
+      : {}),
+    speechConfig: {
+      voiceConfig: {
+        prebuiltVoiceConfig: {
+          voiceName: config.voice ?? GOOGLE_REALTIME_DEFAULT_VOICE,
+        },
+      },
+    },
+    systemInstruction: config.instructions,
+    ...(functionDeclarations.length > 0 ? { tools: [{ functionDeclarations }] } : {}),
+    ...(buildRealtimeInputConfig(config)
+      ? { realtimeInputConfig: buildRealtimeInputConfig(config) }
+      : {}),
+    inputAudioTranscription: {},
+    outputAudioTranscription: {},
+    ...(typeof config.enableAffectiveDialog === "boolean"
+      ? { enableAffectiveDialog: config.enableAffectiveDialog }
+      : {}),
+    ...(buildThinkingConfig(config) ? { thinkingConfig: buildThinkingConfig(config) } : {}),
+  };
+}
+
+function toGoogleModelResource(model: string): string {
+  return model.startsWith("models/") ? model : `models/${model}`;
+}
+
+function buildBrowserInitialSetup(model: string) {
+  return {
+    setup: {
+      model: toGoogleModelResource(model),
+      generationConfig: {
+        responseModalities: [Modality.AUDIO],
+      },
+      inputAudioTranscription: {},
+      outputAudioTranscription: {},
+    },
+  };
 }
 
 function parsePcmSampleRate(mimeType: string | undefined): number {
@@ -366,31 +423,9 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
       },
     });
 
-    const functionDeclarations = buildFunctionDeclarations(this.config.tools);
     this.session = (await ai.live.connect({
       model: this.config.model ?? GOOGLE_REALTIME_DEFAULT_MODEL,
-      config: {
-        responseModalities: [Modality.AUDIO],
-        ...(typeof this.config.temperature === "number" && this.config.temperature > 0
-          ? { temperature: this.config.temperature }
-          : {}),
-        speechConfig: {
-          voiceConfig: {
-            prebuiltVoiceConfig: {
-              voiceName: this.config.voice ?? GOOGLE_REALTIME_DEFAULT_VOICE,
-            },
-          },
-        },
-        systemInstruction: this.config.instructions,
-        ...(functionDeclarations.length > 0 ? { tools: [{ functionDeclarations }] } : {}),
-        ...(this.realtimeInputConfig ? { realtimeInputConfig: this.realtimeInputConfig } : {}),
-        inputAudioTranscription: {},
-        outputAudioTranscription: {},
-        ...(typeof this.config.enableAffectiveDialog === "boolean"
-          ? { enableAffectiveDialog: this.config.enableAffectiveDialog }
-          : {}),
-        ...(this.thinkingConfig ? { thinkingConfig: this.thinkingConfig } : {}),
-      },
+      config: buildGoogleLiveConnectConfig(this.config),
       callbacks: {
         onopen: () => {
           this.connected = true;
@@ -657,14 +692,67 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
       });
     }
   }
+}
 
-  private get realtimeInputConfig(): RealtimeInputConfig | undefined {
-    return buildRealtimeInputConfig(this.config);
+async function createGoogleRealtimeBrowserSession(
+  req: RealtimeVoiceBrowserSessionCreateRequest,
+): Promise<RealtimeVoiceBrowserSession> {
+  const config = normalizeProviderConfig(req.providerConfig);
+  const apiKey = config.apiKey || resolveEnvApiKey();
+  if (!apiKey) {
+    throw new Error("Google Gemini API key missing");
   }
 
-  private get thinkingConfig(): ThinkingConfig | undefined {
-    return buildThinkingConfig(this.config);
+  const model = req.model ?? config.model ?? GOOGLE_REALTIME_DEFAULT_MODEL;
+  const voice = req.voice ?? config.voice ?? GOOGLE_REALTIME_DEFAULT_VOICE;
+  const expiresAtMs = Date.now() + GOOGLE_REALTIME_BROWSER_SESSION_TTL_MS;
+  const newSessionExpiresAtMs = Date.now() + GOOGLE_REALTIME_BROWSER_NEW_SESSION_TTL_MS;
+  const ai = createGoogleGenAI({
+    apiKey,
+    httpOptions: {
+      apiVersion: GOOGLE_REALTIME_BROWSER_API_VERSION,
+    },
+  });
+  const token = await ai.authTokens.create({
+    config: {
+      uses: 1,
+      expireTime: new Date(expiresAtMs).toISOString(),
+      newSessionExpireTime: new Date(newSessionExpiresAtMs).toISOString(),
+      liveConnectConstraints: {
+        model,
+        config: buildGoogleLiveConnectConfig({
+          ...config,
+          apiKey,
+          model,
+          voice,
+          instructions: req.instructions,
+          tools: req.tools,
+        }),
+      },
+    },
+  });
+  const clientSecret = token.name?.trim();
+  if (!clientSecret) {
+    throw new Error("Google Live browser session did not return an ephemeral token");
   }
+
+  return {
+    provider: "google",
+    transport: "json-pcm-websocket",
+    protocol: "google-live-bidi",
+    clientSecret,
+    websocketUrl: GOOGLE_REALTIME_BROWSER_WEBSOCKET_URL,
+    audio: {
+      inputEncoding: "pcm16",
+      inputSampleRateHz: GOOGLE_REALTIME_INPUT_SAMPLE_RATE,
+      outputEncoding: "pcm16",
+      outputSampleRateHz: 24_000,
+    },
+    initialMessage: buildBrowserInitialSetup(model),
+    model,
+    voice,
+    expiresAt: Math.floor(expiresAtMs / 1000),
+  };
 }
 
 export function buildGoogleRealtimeVoiceProvider(): RealtimeVoiceProviderPlugin {
@@ -700,6 +788,7 @@ export function buildGoogleRealtimeVoiceProvider(): RealtimeVoiceProviderPlugin 
         thinkingBudget: config.thinkingBudget,
       });
     },
+    createBrowserSession: createGoogleRealtimeBrowserSession,
   };
 }
 
@@ -707,5 +796,7 @@ export {
   GOOGLE_REALTIME_DEFAULT_API_VERSION,
   GOOGLE_REALTIME_DEFAULT_MODEL,
   GOOGLE_REALTIME_DEFAULT_VOICE,
+  GOOGLE_REALTIME_BROWSER_API_VERSION,
+  GOOGLE_REALTIME_BROWSER_WEBSOCKET_URL,
 };
 export type { GoogleRealtimeVoiceProviderConfig };

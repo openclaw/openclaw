@@ -1,5 +1,5 @@
-import { ChannelType } from "@buape/carbon";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { ChannelType } from "../internal/discord.js";
 import { createPartialDiscordChannelWithThrowingGetters } from "../test-support/partial-channel.js";
 
 const transcribeFirstAudioMock = vi.hoisted(() => vi.fn());
@@ -71,7 +71,7 @@ function createThreadBinding(
 }
 
 function createPreflightArgs(params: {
-  cfg: import("openclaw/plugin-sdk/config-runtime").OpenClawConfig;
+  cfg: import("openclaw/plugin-sdk/config-types").OpenClawConfig;
   discordConfig: DiscordConfig;
   data: DiscordMessageEvent;
   client: DiscordClient;
@@ -120,7 +120,7 @@ function createDmClient(channelId: string): DiscordClient {
 async function runThreadBoundPreflight(params: {
   threadId: string;
   parentId: string;
-  message: import("@buape/carbon").Message;
+  message: import("../internal/discord.js").Message;
   threadBinding: import("openclaw/plugin-sdk/conversation-runtime").SessionBindingRecord;
   discordConfig: DiscordConfig;
   registerBindingAdapter?: boolean;
@@ -161,9 +161,9 @@ async function runThreadBoundPreflight(params: {
 async function runGuildPreflight(params: {
   channelId: string;
   guildId: string;
-  message: import("@buape/carbon").Message;
+  message: import("../internal/discord.js").Message;
   discordConfig: DiscordConfig;
-  cfg?: import("openclaw/plugin-sdk/config-runtime").OpenClawConfig;
+  cfg?: import("openclaw/plugin-sdk/config-types").OpenClawConfig;
   guildEntries?: Parameters<typeof preflightDiscordMessage>[0]["guildEntries"];
   includeGuildObject?: boolean;
 }) {
@@ -186,7 +186,7 @@ async function runGuildPreflight(params: {
 
 async function runDmPreflight(params: {
   channelId: string;
-  message: import("@buape/carbon").Message;
+  message: import("../internal/discord.js").Message;
   discordConfig: DiscordConfig;
 }) {
   return preflightDiscordMessage({
@@ -206,7 +206,7 @@ async function runDmPreflight(params: {
 async function runMentionOnlyBotPreflight(params: {
   channelId: string;
   guildId: string;
-  message: import("@buape/carbon").Message;
+  message: import("../internal/discord.js").Message;
 }) {
   return runGuildPreflight({
     channelId: params.channelId,
@@ -221,7 +221,7 @@ async function runMentionOnlyBotPreflight(params: {
 async function runIgnoreOtherMentionsPreflight(params: {
   channelId: string;
   guildId: string;
-  message: import("@buape/carbon").Message;
+  message: import("../internal/discord.js").Message;
 }) {
   return runGuildPreflight({
     channelId: params.channelId,
@@ -364,6 +364,81 @@ describe("preflightDiscordMessage", () => {
         pluginId: "openclaw-codex-app-server",
       },
     });
+  });
+
+  it("ignores stale route-shaped channel bindings when config now routes to another agent", async () => {
+    const channelId = "channel-stale-route";
+    registerSessionBindingAdapter({
+      channel: "discord",
+      accountId: "default",
+      listBySession: () => [],
+      resolveByConversation: (ref) =>
+        ref.conversationId === channelId
+          ? createThreadBinding({
+              bindingId: "default:channel-stale-route",
+              targetKind: "session",
+              targetSessionKey: `agent:oldagent:discord:channel:${channelId}`,
+              conversation: {
+                channel: "discord",
+                accountId: "default",
+                conversationId: channelId,
+              },
+              metadata: undefined,
+            })
+          : null,
+    });
+
+    const result = await runGuildPreflight({
+      channelId,
+      guildId: "guild-stale-route",
+      message: createDiscordMessage({
+        id: "m-stale-route",
+        channelId,
+        content: "which agent is this?",
+        author: {
+          id: "user-1",
+          bot: false,
+          username: "alice",
+        },
+      }),
+      cfg: {
+        agents: {
+          list: [{ id: "newagent" }],
+        },
+        bindings: [
+          {
+            agentId: "newagent",
+            match: {
+              channel: "discord",
+              accountId: "default",
+              peer: { kind: "channel", id: channelId },
+            },
+          },
+        ],
+        channels: {
+          discord: {},
+        },
+      },
+      discordConfig: {
+        allowBots: true,
+      } as DiscordConfig,
+      guildEntries: {
+        "guild-stale-route": {
+          channels: {
+            [channelId]: {
+              enabled: true,
+              requireMention: false,
+            },
+          },
+        },
+      },
+    });
+
+    expect(result).not.toBeNull();
+    expect(result?.route.agentId).toBe("newagent");
+    expect(result?.route.sessionKey).toBe(`agent:newagent:discord:channel:${channelId}`);
+    expect(result?.boundSessionKey).toBeUndefined();
+    expect(result?.threadBinding).toBeUndefined();
   });
 
   it("preflights direct-message voice notes without mention gating", async () => {
@@ -579,7 +654,7 @@ describe("preflightDiscordMessage", () => {
       createPreflightArgs({
         cfg: {
           ...DEFAULT_PREFLIGHT_CFG,
-        } as import("openclaw/plugin-sdk/config-runtime").OpenClawConfig,
+        } as import("openclaw/plugin-sdk/config-types").OpenClawConfig,
         discordConfig: {
           allowBots: true,
         } as DiscordConfig,
@@ -720,6 +795,55 @@ describe("preflightDiscordMessage", () => {
     const result = await runMentionOnlyBotPreflight({ channelId, guildId, message });
 
     expect(result).not.toBeNull();
+  });
+
+  it("does not mask mention gating when bot id is missing but mention patterns can detect", async () => {
+    const channelId = "channel-missing-bot-id-mention-gate";
+    const guildId = "guild-missing-bot-id-mention-gate";
+    const message = createDiscordMessage({
+      id: "m-missing-bot-id-mention-gate",
+      channelId,
+      content: "general update without the configured mention",
+      author: {
+        id: "user-1",
+        bot: false,
+        username: "Alice",
+      },
+    });
+
+    const result = await preflightDiscordMessage({
+      ...createPreflightArgs({
+        cfg: {
+          ...DEFAULT_PREFLIGHT_CFG,
+          messages: {
+            groupChat: {
+              mentionPatterns: ["openclaw"],
+            },
+          },
+        } as import("openclaw/plugin-sdk/config-types").OpenClawConfig,
+        discordConfig: {} as DiscordConfig,
+        data: createGuildEvent({
+          channelId,
+          guildId,
+          author: message.author,
+          message,
+        }),
+        client: createGuildTextClient(channelId),
+      }),
+      botUserId: undefined,
+      guildEntries: {
+        [guildId]: {
+          channels: {
+            [channelId]: {
+              enabled: true,
+              requireMention: true,
+            },
+          },
+        },
+      },
+    });
+
+    expect(result).toBeNull();
   });
 
   it("treats @everyone as a mention when requireMention is true", async () => {
@@ -1064,7 +1188,7 @@ describe("preflightDiscordMessage", () => {
               mentionPatterns: ["openclaw"],
             },
           },
-        } as import("openclaw/plugin-sdk/config-runtime").OpenClawConfig,
+        } as import("openclaw/plugin-sdk/config-types").OpenClawConfig,
         discordConfig: {} as DiscordConfig,
         data: createGuildEvent({
           channelId,
@@ -1133,7 +1257,7 @@ describe("preflightDiscordMessage", () => {
               mentionPatterns: ["openclaw"],
             },
           },
-        } as import("openclaw/plugin-sdk/config-runtime").OpenClawConfig,
+        } as import("openclaw/plugin-sdk/config-types").OpenClawConfig,
         discordConfig: {} as DiscordConfig,
         data: createGuildEvent({
           channelId,

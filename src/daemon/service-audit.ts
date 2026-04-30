@@ -50,6 +50,7 @@ export const SERVICE_AUDIT_CODES = {
   gatewayPathNonMinimal: "gateway-path-nonminimal",
   gatewayTokenEmbedded: "gateway-token-embedded",
   gatewayManagedEnvEmbedded: "gateway-managed-env-embedded",
+  gatewayPortMismatch: "gateway-port-mismatch",
   gatewayProxyEnvEmbedded: "gateway-proxy-env-embedded",
   gatewayTokenMismatch: "gateway-token-mismatch",
   gatewayRuntimeBun: "gateway-runtime-bun",
@@ -217,6 +218,52 @@ function auditGatewayCommand(programArguments: string[] | undefined, issues: Ser
       level: "aggressive",
     });
   }
+}
+
+function parseGatewayPortArg(value: string | undefined): number | undefined {
+  const parsed = Number.parseInt(value ?? "", 10);
+  return Number.isSafeInteger(parsed) && parsed > 0 && parsed <= 65535 ? parsed : undefined;
+}
+
+export function readGatewayServiceCommandPort(programArguments?: string[]): number | undefined {
+  if (!programArguments || programArguments.length === 0) {
+    return undefined;
+  }
+  for (let index = 0; index < programArguments.length; index += 1) {
+    const arg = programArguments[index];
+    if (arg === "--port") {
+      return parseGatewayPortArg(programArguments[index + 1]);
+    }
+    if (arg.startsWith("--port=")) {
+      return parseGatewayPortArg(arg.slice("--port=".length));
+    }
+  }
+  return undefined;
+}
+
+function auditGatewayServicePort(params: {
+  programArguments: string[] | undefined;
+  issues: ServiceConfigIssue[];
+  expectedPort?: number;
+}) {
+  if (
+    typeof params.expectedPort !== "number" ||
+    !Number.isSafeInteger(params.expectedPort) ||
+    params.expectedPort <= 0 ||
+    params.expectedPort > 65535
+  ) {
+    return;
+  }
+  const servicePort = readGatewayServiceCommandPort(params.programArguments);
+  if (servicePort === undefined || servicePort === params.expectedPort) {
+    return;
+  }
+  params.issues.push({
+    code: SERVICE_AUDIT_CODES.gatewayPortMismatch,
+    message: "Gateway service port does not match current gateway config.",
+    detail: `${servicePort} -> ${params.expectedPort}`,
+    level: "recommended",
+  });
 }
 
 function auditGatewayToken(
@@ -521,11 +568,17 @@ export async function auditGatewayServiceConfig(params: {
   platform?: NodeJS.Platform;
   expectedGatewayToken?: string;
   expectedManagedServiceEnvKeys?: Iterable<string>;
+  expectedPort?: number;
 }): Promise<ServiceConfigAudit> {
   const issues: ServiceConfigIssue[] = [];
   const platform = params.platform ?? process.platform;
 
   auditGatewayCommand(params.command?.programArguments, issues);
+  auditGatewayServicePort({
+    programArguments: params.command?.programArguments,
+    issues,
+    expectedPort: params.expectedPort,
+  });
   auditManagedServiceEnvironment(params.command, issues, params.expectedManagedServiceEnvKeys);
   auditProxyServiceEnvironment(params.command, issues);
   auditGatewayToken(params.command, issues, params.expectedGatewayToken);

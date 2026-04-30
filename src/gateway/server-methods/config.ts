@@ -1,11 +1,9 @@
 import { execFile } from "node:child_process";
-import { isDeepStrictEqual } from "node:util";
 import {
   createConfigIO,
   parseConfigJson5,
   readConfigFileSnapshot,
   readConfigFileSnapshotForWrite,
-  replaceConfigFile,
   resolveConfigSnapshotHash,
   validateConfigObjectWithPlugins,
 } from "../../config/config.js";
@@ -18,22 +16,10 @@ import {
 } from "../../config/redact-snapshot.js";
 import { loadGatewayRuntimeConfigSchema } from "../../config/runtime-schema.js";
 import { lookupConfigSchema, type ConfigSchemaResponse } from "../../config/schema.js";
-import { extractDeliveryInfo } from "../../config/sessions.js";
 import type { ConfigValidationIssue, OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import {
-  formatDoctorNonInteractiveHint,
-  type RestartSentinelPayload,
-  writeRestartSentinel,
-} from "../../infra/restart-sentinel.js";
-import { scheduleGatewaySigusr1Restart } from "../../infra/restart.js";
 import { prepareSecretsRuntimeSnapshot } from "../../secrets/runtime.js";
-import { resolveEffectiveSharedGatewayAuth } from "../auth.js";
-import {
-  buildGatewayReloadPlan,
-  diffConfigPaths,
-  resolveGatewayReloadSettings,
-} from "../config-reload.js";
+import { diffConfigPaths } from "../config-reload.js";
 import {
   formatControlPlaneActor,
   resolveControlPlaneActor,
@@ -52,8 +38,13 @@ import {
   validateConfigSetParams,
 } from "../protocol/index.js";
 import { resolveBaseHashParam } from "./base-hash.js";
-import { parseRestartRequestParams } from "./restart-request.js";
-import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
+import {
+  commitGatewayConfigWrite,
+  didSharedGatewayAuthChange,
+  resolveGatewayConfigPath,
+  resolveGatewayConfigRestartWriteResult,
+} from "./config-write-flow.js";
+import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 const MAX_CONFIG_ISSUES_IN_ERROR_MESSAGE = 3;
@@ -62,15 +53,6 @@ type ConfigOpenCommand = {
   command: string;
   args: string[];
 };
-
-type ConfigWriteSnapshot = Awaited<ReturnType<typeof readConfigFileSnapshotForWrite>>["snapshot"];
-type ConfigWriteOptions = Awaited<
-  ReturnType<typeof readConfigFileSnapshotForWrite>
->["writeOptions"];
-
-function resolveGatewayConfigPath(snapshot?: Pick<ConfigWriteSnapshot, "path">): string {
-  return snapshot?.path ?? createConfigIO().configPath;
-}
 
 function requireConfigBaseHash(
   params: unknown,
@@ -235,48 +217,6 @@ function parseValidateConfigFromRawOrRespond(
   return { config: validated.config, schema };
 }
 
-function didSharedGatewayAuthChange(prev: OpenClawConfig, next: OpenClawConfig): boolean {
-  const prevAuth = resolveEffectiveSharedGatewayAuth({
-    authConfig: prev.gateway?.auth,
-    env: process.env,
-    tailscaleMode: prev.gateway?.tailscale?.mode,
-  });
-  const nextAuth = resolveEffectiveSharedGatewayAuth({
-    authConfig: next.gateway?.auth,
-    env: process.env,
-    tailscaleMode: next.gateway?.tailscale?.mode,
-  });
-  if (prevAuth === null || nextAuth === null) {
-    return prevAuth !== nextAuth;
-  }
-  return prevAuth.mode !== nextAuth.mode || !isDeepStrictEqual(prevAuth.secret, nextAuth.secret);
-}
-
-function queueSharedGatewayAuthDisconnect(
-  shouldDisconnect: boolean,
-  context?: GatewayRequestContext,
-): void {
-  if (!shouldDisconnect) {
-    return;
-  }
-  queueMicrotask(() => {
-    context?.disconnectClientsUsingSharedGatewayAuth?.();
-  });
-}
-
-function queueSharedGatewayAuthGenerationRefresh(
-  shouldRefresh: boolean,
-  nextConfig: OpenClawConfig,
-  context?: GatewayRequestContext,
-): void {
-  if (!shouldRefresh) {
-    return;
-  }
-  queueMicrotask(() => {
-    context?.enforceSharedGatewayAuthGenerationForConfigWrite?.(nextConfig);
-  });
-}
-
 function summarizeConfigValidationIssues(issues: ReadonlyArray<ConfigValidationIssue>): string {
   const trimmed = issues.slice(0, MAX_CONFIG_ISSUES_IN_ERROR_MESSAGE);
   const lines = formatConfigIssueLines(trimmed, "", { normalizeRoot: true })
@@ -289,21 +229,6 @@ function summarizeConfigValidationIssues(issues: ReadonlyArray<ConfigValidationI
   return `invalid config: ${lines.join("; ")}${
     hiddenCount > 0 ? ` (+${hiddenCount} more issue${hiddenCount === 1 ? "" : "s"})` : ""
   }`;
-}
-
-function shouldScheduleDirectConfigRestart(params: {
-  changedPaths: string[];
-  nextConfig: OpenClawConfig;
-}): boolean {
-  const reloadSettings = resolveGatewayReloadSettings(params.nextConfig);
-  if (reloadSettings.mode === "off") {
-    return true;
-  }
-  const plan = buildGatewayReloadPlan(params.changedPaths);
-  if (reloadSettings.mode === "hot" && plan.restartGateway) {
-    return true;
-  }
-  return false;
 }
 
 async function ensureResolvableSecretRefsOrRespond(params: {
@@ -330,146 +255,12 @@ async function ensureResolvableSecretRefsOrRespond(params: {
   }
 }
 
-function resolveConfigRestartRequest(params: unknown): {
-  sessionKey: string | undefined;
-  note: string | undefined;
-  restartDelayMs: number | undefined;
-  deliveryContext: ReturnType<typeof extractDeliveryInfo>["deliveryContext"];
-  threadId: ReturnType<typeof extractDeliveryInfo>["threadId"];
-} {
-  const {
-    sessionKey,
-    deliveryContext: requestedDeliveryContext,
-    threadId: requestedThreadId,
-    note,
-    restartDelayMs,
-  } = parseRestartRequestParams(params);
-
-  // Extract deliveryContext + threadId for routing after restart.
-  // Uses generic :thread: parsing plus plugin-owned session grammars.
-  const { deliveryContext: sessionDeliveryContext, threadId: sessionThreadId } =
-    extractDeliveryInfo(sessionKey);
-
-  return {
-    sessionKey,
-    note,
-    restartDelayMs,
-    deliveryContext: requestedDeliveryContext ?? sessionDeliveryContext,
-    threadId: requestedThreadId ?? sessionThreadId,
-  };
-}
-
-function buildConfigRestartSentinelPayload(params: {
-  kind: RestartSentinelPayload["kind"];
-  mode: string;
-  configPath: string;
-  sessionKey: string | undefined;
-  deliveryContext: ReturnType<typeof extractDeliveryInfo>["deliveryContext"];
-  threadId: ReturnType<typeof extractDeliveryInfo>["threadId"];
-  note: string | undefined;
-}): RestartSentinelPayload {
-  return {
-    kind: params.kind,
-    status: "ok",
-    ts: Date.now(),
-    sessionKey: params.sessionKey,
-    deliveryContext: params.deliveryContext,
-    threadId: params.threadId,
-    message: params.note ?? null,
-    doctorHint: formatDoctorNonInteractiveHint(),
-    stats: {
-      mode: params.mode,
-      root: params.configPath,
-    },
-  };
-}
-
-async function tryWriteRestartSentinelPayload(
-  payload: RestartSentinelPayload,
-): Promise<string | null> {
-  try {
-    return await writeRestartSentinel(payload);
-  } catch {
-    return null;
-  }
-}
-
 function loadSchemaWithPlugins(): ConfigSchemaResponse {
   // Note: We can't easily cache this, as there are no callback that can invalidate
   // our cache. However, getRuntimeConfig() and loadOpenClawPlugins() (called inside
   // loadGatewayRuntimeConfigSchema) already cache their results, and buildConfigSchema()
   // is just a cheap transformation.
   return loadGatewayRuntimeConfigSchema();
-}
-
-async function commitGatewayConfigWrite(params: {
-  snapshot: ConfigWriteSnapshot;
-  writeOptions: ConfigWriteOptions;
-  nextConfig: OpenClawConfig;
-  context?: GatewayRequestContext;
-  disconnectSharedAuthClients?: boolean;
-}): Promise<{ path: string; queueFollowUp: () => void }> {
-  await replaceConfigFile({
-    nextConfig: params.nextConfig,
-    writeOptions: params.writeOptions,
-    afterWrite: { mode: "auto" },
-  });
-  return {
-    path: resolveGatewayConfigPath(params.snapshot),
-    queueFollowUp: () => {
-      queueSharedGatewayAuthGenerationRefresh(true, params.nextConfig, params.context);
-      queueSharedGatewayAuthDisconnect(Boolean(params.disconnectSharedAuthClients), params.context);
-    },
-  };
-}
-
-async function resolveGatewayConfigRestartWriteResult(params: {
-  requestParams: unknown;
-  kind: RestartSentinelPayload["kind"];
-  mode: "config.patch" | "config.apply";
-  configPath: string;
-  changedPaths: string[];
-  nextConfig: OpenClawConfig;
-  actor: ReturnType<typeof resolveControlPlaneActor>;
-  context?: GatewayRequestContext;
-}): Promise<{
-  payload: RestartSentinelPayload;
-  sentinelPath: string | null;
-  restart: ReturnType<typeof scheduleGatewaySigusr1Restart> | undefined;
-}> {
-  const { sessionKey, note, restartDelayMs, deliveryContext, threadId } =
-    resolveConfigRestartRequest(params.requestParams);
-  const payload = buildConfigRestartSentinelPayload({
-    kind: params.kind,
-    mode: params.mode,
-    configPath: params.configPath,
-    sessionKey,
-    deliveryContext,
-    threadId,
-    note,
-  });
-  const sentinelPath = await tryWriteRestartSentinelPayload(payload);
-  const restart = shouldScheduleDirectConfigRestart({
-    changedPaths: params.changedPaths,
-    nextConfig: params.nextConfig,
-  })
-    ? scheduleGatewaySigusr1Restart({
-        delayMs: restartDelayMs,
-        reason: params.mode,
-        audit: {
-          actor: params.actor.actor,
-          deviceId: params.actor.deviceId,
-          clientIp: params.actor.clientIp,
-          changedPaths: params.changedPaths,
-        },
-      })
-    : undefined;
-  if (restart?.coalesced) {
-    params.context?.logGateway?.warn(
-      `${params.mode} restart coalesced ${formatControlPlaneActor(params.actor)} delayMs=${restart.delayMs}`,
-    );
-  }
-  return { payload, sentinelPath, restart };
 }
 
 export const configHandlers: GatewayRequestHandlers = {

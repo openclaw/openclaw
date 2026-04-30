@@ -84,6 +84,8 @@ const GATEWAY_LIVE_STRIP_SCAFFOLDING_MODEL_KEYS = new Set([
 ]);
 const GATEWAY_LIVE_EXEC_READ_NONCE_MISS_SKIP_MODEL_KEYS = new Set([
   "fireworks/accounts/fireworks/models/glm-5",
+  "fireworks/accounts/fireworks/models/kimi-k2p5",
+  "fireworks/accounts/fireworks/models/kimi-k2p6",
   "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
   "google/gemini-3.1-flash-lite-preview",
 ]);
@@ -503,6 +505,12 @@ describe("shouldSkipExecReadNonceMissForLiveModel", () => {
       shouldSkipExecReadNonceMissForLiveModel("fireworks/accounts/fireworks/models/glm-5"),
     ).toBe(true);
     expect(
+      shouldSkipExecReadNonceMissForLiveModel("fireworks/accounts/fireworks/models/kimi-k2p5"),
+    ).toBe(true);
+    expect(
+      shouldSkipExecReadNonceMissForLiveModel("fireworks/accounts/fireworks/models/kimi-k2p6"),
+    ).toBe(true);
+    expect(
       shouldSkipExecReadNonceMissForLiveModel(
         "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
       ),
@@ -677,6 +685,7 @@ function shouldSkipToolNonceProbeMissForLiveModel(modelKey?: string): boolean {
     provider === "minimax" ||
     provider === "opencode" ||
     provider === "opencode-go" ||
+    provider === "openrouter" ||
     provider === "xai" ||
     provider === "zai"
   ) {
@@ -695,6 +704,7 @@ describe("shouldSkipToolNonceProbeMissForLiveModel", () => {
     { modelKey: "minimax/minimax-m1", expected: true },
     { modelKey: "opencode/big-pickle", expected: true },
     { modelKey: "opencode-go/glm-5", expected: true },
+    { modelKey: "openrouter/ai21/jamba-large-1.7", expected: true },
     { modelKey: "xai/grok-4.1-fast", expected: true },
     { modelKey: "zai/glm-5.1", expected: true },
     { modelKey: "google/gemini-3-flash-preview", expected: true },

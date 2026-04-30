@@ -1,16 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-
-const resolveDefaultAgentId = vi.hoisted(() => vi.fn(() => "main"));
-const resolveAgentWorkspaceDir = vi.hoisted(() =>
-  vi.fn((_cfg: OpenClawConfig, agentId: string) => `/workspace/${agentId}`),
-);
-
-vi.mock("../agents/agent-scope.js", () => ({
-  resolveDefaultAgentId,
-  resolveAgentWorkspaceDir,
-}));
-
 import {
   formatMemoryDreamingDay,
   isSameMemoryDreamingDay,
@@ -164,19 +153,13 @@ describe("memory dreaming host helpers", () => {
   });
 
   it("dedupes shared workspaces across all configured agents", () => {
-    resolveAgentWorkspaceDir.mockImplementation((_cfg: OpenClawConfig, agentId: string) => {
-      if (agentId === "alpha") {
-        return "/workspace/shared";
-      }
-      if (agentId === "gamma") {
-        return "/workspace/shared";
-      }
-      return `/workspace/${agentId}`;
-    });
-
     const cfg = {
       agents: {
-        list: [{ id: "alpha" }, { id: "beta" }, { id: "gamma" }],
+        list: [
+          { id: "alpha", workspace: "/workspace/shared" },
+          { id: "beta", workspace: "/workspace/beta" },
+          { id: "gamma", workspace: "/workspace/shared" },
+        ],
       },
     } as OpenClawConfig;
 
@@ -193,13 +176,18 @@ describe("memory dreaming host helpers", () => {
   });
 
   it("uses default agent fallback and timezone-aware day helpers", () => {
-    resolveDefaultAgentId.mockReturnValue("fallback");
-    const cfg = {} as OpenClawConfig;
+    const cfg = {
+      agents: {
+        defaults: {
+          workspace: "/workspace",
+        },
+      },
+    } as OpenClawConfig;
 
     expect(resolveMemoryDreamingWorkspaces(cfg)).toEqual([
       {
-        workspaceDir: "/workspace/fallback",
-        agentIds: ["fallback"],
+        workspaceDir: "/workspace",
+        agentIds: ["main"],
       },
     ]);
 

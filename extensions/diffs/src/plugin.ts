@@ -1,5 +1,5 @@
 import path from "node:path";
-import { resolveLivePluginConfigObject } from "openclaw/plugin-sdk/config-runtime";
+import { resolveLivePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import {
   resolvePreferredOpenClawTmpDir,
   type OpenClawConfig,

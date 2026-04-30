@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { App } from "@slack/bolt";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import type { ResolvedSlackAccount } from "../../accounts.js";
@@ -31,7 +31,7 @@ export function createInboundSlackTestContext(params: {
     mainKey: "main",
     dmEnabled: true,
     dmPolicy: "open",
-    allowFrom: [],
+    allowFrom: ["*"],
     allowNameMatching: false,
     groupDmEnabled: true,
     groupDmChannels: [],

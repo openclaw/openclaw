@@ -16,13 +16,13 @@ export type {
   GroupPolicy,
   GroupToolPolicyConfig,
   OpenClawConfig,
-} from "openclaw/plugin-sdk/config-runtime";
+} from "openclaw/plugin-sdk/config-types";
 export {
   GROUP_POLICY_BLOCKED_LABEL,
   resolveAllowlistProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
   warnMissingProviderGroupPolicyFallbackOnce,
-} from "openclaw/plugin-sdk/config-runtime";
+} from "openclaw/plugin-sdk/runtime-group-policy";
 export { dispatchInboundReplyWithBase } from "openclaw/plugin-sdk/inbound-reply-dispatch";
 export type { OutboundReplyPayload } from "openclaw/plugin-sdk/reply-payload";
 export { deliverFormattedTextWithAttachments } from "openclaw/plugin-sdk/reply-payload";

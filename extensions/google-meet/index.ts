@@ -677,7 +677,13 @@ export default definePluginEntry({
       async ({ params, respond }: GatewayRequestHandlerOptions) => {
         try {
           const rt = await ensureRuntime();
-          respond(true, await rt.setupStatus({ transport: normalizeTransport(params?.transport) }));
+          respond(
+            true,
+            await rt.setupStatus({
+              transport: normalizeTransport(params?.transport),
+              mode: normalizeMode(params?.mode),
+            }),
+          );
         } catch (err) {
           sendError(respond, err);
         }

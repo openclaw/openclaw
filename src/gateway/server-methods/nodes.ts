@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { getRuntimeConfig } from "../../config/config.js";
+import { getRuntimeConfig } from "../../config/io.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { listDevicePairing } from "../../infra/device-pairing.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -1164,11 +1164,16 @@ export const nodeHandlers: GatewayRequestHandlers = {
         loadGatewayModelCatalog: context.loadGatewayModelCatalog,
         logGateway: { warn: context.logGateway.warn },
       };
-      await handleNodeEvent(nodeContext, nodeId, {
-        event: p.event,
-        payloadJSON,
-      });
-      respond(true, { ok: true }, undefined);
+      const result = await handleNodeEvent(
+        nodeContext,
+        nodeId,
+        {
+          event: p.event,
+          payloadJSON,
+        },
+        { deviceId: client?.connect?.device?.id },
+      );
+      respond(true, result ?? { ok: true }, undefined);
     });
   },
 };

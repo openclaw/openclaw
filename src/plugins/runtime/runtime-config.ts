@@ -6,6 +6,8 @@ import {
 import { logWarn } from "../../logger.js";
 import type { PluginRuntime } from "./types.js";
 
+export const RUNTIME_CONFIG_LOAD_WRITE_COMPAT_CODE = "runtime-config-load-write";
+
 const warnedDeprecatedConfigApis = new Set<string>();
 
 function warnDeprecatedConfigApiOnce(
@@ -16,7 +18,9 @@ function warnDeprecatedConfigApiOnce(
     return;
   }
   warnedDeprecatedConfigApis.add(name);
-  logWarn(`plugin runtime config.${name}() is deprecated; use ${replacement}.`);
+  logWarn(
+    `plugin runtime config.${name}() is deprecated (${RUNTIME_CONFIG_LOAD_WRITE_COMPAT_CODE}); use ${replacement}.`,
+  );
 }
 
 export function createRuntimeConfig(): PluginRuntime["config"] {

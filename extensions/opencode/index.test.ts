@@ -1,9 +1,9 @@
-import { describe, expect, it } from "vitest";
 import {
   registerProviderPlugin,
   requireRegisteredProvider,
-} from "../../test/helpers/plugins/provider-registration.js";
-import { expectPassthroughReplayPolicy } from "../../test/helpers/provider-replay-policy.ts";
+} from "openclaw/plugin-sdk/plugin-test-runtime";
+import { expectPassthroughReplayPolicy } from "openclaw/plugin-sdk/provider-test-contracts";
+import { describe, expect, it } from "vitest";
 import plugin from "./index.js";
 
 describe("opencode provider plugin", () => {

@@ -1,8 +1,9 @@
-import { definePluginEntry, type ProviderThinkingProfile } from "openclaw/plugin-sdk/plugin-entry";
+import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
 import {
   matchesExactOrPrefix,
   PASSTHROUGH_GEMINI_REPLAY_HOOKS,
+  resolveClaudeThinkingProfile,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { applyOpencodeZenConfig, OPENCODE_ZEN_DEFAULT_MODEL } from "./api.js";
@@ -17,20 +18,6 @@ const OPENCODE_SHARED_WIZARD_GROUP = {
   groupLabel: "OpenCode",
   groupHint: OPENCODE_SHARED_HINT,
 } as const;
-const ANTHROPIC_OPUS_47_MODEL_PREFIXES = ["claude-opus-4-7", "claude-opus-4.7"] as const;
-const ANTHROPIC_ADAPTIVE_MODEL_PREFIXES = [
-  "claude-opus-4-6",
-  "claude-opus-4.6",
-  "claude-sonnet-4-6",
-  "claude-sonnet-4.6",
-] as const;
-const BASE_ANTHROPIC_THINKING_LEVELS = [
-  { id: "off" },
-  { id: "minimal" },
-  { id: "low" },
-  { id: "medium" },
-  { id: "high" },
-] as const satisfies ProviderThinkingProfile["levels"];
 
 function isModernOpencodeModel(modelId: string): boolean {
   const lower = normalizeLowercaseStringOrEmpty(modelId);
@@ -38,32 +25,6 @@ function isModernOpencodeModel(modelId: string): boolean {
     return false;
   }
   return !matchesExactOrPrefix(lower, MINIMAX_MODERN_MODEL_MATCHERS);
-}
-
-function matchesAnyPrefix(modelId: string, prefixes: readonly string[]): boolean {
-  const lower = normalizeLowercaseStringOrEmpty(modelId);
-  return prefixes.some((prefix) => lower.startsWith(prefix));
-}
-
-function resolveOpencodeThinkingProfile(modelId: string): ProviderThinkingProfile {
-  if (matchesAnyPrefix(modelId, ANTHROPIC_OPUS_47_MODEL_PREFIXES)) {
-    return {
-      levels: [
-        ...BASE_ANTHROPIC_THINKING_LEVELS,
-        { id: "xhigh" },
-        { id: "adaptive" },
-        { id: "max" },
-      ],
-      defaultLevel: "off",
-    };
-  }
-  if (matchesAnyPrefix(modelId, ANTHROPIC_ADAPTIVE_MODEL_PREFIXES)) {
-    return {
-      levels: [...BASE_ANTHROPIC_THINKING_LEVELS, { id: "adaptive" }],
-      defaultLevel: "adaptive",
-    };
-  }
-  return { levels: BASE_ANTHROPIC_THINKING_LEVELS };
 }
 
 export default definePluginEntry({
@@ -106,7 +67,7 @@ export default definePluginEntry({
       ],
       ...PASSTHROUGH_GEMINI_REPLAY_HOOKS,
       isModernModelRef: ({ modelId }) => isModernOpencodeModel(modelId),
-      resolveThinkingProfile: ({ modelId }) => resolveOpencodeThinkingProfile(modelId),
+      resolveThinkingProfile: ({ modelId }) => resolveClaudeThinkingProfile(modelId),
     });
     api.registerMediaUnderstandingProvider(opencodeMediaUnderstandingProvider);
   },

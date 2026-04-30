@@ -112,7 +112,7 @@ export type ChannelSetupInput = {
   useEnv?: boolean;
   homeserver?: string;
   dangerouslyAllowPrivateNetwork?: boolean;
-  /** Compatibility alias for legacy setup callers; prefer dangerouslyAllowPrivateNetwork. */
+  /** @deprecated Compatibility alias; prefer dangerouslyAllowPrivateNetwork. */
   allowPrivateNetwork?: boolean;
   proxy?: string;
   userId?: string;
@@ -273,10 +273,29 @@ export type ChannelGroupContext = {
 };
 
 /** TTS voice delivery behavior advertised by a channel plugin. */
+/**
+ * Container tokens (file-extension shape, no leading dot) that the host
+ * speech-core pipeline knows how to pre-transcode synthesized audio into.
+ * Channels that benefit from a specific container — currently only
+ * BlueBubbles, which needs Apple's native voice-memo CAF descriptor — name
+ * one here. Adding a new entry requires extending the host transcoder
+ * recipe table in lockstep so a typed declaration cannot silently no-op.
+ */
+export type PreferredAudioFileFormat = "caf";
+
 export type ChannelTtsVoiceDeliveryCapabilities = {
   synthesisTarget: "audio-file" | "voice-note";
   transcodesAudio?: boolean;
   audioFileFormats?: readonly string[];
+  /**
+   * Optional preferred audio container the channel wants for voice-memo
+   * delivery. When set and the host can transcode (e.g. `afconvert` on
+   * macOS), the TTS pipeline pre-encodes synthesized audio to this format
+   * before handing it to the channel. Useful for channels (such as
+   * BlueBubbles) whose downstream attempts its own container conversion
+   * that races against the upload write and fails.
+   */
+  preferAudioFileFormat?: PreferredAudioFileFormat;
 };
 
 /** Static capability flags advertised by a channel plugin. */
@@ -388,6 +407,8 @@ export type ChannelThreadingAdapter = {
    */
   allowExplicitReplyTagsWhenOff?: boolean;
   /**
+   * @deprecated Use allowExplicitReplyTagsWhenOff.
+   *
    * Deprecated alias for allowExplicitReplyTagsWhenOff.
    * Kept for compatibility with older plugin surfaces.
    */
@@ -516,6 +537,8 @@ export type ChannelMessagingAdapter = {
     parentConversationCandidates?: string[];
   } | null;
   /**
+   * @deprecated Return parentConversationCandidates from resolveSessionConversation.
+   *
    * Legacy compatibility hook for parent fallbacks when a plugin does not need
    * to customize `id` or `threadId`. Core only uses this when
    * `resolveSessionConversation(...)` does not return
