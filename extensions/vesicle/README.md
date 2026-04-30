@@ -16,6 +16,12 @@ From a packed tarball:
 openclaw plugins install ./openclaw-vesicle-2026.4.25.tgz
 ```
 
+For a fast local install smoke from the OpenClaw checkout:
+
+```sh
+pnpm test:plugins:vesicle-install
+```
+
 Configure the channel under `channels.vesicle`:
 
 ```json5
