@@ -280,6 +280,56 @@ describe("getMemorySearchManager caching", () => {
     expect(searchResults).toHaveLength(1);
   });
 
+  it("backs off repeated full qmd open failures until the cooldown expires", async () => {
+    const agentId = "qmd-open-cooldown";
+    const cfg = createQmdCfg(agentId);
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    createQmdManagerMock.mockRejectedValueOnce(new Error("Cannot find package 'chokidar'"));
+
+    try {
+      const first = await getMemorySearchManager({ cfg, agentId });
+      const second = await getMemorySearchManager({ cfg, agentId });
+
+      expect(first.manager).toBe(fallbackManager);
+      expect(second.manager).toBe(fallbackManager);
+      expect(createQmdManagerMock).toHaveBeenCalledTimes(1);
+      expect(checkQmdBinaryAvailability).toHaveBeenCalledTimes(1);
+
+      nowSpy.mockReturnValue(62_001);
+      const third = await getMemorySearchManager({ cfg, agentId });
+      const thirdManager = requireManager(third);
+
+      expect(thirdManager.status()).toMatchObject({ backend: "qmd" });
+      expect(createQmdManagerMock).toHaveBeenCalledTimes(2);
+      expect(checkQmdBinaryAvailability).toHaveBeenCalledTimes(2);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it("lets status probes bypass and clear a full qmd open-failure cooldown", async () => {
+    const agentId = "qmd-open-status-bypass";
+    const cfg = createQmdCfg(agentId);
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    createQmdManagerMock.mockRejectedValueOnce(new Error("Cannot find package 'chokidar'"));
+
+    try {
+      const first = await getMemorySearchManager({ cfg, agentId });
+      expect(first.manager).toBe(fallbackManager);
+      expect(createQmdManagerMock).toHaveBeenCalledTimes(1);
+
+      const status = await getMemorySearchManager({ cfg, agentId, purpose: "status" });
+      expect(requireManager(status).status()).toMatchObject({ backend: "qmd" });
+      expect(createQmdManagerMock).toHaveBeenCalledTimes(2);
+
+      const full = await getMemorySearchManager({ cfg, agentId });
+      expect(requireManager(full).status()).toMatchObject({ backend: "qmd" });
+      expect(createQmdManagerMock).toHaveBeenCalledTimes(3);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
   it("probes qmd availability from the agent workspace", async () => {
     const agentId = "workspace-probe";
     const cfg = createQmdCfg(agentId);

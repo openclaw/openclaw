@@ -168,6 +168,13 @@ catalog id and model ref:
 - `models.providers.mlx.models[].id: "mlx-community/Qwen3-30B-A3B-6bit"`
 - `agents.defaults.model.primary: "mlx/mlx-community/Qwen3-30B-A3B-6bit"`
 
+Set `input: ["text", "image"]` on local or proxied vision models so image
+attachments are injected into agent turns. Interactive custom-provider
+onboarding infers common vision model IDs and asks only for unknown names.
+Non-interactive onboarding uses the same inference; use `--custom-image-input`
+for unknown vision IDs or `--custom-text-input` when a known-looking model is
+text-only behind your endpoint.
+
 Keep `models.mode: "merge"` so hosted models stay available as fallbacks.
 Use `models.providers.<id>.timeoutSeconds` for slow local or remote model
 servers before raising `agents.defaults.timeoutSeconds`. The provider timeout
@@ -238,15 +245,67 @@ Compatibility notes for stricter OpenAI-compatible backends:
   openclaw config set agents.defaults.models '{"local/my-local-model":{"params":{"extra_body":{"tool_choice":"required"}}}}' --strict-json --merge
   ```
 
+- If a custom OpenAI-compatible model accepts OpenAI reasoning efforts beyond
+  the built-in profile, declare them on the model compat block. Adding `"xhigh"`
+  here makes `/think xhigh`, session pickers, Gateway validation, and `llm-task`
+  validation expose the level for that configured provider/model ref:
+
+  ```json5
+  {
+    models: {
+      providers: {
+        local: {
+          baseUrl: "http://127.0.0.1:8000/v1",
+          apiKey: "sk-local",
+          api: "openai-responses",
+          models: [
+            {
+              id: "gpt-5.4",
+              name: "GPT 5.4 via local proxy",
+              reasoning: true,
+              input: ["text"],
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              contextWindow: 196608,
+              maxTokens: 8192,
+              compat: {
+                supportedReasoningEfforts: ["low", "medium", "high", "xhigh"],
+                reasoningEffortMap: { xhigh: "xhigh" },
+              },
+            },
+          ],
+        },
+      },
+    },
+  }
+  ```
+
 - Some smaller or stricter local backends are unstable with OpenClaw's full
-  agent-runtime prompt shape, especially when tool schemas are included. If the
-  backend works for tiny direct `/v1/chat/completions` calls but fails on normal
-  OpenClaw agent turns, first try
+  agent-runtime prompt shape, especially when tool schemas are included. First
+  verify the provider path with the lean local probe:
+
+  ```bash
+  openclaw infer model run --local --model <provider/model> --prompt "Reply with exactly: pong" --json
+  ```
+
+  To verify the Gateway route without the full agent prompt shape, use the
+  Gateway model probe instead:
+
+  ```bash
+  openclaw infer model run --gateway --model <provider/model> --prompt "Reply with exactly: pong" --json
+  ```
+
+  Both local and Gateway model probes send only the supplied prompt. The
+  Gateway probe still validates Gateway routing, auth, and provider selection,
+  but it intentionally skips prior session transcript, AGENTS/bootstrap context,
+  context-engine assembly, tools, and bundled MCP servers.
+
+  If that succeeds but normal OpenClaw agent turns fail, first try
   `agents.defaults.experimental.localModelLean: true` to drop heavyweight
   default tools like `browser`, `cron`, and `message`; this is an experimental
   flag, not a stable default-mode setting. See
   [Experimental Features](/concepts/experimental-features). If that still fails, try
   `models.providers.<provider>.models[].compat.supportsTools: false`.
+
 - If the backend still fails only on larger OpenClaw runs, the remaining issue
   is usually upstream model/server capacity or a backend bug, not OpenClaw's
   transport layer.
@@ -260,14 +319,15 @@ Compatibility notes for stricter OpenAI-compatible backends:
   OpenClaw process RSS/heap snapshot in diagnostics. For LM Studio/Ollama
   memory pressure, match that timestamp against the server log or macOS crash /
   jetsam log to confirm whether the model server was killed.
-- OpenClaw warns when the detected context window is below **32k** and blocks below **16k**. If you hit that preflight, raise the server/model context limit or choose a larger model.
+- OpenClaw derives context-window preflight thresholds from the detected model window, or from the uncapped model window when `agents.defaults.contextTokens` lowers the effective window. It warns below 20% with an **8k** floor. Hard blocks use the 10% threshold with a **4k** floor, capped to the effective context window so oversized model metadata cannot reject an otherwise valid user cap. If you hit that preflight, raise the server/model context limit or choose a larger model.
 - Context errors? Lower `contextWindow` or raise your server limit.
 - OpenAI-compatible server returns `messages[].content ... expected a string`?
   Add `compat.requiresStringContent: true` on that model entry.
-- Direct tiny `/v1/chat/completions` calls work, but `openclaw infer model run`
-  fails on Gemma or another local model? Disable tool schemas first with
-  `compat.supportsTools: false`, then retest. If the server still crashes only
-  on larger OpenClaw prompts, treat it as an upstream server/model limitation.
+- Direct tiny `/v1/chat/completions` calls work, but `openclaw infer model run --local`
+  fails on Gemma or another local model? Check the provider URL, model ref, auth
+  marker, and server logs first; local `model run` does not include agent tools.
+  If local `model run` succeeds but larger agent turns fail, reduce the agent
+  tool surface with `localModelLean` or `compat.supportsTools: false`.
 - Tool calls show up as raw JSON/XML/ReAct text, or the provider returns an
   empty `tool_calls` array? Do not add a proxy that blindly converts assistant
   text into tool execution. Fix the server chat template/parser first. If the

@@ -39,6 +39,21 @@ export const AgentSummarySchema = Type.Object(
         { additionalProperties: false },
       ),
     ),
+    agentRuntime: Type.Optional(
+      Type.Object(
+        {
+          id: NonEmptyString,
+          fallback: Type.Optional(Type.Union([Type.Literal("pi"), Type.Literal("none")])),
+          source: Type.Union([
+            Type.Literal("env"),
+            Type.Literal("agent"),
+            Type.Literal("defaults"),
+            Type.Literal("implicit"),
+          ]),
+        },
+        { additionalProperties: false },
+      ),
+    ),
   },
   { additionalProperties: false },
 );
@@ -178,7 +193,14 @@ export const AgentsFilesSetResultSchema = Type.Object(
   { additionalProperties: false },
 );
 
-export const ModelsListParamsSchema = Type.Object({}, { additionalProperties: false });
+export const ModelsListParamsSchema = Type.Object(
+  {
+    view: Type.Optional(
+      Type.Union([Type.Literal("default"), Type.Literal("configured"), Type.Literal("all")]),
+    ),
+  },
+  { additionalProperties: false },
+);
 
 export const ModelsListResultSchema = Type.Object(
   {
@@ -374,6 +396,10 @@ export const ToolCatalogEntrySchema = Type.Object(
     source: Type.Union([Type.Literal("core"), Type.Literal("plugin")]),
     pluginId: Type.Optional(NonEmptyString),
     optional: Type.Optional(Type.Boolean()),
+    risk: Type.Optional(
+      Type.Union([Type.Literal("low"), Type.Literal("medium"), Type.Literal("high")]),
+    ),
+    tags: Type.Optional(Type.Array(NonEmptyString)),
     defaultProfiles: Type.Array(
       Type.Union([
         Type.Literal("minimal"),
@@ -415,6 +441,10 @@ export const ToolsEffectiveEntrySchema = Type.Object(
     source: Type.Union([Type.Literal("core"), Type.Literal("plugin"), Type.Literal("channel")]),
     pluginId: Type.Optional(NonEmptyString),
     channelId: Type.Optional(NonEmptyString),
+    risk: Type.Optional(
+      Type.Union([Type.Literal("low"), Type.Literal("medium"), Type.Literal("high")]),
+    ),
+    tags: Type.Optional(Type.Array(NonEmptyString)),
   },
   { additionalProperties: false },
 );

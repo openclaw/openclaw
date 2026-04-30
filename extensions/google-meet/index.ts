@@ -677,7 +677,13 @@ export default definePluginEntry({
       async ({ params, respond }: GatewayRequestHandlerOptions) => {
         try {
           const rt = await ensureRuntime();
-          respond(true, await rt.setupStatus({ transport: normalizeTransport(params?.transport) }));
+          respond(
+            true,
+            await rt.setupStatus({
+              transport: normalizeTransport(params?.transport),
+              mode: normalizeMode(params?.mode),
+            }),
+          );
         } catch (err) {
           sendError(respond, err);
         }
@@ -817,7 +823,7 @@ export default definePluginEntry({
             return;
           }
           const rt = await ensureRuntime();
-          respond(true, rt.speak(sessionId, normalizeOptionalString(params?.message)));
+          respond(true, await rt.speak(sessionId, normalizeOptionalString(params?.message)));
         } catch (err) {
           sendError(respond, err);
         }

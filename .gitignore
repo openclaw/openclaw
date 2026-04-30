@@ -3,6 +3,7 @@ node_modules
 .env
 docker-compose.override.yml
 docker-compose.extra.yml
+docker-compose.sandbox.yml
 dist
 dist-runtime/
 pnpm-lock.yaml
@@ -102,6 +103,8 @@ USER.md
 .agents/skills/*
 !.agents/skills/blacksmith-testbox/
 !.agents/skills/blacksmith-testbox/**
+!.agents/skills/gitcrawl/
+!.agents/skills/gitcrawl/**
 !.agents/skills/openclaw-ghsa-maintainer/
 !.agents/skills/openclaw-ghsa-maintainer/**
 !.agents/skills/openclaw-parallels-smoke/
@@ -134,6 +137,7 @@ USER.md
 .agent/*.json
 !.agent/workflows/
 /local/
+/client_secret_*.json
 package-lock.json
 .claude/
 .agent/
@@ -188,3 +192,6 @@ extensions/qa-lab/web/dist/
 # Generated bundled plugin runtime dependency manifests
 extensions/**/.openclaw-runtime-deps.json
 extensions/**/.openclaw-runtime-deps-stamp.json
+
+# Output dir for scripts/run-opengrep.sh (local opengrep scans)
+/.opengrep-out/

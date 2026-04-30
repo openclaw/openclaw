@@ -208,6 +208,7 @@ Choose your preferred auth method and follow the setup steps.
     | Model ref | Runtime config | Route | Auth |
     |-----------|----------------|-------|------|
     | `openai-codex/gpt-5.5` | omitted / `runtime: "pi"` | ChatGPT/Codex OAuth through PI | Codex sign-in |
+    | `openai-codex/gpt-5.4-mini` | omitted / `runtime: "pi"` | ChatGPT/Codex OAuth through PI | Codex sign-in |
     | `openai-codex/gpt-5.5` | `runtime: "auto"` | Still PI unless a plugin explicitly claims `openai-codex` | Codex sign-in |
     | `openai/gpt-5.5` | `agentRuntime.id: "codex"` | Codex app-server harness | Codex app-server auth |
 
@@ -284,6 +285,26 @@ Choose your preferred auth method and follow the setup steps.
 
   </Tab>
 </Tabs>
+
+## Native Codex app-server auth
+
+The native Codex app-server harness uses `openai/*` model refs plus
+`agentRuntime.id: "codex"`, but its auth is still account-based. OpenClaw
+selects auth in this order:
+
+1. An explicit OpenClaw `openai-codex` auth profile bound to the agent.
+2. The app-server's existing account, such as a local Codex CLI ChatGPT sign-in.
+3. For local stdio app-server launches only, `CODEX_API_KEY`, then
+   `OPENAI_API_KEY`, when the app-server reports no account and still requires
+   OpenAI auth.
+
+That means a local ChatGPT/Codex subscription sign-in is not replaced just
+because the gateway process also has `OPENAI_API_KEY` for direct OpenAI models
+or embeddings. Env API-key fallback is only the local stdio no-account path; it
+is not sent to WebSocket app-server connections. When a subscription-style Codex
+profile is selected, OpenClaw also keeps `CODEX_API_KEY` and `OPENAI_API_KEY`
+out of the spawned stdio app-server child and sends the selected credentials
+through the app-server login RPC.
 
 ## Image generation
 

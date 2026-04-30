@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { typedCases } from "../test-utils/typed-cases.js";
 import { buildSubagentSystemPrompt } from "./subagent-system-prompt.js";
+import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "./system-prompt-cache-boundary.js";
 import {
   buildAgentSystemPrompt,
   buildAgentUserPromptPrefix,
@@ -134,6 +135,17 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("## Subagent Context");
     expect(prompt).not.toContain("## Group Chat Context");
     expect(prompt).toContain("Subagent details");
+  });
+
+  it("can omit generic silent-reply guidance for channel-aware prompts", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      extraSystemPrompt: 'If no response is needed, reply with exactly "NO_REPLY".',
+      silentReplyPromptMode: "none",
+    });
+
+    expect(prompt).not.toContain("## Silent Replies");
+    expect(prompt).toContain('reply with exactly "NO_REPLY"');
   });
 
   it("includes skills in minimal prompt mode when skillsPrompt is provided (cron regression)", () => {
@@ -315,6 +327,16 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("sessions_list");
     expect(prompt).toContain("sessions_history");
     expect(prompt).toContain("sessions_send");
+  });
+
+  it("uses provider-neutral web_search prompt metadata", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["web_search"],
+    });
+
+    expect(prompt).toContain("- web_search: Search the web using the configured provider");
+    expect(prompt).not.toContain("Brave API");
   });
 
   it("documents ACP sessions_spawn agent targeting requirements", () => {
@@ -747,6 +769,46 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("`style` can be `primary`, `success`, or `danger`");
   });
 
+  it("uses Slack interactive reply hints instead of generic inline button config guidance", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["message"],
+      runtimeInfo: {
+        channel: "slack",
+      },
+      messageToolHints: [
+        "- Prefer Slack buttons/selects for 2-5 discrete choices or parameter picks instead of asking the user to type one.",
+        "- Slack interactive replies: use `[[slack_buttons: Label:value, Other:other]]` to add action buttons that route clicks back as Slack interaction system events.",
+      ],
+    });
+
+    expect(prompt).toContain("Slack interactive replies");
+    expect(prompt).toContain("[[slack_buttons: Label:value, Other:other]]");
+    expect(prompt).not.toContain("Inline buttons not enabled for slack");
+    expect(prompt).not.toContain("slack.capabilities.inlineButtons");
+    expect(prompt).not.toContain("buttons=[[{text,callback_data,style?}]]");
+  });
+
+  it("describes message-tool-only source delivery without requiring target", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["message"],
+      sourceReplyDeliveryMode: "message_tool_only",
+      runtimeInfo: {
+        channel: "discord",
+      },
+    });
+
+    expect(prompt).toContain("private by default for this source channel");
+    expect(prompt).toContain("use `message(action=send)` for visible channel output");
+    expect(prompt).toContain("The target defaults to the current source channel");
+    expect(prompt).toContain("final answers are private in this mode");
+    expect(prompt).not.toContain(
+      `respond with ONLY: ${SILENT_REPLY_TOKEN} (avoid duplicate replies)`,
+    );
+    expect(prompt).not.toContain("For `action=send`, include `target` and `message`.");
+  });
+
   it("suppresses plain chat approval commands when inline approval UI is available", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
@@ -758,6 +820,35 @@ describe("buildAgentSystemPrompt", () => {
 
     expect(prompt).toContain("rely on native approval card/buttons when they appear");
     expect(prompt).toContain("do not also send plain chat /approve instructions");
+  });
+
+  it("suppresses plain chat approval commands for native approval channels", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      runtimeInfo: {
+        channel: "slack",
+      },
+    });
+
+    expect(prompt).toContain("rely on native approval card/buttons when they appear");
+    expect(prompt).toContain("do not also send plain chat /approve instructions");
+  });
+
+  it("keeps approval slug guidance separate from command previews", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      runtimeInfo: {
+        channel: "discord",
+      },
+    });
+
+    expect(prompt).toContain(
+      'copy the exact /approve command from the tool output\'s "Reply with:" line',
+    );
+    expect(prompt).toContain("keep command/script previews separate from the /approve command");
+    expect(prompt).toContain(
+      "never substitute the shell command/script for the approval id or slug",
+    );
   });
 
   it("includes runtime provider capabilities when present", () => {
@@ -920,6 +1011,41 @@ describe("buildAgentSystemPrompt", () => {
 
     expect(prompt).toContain("## Reactions");
     expect(prompt).toContain("Reactions are enabled for Telegram in MINIMAL mode.");
+  });
+
+  it("keeps stable project context before volatile channel guidance for prefix-cache reuse", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["message"],
+      runtimeInfo: {
+        channel: "telegram",
+        capabilities: ["inlineButtons"],
+        canvasRootDir: "/tmp/canvas",
+      },
+      contextFiles: [
+        {
+          path: "AGENTS.md",
+          content: "Project rules mention ## Messaging, ## Group Chat Context, and ## Reactions.",
+        },
+      ],
+      extraSystemPrompt: "Current group-chat facts",
+      reactionGuidance: { level: "minimal", channel: "Telegram" },
+      ttsHint: "Use short voice-friendly replies.",
+    });
+
+    const projectContextPos = prompt.indexOf("# Project Context");
+    const boundaryPos = prompt.indexOf(SYSTEM_PROMPT_CACHE_BOUNDARY);
+    const messagingPos = prompt.lastIndexOf("## Messaging");
+    const groupChatPos = prompt.lastIndexOf("## Group Chat Context");
+    const reactionsPos = prompt.lastIndexOf("## Reactions");
+    const voicePos = prompt.lastIndexOf("## Voice (TTS)");
+
+    expect(projectContextPos).toBeGreaterThan(-1);
+    expect(boundaryPos).toBeGreaterThan(projectContextPos);
+    expect(messagingPos).toBeGreaterThan(boundaryPos);
+    expect(groupChatPos).toBeGreaterThan(boundaryPos);
+    expect(reactionsPos).toBeGreaterThan(boundaryPos);
+    expect(voicePos).toBeGreaterThan(boundaryPos);
   });
 });
 

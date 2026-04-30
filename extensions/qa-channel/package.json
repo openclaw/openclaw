@@ -4,8 +4,14 @@
   "private": true,
   "description": "OpenClaw QA synthetic channel plugin",
   "type": "module",
+  "exports": {
+    ".": "./index.ts",
+    "./api.js": "./api.ts",
+    "./runtime-api.js": "./runtime-api.ts",
+    "./test-api.js": "./test-api.ts"
+  },
   "dependencies": {
-    "typebox": "1.1.33"
+    "typebox": "1.1.34"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*",

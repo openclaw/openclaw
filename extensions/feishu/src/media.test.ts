@@ -51,11 +51,6 @@ vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => {
   };
 });
 
-vi.mock("../../../src/channels/plugins/bundled.js", () => ({
-  bundledChannelPlugins: [],
-  bundledChannelSetupPlugins: [],
-}));
-
 let downloadImageFeishu: typeof import("./media.js").downloadImageFeishu;
 let downloadMessageResourceFeishu: typeof import("./media.js").downloadMessageResourceFeishu;
 let sanitizeFileNameForUpload: typeof import("./media.js").sanitizeFileNameForUpload;
@@ -644,6 +639,12 @@ describe("sanitizeFileNameForUpload", () => {
 });
 
 describe("downloadMessageResourceFeishu", () => {
+  function httpStatusError(status: number): Error & { response: { status: number } } {
+    return Object.assign(new Error(`Request failed with status code ${status}`), {
+      response: { status },
+    });
+  }
+
   beforeEach(() => {
     vi.clearAllMocks();
     mockResolvedFeishuAccount();
@@ -720,5 +721,152 @@ describe("downloadMessageResourceFeishu", () => {
       contentType: "video/mp4",
       fileName: "clip.mp4",
     });
+  });
+
+  it("retries file resources as media after HTTP 502", async () => {
+    const originalError = httpStatusError(502);
+    messageResourceGetMock.mockRejectedValueOnce(originalError).mockResolvedValueOnce({
+      data: Buffer.from("fake-ios-video-data"),
+      headers: {
+        "content-type": "video/mp4",
+        "content-disposition": `attachment; filename="ios-video.mp4"`,
+      },
+    });
+
+    const result = await downloadMessageResourceFeishu({
+      cfg: emptyConfig,
+      messageId: "om_ios_video_msg",
+      fileKey: "file_key_ios_video",
+      type: "file",
+    });
+
+    expect(messageResourceGetMock).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        path: { message_id: "om_ios_video_msg", file_key: "file_key_ios_video" },
+        params: { type: "file" },
+      }),
+    );
+    expect(messageResourceGetMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        path: { message_id: "om_ios_video_msg", file_key: "file_key_ios_video" },
+        params: { type: "media" },
+      }),
+    );
+    expect(result).toMatchObject({
+      buffer: Buffer.from("fake-ios-video-data"),
+      contentType: "video/mp4",
+      fileName: "ios-video.mp4",
+    });
+  });
+
+  it("rethrows the original HTTP 502 when the media retry fails", async () => {
+    const originalError = httpStatusError(502);
+    messageResourceGetMock
+      .mockRejectedValueOnce(originalError)
+      .mockRejectedValueOnce(new Error("media retry failed"));
+
+    await expect(
+      downloadMessageResourceFeishu({
+        cfg: emptyConfig,
+        messageId: "om_ios_video_msg",
+        fileKey: "file_key_ios_video",
+        type: "file",
+      }),
+    ).rejects.toBe(originalError);
+
+    expect(messageResourceGetMock).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ params: { type: "file" } }),
+    );
+    expect(messageResourceGetMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ params: { type: "media" } }),
+    );
+  });
+
+  it("does not retry non-fallback download failures", async () => {
+    for (const scenario of [
+      { messageId: "om_image_msg", fileKey: "img_key_502", type: "image" as const, status: 502 },
+      { messageId: "om_file_msg", fileKey: "file_key_500", type: "file" as const, status: 500 },
+    ]) {
+      const originalError = httpStatusError(scenario.status);
+      messageResourceGetMock.mockClear();
+      messageResourceGetMock.mockRejectedValueOnce(originalError);
+
+      await expect(
+        downloadMessageResourceFeishu({
+          cfg: emptyConfig,
+          messageId: scenario.messageId,
+          fileKey: scenario.fileKey,
+          type: scenario.type,
+        }),
+      ).rejects.toBe(originalError);
+
+      expect(messageResourceGetMock).toHaveBeenCalledTimes(1);
+      expect(messageResourceGetMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          path: { message_id: scenario.messageId, file_key: scenario.fileKey },
+          params: { type: scenario.type },
+        }),
+      );
+    }
+  });
+
+  it("recovers CJK filenames from plain Content-Disposition headers decoded as Latin-1", async () => {
+    const fileName = "武汉15座山登山信息汇总.csv";
+    const latin1HeaderFileName = Buffer.from(fileName, "utf8").toString("latin1");
+    messageResourceGetMock.mockResolvedValueOnce({
+      data: Buffer.from("fake-file-data"),
+      headers: {
+        "content-disposition": `attachment; filename="${latin1HeaderFileName}"`,
+      },
+    });
+
+    const result = await downloadMessageResourceFeishu({
+      cfg: emptyConfig,
+      messageId: "om_file_msg",
+      fileKey: "file_key_csv",
+      type: "file",
+    });
+
+    expect(result.fileName).toBe(fileName);
+  });
+
+  it("keeps valid Latin-1 filenames from plain Content-Disposition headers unchanged", async () => {
+    messageResourceGetMock.mockResolvedValueOnce({
+      data: Buffer.from("fake-file-data"),
+      headers: {
+        "content-disposition": `attachment; filename="café-Â©.txt"`,
+      },
+    });
+
+    const result = await downloadMessageResourceFeishu({
+      cfg: emptyConfig,
+      messageId: "om_latin1_msg",
+      fileKey: "file_key_latin1",
+      type: "file",
+    });
+
+    expect(result.fileName).toBe("café-Â©.txt");
+  });
+
+  it("keeps JSON-derived file_name metadata unchanged", async () => {
+    const fileName = "武汉15座山登山信息汇总.csv";
+    const latin1LookingFileName = Buffer.from(fileName, "utf8").toString("latin1");
+    messageResourceGetMock.mockResolvedValueOnce({
+      data: Buffer.from("fake-file-data"),
+      file_name: latin1LookingFileName,
+    });
+
+    const result = await downloadMessageResourceFeishu({
+      cfg: emptyConfig,
+      messageId: "om_json_file_msg",
+      fileKey: "file_key_json",
+      type: "file",
+    });
+
+    expect(result.fileName).toBe(latin1LookingFileName);
   });
 });

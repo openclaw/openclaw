@@ -73,6 +73,11 @@ on:
           - none
           - mock-openai
           - live-frontier
+      telegram_scenarios:
+        description: Optional comma-separated Telegram scenario ids
+        required: false
+        default: ""
+        type: string
   workflow_call:
     inputs:
       workflow_ref:
@@ -129,6 +134,11 @@ on:
         required: false
         default: none
         type: string
+      telegram_scenarios:
+        description: Optional comma-separated Telegram scenario ids
+        required: false
+        default: ""
+        type: string
     secrets:
       OPENAI_API_KEY:
         required: false
@@ -143,6 +153,8 @@ on:
       BYTEPLUS_API_KEY:
         required: false
       CEREBRAS_API_KEY:
+        required: false
+      DEEPINFRA_API_KEY:
         required: false
       DASHSCOPE_API_KEY:
         required: false
@@ -242,7 +254,7 @@ env:
 jobs:
   resolve_package:
     name: Resolve package candidate
-    runs-on: ubuntu-24.04
+    runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: 60
     outputs:
       docker_lanes: ${{ steps.profile.outputs.docker_lanes }}
@@ -250,6 +262,7 @@ jobs:
       include_openwebui: ${{ steps.profile.outputs.include_openwebui }}
       include_release_path_suites: ${{ steps.profile.outputs.include_release_path_suites }}
       package_artifact_name: ${{ steps.profile.outputs.package_artifact_name }}
+      package_source_sha: ${{ steps.resolve.outputs.package_source_sha }}
       package_sha256: ${{ steps.resolve.outputs.sha256 }}
       package_version: ${{ steps.resolve.outputs.package_version }}
       telegram_enabled: ${{ steps.profile.outputs.telegram_enabled }}
@@ -269,8 +282,15 @@ jobs:
           install-bun: ${{ inputs.source == 'ref' && 'true' || 'false' }}
           install-deps: "false"
 
-      - name: Download package artifact input
-        if: inputs.source == 'artifact'
+      - name: Download current-run package artifact input
+        if: inputs.source == 'artifact' && inputs.artifact_run_id == ''
+        uses: actions/download-artifact@v8
+        with:
+          name: ${{ inputs.artifact_name }}
+          path: .artifacts/package-candidate-input
+
+      - name: Download previous-run package artifact input
+        if: inputs.source == 'artifact' && inputs.artifact_run_id != ''
         env:
           GH_TOKEN: ${{ github.token }}
           ARTIFACT_RUN_ID: ${{ inputs.artifact_run_id }}
@@ -278,10 +298,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if [[ -z "${ARTIFACT_RUN_ID// }" ]]; then
-            echo "artifact_run_id is required when source=artifact." >&2
-            exit 1
-          fi
           if [[ -z "${ARTIFACT_NAME// }" ]]; then
             echo "artifact_name is required when source=artifact." >&2
             exit 1
@@ -433,6 +449,7 @@ jobs:
       ANTHROPIC_API_TOKEN: ${{ secrets.ANTHROPIC_API_TOKEN }}
       BYTEPLUS_API_KEY: ${{ secrets.BYTEPLUS_API_KEY }}
       CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
+      DEEPINFRA_API_KEY: ${{ secrets.DEEPINFRA_API_KEY }}
       DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
       GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
       KIMI_API_KEY: ${{ secrets.KIMI_API_KEY }}
@@ -480,8 +497,9 @@ jobs:
       package_spec: ${{ inputs.package_spec }}
       package_artifact_name: ${{ needs.resolve_package.outputs.package_artifact_name }}
       package_label: openclaw@${{ needs.resolve_package.outputs.package_version }}
-      harness_ref: ${{ inputs.source == 'ref' && inputs.package_ref || inputs.workflow_ref }}
+      harness_ref: ${{ needs.resolve_package.outputs.package_source_sha || inputs.workflow_ref }}
       provider_mode: ${{ needs.resolve_package.outputs.telegram_mode }}
+      scenario: ${{ inputs.telegram_scenarios }}
     secrets:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
@@ -491,7 +509,7 @@ jobs:
     name: Verify package acceptance
     needs: [resolve_package, docker_acceptance, package_telegram]
     if: always()
-    runs-on: ubuntu-24.04
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 5
     steps:
       - name: Verify package acceptance results

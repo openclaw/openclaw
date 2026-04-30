@@ -30,7 +30,7 @@ export {
 export { PAIRING_APPROVED_MESSAGE } from "openclaw/plugin-sdk/channel-status";
 export { chunkTextForOutbound } from "openclaw/plugin-sdk/text-chunking";
 export type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
-export { GoogleChatConfigSchema } from "openclaw/plugin-sdk/channel-config-schema-legacy";
+export { GoogleChatConfigSchema } from "openclaw/plugin-sdk/bundled-channel-config-schema";
 export {
   GROUP_POLICY_BLOCKED_LABEL,
   resolveAllowlistProviderRuntimeGroupPolicy,

@@ -23,7 +23,6 @@ async function prepareRoutedCommand(params: {
   const { VERSION } = await import("../version.js");
   await applyCliExecutionStartupPresentation({
     argv: params.argv,
-    routeLogsToStderrOnSuppress: false,
     startupPolicy,
     showBanner: process.stdout.isTTY && !startupPolicy.suppressDoctorStdout,
     version: VERSION,

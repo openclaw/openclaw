@@ -132,7 +132,6 @@ function createDiscordOriginTargetResolver(configOverride?: DiscordExecApprovalC
           }
         : null;
     },
-    targetsMatch: (a, b) => a.to === b.to && a.threadId === b.threadId,
     resolveFallbackTarget: (request) => {
       const sessionConversation = resolveApprovalRequestSessionConversation({
         request,

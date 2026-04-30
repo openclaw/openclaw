@@ -1,5 +1,5 @@
+import { createSendCfgThreadingRuntime } from "openclaw/plugin-sdk/channel-test-helpers";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createSendCfgThreadingRuntime } from "../../../test/helpers/plugins/send-config.js";
 import type { IrcClient } from "./client.js";
 import { setIrcRuntime } from "./runtime.js";
 import type { CoreConfig } from "./types.js";

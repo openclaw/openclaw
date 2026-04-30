@@ -1,7 +1,7 @@
 import type * as ConversationRuntime from "openclaw/plugin-sdk/conversation-runtime";
+import { createRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createRuntimeEnv } from "../../../test/helpers/plugins/runtime-env.js";
 import type { ClawdbotConfig, PluginRuntime } from "../runtime-api.js";
 import type { FeishuMessageEvent } from "./bot.js";
 import { handleFeishuMessage } from "./bot.js";
@@ -175,6 +175,7 @@ function createFeishuBotRuntime(overrides: DeepPartial<PluginRuntime> = {}): Plu
       session: {
         readSessionUpdatedAt: readSessionUpdatedAtMock,
         resolveStorePath: resolveStorePathMock,
+        recordInboundSession: vi.fn(async () => undefined),
       },
       reply: {
         resolveEnvelopeFormatOptions:
@@ -195,6 +196,21 @@ function createFeishuBotRuntime(overrides: DeepPartial<PluginRuntime> = {}): Plu
         readAllowFromStore: vi.fn().mockResolvedValue(["ou_sender_1"]),
         upsertPairingRequest: vi.fn(),
         buildPairingReply: vi.fn(),
+      },
+      turn: {
+        run: vi.fn(async (params) => {
+          const input = await params.adapter.ingest(params.raw);
+          const turn = await params.adapter.resolveTurn(input, {
+            kind: "message",
+            canStartAgentTurn: true,
+          });
+          return {
+            dispatchResult: await turn.runDispatch(),
+          };
+        }),
+        runPrepared: vi.fn(async (params) => ({
+          dispatchResult: await params.runDispatch(),
+        })),
       },
       ...overrides.channel,
     },
@@ -338,8 +354,22 @@ vi.mock("openclaw/plugin-sdk/conversation-runtime", async () => {
 
 async function dispatchMessage(params: { cfg: ClawdbotConfig; event: FeishuMessageEvent }) {
   const runtime = createRuntimeEnv();
+  const feishuConfig = params.cfg.channels?.feishu;
+  const cfg =
+    feishuConfig?.dmPolicy === "open" && feishuConfig.allowFrom === undefined
+      ? ({
+          ...params.cfg,
+          channels: {
+            ...params.cfg.channels,
+            feishu: {
+              ...feishuConfig,
+              allowFrom: ["*"],
+            },
+          },
+        } as ClawdbotConfig)
+      : params.cfg;
   await handleFeishuMessage({
-    cfg: params.cfg,
+    cfg,
     event: params.event,
     runtime,
   });
@@ -637,7 +667,7 @@ describe("handleFeishuMessage command authorization", () => {
     expect(mockEnqueueSystemEvent).not.toHaveBeenCalled();
   });
 
-  it("uses authorizer resolution instead of hardcoded CommandAuthorized=true", async () => {
+  it("blocks open DMs when a restrictive allowlist does not match", async () => {
     const cfg: ClawdbotConfig = {
       commands: { useAccessGroups: true },
       channels: {
@@ -665,18 +695,8 @@ describe("handleFeishuMessage command authorization", () => {
 
     await dispatchMessage({ cfg, event });
 
-    expect(mockResolveCommandAuthorizedFromAuthorizers).toHaveBeenCalledWith({
-      useAccessGroups: true,
-      authorizers: [{ configured: true, allowed: false }],
-    });
-    expect(mockFinalizeInboundContext).toHaveBeenCalledTimes(1);
-    expect(mockFinalizeInboundContext).toHaveBeenCalledWith(
-      expect.objectContaining({
-        CommandAuthorized: false,
-        SenderId: "ou-attacker",
-        Surface: "feishu",
-      }),
-    );
+    expect(mockResolveCommandAuthorizedFromAuthorizers).not.toHaveBeenCalled();
+    expect(mockFinalizeInboundContext).not.toHaveBeenCalled();
   });
 
   it("reads pairing allow store for non-command DMs when dmPolicy is pairing", async () => {
@@ -1414,6 +1434,114 @@ describe("handleFeishuMessage command authorization", () => {
     expect(mockDispatchReplyFromConfig).not.toHaveBeenCalled();
   });
 
+  it("admits group when chat_id is explicitly configured under groups, even with empty groupAllowFrom (#67687)", async () => {
+    // Regression for #67687: a group that only sets `groups.<chat_id>.requireMention=false`
+    // (and leaves `groupAllowFrom` empty) should still be admitted under the schema-default
+    // `groupPolicy="allowlist"`. The group's explicit presence in `channels.feishu.groups`
+    // is the operator's allowlist signal, and the per-group `requireMention` override should
+    // then control mention gating for inbound text events.
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          groupPolicy: "allowlist",
+          // groupAllowFrom intentionally omitted -> empty []
+          groups: {
+            "oc-explicit-group": {
+              requireMention: false,
+            },
+          },
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: {
+        sender_id: { open_id: "ou-sender" },
+      },
+      message: {
+        message_id: "msg-explicit-group-67687",
+        chat_id: "oc-explicit-group",
+        chat_type: "group",
+        message_type: "text",
+        content: JSON.stringify({ text: "hello bot" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    // Group must be admitted: the inbound finalize/dispatch path runs.
+    expect(mockFinalizeInboundContext).toHaveBeenCalled();
+    expect(mockDispatchReplyFromConfig).toHaveBeenCalled();
+  });
+
+  it("does not let explicit group config override disabled group policy", async () => {
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          groupPolicy: "disabled",
+          groups: {
+            "oc-disabled-policy-group": {
+              requireMention: false,
+            },
+          },
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: {
+        sender_id: { open_id: "ou-sender" },
+      },
+      message: {
+        message_id: "msg-disabled-policy-group",
+        chat_id: "oc-disabled-policy-group",
+        chat_type: "group",
+        message_type: "text",
+        content: JSON.stringify({ text: "hello bot" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    expect(mockFinalizeInboundContext).not.toHaveBeenCalled();
+    expect(mockDispatchReplyFromConfig).not.toHaveBeenCalled();
+  });
+
+  it("does not treat wildcard group defaults as allowlist admission", async () => {
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          groupPolicy: "allowlist",
+          groups: {
+            "*": {
+              requireMention: false,
+            },
+          },
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: {
+        sender_id: { open_id: "ou-sender" },
+      },
+      message: {
+        message_id: "msg-wildcard-group-default",
+        chat_id: "oc-wildcard-only",
+        chat_type: "group",
+        message_type: "text",
+        content: JSON.stringify({ text: "hello bot" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    expect(mockFinalizeInboundContext).not.toHaveBeenCalled();
+    expect(mockDispatchReplyFromConfig).not.toHaveBeenCalled();
+  });
+
   it("drops message when groupConfig.enabled is false", async () => {
     const cfg: ClawdbotConfig = {
       channels: {
@@ -1502,7 +1630,11 @@ describe("handleFeishuMessage command authorization", () => {
         MediaTypes: ["audio/ogg"],
         ChatType: "direct",
       },
-      cfg,
+      cfg: expect.objectContaining({
+        channels: expect.objectContaining({
+          feishu: expect.objectContaining({ dmPolicy: "open" }),
+        }),
+      }),
     });
     expect(mockFinalizeInboundContext).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -2866,5 +2998,43 @@ describe("handleFeishuMessage command authorization", () => {
 
     await Promise.all([dispatchMessage({ cfg, event }), dispatchMessage({ cfg, event })]);
     expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips empty-text messages with no media to prevent blank user turns in session (#74634)", async () => {
+    // Feishu can deliver { "text": "" } events (empty-text or media-stripped
+    // messages). Writing blank user content to the session causes downstream
+    // LLM providers such as MiniMax to reject requests with "messages must not
+    // be empty". The handler should drop such events before queuing a reply.
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: {
+        sender_id: {
+          open_id: "ou-empty-text-sender",
+        },
+      },
+      message: {
+        message_id: "msg-empty-text-74634",
+        chat_id: "oc-dm",
+        chat_type: "p2p",
+        message_type: "text",
+        // Feishu encodes empty text as {"text":""}
+        content: JSON.stringify({ text: "" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    // No reply should be dispatched: empty message is silently skipped
+    expect(mockDispatchReplyFromConfig).not.toHaveBeenCalled();
   });
 });

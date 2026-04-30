@@ -1,5 +1,8 @@
 {
   "id": "ollama",
+  "activation": {
+    "onStartup": false
+  },
   "enabledByDefault": true,
   "providers": ["ollama"],
   "providerDiscoveryEntry": "./provider-discovery.ts",

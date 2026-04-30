@@ -1,8 +1,14 @@
 {
   "id": "memory-core",
+  "activation": {
+    "onStartup": false
+  },
   "kind": "memory",
   "contracts": {
     "memoryEmbeddingProviders": ["local"]
+  },
+  "runtimeDependencies": {
+    "localMemoryEmbedding": ["node-llama-cpp@3.18.1"]
   },
   "commandAliases": [
     {

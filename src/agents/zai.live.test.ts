@@ -12,7 +12,7 @@ const ZAI_LIVE_TIMEOUT_MS = 45_000;
 
 const describeLive = LIVE && ZAI_KEY ? describe : describe.skip;
 
-async function expectModelReturnsAssistantText(modelId: "glm-5" | "glm-5.1") {
+async function expectModelReturnsAssistantText(modelId: "glm-5-turbo" | "glm-5.1") {
   const model = getModel("zai", modelId);
   const res = await completeSimple(
     model,
@@ -29,7 +29,7 @@ describeLive("zai live", () => {
   it(
     "returns assistant text",
     async () => {
-      await expectModelReturnsAssistantText("glm-5");
+      await expectModelReturnsAssistantText("glm-5-turbo");
     },
     ZAI_LIVE_TIMEOUT_MS,
   );

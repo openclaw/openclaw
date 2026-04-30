@@ -1,5 +1,8 @@
 {
   "id": "vercel-ai-gateway",
+  "activation": {
+    "onStartup": false
+  },
   "enabledByDefault": true,
   "providers": ["vercel-ai-gateway"],
   "modelIdNormalization": {

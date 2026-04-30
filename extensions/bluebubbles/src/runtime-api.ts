@@ -29,7 +29,7 @@ export type {
   OpenClawConfig,
   PluginRuntime,
 } from "openclaw/plugin-sdk/channel-core";
-export { parseFiniteNumber } from "openclaw/plugin-sdk/infra-runtime";
+export { parseFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
 export { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 export {
   DM_GROUP_ACCESS_REASON,

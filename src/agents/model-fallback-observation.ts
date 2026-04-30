@@ -29,6 +29,41 @@ function buildErrorObservationFields(error?: string): {
 
 type FallbackStepOutcome = "next_fallback" | "succeeded" | "chain_exhausted";
 
+export type ModelFallbackStepFields = {
+  fallbackStepType: "fallback_step";
+  fallbackStepFromModel: string;
+  fallbackStepToModel?: string;
+  fallbackStepFromFailureReason?: FailoverReason;
+  fallbackStepFromFailureDetail?: string;
+  fallbackStepChainPosition?: number;
+  fallbackStepFinalOutcome: FallbackStepOutcome;
+};
+
+export type ModelFallbackDecisionParams = {
+  decision:
+    | "skip_candidate"
+    | "probe_cooldown_candidate"
+    | "candidate_failed"
+    | "candidate_succeeded";
+  runId?: string;
+  requestedProvider: string;
+  requestedModel: string;
+  candidate: ModelCandidate;
+  attempt?: number;
+  total?: number;
+  reason?: FailoverReason | null;
+  status?: number;
+  code?: string;
+  error?: string;
+  nextCandidate?: ModelCandidate;
+  isPrimary?: boolean;
+  requestedModelMatched?: boolean;
+  fallbackConfigured?: boolean;
+  allowTransientCooldownProbe?: boolean;
+  profileCount?: number;
+  previousAttempts?: FallbackAttempt[];
+};
+
 function formatModelRef(candidate: ModelCandidate): string {
   return `${candidate.provider}/${candidate.model}`;
 }
@@ -41,17 +76,7 @@ function buildFallbackStepFields(params: {
   nextCandidate?: ModelCandidate;
   attempt?: number;
   previousAttempts?: FallbackAttempt[];
-}):
-  | {
-      fallbackStepType: "fallback_step";
-      fallbackStepFromModel: string;
-      fallbackStepToModel?: string;
-      fallbackStepFromFailureReason?: FailoverReason;
-      fallbackStepFromFailureDetail?: string;
-      fallbackStepChainPosition?: number;
-      fallbackStepFinalOutcome: FallbackStepOutcome;
-    }
-  | undefined {
+}): ModelFallbackStepFields | undefined {
   const lastPreviousAttempt = params.previousAttempts?.at(-1);
   if (params.decision === "candidate_succeeded") {
     if (!lastPreviousAttempt) {
@@ -89,30 +114,9 @@ function buildFallbackStepFields(params: {
   };
 }
 
-export function logModelFallbackDecision(params: {
-  decision:
-    | "skip_candidate"
-    | "probe_cooldown_candidate"
-    | "candidate_failed"
-    | "candidate_succeeded";
-  runId?: string;
-  requestedProvider: string;
-  requestedModel: string;
-  candidate: ModelCandidate;
-  attempt?: number;
-  total?: number;
-  reason?: FailoverReason | null;
-  status?: number;
-  code?: string;
-  error?: string;
-  nextCandidate?: ModelCandidate;
-  isPrimary?: boolean;
-  requestedModelMatched?: boolean;
-  fallbackConfigured?: boolean;
-  allowTransientCooldownProbe?: boolean;
-  profileCount?: number;
-  previousAttempts?: FallbackAttempt[];
-}): void {
+export function logModelFallbackDecision(
+  params: ModelFallbackDecisionParams,
+): ModelFallbackStepFields | undefined {
   const nextText = params.nextCandidate
     ? `${sanitizeForLog(params.nextCandidate.provider)}/${sanitizeForLog(params.nextCandidate.model)}`
     : "none";
@@ -172,4 +176,5 @@ export function logModelFallbackDecision(params: {
       `model fallback decision: decision=${params.decision} requested=${sanitizeForLog(params.requestedProvider)}/${sanitizeForLog(params.requestedModel)} ` +
       `candidate=${sanitizeForLog(params.candidate.provider)}/${sanitizeForLog(params.candidate.model)} reason=${reasonText}${providerErrorTypeSuffix} next=${nextText}${detailSuffix}`,
   });
+  return fallbackStepFields;
 }

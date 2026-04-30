@@ -165,6 +165,22 @@ export function redactToolDetail(detail: string): string {
   return redactSensitiveText(detail, resolved);
 }
 
+// Forces tools-mode regardless of `logging.redactSensitive` (which governs log
+// output, not UI surfaces), and merges user `logging.redactPatterns` with the
+// built-in defaults so both apply.
+export function redactToolPayloadText(text: string): string {
+  if (!text) {
+    return text;
+  }
+  const cfg = readLoggingConfig();
+  const userPatterns = cfg?.redactPatterns;
+  const patterns =
+    userPatterns && userPatterns.length > 0
+      ? [...userPatterns, ...DEFAULT_REDACT_PATTERNS]
+      : undefined;
+  return redactSensitiveText(text, { mode: "tools", patterns });
+}
+
 export function getDefaultRedactPatterns(): string[] {
   return [...DEFAULT_REDACT_PATTERNS];
 }

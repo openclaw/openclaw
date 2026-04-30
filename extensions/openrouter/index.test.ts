@@ -1,7 +1,9 @@
+import {
+  registerProviderPlugin,
+  registerSingleProviderPlugin,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
+import { expectPassthroughReplayPolicy } from "openclaw/plugin-sdk/provider-test-contracts";
 import { describe, expect, it, vi } from "vitest";
-import { registerSingleProviderPlugin } from "../../test/helpers/plugins/plugin-registration.js";
-import { registerProviderPlugin } from "../../test/helpers/plugins/provider-registration.js";
-import { expectPassthroughReplayPolicy } from "../../test/helpers/provider-replay-policy.ts";
 import openrouterPlugin from "./index.js";
 import {
   buildOpenrouterProvider,
@@ -10,7 +12,7 @@ import {
 
 describe("openrouter provider hooks", () => {
   it("registers OpenRouter speech alongside model and media providers", async () => {
-    const { providers, speechProviders, mediaProviders, imageProviders } =
+    const { providers, speechProviders, mediaProviders, imageProviders, videoProviders } =
       await registerProviderPlugin({
         plugin: openrouterPlugin,
         id: "openrouter",
@@ -21,6 +23,7 @@ describe("openrouter provider hooks", () => {
     expect(speechProviders).toEqual([expect.objectContaining({ id: "openrouter" })]);
     expect(mediaProviders).toEqual([expect.objectContaining({ id: "openrouter" })]);
     expect(imageProviders).toEqual([expect.objectContaining({ id: "openrouter" })]);
+    expect(videoProviders).toEqual([expect.objectContaining({ id: "openrouter" })]);
   });
 
   it("includes Kimi K2.6 in the bundled catalog", () => {

@@ -9,7 +9,8 @@ Use this skill for maintainer-facing GitHub workflow, not for ordinary code chan
 
 ## Start issue and PR triage with gitcrawl
 
-- Anytime you inspect OpenClaw issues or PRs, check local `gitcrawl` data first for related threads, duplicate attempts, and already-landed fixes.
+- Use `$gitcrawl` first anytime you inspect OpenClaw issues or PRs.
+- Check local `gitcrawl` data first for related threads, duplicate attempts, and already-landed fixes.
 - Use `gitcrawl` for candidate discovery and clustering; use `gh`, `gh api`, and the current checkout to verify live state before commenting, labeling, closing, or landing.
 - If `gitcrawl` is missing, stale, lacks the target thread, or has no embeddings for neighbor/search commands, fall back to the GitHub search workflow below.
 - Do not run expensive/update commands such as `gitcrawl sync --include-comments`, future enrichment commands, or broad reclustering unless the user asked to update the local store or stale data is blocking the decision.
@@ -39,6 +40,28 @@ gitcrawl cluster-detail openclaw/openclaw --id <cluster-id> --member-limit 20 --
   - `r: spam`
   - `invalid`
   - `dirty` for PRs only
+
+## Select small high-confidence triage candidates
+
+When asked for `X` issues or PRs to triage, `X` means qualified candidates, not sampled threads.
+
+Only list candidates that pass all gates:
+
+- small owner/surface, with a likely narrow fix and focused regression test
+- symptom is reproducible or provable with logs, failing test, live command, dependency contract, or current-main behavior
+- root cause is traceable to code with file/line and the proposed fix touches that path
+- no strong smell that a broader refactor, ownership rethink, migration, or product decision is the better fix
+- dependency-backed behavior checked against upstream docs/source/types; live or web proof used when local proof is insufficient
+
+Loop:
+
+1. Use `gitcrawl` / `gh` to gather candidate clusters.
+2. Read issue/PR body, comments, current code, adjacent tests, and dependency contracts.
+3. Try focused repro or proof.
+4. Reject unclear, stale, speculative, broad-refactor, or owner-ambiguous items.
+5. Continue until `X` qualified candidates or the bounded search is exhausted.
+
+Output only qualifying candidates, with: ref, surface, proof, cause, fix sketch, why small, expected test/gate. If none qualify, say so; do not pad.
 
 ## Enforce the bug-fix evidence bar
 

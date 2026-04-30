@@ -16,6 +16,10 @@ const LEGACY_BROAD_SUBPATH_PATTERNS = [
     pattern: /["']openclaw\/plugin-sdk\/config-runtime["']/,
     label: "openclaw/plugin-sdk/config-runtime",
   },
+  {
+    pattern: /["']openclaw\/plugin-sdk\/infra-runtime["']/,
+    label: "openclaw/plugin-sdk/infra-runtime",
+  },
 ] as const;
 
 function hasMonolithicRootImport(content: string): boolean {

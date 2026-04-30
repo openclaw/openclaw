@@ -198,6 +198,27 @@ describe("doctor stale plugin config helpers", () => {
     expect(maybeRepairStalePluginConfig(cfg)).toEqual({ config: cfg, changes: [] });
   });
 
+  it("treats stale plugin refs as inert while plugins are globally disabled", () => {
+    const cfg = {
+      plugins: {
+        enabled: false,
+        allow: ["acpx"],
+        entries: {
+          acpx: { enabled: true },
+        },
+      },
+      channels: {
+        "openclaw-weixin": {
+          enabled: true,
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(scanStalePluginConfig(cfg)).toEqual([]);
+    expect(maybeRepairStalePluginConfig(cfg)).toEqual({ config: cfg, changes: [] });
+    expect(manifestRegistry.loadPluginManifestRegistry).not.toHaveBeenCalled();
+  });
+
   it("uses missing persisted install records as stale channel evidence", () => {
     installedPluginIndexMocks.loadInstalledPluginIndexInstallRecordsSync.mockReturnValue({
       "openclaw-weixin": {

@@ -107,6 +107,9 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
           (options?.ingressBuffer ? ` buffer=${options.ingressBuffer}` : ""),
       );
     }
+    void context.sendTyping().catch((err) => {
+      logVerbose(`telegram early typing cue failed for chat ${context.chatId}: ${String(err)}`);
+    });
     try {
       await dispatchTelegramMessage({
         context,

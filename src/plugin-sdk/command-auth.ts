@@ -77,8 +77,7 @@ export {
   listSkillCommandsForWorkspace,
   resolveSkillCommandInvocation,
 } from "../auto-reply/skill-commands.js";
-export { getPluginCommandSpecs } from "../plugins/command-specs.js";
-export { listProviderPluginCommandSpecs } from "../plugins/command-registry-state.js";
+export { getPluginCommandSpecs, listProviderPluginCommandSpecs } from "../plugins/command-specs.js";
 export type { SkillCommandSpec } from "../agents/skills.js";
 export {
   buildModelsProviderData,
@@ -133,7 +132,7 @@ export function resolveDirectDmAuthorizationOutcome(params: {
   if (params.dmPolicy === "disabled") {
     return "disabled";
   }
-  if (params.dmPolicy !== "open" && !params.senderAllowedForCommands) {
+  if (!params.senderAllowedForCommands) {
     return "unauthorized";
   }
   return "allowed";
@@ -162,9 +161,7 @@ export async function resolveSenderCommandAuthorization(
 }> {
   const shouldComputeAuth = params.shouldComputeCommandAuthorized(params.rawBody, params.cfg);
   const storeAllowFrom =
-    !params.isGroup &&
-    params.dmPolicy !== "allowlist" &&
-    (params.dmPolicy !== "open" || shouldComputeAuth)
+    !params.isGroup && params.dmPolicy !== "allowlist" && params.dmPolicy !== "open"
       ? await params.readAllowFromStore().catch(() => [])
       : [];
   const access = resolveDmGroupAccessWithLists({

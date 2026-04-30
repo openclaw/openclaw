@@ -18,6 +18,10 @@ vi.mock("../config/config.js", () => ({
   getRuntimeConfig: () => cfg,
 }));
 
+vi.mock("../config/io.js", () => ({
+  getRuntimeConfig: () => cfg,
+}));
+
 vi.mock("./auth.js", () => ({
   authorizeHttpGatewayConnect: authMock,
   isLocalDirectRequest: isLocalDirectRequestMock,

@@ -54,21 +54,33 @@ function collectModelRefs(cfg: OpenClawConfig): string[] {
       refs.push(value.trim());
     }
   };
+  const collectModelConfig = (value: unknown) => {
+    if (typeof value === "string") {
+      pushModelRef(value);
+      return;
+    }
+    if (!isRecord(value)) {
+      return;
+    }
+    pushModelRef(value.primary);
+    const fallbacks = value.fallbacks;
+    if (Array.isArray(fallbacks)) {
+      for (const entry of fallbacks) {
+        pushModelRef(entry);
+      }
+    }
+  };
   const collectFromAgent = (agent: Record<string, unknown> | null | undefined) => {
     if (!agent) {
       return;
     }
-    const model = agent.model;
-    if (typeof model === "string") {
-      pushModelRef(model);
-    } else if (isRecord(model)) {
-      pushModelRef(model.primary);
-      const fallbacks = model.fallbacks;
-      if (Array.isArray(fallbacks)) {
-        for (const entry of fallbacks) {
-          pushModelRef(entry);
-        }
-      }
+    for (const key of [
+      "model",
+      "imageGenerationModel",
+      "videoGenerationModel",
+      "musicGenerationModel",
+    ]) {
+      collectModelConfig(agent[key]);
     }
     const models = agent.models;
     if (isRecord(models)) {
@@ -283,7 +295,7 @@ function collectPluginIdsForConfiguredChannel(
 }
 
 function collectCandidateChannelIds(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): string[] {
-  return listPotentialConfiguredChannelIds(cfg, env).map(
+  return listPotentialConfiguredChannelIds(cfg, env, { includePersistedAuthState: false }).map(
     (channelId) => normalizeChatChannelId(channelId) ?? channelId,
   );
 }
@@ -466,7 +478,14 @@ function hasConfiguredProviderModelOrHarness(cfg: OpenClawConfig, env: NodeJS.Pr
   return hasConfiguredEmbeddedHarnessRuntime(cfg, env);
 }
 
+function arePluginsGloballyDisabled(cfg: OpenClawConfig): boolean {
+  return cfg.plugins?.enabled === false;
+}
+
 function configMayNeedPluginManifestRegistry(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {
+  if (arePluginsGloballyDisabled(cfg)) {
+    return false;
+  }
   if (hasPluginAllowlistWithMaterialEntries(cfg)) {
     return true;
   }
@@ -493,13 +512,16 @@ export function configMayNeedPluginAutoEnable(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv,
 ): boolean {
+  if (arePluginsGloballyDisabled(cfg)) {
+    return false;
+  }
   if (hasPluginAllowlistWithMaterialEntries(cfg)) {
     return true;
   }
   if (hasConfiguredPluginConfigEntry(cfg)) {
     return true;
   }
-  if (hasPotentialConfiguredChannels(cfg, env)) {
+  if (hasPotentialConfiguredChannels(cfg, env, { includePersistedAuthState: false })) {
     return true;
   }
   if (hasConfiguredProviderModelOrHarness(cfg, env)) {

@@ -35,7 +35,7 @@ describe("synthetic auth runtime refs", () => {
     getPluginRegistryState.mockReset();
     pluginRegistryMocks.loadPluginRegistrySnapshotWithMetadata.mockReset().mockReturnValue({
       source: "persisted",
-      snapshot: { plugins: [] },
+      snapshot: { plugins: [] as Array<{ syntheticAuthRefs?: string[] }> },
       diagnostics: [],
     });
   });
@@ -58,9 +58,7 @@ describe("synthetic auth runtime refs", () => {
       "local-cli",
       "remote-provider",
     ]);
-    expect(pluginRegistryMocks.loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledWith({
-      cache: true,
-    });
+    expect(pluginRegistryMocks.loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledWith({});
   });
 
   it("does not derive the registry just to resolve synthetic auth refs", () => {

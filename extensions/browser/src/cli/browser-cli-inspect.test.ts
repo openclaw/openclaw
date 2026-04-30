@@ -16,9 +16,14 @@ const gatewayMocks = vi.hoisted(() => ({
   })),
 }));
 
-vi.mock("../../../../src/cli/gateway-rpc.js", () => ({
-  callGatewayFromCli: gatewayMocks.callGatewayFromCli,
-}));
+vi.mock("../sdk-node-runtime.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("../sdk-node-runtime.js")>("../sdk-node-runtime.js");
+  return {
+    ...actual,
+    callGatewayFromCli: gatewayMocks.callGatewayFromCli,
+  };
+});
 
 const configMocks = vi.hoisted(() => {
   const loadConfig = vi.fn(() => ({ browser: {} }));

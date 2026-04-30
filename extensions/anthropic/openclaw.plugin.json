@@ -1,5 +1,8 @@
 {
   "id": "anthropic",
+  "activation": {
+    "onStartup": false
+  },
   "enabledByDefault": true,
   "providers": ["anthropic"],
   "providerDiscoveryEntry": "./provider-discovery.ts",

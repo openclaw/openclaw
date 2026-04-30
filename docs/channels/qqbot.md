@@ -118,6 +118,55 @@ Add a second bot via CLI:
 openclaw channels add --channel qqbot --account bot2 --token "222222222:secret-of-bot-2"
 ```
 
+### Group chats
+
+QQ Bot group chat support uses QQ group OpenIDs, not display names. Add the bot
+to a group, then mention it or configure the group to run without a mention.
+
+```json5
+{
+  channels: {
+    qqbot: {
+      groupPolicy: "allowlist",
+      groupAllowFrom: ["member_openid"],
+      groups: {
+        "*": {
+          requireMention: true,
+          historyLimit: 50,
+          toolPolicy: "restricted",
+        },
+        GROUP_OPENID: {
+          name: "Release room",
+          requireMention: false,
+          ignoreOtherMentions: true,
+          historyLimit: 20,
+          prompt: "Keep replies short and operational.",
+        },
+      },
+    },
+  },
+}
+```
+
+`groups["*"]` sets defaults for every group, and a concrete
+`groups.GROUP_OPENID` entry overrides those defaults for one group. Group
+settings include:
+
+- `requireMention`: require an @mention before the bot replies. Default: `true`.
+- `ignoreOtherMentions`: drop messages that mention someone else but not the bot.
+- `historyLimit`: keep recent non-mention group messages as context for the next mentioned turn. Set `0` to disable.
+- `toolPolicy`: `full`, `restricted`, or `none` for group-scoped tools.
+- `name`: friendly label used in logs and group context.
+- `prompt`: per-group behavior prompt appended to the agent context.
+
+Activation modes are `mention` and `always`. `requireMention: true` maps to
+`mention`; `requireMention: false` maps to `always`. A session-level activation
+override, when present, wins over config.
+
+The inbound queue is per peer. Group peers get a larger queue cap, keep human
+messages ahead of bot-authored chatter when full, and merge bursts of normal
+group messages into one attributed turn. Slash commands still run one by one.
+
 ### Voice (STT / TTS)
 
 STT and TTS support two-level configuration with priority fallback:
@@ -190,11 +239,14 @@ Built-in commands intercepted before the AI queue:
 | `/bot-ping`    | Latency test                                                                                             |
 | `/bot-version` | Show the OpenClaw framework version                                                                      |
 | `/bot-help`    | List all commands                                                                                        |
+| `/bot-me`      | Show the sender's QQ user ID (openid) for `allowFrom`/`groupAllowFrom` setup                             |
 | `/bot-upgrade` | Show the QQBot upgrade guide link                                                                        |
 | `/bot-logs`    | Export recent gateway logs as a file                                                                     |
 | `/bot-approve` | Approve a pending QQ Bot action (for example, confirming a C2C or group upload) through the native flow. |
 
 Append `?` to any command for usage help (for example `/bot-upgrade ?`).
+
+Admin commands (`/bot-me`, `/bot-upgrade`, `/bot-logs`, `/bot-clear-storage`, `/bot-streaming`, `/bot-approve`) are direct-message-only and require the sender's openid in an explicit non-wildcard `allowFrom` list. A wildcard `allowFrom: ["*"]` permits chat but does not grant admin command access. Group messages match against `groupAllowFrom` first and fall back to `allowFrom`. Running an admin command in a group returns a hint rather than silently dropping.
 
 ## Engine architecture
 
@@ -203,6 +255,7 @@ QQ Bot ships as a self-contained engine inside the plugin:
 - Each account owns an isolated resource stack (WebSocket connection, API client, token cache, media storage root) keyed by `appId`. Accounts never share inbound/outbound state.
 - The multi-account logger tags log lines with the owning account so diagnostics stay separable when you run several bots under one gateway.
 - Inbound, outbound, and gateway bridge paths share a single media payload root under `~/.openclaw/media`, so uploads, downloads, and transcode caches land under one guarded directory instead of a per-subsystem tree.
+- Rich media delivery goes through one `sendMedia` path for C2C and group targets. Local files and buffers above the large-file threshold use QQ's chunked upload endpoints, while smaller payloads use the one-shot media API.
 - Credentials can be backed up and restored as part of standard OpenClaw credential snapshots; the engine re-attaches each account's resource stack on restore without requiring a fresh QR-code pair.
 
 ## QR-code onboarding

@@ -211,8 +211,11 @@ export async function sendMessageMatrix(
       const relation = threadId
         ? buildThreadRelation(threadId, opts.replyToId)
         : buildReplyRelation(opts.replyToId);
+      let pendingExtraContent = opts.extraContent;
       const sendContent = async (content: MatrixOutboundContent) => {
-        const eventId = await client.sendMessage(roomId, content);
+        const contentWithExtra = withMatrixExtraContentFields(content, pendingExtraContent);
+        pendingExtraContent = undefined;
+        const eventId = await client.sendMessage(roomId, contentWithExtra);
         return eventId;
       };
 

@@ -1,7 +1,7 @@
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import type { WizardPrompter } from "openclaw/plugin-sdk/setup";
+import { jsonResponse, requestBodyText, requestUrl } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { jsonResponse, requestBodyText, requestUrl } from "../../../src/test-helpers/http.js";
 import { resetOllamaModelShowInfoCacheForTest } from "./provider-models.js";
 import {
   configureOllamaNonInteractive,
@@ -431,7 +431,9 @@ describe("ollama setup", () => {
       "qwen3-coder:480b-cloud",
       "gpt-oss:120b-cloud",
     ]);
-    expect(models?.find((m) => m.id === "qwen3-coder:480b-cloud")?.contextWindow).toBe(262144);
+    expect(fetchMock.mock.calls.some((call) => requestUrl(call[0]).endsWith("/api/show"))).toBe(
+      false,
+    );
     expect(
       fetchMock.mock.calls.some((call) => requestUrl(call[0]) === "https://ollama.com/api/tags"),
     ).toBe(true);

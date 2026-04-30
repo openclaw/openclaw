@@ -1,5 +1,8 @@
 {
   "id": "lmstudio",
+  "activation": {
+    "onStartup": false
+  },
   "enabledByDefault": true,
   "providers": ["lmstudio"],
   "providerRequest": {

@@ -1,5 +1,8 @@
 {
   "id": "kimi",
+  "activation": {
+    "onStartup": false
+  },
   "enabledByDefault": true,
   "providers": ["kimi", "kimi-coding"],
   "providerRequest": {

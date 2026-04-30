@@ -1,24 +1,35 @@
-import { describe, expect, it } from "vitest";
-import { resolveOpenClawAgentDir } from "../src/agents/agent-paths.js";
-import { collectProviderApiKeys } from "../src/agents/live-auth-keys.js";
-import { isLiveProfileKeyModeEnabled, isLiveTestEnabled } from "../src/agents/live-test-helpers.js";
-import { resolveApiKeyForProvider } from "../src/agents/model-auth.js";
-import { loadConfig, type OpenClawConfig } from "../src/config/config.js";
-import { isTruthyEnvValue } from "../src/infra/env.js";
-import { getShellEnvAppliedKeys } from "../src/infra/shell-env.js";
-import { encodePngRgba, fillPixel } from "../src/media/png-encode.js";
+import {
+  resolveApiKeyForProvider,
+  resolveOpenClawAgentDir,
+} from "openclaw/plugin-sdk/agent-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import {
+  registerProviderPlugin,
+  requireRegisteredProvider,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
+import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import {
   DEFAULT_LIVE_MUSIC_MODELS,
+  collectProviderApiKeys,
+  encodePngRgba,
+  fillPixel,
+  getShellEnvAppliedKeys,
+  isAuthErrorMessage,
+  isBillingErrorMessage,
+  isLiveProfileKeyModeEnabled,
+  isLiveTestEnabled,
+  isModelNotFoundErrorMessage,
+  isOverloadedErrorMessage,
+  isServerErrorMessage,
+  isTimeoutErrorMessage,
+  isTruthyEnvValue,
   parseCsvFilter,
   parseProviderModelMap,
   redactLiveApiKey,
   resolveConfiguredLiveMusicModels,
   resolveLiveMusicAuthStore,
-} from "../src/music-generation/live-test-helpers.js";
-import {
-  registerProviderPlugin,
-  requireRegisteredProvider,
-} from "../test/helpers/plugins/provider-registration.js";
+} from "openclaw/plugin-sdk/test-env";
+import { describe, expect, it } from "vitest";
 import googlePlugin from "./google/index.js";
 import minimaxPlugin from "./minimax/index.js";
 import { maybeLoadShellEnvForGenerationProviders } from "./test-support/generation-live-test-helpers.js";
@@ -116,19 +127,37 @@ function resolveLiveLyrics(providerId: string): string | undefined {
   ].join("\n");
 }
 
-function isSkippableLiveMusicProviderError(providerId: string, error: unknown): boolean {
+function resolveLiveMusicSkipReason(providerId: string, error: unknown): string | null {
   const message = error instanceof Error ? error.message : String(error);
-  return (
+  if (
     providerId === "google" &&
     message.toLowerCase().includes("music generation response missing audio data")
-  );
+  ) {
+    return "transient no-audio response";
+  }
+  if (isAuthErrorMessage(message)) {
+    return "auth drift";
+  }
+  if (isModelNotFoundErrorMessage(message)) {
+    return "model drift";
+  }
+  if (isBillingErrorMessage(message)) {
+    return "billing drift";
+  }
+  if (isTimeoutErrorMessage(message) || /operation was aborted/i.test(message)) {
+    return "provider timeout";
+  }
+  if (isOverloadedErrorMessage(message) || isServerErrorMessage(message)) {
+    return "provider outage";
+  }
+  return null;
 }
 
 describeLive("music generation provider live", () => {
   it(
     "covers generate plus declared edit paths with shell/profile auth",
     async () => {
-      const cfg = withPluginsEnabled(loadConfig());
+      const cfg = withPluginsEnabled(getRuntimeConfig());
       const configuredModels = resolveConfiguredLiveMusicModels(cfg);
       const agentDir = resolveOpenClawAgentDir();
       const attempted: string[] = [];
@@ -199,8 +228,9 @@ describeLive("music generation provider live", () => {
           expect(result.tracks[0]?.buffer.byteLength).toBeGreaterThan(1024);
           attempted.push(`${testCase.providerId}:generate:${providerModel} (${authLabel})`);
         } catch (error) {
-          if (isSkippableLiveMusicProviderError(testCase.providerId, error)) {
-            skipped.push(`${testCase.providerId}:generate transient no-audio response`);
+          const skipReason = resolveLiveMusicSkipReason(testCase.providerId, error);
+          if (skipReason) {
+            skipped.push(`${testCase.providerId}:generate ${skipReason}`);
             continue;
           }
           failures.push(
@@ -237,8 +267,9 @@ describeLive("music generation provider live", () => {
           expect(result.tracks[0]?.buffer.byteLength).toBeGreaterThan(1024);
           attempted.push(`${testCase.providerId}:edit:${providerModel} (${authLabel})`);
         } catch (error) {
-          if (isSkippableLiveMusicProviderError(testCase.providerId, error)) {
-            skipped.push(`${testCase.providerId}:edit transient no-audio response`);
+          const skipReason = resolveLiveMusicSkipReason(testCase.providerId, error);
+          if (skipReason) {
+            skipped.push(`${testCase.providerId}:edit ${skipReason}`);
             continue;
           }
           failures.push(

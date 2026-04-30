@@ -8,6 +8,7 @@ export {
   resolvePluginConfigObject,
 } from "./plugin-config-runtime.js";
 export {
+  clearConfigCache,
   clearRuntimeConfigSnapshot,
   getRuntimeConfigSourceSnapshot,
   getRuntimeConfigSnapshot,

@@ -1,14 +1,16 @@
 ---
-summary: "YuanBao bot overview, features, and configuration"
+summary: "Yuanbao bot overview, features, and configuration"
 read_when:
-  - You want to connect a YuanBao bot
-  - You are configuring the YuanBao channel
-title: YuanBao
+  - You want to connect a Yuanbao bot
+  - You are configuring the Yuanbao channel
+title: Yuanbao
 ---
 
-# YuanBao
+# Yuanbao
 
-YuanBao is Tencent's AI assistant platform that supports bot integration via instant messaging. Bots can interact with users through direct messages and group chats.
+Tencent Yuanbao is Tencent's AI assistant platform. The OpenClaw channel plugin
+connects Yuanbao bots to OpenClaw over WebSocket so they can interact with users
+through direct messages and group chats.
 
 **Status:** production-ready for bot DMs + group chats. WebSocket is the only supported connection mode.
 
@@ -19,11 +21,11 @@ YuanBao is Tencent's AI assistant platform that supports bot integration via ins
 > **Requires OpenClaw 2026.4.10 or above.** Run `openclaw --version` to check. Upgrade with `openclaw update`.
 
 <Steps>
-  <Step title="Add the YuanBao channel with your credentials">
+  <Step title="Add the Yuanbao channel with your credentials">
   ```bash
   openclaw channels add --channel yuanbao --token "appKey:appSecret"
   ```
-  The `--token` value uses colon-separated `appKey:appSecret` format. You can obtain these from the YuanBao APP by creating a robot in your application settings.
+  The `--token` value uses colon-separated `appKey:appSecret` format. You can obtain these from the Yuanbao app by creating a robot in your application settings.
   </Step>
 
   <Step title="After setup completes, restart the gateway to apply the changes">
@@ -162,7 +164,7 @@ Replying to the bot's message in a group chat is treated as an implicit mention.
 | `/restart` | Restart OpenClaw            |
 | `/compact` | Compact the session context |
 
-> YuanBao supports native slash-command menus. Commands are synced to the platform automatically when the gateway starts.
+> Yuanbao supports native slash-command menus. Commands are synced to the platform automatically when the gateway starts.
 
 ---
 
@@ -176,7 +178,7 @@ Replying to the bot's message in a group chat is treated as an implicit mention.
 
 ### Bot does not receive messages
 
-1. Ensure the bot is created and approved in YuanBao APP
+1. Ensure the bot is created and approved in the Yuanbao app
 2. Ensure `appKey` and `appSecret` are correctly configured
 3. Ensure the gateway is running: `openclaw gateway status`
 4. Check logs: `openclaw logs --follow`
@@ -232,7 +234,7 @@ Replying to the bot's message in a group chat is treated as an implicit mention.
 
 ### Streaming
 
-YuanBao supports block-level streaming output. When enabled, the bot sends text in chunks as it generates.
+Yuanbao supports block-level streaming output. When enabled, the bot sends text in chunks as it generates.
 
 ```json5
 {
@@ -310,7 +312,7 @@ Enable unsanitized log output for specific bot IDs:
 
 ### Multi-agent routing
 
-Use `bindings` to route YuanBao DMs or groups to different agents.
+Use `bindings` to route Yuanbao DMs or groups to different agents.
 
 ```json5
 {

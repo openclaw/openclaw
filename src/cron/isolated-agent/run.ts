@@ -6,9 +6,11 @@ import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { CliDeps } from "../../cli/outbound-send-deps.js";
 import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { resolveCronDeliveryPlan, type CronDeliveryPlan } from "../delivery-plan.js";
 import type {
+  CronAgentExecutionStarted,
   CronDeliveryTrace,
   CronDeliveryTraceMessageTarget,
   CronDeliveryTraceTarget,
@@ -75,6 +77,9 @@ let cronModelCatalogRuntimePromise:
   | Promise<typeof import("./run-model-catalog.runtime.js")>
   | undefined;
 let cronDeliveryRuntimePromise: Promise<typeof import("./run-delivery.runtime.js")> | undefined;
+let cronModelPreflightRuntimePromise:
+  | Promise<typeof import("./model-preflight.runtime.js")>
+  | undefined;
 
 async function loadSessionStoreRuntime() {
   sessionStoreRuntimePromise ??= import("../../config/sessions/store.runtime.js");
@@ -109,6 +114,11 @@ async function loadCronModelCatalogRuntime() {
 async function loadCronDeliveryRuntime() {
   cronDeliveryRuntimePromise ??= import("./run-delivery.runtime.js");
   return await cronDeliveryRuntimePromise;
+}
+
+async function loadCronModelPreflightRuntime() {
+  cronModelPreflightRuntimePromise ??= import("./model-preflight.runtime.js");
+  return await cronModelPreflightRuntimePromise;
 }
 
 function hasConfiguredAuthProfiles(cfg: OpenClawConfig): boolean {
@@ -278,6 +288,7 @@ function resolveMessagingToolSentTargets(params: {
   if (!params.resolvedDelivery.ok) {
     return [];
   }
+  const threadId = stringifyRouteThreadId(params.resolvedDelivery.threadId);
   return [
     {
       tool: "message",
@@ -286,9 +297,7 @@ function resolveMessagingToolSentTargets(params: {
         ? { accountId: params.resolvedDelivery.accountId }
         : {}),
       ...(params.resolvedDelivery.to ? { to: params.resolvedDelivery.to } : {}),
-      ...(params.resolvedDelivery.threadId
-        ? { threadId: String(params.resolvedDelivery.threadId) }
-        : {}),
+      ...(threadId ? { threadId } : {}),
     },
   ];
 }
@@ -416,7 +425,7 @@ type RunCronAgentTurnParams = {
   message: string;
   abortSignal?: AbortSignal;
   signal?: AbortSignal;
-  onExecutionStarted?: () => void;
+  onExecutionStarted?: (info?: CronAgentExecutionStarted) => void;
   sessionKey: string;
   agentId?: string;
   lane?: string;
@@ -567,8 +576,25 @@ async function prepareCronRunContext(params: {
   }
   let provider = resolvedModelSelection.provider;
   let model = resolvedModelSelection.model;
-  if (resolvedModelSelection.warning) {
-    logWarn(resolvedModelSelection.warning);
+
+  const preflight = await (
+    await loadCronModelPreflightRuntime()
+  ).preflightCronModelProvider({
+    cfg: cfgWithAgentDefaults,
+    provider,
+    model,
+  });
+  if (preflight.status === "unavailable") {
+    logWarn(`[cron:${input.job.id}] ${preflight.reason}`);
+    return {
+      ok: false,
+      result: withRunSession({
+        status: "skipped",
+        error: preflight.reason,
+        provider,
+        model,
+      }),
+    };
   }
 
   const hooksGmailThinking = isGmailHook
@@ -579,18 +605,21 @@ async function prepareCronRunContext(params: {
   );
   let thinkLevel: ThinkLevel | undefined = jobThink ?? hooksGmailThinking;
   if (!thinkLevel) {
+    const thinkingCatalog = await loadCatalog();
     thinkLevel = resolveThinkingDefault({
       cfg: cfgWithAgentDefaults,
       provider,
       model,
-      catalog: await loadCatalog(),
+      catalog: thinkingCatalog,
     });
   }
-  if (!isThinkingLevelSupported({ provider, model, level: thinkLevel })) {
+  const thinkingCatalog = await loadCatalog();
+  if (!isThinkingLevelSupported({ provider, model, level: thinkLevel, catalog: thinkingCatalog })) {
     const fallbackThinkLevel = resolveSupportedThinkingLevel({
       provider,
       model,
       level: thinkLevel,
+      catalog: thinkingCatalog,
     });
     if (fallbackThinkLevel !== thinkLevel) {
       logWarn(
@@ -980,7 +1009,7 @@ export async function runCronIsolatedAgentTurn(params: {
   message: string;
   abortSignal?: AbortSignal;
   signal?: AbortSignal;
-  onExecutionStarted?: () => void;
+  onExecutionStarted?: (info?: CronAgentExecutionStarted) => void;
   sessionKey: string;
   agentId?: string;
   lane?: string;
@@ -998,6 +1027,13 @@ export async function runCronIsolatedAgentTurn(params: {
   if (!prepared.ok) {
     return prepared.result;
   }
+  const notifyExecutionStarted = () =>
+    params.onExecutionStarted?.({
+      jobId: params.job.id,
+      agentId: prepared.context.agentId,
+      sessionId: prepared.context.runSessionId,
+      sessionKey: prepared.context.runSessionKey,
+    });
 
   try {
     const { executeCronRun } = await loadCronExecutorRuntime();
@@ -1026,7 +1062,7 @@ export async function runCronIsolatedAgentTurn(params: {
       commandBody: prepared.context.commandBody,
       persistSessionEntry: prepared.context.persistSessionEntry,
       abortSignal,
-      onExecutionStarted: params.onExecutionStarted,
+      onExecutionStarted: notifyExecutionStarted,
       abortReason,
       isAborted,
       thinkLevel: prepared.context.thinkLevel,

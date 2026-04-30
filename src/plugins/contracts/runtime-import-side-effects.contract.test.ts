@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { assertNoImportTimeSideEffects } from "../../../test/helpers/plugins/contracts-testkit.js";
+import { assertNoImportTimeSideEffects } from "../../plugin-sdk/test-helpers/import-side-effects.js";
 
 const listChannelPlugins = vi.hoisted(() =>
   vi.fn(() => [

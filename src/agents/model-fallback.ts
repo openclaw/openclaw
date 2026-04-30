@@ -23,7 +23,11 @@ import {
   shouldUseTransientCooldownProbeSlot,
 } from "./failover-policy.js";
 import { LiveSessionModelSwitchError } from "./live-model-switch-error.js";
-import { logModelFallbackDecision } from "./model-fallback-observation.js";
+import {
+  logModelFallbackDecision,
+  type ModelFallbackDecisionParams,
+  type ModelFallbackStepFields,
+} from "./model-fallback-observation.js";
 import type { FallbackAttempt, ModelCandidate } from "./model-fallback.types.js";
 import { modelKey, normalizeModelRef } from "./model-selection-normalize.js";
 import {
@@ -132,6 +136,8 @@ type ModelFallbackErrorHandler = (attempt: {
   attempt: number;
   total: number;
 }) => void | Promise<void>;
+
+type ModelFallbackStepHandler = (step: ModelFallbackStepFields) => void | Promise<void>;
 
 export type ModelFallbackResultClassification =
   | {
@@ -297,7 +303,7 @@ function recordFailedCandidateAttempt(params: {
   isPrimary: boolean;
   requestedModelMatched: boolean;
   fallbackConfigured: boolean;
-}) {
+}): ModelFallbackStepFields | undefined {
   const described = describeFailoverError(params.error);
   params.attempts.push({
     provider: params.candidate.provider,
@@ -307,7 +313,7 @@ function recordFailedCandidateAttempt(params: {
     status: described.status,
     code: described.code,
   });
-  logModelFallbackDecision({
+  return logModelFallbackDecision({
     decision: "candidate_failed",
     runId: params.runId,
     requestedProvider: params.requestedProvider ?? params.candidate.provider,
@@ -501,8 +507,23 @@ function resolveFallbackCandidates(params: {
     defaultProvider,
   });
   const { candidates, addExplicitCandidate } = createModelCandidateCollector(allowlist);
+  const resolvedModelAlias = resolveModelRefFromString({
+    raw: modelRaw,
+    defaultProvider: providerRaw,
+    aliasIndex,
+  });
+  const resolvedProviderModelAlias = resolveModelRefFromString({
+    raw: `${providerRaw}/${modelRaw}`,
+    defaultProvider,
+    aliasIndex,
+  });
+  const resolvedPrimary =
+    (resolvedModelAlias?.alias ? resolvedModelAlias.ref : null) ??
+    (resolvedProviderModelAlias?.alias ? resolvedProviderModelAlias.ref : null) ??
+    normalizedPrimary;
+  const effectivePrimary = normalizeModelRef(resolvedPrimary.provider, resolvedPrimary.model);
 
-  addExplicitCandidate(normalizedPrimary);
+  addExplicitCandidate(effectivePrimary);
 
   const modelFallbacks = (() => {
     if (params.fallbacksOverride !== undefined) {
@@ -513,14 +534,14 @@ function resolveFallbackCandidates(params: {
     );
     // When user runs a different provider than config, only use configured fallbacks
     // if the current model is already in that chain (e.g. session on first fallback).
-    if (normalizedPrimary.provider !== configuredPrimary.provider) {
+    if (effectivePrimary.provider !== configuredPrimary.provider) {
       const isConfiguredFallback = configuredFallbacks.some((raw) => {
         const resolved = resolveModelRefFromString({
           raw,
           defaultProvider,
           aliasIndex,
         });
-        return resolved ? sameModelCandidate(resolved.ref, normalizedPrimary) : false;
+        return resolved ? sameModelCandidate(resolved.ref, effectivePrimary) : false;
       });
       return isConfiguredFallback ? configuredFallbacks : [];
     }
@@ -737,6 +758,7 @@ export async function runWithModelFallback<T>(params: {
   fallbacksOverride?: string[];
   run: ModelFallbackRunFn<T>;
   onError?: ModelFallbackErrorHandler;
+  onFallbackStep?: ModelFallbackStepHandler;
   classifyResult?: ModelFallbackResultClassifier<T>;
 }): Promise<ModelFallbackRunResult<T>> {
   const candidates = resolveFallbackCandidates({
@@ -755,14 +777,30 @@ export async function runWithModelFallback<T>(params: {
   const attempts: FallbackAttempt[] = [];
   let lastError: unknown;
   const cooldownProbeUsedProviders = new Set<string>();
+  const observeDecision = async (decision: ModelFallbackDecisionParams) => {
+    const fallbackStep = logModelFallbackDecision(decision);
+    if (fallbackStep) {
+      await params.onFallbackStep?.(fallbackStep);
+    }
+  };
+  const observeFailedCandidate = async (
+    failedAttempt: Parameters<typeof recordFailedCandidateAttempt>[0],
+  ) => {
+    const fallbackStep = recordFailedCandidateAttempt(failedAttempt);
+    if (fallbackStep) {
+      await params.onFallbackStep?.(fallbackStep);
+    }
+  };
 
   const hasFallbackCandidates = candidates.length > 1;
+  const requestedCandidate = candidates[0];
 
   for (let i = 0; i < candidates.length; i += 1) {
     const candidate = candidates[i];
     const isPrimary = i === 0;
-    const requestedModel =
-      params.provider === candidate.provider && params.model === candidate.model;
+    const requestedModel = requestedCandidate
+      ? sameModelCandidate(candidate, requestedCandidate)
+      : false;
     let runOptions: ModelFallbackRunOptions | undefined;
     let attemptedDuringCooldown = false;
     let transientProbeProviderForAttempt: string | null = null;
@@ -799,7 +837,7 @@ export async function runWithModelFallback<T>(params: {
             error: decision.error,
             reason: decision.reason,
           });
-          logModelFallbackDecision({
+          await observeDecision({
             decision: "skip_candidate",
             runId: params.runId,
             requestedProvider: params.provider,
@@ -834,7 +872,7 @@ export async function runWithModelFallback<T>(params: {
               error,
               reason: decision.reason,
             });
-            logModelFallbackDecision({
+            await observeDecision({
               decision: "skip_candidate",
               runId: params.runId,
               requestedProvider: params.provider,
@@ -858,7 +896,7 @@ export async function runWithModelFallback<T>(params: {
           }
         }
         attemptedDuringCooldown = true;
-        logModelFallbackDecision({
+        await observeDecision({
           decision: "probe_cooldown_candidate",
           runId: params.runId,
           requestedProvider: params.provider,
@@ -888,7 +926,7 @@ export async function runWithModelFallback<T>(params: {
     });
     if ("success" in attemptRun) {
       if (i > 0 || attempts.length > 0 || attemptedDuringCooldown) {
-        logModelFallbackDecision({
+        await observeDecision({
           decision: "candidate_succeeded",
           runId: params.runId,
           requestedProvider: params.provider,
@@ -956,7 +994,7 @@ export async function runWithModelFallback<T>(params: {
           model: candidate.model,
         });
         lastError = switchNormalized;
-        recordFailedCandidateAttempt({
+        await observeFailedCandidate({
           attempts,
           candidate,
           error: switchNormalized,
@@ -982,7 +1020,7 @@ export async function runWithModelFallback<T>(params: {
       }
 
       lastError = isKnownFailover ? normalized : err;
-      recordFailedCandidateAttempt({
+      await observeFailedCandidate({
         attempts,
         candidate,
         error: normalized,

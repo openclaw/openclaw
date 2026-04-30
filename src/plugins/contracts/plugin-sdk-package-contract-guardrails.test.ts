@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -24,6 +24,25 @@ const PRIVATE_BUNDLED_SDK_SURFACE_PATTERN =
 const GENERIC_CORE_HELPER_FILES = ["src/polls.ts", "src/poll-params.ts"] as const;
 const GENERIC_CORE_PLUGIN_OWNER_NAME_PATTERN =
   /\b(?:bluebubbles|discord|feishu|googlechat|matrix|mattermost|msteams|slack|telegram|whatsapp|zalo|zalouser)\b/gi;
+const DEPRECATED_EXTENSION_SDK_SPECIFIERS = new Set([
+  "openclaw/plugin-sdk",
+  "openclaw/plugin-sdk/channel-config-schema-legacy",
+  "openclaw/plugin-sdk/compat",
+  "openclaw/plugin-sdk/testing",
+  "openclaw/plugin-sdk/test-utils",
+]);
+const DEPRECATED_TEST_BARREL_SPECIFIERS = new Set([
+  "openclaw/plugin-sdk/testing",
+  "openclaw/plugin-sdk/test-utils",
+]);
+const DEPRECATED_TEST_BARREL_ALLOWED_REFERENCE_FILES = new Set([
+  "src/plugin-sdk/testing.ts",
+  "src/plugin-sdk/test-utils.ts",
+  "packages/plugin-sdk/src/testing.ts",
+  "src/plugins/compat/registry.ts",
+  "src/plugins/contracts/plugin-entry-guardrails.test.ts",
+  "src/plugins/contracts/plugin-sdk-package-contract-guardrails.test.ts",
+]);
 
 function collectPluginSdkPackageExports(): string[] {
   const packageJson = JSON.parse(readFileSync(resolve(REPO_ROOT, "package.json"), "utf8")) as {
@@ -196,17 +215,25 @@ function collectExtensionFiles(dir: string): string[] {
   return files;
 }
 
+function isExtensionTestOrSupportPath(repoRelativePath: string): boolean {
+  return (
+    /(?:^|\/)(?:__tests__|tests|test-support)(?:\/|$)/.test(repoRelativePath) ||
+    /(?:^|\/)test-support\.[cm]?tsx?$/.test(repoRelativePath) ||
+    /(?:^|\/)test-helpers\.[cm]?tsx?$/.test(repoRelativePath) ||
+    /(?:^|\/)test-harness\.[cm]?tsx?$/.test(repoRelativePath) ||
+    /\.test-support\.[cm]?tsx?$/.test(repoRelativePath) ||
+    /\.test-helpers\.[cm]?tsx?$/.test(repoRelativePath) ||
+    /\.test-harness\.[cm]?tsx?$/.test(repoRelativePath) ||
+    /\.test\.[cm]?tsx?$/.test(repoRelativePath)
+  );
+}
+
 function collectExtensionCoreImportLeaks(): Array<{ file: string; specifier: string }> {
   const leaks: Array<{ file: string; specifier: string }> = [];
   const importPattern = /\b(?:import|export)\b[\s\S]*?\bfrom\s*["']((?:\.\.\/)+src\/[^"']+)["']/g;
   for (const file of collectExtensionFiles(resolve(REPO_ROOT, "extensions"))) {
     const repoRelativePath = relative(REPO_ROOT, file).replaceAll("\\", "/");
-    if (
-      /(?:^|\/)(?:__tests__|tests|test-support)(?:\/|$)/.test(repoRelativePath) ||
-      /(?:^|\/)test-support\.[cm]?tsx?$/.test(repoRelativePath) ||
-      /\.test-support\.[cm]?tsx?$/.test(repoRelativePath) ||
-      /\.test\.[cm]?tsx?$/.test(repoRelativePath)
-    ) {
+    if (isExtensionTestOrSupportPath(repoRelativePath)) {
       continue;
     }
     const extensionRootMatch = /^(.*?\/extensions\/[^/]+)/.exec(file.replaceAll("\\", "/"));
@@ -230,6 +257,203 @@ function collectExtensionCoreImportLeaks(): Array<{ file: string; specifier: str
   return leaks;
 }
 
+function collectExtensionTestHelperImportLeaks(): Array<{ file: string; specifier: string }> {
+  const leaks: Array<{ file: string; specifier: string }> = [];
+  const importPatterns = [
+    /\b(?:import|export)\b[\s\S]*?\bfrom\s*["']((?:\.\.\/)+test\/helpers\/[^"']+)["']/g,
+    /\bimport\s*\(\s*["']((?:\.\.\/)+test\/helpers\/[^"']+)["']\s*\)/g,
+    /\bvi\.(?:mock|doMock)\s*\(\s*["']((?:\.\.\/)+test\/helpers\/[^"']+)["']/g,
+  ];
+  for (const file of collectExtensionFiles(resolve(REPO_ROOT, "extensions"))) {
+    const repoRelativePath = relative(REPO_ROOT, file).replaceAll("\\", "/");
+    if (isExtensionTestOrSupportPath(repoRelativePath)) {
+      continue;
+    }
+    const source = readFileSync(file, "utf8");
+    for (const importPattern of importPatterns) {
+      for (const match of source.matchAll(importPattern)) {
+        const specifier = match[1];
+        if (!specifier) {
+          continue;
+        }
+        leaks.push({
+          file: repoRelativePath,
+          specifier,
+        });
+      }
+    }
+  }
+  return leaks;
+}
+
+function collectDeprecatedExtensionSdkImports(): Array<{ file: string; specifier: string }> {
+  const leaks: Array<{ file: string; specifier: string }> = [];
+  const importPatterns = [
+    /\b(?:import|export)\b[\s\S]*?\bfrom\s*["'](openclaw\/plugin-sdk(?:\/[a-z0-9][a-z0-9-]*)?)["']/g,
+    /\bimport\s*\(\s*["'](openclaw\/plugin-sdk(?:\/[a-z0-9][a-z0-9-]*)?)["']\s*\)/g,
+    /\bvi\.(?:mock|doMock)\s*\(\s*["'](openclaw\/plugin-sdk(?:\/[a-z0-9][a-z0-9-]*)?)["']/g,
+  ];
+  for (const file of collectExtensionFiles(resolve(REPO_ROOT, "extensions"))) {
+    const repoRelativePath = relative(REPO_ROOT, file).replaceAll("\\", "/");
+    const source = readFileSync(file, "utf8");
+    for (const importPattern of importPatterns) {
+      for (const match of source.matchAll(importPattern)) {
+        const specifier = match[1];
+        if (!specifier || !DEPRECATED_EXTENSION_SDK_SPECIFIERS.has(specifier)) {
+          continue;
+        }
+        leaks.push({
+          file: repoRelativePath,
+          specifier,
+        });
+      }
+    }
+  }
+  return leaks;
+}
+
+function collectCodeFiles(dir: string): string[] {
+  const files: string[] = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    if (entry.name === "dist" || entry.name === "node_modules" || entry.name === ".git") {
+      continue;
+    }
+    const nextPath = join(dir, entry.name);
+    if (entry.isDirectory()) {
+      files.push(...collectCodeFiles(nextPath));
+      continue;
+    }
+    if (!entry.isFile() || !/\.(?:[cm]?ts|tsx|mts|cts)$/.test(entry.name)) {
+      continue;
+    }
+    files.push(nextPath);
+  }
+  return files;
+}
+
+function collectDeprecatedTestBarrelImports(): Array<{ file: string; specifier: string }> {
+  const leaks: Array<{ file: string; specifier: string }> = [];
+  const importPatterns = [
+    /\b(?:import|export)\b[\s\S]*?\bfrom\s*["'](openclaw\/plugin-sdk\/(?:testing|test-utils))["']/g,
+    /\bimport\s*\(\s*["'](openclaw\/plugin-sdk\/(?:testing|test-utils))["']\s*\)/g,
+    /\bvi\.(?:mock|doMock)\s*\(\s*["'](openclaw\/plugin-sdk\/(?:testing|test-utils))["']/g,
+  ];
+  for (const root of ["src", "test", "extensions", "packages"]) {
+    for (const file of collectCodeFiles(resolve(REPO_ROOT, root))) {
+      const repoRelativePath = relative(REPO_ROOT, file).replaceAll("\\", "/");
+      if (DEPRECATED_TEST_BARREL_ALLOWED_REFERENCE_FILES.has(repoRelativePath)) {
+        continue;
+      }
+      const source = readFileSync(file, "utf8");
+      for (const importPattern of importPatterns) {
+        for (const match of source.matchAll(importPattern)) {
+          const specifier = match[1];
+          if (!specifier || !DEPRECATED_TEST_BARREL_SPECIFIERS.has(specifier)) {
+            continue;
+          }
+          leaks.push({
+            file: repoRelativePath,
+            specifier,
+          });
+        }
+      }
+    }
+  }
+  return leaks;
+}
+
+function collectDeprecatedPackageTestingBridgeDrift(): string[] {
+  const source = readFileSync(
+    resolve(REPO_ROOT, "packages/plugin-sdk/src/testing.ts"),
+    "utf8",
+  ).trim();
+  return source === 'export * from "../../../src/plugin-sdk/testing.js";'
+    ? []
+    : ["packages/plugin-sdk/src/testing.ts"];
+}
+
+function parseTestApiNamedExports(source: string): string[] {
+  const exports = new Set<string>();
+  const declarationPattern =
+    /\bexport\s+(?:const|function|class|async\s+function|type|interface)\s+([A-Za-z_$][\w$]*)/g;
+  const exportListPattern = /\bexport\s*\{([^}]+)\}/g;
+
+  for (const match of source.matchAll(declarationPattern)) {
+    const exportName = match[1];
+    if (exportName) {
+      exports.add(exportName);
+    }
+  }
+
+  for (const match of source.matchAll(exportListPattern)) {
+    const exportList = match[1];
+    if (!exportList) {
+      continue;
+    }
+    for (const part of exportList.split(",")) {
+      const item = part.trim().replace(/^type\s+/, "");
+      const aliasMatch = /\bas\s+([A-Za-z_$][\w$]*)$/u.exec(item);
+      const nameMatch = /^([A-Za-z_$][\w$]*)/u.exec(item);
+      const exportName = aliasMatch?.[1] ?? nameMatch?.[1];
+      if (exportName && exportName !== "default") {
+        exports.add(exportName);
+      }
+    }
+  }
+
+  return [...exports].toSorted();
+}
+
+function collectWorkspaceCodeFiles(): string[] {
+  const files: string[] = [];
+  for (const root of ["src", "test", "extensions", "packages", "scripts"]) {
+    const dir = resolve(REPO_ROOT, root);
+    if (existsSync(dir)) {
+      files.push(...collectCodeFiles(dir));
+    }
+  }
+  return files;
+}
+
+function countIdentifierReferences(
+  files: readonly string[],
+  excludedFile: string,
+  name: string,
+): number {
+  let count = 0;
+  const pattern = new RegExp(`\\b${name}\\b`, "g");
+  for (const file of files) {
+    if (file === excludedFile) {
+      continue;
+    }
+    const source = readFileSync(file, "utf8");
+    count += [...source.matchAll(pattern)].length;
+  }
+  return count;
+}
+
+function collectUnusedExtensionTestApiExports(): Array<{ file: string; exportName: string }> {
+  const leaks: Array<{ file: string; exportName: string }> = [];
+  const workspaceCodeFiles = collectWorkspaceCodeFiles();
+  const testApiFiles = collectCodeFiles(resolve(REPO_ROOT, "extensions")).filter((file) =>
+    file.endsWith("/test-api.ts"),
+  );
+
+  for (const file of testApiFiles) {
+    const repoRelativePath = relative(REPO_ROOT, file).replaceAll("\\", "/");
+    const source = readFileSync(file, "utf8");
+    for (const exportName of parseTestApiNamedExports(source)) {
+      if (countIdentifierReferences(workspaceCodeFiles, file, exportName) === 0) {
+        leaks.push({ file: repoRelativePath, exportName });
+      }
+    }
+  }
+
+  return leaks.toSorted(
+    (a, b) => a.file.localeCompare(b.file) || a.exportName.localeCompare(b.exportName),
+  );
+}
+
 function collectCrossOwnerReservedSdkImports(): Array<{
   file: string;
   specifier: string;
@@ -242,14 +466,6 @@ function collectCrossOwnerReservedSdkImports(): Array<{
 
   for (const file of collectExtensionFiles(resolve(REPO_ROOT, "extensions"))) {
     const repoRelativePath = relative(REPO_ROOT, file).replaceAll("\\", "/");
-    if (
-      /(?:^|\/)(?:__tests__|tests|test-support)(?:\/|$)/.test(repoRelativePath) ||
-      /(?:^|\/)test-support\.[cm]?tsx?$/.test(repoRelativePath) ||
-      /\.test-support\.[cm]?tsx?$/.test(repoRelativePath) ||
-      /\.test\.[cm]?tsx?$/.test(repoRelativePath)
-    ) {
-      continue;
-    }
     const pluginId = repoRelativePath.split("/")[1];
     const source = readFileSync(file, "utf8");
     for (const match of source.matchAll(importPattern)) {
@@ -269,6 +485,32 @@ function collectCrossOwnerReservedSdkImports(): Array<{
     }
   }
   return leaks;
+}
+
+function collectReservedSdkSubpathImports(): string[] {
+  const imports = new Set<string>();
+  const reserved = new Set<string>(reservedBundledPluginSdkEntrypoints);
+  const importPatterns = [
+    /\b(?:import|export)\b[\s\S]*?\bfrom\s*["']openclaw\/plugin-sdk\/([a-z0-9][a-z0-9-]*)["']/g,
+    /\bimport\s*\(\s*["']openclaw\/plugin-sdk\/([a-z0-9][a-z0-9-]*)["']\s*\)/g,
+    /\bvi\.(?:mock|doMock)\s*\(\s*["']openclaw\/plugin-sdk\/([a-z0-9][a-z0-9-]*)["']/g,
+  ];
+
+  for (const root of ["src", "test", "extensions", "packages", "scripts"]) {
+    for (const file of collectCodeFiles(resolve(REPO_ROOT, root))) {
+      const source = readFileSync(file, "utf8");
+      for (const importPattern of importPatterns) {
+        for (const match of source.matchAll(importPattern)) {
+          const subpath = match[1];
+          if (subpath && reserved.has(subpath)) {
+            imports.add(subpath);
+          }
+        }
+      }
+    }
+  }
+
+  return [...imports].toSorted();
 }
 
 describe("plugin-sdk package contract guardrails", () => {
@@ -397,8 +639,37 @@ describe("plugin-sdk package contract guardrails", () => {
     expect(collectExtensionCoreImportLeaks()).toEqual([]);
   });
 
+  it("keeps extension production sources off repo test helpers", () => {
+    expect(collectExtensionTestHelperImportLeaks()).toEqual([]);
+  });
+
+  it("keeps extension sources off deprecated plugin-sdk compatibility imports", () => {
+    expect(collectDeprecatedExtensionSdkImports()).toEqual([]);
+  });
+
+  it("keeps real tests off deprecated plugin-sdk testing barrels", () => {
+    expect(collectDeprecatedTestBarrelImports()).toEqual([]);
+  });
+
+  it("keeps the package testing barrel as a single deprecated bridge", () => {
+    expect(collectDeprecatedPackageTestingBridgeDrift()).toEqual([]);
+  });
+
+  it("keeps extension test-api exports consumed", () => {
+    expect(collectUnusedExtensionTestApiExports()).toEqual([]);
+  });
+
   it("keeps reserved SDK compatibility subpaths inside their owning bundled plugins", () => {
     expect(collectCrossOwnerReservedSdkImports()).toEqual([]);
+  });
+
+  it("keeps reserved SDK compatibility subpaths actively used", () => {
+    const usedReserved = new Set(collectReservedSdkSubpathImports());
+    const unusedReserved = reservedBundledPluginSdkEntrypoints.filter(
+      (entrypoint) => !usedReserved.has(entrypoint),
+    );
+
+    expect(unusedReserved).toEqual([]);
   });
 
   it("keeps generic core poll helpers free of plugin owner names", () => {

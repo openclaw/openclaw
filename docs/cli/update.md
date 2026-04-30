@@ -96,6 +96,14 @@ keeps packaged sidecars and channel-owned plugin records aligned with the
 installed OpenClaw build while leaving full plugin-command completion rebuilds to
 explicit `openclaw completion --write-state` runs.
 
+When a local managed Gateway service is installed and restart is enabled,
+package-manager updates stop the running service before replacing the package
+tree, then refresh the service metadata from the updated install, restart the
+service, and verify the restarted Gateway reports the expected version. With
+`--no-restart`, package replacement still runs but the managed service is not
+stopped or restarted, so the running Gateway may keep old code until you restart
+it manually.
+
 ## Git checkout flow
 
 ### Channel selection

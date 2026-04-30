@@ -1,12 +1,10 @@
+import { createParameterFreeTool } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { describe, expect, it, vi } from "vitest";
-import { createParameterFreeTool } from "../../../test/helpers/agents/schema-normalization-runtime-contract.js";
 import { buildAgentRuntimePlan } from "./build.js";
 
 vi.mock("../../plugins/provider-hook-runtime.js", () => ({
   __testing: {},
-  clearProviderRuntimeHookCache: vi.fn(),
   prepareProviderExtraParams: vi.fn(() => undefined),
-  resetProviderRuntimeHookCacheForTest: vi.fn(),
   resolveProviderAuthProfileId: vi.fn(() => undefined),
   resolveProviderExtraParamsForTransport: vi.fn(() => undefined),
   resolveProviderFollowupFallbackRoute: vi.fn(() => undefined),

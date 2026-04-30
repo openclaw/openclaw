@@ -1,5 +1,8 @@
 {
   "id": "zai",
+  "activation": {
+    "onStartup": false
+  },
   "enabledByDefault": true,
   "providers": ["zai"],
   "providerEndpoints": [

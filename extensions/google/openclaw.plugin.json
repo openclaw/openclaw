@@ -1,5 +1,8 @@
 {
   "id": "google",
+  "activation": {
+    "onStartup": false
+  },
   "enabledByDefault": true,
   "providers": ["google", "google-gemini-cli", "google-vertex"],
   "autoEnableWhenConfiguredProviders": ["google-gemini-cli"],
@@ -67,6 +70,29 @@
         "family": "google"
       }
     }
+  },
+  "setup": {
+    "providers": [
+      {
+        "id": "google-vertex",
+        "authMethods": ["api-key"],
+        "envVars": ["GOOGLE_CLOUD_API_KEY"],
+        "authEvidence": [
+          {
+            "type": "local-file-with-env",
+            "fileEnvVar": "GOOGLE_APPLICATION_CREDENTIALS",
+            "fallbackPaths": [
+              "${HOME}/.config/gcloud/application_default_credentials.json",
+              "${APPDATA}/gcloud/application_default_credentials.json"
+            ],
+            "requiresAnyEnv": ["GOOGLE_CLOUD_PROJECT", "GCLOUD_PROJECT"],
+            "requiresAllEnv": ["GOOGLE_CLOUD_LOCATION"],
+            "credentialMarker": "gcp-vertex-credentials",
+            "source": "gcloud adc"
+          }
+        ]
+      }
+    ]
   },
   "cliBackends": ["google-gemini-cli"],
   "providerAuthEnvVars": {

@@ -53,6 +53,13 @@ If the same person contacts you from multiple channels, use
 `session.identityLinks` to link their identities so they share one session.
 </Tip>
 
+### Dock linked channels
+
+Dock commands let a user move the current direct-chat session's reply route to
+another linked channel without starting a new session. See
+[Channel docking](/concepts/channel-docking) for examples, config, and
+troubleshooting.
+
 Verify your setup with `openclaw security audit`.
 
 ## Session lifecycle

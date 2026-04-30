@@ -46,12 +46,12 @@ See [Active Memory](/concepts/active-memory) for the activation model, plugin-ow
 
 ## Provider selection
 
-| Key        | Type      | Default          | Description                                                                                                   |
-| ---------- | --------- | ---------------- | ------------------------------------------------------------------------------------------------------------- |
-| `provider` | `string`  | auto-detected    | Embedding adapter ID: `bedrock`, `gemini`, `github-copilot`, `local`, `mistral`, `ollama`, `openai`, `voyage` |
-| `model`    | `string`  | provider default | Embedding model name                                                                                          |
-| `fallback` | `string`  | `"none"`         | Fallback adapter ID when the primary fails                                                                    |
-| `enabled`  | `boolean` | `true`           | Enable or disable memory search                                                                               |
+| Key        | Type      | Default          | Description                                                                                                                                                                                                                        |
+| ---------- | --------- | ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `provider` | `string`  | auto-detected    | Embedding adapter ID such as `bedrock`, `deepinfra`, `gemini`, `github-copilot`, `local`, `mistral`, `ollama`, `openai`, or `voyage`; may also be a configured `models.providers.<id>` whose `api` points at one of those adapters |
+| `model`    | `string`  | provider default | Embedding model name                                                                                                                                                                                                               |
+| `fallback` | `string`  | `"none"`         | Fallback adapter ID when the primary fails                                                                                                                                                                                         |
+| `enabled`  | `boolean` | `true`           | Enable or disable memory search                                                                                                                                                                                                    |
 
 ### Auto-detection order
 
@@ -76,6 +76,9 @@ When `provider` is not set, OpenClaw selects the first available:
   <Step title="mistral">
     Selected if a Mistral key can be resolved.
   </Step>
+  <Step title="deepinfra">
+    Selected if a DeepInfra key can be resolved.
+  </Step>
   <Step title="bedrock">
     Selected if the AWS SDK credential chain resolves (instance role, access keys, profile, SSO, web identity, or shared config).
   </Step>
@@ -83,19 +86,47 @@ When `provider` is not set, OpenClaw selects the first available:
 
 `ollama` is supported but not auto-detected (set it explicitly).
 
+### Custom provider ids
+
+`memorySearch.provider` can point at a custom `models.providers.<id>` entry. OpenClaw resolves that provider's `api` owner for the embedding adapter while preserving the custom provider id for endpoint, auth, and model-prefix handling. This lets multi-GPU or multi-host setups dedicate memory embeddings to a specific local endpoint:
+
+```json5
+{
+  models: {
+    providers: {
+      "ollama-5080": {
+        api: "ollama",
+        baseUrl: "http://gpu-box.local:11435",
+        apiKey: "ollama-local",
+        models: [{ id: "qwen3-embedding:0.6b" }],
+      },
+    },
+  },
+  agents: {
+    defaults: {
+      memorySearch: {
+        provider: "ollama-5080",
+        model: "qwen3-embedding:0.6b",
+      },
+    },
+  },
+}
+```
+
 ### API key resolution
 
 Remote embeddings require an API key. Bedrock uses the AWS SDK default credential chain instead (instance roles, SSO, access keys).
 
-| Provider       | Env var                                            | Config key                        |
-| -------------- | -------------------------------------------------- | --------------------------------- |
-| Bedrock        | AWS credential chain                               | No API key needed                 |
-| Gemini         | `GEMINI_API_KEY`                                   | `models.providers.google.apiKey`  |
-| GitHub Copilot | `COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, `GITHUB_TOKEN` | Auth profile via device login     |
-| Mistral        | `MISTRAL_API_KEY`                                  | `models.providers.mistral.apiKey` |
-| Ollama         | `OLLAMA_API_KEY` (placeholder)                     | --                                |
-| OpenAI         | `OPENAI_API_KEY`                                   | `models.providers.openai.apiKey`  |
-| Voyage         | `VOYAGE_API_KEY`                                   | `models.providers.voyage.apiKey`  |
+| Provider       | Env var                                            | Config key                          |
+| -------------- | -------------------------------------------------- | ----------------------------------- |
+| Bedrock        | AWS credential chain                               | No API key needed                   |
+| DeepInfra      | `DEEPINFRA_API_KEY`                                | `models.providers.deepinfra.apiKey` |
+| Gemini         | `GEMINI_API_KEY`                                   | `models.providers.google.apiKey`    |
+| GitHub Copilot | `COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, `GITHUB_TOKEN` | Auth profile via device login       |
+| Mistral        | `MISTRAL_API_KEY`                                  | `models.providers.mistral.apiKey`   |
+| Ollama         | `OLLAMA_API_KEY` (placeholder)                     | --                                  |
+| OpenAI         | `OPENAI_API_KEY`                                   | `models.providers.openai.apiKey`    |
+| Voyage         | `VOYAGE_API_KEY`                                   | `models.providers.voyage.apiKey`    |
 
 <Note>
 Codex OAuth covers chat/completions only and does not satisfy embedding requests.
@@ -253,7 +284,7 @@ For custom OpenAI-compatible endpoints or overriding provider defaults:
     | `local.modelCacheDir` | `string`           | node-llama-cpp default | Cache dir for downloaded models                                                                                                                                                                                                                                                                                      |
     | `local.contextSize`   | `number \| "auto"` | `4096`                 | Context window size for the embedding context. 4096 covers typical chunks (128–512 tokens) while bounding non-weight VRAM. Lower to 1024–2048 on constrained hosts. `"auto"` uses the model's trained maximum — not recommended for 8B+ models (Qwen3-Embedding-8B: 40 960 tokens → ~32 GB VRAM vs ~8.8 GB at 4096). |
 
-    Default model: `embeddinggemma-300m-qat-Q8_0.gguf` (~0.6 GB, auto-downloaded). Requires native build: `pnpm approve-builds` then `pnpm rebuild node-llama-cpp`.
+    Default model: `embeddinggemma-300m-qat-Q8_0.gguf` (~0.6 GB, auto-downloaded). Packaged installs repair the native `node-llama-cpp` runtime through managed plugin runtime deps when `provider: "local"` is configured. Source checkouts still require native build approval: `pnpm approve-builds` then `pnpm rebuild node-llama-cpp`.
 
     Use the standalone CLI to verify the same provider path the Gateway uses:
 
@@ -386,6 +417,7 @@ Prevents re-embedding unchanged text during reindex or transcript updates.
 
 | Key                           | Type      | Default | Description                |
 | ----------------------------- | --------- | ------- | -------------------------- |
+| `remote.nonBatchConcurrency`  | `number`  | `4`     | Parallel inline embeddings |
 | `remote.batch.enabled`        | `boolean` | `false` | Enable batch embedding API |
 | `remote.batch.concurrency`    | `number`  | `2`     | Parallel batch jobs        |
 | `remote.batch.wait`           | `boolean` | `true`  | Wait for batch completion  |
@@ -394,7 +426,9 @@ Prevents re-embedding unchanged text during reindex or transcript updates.
 
 Available for `openai`, `gemini`, and `voyage`. OpenAI batch is typically fastest and cheapest for large backfills.
 
-This is separate from `sync.embeddingBatchTimeoutSeconds`, which controls inline embedding calls used by local/self-hosted providers and hosted providers when provider batch APIs are not active.
+`remote.nonBatchConcurrency` controls inline embedding calls used by local/self-hosted providers and hosted providers when provider batch APIs are not active. Ollama defaults to `1` for non-batch indexing to avoid overwhelming smaller local hosts; set a higher value on larger machines.
+
+This is separate from `sync.embeddingBatchTimeoutSeconds`, which controls the timeout for inline embedding calls.
 
 ---
 
@@ -463,8 +497,10 @@ QMD model overrides stay on the QMD side, not OpenClaw config. If you need to ov
     | ------------------------- | --------- | ------- | ------------------------------------- |
     | `update.interval`         | `string`  | `5m`    | Refresh interval                      |
     | `update.debounceMs`       | `number`  | `15000` | Debounce file changes                 |
-    | `update.onBoot`           | `boolean` | `true`  | Refresh on startup                    |
-    | `update.waitForBootSync`  | `boolean` | `false` | Block startup until refresh completes |
+    | `update.onBoot`           | `boolean` | `true`  | Refresh when the long-lived QMD manager opens; also gates opt-in startup refresh |
+    | `update.startup`          | `string`  | `off`   | Optional gateway-start refresh: `off`, `idle`, or `immediate` |
+    | `update.startupDelayMs`   | `number`  | `120000` | Delay before `startup: "idle"` refresh runs |
+    | `update.waitForBootSync`  | `boolean` | `false` | Block manager opening until its initial refresh completes |
     | `update.embedInterval`    | `string`  | --      | Separate embed cadence                |
     | `update.commandTimeoutMs` | `number`  | --      | Timeout for QMD commands              |
     | `update.updateTimeoutMs`  | `number`  | --      | Timeout for QMD update operations     |
@@ -510,6 +546,8 @@ QMD model overrides stay on the QMD side, not OpenClaw config. If you need to ov
 
   </Accordion>
 </AccordionGroup>
+
+QMD boot refreshes use a one-shot subprocess path during gateway startup. The long-lived QMD manager still owns the regular file watcher and interval timers when memory search is opened for interactive use.
 
 ### Full QMD example
 
@@ -578,7 +616,9 @@ For conceptual behavior and slash commands, see [Dreaming](/concepts/dreaming).
 - Dreaming writes machine state to `memory/.dreams/`.
 - Dreaming writes human-readable narrative output to `DREAMS.md` (or existing `dreams.md`).
 - `dreaming.model` uses the existing plugin subagent trust gate; set `plugins.entries.memory-core.subagent.allowModelOverride: true` before enabling it.
+- Dream Diary retries once with the session default model when the configured model is unavailable. Trust or allowlist failures are logged and are not silently retried.
 - The light/deep/REM phase policy and thresholds are internal behavior, not user-facing config.
+
 </Note>
 
 ## Related

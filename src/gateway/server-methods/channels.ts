@@ -437,7 +437,7 @@ export const channelsHandlers: GatewayRequestHandlers = {
       const payload = await logoutChannelAccount({
         channelId,
         accountId,
-        cfg: snapshot.config ?? {},
+        cfg: context.getRuntimeConfig(),
         context,
         plugin,
       });

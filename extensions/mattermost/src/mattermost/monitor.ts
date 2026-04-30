@@ -69,7 +69,6 @@ import {
   buildAgentMediaPayload,
   buildModelsProviderData,
   buildPendingHistoryContextFromMap,
-  clearHistoryEntriesIfEnabled,
   createChannelPairingController,
   createChannelReplyPipeline,
   DEFAULT_GROUP_HISTORY_LIMIT,
@@ -1488,16 +1487,6 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           directId: senderId,
         });
 
-        const preview = bodyText.replace(/\s+/g, " ").slice(0, 160);
-        const inboundLabel =
-          kind === "direct"
-            ? `Mattermost DM from ${senderName}`
-            : `Mattermost message in ${roomLabel} from ${senderName}`;
-        core.system.enqueueSystemEvent(`${inboundLabel}: ${preview}`, {
-          sessionKey,
-          contextKey: `mattermost:message:${channelId}:${post.id ?? "unknown"}`,
-        });
-
         const textWithId = `${bodyText}\n[mattermost message id: ${post.id ?? "unknown"} channel: ${channelId}]`;
         const body = core.channel.reply.formatInboundEnvelope({
           channel: "Mattermost",
@@ -1580,21 +1569,9 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           ...mediaPayload,
         });
 
-        if (kind === "direct") {
-          const sessionCfg = cfg.session;
-          const storePath = core.channel.session.resolveStorePath(sessionCfg?.store, {
-            agentId: route.agentId,
-          });
-          await core.channel.session.updateLastRoute({
-            storePath,
-            sessionKey: route.mainSessionKey,
-            deliveryContext: {
-              channel: "mattermost",
-              to,
-              accountId: route.accountId,
-            },
-          });
-        }
+        const storePath = core.channel.session.resolveStorePath(cfg.session?.store, {
+          agentId: route.agentId,
+        });
 
         const previewLine = bodyText.slice(0, 200).replace(/\n/g, "\\n");
         logVerboseMessage(
@@ -1741,40 +1718,97 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
             },
           });
 
+        let dispatchSettledBeforeStart = false;
         try {
-          await core.channel.reply.withReplyDispatcher({
-            dispatcher,
-            onSettled: () => {
-              markDispatchIdle();
-            },
-            run: () =>
-              core.channel.reply.dispatchReplyFromConfig({
-                ctx: ctxPayload,
-                cfg,
-                dispatcher,
-                replyOptions: {
-                  ...replyOptions,
-                  disableBlockStreaming: true,
-                  onModelSelected,
-                  onPartialReply: (payload) => {
-                    updateDraftFromPartial(payload.text);
-                  },
-                  onAssistantMessageStart: () => {
-                    lastPartialText = "";
-                  },
-                  onReasoningEnd: () => {
-                    lastPartialText = "";
-                  },
-                  onReasoningStream: async () => {
-                    if (!lastPartialText) {
-                      draftStream.update("Thinking…");
-                    }
-                  },
-                  onToolStart: async (payload) => {
-                    draftStream.update(buildMattermostToolStatusText(payload));
+          await core.channel.turn.run({
+            channel: "mattermost",
+            accountId: route.accountId,
+            raw: post,
+            adapter: {
+              ingest: () => ({
+                id: post.id ?? `${to}:${Date.now()}`,
+                timestamp: post.create_at ?? undefined,
+                rawText,
+                textForAgent: ctxPayload.BodyForAgent,
+                textForCommands: ctxPayload.CommandBody,
+                raw: post,
+              }),
+              resolveTurn: () => ({
+                channel: "mattermost",
+                accountId: route.accountId,
+                routeSessionKey: route.sessionKey,
+                storePath,
+                ctxPayload,
+                recordInboundSession: core.channel.session.recordInboundSession,
+                record: {
+                  updateLastRoute:
+                    kind === "direct"
+                      ? {
+                          sessionKey: route.mainSessionKey,
+                          channel: "mattermost",
+                          to,
+                          accountId: route.accountId,
+                        }
+                      : undefined,
+                  onRecordError: (err) => {
+                    logVerboseMessage(
+                      `mattermost: failed updating session meta id=${post.id ?? "unknown"}: ${String(err)}`,
+                    );
                   },
                 },
+                history: {
+                  isGroup: Boolean(historyKey),
+                  historyKey: historyKey ?? undefined,
+                  historyMap: channelHistories,
+                  limit: historyLimit,
+                },
+                onPreDispatchFailure: async () => {
+                  dispatchSettledBeforeStart = true;
+                  await core.channel.reply.settleReplyDispatcher({
+                    dispatcher,
+                    onSettled: () => {
+                      markRunComplete();
+                      markDispatchIdle();
+                    },
+                  });
+                },
+                runDispatch: () =>
+                  core.channel.reply.withReplyDispatcher({
+                    dispatcher,
+                    onSettled: () => {
+                      markDispatchIdle();
+                    },
+                    run: () =>
+                      core.channel.reply.dispatchReplyFromConfig({
+                        ctx: ctxPayload,
+                        cfg,
+                        dispatcher,
+                        replyOptions: {
+                          ...replyOptions,
+                          disableBlockStreaming: true,
+                          onModelSelected,
+                          onPartialReply: (payload) => {
+                            updateDraftFromPartial(payload.text);
+                          },
+                          onAssistantMessageStart: () => {
+                            lastPartialText = "";
+                          },
+                          onReasoningEnd: () => {
+                            lastPartialText = "";
+                          },
+                          onReasoningStream: async () => {
+                            if (!lastPartialText) {
+                              draftStream.update("Thinking…");
+                            }
+                          },
+                          onToolStart: async (payload) => {
+                            draftStream.update(buildMattermostToolStatusText(payload));
+                          },
+                        },
+                      }),
+                  }),
               }),
+            },
           });
         } finally {
           try {
@@ -1782,14 +1816,9 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           } catch (err) {
             logVerboseMessage(`mattermost draft preview cleanup failed: ${String(err)}`);
           }
-          markRunComplete();
-        }
-        if (historyKey) {
-          clearHistoryEntriesIfEnabled({
-            historyMap: channelHistories,
-            historyKey,
-            limit: historyLimit,
-          });
+          if (!dispatchSettledBeforeStart) {
+            markRunComplete();
+          }
         }
       },
     });

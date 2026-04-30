@@ -7,7 +7,7 @@ import {
   parseModelRef,
   resolveDefaultModelForAgent,
 } from "../agents/model-selection.js";
-import { getRuntimeConfig } from "../config/config.js";
+import { getRuntimeConfig } from "../config/io.js";
 import { buildAgentMainSessionKey, normalizeAgentId } from "../routing/session-key.js";
 import {
   normalizeLowercaseStringOrEmpty,

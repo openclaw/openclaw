@@ -1,12 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterAll, describe, expect, it, vi } from "vitest";
 import {
   bundledDistPluginFile,
   bundledPluginFile,
   bundledPluginRoot,
-} from "../../test/helpers/bundled-plugin-paths.js";
+} from "openclaw/plugin-sdk/test-fixtures";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { withEnv } from "../test-utils/env.js";
 import {
   buildPluginLoaderAliasMap,
@@ -101,7 +101,7 @@ function createPluginSdkAliasFixture(params?: {
   mkdirSafeDir(path.join(root, "scripts", "lib"));
   fs.writeFileSync(
     path.join(root, "scripts", "lib", "plugin-sdk-private-local-only-subpaths.json"),
-    JSON.stringify(["qa-lab", "qa-runtime"], null, 2),
+    JSON.stringify(["qa-channel", "qa-channel-protocol", "qa-lab", "qa-runtime"], null, 2),
     "utf-8",
   );
   fs.writeFileSync(srcFile, params?.srcBody ?? "export {};\n", "utf-8");
@@ -163,12 +163,25 @@ function createPluginSdkAliasTargetFixture(params?: {
     distFile: "channel-runtime.js",
     packageExports: {
       "./plugin-sdk/channel-runtime": { default: "./dist/plugin-sdk/channel-runtime.js" },
+      "./plugin-sdk/plugin-entry": { default: "./dist/plugin-sdk/plugin-entry.js" },
     },
   });
   const sourceRootAlias = path.join(fixture.root, "src", "plugin-sdk", "root-alias.cjs");
   const distRootAlias = path.join(fixture.root, "dist", "plugin-sdk", "root-alias.cjs");
+  const sourcePluginEntryPath = path.join(fixture.root, "src", "plugin-sdk", "plugin-entry.ts");
+  const distPluginEntryPath = path.join(fixture.root, "dist", "plugin-sdk", "plugin-entry.js");
   fs.writeFileSync(sourceRootAlias, "module.exports = {};\n", "utf-8");
   fs.writeFileSync(distRootAlias, "module.exports = {};\n", "utf-8");
+  fs.writeFileSync(
+    sourcePluginEntryPath,
+    "export const definePluginEntry = (entry) => entry;\n",
+    "utf-8",
+  );
+  fs.writeFileSync(
+    distPluginEntryPath,
+    "export const definePluginEntry = (entry) => entry;\n",
+    "utf-8",
+  );
   return {
     fixture,
     sourceRootAlias,
@@ -180,6 +193,8 @@ function createPluginSdkAliasTargetFixture(params?: {
       `channel-runtime${sourceChannelRuntimeExtension}`,
     ),
     distChannelRuntimePath: path.join(fixture.root, "dist", "plugin-sdk", "channel-runtime.js"),
+    sourcePluginEntryPath,
+    distPluginEntryPath,
   };
 }
 
@@ -191,16 +206,25 @@ function writePluginEntry(root: string, relativePath: string) {
 }
 
 function createUserInstalledPluginSdkAliasFixture() {
-  const { fixture, sourceRootAlias, sourceChannelRuntimePath } =
+  const { fixture, sourcePluginEntryPath, sourceRootAlias, sourceChannelRuntimePath } =
     createPluginSdkAliasTargetFixture();
   const externalPluginRoot = path.join(makeTempDir(), ".openclaw", "extensions", "demo");
   const externalPluginEntry = path.join(externalPluginRoot, "index.ts");
   mkdirSafeDir(externalPluginRoot);
-  fs.writeFileSync(externalPluginEntry, 'export const plugin = "demo";\n', "utf-8");
+  fs.writeFileSync(
+    externalPluginEntry,
+    [
+      'import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";',
+      'export default definePluginEntry({ id: "demo", register() {} });',
+      "",
+    ].join("\n"),
+    "utf-8",
+  );
   return {
     externalPluginEntry,
     externalPluginRoot,
     fixture,
+    sourcePluginEntryPath,
     sourceRootAlias,
     sourceChannelRuntimePath,
   };
@@ -251,6 +275,7 @@ function expectPluginSdkAliasTargets(
   params: {
     rootAliasPath: string;
     channelRuntimePath?: string;
+    pluginEntryPath?: string;
   },
 ) {
   expect(fs.realpathSync(aliases["openclaw/plugin-sdk"] ?? "")).toBe(
@@ -265,6 +290,14 @@ function expectPluginSdkAliasTargets(
     );
     expect(fs.realpathSync(aliases["@openclaw/plugin-sdk/channel-runtime"] ?? "")).toBe(
       fs.realpathSync(params.channelRuntimePath),
+    );
+  }
+  if (params.pluginEntryPath) {
+    expect(fs.realpathSync(aliases["openclaw/plugin-sdk/plugin-entry"] ?? "")).toBe(
+      fs.realpathSync(params.pluginEntryPath),
+    );
+    expect(fs.realpathSync(aliases["@openclaw/plugin-sdk/plugin-entry"] ?? "")).toBe(
+      fs.realpathSync(params.pluginEntryPath),
     );
   }
 }
@@ -531,6 +564,16 @@ describe("plugin sdk alias helpers", () => {
       },
     });
     fs.writeFileSync(
+      path.join(fixture.root, "src", "plugin-sdk", "qa-channel.ts"),
+      "export const qaChannel = true;\n",
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(fixture.root, "src", "plugin-sdk", "qa-channel-protocol.ts"),
+      "export const qaChannelProtocol = true;\n",
+      "utf-8",
+    );
+    fs.writeFileSync(
       path.join(fixture.root, "src", "plugin-sdk", "qa-runtime.ts"),
       "export const qaRuntime = true;\n",
       "utf-8",
@@ -546,7 +589,7 @@ describe("plugin sdk alias helpers", () => {
         modulePath: path.join(fixture.root, "src", "plugins", "loader.ts"),
       }),
     );
-    expect(subpaths).toEqual(["core", "qa-lab", "qa-runtime"]);
+    expect(subpaths).toEqual(["core", "qa-channel", "qa-channel-protocol", "qa-lab", "qa-runtime"]);
   });
 
   it("does not reuse a non-private cached subpath list after private qa gets enabled", () => {
@@ -555,6 +598,16 @@ describe("plugin sdk alias helpers", () => {
         "./plugin-sdk/core": { default: "./dist/plugin-sdk/core.js" },
       },
     });
+    fs.writeFileSync(
+      path.join(fixture.root, "src", "plugin-sdk", "qa-channel.ts"),
+      "export const qaChannel = true;\n",
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(fixture.root, "src", "plugin-sdk", "qa-channel-protocol.ts"),
+      "export const qaChannelProtocol = true;\n",
+      "utf-8",
+    );
     fs.writeFileSync(
       path.join(fixture.root, "src", "plugin-sdk", "qa-runtime.ts"),
       "export const qaRuntime = true;\n",
@@ -577,7 +630,13 @@ describe("plugin sdk alias helpers", () => {
         modulePath: path.join(fixture.root, "src", "plugins", "loader.ts"),
       }),
     );
-    expect(privateSubpaths).toEqual(["core", "qa-lab", "qa-runtime"]);
+    expect(privateSubpaths).toEqual([
+      "core",
+      "qa-channel",
+      "qa-channel-protocol",
+      "qa-lab",
+      "qa-runtime",
+    ]);
   });
 
   it.each([
@@ -657,9 +716,22 @@ describe("plugin sdk alias helpers", () => {
       },
     });
     const sourceRootAlias = path.join(fixture.root, "src", "plugin-sdk", "root-alias.cjs");
+    const sourceQaChannelPath = path.join(fixture.root, "src", "plugin-sdk", "qa-channel.ts");
+    const sourceQaChannelProtocolPath = path.join(
+      fixture.root,
+      "src",
+      "plugin-sdk",
+      "qa-channel-protocol.ts",
+    );
     const sourceQaRuntimePath = path.join(fixture.root, "src", "plugin-sdk", "qa-runtime.ts");
     const distQaLabPath = path.join(fixture.root, "dist", "plugin-sdk", "qa-lab.js");
     fs.writeFileSync(sourceRootAlias, "module.exports = {};\n", "utf-8");
+    fs.writeFileSync(sourceQaChannelPath, "export const qaChannel = true;\n", "utf-8");
+    fs.writeFileSync(
+      sourceQaChannelProtocolPath,
+      "export const qaChannelProtocol = true;\n",
+      "utf-8",
+    );
     fs.writeFileSync(sourceQaRuntimePath, "export const qaRuntime = true;\n", "utf-8");
     fs.writeFileSync(distQaLabPath, "export const qaLab = true;\n", "utf-8");
     const sourcePluginEntry = writePluginEntry(
@@ -676,6 +748,12 @@ describe("plugin sdk alias helpers", () => {
     );
     expect(fs.realpathSync(aliases["openclaw/plugin-sdk/qa-runtime"] ?? "")).toBe(
       fs.realpathSync(sourceQaRuntimePath),
+    );
+    expect(fs.realpathSync(aliases["openclaw/plugin-sdk/qa-channel"] ?? "")).toBe(
+      fs.realpathSync(sourceQaChannelPath),
+    );
+    expect(fs.realpathSync(aliases["openclaw/plugin-sdk/qa-channel-protocol"] ?? "")).toBe(
+      fs.realpathSync(sourceQaChannelProtocolPath),
     );
     expect(fs.realpathSync(aliases["openclaw/plugin-sdk/qa-lab"] ?? "")).toBe(
       fs.realpathSync(distQaLabPath),
@@ -753,6 +831,7 @@ describe("plugin sdk alias helpers", () => {
       externalPluginEntry,
       externalPluginRoot,
       fixture,
+      sourcePluginEntryPath,
       sourceRootAlias,
       sourceChannelRuntimePath,
     } = createUserInstalledPluginSdkAliasFixture();
@@ -766,6 +845,7 @@ describe("plugin sdk alias helpers", () => {
     expectPluginSdkAliasTargets(aliases, {
       rootAliasPath: sourceRootAlias,
       channelRuntimePath: sourceChannelRuntimePath,
+      pluginEntryPath: sourcePluginEntryPath,
     });
   });
 
@@ -774,6 +854,7 @@ describe("plugin sdk alias helpers", () => {
       externalPluginEntry,
       externalPluginRoot,
       fixture,
+      sourcePluginEntryPath,
       sourceRootAlias,
       sourceChannelRuntimePath,
     } = createUserInstalledPluginSdkAliasFixture();
@@ -805,6 +886,7 @@ describe("plugin sdk alias helpers", () => {
     expectPluginSdkAliasTargets(aliases, {
       rootAliasPath: sourceRootAlias,
       channelRuntimePath: sourceChannelRuntimePath,
+      pluginEntryPath: sourcePluginEntryPath,
     });
   });
 
@@ -870,7 +952,7 @@ describe("plugin sdk alias helpers", () => {
     }
   });
 
-  it("disables native Jiti loads on Windows for built JavaScript entries", () => {
+  it("enables native Jiti loads on Windows for built JavaScript entries", () => {
     const originalPlatform = process.platform;
     Object.defineProperty(process, "platform", {
       configurable: true,
@@ -878,9 +960,9 @@ describe("plugin sdk alias helpers", () => {
     });
 
     try {
-      expect(shouldPreferNativeJiti("/repo/dist/plugins/runtime/index.js")).toBe(false);
+      expect(shouldPreferNativeJiti("/repo/dist/plugins/runtime/index.js")).toBe(true);
       expect(shouldPreferNativeJiti(`/repo/${bundledDistPluginFile("browser", "index.js")}`)).toBe(
-        false,
+        true,
       );
     } finally {
       Object.defineProperty(process, "platform", {
@@ -890,7 +972,7 @@ describe("plugin sdk alias helpers", () => {
     }
   });
 
-  it("keeps plugin loader dist shortcuts on transpiled Jiti on Windows", () => {
+  it("keeps plugin loader dist shortcuts on native Jiti on Windows for JS entries", () => {
     const originalPlatform = process.platform;
     Object.defineProperty(process, "platform", {
       configurable: true,
@@ -902,7 +984,7 @@ describe("plugin sdk alias helpers", () => {
         resolvePluginLoaderJitiTryNative(`/repo/${bundledDistPluginFile("browser", "index.js")}`, {
           preferBuiltDist: true,
         }),
-      ).toBe(false);
+      ).toBe(true);
       expect(
         resolvePluginLoaderJitiTryNative(`/repo/${bundledDistPluginFile("browser", "helper.ts")}`, {
           preferBuiltDist: true,
@@ -1063,7 +1145,7 @@ describe("plugin sdk alias helpers", () => {
     fs.writeFileSync(jitiBaseFile, "export {};\n", "utf-8");
     fs.writeFileSync(
       path.join(copiedSourceDir, "channel.runtime.ts"),
-      `import { resolveOutboundSendDep } from "@openclaw/plugin-sdk/infra-runtime";
+      `import { resolveOutboundSendDep } from "@openclaw/plugin-sdk/outbound-send-deps";
 
 export const syntheticRuntimeMarker = {
   resolveOutboundSendDep,
@@ -1071,7 +1153,7 @@ export const syntheticRuntimeMarker = {
 `,
       "utf-8",
     );
-    const copiedChannelRuntimeShim = path.join(copiedPluginSdkDir, "infra-runtime.ts");
+    const copiedChannelRuntimeShim = path.join(copiedPluginSdkDir, "outbound-send-deps.ts");
     fs.writeFileSync(
       copiedChannelRuntimeShim,
       `export function resolveOutboundSendDep() {
@@ -1092,8 +1174,8 @@ export const syntheticRuntimeMarker = {
 
     const withAlias = createJiti(jitiBaseUrl, {
       ...buildPluginLoaderJitiOptions({
-        "openclaw/plugin-sdk/infra-runtime": copiedChannelRuntimeShim,
-        "@openclaw/plugin-sdk/infra-runtime": copiedChannelRuntimeShim,
+        "openclaw/plugin-sdk/outbound-send-deps": copiedChannelRuntimeShim,
+        "@openclaw/plugin-sdk/outbound-send-deps": copiedChannelRuntimeShim,
       }),
       tryNative: false,
     });

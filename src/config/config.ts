@@ -15,6 +15,7 @@ export {
   parseConfigJson5,
   promoteConfigSnapshotToLastKnownGood,
   readConfigFileSnapshot,
+  readConfigFileSnapshotWithPluginMetadata,
   readConfigFileSnapshotForWrite,
   readSourceConfigSnapshot,
   readSourceConfigSnapshotForWrite,

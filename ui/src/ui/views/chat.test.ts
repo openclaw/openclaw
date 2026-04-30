@@ -8,6 +8,10 @@ import {
   createSessionsListResult,
   DEFAULT_CHAT_MODEL_CATALOG,
 } from "../chat-model.test-helpers.ts";
+import {
+  getChatAttachmentDataUrl,
+  resetChatAttachmentPayloadStoreForTest,
+} from "../chat/attachment-payload-store.ts";
 import { renderChatQueue } from "../chat/chat-queue.ts";
 import { buildRawSidebarContent } from "../chat/chat-sidebar-raw.ts";
 import { renderWelcomeState } from "../chat/chat-welcome.ts";
@@ -15,7 +19,7 @@ import { renderChatSessionSelect } from "../chat/session-controls.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
 import type { ModelCatalogEntry } from "../types.ts";
 import type { ChatQueueItem } from "../ui-types.ts";
-import { renderChat } from "./chat.ts";
+import { renderChat, resetChatViewState } from "./chat.ts";
 
 const refreshVisibleToolsEffectiveForCurrentSessionMock = vi.hoisted(() =>
   vi.fn(async (state: AppViewState) => {
@@ -388,6 +392,8 @@ function renderChatView(overrides: Partial<Parameters<typeof renderChat>[0]> = {
 afterEach(() => {
   loadSessionsMock.mockClear();
   refreshVisibleToolsEffectiveForCurrentSessionMock.mockClear();
+  resetChatViewState();
+  resetChatAttachmentPayloadStoreForTest();
   vi.unstubAllGlobals();
 });
 
@@ -447,6 +453,134 @@ describe("chat voice controls", () => {
   });
 });
 
+describe("chat slash menu accessibility", () => {
+  function inputDraft(container: HTMLElement, value: string) {
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
+    expect(textarea).not.toBeNull();
+    textarea!.value = value;
+    textarea!.dispatchEvent(new Event("input", { bubbles: true }));
+  }
+
+  function keydownComposer(container: HTMLElement, key: string) {
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
+    expect(textarea).not.toBeNull();
+    textarea!.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true }));
+  }
+
+  it("wires command suggestions to the composer with stable active option ids", () => {
+    let draft = "";
+    const onDraftChange = vi.fn((next: string) => {
+      draft = next;
+    });
+    let container = renderChatView({ draft, onDraftChange });
+
+    inputDraft(container, "/");
+    container = renderChatView({ draft, onDraftChange });
+
+    const wrapper = container.querySelector<HTMLElement>(".agent-chat__composer-combobox");
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
+    const listbox = container.querySelector<HTMLElement>("#chat-slash-menu-listbox");
+    const activeId = textarea?.getAttribute("aria-activedescendant");
+
+    expect(wrapper?.hasAttribute("role")).toBe(false);
+    expect(wrapper?.hasAttribute("aria-expanded")).toBe(false);
+    expect(wrapper?.hasAttribute("aria-haspopup")).toBe(false);
+    expect(wrapper?.hasAttribute("aria-controls")).toBe(false);
+    expect(textarea?.hasAttribute("role")).toBe(false);
+    expect(textarea?.hasAttribute("aria-expanded")).toBe(false);
+    expect(textarea?.hasAttribute("aria-haspopup")).toBe(false);
+    expect(textarea?.getAttribute("aria-controls")).toBe("chat-slash-menu-listbox");
+    expect(textarea?.getAttribute("aria-autocomplete")).toBe("list");
+    expect(listbox?.getAttribute("role")).toBe("listbox");
+    expect(activeId).toMatch(/^chat-slash-option-command-/u);
+    expect(listbox?.querySelector(`#${activeId}`)?.getAttribute("role")).toBe("option");
+  });
+
+  it("updates the active descendant and live announcement during command navigation", () => {
+    let draft = "";
+    const onDraftChange = vi.fn((next: string) => {
+      draft = next;
+    });
+    let container = renderChatView({ draft, onDraftChange });
+
+    inputDraft(container, "/");
+    container = renderChatView({ draft, onDraftChange });
+    const initialActiveId = container
+      .querySelector<HTMLTextAreaElement>("textarea")
+      ?.getAttribute("aria-activedescendant");
+
+    keydownComposer(container, "ArrowDown");
+    container = renderChatView({ draft, onDraftChange });
+
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
+    const nextActiveId = textarea?.getAttribute("aria-activedescendant");
+    const activeOption = nextActiveId
+      ? container.querySelector<HTMLElement>(`#${nextActiveId}`)
+      : null;
+    const status = container.querySelector<HTMLElement>("#chat-slash-active-announcement");
+
+    expect(nextActiveId).toBeTruthy();
+    expect(nextActiveId).not.toBe(initialActiveId);
+    expect(activeOption?.getAttribute("aria-selected")).toBe("true");
+    expect(status?.getAttribute("aria-live")).toBe("polite");
+    expect(status?.textContent?.trim()).toBeTruthy();
+    expect(status?.textContent).toContain(activeOption?.textContent?.trim().split(/\s+/u)[0]);
+  });
+
+  it("wires fixed argument suggestions with command-and-argument option ids", () => {
+    let draft = "";
+    const onDraftChange = vi.fn((next: string) => {
+      draft = next;
+    });
+    let container = renderChatView({ draft, onDraftChange });
+
+    inputDraft(container, "/tools ");
+    container = renderChatView({ draft, onDraftChange });
+
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
+    const listbox = container.querySelector<HTMLElement>("#chat-slash-menu-listbox");
+    const activeId = textarea?.getAttribute("aria-activedescendant");
+
+    expect(listbox?.getAttribute("aria-label")).toBe("Command arguments");
+    expect(activeId).toBe("chat-slash-option-arg-tools-compact");
+    expect(listbox?.querySelector(`#${activeId}`)?.getAttribute("aria-selected")).toBe("true");
+  });
+
+  it("clears active descendant when suggestions close", () => {
+    let draft = "";
+    const onDraftChange = vi.fn((next: string) => {
+      draft = next;
+    });
+    let container = renderChatView({ draft, onDraftChange });
+
+    inputDraft(container, "/");
+    container = renderChatView({ draft, onDraftChange });
+    expect(
+      container
+        .querySelector<HTMLTextAreaElement>("textarea")
+        ?.getAttribute("aria-activedescendant"),
+    ).toBeTruthy();
+
+    inputDraft(container, "plain message");
+    container = renderChatView({ draft, onDraftChange });
+
+    expect(container.querySelector(".slash-menu")).toBeNull();
+    expect(
+      container.querySelector<HTMLTextAreaElement>("textarea")?.hasAttribute("aria-expanded"),
+    ).toBe(false);
+    expect(
+      container
+        .querySelector<HTMLElement>(".agent-chat__composer-combobox")
+        ?.hasAttribute("aria-expanded"),
+    ).toBe(false);
+    expect(
+      container
+        .querySelector<HTMLTextAreaElement>("textarea")
+        ?.hasAttribute("aria-activedescendant"),
+    ).toBe(false);
+  });
+});
+
 describe("chat attachment picker", () => {
   it("accepts and previews non-video file attachments", async () => {
     const onAttachmentsChange = vi.fn();
@@ -464,14 +598,15 @@ describe("chat attachment picker", () => {
     await vi.waitFor(() => {
       expect(onAttachmentsChange).toHaveBeenCalledWith([
         expect.objectContaining({
-          dataUrl: expect.stringMatching(/^data:application\/pdf;base64,/),
           fileName: "brief.pdf",
           mimeType: "application/pdf",
+          sizeBytes: file.size,
         }),
       ]);
     });
 
     const nextAttachments = onAttachmentsChange.mock.calls[0]?.[0] ?? [];
+    expect(getChatAttachmentDataUrl(nextAttachments[0])).toMatch(/^data:application\/pdf;base64,/);
     const preview = renderChatView({ attachments: nextAttachments });
     expect(preview.querySelector(".chat-attachment-thumb--file")).not.toBeNull();
     expect(preview.textContent).toContain("brief.pdf");

@@ -101,7 +101,7 @@ describe("auditGatewayServiceConfig", () => {
   });
 
   it("accepts Linux minimal PATH with user directories", async () => {
-    const env = { HOME: "/home/testuser", PNPM_HOME: "/opt/pnpm" };
+    const env = { HOME: "/tmp/openclaw-testuser", PNPM_HOME: "/opt/pnpm" };
     const minimalPath = buildMinimalServicePath({ platform: "linux", env });
     const audit = await auditGatewayServiceConfig({
       env,
@@ -121,7 +121,10 @@ describe("auditGatewayServiceConfig", () => {
   });
 
   it("accepts Linux fnm aliases/default without requiring the legacy current symlink", async () => {
-    const env = { HOME: "/home/testuser", FNM_DIR: "/home/testuser/.local/share/fnm" };
+    const env = {
+      HOME: "/tmp/openclaw-testuser",
+      FNM_DIR: "/tmp/openclaw-testuser/.local/share/fnm",
+    };
     const pathParts = buildMinimalServicePath({ platform: "linux", env })
       .split(":")
       .filter((entry) => !entry.includes("/fnm/current/bin"));
@@ -140,7 +143,10 @@ describe("auditGatewayServiceConfig", () => {
   });
 
   it("accepts Linux fnm current symlink without requiring aliases/default", async () => {
-    const env = { HOME: "/home/testuser", FNM_DIR: "/home/testuser/.local/share/fnm" };
+    const env = {
+      HOME: "/tmp/openclaw-testuser",
+      FNM_DIR: "/tmp/openclaw-testuser/.local/share/fnm",
+    };
     const pathParts = buildMinimalServicePath({ platform: "linux", env })
       .split(":")
       .filter((entry) => !entry.includes("/fnm/aliases/default/bin"));

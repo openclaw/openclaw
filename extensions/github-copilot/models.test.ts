@@ -1,8 +1,5 @@
+import { createProviderUsageFetch, makeResponse } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  createProviderUsageFetch,
-  makeResponse,
-} from "../../test/helpers/plugins/provider-usage-fetch.js";
 import { buildCopilotModelDefinition, getDefaultCopilotModelIds } from "./models-defaults.js";
 import { fetchCopilotUsage } from "./usage.js";
 
@@ -19,14 +16,21 @@ vi.mock("@mariozechner/pi-ai/oauth", async () => {
 
 vi.mock("openclaw/plugin-sdk/provider-model-shared", () => ({
   normalizeModelCompat: (model: Record<string, unknown>) => model,
+  resolveProviderEndpoint: (baseUrl: string) => ({
+    baseUrl,
+    endpointClass: "custom",
+    warnings: [],
+  }),
 }));
 
-const loadJsonFile = vi.fn();
-const saveJsonFile = vi.fn();
+const jsonStoreMocks = vi.hoisted(() => ({
+  loadJsonFile: vi.fn(),
+  saveJsonFile: vi.fn(),
+}));
 
 vi.mock("openclaw/plugin-sdk/json-store", () => ({
-  loadJsonFile,
-  saveJsonFile,
+  loadJsonFile: jsonStoreMocks.loadJsonFile,
+  saveJsonFile: jsonStoreMocks.saveJsonFile,
 }));
 
 vi.mock("openclaw/plugin-sdk/state-paths", () => ({
@@ -65,7 +69,7 @@ describe("github-copilot model defaults", () => {
   describe("getDefaultCopilotModelIds", () => {
     it("includes claude-opus-4.7", () => {
       expect(getDefaultCopilotModelIds()).toContain("claude-opus-4.7");
-      expect(getDefaultCopilotModelIds()).not.toContain("claude-opus-4.6");
+      expect(getDefaultCopilotModelIds()).toContain("claude-opus-4.6");
     });
 
     it("includes claude-sonnet-4.6", () => {
@@ -301,8 +305,8 @@ describe("github-copilot token", () => {
 
   beforeEach(async () => {
     vi.resetModules();
-    loadJsonFile.mockClear();
-    saveJsonFile.mockClear();
+    jsonStoreMocks.loadJsonFile.mockClear();
+    jsonStoreMocks.saveJsonFile.mockClear();
     ({ deriveCopilotApiBaseUrlFromToken, resolveCopilotApiToken } = await import("./token.js"));
   });
 
@@ -317,7 +321,7 @@ describe("github-copilot token", () => {
 
   it("uses cache when token is still valid", async () => {
     const now = Date.now();
-    loadJsonFile.mockReturnValue({
+    jsonStoreMocks.loadJsonFile.mockReturnValue({
       token: "cached;proxy-ep=proxy.example.com;",
       expiresAt: now + 60 * 60 * 1000,
       updatedAt: now,
@@ -327,19 +331,19 @@ describe("github-copilot token", () => {
     const res = await resolveCopilotApiToken({
       githubToken: "gh",
       cachePath,
-      loadJsonFileImpl: loadJsonFile,
-      saveJsonFileImpl: saveJsonFile,
+      loadJsonFileImpl: jsonStoreMocks.loadJsonFile,
+      saveJsonFileImpl: jsonStoreMocks.saveJsonFile,
       fetchImpl: fetchImpl as unknown as typeof fetch,
     });
 
     expect(res.token).toBe("cached;proxy-ep=proxy.example.com;");
     expect(res.baseUrl).toBe("https://api.example.com");
-    expect(String(res.source)).toContain("cache:");
+    expect(res.source).toContain("cache:");
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
   it("fetches and stores token when cache is missing", async () => {
-    loadJsonFile.mockReturnValue(undefined);
+    jsonStoreMocks.loadJsonFile.mockReturnValue(undefined);
 
     const fetchImpl = vi.fn().mockResolvedValue({
       ok: true,
@@ -353,13 +357,13 @@ describe("github-copilot token", () => {
     const res = await resolveCopilotApiToken({
       githubToken: "gh",
       cachePath,
-      loadJsonFileImpl: loadJsonFile,
-      saveJsonFileImpl: saveJsonFile,
+      loadJsonFileImpl: jsonStoreMocks.loadJsonFile,
+      saveJsonFileImpl: jsonStoreMocks.saveJsonFile,
       fetchImpl: fetchImpl as unknown as typeof fetch,
     });
 
     expect(res.token).toBe("fresh;proxy-ep=https://proxy.contoso.test;");
     expect(res.baseUrl).toBe("https://api.contoso.test");
-    expect(saveJsonFile).toHaveBeenCalledTimes(1);
+    expect(jsonStoreMocks.saveJsonFile).toHaveBeenCalledTimes(1);
   });
 });
