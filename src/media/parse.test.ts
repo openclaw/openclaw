@@ -59,6 +59,8 @@ describe("splitMediaFromOutput", () => {
       "/path/to/image.png",
       'MEDIA:/path/to/image.png"}],"details":{"provider":"openai","model":"gpt-image-2"}',
     ],
+    // Commas and pipes in a path must NOT be stripped (they can appear in valid paths).
+    ["/tmp/render,final.png", "MEDIA:/tmp/render,final.png"],
   ] as const)("accepts supported media path variant: %s", (expectedPath, input) => {
     expectAcceptedMediaPathCase(expectedPath, input);
   });

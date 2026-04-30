@@ -34,9 +34,10 @@ export function normalizeMediaSource(src: string) {
   return src.startsWith("file://") ? src.replace("file://", "") : src;
 }
 
-// Matches a file-extension boundary followed by non-path serialized JSON noise
-// (e.g. `.png"}],"details":...`). Captures the path up to and including the ext.
-const TRAILING_JSON_AFTER_EXT_RE = /^(.*\.\w{1,10})["'}\]|,].*$/s;
+// Matches a file-extension boundary followed by a double-quote — the opening
+// delimiter of serialized JSON noise (e.g. `.png"}],"details":...`). Commas,
+// pipes, and single-quotes are excluded: they can appear in valid media paths.
+const TRAILING_JSON_AFTER_EXT_RE = /^(.*\.\w{1,10})".*$/s;
 
 function cleanCandidate(raw: string) {
   const stripped = raw.replace(/^[`"'[{(]+/, "").replace(/[`"'\\})\],]+$/, "");
