@@ -217,10 +217,26 @@ describe("sanitizeUserFacingText", () => {
     expect(sanitizeUserFacingText("A\n[tool calls omitted]\n[tool calls omitted]\nB")).toBe("A\nB");
   });
 
+  it("strips copied inbound metadata replay placeholders without trimming visible text", () => {
+    expect(sanitizeUserFacingText("[assistant copied inbound metadata omitted]")).toBe("");
+    expect(sanitizeUserFacingText("  [assistant copied inbound metadata omitted]\t")).toBe("");
+    expect(
+      sanitizeUserFacingText("Hello\n\n[assistant copied inbound metadata omitted]\nWorld\n"),
+    ).toBe("Hello\n\nWorld\n");
+    expect(
+      sanitizeUserFacingText(
+        "A\n[assistant copied inbound metadata omitted]\n[assistant copied inbound metadata omitted]\nB",
+      ),
+    ).toBe("A\nB");
+  });
+
   it("keeps ordinary inline mentions of the replay placeholder", () => {
     expect(sanitizeUserFacingText("What does [tool calls omitted] mean?")).toBe(
       "What does [tool calls omitted] mean?",
     );
+    expect(
+      sanitizeUserFacingText("What does [assistant copied inbound metadata omitted] mean?"),
+    ).toBe("What does [assistant copied inbound metadata omitted] mean?");
   });
 
   it("strips marked internal runtime context blocks but keeps real reply text", () => {

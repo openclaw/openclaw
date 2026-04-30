@@ -112,6 +112,22 @@ describe("normalizeReplyPayload", () => {
     }
   });
 
+  it("strips replay metadata placeholder from outbound replies (#74745)", () => {
+    const result = normalizeReplyPayload({
+      text: "Hello\n[assistant copied inbound metadata omitted]\nWorld",
+    });
+    expect(result).not.toBeNull();
+    expect(result!.text).toBe("Hello\nWorld");
+    expect(result!.text).not.toContain("assistant copied inbound metadata omitted");
+  });
+
+  it("strips standalone replay metadata placeholder (#74745)", () => {
+    const result = normalizeReplyPayload({
+      text: "[assistant copied inbound metadata omitted]",
+    });
+    expect(result).toBeNull(); // Empty after stripping
+  });
+
   it("strips NO_REPLY from mixed emoji message (#30916)", () => {
     const result = normalizeReplyPayload({ text: "😄 NO_REPLY" });
     expect(result).not.toBeNull();
