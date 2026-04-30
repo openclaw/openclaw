@@ -9,6 +9,7 @@ import {
   getActiveEmbeddedRunSnapshot,
   isEmbeddedPiRunHandleActive,
   queueEmbeddedPiMessage,
+  queueEmbeddedPiMessageDurably,
   requestEmbeddedRunModelSwitch,
   resolveActiveEmbeddedRunHandleSessionId,
   setActiveEmbeddedRun,
@@ -91,6 +92,17 @@ describe("pi-embedded runner run registry", () => {
     expect(queueEmbeddedPiMessage("session-default-steer", "continue")).toBe(true);
 
     expect(queueMessage).toHaveBeenCalledWith("continue", { steeringMode: "all" });
+  });
+
+  it("reports durable steering failures to callers", async () => {
+    setActiveEmbeddedRun("session-failed-steer", {
+      ...createRunHandle(),
+      queueMessage: async () => false,
+    });
+
+    await expect(queueEmbeddedPiMessageDurably("session-failed-steer", "continue")).resolves.toBe(
+      false,
+    );
   });
 
   it("force-clears an aborted run that does not drain", async () => {

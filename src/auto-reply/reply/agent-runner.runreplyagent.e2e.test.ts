@@ -25,6 +25,7 @@ type AgentRunParams = {
 const state = vi.hoisted(() => ({
   compactEmbeddedPiSessionMock: vi.fn(),
   runEmbeddedPiAgentMock: vi.fn(),
+  queueEmbeddedPiMessageDurablyMock: vi.fn(),
 }));
 
 let modelFallbackModule: typeof import("../../agents/model-fallback.js");
@@ -64,13 +65,19 @@ vi.mock("../../agents/model-fallback.js", () => ({
 
 vi.mock("../../agents/pi-embedded.js", () => ({
   compactEmbeddedPiSession: (params: unknown) => state.compactEmbeddedPiSessionMock(params),
-  queueEmbeddedPiMessage: vi.fn().mockReturnValue(false),
   runEmbeddedPiAgent: (params: unknown) => state.runEmbeddedPiAgentMock(params),
+}));
+
+vi.mock("../../agents/pi-embedded-runner/runs.js", () => ({
+  queueEmbeddedPiMessageDurably: (...args: unknown[]) =>
+    state.queueEmbeddedPiMessageDurablyMock(...args),
 }));
 
 vi.mock("./queue.js", () => ({
   enqueueFollowupRun: vi.fn(),
   refreshQueuedFollowupSession: vi.fn(),
+  resolvePiSteeringModeForQueueMode: (mode: string) =>
+    mode === "steer-backlog" ? "one-at-a-time" : "all",
   scheduleFollowupDrain: vi.fn(),
 }));
 
@@ -96,6 +103,8 @@ beforeEach(() => {
   vi.mocked(enqueueFollowupRun).mockClear();
   vi.mocked(refreshQueuedFollowupSession).mockClear();
   vi.mocked(scheduleFollowupDrain).mockClear();
+  state.queueEmbeddedPiMessageDurablyMock.mockReset();
+  state.queueEmbeddedPiMessageDurablyMock.mockResolvedValue(false);
   vi.stubEnv("OPENCLAW_TEST_FAST", "1");
 });
 
@@ -110,6 +119,8 @@ function createMinimalRun(params?: {
   blockStreamingEnabled?: boolean;
   isActive?: boolean;
   isRunActive?: () => boolean;
+  isStreaming?: boolean;
+  shouldSteer?: boolean;
   shouldFollowup?: boolean;
   resolvedQueueMode?: string;
   runOverrides?: Partial<FollowupRun["run"]>;
@@ -163,11 +174,11 @@ function createMinimalRun(params?: {
         followupRun,
         queueKey: "main",
         resolvedQueue,
-        shouldSteer: false,
+        shouldSteer: params?.shouldSteer ?? false,
         shouldFollowup: params?.shouldFollowup ?? false,
         isActive: params?.isActive ?? false,
         isRunActive: params?.isRunActive,
-        isStreaming: false,
+        isStreaming: params?.isStreaming ?? false,
         opts,
         typing,
         sessionEntry: params?.sessionEntry,
@@ -215,6 +226,27 @@ describe("runReplyAgent heartbeat followup guard", () => {
     const result = await run();
 
     expect(result).toBeUndefined();
+    expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledTimes(1);
+    expect(state.runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+  });
+
+  it("enqueues a followup when durable steering is rejected after an active turn ends", async () => {
+    const { run } = createMinimalRun({
+      opts: { isHeartbeat: false },
+      isActive: true,
+      isStreaming: true,
+      shouldSteer: true,
+      shouldFollowup: false,
+      resolvedQueueMode: "steer",
+    });
+    state.queueEmbeddedPiMessageDurablyMock.mockResolvedValueOnce(false);
+
+    const result = await run();
+
+    expect(result).toBeUndefined();
+    expect(state.queueEmbeddedPiMessageDurablyMock).toHaveBeenCalledWith("session", "hello", {
+      steeringMode: "all",
+    });
     expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledTimes(1);
     expect(state.runEmbeddedPiAgentMock).not.toHaveBeenCalled();
   });

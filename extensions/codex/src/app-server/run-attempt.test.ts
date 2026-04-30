@@ -1089,6 +1089,28 @@ describe("runCodexAppServerAttempt", () => {
     await run;
   });
 
+  it("does not send pending batched steering after the turn completes before debounce flush", async () => {
+    let turnCompleted = false;
+    const { requests, waitForMethod, completeTurn } = createStartedThreadHarness(async (method) => {
+      if (method === "turn/steer" && turnCompleted) {
+        throw new Error("expectedTurnId does not match an active turn");
+      }
+      return undefined;
+    });
+
+    const run = runCodexAppServerAttempt(
+      createParams(path.join(tempDir, "session.jsonl"), path.join(tempDir, "workspace")),
+    );
+    await waitForMethod("turn/start");
+
+    expect(queueAgentHarnessMessage("session-1", "late context", { debounceMs: 1_000 })).toBe(true);
+    turnCompleted = true;
+    await completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+
+    expect(requests.filter((entry) => entry.method === "turn/steer")).toEqual([]);
+  });
+
   it("keeps legacy queue steering as separate turn/steer requests", async () => {
     const { requests, waitForMethod, completeTurn } = createStartedThreadHarness();
 

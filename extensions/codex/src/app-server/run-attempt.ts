@@ -135,11 +135,12 @@ function createCodexSteeringQueue(params: {
   threadId: string;
   turnId: string;
   answerPendingUserInput: (text: string) => boolean;
+  canSteer: () => boolean;
   signal: AbortSignal;
 }) {
-  let batchedTexts: string[] = [];
+  let batchedTexts: Array<{ text: string; resolve: (sent: boolean) => void }> = [];
   let batchTimer: NodeJS.Timeout | undefined;
-  let sendChain: Promise<void> = Promise.resolve();
+  let sendChain: Promise<boolean> = Promise.resolve(true);
 
   const clearBatchTimer = () => {
     if (batchTimer) {
@@ -149,54 +150,71 @@ function createCodexSteeringQueue(params: {
   };
 
   const sendTexts = async (texts: string[]) => {
-    if (texts.length === 0 || params.signal.aborted) {
-      return;
+    if (texts.length === 0) {
+      return true;
     }
-    await params.client.request("turn/steer", {
-      threadId: params.threadId,
-      expectedTurnId: params.turnId,
-      input: texts.map(toCodexTextInput),
-    });
+    if (params.signal.aborted || !params.canSteer()) {
+      return false;
+    }
+    try {
+      await params.client.request("turn/steer", {
+        threadId: params.threadId,
+        expectedTurnId: params.turnId,
+        input: texts.map(toCodexTextInput),
+      });
+      return true;
+    } catch (error: unknown) {
+      embeddedAgentLog.debug("codex app-server queued steer failed", { error });
+      return false;
+    }
   };
 
   const enqueueSend = (texts: string[]) => {
-    sendChain = sendChain
-      .then(() => sendTexts(texts))
-      .catch((error: unknown) => {
-        embeddedAgentLog.debug("codex app-server queued steer failed", { error });
-      });
+    sendChain = sendChain.then(
+      () => sendTexts(texts),
+      () => sendTexts(texts),
+    );
     return sendChain;
   };
 
   const flushBatch = () => {
     clearBatchTimer();
-    const texts = batchedTexts;
+    const batch = batchedTexts;
     batchedTexts = [];
-    return enqueueSend(texts);
+    const texts = batch.map((entry) => entry.text);
+    if (texts.length === 0) {
+      return Promise.resolve(true);
+    }
+    const sent = enqueueSend(texts);
+    void sent.then((accepted) => {
+      for (const entry of batch) {
+        entry.resolve(accepted);
+      }
+    });
+    return sent;
   };
 
   return {
     async queue(text: string, options?: CodexSteeringQueueOptions) {
       if (params.answerPendingUserInput(text)) {
-        return;
+        return true;
       }
       if (options?.steeringMode === "one-at-a-time") {
         await flushBatch();
-        await enqueueSend([text]);
-        return;
+        return await enqueueSend([text]);
       }
-      batchedTexts.push(text);
+      const queued = new Promise<boolean>((resolve) => {
+        batchedTexts.push({ text, resolve });
+      });
       clearBatchTimer();
       const debounceMs = normalizeCodexSteerDebounceMs(options?.debounceMs);
       batchTimer = setTimeout(() => {
         batchTimer = undefined;
         void flushBatch();
       }, debounceMs);
+      return await queued;
     },
-    cancel() {
-      clearBatchTimer();
-      batchedTexts = [];
-    },
+    drain: flushBatch,
   };
 }
 
@@ -819,6 +837,7 @@ export async function runCodexAppServerAttempt(
     threadId: thread.threadId,
     turnId: activeTurnId,
     answerPendingUserInput: (text) => userInputBridge?.handleQueuedMessage(text) ?? false,
+    canSteer: () => !completed,
     signal: runAbortController.signal,
   });
   const handle = {
@@ -999,7 +1018,7 @@ export async function runCodexAppServerAttempt(
     nativeHookRelay?.unregister();
     runAbortController.signal.removeEventListener("abort", abortListener);
     params.abortSignal?.removeEventListener("abort", abortFromUpstream);
-    steeringQueue.cancel();
+    await steeringQueue.drain();
     clearActiveEmbeddedRun(params.sessionId, handle, params.sessionKey);
   }
 }

@@ -83,8 +83,43 @@ export function queueEmbeddedPiMessage(
     return false;
   }
   logMessageQueued({ sessionId, source: "pi-embedded-runner" });
-  void handle.queueMessage(text, options ?? { steeringMode: "all" });
+  void handle.queueMessage(text, options ?? { steeringMode: "all" }).catch((err: unknown) => {
+    diag.debug(`queue message failed: sessionId=${sessionId} err=${String(err)}`);
+  });
   return true;
+}
+
+export async function queueEmbeddedPiMessageDurably(
+  sessionId: string,
+  text: string,
+  options?: EmbeddedPiQueueMessageOptions,
+): Promise<boolean> {
+  const handle = ACTIVE_EMBEDDED_RUNS.get(sessionId);
+  if (!handle) {
+    const queuedReplyRunMessage = queueReplyRunMessage(sessionId, text);
+    if (queuedReplyRunMessage) {
+      logMessageQueued({ sessionId, source: "pi-embedded-runner" });
+      return true;
+    }
+    diag.debug(`queue message failed: sessionId=${sessionId} reason=no_active_run`);
+    return false;
+  }
+  if (!handle.isStreaming()) {
+    diag.debug(`queue message failed: sessionId=${sessionId} reason=not_streaming`);
+    return false;
+  }
+  if (handle.isCompacting()) {
+    diag.debug(`queue message failed: sessionId=${sessionId} reason=compacting`);
+    return false;
+  }
+  logMessageQueued({ sessionId, source: "pi-embedded-runner" });
+  try {
+    const queued = await handle.queueMessage(text, options ?? { steeringMode: "all" });
+    return queued !== false;
+  } catch (err) {
+    diag.debug(`queue message failed: sessionId=${sessionId} err=${String(err)}`);
+    return false;
+  }
 }
 
 /**

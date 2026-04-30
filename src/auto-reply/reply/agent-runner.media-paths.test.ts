@@ -44,6 +44,7 @@ vi.mock("../../agents/pi-embedded.js", () => ({
 
 vi.mock("../../agents/pi-embedded-runner/runs.js", () => ({
   queueEmbeddedPiMessage: queueEmbeddedPiMessageMock,
+  queueEmbeddedPiMessageDurably: queueEmbeddedPiMessageMock,
 }));
 
 vi.mock("./queue.js", () => ({
