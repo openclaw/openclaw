@@ -87,6 +87,22 @@ function looksLikeStructuredCommandOutput(text: string): boolean {
   return trimmed.length > 700 && structuralTokens > 50 && /"[^"]+"\s*:/.test(trimmed);
 }
 
+const COMPLETION_STATUS_CLAIM_POLICY_MESSAGE =
+  "Completion/status claim requires review and QA evidence";
+
+function isActionSinkCompletionClaimPolicyError(error: unknown): boolean {
+  if (!hasSessionFollowupFailure(error)) {
+    return false;
+  }
+
+  const message = formatUnknownError(error);
+  return (
+    message.includes(COMPLETION_STATUS_CLAIM_POLICY_MESSAGE) ||
+    (message.includes("ActionSinkPolicyDeniedError") &&
+      message.toLowerCase().includes("completion/status claim"))
+  );
+}
+
 function formatStructuredOutputOmittedText(channel?: string): string {
   const target =
     normalizeMessageChannel(channel) === "telegram" ? "Telegram" : "the direct follow-up";
@@ -94,6 +110,16 @@ function formatStructuredOutputOmittedText(channel?: string): string {
     "Command finished, but the session follow-up could not be resumed.",
     "",
     `Structured command output was omitted from ${target}.`,
+  ].join("\n");
+}
+
+function formatPolicyBlockedSessionResumeText(channel?: string): string {
+  const target =
+    normalizeMessageChannel(channel) === "telegram" ? "Telegram" : "the direct follow-up";
+  return [
+    "The approved command returned, but automatic session resume was blocked by Action Sink policy.",
+    "",
+    `Command output was kept out of ${target}. Check the OpenClaw logs for the gateway id.`,
   ].join("\n");
 }
 
@@ -131,6 +157,10 @@ function formatDirectExecApprovalFollowupText(
   }
   if (parsed.kind === "denied") {
     return opts.allowDenied ? formatExecDeniedUserMessage(parsed.raw) : null;
+  }
+
+  if (isActionSinkCompletionClaimPolicyError(opts.sessionError)) {
+    return formatPolicyBlockedSessionResumeText(opts.channel);
   }
 
   if (parsed.kind === "finished") {

@@ -157,12 +157,8 @@ describe("exec approval followup", () => {
     );
   });
 
-  it("omits structured command output from direct delivery when session resume fails", async () => {
-    vi.mocked(callGatewayTool).mockRejectedValueOnce(
-      new Error(
-        "ActionSinkPolicyDeniedError: Completion/status claim requires review and QA evidence",
-      ),
-    );
+  it("omits structured command output from direct delivery when a generic session resume fails", async () => {
+    vi.mocked(callGatewayTool).mockRejectedValueOnce(new Error("session missing"));
 
     const structuredOutput = JSON.stringify({
       query: { team: "MCH", project: null, state: null, first: 1 },
@@ -196,6 +192,43 @@ describe("exec approval followup", () => {
     expect(content).not.toContain('"columns"');
     expect(content).not.toContain('"cache"');
     expect(content).not.toContain("MCH-120");
+  });
+
+  it("omits plain command output when Action Sink blocks session resume", async () => {
+    vi.mocked(callGatewayTool).mockRejectedValueOnce(
+      new Error(
+        "ActionSinkPolicyDeniedError: Completion/status claim requires review and QA evidence",
+      ),
+    );
+
+    const plainStatusOutput = [
+      "# wrapper/symlink target",
+      "lrwx------@ 1 admin staff 61 Apr 30 09:35 /Users/admin/.openclaw/bin/openclaw-current-dist -> /Users/admin/Projects/openclaw-hotfix-mch61-424/dist/index.js",
+      "-rwx------@ 1 admin staff 228 Apr 30 09:35 /Users/admin/.openclaw/bin/openclaw-gateway-current",
+      "# target repo head/build files",
+      "hotfix/mch61-on-2026.4.24 bd67c1b06e9ecaa4ce5700f108c68fd895bbdeb8",
+    ].join("\n");
+
+    await sendExecApprovalFollowup({
+      approvalId: "req-plain-policy-resume-failed",
+      sessionKey: "agent:main:telegram:-100123",
+      turnSourceChannel: "telegram",
+      turnSourceTo: "-100123",
+      turnSourceAccountId: "default",
+      turnSourceThreadId: "789",
+      resultText: `Exec finished (gateway id=req-plain-policy-resume-failed, session=sess_1, code 0)\n${plainStatusOutput}`,
+    });
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content:
+          "Automatic session resume failed, so sending the status directly.\n\nThe approved command returned, but automatic session resume was blocked by Action Sink policy.\n\nCommand output was kept out of Telegram. Check the OpenClaw logs for the gateway id.",
+        idempotencyKey: "exec-approval-followup:req-plain-policy-resume-failed",
+      }),
+    );
+    const content = vi.mocked(sendMessage).mock.calls[0]?.[0]?.content ?? "";
+    expect(content).not.toContain("openclaw-current-dist");
+    expect(content).not.toContain("bd67c1b06e9ecaa4ce5700f108c68fd895bbdeb8");
   });
 
   it("uses a generic summary when a no-session completion has no user-visible output", async () => {
