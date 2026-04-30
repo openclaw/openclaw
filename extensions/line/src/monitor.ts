@@ -231,7 +231,7 @@ export async function monitorLineProvider(
         });
 
         const core = getLineRuntime();
-        const { dispatchResult } = await core.channel.turn.run({
+        const turnResult = await core.channel.turn.run({
           channel: "line",
           accountId: route.accountId,
           raw: ctx,
@@ -316,6 +316,7 @@ export async function monitorLineProvider(
             }),
           },
         });
+        const dispatchResult = turnResult.dispatched ? turnResult.dispatchResult : undefined;
         if (!hasFinalInboundReplyDispatch(dispatchResult)) {
           logVerbose(`line: no response generated for message from ${ctxPayload.From}`);
         }

@@ -1,5 +1,6 @@
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { clearHistoryEntriesIfEnabled } from "../../auto-reply/reply/history.js";
+import { EMPTY_CHANNEL_TURN_DISPATCH_COUNTS } from "./dispatch-result.js";
 export { buildChannelTurnContext, filterChannelTurnSupplementalContext } from "./context.js";
 export type { BuildChannelTurnContextParams } from "./context.js";
 import type {
@@ -9,6 +10,7 @@ import type {
   ChannelTurnDeliveryAdapter,
   ChannelTurnHistoryFinalizeOptions,
   ChannelTurnLogEvent,
+  ChannelTurnResolved,
   ChannelTurnResult,
   DispatchedChannelTurnResult,
   PreparedChannelTurn,
@@ -111,6 +113,15 @@ function clearPendingHistoryAfterTurn(params?: ChannelTurnHistoryFinalizeOptions
   });
 }
 
+function resolveObserveOnlyDispatchResult<TDispatchResult>(
+  params: PreparedChannelTurn<TDispatchResult>,
+): TDispatchResult {
+  return (params.observeOnlyDispatchResult ?? {
+    queuedFinal: false,
+    counts: EMPTY_CHANNEL_TURN_DISPATCH_COUNTS,
+  }) as TDispatchResult;
+}
+
 export async function dispatchAssembledChannelTurn(
   params: AssembledChannelTurn,
 ): Promise<DispatchedChannelTurnResult> {
@@ -141,6 +152,36 @@ export async function dispatchAssembledChannelTurn(
         replyResolver: params.replyResolver,
       }),
   });
+}
+
+function isPreparedChannelTurn<TDispatchResult>(
+  value: ChannelTurnResolved<TDispatchResult>,
+): value is PreparedChannelTurn<TDispatchResult> & {
+  admission?: Extract<ChannelTurnAdmission, { kind: "dispatch" | "observeOnly" }>;
+} {
+  return "runDispatch" in value;
+}
+
+async function dispatchResolvedChannelTurn<TDispatchResult>(
+  params: ChannelTurnResolved<TDispatchResult> & {
+    admission: Extract<ChannelTurnAdmission, { kind: "dispatch" | "observeOnly" }>;
+    log?: (event: ChannelTurnLogEvent) => void;
+    messageId?: string;
+  },
+): Promise<DispatchedChannelTurnResult<TDispatchResult>> {
+  if (isPreparedChannelTurn(params)) {
+    return await runPreparedChannelTurn(
+      params.admission.kind === "observeOnly"
+        ? {
+            ...params,
+            runDispatch: async () => resolveObserveOnlyDispatchResult(params),
+          }
+        : params,
+    );
+  }
+  return (await dispatchAssembledChannelTurn(
+    params,
+  )) as DispatchedChannelTurnResult<TDispatchResult>;
 }
 
 export async function runPreparedChannelTurn<
@@ -248,9 +289,12 @@ export async function runPreparedChannelTurn<
   };
 }
 
-export async function runChannelTurn<TRaw>(
-  params: RunChannelTurnParams<TRaw>,
-): Promise<ChannelTurnResult> {
+export async function runChannelTurn<
+  TRaw,
+  TDispatchResult = DispatchedChannelTurnResult["dispatchResult"],
+>(
+  params: RunChannelTurnParams<TRaw, TDispatchResult>,
+): Promise<ChannelTurnResult<TDispatchResult>> {
   emit({
     ...params,
     event: { stage: "ingest", event: "start" },
@@ -327,9 +371,9 @@ export async function runChannelTurn<TRaw>(
   });
 
   const admission = resolved.admission ?? preflightAdmission ?? ({ kind: "dispatch" } as const);
-  let result: ChannelTurnResult;
+  let result: ChannelTurnResult<TDispatchResult>;
   try {
-    const dispatchResult = await dispatchAssembledChannelTurn(
+    const dispatchResult = await dispatchResolvedChannelTurn(
       admission.kind === "observeOnly"
         ? {
             ...resolved,
@@ -350,7 +394,7 @@ export async function runChannelTurn<TRaw>(
       admission,
     };
   } catch (err) {
-    const failedResult: ChannelTurnResult = {
+    const failedResult: ChannelTurnResult<TDispatchResult> = {
       admission,
       dispatched: false,
       ctxPayload: resolved.ctxPayload,
@@ -407,9 +451,12 @@ export async function runChannelTurn<TRaw>(
   return result;
 }
 
-export async function runResolvedChannelTurn<TRaw>(
-  params: RunResolvedChannelTurnParams<TRaw>,
-): Promise<ChannelTurnResult> {
+export async function runResolvedChannelTurn<
+  TRaw,
+  TDispatchResult = DispatchedChannelTurnResult["dispatchResult"],
+>(
+  params: RunResolvedChannelTurnParams<TRaw, TDispatchResult>,
+): Promise<ChannelTurnResult<TDispatchResult>> {
   return await runChannelTurn({
     channel: params.channel,
     accountId: params.accountId,

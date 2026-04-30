@@ -146,7 +146,7 @@ function assertExpectedDiagnostics(surfaceMode, errorMessages) {
     "plugin must own memory slot or declare contracts.memoryEmbeddingProviders for adapter: kitchen-sink-memory-embedding-provider",
     "memory prompt supplement registration missing builder",
   ]);
-  if (surfaceMode !== "full" && surfaceMode !== "adversarial") {
+  if (surfaceMode !== "full" && surfaceMode !== "conformance" && surfaceMode !== "adversarial") {
     if (errorMessages.size > 0) {
       throw new Error(
         `unexpected kitchen-sink diagnostic errors: ${[...errorMessages].join(", ")}`,

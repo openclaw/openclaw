@@ -886,6 +886,33 @@ describe("installBundledRuntimeDeps", () => {
     );
   });
 
+  it("accepts extensionless package main entries resolved by Node", () => {
+    const installRoot = makeTempDir();
+    spawnSyncMock.mockImplementation((_command, _args, options) => {
+      const packageDir = path.join(String(options?.cwd ?? ""), "node_modules", "jszip");
+      fs.mkdirSync(path.join(packageDir, "lib"), { recursive: true });
+      fs.writeFileSync(
+        path.join(packageDir, "package.json"),
+        JSON.stringify({ name: "jszip", version: "3.10.1", main: "./lib/index" }),
+      );
+      fs.writeFileSync(path.join(packageDir, "lib", "index.js"), "export default {};\n");
+      return {
+        pid: 123,
+        output: [],
+        stdout: "",
+        stderr: "",
+        signal: null,
+        status: 0,
+      };
+    });
+
+    installBundledRuntimeDeps({
+      installRoot,
+      missingSpecs: ["jszip@^3.10.1"],
+      env: {},
+    });
+  });
+
   it("cleans an owned isolated execution root after copying node_modules back", () => {
     const installRoot = makeTempDir();
     const installExecutionRoot = path.join(installRoot, ".openclaw-install-stage");
@@ -1037,6 +1064,13 @@ describe("scanBundledPluginRuntimeDeps config policy", () => {
       deps: { "telegram-runtime": "2.0.0" },
       channels: ["telegram"],
     });
+    writeBundledPluginPackage({
+      packageRoot,
+      pluginId: "amazon-bedrock",
+      deps: { "bedrock-runtime": "3.0.0" },
+      enabledByDefault: true,
+      providers: ["amazon-bedrock"],
+    });
     return packageRoot;
   }
 
@@ -1132,6 +1166,33 @@ describe("scanBundledPluginRuntimeDeps config policy", () => {
       name: "lets explicit channel disable override recovery",
       config: { channels: { telegram: { botToken: "123:abc", enabled: false } } },
       includeConfiguredChannels: true,
+      expectedDeps: ["alpha-runtime@1.0.0"],
+    },
+    {
+      name: "includes configured model provider deps",
+      config: { agents: { defaults: { model: "amazon-bedrock/claude-opus-4-7" } } },
+      includeConfiguredChannels: false,
+      expectedDeps: ["alpha-runtime@1.0.0", "bedrock-runtime@3.0.0"],
+    },
+    {
+      name: "includes configured model provider deps from aliases",
+      config: { models: { providers: { "aws-bedrock": { baseUrl: "", models: [] } } } },
+      includeConfiguredChannels: false,
+      expectedDeps: ["alpha-runtime@1.0.0", "bedrock-runtime@3.0.0"],
+    },
+    {
+      name: "includes configured subagent model provider deps",
+      config: { agents: { defaults: { subagents: { model: "bedrock/claude-sonnet-4-6" } } } },
+      includeConfiguredChannels: false,
+      expectedDeps: ["alpha-runtime@1.0.0", "bedrock-runtime@3.0.0"],
+    },
+    {
+      name: "keeps configured provider deps behind restrictive allowlists",
+      config: {
+        plugins: { allow: ["alpha"] },
+        agents: { defaults: { model: "amazon-bedrock/claude-opus-4-7" } },
+      },
+      includeConfiguredChannels: false,
       expectedDeps: ["alpha-runtime@1.0.0"],
     },
   ];

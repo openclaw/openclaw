@@ -176,6 +176,27 @@ function createRuntimeCore(cfg: OpenClawConfig) {
       };
     },
   );
+  const run = vi.fn(
+    async (params: {
+      raw: unknown;
+      adapter: {
+        ingest: (raw: unknown) => unknown;
+        resolveTurn: (
+          input: unknown,
+          eventClass: { kind: "message"; canStartAgentTurn: true },
+          preflight: Record<string, never>,
+        ) => Parameters<typeof runPrepared>[0];
+      };
+    }) => {
+      const input = params.adapter.ingest(params.raw);
+      const turn = params.adapter.resolveTurn(
+        input,
+        { kind: "message", canStartAgentTurn: true },
+        {},
+      );
+      return await runPrepared(turn);
+    },
+  );
   return {
     config: {
       current: () => cfg,
@@ -260,6 +281,7 @@ function createRuntimeCore(cfg: OpenClawConfig) {
         updateLastRoute: vi.fn(async () => {}),
       },
       turn: {
+        run,
         runPrepared,
       },
       text: {

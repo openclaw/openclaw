@@ -25,6 +25,7 @@ const mocks = vi.hoisted(() => ({
   updateSessionStore: vi.fn(),
   agentCommand: vi.fn(),
   registerAgentRunContext: vi.fn(),
+  emitAgentEvent: vi.fn(),
   performGatewaySessionReset: vi.fn(),
   getLatestSubagentRunByChildSessionKey: vi.fn(),
   replaceSubagentRunAfterSteer: vi.fn(),
@@ -102,6 +103,7 @@ vi.mock("../../auto-reply/reply/session-reset-prompt.js", async () => {
 });
 
 vi.mock("../../infra/agent-events.js", () => ({
+  emitAgentEvent: mocks.emitAgentEvent,
   registerAgentRunContext: mocks.registerAgentRunContext,
   onAgentEvent: vi.fn(),
 }));
