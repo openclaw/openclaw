@@ -29,6 +29,7 @@ Docs: https://docs.openclaw.ai
 - Telegram: echo preflighted DM voice-note transcripts back to the originating chat, including Telegram DM topic thread metadata, instead of only echoing later media-understanding transcripts. Fixes #75084. Thanks @M-Lietz.
 - Web search: describe `web_search` as using the configured provider instead of hard-coding Brave when DuckDuckGo or another provider is active. Fixes #75088. Thanks @sun-rongyang.
 - Infra/tmp: tolerate concurrent temp-dir permission repairs by rechecking directories that another process already tightened, so parallel ACP subprocess startup no longer throws `Unsafe fallback OpenClaw temp dir`. Fixes #66867. Thanks @Kane808-AI and @jarvisz8.
+- Agents/compaction: add an opt-in `agents.defaults.compaction.midTurnPrecheck` mid-turn precheck that detects tool-loop context pressure and triggers compaction before the next tool call instead of waiting for end-of-turn. (#73499) Thanks @marchpure and @haoxingjun.
 
 ## 2026.4.29
 
