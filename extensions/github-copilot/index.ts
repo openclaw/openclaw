@@ -163,14 +163,17 @@ async function fetchCopilotModelCatalog(params: {
     return [];
   }
 
-  const payload = (await response.json()) as { data?: unknown; models?: unknown } | unknown[];
-  const models = Array.isArray(payload)
+  const payload = (await response.json()) as unknown;
+  const models: unknown[] = Array.isArray(payload)
     ? payload
-    : Array.isArray(payload.data)
-      ? payload.data
-      : Array.isArray(payload.models)
-        ? payload.models
-        : [];
+    : (() => {
+        if (payload && typeof payload === "object") {
+          const record = payload as { data?: unknown; models?: unknown };
+          if (Array.isArray(record.data)) return record.data;
+          if (Array.isArray(record.models)) return record.models;
+        }
+        return [];
+      })();
 
   return models
     .map((entry) => mapCopilotWireModel(entry as CopilotModelWireEntry))
