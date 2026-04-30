@@ -11,6 +11,7 @@ export type DirFetchParams = {
   maxBytes?: unknown;
   includeDotfiles?: unknown;
   followSymlinks?: unknown;
+  preflightOnly?: unknown;
 };
 
 export type DirFetchOk = {
@@ -20,6 +21,8 @@ export type DirFetchOk = {
   tarBytes: number;
   sha256: string;
   fileCount: number;
+  entries?: string[];
+  preflightOnly?: boolean;
 };
 
 export type DirFetchErrCode =
@@ -137,6 +140,30 @@ async function countTarEntries(tarBuffer: Buffer): Promise<number> {
   });
 }
 
+async function listTreeEntries(root: string, maxEntries: number): Promise<string[] | "TOO_MANY"> {
+  const results: string[] = [];
+  async function visit(dir: string): Promise<boolean> {
+    const entries = await fs.readdir(dir, { withFileTypes: true });
+    entries.sort((left, right) => left.name.localeCompare(right.name));
+    for (const entry of entries) {
+      const abs = path.join(dir, entry.name);
+      const rel = path.relative(root, abs).replace(/\\/gu, "/");
+      results.push(rel);
+      if (results.length > maxEntries) {
+        return false;
+      }
+      if (entry.isDirectory()) {
+        const ok = await visit(abs);
+        if (!ok) {
+          return false;
+        }
+      }
+    }
+    return true;
+  }
+  return (await visit(root)) ? results : "TOO_MANY";
+}
+
 export async function handleDirFetch(params: DirFetchParams): Promise<DirFetchResult> {
   const requestedPath = params.path;
   if (typeof requestedPath !== "string" || requestedPath.length === 0) {
@@ -152,6 +179,7 @@ export async function handleDirFetch(params: DirFetchParams): Promise<DirFetchRe
   const maxBytes = clampMaxBytes(params.maxBytes);
   const includeDotfiles = params.includeDotfiles === true;
   const followSymlinks = params.followSymlinks === true;
+  const preflightOnly = params.preflightOnly === true;
 
   let canonical: string;
   try {
@@ -189,6 +217,38 @@ export async function handleDirFetch(params: DirFetchParams): Promise<DirFetchRe
       message: "path is not a directory",
       canonicalPath: canonical,
     };
+  }
+
+  if (preflightOnly) {
+    try {
+      const entries = await listTreeEntries(canonical, 5000);
+      if (entries === "TOO_MANY") {
+        return {
+          ok: false,
+          code: "TREE_TOO_LARGE",
+          message: "directory tree exceeds 5000 entries during preflight",
+          canonicalPath: canonical,
+        };
+      }
+      return {
+        ok: true,
+        path: canonical,
+        tarBase64: "",
+        tarBytes: 0,
+        sha256: "",
+        fileCount: entries.length,
+        entries,
+        preflightOnly: true,
+      };
+    } catch (err) {
+      const code = classifyFsError(err);
+      return {
+        ok: false,
+        code,
+        message: `preflight readdir failed: ${String(err)}`,
+        canonicalPath: canonical,
+      };
+    }
   }
 
   // Preflight size check using du

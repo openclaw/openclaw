@@ -252,6 +252,26 @@ describe("evaluateFilePolicy — ask modes", () => {
     });
   });
 
+  it("ask=on-miss miss preserves transfer caps for one-time approvals", () => {
+    withConfig({
+      n1: {
+        ask: "on-miss",
+        allowReadPaths: ["/var/log/**"],
+        maxBytes: 4096,
+        followSymlinks: true,
+      },
+    });
+    const r = evaluateFilePolicy({ nodeId: "n1", kind: "read", path: "/tmp/x" });
+    expect(r).toMatchObject({
+      ok: false,
+      code: "POLICY_DENIED",
+      askable: true,
+      askMode: "on-miss",
+      maxBytes: 4096,
+      followSymlinks: true,
+    });
+  });
+
   it("ask=on-miss still silent-allows on a match", () => {
     withConfig({
       n1: { ask: "on-miss", allowReadPaths: ["/tmp/**"] },

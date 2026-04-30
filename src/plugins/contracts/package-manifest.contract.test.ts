@@ -46,6 +46,10 @@ const packageManifestContractTests: PackageManifestContractParams[] = [
     mirroredRootRuntimeDeps: ["typebox"],
   },
   {
+    pluginId: "file-transfer",
+    mirroredRootRuntimeDeps: ["minimatch", "typebox"],
+  },
+  {
     pluginId: "matrix",
     pluginLocalRuntimeDeps: [
       "@matrix-org/matrix-sdk-crypto-nodejs",

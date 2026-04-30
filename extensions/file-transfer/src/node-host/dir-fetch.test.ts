@@ -60,6 +60,29 @@ describe("handleDirFetch — fs errors", () => {
 });
 
 describe("handleDirFetch — happy path", () => {
+  it("preflights directory entries without creating a tarball", async () => {
+    await fs.writeFile(path.join(tmpRoot, "a.txt"), "alpha\n");
+    await fs.mkdir(path.join(tmpRoot, ".ssh"));
+    await fs.writeFile(path.join(tmpRoot, ".ssh", "id_rsa"), "secret\n");
+    await fs.mkdir(path.join(tmpRoot, "sub"));
+    await fs.writeFile(path.join(tmpRoot, "sub", "b.txt"), "beta\n");
+
+    const r = await handleDirFetch({ path: tmpRoot, preflightOnly: true });
+    if (!r.ok) {
+      throw new Error(`expected ok, got ${r.code}: ${r.message}`);
+    }
+
+    expect(r).toMatchObject({
+      path: tmpRoot,
+      tarBase64: "",
+      tarBytes: 0,
+      sha256: "",
+      preflightOnly: true,
+    });
+    expect(r.entries).toEqual([".ssh", ".ssh/id_rsa", "a.txt", "sub", "sub/b.txt"]);
+    expect(r.fileCount).toBe(r.entries?.length);
+  });
+
   it.runIf(HAS_TAR)("returns a gzipped tar with byte count and sha256", async () => {
     await fs.writeFile(path.join(tmpRoot, "a.txt"), "alpha\n");
     await fs.writeFile(path.join(tmpRoot, "b.txt"), "beta\n");

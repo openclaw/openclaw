@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { PluginApprovalRequestPayload } from "../infra/plugin-approvals.js";
 import { DEFAULT_PLUGIN_APPROVAL_TIMEOUT_MS } from "../infra/plugin-approvals.js";
 import { getActiveRuntimePluginRegistry } from "../plugins/active-runtime-registry.js";
+import type { PluginRegistry } from "../plugins/registry-types.js";
 import type {
   OpenClawPluginNodeInvokePolicyContext,
   OpenClawPluginNodeInvokePolicyResult,
@@ -26,6 +27,19 @@ function parsePayload(payloadJSON: string | null | undefined, payload: unknown):
   } catch {
     return payload;
   }
+}
+
+function findDangerousPluginNodeCommand(registry: PluginRegistry | null, command: string) {
+  const normalizedCommand = command.trim();
+  if (!normalizedCommand) {
+    return null;
+  }
+  return (
+    registry?.nodeHostCommands?.find(
+      (entry) =>
+        entry.command.dangerous === true && entry.command.command.trim() === normalizedCommand,
+    ) ?? null
+  );
 }
 
 function createApprovalRuntime(params: {
@@ -90,6 +104,14 @@ export async function applyPluginNodeInvokePolicy(params: {
     candidate.policy.commands.includes(params.command),
   );
   if (!entry) {
+    const dangerousCommand = findDangerousPluginNodeCommand(registry, params.command);
+    if (dangerousCommand) {
+      return {
+        ok: false,
+        code: "PLUGIN_POLICY_MISSING",
+        message: `node.invoke ${params.command} is registered as dangerous by plugin ${dangerousCommand.pluginId} but has no plugin node.invoke policy`,
+      };
+    }
     return null;
   }
 
