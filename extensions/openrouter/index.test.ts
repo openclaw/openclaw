@@ -58,7 +58,7 @@ describe("openrouter provider hooks", () => {
     });
   });
 
-  it("owns native reasoning output mode", async () => {
+  it("uses tagged reasoning so user-visible streams keep the runtime final gate", async () => {
     const provider = await registerSingleProviderPlugin(openrouterPlugin);
 
     expect(
@@ -67,7 +67,7 @@ describe("openrouter provider hooks", () => {
         modelApi: "openai-completions",
         modelId: "openai/gpt-5.4",
       } as never),
-    ).toBe("native");
+    ).toBe("tagged");
   });
 
   it("canonicalizes stale OpenRouter /v1 config and runtime metadata", async () => {

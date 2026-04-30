@@ -149,7 +149,7 @@ export default definePluginEntry({
           : undefined;
       },
       ...PASSTHROUGH_GEMINI_REPLAY_HOOKS,
-      resolveReasoningOutputMode: () => "native",
+      resolveReasoningOutputMode: () => "tagged",
       isModernModelRef: () => true,
       wrapStreamFn: wrapOpenRouterProviderStream,
       isCacheTtlEligible: (ctx) => isOpenRouterCacheTtlModel(ctx.modelId),

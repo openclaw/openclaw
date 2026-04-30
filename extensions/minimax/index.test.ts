@@ -25,7 +25,7 @@ const minimaxProviderPlugin = {
 };
 
 describe("minimax provider hooks", () => {
-  it("keeps native reasoning mode for MiniMax transports", async () => {
+  it("uses tagged reasoning so user-visible streams keep the runtime final gate", async () => {
     const { providers } = await registerProviderPlugin({
       plugin: minimaxProviderPlugin,
       id: "minimax",
@@ -41,7 +41,7 @@ describe("minimax provider hooks", () => {
         modelApi: "anthropic-messages",
         modelId: "MiniMax-M2.7",
       } as never),
-    ).toBe("native");
+    ).toBe("tagged");
 
     expect(portalProvider.hookAliases).toContain("minimax-portal-cn");
     expect(
@@ -50,7 +50,7 @@ describe("minimax provider hooks", () => {
         modelApi: "anthropic-messages",
         modelId: "MiniMax-M2.7",
       } as never),
-    ).toBe("native");
+    ).toBe("tagged");
   });
 
   it("keeps MiniMax auth setup metadata aligned across regions", async () => {

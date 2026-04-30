@@ -45,7 +45,7 @@ const HYBRID_ANTHROPIC_OPENAI_REPLAY_HOOKS = buildProviderReplayFamilyHooks({
 const MINIMAX_PROVIDER_HOOKS = {
   ...HYBRID_ANTHROPIC_OPENAI_REPLAY_HOOKS,
   ...MINIMAX_FAST_MODE_STREAM_HOOKS,
-  resolveReasoningOutputMode: () => "native" as const,
+  resolveReasoningOutputMode: () => "tagged" as const,
 };
 
 function getDefaultBaseUrl(region: MiniMaxRegion): string {

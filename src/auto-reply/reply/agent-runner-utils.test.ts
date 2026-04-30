@@ -137,10 +137,11 @@ describe("agent-runner-utils", () => {
     });
   });
 
-  it("does not force final-tag enforcement for minimax providers", () => {
+  it("forces final-tag enforcement when the provider requires tagged output", () => {
     const run = makeRun();
+    hoisted.isReasoningTagProviderMock.mockReturnValueOnce(true);
 
-    expect(resolveEnforceFinalTag(run, "minimax", "MiniMax-M2.7")).toBe(false);
+    expect(resolveEnforceFinalTag(run, "minimax", "MiniMax-M2.7")).toBe(true);
     expect(hoisted.isReasoningTagProviderMock).toHaveBeenCalledWith("minimax", {
       config: run.config,
       workspaceDir: run.workspaceDir,
