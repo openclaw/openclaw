@@ -1054,6 +1054,26 @@ describe("host-hook fixture plugin contract", () => {
     await expect(
       callPluginSessionActionThroughGatewayForTest({
         body: {
+          pluginId: "approval-action-fixture",
+          actionId: "view",
+        },
+        scopes: [WRITE_SCOPE],
+      }),
+    ).resolves.toEqual({
+      ok: true,
+      payload: { ok: true, result: { visible: true }, continueAgent: false },
+      error: undefined,
+    });
+    expect(handlerCalls).toEqual([
+      { scopes: [APPROVALS_SCOPE], sessionKey: undefined },
+      { scopes: [APPROVALS_SCOPE], sessionKey: "agent:main:main" },
+      { scopes: [READ_SCOPE], action: "view" },
+      { scopes: [WRITE_SCOPE], action: "view" },
+    ]);
+
+    await expect(
+      callPluginSessionActionThroughGatewayForTest({
+        body: {
           pluginId: "   ",
           actionId: "approve",
         },
@@ -1082,7 +1102,7 @@ describe("host-hook fixture plugin contract", () => {
         message: `plugin session action requires gateway scope: ${APPROVALS_SCOPE}`,
       },
     });
-    expect(handlerCalls).toHaveLength(3);
+    expect(handlerCalls).toHaveLength(4);
   });
 
   it("does not dispatch session actions for plugins that are not loaded", async () => {

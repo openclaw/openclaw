@@ -8,7 +8,7 @@ import {
 } from "../../plugins/schema-validator.js";
 import type { JsonSchemaObject } from "../../shared/json-schema.types.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
-import { ADMIN_SCOPE, WRITE_SCOPE } from "../operator-scopes.js";
+import { ADMIN_SCOPE, READ_SCOPE, WRITE_SCOPE } from "../operator-scopes.js";
 import {
   ErrorCodes,
   errorShape,
@@ -99,7 +99,12 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
       registration.action.requiredScopes && registration.action.requiredScopes.length > 0
         ? registration.action.requiredScopes
         : [WRITE_SCOPE];
-    const missingScope = requiredScopes.find((scope) => !hasAdmin && !scopes.includes(scope));
+    const missingScope = requiredScopes.find(
+      (scope) =>
+        !hasAdmin &&
+        !scopes.includes(scope) &&
+        !(scope === READ_SCOPE && scopes.includes(WRITE_SCOPE)),
+    );
     if (missingScope) {
       respond(
         false,
