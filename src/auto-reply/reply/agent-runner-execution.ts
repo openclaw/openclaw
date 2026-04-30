@@ -10,6 +10,7 @@ import {
 } from "../../agents/auth-profiles/oauth-refresh-failure.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { runCliAgent } from "../../agents/cli-runner.js";
+import { cliBackendLog } from "../../agents/cli-runner/log.js";
 import { getCliSessionBinding } from "../../agents/cli-session.js";
 import { claudeCliSessionTranscriptHasContent } from "../../agents/command/attempt-execution.helpers.js";
 import { clearCliSessionInStore } from "../../agents/command/session-store.js";
@@ -983,6 +984,10 @@ export async function runAgentTurnWithFallback(params: {
             });
             return (async () => {
               let lifecycleTerminalEmitted = false;
+              // DIAG(heartbeat-model): remove after diagnosis is complete.
+              cliBackendLog.info(
+                `[diag:runCliAgent] isHeartbeat=${params.isHeartbeat === true} provider=${provider} model=${model} runProvider=${params.followupRun.run.provider} runModel=${params.followupRun.run.model} sessionKey=${params.sessionKey ?? "(none)"}`,
+              );
               try {
                 const result = await runCliAgent({
                   sessionId: params.followupRun.run.sessionId,

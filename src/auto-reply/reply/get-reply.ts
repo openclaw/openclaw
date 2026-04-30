@@ -5,6 +5,7 @@ import {
   resolveSessionAgentId,
   resolveAgentSkillsFilter,
 } from "../../agents/agent-scope.js";
+import { cliBackendLog } from "../../agents/cli-runner/log.js";
 import { resolveModelRefFromString } from "../../agents/model-selection.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../../agents/workspace.js";
@@ -216,6 +217,10 @@ export async function getReplyFromConfig(
       model = heartbeatRef.ref.model;
       hasResolvedHeartbeatModelOverride = true;
     }
+    // DIAG(heartbeat-model): remove after diagnosis is complete.
+    cliBackendLog.info(
+      `[diag:heartbeat-model] heartbeatRaw=${JSON.stringify(heartbeatRaw)} parsedProvider=${heartbeatRef?.ref.provider ?? "(none)"} parsedModel=${heartbeatRef?.ref.model ?? "(none)"} hasResolvedHeartbeatModelOverride=${hasResolvedHeartbeatModelOverride} postProvider=${provider} postModel=${model} agentId=${agentId ?? "(none)"}`,
+    );
   }
 
   const workspaceDirRaw = resolveAgentWorkspaceDir(cfg, agentId) ?? DEFAULT_AGENT_WORKSPACE_DIR;
