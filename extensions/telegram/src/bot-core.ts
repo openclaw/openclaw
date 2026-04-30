@@ -68,6 +68,55 @@ export function setTelegramBotRuntimeForTest(runtime?: TelegramBotRuntime): void
 
 type TelegramFetchInput = Parameters<NonNullable<ApiClientOptions["fetch"]>>[0];
 type TelegramFetchInit = Parameters<NonNullable<ApiClientOptions["fetch"]>>[1];
+type TelegramLatencyUpdate = {
+  update_id?: number;
+  message?: {
+    message_id?: number;
+    date?: number;
+    chat?: { id?: string | number; type?: string; is_forum?: boolean };
+    message_thread_id?: number;
+    text?: string;
+  };
+  callback_query?: {
+    id?: string;
+    data?: string;
+    message?: {
+      message_id?: number;
+      date?: number;
+      chat?: { id?: string | number; type?: string; is_forum?: boolean };
+      message_thread_id?: number;
+    };
+  };
+};
+
+function describeTelegramLatencyUpdate(update: unknown): string {
+  const typed = update as TelegramLatencyUpdate | undefined;
+  const msg = typed?.message ?? typed?.callback_query?.message;
+  const now = Date.now();
+  const telegramDateMs =
+    typeof msg?.date === "number" && Number.isFinite(msg.date) ? msg.date * 1000 : undefined;
+  const lagMs =
+    typeof telegramDateMs === "number" && Number.isFinite(telegramDateMs)
+      ? now - telegramDateMs
+      : undefined;
+  const parts = [
+    `update=${typed?.update_id ?? "?"}`,
+    `message=${msg?.message_id ?? "?"}`,
+    `chat=${msg?.chat?.id ?? "?"}`,
+    `thread=${msg?.message_thread_id ?? "root"}`,
+    `type=${msg?.chat?.type ?? "?"}`,
+  ];
+  if (typed?.callback_query?.data) {
+    parts.push(`callback=${typed.callback_query.data.slice(0, 80)}`);
+  }
+  if (typed?.message?.text) {
+    parts.push(`textChars=${typed.message.text.length}`);
+  }
+  if (typeof lagMs === "number" && Number.isFinite(lagMs)) {
+    parts.push(`telegramLagMs=${Math.round(lagMs)}`);
+  }
+  return parts.join(" ");
+}
 type TelegramClientFetch = NonNullable<ApiClientOptions["fetch"]>;
 type TelegramCompatFetch = (
   input: TelegramFetchInput,
@@ -369,16 +418,46 @@ export function createTelegramBotCore(
     }
   });
 
-  bot.use(
-    botRuntime.sequentialize(
-      createTelegramSequentialKey({
-        accountId: account.accountId,
-        loadRuntimeConfig: () => telegramDeps.getRuntimeConfig(),
-        resolveTelegramGroupConfig: (chatId, messageThreadId) =>
-          resolveTelegramGroupConfig(chatId, messageThreadId),
-      }),
-    ),
-  );
+  const telegramSequentialKey = createTelegramSequentialKey({
+    accountId: account.accountId,
+    loadRuntimeConfig: () => telegramDeps.getRuntimeConfig(),
+    resolveTelegramGroupConfig: (chatId, messageThreadId) =>
+      resolveTelegramGroupConfig(chatId, messageThreadId),
+  });
+  const telegramSequentialAcceptedAt = new WeakMap<object, { acceptedAt: number; key: string }>();
+  bot.use(async (ctx, next) => {
+    const acceptedAt = Date.now();
+    const key = telegramSequentialKey(ctx);
+    if (ctx.update && typeof ctx.update === "object") {
+      telegramSequentialAcceptedAt.set(ctx.update, { acceptedAt, key });
+    }
+    runtime.log?.(
+      `[telegram/latency] accepted key=${key} ${describeTelegramLatencyUpdate(ctx.update)}`,
+    );
+    await next();
+  });
+  bot.use(botRuntime.sequentialize(telegramSequentialKey));
+  bot.use(async (ctx, next) => {
+    const marker =
+      ctx.update && typeof ctx.update === "object"
+        ? telegramSequentialAcceptedAt.get(ctx.update)
+        : undefined;
+    const dequeuedAt = Date.now();
+    runtime.log?.(
+      `[telegram/latency] dequeued key=${marker?.key ?? telegramSequentialKey(ctx)} queueWaitMs=${
+        marker ? Math.round(dequeuedAt - marker.acceptedAt) : "?"
+      } ${describeTelegramLatencyUpdate(ctx.update)}`,
+    );
+    try {
+      await next();
+    } finally {
+      runtime.log?.(
+        `[telegram/latency] update done key=${marker?.key ?? telegramSequentialKey(ctx)} totalAfterDequeueMs=${Math.round(
+          Date.now() - dequeuedAt,
+        )} ${describeTelegramLatencyUpdate(ctx.update)}`,
+      );
+    }
+  });
 
   const rawUpdateLogger = createSubsystemLogger("gateway/channels/telegram/raw-update");
   const MAX_RAW_UPDATE_CHARS = 8000;

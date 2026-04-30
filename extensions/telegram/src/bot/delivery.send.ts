@@ -150,6 +150,10 @@ export async function sendTelegramText(
   const fallbackText = opts?.plainText ?? text;
   const hasFallbackText = fallbackText.trim().length > 0;
   const sendPlainFallback = async () => {
+    const startedAt = Date.now();
+    runtime.log?.(
+      `telegram sendMessage start chat=${chatId} mode=plain textChars=${fallbackText.length}`,
+    );
     const res = await sendTelegramWithThreadFallback({
       operation: "sendMessage",
       runtime,
@@ -162,7 +166,11 @@ export async function sendTelegramText(
           ...effectiveParams,
         }),
     });
-    runtime.log?.(`telegram sendMessage ok chat=${chatId} message=${res.message_id} (plain)`);
+    runtime.log?.(
+      `telegram sendMessage ok chat=${chatId} message=${res.message_id} durationMs=${Math.round(
+        Date.now() - startedAt,
+      )} (plain)`,
+    );
     return res.message_id;
   };
 
@@ -174,6 +182,10 @@ export async function sendTelegramText(
     return await sendPlainFallback();
   }
   try {
+    const startedAt = Date.now();
+    runtime.log?.(
+      `telegram sendMessage start chat=${chatId} mode=${textMode} textChars=${htmlText.length}`,
+    );
     const res = await sendTelegramWithThreadFallback({
       operation: "sendMessage",
       runtime,
@@ -191,7 +203,11 @@ export async function sendTelegramText(
           ...effectiveParams,
         }),
     });
-    runtime.log?.(`telegram sendMessage ok chat=${chatId} message=${res.message_id}`);
+    runtime.log?.(
+      `telegram sendMessage ok chat=${chatId} message=${res.message_id} durationMs=${Math.round(
+        Date.now() - startedAt,
+      )}`,
+    );
     return res.message_id;
   } catch (err) {
     const errText = formatErrorMessage(err);

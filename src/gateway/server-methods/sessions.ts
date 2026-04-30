@@ -646,10 +646,13 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateSessionsListParams, "sessions.list", respond)) {
       return;
     }
+    const startedAt = Date.now();
     const p = params;
     const cfg = context.getRuntimeConfig();
     const { storePath, store } = loadCombinedSessionStoreForGateway(cfg);
+    const loadedStoreAt = Date.now();
     const modelCatalog = await loadOptionalSessionsListModelCatalog(context);
+    const loadedCatalogAt = Date.now();
     const result = listSessionsFromStore({
       cfg,
       storePath,
@@ -657,6 +660,15 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       modelCatalog,
       opts: p,
     });
+    context.logGateway?.debug?.(
+      `sessions.list timing totalMs=${Math.round(Date.now() - startedAt)} storeMs=${Math.round(
+        loadedStoreAt - startedAt,
+      )} catalogMs=${Math.round(loadedCatalogAt - loadedStoreAt)} listMs=${Math.round(
+        Date.now() - loadedCatalogAt,
+      )} count=${result.count} includeDerivedTitles=${p.includeDerivedTitles === true} includeLastMessage=${
+        p.includeLastMessage === true
+      } limit=${typeof p.limit === "number" ? p.limit : "none"}`,
+    );
     respond(true, result, undefined);
   },
   "sessions.subscribe": ({ client, context, respond }) => {

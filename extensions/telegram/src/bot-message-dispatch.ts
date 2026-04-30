@@ -269,6 +269,18 @@ export const dispatchTelegramMessage = async ({
     removeAckAfterReply,
     statusReactionController,
   } = context;
+  const turnStartedAt = Date.now();
+  const latencyPrefix = `[telegram/latency] message=${msg.message_id ?? "?"} chat=${chatId} thread=${
+    threadSpec.id ?? "root"
+  } session=${ctxPayload.SessionKey ?? "?"}`;
+  const logLatency = (phase: string, extra?: string) => {
+    runtime.log?.(
+      `${latencyPrefix} phase=${phase} elapsedMs=${Math.round(Date.now() - turnStartedAt)}${
+        extra ? ` ${extra}` : ""
+      }`,
+    );
+  };
+  logLatency("dispatch-start");
   const statusReactionTiming = {
     ...DEFAULT_TIMING,
     ...cfg.messages?.statusReactions?.timing,
@@ -736,6 +748,12 @@ export const dispatchTelegramMessage = async ({
       if (isDispatchSuperseded()) {
         return false;
       }
+      const reply = resolveSendableOutboundReplyParts(payload);
+      const payloadStartedAt = Date.now();
+      logLatency(
+        "send-payload-start",
+        `kind=${payload.isError ? "error" : "reply"} textChars=${reply.text.length} media=${reply.mediaUrls.length}`,
+      );
       const result = await (telegramDeps.deliverReplies ?? deliverReplies)({
         ...deliveryBaseOptions,
         replies: [applyQuoteReplyTarget(payload)],
@@ -746,6 +764,10 @@ export const dispatchTelegramMessage = async ({
       if (result.delivered) {
         deliveryState.markDelivered();
       }
+      logLatency(
+        "send-payload-end",
+        `delivered=${result.delivered} durationMs=${Math.round(Date.now() - payloadStartedAt)}`,
+      );
       return result.delivered;
     };
     const emitPreviewFinalizedHook = (result: LaneDeliveryResult) => {
@@ -849,6 +871,7 @@ export const dispatchTelegramMessage = async ({
     });
 
     try {
+      logLatency("run-turn-start");
       const turnResult = await runInboundReplyTurn({
         channel: "telegram",
         accountId: route.accountId,
@@ -881,6 +904,11 @@ export const dispatchTelegramMessage = async ({
                     if (isDispatchSuperseded()) {
                       return;
                     }
+                    const deliveryReply = resolveSendableOutboundReplyParts(payload);
+                    logLatency(
+                      "deliver-callback",
+                      `kind=${info.kind} textChars=${deliveryReply.text.length} media=${deliveryReply.mediaUrls.length}`,
+                    );
                     const clearPendingCompactionReplayBoundaryOnVisibleBoundary = (
                       didDeliver: boolean,
                     ) => {
@@ -1183,6 +1211,10 @@ export const dispatchTelegramMessage = async ({
           }),
         },
       });
+      logLatency(
+        "run-turn-end",
+        `queuedFinal=${turnResult.queuedFinal === true} delivered=${deliveryState.snapshot().delivered}`,
+      );
       if (!turnResult.dispatched) {
         return;
       }
