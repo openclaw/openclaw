@@ -241,42 +241,58 @@ export async function handleFeishuCommentEvent(
       `feishu[${account.accountId}]: dispatching drive comment to agent ` +
         `(session=${commentSessionKey} comment=${turn.commentId} type=${turn.noticeType})`,
     );
-    const { dispatchResult } = await core.channel.turn.runPrepared({
+    const turnResult = await core.channel.turn.run({
       channel: "feishu",
       accountId: route.accountId,
-      routeSessionKey: commentSessionKey,
-      storePath,
-      ctxPayload,
-      recordInboundSession: core.channel.session.recordInboundSession,
-      record: {
-        onRecordError: (err) => {
-          error(
-            `feishu[${account.accountId}]: failed to record comment inbound session ${commentSessionKey}: ${String(err)}`,
-          );
-        },
-      },
-      onPreDispatchFailure: async () => {
-        dispatchSettledBeforeStart = true;
-        await core.channel.reply.settleReplyDispatcher({
-          dispatcher,
-          onSettled: () => {
-            markRunComplete();
-            markDispatchIdle();
+      raw: turn,
+      adapter: {
+        ingest: () => ({
+          id: turn.messageId,
+          timestamp: parseTimestampMs(turn.timestamp),
+          rawText: ctxPayload.RawBody ?? "",
+          textForAgent: ctxPayload.BodyForAgent,
+          textForCommands: ctxPayload.CommandBody,
+          raw: turn,
+        }),
+        resolveTurn: () => ({
+          channel: "feishu",
+          accountId: route.accountId,
+          routeSessionKey: commentSessionKey,
+          storePath,
+          ctxPayload,
+          recordInboundSession: core.channel.session.recordInboundSession,
+          record: {
+            onRecordError: (err) => {
+              error(
+                `feishu[${account.accountId}]: failed to record comment inbound session ${commentSessionKey}: ${String(err)}`,
+              );
+            },
           },
-        });
-      },
-      runDispatch: () =>
-        core.channel.reply.withReplyDispatcher({
-          dispatcher,
-          run: () =>
-            core.channel.reply.dispatchReplyFromConfig({
-              ctx: ctxPayload,
-              cfg: effectiveCfg,
+          onPreDispatchFailure: async () => {
+            dispatchSettledBeforeStart = true;
+            await core.channel.reply.settleReplyDispatcher({
               dispatcher,
-              replyOptions,
+              onSettled: () => {
+                markRunComplete();
+                markDispatchIdle();
+              },
+            });
+          },
+          runDispatch: () =>
+            core.channel.reply.withReplyDispatcher({
+              dispatcher,
+              run: () =>
+                core.channel.reply.dispatchReplyFromConfig({
+                  ctx: ctxPayload,
+                  cfg: effectiveCfg,
+                  dispatcher,
+                  replyOptions,
+                }),
             }),
         }),
+      },
     });
+    const dispatchResult = turnResult.dispatched ? turnResult.dispatchResult : undefined;
     const queuedFinal = dispatchResult?.queuedFinal ?? false;
     const counts = dispatchResult?.counts ?? { tool: 0, block: 0, final: 0 };
     log(

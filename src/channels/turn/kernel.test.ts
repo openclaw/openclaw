@@ -310,6 +310,38 @@ describe("channel turn kernel", () => {
     );
   });
 
+  it("runs custom prepared dispatch from a full turn adapter", async () => {
+    const events: string[] = [];
+    const result = await runChannelTurn({
+      channel: "test",
+      raw: { id: "msg-1", text: "hello" },
+      adapter: {
+        ingest: () => ({ id: "msg-1", rawText: "hello" }),
+        resolveTurn: () => ({
+          channel: "test",
+          routeSessionKey: "agent:main:test:peer",
+          storePath: "/tmp/sessions.json",
+          ctxPayload: createCtx(),
+          recordInboundSession: createRecordInboundSession(events),
+          runDispatch: async () => {
+            events.push("custom-dispatch");
+            return {
+              queuedFinal: true,
+              counts: { tool: 0, block: 0, final: 1 },
+            };
+          },
+        }),
+      },
+    });
+
+    expect(events).toEqual(["record", "custom-dispatch"]);
+    expect(result.dispatched).toBe(true);
+    if (!result.dispatched) {
+      throw new Error("expected dispatch");
+    }
+    expect(result.dispatchResult.queuedFinal).toBe(true);
+  });
+
   it("finalizes failed dispatches before rethrowing", async () => {
     const onFinalize = vi.fn();
     const dispatchError = new Error("dispatch failed");

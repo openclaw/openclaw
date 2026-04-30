@@ -240,9 +240,13 @@ export type PreparedChannelTurn<TDispatchResult = DispatchFromConfigResult> = {
   messageId?: string;
 };
 
-export type ChannelTurnResolved = AssembledChannelTurn & {
-  admission?: Extract<ChannelTurnAdmission, { kind: "dispatch" | "observeOnly" }>;
-};
+export type ChannelTurnResolved<TDispatchResult = DispatchFromConfigResult> =
+  | (AssembledChannelTurn & {
+      admission?: Extract<ChannelTurnAdmission, { kind: "dispatch" | "observeOnly" }>;
+    })
+  | (PreparedChannelTurn<TDispatchResult> & {
+      admission?: Extract<ChannelTurnAdmission, { kind: "dispatch" | "observeOnly" }>;
+    });
 
 export type ChannelTurnStage =
   | "ingest"
@@ -267,13 +271,14 @@ export type ChannelTurnLogEvent = {
   error?: unknown;
 };
 
-export type ChannelTurnResult = {
-  admission: ChannelTurnAdmission;
-  dispatched: boolean;
-  ctxPayload?: MsgContext;
-  routeSessionKey?: string;
-  dispatchResult?: DispatchFromConfigResult;
-};
+export type ChannelTurnResult<TDispatchResult = DispatchFromConfigResult> =
+  | DispatchedChannelTurnResult<TDispatchResult>
+  | {
+      admission: ChannelTurnAdmission;
+      dispatched: false;
+      ctxPayload?: MsgContext;
+      routeSessionKey?: string;
+    };
 
 export type DispatchedChannelTurnResult<TDispatchResult = DispatchFromConfigResult> = {
   admission: Extract<ChannelTurnAdmission, { kind: "dispatch" | "observeOnly" }>;
@@ -283,7 +288,7 @@ export type DispatchedChannelTurnResult<TDispatchResult = DispatchFromConfigResu
   dispatchResult: TDispatchResult;
 };
 
-export type ChannelTurnAdapter<TRaw> = {
+export type ChannelTurnAdapter<TRaw, TDispatchResult = DispatchFromConfigResult> = {
   ingest: (raw: TRaw) => Promise<NormalizedTurnInput | null> | NormalizedTurnInput | null;
   classify?: (input: NormalizedTurnInput) => Promise<ChannelEventClass> | ChannelEventClass;
   preflight?: (
@@ -299,29 +304,14 @@ export type ChannelTurnAdapter<TRaw> = {
     input: NormalizedTurnInput,
     eventClass: ChannelEventClass,
     preflight: PreflightFacts,
-  ) => Promise<ChannelTurnResolved> | ChannelTurnResolved;
-  onFinalize?: (result: ChannelTurnResult) => Promise<void> | void;
+  ) => Promise<ChannelTurnResolved<TDispatchResult>> | ChannelTurnResolved<TDispatchResult>;
+  onFinalize?: (result: ChannelTurnResult<TDispatchResult>) => Promise<void> | void;
 };
 
-export type RunChannelTurnParams<TRaw> = {
+export type RunChannelTurnParams<TRaw, TDispatchResult = DispatchFromConfigResult> = {
   channel: string;
   accountId?: string;
   raw: TRaw;
-  adapter: ChannelTurnAdapter<TRaw>;
-  log?: (event: ChannelTurnLogEvent) => void;
-};
-
-export type RunResolvedChannelTurnParams<TRaw> = {
-  channel: string;
-  accountId?: string;
-  raw: TRaw;
-  input:
-    | NormalizedTurnInput
-    | ((raw: TRaw) => Promise<NormalizedTurnInput | null> | NormalizedTurnInput | null);
-  resolveTurn: (
-    input: NormalizedTurnInput,
-    eventClass: ChannelEventClass,
-    preflight: PreflightFacts,
-  ) => Promise<ChannelTurnResolved> | ChannelTurnResolved;
+  adapter: ChannelTurnAdapter<TRaw, TDispatchResult>;
   log?: (event: ChannelTurnLogEvent) => void;
 };

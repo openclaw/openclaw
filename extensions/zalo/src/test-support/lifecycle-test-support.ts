@@ -257,13 +257,23 @@ export function createImageLifecycleCore() {
             updateLastRoute: resolved.record?.updateLastRoute,
             onRecordError: resolved.record?.onRecordError ?? (() => undefined),
           });
+          if ("runDispatch" in resolved) {
+            const dispatchResult = await resolved.runDispatch();
+            return {
+              admission: { kind: "dispatch" as const },
+              dispatched: true,
+              ctxPayload: resolved.ctxPayload,
+              routeSessionKey: resolved.routeSessionKey,
+              dispatchResult,
+            };
+          }
           const dispatchResult = await resolved.dispatchReplyWithBufferedBlockDispatcher({
             ctx: resolved.ctxPayload,
             cfg: resolved.cfg,
             dispatcherOptions: {
               ...resolved.dispatcherOptions,
-              deliver: async (payload, info) => {
-                await resolved.delivery.deliver(payload, info);
+              deliver: async (...args: Parameters<typeof resolved.delivery.deliver>) => {
+                await resolved.delivery.deliver(...args);
               },
               onError: resolved.delivery.onError,
             },

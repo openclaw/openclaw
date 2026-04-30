@@ -9,12 +9,12 @@ import type {
   ChannelTurnDeliveryAdapter,
   ChannelTurnHistoryFinalizeOptions,
   ChannelTurnLogEvent,
+  ChannelTurnResolved,
   ChannelTurnResult,
   DispatchedChannelTurnResult,
   PreparedChannelTurn,
   PreflightFacts,
   RunChannelTurnParams,
-  RunResolvedChannelTurnParams,
 } from "./types.js";
 export {
   EMPTY_CHANNEL_TURN_DISPATCH_COUNTS,
@@ -49,7 +49,6 @@ export type {
   ReplyPlanFacts,
   RouteFacts,
   RunChannelTurnParams,
-  RunResolvedChannelTurnParams,
   SenderFacts,
   SupplementalContextFacts,
 } from "./types.js";
@@ -141,6 +140,29 @@ export async function dispatchAssembledChannelTurn(
         replyResolver: params.replyResolver,
       }),
   });
+}
+
+function isPreparedChannelTurn<TDispatchResult>(
+  value: ChannelTurnResolved<TDispatchResult>,
+): value is PreparedChannelTurn<TDispatchResult> & {
+  admission?: Extract<ChannelTurnAdmission, { kind: "dispatch" | "observeOnly" }>;
+} {
+  return "runDispatch" in value;
+}
+
+async function dispatchResolvedChannelTurn<TDispatchResult>(
+  params: ChannelTurnResolved<TDispatchResult> & {
+    admission: Extract<ChannelTurnAdmission, { kind: "dispatch" | "observeOnly" }>;
+    log?: (event: ChannelTurnLogEvent) => void;
+    messageId?: string;
+  },
+): Promise<DispatchedChannelTurnResult<TDispatchResult>> {
+  if (isPreparedChannelTurn(params)) {
+    return await runPreparedChannelTurn(params);
+  }
+  return (await dispatchAssembledChannelTurn(
+    params,
+  )) as DispatchedChannelTurnResult<TDispatchResult>;
 }
 
 export async function runPreparedChannelTurn<
@@ -248,9 +270,12 @@ export async function runPreparedChannelTurn<
   };
 }
 
-export async function runChannelTurn<TRaw>(
-  params: RunChannelTurnParams<TRaw>,
-): Promise<ChannelTurnResult> {
+export async function runChannelTurn<
+  TRaw,
+  TDispatchResult = DispatchedChannelTurnResult["dispatchResult"],
+>(
+  params: RunChannelTurnParams<TRaw, TDispatchResult>,
+): Promise<ChannelTurnResult<TDispatchResult>> {
   emit({
     ...params,
     event: { stage: "ingest", event: "start" },
@@ -327,9 +352,9 @@ export async function runChannelTurn<TRaw>(
   });
 
   const admission = resolved.admission ?? preflightAdmission ?? ({ kind: "dispatch" } as const);
-  let result: ChannelTurnResult;
+  let result: ChannelTurnResult<TDispatchResult>;
   try {
-    const dispatchResult = await dispatchAssembledChannelTurn(
+    const dispatchResult = await dispatchResolvedChannelTurn(
       admission.kind === "observeOnly"
         ? {
             ...resolved,
@@ -350,7 +375,7 @@ export async function runChannelTurn<TRaw>(
       admission,
     };
   } catch (err) {
-    const failedResult: ChannelTurnResult = {
+    const failedResult: ChannelTurnResult<TDispatchResult> = {
       admission,
       dispatched: false,
       ctxPayload: resolved.ctxPayload,
@@ -405,19 +430,4 @@ export async function runChannelTurn<TRaw>(
   }
 
   return result;
-}
-
-export async function runResolvedChannelTurn<TRaw>(
-  params: RunResolvedChannelTurnParams<TRaw>,
-): Promise<ChannelTurnResult> {
-  return await runChannelTurn({
-    channel: params.channel,
-    accountId: params.accountId,
-    raw: params.raw,
-    log: params.log,
-    adapter: {
-      ingest: (raw) => (typeof params.input === "function" ? params.input(raw) : params.input),
-      resolveTurn: params.resolveTurn,
-    },
-  });
 }
