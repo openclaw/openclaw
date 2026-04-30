@@ -2160,6 +2160,172 @@ describe("memory plugin e2e", () => {
     expect(detectCategory("The server is running on port 3000")).toBe("fact");
     expect(detectCategory("Random note")).toBe("other");
   });
+
+  describe("ltm search CLI --limit validation", () => {
+    type SearchActionHandler = (query: string, opts: { limit: string }) => Promise<void>;
+
+    async function captureSearchAction(): Promise<{
+      runHandler: (limitArg: string) => Promise<void>;
+      lanceLimit: ReturnType<typeof vi.fn>;
+      warnSpy: ReturnType<typeof vi.spyOn>;
+      logSpy: ReturnType<typeof vi.spyOn>;
+      cleanup: () => void;
+    }> {
+      const embeddingsCreate = vi.fn(async () => ({ data: [{ embedding: [0.1, 0.2, 0.3] }] }));
+      const ensureGlobalUndiciEnvProxyDispatcher = vi.fn();
+      const toArray = vi.fn(async () => []);
+      const lanceLimit = vi.fn(() => ({ toArray }));
+      const vectorSearch = vi.fn(() => ({ limit: lanceLimit }));
+      const loadLanceDbModule = vi.fn(async () => ({
+        connect: vi.fn(async () => ({
+          tableNames: vi.fn(async () => ["memories"]),
+          openTable: vi.fn(async () => ({
+            vectorSearch,
+            countRows: vi.fn(async () => 0),
+            add: vi.fn(async () => undefined),
+            delete: vi.fn(async () => undefined),
+          })),
+        })),
+      }));
+
+      vi.resetModules();
+      vi.doMock("openclaw/plugin-sdk/runtime-env", () => ({
+        ensureGlobalUndiciEnvProxyDispatcher,
+      }));
+      vi.doMock("openai", () => ({
+        default: class MockOpenAI {
+          post = vi.fn((_path: string, opts: { body?: unknown }) =>
+            invokeEmbeddingCreate(embeddingsCreate, opts.body),
+          );
+        },
+      }));
+      vi.doMock("./lancedb-runtime.js", () => ({ loadLanceDbModule }));
+
+      const { default: dynamicMemoryPlugin } = await import("./index.js");
+      const registerCli = vi.fn();
+      const mockApi = {
+        id: "memory-lancedb",
+        name: "Memory (LanceDB)",
+        source: "test",
+        config: {},
+        pluginConfig: {
+          embedding: { apiKey: OPENAI_API_KEY, model: "text-embedding-3-small" },
+          dbPath: getDbPath(),
+          autoCapture: false,
+          autoRecall: false,
+        },
+        runtime: {},
+        logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+        registerTool: vi.fn(),
+        registerCli,
+        registerService: vi.fn(),
+        on: vi.fn(),
+        resolvePath: (p: string) => p,
+      };
+
+      dynamicMemoryPlugin.register(mockApi as any);
+
+      const cliRegistrar = registerCli.mock.calls[0]?.[0] as
+        | ((ctx: { program: unknown }) => void)
+        | undefined;
+      expect(cliRegistrar).toBeTypeOf("function");
+
+      let searchAction: SearchActionHandler | undefined;
+      const searchCommand = {
+        description: () => searchCommand,
+        argument: () => searchCommand,
+        option: () => searchCommand,
+        action: (handler: SearchActionHandler) => {
+          searchAction = handler;
+          return searchCommand;
+        },
+      };
+      const noopCommand = {
+        description: () => noopCommand,
+        argument: () => noopCommand,
+        option: () => noopCommand,
+        action: () => noopCommand,
+      };
+      const ltmCommand = {
+        description: () => ltmCommand,
+        command: (name: string) => (name === "search" ? searchCommand : noopCommand),
+      };
+      const program = { command: (_name: string) => ltmCommand };
+
+      cliRegistrar?.({ program });
+      expect(searchAction).toBeTypeOf("function");
+
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+      const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+      return {
+        runHandler: async (limitArg: string) => {
+          await searchAction!("hello", { limit: limitArg });
+        },
+        lanceLimit,
+        warnSpy,
+        logSpy,
+        cleanup: () => {
+          warnSpy.mockRestore();
+          logSpy.mockRestore();
+          vi.doUnmock("openclaw/plugin-sdk/runtime-env");
+          vi.doUnmock("openai");
+          vi.doUnmock("./lancedb-runtime.js");
+          vi.resetModules();
+        },
+      };
+    }
+
+    test("passes through a valid positive integer", async () => {
+      const ctx = await captureSearchAction();
+      try {
+        await ctx.runHandler("12");
+        expect(ctx.lanceLimit).toHaveBeenCalledWith(12);
+        expect(ctx.warnSpy).not.toHaveBeenCalled();
+      } finally {
+        ctx.cleanup();
+      }
+    });
+
+    test("falls back to 5 and warns when --limit is non-numeric", async () => {
+      const ctx = await captureSearchAction();
+      try {
+        await ctx.runHandler("abc");
+        expect(ctx.lanceLimit).toHaveBeenCalledWith(5);
+        expect(ctx.warnSpy).toHaveBeenCalledWith(
+          'Invalid --limit value "abc"; using default limit of 5.',
+        );
+      } finally {
+        ctx.cleanup();
+      }
+    });
+
+    test("falls back to 5 and warns when --limit is zero", async () => {
+      const ctx = await captureSearchAction();
+      try {
+        await ctx.runHandler("0");
+        expect(ctx.lanceLimit).toHaveBeenCalledWith(5);
+        expect(ctx.warnSpy).toHaveBeenCalledWith(
+          'Invalid --limit value "0"; using default limit of 5.',
+        );
+      } finally {
+        ctx.cleanup();
+      }
+    });
+
+    test("falls back to 5 and warns when --limit is negative", async () => {
+      const ctx = await captureSearchAction();
+      try {
+        await ctx.runHandler("-3");
+        expect(ctx.lanceLimit).toHaveBeenCalledWith(5);
+        expect(ctx.warnSpy).toHaveBeenCalledWith(
+          'Invalid --limit value "-3"; using default limit of 5.',
+        );
+      } finally {
+        ctx.cleanup();
+      }
+    });
+  });
 });
 
 describe("lancedb runtime loader", () => {

@@ -809,7 +809,12 @@ export default definePluginEntry({
           .option("--limit <n>", "Max results", "5")
           .action(async (query, opts) => {
             const vector = await embeddings.embed(normalizeRecallQuery(query, cfg.recallMaxChars));
-            const results = await db.search(vector, Number.parseInt(opts.limit, 10), 0.3);
+            const limitRaw = Number.parseInt(opts.limit, 10);
+            const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? limitRaw : 5;
+            if (limit !== limitRaw) {
+              console.warn(`Invalid --limit value "${opts.limit}"; using default limit of ${limit}.`);
+            }
+            const results = await db.search(vector, limit, 0.3);
             // Strip vectors for output
             const output = results.map((r) => ({
               id: r.entry.id,

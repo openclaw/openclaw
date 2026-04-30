@@ -29,6 +29,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Plugin SDK/testing: lazy-load TypeScript from the plugin test-contract runtime and add release checks for critical SDK contract entrypoint imports and bundle size, so published packages fail preflight before shipping ESM-incompatible or oversized contract helpers. Thanks @vincentkoc.
+- Memory/LanceDB: validate the `openclaw ltm search --limit` CLI option so non-numeric, zero, or negative values fall back to the documented default of 5 with a warning instead of forwarding `NaN` to LanceDB. Thanks @PrincNL.
 - CLI/browser: preserve parent flags while lazy-loading browser subcommands, so `openclaw browser --json open` and `openclaw browser --json tabs` keep machine-readable output after reparsing. Fixes #74574. Thanks @devintegeritsm.
 - Plugins/runtime-deps: add `openclaw plugins deps` inspection and repair with script-free package-manager defaults shared across plugin installers, so operators can repair missing bundled runtime deps without corrupting JSON output or blocking unrelated conflict-free deps. Thanks @vincentkoc.
 - Agents/output: strip internal `[tool calls omitted]` replay placeholders from user-facing replies while preserving visible reply whitespace. Fixes #74573. Thanks @blaspat.
