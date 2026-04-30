@@ -1,8 +1,10 @@
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { isPidAlive } from "../shared/pid-alive.js";
+import { getProcessStartTime, isPidAlive } from "../shared/pid-alive.js";
 import { resolveProcessScopedMap } from "../shared/process-scoped-map.js";
+
+const CURRENT_PROCESS_STARTTIME = getProcessStartTime(process.pid);
 
 export type FileLockOptions = {
   retries: {
@@ -17,6 +19,7 @@ export type FileLockOptions = {
 
 type LockFilePayload = {
   pid: number;
+  starttime?: number;
   createdAt: string;
 };
 
@@ -81,7 +84,11 @@ async function readLockPayload(lockPath: string): Promise<LockFilePayload | null
     if (typeof parsed.pid !== "number" || typeof parsed.createdAt !== "string") {
       return null;
     }
-    return { pid: parsed.pid, createdAt: parsed.createdAt };
+    return {
+      pid: parsed.pid,
+      ...(typeof parsed.starttime === "number" ? { starttime: parsed.starttime } : {}),
+      createdAt: parsed.createdAt,
+    };
   } catch {
     return null;
   }
@@ -103,6 +110,12 @@ async function isStaleLock(lockPath: string, staleMs: number): Promise<boolean> 
   const payload = await readLockPayload(lockPath);
   if (payload?.pid && !isPidAlive(payload.pid)) {
     return true;
+  }
+  if (payload?.pid && typeof payload.starttime === "number") {
+    const liveStarttime = getProcessStartTime(payload.pid);
+    if (liveStarttime !== null && liveStarttime !== payload.starttime) {
+      return true;
+    }
   }
   if (payload?.createdAt) {
     const createdAt = Date.parse(payload.createdAt);
@@ -185,7 +198,17 @@ export async function acquireFileLock(
       const handle = await fs.open(lockPath, "wx");
       try {
         await handle.writeFile(
-          JSON.stringify({ pid: process.pid, createdAt: new Date().toISOString() }, null, 2),
+          JSON.stringify(
+            {
+              pid: process.pid,
+              ...(typeof CURRENT_PROCESS_STARTTIME === "number"
+                ? { starttime: CURRENT_PROCESS_STARTTIME }
+                : {}),
+              createdAt: new Date().toISOString(),
+            },
+            null,
+            2,
+          ),
           "utf8",
         );
       } catch (writeError) {
