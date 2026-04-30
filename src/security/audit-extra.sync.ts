@@ -283,8 +283,18 @@ function hasConfiguredGroupTargets(section: Record<string, unknown>): boolean {
   });
 }
 
-function listPotentialMultiUserSignals(cfg: OpenClawConfig): string[] {
-  const out = new Set<string>();
+type MultiUserSignal = { label: string; broadening: boolean };
+
+function listPotentialMultiUserSignals(cfg: OpenClawConfig): MultiUserSignal[] {
+  const seen = new Set<string>();
+  const out: MultiUserSignal[] = [];
+  const push = (label: string, broadening: boolean) => {
+    if (seen.has(label)) {
+      return;
+    }
+    seen.add(label);
+    out.push({ label, broadening });
+  };
   const channels = cfg.channels as Record<string, unknown> | undefined;
   if (!channels || typeof channels !== "object") {
     return [];
@@ -293,24 +303,28 @@ function listPotentialMultiUserSignals(cfg: OpenClawConfig): string[] {
   const inspectSection = (section: Record<string, unknown>, basePath: string) => {
     const groupPolicy = typeof section.groupPolicy === "string" ? section.groupPolicy : null;
     if (groupPolicy === "open") {
-      out.add(`${basePath}.groupPolicy="open"`);
+      push(`${basePath}.groupPolicy="open"`, true);
     } else if (groupPolicy === "allowlist" && hasConfiguredGroupTargets(section)) {
-      out.add(`${basePath}.groupPolicy="allowlist" with configured group targets`);
+      // Scoped: an allowlist with configured group targets is a normal
+      // single-operator-multi-agent pattern (#26859). Surface it as a signal
+      // so the detail can include it, but don't treat it as broadening — at
+      // least one open/wildcard signal is required to fire the heuristic.
+      push(`${basePath}.groupPolicy="allowlist" with configured group targets`, false);
     }
 
     const dmPolicy = typeof section.dmPolicy === "string" ? section.dmPolicy : null;
     if (dmPolicy === "open") {
-      out.add(`${basePath}.dmPolicy="open"`);
+      push(`${basePath}.dmPolicy="open"`, true);
     }
 
     const allowFrom = Array.isArray(section.allowFrom) ? section.allowFrom : [];
     if (allowFrom.some((entry) => isWildcardEntry(entry))) {
-      out.add(`${basePath}.allowFrom includes "*"`);
+      push(`${basePath}.allowFrom includes "*"`, true);
     }
 
     const groupAllowFrom = Array.isArray(section.groupAllowFrom) ? section.groupAllowFrom : [];
     if (groupAllowFrom.some((entry) => isWildcardEntry(entry))) {
-      out.add(`${basePath}.groupAllowFrom includes "*"`);
+      push(`${basePath}.groupAllowFrom includes "*"`, true);
     }
 
     const dm = section.dm;
@@ -318,11 +332,11 @@ function listPotentialMultiUserSignals(cfg: OpenClawConfig): string[] {
       const dmSection = dm as Record<string, unknown>;
       const dmLegacyPolicy = typeof dmSection.policy === "string" ? dmSection.policy : null;
       if (dmLegacyPolicy === "open") {
-        out.add(`${basePath}.dm.policy="open"`);
+        push(`${basePath}.dm.policy="open"`, true);
       }
       const dmAllowFrom = Array.isArray(dmSection.allowFrom) ? dmSection.allowFrom : [];
       if (dmAllowFrom.some((entry) => isWildcardEntry(entry))) {
-        out.add(`${basePath}.dm.allowFrom includes "*"`);
+        push(`${basePath}.dm.allowFrom includes "*"`, true);
       }
     }
   };
@@ -348,7 +362,7 @@ function listPotentialMultiUserSignals(cfg: OpenClawConfig): string[] {
     }
   }
 
-  return Array.from(out);
+  return out;
 }
 
 function collectRiskyToolExposureContexts(cfg: OpenClawConfig): {
@@ -548,12 +562,18 @@ export function collectHooksHardeningFindings(
   }
 
   if (allowRequestSessionKey) {
+    const prefixesConstrained = allowedPrefixes.length > 0;
+    const enabledSeverity = prefixesConstrained ? "info" : remoteExposure ? "critical" : "warn";
+    const enabledDetail = prefixesConstrained
+      ? `hooks.allowRequestSessionKey=true with allowedSessionKeyPrefixes=${JSON.stringify(allowedPrefixes)}. Hook token holders can pick any session key matching one of those prefixes; double-check the prefixes can only target intended sessions.`
+      : "hooks.allowRequestSessionKey=true allows `/hooks/agent` callers to choose the session key. Treat hook token holders as full-trust unless you also restrict prefixes.";
     findings.push({
       checkId: "hooks.request_session_key_enabled",
-      severity: remoteExposure ? "critical" : "warn",
-      title: "External hook payloads may override sessionKey",
-      detail:
-        "hooks.allowRequestSessionKey=true allows `/hooks/agent` callers to choose the session key. Treat hook token holders as full-trust unless you also restrict prefixes.",
+      severity: enabledSeverity,
+      title: prefixesConstrained
+        ? "External hook payloads may override sessionKey within configured prefixes"
+        : "External hook payloads may override sessionKey",
+      detail: enabledDetail,
       remediation:
         "Set hooks.allowRequestSessionKey=false (recommended) or constrain hooks.allowedSessionKeyPrefixes.",
     });
@@ -1055,7 +1075,12 @@ export function collectExposureMatrixFindings(cfg: OpenClawConfig): SecurityAudi
 export function collectLikelyMultiUserSetupFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
   const signals = listPotentialMultiUserSignals(cfg);
-  if (signals.length === 0) {
+  // Only fire when at least one broadening signal exists (open policy or
+  // wildcard allow-list). Scoped signals (allowlist with configured targets)
+  // are normal for single-operator-multi-agent setups (#26859) and should not
+  // trigger the heuristic on their own.
+  const hasBroadeningSignal = signals.some((signal) => signal.broadening);
+  if (!hasBroadeningSignal) {
     return findings;
   }
 
@@ -1074,7 +1099,7 @@ export function collectLikelyMultiUserSetupFindings(cfg: OpenClawConfig): Securi
     title: "Potential multi-user setup detected (personal-assistant model warning)",
     detail:
       "Heuristic signals indicate this gateway may be reachable by multiple users:\n" +
-      signals.map((signal) => `- ${signal}`).join("\n") +
+      signals.map((signal) => `- ${signal.label}`).join("\n") +
       `\n${impactLine}\n${riskyContextsDetail}\n` +
       "OpenClaw's default security model is personal-assistant (one trusted operator boundary), not hostile multi-tenant isolation on one shared gateway.",
     remediation:

@@ -5,7 +5,7 @@ import { collectHooksHardeningFindings } from "./audit-extra.sync.js";
 function hasFinding(
   findings: ReturnType<typeof collectHooksHardeningFindings>,
   checkId: string,
-  severity: "warn" | "critical",
+  severity: "info" | "warn" | "critical",
 ) {
   return findings.some((finding) => finding.checkId === checkId && finding.severity === severity);
 }
@@ -92,6 +92,29 @@ describe("security audit hooks ingress findings", () => {
         } satisfies OpenClawConfig,
         expectedFinding: "hooks.request_session_key_enabled",
         expectedSeverity: "critical" as const,
+      },
+      {
+        name: "downgrades hooks request sessionKey override to info when prefixes are constrained",
+        cfg: {
+          hooks: {
+            ...requestSessionKeyHooks,
+            allowedSessionKeyPrefixes: ["hook:gmail:", "hook:github:"],
+          },
+        } satisfies OpenClawConfig,
+        expectedFinding: "hooks.request_session_key_enabled",
+        expectedSeverity: "info" as const,
+      },
+      {
+        name: "stays at info when prefixes are constrained even with remote exposure",
+        cfg: {
+          gateway: { bind: "lan" },
+          hooks: {
+            ...requestSessionKeyHooks,
+            allowedSessionKeyPrefixes: ["hook:"],
+          },
+        } satisfies OpenClawConfig,
+        expectedFinding: "hooks.request_session_key_enabled",
+        expectedSeverity: "info" as const,
       },
     ] as const;
 
