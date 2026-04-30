@@ -154,8 +154,11 @@ function resolveBlockDownload(block: Record<string, unknown>): {
   const dataUrl = [url, sourceUrl, imageUrl, audioUrl, data, content, sourceData].find(
     (value) => typeof value === "string" && /^data:/i.test(value),
   );
-  const base64 =
-    (dataUrl ? base64FromDataUrl(dataUrl) : undefined) ?? data ?? sourceData ?? content;
+  const base64FromDetectedDataUrl = dataUrl ? base64FromDataUrl(dataUrl) : undefined;
+  const directBase64 = [data, sourceData, content].find(
+    (value) => typeof value === "string" && !/^data:/i.test(value),
+  );
+  const base64 = base64FromDetectedDataUrl ?? directBase64;
   const remoteUrl = [url, sourceUrl, imageUrl, audioUrl].find(
     (value) => typeof value === "string" && isSafeDownloadUrl(value),
   );
