@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Models: suppress explicitly configured openai-codex/gpt-5.4-mini inline entries so a stale models config written by `openclaw doctor --fix` cannot bypass the manifest capability block and cause repeated assistant-turn failures when the runtime switches to that model on ChatGPT-backed Codex accounts. Conditional suppressions (e.g. qwen Coding Plan endpoint guards) remain bypassable by explicit user configuration. (#74451) Thanks @0xCyda, @hclsys, and @Marvae.
 - Dependencies: refresh workspace runtime, plugin, and tooling packages, including ACP, Pi, AWS SDK, TypeBox, pnpm, oxlint, oxfmt, jsdom, pdfjs, ciao, and tokenjuice, while keeping patched ACP behavior and lint gates current. Thanks @mariozechner.
 - Messages/queue: make `steer` drain all pending Pi steering messages at the next model boundary, keep legacy one-at-a-time steering as `queue`, and add a dedicated steering queue docs page. Thanks @vincentkoc.
 - Messages/queue: default active-run queueing to `steer` with a 500ms followup fallback debounce, and document the queue modes, precedence, and drop policies on the command queue page. Thanks @vincentkoc.
@@ -30,7 +31,9 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- CLI/status: resolve read-only channel setup runtime fallback from the packaged OpenClaw dist root, so `status --all`, `status --deep`, channel, and doctor paths do not crash when an external channel plugin needs setup metadata. Fixes #74693. Thanks @giangthb.
 - CLI/update: scope packaged Node compile caches by OpenClaw version and install metadata, so global installs no longer reuse stale compiled chunks after package updates. Thanks @pashpashpash.
+- Channels/Voice call: keep pre-auth webhook in-flight limiting active when socket remote address metadata is missing, so slow-body requests from stripped-IP proxy paths still share the fallback bucket. (#74453) Thanks @davidangularme.
 - Plugin SDK/testing: lazy-load TypeScript from the plugin test-contract runtime and add release checks for critical SDK contract entrypoint imports and bundle size, so published packages fail preflight before shipping ESM-incompatible or oversized contract helpers. Thanks @vincentkoc.
 - Channels/Microsoft Teams: treat configured `19:...@thread.tacv2` and legacy `19:...@thread.skype` team/channel IDs as already resolved during startup, avoiding false `channels unresolved` warnings while preserving Graph name lookup for display-name entries. Fixes #74683. Thanks @dseravalli.
 - CLI/browser: preserve parent flags while lazy-loading browser subcommands, so `openclaw browser --json open` and `openclaw browser --json tabs` keep machine-readable output after reparsing. Fixes #74574. Thanks @devintegeritsm.
@@ -60,6 +63,7 @@ Docs: https://docs.openclaw.ai
 - Ollama: keep explicit local model runs on target-provider runtime hooks when PI discovery is skipped, so one-shot Ollama calls no longer cold-load unrelated provider runtimes before streaming. Fixes #74078. Thanks @sakalaboator.
 - Slack/prompts: rely on Slack `interactiveReplies` guidance instead of generic `inlineButtons` config hints so enabled Slack button directives are not contradicted. Fixes #46647. Thanks @jeremykoerber.
 - Slack/reactions: treat duplicate `already_reacted` responses as idempotent success so repeated agent reaction adds no longer surface as tool failures. Fixes #69005. Thanks @shipitsteven and @martingarramon.
+- Channels/Discord: cool down Cloudflare/Error 1015 HTML 429 REST failures during startup application lookup and gateway metadata fetches, add `channels.discord.applicationId` as an app-id lookup bypass, sanitize HTML bodies before logging, and honor Retry-After before falling back to a conservative cooldown. Fixes #38853. (#74489) Thanks @djgeorg3 and @Garyko0730.
 - Slack/tools: expose `fileId` in the shared message tool schema so `download-file` can receive Slack attachment IDs from inbound placeholders. Fixes #45574. Thanks @chadvegas.
 - Exec: reject invalid per-call `host` values instead of silently falling back to the default target, so hostname-like values fail before commands run. Fixes #74426. Thanks @scr00ge-00 and @vyctorbrzezowski.
 - Google/Gemini: send non-empty placeholder content when a Gemini run is triggered with empty or filtered user content, avoiding `contents is not specified` API errors. Thanks @CaoYuhaoCarl.
