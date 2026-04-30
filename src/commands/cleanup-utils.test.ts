@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, test, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
@@ -88,6 +90,41 @@ describe("cleanup path removals", () => {
     expect(joinedLogs).toContain("/tmp/openclaw-cleanup/state");
     expect(joinedLogs).toContain("/tmp/openclaw-cleanup/oauth");
     expect(joinedLogs).not.toContain("openclaw.json");
+  });
+
+  it("preserves nested workspace paths during state-only removal", async () => {
+    const runtime = createRuntimeMock();
+    const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cleanup-"));
+    const stateDir = path.join(tmpRoot, ".openclaw");
+    const workspaceDir = path.join(stateDir, "workspace");
+    const workspaceFile = path.join(workspaceDir, "project.txt");
+    const configPath = path.join(stateDir, "openclaw.json");
+    const cacheFile = path.join(stateDir, "cache.json");
+
+    try {
+      await fs.mkdir(workspaceDir, { recursive: true });
+      await fs.writeFile(workspaceFile, "keep me");
+      await fs.writeFile(configPath, "{}");
+      await fs.writeFile(cacheFile, "remove me");
+
+      await removeStateAndLinkedPaths(
+        {
+          stateDir,
+          configPath,
+          oauthDir: path.join(stateDir, "credentials"),
+          configInsideState: true,
+          oauthInsideState: true,
+        },
+        runtime,
+        { preservePaths: [workspaceDir] },
+      );
+
+      await expect(fs.readFile(workspaceFile, "utf8")).resolves.toBe("keep me");
+      await expect(fs.stat(configPath)).rejects.toThrow();
+      await expect(fs.stat(cacheFile)).rejects.toThrow();
+    } finally {
+      await fs.rm(tmpRoot, { recursive: true, force: true });
+    }
   });
 
   it("removes every workspace directory", async () => {
