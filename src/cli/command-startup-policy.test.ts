@@ -115,13 +115,16 @@ describe("command-startup-policy", () => {
     ).toBe(true);
     expect(
       shouldLoadPluginsForCommandPath({
+        commandPath: ["agents"],
+        jsonOutputMode: false,
+      }),
+    ).toBe(false);
+    expect(
+      shouldLoadPluginsForCommandPath({
         commandPath: ["agents", "list"],
         jsonOutputMode: false,
       }),
-    ).toBe(true);
-    // text-only opts agents list out of plugin preload in --json mode so
-    // dashboards/scripts that poll this command don't pay the bundled-plugin
-    // import waterfall when they only consume config-derived fields. (#71739)
+    ).toBe(false);
     expect(
       shouldLoadPluginsForCommandPath({
         commandPath: ["agents", "list"],

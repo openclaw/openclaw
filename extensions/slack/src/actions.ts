@@ -3,15 +3,13 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolveSlackAccount } from "./accounts.js";
-import { buildSlackBlocksFallbackText } from "./blocks-fallback.js";
 import { validateSlackBlocksArray } from "./blocks-input.js";
 import { createSlackWebClient, getSlackWriteClient } from "./client.js";
-import { SLACK_TEXT_LIMIT } from "./limits.js";
+import { buildSlackEditTextPayload } from "./edit-text.js";
 import { resolveSlackMedia } from "./monitor/media.js";
 import type { SlackMediaResult } from "./monitor/media.js";
 import { sendMessageSlack } from "./send.js";
 import { resolveSlackBotToken } from "./token.js";
-import { truncateSlackText } from "./truncate.js";
 
 export type SlackActionClientOpts = {
   cfg?: OpenClawConfig;
@@ -232,13 +230,10 @@ export async function editSlackMessage(
 ) {
   const client = await getClient(opts, "write");
   const blocks = opts.blocks == null ? undefined : validateSlackBlocksArray(opts.blocks);
-  const trimmedContent = content.trim();
   await client.chat.update({
     channel: channelId,
     ts: messageId,
-    text:
-      trimmedContent ||
-      (blocks ? truncateSlackText(buildSlackBlocksFallbackText(blocks), SLACK_TEXT_LIMIT) : " "),
+    text: buildSlackEditTextPayload(content, blocks),
     ...(blocks ? { blocks } : {}),
   });
 }

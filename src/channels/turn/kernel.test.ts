@@ -127,6 +127,40 @@ describe("channel turn kernel", () => {
     );
   });
 
+  it("suppresses direct prepared dispatches for observe-only admission", async () => {
+    const events: string[] = [];
+    const recordInboundSession = createRecordInboundSession(events);
+    const runDispatch = vi.fn(async () => {
+      events.push("dispatch");
+      return {
+        queuedFinal: true,
+        counts: { tool: 0, block: 0, final: 1 },
+      };
+    });
+    const observeOnlyDispatchResult = {
+      queuedFinal: false,
+      counts: { tool: 0, block: 0, final: 0 },
+    };
+
+    const result = await runPreparedChannelTurn({
+      channel: "test",
+      routeSessionKey: "agent:observer:test:peer",
+      storePath: "/tmp/sessions.json",
+      ctxPayload: createCtx({ SessionKey: "agent:observer:test:peer" }),
+      recordInboundSession,
+      runDispatch,
+      observeOnlyDispatchResult,
+      admission: { kind: "observeOnly", reason: "broadcast-observer" },
+    });
+
+    expect(events).toEqual(["record"]);
+    expect(runDispatch).not.toHaveBeenCalled();
+    expect(result.admission).toEqual({ kind: "observeOnly", reason: "broadcast-observer" });
+    expect(result.dispatched).toBe(true);
+    expect(result.dispatchResult).toBe(observeOnlyDispatchResult);
+    expect(hasFinalChannelTurnDispatch(result.dispatchResult)).toBe(false);
+  });
+
   it("clears pending group history after a successful prepared turn", async () => {
     const historyMap = new Map([["room-1", [{ sender: "User", body: "queued before reply" }]]]);
 
