@@ -114,7 +114,8 @@ export async function runCursorSdkAgent(
     );
   }
   const workspaceDir = workspaceResolution.workspaceDir;
-  const modelId = (params.model ?? DEFAULT_MODEL).trim() || DEFAULT_MODEL;
+  const cursorSdkConfig = params.config?.agents?.defaults?.cursorSdk;
+  const modelId = (params.model ?? cursorSdkConfig?.model ?? DEFAULT_MODEL).trim() || DEFAULT_MODEL;
 
   const apiKey = await resolveAgentApiKey({
     config: params.config,
@@ -126,7 +127,6 @@ export async function runCursorSdkAgent(
   loadedSdkModule = sdk;
   const { Agent } = sdk;
 
-  const cursorSdkConfig = params.config?.agents?.defaults?.cursorSdk;
   const runtime = cursorSdkConfig?.runtime ?? "local";
 
   log.info(
@@ -134,13 +134,13 @@ export async function runCursorSdkAgent(
   );
 
   const agentOptions =
-    runtime === "cloud" && cursorSdkConfig?.cloud
+    runtime === "cloud"
       ? {
           apiKey,
           model: { id: modelId },
           cloud: {
-            repos: cursorSdkConfig.cloud.repos ?? [],
-            autoCreatePR: cursorSdkConfig.cloud.autoCreatePR,
+            repos: cursorSdkConfig?.cloud?.repos ?? [],
+            autoCreatePR: cursorSdkConfig?.cloud?.autoCreatePR,
           },
         }
       : {
@@ -155,15 +155,52 @@ export async function runCursorSdkAgent(
   try {
     const run = await agent.send(params.prompt);
     let text = "";
+    let timedOut = false;
 
-    for await (const event of run.stream()) {
-      text += collectAssistantText(event);
+    const timeoutHandle = setTimeout(() => {
+      timedOut = true;
+      run.cancel().catch(() => {});
+    }, params.timeoutMs);
+
+    try {
+      for await (const event of run.stream()) {
+        text += collectAssistantText(event);
+      }
+    } finally {
+      clearTimeout(timeoutHandle);
+    }
+
+    if (timedOut) {
+      throw new FailoverError(`Cursor SDK agent timed out after ${params.timeoutMs}ms`, {
+        reason: "timeout",
+        provider: params.provider,
+        model: modelId,
+        status: resolveFailoverStatus("timeout"),
+      });
     }
 
     const result = await run.wait();
+    const durationMs = run.durationMs ?? Date.now() - started;
+
+    if (result.status === "error") {
+      throw new FailoverError(`Cursor SDK run finished with status: ${result.status}`, {
+        reason: "unclassified",
+        provider: params.provider,
+        model: modelId,
+        status: resolveFailoverStatus("unclassified"),
+      });
+    }
+    if (result.status === "cancelled") {
+      throw new FailoverError("Cursor SDK run was cancelled", {
+        reason: "unclassified",
+        provider: params.provider,
+        model: modelId,
+        status: resolveFailoverStatus("unclassified"),
+      });
+    }
+
     const trimmedText = text.trim() || result.result?.trim() || "";
     const payloads = trimmedText ? [{ text: trimmedText }] : undefined;
-    const durationMs = run.durationMs ?? Date.now() - started;
 
     log.info(
       `cursor-sdk done: runtime=${runtime} model=${modelId} durationMs=${durationMs} textLen=${trimmedText.length} run=${params.runId}`,

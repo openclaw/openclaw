@@ -57,12 +57,20 @@ describe("runCursorSdkAgent", () => {
     vi.clearAllMocks();
   });
 
-  function makeFakeAgent(overrides?: { sendResult?: unknown; sendError?: Error }) {
+  function makeFakeAgent(overrides?: {
+    sendResult?: unknown;
+    sendError?: Error;
+    runStatus?: string;
+    streamDelay?: number;
+  }) {
     const fakeRun = {
       id: "cursor-run-123",
       durationMs: 42,
       stream: () => ({
         [Symbol.asyncIterator]: async function* () {
+          if (overrides?.streamDelay) {
+            await new Promise((r) => setTimeout(r, overrides.streamDelay));
+          }
           yield {
             type: "assistant",
             message: {
@@ -71,9 +79,12 @@ describe("runCursorSdkAgent", () => {
           };
         },
       }),
-      wait: vi
-        .fn()
-        .mockResolvedValue({ id: "r1", status: "finished", result: "Hello from Cursor!" }),
+      wait: vi.fn().mockResolvedValue({
+        id: "r1",
+        status: overrides?.runStatus ?? "finished",
+        result: "Hello from Cursor!",
+      }),
+      cancel: vi.fn().mockResolvedValue(undefined),
     };
 
     const agent = {
@@ -294,6 +305,138 @@ describe("runCursorSdkAgent", () => {
       expect(err).toBeInstanceOf(FailoverError);
       expect((err as FailoverError).reason).toBe("rate_limit");
     }
+  });
+
+  it("throws FailoverError when run finishes with error status", async () => {
+    resolveApiKeyForProvider.mockResolvedValue({
+      apiKey: "test-key",
+      source: "env: CURSOR_API_KEY",
+    });
+
+    const { agent } = makeFakeAgent({ runStatus: "error" });
+    const mockCreate = await getMockCreate();
+    mockCreate.mockResolvedValue(agent);
+
+    const { runCursorSdkAgent } = await import("./cursor-sdk-runner.js");
+
+    try {
+      await runCursorSdkAgent({
+        sessionId: "s-err",
+        sessionFile: "/tmp/s.json",
+        workspaceDir: "/tmp/ws",
+        prompt: "test",
+        provider: "cursor-sdk",
+        timeoutMs: 10000,
+        runId: "r-err",
+      });
+      expect.unreachable("should have thrown");
+    } catch (err) {
+      expect(err).toBeInstanceOf(FailoverError);
+      expect((err as FailoverError).reason).toBe("unclassified");
+    }
+  });
+
+  it("throws FailoverError when run finishes with cancelled status", async () => {
+    resolveApiKeyForProvider.mockResolvedValue({
+      apiKey: "test-key",
+      source: "env: CURSOR_API_KEY",
+    });
+
+    const { agent } = makeFakeAgent({ runStatus: "cancelled" });
+    const mockCreate = await getMockCreate();
+    mockCreate.mockResolvedValue(agent);
+
+    const { runCursorSdkAgent } = await import("./cursor-sdk-runner.js");
+
+    try {
+      await runCursorSdkAgent({
+        sessionId: "s-cancel",
+        sessionFile: "/tmp/s.json",
+        workspaceDir: "/tmp/ws",
+        prompt: "test",
+        provider: "cursor-sdk",
+        timeoutMs: 10000,
+        runId: "r-cancel",
+      });
+      expect.unreachable("should have thrown");
+    } catch (err) {
+      expect(err).toBeInstanceOf(FailoverError);
+    }
+  });
+
+  it("builds cloud options when runtime=cloud without a cloud config block", async () => {
+    resolveApiKeyForProvider.mockResolvedValue({
+      apiKey: "test-key",
+      source: "env: CURSOR_API_KEY",
+    });
+
+    const { agent } = makeFakeAgent();
+    const mockCreate = await getMockCreate();
+    mockCreate.mockResolvedValue(agent);
+
+    const { runCursorSdkAgent } = await import("./cursor-sdk-runner.js");
+
+    await runCursorSdkAgent({
+      sessionId: "s-cloud-bare",
+      sessionFile: "/tmp/s.json",
+      workspaceDir: "/tmp/ws",
+      prompt: "test cloud bare",
+      provider: "cursor-sdk",
+      timeoutMs: 10000,
+      runId: "r-cloud-bare",
+      config: {
+        agents: {
+          defaults: {
+            cursorSdk: { runtime: "cloud" },
+          },
+        },
+      } as any,
+    });
+
+    expect(mockCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cloud: { repos: [], autoCreatePR: undefined },
+      }),
+    );
+    expect(mockCreate).not.toHaveBeenCalledWith(
+      expect.objectContaining({ local: expect.anything() }),
+    );
+  });
+
+  it("honors cursorSdk.model from config when params.model is not set", async () => {
+    resolveApiKeyForProvider.mockResolvedValue({
+      apiKey: "test-key",
+      source: "env: CURSOR_API_KEY",
+    });
+
+    const { agent } = makeFakeAgent();
+    const mockCreate = await getMockCreate();
+    mockCreate.mockResolvedValue(agent);
+
+    const { runCursorSdkAgent } = await import("./cursor-sdk-runner.js");
+
+    await runCursorSdkAgent({
+      sessionId: "s-cfg-model",
+      sessionFile: "/tmp/s.json",
+      workspaceDir: "/tmp/ws",
+      prompt: "test config model",
+      provider: "cursor-sdk",
+      timeoutMs: 10000,
+      runId: "r-cfg-model",
+      config: {
+        agents: {
+          defaults: {
+            cursorSdk: { model: "composer-2-fast" },
+          },
+        },
+      } as any,
+    });
+
+    expect(mockCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: { id: "composer-2-fast" },
+      }),
+    );
   });
 
   it("classifies AuthenticationError as auth failover reason", async () => {
