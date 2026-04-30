@@ -708,6 +708,44 @@ describe("stageBundledPluginRuntimeDeps", () => {
     );
   });
 
+  it("replaces legacy OpenClaw-owned symlinked plugin node_modules", () => {
+    const { pluginDir, repoRoot } = createBundledPluginFixture({
+      packageJson: {
+        name: "@openclaw/fixture-plugin",
+        version: "1.0.0",
+        dependencies: { direct: "1.0.0" },
+        openclaw: { bundle: { stageRuntimeDependencies: true } },
+      },
+    });
+    const directDir = path.join(repoRoot, "node_modules", "direct");
+    const legacyNodeModulesDir = path.join(
+      repoRoot,
+      ".local",
+      "bundled-plugin-runtime-deps",
+      "fixture-plugin-1234567890abcdef",
+      "node_modules",
+    );
+    const nodeModulesDir = path.join(pluginDir, "node_modules");
+    fs.mkdirSync(directDir, { recursive: true });
+    fs.mkdirSync(legacyNodeModulesDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(directDir, "package.json"),
+      '{ "name": "direct", "version": "1.0.0" }\n',
+      "utf8",
+    );
+    fs.writeFileSync(path.join(directDir, "index.js"), "module.exports = 'direct';\n", "utf8");
+    fs.writeFileSync(path.join(legacyNodeModulesDir, "legacy.js"), "module.exports = 0;\n", "utf8");
+    fs.symlinkSync(legacyNodeModulesDir, nodeModulesDir);
+
+    stageBundledPluginRuntimeDeps({ cwd: repoRoot });
+
+    expect(fs.lstatSync(nodeModulesDir).isSymbolicLink()).toBe(false);
+    expect(fs.readFileSync(path.join(nodeModulesDir, "direct", "index.js"), "utf8")).toBe(
+      "module.exports = 'direct';\n",
+    );
+    expect(fs.existsSync(path.join(legacyNodeModulesDir, "legacy.js"))).toBe(true);
+  });
+
   it("refuses to write a runtime deps stamp through a symlink", () => {
     const { repoRoot } = createBundledPluginFixture({
       packageJson: {
