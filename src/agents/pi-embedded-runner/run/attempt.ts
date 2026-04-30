@@ -268,7 +268,7 @@ import {
   resolveAttemptPrependSystemContext,
   resolvePromptBuildHookResult,
   resolvePromptModeForSession,
-  hasPromptSubmissionContent,
+  resolvePromptSubmissionSkipReason,
   shouldWarnOnOrphanedUserRepair,
   shouldInjectHeartbeatPrompt,
 } from "./attempt.prompt-helpers.js";
@@ -2677,23 +2677,26 @@ export async function runEmbeddedAttempt(
             transcriptLeafId,
           });
 
-          if (
-            !skipPromptSubmission &&
-            !promptSubmission.runtimeOnly &&
-            !hasPromptSubmissionContent({
-              prompt: promptSubmission.prompt,
-              messages: activeSession.messages,
-              imageCount: imageResult.images.length,
-            })
-          ) {
+          const promptSkipReason = skipPromptSubmission
+            ? null
+            : resolvePromptSubmissionSkipReason({
+                prompt: promptSubmission.prompt,
+                messages: activeSession.messages,
+                runtimeOnly: promptSubmission.runtimeOnly,
+                imageCount: imageResult.images.length,
+              });
+          if (promptSkipReason) {
             skipPromptSubmission = true;
-            log.info(
-              `embedded run prompt skipped: empty prompt/history/images ` +
-                `runId=${params.runId} sessionId=${params.sessionId} trigger=${params.trigger} ` +
-                `provider=${params.provider}/${params.modelId}`,
-            );
+            const skipContext =
+              `runId=${params.runId} sessionId=${params.sessionId} trigger=${params.trigger} ` +
+              `provider=${params.provider}/${params.modelId}`;
+            if (promptSkipReason === "blank_user_prompt") {
+              log.warn(`embedded run prompt skipped: blank user prompt ${skipContext}`);
+            } else {
+              log.info(`embedded run prompt skipped: empty prompt/history/images ${skipContext}`);
+            }
             trajectoryRecorder?.recordEvent("prompt.skipped", {
-              reason: "empty_prompt_history_images",
+              reason: promptSkipReason,
               prompt: promptSubmission.prompt,
               messages: activeSession.messages,
               imagesCount: imageResult.images.length,
