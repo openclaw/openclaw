@@ -113,10 +113,10 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
       sweepScript.indexOf("run_success_scenario()"),
       sweepScript.indexOf("run_failure_scenario()"),
     );
-    expect(successScenario.indexOf('plugins install "$KITCHEN_SINK_SPEC"')).toBeLessThan(
-      successScenario.indexOf("configure_kitchen_sink_runtime"),
-    );
     expect(successScenario.indexOf("configure_kitchen_sink_runtime")).toBeLessThan(
+      successScenario.indexOf('plugins install "$KITCHEN_SINK_SPEC"'),
+    );
+    expect(successScenario.indexOf('plugins install "$KITCHEN_SINK_SPEC"')).toBeLessThan(
       successScenario.indexOf('plugins enable "$KITCHEN_SINK_ID"'),
     );
     expect(sweepScript).toContain("run_failure_scenario");
@@ -124,6 +124,10 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     expect(assertionsScript).toContain("record.clawhubPackage !== packageName");
     expect(assertionsScript).toContain("assertClawHubExternalInstallContract");
     expect(assertionsScript).toContain("expectedErrorMessages");
+    expect(assertionsScript).toContain('surfaceMode !== "full" && surfaceMode !== "adversarial"');
+    expect(assertionsScript).not.toContain(
+      'surfaceMode !== "full" && surfaceMode !== "conformance"',
+    );
     expect(readFileSync("scripts/e2e/lib/clawhub-fixture-server.cjs", "utf8")).toContain(
       'from "openclaw/plugin-sdk/plugin-entry"',
     );
