@@ -124,9 +124,23 @@ fun CanvasScreen(
             val headers = viewModel.canvas.getAuthHeaders()
             if (headers.isEmpty()) return super.shouldInterceptRequest(view, request)
 
+            val remoteAddress = viewModel.remoteAddress.value
+            if (remoteAddress == null) return super.shouldInterceptRequest(view, request)
+
+            val uri = request.url
+            val host = uri.host ?: return super.shouldInterceptRequest(view, request)
+            val port = if (uri.port != -1) uri.port else if (uri.scheme == "https") 443 else 80
+            val normalizedHost = host.trim().trim('[', ']')
+            val requestAuthority = if (normalizedHost.contains(":")) "[$normalizedHost]:$port" else "$normalizedHost:$port"
+
+            if (requestAuthority != remoteAddress) {
+              return super.shouldInterceptRequest(view, request)
+            }
+
             return try {
               val conn = java.net.URL(urlStr).openConnection() as java.net.HttpURLConnection
               conn.requestMethod = request.method
+              conn.instanceFollowRedirects = false
               request.requestHeaders.forEach { (key, value) ->
                 conn.setRequestProperty(key, value)
               }

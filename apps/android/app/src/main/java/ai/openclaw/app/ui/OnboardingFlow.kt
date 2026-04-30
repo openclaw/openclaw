@@ -942,6 +942,9 @@ fun OnboardingFlow(
                   val basicUser = gatewayBasicAuthUser.trim()
                   val basicPass = gatewayBasicAuthPassword.trim()
                   viewModel.setGatewayPassword(password)
+                  viewModel.setGatewayBearerToken(bearerToken)
+                  viewModel.setGatewayBasicAuthUser(basicUser)
+                  viewModel.setGatewayBasicAuthPassword(basicPass)
                   viewModel.connect(
                     GatewayEndpoint.manual(host = parsed.config.host, port = parsed.config.port),
                     token = token.ifEmpty { null },

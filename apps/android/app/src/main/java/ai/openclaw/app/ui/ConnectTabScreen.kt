@@ -307,6 +307,9 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
             viewModel.setGatewayToken("")
           }
           viewModel.setGatewayPassword(config.password)
+          viewModel.setGatewayBearerToken(bearerTokenInput)
+          viewModel.setGatewayBasicAuthUser(basicAuthUserInput)
+          viewModel.setGatewayBasicAuthPassword(basicAuthPasswordInput)
           viewModel.connect(
             GatewayEndpoint.manual(host = config.host, port = config.port),
             token = config.token.ifEmpty { null },
