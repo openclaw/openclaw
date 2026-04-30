@@ -1,7 +1,39 @@
 {
   "id": "xai",
+  "activation": {
+    "onStartup": false
+  },
   "enabledByDefault": true,
   "providers": ["xai"],
+  "providerDiscoveryEntry": "./provider-discovery.ts",
+  "modelIdNormalization": {
+    "providers": {
+      "xai": {
+        "aliases": {
+          "grok-4-fast-reasoning": "grok-4-fast",
+          "grok-4-1-fast-reasoning": "grok-4-1-fast",
+          "grok-4.20-experimental-beta-0304-reasoning": "grok-4.20-beta-latest-reasoning",
+          "grok-4.20-experimental-beta-0304-non-reasoning": "grok-4.20-beta-latest-non-reasoning",
+          "grok-4.20-reasoning": "grok-4.20-beta-latest-reasoning",
+          "grok-4.20-non-reasoning": "grok-4.20-beta-latest-non-reasoning"
+        }
+      }
+    }
+  },
+  "providerEndpoints": [
+    {
+      "endpointClass": "xai-native",
+      "hosts": ["api.x.ai", "api.grok.x.ai"]
+    }
+  ],
+  "providerRequest": {
+    "providers": {
+      "xai": {
+        "family": "xai"
+      }
+    }
+  },
+  "syntheticAuthRefs": ["xai"],
   "providerAuthEnvVars": {
     "xai": ["XAI_API_KEY"]
   },
@@ -38,6 +70,30 @@
       "label": "Enable Code Execution",
       "help": "Enable the code_execution tool for remote xAI sandbox analysis."
     },
+    "xSearch.enabled": {
+      "label": "Enable X Search",
+      "help": "Enable the x_search tool for searching X posts with xAI."
+    },
+    "xSearch.model": {
+      "label": "X Search Model",
+      "help": "xAI model override for x_search."
+    },
+    "xSearch.inlineCitations": {
+      "label": "X Search Inline Citations",
+      "help": "Keep inline markdown citations from xAI in x_search responses when available."
+    },
+    "xSearch.maxTurns": {
+      "label": "X Search Max Turns",
+      "help": "Optional max internal tool turns xAI may use per x_search request."
+    },
+    "xSearch.timeoutSeconds": {
+      "label": "X Search Timeout",
+      "help": "Timeout in seconds for x_search requests."
+    },
+    "xSearch.cacheTtlMinutes": {
+      "label": "X Search Cache TTL",
+      "help": "Cache TTL in minutes for x_search results."
+    },
     "codeExecution.model": {
       "label": "Code Execution Model",
       "help": "xAI model override for code_execution."
@@ -53,7 +109,26 @@
   },
   "contracts": {
     "webSearchProviders": ["grok"],
+    "videoGenerationProviders": ["xai"],
+    "mediaUnderstandingProviders": ["xai"],
+    "speechProviders": ["xai"],
+    "realtimeTranscriptionProviders": ["xai"],
+    "imageGenerationProviders": ["xai"],
     "tools": ["code_execution", "x_search"]
+  },
+  "mediaUnderstandingProviderMetadata": {
+    "xai": {
+      "capabilities": ["audio"],
+      "defaultModels": {
+        "audio": "grok-stt"
+      },
+      "autoPriority": {
+        "audio": 25
+      }
+    }
+  },
+  "configContracts": {
+    "compatibilityRuntimePaths": ["tools.web.search.apiKey"]
   },
   "configSchema": {
     "type": "object",
@@ -71,6 +146,30 @@
           },
           "inlineCitations": {
             "type": "boolean"
+          }
+        }
+      },
+      "xSearch": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "model": {
+            "type": "string"
+          },
+          "inlineCitations": {
+            "type": "boolean"
+          },
+          "maxTurns": {
+            "type": "number"
+          },
+          "timeoutSeconds": {
+            "type": "number"
+          },
+          "cacheTtlMinutes": {
+            "type": "number"
           }
         }
       },

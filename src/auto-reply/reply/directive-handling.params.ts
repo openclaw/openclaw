@@ -1,6 +1,7 @@
+import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
 import type { ModelAliasIndex } from "../../agents/model-selection.js";
-import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { MsgContext } from "../templating.js";
 import type { InlineDirectives } from "./directive-handling.parse.js";
 import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "./directives.js";
@@ -23,6 +24,7 @@ export type HandleDirectiveOnlyCoreParams = {
   allowedModelCatalog: Awaited<
     ReturnType<typeof import("../../agents/model-catalog.js").loadModelCatalog>
   >;
+  thinkingCatalog?: ModelCatalogEntry[];
   resetModelOverride: boolean;
   provider: string;
   model: string;
@@ -31,24 +33,30 @@ export type HandleDirectiveOnlyCoreParams = {
 };
 
 export type HandleDirectiveOnlyParams = HandleDirectiveOnlyCoreParams & {
+  ctx?: MsgContext;
   messageProvider?: string;
   currentThinkLevel?: ThinkLevel;
   currentFastMode?: boolean;
   currentVerboseLevel?: VerboseLevel;
   currentReasoningLevel?: ReasoningLevel;
   currentElevatedLevel?: ElevatedLevel;
+  workspaceDir?: string;
   surface?: string;
   gatewayClientScopes?: string[];
+  senderIsOwner?: boolean;
 };
 
 export type ApplyInlineDirectivesFastLaneParams = HandleDirectiveOnlyCoreParams & {
   commandAuthorized: boolean;
+  senderIsOwner: boolean;
   ctx: MsgContext;
+  workspaceDir?: string;
   agentId?: string;
   isGroup: boolean;
   agentCfg?: NonNullable<OpenClawConfig["agents"]>["defaults"];
   modelState: {
     resolveDefaultThinkingLevel: () => Promise<ThinkLevel | undefined>;
+    resolveThinkingCatalog: () => Promise<ModelCatalogEntry[] | undefined>;
     allowedModelKeys: Set<string>;
     allowedModelCatalog: Awaited<
       ReturnType<typeof import("../../agents/model-catalog.js").loadModelCatalog>

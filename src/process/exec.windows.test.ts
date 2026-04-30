@@ -1,18 +1,33 @@
+import type { execFile as execFileType } from "node:child_process";
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-const spawnMock = vi.hoisted(() => vi.fn());
-const execFileMock = vi.hoisted(() => vi.fn());
-
-vi.mock("node:child_process", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:child_process")>();
+const { spawnMock, spawnSyncMock, execFileMock, execFilePromisifyMock } = vi.hoisted(() => {
+  const execFilePromisifyMock = vi.fn();
+  const execFileMock = Object.assign(vi.fn(), {
+    [Symbol.for("nodejs.util.promisify.custom")]: execFilePromisifyMock,
+    __promisify__: execFilePromisifyMock,
+  });
   return {
-    ...actual,
-    spawn: spawnMock,
-    execFile: execFileMock,
+    spawnMock: vi.fn(),
+    spawnSyncMock: vi.fn(),
+    execFileMock,
+    execFilePromisifyMock,
   };
+});
+
+vi.mock("node:child_process", async () => {
+  const { mockNodeBuiltinModule } = await import("openclaw/plugin-sdk/test-node-mocks");
+  return mockNodeBuiltinModule(
+    () => vi.importActual<typeof import("node:child_process")>("node:child_process"),
+    {
+      spawn: spawnMock,
+      spawnSync: spawnSyncMock,
+      execFile: execFileMock as unknown as typeof execFileType,
+    },
+  );
 });
 
 let runCommandWithTimeout: typeof import("./exec.js").runCommandWithTimeout;
@@ -36,6 +51,7 @@ function createMockChild(params?: {
   exitCodeAfterClose?: number | null;
   exitCodeAfterCloseDelayMs?: number;
   signal?: NodeJS.Signals | null;
+  autoClose?: boolean;
 }): MockChild {
   const child = new EventEmitter() as MockChild;
   child.stdout = new EventEmitter();
@@ -49,14 +65,16 @@ function createMockChild(params?: {
   child.kill = vi.fn(() => true);
   child.pid = 1234;
   child.killed = false;
-  queueMicrotask(() => {
-    child.emit("close", params?.closeCode ?? 0, params?.closeSignal ?? params?.signal ?? null);
-    if (params?.exitCodeAfterClose !== undefined) {
-      setTimeout(() => {
-        child.exitCode = params.exitCodeAfterClose ?? null;
-      }, params.exitCodeAfterCloseDelayMs ?? 0);
-    }
-  });
+  if (params?.autoClose !== false) {
+    queueMicrotask(() => {
+      child.emit("close", params?.closeCode ?? 0, params?.closeSignal ?? params?.signal ?? null);
+      if (params?.exitCodeAfterClose !== undefined) {
+        setTimeout(() => {
+          child.exitCode = params.exitCodeAfterClose ?? null;
+        }, params.exitCodeAfterCloseDelayMs ?? 0);
+      }
+    });
+  }
   return child;
 }
 
@@ -79,18 +97,61 @@ function expectCmdWrappedInvocation(params: {
   expect(params.captured[0]).toBe(params.expectedComSpec);
   expect(params.captured[1].slice(0, 3)).toEqual(["/d", "/s", "/c"]);
   expect(params.captured[1][3]).toContain("pnpm.cmd --version");
+  expect(params.captured[2].windowsHide).toBe(true);
   expect(params.captured[2].windowsVerbatimArguments).toBe(true);
 }
 
+async function expectShimmedWindowsCommandWithoutExitCodeSucceeds(params?: { killed?: boolean }) {
+  const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+  const child = createMockChild({
+    closeCode: null,
+    exitCode: null,
+  });
+  child.killed = params?.killed ?? false;
+
+  spawnMock.mockImplementation(() => child);
+
+  try {
+    const result = await runCommandWithTimeout(["npm", "--version"], { timeoutMs: 1000 });
+    expect(result.code).toBe(0);
+    expect(result.signal).toBeNull();
+    expect(result.termination).toBe("exit");
+  } finally {
+    platformSpy.mockRestore();
+  }
+}
+
 describe("windows command wrapper behavior", () => {
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeAll(async () => {
     ({ runCommandWithTimeout, runExec } = await import("./exec.js"));
   });
 
-  afterEach(() => {
+  beforeEach(() => {
     spawnMock.mockReset();
+    spawnSyncMock.mockReset();
+    spawnSyncMock.mockReturnValue({ stdout: "Active code page: 936", stderr: "" });
     execFileMock.mockReset();
+    execFilePromisifyMock.mockReset();
+    execFilePromisifyMock.mockImplementation(
+      (command: string, args: string[], options: Record<string, unknown>) =>
+        new Promise((resolve, reject) => {
+          execFileMock(
+            command,
+            args,
+            options,
+            (err: Error | null, stdout: string | Buffer, stderr: string | Buffer) => {
+              if (err) {
+                reject(err);
+                return;
+              }
+              resolve({ stdout, stderr });
+            },
+          );
+        }),
+    );
+  });
+
+  afterEach(() => {
     vi.restoreAllMocks();
   });
 
@@ -107,6 +168,31 @@ describe("windows command wrapper behavior", () => {
       expect(result.code).toBe(0);
       const captured = spawnMock.mock.calls[0] as SpawnCall | undefined;
       expectCmdWrappedInvocation({ captured, expectedComSpec });
+    } finally {
+      platformSpy.mockRestore();
+    }
+  });
+
+  it("wraps corepack.cmd via cmd.exe in runCommandWithTimeout", async () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    const expectedComSpec = process.env.ComSpec ?? "cmd.exe";
+
+    spawnMock.mockImplementation(
+      (_command: string, _args: string[], _options: Record<string, unknown>) => createMockChild(),
+    );
+
+    try {
+      const result = await runCommandWithTimeout(["corepack", "--version"], { timeoutMs: 1000 });
+      expect(result.code).toBe(0);
+      const captured = spawnMock.mock.calls[0] as SpawnCall | undefined;
+      if (!captured) {
+        throw new Error("expected corepack shim spawn");
+      }
+      expect(captured[0]).toBe(expectedComSpec);
+      expect(captured[1].slice(0, 3)).toEqual(["/d", "/s", "/c"]);
+      expect(captured[1][3]).toContain("corepack.cmd --version");
+      expect(captured[2].windowsHide).toBe(true);
+      expect(captured[2].windowsVerbatimArguments).toBe(true);
     } finally {
       platformSpy.mockRestore();
     }
@@ -145,6 +231,7 @@ describe("windows command wrapper behavior", () => {
         path.join(path.dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js"),
       );
       expect(captured[1][1]).toBe("--version");
+      expect(captured[2].windowsHide).toBe(true);
       expect(captured[2].windowsVerbatimArguments).toBeUndefined();
       expect(captured[2].stdio).toEqual(["inherit", "pipe", "pipe"]);
     } finally {
@@ -172,6 +259,7 @@ describe("windows command wrapper behavior", () => {
       expect(captured[0]).toBe(expectedComSpec);
       expect(captured[1].slice(0, 3)).toEqual(["/d", "/s", "/c"]);
       expect(captured[1][3]).toContain("npm.cmd --version");
+      expect(captured[2].windowsHide).toBe(true);
       expect(captured[2].windowsVerbatimArguments).toBe(true);
       expect(captured[2].stdio).toEqual(["inherit", "pipe", "pipe"]);
     } finally {
@@ -200,42 +288,11 @@ describe("windows command wrapper behavior", () => {
   });
 
   it("treats shimmed Windows commands without a reported exit code as success when they close cleanly", async () => {
-    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-    const child = createMockChild({
-      closeCode: null,
-      exitCode: null,
-    });
-
-    spawnMock.mockImplementation(() => child);
-
-    try {
-      const result = await runCommandWithTimeout(["npm", "--version"], { timeoutMs: 1000 });
-      expect(result.code).toBe(0);
-      expect(result.signal).toBeNull();
-      expect(result.termination).toBe("exit");
-    } finally {
-      platformSpy.mockRestore();
-    }
+    await expectShimmedWindowsCommandWithoutExitCodeSucceeds();
   });
 
   it("treats shimmed Windows commands without a reported exit code as success even when child.killed is true", async () => {
-    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-    const child = createMockChild({
-      closeCode: null,
-      exitCode: null,
-    });
-    child.killed = true;
-
-    spawnMock.mockImplementation(() => child);
-
-    try {
-      const result = await runCommandWithTimeout(["npm", "--version"], { timeoutMs: 1000 });
-      expect(result.code).toBe(0);
-      expect(result.signal).toBeNull();
-      expect(result.termination).toBe("exit");
-    } finally {
-      platformSpy.mockRestore();
-    }
+    await expectShimmedWindowsCommandWithoutExitCodeSucceeds({ killed: true });
   });
 
   it("uses cmd.exe wrapper with windowsVerbatimArguments in runExec for .cmd shims", async () => {
@@ -257,6 +314,131 @@ describe("windows command wrapper behavior", () => {
       await runExec("pnpm", ["--version"], 1000);
       const captured = execFileMock.mock.calls[0] as ExecCall | undefined;
       expectCmdWrappedInvocation({ captured, expectedComSpec });
+    } finally {
+      platformSpy.mockRestore();
+    }
+  });
+
+  it("sets windowsHide on direct runExec invocations too", async () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+
+    execFileMock.mockImplementation(
+      (
+        _command: string,
+        _args: string[],
+        _options: Record<string, unknown>,
+        cb: (err: Error | null, stdout: string, stderr: string) => void,
+      ) => {
+        cb(null, "ok", "");
+      },
+    );
+
+    try {
+      await runExec("node", ["--version"], 1000);
+      const captured = execFileMock.mock.calls[0] as ExecCall | undefined;
+      if (!captured) {
+        throw new Error("expected direct execFile invocation");
+      }
+      expect(captured[0]).toBe("node");
+      expect(captured[1]).toEqual(["--version"]);
+      expect(captured[2].windowsHide).toBe(true);
+    } finally {
+      platformSpy.mockRestore();
+    }
+  });
+
+  it("sets windowsHide on direct runCommandWithTimeout invocations too", async () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+
+    spawnMock.mockImplementation(
+      (_command: string, _args: string[], _options: Record<string, unknown>) => createMockChild(),
+    );
+
+    try {
+      const result = await runCommandWithTimeout(["node", "--version"], { timeoutMs: 1000 });
+      expect(result.code).toBe(0);
+      const captured = spawnMock.mock.calls[0] as SpawnCall | undefined;
+      if (!captured) {
+        throw new Error("expected direct spawn invocation");
+      }
+      expect(captured[0]).toBe("node");
+      expect(captured[1]).toEqual(["--version"]);
+      expect(captured[2].windowsHide).toBe(true);
+      expect(captured[2].windowsVerbatimArguments).toBeUndefined();
+    } finally {
+      platformSpy.mockRestore();
+    }
+  });
+
+  it("decodes GBK stdout and stderr from runExec on Windows", async () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    const stdout = Buffer.from([0xb2, 0xe2, 0xca, 0xd4]);
+    const stderr = Buffer.from([0xa3, 0xbb]);
+
+    execFileMock.mockImplementation(
+      (
+        _command: string,
+        _args: string[],
+        _options: Record<string, unknown>,
+        cb: (err: Error | null, stdout: Buffer, stderr: Buffer) => void,
+      ) => {
+        cb(null, stdout, stderr);
+      },
+    );
+
+    try {
+      const result = await runExec("node", ["gbk-output.js"], 1000);
+      expect(result.stdout).toBe("测试");
+      expect(result.stderr).toBe("；");
+      const captured = execFileMock.mock.calls[0] as ExecCall | undefined;
+      expect(captured?.[2].encoding).toBe("buffer");
+    } finally {
+      platformSpy.mockRestore();
+    }
+  });
+
+  it("prefers valid UTF-8 stdout from runExec on Windows", async () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+
+    execFileMock.mockImplementation(
+      (
+        _command: string,
+        _args: string[],
+        _options: Record<string, unknown>,
+        cb: (err: Error | null, stdout: Buffer, stderr: Buffer) => void,
+      ) => {
+        cb(null, Buffer.from("测试", "utf8"), Buffer.alloc(0));
+      },
+    );
+
+    try {
+      await expect(runExec("node", ["utf8-output.js"], 1000)).resolves.toMatchObject({
+        stdout: "测试",
+      });
+    } finally {
+      platformSpy.mockRestore();
+    }
+  });
+
+  it("decodes spawn stdout once so GBK characters split across chunks survive", async () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    const child = createMockChild({ autoClose: false });
+    spawnMock.mockImplementation(() => {
+      queueMicrotask(() => {
+        child.stdout.emit("data", Buffer.from([0xb2]));
+        child.stdout.emit("data", Buffer.from([0xe2, 0xca]));
+        child.stdout.emit("data", Buffer.from([0xd4]));
+        child.emit("close", 0, null);
+      });
+      return child;
+    });
+
+    try {
+      await expect(
+        runCommandWithTimeout(["node", "gbk-output.js"], { timeoutMs: 1000 }),
+      ).resolves.toMatchObject({
+        stdout: "测试",
+      });
     } finally {
       platformSpy.mockRestore();
     }

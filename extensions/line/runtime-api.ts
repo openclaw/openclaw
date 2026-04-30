@@ -2,16 +2,19 @@
 // Keep this barrel thin and aligned with the local extension surface.
 
 export type {
+  ChannelAccountSnapshot,
   ChannelPlugin,
   OpenClawConfig,
   OpenClawPluginApi,
   PluginRuntime,
 } from "openclaw/plugin-sdk/core";
+export type {
+  ChannelGatewayContext,
+  ChannelStatusIssue,
+} from "openclaw/plugin-sdk/channel-contract";
 export { clearAccountEntryFields } from "openclaw/plugin-sdk/core";
 export { buildChannelConfigSchema } from "openclaw/plugin-sdk/channel-config-schema";
 export type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
-export type { ChannelAccountSnapshot, ChannelGatewayContext } from "openclaw/plugin-sdk/testing";
-export type { ChannelStatusIssue } from "openclaw/plugin-sdk/channel-contract";
 export type { ChannelSetupDmPolicy, ChannelSetupWizard } from "openclaw/plugin-sdk/setup";
 export {
   buildComputedAccountStatusSnapshot,
@@ -23,9 +26,7 @@ export {
   setSetupChannelEnabled,
   splitSetupEntries,
 } from "openclaw/plugin-sdk/setup";
-// Keep named exports explicit here so the runtime barrel stays self-contained
-// and plugin-sdk can re-export this file directly without reaching into
-// extension internals.
+export { setLineRuntime } from "./src/runtime.js";
 export {
   firstDefined,
   isSenderAllowed,
@@ -46,27 +47,88 @@ export {
   sendMessageLine,
 } from "./src/send.js";
 export { monitorLineProvider } from "./src/monitor.js";
-
-export * from "./src/accounts.js";
-export * from "./src/bot-access.js";
-export * from "./src/channel-access-token.js";
-export * from "./src/config-schema.js";
-export * from "./src/download.js";
-export * from "./src/group-keys.js";
-export * from "./src/markdown-to-line.js";
-export * from "./src/probe.js";
-export * from "./src/send.js";
-export * from "./src/signature.js";
-export * from "./src/template-messages.js";
+export { hasLineDirectives, parseLineDirectives } from "./src/reply-payload-transform.js";
+export {
+  listLineAccountIds,
+  normalizeAccountId,
+  resolveDefaultLineAccountId,
+  resolveLineAccount,
+} from "./src/accounts.js";
+export { type NormalizedAllowFrom } from "./src/bot-access.js";
+export { resolveLineChannelAccessToken } from "./src/channel-access-token.js";
+export {
+  LineChannelConfigSchema,
+  LineConfigSchema,
+  type LineConfigSchemaType,
+} from "./src/config-schema.js";
+export {
+  resolveExactLineGroupConfigKey,
+  resolveLineGroupConfigEntry,
+  resolveLineGroupLookupIds,
+  resolveLineGroupsConfig,
+} from "./src/group-keys.js";
+export {
+  type CodeBlock,
+  convertCodeBlockToFlexBubble,
+  convertLinksToFlexBubble,
+  convertTableToFlexBubble,
+  extractCodeBlocks,
+  extractLinks,
+  extractMarkdownTables,
+  hasMarkdownToConvert,
+  type MarkdownLink,
+  type MarkdownTable,
+  type ProcessedLineMessage,
+  processLineMessage,
+  stripMarkdown,
+} from "./src/markdown-to-line.js";
+export {
+  createAudioMessage,
+  createFlexMessage,
+  createImageMessage,
+  createLocationMessage,
+  createTextMessageWithQuickReplies,
+  createVideoMessage,
+  getUserDisplayName,
+  getUserProfile,
+  pushImageMessage,
+  replyMessageLine,
+  showLoadingAnimation,
+} from "./src/send.js";
+export { validateLineSignature } from "./src/signature.js";
+export {
+  type ButtonsTemplate,
+  type CarouselColumn,
+  type CarouselTemplate,
+  type ConfirmTemplate,
+  createButtonMenu,
+  createButtonTemplate,
+  createCarouselColumn,
+  createConfirmTemplate,
+  createImageCarousel,
+  createImageCarouselColumn,
+  createLinkMenu,
+  createProductCarousel,
+  createTemplateCarousel,
+  createYesNoConfirm,
+  type ImageCarouselColumn,
+  type ImageCarouselTemplate,
+  type TemplateMessage,
+} from "./src/template-messages.js";
 export type {
   LineChannelData,
   LineConfig,
   LineProbeResult,
   ResolvedLineAccount,
 } from "./src/types.js";
-export * from "./src/webhook-node.js";
-export * from "./src/webhook.js";
-export * from "./src/webhook-utils.js";
+export { createLineNodeWebhookHandler, readLineWebhookRequestBody } from "./src/webhook-node.js";
+export {
+  createLineWebhookMiddleware,
+  type LineWebhookOptions,
+  startLineWebhook,
+  type StartLineWebhookOptions,
+} from "./src/webhook.js";
+export { parseLineWebhookBody } from "./src/webhook-utils.js";
 export { datetimePickerAction, messageAction, postbackAction, uriAction } from "./src/actions.js";
 export type { Action } from "./src/actions.js";
 export {

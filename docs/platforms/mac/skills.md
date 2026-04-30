@@ -6,8 +6,6 @@ read_when:
 title: "Skills (macOS)"
 ---
 
-# Skills (macOS)
-
 The macOS app surfaces OpenClaw skills via the gateway; it does not parse skills locally.
 
 ## Data source
@@ -21,8 +19,14 @@ The macOS app surfaces OpenClaw skills via the gateway; it does not parse skills
 - `metadata.openclaw.install` defines install options (brew/node/go/uv).
 - The app calls `skills.install` to run installers on the gateway host.
 - Built-in dangerous-code `critical` findings block `skills.install` by default; suspicious findings still warn only. The dangerous override exists on the gateway request, but the default app flow stays fail-closed.
-- The gateway surfaces only one preferred installer when multiple are provided
-  (brew when available, otherwise node manager from `skills.install`, default npm).
+- If every install option is `download`, the gateway surfaces all download
+  choices.
+- Otherwise, the gateway picks one preferred installer using the current
+  install preferences and host binaries: Homebrew first when
+  `skills.install.preferBrew` is enabled and `brew` exists, then `uv`, then the
+  configured node manager from `skills.install.nodeManager`, then later
+  fallbacks like `go` or `download`.
+- Node install labels reflect the configured node manager, including `yarn`.
 
 ## Env/API keys
 
@@ -32,3 +36,8 @@ The macOS app surfaces OpenClaw skills via the gateway; it does not parse skills
 ## Remote mode
 
 - Install + config updates happen on the gateway host (not the local Mac).
+
+## Related
+
+- [Skills](/tools/skills)
+- [macOS app](/platforms/macos)

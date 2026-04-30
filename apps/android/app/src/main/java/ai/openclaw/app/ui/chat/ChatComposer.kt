@@ -1,5 +1,18 @@
 package ai.openclaw.app.ui.chat
 
+import ai.openclaw.app.ui.mobileAccent
+import ai.openclaw.app.ui.mobileAccentBorderStrong
+import ai.openclaw.app.ui.mobileAccentSoft
+import ai.openclaw.app.ui.mobileBorder
+import ai.openclaw.app.ui.mobileBorderStrong
+import ai.openclaw.app.ui.mobileCallout
+import ai.openclaw.app.ui.mobileCaption1
+import ai.openclaw.app.ui.mobileCardSurface
+import ai.openclaw.app.ui.mobileHeadline
+import ai.openclaw.app.ui.mobileSurface
+import ai.openclaw.app.ui.mobileText
+import ai.openclaw.app.ui.mobileTextSecondary
+import ai.openclaw.app.ui.mobileTextTertiary
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -33,6 +46,7 @@ import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -45,26 +59,46 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import ai.openclaw.app.ui.mobileAccent
-import ai.openclaw.app.ui.mobileAccentBorderStrong
-import ai.openclaw.app.ui.mobileAccentSoft
-import ai.openclaw.app.ui.mobileBorder
-import ai.openclaw.app.ui.mobileBorderStrong
-import ai.openclaw.app.ui.mobileCallout
-import ai.openclaw.app.ui.mobileCaption1
-import ai.openclaw.app.ui.mobileCardSurface
-import ai.openclaw.app.ui.mobileHeadline
-import ai.openclaw.app.ui.mobileSurface
-import ai.openclaw.app.ui.mobileText
-import ai.openclaw.app.ui.mobileTextSecondary
-import ai.openclaw.app.ui.mobileTextTertiary
+
+internal data class DraftApplication(
+  val input: String,
+  val lastAppliedDraft: String?,
+  val consumed: Boolean,
+)
+
+internal fun applyDraftText(
+  draftText: String?,
+  currentInput: String,
+  lastAppliedDraft: String?,
+): DraftApplication {
+  val draft =
+    draftText?.trim()?.ifEmpty { null } ?: return DraftApplication(
+      input = currentInput,
+      lastAppliedDraft = null,
+      consumed = false,
+    )
+  if (draft == lastAppliedDraft) {
+    return DraftApplication(
+      input = currentInput,
+      lastAppliedDraft = lastAppliedDraft,
+      consumed = false,
+    )
+  }
+  return DraftApplication(
+    input = draft,
+    lastAppliedDraft = draft,
+    consumed = true,
+  )
+}
 
 @Composable
 fun ChatComposer(
+  draftText: String?,
   healthOk: Boolean,
   thinkingLevel: String,
   pendingRunCount: Int,
   attachments: List<PendingImageAttachment>,
+  onDraftApplied: () -> Unit,
   onPickImages: () -> Unit,
   onRemoveAttachment: (id: String) -> Unit,
   onSetThinkingLevel: (level: String) -> Unit,
@@ -73,7 +107,17 @@ fun ChatComposer(
   onSend: (text: String) -> Unit,
 ) {
   var input by rememberSaveable { mutableStateOf("") }
+  var lastAppliedDraft by rememberSaveable { mutableStateOf<String?>(null) }
   var showThinkingMenu by remember { mutableStateOf(false) }
+
+  LaunchedEffect(draftText) {
+    val next = applyDraftText(draftText = draftText, currentInput = input, lastAppliedDraft = lastAppliedDraft)
+    input = next.input
+    lastAppliedDraft = next.lastAppliedDraft
+    if (next.consumed) {
+      onDraftApplied()
+    }
+  }
 
   val canSend = pendingRunCount == 0 && (input.trim().isNotEmpty() || attachments.isNotEmpty()) && healthOk
   val sendBusy = pendingRunCount > 0
@@ -124,7 +168,12 @@ fun ChatComposer(
               style = mobileCaption1.copy(fontWeight = FontWeight.SemiBold),
               color = mobileTextSecondary,
             )
-            Icon(Icons.Default.ArrowDropDown, contentDescription = "Select thinking level", modifier = Modifier.size(18.dp), tint = mobileTextTertiary)
+            Icon(
+              Icons.Default.ArrowDropDown,
+              contentDescription = "Select thinking level",
+              modifier = Modifier.size(18.dp),
+              tint = mobileTextTertiary,
+            )
           }
         }
 
@@ -264,14 +313,13 @@ private fun ThinkingMenuItem(
   )
 }
 
-private fun thinkingLabel(raw: String): String {
-  return when (raw.trim().lowercase()) {
+private fun thinkingLabel(raw: String): String =
+  when (raw.trim().lowercase()) {
     "low" -> "Low"
     "medium" -> "Medium"
     "high" -> "High"
     else -> "Off"
   }
-}
 
 @Composable
 private fun AttachmentsStrip(
@@ -292,7 +340,10 @@ private fun AttachmentsStrip(
 }
 
 @Composable
-private fun AttachmentChip(fileName: String, onRemove: () -> Unit) {
+private fun AttachmentChip(
+  fileName: String,
+  onRemove: () -> Unit,
+) {
   Surface(
     shape = RoundedCornerShape(999.dp),
     color = mobileAccentSoft,

@@ -1,5 +1,9 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  __resetDiscordDirectoryCacheForTest,
+  resolveDiscordDirectoryUserId,
+} from "./directory-cache.js";
 import * as directoryLive from "./directory-live.js";
 import {
   resolveDiscordGroupRequireMention,
@@ -58,6 +62,12 @@ describe("parseDiscordTarget", () => {
       );
     }
   });
+
+  it("guides ambiguous numeric recipients with all supported explicit formats", () => {
+    expect(() => parseDiscordTarget("123456789")).toThrow(
+      'Ambiguous Discord recipient "123456789". For DMs use "user:123456789" or "<@123456789>"; for channels use "channel:123456789".',
+    );
+  });
 });
 
 describe("resolveDiscordChannelId", () => {
@@ -76,6 +86,7 @@ describe("resolveDiscordTarget", () => {
 
   beforeEach(() => {
     vi.restoreAllMocks();
+    __resetDiscordDirectoryCacheForTest();
   });
 
   it("returns a resolved user for usernames", async () => {
@@ -101,6 +112,112 @@ describe("resolveDiscordTarget", () => {
       resolveDiscordTarget("user:123", { cfg, accountId: "default" }),
     ).resolves.toMatchObject({ kind: "user", id: "123" });
     expect(listPeers).not.toHaveBeenCalled();
+  });
+
+  it("treats bare numeric ids in allowFrom as users even when channels are the default", async () => {
+    const listPeers = vi.spyOn(directoryLive, "listDiscordDirectoryPeersLive");
+    const cfg = {
+      channels: {
+        discord: {
+          accounts: {
+            default: {
+              allowFrom: ["123"],
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    await expect(
+      resolveDiscordTarget("123", { cfg, accountId: "default" }, { defaultKind: "channel" }),
+    ).resolves.toMatchObject({ kind: "user", id: "123", normalized: "user:123" });
+    expect(listPeers).not.toHaveBeenCalled();
+  });
+
+  it("uses legacy dm.allowFrom when disambiguating bare numeric ids", async () => {
+    const cfg = {
+      channels: {
+        discord: {
+          accounts: {
+            default: {
+              dm: { allowFrom: ["456"] },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    await expect(
+      resolveDiscordTarget("456", { cfg, accountId: "default" }, { defaultKind: "channel" }),
+    ).resolves.toMatchObject({ kind: "user", id: "456", normalized: "user:456" });
+  });
+
+  it("prefers top-level allowFrom over legacy dm.allowFrom for bare numeric ids", async () => {
+    const cfg = {
+      channels: {
+        discord: {
+          accounts: {
+            default: {
+              allowFrom: ["123"],
+              dm: { allowFrom: ["456"] },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    await expect(
+      resolveDiscordTarget("456", { cfg, accountId: "default" }, { defaultKind: "channel" }),
+    ).resolves.toMatchObject({ kind: "channel", id: "456", normalized: "channel:456" });
+  });
+
+  it("uses account legacy dm.allowFrom before inherited root allowFrom for bare numeric ids", async () => {
+    const cfg = {
+      channels: {
+        discord: {
+          allowFrom: ["123"],
+          accounts: {
+            work: {
+              dm: { allowFrom: ["456"] },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    await expect(
+      resolveDiscordTarget("456", { cfg, accountId: "work" }, { defaultKind: "channel" }),
+    ).resolves.toMatchObject({ kind: "user", id: "456", normalized: "user:456" });
+    await expect(
+      resolveDiscordTarget("123", { cfg, accountId: "work" }, { defaultKind: "channel" }),
+    ).resolves.toMatchObject({ kind: "channel", id: "123", normalized: "channel:123" });
+  });
+
+  it("caches username lookups under the configured default account when accountId is omitted", async () => {
+    const cfg = {
+      channels: {
+        discord: {
+          defaultAccount: "work",
+          accounts: {
+            work: {
+              token: "discord-work",
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    vi.spyOn(directoryLive, "listDiscordDirectoryPeersLive").mockResolvedValueOnce([
+      { kind: "user", id: "user:999", name: "Jane" } as const,
+    ]);
+
+    await expect(resolveDiscordTarget("jane", { cfg })).resolves.toMatchObject({
+      kind: "user",
+      id: "999",
+      normalized: "user:999",
+    });
+    expect(resolveDiscordDirectoryUserId({ accountId: "work", handle: "jane" })).toBe("999");
+    expect(resolveDiscordDirectoryUserId({ accountId: "default", handle: "jane" })).toBeUndefined();
   });
 });
 
@@ -136,7 +253,6 @@ describe("discord group policy", () => {
           },
         },
       },
-      // oxlint-disable-next-line typescript/no-explicit-any
     } as any;
 
     expect(
@@ -181,5 +297,71 @@ describe("discord group policy", () => {
         senderId: "user:someone",
       }),
     ).toEqual({ allow: ["message.guild"] });
+  });
+
+  it("honors account-scoped guild and channel overrides", () => {
+    const discordCfg = {
+      channels: {
+        discord: {
+          token: "discord-test",
+          guilds: {
+            guild1: {
+              requireMention: true,
+              tools: { allow: ["message.root"] },
+            },
+          },
+          accounts: {
+            work: {
+              token: "discord-work",
+              guilds: {
+                guild1: {
+                  requireMention: false,
+                  tools: { allow: ["message.account"] },
+                  channels: {
+                    "123": {
+                      requireMention: true,
+                      tools: { allow: ["message.account-channel"] },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    } as any;
+
+    expect(
+      resolveDiscordGroupRequireMention({
+        cfg: discordCfg,
+        accountId: "work",
+        groupSpace: "guild1",
+        groupId: "missing",
+      }),
+    ).toBe(false);
+    expect(
+      resolveDiscordGroupRequireMention({
+        cfg: discordCfg,
+        accountId: "work",
+        groupSpace: "guild1",
+        groupId: "123",
+      }),
+    ).toBe(true);
+    expect(
+      resolveDiscordGroupToolPolicy({
+        cfg: discordCfg,
+        accountId: "work",
+        groupSpace: "guild1",
+        groupId: "missing",
+      }),
+    ).toEqual({ allow: ["message.account"] });
+    expect(
+      resolveDiscordGroupToolPolicy({
+        cfg: discordCfg,
+        accountId: "work",
+        groupSpace: "guild1",
+        groupId: "123",
+      }),
+    ).toEqual({ allow: ["message.account-channel"] });
   });
 });

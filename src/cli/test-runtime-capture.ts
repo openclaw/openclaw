@@ -64,10 +64,10 @@ export function createCliRuntimeCapture(): CliRuntimeCapture {
 }
 
 export async function mockRuntimeModule<TModule extends { defaultRuntime: OutputRuntimeEnv }>(
-  importOriginal: () => Promise<TModule>,
+  loadActual: () => Promise<TModule>,
   defaultRuntime: TModule["defaultRuntime"],
 ): Promise<TModule> {
-  const actual = await importOriginal();
+  const actual = await loadActual();
   return {
     ...actual,
     defaultRuntime: {
@@ -89,6 +89,7 @@ export function spyRuntimeJson(runtime: Pick<OutputRuntimeEnv, "writeJson">) {
   return vi.spyOn(runtime, "writeJson").mockImplementation(() => {});
 }
 
+// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Test helper lets callers ascribe captured JSON shape.
 export function firstWrittenJsonArg<T>(writeJson: MockCallsWithFirstArg): T | null {
   return (writeJson.mock.calls[0]?.[0] ?? null) as T | null;
 }

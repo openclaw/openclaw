@@ -7,23 +7,29 @@ read_when:
 title: LINE
 ---
 
-# LINE (plugin)
-
 LINE connects to OpenClaw via the LINE Messaging API. The plugin runs as a webhook
 receiver on the gateway and uses your channel access token + channel secret for
 authentication.
 
-Status: supported via plugin. Direct messages, group chats, media, locations, Flex
+Status: bundled plugin. Direct messages, group chats, media, locations, Flex
 messages, template messages, and quick replies are supported. Reactions and threads
 are not supported.
 
-## Plugin required
+## Bundled plugin
 
-Install the LINE plugin:
+LINE ships as a bundled plugin in current OpenClaw releases, so normal
+packaged builds do not need a separate install.
+
+If you are on an older build or a custom install that excludes LINE, install a
+current npm package when one is published:
 
 ```bash
 openclaw plugins install @openclaw/line
 ```
+
+If npm reports the OpenClaw-owned package as deprecated or missing, use a
+current packaged OpenClaw build or a local checkout until the npm package train
+catches up.
 
 Local checkout (when running from a git repo):
 
@@ -141,6 +147,9 @@ LINE IDs are case-sensitive. Valid IDs look like:
 - Streaming responses are buffered; LINE receives full chunks with a loading
   animation while the agent works.
 - Media downloads are capped by `channels.line.mediaMaxMb` (default 10).
+- Inbound media is saved under `~/.openclaw/media/inbound/` before it is passed
+  to the agent, matching the shared media store used by other bundled channel
+  plugins.
 
 ## Channel data (rich messages)
 
@@ -200,6 +209,8 @@ The LINE plugin supports sending images, videos, and audio files through the age
 - **Images**: sent as LINE image messages with automatic preview generation.
 - **Videos**: sent with explicit preview and content-type handling.
 - **Audio**: sent as LINE audio messages.
+
+Outbound media URLs must be public HTTPS URLs. OpenClaw validates the target hostname before handing the URL to LINE and rejects loopback, link-local, and private-network targets.
 
 Generic media sends fall back to the existing image-only route when a LINE-specific path is not available.
 

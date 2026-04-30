@@ -1,8 +1,17 @@
 import { postTrustedWebToolsJson, wrapWebContent } from "openclaw/plugin-sdk/provider-web-search";
-import { normalizeXaiModelId } from "../model-id.js";
-import { extractXaiWebSearchContent, type XaiWebSearchResponse } from "./web-search-shared.js";
+import {
+  buildXaiResponsesToolBody,
+  resolveXaiResponseTextCitationsAndInline,
+  XAI_RESPONSES_ENDPOINT,
+} from "./responses-tool-shared.js";
+import {
+  coerceXaiToolConfig,
+  resolveNormalizedXaiToolModel,
+  resolvePositiveIntegerToolConfig,
+} from "./tool-config-shared.js";
+import { type XaiWebSearchResponse } from "./web-search-shared.js";
 
-export const XAI_X_SEARCH_ENDPOINT = "https://api.x.ai/v1/responses";
+export const XAI_X_SEARCH_ENDPOINT = XAI_RESPONSES_ENDPOINT;
 export const XAI_DEFAULT_X_SEARCH_MODEL = "grok-4-1-fast-non-reasoning";
 
 export type XaiXSearchConfig = {
@@ -28,19 +37,15 @@ export type XaiXSearchResult = {
   inlineCitations?: XaiWebSearchResponse["inline_citations"];
 };
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 export function resolveXaiXSearchConfig(config?: Record<string, unknown>): XaiXSearchConfig {
-  return isRecord(config) ? (config as XaiXSearchConfig) : {};
+  return coerceXaiToolConfig(config) as XaiXSearchConfig;
 }
 
 export function resolveXaiXSearchModel(config?: Record<string, unknown>): string {
-  const resolved = resolveXaiXSearchConfig(config);
-  return typeof resolved.model === "string" && resolved.model.trim()
-    ? normalizeXaiModelId(resolved.model.trim())
-    : XAI_DEFAULT_X_SEARCH_MODEL;
+  return resolveNormalizedXaiToolModel({
+    config,
+    defaultModel: XAI_DEFAULT_X_SEARCH_MODEL,
+  });
 }
 
 export function resolveXaiXSearchInlineCitations(config?: Record<string, unknown>): boolean {
@@ -48,12 +53,7 @@ export function resolveXaiXSearchInlineCitations(config?: Record<string, unknown
 }
 
 export function resolveXaiXSearchMaxTurns(config?: Record<string, unknown>): number | undefined {
-  const raw = resolveXaiXSearchConfig(config).maxTurns;
-  if (typeof raw !== "number" || !Number.isFinite(raw)) {
-    return undefined;
-  }
-  const normalized = Math.trunc(raw);
-  return normalized > 0 ? normalized : undefined;
+  return resolvePositiveIntegerToolConfig(config, "maxTurns");
 }
 
 function buildXSearchTool(options: XaiXSearchOptions): Record<string, unknown> {
@@ -117,29 +117,17 @@ export async function requestXaiXSearch(params: {
       url: XAI_X_SEARCH_ENDPOINT,
       timeoutSeconds: params.timeoutSeconds,
       apiKey: params.apiKey,
-      body: {
+      body: buildXaiResponsesToolBody({
         model: params.model,
-        input: [{ role: "user", content: params.options.query }],
+        inputText: params.options.query,
         tools: [buildXSearchTool(params.options)],
-        ...(params.maxTurns ? { max_turns: params.maxTurns } : {}),
-      },
+        maxTurns: params.maxTurns,
+      }),
       errorLabel: "xAI",
     },
     async (response) => {
       const data = (await response.json()) as XaiWebSearchResponse;
-      const { text, annotationCitations } = extractXaiWebSearchContent(data);
-      const citations =
-        Array.isArray(data.citations) && data.citations.length > 0
-          ? data.citations
-          : annotationCitations;
-      return {
-        content: text ?? "No response",
-        citations,
-        inlineCitations:
-          params.inlineCitations && Array.isArray(data.inline_citations)
-            ? data.inline_citations
-            : undefined,
-      };
+      return resolveXaiResponseTextCitationsAndInline(data, params.inlineCitations);
     },
   );
 }

@@ -1,7 +1,8 @@
-import { mkdirSync, mkdtempSync, symlinkSync, unlinkSync } from "node:fs";
+import { mkdirSync, mkdtempSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { resolveSandboxHostPathViaExistingAncestor } from "./host-paths.js";
 import {
   getBlockedBindReason,
   validateBindMounts,
@@ -31,50 +32,55 @@ describe("getBlockedBindReason", () => {
     expect(getBlockedBindReason("/var:/var")).toBeNull();
   });
 
-  it("blocks sensitive home subdirectories", () => {
+  it("blocks sensitive home credential paths", () => {
     vi.stubEnv("HOME", "/home/tester");
-    expect(getBlockedBindReason("/home/tester/.openclaw:/mnt/state:ro")).toEqual(
-      expect.objectContaining({
-        kind: "targets",
-        blockedPath: "/home/tester/.openclaw",
-      }),
-    );
-    expect(getBlockedBindReason("/home/tester/.ssh:/mnt/ssh:ro")).toEqual(
-      expect.objectContaining({
-        kind: "targets",
-        blockedPath: "/home/tester/.ssh",
-      }),
-    );
+
+    const cases = [
+      "/home/tester/.aws/credentials",
+      "/home/tester/.cargo/credentials.toml",
+      "/home/tester/.config/gcloud",
+      "/home/tester/.docker/config.json",
+      "/home/tester/.gnupg/private-keys-v1.d",
+      "/home/tester/.netrc",
+      "/home/tester/.npm/_logs",
+      "/home/tester/.ssh/config",
+    ] as const;
+
+    for (const source of cases) {
+      expect(getBlockedBindReason(`${source}:/mnt/test:ro`)).toEqual(
+        expect.objectContaining({ kind: "targets" }),
+      );
+    }
   });
 
-  it("blocks sensitive home subdirectories under OPENCLAW_HOME", () => {
-    vi.stubEnv("HOME", "/home/tester");
-    vi.stubEnv("OPENCLAW_HOME", "/srv/openclaw-home");
-    expect(getBlockedBindReason("/srv/openclaw-home/.ssh:/mnt/ssh:ro")).toEqual(
-      expect.objectContaining({
-        kind: "targets",
-        blockedPath: "/srv/openclaw-home/.ssh",
-      }),
-    );
-  });
-
-  it("still blocks OS-home sensitive paths when OPENCLAW_HOME is overridden", () => {
+  it("still blocks OS-home credential paths when OPENCLAW_HOME points elsewhere", () => {
     vi.stubEnv("HOME", "/home/tester");
     vi.stubEnv("OPENCLAW_HOME", "/srv/openclaw-home");
-    expect(getBlockedBindReason("/home/tester/.aws:/mnt/aws:ro")).toEqual(
+
+    expect(getBlockedBindReason("/home/tester/.gnupg/secring.gpg:/mnt/gnupg:ro")).toEqual(
       expect.objectContaining({
         kind: "targets",
-        blockedPath: "/home/tester/.aws",
+        blockedPath: "/home/tester/.gnupg",
       }),
     );
   });
 
-  it("blocks the resolved OpenClaw state directory override", () => {
-    vi.stubEnv("OPENCLAW_STATE_DIR", "/srv/openclaw-state");
-    expect(getBlockedBindReason("/srv/openclaw-state/credentials:/mnt/state:ro")).toEqual(
+  it("blocks canonical OS-home aliases for credential paths", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    const dir = mkdtempSync(join(tmpdir(), "openclaw-home-"));
+    const realHome = join(dir, "real-home");
+    const aliasHome = join(dir, "alias-home");
+    mkdirSync(join(realHome, ".ssh"), { recursive: true });
+    symlinkSync(realHome, aliasHome);
+    vi.stubEnv("HOME", aliasHome);
+
+    expect(getBlockedBindReason(`${join(realHome, ".ssh", "config")}:/mnt/ssh:ro`)).toEqual(
       expect.objectContaining({
         kind: "targets",
-        blockedPath: "/srv/openclaw-state",
+        blockedPath: normalizePathForSnapshot(join(realHome, ".ssh")),
       }),
     );
   });
@@ -86,12 +92,13 @@ describe("validateBindMounts", () => {
   });
 
   it("allows legitimate project directory mounts", () => {
+    const projectRoot = mkdtempSync(join(tmpdir(), "openclaw-sbx-safe-"));
     expect(() =>
       validateBindMounts([
-        "/home/user/source:/source:rw",
-        "/home/user/projects:/projects:ro",
-        "/var/data/myapp:/data",
-        "/opt/myapp/config:/config:ro",
+        `${join(projectRoot, "source")}:/source:rw`,
+        `${join(projectRoot, "projects")}:/projects:ro`,
+        `${join(projectRoot, "data")}:/data`,
+        `${join(projectRoot, "config")}:/config:ro`,
       ]),
     ).not.toThrow();
   });
@@ -158,6 +165,32 @@ describe("validateBindMounts", () => {
     expect(() => validateBindMounts(["/var:/var"])).not.toThrow();
   });
 
+  it("blocks sensitive home credential binds", () => {
+    vi.stubEnv("HOME", "/home/tester");
+
+    expect(() => validateBindMounts(["/home/tester/.docker/config.json:/mnt/docker:ro"])).toThrow(
+      /blocked path/,
+    );
+    expect(() => validateBindMounts(["/home/tester/.netrc:/mnt/netrc:ro"])).toThrow(/blocked path/);
+  });
+
+  it("blocks credential binds through canonical home aliases", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    const dir = mkdtempSync(join(tmpdir(), "openclaw-home-"));
+    const realHome = join(dir, "real-home");
+    const aliasHome = join(dir, "alias-home");
+    mkdirSync(join(realHome, ".docker"), { recursive: true });
+    symlinkSync(realHome, aliasHome);
+    vi.stubEnv("HOME", aliasHome);
+
+    expect(() =>
+      validateBindMounts([`${join(realHome, ".docker", "config.json")}:/mnt/docker:ro`]),
+    ).toThrow(/credential paths/);
+  });
+
   it("blocks symlink escapes into blocked directories", () => {
     if (process.platform === "win32") {
       // Symlinks to non-existent targets like /etc require
@@ -176,56 +209,6 @@ describe("validateBindMounts", () => {
     symlinkSync("/etc", link);
     const run = () => validateBindMounts([`${link}/passwd:/mnt/passwd:ro`]);
     expect(run).toThrow(/blocked path/);
-  });
-
-  it("blocks canonicalized sensitive paths derived from OPENCLAW_HOME", () => {
-    if (process.platform === "win32") {
-      return;
-    }
-
-    const dir = mkdtempSync(join(tmpdir(), "openclaw-home-"));
-    const realHome = join(dir, "real-home");
-    const linkedHome = join(dir, "linked-home");
-    mkdirSync(join(realHome, ".ssh"), { recursive: true });
-    symlinkSync(realHome, linkedHome);
-    vi.stubEnv("OPENCLAW_HOME", linkedHome);
-
-    expect(() => validateBindMounts([`${join(realHome, ".ssh")}:/mnt/ssh:ro`])).toThrow(
-      /blocked path/,
-    );
-  });
-
-  it("refreshes canonical blocked aliases when OPENCLAW_HOME symlinks retarget", () => {
-    if (process.platform === "win32") {
-      return;
-    }
-
-    const dir = mkdtempSync(join(tmpdir(), "openclaw-home-"));
-    const firstHome = join(dir, "home-a");
-    const secondHome = join(dir, "home-b");
-    const linkedHome = join(dir, "linked-home");
-    mkdirSync(join(firstHome, ".ssh"), { recursive: true });
-    mkdirSync(join(secondHome, ".ssh"), { recursive: true });
-    symlinkSync(firstHome, linkedHome);
-    vi.stubEnv("OPENCLAW_HOME", linkedHome);
-
-    expect(() => validateBindMounts([`${join(firstHome, ".ssh")}:/mnt/ssh:ro`])).toThrow(
-      /blocked path/,
-    );
-
-    unlinkSync(linkedHome);
-    symlinkSync(secondHome, linkedHome);
-
-    expect(() => validateBindMounts([`${join(secondHome, ".ssh")}:/mnt/ssh:ro`])).toThrow(
-      /blocked path/,
-    );
-  });
-
-  it("blocks OS-home sensitive paths when OPENCLAW_HOME points elsewhere", () => {
-    vi.stubEnv("HOME", "/home/tester");
-    vi.stubEnv("OPENCLAW_HOME", "/srv/openclaw-home");
-
-    expect(() => validateBindMounts(["/home/tester/.ssh:/mnt/ssh:ro"])).toThrow(/blocked path/);
   });
 
   it("blocks symlink-parent escapes with non-existent leaf outside allowed roots", () => {
@@ -274,47 +257,55 @@ describe("validateBindMounts", () => {
   });
 
   it("blocks bind sources outside allowed roots when allowlist is configured", () => {
+    const allowedRoot = mkdtempSync(join(tmpdir(), "openclaw-sbx-allowed-root-"));
+    const externalRoot = mkdtempSync(join(tmpdir(), "openclaw-sbx-external-"));
     expect(() =>
-      validateBindMounts(["/opt/external:/data:ro"], {
-        allowedSourceRoots: ["/home/user/project"],
+      validateBindMounts([`${externalRoot}:/data:ro`], {
+        allowedSourceRoots: [allowedRoot],
       }),
     ).toThrow(/outside allowed roots/);
   });
 
   it("allows bind sources in allowed roots when allowlist is configured", () => {
+    const projectRoot = mkdtempSync(join(tmpdir(), "openclaw-sbx-allowed-"));
     expect(() =>
-      validateBindMounts(["/home/user/project/cache:/data:ro"], {
-        allowedSourceRoots: ["/home/user/project"],
+      validateBindMounts([`${join(projectRoot, "cache")}:/data:ro`], {
+        allowedSourceRoots: [projectRoot],
       }),
     ).not.toThrow();
   });
 
   it("allows bind sources outside allowed roots with explicit dangerous override", () => {
+    const allowedRoot = mkdtempSync(join(tmpdir(), "openclaw-sbx-allowed-root-"));
+    const externalRoot = mkdtempSync(join(tmpdir(), "openclaw-sbx-external-"));
     expect(() =>
-      validateBindMounts(["/opt/external:/data:ro"], {
-        allowedSourceRoots: ["/home/user/project"],
+      validateBindMounts([`${externalRoot}:/data:ro`], {
+        allowedSourceRoots: [allowedRoot],
         allowSourcesOutsideAllowedRoots: true,
       }),
     ).not.toThrow();
   });
 
   it("blocks reserved container target paths by default", () => {
+    const projectRoot = mkdtempSync(join(tmpdir(), "openclaw-sbx-reserved-default-"));
     expect(() =>
-      validateBindMounts([
-        "/home/user/project:/workspace:rw",
-        "/home/user/project:/agent/cache:rw",
-      ]),
+      validateBindMounts([`${projectRoot}:/workspace:rw`, `${projectRoot}:/agent/cache:rw`]),
     ).toThrow(/reserved container path/);
   });
 
   it("allows reserved container target paths with explicit dangerous override", () => {
+    const projectRoot = mkdtempSync(join(tmpdir(), "openclaw-sbx-reserved-"));
     expect(() =>
-      validateBindMounts(["/home/user/project:/workspace:rw"], {
+      validateBindMounts([`${projectRoot}:/workspace:rw`], {
         allowReservedContainerTargets: true,
       }),
     ).not.toThrow();
   });
 });
+
+function normalizePathForSnapshot(input: string): string {
+  return resolveSandboxHostPathViaExistingAncestor(input).replaceAll("\\", "/");
+}
 
 describe("validateNetworkMode", () => {
   it("allows bridge/none/custom/undefined", () => {
@@ -393,9 +384,10 @@ describe("profile hardening", () => {
 
 describe("validateSandboxSecurity", () => {
   it("passes with safe config", () => {
+    const projectRoot = mkdtempSync(join(tmpdir(), "openclaw-sbx-safe-config-"));
     expect(() =>
       validateSandboxSecurity({
-        binds: ["/home/user/src:/src:rw"],
+        binds: [`${projectRoot}:/src:rw`],
         network: "none",
         seccompProfile: "/tmp/seccomp.json",
         apparmorProfile: "openclaw-sandbox",

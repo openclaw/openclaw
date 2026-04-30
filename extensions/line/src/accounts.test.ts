@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import {
   resolveLineAccount,
@@ -95,6 +95,32 @@ describe("LINE accounts", () => {
       };
 
       const account = resolveLineAccount({ cfg, accountId: "business" });
+
+      expect(account.accountId).toBe("business");
+      expect(account.enabled).toBe(true);
+      expect(account.channelAccessToken).toBe("business-token");
+      expect(account.channelSecret).toBe("business-secret");
+      expect(account.name).toBe("Business Bot");
+    });
+
+    it("uses configured defaultAccount when accountId is omitted", () => {
+      const cfg: OpenClawConfig = {
+        channels: {
+          line: {
+            defaultAccount: "business",
+            accounts: {
+              business: {
+                enabled: true,
+                channelAccessToken: "business-token",
+                channelSecret: "business-secret",
+                name: "Business Bot",
+              },
+            },
+          },
+        },
+      };
+
+      const account = resolveLineAccount({ cfg });
 
       expect(account.accountId).toBe("business");
       expect(account.enabled).toBe(true);

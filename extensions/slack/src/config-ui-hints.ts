@@ -1,4 +1,4 @@
-import type { ChannelConfigUiHint } from "openclaw/plugin-sdk/core";
+import type { ChannelConfigUiHint } from "openclaw/plugin-sdk/channel-core";
 
 export const slackChannelConfigUiHints = {
   "": {
@@ -29,6 +29,22 @@ export const slackChannelConfigUiHints = {
     label: "Slack Allow Bot Messages",
     help: "Allow bot-authored messages to trigger Slack replies (default: false).",
   },
+  socketMode: {
+    label: "Slack Socket Mode Transport",
+    help: "Slack Socket Mode transport tuning passed to the Slack SDK. Use only when investigating ping/pong timeout or stale websocket behavior.",
+  },
+  "socketMode.clientPingTimeout": {
+    label: "Slack Socket Mode Pong Timeout",
+    help: "Milliseconds the Slack SDK waits for a pong after its client ping before treating the websocket as stale (OpenClaw default: 15000). Increase on hosts with event-loop starvation or slow network scheduling.",
+  },
+  "socketMode.serverPingTimeout": {
+    label: "Slack Socket Mode Server Ping Timeout",
+    help: "Milliseconds the Slack SDK waits for Slack server pings before treating the websocket as stale.",
+  },
+  "socketMode.pingPongLoggingEnabled": {
+    label: "Slack Socket Mode Ping/Pong Logging",
+    help: "Enable Slack SDK ping/pong transport logs while debugging Socket Mode websocket health.",
+  },
   botToken: {
     label: "Slack Bot Token",
     help: "Slack bot token used for standard chat actions in the configured workspace. Keep this credential scoped and rotate if workspace app permissions change.",
@@ -51,11 +67,11 @@ export const slackChannelConfigUiHints = {
   },
   execApprovals: {
     label: "Slack Exec Approvals",
-    help: "Slack-native exec approval routing and approver authorization. Enable this only when Slack should act as an explicit exec-approval client for the selected workspace account.",
+    help: "Slack-native exec approval routing and approver authorization. When unset, OpenClaw auto-enables DM-first native approvals if approvers can be resolved for this workspace account.",
   },
   "execApprovals.enabled": {
     label: "Slack Exec Approvals Enabled",
-    help: "Enable Slack exec approvals for this account. When false or unset, Slack messages/buttons cannot approve exec requests.",
+    help: 'Controls Slack native exec approvals for this account: unset or "auto" enables DM-first native approvals when approvers can be resolved, true forces native approvals on, and false disables them.',
   },
   "execApprovals.approvers": {
     label: "Slack Exec Approval Approvers",
@@ -77,13 +93,29 @@ export const slackChannelConfigUiHints = {
     label: "Slack Streaming Mode",
     help: 'Unified Slack stream preview mode: "off" | "partial" | "block" | "progress". Legacy boolean/streamMode keys are auto-mapped.',
   },
-  nativeStreaming: {
-    label: "Slack Native Streaming",
-    help: "Enable native Slack text streaming (chat.startStream/chat.appendStream/chat.stopStream) when channels.slack.streaming is partial (default: true).",
+  "streaming.mode": {
+    label: "Slack Streaming Mode",
+    help: 'Canonical Slack preview mode: "off" | "partial" | "block" | "progress".',
   },
-  streamMode: {
-    label: "Slack Stream Mode (Legacy)",
-    help: "Legacy Slack preview mode alias (replace | status_final | append); auto-migrated to channels.slack.streaming.",
+  "streaming.chunkMode": {
+    label: "Slack Chunk Mode",
+    help: 'Chunking mode for outbound Slack text delivery: "length" (default) or "newline".',
+  },
+  "streaming.block.enabled": {
+    label: "Slack Block Streaming Enabled",
+    help: 'Enable chunked block-style Slack preview delivery when channels.slack.streaming.mode="block".',
+  },
+  "streaming.block.coalesce": {
+    label: "Slack Block Streaming Coalesce",
+    help: "Merge streamed Slack block replies before final delivery.",
+  },
+  "streaming.nativeTransport": {
+    label: "Slack Native Streaming",
+    help: "Enable native Slack text streaming (chat.startStream/chat.appendStream/chat.stopStream) when channels.slack.streaming.mode is partial (default: true). Requires a reply thread target; top-level DMs stay on the non-thread fallback path.",
+  },
+  "streaming.preview.toolProgress": {
+    label: "Slack Draft Tool Progress",
+    help: "Show tool/progress activity in the live draft preview message (default: true). Set false to keep tool updates as separate messages.",
   },
   "thread.historyScope": {
     label: "Slack Thread History Scope",
@@ -96,5 +128,9 @@ export const slackChannelConfigUiHints = {
   "thread.initialHistoryLimit": {
     label: "Slack Thread Initial History Limit",
     help: "Maximum number of existing Slack thread messages to fetch when starting a new thread session (default: 20, set to 0 to disable).",
+  },
+  "thread.requireExplicitMention": {
+    label: "Slack Thread Require Explicit Mention",
+    help: "If true, require an explicit @mention even inside threads where the bot has participated. Suppresses implicit thread mention behavior so the bot only responds to explicit @bot mentions in threads (default: false).",
   },
 } satisfies Record<string, ChannelConfigUiHint>;

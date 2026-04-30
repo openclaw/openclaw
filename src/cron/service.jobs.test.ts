@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { applyJobPatch, createJob, recomputeNextRuns } from "./service/jobs.js";
+import {
+  applyJobPatch,
+  createJob,
+  recomputeNextRuns,
+  resolveJobPayloadTextForMain,
+} from "./service/jobs.js";
 import type { CronServiceState } from "./service/state.js";
 import { DEFAULT_TOP_OF_HOUR_STAGGER_MS } from "./stagger.js";
 import type { CronJob, CronJobPatch } from "./types.js";
@@ -169,6 +174,81 @@ describe("applyJobPatch", () => {
     }
   });
 
+  it("persists agentTurn payload.fallbacks updates when editing existing jobs", () => {
+    const job = createIsolatedAgentTurnJob("job-fallbacks", {
+      mode: "announce",
+      channel: "telegram",
+    });
+    job.payload = {
+      kind: "agentTurn",
+      message: "do it",
+      fallbacks: ["openrouter/gpt-4.1-mini"],
+    };
+
+    applyJobPatch(job, {
+      payload: {
+        kind: "agentTurn",
+        message: "do it",
+        fallbacks: ["anthropic/claude-haiku-3-5", "openai/gpt-5"],
+      },
+    });
+
+    expect(job.payload.kind).toBe("agentTurn");
+    if (job.payload.kind === "agentTurn") {
+      expect(job.payload.fallbacks).toEqual(["anthropic/claude-haiku-3-5", "openai/gpt-5"]);
+    }
+  });
+
+  it("persists agentTurn payload.toolsAllow updates when editing existing jobs", () => {
+    const job = createIsolatedAgentTurnJob("job-tools", {
+      mode: "announce",
+      channel: "telegram",
+    });
+    job.payload = {
+      kind: "agentTurn",
+      message: "do it",
+      toolsAllow: ["exec"],
+    };
+
+    applyJobPatch(job, {
+      payload: {
+        kind: "agentTurn",
+        message: "do it",
+        toolsAllow: ["read", "write"],
+      },
+    });
+
+    expect(job.payload.kind).toBe("agentTurn");
+    if (job.payload.kind === "agentTurn") {
+      expect(job.payload.toolsAllow).toEqual(["read", "write"]);
+    }
+  });
+
+  it("clears agentTurn payload.toolsAllow when patch requests null", () => {
+    const job = createIsolatedAgentTurnJob("job-tools-clear", {
+      mode: "announce",
+      channel: "telegram",
+    });
+    job.payload = {
+      kind: "agentTurn",
+      message: "do it",
+      toolsAllow: ["exec", "read"],
+    };
+
+    applyJobPatch(job, {
+      payload: {
+        kind: "agentTurn",
+        message: "do it",
+        toolsAllow: null,
+      },
+    });
+
+    expect(job.payload.kind).toBe("agentTurn");
+    if (job.payload.kind === "agentTurn") {
+      expect(job.payload.toolsAllow).toBeUndefined();
+    }
+  });
+
   it("applies payload.lightContext when replacing payload kind via patch", () => {
     const job = createIsolatedAgentTurnJob("job-light-context-switch", {
       mode: "announce",
@@ -188,6 +268,50 @@ describe("applyJobPatch", () => {
     expect(payload.kind).toBe("agentTurn");
     if (payload.kind === "agentTurn") {
       expect(payload.lightContext).toBe(true);
+    }
+  });
+
+  it("carries payload.fallbacks when replacing payload kind via patch", () => {
+    const job = createIsolatedAgentTurnJob("job-fallbacks-switch", {
+      mode: "announce",
+      channel: "telegram",
+    });
+    job.payload = { kind: "systemEvent", text: "ping" };
+
+    applyJobPatch(job, {
+      payload: {
+        kind: "agentTurn",
+        message: "do it",
+        fallbacks: ["anthropic/claude-haiku-3-5", "openai/gpt-5"],
+      },
+    });
+
+    const payload = job.payload as CronJob["payload"];
+    expect(payload.kind).toBe("agentTurn");
+    if (payload.kind === "agentTurn") {
+      expect(payload.fallbacks).toEqual(["anthropic/claude-haiku-3-5", "openai/gpt-5"]);
+    }
+  });
+
+  it("carries payload.toolsAllow when replacing payload kind via patch", () => {
+    const job = createIsolatedAgentTurnJob("job-tools-switch", {
+      mode: "announce",
+      channel: "telegram",
+    });
+    job.payload = { kind: "systemEvent", text: "ping" };
+
+    applyJobPatch(job, {
+      payload: {
+        kind: "agentTurn",
+        message: "do it",
+        toolsAllow: ["exec", "read"],
+      },
+    });
+
+    const payload = job.payload as CronJob["payload"];
+    expect(payload.kind).toBe("agentTurn");
+    if (payload.kind === "agentTurn") {
+      expect(payload.toolsAllow).toEqual(["exec", "read"]);
     }
   });
 
@@ -270,16 +394,15 @@ describe("applyJobPatch", () => {
     expect(job.delivery?.failureDestination?.to).toBe("https://example.invalid/failure");
   });
 
-  it("rejects Telegram delivery with invalid target (chatId/topicId format)", () => {
+  it("preserves raw channel delivery targets for plugin-owned validation", () => {
     const job = createIsolatedAgentTurnJob("job-telegram-invalid", {
       mode: "announce",
       channel: "telegram",
       to: "-10012345/6789",
     });
 
-    expect(() => applyJobPatch(job, { enabled: true })).toThrow(
-      'Invalid Telegram delivery target "-10012345/6789". Use colon (:) as delimiter for topics, not slash. Valid formats: -1001234567890, -1001234567890:123, -1001234567890:topic:123, @username, https://t.me/username',
-    );
+    expect(() => applyJobPatch(job, { enabled: true })).not.toThrow();
+    expect(job.delivery?.to).toBe("-10012345/6789");
   });
 
   it.each([
@@ -357,6 +480,20 @@ describe("createJob rejects sessionTarget main for non-default agents", () => {
     ).not.toThrow();
   });
 
+  it("rejects custom session targets with path separators", () => {
+    const state = createMockState(now, { defaultAgentId: "main" });
+    expect(() =>
+      createJob(state, {
+        name: "bad-custom-session",
+        enabled: true,
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "session:../../outside",
+        wakeMode: "now",
+        payload: { kind: "agentTurn", message: "hello" },
+      }),
+    ).toThrow("invalid cron sessionTarget session id");
+  });
+
   it("rejects failureDestination on main jobs without webhook delivery mode", () => {
     const state = createMockState(now, { defaultAgentId: "main" });
     expect(() =>
@@ -407,6 +544,20 @@ describe("applyJobPatch rejects sessionTarget main for non-default agents", () =
       return;
     }
     expect(() => applyJobPatch(job, patch, { defaultAgentId: "main" })).not.toThrow();
+  });
+
+  it("rejects patching to a custom session target with path separators", () => {
+    const job = createMainJob();
+    expect(() =>
+      applyJobPatch(
+        job,
+        {
+          sessionTarget: "session:..\\outside",
+          payload: { kind: "agentTurn", message: "hello" },
+        },
+        { defaultAgentId: "main" },
+      ),
+    ).toThrow("invalid cron sessionTarget session id");
   });
 });
 
@@ -536,6 +687,20 @@ describe("createJob delivery defaults", () => {
       payload: { kind: "systemEvent", text: "ping" },
     });
     expect(job.delivery).toBeUndefined();
+  });
+
+  it("uses legacy systemEvent message text without throwing", () => {
+    const state = createMockState(now, { defaultAgentId: "main" });
+    const job = createJob(state, {
+      name: "legacy system event",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "main",
+      wakeMode: "now",
+      payload: { kind: "systemEvent", message: "legacy text" } as never,
+    });
+
+    expect(resolveJobPayloadTextForMain(job)).toBe("legacy text");
   });
 });
 

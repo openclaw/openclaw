@@ -1,14 +1,14 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { unwrapRemoteConfigSnapshot } from "../../test/helpers/gateway/android-node-capabilities-policy-config.js";
+import { shouldFetchRemotePolicyConfig } from "../../test/helpers/gateway/android-node-capabilities-policy-source.js";
 import { isLiveTestEnabled } from "../agents/live-test-helpers.js";
-import { loadConfig } from "../config/config.js";
+import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { parseNodeList, parsePairingList } from "../shared/node-list-parse.js";
 import type { NodeListNode } from "../shared/node-list-types.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
-import { unwrapRemoteConfigSnapshot } from "./android-node.capabilities.policy-config.js";
-import { shouldFetchRemotePolicyConfig } from "./android-node.capabilities.policy-source.js";
 import { buildGatewayConnectionDetails } from "./call.js";
 import { GatewayClient } from "./client.js";
 import { resolveGatewayCredentialsFromConfig } from "./credentials.js";
@@ -257,7 +257,7 @@ const COMMAND_PROFILES: Record<string, CommandProfile> = {
 };
 
 function resolveGatewayConnection() {
-  const cfg = loadConfig();
+  const cfg = getRuntimeConfig();
   const urlOverride = readString(process.env.OPENCLAW_ANDROID_GATEWAY_URL);
   const details = buildGatewayConnectionDetails({
     config: cfg,
@@ -290,7 +290,7 @@ async function resolvePolicyConfigForRun(params: {
     return unwrapRemoteConfigSnapshot(raw);
   }
 
-  const loadLocalConfig = params.loadLocalConfig ?? loadConfig;
+  const loadLocalConfig = params.loadLocalConfig ?? getRuntimeConfig;
   return loadLocalConfig();
 }
 

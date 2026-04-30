@@ -1,15 +1,29 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { Model } from "@mariozechner/pi-ai";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const hoisted = vi.hoisted(() => ({
   resolveModelMock: vi.fn(),
+  resolveModelAsyncMock: vi.fn(),
   getApiKeyForModelMock: vi.fn(),
   applyLocalNoAuthHeaderOverrideMock: vi.fn(),
   setRuntimeApiKeyMock: vi.fn(),
   resolveCopilotApiTokenMock: vi.fn(),
+  prepareProviderRuntimeAuthMock: vi.fn(),
+  prepareModelForSimpleCompletionMock: vi.fn((params: { model: unknown }) => params.model),
+  completeMock: vi.fn(),
+}));
+
+vi.mock("@mariozechner/pi-ai", () => ({
+  complete: hoisted.completeMock,
 }));
 
 vi.mock("./pi-embedded-runner/model.js", () => ({
   resolveModel: hoisted.resolveModelMock,
+  resolveModelAsync: hoisted.resolveModelAsyncMock,
+}));
+
+vi.mock("./simple-completion-transport.js", () => ({
+  prepareModelForSimpleCompletion: hoisted.prepareModelForSimpleCompletionMock,
 }));
 
 vi.mock("./model-auth.js", () => ({
@@ -21,17 +35,34 @@ vi.mock("./github-copilot-token.js", () => ({
   resolveCopilotApiToken: hoisted.resolveCopilotApiTokenMock,
 }));
 
+vi.mock("../plugins/provider-runtime.runtime.js", () => ({
+  prepareProviderRuntimeAuth: hoisted.prepareProviderRuntimeAuthMock,
+}));
+
+let completeWithPreparedSimpleCompletionModel: typeof import("./simple-completion-runtime.js").completeWithPreparedSimpleCompletionModel;
 let prepareSimpleCompletionModel: typeof import("./simple-completion-runtime.js").prepareSimpleCompletionModel;
 
-beforeEach(async () => {
-  vi.resetModules();
+beforeAll(async () => {
+  ({ completeWithPreparedSimpleCompletionModel, prepareSimpleCompletionModel } =
+    await import("./simple-completion-runtime.js"));
+});
+
+beforeEach(() => {
   hoisted.resolveModelMock.mockReset();
+  hoisted.resolveModelAsyncMock.mockReset();
   hoisted.getApiKeyForModelMock.mockReset();
   hoisted.applyLocalNoAuthHeaderOverrideMock.mockReset();
   hoisted.setRuntimeApiKeyMock.mockReset();
   hoisted.resolveCopilotApiTokenMock.mockReset();
+  hoisted.prepareProviderRuntimeAuthMock.mockReset();
+  hoisted.prepareModelForSimpleCompletionMock.mockReset();
+  hoisted.completeMock.mockReset();
 
   hoisted.applyLocalNoAuthHeaderOverrideMock.mockImplementation((model: unknown) => model);
+  hoisted.prepareModelForSimpleCompletionMock.mockImplementation(
+    (params: { model: unknown }) => params.model,
+  );
+  hoisted.completeMock.mockResolvedValue({ content: [{ type: "text", text: "ok" }] });
 
   hoisted.resolveModelMock.mockReturnValue({
     model: {
@@ -43,6 +74,9 @@ beforeEach(async () => {
     },
     modelRegistry: {},
   });
+  hoisted.resolveModelAsyncMock.mockImplementation((...args: unknown[]) =>
+    Promise.resolve(hoisted.resolveModelMock(...args)),
+  );
   hoisted.getApiKeyForModelMock.mockResolvedValue({
     apiKey: "sk-test",
     source: "env:TEST_API_KEY",
@@ -54,7 +88,7 @@ beforeEach(async () => {
     source: "cache:/tmp/copilot-token.json",
     baseUrl: "https://api.individual.githubcopilot.com",
   });
-  ({ prepareSimpleCompletionModel } = await import("./simple-completion-runtime.js"));
+  hoisted.prepareProviderRuntimeAuthMock.mockResolvedValue(undefined);
 });
 
 describe("prepareSimpleCompletionModel", () => {
@@ -134,7 +168,7 @@ describe("prepareSimpleCompletionModel", () => {
     hoisted.resolveModelMock.mockReturnValueOnce({
       model: {
         provider: "amazon-bedrock",
-        id: "anthropic.claude-sonnet-4-5",
+        id: "anthropic.claude-sonnet-4-6",
       },
       authStorage: {
         setRuntimeApiKey: hoisted.setRuntimeApiKeyMock,
@@ -149,7 +183,7 @@ describe("prepareSimpleCompletionModel", () => {
     const result = await prepareSimpleCompletionModel({
       cfg: undefined,
       provider: "amazon-bedrock",
-      modelId: "anthropic.claude-sonnet-4-5",
+      modelId: "anthropic.claude-sonnet-4-6",
       allowMissingApiKeyModes: ["aws-sdk"],
     });
 
@@ -157,7 +191,7 @@ describe("prepareSimpleCompletionModel", () => {
       expect.objectContaining({
         model: expect.objectContaining({
           provider: "amazon-bedrock",
-          id: "anthropic.claude-sonnet-4-5",
+          id: "anthropic.claude-sonnet-4-6",
         }),
         auth: {
           source: "aws-sdk default chain",
@@ -336,6 +370,150 @@ describe("prepareSimpleCompletionModel", () => {
           headers: expect.objectContaining({ Authorization: null }),
         }),
       }),
+    );
+  });
+
+  it("applies provider runtime auth before storing simple-completion credentials", async () => {
+    hoisted.resolveModelMock.mockReturnValueOnce({
+      model: {
+        provider: "amazon-bedrock-mantle",
+        id: "anthropic.claude-opus-4-7",
+        baseUrl: "https://bedrock-mantle.us-east-1.api.aws/anthropic",
+      },
+      authStorage: {
+        setRuntimeApiKey: hoisted.setRuntimeApiKeyMock,
+      },
+      modelRegistry: {},
+    });
+    hoisted.getApiKeyForModelMock.mockResolvedValueOnce({
+      apiKey: "__amazon_bedrock_mantle_iam__",
+      source: "models.providers.amazon-bedrock-mantle.apiKey",
+      mode: "api-key",
+      profileId: "mantle",
+    });
+    hoisted.prepareProviderRuntimeAuthMock.mockResolvedValueOnce({
+      apiKey: "bedrock-runtime-token",
+      baseUrl: "https://bedrock-mantle.us-east-1.api.aws/anthropic",
+    });
+
+    const result = await prepareSimpleCompletionModel({
+      cfg: undefined,
+      provider: "amazon-bedrock-mantle",
+      modelId: "anthropic.claude-opus-4-7",
+      agentDir: "/tmp/openclaw-agent",
+    });
+
+    expect(hoisted.prepareProviderRuntimeAuthMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "amazon-bedrock-mantle",
+        workspaceDir: "/tmp/openclaw-agent",
+        context: expect.objectContaining({
+          apiKey: "__amazon_bedrock_mantle_iam__",
+          authMode: "api-key",
+          modelId: "anthropic.claude-opus-4-7",
+          profileId: "mantle",
+        }),
+      }),
+    );
+    expect(hoisted.setRuntimeApiKeyMock).toHaveBeenCalledWith(
+      "amazon-bedrock-mantle",
+      "bedrock-runtime-token",
+    );
+    expect(result).toEqual(
+      expect.objectContaining({
+        model: expect.objectContaining({
+          baseUrl: "https://bedrock-mantle.us-east-1.api.aws/anthropic",
+        }),
+        auth: expect.objectContaining({
+          apiKey: "bedrock-runtime-token",
+        }),
+      }),
+    );
+  });
+
+  it("can skip Pi model/auth discovery for config-scoped one-shot completions", async () => {
+    hoisted.resolveModelAsyncMock.mockResolvedValueOnce({
+      model: {
+        provider: "ollama",
+        id: "llama3.2:latest",
+      },
+      authStorage: {
+        setRuntimeApiKey: hoisted.setRuntimeApiKeyMock,
+      },
+      modelRegistry: {},
+    });
+    hoisted.getApiKeyForModelMock.mockResolvedValueOnce({
+      apiKey: "ollama-local",
+      source: "models.json (local marker)",
+      mode: "api-key",
+    });
+
+    const result = await prepareSimpleCompletionModel({
+      cfg: undefined,
+      provider: "ollama",
+      modelId: "llama3.2:latest",
+      skipPiDiscovery: true,
+    });
+
+    expect(result).not.toHaveProperty("error");
+    expect(hoisted.resolveModelMock).not.toHaveBeenCalled();
+    expect(hoisted.resolveModelAsyncMock).toHaveBeenCalledWith(
+      "ollama",
+      "llama3.2:latest",
+      undefined,
+      undefined,
+      {
+        skipPiDiscovery: true,
+      },
+    );
+  });
+});
+
+describe("completeWithPreparedSimpleCompletionModel", () => {
+  it("prepares provider-owned stream APIs before running a completion", async () => {
+    const model = {
+      provider: "ollama",
+      id: "llama3.2:latest",
+      name: "llama3.2:latest",
+      api: "ollama",
+      baseUrl: "http://127.0.0.1:11434",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 8192,
+      maxTokens: 1024,
+    } satisfies Model<"ollama">;
+    const preparedModel = {
+      ...model,
+      api: "openclaw-ollama-simple-test",
+    };
+    const cfg = {
+      models: { providers: { ollama: { baseUrl: "http://remote-ollama:11434", models: [] } } },
+    };
+    hoisted.prepareModelForSimpleCompletionMock.mockReturnValueOnce(preparedModel);
+
+    await completeWithPreparedSimpleCompletionModel({
+      model,
+      auth: {
+        apiKey: "ollama-local",
+        source: "models.json (local marker)",
+        mode: "api-key",
+      },
+      cfg,
+      context: {
+        messages: [{ role: "user", content: "pong", timestamp: 1 }],
+      },
+    });
+
+    expect(hoisted.prepareModelForSimpleCompletionMock).toHaveBeenCalledWith({ model, cfg });
+    expect(hoisted.completeMock).toHaveBeenCalledWith(
+      preparedModel,
+      {
+        messages: [{ role: "user", content: "pong", timestamp: 1 }],
+      },
+      {
+        apiKey: "ollama-local",
+      },
     );
   });
 });

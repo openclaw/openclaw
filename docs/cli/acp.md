@@ -3,10 +3,8 @@ summary: "Run the ACP bridge for IDE integrations"
 read_when:
   - Setting up ACP-based IDE integrations
   - Debugging ACP session routing to the Gateway
-title: "acp"
+title: "ACP"
 ---
-
-# acp
 
 Run the [Agent Client Protocol (ACP)](https://agentclientprotocol.com/) bridge that talks to an OpenClaw Gateway.
 
@@ -20,6 +18,24 @@ updates.
 If you want an external MCP client to talk directly to OpenClaw channel
 conversations instead of hosting an ACP harness session, use
 [`openclaw mcp serve`](/cli/mcp) instead.
+
+## What this is not
+
+This page is often confused with ACP harness sessions.
+
+`openclaw acp` means:
+
+- OpenClaw acts as an ACP server
+- an IDE or ACP client connects to OpenClaw
+- OpenClaw forwards that work into a Gateway session
+
+This is different from [ACP Agents](/tools/acp-agents), where OpenClaw runs an
+external harness such as Codex or Claude Code through `acpx`.
+
+Quick rule:
+
+- editor/client wants to talk ACP to OpenClaw: use `openclaw acp`
+- OpenClaw should launch Codex/Claude/Gemini as an ACP harness: use `/acp spawn` and [ACP Agents](/tools/acp-agents)
 
 ## Compatibility Matrix
 
@@ -148,9 +164,11 @@ Per-session `mcpServers` are not supported in bridge mode. If an ACP client
 sends them during `newSession` or `loadSession`, the bridge returns a clear
 error instead of silently ignoring them.
 
-If you want ACPX-backed sessions to see OpenClaw plugin tools, enable the
-gateway-side ACPX plugin bridge instead of trying to pass per-session
-`mcpServers`. See [ACP Agents](/tools/acp-agents#plugin-tools-mcp-bridge).
+If you want ACPX-backed sessions to see OpenClaw plugin tools or selected
+built-in tools such as `cron`, enable the gateway-side ACPX MCP bridges instead
+of trying to pass per-session `mcpServers`. See
+[ACP Agents](/tools/acp-agents-setup#plugin-tools-mcp-bridge) and
+[OpenClaw tools MCP bridge](/tools/acp-agents-setup#openclaw-tools-mcp-bridge).
 
 ## Use from `acpx` (Codex, Claude, other ACP clients)
 
@@ -275,6 +293,7 @@ Learn more about session keys at [/concepts/session](/concepts/session).
 - `--require-existing`: fail if the session key/label does not exist.
 - `--reset-session`: reset the session key before first use.
 - `--no-prefix-cwd`: do not prefix prompts with the working directory.
+- `--provenance <off|meta|meta+receipt>`: include ACP provenance metadata or receipts.
 - `--verbose, -v`: verbose logging to stderr.
 
 Security note:
@@ -295,3 +314,8 @@ Security note:
 - `--server-args <args...>`: extra arguments passed to the ACP server.
 - `--server-verbose`: enable verbose logging on the ACP server.
 - `--verbose, -v`: verbose client logging.
+
+## Related
+
+- [CLI reference](/cli)
+- [ACP agents](/tools/acp-agents)

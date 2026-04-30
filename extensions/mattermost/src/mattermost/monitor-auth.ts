@@ -1,3 +1,4 @@
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import type { ResolvedMattermostAccount } from "./accounts.js";
 import type { MattermostChannel } from "./client.js";
 import type { OpenClawConfig } from "./runtime-api.js";
@@ -20,7 +21,9 @@ export function normalizeMattermostAllowEntry(entry: string): string {
   return trimmed
     .replace(/^(mattermost|user):/i, "")
     .replace(/^@/, "")
-    .toLowerCase();
+    .trim()
+    ? normalizeLowercaseStringOrEmpty(trimmed.replace(/^(mattermost|user):/i, "").replace(/^@/, ""))
+    : "";
 }
 
 export function normalizeMattermostAllowList(entries: Array<string | number>): string[] {
@@ -199,9 +202,7 @@ export function authorizeMattermostCommandInvocation(params: {
   });
 
   const commandAuthorized =
-    kind === "direct"
-      ? dmPolicy === "open" || senderAllowedForCommands
-      : commandGate.commandAuthorized;
+    kind === "direct" ? senderAllowedForCommands : commandGate.commandAuthorized;
 
   if (kind === "direct") {
     if (dmPolicy === "disabled") {
@@ -218,7 +219,7 @@ export function authorizeMattermostCommandInvocation(params: {
       };
     }
 
-    if (dmPolicy !== "open" && !senderAllowedForCommands) {
+    if (!senderAllowedForCommands) {
       return {
         ok: false,
         denyReason: dmPolicy === "pairing" ? "dm-pairing" : "unauthorized",

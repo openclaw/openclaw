@@ -1,4 +1,4 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SecretInput } from "../config/types.secrets.js";
 
 vi.mock("../infra/device-bootstrap.js", () => ({
@@ -8,9 +8,9 @@ vi.mock("../infra/device-bootstrap.js", () => ({
   })),
 }));
 
-let encodePairingSetupCode: typeof import("./setup-code.js").encodePairingSetupCode;
-let resolvePairingSetupFromConfig: typeof import("./setup-code.js").resolvePairingSetupFromConfig;
-let issueDeviceBootstrapTokenMock: typeof import("../infra/device-bootstrap.js").issueDeviceBootstrapToken;
+const { encodePairingSetupCode, resolvePairingSetupFromConfig } = await import("./setup-code.js");
+const { issueDeviceBootstrapToken: issueDeviceBootstrapTokenMock } =
+  await import("../infra/device-bootstrap.js");
 
 describe("pairing setup code", () => {
   type ResolvedSetup = Awaited<ReturnType<typeof resolvePairingSetupFromConfig>>;
@@ -43,7 +43,7 @@ describe("pairing setup code", () => {
       ...config,
       gateway: {
         bind: "custom",
-        customBindHost: "gateway.local",
+        customBindHost: "127.0.0.1",
         auth,
       },
     };
@@ -55,6 +55,23 @@ describe("pairing setup code", () => {
       stdout: '{"Self":{"DNSName":"mb-server.tailnet.ts.net."}}',
       stderr: "",
     }));
+  }
+
+  function createIpv4NetworkInterfaces(
+    address: string,
+  ): ReturnType<NonNullable<NonNullable<ResolveSetupOptions>["networkInterfaces"]>> {
+    return {
+      en0: [
+        {
+          address,
+          family: "IPv4",
+          internal: false,
+          netmask: "255.255.255.0",
+          mac: "00:00:00:00:00:00",
+          cidr: `${address}/24`,
+        },
+      ],
+    };
   }
 
   function expectResolvedSetupOk(
@@ -75,7 +92,12 @@ describe("pairing setup code", () => {
       expect.objectContaining({
         profile: {
           roles: ["node", "operator"],
-          scopes: ["operator.read", "operator.talk.secrets", "operator.write"],
+          scopes: [
+            "operator.approvals",
+            "operator.read",
+            "operator.talk.secrets",
+            "operator.write",
+          ],
         },
       }),
     );
@@ -163,12 +185,6 @@ describe("pairing setup code", () => {
     vi.stubEnv("OPENCLAW_GATEWAY_PORT", "");
   });
 
-  beforeAll(async () => {
-    ({ encodePairingSetupCode, resolvePairingSetupFromConfig } = await import("./setup-code.js"));
-    ({ issueDeviceBootstrapToken: issueDeviceBootstrapTokenMock } =
-      await import("../infra/device-bootstrap.js"));
-  });
-
   beforeEach(() => {
     vi.mocked(issueDeviceBootstrapTokenMock).mockClear();
   });
@@ -189,6 +205,60 @@ describe("pairing setup code", () => {
     },
   ] as const)("$name", ({ payload, expected }) => {
     expect(encodePairingSetupCode(payload)).toBe(expected);
+  });
+
+  it("normalizes bare publicUrl host ports for setup code payloads", async () => {
+    await expectResolvedSetupSuccessCase({
+      config: createCustomGatewayConfig({ mode: "token", token: "tok_123" }),
+      options: {
+        forceSecure: true,
+        publicUrl: "gateway.example.test:18789/setup",
+      },
+      expected: {
+        authLabel: "token",
+        url: "wss://gateway.example.test:18789",
+        urlSource: "plugins.entries.device-pair.config.publicUrl",
+      },
+    });
+  });
+
+  it("rejects invalid gateway.remote.url before falling back to bind-derived setup urls", async () => {
+    await expectResolvedSetupFailureCase({
+      config: {
+        gateway: {
+          bind: "custom",
+          customBindHost: "127.0.0.1",
+          remote: { url: "http://localhost:notaport" },
+          auth: { mode: "token", token: "tok_123" },
+        },
+      },
+      options: {
+        preferRemoteUrl: true,
+      },
+      expectedError: "Configured gateway.remote.url is invalid.",
+    });
+    expect(issueDeviceBootstrapTokenMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    "localhost:notaport",
+    "http://localhost:notaport",
+    "http:gateway.example.test",
+    "ws:gateway.example.test",
+    "http:/localhost:notaport",
+    "ftp:/gateway.example.test",
+    "mailto:foo@example.com",
+    "ws://user:pass@gateway.example.test:18789",
+  ])("rejects invalid publicUrl %s before issuing setup code payloads", async (publicUrl) => {
+    await expectResolvedSetupFailureCase({
+      config: createCustomGatewayConfig({ mode: "token", token: "tok_123" }),
+      options: {
+        forceSecure: true,
+        publicUrl,
+      },
+      expectedError: "Configured publicUrl is invalid.",
+    });
+    expect(issueDeviceBootstrapTokenMock).not.toHaveBeenCalled();
   });
 
   async function resolveCustomGatewaySetup(params: {
@@ -279,7 +349,7 @@ describe("pairing setup code", () => {
       {
         gateway: {
           bind: "custom",
-          customBindHost: "gateway.local",
+          customBindHost: "127.0.0.1",
           auth: { token },
         },
         ...defaultEnvSecretProviderConfig,
@@ -351,14 +421,14 @@ describe("pairing setup code", () => {
       config: {
         gateway: {
           bind: "custom",
-          customBindHost: "gateway.local",
+          customBindHost: "127.0.0.1",
           port: 19001,
           auth: { mode: "token", token: "tok_123" },
         },
       } satisfies ResolveSetupConfig,
       expected: {
         authLabel: "token",
-        url: "ws://gateway.local:19001",
+        url: "ws://127.0.0.1:19001",
         urlSource: "gateway.bind=custom",
       },
     },
@@ -367,7 +437,7 @@ describe("pairing setup code", () => {
       config: {
         gateway: {
           bind: "custom",
-          customBindHost: "gateway.local",
+          customBindHost: "127.0.0.1",
           auth: { mode: "token", token: "old" },
         },
       } satisfies ResolveSetupConfig,
@@ -378,7 +448,37 @@ describe("pairing setup code", () => {
       } satisfies ResolveSetupOptions,
       expected: {
         authLabel: "token",
-        url: "ws://gateway.local:18789",
+        url: "ws://127.0.0.1:18789",
+        urlSource: "gateway.bind=custom",
+      },
+    },
+    {
+      name: "allows android emulator cleartext setup urls",
+      config: {
+        gateway: {
+          bind: "custom",
+          customBindHost: "10.0.2.2",
+          auth: { mode: "token", token: "tok_123" },
+        },
+      } satisfies ResolveSetupConfig,
+      expected: {
+        authLabel: "token",
+        url: "ws://10.0.2.2:18789",
+        urlSource: "gateway.bind=custom",
+      },
+    },
+    {
+      name: "allows lan ip cleartext setup urls",
+      config: {
+        gateway: {
+          bind: "custom",
+          customBindHost: "192.168.1.20",
+          auth: { mode: "token", token: "tok_123" },
+        },
+      } satisfies ResolveSetupConfig,
+      expected: {
+        authLabel: "token",
+        url: "ws://192.168.1.20:18789",
         urlSource: "gateway.bind=custom",
       },
     },
@@ -387,6 +487,69 @@ describe("pairing setup code", () => {
       config,
       options,
       expected,
+    });
+  });
+
+  it.each([
+    {
+      name: "rejects custom bind public ws setup urls for mobile pairing",
+      config: {
+        gateway: {
+          bind: "custom",
+          customBindHost: "gateway.example",
+          auth: { mode: "token", token: "tok_123" },
+        },
+      } satisfies ResolveSetupConfig,
+      expectedError: "Tailscale and public mobile pairing require a secure gateway URL",
+    },
+    {
+      name: "rejects mdns hostname cleartext setup urls",
+      config: {
+        gateway: {
+          bind: "custom",
+          customBindHost: "gateway.local",
+          auth: { mode: "token", token: "tok_123" },
+        },
+      } satisfies ResolveSetupConfig,
+      expectedError: "private LAN IP address",
+    },
+    {
+      name: "rejects tailnet bind remote ws setup urls for mobile pairing",
+      config: {
+        gateway: {
+          bind: "tailnet",
+          auth: { mode: "token", token: "tok_123" },
+        },
+      } satisfies ResolveSetupConfig,
+      options: {
+        networkInterfaces: () => createIpv4NetworkInterfaces("100.64.0.9"),
+      } satisfies ResolveSetupOptions,
+      expectedError: "prefer gateway.tailscale.mode=serve",
+    },
+  ] as const)("$name", async ({ config, options, expectedError }) => {
+    await expectResolvedSetupFailureCase({
+      config,
+      options,
+      expectedError,
+    });
+  });
+
+  it("allows lan bind cleartext setup urls for mobile pairing", async () => {
+    await expectResolvedSetupSuccessCase({
+      config: {
+        gateway: {
+          bind: "lan",
+          auth: { mode: "password", password: "secret" },
+        },
+      } satisfies ResolveSetupConfig,
+      options: {
+        networkInterfaces: () => createIpv4NetworkInterfaces("192.168.1.20"),
+      } satisfies ResolveSetupOptions,
+      expected: {
+        authLabel: "password",
+        url: "ws://192.168.1.20:18789",
+        urlSource: "gateway.bind=lan",
+      },
     });
   });
 

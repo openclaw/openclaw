@@ -1,4 +1,13 @@
-import { createHash, timingSafeEqual } from "node:crypto";
+import { timingSafeEqual } from "node:crypto";
+
+function padSecretBytes(bytes: Buffer, length: number): Buffer {
+  if (bytes.length === length) {
+    return bytes;
+  }
+  const padded = Buffer.alloc(length);
+  bytes.copy(padded);
+  return padded;
+}
 
 export function safeEqualSecret(
   provided: string | undefined | null,

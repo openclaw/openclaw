@@ -6,10 +6,16 @@ vi.mock("../send.js", () => ({
 }));
 
 let deliverReplies: typeof import("./replies.js").deliverReplies;
+let createSlackReplyDeliveryPlan: typeof import("./replies.js").createSlackReplyDeliveryPlan;
+let resolveDeliveredSlackReplyThreadTs: typeof import("./replies.js").resolveDeliveredSlackReplyThreadTs;
+let resolveSlackThreadTs: typeof import("./replies.js").resolveSlackThreadTs;
 import { deliverSlackSlashReplies } from "./replies.js";
+
+const SLACK_TEST_CFG = { channels: { slack: { botToken: "xoxb-test" } } };
 
 function baseParams(overrides?: Record<string, unknown>) {
   return {
+    cfg: SLACK_TEST_CFG,
     replies: [{ text: "hello" }],
     target: "C123",
     token: "xoxb-test",
@@ -22,8 +28,12 @@ function baseParams(overrides?: Record<string, unknown>) {
 
 describe("deliverReplies identity passthrough", () => {
   beforeAll(async () => {
-    vi.resetModules();
-    ({ deliverReplies } = await import("./replies.js"));
+    ({
+      createSlackReplyDeliveryPlan,
+      deliverReplies,
+      resolveDeliveredSlackReplyThreadTs,
+      resolveSlackThreadTs,
+    } = await import("./replies.js"));
   });
 
   beforeEach(() => {
@@ -163,6 +173,109 @@ describe("deliverReplies identity passthrough", () => {
         }),
       ),
     ).rejects.toThrow(/Slack blocks cannot exceed 50 items/i);
+  });
+});
+
+describe("resolveDeliveredSlackReplyThreadTs", () => {
+  beforeAll(async () => {
+    ({ resolveDeliveredSlackReplyThreadTs } = await import("./replies.js"));
+  });
+
+  it("prefers explicit reply targets when reply tags are enabled", () => {
+    expect(
+      resolveDeliveredSlackReplyThreadTs({
+        replyToMode: "first",
+        payloadReplyToId: "explicit-thread",
+        replyThreadTs: "planned-thread",
+      }),
+    ).toBe("explicit-thread");
+  });
+
+  it("ignores explicit reply tags when replyToMode is off", () => {
+    expect(
+      resolveDeliveredSlackReplyThreadTs({
+        replyToMode: "off",
+        payloadReplyToId: "explicit-thread",
+        replyThreadTs: "planned-thread",
+      }),
+    ).toBe("planned-thread");
+  });
+
+  it("falls back to the planned reply thread when no explicit reply tag exists", () => {
+    expect(
+      resolveDeliveredSlackReplyThreadTs({
+        replyToMode: "batched",
+        replyThreadTs: "planned-thread",
+      }),
+    ).toBe("planned-thread");
+  });
+});
+
+describe("resolveSlackThreadTs fallback classification", () => {
+  const threadTs = "1234567890.123456";
+  const messageTs = "9999999999.999999";
+
+  it("keeps legacy thread-stickiness for genuine replies when callers omit isThreadReply", () => {
+    expect(
+      resolveSlackThreadTs({
+        replyToMode: "off",
+        incomingThreadTs: threadTs,
+        messageTs,
+        hasReplied: false,
+      }),
+    ).toBe(threadTs);
+  });
+
+  it("respects replyToMode for auto-created top-level thread_ts when callers omit isThreadReply", () => {
+    expect(
+      resolveSlackThreadTs({
+        replyToMode: "off",
+        incomingThreadTs: messageTs,
+        messageTs,
+        hasReplied: false,
+      }),
+    ).toBeUndefined();
+
+    expect(
+      resolveSlackThreadTs({
+        replyToMode: "first",
+        incomingThreadTs: messageTs,
+        messageTs,
+        hasReplied: false,
+      }),
+    ).toBe(messageTs);
+
+    expect(
+      resolveSlackThreadTs({
+        replyToMode: "batched",
+        incomingThreadTs: messageTs,
+        messageTs,
+        hasReplied: true,
+      }),
+    ).toBeUndefined();
+  });
+});
+
+describe("createSlackReplyDeliveryPlan", () => {
+  it("lets draft previews inspect first thread targets without consuming them", () => {
+    const hasRepliedRef = { value: false };
+    const plan = createSlackReplyDeliveryPlan({
+      replyToMode: "first",
+      incomingThreadTs: undefined,
+      messageTs: "9999999999.999999",
+      hasRepliedRef,
+      isThreadReply: false,
+    });
+
+    expect(plan.peekThreadTs()).toBe("9999999999.999999");
+    expect(plan.peekThreadTs()).toBe("9999999999.999999");
+    expect(hasRepliedRef.value).toBe(false);
+
+    plan.markSent();
+
+    expect(hasRepliedRef.value).toBe(true);
+    expect(plan.peekThreadTs()).toBeUndefined();
+    expect(plan.nextThreadTs()).toBeUndefined();
   });
 });
 

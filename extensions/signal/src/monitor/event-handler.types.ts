@@ -1,9 +1,9 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import type {
   DmPolicy,
   GroupPolicy,
   SignalReactionNotificationMode,
-} from "openclaw/plugin-sdk/config-runtime";
+} from "openclaw/plugin-sdk/config-types";
 import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
@@ -37,7 +37,11 @@ export type SignalDataMessage = {
     groupId?: string | null;
     groupName?: string | null;
   } | null;
-  quote?: { text?: string | null } | null;
+  quote?: {
+    text?: string | null;
+    author?: string | null;
+    authorUuid?: string | null;
+  } | null;
   reaction?: SignalReactionMessage | null;
 };
 
@@ -101,6 +105,7 @@ export type SignalEventHandlerDeps = {
     maxBytes: number;
   }) => Promise<{ path: string; contentType?: string } | null>;
   deliverReplies: (params: {
+    cfg: OpenClawConfig;
     replies: ReplyPayload[];
     target: string;
     baseUrl: string;

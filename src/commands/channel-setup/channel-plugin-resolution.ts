@@ -1,19 +1,24 @@
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import {
-  getChannelPluginCatalogEntry,
   listChannelPluginCatalogEntries,
   type ChannelPluginCatalogEntry,
 } from "../../channels/plugins/catalog.js";
 import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
-import type { ChannelId, ChannelPlugin } from "../../channels/plugins/types.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
+import type { ChannelId } from "../../channels/plugins/types.public.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { RuntimeEnv } from "../../runtime.js";
+import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import { createClackPrompter } from "../../wizard/clack-prompter.js";
 import type { WizardPrompter } from "../../wizard/prompts.js";
 import {
   ensureChannelSetupPluginInstalled,
   loadChannelSetupPluginRegistrySnapshotForChannel,
 } from "./plugin-install.js";
+import {
+  getTrustedChannelPluginCatalogEntry,
+  listTrustedChannelPluginCatalogEntries,
+} from "./trusted-catalog.js";
 
 type ChannelPluginSnapshot = {
   channels: Array<{ plugin: ChannelPlugin }>;
@@ -26,6 +31,7 @@ type ResolveInstallableChannelPluginResult = {
   plugin?: ChannelPlugin;
   catalogEntry?: ChannelPluginCatalogEntry;
   configChanged: boolean;
+  pluginInstalled: boolean;
 };
 
 function resolveWorkspaceDir(cfg: OpenClawConfig) {
@@ -47,16 +53,23 @@ function resolveResolvedChannelId(params: {
 }
 
 export function resolveCatalogChannelEntry(raw: string, cfg: OpenClawConfig | null) {
-  const trimmed = raw.trim().toLowerCase();
+  const trimmed = normalizeOptionalLowercaseString(raw);
   if (!trimmed) {
     return undefined;
   }
-  const workspaceDir = cfg ? resolveWorkspaceDir(cfg) : undefined;
-  return listChannelPluginCatalogEntries({ workspaceDir }).find((entry) => {
-    if (entry.id.toLowerCase() === trimmed) {
+  const entries = cfg
+    ? listTrustedChannelPluginCatalogEntries({
+        cfg,
+        workspaceDir: resolveWorkspaceDir(cfg),
+      })
+    : listChannelPluginCatalogEntries({ excludeWorkspace: true });
+  return entries.find((entry) => {
+    if (normalizeOptionalLowercaseString(entry.id) === trimmed) {
       return true;
     }
-    return (entry.meta.aliases ?? []).some((alias) => alias.trim().toLowerCase() === trimmed);
+    return (entry.meta.aliases ?? []).some(
+      (alias) => normalizeOptionalLowercaseString(alias) === trimmed,
+    );
   });
 }
 
@@ -102,7 +115,8 @@ export async function resolveInstallableChannelPlugin(params: {
   const catalogEntry =
     (params.rawChannel ? resolveCatalogChannelEntry(params.rawChannel, nextCfg) : undefined) ??
     (params.channelId
-      ? getChannelPluginCatalogEntry(params.channelId, {
+      ? getTrustedChannelPluginCatalogEntry(params.channelId, {
+          cfg: nextCfg,
           workspaceDir,
         })
       : undefined);
@@ -117,6 +131,7 @@ export async function resolveInstallableChannelPlugin(params: {
       cfg: nextCfg,
       catalogEntry,
       configChanged: false,
+      pluginInstalled: false,
     };
   }
 
@@ -128,6 +143,7 @@ export async function resolveInstallableChannelPlugin(params: {
       plugin: existing,
       catalogEntry,
       configChanged: false,
+      pluginInstalled: false,
     };
   }
 
@@ -147,6 +163,7 @@ export async function resolveInstallableChannelPlugin(params: {
         plugin: scoped,
         catalogEntry,
         configChanged: false,
+        pluginInstalled: false,
       };
     }
 
@@ -178,6 +195,7 @@ export async function resolveInstallableChannelPlugin(params: {
             ? { ...catalogEntry, pluginId: installedPluginId }
             : catalogEntry,
         configChanged: nextCfg !== params.cfg,
+        pluginInstalled: installResult.installed,
       };
     }
   }
@@ -188,5 +206,6 @@ export async function resolveInstallableChannelPlugin(params: {
     plugin: existing,
     catalogEntry,
     configChanged: false,
+    pluginInstalled: false,
   };
 }

@@ -1,8 +1,9 @@
 import type { Command } from "commander";
-import { loadConfig } from "../config/config.js";
+import { getRuntimeConfig } from "../config/config.js";
 import { defaultRuntime } from "../runtime.js";
 import { runSecurityAudit } from "../security/audit.js";
 import { fixSecurityFootguns } from "../security/fix.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { isRich, theme } from "../terminal/theme.js";
 import { shortenHomeInString, shortenHomePath } from "../utils.js";
@@ -60,9 +61,11 @@ export function registerSecurityCli(program: Command) {
     .option("--fix", "Apply safe fixes (tighten defaults + chmod state/config)", false)
     .option("--json", "Print JSON", false)
     .action(async (opts: SecurityAuditOptions) => {
+      const token = normalizeOptionalString(opts.token);
+      const password = normalizeOptionalString(opts.password);
       const fixResult = opts.fix ? await fixSecurityFootguns().catch((_err) => null) : null;
 
-      const sourceConfig = loadConfig();
+      const sourceConfig = getRuntimeConfig();
       const { resolvedConfig: cfg, diagnostics: secretDiagnostics } =
         await resolveCommandSecretRefsViaGateway({
           config: sourceConfig,
@@ -77,11 +80,8 @@ export function registerSecurityCli(program: Command) {
         includeFilesystem: true,
         includeChannelSecurity: true,
         deepProbeAuth:
-          opts.token?.trim() || opts.password?.trim()
-            ? {
-                ...(opts.token?.trim() ? { token: opts.token } : {}),
-                ...(opts.password?.trim() ? { password: opts.password } : {}),
-              }
+          token || password
+            ? { ...(token ? { token } : {}), ...(password ? { password } : {}) }
             : undefined,
       });
 

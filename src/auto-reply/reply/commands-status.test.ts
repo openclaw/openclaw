@@ -1,9 +1,15 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { normalizeTestText } from "../../../test/helpers/normalize-text.js";
+import { clearAgentHarnesses, registerAgentHarness } from "../../agents/harness/registry.js";
+import type { AgentHarness } from "../../agents/harness/types.js";
 import {
   addSubagentRunForTests,
   resetSubagentRegistryForTests,
 } from "../../agents/subagent-registry.js";
-import type { OpenClawConfig } from "../../config/config.js";
 import {
   completeTaskRunByRunId,
   createQueuedTaskRun,
@@ -11,14 +17,15 @@ import {
   failTaskRunByRunId,
 } from "../../tasks/task-executor.js";
 import { resetTaskRegistryForTests } from "../../tasks/task-registry.js";
-import { buildStatusReply } from "./commands-status.js";
-import { buildCommandTestParams } from "./commands.test-harness.js";
+import { withEnvAsync } from "../../test-utils/env.js";
+import { buildStatusReply, buildStatusText } from "./commands-status.js";
+import {
+  baseCommandTestConfig,
+  buildCommandTestParams,
+  configureInMemoryTaskRegistryStoreForTests,
+} from "./commands.test-harness.js";
 
-const baseCfg = {
-  commands: { text: true },
-  channels: { whatsapp: { allowFrom: ["*"] } },
-  session: { mainKey: "main", scope: "per-sender" },
-} as OpenClawConfig;
+const baseCfg = baseCommandTestConfig;
 
 async function buildStatusReplyForTest(params: { sessionKey?: string; verbose?: boolean }) {
   const commandParams = buildCommandTestParams("/status", baseCfg);
@@ -32,7 +39,7 @@ async function buildStatusReplyForTest(params: { sessionKey?: string; verbose?: 
     sessionScope: commandParams.sessionScope,
     storePath: commandParams.storePath,
     provider: "anthropic",
-    model: "claude-opus-4-5",
+    model: "claude-opus-4-6",
     contextTokens: 0,
     resolvedThinkLevel: commandParams.resolvedThinkLevel,
     resolvedFastMode: false,
@@ -42,18 +49,73 @@ async function buildStatusReplyForTest(params: { sessionKey?: string; verbose?: 
     resolveDefaultThinkingLevel: commandParams.resolveDefaultThinkingLevel,
     isGroup: commandParams.isGroup,
     defaultGroupActivation: commandParams.defaultGroupActivation,
+    modelAuthOverride: "api-key",
+    activeModelAuthOverride: "api-key",
   });
+}
+
+function registerStatusCodexHarness(): void {
+  const harness: AgentHarness = {
+    id: "codex",
+    label: "Codex",
+    supports: (ctx) =>
+      ctx.provider === "codex" ? { supported: true, priority: 100 } : { supported: false },
+    runAttempt: async () => {
+      throw new Error("not used in status tests");
+    },
+  };
+  registerAgentHarness(harness, { ownerPluginId: "codex" });
+}
+
+afterEach(() => {
+  clearAgentHarnesses();
+});
+
+function writeTranscriptUsageLog(params: {
+  dir: string;
+  agentId: string;
+  sessionId: string;
+  usage: {
+    input: number;
+    output: number;
+    cacheRead: number;
+    cacheWrite: number;
+    totalTokens: number;
+  };
+}) {
+  const logPath = path.join(
+    params.dir,
+    ".openclaw",
+    "agents",
+    params.agentId,
+    "sessions",
+    `${params.sessionId}.jsonl`,
+  );
+  fs.mkdirSync(path.dirname(logPath), { recursive: true });
+  fs.writeFileSync(
+    logPath,
+    JSON.stringify({
+      type: "message",
+      message: {
+        role: "assistant",
+        model: "claude-opus-4-5",
+        usage: params.usage,
+      },
+    }),
+    "utf-8",
+  );
 }
 
 describe("buildStatusReply subagent summary", () => {
   beforeEach(() => {
     resetSubagentRegistryForTests();
-    resetTaskRegistryForTests();
+    resetTaskRegistryForTests({ persist: false });
+    configureInMemoryTaskRegistryStoreForTests();
   });
 
   afterEach(() => {
     resetSubagentRegistryForTests();
-    resetTaskRegistryForTests();
+    resetTaskRegistryForTests({ persist: false });
   });
 
   it("counts ended orchestrators with active descendants as active", async () => {
@@ -262,6 +324,34 @@ describe("buildStatusReply subagent summary", () => {
     expect(reply?.text).toContain("approval denied");
   });
 
+  it("does not leak internal runtime context through the task status line", async () => {
+    createRunningTaskRun({
+      runtime: "subagent",
+      requesterSessionKey: "agent:main:main",
+      childSessionKey: "agent:main:subagent:status-task-leak",
+      runId: "run-status-task-leak",
+      task: "leaked context task",
+    });
+    failTaskRunByRunId({
+      runId: "run-status-task-leak",
+      endedAt: Date.now(),
+      error: [
+        "OpenClaw runtime context (internal):",
+        "This context is runtime-generated, not user-authored. Keep internal details private.",
+        "",
+        "[Internal task completion event]",
+        "source: subagent",
+      ].join("\n"),
+    });
+
+    const reply = await buildStatusReplyForTest({});
+
+    expect(reply?.text).toContain("📌 Tasks: 1 recent failure");
+    expect(reply?.text).toContain("leaked context task");
+    expect(reply?.text).not.toContain("OpenClaw runtime context (internal):");
+    expect(reply?.text).not.toContain("Internal task completion event");
+  });
+
   it("truncates long task titles and details in the session task line", async () => {
     createRunningTaskRun({
       runtime: "subagent",
@@ -346,5 +436,207 @@ describe("buildStatusReply subagent summary", () => {
     expect(reply?.text).not.toContain("hidden progress detail");
     expect(reply?.text).not.toContain("subagent");
     expect(reply?.text).not.toContain("cron");
+  });
+
+  it("uses transcript usage fallback in /status output", async () => {
+    await withTempHome(async (dir) => {
+      const sessionId = "sess-status-transcript";
+      writeTranscriptUsageLog({
+        dir,
+        agentId: "main",
+        sessionId,
+        usage: {
+          input: 1,
+          output: 2,
+          cacheRead: 1000,
+          cacheWrite: 0,
+          totalTokens: 1003,
+        },
+      });
+
+      const text = await buildStatusText({
+        cfg: baseCfg,
+        sessionEntry: {
+          sessionId,
+          updatedAt: 0,
+          totalTokens: 3,
+          contextTokens: 32_000,
+        },
+        sessionKey: "agent:main:main",
+        parentSessionKey: "agent:main:main",
+        sessionScope: "per-sender",
+        statusChannel: "mobilechat",
+        provider: "anthropic",
+        model: "claude-opus-4-5",
+        contextTokens: 32_000,
+        resolvedFastMode: false,
+        resolvedVerboseLevel: "off",
+        resolvedReasoningLevel: "off",
+        resolveDefaultThinkingLevel: async () => undefined,
+        isGroup: false,
+        defaultGroupActivation: () => "mention",
+        modelAuthOverride: "api-key",
+        activeModelAuthOverride: "api-key",
+      });
+
+      expect(normalizeTestText(text)).toContain("Context: 1.0k/32k");
+    });
+  });
+
+  it("shows the effective non-PI embedded harness in /status", async () => {
+    registerStatusCodexHarness();
+
+    const text = await buildStatusText({
+      cfg: {
+        ...baseCfg,
+        agents: {
+          defaults: {
+            agentRuntime: { id: "codex" },
+          },
+        },
+      },
+      sessionEntry: {
+        sessionId: "sess-status-codex",
+        updatedAt: 0,
+        fastMode: true,
+      },
+      sessionKey: "agent:main:main",
+      parentSessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      statusChannel: "mobilechat",
+      provider: "openai",
+      model: "gpt-5.4",
+      contextTokens: 32_000,
+      resolvedFastMode: true,
+      resolvedVerboseLevel: "off",
+      resolvedReasoningLevel: "off",
+      resolveDefaultThinkingLevel: async () => undefined,
+      isGroup: false,
+      defaultGroupActivation: () => "mention",
+      modelAuthOverride: "api-key",
+      activeModelAuthOverride: "api-key",
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Runtime: OpenAI Codex");
+    expect(normalized).toContain("Fast");
+    expect(normalized).not.toContain("Fast · codex");
+  });
+
+  it("uses workspace-scoped auth evidence in /status auth labels", async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-status-auth-label-"));
+    const workspaceDir = path.join(tempRoot, "workspace");
+    const pluginDir = path.join(workspaceDir, ".openclaw", "extensions", "workspace-auth-label");
+    const bundledDir = path.join(tempRoot, "bundled");
+    const stateDir = path.join(tempRoot, "state");
+    const credentialPath = path.join(tempRoot, "credentials.json");
+    fs.mkdirSync(pluginDir, { recursive: true });
+    fs.mkdirSync(bundledDir, { recursive: true });
+    fs.mkdirSync(stateDir, { recursive: true });
+    fs.writeFileSync(path.join(pluginDir, "index.ts"), "export default {}\n", "utf8");
+    fs.writeFileSync(credentialPath, "{}", "utf8");
+    fs.writeFileSync(
+      path.join(pluginDir, "openclaw.plugin.json"),
+      JSON.stringify({
+        id: "workspace-auth-label",
+        configSchema: { type: "object" },
+        setup: {
+          providers: [
+            {
+              id: "anthropic",
+              authEvidence: [
+                {
+                  type: "local-file-with-env",
+                  fileEnvVar: "WORKSPACE_STATUS_CREDENTIALS",
+                  credentialMarker: "workspace-status-local-credentials",
+                  source: "workspace status credentials",
+                },
+              ],
+            },
+          ],
+        },
+      }),
+      "utf8",
+    );
+
+    try {
+      await withEnvAsync(
+        {
+          OPENCLAW_BUNDLED_PLUGINS_DIR: bundledDir,
+          OPENCLAW_STATE_DIR: stateDir,
+          WORKSPACE_STATUS_CREDENTIALS: credentialPath,
+        },
+        async () => {
+          const text = await buildStatusText({
+            cfg: {
+              ...baseCfg,
+              plugins: { allow: ["workspace-auth-label"] },
+            },
+            sessionEntry: {
+              sessionId: "sess-status-workspace-auth",
+              updatedAt: 0,
+            },
+            sessionKey: "agent:main:main",
+            parentSessionKey: "agent:main:main",
+            sessionScope: "per-sender",
+            statusChannel: "mobilechat",
+            workspaceDir,
+            provider: "anthropic",
+            model: "claude-opus-4-5",
+            contextTokens: 32_000,
+            resolvedFastMode: false,
+            resolvedVerboseLevel: "off",
+            resolvedReasoningLevel: "off",
+            resolveDefaultThinkingLevel: async () => undefined,
+            isGroup: false,
+            defaultGroupActivation: () => "mention",
+          });
+
+          expect(normalizeTestText(text)).toContain("workspace status credentials");
+        },
+      );
+    } finally {
+      fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps /status on a session-pinned PI harness after config changes", async () => {
+    registerStatusCodexHarness();
+
+    const text = await buildStatusText({
+      cfg: {
+        ...baseCfg,
+        agents: {
+          defaults: {
+            agentRuntime: { id: "codex" },
+          },
+        },
+      },
+      sessionEntry: {
+        sessionId: "sess-status-pinned-pi",
+        updatedAt: 0,
+        fastMode: true,
+        agentHarnessId: "pi",
+      },
+      sessionKey: "agent:main:main",
+      parentSessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      statusChannel: "mobilechat",
+      provider: "openai",
+      model: "gpt-5.4",
+      contextTokens: 32_000,
+      resolvedFastMode: true,
+      resolvedVerboseLevel: "off",
+      resolvedReasoningLevel: "off",
+      resolveDefaultThinkingLevel: async () => undefined,
+      isGroup: false,
+      defaultGroupActivation: () => "mention",
+      modelAuthOverride: "api-key",
+      activeModelAuthOverride: "api-key",
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Fast");
+    expect(normalized).not.toContain("codex");
   });
 });

@@ -24,7 +24,7 @@ function makeToolCallResultPairInput(): Array<AssistantMessage | ToolResultMessa
           arguments: { path: "package.json" },
         },
       ],
-      model: "gpt-5.2",
+      model: "gpt-5.4",
       stopReason: "toolUse",
       timestamp: nextTimestamp(),
     }),
@@ -43,7 +43,7 @@ function makeEmptyAssistantErrorMessage(): AssistantMessage {
   return makeAgentAssistantMessage({
     stopReason: "error",
     content: [],
-    model: "gpt-5.2",
+    model: "gpt-5.4",
     timestamp: nextTimestamp(),
   }) satisfies AssistantMessage;
 }
@@ -54,7 +54,7 @@ function makeOpenAiResponsesAssistantMessage(
 ): AssistantMessage {
   return makeAgentAssistantMessage({
     content,
-    model: "gpt-5.2",
+    model: "gpt-5.4",
     stopReason,
     timestamp: nextTimestamp(),
   });
@@ -194,26 +194,13 @@ describe("sanitizeSessionMessagesImages", () => {
   });
   it("filters whitespace-only assistant text blocks", async () => {
     const input = castAgentMessages([
-      {
-        role: "assistant",
-        content: [
+      makeOpenAiResponsesAssistantMessage(
+        [
           { type: "text", text: "   " },
           { type: "text", text: "ok" },
         ],
-        api: "openai-responses",
-        provider: "openai",
-        model: "gpt-5.2",
-        usage: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 0,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        },
-        stopReason: "stop",
-        timestamp: nextTimestamp(),
-      },
+        "stop",
+      ),
     ]);
 
     const out = await sanitizeSessionMessagesImages(input, "test");
@@ -225,23 +212,7 @@ describe("sanitizeSessionMessagesImages", () => {
   it("drops assistant messages that only contain empty text", async () => {
     const input = castAgentMessages([
       { role: "user", content: "hello", timestamp: nextTimestamp() } satisfies UserMessage,
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "" }],
-        api: "openai-responses",
-        provider: "openai",
-        model: "gpt-5.2",
-        usage: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 0,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        },
-        stopReason: "stop",
-        timestamp: nextTimestamp(),
-      } satisfies AssistantMessage,
+      makeOpenAiResponsesAssistantMessage([{ type: "text", text: "" }], "stop"),
     ]);
 
     const out = await sanitizeSessionMessagesImages(input, "test");
@@ -249,7 +220,7 @@ describe("sanitizeSessionMessagesImages", () => {
     expect(out).toHaveLength(1);
     expect(out[0]?.role).toBe("user");
   });
-  it("keeps empty assistant error messages", async () => {
+  it("drops empty assistant error messages", async () => {
     const input = castAgentMessages([
       { role: "user", content: "hello", timestamp: nextTimestamp() } satisfies UserMessage,
       {
@@ -262,10 +233,68 @@ describe("sanitizeSessionMessagesImages", () => {
 
     const out = await sanitizeSessionMessagesImages(input, "test");
 
-    expect(out).toHaveLength(3);
+    expect(out).toHaveLength(1);
     expect(out[0]?.role).toBe("user");
-    expect(out[1]?.role).toBe("assistant");
-    expect(out[2]?.role).toBe("assistant");
+  });
+  it("removes empty text blocks from user and tool result messages", async () => {
+    const input = [
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "" },
+          { type: "text", text: "hello" },
+        ],
+        timestamp: nextTimestamp(),
+      } satisfies UserMessage,
+      {
+        role: "toolResult",
+        toolCallId: "tool-1",
+        toolName: "read",
+        isError: false,
+        content: [
+          { type: "text", text: "   " },
+          { type: "text", text: "result" },
+        ],
+        timestamp: nextTimestamp(),
+      } satisfies ToolResultMessage,
+    ];
+
+    const out = await sanitizeSessionMessagesImages(input, "test");
+
+    expect(out[0]?.role).toBe("user");
+    expect((out[0] as { content?: Array<{ text?: string }> }).content).toEqual([
+      { type: "text", text: "hello" },
+    ]);
+    expect(out[1]?.role).toBe("toolResult");
+    expect((out[1] as { content?: Array<{ text?: string }> }).content).toEqual([
+      { type: "text", text: "result" },
+    ]);
+  });
+  it("uses a non-empty placeholder when user or tool result content becomes empty", async () => {
+    const input = [
+      {
+        role: "user",
+        content: [{ type: "text", text: "" }],
+        timestamp: nextTimestamp(),
+      } satisfies UserMessage,
+      {
+        role: "toolResult",
+        toolCallId: "tool-1",
+        toolName: "read",
+        isError: false,
+        content: [{ type: "text", text: "   " }],
+        timestamp: nextTimestamp(),
+      } satisfies ToolResultMessage,
+    ];
+
+    const out = await sanitizeSessionMessagesImages(input, "test");
+
+    expect((out[0] as { content?: Array<{ text?: string }> }).content).toEqual([
+      { type: "text", text: "[empty content omitted]" },
+    ]);
+    expect((out[1] as { content?: Array<{ text?: string }> }).content).toEqual([
+      { type: "text", text: "[empty content omitted]" },
+    ]);
   });
   it("leaves non-assistant messages unchanged", async () => {
     const input = [
@@ -312,6 +341,30 @@ describe("sanitizeSessionMessagesImages", () => {
       expect((content?.[1] as { thought_signature?: unknown })?.thought_signature).toBe("AQID");
     });
 
+    it("still strips signatures in images-only mode when replay policy requests it", async () => {
+      const input = castAgentMessages([
+        {
+          role: "assistant",
+          content: [
+            { type: "thinking", thinking: "internal", thought_signature: "msg_abc123" },
+            { type: "text", text: "visible" },
+          ],
+        },
+      ]);
+
+      const out = await sanitizeSessionMessagesImages(input, "test", {
+        sanitizeMode: "images-only",
+        sanitizeThoughtSignatures: {
+          allowBase64Only: true,
+          includeCamelCase: true,
+        },
+      });
+
+      const content = (out[0] as { content?: Array<{ thought_signature?: unknown }> }).content;
+      expect(content).toHaveLength(2);
+      expect(content?.[0]?.thought_signature).toBeUndefined();
+    });
+
     it("preserves interleaved thinking block order when signatures are preserved", async () => {
       const input = castAgentMessages([
         {
@@ -343,7 +396,6 @@ describe("sanitizeSessionMessagesImages", () => {
       expect(content?.map((block) => block.type)).toEqual([
         "thinking",
         "text",
-        "text",
         "redacted_thinking",
         "text",
       ]);
@@ -352,10 +404,30 @@ describe("sanitizeSessionMessagesImages", () => {
         thinking: "first",
         thought_signature: "sig-1",
       });
-      expect(content?.[1]).toMatchObject({ type: "text", text: "" });
-      expect(content?.[3]).toMatchObject({
+      expect(content?.[1]).toMatchObject({ type: "text", text: "visible" });
+      expect(content?.[2]).toMatchObject({
         type: "redacted_thinking",
         thought_signature: "sig-2",
+      });
+    });
+
+    it("drops empty assistant text blocks in images-only mode", async () => {
+      const input = castAgentMessages([
+        makeOpenAiResponsesAssistantMessage(
+          [
+            { type: "text", text: " " },
+            { type: "text", text: "visible" },
+          ],
+          "stop",
+        ),
+      ]);
+
+      const out = await sanitizeSessionMessagesImages(input, "test", {
+        sanitizeMode: "images-only",
+      });
+
+      expectSingleAssistantContentEntry(out, (entry) => {
+        expect(entry.text).toBe("visible");
       });
     });
   });

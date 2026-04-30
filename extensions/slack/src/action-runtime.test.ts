@@ -1,11 +1,11 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { handleSlackAction, slackActionRuntime } from "./action-runtime.js";
 import { parseSlackBlocksInput } from "./blocks-input.js";
 
 const originalSlackActionRuntime = { ...slackActionRuntime };
 const deleteSlackMessage = vi.fn(async (..._args: unknown[]) => ({}));
-const downloadSlackFile = vi.fn(async (..._args: unknown[]) => null);
+const downloadSlackFile = vi.fn(async (..._args: unknown[]): Promise<unknown> => null);
 const editSlackMessage = vi.fn(async (..._args: unknown[]) => ({}));
 const getSlackMemberInfo = vi.fn(async (..._args: unknown[]) => ({}));
 const listSlackEmojis = vi.fn(async (..._args: unknown[]) => ({}));
@@ -50,11 +50,16 @@ describe("handleSlackAction", () => {
   }
 
   function expectLastSlackSend(content: string, threadTs?: string) {
-    expect(sendSlackMessage).toHaveBeenLastCalledWith("channel:C123", content, {
-      mediaUrl: undefined,
-      threadTs,
-      blocks: undefined,
-    });
+    expect(sendSlackMessage).toHaveBeenLastCalledWith(
+      "channel:C123",
+      content,
+      expect.objectContaining({
+        cfg: expect.any(Object),
+        mediaUrl: undefined,
+        threadTs,
+        blocks: undefined,
+      }),
+    );
   }
 
   async function sendSecondMessageAndExpectNoThread(params: {
@@ -110,7 +115,7 @@ describe("handleSlackAction", () => {
     { name: "raw channel id", channelId: "C1" },
     { name: "channel: prefixed id", channelId: "channel:C1" },
   ])("adds reactions for $name", async ({ channelId }) => {
-    await handleSlackAction(
+    const result = await handleSlackAction(
       {
         action: "react",
         channelId,
@@ -119,7 +124,16 @@ describe("handleSlackAction", () => {
       },
       slackConfig(),
     );
-    expect(reactSlackMessage).toHaveBeenCalledWith("C1", "123.456", "✅");
+    expect(reactSlackMessage).toHaveBeenCalledWith(
+      "C1",
+      "123.456",
+      "✅",
+      expect.objectContaining({ cfg: expect.any(Object) }),
+    );
+    expect(JSON.parse((result.content?.[0] as { type: "text"; text: string }).text)).toEqual({
+      ok: true,
+      added: "✅",
+    });
   });
 
   it("removes reactions on empty emoji", async () => {
@@ -132,7 +146,11 @@ describe("handleSlackAction", () => {
       },
       slackConfig(),
     );
-    expect(removeOwnSlackReactions).toHaveBeenCalledWith("C1", "123.456");
+    expect(removeOwnSlackReactions).toHaveBeenCalledWith(
+      "C1",
+      "123.456",
+      expect.objectContaining({ cfg: expect.any(Object) }),
+    );
   });
 
   it("removes reactions when remove flag set", async () => {
@@ -146,7 +164,12 @@ describe("handleSlackAction", () => {
       },
       slackConfig(),
     );
-    expect(removeSlackReaction).toHaveBeenCalledWith("C1", "123.456", "✅");
+    expect(removeSlackReaction).toHaveBeenCalledWith(
+      "C1",
+      "123.456",
+      "✅",
+      expect.objectContaining({ cfg: expect.any(Object) }),
+    );
   });
 
   it("rejects removes without emoji", async () => {
@@ -188,11 +211,16 @@ describe("handleSlackAction", () => {
       },
       slackConfig(),
     );
-    expect(sendSlackMessage).toHaveBeenCalledWith("channel:C123", "Hello thread", {
-      mediaUrl: undefined,
-      threadTs: "1234567890.123456",
-      blocks: undefined,
-    });
+    expect(sendSlackMessage).toHaveBeenCalledWith(
+      "channel:C123",
+      "Hello thread",
+      expect.objectContaining({
+        cfg: expect.any(Object),
+        mediaUrl: undefined,
+        threadTs: "1234567890.123456",
+        blocks: undefined,
+      }),
+    );
   });
 
   it("returns a friendly error when downloadFile cannot fetch the attachment", async () => {
@@ -242,6 +270,67 @@ describe("handleSlackAction", () => {
     );
   });
 
+  it("returns non-image downloadFile results as file metadata instead of image content", async () => {
+    downloadSlackFile.mockResolvedValueOnce({
+      path: "/tmp/openclaw-media/report.pdf",
+      contentType: "application/pdf",
+      placeholder: "[Slack file: report.pdf (fileId: F123)]",
+    });
+
+    const result = await handleSlackAction(
+      {
+        action: "downloadFile",
+        fileId: "F123",
+      },
+      slackConfig(),
+    );
+
+    expect(result.content).toHaveLength(1);
+    expect(result.content[0]).toEqual(
+      expect.objectContaining({
+        type: "text",
+        text: expect.stringContaining("/tmp/openclaw-media/report.pdf"),
+      }),
+    );
+    expect(result.content.some((entry) => entry.type === "image")).toBe(false);
+    expect(result.details).toEqual(
+      expect.objectContaining({
+        ok: true,
+        fileId: "F123",
+        path: "/tmp/openclaw-media/report.pdf",
+        contentType: "application/pdf",
+        media: {
+          mediaUrl: "/tmp/openclaw-media/report.pdf",
+          contentType: "application/pdf",
+        },
+      }),
+    );
+  });
+
+  it("forwards resolved botToken to action functions instead of relying on config re-read", async () => {
+    downloadSlackFile.mockResolvedValueOnce(null);
+    await handleSlackAction({ action: "downloadFile", fileId: "F123" }, slackConfig());
+    const opts = downloadSlackFile.mock.calls[0]?.[1] as { token?: string } | undefined;
+    expect(opts?.token).toBe("tok");
+  });
+
+  it("keeps resolved userToken for downloadFile reads when configured", async () => {
+    downloadSlackFile.mockResolvedValueOnce(null);
+    await handleSlackAction(
+      { action: "downloadFile", fileId: "F123" },
+      slackConfig({
+        accounts: {
+          default: {
+            botToken: "xoxb-bot",
+            userToken: "xoxp-user",
+          },
+        },
+      }),
+    );
+    const opts = downloadSlackFile.mock.calls[0]?.[1] as { token?: string } | undefined;
+    expect(opts?.token).toBe("xoxp-user");
+  });
+
   it.each([
     {
       name: "JSON blocks",
@@ -265,11 +354,16 @@ describe("handleSlackAction", () => {
       },
       slackConfig(),
     );
-    expect(sendSlackMessage).toHaveBeenCalledWith("channel:C123", "", {
-      mediaUrl: undefined,
-      threadTs: undefined,
-      blocks: expectedBlocks,
-    });
+    expect(sendSlackMessage).toHaveBeenCalledWith(
+      "channel:C123",
+      "",
+      expect.objectContaining({
+        cfg: expect.any(Object),
+        mediaUrl: undefined,
+        threadTs: undefined,
+        blocks: expectedBlocks,
+      }),
+    );
   });
 
   it.each([
@@ -320,12 +414,17 @@ describe("handleSlackAction", () => {
       slackConfig(),
     );
 
-    expect(sendSlackMessage).toHaveBeenCalledWith("user:U123", "fresh report", {
-      mediaUrl: "/tmp/report.png",
-      threadTs: "111.222",
-      uploadFileName: "report-final.png",
-      uploadTitle: "Report Final",
-    });
+    expect(sendSlackMessage).toHaveBeenCalledWith(
+      "user:U123",
+      "fresh report",
+      expect.objectContaining({
+        cfg: expect.any(Object),
+        mediaUrl: "/tmp/report.png",
+        threadTs: "111.222",
+        uploadFileName: "report-final.png",
+        uploadTitle: "Report Final",
+      }),
+    );
   });
 
   it("rejects blocks combined with mediaUrl", async () => {
@@ -365,9 +464,15 @@ describe("handleSlackAction", () => {
       },
       slackConfig(),
     );
-    expect(editSlackMessage).toHaveBeenCalledWith("C123", "123.456", "", {
-      blocks: expectedBlocks,
-    });
+    expect(editSlackMessage).toHaveBeenCalledWith(
+      "C123",
+      "123.456",
+      "",
+      expect.objectContaining({
+        cfg: expect.any(Object),
+        blocks: expectedBlocks,
+      }),
+    );
   });
 
   it("requires content or blocks for editMessage", async () => {
@@ -411,6 +516,24 @@ describe("handleSlackAction", () => {
     );
 
     expectLastSlackSend("First", "1111111111.111111");
+    await sendSecondMessageAndExpectNoThread({ cfg, context });
+  });
+
+  it("replyToMode=first normalizes channel target when accounting explicit threadTs", async () => {
+    const { cfg, context, hasRepliedRef } = createReplyToFirstScenario();
+
+    await handleSlackAction(
+      {
+        action: "sendMessage",
+        to: "#c123",
+        content: "Explicit",
+        threadTs: "9999999999.999999",
+      },
+      cfg,
+      context,
+    );
+
+    expect(hasRepliedRef.value).toBe(true);
     await sendSecondMessageAndExpectNoThread({ cfg, context });
   });
 
@@ -469,11 +592,16 @@ describe("handleSlackAction", () => {
         replyToMode: "all",
       },
     );
-    expect(sendSlackMessage).toHaveBeenCalledWith("channel:C999", "Other channel", {
-      mediaUrl: undefined,
-      threadTs: undefined,
-      blocks: undefined,
-    });
+    expect(sendSlackMessage).toHaveBeenCalledWith(
+      "channel:C999",
+      "Other channel",
+      expect.objectContaining({
+        cfg: expect.any(Object),
+        mediaUrl: undefined,
+        threadTs: undefined,
+        blocks: undefined,
+      }),
+    );
   });
 
   it("explicit threadTs overrides context threadTs", async () => {
@@ -504,11 +632,16 @@ describe("handleSlackAction", () => {
         replyToMode: "all",
       },
     );
-    expect(sendSlackMessage).toHaveBeenCalledWith("C123", "Bare target", {
-      mediaUrl: undefined,
-      threadTs: "1111111111.111111",
-      blocks: undefined,
-    });
+    expect(sendSlackMessage).toHaveBeenCalledWith(
+      "C123",
+      "Bare target",
+      expect.objectContaining({
+        cfg: expect.any(Object),
+        mediaUrl: undefined,
+        threadTs: "1111111111.111111",
+        blocks: undefined,
+      }),
+    );
   });
 
   it("adds normalized timestamps to readMessages payloads", async () => {
@@ -544,12 +677,16 @@ describe("handleSlackAction", () => {
       slackConfig(),
     );
 
-    expect(readSlackMessages).toHaveBeenCalledWith("C1", {
-      threadId: "1712345678.123456",
-      limit: undefined,
-      before: undefined,
-      after: undefined,
-    });
+    expect(readSlackMessages).toHaveBeenCalledWith(
+      "C1",
+      expect.objectContaining({
+        cfg: expect.any(Object),
+        threadId: "1712345678.123456",
+        limit: undefined,
+        before: undefined,
+        after: undefined,
+      }),
+    );
   });
 
   it("adds normalized timestamps to pin payloads", async () => {

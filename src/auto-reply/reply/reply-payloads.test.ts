@@ -1,10 +1,38 @@
-import { describe, expect, it } from "vitest";
-import { setActivePluginRegistry } from "../../plugins/runtime.js";
-import { createTestRegistry } from "../../test-utils/channel-plugins.js";
+import { describe, expect, it, vi } from "vitest";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
+import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import {
   filterMessagingToolMediaDuplicates,
   shouldSuppressMessagingToolReplies,
 } from "./reply-payloads.js";
+
+function targetsMatchTelegramReplySuppression(params: {
+  originTarget: string;
+  targetKey: string;
+  targetThreadId?: string;
+}): boolean {
+  const baseTarget = (value: string) =>
+    value
+      .replace(/^telegram:(group|channel):/u, "")
+      .replace(/^telegram:/u, "")
+      .replace(/:topic:.*$/u, "");
+  const originTopic = params.originTarget.match(/:topic:([^:]+)$/u)?.[1];
+  return (
+    baseTarget(params.originTarget) === baseTarget(params.targetKey) &&
+    (originTopic === undefined || originTopic === params.targetThreadId)
+  );
+}
+
+vi.mock("../../channels/plugins/bundled.js", () => ({
+  getBundledChannelPlugin: (channel: string) =>
+    channel === "telegram"
+      ? {
+          outbound: {
+            targetsMatchForReplySuppression: targetsMatchTelegramReplySuppression,
+          },
+        }
+      : undefined,
+}));
 
 describe("filterMessagingToolMediaDuplicates", () => {
   it("strips mediaUrl when it matches sentMediaUrls", () => {
@@ -82,6 +110,25 @@ describe("filterMessagingToolMediaDuplicates", () => {
 });
 
 describe("shouldSuppressMessagingToolReplies", () => {
+  const installTelegramSuppressionRegistry = () => {
+    resetPluginRuntimeStateForTest();
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "telegram-plugin",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "telegram",
+            outbound: {
+              deliveryMode: "direct",
+              targetsMatchForReplySuppression: targetsMatchTelegramReplySuppression,
+            },
+          }),
+        },
+      ]),
+    );
+  };
+
   it("suppresses when target provider is missing but target matches current provider route", () => {
     expect(
       shouldSuppressMessagingToolReplies({
@@ -112,7 +159,32 @@ describe("shouldSuppressMessagingToolReplies", () => {
     ).toBe(false);
   });
 
+  it("suppresses when only one side carries the account id", () => {
+    expect(
+      shouldSuppressMessagingToolReplies({
+        messageProvider: "telegram",
+        originatingTo: "123",
+        accountId: "work",
+        messagingToolSentTargets: [{ tool: "message", provider: "telegram", to: "123" }],
+      }),
+    ).toBe(true);
+  });
+
+  it("does not suppress when route accounts differ", () => {
+    expect(
+      shouldSuppressMessagingToolReplies({
+        messageProvider: "telegram",
+        originatingTo: "123",
+        accountId: "work",
+        messagingToolSentTargets: [
+          { tool: "message", provider: "telegram", to: "123", accountId: "personal" },
+        ],
+      }),
+    ).toBe(false);
+  });
+
   it("suppresses telegram topic-origin replies when explicit threadId matches", () => {
+    installTelegramSuppressionRegistry();
     expect(
       shouldSuppressMessagingToolReplies({
         messageProvider: "telegram",
@@ -147,6 +219,7 @@ describe("shouldSuppressMessagingToolReplies", () => {
   });
 
   it("suppresses telegram replies when chatId matches but target forms differ", () => {
+    installTelegramSuppressionRegistry();
     expect(
       shouldSuppressMessagingToolReplies({
         messageProvider: "telegram",
@@ -157,6 +230,7 @@ describe("shouldSuppressMessagingToolReplies", () => {
   });
 
   it("suppresses telegram replies even when the active plugin registry omits telegram", () => {
+    resetPluginRuntimeStateForTest();
     setActivePluginRegistry(createTestRegistry([]));
 
     expect(

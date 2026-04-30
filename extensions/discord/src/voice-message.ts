@@ -13,7 +13,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { RateLimitError, type RequestClient } from "@buape/carbon";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   parseFfprobeCodecAndSampleRate,
   runFfmpeg,
@@ -23,6 +23,8 @@ import { MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS } from "openclaw/plugin-sdk/media-
 import { unlinkIfExists } from "openclaw/plugin-sdk/media-runtime";
 import type { RetryRunner } from "openclaw/plugin-sdk/retry-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { RateLimitError, type RequestClient } from "./internal/discord.js";
 
 const DISCORD_VOICE_MESSAGE_FLAG = 1 << 13;
 const SUPPRESS_NOTIFICATIONS_FLAG = 1 << 12;
@@ -34,7 +36,7 @@ function createRateLimitError(
   body: { message: string; retry_after: number; global: boolean },
   request?: Request,
 ): RateLimitError {
-  const compatRequest =
+  const fallbackRequest =
     request ??
     new Request("https://discord.com/api/v10/channels/voice/messages", {
       method: "POST",
@@ -44,7 +46,7 @@ function createRateLimitError(
     body: { message: string; retry_after: number; global: boolean },
     request?: Request,
   ) => RateLimitError;
-  return new RateLimitErrorCtor(response, body, compatRequest);
+  return new RateLimitErrorCtor(response, body, fallbackRequest);
 }
 
 export type VoiceMessageMetadata = {
@@ -66,13 +68,13 @@ export async function getAudioDuration(filePath: string): Promise<number> {
       "csv=p=0",
       filePath,
     ]);
-    const duration = parseFloat(stdout.trim());
-    if (isNaN(duration)) {
+    const duration = Number.parseFloat(stdout.trim());
+    if (Number.isNaN(duration)) {
       throw new Error("Could not parse duration");
     }
     return Math.round(duration * 100) / 100; // Round to 2 decimal places
   } catch (err) {
-    const errMessage = err instanceof Error ? err.message : String(err);
+    const errMessage = formatErrorMessage(err);
     throw new Error(`Failed to get audio duration: ${errMessage}`, { cause: err });
   }
 }
@@ -178,7 +180,7 @@ export async function ensureOggOpus(filePath: string): Promise<{ path: string; c
     );
   }
 
-  const ext = path.extname(filePath).toLowerCase();
+  const ext = normalizeLowercaseStringOrEmpty(path.extname(filePath));
 
   // Check if already OGG
   if (ext === ".ogg") {
@@ -273,7 +275,7 @@ export async function sendDiscordVoiceMessage(
   const fileSize = audioBuffer.byteLength;
 
   // Step 1: Request upload URL from Discord
-  // Must use fetch() directly instead of rest.post() because @buape/carbon's
+  // Must use fetch() directly instead of rest.post() because ./internal/discord.js's
   // RequestClient auto-converts requests to multipart/form-data when the body
   // contains a "files" key. Discord's /attachments endpoint expects JSON, so
   // the auto-conversion causes HTTP 400 "Expected Content-Type application/json".

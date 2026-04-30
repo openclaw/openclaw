@@ -1,10 +1,12 @@
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+
 export type SystemdUnavailableKind =
   | "missing_systemctl"
   | "user_bus_unavailable"
   | "generic_unavailable";
 
 function normalizeDetail(detail?: string): string {
-  return detail?.toLowerCase().trim() ?? "";
+  return normalizeLowercaseStringOrEmpty(detail);
 }
 
 export function isSystemctlMissingDetail(detail?: string): boolean {
@@ -25,6 +27,7 @@ export function isSystemdUserBusUnavailableDetail(detail?: string): boolean {
     normalized.includes("failed to connect to user scope bus") ||
     normalized.includes("dbus_session_bus_address") ||
     normalized.includes("xdg_runtime_dir") ||
+    normalized.includes("enomedium") ||
     normalized.includes("no medium found")
   );
 }

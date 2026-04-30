@@ -1,10 +1,11 @@
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { isRecord } from "openclaw/plugin-sdk/text-runtime";
 import { fetchWithTimeout } from "openclaw/plugin-sdk/text-runtime";
 import type {
   AuditTelegramGroupMembershipParams,
   TelegramGroupMembershipAudit,
   TelegramGroupMembershipAuditEntry,
-} from "./audit.js";
+} from "./audit.types.js";
 import { resolveTelegramApiBase, resolveTelegramFetch } from "./fetch.js";
 import { makeProxyFetch } from "./proxy.js";
 
@@ -60,7 +61,7 @@ export async function auditTelegramGroupMembershipImpl(
         chatId,
         ok: false,
         status: null,
-        error: err instanceof Error ? err.message : String(err),
+        error: formatErrorMessage(err),
         matchKey: chatId,
         matchSource: "id",
       });

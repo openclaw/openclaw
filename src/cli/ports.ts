@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { createServer } from "node:net";
+import { formatErrorMessage } from "../infra/errors.js";
 import { resolveLsofCommandSync } from "../infra/ports-lsof.js";
 import { tryListenOnPort } from "../infra/ports-probe.js";
 import { sleep } from "../utils.js";
@@ -64,7 +65,7 @@ function isRecoverableLsofError(err: unknown): boolean {
   if (code === "ENOENT" || code === "EACCES" || code === "EPERM") {
     return true;
   }
-  const message = err instanceof Error ? err.message : String(err);
+  const message = formatErrorMessage(err);
   return /lsof.*(permission denied|not permitted|operation not permitted|eacces|eperm)/i.test(
     message,
   );
