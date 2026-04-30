@@ -14,11 +14,10 @@ import { resolveMessageChannel } from "../../utils/message-channel.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../bootstrap-budget.js";
 import { runCliAgent } from "../cli-runner.js";
 import { getCliSessionBinding, setCliSessionBinding } from "../cli-session.js";
-import { runCursorSdkAgent } from "../cursor-sdk-runner.js";
 import { FailoverError } from "../failover-error.js";
 import { resolveAgentHarnessPolicy } from "../harness/selection.js";
 import { isCliRuntimeAlias, resolveCliRuntimeExecutionProvider } from "../model-runtime-aliases.js";
-import { isCursorSdkProvider, isCliProvider } from "../model-selection.js";
+import { isCliProvider } from "../model-selection.js";
 import { prepareSessionManagerForRun } from "../pi-embedded-runner/session-manager-init.js";
 import { runEmbeddedPiAgent, type EmbeddedPiRunResult } from "../pi-embedded.js";
 import { buildAgentRuntimeAuthPlan } from "../runtime-plan/auth.js";
@@ -452,22 +451,6 @@ export function runAgentAttempt(params: {
         }
         throw err;
       }
-    });
-  }
-
-  if (isCursorSdkProvider(cliExecutionProvider)) {
-    return runCursorSdkAgent({
-      sessionId: params.sessionId,
-      sessionKey: params.sessionKey,
-      agentId: params.sessionAgentId,
-      sessionFile: params.sessionFile,
-      workspaceDir: params.workspaceDir,
-      config: params.cfg,
-      prompt: effectivePrompt,
-      provider: cliExecutionProvider,
-      model: params.modelOverride,
-      timeoutMs: params.timeoutMs,
-      runId: params.runId,
     });
   }
 

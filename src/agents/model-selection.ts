@@ -78,10 +78,6 @@ export {
 };
 export { isCliProvider } from "./model-selection-cli.js";
 
-export function isCursorSdkProvider(provider: string): boolean {
-  return normalizeProviderId(provider) === "cursor-sdk";
-}
-
 export function resolvePersistedOverrideModelRef(params: {
   defaultProvider: string;
   overrideProvider?: string;

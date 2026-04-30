@@ -1,0 +1,80 @@
+{
+  "id": "cursor-sdk",
+  "name": "Cursor SDK",
+  "description": "Cursor SDK agent harness supporting local and cloud execution via @cursor/sdk.",
+  "providers": ["cursor-sdk"],
+  "activation": {
+    "onStartup": false,
+    "onAgentHarnesses": ["cursor-sdk"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "runtime": {
+        "type": "string",
+        "enum": ["local", "cloud"],
+        "default": "local"
+      },
+      "model": {
+        "type": "string",
+        "default": "composer-2"
+      },
+      "cloud": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "repos": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "url": { "type": "string", "format": "uri" },
+                "startingRef": { "type": "string" }
+              },
+              "required": ["url"]
+            }
+          },
+          "autoCreatePR": { "type": "boolean" }
+        }
+      },
+      "local": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "cwd": { "type": "string" }
+        }
+      }
+    }
+  },
+  "uiHints": {
+    "runtime": {
+      "label": "Runtime",
+      "help": "Run Cursor agent locally on the host machine or in a Cursor cloud VM."
+    },
+    "model": {
+      "label": "Model",
+      "help": "Default Cursor agent model (e.g. composer-2, composer-2-fast)."
+    },
+    "cloud": {
+      "label": "Cloud Settings",
+      "help": "Configuration for Cursor cloud VM execution.",
+      "advanced": true
+    },
+    "cloud.repos": {
+      "label": "Repositories",
+      "help": "Git repositories to clone into the cloud VM.",
+      "advanced": true
+    },
+    "cloud.autoCreatePR": {
+      "label": "Auto Create PR",
+      "help": "Automatically create a pull request from cloud agent changes.",
+      "advanced": true
+    },
+    "local.cwd": {
+      "label": "Working Directory",
+      "help": "Override the local agent working directory (defaults to agent workspace).",
+      "advanced": true
+    }
+  }
+}

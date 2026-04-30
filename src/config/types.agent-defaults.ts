@@ -176,22 +176,6 @@ export type CliBackendConfig = {
   };
 };
 
-export type CursorSdkBackendConfig = {
-  /** Runtime mode: "local" (user's machine) or "cloud" (Cursor VM). */
-  runtime?: "local" | "cloud";
-  /** Default model id for Cursor agent runs (e.g. "composer-2"). */
-  model?: string;
-  /** Cloud-specific settings. */
-  cloud?: {
-    repos?: Array<{ url: string; startingRef?: string }>;
-    autoCreatePR?: boolean;
-  };
-  /** Local-specific settings (defaults to agent workspace dir). */
-  local?: {
-    cwd?: string;
-  };
-};
-
 export type AgentDefaultsConfig = {
   /** Global default provider params applied to all models before per-model and per-agent overrides. */
   params?: Record<string, unknown>;
@@ -291,8 +275,6 @@ export type AgentDefaultsConfig = {
   contextTokens?: number;
   /** Optional CLI backends for text-only fallback (claude-cli, etc.). */
   cliBackends?: Record<string, CliBackendConfig>;
-  /** Cursor SDK backend settings (cursor-sdk provider). */
-  cursorSdk?: CursorSdkBackendConfig;
   /** Opt-in: prune old tool results from the LLM context to reduce token usage. */
   contextPruning?: AgentContextPruningConfig;
   /** Compaction tuning and pre-compaction memory flush behavior. */

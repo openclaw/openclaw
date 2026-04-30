@@ -3,7 +3,6 @@ export { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-bu
 export { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 export { runWithModelFallback } from "../../agents/model-fallback.js";
 export { isCliProvider } from "../../agents/model-selection-cli.js";
-export { isCursorSdkProvider } from "../../agents/model-selection.js";
 export { normalizeVerboseLevel } from "../../auto-reply/thinking.shared.js";
 export { resolveSessionTranscriptPath } from "../../config/sessions/paths.js";
 export { registerAgentRunContext } from "../../infra/agent-events.js";
@@ -30,11 +29,4 @@ export async function runCliAgent(
 ): ReturnType<typeof import("../../agents/cli-runner.js").runCliAgent> {
   const runtime = await loadCronExecutionCliRuntime();
   return runtime.runCliAgent(...args);
-}
-
-export async function runCursorSdkAgent(
-  ...args: Parameters<typeof import("../../agents/cursor-sdk-runner.js").runCursorSdkAgent>
-): ReturnType<typeof import("../../agents/cursor-sdk-runner.js").runCursorSdkAgent> {
-  const { runCursorSdkAgent: run } = await import("../../agents/cursor-sdk-runner.js");
-  return run(...args);
 }

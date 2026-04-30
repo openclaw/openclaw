@@ -11,7 +11,6 @@ import {
 import { resolveCronPayloadOutcome } from "./helpers.js";
 import {
   getCliSessionId,
-  isCursorSdkProvider,
   isCliProvider,
   LiveSessionModelSwitchError,
   logWarn,
@@ -20,7 +19,6 @@ import {
   resolveBootstrapWarningSignaturesSeen,
   resolveSessionTranscriptPath,
   runCliAgent,
-  runCursorSdkAgent,
   runWithModelFallback,
 } from "./run-execution.runtime.js";
 import { resolveCronFallbacksOverride } from "./run-fallback-policy.js";
@@ -164,22 +162,6 @@ export function createCronPromptExecutor(params: {
           bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
             result.meta?.systemPromptReport,
           );
-          return result;
-        }
-        if (isCursorSdkProvider(providerOverride)) {
-          const result = await runCursorSdkAgent({
-            sessionId: params.cronSession.sessionEntry.sessionId,
-            sessionKey: params.runSessionKey,
-            agentId: params.agentId,
-            sessionFile,
-            workspaceDir: params.workspaceDir,
-            config: params.cfgWithAgentDefaults,
-            prompt: promptText,
-            provider: providerOverride,
-            model: modelOverride,
-            timeoutMs: params.timeoutMs,
-            runId: params.cronSession.sessionEntry.sessionId,
-          });
           return result;
         }
         const { resolveCronAgentLane, resolveFastModeState, runEmbeddedPiAgent } =
