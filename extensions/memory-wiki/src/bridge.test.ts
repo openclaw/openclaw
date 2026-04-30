@@ -10,12 +10,23 @@ import {
   appendMemoryHostEvent,
   resolveMemoryHostEventLogPath,
 } from "openclaw/plugin-sdk/memory-host-events";
+import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../api.js";
 import { syncMemoryWikiBridgeSources } from "./bridge.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
 
 const { createVault } = createMemoryWikiTestHarness();
+
+let bridgeMirrorImportId = 0;
+
+async function importMirroredBridgeModule(): Promise<typeof import("./bridge.js")> {
+  bridgeMirrorImportId += 1;
+  return await importFreshModule<typeof import("./bridge.js")>(
+    import.meta.url,
+    `./bridge.js?runtimeMirror=${bridgeMirrorImportId}`,
+  );
+}
 
 describe("syncMemoryWikiBridgeSources", () => {
   let fixtureRoot = "";
@@ -196,6 +207,45 @@ describe("syncMemoryWikiBridgeSources", () => {
       workspaces: 0,
       pagePaths: [],
     });
+  });
+
+  it("imports canonical memory artifacts when loaded from a mirrored runtime module instance", async () => {
+    const workspaceDir = await createBridgeWorkspace("mirrored-workspace");
+    const { config } = await createVault({
+      rootDir: nextCaseRoot("mirrored-vault"),
+      config: {
+        vaultMode: "bridge",
+        bridge: {
+          enabled: true,
+          readMemoryArtifacts: true,
+          indexMemoryRoot: true,
+        },
+      },
+    });
+    const memoryPath = path.join(workspaceDir, "MEMORY.md");
+    await fs.writeFile(memoryPath, "# Durable Memory\n", "utf8");
+    registerBridgeArtifacts([
+      {
+        kind: "memory-root",
+        workspaceDir,
+        relativePath: "MEMORY.md",
+        absolutePath: memoryPath,
+        agentIds: ["main"],
+        contentType: "markdown",
+      },
+    ]);
+    const appConfig: OpenClawConfig = {
+      agents: {
+        list: [{ id: "main", default: true, workspace: workspaceDir }],
+      },
+    };
+    const mirroredBridge = await importMirroredBridgeModule();
+
+    const result = await mirroredBridge.syncMemoryWikiBridgeSources({ config, appConfig });
+
+    expect(result.artifactCount).toBe(1);
+    expect(result.importedCount).toBe(1);
+    expect(result.pagePaths).toHaveLength(1);
   });
 
   it("imports the public memory event journal when followMemoryEvents is enabled", async () => {

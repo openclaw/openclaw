@@ -1,4 +1,5 @@
 import type { MemoryCitationsMode } from "../config/types.memory.js";
+import { createPluginRuntimeStore } from "../plugin-sdk/runtime-store.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { MemorySearchManager } from "../memory-host-sdk/host/types.js";
 
@@ -152,10 +153,22 @@ type MemoryPluginState = {
   runtime?: MemoryPluginRuntime;
 };
 
-const memoryPluginState: MemoryPluginState = {
-  corpusSupplements: [],
-  promptSupplements: [],
-};
+function createEmptyMemoryPluginState(): MemoryPluginState {
+  return {
+    corpusSupplements: [],
+    promptSupplements: [],
+  };
+}
+
+// Runtime dependency mirrors can load a second copy of this module in the same
+// Gateway process. Store the mutable registry through the shared plugin runtime
+// store so mirrored chunks observe the same memory capability state.
+const memoryPluginStateStore = createPluginRuntimeStore<MemoryPluginState>({
+  key: "memory-plugin-state",
+  errorMessage: "memory plugin state has not been initialized",
+});
+const memoryPluginState = memoryPluginStateStore.tryGetRuntime() ?? createEmptyMemoryPluginState();
+memoryPluginStateStore.setRuntime(memoryPluginState);
 
 export function registerMemoryCorpusSupplement(
   pluginId: string,

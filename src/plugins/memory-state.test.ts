@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
+import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import {
   _resetMemoryPluginState,
   buildMemoryPromptSection,
@@ -76,6 +77,16 @@ function registerMemoryState(params: {
   if (params.runtime) {
     registerMemoryRuntime(params.runtime);
   }
+}
+
+let memoryStateMirrorImportId = 0;
+
+async function importMirroredMemoryStateModule(): Promise<typeof import("./memory-state.js")> {
+  memoryStateMirrorImportId += 1;
+  return await importFreshModule<typeof import("./memory-state.js")>(
+    import.meta.url,
+    `./memory-state.js?runtimeMirror=${memoryStateMirrorImportId}`,
+  );
 }
 
 describe("memory plugin state", () => {
@@ -179,6 +190,33 @@ describe("memory plugin state", () => {
         contentType: "markdown",
       },
     ]);
+  });
+
+  it("shares active public artifacts across mirrored runtime module instances", async () => {
+    const artifact = {
+      kind: "memory-root",
+      workspaceDir: "workspace",
+      relativePath: "MEMORY.md",
+      absolutePath: "workspace/MEMORY.md",
+      agentIds: ["main"],
+      contentType: "markdown" as const,
+    };
+    registerMemoryCapability("memory-core", {
+      publicArtifacts: {
+        async listArtifacts() {
+          return [artifact];
+        },
+      },
+    });
+
+    const mirroredMemoryState = await importMirroredMemoryStateModule();
+
+    await expect(
+      mirroredMemoryState.listActiveMemoryPublicArtifacts({ cfg: {} as never }),
+    ).resolves.toEqual([artifact]);
+
+    mirroredMemoryState.clearMemoryPluginState();
+    await expect(listActiveMemoryPublicArtifacts({ cfg: {} as never })).resolves.toEqual([]);
   });
 
   it("passes citations mode through to the prompt builder", () => {
