@@ -40,6 +40,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- CLI/agents/status: keep `openclaw agents`, text `agents list`, and plain text `status` on read-only metadata paths so human output no longer preloads plugin runtimes or live channel scans before printing. Fixes #74195. Thanks @NianJiuZst.
 - Media: treat legacy Word/OLE attachments with `application/msword` or `application/x-cfb` MIME as binary so printable-looking `.doc` files are not embedded into prompts as text. Fixes #54176; carries forward #54380. Thanks @andyliu.
 - Config: accept documented `browser.tabCleanup` keys in strict root config validation, so configured tab cleanup no longer fails before runtime reads it. Fixes #74577. Thanks @lonexreb and @ezdlp.
 - Cron: validate disabled job schedule edits before persisting updates, so invalid cron changes no longer partially mutate stored jobs. Fixes #74459. Thanks @yfge.
