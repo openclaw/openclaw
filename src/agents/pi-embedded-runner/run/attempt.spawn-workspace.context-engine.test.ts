@@ -869,3 +869,43 @@ describe("runEmbeddedAttempt context engine mid-turn precheck integration", () =
     expect(result.messagesSnapshot).toEqual([seedMessage]);
   });
 });
+
+describe("runEmbeddedAttempt tool-result guard budget wiring", () => {
+  const sessionKey = "agent:main:guildchat:channel:tool-result-guard-budget";
+  const tempPaths: string[] = [];
+
+  beforeEach(() => {
+    resetEmbeddedAttemptHarness();
+    clearMemoryPluginState();
+  });
+
+  afterEach(async () => {
+    await cleanupTempPaths(tempPaths);
+    clearMemoryPluginState();
+    vi.restoreAllMocks();
+  });
+
+  it("uses the resolved contextTokenBudget before model contextWindow", async () => {
+    await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey,
+      tempPaths,
+      attemptOverrides: {
+        contextTokenBudget: 1_000_000,
+        model: {
+          api: "openai-completions",
+          provider: "openai",
+          compat: {},
+          contextWindow: 200_000,
+          input: ["text"],
+        } as never,
+      },
+    });
+
+    expect(hoisted.installToolResultContextGuardMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        contextWindowTokens: 1_000_000,
+      }),
+    );
+  });
+});

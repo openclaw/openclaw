@@ -11,6 +11,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Agents/tool-result guard: use the resolved runtime context token budget for non-context-engine tool-result overflow checks, so long tool-heavy sessions no longer compact early when `contextTokens` is larger than native `contextWindow`. Fixes #74917. Thanks @kAIborg24.
 - Gateway/systemd: exit with sysexits 78 for supervised lock and `EADDRINUSE` conflicts so `RestartPreventExitStatus=78` stops `Restart=always` restart loops instead of repeatedly reloading plugins against an occupied port. Fixes #75115. Thanks @yhyatt.
 - Plugins/runtime-deps: replace stale symlinked mirror target roots before writing runtime-mirror temp files and skip rewriting already materialized hardlinks, so cross-version container upgrades no longer crash-loop on read-only image-layer paths while warm mirrors do less churn. Fixes #75108; refs #75069. Thanks @coletebou and @xiaohuaxi.
 - Auto-reply/group chats: fall back to automatic source delivery when a channel precomputes message-tool-only replies but the `message` tool is unavailable, so Discord/Slack-style group turns do not silently complete without a visible reply. Fixes #74868. Thanks @kagura-agent.

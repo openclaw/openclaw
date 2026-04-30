@@ -1528,7 +1528,12 @@ export async function runEmbeddedAttempt(
       };
       const contextTokenBudgetForGuard = Math.max(
         1,
-        Math.floor(params.contextTokenBudget ?? DEFAULT_CONTEXT_TOKENS),
+        Math.floor(
+          params.contextTokenBudget ??
+            params.model.contextWindow ??
+            params.model.maxTokens ??
+            DEFAULT_CONTEXT_TOKENS,
+        ),
       );
       const toolResultMaxCharsForGuard = resolveLiveToolResultMaxChars({
         contextWindowTokens: contextTokenBudgetForGuard,
@@ -1544,12 +1549,7 @@ export async function runEmbeddedAttempt(
       if (!activeContextEngine || activeContextEngine.info.ownsCompaction !== true) {
         removeToolResultContextGuard = installToolResultContextGuard({
           agent: activeSession.agent,
-          contextWindowTokens: Math.max(
-            1,
-            Math.floor(
-              params.model.contextWindow ?? params.model.maxTokens ?? DEFAULT_CONTEXT_TOKENS,
-            ),
-          ),
+          contextWindowTokens: contextTokenBudgetForGuard,
           ...(midTurnPrecheckEnabled
             ? {
                 midTurnPrecheck: {
