@@ -1,4 +1,4 @@
-import { logVerbose, shouldLogVerbose } from "../../globals.js";
+import { createHash } from "node:crypto"; import { logVerbose, shouldLogVerbose } from "../../globals.js";
 import { resolveGlobalDedupeCache, type DedupeCache } from "../../infra/dedupe.js";
 import { channelRouteDedupeKey } from "../../plugin-sdk/channel-route.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
@@ -75,7 +75,25 @@ export function buildInboundDedupeKey(ctx: MsgContext): string | null {
     accountId,
     threadId: ctx.MessageThreadId,
   });
-  return JSON.stringify([sessionScope, routeKey, messageId]);
+
+  // Primary: stable MessageSid from channel — safe dedupe.
+  if (messageId) {
+    return JSON.stringify([sessionScope, routeKey, messageId]);
+  }
+
+  // Fallback: some channel retries generate new MessageSid per attempt, bypassing
+  // the primary dedupe. Without a stable messageId, we use a content hash (Body|Timestamp)
+  // to catch duplicate retries.
+  //
+  // Note: This is a heuristic. If the channel emits coarse or varying timestamps
+  // across retries, the hash may not match and duplicates can slip through.
+  // Also, distinct messages with same body from same sender will suppress each other
+  // (unlikely for user chat, more relevant for system events).
+  const contentHash = createHash("sha256")
+    .update(`${ctx.Body ?? ""}|${ctx.Timestamp ?? ""}|${ctx.From ?? ""}`, "utf8")
+    .digest("hex")
+    .substring(0, 16);
+  return JSON.stringify([sessionScope, routeKey, `content:${contentHash}`]);
 }
 
 export function shouldSkipDuplicateInbound(
