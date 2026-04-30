@@ -604,9 +604,7 @@ describe("config plugin validation", () => {
     });
     expect(res.ok).toBe(false);
     if (!res.ok) {
-      expect(
-        res.issues.some((issue) => issue.path === "agents.defaults.heartbeat.directPolicy"),
-      ).toBe(true);
+      expect(res.issues.some((issue) => issue.path === "agents.defaults.heartbeat")).toBe(true);
     }
   });
 });

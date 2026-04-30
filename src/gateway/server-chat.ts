@@ -23,10 +23,9 @@ import { formatForLog } from "./ws-log.js";
 function resolveHeartbeatAckMaxChars(): number {
   try {
     const cfg = loadConfig();
-    return Math.max(
-      0,
-      cfg.agents?.defaults?.heartbeat?.ackMaxChars ?? DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
-    );
+    const heartbeat =
+      cfg.agents?.defaults?.heartbeat === false ? undefined : cfg.agents?.defaults?.heartbeat;
+    return Math.max(0, heartbeat?.ackMaxChars ?? DEFAULT_HEARTBEAT_ACK_MAX_CHARS);
   } catch {
     return DEFAULT_HEARTBEAT_ACK_MAX_CHARS;
   }

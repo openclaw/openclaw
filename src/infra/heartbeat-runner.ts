@@ -44,7 +44,7 @@ import {
   saveSessionStore,
   updateSessionStore,
 } from "../config/sessions/store.js";
-import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
+import type { HeartbeatConfig } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveCronSession } from "../cron/isolated-agent/session.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -142,7 +142,6 @@ export {
   type HeartbeatSummary,
 } from "./heartbeat-summary.js";
 
-type HeartbeatConfig = AgentDefaultsConfig["heartbeat"];
 type HeartbeatAgent = {
   agentId: string;
   heartbeat?: HeartbeatConfig;
@@ -189,14 +188,18 @@ function resolveHeartbeatConfig(
   agentId?: string,
 ): HeartbeatConfig | undefined {
   const defaults = cfg.agents?.defaults?.heartbeat;
+  const resolvedDefaults = defaults === false ? undefined : defaults;
   if (!agentId) {
-    return defaults;
+    return resolvedDefaults;
   }
   const overrides = resolveAgentConfig(cfg, agentId)?.heartbeat;
-  if (!defaults && !overrides) {
+  if (overrides === false) {
+    return undefined;
+  }
+  if (!resolvedDefaults && !overrides) {
     return overrides;
   }
-  return { ...defaults, ...overrides };
+  return { ...resolvedDefaults, ...overrides };
 }
 
 function resolveHeartbeatAgents(cfg: OpenClawConfig): HeartbeatAgent[] {
@@ -215,15 +218,17 @@ function resolveHeartbeatAgents(cfg: OpenClawConfig): HeartbeatAgent[] {
 }
 
 export function resolveHeartbeatPrompt(cfg: OpenClawConfig, heartbeat?: HeartbeatConfig) {
-  return resolveHeartbeatPromptText(heartbeat?.prompt ?? cfg.agents?.defaults?.heartbeat?.prompt);
+  const defaultHeartbeat =
+    cfg.agents?.defaults?.heartbeat === false ? undefined : cfg.agents?.defaults?.heartbeat;
+  return resolveHeartbeatPromptText(heartbeat?.prompt ?? defaultHeartbeat?.prompt);
 }
 
 function resolveHeartbeatAckMaxChars(cfg: OpenClawConfig, heartbeat?: HeartbeatConfig) {
+  const defaultHeartbeat =
+    cfg.agents?.defaults?.heartbeat === false ? undefined : cfg.agents?.defaults?.heartbeat;
   return Math.max(
     0,
-    heartbeat?.ackMaxChars ??
-      cfg.agents?.defaults?.heartbeat?.ackMaxChars ??
-      DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
+    heartbeat?.ackMaxChars ?? defaultHeartbeat?.ackMaxChars ?? DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
   );
 }
 

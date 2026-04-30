@@ -5,7 +5,9 @@ import { applyProviderConfigDefaultsForConfig } from "./provider-policy.js";
 function expectAnthropicPruningDefaults(cfg: OpenClawConfig, heartbeatEvery = "30m") {
   expect(cfg.agents?.defaults?.contextPruning?.mode).toBe("cache-ttl");
   expect(cfg.agents?.defaults?.contextPruning?.ttl).toBe("1h");
-  expect(cfg.agents?.defaults?.heartbeat?.every).toBe(heartbeatEvery);
+  const heartbeat =
+    cfg.agents?.defaults?.heartbeat === false ? undefined : cfg.agents?.defaults?.heartbeat;
+  expect(heartbeat?.every).toBe(heartbeatEvery);
 }
 
 function applyAnthropicDefaultsForTest(config: OpenClawConfig) {

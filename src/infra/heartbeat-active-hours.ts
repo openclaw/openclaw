@@ -1,8 +1,6 @@
 import { resolveUserTimezone } from "../agents/date-time.js";
-import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
+import type { HeartbeatConfig } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-
-type HeartbeatConfig = AgentDefaultsConfig["heartbeat"];
 
 const ACTIVE_HOURS_TIME_PATTERN = /^(?:([01]\d|2[0-3]):([0-5]\d)|24:00)$/;
 

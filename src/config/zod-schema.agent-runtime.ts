@@ -17,86 +17,94 @@ import {
 import { sensitive } from "./zod-schema.sensitive.js";
 
 export const HeartbeatSchema = z
-  .object({
-    every: z.string().optional(),
-    activeHours: z
+  .union([
+    z.literal(false),
+    z
       .object({
-        start: z.string().optional(),
-        end: z.string().optional(),
-        timezone: z.string().optional(),
+        every: z.string().optional(),
+        activeHours: z
+          .object({
+            start: z.string().optional(),
+            end: z.string().optional(),
+            timezone: z.string().optional(),
+          })
+          .strict()
+          .optional(),
+        model: z.string().optional(),
+        session: z.string().optional(),
+        includeReasoning: z.boolean().optional(),
+        target: z.string().optional(),
+        directPolicy: z.union([z.literal("allow"), z.literal("block")]).optional(),
+        to: z.string().optional(),
+        accountId: z.string().optional(),
+        prompt: z.string().optional(),
+        includeSystemPromptSection: z.boolean().optional(),
+        ackMaxChars: z.number().int().nonnegative().optional(),
+        suppressToolErrorWarnings: z.boolean().optional(),
+        timeoutSeconds: z.number().int().positive().optional(),
+        lightContext: z.boolean().optional(),
+        isolatedSession: z.boolean().optional(),
       })
       .strict()
-      .optional(),
-    model: z.string().optional(),
-    session: z.string().optional(),
-    includeReasoning: z.boolean().optional(),
-    target: z.string().optional(),
-    directPolicy: z.union([z.literal("allow"), z.literal("block")]).optional(),
-    to: z.string().optional(),
-    accountId: z.string().optional(),
-    prompt: z.string().optional(),
-    includeSystemPromptSection: z.boolean().optional(),
-    ackMaxChars: z.number().int().nonnegative().optional(),
-    suppressToolErrorWarnings: z.boolean().optional(),
-    timeoutSeconds: z.number().int().positive().optional(),
-    lightContext: z.boolean().optional(),
-    isolatedSession: z.boolean().optional(),
-  })
-  .strict()
-  .superRefine((val, ctx) => {
-    if (!val.every) {
-      return;
-    }
-    try {
-      parseDurationMs(val.every, { defaultUnit: "m" });
-    } catch {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["every"],
-        message: "invalid duration (use ms, s, m, h)",
-      });
-    }
+      .superRefine((val, ctx) => {
+        if (!val.every) {
+          return;
+        }
+        try {
+          parseDurationMs(val.every, { defaultUnit: "m" });
+        } catch {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["every"],
+            message: "invalid duration (use ms, s, m, h)",
+          });
+        }
 
-    const active = val.activeHours;
-    if (!active) {
-      return;
-    }
-    const timePattern = /^([01]\d|2[0-3]|24):([0-5]\d)$/;
-    const validateTime = (raw: string | undefined, opts: { allow24: boolean }, path: string) => {
-      if (!raw) {
-        return;
-      }
-      if (!timePattern.test(raw)) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ["activeHours", path],
-          message: 'invalid time (use "HH:MM" 24h format)',
-        });
-        return;
-      }
-      const [hourStr, minuteStr] = raw.split(":");
-      const hour = Number(hourStr);
-      const minute = Number(minuteStr);
-      if (hour === 24 && minute !== 0) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ["activeHours", path],
-          message: "invalid time (24:00 is the only allowed 24:xx value)",
-        });
-        return;
-      }
-      if (hour === 24 && !opts.allow24) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ["activeHours", path],
-          message: "invalid time (start cannot be 24:00)",
-        });
-      }
-    };
+        const active = val.activeHours;
+        if (!active) {
+          return;
+        }
+        const timePattern = /^([01]\d|2[0-3]|24):([0-5]\d)$/;
+        const validateTime = (
+          raw: string | undefined,
+          opts: { allow24: boolean },
+          path: string,
+        ) => {
+          if (!raw) {
+            return;
+          }
+          if (!timePattern.test(raw)) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: ["activeHours", path],
+              message: 'invalid time (use "HH:MM" 24h format)',
+            });
+            return;
+          }
+          const [hourStr, minuteStr] = raw.split(":");
+          const hour = Number(hourStr);
+          const minute = Number(minuteStr);
+          if (hour === 24 && minute !== 0) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: ["activeHours", path],
+              message: "invalid time (24:00 is the only allowed 24:xx value)",
+            });
+            return;
+          }
+          if (hour === 24 && !opts.allow24) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: ["activeHours", path],
+              message: "invalid time (start cannot be 24:00)",
+            });
+          }
+        };
 
-    validateTime(active.start, { allow24: false }, "start");
-    validateTime(active.end, { allow24: true }, "end");
-  })
+        validateTime(active.start, { allow24: false }, "start");
+        validateTime(active.end, { allow24: true }, "end");
+      }),
+  ])
   .optional();
 
 export const SandboxDockerSchema = z

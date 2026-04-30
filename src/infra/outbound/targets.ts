@@ -2,7 +2,7 @@ import { mapAllowFromEntries } from "openclaw/plugin-sdk/channel-config-helpers"
 import { normalizeChatType, type ChatType } from "../../channels/chat-type.js";
 import type { ChannelOutboundTargetMode } from "../../channels/plugins/types.core.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
+import type { AgentDefaultsConfig, HeartbeatConfig } from "../../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeAccountId } from "../../routing/session-key.js";
 import {
@@ -88,7 +88,11 @@ export function resolveHeartbeatDeliveryTarget(params: {
   turnSource?: DeliveryContext;
 }): OutboundTarget {
   const { cfg, entry } = params;
-  const heartbeat = params.heartbeat ?? cfg.agents?.defaults?.heartbeat;
+  const defaultHeartbeat = cfg.agents?.defaults?.heartbeat;
+  const heartbeat: HeartbeatConfig | undefined =
+    params.heartbeat === false
+      ? undefined
+      : (params.heartbeat ?? (defaultHeartbeat === false ? undefined : defaultHeartbeat));
   const rawTarget = heartbeat?.target;
   let target: HeartbeatTarget = "none";
   if (rawTarget === "none" || rawTarget === "last") {
@@ -301,7 +305,7 @@ function resolveHeartbeatDeliveryChatType(params: {
 function shouldReuseHeartbeatRouteThreadId(params: {
   cfg: OpenClawConfig;
   target: HeartbeatTarget;
-  heartbeat?: AgentDefaultsConfig["heartbeat"];
+  heartbeat?: HeartbeatConfig;
   turnSource?: DeliveryContext;
   entry?: SessionEntry;
   resolvedTarget: SessionDeliveryTarget;

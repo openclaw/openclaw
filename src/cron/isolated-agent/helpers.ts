@@ -129,8 +129,11 @@ export function isHeartbeatOnlyResponse(payloads: DeliveryPayload[], ackMaxChars
   return shouldSkipHeartbeatOnlyDelivery(payloads, ackMaxChars);
 }
 
-export function resolveHeartbeatAckMaxChars(agentCfg?: { heartbeat?: { ackMaxChars?: number } }) {
-  const raw = agentCfg?.heartbeat?.ackMaxChars ?? DEFAULT_HEARTBEAT_ACK_MAX_CHARS;
+export function resolveHeartbeatAckMaxChars(agentCfg?: {
+  heartbeat?: false | { ackMaxChars?: number };
+}) {
+  const heartbeat = agentCfg?.heartbeat === false ? undefined : agentCfg?.heartbeat;
+  const raw = heartbeat?.ackMaxChars ?? DEFAULT_HEARTBEAT_ACK_MAX_CHARS;
   return Math.max(0, raw);
 }
 

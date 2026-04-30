@@ -99,6 +99,19 @@ describe("agent defaults schema", () => {
     expect(agent.contextLimits?.memoryGetMaxChars).toBe(18_000);
   });
 
+  it("accepts heartbeat: false on defaults and agent entries", () => {
+    const defaults = AgentDefaultsSchema.parse({
+      heartbeat: false,
+    })!;
+    const agent = AgentEntrySchema.parse({
+      id: "ops",
+      heartbeat: false,
+    });
+
+    expect(defaults.heartbeat).toBe(false);
+    expect(agent.heartbeat).toBe(false);
+  });
+
   it("accepts positive heartbeat timeoutSeconds on defaults and agent entries", () => {
     const defaults = AgentDefaultsSchema.parse({
       heartbeat: { timeoutSeconds: 45 },
@@ -108,8 +121,11 @@ describe("agent defaults schema", () => {
       heartbeat: { timeoutSeconds: 45 },
     });
 
-    expect(defaults.heartbeat?.timeoutSeconds).toBe(45);
-    expect(agent.heartbeat?.timeoutSeconds).toBe(45);
+    const defaultHeartbeat = defaults.heartbeat === false ? undefined : defaults.heartbeat;
+    const agentHeartbeat = agent.heartbeat === false ? undefined : agent.heartbeat;
+
+    expect(defaultHeartbeat?.timeoutSeconds).toBe(45);
+    expect(agentHeartbeat?.timeoutSeconds).toBe(45);
   });
 
   it("rejects zero heartbeat timeoutSeconds", () => {

@@ -990,13 +990,13 @@ function validateConfigObjectWithPluginsBase(
     issues.push({ path, message: `unknown heartbeat target: ${target}` });
   };
 
-  validateHeartbeatTarget(
-    config.agents?.defaults?.heartbeat?.target,
-    "agents.defaults.heartbeat.target",
-  );
+  const defaultHeartbeat =
+    config.agents?.defaults?.heartbeat === false ? undefined : config.agents?.defaults?.heartbeat;
+  validateHeartbeatTarget(defaultHeartbeat?.target, "agents.defaults.heartbeat.target");
   if (Array.isArray(config.agents?.list)) {
     for (const [index, entry] of config.agents.list.entries()) {
-      validateHeartbeatTarget(entry?.heartbeat?.target, `agents.list.${index}.heartbeat.target`);
+      const entryHeartbeat = entry?.heartbeat === false ? undefined : entry?.heartbeat;
+      validateHeartbeatTarget(entryHeartbeat?.target, `agents.list.${index}.heartbeat.target`);
     }
   }
 

@@ -5024,94 +5024,102 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 ],
               },
               heartbeat: {
-                type: "object",
-                properties: {
-                  every: {
-                    type: "string",
+                anyOf: [
+                  {
+                    type: "boolean",
+                    const: false,
                   },
-                  activeHours: {
+                  {
                     type: "object",
                     properties: {
-                      start: {
+                      every: {
                         type: "string",
                       },
-                      end: {
+                      activeHours: {
+                        type: "object",
+                        properties: {
+                          start: {
+                            type: "string",
+                          },
+                          end: {
+                            type: "string",
+                          },
+                          timezone: {
+                            type: "string",
+                          },
+                        },
+                        additionalProperties: false,
+                      },
+                      model: {
                         type: "string",
                       },
-                      timezone: {
+                      session: {
                         type: "string",
+                      },
+                      includeReasoning: {
+                        type: "boolean",
+                      },
+                      target: {
+                        type: "string",
+                      },
+                      directPolicy: {
+                        anyOf: [
+                          {
+                            type: "string",
+                            const: "allow",
+                          },
+                          {
+                            type: "string",
+                            const: "block",
+                          },
+                        ],
+                        title: "Heartbeat Direct Policy",
+                        description:
+                          'Controls whether heartbeat delivery may target direct/DM chats: "allow" (default) permits DM delivery and "block" suppresses direct-target sends.',
+                      },
+                      to: {
+                        type: "string",
+                      },
+                      accountId: {
+                        type: "string",
+                      },
+                      prompt: {
+                        type: "string",
+                      },
+                      includeSystemPromptSection: {
+                        type: "boolean",
+                        title: "Heartbeat Include System Prompt Section",
+                        description:
+                          "Includes the default agent's ## Heartbeats system prompt section when true. Turn this off to keep heartbeat runtime behavior while omitting the heartbeat prompt instructions from the agent system prompt.",
+                      },
+                      ackMaxChars: {
+                        type: "integer",
+                        minimum: 0,
+                        maximum: 9007199254740991,
+                      },
+                      suppressToolErrorWarnings: {
+                        type: "boolean",
+                        title: "Heartbeat Suppress Tool Error Warnings",
+                        description: "Suppress tool error warning payloads during heartbeat runs.",
+                      },
+                      timeoutSeconds: {
+                        type: "integer",
+                        exclusiveMinimum: 0,
+                        maximum: 9007199254740991,
+                        title: "Heartbeat Timeout (Seconds)",
+                        description:
+                          "Maximum time in seconds allowed for a heartbeat agent turn before it is aborted. Leave unset to use agents.defaults.timeoutSeconds.",
+                      },
+                      lightContext: {
+                        type: "boolean",
+                      },
+                      isolatedSession: {
+                        type: "boolean",
                       },
                     },
                     additionalProperties: false,
                   },
-                  model: {
-                    type: "string",
-                  },
-                  session: {
-                    type: "string",
-                  },
-                  includeReasoning: {
-                    type: "boolean",
-                  },
-                  target: {
-                    type: "string",
-                  },
-                  directPolicy: {
-                    anyOf: [
-                      {
-                        type: "string",
-                        const: "allow",
-                      },
-                      {
-                        type: "string",
-                        const: "block",
-                      },
-                    ],
-                    title: "Heartbeat Direct Policy",
-                    description:
-                      'Controls whether heartbeat delivery may target direct/DM chats: "allow" (default) permits DM delivery and "block" suppresses direct-target sends.',
-                  },
-                  to: {
-                    type: "string",
-                  },
-                  accountId: {
-                    type: "string",
-                  },
-                  prompt: {
-                    type: "string",
-                  },
-                  includeSystemPromptSection: {
-                    type: "boolean",
-                    title: "Heartbeat Include System Prompt Section",
-                    description:
-                      "Includes the default agent's ## Heartbeats system prompt section when true. Turn this off to keep heartbeat runtime behavior while omitting the heartbeat prompt instructions from the agent system prompt.",
-                  },
-                  ackMaxChars: {
-                    type: "integer",
-                    minimum: 0,
-                    maximum: 9007199254740991,
-                  },
-                  suppressToolErrorWarnings: {
-                    type: "boolean",
-                    title: "Heartbeat Suppress Tool Error Warnings",
-                    description: "Suppress tool error warning payloads during heartbeat runs.",
-                  },
-                  timeoutSeconds: {
-                    type: "integer",
-                    exclusiveMinimum: 0,
-                    maximum: 9007199254740991,
-                    title: "Heartbeat Timeout (Seconds)",
-                    description:
-                      "Maximum time in seconds allowed for a heartbeat agent turn before it is aborted. Leave unset to use agents.defaults.timeoutSeconds.",
-                  },
-                  lightContext: {
-                    type: "boolean",
-                  },
-                  isolatedSession: {
-                    type: "boolean",
-                  },
-                },
-                additionalProperties: false,
+                ],
               },
               maxConcurrent: {
                 type: "integer",
@@ -6335,94 +6343,103 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     "Optional per-agent overrides for the focused context budget knobs. Omitted fields inherit agents.defaults.contextLimits.",
                 },
                 heartbeat: {
-                  type: "object",
-                  properties: {
-                    every: {
-                      type: "string",
+                  anyOf: [
+                    {
+                      type: "boolean",
+                      const: false,
                     },
-                    activeHours: {
+                    {
                       type: "object",
                       properties: {
-                        start: {
+                        every: {
                           type: "string",
                         },
-                        end: {
+                        activeHours: {
+                          type: "object",
+                          properties: {
+                            start: {
+                              type: "string",
+                            },
+                            end: {
+                              type: "string",
+                            },
+                            timezone: {
+                              type: "string",
+                            },
+                          },
+                          additionalProperties: false,
+                        },
+                        model: {
                           type: "string",
                         },
-                        timezone: {
+                        session: {
                           type: "string",
+                        },
+                        includeReasoning: {
+                          type: "boolean",
+                        },
+                        target: {
+                          type: "string",
+                        },
+                        directPolicy: {
+                          anyOf: [
+                            {
+                              type: "string",
+                              const: "allow",
+                            },
+                            {
+                              type: "string",
+                              const: "block",
+                            },
+                          ],
+                          title: "Heartbeat Direct Policy",
+                          description:
+                            'Per-agent override for heartbeat direct/DM delivery policy; use "block" for agents that should only send heartbeat alerts to non-DM destinations.',
+                        },
+                        to: {
+                          type: "string",
+                        },
+                        accountId: {
+                          type: "string",
+                        },
+                        prompt: {
+                          type: "string",
+                        },
+                        includeSystemPromptSection: {
+                          type: "boolean",
+                          title: "Heartbeat Include System Prompt Section",
+                          description:
+                            "Per-agent override for whether the default agent's ## Heartbeats system prompt section is injected. Use false to keep heartbeat runtime behavior but omit the heartbeat prompt instructions from that agent's system prompt.",
+                        },
+                        ackMaxChars: {
+                          type: "integer",
+                          minimum: 0,
+                          maximum: 9007199254740991,
+                        },
+                        suppressToolErrorWarnings: {
+                          type: "boolean",
+                          title: "Heartbeat Suppress Tool Error Warnings",
+                          description:
+                            "Suppress tool error warning payloads during heartbeat runs.",
+                        },
+                        timeoutSeconds: {
+                          type: "integer",
+                          exclusiveMinimum: 0,
+                          maximum: 9007199254740991,
+                          title: "Heartbeat Timeout (Seconds)",
+                          description:
+                            "Per-agent maximum time in seconds allowed for a heartbeat agent turn before it is aborted. Leave unset to inherit the merged heartbeat/default agent timeout.",
+                        },
+                        lightContext: {
+                          type: "boolean",
+                        },
+                        isolatedSession: {
+                          type: "boolean",
                         },
                       },
                       additionalProperties: false,
                     },
-                    model: {
-                      type: "string",
-                    },
-                    session: {
-                      type: "string",
-                    },
-                    includeReasoning: {
-                      type: "boolean",
-                    },
-                    target: {
-                      type: "string",
-                    },
-                    directPolicy: {
-                      anyOf: [
-                        {
-                          type: "string",
-                          const: "allow",
-                        },
-                        {
-                          type: "string",
-                          const: "block",
-                        },
-                      ],
-                      title: "Heartbeat Direct Policy",
-                      description:
-                        'Per-agent override for heartbeat direct/DM delivery policy; use "block" for agents that should only send heartbeat alerts to non-DM destinations.',
-                    },
-                    to: {
-                      type: "string",
-                    },
-                    accountId: {
-                      type: "string",
-                    },
-                    prompt: {
-                      type: "string",
-                    },
-                    includeSystemPromptSection: {
-                      type: "boolean",
-                      title: "Heartbeat Include System Prompt Section",
-                      description:
-                        "Per-agent override for whether the default agent's ## Heartbeats system prompt section is injected. Use false to keep heartbeat runtime behavior but omit the heartbeat prompt instructions from that agent's system prompt.",
-                    },
-                    ackMaxChars: {
-                      type: "integer",
-                      minimum: 0,
-                      maximum: 9007199254740991,
-                    },
-                    suppressToolErrorWarnings: {
-                      type: "boolean",
-                      title: "Heartbeat Suppress Tool Error Warnings",
-                      description: "Suppress tool error warning payloads during heartbeat runs.",
-                    },
-                    timeoutSeconds: {
-                      type: "integer",
-                      exclusiveMinimum: 0,
-                      maximum: 9007199254740991,
-                      title: "Heartbeat Timeout (Seconds)",
-                      description:
-                        "Per-agent maximum time in seconds allowed for a heartbeat agent turn before it is aborted. Leave unset to inherit the merged heartbeat/default agent timeout.",
-                    },
-                    lightContext: {
-                      type: "boolean",
-                    },
-                    isolatedSession: {
-                      type: "boolean",
-                    },
-                  },
-                  additionalProperties: false,
+                  ],
                 },
                 identity: {
                   type: "object",

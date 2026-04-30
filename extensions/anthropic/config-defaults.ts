@@ -196,7 +196,7 @@ export function applyAnthropicConfigDefaults(params: {
   let mutated = false;
   const nextDefaults = { ...defaults };
   const contextPruning = defaults.contextPruning ?? {};
-  const heartbeat = defaults.heartbeat ?? {};
+  const heartbeat = defaults.heartbeat === false ? {} : (defaults.heartbeat ?? {});
 
   if (defaults.contextPruning?.mode === undefined) {
     nextDefaults.contextPruning = {
@@ -207,7 +207,7 @@ export function applyAnthropicConfigDefaults(params: {
     mutated = true;
   }
 
-  if (defaults.heartbeat?.every === undefined) {
+  if (defaults.heartbeat !== false && defaults.heartbeat?.every === undefined) {
     nextDefaults.heartbeat = {
       ...heartbeat,
       every: authMode === "oauth" ? "1h" : "30m",

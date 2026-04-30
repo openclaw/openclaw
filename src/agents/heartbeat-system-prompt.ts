@@ -3,23 +3,27 @@ import {
   resolveHeartbeatPrompt as resolveHeartbeatPromptText,
 } from "../auto-reply/heartbeat.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
-import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
+import type { HeartbeatConfig } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { listAgentEntries, resolveAgentConfig, resolveDefaultAgentId } from "./agent-scope.js";
-
-type HeartbeatConfig = AgentDefaultsConfig["heartbeat"];
 
 function resolveHeartbeatConfigForSystemPrompt(
   config?: OpenClawConfig,
   agentId?: string,
 ): HeartbeatConfig | undefined {
   const defaults = config?.agents?.defaults?.heartbeat;
+  if (defaults === false) {
+    return undefined;
+  }
   if (!config || !agentId) {
     return defaults;
   }
   const overrides = resolveAgentConfig(config, agentId)?.heartbeat;
+  if (overrides === false) {
+    return undefined;
+  }
   if (!defaults && !overrides) {
     return overrides;
   }

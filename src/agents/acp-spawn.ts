@@ -322,10 +322,11 @@ function isHeartbeatEnabledForSessionAgent(params: {
     return false;
   }
 
-  const heartbeatEvery =
-    resolveAgentConfig(params.cfg, requesterAgentId)?.heartbeat?.every ??
-    params.cfg.agents?.defaults?.heartbeat?.every ??
-    DEFAULT_HEARTBEAT_EVERY;
+  const heartbeat = resolveHeartbeatConfigForAgent({
+    cfg: params.cfg,
+    agentId: requesterAgentId,
+  });
+  const heartbeatEvery = heartbeat?.every ?? DEFAULT_HEARTBEAT_EVERY;
   const trimmedEvery = normalizeOptionalString(heartbeatEvery) ?? "";
   if (!trimmedEvery) {
     return false;
@@ -340,14 +341,23 @@ function isHeartbeatEnabledForSessionAgent(params: {
 function resolveHeartbeatConfigForAgent(params: {
   cfg: OpenClawConfig;
   agentId: string;
-}): NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>["heartbeat"] {
+}):
+  | Exclude<
+      NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>["heartbeat"],
+      false | undefined
+    >
+  | undefined {
   const defaults = params.cfg.agents?.defaults?.heartbeat;
+  const resolvedDefaults = defaults === false ? undefined : defaults;
   const overrides = resolveAgentConfig(params.cfg, params.agentId)?.heartbeat;
-  if (!defaults && !overrides) {
+  if (overrides === false) {
+    return undefined;
+  }
+  if (!resolvedDefaults && !overrides) {
     return undefined;
   }
   return {
-    ...defaults,
+    ...resolvedDefaults,
     ...overrides,
   };
 }

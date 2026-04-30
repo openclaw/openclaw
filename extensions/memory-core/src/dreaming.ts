@@ -371,7 +371,9 @@ export function resolveDreamingBlockedReason(cfg: OpenClawConfig): string | null
   // resolveHeartbeatSummaryForAgent since it would apply the per-agent override
   // and diverge from actual runtime behavior.
   const enabledForDefault = isHeartbeatEnabledForAgent(cfg, defaultAgentId);
-  const intervalMs = resolveHeartbeatIntervalMs(cfg, undefined, cfg.agents?.defaults?.heartbeat);
+  const defaultsHeartbeat =
+    cfg.agents?.defaults?.heartbeat === false ? undefined : cfg.agents?.defaults?.heartbeat;
+  const intervalMs = resolveHeartbeatIntervalMs(cfg, undefined, defaultsHeartbeat);
   if (enabledForDefault && intervalMs != null) {
     return null;
   }

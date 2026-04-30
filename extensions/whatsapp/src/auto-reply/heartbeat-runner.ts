@@ -177,10 +177,12 @@ export async function runWebHeartbeatOnce(opts: {
       return;
     }
 
+    const defaultsHeartbeat =
+      cfg.agents?.defaults?.heartbeat === false ? undefined : cfg.agents?.defaults?.heartbeat;
     const replyResult = await replyResolver(
       {
         Body: appendCronStyleCurrentTimeLine(
-          resolveHeartbeatPrompt(cfg.agents?.defaults?.heartbeat?.prompt),
+          resolveHeartbeatPrompt(defaultsHeartbeat?.prompt),
           cfg,
           Date.now(),
         ),
@@ -217,7 +219,7 @@ export async function runWebHeartbeatOnce(opts: {
     const hasMedia = reply.hasMedia;
     const ackMaxChars = Math.max(
       0,
-      cfg.agents?.defaults?.heartbeat?.ackMaxChars ?? DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
+      defaultsHeartbeat?.ackMaxChars ?? DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
     );
     const stripped = stripHeartbeatToken(replyPayload.text, {
       mode: "heartbeat",

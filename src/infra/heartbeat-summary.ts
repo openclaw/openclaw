@@ -5,12 +5,10 @@ import {
   resolveHeartbeatPrompt as resolveHeartbeatPromptText,
 } from "../auto-reply/heartbeat.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
-import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
+import type { AgentDefaultsConfig, HeartbeatConfig } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
-
-type HeartbeatConfig = AgentDefaultsConfig["heartbeat"];
 
 export type HeartbeatSummary = {
   enabled: boolean;
@@ -24,9 +22,15 @@ export type HeartbeatSummary = {
 
 const DEFAULT_HEARTBEAT_TARGET = "none";
 
+function isHeartbeatConfigEnabled(
+  heartbeat: AgentDefaultsConfig["heartbeat"],
+): heartbeat is HeartbeatConfig {
+  return Boolean(heartbeat) && heartbeat !== false;
+}
+
 function hasExplicitHeartbeatAgents(cfg: OpenClawConfig) {
   const list = cfg.agents?.list ?? [];
-  return list.some((entry) => Boolean(entry?.heartbeat));
+  return list.some((entry) => isHeartbeatConfigEnabled(entry?.heartbeat));
 }
 
 export function isHeartbeatEnabledForAgent(cfg: OpenClawConfig, agentId?: string): boolean {
@@ -35,8 +39,14 @@ export function isHeartbeatEnabledForAgent(cfg: OpenClawConfig, agentId?: string
   const hasExplicit = hasExplicitHeartbeatAgents(cfg);
   if (hasExplicit) {
     return list.some(
-      (entry) => Boolean(entry?.heartbeat) && normalizeAgentId(entry?.id) === resolvedAgentId,
+      (entry) =>
+        isHeartbeatConfigEnabled(entry?.heartbeat) &&
+        normalizeAgentId(entry?.id) === resolvedAgentId,
     );
+  }
+  const defaultsHeartbeat = cfg.agents?.defaults?.heartbeat;
+  if (defaultsHeartbeat === false) {
+    return false;
   }
   return resolvedAgentId === resolveDefaultAgentId(cfg);
 }
@@ -46,11 +56,13 @@ export function resolveHeartbeatIntervalMs(
   overrideEvery?: string,
   heartbeat?: HeartbeatConfig,
 ) {
+  const defaultsHeartbeat = cfg.agents?.defaults?.heartbeat;
   const raw =
     overrideEvery ??
     heartbeat?.every ??
-    cfg.agents?.defaults?.heartbeat?.every ??
-    DEFAULT_HEARTBEAT_EVERY;
+    (defaultsHeartbeat === false
+      ? undefined
+      : (defaultsHeartbeat?.every ?? DEFAULT_HEARTBEAT_EVERY));
   if (!raw) {
     return null;
   }
@@ -74,8 +86,11 @@ export function resolveHeartbeatSummaryForAgent(
   cfg: OpenClawConfig,
   agentId?: string,
 ): HeartbeatSummary {
-  const defaults = cfg.agents?.defaults?.heartbeat;
-  const overrides = agentId ? resolveAgentConfig(cfg, agentId)?.heartbeat : undefined;
+  const defaults = isHeartbeatConfigEnabled(cfg.agents?.defaults?.heartbeat)
+    ? cfg.agents?.defaults?.heartbeat
+    : undefined;
+  const agentHeartbeat = agentId ? resolveAgentConfig(cfg, agentId)?.heartbeat : undefined;
+  const overrides = isHeartbeatConfigEnabled(agentHeartbeat) ? agentHeartbeat : undefined;
   const enabled = isHeartbeatEnabledForAgent(cfg, agentId);
 
   if (!enabled) {
