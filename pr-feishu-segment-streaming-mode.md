@@ -1,14 +1,25 @@
 ## Summary
 
-Add an opt-in Feishu streaming delivery mode that flushes accumulated model output at pause points instead of changing the existing streaming card behavior.
+Add an opt-in Feishu streaming delivery mode that accumulates model output and flushes complete segments at pause points, without changing the existing CardKit streaming-card default.
 
 ## Motivation
 
-Feishu currently uses `channels.feishu.streaming` for CardKit live streaming. That behavior is useful, but some workflows need a different delivery style: collect text while the model is actively generating, then send a complete segment only when the model pauses for a tool call, idle event, block event, or final reply.
+Feishu currently uses `channels.feishu.streaming` for CardKit live streaming. That behavior is useful when users want one live card that updates as the model generates text.
 
-This PR keeps the existing `streaming: true` behavior unchanged and adds a new explicit mode for the new semantics.
+Some workflows need a different delivery style: show completed model text before a tool call, keep tool/status output in order, and then send the follow-up answer after the model resumes. Sending these boundaries as complete segments avoids sentence-by-sentence card updates while still giving users useful progress before the final reply.
+
+## Configuration Behavior
 
 `streaming` remains the top-level enable/disable switch for Feishu streaming delivery. `streamingMode` only applies when `streaming` is enabled.
+
+| `streaming` | `streamingMode` | Behavior                                                                                                                                                |
+| ----------- | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `false`     | `"card"`        | Streaming is disabled. Feishu sends replies through the regular non-streaming path; the mode value is ignored.                                          |
+| `false`     | `"segment"`     | Streaming is disabled. Partial text is not accumulated and pause-point segment flushing is not enabled; the mode value is ignored.                      |
+| `true`      | `"card"`        | Existing CardKit streaming behavior. Feishu updates one live card and closes it with the final content. This remains the default.                       |
+| `true`      | `"segment"`     | New pause-point segment behavior. Feishu accumulates partial text and sends complete segments on tool start, idle, block, tool payload, or final reply. |
+
+`chunkMode` still applies after a reply or segment is ready to send. In segment mode, `streamingMode: "segment"` decides when to flush a semantic segment, then `chunkMode` decides whether that segment needs to be split by length or newline before sending to Feishu.
 
 ## Changes
 
@@ -30,15 +41,6 @@ This PR keeps the existing `streaming: true` behavior unchanged and adds a new e
 - Update Feishu config schema, generated config metadata, docs, and tests.
 
 ## Example
-
-Behavior by configuration:
-
-| `streaming` | `streamingMode` | Behavior                                                                                                                                                |
-| ----------- | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `false`     | `"card"`        | Streaming is disabled. Feishu sends replies through the regular non-streaming path; the mode value is ignored.                                          |
-| `false`     | `"segment"`     | Streaming is disabled. Partial text is not accumulated and pause-point segment flushing is not enabled; the mode value is ignored.                      |
-| `true`      | `"card"`        | Existing CardKit streaming behavior. Feishu updates one live card and closes it with the final content.                                                 |
-| `true`      | `"segment"`     | New pause-point segment behavior. Feishu accumulates partial text and sends complete segments on tool start, idle, block, tool payload, or final reply. |
 
 Use segment delivery with:
 
@@ -65,6 +67,12 @@ Default behavior remains:
   },
 }
 ```
+
+## Compatibility
+
+- Existing configs that only set `channels.feishu.streaming` keep the same behavior because `streamingMode` defaults to `"card"`.
+- `streaming: false` continues to disable streaming delivery regardless of `streamingMode`.
+- Segment mode is opt-in and does not change CardKit streaming-card behavior.
 
 ## Tests
 
