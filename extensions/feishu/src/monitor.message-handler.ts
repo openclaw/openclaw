@@ -1,6 +1,6 @@
 import type { ClawdbotConfig, HistoryEntry, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
-import type { FeishuMessageEvent } from "./event-types.js";
 import { parseMediaKeys } from "./bot-content.js";
+import type { FeishuMessageEvent } from "./event-types.js";
 import { isMentionForwardRequest } from "./mention.js";
 import {
   releaseFeishuMessageProcessing,
@@ -261,9 +261,7 @@ export function createFeishuMessageReceiveHandler({
       try {
         await recordProcessedMessage(key, accountId, log);
       } catch (err) {
-        error(
-          `feishu[${accountId}]: failed to record merged dedupe id ${key}: ${String(err)}`,
-        );
+        error(`feishu[${accountId}]: failed to record merged dedupe id ${key}: ${String(err)}`);
       }
     }
   };

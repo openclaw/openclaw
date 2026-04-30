@@ -26,7 +26,7 @@ import {
   normalizeMentions,
   parseMergeForwardContent,
   parseMediaKeys,
-parseMessageContent,
+  parseMessageContent,
   resolveFeishuGroupSession,
   resolveFeishuMediaList,
   toMessageResourceType,
@@ -389,9 +389,15 @@ function computeMediaAwareDedupeKey(
   content: string | undefined | null,
 ): string | undefined {
   const id = messageId?.trim();
-  if (!id) return undefined;
-  if (!messageType || !MEDIA_TYPES_FOR_DEDUPE.has(messageType)) return id;
-  if (!content) return id;
+  if (!id) {
+    return undefined;
+  }
+  if (!messageType || !MEDIA_TYPES_FOR_DEDUPE.has(messageType)) {
+    return id;
+  }
+  if (!content) {
+    return id;
+  }
   const keys = parseMediaKeys(content, messageType);
   const mediaKey = keys.fileKey || keys.imageKey;
   return mediaKey ? `${id}:${mediaKey}` : id;
@@ -426,7 +432,11 @@ export async function handleFeishuMessage(params: {
   const error = runtime?.error ?? console.error;
 
   const messageId = event.message.message_id;
-  const dedupeKey = computeMediaAwareDedupeKey(messageId, event.message.message_type, event.message.content);
+  const dedupeKey = computeMediaAwareDedupeKey(
+    messageId,
+    event.message.message_type,
+    event.message.content,
+  );
   if (
     !(await finalizeFeishuMessageProcessing({
       messageId: dedupeKey,
