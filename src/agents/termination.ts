@@ -161,6 +161,8 @@ export class ReplyPattern extends TerminationCondition {
   }
 
   check(state: TerminationState): readonly [boolean, string | null] {
+    // Reset lastIndex so global/sticky regexes don't alternate true/false across calls.
+    this.pattern.lastIndex = 0;
     return this.pattern.test(state.replyText)
       ? [true, `reply_pattern:${this.pattern.source}`]
       : [false, null];
