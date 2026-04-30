@@ -107,7 +107,10 @@ describe("gateway-client-timing", () => {
       extraEvil: "should-not-appear",
     });
     expect(ok).not.toBeNull();
-    expect(Object.keys(ok!)).not.toContain("extraEvil");
+    if (!ok) {
+      throw new Error("expected sanitized timing payload");
+    }
+    expect(Object.keys(ok)).not.toContain("extraEvil");
   });
 
   test("sanitize rejects non-finite elapsedMs", () => {
