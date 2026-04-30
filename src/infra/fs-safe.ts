@@ -392,12 +392,31 @@ export async function readdirWithinRoot(params: {
   rootDir: string;
   relativePath?: string;
 }): Promise<string[]> {
-  const { resolved } = await resolvePinnedPathWithinRoot({
+  const resolved = await resolvePinnedPathWithinRoot({
     rootDir: params.rootDir,
     relativePath: params.relativePath ?? ".",
     allowRoot: true,
   });
-  return (await fs.readdir(resolved)).sort();
+  if (process.platform === "win32") {
+    return await readdirWithinRootLegacy(resolved);
+  }
+  try {
+    const stdout = await runPinnedPathHelper({
+      operation: "readdir",
+      rootPath: resolved.rootReal,
+      relativePath: resolved.relativePosix,
+    });
+    const entries: unknown = JSON.parse(stdout);
+    if (!Array.isArray(entries) || entries.some((entry) => typeof entry !== "string")) {
+      throw new SafeOpenError("invalid-path", "invalid directory listing result");
+    }
+    return entries;
+  } catch (error) {
+    if (isPinnedPathHelperSpawnError(error)) {
+      return await readdirWithinRootLegacy(resolved);
+    }
+    throw normalizePinnedPathError(error);
+  }
 }
 
 export async function openLocalFileSafely(params: { filePath: string }): Promise<SafeOpenResult> {
@@ -767,18 +786,25 @@ export async function renamePathWithinRoot(params: {
   if (from.rootReal !== to.rootReal) {
     throw new SafeOpenError("outside-workspace", "rename roots do not match");
   }
-  if (params.overwrite !== true) {
-    try {
-      await fs.lstat(to.resolved);
-      throw new SafeOpenError("invalid-path", "destination already exists");
-    } catch (err) {
-      if (!isNotFoundPathError(err)) {
-        throw err;
-      }
-    }
+  if (process.platform === "win32") {
+    await renamePathWithinRootLegacy({ from, to, overwrite: params.overwrite });
+    return;
   }
-  await fs.mkdir(path.dirname(to.resolved), { recursive: true });
-  await fs.rename(from.resolved, to.resolved);
+  try {
+    await runPinnedPathHelper({
+      operation: "rename",
+      rootPath: from.rootReal,
+      relativePath: from.relativePosix,
+      toRelativePath: to.relativePosix,
+      overwrite: params.overwrite,
+    });
+  } catch (error) {
+    if (isPinnedPathHelperSpawnError(error)) {
+      await renamePathWithinRootLegacy({ from, to, overwrite: params.overwrite });
+      return;
+    }
+    throw normalizePinnedPathError(error);
+  }
 }
 
 export async function mkdirPathWithinRoot(params: {
@@ -1114,6 +1140,29 @@ function normalizePinnedPathError(error: unknown): Error {
 
 async function removePathWithinRootLegacy(resolved: { resolved: string }): Promise<void> {
   await fs.rm(resolved.resolved);
+}
+
+async function readdirWithinRootLegacy(resolved: { resolved: string }): Promise<string[]> {
+  return (await fs.readdir(resolved.resolved)).sort();
+}
+
+async function renamePathWithinRootLegacy(params: {
+  from: { resolved: string };
+  to: { resolved: string };
+  overwrite?: boolean;
+}): Promise<void> {
+  if (params.overwrite !== true) {
+    try {
+      await fs.lstat(params.to.resolved);
+      throw new SafeOpenError("invalid-path", "destination already exists");
+    } catch (err) {
+      if (!isNotFoundPathError(err)) {
+        throw err;
+      }
+    }
+  }
+  await fs.mkdir(path.dirname(params.to.resolved), { recursive: true });
+  await fs.rename(params.from.resolved, params.to.resolved);
 }
 
 async function mkdirPathWithinRootLegacy(resolved: { resolved: string }): Promise<void> {

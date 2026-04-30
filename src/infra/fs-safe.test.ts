@@ -447,6 +447,72 @@ describe("fs-safe", () => {
     });
   });
 
+  it.runIf(process.platform !== "win32")(
+    "does not list out-of-root directories when path parents change before pinned readdir",
+    async () => {
+      const root = await tempDirs.make("openclaw-fs-safe-root-");
+      const outside = await tempDirs.make("openclaw-fs-safe-outside-");
+      const slot = path.join(root, "slot");
+      await fs.mkdir(slot, { recursive: true });
+      await fs.writeFile(path.join(slot, "safe.txt"), "safe");
+      await fs.writeFile(path.join(outside, "secret.txt"), "secret");
+
+      const realRunPinnedPathHelper = pinnedPathHelperModule.runPinnedPathHelper;
+      const runPinnedPathHelperSpy = vi
+        .spyOn(pinnedPathHelperModule, "runPinnedPathHelper")
+        .mockImplementation(async (params) => {
+          if (params.operation === "readdir") {
+            await fs.rm(slot, { recursive: true, force: true });
+            await fs.symlink(outside, slot);
+          }
+          return await realRunPinnedPathHelper(params);
+        });
+
+      try {
+        await expect(
+          readdirWithinRoot({ rootDir: root, relativePath: "slot" }),
+        ).rejects.toMatchObject({
+          code: "invalid-path",
+        });
+      } finally {
+        runPinnedPathHelperSpy.mockRestore();
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "does not rename into out-of-root directories when destination parents change before pinned rename",
+    async () => {
+      const root = await tempDirs.make("openclaw-fs-safe-root-");
+      const outside = await tempDirs.make("openclaw-fs-safe-outside-");
+      await fs.writeFile(path.join(root, "from.txt"), "hello");
+      const slot = path.join(root, "slot");
+
+      const realRunPinnedPathHelper = pinnedPathHelperModule.runPinnedPathHelper;
+      const runPinnedPathHelperSpy = vi
+        .spyOn(pinnedPathHelperModule, "runPinnedPathHelper")
+        .mockImplementation(async (params) => {
+          if (params.operation === "rename") {
+            await fs.symlink(outside, slot);
+          }
+          return await realRunPinnedPathHelper(params);
+        });
+
+      try {
+        await expect(
+          renamePathWithinRoot({
+            rootDir: root,
+            fromRelativePath: "from.txt",
+            toRelativePath: path.join("slot", "to.txt"),
+          }),
+        ).rejects.toMatchObject({ code: "invalid-path" });
+      } finally {
+        runPinnedPathHelperSpy.mockRestore();
+      }
+      await expect(fs.stat(path.join(outside, "to.txt"))).rejects.toMatchObject({ code: "ENOENT" });
+    },
+  );
+
   it("rejects stat, list, and rename traversal outside root", async () => {
     const root = await tempDirs.make("openclaw-fs-safe-root-");
     await expect(
