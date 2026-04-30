@@ -388,7 +388,11 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
         const abort = new AbortController();
         store.aborts.set(id, abort);
         let handedOffTask = false;
-        const log = channelLogs[channelId];
+        // channelLogs[channelId] can be undefined during config-reload races where
+        // the channel map is rebuilt while a promise chain from a prior start is
+        // still in flight.  Capture as potentially undefined so all async
+        // continuations guard with optional chaining instead of crashing.
+        const log = channelLogs[channelId] as (typeof channelLogs)[ChannelId] | undefined;
         let scopedChannelRuntime: ReturnType<typeof createTaskScopedChannelRuntime> | null = null;
         let channelRuntimeForTask: ChannelRuntimeSurface | undefined;
         let stopApprovalBootstrap: () => Promise<void> = async () => {};
@@ -404,7 +408,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
           try {
             await stopTaskScopedApprovalRuntime();
           } catch (error) {
-            log.error?.(`[${id}] ${label}: ${formatErrorMessage(error)}`);
+            log?.error?.(`[${id}] ${label}: ${formatErrorMessage(error)}`);
           }
         };
 
@@ -481,7 +485,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
                 }),
             );
           } catch (error) {
-            log.error?.(`[${id}] native approval bootstrap failed: ${formatErrorMessage(error)}`);
+            log?.error?.(`[${id}] native approval bootstrap failed: ${formatErrorMessage(error)}`);
           }
           setRuntime(channelId, id, {
             accountId: id,
@@ -515,12 +519,12 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
               }
               const message = "channel exited without an error";
               setRuntime(channelId, id, { accountId: id, lastError: message });
-              log.error?.(`[${id}] ${message}`);
+              log?.error?.(`[${id}] ${message}`);
             })
             .catch((err) => {
               const message = formatErrorMessage(err);
               setRuntime(channelId, id, { accountId: id, lastError: message });
-              log.error?.(`[${id}] channel exited: ${message}`);
+              log?.error?.(`[${id}] channel exited: ${message}`);
             })
             .finally(async () => {
               await cleanupTaskScopedApprovalRuntime("channel cleanup failed");
@@ -542,11 +546,11 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
                   restartPending: false,
                   reconnectAttempts: attempt,
                 });
-                log.error?.(`[${id}] giving up after ${MAX_RESTART_ATTEMPTS} restart attempts`);
+                log?.error?.(`[${id}] giving up after ${MAX_RESTART_ATTEMPTS} restart attempts`);
                 return;
               }
               const delayMs = computeBackoff(CHANNEL_RESTART_POLICY, attempt);
-              log.info?.(
+              log?.info?.(
                 `[${id}] auto-restart attempt ${attempt}/${MAX_RESTART_ATTEMPTS} in ${Math.round(delayMs / 1000)}s`,
               );
               setRuntime(channelId, id, {
