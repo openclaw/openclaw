@@ -686,6 +686,12 @@ if (!(Test-Path $scriptPath)) { throw "background script was not written" }`,
       const launchLog = await readFile(launchLogPath, "utf8").catch(() => "");
       this.log(launchLog);
       if (launchStatus === 0 || launchStatus === 124) {
+        const materialized = this.waitForBackgroundMaterialized(pathsScript, 20_000);
+        if (!materialized) {
+          warn(`${label} launch retry ${attempt}: background log/done file did not materialize`);
+          lastLaunchStatus = launchStatus;
+          continue;
+        }
         launched = true;
         break;
       }
@@ -752,6 +758,31 @@ Remove-Item -Path $scriptPath, $logPath, $donePath, $exitPath -Force -ErrorActio
       run("sleep", ["5"], { quiet: true });
     }
     throw new Error(`${label} timed out`);
+  }
+
+  private waitForBackgroundMaterialized(pathsScript: string, timeoutMs: number): boolean {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      const result = this.guest.run(
+        [
+          "powershell.exe",
+          "-NoProfile",
+          "-ExecutionPolicy",
+          "Bypass",
+          "-EncodedCommand",
+          encodePowerShell(`${pathsScript}
+if ((Test-Path $logPath) -or (Test-Path $donePath)) {
+  'materialized'
+}`),
+        ],
+        { check: false, timeoutMs: this.remainingPhaseTimeoutMs(15_000) },
+      );
+      if (result.stdout.includes("materialized")) {
+        return true;
+      }
+      run("sleep", ["2"], { quiet: true });
+    }
+    return false;
   }
 
   private runDevChannelUpdate(): void {
