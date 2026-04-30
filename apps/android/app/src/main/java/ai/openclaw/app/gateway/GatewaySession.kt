@@ -368,7 +368,10 @@ class GatewaySession(
       }
       if (!basicAuthUser.isNullOrEmpty() && !basicAuthPassword.isNullOrEmpty()) {
         val creds = "$basicAuthUser:$basicAuthPassword"
-        val basic = java.util.Base64.getEncoder().encodeToString(creds.toByteArray())
+        val basic =
+          java.util.Base64
+            .getEncoder()
+            .encodeToString(creds.toByteArray())
         requestBuilder.header("Authorization", "Basic $basic")
       }
       val request = requestBuilder.build()

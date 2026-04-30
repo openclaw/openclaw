@@ -34,9 +34,13 @@ class CanvasController {
   @Volatile private var webView: WebView? = null
 
   @Volatile private var url: String? = null
+
   @Volatile private var bearerToken: String? = null
+
   @Volatile private var basicAuthUser: String? = null
+
   @Volatile private var basicAuthPassword: String? = null
+
   @Volatile private var debugStatusEnabled: Boolean = false
 
   @Volatile private var debugStatusTitle: String? = null
@@ -75,7 +79,11 @@ class CanvasController {
     }
   }
 
-  fun setAuthHeaders(bearerToken: String?, basicUser: String?, basicPass: String?) {
+  fun setAuthHeaders(
+    bearerToken: String?,
+    basicUser: String?,
+    basicPass: String?,
+  ) {
     this.bearerToken = bearerToken
     this.basicAuthUser = basicUser
     this.basicAuthPassword = basicPass
