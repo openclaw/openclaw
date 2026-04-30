@@ -192,15 +192,15 @@ describe("matrixOutbound cfg threading", () => {
       ctx: {} as never,
     });
 
-    const matrixData =
-      (rendered?.channelData?.matrix as {
-        extraContent?: Record<string, unknown>;
-      }) ?? {};
+    const matrixData = rendered?.channelData?.matrix as {
+      extraContent?: Record<string, unknown>;
+    };
     expect(rendered?.text).toContain("fallback");
     expect(rendered?.text).toContain("Select thinking level");
     expect(matrixData.extraContent?.["com.openclaw.presentation"]).toEqual({
-      version: 1,
       ...presentation,
+      version: 1,
+      type: "message.presentation",
     });
   });
 
@@ -215,6 +215,7 @@ describe("matrixOutbound cfg threading", () => {
 
     const presentationContent = {
       version: 1,
+      type: "message.presentation",
       title: "Select model",
       blocks: [
         {
@@ -322,7 +323,10 @@ describe("matrixOutbound cfg threading", () => {
         channelData: {
           matrix: {
             extraContent: {
-              "com.openclaw.presentation": { version: 1 },
+              "com.openclaw.presentation": {
+                version: 1,
+                type: "message.presentation",
+              },
             },
           },
         },
@@ -338,7 +342,12 @@ describe("matrixOutbound cfg threading", () => {
       "room:!room:example",
       "caption",
       expect.objectContaining({
-        extraContent: { "com.openclaw.presentation": { version: 1 } },
+        extraContent: {
+          "com.openclaw.presentation": {
+            version: 1,
+            type: "message.presentation",
+          },
+        },
       }),
     );
     // Second call does NOT get extraContent
