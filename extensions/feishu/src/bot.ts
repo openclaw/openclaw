@@ -42,6 +42,7 @@ import { type FeishuPermissionError, resolveFeishuSenderName } from "./bot-sende
 import { getChatInfo } from "./chat.js";
 import { createFeishuClient } from "./client.js";
 import { finalizeFeishuMessageProcessing, tryRecordMessagePersistent } from "./dedup.js";
+import { resolveFeishuMessageDedupeKey } from "./dedupe-key.js";
 import { maybeCreateDynamicAgent } from "./dynamic-agent.js";
 import { extractMentionTargets, isMentionForwardRequest } from "./mention.js";
 import {
@@ -408,16 +409,16 @@ export async function handleFeishuMessage(params: {
   const log = runtime?.log ?? console.log;
   const error = runtime?.error ?? console.error;
 
-  const messageId = event.message.message_id;
+  const dedupeKey = resolveFeishuMessageDedupeKey(event);
   if (
     !(await finalizeFeishuMessageProcessing({
-      messageId,
+      messageId: dedupeKey,
       namespace: account.accountId,
       log,
       claimHeld: processingClaimHeld,
     }))
   ) {
-    log(`feishu: skipping duplicate message ${messageId}`);
+    log(`feishu: skipping duplicate message ${dedupeKey}`);
     return;
   }
 

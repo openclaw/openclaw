@@ -1,4 +1,5 @@
 import type { ClawdbotConfig, HistoryEntry, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
+import { resolveFeishuMessageDedupeKey } from "./dedupe-key.js";
 import type { FeishuMessageEvent } from "./event-types.js";
 import { isMentionForwardRequest } from "./mention.js";
 import {
@@ -116,15 +117,15 @@ function dedupeFeishuDebounceEntriesByMessageId(
   const seen = new Set<string>();
   const deduped: FeishuMessageEvent[] = [];
   for (const entry of entries) {
-    const messageId = entry.message.message_id?.trim();
-    if (!messageId) {
+    const dedupeKey = resolveFeishuMessageDedupeKey(entry).trim();
+    if (!dedupeKey) {
       deduped.push(entry);
       continue;
     }
-    if (seen.has(messageId)) {
+    if (seen.has(dedupeKey)) {
       continue;
     }
-    seen.add(messageId);
+    seen.add(dedupeKey);
     deduped.push(entry);
   }
   return deduped;
@@ -219,20 +220,20 @@ export function createFeishuMessageReceiveHandler({
 
   const recordSuppressedMessageIds = async (
     entries: FeishuMessageEvent[],
-    dispatchMessageId?: string,
+    dispatchDedupeKey?: string,
   ) => {
-    const keepMessageId = dispatchMessageId?.trim();
-    const suppressedIds = new Set(
+    const keepKey = dispatchDedupeKey?.trim();
+    const suppressedKeys = new Set(
       entries
-        .map((entry) => entry.message.message_id?.trim())
-        .filter((id): id is string => Boolean(id) && (!keepMessageId || id !== keepMessageId)),
+        .map((entry) => resolveFeishuMessageDedupeKey(entry).trim())
+        .filter((key): key is string => Boolean(key) && (!keepKey || key !== keepKey)),
     );
-    for (const messageId of suppressedIds) {
+    for (const dedupeKey of suppressedKeys) {
       try {
-        await recordProcessedMessage(messageId, accountId, log);
+        await recordProcessedMessage(dedupeKey, accountId, log);
       } catch (err) {
         error(
-          `feishu[${accountId}]: failed to record merged dedupe id ${messageId}: ${String(err)}`,
+          `feishu[${accountId}]: failed to record merged dedupe id ${dedupeKey}: ${String(err)}`,
         );
       }
     }
@@ -269,7 +270,7 @@ export function createFeishuMessageReceiveHandler({
       const dedupedEntries = dedupeFeishuDebounceEntriesByMessageId(entries);
       const freshEntries: FeishuMessageEvent[] = [];
       for (const entry of dedupedEntries) {
-        if (!(await hasProcessedMessage(entry.message.message_id, accountId, log))) {
+        if (!(await hasProcessedMessage(resolveFeishuMessageDedupeKey(entry), accountId, log))) {
           freshEntries.push(entry);
         }
       }
@@ -277,7 +278,10 @@ export function createFeishuMessageReceiveHandler({
       if (!dispatchEntry) {
         return;
       }
-      await recordSuppressedMessageIds(dedupedEntries, dispatchEntry.message.message_id);
+      await recordSuppressedMessageIds(
+        dedupedEntries,
+        resolveFeishuMessageDedupeKey(dispatchEntry),
+      );
       const combinedText = freshEntries
         .map((entry) => resolveDebounceText(entry))
         .filter(Boolean)
@@ -302,7 +306,7 @@ export function createFeishuMessageReceiveHandler({
     },
     onError: (err, entries) => {
       for (const entry of entries) {
-        releaseFeishuMessageProcessing(entry.message.message_id, accountId);
+        releaseFeishuMessageProcessing(resolveFeishuMessageDedupeKey(entry), accountId);
       }
       error(`feishu[${accountId}]: inbound debounce flush failed: ${String(err)}`);
     },
@@ -314,9 +318,9 @@ export function createFeishuMessageReceiveHandler({
       error(`feishu[${accountId}]: ignoring malformed message event payload`);
       return;
     }
-    const messageId = event.message?.message_id?.trim();
-    if (!tryBeginFeishuMessageProcessing(messageId, accountId)) {
-      log(`feishu[${accountId}]: dropping duplicate event for message ${messageId}`);
+    const dedupeKey = resolveFeishuMessageDedupeKey(event).trim();
+    if (!tryBeginFeishuMessageProcessing(dedupeKey, accountId)) {
+      log(`feishu[${accountId}]: dropping duplicate event for message ${dedupeKey}`);
       return;
     }
     const processMessage = async () => {
@@ -324,7 +328,7 @@ export function createFeishuMessageReceiveHandler({
     };
     if (fireAndForget) {
       void processMessage().catch((err) => {
-        releaseFeishuMessageProcessing(messageId, accountId);
+        releaseFeishuMessageProcessing(dedupeKey, accountId);
         error(`feishu[${accountId}]: error handling message: ${String(err)}`);
       });
       return;
@@ -332,7 +336,7 @@ export function createFeishuMessageReceiveHandler({
     try {
       await processMessage();
     } catch (err) {
-      releaseFeishuMessageProcessing(messageId, accountId);
+      releaseFeishuMessageProcessing(dedupeKey, accountId);
       error(`feishu[${accountId}]: error handling message: ${String(err)}`);
     }
   };
