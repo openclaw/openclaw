@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, unlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -80,6 +80,85 @@ describe("scripts/changed-lanes", () => {
     expect(JSON.parse(output)).toMatchObject({
       paths: ["scripts/new-check.mjs"],
       lanes: { tooling: true },
+    });
+  });
+
+  it("includes deleted worktree files in the default local diff", () => {
+    const dir = makeTempRepoRoot(tempDirs, "openclaw-changed-lanes-deleted-");
+    git(dir, ["init", "-q", "--initial-branch=main"]);
+    mkdirSync(path.join(dir, "src", "shared"), { recursive: true });
+    writeFileSync(
+      path.join(dir, "src", "shared", "obsolete.ts"),
+      "export const value = 1;\n",
+      "utf8",
+    );
+    git(dir, ["add", "src/shared/obsolete.ts"]);
+    git(dir, [
+      "-c",
+      "user.email=test@example.com",
+      "-c",
+      "user.name=Test User",
+      "commit",
+      "-q",
+      "-m",
+      "initial",
+    ]);
+
+    unlinkSync(path.join(dir, "src", "shared", "obsolete.ts"));
+
+    const output = execFileSync(
+      process.execPath,
+      [path.join(repoRoot, "scripts", "changed-lanes.mjs"), "--json", "--base", "HEAD"],
+      {
+        cwd: dir,
+        encoding: "utf8",
+        env: createNestedGitEnv(),
+      },
+    );
+
+    expect(JSON.parse(output)).toMatchObject({
+      paths: ["src/shared/obsolete.ts"],
+      lanes: { core: true, coreTests: true },
+    });
+  });
+
+  it("includes deleted staged files in the staged diff", () => {
+    const dir = makeTempRepoRoot(tempDirs, "openclaw-changed-lanes-staged-deleted-");
+    git(dir, ["init", "-q", "--initial-branch=main"]);
+    mkdirSync(path.join(dir, "src", "shared"), { recursive: true });
+    writeFileSync(
+      path.join(dir, "src", "shared", "obsolete.ts"),
+      "export const value = 1;\n",
+      "utf8",
+    );
+    git(dir, ["add", "src/shared/obsolete.ts"]);
+    git(dir, [
+      "-c",
+      "user.email=test@example.com",
+      "-c",
+      "user.name=Test User",
+      "commit",
+      "-q",
+      "-m",
+      "initial",
+    ]);
+
+    unlinkSync(path.join(dir, "src", "shared", "obsolete.ts"));
+    git(dir, ["add", "src/shared/obsolete.ts"]);
+
+    const output = execFileSync(
+      process.execPath,
+      [path.join(repoRoot, "scripts", "changed-lanes.mjs"), "--json", "--staged"],
+      {
+        cwd: dir,
+        encoding: "utf8",
+        env: createNestedGitEnv(),
+      },
+    );
+
+    expect(JSON.parse(output)).toMatchObject({
+      paths: ["src/shared/obsolete.ts"],
+      lanes: { core: true, coreTests: true },
     });
   });
 
@@ -258,6 +337,10 @@ describe("scripts/changed-lanes", () => {
     });
     expect(plan.commands.map((command) => command.name)).toEqual([
       "conflict markers",
+      "changelog attributions",
+      "guarded extension wildcard re-exports",
+      "plugin-sdk wildcard re-exports",
+      "duplicate scan target coverage",
       "typecheck core tests",
       "lint core",
       "lint scripts",
@@ -544,12 +627,29 @@ describe("scripts/changed-lanes", () => {
     });
     expect(plan.commands.map((command) => command.args[0])).toEqual([
       "check:no-conflict-markers",
+      "check:changelog-attributions",
+      "lint:extensions:no-guarded-wildcard-reexports",
+      "lint:extensions:no-plugin-sdk-wildcard-reexports",
+      "dup:check:coverage",
       "release-metadata:check",
       "ios:version:check",
       "config:schema:check",
       "config:docs:check",
       "deps:root-ownership:check",
     ]);
+  });
+
+  it("keeps docs plus changelog entries on the docs-only changed gate", () => {
+    const result = detectChangedLanes(["CHANGELOG.md", "docs/tools/index.md"]);
+    const plan = createChangedCheckPlan(result);
+
+    expect(result.docsOnly).toBe(true);
+    expect(result.lanes).toMatchObject({
+      docs: true,
+      releaseMetadata: false,
+      all: false,
+    });
+    expect(plan.commands.map((command) => command.args[0])).not.toContain("release-metadata:check");
   });
 
   it("guards release metadata package changes to the top-level version field", () => {
@@ -674,6 +774,16 @@ describe("scripts/changed-lanes", () => {
     });
     expect(plan.commands).toEqual([
       { name: "conflict markers", args: ["check:no-conflict-markers"] },
+      { name: "changelog attributions", args: ["check:changelog-attributions"] },
+      {
+        name: "guarded extension wildcard re-exports",
+        args: ["lint:extensions:no-guarded-wildcard-reexports"],
+      },
+      {
+        name: "plugin-sdk wildcard re-exports",
+        args: ["lint:extensions:no-plugin-sdk-wildcard-reexports"],
+      },
+      { name: "duplicate scan target coverage", args: ["dup:check:coverage"] },
     ]);
   });
 
@@ -684,6 +794,16 @@ describe("scripts/changed-lanes", () => {
     expect(result.docsOnly).toBe(true);
     expect(plan.commands).toEqual([
       { name: "conflict markers", args: ["check:no-conflict-markers"] },
+      { name: "changelog attributions", args: ["check:changelog-attributions"] },
+      {
+        name: "guarded extension wildcard re-exports",
+        args: ["lint:extensions:no-guarded-wildcard-reexports"],
+      },
+      {
+        name: "plugin-sdk wildcard re-exports",
+        args: ["lint:extensions:no-plugin-sdk-wildcard-reexports"],
+      },
+      { name: "duplicate scan target coverage", args: ["dup:check:coverage"] },
     ]);
   });
 });

@@ -43,12 +43,17 @@ import {
   resolveOpenAIStrictToolFlagForInventory,
   resolveOpenAIStrictToolSetting,
 } from "./openai-tool-schema.js";
-import { buildGuardedModelFetch } from "./provider-transport-fetch.js";
+import { resolveProviderRequestPolicyConfig } from "./provider-request-config.js";
+import {
+  buildGuardedModelFetch,
+  resolveModelRequestTimeoutMs,
+} from "./provider-transport-fetch.js";
 import { stripSystemPromptCacheBoundary } from "./system-prompt-cache-boundary.js";
 import { transformTransportMessages } from "./transport-message-transform.js";
 import { mergeTransportMetadata, sanitizeTransportPayloadText } from "./transport-stream-shared.js";
 
 const DEFAULT_AZURE_OPENAI_API_VERSION = "2024-12-01-preview";
+const OPENAI_CODEX_RESPONSES_EMPTY_INPUT_TEXT = " ";
 const log = createSubsystemLogger("openai-transport");
 
 type BaseStreamOptions = {
@@ -84,8 +89,12 @@ type OpenAICompletionsOptions = BaseStreamOptions & {
   reasoningEffort?: OpenAIReasoningEffort;
 };
 
+type OpenAIModeCompatInput = Omit<ModelCompatConfig, "thinkingFormat"> & {
+  thinkingFormat?: string;
+};
+
 type OpenAIModeModel = Omit<Model<Api>, "compat"> & {
-  compat?: ModelCompatConfig;
+  compat?: OpenAIModeCompatInput | null;
 };
 
 type MutableAssistantOutput = {
@@ -623,23 +632,28 @@ function buildOpenAIClientHeaders(
   optionHeaders?: Record<string, string>,
   turnHeaders?: Record<string, string>,
 ): Record<string, string> {
-  const headers = { ...model.headers };
+  const providerHeaders = { ...model.headers };
   if (model.provider === "github-copilot") {
     Object.assign(
-      headers,
+      providerHeaders,
       buildCopilotDynamicHeaders({
         messages: context.messages,
         hasImages: hasCopilotVisionInput(context.messages),
       }),
     );
   }
-  if (optionHeaders) {
-    Object.assign(headers, optionHeaders);
-  }
-  if (turnHeaders) {
-    Object.assign(headers, turnHeaders);
-  }
-  return headers;
+  const callerHeaders = { ...optionHeaders, ...turnHeaders };
+  const headers = resolveProviderRequestPolicyConfig({
+    provider: model.provider,
+    api: model.api,
+    baseUrl: model.baseUrl,
+    capability: "llm",
+    transport: "stream",
+    providerHeaders,
+    callerHeaders: Object.keys(callerHeaders).length > 0 ? callerHeaders : undefined,
+    precedence: "caller-wins",
+  }).headers;
+  return headers ?? {};
 }
 
 function resolveProviderTransportTurnState(
@@ -665,6 +679,29 @@ function resolveProviderTransportTurnState(
   });
 }
 
+function resolveOpenAISdkTimeoutMs(model: Model<Api>): number | undefined {
+  return resolveModelRequestTimeoutMs(model, undefined);
+}
+
+function buildOpenAISdkClientOptions(model: Model<Api>): { timeout?: number } {
+  const timeout = resolveOpenAISdkTimeoutMs(model);
+  return timeout === undefined ? {} : { timeout };
+}
+
+function buildOpenAISdkRequestOptions(
+  model: Model<Api>,
+  signal?: AbortSignal,
+): { signal?: AbortSignal; timeout?: number } | undefined {
+  const timeout = resolveOpenAISdkTimeoutMs(model);
+  if (timeout === undefined && !signal) {
+    return undefined;
+  }
+  return {
+    ...(signal ? { signal } : {}),
+    ...(timeout !== undefined ? { timeout } : {}),
+  };
+}
+
 function createOpenAIResponsesClient(
   model: Model<Api>,
   context: Context,
@@ -678,6 +715,7 @@ function createOpenAIResponsesClient(
     dangerouslyAllowBrowser: true,
     defaultHeaders: buildOpenAIClientHeaders(model, context, optionHeaders, turnHeaders),
     fetch: buildGuardedModelFetch(model),
+    ...buildOpenAISdkClientOptions(model),
   });
 }
 
@@ -731,7 +769,7 @@ export function createOpenAIResponsesTransportStreamFn(): StreamFn {
         params = mergeTransportMetadata(params, turnState?.metadata);
         const responseStream = (await client.responses.create(
           params as never,
-          options?.signal ? { signal: options.signal } : undefined,
+          buildOpenAISdkRequestOptions(model, options?.signal),
         )) as unknown as AsyncIterable<unknown>;
         stream.push({ type: "start", partial: output as never });
         await processResponsesStream(responseStream, output, stream, model, {
@@ -839,6 +877,22 @@ function buildOpenAICodexResponsesInstructions(context: Context): string | undef
   return sanitizeTransportPayloadText(stripSystemPromptCacheBoundary(context.systemPrompt));
 }
 
+function ensureOpenAICodexResponsesInput(messages: ResponseInput, context: Context): void {
+  if (messages.length > 0 || !context.systemPrompt) {
+    return;
+  }
+  const text = buildOpenAICodexResponsesInstructions(context);
+  if (!text) {
+    throw new Error(
+      "OpenAI Codex Responses requires non-empty input when only systemPrompt is provided.",
+    );
+  }
+  messages.push({
+    role: "user",
+    content: [{ type: "input_text", text: OPENAI_CODEX_RESPONSES_EMPTY_INPUT_TEXT }],
+  });
+}
+
 export function buildOpenAIResponsesParams(
   model: Model<Api>,
   context: Context,
@@ -855,6 +909,9 @@ export function buildOpenAIResponsesParams(
     new Set(["openai", "openai-codex", "opencode", "azure-openai-responses"]),
     { includeSystemPrompt: !isCodexResponses, supportsDeveloperRole },
   );
+  if (isCodexResponses) {
+    ensureOpenAICodexResponsesInput(messages, context);
+  }
   const cacheRetention = resolveCacheRetention(options?.cacheRetention);
   const payloadPolicy = resolveOpenAIResponsesPayloadPolicy(model, {
     storeMode: "disable",
@@ -975,7 +1032,7 @@ export function createAzureOpenAIResponsesTransportStreamFn(): StreamFn {
         params = mergeTransportMetadata(params, turnState?.metadata);
         const responseStream = (await client.responses.create(
           params as never,
-          options?.signal ? { signal: options.signal } : undefined,
+          buildOpenAISdkRequestOptions(model, options?.signal),
         )) as unknown as AsyncIterable<unknown>;
         stream.push({ type: "start", partial: output as never });
         await processResponsesStream(responseStream, output, stream, model);
@@ -1029,6 +1086,7 @@ function createAzureOpenAIClient(
     defaultHeaders: buildOpenAIClientHeaders(model, context, optionHeaders, turnHeaders),
     baseURL: normalizeAzureBaseUrl(model.baseUrl),
     fetch: buildGuardedModelFetch(model),
+    ...buildOpenAISdkClientOptions(model),
   });
 }
 
@@ -1067,6 +1125,7 @@ function createOpenAICompletionsClient(
     defaultHeaders: clientConfig.defaultHeaders,
     defaultQuery: clientConfig.defaultQuery,
     fetch: buildGuardedModelFetch(model),
+    ...buildOpenAISdkClientOptions(model),
   });
 }
 
@@ -1160,9 +1219,10 @@ export function createOpenAICompletionsTransportStreamFn(): StreamFn {
         if (nextParams !== undefined) {
           params = nextParams as typeof params;
         }
-        const responseStream = (await client.chat.completions.create(params as never, {
-          signal: options?.signal,
-        })) as unknown as AsyncIterable<ChatCompletionChunk>;
+        const responseStream = (await client.chat.completions.create(
+          params as never,
+          buildOpenAISdkRequestOptions(model, options?.signal),
+        )) as unknown as AsyncIterable<ChatCompletionChunk>;
         stream.push({ type: "start", partial: output as never });
         await processOpenAICompletionsStream(responseStream, output, model, stream);
         if (options?.signal?.aborted) {
@@ -1492,26 +1552,12 @@ function getCompletionsReasoningDeltas(
 }
 
 function detectCompat(model: OpenAIModeModel) {
-  const provider = model.provider;
-  const { capabilities, defaults: compatDefaults } = detectOpenAICompletionsCompat(model);
-  const endpointClass = capabilities.endpointClass;
-  const isDefaultRoute = endpointClass === "default";
-  const isGroq = endpointClass === "groq-native" || (isDefaultRoute && provider === "groq");
-  const reasoningEffortMap: Record<string, string> =
-    isGroq && model.id === "qwen/qwen3-32b"
-      ? {
-          minimal: "default",
-          low: "default",
-          medium: "default",
-          high: "default",
-          xhigh: "default",
-        }
-      : {};
+  const { defaults: compatDefaults } = detectOpenAICompletionsCompat(model);
   return {
     supportsStore: compatDefaults.supportsStore,
     supportsDeveloperRole: compatDefaults.supportsDeveloperRole,
     supportsReasoningEffort: compatDefaults.supportsReasoningEffort,
-    reasoningEffortMap,
+    reasoningEffortMap: {},
     supportsUsageInStreaming: compatDefaults.supportsUsageInStreaming,
     maxTokensField: compatDefaults.maxTokensField,
     requiresToolResultName: false,
@@ -1562,7 +1608,7 @@ function getCompat(model: OpenAIModeModel): {
     requiresAssistantAfterToolResult:
       compat.requiresAssistantAfterToolResult ?? detected.requiresAssistantAfterToolResult,
     requiresThinkingAsText: compat.requiresThinkingAsText ?? detected.requiresThinkingAsText,
-    thinkingFormat: (compat.thinkingFormat as string | undefined) ?? detected.thinkingFormat,
+    thinkingFormat: compat.thinkingFormat ?? detected.thinkingFormat,
     openRouterRouting: (compat.openRouterRouting as Record<string, unknown> | undefined) ?? {},
     vercelGatewayRouting:
       (compat.vercelGatewayRouting as Record<string, unknown> | undefined) ??
@@ -1849,6 +1895,12 @@ function mapStopReason(reason: string | null) {
 }
 
 export const __testing = {
+  buildOpenAIClientHeaders,
+  buildOpenAISdkClientOptions,
+  buildOpenAISdkRequestOptions,
+  createAzureOpenAIClient,
+  createOpenAICompletionsClient,
+  createOpenAIResponsesClient,
   buildOpenAICompletionsClientConfig,
   processOpenAICompletionsStream,
 };

@@ -15,9 +15,7 @@ export type OllamaPluginConfig = {
 type OllamaDiscoveryContext = {
   config: {
     models?: {
-      providers?: {
-        ollama?: ModelProviderConfig;
-      };
+      providers?: Record<string, ModelProviderConfig | undefined>;
       ollamaDiscovery?: {
         enabled?: boolean;
       };
@@ -73,6 +71,17 @@ function shouldSkipAmbientOllamaDiscovery(env: NodeJS.ProcessEnv): boolean {
 
 const LOCAL_OLLAMA_HOSTNAMES = new Set(["localhost", "127.0.0.1", "0.0.0.0", "::1", "::"]);
 
+function isIpv4Loopback(host: string): boolean {
+  if (!/^\d+\.\d+\.\d+\.\d+$/.test(host)) {
+    return false;
+  }
+  const octets = host.split(".").map((part) => Number.parseInt(part, 10));
+  if (octets.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) {
+    return false;
+  }
+  return octets[0] === 127;
+}
+
 function isIpv4PrivateRange(host: string): boolean {
   if (!/^\d+\.\d+\.\d+\.\d+$/.test(host)) {
     return false;
@@ -111,6 +120,44 @@ export function isLocalOllamaBaseUrl(baseUrl: string | undefined | null): boolea
     isIpv6LocalRange(host) ||
     (!host.includes(".") && !host.includes(":"))
   );
+}
+
+function isLoopbackOllamaBaseUrl(baseUrl: string | undefined | null): boolean {
+  if (!baseUrl) {
+    return true;
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(baseUrl);
+  } catch {
+    return false;
+  }
+  let host = parsed.hostname.toLowerCase();
+  if (host.startsWith("[") && host.endsWith("]")) {
+    host = host.slice(1, -1);
+  }
+  return LOCAL_OLLAMA_HOSTNAMES.has(host) || isIpv4Loopback(host);
+}
+
+function hasExplicitRemoteOllamaApiProvider(
+  providers: Record<string, ModelProviderConfig | undefined> | undefined,
+): boolean {
+  if (!providers) {
+    return false;
+  }
+  for (const [providerId, provider] of Object.entries(providers)) {
+    if (providerId === OLLAMA_PROVIDER_ID || !provider) {
+      continue;
+    }
+    if (normalizeOptionalString(provider.api)?.toLowerCase() !== "ollama") {
+      continue;
+    }
+    const baseUrl = readProviderBaseUrl(provider);
+    if (baseUrl && !isLoopbackOllamaBaseUrl(baseUrl)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 export function shouldUseSyntheticOllamaAuth(
@@ -171,6 +218,9 @@ export async function resolveOllamaDiscoveryResult(params: {
   const explicit = params.ctx.config.models?.providers?.ollama;
   const hasExplicitModels = Array.isArray(explicit?.models) && explicit.models.length > 0;
   const hasMeaningfulExplicitConfig = hasMeaningfulExplicitOllamaConfig(explicit);
+  const hasRemoteOllamaApiProvider = hasExplicitRemoteOllamaApiProvider(
+    params.ctx.config.models?.providers,
+  );
   const discoveryEnabled =
     params.pluginConfig.discovery?.enabled ?? params.ctx.config.models?.ollamaDiscovery?.enabled;
   if (!hasExplicitModels && discoveryEnabled === false) {
@@ -201,6 +251,9 @@ export async function resolveOllamaDiscoveryResult(params: {
         ...(apiKey ? { apiKey } : {}),
       },
     };
+  }
+  if (!hasMeaningfulExplicitConfig && hasRemoteOllamaApiProvider) {
+    return null;
   }
   if (!hasOllamaDiscoveryOptIn && !hasMeaningfulExplicitConfig) {
     return null;

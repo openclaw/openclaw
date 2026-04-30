@@ -124,7 +124,7 @@ async function createConfigModuleMock() {
   const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
   return {
     ...actual,
-    loadConfig: () => mockConfig,
+    getRuntimeConfig: () => mockConfig,
   };
 }
 
@@ -183,6 +183,7 @@ function createCommandsStatusRuntimeModuleMock() {
       statusChannel: string;
       provider?: string;
       model: string;
+      workspaceDir?: string;
       primaryModelLabelOverride?: string;
       includeTranscriptUsage?: boolean;
       taskLineOverride?: string;
@@ -225,6 +226,7 @@ function createCommandsStatusRuntimeModuleMock() {
         sessionEntry: params.sessionEntry,
         modelAuth,
         includeTranscriptUsage: params.includeTranscriptUsage,
+        workspaceDir: params.workspaceDir,
       });
       return ["OpenClaw", `🧠 Model: ${primary}`, params.taskLineOverride]
         .filter(Boolean)
@@ -427,6 +429,28 @@ describe("session_status tool", () => {
     );
   });
 
+  it("passes spawned workspace to session_status auth labels", async () => {
+    resetSessionStore({
+      "agent:main:spawned": {
+        sessionId: "spawned-status",
+        updatedAt: 10,
+        spawnedWorkspaceDir: "/tmp/openclaw-spawned-workspace",
+        providerOverride: "anthropic",
+        modelOverride: "claude-opus-4-6",
+      },
+    });
+
+    const tool = getSessionStatusTool("agent:main:spawned");
+
+    await tool.execute("call-spawned-workspace-status", {});
+
+    expect(buildStatusMessageMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceDir: "/tmp/openclaw-spawned-workspace",
+      }),
+    );
+  });
+
   it("errors for unknown session keys", async () => {
     resetSessionStore({
       main: { sessionId: "s1", updatedAt: 10 },
@@ -466,6 +490,22 @@ describe("session_status tool", () => {
     const details = result.details as { ok?: boolean; sessionKey?: string };
     expect(details.ok).toBe(true);
     expect(details.sessionKey).toBe("main");
+  });
+
+  it("treats the TUI client label as the current requester session", async () => {
+    resetSessionStore({
+      "agent:main:main": {
+        sessionId: "s-main",
+        updatedAt: 10,
+      },
+    });
+
+    const tool = getSessionStatusTool("agent:main:main");
+
+    const result = await tool.execute("call-tui-label", { sessionKey: "openclaw-tui" });
+    const details = result.details as { ok?: boolean; sessionKey?: string };
+    expect(details.ok).toBe(true);
+    expect(details.sessionKey).toBe("agent:main:main");
   });
 
   it("falls back from implicit default-account direct policy keys to persisted direct sessions", async () => {

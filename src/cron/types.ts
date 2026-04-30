@@ -98,11 +98,20 @@ export type CronRunOutcome = {
   sessionKey?: string;
 };
 
+export type CronAgentExecutionStarted = {
+  jobId: string;
+  agentId?: string;
+  sessionId?: string;
+  sessionKey?: string;
+};
+
 export type CronFailureAlert = {
   after?: number;
   channel?: CronMessageChannel;
   to?: string;
   cooldownMs?: number;
+  /** When true, consecutive skipped runs count toward the alert threshold. */
+  includeSkipped?: boolean;
   /** Delivery mode: announce (via messaging channels) or webhook (HTTP POST). */
   mode?: "announce" | "webhook";
   /** Account ID for multi-account channel configurations. */
@@ -145,7 +154,7 @@ export type CronJobState = {
   lastRunAtMs?: number;
   /** Preferred execution outcome field. */
   lastRunStatus?: CronRunStatus;
-  /** Back-compat alias for lastRunStatus. */
+  /** @deprecated Use lastRunStatus. */
   lastStatus?: "ok" | "error" | "skipped";
   lastError?: string;
   /** Classified reason for the last error (when available). */
@@ -153,6 +162,8 @@ export type CronJobState = {
   lastDurationMs?: number;
   /** Number of consecutive execution errors (reset on success). Used for backoff. */
   consecutiveErrors?: number;
+  /** Number of consecutive skipped executions (reset on success or error). */
+  consecutiveSkipped?: number;
   /** Last failure alert timestamp (ms since epoch) for cooldown gating. */
   lastFailureAlertAtMs?: number;
   /** Number of consecutive schedule computation errors. Auto-disables job after threshold. */

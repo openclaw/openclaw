@@ -7,6 +7,7 @@ import type { PluginCandidate } from "./discovery.js";
 import type { PluginInstallSourceInfo } from "./install-source-info.js";
 import { describePluginInstallSource } from "./install-source-info.js";
 import { hashJson, safeHashFile } from "./installed-plugin-index-hash.js";
+import { hasOptionalMissingPluginManifestFile } from "./installed-plugin-index-manifest.js";
 import type {
   InstalledPluginIndexRecord,
   InstalledPluginInstallRecordInfo,
@@ -43,15 +44,29 @@ function hasRuntimeContractSurface(record: PluginManifestRecord): boolean {
     record.contracts?.webContentExtractors?.length ||
     record.contracts?.webFetchProviders?.length ||
     record.contracts?.webSearchProviders?.length ||
+    record.contracts?.migrationProviders?.length ||
     record.contracts?.memoryEmbeddingProviders?.length ||
     hasKind(record.kind, "memory"),
   );
 }
 
+/**
+ * @deprecated Compatibility classification for plugins that predate explicit
+ * `activation.onStartup`. Every plugin manifest should move to an explicit
+ * startup decision so Gateway boot can avoid importing inert plugins.
+ */
+function isLegacyImplicitStartupSidecar(record: PluginManifestRecord): boolean {
+  const channels = Array.isArray(record.channels) ? record.channels : [];
+  return (
+    channels.length === 0 &&
+    !hasRuntimeContractSurface(record) &&
+    record.activation?.onStartup === undefined
+  );
+}
+
 function buildStartupInfo(record: PluginManifestRecord): InstalledPluginStartupInfo {
-  const channels = record.channels ?? [];
   return {
-    sidecar: channels.length === 0 && !hasRuntimeContractSurface(record),
+    sidecar: record.activation?.onStartup === true || isLegacyImplicitStartupSidecar(record),
     memory: hasKind(record.kind, "memory"),
     deferConfiguredChannelFullLoadUntilAfterListen:
       record.startupDeferConfiguredChannelFullLoadUntilAfterListen === true,
@@ -62,8 +77,13 @@ function buildStartupInfo(record: PluginManifestRecord): InstalledPluginStartupI
   };
 }
 
-function collectCompatCodes(record: PluginManifestRecord): readonly PluginCompatCode[] {
+export function collectPluginManifestCompatCodes(
+  record: PluginManifestRecord,
+): readonly PluginCompatCode[] {
   const codes: PluginCompatCode[] = [];
+  if (isLegacyImplicitStartupSidecar(record)) {
+    codes.push("legacy-implicit-startup-sidecar");
+  }
   if (record.providerAuthEnvVars && Object.keys(record.providerAuthEnvVars).length > 0) {
     codes.push("provider-auth-env-vars");
   }
@@ -84,6 +104,9 @@ function collectCompatCodes(record: PluginManifestRecord): readonly PluginCompat
   }
   if (record.activation?.onRoutes?.length) {
     codes.push("activation-route-hint");
+  }
+  if (record.activation?.onConfigPaths?.length) {
+    codes.push("activation-config-path-hint");
   }
   if (record.activation?.onCapabilities?.length) {
     codes.push("activation-capability-hint");
@@ -197,6 +220,40 @@ function normalizePackageChannel(
   };
 }
 
+function hashManifestlessBundleRecord(record: PluginManifestRecord): string {
+  return hashJson({
+    id: record.id,
+    name: record.name,
+    description: record.description,
+    version: record.version,
+    format: record.format,
+    bundleFormat: record.bundleFormat,
+    bundleCapabilities: record.bundleCapabilities ?? [],
+    skills: record.skills ?? [],
+    settingsFiles: record.settingsFiles ?? [],
+    hooks: record.hooks ?? [],
+  });
+}
+
+function resolveManifestHash(params: {
+  record: PluginManifestRecord;
+  diagnostics: PluginDiagnostic[];
+}): string {
+  if (hasOptionalMissingPluginManifestFile(params.record)) {
+    return hashManifestlessBundleRecord(params.record);
+  }
+  const hash = safeHashFile({
+    filePath: params.record.manifestPath,
+    pluginId: params.record.id,
+    diagnostics: params.diagnostics,
+    required: true,
+  });
+  if (hash) {
+    return hash;
+  }
+  return "";
+}
+
 function buildCandidateLookup(
   candidates: readonly PluginCandidate[],
 ): Map<string, PluginCandidate> {
@@ -222,13 +279,7 @@ export function buildInstalledPluginIndexRecords(params: {
     const installRecord = params.installRecords[record.id];
     const packageInstall = describePackageInstallSource(candidate);
     const packageChannel = normalizePackageChannel(candidate?.packageManifest?.channel);
-    const manifestHash =
-      safeHashFile({
-        filePath: record.manifestPath,
-        pluginId: record.id,
-        diagnostics: params.diagnostics,
-        required: true,
-      }) ?? "";
+    const manifestHash = resolveManifestHash({ record, diagnostics: params.diagnostics });
     const packageJson = resolvePackageJsonRecord({
       candidate,
       packageJsonPath,
@@ -251,7 +302,7 @@ export function buildInstalledPluginIndexRecords(params: {
       origin: record.origin,
       enabled,
       startup: buildStartupInfo(record),
-      compat: collectCompatCodes(record),
+      compat: collectPluginManifestCompatCodes(record),
     };
     if (record.format && record.format !== "openclaw") {
       indexRecord.format = record.format;
@@ -262,8 +313,8 @@ export function buildInstalledPluginIndexRecords(params: {
     if (record.enabledByDefault === true) {
       indexRecord.enabledByDefault = true;
     }
-    if (record.syntheticAuthRefs && record.syntheticAuthRefs.length > 0) {
-      indexRecord.syntheticAuthRefs = record.syntheticAuthRefs;
+    if (record.syntheticAuthRefs?.length) {
+      indexRecord.syntheticAuthRefs = [...record.syntheticAuthRefs];
     }
     if (record.setupSource) {
       indexRecord.setupSource = record.setupSource;

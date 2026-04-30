@@ -2,8 +2,8 @@ import {
   createResolvedApproverActionAuthAdapter,
   resolveApprovalApprovers,
 } from "openclaw/plugin-sdk/approval-auth-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { resolveSlackAccount } from "./accounts.js";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import { resolveSlackAccount, resolveSlackAccountAllowFrom } from "./accounts.js";
 import { normalizeSlackApproverId } from "./exec-approvals.js";
 
 export function getSlackApprovalApprovers(params: {
@@ -12,8 +12,7 @@ export function getSlackApprovalApprovers(params: {
 }): string[] {
   const account = resolveSlackAccount(params).config;
   return resolveApprovalApprovers({
-    allowFrom: account.allowFrom,
-    extraAllowFrom: account.dm?.allowFrom,
+    allowFrom: resolveSlackAccountAllowFrom(params),
     defaultTo: account.defaultTo,
     normalizeApprover: normalizeSlackApproverId,
     normalizeDefaultTo: normalizeSlackApproverId,

@@ -6,7 +6,7 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
@@ -22,6 +22,7 @@ import { formatQaGatewayLogsForError, redactQaGatewayDebugText } from "./gateway
 import { startQaGatewayRpcClient } from "./gateway-rpc-client.js";
 import { splitQaModelRef, type QaProviderMode } from "./model-selection.js";
 import { resolveQaNodeExecPath } from "./node-exec.js";
+import { readProcessTreeCpuMs, readProcessTreeRssBytes } from "./process-tree-cpu.js";
 import {
   normalizeQaProviderModeEnv,
   QA_LIVE_PROVIDER_CONFIG_PATH_ENV,
@@ -211,6 +212,7 @@ export function buildQaRuntimeEnv(params: {
     OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
     OPENCLAW_SKIP_GMAIL_WATCHER: "1",
     OPENCLAW_SKIP_CANVAS_HOST: "1",
+    OPENCLAW_SKIP_STARTUP_MODEL_PREWARM: "1",
     OPENCLAW_NO_RESPAWN: "1",
     OPENCLAW_TEST_FAST: "1",
     OPENCLAW_QA_ALLOW_LOCAL_IMAGE_PROVIDER: "1",
@@ -268,6 +270,24 @@ async function fetchLocalGatewayHealth(params: {
   }
 }
 
+async function waitForQaGatewayRestartBoundary(params: {
+  logs: () => string;
+  offset: number;
+  pollMs?: number;
+  timeoutMs?: number;
+}) {
+  const timeoutMs = params.timeoutMs ?? 30_000;
+  const pollMs = params.pollMs ?? 100;
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    if (params.logs().slice(params.offset).includes("restart mode:")) {
+      return;
+    }
+    await sleep(pollMs);
+  }
+  throw new Error(`qa gateway child did not reach restart boundary within ${timeoutMs}ms`);
+}
+
 export const __testing = {
   assertQaArtifactDirWithinRepo,
   buildQaRuntimeEnv,
@@ -283,6 +303,7 @@ export const __testing = {
   stageQaLiveAnthropicSetupToken,
   stageQaMockAuthProfiles,
   resolveQaLiveCliAuthEnv,
+  waitForQaGatewayRestartBoundary,
   resolveQaOwnerPluginIdsForProviderIds,
   resolveQaBundledPluginSourceDir,
   resolveQaRuntimeHostVersion,
@@ -806,6 +827,8 @@ export async function startQaGatewayChild(params: {
       baseUrl,
       wsUrl,
       pid: child.pid ?? null,
+      getProcessCpuMs: () => readProcessTreeCpuMs(activeChild.pid ?? null),
+      getProcessRssBytes: () => readProcessTreeRssBytes(activeChild.pid ?? null),
       token: gatewayToken,
       workspaceDir,
       tempRoot,
@@ -816,7 +839,20 @@ export async function startQaGatewayChild(params: {
         if (!activeChild.pid) {
           throw new Error("qa gateway child has no pid");
         }
+        const restartLogOffset = logs().length;
         process.kill(activeChild.pid, signal);
+        if (signal === "SIGUSR1") {
+          await waitForQaGatewayRestartBoundary({
+            logs,
+            offset: restartLogOffset,
+          });
+          await waitForGatewayReady({
+            baseUrl,
+            logs,
+            child: activeChild,
+            timeoutMs: 120_000,
+          });
+        }
       },
       async restartAfterStateMutation(
         mutateState: (context: QaGatewayChildStateMutationContext) => Promise<void>,

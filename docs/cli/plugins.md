@@ -1,5 +1,5 @@
 ---
-summary: "CLI reference for `openclaw plugins` (list, install, marketplace, uninstall, enable/disable, doctor)"
+summary: "CLI reference for `openclaw plugins` (list, install, marketplace, uninstall, enable/disable, deps, doctor)"
 read_when:
   - You want to install or manage Gateway plugins or compatible bundles
   - You want to debug plugin load failures
@@ -41,12 +41,20 @@ openclaw plugins disable <id>
 openclaw plugins registry
 openclaw plugins registry --refresh
 openclaw plugins uninstall <id>
+openclaw plugins deps
+openclaw plugins deps --repair
+openclaw plugins deps --prune
+openclaw plugins deps --json
 openclaw plugins doctor
 openclaw plugins update <id-or-npm-spec>
 openclaw plugins update --all
 openclaw plugins marketplace list <marketplace>
 openclaw plugins marketplace list <marketplace> --json
 ```
+
+For slow install, inspect, uninstall, or registry-refresh investigation, run the
+command with `OPENCLAW_PLUGIN_LIFECYCLE_TRACE=1`. The trace writes phase timings
+to stderr and keeps JSON output parseable. See [Debugging](/help/debugging#plugin-lifecycle-trace).
 
 <Note>
 Bundled plugins ship with OpenClaw. Some are enabled by default (for example bundled model providers, bundled speech providers, and the bundled browser plugin); others require `plugins enable`.
@@ -61,6 +69,7 @@ Native OpenClaw plugins must ship `openclaw.plugin.json` with an inline JSON Sch
 ```bash
 openclaw plugins install <package>                      # ClawHub first, then npm
 openclaw plugins install clawhub:<package>              # ClawHub only
+openclaw plugins install npm:<package>                  # npm only
 openclaw plugins install <package> --force              # overwrite existing install
 openclaw plugins install <package> --pin                # pin version
 openclaw plugins install <package> --dangerously-force-unsafe-install
@@ -74,11 +83,21 @@ openclaw plugins install <plugin> --marketplace https://github.com/<owner>/<repo
 Bare package names are checked against ClawHub first, then npm. Treat plugin installs like running code. Prefer pinned versions.
 </Warning>
 
+<Note>
+ClawHub is the primary distribution and discovery surface for most plugins. Npm
+remains a supported fallback and direct-install path. During the migration to
+ClawHub, OpenClaw still ships some OpenClaw-owned `@openclaw/*` plugin packages
+on npm; those package versions can lag the bundled source between plugin release
+trains. If npm reports an OpenClaw-owned plugin package as deprecated, that
+published version is an old external artifact; use the plugin bundled with
+current OpenClaw or a local checkout until a newer npm package is published.
+</Note>
+
 <AccordionGroup>
   <Accordion title="Config includes and invalid-config recovery">
     If your `plugins` section is backed by a single-file `$include`, `plugins install/update/enable/disable/uninstall` write through to that included file and leave `openclaw.json` untouched. Root includes, include arrays, and includes with sibling overrides fail closed instead of flattening. See [Config includes](/gateway/configuration) for the supported shapes.
 
-    If config is invalid, `plugins install` normally fails closed and tells you to run `openclaw doctor --fix` first. The only documented exception is a narrow bundled-plugin recovery path for plugins that explicitly opt into `openclaw.install.allowInvalidConfigRecovery`.
+    If config is invalid during install, `plugins install` normally fails closed and tells you to run `openclaw doctor --fix` first. During Gateway startup, invalid config for one plugin is isolated to that plugin so other channels and plugins can keep running; `openclaw doctor --fix` can quarantine the invalid plugin entry. The only documented install-time exception is a narrow bundled-plugin recovery path for plugins that explicitly opt into `openclaw.install.allowInvalidConfigRecovery`.
 
   </Accordion>
   <Accordion title="--force and reinstall vs update">
@@ -95,11 +114,15 @@ Bare package names are checked against ClawHub first, then npm. Treat plugin ins
 
     This CLI flag applies to plugin install/update flows. Gateway-backed skill dependency installs use the matching `dangerouslyForceUnsafeInstall` request override, while `openclaw skills install` remains a separate ClawHub skill download/install flow.
 
+    If a plugin you published on ClawHub is blocked by a registry scan, use the publisher steps in [ClawHub](/tools/clawhub).
+
   </Accordion>
   <Accordion title="Hook packs and npm specs">
     `plugins install` is also the install surface for hook packs that expose `openclaw.hooks` in `package.json`. Use `openclaw hooks` for filtered hook visibility and per-hook enablement, not package installation.
 
     Npm specs are **registry-only** (package name + optional **exact version** or **dist-tag**). Git/URL/file specs and semver ranges are rejected. Dependency installs run project-local with `--ignore-scripts` for safety, even when your shell has global npm install settings.
+
+    Use `npm:<package>` when you want to skip ClawHub lookup and install directly from npm. Bare package specs still prefer ClawHub and only fall back to npm when ClawHub does not have that package or version.
 
     Bare specs and `@latest` stay on the stable track. If npm resolves either of those to a prerelease, OpenClaw stops and asks you to opt in explicitly with a prerelease tag such as `@beta`/`@rc` or an exact prerelease version such as `@1.2.3-beta.4`.
 
@@ -127,7 +150,15 @@ OpenClaw now also prefers ClawHub for bare npm-safe plugin specs. It only falls 
 openclaw plugins install openclaw-codex-app-server
 ```
 
+Use `npm:` to force npm-only resolution, for example when ClawHub is unreachable or you know the package exists only on npm:
+
+```bash
+openclaw plugins install npm:openclaw-codex-app-server
+openclaw plugins install npm:@scope/plugin-name@1.0.1
+```
+
 OpenClaw downloads the package archive from ClawHub, checks the advertised plugin API / minimum gateway compatibility, then installs it through the normal archive path. Recorded installs keep their ClawHub source metadata for later updates.
+Unversioned ClawHub installs keep an unversioned recorded spec so `openclaw plugins update` can follow newer ClawHub releases; explicit version or tag selectors such as `clawhub:pkg@1.2.3` and `clawhub:pkg@beta` remain pinned to that selector.
 
 #### Marketplace shorthand
 
@@ -154,6 +185,7 @@ openclaw plugins install <plugin-name> --marketplace ./my-marketplace
     - a GitHub repo shorthand such as `owner/repo`
     - a GitHub repo URL such as `https://github.com/owner/repo`
     - a git URL
+
   </Tab>
   <Tab title="Remote marketplace rules">
     For remote marketplaces loaded from GitHub or git, plugin entries must stay inside the cloned marketplace repo. OpenClaw accepts relative path sources from that repo and rejects HTTP(S), absolute-path, git, GitHub, and other non-path plugin sources from remote manifests.
@@ -223,6 +255,19 @@ Use `--pin` on npm installs to save the resolved exact spec (`name@version`) in 
 Plugin install metadata is machine-managed state, not user config. Installs and updates write it to `plugins/installs.json` under the active OpenClaw state directory. Its top-level `installRecords` map is the durable source of install metadata, including records for broken or missing plugin manifests. The `plugins` array is the manifest-derived cold registry cache. The file includes a do-not-edit warning and is used by `openclaw plugins update`, uninstall, diagnostics, and the cold plugin registry.
 
 When OpenClaw sees shipped legacy `plugins.installs` records in config, it moves them into the plugin index and removes the config key; if either write fails, the config records are kept so the install metadata is not lost.
+
+### Runtime deps
+
+```bash
+openclaw plugins deps
+openclaw plugins deps --repair
+openclaw plugins deps --prune
+openclaw plugins deps --json
+```
+
+`plugins deps` inspects the packaged runtime dependency stage for OpenClaw-owned bundled plugins selected by plugin config, enabled/configured channels, configured model providers, or bundled manifest defaults. It is not the install/update path for third-party npm or ClawHub plugins.
+
+Use `--repair` when a packaged install reports missing bundled runtime dependencies during Gateway startup or `plugins doctor`. Repair installs only missing enabled bundled-plugin deps with lifecycle scripts disabled. Use `--prune` to remove stale unknown external runtime-dependency roots left behind by older packaged layouts.
 
 ### Uninstall
 

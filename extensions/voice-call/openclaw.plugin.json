@@ -1,5 +1,8 @@
 {
   "id": "voice-call",
+  "activation": {
+    "onStartup": true
+  },
   "channelEnvVars": {
     "voice-call": [
       "TELNYX_API_KEY",
@@ -203,7 +206,7 @@
             "type": "string"
           },
           "authToken": {
-            "type": "string"
+            "type": ["string", "object"]
           }
         }
       },
@@ -521,7 +524,7 @@
                 "additionalProperties": false,
                 "properties": {
                   "apiKey": {
-                    "type": "string"
+                    "type": ["string", "object"]
                   },
                   "baseUrl": {
                     "type": "string"
@@ -547,7 +550,7 @@
                 "additionalProperties": false,
                 "properties": {
                   "apiKey": {
-                    "type": "string"
+                    "type": ["string", "object"]
                   },
                   "baseUrl": {
                     "type": "string"
@@ -682,7 +685,7 @@
               "type": "object",
               "properties": {
                 "apiKey": {
-                  "type": "string"
+                  "type": ["string", "object"]
                 }
               },
               "additionalProperties": true
@@ -718,6 +721,12 @@
     }
   },
   "configContracts": {
-    "compatibilityMigrationPaths": ["plugins.entries.voice-call.config"]
+    "compatibilityMigrationPaths": ["plugins.entries.voice-call.config"],
+    "secretInputs": {
+      "paths": [
+        { "path": "twilio.authToken", "expected": "string" },
+        { "path": "tts.providers.*.apiKey", "expected": "string" }
+      ]
+    }
   }
 }

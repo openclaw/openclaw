@@ -185,7 +185,8 @@ error prompting you to configure one).
 <Note>
   All provider key fields support SecretRef objects. Plugin-scoped SecretRefs
   under `plugins.entries.<plugin>.config.webSearch.apiKey` are resolved for the
-  bundled Exa, Firecrawl, Gemini, Grok, Kimi, Perplexity, and Tavily providers
+  bundled API-backed web search providers, including Brave, Exa, Firecrawl,
+  Gemini, Grok, Kimi, MiniMax, Perplexity, and Tavily,
   whether the provider is picked explicitly via `tools.web.search.provider` or
   selected through auto-detect. In auto-detect mode, OpenClaw resolves only the
   selected provider key -- non-selected SecretRefs stay inactive, so you can

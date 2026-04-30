@@ -9,17 +9,10 @@ import { sanitizeForLog } from "../terminal/ansi.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
 import { loadBundleManifest } from "./bundle-manifest.js";
-import {
-  normalizePluginsConfigWithResolver,
-  type NormalizedPluginsConfig,
-} from "./config-policy.js";
+import { normalizePluginsConfigWithResolver } from "./config-policy.js";
 import { discoverOpenClawPlugins, type PluginCandidate } from "./discovery.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-record-reader.js";
 import type { PluginManifestCommandAlias } from "./manifest-command-aliases.js";
-import {
-  clearPluginManifestRegistryCache,
-  pluginManifestRegistryCache,
-} from "./manifest-registry-state.js";
 import type {
   PluginBundleFormat,
   PluginConfigUiHint,
@@ -37,8 +30,11 @@ import {
   type PluginManifestContracts,
   type PluginManifestMediaUnderstandingProviderMetadata,
   type PluginManifestModelCatalog,
+  type PluginManifestModelIdNormalization,
+  type PluginManifestModelPricing,
   type PluginManifestModelSupport,
   type PluginManifestProviderEndpoint,
+  type PluginManifestProviderRequest,
   type PluginManifestQaRunner,
   type PluginManifestSetup,
 } from "./manifest.js";
@@ -46,7 +42,6 @@ import { checkMinHostVersion } from "./min-host-version.js";
 import { isPathInside, safeRealpathSync } from "./path-safety.js";
 import type { PluginKind } from "./plugin-kind.types.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
-import { resolvePluginCacheInputs } from "./roots.js";
 
 /**
  * Resolve a plugin source path, falling back from .ts to .js when the
@@ -79,7 +74,8 @@ export type PluginManifestContractListKey =
   | "memoryEmbeddingProviders"
   | "webContentExtractors"
   | "webFetchProviders"
-  | "webSearchProviders";
+  | "webSearchProviders"
+  | "migrationProviders";
 
 type SeenIdEntry = {
   candidate: PluginCandidate;
@@ -112,7 +108,10 @@ export type PluginManifestRecord = {
   providerDiscoverySource?: string;
   modelSupport?: PluginManifestModelSupport;
   modelCatalog?: PluginManifestModelCatalog;
+  modelPricing?: PluginManifestModelPricing;
+  modelIdNormalization?: PluginManifestModelIdNormalization;
   providerEndpoints?: PluginManifestProviderEndpoint[];
+  providerRequest?: PluginManifestProviderRequest;
   cliBackends: string[];
   syntheticAuthRefs?: string[];
   nonSecretAuthMarkers?: string[];
@@ -163,58 +162,6 @@ export type BundledChannelConfigCollector = (params: {
   manifest: PluginManifest;
   packageManifest?: OpenClawPackageManifest;
 }) => Record<string, PluginManifestChannelConfig> | undefined;
-
-const registryCache = pluginManifestRegistryCache as Map<
-  string,
-  { expiresAt: number; registry: PluginManifestRegistry }
->;
-
-// Keep a short cache window to collapse bursty reloads during startup flows.
-const DEFAULT_MANIFEST_CACHE_MS = 1000;
-
-export { clearPluginManifestRegistryCache } from "./manifest-registry-state.js";
-
-function resolveManifestCacheMs(env: NodeJS.ProcessEnv): number {
-  const raw = env.OPENCLAW_PLUGIN_MANIFEST_CACHE_MS?.trim();
-  if (raw === "" || raw === "0") {
-    return 0;
-  }
-  if (!raw) {
-    return DEFAULT_MANIFEST_CACHE_MS;
-  }
-  const parsed = Number.parseInt(raw, 10);
-  if (!Number.isFinite(parsed)) {
-    return DEFAULT_MANIFEST_CACHE_MS;
-  }
-  return Math.max(0, parsed);
-}
-
-function shouldUseManifestCache(env: NodeJS.ProcessEnv): boolean {
-  const disabled = env.OPENCLAW_DISABLE_PLUGIN_MANIFEST_CACHE?.trim();
-  if (disabled) {
-    return false;
-  }
-  return resolveManifestCacheMs(env) > 0;
-}
-
-function buildCacheKey(params: {
-  workspaceDir?: string;
-  plugins: NormalizedPluginsConfig;
-  env: NodeJS.ProcessEnv;
-}): string {
-  const { roots, loadPaths } = resolvePluginCacheInputs({
-    workspaceDir: params.workspaceDir,
-    loadPaths: params.plugins.loadPaths,
-    env: params.env,
-  });
-  const workspaceKey = roots.workspace ?? "";
-  const configExtensionsRoot = roots.global;
-  const bundledRoot = roots.stock ?? "";
-  const runtimeServiceVersion = resolveCompatibilityHostVersion(params.env);
-  // The manifest registry only depends on where plugins are discovered from (workspace + load paths).
-  // It does not depend on allow/deny/entries enable-state, so exclude those for higher cache hit rates.
-  return `${workspaceKey}::${configExtensionsRoot}::${bundledRoot}::${runtimeServiceVersion}::${JSON.stringify(loadPaths)}`;
-}
 
 function safeStatMtimeMs(filePath: string): number | null {
   try {
@@ -337,7 +284,10 @@ function buildRecord(params: {
       : undefined,
     modelSupport: params.manifest.modelSupport,
     modelCatalog: params.manifest.modelCatalog,
+    modelPricing: params.manifest.modelPricing,
+    modelIdNormalization: params.manifest.modelIdNormalization,
     providerEndpoints: params.manifest.providerEndpoints,
+    providerRequest: params.manifest.providerRequest,
     cliBackends: params.manifest.cliBackends ?? [],
     syntheticAuthRefs: params.manifest.syntheticAuthRefs ?? [],
     nonSecretAuthMarkers: params.manifest.nonSecretAuthMarkers ?? [],
@@ -548,11 +498,38 @@ function resolveDuplicatePrecedenceRank(params: {
   return 4;
 }
 
+function isIntentionalInstalledBundledDuplicate(params: {
+  pluginId: string;
+  left: PluginCandidate;
+  right: PluginCandidate;
+  config?: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  installRecords: Record<string, PluginInstallRecord>;
+}): boolean {
+  const leftIsInstalled = matchesInstalledPluginRecord({
+    pluginId: params.pluginId,
+    candidate: params.left,
+    config: params.config,
+    env: params.env,
+    installRecords: params.installRecords,
+  });
+  const rightIsInstalled = matchesInstalledPluginRecord({
+    pluginId: params.pluginId,
+    candidate: params.right,
+    config: params.config,
+    env: params.env,
+    installRecords: params.installRecords,
+  });
+  return (
+    (leftIsInstalled && params.right.origin === "bundled") ||
+    (rightIsInstalled && params.left.origin === "bundled")
+  );
+}
+
 export function loadPluginManifestRegistry(
   params: {
     config?: OpenClawConfig;
     workspaceDir?: string;
-    cache?: boolean;
     env?: NodeJS.ProcessEnv;
     candidates?: PluginCandidate[];
     diagnostics?: PluginDiagnostic[];
@@ -563,18 +540,6 @@ export function loadPluginManifestRegistry(
   const config = params.config ?? {};
   const normalized = normalizePluginsConfigWithResolver(config.plugins);
   const env = params.env ?? process.env;
-  const cacheKey = buildCacheKey({ workspaceDir: params.workspaceDir, plugins: normalized, env });
-  const cacheEnabled =
-    params.cache !== false &&
-    !params.installRecords &&
-    !params.bundledChannelConfigCollector &&
-    shouldUseManifestCache(env);
-  if (cacheEnabled) {
-    const cached = registryCache.get(cacheKey);
-    if (cached && cached.expiresAt > Date.now()) {
-      return cached.registry;
-    }
-  }
 
   const discovery = params.candidates
     ? {
@@ -584,7 +549,6 @@ export function loadPluginManifestRegistry(
     : discoverOpenClawPlugins({
         workspaceDir: params.workspaceDir,
         extraPaths: normalized.loadPaths,
-        cache: params.cache,
         env,
       });
   const diagnostics: PluginDiagnostic[] = [...discovery.diagnostics];
@@ -730,6 +694,18 @@ export function loadPluginManifestRegistry(
         seenIds.set(manifest.id, { candidate, recordIndex: existing.recordIndex });
         pushManifestCompatibilityDiagnostics({ record, diagnostics });
       }
+      if (
+        isIntentionalInstalledBundledDuplicate({
+          pluginId: manifest.id,
+          left: candidate,
+          right: existing.candidate,
+          config,
+          env,
+          installRecords: getInstallRecords(),
+        })
+      ) {
+        continue;
+      }
       diagnostics.push({
         level: "warn",
         pluginId: manifest.id,
@@ -745,11 +721,5 @@ export function loadPluginManifestRegistry(
   }
 
   const registry = { plugins: records, diagnostics };
-  if (cacheEnabled) {
-    const ttl = resolveManifestCacheMs(env);
-    if (ttl > 0) {
-      registryCache.set(cacheKey, { expiresAt: Date.now() + ttl, registry });
-    }
-  }
   return registry;
 }

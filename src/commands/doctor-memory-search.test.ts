@@ -228,6 +228,24 @@ describe("noteMemorySearchHealth", () => {
     expect(note).not.toHaveBeenCalled();
   });
 
+  it("does not treat an inconclusive gateway timeout as local embeddings not ready", async () => {
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "local",
+      local: {},
+      remote: {},
+    });
+
+    await noteMemorySearchHealth(cfg, {
+      gatewayMemoryProbe: {
+        checked: false,
+        ready: false,
+        error: "gateway memory probe timed out: gateway timeout after 8000ms",
+      },
+    });
+
+    expect(note).not.toHaveBeenCalled();
+  });
+
   it("does not warn when local provider has an explicit hf: modelPath", async () => {
     resolveMemorySearchConfig.mockReturnValue({
       provider: "local",

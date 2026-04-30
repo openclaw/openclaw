@@ -1,6 +1,6 @@
 import type { Bot } from "grammy";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../../src/config/types.openclaw.js";
 import { resolveAutoTopicLabelConfig as resolveAutoTopicLabelConfigRuntime } from "./auto-topic-label-config.js";
 import type { TelegramBotDeps } from "./bot-deps.js";
 import {
@@ -133,7 +133,7 @@ let getTelegramAbortFenceSizeForTests: typeof import("./bot-message-dispatch.js"
 let resetTelegramAbortFenceForTests: typeof import("./bot-message-dispatch.js").resetTelegramAbortFenceForTests;
 
 const telegramDepsForTest: TelegramBotDeps = {
-  loadConfig: loadConfig as TelegramBotDeps["loadConfig"],
+  getRuntimeConfig: loadConfig as TelegramBotDeps["getRuntimeConfig"],
   resolveStorePath: resolveStorePath as TelegramBotDeps["resolveStorePath"],
   loadSessionStore: loadSessionStore as TelegramBotDeps["loadSessionStore"],
   readChannelAllowFromStore:
@@ -290,6 +290,13 @@ describe("dispatchTelegramMessage draft streaming", () => {
       reactionApi: null,
       removeAckAfterReply: false,
     } as unknown as TelegramMessageContext;
+    base.turn = {
+      storePath: "/tmp/openclaw/telegram-sessions.json",
+      recordInboundSession: vi.fn(async () => undefined),
+      record: {
+        onRecordError: vi.fn(),
+      },
+    } as unknown as TelegramMessageContext["turn"];
 
     return {
       ...base,
@@ -790,7 +797,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     );
   });
 
-  it("keeps default tool progress messages when answer preview streaming is off", async () => {
+  it("suppresses default tool progress messages when answer preview streaming is off", async () => {
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
       await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
       await replyOptions?.onItemEvent?.({ progressText: "exec ls ~/Desktop" });
@@ -803,7 +810,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledWith(
       expect.objectContaining({
         replyOptions: expect.objectContaining({
-          suppressDefaultToolProgressMessages: false,
+          suppressDefaultToolProgressMessages: true,
         }),
       }),
     );
@@ -2887,6 +2894,33 @@ describe("dispatchTelegramMessage draft streaming", () => {
     );
   });
 
+  it("finalizes explicit failed-action replies without a standalone warning delivery", async () => {
+    const draftStream = createDraftStream(999);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: "Let me update that file." });
+        await dispatcherOptions.deliver(
+          { text: "I couldn't update the file, so no changes were applied." },
+          { kind: "final" },
+        );
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "block" });
+
+    expect(editMessageTelegram).toHaveBeenCalledWith(
+      123,
+      999,
+      "I couldn't update the file, so no changes were applied.",
+      expect.any(Object),
+    );
+    expect(deliverReplies).not.toHaveBeenCalled();
+    expect(draftStream.clear).not.toHaveBeenCalled();
+  });
+
   it("clears preview for error-only finals", async () => {
     const draftStream = createDraftStream(999);
     createTelegramDraftStream.mockReturnValue(draftStream);
@@ -3135,7 +3169,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     editMessageTelegram.mockResolvedValue({ ok: true });
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
       async ({ dispatcherOptions, replyOptions }) => {
-        replyOptions?.onPartialReply?.({ text: "Processing..." });
+        await replyOptions?.onPartialReply?.({ text: "Processing..." });
         await dispatcherOptions.deliver(
           { text: "⚠️ exec failed", isError: true },
           { kind: "block" },

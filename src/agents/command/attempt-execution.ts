@@ -7,6 +7,7 @@ import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { sanitizeForLog } from "../../terminal/ansi.js";
 import { resolveMessageChannel } from "../../utils/message-channel.js";
@@ -23,6 +24,7 @@ import { buildAgentRuntimeAuthPlan } from "../runtime-plan/auth.js";
 import { buildWorkspaceSkillSnapshot } from "../skills.js";
 import { buildUsageWithNoCost } from "../stream-message-shared.js";
 import {
+  buildClaudeCliFallbackContextPrelude,
   claudeCliSessionTranscriptHasContent,
   resolveFallbackRetryPrompt,
 } from "./attempt-execution.helpers.js";
@@ -233,6 +235,7 @@ export async function persistCliTurnTranscript(params: {
 export function runAgentAttempt(params: {
   providerOverride: string;
   modelOverride: string;
+  originalProvider: string;
   cfg: OpenClawConfig;
   sessionEntry: SessionEntry | undefined;
   sessionId: string;
@@ -252,46 +255,71 @@ export function runAgentAttempt(params: {
   skillsSnapshot: ReturnType<typeof buildWorkspaceSkillSnapshot> | undefined;
   resolvedVerboseLevel: VerboseLevel | undefined;
   agentDir: string;
-  onAgentEvent: (evt: { stream: string; data?: Record<string, unknown> }) => void;
+  onAgentEvent: (evt: {
+    stream: string;
+    data?: Record<string, unknown>;
+    sessionKey?: string;
+  }) => void;
   authProfileProvider: string;
   sessionStore?: Record<string, SessionEntry>;
   storePath?: string;
   allowTransientCooldownProbe?: boolean;
   sessionHasHistory?: boolean;
 }) {
-  const effectivePrompt = resolveFallbackRetryPrompt({
+  const isRawModelRun = params.opts.modelRun === true || params.opts.promptMode === "none";
+  const claudeCliFallbackPrelude =
+    !isRawModelRun &&
+    params.isFallbackRetry &&
+    isClaudeCliProvider(params.originalProvider) &&
+    !isClaudeCliProvider(params.providerOverride)
+      ? buildClaudeCliFallbackContextPrelude({
+          cliSessionId: getCliSessionBinding(params.sessionEntry, "claude-cli")?.sessionId,
+        })
+      : "";
+  const resolvedPrompt = resolveFallbackRetryPrompt({
     body: params.body,
     isFallbackRetry: params.isFallbackRetry,
     sessionHasHistory: params.sessionHasHistory,
+    priorContextPrelude: claudeCliFallbackPrelude,
   });
+  const effectivePrompt = isRawModelRun
+    ? resolvedPrompt
+    : annotateInterSessionPromptText(resolvedPrompt, params.opts.inputProvenance);
   const bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
     params.sessionEntry?.systemPromptReport,
   );
   const bootstrapPromptWarningSignature =
     bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1];
-  const sessionPinnedAgentHarnessId = resolveSessionPinnedAgentHarnessId({
-    cfg: params.cfg,
-    sessionAgentId: params.sessionAgentId,
-    sessionEntry: params.sessionEntry,
-    sessionHasHistory: params.sessionHasHistory,
-    sessionId: params.sessionId,
-    sessionKey: params.sessionKey ?? params.sessionId,
-  });
-  const agentRuntimeOverride = params.sessionEntry?.agentRuntimeOverride?.trim();
-  const cliExecutionProvider =
-    resolveCliRuntimeExecutionProvider({
-      provider: params.providerOverride,
-      cfg: params.cfg,
-      agentId: params.sessionAgentId,
-      runtimeOverride: agentRuntimeOverride,
-    }) ?? params.providerOverride;
-  const agentHarnessPolicy = resolveAgentHarnessPolicy({
-    provider: params.providerOverride,
-    modelId: params.modelOverride,
-    config: params.cfg,
-    agentId: params.sessionAgentId,
-    sessionKey: params.sessionKey ?? params.sessionId,
-  });
+  const sessionPinnedAgentHarnessId = isRawModelRun
+    ? "pi"
+    : resolveSessionPinnedAgentHarnessId({
+        cfg: params.cfg,
+        sessionAgentId: params.sessionAgentId,
+        sessionEntry: params.sessionEntry,
+        sessionHasHistory: params.sessionHasHistory,
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey ?? params.sessionId,
+      });
+  const agentRuntimeOverride = isRawModelRun
+    ? undefined
+    : params.sessionEntry?.agentRuntimeOverride?.trim();
+  const cliExecutionProvider = isRawModelRun
+    ? params.providerOverride
+    : (resolveCliRuntimeExecutionProvider({
+        provider: params.providerOverride,
+        cfg: params.cfg,
+        agentId: params.sessionAgentId,
+        runtimeOverride: agentRuntimeOverride,
+      }) ?? params.providerOverride);
+  const agentHarnessPolicy = isRawModelRun
+    ? ({ runtime: "pi", fallback: "pi" } as const)
+    : resolveAgentHarnessPolicy({
+        provider: params.providerOverride,
+        modelId: params.modelOverride,
+        config: params.cfg,
+        agentId: params.sessionAgentId,
+        sessionKey: params.sessionKey ?? params.sessionId,
+      });
   const runtimeAuthPlan = buildAgentRuntimeAuthPlan({
     provider: params.providerOverride,
     authProfileProvider: params.authProfileProvider,
@@ -303,7 +331,7 @@ export function runAgentAttempt(params: {
     allowHarnessAuthProfileForwarding: !isCliProvider(cliExecutionProvider, params.cfg),
   });
   const authProfileId = runtimeAuthPlan.forwardedAuthProfileId;
-  if (isCliProvider(cliExecutionProvider, params.cfg)) {
+  if (!isRawModelRun && isCliProvider(cliExecutionProvider, params.cfg)) {
     const cliSessionBinding = getCliSessionBinding(params.sessionEntry, cliExecutionProvider);
     const resolveReusableCliSessionBinding = async () => {
       if (
@@ -349,6 +377,7 @@ export function runAgentAttempt(params: {
         timeoutMs: params.timeoutMs,
         runId: params.runId,
         extraSystemPrompt: params.opts.extraSystemPrompt,
+        inputProvenance: params.opts.inputProvenance,
         cliSessionId: nextCliSessionId,
         cliSessionBinding:
           nextCliSessionId === activeCliSessionBinding?.sessionId
@@ -365,6 +394,8 @@ export function runAgentAttempt(params: {
         messageProvider: params.messageChannel,
         agentAccountId: params.runContext.accountId,
         senderIsOwner: params.opts.senderIsOwner,
+        cleanupBundleMcpOnRunEnd: params.opts.cleanupBundleMcpOnRunEnd,
+        cleanupCliLiveSessionOnRunEnd: params.opts.cleanupCliLiveSessionOnRunEnd,
       });
     return resolveReusableCliSessionBinding().then(async (activeCliSessionBinding) => {
       try {

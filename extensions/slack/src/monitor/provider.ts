@@ -8,7 +8,7 @@ import {
 } from "openclaw/plugin-sdk/allow-from";
 import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
 import { registerChannelRuntimeContext } from "openclaw/plugin-sdk/channel-runtime-context";
-import type { SessionScope } from "openclaw/plugin-sdk/config-runtime";
+import type { SessionScope } from "openclaw/plugin-sdk/config-types";
 import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
 import { DEFAULT_GROUP_HISTORY_LIMIT } from "openclaw/plugin-sdk/reply-history";
 import { normalizeMainKey } from "openclaw/plugin-sdk/routing";
@@ -22,7 +22,11 @@ import {
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/text-runtime";
 import { installRequestBodyLimitGuard } from "openclaw/plugin-sdk/webhook-request-guards";
-import { resolveSlackAccount } from "../accounts.js";
+import {
+  resolveSlackAccount,
+  resolveSlackAccountAllowFrom,
+  resolveSlackAccountDmPolicy,
+} from "../accounts.js";
 import { resolveSlackWebClientOptions } from "../client-options.js";
 import { isSlackExecApprovalClientEnabled } from "../exec-approvals.js";
 import { normalizeSlackWebhookPath, registerSlackHttpHandler } from "../http/index.js";
@@ -33,8 +37,8 @@ import { resolveSlackAppToken, resolveSlackBotToken } from "../token.js";
 import { normalizeAllowList } from "./allow-list.js";
 import { resolveSlackSlashCommandConfig } from "./commands.js";
 import {
+  getRuntimeConfig,
   isDangerousNameMatchingEnabled,
-  loadConfig,
   resolveDefaultGroupPolicy,
   resolveOpenProviderRuntimeGroupPolicy,
   warnMissingProviderGroupPolicyFallbackOnce,
@@ -91,7 +95,7 @@ function parseApiAppIdFromAppToken(raw?: string) {
 }
 
 export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
-  const cfg = opts.config ?? loadConfig();
+  const cfg = opts.config ?? getRuntimeConfig();
   const runtime: RuntimeEnv = opts.runtime ?? createNonExitingRuntime();
 
   let account = resolveSlackAccount({
@@ -148,8 +152,8 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   const dmConfig = slackCfg.dm;
 
   const dmEnabled = dmConfig?.enabled ?? true;
-  const dmPolicy = slackCfg.dmPolicy ?? dmConfig?.policy ?? "pairing";
-  let allowFrom = slackCfg.allowFrom ?? dmConfig?.allowFrom;
+  const dmPolicy = resolveSlackAccountDmPolicy({ cfg, accountId: account.accountId }) ?? "pairing";
+  let allowFrom = resolveSlackAccountAllowFrom({ cfg, accountId: account.accountId });
   const groupDmEnabled = dmConfig?.groupEnabled ?? false;
   const groupDmChannels = dmConfig?.groupChannels;
   let channelsConfig = slackCfg.channels;
@@ -192,6 +196,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     signingSecret: signingSecret ?? undefined,
     slackWebhookPath,
     clientOptions: clientOptions as Record<string, unknown>,
+    ...(slackCfg.socketMode ? { socketMode: slackCfg.socketMode } : {}),
   });
 
   // Pre-set shuttingDown on the SocketModeClient before app.stop() to prevent

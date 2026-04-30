@@ -28,6 +28,8 @@ describe("resolve-openclaw-package-candidate", () => {
       parseArgs([
         "--source",
         "npm",
+        "--package-ref",
+        "release/2026.4.27",
         "--package-spec",
         "openclaw@beta",
         "--package-url",
@@ -43,6 +45,7 @@ describe("resolve-openclaw-package-candidate", () => {
       artifactDir: ".",
       outputDir: ".artifacts/docker-e2e-package",
       packageSha256: "",
+      packageRef: "release/2026.4.27",
       packageSpec: "openclaw@beta",
       packageUrl: "",
       source: "npm",

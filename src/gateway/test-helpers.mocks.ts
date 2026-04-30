@@ -211,8 +211,9 @@ vi.mock("../config/io.js", async () => {
   const configMock = createGatewayConfigModuleMock(configActual);
   const createConfigIO = vi.fn(() => ({
     ...actual.createConfigIO(),
-    loadConfig: configMock.loadConfig,
+    getRuntimeConfig: configMock.getRuntimeConfig,
     readConfigFileSnapshot: configMock.readConfigFileSnapshot,
+    readConfigFileSnapshotWithPluginMetadata: configMock.readConfigFileSnapshotWithPluginMetadata,
     readConfigFileSnapshotForWrite: configMock.readConfigFileSnapshotForWrite,
     writeConfigFile: configMock.writeConfigFile,
   }));
@@ -220,8 +221,8 @@ vi.mock("../config/io.js", async () => {
     ...actual,
     createConfigIO,
     getRuntimeConfig: configMock.getRuntimeConfig,
-    loadConfig: configMock.loadConfig,
     readConfigFileSnapshot: configMock.readConfigFileSnapshot,
+    readConfigFileSnapshotWithPluginMetadata: configMock.readConfigFileSnapshotWithPluginMetadata,
     readConfigFileSnapshotForWrite: configMock.readConfigFileSnapshotForWrite,
     writeConfigFile: configMock.writeConfigFile,
   };
@@ -259,16 +260,6 @@ vi.mock("../commands/health.js", () => ({
 vi.mock("../commands/status.js", () => ({
   getStatusSummary: vi.fn().mockResolvedValue({ ok: true }),
 }));
-vi.mock("../channels/web/index.js", async () => {
-  const actual = await vi.importActual<typeof import("../channels/web/index.js")>(
-    "../channels/web/index.js",
-  );
-  return {
-    ...actual,
-    sendMessageWhatsApp: (...args: unknown[]) =>
-      (gatewayTestHoisted.sendWhatsAppMock as (...args: unknown[]) => unknown)(...args),
-  };
-});
 vi.mock("../commands/agent.js", () => ({
   agentCommand,
   agentCommandFromIngress: agentCommand,

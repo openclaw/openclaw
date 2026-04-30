@@ -42,6 +42,7 @@ export const HeartbeatSchema = z
     timeoutSeconds: z.number().int().positive().optional(),
     lightContext: z.boolean().optional(),
     isolatedSession: z.boolean().optional(),
+    skipWhenBusy: z.boolean().optional(),
   })
   .strict()
   .superRefine((val, ctx) => {
@@ -119,6 +120,7 @@ export const SandboxDockerSchema = z
     memory: z.union([z.string(), z.number()]).optional(),
     memorySwap: z.union([z.string(), z.number()]).optional(),
     cpus: z.number().positive().optional(),
+    gpus: z.string().min(1).optional(),
     ulimits: z
       .record(
         z.string(),
@@ -352,6 +354,7 @@ export const ToolsWebFetchSchema = z
     ssrfPolicy: z
       .object({
         allowRfc2544BenchmarkRange: z.boolean().optional(),
+        allowIpv6UniqueLocalRange: z.boolean().optional(),
       })
       .strict()
       .optional(),
@@ -665,6 +668,7 @@ export const MemorySearchSchema = z
         baseUrl: z.string().optional(),
         apiKey: SecretInputSchema.optional().register(sensitive),
         headers: z.record(z.string(), z.string()).optional(),
+        nonBatchConcurrency: z.number().int().positive().optional(),
         batch: z
           .object({
             enabled: z.boolean().optional(),
@@ -680,6 +684,9 @@ export const MemorySearchSchema = z
       .optional(),
     fallback: z.string().optional(),
     model: z.string().optional(),
+    inputType: z.string().min(1).optional(),
+    queryInputType: z.string().min(1).optional(),
+    documentInputType: z.string().min(1).optional(),
     outputDimensionality: z.number().int().positive().optional(),
     local: z
       .object({

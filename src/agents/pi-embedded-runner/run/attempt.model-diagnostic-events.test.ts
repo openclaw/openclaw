@@ -254,6 +254,49 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents", () => {
     expect(JSON.stringify(events[1])).not.toContain(requestId);
   });
 
+  it("adds failure kind and memory diagnostics for terminated model calls", async () => {
+    const stream = {
+      [Symbol.asyncIterator]() {
+        return {
+          async next(): Promise<IteratorResult<unknown>> {
+            throw new Error("terminated");
+          },
+        };
+      },
+    };
+    const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(
+      (() => stream) as unknown as StreamFn,
+      {
+        runId: "run-1",
+        provider: "lmstudio",
+        model: "qwen/qwen3.5-9b",
+        trace: createDiagnosticTraceContext(),
+        nextCallId: () => "call-terminated",
+      },
+    );
+
+    const events = await collectModelCallEvents(async () => {
+      await expect(
+        drain(wrapped({} as never, {} as never, {} as never) as AsyncIterable<unknown>),
+      ).rejects.toThrow("terminated");
+    });
+
+    expect(events.map((event) => event.type)).toEqual(["model.call.started", "model.call.error"]);
+    expect(events[1]).toMatchObject({
+      type: "model.call.error",
+      callId: "call-terminated",
+      errorCategory: "Error",
+      failureKind: "terminated",
+      memory: {
+        rssBytes: expect.any(Number),
+        heapTotalBytes: expect.any(Number),
+        heapUsedBytes: expect.any(Number),
+        externalBytes: expect.any(Number),
+        arrayBuffersBytes: expect.any(Number),
+      },
+    });
+  });
+
   it("does not mutate non-configurable provider streams", async () => {
     const stream = {};
     Object.defineProperty(stream, Symbol.asyncIterator, {

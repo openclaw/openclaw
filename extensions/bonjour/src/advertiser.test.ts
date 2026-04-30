@@ -1,6 +1,13 @@
+import type { ChildProcess } from "node:child_process";
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import os from "node:os";
 import { afterEach, describe, expect, it, vi } from "vitest";
+
+const nodeRequire = createRequire(import.meta.url);
+const childProcessModule = nodeRequire("node:child_process") as {
+  exec: typeof import("node:child_process").exec;
+};
 
 const mocks = vi.hoisted(() => ({
   createService: vi.fn(),
@@ -22,9 +29,18 @@ const {
   registerUnhandledRejectionHandler,
   logger,
 } = mocks;
+const dnsLabelEncoder = new TextEncoder();
 
 const asString = (value: unknown, fallback: string) =>
   typeof value === "string" && value.trim() ? value : fallback;
+
+function expectDnsLabelByteLength(value: string, expected: number) {
+  expect(dnsLabelEncoder.encode(value).byteLength).toBe(expected);
+}
+
+function expectDnsLabelWithinLimit(value: string) {
+  expect(dnsLabelEncoder.encode(value).byteLength).toBeLessThanOrEqual(63);
+}
 
 function enableAdvertiserUnitMode(hostname = "test-host") {
   // Allow advertiser to run in unit tests.
@@ -240,6 +256,42 @@ describe("gateway bonjour advertiser", () => {
     await started.stop();
   });
 
+  it("hides ciao Windows ARP probe shell while advertiser is active", async () => {
+    enableAdvertiserUnitMode();
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    const originalExec = childProcessModule.exec;
+    const execMock = vi.fn((command: string, options?: unknown, callback?: unknown) => {
+      const cb = typeof options === "function" ? options : callback;
+      if (typeof cb === "function") {
+        cb(null, "", "");
+      }
+      return { kill: vi.fn() } as unknown as ChildProcess;
+    });
+    childProcessModule.exec = execMock as unknown as typeof childProcessModule.exec;
+
+    const destroy = vi.fn().mockResolvedValue(undefined);
+    const advertise = vi.fn().mockResolvedValue(undefined);
+    mockCiaoService({ advertise, destroy });
+
+    try {
+      const started = await startAdvertiser({ gatewayPort: 18789 });
+      childProcessModule.exec('arp -a | findstr /C:"---"', () => {});
+
+      expect(execMock).toHaveBeenCalledWith(
+        'arp -a | findstr /C:"---"',
+        { windowsHide: true },
+        expect.any(Function),
+      );
+
+      await started.stop();
+      childProcessModule.exec('arp -a | findstr /C:"---"', () => {});
+      const afterStopOptions = execMock.mock.calls.at(-1)?.[1];
+      expect(afterStopOptions).toEqual(expect.any(Function));
+    } finally {
+      childProcessModule.exec = originalExec;
+    }
+  });
+
   it("attaches conflict listeners for services", async () => {
     enableAdvertiserUnitMode();
 
@@ -263,7 +315,7 @@ describe("gateway bonjour advertiser", () => {
     await started.stop();
   });
 
-  it("does not install process-level ciao handlers by default", async () => {
+  it("installs only the scoped ciao unhandled-rejection listener by default", async () => {
     enableAdvertiserUnitMode();
 
     const destroy = vi.fn().mockResolvedValue(undefined);
@@ -279,7 +331,7 @@ describe("gateway bonjour advertiser", () => {
       { logger },
     );
 
-    expect(processOn).not.toHaveBeenCalledWith("unhandledRejection", expect.any(Function));
+    expect(processOn).toHaveBeenCalledWith("unhandledRejection", expect.any(Function));
     expect(processOn).not.toHaveBeenCalledWith("uncaughtException", expect.any(Function));
 
     await started.stop();
@@ -341,11 +393,11 @@ describe("gateway bonjour advertiser", () => {
     expect(exceptionHandler).toBeTypeOf("function");
 
     expect(handler?.(new Error("CIAO PROBING CANCELLED"))).toBe(true);
-    expect(logger.debug).toHaveBeenCalledWith(
-      expect.stringContaining("ignoring unhandled ciao rejection"),
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining("suppressing ciao cancellation"),
     );
 
-    logger.debug.mockClear();
+    logger.warn.mockClear();
     expect(
       handler?.(new Error("Reached illegal state! IPV4 address change from defined to undefined!")),
     ).toBe(true);
@@ -367,6 +419,37 @@ describe("gateway bonjour advertiser", () => {
     expect(logger.warn).toHaveBeenCalledWith(
       expect.stringContaining("suppressing ciao netmask assertion"),
     );
+
+    await started.stop();
+  });
+
+  it("recovers when ciao cancellation escapes the advertiser", async () => {
+    enableAdvertiserUnitMode();
+
+    const destroy = vi.fn().mockResolvedValue(undefined);
+    const advertise = vi.fn().mockResolvedValue(undefined);
+    mockCiaoService({ advertise, destroy });
+
+    const started = await startAdvertiser({
+      gatewayPort: 18789,
+      sshPort: 2222,
+    });
+
+    const handler = registerUnhandledRejectionHandler.mock.calls[0]?.[0] as
+      | ((reason: unknown) => boolean)
+      | undefined;
+    expect(handler?.(new Error("CIAO ANNOUNCEMENT CANCELLED"))).toBe(true);
+
+    await vi.waitFor(() => {
+      expect(createService).toHaveBeenCalledTimes(2);
+    });
+
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining("suppressing ciao cancellation"),
+    );
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("restarting advertiser"));
+    expect(destroy).toHaveBeenCalledTimes(1);
+    expect(advertise).toHaveBeenCalledTimes(2);
 
     await started.stop();
   });
@@ -396,7 +479,7 @@ describe("gateway bonjour advertiser", () => {
 
     // watchdog first retries, then recreates the advertiser after the service
     // stays unhealthy across multiple 5s ticks.
-    await vi.advanceTimersByTimeAsync(15_000);
+    await vi.advanceTimersByTimeAsync(25_000);
     expect(advertise).toHaveBeenCalledTimes(3);
     expect(createService).toHaveBeenCalledTimes(2);
 
@@ -553,7 +636,7 @@ describe("gateway bonjour advertiser", () => {
     expect(registerUncaughtExceptionHandler).toHaveBeenCalledTimes(1);
     expect(registerUnhandledRejectionHandler).toHaveBeenCalledTimes(1);
 
-    await vi.advanceTimersByTimeAsync(15_000);
+    await vi.advanceTimersByTimeAsync(25_000);
 
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("restarting advertiser"));
     expect(createService).toHaveBeenCalledTimes(2);
@@ -598,7 +681,7 @@ describe("gateway bonjour advertiser", () => {
     expect(createService).toHaveBeenCalledTimes(1);
     expect(advertise).toHaveBeenCalledTimes(1);
 
-    await vi.advanceTimersByTimeAsync(15_000);
+    await vi.advanceTimersByTimeAsync(25_000);
 
     expect(logger.warn).toHaveBeenCalledWith(
       expect.stringContaining("service stuck in announcing"),
@@ -626,7 +709,7 @@ describe("gateway bonjour advertiser", () => {
       sshPort: 2222,
     });
 
-    await vi.advanceTimersByTimeAsync(65_000);
+    await vi.advanceTimersByTimeAsync(105_000);
 
     expect(logger.warn).toHaveBeenCalledWith(
       expect.stringContaining("disabling advertiser after 3 failed restarts"),
@@ -642,6 +725,49 @@ describe("gateway bonjour advertiser", () => {
 
     await started.stop();
     expect(shutdown).toHaveBeenCalledTimes(1);
+  });
+
+  it("disables bonjour when the advertiser flaps within a sliding window", async () => {
+    enableAdvertiserUnitMode();
+    vi.useFakeTimers();
+
+    const stateRef = { value: "announced" };
+    const destroy = vi.fn().mockResolvedValue(undefined);
+    const advertise = vi.fn().mockResolvedValue(undefined);
+    mockCiaoService({ advertise, destroy, stateRef });
+
+    const started = await startAdvertiser({
+      gatewayPort: 18789,
+      sshPort: 2222,
+    });
+
+    for (let cycle = 0; cycle < 12; cycle += 1) {
+      stateRef.value = "announced";
+      await vi.advanceTimersByTimeAsync(5_000);
+      stateRef.value = "probing";
+      await vi.advanceTimersByTimeAsync(25_000);
+      if (
+        logger.warn.mock.calls.some(
+          (call) => typeof call[0] === "string" && call[0].includes("disabling advertiser after"),
+        )
+      ) {
+        break;
+      }
+    }
+
+    const disableLog = logger.warn.mock.calls.find(
+      (call) => typeof call[0] === "string" && call[0].includes("disabling advertiser after"),
+    );
+    expect(disableLog).toBeDefined();
+    expect(String(disableLog?.[0])).toMatch(/restarts within \d+ minutes/);
+
+    const advertiseCallsAtDisable = advertise.mock.calls.length;
+    const createServiceCallsAtDisable = createService.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    expect(advertise).toHaveBeenCalledTimes(advertiseCallsAtDisable);
+    expect(createService).toHaveBeenCalledTimes(createServiceCallsAtDisable);
+
+    await started.stop();
   });
 
   it("normalizes hostnames with domains for service names", async () => {
@@ -661,10 +787,129 @@ describe("gateway bonjour advertiser", () => {
     });
 
     const [gatewayCall] = createService.mock.calls as Array<[ServiceCall]>;
-    expect(gatewayCall?.[0]?.name).toBe("openclaw (OpenClaw)");
+    expect(gatewayCall?.[0]?.name).toBe("Mac (OpenClaw)");
     expect(gatewayCall?.[0]?.domain).toBe("local");
+    expect(gatewayCall?.[0]?.hostname).toBe("Mac");
+    expect((gatewayCall?.[0]?.txt as Record<string, string>)?.lanHost).toBe("Mac.local");
+
+    await started.stop();
+  });
+
+  it("falls back to openclaw when system hostname is invalid for DNS", async () => {
+    // Allow advertiser to run in unit tests.
+    delete process.env.VITEST;
+    process.env.NODE_ENV = "development";
+    delete process.env.OPENCLAW_MDNS_HOSTNAME;
+    vi.spyOn(os, "hostname").mockReturnValue("My_Lobster Host");
+
+    const destroy = vi.fn().mockResolvedValue(undefined);
+    const advertise = vi.fn().mockResolvedValue(undefined);
+    mockCiaoService({ advertise, destroy });
+
+    const started = await startAdvertiser({
+      gatewayPort: 18789,
+      sshPort: 2222,
+    });
+
+    const [gatewayCall] = createService.mock.calls as Array<[ServiceCall]>;
     expect(gatewayCall?.[0]?.hostname).toBe("openclaw");
     expect((gatewayCall?.[0]?.txt as Record<string, string>)?.lanHost).toBe("openclaw.local");
+
+    await started.stop();
+  });
+
+  it("truncates reported Kubernetes service name at the DNS label byte limit", async () => {
+    const reportedHostname = "app-41627eae5842473f9e05f139ea307277-7f9477f4d6-lqqzf";
+    enableAdvertiserUnitMode(reportedHostname);
+
+    const destroy = vi.fn().mockResolvedValue(undefined);
+    const advertise = vi.fn().mockResolvedValue(undefined);
+    mockCiaoService({ advertise, destroy });
+
+    const started = await startAdvertiser({
+      gatewayPort: 18789,
+      sshPort: 2222,
+    });
+
+    const [gatewayCall] = createService.mock.calls as Array<[ServiceCall]>;
+    const serviceName = gatewayCall?.[0]?.name as string;
+    const hostname = gatewayCall?.[0]?.hostname as string;
+
+    expectDnsLabelByteLength(`${reportedHostname} (OpenClaw)`, 64);
+    expect(hostname).toBe(reportedHostname);
+    expectDnsLabelWithinLimit(serviceName);
+
+    await started.stop();
+  });
+
+  it("truncates host labels exceeding the 63-byte DNS label limit", async () => {
+    const longHostname = "app-41627eae5842473f9e05f139ea307277-7f9477f4d6-lqqzf-abcdefghij";
+    enableAdvertiserUnitMode(longHostname);
+
+    const destroy = vi.fn().mockResolvedValue(undefined);
+    const advertise = vi.fn().mockResolvedValue(undefined);
+    mockCiaoService({ advertise, destroy });
+
+    const started = await startAdvertiser({
+      gatewayPort: 18789,
+      sshPort: 2222,
+    });
+
+    const [gatewayCall] = createService.mock.calls as Array<[ServiceCall]>;
+    const serviceName = gatewayCall?.[0]?.name as string;
+    const hostname = gatewayCall?.[0]?.hostname as string;
+
+    expectDnsLabelByteLength(longHostname, 64);
+    expectDnsLabelByteLength(hostname, 63);
+    expect(hostname).toBe(longHostname.slice(0, -1));
+    expect(hostname).not.toMatch(/-$/);
+    expectDnsLabelWithinLimit(serviceName);
+
+    await started.stop();
+  });
+
+  it("truncates multi-byte hostname within DNS label byte limit", async () => {
+    // 21 CJK characters = 63 bytes in UTF-8, adding " (OpenClaw)" pushes over
+    const cjkHostname = "你".repeat(21);
+    enableAdvertiserUnitMode(cjkHostname);
+
+    const destroy = vi.fn().mockResolvedValue(undefined);
+    const advertise = vi.fn().mockResolvedValue(undefined);
+    mockCiaoService({ advertise, destroy });
+
+    const started = await startAdvertiser({
+      gatewayPort: 18789,
+      sshPort: 2222,
+    });
+
+    const [gatewayCall] = createService.mock.calls as Array<[ServiceCall]>;
+    const serviceName = gatewayCall?.[0]?.name as string;
+
+    expectDnsLabelWithinLimit(serviceName);
+    expect(serviceName).not.toMatch(/\uFFFD$/);
+
+    await started.stop();
+  });
+
+  it("uses system hostname when OPENCLAW_MDNS_HOSTNAME is unset", async () => {
+    // Allow advertiser to run in unit tests.
+    delete process.env.VITEST;
+    process.env.NODE_ENV = "development";
+    delete process.env.OPENCLAW_MDNS_HOSTNAME;
+    vi.spyOn(os, "hostname").mockReturnValue("Lobster");
+
+    const destroy = vi.fn().mockResolvedValue(undefined);
+    const advertise = vi.fn().mockResolvedValue(undefined);
+    mockCiaoService({ advertise, destroy });
+
+    const started = await startAdvertiser({
+      gatewayPort: 18789,
+      sshPort: 2222,
+    });
+
+    const [gatewayCall] = createService.mock.calls as Array<[ServiceCall]>;
+    expect(gatewayCall?.[0]?.hostname).toBe("Lobster");
+    expect((gatewayCall?.[0]?.txt as Record<string, string>)?.lanHost).toBe("Lobster.local");
 
     await started.stop();
   });

@@ -64,6 +64,7 @@ function buildCliHookAssistantMessage(params: {
 export async function runCliAgent(params: RunCliAgentParams): Promise<EmbeddedPiRunResult> {
   // Cron gate must fire before prepareCliRunContext — that call allocates
   // backend resources released only by runPreparedCliAgent's try…finally.
+  params.onExecutionStarted?.();
   if (params.trigger === "cron") {
     const startedAt = Date.now();
     const hookRunner = getGlobalHookRunner();
@@ -108,7 +109,11 @@ export async function runCliAgent(params: RunCliAgentParams): Promise<EmbeddedPi
     if (params.cleanupCliLiveSessionOnRunEnd === true) {
       const { closeClaudeLiveSessionForContext } =
         await import("./cli-runner/claude-live-session.js");
-      closeClaudeLiveSessionForContext(context);
+      await closeClaudeLiveSessionForContext(context);
+    }
+    if (params.cleanupBundleMcpOnRunEnd === true) {
+      const { closeMcpLoopbackServer } = await import("../gateway/mcp-http.js");
+      await closeMcpLoopbackServer();
     }
   }
 }
@@ -393,6 +398,9 @@ export function buildRunClaudeCliAgentParams(params: RunClaudeCliAgentParams): R
     runId: params.runId,
     jobId: params.jobId,
     extraSystemPrompt: params.extraSystemPrompt,
+    inputProvenance: params.inputProvenance,
+    sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+    silentReplyPromptMode: params.silentReplyPromptMode,
     extraSystemPromptStatic: params.extraSystemPromptStatic,
     ownerNumbers: params.ownerNumbers,
     // Legacy `claudeSessionId` callers predate the shared CLI session contract.
