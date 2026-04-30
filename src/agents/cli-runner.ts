@@ -1,6 +1,7 @@
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { loadCliSessionHistoryMessages } from "./cli-runner/session-history.js";
 import type { PreparedCliRunContext, RunCliAgentParams } from "./cli-runner/types.js";
@@ -13,6 +14,8 @@ import {
 } from "./harness/lifecycle-hook-helpers.js";
 import { classifyFailoverReason, isFailoverErrorMessage } from "./pi-embedded-helpers.js";
 import type { EmbeddedPiRunResult } from "./pi-embedded-runner.js";
+
+const log = createSubsystemLogger("agents/cli-runner");
 
 function buildHandledReplyPayloads(reply?: ReplyPayload) {
   const normalized = reply ?? { text: SILENT_REPLY_TOKEN };
@@ -107,13 +110,21 @@ export async function runCliAgent(params: RunCliAgentParams): Promise<EmbeddedPi
     return await runPreparedCliAgent(context);
   } finally {
     if (params.cleanupCliLiveSessionOnRunEnd === true) {
-      const { closeClaudeLiveSessionForContext } =
-        await import("./cli-runner/claude-live-session.js");
-      await closeClaudeLiveSessionForContext(context);
+      try {
+        const { closeClaudeLiveSessionForContext } =
+          await import("./cli-runner/claude-live-session.js");
+        await closeClaudeLiveSessionForContext(context);
+      } catch (err) {
+        log.warn(`CLI live session cleanup failed after run: ${formatErrorMessage(err)}`);
+      }
     }
     if (params.cleanupBundleMcpOnRunEnd === true) {
-      const { closeMcpLoopbackServer } = await import("../gateway/mcp-http.js");
-      await closeMcpLoopbackServer();
+      try {
+        const { closeMcpLoopbackServer } = await import("../gateway/mcp-http.js");
+        await closeMcpLoopbackServer();
+      } catch (err) {
+        log.warn(`bundle MCP loopback cleanup failed after run: ${formatErrorMessage(err)}`);
+      }
     }
   }
 }
