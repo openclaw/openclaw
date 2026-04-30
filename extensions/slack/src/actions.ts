@@ -6,10 +6,12 @@ import { resolveSlackAccount } from "./accounts.js";
 import { buildSlackBlocksFallbackText } from "./blocks-fallback.js";
 import { validateSlackBlocksArray } from "./blocks-input.js";
 import { createSlackWebClient, getSlackWriteClient } from "./client.js";
+import { SLACK_TEXT_LIMIT } from "./limits.js";
 import { resolveSlackMedia } from "./monitor/media.js";
 import type { SlackMediaResult } from "./monitor/media.js";
 import { sendMessageSlack } from "./send.js";
 import { resolveSlackBotToken } from "./token.js";
+import { truncateSlackText } from "./truncate.js";
 
 export type SlackActionClientOpts = {
   cfg?: OpenClawConfig;
@@ -77,6 +79,17 @@ function normalizeEmoji(raw: string) {
   return trimmed.replace(/^:+|:+$/g, "");
 }
 
+function hasSlackPlatformError(err: unknown, code: string): boolean {
+  if (!err || typeof err !== "object") {
+    return false;
+  }
+  const data = (err as { data?: unknown }).data;
+  if (!data || typeof data !== "object") {
+    return false;
+  }
+  return (data as { error?: unknown }).error === code;
+}
+
 async function getClient(opts: SlackActionClientOpts = {}, mode: "read" | "write" = "read") {
   if (opts.client) {
     return opts.client;
@@ -100,11 +113,18 @@ export async function reactSlackMessage(
   opts: SlackActionClientOpts = {},
 ) {
   const client = await getClient(opts, "write");
-  await client.reactions.add({
-    channel: channelId,
-    timestamp: messageId,
-    name: normalizeEmoji(emoji),
-  });
+  try {
+    await client.reactions.add({
+      channel: channelId,
+      timestamp: messageId,
+      name: normalizeEmoji(emoji),
+    });
+  } catch (err) {
+    if (hasSlackPlatformError(err, "already_reacted")) {
+      return;
+    }
+    throw err;
+  }
 }
 
 export async function removeSlackReaction(
@@ -216,7 +236,9 @@ export async function editSlackMessage(
   await client.chat.update({
     channel: channelId,
     ts: messageId,
-    text: trimmedContent || (blocks ? buildSlackBlocksFallbackText(blocks) : " "),
+    text:
+      trimmedContent ||
+      (blocks ? truncateSlackText(buildSlackBlocksFallbackText(blocks), SLACK_TEXT_LIMIT) : " "),
     ...(blocks ? { blocks } : {}),
   });
 }

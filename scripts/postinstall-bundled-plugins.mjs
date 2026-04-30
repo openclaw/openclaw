@@ -24,7 +24,19 @@ import {
 import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, posix, relative } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import {
+  createBundledRuntimeDependencyInstallArgs,
+  createBundledRuntimeDependencyInstallEnv,
+  createNestedNpmInstallEnv,
+  runBundledRuntimeDependencyNpmInstall,
+} from "./lib/bundled-runtime-deps-install.mjs";
 import { resolveNpmRunner } from "./npm-runner.mjs";
+
+export {
+  createBundledRuntimeDependencyInstallArgs,
+  createBundledRuntimeDependencyInstallEnv,
+  createNestedNpmInstallEnv,
+};
 
 export const BUNDLED_PLUGIN_INSTALL_TARGETS = [];
 
@@ -104,6 +116,7 @@ const BAILEYS_MEDIA_DISPATCHER_HEADER_REPLACEMENT = [
 const BAILEYS_MEDIA_ONCE_IMPORT_RE = /import\s+\{\s*once\s*\}\s+from\s+['"]events['"]/u;
 const BAILEYS_MEDIA_ASYNC_CONTEXT_RE =
   /async\s+function\s+encryptedStream|encryptedStream\s*=\s*async/u;
+const NODE_COMPILE_CACHE_VERSION_DIR_RE = /^v\d+\.\d+\.\d+-/u;
 
 function hasEnvFlag(env, key) {
   const value = env?.[key]?.trim().toLowerCase();
@@ -581,32 +594,6 @@ export function discoverBundledPluginRuntimeDeps(params = {}) {
     .toSorted((a, b) => a.name.localeCompare(b.name));
 }
 
-export function createNestedNpmInstallEnv(env = process.env) {
-  const nextEnv = { ...env };
-  delete nextEnv.npm_config_global;
-  delete nextEnv.npm_config_location;
-  delete nextEnv.npm_config_prefix;
-  return nextEnv;
-}
-
-export function createBundledRuntimeDependencyInstallEnv(env = process.env) {
-  return {
-    ...createNestedNpmInstallEnv(env),
-    npm_config_dry_run: "false",
-    npm_config_fetch_retries: env.npm_config_fetch_retries ?? "5",
-    npm_config_fetch_retry_maxtimeout: env.npm_config_fetch_retry_maxtimeout ?? "120000",
-    npm_config_fetch_retry_mintimeout: env.npm_config_fetch_retry_mintimeout ?? "10000",
-    npm_config_fetch_timeout: env.npm_config_fetch_timeout ?? "300000",
-    npm_config_legacy_peer_deps: "true",
-    npm_config_package_lock: "false",
-    npm_config_save: "false",
-  };
-}
-
-export function createBundledRuntimeDependencyInstallArgs(missingSpecs) {
-  return ["install", "--ignore-scripts", ...missingSpecs];
-}
-
 function shouldEagerInstallBundledPluginDeps(env = process.env) {
   return env?.[EAGER_BUNDLED_PLUGIN_DEPS_ENV]?.trim() === "1";
 }
@@ -865,6 +852,7 @@ function shouldRunBundledPluginPostinstall(params) {
 export function pruneOpenClawCompileCache(params = {}) {
   const env = params.env ?? process.env;
   const pathExists = params.existsSync ?? existsSync;
+  const readDir = params.readdirSync ?? readdirSync;
   const remove = params.rmSync ?? rmSync;
   const log = params.log ?? console;
   const baseDirs = [
@@ -873,12 +861,25 @@ export function pruneOpenClawCompileCache(params = {}) {
   ].filter((value, index, values) => value && values.indexOf(value) === index);
 
   for (const baseDir of baseDirs) {
-    const cacheRoot = join(baseDir, "openclaw");
-    if (!pathExists(cacheRoot)) {
+    if (!pathExists(baseDir)) {
       continue;
     }
     try {
-      remove(cacheRoot, { recursive: true, force: true, maxRetries: 2, retryDelay: 100 });
+      for (const entry of readDir(baseDir, { withFileTypes: true })) {
+        if (!entry.isDirectory() || !NODE_COMPILE_CACHE_VERSION_DIR_RE.test(entry.name)) {
+          continue;
+        }
+        try {
+          remove(join(baseDir, entry.name), {
+            recursive: true,
+            force: true,
+            maxRetries: 2,
+            retryDelay: 100,
+          });
+        } catch (error) {
+          log.warn?.(`[postinstall] could not prune OpenClaw compile cache: ${String(error)}`);
+        }
+      }
     } catch (error) {
       log.warn?.(`[postinstall] could not prune OpenClaw compile cache: ${String(error)}`);
     }
@@ -988,19 +989,12 @@ export function runBundledPluginPostinstall(params = {}) {
         comSpec: params.comSpec,
         npmArgs: createBundledRuntimeDependencyInstallArgs(missingSpecs),
       });
-    const result = spawn(npmRunner.command, npmRunner.args, {
+    runBundledRuntimeDependencyNpmInstall({
       cwd: packageRoot,
-      encoding: "utf8",
+      npmRunner,
       env: npmRunner.env ?? installEnv,
-      stdio: "pipe",
-      windowsHide: true,
-      shell: npmRunner.shell,
-      windowsVerbatimArguments: npmRunner.windowsVerbatimArguments,
+      spawnSyncImpl: spawn,
     });
-    if (result.status !== 0) {
-      const output = [result.stderr, result.stdout].filter(Boolean).join("\n").trim();
-      throw new Error(output || "npm install failed");
-    }
     log.log(`[postinstall] installed bundled plugin deps: ${missingSpecs.join(", ")}`);
   } catch (e) {
     // Non-fatal: gateway will surface the missing dep via doctor.

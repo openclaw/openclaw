@@ -115,6 +115,10 @@ describe("startQaLiveLaneGateway", () => {
           "memory-core": { enabled: true },
           "qa-channel": { enabled: true },
         },
+        slots: {
+          memory: "memory-core",
+          contextEngine: "qmd",
+        },
       },
       agents: {
         defaults: {
@@ -132,6 +136,10 @@ describe("startQaLiveLaneGateway", () => {
 
     expect(cfg?.plugins?.allow).toEqual(["acpx", "qa-channel"]);
     expect(cfg?.plugins?.entries).not.toHaveProperty("memory-core");
+    expect(cfg?.plugins?.slots).toMatchObject({
+      memory: "none",
+      contextEngine: "qmd",
+    });
     expect(cfg?.agents?.defaults?.memorySearch).toMatchObject({
       enabled: false,
       sync: {

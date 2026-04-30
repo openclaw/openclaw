@@ -64,6 +64,10 @@ function isNativeResponsesReasoningPayload(model: Model<Api>): boolean {
   }).usesKnownNativeOpenAIRoute;
 }
 
+function formatModelInputCapabilities(input: Model<Api>["input"] | undefined): string {
+  return input && input.length > 0 ? input.join(", ") : "none";
+}
+
 function removeReasoningInclude(value: unknown): unknown {
   if (!Array.isArray(value)) {
     return value;
@@ -192,7 +196,10 @@ async function resolveImageRuntime(params: {
     if (isMinimaxVlmModel(resolvedRef.provider, resolvedRef.model)) {
       throw new Error(`Unknown model: ${resolvedRef.provider}/${resolvedRef.model}`);
     }
-    throw new Error(`Model does not support images: ${params.provider}/${params.model}`);
+    throw new Error(
+      `Model does not support images: ${params.provider}/${params.model} ` +
+        `(resolved ${model.provider}/${model.id} input: ${formatModelInputCapabilities(model.input)})`,
+    );
   }
   const apiKeyInfo = await getApiKeyForModel({
     model,
@@ -349,11 +356,17 @@ async function describeImagesWithModelInternal(
   options: { onPayload?: ProviderStreamOptions["onPayload"] } = {},
 ): Promise<ImagesDescriptionResult> {
   const prompt = params.prompt ?? "Describe the image.";
+  const startedAtMs = Date.now();
+  const controller = new AbortController();
   let apiKey: string;
   let model: Model<Api> | undefined;
 
   try {
-    const resolved = await resolveImageRuntime(params);
+    const resolved = await withImageDescriptionTimeout({
+      controller,
+      timeoutMs: resolveImageDescriptionTimeoutMs(params.timeoutMs, startedAtMs),
+      task: resolveImageRuntime(params),
+    });
     apiKey = resolved.apiKey;
     model = resolved.model;
   } catch (err) {
@@ -391,19 +404,19 @@ async function describeImagesWithModelInternal(
   const context = buildImageContext(prompt, params.images, {
     promptInUserContent: shouldPlaceImagePromptInUserContent(model),
   });
-  const startedAtMs = Date.now();
-  const controller = new AbortController();
 
   const maxTokens = resolveImageToolMaxTokens(model.maxTokens, params.maxTokens ?? 512);
   const completeImage = async (onPayload?: ProviderStreamOptions["onPayload"]) => {
     const payloadHandler = composeImageDescriptionPayloadHandlers(onPayload, options.onPayload);
+    const timeoutMs = resolveImageDescriptionTimeoutMs(params.timeoutMs, startedAtMs);
     return await withImageDescriptionTimeout({
       controller,
-      timeoutMs: resolveImageDescriptionTimeoutMs(params.timeoutMs, startedAtMs),
+      timeoutMs,
       task: complete(model, context, {
         apiKey,
         maxTokens,
         signal: controller.signal,
+        ...(timeoutMs !== undefined ? { timeoutMs } : {}),
         ...(payloadHandler ? { onPayload: payloadHandler } : {}),
       }),
     });

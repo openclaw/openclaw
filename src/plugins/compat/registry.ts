@@ -102,6 +102,25 @@ export const PLUGIN_COMPAT_RECORDS = [
     ],
   },
   {
+    code: "bundled-channel-sdk-compat-facades",
+    status: "active",
+    owner: "sdk",
+    introduced: "2026-04-28",
+    replacement:
+      "generic channel SDK subpaths or plugin-local `api.ts` / `runtime-api.ts` barrels for new plugins",
+    docsPath: "/plugins/sdk-overview",
+    surfaces: [
+      "openclaw/plugin-sdk/discord component message helpers",
+      "openclaw/plugin-sdk/telegram-account resolveTelegramAccount",
+    ],
+    diagnostics: ["plugin SDK compatibility registry"],
+    tests: [
+      "src/plugin-sdk/discord.test.ts",
+      "src/plugin-sdk/telegram-account.test.ts",
+      "src/plugins/contracts/plugin-sdk-package-contract-guardrails.test.ts",
+    ],
+  },
+  {
     code: "bundled-channel-config-schema-legacy",
     status: "deprecated",
     owner: "sdk",
