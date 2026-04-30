@@ -194,27 +194,27 @@ describe("security fix", () => {
 
   it("hardens gateway.bind when no auth is configured", async () => {
     const cfg = {
-      gateway: { bind: "0.0.0.0" },
+      gateway: { bind: "lan" },
     } satisfies OpenClawConfig;
     const fixed = await applySecurityFixConfigMutations({
       cfg,
       env: process.env,
     });
     expect(fixed.changes).toContain(
-      'gateway.bind=0.0.0.0 -> "loopback" (hardening: unauthenticated remote bind)',
+      'gateway.bind=lan -> "loopback" (hardening: unauthenticated remote bind)',
     );
     expect(fixed.cfg.gateway?.bind).toBe("loopback");
   });
 
   it("does NOT harden gateway.bind when auth is present", async () => {
     const cfg = {
-      gateway: { bind: "0.0.0.0", auth: { token: "secret" } },
+      gateway: { bind: "lan", auth: { token: "secret" } },
     } satisfies OpenClawConfig;
     const fixed = await applySecurityFixConfigMutations({
       cfg,
       env: process.env,
     });
-    expect(fixed.cfg.gateway?.bind).toBe("0.0.0.0");
+    expect(fixed.cfg.gateway?.bind).toBe("lan");
   });
 
   it("applies allowlist per-account and seeds WhatsApp groupAllowFrom from store", async () => {

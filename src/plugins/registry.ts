@@ -448,8 +448,8 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     const factory: OpenClawPluginToolFactory =
       typeof tool === "function" ? tool : (_ctx: OpenClawPluginToolContext) => tool;
 
-    if (typeof tool !== "function") {
-      names.push(tool.name);
+    if (typeof tool !== "function" && typeof (tool as any).name === "string") {
+      names.push((tool as any).name);
     }
 
     const normalized = names.map((name) => name.trim()).filter(Boolean);
@@ -552,9 +552,54 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     }> = [];
     for (const event of normalizedEvents) {
       const wrappedHandler: typeof handler = async (evt) => {
-        // Shallow-copy to avoid mutating the shared event object
-        // passed to all handlers sequentially by triggerInternalHook
-        return handler({ ...evt, context: { ...evt.context, pluginConfig } });
+        // We MUST allow mutation of the original context for hooks like agent:bootstrap.
+        // We use a Proxy to inject pluginConfig without polluting the original context
+        // for other plugins, while still allowing mutations to propagate to the original object.
+        const contextProxy = new Proxy(evt.context, {
+          get(target, prop, receiver) {
+            if (prop === "pluginConfig") {
+              return pluginConfig;
+            }
+            return Reflect.get(target, prop, receiver);
+          },
+          has(target, prop) {
+            return prop === "pluginConfig" || Reflect.has(target, prop);
+          },
+          ownKeys(target) {
+            const keys = Reflect.ownKeys(target);
+            if (!keys.includes("pluginConfig")) {
+              keys.push("pluginConfig");
+            }
+            return keys;
+          },
+          getOwnPropertyDescriptor(target, prop) {
+            if (prop === "pluginConfig") {
+              return {
+                value: pluginConfig,
+                enumerable: true,
+                configurable: true,
+                writable: false,
+              };
+            }
+            return Reflect.getOwnPropertyDescriptor(target, prop);
+          },
+          set(target, prop, value, receiver) {
+            if (prop === "pluginConfig") {
+              return false;
+            }
+            return Reflect.set(target, prop, value, receiver);
+          },
+          deleteProperty(target, prop) {
+            if (prop === "pluginConfig") {
+              return false;
+            }
+            return Reflect.deleteProperty(target, prop);
+          },
+        });
+
+        // Shallow-copy the event object itself to keep properties like 'params' isolated per-plugin,
+        // but the 'context' property now points to our proxy that delegates to the shared original context.
+        return handler({ ...evt, context: contextProxy as any });
       };
       registerInternalHook(event, wrappedHandler);
       nextRegistrations.push({ event, handler: wrappedHandler });

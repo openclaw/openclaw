@@ -792,7 +792,7 @@ function stripHeartbeatTasksBlock(content: string): string {
   // Replace the tasks: block (including indented task entries and blank lines within the block)
   // until the first line that doesn't start with whitespace.
   // This preserves top-level bullets (starting with '-') that follow the tasks block.
-  return content.replace(/^tasks:(?:\r?\n(?:[ \t].*|$))*/m, "");
+  return content.replace(/^tasks:(?:\r?\n(?:[ \t].*|- name:.*|$))*/m, "");
 }
 
 function resolveHeartbeatRunPrompt(params: {
@@ -1321,7 +1321,12 @@ export async function runHeartbeatOnce(opts: {
 
     let anyReplyContentSent = false;
 
-    for (const [groupModel, groupTasks] of modelGroups) {
+    const sortedModels = Array.from(modelGroups.keys()).sort((a, b) =>
+      (a ?? "").localeCompare(b ?? ""),
+    );
+
+    for (const groupModel of sortedModels) {
+      const groupTasks = modelGroups.get(groupModel)!;
       const currentResolution =
         groupTasks.length === dueTasks.length && dueTasks.length > 0
           ? initialResolution

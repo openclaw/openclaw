@@ -88,7 +88,11 @@ function describeMalformedPluginTool(tool: unknown): string | undefined {
   if (typeof tool.execute !== "function") {
     return `${name} missing execute function`;
   }
-  if (!isRecord(tool.parameters)) {
+  if (
+    !tool.parameters ||
+    typeof tool.parameters !== "object" ||
+    Array.isArray(tool.parameters)
+  ) {
     return `${name} missing parameters object`;
   }
   return undefined;
