@@ -335,7 +335,7 @@ describe("dispatchPreparedSlackMessage progress plan routing", () => {
     setSlackThreadStatusMock.mockClear();
   });
 
-  it("routes top-level direct messages into Slack's assistant thread surface", async () => {
+  it("renders top-level direct message progress as a plan message on the main DM timeline", async () => {
     await dispatchPreparedSlackMessage(
       createPreparedSlackMessage({
         channel: "D123",
@@ -346,23 +346,26 @@ describe("dispatchPreparedSlackMessage progress plan routing", () => {
       }),
     );
 
-    expect(startSlackChunkStreamMock).toHaveBeenCalledWith(
+    expect(startSlackPlanMessageMock).toHaveBeenCalledWith(
       expect.objectContaining({
         channel: "D123",
-        threadTs: "171234.111",
-        taskDisplayMode: "plan",
+        chunks: [
+          expect.objectContaining({
+            type: "task_update",
+            taskId: "reading_message",
+            title: "Reading message",
+            status: "in_progress",
+          }),
+        ],
+        renderMode: "plan",
       }),
     );
-    expect(startSlackPlanMessageMock).not.toHaveBeenCalled();
-    expect(setSlackThreadStatusMock).toHaveBeenCalledWith({
-      channelId: "D123",
-      threadTs: "171234.111",
-      status: "",
-    });
+    expect(startSlackChunkStreamMock).not.toHaveBeenCalled();
+    expect(setSlackThreadStatusMock).not.toHaveBeenCalled();
     expect(deliverRepliesMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        replyThreadTs: "171234.111",
-        replyToMode: "all",
+        replyThreadTs: undefined,
+        replyToMode: "off",
       }),
     );
   });

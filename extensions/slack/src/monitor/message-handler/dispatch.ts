@@ -38,17 +38,21 @@ import {
 } from "../../stream-mode.js";
 import type {
   SlackChunkStreamSession,
+  SlackPlanMessageSession,
   SlackStreamChunk,
   SlackStreamSession,
 } from "../../streaming.js";
 import {
   appendSlackStream,
   appendSlackChunkStream,
+  appendSlackPlanMessage,
   markSlackStreamFallbackDelivered,
   SlackStreamNotDeliveredError,
   startSlackChunkStream,
+  startSlackPlanMessage,
   startSlackStream,
   stopSlackChunkStream,
+  stopSlackPlanMessage,
   stopSlackStream,
 } from "../../streaming.js";
 import { resolveSlackThreadTargets } from "../../threading.js";
@@ -326,10 +330,14 @@ export async function resolveSlackStreamRecipientTeamId(params: {
 
 function shouldUseSlackProgressPlanStream(params: {
   mode: "off" | "partial" | "block" | "progress";
+  isDirectMessage: boolean;
   threadTs?: string;
 }): boolean {
   if (params.mode !== "progress") {
     return false;
+  }
+  if (params.isDirectMessage) {
+    return true;
   }
   return typeof params.threadTs === "string" && params.threadTs.length > 0;
 }
@@ -343,9 +351,6 @@ function resolveSlackAssistantUiReplyToMode(params: {
   isDirectMessage: boolean;
   streamingMode: "off" | "partial" | "block" | "progress";
 }): "off" | "first" | "all" | "batched" {
-  if (params.isDirectMessage && params.streamingMode === "progress") {
-    return "all";
-  }
   return params.replyToMode;
 }
 
@@ -618,6 +623,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   });
   const progressPlanStreamingEnabled = shouldUseSlackProgressPlanStream({
     mode: slackStreaming.mode,
+    isDirectMessage: prepared.isDirectMessage,
     threadTs: streamThreadHint,
   });
   const useStreaming = shouldUseStreaming({
@@ -631,6 +637,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   });
   let streamSession: SlackStreamSession | null = null;
   let progressStreamSession: SlackChunkStreamSession | null = null;
+  let progressPlanMessageSession: SlackPlanMessageSession | null = null;
   let streamFailed = false;
   let usedReplyThreadTs: string | undefined;
   let observedReplyDelivery = false;
@@ -705,20 +712,29 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         status: "in_progress",
       }),
     ];
-    progressStreamSession = await startSlackChunkStream({
-      client: ctx.app.client,
-      channel: message.channel,
-      ...(streamThreadHint ? { threadTs: streamThreadHint } : {}),
-      teamId: await resolveSlackStreamRecipientTeamId({
+    if (prepared.isDirectMessage) {
+      progressPlanMessageSession = await startSlackPlanMessage({
         client: ctx.app.client,
-        token: ctx.botToken,
+        channel: message.channel,
+        chunks: initialChunks,
+        renderMode: "plan",
+      });
+    } else {
+      progressStreamSession = await startSlackChunkStream({
+        client: ctx.app.client,
+        channel: message.channel,
+        ...(streamThreadHint ? { threadTs: streamThreadHint } : {}),
+        teamId: await resolveSlackStreamRecipientTeamId({
+          client: ctx.app.client,
+          token: ctx.botToken,
+          userId: message.user,
+          fallbackTeamId: ctx.teamId,
+        }),
         userId: message.user,
-        fallbackTeamId: ctx.teamId,
-      }),
-      userId: message.user,
-      taskDisplayMode: "plan",
-      chunks: initialChunks,
-    });
+        taskDisplayMode: "plan",
+        chunks: initialChunks,
+      });
+    }
     progressPlanStarted = true;
     didSetStatus = false;
     if (shouldUseSlackAssistantThreadStatus({ threadTs: streamThreadHint })) {
@@ -735,7 +751,17 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       return;
     }
     await ensureProgressPlanStream();
-    if (!progressStreamSession || chunks.length === 0) {
+    if (chunks.length === 0) {
+      return;
+    }
+    if (progressPlanMessageSession) {
+      await appendSlackPlanMessage({
+        session: progressPlanMessageSession,
+        chunks,
+      });
+      return;
+    }
+    if (!progressStreamSession) {
       return;
     }
     await appendSlackChunkStream({
@@ -1625,7 +1651,11 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
 
   await progressUpdateChain;
   const finalProgressStream = progressStreamSession as SlackChunkStreamSession | null;
-  if (finalProgressStream && !finalProgressStream.stopped) {
+  const finalProgressPlanMessage = progressPlanMessageSession as SlackPlanMessageSession | null;
+  if (
+    (finalProgressStream && !finalProgressStream.stopped) ||
+    (finalProgressPlanMessage && !finalProgressPlanMessage.stopped)
+  ) {
     try {
       if (dispatchError) {
         await appendProgressTaskUpdates([
@@ -1688,7 +1718,9 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
           await setProgressSendingStatus("complete");
         }
       }
-      if (finalProgressStream && !finalProgressStream.stopped) {
+      if (finalProgressPlanMessage && !finalProgressPlanMessage.stopped) {
+        await stopSlackPlanMessage({ session: finalProgressPlanMessage });
+      } else if (finalProgressStream && !finalProgressStream.stopped) {
         await stopSlackChunkStream({ session: finalProgressStream });
       }
     } catch (err) {
