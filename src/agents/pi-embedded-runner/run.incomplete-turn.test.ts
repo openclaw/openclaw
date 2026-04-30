@@ -2335,7 +2335,7 @@ describe("resolvePlanningOnlyRetryInstruction actionable-prompt and active-narra
   );
 
   it.each([
-    "i do not want you to run anything",
+    "i do not want you to do anything",
     "I start to think this might already be fine",
     "let's continue this conversation tomorrow",
     "the build was already successful, no need to redo it",

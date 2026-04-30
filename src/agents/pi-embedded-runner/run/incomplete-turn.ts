@@ -111,7 +111,7 @@ const PLANNING_ONLY_PROMISE_RE =
 // a longer reply (e.g. "Here are my thoughts on it..."). The call site below
 // uses isActiveNarration to bypass the action-verb gate, so any unanchored
 // match would silently force a strict-agentic retry on legitimate answer prose.
-const PLANNING_ONLY_ACTIVE_NARRATION_MAX_LENGTH = 200;
+const PLANNING_ONLY_ACTIVE_NARRATION_MAX_LENGTH = 100;
 const PLANNING_ONLY_ACTIVE_NARRATION_LEAD_RE =
   /^[\s.,!]*(?:great|sure|alright|cool|noted|will do|absolutely|yes|yep|okay|ok|right)[\s.,!]+/i;
 const PLANNING_ONLY_ACTIVE_NARRATION_RE =
