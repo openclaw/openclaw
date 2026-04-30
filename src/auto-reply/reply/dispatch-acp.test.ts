@@ -186,7 +186,8 @@ vi.mock("./dispatch-acp-transcript.runtime.js", () => ({
     transcriptMocks.persistAcpDispatchTranscript(params),
 }));
 
-vi.mock("../../agents/agent-scope-config.js", () => ({
+vi.mock("../../agents/agent-scope-config.js", async () => ({
+  ...(await vi.importActual("../../agents/agent-scope-config.js")),
   resolveAgentConfig: (cfg: OpenClawConfig, agentId: string) =>
     agentConfigMocks.resolveAgentConfig(cfg, agentId),
 }));
