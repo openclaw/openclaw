@@ -83,6 +83,9 @@ function stripDisallowedChatControlChars(message: string): string {
 export function sanitizeChatSendMessageInput(
   message: string,
 ): { ok: true; message: string } | { ok: false; error: string } {
+  if (typeof message !== "string") {
+    return { ok: false, error: "message must be a string" };
+  }
   const normalized = message.normalize("NFC");
   if (normalized.includes("\u0000")) {
     return { ok: false, error: "message must not contain null bytes" };

@@ -28,14 +28,15 @@ export function normalizeReplyPayload(
   const hasChannelData = Boolean(
     payload.channelData && Object.keys(payload.channelData).length > 0,
   );
-  const trimmed = payload.text?.trim() ?? "";
+  const rawText = typeof payload.text === "string" ? payload.text : undefined;
+  const trimmed = rawText?.trim() ?? "";
   if (!trimmed && !hasMedia && !hasChannelData) {
     opts.onSkip?.("empty");
     return null;
   }
 
   const silentToken = opts.silentToken ?? SILENT_REPLY_TOKEN;
-  let text = payload.text ?? undefined;
+  let text = rawText;
   if (text && isSilentReplyText(text, silentToken)) {
     if (!hasMedia && !hasChannelData) {
       opts.onSkip?.("silent");
