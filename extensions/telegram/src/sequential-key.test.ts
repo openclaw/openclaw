@@ -174,6 +174,28 @@ describe("getTelegramSequentialKey", () => {
         update: {
           callback_query: {
             message: mockMessage({ chat: mockChat({ id: 123 }) }),
+            data: "mdl_sel_openai/gpt-5.4",
+          },
+        },
+      },
+      "telegram:123:control",
+    ],
+    [
+      {
+        update: {
+          callback_query: {
+            message: mockMessage({ chat: mockChat({ id: 123 }) }),
+            data: "commands_page_2:main",
+          },
+        },
+      },
+      "telegram:123:control",
+    ],
+    [
+      {
+        update: {
+          callback_query: {
+            message: mockMessage({ chat: mockChat({ id: 123 }) }),
             data: "some-other-button",
           },
         },

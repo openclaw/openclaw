@@ -48,6 +48,18 @@ function resolveStatusCommandControlLane(params: {
   return command?.category === "status" && command.key !== "export-session";
 }
 
+function isTelegramControlCallbackData(data: string | undefined): boolean {
+  const trimmed = data?.trim();
+  if (!trimmed) {
+    return false;
+  }
+  return (
+    trimmed.startsWith("mdl_") ||
+    trimmed.startsWith("commands_page_") ||
+    trimmed.startsWith("commands:")
+  );
+}
+
 export function getTelegramSequentialKey(ctx: TelegramSequentialKeyContext): string {
   const reaction = ctx.update?.message_reaction;
   if (reaction?.chat?.id) {
@@ -93,6 +105,12 @@ export function getTelegramSequentialKey(ctx: TelegramSequentialKeyContext): str
       return `telegram:${chatId}:approval`;
     }
     return "telegram:approval";
+  }
+  if (isTelegramControlCallbackData(callbackData)) {
+    if (typeof chatId === "number") {
+      return `telegram:${chatId}:control`;
+    }
+    return "telegram:control";
   }
   const isGroup = msg?.chat?.type === "group" || msg?.chat?.type === "supergroup";
   const messageThreadId = msg?.message_thread_id;
