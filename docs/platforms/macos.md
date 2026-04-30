@@ -60,10 +60,7 @@ The node reports a `permissions` map so agents can decide what’s allowed.
 
 ### Native productivity skills
 
-For macOS-only workflows, we recommend using native-first skills that leverage AppleScript (osascript) to avoid external CLI dependencies:
-
-- **Apple Notes:** Use `apple-notes-native` (by `lishix520`) for direct interaction with Notes.app without the `memo` CLI wrapper.
-- **Things 3:** Use the bundled `things-mac` skill.
+For macOS-only workflows, you can find native-first skills on ClawHub that leverage AppleScript (osascript) to avoid external CLI dependencies (e.g., searching for `apple-notes-native` to avoid the `memo` CLI wrapper).
 
 Node service + app IPC:
 

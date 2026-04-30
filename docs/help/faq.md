@@ -354,12 +354,14 @@ lives on the [First-run FAQ](/help/faq-first-run).
   </Accordion>
 
   <Accordion title="Is there a native Apple Notes skill that doesn't require extra CLI tools?">
-    Yes. While the default `apple-notes` skill requires the `memo` CLI, you can install the **`apple-notes-native`** skill (by `lishix520`) from ClawHub. It uses native macOS AppleScript (osascript) and has no external binary dependencies.
+    Yes. While the default `apple-notes` skill requires the `memo` CLI, you can find native macOS alternatives on ClawHub that use `osascript` with no external binary dependencies.
 
-    Install it via:
+    Search for available options via:
     ```bash
-    openclaw skills install lishix520/apple-notes-native
+    openclaw skills search apple-notes
     ```
+
+    A common community choice is `apple-notes-native`.
 
   </Accordion>
 
