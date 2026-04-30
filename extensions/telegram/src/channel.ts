@@ -22,7 +22,6 @@ import {
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { createChannelDirectoryAdapter } from "openclaw/plugin-sdk/directory-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { HEARTBEAT_TRANSCRIPT_PROMPT } from "openclaw/plugin-sdk/heartbeat-runtime";
 import {
   resolveOutboundSendDep,
   type OutboundSendDeps,
@@ -282,9 +281,6 @@ function shouldTreatTelegramDeliveredTextAsVisible(params: {
   kind: "tool" | "block" | "final";
   text?: string;
 }): boolean {
-  if (params.text?.trim() === HEARTBEAT_TRANSCRIPT_PROMPT) {
-    return false;
-  }
   return params.kind !== "final";
 }
 

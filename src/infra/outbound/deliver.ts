@@ -31,6 +31,7 @@ import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { diagnosticErrorCategory } from "../diagnostic-error-metadata.js";
 import { emitDiagnosticEvent, type DiagnosticMessageDeliveryKind } from "../diagnostic-events.js";
 import { formatErrorMessage } from "../errors.js";
+import { HEARTBEAT_TRANSCRIPT_PROMPT } from "../heartbeat-events.js";
 import { throwIfAborted } from "./abort.js";
 import type { OutboundDeliveryResult } from "./deliver-types.js";
 import {
@@ -499,6 +500,10 @@ function normalizePayloadsForChannelDelivery(
         )
       : null;
     if (normalized) {
+      const text = typeof normalized.text === "string" ? normalized.text.trim() : "";
+      if (text === HEARTBEAT_TRANSCRIPT_PROMPT) {
+        continue;
+      }
       normalizedPayloads.push(normalized);
     }
   }

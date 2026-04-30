@@ -14,7 +14,6 @@ import {
   createRuntimeDirectoryLiveAdapter,
 } from "openclaw/plugin-sdk/directory-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { HEARTBEAT_TRANSCRIPT_PROMPT } from "openclaw/plugin-sdk/heartbeat-runtime";
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import {
   createComputedAccountStatusAdapter,
@@ -87,9 +86,6 @@ function shouldTreatDiscordDeliveredTextAsVisible(params: {
   kind: "tool" | "block" | "final";
   text?: string;
 }): boolean {
-  if (params.text?.trim() === HEARTBEAT_TRANSCRIPT_PROMPT) {
-    return false;
-  }
   return (
     params.kind === "block" && typeof params.text === "string" && params.text.trim().length > 0
   );
