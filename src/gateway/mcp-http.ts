@@ -113,6 +113,7 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
           messageProvider: requestContext.messageProvider,
           accountId: requestContext.accountId,
           senderIsOwner: requestContext.senderIsOwner,
+          currentChannelId: requestContext.currentChannelId,
         });
 
         const messages = Array.isArray(parsed) ? parsed : [parsed];

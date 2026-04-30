@@ -483,6 +483,7 @@ export function runAgentAttempt(params: {
         streamParams: params.opts.streamParams,
         messageProvider: params.messageChannel,
         agentAccountId: params.runContext.accountId,
+        currentChannelId: params.runContext.currentChannelId,
         senderIsOwner: params.opts.senderIsOwner,
         cleanupBundleMcpOnRunEnd: params.opts.cleanupBundleMcpOnRunEnd,
         cleanupCliLiveSessionOnRunEnd: params.opts.cleanupCliLiveSessionOnRunEnd,

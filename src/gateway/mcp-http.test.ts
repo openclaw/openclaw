@@ -638,6 +638,36 @@ describe("mcp loopback server", () => {
 
     expect(response.status).toBe(200);
   });
+
+  it("passes case-sensitive current channel ID to tool resolution (#75261)", async () => {
+    // Regression: MCP loopback path did not thread currentChannelId into cron tool,
+    // so inferDeliveryFromSessionKey fell back and lowercased the Matrix room ID.
+    const port = await getFreePortBlockWithPermissionFallback({
+      offsets: [0],
+      fallbackBase: 53_100,
+    });
+    server = await startMcpLoopbackServer(port);
+    const runtime = getActiveMcpLoopbackRuntime();
+
+    const response = await sendRaw({
+      port: server.port,
+      token: runtime ? resolveMcpLoopbackBearerToken(runtime, true) : undefined,
+      headers: {
+        "content-type": "application/json",
+        "x-session-key": "agent:main:matrix:channel:!c9p9xfwih5szl4yzip:matrix.example",
+        "x-openclaw-message-channel": "matrix",
+        "x-openclaw-current-channel-id": "!c9p9XFWiH5Szl4yZiP:matrix.example",
+      },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(resolveGatewayScopedToolsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        currentChannelId: "!c9p9XFWiH5Szl4yZiP:matrix.example",
+      }),
+    );
+  });
 });
 
 describe("createMcpLoopbackServerConfig", () => {
@@ -651,6 +681,9 @@ describe("createMcpLoopbackServerConfig", () => {
     );
     expect(config.mcpServers?.openclaw?.headers?.["x-openclaw-message-channel"]).toBe(
       "${OPENCLAW_MCP_MESSAGE_CHANNEL}",
+    );
+    expect(config.mcpServers?.openclaw?.headers?.["x-openclaw-current-channel-id"]).toBe(
+      "${OPENCLAW_MCP_CURRENT_CHANNEL_ID}",
     );
     expect(config.mcpServers?.openclaw?.headers?.["x-openclaw-sender-is-owner"]).toBeUndefined();
   });
