@@ -151,10 +151,14 @@ export function createBlockReplyPipeline(params: {
         sentKeys.add(payloadKey);
         sentContentKeys.add(contentKey);
         const reply = resolveSendableOutboundReplyParts(payload);
-        // Only track media URLs for dedupe when the block payload is
-        // media-only (no text). Mixed text+media payloads carry media
-        // that must survive into the final reply (#75156).
-        if (!reply.trimmedText) {
+        // Track media URLs only when the block payload is media-only.
+        // For mixed text+media block payloads, the downstream delivery
+        // handler sends the text portion but does not reliably deliver
+        // the media attachment (e.g. Telegram captioned-media path may
+        // split or drop the attachment on first send). If we mark those
+        // URLs as sent, the final reply dedupe strips the still-undelivered
+        // attachment (#75156, #65468, #73253).
+        if (reply.hasMedia && !reply.trimmedText) {
           for (const mediaUrl of reply.mediaUrls) {
             sentMediaUrls.add(mediaUrl);
           }
