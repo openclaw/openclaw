@@ -22,6 +22,7 @@ const {
   getOnHandler,
   getReadChannelAllowFromStoreMock,
   getUpsertChannelPairingRequestMock,
+  isReplyRunActiveForSessionKey,
   listSkillCommandsForAgents,
   makeForumGroupMessageCtx,
   middlewareUseSpy,
@@ -304,7 +305,65 @@ describe("createTelegramBot", () => {
     createTelegramBot({ token: "tok" });
     expect(sequentializeSpy).toHaveBeenCalledTimes(1);
     expect(middlewareUseSpy).toHaveBeenCalledWith(sequentializeSpy.mock.results[0]?.value);
-    expect(harness.sequentializeKey).toBe(getTelegramSequentialKey);
+    const ctx = makeForumGroupMessageCtx({ threadId: 9, text: "hello" });
+    expect(harness.sequentializeKey?.(ctx)).toBe(getTelegramSequentialKey(ctx));
+  });
+
+  it("routes busy Telegram topic messages onto a session control lane", () => {
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+          groups: { "*": { requireMention: false } },
+        },
+      },
+    });
+
+    createTelegramBot({ token: "tok" });
+    const ctx = makeForumGroupMessageCtx({ threadId: 99, text: "follow up please" });
+    isReplyRunActiveForSessionKey.mockReturnValue(true);
+
+    const key = harness.sequentializeKey?.(ctx);
+
+    expect(key).toMatch(/^telegram:session-control:/);
+    expect(key).not.toBe(getTelegramSequentialKey(ctx));
+    expect(isReplyRunActiveForSessionKey).toHaveBeenCalledOnce();
+  });
+
+  it("does not route inactive Telegram topic messages onto the session control lane", () => {
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+          groups: { "*": { requireMention: false } },
+        },
+      },
+    });
+
+    createTelegramBot({ token: "tok" });
+    const ctx = makeForumGroupMessageCtx({ threadId: 99, text: "ordinary message" });
+
+    expect(harness.sequentializeKey?.(ctx)).toBe(getTelegramSequentialKey(ctx));
+  });
+
+  it("does not route whole-message control commands through the busy session lane", () => {
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+          groups: { "*": { requireMention: false } },
+        },
+      },
+    });
+
+    createTelegramBot({ token: "tok" });
+    const ctx = makeForumGroupMessageCtx({ threadId: 99, text: "/queue interrupt" });
+    isReplyRunActiveForSessionKey.mockReturnValue(true);
+
+    expect(harness.sequentializeKey?.(ctx)).toBe(getTelegramSequentialKey(ctx));
   });
 
   it("lets /status bypass a busy Telegram topic lane", async () => {

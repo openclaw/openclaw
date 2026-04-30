@@ -40,6 +40,7 @@ import { tagTelegramNetworkError } from "./network-errors.js";
 import { resolveTelegramRequestTimeoutMs } from "./request-timeouts.js";
 import { createTelegramSendChatActionHandler } from "./sendchataction-401-backoff.js";
 import { getTelegramSequentialKey } from "./sequential-key.js";
+import { createTelegramSequentialKey } from "./sequential-key.runtime.js";
 import { createTelegramThreadBindingManager } from "./thread-bindings.js";
 
 export type { TelegramBotOptions } from "./bot.types.js";
@@ -368,7 +369,16 @@ export function createTelegramBotCore(
     }
   });
 
-  bot.use(botRuntime.sequentialize(getTelegramSequentialKey));
+  bot.use(
+    botRuntime.sequentialize(
+      createTelegramSequentialKey({
+        accountId: account.accountId,
+        loadRuntimeConfig: () => telegramDeps.getRuntimeConfig(),
+        resolveTelegramGroupConfig: (chatId, messageThreadId) =>
+          resolveTelegramGroupConfig(chatId, messageThreadId),
+      }),
+    ),
+  );
 
   const rawUpdateLogger = createSubsystemLogger("gateway/channels/telegram/raw-update");
   const MAX_RAW_UPDATE_CHARS = 8000;
@@ -500,7 +510,7 @@ export function createTelegramBotCore(
       return telegramCfg;
     }
   };
-  const resolveTelegramGroupConfig = (chatId: string | number, messageThreadId?: number) => {
+  function resolveTelegramGroupConfig(chatId: string | number, messageThreadId?: number) {
     const freshTelegramCfg = loadFreshTelegramAccountConfig();
     const groups = freshTelegramCfg.groups;
     const direct = freshTelegramCfg.direct;
@@ -525,7 +535,7 @@ export function createTelegramBotCore(
     const topicConfig =
       messageThreadId != null ? groupConfig?.topics?.[String(messageThreadId)] : undefined;
     return { groupConfig, topicConfig };
-  };
+  }
 
   // Global sendChatAction handler with 401 backoff / circuit breaker (issue #27092).
   // Created BEFORE the message processor so it can be injected into every message context.

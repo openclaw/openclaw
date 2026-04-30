@@ -445,6 +445,10 @@ export function resolveActiveReplyRunSessionId(sessionKey: string): string | und
   return replyRunRegistry.resolveSessionId(sessionKey);
 }
 
+export function isReplyRunActiveForSessionKey(sessionKey: string): boolean {
+  return replyRunRegistry.isActive(sessionKey);
+}
+
 export function isReplyRunActiveForSessionId(sessionId: string): boolean {
   return resolveReplyRunForCurrentSessionId(sessionId) !== undefined;
 }

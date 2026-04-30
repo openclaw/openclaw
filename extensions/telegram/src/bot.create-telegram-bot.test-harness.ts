@@ -167,6 +167,9 @@ const commandStatusHoisted = vi.hoisted(() => ({
     text: "status reply",
   })),
 }));
+const replyRunHoisted = vi.hoisted(() => ({
+  isReplyRunActiveForSessionKey: vi.fn(() => false),
+}));
 export const listSkillCommandsForAgents = skillCommandListHoisted.listSkillCommandsForAgents;
 const buildModelsProviderData = modelProviderDataHoisted.buildModelsProviderData;
 export const replySpy = replySpyHoisted.replySpy;
@@ -174,6 +177,7 @@ export const dispatchReplyWithBufferedBlockDispatcher =
   dispatchReplyHoisted.dispatchReplyWithBufferedBlockDispatcher;
 export const resolveDirectStatusReplyForSession =
   commandStatusHoisted.resolveDirectStatusReplyForSession;
+export const isReplyRunActiveForSessionKey = replyRunHoisted.isReplyRunActiveForSessionKey;
 const menuSyncHoisted = vi.hoisted(() => ({
   syncTelegramMenuCommands: vi.fn(async ({ bot, commandsToRegister }) => {
     await bot.api.setMyCommands(commandsToRegister);
@@ -270,6 +274,10 @@ vi.mock("openclaw/plugin-sdk/command-status-runtime", () => ({
   resolveDirectStatusReplyForSession: (
     params: Parameters<ResolveDirectStatusReplyForSessionFn>[0],
   ) => commandStatusHoisted.resolveDirectStatusReplyForSession(params),
+}));
+
+vi.doMock("./reply-run-runtime.js", () => ({
+  isReplyRunActiveForSessionKey: replyRunHoisted.isReplyRunActiveForSessionKey,
 }));
 
 // All spy variables used inside vi.mock("grammy", ...) must be created via
@@ -502,6 +510,8 @@ beforeEach(() => {
   );
   resolveDirectStatusReplyForSession.mockReset();
   resolveDirectStatusReplyForSession.mockResolvedValue({ text: "status reply" });
+  isReplyRunActiveForSessionKey.mockReset();
+  isReplyRunActiveForSessionKey.mockReturnValue(false);
   syncTelegramMenuCommands.mockReset();
   syncTelegramMenuCommands.mockImplementation(async ({ bot, commandsToRegister }) => {
     await bot.api.setMyCommands(commandsToRegister);

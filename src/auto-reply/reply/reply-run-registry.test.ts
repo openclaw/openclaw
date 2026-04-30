@@ -4,6 +4,7 @@ import {
   abortActiveReplyRuns,
   createReplyOperation,
   forceClearReplyRunBySessionId,
+  isReplyRunActiveForSessionKey,
   isReplyRunActiveForSessionId,
   queueReplyRunMessage,
   replyRunRegistry,
@@ -64,6 +65,21 @@ describe("reply run registry", () => {
 
     expect(operation.result).toEqual({ kind: "aborted", code: "aborted_by_user" });
     expect(replyRunRegistry.isActive("agent:main:main")).toBe(false);
+  });
+
+  it("exposes active state lookups by session key", () => {
+    const operation = createReplyOperation({
+      sessionKey: "agent:main:main",
+      sessionId: "session-active",
+      resetTriggered: false,
+    });
+
+    expect(isReplyRunActiveForSessionKey("agent:main:main")).toBe(true);
+    expect(isReplyRunActiveForSessionKey("agent:main:missing")).toBe(false);
+
+    operation.complete();
+
+    expect(isReplyRunActiveForSessionKey("agent:main:main")).toBe(false);
   });
 
   it("force-clears a running operation after abort without backend cleanup", async () => {
