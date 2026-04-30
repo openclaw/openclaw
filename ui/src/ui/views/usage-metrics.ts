@@ -56,11 +56,12 @@ function forEachSessionHourSlice(
   const durationMs = Math.max(endMs - startMs, 1);
   const totalMinutes = durationMs / 60000;
 
+  // Use half-open slices [cursor, nextBoundary) so exact hour boundaries do
+  // not create zero-duration buckets and DST transitions remain monotonic.
   let cursor = startMs;
   while (cursor < endMs) {
     const date = new Date(cursor);
-    const nextHour = setToHourEnd(date, timeZone);
-    const nextMs = Math.min(nextHour.getTime(), endMs);
+    const nextMs = getNextHourBoundaryMs(cursor, endMs, timeZone);
     const minutes = Math.max((nextMs - cursor) / 60000, 0);
     visitor({
       usage,
@@ -68,7 +69,7 @@ function forEachSessionHourSlice(
       weekday: getZonedWeekday(date, timeZone),
       share: minutes / totalMinutes,
     });
-    cursor = nextMs + 1;
+    cursor = nextMs;
   }
 
   return true;
@@ -146,14 +147,54 @@ function getZonedWeekday(date: Date, zone: "local" | "utc"): number {
   return zone === "utc" ? date.getUTCDay() : date.getDay();
 }
 
-function setToHourEnd(date: Date, zone: "local" | "utc"): Date {
+function getNextHourStart(date: Date, zone: "local" | "utc"): Date {
   const next = new Date(date);
   if (zone === "utc") {
-    next.setUTCMinutes(59, 59, 999);
+    next.setUTCHours(next.getUTCHours() + 1, 0, 0, 0);
   } else {
-    next.setMinutes(59, 59, 999);
+    // Advance in local wall time so repeated and skipped hours are handled by
+    // the runtime's timezone rules instead of reconstructing an ambiguous end.
+    next.setHours(next.getHours() + 1, 0, 0, 0);
   }
   return next;
+}
+
+function getNextHourBoundaryMs(cursor: number, endMs: number, zone: "local" | "utc"): number {
+  const nextStartMs = getNextHourStart(new Date(cursor), zone).getTime();
+  const boundedNextMs = Math.min(nextStartMs, endMs);
+  // Guard against non-monotonic timezone transitions so the UI never stalls.
+  return boundedNextMs > cursor ? boundedNextMs : endMs;
+}
+
+function sessionTouchesHours(
+  session: UsageSessionEntry,
+  timeZone: "local" | "utc",
+  hours: number[],
+): boolean {
+  if (hours.length === 0) {
+    return true;
+  }
+
+  const usage = session.usage;
+  const start = usage?.firstActivity ?? session.updatedAt;
+  const end = usage?.lastActivity ?? session.updatedAt;
+  if (!start || !end) {
+    return false;
+  }
+
+  const startMs = Math.min(start, end);
+  const endMs = Math.max(start, end);
+  let cursor = startMs;
+
+  while (true) {
+    if (hours.includes(getZonedHour(new Date(cursor), timeZone))) {
+      return true;
+    }
+    if (cursor >= endMs) {
+      return false;
+    }
+    cursor = getNextHourBoundaryMs(cursor, endMs, timeZone);
+  }
 }
 
 function buildUsageMosaicStats(
@@ -631,6 +672,10 @@ const buildUsageInsightStats = (
   };
 };
 
+export const __test = {
+  getNextHourStart,
+};
+
 export type { UsageInsightStats };
 export {
   buildAggregatesFromSessions,
@@ -645,5 +690,5 @@ export {
   formatTokens,
   getZonedHour,
   renderUsageMosaic,
-  setToHourEnd,
+  sessionTouchesHours,
 };
