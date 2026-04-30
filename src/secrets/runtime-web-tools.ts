@@ -680,7 +680,10 @@ export async function resolveRuntimeWebTools(params: {
     diagnostics: [],
   };
   const fetchExplicitlyDisabled = fetch?.enabled === false;
-  if ((fetch && !fetchExplicitlyDisabled) || hasPluginWebFetchConfig) {
+  if (
+    (fetch && !fetchExplicitlyDisabled) ||
+    (hasPluginWebFetchConfig && !fetchExplicitlyDisabled)
+  ) {
     const fetchSurface = await resolveRuntimeWebProviderSurface({
       contract: "webFetchProviders",
       rawProvider: rawFetchProvider,
