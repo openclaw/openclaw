@@ -483,7 +483,7 @@ describe("scripts/test-projects changed-target routing", () => {
 
   it("narrows default-lane changed source files to affected tests", () => {
     const plans = buildVitestRunPlans(["--changed", "origin/main"], process.cwd(), () => [
-      "packages/sdk/src/index.ts",
+      "packages/plugin-sdk/src/provider-web-search-config-contract.ts",
     ]);
 
     expect(plans).toEqual([
