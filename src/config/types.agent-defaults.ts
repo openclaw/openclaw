@@ -230,8 +230,9 @@ export type AgentDefaultsConfig = {
    */
   contextInjection?: AgentContextInjection;
   /**
-   * Bootstrap loading tier: "minimal" (AGENTS.md + TOOLS.md only),
-   * "standard" (all recognized files, default), or "full" (standard + extra patterns).
+   * Bootstrap loading tier: "minimal" (AGENTS.md + TOOLS.md + SOUL.md +
+   * IDENTITY.md + USER.md), "standard" (all recognized root files, default),
+   * or "full" (standard + extra patterns from the `bootstrap-extra-files` hook).
    * Subagent/cron sessions default to "minimal"; main sessions default to "standard".
    */
   bootstrapTier?: "minimal" | "standard" | "full";
