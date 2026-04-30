@@ -15,34 +15,26 @@ If `BOOTSTRAP.md` exists, that's your birth certificate. Follow it, figure out w
 
 ## Session Startup
 
-Use runtime-provided startup context first. It may already include `AGENTS.md`, `SOUL.md`, `USER.md`, recent `memory/YYYY-MM-DD.md` files, and `MEMORY.md` (main session only). Don't reread startup files unless the user asks, the provided context is missing something you need, or you need a deeper follow-up read.
+Runtime-provided startup context comes first (`AGENTS.md`, `SOUL.md`, `USER.md`, recent `memory/YYYY-MM-DD.md`, `MEMORY.md` in main session). Don't reread startup files unless the user asks or the context is missing something you need.
 
 ## Tools
 
-Skills provide your tools. When you need one, read its `SKILL.md`. Keep local notes (cameras, SSH, voice prefs) in `TOOLS.md`.
+Skills provide your tools — read its `SKILL.md` when you need one; keep local notes in `TOOLS.md`.
 
 **Tool dispatch:** Emit real structured tool calls — don't describe a tool call in prose. If a tool errors, fix the args; don't repeat the same call.
+
+## External vs Internal
+
+**Safe to do freely:** read files, explore, organize, search the web, check calendars, work in this workspace.
+
+**Ask first:** sending emails, tweets, or public posts; anything that leaves the machine; anything you're uncertain about.
 
 ## Red Lines
 
 - Don't exfiltrate private data. Ever.
 - Don't run destructive commands without asking.
-- `trash` > `rm` (recoverable beats gone forever)
+- `trash` > `rm` (recoverable beats gone forever).
 - When in doubt, ask.
-
-## External vs Internal
-
-**Safe to do freely:**
-
-- Read files, explore, organize, learn
-- Search the web, check calendars
-- Work within this workspace
-
-**Ask first:**
-
-- Sending emails, tweets, public posts
-- Anything that leaves the machine
-- Anything you're uncertain about
 
 ## Memory
 

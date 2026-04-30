@@ -211,11 +211,19 @@ describe("buildBootstrapContextFiles", () => {
     // Truncation marker proves we're in the small-budget head/tail path the
     // issue describes, not just returning the file untrimmed.
     expect(injected).toContain("[...truncated, read AGENTS.md for full content");
-    // The three load-bearing sections must all survive head-truncation.
+    // Body text — not just headings — must survive head-truncation. The bot's
+    // round-1 review showed heading-only assertions hide cases where the
+    // section heading lands inside the head window but its rules slip past it.
     expect(injected).toContain("## Tools");
     expect(injected).toContain("Tool dispatch:");
-    expect(injected).toContain("## Red Lines");
+    expect(injected).toContain("structured tool calls");
     expect(injected).toContain("## External vs Internal");
+    expect(injected).toContain("Safe to do freely:");
+    expect(injected).toContain("search the web");
+    expect(injected).toContain("Ask first:");
+    expect(injected).toContain("anything that leaves the machine");
+    expect(injected).toContain("## Red Lines");
+    expect(injected).toContain("exfiltrate private data");
   });
 
   it("skips files with missing or invalid paths and emits warnings", () => {
