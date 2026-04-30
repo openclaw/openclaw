@@ -1,7 +1,11 @@
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { resolveMediaToolLocalRoots, resolveModelFromRegistry } from "./media-tool-shared.js";
+import {
+  resolveCapabilityModelConfigForTool,
+  resolveMediaToolLocalRoots,
+  resolveModelFromRegistry,
+} from "./media-tool-shared.js";
 
 function normalizeHostPath(value: string): string {
   return path.normalize(path.resolve(value));
@@ -97,4 +101,36 @@ describe("resolveModelFromRegistry", () => {
     ]);
     expect(result).toBe(foundModel);
   }, 180_000);
+});
+
+describe("resolveCapabilityModelConfigForTool", () => {
+  it("does not invoke the providers thunk when an explicit modelConfig resolves", () => {
+    // Regression: tools previously listed runtime providers eagerly even
+    // when the explicit modelConfig was complete and the provider list was
+    // unused. On hosted gateways with `plugins.entries` populated, listing
+    // providers triggers a full plugin-registry reload (~5–6s per call).
+    const providersThunk = vi.fn(() => []);
+
+    const result = resolveCapabilityModelConfigForTool({
+      cfg: { agents: { defaults: {} } } as never,
+      modelConfig: { primary: "openai/gpt-image-1" },
+      providers: providersThunk,
+    });
+
+    expect(result).toEqual({ primary: "openai/gpt-image-1" });
+    expect(providersThunk).not.toHaveBeenCalled();
+  });
+
+  it("invokes the providers thunk when modelConfig is incomplete", () => {
+    const providersThunk = vi.fn(() => []);
+
+    const result = resolveCapabilityModelConfigForTool({
+      cfg: { agents: { defaults: {} } } as never,
+      modelConfig: undefined,
+      providers: providersThunk,
+    });
+
+    expect(result).toBeNull();
+    expect(providersThunk).toHaveBeenCalledTimes(1);
+  });
 });

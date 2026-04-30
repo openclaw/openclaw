@@ -229,7 +229,7 @@ export function resolveVideoGenerationModelConfigForTool(params: {
     cfg: params.cfg,
     agentDir: params.agentDir,
     modelConfig: params.cfg?.agents?.defaults?.videoGenerationModel,
-    providers: listRuntimeVideoGenerationProviders({ config: params.cfg }),
+    providers: () => listRuntimeVideoGenerationProviders({ config: params.cfg }),
   });
 }
 
