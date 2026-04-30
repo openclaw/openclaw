@@ -5,7 +5,11 @@ import {
   normalizeMessagePresentation,
 } from "openclaw/plugin-sdk/interactive-runtime";
 import { readNumberParam, readStringParam } from "openclaw/plugin-sdk/param-readers";
-import { buildSlackInteractiveBlocks, buildSlackPresentationBlocks } from "./blocks-render.js";
+import {
+  buildSlackInteractiveBlocks,
+  buildSlackPresentationBlocks,
+  resolveSlackInteractiveBlockOffsets,
+} from "./blocks-render.js";
 
 type SlackActionInvoke = (
   action: Record<string, unknown>,
@@ -40,9 +44,14 @@ export async function handleSlackMessageAction(params: {
     const mediaUrl = readStringParam(actionParams, "media", { trim: false });
     const presentation = normalizeMessagePresentation(actionParams.presentation);
     const interactive = normalizeInteractiveReply(actionParams.interactive);
-    const interactiveBlocks = interactive ? buildSlackInteractiveBlocks(interactive) : undefined;
     const presentationBlocks = presentation
       ? buildSlackPresentationBlocks(presentation)
+      : undefined;
+    const interactiveBlocks = interactive
+      ? buildSlackInteractiveBlocks(
+          interactive,
+          resolveSlackInteractiveBlockOffsets(presentationBlocks),
+        )
       : undefined;
     const mergedBlocks = [...(presentationBlocks ?? []), ...(interactiveBlocks ?? [])];
     const blocks = mergedBlocks.length > 0 ? mergedBlocks : undefined;
