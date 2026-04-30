@@ -25,6 +25,7 @@ export {
   resolveTextChunkLimit,
   type getReplyFromConfig,
   type ReplyPayload,
+  type SourceReplyDeliveryMode,
 } from "openclaw/plugin-sdk/reply-runtime";
 export {
   resolveInboundLastRouteSessionKey,

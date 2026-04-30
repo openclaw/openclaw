@@ -789,10 +789,10 @@ describe("buildAgentSystemPrompt", () => {
       },
     });
 
-    expect(prompt).toContain("private by default for this source channel");
-    expect(prompt).toContain("use `message(action=send)` for visible channel output");
+    expect(prompt).toContain("visible output for this source channel requires");
+    expect(prompt).toContain("`message(action=send)`");
     expect(prompt).toContain("The target defaults to the current source channel");
-    expect(prompt).toContain("final answers are private in this mode");
+    expect(prompt).toContain("Do not rely on final assistant text for user-visible delivery");
     expect(prompt).not.toContain(
       `respond with ONLY: ${SILENT_REPLY_TOKEN} (avoid duplicate replies)`,
     );

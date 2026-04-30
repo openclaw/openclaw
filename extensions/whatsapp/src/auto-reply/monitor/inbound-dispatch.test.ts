@@ -612,6 +612,95 @@ describe("whatsapp inbound dispatch", () => {
     ).toBeUndefined();
   });
 
+  it("passes sourceReplyDeliveryMode into shared dispatch", async () => {
+    await dispatchBufferedReply({
+      sourceReplyDeliveryMode: "message_tool_only",
+    });
+
+    expect(
+      (
+        capturedDispatchParams as {
+          replyOptions?: { sourceReplyDeliveryMode?: string };
+        }
+      )?.replyOptions?.sourceReplyDeliveryMode,
+    ).toBe("message_tool_only");
+  });
+
+  it("falls back to suppressed final replies when enabled for WhatsApp DMs", async () => {
+    const deliverReply = vi.fn(async () => acceptedDeliveryResult());
+    const rememberSentText = vi.fn();
+    dispatchReplyWithBufferedBlockDispatcherMock.mockImplementationOnce(async (params) => {
+      capturedDispatchParams = params;
+      return {
+        queuedFinal: false,
+        counts: { tool: 0, block: 0, final: 0 },
+        suppressedFinalReplies: [{ text: "fallback final" }],
+      };
+    });
+
+    await expect(
+      dispatchBufferedReply({
+        allowSuppressedFinalReplyFallback: true,
+        sourceReplyDeliveryMode: "message_tool_only",
+        deliverReply,
+        rememberSentText,
+      }),
+    ).resolves.toBe(true);
+
+    expect(deliverReply).toHaveBeenCalledTimes(1);
+    expect(deliverReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replyResult: expect.objectContaining({ text: "fallback final" }),
+      }),
+    );
+    expect(rememberSentText).toHaveBeenCalledWith(
+      "fallback final",
+      expect.objectContaining({
+        combinedBodySessionKey: "agent:main:whatsapp:direct:+1000",
+      }),
+    );
+  });
+
+  it("does not fallback when shared dispatch reports no suppressed final reply", async () => {
+    const deliverReply = vi.fn(async () => acceptedDeliveryResult());
+    dispatchReplyWithBufferedBlockDispatcherMock.mockImplementationOnce(async (params) => {
+      capturedDispatchParams = params;
+      return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
+    });
+
+    await expect(
+      dispatchBufferedReply({
+        allowSuppressedFinalReplyFallback: true,
+        sourceReplyDeliveryMode: "message_tool_only",
+        deliverReply,
+      }),
+    ).resolves.toBe(false);
+
+    expect(deliverReply).not.toHaveBeenCalled();
+  });
+
+  it("does not fallback when disabled even if a suppressed final reply is available", async () => {
+    const deliverReply = vi.fn(async () => acceptedDeliveryResult());
+    dispatchReplyWithBufferedBlockDispatcherMock.mockImplementationOnce(async (params) => {
+      capturedDispatchParams = params;
+      return {
+        queuedFinal: false,
+        counts: { tool: 0, block: 0, final: 0 },
+        suppressedFinalReplies: [{ text: "group final" }],
+      };
+    });
+
+    await expect(
+      dispatchBufferedReply({
+        allowSuppressedFinalReplyFallback: false,
+        sourceReplyDeliveryMode: "message_tool_only",
+        deliverReply,
+      }),
+    ).resolves.toBe(false);
+
+    expect(deliverReply).not.toHaveBeenCalled();
+  });
+
   it("treats block-only turns as visible replies instead of silent turns", async () => {
     const deliverReply = vi.fn(async () => acceptedDeliveryResult());
     const rememberSentText = vi.fn();
