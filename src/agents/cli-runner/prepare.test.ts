@@ -50,7 +50,7 @@ const mockBuildActiveMusicGenerationTaskPromptContextForSession = vi.mocked(
 );
 
 function createCliBackendConfig(
-  params: { systemPromptOverride?: string | null } = {},
+  params: { systemPromptOverride?: string | null; bundleMcp?: boolean } = {},
 ): OpenClawConfig {
   return {
     agents: {
@@ -67,6 +67,9 @@ function createCliBackendConfig(
             sessionMode: "existing",
             output: "text",
             input: "arg",
+            ...(params.bundleMcp
+              ? { bundleMcp: true, bundleMcpMode: "claude-config-file" as const }
+              : {}),
           },
         },
       },
@@ -126,6 +129,13 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       resolveBootstrapContextForRun: vi.fn(async () => ({
         bootstrapFiles: [],
         contextFiles: [],
+      })),
+      getActiveMcpLoopbackRuntime: vi.fn(() => undefined),
+      ensureMcpLoopbackServer: vi.fn(async () => undefined),
+      createMcpLoopbackServerConfig: vi.fn((port: number) => ({
+        mcpServers: {
+          openclaw: { url: `http://127.0.0.1:${port}/mcp` },
+        },
       })),
       resolveOpenClawReferencePaths: vi.fn(async () => ({ docsPath: null, sourcePath: null })),
     });
@@ -538,6 +548,50 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       expect(mockBuildActiveVideoGenerationTaskPromptContextForSession).toHaveBeenCalledWith(
         "agent:main:test",
       );
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("skips bundle MCP preparation when tools are disabled", async () => {
+    const { dir, sessionFile } = createSessionFile();
+    try {
+      const getActiveMcpLoopbackRuntime = vi.fn(() => ({
+        port: 31783,
+        ownerToken: "owner-token",
+        nonOwnerToken: "non-owner-token",
+      }));
+      const ensureMcpLoopbackServer = vi.fn(async () => undefined);
+      const createMcpLoopbackServerConfig = vi.fn((port: number) => ({
+        mcpServers: {
+          openclaw: { url: `http://127.0.0.1:${port}/mcp` },
+        },
+      }));
+      setCliRunnerPrepareTestDeps({
+        getActiveMcpLoopbackRuntime,
+        ensureMcpLoopbackServer,
+        createMcpLoopbackServerConfig,
+      });
+
+      const context = await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "latest ask",
+        provider: "test-cli",
+        model: "test-model",
+        timeoutMs: 1_000,
+        runId: "run-test-disable-tools",
+        config: createCliBackendConfig({ bundleMcp: true }),
+        disableTools: true,
+      });
+
+      expect(getActiveMcpLoopbackRuntime).not.toHaveBeenCalled();
+      expect(ensureMcpLoopbackServer).not.toHaveBeenCalled();
+      expect(createMcpLoopbackServerConfig).not.toHaveBeenCalled();
+      expect(context.preparedBackend.mcpConfigHash).toBeUndefined();
+      expect(context.preparedBackend.env).toBeUndefined();
+      expect(context.preparedBackend.backend.args).toEqual(["--print"]);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
