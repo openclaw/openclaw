@@ -4,7 +4,7 @@ import path from "node:path";
 import dotenv from "dotenv";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveConfigDir } from "../utils.js";
-import { resolveRequiredHomeDir } from "./home-dir.js";
+import { resolveRequiredHomeDir, safeCwd } from "./home-dir.js";
 import {
   isDangerousHostEnvOverrideVarName,
   isDangerousHostEnvVarName,
@@ -278,8 +278,10 @@ export function loadGlobalRuntimeDotEnvFiles(opts?: { quiet?: boolean; stateEnvP
 
 export function loadDotEnv(opts?: { quiet?: boolean }) {
   const quiet = opts?.quiet ?? true;
-  const cwdEnvPath = path.join(process.cwd(), ".env");
-  loadWorkspaceDotEnvFile(cwdEnvPath, { quiet });
+  const cwd = safeCwd();
+  if (cwd != null) {
+    loadWorkspaceDotEnvFile(path.join(cwd, ".env"), { quiet });
+  }
 
   // Then load global fallback: ~/.openclaw/.env (or OPENCLAW_STATE_DIR/.env),
   // without overriding any env vars already present.

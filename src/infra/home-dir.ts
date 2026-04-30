@@ -65,18 +65,26 @@ function normalizeSafe(homedir: () => string): string | undefined {
   }
 }
 
+export function safeCwd(): string | undefined {
+  try {
+    return process.cwd();
+  } catch {
+    return undefined;
+  }
+}
+
 export function resolveRequiredHomeDir(
   env: NodeJS.ProcessEnv = process.env,
   homedir: () => string = os.homedir,
 ): string {
-  return resolveEffectiveHomeDir(env, homedir) ?? path.resolve(process.cwd());
+  return resolveEffectiveHomeDir(env, homedir) ?? path.resolve(safeCwd() ?? os.tmpdir());
 }
 
 export function resolveRequiredOsHomeDir(
   env: NodeJS.ProcessEnv = process.env,
   homedir: () => string = os.homedir,
 ): string {
-  return resolveOsHomeDir(env, homedir) ?? path.resolve(process.cwd());
+  return resolveOsHomeDir(env, homedir) ?? path.resolve(safeCwd() ?? os.tmpdir());
 }
 
 export function expandHomePrefix(
