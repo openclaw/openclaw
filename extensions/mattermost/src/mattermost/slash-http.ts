@@ -144,7 +144,7 @@ function sanitizeCommandLookupError(error: unknown): string {
           url.username = "redacted";
           url.password = "redacted";
         }
-        for (const key of [...url.searchParams.keys()]) {
+        for (const key of url.searchParams.keys()) {
           if (SECRET_LOG_KEYS.has(key.toLowerCase())) {
             url.searchParams.set(key, "redacted");
           }
