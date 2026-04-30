@@ -421,7 +421,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     expect(setConfigOption).not.toHaveBeenCalled();
   });
 
-  it("forwards timeout config controls for non-Codex ACP agents", async () => {
+  it("ignores timeout config controls for Claude ACP agents", async () => {
     const baseStore: TestSessionStore = {
       load: vi.fn(async () => ({
         acpxRecordId: "agent:claude:acp:test",
@@ -443,13 +443,16 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       key: "timeout",
       value: "60",
     });
-
-    expect(setConfigOption).toHaveBeenCalledOnce();
-    expect(setConfigOption).toHaveBeenCalledWith({
+    await runtime.setConfigOption({
       handle,
-      key: "timeout",
+      key: "Timeout_Seconds",
       value: "60",
     });
+
+    // claude-agent-acp@0.31.x rejects this config option with
+    // "Unknown config option: timeout" → ACP_TURN_FAILED. The turn-timeout
+    // watchdog is owned by the manager, so the agent does not need it.
+    expect(setConfigOption).not.toHaveBeenCalled();
   });
 
   it("keeps stale persistent loads hidden until a fresh record is saved", async () => {

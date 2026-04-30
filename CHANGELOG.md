@@ -114,6 +114,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Agents/ACPX: stop forwarding `timeout` and `timeout_seconds` setSessionConfigOption calls to Claude ACP sessions, since `claude-agent-acp@0.31.x` rejects them with "Unknown config option: timeout" and surfaces ACP_TURN_FAILED on every spawn. The OpenClaw turn-timeout watchdog still runs in the manager via `agents.defaults.timeoutSeconds`. Codex was already covered by the same skip; the filter now applies to all backends. Thanks @henkterharmsel.
 - Telegram/Codex: generate DM topic labels with Codex-compatible simple-completion requests so auto-created private topics can be renamed instead of staying `New Chat`.
 - Web fetch: bound guarded dispatcher cleanup after request timeouts so timed-out fetches return tool errors instead of leaving Gateway tool lanes active. (#78439) Thanks @obviyus.
 - Mattermost/setup: prompt for and persist the server base URL after the bot token in `openclaw setup --wizard`, instead of failing validation before `--http-url` is collected. Fixes #76670. Thanks @jacobtomlinson.

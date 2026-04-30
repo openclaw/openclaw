@@ -531,10 +531,16 @@ export class AcpxRuntime implements AcpRuntime {
     const delegate = await this.resolveDelegateForHandle(input.handle);
     const command = await this.resolveCommandForHandle(input.handle);
     const key = input.key.trim().toLowerCase();
+    // claude-agent-acp@0.31.x rejects `timeout`/`timeout_seconds` with
+    // "Unknown config option: timeout", which surfaces as ACP_TURN_FAILED on
+    // every Claude ACP spawn. The OpenClaw turn-timeout watchdog is enforced
+    // at the manager layer (agents.defaults.timeoutSeconds) and does not need
+    // to be replayed onto the agent session, so drop it for all backends —
+    // Codex was already skipping the same key for the same reason.
+    if (key === "timeout" || key === "timeout_seconds") {
+      return;
+    }
     if (isCodexAcpCommand(command)) {
-      if (key === "timeout" || key === "timeout_seconds") {
-        return;
-      }
       if (
         key === "model" ||
         key === "thinking" ||
