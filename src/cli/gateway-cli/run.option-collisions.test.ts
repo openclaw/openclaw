@@ -408,7 +408,7 @@ describe("gateway run option collisions", () => {
       },
     });
     expect(gatewayLogMessages).toContain(
-      "gateway: restored invalid effective config from last-known-good backup: /tmp/openclaw-test-missing-config.json",
+      "gateway: restored invalid effective config from last-known-good backup: /tmp/openclaw-test-missing-config.json; Rejected validation details: <root>: JSON5 parse failed.",
     );
     expect(startGatewayServer).toHaveBeenCalledWith(
       19170,
