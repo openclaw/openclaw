@@ -669,6 +669,8 @@ export const FIELD_HELP: Record<string, string> = {
   "tools.exec.pathPrepend": "Directories to prepend to PATH for exec runs (gateway/sandbox).",
   "tools.exec.safeBins":
     "Allow stdin-only safe binaries to run without explicit allowlist entries.",
+  "tools.exec.denyPathPatterns":
+    "Glob patterns matched against argv (and best-effort shell-payload tokens) before allowlist or approval checks. A match aborts the run regardless of `security`/`ask`/`safeBins`. Use it for hard-deny paths like secrets directories or SSH private keys. v1 matches literal path-like arguments after simple shell-quote stripping; it does not defeat heredocs, eval-style indirection, base64-decoded paths, command substitution, or symlink redirection.",
   "tools.exec.strictInlineEval":
     "Require explicit approval for interpreter inline-eval forms such as `python -c`, `node -e`, `ruby -e`, or `osascript -e`. Prevents silent allowlist reuse and downgrades allow-always to ask-each-time for those forms.",
   "tools.exec.safeBinTrustedDirs":

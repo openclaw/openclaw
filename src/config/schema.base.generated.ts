@@ -8194,6 +8194,12 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                             type: "string",
                           },
                         },
+                        denyPathPatterns: {
+                          type: "array",
+                          items: {
+                            type: "string",
+                          },
+                        },
                         strictInlineEval: {
                           type: "boolean",
                         },
@@ -18461,6 +18467,12 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 title: "Exec Safe Bins",
                 description:
                   "Allow stdin-only safe binaries to run without explicit allowlist entries.",
+              },
+              denyPathPatterns: {
+                type: "array",
+                items: {
+                  type: "string",
+                },
               },
               strictInlineEval: {
                 type: "boolean",

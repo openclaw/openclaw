@@ -264,6 +264,17 @@ export type ExecToolConfig = {
   /** Safe stdin-only binaries that can run without allowlist entries. */
   safeBins?: string[];
   /**
+   * Glob patterns matched against argv (and best-effort shell-payload tokens)
+   * before allowlist or approval checks. Hard deny — a match aborts the run
+   * regardless of `security`/`ask`/`safeBins`. Example values:
+   * `~/.openclaw/secrets/<glob>`, `<glob>/.env`, `~/.ssh/id_*`.
+   *
+   * v1 limitations: matches literal path-like arguments after simple shell
+   * quote stripping. Does not defeat heredocs, `eval`-style indirection,
+   * base64-decoded paths, command substitution, or symlink redirection.
+   */
+  denyPathPatterns?: string[];
+  /**
    * Require explicit approval for interpreter inline-eval forms (`python -c`, `node -e`, etc.).
    * Prevents silent allowlist reuse and allow-always persistence for those forms.
    */
