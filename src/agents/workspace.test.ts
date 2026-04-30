@@ -85,6 +85,21 @@ describe("ensureAgentWorkspace", () => {
     expect((await readWorkspaceState(tempDir)).setupCompletedAt).toBeUndefined();
   });
 
+  it("skips git init for brand new workspaces when gitInit is false", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-workspace-");
+
+    await ensureAgentWorkspace({
+      dir: tempDir,
+      ensureBootstrapFiles: true,
+      gitInit: false,
+    });
+
+    await expect(fs.access(path.join(tempDir, ".git"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    await expectBootstrapSeeded(tempDir);
+  });
+
   it("recovers partial initialization by creating BOOTSTRAP.md when marker is missing", async () => {
     const tempDir = await makeTempWorkspace("openclaw-workspace-");
     await writeWorkspaceFile({ dir: tempDir, name: DEFAULT_AGENTS_FILENAME, content: "existing" });
