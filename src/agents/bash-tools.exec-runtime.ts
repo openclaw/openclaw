@@ -322,11 +322,13 @@ export function maybeNotifyOnExit(
   session: ProcessSession, 
   statusOverride?: string
 ): void {
+  // P2 Guard: Avoid duplicate or invalid notifications
   if (!session || session.exitNotified) {
     return;
   }
 
-  if (!session.notifyOnExit) {
+  // P2 Guard: Respect opt-out configuration
+  if (session.notifyOnExit === false) {
     session.exitNotified = true;
     return;
   }
@@ -339,17 +341,16 @@ export function maybeNotifyOnExit(
 
   const exitCode = session.exitCode;
   const signal = session.exitSignal;
-
   const sessionAny = session as unknown as Record<string, unknown>;
-  const isManuallyCanceled = Boolean(
-    sessionAny.manuallyCanceled || 
-    (sessionAny.process as Record<string, unknown>)?.manuallyCanceled
-  );
-
   const isActuallyFailed = exitCode !== 0 && exitCode !== undefined;
   const status = statusOverride || (isActuallyFailed || signal != null ? "failed" : "completed");
 
-  if (isManuallyCanceled && status !== "failed") {
+  // Opt-in check for successful but empty output runs
+  if (
+    status === "completed" && 
+    !session.notifyOnExitEmptySuccess && 
+    !session.aggregated.trim()
+  ) {
     session.exitNotified = true;
     return;
   }
@@ -360,27 +361,15 @@ export function maybeNotifyOnExit(
   const deliveryContext = sessionAny.deliveryContext as DeliveryContext | undefined;
   const scopeKey = session.scopeKey;
 
-  let text = signal 
+  const text = signal 
     ? `Process exited with signal ${signal}` 
     : `Exec ${status} (exit code ${exitCode ?? 0})`;
 
   const cfg = loadConfig() || {};
   const cfgAny = cfg as unknown as Record<string, unknown>;
 
-  if (!scopeKey) {
-    enqueueSystemEvent(text, { 
-      sessionKey: sKey, 
-      contextKey, 
-      deliveryContext 
-    });
-
-    requestHeartbeatNow(
-      scopedHeartbeatWakeOptions(sKey, { reason: "exec-exit", coalesceMs: 0 })
-    );
-    return;
-  }
-
-  const agentId = normalizeAgentId(scopeKey);
+  // Resolve Routing logic to prevent Orphan Sessions
+  const agentId = normalizeAgentId(scopeKey || "");
   const mainSessionKey = resolveAgentMainSessionKey({ cfg, agentId });
 
   const allowFrom: string[] = 
@@ -396,16 +385,18 @@ export function maybeNotifyOnExit(
     resolveAgentMainSessionKey: () => mainSessionKey,
   });
 
+  // [P1] CRITICAL: Enqueue notification BEFORE waking the heartbeat
   enqueueSystemEvent(text, {
     sessionKey: finalSessionKey,
     contextKey,
     deliveryContext,
   });
 
+  // [P1] CRITICAL: Wake heartbeat AFTER the event is queued
   requestHeartbeatNow(
     scopedHeartbeatWakeOptions(finalSessionKey, { 
       reason: "exec-exit", 
-      coalesceMs: 0 
+      coalesMs: 0 
     })
   );
 }
