@@ -258,30 +258,31 @@ or overlapping changed hunks.
 The `CodeQL` workflow is intentionally a narrow first-pass security scanner,
 not the full repository sweep. Daily, manual, and non-draft pull request guard
 runs scan Actions workflow code plus the highest-risk JavaScript/TypeScript
-auth, secrets, sandbox, cron, and gateway surfaces with high-precision security
-queries under the `/codeql-critical-security/core-auth-secrets` category. The
+auth, secrets, sandbox, cron, and gateway surfaces with high-confidence security
+queries filtered to high/critical `security-severity` under the
+`/codeql-security-high/core-auth-secrets` category. The
 channel-runtime-boundary job separately scans core channel implementation
 contracts plus the channel plugin runtime, gateway, Plugin SDK, secrets, and
-audit touchpoints under the `/codeql-critical-security/channel-runtime-boundary`
+audit touchpoints under the `/codeql-security-high/channel-runtime-boundary`
 category so channel security signal can scale without broadening the baseline
 auth/secrets category. The network-ssrf-boundary job scans core SSRF, IP parsing,
 network guard, web-fetch, and Plugin SDK SSRF policy surfaces under the
-`/codeql-critical-security/network-ssrf-boundary` category so network trust
-boundary signal stays separate from the auth/secrets security baseline.
+`/codeql-security-high/network-ssrf-boundary` category so network trust boundary
+signal stays separate from the auth/secrets security baseline.
 The mcp-process-tool-boundary job scans MCP servers, process execution helpers,
 outbound delivery, and agent tool-execution gates under the
-`/codeql-critical-security/mcp-process-tool-boundary` category so command and
-tool boundary signal stays separate from both the auth/secrets baseline and
-the non-security MCP/process quality shard. The plugin-trust-boundary job scans
+`/codeql-security-high/mcp-process-tool-boundary` category so command and tool
+boundary signal stays separate from both the auth/secrets baseline and the
+non-security MCP/process quality shard. The plugin-trust-boundary job scans
 plugin install, loader, manifest, registry, runtime-dependency staging,
 source-loading, public-surface, and Plugin SDK package contract trust surfaces
-under the `/codeql-critical-security/plugin-trust-boundary` category so plugin
+under the `/codeql-security-high/plugin-trust-boundary` category so plugin
 supply-chain and runtime-loading signal stays separate from both bundled plugin
 implementation code and the non-security plugin quality shard.
 The pull request guard stays light: it only starts for changes under
 `.github/actions`, `.github/codeql`, `.github/workflows`, `packages`, or `src`,
-and it runs the same critical-security matrix as the scheduled workflow. Android,
-macOS, and non-security quality CodeQL stay out of PR defaults.
+and it runs the same high-confidence security matrix as the scheduled workflow.
+Android and macOS CodeQL stay out of PR defaults.
 
 The `CodeQL Android Critical Security` workflow is the scheduled Android
 security shard. It builds the Android app manually for CodeQL on the smallest
@@ -297,8 +298,11 @@ default workflow because the macOS build dominates runtime even when clean.
 The `CodeQL Critical Quality` workflow is the matching non-security shard. It
 runs only error-severity, non-security JavaScript/TypeScript quality queries
 over narrow high-value surfaces on the smaller Blacksmith Linux runner. Its
-manual dispatch accepts
-`profile=all|plugin-sdk-package-contract|plugin-sdk-reply-runtime|provider-runtime-boundary|session-diagnostics-boundary`;
+pull request guard is intentionally smaller than the scheduled profile: non-draft
+PRs only run the `plugin-boundary` and `plugin-sdk-package-contract` shards when
+plugin loader, Plugin SDK, package-contract, CodeQL config, or quality workflow
+files change. Its manual dispatch accepts
+`profile=all|plugin-boundary|plugin-sdk-package-contract|plugin-sdk-reply-runtime|provider-runtime-boundary|session-diagnostics-boundary`;
 the narrow profiles are teaching/iteration hooks for running one quality shard
 in isolation without dispatching the rest of the workflow.
 Its
