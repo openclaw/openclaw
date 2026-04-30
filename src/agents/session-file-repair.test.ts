@@ -98,9 +98,11 @@ describe("repairSessionFileIfNeeded", () => {
     expect(warn).toHaveBeenCalledTimes(1);
   });
 
-  it("rewrites persisted assistant messages with empty content arrays", async () => {
+  it("rewrites persisted assistant messages with empty content arrays (mid-transcript)", async () => {
+    // Poisoned assistant entry followed by a user turn: the rewrite must preserve the entry
+    // (with fallback text) because it is not a trailing assistant turn.
     const { file } = await createTempSessionPath();
-    const { header } = buildSessionHeaderAndMessage();
+    const { header, message } = buildSessionHeaderAndMessage();
     const poisonedAssistantEntry = {
       type: "message",
       id: "msg-2",
@@ -117,7 +119,8 @@ describe("repairSessionFileIfNeeded", () => {
         errorMessage: "transient stream failure",
       },
     };
-    const original = `${JSON.stringify(header)}\n${JSON.stringify(poisonedAssistantEntry)}\n`;
+    // header → poisoned assistant → user (not trailing)
+    const original = `${JSON.stringify(header)}\n${JSON.stringify(poisonedAssistantEntry)}\n${JSON.stringify(message)}\n`;
     await fs.writeFile(file, original, "utf-8");
 
     const warn = vi.fn();
@@ -127,18 +130,15 @@ describe("repairSessionFileIfNeeded", () => {
     expect(result.droppedLines).toBe(0);
     expect(result.rewrittenAssistantMessages).toBe(1);
     expect(result.backupPath).toBeTruthy();
-    // Warn message must omit the "dropped 0 malformed line(s)" noise when
-    // nothing was dropped; only the rewrite count is reported.
     expect(warn).toHaveBeenCalledTimes(1);
     const warnMessage = warn.mock.calls[0]?.[0] as string;
     expect(warnMessage).toContain("rewrote 1 assistant message(s)");
-    expect(warnMessage).not.toContain("dropped");
 
     const repaired = await fs.readFile(file, "utf-8");
     const repairedLines = repaired.trim().split("\n");
-    expect(repairedLines).toHaveLength(2);
+    expect(repairedLines).toHaveLength(3);
     const repairedEntry: { message: { content: { type: string; text: string }[] } } = JSON.parse(
-      repairedLines[1],
+      repairedLines[1] ?? "{}",
     );
     expect(repairedEntry.message.content).toEqual([
       { type: "text", text: "[assistant turn failed before producing content]" },
@@ -236,15 +236,12 @@ describe("repairSessionFileIfNeeded", () => {
     expect(warnMessage).toContain("rewrote 1 assistant message(s)");
   });
 
-  it("does not rewrite silent-reply turns (stopReason=stop, content=[]) on disk", async () => {
-    // Mirror of the in-memory replay-history test: a clean stop with no
-    // content is a legitimate silent reply (NO_REPLY token path). Repair
-    // must NOT permanently mutate it into a synthetic "[assistant turn
-    // failed before producing content]" entry — that would corrupt the
-    // historical transcript and replay fabricated failure text on every
-    // future provider request.
+  it("does not rewrite silent-reply turns (stopReason=stop) mid-transcript", async () => {
+    // A silent-reply assistant turn in the MIDDLE of a transcript (followed by a user turn)
+    // must not be mutated into the synthetic fallback text — that would corrupt historical
+    // replay. The trailing-assistant trim only applies when the entry is the LAST message.
     const { file } = await createTempSessionPath();
-    const { header } = buildSessionHeaderAndMessage();
+    const { header, message } = buildSessionHeaderAndMessage();
     const silentReplyEntry = {
       type: "message",
       id: "msg-2",
@@ -260,7 +257,8 @@ describe("repairSessionFileIfNeeded", () => {
         stopReason: "stop",
       },
     };
-    const original = `${JSON.stringify(header)}\n${JSON.stringify(silentReplyEntry)}\n`;
+    // header → silentReply → user → not a trailing assistant turn
+    const original = `${JSON.stringify(header)}\n${JSON.stringify(silentReplyEntry)}\n${JSON.stringify(message)}\n`;
     await fs.writeFile(file, original, "utf-8");
 
     const result = await repairSessionFileIfNeeded({ sessionFile: file });
@@ -271,9 +269,77 @@ describe("repairSessionFileIfNeeded", () => {
     expect(after).toBe(original);
   });
 
-  it("is a no-op on a session that was already repaired", async () => {
+  it("drops trailing assistant turns to prevent Anthropic 400 prefill rejection (#75271)", async () => {
+    // Regression for openclaw/openclaw#75271: a session that ends on role=assistant
+    // causes Anthropic to reject with HTTP 400 "does not support assistant message prefill".
+    // repairSessionFileIfNeeded must trim trailing assistant entries so the file ends
+    // on a user turn (or only the session header if no user turns survive).
     const { file } = await createTempSessionPath();
-    const { header } = buildSessionHeaderAndMessage();
+    const { header, message } = buildSessionHeaderAndMessage();
+    const assistantEntry = {
+      type: "message",
+      id: "msg-2",
+      parentId: null,
+      timestamp: new Date().toISOString(),
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Hello from assistant." }],
+        stopReason: "stop",
+      },
+    };
+    // header → user → assistant (trailing — should be dropped)
+    const original = `${JSON.stringify(header)}\n${JSON.stringify(message)}\n${JSON.stringify(assistantEntry)}\n`;
+    await fs.writeFile(file, original, "utf-8");
+
+    const warn = vi.fn();
+    const result = await repairSessionFileIfNeeded({ sessionFile: file, warn });
+
+    expect(result.repaired).toBe(true);
+    expect(result.droppedTrailingAssistantMessages).toBe(1);
+    expect(warn.mock.calls[0]?.[0]).toContain("dropped 1 trailing assistant message(s)");
+
+    const repaired = await fs.readFile(file, "utf-8");
+    const repairedLines = repaired.trim().split("\n");
+    // Only header + user message remain; trailing assistant is gone.
+    expect(repairedLines).toHaveLength(2);
+    expect(JSON.parse(repairedLines[1] ?? "{}").message?.role).toBe("user");
+  });
+
+  it("drops multiple consecutive trailing assistant turns", async () => {
+    const { file } = await createTempSessionPath();
+    const { header, message } = buildSessionHeaderAndMessage();
+    const makeAssistant = (id: string) => ({
+      type: "message",
+      id,
+      parentId: null,
+      timestamp: new Date().toISOString(),
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "reply" }],
+        stopReason: "stop",
+      },
+    });
+    const original =
+      [header, message, makeAssistant("a1"), makeAssistant("a2")]
+        .map((e) => JSON.stringify(e))
+        .join("\n") + "\n";
+    await fs.writeFile(file, original, "utf-8");
+
+    const result = await repairSessionFileIfNeeded({ sessionFile: file });
+
+    expect(result.repaired).toBe(true);
+    expect(result.droppedTrailingAssistantMessages).toBe(2);
+    const repaired = await fs.readFile(file, "utf-8");
+    const lines = repaired.trim().split("\n");
+    expect(lines).toHaveLength(2);
+    expect(JSON.parse(lines[1] ?? "{}").message?.role).toBe("user");
+  });
+
+  it("is a no-op on a session that was already repaired (healed assistant mid-transcript)", async () => {
+    // Idempotency check: after repair writes a healed assistant entry followed by a user turn,
+    // a second repair pass must produce no further changes.
+    const { file } = await createTempSessionPath();
+    const { header, message } = buildSessionHeaderAndMessage();
     const healedEntry = {
       type: "message",
       id: "msg-2",
@@ -289,7 +355,8 @@ describe("repairSessionFileIfNeeded", () => {
         stopReason: "error",
       },
     };
-    const original = `${JSON.stringify(header)}\n${JSON.stringify(healedEntry)}\n`;
+    // header → healed assistant → user (last entry is user, not assistant)
+    const original = `${JSON.stringify(header)}\n${JSON.stringify(healedEntry)}\n${JSON.stringify(message)}\n`;
     await fs.writeFile(file, original, "utf-8");
 
     const result = await repairSessionFileIfNeeded({ sessionFile: file });

@@ -8,6 +8,7 @@ type RepairReport = {
   rewrittenAssistantMessages?: number;
   droppedBlankUserMessages?: number;
   rewrittenUserMessages?: number;
+  droppedTrailingAssistantMessages?: number;
   backupPath?: string;
   reason?: string;
 };
@@ -118,11 +119,23 @@ function repairUserEntryWithBlankTextContent(entry: SessionMessageEntry): UserEn
   };
 }
 
+function isAssistantMessageEntry(entry: unknown): boolean {
+  if (!entry || typeof entry !== "object") {
+    return false;
+  }
+  const record = entry as { type?: unknown; message?: unknown };
+  if (record.type !== "message" || !record.message || typeof record.message !== "object") {
+    return false;
+  }
+  return (record.message as { role?: unknown }).role === "assistant";
+}
+
 function buildRepairSummaryParts(params: {
   droppedLines: number;
   rewrittenAssistantMessages: number;
   droppedBlankUserMessages: number;
   rewrittenUserMessages: number;
+  droppedTrailingAssistantMessages: number;
 }): string {
   const parts: string[] = [];
   if (params.droppedLines > 0) {
@@ -136,6 +149,9 @@ function buildRepairSummaryParts(params: {
   }
   if (params.rewrittenUserMessages > 0) {
     parts.push(`rewrote ${params.rewrittenUserMessages} user message(s)`);
+  }
+  if (params.droppedTrailingAssistantMessages > 0) {
+    parts.push(`dropped ${params.droppedTrailingAssistantMessages} trailing assistant message(s)`);
   }
   // Caller only invokes this once at least one counter is non-zero, so the
   // empty-array branch is unreachable in production. Kept for defensive output.
@@ -170,6 +186,7 @@ export async function repairSessionFileIfNeeded(params: {
   let rewrittenAssistantMessages = 0;
   let droppedBlankUserMessages = 0;
   let rewrittenUserMessages = 0;
+  let droppedTrailingAssistantMessages = 0;
 
   for (const line of lines) {
     if (!line.trim()) {
@@ -206,6 +223,16 @@ export async function repairSessionFileIfNeeded(params: {
     }
   }
 
+  // Trim trailing assistant turns: a session JSONL that ends on role=assistant
+  // causes Anthropic (and Anthropic-compatible) APIs to reject the request with
+  // HTTP 400 "This model does not support assistant message prefill" (#75271).
+  // Keep popping until the last message entry is a non-assistant turn. A lone
+  // session header after trimming is treated as empty — caught below.
+  while (entries.length > 0 && isAssistantMessageEntry(entries[entries.length - 1])) {
+    entries.pop();
+    droppedTrailingAssistantMessages += 1;
+  }
+
   if (entries.length === 0) {
     return { repaired: false, droppedLines, reason: "empty session file" };
   }
@@ -221,7 +248,8 @@ export async function repairSessionFileIfNeeded(params: {
     droppedLines === 0 &&
     rewrittenAssistantMessages === 0 &&
     droppedBlankUserMessages === 0 &&
-    rewrittenUserMessages === 0
+    rewrittenUserMessages === 0 &&
+    droppedTrailingAssistantMessages === 0
   ) {
     return { repaired: false, droppedLines: 0 };
   }
@@ -256,6 +284,7 @@ export async function repairSessionFileIfNeeded(params: {
       rewrittenAssistantMessages,
       droppedBlankUserMessages,
       rewrittenUserMessages,
+      droppedTrailingAssistantMessages,
       reason: `repair failed: ${err instanceof Error ? err.message : "unknown error"}`,
     };
   }
@@ -266,6 +295,7 @@ export async function repairSessionFileIfNeeded(params: {
       rewrittenAssistantMessages,
       droppedBlankUserMessages,
       rewrittenUserMessages,
+      droppedTrailingAssistantMessages,
     })} (${path.basename(sessionFile)})`,
   );
   return {
@@ -274,6 +304,7 @@ export async function repairSessionFileIfNeeded(params: {
     rewrittenAssistantMessages,
     droppedBlankUserMessages,
     rewrittenUserMessages,
+    droppedTrailingAssistantMessages,
     backupPath,
   };
 }
