@@ -362,6 +362,44 @@ describe("modelsStatusCommand auth overview", () => {
     ).toBe(true);
   });
 
+  it("loads auth status with config-derived external CLI scope", async () => {
+    const localRuntime = createRuntime();
+    const originalLoadConfig = mocks.loadConfig.getMockImplementation();
+    mocks.ensureAuthProfileStore.mockClear();
+    mocks.loadConfig.mockReturnValue({
+      auth: {
+        profiles: {
+          "openai-codex:default": { provider: "openai-codex", mode: "oauth" },
+        },
+      },
+      agents: {
+        defaults: {
+          model: { primary: "openai-codex/gpt-5.4", fallbacks: [] },
+        },
+      },
+      models: { providers: {} },
+      env: { shellEnv: { enabled: true } },
+    });
+
+    try {
+      await modelsStatusCommand({ json: true }, localRuntime as never);
+
+      expect(mocks.ensureAuthProfileStore).toHaveBeenCalledWith(
+        "/tmp/openclaw-agent",
+        expect.objectContaining({
+          allowKeychainPrompt: false,
+          config: expect.any(Object),
+          externalCliProviderIds: expect.arrayContaining(["openai-codex"]),
+          externalCliProfileIds: ["openai-codex:default"],
+        }),
+      );
+    } finally {
+      if (originalLoadConfig) {
+        mocks.loadConfig.mockImplementation(originalLoadConfig);
+      }
+    }
+  });
+
   it("uses agent overrides and reports sources", async () => {
     const localRuntime = createRuntime();
     await withAgentScopeOverrides(

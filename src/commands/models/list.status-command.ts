@@ -12,8 +12,9 @@ import {
   DEFAULT_OAUTH_WARN_MS,
   formatRemainingShort,
 } from "../../agents/auth-health.js";
+import { resolveExternalCliAuthScopeFromConfig } from "../../agents/auth-profiles/external-cli-scope.js";
 import { resolveAuthStorePathForDisplay } from "../../agents/auth-profiles/paths.js";
-import { ensureAuthProfileStoreWithoutExternalProfiles as ensureAuthProfileStore } from "../../agents/auth-profiles/store.js";
+import { ensureAuthProfileStore } from "../../agents/auth-profiles/store.js";
 import type { AuthProfileCredential } from "../../agents/auth-profiles/types.js";
 import { resolveProfileUnusableUntilForDisplay } from "../../agents/auth-profiles/usage.js";
 import {
@@ -220,7 +221,13 @@ export async function modelsStatusCommand(
   );
   const allowed = Object.keys(cfg.agents?.defaults?.models ?? {});
 
-  const store = ensureAuthProfileStore(agentDir);
+  const externalCliAuthScope = resolveExternalCliAuthScopeFromConfig(resolvedConfig);
+  const store = ensureAuthProfileStore(agentDir, {
+    allowKeychainPrompt: false,
+    config: resolvedConfig,
+    externalCliProviderIds: externalCliAuthScope?.providerIds,
+    externalCliProfileIds: externalCliAuthScope?.profileIds,
+  });
   const modelsPath = path.join(agentDir, "models.json");
 
   const providersFromStore = new Set(
