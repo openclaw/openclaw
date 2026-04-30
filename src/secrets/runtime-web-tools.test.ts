@@ -416,6 +416,23 @@ describe("runtime web tools resolution", () => {
     expect(resolvePluginWebFetchProvidersMock).not.toHaveBeenCalled();
   });
 
+  it("skips fetch provider discovery when tools.web.fetch.enabled is false", async () => {
+    const { metadata } = await runRuntimeWebTools({
+      config: asConfig({
+        tools: {
+          web: {
+            fetch: { enabled: false },
+          },
+        },
+      }),
+    });
+
+    expect(metadata.fetch.providerSource).toBe("none");
+    expect(metadata.fetch.selectedProvider).toBeUndefined();
+    expect(resolveBundledWebFetchProvidersFromPublicArtifactsMock).not.toHaveBeenCalled();
+    expect(resolvePluginWebFetchProvidersMock).not.toHaveBeenCalled();
+  });
+
   it("auto-selects a keyless provider when no credentials are configured", async () => {
     const { metadata } = await runRuntimeWebTools({
       config: asConfig({

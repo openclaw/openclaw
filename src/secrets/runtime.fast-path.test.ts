@@ -72,6 +72,26 @@ describe("secrets runtime fast path", () => {
     ]);
   });
 
+  it("uses the fast path when tools.web.fetch is present but explicitly disabled", async () => {
+    const { prepareSecretsRuntimeSnapshot } = await import("./runtime.js");
+
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        tools: {
+          web: {
+            fetch: { enabled: false },
+          },
+        },
+      }),
+      env: {},
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: emptyAuthStore,
+    });
+
+    expect(runtimePrepareImportMock).not.toHaveBeenCalled();
+    expect(snapshot).toBeDefined();
+  });
+
   it("uses the resolver path when an auth profile store contains a SecretRef", async () => {
     const { prepareSecretsRuntimeSnapshot } = await import("./runtime.js");
 

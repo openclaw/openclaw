@@ -199,8 +199,17 @@ function createEmptyRuntimeWebToolsMetadata(): RuntimeWebToolsMetadata {
 
 function hasRuntimeWebToolConfigSurface(config: OpenClawConfig): boolean {
   const web = config.tools?.web;
-  if (web && typeof web === "object" && ("search" in web || "fetch" in web || "x_search" in web)) {
-    return true;
+  if (web && typeof web === "object") {
+    const webRecord = web as Record<string, unknown>;
+    const fetchEntry = webRecord.fetch;
+    const fetchEnabled =
+      !fetchEntry ||
+      typeof fetchEntry !== "object" ||
+      Array.isArray(fetchEntry) ||
+      (fetchEntry as Record<string, unknown>).enabled !== false;
+    if ("search" in web || "x_search" in web || ("fetch" in web && fetchEnabled)) {
+      return true;
+    }
   }
   const entries = config.plugins?.entries;
   if (!entries || typeof entries !== "object" || Array.isArray(entries)) {
