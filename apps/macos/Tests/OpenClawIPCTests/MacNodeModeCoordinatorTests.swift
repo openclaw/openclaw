@@ -48,7 +48,7 @@ struct MacNodeModeCoordinatorTests {
         #expect(MacNodeModeCoordinator.shouldAutoRepairStaleTLSPin(url: url, failure: failure))
     }
 
-    @Test func `auto repairs trusted public host pin mismatch`() throws {
+    @Test func `does not auto repair trusted public host without opt in`() throws {
         let url = try #require(URL(string: "wss://gateway.example.com"))
         let failure = GatewayTLSValidationFailure(
             kind: .pinMismatch,
@@ -58,10 +58,26 @@ struct MacNodeModeCoordinatorTests {
             observedFingerprint: "new",
             systemTrustOk: true)
 
-        #expect(MacNodeModeCoordinator.shouldAutoRepairStaleTLSPin(url: url, failure: failure))
+        #expect(!MacNodeModeCoordinator.shouldAutoRepairStaleTLSPin(url: url, failure: failure))
     }
 
-    @Test func `does not auto repair untrusted remote pin mismatch`() throws {
+    @Test func `auto repairs trusted public host when opt in is enabled`() throws {
+        let url = try #require(URL(string: "wss://gateway.example.com"))
+        let failure = GatewayTLSValidationFailure(
+            kind: .pinMismatch,
+            host: "gateway.example.com",
+            storeKey: "gateway.example.com:443",
+            expectedFingerprint: "old",
+            observedFingerprint: "new",
+            systemTrustOk: true)
+
+        #expect(MacNodeModeCoordinator.shouldAutoRepairStaleTLSPin(
+            url: url,
+            failure: failure,
+            allowSystemTrustedFallback: true))
+    }
+
+    @Test func `does not auto repair untrusted remote pin mismatch even with opt in`() throws {
         let url = try #require(URL(string: "wss://gateway.example.com"))
         let failure = GatewayTLSValidationFailure(
             kind: .pinMismatch,
@@ -71,7 +87,10 @@ struct MacNodeModeCoordinatorTests {
             observedFingerprint: "new",
             systemTrustOk: false)
 
-        #expect(!MacNodeModeCoordinator.shouldAutoRepairStaleTLSPin(url: url, failure: failure))
+        #expect(!MacNodeModeCoordinator.shouldAutoRepairStaleTLSPin(
+            url: url,
+            failure: failure,
+            allowSystemTrustedFallback: true))
     }
 
     @Test func `auto repairs trusted loopback pin mismatch`() throws {

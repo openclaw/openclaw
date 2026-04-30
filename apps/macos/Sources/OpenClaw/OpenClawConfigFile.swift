@@ -184,6 +184,21 @@ enum OpenClawConfigFile {
         return remote["password"] as? String
     }
 
+    /// When true, the macOS companion may auto-replace a stale gateway TLS pin for any
+    /// `wss://` host whose new certificate chain still validates against the system trust
+    /// store. Off by default because system trust accepts admin/MDM/user-installed roots,
+    /// which would weaken pinning against the local MitM cases the pin is meant to catch.
+    /// Operators who run a rotating public gateway (e.g. ACME-issued cert) can opt in.
+    static func gatewayAllowSystemTrustedPinRepair() -> Bool {
+        let root = self.loadDict()
+        guard let gateway = root["gateway"] as? [String: Any],
+              let remote = gateway["remote"] as? [String: Any]
+        else {
+            return false
+        }
+        return remote["allowSystemTrustedPinRepair"] as? Bool ?? false
+    }
+
     static func gatewayPort() -> Int? {
         let root = self.loadDict()
         guard let gateway = root["gateway"] as? [String: Any] else { return nil }

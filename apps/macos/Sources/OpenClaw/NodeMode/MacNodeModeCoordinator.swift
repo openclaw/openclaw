@@ -201,24 +201,43 @@ final class MacNodeModeCoordinator {
         return "\(host):\(port)"
     }
 
-    nonisolated static func shouldAutoRepairStaleTLSPin(url: URL, failure: GatewayTLSValidationFailure) -> Bool {
+    nonisolated static func shouldAutoRepairStaleTLSPin(
+        url: URL,
+        failure: GatewayTLSValidationFailure,
+        allowSystemTrustedFallback: Bool = false) -> Bool
+    {
         guard failure.kind == .pinMismatch else { return false }
         guard url.scheme?.lowercased() == "wss" else { return false }
         guard failure.storeKey == nil || failure.storeKey == self.tlsPinStoreKey(for: url) else { return false }
-        let host = url.host?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard !host.isEmpty else { return false }
+        guard let host = url.host?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(), !host.isEmpty
+        else { return false }
 
-        // System trust is the primary defense against MitM; the pin is a secondary check.
-        // When the new cert chain is still system-trusted, a pin mismatch is overwhelmingly
-        // a legitimate cert rotation (e.g. Tailscale Serve, ACME-issued public gateways) and
-        // the companion app must not be left looping on a stale pin. Self-signed / private
-        // CA scenarios still take the strict path because systemTrustOk is false there.
-        return failure.systemTrustOk
+        if LoopbackHost.isLoopback(host) {
+            return failure.systemTrustOk
+        }
+
+        // Tailscale Serve uses publicly trusted, rotating certificates for *.ts.net names.
+        // A stale legacy leaf pin should not leave the companion app half-connected forever.
+        if host == "ts.net" || host.hasSuffix(".ts.net") {
+            return failure.systemTrustOk
+        }
+
+        // For arbitrary remote hosts, system trust alone is not a safe replacement signal:
+        // SecTrustEvaluateWithError also accepts MDM-/admin-/user-installed roots and local
+        // interception roots, so silent self-heal would weaken the pin against exactly the
+        // MitM cases pinning is meant to catch. Operators running rotating public gateways
+        // (e.g. ACME-issued certs) can opt in via `gateway.remote.allowSystemTrustedPinRepair`
+        // to accept the trade-off explicitly.
+        return allowSystemTrustedFallback && failure.systemTrustOk
     }
 
     private func autoRepairStaleTLSPinIfNeeded(error: Error, url: URL?) async -> Bool {
         guard let tlsError = error as? GatewayTLSValidationError, let url else { return false }
-        guard Self.shouldAutoRepairStaleTLSPin(url: url, failure: tlsError.failure) else { return false }
+        let allowSystemTrustedFallback = OpenClawConfigFile.gatewayAllowSystemTrustedPinRepair()
+        guard Self.shouldAutoRepairStaleTLSPin(
+            url: url,
+            failure: tlsError.failure,
+            allowSystemTrustedFallback: allowSystemTrustedFallback) else { return false }
         let storeKey = tlsError.failure.storeKey ?? Self.tlsPinStoreKey(for: url)
         guard let observedFingerprint = tlsError.failure.observedFingerprint else { return false }
         guard self.autoRepairedTLSFingerprintsByStoreKey[storeKey] != observedFingerprint else { return false }
