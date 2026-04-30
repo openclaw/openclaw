@@ -1,5 +1,4 @@
-import { readErrorName } from "../infra/errors.js";
-import { redactSensitiveText } from "../logging/redact.js";
+import { formatErrorMessage, readErrorName } from "../infra/errors.js";
 import {
   classifyFailoverSignal,
   inferSignalStatus,
@@ -211,7 +210,7 @@ export function collectErrorChainMessages(err: unknown, options?: { redact?: boo
 
     const direct = readDirectErrorMessage(e);
     if (direct) {
-      const value = options?.redact === false ? direct : redactSensitiveText(direct);
+      const value = options?.redact === false ? direct : formatErrorMessage(direct);
       if (value) {
         out.push(value);
       }
