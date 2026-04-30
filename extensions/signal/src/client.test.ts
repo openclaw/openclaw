@@ -202,6 +202,31 @@ describe("streamSignalEvents", () => {
     expect(events).toEqual([{ id: "42", event: "message", data: '{"group":true}' }]);
   });
 
+  it("does not apply the RPC default deadline to event streams", async () => {
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const events: Array<import("./client.js").SignalSseEvent> = [];
+    let armedDefaultDeadline = false;
+    const baseUrl = await withSignalServer((req, res) => {
+      expect(req.url).toBe("/api/v1/events");
+      expect(req.headers.accept).toBe("text/event-stream");
+      res.writeHead(200, { "Content-Type": "text/event-stream" });
+      res.end('event: receive\ndata: {"message":"ping"}\n\n');
+    });
+
+    try {
+      await streamSignalEvents({
+        baseUrl,
+        onEvent: (event) => events.push(event),
+      });
+      armedDefaultDeadline = setTimeoutSpy.mock.calls.some(([, delay]) => delay === 10_000);
+    } finally {
+      setTimeoutSpy.mockRestore();
+    }
+
+    expect(events).toEqual([{ event: "receive", data: '{"message":"ping"}' }]);
+    expect(armedDefaultDeadline).toBe(false);
+  });
+
   it("reports HTTP status failures from the event stream", async () => {
     const baseUrl = await withSignalServer((_req, res) => {
       res.writeHead(503, "Unavailable");
@@ -216,7 +241,7 @@ describe("streamSignalEvents", () => {
     ).rejects.toThrow("Signal SSE failed (503 Unavailable)");
   });
 
-  it("rejects event streams that do not send headers before the deadline", async () => {
+  it("honors explicit event stream deadlines before response headers arrive", async () => {
     const baseUrl = await withSignalServer(() => {
       // Leave the request open without response headers.
     });
