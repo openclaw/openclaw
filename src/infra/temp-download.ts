@@ -7,9 +7,9 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 
 const logger = createSubsystemLogger("infra:temp-download");
 
-const logger = createSubsystemLogger("infra:temp-download");
-
 export { resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir.js";
+
+const logger = createSubsystemLogger("infra:temp-download");
 
 export type TempDownloadTarget = {
   dir: string;

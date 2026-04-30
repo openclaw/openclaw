@@ -786,32 +786,9 @@ function appendHeartbeatWorkspacePathHint(prompt: string, workspaceDir: string):
 }
 
 function stripHeartbeatTasksBlock(content: string): string {
-  const lines = content.split(/\r?\n/);
-  const kept: string[] = [];
-  let inTasksBlock = false;
-
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (!inTasksBlock && trimmed === "tasks:") {
-      inTasksBlock = true;
-      continue;
-    }
-
-    if (inTasksBlock) {
-      if (!trimmed) {
-        continue;
-      }
-      const isIndented = /^[\s]/.test(line);
-      if (isIndented || trimmed.startsWith("- name:")) {
-        continue;
-      }
-      inTasksBlock = false;
-    }
-
-    kept.push(line);
-  }
-
-  return kept.join("\n");
+  // Replace the tasks: block (including indented task entries, unindented list items, and blank lines within the block)
+  // until the first line that doesn't start with whitespace or a list marker (-).
+  return content.replace(/^tasks:(?:\r?\n(?:[ \t-].*|$))*/m, "");
 }
 
 function resolveHeartbeatRunPrompt(params: {

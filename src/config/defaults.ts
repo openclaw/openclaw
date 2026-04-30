@@ -1,16 +1,16 @@
 import { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
 import { normalizeProviderId } from "../agents/provider-id.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { DEFAULT_AGENT_MAX_CONCURRENT, DEFAULT_SUBAGENT_MAX_CONCURRENT } from "./agent-limits.js";
 import {
   applyProviderConfigDefaultsForConfig,
   normalizeProviderConfigForConfigDefaults,
 } from "./provider-policy.js";
 import { normalizeTalkConfig } from "./talk.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
-
-const logger = createSubsystemLogger("config:defaults");
 import type { ModelDefinitionConfig } from "./types.models.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
+
+const log = createSubsystemLogger("config/defaults");
 
 type WarnState = { warned: boolean };
 
@@ -117,7 +117,7 @@ export function applySessionDefaults(
   }
 
   const trimmed = session.mainKey.trim();
-  const warn = options.warn ?? ((message: string) => logger.warn(message));
+  const warn = options.warn ?? ((message: string) => log.warn(message));
   const warnState = options.warnState ?? defaultWarnState;
 
   const next: OpenClawConfig = {

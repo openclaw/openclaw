@@ -1,4 +1,5 @@
 import process from "node:process";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { restoreTerminalState } from "../terminal/restore.js";
 import {
@@ -8,9 +9,8 @@ import {
   readErrorName,
 } from "./errors.js";
 import { runFatalErrorHooks } from "./fatal-error-hooks.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
 
-const logger = createSubsystemLogger("infra:runtime");
+const log = createSubsystemLogger("infra:unhandled-rejections");
 
 type UnhandledRejectionHandler = (reason: unknown) => boolean;
 type UncaughtExceptionHandler = (error: unknown) => boolean;
@@ -401,7 +401,10 @@ export function isUnhandledRejectionHandled(reason: unknown): boolean {
         return true;
       }
     } catch (err) {
-      logger.error("Unhandled rejection handler failed", { error: err });
+      log.error(
+        "Unhandled rejection handler failed:",
+        formatUncaughtError(err),
+      );
     }
   }
   return false;
@@ -421,7 +424,10 @@ export function isUncaughtExceptionHandled(error: unknown): boolean {
         return true;
       }
     } catch (err) {
-      logger.error("Uncaught exception handler failed", { error: err });
+      log.error(
+        "Uncaught exception handler failed:",
+        formatUncaughtError(err),
+      );
     }
   }
   return false;
@@ -430,7 +436,7 @@ export function isUncaughtExceptionHandled(error: unknown): boolean {
 export function installUnhandledRejectionHandler(): void {
   const exitWithTerminalRestore = (reason: string, error?: unknown, hookReason = reason) => {
     for (const message of runFatalErrorHooks({ reason: hookReason, error })) {
-      logger.error(message, { reason: hookReason, error });
+      log.error(message, { reason: hookReason, error });
     }
     restoreTerminalState(reason, { resumeStdinIfPaused: false });
     process.exit(1);
@@ -444,28 +450,28 @@ export function installUnhandledRejectionHandler(): void {
     // AbortError is typically an intentional cancellation (e.g., during shutdown)
     // Log it but don't crash - these are expected during graceful shutdown
     if (isAbortError(reason)) {
-      logger.warn("Suppressed AbortError", { error: reason });
+      log.warn("Suppressed AbortError:", formatUncaughtError(reason));
       return;
     }
 
     if (isFatalError(reason)) {
-      logger.error("FATAL unhandled rejection", { error: reason });
+      log.error("FATAL unhandled rejection", { error: reason });
       exitWithTerminalRestore("fatal unhandled rejection", reason, "fatal_unhandled_rejection");
       return;
     }
 
     if (isConfigError(reason)) {
-      logger.error("CONFIGURATION ERROR - requires fix", { error: reason });
+      log.error("CONFIGURATION ERROR - requires fix", { error: reason });
       exitWithTerminalRestore("configuration error", reason, "configuration_error");
       return;
     }
 
     if (isTransientUnhandledRejectionError(reason)) {
-      logger.warn("Non-fatal unhandled rejection (continuing)", { error: reason });
+      log.warn("Non-fatal unhandled rejection (continuing):", formatUncaughtError(reason));
       return;
     }
 
-    logger.error("Unhandled promise rejection", { error: reason });
+    log.error("Unhandled promise rejection", { error: reason });
     exitWithTerminalRestore("unhandled rejection", reason, "unhandled_rejection");
   });
 }

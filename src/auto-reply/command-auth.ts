@@ -6,21 +6,21 @@ import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import { normalizeAnyChannelId } from "../channels/registry.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
 import { normalizeStringEntries } from "../shared/string-normalization.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
   isInternalMessageChannel,
   normalizeMessageChannel,
 } from "../utils/message-channel.js";
-
-const logger = createSubsystemLogger("auto-reply:command-auth");
 import type { MsgContext } from "./templating.js";
+
+const log = createSubsystemLogger("auto-reply:command-auth");
 
 export type CommandAuthorization = {
   providerId?: ChannelId;
@@ -206,7 +206,7 @@ function resolveProviderAllowFrom(params: {
       };
     }
     if (!Array.isArray(allowFrom)) {
-      logger.warn(
+      log.warn(
         `resolveAllowFrom returned an invalid allowFrom for provider "${providerId}", falling back to config allowFrom`,
         { providerId, result: "invalid_result" },
       );
@@ -220,7 +220,7 @@ function resolveProviderAllowFrom(params: {
       hadResolutionError: false,
     };
   } catch (err) {
-    logger.warn(
+    log.warn(
       `resolveAllowFrom threw for provider "${providerId}", falling back to config allowFrom`,
       { providerId, error: describeAllowFromResolutionError(err) },
     );

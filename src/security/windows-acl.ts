@@ -5,9 +5,9 @@ import { runExec } from "../process/exec.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 
-const log = createSubsystemLogger("security/windows-acl");
-
 export type ExecFn = typeof runExec;
+
+const log = createSubsystemLogger("security/windows-acl");
 
 export type WindowsAclEntry = {
   principal: string;

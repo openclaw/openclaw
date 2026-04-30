@@ -31,15 +31,15 @@ function hasExplicitHeartbeatAgents(cfg: OpenClawConfig) {
 
 export function isHeartbeatEnabledForAgent(cfg: OpenClawConfig, agentId?: string): boolean {
   const resolvedAgentId = normalizeAgentId(agentId ?? resolveDefaultAgentId(cfg));
+  if (cfg.agents?.defaults?.heartbeat) {
+    return true;
+  }
   const list = cfg.agents?.list ?? [];
   const hasExplicit = hasExplicitHeartbeatAgents(cfg);
   if (hasExplicit) {
     return list.some(
       (entry) => Boolean(entry?.heartbeat) && normalizeAgentId(entry?.id) === resolvedAgentId,
     );
-  }
-  if (cfg.agents?.defaults?.heartbeat) {
-    return true;
   }
   return resolvedAgentId === resolveDefaultAgentId(cfg);
 }
