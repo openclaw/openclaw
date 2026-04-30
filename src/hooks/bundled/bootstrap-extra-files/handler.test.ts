@@ -146,10 +146,11 @@ describe("bootstrap-extra-files hook", () => {
         [sessionKey]: ["sessions/zeus-dev/ZEUS.md"],
       },
     });
+    const nonMatchingSessionKey = "agent:main:whatsapp:group:456";
     const nonMatchingContext = await createBootstrapContext({
       workspaceDir: tempDir,
       cfg,
-      sessionKey: "agent:main:whatsapp:group:456",
+      sessionKey: nonMatchingSessionKey,
       rootFiles: [{ name: "AGENTS.md", content: "root agents" }],
     });
     const matchingContext = await createBootstrapContext({
@@ -162,7 +163,7 @@ describe("bootstrap-extra-files hook", () => {
     const nonMatchingEvent = createHookEvent(
       "agent",
       "bootstrap",
-      nonMatchingContext.sessionKey,
+      nonMatchingSessionKey,
       nonMatchingContext,
     );
     const matchingEvent = createHookEvent("agent", "bootstrap", sessionKey, matchingContext);
