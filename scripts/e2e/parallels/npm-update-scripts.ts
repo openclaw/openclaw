@@ -184,10 +184,45 @@ ${input.auth.apiKeyEnv}=${shellQuote(input.auth.apiKeyValue)} openclaw agent --l
 }
 
 function posixVersionCheck(command: string, expectedNeedle: string): string {
+  const quotedNeedle = shellQuote(expectedNeedle);
   if (!expectedNeedle) {
-    return `${command} --version`;
+    return `hash -r || true
+version_deadline=$((SECONDS + 60))
+while true; do
+  set +e
+  version="$(${command} --version 2>&1)"
+  version_status=$?
+  set -e
+  printf '%s\\n' "$version"
+  if [ "$version_status" -eq 0 ]; then
+    break
+  fi
+  if [ "$SECONDS" -ge "$version_deadline" ]; then
+    exit "$version_status"
+  fi
+  sleep 2
+done`;
   }
-  return `version="$(${command} --version)"; printf '%s\\n' "$version"; case "$version" in *${shellQuote(expectedNeedle)}*) ;; *) echo "version mismatch: expected ${expectedNeedle}" >&2; exit 1 ;; esac`;
+  return `hash -r || true
+version_deadline=$((SECONDS + 60))
+while true; do
+  set +e
+  version="$(${command} --version 2>&1)"
+  version_status=$?
+  set -e
+  printf '%s\\n' "$version"
+  if [ "$version_status" -eq 0 ]; then
+    case "$version" in *${quotedNeedle}*) break ;; esac
+  fi
+  if [ "$SECONDS" -ge "$version_deadline" ]; then
+    if [ "$version_status" -ne 0 ]; then
+      exit "$version_status"
+    fi
+    echo "version mismatch: expected ${expectedNeedle}" >&2
+    exit 1
+  fi
+  sleep 2
+done`;
 }
 
 function windowsVersionCheck(expectedNeedle: string): string {
