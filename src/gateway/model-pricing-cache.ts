@@ -30,7 +30,9 @@ import {
   clearGatewayModelPricingCacheState,
   getCachedGatewayModelPricing,
   getGatewayModelPricingCacheMeta as getGatewayModelPricingCacheMetaState,
+  loadPricingCacheFromDisk,
   replaceGatewayModelPricingCache,
+  savePricingCacheToDisk,
   type CachedModelPricing,
   type CachedPricingTier,
 } from "./model-pricing-cache-state.js";
@@ -1238,7 +1240,13 @@ export async function refreshGatewayModelPricingCache(params: {
       }
     }
 
-    replaceGatewayModelPricingCache(nextPricing);
+    const nowCachedAt = Date.now();
+    replaceGatewayModelPricingCache(nextPricing, nowCachedAt);
+    // Persist to disk asynchronously — non-blocking, non-fatal.
+    if (!openRouterFailed && !litellmFailed) {
+      void savePricingCacheToDisk("openrouter", nextPricing, nowCachedAt).catch(() => {});
+      void savePricingCacheToDisk("litellm", nextPricing, nowCachedAt).catch(() => {});
+    }
     scheduleRefresh({ config: params.config, fetchImpl });
   })();
 
@@ -1247,6 +1255,50 @@ export async function refreshGatewayModelPricingCache(params: {
   } finally {
     inFlightRefresh = null;
   }
+}
+
+async function warmFromDiskCacheIfFresh(params: {
+  config: OpenClawConfig;
+  fetchImpl: typeof fetch;
+}): Promise<boolean> {
+  const now = Date.now();
+  const [openrouterCache, litellmCache] = await Promise.all([
+    loadPricingCacheFromDisk("openrouter"),
+    loadPricingCacheFromDisk("litellm"),
+  ]);
+  const openrouterFresh =
+    openrouterCache !== null && now - openrouterCache.cachedAt < CACHE_TTL_MS;
+  const litellmFresh = litellmCache !== null && now - litellmCache.cachedAt < CACHE_TTL_MS;
+  if (!openrouterFresh && !litellmFresh) {
+    return false;
+  }
+  // At least one source has a fresh cache — merge and populate in-memory state.
+  const merged = new Map<string, CachedModelPricing>();
+  if (openrouterFresh && openrouterCache) {
+    for (const [key, pricing] of openrouterCache.pricing) {
+      merged.set(key, pricing);
+    }
+  }
+  if (litellmFresh && litellmCache) {
+    for (const [key, pricing] of litellmCache.pricing) {
+      // Prefer openrouter for flat pricing unless litellm has tiered data.
+      const existing = merged.get(key);
+      if (existing && pricing.tieredPricing) {
+        merged.set(key, { ...existing, tieredPricing: pricing.tieredPricing });
+      } else if (!existing) {
+        merged.set(key, pricing);
+      }
+    }
+  }
+  const earliestCachedAt = Math.min(
+    openrouterFresh && openrouterCache ? openrouterCache.cachedAt : Infinity,
+    litellmFresh && litellmCache ? litellmCache.cachedAt : Infinity,
+  );
+  replaceGatewayModelPricingCache(merged, earliestCachedAt);
+  log.info(
+    `pricing: loaded ${merged.size} entries from disk cache (age ${Math.round((now - earliestCachedAt) / 60_000)}min)`,
+  );
+  return true;
 }
 
 export function startGatewayModelPricingRefresh(params: {
@@ -1260,13 +1312,33 @@ export function startGatewayModelPricingRefresh(params: {
     return () => {};
   }
   let stopped = false;
-  queueMicrotask(() => {
+  const fetchImpl = params.fetchImpl ?? fetch;
+  void (async () => {
     if (stopped) {
       return;
     }
+    // Attempt to warm from disk cache first. If cache is fresh, skip live fetch
+    // and schedule a background refresh for when the cache expires.
+    const warmedFromDisk = await warmFromDiskCacheIfFresh({ config: params.config, fetchImpl });
+    if (stopped) {
+      return;
+    }
+    if (warmedFromDisk) {
+      // Schedule the next live refresh at the remaining TTL window.
+      scheduleRefresh({ config: params.config, fetchImpl });
+      return;
+    }
+    // No fresh disk cache — proceed with live fetch as normal.
     void refreshGatewayModelPricingCache(params).catch((error: unknown) => {
       log.warn(`pricing bootstrap failed: ${String(error)}`);
     });
+  })().catch((error: unknown) => {
+    log.warn(`pricing disk cache warm failed: ${String(error)}`);
+    if (!stopped) {
+      void refreshGatewayModelPricingCache(params).catch((e: unknown) => {
+        log.warn(`pricing bootstrap fallback failed: ${String(e)}`);
+      });
+    }
   });
   return () => {
     stopped = true;
