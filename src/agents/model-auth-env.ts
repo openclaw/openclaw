@@ -132,7 +132,10 @@ export function resolveEnvApiKey(
     }
   }
 
-  const authEvidence = resolveAuthEvidence(authEvidenceMap[normalized], env);
+  const evidence = Object.hasOwn(authEvidenceMap, normalized)
+    ? authEvidenceMap[normalized]
+    : undefined;
+  const authEvidence = resolveAuthEvidence(evidence, env);
   if (authEvidence) {
     return authEvidence;
   }

@@ -3,6 +3,7 @@ import {
   evaluateSupplementalContextVisibility,
   resolveChannelContextVisibilityMode,
 } from "openclaw/plugin-sdk/context-visibility-runtime";
+import { hasFinalInboundReplyDispatch } from "openclaw/plugin-sdk/inbound-reply-dispatch";
 import type { GetReplyOptions } from "openclaw/plugin-sdk/reply-runtime";
 import {
   loadSessionStore,
@@ -1963,7 +1964,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       if (isRoom && triggerSnapshot) {
         roomHistoryTracker.consumeHistory(_route.agentId, roomId, triggerSnapshot, _messageId);
       }
-      if (!queuedFinal) {
+      if (!hasFinalInboundReplyDispatch({ queuedFinal, counts })) {
         await commitInboundEventIfClaimed();
         return;
       }

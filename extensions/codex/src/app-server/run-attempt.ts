@@ -193,6 +193,9 @@ function createCodexSteeringQueue(params: {
         void flushBatch();
       }, debounceMs);
     },
+    async flushPending() {
+      await flushBatch();
+    },
     cancel() {
       clearBatchTimer();
       batchedTexts = [];
@@ -453,6 +456,7 @@ export async function runCodexAppServerAttempt(
   let turnId: string | undefined;
   const pendingNotifications: CodexServerNotification[] = [];
   let userInputBridge: ReturnType<typeof createCodexUserInputBridge> | undefined;
+  let steeringQueue: ReturnType<typeof createCodexSteeringQueue> | undefined;
   let completed = false;
   let timedOut = false;
   let turnCompletionIdleTimedOut = false;
@@ -586,6 +590,9 @@ export async function runCodexAppServerAttempt(
       });
     } finally {
       if (isTurnCompletion) {
+        if (!timedOut && !runAbortController.signal.aborted) {
+          await steeringQueue?.flushPending();
+        }
         completed = true;
         clearTurnCompletionIdleTimer();
         resolveCompletion?.();
@@ -814,17 +821,18 @@ export async function runCodexAppServerAttempt(
     });
   }
 
-  const steeringQueue = createCodexSteeringQueue({
+  const activeSteeringQueue = createCodexSteeringQueue({
     client,
     threadId: thread.threadId,
     turnId: activeTurnId,
     answerPendingUserInput: (text) => userInputBridge?.handleQueuedMessage(text) ?? false,
     signal: runAbortController.signal,
   });
+  steeringQueue = activeSteeringQueue;
   const handle = {
     kind: "embedded" as const,
     queueMessage: async (text: string, options?: CodexSteeringQueueOptions) =>
-      steeringQueue.queue(text, options),
+      activeSteeringQueue.queue(text, options),
     isStreaming: () => !completed,
     isCompacting: () => projector?.isCompacting() ?? false,
     cancel: () => runAbortController.abort("cancelled"),
@@ -991,6 +999,9 @@ export async function runCodexAppServerAttempt(
         await trajectoryRecorder?.flush();
       },
     });
+    if (!timedOut && !runAbortController.signal.aborted) {
+      await steeringQueue?.flushPending();
+    }
     userInputBridge?.cancelPending();
     clearTimeout(timeout);
     clearTurnCompletionIdleTimer();
@@ -999,7 +1010,7 @@ export async function runCodexAppServerAttempt(
     nativeHookRelay?.unregister();
     runAbortController.signal.removeEventListener("abort", abortListener);
     params.abortSignal?.removeEventListener("abort", abortFromUpstream);
-    steeringQueue.cancel();
+    steeringQueue?.cancel();
     clearActiveEmbeddedRun(params.sessionId, handle, params.sessionKey);
   }
 }

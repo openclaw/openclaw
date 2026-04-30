@@ -11,7 +11,11 @@ import {
   shouldIncludeSupplementalContext,
 } from "openclaw/plugin-sdk/context-visibility-runtime";
 import { evaluateSenderGroupAccessForPolicy } from "openclaw/plugin-sdk/group-access";
-import { dispatchReplyFromConfigWithSettledDispatcher } from "openclaw/plugin-sdk/inbound-reply-dispatch";
+import {
+  dispatchReplyFromConfigWithSettledDispatcher,
+  hasFinalInboundReplyDispatch,
+  resolveInboundReplyDispatchCounts,
+} from "openclaw/plugin-sdk/inbound-reply-dispatch";
 import {
   buildPendingHistoryContextFromMap,
   clearHistoryEntriesIfEnabled,
@@ -864,11 +868,12 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
           }),
       });
       const queuedFinal = dispatchResult?.queuedFinal ?? false;
-      const counts = dispatchResult?.counts ?? { tool: 0, block: 0, final: 0 };
+      const counts = resolveInboundReplyDispatchCounts(dispatchResult);
+      const hasFinalResponse = hasFinalInboundReplyDispatch(dispatchResult);
 
       log.info("dispatch complete", { queuedFinal, counts });
 
-      if (!queuedFinal) {
+      if (!hasFinalResponse) {
         if (isRoomish && historyKey) {
           clearHistoryEntriesIfEnabled({
             historyMap: conversationHistories,

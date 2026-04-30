@@ -104,7 +104,7 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
         replyResolver: params.replyResolver,
       });
       return {
-        admission: { kind: "dispatch" as const },
+        admission: params.admission ?? { kind: "dispatch" as const },
         dispatched: true,
         ctxPayload: params.ctxPayload,
         routeSessionKey: params.routeSessionKey,
@@ -135,7 +135,7 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       }
       const dispatchResult = await params.runDispatch();
       return {
-        admission: { kind: "dispatch" as const },
+        admission: params.admission ?? { kind: "dispatch" as const },
         dispatched: true,
         ctxPayload: params.ctxPayload,
         routeSessionKey: params.routeSessionKey,
@@ -178,10 +178,19 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
         };
       }
       const resolved = await params.adapter.resolveTurn(input, eventClass, preflight ?? {});
-      const dispatchResult = await dispatchAssembledChannelTurnMock(resolved);
+      const admission =
+        resolved.admission ?? preflight.admission ?? ({ kind: "dispatch" } as const);
+      const dispatchResult = await dispatchAssembledChannelTurnMock({
+        ...resolved,
+        admission,
+        delivery:
+          admission.kind === "observeOnly"
+            ? { deliver: async () => ({ visibleReplySent: false }) }
+            : resolved.delivery,
+      });
       const result = {
         ...dispatchResult,
-        admission: resolved.admission ?? preflight.admission ?? dispatchResult.admission,
+        admission,
       };
       await params.adapter.onFinalize?.(result);
       return result;

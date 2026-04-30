@@ -52,7 +52,9 @@ const SLACK_COMMAND_ARG_BUTTON_ROW_SIZE = 5;
 const SLACK_COMMAND_ARG_OVERFLOW_MIN = 3;
 const SLACK_COMMAND_ARG_OVERFLOW_MAX = 5;
 const SLACK_COMMAND_ARG_SELECT_OPTIONS_MAX = 100;
+const SLACK_COMMAND_ARG_SELECT_OPTION_TEXT_MAX = 75;
 const SLACK_COMMAND_ARG_SELECT_OPTION_VALUE_MAX = 75;
+const SLACK_COMMAND_ARG_BUTTON_TEXT_MAX = 75;
 const SLACK_HEADER_TEXT_MAX = 150;
 let slashCommandsRuntimePromise: Promise<typeof import("./slash-commands.runtime.js")> | null =
   null;
@@ -217,7 +219,10 @@ function parseSlackCommandArgValue(raw?: string | null): {
 
 function buildSlackArgMenuOptions(choices: EncodedMenuChoice[]) {
   return choices.map((choice) => ({
-    text: { type: "plain_text", text: choice.label.slice(0, 75) },
+    text: {
+      type: "plain_text",
+      text: truncateSlackText(choice.label, SLACK_COMMAND_ARG_SELECT_OPTION_TEXT_MAX),
+    },
     value: choice.value,
   }));
 }
@@ -293,7 +298,10 @@ function buildSlackCommandArgMenuBlocks(params: {
               elements: choices.map((choice, colIndex) => ({
                 type: "button",
                 action_id: `${SLACK_COMMAND_ARG_ACTION_ID}_${rowIndex}_${colIndex}`,
-                text: { type: "plain_text", text: choice.label },
+                text: {
+                  type: "plain_text",
+                  text: truncateSlackText(choice.label, SLACK_COMMAND_ARG_BUTTON_TEXT_MAX),
+                },
                 value: choice.value,
                 confirm: buildSlackArgMenuConfirm({ command: params.command, arg: params.arg }),
               })),

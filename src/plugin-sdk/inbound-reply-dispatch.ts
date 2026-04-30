@@ -7,7 +7,12 @@ import {
 import type { DispatchReplyWithBufferedBlockDispatcher } from "../auto-reply/reply/provider-dispatcher.types.js";
 import type { ReplyDispatcher } from "../auto-reply/reply/reply-dispatcher.types.js";
 import type { FinalizedMsgContext } from "../auto-reply/templating.js";
-import { dispatchAssembledChannelTurn, runPreparedChannelTurn } from "../channels/turn/kernel.js";
+import {
+  hasFinalChannelTurnDispatch,
+  hasVisibleChannelTurnDispatch,
+  resolveChannelTurnDispatchCounts,
+  runPreparedChannelTurn,
+} from "../channels/turn/kernel.js";
 import type { PreparedChannelTurn } from "../channels/turn/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createChannelReplyPipeline } from "./channel-reply-pipeline.js";
@@ -27,6 +32,12 @@ export async function runPreparedInboundReplyTurn<TDispatchResult>(
 ) {
   return await runPreparedChannelTurn(params);
 }
+
+export {
+  hasFinalChannelTurnDispatch as hasFinalInboundReplyDispatch,
+  hasVisibleChannelTurnDispatch as hasVisibleInboundReplyDispatch,
+  resolveChannelTurnDispatchCounts as resolveInboundReplyDispatchCounts,
+};
 
 /** Run `dispatchReplyFromConfig` with a dispatcher that always gets its settled callback. */
 export async function dispatchReplyFromConfigWithSettledDispatcher(params: {
@@ -134,27 +145,29 @@ export async function recordInboundSessionAndDispatchReply(params: {
   });
   const deliver = createNormalizedOutboundDeliverer(params.deliver);
 
-  await dispatchAssembledChannelTurn({
-    cfg: params.cfg,
+  await runPreparedChannelTurn({
     channel: params.channel,
     accountId: params.accountId,
-    agentId: params.agentId,
     routeSessionKey: params.routeSessionKey,
     storePath: params.storePath,
     ctxPayload: params.ctxPayload,
     recordInboundSession: params.recordInboundSession,
-    dispatchReplyWithBufferedBlockDispatcher: params.dispatchReplyWithBufferedBlockDispatcher,
-    delivery: {
-      deliver,
-      onError: params.onDispatchError,
-    },
-    dispatcherOptions: replyPipeline,
-    replyOptions: {
-      ...params.replyOptions,
-      onModelSelected,
-    },
     record: {
       onRecordError: params.onRecordError,
     },
+    runDispatch: async () =>
+      await params.dispatchReplyWithBufferedBlockDispatcher({
+        ctx: params.ctxPayload,
+        cfg: params.cfg,
+        dispatcherOptions: {
+          ...replyPipeline,
+          deliver,
+          onError: params.onDispatchError,
+        },
+        replyOptions: {
+          ...params.replyOptions,
+          onModelSelected,
+        },
+      }),
   });
 }

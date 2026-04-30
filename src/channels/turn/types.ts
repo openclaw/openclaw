@@ -209,6 +209,9 @@ export type AssembledChannelTurn = {
   replyOptions?: Omit<GetReplyOptions, "onBlockReply">;
   replyResolver?: GetReplyFromConfig;
   record?: ChannelTurnRecordOptions;
+  admission?: Extract<ChannelTurnAdmission, { kind: "dispatch" | "observeOnly" }>;
+  log?: (event: ChannelTurnLogEvent) => void;
+  messageId?: string;
 };
 
 export type PreparedChannelTurn<TDispatchResult = DispatchFromConfigResult> = {
@@ -221,6 +224,9 @@ export type PreparedChannelTurn<TDispatchResult = DispatchFromConfigResult> = {
   record?: ChannelTurnRecordOptions;
   onPreDispatchFailure?: (err: unknown) => void | Promise<void>;
   runDispatch: () => Promise<TDispatchResult>;
+  admission?: Extract<ChannelTurnAdmission, { kind: "dispatch" | "observeOnly" }>;
+  log?: (event: ChannelTurnLogEvent) => void;
+  messageId?: string;
 };
 
 export type ChannelTurnResolved = AssembledChannelTurn & {
@@ -259,7 +265,7 @@ export type ChannelTurnResult = {
 };
 
 export type DispatchedChannelTurnResult<TDispatchResult = DispatchFromConfigResult> = {
-  admission: Extract<ChannelTurnAdmission, { kind: "dispatch" }>;
+  admission: Extract<ChannelTurnAdmission, { kind: "dispatch" | "observeOnly" }>;
   dispatched: true;
   ctxPayload: MsgContext;
   routeSessionKey: string;

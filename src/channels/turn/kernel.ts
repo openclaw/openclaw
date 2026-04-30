@@ -14,6 +14,14 @@ import type {
   RunChannelTurnParams,
   RunResolvedChannelTurnParams,
 } from "./types.js";
+export {
+  EMPTY_CHANNEL_TURN_DISPATCH_COUNTS,
+  hasFinalChannelTurnDispatch,
+  hasVisibleChannelTurnDispatch,
+  resolveChannelTurnDispatchCounts,
+  type ChannelTurnDispatchResultLike,
+  type ChannelTurnVisibleDeliverySignals,
+} from "./dispatch-result.js";
 export type {
   AccessFacts,
   AssembledChannelTurn,
@@ -100,6 +108,9 @@ export async function dispatchAssembledChannelTurn(
     ctxPayload: params.ctxPayload,
     recordInboundSession: params.recordInboundSession,
     record: params.record,
+    admission: params.admission,
+    log: params.log,
+    messageId: params.messageId,
     runDispatch: async () =>
       await params.dispatchReplyWithBufferedBlockDispatcher({
         ctx: params.ctxPayload,
@@ -122,6 +133,17 @@ export async function runPreparedChannelTurn<
 >(
   params: PreparedChannelTurn<TDispatchResult>,
 ): Promise<DispatchedChannelTurnResult<TDispatchResult>> {
+  const admission = params.admission ?? ({ kind: "dispatch" } as const);
+  emit({
+    ...params,
+    event: {
+      stage: "record",
+      event: "start",
+      messageId: params.messageId,
+      sessionKey: params.ctxPayload.SessionKey ?? params.routeSessionKey,
+      admission: admission.kind,
+    },
+  });
   try {
     await params.recordInboundSession({
       storePath: params.storePath,
@@ -133,7 +155,28 @@ export async function runPreparedChannelTurn<
       onRecordError: params.record?.onRecordError ?? (() => undefined),
       trackSessionMetaTask: params.record?.trackSessionMetaTask,
     });
+    emit({
+      ...params,
+      event: {
+        stage: "record",
+        event: "done",
+        messageId: params.messageId,
+        sessionKey: params.ctxPayload.SessionKey ?? params.routeSessionKey,
+        admission: admission.kind,
+      },
+    });
   } catch (err) {
+    emit({
+      ...params,
+      event: {
+        stage: "record",
+        event: "error",
+        messageId: params.messageId,
+        sessionKey: params.ctxPayload.SessionKey ?? params.routeSessionKey,
+        admission: admission.kind,
+        error: err,
+      },
+    });
     try {
       await params.onPreDispatchFailure?.(err);
     } catch {
@@ -142,10 +185,46 @@ export async function runPreparedChannelTurn<
     throw err;
   }
 
-  const dispatchResult = await params.runDispatch();
+  emit({
+    ...params,
+    event: {
+      stage: "dispatch",
+      event: "start",
+      messageId: params.messageId,
+      sessionKey: params.ctxPayload.SessionKey ?? params.routeSessionKey,
+      admission: admission.kind,
+    },
+  });
+  let dispatchResult: TDispatchResult;
+  try {
+    dispatchResult = await params.runDispatch();
+  } catch (err) {
+    emit({
+      ...params,
+      event: {
+        stage: "dispatch",
+        event: "error",
+        messageId: params.messageId,
+        sessionKey: params.ctxPayload.SessionKey ?? params.routeSessionKey,
+        admission: admission.kind,
+        error: err,
+      },
+    });
+    throw err;
+  }
+  emit({
+    ...params,
+    event: {
+      stage: "dispatch",
+      event: "done",
+      messageId: params.messageId,
+      sessionKey: params.ctxPayload.SessionKey ?? params.routeSessionKey,
+      admission: admission.kind,
+    },
+  });
 
   return {
-    admission: { kind: "dispatch" },
+    admission,
     dispatched: true,
     ctxPayload: params.ctxPayload,
     routeSessionKey: params.routeSessionKey,
@@ -239,25 +318,21 @@ export async function runChannelTurn<TRaw>(
         ? {
             ...resolved,
             delivery: createNoopChannelTurnDeliveryAdapter(),
+            admission,
+            log: params.log,
+            messageId: input.id,
           }
-        : resolved,
+        : {
+            ...resolved,
+            admission,
+            log: params.log,
+            messageId: input.id,
+          },
     );
     result = {
       ...dispatchResult,
       admission,
     };
-
-    emit({
-      ...params,
-      accountId: resolved.accountId ?? params.accountId,
-      event: {
-        stage: "dispatch",
-        event: "done",
-        messageId: input.id,
-        sessionKey: resolved.routeSessionKey,
-        admission: admission.kind,
-      },
-    });
   } catch (err) {
     const failedResult: ChannelTurnResult = {
       admission,
@@ -274,12 +349,11 @@ export async function runChannelTurn<TRaw>(
       ...params,
       accountId: resolved.accountId ?? params.accountId,
       event: {
-        stage: "dispatch",
-        event: "error",
+        stage: "finalize",
+        event: "done",
         messageId: input.id,
         sessionKey: resolved.routeSessionKey,
         admission: admission.kind,
-        error: err,
       },
     });
     throw err;
