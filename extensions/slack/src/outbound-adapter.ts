@@ -20,6 +20,7 @@ import { parseSlackBlocksInput } from "./blocks-input.js";
 import {
   buildSlackInteractiveBlocks,
   buildSlackPresentationBlocks,
+  resolveSlackInteractiveBlockOffsets,
   type SlackBlock,
 } from "./blocks-render.js";
 import { compileSlackInteractiveReplies } from "./interactive-replies.js";
@@ -39,11 +40,15 @@ async function loadSlackSendRuntime() {
 
 function resolveRenderedInteractiveBlocks(
   interactive?: InteractiveReply,
+  previousBlocks?: readonly SlackBlock[],
 ): SlackBlock[] | undefined {
   if (!interactive) {
     return undefined;
   }
-  const blocks = buildSlackInteractiveBlocks(interactive);
+  const blocks = buildSlackInteractiveBlocks(
+    interactive,
+    resolveSlackInteractiveBlockOffsets(previousBlocks),
+  );
   return blocks.length > 0 ? blocks : undefined;
 }
 
@@ -116,12 +121,9 @@ function resolveSlackBlocks(payload: {
   const nativeBlocks = parseSlackBlocksInput(slackData?.blocks) as SlackBlock[] | undefined;
   const renderedPresentation =
     slackData?.presentationBlocks ?? buildSlackPresentationBlocks(payload.presentation);
-  const renderedInteractive = resolveRenderedInteractiveBlocks(payload.interactive);
-  const mergedBlocks = [
-    ...(nativeBlocks ?? []),
-    ...renderedPresentation,
-    ...(renderedInteractive ?? []),
-  ];
+  const previousBlocks = [...(nativeBlocks ?? []), ...renderedPresentation];
+  const renderedInteractive = resolveRenderedInteractiveBlocks(payload.interactive, previousBlocks);
+  const mergedBlocks = [...previousBlocks, ...(renderedInteractive ?? [])];
   if (mergedBlocks.length === 0) {
     return undefined;
   }

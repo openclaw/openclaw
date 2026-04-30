@@ -129,7 +129,10 @@ vi.mock("./model-auth-env-vars.js", () => {
           {
             type: "local-file-with-env",
             fileEnvVar: "GOOGLE_APPLICATION_CREDENTIALS",
-            fallbackPaths: ["${HOME}/.config/gcloud/application_default_credentials.json"],
+            fallbackPaths: [
+              "${HOME}/.config/gcloud/application_default_credentials.json",
+              "${APPDATA}/gcloud/application_default_credentials.json",
+            ],
             requiresAnyEnv: ["GOOGLE_CLOUD_PROJECT", "GCLOUD_PROJECT"],
             requiresAllEnv: ["GOOGLE_CLOUD_LOCATION"],
             credentialMarker: "gcp-vertex-credentials",
@@ -957,6 +960,130 @@ describe("getApiKeyForModel", () => {
         GOOGLE_CLOUD_PROJECT: "vertex-project",
       },
     });
+  });
+
+  it("resolveEnvApiKey('google-vertex') accepts Unicode explicit ADC credential paths", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-google-adc-unicode-"));
+    const explicitDir = path.join(homeDir, "認証情報");
+    const fallbackDir = path.join(homeDir, ".config", "gcloud");
+    const explicitCredentialsPath = path.join(explicitDir, "adc.json");
+    await fs.mkdir(explicitDir, { recursive: true });
+    await fs.mkdir(fallbackDir, { recursive: true });
+    await fs.writeFile(explicitCredentialsPath, "{}", "utf8");
+    await fs.writeFile(
+      path.join(fallbackDir, "application_default_credentials.json"),
+      "{}",
+      "utf8",
+    );
+
+    try {
+      const resolved = resolveEnvApiKey("google-vertex", {
+        GOOGLE_APPLICATION_CREDENTIALS: explicitCredentialsPath,
+        GOOGLE_CLOUD_LOCATION: "us-central1",
+        GOOGLE_CLOUD_PROJECT: "vertex-project",
+        HOME: homeDir,
+      } as NodeJS.ProcessEnv);
+
+      expect(resolved?.apiKey).toBe("gcp-vertex-credentials");
+      expect(resolved?.source).toBe("gcloud adc");
+    } finally {
+      await fs.rm(homeDir, { recursive: true, force: true });
+    }
+  });
+
+  it("resolveEnvApiKey('google-vertex') accepts Unicode ADC fallback home paths", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-google-adc-home-"));
+    const homeDir = path.join(tempDir, "認証情報-home");
+    const fallbackDir = path.join(homeDir, ".config", "gcloud");
+    await fs.mkdir(fallbackDir, { recursive: true });
+    await fs.writeFile(
+      path.join(fallbackDir, "application_default_credentials.json"),
+      "{}",
+      "utf8",
+    );
+
+    try {
+      const resolved = resolveEnvApiKey("google-vertex", {
+        GOOGLE_CLOUD_LOCATION: "us-central1",
+        GOOGLE_CLOUD_PROJECT: "vertex-project",
+        HOME: homeDir,
+      } as NodeJS.ProcessEnv);
+
+      expect(resolved?.apiKey).toBe("gcp-vertex-credentials");
+      expect(resolved?.source).toBe("gcloud adc");
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("resolveEnvApiKey('google-vertex') rejects GOOGLE_CLOUD_PROJECT_ID-only ADC auth evidence", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-google-adc-project-id-"));
+    const credentialsPath = path.join(tempDir, "adc.json");
+    await fs.writeFile(credentialsPath, "{}", "utf8");
+
+    try {
+      const resolved = resolveEnvApiKey("google-vertex", {
+        GOOGLE_APPLICATION_CREDENTIALS: credentialsPath,
+        GOOGLE_CLOUD_LOCATION: "us-central1",
+        GOOGLE_CLOUD_PROJECT_ID: "vertex-project",
+      } as NodeJS.ProcessEnv);
+
+      expect(resolved).toBeNull();
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("resolveEnvApiKey('google-vertex') accepts Windows APPDATA ADC fallback evidence", async () => {
+    const appDataDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-google-adc-appdata-"));
+    const fallbackDir = path.join(appDataDir, "gcloud");
+    await fs.mkdir(fallbackDir, { recursive: true });
+    await fs.writeFile(
+      path.join(fallbackDir, "application_default_credentials.json"),
+      "{}",
+      "utf8",
+    );
+
+    try {
+      const resolved = resolveEnvApiKey("google-vertex", {
+        APPDATA: appDataDir,
+        GOOGLE_CLOUD_LOCATION: "us-central1",
+        GOOGLE_CLOUD_PROJECT: "vertex-project",
+      } as NodeJS.ProcessEnv);
+
+      expect(resolved?.apiKey).toBe("gcp-vertex-credentials");
+      expect(resolved?.source).toBe("gcloud adc");
+    } finally {
+      await fs.rm(appDataDir, { recursive: true, force: true });
+    }
+  });
+
+  it("resolveEnvApiKey('google-vertex') does not synthesize APPDATA from USERPROFILE", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-google-adc-home-"));
+    const userProfileDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-google-adc-userprofile-"),
+    );
+    const fallbackDir = path.join(userProfileDir, "AppData", "Roaming", "gcloud");
+    await fs.mkdir(fallbackDir, { recursive: true });
+    await fs.writeFile(
+      path.join(fallbackDir, "application_default_credentials.json"),
+      "{}",
+      "utf8",
+    );
+
+    try {
+      const resolved = resolveEnvApiKey("google-vertex", {
+        HOME: homeDir,
+        USERPROFILE: userProfileDir,
+        GOOGLE_CLOUD_LOCATION: "us-central1",
+        GOOGLE_CLOUD_PROJECT: "vertex-project",
+      } as NodeJS.ProcessEnv);
+
+      expect(resolved).toBeNull();
+    } finally {
+      await fs.rm(homeDir, { recursive: true, force: true });
+      await fs.rm(userProfileDir, { recursive: true, force: true });
+    }
   });
 
   it("resolveEnvApiKey('google-vertex') keeps ADC fallback when manifest env candidates are empty", async () => {

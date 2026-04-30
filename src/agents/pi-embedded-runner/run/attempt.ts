@@ -2156,7 +2156,10 @@ export async function runEmbeddedAttempt(
         cancel: (reason?: "user_abort" | "restart" | "superseded") => void;
       } = {
         kind: "embedded",
-        queueMessage: async (text: string) => {
+        queueMessage: async (text: string, options) => {
+          if (options?.steeringMode) {
+            activeSession.agent.steeringMode = options.steeringMode;
+          }
           await activeSession.steer(text);
         },
         isStreaming: () => activeSession.isStreaming,

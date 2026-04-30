@@ -99,7 +99,7 @@
     },
     "modelFallbackPolicy": {
       "label": "Model Fallback Policy",
-      "help": "Deprecated compatibility field. Active Memory no longer uses a built-in fallback model; set modelFallback explicitly if you want a fallback."
+      "help": "Deprecated compatibility field. modelFallback is only the chain-resolution last resort when no explicit plugin model, session model, or agent primary model resolves; it is not runtime failover."
     },
     "allowedChatTypes": {
       "label": "Allowed Chat Types",
