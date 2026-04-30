@@ -782,6 +782,7 @@ export const ja_JP: TranslationMap = {
       perMinute: "/ 分",
       activeTime: "アクティブ時間",
       activeTimeHint: "この範囲で時間データがあるセッションの合計アクティブ時間。",
+      activeTimeSub: "平均セッション {avgDuration} · 時間データ付き {count} セッション",
       acrossTimedSessions: "時間データ付き {count} セッション",
       errorRate: "エラー率",
       errorHint: "エラー率 = エラー数 / メッセージ総数。低いほど良好です。",

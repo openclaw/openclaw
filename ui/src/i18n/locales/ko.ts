@@ -777,6 +777,7 @@ export const ko: TranslationMap = {
       perMinute: "/분",
       activeTime: "활성 시간",
       activeTimeHint: "이 범위에서 시간 데이터가 있는 세션의 총 활성 시간입니다.",
+      activeTimeSub: "평균 세션 {avgDuration} · 시간 데이터가 있는 세션 {count}개",
       acrossTimedSessions: "시간 데이터가 있는 세션 {count}개",
       errorRate: "오류율",
       errorHint: "오류율 = 오류 / 전체 메시지. 낮을수록 좋습니다.",

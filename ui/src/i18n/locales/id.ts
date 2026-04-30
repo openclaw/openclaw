@@ -779,6 +779,7 @@ export const id: TranslationMap = {
       perMinute: "/ menit",
       activeTime: "Waktu Aktif",
       activeTimeHint: "Total waktu aktif di seluruh sesi dengan data durasi dalam rentang ini.",
+      activeTimeSub: "Rata-rata sesi {avgDuration} · {count} sesi berdurasi",
       acrossTimedSessions: "Di {count} sesi berdurasi",
       errorRate: "Tingkat Kesalahan",
       errorHint: "Tingkat kesalahan = kesalahan / total pesan. Semakin rendah semakin baik.",

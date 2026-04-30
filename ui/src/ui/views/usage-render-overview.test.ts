@@ -90,7 +90,7 @@ describe("renderUsageInsights", () => {
 
     expect(container.textContent).toContain("Active Time");
     expect(container.textContent).toContain("9m");
-    expect(container.textContent).toContain("3m avg session");
-    expect(container.textContent).toContain("Across 3 timed sessions");
+    expect(container.textContent).toContain("Avg session 3m");
+    expect(container.textContent).toContain("3 timed sessions");
   });
 });

@@ -768,6 +768,7 @@ export const th: TranslationMap = {
       perMinute: "/ นาที",
       activeTime: "เวลาที่ใช้งาน",
       activeTimeHint: "เวลาที่ใช้งานรวมของเซสชันที่มีข้อมูลระยะเวลาในช่วงนี้",
+      activeTimeSub: "เซสชันเฉลี่ย {avgDuration} · {count} เซสชันที่มีข้อมูลเวลา",
       acrossTimedSessions: "ครอบคลุม {count} เซสชันที่มีข้อมูลเวลา",
       errorRate: "อัตราข้อผิดพลาด",
       errorHint: "อัตราข้อผิดพลาด = ข้อผิดพลาด / ข้อความทั้งหมด ยิ่งต่ำยิ่งดี",

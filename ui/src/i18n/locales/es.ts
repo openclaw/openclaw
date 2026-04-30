@@ -783,6 +783,7 @@ export const es: TranslationMap = {
       perMinute: "/ min",
       activeTime: "Tiempo activo",
       activeTimeHint: "Tiempo activo total de las sesiones con datos de duración en este rango.",
+      activeTimeSub: "Prom. de sesión {avgDuration} · {count} sesiones con duración",
       acrossTimedSessions: "En {count} sesiones con duración",
       errorRate: "Tasa de errores",
       errorHint: "Tasa de errores = errores / mensajes totales. Cuanto más baja, mejor.",

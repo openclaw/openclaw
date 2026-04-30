@@ -778,6 +778,7 @@ export const vi: TranslationMap = {
       activeTime: "Thời gian hoạt động",
       activeTimeHint:
         "Tổng thời gian hoạt động của các phiên có dữ liệu thời lượng trong phạm vi này.",
+      activeTimeSub: "Phiên TB {avgDuration} · {count} phiên có thời lượng",
       acrossTimedSessions: "Trên {count} phiên có thời lượng",
       errorRate: "Tỷ lệ lỗi",
       errorHint: "Tỷ lệ lỗi = lỗi / tổng số tin nhắn. Càng thấp càng tốt.",

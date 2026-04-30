@@ -767,6 +767,7 @@ export const zh_CN: TranslationMap = {
       perMinute: "/ 分钟",
       activeTime: "活跃时长",
       activeTimeHint: "此范围内带时长数据的会话总活跃时间。",
+      activeTimeSub: "平均会话 {avgDuration} · 共 {count} 个含时长数据的会话",
       acrossTimedSessions: "共 {count} 个含时长数据的会话",
       errorRate: "错误率",
       errorHint: "错误率 = 错误数 / 消息总数。越低越好。",

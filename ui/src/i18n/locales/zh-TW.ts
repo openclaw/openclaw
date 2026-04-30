@@ -768,6 +768,7 @@ export const zh_TW: TranslationMap = {
       perMinute: "/ 分",
       activeTime: "活躍時長",
       activeTimeHint: "此範圍內具有時長資料的工作階段總活躍時間。",
+      activeTimeSub: "平均工作階段 {avgDuration} · 共 {count} 個含時長資料的工作階段",
       acrossTimedSessions: "共 {count} 個含時長資料的工作階段",
       errorRate: "錯誤率",
       errorHint: "錯誤率 = 錯誤數 / 訊息總數。越低越好。",

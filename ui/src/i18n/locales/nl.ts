@@ -782,6 +782,7 @@ export const nl: TranslationMap = {
       perMinute: "/ min",
       activeTime: "Actieve tijd",
       activeTimeHint: "Totale actieve tijd over sessies met tijdsgegevens in dit bereik.",
+      activeTimeSub: "Gem. sessie {avgDuration} · {count} sessies met tijdsgegevens",
       acrossTimedSessions: "Over {count} sessies met tijdsgegevens",
       errorRate: "Foutpercentage",
       errorHint: "Foutpercentage = fouten / totaal aantal berichten. Lager is beter.",

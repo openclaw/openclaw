@@ -786,6 +786,7 @@ export const de: TranslationMap = {
       perMinute: "/ Min.",
       activeTime: "Aktive Zeit",
       activeTimeHint: "Gesamte aktive Zeit aller Sitzungen mit Zeitdaten in diesem Bereich.",
+      activeTimeSub: "Ø Sitzung {avgDuration} · {count} Sitzungen mit Zeitdaten",
       acrossTimedSessions: "Über {count} Sitzungen mit Zeitdaten",
       errorRate: "Fehlerrate",
       errorHint: "Fehlerrate = Fehler / Gesamtzahl der Nachrichten. Niedriger ist besser.",

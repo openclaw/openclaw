@@ -780,6 +780,7 @@ export const pt_BR: TranslationMap = {
       perMinute: "/ min",
       activeTime: "Tempo ativo",
       activeTimeHint: "Tempo ativo total das sessões com dados de duração neste intervalo.",
+      activeTimeSub: "Sessão média {avgDuration} · {count} sessões com duração",
       acrossTimedSessions: "Em {count} sessões com duração",
       errorRate: "Taxa de erro",
       errorHint: "Taxa de erro = erros / total de mensagens. Quanto menor, melhor.",

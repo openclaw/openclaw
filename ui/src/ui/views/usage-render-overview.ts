@@ -538,12 +538,10 @@ function renderUsageInsights(
       : t("usage.common.emptyValue");
   const activeTimeSub =
     stats.durationCount > 0
-      ? `${avgDurationLabel} ${t("usage.overview.avgSession")} · ${t(
-          "usage.overview.acrossTimedSessions",
-          {
-            count: String(stats.durationCount),
-          },
-        )}`
+      ? t("usage.overview.activeTimeSub", {
+          avgDuration: avgDurationLabel,
+          count: String(stats.durationCount),
+        })
       : t("usage.overview.acrossTimedSessions", { count: String(stats.durationCount) });
   const cacheHint = t("usage.overview.cacheHint");
   const activeTimeHint = t("usage.overview.activeTimeHint");

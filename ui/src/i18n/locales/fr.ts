@@ -786,6 +786,7 @@ export const fr: TranslationMap = {
       activeTime: "Temps actif",
       activeTimeHint:
         "Temps actif total des sessions disposant de données de durée dans cette plage.",
+      activeTimeSub: "Session moy. {avgDuration} · {count} sessions avec durée",
       acrossTimedSessions: "Sur {count} sessions avec durée",
       errorRate: "Taux d’erreur",
       errorHint: "Taux d’erreur = erreurs / total des messages. Plus il est faible, mieux c’est.",

@@ -785,6 +785,7 @@ export const uk: TranslationMap = {
       perMinute: "/ хв",
       activeTime: "Активний час",
       activeTimeHint: "Загальний активний час сеансів із даними тривалості в цьому діапазоні.",
+      activeTimeSub: "Сер. сеанс {avgDuration} · {count} сеансів із даними тривалості",
       acrossTimedSessions: "У {count} сеансах із даними тривалості",
       errorRate: "Рівень помилок",
       errorHint: "Рівень помилок = помилки / загальна кількість повідомлень. Менше — краще.",

@@ -772,6 +772,7 @@ export const ar: TranslationMap = {
       perMinute: "/ دقيقة",
       activeTime: "الوقت النشط",
       activeTimeHint: "إجمالي الوقت النشط عبر الجلسات التي تتضمن بيانات مدة ضمن هذا النطاق.",
+      activeTimeSub: "متوسط الجلسة {avgDuration} · {count} جلسات لها بيانات مدة",
       acrossTimedSessions: "عبر {count} جلسات لها بيانات مدة",
       errorRate: "معدل الأخطاء",
       errorHint: "معدل الأخطاء = الأخطاء / إجمالي الرسائل. الأقل أفضل.",

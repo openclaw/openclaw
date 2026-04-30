@@ -781,6 +781,7 @@ export const fa: TranslationMap = {
       perMinute: "/ دقیقه",
       activeTime: "زمان فعال",
       activeTimeHint: "مجموع زمان فعال نشست‌های دارای دادهٔ مدت‌زمان در این بازه.",
+      activeTimeSub: "میانگین نشست {avgDuration} · {count} نشست دارای مدت‌زمان",
       acrossTimedSessions: "در {count} نشست دارای مدت‌زمان",
       errorRate: "نرخ خطا",
       errorHint: "نرخ خطا = خطاها / مجموع پیام‌ها. هرچه کمتر باشد بهتر است.",
