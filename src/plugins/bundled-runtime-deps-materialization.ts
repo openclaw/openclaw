@@ -166,7 +166,7 @@ function createNpmInstallExecutionManifest(installSpecs: readonly string[]): Jso
   return {
     name: "openclaw-runtime-deps-install",
     private: true,
-    ...(Object.keys(sortedDependencies).length > 0 ? { dependencies: sortedDependencies } : {}),
+    dependencies: sortedDependencies,
   };
 }
 
