@@ -284,6 +284,44 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(contextCompiled?.data?.systemPrompt).toContain("internal heartbeat event");
   });
 
+  it("skips blank visible prompts with replay history before provider submission", async () => {
+    const sessionPrompt = vi.fn(async () => {
+      throw new Error("blank prompt should not be submitted");
+    });
+
+    const result = await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey,
+      tempPaths,
+      attemptOverrides: {
+        prompt: "  \n\t  ",
+      },
+      sessionPrompt,
+    });
+
+    expect(sessionPrompt).not.toHaveBeenCalled();
+    expect(result.finalPromptText).toBeUndefined();
+    expect(result.promptError).toBeFalsy();
+    expect(result.messagesSnapshot).toEqual([
+      expect.objectContaining({ role: "user", content: "seed" }),
+    ]);
+    const trajectoryEvents = (
+      await fs.readFile(path.join(tempPaths[0] ?? "", "session.trajectory.jsonl"), "utf8")
+    )
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as TrajectoryEvent);
+    expect(trajectoryEvents.some((event) => event.type === "prompt.submitted")).toBe(false);
+    expect(trajectoryEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "prompt.skipped",
+          data: expect.objectContaining({ reason: "blank_user_prompt" }),
+        }),
+      ]),
+    );
+  });
+
   it("keeps gateway model runs independent from agent context and session history", async () => {
     const bootstrap = vi.fn(async () => ({ bootstrapped: true }));
     const assemble = vi.fn(async ({ messages }: { messages: AgentMessage[] }) => ({
