@@ -207,7 +207,7 @@ static void on_config_dialog_response(GObject *source, GAsyncResult *result, gpo
     
     /* Get the edited channel subtree */
     /* I1: Properly manage JsonNode ownership - copy root for later transfer */
-    JsonNode *edited_channel_node = json_node_copy(parsed_root);
+    g_autoptr(JsonNode) edited_channel_node = json_node_copy(parsed_root);
     g_object_unref(parser);
 
     if (channels_status_label)
@@ -273,7 +273,7 @@ static void on_config_dialog_response(GObject *source, GAsyncResult *result, gpo
         json_object_remove_member(channels_obj, session->channel_id);
     }
     /* I1: Transfer ownership of edited_channel_node to the channels object */
-    json_object_set_member(channels_obj, session->channel_id, edited_channel_node);
+    json_object_set_member(channels_obj, session->channel_id, g_steal_pointer(&edited_channel_node));
 
     /* Serialize the FULL updated config document */
     g_autofree gchar *full_raw_json = json_to_string(full_config_copy, FALSE);
