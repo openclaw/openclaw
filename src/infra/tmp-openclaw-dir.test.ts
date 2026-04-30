@@ -470,6 +470,28 @@ describe("resolvePreferredOpenClawTmpDir", () => {
     expect(warn).not.toHaveBeenCalled();
   });
 
+  it("uses fallback when chmod loses a concurrent fallback repair race", () => {
+    const fallbackPath = fallbackTmp();
+    const chmodSync = vi.fn((target: string, mode: number) => {
+      if (target === fallbackPath && mode === 0o700) {
+        throw nodeErrorWithCode("EACCES");
+      }
+    });
+    const warn = vi.fn();
+    const states = [0o40777, 0o40777, 0o40700];
+
+    const resolved = resolveWithReadOnlyTmpFallback({
+      fallbackPath,
+      fallbackLstatSync: vi.fn(() => makeDirStat({ mode: states.shift() ?? 0o40700 })),
+      chmodSync,
+      warn,
+    });
+
+    expect(resolved).toBe(fallbackPath);
+    expect(chmodSync).toHaveBeenCalledWith(fallbackPath, 0o700);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
   it("throws when the fallback directory cannot be created", () => {
     expect(() =>
       resolvePreferredOpenClawTmpDir({
