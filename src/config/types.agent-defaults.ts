@@ -301,6 +301,8 @@ export type AgentDefaultsConfig = {
   thinkingDefault?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive" | "max";
   /** Default verbose level when no /verbose directive is present. */
   verboseDefault?: "off" | "on" | "full";
+  /** Default reasoning level when no /reasoning directive is present. */
+  reasoningDefault?: "off" | "on" | "stream";
   /** Default elevated level when no /elevated directive is present. */
   elevatedDefault?: "off" | "on" | "ask" | "full";
   /** Default block streaming level when no override is present. */
@@ -379,6 +381,11 @@ export type AgentDefaultsConfig = {
      */
     isolatedSession?: boolean;
     /**
+     * If true, defer heartbeat runs while subagent or nested command lanes are busy.
+     * Cron lanes are always treated as busy for heartbeat deferral.
+     */
+    skipWhenBusy?: boolean;
+    /**
      * When enabled, deliver the model's reasoning payload for heartbeat runs (when available)
      * as a separate message prefixed with `Reasoning:` (same as `/reasoning on`).
      *
@@ -425,6 +432,14 @@ export type AgentCompactionQualityGuardConfig = {
   maxRetries?: number;
 };
 
+export type AgentCompactionMidTurnPrecheckConfig = {
+  /**
+   * Enable structured context pressure checks after tool results are appended
+   * and before the next Pi model call. Default: false.
+   */
+  enabled?: boolean;
+};
+
 export type AgentCompactionConfig = {
   /** Compaction summarization mode. */
   mode?: AgentCompactionMode;
@@ -446,6 +461,8 @@ export type AgentCompactionConfig = {
   identifierInstructions?: string;
   /** Optional quality-audit retries for safeguard compaction summaries. */
   qualityGuard?: AgentCompactionQualityGuardConfig;
+  /** Mid-turn precheck for tool-loop context pressure. Default: disabled. */
+  midTurnPrecheck?: AgentCompactionMidTurnPrecheckConfig;
   /** Post-compaction session memory index sync mode. */
   postIndexSync?: AgentCompactionPostIndexSyncMode;
   /** Pre-compaction memory flush (agentic turn). Default: enabled. */

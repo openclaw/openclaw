@@ -23,6 +23,7 @@ const PLUGINS_DOCKER_E2E_PATH = "scripts/e2e/plugins-docker.sh";
 const PLUGINS_DOCKER_SWEEP_PATH = "scripts/e2e/lib/plugins/sweep.sh";
 const PLUGINS_DOCKER_MARKETPLACE_PATH = "scripts/e2e/lib/plugins/marketplace.sh";
 const PLUGINS_DOCKER_CLAWHUB_PATH = "scripts/e2e/lib/plugins/clawhub.sh";
+const PLUGINS_DOCKER_ASSERTIONS_PATH = "scripts/e2e/lib/plugins/assertions.mjs";
 const PLUGIN_UPDATE_DOCKER_E2E_PATH = "scripts/e2e/plugin-update-unchanged-docker.sh";
 const PLUGIN_UPDATE_SCENARIO_PATH = "scripts/e2e/lib/plugin-update/unchanged-scenario.sh";
 const PLUGIN_UPDATE_PROBE_PATH = "scripts/e2e/lib/plugin-update/probe.mjs";
@@ -30,6 +31,8 @@ const DOCTOR_SWITCH_DOCKER_E2E_PATH = "scripts/e2e/doctor-install-switch-docker.
 const DOCTOR_SWITCH_SCENARIO_PATH = "scripts/e2e/lib/doctor-install-switch/scenario.sh";
 const PACKAGE_COMPAT_PATH = "scripts/e2e/lib/package-compat.mjs";
 const UPDATE_CHANNEL_SWITCH_DOCKER_E2E_PATH = "scripts/e2e/update-channel-switch-docker.sh";
+const UPDATE_CHANNEL_SWITCH_ASSERTIONS_PATH =
+  "scripts/e2e/lib/update-channel-switch/assertions.mjs";
 const CENTRALIZED_BUILD_SCRIPTS = [
   "scripts/docker/setup.sh",
   "scripts/e2e/browser-cdp-snapshot-docker.sh",
@@ -111,6 +114,23 @@ describe("docker build helper", () => {
     );
   });
 
+  it("times and parallelizes release installer E2E agent turns after gateway startup", () => {
+    const runner = readFileSync(INSTALL_E2E_RUNNER_PATH, "utf8");
+    const wrapper = readFileSync("scripts/test-install-sh-e2e-docker.sh", "utf8");
+
+    expect(runner).toContain(
+      'AGENT_TURNS_PARALLEL="${OPENCLAW_INSTALL_E2E_AGENT_TURNS_PARALLEL:-1}"',
+    );
+    expect(runner).toContain("time_phase");
+    expect(runner).toContain("phase_mark_start");
+    expect(runner).toContain("run_agent_turn_bg");
+    expect(runner).toContain("wait_agent_turn_batch");
+    expect(runner).toContain('run_agent_turn_bg "read proof"');
+    expect(runner).toContain('run_agent_turn_bg "image write"');
+    expect(runner).toContain('run_agent_turn_logged "read proof copy"');
+    expect(wrapper).toContain("OPENCLAW_INSTALL_E2E_AGENT_TURNS_PARALLEL");
+  });
+
   it("keeps package acceptance plugin coverage offline-capable", () => {
     const scenarios = readFileSync(DOCKER_E2E_SCENARIOS_PATH, "utf8");
 
@@ -140,15 +160,19 @@ describe("docker build helper", () => {
     const pluginsSweep = readFileSync(PLUGINS_DOCKER_SWEEP_PATH, "utf8");
     const pluginsMarketplace = readFileSync(PLUGINS_DOCKER_MARKETPLACE_PATH, "utf8");
     const pluginsClawhub = readFileSync(PLUGINS_DOCKER_CLAWHUB_PATH, "utf8");
+    const pluginsAssertions = readFileSync(PLUGINS_DOCKER_ASSERTIONS_PATH, "utf8");
     const pluginUpdateScenario = readFileSync(PLUGIN_UPDATE_SCENARIO_PATH, "utf8");
     const pluginUpdateProbe = readFileSync(PLUGIN_UPDATE_PROBE_PATH, "utf8");
+    const updateChannelAssertions = readFileSync(UPDATE_CHANNEL_SWITCH_ASSERTIONS_PATH, "utf8");
     const packageCompat = readFileSync(PACKAGE_COMPAT_PATH, "utf8");
     const scripts = [
       doctorScenario,
       updateChannel,
+      updateChannelAssertions,
       pluginsSweep,
       pluginsMarketplace,
       pluginsClawhub,
+      pluginsAssertions,
       pluginUpdateScenario,
       pluginUpdateProbe,
     ];
@@ -170,10 +194,9 @@ describe("docker build helper", () => {
     expect(scripts.join("\n")).toContain(
       "Package $package_version must support gateway install --wrapper.",
     );
-    expect(scripts.join("\n")).toContain("expected persisted update.channel dev");
-    expect(scripts.join("\n")).toContain(
-      "expected modern installRecords in installed plugin index",
-    );
+    expect(updateChannel).toContain("assert-config-channel dev");
+    expect(updateChannelAssertions).toContain("expected persisted update.channel ${channel}");
+    expect(pluginsAssertions).toContain("expected modern installRecords in installed plugin index");
   });
 
   it("keeps bundled plugin install/uninstall sweep chunkable", () => {
@@ -208,7 +231,7 @@ describe("docker build helper", () => {
 
     expect(runner).toContain('rm -f "$workspace/BOOTSTRAP.md"');
     expect(runner.indexOf('rm -f "$workspace/BOOTSTRAP.md"')).toBeLessThan(
-      runner.indexOf('echo "==> Agent turns ($profile)"'),
+      runner.indexOf('phase_mark_start "Agent turns ($profile)"'),
     );
   });
 
