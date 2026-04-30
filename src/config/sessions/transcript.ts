@@ -1,9 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { SessionManager } from "@mariozechner/pi-coding-agent";
+import { guardSessionManager } from "../../agents/session-tool-result-guard-wrapper.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
+import type { SessionTranscriptUpdateMode } from "../../sessions/transcript-events.js";
 import { extractAssistantVisibleText } from "../../shared/chat-message-content.js";
+import type { OpenClawConfig } from "../types.openclaw.js";
 import {
   resolveDefaultSessionStorePath,
   resolveSessionFilePath,
@@ -50,7 +52,7 @@ export type SessionTranscriptAppendResult =
   | { ok: true; sessionFile: string; messageId: string }
   | { ok: false; reason: string };
 
-export type SessionTranscriptUpdateMode = "inline" | "file-only" | "none";
+export type { SessionTranscriptUpdateMode };
 
 export type SessionTranscriptAssistantMessage = Parameters<SessionManager["appendMessage"]>[0] & {
   role: "assistant";
@@ -163,6 +165,7 @@ export async function appendAssistantMessageToSessionTranscript(params: {
   /** Optional override for store path (mostly for tests). */
   storePath?: string;
   updateMode?: SessionTranscriptUpdateMode;
+  config?: OpenClawConfig;
 }): Promise<SessionTranscriptAppendResult> {
   const sessionKey = params.sessionKey.trim();
   if (!sessionKey) {
@@ -183,6 +186,7 @@ export async function appendAssistantMessageToSessionTranscript(params: {
     storePath: params.storePath,
     idempotencyKey: params.idempotencyKey,
     updateMode: params.updateMode,
+    config: params.config,
     message: {
       role: "assistant" as const,
       content: [{ type: "text", text: mirrorText }],
@@ -216,6 +220,7 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
   idempotencyKey?: string;
   storePath?: string;
   updateMode?: SessionTranscriptUpdateMode;
+  config?: OpenClawConfig;
 }): Promise<SessionTranscriptAppendResult> {
   const sessionKey = params.sessionKey.trim();
   if (!sessionKey) {
@@ -276,19 +281,13 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
     ...(explicitIdempotencyKey ? { idempotencyKey: explicitIdempotencyKey } : {}),
   } as Parameters<SessionManager["appendMessage"]>[0];
   const { SessionManager } = await loadPiCodingAgentModule();
-  const sessionManager = SessionManager.open(sessionFile);
+  const sessionManager = guardSessionManager(SessionManager.open(sessionFile), {
+    agentId: params.agentId,
+    sessionKey: params.sessionKey,
+    updateMode: params.updateMode ?? "inline",
+    config: params.config,
+  });
   const messageId = sessionManager.appendMessage(message);
-
-  switch (params.updateMode ?? "inline") {
-    case "inline":
-      emitSessionTranscriptUpdate({ sessionFile, sessionKey, message, messageId });
-      break;
-    case "file-only":
-      emitSessionTranscriptUpdate(sessionFile);
-      break;
-    case "none":
-      break;
-  }
   return { ok: true, sessionFile, messageId };
 }
 

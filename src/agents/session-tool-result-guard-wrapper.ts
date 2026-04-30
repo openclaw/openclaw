@@ -7,6 +7,7 @@ import {
   applyInputProvenanceToUserMessage,
   type InputProvenance,
 } from "../sessions/input-provenance.js";
+import type { SessionTranscriptUpdateMode } from "../sessions/transcript-events.js";
 import { resolveLiveToolResultMaxChars } from "./pi-embedded-runner/tool-result-truncation.js";
 import { installSessionToolResultGuard } from "./session-tool-result-guard.js";
 
@@ -16,6 +17,10 @@ export type GuardedSessionManager = SessionManager & {
   /** Clear pending tool calls without persisting synthetic tool results. Idempotent. */
   clearPendingToolResults?: () => void;
 };
+
+function getIdempotencyKey(message: unknown): unknown {
+  return (message as { idempotencyKey?: unknown } | null | undefined)?.idempotencyKey;
+}
 
 function redactTranscriptText(value: string, cfg?: OpenClawConfig): string {
   if (cfg?.logging?.redactSensitive === "off") {
@@ -91,6 +96,11 @@ export function guardSessionManager(
   opts?: {
     agentId?: string;
     sessionKey?: string;
+    /**
+     * How transcript update events are broadcast after each appendMessage.
+     * See `SessionTranscriptUpdateMode` for semantics. Defaults to `"inline"`.
+     */
+    updateMode?: SessionTranscriptUpdateMode;
     config?: OpenClawConfig;
     contextWindowTokens?: number;
     inputProvenance?: InputProvenance;
@@ -109,6 +119,9 @@ export function guardSessionManager(
   }) => {
     let message = event.message;
     let changed = false;
+    // Preserve idempotencyKey across hook rewrites — this is a persistence-layer
+    // identifier managed by the caller, not subject to plugin control.
+    const originalIdempotencyKey = getIdempotencyKey(message);
     if (hookRunner?.hasHooks("before_message_write")) {
       const result = hookRunner.runBeforeMessageWrite(event, {
         agentId: opts?.agentId,
@@ -121,6 +134,17 @@ export function guardSessionManager(
         message = result.message;
         changed = true;
       }
+    }
+    // Restore idempotencyKey if a hook rewrote it.
+    if (
+      originalIdempotencyKey !== undefined &&
+      getIdempotencyKey(message) !== originalIdempotencyKey
+    ) {
+      message = {
+        ...(message as AgentMessage & { idempotencyKey?: unknown }),
+        idempotencyKey: originalIdempotencyKey,
+      } as unknown as AgentMessage;
+      changed = true;
     }
     const redacted = redactTranscriptMessage(message, opts?.config);
     if (redacted !== message) {
@@ -155,6 +179,7 @@ export function guardSessionManager(
 
   const guard = installSessionToolResultGuard(sessionManager, {
     sessionKey: opts?.sessionKey,
+    updateMode: opts?.updateMode,
     transformMessageForPersistence: (message) =>
       applyInputProvenanceToUserMessage(message, opts?.inputProvenance),
     transformToolResultForPersistence: transform,

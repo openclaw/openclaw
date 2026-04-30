@@ -4,8 +4,9 @@ import { SessionManager } from "@mariozechner/pi-coding-agent";
 import {
   acquireSessionWriteLock,
   emitSessionTranscriptUpdate,
-  runAgentHarnessBeforeMessageWriteHook,
+  guardSessionManager,
   type AgentMessage,
+  type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 
 export async function mirrorCodexAppServerTranscript(params: {
@@ -14,6 +15,7 @@ export async function mirrorCodexAppServerTranscript(params: {
   agentId?: string;
   messages: AgentMessage[];
   idempotencyScope?: string;
+  config?: EmbeddedRunAttemptParams["config"];
 }): Promise<void> {
   const messages = params.messages.filter(
     (message) => message.role === "user" || message.role === "assistant",
@@ -29,7 +31,15 @@ export async function mirrorCodexAppServerTranscript(params: {
   });
   try {
     const existingIdempotencyKeys = await readTranscriptIdempotencyKeys(params.sessionFile);
-    const sessionManager = SessionManager.open(params.sessionFile);
+    const sessionManager = guardSessionManager(SessionManager.open(params.sessionFile), {
+      agentId: params.agentId,
+      sessionKey: params.sessionKey,
+      config: params.config,
+      // Suppress per-message emits inside the guard; the single batch-level
+      // emitSessionTranscriptUpdate below fires once after all messages are
+      // written, preserving the pre-guard semantics of one notification per mirror call.
+      updateMode: "none",
+    });
     for (const [index, message] of messages.entries()) {
       const idempotencyKey = params.idempotencyScope
         ? `${params.idempotencyScope}:${message.role}:${index}`
@@ -41,22 +51,12 @@ export async function mirrorCodexAppServerTranscript(params: {
         ...message,
         ...(idempotencyKey ? { idempotencyKey } : {}),
       } as Parameters<SessionManager["appendMessage"]>[0];
-      const nextMessage = runAgentHarnessBeforeMessageWriteHook({
-        message: transcriptMessage,
-        agentId: params.agentId,
-        sessionKey: params.sessionKey,
-      });
-      if (!nextMessage) {
-        continue;
-      }
-      const messageToAppend = (idempotencyKey
-        ? {
-            ...(nextMessage as unknown as Record<string, unknown>),
-            idempotencyKey,
-          }
-        : nextMessage) as unknown as Parameters<SessionManager["appendMessage"]>[0];
-      sessionManager.appendMessage(messageToAppend);
-      if (idempotencyKey) {
+      const appended = sessionManager.appendMessage(transcriptMessage);
+      // Only track the idempotency key if the message was actually persisted.
+      // When the before_message_write hook blocks the message, appendMessage
+      // returns undefined and the key should not be marked as seen, preserving
+      // consistency between the in-memory set and the on-disk JSONL.
+      if (idempotencyKey && appended !== undefined) {
         existingIdempotencyKeys.add(idempotencyKey);
       }
     }

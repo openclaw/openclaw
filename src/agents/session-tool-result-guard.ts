@@ -10,7 +10,10 @@ import type {
   PluginHookBeforeMessageWriteEvent,
   PluginHookBeforeMessageWriteResult,
 } from "../plugins/types.js";
-import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
+import {
+  emitSessionTranscriptUpdate,
+  type SessionTranscriptUpdateMode,
+} from "../sessions/transcript-events.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { formatContextLimitTruncationNotice } from "./pi-embedded-runner/tool-result-context-guard.js";
 import {
@@ -271,6 +274,12 @@ export function installSessionToolResultGuard(
     /** Optional session key for transcript update broadcasts. */
     sessionKey?: string;
     /**
+     * How guarded appendMessage broadcasts transcript updates. Defaults to `"inline"`
+     * (full payload with sessionFile/sessionKey/message/messageId). Use `"file-only"`
+     * to emit a lightweight sessionFile-only notification, or `"none"` to suppress.
+     */
+    updateMode?: SessionTranscriptUpdateMode;
+    /**
      * Optional transform applied to any message before persistence.
      */
     transformMessageForPersistence?: (message: AgentMessage) => AgentMessage;
@@ -455,13 +464,18 @@ export function installSessionToolResultGuard(
     const sessionFile = (
       sessionManager as { getSessionFile?: () => string | null }
     ).getSessionFile?.();
-    if (sessionFile) {
-      emitSessionTranscriptUpdate({
-        sessionFile,
-        sessionKey: opts?.sessionKey,
-        message: finalMessage,
-        messageId: typeof result === "string" ? result : undefined,
-      });
+    const updateMode = opts?.updateMode ?? "inline";
+    if (sessionFile && updateMode !== "none") {
+      emitSessionTranscriptUpdate(
+        updateMode === "inline"
+          ? {
+              sessionFile,
+              sessionKey: opts?.sessionKey,
+              message: finalMessage,
+              messageId: typeof result === "string" ? result : undefined,
+            }
+          : sessionFile,
+      );
     }
 
     if (toolCalls.length > 0) {

@@ -443,6 +443,43 @@ describe("before_message_write hook", () => {
     expect(messages[0]?.role).toBe("user");
   });
 
+  it("preserves caller-owned idempotency keys when before_message_write rewrites them", () => {
+    initializeTempPlugin({
+      tmpPrefix: "openclaw-before-write-idempotency-",
+      id: "before-write-idempotency",
+      body: `export default { id: "before-write-idempotency", register(api) {
+  api.on("before_message_write", (event) => {
+    return {
+      message: {
+        ...event.message,
+        idempotencyKey: "hook-rewritten-key",
+      },
+    };
+	  }, { priority: 10 });
+	} };`,
+    });
+
+    const sm = guardSessionManager(SessionManager.inMemory(), {
+      agentId: "main",
+      sessionKey: "main",
+    });
+    const appendMessage = sm.appendMessage.bind(sm) as unknown as (message: AgentMessage) => void;
+    appendMessage({
+      role: "user",
+      content: "hello",
+      timestamp: Date.now(),
+      idempotencyKey: "caller-owned-key",
+    } as AgentMessage);
+
+    const messages = sm
+      .getEntries()
+      .filter((e) => e.type === "message")
+      .map((e) => (e as { message: AgentMessage }).message);
+
+    expect(messages).toHaveLength(1);
+    expect((messages[0] as { idempotencyKey?: unknown }).idempotencyKey).toBe("caller-owned-key");
+  });
+
   it("reapplies the cap after before_message_write expands a tool result", () => {
     initializeTempPlugin({
       tmpPrefix: "openclaw-before-write-expand-",

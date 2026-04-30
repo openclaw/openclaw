@@ -7,6 +7,14 @@ export type SessionTranscriptUpdate = {
   messageId?: string;
 };
 
+/**
+ * Controls how transcript update events are broadcast after a message is appended:
+ * - `"inline"` (default): emit the full update payload (sessionFile + sessionKey + message + messageId)
+ * - `"file-only"`: emit a lightweight update carrying only sessionFile (listeners reload from disk)
+ * - `"none"`: suppress the event entirely
+ */
+export type SessionTranscriptUpdateMode = "inline" | "file-only" | "none";
+
 type SessionTranscriptListener = (update: SessionTranscriptUpdate) => void;
 
 const SESSION_TRANSCRIPT_LISTENERS = new Set<SessionTranscriptListener>();

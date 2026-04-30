@@ -1,5 +1,7 @@
 import fs from "node:fs";
-import { describe, expect, it, vi } from "vitest";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import * as transcriptEvents from "../../sessions/transcript-events.js";
 import { resolveSessionTranscriptPathInDir } from "./paths.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
@@ -8,13 +10,62 @@ import {
   appendExactAssistantMessageToSessionTranscript,
 } from "./transcript.js";
 
+type ExactAssistantMessage = Parameters<
+  typeof appendExactAssistantMessageToSessionTranscript
+>[0]["message"];
+
+function makeAssistantMessage(params: {
+  text?: string;
+  content?: ExactAssistantMessage["content"];
+  provider?: string;
+  model?: string;
+}): ExactAssistantMessage {
+  return {
+    role: "assistant",
+    content: params.content ?? [{ type: "text", text: params.text ?? "" }],
+    api: "openai-responses",
+    provider: params.provider ?? "codex",
+    model: params.model ?? "gpt-5.4",
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "stop",
+    timestamp: Date.now(),
+  };
+}
+
+const originalConfigPath = process.env.OPENCLAW_CONFIG_PATH;
+let tempConfigDirs: string[] = [];
+
+afterEach(() => {
+  if (originalConfigPath === undefined) {
+    delete process.env.OPENCLAW_CONFIG_PATH;
+  } else {
+    process.env.OPENCLAW_CONFIG_PATH = originalConfigPath;
+  }
+  for (const dir of tempConfigDirs) {
+    fs.rmSync(dir, { force: true, recursive: true });
+  }
+  tempConfigDirs = [];
+});
+
+function writeRedactConfig(source: string): void {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-transcript-redact-"));
+  tempConfigDirs.push(dir);
+  const configPath = path.join(dir, "openclaw.json");
+  fs.writeFileSync(configPath, source);
+  process.env.OPENCLAW_CONFIG_PATH = configPath;
+}
+
 describe("appendAssistantMessageToSessionTranscript", () => {
   const fixture = useTempSessionsFixture("transcript-test-");
   const sessionId = "test-session-id";
   const sessionKey = "test-session";
-  type ExactAssistantMessage = Parameters<
-    typeof appendExactAssistantMessageToSessionTranscript
-  >[0]["message"];
 
   function writeTranscriptStore() {
     fs.writeFileSync(
@@ -28,31 +79,6 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       }),
       "utf-8",
     );
-  }
-
-  function createExactAssistantMessage(params: {
-    text?: string;
-    content?: ExactAssistantMessage["content"];
-    provider?: string;
-    model?: string;
-  }): ExactAssistantMessage {
-    return {
-      role: "assistant",
-      content: params.content ?? [{ type: "text", text: params.text ?? "" }],
-      api: "openai-responses",
-      provider: params.provider ?? "codex",
-      model: params.model ?? "gpt-5.4",
-      usage: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 0,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-      },
-      stopReason: "stop",
-      timestamp: Date.now(),
-    };
   }
 
   it("creates transcript file and appends message for valid session", async () => {
@@ -152,7 +178,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     const exactResult = await appendExactAssistantMessageToSessionTranscript({
       sessionKey,
       storePath: fixture.storePath(),
-      message: createExactAssistantMessage({ text: "Hello from Codex!" }),
+      message: makeAssistantMessage({ text: "Hello from Codex!" }),
     });
 
     expect(exactResult.ok).toBe(true);
@@ -182,13 +208,13 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     const olderResult = await appendExactAssistantMessageToSessionTranscript({
       sessionKey,
       storePath: fixture.storePath(),
-      message: createExactAssistantMessage({ text: "Repeated answer" }),
+      message: makeAssistantMessage({ text: "Repeated answer" }),
     });
 
     const latestResult = await appendExactAssistantMessageToSessionTranscript({
       sessionKey,
       storePath: fixture.storePath(),
-      message: createExactAssistantMessage({ text: "Different latest answer" }),
+      message: makeAssistantMessage({ text: "Different latest answer" }),
     });
 
     const mirrorResult = await appendAssistantMessageToSessionTranscript({
@@ -299,7 +325,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     const result = await appendExactAssistantMessageToSessionTranscript({
       sessionKey,
       storePath: fixture.storePath(),
-      message: createExactAssistantMessage({
+      message: makeAssistantMessage({
         content: [
           {
             type: "text",
@@ -344,7 +370,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       sessionKey,
       storePath: fixture.storePath(),
       updateMode: "file-only",
-      message: createExactAssistantMessage({
+      message: makeAssistantMessage({
         text: "Done.",
         provider: "openclaw",
         model: "delivery-mirror",
@@ -353,7 +379,230 @@ describe("appendAssistantMessageToSessionTranscript", () => {
 
     expect(result.ok).toBe(true);
     if (result.ok) {
+      expect(emitSpy).toHaveBeenCalledTimes(1);
       expect(emitSpy).toHaveBeenCalledWith(result.sessionFile);
+    }
+    emitSpy.mockRestore();
+  });
+
+  it("can suppress transcript update events for exact assistant appends", async () => {
+    writeTranscriptStore();
+    const emitSpy = vi.spyOn(transcriptEvents, "emitSessionTranscriptUpdate");
+
+    const result = await appendExactAssistantMessageToSessionTranscript({
+      sessionKey,
+      storePath: fixture.storePath(),
+      updateMode: "none",
+      message: makeAssistantMessage({
+        text: "Done.",
+        provider: "openclaw",
+        model: "delivery-mirror",
+      }),
+    });
+
+    expect(result.ok).toBe(true);
+    expect(emitSpy).not.toHaveBeenCalled();
+    emitSpy.mockRestore();
+  });
+});
+
+describe("transcript message redaction via guardSessionManager", () => {
+  const fixture = useTempSessionsFixture("transcript-redact-");
+  const sessionId = "redact-session-id";
+  const sessionKey = "redact-session";
+
+  function writeStore() {
+    fs.writeFileSync(
+      fixture.storePath(),
+      JSON.stringify({
+        [sessionKey]: {
+          sessionId,
+          chatType: "direct",
+          channel: "discord",
+        },
+      }),
+      "utf-8",
+    );
+  }
+
+  it("writes non-sensitive text content verbatim to JSONL", async () => {
+    writeRedactConfig(
+      JSON.stringify({
+        logging: { redactSensitive: "tools", redactPatterns: [String.raw`sk-[a-zA-Z0-9]+`] },
+      }),
+    );
+    writeStore();
+
+    const plainText = "This is a normal message with no secrets.";
+    const result = await appendExactAssistantMessageToSessionTranscript({
+      sessionKey,
+      storePath: fixture.storePath(),
+      message: makeAssistantMessage({ text: plainText }),
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      const raw = fs.readFileSync(result.sessionFile, "utf-8");
+      expect(raw).toContain(plainText);
+    }
+  });
+
+  it("applies default redaction when no config is provided (safe fallback)", async () => {
+    // With no config passed, guardSessionManager uses undefined opts.config,
+    // so redactTranscriptText falls back to default redaction patterns.
+    // This is the intended safe fallback: callers without a config context
+    // still get redaction applied.
+    writeStore();
+
+    const secret = "apiKey=sk-abcdef1234567890xyz";
+    const result = await appendExactAssistantMessageToSessionTranscript({
+      sessionKey,
+      storePath: fixture.storePath(),
+      message: makeAssistantMessage({ text: `Here is the key: ${secret}` }),
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      const raw = fs.readFileSync(result.sessionFile, "utf-8");
+      // Default redaction masks long alphanumeric tokens
+      expect(raw).not.toContain("sk-abcdef1234567890xyz");
+    }
+  });
+
+  it("honours logging.redactSensitive=off when config is passed through", async () => {
+    // Regression test: before this fix, config was not threaded through
+    // to guardSessionManager, so redactSensitive="off" was silently ignored.
+    writeStore();
+
+    const secret = "apiKey=sk-abcdef1234567890xyz";
+    const result = await appendExactAssistantMessageToSessionTranscript({
+      sessionKey,
+      storePath: fixture.storePath(),
+      message: makeAssistantMessage({ text: `Here is the key: ${secret}` }),
+      config: { logging: { redactSensitive: "off" } } as Parameters<
+        typeof appendExactAssistantMessageToSessionTranscript
+      >[0]["config"],
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      const raw = fs.readFileSync(result.sessionFile, "utf-8");
+      // With redactSensitive="off", the secret should appear verbatim
+      expect(raw).toContain("sk-abcdef1234567890xyz");
+    }
+  });
+
+  it("masks Bearer tokens in thinking blocks persisted to JSONL", async () => {
+    writeRedactConfig(
+      JSON.stringify({
+        logging: { redactSensitive: "tools", redactPatterns: [String.raw`Bearer\s+[a-zA-Z0-9_]+`] },
+      }),
+    );
+    writeStore();
+
+    const result = await appendExactAssistantMessageToSessionTranscript({
+      sessionKey,
+      storePath: fixture.storePath(),
+      message: makeAssistantMessage({
+        content: [
+          {
+            type: "thinking",
+            thinking: "I will authenticate using Bearer ghp_abcdefghijklmnopqrst",
+            thinkingSignature: "sig-v1",
+          },
+          { type: "text", text: "Done." },
+        ],
+      }),
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      const raw = fs.readFileSync(result.sessionFile, "utf-8");
+      expect(raw).not.toContain("ghp_abcdefghijklmnopqrst");
+    }
+  });
+
+  it("passes through non-text content blocks unchanged", async () => {
+    writeRedactConfig(
+      JSON.stringify({
+        logging: { redactSensitive: "tools", redactPatterns: [String.raw`sk-[a-zA-Z0-9]+`] },
+      }),
+    );
+    writeStore();
+
+    const imageUrl = "https://example.com/image.png";
+    const result = await appendExactAssistantMessageToSessionTranscript({
+      sessionKey,
+      storePath: fixture.storePath(),
+      message: makeAssistantMessage({
+        content: [
+          { type: "image_url", image_url: { url: imageUrl } } as any,
+          { type: "text", text: "See image above" },
+        ],
+      }),
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      const raw = fs.readFileSync(result.sessionFile, "utf-8");
+      expect(raw).toContain(imageUrl);
+    }
+  });
+
+  it("preserves idempotency-key dedup after guard wrapping", async () => {
+    writeRedactConfig(
+      JSON.stringify({
+        logging: { redactSensitive: "tools", redactPatterns: [String.raw`sk-[a-zA-Z0-9]+`] },
+      }),
+    );
+    writeStore();
+
+    const r1 = await appendExactAssistantMessageToSessionTranscript({
+      sessionKey,
+      storePath: fixture.storePath(),
+      idempotencyKey: "dup-test-key",
+      message: makeAssistantMessage({ text: "First write sk-abc123" }),
+    });
+    const r2 = await appendExactAssistantMessageToSessionTranscript({
+      sessionKey,
+      storePath: fixture.storePath(),
+      idempotencyKey: "dup-test-key",
+      message: makeAssistantMessage({ text: "Second write sk-def456" }),
+    });
+
+    expect(r1.ok).toBe(true);
+    expect(r2.ok).toBe(true);
+    if (r1.ok && r2.ok) {
+      expect(r2.messageId).toBe(r1.messageId);
+      const lines = fs.readFileSync(r2.sessionFile, "utf-8").trim().split("\n");
+      // header + exactly one message line
+      expect(lines.length).toBe(2);
+    }
+  });
+
+  it("still emits transcript update event with correct payload after guard wrapping", async () => {
+    writeStore();
+
+    const emitSpy = vi.spyOn(transcriptEvents, "emitSessionTranscriptUpdate");
+
+    const result = await appendExactAssistantMessageToSessionTranscript({
+      sessionKey,
+      storePath: fixture.storePath(),
+      message: makeAssistantMessage({ text: "Event test message" }),
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(emitSpy).toHaveBeenCalledTimes(1);
+      const lastCallArg = emitSpy.mock.lastCall?.[0];
+      const lastCall = typeof lastCallArg === "object" ? lastCallArg : undefined;
+      expect(lastCall?.sessionFile).toBe(result.sessionFile);
+      expect(lastCall?.sessionKey).toBe(sessionKey);
+      expect(lastCall?.messageId).toBe(result.messageId);
+      expect(
+        (lastCall?.message as { content?: Array<{ type?: string }> } | undefined)?.content?.[0]
+          ?.type,
+      ).toBe("text");
     }
     emitSpy.mockRestore();
   });

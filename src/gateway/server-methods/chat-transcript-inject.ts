@@ -1,6 +1,6 @@
 import { SessionManager } from "@mariozechner/pi-coding-agent";
+import { guardSessionManager } from "../../agents/session-tool-result-guard-wrapper.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 
 type AppendMessageArg = Parameters<SessionManager["appendMessage"]>[0];
 
@@ -102,13 +102,9 @@ export function appendInjectedAssistantMessageToTranscript(params: {
   try {
     // IMPORTANT: Use SessionManager so the entry is attached to the current leaf via parentId.
     // Raw jsonl appends break the parent chain and can hide compaction summaries from context.
-    const sessionManager = SessionManager.open(params.transcriptPath);
+    // No agentId/sessionKey: system-level inject with no agent context; default redaction still applies.
+    const sessionManager = guardSessionManager(SessionManager.open(params.transcriptPath), {});
     const messageId = sessionManager.appendMessage(messageBody);
-    emitSessionTranscriptUpdate({
-      sessionFile: params.transcriptPath,
-      message: messageBody,
-      messageId,
-    });
     return { ok: true, messageId, message: messageBody };
   } catch (err) {
     return { ok: false, error: formatErrorMessage(err) };
