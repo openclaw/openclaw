@@ -428,17 +428,6 @@ export function createOpenClawCodingTools(options?: {
           store: subagentStore,
         })
       : undefined;
-  const allowBackground = isToolAllowedByPolicies("process", [
-    profilePolicyWithAlsoAllow,
-    providerProfilePolicyWithAlsoAllow,
-    globalPolicy,
-    globalProviderPolicy,
-    agentPolicy,
-    agentProviderPolicy,
-    groupPolicy,
-    sandboxToolPolicy,
-    subagentPolicy,
-  ]);
   const execConfig = resolveExecConfig({ cfg: options?.config, agentId });
   const fsConfig = resolveToolFsConfig({ cfg: options?.config, agentId });
   const fsPolicy = createToolFsPolicy({
@@ -525,7 +514,10 @@ export function createOpenClawCodingTools(options?: {
     safeBinProfiles: options?.exec?.safeBinProfiles ?? execConfig.safeBinProfiles,
     agentId,
     cwd: workspaceRoot,
-    allowBackground,
+    // Exec owns process lifetime and timeout. Keep auto-backgrounding available
+    // even when the separate process follow-up tool is hidden, so long-running
+    // commands cannot pin the agent turn indefinitely.
+    allowBackground: true,
     scopeKey,
     sessionKey: options?.sessionKey,
     messageProvider: options?.messageProvider,
