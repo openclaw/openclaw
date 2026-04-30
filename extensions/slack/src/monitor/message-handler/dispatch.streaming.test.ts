@@ -176,6 +176,27 @@ describe("slack progress tool titles", () => {
       normalizeSlackProgressToolTitle({ title: "ov read viking://resources/docs/api.md" }),
     ).toBe("Exploring memory");
   });
+
+  it("only labels explicit Linear-shaped titles as Linear", () => {
+    expect(
+      normalizeSlackProgressToolTitle({
+        title: "linear issue search",
+        itemId: "tool_linear_1",
+      }),
+    ).toBe("Using Linear");
+    expect(
+      normalizeSlackProgressToolTitle({
+        title: "inline diff review",
+        itemId: "tool_pipeline_1",
+      }),
+    ).toBe("inline diff review");
+    expect(
+      normalizeSlackProgressToolTitle({
+        title: "lint workspace",
+        itemId: "tool_lint_1",
+      }),
+    ).toBe("lint workspace");
+  });
 });
 
 describe("slack native streaming thread hint", () => {

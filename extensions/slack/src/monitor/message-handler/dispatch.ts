@@ -137,6 +137,8 @@ export function normalizeSlackProgressToolTitle(params: {
   itemId?: string;
 }): string {
   const haystack = `${params.title ?? ""} ${params.itemId ?? ""}`.toLowerCase();
+  const looksLikeLinear =
+    /\blinear\b/.test(haystack) || /(?:^|[_:\-\s])linear(?:[_:\-\s]|$)/.test(haystack);
   const isMemoryRelated =
     haystack.includes("openviking") ||
     haystack.includes(" viking") ||
@@ -170,7 +172,7 @@ export function normalizeSlackProgressToolTitle(params: {
   ) {
     return "Exploring memory";
   }
-  if (haystack.includes("lin") || haystack.includes("linear")) {
+  if (looksLikeLinear) {
     return "Using Linear";
   }
   if (haystack.includes("gog") || haystack.includes("google")) {
