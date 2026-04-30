@@ -75,13 +75,41 @@ gchar* mutation_cron_run(const gchar *job_id,
                          GatewayRpcCallback cb, gpointer data);
 
 /*
- * Create or update a cron job. Pass the full payload as a pre-built
- * JsonNode (object). Ownership is NOT transferred — caller retains it.
+ * Typed input for cron.add / cron.update payloads.
+ *
+ * Optional-field semantics (preserved from the previous UI builder):
+ *   - description omitted when NULL or empty.
+ *   - agent_id omitted when NULL or empty.
+ *   - prompt omitted (no payload object) when NULL or empty. Callers that
+ *     require a prompt (for example the create UI) validate this themselves;
+ *     the mutation layer does not enforce it.
+ *
+ * All const gchar* members are borrowed; the caller retains ownership.
  */
-gchar* mutation_cron_add(JsonNode *params,
+typedef struct {
+    const gchar *name;            /* required, non-empty */
+    const gchar *description;     /* optional */
+    const gchar *agent_id;        /* optional */
+    const gchar *schedule_kind;   /* required; "cron" today */
+    const gchar *schedule_expr;   /* required */
+    const gchar *session_target;  /* required, e.g. "main"/"current"/"isolated" */
+    const gchar *wake_mode;       /* required, e.g. "now"/"next-heartbeat" */
+    const gchar *prompt;          /* optional; produces payload.message */
+} GatewayCronJobMutationFields;
+
+/*
+ * Create a cron job. Emits enabled: true at the root in addition to the
+ * shared field block built by mutation_build_cron_job_fields.
+ */
+gchar* mutation_cron_add(const GatewayCronJobMutationFields *fields,
                          GatewayRpcCallback cb, gpointer data);
 
-gchar* mutation_cron_update(JsonNode *params,
+/*
+ * Update a cron job. Emits { id, patch: { ...shared field block... } }.
+ * Does not emit enabled (use mutation_cron_enable for that).
+ */
+gchar* mutation_cron_update(const gchar *id,
+                            const GatewayCronJobMutationFields *fields,
                             GatewayRpcCallback cb, gpointer data);
 
 /* ── Channels mutations ──────────────────────────────────────────── */

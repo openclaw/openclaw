@@ -280,45 +280,43 @@ static void test_cron_run(void) {
 
 static void test_cron_add(void) {
     stub_reset();
-    JsonBuilder *b = json_builder_new();
-    json_builder_begin_object(b);
-    json_builder_set_member_name(b, "name");
-    json_builder_add_string_value(b, "Test Job");
-    json_builder_set_member_name(b, "enabled");
-    json_builder_add_boolean_value(b, TRUE);
-    json_builder_end_object(b);
-    JsonNode *params = json_builder_get_root(b);
-    g_object_unref(b);
+    GatewayCronJobMutationFields fields = {
+        .name = "Test Job",
+        .schedule_kind = "cron",
+        .schedule_expr = "0 9 * * *",
+        .session_target = "main",
+        .wake_mode = "next-heartbeat",
+        .prompt = "do work",
+    };
 
-    gchar *rid = mutation_cron_add(params, noop_cb, NULL);
+    gchar *rid = mutation_cron_add(&fields, noop_cb, NULL);
     ASSERT(rid != NULL, "cron_add: rid");
     ASSERT(g_strcmp0(stub_last_method, "cron.add") == 0, "cron_add: method");
     JsonObject *p = get_stub_params_obj();
     ASSERT(g_strcmp0(obj_get_string(p, "name"), "Test Job") == 0, "cron_add: name");
     ASSERT(obj_get_bool(p, "enabled") == TRUE, "cron_add: enabled");
-    json_node_unref(params);
     g_free(rid);
 }
 
 static void test_cron_update(void) {
     stub_reset();
-    JsonBuilder *b = json_builder_new();
-    json_builder_begin_object(b);
-    json_builder_set_member_name(b, "id");
-    json_builder_add_string_value(b, "job-1");
-    json_builder_set_member_name(b, "name");
-    json_builder_add_string_value(b, "Updated Job");
-    json_builder_end_object(b);
-    JsonNode *params = json_builder_get_root(b);
-    g_object_unref(b);
+    GatewayCronJobMutationFields fields = {
+        .name = "Updated Job",
+        .schedule_kind = "cron",
+        .schedule_expr = "0 9 * * *",
+        .session_target = "main",
+        .wake_mode = "next-heartbeat",
+    };
 
-    gchar *rid = mutation_cron_update(params, noop_cb, NULL);
+    gchar *rid = mutation_cron_update("job-1", &fields, noop_cb, NULL);
     ASSERT(rid != NULL, "cron_update: rid");
     ASSERT(g_strcmp0(stub_last_method, "cron.update") == 0, "cron_update: method");
     JsonObject *p = get_stub_params_obj();
     ASSERT(g_strcmp0(obj_get_string(p, "id"), "job-1") == 0, "cron_update: id");
-    ASSERT(g_strcmp0(obj_get_string(p, "name"), "Updated Job") == 0, "cron_update: name");
-    json_node_unref(params);
+    JsonObject *patch = json_object_get_object_member(p, "patch");
+    ASSERT(patch != NULL, "cron_update: patch object");
+    ASSERT(g_strcmp0(obj_get_string(patch, "name"), "Updated Job") == 0, "cron_update: patch.name");
+    ASSERT(!json_object_has_member(patch, "enabled"), "cron_update: patch omits enabled");
     g_free(rid);
 }
 
@@ -503,243 +501,125 @@ static void test_web_login_wait_null_account(void) {
 
 static void test_cron_add_expanded(void) {
     stub_reset();
-    JsonBuilder *b = json_builder_new();
-    json_builder_begin_object(b);
-    
-    json_builder_set_member_name(b, "name");
-    json_builder_add_string_value(b, "Daily Report");
-    json_builder_set_member_name(b, "description");
-    json_builder_add_string_value(b, "Generates daily summary");
-    json_builder_set_member_name(b, "agentId");
-    json_builder_add_string_value(b, "reporter-agent");
-    json_builder_set_member_name(b, "enabled");
-    json_builder_add_boolean_value(b, TRUE);
-    
-    /* schedule - backend contract uses 'kind' and 'expr' */
-    json_builder_set_member_name(b, "schedule");
-    json_builder_begin_object(b);
-    json_builder_set_member_name(b, "kind");
-    json_builder_add_string_value(b, "cron");
-    json_builder_set_member_name(b, "expr");
-    json_builder_add_string_value(b, "0 9 * * *");
-    json_builder_end_object(b);
-    
-    /* sessionTarget - backend contract requires string directly */
-    json_builder_set_member_name(b, "sessionTarget");
-    json_builder_add_string_value(b, "main");
-    
-    /* wakeMode - backend contract requires string directly */
-    json_builder_set_member_name(b, "wakeMode");
-    json_builder_add_string_value(b, "next-heartbeat");
-    
-    /* payload - backend contract uses 'kind' not 'type' */
-    json_builder_set_member_name(b, "payload");
-    json_builder_begin_object(b);
-    json_builder_set_member_name(b, "kind");
-    json_builder_add_string_value(b, "agentTurn");
-    json_builder_set_member_name(b, "message");
-    json_builder_add_string_value(b, "Generate daily summary");
-    json_builder_end_object(b);
-    
-    json_builder_end_object(b);
-    JsonNode *params = json_builder_get_root(b);
-    g_object_unref(b);
+    GatewayCronJobMutationFields fields = {
+        .name = "Daily Report",
+        .description = "Generates daily summary",
+        .agent_id = "reporter-agent",
+        .schedule_kind = "cron",
+        .schedule_expr = "0 9 * * *",
+        .session_target = "main",
+        .wake_mode = "next-heartbeat",
+        .prompt = "Generate daily summary",
+    };
 
-    gchar *rid = mutation_cron_add(params, noop_cb, NULL);
+    gchar *rid = mutation_cron_add(&fields, noop_cb, NULL);
     ASSERT(rid != NULL, "cron_add_expanded: rid");
     ASSERT(g_strcmp0(stub_last_method, "cron.add") == 0, "cron_add_expanded: method");
     JsonObject *p = get_stub_params_obj();
     ASSERT(g_strcmp0(obj_get_string(p, "name"), "Daily Report") == 0, "cron_add_expanded: name");
     ASSERT(g_strcmp0(obj_get_string(p, "description"), "Generates daily summary") == 0, "cron_add_expanded: description");
     ASSERT(g_strcmp0(obj_get_string(p, "agentId"), "reporter-agent") == 0, "cron_add_expanded: agentId");
+    ASSERT(obj_get_bool(p, "enabled") == TRUE, "cron_add_expanded: enabled");
     ASSERT(g_strcmp0(obj_get_string(p, "sessionTarget"), "main") == 0, "cron_add_expanded: sessionTarget");
     ASSERT(g_strcmp0(obj_get_string(p, "wakeMode"), "next-heartbeat") == 0, "cron_add_expanded: wakeMode");
-    
-    /* Verify schedule uses 'kind' and 'expr' per contract */
+
     JsonObject *sched = json_object_get_object_member(p, "schedule");
     ASSERT(sched != NULL, "cron_add_expanded: schedule obj");
     ASSERT(g_strcmp0(obj_get_string(sched, "kind"), "cron") == 0, "cron_add_expanded: schedule.kind");
     ASSERT(g_strcmp0(obj_get_string(sched, "expr"), "0 9 * * *") == 0, "cron_add_expanded: schedule.expr");
-    
-    /* Verify payload uses 'kind' not 'type' */
+
     JsonObject *payload = json_object_get_object_member(p, "payload");
     ASSERT(payload != NULL, "cron_add_expanded: payload obj");
     ASSERT(g_strcmp0(obj_get_string(payload, "kind"), "agentTurn") == 0, "cron_add_expanded: payload.kind");
     ASSERT(g_strcmp0(obj_get_string(payload, "message"), "Generate daily summary") == 0, "cron_add_expanded: payload.message");
-    
-    json_node_unref(params);
+
     g_free(rid);
 }
 
 static void test_cron_update_expanded(void) {
     stub_reset();
-    /* Build the exact payload structure that on_edit_job_dialog_response emits:
-     * { "id": "...", "patch": { "name": "...", "description": "...", 
-     *   "agentId": "...", "schedule": { "kind": "cron", "expr": "..." } } } */
-    JsonBuilder *b = json_builder_new();
-    json_builder_begin_object(b);
-    json_builder_set_member_name(b, "id");
-    json_builder_add_string_value(b, "job-1");
-    
-    json_builder_set_member_name(b, "patch");
-    json_builder_begin_object(b);
-    json_builder_set_member_name(b, "name");
-    json_builder_add_string_value(b, "Updated Job");
-    json_builder_set_member_name(b, "description");
-    json_builder_add_string_value(b, "Updated description");
-    json_builder_set_member_name(b, "agentId");
-    json_builder_add_string_value(b, "new-agent");
-    
-    /* schedule patch - backend contract uses 'kind' and 'expr' */
-    json_builder_set_member_name(b, "schedule");
-    json_builder_begin_object(b);
-    json_builder_set_member_name(b, "kind");
-    json_builder_add_string_value(b, "cron");
-    json_builder_set_member_name(b, "expr");
-    json_builder_add_string_value(b, "30 10 * * *");
-    json_builder_end_object(b);
-    
-    json_builder_end_object(b); /* end patch */
-    json_builder_end_object(b); /* end root */
-    
-    JsonNode *params = json_builder_get_root(b);
-    g_object_unref(b);
+    GatewayCronJobMutationFields fields = {
+        .name = "Updated Job",
+        .description = "Updated description",
+        .agent_id = "new-agent",
+        .schedule_kind = "cron",
+        .schedule_expr = "30 10 * * *",
+        .session_target = "main",
+        .wake_mode = "next-heartbeat",
+    };
 
-    gchar *rid = mutation_cron_update(params, noop_cb, NULL);
+    gchar *rid = mutation_cron_update("job-1", &fields, noop_cb, NULL);
     ASSERT(rid != NULL, "cron_update_expanded: rid");
     ASSERT(g_strcmp0(stub_last_method, "cron.update") == 0, "cron_update_expanded: method");
-    
-    /* Validate top-level structure */
+
     JsonObject *p = get_stub_params_obj();
     ASSERT(g_strcmp0(obj_get_string(p, "id"), "job-1") == 0, "cron_update_expanded: id");
-    
-    /* Validate nested patch object */
     ASSERT(json_object_has_member(p, "patch"), "cron_update_expanded: has patch member");
     JsonNode *patch_node = json_object_get_member(p, "patch");
     ASSERT(patch_node && JSON_NODE_HOLDS_OBJECT(patch_node), "cron_update_expanded: patch is object");
-    
+
     JsonObject *patch = json_node_get_object(patch_node);
     ASSERT(g_strcmp0(obj_get_string(patch, "name"), "Updated Job") == 0, "cron_update_expanded: patch.name");
     ASSERT(g_strcmp0(obj_get_string(patch, "description"), "Updated description") == 0, "cron_update_expanded: patch.description");
     ASSERT(g_strcmp0(obj_get_string(patch, "agentId"), "new-agent") == 0, "cron_update_expanded: patch.agentId");
-    
-    /* Verify schedule in patch uses 'kind' and 'expr' per contract */
+    ASSERT(!json_object_has_member(patch, "enabled"), "cron_update_expanded: patch omits enabled");
+
     JsonObject *sched = json_object_get_object_member(patch, "schedule");
     ASSERT(sched != NULL, "cron_update_expanded: patch.schedule obj");
     ASSERT(g_strcmp0(obj_get_string(sched, "kind"), "cron") == 0, "cron_update_expanded: patch.schedule.kind");
     ASSERT(g_strcmp0(obj_get_string(sched, "expr"), "30 10 * * *") == 0, "cron_update_expanded: patch.schedule.expr");
-    
-    json_node_unref(params);
+
     g_free(rid);
 }
 
 static void test_cron_update_full_payload(void) {
     stub_reset();
-    /* This test verifies the ACTUAL edit payload shape built by on_edit_job_dialog_response.
-     * The expanded edit dialog now includes:
-     * - sessionTarget (combo selection)
-     * - wakeMode (combo selection)
-     * - payload with kind and message (if prompt provided)
-     *
-     * Expected payload structure:
-     * {
-     *   "id": "job-1",
-     *   "patch": {
-     *     "name": "Updated Job",
-     *     "description": "Updated description",
-     *     "agentId": "new-agent",
-     *     "schedule": { "kind": "cron", "expr": "30 10 * * *" },
-     *     "sessionTarget": "main",
-     *     "wakeMode": "next-heartbeat",
-     *     "payload": { "kind": "agentTurn", "message": "Generate daily summary" }
-     *   }
-     * }
+    /* Verify the full edit payload that section_cron.c emits:
+     * { "id": "job-1",
+     *   "patch": { name, description, agentId, schedule{kind,expr},
+     *              sessionTarget, wakeMode, payload{kind,message} } }
      */
-    JsonBuilder *b = json_builder_new();
-    json_builder_begin_object(b);
-    json_builder_set_member_name(b, "id");
-    json_builder_add_string_value(b, "job-1");
-    
-    json_builder_set_member_name(b, "patch");
-    json_builder_begin_object(b);
-    json_builder_set_member_name(b, "name");
-    json_builder_add_string_value(b, "Updated Job");
-    json_builder_set_member_name(b, "description");
-    json_builder_add_string_value(b, "Updated description");
-    json_builder_set_member_name(b, "agentId");
-    json_builder_add_string_value(b, "new-agent");
-    
-    /* schedule - backend contract uses 'kind' and 'expr' */
-    json_builder_set_member_name(b, "schedule");
-    json_builder_begin_object(b);
-    json_builder_set_member_name(b, "kind");
-    json_builder_add_string_value(b, "cron");
-    json_builder_set_member_name(b, "expr");
-    json_builder_add_string_value(b, "30 10 * * *");
-    json_builder_end_object(b);
-    
-    /* sessionTarget - added in Phase 2 edit dialog expansion */
-    json_builder_set_member_name(b, "sessionTarget");
-    json_builder_add_string_value(b, "main");
-    
-    /* wakeMode - added in Phase 2 edit dialog expansion */
-    json_builder_set_member_name(b, "wakeMode");
-    json_builder_add_string_value(b, "next-heartbeat");
-    
-    /* payload - added in Phase 2 edit dialog expansion */
-    json_builder_set_member_name(b, "payload");
-    json_builder_begin_object(b);
-    json_builder_set_member_name(b, "kind");
-    json_builder_add_string_value(b, "agentTurn");
-    json_builder_set_member_name(b, "message");
-    json_builder_add_string_value(b, "Generate daily summary");
-    json_builder_end_object(b);
-    
-    json_builder_end_object(b); /* end patch */
-    json_builder_end_object(b); /* end root */
-    
-    JsonNode *params = json_builder_get_root(b);
-    g_object_unref(b);
+    GatewayCronJobMutationFields fields = {
+        .name = "Updated Job",
+        .description = "Updated description",
+        .agent_id = "new-agent",
+        .schedule_kind = "cron",
+        .schedule_expr = "30 10 * * *",
+        .session_target = "main",
+        .wake_mode = "next-heartbeat",
+        .prompt = "Generate daily summary",
+    };
 
-    gchar *rid = mutation_cron_update(params, noop_cb, NULL);
+    gchar *rid = mutation_cron_update("job-1", &fields, noop_cb, NULL);
     ASSERT(rid != NULL, "cron_update_full: rid");
     ASSERT(g_strcmp0(stub_last_method, "cron.update") == 0, "cron_update_full: method");
-    
-    /* Validate top-level id */
+
     JsonObject *p = get_stub_params_obj();
     ASSERT(g_strcmp0(obj_get_string(p, "id"), "job-1") == 0, "cron_update_full: id");
-    
-    /* Validate nested patch object exists */
+
     ASSERT(json_object_has_member(p, "patch"), "cron_update_full: has patch member");
     JsonNode *patch_node = json_object_get_member(p, "patch");
     ASSERT(patch_node && JSON_NODE_HOLDS_OBJECT(patch_node), "cron_update_full: patch is object");
-    
+
     JsonObject *patch = json_node_get_object(patch_node);
-    
-    /* Validate basic patch fields */
     ASSERT(g_strcmp0(obj_get_string(patch, "name"), "Updated Job") == 0, "cron_update_full: patch.name");
     ASSERT(g_strcmp0(obj_get_string(patch, "description"), "Updated description") == 0, "cron_update_full: patch.description");
     ASSERT(g_strcmp0(obj_get_string(patch, "agentId"), "new-agent") == 0, "cron_update_full: patch.agentId");
-    
-    /* Validate schedule in patch */
+    ASSERT(!json_object_has_member(patch, "enabled"), "cron_update_full: patch omits enabled");
+
     JsonObject *sched = json_object_get_object_member(patch, "schedule");
     ASSERT(sched != NULL, "cron_update_full: patch.schedule obj");
     ASSERT(g_strcmp0(obj_get_string(sched, "kind"), "cron") == 0, "cron_update_full: patch.schedule.kind");
     ASSERT(g_strcmp0(obj_get_string(sched, "expr"), "30 10 * * *") == 0, "cron_update_full: patch.schedule.expr");
-    
-    /* Validate NEW Phase 2 fields: sessionTarget */
+
     ASSERT(g_strcmp0(obj_get_string(patch, "sessionTarget"), "main") == 0, "cron_update_full: patch.sessionTarget");
-    
-    /* Validate NEW Phase 2 fields: wakeMode */
     ASSERT(g_strcmp0(obj_get_string(patch, "wakeMode"), "next-heartbeat") == 0, "cron_update_full: patch.wakeMode");
-    
-    /* Validate NEW Phase 2 fields: payload with kind and message */
+
     JsonObject *payload = json_object_get_object_member(patch, "payload");
     ASSERT(payload != NULL, "cron_update_full: patch.payload obj");
     ASSERT(g_strcmp0(obj_get_string(payload, "kind"), "agentTurn") == 0, "cron_update_full: patch.payload.kind");
     ASSERT(g_strcmp0(obj_get_string(payload, "message"), "Generate daily summary") == 0, "cron_update_full: patch.payload.message");
-    
-    json_node_unref(params);
+
     g_free(rid);
 }
 
@@ -981,166 +861,58 @@ static void test_config_save_preserves_unrelated_keys(void) {
     g_object_unref(verify_parser);
 }
 
-/* ── Cron edit patch builder helper (exercises actual UI logic) ─────
+/* ── Cron mutation optional-field omission ─────────────────────────
  *
- * This helper mimics the EXACT builder logic from on_edit_job_dialog_response
- * in section_cron.c. It captures all fields that the edit dialog now exposes:
- * - id
- * - patch.name, patch.description, patch.agentId
- * - patch.schedule.kind, patch.schedule.expr
- * - patch.sessionTarget, patch.wakeMode
- * - patch.payload.kind, patch.payload.message (conditional on prompt)
- *
- * Testing this helper proves the UI path produces the correct shape.
+ * Verifies the optional-field semantics owned by mutation_build_cron_job_fields:
+ * description, agentId, and payload are omitted when their backing string is
+ * NULL or empty, while required scalars (sessionTarget, wakeMode, schedule)
+ * are always present. The mutation layer does not enforce a non-empty prompt;
+ * callers like the create UI validate that themselves.
  */
+static void test_cron_update_omits_optional_fields(void) {
+    stub_reset();
+    GatewayCronJobMutationFields fields = {
+        .name = "Heartbeat",
+        .description = NULL,
+        .agent_id = "",
+        .schedule_kind = "cron",
+        .schedule_expr = "*/5 * * * *",
+        .session_target = "isolated",
+        .wake_mode = "now",
+        .prompt = "",
+    };
 
-static JsonNode* build_cron_edit_patch(const gchar *job_id,
-                                       const gchar *name,
-                                       const gchar *schedule,
-                                       const gchar *desc,
-                                       const gchar *agent,
-                                       const gchar *session_target,
-                                       const gchar *wake_mode,
-                                       const gchar *prompt) {
-    JsonBuilder *b = json_builder_new();
-    json_builder_begin_object(b);
-    json_builder_set_member_name(b, "id");
-    json_builder_add_string_value(b, job_id);
-    
-    json_builder_set_member_name(b, "patch");
-    json_builder_begin_object(b);
-    json_builder_set_member_name(b, "name");
-    json_builder_add_string_value(b, name);
+    gchar *rid = mutation_cron_update("job-456", &fields, noop_cb, NULL);
+    ASSERT(rid != NULL, "cron_update_omit: rid");
+    ASSERT(g_strcmp0(stub_last_method, "cron.update") == 0, "cron_update_omit: method");
 
-    if (desc && *desc != '\0') {
-        json_builder_set_member_name(b, "description");
-        json_builder_add_string_value(b, desc);
-    }
-    if (agent && *agent != '\0') {
-        json_builder_set_member_name(b, "agentId");
-        json_builder_add_string_value(b, agent);
-    }
-    
-    /* schedule patch - contract requires 'kind' and 'expr' for cron type */
-    json_builder_set_member_name(b, "schedule");
-    json_builder_begin_object(b);
-    json_builder_set_member_name(b, "kind");
-    json_builder_add_string_value(b, "cron");
-    json_builder_set_member_name(b, "expr");
-    json_builder_add_string_value(b, schedule);
-    json_builder_end_object(b);
-    
-    /* sessionTarget - added in Phase 2 */
-    if (session_target && *session_target != '\0') {
-        json_builder_set_member_name(b, "sessionTarget");
-        json_builder_add_string_value(b, session_target);
-    }
-    
-    /* wakeMode - added in Phase 2 */
-    if (wake_mode && *wake_mode != '\0') {
-        json_builder_set_member_name(b, "wakeMode");
-        json_builder_add_string_value(b, wake_mode);
-    }
-    
-    /* payload with kind and message - added in Phase 2, conditional on prompt */
-    if (prompt && *prompt != '\0') {
-        json_builder_set_member_name(b, "payload");
-        json_builder_begin_object(b);
-        json_builder_set_member_name(b, "kind");
-        json_builder_add_string_value(b, "agentTurn");
-        json_builder_set_member_name(b, "message");
-        json_builder_add_string_value(b, prompt);
-        json_builder_end_object(b);
-    }
-    
-    json_builder_end_object(b); /* end patch */
-    json_builder_end_object(b); /* end root */
-    
-    JsonNode *params = json_builder_get_root(b);
-    g_object_unref(b);
-    return params;
-}
+    JsonObject *p = get_stub_params_obj();
+    ASSERT(g_strcmp0(obj_get_string(p, "id"), "job-456") == 0, "cron_update_omit: id");
 
-static void test_cron_edit_patch_builder_helper(void) {
-    /* Test with ALL fields (including prompt -> payload should be present) */
-    JsonNode *params1 = build_cron_edit_patch(
-        "job-123",
-        "Daily Report",
-        "0 9 * * *",
-        "Send daily summary",
-        "reporter-agent",
-        "main",
-        "next-heartbeat",
-        "Generate a daily summary of all activities"
-    );
-    
-    /* Verify top-level id */
-    JsonObject *root = json_node_get_object(params1);
-    ASSERT(g_strcmp0(obj_get_string(root, "id"), "job-123") == 0,
-           "cron_builder: id field");
-    
-    /* Verify patch exists and is object */
-    ASSERT(json_object_has_member(root, "patch"), "cron_builder: has patch");
-    JsonObject *patch = json_object_get_object_member(root, "patch");
-    ASSERT(patch != NULL, "cron_builder: patch is object");
-    
-    /* Verify all 9 fields (id + 8 patch fields) */
-    ASSERT(g_strcmp0(obj_get_string(patch, "name"), "Daily Report") == 0,
-           "cron_builder: patch.name");
-    ASSERT(g_strcmp0(obj_get_string(patch, "description"), "Send daily summary") == 0,
-           "cron_builder: patch.description");
-    ASSERT(g_strcmp0(obj_get_string(patch, "agentId"), "reporter-agent") == 0,
-           "cron_builder: patch.agentId");
-    
+    JsonObject *patch = json_object_get_object_member(p, "patch");
+    ASSERT(patch != NULL, "cron_update_omit: patch is object");
+    ASSERT(g_strcmp0(obj_get_string(patch, "name"), "Heartbeat") == 0,
+           "cron_update_omit: patch.name");
+    ASSERT(!json_object_has_member(patch, "description"),
+           "cron_update_omit: description omitted when NULL");
+    ASSERT(!json_object_has_member(patch, "agentId"),
+           "cron_update_omit: agentId omitted when empty");
+    ASSERT(!json_object_has_member(patch, "payload"),
+           "cron_update_omit: payload omitted when prompt empty");
+
+    ASSERT(g_strcmp0(obj_get_string(patch, "sessionTarget"), "isolated") == 0,
+           "cron_update_omit: sessionTarget present");
+    ASSERT(g_strcmp0(obj_get_string(patch, "wakeMode"), "now") == 0,
+           "cron_update_omit: wakeMode present");
+
     JsonObject *sched = json_object_get_object_member(patch, "schedule");
-    ASSERT(sched != NULL, "cron_builder: patch.schedule exists");
+    ASSERT(sched != NULL, "cron_update_omit: schedule present");
     ASSERT(g_strcmp0(obj_get_string(sched, "kind"), "cron") == 0,
-           "cron_builder: patch.schedule.kind");
-    ASSERT(g_strcmp0(obj_get_string(sched, "expr"), "0 9 * * *") == 0,
-           "cron_builder: patch.schedule.expr");
-    
-    ASSERT(g_strcmp0(obj_get_string(patch, "sessionTarget"), "main") == 0,
-           "cron_builder: patch.sessionTarget");
-    ASSERT(g_strcmp0(obj_get_string(patch, "wakeMode"), "next-heartbeat") == 0,
-           "cron_builder: patch.wakeMode");
-    
-    JsonObject *payload = json_object_get_object_member(patch, "payload");
-    ASSERT(payload != NULL, "cron_builder: patch.payload exists when prompt provided");
-    ASSERT(g_strcmp0(obj_get_string(payload, "kind"), "agentTurn") == 0,
-           "cron_builder: patch.payload.kind");
-    ASSERT(g_strcmp0(obj_get_string(payload, "message"), 
-                     "Generate a daily summary of all activities") == 0,
-           "cron_builder: patch.payload.message");
-    
-    json_node_unref(params1);
-    
-    /* Test WITHOUT prompt (payload should be ABSENT) */
-    JsonNode *params2 = build_cron_edit_patch(
-        "job-456",
-        "Heartbeat",
-        "*/5 * * * *",
-        "",
-        "",
-        "isolated",
-        "now",
-        ""  /* empty prompt */
-    );
-    
-    JsonObject *root2 = json_node_get_object(params2);
-    JsonObject *patch2 = json_object_get_object_member(root2, "patch");
-    ASSERT(patch2 != NULL, "cron_builder_noprompt: patch is object");
-    
-    /* payload should be absent when no prompt */
-    ASSERT(!json_object_has_member(patch2, "payload"),
-           "cron_builder_noprompt: payload absent when no prompt");
-    
-    /* but sessionTarget and wakeMode should still be present */
-    ASSERT(g_strcmp0(obj_get_string(patch2, "sessionTarget"), "isolated") == 0,
-           "cron_builder_noprompt: sessionTarget present");
-    ASSERT(g_strcmp0(obj_get_string(patch2, "wakeMode"), "now") == 0,
-           "cron_builder_noprompt: wakeMode present");
-    
-    json_node_unref(params2);
+           "cron_update_omit: schedule.kind");
+    ASSERT(g_strcmp0(obj_get_string(sched, "expr"), "*/5 * * * *") == 0,
+           "cron_update_omit: schedule.expr");
+
+    g_free(rid);
 }
 
 /* ── Cron sessionTarget mapping regression test ─────────────────────
@@ -1323,7 +1095,7 @@ int main(int argc, char **argv) {
     g_test_add_func("/rpc_mutations/cron/add_expanded", test_cron_add_expanded);
     g_test_add_func("/rpc_mutations/cron/update_expanded", test_cron_update_expanded);
     g_test_add_func("/rpc_mutations/cron/update_full_payload", test_cron_update_full_payload);
-    g_test_add_func("/rpc_mutations/cron/edit_patch_builder_helper", test_cron_edit_patch_builder_helper);
+    g_test_add_func("/rpc_mutations/cron/update_omits_optional_fields", test_cron_update_omits_optional_fields);
     g_test_add_func("/rpc_mutations/cron/session_target_mapping", test_cron_session_target_mapping);
 
     g_test_add_func("/rpc_mutations/channels/status_probe", test_channels_status_probe);

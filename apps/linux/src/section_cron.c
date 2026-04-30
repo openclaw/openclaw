@@ -267,66 +267,24 @@ static void on_edit_job_dialog_response(GObject *source, GAsyncResult *result, g
     gint wake_idx = wake_combo ? adw_combo_row_get_selected(ADW_COMBO_ROW(wake_combo)) : 0;
     const gchar *wake_str = wake_idx == 1 ? "now" : "next-heartbeat";
 
-    /* Build JSON params for cron.update with full patch */
-    JsonBuilder *b = json_builder_new();
-    json_builder_begin_object(b);
-    json_builder_set_member_name(b, "id");
-    json_builder_add_string_value(b, job_id);
-
-    json_builder_set_member_name(b, "patch");
-    json_builder_begin_object(b);
-    json_builder_set_member_name(b, "name");
-    json_builder_add_string_value(b, name);
-
-    if (desc && *desc != '\0') {
-        json_builder_set_member_name(b, "description");
-        json_builder_add_string_value(b, desc);
-    }
-    if (agent && *agent != '\0') {
-        json_builder_set_member_name(b, "agentId");
-        json_builder_add_string_value(b, agent);
-    }
-
-    /* schedule patch - contract requires 'kind' and 'expr' for cron type */
-    json_builder_set_member_name(b, "schedule");
-    json_builder_begin_object(b);
-    json_builder_set_member_name(b, "kind");
-    json_builder_add_string_value(b, "cron");
-    json_builder_set_member_name(b, "expr");
-    json_builder_add_string_value(b, schedule);
-    json_builder_end_object(b);
-
-    /* sessionTarget - contract requires string directly */
-    json_builder_set_member_name(b, "sessionTarget");
-    json_builder_add_string_value(b, target_str);
-
-    /* wakeMode - contract requires string directly */
-    json_builder_set_member_name(b, "wakeMode");
-    json_builder_add_string_value(b, wake_str);
-
-    /* payload - include if prompt provided */
-    if (prompt && *prompt != '\0') {
-        json_builder_set_member_name(b, "payload");
-        json_builder_begin_object(b);
-        json_builder_set_member_name(b, "kind");
-        json_builder_add_string_value(b, "agentTurn");
-        json_builder_set_member_name(b, "message");
-        json_builder_add_string_value(b, prompt);
-        json_builder_end_object(b);
-    }
-
-    json_builder_end_object(b); /* end patch */
-    json_builder_end_object(b);
-
-    JsonNode *params = json_builder_get_root(b);
-    g_object_unref(b);
+    GatewayCronJobMutationFields fields = {
+        .name = name,
+        .description = desc,
+        .agent_id = agent,
+        .schedule_kind = "cron",
+        .schedule_expr = schedule,
+        .session_target = target_str,
+        .wake_mode = wake_str,
+        .prompt = prompt,
+    };
 
     if (cron_status_label)
         gtk_label_set_text(GTK_LABEL(cron_status_label), "Updating job\u2026");
 
     guint current_gen = cron_ui_generation;
-    g_autofree gchar *req = mutation_cron_update(params, on_mutation_done, GUINT_TO_POINTER(current_gen));
-    json_node_unref(params);
+    g_autofree gchar *req = mutation_cron_update(job_id, &fields,
+                                                 on_mutation_done,
+                                                 GUINT_TO_POINTER(current_gen));
 
     if (!req && cron_status_label) {
         gtk_label_set_text(GTK_LABEL(cron_status_label), "Failed to send request");
@@ -454,62 +412,23 @@ static void on_create_job_dialog_response(GObject *source, GAsyncResult *result,
     gint wake_idx = wake_combo ? adw_combo_row_get_selected(ADW_COMBO_ROW(wake_combo)) : 0;
     const gchar *wake_str = wake_idx == 1 ? "now" : "next-heartbeat";
 
-    /* Build JSON params for cron.add */
-    JsonBuilder *b = json_builder_new();
-    json_builder_begin_object(b);
-
-    json_builder_set_member_name(b, "name");
-    json_builder_add_string_value(b, name);
-
-    if (desc && *desc != '\0') {
-        json_builder_set_member_name(b, "description");
-        json_builder_add_string_value(b, desc);
-    }
-    if (agent && *agent != '\0') {
-        json_builder_set_member_name(b, "agentId");
-        json_builder_add_string_value(b, agent);
-    }
-
-    json_builder_set_member_name(b, "enabled");
-    json_builder_add_boolean_value(b, TRUE);
-
-    /* schedule - contract requires 'kind' and 'expr' for cron type */
-    json_builder_set_member_name(b, "schedule");
-    json_builder_begin_object(b);
-    json_builder_set_member_name(b, "kind");
-    json_builder_add_string_value(b, "cron");
-    json_builder_set_member_name(b, "expr");
-    json_builder_add_string_value(b, schedule);
-    json_builder_end_object(b);
-
-    /* sessionTarget - contract requires string directly, not nested object */
-    json_builder_set_member_name(b, "sessionTarget");
-    json_builder_add_string_value(b, target_str);
-
-    /* wakeMode - contract requires string directly */
-    json_builder_set_member_name(b, "wakeMode");
-    json_builder_add_string_value(b, wake_str);
-
-    /* payload - contract requires 'kind' not 'type' */
-    json_builder_set_member_name(b, "payload");
-    json_builder_begin_object(b);
-    json_builder_set_member_name(b, "kind");
-    json_builder_add_string_value(b, "agentTurn");
-    json_builder_set_member_name(b, "message");
-    json_builder_add_string_value(b, prompt);
-    json_builder_end_object(b);
-
-    json_builder_end_object(b);
-
-    JsonNode *params = json_builder_get_root(b);
-    g_object_unref(b);
+    GatewayCronJobMutationFields fields = {
+        .name = name,
+        .description = desc,
+        .agent_id = agent,
+        .schedule_kind = "cron",
+        .schedule_expr = schedule,
+        .session_target = target_str,
+        .wake_mode = wake_str,
+        .prompt = prompt,
+    };
 
     if (cron_status_label)
         gtk_label_set_text(GTK_LABEL(cron_status_label), "Creating job\u2026");
 
     guint current_gen = cron_ui_generation;
-    g_autofree gchar *req = mutation_cron_add(params, on_mutation_done, GUINT_TO_POINTER(current_gen));
-    json_node_unref(params);
+    g_autofree gchar *req = mutation_cron_add(&fields, on_mutation_done,
+                                              GUINT_TO_POINTER(current_gen));
 
     if (!req && cron_status_label) {
         gtk_label_set_text(GTK_LABEL(cron_status_label), "Failed to send request");
