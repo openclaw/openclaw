@@ -44,7 +44,6 @@ import {
 import type { CommitmentRecord } from "../commitments/types.js";
 import { getRuntimeConfig } from "../config/config.js";
 import {
-  canonicalizeMainSessionAlias,
   resolveAgentMainSessionKey,
 } from "../config/sessions/main-session.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
@@ -71,11 +70,9 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
-  toAgentStoreSessionKey,
 } from "../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import {
-  normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
 import { escapeRegExp } from "../utils.js";
@@ -300,9 +297,9 @@ function resolveHeartbeatTypingIntervalSeconds(cfg: OpenClawConfig) {
 }
 
 export function resolveHeartbeatSession(
-  cfg: any, 
+  cfg: OpenClawConfig,
   agentId?: string,
-  heartbeat?: any,
+  heartbeat?: HeartbeatConfig,
   forcedSessionKey?: string,
 ) {
   const sessionCfg = cfg?.session;
@@ -1075,17 +1072,14 @@ export async function runHeartbeatOnce(opts: {
   );
   const hasUntrustedPendingEvents = hasUntrustedInspectedEvents || hasUntrustedActiveSessionEvents;
 
-  // Update task last run times AFTER successful heartbeat completion
   const updateTaskTimestamps = async () => {
-    if (!preflight.tasks || preflight.tasks.length === 0) {
-      return;
-    }
+    if (!preflight.tasks || preflight.tasks.length === 0) {return;}
 
     const store = loadSessionStore(storePath);
     const current = store[sessionKey];
-    // Initialize stub entry on first run when current doesn't exist
+    
+    // Initializing stub properly
     const base = current ?? {
-      // Generate valid sessionId - derive from sessionKey without colons
       sessionId: sessionKey.replace(/:/g, "_"),
       updatedAt: startedAt,
       createdAt: startedAt,
@@ -1093,16 +1087,21 @@ export async function runHeartbeatOnce(opts: {
       lastMessageAt: startedAt,
       heartbeatTaskState: {},
     };
+
     const taskState = { ...base.heartbeatTaskState };
+    let hasChanged = false;
 
     for (const task of preflight.tasks) {
       if (isTaskDue(taskState[task.name], task.interval, startedAt)) {
         taskState[task.name] = startedAt;
+        hasChanged = true;
       }
     }
 
-    store[sessionKey] = { ...base, heartbeatTaskState: taskState };
-    await saveSessionStore(storePath, store);
+    if (hasChanged) {
+      store[sessionKey] = { ...base, heartbeatTaskState: taskState };
+      await saveSessionStore(storePath, store);
+    }
   };
 
   const consumeInspectedSystemEvents = () => {
