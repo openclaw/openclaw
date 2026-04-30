@@ -437,6 +437,7 @@ export async function monitorWebChannel(
       });
       enqueueSystemEvent(`WhatsApp gateway connected${selfE164 ? ` as ${selfE164}` : ""}.`, {
         sessionKey: connectRoute.sessionKey,
+        trusted: true,
       });
 
       const normalizedAccountId = normalizeReconnectAccountId(account.accountId);
@@ -496,6 +497,7 @@ export async function monitorWebChannel(
         `WhatsApp gateway disconnected (status ${decision.normalized.statusLabel})`,
         {
           sessionKey: connectRoute.sessionKey,
+          trusted: true,
         },
       );
 

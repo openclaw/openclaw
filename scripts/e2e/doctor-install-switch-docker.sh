@@ -103,7 +103,7 @@ LOGINCTL
     git init -q
     git config user.email "docker-e2e@openclaw.local"
     git config user.name "OpenClaw Docker E2E"
-    git add -A
+    git add -A --
     git commit -qm "test fixture"
   )
   npm_log="/tmp/openclaw-doctor-switch-npm-install.log"

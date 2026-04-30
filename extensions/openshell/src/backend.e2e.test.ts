@@ -377,6 +377,7 @@ describe("openshell sandbox backend e2e", () => {
         backend: "openshell" as const,
         scope: "session" as const,
         workspaceAccess: "rw" as const,
+        workspaceLifecycle: "persistent" as const,
         workspaceRoot: path.join(rootDir, "sandboxes"),
         docker: {
           image: "openclaw-sandbox:bookworm-slim",

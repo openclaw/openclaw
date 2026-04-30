@@ -2,12 +2,16 @@
 // Normalizes package-acceptance inputs into the tarball shape consumed by Docker E2E.
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
+import { lookup as dnsLookupCb } from "node:dns";
+import { lookup as dnsLookup } from "node:dns/promises";
 import { createWriteStream } from "node:fs";
 import fs from "node:fs/promises";
+import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
+import { Agent, fetch as undiciFetch } from "undici";
 
 const ROOT_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const DEFAULT_OUTPUT_NAME = "openclaw-current.tgz";
@@ -160,6 +164,110 @@ async function assertExpectedSha256(file, expected) {
   return actual;
 }
 
+function isBlockedIpv4(address) {
+  const octets = address.split(".").map((part) => Number(part));
+  if (octets.length !== 4 || octets.some((part) => !Number.isInteger(part))) {
+    return true;
+  }
+  const [a, b] = octets;
+  return (
+    a === 0 ||
+    a === 10 ||
+    a === 127 ||
+    (a === 169 && b === 254) ||
+    (a === 172 && b >= 16 && b <= 31) ||
+    (a === 192 && b === 168) ||
+    (a === 100 && b >= 64 && b <= 127) ||
+    (a === 192 && b === 0) ||
+    (a === 198 && (b === 18 || b === 19)) ||
+    a >= 224
+  );
+}
+
+function isBlockedIpv6(address) {
+  const normalized = address.toLowerCase();
+  return (
+    normalized === "::1" ||
+    normalized === "::" ||
+    normalized.startsWith("fc") ||
+    normalized.startsWith("fd") ||
+    normalized.startsWith("fe8") ||
+    normalized.startsWith("fe9") ||
+    normalized.startsWith("fea") ||
+    normalized.startsWith("feb") ||
+    normalized.startsWith("::ffff:127.") ||
+    normalized.startsWith("::ffff:10.") ||
+    normalized.startsWith("::ffff:192.168.") ||
+    /^::ffff:172\.(1[6-9]|2[0-9]|3[0-1])\./u.test(normalized)
+  );
+}
+
+function isBlockedHostOrAddress(hostnameOrAddress) {
+  const normalized = hostnameOrAddress.toLowerCase().replace(/^\[|\]$/gu, "");
+  if (
+    normalized === "localhost" ||
+    normalized.endsWith(".localhost") ||
+    normalized.endsWith(".local") ||
+    normalized.endsWith(".internal")
+  ) {
+    return true;
+  }
+  const family = net.isIP(normalized);
+  if (family === 4) {
+    return isBlockedIpv4(normalized);
+  }
+  if (family === 6) {
+    return isBlockedIpv6(normalized);
+  }
+  return false;
+}
+
+function createPinnedLookup(hostname, addresses) {
+  const records = addresses.map((address) => ({
+    address,
+    family: net.isIP(address) === 6 ? 6 : 4,
+  }));
+  return (host, options, callback) => {
+    const cb = typeof options === "function" ? options : callback;
+    if (!cb) {
+      return;
+    }
+    if (host.toLowerCase() !== hostname) {
+      if (typeof options === "function" || options === undefined) {
+        dnsLookupCb(host, cb);
+        return;
+      }
+      dnsLookupCb(host, options, cb);
+      return;
+    }
+    const opts = typeof options === "object" && options !== null ? options : {};
+    if (opts.all) {
+      cb(null, records);
+      return;
+    }
+    const family = typeof options === "number" ? options : opts.family;
+    const selected = records.find((entry) => !family || entry.family === family) ?? records[0];
+    cb(null, selected.address, selected.family);
+  };
+}
+
+async function createPackageDownloadDispatcher(parsed) {
+  const hostname = parsed.hostname.toLowerCase();
+  if (isBlockedHostOrAddress(hostname)) {
+    throw new Error(`package_url host is not allowed: ${parsed.hostname}`);
+  }
+  const resolved = await dnsLookup(hostname, { all: true });
+  const addresses = [...new Set(resolved.map((entry) => entry.address))];
+  if (addresses.length === 0) {
+    throw new Error(`package_url host did not resolve: ${parsed.hostname}`);
+  }
+  const blocked = addresses.find((address) => isBlockedHostOrAddress(address));
+  if (blocked) {
+    throw new Error(`package_url host resolves to a blocked address: ${blocked}`);
+  }
+  return new Agent({ connect: { lookup: createPinnedLookup(hostname, addresses) } });
+}
+
 async function findSingleTarball(dir) {
   const files = (await walkFiles(path.resolve(ROOT_DIR, dir)))
     .filter((file) => /\.t(?:ar\.)?gz$/u.test(path.basename(file)))
@@ -310,11 +418,16 @@ async function downloadUrl(url, target) {
   if (parsed.protocol !== "https:") {
     throw new Error(`package_url must use https: ${url}`);
   }
-  const response = await fetch(parsed);
-  if (!response.ok || !response.body) {
-    throw new Error(`failed to download package_url: HTTP ${response.status}`);
+  const dispatcher = await createPackageDownloadDispatcher(parsed);
+  try {
+    const response = await undiciFetch(parsed, { dispatcher });
+    if (!response.ok || !response.body) {
+      throw new Error(`failed to download package_url: HTTP ${response.status}`);
+    }
+    await pipeline(response.body, createWriteStream(target));
+  } finally {
+    await dispatcher.close();
   }
-  await pipeline(response.body, createWriteStream(target));
 }
 
 async function readPackageJson(tarball) {
