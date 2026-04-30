@@ -1,4 +1,4 @@
-import fs from "node:fs";
+import fs, { type Dirent } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -146,6 +146,12 @@ type CandidateSkillDir = {
   skillMdRealPath: string;
 };
 
+type ChildDirectoryScan = {
+  dirs: string[];
+  scannedEntryCount: number;
+  truncated: boolean;
+};
+
 function resolveSkillsLimits(config?: OpenClawConfig, agentId?: string): ResolvedSkillsLimits {
   const limits = config?.skills?.limits;
   const agentSkillsLimits = resolveEffectiveAgentSkillsLimits(config, agentId);
@@ -162,31 +168,53 @@ function resolveSkillsLimits(config?: OpenClawConfig, agentId?: string): Resolve
   };
 }
 
-function listChildDirectories(dir: string): string[] {
+function listChildDirectories(
+  dir: string,
+  opts?: {
+    maxEntriesToScan?: number;
+  },
+): ChildDirectoryScan {
+  const maxEntriesToScan =
+    opts?.maxEntriesToScan === undefined
+      ? Number.POSITIVE_INFINITY
+      : Math.max(0, opts.maxEntriesToScan);
   try {
-    const entries = fs.readdirSync(dir, { withFileTypes: true });
     const dirs: string[] = [];
-    for (const entry of entries) {
-      if (entry.name.startsWith(".")) continue;
-      if (entry.name === "node_modules") continue;
-      const fullPath = path.join(dir, entry.name);
-      if (entry.isDirectory()) {
-        dirs.push(entry.name);
-        continue;
-      }
-      if (entry.isSymbolicLink()) {
-        try {
-          if (fs.statSync(fullPath).isDirectory()) {
-            dirs.push(entry.name);
+    let scannedEntryCount = 0;
+    let truncated = false;
+    const handle = fs.opendirSync(dir);
+    try {
+      let entry: Dirent | null;
+      while ((entry = handle.readSync()) !== null) {
+        if (scannedEntryCount >= maxEntriesToScan) {
+          truncated = true;
+          break;
+        }
+        scannedEntryCount += 1;
+
+        if (entry.name.startsWith(".")) continue;
+        if (entry.name === "node_modules") continue;
+        const fullPath = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+          dirs.push(entry.name);
+          continue;
+        }
+        if (entry.isSymbolicLink()) {
+          try {
+            if (fs.statSync(fullPath).isDirectory()) {
+              dirs.push(entry.name);
+            }
+          } catch {
+            // ignore broken symlinks
           }
-        } catch {
-          // ignore broken symlinks
         }
       }
+    } finally {
+      handle.closeSync();
     }
-    return dirs;
+    return { dirs, scannedEntryCount, truncated };
   } catch {
-    return [];
+    return { dirs: [], scannedEntryCount: 0, truncated: false };
   }
 }
 
@@ -311,11 +339,10 @@ function resolveNestedSkillsRoot(
 
   // Heuristic: if `dir/skills/*/SKILL.md` exists for any entry, treat `dir/skills` as the real root.
   // Note: don't stop at 25, but keep a cap to avoid pathological scans.
-  const nestedDirs = listChildDirectories(nested);
   const scanLimit = Math.max(0, opts?.maxEntriesToScan ?? 100);
-  const toScan = scanLimit === 0 ? [] : nestedDirs.slice(0, Math.min(nestedDirs.length, scanLimit));
+  const nestedDirs = listChildDirectories(nested, { maxEntriesToScan: scanLimit }).dirs;
 
-  for (const name of toScan) {
+  for (const name of nestedDirs) {
     const skillMd = path.join(nested, name, "SKILL.md");
     if (fs.existsSync(skillMd)) {
       return { baseDir: nested, note: `Detected nested skills root at ${nested}` };
@@ -426,12 +453,14 @@ function loadSkillEntries(
       });
     }
 
-    const childDirs = listChildDirectories(baseDir);
     const maxCandidatesPerRoot = Math.max(0, limits.maxCandidatesPerRoot);
     const maxSkillsLoadedPerSource = Math.max(0, limits.maxSkillsLoadedPerSource);
-    const suspicious = childDirs.length > maxCandidatesPerRoot;
-
     const maxCandidates = Math.min(maxCandidatesPerRoot, maxSkillsLoadedPerSource);
+    const childDirScan = listChildDirectories(baseDir, {
+      maxEntriesToScan: maxCandidatesPerRoot,
+    });
+    const childDirs = childDirScan.dirs;
+    const suspicious = childDirScan.truncated;
     const limitedChildren = childDirs.toSorted().slice(0, maxCandidates);
 
     if (suspicious) {
@@ -439,6 +468,8 @@ function loadSkillEntries(
         dir: params.dir,
         baseDir,
         childDirCount: childDirs.length,
+        scannedEntryCount: childDirScan.scannedEntryCount,
+        maxEntriesToScan: maxCandidatesPerRoot,
         maxCandidatesPerRoot: limits.maxCandidatesPerRoot,
         maxSkillsLoadedPerSource: limits.maxSkillsLoadedPerSource,
       });
@@ -482,8 +513,11 @@ function loadSkillEntries(
       } else {
         // No SKILL.md here — check one level deeper for grouped skill directories.
         // Apply the same per-root cap as the outer scan to avoid scanning huge nested trees.
-        const nestedChildren = listChildDirectories(skillDir);
-        const nestedSuspicious = nestedChildren.length > maxCandidatesPerRoot;
+        const nestedChildScan = listChildDirectories(skillDir, {
+          maxEntriesToScan: maxCandidatesPerRoot,
+        });
+        const nestedChildren = nestedChildScan.dirs;
+        const nestedSuspicious = nestedChildScan.truncated;
         if (nestedSuspicious) {
           skillsLogger.warn(
             "Nested skills directory looks suspiciously large, truncating discovery.",
@@ -492,12 +526,14 @@ function loadSkillEntries(
               baseDir,
               nestedDir: skillDir,
               nestedChildDirCount: nestedChildren.length,
+              scannedEntryCount: nestedChildScan.scannedEntryCount,
+              maxEntriesToScan: maxCandidatesPerRoot,
               maxCandidatesPerRoot: limits.maxCandidatesPerRoot,
               maxSkillsLoadedPerSource: limits.maxSkillsLoadedPerSource,
             },
           );
         }
-        const limitedNested = nestedChildren.toSorted().slice(0, maxCandidatesPerRoot);
+        const limitedNested = nestedChildren.toSorted();
         for (const nestedName of limitedNested) {
           const nestedDir = path.join(skillDir, nestedName);
           const nestedSkillMd = path.join(nestedDir, "SKILL.md");

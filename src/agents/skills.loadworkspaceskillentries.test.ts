@@ -516,8 +516,7 @@ describe("loadWorkspaceSkillEntries", () => {
         },
       }).map((entry) => entry.skill.name);
 
-      expect(names).toEqual(expect.arrayContaining(["nested-skill-0", "nested-skill-1"]));
-      expect(names).not.toContain("nested-skill-2");
+      expect(names.filter((name) => name.startsWith("nested-skill-"))).toHaveLength(2);
       expect(
         warn.mock.calls
           .map(([line]) => String(line))
