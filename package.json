@@ -1206,6 +1206,10 @@
       "types": "./dist/plugin-sdk/text-autolink-runtime.d.ts",
       "default": "./dist/plugin-sdk/text-autolink-runtime.js"
     },
+    "./plugin-sdk/task-events": {
+      "types": "./dist/plugin-sdk/task-events.d.ts",
+      "default": "./dist/plugin-sdk/task-events.js"
+    },
     "./plugin-sdk/tool-payload": {
       "types": "./dist/plugin-sdk/tool-payload.d.ts",
       "default": "./dist/plugin-sdk/tool-payload.js"

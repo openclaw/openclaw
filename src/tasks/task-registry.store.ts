@@ -64,6 +64,7 @@ const defaultTaskRegistryStore: TaskRegistryStore = {
 
 let configuredTaskRegistryStore: TaskRegistryStore = defaultTaskRegistryStore;
 let configuredTaskRegistryObservers: TaskRegistryObservers | null = null;
+const additionalTaskRegistryEventListeners = new Set<(event: TaskRegistryObserverEvent) => void>();
 
 export function getTaskRegistryStore(): TaskRegistryStore {
   return configuredTaskRegistryStore;
@@ -71,6 +72,39 @@ export function getTaskRegistryStore(): TaskRegistryStore {
 
 export function getTaskRegistryObservers(): TaskRegistryObservers | null {
   return configuredTaskRegistryObservers;
+}
+
+export function hasAdditionalTaskRegistryEventListeners(): boolean {
+  return additionalTaskRegistryEventListeners.size > 0;
+}
+
+export function notifyAdditionalTaskRegistryEventListeners(event: TaskRegistryObserverEvent): void {
+  if (additionalTaskRegistryEventListeners.size === 0) {
+    return;
+  }
+  for (const listener of additionalTaskRegistryEventListeners) {
+    try {
+      listener(event);
+    } catch {
+      // Listeners are best-effort; one bad consumer must not block the others.
+    }
+  }
+}
+
+/**
+ * Register a plugin-side task-registry event listener.
+ *
+ * Unlike `configureTaskRegistryRuntime`, multiple listeners can subscribe in
+ * parallel. Returns an unsubscribe function. Listener exceptions are swallowed
+ * so that one consumer cannot break the registry's notification path.
+ */
+export function addTaskRegistryEventListener(
+  listener: (event: TaskRegistryObserverEvent) => void,
+): () => void {
+  additionalTaskRegistryEventListeners.add(listener);
+  return () => {
+    additionalTaskRegistryEventListeners.delete(listener);
+  };
 }
 
 export function configureTaskRegistryRuntime(params: {
@@ -89,4 +123,5 @@ export function resetTaskRegistryRuntimeForTests() {
   configuredTaskRegistryStore.close?.();
   configuredTaskRegistryStore = defaultTaskRegistryStore;
   configuredTaskRegistryObservers = null;
+  additionalTaskRegistryEventListeners.clear();
 }
