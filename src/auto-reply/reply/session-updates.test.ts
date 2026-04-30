@@ -15,7 +15,12 @@ const {
   resolveSessionStoreEntryMock,
   updateSessionStoreMock,
 } = vi.hoisted(() => ({
-  buildWorkspaceSkillSnapshotMock: vi.fn(() => ({ prompt: "", skills: [], resolvedSkills: [] })),
+  buildWorkspaceSkillSnapshotMock: vi.fn(() => ({
+    prompt: "",
+    skills: [],
+    resolvedSkills: [],
+    version: 0,
+  })),
   ensureSkillsWatcherMock: vi.fn(),
   getSkillsSnapshotVersionMock: vi.fn(() => 0),
   shouldRefreshSnapshotForVersionMock: vi.fn(() => false),
@@ -25,7 +30,7 @@ const {
     hasAnyBin: () => false,
   })),
   resolveAgentConfigMock: vi.fn(() => undefined),
-  resolveAgentSkillsFilterMock: vi.fn(() => undefined as string[] | undefined),
+  resolveAgentSkillsFilterMock: vi.fn<() => string[] | undefined>(() => undefined),
   resolveAgentWorkspaceDirMock: vi.fn(() => "/tmp/workspace"),
   resolveSessionAgentIdMock: vi.fn(() => "writer"),
   resolveAgentIdFromSessionKeyMock: vi.fn(() => "main"),
@@ -83,7 +88,12 @@ const { ensureSkillSnapshot, prewarmMirroredSession } = await import("./session-
 describe("ensureSkillSnapshot", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    buildWorkspaceSkillSnapshotMock.mockReturnValue({ prompt: "", skills: [], resolvedSkills: [] });
+    buildWorkspaceSkillSnapshotMock.mockReturnValue({
+      prompt: "",
+      skills: [],
+      resolvedSkills: [],
+      version: 0,
+    });
     getSkillsSnapshotVersionMock.mockReturnValue(0);
     shouldRefreshSnapshotForVersionMock.mockReturnValue(false);
     getRemoteSkillEligibilityMock.mockReturnValue({
@@ -146,6 +156,7 @@ describe("ensureSkillSnapshot", () => {
       prompt: "skills",
       skills: [],
       resolvedSkills: [],
+      version: 0,
     });
 
     await prewarmMirroredSession({
