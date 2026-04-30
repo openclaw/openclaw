@@ -6185,6 +6185,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 name: {
                   type: "string",
                 },
+                description: {
+                  type: "string",
+                },
                 workspace: {
                   type: "string",
                 },
