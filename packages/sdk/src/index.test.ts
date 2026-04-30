@@ -266,19 +266,44 @@ describe("OpenClaw SDK", () => {
     await expect(oc.artifacts.download("artifact_123")).rejects.toThrow(
       "oc.artifacts.download is not supported by the current OpenClaw Gateway yet",
     );
-    await expect(oc.environments.list()).rejects.toThrow(
-      "oc.environments.list is not supported by the current OpenClaw Gateway yet",
-    );
     await expect(oc.environments.create({ provider: "testbox" })).rejects.toThrow(
       "oc.environments.create is not supported by the current OpenClaw Gateway yet",
-    );
-    await expect(oc.environments.status("environment_123")).rejects.toThrow(
-      "oc.environments.status is not supported by the current OpenClaw Gateway yet",
     );
     await expect(oc.environments.delete("environment_123")).rejects.toThrow(
       "oc.environments.delete is not supported by the current OpenClaw Gateway yet",
     );
     expect(transport.calls).toEqual([]);
+  });
+
+  it("lists and checks environment status through Gateway discovery RPCs", async () => {
+    const localEnvironment = {
+      id: "local",
+      type: "local",
+      label: "Local Gateway host",
+      status: "available",
+      capabilities: ["agent.run"],
+    };
+    const transport = new FakeTransport({
+      "environments.list": { environments: [localEnvironment] },
+      "environments.status": localEnvironment,
+    });
+    const oc = new OpenClaw({ transport });
+
+    await expect(oc.environments.list()).resolves.toEqual({
+      environments: [localEnvironment],
+    });
+    await expect(oc.environments.status("local")).resolves.toEqual(localEnvironment);
+    await expect(oc.environments.create({ provider: "testbox" })).rejects.toThrow(
+      "oc.environments.create is not supported by the current OpenClaw Gateway yet",
+    );
+    await expect(oc.environments.delete("local")).rejects.toThrow(
+      "oc.environments.delete is not supported by the current OpenClaw Gateway yet",
+    );
+
+    expect(transport.calls.map((call) => [call.method, call.params])).toEqual([
+      ["environments.list", undefined],
+      ["environments.status", { environmentId: "local" }],
+    ]);
   });
 
   it("cancels runs and checks model auth status through current Gateway methods", async () => {

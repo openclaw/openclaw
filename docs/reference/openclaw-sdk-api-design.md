@@ -67,9 +67,9 @@ oc.artifacts.download(artifactId); // future API: current SDK throws unsupported
 oc.approvals.list();
 oc.approvals.respond(approvalId, ...);
 
-oc.environments.list(); // future API: current SDK throws unsupported
+oc.environments.list();
 oc.environments.create(...); // future API: current SDK throws unsupported
-oc.environments.status(environmentId); // future API: current SDK throws unsupported
+oc.environments.status(environmentId);
 oc.environments.delete(environmentId); // future API: current SDK throws unsupported
 ```
 
@@ -296,6 +296,7 @@ Recommended token scopes:
 | `approval.respond`  | Approve or deny requests.                           |
 | `tools.invoke`      | Invoke exposed tools directly.                      |
 | `artifacts.read`    | List and download artifacts.                        |
+| `environment.read`  | Discover environment status and capabilities.       |
 | `environment.write` | Create or destroy managed environments.             |
 | `admin`             | Administrative operations.                          |
 

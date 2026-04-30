@@ -136,6 +136,18 @@ import {
   DeviceTokenRevokeParamsSchema,
   type DeviceTokenRotateParams,
   DeviceTokenRotateParamsSchema,
+  type EnvironmentStatus,
+  EnvironmentStatusSchema,
+  type EnvironmentSummary,
+  EnvironmentSummarySchema,
+  type EnvironmentsListParams,
+  EnvironmentsListParamsSchema,
+  type EnvironmentsListResult,
+  EnvironmentsListResultSchema,
+  type EnvironmentsStatusParams,
+  EnvironmentsStatusParamsSchema,
+  type EnvironmentsStatusResult,
+  EnvironmentsStatusResultSchema,
   type ExecApprovalsGetParams,
   ExecApprovalsGetParamsSchema,
   type ExecApprovalsNodeGetParams,
@@ -548,6 +560,18 @@ export const validateDeviceTokenRotateParams = ajv.compile<DeviceTokenRotatePara
 export const validateDeviceTokenRevokeParams = ajv.compile<DeviceTokenRevokeParams>(
   DeviceTokenRevokeParamsSchema,
 );
+export const validateEnvironmentsListParams = ajv.compile<EnvironmentsListParams>(
+  EnvironmentsListParamsSchema,
+);
+export const validateEnvironmentsListResult = ajv.compile<EnvironmentsListResult>(
+  EnvironmentsListResultSchema,
+);
+export const validateEnvironmentsStatusParams = ajv.compile<EnvironmentsStatusParams>(
+  EnvironmentsStatusParamsSchema,
+);
+export const validateEnvironmentsStatusResult = ajv.compile<EnvironmentsStatusResult>(
+  EnvironmentsStatusResultSchema,
+);
 export const validateExecApprovalsGetParams = ajv.compile<ExecApprovalsGetParams>(
   ExecApprovalsGetParamsSchema,
 );
@@ -636,6 +660,12 @@ export {
   PresenceEntrySchema,
   SnapshotSchema,
   ErrorShapeSchema,
+  EnvironmentStatusSchema,
+  EnvironmentSummarySchema,
+  EnvironmentsListParamsSchema,
+  EnvironmentsListResultSchema,
+  EnvironmentsStatusParamsSchema,
+  EnvironmentsStatusResultSchema,
   StateVersionSchema,
   AgentEventSchema,
   MessageActionParamsSchema,
@@ -784,6 +814,12 @@ export type {
   PresenceEntry,
   Snapshot,
   ErrorShape,
+  EnvironmentStatus,
+  EnvironmentSummary,
+  EnvironmentsListParams,
+  EnvironmentsListResult,
+  EnvironmentsStatusParams,
+  EnvironmentsStatusResult,
   StateVersion,
   AgentEvent,
   AgentIdentityParams,

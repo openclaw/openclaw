@@ -12,6 +12,8 @@ const BASE_METHODS = [
   "doctor.memory.repairDreamingArtifacts",
   "doctor.memory.dedupeDreamDiary",
   "doctor.memory.remHarness",
+  "environments.list",
+  "environments.status",
   "logs.tail",
   "channels.status",
   "channels.start",

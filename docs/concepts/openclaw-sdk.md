@@ -227,6 +227,15 @@ const approvals = await oc.approvals.list();
 await oc.approvals.respond("approval-id", { decision: "approve" });
 ```
 
+Environment helpers expose read-only Gateway discovery. `list` returns local,
+Gateway, connected node, and managed candidates with status and capabilities.
+`status` resolves one environment id without creating or deleting anything:
+
+```typescript
+await oc.environments.list();
+await oc.environments.status("local");
+```
+
 ## Explicitly Unsupported Today
 
 The SDK includes names for the product model we want, but it does not silently
@@ -244,9 +253,7 @@ await oc.artifacts.list();
 await oc.artifacts.get("artifact-id");
 await oc.artifacts.download("artifact-id");
 
-await oc.environments.list();
 await oc.environments.create({});
-await oc.environments.status("environment-id");
 await oc.environments.delete("environment-id");
 ```
 

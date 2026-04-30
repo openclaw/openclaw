@@ -321,6 +321,7 @@ enumeration of `src/gateway/server-methods/*.ts`.
     - `diagnostics.stability` returns the recent bounded diagnostic stability recorder. It keeps operational metadata such as event names, counts, byte sizes, memory readings, queue/session state, channel/plugin names, and session ids. It does not keep chat text, webhook bodies, tool outputs, raw request or response bodies, tokens, cookies, or secret values. Operator read scope is required.
     - `status` returns the `/status`-style gateway summary; sensitive fields are included only for admin-scoped operator clients.
     - `gateway.identity.get` returns the gateway device identity used by relay and pairing flows.
+    - `environments.list` and `environments.status` return read-only SDK environment candidates, statuses, and capabilities.
     - `system-presence` returns the current presence snapshot for connected operator/node devices.
     - `system-event` appends a system event and can update/broadcast presence context.
     - `last-heartbeat` returns the latest persisted heartbeat event.

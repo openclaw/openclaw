@@ -612,6 +612,46 @@
     "target": "Codex Harness Context Engine Port"
   },
   {
+    "source": "Media understanding pipeline",
+    "target": "媒体理解管线"
+  },
+  {
+    "source": "PDF tool",
+    "target": "PDF 工具"
+  },
+  {
+    "source": "Background tasks",
+    "target": "后台任务"
+  },
+  {
+    "source": "ACP agents",
+    "target": "ACP 代理"
+  },
+  {
+    "source": "Command queue",
+    "target": "命令队列"
+  },
+  {
+    "source": "Messages",
+    "target": "消息"
+  },
+  {
+    "source": "Channel turn kernel",
+    "target": "频道轮次内核"
+  },
+  {
+    "source": "Building channel plugins",
+    "target": "构建频道插件"
+  },
+  {
+    "source": "Plugin runtime helpers",
+    "target": "插件运行时助手"
+  },
+  {
+    "source": "Plugin internals",
+    "target": "插件内部"
+  },
+  {
     "source": "/gateway/configuration#strict-validation",
     "target": "/gateway/configuration#strict-validation"
   },

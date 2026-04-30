@@ -3,6 +3,10 @@ import { describe, expect, it } from "vitest";
 import { TALK_TEST_PROVIDER_ID } from "../../test-utils/talk-test-provider.js";
 import {
   formatValidationErrors,
+  validateEnvironmentsListParams,
+  validateEnvironmentsListResult,
+  validateEnvironmentsStatusParams,
+  validateEnvironmentsStatusResult,
   validateModelsListParams,
   validateNodeEventResult,
   validateNodePresenceAlivePayload,
@@ -190,6 +194,41 @@ describe("validateModelsListParams", () => {
   it("rejects unknown model catalog views and extra fields", () => {
     expect(validateModelsListParams({ view: "available" })).toBe(false);
     expect(validateModelsListParams({ view: "configured", provider: "minimax" })).toBe(false);
+  });
+});
+
+describe("validateEnvironments RPC schemas", () => {
+  it("accepts read-only environment discovery params and results", () => {
+    const environment = {
+      id: "local",
+      type: "local",
+      label: "Local Gateway host",
+      status: "available",
+      capabilities: ["agent.run", "sessions"],
+    };
+
+    expect(validateEnvironmentsListParams({})).toBe(true);
+    expect(validateEnvironmentsStatusParams({ environmentId: "local" })).toBe(true);
+    expect(validateEnvironmentsListResult({ environments: [environment] })).toBe(true);
+    expect(validateEnvironmentsStatusResult(environment)).toBe(true);
+  });
+
+  it("rejects extra fields, missing ids, and unknown statuses", () => {
+    expect(validateEnvironmentsListParams({ provider: "testbox" })).toBe(false);
+    expect(validateEnvironmentsStatusParams({})).toBe(false);
+    expect(
+      validateEnvironmentsListResult({
+        environments: [{ id: "local", type: "local", status: "ready" }],
+      }),
+    ).toBe(false);
+    expect(
+      validateEnvironmentsStatusResult({
+        id: "local",
+        type: "local",
+        status: "available",
+        unsupported: true,
+      }),
+    ).toBe(false);
   });
 });
 
