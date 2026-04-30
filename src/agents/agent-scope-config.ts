@@ -21,6 +21,7 @@ export type ResolvedAgentConfig = {
   thinkingDefault?: AgentEntry["thinkingDefault"];
   verboseDefault?: AgentDefaultsConfig["verboseDefault"];
   reasoningDefault?: AgentEntry["reasoningDefault"];
+  elevatedDefault?: AgentDefaultsConfig["elevatedDefault"];
   fastModeDefault?: AgentEntry["fastModeDefault"];
   skills?: AgentEntry["skills"];
   memorySearch?: AgentEntry["memorySearch"];
@@ -120,6 +121,7 @@ export function resolveAgentConfig(
     thinkingDefault: entry.thinkingDefault,
     verboseDefault: entry.verboseDefault ?? agentDefaults?.verboseDefault,
     reasoningDefault: entry.reasoningDefault,
+    elevatedDefault: entry.elevatedDefault ?? agentDefaults?.elevatedDefault,
     fastModeDefault: entry.fastModeDefault,
     skills: Array.isArray(entry.skills) ? entry.skills : undefined,
     memorySearch: entry.memorySearch,

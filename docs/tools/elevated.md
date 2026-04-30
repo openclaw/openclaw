@@ -79,7 +79,8 @@ Send `/elevated` with no argument to see the current level.
 
 1. **Inline directive** on the message (applies only to that message)
 2. **Session override** (set by sending a directive-only message)
-3. **Global default** (`agents.defaults.elevatedDefault` in config)
+3. **Per-agent default** (`agents.list[].elevatedDefault` in config)
+4. **Global default** (`agents.defaults.elevatedDefault` in config)
 
 ## Availability and allowlists
 
