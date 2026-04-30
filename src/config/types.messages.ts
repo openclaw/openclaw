@@ -4,6 +4,11 @@ import type { TtsConfig } from "./types.tts.js";
 export type GroupChatConfig = {
   mentionPatterns?: string[];
   historyLimit?: number;
+  /**
+   * Controls how group/channel turns produce visible room replies.
+   * Default: "message_tool".
+   */
+  visibleReplies?: "automatic" | "message_tool";
 };
 
 export type DmConfig = {
@@ -86,6 +91,14 @@ export type StatusReactionsConfig = {
 export type MessagesConfig = {
   /** @deprecated Use `whatsapp.messagePrefix` (WhatsApp-only inbound prefix). */
   messagePrefix?: string;
+  /**
+   * Controls how source turns produce visible replies across direct, group, and
+   * channel conversations. Group/channel turns still default to
+   * `groupChat.visibleReplies` when it is set.
+   *
+   * Default: "automatic" for direct chats, "message_tool" for groups/channels.
+   */
+  visibleReplies?: "automatic" | "message_tool";
   /**
    * Prefix auto-added to all outbound replies.
    *

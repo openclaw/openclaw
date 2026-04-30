@@ -1,4 +1,10 @@
 import {
+  logAckFailure,
+  removeAckReactionHandleAfterReply,
+  type AckReactionHandle,
+} from "openclaw/plugin-sdk/channel-feedback";
+import { recordInboundSession } from "openclaw/plugin-sdk/conversation-runtime";
+import {
   createInternalHookEvent,
   deriveInboundMessageHookContext,
   fireAndForgetBoundedHook,
@@ -7,6 +13,7 @@ import {
   toPluginMessageReceivedEvent,
   triggerInternalHook,
 } from "openclaw/plugin-sdk/hook-runtime";
+import { runInboundReplyTurn } from "openclaw/plugin-sdk/inbound-reply-dispatch";
 import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
 import { resolveBatchedReplyThreadingPolicy } from "openclaw/plugin-sdk/reply-reference";
 import { getPrimaryIdentityId, getSelfIdentity, getSenderIdentity } from "../../identity.js";
@@ -46,7 +53,6 @@ import {
   formatInboundEnvelope,
   logVerbose,
   normalizeE164,
-  recordSessionMetaFromInbound,
   resolveChannelContextVisibilityMode,
   resolveInboundSessionEnvelopeContext,
   resolvePinnedMainDmOwnerFromAllowlist,
@@ -192,6 +198,7 @@ export async function processMessage(params: {
   groupHistory?: GroupHistoryEntry[];
   suppressGroupHistoryClear?: boolean;
   ackAlreadySent?: boolean;
+  ackReaction?: AckReactionHandle | null;
   /** Pre-computed audio transcript from a caller-level preflight, used to avoid
    * re-transcribing the same voice note once per broadcast agent.
    * - string  → transcript obtained; use it directly, skip internal STT
@@ -251,10 +258,8 @@ export async function processMessage(params: {
   // If we have a transcript, replace the agent-facing body so the agent sees the spoken text.
   // mediaPath and mediaType are intentionally preserved so that inboundAudio detection
   // (used by features such as messages.tts.auto: "inbound") still sees this as an
-  // audio message. The transcript is also stored in Transcript so downstream pipelines
-  // can detect it. Preventing a second STT pass in the media-understanding pipeline
-  // requires SDK-level support (alreadyTranscribed on a shared attachment instance);
-  // that is a shared concern across all channels and is tracked separately.
+  // audio message. The transcript and transcribed media index are also stored on
+  // context so downstream media understanding does not transcribe it again.
   const msgForAgent =
     audioTranscript !== undefined ? { ...params.msg, body: audioTranscript } : params.msg;
 
@@ -318,8 +323,9 @@ export async function processMessage(params: {
   // Send ack reaction immediately upon message receipt (post-gating). Callers
   // that do preflight work before processMessage can send it first and set
   // ackAlreadySent so slow STT does not delay user-visible receipt feedback.
-  if (params.ackAlreadySent !== true) {
-    await maybeSendAckReaction({
+  let ackReaction = params.ackReaction ?? null;
+  if (!ackReaction && params.ackAlreadySent !== true) {
+    ackReaction = await maybeSendAckReaction({
       cfg: params.cfg,
       msg: params.msg,
       agentId: params.route.agentId,
@@ -422,6 +428,7 @@ export async function processMessage(params: {
       e164: sender.e164 ?? undefined,
     },
     ...(audioTranscript !== undefined ? { transcript: audioTranscript } : {}),
+    ...(audioTranscript !== undefined ? { mediaTranscribedIndexes: [0] } : {}),
     replyThreading,
     visibleReplyTo: visibleReplyTo ?? undefined,
   });
@@ -447,44 +454,81 @@ export async function processMessage(params: {
     warn: params.replyLogger.warn.bind(params.replyLogger),
   });
 
-  const metaTask = recordSessionMetaFromInbound({
-    storePath,
-    sessionKey: params.route.sessionKey,
-    ctx: ctxPayload,
-  }).catch((err) => {
-    params.replyLogger.warn(
-      {
-        error: formatError(err),
+  const turnResult = await runInboundReplyTurn({
+    channel: "whatsapp",
+    accountId: params.route.accountId,
+    raw: params.msg,
+    adapter: {
+      ingest: () => ({
+        id: params.msg.id ?? `${conversationId}:${Date.now()}`,
+        timestamp: params.msg.timestamp,
+        rawText: ctxPayload.RawBody ?? "",
+        textForAgent: ctxPayload.BodyForAgent,
+        textForCommands: ctxPayload.CommandBody,
+        raw: params.msg,
+      }),
+      resolveTurn: () => ({
+        channel: "whatsapp",
+        accountId: params.route.accountId,
+        routeSessionKey: params.route.sessionKey,
         storePath,
-        sessionKey: params.route.sessionKey,
-      },
-      "failed updating session meta",
-    );
-  });
-  trackBackgroundTask(params.backgroundTasks, metaTask);
-
-  return dispatchWhatsAppBufferedReply({
-    cfg: params.cfg,
-    connectionId: params.connectionId,
-    context: ctxPayload,
-    conversationId,
-    deliverReply: deliverWebReply,
-    groupHistories: params.groupHistories,
-    groupHistoryKey: params.groupHistoryKey,
-    maxMediaBytes: params.maxMediaBytes,
-    maxMediaTextChunkLimit: params.maxMediaTextChunkLimit,
-    msg: params.msg,
-    onModelSelected,
-    rememberSentText: params.rememberSentText,
-    replyLogger: params.replyLogger,
-    replyPipeline: {
-      ...replyPipeline,
-      responsePrefix,
+        ctxPayload,
+        recordInboundSession,
+        record: {
+          onRecordError: (err) => {
+            params.replyLogger.warn(
+              {
+                error: formatError(err),
+                storePath,
+                sessionKey: params.route.sessionKey,
+              },
+              "failed updating session meta",
+            );
+          },
+          trackSessionMetaTask: (task) => {
+            trackBackgroundTask(params.backgroundTasks, task);
+          },
+        },
+        runDispatch: () =>
+          dispatchWhatsAppBufferedReply({
+            cfg: params.cfg,
+            connectionId: params.connectionId,
+            context: ctxPayload,
+            conversationId,
+            deliverReply: deliverWebReply,
+            groupHistories: params.groupHistories,
+            groupHistoryKey: params.groupHistoryKey,
+            maxMediaBytes: params.maxMediaBytes,
+            maxMediaTextChunkLimit: params.maxMediaTextChunkLimit,
+            msg: params.msg,
+            onModelSelected,
+            rememberSentText: params.rememberSentText,
+            replyLogger: params.replyLogger,
+            replyPipeline: {
+              ...replyPipeline,
+              responsePrefix,
+            },
+            replyResolver: params.replyResolver,
+            route: params.route,
+            shouldClearGroupHistory,
+          }),
+      }),
     },
-    replyResolver: params.replyResolver,
-    route: params.route,
-    shouldClearGroupHistory,
   });
+  const didSendReply = turnResult.dispatched ? turnResult.dispatchResult : false;
+  removeAckReactionHandleAfterReply({
+    removeAfterReply: Boolean(params.cfg.messages?.removeAckAfterReply && didSendReply),
+    ackReaction,
+    onError: (err) => {
+      logAckFailure({
+        log: logVerbose,
+        channel: "whatsapp",
+        target: `${params.msg.chatId ?? conversationId}/${params.msg.id ?? "unknown"}`,
+        error: err,
+      });
+    },
+  });
+  return didSendReply;
 }
 
 export const __testing = {

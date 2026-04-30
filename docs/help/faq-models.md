@@ -21,7 +21,7 @@ troubleshooting, see the main [FAQ](/help/faq).
     agents.defaults.model.primary
     ```
 
-    Models are referenced as `provider/model` (example: `openai/gpt-5.4` or `openai-codex/gpt-5.5`). If you omit the provider, OpenClaw first tries an alias, then a unique configured-provider match for that exact model id, and only then falls back to the configured default provider as a deprecated compatibility path. If that provider no longer exposes the configured default model, OpenClaw falls back to the first configured provider/model instead of surfacing a stale removed-provider default. You should still **explicitly** set `provider/model`.
+    Models are referenced as `provider/model` (example: `openai/gpt-5.5` or `openai-codex/gpt-5.5`). If you omit the provider, OpenClaw first tries an alias, then a unique configured-provider match for that exact model id, and only then falls back to the configured default provider as a deprecated compatibility path. If that provider no longer exposes the configured default model, OpenClaw falls back to the first configured provider/model instead of surfacing a stale removed-provider default. You should still **explicitly** set `provider/model`.
 
   </Accordion>
 
@@ -95,6 +95,7 @@ troubleshooting, see the main [FAQ](/help/faq).
     - These deployments can differ and may change over time; there is no fixed provider recommendation.
     - Check the current runtime setting on each gateway with `openclaw models status`.
     - For security-sensitive/tool-enabled agents, use the strongest latest-generation model available.
+
   </Accordion>
 
   <Accordion title="How do I switch models on the fly (without restarting)?">
@@ -146,12 +147,9 @@ troubleshooting, see the main [FAQ](/help/faq).
   <Accordion title="Can I use GPT 5.5 for daily tasks and Codex 5.5 for coding?">
     Yes. Set one as default and switch as needed:
 
-    - **Quick switch (per session):** `/model openai/gpt-5.4` for current direct OpenAI API-key tasks or `/model openai-codex/gpt-5.5` for GPT-5.5 Codex OAuth tasks.
-    - **Default:** set `agents.defaults.model.primary` to `openai/gpt-5.4` for API-key usage or `openai-codex/gpt-5.5` for GPT-5.5 Codex OAuth usage.
+    - **Quick switch (per session):** `/model openai/gpt-5.5` for current direct OpenAI API-key tasks or `/model openai-codex/gpt-5.5` for GPT-5.5 Codex OAuth tasks.
+    - **Default:** set `agents.defaults.model.primary` to `openai/gpt-5.5` for API-key usage or `openai-codex/gpt-5.5` for GPT-5.5 Codex OAuth usage.
     - **Sub-agents:** route coding tasks to sub-agents with a different default model.
-
-    Direct API-key access for `openai/gpt-5.5` is supported once OpenAI enables
-    GPT-5.5 on the public API. Until then GPT-5.5 is subscription/OAuth-only.
 
     See [Models](/concepts/models) and [Slash commands](/tools/slash-commands).
 
@@ -160,8 +158,8 @@ troubleshooting, see the main [FAQ](/help/faq).
   <Accordion title="How do I configure fast mode for GPT 5.5?">
     Use either a session toggle or a config default:
 
-    - **Per session:** send `/fast on` while the session is using `openai/gpt-5.4` or `openai-codex/gpt-5.5`.
-    - **Per model default:** set `agents.defaults.models["openai/gpt-5.4"].params.fastMode` or `agents.defaults.models["openai-codex/gpt-5.5"].params.fastMode` to `true`.
+    - **Per session:** send `/fast on` while the session is using `openai/gpt-5.5` or `openai-codex/gpt-5.5`.
+    - **Per model default:** set `agents.defaults.models["openai/gpt-5.5"].params.fastMode` or `agents.defaults.models["openai-codex/gpt-5.5"].params.fastMode` to `true`.
 
     Example:
 
@@ -170,7 +168,7 @@ troubleshooting, see the main [FAQ](/help/faq).
       agents: {
         defaults: {
           models: {
-            "openai/gpt-5.4": {
+            "openai/gpt-5.5": {
               params: {
                 fastMode: true,
               },
@@ -241,7 +239,7 @@ troubleshooting, see the main [FAQ](/help/faq).
           model: { primary: "minimax/MiniMax-M2.7" },
           models: {
             "minimax/MiniMax-M2.7": { alias: "minimax" },
-            "openai/gpt-5.4": { alias: "gpt" },
+            "openai/gpt-5.5": { alias: "gpt" },
           },
         },
       },
@@ -269,7 +267,7 @@ troubleshooting, see the main [FAQ](/help/faq).
 
     - `opus` → `anthropic/claude-opus-4-6`
     - `sonnet` → `anthropic/claude-sonnet-4-6`
-    - `gpt` → `openai/gpt-5.4` for API-key setups, or `openai-codex/gpt-5.5` when configured for Codex OAuth
+    - `gpt` → `openai/gpt-5.5` for API-key setups, or `openai-codex/gpt-5.5` when configured for Codex OAuth
     - `gpt-mini` → `openai/gpt-5.4-mini`
     - `gpt-nano` → `openai/gpt-5.4-nano`
     - `gemini` → `google/gemini-3.1-pro-preview`
@@ -345,7 +343,8 @@ troubleshooting, see the main [FAQ](/help/faq).
     Fix options:
 
     - Run `openclaw agents add <id>` and configure auth during the wizard.
-    - Or copy `auth-profiles.json` from the main agent's `agentDir` into the new agent's `agentDir`.
+    - Or copy only portable static `api_key` / `token` profiles from the main agent's auth store into the new agent's auth store.
+    - For OAuth profiles, sign in from the new agent when it needs its own account; otherwise OpenClaw can read through to the default/main agent without cloning refresh tokens.
 
     Do **not** reuse `agentDir` across agents; it causes auth/session collisions.
 

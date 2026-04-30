@@ -52,10 +52,11 @@ type ClaudeLiveRunResult = {
 
 const CLAUDE_LIVE_IDLE_TIMEOUT_MS = 10 * 60 * 1_000;
 const CLAUDE_LIVE_MAX_SESSIONS = 16;
-const CLAUDE_LIVE_MAX_STDOUT_BUFFER_CHARS = 256 * 1024;
 const CLAUDE_LIVE_MAX_STDERR_CHARS = 64 * 1024;
 const CLAUDE_LIVE_MAX_TURN_RAW_CHARS = 2 * 1024 * 1024;
+const CLAUDE_LIVE_MAX_PENDING_LINE_CHARS = CLAUDE_LIVE_MAX_TURN_RAW_CHARS;
 const CLAUDE_LIVE_MAX_TURN_LINES = 5_000;
+const CLAUDE_LIVE_CLOSE_WAIT_TIMEOUT_MS = 5_000;
 const liveSessions = new Map<string, ClaudeLiveSession>();
 const liveSessionCreates = new Map<string, Promise<ClaudeLiveSession>>();
 
@@ -71,11 +72,34 @@ export function resetClaudeLiveSessionsForTest(): void {
   liveSessionCreates.clear();
 }
 
-export function closeClaudeLiveSessionForContext(context: PreparedCliRunContext): void {
+async function waitForManagedRunExit(managedRun: ManagedRun): Promise<void> {
+  let timeout: NodeJS.Timeout | null = null;
+  try {
+    await Promise.race([
+      managedRun.wait().then(
+        () => undefined,
+        () => undefined,
+      ),
+      new Promise<void>((resolve) => {
+        timeout = setTimeout(resolve, CLAUDE_LIVE_CLOSE_WAIT_TIMEOUT_MS);
+        timeout.unref?.();
+      }),
+    ]);
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
+}
+
+export async function closeClaudeLiveSessionForContext(
+  context: PreparedCliRunContext,
+): Promise<void> {
   const key = buildClaudeLiveKey(context);
   const session = liveSessions.get(key);
   if (session) {
     closeLiveSession(session, "restart");
+    await waitForManagedRunExit(session.managedRun);
   }
   liveSessionCreates.delete(key);
 }
@@ -147,8 +171,12 @@ export function buildClaudeLiveArgs(params: {
   return appendArg(
     upsertArgValue(
       upsertArgValue(
-        stripLiveProcessArgs(params.args, params.backend, params.useResume),
-        "--input-format",
+        upsertArgValue(
+          stripLiveProcessArgs(params.args, params.backend, params.useResume),
+          "--input-format",
+          "stream-json",
+        ),
+        "--output-format",
         "stream-json",
       ),
       "--permission-prompt-tool",
@@ -415,7 +443,7 @@ function parseClaudeLiveJsonLine(
   session: ClaudeLiveSession,
   trimmed: string,
 ): Record<string, unknown> | null {
-  if (trimmed.length > CLAUDE_LIVE_MAX_STDOUT_BUFFER_CHARS) {
+  if (trimmed.length > CLAUDE_LIVE_MAX_PENDING_LINE_CHARS) {
     closeLiveSession(
       session,
       "abort",
@@ -513,11 +541,11 @@ function handleClaudeLiveLine(session: ClaudeLiveSession, line: string): void {
 function handleClaudeStdout(session: ClaudeLiveSession, chunk: string) {
   resetNoOutputTimer(session);
   session.stdoutBuffer += chunk;
-  if (session.stdoutBuffer.length > CLAUDE_LIVE_MAX_STDOUT_BUFFER_CHARS) {
+  if (session.stdoutBuffer.length > CLAUDE_LIVE_MAX_PENDING_LINE_CHARS) {
     closeLiveSession(
       session,
       "abort",
-      createOutputLimitError(session, "Claude CLI stdout buffer exceeded limit."),
+      createOutputLimitError(session, "Claude CLI JSONL line exceeded output limit."),
     );
     return;
   }

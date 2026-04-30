@@ -1,6 +1,6 @@
 import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { withEnv } from "openclaw/plugin-sdk/testing";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import { withEnv } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
 
 const handleDiscordMessageActionMock = vi.hoisted(() =>
@@ -112,6 +112,21 @@ describe("discordMessageActions", () => {
     });
     expect(discovery?.schema).toBeUndefined();
   });
+
+  it.each(["read", "search"])("routes %s actions through gateway execution mode", (action) => {
+    expect(discordMessageActions.resolveExecutionMode?.({ action: action as never })).toBe(
+      "gateway",
+    );
+  });
+
+  it.each(["send", "edit", "delete", "react", "pin", "poll"])(
+    "routes %s actions through local execution mode",
+    (action) => {
+      expect(discordMessageActions.resolveExecutionMode?.({ action: action as never })).toBe(
+        "local",
+      );
+    },
+  );
 
   it("extracts send targets for message and thread reply actions", () => {
     expect(

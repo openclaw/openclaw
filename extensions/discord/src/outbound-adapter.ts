@@ -2,11 +2,9 @@ import {
   type ChannelOutboundAdapter,
   createAttachedChannelResultAdapter,
 } from "openclaw/plugin-sdk/channel-send-result";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import {
-  resolveOutboundSendDep,
-  type OutboundIdentity,
-} from "openclaw/plugin-sdk/outbound-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OutboundIdentity } from "openclaw/plugin-sdk/outbound-runtime";
+import { resolveOutboundSendDep } from "openclaw/plugin-sdk/outbound-send-deps";
 import {
   normalizeOptionalString,
   normalizeOptionalStringifiedId,
@@ -28,6 +26,19 @@ import {
 } from "./outbound-send-context.js";
 
 export const DISCORD_TEXT_CHUNK_LIMIT = 2000;
+const DISCORD_INTERNAL_RUNTIME_SCAFFOLDING_BLOCK_RE =
+  /<\s*(system-reminder|previous_response)\b[^>]*>[\s\S]*?<\s*\/\s*\1\s*>/gi;
+const DISCORD_INTERNAL_RUNTIME_SCAFFOLDING_SELF_CLOSING_RE =
+  /<\s*(?:system-reminder|previous_response)\b[^>]*\/\s*>/gi;
+const DISCORD_INTERNAL_RUNTIME_SCAFFOLDING_TAG_RE =
+  /<\s*\/?\s*(?:system-reminder|previous_response)\b[^>]*>/gi;
+
+function stripDiscordInternalRuntimeScaffolding(text: string): string {
+  return text
+    .replace(DISCORD_INTERNAL_RUNTIME_SCAFFOLDING_BLOCK_RE, "")
+    .replace(DISCORD_INTERNAL_RUNTIME_SCAFFOLDING_SELF_CLOSING_RE, "")
+    .replace(DISCORD_INTERNAL_RUNTIME_SCAFFOLDING_TAG_RE, "");
+}
 
 type DiscordThreadBindingsModule = typeof import("./monitor/thread-bindings.js");
 
@@ -99,6 +110,7 @@ export const discordOutbound: ChannelOutboundAdapter = {
       maxLines: ctx?.formatting?.maxLinesPerMessage,
     }),
   textChunkLimit: DISCORD_TEXT_CHUNK_LIMIT,
+  sanitizeText: ({ text }) => stripDiscordInternalRuntimeScaffolding(text),
   pollMaxOptions: 10,
   normalizePayload: ({ payload }) => normalizeDiscordApprovalPayload(payload),
   presentationCapabilities: {
@@ -114,7 +126,7 @@ export const discordOutbound: ChannelOutboundAdapter = {
       presentation,
     });
   },
-  resolveTarget: ({ to }) => normalizeDiscordOutboundTarget(to),
+  resolveTarget: ({ to, allowFrom }) => normalizeDiscordOutboundTarget(to, allowFrom),
   sendPayload: async (ctx) =>
     await sendDiscordOutboundPayload({
       ctx,

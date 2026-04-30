@@ -1,7 +1,7 @@
 import type { Message } from "@grammyjs/types";
 import type { Bot } from "grammy";
 import { createChannelPairingChallengeIssuer } from "openclaw/plugin-sdk/channel-pairing";
-import type { DmPolicy } from "openclaw/plugin-sdk/config-runtime";
+import type { DmPolicy } from "openclaw/plugin-sdk/config-types";
 import { upsertChannelPairingRequest } from "openclaw/plugin-sdk/conversation-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
@@ -60,9 +60,6 @@ export async function enforceTelegramDmAccess(params: {
   if (dmPolicy === "disabled") {
     return false;
   }
-  if (dmPolicy === "open") {
-    return true;
-  }
 
   const sender = resolveTelegramSenderIdentity(msg, chatId);
   const allowMatch = resolveSenderAllowMatch({
@@ -75,6 +72,15 @@ export async function enforceTelegramDmAccess(params: {
   }`;
   const allowed =
     effectiveDmAllow.hasWildcard || (effectiveDmAllow.hasEntries && allowMatch.allowed);
+  if (dmPolicy === "open") {
+    if (allowed) {
+      return true;
+    }
+    logVerbose(
+      `Blocked unauthorized telegram sender ${sender.candidateId} (dmPolicy=open, ${allowMatchMeta})`,
+    );
+    return false;
+  }
   if (allowed) {
     return true;
   }

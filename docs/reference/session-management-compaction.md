@@ -7,15 +7,15 @@ read_when:
 title: "Session management deep dive"
 ---
 
-This page explains how OpenClaw manages sessions end-to-end:
+OpenClaw manages sessions end-to-end across these areas:
 
 - **Session routing** (how inbound messages map to a `sessionKey`)
 - **Session store** (`sessions.json`) and what it tracks
 - **Transcript persistence** (`*.jsonl`) and its structure
 - **Transcript hygiene** (provider-specific fixups before runs)
 - **Context limits** (context window vs tracked tokens)
-- **Compaction** (manual + auto-compaction) and where to hook pre-compaction work
-- **Silent housekeeping** (e.g. memory writes that shouldn’t produce user-visible output)
+- **Compaction** (manual and auto-compaction) and where to hook pre-compaction work
+- **Silent housekeeping** (memory writes that should not produce user-visible output)
 
 If you want a higher-level overview first, start with:
 
@@ -50,6 +50,9 @@ OpenClaw persists sessions in two layers:
    - Append-only transcript with tree structure (entries have `id` + `parentId`)
    - Stores the actual conversation + tool calls + compaction summaries
    - Used to rebuild the model context for future turns
+   - Large pre-compaction debug checkpoints are skipped once the active
+     transcript exceeds the checkpoint size cap, avoiding a second giant
+     `.checkpoint.*.jsonl` copy.
 
 ---
 
@@ -67,20 +70,23 @@ OpenClaw resolves these via `src/config/sessions.ts`.
 
 ## Store maintenance and disk controls
 
-Session persistence has automatic maintenance controls (`session.maintenance`) for `sessions.json` and transcript artifacts:
+Session persistence has automatic maintenance controls (`session.maintenance`) for `sessions.json`, transcript artifacts, and trajectory sidecars:
 
 - `mode`: `warn` (default) or `enforce`
 - `pruneAfter`: stale-entry age cutoff (default `30d`)
 - `maxEntries`: cap entries in `sessions.json` (default `500`)
-- `rotateBytes`: rotate `sessions.json` when oversized (default `10mb`)
 - `resetArchiveRetention`: retention for `*.reset.<timestamp>` transcript archives (default: same as `pruneAfter`; `false` disables cleanup)
 - `maxDiskBytes`: optional sessions-directory budget
 - `highWaterBytes`: optional target after cleanup (default `80%` of `maxDiskBytes`)
 
+Normal Gateway writes batch `maxEntries` cleanup for production-sized caps, so a store may briefly exceed the configured cap before the next high-water cleanup rewrites it back down. `openclaw sessions cleanup --enforce` still applies the configured cap immediately.
+
+OpenClaw no longer creates automatic `sessions.json.bak.*` rotation backups during Gateway writes. The legacy `session.maintenance.rotateBytes` key is ignored and `openclaw doctor --fix` removes it from older configs.
+
 Enforcement order for disk budget cleanup (`mode: "enforce"`):
 
-1. Remove oldest archived or orphan transcript artifacts first.
-2. If still above the target, evict oldest session entries and their transcript files.
+1. Remove oldest archived, orphan transcript, or orphan trajectory artifacts first.
+2. If still above the target, evict oldest session entries and their transcript/trajectory files.
 3. Keep going until usage is at or below `highWaterBytes`.
 
 In `mode: "warn"`, OpenClaw reports potential evictions but does not mutate the store/files.
@@ -136,6 +142,7 @@ Rules of thumb:
 - **Reset** (`/new`, `/reset`) creates a new `sessionId` for that `sessionKey`.
 - **Daily reset** (default 4:00 AM local time on the gateway host) creates a new `sessionId` on the next message after the reset boundary.
 - **Idle expiry** (`session.reset.idleMinutes` or legacy `session.idleMinutes`) creates a new `sessionId` when a message arrives after the idle window. When daily + idle are both configured, whichever expires first wins.
+- **System events** (heartbeat, cron wakeups, exec notifications, gateway bookkeeping) may mutate the session row but do not extend daily/idle reset freshness. Reset rollover discards queued system-event notices for the previous session before the fresh prompt is built.
 - **Thread parent fork guard** (`session.parentForkMaxTokens`, default `100000`) skips parent transcript forking when the parent session is already too large; the new thread starts fresh. Set `0` to disable.
 
 Implementation detail: the decision happens in `initSessionState()` in `src/auto-reply/reply/session.ts`.
@@ -149,7 +156,14 @@ The store’s value type is `SessionEntry` in `src/config/sessions.ts`.
 Key fields (not exhaustive):
 
 - `sessionId`: current transcript id (filename is derived from this unless `sessionFile` is set)
-- `updatedAt`: last activity timestamp
+- `sessionStartedAt`: start timestamp for the current `sessionId`; daily reset
+  freshness uses this. Legacy rows may derive it from the JSONL session header.
+- `lastInteractionAt`: last real user/channel interaction timestamp; idle reset
+  freshness uses this so heartbeat, cron, and exec events do not keep sessions
+  alive. Legacy rows without this field fall back to the recovered session start
+  time for idle freshness.
+- `updatedAt`: last store-row mutation timestamp, used for listing, pruning, and
+  bookkeeping. It is not the authority for daily/idle reset freshness.
 - `sessionFile`: optional explicit transcript path override
 - `chatType`: `direct | group | room` (helps UIs and send policy)
 - `provider`, `subject`, `room`, `space`, `displayName`: metadata for group/channel labeling
@@ -251,6 +265,27 @@ Where:
 
 These are Pi runtime semantics (OpenClaw consumes the events, but Pi decides when to compact).
 
+OpenClaw can also trigger a preflight local compaction before opening the next
+run when `agents.defaults.compaction.maxActiveTranscriptBytes` is set and the
+active transcript file reaches that size. This is a file-size guard for local
+reopen cost, not raw archival: OpenClaw still runs normal semantic compaction,
+and it requires `truncateAfterCompaction` so the compacted summary can become a
+new successor transcript.
+
+For embedded Pi runs, `agents.defaults.compaction.midTurnPrecheck.enabled: true`
+adds an opt-in tool-loop guard. After a tool result is appended and before the
+next model call, OpenClaw estimates the prompt pressure using the same preflight
+budget logic used at turn start. If the context no longer fits, the guard does
+not compact inside Pi's `transformContext` hook. It raises a structured
+mid-turn precheck signal, stops the current prompt submission, and lets the
+outer run loop use the existing recovery path: truncate oversized tool results
+when that is enough, or trigger the configured compaction mode and retry. The
+option is disabled by default and works with both `default` and `safeguard`
+compaction modes, including provider-backed safeguard compaction.
+This is independent of `maxActiveTranscriptBytes`: the byte-size guard runs
+before a turn opens, while mid-turn precheck runs later in the embedded Pi tool
+loop after new tool results have been appended.
+
 ---
 
 ## Compaction settings (`reserveTokens`, `keepRecentTokens`)
@@ -277,6 +312,20 @@ OpenClaw also enforces a safety floor for embedded runs:
   and keeps Pi's recent-tail cut point. Without an explicit keep budget,
   manual compaction remains a hard checkpoint and rebuilt context starts from
   the new summary.
+- Set `agents.defaults.compaction.midTurnPrecheck.enabled: true` to run the
+  optional tool-loop precheck after new tool results and before the next model
+  call. This is a trigger only; summary generation still uses the configured
+  compaction path. It is independent of `maxActiveTranscriptBytes`, which is a
+  turn-start active-transcript byte-size guard.
+- Set `agents.defaults.compaction.maxActiveTranscriptBytes` to a byte value or
+  string such as `"20mb"` to run local compaction before a turn when the active
+  transcript gets large. This guard is active only when
+  `truncateAfterCompaction` is also enabled. Leave it unset or set `0` to
+  disable.
+- When `agents.defaults.compaction.truncateAfterCompaction` is enabled,
+  OpenClaw rotates the active transcript to a compacted successor JSONL after
+  compaction. The old full transcript remains archived and linked from the
+  compaction checkpoint instead of being rewritten in place.
 
 Why: leave enough headroom for multi-turn “housekeeping” (like memory writes) before compaction becomes unavoidable.
 
@@ -352,6 +401,7 @@ OpenClaw uses the **pre-threshold flush** approach:
 Config (`agents.defaults.compaction.memoryFlush`):
 
 - `enabled` (default: `true`)
+- `model` (optional exact provider/model override for the flush turn, for example `ollama/qwen3:8b`)
 - `softThresholdTokens` (default: `4000`)
 - `prompt` (user message for the flush turn)
 - `systemPrompt` (extra system prompt appended for the flush turn)
@@ -360,6 +410,9 @@ Notes:
 
 - The default prompt/system prompt include a `NO_REPLY` hint to suppress
   delivery.
+- When `model` is set, the flush turn uses that model without inheriting the
+  active session fallback chain, so local-only housekeeping does not silently
+  fall back to a paid conversation model.
 - The flush runs once per compaction cycle (tracked in `sessions.json`).
 - The flush runs only for embedded Pi sessions (CLI backends skip it).
 - The flush is skipped when the session workspace is read-only (`workspaceAccess: "ro"` or `"none"`).

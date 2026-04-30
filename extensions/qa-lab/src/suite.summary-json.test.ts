@@ -13,8 +13,8 @@ describe("buildQaSuiteSummaryJson", () => {
     startedAt: new Date("2026-04-11T00:00:00.000Z"),
     finishedAt: new Date("2026-04-11T00:05:00.000Z"),
     providerMode: "mock-openai" as const,
-    primaryModel: "openai/gpt-5.4",
-    alternateModel: "openai/gpt-5.4-alt",
+    primaryModel: "openai/gpt-5.5",
+    alternateModel: "openai/gpt-5.5-alt",
     fastMode: true,
     concurrency: 2,
   };
@@ -25,12 +25,12 @@ describe("buildQaSuiteSummaryJson", () => {
       startedAt: "2026-04-11T00:00:00.000Z",
       finishedAt: "2026-04-11T00:05:00.000Z",
       providerMode: "mock-openai",
-      primaryModel: "openai/gpt-5.4",
+      primaryModel: "openai/gpt-5.5",
       primaryProvider: "openai",
-      primaryModelName: "gpt-5.4",
-      alternateModel: "openai/gpt-5.4-alt",
+      primaryModelName: "gpt-5.5",
+      alternateModel: "openai/gpt-5.5-alt",
       alternateProvider: "openai",
-      alternateModelName: "gpt-5.4-alt",
+      alternateModelName: "gpt-5.5-alt",
       fastMode: true,
       concurrency: 2,
       scenarioIds: null,
@@ -96,6 +96,28 @@ describe("buildQaSuiteSummaryJson", () => {
       total: 2,
       passed: 1,
       failed: 1,
+    });
+  });
+
+  it("records optional runtime metrics when provided", () => {
+    const json = buildQaSuiteSummaryJson({
+      ...baseParams,
+      metrics: {
+        wallMs: 12_000,
+        gatewayProcessCpuMs: 3_400,
+        gatewayCpuCoreRatio: 0.283,
+        gatewayProcessRssStartBytes: 100_000_000,
+        gatewayProcessRssEndBytes: 125_000_000,
+        gatewayProcessRssDeltaBytes: 25_000_000,
+      },
+    });
+    expect(json.metrics).toEqual({
+      wallMs: 12_000,
+      gatewayProcessCpuMs: 3_400,
+      gatewayCpuCoreRatio: 0.283,
+      gatewayProcessRssStartBytes: 100_000_000,
+      gatewayProcessRssEndBytes: 125_000_000,
+      gatewayProcessRssDeltaBytes: 25_000_000,
     });
   });
 });

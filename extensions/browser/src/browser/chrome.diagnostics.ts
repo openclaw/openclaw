@@ -365,6 +365,19 @@ export async function diagnoseChromeCdp(
 
   const health = await diagnoseCdpHealthCommand(wsUrl, handshakeTimeoutMs);
   if (!health.ok) {
+    if (isWebSocketUrl(cdpUrl) && wsUrl !== cdpUrl) {
+      const directHealth = await diagnoseCdpHealthCommand(cdpUrl, handshakeTimeoutMs);
+      if (directHealth.ok) {
+        return {
+          ok: true,
+          cdpUrl,
+          wsUrl: cdpUrl,
+          browser: version.Browser,
+          userAgent: version["User-Agent"],
+          elapsedMs: elapsedSince(startedAt),
+        };
+      }
+    }
     return failureDiagnostic({
       cdpUrl,
       wsUrl,

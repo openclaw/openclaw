@@ -2,9 +2,10 @@ import crypto from "node:crypto";
 import fsSync from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { redactIdentifier } from "openclaw/plugin-sdk/logging-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { WhatsAppSendKind, WhatsAppSendResult } from "./inbound/send-result.js";
 import type { ActiveWebListener } from "./inbound/types.js";
 
 const hoisted = vi.hoisted(() => ({
@@ -22,6 +23,16 @@ let setLoggerOverride: typeof import("openclaw/plugin-sdk/runtime-env").setLogge
 const WHATSAPP_TEST_CFG: OpenClawConfig = {
   channels: { whatsapp: {} },
 };
+
+function acceptedSendResult(kind: WhatsAppSendKind, id: string): WhatsAppSendResult {
+  return {
+    kind,
+    messageId: id,
+    messageIds: [id],
+    keys: [{ id }],
+    providerAccepted: true,
+  };
+}
 
 vi.mock("./connection-controller-registry.js", async () => {
   const actual = await vi.importActual<typeof import("./connection-controller-registry.js")>(
@@ -70,9 +81,9 @@ vi.mock("./text-runtime.js", async () => {
 
 describe("web outbound", () => {
   const sendComposingTo = vi.fn(async () => {});
-  const sendMessage = vi.fn(async () => ({ messageId: "msg123" }));
-  const sendPoll = vi.fn(async () => ({ messageId: "poll123" }));
-  const sendReaction = vi.fn(async () => {});
+  const sendMessage = vi.fn(async () => acceptedSendResult("text", "msg123"));
+  const sendPoll = vi.fn(async () => acceptedSendResult("poll", "poll123"));
+  const sendReaction = vi.fn(async () => acceptedSendResult("reaction", "reaction123"));
 
   beforeAll(async () => {
     ({ sendMessageWhatsApp, sendPollWhatsApp, sendReactionWhatsApp } = await import("./send.js"));
@@ -245,12 +256,8 @@ describe("web outbound", () => {
       cfg: WHATSAPP_TEST_CFG,
       mediaUrl: "/tmp/voice.ogg",
     });
-    expect(sendMessage).toHaveBeenLastCalledWith(
-      "+1555",
-      "voice note",
-      buf,
-      "audio/ogg; codecs=opus",
-    );
+    expect(sendMessage).toHaveBeenNthCalledWith(1, "+1555", "", buf, "audio/ogg; codecs=opus");
+    expect(sendMessage).toHaveBeenNthCalledWith(2, "+1555", "voice note", undefined, undefined);
   });
 
   it.each([
@@ -274,12 +281,14 @@ describe("web outbound", () => {
     expect(hoisted.runFfmpeg).toHaveBeenCalledWith(
       expect.arrayContaining(["-c:a", "libopus", "-ar", "48000", "-b:a", "64k"]),
     );
-    expect(sendMessage).toHaveBeenLastCalledWith(
+    expect(sendMessage).toHaveBeenNthCalledWith(
+      1,
       "+1555",
-      "voice note",
+      "",
       Buffer.from("opus-output"),
       "audio/ogg; codecs=opus",
     );
+    expect(sendMessage).toHaveBeenNthCalledWith(2, "+1555", "voice note", undefined, undefined);
   });
 
   it("maps video with caption", async () => {

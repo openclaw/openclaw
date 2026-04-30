@@ -251,6 +251,19 @@ describe("local-heavy-check-runtime", () => {
     ]);
   });
 
+  it("honors an explicit oxlint thread count", () => {
+    const { args } = applyLocalOxlintPolicy(["--threads=8"], makeEnv(), ROOMY_HOST);
+
+    expect(args).toEqual([
+      "--threads=8",
+      "--type-aware",
+      "--tsconfig",
+      "tsconfig.oxlint.json",
+      "--report-unused-disable-directives-severity",
+      "error",
+    ]);
+  });
+
   it("allows forcing full-speed oxlint runs on roomy hosts", () => {
     const { args } = applyLocalOxlintPolicy(
       [],

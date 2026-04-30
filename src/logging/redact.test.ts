@@ -1,4 +1,7 @@
-import { describe, expect, it } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   getDefaultRedactPatterns,
   redactSensitiveLines,
@@ -7,6 +10,28 @@ import {
 } from "./redact.js";
 
 const defaults = getDefaultRedactPatterns();
+const originalConfigPath = process.env.OPENCLAW_CONFIG_PATH;
+let tempDirs: string[] = [];
+
+function writeConfig(source: string): void {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-redact-config-"));
+  tempDirs.push(dir);
+  const configPath = path.join(dir, "openclaw.json");
+  fs.writeFileSync(configPath, source);
+  process.env.OPENCLAW_CONFIG_PATH = configPath;
+}
+
+afterEach(() => {
+  if (originalConfigPath === undefined) {
+    delete process.env.OPENCLAW_CONFIG_PATH;
+  } else {
+    process.env.OPENCLAW_CONFIG_PATH = originalConfigPath;
+  }
+  for (const dir of tempDirs) {
+    fs.rmSync(dir, { force: true, recursive: true });
+  }
+  tempDirs = [];
+});
 
 describe("redactSensitiveText", () => {
   it("masks env assignments while keeping the key", () => {
@@ -36,6 +61,33 @@ describe("redactSensitiveText", () => {
     expect(output).toBe("gog gmail watch serve --hook-token abcdef…ghij");
   });
 
+  it("masks sensitive URL query parameters", () => {
+    const input = "connect https://user.example/sync?access_token=abcdef1234567890ghij&safe=value";
+    const output = redactSensitiveText(input, {
+      mode: "tools",
+      patterns: defaults,
+    });
+    expect(output).toBe("connect https://user.example/sync?access_token=abcdef…ghij&safe=value");
+  });
+
+  it("masks short URL query tokens fully", () => {
+    const input = "cdp=https://browserless.example.com/?token=supersecret123";
+    const output = redactSensitiveText(input, {
+      mode: "tools",
+      patterns: defaults,
+    });
+    expect(output).toBe("cdp=https://browserless.example.com/?token=***");
+  });
+
+  it("masks standalone lowercase token assignments in diagnostic output", () => {
+    const input = "matrix access_token=abcdef1234567890ghij next";
+    const output = redactSensitiveText(input, {
+      mode: "tools",
+      patterns: defaults,
+    });
+    expect(output).toBe("matrix access_token=abcdef…ghij next");
+  });
+
   it("masks JSON fields", () => {
     const input = '{"token":"abcdef1234567890ghij"}';
     const output = redactSensitiveText(input, {
@@ -52,6 +104,15 @@ describe("redactSensitiveText", () => {
       patterns: defaults,
     });
     expect(output).toBe("Authorization: Bearer abcdef…ghij");
+  });
+
+  it("masks URL query tokens", () => {
+    const input = "GET /_matrix/client/v3/sync?access_token=abcdef1234567890ghij";
+    const output = redactSensitiveText(input, {
+      mode: "tools",
+      patterns: defaults,
+    });
+    expect(output).toBe("GET /_matrix/client/v3/sync?access_token=abcdef…ghij");
   });
 
   it("masks bot-style tokens", () => {
@@ -82,6 +143,33 @@ describe("redactSensitiveText", () => {
     expect(output).toBe("TOKEN=***");
   });
 
+  it("does not redact lowercase key diagnostics", () => {
+    const input = 'agents.defaults: Unrecognized key: "llm"';
+    const output = redactSensitiveText(input, {
+      mode: "tools",
+      patterns: defaults,
+    });
+    expect(output).toBe(input);
+  });
+
+  it("masks sensitive URL query params while preserving non-sensitive params", () => {
+    const input = "GET /_matrix/client/v3/sync?access_token=abcdef1234567890ghij&since=123";
+    const output = redactSensitiveText(input, {
+      mode: "tools",
+      patterns: defaults,
+    });
+    expect(output).toBe("GET /_matrix/client/v3/sync?access_token=abcdef…ghij&since=123");
+  });
+
+  it("treats sensitive URL query param names case-insensitively", () => {
+    const input = "connect https://gateway.example/ws?Access-Token=short-token&ok=1";
+    const output = redactSensitiveText(input, {
+      mode: "tools",
+      patterns: defaults,
+    });
+    expect(output).toBe("connect https://gateway.example/ws?Access-Token=***&ok=1");
+  });
+
   it("redacts private key blocks", () => {
     const input = [
       "-----BEGIN PRIVATE KEY-----",
@@ -105,6 +193,16 @@ describe("redactSensitiveText", () => {
       patterns: ["/token=([A-Za-z0-9]+)/i"],
     });
     expect(output).toBe("token=abcdef…ghij");
+  });
+
+  it("honors escaped character classes in custom patterns", () => {
+    const input = "contact peter@dc.io";
+    const output = redactSensitiveText(input, {
+      mode: "tools",
+      patterns: [String.raw`([\w]|[-.])+@([\w]|[-.])+\.\w+`],
+    });
+    expect(output).toBe("contact peter@d***.io");
+    expect(output).not.toContain("peter@dc.io");
   });
 
   it("ignores unsafe nested-repetition custom patterns", () => {
@@ -132,6 +230,18 @@ describe("redactSensitiveText", () => {
       patterns: defaults,
     });
     expect(output).toBe(input);
+  });
+
+  it("honors logging redaction settings from the active config path", () => {
+    writeConfig(`{
+      logging: {
+        redactSensitive: "off",
+      },
+    }`);
+
+    expect(redactSensitiveText("OPENAI_API_KEY=sk-1234567890abcdef")).toBe(
+      "OPENAI_API_KEY=sk-1234567890abcdef",
+    );
   });
 
   it("does not resolve patterns when mode is off", () => {

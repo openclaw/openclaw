@@ -2,6 +2,7 @@ import type { ClawdbotConfig } from "../runtime-api.js";
 import { buildFeishuConversationId } from "./conversation-id.js";
 import { normalizeFeishuExternalKey } from "./external-keys.js";
 import { downloadMessageResourceFeishu } from "./media.js";
+import { isFeishuBroadcastMention } from "./mention.js";
 import { parsePostContent } from "./post.js";
 import { getFeishuRuntime } from "./runtime.js";
 import type { FeishuChatType, FeishuMediaInfo } from "./types.js";
@@ -139,6 +140,18 @@ export function parseMessageContent(content: string, messageType: string): strin
     if (messageType === "text") {
       return parsed.text || "";
     }
+    if (["image", "file", "audio", "video", "media", "sticker"].includes(messageType)) {
+      if (messageType === "audio") {
+        const speechToText =
+          typeof parsed.speech_to_text === "string" ? parsed.speech_to_text.trim() : "";
+        if (speechToText) {
+          return speechToText;
+        }
+      }
+      const placeholder = inferPlaceholder(messageType);
+      const fileName = typeof parsed.file_name === "string" ? parsed.file_name.trim() : "";
+      return fileName ? `${placeholder} (${fileName})` : placeholder;
+    }
     if (messageType === "share_chat") {
       if (parsed && typeof parsed === "object") {
         const share = parsed as { body?: unknown; summary?: unknown; share_chat_id?: unknown };
@@ -237,15 +250,16 @@ export function checkBotMentioned(event: FeishuMessageLike, botOpenId?: string):
   if (!botOpenId) {
     return false;
   }
-  if ((event.message.content ?? "").includes("@_all")) {
-    return true;
-  }
   const mentions = event.message.mentions ?? [];
   if (mentions.length > 0) {
-    return mentions.some((mention) => mention.id.open_id === botOpenId);
+    return mentions.some(
+      (mention) => !isFeishuBroadcastMention(mention) && mention.id.open_id === botOpenId,
+    );
   }
   if (event.message.message_type === "post") {
-    return parsePostContent(event.message.content).mentionedOpenIds.some((id) => id === botOpenId);
+    return parsePostContent(event.message.content).mentionedOpenIds.some(
+      (id) => id.trim().toLowerCase() !== "all" && id === botOpenId,
+    );
   }
   return false;
 }

@@ -129,6 +129,8 @@ export type GoogleMeetExportManifest = {
 
 type SetupOptions = {
   json?: boolean;
+  mode?: GoogleMeetMode;
+  transport?: GoogleMeetTransport;
 };
 
 type DoctorOptions = {
@@ -145,6 +147,10 @@ type DoctorOptions = {
 
 type JsonOptions = {
   json?: boolean;
+};
+
+type RecoverTabOptions = JsonOptions & {
+  transport?: GoogleMeetTransport;
 };
 
 type CreateOptions = {
@@ -261,6 +267,11 @@ function writeDoctorStatus(status: ReturnType<GoogleMeetRuntime["status"]>): voi
     if (health?.manualActionRequired) {
       writeStdoutLine("manual reason: %s", formatOptional(health.manualActionReason));
       writeStdoutLine("manual message: %s", formatOptional(health.manualActionMessage));
+    }
+    writeStdoutLine("speech ready: %s", formatBoolean(health?.speechReady));
+    if (health?.speechReady === false) {
+      writeStdoutLine("speech blocked reason: %s", formatOptional(health.speechBlockedReason));
+      writeStdoutLine("speech blocked message: %s", formatOptional(health.speechBlockedMessage));
     }
     writeStdoutLine("provider connected: %s", formatBoolean(health?.providerConnected));
     writeStdoutLine("realtime ready: %s", formatBoolean(health?.realtimeReady));
@@ -430,7 +441,8 @@ function writeRecoverCurrentTabResult(
   result: Awaited<ReturnType<GoogleMeetRuntime["recoverCurrentTab"]>>,
 ): void {
   writeStdoutLine("Google Meet current tab: %s", result.found ? "found" : "not found");
-  writeStdoutLine("node: %s", result.nodeId);
+  writeStdoutLine("transport: %s", result.transport);
+  writeStdoutLine("node: %s", result.nodeId ?? "local/none");
   if (result.targetId) {
     writeStdoutLine("target: %s", result.targetId);
   }
@@ -444,12 +456,15 @@ function writeRecoverCurrentTabResult(
       session: {
         id: "current-tab",
         url: result.browser.browserUrl ?? result.tab?.url ?? "unknown",
-        transport: "chrome-node",
+        transport: result.transport,
         mode: "transcribe",
         state: "active",
         createdAt: "",
         updatedAt: "",
-        participantIdentity: "signed-in Google Chrome profile on a paired node",
+        participantIdentity:
+          result.transport === "chrome-node"
+            ? "signed-in Google Chrome profile on a paired node"
+            : "signed-in Google Chrome profile",
         realtime: { enabled: false, toolPolicy: "safe-read-only" },
         chrome: {
           audioBackend: "blackhole-2ch",
@@ -1959,12 +1974,13 @@ export function registerGoogleMeetCli(params: {
 
   root
     .command("recover-tab")
-    .description("Focus and inspect an existing Google Meet tab on the Chrome node")
+    .description("Focus and inspect an existing Google Meet tab")
     .argument("[url]", "Optional Meet URL to match")
+    .option("--transport <transport>", "Transport to inspect: chrome or chrome-node")
     .option("--json", "Print JSON output", false)
-    .action(async (url: string | undefined, options: JsonOptions) => {
+    .action(async (url: string | undefined, options: RecoverTabOptions) => {
       const rt = await params.ensureRuntime();
-      const result = await rt.recoverCurrentTab({ url });
+      const result = await rt.recoverCurrentTab({ url, transport: options.transport });
       if (options.json) {
         writeStdoutJson(result);
         return;
@@ -1975,10 +1991,12 @@ export function registerGoogleMeetCli(params: {
   root
     .command("setup")
     .description("Show Google Meet transport setup status")
+    .option("--transport <transport>", "Transport to check: chrome, chrome-node, or twilio")
+    .option("--mode <mode>", "Mode to check: realtime or transcribe")
     .option("--json", "Print JSON output", false)
     .action(async (options: SetupOptions) => {
       const rt = await params.ensureRuntime();
-      const status = await rt.setupStatus();
+      const status = await rt.setupStatus({ transport: options.transport, mode: options.mode });
       if (options.json) {
         writeStdoutJson(status);
         return;
@@ -2004,12 +2022,15 @@ export function registerGoogleMeetCli(params: {
     .argument("[message]", "Realtime instructions to speak now")
     .action(async (sessionId: string, message?: string) => {
       const rt = await params.ensureRuntime();
-      const result = rt.speak(sessionId, message);
+      const result = await rt.speak(sessionId, message);
       if (!result.found) {
         throw new Error("session not found");
       }
       if (!result.spoken) {
-        throw new Error("session has no active realtime audio bridge");
+        throw new Error(
+          result.session?.chrome?.health?.speechBlockedMessage ??
+            "session has no active realtime audio bridge",
+        );
       }
       writeStdoutLine("speaking on %s", sessionId);
     });

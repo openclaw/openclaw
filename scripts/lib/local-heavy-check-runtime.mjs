@@ -92,7 +92,7 @@ export function applyLocalOxlintPolicy(args, env, hostResources) {
     insertBeforeSeparator(nextArgs, "--report-unused-disable-directives-severity", "error");
   }
 
-  if (shouldThrottleLocalHeavyChecks(nextEnv, hostResources)) {
+  if (shouldThrottleLocalHeavyChecks(nextEnv, hostResources) && !hasFlag(nextArgs, "--threads")) {
     insertBeforeSeparator(nextArgs, "--threads=1");
   }
 

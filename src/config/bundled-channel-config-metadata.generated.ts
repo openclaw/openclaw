@@ -789,8 +789,16 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
             },
           ],
         },
+        applicationId: {
+          type: "string",
+        },
         proxy: {
           type: "string",
+        },
+        gatewayInfoTimeoutMs: {
+          type: "integer",
+          exclusiveMinimum: 0,
+          maximum: 120000,
         },
         allowBots: {
           anyOf: [
@@ -1445,6 +1453,9 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
             guildMembers: {
               type: "boolean",
             },
+            voiceStates: {
+              type: "boolean",
+            },
           },
           additionalProperties: false,
         },
@@ -1501,6 +1512,181 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                 provider: {
                   type: "string",
                   minLength: 1,
+                },
+                persona: {
+                  type: "string",
+                },
+                personas: {
+                  type: "object",
+                  propertyNames: {
+                    type: "string",
+                  },
+                  additionalProperties: {
+                    type: "object",
+                    properties: {
+                      label: {
+                        type: "string",
+                      },
+                      description: {
+                        type: "string",
+                      },
+                      provider: {
+                        type: "string",
+                        minLength: 1,
+                      },
+                      fallbackPolicy: {
+                        anyOf: [
+                          {
+                            type: "string",
+                            const: "preserve-persona",
+                          },
+                          {
+                            type: "string",
+                            const: "provider-defaults",
+                          },
+                          {
+                            type: "string",
+                            const: "fail",
+                          },
+                        ],
+                      },
+                      prompt: {
+                        type: "object",
+                        properties: {
+                          profile: {
+                            type: "string",
+                          },
+                          scene: {
+                            type: "string",
+                          },
+                          sampleContext: {
+                            type: "string",
+                          },
+                          style: {
+                            type: "string",
+                          },
+                          accent: {
+                            type: "string",
+                          },
+                          pacing: {
+                            type: "string",
+                          },
+                          constraints: {
+                            type: "array",
+                            items: {
+                              type: "string",
+                            },
+                          },
+                        },
+                        additionalProperties: false,
+                      },
+                      providers: {
+                        type: "object",
+                        propertyNames: {
+                          type: "string",
+                        },
+                        additionalProperties: {
+                          type: "object",
+                          properties: {
+                            apiKey: {
+                              anyOf: [
+                                {
+                                  type: "string",
+                                },
+                                {
+                                  oneOf: [
+                                    {
+                                      type: "object",
+                                      properties: {
+                                        source: {
+                                          type: "string",
+                                          const: "env",
+                                        },
+                                        provider: {
+                                          type: "string",
+                                          pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                        },
+                                        id: {
+                                          type: "string",
+                                          pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                        },
+                                      },
+                                      required: ["source", "provider", "id"],
+                                      additionalProperties: false,
+                                    },
+                                    {
+                                      type: "object",
+                                      properties: {
+                                        source: {
+                                          type: "string",
+                                          const: "file",
+                                        },
+                                        provider: {
+                                          type: "string",
+                                          pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                        },
+                                        id: {
+                                          type: "string",
+                                        },
+                                      },
+                                      required: ["source", "provider", "id"],
+                                      additionalProperties: false,
+                                    },
+                                    {
+                                      type: "object",
+                                      properties: {
+                                        source: {
+                                          type: "string",
+                                          const: "exec",
+                                        },
+                                        provider: {
+                                          type: "string",
+                                          pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                        },
+                                        id: {
+                                          type: "string",
+                                        },
+                                      },
+                                      required: ["source", "provider", "id"],
+                                      additionalProperties: false,
+                                    },
+                                  ],
+                                },
+                              ],
+                            },
+                          },
+                          additionalProperties: {
+                            anyOf: [
+                              {
+                                type: "string",
+                              },
+                              {
+                                type: "number",
+                              },
+                              {
+                                type: "boolean",
+                              },
+                              {
+                                type: "null",
+                              },
+                              {
+                                type: "array",
+                                items: {},
+                              },
+                              {
+                                type: "object",
+                                propertyNames: {
+                                  type: "string",
+                                },
+                                additionalProperties: {},
+                              },
+                            ],
+                          },
+                        },
+                      },
+                    },
+                    additionalProperties: false,
+                  },
                 },
                 summaryModel: {
                   type: "string",
@@ -1969,8 +2155,16 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                   },
                 ],
               },
+              applicationId: {
+                type: "string",
+              },
               proxy: {
                 type: "string",
+              },
+              gatewayInfoTimeoutMs: {
+                type: "integer",
+                exclusiveMinimum: 0,
+                maximum: 120000,
               },
               allowBots: {
                 anyOf: [
@@ -2625,6 +2819,9 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                   guildMembers: {
                     type: "boolean",
                   },
+                  voiceStates: {
+                    type: "boolean",
+                  },
                 },
                 additionalProperties: false,
               },
@@ -2681,6 +2878,181 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                       provider: {
                         type: "string",
                         minLength: 1,
+                      },
+                      persona: {
+                        type: "string",
+                      },
+                      personas: {
+                        type: "object",
+                        propertyNames: {
+                          type: "string",
+                        },
+                        additionalProperties: {
+                          type: "object",
+                          properties: {
+                            label: {
+                              type: "string",
+                            },
+                            description: {
+                              type: "string",
+                            },
+                            provider: {
+                              type: "string",
+                              minLength: 1,
+                            },
+                            fallbackPolicy: {
+                              anyOf: [
+                                {
+                                  type: "string",
+                                  const: "preserve-persona",
+                                },
+                                {
+                                  type: "string",
+                                  const: "provider-defaults",
+                                },
+                                {
+                                  type: "string",
+                                  const: "fail",
+                                },
+                              ],
+                            },
+                            prompt: {
+                              type: "object",
+                              properties: {
+                                profile: {
+                                  type: "string",
+                                },
+                                scene: {
+                                  type: "string",
+                                },
+                                sampleContext: {
+                                  type: "string",
+                                },
+                                style: {
+                                  type: "string",
+                                },
+                                accent: {
+                                  type: "string",
+                                },
+                                pacing: {
+                                  type: "string",
+                                },
+                                constraints: {
+                                  type: "array",
+                                  items: {
+                                    type: "string",
+                                  },
+                                },
+                              },
+                              additionalProperties: false,
+                            },
+                            providers: {
+                              type: "object",
+                              propertyNames: {
+                                type: "string",
+                              },
+                              additionalProperties: {
+                                type: "object",
+                                properties: {
+                                  apiKey: {
+                                    anyOf: [
+                                      {
+                                        type: "string",
+                                      },
+                                      {
+                                        oneOf: [
+                                          {
+                                            type: "object",
+                                            properties: {
+                                              source: {
+                                                type: "string",
+                                                const: "env",
+                                              },
+                                              provider: {
+                                                type: "string",
+                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                              },
+                                              id: {
+                                                type: "string",
+                                                pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                              },
+                                            },
+                                            required: ["source", "provider", "id"],
+                                            additionalProperties: false,
+                                          },
+                                          {
+                                            type: "object",
+                                            properties: {
+                                              source: {
+                                                type: "string",
+                                                const: "file",
+                                              },
+                                              provider: {
+                                                type: "string",
+                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                              },
+                                              id: {
+                                                type: "string",
+                                              },
+                                            },
+                                            required: ["source", "provider", "id"],
+                                            additionalProperties: false,
+                                          },
+                                          {
+                                            type: "object",
+                                            properties: {
+                                              source: {
+                                                type: "string",
+                                                const: "exec",
+                                              },
+                                              provider: {
+                                                type: "string",
+                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                              },
+                                              id: {
+                                                type: "string",
+                                              },
+                                            },
+                                            required: ["source", "provider", "id"],
+                                            additionalProperties: false,
+                                          },
+                                        ],
+                                      },
+                                    ],
+                                  },
+                                },
+                                additionalProperties: {
+                                  anyOf: [
+                                    {
+                                      type: "string",
+                                    },
+                                    {
+                                      type: "number",
+                                    },
+                                    {
+                                      type: "boolean",
+                                    },
+                                    {
+                                      type: "null",
+                                    },
+                                    {
+                                      type: "array",
+                                      items: {},
+                                    },
+                                    {
+                                      type: "object",
+                                      propertyNames: {
+                                        type: "string",
+                                      },
+                                      additionalProperties: {},
+                                    },
+                                  ],
+                                },
+                              },
+                            },
+                          },
+                          additionalProperties: false,
+                        },
                       },
                       summaryModel: {
                         type: "string",
@@ -3123,10 +3495,6 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
         label: "Discord Thread Parent Inheritance",
         help: "If true, Discord thread sessions inherit the parent channel transcript (default: false).",
       },
-      "inboundWorker.runTimeoutMs": {
-        label: "Discord Inbound Worker Timeout (ms)",
-        help: "Optional queued Discord inbound worker timeout in ms. This is separate from Carbon listener timeouts; defaults to 1800000 and can be disabled with 0. Set per account via channels.discord.accounts.<id>.inboundWorker.runTimeoutMs.",
-      },
       "eventQueue.listenerTimeout": {
         label: "Discord EventQueue Listener Timeout (ms)",
         help: "Canonical Discord listener timeout control in ms for gateway normalization/enqueue handlers. Default is 120000 in OpenClaw; set per account via channels.discord.accounts.<id>.eventQueue.listenerTimeout.",
@@ -3171,9 +3539,17 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
         label: "Discord Guild Members Intent",
         help: "Enable the Guild Members privileged intent. Must also be enabled in the Discord Developer Portal. Default: false.",
       },
+      "intents.voiceStates": {
+        label: "Discord Voice States Intent",
+        help: "Enable the Guild Voice States intent. Defaults to the effective Discord voice setting; set false for text-only gateway sessions even when voice config is present.",
+      },
+      gatewayInfoTimeoutMs: {
+        label: "Discord Gateway Metadata Timeout (ms)",
+        help: "Timeout for Discord /gateway/bot metadata lookup before falling back to the default gateway URL. Default is 30000; OPENCLAW_DISCORD_GATEWAY_INFO_TIMEOUT_MS can override when config is unset.",
+      },
       "voice.enabled": {
         label: "Discord Voice Enabled",
-        help: "Enable Discord voice channel conversations (default: true). Omit channels.discord.voice to keep voice support disabled for the account.",
+        help: "Enable Discord voice channel conversations (default: true). Set false for text-only gateway sessions.",
       },
       "voice.model": {
         label: "Discord Voice Model",
@@ -3251,6 +3627,10 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
         label: "Discord Bot Token",
         help: "Discord bot token used for gateway and REST API authentication for this provider account. Keep this secret out of committed config and rotate immediately after any leak.",
         sensitive: true,
+      },
+      applicationId: {
+        label: "Discord Application ID",
+        help: "Optional Discord application/client ID. Set this when hosted environments cannot reach Discord's application lookup endpoint during startup.",
       },
     },
     unsupportedSecretRefSurfacePatterns: [
@@ -3791,6 +4171,78 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
         resolveSenderNames: {
           default: true,
           type: "boolean",
+        },
+        tts: {
+          type: "object",
+          properties: {
+            auto: {
+              type: "string",
+              enum: ["off", "always", "inbound", "tagged"],
+            },
+            enabled: {
+              type: "boolean",
+            },
+            mode: {
+              type: "string",
+              enum: ["final", "all"],
+            },
+            provider: {
+              type: "string",
+            },
+            persona: {
+              type: "string",
+            },
+            personas: {
+              type: "object",
+              propertyNames: {
+                type: "string",
+              },
+              additionalProperties: {
+                type: "object",
+                propertyNames: {
+                  type: "string",
+                },
+                additionalProperties: {},
+              },
+            },
+            summaryModel: {
+              type: "string",
+            },
+            modelOverrides: {
+              type: "object",
+              propertyNames: {
+                type: "string",
+              },
+              additionalProperties: {},
+            },
+            providers: {
+              type: "object",
+              propertyNames: {
+                type: "string",
+              },
+              additionalProperties: {
+                type: "object",
+                propertyNames: {
+                  type: "string",
+                },
+                additionalProperties: {},
+              },
+            },
+            prefsPath: {
+              type: "string",
+            },
+            maxTextLength: {
+              type: "integer",
+              minimum: 1,
+              maximum: 9007199254740991,
+            },
+            timeoutMs: {
+              type: "integer",
+              minimum: 1000,
+              maximum: 120000,
+            },
+          },
+          additionalProperties: false,
         },
         groupSessionScope: {
           type: "string",
@@ -4344,6 +4796,78 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
               },
               resolveSenderNames: {
                 type: "boolean",
+              },
+              tts: {
+                type: "object",
+                properties: {
+                  auto: {
+                    type: "string",
+                    enum: ["off", "always", "inbound", "tagged"],
+                  },
+                  enabled: {
+                    type: "boolean",
+                  },
+                  mode: {
+                    type: "string",
+                    enum: ["final", "all"],
+                  },
+                  provider: {
+                    type: "string",
+                  },
+                  persona: {
+                    type: "string",
+                  },
+                  personas: {
+                    type: "object",
+                    propertyNames: {
+                      type: "string",
+                    },
+                    additionalProperties: {
+                      type: "object",
+                      propertyNames: {
+                        type: "string",
+                      },
+                      additionalProperties: {},
+                    },
+                  },
+                  summaryModel: {
+                    type: "string",
+                  },
+                  modelOverrides: {
+                    type: "object",
+                    propertyNames: {
+                      type: "string",
+                    },
+                    additionalProperties: {},
+                  },
+                  providers: {
+                    type: "object",
+                    propertyNames: {
+                      type: "string",
+                    },
+                    additionalProperties: {
+                      type: "object",
+                      propertyNames: {
+                        type: "string",
+                      },
+                      additionalProperties: {},
+                    },
+                  },
+                  prefsPath: {
+                    type: "string",
+                  },
+                  maxTextLength: {
+                    type: "integer",
+                    minimum: 1,
+                    maximum: 9007199254740991,
+                  },
+                  timeoutMs: {
+                    type: "integer",
+                    minimum: 1000,
+                    maximum: 120000,
+                  },
+                },
+                additionalProperties: false,
               },
               groupSessionScope: {
                 type: "string",
@@ -6876,6 +7400,25 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
             },
             {
               type: "boolean",
+            },
+            {
+              type: "object",
+              properties: {
+                mode: {
+                  type: "string",
+                  enum: ["partial", "quiet", "off"],
+                },
+                preview: {
+                  type: "object",
+                  properties: {
+                    toolProgress: {
+                      type: "boolean",
+                    },
+                  },
+                  additionalProperties: false,
+                },
+              },
+              additionalProperties: false,
             },
           ],
         },
@@ -9516,6 +10059,9 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                   type: "string",
                   enum: ["off", "partial"],
                 },
+                c2cStreamApi: {
+                  type: "boolean",
+                },
               },
               required: ["mode"],
               additionalProperties: {},
@@ -9755,6 +10301,9 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                         default: "partial",
                         type: "string",
                         enum: ["off", "partial"],
+                      },
+                      c2cStreamApi: {
+                        type: "boolean",
                       },
                     },
                     required: ["mode"],
@@ -10498,6 +11047,25 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
           default: "socket",
           type: "string",
           enum: ["socket", "http"],
+        },
+        socketMode: {
+          type: "object",
+          properties: {
+            clientPingTimeout: {
+              type: "integer",
+              exclusiveMinimum: 0,
+              maximum: 9007199254740991,
+            },
+            serverPingTimeout: {
+              type: "integer",
+              exclusiveMinimum: 0,
+              maximum: 9007199254740991,
+            },
+            pingPongLoggingEnabled: {
+              type: "boolean",
+            },
+          },
+          additionalProperties: false,
         },
         signingSecret: {
           anyOf: [
@@ -11412,6 +11980,25 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
               mode: {
                 type: "string",
                 enum: ["socket", "http"],
+              },
+              socketMode: {
+                type: "object",
+                properties: {
+                  clientPingTimeout: {
+                    type: "integer",
+                    exclusiveMinimum: 0,
+                    maximum: 9007199254740991,
+                  },
+                  serverPingTimeout: {
+                    type: "integer",
+                    exclusiveMinimum: 0,
+                    maximum: 9007199254740991,
+                  },
+                  pingPongLoggingEnabled: {
+                    type: "boolean",
+                  },
+                },
+                additionalProperties: false,
               },
               signingSecret: {
                 anyOf: [
@@ -12350,6 +12937,22 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
       allowBots: {
         label: "Slack Allow Bot Messages",
         help: "Allow bot-authored messages to trigger Slack replies (default: false).",
+      },
+      socketMode: {
+        label: "Slack Socket Mode Transport",
+        help: "Slack Socket Mode transport tuning passed to the Slack SDK. Use only when investigating ping/pong timeout or stale websocket behavior.",
+      },
+      "socketMode.clientPingTimeout": {
+        label: "Slack Socket Mode Pong Timeout",
+        help: "Milliseconds the Slack SDK waits for a pong after its client ping before treating the websocket as stale (OpenClaw default: 15000). Increase on hosts with event-loop starvation or slow network scheduling.",
+      },
+      "socketMode.serverPingTimeout": {
+        label: "Slack Socket Mode Server Ping Timeout",
+        help: "Milliseconds the Slack SDK waits for Slack server pings before treating the websocket as stale.",
+      },
+      "socketMode.pingPongLoggingEnabled": {
+        label: "Slack Socket Mode Ping/Pong Logging",
+        help: "Enable Slack SDK ping/pong transport logs while debugging Socket Mode websocket health.",
       },
       botToken: {
         label: "Slack Bot Token",
@@ -14658,7 +15261,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
       },
       apiRoot: {
         label: "Telegram API Root URL",
-        help: "Custom Telegram Bot API root URL. Use for self-hosted Bot API servers (https://github.com/tdlib/telegram-bot-api) or reverse proxies in regions where api.telegram.org is blocked.",
+        help: "Custom Telegram Bot API root URL. Use the API root only (for example https://api.telegram.org), not a full /bot<TOKEN> endpoint. Use for self-hosted Bot API servers (https://github.com/tdlib/telegram-bot-api) or reverse proxies in regions where api.telegram.org is blocked.",
       },
       trustedLocalFileRoots: {
         label: "Telegram Trusted Local File Roots",
@@ -14690,7 +15293,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
       },
       "execApprovals.approvers": {
         label: "Telegram Exec Approval Approvers",
-        help: "Telegram user IDs allowed to approve exec requests for this bot account. Use numeric Telegram user IDs. If you leave this unset, OpenClaw falls back to numeric owner IDs inferred from channels.telegram.allowFrom and direct-message defaultTo when possible.",
+        help: "Telegram user IDs allowed to approve exec requests for this bot account. Use numeric Telegram user IDs. If you leave this unset, OpenClaw falls back to numeric owner IDs inferred from commands.ownerAllowFrom when possible.",
       },
       "execApprovals.agentFilter": {
         label: "Telegram Exec Approval Agent Filter",

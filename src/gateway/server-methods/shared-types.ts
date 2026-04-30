@@ -26,6 +26,7 @@ export type GatewayClient = {
   isDeviceTokenAuth?: boolean;
   internal?: {
     allowModelOverride?: boolean;
+    pluginRuntimeOwnerId?: string;
   };
 };
 
@@ -40,11 +41,15 @@ export type GatewayRequestContext = {
   deps: CliDeps;
   cron: CronServiceContract;
   cronStorePath: string;
+  getRuntimeConfig: () => OpenClawConfig;
   execApprovalManager?: ExecApprovalManager;
   pluginApprovalManager?: ExecApprovalManager<PluginApprovalRequestPayload>;
   loadGatewayModelCatalog: () => Promise<ModelCatalogEntry[]>;
   getHealthCache: () => HealthSummary | null;
-  refreshHealthSnapshot: (opts?: { probe?: boolean }) => Promise<HealthSummary>;
+  refreshHealthSnapshot: (opts?: {
+    probe?: boolean;
+    includeSensitive?: boolean;
+  }) => Promise<HealthSummary>;
   logHealth: { error: (message: string) => void };
   logGateway: SubsystemLogger;
   incrementPresenceVersion: () => number;
@@ -105,6 +110,9 @@ export type GatewayRequestContext = {
     prompter: import("../../wizard/prompts.js").WizardPrompter,
   ) => Promise<void>;
   broadcastVoiceWakeChanged: (triggers: string[]) => void;
+  broadcastVoiceWakeRoutingChanged: (
+    config: import("../../infra/voicewake-routing.js").VoiceWakeRoutingConfig,
+  ) => void;
   unavailableGatewayMethods?: ReadonlySet<string>;
 };
 

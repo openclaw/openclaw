@@ -26,6 +26,11 @@ vi.mock("../../commands/onboard-core-auth-flags.js", () => ({
       description: "Mistral API key",
       optionKey: "mistralApiKey",
     },
+    {
+      cliOption: "--openai-api-key <key>",
+      description: "OpenAI API key (core fallback)",
+      optionKey: "openaiApiKey",
+    },
   ] as Array<{ cliOption: string; description: string; optionKey: string }>,
 }));
 
@@ -156,11 +161,43 @@ describe("registerOnboardCommand", () => {
     );
   });
 
+  it("dedupes provider auth flags before registering command options", async () => {
+    await runCli(["onboard", "--openai-api-key", "sk-openai-test"]);
+    expect(setupWizardCommandMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        openaiApiKey: "sk-openai-test", // pragma: allowlist secret
+      }),
+      runtime,
+    );
+  });
+
   it("forwards --gateway-token-ref-env", async () => {
     await runCli(["onboard", "--gateway-token-ref-env", "OPENCLAW_GATEWAY_TOKEN"]);
     expect(setupWizardCommandMock).toHaveBeenCalledWith(
       expect.objectContaining({
         gatewayTokenRefEnv: "OPENCLAW_GATEWAY_TOKEN",
+      }),
+      runtime,
+    );
+  });
+
+  it("forwards onboarding migration flags", async () => {
+    await runCli([
+      "onboard",
+      "--flow",
+      "import",
+      "--import-from",
+      "hermes",
+      "--import-source",
+      "/tmp/hermes",
+      "--import-secrets",
+    ]);
+    expect(setupWizardCommandMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        flow: "import",
+        importFrom: "hermes",
+        importSource: "/tmp/hermes",
+        importSecrets: true,
       }),
       runtime,
     );

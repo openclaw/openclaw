@@ -1,8 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
-import { CURRENT_SESSION_VERSION, SessionManager } from "@mariozechner/pi-coding-agent";
+import type { SessionManager } from "@mariozechner/pi-coding-agent";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
+import { extractAssistantVisibleText } from "../../shared/chat-message-content.js";
 import {
   resolveDefaultSessionStorePath,
   resolveSessionFilePath,
@@ -15,6 +16,14 @@ import { parseSessionThreadInfo } from "./thread-info.js";
 import { resolveMirroredTranscriptText } from "./transcript-mirror.js";
 import type { SessionEntry } from "./types.js";
 
+let piCodingAgentModulePromise: Promise<typeof import("@mariozechner/pi-coding-agent")> | null =
+  null;
+
+async function loadPiCodingAgentModule(): Promise<typeof import("@mariozechner/pi-coding-agent")> {
+  piCodingAgentModulePromise ??= import("@mariozechner/pi-coding-agent");
+  return await piCodingAgentModulePromise;
+}
+
 async function ensureSessionHeader(params: {
   sessionFile: string;
   sessionId: string;
@@ -22,6 +31,7 @@ async function ensureSessionHeader(params: {
   if (fs.existsSync(params.sessionFile)) {
     return;
   }
+  const { CURRENT_SESSION_VERSION } = await loadPiCodingAgentModule();
   await fs.promises.mkdir(path.dirname(params.sessionFile), { recursive: true });
   const header = {
     type: "session",
@@ -44,6 +54,12 @@ export type SessionTranscriptUpdateMode = "inline" | "file-only" | "none";
 
 export type SessionTranscriptAssistantMessage = Parameters<SessionManager["appendMessage"]>[0] & {
   role: "assistant";
+};
+
+export type LatestAssistantTranscriptText = {
+  id?: string;
+  text: string;
+  timestamp?: number;
 };
 
 export async function resolveSessionTranscriptFile(params: {
@@ -89,6 +105,53 @@ export async function resolveSessionTranscriptFile(params: {
     sessionFile,
     sessionEntry,
   };
+}
+
+export async function readLatestAssistantTextFromSessionTranscript(
+  sessionFile: string | undefined,
+): Promise<LatestAssistantTranscriptText | undefined> {
+  if (!sessionFile?.trim()) {
+    return undefined;
+  }
+
+  let raw: string;
+  try {
+    raw = await fs.promises.readFile(sessionFile, "utf-8");
+  } catch {
+    return undefined;
+  }
+
+  const lines = raw.split(/\r?\n/);
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const line = lines[index];
+    if (!line.trim()) {
+      continue;
+    }
+    try {
+      const parsed = JSON.parse(line) as {
+        id?: unknown;
+        message?: unknown;
+      };
+      const message = parsed.message as { role?: unknown; timestamp?: unknown } | undefined;
+      if (!message || message.role !== "assistant") {
+        continue;
+      }
+      const text = extractAssistantVisibleText(message)?.trim();
+      if (!text) {
+        continue;
+      }
+      return {
+        ...(typeof parsed.id === "string" && parsed.id ? { id: parsed.id } : {}),
+        text,
+        ...(typeof message.timestamp === "number" && Number.isFinite(message.timestamp)
+          ? { timestamp: message.timestamp }
+          : {}),
+      };
+    } catch {
+      continue;
+    }
+  }
+  return undefined;
 }
 
 export async function appendAssistantMessageToSessionTranscript(params: {
@@ -212,6 +275,7 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
     ...params.message,
     ...(explicitIdempotencyKey ? { idempotencyKey: explicitIdempotencyKey } : {}),
   } as Parameters<SessionManager["appendMessage"]>[0];
+  const { SessionManager } = await loadPiCodingAgentModule();
   const sessionManager = SessionManager.open(sessionFile);
   const messageId = sessionManager.appendMessage(message);
 

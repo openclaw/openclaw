@@ -11,9 +11,9 @@ Manage isolated agents (workspaces + auth + routing).
 
 Related:
 
-- Multi-agent routing: [Multi-Agent Routing](/concepts/multi-agent)
-- Agent workspace: [Agent workspace](/concepts/agent-workspace)
-- Skill visibility config: [Skills config](/tools/skills-config)
+- [Multi-agent routing](/concepts/multi-agent)
+- [Agent workspace](/concepts/agent-workspace)
+- [Skills config](/tools/skills-config): skill visibility configuration.
 
 ## Examples
 
@@ -34,10 +34,7 @@ openclaw agents delete work
 
 Use routing bindings to pin inbound channel traffic to a specific agent.
 
-If you also want different visible skills per agent, configure
-`agents.defaults.skills` and `agents.list[].skills` in `openclaw.json`. See
-[Skills config](/tools/skills-config) and
-[Configuration Reference](/gateway/config-agents#agents-defaults-skills).
+If you also want different visible skills per agent, configure `agents.defaults.skills` and `agents.list[].skills` in `openclaw.json`. See [Skills config](/tools/skills-config) and [Configuration reference](/gateway/config-agents#agents-defaults-skills).
 
 List bindings:
 
@@ -113,6 +110,11 @@ Notes:
 - Passing any explicit add flags switches the command into the non-interactive path.
 - Non-interactive mode requires both an agent name and `--workspace`.
 - `main` is reserved and cannot be used as the new agent id.
+- In interactive mode, auth seeding copies only portable static profiles
+  (`api_key` and static `token` by default). OAuth refresh-token profiles remain
+  available only by read-through inheritance from the real `main` agent store.
+  If the configured default agent is not `main`, sign in separately for OAuth
+  profiles on the new agent.
 
 ### `agents bindings`
 

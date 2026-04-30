@@ -1,9 +1,11 @@
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
+import { getRuntimeConfig } from "../config/config.js";
 import { resolveMainSessionKey } from "../config/sessions/main-session.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
 import { readSessionStoreReadOnly } from "../config/sessions/store-read.js";
 import { resolveSessionTotalTokens, type SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.js";
+import { resolveCronStorePath } from "../cron/store.js";
 import { listGatewayAgentsBasic } from "../gateway/agent-list.js";
 import { resolveHeartbeatSummaryForAgent } from "../infra/heartbeat-summary.js";
 import { peekSystemEvents } from "../infra/system-events.js";
@@ -15,7 +17,6 @@ import type { HeartbeatStatus, SessionStatus, StatusSummary } from "./status.typ
 
 let channelSummaryModulePromise: Promise<typeof import("../infra/channel-summary.js")> | undefined;
 let linkChannelModulePromise: Promise<typeof import("./status.link-channel.js")> | undefined;
-let configIoModulePromise: Promise<typeof import("../config/io.js")> | undefined;
 let taskRegistryMaintenanceModulePromise:
   | Promise<typeof import("../tasks/task-registry.maintenance.js")>
   | undefined;
@@ -34,11 +35,6 @@ const loadStatusSummaryRuntimeModule = createLazyRuntimeSurface(
   () => import("./status.summary.runtime.js"),
   ({ statusSummaryRuntime }) => statusSummaryRuntime,
 );
-
-function loadConfigIoModule() {
-  configIoModulePromise ??= import("../config/io.js");
-  return configIoModulePromise;
-}
 
 function loadTaskRegistryMaintenanceModule() {
   taskRegistryMaintenanceModulePromise ??= import("../tasks/task-registry.maintenance.js");
@@ -117,7 +113,7 @@ export async function getStatusSummary(
     resolveContextTokensForModel,
     resolveSessionModelRef,
   } = await loadStatusSummaryRuntimeModule();
-  const cfg = options.config ?? (await loadConfigIoModule()).loadConfig();
+  const cfg = options.config ?? getRuntimeConfig();
   const channelScopeConfig =
     options.sourceConfig === undefined
       ? { config: cfg }
@@ -151,6 +147,9 @@ export async function getStatusSummary(
   const mainSessionKey = resolveMainSessionKey(cfg);
   const queuedSystemEvents = peekSystemEvents(mainSessionKey);
   const taskMaintenanceModule = await loadTaskRegistryMaintenanceModule();
+  taskMaintenanceModule.configureTaskRegistryMaintenance({
+    cronStorePath: resolveCronStorePath(cfg.cron?.store),
+  });
   const tasks = taskMaintenanceModule.getInspectableTaskRegistrySummary();
   const taskAudit = taskMaintenanceModule.getInspectableTaskAuditSummary();
 

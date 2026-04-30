@@ -1,14 +1,16 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { AnyAgentTool } from "openclaw/plugin-sdk/agent-harness";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { wrapToolWithBeforeToolCallHook } from "../../../../src/agents/pi-tools.before-tool-call.js";
+import { wrapToolWithBeforeToolCallHook } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
-} from "../../../../src/plugins/hook-runner-global.js";
-import { createMockPluginRegistry } from "../../../../src/plugins/hooks.test-helpers.js";
-import { createEmptyPluginRegistry } from "../../../../src/plugins/registry.js";
-import { setActivePluginRegistry } from "../../../../src/plugins/runtime.js";
+} from "openclaw/plugin-sdk/hook-runtime";
+import {
+  createEmptyPluginRegistry,
+  createMockPluginRegistry,
+  setActivePluginRegistry,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
 import type { JsonValue } from "./protocol.js";
 
@@ -516,7 +518,7 @@ describe("createCodexDynamicToolBridge", () => {
     });
 
     expect(result).toEqual({
-      success: false,
+      success: true,
       contentItems: [{ type: "inputText", text: "blocked by policy" }],
     });
     expect(execute).not.toHaveBeenCalled();
@@ -532,7 +534,14 @@ describe("createCodexDynamicToolBridge", () => {
             provider: "telegram",
             to: "chat-1",
           },
-          error: "blocked by policy",
+          result: expect.objectContaining({
+            content: [{ type: "text", text: "blocked by policy" }],
+            details: {
+              status: "blocked",
+              deniedReason: "plugin-before-tool-call",
+              reason: "blocked by policy",
+            },
+          }),
         }),
         expect.objectContaining({
           runId: "run-blocked",
@@ -663,6 +672,43 @@ describe("createCodexDynamicToolBridge", () => {
         }),
       );
     });
+  });
+
+  it("passes per-call abort signals into dynamic tool execution", async () => {
+    let capturedSignal: AbortSignal | undefined;
+    let resolveTool: ((result: AgentToolResult<unknown>) => void) | undefined;
+    const execute = vi.fn(
+      async (_callId: string, _args: Record<string, unknown>, signal: AbortSignal) =>
+        await new Promise<AgentToolResult<unknown>>((resolve) => {
+          capturedSignal = signal;
+          resolveTool = resolve;
+        }),
+    );
+    const runController = new AbortController();
+    const callController = new AbortController();
+    const bridge = createCodexDynamicToolBridge({
+      tools: [createTool({ name: "exec", execute })],
+      signal: runController.signal,
+    });
+
+    const result = bridge.handleToolCall(
+      {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-signal",
+        namespace: null,
+        tool: "exec",
+        arguments: { command: "sleep" },
+      },
+      { signal: callController.signal },
+    );
+    await vi.waitFor(() => expect(capturedSignal).toBeDefined());
+
+    callController.abort(new Error("deadline"));
+    expect(capturedSignal?.aborted).toBe(true);
+    resolveTool?.(textToolResult("done"));
+
+    await expect(result).resolves.toEqual(expectInputText("done"));
   });
 
   it("does not double-wrap dynamic tools that already have before_tool_call", async () => {

@@ -1,5 +1,6 @@
 import { normalizeAssistantIdentity } from "../assistant-identity.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
+import { loadLocalAssistantIdentity, saveLocalAssistantIdentity } from "../storage.ts";
 
 export type AssistantIdentityState = {
   client: GatewayBrowserClient | null;
@@ -14,11 +15,31 @@ export type AssistantIdentityState = {
 };
 
 export type AssistantAvatarOverrideState = {
-  client: GatewayBrowserClient | null;
-  connected: boolean;
-  applySessionKey?: string;
-  configSnapshot?: { hash?: string | null } | null;
+  assistantAvatar?: string | null;
+  assistantAvatarSource?: string | null;
+  assistantAvatarStatus?: "none" | "local" | "remote" | "data" | null;
+  assistantAvatarReason?: string | null;
 };
+
+const assistantIdentityRequestVersions = new WeakMap<object, number>();
+
+function beginAssistantIdentityRequest(state: AssistantIdentityState): number {
+  const key = state as object;
+  const nextVersion = (assistantIdentityRequestVersions.get(key) ?? 0) + 1;
+  assistantIdentityRequestVersions.set(key, nextVersion);
+  return nextVersion;
+}
+
+function shouldApplyAssistantIdentityResult(
+  state: AssistantIdentityState,
+  version: number,
+  sessionKey: string,
+): boolean {
+  return (
+    assistantIdentityRequestVersions.get(state as object) === version &&
+    state.sessionKey.trim() === sessionKey
+  );
+}
 
 export async function loadAssistantIdentity(
   state: AssistantIdentityState,
@@ -29,8 +50,12 @@ export async function loadAssistantIdentity(
   }
   const sessionKey = opts?.sessionKey?.trim() || state.sessionKey.trim();
   const params = sessionKey ? { sessionKey } : {};
+  const requestVersion = beginAssistantIdentityRequest(state);
   try {
     const res = await state.client.request("agent.identity.get", params);
+    if (!shouldApplyAssistantIdentityResult(state, requestVersion, sessionKey)) {
+      return;
+    }
     if (!res) {
       return;
     }
@@ -41,28 +66,33 @@ export async function loadAssistantIdentity(
     state.assistantAvatarStatus = normalized.avatarStatus ?? null;
     state.assistantAvatarReason = normalized.avatarReason ?? null;
     state.assistantAgentId = normalized.agentId ?? null;
+    // Local override always wins — same pattern as the user avatar.
+    const localAvatar = loadLocalAssistantIdentity().avatar;
+    if (localAvatar) {
+      state.assistantAvatar = localAvatar;
+      state.assistantAvatarSource = localAvatar;
+      state.assistantAvatarStatus = "data";
+      state.assistantAvatarReason = null;
+    }
   } catch {
     // Ignore errors; keep last known identity.
   }
 }
 
-export async function setAssistantAvatarOverride(
+export function setAssistantAvatarOverride(
   state: AssistantAvatarOverrideState,
   avatar: string | null,
 ) {
-  if (!state.client || !state.connected) {
-    throw new Error("Gateway is not connected.");
+  saveLocalAssistantIdentity({ avatar });
+  if (avatar) {
+    state.assistantAvatar = avatar;
+    state.assistantAvatarSource = avatar;
+    state.assistantAvatarStatus = "data";
+    state.assistantAvatarReason = null;
+  } else {
+    state.assistantAvatar = null;
+    state.assistantAvatarSource = null;
+    state.assistantAvatarStatus = null;
+    state.assistantAvatarReason = null;
   }
-  const baseHash = state.configSnapshot?.hash;
-  if (!baseHash) {
-    throw new Error("Config hash missing; refresh and retry.");
-  }
-  await state.client.request("config.patch", {
-    baseHash,
-    raw: JSON.stringify({ ui: { assistant: { avatar } } }),
-    sessionKey: state.applySessionKey,
-    note: avatar
-      ? "Assistant avatar override updated from Control UI."
-      : "Assistant avatar override cleared from Control UI.",
-  });
 }

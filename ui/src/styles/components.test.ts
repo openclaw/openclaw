@@ -1,9 +1,19 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
+
+function readComponentsCss(): string {
+  const cssPath = [
+    resolve(process.cwd(), "ui/src/styles/components.css"),
+    resolve(process.cwd(), "..", "ui/src/styles/components.css"),
+  ].find((candidate) => existsSync(candidate));
+  expect(cssPath).toBeTruthy();
+  return readFileSync(cssPath!, "utf8");
+}
 
 describe("agent fallback chip styles", () => {
   it("styles the chip remove control inside the agent model input", () => {
-    const css = readFileSync(new URL("./components.css", import.meta.url), "utf8");
+    const css = readComponentsCss();
 
     expect(css).toContain(".agent-chip-input .chip {");
     expect(css).toContain(".agent-chip-input .chip-remove {");

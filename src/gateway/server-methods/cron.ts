@@ -1,4 +1,3 @@
-import { loadConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveCronDeliveryPreviews } from "../../cron/delivery-preview.js";
 import { normalizeCronJobCreate, normalizeCronJobPatch } from "../../cron/normalize.js";
@@ -33,7 +32,6 @@ function listConfiguredAnnounceChannelIds(cfg: OpenClawConfig): string[] {
   return listConfiguredAnnounceChannelIdsForConfig({
     config: cfg,
     env: process.env,
-    cache: true,
   });
 }
 
@@ -165,7 +163,7 @@ export const cronHandlers: GatewayRequestHandlers = {
       sortDir: p.sortDir,
     });
     const deliveryPreviews = await resolveCronDeliveryPreviews({
-      cfg: loadConfig(),
+      cfg: context.getRuntimeConfig(),
       defaultAgentId: context.cron.getDefaultAgentId(),
       jobs: page.jobs,
     });
@@ -220,7 +218,7 @@ export const cronHandlers: GatewayRequestHandlers = {
       return;
     }
     const jobCreate = normalized as unknown as CronJobCreate;
-    const cfg = loadConfig();
+    const cfg = context.getRuntimeConfig();
     const timestampValidation = validateScheduleTimestamp(jobCreate.schedule);
     if (!timestampValidation.ok) {
       respond(
@@ -243,7 +241,23 @@ export const cronHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const job = await context.cron.add(jobCreate);
+    let job: Awaited<ReturnType<typeof context.cron.add>>;
+    try {
+      job = await context.cron.add(jobCreate);
+    } catch (err) {
+      if (!(err instanceof TypeError) && !(err instanceof RangeError)) {
+        throw err;
+      }
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid cron.add params: ${formatErrorMessage(err)}`,
+        ),
+      );
+      return;
+    }
     context.logGateway.info("cron: job created", { jobId: job.id, schedule: jobCreate.schedule });
     respond(true, job, undefined);
   },
@@ -292,7 +306,7 @@ export const cronHandlers: GatewayRequestHandlers = {
       return;
     }
     const patch = p.patch as unknown as CronJobPatch;
-    const cfg = loadConfig();
+    const cfg = context.getRuntimeConfig();
     if (patch.schedule) {
       const timestampValidation = validateScheduleTimestamp(patch.schedule);
       if (!timestampValidation.ok) {
@@ -322,7 +336,23 @@ export const cronHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const job = await context.cron.update(jobId, patch);
+    let job: Awaited<ReturnType<typeof context.cron.update>>;
+    try {
+      job = await context.cron.update(jobId, patch);
+    } catch (err) {
+      if (!(err instanceof TypeError) && !(err instanceof RangeError)) {
+        throw err;
+      }
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid cron.update params: ${formatErrorMessage(err)}`,
+        ),
+      );
+      return;
+    }
     context.logGateway.info("cron: job updated", { jobId });
     respond(true, job, undefined);
   },

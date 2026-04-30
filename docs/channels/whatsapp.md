@@ -14,13 +14,18 @@ Status: production-ready via WhatsApp Web (Baileys). Gateway owns linked session
 - `openclaw channels login --channel whatsapp` also offers the install flow when
   the plugin is not present yet.
 - Dev channel + git checkout: defaults to the local plugin path.
-- Stable/Beta: defaults to the npm package `@openclaw/whatsapp`.
+- Stable/Beta: uses the npm package `@openclaw/whatsapp` when a current package
+  is published.
 
 Manual install stays available:
 
 ```bash
 openclaw plugins install @openclaw/whatsapp
 ```
+
+If npm reports the OpenClaw-owned package as deprecated or missing, use a
+current packaged OpenClaw build or a local checkout until the npm package train
+catches up.
 
 <CardGroup cols={3}>
   <Card title="Pairing" icon="link" href="/channels/pairing">
@@ -146,11 +151,15 @@ OpenClaw recommends running WhatsApp on a separate number when possible. (The ch
 ## Runtime model
 
 - Gateway owns the WhatsApp socket and reconnect loop.
+- The reconnect watchdog uses WhatsApp Web transport activity, not only inbound app-message volume, so a quiet linked-device session is not restarted solely because nobody has sent a message recently. A longer application-silence cap still forces a reconnect if transport frames keep arriving but no application messages are handled for the watchdog window; after a transient reconnect for a recently active session, that application-silence check uses the normal message timeout for the first recovery window.
+- Baileys socket timings are explicit under `web.whatsapp.*`: `keepAliveIntervalMs` controls WhatsApp Web application pings, `connectTimeoutMs` controls the opening handshake timeout, and `defaultQueryTimeoutMs` controls Baileys query timeouts.
 - Outbound sends require an active WhatsApp listener for the target account.
 - Status and broadcast chats are ignored (`@status`, `@broadcast`).
+- The reconnect watchdog follows WhatsApp Web transport activity, not only inbound app-message volume: quiet linked-device sessions stay up while transport frames continue, but a transport stall forces reconnect well before the later remote disconnect path.
 - Direct chats use DM session rules (`session.dmScope`; default `main` collapses DMs to the agent main session).
 - Group sessions are isolated (`agent:<agentId>:whatsapp:group:<jid>`).
 - WhatsApp Web transport honors standard proxy environment variables on the gateway host (`HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY` / lowercase variants). Prefer host-level proxy config over channel-specific WhatsApp proxy settings.
+- When `messages.removeAckAfterReply` is enabled, OpenClaw clears the WhatsApp ack reaction after a visible reply is delivered.
 
 ## Plugin hooks and privacy
 
@@ -243,6 +252,7 @@ content and identifiers.
 
     - explicit WhatsApp mentions of the bot identity
     - configured mention regex patterns (`agents.list[].groupChat.mentionPatterns`, fallback `messages.groupChat.mentionPatterns`)
+    - inbound voice-note transcripts for authorized group messages
     - implicit reply-to-bot detection (reply sender matches bot identity)
 
     Security note:
@@ -294,6 +304,11 @@ When the linked self number is also present in `allowFrom`, WhatsApp self-chat s
     - `<media:audio>`
     - `<media:document>`
     - `<media:sticker>`
+
+    Authorized group voice notes are transcribed before mention gating when the
+    body is only `<media:audio>`, so saying the bot mention in the voice note can
+    trigger the reply. If the transcript still does not mention the bot, the
+    transcript is kept in pending group history instead of the raw placeholder.
 
     Location bodies use terse coordinate text. Location labels/comments and contact/vCard details are rendered as fenced untrusted metadata, not inline prompt text.
 
@@ -357,16 +372,20 @@ When the linked self number is also present in `allowFrom`, WhatsApp self-chat s
     - default chunk limit: `channels.whatsapp.textChunkLimit = 4000`
     - `channels.whatsapp.chunkMode = "length" | "newline"`
     - `newline` mode prefers paragraph boundaries (blank lines), then falls back to length-safe chunking
+
   </Accordion>
 
   <Accordion title="Outbound media behavior">
     - supports image, video, audio (PTT voice-note), and document payloads
-    - reply payloads preserve `audioAsVoice`; WhatsApp sends audio media as Baileys PTT voice notes
-    - non-Ogg audio, including Microsoft Edge TTS MP3/WebM output, is transcoded to Ogg/Opus before PTT delivery
-    - native Ogg/Opus audio is sent with `audio/ogg; codecs=opus` for voice-note compatibility
+    - audio media is sent through the Baileys `audio` payload with `ptt: true`, so WhatsApp clients render it as a push-to-talk voice note
+    - reply payloads preserve `audioAsVoice`; TTS voice-note output for WhatsApp stays on this PTT path even when the provider returns MP3 or WebM
+    - native Ogg/Opus audio is sent as `audio/ogg; codecs=opus` for voice-note compatibility
+    - non-Ogg audio, including Microsoft Edge TTS MP3/WebM output, is transcoded with `ffmpeg` to 48 kHz mono Ogg/Opus before PTT delivery
+    - `/tts latest` sends the latest assistant reply as one voice note and suppresses repeat sends for the same reply; `/tts chat on|off|default` controls auto-TTS for the current WhatsApp chat
     - animated GIF playback is supported via `gifPlayback: true` on video sends
-    - captions are applied to the first media item when sending multi-media reply payloads
+    - captions are applied to the first media item when sending multi-media reply payloads, except PTT voice notes send the audio first and visible text separately because WhatsApp clients do not render voice-note captions consistently
     - media source can be HTTP(S), `file://`, or local paths
+
   </Accordion>
 
   <Accordion title="Media size limits and fallback behavior">
@@ -375,6 +394,7 @@ When the linked self number is also present in `allowFrom`, WhatsApp self-chat s
     - per-account overrides use `channels.whatsapp.accounts.<accountId>.mediaMaxMb`
     - images are auto-optimized (resize/quality sweep) to fit limits
     - on media send failure, first-item fallback sends text warning instead of dropping the response silently
+
   </Accordion>
 </AccordionGroup>
 
@@ -459,12 +479,14 @@ Behavior notes:
     - account ids come from `channels.whatsapp.accounts`
     - default account selection: `default` if present, otherwise first configured account id (sorted)
     - account ids are normalized internally for lookup
+
   </Accordion>
 
   <Accordion title="Credential paths and legacy compatibility">
     - current auth path: `~/.openclaw/credentials/whatsapp/<accountId>/creds.json`
     - backup file: `creds.json.bak`
     - legacy default auth in `~/.openclaw/credentials/` is still recognized/migrated for default-account flows
+
   </Accordion>
 
   <Accordion title="Logout behavior">
@@ -501,6 +523,27 @@ Behavior notes:
   <Accordion title="Linked but disconnected / reconnect loop">
     Symptom: linked account with repeated disconnects or reconnect attempts.
 
+    Quiet accounts can stay connected past the normal message timeout; the watchdog
+    restarts when WhatsApp Web transport activity stops, the socket closes, or
+    application-level activity stays silent beyond the longer safety window.
+
+    If logs show repeated `status=408 Request Time-out Connection was lost`, tune
+    Baileys socket timings under `web.whatsapp`. Start by shortening
+    `keepAliveIntervalMs` below your network's idle timeout and increasing
+    `connectTimeoutMs` on slow or lossy links:
+
+    ```json5
+    {
+      web: {
+        whatsapp: {
+          keepAliveIntervalMs: 15000,
+          connectTimeoutMs: 60000,
+          defaultQueryTimeoutMs: 60000,
+        },
+      },
+    }
+    ```
+
     Fix:
 
     ```bash
@@ -512,10 +555,26 @@ Behavior notes:
 
   </Accordion>
 
+  <Accordion title="QR login times out behind a proxy">
+    Symptom: `openclaw channels login --channel whatsapp` fails before showing a usable QR code with `status=408 Request Time-out` or a TLS socket disconnect.
+
+    WhatsApp Web login uses the gateway host's standard proxy environment (`HTTPS_PROXY`, `HTTP_PROXY`, lowercase variants, and `NO_PROXY`). Verify the gateway process inherits the proxy env and that `NO_PROXY` does not match `mmg.whatsapp.net`.
+
+  </Accordion>
+
   <Accordion title="No active listener when sending">
     Outbound sends fail fast when no active gateway listener exists for the target account.
 
     Make sure gateway is running and the account is linked.
+
+  </Accordion>
+
+  <Accordion title="Reply appears in transcript but not in WhatsApp">
+    Transcript rows record what the agent generated. WhatsApp delivery is checked separately: OpenClaw only treats an auto-reply as sent after Baileys returns an outbound message id for at least one visible text or media send.
+
+    Ack reactions are independent pre-reply receipts. A successful reaction does not prove that the later text or media reply was accepted by WhatsApp.
+
+    Check gateway logs for `auto-reply delivery failed` or `auto-reply was not accepted by WhatsApp provider`.
 
   </Accordion>
 
@@ -553,7 +612,9 @@ The effective `direct` map is determined first: if the account defines its own `
 1. **Direct-specific system prompt** (`direct["<peerId>"].systemPrompt`): used when the specific peer entry exists in the map **and** its `systemPrompt` key is defined. If `systemPrompt` is an empty string (`""`), the wildcard is suppressed and no system prompt is applied.
 2. **Direct wildcard system prompt** (`direct["*"].systemPrompt`): used when the specific peer entry is absent from the map entirely, or when it exists but defines no `systemPrompt` key.
 
-Note: `dms` remains the lightweight per-DM history override bucket (`dms.<id>.historyLimit`); prompt overrides live under `direct`.
+<Note>
+`dms` remains the lightweight per-DM history override bucket (`dms.<id>.historyLimit`). Prompt overrides live under `direct`.
+</Note>
 
 **Difference from Telegram multi-account behavior:** In Telegram, root `groups` is intentionally suppressed for all accounts in a multi-account setup — even accounts that define no `groups` of their own — to prevent a bot from receiving group messages for groups it does not belong to. WhatsApp does not apply this guard: root `groups` and root `direct` are always inherited by accounts that define no account-level override, regardless of how many accounts are configured. In a multi-account WhatsApp setup, if you want per-account group or direct prompts, define the full map under each account explicitly rather than relying on root-level defaults.
 
@@ -615,7 +676,7 @@ High-signal WhatsApp fields:
 - access: `dmPolicy`, `allowFrom`, `groupPolicy`, `groupAllowFrom`, `groups`
 - delivery: `textChunkLimit`, `chunkMode`, `mediaMaxMb`, `sendReadReceipts`, `ackReaction`, `reactionLevel`
 - multi-account: `accounts.<id>.enabled`, `accounts.<id>.authDir`, account-level overrides
-- operations: `configWrites`, `debounceMs`, `web.enabled`, `web.heartbeatSeconds`, `web.reconnect.*`
+- operations: `configWrites`, `debounceMs`, `web.enabled`, `web.heartbeatSeconds`, `web.reconnect.*`, `web.whatsapp.*`
 - session behavior: `session.dmScope`, `historyLimit`, `dmHistoryLimit`, `dms.<id>.historyLimit`
 - prompts: `groups.<id>.systemPrompt`, `groups["*"].systemPrompt`, `direct.<id>.systemPrompt`, `direct["*"].systemPrompt`
 

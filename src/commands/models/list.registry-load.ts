@@ -1,15 +1,21 @@
 import type { Api, Model } from "@mariozechner/pi-ai";
 import type { ModelRegistry } from "@mariozechner/pi-coding-agent";
+import { resolveOpenClawAgentDir } from "../../agents/agent-paths.js";
 import { shouldSuppressBuiltInModel } from "../../agents/model-suppression.js";
+import { discoverAuthStorage, discoverModels } from "../../agents/pi-model-discovery.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { loadModelRegistry } from "./list.registry.js";
-import { discoverAuthStorage, discoverModels, resolveOpenClawAgentDir } from "./list.runtime.js";
 import type { ConfiguredEntry } from "./list.types.js";
 import { modelKey } from "./shared.js";
 
 export async function loadListModelRegistry(
   cfg: OpenClawConfig,
-  opts?: { providerFilter?: string },
+  opts?: {
+    providerFilter?: string;
+    normalizeModels?: boolean;
+    loadAvailability?: boolean;
+    workspaceDir?: string;
+  },
 ) {
   const loaded = await loadModelRegistry(cfg, opts);
   return {
@@ -43,10 +49,14 @@ function findConfiguredRegistryModel(params: {
 export function loadConfiguredListModelRegistry(
   cfg: OpenClawConfig,
   entries: ConfiguredEntry[],
-  opts?: { providerFilter?: string },
+  opts?: { providerFilter?: string; workspaceDir?: string },
 ) {
   const agentDir = resolveOpenClawAgentDir();
-  const authStorage = discoverAuthStorage(agentDir, { readOnly: true });
+  const authStorage = discoverAuthStorage(agentDir, {
+    readOnly: true,
+    config: cfg,
+    workspaceDir: opts?.workspaceDir,
+  });
   const registry = discoverModels(authStorage, agentDir, {
     providerFilter: opts?.providerFilter,
   });

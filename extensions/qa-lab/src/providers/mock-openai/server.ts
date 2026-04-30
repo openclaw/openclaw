@@ -53,7 +53,7 @@ type StreamEvent =
  * - Everything else (including empty strings) → `"unknown"`
  *
  * The `/v1/messages` route always feeds `body.model` straight through,
- * so an Anthropic request with an `openai/gpt-5.4` model string is still
+ * so an Anthropic request with an `openai/gpt-5.5` model string is still
  * classified as `"openai"`. That matches the parity program's convention
  * where the provider label is the source of truth, not the HTTP route.
  */
@@ -78,7 +78,7 @@ export function resolveProviderVariant(model: string | undefined): MockOpenAiPro
     return "anthropic";
   }
   // Fall back to model-name prefix matching for bare model strings like
-  // `gpt-5.4` or `claude-opus-4-6`.
+  // `gpt-5.5` or `claude-opus-4-6`.
   if (/^(?:gpt-|o1-|openai-)/.test(trimmed)) {
     return "openai";
   }
@@ -145,8 +145,14 @@ const QA_THINKING_VISIBILITY_OFF_PROMPT_RE = /qa thinking visibility check off/i
 const QA_THINKING_VISIBILITY_MAX_PROMPT_RE = /qa thinking visibility check max/i;
 const QA_EMPTY_RESPONSE_RECOVERY_PROMPT_RE = /empty response continuation qa check/i;
 const QA_EMPTY_RESPONSE_EXHAUSTION_PROMPT_RE = /empty response exhaustion qa check/i;
-const QA_QUIET_STREAMING_PROMPT_RE = /quiet streaming qa check/i;
+const QA_STREAMING_PROMPT_RE = /(?:partial|quiet) streaming qa check/i;
 const QA_BLOCK_STREAMING_PROMPT_RE = /block streaming qa check/i;
+const QA_TOOL_PROGRESS_ERROR_PROMPT_RE = /tool progress error qa check/i;
+const QA_TOOL_PROGRESS_PROMPT_RE = /tool progress qa check/i;
+const QA_SUBAGENT_DIRECT_FALLBACK_PROMPT_RE = /subagent direct fallback qa check/i;
+const QA_SUBAGENT_DIRECT_FALLBACK_WORKER_RE = /subagent direct fallback worker/i;
+const QA_SUBAGENT_DIRECT_FALLBACK_MARKER = "QA-SUBAGENT-DIRECT-FALLBACK-OK";
+const QA_IMAGE_GENERATION_PROMPT_RE = /image generation check|capability flip image check/i;
 const QA_REASONING_ONLY_RETRY_NEEDLE =
   "recorded reasoning but did not produce a user-visible answer";
 const QA_EMPTY_RESPONSE_RETRY_NEEDLE =
@@ -338,21 +344,33 @@ function extractAllRequestTexts(input: ResponsesInputItem[], body: Record<string
   return texts.join("\n");
 }
 
-function countImageInputs(input: ResponsesInputItem[]) {
+function countImageInputs(value: unknown): number {
+  const seen = new WeakSet<object>();
+  const stack = [value];
   let count = 0;
-  for (const item of input) {
-    if (!Array.isArray(item.content)) {
+  let visited = 0;
+  while (stack.length > 0 && visited < 50_000) {
+    visited += 1;
+    const current = stack.pop();
+    if (Array.isArray(current)) {
+      for (const entry of current) {
+        stack.push(entry);
+      }
       continue;
     }
-    for (const entry of item.content) {
-      if (
-        entry &&
-        typeof entry === "object" &&
-        (entry as { type?: unknown }).type === "input_image"
-      ) {
-        count += 1;
-      }
+    if (!current || typeof current !== "object") {
+      continue;
     }
+    if (seen.has(current)) {
+      continue;
+    }
+    seen.add(current);
+    const record = current as Record<string, unknown>;
+    const type = typeof record.type === "string" ? record.type : "";
+    if (type === "input_image" || type === "image" || type === "image_url" || type === "media") {
+      count += 1;
+    }
+    stack.push(record.content, record.image_url, record.source);
   }
   return count;
 }
@@ -514,12 +532,30 @@ function extractLastCapture(text: string, pattern: RegExp) {
   return lastMatch?.[1]?.trim() || null;
 }
 
+function extractLastMatchingUserText(texts: string[], pattern: RegExp) {
+  for (let index = texts.length - 1; index >= 0; index -= 1) {
+    const text = texts[index] ?? "";
+    if (pattern.test(text)) {
+      return text;
+    }
+  }
+  return "";
+}
+
 function extractExactReplyDirective(text: string) {
   const backtickedMatch = extractLastCapture(text, /reply(?: with)? exactly\s+`([^`]+)`/i);
   if (backtickedMatch) {
     return backtickedMatch;
   }
   return extractLastCapture(text, /reply(?: with)? exactly:\s*([^\n]+)/i);
+}
+
+function extractFinishExactlyDirective(text: string) {
+  const backtickedMatch = extractLastCapture(text, /finish with exactly\s+`([^`]+)`/i);
+  if (backtickedMatch) {
+    return backtickedMatch;
+  }
+  return extractLastCapture(text, /finish with exactly\s+([^\s`.,;:!?]+)/i);
 }
 
 function extractExactMarkerDirective(text: string) {
@@ -618,6 +654,19 @@ function extractToolErrorForNamedCall(params: {
   return undefined;
 }
 
+function hasToolErrorOutput(toolJson: Record<string, unknown> | null, toolOutput: string) {
+  if (typeof toolJson?.error === "string" && toolJson.error.trim()) {
+    return true;
+  }
+  if (
+    typeof toolJson?.status === "string" &&
+    /\b(?:error|failed|failure)\b/i.test(toolJson.status)
+  ) {
+    return true;
+  }
+  return /\b(?:error|failed|failure|not found|no such file|enoent)\b/i.test(toolOutput);
+}
+
 function isHeartbeatPrompt(text: string) {
   const trimmed = text.trim();
   if (!trimmed || /remember this fact/i.test(trimmed)) {
@@ -650,6 +699,8 @@ function buildAssistantText(
     extractExactReplyDirective(prompt) ?? extractExactReplyDirective(allInputText);
   const exactMarkerDirective =
     extractExactMarkerDirective(prompt) ?? extractExactMarkerDirective(allInputText);
+  const finishExactlyDirective =
+    extractFinishExactlyDirective(prompt) ?? extractFinishExactlyDirective(allInputText);
   const imageInputCount = countImageInputs(input);
   const activeMemorySummary = extractActiveMemorySummary(allInputText);
   const snackPreference = extractSnackPreference(activeMemorySummary ?? memorySnippet);
@@ -678,10 +729,10 @@ function buildAssistantText(
   if (isHeartbeatPrompt(prompt)) {
     return "HEARTBEAT_OK";
   }
-  if (/\bmarker\b/i.test(prompt) && exactReplyDirective) {
+  if (/\bmarker\b/i.test(allInputText) && exactReplyDirective) {
     return exactReplyDirective;
   }
-  if (/\bmarker\b/i.test(prompt) && exactMarkerDirective) {
+  if (/\bmarker\b/i.test(allInputText) && exactMarkerDirective) {
     return exactMarkerDirective;
   }
   if (/visible skill marker/i.test(prompt)) {
@@ -722,13 +773,13 @@ function buildAssistantText(
   if (/session memory ranking check/i.test(prompt) && orbitCode) {
     return `Protocol note: I checked memory and the current Project Nebula codename is ${orbitCode}.`;
   }
-  if (/thread memory check/i.test(prompt) && orbitCode) {
+  if (/thread memory check/i.test(allInputText) && orbitCode) {
     return `Protocol note: I checked memory in-thread and the hidden thread codename is ${orbitCode}.`;
   }
   if (/switch(?:ing)? models?/i.test(prompt)) {
     return `Protocol note: model switch acknowledged. Continuing on ${model || "the requested model"}.`;
   }
-  if (/(image generation check|capability flip image check)/i.test(prompt) && mediaPath) {
+  if (QA_IMAGE_GENERATION_PROMPT_RE.test(allInputText) && mediaPath) {
     return `Protocol note: generated the QA lighthouse image successfully.\nMEDIA:${mediaPath}`;
   }
   if (QA_SKILL_WORKSHOP_GIF_PROMPT_RE.test(prompt) && toolOutput) {
@@ -762,11 +813,16 @@ function buildAssistantText(
   if (/fanout worker beta/i.test(prompt)) {
     return "BETA-OK";
   }
+  if (QA_SUBAGENT_DIRECT_FALLBACK_WORKER_RE.test(prompt)) {
+    return QA_SUBAGENT_DIRECT_FALLBACK_MARKER;
+  }
   if (/report the visible code/i.test(prompt) && /FORKED-CONTEXT-ALPHA/i.test(allInputText)) {
     return "FORKED-CONTEXT-ALPHA";
   }
   const fanoutCompleteReply = "subagent-1: ok\nsubagent-2: ok";
-  if (scenarioState.subagentFanoutPhase === 2 && prompt) {
+  const isFanoutCompletionTurn =
+    /subagent fanout synthesis check/i.test(allInputText) || /^continue\.?$/i.test(prompt.trim());
+  if (scenarioState.subagentFanoutPhase === 2 && prompt && isFanoutCompletionTurn) {
     scenarioState.subagentFanoutPhase = 3;
     return fanoutCompleteReply;
   }
@@ -810,6 +866,9 @@ function buildAssistantText(
   if (toolOutput) {
     const snippet = toolOutput.replace(/\s+/g, " ").trim().slice(0, 220);
     return `Protocol note: I reviewed the requested material. Evidence snippet: ${snippet || "no content"}`;
+  }
+  if (finishExactlyDirective) {
+    return finishExactlyDirective;
   }
   if (prompt) {
     return `Protocol note: acknowledged. Continue with the QA scenario plan and report worked, failed, and blocked items.`;
@@ -1115,6 +1174,8 @@ async function buildResponsesPayload(
   const allInputText = extractAllRequestTexts(input, body);
   const exactReplyDirective =
     extractExactReplyDirective(prompt) ?? extractExactReplyDirective(allInputText);
+  const exactMarkerDirective =
+    extractExactMarkerDirective(prompt) ?? extractExactMarkerDirective(allInputText);
   const firstExactMarkerDirective = extractLabeledMarkerDirective(
     allInputText,
     "first exact marker",
@@ -1128,11 +1189,46 @@ async function buildResponsesPayload(
   const hasReasoningOnlyRetryInstruction = allInputText.includes(QA_REASONING_ONLY_RETRY_NEEDLE);
   const hasEmptyResponseRetryInstruction = allInputText.includes(QA_EMPTY_RESPONSE_RETRY_NEEDLE);
   const canCallSessionsSpawn = hasDeclaredTool(body, "sessions_spawn");
+  const canCallSessionsYield = hasDeclaredTool(body, "sessions_yield");
+  const buildToolProgressReadEvents = (pattern: RegExp) => {
+    const toolProgressPrompt = extractLastMatchingUserText(extractAllUserTexts(input), pattern);
+    return buildToolCallEventsWithArgs("read", {
+      path: readTargetFromPrompt(toolProgressPrompt || prompt || allInputText),
+    });
+  };
+  if (
+    allInputText.includes(QA_SUBAGENT_DIRECT_FALLBACK_MARKER) &&
+    /Internal task completion event/i.test(allInputText)
+  ) {
+    return buildAssistantEvents("");
+  }
+  if (QA_SUBAGENT_DIRECT_FALLBACK_PROMPT_RE.test(allInputText)) {
+    if (!toolOutput && canCallSessionsSpawn) {
+      return buildToolCallEventsWithArgs("sessions_spawn", {
+        task: `Subagent direct fallback worker: finish with exactly ${QA_SUBAGENT_DIRECT_FALLBACK_MARKER}.`,
+        label: "qa-direct-fallback-worker",
+        thread: false,
+        mode: "run",
+        runTimeoutSeconds: 30,
+      });
+    }
+    if (toolOutput && canCallSessionsYield && !/\byielded\b/i.test(toolOutput)) {
+      return buildToolCallEventsWithArgs("sessions_yield", {
+        message: `Waiting for ${QA_SUBAGENT_DIRECT_FALLBACK_MARKER}.`,
+      });
+    }
+  }
   if (/remember this fact/i.test(prompt)) {
     return buildAssistantEvents(buildAssistantText(input, body, scenarioState));
   }
   if (isHeartbeatPrompt(prompt)) {
     return buildAssistantEvents("HEARTBEAT_OK");
+  }
+  if (/fanout worker alpha/i.test(prompt)) {
+    return buildAssistantEvents("ALPHA-OK");
+  }
+  if (/fanout worker beta/i.test(prompt)) {
+    return buildAssistantEvents("BETA-OK");
   }
   if (QA_REASONING_ONLY_RECOVERY_PROMPT_RE.test(allInputText)) {
     if (!toolOutput) {
@@ -1185,7 +1281,7 @@ async function buildResponsesPayload(
     }
     return buildAssistantEvents("");
   }
-  if (QA_QUIET_STREAMING_PROMPT_RE.test(allInputText) && exactReplyDirective) {
+  if (QA_STREAMING_PROMPT_RE.test(allInputText) && exactReplyDirective) {
     return buildAssistantEvents([
       {
         id: "msg_mock_quiet_stream",
@@ -1194,6 +1290,20 @@ async function buildResponsesPayload(
         text: exactReplyDirective,
       },
     ]);
+  }
+  if (QA_TOOL_PROGRESS_ERROR_PROMPT_RE.test(allInputText) && exactReplyDirective) {
+    if (!toolOutput) {
+      return buildToolProgressReadEvents(QA_TOOL_PROGRESS_ERROR_PROMPT_RE);
+    }
+    return buildAssistantEvents(
+      hasToolErrorOutput(toolJson, toolOutput) ? exactReplyDirective : "BUG-TOOL-DID-NOT-FAIL",
+    );
+  }
+  if (QA_TOOL_PROGRESS_PROMPT_RE.test(allInputText) && exactReplyDirective) {
+    if (!toolOutput) {
+      return buildToolProgressReadEvents(QA_TOOL_PROGRESS_PROMPT_RE);
+    }
+    return buildAssistantEvents(exactReplyDirective);
   }
   if (
     QA_BLOCK_STREAMING_PROMPT_RE.test(allInputText) &&
@@ -1214,6 +1324,12 @@ async function buildResponsesPayload(
         text: secondExactMarkerDirective,
       },
     ]);
+  }
+  if (/\bmarker\b/i.test(allInputText) && exactReplyDirective) {
+    return buildAssistantEvents(exactReplyDirective);
+  }
+  if (/\bmarker\b/i.test(allInputText) && exactMarkerDirective) {
+    return buildAssistantEvents(exactMarkerDirective);
   }
   if (QA_SKILL_WORKSHOP_REVIEW_PROMPT_RE.test(allInputText)) {
     return buildAssistantEvents(
@@ -1331,37 +1447,34 @@ async function buildResponsesPayload(
     /silent snack recall check/i.test(allInputText)
   ) {
     if (!toolOutput) {
-      return buildToolCallEventsWithArgs("memory_search", {
+      return buildToolCallEventsWithArgs("memory_recall", {
         query: "QA movie night snack lemon pepper wings blue cheese",
-        maxResults: 3,
+        limit: 3,
       });
     }
-    const results = Array.isArray(toolJson?.results)
-      ? (toolJson.results as Array<Record<string, unknown>>)
-      : [];
-    const first = results[0];
-    if (
-      typeof first?.path === "string" &&
-      (typeof first.startLine === "number" || typeof first.endLine === "number")
-    ) {
-      const from =
-        typeof first.startLine === "number"
-          ? Math.max(1, first.startLine)
-          : typeof first.endLine === "number"
-            ? Math.max(1, first.endLine)
-            : 1;
-      return buildToolCallEventsWithArgs("memory_get", {
-        path: first.path,
-        from,
-        lines: 4,
-      });
-    }
-    const memorySnippet =
+    const memoryText =
       typeof toolJson?.text === "string"
         ? toolJson.text
-        : Array.isArray(toolJson?.results)
-          ? JSON.stringify(toolJson.results)
-          : toolOutput;
+        : Array.isArray(toolJson?.content)
+          ? toolJson.content
+              .map((item) =>
+                typeof item === "object" && item && "text" in item && typeof item.text === "string"
+                  ? item.text
+                  : "",
+              )
+              .filter(Boolean)
+              .join("\n")
+          : undefined;
+    if (memoryText) {
+      const snackPreference = extractSnackPreference(memoryText);
+      if (snackPreference) {
+        return buildAssistantEvents(`User usually wants ${snackPreference} for QA movie night.`);
+      }
+      return buildAssistantEvents("NONE");
+    }
+    const memorySnippet = Array.isArray(toolJson?.results)
+      ? JSON.stringify(toolJson.results)
+      : toolOutput;
     const snackPreference = extractSnackPreference(memorySnippet);
     if (snackPreference) {
       return buildAssistantEvents(`User usually wants ${snackPreference} for QA movie night.`);
@@ -1373,6 +1486,7 @@ async function buildResponsesPayload(
       return buildToolCallEventsWithArgs("memory_search", {
         query: "current Project Nebula codename ORBIT-10",
         maxResults: 3,
+        corpus: "sessions",
       });
     }
     const results = Array.isArray(toolJson?.results)
@@ -1402,7 +1516,7 @@ async function buildResponsesPayload(
       });
     }
   }
-  if (/thread memory check/i.test(prompt)) {
+  if (/thread memory check/i.test(allInputText)) {
     if (!toolOutput) {
       return buildToolCallEventsWithArgs("memory_search", {
         query: "hidden thread codename ORBIT-22",
@@ -1430,7 +1544,7 @@ async function buildResponsesPayload(
       });
     }
   }
-  if (/(image generation check|capability flip image check)/i.test(prompt) && !toolOutput) {
+  if (QA_IMAGE_GENERATION_PROMPT_RE.test(allInputText) && !toolOutput) {
     return buildToolCallEventsWithArgs("image_generate", {
       prompt: "A QA lighthouse on a dark sea with a tiny protocol droid silhouette.",
       filename: "qa-lighthouse.png",
@@ -1537,7 +1651,7 @@ async function buildResponsesPayload(
 // ---------------------------------------------------------------------------
 //
 // The QA parity gate needs two comparable scenario runs: one against the
-// "candidate" (openai/gpt-5.4) and one against the "baseline"
+// "candidate" (openai/gpt-5.5) and one against the "baseline"
 // (anthropic/claude-opus-4-6). The OpenAI mock above already dispatches all
 // the scenario prompt branches we care about. Rather than duplicating that
 // machinery, the /v1/messages route below translates Anthropic request
@@ -1926,8 +2040,8 @@ export async function startQaMockOpenAiServer(params?: { host?: string; port?: n
     if (req.method === "GET" && url.pathname === "/v1/models") {
       writeJson(res, 200, {
         data: [
-          { id: "gpt-5.4", object: "model" },
-          { id: "gpt-5.4-alt", object: "model" },
+          { id: "gpt-5.5", object: "model" },
+          { id: "gpt-5.5-alt", object: "model" },
           { id: "gpt-image-1", object: "model" },
           { id: "text-embedding-3-small", object: "model" },
           { id: "claude-opus-4-6", object: "model" },

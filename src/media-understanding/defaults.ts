@@ -1,55 +1,55 @@
+import { resolveRuntimeConfigCacheKey } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { buildMediaUnderstandingManifestMetadataRegistry } from "./manifest-metadata.js";
 import { normalizeMediaProviderId } from "./provider-registry.js";
 import { providerSupportsCapability } from "./provider-supports.js";
 import type { MediaUnderstandingCapability, MediaUnderstandingProvider } from "./types.js";
-
-const MB = 1024 * 1024;
-
-export const DEFAULT_MAX_CHARS = 500;
-export const DEFAULT_MAX_CHARS_BY_CAPABILITY: Record<
-  MediaUnderstandingCapability,
-  number | undefined
-> = {
-  image: DEFAULT_MAX_CHARS,
-  audio: undefined,
-  video: DEFAULT_MAX_CHARS,
-};
-export const DEFAULT_MAX_BYTES: Record<MediaUnderstandingCapability, number> = {
-  image: 10 * MB,
-  audio: 20 * MB,
-  video: 50 * MB,
-};
-export const DEFAULT_TIMEOUT_SECONDS: Record<MediaUnderstandingCapability, number> = {
-  image: 60,
-  audio: 60,
-  video: 120,
-};
-export const DEFAULT_PROMPT: Record<MediaUnderstandingCapability, string> = {
-  image: "Describe the image.",
-  audio: "Transcribe the audio.",
-  video: "Describe the video.",
-};
-export const DEFAULT_VIDEO_MAX_BASE64_BYTES = 70 * MB;
-export const CLI_OUTPUT_MAX_BUFFER = 5 * MB;
-export const DEFAULT_MEDIA_CONCURRENCY = 2;
+export {
+  CLI_OUTPUT_MAX_BUFFER,
+  DEFAULT_MAX_BYTES,
+  DEFAULT_MAX_CHARS,
+  DEFAULT_MAX_CHARS_BY_CAPABILITY,
+  DEFAULT_MEDIA_CONCURRENCY,
+  DEFAULT_PROMPT,
+  DEFAULT_TIMEOUT_SECONDS,
+  DEFAULT_VIDEO_MAX_BASE64_BYTES,
+  MIN_AUDIO_FILE_BYTES,
+} from "./defaults.constants.js";
 
 let defaultRegistryCache: Map<string, MediaUnderstandingProvider> | null = null;
-const configRegistryCache = new WeakMap<OpenClawConfig, Map<string, MediaUnderstandingProvider>>();
+const configRegistryCache = new Map<string, Map<string, MediaUnderstandingProvider>>();
+const MAX_CONFIG_REGISTRY_CACHE_ENTRIES = 32;
+
+function cacheConfigRegistry(
+  key: string,
+  registry: Map<string, MediaUnderstandingProvider>,
+): Map<string, MediaUnderstandingProvider> {
+  if (
+    !configRegistryCache.has(key) &&
+    configRegistryCache.size >= MAX_CONFIG_REGISTRY_CACHE_ENTRIES
+  ) {
+    const oldestKey = configRegistryCache.keys().next().value;
+    if (oldestKey) {
+      configRegistryCache.delete(oldestKey);
+    }
+  }
+  configRegistryCache.set(key, registry);
+  return registry;
+}
 
 function resolveDefaultRegistry(cfg?: OpenClawConfig) {
   if (!cfg) {
     defaultRegistryCache ??= buildMediaUnderstandingManifestMetadataRegistry();
     return defaultRegistryCache;
   }
-  const cached = configRegistryCache.get(cfg);
+  const cacheKey = resolveRuntimeConfigCacheKey(cfg);
+  const cached = configRegistryCache.get(cacheKey);
   if (cached) {
     return cached;
   }
   const registry = buildMediaUnderstandingManifestMetadataRegistry(cfg);
-  configRegistryCache.set(cfg, registry);
-  return registry;
+  return cacheConfigRegistry(cacheKey, registry);
 }
 
 function providerHasDeclaredCapability(
@@ -173,10 +173,3 @@ export function providerSupportsNativePdfDocument(params: {
   const provider = registry.get(normalizeMediaProviderId(params.providerId));
   return provider?.nativeDocumentInputs?.includes("pdf") ?? false;
 }
-
-/**
- * Minimum audio file size in bytes below which transcription is skipped.
- * Files smaller than this threshold are almost certainly empty or corrupt
- * and would cause unhelpful API errors from Whisper/transcription providers.
- */
-export const MIN_AUDIO_FILE_BYTES = 1024;

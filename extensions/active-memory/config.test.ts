@@ -1,7 +1,6 @@
 import fs from "node:fs";
+import { type JsonSchemaObject, validateJsonSchemaValue } from "openclaw/plugin-sdk/config-schema";
 import { describe, expect, it } from "vitest";
-import { validateJsonSchemaValue } from "../../src/plugins/schema-validator.js";
-import type { JsonSchemaObject } from "../../src/shared/json-schema.types.js";
 
 const manifest = JSON.parse(
   fs.readFileSync(new URL("./openclaw.plugin.json", import.meta.url), "utf-8"),
@@ -37,6 +36,20 @@ describe("active-memory manifest config schema", () => {
     expect(result.ok).toBe(true);
   });
 
+  it("accepts explicit in allowedChatTypes", () => {
+    const result = validateJsonSchemaValue({
+      schema: manifest.configSchema,
+      cacheKey: "active-memory.manifest.allowed-chat-types.explicit",
+      value: {
+        enabled: true,
+        agents: ["main"],
+        allowedChatTypes: ["direct", "explicit"],
+      },
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
   it("rejects timeoutMs values above the runtime ceiling", () => {
     const result = validateJsonSchemaValue({
       schema: manifest.configSchema,
@@ -45,6 +58,20 @@ describe("active-memory manifest config schema", () => {
         enabled: true,
         agents: ["main"],
         timeoutMs: 120_001,
+      },
+    });
+
+    expect(result.ok).toBe(false);
+  });
+
+  it("rejects unknown allowedChatTypes values", () => {
+    const result = validateJsonSchemaValue({
+      schema: manifest.configSchema,
+      cacheKey: "active-memory.manifest.allowed-chat-types.invalid",
+      value: {
+        enabled: true,
+        agents: ["main"],
+        allowedChatTypes: ["direct", "portal"],
       },
     });
 

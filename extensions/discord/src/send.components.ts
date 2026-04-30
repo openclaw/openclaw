@@ -1,16 +1,7 @@
-import {
-  serializePayload,
-  type MessagePayloadFile,
-  type MessagePayloadObject,
-  type RequestClient,
-} from "@buape/carbon";
-import { ChannelType, Routes } from "discord-api-types/v10";
-import {
-  requireRuntimeConfig,
-  type MarkdownTableMode,
-  type OpenClawConfig,
-} from "openclaw/plugin-sdk/config-runtime";
-import { recordChannelActivity } from "openclaw/plugin-sdk/infra-runtime";
+import { ChannelType } from "discord-api-types/v10";
+import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
+import type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import type { ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import { resolveDiscordAccount } from "./accounts.js";
 import { registerDiscordComponentEntries } from "./components-registry.js";
@@ -21,6 +12,14 @@ import {
   type DiscordComponentBuildResult,
   type DiscordComponentMessageSpec,
 } from "./components.js";
+import {
+  createChannelMessage,
+  editChannelMessage,
+  serializePayload,
+  type MessagePayloadFile,
+  type MessagePayloadObject,
+  type RequestClient,
+} from "./internal/discord.js";
 import { parseAndResolveRecipient } from "./recipient-resolution.js";
 import { loadOutboundMediaFromUrl } from "./runtime-api.js";
 import { sendMessageDiscord } from "./send.outbound.js";
@@ -298,9 +297,9 @@ export async function sendDiscordComponentMessage(
   try {
     result = (await request(
       () =>
-        rest.post(Routes.channelMessages(channelId), {
+        createChannelMessage<{ id: string; channel_id: string }>(rest, channelId, {
           body,
-        }) as Promise<{ id: string; channel_id: string }>,
+        }),
       "components",
     )) as { id: string; channel_id: string };
   } catch (err) {
@@ -351,7 +350,7 @@ export async function editDiscordComponentMessage(
   try {
     result = (await request(
       () =>
-        rest.patch(Routes.channelMessage(channelId, messageId), {
+        editChannelMessage(rest, channelId, messageId, {
           body,
         }) as Promise<{ id: string; channel_id: string }>,
       "components",

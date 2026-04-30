@@ -31,7 +31,7 @@ describe("qa suite gateway helpers", () => {
         profile: "coding",
       },
       agents: {
-        list: [{ id: "qa", model: { primary: "openai/gpt-5.4" } }],
+        list: [{ id: "qa", model: { primary: "openai/gpt-5.5" } }],
       },
     };
 

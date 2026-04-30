@@ -63,6 +63,7 @@ type AttemptSpawnWorkspaceHoisted = {
   subscribeEmbeddedPiSessionMock: Mock<SubscribeEmbeddedPiSessionFn>;
   acquireSessionWriteLockMock: Mock<AcquireSessionWriteLockFn>;
   installToolResultContextGuardMock: UnknownMock;
+  installContextEngineLoopHookMock: UnknownMock;
   flushPendingToolResultsAfterIdleMock: AsyncUnknownMock;
   releaseWsSessionMock: UnknownMock;
   resolveBootstrapContextForRunMock: Mock<() => Promise<BootstrapContext>>;
@@ -90,6 +91,7 @@ export function createSubscriptionMock(): SubscriptionMock {
     getMessagingToolSentTexts: () => [] as string[],
     getMessagingToolSentMediaUrls: () => [] as string[],
     getMessagingToolSentTargets: () => [] as MessagingToolSend[],
+    getPendingToolMediaReply: () => null,
     getSuccessfulCronAdds: () => 0,
     getReplayState: () => ({
       replayInvalid: false,
@@ -100,6 +102,7 @@ export function createSubscriptionMock(): SubscriptionMock {
     getLastToolError: () => undefined,
     getUsageTotals: () => undefined,
     getCompactionCount: () => 0,
+    getLastCompactionTokensAfter: () => undefined,
     getItemLifecycle: () => ({ startedCount: 0, completedCount: 0, activeCount: 0 }),
     isCompacting: () => false,
     isCompactionInFlight: () => false,
@@ -115,6 +118,7 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
   const ensureGlobalUndiciStreamTimeoutsMock = vi.fn();
   const buildEmbeddedMessageActionDiscoveryInputMock = vi.fn((params: unknown) => params);
   const installToolResultContextGuardMock = vi.fn(() => () => {});
+  const installContextEngineLoopHookMock = vi.fn(() => () => {});
   const flushPendingToolResultsAfterIdleMock = vi.fn(async () => {});
   const releaseWsSessionMock = vi.fn(() => {});
   const subscribeEmbeddedPiSessionMock = vi.fn<SubscribeEmbeddedPiSessionFn>(() =>
@@ -164,6 +168,7 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
     subscribeEmbeddedPiSessionMock,
     acquireSessionWriteLockMock,
     installToolResultContextGuardMock,
+    installContextEngineLoopHookMock,
     flushPendingToolResultsAfterIdleMock,
     releaseWsSessionMock,
     resolveBootstrapContextForRunMock,
@@ -184,10 +189,7 @@ export function getHoisted(): AttemptSpawnWorkspaceHoisted {
   return hoisted;
 }
 
-vi.mock("@mariozechner/pi-coding-agent", async () => {
-  const actual = await vi.importActual<typeof import("@mariozechner/pi-coding-agent")>(
-    "@mariozechner/pi-coding-agent",
-  );
+vi.mock("@mariozechner/pi-coding-agent", () => {
   function AuthStorage() {}
   class DefaultResourceLoader {
     async reload() {}
@@ -197,7 +199,6 @@ vi.mock("@mariozechner/pi-coding-agent", async () => {
     Math.max(1, Math.ceil(JSON.stringify(value ?? "").length / 4));
 
   return {
-    ...actual,
     AuthStorage,
     createAgentSession: (...args: unknown[]) => hoisted.createAgentSessionMock(...args),
     DefaultResourceLoader,
@@ -220,7 +221,7 @@ vi.mock("../../sandbox.js", () => ({
 }));
 
 vi.mock("../../session-tool-result-guard-wrapper.js", () => ({
-  guardSessionManager: () => hoisted.sessionManager,
+  guardSessionManager: (sessionManager: unknown) => sessionManager,
 }));
 
 vi.mock("../../pi-embedded-subscribe.js", () => ({
@@ -233,6 +234,13 @@ vi.mock("../../../plugins/hook-runner-global.js", () => ({
   initializeGlobalHookRunner: hoisted.initializeGlobalHookRunnerMock,
 }));
 
+vi.mock("../../../plugins/provider-runtime.js", () => ({
+  resolveProviderReasoningOutputModeWithPlugin: () => undefined,
+  resolveProviderSystemPromptContribution: () => undefined,
+  resolveProviderTextTransforms: () => undefined,
+  transformProviderSystemPrompt: ({ systemPrompt }: { systemPrompt: string }) => systemPrompt,
+}));
+
 vi.mock("../../../infra/machine-name.js", () => ({
   getMachineDisplayName: async () => "test-host",
 }));
@@ -243,6 +251,10 @@ vi.mock("../../../infra/net/undici-global-dispatcher.js", () => ({
     hoisted.ensureGlobalUndiciEnvProxyDispatcherMock(...args),
   ensureGlobalUndiciStreamTimeouts: (...args: unknown[]) =>
     hoisted.ensureGlobalUndiciStreamTimeoutsMock(...args),
+}));
+
+vi.mock("../../../tts/tts.js", () => ({
+  buildTtsSystemPromptHint: () => undefined,
 }));
 
 vi.mock("../../bootstrap-files.js", async () => {
@@ -346,6 +358,8 @@ vi.mock("../tool-result-context-guard.js", async () => {
       `[... ${Math.max(1, Math.floor(truncatedChars))} more characters truncated]`,
     installToolResultContextGuard: (...args: unknown[]) =>
       (hoisted.installToolResultContextGuardMock as (...args: unknown[]) => unknown)(...args),
+    installContextEngineLoopHook: (...args: unknown[]) =>
+      (hoisted.installContextEngineLoopHookMock as (...args: unknown[]) => unknown)(...args),
   };
 });
 
@@ -604,6 +618,7 @@ vi.mock("../sandbox-info.js", () => ({
 }));
 
 vi.mock("../thinking.js", () => ({
+  dropReasoningFromHistory: <T>(messages: T) => messages,
   dropThinkingBlocks: <T>(messages: T) => messages,
 }));
 
@@ -657,7 +672,8 @@ vi.mock("./compaction-timeout.js", () => ({
 }));
 
 vi.mock("./history-image-prune.js", () => ({
-  pruneProcessedHistoryImages: <T>(messages: T) => messages,
+  installHistoryImagePruneContextTransform: () => () => {},
+  pruneProcessedHistoryImages: () => null,
 }));
 
 export type MutableSession = {
@@ -668,12 +684,22 @@ export type MutableSession = {
   agent: {
     streamFn?: unknown;
     transport?: string;
+    reset: () => void;
     state: {
       messages: unknown[];
       systemPrompt?: string;
     };
   };
   prompt: (prompt: string, options?: { images?: unknown[] }) => Promise<void>;
+  sendCustomMessage: (
+    message: {
+      customType: string;
+      content: string;
+      display: boolean;
+      details?: Record<string, unknown>;
+    },
+    options?: { deliverAs?: "nextTurn"; triggerTurn?: boolean },
+  ) => Promise<void>;
   setActiveToolsByName: (toolNames: string[]) => void;
   abort: () => Promise<void>;
   dispose: () => void;
@@ -729,6 +755,7 @@ export function resetEmbeddedAttemptHarness(
     release: async () => {},
   });
   hoisted.installToolResultContextGuardMock.mockReset().mockReturnValue(() => {});
+  hoisted.installContextEngineLoopHookMock.mockReset().mockReturnValue(() => {});
   hoisted.flushPendingToolResultsAfterIdleMock.mockReset().mockResolvedValue(undefined);
   hoisted.releaseWsSessionMock.mockReset().mockReturnValue(undefined);
   hoisted.resolveBootstrapContextForRunMock.mockReset().mockResolvedValue({
@@ -778,6 +805,9 @@ export function createDefaultEmbeddedSession(params?: {
     isCompacting: false,
     isStreaming: false,
     agent: {
+      reset: () => {
+        session.messages = [];
+      },
       state: {
         get messages() {
           return session.messages;
@@ -797,6 +827,19 @@ export function createDefaultEmbeddedSession(params?: {
         ...session.messages,
         { role: "assistant", content: "done", timestamp: 2 },
       ];
+    },
+    sendCustomMessage: async (message, options) => {
+      if (options?.deliverAs === "nextTurn") {
+        session.messages = [...session.messages, { role: "custom", timestamp: 1, ...message }];
+        return;
+      }
+      if (options?.triggerTurn) {
+        session.messages = [
+          ...session.messages,
+          { role: "custom", timestamp: 1, ...message },
+          { role: "assistant", content: "done", timestamp: 2 },
+        ];
+      }
     },
     abort: async () => {},
     dispose: () => {},

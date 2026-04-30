@@ -2,7 +2,6 @@ import { createHash } from "node:crypto";
 import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/memory-core";
 import {
   buildSessionEntry,
   listSessionFilesForAgent,
@@ -18,14 +17,16 @@ import {
   resolveMemoryLightDreamingConfig,
   resolveMemoryRemDreamingConfig,
 } from "openclaw/plugin-sdk/memory-core-host-status";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { writeDailyDreamingPhaseBlock } from "./dreaming-markdown.js";
 import {
-  buildNarrativeSessionKey,
   generateAndAppendDreamNarrative,
   type NarrativePhaseData,
+  runDetachedDreamNarrative,
 } from "./dreaming-narrative.js";
 import { asRecord, formatErrorMessage, normalizeTrimmedString } from "./dreaming-shared.js";
 import {
+  filterLiveShortTermRecallEntries,
   readShortTermRecallEntries,
   recordDreamingPhaseSignals,
   recordShortTermRecalls,
@@ -37,6 +38,7 @@ type DreamingHostConfig = unknown;
 type DreamingPhaseStorageConfig = {
   timezone?: string;
   storage: { mode: "inline" | "separate" | "both"; separateReports: boolean };
+  execution?: { model?: string };
 };
 type LightDreamingConfig = DreamingPhaseStorageConfig & {
   enabled: boolean;
@@ -90,6 +92,7 @@ const SESSION_INGESTION_MAX_MESSAGES_PER_FILE = 80;
 const SESSION_INGESTION_MIN_MESSAGES_PER_FILE = 12;
 const SESSION_INGESTION_MAX_TRACKED_MESSAGES_PER_SESSION = 4096;
 const SESSION_INGESTION_MAX_TRACKED_SCOPES = 2048;
+const SESSION_CHECKPOINT_TRANSCRIPT_FILENAME_RE = /\.checkpoint\..+\.jsonl$/i;
 const GENERIC_DAY_HEADING_RE =
   /^(?:(?:mon|monday|tue|tues|tuesday|wed|wednesday|thu|thur|thurs|thursday|fri|friday|sat|saturday|sun|sunday)(?:,\s+)?)?(?:(?:jan|january|feb|february|mar|march|apr|april|may|jun|june|jul|july|aug|august|sep|sept|september|oct|october|nov|november|dec|december)\s+\d{1,2}(?:st|nd|rd|th)?(?:,\s*\d{4})?|\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?|\d{4}[/-]\d{2}[/-]\d{2})$/i;
 const MANAGED_DAILY_DREAMING_BLOCKS = [
@@ -359,6 +362,18 @@ function entryWithinLookback(entry: ShortTermRecallEntry, cutoffMs: number): boo
   return Number.isFinite(lastRecalledAtMs) && lastRecalledAtMs >= cutoffMs;
 }
 
+// Public lookback filter for recall entries. Kept in memory-core so gateway
+// doctor harness, CLI harness, and internal REM/light dreaming paths all
+// resolve `recallDays` vs `lastRecalledAt` the same way and cannot drift.
+export function filterRecallEntriesWithinLookback(params: {
+  entries: readonly ShortTermRecallEntry[];
+  nowMs: number;
+  lookbackDays: number;
+}): ShortTermRecallEntry[] {
+  const cutoffMs = calculateLookbackCutoffMs(params.nowMs, params.lookbackDays);
+  return params.entries.filter((entry) => entryWithinLookback(entry, cutoffMs));
+}
+
 type DailyIngestionBatch = {
   day: string;
   results: MemorySearchResult[];
@@ -612,6 +627,10 @@ function buildSessionStateKey(agentId: string, absolutePath: string): string {
   return `${agentId}:${sessionPathForFile(absolutePath)}`;
 }
 
+function isCheckpointSessionTranscriptPath(absolutePath: string): boolean {
+  return SESSION_CHECKPOINT_TRANSCRIPT_FILENAME_RE.test(path.basename(absolutePath));
+}
+
 function buildSessionRenderedLine(params: {
   agentId: string;
   sessionPath: string;
@@ -725,6 +744,9 @@ async function collectSessionIngestionBatches(params: {
             cronRunTranscriptPaths: new Set<string>(),
           };
     for (const absolutePath of files) {
+      if (isCheckpointSessionTranscriptPath(absolutePath)) {
+        continue;
+      }
       const normalizedPath = normalizeSessionTranscriptPathForComparison(absolutePath);
       sessionFiles.push({
         agentId,
@@ -1505,7 +1527,6 @@ async function runLightDreaming(params: {
   nowMs?: number;
 }): Promise<void> {
   const nowMs = Number.isFinite(params.nowMs) ? (params.nowMs as number) : Date.now();
-  const cutoffMs = calculateLookbackCutoffMs(nowMs, params.config.lookbackDays);
   await ingestDailyMemorySignals({
     workspaceDir: params.workspaceDir,
     lookbackDays: params.config.lookbackDays,
@@ -1520,9 +1541,16 @@ async function runLightDreaming(params: {
     nowMs,
     timezone: params.config.timezone,
   });
+  const recentEntries = await filterLiveShortTermRecallEntries({
+    workspaceDir: params.workspaceDir,
+    entries: filterRecallEntriesWithinLookback({
+      entries: await readShortTermRecallEntries({ workspaceDir: params.workspaceDir, nowMs }),
+      nowMs,
+      lookbackDays: params.config.lookbackDays,
+    }),
+  });
   const entries = dedupeEntries(
-    (await readShortTermRecallEntries({ workspaceDir: params.workspaceDir, nowMs }))
-      .filter((entry) => entryWithinLookback(entry, cutoffMs))
+    recentEntries
       .toSorted((a, b) => {
         const byTime = Date.parse(b.lastRecalledAt) - Date.parse(a.lastRecalledAt);
         if (byTime !== 0) {
@@ -1563,15 +1591,14 @@ async function runLightDreaming(params: {
       ...(themes.length > 0 ? { themes } : {}),
     };
     if (params.detachNarratives) {
-      queueMicrotask(() => {
-        void generateAndAppendDreamNarrative({
-          subagent: params.subagent!,
-          workspaceDir: params.workspaceDir,
-          data,
-          nowMs,
-          timezone: params.config.timezone,
-          logger: params.logger,
-        }).catch(() => undefined);
+      runDetachedDreamNarrative({
+        subagent: params.subagent,
+        workspaceDir: params.workspaceDir,
+        data,
+        nowMs,
+        timezone: params.config.timezone,
+        model: params.config.execution?.model,
+        logger: params.logger,
       });
     } else {
       await generateAndAppendDreamNarrative({
@@ -1580,6 +1607,7 @@ async function runLightDreaming(params: {
         data,
         nowMs,
         timezone: params.config.timezone,
+        model: params.config.execution?.model,
         logger: params.logger,
       });
     }
@@ -1596,7 +1624,6 @@ async function runRemDreaming(params: {
   nowMs?: number;
 }): Promise<void> {
   const nowMs = Number.isFinite(params.nowMs) ? (params.nowMs as number) : Date.now();
-  const cutoffMs = calculateLookbackCutoffMs(nowMs, params.config.lookbackDays);
   await ingestDailyMemorySignals({
     workspaceDir: params.workspaceDir,
     lookbackDays: params.config.lookbackDays,
@@ -1611,9 +1638,14 @@ async function runRemDreaming(params: {
     nowMs,
     timezone: params.config.timezone,
   });
-  const entries = (
-    await readShortTermRecallEntries({ workspaceDir: params.workspaceDir, nowMs })
-  ).filter((entry) => entryWithinLookback(entry, cutoffMs));
+  const entries = await filterLiveShortTermRecallEntries({
+    workspaceDir: params.workspaceDir,
+    entries: filterRecallEntriesWithinLookback({
+      entries: await readShortTermRecallEntries({ workspaceDir: params.workspaceDir, nowMs }),
+      nowMs,
+      lookbackDays: params.config.lookbackDays,
+    }),
+  });
   const preview = previewRemDreaming({
     entries,
     limit: params.config.limit,
@@ -1656,15 +1688,14 @@ async function runRemDreaming(params: {
       ...(themes.length > 0 ? { themes } : {}),
     };
     if (params.detachNarratives) {
-      queueMicrotask(() => {
-        void generateAndAppendDreamNarrative({
-          subagent: params.subagent!,
-          workspaceDir: params.workspaceDir,
-          data,
-          nowMs,
-          timezone: params.config.timezone,
-          logger: params.logger,
-        }).catch(() => undefined);
+      runDetachedDreamNarrative({
+        subagent: params.subagent,
+        workspaceDir: params.workspaceDir,
+        data,
+        nowMs,
+        timezone: params.config.timezone,
+        model: params.config.execution?.model,
+        logger: params.logger,
       });
     } else {
       await generateAndAppendDreamNarrative({
@@ -1673,20 +1704,10 @@ async function runRemDreaming(params: {
         data,
         nowMs,
         timezone: params.config.timezone,
+        model: params.config.execution?.model,
         logger: params.logger,
       });
     }
-  }
-}
-
-async function deleteNarrativeSessionBestEffort(
-  subagent: Parameters<typeof generateAndAppendDreamNarrative>[0]["subagent"],
-  sessionKey: string,
-): Promise<void> {
-  try {
-    await subagent.deleteSession({ sessionKey });
-  } catch {
-    // Cleanup is best-effort; request-scoped runtimes can throw synchronously.
   }
 }
 
@@ -1716,19 +1737,6 @@ export async function runDreamingSweepPhases(params: {
       nowMs: sweepNowMs,
       detachNarratives: params.detachNarratives,
     });
-    // Defensive cleanup: ensure the light-phase narrative session is deleted even if
-    // generateAndAppendDreamNarrative's primary cleanup was skipped due to an error.
-    // Skip when narratives are detached: the queued subagent run hasn't read the
-    // session yet, so eager cleanup would race the writer and silently drop the
-    // diary entry. The narrative function does its own cleanup in finally{}.
-    if (params.subagent && !params.detachNarratives) {
-      const lightSessionKey = buildNarrativeSessionKey({
-        workspaceDir: params.workspaceDir,
-        phase: "light",
-        nowMs: sweepNowMs,
-      });
-      await deleteNarrativeSessionBestEffort(params.subagent, lightSessionKey);
-    }
   }
 
   const rem = resolveMemoryRemDreamingConfig({
@@ -1745,16 +1753,6 @@ export async function runDreamingSweepPhases(params: {
       nowMs: sweepNowMs,
       detachNarratives: params.detachNarratives,
     });
-    // Defensive cleanup: ensure the REM-phase narrative session is deleted.
-    // Skip when narratives are detached (see light-phase comment above).
-    if (params.subagent && !params.detachNarratives) {
-      const remSessionKey = buildNarrativeSessionKey({
-        workspaceDir: params.workspaceDir,
-        phase: "rem",
-        nowMs: sweepNowMs,
-      });
-      await deleteNarrativeSessionBestEffort(params.subagent, remSessionKey);
-    }
   }
 }
 

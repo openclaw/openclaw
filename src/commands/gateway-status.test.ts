@@ -60,6 +60,10 @@ const mocks = vi.hoisted(() => {
             scopes: ["operator.read"],
             capability: "read_only",
           },
+          server: {
+            version: "2026.4.24",
+            connId: "local",
+          },
           health: { ok: true },
           status: {
             linkChannel: {
@@ -102,6 +106,10 @@ const mocks = vi.hoisted(() => {
           role: "operator",
           scopes: ["operator.admin"],
           capability: "admin_capable",
+        },
+        server: {
+          version: "2026.4.24",
+          connId: "remote",
         },
         health: { ok: true },
         status: {
@@ -782,6 +790,28 @@ describe("gateway-status command", () => {
       expect.objectContaining({
         url: "ws://127.0.0.1:18789",
         timeoutMs: 15_000,
+      }),
+    );
+  });
+
+  it("uses configured handshake timeout as the default local probe budget", async () => {
+    const { runtime } = createRuntimeCapture();
+    probeGateway.mockClear();
+    readBestEffortConfig.mockResolvedValueOnce({
+      gateway: {
+        mode: "local",
+        handshakeTimeoutMs: 30_000,
+        auth: { mode: "token", token: "ltok" },
+      },
+    } as never);
+
+    await gatewayStatusCommand({ json: true }, asRuntimeEnv(runtime));
+
+    expect(probeGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "ws://127.0.0.1:18789",
+        preauthHandshakeTimeoutMs: 30_000,
+        timeoutMs: 30_000,
       }),
     );
   });

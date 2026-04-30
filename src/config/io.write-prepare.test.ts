@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   collectChangedPaths,
   formatConfigValidationFailure,
+  applyUnsetPathsForWrite,
   restoreEnvRefsFromMap,
   resolvePersistCandidateForWrite,
   resolveWriteEnvSnapshotForPath,
@@ -38,54 +39,123 @@ describe("config io write prepare", () => {
     expect(persisted).not.toHaveProperty("sessions.persistence");
   });
 
-  it("preserves authored source-only nested fields during partial writes", () => {
-    const persisted = resolvePersistCandidateForWrite({
-      runtimeConfig: {
-        plugins: {
-          entries: {},
+  it("strips transient plugin install records from partial writes", () => {
+    const persisted = applyUnsetPathsForWrite(
+      resolvePersistCandidateForWrite({
+        runtimeConfig: {
+          plugins: {
+            entries: {},
+          },
         },
-      },
-      sourceConfig: {
-        plugins: {
-          entries: {},
-          installs: {
-            "openclaw-web-search": {
-              source: "npm",
-              spec: "@ollama/openclaw-web-search",
-              installPath: "/tmp/openclaw-web-search",
-              resolvedName: "@ollama/openclaw-web-search",
-              resolvedVersion: "0.2.2",
+        sourceConfig: {
+          plugins: {
+            entries: {},
+            installs: {
+              "openclaw-web-search": {
+                source: "npm",
+                spec: "@ollama/openclaw-web-search",
+                installPath: "/tmp/openclaw-web-search",
+                resolvedName: "@ollama/openclaw-web-search",
+                resolvedVersion: "0.2.2",
+              },
             },
           },
         },
-      },
-      nextConfig: {
-        plugins: {
-          entries: {},
-          installs: {
-            "openclaw-web-search": {
-              source: "npm",
-              spec: "@ollama/openclaw-web-search@0.2.2",
-              installPath: "/tmp/openclaw-web-search",
-              resolvedName: "@ollama/openclaw-web-search",
-              resolvedVersion: "0.2.2",
+        nextConfig: {
+          plugins: {
+            entries: {},
+            installs: {
+              "openclaw-web-search": {
+                source: "npm",
+                spec: "@ollama/openclaw-web-search@0.2.2",
+                installPath: "/tmp/openclaw-web-search",
+                resolvedName: "@ollama/openclaw-web-search",
+                resolvedVersion: "0.2.2",
+              },
             },
           },
         },
-      },
-    }) as {
+      }) as OpenClawConfig,
+      [["plugins", "installs"]],
+    ) as {
       plugins?: {
         installs?: Record<string, Record<string, unknown>>;
       };
     };
 
-    expect(persisted.plugins?.installs?.["openclaw-web-search"]).toEqual({
-      source: "npm",
-      spec: "@ollama/openclaw-web-search@0.2.2",
-      installPath: "/tmp/openclaw-web-search",
-      resolvedName: "@ollama/openclaw-web-search",
-      resolvedVersion: "0.2.2",
+    expect(persisted.plugins?.installs).toBeUndefined();
+  });
+
+  it("preserves authored agent provider params during narrowed agent-list writes", () => {
+    const sourceConfig = {
+      agents: {
+        defaults: {
+          params: { transport: "sse", openaiWsWarmup: false },
+          models: {
+            "openai/gpt-5.4": {
+              alias: "GPT",
+              params: { transport: "sse", openaiWsWarmup: false },
+            },
+          },
+        },
+        list: [{ id: "main" }],
+      },
+      gateway: { mode: "local" },
+    };
+    const persisted = resolvePersistCandidateForWrite({
+      runtimeConfig: {
+        ...sourceConfig,
+        agents: {
+          ...sourceConfig.agents,
+          defaults: {
+            ...sourceConfig.agents.defaults,
+            maxConcurrent: 4,
+          },
+        },
+      },
+      sourceConfig,
+      nextConfig: {
+        agents: { list: [{ id: "main" }, { id: "ops" }] },
+        gateway: { mode: "local" },
+      },
+    }) as OpenClawConfig;
+
+    expect(persisted.agents?.defaults?.params).toEqual({
+      transport: "sse",
+      openaiWsWarmup: false,
     });
+    expect(persisted.agents?.defaults?.models?.["openai/gpt-5.4"]).toEqual({
+      alias: "GPT",
+      params: { transport: "sse", openaiWsWarmup: false },
+    });
+    expect(persisted.agents?.list).toEqual([{ id: "main" }, { id: "ops" }]);
+  });
+
+  it("allows explicit unsets to remove authored agent provider params", () => {
+    const sourceConfig: OpenClawConfig = {
+      agents: {
+        defaults: {
+          params: { transport: "sse", openaiWsWarmup: false },
+          models: {
+            "openai/gpt-5.4": {
+              params: { transport: "sse", openaiWsWarmup: false },
+            },
+          },
+        },
+      },
+    };
+    const persisted = resolvePersistCandidateForWrite({
+      runtimeConfig: sourceConfig,
+      sourceConfig,
+      nextConfig: { agents: { defaults: { models: { "openai/gpt-5.4": {} } } } },
+      unsetPaths: [
+        ["agents", "defaults", "params"],
+        ["agents", "defaults", "models", "openai/gpt-5.4", "params"],
+      ],
+    }) as OpenClawConfig;
+
+    expect(persisted.agents?.defaults).not.toHaveProperty("params");
+    expect(persisted.agents?.defaults?.models?.["openai/gpt-5.4"]).not.toHaveProperty("params");
   });
 
   it("preserves untouched include-owned subtrees during unrelated writes", () => {

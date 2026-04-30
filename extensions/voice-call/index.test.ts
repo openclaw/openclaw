@@ -2,8 +2,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
+import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createTestPluginApi } from "../../test/helpers/plugins/plugin-api.ts";
 import type { OpenClawPluginApi } from "./api.js";
 import type { VoiceCallRuntime } from "./runtime-entry.js";
 
@@ -149,6 +149,7 @@ describe("voice-call plugin", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
     delete (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.voice-call.runtime")];
     delete (globalThis as Record<PropertyKey, unknown>)[
       Symbol.for("openclaw.voice-call.runtimePromise")
@@ -177,6 +178,32 @@ describe("voice-call plugin", () => {
     expect(respond).toHaveBeenCalledWith(true, { callId: "call-1", initiated: true });
   });
 
+  it("does not block service startup while runtime exposure initializes", async () => {
+    let resolveRuntime: ((runtime: VoiceCallRuntime) => void) | undefined;
+    vi.mocked(createVoiceCallRuntime).mockReturnValueOnce(
+      new Promise<VoiceCallRuntime>((resolve) => {
+        resolveRuntime = resolve;
+      }),
+    );
+    const { service, methods } = setup({ provider: "mock" });
+
+    expect(service).toBeDefined();
+    expect(service!.start(createServiceContext())).toBeUndefined();
+    expect(createVoiceCallRuntime).toHaveBeenCalledTimes(1);
+
+    resolveRuntime?.(runtimeStub);
+    const handler = methods.get("voicecall.initiate") as
+      | ((ctx: {
+          params: Record<string, unknown>;
+          respond: ReturnType<typeof vi.fn>;
+        }) => Promise<void>)
+      | undefined;
+    const respond = vi.fn();
+    await handler?.({ params: { message: "Hi" }, respond });
+
+    expect(respond).toHaveBeenCalledWith(true, { callId: "call-1", initiated: true });
+  });
+
   it("creates a fresh shared runtime after service stop", async () => {
     const first = setup({ provider: "mock" });
     await first.service?.start(createServiceContext());
@@ -195,6 +222,50 @@ describe("voice-call plugin", () => {
 
     expect(createVoiceCallRuntime).toHaveBeenCalledTimes(2);
     expect(respond).toHaveBeenCalledWith(true, { callId: "call-2", initiated: true });
+  });
+
+  it("does not log a startup error when provider setup is incomplete", async () => {
+    vi.stubEnv("TWILIO_ACCOUNT_SID", "");
+    vi.stubEnv("TWILIO_AUTH_TOKEN", "");
+    vi.stubEnv("TWILIO_FROM_NUMBER", "");
+    const { service } = setup({ provider: "twilio" });
+
+    await service?.start(createServiceContext());
+
+    expect(createVoiceCallRuntime).not.toHaveBeenCalled();
+    expect(
+      noopLogger.error.mock.calls.some(([message]) =>
+        String(message).includes("Failed to start runtime"),
+      ),
+    ).toBe(false);
+    expect(noopLogger.warn).toHaveBeenCalledWith(
+      expect.stringContaining("Runtime not started; setup incomplete"),
+    );
+    expect(noopLogger.warn).toHaveBeenCalledWith(expect.stringContaining("TWILIO_ACCOUNT_SID"));
+  });
+
+  it("still reports missing provider setup when a command needs the runtime", async () => {
+    vi.stubEnv("TWILIO_ACCOUNT_SID", "");
+    vi.stubEnv("TWILIO_AUTH_TOKEN", "");
+    vi.stubEnv("TWILIO_FROM_NUMBER", "");
+    const { methods } = setup({ provider: "twilio" });
+    const handler = methods.get("voicecall.initiate") as
+      | ((ctx: {
+          params: Record<string, unknown>;
+          respond: ReturnType<typeof vi.fn>;
+        }) => Promise<void>)
+      | undefined;
+    const respond = vi.fn();
+
+    await handler?.({ params: { message: "Hi", to: "+15550001234" }, respond });
+
+    expect(createVoiceCallRuntime).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      expect.objectContaining({
+        error: expect.stringContaining("TWILIO_ACCOUNT_SID"),
+      }),
+    );
   });
 
   it("initiates a call via voicecall.initiate", async () => {

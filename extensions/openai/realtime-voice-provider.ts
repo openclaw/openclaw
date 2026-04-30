@@ -1,11 +1,15 @@
 import { randomUUID } from "node:crypto";
-import { createProviderHttpError } from "openclaw/plugin-sdk/provider-http";
+import {
+  createProviderHttpError,
+  resolveProviderRequestHeaders,
+} from "openclaw/plugin-sdk/provider-http";
 import {
   captureWsEvent,
   createDebugProxyWebSocketAgent,
   resolveDebugProxySettings,
 } from "openclaw/plugin-sdk/proxy-capture";
 import type {
+  RealtimeVoiceAudioFormat,
   RealtimeVoiceBridge,
   RealtimeVoiceBrowserSession,
   RealtimeVoiceBrowserSessionCreateRequest,
@@ -14,6 +18,7 @@ import type {
   RealtimeVoiceProviderPlugin,
   RealtimeVoiceTool,
 } from "openclaw/plugin-sdk/realtime-voice";
+import { REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ } from "openclaw/plugin-sdk/realtime-voice";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import WebSocket from "ws";
@@ -141,8 +146,11 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
   private toolCallBuffers = new Map<string, { name: string; callId: string; args: string }>();
   private readonly flowId = randomUUID();
   private sessionReadyFired = false;
+  private readonly audioFormat: RealtimeVoiceAudioFormat;
 
-  constructor(private readonly config: OpenAIRealtimeVoiceBridgeConfig) {}
+  constructor(private readonly config: OpenAIRealtimeVoiceBridgeConfig) {
+    this.audioFormat = config.audioFormat ?? REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ;
+  }
 
   async connect(): Promise<void> {
     this.intentionallyClosed = false;
@@ -345,11 +353,18 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
         .replace(/\/$/, "")
         .replace(/^http(s?):/, (_, secure: string) => `ws${secure}:`);
       const apiVersion = cfg.azureApiVersion ?? "2024-10-01-preview";
+      const url = `${base}/openai/realtime?api-version=${apiVersion}&deployment=${encodeURIComponent(
+        cfg.azureDeployment,
+      )}`;
       return {
-        url: `${base}/openai/realtime?api-version=${apiVersion}&deployment=${encodeURIComponent(
-          cfg.azureDeployment,
-        )}`,
-        headers: { "api-key": cfg.apiKey },
+        url,
+        headers: resolveProviderRequestHeaders({
+          provider: "openai",
+          baseUrl: url,
+          capability: "audio",
+          transport: "websocket",
+          defaultHeaders: { "api-key": cfg.apiKey },
+        }) ?? { "api-key": cfg.apiKey },
       };
     }
 
@@ -357,19 +372,36 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
       const base = cfg.azureEndpoint
         .replace(/\/$/, "")
         .replace(/^http(s?):/, (_, secure: string) => `ws${secure}:`);
+      const url = `${base}/v1/realtime?model=${encodeURIComponent(
+        cfg.model ?? OpenAIRealtimeVoiceBridge.DEFAULT_MODEL,
+      )}`;
       return {
-        url: `${base}/v1/realtime?model=${encodeURIComponent(
-          cfg.model ?? OpenAIRealtimeVoiceBridge.DEFAULT_MODEL,
-        )}`,
-        headers: { Authorization: `Bearer ${cfg.apiKey}` },
+        url,
+        headers: resolveProviderRequestHeaders({
+          provider: "openai",
+          baseUrl: url,
+          capability: "audio",
+          transport: "websocket",
+          defaultHeaders: { Authorization: `Bearer ${cfg.apiKey}` },
+        }) ?? { Authorization: `Bearer ${cfg.apiKey}` },
       };
     }
 
+    const url = `wss://api.openai.com/v1/realtime?model=${encodeURIComponent(
+      cfg.model ?? OpenAIRealtimeVoiceBridge.DEFAULT_MODEL,
+    )}`;
     return {
-      url: `wss://api.openai.com/v1/realtime?model=${encodeURIComponent(
-        cfg.model ?? OpenAIRealtimeVoiceBridge.DEFAULT_MODEL,
-      )}`,
-      headers: {
+      url,
+      headers: resolveProviderRequestHeaders({
+        provider: "openai",
+        baseUrl: url,
+        capability: "audio",
+        transport: "websocket",
+        defaultHeaders: {
+          Authorization: `Bearer ${cfg.apiKey}`,
+          "OpenAI-Beta": "realtime=v1",
+        },
+      }) ?? {
         Authorization: `Bearer ${cfg.apiKey}`,
         "OpenAI-Beta": "realtime=v1",
       },
@@ -407,8 +439,8 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
         modalities: ["text", "audio"],
         instructions: cfg.instructions,
         voice: cfg.voice ?? "alloy",
-        input_audio_format: "g711_ulaw",
-        output_audio_format: "g711_ulaw",
+        input_audio_format: this.resolveRealtimeAudioFormat(),
+        output_audio_format: this.resolveRealtimeAudioFormat(),
         input_audio_transcription: {
           model: "whisper-1",
         },
@@ -429,6 +461,10 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
       },
     };
     this.sendEvent(sessionUpdate);
+  }
+
+  private resolveRealtimeAudioFormat(): "g711_ulaw" | "pcm16" {
+    return this.audioFormat.encoding === "pcm16" ? "pcm16" : "g711_ulaw";
   }
 
   private handleEvent(event: RealtimeEvent): void {
@@ -593,6 +629,20 @@ function readStringField(value: unknown, key: string): string | undefined {
   return typeof raw === "string" && raw.trim() ? raw.trim() : undefined;
 }
 
+function resolveOpenAIRealtimeBrowserOfferHeaders(): Record<string, string> | undefined {
+  const headers = resolveProviderRequestHeaders({
+    provider: "openai",
+    baseUrl: "https://api.openai.com/v1/realtime/calls",
+    capability: "audio",
+    transport: "http",
+    defaultHeaders: {},
+  });
+  const browserHeaders = Object.fromEntries(
+    Object.entries(headers ?? {}).filter(([key]) => key.toLowerCase() !== "user-agent"),
+  );
+  return Object.keys(browserHeaders).length > 0 ? browserHeaders : undefined;
+}
+
 async function createOpenAIRealtimeBrowserSession(
   req: RealtimeVoiceBrowserSessionCreateRequest,
 ): Promise<RealtimeVoiceBrowserSession> {
@@ -624,7 +674,16 @@ async function createOpenAIRealtimeBrowserSession(
     url: "https://api.openai.com/v1/realtime/client_secrets",
     init: {
       method: "POST",
-      headers: {
+      headers: resolveProviderRequestHeaders({
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1/realtime/client_secrets",
+        capability: "audio",
+        transport: "http",
+        defaultHeaders: {
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+        },
+      }) ?? {
         Authorization: `Bearer ${apiKey}`,
         "Content-Type": "application/json",
       },
@@ -654,9 +713,13 @@ async function createOpenAIRealtimeBrowserSession(
     payload && typeof payload === "object"
       ? (payload as Record<string, unknown>).expires_at
       : undefined;
+  const offerHeaders = resolveOpenAIRealtimeBrowserOfferHeaders();
   return {
     provider: "openai",
+    transport: "webrtc-sdp",
     clientSecret,
+    offerUrl: "https://api.openai.com/v1/realtime/calls",
+    ...(offerHeaders ? { offerHeaders } : {}),
     model,
     voice,
     ...(typeof expiresAt === "number" ? { expiresAt } : {}),

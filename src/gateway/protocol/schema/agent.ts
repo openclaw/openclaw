@@ -30,6 +30,7 @@ export const AgentEventSchema = Type.Object(
     seq: Type.Integer({ minimum: 0 }),
     stream: NonEmptyString,
     ts: Type.Integer({ minimum: 0 }),
+    spawnedBy: Type.Optional(NonEmptyString),
     data: Type.Record(Type.String(), Type.Unknown()),
   },
   { additionalProperties: false },
@@ -152,7 +153,13 @@ export const AgentParamsSchema = Type.Object(
     timeout: Type.Optional(Type.Integer({ minimum: 0 })),
     bestEffortDeliver: Type.Optional(Type.Boolean()),
     lane: Type.Optional(Type.String()),
+    // Backward-compatible no-op. Older CLI clients sent this field on gateway
+    // agent requests; the gateway accepts but intentionally ignores it.
     cleanupBundleMcpOnRunEnd: Type.Optional(Type.Boolean()),
+    modelRun: Type.Optional(Type.Boolean()),
+    promptMode: Type.Optional(
+      Type.Union([Type.Literal("full"), Type.Literal("minimal"), Type.Literal("none")]),
+    ),
     extraSystemPrompt: Type.Optional(Type.String()),
     bootstrapContextMode: Type.Optional(
       Type.Union([Type.Literal("full"), Type.Literal("lightweight")]),
@@ -160,8 +167,10 @@ export const AgentParamsSchema = Type.Object(
     bootstrapContextRunKind: Type.Optional(
       Type.Union([Type.Literal("default"), Type.Literal("heartbeat"), Type.Literal("cron")]),
     ),
+    acpTurnSource: Type.Optional(Type.Literal("manual_spawn")),
     internalEvents: Type.Optional(Type.Array(AgentInternalEventSchema)),
     inputProvenance: Type.Optional(InputProvenanceSchema),
+    voiceWakeTrigger: Type.Optional(Type.String()),
     idempotencyKey: NonEmptyString,
     label: Type.Optional(SessionLabelString),
   },

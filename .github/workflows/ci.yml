@@ -1,6 +1,18 @@
 name: CI
 
 on:
+  workflow_dispatch:
+    inputs:
+      target_ref:
+        description: Optional branch, tag, or full commit SHA to validate instead of the workflow ref
+        required: false
+        default: ""
+        type: string
+      include_android:
+        description: Run Android lanes for this manual CI dispatch.
+        required: false
+        default: false
+        type: boolean
   push:
     branches: [main]
     paths-ignore:
@@ -13,8 +25,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.event_name == 'pull_request' && format('{0}-v7-{1}', github.workflow, github.event.pull_request.number) || (github.repository == 'openclaw/openclaw' && format('{0}-v7-{1}', github.workflow, github.ref) || format('{0}-v7-{1}-{2}', github.workflow, github.ref, github.sha)) }}
-  cancel-in-progress: true
+  group: ${{ github.event_name == 'workflow_dispatch' && format('{0}-manual-v1-{1}', github.workflow, github.run_id) || (github.event_name == 'pull_request' && format('{0}-v7-{1}', github.workflow, github.event.pull_request.number) || (github.repository == 'openclaw/openclaw' && format('{0}-v7-{1}', github.workflow, github.ref) || format('{0}-v7-{1}-{2}', github.workflow, github.ref, github.sha))) }}
+  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
@@ -29,6 +41,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     outputs:
+      checkout_revision: ${{ steps.checkout_ref.outputs.sha }}
       docs_only: ${{ steps.manifest.outputs.docs_only }}
       docs_changed: ${{ steps.manifest.outputs.docs_changed }}
       run_node: ${{ steps.manifest.outputs.run_node }}
@@ -37,22 +50,19 @@ jobs:
       run_skills_python: ${{ steps.manifest.outputs.run_skills_python }}
       run_skills_python_job: ${{ steps.manifest.outputs.run_skills_python_job }}
       run_windows: ${{ steps.manifest.outputs.run_windows }}
-      has_changed_extensions: ${{ steps.manifest.outputs.has_changed_extensions }}
-      changed_extensions_matrix: ${{ steps.manifest.outputs.changed_extensions_matrix }}
       run_build_artifacts: ${{ steps.manifest.outputs.run_build_artifacts }}
       run_checks_fast_core: ${{ steps.manifest.outputs.run_checks_fast_core }}
       run_checks_fast: ${{ steps.manifest.outputs.run_checks_fast }}
       checks_fast_core_matrix: ${{ steps.manifest.outputs.checks_fast_core_matrix }}
+      run_plugin_contracts_shards: ${{ steps.manifest.outputs.run_plugin_contracts_shards }}
+      plugin_contracts_matrix: ${{ steps.manifest.outputs.plugin_contracts_matrix }}
       channel_contracts_matrix: ${{ steps.manifest.outputs.channel_contracts_matrix }}
-      checks_node_extensions_matrix: ${{ steps.manifest.outputs.checks_node_extensions_matrix }}
       run_checks: ${{ steps.manifest.outputs.run_checks }}
       checks_matrix: ${{ steps.manifest.outputs.checks_matrix }}
       run_checks_node_core_nondist: ${{ steps.manifest.outputs.run_checks_node_core_nondist }}
       checks_node_core_nondist_matrix: ${{ steps.manifest.outputs.checks_node_core_nondist_matrix }}
       run_checks_node_core_dist: ${{ steps.manifest.outputs.run_checks_node_core_dist }}
       checks_node_core_dist_matrix: ${{ steps.manifest.outputs.checks_node_core_dist_matrix }}
-      run_extension_fast: ${{ steps.manifest.outputs.run_extension_fast }}
-      extension_fast_matrix: ${{ steps.manifest.outputs.extension_fast_matrix }}
       run_check: ${{ steps.manifest.outputs.run_check }}
       run_check_additional: ${{ steps.manifest.outputs.run_check_additional }}
       run_build_smoke: ${{ steps.manifest.outputs.run_build_smoke }}
@@ -69,12 +79,18 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
+          ref: ${{ inputs.target_ref || github.sha }}
           fetch-depth: 1
           fetch-tags: false
           persist-credentials: false
           submodules: false
 
+      - name: Resolve checkout SHA
+        id: checkout_ref
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
       - name: Ensure preflight base commit
+        if: github.event_name != 'workflow_dispatch'
         uses: ./.github/actions/ensure-base-commit
         with:
           base-sha: ${{ github.event_name == 'push' && github.event.before || github.event.pull_request.base.sha }}
@@ -82,11 +98,12 @@ jobs:
 
       - name: Detect docs-only changes
         id: docs_scope
+        if: github.event_name != 'workflow_dispatch'
         uses: ./.github/actions/detect-docs-changes
 
       - name: Detect changed scopes
         id: changed_scope
-        if: steps.docs_scope.outputs.docs_only != 'true'
+        if: github.event_name != 'workflow_dispatch' && steps.docs_scope.outputs.docs_only != 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -99,45 +116,21 @@ jobs:
 
           node scripts/ci-changed-scope.mjs --base "$BASE" --head HEAD
 
-      - name: Detect changed extensions
-        id: changed_extensions
-        if: steps.docs_scope.outputs.docs_only != 'true' && steps.changed_scope.outputs.run_node == 'true'
-        env:
-          BASE_SHA: ${{ github.event_name == 'push' && github.event.before || github.event.pull_request.base.sha }}
-          BASE_REF: ${{ github.event_name == 'push' && github.ref_name || github.event.pull_request.base.ref }}
-        run: |
-          node --input-type=module <<'EOF'
-          import { appendFileSync } from "node:fs";
-          import { listChangedExtensionIds } from "./scripts/lib/changed-extensions.mjs";
-
-          const extensionIds = listChangedExtensionIds({
-            base: process.env.BASE_SHA,
-            head: "HEAD",
-            fallbackBaseRef: process.env.BASE_REF,
-            unavailableBaseBehavior: "all",
-          });
-          const matrix = JSON.stringify({ include: extensionIds.map((extension) => ({ extension })) });
-
-          appendFileSync(process.env.GITHUB_OUTPUT, `has_changed_extensions=${extensionIds.length > 0}\n`, "utf8");
-          appendFileSync(process.env.GITHUB_OUTPUT, `changed_extensions_matrix=${matrix}\n`, "utf8");
-          EOF
-
       - name: Build CI manifest
         id: manifest
         env:
-          OPENCLAW_CI_DOCS_ONLY: ${{ steps.docs_scope.outputs.docs_only }}
-          OPENCLAW_CI_DOCS_CHANGED: ${{ steps.docs_scope.outputs.docs_changed }}
-          OPENCLAW_CI_RUN_NODE: ${{ steps.changed_scope.outputs.run_node || 'false' }}
-          OPENCLAW_CI_RUN_MACOS: ${{ steps.changed_scope.outputs.run_macos || 'false' }}
-          OPENCLAW_CI_RUN_ANDROID: ${{ steps.changed_scope.outputs.run_android || 'false' }}
-          OPENCLAW_CI_RUN_WINDOWS: ${{ steps.changed_scope.outputs.run_windows || 'false' }}
-          OPENCLAW_CI_RUN_NODE_FAST_ONLY: ${{ steps.changed_scope.outputs.run_node_fast_only || 'false' }}
-          OPENCLAW_CI_RUN_NODE_FAST_PLUGIN_CONTRACTS: ${{ steps.changed_scope.outputs.run_node_fast_plugin_contracts || 'false' }}
-          OPENCLAW_CI_RUN_NODE_FAST_CI_ROUTING: ${{ steps.changed_scope.outputs.run_node_fast_ci_routing || 'false' }}
-          OPENCLAW_CI_RUN_SKILLS_PYTHON: ${{ steps.changed_scope.outputs.run_skills_python || 'false' }}
-          OPENCLAW_CI_RUN_CONTROL_UI_I18N: ${{ steps.changed_scope.outputs.run_control_ui_i18n || 'false' }}
-          OPENCLAW_CI_HAS_CHANGED_EXTENSIONS: ${{ steps.changed_extensions.outputs.has_changed_extensions || 'false' }}
-          OPENCLAW_CI_CHANGED_EXTENSIONS_MATRIX: ${{ steps.changed_extensions.outputs.changed_extensions_matrix || '{"include":[]}' }}
+          OPENCLAW_CI_DOCS_ONLY: ${{ github.event_name == 'workflow_dispatch' && 'false' || steps.docs_scope.outputs.docs_only }}
+          OPENCLAW_CI_DOCS_CHANGED: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.docs_scope.outputs.docs_changed }}
+          OPENCLAW_CI_RUN_NODE: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_node || 'false' }}
+          OPENCLAW_CI_RUN_MACOS: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_macos || 'false' }}
+          OPENCLAW_CI_RUN_ANDROID: ${{ github.event_name == 'workflow_dispatch' && inputs.include_android && 'true' || steps.changed_scope.outputs.run_android || 'false' }}
+          OPENCLAW_CI_RUN_WINDOWS: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_windows || 'false' }}
+          OPENCLAW_CI_RUN_NODE_FAST_ONLY: ${{ github.event_name == 'workflow_dispatch' && 'false' || steps.changed_scope.outputs.run_node_fast_only || 'false' }}
+          OPENCLAW_CI_RUN_NODE_FAST_PLUGIN_CONTRACTS: ${{ github.event_name == 'workflow_dispatch' && 'false' || steps.changed_scope.outputs.run_node_fast_plugin_contracts || 'false' }}
+          OPENCLAW_CI_RUN_NODE_FAST_CI_ROUTING: ${{ github.event_name == 'workflow_dispatch' && 'false' || steps.changed_scope.outputs.run_node_fast_ci_routing || 'false' }}
+          OPENCLAW_CI_RUN_SKILLS_PYTHON: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_skills_python || 'false' }}
+          OPENCLAW_CI_RUN_CONTROL_UI_I18N: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_control_ui_i18n || 'false' }}
+          OPENCLAW_CI_CHECKOUT_REVISION: ${{ steps.checkout_ref.outputs.sha }}
           OPENCLAW_CI_REPOSITORY: ${{ github.repository }}
         run: |
           node --input-type=module <<'EOF'
@@ -148,10 +141,6 @@ jobs:
           import {
             createChannelContractTestShards,
           } from "./scripts/lib/channel-contract-test-plan.mjs";
-          import {
-            createExtensionTestShards,
-            DEFAULT_EXTENSION_TEST_SHARD_COUNT,
-          } from "./scripts/lib/extension-test-plan.mjs";
 
           const parseBoolean = (value, fallback = false) => {
             if (value === undefined) return fallback;
@@ -161,18 +150,26 @@ jobs:
             return fallback;
           };
 
-          const parseJson = (value, fallback) => {
-            try {
-              return value ? JSON.parse(value) : fallback;
-            } catch {
-              return fallback;
+          const { createPluginContractTestShards } = await import(
+            "./scripts/lib/plugin-contract-test-plan.mjs"
+          ).catch((error) => {
+            if (error?.code !== "ERR_MODULE_NOT_FOUND") {
+              throw error;
             }
-          };
+            return {
+              createPluginContractTestShards: () => [
+                {
+                  checkName: "checks-fast-contracts-plugins-legacy",
+                  includePatterns: ["src/plugins/contracts/**/*.test.ts"],
+                  runtime: "node",
+                  task: "contracts-plugins",
+                },
+              ],
+            };
+          });
 
           const createMatrix = (include) => ({ include });
           const outputPath = process.env.GITHUB_OUTPUT;
-          const eventName = process.env.GITHUB_EVENT_NAME ?? "pull_request";
-          const isPush = eventName === "push";
           const isCanonicalRepository = process.env.OPENCLAW_CI_REPOSITORY === "openclaw/openclaw";
           const docsOnly = parseBoolean(process.env.OPENCLAW_CI_DOCS_ONLY);
           const docsChanged = parseBoolean(process.env.OPENCLAW_CI_DOCS_CHANGED);
@@ -184,7 +181,7 @@ jobs:
             runNode && parseBoolean(process.env.OPENCLAW_CI_RUN_NODE_FAST_PLUGIN_CONTRACTS);
           const runNodeFastCiRouting =
             runNode && parseBoolean(process.env.OPENCLAW_CI_RUN_NODE_FAST_CI_ROUTING);
-          const runChecksFastCore = runNodeFull || runNodeFastPluginContracts || runNodeFastCiRouting;
+          const runPluginContractShards = runNodeFull || runNodeFastPluginContracts;
           const runMacos =
             parseBoolean(process.env.OPENCLAW_CI_RUN_MACOS) && !docsOnly && isCanonicalRepository;
           const runAndroid =
@@ -197,49 +194,13 @@ jobs:
           const runSkillsPython = parseBoolean(process.env.OPENCLAW_CI_RUN_SKILLS_PYTHON) && !docsOnly;
           const runControlUiI18n =
             parseBoolean(process.env.OPENCLAW_CI_RUN_CONTROL_UI_I18N) && !docsOnly;
-          const hasChangedExtensions =
-            parseBoolean(process.env.OPENCLAW_CI_HAS_CHANGED_EXTENSIONS) && !docsOnly;
-          const changedExtensionsMatrix = hasChangedExtensions
-            ? parseJson(process.env.OPENCLAW_CI_CHANGED_EXTENSIONS_MATRIX, { include: [] })
-            : { include: [] };
-          const extensionTestShardCount = isCanonicalRepository
-            ? DEFAULT_EXTENSION_TEST_SHARD_COUNT
-            : Math.max(DEFAULT_EXTENSION_TEST_SHARD_COUNT, 36);
-          const extensionShardMatrix = createMatrix(
-            runNodeFull
-              ? createExtensionTestShards({
-                  shardCount: extensionTestShardCount,
-                }).map((shard) => ({
-                  check_name: shard.checkName,
-                  extensions_csv: shard.extensionIds.join(","),
-                  runner: isCanonicalRepository && [0, 3, 4].includes(shard.index)
-                    ? "blacksmith-8vcpu-ubuntu-2404"
-                    : isCanonicalRepository
-                      ? "blacksmith-4vcpu-ubuntu-2404"
-                      : "ubuntu-24.04",
-                  shard_index: shard.index + 1,
-                  task: "extensions-batch",
-                }))
-              : [],
-          );
           const checksFastCoreTasks = [];
           if (runNodeFull) {
             checksFastCoreTasks.push(
               { check_name: "checks-fast-bundled", runtime: "node", task: "bundled" },
-              {
-                check_name: "checks-fast-contracts-plugins",
-                runtime: "node",
-                task: "contracts-plugins",
-              },
             );
           } else {
-            if (runNodeFastPluginContracts) {
-              checksFastCoreTasks.push({
-                check_name: "checks-fast-contracts-plugins",
-                runtime: "node",
-                task: runNodeFastCiRouting ? "contracts-plugins-ci-routing" : "contracts-plugins",
-              });
-            } else if (runNodeFastCiRouting) {
+            if (runNodeFastCiRouting) {
               checksFastCoreTasks.push({
                 check_name: "checks-fast-ci-routing",
                 runtime: "node",
@@ -249,7 +210,9 @@ jobs:
           }
 
           const nodeTestShards = runNodeFull
-            ? createNodeTestShards().map((shard) => ({
+            ? createNodeTestShards({
+                includeReleaseOnlyPluginShards: false,
+              }).map((shard) => ({
                 check_name: shard.checkName,
                 runtime: "node",
                 task: "test-shard",
@@ -271,16 +234,17 @@ jobs:
             run_android: runAndroid,
             run_skills_python: runSkillsPython,
             run_windows: runWindows,
-            has_changed_extensions: hasChangedExtensions,
-            changed_extensions_matrix: changedExtensionsMatrix,
             run_build_artifacts: runNodeFull,
-            run_checks_fast_core: runChecksFastCore,
+            run_checks_fast_core: checksFastCoreTasks.length > 0,
             run_checks_fast: runNodeFull,
             checks_fast_core_matrix: createMatrix(checksFastCoreTasks),
+            run_plugin_contracts_shards: runPluginContractShards,
+            plugin_contracts_matrix: createMatrix(
+              runPluginContractShards ? createPluginContractTestShards() : [],
+            ),
             channel_contracts_matrix: createMatrix(
               runNodeFull ? createChannelContractTestShards() : [],
             ),
-            checks_node_extensions_matrix: extensionShardMatrix,
             run_checks: runNodeFull,
             checks_matrix: createMatrix(
               runNodeFull
@@ -293,15 +257,6 @@ jobs:
             checks_node_core_nondist_matrix: createMatrix(nodeTestNonDistShards),
             run_checks_node_core_dist: nodeTestDistShards.length > 0,
             checks_node_core_dist_matrix: createMatrix(nodeTestDistShards),
-            run_extension_fast: hasChangedExtensions && !isPush,
-            extension_fast_matrix: createMatrix(
-              hasChangedExtensions && !isPush
-                ? (changedExtensionsMatrix.include ?? []).map((entry) => ({
-                    check_name: `extension-fast-${entry.extension}`,
-                    extension: entry.extension,
-                  }))
-                : [],
-            ),
             run_check: runNodeFull,
             run_check_additional: runNodeFull,
             run_build_smoke: runNodeFull,
@@ -354,12 +309,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
+          ref: ${{ inputs.target_ref || github.sha }}
           fetch-depth: 1
           fetch-tags: false
           persist-credentials: false
           submodules: false
 
       - name: Ensure security base commit
+        if: github.event_name != 'workflow_dispatch'
         uses: ./.github/actions/ensure-base-commit
         with:
           base-sha: ${{ github.event_name == 'push' && github.event.before || github.event.pull_request.base.sha }}
@@ -443,6 +400,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
+          ref: ${{ inputs.target_ref || github.sha }}
           fetch-depth: 1
           fetch-tags: false
           persist-credentials: false
@@ -505,7 +463,7 @@ jobs:
         shell: bash
         env:
           CHECKOUT_REPO: ${{ github.repository }}
-          CHECKOUT_SHA: ${{ github.sha }}
+          CHECKOUT_SHA: ${{ needs.preflight.outputs.checkout_revision }}
           CHECKOUT_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
@@ -577,7 +535,7 @@ jobs:
           path: |
             dist/
             dist-runtime/
-          key: ${{ runner.os }}-dist-build-${{ github.sha }}
+          key: ${{ runner.os }}-dist-build-${{ needs.preflight.outputs.checkout_revision }}
 
       - name: Pack built runtime artifacts
         run: tar --posix -cf dist-runtime-build.tar.zst --use-compress-program zstdmt dist dist-runtime
@@ -706,7 +664,7 @@ jobs:
         shell: bash
         env:
           CHECKOUT_REPO: ${{ github.repository }}
-          CHECKOUT_SHA: ${{ github.sha }}
+          CHECKOUT_SHA: ${{ needs.preflight.outputs.checkout_revision }}
           CHECKOUT_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
@@ -785,6 +743,112 @@ jobs:
               ;;
           esac
 
+  checks-fast-plugin-contracts-shard:
+    permissions:
+      contents: read
+    name: ${{ matrix.checkName }}
+    needs: [preflight]
+    if: needs.preflight.outputs.run_plugin_contracts_shards == 'true'
+    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.preflight.outputs.plugin_contracts_matrix) }}
+    steps:
+      - name: Checkout
+        shell: bash
+        env:
+          CHECKOUT_REPO: ${{ github.repository }}
+          CHECKOUT_SHA: ${{ needs.preflight.outputs.checkout_revision }}
+          CHECKOUT_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          workdir="$GITHUB_WORKSPACE"
+          auth_header="$(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+
+          reset_checkout_dir() {
+            mkdir -p "$workdir"
+            find "$workdir" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+          }
+
+          checkout_attempt() {
+            local attempt="$1"
+
+            reset_checkout_dir
+            git init "$workdir" >/dev/null
+            git config --global --add safe.directory "$workdir"
+            git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}"
+            git -C "$workdir" config gc.auto 0
+
+            timeout --signal=TERM 30s git -C "$workdir" \
+              -c protocol.version=2 \
+              -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
+              fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
+              "+${CHECKOUT_SHA}:refs/remotes/origin/ci-target" || return 1
+
+            git -C "$workdir" checkout --force --detach "$CHECKOUT_SHA" || return 1
+            test -f "$workdir/.github/actions/setup-node-env/action.yml" || return 1
+            echo "checkout attempt ${attempt}/5 succeeded"
+          }
+
+          for attempt in 1 2 3 4 5; do
+            if checkout_attempt "$attempt"; then
+              exit 0
+            fi
+            echo "checkout attempt ${attempt}/5 failed"
+            sleep $((attempt * 5))
+          done
+
+          echo "checkout failed after 5 attempts" >&2
+          exit 1
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+
+      - name: Run plugin contract shard
+        env:
+          OPENCLAW_CONTRACT_INCLUDE_PATTERNS_JSON: ${{ toJson(matrix.includePatterns) }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          include_file="$RUNNER_TEMP/plugin-contract-include.json"
+          INCLUDE_FILE="$include_file" node --input-type=module <<'EOF'
+          import { writeFileSync } from "node:fs";
+
+          const includePatterns = JSON.parse(process.env.OPENCLAW_CONTRACT_INCLUDE_PATTERNS_JSON ?? "[]");
+          if (!Array.isArray(includePatterns) || includePatterns.length === 0) {
+            console.error("Missing plugin contract include patterns");
+            process.exit(1);
+          }
+          writeFileSync(process.env.INCLUDE_FILE, JSON.stringify(includePatterns), "utf8");
+          EOF
+          OPENCLAW_VITEST_INCLUDE_FILE="$include_file" pnpm test:contracts:plugins
+
+  checks-fast-plugin-contracts:
+    permissions:
+      contents: read
+    name: checks-fast-contracts-plugins
+    needs: [preflight, checks-fast-plugin-contracts-shard]
+    if: ${{ !cancelled() && always() && needs.preflight.outputs.run_plugin_contracts_shards == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Verify plugin contract shards
+        env:
+          SHARD_RESULT: ${{ needs.checks-fast-plugin-contracts-shard.result }}
+        run: |
+          if [ "$SHARD_RESULT" = "cancelled" ]; then
+            echo "Plugin contract shards were cancelled, usually because a newer commit superseded this run." >&2
+            exit 1
+          fi
+          if [ "$SHARD_RESULT" != "success" ]; then
+            echo "Plugin contract shards failed: $SHARD_RESULT" >&2
+            exit 1
+          fi
+
   checks-fast-channel-contracts-shard:
     permissions:
       contents: read
@@ -801,7 +865,7 @@ jobs:
         shell: bash
         env:
           CHECKOUT_REPO: ${{ github.repository }}
-          CHECKOUT_SHA: ${{ github.sha }}
+          CHECKOUT_SHA: ${{ needs.preflight.outputs.checkout_revision }}
           CHECKOUT_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
@@ -904,7 +968,7 @@ jobs:
         shell: bash
         env:
           CHECKOUT_REPO: ${{ github.repository }}
-          CHECKOUT_SHA: ${{ github.sha }}
+          CHECKOUT_SHA: ${{ needs.preflight.outputs.checkout_revision }}
           CHECKOUT_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
@@ -956,97 +1020,6 @@ jobs:
       - name: Run protocol check
         run: pnpm protocol:check
 
-  checks-node-extensions-shard:
-    permissions:
-      contents: read
-    name: ${{ matrix.check_name }}
-    needs: [preflight]
-    if: needs.preflight.outputs.run_checks_fast == 'true'
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 60
-    strategy:
-      fail-fast: false
-      matrix: ${{ fromJson(needs.preflight.outputs.checks_node_extensions_matrix) }}
-    steps:
-      - name: Checkout
-        shell: bash
-        env:
-          CHECKOUT_REPO: ${{ github.repository }}
-          CHECKOUT_SHA: ${{ github.sha }}
-          CHECKOUT_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-
-          workdir="$GITHUB_WORKSPACE"
-          auth_header="$(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
-
-          reset_checkout_dir() {
-            mkdir -p "$workdir"
-            find "$workdir" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
-          }
-
-          checkout_attempt() {
-            local attempt="$1"
-
-            reset_checkout_dir
-            git init "$workdir" >/dev/null
-            git config --global --add safe.directory "$workdir"
-            git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}"
-            git -C "$workdir" config gc.auto 0
-
-            timeout --signal=TERM 30s git -C "$workdir" \
-              -c protocol.version=2 \
-              -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
-              fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
-              "+${CHECKOUT_SHA}:refs/remotes/origin/ci-target" || return 1
-
-            git -C "$workdir" checkout --force --detach "$CHECKOUT_SHA" || return 1
-            test -f "$workdir/.github/actions/setup-node-env/action.yml" || return 1
-            echo "checkout attempt ${attempt}/5 succeeded"
-          }
-
-          for attempt in 1 2 3 4 5; do
-            if checkout_attempt "$attempt"; then
-              exit 0
-            fi
-            echo "checkout attempt ${attempt}/5 failed"
-            sleep $((attempt * 5))
-          done
-
-          echo "checkout failed after 5 attempts" >&2
-          exit 1
-
-      - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
-        with:
-          install-bun: "false"
-
-      - name: Run extension shard
-        env:
-          NODE_OPTIONS: --max-old-space-size=6144
-          OPENCLAW_EXTENSION_BATCH_PARALLEL: 2
-          OPENCLAW_VITEST_MAX_WORKERS: 1
-          OPENCLAW_EXTENSION_BATCH: ${{ matrix.extensions_csv }}
-        run: pnpm test:extensions:batch -- "$OPENCLAW_EXTENSION_BATCH"
-
-  checks-node-extensions:
-    permissions:
-      contents: read
-    name: checks-node-extensions
-    needs: [preflight, checks-node-extensions-shard]
-    if: ${{ !cancelled() && always() && needs.preflight.outputs.run_checks_fast == 'true' }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    steps:
-      - name: Verify extension shards
-        env:
-          SHARD_RESULT: ${{ needs.checks-node-extensions-shard.result }}
-        run: |
-          if [ "$SHARD_RESULT" != "success" ]; then
-            echo "Extension shard checks failed: $SHARD_RESULT" >&2
-            exit 1
-          fi
-
   checks:
     permissions:
       contents: read
@@ -1084,7 +1057,7 @@ jobs:
       contents: read
     name: checks-node-compat-node22
     needs: [preflight]
-    if: needs.preflight.outputs.run_build_artifacts == 'true' && github.event_name == 'push'
+    if: needs.preflight.outputs.run_build_artifacts == 'true' && github.event_name == 'workflow_dispatch'
     runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
     timeout-minutes: 60
     steps:
@@ -1092,7 +1065,7 @@ jobs:
         shell: bash
         env:
           CHECKOUT_REPO: ${{ github.repository }}
-          CHECKOUT_SHA: ${{ github.sha }}
+          CHECKOUT_SHA: ${{ needs.preflight.outputs.checkout_revision }}
           CHECKOUT_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
@@ -1172,7 +1145,7 @@ jobs:
         shell: bash
         env:
           CHECKOUT_REPO: ${{ github.repository }}
-          CHECKOUT_SHA: ${{ github.sha }}
+          CHECKOUT_SHA: ${{ needs.preflight.outputs.checkout_revision }}
           CHECKOUT_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
@@ -1231,6 +1204,7 @@ jobs:
           NODE_OPTIONS: --max-old-space-size=6144
           OPENCLAW_NODE_TEST_CONFIGS_JSON: ${{ toJson(matrix.configs) }}
           OPENCLAW_NODE_TEST_INCLUDE_PATTERNS_JSON: ${{ toJson(matrix.includePatterns) }}
+          OPENCLAW_VITEST_SHARD_NAME: ${{ matrix.shard_name }}
           OPENCLAW_TEST_PROJECTS_PARALLEL: "2"
         shell: bash
         run: |
@@ -1322,84 +1296,6 @@ jobs:
             exit 1
           fi
 
-  extension-fast:
-    permissions:
-      contents: read
-    name: "extension-fast"
-    needs: [preflight]
-    if: needs.preflight.outputs.run_extension_fast == 'true'
-    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-8vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
-    timeout-minutes: 60
-    strategy:
-      fail-fast: false
-      matrix: ${{ fromJson(needs.preflight.outputs.extension_fast_matrix) }}
-    steps:
-      - name: Checkout
-        shell: bash
-        env:
-          CHECKOUT_REPO: ${{ github.repository }}
-          CHECKOUT_SHA: ${{ github.sha }}
-          CHECKOUT_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-
-          workdir="$GITHUB_WORKSPACE"
-          auth_header="$(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
-
-          reset_checkout_dir() {
-            mkdir -p "$workdir"
-            find "$workdir" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
-          }
-
-          checkout_attempt() {
-            local attempt="$1"
-
-            reset_checkout_dir
-            git init "$workdir" >/dev/null
-            git config --global --add safe.directory "$workdir"
-            git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}"
-            git -C "$workdir" config gc.auto 0
-
-            timeout --signal=TERM 30s git -C "$workdir" \
-              -c protocol.version=2 \
-              -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
-              fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
-              "+${CHECKOUT_SHA}:refs/remotes/origin/ci-target" || return 1
-
-            git -C "$workdir" checkout --force --detach "$CHECKOUT_SHA" || return 1
-            test -f "$workdir/.github/actions/setup-node-env/action.yml" || return 1
-            echo "checkout attempt ${attempt}/5 succeeded"
-          }
-
-          for attempt in 1 2 3 4 5; do
-            if checkout_attempt "$attempt"; then
-              exit 0
-            fi
-            echo "checkout attempt ${attempt}/5 failed"
-            sleep $((attempt * 5))
-          done
-
-          echo "checkout failed after 5 attempts" >&2
-          exit 1
-
-      - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
-        with:
-          install-bun: "false"
-
-      - name: Run changed extension tests
-        env:
-          OPENCLAW_CHANGED_EXTENSION: ${{ matrix.extension }}
-        run: |
-          set -euo pipefail
-          if [ "$OPENCLAW_CHANGED_EXTENSION" = "telegram" ]; then
-            export OPENCLAW_VITEST_MAX_WORKERS=1
-            export NODE_OPTIONS="${NODE_OPTIONS:+$NODE_OPTIONS }--max-old-space-size=6144"
-            pnpm test:extension "$OPENCLAW_CHANGED_EXTENSION" -- --pool=forks
-            exit 0
-          fi
-          pnpm test:extension "$OPENCLAW_CHANGED_EXTENSION"
-
   # Types, lint, and format check shards.
   check-shard:
     permissions:
@@ -1422,6 +1318,9 @@ jobs:
           - check_name: check-lint
             task: lint
             runner: blacksmith-16vcpu-ubuntu-2404
+          - check_name: check-dependencies
+            task: dependencies
+            runner: ubuntu-24.04
           - check_name: check-policy-guards
             task: policy-guards
             runner: ubuntu-24.04
@@ -1436,7 +1335,7 @@ jobs:
         shell: bash
         env:
           CHECKOUT_REPO: ${{ github.repository }}
-          CHECKOUT_SHA: ${{ github.sha }}
+          CHECKOUT_SHA: ${{ needs.preflight.outputs.checkout_revision }}
           CHECKOUT_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
@@ -1497,12 +1396,21 @@ jobs:
               pnpm check:no-conflict-markers
               pnpm tool-display:check
               pnpm check:host-env-policy:swift
+              pnpm dup:check:coverage
               ;;
             prod-types)
               pnpm tsgo:prod
               ;;
             lint)
               pnpm lint --threads=8
+              ;;
+            dependencies)
+              if pnpm run --silent 2>/dev/null | grep -q '^  deadcode:dependencies$'; then
+                pnpm deadcode:dependencies
+                pnpm deadcode:unused-files
+              else
+                pnpm deadcode:ci
+              fi
               ;;
             policy-guards)
               pnpm lint:webhook:no-low-level-body-read
@@ -1568,7 +1476,7 @@ jobs:
         shell: bash
         env:
           CHECKOUT_REPO: ${{ github.repository }}
-          CHECKOUT_SHA: ${{ github.sha }}
+          CHECKOUT_SHA: ${{ needs.preflight.outputs.checkout_revision }}
           CHECKOUT_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
@@ -1766,7 +1674,7 @@ jobs:
         shell: bash
         env:
           CHECKOUT_REPO: ${{ github.repository }}
-          CHECKOUT_SHA: ${{ github.sha }}
+          CHECKOUT_SHA: ${{ needs.preflight.outputs.checkout_revision }}
           CHECKOUT_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
@@ -1829,6 +1737,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
+          ref: ${{ needs.preflight.outputs.checkout_revision }}
           persist-credentials: false
           submodules: false
 
@@ -1871,6 +1780,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
+          ref: ${{ needs.preflight.outputs.checkout_revision }}
           persist-credentials: false
           submodules: false
 
@@ -1975,6 +1885,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
+          ref: ${{ needs.preflight.outputs.checkout_revision }}
           persist-credentials: false
           submodules: false
 
@@ -2015,6 +1926,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
+          ref: ${{ needs.preflight.outputs.checkout_revision }}
           persist-credentials: false
           submodules: false
 
@@ -2115,7 +2027,7 @@ jobs:
         shell: bash
         env:
           CHECKOUT_REPO: ${{ github.repository }}
-          CHECKOUT_SHA: ${{ github.sha }}
+          CHECKOUT_SHA: ${{ needs.preflight.outputs.checkout_revision }}
           CHECKOUT_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
@@ -2171,6 +2083,14 @@ jobs:
             apps/android/**/gradle-wrapper.properties
             apps/android/gradle/libs.versions.toml
 
+      - name: Cache Android SDK
+        uses: actions/cache@v5
+        with:
+          path: ~/.android-sdk
+          key: ${{ runner.os }}-android-sdk-v1-cmdline-12266719-platform-36-build-tools-36.0.0
+          restore-keys: |
+            ${{ runner.os }}-android-sdk-v1-
+
       - name: Setup Android SDK cmdline-tools
         run: |
           set -euo pipefail
@@ -2179,11 +2099,13 @@ jobs:
           ARCHIVE="commandlinetools-linux-${CMDLINE_TOOLS_VERSION}_latest.zip"
           URL="https://dl.google.com/android/repository/${ARCHIVE}"
 
-          mkdir -p "$ANDROID_SDK_ROOT/cmdline-tools"
-          curl -fsSL "$URL" -o "/tmp/${ARCHIVE}"
-          rm -rf "$ANDROID_SDK_ROOT/cmdline-tools/latest"
-          unzip -q "/tmp/${ARCHIVE}" -d "$ANDROID_SDK_ROOT/cmdline-tools"
-          mv "$ANDROID_SDK_ROOT/cmdline-tools/cmdline-tools" "$ANDROID_SDK_ROOT/cmdline-tools/latest"
+          if [ ! -x "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" ]; then
+            mkdir -p "$ANDROID_SDK_ROOT/cmdline-tools"
+            curl -fsSL "$URL" -o "/tmp/${ARCHIVE}"
+            rm -rf "$ANDROID_SDK_ROOT/cmdline-tools/latest"
+            unzip -q "/tmp/${ARCHIVE}" -d "$ANDROID_SDK_ROOT/cmdline-tools"
+            mv "$ANDROID_SDK_ROOT/cmdline-tools/cmdline-tools" "$ANDROID_SDK_ROOT/cmdline-tools/latest"
+          fi
 
           echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT" >> "$GITHUB_ENV"
           echo "ANDROID_HOME=$ANDROID_SDK_ROOT" >> "$GITHUB_ENV"
