@@ -14,6 +14,7 @@ import {
   type OutboundDeliveryResult,
   type OutboundSendDeps,
 } from "./deliver.js";
+import type { HermesArbiterMetadata } from "./hermes-arbiter-metadata.js";
 import type { OutboundMirror } from "./mirror.js";
 import {
   createOutboundPayloadPlan,
@@ -80,6 +81,8 @@ type MessageSendParams = {
   gateway?: MessageGatewayOptions;
   idempotencyKey?: string;
   mirror?: OutboundMirror;
+  /** Optional Hermes arbiter metadata. Forwarded only through gateway delivery. */
+  hermesArbiter?: HermesArbiterMetadata;
   abortSignal?: AbortSignal;
   silent?: boolean;
 };
@@ -337,6 +340,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
       replyToId: params.replyToId,
       sessionKey: params.mirror?.sessionKey,
       idempotencyKey: await resolveGatewayIdempotencyKey(params.idempotencyKey),
+      ...(params.hermesArbiter ? { metadata: params.hermesArbiter } : {}),
     },
   });
 
