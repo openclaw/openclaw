@@ -66,6 +66,15 @@ type SecretResolutionSource =
   | WebSearchCredentialResolutionSource
   | WebFetchCredentialResolutionSource;
 
+function hasNestedObjectFields(record: Record<string, unknown>): boolean {
+  for (const value of Object.values(record)) {
+    if (value !== null && typeof value === "object") {
+      return true;
+    }
+  }
+  return false;
+}
+
 function hasPluginScopedWebToolConfig(
   config: OpenClawConfig,
   key: "webSearch" | "webFetch",
@@ -549,6 +558,21 @@ export async function resolveRuntimeWebTools(params: {
   }
   const search = isRecord(sourceWeb?.search) ? sourceWeb.search : undefined;
   const fetch = isRecord(sourceWeb?.fetch) ? (sourceWeb.fetch as FetchConfig) : undefined;
+  // Provider discovery must not block gateway startup when a tool surface is
+  // explicitly disabled and has nothing to resolve. We still run discovery
+  // when the tool config carries credentials (nested objects such as
+  // `firecrawl: { apiKey: ... }`) so SecretRef warnings remain accurate, and
+  // when any plugin owns a scoped config for that surface.
+  const searchSurfaceCanSkip =
+    isRecord(search) &&
+    search.enabled === false &&
+    !hasPluginWebSearchConfig &&
+    !hasNestedObjectFields(search);
+  const fetchSurfaceCanSkip =
+    isRecord(fetch) &&
+    fetch.enabled === false &&
+    !hasPluginWebFetchConfig &&
+    !hasNestedObjectFields(fetch);
   if (!search && !fetch && !hasPluginWebSearchConfig && !hasPluginWebFetchConfig) {
     return {
       search: {
@@ -581,7 +605,7 @@ export async function resolveRuntimeWebTools(params: {
     providerSource: "none",
     diagnostics: [],
   };
-  if (search || hasPluginWebSearchConfig) {
+  if ((search || hasPluginWebSearchConfig) && !searchSurfaceCanSkip) {
     const searchSurface = await resolveRuntimeWebProviderSurface({
       contract: "webSearchProviders",
       rawProvider,
@@ -679,7 +703,7 @@ export async function resolveRuntimeWebTools(params: {
     providerSource: "none",
     diagnostics: [],
   };
-  if (fetch || hasPluginWebFetchConfig) {
+  if ((fetch || hasPluginWebFetchConfig) && !fetchSurfaceCanSkip) {
     const fetchSurface = await resolveRuntimeWebProviderSurface({
       contract: "webFetchProviders",
       rawProvider: rawFetchProvider,

@@ -416,6 +416,86 @@ describe("runtime web tools resolution", () => {
     expect(resolvePluginWebFetchProvidersMock).not.toHaveBeenCalled();
   });
 
+  it("skips fetch provider discovery when tools.web.fetch is explicitly disabled and has no credentials", async () => {
+    const { metadata } = await runRuntimeWebTools({
+      config: asConfig({
+        tools: {
+          web: {
+            fetch: {
+              enabled: false,
+              maxChars: 200_000,
+              maxCharsCap: 2_000_000,
+            },
+          },
+        },
+        plugins: {
+          enabled: true,
+          allow: [],
+          entries: {},
+        },
+      }),
+    });
+
+    expect(metadata.fetch.providerSource).toBe("none");
+    expect(metadata.fetch.selectedProvider).toBeUndefined();
+    expect(resolveBundledWebFetchProvidersFromPublicArtifactsMock).not.toHaveBeenCalled();
+    expect(resolveBundledExplicitWebFetchProvidersFromPublicArtifactsMock).not.toHaveBeenCalled();
+    expect(resolvePluginWebFetchProvidersMock).not.toHaveBeenCalled();
+  });
+
+  it("skips search provider discovery when tools.web.search is explicitly disabled and has no credentials", async () => {
+    const { metadata } = await runRuntimeWebTools({
+      config: asConfig({
+        tools: {
+          web: {
+            search: {
+              enabled: false,
+            },
+          },
+        },
+        plugins: {
+          enabled: true,
+          allow: [],
+          entries: {},
+        },
+      }),
+    });
+
+    expect(metadata.search.providerSource).toBe("none");
+    expect(metadata.search.selectedProvider).toBeUndefined();
+    expect(resolveBundledWebSearchProvidersFromPublicArtifactsMock).not.toHaveBeenCalled();
+    expect(resolveBundledExplicitWebSearchProvidersFromPublicArtifactsMock).not.toHaveBeenCalled();
+    expect(resolvePluginWebSearchProvidersMock).not.toHaveBeenCalled();
+  });
+
+  it("still runs fetch provider discovery when tools.web.fetch is disabled but has nested credential config", async () => {
+    const { metadata } = await runRuntimeWebTools({
+      config: asConfig({
+        tools: {
+          web: {
+            fetch: {
+              enabled: false,
+              firecrawl: {
+                apiKey: { source: "env", provider: "default", id: "FIRECRAWL_API_KEY_REF" },
+              },
+            },
+          },
+        },
+        plugins: { enabled: true, allow: [], entries: {} },
+      }),
+      env: { FIRECRAWL_API_KEY_REF: "firecrawl-key" }, // pragma: allowlist secret
+    });
+
+    // Discovery still runs so SecretRef resolution happens; metadata reflects the disabled
+    // surface but plugin discovery was reached.
+    expect(
+      resolveBundledWebFetchProvidersFromPublicArtifactsMock.mock.calls.length +
+        resolveBundledExplicitWebFetchProvidersFromPublicArtifactsMock.mock.calls.length +
+        resolvePluginWebFetchProvidersMock.mock.calls.length,
+    ).toBeGreaterThan(0);
+    expect(metadata.fetch.providerSource).toBeDefined();
+  });
+
   it("auto-selects a keyless provider when no credentials are configured", async () => {
     const { metadata } = await runRuntimeWebTools({
       config: asConfig({
