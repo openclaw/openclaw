@@ -6,6 +6,7 @@ import {
 } from "../infra/system-events.js";
 import {
   enqueueConfigRecoveryNotice,
+  formatConfigRecoveryIssueSummary,
   formatConfigRecoveryNotice,
 } from "./config-recovery-notice.js";
 
@@ -26,6 +27,28 @@ describe("config recovery notice", () => {
     );
   });
 
+  it("formats validation details for recovered configs", () => {
+    expect(
+      formatConfigRecoveryIssueSummary([
+        { path: "agents.defaults.execution", message: "Unrecognized key: execution" },
+        { path: "gateway.auth.password.source", message: "Required" },
+      ]),
+    ).toBe(
+      " Validation issues: agents.defaults.execution: Unrecognized key: execution; gateway.auth.password.source: Required.",
+    );
+  });
+
+  it("includes validation details in prompt-facing warnings", () => {
+    expect(
+      formatConfigRecoveryNotice({
+        phase: "startup",
+        reason: "startup-invalid-config",
+        configPath: "/home/test/.openclaw/openclaw.json",
+        issues: [{ path: "agents.defaults.execution", message: "Unrecognized key: execution" }],
+      }),
+    ).toContain("Validation issues: agents.defaults.execution: Unrecognized key: execution.");
+  });
+
   it("queues the notice for the main agent session", () => {
     expect(
       enqueueConfigRecoveryNotice({
@@ -33,12 +56,15 @@ describe("config recovery notice", () => {
         phase: "reload",
         reason: "reload-invalid-config",
         configPath: "/home/test/.openclaw/openclaw.json",
+        issues: [{ path: "gateway.auth.password.source", message: "Required" }],
       }),
     ).toBe(true);
 
     expect(peekSystemEvents("agent:main:main")).toHaveLength(1);
-    expect(drainSystemEvents("agent:main:main")[0]).toContain(
+    const notice = drainSystemEvents("agent:main:main")[0];
+    expect(notice).toContain(
       "Do not write openclaw.json again unless you validate the full config first.",
     );
+    expect(notice).toContain("gateway.auth.password.source: Required");
   });
 });

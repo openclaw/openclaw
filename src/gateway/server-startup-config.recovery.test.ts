@@ -389,13 +389,14 @@ describe("gateway startup config recovery", () => {
       reason: "startup-invalid-config",
     });
     expect(log.warn).toHaveBeenCalledWith(
-      `gateway: invalid config was restored from last-known-good backup: ${configPath}`,
+      `gateway: invalid config was restored from last-known-good backup: ${configPath} (gateway.mode: Expected 'local' or 'remote')`,
     );
     expect(recoveryNotice.enqueueConfigRecoveryNotice).toHaveBeenCalledWith({
       cfg: recoveredSnapshot.config,
       phase: "startup",
       reason: "startup-invalid-config",
       configPath,
+      issues: invalidSnapshot.issues,
     });
   });
 

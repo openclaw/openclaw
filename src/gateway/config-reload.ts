@@ -271,7 +271,18 @@ export function startGatewayConfigReloader(opts: {
     if (!recovered) {
       return null;
     }
-    opts.log.warn(`config reload restored last-known-good config after ${reason}`);
+    const issueSummary = formatConfigIssueLines(
+      [...snapshot.issues, ...snapshot.legacyIssues],
+      "",
+      {
+        normalizeRoot: true,
+      },
+    ).join("; ");
+    opts.log.warn(
+      `config reload restored last-known-good config after ${reason}${
+        issueSummary ? ` (${issueSummary})` : ""
+      }`,
+    );
     const nextSnapshot = await opts.readSnapshot();
     if (!nextSnapshot.valid) {
       const issues = formatConfigIssueLines(nextSnapshot.issues, "").join(", ");

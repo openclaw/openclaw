@@ -229,6 +229,7 @@ export async function loadGatewayStartupConfigSnapshot(params: {
       }
     }
     if (!configSnapshot.valid) {
+      const recoveryIssues = [...configSnapshot.issues, ...configSnapshot.legacyIssues];
       const canRecoverFromLastKnownGood = shouldAttemptLastKnownGoodRecovery(configSnapshot);
       const recovered = canRecoverFromLastKnownGood
         ? await recoverConfigFromLastKnownGood({
@@ -243,8 +244,13 @@ export async function loadGatewayStartupConfigSnapshot(params: {
       }
       if (recovered) {
         wroteConfig = true;
+        const issueSummary = formatConfigIssueLines(recoveryIssues, "", {
+          normalizeRoot: true,
+        }).join("; ");
         params.log.warn(
-          `gateway: invalid config was restored from last-known-good backup: ${configSnapshot.path}`,
+          `gateway: invalid config was restored from last-known-good backup: ${configSnapshot.path}${
+            issueSummary ? ` (${issueSummary})` : ""
+          }`,
         );
         snapshotRead = await measure("config.snapshot.recovery-read", () =>
           readConfigFileSnapshotWithPluginMetadata({ measure }),
@@ -257,6 +263,7 @@ export async function loadGatewayStartupConfigSnapshot(params: {
             phase: "startup",
             reason: "startup-invalid-config",
             configPath: configSnapshot.path,
+            issues: recoveryIssues,
           });
         }
       }
