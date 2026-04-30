@@ -333,15 +333,14 @@ export class OpenClaw {
   ): AsyncIterable<OpenClawEvent> {
     await this.connect();
     const replayEvents = this.replaySnapshot(runId);
-    let hasAssistantRunEvent = replayEvents.some(isAssistantRunEvent);
+    let hasCanonicalAssistantRunEvent = replayEvents.some(isAssistantRunEvent);
     let hasTerminalRunEvent = replayEvents.some(isTerminalRunEvent);
     const toRunStreamEvent = (event: OpenClawEvent): OpenClawEvent | undefined => {
       const chatProjection = readChatProjection(event);
       if (chatProjection?.state === "delta") {
-        if (hasAssistantRunEvent) {
+        if (hasCanonicalAssistantRunEvent) {
           return undefined;
         }
-        hasAssistantRunEvent = true;
         return normalizeChatProjectionEvent(event, chatProjection);
       }
       if (chatProjection?.state === "final") {
@@ -352,7 +351,7 @@ export class OpenClaw {
         return normalizeChatProjectionEvent(event, chatProjection);
       }
       if (isAssistantRunEvent(event)) {
-        hasAssistantRunEvent = true;
+        hasCanonicalAssistantRunEvent = true;
       }
       if (isTerminalRunEvent(event)) {
         hasTerminalRunEvent = true;

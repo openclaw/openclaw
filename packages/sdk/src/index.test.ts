@@ -485,20 +485,34 @@ describe("OpenClaw SDK", () => {
           payload: {
             runId: "run_chat_only",
             sessionKey: "chat-only",
-            state: "final",
+            state: "delta",
             message: {
               role: "assistant",
-              content: [{ type: "text", text: "hello" }],
+              content: [{ type: "text", text: "hello again" }],
               timestamp: ts + 1,
             },
           },
         });
         fake.emit({
-          event: "custom.debug",
+          event: "chat",
           seq: 3,
           payload: {
             runId: "run_chat_only",
-            ts: ts + 2,
+            sessionKey: "chat-only",
+            state: "final",
+            message: {
+              role: "assistant",
+              content: [{ type: "text", text: "hello again" }],
+              timestamp: ts + 2,
+            },
+          },
+        });
+        fake.emit({
+          event: "custom.debug",
+          seq: 4,
+          payload: {
+            runId: "run_chat_only",
+            ts: ts + 3,
             data: { ok: true },
           },
         });
@@ -529,8 +543,18 @@ describe("OpenClaw SDK", () => {
       expect(second).toMatchObject({
         done: false,
         value: {
+          type: "assistant.delta",
+          data: { delta: "hello again" },
+          raw: { event: "chat" },
+        },
+      });
+
+      const third = await iterator.next();
+      expect(third).toMatchObject({
+        done: false,
+        value: {
           type: "run.completed",
-          data: { phase: "end", outputText: "hello" },
+          data: { phase: "end", outputText: "hello again" },
           raw: { event: "chat" },
         },
       });
