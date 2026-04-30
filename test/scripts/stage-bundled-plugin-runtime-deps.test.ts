@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  __testing as stageBundledPluginRuntimeDepsTesting,
   collectRuntimeDependencyInstallManifest,
   collectRuntimeDependencyInstallSpecs,
   stageBundledPluginRuntimeDeps,
@@ -127,6 +128,56 @@ describe("stageBundledPluginRuntimeDeps", () => {
       dependencies: { direct: "1.2.3" },
       optionalDependencies: { optional: "2.0.4" },
     });
+  });
+
+  it("hides npm child windows during fallback runtime installs", () => {
+    const spawnSyncImpl = vi.fn(() => ({ status: 0, stderr: "", stdout: "" }));
+
+    stageBundledPluginRuntimeDepsTesting.runNpmInstall({
+      cwd: "C:\\openclaw\\dist\\extensions\\telegram\\.openclaw-install-stage",
+      npmRunner: {
+        command: "npm.cmd",
+        args: ["install", "--silent"],
+        env: { PATH: "C:\\node" },
+        shell: false,
+        windowsVerbatimArguments: true,
+      },
+      spawnSyncImpl,
+    });
+
+    expect(spawnSyncImpl).toHaveBeenCalledWith(
+      "npm.cmd",
+      ["install", "--silent"],
+      expect.objectContaining({
+        windowsHide: true,
+        windowsVerbatimArguments: true,
+      }),
+    );
+  });
+
+  it("forces fallback runtime installs off inherited npm dry-run mode", () => {
+    const spawnSyncImpl = vi.fn(() => ({ status: 0, stderr: "", stdout: "" }));
+
+    stageBundledPluginRuntimeDepsTesting.runNpmInstall({
+      cwd: "/tmp/openclaw-runtime-deps",
+      npmRunner: {
+        command: "npm",
+        args: ["install"],
+        env: { PATH: "/usr/bin", npm_config_dry_run: "true" },
+        shell: false,
+      },
+      spawnSyncImpl,
+    });
+
+    expect(spawnSyncImpl).toHaveBeenCalledWith(
+      "npm",
+      ["install"],
+      expect.objectContaining({
+        env: expect.objectContaining({
+          npm_config_dry_run: "false",
+        }),
+      }),
+    );
   });
 
   it("skips restaging when runtime deps stamp matches the sanitized manifest", () => {
@@ -301,6 +352,197 @@ describe("stageBundledPluginRuntimeDeps", () => {
     );
   });
 
+  it("keeps runtime deps temp dirs owned by a live build process", () => {
+    const { pluginDir, repoRoot } = createBundledPluginFixture({
+      packageJson: {
+        name: "@openclaw/fixture-plugin",
+        version: "1.0.0",
+        dependencies: { "left-pad": "1.3.0" },
+        openclaw: { bundle: { stageRuntimeDependencies: true } },
+      },
+    });
+    const activeTempDir = path.join(pluginDir, ".openclaw-runtime-deps-stage-active");
+    fs.mkdirSync(activeTempDir, { recursive: true });
+    stageBundledPluginRuntimeDepsTesting.writeRuntimeDepsTempOwner(activeTempDir);
+    fs.writeFileSync(path.join(activeTempDir, "marker.txt"), "active\n", "utf8");
+
+    stageBundledPluginRuntimeDeps({
+      cwd: repoRoot,
+      installPluginRuntimeDepsImpl: ({ fingerprint, stampPath }: RuntimeDepsStampParams) => {
+        const nodeModulesDir = path.join(pluginDir, "node_modules");
+        fs.mkdirSync(nodeModulesDir, { recursive: true });
+        fs.writeFileSync(path.join(nodeModulesDir, "marker.txt"), "installed\n", "utf8");
+        writeRuntimeDepsStamp(stampPath, fingerprint);
+      },
+    });
+
+    expect(fs.readFileSync(path.join(activeTempDir, "marker.txt"), "utf8")).toBe("active\n");
+    expect(fs.readFileSync(path.join(pluginDir, "node_modules", "marker.txt"), "utf8")).toBe(
+      "installed\n",
+    );
+  });
+
+  it("restores atomically replaced dirs when concurrent cleanup runs during rename failure", () => {
+    const parentDir = createTempDir("openclaw-runtime-deps-replace-");
+    const targetPath = path.join(parentDir, "node_modules");
+    const sourcePath = path.join(parentDir, "source-node_modules");
+    fs.mkdirSync(targetPath, { recursive: true });
+    fs.writeFileSync(path.join(targetPath, "marker.txt"), "original\n", "utf8");
+    fs.mkdirSync(sourcePath, { recursive: true });
+    fs.writeFileSync(path.join(sourcePath, "marker.txt"), "replacement\n", "utf8");
+
+    const realRenameSync = fs.renameSync.bind(fs);
+    let backupPath: string | null = null;
+    vi.spyOn(fs, "renameSync").mockImplementation((oldPath, newPath) => {
+      const oldPathString = String(oldPath);
+      const newPathString = String(newPath);
+      if (
+        oldPathString === targetPath &&
+        path.basename(newPathString).startsWith(".openclaw-runtime-deps-backup-")
+      ) {
+        backupPath = newPathString;
+        return realRenameSync(oldPath, newPath);
+      }
+      if (oldPathString === sourcePath && newPathString === targetPath) {
+        expect(backupPath).not.toBeNull();
+        stageBundledPluginRuntimeDepsTesting.removeStaleRuntimeDepsTempDirs(parentDir);
+        expect(fs.existsSync(path.join(backupPath ?? "", "marker.txt"))).toBe(true);
+        throw new Error("rename failed after backup");
+      }
+      return realRenameSync(oldPath, newPath);
+    });
+
+    expect(() =>
+      stageBundledPluginRuntimeDepsTesting.replaceDirAtomically(targetPath, sourcePath),
+    ).toThrow("rename failed after backup");
+
+    expect(fs.readFileSync(path.join(targetPath, "marker.txt"), "utf8")).toBe("original\n");
+    expect(fs.existsSync(path.join(targetPath, "owner.json"))).toBe(false);
+  });
+
+  it("retries transient backup cleanup during atomic replace", () => {
+    const parentDir = createTempDir("openclaw-runtime-deps-replace-");
+    const targetPath = path.join(parentDir, "node_modules");
+    const sourcePath = path.join(parentDir, "source-node_modules");
+    fs.mkdirSync(targetPath, { recursive: true });
+    fs.writeFileSync(path.join(targetPath, "marker.txt"), "original\n", "utf8");
+    fs.mkdirSync(sourcePath, { recursive: true });
+    fs.writeFileSync(path.join(sourcePath, "marker.txt"), "replacement\n", "utf8");
+
+    const realRmSync = fs.rmSync.bind(fs);
+    let transientFailures = 0;
+    vi.spyOn(fs, "rmSync").mockImplementation((target, options) => {
+      const targetString = String(target);
+      if (
+        targetString.includes(`${path.sep}.openclaw-runtime-deps-backup-`) &&
+        transientFailures < 2
+      ) {
+        transientFailures += 1;
+        const error = new Error("transient backup cleanup failure") as NodeJS.ErrnoException;
+        error.code = "ENOTEMPTY";
+        throw error;
+      }
+      return realRmSync(target, options);
+    });
+
+    stageBundledPluginRuntimeDepsTesting.replaceDirAtomically(targetPath, sourcePath);
+
+    expect(transientFailures).toBe(2);
+    expect(fs.readFileSync(path.join(targetPath, "marker.txt"), "utf8")).toBe("replacement\n");
+  });
+
+  it("keeps a successful replacement when backup cleanup hits transient ENOTEMPTY", () => {
+    const parentDir = createTempDir("openclaw-runtime-deps-replace-cleanup-");
+    const targetPath = path.join(parentDir, "node_modules");
+    const sourcePath = path.join(parentDir, "source-node_modules");
+    fs.mkdirSync(targetPath, { recursive: true });
+    fs.writeFileSync(path.join(targetPath, "marker.txt"), "original\n", "utf8");
+    fs.mkdirSync(sourcePath, { recursive: true });
+    fs.writeFileSync(path.join(sourcePath, "marker.txt"), "replacement\n", "utf8");
+
+    const realRenameSync = fs.renameSync.bind(fs);
+    const realRmSync = fs.rmSync.bind(fs);
+    let backupPath: string | null = null;
+    vi.spyOn(fs, "renameSync").mockImplementation((oldPath, newPath) => {
+      const oldPathString = String(oldPath);
+      const newPathString = String(newPath);
+      if (
+        oldPathString === targetPath &&
+        path.basename(newPathString).startsWith(".openclaw-runtime-deps-backup-")
+      ) {
+        backupPath = newPathString;
+      }
+      return realRenameSync(oldPath, newPath);
+    });
+    vi.spyOn(fs, "rmSync").mockImplementation((target, options) => {
+      const targetString = String(target);
+      if (
+        backupPath &&
+        targetString === backupPath &&
+        fs.existsSync(path.join(backupPath, "marker.txt"))
+      ) {
+        const error = new Error("Directory not empty") as NodeJS.ErrnoException;
+        error.code = "ENOTEMPTY";
+        throw error;
+      }
+      return realRmSync(target, options);
+    });
+
+    expect(() =>
+      stageBundledPluginRuntimeDepsTesting.replaceDirAtomically(targetPath, sourcePath),
+    ).not.toThrow();
+
+    expect(fs.readFileSync(path.join(targetPath, "marker.txt"), "utf8")).toBe("replacement\n");
+    expect(backupPath).not.toBeNull();
+    expect(fs.readFileSync(path.join(backupPath ?? "", "marker.txt"), "utf8")).toBe("original\n");
+    expect(fs.existsSync(path.join(backupPath ?? "", "owner.json"))).toBe(true);
+  });
+
+  it("keeps successful root staging when owned stage temp cleanup races", () => {
+    const { pluginDir, repoRoot } = createBundledPluginFixture({
+      packageJson: {
+        name: "@openclaw/fixture-plugin",
+        version: "1.0.0",
+        dependencies: { direct: "1.0.0" },
+        openclaw: { bundle: { stageRuntimeDependencies: true } },
+      },
+    });
+    const directDir = path.join(repoRoot, "node_modules", "direct");
+    fs.mkdirSync(directDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(directDir, "package.json"),
+      '{ "name": "direct", "version": "1.0.0" }\n',
+      "utf8",
+    );
+    fs.writeFileSync(path.join(directDir, "index.js"), "module.exports = 'direct';\n", "utf8");
+
+    const realRmSync = fs.rmSync.bind(fs);
+    let cleanupAttempts = 0;
+    vi.spyOn(fs, "rmSync").mockImplementation((target, options) => {
+      const targetString = String(target);
+      if (
+        targetString.startsWith(path.join(pluginDir, ".openclaw-runtime-deps-stage-")) &&
+        cleanupAttempts === 0
+      ) {
+        cleanupAttempts += 1;
+        const error = new Error("Directory not empty") as NodeJS.ErrnoException;
+        error.code = "ENOTEMPTY";
+        throw error;
+      }
+      if (targetString.startsWith(path.join(pluginDir, ".openclaw-runtime-deps-stage-"))) {
+        cleanupAttempts += 1;
+      }
+      return realRmSync(target, options);
+    });
+
+    expect(() => stageBundledPluginRuntimeDeps({ cwd: repoRoot })).not.toThrow();
+
+    expect(cleanupAttempts).toBe(2);
+    expect(
+      fs.readFileSync(path.join(pluginDir, "node_modules", "direct", "index.js"), "utf8"),
+    ).toBe("module.exports = 'direct';\n");
+  });
+
   it("restages when installed root runtime dependency contents change", () => {
     const { pluginDir, repoRoot } = createBundledPluginFixture({
       packageJson: {
@@ -325,6 +567,55 @@ describe("stageBundledPluginRuntimeDeps", () => {
     ).toBe("module.exports = 'first';\n");
 
     fs.writeFileSync(path.join(directDir, "index.js"), "module.exports = 'second';\n", "utf8");
+    stageBundledPluginRuntimeDeps({ cwd: repoRoot });
+
+    expect(
+      fs.readFileSync(path.join(pluginDir, "node_modules", "direct", "index.js"), "utf8"),
+    ).toBe("module.exports = 'second';\n");
+  });
+
+  it("restages when plugin-local installed runtime dependency contents change", () => {
+    const { pluginDir, repoRoot } = createBundledPluginFixture({
+      packageJson: {
+        name: "@openclaw/fixture-plugin",
+        version: "1.0.0",
+        dependencies: { direct: "1.0.0" },
+        openclaw: { bundle: { stageRuntimeDependencies: true } },
+      },
+    });
+    const rootDirectDir = path.join(repoRoot, "node_modules", "direct");
+    const sourcePluginDir = path.join(repoRoot, "extensions", "fixture-plugin");
+    const pluginDirectDir = path.join(sourcePluginDir, "node_modules", "direct");
+    fs.mkdirSync(rootDirectDir, { recursive: true });
+    fs.mkdirSync(pluginDirectDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(sourcePluginDir, "package.json"),
+      '{ "name": "@openclaw/fixture-plugin", "version": "1.0.0" }\n',
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(rootDirectDir, "package.json"),
+      '{ "name": "direct", "version": "1.0.0" }\n',
+      "utf8",
+    );
+    fs.writeFileSync(path.join(rootDirectDir, "index.js"), "module.exports = 'root';\n", "utf8");
+    fs.writeFileSync(
+      path.join(pluginDirectDir, "package.json"),
+      '{ "name": "direct", "version": "1.0.0" }\n',
+      "utf8",
+    );
+    fs.writeFileSync(path.join(pluginDirectDir, "index.js"), "module.exports = 'first';\n", "utf8");
+
+    stageBundledPluginRuntimeDeps({ cwd: repoRoot });
+    expect(
+      fs.readFileSync(path.join(pluginDir, "node_modules", "direct", "index.js"), "utf8"),
+    ).toBe("module.exports = 'first';\n");
+
+    fs.writeFileSync(
+      path.join(pluginDirectDir, "index.js"),
+      "module.exports = 'second';\n",
+      "utf8",
+    );
     stageBundledPluginRuntimeDeps({ cwd: repoRoot });
 
     expect(

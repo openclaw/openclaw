@@ -28,7 +28,11 @@ import { note } from "../terminal/note.js";
 import { shortenHomePath } from "../utils.js";
 
 type DoctorPrompterLike = {
-  confirmRuntimeRepair: (params: { message: string; initialValue?: boolean }) => Promise<boolean>;
+  confirmRuntimeRepair: (params: {
+    message: string;
+    initialValue?: boolean;
+    requiresInteractiveConfirmation?: boolean;
+  }) => Promise<boolean>;
   note?: typeof note;
 };
 
@@ -556,14 +560,12 @@ function shouldRequireOAuthDir(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boo
     listConfiguredChannelIdsForReadOnlyScope({
       config: cfg,
       env,
-      cache: true,
     }),
   );
   const withoutPersistedAuth = new Set(
     listConfiguredChannelIdsForReadOnlyScope({
       config: cfg,
       env,
-      cache: true,
       includePersistedAuthState: false,
     }),
   );
@@ -921,6 +923,7 @@ export async function noteStateIntegrity(
       const archiveOrphans = await prompter.confirmRuntimeRepair({
         message: `Archive ${orphanCount} in ${displaySessionsDir}? This only renames them to *.deleted.<timestamp>.`,
         initialValue: false,
+        requiresInteractiveConfirmation: true,
       });
       if (archiveOrphans) {
         let archived = 0;

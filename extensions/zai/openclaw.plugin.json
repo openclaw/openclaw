@@ -1,7 +1,35 @@
 {
   "id": "zai",
+  "activation": {
+    "onStartup": false
+  },
   "enabledByDefault": true,
   "providers": ["zai"],
+  "providerEndpoints": [
+    {
+      "endpointClass": "zai-native",
+      "hosts": ["api.z.ai"]
+    }
+  ],
+  "providerRequest": {
+    "providers": {
+      "zai": {
+        "family": "zai"
+      }
+    }
+  },
+  "modelPricing": {
+    "providers": {
+      "zai": {
+        "openRouter": {
+          "provider": "z-ai"
+        },
+        "liteLLM": {
+          "provider": "zai"
+        }
+      }
+    }
+  },
   "providerAuthEnvVars": {
     "zai": ["ZAI_API_KEY", "Z_AI_API_KEY"]
   },

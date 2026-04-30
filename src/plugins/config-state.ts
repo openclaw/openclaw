@@ -18,6 +18,7 @@ import {
   hasExplicitPluginConfig as hasExplicitPluginConfigShared,
   isBundledChannelEnabledByChannelConfig as isBundledChannelEnabledByChannelConfigShared,
   normalizePluginsConfigWithResolver,
+  type NormalizePluginId,
   type NormalizedPluginsConfig as SharedNormalizedPluginsConfig,
 } from "./config-normalization-shared.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
@@ -33,8 +34,6 @@ export type PluginActivationConfigSource = {
 
 export type NormalizedPluginsConfig = SharedNormalizedPluginsConfig;
 
-let bundledPluginAliasLookupCache: ReadonlyMap<string, string> | undefined;
-
 const BUILT_IN_PLUGIN_ALIAS_FALLBACKS: ReadonlyArray<readonly [alias: string, pluginId: string]> = [
   ["openai-codex", "openai"],
   ["google-gemini-cli", "google"],
@@ -46,11 +45,12 @@ const BUILT_IN_PLUGIN_ALIAS_LOOKUP = new Map<string, string>([
   ...BUILT_IN_PLUGIN_ALIAS_FALLBACKS.map(([, pluginId]) => [pluginId, pluginId] as const),
 ]);
 
-function getBundledPluginAliasLookup(): ReadonlyMap<string, string> {
-  if (bundledPluginAliasLookupCache) {
-    return bundledPluginAliasLookupCache;
-  }
+let bundledPluginAliasLookup: ReadonlyMap<string, string> | undefined;
 
+function getBundledPluginAliasLookup(): ReadonlyMap<string, string> {
+  if (bundledPluginAliasLookup) {
+    return bundledPluginAliasLookup;
+  }
   const lookup = new Map<string, string>();
   for (const plugin of listBundledPluginMetadata({ includeChannelConfigs: false })) {
     const pluginId = normalizeOptionalLowercaseString(plugin.manifest.id);
@@ -73,24 +73,40 @@ function getBundledPluginAliasLookup(): ReadonlyMap<string, string> {
   for (const [alias, pluginId] of BUILT_IN_PLUGIN_ALIAS_FALLBACKS) {
     lookup.set(alias, pluginId);
   }
-  bundledPluginAliasLookupCache = lookup;
-  return lookup;
+  bundledPluginAliasLookup = lookup;
+  return bundledPluginAliasLookup;
 }
 
-export function normalizePluginId(id: string): string {
+function normalizePluginIdWithLookup(
+  id: string,
+  getAliasLookup: () => ReadonlyMap<string, string>,
+): string {
   const trimmed = normalizeOptionalString(id) ?? "";
   const normalized = normalizeOptionalLowercaseString(trimmed) ?? "";
   const builtInAlias = BUILT_IN_PLUGIN_ALIAS_LOOKUP.get(normalized);
   if (builtInAlias) {
     return builtInAlias;
   }
-  return getBundledPluginAliasLookup().get(normalized) ?? trimmed;
+  return getAliasLookup().get(normalized) ?? trimmed;
+}
+
+function createScopedPluginIdNormalizer(): NormalizePluginId {
+  let lookup: ReadonlyMap<string, string> | undefined;
+  return (id) =>
+    normalizePluginIdWithLookup(id, () => {
+      lookup ??= getBundledPluginAliasLookup();
+      return lookup;
+    });
+}
+
+export function normalizePluginId(id: string): string {
+  return normalizePluginIdWithLookup(id, getBundledPluginAliasLookup);
 }
 
 export const normalizePluginsConfig = (
   config?: OpenClawConfig["plugins"],
 ): NormalizedPluginsConfig => {
-  return normalizePluginsConfigWithResolver(config, normalizePluginId);
+  return normalizePluginsConfigWithResolver(config, createScopedPluginIdNormalizer());
 };
 
 export function createPluginActivationSource(params: {

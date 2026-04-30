@@ -8,6 +8,7 @@ import {
   withoutPluginInstallRecords,
 } from "../plugins/installed-plugin-index-records.js";
 import type { PluginInstallUpdate } from "../plugins/installs.js";
+import { tracePluginLifecyclePhaseAsync } from "../plugins/plugin-lifecycle-trace.js";
 import { defaultRuntime } from "../runtime.js";
 import { theme } from "../terminal/theme.js";
 import {
@@ -61,31 +62,57 @@ export async function persistPluginInstall(params: {
   snapshot: ConfigSnapshotForInstallPersist;
   pluginId: string;
   install: Omit<PluginInstallUpdate, "pluginId">;
+  enable?: boolean;
   successMessage?: string;
   warningMessage?: string;
 }): Promise<OpenClawConfig> {
-  const installConfig = removeInstalledPluginFromDenylist(
-    addInstalledPluginToAllowlist(params.snapshot.config, params.pluginId),
-    params.pluginId,
+  const installConfig =
+    params.enable === false
+      ? params.snapshot.config
+      : removeInstalledPluginFromDenylist(
+          addInstalledPluginToAllowlist(params.snapshot.config, params.pluginId),
+          params.pluginId,
+        );
+  let next =
+    params.enable === false
+      ? installConfig
+      : enablePluginInConfig(installConfig, params.pluginId, {
+          updateChannelConfig: false,
+        }).config;
+  const installRecords = await tracePluginLifecyclePhaseAsync(
+    "install records load",
+    () => loadInstalledPluginIndexInstallRecords(),
+    { command: "install" },
   );
-  let next = enablePluginInConfig(installConfig, params.pluginId).config;
-  const installRecords = await loadInstalledPluginIndexInstallRecords();
   const nextInstallRecords = recordPluginInstallInRecords(installRecords, {
     pluginId: params.pluginId,
     ...params.install,
   });
-  const slotResult = applySlotSelectionForPlugin(next, params.pluginId);
+  const slotResult =
+    params.enable === false
+      ? { config: next, warnings: [] }
+      : await tracePluginLifecyclePhaseAsync(
+          "slot selection",
+          async () => applySlotSelectionForPlugin(next, params.pluginId),
+          { command: "install", pluginId: params.pluginId },
+        );
   next = withoutPluginInstallRecords(slotResult.config);
-  await commitPluginInstallRecordsWithConfig({
-    previousInstallRecords: installRecords,
-    nextInstallRecords,
-    nextConfig: next,
-    baseHash: params.snapshot.baseHash,
-  });
+  await tracePluginLifecyclePhaseAsync(
+    "config mutation",
+    () =>
+      commitPluginInstallRecordsWithConfig({
+        previousInstallRecords: installRecords,
+        nextInstallRecords,
+        nextConfig: next,
+        baseHash: params.snapshot.baseHash,
+      }),
+    { command: "install" },
+  );
   await refreshPluginRegistryAfterConfigMutation({
     config: next,
     reason: "source-changed",
     installRecords: nextInstallRecords,
+    traceCommand: "install",
     logger: {
       warn: (message) => defaultRuntime.log(theme.warn(message)),
     },

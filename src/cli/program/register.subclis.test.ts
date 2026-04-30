@@ -47,8 +47,25 @@ const { registerPluginsCli, registerPluginCliCommandsFromValidatedConfig } = vi.
   }),
   registerPluginCliCommandsFromValidatedConfig: vi.fn(async () => null),
 }));
+const { addGatewayRunCommand, gatewayRunAction, registerGatewayCli } = vi.hoisted(() => {
+  const runAction = vi.fn();
+  return {
+    addGatewayRunCommand: vi.fn((command: Command) =>
+      command.option("--force", "force", false).action(runAction),
+    ),
+    gatewayRunAction: runAction,
+    registerGatewayCli: vi.fn((program: Command) => {
+      program
+        .command("gateway")
+        .command("call")
+        .action(() => undefined);
+    }),
+  };
+});
 
 vi.mock("../acp-cli.js", () => ({ registerAcpCli }));
+vi.mock("../gateway-cli.js", () => ({ registerGatewayCli }));
+vi.mock("../gateway-cli/run.js", () => ({ addGatewayRunCommand }));
 vi.mock("../nodes-cli.js", () => ({ registerNodesCli }));
 vi.mock("../capability-cli.js", () => ({ registerCapabilityCli }));
 vi.mock("../plugins-cli.js", () => ({ registerPluginsCli }));
@@ -93,6 +110,9 @@ describe("registerSubCliCommands", () => {
     inferAction.mockClear();
     registerPluginsCli.mockClear();
     registerPluginCliCommandsFromValidatedConfig.mockClear();
+    addGatewayRunCommand.mockClear();
+    gatewayRunAction.mockClear();
+    registerGatewayCli.mockClear();
   });
 
   afterEach(() => {
@@ -174,8 +194,41 @@ describe("registerSubCliCommands", () => {
     expect(acpAction).toHaveBeenCalledTimes(1);
   });
 
-  it("does not preload plugin CLI registrations for builtin plugins update", async () => {
-    process.argv = ["node", "openclaw", "plugins", "update", "lossless-claw"];
+  it("registers only the gateway run surface for gateway startup", async () => {
+    const argv = ["node", "openclaw", "gateway", "--force"];
+    process.argv = argv;
+    const program = new Command().name("openclaw");
+
+    await registerSubCliByName(program, "gateway", argv);
+
+    expect(addGatewayRunCommand).toHaveBeenCalledTimes(2);
+    expect(registerGatewayCli).not.toHaveBeenCalled();
+    await program.parseAsync(["gateway", "--force"], { from: "user" });
+    expect(gatewayRunAction).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the full gateway CLI for non-run gateway subcommands", async () => {
+    const argv = ["node", "openclaw", "gateway", "call", "health"];
+    process.argv = argv;
+    const program = new Command().name("openclaw");
+
+    await registerSubCliByName(program, "gateway", argv);
+
+    expect(addGatewayRunCommand).not.toHaveBeenCalled();
+    expect(registerGatewayCli).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ["plugins update", ["plugins", "update", "lossless-claw"]],
+    ["plugins update --all", ["plugins", "update", "--all"]],
+    ["plugins install", ["plugins", "install", "lossless-claw"]],
+    ["plugins list", ["plugins", "list"]],
+    ["plugins inspect", ["plugins", "inspect", "lossless-claw"]],
+    ["plugins registry --refresh", ["plugins", "registry", "--refresh"]],
+    ["plugins doctor", ["plugins", "doctor"]],
+    ["plugins --help", ["plugins", "--help"]],
+  ])("does not preload plugin CLI registrations for builtin %s", async (_label, args) => {
+    process.argv = ["node", "openclaw", ...args];
     const program = new Command().name("openclaw");
 
     await registerSubCliByName(program, "plugins");

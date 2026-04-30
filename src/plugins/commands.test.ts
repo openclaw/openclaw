@@ -1,6 +1,7 @@
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
+import { listRegisteredPluginAgentPromptGuidance } from "./command-registry-state.js";
 import {
   __testing,
   clearPluginCommands,
@@ -11,7 +12,9 @@ import {
   matchPluginCommand,
   registerPluginCommand,
 } from "./commands.js";
+import { createPluginRegistry, type PluginRecord } from "./registry.js";
 import { setActivePluginRegistry } from "./runtime.js";
+import type { PluginRuntime } from "./runtime/types.js";
 
 type CommandsModule = typeof import("./commands.js");
 
@@ -28,6 +31,59 @@ function createVoiceCommand(overrides: Partial<Parameters<typeof registerPluginC
     handler: async () => ({ text: "ok" }),
     ...overrides,
   };
+}
+
+function createBundledPluginRecord(id: string): PluginRecord {
+  return {
+    id,
+    name: id,
+    source: `bundled:${id}`,
+    rootDir: `/bundled/${id}`,
+    origin: "bundled",
+    enabled: true,
+    status: "loaded",
+    toolNames: [],
+    hookNames: [],
+    channelIds: [],
+    cliBackendIds: [],
+    providerIds: [],
+    speechProviderIds: [],
+    realtimeTranscriptionProviderIds: [],
+    realtimeVoiceProviderIds: [],
+    mediaUnderstandingProviderIds: [],
+    imageGenerationProviderIds: [],
+    videoGenerationProviderIds: [],
+    musicGenerationProviderIds: [],
+    webFetchProviderIds: [],
+    webSearchProviderIds: [],
+    migrationProviderIds: [],
+    memoryEmbeddingProviderIds: [],
+    agentHarnessIds: [],
+    gatewayMethods: [],
+    cliCommands: [],
+    services: [],
+    gatewayDiscoveryServiceIds: [],
+    commands: [],
+    httpRoutes: 0,
+    hookCount: 0,
+    configSchema: false,
+  } as PluginRecord;
+}
+
+function registerHostTrustedReservedCommandForTest(
+  command: Parameters<typeof registerPluginCommand>[1],
+) {
+  const pluginRegistry = createPluginRegistry({
+    logger: {
+      info() {},
+      warn() {},
+      error() {},
+      debug() {},
+    },
+    runtime: {} as PluginRuntime,
+    activateGlobalSideEffects: true,
+  });
+  pluginRegistry.registerCommand(createBundledPluginRecord(command.name), command);
 }
 
 function registerVoiceCommandForTest(
@@ -250,6 +306,19 @@ describe("registerPluginCommand", () => {
         error: "Command description must be a string",
       },
     },
+    {
+      name: "rejects invalid agent prompt guidance",
+      command: {
+        name: "demo",
+        description: "Demo",
+        agentPromptGuidance: "use /demo" as unknown as string[],
+        handler: async () => ({ text: "ok" }),
+      },
+      expected: {
+        ok: false,
+        error: "Agent prompt guidance must be an array of strings",
+      },
+    },
   ] as const)("$name", ({ command, expected }) => {
     expect(registerPluginCommand("demo-plugin", command)).toEqual(expected);
   });
@@ -258,6 +327,7 @@ describe("registerPluginCommand", () => {
     const result = registerPluginCommand("demo-plugin", {
       name: "  demo_cmd  ",
       description: "  Demo command  ",
+      agentPromptGuidance: ["  Use /demo_cmd for demo routing.  "],
       handler: async () => ({ text: "ok" }),
     });
     expect(result).toEqual({ ok: true });
@@ -276,6 +346,7 @@ describe("registerPluginCommand", () => {
         acceptsArgs: false,
       },
     ]);
+    expect(listRegisteredPluginAgentPromptGuidance()).toEqual(["Use /demo_cmd for demo routing."]);
   });
 
   it("matches underscore aliases for hyphenated command names", () => {
@@ -344,8 +415,6 @@ describe("registerPluginCommand", () => {
       ...process.env,
       OPENCLAW_BUNDLED_PLUGINS_DIR: path.resolve("extensions"),
       OPENCLAW_DISABLE_PERSISTED_PLUGIN_REGISTRY: "1",
-      OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE: "1",
-      OPENCLAW_DISABLE_PLUGIN_MANIFEST_CACHE: "1",
     };
 
     expect(getPluginCommandSpecs("discord", { env })).toEqual([]);
@@ -395,6 +464,154 @@ describe("registerPluginCommand", () => {
       ok: false,
       error: 'Native progress message "telegram" cannot be empty',
     });
+  });
+
+  it("keeps reserved command bypass scoped to the primary command name", () => {
+    const result = registerPluginCommand(
+      "status",
+      createVoiceCommand({
+        name: "status",
+        nativeNames: {
+          telegram: "help",
+        },
+      }),
+      { allowReservedCommandNames: true },
+    );
+
+    expect(result).toEqual({
+      ok: false,
+      error:
+        'Native command alias "telegram" invalid: Command name "help" is reserved by a built-in command',
+    });
+  });
+
+  it("reserves the bundled Codex command name", () => {
+    const result = registerPluginCommand("demo-plugin", {
+      name: "codex",
+      description: "Fake Codex command",
+      handler: async () => ({ text: "ok" }),
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      error: 'Command name "codex" is reserved by a built-in command',
+    });
+  });
+
+  it("rejects reserved ownership on non-reserved direct command registrations", () => {
+    const result = registerPluginCommand(
+      "demo-plugin",
+      {
+        name: "voice",
+        description: "Voice command",
+        ownership: "reserved",
+        handler: async () => ({ text: "ok" }),
+      },
+      { allowReservedCommandNames: true },
+    );
+
+    expect(result).toEqual({
+      ok: false,
+      error: "Reserved command ownership is only available to bundled reserved commands",
+    });
+  });
+
+  it("does not expose owner status to normal plugin commands", async () => {
+    let observedOwnerStatus: boolean | undefined;
+    registerPluginCommand("demo-plugin", {
+      name: "voice",
+      description: "Voice command",
+      handler: async (ctx) => {
+        observedOwnerStatus = ctx.senderIsOwner;
+        return { text: "ok" };
+      },
+    });
+    const match = matchPluginCommand("/voice");
+    expect(match).toBeTruthy();
+
+    await executePluginCommand({
+      command: match!.command,
+      channel: "telegram",
+      isAuthorizedSender: true,
+      senderIsOwner: true,
+      commandBody: "/voice",
+      config: {},
+    });
+
+    expect(observedOwnerStatus).toBeUndefined();
+  });
+
+  it("does not allow direct reserved command registrations to claim owner status", () => {
+    const result = registerPluginCommand(
+      "codex",
+      {
+        name: "codex",
+        description: "Codex command",
+        ownership: "reserved",
+        handler: async () => ({ text: "ok" }),
+      },
+      { allowReservedCommandNames: true },
+    );
+
+    expect(result).toEqual({
+      ok: false,
+      error: "Reserved command ownership is only available to bundled reserved commands",
+    });
+    expect(matchPluginCommand("/codex")).toBeNull();
+  });
+
+  it("exposes owner status only to host-trusted reserved command owners", async () => {
+    let observedOwnerStatus: boolean | undefined;
+    registerHostTrustedReservedCommandForTest({
+      name: "codex",
+      description: "Codex command",
+      ownership: "reserved",
+      handler: async (ctx) => {
+        observedOwnerStatus = ctx.senderIsOwner;
+        return { text: "ok" };
+      },
+    });
+    const match = matchPluginCommand("/codex");
+    expect(match).toBeTruthy();
+
+    await executePluginCommand({
+      command: match!.command,
+      channel: "telegram",
+      isAuthorizedSender: true,
+      senderIsOwner: true,
+      commandBody: "/codex",
+      config: {},
+    });
+
+    expect(observedOwnerStatus).toBe(true);
+  });
+
+  it("rejects mismatched reserved command owners", () => {
+    const pluginRegistry = createPluginRegistry({
+      logger: {
+        info() {},
+        warn() {},
+        error() {},
+        debug() {},
+      },
+      runtime: {} as PluginRuntime,
+      activateGlobalSideEffects: true,
+    });
+    pluginRegistry.registerCommand(createBundledPluginRecord("bundled-plugin"), {
+      name: "codex",
+      description: "Codex command",
+      ownership: "reserved",
+      handler: async () => ({ text: "ok" }),
+    });
+
+    expect(pluginRegistry.registry.diagnostics).toContainEqual(
+      expect.objectContaining({
+        level: "error",
+        pluginId: "bundled-plugin",
+        message:
+          'command registration failed: Reserved command ownership requires plugin id "bundled-plugin" to match reserved command name "codex"',
+      }),
+    );
   });
 
   it("shares plugin commands across duplicate module instances", async () => {

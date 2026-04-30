@@ -1,6 +1,9 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
+  applyExclusiveSlotSelection,
+  buildPluginDiagnosticsReport,
+  buildPluginSnapshotReport,
   enablePluginInConfig,
   refreshPluginRegistry,
   resetPluginsCliTestState,
@@ -106,5 +109,231 @@ describe("persistPluginInstall", () => {
     });
 
     expect(next).toEqual(enabledConfig);
+  });
+
+  it("falls back to runtime kind registry cleanup when metadata omits kind", async () => {
+    const { persistPluginInstall } = await import("./plugins-install-persist.js");
+    const baseConfig = {
+      plugins: {
+        entries: {
+          "legacy-memory-a": { enabled: true },
+        },
+      },
+    } as OpenClawConfig;
+    const enabledConfig = {
+      plugins: {
+        entries: {
+          "legacy-memory-a": { enabled: true },
+          "legacy-memory": { enabled: true },
+        },
+      },
+    } as OpenClawConfig;
+    enablePluginInConfig.mockReturnValue({ config: enabledConfig });
+    buildPluginSnapshotReport.mockReturnValue({
+      plugins: [{ id: "legacy-memory-a" }, { id: "legacy-memory" }],
+      diagnostics: [],
+    });
+    buildPluginDiagnosticsReport.mockReturnValue({
+      plugins: [
+        { id: "legacy-memory-a", kind: "memory" },
+        { id: "legacy-memory", kind: "memory" },
+      ],
+      diagnostics: [],
+    });
+    applyExclusiveSlotSelection.mockImplementation(((params: {
+      config: OpenClawConfig;
+      selectedId: string;
+      selectedKind?: string;
+      registry?: { plugins: Array<{ id: string; kind?: string }> };
+    }) => {
+      expect(params.selectedId).toBe("legacy-memory");
+      expect(params.selectedKind).toBe("memory");
+      expect(params.registry?.plugins).toEqual([
+        { id: "legacy-memory-a", kind: "memory" },
+        { id: "legacy-memory", kind: "memory" },
+      ]);
+      return {
+        config: {
+          ...params.config,
+          plugins: {
+            ...params.config.plugins,
+            entries: {
+              ...params.config.plugins?.entries,
+              "legacy-memory-a": { enabled: false },
+            },
+            slots: {
+              ...params.config.plugins?.slots,
+              memory: "legacy-memory",
+            },
+          },
+        },
+        warnings: [],
+        changed: true,
+      };
+    }) as (...args: unknown[]) => unknown);
+
+    const next = await persistPluginInstall({
+      snapshot: {
+        config: baseConfig,
+        baseHash: "config-1",
+      },
+      pluginId: "legacy-memory",
+      install: {
+        source: "path",
+        sourcePath: "/tmp/legacy-memory",
+        installPath: "/tmp/legacy-memory",
+      },
+    });
+
+    expect(buildPluginDiagnosticsReport).toHaveBeenCalledWith({
+      config: enabledConfig,
+    });
+    expect(next.plugins?.entries?.["legacy-memory-a"]?.enabled).toBe(false);
+    expect(next.plugins?.slots?.memory).toBe("legacy-memory");
+  });
+
+  it("uses runtime registry cleanup when a manifest-kind plugin has runtime-kind siblings", async () => {
+    const { persistPluginInstall } = await import("./plugins-install-persist.js");
+    const baseConfig = {
+      plugins: {
+        entries: {
+          "legacy-memory-a": { enabled: true },
+        },
+      },
+    } as OpenClawConfig;
+    const enabledConfig = {
+      plugins: {
+        entries: {
+          "legacy-memory-a": { enabled: true },
+          "memory-b": { enabled: true },
+        },
+      },
+    } as OpenClawConfig;
+    enablePluginInConfig.mockReturnValue({ config: enabledConfig });
+    buildPluginSnapshotReport.mockReturnValue({
+      plugins: [{ id: "legacy-memory-a" }, { id: "memory-b", kind: "memory" }],
+      diagnostics: [],
+    });
+    buildPluginDiagnosticsReport.mockReturnValue({
+      plugins: [
+        { id: "legacy-memory-a", kind: "memory" },
+        { id: "memory-b", kind: "memory" },
+      ],
+      diagnostics: [],
+    });
+    applyExclusiveSlotSelection.mockImplementation(((params: {
+      config: OpenClawConfig;
+      selectedId: string;
+      selectedKind?: string;
+      registry?: { plugins: Array<{ id: string; kind?: string }> };
+    }) => {
+      expect(params.selectedId).toBe("memory-b");
+      expect(params.selectedKind).toBe("memory");
+      expect(params.registry?.plugins).toEqual([
+        { id: "legacy-memory-a", kind: "memory" },
+        { id: "memory-b", kind: "memory" },
+      ]);
+      return {
+        config: {
+          ...params.config,
+          plugins: {
+            ...params.config.plugins,
+            entries: {
+              ...params.config.plugins?.entries,
+              "legacy-memory-a": { enabled: false },
+            },
+            slots: {
+              ...params.config.plugins?.slots,
+              memory: "memory-b",
+            },
+          },
+        },
+        warnings: [],
+        changed: true,
+      };
+    }) as (...args: unknown[]) => unknown);
+
+    const next = await persistPluginInstall({
+      snapshot: {
+        config: baseConfig,
+        baseHash: "config-1",
+      },
+      pluginId: "memory-b",
+      install: {
+        source: "path",
+        sourcePath: "/tmp/memory-b",
+        installPath: "/tmp/memory-b",
+      },
+    });
+
+    expect(buildPluginDiagnosticsReport).toHaveBeenCalledWith({
+      config: enabledConfig,
+    });
+    expect(next.plugins?.entries?.["legacy-memory-a"]?.enabled).toBe(false);
+    expect(next.plugins?.slots?.memory).toBe("memory-b");
+  });
+
+  it("can persist an install record without enabling a plugin that needs config first", async () => {
+    const { persistPluginInstall } = await import("./plugins-install-persist.js");
+    const baseConfig = {
+      plugins: {
+        entries: {},
+      },
+    } as OpenClawConfig;
+
+    const next = await persistPluginInstall({
+      snapshot: {
+        config: baseConfig,
+        baseHash: "config-1",
+      },
+      pluginId: "memory-lancedb",
+      enable: false,
+      install: {
+        source: "path",
+        spec: "memory-lancedb",
+        sourcePath: "/app/dist/extensions/memory-lancedb",
+        installPath: "/app/dist/extensions/memory-lancedb",
+      },
+    });
+
+    expect(next).toEqual(baseConfig);
+    expect(enablePluginInConfig).not.toHaveBeenCalled();
+    expect(applyExclusiveSlotSelection).not.toHaveBeenCalled();
+    expect(writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledWith({
+      "memory-lancedb": expect.objectContaining({
+        source: "path",
+        sourcePath: "/app/dist/extensions/memory-lancedb",
+      }),
+    });
+    expect(writeConfigFile).toHaveBeenCalledWith(baseConfig);
+  });
+
+  it("does not add disabled installs to restrictive allowlists", async () => {
+    const { persistPluginInstall } = await import("./plugins-install-persist.js");
+    const baseConfig = {
+      plugins: {
+        allow: ["memory-core"],
+        deny: ["memory-lancedb"],
+      },
+    } as OpenClawConfig;
+
+    const next = await persistPluginInstall({
+      snapshot: {
+        config: baseConfig,
+        baseHash: "config-1",
+      },
+      pluginId: "memory-lancedb",
+      enable: false,
+      install: {
+        source: "path",
+        spec: "memory-lancedb",
+        sourcePath: "/app/dist/extensions/memory-lancedb",
+        installPath: "/app/dist/extensions/memory-lancedb",
+      },
+    });
+
+    expect(next.plugins?.allow).toEqual(["memory-core"]);
+    expect(next.plugins?.deny).toEqual(["memory-lancedb"]);
+    expect(next.plugins?.entries?.["memory-lancedb"]).toBeUndefined();
   });
 });

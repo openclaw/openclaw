@@ -1,5 +1,5 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-types";
 import { describe, expect, it } from "vitest";
 import { authorizeDiscordVoiceIngress } from "./access.js";
 
@@ -184,5 +184,33 @@ describe("authorizeDiscordVoiceIngress", () => {
       ok: false,
       message: "You are not authorized to use this command.",
     });
+  });
+
+  it("uses resolved account owner allowFrom over merged Discord config", async () => {
+    const access = await authorizeDiscordVoiceIngress({
+      cfg: baseCfg,
+      discordConfig: {
+        allowFrom: ["discord:u-root"],
+        guilds: {
+          g1: {
+            channels: {
+              c1: {},
+            },
+          },
+        },
+      } as DiscordAccountConfig,
+      groupPolicy: "allowlist",
+      guildId: "g1",
+      channelId: "c1",
+      channelSlug: "",
+      memberRoleIds: [],
+      ownerAllowFrom: ["discord:u-account"],
+      sender: {
+        id: "u-account",
+        name: "owner",
+      },
+    });
+
+    expect(access).toEqual({ ok: true });
   });
 });

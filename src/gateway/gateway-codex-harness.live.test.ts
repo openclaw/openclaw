@@ -17,7 +17,9 @@ import {
 } from "./gateway-cli-backend.live-helpers.js";
 import {
   EXPECTED_CODEX_MODELS_COMMAND_TEXT,
+  EXPECTED_CODEX_STATUS_COMMAND_TEXT,
   isExpectedCodexModelsCommandText,
+  isExpectedCodexStatusCommandText,
 } from "./gateway-codex-harness.live-helpers.js";
 import {
   assertCronJobMatches,
@@ -523,7 +525,6 @@ async function readSpawnedChildRow(params: {
     "sessions.list",
     {
       spawnedBy: params.parentSessionKey,
-      includeLastMessage: true,
       limit: 20,
     },
     { timeoutMs: 10_000 },
@@ -535,6 +536,13 @@ async function readSpawnedChildRow(params: {
   return sessions
     .map((entry) => asRecord(entry))
     .find((entry): entry is Record<string, unknown> => entry?.key === params.childSessionKey);
+}
+
+function isActiveCodexSubagentRow(row: Record<string, unknown> | undefined): boolean {
+  if (!row) {
+    return false;
+  }
+  return row.hasActiveSubagentRun === true || row.subagentRunState === "active";
 }
 
 async function waitForCodexSubagentStarted(params: {
@@ -553,14 +561,12 @@ async function waitForCodexSubagentStarted(params: {
         client: params.client,
         parentSessionKey: params.parentSessionKey,
       });
-      if (
-        lastRow &&
-        params.events.some(
-          (event) =>
-            event.sessionKey === params.childSessionKey &&
-            event.stream === "codex_app_server.lifecycle",
-        )
-      ) {
+      const hasLifecycleEvent = params.events.some(
+        (event) =>
+          event.sessionKey === params.childSessionKey &&
+          event.stream === "codex_app_server.lifecycle",
+      );
+      if (lastRow && (hasLifecycleEvent || isActiveCodexSubagentRow(lastRow))) {
         return lastRow;
       }
     } catch (error) {
@@ -790,19 +796,8 @@ describeLive("gateway live (Codex harness)", () => {
             client,
             sessionKey,
             command: "/codex status",
-            expectedText: [
-              "Codex app-server:",
-              "Model: `codex/",
-              "Model: codex/",
-              "Session: `agent:dev:live-codex-harness`",
-              "Session: agent:dev:live-codex-harness",
-              "OpenClaw `",
-              "OpenClaw status:",
-              "model `codex/",
-              "session `agent:dev:live-codex-harness`",
-              "Model/status card shown above",
-              "Status shown above.",
-            ],
+            expectedText: [...EXPECTED_CODEX_STATUS_COMMAND_TEXT],
+            isExpectedText: isExpectedCodexStatusCommandText,
           });
           logCodexLiveStep("codex-status-command", { statusText });
 

@@ -1,5 +1,5 @@
+import { createRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createRuntimeEnv } from "../../../test/helpers/plugins/runtime-env.js";
 import { slackPlugin } from "./channel.js";
 import { slackOutbound } from "./outbound-adapter.js";
 import * as probeModule from "./probe.js";
@@ -372,6 +372,8 @@ describe("slackPlugin security", () => {
 
     expect(result.policy).toBe("allowlist");
     expect(result.allowFrom).toEqual(["  slack:U123  "]);
+    expect(result.policyPath).toBe("channels.slack.dmPolicy");
+    expect(result.allowFromPath).toBe("channels.slack.");
     expect(result.normalizeEntry?.("  slack:U123  ")).toBe("U123");
     expect(result.normalizeEntry?.("  user:U999  ")).toBe("U999");
   });

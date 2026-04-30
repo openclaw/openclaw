@@ -2,7 +2,7 @@ import type {
   ChannelDoctorConfigMutation,
   ChannelDoctorLegacyConfigRule,
 } from "openclaw/plugin-sdk/channel-contract";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { asObjectRecord, normalizeLegacyChannelAliases } from "openclaw/plugin-sdk/runtime-doctor";
 import { resolveDiscordPreviewStreamMode } from "./preview-streaming.js";
 
@@ -219,14 +219,12 @@ export function normalizeCompatibilityConfig({
   const changes: string[] = [];
   let updated = rawEntry;
   let changed = false;
-  const shouldPromoteRootDmAllowFrom = !asObjectRecord(updated.accounts);
 
   const aliases = normalizeLegacyChannelAliases({
     entry: rawEntry,
     pathPrefix: "channels.discord",
     changes,
     normalizeDm: true,
-    rootDmPromoteAllowFrom: shouldPromoteRootDmAllowFrom,
     normalizeAccountDm: true,
     resolveStreamingOptions: (entry) => ({
       resolvedMode: resolveDiscordPreviewStreamMode(entry),

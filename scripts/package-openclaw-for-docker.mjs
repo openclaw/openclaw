@@ -14,6 +14,7 @@ function parseArgs(argv) {
     outputDir: "",
     outputName: "",
     skipBuild: false,
+    sourceDir: ROOT_DIR,
   };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
@@ -27,6 +28,10 @@ function parseArgs(argv) {
       options.outputName = arg.slice("--output-name=".length);
     } else if (arg === "--skip-build") {
       options.skipBuild = true;
+    } else if (arg === "--source-dir") {
+      options.sourceDir = argv[(index += 1)] ?? "";
+    } else if (arg?.startsWith("--source-dir=")) {
+      options.sourceDir = arg.slice("--source-dir=".length);
     } else {
       throw new Error(`unknown argument: ${arg}`);
     }
@@ -34,16 +39,33 @@ function parseArgs(argv) {
   return options;
 }
 
-function run(command, args) {
+function run(command, args, cwd, options = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
-      cwd: ROOT_DIR,
+      cwd,
       stdio: ["ignore", "pipe", "pipe"],
     });
+    let timedOut = false;
+    const timeout =
+      options.timeoutMs === undefined
+        ? undefined
+        : setTimeout(() => {
+            timedOut = true;
+            child.kill("SIGTERM");
+            setTimeout(() => child.kill("SIGKILL"), 5_000).unref?.();
+          }, options.timeoutMs);
+    timeout?.unref?.();
     child.stdout.pipe(process.stderr, { end: false });
     child.stderr.pipe(process.stderr, { end: false });
     child.on("error", reject);
     child.on("close", (status, signal) => {
+      if (timeout) {
+        clearTimeout(timeout);
+      }
+      if (timedOut) {
+        reject(new Error(`${command} ${args.join(" ")} timed out after ${options.timeoutMs}ms`));
+        return;
+      }
       if (status === 0) {
         resolve();
         return;
@@ -53,10 +75,10 @@ function run(command, args) {
   });
 }
 
-async function runCapture(command, args) {
+async function runCapture(command, args, cwd) {
   return await new Promise((resolve, reject) => {
     const child = spawn(command, args, {
-      cwd: ROOT_DIR,
+      cwd,
       stdio: ["ignore", "pipe", "pipe"],
     });
     let stdout = "";
@@ -100,6 +122,7 @@ async function newestOpenClawTarball(outputDir, packOutput) {
 
 async function main() {
   const options = parseArgs(process.argv.slice(2));
+  const sourceDir = path.resolve(ROOT_DIR, options.sourceDir || ROOT_DIR);
   const outputDir = path.resolve(
     ROOT_DIR,
     options.outputDir || path.join(".artifacts", "docker-e2e-package"),
@@ -108,26 +131,30 @@ async function main() {
 
   if (!options.skipBuild) {
     console.error("==> Building OpenClaw package artifacts");
-    await run("pnpm", ["build"]);
+    await run("pnpm", ["build"], sourceDir);
+    console.error("==> Building OpenClaw Control UI artifacts");
+    await run("pnpm", ["ui:build"], sourceDir);
   }
 
   console.error("==> Writing OpenClaw package inventory");
-  await run("node", [
-    "--import",
-    "tsx",
-    "--input-type=module",
-    "-e",
-    "const { writePackageDistInventory } = await import('./src/infra/package-dist-inventory.ts'); await writePackageDistInventory(process.cwd());",
-  ]);
+  await run(
+    "node",
+    [
+      "--import",
+      "tsx",
+      "--input-type=module",
+      "-e",
+      "const { writePackageDistInventory } = await import('./src/infra/package-dist-inventory.ts'); await writePackageDistInventory(process.cwd());",
+    ],
+    sourceDir,
+  );
 
   console.error("==> Packing OpenClaw package");
-  const packOutput = await runCapture("npm", [
-    "pack",
-    "--silent",
-    "--ignore-scripts",
-    "--pack-destination",
-    outputDir,
-  ]);
+  const packOutput = await runCapture(
+    "npm",
+    ["pack", "--silent", "--ignore-scripts", "--pack-destination", outputDir],
+    sourceDir,
+  );
   let tarball = await newestOpenClawTarball(outputDir, packOutput);
 
   if (options.outputName) {
@@ -140,7 +167,16 @@ async function main() {
   }
 
   console.error("==> Checking OpenClaw package tarball");
-  await run("node", ["scripts/check-openclaw-package-tarball.mjs", tarball]);
+  const checkStartedAt = Date.now();
+  await run(
+    "node",
+    [path.join(ROOT_DIR, "scripts/check-openclaw-package-tarball.mjs"), tarball],
+    sourceDir,
+    { timeoutMs: 5 * 60 * 1000 },
+  );
+  console.error(
+    `==> OpenClaw package tarball check finished in ${Math.round((Date.now() - checkStartedAt) / 1000)}s`,
+  );
 
   process.stdout.write(`${tarball}\n`);
 }

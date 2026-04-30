@@ -148,6 +148,9 @@ function createHarness(params?: {
         }),
   } as unknown as MatrixClient;
 
+  const dmPolicy = params?.dmPolicy ?? "open";
+  const allowFrom = params?.allowFrom ?? (dmPolicy === "open" ? ["*"] : []);
+
   registerMatrixMonitorEvents({
     cfg: params?.cfg ?? { channels: { matrix: {} } },
     client,
@@ -155,9 +158,9 @@ function createHarness(params?: {
       accountId: params?.accountId ?? "default",
       encryption: params?.authEncryption ?? true,
     } as MatrixAuth,
-    allowFrom: params?.allowFrom ?? [],
+    allowFrom,
     dmEnabled: params?.dmEnabled ?? true,
-    dmPolicy: params?.dmPolicy ?? "open",
+    dmPolicy,
     readStoreAllowFrom,
     directTracker: {
       invalidateRoom,
@@ -196,6 +199,9 @@ function createHarness(params?: {
     flushTasks,
     runDetachedTask,
     roomMessageListener: listeners.get("room.message") as RoomEventListener | undefined,
+    roomDecryptedEventListener: listeners.get("room.decrypted_event") as
+      | RoomEventListener
+      | undefined,
     failedDecryptListener: listeners.get("room.failed_decryption") as
       | FailedDecryptListener
       | undefined,
@@ -400,6 +406,29 @@ describe("registerMatrixMonitorEvents verification routing", () => {
     const body = getSentNoticeBody(sendMessage, 0);
     expect(body).toContain("Matrix verification request received from @alice:example.org.");
     expect(body).toContain('Open "Verify by emoji"');
+  });
+
+  it("routes late-decrypted room messages through the normal room handler", async () => {
+    const { onRoomMessage, roomDecryptedEventListener, flushTasks } = createHarness();
+    if (!roomDecryptedEventListener) {
+      throw new Error("room.decrypted_event listener was not registered");
+    }
+    const event: MatrixRawEvent = {
+      event_id: "$decrypted1",
+      sender: "@alice:example.org",
+      type: EventType.RoomMessage,
+      origin_server_ts: Date.now(),
+      content: {
+        msgtype: "m.text",
+        body: "@bot late decrypt trigger",
+      },
+    };
+
+    roomDecryptedEventListener("!room:example.org", event);
+
+    await flushTasks();
+    expect(onRoomMessage).toHaveBeenCalledTimes(1);
+    expect(onRoomMessage).toHaveBeenCalledWith("!room:example.org", event);
   });
 
   it("blocks verification request notices when dmPolicy pairing would block the sender", async () => {

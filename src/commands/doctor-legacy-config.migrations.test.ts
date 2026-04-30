@@ -18,16 +18,19 @@ vi.mock("../plugins/manifest-registry.js", () => ({
       {
         id: "brave",
         origin: "bundled",
+        channels: [],
         contracts: { webSearchProviders: ["brave"] },
       },
       {
         id: "google",
         origin: "bundled",
+        channels: [],
         contracts: { webSearchProviders: ["gemini"] },
       },
       {
         id: "firecrawl",
         origin: "bundled",
+        channels: [],
         contracts: { webSearchProviders: ["firecrawl"] },
       },
     ],
@@ -339,6 +342,40 @@ describe("normalizeCompatibilityConfigValues", () => {
     expect(res.config.commands).toEqual({ text: true });
     expect(res.changes).toContain(
       "Removed deprecated commands.modelsWrite (/models add is deprecated).",
+    );
+  });
+
+  it("migrates legacy OpenAI provider api values to OpenAI completions", () => {
+    const res = normalizeCompatibilityConfigValues({
+      models: {
+        providers: {
+          openrouter: {
+            baseUrl: "https://openrouter.ai/api/v1",
+            api: "openai",
+            models: [
+              {
+                id: "openai/gpt-4o-mini",
+                name: "OpenRouter GPT-4o Mini",
+                api: "openai",
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 128_000,
+                maxTokens: 16_384,
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig);
+
+    expect(res.config.models?.providers?.openrouter?.api).toBe("openai-completions");
+    expect(res.config.models?.providers?.openrouter?.models?.[0]?.api).toBe("openai-completions");
+    expect(res.changes).toContain(
+      'Moved models.providers.openrouter.api "openai" → "openai-completions".',
+    );
+    expect(res.changes).toContain(
+      'Moved models.providers.openrouter.models[0].api "openai" → "openai-completions".',
     );
   });
 

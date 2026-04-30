@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { shouldExpectNativeJitiForJavaScriptTestRuntime } from "../test-utils/jiti-runtime.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
@@ -55,7 +56,9 @@ describe("doctor-contract-registry getJiti", () => {
     }
 
     expect(mocks.createJiti).toHaveBeenCalledTimes(1);
-    expect(mocks.createJiti.mock.calls[0]?.[0]).toBe(path.join(pluginRoot, "contract-api.js"));
+    expect(mocks.createJiti.mock.calls[0]?.[0]).toBe(
+      pathToFileURL(path.join(pluginRoot, "contract-api.js"), { windows: true }).href,
+    );
     expect(mocks.createJiti.mock.calls[0]?.[1]).toEqual(
       expect.objectContaining({
         tryNative: expectedTryNative,
@@ -128,6 +131,44 @@ describe("doctor-contract-registry getJiti", () => {
     } finally {
       platformSpy.mockRestore();
     }
+  });
+
+  it("reads doctor contracts from the current manifest registry on each call", () => {
+    const firstRoot = makeTempDir();
+    const secondRoot = makeTempDir();
+    fs.writeFileSync(
+      path.join(firstRoot, "doctor-contract-api.cjs"),
+      "module.exports = { legacyConfigRules: [{ path: ['plugins', 'entries', 'first'], message: 'first contract' }] };\n",
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(secondRoot, "doctor-contract-api.cjs"),
+      "module.exports = { legacyConfigRules: [{ path: ['plugins', 'entries', 'second'], message: 'second contract' }] };\n",
+      "utf-8",
+    );
+    mocks.loadPluginManifestRegistry
+      .mockReturnValueOnce({
+        plugins: [{ id: "first-plugin", rootDir: firstRoot }],
+        diagnostics: [],
+      })
+      .mockReturnValueOnce({
+        plugins: [{ id: "second-plugin", rootDir: secondRoot }],
+        diagnostics: [],
+      });
+
+    expect(listPluginDoctorLegacyConfigRules({ workspaceDir: "/workspace", env: {} })).toEqual([
+      {
+        path: ["plugins", "entries", "first"],
+        message: "first contract",
+      },
+    ]);
+    expect(listPluginDoctorLegacyConfigRules({ workspaceDir: "/workspace", env: {} })).toEqual([
+      {
+        path: ["plugins", "entries", "second"],
+        message: "second contract",
+      },
+    ]);
+    expect(mocks.loadPluginManifestRegistry).toHaveBeenCalledTimes(2);
   });
 
   it("narrows touched-path doctor ids for scoped dry-run validation", () => {

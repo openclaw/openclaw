@@ -4,6 +4,7 @@ import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { createWriteStream } from "node:fs";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
@@ -18,6 +19,7 @@ function usage() {
 
 Options:
   --package-spec <spec>       Published npm spec for source=npm.
+  --package-ref <ref>         Trusted repo ref for source=ref.
   --package-url <url>         HTTPS tarball URL for source=url.
   --package-sha256 <sha256>   Expected tarball SHA-256 for source=url or source=artifact.
   --artifact-dir <dir>        Directory containing exactly one .tgz for source=artifact.
@@ -33,6 +35,7 @@ export function parseArgs(argv) {
     metadata: "",
     outputDir: "",
     outputName: DEFAULT_OUTPUT_NAME,
+    packageRef: "",
     packageSha256: "",
     packageSpec: "",
     packageUrl: "",
@@ -59,6 +62,8 @@ export function parseArgs(argv) {
       options.outputName = readValue(arg);
     } else if (arg === "--package-sha256") {
       options.packageSha256 = readValue(arg).toLowerCase();
+    } else if (arg === "--package-ref") {
+      options.packageRef = readValue(arg);
     } else if (arg === "--package-spec") {
       options.packageSpec = readValue(arg);
     } else if (arg === "--package-url") {
@@ -88,6 +93,16 @@ function run(command, args, options = {}) {
       cwd: options.cwd ?? ROOT_DIR,
       stdio: options.capture ? ["ignore", "pipe", "pipe"] : ["ignore", "inherit", "inherit"],
     });
+    let timedOut = false;
+    const timeout =
+      options.timeoutMs === undefined
+        ? undefined
+        : setTimeout(() => {
+            timedOut = true;
+            child.kill("SIGTERM");
+            setTimeout(() => child.kill("SIGKILL"), 5_000).unref?.();
+          }, options.timeoutMs);
+    timeout?.unref?.();
     let stdout = "";
     let stderr = "";
     if (options.capture) {
@@ -100,6 +115,13 @@ function run(command, args, options = {}) {
     }
     child.on("error", reject);
     child.on("close", (status, signal) => {
+      if (timeout) {
+        clearTimeout(timeout);
+      }
+      if (timedOut) {
+        reject(new Error(`${command} ${args.join(" ")} timed out after ${options.timeoutMs}ms`));
+        return;
+      }
       if (status === 0) {
         resolve(stdout);
         return;
@@ -165,6 +187,104 @@ async function findSingleTarball(dir) {
     );
   }
   return files[0];
+}
+
+async function revParseTrustedInputRef(ref) {
+  const candidates = [ref, `refs/remotes/origin/${ref}`, `refs/tags/${ref}`];
+  for (const candidate of candidates) {
+    const resolved = await run("git", ["rev-parse", "--verify", `${candidate}^{commit}`], {
+      capture: true,
+    }).then(
+      (value) => value.trim(),
+      () => "",
+    );
+    if (resolved) {
+      return resolved;
+    }
+  }
+  throw new Error(`package_ref does not resolve to a commit: ${ref}`);
+}
+
+async function resolveTrustedRepoRef(ref) {
+  if (!ref || ref.trim() === "" || ref.startsWith("-")) {
+    throw new Error(
+      `package_ref must be a branch, tag, or full commit SHA; got: ${ref || "<empty>"}`,
+    );
+  }
+
+  await run("git", ["fetch", "--no-tags", "origin", "+refs/heads/*:refs/remotes/origin/*"]);
+  await run("git", ["fetch", "--tags", "origin", "+refs/tags/*:refs/tags/*"]);
+
+  const selectedSha = await revParseTrustedInputRef(ref);
+  const isMainAncestor = await run("git", [
+    "merge-base",
+    "--is-ancestor",
+    selectedSha,
+    "refs/remotes/origin/main",
+  ]).then(
+    () => true,
+    () => false,
+  );
+  if (isMainAncestor) {
+    return { selectedSha, trustedReason: "main-ancestor" };
+  }
+
+  const releaseTags = (await run("git", ["tag", "--points-at", selectedSha], { capture: true }))
+    .split(/\r?\n/u)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (releaseTags.some((tag) => tag.startsWith("v"))) {
+    return { selectedSha, trustedReason: "release-tag" };
+  }
+
+  const containingBranches = (
+    await run(
+      "git",
+      [
+        "for-each-ref",
+        "--format=%(refname:short)",
+        "--contains",
+        selectedSha,
+        "refs/remotes/origin",
+      ],
+      { capture: true },
+    )
+  )
+    .split(/\r?\n/u)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (containingBranches.some((branch) => branch.startsWith("origin/"))) {
+    return { selectedSha, trustedReason: "repository-branch-history" };
+  }
+
+  throw new Error(
+    `package_ref ${ref} resolved to ${selectedSha}, which is not reachable from an OpenClaw branch or release tag`,
+  );
+}
+
+async function preparePackageSourceWorktree(ref) {
+  const { selectedSha, trustedReason } = await resolveTrustedRepoRef(ref);
+  const sourceDir = path.join(
+    process.env.RUNNER_TEMP || os.tmpdir(),
+    `openclaw-package-source-${process.pid}`,
+  );
+  await fs.rm(sourceDir, { recursive: true, force: true });
+  await run("git", ["worktree", "add", "--detach", sourceDir, selectedSha]);
+  return { selectedSha, sourceDir, trustedReason };
+}
+
+async function installPackageSourceDeps(sourceDir) {
+  await run(
+    "pnpm",
+    [
+      "install",
+      "--frozen-lockfile",
+      "--ignore-scripts=false",
+      "--config.engine-strict=false",
+      "--config.enable-pre-post-scripts=true",
+    ],
+    { cwd: sourceDir },
+  );
 }
 
 async function moveNewestPackedTarball(outputDir, packOutput, outputName) {
@@ -238,47 +358,86 @@ async function resolveCandidate(options) {
   const target = path.join(outputDir, options.outputName || DEFAULT_OUTPUT_NAME);
   await fs.mkdir(outputDir, { recursive: true });
   await fs.rm(target, { force: true });
+  let packageRef = "";
+  let packageSourceSha = "";
+  let packageTrustedReason = "";
+  let packageWorktreeDir = "";
 
-  if (options.source === "ref") {
-    await run("node", [
-      "scripts/package-openclaw-for-docker.mjs",
-      "--output-dir",
-      outputDir,
-      "--output-name",
-      options.outputName || DEFAULT_OUTPUT_NAME,
-    ]);
-  } else if (options.source === "npm") {
-    validateOpenClawPackageSpec(options.packageSpec);
-    const packOutput = await run(
-      "npm",
-      ["pack", options.packageSpec, "--ignore-scripts", "--json", "--pack-destination", outputDir],
-      { capture: true },
-    );
-    await moveNewestPackedTarball(outputDir, packOutput, options.outputName || DEFAULT_OUTPUT_NAME);
-  } else if (options.source === "url") {
-    if (!options.packageUrl) {
-      throw new Error("source=url requires --package-url");
+  try {
+    if (options.source === "ref") {
+      packageRef = options.packageRef || "main";
+      const packageSource = await preparePackageSourceWorktree(packageRef);
+      packageWorktreeDir = packageSource.sourceDir;
+      packageSourceSha = packageSource.selectedSha;
+      packageTrustedReason = packageSource.trustedReason;
+      await installPackageSourceDeps(packageSource.sourceDir);
+      await run("node", [
+        "scripts/package-openclaw-for-docker.mjs",
+        "--source-dir",
+        packageSource.sourceDir,
+        "--output-dir",
+        outputDir,
+        "--output-name",
+        options.outputName || DEFAULT_OUTPUT_NAME,
+      ]);
+    } else if (options.source === "npm") {
+      validateOpenClawPackageSpec(options.packageSpec);
+      const packOutput = await run(
+        "npm",
+        [
+          "pack",
+          options.packageSpec,
+          "--ignore-scripts",
+          "--json",
+          "--pack-destination",
+          outputDir,
+        ],
+        { capture: true },
+      );
+      await moveNewestPackedTarball(
+        outputDir,
+        packOutput,
+        options.outputName || DEFAULT_OUTPUT_NAME,
+      );
+    } else if (options.source === "url") {
+      if (!options.packageUrl) {
+        throw new Error("source=url requires --package-url");
+      }
+      if (!options.packageSha256) {
+        throw new Error("source=url requires --package-sha256");
+      }
+      await downloadUrl(options.packageUrl, target);
+    } else if (options.source === "artifact") {
+      if (!options.artifactDir) {
+        throw new Error("source=artifact requires --artifact-dir");
+      }
+      const input = await findSingleTarball(options.artifactDir);
+      await fs.copyFile(input, target);
+    } else {
+      throw new Error(`source must be one of: ref, npm, url, artifact. Got: ${options.source}`);
     }
-    if (!options.packageSha256) {
-      throw new Error("source=url requires --package-sha256");
+  } finally {
+    if (packageWorktreeDir) {
+      await run("git", ["worktree", "remove", "--force", packageWorktreeDir]).catch(() => {});
     }
-    await downloadUrl(options.packageUrl, target);
-  } else if (options.source === "artifact") {
-    if (!options.artifactDir) {
-      throw new Error("source=artifact requires --artifact-dir");
-    }
-    const input = await findSingleTarball(options.artifactDir);
-    await fs.copyFile(input, target);
-  } else {
-    throw new Error(`source must be one of: ref, npm, url, artifact. Got: ${options.source}`);
   }
 
   const digest = await assertExpectedSha256(target, options.packageSha256);
-  await run("node", ["scripts/check-openclaw-package-tarball.mjs", target]);
+  console.error(`Checking OpenClaw package tarball: ${target}`);
+  const checkStartedAt = Date.now();
+  await run("node", ["scripts/check-openclaw-package-tarball.mjs", target], {
+    timeoutMs: 5 * 60 * 1000,
+  });
+  console.error(
+    `OpenClaw package tarball check finished in ${Math.round((Date.now() - checkStartedAt) / 1000)}s`,
+  );
   const pkg = await readPackageJson(target);
   const metadata = {
     name: pkg.name,
+    packageRef,
     packageSpec: options.packageSpec || "",
+    packageSourceSha,
+    packageTrustedReason,
     sha256: digest,
     source: options.source,
     tarball: path.relative(ROOT_DIR, target),
@@ -301,6 +460,7 @@ async function resolveCandidate(options) {
   }
   await appendGithubOutputs(options.githubOutput, {
     package_name: pkg.name,
+    package_source_sha: packageSourceSha,
     package_version: pkg.version,
     sha256: digest,
     tarball: metadata.tarball,
