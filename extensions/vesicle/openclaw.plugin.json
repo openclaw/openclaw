@@ -4,6 +4,142 @@
     "onStartup": false
   },
   "channels": ["vesicle"],
+  "channelConfigs": {
+    "vesicle": {
+      "label": "Vesicle",
+      "description": "iMessage via Vesicle's native REST API.",
+      "preferOver": ["bluebubbles", "imessage"],
+      "schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "definitions": {
+          "allowFrom": {
+            "type": "array",
+            "items": {
+              "anyOf": [{ "type": "string" }, { "type": "number" }]
+            }
+          },
+          "markdown": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "tables": {
+                "type": "string",
+                "enum": ["off", "bullets", "code", "block"]
+              }
+            }
+          },
+          "network": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "dangerouslyAllowPrivateNetwork": { "type": "boolean" }
+            }
+          },
+          "secretInput": {
+            "anyOf": [{ "type": "string" }, { "type": "object" }]
+          },
+          "account": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "name": { "type": "string" },
+              "enabled": { "type": "boolean" },
+              "markdown": { "$ref": "#/definitions/markdown" },
+              "serverUrl": { "type": "string" },
+              "authToken": { "$ref": "#/definitions/secretInput" },
+              "webhookPath": { "type": "string" },
+              "webhookSecret": { "$ref": "#/definitions/secretInput" },
+              "dmPolicy": {
+                "type": "string",
+                "enum": ["pairing", "allowlist", "open", "disabled"]
+              },
+              "allowFrom": { "$ref": "#/definitions/allowFrom" },
+              "groupAllowFrom": { "$ref": "#/definitions/allowFrom" },
+              "groupPolicy": {
+                "type": "string",
+                "enum": ["open", "disabled", "allowlist"]
+              },
+              "defaultTo": { "type": "string" },
+              "sendTimeoutMs": {
+                "type": "integer",
+                "exclusiveMinimum": 0
+              },
+              "probeTimeoutMs": {
+                "type": "integer",
+                "exclusiveMinimum": 0
+              },
+              "textChunkLimit": {
+                "type": "integer",
+                "exclusiveMinimum": 0
+              },
+              "network": { "$ref": "#/definitions/network" }
+            }
+          }
+        },
+        "properties": {
+          "name": { "type": "string" },
+          "enabled": { "type": "boolean" },
+          "markdown": { "$ref": "#/definitions/markdown" },
+          "serverUrl": { "type": "string" },
+          "authToken": { "$ref": "#/definitions/secretInput" },
+          "webhookPath": { "type": "string" },
+          "webhookSecret": { "$ref": "#/definitions/secretInput" },
+          "dmPolicy": {
+            "type": "string",
+            "enum": ["pairing", "allowlist", "open", "disabled"]
+          },
+          "allowFrom": { "$ref": "#/definitions/allowFrom" },
+          "groupAllowFrom": { "$ref": "#/definitions/allowFrom" },
+          "groupPolicy": {
+            "type": "string",
+            "enum": ["open", "disabled", "allowlist"]
+          },
+          "defaultTo": { "type": "string" },
+          "sendTimeoutMs": {
+            "type": "integer",
+            "exclusiveMinimum": 0
+          },
+          "probeTimeoutMs": {
+            "type": "integer",
+            "exclusiveMinimum": 0
+          },
+          "textChunkLimit": {
+            "type": "integer",
+            "exclusiveMinimum": 0
+          },
+          "network": { "$ref": "#/definitions/network" },
+          "accounts": {
+            "type": "object",
+            "additionalProperties": { "$ref": "#/definitions/account" }
+          },
+          "defaultAccount": { "type": "string" }
+        }
+      },
+      "uiHints": {
+        "serverUrl": {
+          "label": "Server URL",
+          "placeholder": "http://127.0.0.1:1234"
+        },
+        "authToken": {
+          "label": "Auth token",
+          "secret": true
+        },
+        "webhookPath": {
+          "label": "Webhook path",
+          "placeholder": "/vesicle-webhook"
+        },
+        "webhookSecret": {
+          "label": "Webhook secret",
+          "secret": true
+        },
+        "defaultTo": {
+          "label": "Default chat",
+          "placeholder": "chat_guid:<GUID>"
+        }
+      }
+    }
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

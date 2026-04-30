@@ -1,0 +1,8 @@
+dist/
+node_modules/
+*.log
+src/**/*.test.ts
+src/**/test-*.ts
+src/**/*test-helpers.ts
+src/**/*test-harness.ts
+src/**/*test-support.ts
