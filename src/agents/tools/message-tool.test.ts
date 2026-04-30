@@ -601,8 +601,10 @@ describe("message tool schema scoping", () => {
 
     expect(getActionEnum(getToolProperties(scopedTool))).toContain("react");
     expect(getActionEnum(getToolProperties(unscopedTool))).not.toContain("react");
-    expect(scopedTool.description).toContain("telegram (react, send)");
-    expect(unscopedTool.description).not.toContain("telegram (react, send)");
+    expect(scopedTool.description).toContain("Supports actions: react, send.");
+    expect(unscopedTool.description).toContain("Supports actions: send.");
+    expect(scopedTool.description).not.toContain("telegram (");
+    expect(unscopedTool.description).not.toContain("telegram (");
   });
 
   it("routes full discovery context into plugin action discovery", () => {
@@ -697,6 +699,29 @@ describe("message tool schema scoping", () => {
       expect.arrayContaining(["send", "broadcast"]),
     );
   });
+
+  it("advertises Slack download-file fileId in scoped schemas", () => {
+    const slackFilePlugin = createChannelPlugin({
+      id: "slack",
+      label: "Slack",
+      docsPath: "/channels/slack",
+      blurb: "Slack test plugin.",
+      actions: ["download-file"],
+    });
+
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "slack", source: "test", plugin: slackFilePlugin }]),
+    );
+
+    const tool = createMessageTool({
+      config: {} as never,
+      currentChannelProvider: "slack",
+    });
+    const properties = getToolProperties(tool);
+
+    expect(getActionEnum(properties)).toContain("download-file");
+    expect(properties.fileId).toMatchObject({ type: "string" });
+  });
 });
 
 describe("message tool description", () => {
@@ -779,7 +804,7 @@ describe("message tool description", () => {
     expect(tool.description).not.toContain("leaveGroup");
   });
 
-  it("includes other configured channels when currentChannel is set", () => {
+  it("describes accepted actions without channel-specific wording when currentChannel is set", () => {
     const signalPlugin = createChannelPlugin({
       id: "signal",
       label: "Signal",
@@ -808,11 +833,12 @@ describe("message tool description", () => {
       currentChannelProvider: "signal",
     });
 
-    // Current channel actions are listed
-    expect(tool.description).toContain("Current channel (signal) supports: react, send.");
-    // Other configured channels are also listed
-    expect(tool.description).toContain("Other configured channels:");
-    expect(tool.description).toContain("telegram (delete, edit, react, send, topic-create)");
+    expect(tool.description).toContain(
+      "Supports actions: delete, edit, react, send, topic-create.",
+    );
+    expect(tool.description).not.toContain("Current channel");
+    expect(tool.description).not.toContain("Other configured channels");
+    expect(tool.description).not.toContain("telegram (");
   });
 
   it("does not advertise cross-channel actions whose params are hidden by current-channel schema", () => {
@@ -885,10 +911,11 @@ describe("message tool description", () => {
       currentChannelProvider: "sig",
     });
 
-    expect(tool.description).toContain("Current channel (signal) supports: react, send.");
+    expect(tool.description).toContain("Supports actions: react, send.");
+    expect(tool.description).not.toContain("Current channel");
   });
 
-  it("does not include 'Other configured channels' when only one channel is configured", () => {
+  it("keeps the current-channel description stable when only one channel is configured", () => {
     setActivePluginRegistry(
       createTestRegistry([{ pluginId: "bluebubbles", source: "test", plugin: bluebubblesPlugin }]),
     );
@@ -898,7 +925,8 @@ describe("message tool description", () => {
       currentChannelProvider: "bluebubbles",
     });
 
-    expect(tool.description).toContain("Current channel (bluebubbles) supports:");
+    expect(tool.description).toContain("Supports actions:");
+    expect(tool.description).not.toContain("Current channel");
     expect(tool.description).not.toContain("Other configured channels");
   });
 
@@ -970,7 +998,7 @@ describe("message tool description", () => {
       config: {} as never,
     });
 
-    expect(tool.description).toContain("Supports actions: send, broadcast.");
+    expect(tool.description).toContain("Supports actions: broadcast, send.");
   });
 });
 

@@ -253,6 +253,42 @@ describe("renderQuickSettings", () => {
     expect(onAssistantAvatarClearOverride).toHaveBeenCalledTimes(1);
   });
 
+  it("lets the browser-local assistant avatar override stale missing IDENTITY.md metadata", () => {
+    const dataUrl = "data:image/png;base64,bG9jYWwtYXNzaXN0YW50";
+    const container = document.createElement("div");
+
+    render(
+      renderQuickSettings(
+        createProps({
+          assistantName: "Nova",
+          assistantAvatar: "/avatar/main",
+          assistantAvatarUrl: null,
+          assistantAvatarSource: "avatars/missing.png",
+          assistantAvatarStatus: "none",
+          assistantAvatarReason: "missing",
+          assistantAvatarOverride: dataUrl,
+        }),
+      ),
+      container,
+    );
+
+    expect(container.querySelector(".qs-assistant-avatar")?.getAttribute("src")).toBe(dataUrl);
+    expect(container.querySelector(".qs-identity-card__source")?.textContent).toContain(
+      "UI override",
+    );
+    expect(container.querySelector(".qs-identity-card__issue")).toBeNull();
+    expect(
+      Array.from(container.querySelectorAll("label.btn")).some(
+        (label) => label.textContent?.trim() === "Replace image",
+      ),
+    ).toBe(true);
+    expect(
+      Array.from(container.querySelectorAll("button")).some(
+        (button) => button.textContent?.trim() === "Clear override",
+      ),
+    ).toBe(true);
+  });
+
   it("rejects oversized avatar uploads before reading them", () => {
     const onUserAvatarChange = vi.fn();
     const fileReader = vi.fn();
@@ -285,14 +321,14 @@ describe("renderQuickSettings", () => {
     }
   });
 
-  it("always shows the custom theme option in quick settings", () => {
+  it("shows an import theme option in quick settings before a theme is imported", () => {
     const container = document.createElement("div");
 
     render(renderQuickSettings(createProps()), container);
 
     expect(
       Array.from(container.querySelectorAll("button")).some(
-        (button) => button.textContent?.trim() === "Custom",
+        (button) => button.textContent?.trim() === "Import",
       ),
     ).toBe(true);
   });
@@ -314,7 +350,7 @@ describe("renderQuickSettings", () => {
     );
 
     const customButton = Array.from(container.querySelectorAll("button")).find(
-      (button) => button.textContent?.trim() === "Custom",
+      (button) => button.textContent?.trim() === "Import",
     );
     customButton?.click();
 
@@ -332,6 +368,7 @@ describe("renderQuickSettings", () => {
         createProps({
           theme: "claw",
           hasCustomTheme: true,
+          customThemeLabel: "Light Green",
           setTheme,
           onOpenCustomThemeImport,
         }),
@@ -340,7 +377,7 @@ describe("renderQuickSettings", () => {
     );
 
     const customButton = Array.from(container.querySelectorAll("button")).find(
-      (button) => button.textContent?.trim() === "Custom",
+      (button) => button.textContent?.trim() === "Light Green",
     );
     customButton?.click();
 

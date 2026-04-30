@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../shared/assistant-error-format.js";
 import { getSlashCommands, parseCommand } from "./commands.js";
 import {
   createBackspaceDeduper,
@@ -39,6 +40,16 @@ describe("resolveFinalAssistantText", () => {
         errorMessage: '401 {"error":{"message":"Missing scopes: model.request"}}',
       }),
     ).toContain("HTTP 401");
+  });
+
+  it("formats malformed streaming fragment errors when final and streamed text are empty", () => {
+    expect(
+      resolveFinalAssistantText({
+        finalText: "",
+        streamedText: "",
+        errorMessage: MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE,
+      }),
+    ).toBe("LLM streaming response contained a malformed fragment. Please try again.");
   });
 });
 
@@ -208,6 +219,14 @@ describe("createBackspaceDeduper", () => {
     expect(dedupe("\x7f")).toBe("\x7f");
     advance(10);
     expect(dedupe("\x7f")).toBe("\x7f");
+  });
+
+  it("treats ASCII BS as backspace when it is the first event", () => {
+    const { dedupe, advance } = createTimedDedupe();
+
+    expect(dedupe("\x08")).toBe("\x08");
+    advance(1);
+    expect(dedupe("\x7f")).toBe("");
   });
 
   it("never suppresses non-backspace keys", () => {

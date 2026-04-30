@@ -2,12 +2,15 @@ import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { describe, expect, it } from "vitest";
 import {
   buildCopilotDynamicHeaders,
+  createDeepSeekV4OpenAICompatibleThinkingWrapper,
   createHtmlEntityToolCallArgumentDecodingWrapper,
+  createAnthropicThinkingPrefillPayloadWrapper,
   createPayloadPatchStreamWrapper,
   defaultToolStreamExtraParams,
   decodeHtmlEntitiesInObject,
   hasCopilotVisionInput,
   isOpenAICompatibleThinkingEnabled,
+  stripTrailingAnthropicAssistantPrefillWhenThinking,
 } from "./provider-stream-shared.js";
 
 type FakeWrappedStream = {
@@ -99,6 +102,37 @@ describe("isOpenAICompatibleThinkingEnabled", () => {
         options: { reasoning: { effort: "off" } } as never,
       }),
     ).toBe(true);
+  });
+});
+
+describe("createDeepSeekV4OpenAICompatibleThinkingWrapper", () => {
+  it("backfills reasoning_content on every replayed assistant message when thinking is enabled", () => {
+    const payload = {
+      messages: [
+        { role: "user", content: "read file" },
+        { role: "assistant", tool_calls: [{ id: "call_1", name: "read" }] },
+        { role: "tool", content: "ok" },
+        { role: "assistant", content: "done" },
+        { role: "assistant", content: "kept", reasoning_content: "native reasoning" },
+      ],
+    };
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      options?.onPayload?.(payload as never, _model as never);
+      return {} as ReturnType<StreamFn>;
+    };
+
+    const wrapped = createDeepSeekV4OpenAICompatibleThinkingWrapper({
+      baseStreamFn,
+      thinkingLevel: "high",
+      shouldPatchModel: () => true,
+    });
+    void wrapped?.({} as never, {} as never, {});
+
+    expect(payload.messages[0]).not.toHaveProperty("reasoning_content");
+    expect(payload.messages[1]).toHaveProperty("reasoning_content", "");
+    expect(payload.messages[2]).not.toHaveProperty("reasoning_content");
+    expect(payload.messages[3]).toHaveProperty("reasoning_content", "");
+    expect(payload.messages[4]).toHaveProperty("reasoning_content", "native reasoning");
   });
 });
 
@@ -263,5 +297,88 @@ describe("createPayloadPatchStreamWrapper", () => {
     void wrapped({ id: "model" } as never, { messages: [] } as never, {});
 
     expect(onPayloadWasInstalled).toBe(false);
+  });
+});
+
+describe("stripTrailingAnthropicAssistantPrefillWhenThinking", () => {
+  it("removes trailing assistant text turns when Anthropic thinking is enabled", () => {
+    const payload = {
+      thinking: { type: "enabled", budget_tokens: 1024 },
+      messages: [
+        { role: "user", content: "Return JSON." },
+        { role: "assistant", content: "{" },
+        { role: "assistant", content: '"status"' },
+      ],
+    };
+
+    expect(stripTrailingAnthropicAssistantPrefillWhenThinking(payload)).toBe(2);
+    expect(payload.messages).toEqual([{ role: "user", content: "Return JSON." }]);
+  });
+
+  it("preserves assistant tool-use turns across Anthropic and OpenAI-shaped payloads", () => {
+    const anthropicPayload = {
+      thinking: { type: "adaptive" },
+      messages: [
+        { role: "user", content: "Read a file." },
+        { role: "assistant", content: [{ type: "tool_use", id: "toolu_1", name: "Read" }] },
+      ],
+    };
+    const openAiPayload = {
+      thinking: { type: "adaptive" },
+      messages: [
+        { role: "user", content: "Read a file." },
+        { role: "assistant", content: [{ type: "toolCall", id: "call_1", name: "Read" }] },
+      ],
+    };
+    const toolCallsPayload = {
+      thinking: { type: "adaptive" },
+      messages: [{ role: "assistant", tool_calls: [{ id: "call_1", name: "Read" }] }],
+    };
+
+    expect(stripTrailingAnthropicAssistantPrefillWhenThinking(anthropicPayload)).toBe(0);
+    expect(stripTrailingAnthropicAssistantPrefillWhenThinking(openAiPayload)).toBe(0);
+    expect(stripTrailingAnthropicAssistantPrefillWhenThinking(toolCallsPayload)).toBe(0);
+  });
+
+  it("keeps assistant prefill when Anthropic thinking is disabled", () => {
+    const payload = {
+      thinking: { type: "disabled" },
+      messages: [
+        { role: "user", content: "Return JSON." },
+        { role: "assistant", content: "{" },
+      ],
+    };
+
+    expect(stripTrailingAnthropicAssistantPrefillWhenThinking(payload)).toBe(0);
+    expect(payload.messages).toHaveLength(2);
+  });
+});
+
+describe("createAnthropicThinkingPrefillPayloadWrapper", () => {
+  it("reports stripped assistant prefill count", () => {
+    const payload = {
+      thinking: { type: "enabled" },
+      messages: [
+        { role: "user", content: "Return JSON." },
+        { role: "assistant", content: "{" },
+      ],
+    };
+    let strippedCount = 0;
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      options?.onPayload?.(payload as never, _model as never);
+      return {} as ReturnType<StreamFn>;
+    };
+
+    const wrapped = createAnthropicThinkingPrefillPayloadWrapper(
+      baseStreamFn,
+      (stripped) => {
+        strippedCount = stripped;
+      },
+      { shouldPatch: ({ model }) => model.api === "anthropic-messages" },
+    );
+    void wrapped({ api: "anthropic-messages" } as never, {} as never, {});
+
+    expect(payload.messages).toEqual([{ role: "user", content: "Return JSON." }]);
+    expect(strippedCount).toBe(1);
   });
 });

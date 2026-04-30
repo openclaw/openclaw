@@ -47,16 +47,47 @@ export async function planAllModelListSources(params: {
   providerFilter?: string;
   cfg: OpenClawConfig;
 }): Promise<ModelListSourcePlan> {
-  if (!params.all || !params.providerFilter) {
+  if (!params.all) {
     return createRegistryModelListSourcePlan();
   }
 
-  const { loadStaticManifestCatalogRowsForList } = await import("./list.manifest-catalog.js");
-  const manifestCatalogRows = loadStaticManifestCatalogRowsForList({
+  const { loadStaticManifestCatalogRowsForList, loadSupplementalManifestCatalogRowsForList } =
+    await import("./list.manifest-catalog.js");
+  if (!params.providerFilter) {
+    const { loadProviderIndexCatalogRowsForList } =
+      await import("./list.provider-index-catalog.js");
+    return createSourcePlan({
+      kind: "registry",
+      manifestCatalogRows: loadSupplementalManifestCatalogRowsForList({
+        cfg: params.cfg,
+      }),
+      providerIndexCatalogRows: loadProviderIndexCatalogRowsForList({
+        cfg: params.cfg,
+      }),
+      requiresInitialRegistry: true,
+    });
+  }
+
+  const staticManifestCatalogRows = loadStaticManifestCatalogRowsForList({
     cfg: params.cfg,
     providerFilter: params.providerFilter,
   });
+  const manifestCatalogRows =
+    staticManifestCatalogRows.length === 0
+      ? loadSupplementalManifestCatalogRowsForList({
+          cfg: params.cfg,
+          providerFilter: params.providerFilter,
+        })
+      : staticManifestCatalogRows;
+
   if (manifestCatalogRows.length > 0) {
+    if (staticManifestCatalogRows.length === 0) {
+      return createSourcePlan({
+        kind: "registry",
+        manifestCatalogRows,
+        requiresInitialRegistry: true,
+      });
+    }
     return createSourcePlan({
       kind: "manifest",
       manifestCatalogRows,
@@ -92,5 +123,6 @@ export async function planAllModelListSources(params: {
 
   return createSourcePlan({
     kind: "provider-runtime-scoped",
+    fallbackToRegistryWhenEmpty: true,
   });
 }

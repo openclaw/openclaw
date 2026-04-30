@@ -196,6 +196,18 @@ describe("resolveSlackSystemEventSessionKey", () => {
     );
   });
 
+  it("uses the configured default agent for fallback system-event sessions", () => {
+    const ctx = createSlackMonitorContext({
+      ...baseParams(),
+      cfg: {
+        agents: { list: [{ id: "ops", default: true }] },
+      },
+    });
+    expect(ctx.resolveSlackSystemEventSessionKey({ channelId: "C123" })).toBe(
+      "agent:ops:slack:channel:c123",
+    );
+  });
+
   it("routes channel system events through account bindings", () => {
     const ctx = createSlackMonitorContext({
       ...baseParams(),

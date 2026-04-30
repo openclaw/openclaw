@@ -16,6 +16,7 @@ import {
 import { loadInstalledPluginIndexInstallRecordsSync } from "../plugins/installed-plugin-index-record-reader.js";
 import { resolveManifestCommandAliasOwnerInRegistry } from "../plugins/manifest-command-aliases.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { loadPluginManifestRegistryForPluginRegistry } from "../plugins/plugin-registry.js";
 import { validateJsonSchemaValue } from "../plugins/schema-validator.js";
 import { hasKind } from "../plugins/slots.js";
@@ -706,31 +707,44 @@ type ValidateConfigWithPluginsResult =
       warnings: ConfigValidationIssue[];
     };
 
+type ValidateConfigWithPluginsParams = {
+  env?: NodeJS.ProcessEnv;
+  pluginValidation?: "full" | "skip";
+  pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "manifestRegistry">;
+  loadPluginMetadataSnapshot?: (
+    config: OpenClawConfig,
+  ) => Pick<PluginMetadataSnapshot, "manifestRegistry">;
+};
+
 export function validateConfigObjectWithPlugins(
   raw: unknown,
-  params?: { env?: NodeJS.ProcessEnv; pluginValidation?: "full" | "skip" },
+  params?: ValidateConfigWithPluginsParams,
 ): ValidateConfigWithPluginsResult {
   return validateConfigObjectWithPluginsBase(raw, {
     applyDefaults: true,
     env: params?.env,
     pluginValidation: params?.pluginValidation ?? "full",
+    pluginMetadataSnapshot: params?.pluginMetadataSnapshot,
+    loadPluginMetadataSnapshot: params?.loadPluginMetadataSnapshot,
   });
 }
 
 export function validateConfigObjectRawWithPlugins(
   raw: unknown,
-  params?: { env?: NodeJS.ProcessEnv; pluginValidation?: "full" | "skip" },
+  params?: ValidateConfigWithPluginsParams,
 ): ValidateConfigWithPluginsResult {
   return validateConfigObjectWithPluginsBase(raw, {
     applyDefaults: false,
     env: params?.env,
     pluginValidation: params?.pluginValidation ?? "full",
+    pluginMetadataSnapshot: params?.pluginMetadataSnapshot,
+    loadPluginMetadataSnapshot: params?.loadPluginMetadataSnapshot,
   });
 }
 
 function validateConfigObjectWithPluginsBase(
   raw: unknown,
-  opts: { applyDefaults: boolean; env?: NodeJS.ProcessEnv; pluginValidation?: "full" | "skip" },
+  opts: ValidateConfigWithPluginsParams & { applyDefaults: boolean },
 ): ValidateConfigWithPluginsResult {
   const base = opts.applyDefaults ? validateConfigObject(raw) : validateConfigObjectRaw(raw);
   if (!base.ok) {
@@ -772,7 +786,9 @@ function validateConfigObjectWithPluginsBase(
     >;
   };
 
-  let registryInfo: RegistryInfo | null = null;
+  let registryInfo: RegistryInfo | null = opts.pluginMetadataSnapshot
+    ? { registry: opts.pluginMetadataSnapshot.manifestRegistry }
+    : null;
   let compatConfig: OpenClawConfig | null | undefined;
   let compatPluginIds: ReadonlySet<string> | null = null;
   let compatPluginIdsResolved = false;
@@ -799,6 +815,11 @@ function validateConfigObjectWithPluginsBase(
   };
 
   const loadValidationRegistry = (): RegistryInfo => {
+    const pluginMetadataSnapshot = opts.loadPluginMetadataSnapshot?.(config);
+    if (pluginMetadataSnapshot) {
+      registryInfo = { registry: pluginMetadataSnapshot.manifestRegistry };
+      return registryInfo;
+    }
     const workspaceDir = resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config));
     const registry = loadPluginManifestRegistryForPluginRegistry({
       config,

@@ -275,6 +275,26 @@ describe("gateway server chat", () => {
       });
       expect(sendRes.ok).toBe(true);
 
+      const cancelledEventP = onceMessage(
+        ws,
+        (o) => {
+          const data =
+            o.payload?.data && typeof o.payload.data === "object"
+              ? (o.payload.data as Record<string, unknown>)
+              : {};
+          return (
+            o.type === "event" &&
+            o.event === "agent" &&
+            o.payload?.runId === "idem-sessions-abort-1" &&
+            o.payload?.stream === "lifecycle" &&
+            data.phase === "end" &&
+            data.stopReason === "rpc"
+          );
+        },
+        8000,
+      );
+      void cancelledEventP.catch(() => undefined);
+
       const abortRes = await rpcReq(ws, "sessions.abort", {
         key: "agent:main:dashboard:test-abort",
         runId: "idem-sessions-abort-1",
@@ -283,8 +303,60 @@ describe("gateway server chat", () => {
       expect(["aborted", "no-active-run"]).toContain(abortRes.payload?.status);
       if (abortRes.payload?.status === "aborted") {
         expect(abortRes.payload?.abortedRunId).toBe("idem-sessions-abort-1");
+        const cancelledEvent = await cancelledEventP;
+        expect(cancelledEvent.payload?.data).toMatchObject({
+          phase: "end",
+          status: "cancelled",
+          aborted: true,
+          stopReason: "rpc",
+        });
+        const waitRes = await rpcReq(ws, "agent.wait", {
+          runId: "idem-sessions-abort-1",
+          timeoutMs: 0,
+        });
+        expect(waitRes.ok).toBe(true);
+        expect(waitRes.payload).toMatchObject({
+          runId: "idem-sessions-abort-1",
+          status: "timeout",
+          stopReason: "rpc",
+        });
       } else {
         expect(abortRes.payload?.abortedRunId).toBeNull();
+      }
+    } finally {
+      testState.sessionStorePath = undefined;
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("sessions.abort resolves active runs by runId without a caller session key", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-abort-runid-"));
+    testState.sessionStorePath = path.join(dir, "sessions.json");
+    try {
+      await writeSessionStore({
+        entries: {
+          "agent:main:dashboard:test-abort-runid": {
+            sessionId: "sess-dashboard-abort-runid",
+            updatedAt: Date.now(),
+          },
+        },
+      });
+
+      const sendRes = await rpcReq(ws, "sessions.send", {
+        key: "agent:main:dashboard:test-abort-runid",
+        message: "hello",
+        idempotencyKey: "idem-sessions-abort-runid-1",
+        timeoutMs: 30_000,
+      });
+      expect(sendRes.ok).toBe(true);
+
+      const abortRes = await rpcReq(ws, "sessions.abort", {
+        runId: "idem-sessions-abort-runid-1",
+      });
+      expect(abortRes.ok).toBe(true);
+      expect(["aborted", "no-active-run"]).toContain(abortRes.payload?.status);
+      if (abortRes.payload?.status === "aborted") {
+        expect(abortRes.payload?.abortedRunId).toBe("idem-sessions-abort-runid-1");
       }
     } finally {
       testState.sessionStorePath = undefined;
@@ -916,6 +988,45 @@ describe("gateway server chat", () => {
       "user:NO_REPLY",
       "assistant:NO_REPLY",
     ]);
+  });
+
+  test("chat.history uses the owning agent thinkingDefault for non-default agent sessions", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
+    try {
+      testState.sessionStorePath = path.join(dir, "sessions.json");
+      testState.agentConfig = {
+        model: { primary: "openai/gpt-5" },
+        thinkingDefault: "low",
+      };
+      testState.agentsConfig = {
+        list: [
+          { id: "main", default: true },
+          { id: "alpha", thinkingDefault: "minimal" },
+        ],
+      };
+      await writeSessionStore({
+        entries: {
+          "agent:alpha:main": {
+            sessionId: "sess-alpha",
+            updatedAt: Date.now(),
+            modelProvider: "openai",
+            model: "gpt-5",
+          },
+        },
+      });
+
+      const historyRes = await rpcReq<{ thinkingLevel?: string }>(ws, "chat.history", {
+        sessionKey: "agent:alpha:main",
+      });
+
+      expect(historyRes.ok).toBe(true);
+      expect(historyRes.payload?.thinkingLevel).toBe("minimal");
+    } finally {
+      testState.agentConfig = undefined;
+      testState.agentsConfig = undefined;
+      testState.sessionStorePath = undefined;
+      await fs.rm(dir, { recursive: true, force: true });
+    }
   });
 
   test("chat.send does not persist verboseLevel for operator.write callers", async () => {

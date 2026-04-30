@@ -15,6 +15,16 @@ vi.mock("../config/config.js", () => ({
   })),
 }));
 
+vi.mock("../config/io.js", () => ({
+  getRuntimeConfig: vi.fn(() => ({
+    gateway: {
+      controlUi: {
+        allowedOrigins: ["https://control.example.com"],
+      },
+    },
+  })),
+}));
+
 vi.mock("./http-common.js", () => ({
   sendGatewayAuthFailure: vi.fn(),
   sendJson: vi.fn(),

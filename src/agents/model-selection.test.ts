@@ -19,6 +19,7 @@ import {
   resolveAllowedModelRef,
   resolveConfiguredModelRef,
   resolveSubagentConfiguredModelSelection,
+  resolveSubagentSpawnModelSelection,
   resolveThinkingDefault,
   resolveModelRefFromString,
 } from "./model-selection.js";
@@ -221,6 +222,12 @@ describe("model-selection", () => {
         variants: ["mlx/mlx-community/Qwen3-30B-A3B-6bit"],
         defaultProvider: "anthropic",
         expected: { provider: "mlx", model: "mlx-community/Qwen3-30B-A3B-6bit" },
+      },
+      {
+        name: "preserves three-segment refs where the maker equals the provider",
+        variants: ["nvidia/nvidia/nemotron-3-super-120b-a12b"],
+        defaultProvider: "anthropic",
+        expected: { provider: "nvidia", model: "nvidia/nemotron-3-super-120b-a12b" },
       },
       {
         name: "normalizes anthropic shorthand aliases",
@@ -628,6 +635,7 @@ describe("model-selection", () => {
                   id: "gpt-test-z",
                   name: "Configured GPT Test Z",
                   contextWindow: 64_000,
+                  compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh"] },
                 },
               ],
             },
@@ -649,7 +657,86 @@ describe("model-selection", () => {
           name: "Configured GPT Test Z",
           alias: "GPT Test Z Alias",
           contextWindow: 64_000,
+          compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh"] },
         },
+      ]);
+    });
+
+    it("keeps configured provider models visible when the catalog is otherwise allow-any", () => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            model: { primary: "ollama/existing" },
+          },
+        },
+        models: {
+          providers: {
+            ollama: {
+              baseUrl: "http://127.0.0.1:11434",
+              api: "ollama",
+              apiKey: "ollama-local",
+              models: [
+                {
+                  id: "glm-5.1:cloud",
+                  name: "GLM 5.1 Cloud",
+                  contextWindow: 131_072,
+                },
+              ],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      const result = buildAllowedModelSet({
+        cfg,
+        catalog: [{ provider: "ollama", id: "existing", name: "Existing" }],
+        defaultProvider: "ollama",
+        defaultModel: "existing",
+      });
+
+      expect(result.allowAny).toBe(true);
+      expect(result.allowedCatalog).toEqual([
+        { provider: "ollama", id: "existing", name: "Existing" },
+        {
+          provider: "ollama",
+          id: "glm-5.1:cloud",
+          name: "GLM 5.1 Cloud",
+          contextWindow: 131_072,
+        },
+      ]);
+      expect(result.allowedKeys.has("ollama/glm-5.1:cloud")).toBe(true);
+    });
+
+    it("matches allowlisted catalog entries with normalized provider and model ids", () => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            models: {
+              "modelscope/Qwen/Qwen3.5-35B-A3B": {},
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      const result = buildAllowedModelSet({
+        cfg,
+        catalog: [
+          {
+            provider: "modelscope",
+            id: "qwen/qwen3.5-35b-a3b",
+            name: "Qwen3.5 35B",
+            input: ["text", "image"],
+          },
+        ],
+        defaultProvider: "anthropic",
+      });
+
+      expect(result.allowedCatalog).toEqual([
+        expect.objectContaining({
+          provider: "modelscope",
+          id: "qwen/qwen3.5-35b-a3b",
+          input: ["text", "image"],
+        }),
       ]);
     });
 
@@ -673,6 +760,7 @@ describe("model-selection", () => {
                   name: "Kimi K2.5 (Configured)",
                   contextWindow: 32_000,
                   reasoning: true,
+                  compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh"] },
                 },
               ],
             },
@@ -695,6 +783,7 @@ describe("model-selection", () => {
           alias: "Kimi K2.5 (NVIDIA)",
           contextWindow: 32_000,
           reasoning: true,
+          compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh"] },
         },
       ]);
     });
@@ -819,6 +908,32 @@ describe("model-selection", () => {
         ref: { provider: "opencode-go", model: "kimi-k2.6" },
       });
     });
+
+    it("resolves slash-form aliases before provider/model parsing", () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            models: {
+              "openai/xiaomi/mimo-v2-pro-mit": {
+                alias: "xiaomi/mimo-v2-pro-mit",
+              },
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      const result = resolveAllowedModelRef({
+        cfg,
+        catalog: [],
+        raw: "xiaomi/mimo-v2-pro-mit",
+        defaultProvider: "openai",
+      });
+
+      expect(result).toEqual({
+        key: "openai/xiaomi/mimo-v2-pro-mit",
+        ref: { provider: "openai", model: "xiaomi/mimo-v2-pro-mit" },
+      });
+    });
   });
 
   describe("resolveModelRefFromString", () => {
@@ -846,6 +961,30 @@ describe("model-selection", () => {
         defaultProvider: "anthropic",
       });
       expect(resolved?.ref).toEqual({ provider: "openai", model: "gpt-4" });
+    });
+
+    it("prefers slash-form aliases over direct provider/model parsing", () => {
+      const index = {
+        byAlias: new Map([
+          [
+            "xiaomi/mimo-v2-pro-mit",
+            {
+              alias: "xiaomi/mimo-v2-pro-mit",
+              ref: { provider: "openai", model: "xiaomi/mimo-v2-pro-mit" },
+            },
+          ],
+        ]),
+        byKey: new Map(),
+      };
+
+      const resolved = resolveModelRefFromString({
+        raw: "xiaomi/mimo-v2-pro-mit",
+        defaultProvider: "anthropic",
+        aliasIndex: index,
+      });
+
+      expect(resolved?.ref).toEqual({ provider: "openai", model: "xiaomi/mimo-v2-pro-mit" });
+      expect(resolved?.alias).toBe("xiaomi/mimo-v2-pro-mit");
     });
 
     it("strips trailing profile suffix for simple model refs", () => {
@@ -1054,6 +1193,29 @@ describe("model-selection", () => {
         setLoggerOverride(null);
         resetLogger();
       }
+    });
+
+    it("prefers slash-form aliases for configured default models", () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            model: { primary: "xiaomi/mimo-v2-pro-mit" },
+            models: {
+              "openai/xiaomi/mimo-v2-pro-mit": {
+                alias: "xiaomi/mimo-v2-pro-mit",
+              },
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      const result = resolveConfiguredModelRef({
+        cfg,
+        defaultProvider: "anthropic",
+        defaultModel: "claude-sonnet-4-6",
+      });
+
+      expect(result).toEqual({ provider: "openai", model: "xiaomi/mimo-v2-pro-mit" });
     });
 
     it("should use default provider/model if config is empty", () => {
@@ -1531,6 +1693,101 @@ describe("resolveSubagentConfiguredModelSelection", () => {
 
     expect(resolveSubagentConfiguredModelSelection({ cfg, agentId: "research" })).toBe(
       "google/gemini-2.5-pro",
+    );
+  });
+});
+
+describe("resolveSubagentSpawnModelSelection", () => {
+  it("resolves a model alias override to its full provider/model ref", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-sonnet-4-6" },
+          models: {
+            "anthropic/claude-opus-4-6": { alias: "opus" },
+            "openai/gpt-5.4": { alias: "gpt" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      resolveSubagentSpawnModelSelection({ cfg, agentId: "main", modelOverride: "opus" }),
+    ).toBe("anthropic/claude-opus-4-6");
+  });
+
+  it("resolves bare configured aliases with the target agent runtime default provider", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.4" },
+          models: {
+            "claude-opus-4-6": { alias: "opus" },
+          },
+        },
+        list: [
+          {
+            id: "research",
+            model: "anthropic/claude-sonnet-4-6",
+          },
+        ],
+      },
+    } as OpenClawConfig;
+
+    expect(
+      resolveSubagentSpawnModelSelection({
+        cfg,
+        agentId: "research",
+        modelOverride: "OPUS",
+      }),
+    ).toBe("anthropic/claude-opus-4-6");
+  });
+
+  it("resolves alias in configured subagent model", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-sonnet-4-6" },
+          models: {
+            "openai/gpt-5.4": { alias: "gpt" },
+          },
+          subagents: { model: "gpt" },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(resolveSubagentSpawnModelSelection({ cfg, agentId: "main" })).toBe("openai/gpt-5.4");
+  });
+
+  it("passes through already-qualified provider/model refs unchanged", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-sonnet-4-6" },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      resolveSubagentSpawnModelSelection({
+        cfg,
+        agentId: "main",
+        modelOverride: "openai/gpt-5.4",
+      }),
+    ).toBe("openai/gpt-5.4");
+  });
+
+  it("falls back to runtime default when no override or config", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-sonnet-4-6" },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(resolveSubagentSpawnModelSelection({ cfg, agentId: "main" })).toBe(
+      "anthropic/claude-sonnet-4-6",
     );
   });
 });

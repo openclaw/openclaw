@@ -184,7 +184,7 @@ export type SessionConfig = {
   };
   /** Shared defaults for thread-bound session routing across channels/providers. */
   threadBindings?: SessionThreadBindingsConfig;
-  /** Automatic session store maintenance (pruning, capping, file rotation). */
+  /** Automatic session store maintenance (pruning, capping, archive retention, disk budget). */
   maintenance?: SessionMaintenanceConfig;
 };
 
@@ -195,11 +195,11 @@ export type SessionMaintenanceConfig = {
   mode?: SessionMaintenanceMode;
   /** Remove session entries older than this duration (e.g. "30d", "12h"). Default: "30d". */
   pruneAfter?: string | number;
-  /** Deprecated. Use pruneAfter instead. */
+  /** @deprecated Use pruneAfter instead. */
   pruneDays?: number;
   /** Maximum number of session entries to keep. Default: 500. */
   maxEntries?: number;
-  /** Rotate sessions.json when it exceeds this size (e.g. "10mb"). Default: 10mb. */
+  /** @deprecated Ignored. Run `openclaw doctor --fix` to remove. */
   rotateBytes?: number | string;
   /**
    * Retention for archived reset transcripts (`*.reset.<timestamp>`).
@@ -225,7 +225,7 @@ export type LoggingConfig = {
   maxFileBytes?: number;
   consoleLevel?: "silent" | "fatal" | "error" | "warn" | "info" | "debug" | "trace";
   consoleStyle?: "pretty" | "compact" | "json";
-  /** Redact sensitive tokens in log sinks and persisted transcript text. Default: "tools". */
+  /** Redact sensitive tokens in log sinks and persisted transcript text. Default: "tools". Safety-boundary UI/tool/diagnostic payloads may still redact when this is "off". */
   redactSensitive?: "off" | "tools";
   /** Regex patterns used to redact sensitive tokens from logs and transcripts. */
   redactPatterns?: string[];
@@ -290,11 +290,21 @@ export type WebReconnectConfig = {
   maxAttempts?: number; // 0 = unlimited
 };
 
+export type WebWhatsAppConfig = {
+  /** Baileys application ping interval in milliseconds. Default: 25000. */
+  keepAliveIntervalMs?: number;
+  /** WebSocket opening handshake timeout in milliseconds. Default: 60000. */
+  connectTimeoutMs?: number;
+  /** Baileys query timeout in milliseconds. Default: 60000. */
+  defaultQueryTimeoutMs?: number;
+};
+
 export type WebConfig = {
   /** If false, do not start the WhatsApp web provider. Default: true. */
   enabled?: boolean;
   heartbeatSeconds?: number;
   reconnect?: WebReconnectConfig;
+  whatsapp?: WebWhatsAppConfig;
 };
 
 // Provider docking: allowlists keyed by provider id (and internal "webchat").

@@ -90,10 +90,14 @@ export type MediaUnderstandingConfig = MediaProviderRequestConfig & {
   maxChars?: number;
   /** Default prompt. */
   prompt?: string;
+  /** Internal request-scoped prompt override injected by CLI/runtime wrappers. */
+  _requestPromptOverride?: string;
   /** Default timeout (seconds). */
   timeoutSeconds?: number;
   /** Default language hint (audio). */
   language?: string;
+  /** Internal request-scoped language override injected by CLI/runtime wrappers. */
+  _requestLanguageOverride?: string;
   /** Attachment selection policy. */
   attachments?: MediaUnderstandingAttachmentsConfig;
   /** Ordered model list (fallbacks in order). */
@@ -365,6 +369,8 @@ export type MemorySearchConfig = {
     baseUrl?: string;
     apiKey?: SecretInput;
     headers?: Record<string, string>;
+    /** Max concurrent non-batch embedding tasks during indexing. Useful for slower local providers such as Ollama. */
+    nonBatchConcurrency?: number;
     batch?: {
       /** Enable batch API for embedding indexing (OpenAI/Gemini; default: true). */
       enabled?: boolean;
@@ -573,6 +579,8 @@ export type ToolsConfig = {
       ssrfPolicy?: {
         /** Allow RFC 2544 benchmark range IPs (198.18.0.0/15) for fake-IP proxy compatibility (e.g., Clash TUN mode, Surge). */
         allowRfc2544BenchmarkRange?: boolean;
+        /** Allow IPv6 Unique Local Addresses (fc00::/7) for trusted fake-IP proxy compatibility. */
+        allowIpv6UniqueLocalRange?: boolean;
       };
     };
   };

@@ -527,7 +527,9 @@ export const DiscordAccountSchema = z
     commands: ProviderCommandsSchema,
     configWrites: z.boolean().optional(),
     token: SecretInputSchema.optional().register(sensitive),
+    applicationId: DiscordIdSchema.optional(),
     proxy: z.string().optional(),
+    gatewayInfoTimeoutMs: z.number().int().positive().max(120_000).optional(),
     allowBots: z.union([z.boolean(), z.literal("mentions")]).optional(),
     dangerouslyAllowNameMatching: z.boolean().optional(),
     groupPolicy: GroupPolicySchema.optional().default("allowlist"),
@@ -613,6 +615,7 @@ export const DiscordAccountSchema = z
       .object({
         presence: z.boolean().optional(),
         guildMembers: z.boolean().optional(),
+        voiceStates: z.boolean().optional(),
       })
       .strict()
       .optional(),
@@ -895,10 +898,19 @@ const SlackReplyToModeByChatTypeSchema = z
   })
   .strict();
 
+export const SlackSocketModeSchema = z
+  .object({
+    clientPingTimeout: z.number().int().positive().optional(),
+    serverPingTimeout: z.number().int().positive().optional(),
+    pingPongLoggingEnabled: z.boolean().optional(),
+  })
+  .strict();
+
 export const SlackAccountSchema = z
   .object({
     name: z.string().optional(),
     mode: z.enum(["socket", "http"]).optional(),
+    socketMode: SlackSocketModeSchema.optional(),
     signingSecret: SecretInputSchema.optional().register(sensitive),
     webhookPath: z.string().optional(),
     capabilities: SlackCapabilitiesSchema.optional(),

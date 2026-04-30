@@ -1,5 +1,8 @@
 {
   "id": "huggingface",
+  "activation": {
+    "onStartup": false
+  },
   "enabledByDefault": true,
   "providers": ["huggingface"],
   "modelIdNormalization": {

@@ -18,6 +18,9 @@ import type {
   OpenClawPluginDefinition,
   OpenClawPluginHttpRouteHandler,
   OpenClawPluginNodeHostCommand,
+  OpenClawPluginNodeInvokePolicy,
+  OpenClawPluginNodeInvokePolicyContext,
+  OpenClawPluginNodeInvokePolicyResult,
   OpenClawPluginReloadRegistration,
   OpenClawPluginSecurityAuditCollector,
   OpenClawPluginSecurityAuditContext,
@@ -81,6 +84,25 @@ import type {
   SpeechProviderPlugin,
   PluginCommandContext,
   PluginCommandResult,
+  PluginAgentEventSubscriptionRegistration,
+  PluginAgentTurnPrepareEvent,
+  PluginAgentTurnPrepareResult,
+  PluginControlUiDescriptor,
+  PluginHeartbeatPromptContributionEvent,
+  PluginHeartbeatPromptContributionResult,
+  PluginJsonValue,
+  PluginNextTurnInjection,
+  PluginNextTurnInjectionEnqueueResult,
+  PluginNextTurnInjectionRecord,
+  PluginRunContextGetParams,
+  PluginRunContextPatch,
+  PluginRuntimeLifecycleRegistration,
+  PluginSessionSchedulerJobHandle,
+  PluginSessionSchedulerJobRegistration,
+  PluginSessionExtensionRegistration,
+  PluginSessionExtensionProjection,
+  PluginToolMetadataRegistration,
+  PluginTrustedToolPolicyRegistration,
 } from "../plugins/types.js";
 import { createCachedLazyValueGetter } from "./lazy-value.js";
 
@@ -97,6 +119,9 @@ export type {
   MigrationSummary,
   OpenClawPluginApi,
   OpenClawPluginNodeHostCommand,
+  OpenClawPluginNodeInvokePolicy,
+  OpenClawPluginNodeInvokePolicyContext,
+  OpenClawPluginNodeInvokePolicyResult,
   OpenClawPluginReloadRegistration,
   OpenClawPluginSecurityAuditCollector,
   OpenClawPluginSecurityAuditContext,
@@ -104,6 +129,25 @@ export type {
   OpenClawPluginToolFactory,
   PluginCommandContext,
   PluginCommandResult,
+  PluginAgentEventSubscriptionRegistration,
+  PluginAgentTurnPrepareEvent,
+  PluginAgentTurnPrepareResult,
+  PluginControlUiDescriptor,
+  PluginHeartbeatPromptContributionEvent,
+  PluginHeartbeatPromptContributionResult,
+  PluginJsonValue,
+  PluginNextTurnInjection,
+  PluginNextTurnInjectionEnqueueResult,
+  PluginNextTurnInjectionRecord,
+  PluginRunContextGetParams,
+  PluginRunContextPatch,
+  PluginRuntimeLifecycleRegistration,
+  PluginSessionSchedulerJobHandle,
+  PluginSessionSchedulerJobRegistration,
+  PluginSessionExtensionRegistration,
+  PluginSessionExtensionProjection,
+  PluginToolMetadataRegistration,
+  PluginTrustedToolPolicyRegistration,
   OpenClawPluginConfigSchema,
   OpenClawPluginHttpRouteHandler,
   ProviderDiscoveryContext,
@@ -186,6 +230,11 @@ type DefinePluginEntryOptions = {
   id: string;
   name: string;
   description: string;
+  /**
+   * @deprecated Declare exclusive plugin kind in `openclaw.plugin.json` via
+   * manifest `kind`. Runtime-entry `kind` remains only as a compatibility
+   * fallback for older plugins.
+   */
   kind?: OpenClawPluginDefinition["kind"];
   configSchema?: OpenClawPluginConfigSchema | (() => OpenClawPluginConfigSchema);
   reload?: OpenClawPluginDefinition["reload"];

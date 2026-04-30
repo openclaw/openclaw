@@ -1,6 +1,5 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import type { SignalReactionNotificationMode } from "openclaw/plugin-sdk/config-types";
-import { waitForTransportReady } from "openclaw/plugin-sdk/infra-runtime";
 import {
   detectMime,
   estimateBase64DecodedBytes,
@@ -33,6 +32,7 @@ import {
   normalizeOptionalString,
   normalizeStringEntries,
 } from "openclaw/plugin-sdk/text-runtime";
+import { waitForTransportReady } from "openclaw/plugin-sdk/transport-ready-runtime";
 import { resolveSignalAccount } from "./accounts.js";
 import { signalCheck, signalRpcRequest } from "./client.js";
 import { formatSignalDaemonExit, spawnSignalDaemon, type SignalDaemonHandle } from "./daemon.js";

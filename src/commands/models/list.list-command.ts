@@ -1,7 +1,9 @@
+import type { Api, Model } from "@mariozechner/pi-ai";
 import type { ModelRegistry } from "@mariozechner/pi-coding-agent";
 import { parseModelRef } from "../../agents/model-selection.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
+import { createModelListAuthIndex } from "./list.auth-index.js";
 import { resolveConfiguredEntries } from "./list.configured.js";
 import { formatErrorWithStack } from "./list.errors.js";
 import { printModelTable } from "./list.table.js";
@@ -63,19 +65,29 @@ export async function modelsListCommand(
   if (providerFilter === null) {
     return;
   }
-  const [{ loadAuthProfileStoreWithoutExternalProfiles }, { resolveOpenClawAgentDir }] =
-    await Promise.all([
-      import("../../agents/auth-profiles/store.js"),
-      import("../../agents/agent-paths.js"),
-    ]);
+  const [
+    { loadAuthProfileStoreWithoutExternalProfiles },
+    { resolveOpenClawAgentDir },
+    { resolveAgentWorkspaceDir, resolveDefaultAgentId },
+    { resolveDefaultAgentWorkspaceDir },
+  ] = await Promise.all([
+    import("../../agents/auth-profiles/store.js"),
+    import("../../agents/agent-paths.js"),
+    import("../../agents/agent-scope.js"),
+    import("../../agents/workspace.js"),
+  ]);
   const { resolvedConfig: cfg } = await loadModelsConfigWithSource({
     commandName: "models list",
     runtime,
   });
   const authStore = loadAuthProfileStoreWithoutExternalProfiles();
   const agentDir = resolveOpenClawAgentDir();
+  const workspaceDir =
+    resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg)) ?? resolveDefaultAgentWorkspaceDir();
+  const authIndex = createModelListAuthIndex({ cfg, authStore, workspaceDir });
 
   let modelRegistry: ModelRegistry | undefined;
+  let registryModels: Model<Api>[] = [];
   let discoveredKeys = new Set<string>();
   let availableKeys: Set<string> | undefined;
   let availabilityErrorMessage: string | undefined;
@@ -90,10 +102,19 @@ export async function modelsListCommand(
       })
     : undefined;
   const shouldLoadRegistry = sourcePlan?.requiresInitialRegistry ?? false;
-  const loadRegistryState = async () => {
+  const loadRegistryState = async (opts?: {
+    normalizeModels?: boolean;
+    loadAvailability?: boolean;
+  }) => {
     const { loadListModelRegistry } = await loadRegistryLoadModule();
-    const loaded = await loadListModelRegistry(cfg, { providerFilter });
+    const loaded = await loadListModelRegistry(cfg, {
+      providerFilter,
+      normalizeModels: opts?.normalizeModels ?? Boolean(providerFilter),
+      loadAvailability: opts?.loadAvailability,
+      workspaceDir,
+    });
     modelRegistry = loaded.registry;
+    registryModels = loaded.models;
     discoveredKeys = loaded.discoveredKeys;
     availableKeys = loaded.availableKeys;
     availabilityErrorMessage = loaded.availabilityErrorMessage;
@@ -103,7 +124,10 @@ export async function modelsListCommand(
       await loadRegistryState();
     } else if (!opts.all && opts.local) {
       const { loadConfiguredListModelRegistry } = await loadRegistryLoadModule();
-      const loaded = loadConfiguredListModelRegistry(cfg, entries, { providerFilter });
+      const loaded = loadConfiguredListModelRegistry(cfg, entries, {
+        providerFilter,
+        workspaceDir,
+      });
       modelRegistry = loaded.registry;
       discoveredKeys = loaded.discoveredKeys;
       availableKeys = loaded.availableKeys;
@@ -116,7 +140,7 @@ export async function modelsListCommand(
   const buildRowContext = (skipRuntimeModelSuppression: boolean) => ({
     cfg,
     agentDir,
-    authStore,
+    authIndex,
     availableKeys,
     configuredByKey,
     discoveredKeys,
@@ -138,23 +162,35 @@ export async function modelsListCommand(
       rows,
       context: rowContext,
       modelRegistry,
+      registryModels,
       sourcePlan,
     });
     if (initialAppend.requiresRegistryFallback) {
+      const useScopedRegistryFallback = sourcePlan.kind === "provider-runtime-scoped";
       try {
-        await loadRegistryState();
+        await loadRegistryState(
+          useScopedRegistryFallback
+            ? {
+                normalizeModels: false,
+                loadAvailability: false,
+              }
+            : undefined,
+        );
       } catch (err) {
         runtime.error(`Model registry unavailable:\n${formatErrorWithStack(err)}`);
         process.exitCode = 1;
         return;
       }
       rows.length = 0;
-      rowContext = buildRowContext(false);
+      rowContext = buildRowContext(useScopedRegistryFallback);
       await appendAllModelRowSources({
         rows,
         context: rowContext,
         modelRegistry,
-        sourcePlan: sourcePlanModule.createRegistryModelListSourcePlan(),
+        registryModels,
+        sourcePlan: useScopedRegistryFallback
+          ? sourcePlan
+          : sourcePlanModule.createRegistryModelListSourcePlan(),
       });
     }
   } else {

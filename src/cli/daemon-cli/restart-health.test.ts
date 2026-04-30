@@ -351,6 +351,35 @@ describe("inspectGatewayRestart", () => {
     expect(snapshot.versionMismatch).toBeUndefined();
   });
 
+  it("accepts matching-version restart liveness when the probe lacks operator scope", async () => {
+    probeGateway.mockResolvedValue({
+      ok: false,
+      close: null,
+      connectLatencyMs: 12,
+      error: "missing scope: operator.read",
+      auth: { capability: "connected_no_operator_scope" },
+      server: { version: "2026.4.24", connId: "new" },
+    });
+
+    const snapshot = await inspectGatewayRestartWithSnapshot({
+      runtime: { status: "running", pid: 8000 },
+      expectedVersion: "2026.4.24",
+      portUsage: {
+        port: 18789,
+        status: "busy",
+        listeners: [{ pid: 8000, commandLine: "openclaw-gateway" }],
+        hints: [],
+      },
+    });
+
+    expect(snapshot).toMatchObject({
+      healthy: true,
+      gatewayVersion: "2026.4.24",
+      expectedVersion: "2026.4.24",
+    });
+    expect(snapshot.versionMismatch).toBeUndefined();
+  });
+
   it("stops waiting once the restarted gateway reports the wrong version", async () => {
     probeGateway.mockResolvedValue({
       ok: true,
@@ -570,6 +599,47 @@ describe("inspectGatewayRestart", () => {
       elapsedMs: 92_500,
     });
     expect(sleep).toHaveBeenCalledTimes(185);
+  });
+
+  it("keeps waiting when the expected gateway version is not available yet", async () => {
+    const service = makeGatewayService({ status: "running", pid: 8000 });
+    inspectPortUsage
+      .mockResolvedValueOnce({
+        port: 18789,
+        status: "free",
+        listeners: [],
+        hints: [],
+      })
+      .mockResolvedValueOnce({
+        port: 18789,
+        status: "busy",
+        listeners: [{ pid: 8000, commandLine: "openclaw-gateway" }],
+        hints: [],
+      });
+    probeGateway.mockResolvedValue({
+      ok: true,
+      close: null,
+      server: { version: "2026.4.26", connId: "new" },
+    });
+
+    const { waitForGatewayHealthyRestart } = await import("./restart-health.js");
+    const snapshot = await waitForGatewayHealthyRestart({
+      service,
+      port: 18789,
+      expectedVersion: "2026.4.26",
+      attempts: 4,
+      delayMs: 1_000,
+    });
+
+    expect(snapshot).toMatchObject({
+      healthy: true,
+      gatewayVersion: "2026.4.26",
+      expectedVersion: "2026.4.26",
+      waitOutcome: "healthy",
+      elapsedMs: 1_000,
+    });
+    expect(snapshot.versionMismatch).toBeUndefined();
+    expect(sleep).toHaveBeenCalledTimes(1);
   });
 
   it("annotates timeout waits when the health loop exhausts all attempts", async () => {

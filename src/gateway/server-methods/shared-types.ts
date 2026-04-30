@@ -46,7 +46,10 @@ export type GatewayRequestContext = {
   pluginApprovalManager?: ExecApprovalManager<PluginApprovalRequestPayload>;
   loadGatewayModelCatalog: () => Promise<ModelCatalogEntry[]>;
   getHealthCache: () => HealthSummary | null;
-  refreshHealthSnapshot: (opts?: { probe?: boolean }) => Promise<HealthSummary>;
+  refreshHealthSnapshot: (opts?: {
+    probe?: boolean;
+    includeSensitive?: boolean;
+  }) => Promise<HealthSummary>;
   logHealth: { error: (message: string) => void };
   logGateway: SubsystemLogger;
   incrementPresenceVersion: () => number;

@@ -74,6 +74,7 @@ cat ~/.openclaw/openclaw.json
     - UI protocol freshness check (rebuilds Control UI when the protocol schema is newer).
     - Health check + restart prompt.
     - Skills status summary (eligible/missing/blocked) and plugin status.
+
   </Accordion>
   <Accordion title="Config and migrations">
     - Config normalization for legacy values.
@@ -86,6 +87,8 @@ cat ~/.openclaw/openclaw.json
     - Legacy plugin manifest contract key migration (`speechProviders`, `realtimeTranscriptionProviders`, `realtimeVoiceProviders`, `mediaUnderstandingProviders`, `imageGenerationProviders`, `videoGenerationProviders`, `webFetchProviders`, `webSearchProviders` → `contracts`).
     - Legacy cron store migration (`jobId`, `schedule.cron`, top-level delivery/payload fields, payload `provider`, simple `notify: true` webhook fallback jobs).
     - Legacy agent runtime-policy migration to `agents.defaults.agentRuntime` and `agents.list[].agentRuntime`.
+    - Stale plugin config cleanup when plugins are enabled; when `plugins.enabled=false`, stale plugin references are treated as inert containment config and are preserved.
+
   </Accordion>
   <Accordion title="State and integrity">
     - Session lock file inspection and stale lock cleanup.
@@ -94,6 +97,7 @@ cat ~/.openclaw/openclaw.json
     - Config file permission checks (chmod 600) when running locally.
     - Model auth health: checks OAuth expiry, can refresh expiring tokens, and reports auth-profile cooldown/disabled states.
     - Extra workspace dir detection (`~/openclaw`).
+
   </Accordion>
   <Accordion title="Gateway, services, and supervisors">
     - Sandbox image repair when sandboxing is enabled.
@@ -105,11 +109,13 @@ cat ~/.openclaw/openclaw.json
     - Embedded proxy environment cleanup for gateway services that captured shell `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` values during install or update.
     - Gateway runtime best-practice checks (Node vs Bun, version-manager paths).
     - Gateway port collision diagnostics (default `18789`).
+
   </Accordion>
   <Accordion title="Auth, security, and pairing">
     - Security warnings for open DM policies.
     - Gateway auth checks for local token mode (offers token generation when no token source exists; does not overwrite token SecretRef configs).
     - Device pairing trouble detection (pending first-time pair requests, pending role/scope upgrades, stale local device-token cache drift, and paired-record auth drift).
+
   </Accordion>
   <Accordion title="Workspace and shell">
     - systemd linger check on Linux.
@@ -118,6 +124,7 @@ cat ~/.openclaw/openclaw.json
     - Memory search embedding provider readiness check (local model, remote API key, or QMD binary).
     - Source install checks (pnpm workspace mismatch, missing UI assets, missing tsx binary).
     - Writes updated config + wizard metadata.
+
   </Accordion>
 </AccordionGroup>
 
@@ -326,7 +333,7 @@ That stages grounded durable candidates into the short-term dreaming store while
     When sandboxing is enabled, doctor checks Docker images and offers to build or switch to legacy names if the current image is missing.
   </Accordion>
   <Accordion title="7b. Bundled plugin runtime deps">
-    Doctor verifies runtime dependencies only for bundled plugins that are active in the current config or enabled by their bundled manifest default, for example `plugins.entries.discord.enabled: true`, legacy `channels.discord.enabled: true`, or a default-enabled bundled provider. If any are missing, doctor reports the packages and installs them in `openclaw doctor --fix` / `openclaw doctor --repair` mode. External plugins still use `openclaw plugins install` / `openclaw plugins update`; doctor does not install dependencies for arbitrary plugin paths.
+    Doctor verifies runtime dependencies only for bundled plugins that are active in the current config or enabled by their bundled manifest default, for example `plugins.entries.discord.enabled: true`, legacy `channels.discord.enabled: true`, configured `models.providers.*` / agent model refs, or a default-enabled bundled plugin without provider ownership. If any are missing, doctor reports the packages and installs them in `openclaw doctor --fix` / `openclaw doctor --repair` mode. External plugins still use `openclaw plugins install` / `openclaw plugins update`; doctor does not install dependencies for arbitrary plugin paths.
 
     During doctor repair, bundled runtime-dependency npm installs report spinner progress in TTY sessions and periodic line progress in piped/headless output. The Gateway and local CLI can also repair active bundled plugin runtime dependencies on demand before importing a bundled plugin. These installs are scoped to the plugin runtime install root, run with scripts disabled, do not write a package lock, and are guarded by an install-root lock so concurrent CLI or Gateway starts do not mutate the same `node_modules` tree at the same time.
 
@@ -440,6 +447,7 @@ That stages grounded durable candidates into the short-term dreaming store while
     - `openclaw doctor --repair` applies recommended fixes without prompts.
     - `openclaw doctor --repair --force` overwrites custom supervisor configs.
     - `OPENCLAW_SERVICE_REPAIR_POLICY=external` keeps doctor read-only for gateway service lifecycle. It still reports service health and runs non-service repairs, but skips service install/start/restart/bootstrap, supervisor config rewrites, and legacy service cleanup because an external supervisor owns that lifecycle.
+    - On Linux, doctor does not rewrite command/entrypoint metadata while the matching systemd gateway unit is active. It also ignores inactive non-legacy extra gateway-like units during the duplicate-service scan so companion service files do not create cleanup noise.
     - If token auth requires a token and `gateway.auth.token` is SecretRef-managed, doctor service install/repair validates the SecretRef but does not persist resolved plaintext token values into supervisor service environment metadata.
     - Doctor detects managed `.env`/SecretRef-backed service environment values that older LaunchAgent, systemd, or Windows Scheduled Task installs embedded inline and rewrites the service metadata so those values load from the runtime source instead of the supervisor definition.
     - Doctor detects when the service command still pins an old `--port` after `gateway.port` changes and rewrites the service metadata to the current port.
@@ -455,6 +463,9 @@ That stages grounded durable candidates into the short-term dreaming store while
   </Accordion>
   <Accordion title="17. Gateway runtime best practices">
     Doctor warns when the gateway service runs on Bun or a version-managed Node path (`nvm`, `fnm`, `volta`, `asdf`, etc.). WhatsApp + Telegram channels require Node, and version-manager paths can break after upgrades because the service does not load your shell init. Doctor offers to migrate to a system Node install when available (Homebrew/apt/choco).
+
+    Newly installed or repaired services keep explicit environment roots (`NVM_DIR`, `FNM_DIR`, `VOLTA_HOME`, `ASDF_DATA_DIR`, `BUN_INSTALL`, `PNPM_HOME`) and stable user-bin directories, but guessed version-manager fallback directories are only written to the service PATH when those directories exist on disk. This keeps the generated supervisor PATH aligned with the same minimal-PATH audit doctor runs later.
+
   </Accordion>
   <Accordion title="18. Config write + wizard metadata">
     Doctor persists any config changes and stamps wizard metadata to record the doctor run.

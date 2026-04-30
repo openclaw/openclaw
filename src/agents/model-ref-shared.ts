@@ -23,7 +23,14 @@ export function modelKey(provider: string, model: string): string {
     : `${providerId}/${modelId}`;
 }
 
-export function normalizeStaticProviderModelId(provider: string, model: string): string {
+export function normalizeStaticProviderModelId(
+  provider: string,
+  model: string,
+  options: { allowManifestNormalization?: boolean } = {},
+): string {
+  if (options.allowManifestNormalization === false) {
+    return model;
+  }
   return (
     normalizeProviderModelIdWithManifest({
       provider,
@@ -62,4 +69,18 @@ export function resolveStaticAllowlistModelKey(
     return null;
   }
   return modelKey(parsed.provider, parsed.model);
+}
+
+export function formatLiteralProviderPrefixedModelRef(provider: string, modelRef: string): string {
+  const providerId = normalizeProviderId(provider);
+  const trimmedRef = modelRef.trim();
+  if (!providerId || !trimmedRef) {
+    return trimmedRef;
+  }
+  const normalizedRef = normalizeLowercaseStringOrEmpty(trimmedRef);
+  const literalPrefix = `${providerId}/${providerId}/`;
+  if (normalizedRef.startsWith(literalPrefix)) {
+    return trimmedRef;
+  }
+  return normalizedRef.startsWith(`${providerId}/`) ? `${providerId}/${trimmedRef}` : trimmedRef;
 }
