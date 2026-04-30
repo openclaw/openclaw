@@ -250,6 +250,89 @@ describe("config io audit helpers", () => {
     expect(redactConfigAuditArgv(argv)).toEqual(argv);
   });
 
+  it("redacts unknown but credential-suffixed flags via the heuristic classifier", () => {
+    const argv = [
+      "node",
+      "openclaw",
+      "--custom-api-key",
+      "real-tenant-key-AB12CD34EF56GH78",
+      "--alibaba-model-studio-api-key=plain-value-xyz-12345",
+      "--app-token",
+      "another-secret-value",
+      "--frobnicate-credential=hidden",
+    ];
+    const result = redactConfigAuditArgv(argv);
+    expect(result).toEqual([
+      "node",
+      "openclaw",
+      "--custom-api-key",
+      "***",
+      "--alibaba-model-studio-api-key=***",
+      "--app-token",
+      "***",
+      "--frobnicate-credential=***",
+    ]);
+  });
+
+  it("does not mask the next arg when a secret flag is followed by another option", () => {
+    const argv = ["openclaw", "--token", "--port", "8080"];
+    expect(redactConfigAuditArgv(argv)).toEqual(["openclaw", "--token", "--port", "8080"]);
+  });
+
+  it("does not mask when a secret flag is the final arg with no value", () => {
+    const argv = ["openclaw", "--token"];
+    expect(redactConfigAuditArgv(argv)).toEqual(["openclaw", "--token"]);
+  });
+
+  it("caps caller-supplied processInfo argv at 8 entries before redaction", () => {
+    const longArgv = [
+      "node",
+      "openclaw",
+      "--api-key",
+      "secret",
+      "--port",
+      "8080",
+      "--bind",
+      "lan",
+      "--leaks-here-token",
+      "this-must-not-land-in-audit-1234567890",
+    ];
+    const base = createConfigWriteAuditRecordBase({
+      configPath: "/tmp/openclaw.json",
+      env: {} as NodeJS.ProcessEnv,
+      existsBefore: true,
+      previousHash: "prev",
+      nextHash: "next",
+      previousBytes: 1,
+      nextBytes: 2,
+      previousMetadata: {
+        dev: null,
+        ino: null,
+        mode: null,
+        nlink: null,
+        uid: null,
+        gid: null,
+      },
+      changedPathCount: 0,
+      hasMetaBefore: true,
+      hasMetaAfter: true,
+      gatewayModeBefore: "local",
+      gatewayModeAfter: "local",
+      suspicious: [],
+      now: "2026-04-30T00:00:00.000Z",
+      processInfo: {
+        pid: 1,
+        ppid: 1,
+        cwd: "/work",
+        argv: longArgv,
+        execArgv: [],
+      },
+    });
+    expect(base.argv).toHaveLength(8);
+    expect(base.argv).not.toContain("this-must-not-land-in-audit-1234567890");
+    expect(base.argv).not.toContain("--leaks-here-token");
+  });
+
   it("redacts processInfo.argv when explicitly supplied to createConfigWriteAuditRecordBase", () => {
     const base = createConfigWriteAuditRecordBase({
       configPath: "/tmp/openclaw.json",

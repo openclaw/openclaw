@@ -2,6 +2,12 @@ import path from "node:path";
 import { redactToolPayloadText } from "../logging/redact.js";
 import { resolveStateDir } from "./paths.js";
 
+const CONFIG_AUDIT_ARGV_CAP = 8;
+
+// Conservative list of credential-bearing flags. The heuristic suffix
+// classifier below catches the long tail (`--custom-api-key`,
+// `--alibaba-model-studio-api-key`, plugin-defined `cliFlag` values, etc.)
+// without needing every name enumerated here.
 const SECRET_FLAG_NAMES = new Set([
   "--token",
   "--api-key",
@@ -16,10 +22,40 @@ const SECRET_FLAG_NAMES = new Set([
   "--hook-token",
   "--gateway-token",
   "--bot-token",
+  "--app-token",
+  "--remote-token",
+  "--push-token",
   "--webhook-secret",
+  "--webhook-token",
   "--service-account-token",
   "--op-service-account-token",
+  "--bearer",
+  "--bearer-token",
+  "--pat",
+  "--personal-access-token",
+  "--oauth-token",
+  "--id-token",
+  "--identity-token",
+  "--session-token",
+  "--service-token",
 ]);
+
+// Suffix-based heuristic. Any `--…-(token|secret|password|passwd|api-key|
+// apikey|api-secret|webhook|credential|bearer|pat)` is treated as a secret
+// flag in addition to the explicit list. The leading `--` is required so we
+// don't mismatch arbitrary positional arguments.
+const SECRET_FLAG_SUFFIX_PATTERN =
+  /^--(?:[a-z0-9]+(?:-[a-z0-9]+)*-)?(?:token|secret|password|passwd|api[-_]?key|api[-_]?secret|webhook|credential|bearer|pat)$/;
+
+function isSecretFlagName(flagName: string | null): boolean {
+  if (flagName === null) {
+    return false;
+  }
+  if (SECRET_FLAG_NAMES.has(flagName)) {
+    return true;
+  }
+  return SECRET_FLAG_SUFFIX_PATTERN.test(flagName);
+}
 
 function parseFlagName(arg: string): string | null {
   if (typeof arg !== "string" || !arg.startsWith("--")) {
@@ -30,36 +66,46 @@ function parseFlagName(arg: string): string | null {
 }
 
 // Redacts CLI argv before it lands in the persistent config-audit log.
-// Three layers, applied per element:
-//  1. `--flag=value` form for known secret flag names — mask the value half.
-//  2. value following a bare `--flag` form — emit `***` instead of the next arg.
+// Layers, applied per element:
+//  1. `--flag=value` form for any name matching the explicit list or the
+//     suffix heuristic — mask the value half.
+//  2. value following a bare `--flag` form — emit `***` instead of the
+//     next arg, but only when the candidate value does not itself look
+//     like another option (`-`/`--` prefix). A bare `--token --port 8080`
+//     is treated as a missing value, leaving `--port` and `8080` intact.
 //  3. fall back to redactToolPayloadText for everything else, which catches
 //     `KEY=VALUE` env-style assignments, raw token shapes (sk-, ghp_, xox*,
 //     gsk_, AIza*, npm_, Telegram bot tokens, PEM blocks, Bearer headers,
 //     URL query secrets) using the shared redaction patterns.
 export function redactConfigAuditArgv(argv: readonly string[]): string[] {
   const result: string[] = [];
+  let redactNext = false;
   for (let i = 0; i < argv.length; i++) {
     const current = argv[i];
     if (typeof current !== "string") {
       result.push(current);
+      redactNext = false;
       continue;
+    }
+    if (redactNext) {
+      redactNext = false;
+      if (!current.startsWith("-")) {
+        result.push("***");
+        continue;
+      }
+      // The previous arg looked like a secret flag but was followed by
+      // another option — treat as a missing value and fall through so the
+      // current arg is processed normally.
     }
     const currentFlag = parseFlagName(current);
-    if (currentFlag !== null && SECRET_FLAG_NAMES.has(currentFlag) && current.includes("=")) {
-      const eq = current.indexOf("=");
-      result.push(`${current.slice(0, eq + 1)}***`);
-      continue;
-    }
-    const previous = i > 0 ? argv[i - 1] : undefined;
-    const previousFlag = typeof previous === "string" ? parseFlagName(previous) : null;
-    if (
-      previousFlag !== null &&
-      SECRET_FLAG_NAMES.has(previousFlag) &&
-      typeof previous === "string" &&
-      !previous.includes("=")
-    ) {
-      result.push("***");
+    if (currentFlag !== null && isSecretFlagName(currentFlag)) {
+      if (current.includes("=")) {
+        const eq = current.indexOf("=");
+        result.push(`${current.slice(0, eq + 1)}***`);
+        continue;
+      }
+      result.push(current);
+      redactNext = true;
       continue;
     }
     result.push(redactToolPayloadText(current));
@@ -67,13 +113,20 @@ export function redactConfigAuditArgv(argv: readonly string[]): string[] {
   return result;
 }
 
+function capArgv(argv: readonly string[] | undefined): string[] {
+  if (!Array.isArray(argv)) {
+    return [];
+  }
+  return argv.slice(0, CONFIG_AUDIT_ARGV_CAP);
+}
+
 export function snapshotConfigAuditProcessInfo(): ConfigAuditProcessInfo {
   return {
     pid: process.pid,
     ppid: process.ppid,
     cwd: process.cwd(),
-    argv: redactConfigAuditArgv(process.argv.slice(0, 8)),
-    execArgv: redactConfigAuditArgv(process.execArgv.slice(0, 8)),
+    argv: redactConfigAuditArgv(capArgv(process.argv)),
+    execArgv: redactConfigAuditArgv(capArgv(process.execArgv)),
   };
 }
 
@@ -241,8 +294,8 @@ function resolveConfigAuditProcessInfo(
   if (processInfo) {
     return {
       ...processInfo,
-      argv: redactConfigAuditArgv(processInfo.argv),
-      execArgv: redactConfigAuditArgv(processInfo.execArgv),
+      argv: redactConfigAuditArgv(capArgv(processInfo.argv)),
+      execArgv: redactConfigAuditArgv(capArgv(processInfo.execArgv)),
     };
   }
   return snapshotConfigAuditProcessInfo();
