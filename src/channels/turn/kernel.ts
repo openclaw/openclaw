@@ -1,5 +1,6 @@
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { clearHistoryEntriesIfEnabled } from "../../auto-reply/reply/history.js";
+import { EMPTY_CHANNEL_TURN_DISPATCH_COUNTS } from "./dispatch-result.js";
 export { buildChannelTurnContext, filterChannelTurnSupplementalContext } from "./context.js";
 export type { BuildChannelTurnContextParams } from "./context.js";
 import type {
@@ -15,6 +16,7 @@ import type {
   PreparedChannelTurn,
   PreflightFacts,
   RunChannelTurnParams,
+  RunResolvedChannelTurnParams,
 } from "./types.js";
 export {
   EMPTY_CHANNEL_TURN_DISPATCH_COUNTS,
@@ -49,6 +51,7 @@ export type {
   ReplyPlanFacts,
   RouteFacts,
   RunChannelTurnParams,
+  RunResolvedChannelTurnParams,
   SenderFacts,
   SupplementalContextFacts,
 } from "./types.js";
@@ -110,6 +113,15 @@ function clearPendingHistoryAfterTurn(params?: ChannelTurnHistoryFinalizeOptions
   });
 }
 
+function resolveObserveOnlyDispatchResult<TDispatchResult>(
+  params: PreparedChannelTurn<TDispatchResult>,
+): TDispatchResult {
+  return (params.observeOnlyDispatchResult ?? {
+    queuedFinal: false,
+    counts: EMPTY_CHANNEL_TURN_DISPATCH_COUNTS,
+  }) as TDispatchResult;
+}
+
 export async function dispatchAssembledChannelTurn(
   params: AssembledChannelTurn,
 ): Promise<DispatchedChannelTurnResult> {
@@ -158,7 +170,14 @@ async function dispatchResolvedChannelTurn<TDispatchResult>(
   },
 ): Promise<DispatchedChannelTurnResult<TDispatchResult>> {
   if (isPreparedChannelTurn(params)) {
-    return await runPreparedChannelTurn(params);
+    return await runPreparedChannelTurn(
+      params.admission.kind === "observeOnly"
+        ? {
+            ...params,
+            runDispatch: async () => resolveObserveOnlyDispatchResult(params),
+          }
+        : params,
+    );
   }
   return (await dispatchAssembledChannelTurn(
     params,
@@ -430,4 +449,22 @@ export async function runChannelTurn<
   }
 
   return result;
+}
+
+export async function runResolvedChannelTurn<
+  TRaw,
+  TDispatchResult = DispatchedChannelTurnResult["dispatchResult"],
+>(
+  params: RunResolvedChannelTurnParams<TRaw, TDispatchResult>,
+): Promise<ChannelTurnResult<TDispatchResult>> {
+  return await runChannelTurn({
+    channel: params.channel,
+    accountId: params.accountId,
+    raw: params.raw,
+    log: params.log,
+    adapter: {
+      ingest: (raw) => (typeof params.input === "function" ? params.input(raw) : params.input),
+      resolveTurn: params.resolveTurn,
+    },
+  });
 }
