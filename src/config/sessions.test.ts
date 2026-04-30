@@ -456,6 +456,53 @@ describe("sessions", () => {
     expect(store[sessionKey]?.reasoningLevel).toBe("on");
   });
 
+  it("updateSessionStoreEntry can preserve activity timestamps for metadata patches", async () => {
+    const sessionKey = "agent:main:main";
+    const { storePath } = await createSessionStoreFixture({
+      prefix: "updateSessionStoreEntry-preserve-activity",
+      entries: {
+        [sessionKey]: {
+          sessionId: "sess-1",
+          updatedAt: 100,
+        },
+      },
+    });
+
+    await updateSessionStoreEntry({
+      storePath,
+      sessionKey,
+      preserveActivity: true,
+      update: async () => ({ memoryFlushAt: 200 }),
+    });
+
+    const store = loadSessionStore(storePath);
+    expect(store[sessionKey]?.memoryFlushAt).toBe(200);
+    expect(store[sessionKey]?.updatedAt).toBe(100);
+  });
+
+  it("updateSessionStoreEntry refreshes activity timestamps by default", async () => {
+    const sessionKey = "agent:main:main";
+    const { storePath } = await createSessionStoreFixture({
+      prefix: "updateSessionStoreEntry-default-activity",
+      entries: {
+        [sessionKey]: {
+          sessionId: "sess-1",
+          updatedAt: 100,
+        },
+      },
+    });
+
+    await updateSessionStoreEntry({
+      storePath,
+      sessionKey,
+      update: async () => ({ memoryFlushAt: 200 }),
+    });
+
+    const store = loadSessionStore(storePath);
+    expect(store[sessionKey]?.memoryFlushAt).toBe(200);
+    expect(store[sessionKey]?.updatedAt).toBeGreaterThan(100);
+  });
+
   it("updateSessionStoreEntry returns null when session key does not exist", async () => {
     const { storePath } = await createSessionStoreFixture({
       prefix: "updateSessionStoreEntry-missing",

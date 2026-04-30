@@ -73,10 +73,12 @@ describe("reconcileSessionStoreCompactionCountAfterSuccess", () => {
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-compaction-reconcile-"));
     const storePath = path.join(tmp, "sessions.json");
     const sessionKey = "main";
+    const updatedAt = Date.now() - 1_000;
     await seedSessionStore({
       storePath,
       sessionKey,
       compactionCount: 1,
+      updatedAt,
     });
 
     const nextCount = await reconcileSessionStoreCompactionCountAfterSuccess({
@@ -89,6 +91,11 @@ describe("reconcileSessionStoreCompactionCountAfterSuccess", () => {
 
     expect(nextCount).toBe(2);
     expect(await readCompactionCount(storePath, sessionKey)).toBe(2);
+    const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+      string,
+      { updatedAt?: number }
+    >;
+    expect(store[sessionKey]?.updatedAt).toBe(updatedAt);
   });
 
   it("does not double count when the store is already at or above the observed value", async () => {

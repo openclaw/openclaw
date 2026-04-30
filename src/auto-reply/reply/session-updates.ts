@@ -234,7 +234,6 @@ export async function incrementCompactionCount(params: {
     sessionKey,
     storePath,
     cfg,
-    now = Date.now(),
     amount = 1,
     tokensAfter,
     newSessionId,
@@ -252,7 +251,6 @@ export async function incrementCompactionCount(params: {
   // Build update payload with compaction count and optionally updated token counts
   const updates: Partial<SessionEntry> = {
     compactionCount: nextCount,
-    updatedAt: now,
   };
   const explicitNewSessionFile = normalizeOptionalString(newSessionFile);
   const sessionIdChanged = Boolean(newSessionId && newSessionId !== entry.sessionId);
@@ -289,8 +287,9 @@ export async function incrementCompactionCount(params: {
   };
   if (storePath) {
     await updateSessionStore(storePath, (store) => {
+      const current = store[sessionKey] ?? entry;
       store[sessionKey] = {
-        ...store[sessionKey],
+        ...current,
         ...updates,
       };
     });
