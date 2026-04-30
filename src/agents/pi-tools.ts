@@ -37,7 +37,6 @@ import {
 import { applyDeferredFollowupToolDescriptions } from "./pi-tools.deferred-followup.js";
 import { filterToolsByMessageProvider } from "./pi-tools.message-provider-policy.js";
 import {
-  isToolAllowedByPolicies,
   resolveEffectiveToolPolicy,
   resolveGroupToolPolicy,
   resolveInheritedToolPolicyForSession,
@@ -607,19 +606,6 @@ export function createOpenClawCodingTools(options?: {
   const sandboxToolPolicyWithToolSearchControls =
     mergeToolSearchControlAllowlist(sandboxToolPolicy);
   const subagentPolicyWithToolSearchControls = mergeToolSearchControlAllowlist(subagentPolicy);
-  const allowBackground = isToolAllowedByPolicies("process", [
-    profilePolicyWithAlsoAllow,
-    providerProfilePolicyWithAlsoAllow,
-    globalPolicyWithToolSearchControls,
-    globalProviderPolicyWithToolSearchControls,
-    agentPolicyWithToolSearchControls,
-    agentProviderPolicyWithToolSearchControls,
-    groupPolicyWithToolSearchControls,
-    senderPolicyWithToolSearchControls,
-    sandboxToolPolicyWithToolSearchControls,
-    subagentPolicyWithToolSearchControls,
-    inheritedToolPolicy,
-  ]);
   options?.recordToolPrepStage?.("tool-policy");
   const execConfig = resolveExecConfig({ cfg: options?.config, agentId });
   const fsConfig = resolveToolFsConfig({ cfg: options?.config, agentId });
@@ -739,7 +725,10 @@ export function createOpenClawCodingTools(options?: {
         safeBinProfiles: options?.exec?.safeBinProfiles ?? execConfig.safeBinProfiles,
         agentId,
         cwd: workspaceRoot,
-        allowBackground,
+        // Exec owns process lifetime and timeout. Keep auto-backgrounding available
+        // even when the separate process follow-up tool is hidden, so long-running
+        // commands cannot pin the agent turn indefinitely.
+        allowBackground: true,
         scopeKey,
         sessionKey: options?.sessionKey,
         mainKey: options?.config?.session?.mainKey,
