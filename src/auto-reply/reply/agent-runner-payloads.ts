@@ -14,7 +14,11 @@ import {
   resolveOriginMessageTo,
 } from "./origin-routing.js";
 import { normalizeReplyPayloadDirectives } from "./reply-delivery.js";
-import { applyReplyThreading, isRenderablePayload } from "./reply-payloads-base.js";
+import {
+  applyReplyThreading,
+  isRenderablePayload,
+  shouldSuppressReasoningPayload,
+} from "./reply-payloads-base.js";
 
 let replyPayloadsDedupeRuntimePromise: Promise<
   typeof import("./reply-payloads-dedupe.runtime.js")
@@ -169,9 +173,12 @@ export async function buildReplyPayloads(params: {
       }),
     )
   ).filter(isRenderablePayload);
+  const userDeliverablePayloads = replyTaggedPayloads.filter(
+    (payload) => !shouldSuppressReasoningPayload(payload),
+  );
   const silentFilteredPayloads = params.silentExpected
-    ? replyTaggedPayloads.filter(shouldKeepPayloadDuringSilentTurn)
-    : replyTaggedPayloads;
+    ? userDeliverablePayloads.filter(shouldKeepPayloadDuringSilentTurn)
+    : userDeliverablePayloads;
 
   // Drop final payloads only when block streaming succeeded end-to-end.
   // If streaming aborted (e.g., timeout), fall back to final payloads.

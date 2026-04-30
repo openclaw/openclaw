@@ -1,4 +1,5 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { RunEmbeddedPiAgentParams } from "../../agents/pi-embedded-runner/run/params.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { TypingMode } from "../../config/types.js";
 import type { TemplateContext } from "../templating.js";
@@ -12,15 +13,7 @@ import {
 } from "./queue.js";
 import { createMockTypingController } from "./test-helpers.js";
 
-type AgentRunParams = {
-  onPartialReply?: (payload: { text?: string }) => Promise<void> | void;
-  onAssistantMessageStart?: () => Promise<void> | void;
-  onReasoningStream?: (payload: { text?: string }) => Promise<void> | void;
-  onBlockReply?: (payload: { text?: string; mediaUrls?: string[] }) => Promise<void> | void;
-  onToolResult?: (payload: ReplyPayload) => Promise<void> | void;
-  onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => void;
-  silentExpected?: boolean;
-};
+type AgentRunParams = RunEmbeddedPiAgentParams;
 
 const state = vi.hoisted(() => ({
   compactEmbeddedPiSessionMock: vi.fn(),
@@ -378,6 +371,27 @@ describe("runReplyAgent typing (heartbeat)", () => {
     expect(onPartialReply).not.toHaveBeenCalled();
     expect(onBlockReply).not.toHaveBeenCalled();
     expect(res).toBeUndefined();
+  });
+
+  it("does not forward reasoning-marked streamed payloads as visible text", async () => {
+    const onBlockReply = vi.fn();
+    const onToolResult = vi.fn();
+    state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
+      await params.onToolResult?.({ text: "Reasoning:\n_tool_", isReasoning: true });
+      await params.onBlockReply?.({ text: "Reasoning:\n_block_", isReasoning: true });
+      return { payloads: [{ text: "Visible final" }], meta: {} };
+    });
+
+    const { run, typing } = createMinimalRun({
+      opts: { isHeartbeat: false, onBlockReply, onToolResult },
+      blockStreamingEnabled: true,
+    });
+    const res = await run();
+
+    expect(onBlockReply).not.toHaveBeenCalled();
+    expect(onToolResult).not.toHaveBeenCalled();
+    expect(typing.startTypingOnText).not.toHaveBeenCalled();
+    expect(res).toMatchObject({ text: "Visible final" });
   });
 
   it("suppresses bare NO_REPLY silent-turn payloads", async () => {
@@ -1117,5 +1131,3 @@ describe("runReplyAgent typing (heartbeat)", () => {
     expect(payloads[0]?.text).toContain("```");
   });
 });
-
-import type { ReplyPayload } from "../types.js";
