@@ -660,15 +660,19 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       modelCatalog,
       opts: p,
     });
-    context.logGateway?.debug?.(
-      `sessions.list timing totalMs=${Math.round(Date.now() - startedAt)} storeMs=${Math.round(
-        loadedStoreAt - startedAt,
-      )} catalogMs=${Math.round(loadedCatalogAt - loadedStoreAt)} listMs=${Math.round(
-        Date.now() - loadedCatalogAt,
-      )} count=${result.count} includeDerivedTitles=${p.includeDerivedTitles === true} includeLastMessage=${
-        p.includeLastMessage === true
-      } limit=${typeof p.limit === "number" ? p.limit : "none"}`,
-    );
+    const totalMs = Math.round(Date.now() - startedAt);
+    const timingMessage = `sessions.list timing totalMs=${totalMs} storeMs=${Math.round(
+      loadedStoreAt - startedAt,
+    )} catalogMs=${Math.round(loadedCatalogAt - loadedStoreAt)} listMs=${Math.round(
+      Date.now() - loadedCatalogAt,
+    )} count=${result.count} includeDerivedTitles=${p.includeDerivedTitles === true} includeLastMessage=${
+      p.includeLastMessage === true
+    } limit=${typeof p.limit === "number" ? p.limit : "none"}`;
+    if (totalMs >= 1000) {
+      context.logGateway?.warn?.(timingMessage);
+    } else {
+      context.logGateway?.debug?.(timingMessage);
+    }
     respond(true, result, undefined);
   },
   "sessions.subscribe": ({ client, context, respond }) => {

@@ -480,6 +480,57 @@ export type SessionTranscriptUsageSnapshot = {
   costUsd?: number;
 };
 
+type SessionTranscriptUsageCacheEntry = {
+  mtimeMs: number;
+  size: number;
+  value: SessionTranscriptUsageSnapshot | null;
+};
+
+const sessionTranscriptUsageCache = new Map<string, SessionTranscriptUsageCacheEntry>();
+const MAX_SESSION_TRANSCRIPT_USAGE_CACHE_ENTRIES = 5000;
+
+function cloneSessionTranscriptUsageSnapshot(
+  value: SessionTranscriptUsageSnapshot | null,
+): SessionTranscriptUsageSnapshot | null {
+  return value ? { ...value } : null;
+}
+
+function getCachedSessionTranscriptUsage(
+  filePath: string,
+  stat: fs.Stats,
+): SessionTranscriptUsageSnapshot | null | undefined {
+  const cached = sessionTranscriptUsageCache.get(filePath);
+  if (!cached) {
+    return undefined;
+  }
+  if (cached.mtimeMs !== stat.mtimeMs || cached.size !== stat.size) {
+    sessionTranscriptUsageCache.delete(filePath);
+    return undefined;
+  }
+  sessionTranscriptUsageCache.delete(filePath);
+  sessionTranscriptUsageCache.set(filePath, cached);
+  return cloneSessionTranscriptUsageSnapshot(cached.value);
+}
+
+function setCachedSessionTranscriptUsage(
+  filePath: string,
+  stat: fs.Stats,
+  value: SessionTranscriptUsageSnapshot | null,
+) {
+  sessionTranscriptUsageCache.set(filePath, {
+    mtimeMs: stat.mtimeMs,
+    size: stat.size,
+    value: cloneSessionTranscriptUsageSnapshot(value),
+  });
+  while (sessionTranscriptUsageCache.size > MAX_SESSION_TRANSCRIPT_USAGE_CACHE_ENTRIES) {
+    const oldestKey = sessionTranscriptUsageCache.keys().next().value;
+    if (typeof oldestKey !== "string" || !oldestKey) {
+      break;
+    }
+    sessionTranscriptUsageCache.delete(oldestKey);
+  }
+}
+
 function extractTranscriptUsageCost(raw: unknown): number | undefined {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
     return undefined;
@@ -636,8 +687,14 @@ export function readLatestSessionUsageFromTranscript(
     if (stat.size === 0) {
       return null;
     }
+    const cached = getCachedSessionTranscriptUsage(filePath, stat);
+    if (cached !== undefined) {
+      return cached;
+    }
     const chunk = fs.readFileSync(fd, "utf-8");
-    return extractLatestUsageFromTranscriptChunk(chunk);
+    const snapshot = extractLatestUsageFromTranscriptChunk(chunk);
+    setCachedSessionTranscriptUsage(filePath, stat, snapshot);
+    return cloneSessionTranscriptUsageSnapshot(snapshot);
   });
 }
 
