@@ -26,7 +26,7 @@ type GeminiCliCredential = NonNullable<ReturnType<typeof readGeminiCliCredential
 function seedGeminiCliAllowlist(
   models: NonNullable<AgentDefaultsModels>,
 ): NonNullable<AgentDefaultsModels> {
-  const next = { ...models };
+  const next: NonNullable<AgentDefaultsModels> = { ...models };
   for (const ref of GEMINI_CLI_DEFAULT_ALLOWLIST_REFS) {
     next[ref] = next[ref] ?? {};
   }
@@ -54,7 +54,7 @@ export function buildGoogleGeminiCliMigrationResult(
 ): ProviderAuthResult {
   void credential;
   const defaults = config.agents?.defaults;
-  const existingModels = (defaults?.models ?? {}) as NonNullable<AgentDefaultsModels>;
+  const existingModels: NonNullable<AgentDefaultsModels> = defaults?.models ?? {};
   const nextModels = seedGeminiCliAllowlist(existingModels);
   const defaultModel = GEMINI_CLI_DEFAULT_MODEL_REF;
 
