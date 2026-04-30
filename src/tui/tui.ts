@@ -280,13 +280,18 @@ export async function drainAndStopTuiForExitSafely(
         }),
       ]);
     }
-    stopTuiSafely(() => tui.stop());
   } catch {
-    // Signal shutdown is best-effort. Do not keep an orphaned TUI alive because
-    // terminal cleanup threw after the controlling terminal disappeared.
+    // Drain is best-effort. A dead terminal can reject or timeout; stop runs regardless.
   } finally {
     if (timeout) {
       clearTimeout(timeout);
+    }
+    // Always stop the TUI — drain failure must not leave terminal listeners alive.
+    // Signal-exit cleanup: swallow all stop errors (terminal may already be dead).
+    try {
+      stopTuiSafely(() => tui.stop());
+    } catch {
+      // Ignore — we're in signal-exit cleanup, best-effort only.
     }
   }
 }

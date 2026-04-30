@@ -363,6 +363,25 @@ describe("TUI shutdown safety", () => {
     expect(stop).toHaveBeenCalledOnce();
   });
 
+  it("still calls tui.stop() when terminal drain rejects (#75289)", async () => {
+    // Regression: if drainInput rejects (e.g. dead terminal after SIGHUP), the old
+    // implementation jumped into the catch block and skipped stopTuiSafely. Terminal
+    // listeners were left alive and the orphaned TUI process could not be killed cleanly.
+    const stop = vi.fn();
+    const drainInput = vi.fn(() => Promise.reject(new Error("terminal closed")));
+
+    await drainAndStopTuiForExitSafely(
+      {
+        stop,
+        terminal: { drainInput },
+      },
+      10,
+    );
+
+    expect(drainInput).toHaveBeenCalledOnce();
+    expect(stop).toHaveBeenCalledOnce();
+  });
+
   it("swallows terminal stop errors during signal-exit cleanup", async () => {
     const stop = vi.fn(() => {
       throw new Error("dead terminal");
