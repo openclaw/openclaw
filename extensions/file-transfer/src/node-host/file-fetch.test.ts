@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   FILE_FETCH_DEFAULT_MAX_BYTES,
   FILE_FETCH_HARD_MAX_BYTES,
@@ -21,6 +21,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await fs.rm(tmpRoot, { recursive: true, force: true });
 });
 
@@ -103,6 +104,24 @@ describe("handleFileFetch — happy path", () => {
     expect(r.sha256).toBe(expectedSha);
     // canonicalized path may differ from input on macOS (/tmp -> /private/tmp)
     expect(path.basename(r.path)).toBe("hello.txt");
+  });
+
+  it("preflights canonical path and size without reading bytes", async () => {
+    const target = path.join(tmpRoot, "hello.txt");
+    await fs.writeFile(target, "hello world\n");
+    const readFileSpy = vi.spyOn(fs, "readFile");
+
+    const r = await handleFileFetch({ path: target, preflightOnly: true });
+
+    expect(r).toMatchObject({
+      ok: true,
+      path: target,
+      size: 12,
+      base64: "",
+      sha256: "",
+      preflightOnly: true,
+    });
+    expect(readFileSpy).not.toHaveBeenCalled();
   });
 
   it("returns a sensible mime type for known extensions", async () => {

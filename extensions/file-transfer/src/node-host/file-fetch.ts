@@ -11,6 +11,7 @@ export type FileFetchParams = {
   path?: unknown;
   maxBytes?: unknown;
   followSymlinks?: unknown;
+  preflightOnly?: unknown;
 };
 
 export type FileFetchOk = {
@@ -20,6 +21,7 @@ export type FileFetchOk = {
   mimeType: string;
   base64: string;
   sha256: string;
+  preflightOnly?: boolean;
 };
 
 export type FileFetchErrCode =
@@ -95,6 +97,7 @@ export async function handleFileFetch(params: FileFetchParams): Promise<FileFetc
 
   const maxBytes = clampMaxBytes(params.maxBytes);
   const followSymlinks = params.followSymlinks === true;
+  const preflightOnly = params.preflightOnly === true;
 
   let canonical: string;
   try {
@@ -153,6 +156,18 @@ export async function handleFileFetch(params: FileFetchParams): Promise<FileFetc
       code: "FILE_TOO_LARGE",
       message: `file size ${stats.size} exceeds limit ${maxBytes}`,
       canonicalPath: canonical,
+    };
+  }
+
+  if (preflightOnly) {
+    return {
+      ok: true,
+      path: canonical,
+      size: stats.size,
+      mimeType: "",
+      base64: "",
+      sha256: "",
+      preflightOnly: true,
     };
   }
 
