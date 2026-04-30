@@ -2196,7 +2196,7 @@ describe("memory plugin e2e", () => {
     vi.resetModules();
     vi.doMock("openai", () => ({
       default: class MockOpenAI {
-        embeddings = { create: vi.fn(async () => ({ data: [{ embedding: [0.1, 0.2, 0.3] }] })) };
+        post = vi.fn(async () => ({ data: [{ embedding: [0.1, 0.2, 0.3] }] }));
       },
     }));
     vi.doMock("@lancedb/lancedb", () => ({
