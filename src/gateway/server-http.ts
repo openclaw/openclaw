@@ -43,10 +43,6 @@ import {
 import type { PreauthConnectionBudget } from "./server/preauth-connection-budget.js";
 import type { ReadinessChecker } from "./server/readiness.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
-import { handleSessionKillHttpRequest } from "./session-kill-http.js";
-import { handleSessionHistoryHttpRequest } from "./sessions-history-http.js";
-import { handleToolsInvokeHttpRequest } from "./tools-invoke-http.js";
-import { handleHttpRpcEndpoint } from "./http-rpc-handler.js";
 import { VOICECLAW_REALTIME_PATH } from "./voiceclaw-realtime/paths.js";
 
 type PluginHttpRequestHandler = (
