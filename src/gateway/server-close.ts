@@ -10,6 +10,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { closePluginStateSqliteStore } from "../plugin-state/plugin-state-store.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { deleteDrainManifest, writeDrainManifest } from "./server-drain-manifest.js";
 
 const shutdownLog = createSubsystemLogger("gateway/shutdown");
 const GATEWAY_SHUTDOWN_HOOK_TIMEOUT_MS = 1_000;
@@ -194,6 +195,12 @@ export function createGatewayCloseHandler(params: {
   transcriptUnsub: (() => void) | null;
   lifecycleUnsub: (() => void) | null;
   chatRunState: { clear: () => void };
+  chatRunRegistry?: {
+    entries: () => ReadonlyArray<{
+      sessionId: string;
+      runs: ReadonlyArray<{ sessionKey: string; clientRunId: string }>;
+    }>;
+  } | null;
   clients: Set<{ socket: { close: (code: number, reason: string) => void } }>;
   configReloader: { stop: () => Promise<void> };
   wss: WebSocketServer;
@@ -327,6 +334,15 @@ export function createGatewayCloseHandler(params: {
       if (params.lifecycleUnsub) {
         await shutdownStep("lifecycle-unsub", () => params.lifecycleUnsub!(), warnings);
       }
+      // Write drain manifest of active sessions before clearing
+      if (params.chatRunRegistry) {
+        try {
+          writeDrainManifest(params.chatRunRegistry);
+        } catch (err) {
+          shutdownLog.warn(`failed to write drain manifest: ${String(err)}`);
+          recordShutdownWarning(warnings, "drain-manifest-write");
+        }
+      }
       params.chatRunState.clear();
       let clientCloseFailures = 0;
       for (const c of params.clients) {
@@ -450,6 +466,14 @@ export function createGatewayCloseHandler(params: {
       } catch {
         /* ignore */
       }
+    }
+
+    // Clean shutdown — remove drain manifest so boot-time consumer knows
+    // all sessions were drained successfully (no unclean restart).
+    try {
+      deleteDrainManifest();
+    } catch (err) {
+      shutdownLog.warn(`failed to delete drain manifest on clean shutdown: ${String(err)}`);
     }
 
     const durationMs = Date.now() - start;

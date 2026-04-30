@@ -9,6 +9,8 @@ export type ChatRunRegistry = {
   shift: (sessionId: string) => ChatRunEntry | undefined;
   remove: (sessionId: string, clientRunId: string, sessionKey?: string) => ChatRunEntry | undefined;
   clear: () => void;
+  /** Snapshot all active runs for drain manifest / diagnostics. */
+  entries: () => ReadonlyArray<{ sessionId: string; runs: ReadonlyArray<ChatRunEntry> }>;
 };
 
 export function createChatRunRegistry(): ChatRunRegistry {
@@ -60,7 +62,17 @@ export function createChatRunRegistry(): ChatRunRegistry {
     chatRunSessions.clear();
   };
 
-  return { add, peek, shift, remove, clear };
+  const entries = () => {
+    const result: Array<{ sessionId: string; runs: ReadonlyArray<ChatRunEntry> }> = [];
+    for (const [sessionId, queue] of chatRunSessions) {
+      if (queue.length > 0) {
+        result.push({ sessionId, runs: [...queue] });
+      }
+    }
+    return result;
+  };
+
+  return { add, peek, shift, remove, clear, entries };
 }
 
 export type ChatRunState = {
