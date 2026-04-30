@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { Stats } from "node:fs";
+import type { Dirent, Stats } from "node:fs";
 import { constants as fsConstants } from "node:fs";
 import type { FileHandle } from "node:fs/promises";
 import fs from "node:fs/promises";
@@ -49,6 +49,16 @@ export type SafeLocalReadResult = {
   buffer: Buffer;
   realPath: string;
   stat: Stats;
+};
+
+export type SafePathKind = "missing" | "file" | "directory" | "symlink" | "other";
+
+export type SafePathStatResult = {
+  exists: boolean;
+  kind: SafePathKind;
+  size?: number;
+  realPath?: string;
+  stat?: Stats;
 };
 
 export type FsSafeTestHooks = {
@@ -334,6 +344,74 @@ export async function readLocalFileSafely(params: {
   } finally {
     await opened.handle.close().catch(() => {});
   }
+}
+
+export async function statPathWithinRoot(params: {
+  rootDir: string;
+  relativePath: string;
+  followSymlinks?: boolean;
+  allowMissing?: boolean;
+}): Promise<SafePathStatResult> {
+  const { rootWithSep, resolved } = await resolvePathWithinRoot(params);
+  let stat: Stats;
+  try {
+    stat = params.followSymlinks === false ? await fs.lstat(resolved) : await fs.stat(resolved);
+  } catch (err) {
+    if (isNotFoundPathError(err)) {
+      if (params.allowMissing === true) {
+        return { exists: false, kind: "missing" };
+      }
+      throw new SafeOpenError("not-found", "file not found", {
+        cause: err instanceof Error ? err : undefined,
+      });
+    }
+    throw err;
+  }
+
+  const realPath = params.followSymlinks === false ? resolved : await fs.realpath(resolved);
+  if (!isPathInside(rootWithSep, realPath)) {
+    throw new SafeOpenError("outside-workspace", "file is outside workspace root");
+  }
+
+  return {
+    exists: true,
+    kind: stat.isFile()
+      ? "file"
+      : stat.isDirectory()
+        ? "directory"
+        : stat.isSymbolicLink()
+          ? "symlink"
+          : "other",
+    size: stat.size,
+    realPath,
+    stat,
+  };
+}
+
+export async function readdirWithinRoot(params: {
+  rootDir: string;
+  relativePath?: string;
+  withFileTypes?: false;
+}): Promise<string[]>;
+export async function readdirWithinRoot(params: {
+  rootDir: string;
+  relativePath?: string;
+  withFileTypes: true;
+}): Promise<Dirent[]>;
+export async function readdirWithinRoot(params: {
+  rootDir: string;
+  relativePath?: string;
+  withFileTypes?: boolean;
+}): Promise<string[] | Dirent[]> {
+  const { resolved } = await resolvePinnedPathWithinRoot({
+    rootDir: params.rootDir,
+    relativePath: params.relativePath ?? ".",
+    allowRoot: true,
+  });
+  if (params.withFileTypes === true) {
+    return await fs.readdir(resolved, { withFileTypes: true });
+  }
+  return (await fs.readdir(resolved)).sort();
 }
 
 export async function openLocalFileSafely(params: { filePath: string }): Promise<SafeOpenResult> {
@@ -684,6 +762,37 @@ export async function removePathWithinRoot(params: {
     }
     throw normalizePinnedPathError(error);
   }
+}
+
+export async function renamePathWithinRoot(params: {
+  rootDir: string;
+  fromRelativePath: string;
+  toRelativePath: string;
+  overwrite?: boolean;
+}): Promise<void> {
+  const from = await resolvePinnedPathWithinRoot({
+    rootDir: params.rootDir,
+    relativePath: params.fromRelativePath,
+  });
+  const to = await resolvePinnedPathWithinRoot({
+    rootDir: params.rootDir,
+    relativePath: params.toRelativePath,
+  });
+  if (from.rootReal !== to.rootReal) {
+    throw new SafeOpenError("outside-workspace", "rename roots do not match");
+  }
+  if (params.overwrite !== true) {
+    try {
+      await fs.lstat(to.resolved);
+      throw new SafeOpenError("invalid-path", "destination already exists");
+    } catch (err) {
+      if (!isNotFoundPathError(err)) {
+        throw err;
+      }
+    }
+  }
+  await fs.mkdir(path.dirname(to.resolved), { recursive: true });
+  await fs.rename(from.resolved, to.resolved);
 }
 
 export async function mkdirPathWithinRoot(params: {
