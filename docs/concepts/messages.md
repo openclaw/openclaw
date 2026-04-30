@@ -127,9 +127,9 @@ current run, or collected for a followup turn.
 - Default mode is `steer`, with a 500ms followup debounce when steering falls
   back to queued followup delivery.
 - Modes: `steer`, `followup`, `collect`, `steer-backlog`, `interrupt`, and the
-  legacy `queue` alias.
+  legacy one-at-a-time `queue` mode.
 
-Details: [Command queue](/concepts/queue).
+Details: [Command queue](/concepts/queue) and [Steering queue](/concepts/queue-steering).
 
 ## Channel run ownership
 

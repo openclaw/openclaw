@@ -89,39 +89,40 @@ function installRuntime(params: {
   const readSessionUpdatedAt = vi.fn(
     (_params?: { storePath: string; sessionKey: string }): number | undefined => undefined,
   );
-  const dispatchAssembled = vi.fn(
-    async (turn: Parameters<PluginRuntime["channel"]["turn"]["dispatchAssembled"]>[0]) => {
-      await turn.recordInboundSession({
-        storePath: turn.storePath,
-        sessionKey: turn.ctxPayload.SessionKey ?? turn.routeSessionKey,
-        ctx: turn.ctxPayload,
-        groupResolution: turn.record?.groupResolution,
-        createIfMissing: turn.record?.createIfMissing,
-        updateLastRoute: turn.record?.updateLastRoute,
-        onRecordError: turn.record?.onRecordError ?? (() => undefined),
-      });
-      const dispatchResult = await turn.dispatchReplyWithBufferedBlockDispatcher({
-        ctx: turn.ctxPayload,
-        cfg: turn.cfg,
-        dispatcherOptions: {
-          ...turn.dispatcherOptions,
-          deliver: async (payload, info) => {
-            await turn.delivery.deliver(payload, info);
-          },
-          onError: turn.delivery.onError,
+  type ResolvedTurn = Awaited<
+    ReturnType<Parameters<PluginRuntime["channel"]["turn"]["run"]>[0]["adapter"]["resolveTurn"]>
+  >;
+  const dispatchAssembled = vi.fn(async (turn: ResolvedTurn) => {
+    await turn.recordInboundSession({
+      storePath: turn.storePath,
+      sessionKey: turn.ctxPayload.SessionKey ?? turn.routeSessionKey,
+      ctx: turn.ctxPayload,
+      groupResolution: turn.record?.groupResolution,
+      createIfMissing: turn.record?.createIfMissing,
+      updateLastRoute: turn.record?.updateLastRoute,
+      onRecordError: turn.record?.onRecordError ?? (() => undefined),
+    });
+    const dispatchResult = await turn.dispatchReplyWithBufferedBlockDispatcher({
+      ctx: turn.ctxPayload,
+      cfg: turn.cfg,
+      dispatcherOptions: {
+        ...turn.dispatcherOptions,
+        deliver: async (payload, info) => {
+          await turn.delivery.deliver(payload, info);
         },
-        replyOptions: turn.replyOptions,
-        replyResolver: turn.replyResolver,
-      });
-      return {
-        admission: { kind: "dispatch" as const },
-        dispatched: true,
-        ctxPayload: turn.ctxPayload,
-        routeSessionKey: turn.routeSessionKey,
-        dispatchResult,
-      };
-    },
-  );
+        onError: turn.delivery.onError,
+      },
+      replyOptions: turn.replyOptions,
+      replyResolver: turn.replyResolver,
+    });
+    return {
+      admission: { kind: "dispatch" as const },
+      dispatched: true,
+      ctxPayload: turn.ctxPayload,
+      routeSessionKey: turn.routeSessionKey,
+      dispatchResult,
+    };
+  });
   const runTurn = vi.fn(async (params: Parameters<PluginRuntime["channel"]["turn"]["run"]>[0]) => {
     const input = await params.adapter.ingest(params.raw);
     if (!input) {
@@ -137,27 +138,6 @@ function installRuntime(params: {
     );
     return await dispatchAssembled(resolved);
   });
-  const runResolvedTurn = vi.fn(
-    async (params: Parameters<PluginRuntime["channel"]["turn"]["runResolved"]>[0]) => {
-      const input =
-        typeof params.input === "function" ? await params.input(params.raw) : params.input;
-      if (!input) {
-        return {
-          admission: { kind: "drop" as const, reason: "ingest-null" },
-          dispatched: false,
-        };
-      }
-      const resolved = await params.resolveTurn(
-        input,
-        {
-          kind: "message",
-          canStartAgentTurn: true,
-        },
-        {},
-      );
-      return await dispatchAssembled(resolved);
-    },
-  );
   const buildContext = vi.fn(
     (params: Parameters<PluginRuntime["channel"]["turn"]["buildContext"]>[0]) =>
       ({
@@ -264,10 +244,7 @@ function installRuntime(params: {
       },
       turn: {
         run: runTurn as unknown as PluginRuntime["channel"]["turn"]["run"],
-        runResolved: runResolvedTurn as unknown as PluginRuntime["channel"]["turn"]["runResolved"],
         buildContext: buildContext as unknown as PluginRuntime["channel"]["turn"]["buildContext"],
-        dispatchAssembled:
-          dispatchAssembled as unknown as PluginRuntime["channel"]["turn"]["dispatchAssembled"],
       },
       text: {
         resolveMarkdownTableMode: vi.fn(() => "code"),
