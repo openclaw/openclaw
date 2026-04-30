@@ -10,7 +10,7 @@ import {
   log,
 } from "./constants.js";
 import { overlayExternalAuthProfiles, shouldPersistExternalAuthProfile } from "./external-auth.js";
-import { hasOAuthIdentity, isSafeToAdoptMainStoreOAuthIdentity } from "./oauth-shared.js";
+import { isSafeToAdoptMainStoreOAuthIdentity } from "./oauth-shared.js";
 import {
   ensureAuthStoreFile,
   resolveAuthStatePath,
@@ -86,8 +86,10 @@ function isInheritedMainOAuthCredential(params: {
   return (
     mainCredential?.type === "oauth" &&
     (isDeepStrictEqual(mainCredential, params.credential) ||
-      (hasOAuthIdentity(params.credential) &&
-        isSafeToAdoptMainStoreOAuthIdentity(params.credential, mainCredential)))
+      shouldUseMainOwnerForLocalOAuthCredential({
+        local: params.credential,
+        main: mainCredential,
+      }))
   );
 }
 
@@ -228,6 +230,31 @@ function buildLocalAuthProfileStoreForSave(params: {
       }),
     ),
   );
+  const keptProfileIds = new Set(Object.keys(localStore.profiles));
+  localStore.order = localStore.order
+    ? Object.fromEntries(
+        Object.entries(localStore.order)
+          .map(([provider, profileIds]) => [
+            provider,
+            profileIds.filter((profileId) => keptProfileIds.has(profileId)),
+          ])
+          .filter(([, profileIds]) => profileIds.length > 0),
+      )
+    : undefined;
+  localStore.lastGood = localStore.lastGood
+    ? Object.fromEntries(
+        Object.entries(localStore.lastGood).filter(([, profileId]) =>
+          keptProfileIds.has(profileId),
+        ),
+      )
+    : undefined;
+  localStore.usageStats = localStore.usageStats
+    ? Object.fromEntries(
+        Object.entries(localStore.usageStats).filter(([profileId]) =>
+          keptProfileIds.has(profileId),
+        ),
+      )
+    : undefined;
   return localStore;
 }
 

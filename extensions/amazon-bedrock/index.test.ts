@@ -253,6 +253,36 @@ describe("amazon-bedrock provider plugin", () => {
     });
   });
 
+  it("mirrors Claude Opus 4.7 thinking levels for Bedrock model refs", async () => {
+    const provider = await registerSingleProviderPlugin(amazonBedrockPlugin);
+
+    for (const modelId of [
+      "us.anthropic.claude-opus-4-7",
+      "us.anthropic.claude-opus-4.7-v1:0",
+      "eu.anthropic.claude-opus-4-7",
+      "arn:aws:bedrock:us-west-2:123456789012:inference-profile/us.anthropic.claude-opus-4-7",
+    ]) {
+      expect(
+        provider.resolveThinkingProfile?.({
+          provider: "amazon-bedrock",
+          modelId,
+        } as never),
+      ).toMatchObject({
+        levels: [
+          { id: "off" },
+          { id: "minimal" },
+          { id: "low" },
+          { id: "medium" },
+          { id: "high" },
+          { id: "xhigh" },
+          { id: "adaptive" },
+          { id: "max" },
+        ],
+        defaultLevel: "off",
+      });
+    }
+  });
+
   it("owns Anthropic-style replay policy for Claude Bedrock models", async () => {
     const provider = await registerSingleProviderPlugin(amazonBedrockPlugin);
 

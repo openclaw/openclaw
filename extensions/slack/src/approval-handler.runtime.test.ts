@@ -113,4 +113,52 @@ describe("slackApprovalNativeRuntime", () => {
       (payload.blocks as Array<{ type?: string }>).some((block) => block.type === "actions"),
     ).toBe(false);
   });
+
+  it("keeps pending metadata context within Slack Block Kit limits", async () => {
+    const payload = (await slackApprovalNativeRuntime.presentation.buildPendingPayload({
+      cfg: {} as never,
+      accountId: "default",
+      context: {
+        app: {} as never,
+        config: {} as never,
+      },
+      request: {
+        id: "req-1",
+        request: {
+          command: "echo hi",
+        },
+        createdAtMs: 0,
+        expiresAtMs: 60_000,
+      },
+      approvalKind: "exec",
+      nowMs: 0,
+      view: {
+        approvalKind: "exec",
+        approvalId: "req-1",
+        commandText: "echo hi",
+        metadata: Array.from({ length: 12 }, (_entry, index) => ({
+          label: `Metadata ${index + 1}`,
+          value: index === 0 ? "x".repeat(3100) : `value-${index + 1}`,
+        })),
+        actions: [
+          {
+            decision: "allow-once",
+            label: "Allow Once",
+            command: "/approve req-1 allow-once",
+            style: "success",
+          },
+        ],
+      } as never,
+    })) as SlackPayload;
+
+    const contextBlock = (payload.blocks as Array<{ type?: string; elements?: unknown[] }>).find(
+      (block) => block.type === "context",
+    );
+    const elements = contextBlock?.elements as Array<{ text?: string }> | undefined;
+
+    expect(elements).toHaveLength(10);
+    expect(elements?.[0]?.text).toHaveLength(3000);
+    expect(elements?.[0]?.text?.endsWith("…")).toBe(true);
+    expect(elements?.at(-1)?.text).toBe("…+3 more");
+  });
 });

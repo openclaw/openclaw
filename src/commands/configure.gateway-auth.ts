@@ -124,7 +124,10 @@ function resolveConfiguredProviderFromAuthChange(params: {
     return changedProviders[0];
   }
 
-  return configuredProviders.length === 1 ? configuredProviders[0] : params.preferredProvider;
+  return (
+    params.preferredProvider ??
+    (configuredProviders.length === 1 ? configuredProviders[0] : undefined)
+  );
 }
 
 export function buildGatewayAuthConfig(params: {
@@ -251,6 +254,8 @@ export async function promptAuthConfig(
     const allowlistSelection = await promptModelAllowlist({
       config: next,
       prompter,
+      workspaceDir: resolveDefaultAgentWorkspaceDir(),
+      env: process.env,
       allowedKeys: modelPrompt?.allowedKeys,
       initialSelections: modelPrompt?.initialSelections,
       message: modelPrompt?.message,

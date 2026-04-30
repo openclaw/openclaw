@@ -175,6 +175,7 @@ function createFeishuBotRuntime(overrides: DeepPartial<PluginRuntime> = {}): Plu
       session: {
         readSessionUpdatedAt: readSessionUpdatedAtMock,
         resolveStorePath: resolveStorePathMock,
+        recordInboundSession: vi.fn(async () => undefined),
       },
       reply: {
         resolveEnvelopeFormatOptions:
@@ -195,6 +196,21 @@ function createFeishuBotRuntime(overrides: DeepPartial<PluginRuntime> = {}): Plu
         readAllowFromStore: vi.fn().mockResolvedValue(["ou_sender_1"]),
         upsertPairingRequest: vi.fn(),
         buildPairingReply: vi.fn(),
+      },
+      turn: {
+        run: vi.fn(async (params) => {
+          const input = await params.adapter.ingest(params.raw);
+          const turn = await params.adapter.resolveTurn(input, {
+            kind: "message",
+            canStartAgentTurn: true,
+          });
+          return {
+            dispatchResult: await turn.runDispatch(),
+          };
+        }),
+        runPrepared: vi.fn(async (params) => ({
+          dispatchResult: await params.runDispatch(),
+        })),
       },
       ...overrides.channel,
     },

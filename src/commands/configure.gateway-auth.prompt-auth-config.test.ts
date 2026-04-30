@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { NormalizedModelCatalogRow } from "../model-catalog/index.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
@@ -85,6 +86,18 @@ function createKilocodeProvider() {
   };
 }
 
+function createTestModel(id: string, name = id) {
+  return {
+    id,
+    name,
+    reasoning: false,
+    input: ["text"] as Array<"text" | "image" | "video" | "audio">,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 128_000,
+    maxTokens: 4096,
+  };
+}
+
 function createApplyAuthChoiceConfig(includeMinimaxProvider = false) {
   return {
     config: {
@@ -101,7 +114,7 @@ function createApplyAuthChoiceConfig(includeMinimaxProvider = false) {
                 minimax: {
                   baseUrl: "https://api.minimax.io/anthropic",
                   api: "anthropic-messages",
-                  models: [{ id: "MiniMax-M2.7", name: "MiniMax M2.7" }],
+                  models: [createTestModel("MiniMax-M2.7", "MiniMax M2.7")],
                 },
               }
             : {}),
@@ -286,6 +299,83 @@ describe("promptAuthConfig", () => {
         preferredProvider: "openai",
       }),
     );
+  });
+
+  it("keeps the selected provider scope when existing config has another provider", async () => {
+    vi.clearAllMocks();
+    mocks.promptAuthChoiceGrouped.mockResolvedValue("github-copilot");
+    mocks.resolvePreferredProviderForAuthChoice.mockResolvedValue("github-copilot");
+    const existingConfig = {
+      agents: {
+        defaults: {
+          model: { primary: "ollama/deepseek-v4-pro" },
+        },
+      },
+      models: {
+        providers: {
+          ollama: {
+            baseUrl: "https://ollama.com",
+            api: "ollama",
+            models: [createTestModel("deepseek-v4-pro")],
+          },
+        },
+      },
+    } as OpenClawConfig;
+    mocks.applyAuthChoice.mockResolvedValue({ config: existingConfig });
+    mocks.promptModelAllowlist.mockResolvedValue({ models: undefined });
+    mocks.resolveProviderPluginChoice.mockReturnValue(null);
+
+    await promptAuthConfig(existingConfig, makeRuntime(), noopPrompter);
+
+    expect(mocks.promptModelAllowlist).toHaveBeenCalledWith(
+      expect.objectContaining({
+        preferredProvider: "github-copilot",
+      }),
+    );
+  });
+
+  it("loads the selected provider catalog after auth enables that plugin", async () => {
+    vi.clearAllMocks();
+    mocks.promptAuthChoiceGrouped.mockResolvedValue("github-copilot");
+    mocks.resolvePreferredProviderForAuthChoice.mockResolvedValue("github-copilot");
+    const existingConfig = {
+      agents: { defaults: { model: { primary: "ollama/deepseek-v4-pro" } } },
+      models: {
+        providers: {
+          ollama: {
+            baseUrl: "https://ollama.com",
+            api: "ollama",
+            models: [createTestModel("deepseek-v4-pro")],
+          },
+        },
+      },
+    } as OpenClawConfig;
+    mocks.applyAuthChoice.mockResolvedValue({
+      config: {
+        ...existingConfig,
+        plugins: { entries: { "github-copilot": { enabled: true } } },
+      },
+    });
+    mocks.loadStaticManifestCatalogRowsForList.mockReturnValueOnce([
+      {
+        ref: "github-copilot/claude-opus-4.7",
+        mergeKey: "github-copilot/claude-opus-4.7",
+        provider: "github-copilot",
+        id: "claude-opus-4.7",
+        name: "Claude Opus 4.7",
+        source: "manifest",
+        input: ["text"],
+        reasoning: false,
+        status: "available",
+      },
+    ]);
+    mocks.promptModelAllowlist.mockResolvedValue({ models: undefined });
+    mocks.resolveProviderPluginChoice.mockReturnValue(null);
+
+    await promptAuthConfig(existingConfig, makeRuntime(), noopPrompter);
+
+    expect(mocks.promptModelAllowlist.mock.calls[0]?.[0]?.preferredProvider).toBe("github-copilot");
+    expect(mocks.promptModelAllowlist.mock.calls[0]?.[0]?.loadCatalog).toBe(true);
   });
 
   it("loads configured provider models after Ollama Cloud + Local and Cloud only setup", async () => {
