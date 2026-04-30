@@ -745,6 +745,78 @@ describe("update-cli", () => {
     expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
   });
 
+  it("restart verification mode reruns the updated gateway restart after stale PID cleanup", async () => {
+    const { root, entrypoints } = setupUpdatedRootRefresh();
+    const stalePid = 987_654_321;
+    serviceReadRuntime
+      .mockResolvedValueOnce({ status: "stopped", state: "stopped" })
+      .mockResolvedValueOnce({ status: "running", pid: 4242, state: "running" });
+    inspectPortUsage
+      .mockResolvedValueOnce({
+        port: 18789,
+        status: "busy",
+        listeners: [{ pid: stalePid, command: "openclaw-gateway" }],
+        hints: [],
+      })
+      .mockResolvedValueOnce({
+        port: 18789,
+        status: "busy",
+        listeners: [{ pid: 4242, command: "openclaw-gateway" }],
+        hints: [],
+      });
+    probeGateway
+      .mockResolvedValueOnce({
+        ok: false,
+        close: null,
+        server: null,
+        auth: null,
+        health: null,
+        status: null,
+        presence: null,
+        configSnapshot: null,
+        connectLatencyMs: 1,
+        error: "stale gateway",
+        url: "ws://127.0.0.1:18789",
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        close: null,
+        server: {
+          version: "2026.4.27",
+          connId: "updated-gateway",
+        },
+        auth: { role: "operator", scopes: ["operator.read"], capability: "read_only" },
+        health: null,
+        status: null,
+        presence: null,
+        configSnapshot: null,
+        connectLatencyMs: 1,
+        error: null,
+        url: "ws://127.0.0.1:18789",
+      });
+
+    await withEnvAsync(
+      {
+        OPENCLAW_UPDATE_RESTART_VERIFY: "1",
+        OPENCLAW_UPDATE_RESTART_VERIFY_ROOT: root,
+        OPENCLAW_UPDATE_RESTART_VERIFY_MODE: "npm",
+        OPENCLAW_UPDATE_RESTART_VERIFY_EXPECTED_VERSION: "2026.4.27",
+        OPENCLAW_UPDATE_RESTART_VERIFY_GATEWAY_PORT: "18789",
+      },
+      async () => {
+        await updateCommand({ json: true });
+      },
+    );
+
+    expect(runGatewayUpdate).not.toHaveBeenCalled();
+    expect(runCommandWithTimeout).toHaveBeenCalledWith(
+      [expect.stringMatching(/node/), entrypoints[0], "gateway", "restart", "--json"],
+      expect.objectContaining({ cwd: root, timeoutMs: 60_000 }),
+    );
+    expect(probeGateway).toHaveBeenCalledTimes(2);
+    expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
+  });
+
   it("post-core resume mode persists the requested update channel with the updated process", async () => {
     vi.mocked(readConfigFileSnapshot).mockResolvedValue({
       ...baseSnapshot,
@@ -2269,7 +2341,7 @@ describe("update-cli", () => {
       [expect.stringMatching(/node/), updatedEntrypoint, "update", "--json"],
       expect.objectContaining({
         cwd: updatedRoot,
-        timeoutMs: 70_000,
+        timeoutMs: 190_000,
         env: expect.objectContaining({
           NODE_DISABLE_COMPILE_CACHE: "1",
           OPENCLAW_UPDATE_RESTART_VERIFY: "1",
@@ -2333,7 +2405,7 @@ describe("update-cli", () => {
       [expect.stringMatching(/node/), updatedEntrypoint, "update", "--json"],
       expect.objectContaining({
         cwd: updatedRoot,
-        timeoutMs: 70_000,
+        timeoutMs: 190_000,
         env: expect.objectContaining({
           OPENCLAW_UPDATE_RESTART_VERIFY: "1",
           OPENCLAW_UPDATE_RESTART_VERIFY_ROOT: updatedRoot,
@@ -2400,7 +2472,7 @@ describe("update-cli", () => {
       [expect.stringMatching(/node/), updatedEntrypoint, "update"],
       expect.objectContaining({
         cwd: updatedRoot,
-        timeoutMs: 70_000,
+        timeoutMs: 190_000,
         env: expect.objectContaining({
           OPENCLAW_UPDATE_RESTART_VERIFY: "1",
           OPENCLAW_UPDATE_RESTART_VERIFY_EXPECTED_VERSION: "2026.4.24",
