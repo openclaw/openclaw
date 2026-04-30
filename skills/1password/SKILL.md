@@ -35,17 +35,41 @@ Follow the official CLI get-started steps. Don't guess install commands.
 
 1. Check OS + shell.
 2. Verify CLI present: `op --version`.
-3. Confirm desktop app integration is enabled (per get-started) and the app is unlocked.
-4. REQUIRED: create a fresh tmux session for all `op` commands (no direct `op` calls outside tmux).
-5. Sign in / authorize inside tmux: `op signin` (expect app prompt).
-6. Verify access inside tmux: `op whoami` (must succeed before any secret read).
-7. If multiple accounts: use `--account` or `OP_ACCOUNT`.
+3. Detect the auth mode the user has set up:
+   - **Service account:** `OP_SERVICE_ACCOUNT_TOKEN` is set (typical for headless setups, CI, gateways).
+   - **Desktop app integration:** the 1Password desktop app is running with CLI integration enabled (typical on macOS / Windows / Linux desktops).
+   - **Standalone signin:** neither of the above — `op signin` will prompt for an account password every session.
+4. Run `op` according to the auth mode (see below).
+5. Verify access: `op whoami` should succeed before any secret read.
+6. If multiple accounts: use `--account` or `OP_ACCOUNT`.
 
-## REQUIRED tmux session (T-Max)
+## Running `op` per auth mode
 
-The shell tool uses a fresh TTY per command. To avoid re-prompts and failures, always run `op` inside a dedicated tmux session with a fresh socket/session name.
+### Service account (preferred for headless / gateway use)
 
-Example (see `tmux` skill for socket conventions, do not reuse old session names):
+Direct exec. No tmux, no signin step.
+
+```bash
+export OP_SERVICE_ACCOUNT_TOKEN="ops_..."
+op vault list
+op read op://app-prod/db/password
+```
+
+### Desktop app integration
+
+Direct exec. **Do not wrap in tmux** — the desktop app communicates with the CLI over a per-user Unix domain socket (on macOS:
+`~/Library/Group Containers/2BUA8C4S2C.com.1password/t/`) that is reliably reachable from the gateway's exec environment but not from arbitrary tmux subshells, which run with a different environment context.
+
+```bash
+op vault list      # may trigger Touch ID / Windows Hello / system auth on first call
+op whoami
+```
+
+If a call returns `1Password CLI couldn't connect to the 1Password desktop app`, do not switch to tmux. Confirm the desktop app is running and unlocked, then retry direct exec.
+
+### Standalone signin (no app, interactive password)
+
+This is the only mode where tmux helps. `op signin` prints an `eval`-style export that authenticates subsequent commands in the same shell; the gateway's per-command shells lose that state, so a persistent tmux pane keeps the session token alive across calls.
 
 ```bash
 SOCKET_DIR="${OPENCLAW_TMUX_SOCKET_DIR:-${TMPDIR:-/tmp}/openclaw-tmux-sockets}"
@@ -61,10 +85,14 @@ tmux -S "$SOCKET" capture-pane -p -J -t "$SESSION":0.0 -S -200
 tmux -S "$SOCKET" kill-session -t "$SESSION"
 ```
 
+See the `tmux` skill for socket conventions; do not reuse old session names.
+
 ## Guardrails
 
 - Never paste secrets into logs, chat, or code.
 - Prefer `op run` / `op inject` over writing secrets to disk.
-- If sign-in without app integration is needed, use `op account add`.
-- If a command returns "account is not signed in", re-run `op signin` inside tmux and authorize in the app.
-- Do not run `op` outside tmux; stop and ask if tmux is unavailable.
+- If sign-in without app integration is needed, use `op account add` first.
+- If a command returns "account is not signed in":
+  - service account: re-export `OP_SERVICE_ACCOUNT_TOKEN`
+  - desktop app: confirm the app is running and integration is enabled
+  - standalone: re-run `op signin` inside the same tmux session and authorize
