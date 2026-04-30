@@ -8,6 +8,7 @@ import { runCommandWithTimeout } from "../process/exec.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { VERSION } from "../version.js";
 import { isTruthyEnvValue } from "./env.js";
+import { detectHomebrewInstall } from "./homebrew-install.js";
 import { writeJsonAtomic } from "./json-files.js";
 import { resolveOpenClawPackageRoot } from "./openclaw-root.js";
 import { normalizeUpdateChannel, DEFAULT_PACKAGE_CHANNEL } from "./update-channels.js";
@@ -420,6 +421,25 @@ export async function runGatewayUpdateCheck(params: {
     }
 
     if (shouldRunAutoUpdate && (channel === "stable" || channel === "beta")) {
+      const homebrewInstall = await detectHomebrewInstall({
+        packageRoot: root,
+      });
+      if (homebrewInstall) {
+        const shouldNotifyHomebrew =
+          state.lastNotifiedVersion !== resolved.version || state.lastNotifiedTag !== tag;
+        if (shouldNotifyHomebrew) {
+          params.log.info(
+            "auto-update skipped: Homebrew-managed install (run: brew upgrade openclaw)",
+            {
+              version: resolved.version,
+              tag,
+              cellarVersion: homebrewInstall.cellarVersion,
+            },
+          );
+        }
+        await writeState(statePath, nextState);
+        return;
+      }
       const runAuto = params.runAutoUpdate ?? runAutoUpdateCommand;
       const attemptIntervalMs =
         channel === "beta"

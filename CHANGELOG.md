@@ -2,6 +2,12 @@
 
 Docs: https://docs.openclaw.ai
 
+## Unreleased
+
+### Changes
+
+- Auto-update: detect Homebrew-managed installs and skip the npm-based auto-update path (which silently fails to update brew-installed binaries). Log a clear `auto-update skipped: Homebrew-managed install (run: brew upgrade openclaw)` hint with the detected Cellar version so users on `brew install openclaw` see why no install ran. (#74754) Thanks @Sanjays2402.
+
 ## 2026.4.29
 
 ### Highlights

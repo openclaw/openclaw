@@ -436,6 +436,58 @@ describe("update-startup", () => {
     );
   });
 
+  it("skips auto-update on Homebrew-managed installs and logs a brew upgrade hint", async () => {
+    const cellarRoot = path.join(
+      tempDir,
+      "Cellar",
+      "openclaw",
+      "2026.4.25",
+      "libexec",
+      "lib",
+      "node_modules",
+      "openclaw",
+    );
+    await fs.mkdir(cellarRoot, { recursive: true });
+
+    vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue(cellarRoot);
+    vi.mocked(checkUpdateStatus).mockResolvedValue({
+      root: cellarRoot,
+      installKind: "package",
+      packageManager: "npm",
+    } satisfies UpdateCheckResult);
+    mockNpmChannelTag("latest", "2.0.0");
+
+    const log = { info: vi.fn() };
+    const runAutoUpdate = createAutoUpdateSuccessMock();
+
+    await runGatewayUpdateCheck({
+      cfg: {
+        update: {
+          channel: "stable",
+          auto: {
+            enabled: true,
+            stableDelayHours: 0,
+            stableJitterHours: 0,
+          },
+        },
+      },
+      log,
+      isNixMode: false,
+      allowInTests: true,
+      runAutoUpdate,
+    });
+
+    expect(runAutoUpdate).not.toHaveBeenCalled();
+    expect(log.info).toHaveBeenCalledWith(
+      expect.stringContaining("auto-update skipped: Homebrew-managed install"),
+      expect.objectContaining({
+        version: "2.0.0",
+        tag: "latest",
+        cellarVersion: "2026.4.25",
+      }),
+    );
+  });
+
   it("scheduleGatewayUpdateCheck returns a cleanup function", async () => {
     mockPackageUpdateStatus("latest", "2.0.0");
 
