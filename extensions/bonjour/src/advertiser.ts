@@ -3,7 +3,7 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import os from "node:os";
 import type { PluginLogger } from "openclaw/plugin-sdk/plugin-entry";
-import { isTruthyEnvValue } from "openclaw/plugin-sdk/runtime-env";
+import { isTruthyEnvValue, isWSL2Sync } from "openclaw/plugin-sdk/runtime-env";
 import { classifyCiaoProcessError, type CiaoProcessErrorClassification } from "./ciao.js";
 import { formatBonjourError } from "./errors.js";
 
@@ -166,6 +166,9 @@ function isDisabledByEnv() {
     return envOverride;
   }
   if (isContainerEnvironment()) {
+    return true;
+  }
+  if (isWSL2Sync()) {
     return true;
   }
   return false;
