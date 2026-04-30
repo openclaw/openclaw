@@ -80,7 +80,14 @@ function hasInstalledRuntimeDepEntryFiles(packageDir: string, packageJson: JsonO
   if (fs.existsSync(mainPath)) {
     return true;
   }
-  return [".js", ".json", ".node"].some((extension) => fs.existsSync(`${mainPath}${extension}`));
+  return (
+    fs.existsSync(`${mainPath}.js`) ||
+    fs.existsSync(`${mainPath}.json`) ||
+    fs.existsSync(`${mainPath}.node`) ||
+    fs.existsSync(path.join(mainPath, "index.js")) ||
+    fs.existsSync(path.join(mainPath, "index.json")) ||
+    fs.existsSync(path.join(mainPath, "index.node"))
+  );
 }
 
 export function isRuntimeDepSatisfied(

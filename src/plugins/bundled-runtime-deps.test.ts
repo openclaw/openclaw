@@ -10,6 +10,7 @@ import {
   getActiveBundledRuntimeDepsInstallCount,
   waitForBundledRuntimeDepsInstallIdle,
 } from "./bundled-runtime-deps-activity.js";
+import { assertBundledRuntimeDepsInstalled } from "./bundled-runtime-deps-materialization.js";
 import {
   __testing as bundledRuntimeDepsTesting,
   createBundledRuntimeDependencyAliasMap,
@@ -1289,6 +1290,20 @@ describe("scanBundledPluginRuntimeDeps config policy", () => {
     expect(result.deps.map((dep) => `${dep.name}@${dep.version}`)).toEqual(["alpha-runtime@1.0.0"]);
     expect(result.missing).toEqual([]);
     expect(result.conflicts).toEqual([]);
+  });
+
+  it("accepts staged runtime deps whose package main relies on Node extension resolution", () => {
+    const installRoot = makeTempDir();
+    const packageDir = path.join(installRoot, "node_modules", "jszip");
+    fs.mkdirSync(path.join(packageDir, "lib"), { recursive: true });
+    fs.writeFileSync(
+      path.join(packageDir, "package.json"),
+      JSON.stringify({ name: "jszip", version: "3.10.1", main: "./lib/index" }),
+      "utf8",
+    );
+    fs.writeFileSync(path.join(packageDir, "lib", "index.js"), "export default {};\n", "utf8");
+
+    expect(() => assertBundledRuntimeDepsInstalled(installRoot, ["jszip@^3.10.1"])).not.toThrow();
   });
 
   it("reports staged package-level runtime deps as missing when the version is stale", () => {
