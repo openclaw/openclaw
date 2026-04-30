@@ -1,7 +1,7 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import type { OpenClawPluginApi, ProviderThinkingProfile } from "openclaw/plugin-sdk/plugin-entry";
 import {
   ANTHROPIC_BY_MODEL_REPLAY_HOOKS,
   normalizeProviderId,
@@ -290,6 +290,13 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
   // initialization during test bootstrap cannot trip TDZ reads.
   const providerId = "amazon-bedrock";
   const claude46ModelRe = /claude-(?:opus|sonnet)-4(?:\.|-)6(?:$|[-.])/i;
+  const baseClaudeThinkingLevels = [
+    { id: "off" },
+    { id: "minimal" },
+    { id: "low" },
+    { id: "medium" },
+    { id: "high" },
+  ] as const satisfies ProviderThinkingProfile["levels"];
   // Match region from bedrock-runtime (Converse API) URLs.
   // e.g. https://bedrock-runtime.us-east-1.amazonaws.com
   const bedrockRegionRe = /bedrock-runtime\.([a-z0-9-]+)\.amazonaws\./;
@@ -302,6 +309,23 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
     /ValidationException[\s\S]*(?:invalid_request_error[\s\S]*)?temperature[\s\S]*deprecated|ValidationException[\s\S]*deprecated[\s\S]*temperature/i;
   const anthropicByModelReplayHooks = ANTHROPIC_BY_MODEL_REPLAY_HOOKS;
   const startupPluginConfig = (api.pluginConfig ?? {}) as AmazonBedrockPluginConfig;
+
+  function resolveBedrockClaudeThinkingProfile(modelId: string): ProviderThinkingProfile {
+    const trimmed = modelId.trim();
+    if (isOpus47BedrockModelRef(trimmed)) {
+      return {
+        levels: [...baseClaudeThinkingLevels, { id: "xhigh" }, { id: "adaptive" }, { id: "max" }],
+        defaultLevel: "off",
+      };
+    }
+    if (claude46ModelRe.test(trimmed)) {
+      return {
+        levels: [...baseClaudeThinkingLevels, { id: "adaptive" }],
+        defaultLevel: "adaptive",
+      };
+    }
+    return { levels: baseClaudeThinkingLevels };
+  }
 
   function resolveCurrentPluginConfig(
     config: OpenClawConfig | undefined,
@@ -521,16 +545,6 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
       }
       return undefined;
     },
-    resolveThinkingProfile: ({ modelId }) => ({
-      levels: [
-        { id: "off" },
-        { id: "minimal" },
-        { id: "low" },
-        { id: "medium" },
-        { id: "high" },
-        ...(claude46ModelRe.test(modelId.trim()) ? [{ id: "adaptive" as const }] : []),
-      ],
-      defaultLevel: claude46ModelRe.test(modelId.trim()) ? "adaptive" : undefined,
-    }),
+    resolveThinkingProfile: ({ modelId }) => resolveBedrockClaudeThinkingProfile(modelId),
   });
 }
