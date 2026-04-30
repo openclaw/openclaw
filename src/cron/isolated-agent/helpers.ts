@@ -258,9 +258,17 @@ export function resolveCronPayloadOutcome(params: {
   preferFinalAssistantVisibleText?: boolean;
 }): CronPayloadOutcome {
   const firstText = params.payloads[0]?.text ?? "";
+  const normalizedFinalAssistantVisibleTextEarly = normalizeOptionalString(
+    params.finalAssistantVisibleText,
+  );
   const fallbackSummary =
-    pickSummaryFromPayloads(params.payloads) ?? pickSummaryFromOutput(firstText);
-  const fallbackOutputText = pickLastNonEmptyTextFromPayloads(params.payloads);
+    pickSummaryFromPayloads(params.payloads) ??
+    (normalizedFinalAssistantVisibleTextEarly
+      ? pickSummaryFromOutput(normalizedFinalAssistantVisibleTextEarly)
+      : undefined) ??
+    pickSummaryFromOutput(firstText);
+  const fallbackOutputText =
+    pickLastNonEmptyTextFromPayloads(params.payloads) ?? normalizedFinalAssistantVisibleTextEarly;
   const deliveryPayload = pickLastDeliverablePayload(params.payloads);
   const selectedDeliveryPayloads = pickDeliverablePayloads(params.payloads);
   const deliveryPayloadHasStructuredContent = payloadHasStructuredDeliveryContent(deliveryPayload);
