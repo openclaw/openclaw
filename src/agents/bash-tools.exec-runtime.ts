@@ -169,7 +169,7 @@ export type ExecProcessHandle = {
   pid?: number;
   promise: Promise<ExecProcessOutcome>;
   kill: () => void;
-  /** Immediately suppress all future `onUpdate` calls for this handle. */
+  /** Immediately suppress all future `onUpdate` calls for this handle.. */
   disableUpdates: () => void;
 };
 
