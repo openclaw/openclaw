@@ -290,6 +290,7 @@ function resolveEstimatedSessionCostUsd(params: {
     "estimatedCostUsd" | "inputTokens" | "outputTokens" | "cacheRead" | "cacheWrite"
   >;
   explicitCostUsd?: number;
+  allowPluginNormalization?: boolean;
 }): number | undefined {
   const explicitCostUsd = resolveNonNegativeNumber(
     params.explicitCostUsd ?? params.entry?.estimatedCostUsd,
@@ -313,6 +314,7 @@ function resolveEstimatedSessionCostUsd(params: {
     provider: params.provider,
     model: params.model,
     config: params.cfg,
+    allowPluginNormalization: params.allowPluginNormalization,
   });
   if (!cost) {
     return undefined;
@@ -466,6 +468,7 @@ function resolveTranscriptUsageFallback(params: {
     provider: modelProvider,
     model,
     explicitCostUsd: snapshot.costUsd,
+    allowPluginNormalization: false,
     entry: {
       inputTokens: snapshot.inputTokens,
       outputTokens: snapshot.outputTokens,
@@ -1095,11 +1098,14 @@ export function getSessionDefaults(
   cfg: OpenClawConfig,
   modelCatalog?: ModelCatalogEntry[],
 ): GatewaySessionsDefaults {
-  const resolved = resolveConfiguredModelRef({
-    cfg,
-    defaultProvider: DEFAULT_PROVIDER,
-    defaultModel: DEFAULT_MODEL,
-  });
+  const defaultAgentId = normalizeAgentId(resolveDefaultAgentId(cfg));
+  const resolved =
+    resolveFastAgentDefaultModelIdentityRef({ cfg, agentId: defaultAgentId }) ??
+    resolveConfiguredModelRef({
+      cfg,
+      defaultProvider: DEFAULT_PROVIDER,
+      defaultModel: DEFAULT_MODEL,
+    });
   const contextTokens =
     cfg.agents?.defaults?.contextTokens ??
     lookupContextTokens(resolved.model, { allowAsyncLoad: false }) ??
@@ -1127,6 +1133,30 @@ export function resolveSessionModelRef(
     | Pick<SessionEntry, "model" | "modelProvider" | "modelOverride" | "providerOverride">,
   agentId?: string,
 ): { provider: string; model: string } {
+  const normalizedOverride = normalizeStoredOverrideModel({
+    providerOverride: entry?.providerOverride,
+    modelOverride: entry?.modelOverride,
+  });
+  if (normalizedOverride.providerOverride && normalizedOverride.modelOverride) {
+    return (
+      parseModelRef(
+        `${normalizedOverride.providerOverride}/${normalizedOverride.modelOverride}`,
+        DEFAULT_PROVIDER,
+        { allowPluginNormalization: false },
+      ) ?? {
+        provider: normalizedOverride.providerOverride,
+        model: normalizedOverride.modelOverride,
+      }
+    );
+  }
+  if (entry?.modelProvider?.trim() && entry?.model?.trim()) {
+    return (
+      parseModelRef(`${entry.modelProvider}/${entry.model}`, DEFAULT_PROVIDER, {
+        allowPluginNormalization: false,
+      }) ?? { provider: entry.modelProvider.trim(), model: entry.model.trim() }
+    );
+  }
+
   const resolved = agentId
     ? resolveDefaultModelForAgent({ cfg, agentId })
     : resolveConfiguredModelRef({
@@ -1134,11 +1164,6 @@ export function resolveSessionModelRef(
         defaultProvider: DEFAULT_PROVIDER,
         defaultModel: DEFAULT_MODEL,
       });
-
-  const normalizedOverride = normalizeStoredOverrideModel({
-    providerOverride: entry?.providerOverride,
-    modelOverride: entry?.modelOverride,
-  });
 
   const persisted = resolvePersistedSelectedModelRef({
     defaultProvider: resolved.provider || DEFAULT_PROVIDER,
@@ -1271,8 +1296,38 @@ export function resolveSessionModelIdentityRef(
     }
     return { model: fallbackRef };
   }
+  const fastDefault = agentId
+    ? resolveFastAgentDefaultModelIdentityRef({ cfg, agentId })
+    : undefined;
+  if (fastDefault) {
+    return fastDefault;
+  }
   const resolved = resolveSessionModelRef(cfg, entry, agentId);
   return { provider: resolved.provider, model: resolved.model };
+}
+
+function resolveFastAgentDefaultModelIdentityRef(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+}): { provider: string; model: string } | undefined {
+  const configuredPrimary = normalizeOptionalString(
+    resolveAgentEffectiveModelPrimary(params.cfg, params.agentId),
+  );
+  if (!configuredPrimary) {
+    return undefined;
+  }
+  if (!configuredPrimary.includes("/")) {
+    const inferredProvider = inferUniqueProviderFromConfiguredModels({
+      cfg: params.cfg,
+      model: configuredPrimary,
+    });
+    return { provider: inferredProvider ?? DEFAULT_PROVIDER, model: configuredPrimary };
+  }
+  return (
+    parseModelRef(configuredPrimary, DEFAULT_PROVIDER, {
+      allowPluginNormalization: false,
+    }) ?? undefined
+  );
 }
 
 export function resolveSessionDisplayModelIdentityRef(params: {
@@ -1287,9 +1342,10 @@ export function resolveSessionDisplayModelIdentityRef(params: {
     return { provider, model };
   }
 
-  const defaultRef = resolveDefaultModelForAgent({ cfg: params.cfg, agentId: params.agentId });
   if (model.includes("/")) {
-    const parsedModel = parseModelRef(model, defaultRef.provider);
+    const parsedModel = parseModelRef(model, DEFAULT_PROVIDER, {
+      allowPluginNormalization: false,
+    });
     if (parsedModel && !isCliProvider(parsedModel.provider, params.cfg)) {
       return parsedModel;
     }
@@ -1303,6 +1359,23 @@ export function resolveSessionDisplayModelIdentityRef(params: {
     return { provider: inferredProvider, model };
   }
 
+  const configuredDefault = resolveFastAgentDefaultModelIdentityRef({
+    cfg: params.cfg,
+    agentId: params.agentId,
+  });
+  if (configuredDefault) {
+    if (isCliProvider(configuredDefault.provider, params.cfg)) {
+      return { provider, model };
+    }
+    const parsedModel = parseModelRef(model, configuredDefault.provider, {
+      allowPluginNormalization: false,
+    });
+    if (parsedModel && !isCliProvider(parsedModel.provider, params.cfg)) {
+      return parsedModel;
+    }
+  }
+
+  const defaultRef = resolveDefaultModelForAgent({ cfg: params.cfg, agentId: params.agentId });
   const parsedModel = parseModelRef(model, defaultRef.provider);
   if (parsedModel && !isCliProvider(parsedModel.provider, params.cfg)) {
     return parsedModel;
@@ -1424,6 +1497,7 @@ export function buildGatewaySessionRow(params: {
       provider: resolvedModel.provider,
       model: resolvedModel.model ?? DEFAULT_MODEL,
       entry,
+      allowPluginNormalization: false,
     }) === undefined;
   const transcriptUsageStartedAt = performance.now();
   const transcriptUsage =
@@ -1488,6 +1562,7 @@ export function buildGatewaySessionRow(params: {
       provider: rowModelProvider,
       model: rowModel,
       entry,
+      allowPluginNormalization: false,
     }) ?? resolveNonNegativeNumber(transcriptUsage?.estimatedCostUsd);
   const contextTokens =
     resolvePositiveNumber(entry?.contextTokens) ??
