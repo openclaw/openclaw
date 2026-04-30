@@ -55,7 +55,7 @@ provider is configured.
 | ElevenLabs  |       |       |       |  ✓  |  ✓  |                |                     |
 | fal         |   ✓   |   ✓   |       |     |     |                |                     |
 | Google      |   ✓   |   ✓   |   ✓   |  ✓  |     |       ✓        |          ✓          |
-| Gradium     |       |       |       |  ✓  |     |                |                     |
+| Gradium     |       |       |       |  ✓  |  ✓  |                |                     |
 | Local CLI   |       |       |       |  ✓  |     |                |                     |
 | Microsoft   |       |       |       |  ✓  |     |                |                     |
 | MiniMax     |   ✓   |   ✓   |   ✓   |  ✓  |     |                |                     |
@@ -103,9 +103,9 @@ parsing mark the transcribed attachment on the inbound context, so the shared
 media-understanding pass reuses that transcript instead of making a second
 STT call for the same audio.
 
-Deepgram, ElevenLabs, Mistral, OpenAI, and xAI also register Voice Call
-streaming STT providers, so live phone audio can be forwarded to the selected
-vendor without waiting for a completed recording.
+Deepgram, ElevenLabs, Gradium, Mistral, OpenAI, and xAI also register Voice
+Call streaming STT providers, so live phone audio can be forwarded to the
+selected vendor without waiting for a completed recording.
 
 ## Provider mappings (how vendors split across surfaces)
 

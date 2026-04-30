@@ -15,6 +15,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Gradium: add a bundled realtime speech-to-text provider for Voice Call streaming STT, using the Gradium ASR WebSocket with PCM, WAV, Opus, μ-law, and A-law input formats. Thanks @timpratim.
 - Agents/commitments: add opt-in inferred follow-up commitments with hidden batched extraction, per-agent/per-channel scoping, heartbeat delivery, CLI management, a simple `commitments.enabled`/`commitments.maxPerDay` config, and heartbeat-interval due-time clamping so magical check-ins do not echo immediately. (#74189) Thanks @vignesh07.
 - Messages/queue: make `steer` drain all pending Pi steering messages at the next model boundary, keep legacy one-at-a-time steering as `queue`, and add a dedicated steering queue docs page. Thanks @vincentkoc.
 - Messages/queue: default active-run queueing to `steer` with a 500ms followup fallback debounce, and document the queue modes, precedence, and drop policies on the command queue page. Thanks @vincentkoc.
