@@ -42,20 +42,20 @@ function formatDebugLogArgs(args: unknown[]): string {
 /** Debug-level log; only outputs when QQBOT_DEBUG is enabled. */
 export function debugLog(...args: unknown[]): void {
   if (isDebug()) {
-    console.log(formatDebugLogArgs(args).replace(/[\r\n]/g, " "));
+    console.log(formatDebugLogArgs(args).replace(/\n|\r/g, ""));
   }
 }
 
 /** Debug-level warning; only outputs when QQBOT_DEBUG is enabled. */
 export function debugWarn(...args: unknown[]): void {
   if (isDebug()) {
-    console.warn(formatDebugLogArgs(args).replace(/[\r\n]/g, " "));
+    console.warn(formatDebugLogArgs(args).replace(/\n|\r/g, ""));
   }
 }
 
 /** Debug-level error; only outputs when QQBOT_DEBUG is enabled. */
 export function debugError(...args: unknown[]): void {
   if (isDebug()) {
-    console.error(formatDebugLogArgs(args).replace(/[\r\n]/g, " "));
+    console.error(formatDebugLogArgs(args).replace(/\n|\r/g, ""));
   }
 }
