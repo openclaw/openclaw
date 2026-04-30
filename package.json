@@ -1703,6 +1703,7 @@
       "tough-cookie": "4.1.3",
       "yauzl": "3.2.1",
       "protobufjs": "7.5.5",
+      "undici": ">=6.24.0",
       "uuid": "14.0.0"
     },
     "onlyBuiltDependencies": [

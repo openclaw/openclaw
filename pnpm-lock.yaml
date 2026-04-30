@@ -26,6 +26,7 @@ overrides:
   tough-cookie: 4.1.3
   yauzl: 3.2.1
   protobufjs: 7.5.5
+  undici: '>=6.24.0'
   uuid: 14.0.0
 
 packageExtensionsChecksum: sha256-n+P/SQo4Pf+dHYpYn1Y6wL4cJEVoVzZ835N0OEp4TM8=
@@ -136,7 +137,7 @@ importers:
         specifier: 1.1.34
         version: 1.1.34
       undici:
-        specifier: 8.1.0
+        specifier: '>=6.24.0'
         version: 8.1.0
       web-push:
         specifier: ^3.6.7
@@ -364,7 +365,7 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
       undici:
-        specifier: 8.1.0
+        specifier: '>=6.24.0'
         version: 8.1.0
 
   extensions/byteplus:
@@ -526,7 +527,7 @@ importers:
         specifier: 1.1.34
         version: 1.1.34
       undici:
-        specifier: 8.1.0
+        specifier: '>=6.24.0'
         version: 8.1.0
       ws:
         specifier: ^8.20.0
@@ -1135,7 +1136,7 @@ importers:
   extensions/qa-matrix:
     dependencies:
       undici:
-        specifier: 8.1.0
+        specifier: '>=6.24.0'
         version: 8.1.0
     devDependencies:
       '@openclaw/matrix':
@@ -1297,7 +1298,7 @@ importers:
         specifier: 1.1.34
         version: 1.1.34
       undici:
-        specifier: 8.1.0
+        specifier: '>=6.24.0'
         version: 8.1.0
     devDependencies:
       '@openclaw/plugin-sdk':
@@ -1469,7 +1470,7 @@ importers:
         specifier: 1.1.34
         version: 1.1.34
       undici:
-        specifier: 8.1.0
+        specifier: '>=6.24.0'
         version: 8.1.0
     devDependencies:
       '@openclaw/plugin-sdk':
@@ -1510,7 +1511,7 @@ importers:
   extensions/zalo:
     dependencies:
       undici:
-        specifier: 8.1.0
+        specifier: '>=6.24.0'
         version: 8.1.0
     devDependencies:
       '@openclaw/plugin-sdk':
@@ -2346,10 +2347,6 @@ packages:
     peerDependenciesMeta:
       '@noble/hashes':
         optional: true
-
-  '@fastify/busboy@2.1.1':
-    resolution: {integrity: sha512-vBZP4NlzfOlerQTnba4aqZoMhE/a9HY7HRqoOPaETQcSQuWEIyZMHGfVu6w9wGtGK5fED5qRs2DteVCjOH60sA==}
-    engines: {node: '>=14'}
 
   '@gar/promisify@1.1.3':
     resolution: {integrity: sha512-k2Ty1JcVojjJFwrg/ThKi2ujJ7XNLYaFGNB/bWT9wGR+oSMJHMa5w+CUq6p/pVrKeNNgA7pCqEcjSnHVoqJQFw==}
@@ -7718,10 +7715,6 @@ packages:
   undici-types@7.19.2:
     resolution: {integrity: sha512-qYVnV5OEm2AW8cJMCpdV20CDyaN3g0AjDlOGf1OW4iaDEx8MwdtChUp4zu4H0VP3nDRF/8RKWH+IPp9uW0YGZg==}
 
-  undici@5.29.0:
-    resolution: {integrity: sha512-raqeBD6NQK4SkWhQzeYKd1KmIG6dllBOTt55Rmkt4HtI9mwdWtJljnrXjAFUBLTSN67HWrOIZ3EPF4kjUw80Bg==}
-    engines: {node: '>=14.0'}
-
   undici@7.25.0:
     resolution: {integrity: sha512-xXnp4kTyor2Zq+J1FfPI6Eq3ew5h6Vl0F/8d9XU5zZQf1tX9s2Su1/3PiMmUANFULpmksxkClamIZcaUqryHsQ==}
     engines: {node: '>=20.18.1'}
@@ -9027,7 +9020,7 @@ snapshots:
     dependencies:
       '@bufbuild/protobuf': 1.10.0
       '@connectrpc/connect': 1.7.0(@bufbuild/protobuf@1.10.0)
-      undici: 5.29.0
+      undici: 8.1.0
 
   '@connectrpc/connect@1.7.0(@bufbuild/protobuf@1.10.0)':
     dependencies:
@@ -9288,8 +9281,6 @@ snapshots:
   '@exodus/bytes@1.15.0(@noble/hashes@2.0.1)':
     optionalDependencies:
       '@noble/hashes': 2.0.1
-
-  '@fastify/busboy@2.1.1': {}
 
   '@gar/promisify@1.1.3':
     optional: true
@@ -9930,7 +9921,7 @@ snapshots:
       proper-lockfile: 4.1.2
       strip-ansi: 7.2.0
       typebox: 1.1.34
-      undici: 7.25.0
+      undici: 8.1.0
       uuid: 14.0.0
       yaml: 2.8.3
     optionalDependencies:
@@ -13292,7 +13283,7 @@ snapshots:
       saxes: 6.0.0
       symbol-tree: 3.2.4
       tough-cookie: 4.1.3
-      undici: 7.25.0
+      undici: 8.1.0
       w3c-xmlserializer: 5.0.0
       webidl-conversions: 8.0.1
       whatwg-mimetype: 5.0.0
@@ -15466,10 +15457,6 @@ snapshots:
   undici-types@7.16.0: {}
 
   undici-types@7.19.2: {}
-
-  undici@5.29.0:
-    dependencies:
-      '@fastify/busboy': 2.1.1
 
   undici@7.25.0: {}
 

@@ -55,22 +55,38 @@ function classifyCursorSdkError(err: unknown, elapsed: number, timeoutMs: number
 
   const sdkModule = loadedSdkModule;
   if (sdkModule) {
-    if (err instanceof sdkModule.AuthenticationError) return "auth";
-    if (err instanceof sdkModule.RateLimitError) return "rate_limit";
+    if (err instanceof sdkModule.AuthenticationError) {
+      return "auth";
+    }
+    if (err instanceof sdkModule.RateLimitError) {
+      return "rate_limit";
+    }
   }
 
-  if (elapsed >= timeoutMs || /timeout/i.test(message)) return "timeout";
-  if (/rate.?limit|429|too many requests/i.test(message)) return "rate_limit";
-  if (/auth|401|unauthorized|forbidden|403/i.test(message)) return "auth";
-  if (/billing|payment|quota|insufficient/i.test(message)) return "billing";
+  if (elapsed >= timeoutMs || /timeout/i.test(message)) {
+    return "timeout";
+  }
+  if (/rate.?limit|429|too many requests/i.test(message)) {
+    return "rate_limit";
+  }
+  if (/auth|401|unauthorized|forbidden|403/i.test(message)) {
+    return "auth";
+  }
+  if (/billing|payment|quota|insufficient/i.test(message)) {
+    return "billing";
+  }
 
   return "unclassified";
 }
 
 function collectAssistantText(event: { type: string }): string {
-  if (event.type !== "assistant") return "";
+  if (event.type !== "assistant") {
+    return "";
+  }
   const msg = (event as { message?: { content?: Array<{ type: string; text?: string }> } }).message;
-  if (!msg?.content) return "";
+  if (!msg?.content) {
+    return "";
+  }
   let text = "";
   for (const block of msg.content) {
     if (block.type === "text" && block.text) {
@@ -121,7 +137,7 @@ export async function runCursorSdkAgent(
     runtime === "cloud" && cursorSdkConfig?.cloud
       ? {
           apiKey,
-          model: { id: modelId } as const,
+          model: { id: modelId },
           cloud: {
             repos: cursorSdkConfig.cloud.repos ?? [],
             autoCreatePR: cursorSdkConfig.cloud.autoCreatePR,
@@ -129,10 +145,11 @@ export async function runCursorSdkAgent(
         }
       : {
           apiKey,
-          model: { id: modelId } as const,
+          model: { id: modelId },
           local: { cwd: cursorSdkConfig?.local?.cwd ?? workspaceDir },
         };
 
+  // eslint-disable-next-line @typescript-eslint/await-thenable -- Agent.create returns a Promise via dynamic import
   const agent = await Agent.create(agentOptions);
 
   try {
@@ -169,12 +186,17 @@ export async function runCursorSdkAgent(
       },
     };
   } catch (err: unknown) {
-    if (err instanceof FailoverError) throw err;
+    if (err instanceof FailoverError) {
+      throw err;
+    }
 
     const elapsed = Date.now() - started;
     let message = "Unknown error";
-    if (err instanceof Error) message = err.message;
-    else if (typeof err === "string") message = err;
+    if (err instanceof Error) {
+      message = err.message;
+    } else if (typeof err === "string") {
+      message = err;
+    }
     log.error(`cursor-sdk error: ${message} run=${params.runId} elapsed=${elapsed}ms`);
 
     const reason = classifyCursorSdkError(err, elapsed, params.timeoutMs);
