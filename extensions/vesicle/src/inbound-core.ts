@@ -1,4 +1,6 @@
+import { isNormalizedSenderAllowed } from "openclaw/plugin-sdk/allow-from";
 import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
+import { resolveDmGroupAccessWithLists } from "openclaw/plugin-sdk/channel-policy";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { extractHandleFromVesicleChatGuid } from "./targets.js";
 import type { ResolvedVesicleAccount, VesicleInboundMessage } from "./types.js";
@@ -37,6 +39,32 @@ function resolveDirectPeerId(message: VesicleInboundMessage): string {
   );
 }
 
+function resolveVesicleChatIdentifier(chatGuid: string): string | undefined {
+  const parts = chatGuid.split(";");
+  return parts.length === 3 && parts[2]?.trim() ? parts[2].trim() : undefined;
+}
+
+function isDirectSenderAllowed(senderId: string, allowFrom: string[]): boolean {
+  return isNormalizedSenderAllowed({
+    senderId,
+    allowFrom,
+  });
+}
+
+function isGroupMessageAllowed(message: VesicleInboundMessage, allowFrom: string[]): boolean {
+  const candidates = [
+    message.sender,
+    message.chatGuid,
+    resolveVesicleChatIdentifier(message.chatGuid),
+  ].filter((entry): entry is string => Boolean(entry?.trim()));
+  return candidates.some((senderId) =>
+    isNormalizedSenderAllowed({
+      senderId,
+      allowFrom,
+    }),
+  );
+}
+
 function readReplyText(payload: unknown): string {
   if (!payload || typeof payload !== "object" || !("text" in payload)) {
     return "";
@@ -63,6 +91,21 @@ export async function handleVesicleInboundMessage(params: {
   const chatType = resolveInboundChatType(params.message);
   const isGroup = chatType === "group";
   const peerId = isGroup ? params.message.chatGuid : resolveDirectPeerId(params.message);
+  const access = resolveDmGroupAccessWithLists({
+    isGroup,
+    dmPolicy: params.account.config.dmPolicy,
+    groupPolicy: params.account.config.groupPolicy,
+    allowFrom: params.account.config.allowFrom,
+    groupAllowFrom: params.account.config.groupAllowFrom,
+    groupAllowFromFallbackToAllowFrom: false,
+    isSenderAllowed: (allowFrom) =>
+      isGroup
+        ? isGroupMessageAllowed(params.message, allowFrom)
+        : isDirectSenderAllowed(peerId, allowFrom),
+  });
+  if (access.decision !== "allow") {
+    return;
+  }
   const target = `chat_guid:${params.message.chatGuid}`;
   const timestamp = resolveVesicleTimestamp(params.message.date);
   const route = params.runtime.channel.routing.resolveAgentRoute({
