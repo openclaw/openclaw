@@ -665,14 +665,14 @@ function resolveCommandSessionKey(params: {
 function formatActiveMemoryCommandHelp(): string {
   return [
     "Active Memory session toggle:",
-    "/active-memory status",
-    "/active-memory on",
-    "/active-memory off",
+    "/active_memory status",
+    "/active_memory on",
+    "/active_memory off",
     "",
     "Global config toggle:",
-    "/active-memory status --global",
-    "/active-memory on --global",
-    "/active-memory off --global",
+    "/active_memory status --global",
+    "/active_memory on --global",
+    "/active_memory off --global",
   ].join("\n");
 }
 
@@ -2462,7 +2462,7 @@ export default definePluginEntry({
       }
     };
     api.registerCommand({
-      name: "active-memory",
+      name: "active_memory",
       description: "Enable, disable, or inspect Active Memory for this session.",
       acceptsArgs: true,
       handler: async (ctx) => {
