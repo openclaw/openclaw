@@ -120,7 +120,7 @@ describe("memory-lancedb config", () => {
     }).toThrow("dreaming config must be an object");
   });
 
-  it("rejects non-positive dimensions in runtime parsing", () => {
+  it("rejects non-positive and fractional dimensions in runtime parsing", () => {
     expect(() => {
       memoryConfigSchema.parse({
         embedding: {
@@ -128,7 +128,7 @@ describe("memory-lancedb config", () => {
           dimensions: 0,
         },
       });
-    }).toThrow("embedding.dimensions must be a positive number");
+    }).toThrow("embedding.dimensions must be a positive integer");
 
     expect(() => {
       memoryConfigSchema.parse({
@@ -137,26 +137,47 @@ describe("memory-lancedb config", () => {
           dimensions: -1,
         },
       });
-    }).toThrow("embedding.dimensions must be a positive number");
-  });
+    }).toThrow("embedding.dimensions must be a positive integer");
 
-  it("rejects non-positive dimensions in the manifest schema", () => {
-    const manifestResult = validateJsonSchemaValue({
-      schema: manifest.configSchema,
-      cacheKey: "memory-lancedb.manifest.invalid-dimensions",
-      value: {
+    expect(() => {
+      memoryConfigSchema.parse({
         embedding: {
           apiKey: "sk-test",
-          dimensions: 0,
+          dimensions: 2.5,
         },
-      },
-    });
-
-    expect(manifestResult.ok).toBe(false);
-    if (!manifestResult.ok) {
-      expect(manifestResult.errors.map((error) => error.text)).toContain(
-        "embedding.dimensions: must be >= 1",
-      );
-    }
+      });
+    }).toThrow("embedding.dimensions must be a positive integer");
   });
+
+  it.each([
+    {
+      cacheKey: "memory-lancedb.manifest.zero-dimensions",
+      dimensions: 0,
+      error: "embedding.dimensions: must be >= 1",
+    },
+    {
+      cacheKey: "memory-lancedb.manifest.fractional-dimensions",
+      dimensions: 2.5,
+      error: "embedding.dimensions: must be integer",
+    },
+  ])(
+    "rejects invalid dimensions in the manifest schema: $dimensions",
+    ({ cacheKey, dimensions, error }) => {
+      const manifestResult = validateJsonSchemaValue({
+        schema: manifest.configSchema,
+        cacheKey,
+        value: {
+          embedding: {
+            apiKey: "sk-test",
+            dimensions,
+          },
+        },
+      });
+
+      expect(manifestResult.ok).toBe(false);
+      if (!manifestResult.ok) {
+        expect(manifestResult.errors.map((entry) => entry.text)).toContain(error);
+      }
+    },
+  );
 });

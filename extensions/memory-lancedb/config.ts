@@ -180,8 +180,12 @@ export const memoryConfigSchema = {
         dimensions:
           typeof embedding.dimensions === "number"
             ? (() => {
-                if (!Number.isFinite(embedding.dimensions) || embedding.dimensions <= 0) {
-                  throw new Error("embedding.dimensions must be a positive number");
+                if (
+                  !Number.isFinite(embedding.dimensions) ||
+                  !Number.isInteger(embedding.dimensions) ||
+                  embedding.dimensions <= 0
+                ) {
+                  throw new Error("embedding.dimensions must be a positive integer");
                 }
                 return embedding.dimensions;
               })()

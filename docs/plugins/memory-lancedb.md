@@ -150,9 +150,10 @@ the Ollama provider documented in [Ollama](/providers/ollama).
 }
 ```
 
-Set `dimensions` for non-standard embedding models. OpenClaw knows the
-dimensions for `text-embedding-3-small` and `text-embedding-3-large`; custom
-models need the value in config so LanceDB can create the vector column.
+Set `dimensions` to the model's positive integer vector size for non-standard
+embedding models. OpenClaw knows the dimensions for `text-embedding-3-small` and
+`text-embedding-3-large`; custom models need the value in config so LanceDB can
+create the vector column.
 
 For small local embedding models, lower `recallMaxChars` if you see context
 length errors from the local server.
@@ -169,8 +170,9 @@ bundled provider adapter, omit `embedding.provider` (or leave it as `openai`) an
 set `embedding.apiKey` plus `embedding.baseUrl`. This preserves the direct
 OpenAI-compatible client path.
 
-Set `embedding.dimensions` for providers whose model dimensions are not built
-in. For example, ZhiPu `embedding-3` uses `2048` dimensions:
+Set `embedding.dimensions` to a positive integer for providers whose model
+dimensions are not built in. For example, ZhiPu `embedding-3` uses `2048`
+dimensions:
 
 ```json5
 {
