@@ -141,9 +141,11 @@ describe("resolveImplicitProviders startup discovery scope", () => {
           models: {
             providers: {
               "github-copilot": {
+                baseUrl: "https://api.githubcopilot.test",
                 headers: {
                   "X-Proxy-Auth": "proxy-token",
                 },
+                models: [],
               },
             },
           },

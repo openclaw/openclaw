@@ -1,4 +1,8 @@
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
+import {
+  fetchWithSsrFGuard,
+  ssrfPolicyFromHttpBaseUrlAllowedHostname,
+} from "openclaw/plugin-sdk/ssrf-runtime";
 import { resolveCopilotTransportApi } from "./models.js";
 
 export const COPILOT_IDE_HEADERS: Record<string, string> = {
@@ -75,44 +79,53 @@ export async function discoverCopilotModels(params: {
   const { baseUrl, copilotToken, knownModelIds, extraHeaders } = params;
 
   const url = `${baseUrl.replace(/\/+$/, "")}/models`;
-  const res = await fetch(url, {
-    headers: {
-      Authorization: `Bearer ${copilotToken}`,
-      ...COPILOT_IDE_HEADERS,
-      ...extraHeaders,
+  const { response, release } = await fetchWithSsrFGuard({
+    url,
+    init: {
+      headers: {
+        Authorization: `Bearer ${copilotToken}`,
+        ...COPILOT_IDE_HEADERS,
+        ...extraHeaders,
+      },
     },
-    signal: AbortSignal.timeout(10_000),
+    policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(baseUrl),
+    timeoutMs: 10_000,
+    auditContext: "github-copilot-model-discovery",
   });
 
-  if (!res.ok) {
-    return [];
-  }
+  try {
+    if (!response.ok) {
+      return [];
+    }
 
-  const body = (await res.json()) as CopilotModelsResponse;
-  if (!Array.isArray(body.data)) {
-    return [];
-  }
+    const body = (await response.json()) as CopilotModelsResponse;
+    if (!Array.isArray(body.data)) {
+      return [];
+    }
 
-  return body.data
-    .filter((m) => {
-      // Must have an id
-      if (!m.id) {
-        return false;
-      }
-      // Only enabled models
-      if (m.policy?.state && m.policy.state !== "enabled") {
-        return false;
-      }
-      // Only chat-capable models (skip embeddings, etc.)
-      if (m.capabilities?.type && m.capabilities.type !== "chat") {
-        return false;
-      }
-      // Skip models already in the built-in list
-      if (knownModelIds?.has(m.id)) {
-        return false;
-      }
-      return true;
-    })
-    .toSorted((a, b) => a.id.localeCompare(b.id))
-    .map(buildModelDefinition);
+    return body.data
+      .filter((m) => {
+        // Must have an id
+        if (!m.id) {
+          return false;
+        }
+        // Only enabled models
+        if (m.policy?.state && m.policy.state !== "enabled") {
+          return false;
+        }
+        // Only chat-capable models (skip embeddings, etc.)
+        if (m.capabilities?.type && m.capabilities.type !== "chat") {
+          return false;
+        }
+        // Skip models already in the built-in list
+        if (knownModelIds?.has(m.id)) {
+          return false;
+        }
+        return true;
+      })
+      .toSorted((a, b) => a.id.localeCompare(b.id))
+      .map(buildModelDefinition);
+  } finally {
+    await release();
+  }
 }
