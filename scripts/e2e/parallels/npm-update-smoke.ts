@@ -14,6 +14,7 @@ import {
   resolveLatestVersion,
   resolveProviderAuth,
   run,
+  runStreaming,
   say,
   startHostServer,
   writeJson,
@@ -318,7 +319,7 @@ class NpmUpdateSmoke {
     }
   }
 
-  private spawnUpdate(label: string, platform: Platform, fn: () => void): Job {
+  private spawnUpdate(label: string, platform: Platform, fn: () => Promise<void> | void): Job {
     const logPath = path.join(this.runDir, `${platform}-update.log`);
     const job: Job = {
       done: false,
@@ -343,7 +344,7 @@ class NpmUpdateSmoke {
           append(chunk)) as typeof process.stdout.write;
         process.stderr.write = ((chunk: string | Uint8Array) =>
           append(chunk)) as typeof process.stderr.write;
-        fn();
+        await fn();
         await writeFile(logPath, log, "utf8");
         return 0;
       } catch (error) {
@@ -365,8 +366,8 @@ class NpmUpdateSmoke {
     this.guestMacos(this.updateScript("macos"), updateTimeoutSeconds * 1000);
   }
 
-  private runWindowsUpdate(): void {
-    this.guestWindows(this.updateScript("windows"), updateTimeoutSeconds * 1000);
+  private runWindowsUpdate(): Promise<void> {
+    return this.guestWindows(this.updateScript("windows"), updateTimeoutSeconds * 1000);
   }
 
   private runLinuxUpdate(): void {
@@ -452,7 +453,27 @@ class NpmUpdateSmoke {
     );
   }
 
-  private guestWindows(script: string, timeoutMs: number): void {
+  private async guestWindows(script: string, timeoutMs: number): Promise<void> {
+    const fileBase = `openclaw-parallels-npm-update-windows-${process.pid}-${Date.now()}`;
+    const pathsScript = `$base = Join-Path $env:TEMP '${fileBase}'
+$scriptPath = "$base.ps1"
+$logPath = "$base.log"
+$donePath = "$base.done"
+$exitPath = "$base.exit"`;
+    const payload = `$ErrorActionPreference = 'Stop'
+$PSNativeCommandUseErrorActionPreference = $false
+${pathsScript}
+try {
+  & {
+${script}
+  } *>&1 | ForEach-Object { $_ | Out-String | Add-Content -Path $logPath -Encoding UTF8 }
+  Set-Content -Path $exitPath -Value '0' -Encoding UTF8
+} catch {
+  $_ | Out-String | Add-Content -Path $logPath -Encoding UTF8
+  Set-Content -Path $exitPath -Value '1' -Encoding UTF8
+} finally {
+  Set-Content -Path $donePath -Value 'done' -Encoding UTF8
+}`;
     run(
       "prlctl",
       [
@@ -464,10 +485,107 @@ class NpmUpdateSmoke {
         "-ExecutionPolicy",
         "Bypass",
         "-EncodedCommand",
-        encodePowerShell(script),
+        encodePowerShell(`${pathsScript}
+Remove-Item -Path $scriptPath, $logPath, $donePath, $exitPath -Force -ErrorAction SilentlyContinue
+[System.IO.File]::WriteAllText($scriptPath, [Console]::In.ReadToEnd(), [System.Text.UTF8Encoding]::new($false))
+if (!(Test-Path $scriptPath)) { throw "background update script was not written" }`),
       ],
-      { timeoutMs },
+      { input: payload, timeoutMs: Math.min(timeoutMs, 120_000) },
     );
+
+    const launchLogPath = path.join(this.runDir, `${fileBase}-launch.log`);
+    const launchStatus = await runStreaming(
+      "prlctl",
+      [
+        "exec",
+        windowsVm,
+        "--current-user",
+        "cmd.exe",
+        "/d",
+        "/s",
+        "/c",
+        `start "" /min powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "%TEMP%\\${fileBase}.ps1"`,
+      ],
+      { logPath: launchLogPath, quiet: true, timeoutMs: 20_000 },
+    );
+    const launchLog = await readFile(launchLogPath, "utf8").catch(() => "");
+    if (launchLog) {
+      process.stdout.write(launchLog);
+    }
+    if (launchStatus !== 0 && launchStatus !== 124) {
+      throw new Error(`Windows update background launch failed with exit code ${launchStatus}`);
+    }
+
+    const deadline = Date.now() + timeoutMs;
+    let lastLogOffset = 0;
+    while (Date.now() < deadline) {
+      const poll = run(
+        "prlctl",
+        [
+          "exec",
+          windowsVm,
+          "--current-user",
+          "powershell.exe",
+          "-NoProfile",
+          "-ExecutionPolicy",
+          "Bypass",
+          "-EncodedCommand",
+          encodePowerShell(`${pathsScript}
+$offset = ${lastLogOffset}
+if (Test-Path $logPath) {
+  $bytes = [System.IO.File]::ReadAllBytes($logPath)
+  if ($bytes.Length -gt $offset) {
+    "__OPENCLAW_LOG_OFFSET__:$($bytes.Length)"
+    [System.Text.Encoding]::UTF8.GetString($bytes, $offset, $bytes.Length - $offset)
+  }
+}
+if (Test-Path $donePath) {
+  $backgroundExit = if (Test-Path $exitPath) { (Get-Content -Path $exitPath -Raw).Trim() } else { '0' }
+  "__OPENCLAW_BACKGROUND_EXIT__:$backgroundExit"
+  '__OPENCLAW_BACKGROUND_DONE__'
+  if ($backgroundExit -ne '0') { exit 23 }
+  exit 0
+}`),
+        ],
+        { check: false, timeoutMs: Math.min(30_000, Math.max(1_000, deadline - Date.now())) },
+      );
+      if (poll.stdout) {
+        process.stdout.write(poll.stdout);
+      }
+      if (poll.stderr) {
+        process.stderr.write(poll.stderr);
+      }
+      const offsetMatch = poll.stdout.match(/__OPENCLAW_LOG_OFFSET__:(\d+)/);
+      if (offsetMatch) {
+        lastLogOffset = Number(offsetMatch[1]);
+      }
+      if (poll.stdout.includes("__OPENCLAW_BACKGROUND_DONE__")) {
+        const exitMatch = poll.stdout.match(/__OPENCLAW_BACKGROUND_EXIT__:(\S+)/);
+        const backgroundExit = exitMatch?.[1] ?? "0";
+        if (backgroundExit !== "0" || (poll.status !== 0 && poll.status !== 124)) {
+          throw new Error("Windows update failed");
+        }
+        run(
+          "prlctl",
+          [
+            "exec",
+            windowsVm,
+            "--current-user",
+            "powershell.exe",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-EncodedCommand",
+            encodePowerShell(`${pathsScript}
+Remove-Item -Path $scriptPath, $logPath, $donePath, $exitPath -Force -ErrorAction SilentlyContinue`),
+          ],
+          { check: false, timeoutMs: 30_000 },
+        );
+        return;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 5_000));
+    }
+    throw new Error(`Windows update timed out after ${updateTimeoutSeconds}s`);
   }
 
   private guestLinux(script: string, timeoutMs: number): void {
