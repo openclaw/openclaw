@@ -67,9 +67,9 @@ oc.artifacts.download(artifactId); // future API: current SDK throws unsupported
 oc.approvals.list();
 oc.approvals.respond(approvalId, ...);
 
-oc.environments.list(); // future API: current SDK throws unsupported
+oc.environments.list();
 oc.environments.create(...); // future API: current SDK throws unsupported
-oc.environments.status(environmentId); // future API: current SDK throws unsupported
+oc.environments.status(environmentId);
 oc.environments.delete(environmentId); // future API: current SDK throws unsupported
 ```
 

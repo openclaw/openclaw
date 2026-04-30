@@ -117,6 +117,8 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "last-heartbeat",
     "node.list",
     "node.describe",
+    "environments.list",
+    "environments.status",
     "chat.history",
     "config.get",
     "config.schema.lookup",
