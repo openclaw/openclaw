@@ -225,14 +225,14 @@ export function resolvePluginCapabilityProvider<K extends CapabilityProviderRegi
   cfg?: OpenClawConfig;
   installBundledRuntimeDeps?: boolean;
 }): CapabilityProviderForKey<K> | undefined {
-  if (arePluginsGloballyDisabled(params.cfg)) {
-    return undefined;
-  }
-
   const activeRegistry = resolveRuntimePluginRegistry();
   const activeProvider = findProviderById(activeRegistry?.[params.key] ?? [], params.providerId);
   if (activeProvider) {
     return activeProvider;
+  }
+
+  if (arePluginsGloballyDisabled(params.cfg)) {
+    return undefined;
   }
 
   const pluginIds = resolveBundledCapabilityCompatPluginIds({
@@ -263,10 +263,6 @@ export function resolvePluginCapabilityProviders<K extends CapabilityProviderReg
   cfg?: OpenClawConfig;
   installBundledRuntimeDeps?: boolean;
 }): CapabilityProviderForKey<K>[] {
-  if (arePluginsGloballyDisabled(params.cfg)) {
-    return [];
-  }
-
   const activeRegistry = resolveRuntimePluginRegistry();
   const activeProviders = activeRegistry?.[params.key] ?? [];
   if (
@@ -277,6 +273,9 @@ export function resolvePluginCapabilityProviders<K extends CapabilityProviderReg
     return activeProviders.map((entry) => entry.provider) as CapabilityProviderForKey<K>[];
   }
   if (activeProviders.length > 0 && params.key === "speechProviders" && !params.cfg) {
+    return activeProviders.map((entry) => entry.provider) as CapabilityProviderForKey<K>[];
+  }
+  if (arePluginsGloballyDisabled(params.cfg)) {
     return activeProviders.map((entry) => entry.provider) as CapabilityProviderForKey<K>[];
   }
   const missingRequestedSpeechProviders =

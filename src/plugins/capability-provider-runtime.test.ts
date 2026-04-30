@@ -657,7 +657,7 @@ describe("resolvePluginCapabilityProviders", () => {
     });
   });
 
-  it("does not load bundled capability providers when plugins are globally disabled", () => {
+  it("returns active providers but skips compat loading when plugins are globally disabled", () => {
     const cfg = { plugins: { enabled: false, allow: ["custom-plugin"] } } as OpenClawConfig;
     const loaded = createEmptyPluginRegistry();
     loaded.mediaUnderstandingProviders.push({
@@ -671,18 +671,20 @@ describe("resolvePluginCapabilityProviders", () => {
     } as never);
     mocks.resolveRuntimePluginRegistry.mockReturnValue(loaded);
 
-    expectNoResolvedCapabilityProviders(
-      resolvePluginCapabilityProviders({
-        key: "mediaUnderstandingProviders",
-        cfg,
-      }),
-    );
+    const providers = resolvePluginCapabilityProviders({
+      key: "mediaUnderstandingProviders",
+      cfg,
+    });
+
+    expect(providers).toHaveLength(1);
+    expect((providers[0] as { id: string }).id).toBe("openai");
 
     expect(mocks.loadPluginManifestRegistry).not.toHaveBeenCalled();
     expect(mocks.withBundledPluginAllowlistCompat).not.toHaveBeenCalled();
     expect(mocks.withBundledPluginEnablementCompat).not.toHaveBeenCalled();
     expect(mocks.withBundledPluginVitestCompat).not.toHaveBeenCalled();
-    expect(mocks.resolveRuntimePluginRegistry).not.toHaveBeenCalled();
+    expect(mocks.resolveRuntimePluginRegistry).toHaveBeenCalledWith();
+    expect(mocks.resolveRuntimePluginRegistry).toHaveBeenCalledTimes(1);
   });
 
   it.each([
@@ -845,7 +847,7 @@ describe("resolvePluginCapabilityProviders", () => {
     });
   });
 
-  it("does not load targeted bundled capability providers when plugins are globally disabled", () => {
+  it("returns active provider but skips compat loading when plugins are globally disabled", () => {
     const cfg = { plugins: { enabled: false, allow: ["custom-plugin"] } } as OpenClawConfig;
     const loaded = createEmptyPluginRegistry();
     loaded.memoryEmbeddingProviders.push({
@@ -865,11 +867,13 @@ describe("resolvePluginCapabilityProviders", () => {
       cfg,
     });
 
-    expect(provider).toBeUndefined();
+    expect(provider).toBeDefined();
+    expect((provider as { id: string } | undefined)?.id).toBe("gemini");
     expect(mocks.loadPluginManifestRegistry).not.toHaveBeenCalled();
     expect(mocks.withBundledPluginAllowlistCompat).not.toHaveBeenCalled();
     expect(mocks.withBundledPluginEnablementCompat).not.toHaveBeenCalled();
     expect(mocks.withBundledPluginVitestCompat).not.toHaveBeenCalled();
-    expect(mocks.resolveRuntimePluginRegistry).not.toHaveBeenCalled();
+    expect(mocks.resolveRuntimePluginRegistry).toHaveBeenCalledWith();
+    expect(mocks.resolveRuntimePluginRegistry).toHaveBeenCalledTimes(1);
   });
 });
