@@ -28,7 +28,18 @@ import {
 } from "./targets.js";
 
 const CHANNEL_ID = "vesicle" as const;
-const meta = { ...getChatChannelMeta(CHANNEL_ID) };
+const meta = {
+  ...getChatChannelMeta(CHANNEL_ID),
+  label: "Vesicle",
+  selectionLabel: "Vesicle (native iMessage bridge)",
+  docsPath: "/channels/vesicle",
+  docsLabel: "vesicle",
+  blurb: "iMessage via Vesicle's native REST API.",
+  aliases: ["vsl"],
+  preferOver: ["bluebubbles", "imessage"],
+  systemImage: "message.badge.waveform",
+  order: 70,
+};
 
 const vesicleConfigAdapter = createScopedChannelConfigAdapter<ResolvedVesicleAccount>({
   sectionKey: CHANNEL_ID,
