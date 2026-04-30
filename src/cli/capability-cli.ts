@@ -10,15 +10,12 @@ import {
   loadAuthProfileStoreForRuntime,
 } from "../agents/auth-profiles.js";
 import { updateAuthProfileStoreWithLock } from "../agents/auth-profiles/store.js";
-import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveMemorySearchConfig } from "../agents/memory-search.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
-import { canonicalizeCaseOnlyCatalogModelRef } from "../agents/model-selection.js";
 import {
   completeWithPreparedSimpleCompletionModel,
   prepareSimpleCompletionModelForAgent,
 } from "../agents/simple-completion-runtime.js";
-import { normalizeThinkLevel, type ThinkLevel } from "../auto-reply/thinking.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -33,14 +30,13 @@ import type {
   ImageGenerationOutputFormat,
 } from "../image-generation/types.js";
 import { buildMediaUnderstandingRegistry } from "../media-understanding/provider-registry.js";
-import type { RunMediaUnderstandingFileResult } from "../media-understanding/runtime-types.js";
 import {
   describeImageFile,
   describeImageFileWithModel,
   describeVideoFile,
   transcribeAudioFile,
 } from "../media-understanding/runtime.js";
-import { convertHeicToJpeg, getImageMetadata } from "../media/image-ops.js";
+import { getImageMetadata } from "../media/image-ops.js";
 import { detectMime, extensionForMime, normalizeMimeType } from "../media/mime.js";
 import { saveMediaBuffer } from "../media/store.js";
 import {
@@ -93,8 +89,6 @@ import { collectOption } from "./program/helpers.js";
 type CapabilityTransport = "local" | "gateway";
 const IMAGE_OUTPUT_FORMATS = ["png", "jpeg", "webp"] as const;
 const IMAGE_BACKGROUNDS = ["transparent", "opaque", "auto"] as const;
-const LOCAL_MODEL_RUN_SYSTEM_PROMPT = "You are a personal assistant running inside OpenClaw.";
-const HEIC_MODEL_RUN_MIMES = new Set(["image/heic", "image/heif"]);
 
 type CapabilityMetadata = {
   id: string;
@@ -490,6 +484,22 @@ function providerHasGenericConfig(params: {
   );
 }
 
+/**
+ * Check if any provider with the given capability is configured.
+ * Used to provide helpful error messages when media understanding operations fail.
+ */
+function hasConfiguredCapabilityProvider(capability: string, cfg: OpenClawConfig): boolean {
+  const registry = buildMediaUnderstandingRegistry(undefined, cfg);
+  const providers = [...registry.values()].filter((p) => p.capabilities?.includes(capability));
+  return providers.some((p) =>
+    providerHasGenericConfig({
+      cfg,
+      providerId: p.id,
+      envVars: getProviderEnvVars(p.id, { config: cfg, includeUntrustedWorkspacePlugins: false }),
+    }),
+  );
+}
+
 async function writeOutputAsset(params: {
   buffer: Buffer;
   mimeType?: string;
@@ -562,20 +572,6 @@ function resolveModelRefOverride(raw: string | undefined): { provider?: string; 
   };
 }
 
-async function canonicalizeModelRunRef(params: {
-  raw: string | undefined;
-  cfg: OpenClawConfig;
-  preserveAuthProfile: boolean;
-}): Promise<string | undefined> {
-  return await canonicalizeCaseOnlyCatalogModelRef({
-    cfg: params.cfg,
-    raw: params.raw,
-    defaultProvider: DEFAULT_PROVIDER,
-    loadCatalog: () => loadModelCatalog({ config: params.cfg, readOnly: true }),
-    preserveAuthProfile: params.preserveAuthProfile,
-  });
-}
-
 function requireProviderModelOverride(
   raw: string | undefined,
 ): { provider: string; model: string } | undefined {
@@ -632,15 +628,6 @@ async function readModelRunImageFiles(files: string[] | undefined): Promise<Mode
           `Unsupported --file for model run: ${resolvedPath}. Only image files are supported; use infer audio transcribe for audio files.`,
         );
       }
-      if (HEIC_MODEL_RUN_MIMES.has(mimeType)) {
-        const converted = await convertHeicToJpeg(buffer);
-        return {
-          path: resolvedPath,
-          fileName: path.basename(resolvedPath),
-          mimeType: "image/jpeg",
-          data: converted.toString("base64"),
-        };
-      }
       return {
         path: resolvedPath,
         fileName: path.basename(resolvedPath),
@@ -651,40 +638,14 @@ async function readModelRunImageFiles(files: string[] | undefined): Promise<Mode
   );
 }
 
-function normalizeModelRunThinking(value: unknown): ThinkLevel | undefined {
-  if (value === undefined) {
-    return undefined;
-  }
-  if (typeof value !== "string") {
-    throw new Error("--thinking must be a string.");
-  }
-  const normalized = normalizeThinkLevel(value);
-  if (!normalized) {
-    throw new Error(
-      "Invalid thinking level. Use one of: off, minimal, low, medium, high, adaptive, xhigh, max.",
-    );
-  }
-  return normalized;
-}
-
 async function runModelRun(params: {
   prompt: string;
   files?: string[];
   model?: string;
-  thinking?: ThinkLevel;
   transport: CapabilityTransport;
 }) {
   const cfg = getRuntimeConfig();
   const agentId = resolveDefaultAgentId(cfg);
-  const modelRef = await canonicalizeModelRunRef({
-    raw: params.model,
-    cfg,
-    preserveAuthProfile: params.transport === "local",
-  });
-  const explicitModelOverride = resolveModelRefOverride(params.model);
-  const hasExplicitProviderModelOverride = Boolean(
-    params.model?.trim() && explicitModelOverride.provider && explicitModelOverride.model,
-  );
   const imageFiles = await readModelRunImageFiles(params.files);
   const messageContent =
     imageFiles.length > 0
@@ -701,30 +662,18 @@ async function runModelRun(params: {
     const prepared = await prepareSimpleCompletionModelForAgent({
       cfg,
       agentId,
-      modelRef,
+      modelRef: params.model,
       allowMissingApiKeyModes: ["aws-sdk"],
-      ...(hasExplicitProviderModelOverride ? { allowBundledStaticCatalogFallback: true } : {}),
       skipPiDiscovery: true,
     });
     if ("error" in prepared) {
       throw new Error(prepared.error);
     }
-    if (prepared.selection.provider === "codex") {
-      throw new Error(
-        'The codex provider is served by the Codex app-server agent runtime, not the local simple-completion transport. Use an openai/<model> ref with agents.defaults.agentRuntime.id: "codex", run through the gateway, or use /codex commands.',
-      );
-    }
-    const localModelRunSystemPrompt =
-      prepared.selection.provider === "openai-codex" ||
-      prepared.model.api === "openai-codex-responses"
-        ? LOCAL_MODEL_RUN_SYSTEM_PROMPT
-        : undefined;
     const result = await completeWithPreparedSimpleCompletionModel({
       model: prepared.model,
       auth: prepared.auth,
       cfg,
       context: {
-        ...(localModelRunSystemPrompt ? { systemPrompt: localModelRunSystemPrompt } : {}),
         messages: [
           {
             role: "user",
@@ -738,18 +687,12 @@ async function runModelRun(params: {
           typeof prepared.model.maxTokens === "number" && Number.isFinite(prepared.model.maxTokens)
             ? prepared.model.maxTokens
             : undefined,
-        ...(params.thinking ? { reasoning: params.thinking } : {}),
       },
     });
     const text = collectModelRunText(result.content);
     if (!text) {
-      const providerErrorMessage = (result as { errorMessage?: unknown }).errorMessage;
-      const detail =
-        typeof providerErrorMessage === "string" && providerErrorMessage.trim()
-          ? `: ${providerErrorMessage.trim()}`
-          : "";
       throw new Error(
-        `No text output returned for provider "${prepared.selection.provider}" model "${prepared.selection.modelId}"${detail}.`,
+        `No text output returned for provider "${prepared.selection.provider}" model "${prepared.selection.modelId}".`,
       );
     }
     return {
@@ -776,20 +719,14 @@ async function runModelRun(params: {
     } satisfies CapabilityEnvelope;
   }
 
-  const { provider, model } = resolveModelRefOverride(modelRef);
+  const { provider, model } = resolveModelRefOverride(params.model);
   // Provider/model overrides require trusted-operator scope. Use the backend
   // shared-secret lane so local gateway smokes do not depend on paired CLI device scopes.
   const hasModelOverride = Boolean(provider || model);
   const response: {
     result?: {
       payloads?: Array<{ text?: string; mediaUrl?: string | null; mediaUrls?: string[] }>;
-      meta?: {
-        agentMeta?: {
-          provider?: string;
-          model?: string;
-          fallbackAttempts?: Array<Record<string, unknown>>;
-        };
-      };
+      meta?: { agentMeta?: { provider?: string; model?: string } };
     };
   } = await callGateway({
     method: "agent",
@@ -807,7 +744,6 @@ async function runModelRun(params: {
           : undefined,
       provider,
       model,
-      ...(params.thinking ? { thinking: params.thinking } : {}),
       modelRun: true,
       promptMode: "none",
       cleanupBundleMcpOnRunEnd: true,
@@ -825,7 +761,7 @@ async function runModelRun(params: {
     transport: "gateway" as const,
     provider: response?.result?.meta?.agentMeta?.provider,
     model: response?.result?.meta?.agentMeta?.model,
-    attempts: response?.result?.meta?.agentMeta?.fallbackAttempts ?? [],
+    attempts: [],
     outputs: (response?.result?.payloads ?? []).map((payload) => ({
       text: payload.text,
       mediaUrl: payload.mediaUrl,
@@ -1044,12 +980,13 @@ async function runImageDescribe(params: {
             timeoutMs: params.timeoutMs,
           });
       if (!result.text) {
-        if (isMissingMediaUnderstandingProvider(result)) {
-          throw new Error(
-            "No image understanding provider is configured or ready. Configure tools.media.image.models or agents.defaults.imageModel.primary, or pass --model <provider/model> after configuring that provider's auth/API key.",
-          );
-        }
-        throw new Error(`No description returned for image: ${resolvedPath}`);
+        // Provide more helpful error message if provider might not be configured
+        const hasConfiguredImageProvider = hasConfiguredCapabilityProvider("image", cfg);
+        throw new Error(
+          hasConfiguredImageProvider
+            ? `No description returned for image: ${resolvedPath}`
+            : "No image-understanding provider available. Configure a provider like openai (OPENAI_API_KEY) first."
+        );
       }
       return {
         path: resolvedPath,
@@ -1071,15 +1008,6 @@ async function runImageDescribe(params: {
   } satisfies CapabilityEnvelope;
 }
 
-function isMissingMediaUnderstandingProvider(result: RunMediaUnderstandingFileResult): boolean {
-  const decision = result.decision;
-  return (
-    decision?.outcome === "skipped" &&
-    decision.attachments.length > 0 &&
-    decision.attachments.every((attachment) => attachment.attempts.length === 0)
-  );
-}
-
 async function runAudioTranscribe(params: {
   file: string;
   language?: string;
@@ -1096,12 +1024,13 @@ async function runAudioTranscribe(params: {
     prompt: params.prompt,
   });
   if (!result.text) {
-    if (isMissingMediaUnderstandingProvider(result)) {
-      throw new Error(
-        "No audio transcription provider is configured or ready. Configure tools.media.audio.models, or pass --model <provider/model> after configuring that provider's auth/API key.",
-      );
-    }
-    throw new Error(`No transcript returned for audio: ${path.resolve(params.file)}`);
+    // Provide more helpful error message if provider might not be configured
+    const hasConfiguredAudioProvider = hasConfiguredCapabilityProvider("audio", cfg);
+    throw new Error(
+      hasConfiguredAudioProvider
+        ? `No transcript returned for audio: ${path.resolve(params.file)}`
+        : "No audio-transcription provider available. Configure a provider like openai (OPENAI_API_KEY) or deepgram (DEEPGRAM_API_KEY) first."
+    );
   }
   return {
     ok: true,
@@ -1676,14 +1605,12 @@ export function registerCapabilityCli(program: Command) {
     .requiredOption("--prompt <text>", "Prompt text")
     .option("--file <path>", "Image file", collectOption, [])
     .option("--model <provider/model>", "Model override")
-    .option("--thinking <level>", "Thinking level override")
     .option("--local", "Force local execution", false)
     .option("--gateway", "Force gateway execution", false)
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
         const prompt = requireModelRunPrompt(opts.prompt);
-        const thinking = normalizeModelRunThinking(opts.thinking);
         const transport = resolveTransport({
           local: Boolean(opts.local),
           gateway: Boolean(opts.gateway),
@@ -1694,7 +1621,6 @@ export function registerCapabilityCli(program: Command) {
           prompt,
           files: opts.file as string[] | undefined,
           model: opts.model as string | undefined,
-          thinking,
           transport,
         });
         emitJsonOrText(defaultRuntime, Boolean(opts.json), result, formatEnvelopeForText);
