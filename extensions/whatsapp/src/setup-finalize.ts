@@ -24,6 +24,8 @@ type SetupRuntime = Parameters<NonNullable<ChannelSetupWizard["finalize"]>>[0]["
 type WhatsAppConfig = NonNullable<NonNullable<OpenClawConfig["channels"]>["whatsapp"]>;
 type WhatsAppAccountConfig = NonNullable<NonNullable<WhatsAppConfig["accounts"]>[string]>;
 
+export const WHATSAPP_NEXT_STEPS_NOTE_TITLE = "WhatsApp next steps";
+
 function trimPromptText(value: string | null | undefined): string {
   return value?.trim() ?? "";
 }
@@ -448,18 +450,36 @@ export async function finalizeWhatsAppSetup(params: {
   });
 
   if (linkSucceeded) {
+    const finalAccount = resolveWhatsAppAccount({ cfg: next, accountId });
+    const finalPolicy = finalAccount.dmPolicy ?? "pairing";
     const sendCommand = formatCliCommand(
       "openclaw message send --channel whatsapp --target +15551234567 --message hi",
     );
+    const inboundLine = describeWhatsAppInboundLine(finalPolicy);
     await params.prompter.note(
       [
-        "Send a WhatsApp message to your linked assistant number from one of the numbers in `allowFrom` to verify routing.",
-        `Or send outbound from the CLI: \`${sendCommand}\` (replace the target with one of your allowFrom numbers).`,
+        ...(inboundLine ? [inboundLine] : []),
+        `Outbound from the CLI: \`${sendCommand}\` (replace the target with a destination number or group JID).`,
         `Docs: ${formatDocsLink("/cli/message", "cli/message")}`,
       ].join("\n"),
-      "WhatsApp next steps",
+      WHATSAPP_NEXT_STEPS_NOTE_TITLE,
     );
   }
 
   return { cfg: next };
+}
+
+function describeWhatsAppInboundLine(policy: DmPolicy): string | undefined {
+  switch (policy) {
+    case "disabled":
+      return undefined;
+    case "pairing":
+      return "Inbound: message the linked assistant number; first contact from a new sender will trigger a pairing code you approve via `openclaw pairing approve whatsapp <code>`.";
+    case "allowlist":
+      return "Inbound: message the linked assistant number from a sender included in your `allowFrom` list to verify routing.";
+    case "open":
+      return "Inbound: message the linked assistant number from any number to verify routing (`dmPolicy=open`).";
+    default:
+      return "Inbound: message the linked assistant number to verify routing.";
+  }
 }

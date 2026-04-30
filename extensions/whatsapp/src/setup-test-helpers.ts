@@ -1,4 +1,5 @@
 import { expect } from "vitest";
+import { WHATSAPP_NEXT_STEPS_NOTE_TITLE } from "./setup-finalize.js";
 
 type WhatsAppSetupConfig = {
   channels?: {
@@ -30,7 +31,6 @@ const WHATSAPP_PERSONAL_NUMBER_INPUT = "+1 (555) 111-2222";
 const WHATSAPP_PERSONAL_NUMBER = "15551112222";
 const WHATSAPP_ACCESS_NOTE_TITLE = "WhatsApp DM access";
 const WHATSAPP_LOGIN_NOTE_TITLE = "WhatsApp";
-const WHATSAPP_NEXT_STEPS_NOTE_TITLE = "WhatsApp next steps";
 
 export function createWhatsAppRootAllowFromConfig(): WhatsAppSetupConfig {
   return {
@@ -207,7 +207,7 @@ export function expectWhatsAppNextStepsNote(harness: WizardPromptHarness): void 
 }
 
 export function expectNoWhatsAppNextStepsNote(harness: WizardPromptHarness): void {
-  expect(harness.note).not.toHaveBeenCalledWith(expect.anything(), WHATSAPP_NEXT_STEPS_NOTE_TITLE);
+  expect(harness.note).not.toHaveBeenCalledWith(expect.any(String), WHATSAPP_NEXT_STEPS_NOTE_TITLE);
 }
 
 export function expectWhatsAppWorkAccountAccessNote(harness: WizardPromptHarness): void {

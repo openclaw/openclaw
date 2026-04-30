@@ -306,8 +306,15 @@ openclaw message send --channel whatsapp \
   --target +15551234567 --message "hi"
 ```
 
-The target must be an E.164 number (or a group JID). For multi-account setups,
-add `--account <id>` to pick the linked account.
+The target is an E.164 number for direct chats. For groups, use the group JID
+(e.g. `120363045678901234@g.us`) — this is what the gateway logs when a group
+message is received. For multi-account setups, add `--account <id>` to pick
+the linked account.
+
+```bash
+openclaw message send --channel whatsapp \
+  --target 120363045678901234@g.us --message "hello group"
+```
 
 ## Related
 
