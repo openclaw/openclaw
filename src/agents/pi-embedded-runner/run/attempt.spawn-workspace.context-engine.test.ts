@@ -284,6 +284,44 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(contextCompiled?.data?.systemPrompt).toContain("internal heartbeat event");
   });
 
+  it("skips blank visible prompts with replay history before provider submission", async () => {
+    const sessionPrompt = vi.fn(async () => {
+      throw new Error("blank prompt should not be submitted");
+    });
+
+    const result = await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey,
+      tempPaths,
+      attemptOverrides: {
+        prompt: "  \n\t  ",
+      },
+      sessionPrompt,
+    });
+
+    expect(sessionPrompt).not.toHaveBeenCalled();
+    expect(result.finalPromptText).toBeUndefined();
+    expect(result.promptError).toBeFalsy();
+    expect(result.messagesSnapshot).toEqual([
+      expect.objectContaining({ role: "user", content: "seed" }),
+    ]);
+    const trajectoryEvents = (
+      await fs.readFile(path.join(tempPaths[0] ?? "", "session.trajectory.jsonl"), "utf8")
+    )
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as TrajectoryEvent);
+    expect(trajectoryEvents.some((event) => event.type === "prompt.submitted")).toBe(false);
+    expect(trajectoryEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "prompt.skipped",
+          data: expect.objectContaining({ reason: "blank_user_prompt" }),
+        }),
+      ]),
+    );
+  });
+
   it("keeps gateway model runs independent from agent context and session history", async () => {
     const bootstrap = vi.fn(async () => ({ bootstrapped: true }));
     const assemble = vi.fn(async ({ messages }: { messages: AgentMessage[] }) => ({
@@ -867,5 +905,45 @@ describe("runEmbeddedAttempt context engine mid-turn precheck integration", () =
     expect(result.promptErrorSource).toBe("precheck");
     expect(result.preflightRecovery).toEqual({ route: "compact_only" });
     expect(result.messagesSnapshot).toEqual([seedMessage]);
+  });
+});
+
+describe("runEmbeddedAttempt tool-result guard budget wiring", () => {
+  const sessionKey = "agent:main:guildchat:channel:tool-result-guard-budget";
+  const tempPaths: string[] = [];
+
+  beforeEach(() => {
+    resetEmbeddedAttemptHarness();
+    clearMemoryPluginState();
+  });
+
+  afterEach(async () => {
+    await cleanupTempPaths(tempPaths);
+    clearMemoryPluginState();
+    vi.restoreAllMocks();
+  });
+
+  it("uses the resolved contextTokenBudget before model contextWindow", async () => {
+    await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey,
+      tempPaths,
+      attemptOverrides: {
+        contextTokenBudget: 1_000_000,
+        model: {
+          api: "openai-completions",
+          provider: "openai",
+          compat: {},
+          contextWindow: 200_000,
+          input: ["text"],
+        } as never,
+      },
+    });
+
+    expect(hoisted.installToolResultContextGuardMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        contextWindowTokens: 1_000_000,
+      }),
+    );
   });
 });
