@@ -1,22 +1,15 @@
 import { getRuntimeConfig } from "../config/config.js";
 import { formatPluginSourceForTable, resolvePluginSourceRoots } from "../plugins/source-display.js";
-import type { PluginLogger } from "../plugins/types.js";
 import { defaultRuntime } from "../runtime.js";
 import { getTerminalTableWidth, renderTable } from "../terminal/table.js";
 import { theme } from "../terminal/theme.js";
+import { quietPluginJsonLogger } from "./plugins-command-helpers.js";
 import { formatPluginLine } from "./plugins-list-format.js";
 
 export type PluginsListOptions = {
   json?: boolean;
   enabled?: boolean;
   verbose?: boolean;
-};
-
-const quietPluginJsonLogger: PluginLogger = {
-  debug: () => undefined,
-  info: () => undefined,
-  warn: () => undefined,
-  error: () => undefined,
 };
 
 export async function runPluginsListCommand(opts: PluginsListOptions): Promise<void> {

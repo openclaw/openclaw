@@ -46,6 +46,7 @@ describe("command-execution-startup", () => {
         hideBanner: false,
         skipConfigGuard: true,
         loadPlugins: false,
+        pluginRegistry: { scope: "channels", installBundledRuntimeDeps: false },
       },
     });
   });
@@ -88,6 +89,7 @@ describe("command-execution-startup", () => {
         hideBanner: false,
         skipConfigGuard: false,
         loadPlugins: true,
+        pluginRegistry: { scope: "all" },
       },
       version: "1.2.3",
       argv: ["node", "openclaw", "status"],
@@ -104,6 +106,7 @@ describe("command-execution-startup", () => {
         hideBanner: true,
         skipConfigGuard: false,
         loadPlugins: true,
+        pluginRegistry: { scope: "all" },
       },
       version: "1.2.3",
       showBanner: true,
@@ -122,6 +125,7 @@ describe("command-execution-startup", () => {
         hideBanner: false,
         skipConfigGuard: true,
         loadPlugins: false,
+        pluginRegistry: { scope: "channels", installBundledRuntimeDeps: false },
       },
     });
 
@@ -131,6 +135,7 @@ describe("command-execution-startup", () => {
       suppressDoctorStdout: true,
       allowInvalid: undefined,
       loadPlugins: false,
+      pluginRegistry: { scope: "channels", installBundledRuntimeDeps: false },
       skipConfigGuard: true,
     });
 
@@ -143,6 +148,7 @@ describe("command-execution-startup", () => {
         hideBanner: false,
         skipConfigGuard: false,
         loadPlugins: false,
+        pluginRegistry: { scope: "all" },
       },
       allowInvalid: true,
       loadPlugins: true,
@@ -154,6 +160,7 @@ describe("command-execution-startup", () => {
       suppressDoctorStdout: false,
       allowInvalid: true,
       loadPlugins: true,
+      pluginRegistry: { scope: "all" },
       skipConfigGuard: false,
     });
   });

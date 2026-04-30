@@ -196,6 +196,7 @@ describe("command-startup-policy", () => {
       hideBanner: false,
       skipConfigGuard: false,
       loadPlugins: false,
+      pluginRegistry: { scope: "channels", installBundledRuntimeDeps: false },
     });
 
     expect(
@@ -209,6 +210,7 @@ describe("command-startup-policy", () => {
       hideBanner: false,
       skipConfigGuard: true,
       loadPlugins: false,
+      pluginRegistry: { scope: "channels", installBundledRuntimeDeps: false },
     });
   });
 });

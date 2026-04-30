@@ -44,8 +44,6 @@ import {
   type BundledRuntimeDepsInstallRootPlan,
 } from "./bundled-runtime-deps-roots.js";
 import {
-  collectConfiguredBundledPluginRuntimeDeps,
-  collectExactBundledPluginRuntimeDeps,
   collectBundledPluginRuntimeDeps,
   collectMirroredPackageRuntimeDeps,
   createBundledRuntimeDepsPluginIdNormalizer,
@@ -286,24 +284,17 @@ export function scanBundledPluginRuntimeDeps(params: {
       : undefined;
   const exactPluginIds = normalizePluginIdSet(params.exactPluginIds, normalizePluginId);
   const scopedPluginIds = normalizePluginIdSet(params.pluginIds, normalizePluginId);
-  const { deps, conflicts, pluginIds } = exactPluginIds
-    ? collectExactBundledPluginRuntimeDeps({
-        extensionsDir,
-        ...(params.config ? { config: params.config } : {}),
-        exactPluginIds,
-        manifestCache,
-        ...(normalizePluginId ? { normalizePluginId } : {}),
-      })
-    : collectConfiguredBundledPluginRuntimeDeps({
-        extensionsDir,
-        ...(params.config ? { config: params.config } : {}),
-        ...(scopedPluginIds ? { pluginIds: scopedPluginIds } : {}),
-        ...(params.includeConfiguredChannels !== undefined
-          ? { includeConfiguredChannels: params.includeConfiguredChannels }
-          : {}),
-        manifestCache,
-        ...(normalizePluginId ? { normalizePluginId } : {}),
-      });
+  const { deps, conflicts, pluginIds } = collectBundledPluginRuntimeDeps({
+    extensionsDir,
+    ...(params.config ? { config: params.config } : {}),
+    ...(exactPluginIds ? { exactPluginIds } : {}),
+    ...(!exactPluginIds && scopedPluginIds ? { pluginIds: scopedPluginIds } : {}),
+    ...(!exactPluginIds && params.includeConfiguredChannels !== undefined
+      ? { includeConfiguredChannels: params.includeConfiguredChannels }
+      : {}),
+    manifestCache,
+    ...(normalizePluginId ? { normalizePluginId } : {}),
+  });
   const packageRuntimeDeps =
     pluginIds.length > 0 ? collectMirroredPackageRuntimeDeps(params.packageRoot) : [];
   const installRootPlan = resolveBundledRuntimeDependencyPackageInstallRootPlan(

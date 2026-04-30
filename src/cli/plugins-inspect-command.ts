@@ -4,23 +4,16 @@ import {
   tracePluginLifecyclePhase,
   tracePluginLifecyclePhaseAsync,
 } from "../plugins/plugin-lifecycle-trace.js";
-import type { PluginLogger } from "../plugins/types.js";
 import { defaultRuntime } from "../runtime.js";
 import { getTerminalTableWidth, renderTable } from "../terminal/table.js";
 import { theme } from "../terminal/theme.js";
 import { shortenHomeInString, shortenHomePath } from "../utils.js";
+import { quietPluginJsonLogger } from "./plugins-command-helpers.js";
 
 export type PluginInspectOptions = {
   json?: boolean;
   all?: boolean;
   runtime?: boolean;
-};
-
-const quietPluginJsonLogger: PluginLogger = {
-  debug: () => undefined,
-  info: () => undefined,
-  warn: () => undefined,
-  error: () => undefined,
 };
 
 function formatInspectSection(title: string, lines: string[]): string[] {
