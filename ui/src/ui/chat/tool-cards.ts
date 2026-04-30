@@ -3,12 +3,12 @@ import { extractCanvasFromText } from "../../../../src/chat/canvas-render.js";
 import { resolveCanvasIframeUrl } from "../canvas-url.ts";
 import { resolveEmbedSandbox, type EmbedSandboxMode } from "../embed-sandbox.ts";
 import { icons } from "../icons.ts";
-import type { SidebarContent } from "../sidebar-content.ts";
+import type { SidebarContent, ToolSidebarContent } from "../sidebar-content.ts";
 import { formatToolDetail, resolveToolDisplay } from "../tool-display.ts";
 import type { ToolCard } from "../types/chat-types.ts";
 import { extractTextCached } from "./message-extract.ts";
 import { isToolResultMessage } from "./role-normalizer.ts";
-import { formatToolOutputForSidebar, getTruncatedPreview } from "./tool-helpers.ts";
+import { getTruncatedPreview } from "./tool-helpers.ts";
 
 export type ToolPreview = NonNullable<ToolCard["preview"]>;
 
@@ -103,25 +103,29 @@ function serializeToolInput(args: unknown): string | undefined {
   }
 }
 
-function formatPayloadForSidebar(
-  text: string | undefined,
-  language: "json" | "text" = "text",
-): string {
-  if (!text?.trim()) {
-    return "";
+function isJsonPayload(text: string): boolean {
+  const trimmed = text.trim();
+  if (!(trimmed.startsWith("{") || trimmed.startsWith("["))) {
+    return false;
   }
-  if (language === "json") {
-    return `\`\`\`json
-${text}
-\`\`\``;
+  try {
+    JSON.parse(trimmed);
+    return true;
+  } catch {
+    return false;
   }
-  const formatted = formatToolOutputForSidebar(text);
-  if (formatted.includes("```")) {
-    return formatted;
+}
+
+function prettyPrintJsonOrSelf(text: string): string {
+  const trimmed = text.trim();
+  if (!(trimmed.startsWith("{") || trimmed.startsWith("["))) {
+    return text;
   }
-  return `\`\`\`text
-${text}
-\`\`\``;
+  try {
+    return JSON.stringify(JSON.parse(trimmed), null, 2);
+  } catch {
+    return text;
+  }
 }
 
 function findLatestCard(cards: ToolCard[], id: string, name: string): ToolCard | undefined {
@@ -205,29 +209,28 @@ export function extractToolCards(message: unknown, prefix = "tool"): ToolCard[] 
   return cards;
 }
 
-export function buildToolCardSidebarContent(card: ToolCard): string {
+export function buildToolCardSidebarContent(card: ToolCard): ToolSidebarContent {
   const display = resolveToolDisplay({ name: card.name, args: card.args });
   const detail = formatToolDetail(display);
-  const sections = [`## ${display.label}`, `**Tool:** \`${display.name}\``];
-
-  if (detail) {
-    sections.push(`**Summary:** ${detail}`);
-  }
-
-  if (card.inputText?.trim()) {
-    const inputIsJson = typeof card.args === "object" && card.args !== null;
-    sections.push(
-      `### Tool input\n${formatPayloadForSidebar(card.inputText, inputIsJson ? "json" : "text")}`,
-    );
-  }
-
-  if (card.outputText?.trim()) {
-    sections.push(`### Tool output\n${formatToolOutputForSidebar(card.outputText)}`);
-  } else {
-    sections.push(`### Tool output\n*No output — tool completed successfully.*`);
-  }
-
-  return sections.join("\n\n");
+  const inputText = card.inputText;
+  const outputText = card.outputText;
+  const inputIsJson =
+    (typeof card.args === "object" && card.args !== null) ||
+    (typeof inputText === "string" && inputText.trim().length > 0 && isJsonPayload(inputText));
+  const outputIsJson =
+    typeof outputText === "string" && outputText.trim().length > 0 && isJsonPayload(outputText);
+  const prettyOutput = outputText && outputIsJson ? prettyPrintJsonOrSelf(outputText) : outputText;
+  return {
+    kind: "tool",
+    toolName: display.name,
+    toolLabel: display.label,
+    ...(detail ? { detail } : {}),
+    ...(inputText !== undefined ? { inputText } : {}),
+    ...(inputIsJson ? { inputIsJson: true } : {}),
+    ...(prettyOutput !== undefined ? { outputText: prettyOutput } : {}),
+    ...(outputIsJson ? { outputIsJson: true } : {}),
+    ...(outputText ? { rawText: outputText } : {}),
+  };
 }
 
 function handleRawDetailsToggle(event: Event) {
@@ -303,17 +306,6 @@ export function renderToolPreview(
   `;
 }
 
-export function buildSidebarContent(
-  value: string,
-  options?: { rawText?: string | null },
-): SidebarContent {
-  return {
-    kind: "markdown",
-    content: value,
-    ...(options?.rawText ? { rawText: options.rawText } : {}),
-  };
-}
-
 export function buildPreviewSidebarContent(
   preview: ToolPreview,
   rawText?: string | null,
@@ -354,7 +346,7 @@ export function renderRawOutputToggle(text: string) {
   `;
 }
 
-function renderToolDataBlock(params: {
+export function renderToolDataBlock(params: {
   label: string;
   text: string;
   expanded: boolean;
@@ -458,8 +450,8 @@ export function renderExpandedToolCardContent(
     card.preview?.kind === "canvas"
       ? buildPreviewSidebarContent(card.preview, card.outputText)
       : null;
-  const sidebarActionContent =
-    previewSidebarContent ?? buildSidebarContent(buildToolCardSidebarContent(card));
+  const sidebarActionContent: SidebarContent =
+    previewSidebarContent ?? buildToolCardSidebarContent(card);
   const visiblePreview = card.preview
     ? renderToolPreview(card.preview, "chat_tool", {
         onOpenSidebar,
@@ -525,11 +517,11 @@ export function renderToolCardSidebar(
   const preview = card.preview;
   const hasText = Boolean(card.outputText?.trim());
   const hasPreview = Boolean(preview);
-  const sidebarContent =
+  const sidebarContent: SidebarContent | null =
     preview?.kind === "canvas"
       ? buildPreviewSidebarContent(preview, card.outputText)
-      : buildSidebarContent(buildToolCardSidebarContent(card));
-  const actionContent = sidebarContent ?? buildSidebarContent(buildToolCardSidebarContent(card));
+      : buildToolCardSidebarContent(card);
+  const actionContent: SidebarContent = sidebarContent ?? buildToolCardSidebarContent(card);
   const canClick = Boolean(onOpenSidebar);
   const handleClick = canClick ? () => onOpenSidebar?.(actionContent) : undefined;
   const isShort = hasText && !hasPreview && (card.outputText?.length ?? 0) <= 240;

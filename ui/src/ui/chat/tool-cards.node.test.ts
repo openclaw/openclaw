@@ -153,11 +153,44 @@ describe("tool-card extraction", () => {
     );
 
     const sidebar = buildToolCardSidebarContent(card);
-    expect(sidebar).toContain("## Deck Manage");
-    expect(sidebar).toContain("### Tool input");
-    expect(sidebar).toContain("with Example Deck");
-    expect(sidebar).toContain("### Tool output");
-    expect(sidebar).toContain("No output");
+    expect(sidebar.kind).toBe("tool");
+    expect(sidebar.toolLabel).toBe("Deck Manage");
+    expect(sidebar.toolName).toBe("deck_manage");
+    expect(sidebar.inputText).toBe("with Example Deck");
+    expect(sidebar.inputIsJson).toBeFalsy();
+    expect(sidebar.outputText).toBeUndefined();
+  });
+
+  it("preserves structured tool output JSON for sidebar rendering", () => {
+    const [card] = extractToolCards(
+      {
+        role: "assistant",
+        toolCallId: "call-json-out",
+        content: [
+          {
+            type: "toolcall",
+            id: "call-json-out",
+            name: "fetch_status",
+            arguments: { id: "abc" },
+          },
+          {
+            type: "toolresult",
+            id: "call-json-out",
+            name: "fetch_status",
+            text: '{"status":"ok","items":[1,2,3]}',
+          },
+        ],
+      },
+      "msg:json",
+    );
+
+    const sidebar = buildToolCardSidebarContent(card);
+    expect(sidebar.kind).toBe("tool");
+    expect(sidebar.inputIsJson).toBe(true);
+    expect(sidebar.outputIsJson).toBe(true);
+    expect(sidebar.outputText).toContain('"status": "ok"');
+    expect(sidebar.outputText).toContain('"items": [');
+    expect(sidebar.rawText).toBe('{"status":"ok","items":[1,2,3]}');
   });
 
   it("extracts canvas handle payloads into canvas previews", () => {

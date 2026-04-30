@@ -549,4 +549,60 @@ describe("renderMarkdownSidebar", () => {
     expect(container.textContent).toContain("Rendered Markdown");
     expect(container.textContent).toContain("View Raw Text");
   });
+
+  it("renders tool kind with expanded input and output and a tool-named header", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderMarkdownSidebar({
+        content: {
+          kind: "tool",
+          toolName: "browser.open",
+          toolLabel: "Browser Open",
+          detail: "with https://example.com",
+          inputText: '{\n  "url": "https://example.com"\n}',
+          inputIsJson: true,
+          outputText: '{\n  "status": "ok"\n}',
+          outputIsJson: true,
+          rawText: '{"status":"ok"}',
+        },
+        error: null,
+        onClose: () => undefined,
+        onViewRawText: () => undefined,
+      }),
+      container,
+    );
+
+    expect(container.querySelector(".sidebar-title")?.textContent?.trim()).toBe("Browser Open");
+    expect(container.querySelector(".sidebar-tool")).not.toBeNull();
+    const sections = container.querySelectorAll(".chat-tool-card__block-content");
+    expect(sections.length).toBe(2);
+    expect(sections[0]?.textContent).toContain("https://example.com");
+    expect(sections[1]?.textContent).toContain('"status": "ok"');
+    expect(container.textContent).toContain("Tool input");
+    expect(container.textContent).toContain("Tool output");
+    expect(container.textContent).toContain("View Raw Text");
+  });
+
+  it("renders explicit empty states when tool has no input or output", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderMarkdownSidebar({
+        content: {
+          kind: "tool",
+          toolName: "do_thing",
+          toolLabel: "Do Thing",
+        },
+        error: null,
+        onClose: () => undefined,
+        onViewRawText: () => undefined,
+      }),
+      container,
+    );
+
+    expect(container.querySelector(".sidebar-title")?.textContent?.trim()).toBe("Do Thing");
+    expect(container.textContent).toContain("No input arguments.");
+    expect(container.textContent).toContain("No output");
+  });
 });
