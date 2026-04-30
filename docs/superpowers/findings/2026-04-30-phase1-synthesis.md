@@ -106,3 +106,141 @@ Missing plugin-runtime-deps volume → staging fails → npm fallback runs → C
 ---
 
 *Phase 2 diagnoses appended below after running Tasks 4 & 5.*
+
+---
+
+## Phase 2 — Diagnosis: openrouter-image-generation
+
+**Plugin version/location:** workspace plugin at `/home/node/.openclaw/workspace/plugins/openrouter-image-generation/` (not a registry-installed package; version `0.0.1`, local-only). Manifest file: `openclaw.plugin.json` at that path.
+
+**Warning message:** `plugins.openrouter-image-generation: providerAuthEnvVars is deprecated compatibility metadata for provider env-var lookup; mirror openrouter env vars to setup.providers[].envVars before the deprecation window closes`
+
+**What 4.27 expects instead of providerAuthEnvVars:** The runtime now reads provider env-var lists from `setup.providers[].envVars` (an array of objects with `id` + `envVars` fields) alongside the new `providerAuthChoices` array. The deprecation was introduced in commit `7536993397` (`feat(plugins): read setup provider env vars`, 2026-04-24) and compounded by `44183de706` (`fix: use setup providers for auth choices`, 2026-04-26). The `providerAuthEnvVars` field continues to be read by the runtime until the `removeAfter` deadline of **2026-07-24** — so it is a warning, not a breakage.
+
+**Relevant upstream changes:**
+- `7536993397` feat(plugins): read setup provider env vars (#71226) — introduced `setup.providers[].envVars` as the authoritative path; marked `providerAuthEnvVars` as deprecated with `warningStarts: 2026-04-24`, `removeAfter: 2026-07-24`
+- `44183de706` fix: use setup providers for auth choices — wired `setup.providers[].envVars` into the auth-choice resolver, making the migration load-bearing for future auth UX
+- `2a54427aba` fix(plugins): keep runtime deps manifest complete — unrelated but confirms manifest completeness requirements tightened in 4.27
+
+**Root cause:**
+- **(c) Warning is informational only — runtime behavior unaffected; plugin continues to work.** The `openrouter-image-generation` workspace plugin declares `providerAuthEnvVars: { "openrouter": ["OPENROUTER_API_KEY"] }` in its `openclaw.plugin.json`. As of 4.27, this field is deprecated in favor of `setup.providers[].envVars`, but the deprecation window does not close until 2026-07-24. The runtime still reads `providerAuthEnvVars` for backwards compatibility, so the OPENROUTER_API_KEY lookup works correctly today. Image generation is fully functional — the doctor warning is advisory.
+
+**Proposed fix (description — no execution):**
+
+File to edit: `/home/node/.openclaw/workspace/plugins/openrouter-image-generation/openclaw.plugin.json`
+
+Exact edit — replace the `providerAuthEnvVars` field with the new `setup.providers[]` structure and add a `providerAuthChoices` entry:
+
+```json
+{
+  "id": "openrouter-image-generation",
+  "name": "OpenRouter Image Generation",
+  "description": "Adds OpenRouter-backed image generation to OpenClaw",
+  "setup": {
+    "providers": [
+      {
+        "id": "openrouter",
+        "envVars": ["OPENROUTER_API_KEY"]
+      }
+    ]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "openrouter",
+      "method": "api-key",
+      "choiceId": "openrouter-api-key",
+      "choiceLabel": "OpenRouter API key",
+      "groupId": "openrouter",
+      "groupLabel": "OpenRouter",
+      "groupHint": "API key",
+      "optionKey": "openrouterApiKey"
+    }
+  ],
+  "contracts": {
+    "imageGenerationProviders": ["openrouter"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
+```
+
+Note: the write must be done as `ubuntu` via `sudo` and immediately `chown opc:opc` the file (workspace is owned by `opc`).
+
+Reload command: no container restart needed; `docker exec openclaw-openclaw-gateway-1 node dist/index.js plugins reload` should pick up the manifest change (or a full `docker compose restart` if hot-reload is not available for workspace plugins).
+
+Expected verification: `docker exec openclaw-openclaw-gateway-1 node dist/index.js doctor 2>&1 | grep openrouter-image-generation` shows no deprecation warning (or the line is absent from the Config warnings and Plugin diagnostics sections).
+
+---
+
+## Phase 2 — Diagnosis: Discord SecretRef
+
+**Reference shape in user config:** `{ source: "file", provider: "filemain", id: "/providers/discord/chiefOfStaff/token" }` — a modern three-key SecretRef object stored inline at `channels.discord.token`. The `filemain` provider is configured as `source: file, mode: json, path: /home/node/.openclaw/secrets.json`. The pointer `/providers/discord/chiefOfStaff/token` resolves successfully to a string of length 72 in `secrets.json`; the underlying secret is present and intact.
+
+**Resolver supports source types:** `env`, `file`, `exec` (lazy-loaded via `dist/resolve-CGQ2EabZ.js` → `dist/resolve-CKxwAAOr.js`). The resolver also handles legacy refs without a `provider` field via `coerceSecretRef`, and `${ENV_VAR}` template strings via `parseEnvTemplateSecretRef`. The secret itself can be resolved — the issue is not in the resolver but in which call path triggers resolution.
+
+**Upstream fix context:**
+
+- `e4ca4c7fbf` (`fix(discord): avoid resolving tokens for read-only accessors`) — the root fix. In `extensions/discord/src/shared.ts`, `discordConfigAdapter` passes its fallback `resolveAccountForAccessors` as `params.resolveAccount(cfg, accountId)`, which calls the full `resolveDiscordAccount` → `resolveDiscordToken` → `normalizeDiscordToken` → `normalizeResolvedSecretInputString(strict)` chain even for read-only accessor calls (allowlist lookup, defaultTo resolution). The fix introduces a lean `resolveDiscordConfigAccessorAccount` helper that reads only `allowFrom` and `defaultTo` from the merged config without touching the token, and wires it as `resolveAccessorAccount` on the adapter.
+
+- `ec7536078f` (`fix(config): validate unresolved SecretRef refs in dry-run`) — a separate fix that corrects `config patch --dry-run` to perform schema validation even when the patched path is not in the SecretRef target registry. Unrelated to the `status` error but authored the same day.
+
+**Root cause (c — source exists but resolver behavior changed):**
+
+The `status` command calls `buildAccountNotes` (`dist/status.scan.runtime-MRy8OcNY.js:232`) which calls `plugin.config.resolveAllowFrom({ cfg, accountId })`. The `discordConfigAdapter` (built in `dist/extensions/discord/shared-Cuv73Rz3.js`) wires `resolveAllowFrom` through `createScopedChannelConfigAdapter` → `createChannelConfigAdapterFromBase` → `resolveAccountForAccessors` which falls back to `params.resolveAccount(cfg, accountId)` — the full `resolveDiscordAccount` function. `resolveDiscordAccount` calls `resolveDiscordToken` → `normalizeDiscordToken` → `normalizeResolvedSecretInputString` in **strict mode**. In strict mode, any unresolved SecretRef (a ref object rather than an already-resolved string) throws `createUnresolvedSecretInputError`. Because `status` runs outside an active gateway runtime snapshot, the file secret is never pre-resolved before the accessor is called, causing the throw.
+
+The fix (`e4ca4c7fbf`) exists in the upstream source tree but is **not yet merged into the local `main` branch** (confirmed: `git merge-base --is-ancestor e4ca4c7fbf HEAD` returns false) and therefore has not been compiled into the container's `dist/`. The container runs build 4.27; the fix was authored 2026-04-30, after the 4.27 release tag.
+
+**Proposed fix (description — no execution):**
+
+File to edit: `extensions/discord/src/shared.ts`
+
+Exact edit: add a `resolveDiscordConfigAccessorAccount` helper that reads routing fields without touching the token, and pass it as `resolveAccessorAccount` to `createScopedChannelConfigAdapter`:
+
+```ts
+// Add imports at top of file:
+import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
+import {
+  mergeDiscordAccountConfig,
+  resolveDefaultDiscordAccountId,
+  resolveDiscordAccountAllowFrom,
+} from "./accounts.js";
+
+// New helper — reads only routing fields, never touches the token:
+function resolveDiscordConfigAccessorAccount(params: {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+}) {
+  const accountId = normalizeAccountId(
+    params.accountId ?? resolveDefaultDiscordAccountId(params.cfg),
+  );
+  const config = mergeDiscordAccountConfig(params.cfg, accountId);
+  return {
+    allowFrom: resolveDiscordAccountAllowFrom({ cfg: params.cfg, accountId }),
+    defaultTo: config.defaultTo,
+  };
+}
+
+// In discordConfigAdapter, add resolveAccessorAccount:
+export const discordConfigAdapter = createScopedChannelConfigAdapter<ResolvedDiscordAccount>({
+  sectionKey: DISCORD_CHANNEL,
+  listAccountIds: listDiscordAccountIds,
+  resolveAccount: (cfg, accountId) => resolveDiscordAccount({ cfg, accountId }),
+  inspectAccount: (cfg, accountId) => inspectDiscordAccount({ cfg, accountId }),
+  resolveAccessorAccount: (cfg, accountId) =>
+    resolveDiscordConfigAccessorAccount({ cfg, accountId }),  // <-- add this line
+  defaultAccountId: resolveDefaultDiscordAccountId,
+  clearBaseFields: ["token", "name"],
+  resolveAllowFrom: (account) => account.config.dm?.allowFrom,
+  formatAllowFrom: (allowFrom) => formatAllowFromLowercase({ allowFrom }),
+  resolveDefaultTo: (account) => account.config.defaultTo,
+});
+```
+
+After the source edit: run `pnpm build`, rebuild the container image, and redeploy.
+
+Reload command: rebuild image, then `docker compose up -d --no-deps openclaw-openclaw-gateway-1` (or equivalent local deploy script from `scripts/`).
+
+Expected verification: `docker exec openclaw-openclaw-gateway-1 node dist/index.js status --all 2>&1 | grep -i discord` shows no `unresolved SecretRef`; the Discord row should show `token:config` in the notes column.
