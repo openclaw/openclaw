@@ -82,6 +82,10 @@ Scope intent:
 - `channels.irc.accounts.*.nickserv.password`
 - `channels.bluebubbles.password`
 - `channels.bluebubbles.accounts.*.password`
+- `channels.vesicle.authToken`
+- `channels.vesicle.webhookSecret`
+- `channels.vesicle.accounts.*.authToken`
+- `channels.vesicle.accounts.*.webhookSecret`
 - `channels.feishu.appSecret`
 - `channels.feishu.encryptKey`
 - `channels.feishu.verificationToken`
