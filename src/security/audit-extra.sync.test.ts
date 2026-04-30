@@ -52,11 +52,16 @@ describe("safeEqualSecret", () => {
     ["secret-token", "secret-token", true],
     ["secret-token", "secret-tokEn", false],
     ["short", "much-longer", false],
-    ["", "", true],
     ["", "secret", false],
     [undefined, "secret", false],
     ["secret", undefined, false],
     [null, "secret", false],
+    // Cases introduced/fixed by timing-safe refactor
+    [null, "", false], // hashes collide after normalisation; type guard must reject
+    [undefined, "", false], // same as above for undefined
+    [null, null, false],
+    [undefined, undefined, false],
+    ["", "", true], // documents that empty-string secrets are considered equal
   ] as const)("compares %o and %o", (left, right, expected) => {
     expect(safeEqualSecret(left, right)).toBe(expected);
   });

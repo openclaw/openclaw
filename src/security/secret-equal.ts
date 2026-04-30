@@ -1,13 +1,4 @@
-import { timingSafeEqual } from "node:crypto";
-
-function padSecretBytes(bytes: Buffer, length: number): Buffer {
-  if (bytes.length === length) {
-    return bytes;
-  }
-  const padded = Buffer.alloc(length);
-  bytes.copy(padded);
-  return padded;
-}
+import { createHmac, timingSafeEqual } from "node:crypto";
 
 export function safeEqualSecret(
   provided: string | undefined | null,
@@ -16,7 +7,9 @@ export function safeEqualSecret(
   // Normalize null/undefined to empty string to ensure constant-time comparison
   const p = typeof provided === "string" ? provided : "";
   const e = typeof expected === "string" ? expected : "";
-  const hash = (s: string) => createHash("sha256").update(s).digest();
-  const isEqual = timingSafeEqual(hash(p), hash(e));
-  return isEqual && typeof provided === "string" && typeof expected === "string";
+  const hash = (s: string) => createHmac("sha256", "openclaw-safe-equal").update(s).digest();
+  const isEqual = timingSafeEqual(hash(p), hash(e)) ? 1 : 0;
+  const pIsString = typeof provided === "string" ? 1 : 0;
+  const eIsString = typeof expected === "string" ? 1 : 0;
+  return Boolean(isEqual & pIsString & eIsString);
 }
