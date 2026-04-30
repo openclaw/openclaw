@@ -76,8 +76,8 @@ assert_kitchen_sink_removed() {
 run_success_scenario() {
   echo "Testing ${KITCHEN_SINK_LABEL} install from ${KITCHEN_SINK_SPEC}..."
   run_logged_print "kitchen-sink-install-${KITCHEN_SINK_LABEL}" node "$OPENCLAW_ENTRY" plugins install "$KITCHEN_SINK_SPEC"
-  run_logged_print "kitchen-sink-enable-${KITCHEN_SINK_LABEL}" node "$OPENCLAW_ENTRY" plugins enable "$KITCHEN_SINK_ID"
   configure_kitchen_sink_runtime
+  run_logged_print "kitchen-sink-enable-${KITCHEN_SINK_LABEL}" node "$OPENCLAW_ENTRY" plugins enable "$KITCHEN_SINK_ID"
   node "$OPENCLAW_ENTRY" plugins list --json >"/tmp/kitchen-sink-${KITCHEN_SINK_LABEL}-plugins.json"
   node "$OPENCLAW_ENTRY" plugins inspect "$KITCHEN_SINK_ID" --json >"/tmp/kitchen-sink-${KITCHEN_SINK_LABEL}-inspect.json"
   node "$OPENCLAW_ENTRY" plugins inspect --all --json >"/tmp/kitchen-sink-${KITCHEN_SINK_LABEL}-inspect-all.json"
