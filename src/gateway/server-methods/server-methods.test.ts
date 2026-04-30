@@ -481,7 +481,12 @@ describe("projectRecentChatDisplayMessages", () => {
     expect(result).toEqual([
       {
         role: "assistant",
-        content: [{ type: "text", text: "Error: 401 status code (no body)" }],
+        content: [
+          {
+            type: "text",
+            text: "Assistant couldn't start because model authentication failed. Reconnect the model provider and try again.",
+          },
+        ],
         stopReason: "error",
         errorMessage: "401 status code (no body)",
         usage: {

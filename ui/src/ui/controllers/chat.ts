@@ -23,6 +23,9 @@ const SYNTHETIC_TRANSCRIPT_REPAIR_RESULT =
 const STARTUP_CHAT_HISTORY_RETRY_TIMEOUT_MS = 60_000;
 const STARTUP_CHAT_HISTORY_DEFAULT_RETRY_MS = 500;
 const STARTUP_CHAT_HISTORY_MAX_RETRY_MS = 5_000;
+const CHAT_ERROR_AUTH_DISPLAY_TEXT =
+  "Assistant couldn't start because model authentication failed. Reconnect the model provider and try again.";
+const CHAT_ERROR_GENERIC_DISPLAY_TEXT = "Assistant turn failed before producing a reply.";
 const chatHistoryRequestVersions = new WeakMap<object, number>();
 const chatLocalMutationVersions = new WeakMap<object, number>();
 
@@ -323,9 +326,18 @@ function flushDeferredChatMessages(state: ChatState) {
 }
 
 function visibleChatErrorText(errorMessage: unknown): string {
-  const text =
-    typeof errorMessage === "string" && errorMessage.trim() ? errorMessage.trim() : "chat error";
-  return /^error:/i.test(text) ? text : `Error: ${text}`;
+  const rawText = typeof errorMessage === "string" ? errorMessage.trim() : "";
+  if (!rawText) {
+    return CHAT_ERROR_GENERIC_DISPLAY_TEXT;
+  }
+  const text = rawText.toLowerCase();
+  if (/\b(401|unauthorized|authentication|auth)\b/.test(text)) {
+    return CHAT_ERROR_AUTH_DISPLAY_TEXT;
+  }
+  if (/^\d{3}\s+status code\b/.test(text)) {
+    return CHAT_ERROR_GENERIC_DISPLAY_TEXT;
+  }
+  return /^error:/i.test(rawText) ? rawText : `Error: ${rawText}`;
 }
 
 function appendVisibleChatMessage(state: ChatState, message: unknown) {
@@ -733,7 +745,7 @@ export async function sendChatMessage(
       ...state.chatMessages,
       {
         role: "assistant",
-        content: [{ type: "text", text: "Error: " + error }],
+        content: [{ type: "text", text: visibleChatErrorText(error) }],
         timestamp: Date.now(),
       },
     ];

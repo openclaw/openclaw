@@ -10,6 +10,9 @@ import { stripEnvelopeFromMessages } from "./chat-sanitize.js";
 import { isSuppressedControlReplyText } from "./control-reply-text.js";
 
 export const DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS = 8_000;
+const STREAM_ERROR_AUTH_DISPLAY_TEXT =
+  "Assistant couldn't start because model authentication failed. Reconnect the model provider and try again.";
+const STREAM_ERROR_GENERIC_DISPLAY_TEXT = "Assistant turn failed before producing a reply.";
 
 type RoleContentMessage = {
   role: string;
@@ -205,7 +208,14 @@ function formatAssistantDisplayErrorText(errorMessage: unknown, maxChars: number
   if (!text) {
     return null;
   }
-  const displayText = /^error:/i.test(text) ? text : `Error: ${text}`;
+  const lower = text.toLowerCase();
+  const displayText = /\b(401|unauthorized|authentication|auth)\b/.test(lower)
+    ? STREAM_ERROR_AUTH_DISPLAY_TEXT
+    : /^\d{3}\s+status code\b/.test(lower)
+      ? STREAM_ERROR_GENERIC_DISPLAY_TEXT
+      : /^error:/i.test(text)
+        ? text
+        : `Error: ${text}`;
   return truncateChatHistoryText(displayText, maxChars).text;
 }
 
