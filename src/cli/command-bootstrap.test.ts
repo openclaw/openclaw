@@ -9,9 +9,15 @@ vi.mock("./program/config-guard.js", () => ({
 
 vi.mock("./plugin-registry-loader.js", () => ({
   ensureCliPluginRegistryLoaded: ensureCliPluginRegistryLoadedMock,
-  resolvePluginRegistryScopeForCommandPath: vi.fn((commandPath: string[]) =>
-    commandPath[0] === "status" || commandPath[0] === "health" ? "channels" : "all",
-  ),
+  resolvePluginRegistryLoadPolicyForCommandPath: vi.fn((commandPath: string[]) => {
+    if (commandPath[0] === "status" || commandPath[0] === "health") {
+      return { scope: "channels", installBundledRuntimeDeps: false };
+    }
+    if (commandPath[0] === "channels") {
+      return { scope: "configured-channels", installBundledRuntimeDeps: false };
+    }
+    return { scope: "all" };
+  }),
 }));
 
 describe("ensureCliCommandBootstrap", () => {
@@ -59,6 +65,21 @@ describe("ensureCliCommandBootstrap", () => {
     expect(ensureCliPluginRegistryLoadedMock).toHaveBeenCalledWith({
       scope: "channels",
       routeLogsToStderr: true,
+      installBundledRuntimeDeps: false,
+    });
+  });
+
+  it("loads configured channel plugins without repairing runtime deps for channel commands", async () => {
+    await ensureCliCommandBootstrap({
+      runtime: {} as never,
+      commandPath: ["channels", "send"],
+      loadPlugins: true,
+    });
+
+    expect(ensureCliPluginRegistryLoadedMock).toHaveBeenCalledWith({
+      scope: "configured-channels",
+      routeLogsToStderr: undefined,
+      installBundledRuntimeDeps: false,
     });
   });
 

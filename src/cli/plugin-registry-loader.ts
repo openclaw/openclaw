@@ -9,10 +9,27 @@ function loadPluginRegistryModule() {
   return pluginRegistryModulePromise;
 }
 
-export function resolvePluginRegistryScopeForCommandPath(
+export type CliPluginRegistryLoadPolicy = {
+  scope: PluginRegistryScope;
+  installBundledRuntimeDeps?: boolean;
+};
+
+export function resolvePluginRegistryLoadPolicyForCommandPath(
   commandPath: string[],
-): Exclude<PluginRegistryScope, "configured-channels"> {
-  return commandPath[0] === "status" || commandPath[0] === "health" ? "channels" : "all";
+): CliPluginRegistryLoadPolicy {
+  if (commandPath[0] === "status" || commandPath[0] === "health") {
+    return {
+      scope: "channels",
+      installBundledRuntimeDeps: false,
+    };
+  }
+  if (commandPath[0] === "channels") {
+    return {
+      scope: "configured-channels",
+      installBundledRuntimeDeps: false,
+    };
+  }
+  return { scope: "all" };
 }
 
 export async function ensureCliPluginRegistryLoaded(params: {
@@ -20,6 +37,7 @@ export async function ensureCliPluginRegistryLoaded(params: {
   routeLogsToStderr?: boolean;
   config?: OpenClawConfig;
   activationSourceConfig?: OpenClawConfig;
+  installBundledRuntimeDeps?: boolean;
 }) {
   const { ensurePluginRegistryLoaded } = await loadPluginRegistryModule();
   const previousForceStderr = loggingState.forceConsoleToStderr;
@@ -32,6 +50,9 @@ export async function ensureCliPluginRegistryLoaded(params: {
       ...(params.config ? { config: params.config } : {}),
       ...(params.activationSourceConfig
         ? { activationSourceConfig: params.activationSourceConfig }
+        : {}),
+      ...(params.installBundledRuntimeDeps !== undefined
+        ? { installBundledRuntimeDeps: params.installBundledRuntimeDeps }
         : {}),
     });
   } finally {

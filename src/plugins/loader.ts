@@ -39,6 +39,7 @@ import {
 } from "./bundled-runtime-deps.js";
 import { clearBundledRuntimeDistMirrorPreparationCache } from "./bundled-runtime-dist-mirror-cache.js";
 import {
+  clearPreparedBundledPluginRuntimeLoadRoots,
   ensureOpenClawPluginSdkAlias,
   prepareBundledPluginRuntimeLoadRoot,
 } from "./bundled-runtime-root.js";
@@ -291,6 +292,7 @@ export function clearPluginLoaderCache(): void {
   pluginLoaderCacheState.clear();
   clearBundledRuntimeDependencyNodePaths();
   clearBundledRuntimeDistMirrorPreparationCache();
+  clearPreparedBundledPluginRuntimeLoadRoots();
   clearBundledRuntimeDependencyJitiAliases();
   clearAgentHarnesses();
   clearPluginCommands();
@@ -1463,12 +1465,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         markPluginActivationDisabled(record, enableState.reason);
       }
 
-      if (
-        shouldLoadModules &&
-        shouldInstallBundledRuntimeDeps &&
-        candidate.origin === "bundled" &&
-        enableState.enabled
-      ) {
+      if (shouldLoadModules && candidate.origin === "bundled" && enableState.enabled) {
         let runtimeDepsInstallStartedAt: number | null = null;
         let runtimeDepsInstallSpecs: string[] = [];
         try {
@@ -1479,6 +1476,8 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
             ...(runtimeSetupSource ? { setupModulePath: runtimeSetupSource } : {}),
             env,
             config: cfg,
+            installMissingDeps: shouldInstallBundledRuntimeDeps,
+            memoizePreparedRoot: true,
             registerRuntimeAliasRoot: registerBundledRuntimeDependencyJitiAliases,
             installDeps: (installParams) => {
               const installSpecs = installParams.installSpecs ?? installParams.missingSpecs;
@@ -1535,7 +1534,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
               `[plugins] ${record.id} failed to stage bundled runtime deps after ${Date.now() - runtimeDepsInstallStartedAt}ms: ${runtimeDepsInstallSpecs.join(", ")}`,
             );
           }
-          pushPluginLoadError(`failed to install bundled runtime deps: ${String(error)}`);
+          pushPluginLoadError(`failed to prepare bundled runtime deps: ${String(error)}`);
           continue;
         }
       }

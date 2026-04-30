@@ -28,6 +28,7 @@ export type PluginsListOptions = {
 export type PluginInspectOptions = {
   json?: boolean;
   all?: boolean;
+  runtime?: boolean;
 };
 
 export type PluginUpdateOptions = {
@@ -280,6 +281,7 @@ export function registerPluginsCli(program: Command) {
     .description("Inspect plugin details")
     .argument("[id]", "Plugin id")
     .option("--all", "Inspect all plugins")
+    .option("--runtime", "Load plugin runtime for hooks/tools/diagnostics")
     .option("--json", "Print JSON")
     .action(async (id: string | undefined, opts: PluginInspectOptions) => {
       const {
@@ -300,20 +302,31 @@ export function registerPluginsCli(program: Command) {
         { command: "inspect" },
       );
       const loggerParams = opts.json ? { logger: quietPluginJsonLogger } : {};
+      const runtimeInspect = opts.runtime === true;
       if (opts.all) {
         if (id) {
           defaultRuntime.error("Pass either a plugin id or --all, not both.");
           return defaultRuntime.exit(1);
         }
-        const report = tracePluginLifecyclePhase(
-          "runtime plugin registry load",
-          () =>
-            buildPluginDiagnosticsReport({
-              config: cfg,
-              ...loggerParams,
-            }),
-          { command: "inspect", all: true },
-        );
+        const report = runtimeInspect
+          ? tracePluginLifecyclePhase(
+              "runtime plugin registry load",
+              () =>
+                buildPluginDiagnosticsReport({
+                  config: cfg,
+                  ...loggerParams,
+                }),
+              { command: "inspect", all: true },
+            )
+          : tracePluginLifecyclePhase(
+              "plugin registry snapshot",
+              () =>
+                buildPluginSnapshotReport({
+                  config: cfg,
+                  ...loggerParams,
+                }),
+              { command: "inspect", all: true },
+            );
         const inspectAll = buildAllPluginInspectReports({
           config: cfg,
           ...loggerParams,
@@ -398,16 +411,18 @@ export function registerPluginsCli(program: Command) {
         defaultRuntime.error(`Plugin not found: ${id}`);
         return defaultRuntime.exit(1);
       }
-      const report = tracePluginLifecyclePhase(
-        "runtime plugin registry load",
-        () =>
-          buildPluginDiagnosticsReport({
-            config: cfg,
-            ...loggerParams,
-            onlyPluginIds: [targetPlugin.id],
-          }),
-        { command: "inspect", pluginId: targetPlugin.id },
-      );
+      const report = runtimeInspect
+        ? tracePluginLifecyclePhase(
+            "runtime plugin registry load",
+            () =>
+              buildPluginDiagnosticsReport({
+                config: cfg,
+                ...loggerParams,
+                onlyPluginIds: [targetPlugin.id],
+              }),
+            { command: "inspect", pluginId: targetPlugin.id },
+          )
+        : snapshotReport;
       const inspect = buildPluginInspectReport({
         id: targetPlugin.id,
         config: cfg,

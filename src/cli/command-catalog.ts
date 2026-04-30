@@ -108,7 +108,11 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   },
   {
     commandPath: ["health"],
-    policy: { loadPlugins: "never", ensureCliPath: false, networkProxy: "bypass" },
+    policy: {
+      loadPlugins: "never",
+      ensureCliPath: false,
+      networkProxy: "bypass",
+    },
     route: { id: "health" },
   },
   {

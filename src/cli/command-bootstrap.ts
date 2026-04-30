@@ -1,7 +1,7 @@
 import type { RuntimeEnv } from "../runtime.js";
 import {
   ensureCliPluginRegistryLoaded,
-  resolvePluginRegistryScopeForCommandPath,
+  resolvePluginRegistryLoadPolicyForCommandPath,
 } from "./plugin-registry-loader.js";
 
 let configGuardModulePromise: Promise<typeof import("./program/config-guard.js")> | undefined;
@@ -31,8 +31,16 @@ export async function ensureCliCommandBootstrap(params: {
   if (!params.loadPlugins) {
     return;
   }
+  const pluginRegistryLoadPolicy = resolvePluginRegistryLoadPolicyForCommandPath(
+    params.commandPath,
+  );
   await ensureCliPluginRegistryLoaded({
-    scope: resolvePluginRegistryScopeForCommandPath(params.commandPath),
+    scope: pluginRegistryLoadPolicy.scope,
     routeLogsToStderr: params.suppressDoctorStdout,
+    ...(pluginRegistryLoadPolicy.installBundledRuntimeDeps !== undefined
+      ? {
+          installBundledRuntimeDeps: pluginRegistryLoadPolicy.installBundledRuntimeDeps,
+        }
+      : {}),
   });
 }

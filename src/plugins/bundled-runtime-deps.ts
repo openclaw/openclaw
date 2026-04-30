@@ -103,6 +103,22 @@ export type BundledRuntimeDepsEnsureResult = {
   installedSpecs: string[];
 };
 
+export class BundledRuntimeDepsMissingError extends Error {
+  readonly pluginId: string;
+  readonly installRoot: string;
+  readonly missingSpecs: string[];
+
+  constructor(params: { pluginId: string; installRoot: string; missingSpecs: string[] }) {
+    super(
+      `bundled runtime dependencies missing for ${params.pluginId}: ${params.missingSpecs.join(", ")}. Run "openclaw plugins deps --repair" to repair them.`,
+    );
+    this.name = "BundledRuntimeDepsMissingError";
+    this.pluginId = params.pluginId;
+    this.installRoot = params.installRoot;
+    this.missingSpecs = params.missingSpecs;
+  }
+}
+
 export type BundledRuntimeDepsPlan = {
   deps: RuntimeDepEntry[];
   missing: RuntimeDepEntry[];
@@ -323,6 +339,7 @@ export function ensureBundledPluginRuntimeDeps(params: {
   pluginRoot: string;
   env: NodeJS.ProcessEnv;
   config?: OpenClawConfig;
+  installMissingDeps?: boolean;
   installDeps?: (params: BundledRuntimeDepsInstallParams) => void;
 }): BundledRuntimeDepsEnsureResult {
   const extensionsDir = path.dirname(params.pluginRoot);
@@ -426,6 +443,13 @@ export function ensureBundledPluginRuntimeDeps(params: {
     if (isRuntimeDepsPlanMaterialized(installRoot, installSpecs)) {
       removeLegacyRuntimeDepsManifest(installRoot);
       return createBundledRuntimeDepsEnsureResult([]);
+    }
+    if (params.installMissingDeps === false) {
+      throw new BundledRuntimeDepsMissingError({
+        pluginId: params.pluginId,
+        installRoot,
+        missingSpecs: installSpecs,
+      });
     }
     const isPluginRootInstall = path.resolve(installRoot) === path.resolve(params.pluginRoot);
     const installExecutionRoot = isPluginRootInstall

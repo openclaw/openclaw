@@ -16,6 +16,7 @@ import {
 } from "./bundled-runtime-deps-materialization.js";
 import {
   __testing as bundledRuntimeDepsTesting,
+  BundledRuntimeDepsMissingError,
   createBundledRuntimeDependencyAliasMap,
   createBundledRuntimeDepsInstallArgs,
   createBundledRuntimeDepsInstallEnv,
@@ -1800,6 +1801,49 @@ describe("ensureBundledPluginRuntimeDeps", () => {
       },
     ]);
     expect(installRoot).not.toBe(pluginRoot);
+  });
+
+  it("reports missing runtime deps without installing when repair is forbidden", () => {
+    const packageRoot = makeTempDir();
+    const extensionsRoot = path.join(packageRoot, "dist", "extensions");
+    const pluginRoot = path.join(extensionsRoot, "bedrock");
+    fs.mkdirSync(pluginRoot, { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginRoot, "package.json"),
+      JSON.stringify({
+        dependencies: {
+          missing: "2.0.0",
+        },
+      }),
+    );
+
+    const installRoot = resolveBundledRuntimeDependencyInstallRoot(pluginRoot, { env: {} });
+    expect(() =>
+      ensureBundledPluginRuntimeDeps({
+        env: {},
+        installMissingDeps: false,
+        installDeps: () => {
+          throw new Error("must not install");
+        },
+        pluginId: "bedrock",
+        pluginRoot,
+      }),
+    ).toThrow(BundledRuntimeDepsMissingError);
+
+    let caught: unknown;
+    try {
+      ensureBundledPluginRuntimeDeps({
+        env: {},
+        installMissingDeps: false,
+        pluginId: "bedrock",
+        pluginRoot,
+      });
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(BundledRuntimeDepsMissingError);
+    expect((caught as BundledRuntimeDepsMissingError).missingSpecs).toEqual(["missing@2.0.0"]);
+    expect((caught as BundledRuntimeDepsMissingError).installRoot).toBe(installRoot);
   });
 
   it("skips workspace-only runtime deps before npm install", () => {

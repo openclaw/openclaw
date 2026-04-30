@@ -4,7 +4,10 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveBundledRuntimeDependencyInstallRoot } from "./bundled-runtime-deps.js";
 import { materializeBundledRuntimeMirrorFile } from "./bundled-runtime-mirror.js";
-import { prepareBundledPluginRuntimeRoot } from "./bundled-runtime-root.js";
+import {
+  clearPreparedBundledPluginRuntimeLoadRoots,
+  prepareBundledPluginRuntimeRoot,
+} from "./bundled-runtime-root.js";
 import { writeGeneratedRuntimeDepsManifest } from "./test-helpers/bundled-runtime-deps-fixtures.js";
 
 const tempRoots: string[] = [];
@@ -17,6 +20,7 @@ function makeTempRoot(): string {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  clearPreparedBundledPluginRuntimeLoadRoots();
   for (const root of tempRoots.splice(0)) {
     fs.rmSync(root, { recursive: true, force: true });
   }

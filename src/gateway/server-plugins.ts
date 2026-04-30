@@ -531,6 +531,7 @@ export function loadGatewayPlugins(params: {
   pluginLookUpTable?: PluginLookUpTable;
   preferSetupRuntimeForChannelPlugins?: boolean;
   suppressPluginInfoLogs?: boolean;
+  installBundledRuntimeDeps?: boolean;
   bundledRuntimeDepsInstaller?: (params: BundledRuntimeDepsInstallParams) => void;
 }) {
   const activationAutoEnabled =
@@ -603,6 +604,7 @@ export function loadGatewayPlugins(params: {
       allowGatewaySubagentBinding: true,
     },
     preferSetupRuntimeForChannelPlugins: params.preferSetupRuntimeForChannelPlugins,
+    installBundledRuntimeDeps: params.installBundledRuntimeDeps,
     bundledRuntimeDepsInstaller: params.bundledRuntimeDepsInstaller,
     ...(params.pluginLookUpTable?.manifestRegistry
       ? { manifestRegistry: params.pluginLookUpTable.manifestRegistry }

@@ -5,12 +5,16 @@ import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { measureDiagnosticsTimelineSpan } from "../infra/diagnostics-timeline.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
+import { registerBundledRuntimeDependencyJitiAliases } from "../plugins/bundled-runtime-deps-jiti-aliases.js";
 import {
   pruneUnknownBundledRuntimeDepsRoots,
   repairBundledRuntimeDepsInstallRootAsync,
   resolveBundledRuntimeDependencyPackageInstallRoot,
   scanBundledPluginRuntimeDeps,
+  type RuntimeDepEntry,
 } from "../plugins/bundled-runtime-deps.js";
+import { prepareBundledPluginRuntimeLoadRoot } from "../plugins/bundled-runtime-root.js";
+import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { loadPluginLookUpTable } from "../plugins/plugin-lookup-table.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
@@ -27,6 +31,14 @@ type GatewayPluginBootstrapLog = {
   debug: (message: string) => void;
 };
 
+function createBundledRuntimeDepsInstallSpecs(params: {
+  deps: readonly RuntimeDepEntry[];
+}): string[] {
+  return params.deps
+    .map((dep) => `${dep.name}@${dep.version}`)
+    .toSorted((left, right) => left.localeCompare(right));
+}
+
 export function resolveGatewayStartupMaintenanceConfig(params: {
   cfgAtStart: OpenClawConfig;
   startupRuntimeConfig: OpenClawConfig;
@@ -42,6 +54,7 @@ export function resolveGatewayStartupMaintenanceConfig(params: {
 
 async function prestageGatewayBundledRuntimeDeps(params: {
   cfg: OpenClawConfig;
+  manifestRegistry: PluginManifestRegistry;
   pluginIds: readonly string[];
   log: GatewayPluginBootstrapLog;
 }): Promise<void> {
@@ -60,77 +73,91 @@ async function prestageGatewayBundledRuntimeDeps(params: {
 
 async function prestageGatewayBundledRuntimeDepsImpl(params: {
   cfg: OpenClawConfig;
+  manifestRegistry: PluginManifestRegistry;
   pluginIds: readonly string[];
   log: GatewayPluginBootstrapLog;
 }): Promise<void> {
   if (params.pluginIds.length === 0) {
     return;
   }
-  const packageRoot = resolveOpenClawPackageRootSync({
-    argv1: process.argv[1],
-    cwd: process.cwd(),
-    moduleUrl: import.meta.url,
-  });
-  if (!packageRoot) {
-    return;
+  const packageRoot = resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url });
+  if (packageRoot) {
+    try {
+      pruneUnknownBundledRuntimeDepsRoots({
+        env: process.env,
+        warn: (message) => params.log.warn(message),
+      });
+      const scan = scanBundledPluginRuntimeDeps({
+        packageRoot,
+        config: params.cfg,
+        pluginIds: params.pluginIds,
+        env: process.env,
+      });
+      const missingSpecs = createBundledRuntimeDepsInstallSpecs({ deps: scan.missing });
+      if (missingSpecs.length > 0) {
+        const installSpecs = createBundledRuntimeDepsInstallSpecs({ deps: scan.deps });
+        const installRoot = resolveBundledRuntimeDependencyPackageInstallRoot(packageRoot, {
+          env: process.env,
+        });
+        const startedAt = Date.now();
+        const result = await repairBundledRuntimeDepsInstallRootAsync({
+          installRoot,
+          missingSpecs,
+          installSpecs,
+          env: process.env,
+          warn: (message) => params.log.warn(message),
+          onProgress: (message) => params.log.info(message),
+        });
+        params.log.info(
+          `[plugins] prepared bundled runtime dependencies before gateway startup in ${Date.now() - startedAt}ms: ${result.installSpecs.join(", ")}`,
+        );
+      }
+    } catch (error) {
+      params.log.warn(
+        `[plugins] bundled runtime dependency staging failed; plugin load will verify without synchronous repair: ${String(error)}`,
+      );
+    }
   }
-  const pruned = pruneUnknownBundledRuntimeDepsRoots({
-    env: process.env,
-    warn: (message) => params.log.warn(`[plugins] ${message}`),
-  });
-  if (pruned.removed > 0) {
-    params.log.info(
-      `[plugins] pruned stale bundled runtime deps roots (${pruned.removed} removed, ${pruned.skippedLocked} locked, ${pruned.scanned} scanned)`,
-    );
-  }
-  let scanResult: ReturnType<typeof scanBundledPluginRuntimeDeps>;
-  try {
-    scanResult = scanBundledPluginRuntimeDeps({
-      packageRoot,
-      config: params.cfg,
-      selectedPluginIds: [...params.pluginIds],
-      env: process.env,
-    });
-  } catch (error) {
-    params.log.warn(
-      `[plugins] failed to scan bundled runtime deps before gateway startup; gateway startup will continue with per-plugin runtime-deps installs: ${String(error)}`,
-    );
-    return;
-  }
-  const { deps, missing, conflicts } = scanResult;
-  if (conflicts.length > 0) {
-    params.log.warn(
-      `[plugins] bundled runtime deps have version conflicts: ${conflicts.map((conflict) => `${conflict.name} (${conflict.versions.join(", ")})`).join("; ")}`,
-    );
-  }
-  if (missing.length === 0) {
-    return;
-  }
-  const installSpecs = deps.map((dep) => `${dep.name}@${dep.version}`);
-  const installRoot = resolveBundledRuntimeDependencyPackageInstallRoot(packageRoot, {
-    env: process.env,
-  });
+  prestageGatewayBundledRuntimeMirrors(params);
+}
+
+function prestageGatewayBundledRuntimeMirrors(params: {
+  cfg: OpenClawConfig;
+  manifestRegistry: PluginManifestRegistry;
+  pluginIds: readonly string[];
+  log: GatewayPluginBootstrapLog;
+}): void {
+  const pluginIdSet = new Set(params.pluginIds);
   const startedAt = Date.now();
-  params.log.info(
-    `[plugins] staging bundled runtime deps before gateway startup (${installSpecs.length} specs): ${installSpecs.join(", ")}`,
-  );
-  try {
-    await repairBundledRuntimeDepsInstallRootAsync({
-      installRoot,
-      missingSpecs: installSpecs,
-      installSpecs,
-      env: process.env,
-      warn: (message) => params.log.warn(`[plugins] ${message}`),
-    });
-  } catch (error) {
-    params.log.warn(
-      `[plugins] failed to stage bundled runtime deps before gateway startup after ${Date.now() - startedAt}ms; gateway startup will continue with per-plugin runtime-deps installs: ${String(error)}`,
-    );
-    return;
+  const preparedPluginIds: string[] = [];
+  for (const record of params.manifestRegistry.plugins) {
+    if (record.origin !== "bundled" || !pluginIdSet.has(record.id)) {
+      continue;
+    }
+    try {
+      prepareBundledPluginRuntimeLoadRoot({
+        pluginId: record.id,
+        pluginRoot: record.rootDir,
+        modulePath: record.source,
+        ...(record.setupSource ? { setupModulePath: record.setupSource } : {}),
+        env: process.env,
+        config: params.cfg,
+        installMissingDeps: false,
+        memoizePreparedRoot: true,
+        registerRuntimeAliasRoot: registerBundledRuntimeDependencyJitiAliases,
+      });
+      preparedPluginIds.push(record.id);
+    } catch (error) {
+      params.log.warn(
+        `[plugins] bundled runtime mirror prep for ${record.id} failed; plugin load will verify without synchronous repair: ${String(error)}`,
+      );
+    }
   }
-  params.log.info(
-    `[plugins] installed bundled runtime deps before gateway startup in ${Date.now() - startedAt}ms: ${installSpecs.join(", ")}`,
-  );
+  if (preparedPluginIds.length > 0) {
+    params.log.info(
+      `[plugins] prepared bundled runtime roots before gateway startup in ${Date.now() - startedAt}ms: ${preparedPluginIds.join(", ")}`,
+    );
+  }
 }
 
 export async function prepareGatewayPluginBootstrap(params: {
@@ -209,6 +236,7 @@ export async function prepareGatewayPluginBootstrap(params: {
   if (!params.minimalTestGateway) {
     await prestageGatewayBundledRuntimeDeps({
       cfg: gatewayPluginConfig,
+      manifestRegistry: pluginLookUpTable?.manifestRegistry ?? { plugins: [], diagnostics: [] },
       pluginIds: startupPluginIds,
       log: params.log,
     });
@@ -221,6 +249,7 @@ export async function prepareGatewayPluginBootstrap(params: {
       baseMethods,
       pluginIds: startupPluginIds,
       pluginLookUpTable,
+      installBundledRuntimeDeps: false,
       preferSetupRuntimeForChannelPlugins: deferredConfiguredChannelPluginIds.length > 0,
       suppressPluginInfoLogs: deferredConfiguredChannelPluginIds.length > 0,
     }));

@@ -37,6 +37,7 @@ type GatewayPluginBootstrapParams = {
   pluginLookUpTable?: PluginLookUpTable;
   preferSetupRuntimeForChannelPlugins?: boolean;
   suppressPluginInfoLogs?: boolean;
+  installBundledRuntimeDeps?: boolean;
   logDiagnostics?: boolean;
   bundledRuntimeDepsInstaller?: (params: BundledRuntimeDepsInstallParams) => void;
   beforePrimeRegistry?: (pluginRegistry: PluginRegistry) => void;
@@ -104,6 +105,7 @@ export function prepareGatewayPluginLoad(params: GatewayPluginBootstrapParams) {
     pluginLookUpTable: params.pluginLookUpTable,
     preferSetupRuntimeForChannelPlugins: params.preferSetupRuntimeForChannelPlugins,
     suppressPluginInfoLogs: params.suppressPluginInfoLogs,
+    installBundledRuntimeDeps: params.installBundledRuntimeDeps,
     bundledRuntimeDepsInstaller: params.bundledRuntimeDepsInstaller,
   });
   params.beforePrimeRegistry?.(loaded.pluginRegistry);
