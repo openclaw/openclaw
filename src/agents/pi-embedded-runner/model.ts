@@ -111,7 +111,7 @@ function createEmptyPiDiscoveryStores(): {
     typeof PiAuthStorageClass.inMemory === "function"
       ? PiAuthStorageClass.inMemory({})
       : PiAuthStorageClass.create();
-  const modelRegistry = new PiModelRegistryClass(authStorage, "");
+  const modelRegistry = PiModelRegistryClass.inMemory(authStorage);
   return { authStorage, modelRegistry };
 }
 
