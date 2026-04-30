@@ -261,6 +261,20 @@ If ClawSweeper passes while merge gates are closed, it labels
 `clawsweeper:merge-ready` and comments instead of merging. `@clawsweeper stop`
 adds `clawsweeper:human-review`.
 
+When Peter asks Codex to create a PR and enable ClawSweeper automerge, do not
+leave his local OpenClaw checkout on the PR branch. After the PR is created,
+pushed, and the `@clawsweeper automerge` request is posted or otherwise
+confirmed, return the local checkout to `main` and fast-forward it when the
+working tree is clean:
+
+```bash
+git switch main
+git pull --ff-only
+```
+
+If unrelated local edits or an in-progress rebase prevent switching, report the
+blocker instead of stashing, deleting, or overwriting work.
+
 Repair caps:
 
 ```bash
