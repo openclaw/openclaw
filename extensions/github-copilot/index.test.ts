@@ -6,10 +6,11 @@ import {
   ensureAuthProfileStore,
 } from "openclaw/plugin-sdk/agent-runtime";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
+import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
-  discoverCopilotModels: vi.fn(async () => []),
+  discoverCopilotModels: vi.fn<() => Promise<ModelDefinitionConfig[]>>(async () => []),
   githubCopilotLoginCommand: vi.fn(),
   resolveCopilotApiToken: vi.fn(),
 }));
