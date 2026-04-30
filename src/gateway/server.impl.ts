@@ -487,6 +487,7 @@ export async function startGatewayServer(
     enqueueSystemEvent(`[${code}] ${message}`, {
       sessionKey: resolveMainSessionKey(cfg),
       contextKey: code,
+      trusted: true,
     });
   };
   const activateRuntimeSecrets = createRuntimeSecretsActivator({
@@ -1004,6 +1005,7 @@ export async function startGatewayServer(
           nextConfig,
           resolveRuntimeSnapshotGeneration: resolveSharedGatewaySessionGenerationForRuntimeSnapshot,
           clients,
+          logger: log,
         });
       },
       nodeRegistry,
