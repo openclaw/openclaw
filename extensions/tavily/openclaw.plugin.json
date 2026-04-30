@@ -17,9 +17,20 @@
     "webSearch.baseUrl": {
       "label": "Tavily Base URL",
       "help": "Tavily API base URL override."
+    },
+    "webFetch.apiKey": {
+      "label": "Tavily Fetch API Key",
+      "help": "Optional override for web fetch. Defaults to webSearch.apiKey since Tavily uses one account for /search and /extract.",
+      "sensitive": true,
+      "placeholder": "tvly-..."
+    },
+    "webFetch.baseUrl": {
+      "label": "Tavily Fetch Base URL",
+      "help": "Optional Tavily Extract base URL override. Defaults to webSearch.baseUrl."
     }
   },
   "contracts": {
+    "webFetchProviders": ["tavily"],
     "webSearchProviders": ["tavily"],
     "tools": ["tavily_search", "tavily_extract"]
   },
@@ -31,6 +42,18 @@
     "additionalProperties": false,
     "properties": {
       "webSearch": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "apiKey": {
+            "type": ["string", "object"]
+          },
+          "baseUrl": {
+            "type": "string"
+          }
+        }
+      },
+      "webFetch": {
         "type": "object",
         "additionalProperties": false,
         "properties": {
