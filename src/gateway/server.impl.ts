@@ -1137,6 +1137,18 @@ export async function startGatewayServer(
     ));
     startupTrace.mark("ready");
 
+    // One-shot warning: visibleReplies default changed to message_tool_only in 2026.4.27.
+    // Group/channel chats without explicit config will silently suppress replies (#74876).
+    if (
+      !minimalTestGateway &&
+      cfgAtStart.messages?.groupChat?.visibleReplies === undefined &&
+      cfgAtStart.messages?.visibleReplies === undefined
+    ) {
+      log.warn(
+        "[visibleReplies] Group/channel chat replies default to private (message tool only). To restore automatic posting, set messages.groupChat.visibleReplies to automatic in openclaw.json and restart the gateway.",
+      );
+    }
+
     const activated = activateGatewayScheduledServices({
       minimalTestGateway,
       cfgAtStart,
