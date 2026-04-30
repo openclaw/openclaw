@@ -82,6 +82,7 @@ Anthropic's current public docs:
         - If `claude` is not on PATH, OpenClaw asks for confirmation and runs `npm install -g @anthropic-ai/claude-code` for you.
         - If Claude CLI is installed but signed out, OpenClaw runs `claude auth login` interactively so you can sign in with your Anthropic account.
         - Once installed and signed in, the existing Claude CLI session is reused automatically — no token to copy or paste.
+
       </Step>
       <Step title="Pick a model">
         The wizard offers the Claude model list (Opus / Sonnet / Haiku) and seeds them into your config. The default is `anthropic/claude-opus-4-7`.

@@ -3,6 +3,7 @@ import type {
   ProviderAuthMethodNonInteractiveContext,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { EnsureClaudeCliReadyResult } from "./cli-install.js";
 
 const {
   readClaudeCliCredentialsForSetup,
@@ -12,7 +13,9 @@ const {
 } = vi.hoisted(() => ({
   readClaudeCliCredentialsForSetup: vi.fn(),
   readClaudeCliCredentialsForSetupNonInteractive: vi.fn(),
-  ensureClaudeCliInstalled: vi.fn(async () => ({ ok: true as const })),
+  ensureClaudeCliInstalled: vi.fn(
+    async (): Promise<EnsureClaudeCliReadyResult> => ({ ok: true }),
+  ),
   runClaudeCliLogin: vi.fn(() => true),
 }));
 
