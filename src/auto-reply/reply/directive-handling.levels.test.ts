@@ -164,4 +164,108 @@ describe("resolveCurrentDirectiveLevels", () => {
 
     expect(result.currentReasoningLevel).toBe("off");
   });
+
+  // Regression for #73680 / PR #74643 P2: verbose and elevated defaults must
+  // honor per-agent values from agentEntry before falling back to the global
+  // agentCfg defaults; otherwise saving a per-agent value has no runtime effect.
+
+  it("prefers per-agent verboseDefault over agentCfg verboseDefault", async () => {
+    const resolveDefaultThinkingLevel = vi.fn().mockResolvedValue("off");
+
+    const result = await resolveCurrentDirectiveLevels({
+      sessionEntry: {},
+      agentEntry: {
+        verboseDefault: "high",
+      },
+      agentCfg: {
+        verboseDefault: "low",
+      },
+      resolveDefaultThinkingLevel,
+    });
+
+    expect(result.currentVerboseLevel).toBe("high");
+  });
+
+  it("falls back to agentCfg verboseDefault when agent entry is absent", async () => {
+    const resolveDefaultThinkingLevel = vi.fn().mockResolvedValue("off");
+
+    const result = await resolveCurrentDirectiveLevels({
+      sessionEntry: {},
+      agentCfg: {
+        verboseDefault: "low",
+      },
+      resolveDefaultThinkingLevel,
+    });
+
+    expect(result.currentVerboseLevel).toBe("low");
+  });
+
+  it("prefers session verboseLevel over per-agent verboseDefault", async () => {
+    const resolveDefaultThinkingLevel = vi.fn().mockResolvedValue("off");
+
+    const result = await resolveCurrentDirectiveLevels({
+      sessionEntry: {
+        verboseLevel: "low",
+      },
+      agentEntry: {
+        verboseDefault: "high",
+      },
+      agentCfg: {
+        verboseDefault: "off",
+      },
+      resolveDefaultThinkingLevel,
+    });
+
+    expect(result.currentVerboseLevel).toBe("low");
+  });
+
+  it("prefers per-agent elevatedDefault over agentCfg elevatedDefault", async () => {
+    const resolveDefaultThinkingLevel = vi.fn().mockResolvedValue("off");
+
+    const result = await resolveCurrentDirectiveLevels({
+      sessionEntry: {},
+      agentEntry: {
+        elevatedDefault: "on",
+      },
+      agentCfg: {
+        elevatedDefault: "off",
+      },
+      resolveDefaultThinkingLevel,
+    });
+
+    expect(result.currentElevatedLevel).toBe("on");
+  });
+
+  it("falls back to agentCfg elevatedDefault when agent entry is absent", async () => {
+    const resolveDefaultThinkingLevel = vi.fn().mockResolvedValue("off");
+
+    const result = await resolveCurrentDirectiveLevels({
+      sessionEntry: {},
+      agentCfg: {
+        elevatedDefault: "off",
+      },
+      resolveDefaultThinkingLevel,
+    });
+
+    expect(result.currentElevatedLevel).toBe("off");
+  });
+
+  it("prefers session elevatedLevel over per-agent elevatedDefault", async () => {
+    const resolveDefaultThinkingLevel = vi.fn().mockResolvedValue("off");
+
+    const result = await resolveCurrentDirectiveLevels({
+      sessionEntry: {
+        elevatedLevel: "off",
+      },
+      agentEntry: {
+        elevatedDefault: "on",
+      },
+      agentCfg: {
+        elevatedDefault: "on",
+      },
+      resolveDefaultThinkingLevel,
+    });
+
+    expect(result.currentElevatedLevel).toBe("off");
+  });
 });
