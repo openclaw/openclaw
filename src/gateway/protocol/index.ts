@@ -275,6 +275,12 @@ import {
   SessionsSendParamsSchema,
   type SessionsUsageParams,
   SessionsUsageParamsSchema,
+  type SessionsCreateSharedTokenParams,
+  SessionsCreateSharedTokenParamsSchema,
+  type SessionsCreateSharedTokenResult,
+  SessionsCreateSharedTokenResultSchema,
+  type SessionsRevokeSharedTokenParams,
+  SessionsRevokeSharedTokenParamsSchema,
   type ShutdownEvent,
   ShutdownEventSchema,
   type SkillsBinsParams,
@@ -466,6 +472,12 @@ export const validateSessionsCompactionRestoreParams = ajv.compile<SessionsCompa
 );
 export const validateSessionsUsageParams =
   ajv.compile<SessionsUsageParams>(SessionsUsageParamsSchema);
+export const validateSessionsCreateSharedTokenParams = ajv.compile<SessionsCreateSharedTokenParams>(
+  SessionsCreateSharedTokenParamsSchema,
+);
+export const validateSessionsRevokeSharedTokenParams = ajv.compile<SessionsRevokeSharedTokenParams>(
+  SessionsRevokeSharedTokenParamsSchema,
+);
 export const validateConfigGetParams = ajv.compile<ConfigGetParams>(ConfigGetParamsSchema);
 export const validateConfigSetParams = ajv.compile<ConfigSetParams>(ConfigSetParamsSchema);
 export const validateConfigApplyParams = ajv.compile<ConfigApplyParams>(ConfigApplyParamsSchema);
@@ -684,6 +696,9 @@ export {
   SessionsDeleteParamsSchema,
   SessionsCompactParamsSchema,
   SessionsUsageParamsSchema,
+  SessionsCreateSharedTokenParamsSchema,
+  SessionsCreateSharedTokenResultSchema,
+  SessionsRevokeSharedTokenParamsSchema,
   ConfigGetParamsSchema,
   ConfigSetParamsSchema,
   ConfigApplyParamsSchema,
@@ -886,6 +901,9 @@ export type {
   SessionsDeleteParams,
   SessionsCompactParams,
   SessionsUsageParams,
+  SessionsCreateSharedTokenParams,
+  SessionsCreateSharedTokenResult,
+  SessionsRevokeSharedTokenParams,
   CronJob,
   CronListParams,
   CronStatusParams,
