@@ -540,6 +540,68 @@ describe("speech-core native voice-note routing", () => {
     }
   });
 
+  it("applies auto emotion as a provider override when enabled", async () => {
+    await synthesizeSpeech({
+      text: "Great news, the deployment succeeded!",
+      cfg: {
+        messages: {
+          tts: {
+            enabled: true,
+            provider: "mock",
+            autoEmotion: {
+              enabled: true,
+              allowed: ["happy", "calm", "neutral"],
+              fallback: "neutral",
+            },
+          },
+        },
+      } as OpenClawConfig,
+      disableFallback: true,
+    });
+
+    expect(synthesizeMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providerOverrides: expect.objectContaining({
+          emotion: "happy",
+        }),
+      }),
+    );
+  });
+
+  it("keeps explicit emotion overrides ahead of auto emotion", async () => {
+    await synthesizeSpeech({
+      text: "Great news, the deployment succeeded!",
+      cfg: {
+        messages: {
+          tts: {
+            enabled: true,
+            provider: "mock",
+            autoEmotion: {
+              enabled: true,
+              allowed: ["happy", "calm", "neutral"],
+            },
+          },
+        },
+      } as OpenClawConfig,
+      overrides: {
+        providerOverrides: {
+          mock: {
+            emotion: "calm",
+          },
+        },
+      },
+      disableFallback: true,
+    });
+
+    expect(synthesizeMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providerOverrides: expect.objectContaining({
+          emotion: "calm",
+        }),
+      }),
+    );
+  });
+
   it("does not mark skipped unregistered providers as missing persona bindings", async () => {
     const result = await synthesizeSpeech({
       text: "Use fallback provider.",
