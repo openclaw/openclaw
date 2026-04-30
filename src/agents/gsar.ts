@@ -24,7 +24,7 @@
  * exits early when grounded, halts at budget when not.
  */
 
-import { TerminationCondition, type TerminationState } from "./termination.js";
+import { TerminationCondition, type Awaitable, type TerminationState } from "./termination.js";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -147,7 +147,7 @@ export function evaluateGroundedness(
 
 // ─── TerminationCondition integration ────────────────────────────────────────
 
-export type GSARScorerFn = (replyText: string) => ClaimPartition;
+export type GSARScorerFn = (replyText: string) => Awaitable<ClaimPartition>;
 
 /**
  * TerminationCondition that fires when GSAR says "proceed".
@@ -170,8 +170,8 @@ export class GroundednessCondition extends TerminationCondition {
     super();
   }
 
-  check(state: TerminationState): readonly [boolean, string | null] {
-    const partition = this.scorer(state.replyText);
+  async check(state: TerminationState): Promise<readonly [boolean, string | null]> {
+    const partition = await this.scorer(state.replyText);
     const result = evaluateGroundedness(partition, this.weights, this.thresholds, this.rho);
     this.lastResult = result;
 

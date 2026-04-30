@@ -55,11 +55,11 @@ const INFERENCE_WEIGHTS: EvidenceWeights = {
 
 type Turn = { reply: string; partition: ClaimPartition };
 
-function loop(
+async function loop(
   cond: TerminationCondition,
   turns: Turn[],
   maxTurns = turns.length,
-): { turnsUsed: number; reason: string | null; score: number } {
+): Promise<{ turnsUsed: number; reason: string | null; score: number }> {
   cond.reset();
   const startedAt = Date.now();
   let turnsUsed = 0;
@@ -74,7 +74,7 @@ function loop(
   for (let i = 0; i < maxTurns && i < turns.length; i++) {
     turnsUsed = i + 1;
     lastPartition = turns[i].partition;
-    const [stop, r] = cond.check({ turn: turnsUsed, replyText: turns[i].reply, startedAt });
+    const [stop, r] = await cond.check({ turn: turnsUsed, replyText: turns[i].reply, startedAt });
     if (stop) {
       reason = r;
       break;
@@ -130,13 +130,13 @@ describe("web research — Anthropic API rate limits query", () => {
     },
   ];
 
-  it("flat MaxIterations always burns 5 turns even when grounded at turn 3", () => {
-    const r = loop(new MaxIterations(5), turns, 5);
+  it("flat MaxIterations always burns 5 turns even when grounded at turn 3", async () => {
+    const r = await loop(new MaxIterations(5), turns, 5);
     expect(r.turnsUsed).toBe(5);
   });
 
-  it("GSAR exits at turn 3 when web evidence grounds the claims", () => {
-    const r = loop(
+  it("GSAR exits at turn 3 when web evidence grounds the claims", async () => {
+    const r = await loop(
       gsarOr(
         turns.map((t) => t.partition),
         WEB_WEIGHTS,
@@ -190,12 +190,12 @@ describe("message drafting — standup update to team channel", () => {
   const groundedContent = new GroundednessCondition(scorer(turns.map((t) => t.partition)));
   const cond = sendConfirmed.and(groundedContent).or(new MaxIterations(3));
 
-  it("exits at turn 2 when send is confirmed AND content is grounded", () => {
-    const r = loop(cond, turns);
+  it("exits at turn 2 when send is confirmed AND content is grounded", async () => {
+    const r = await loop(cond, turns);
     expect(r.turnsUsed).toBe(2);
   });
 
-  it("does NOT exit at turn 1 even if send were somehow triggered — content is ungrounded", () => {
+  it("does NOT exit at turn 1 even if send were somehow triggered — content is ungrounded", async () => {
     // Simulate turn 1 with a fake [send confirmed] in the reply but ungrounded content
     const adversarial: Turn[] = [
       {
@@ -210,7 +210,7 @@ describe("message drafting — standup update to team channel", () => {
     const c = new TextMention("[send confirmed]")
       .and(new GroundednessCondition(scorer(adversarial.map((t) => t.partition))))
       .or(new MaxIterations(3));
-    const r = loop(c, adversarial);
+    const r = await loop(c, adversarial);
     expect(r.turnsUsed).toBe(2); // blocked at turn 1, exits at turn 2
   });
 });
@@ -257,10 +257,10 @@ describe("code review — PR #74360 SSRF fix analysis", () => {
     expect(s).toBeGreaterThanOrEqual(0.8);
   });
 
-  it("GSAR with tool_match weights exits at turn 2 (5 grounded claims outweigh 1 contradiction)", () => {
+  it("GSAR with tool_match weights exits at turn 2 (5 grounded claims outweigh 1 contradiction)", async () => {
     // p(5,0,1,1): S = (5*1.0 + 1*0.5)/(5 + 0 + 1*1.0 + 0.5) = 5.5/6.5 ≈ 0.846 → proceed
     // The contradiction doesn't drag the score below 0.80 when grounded evidence dominates.
-    const r = loop(
+    const r = await loop(
       gsarOr(
         turns.map((t) => t.partition),
         TOOL_MATCH_WEIGHTS,
@@ -318,8 +318,8 @@ describe("A2A delegation — shell-grounded system metrics", () => {
     expect(s).toBe(1.0);
   });
 
-  it("GSAR exits at turn 2 when shell evidence grounds all claims", () => {
-    const r = loop(
+  it("GSAR exits at turn 2 when shell evidence grounds all claims", async () => {
+    const r = await loop(
       gsarOr(
         turns.map((t) => t.partition),
         TOOL_MATCH_WEIGHTS,
@@ -331,13 +331,13 @@ describe("A2A delegation — shell-grounded system metrics", () => {
   });
 
   // The A2A ping-pong loop with termination condition wired (sessions-send-tool.a2a.ts)
-  it("A2A budget of maxPingPongTurns=3 with GSAR exits early without wasting turns", () => {
+  it("A2A budget of maxPingPongTurns=3 with GSAR exits early without wasting turns", async () => {
     const cond = gsarOr(
       turns.map((t) => t.partition),
       TOOL_MATCH_WEIGHTS,
       3,
     );
-    const r = loop(cond, turns, 3);
+    const r = await loop(cond, turns, 3);
     expect(r.turnsUsed).toBe(2); // saves 1 turn vs maxPingPongTurns=3
   });
 });
@@ -368,13 +368,13 @@ describe("scheduled digest — PR summary with time budget", () => {
   const timeCond = new TimeLimit(60);
   const cond = gsarCond.or(timeCond).or(new MaxIterations(10));
 
-  it("exits at turn 2 when gh output grounds the summary", () => {
-    const r = loop(cond, turns);
+  it("exits at turn 2 when gh output grounds the summary", async () => {
+    const r = await loop(cond, turns);
     expect(r.turnsUsed).toBe(2);
     expect(r.reason).toMatch(/grounded:proceed/);
   });
 
-  it("TimeLimit fires if tool calls take too long (simulated 90s elapsed)", () => {
+  it("TimeLimit fires if tool calls take too long (simulated 90s elapsed)", async () => {
     const slowCond = new GroundednessCondition(
       scorer(turns.map((t) => t.partition)),
       TOOL_MATCH_WEIGHTS,
@@ -383,7 +383,7 @@ describe("scheduled digest — PR summary with time budget", () => {
       .or(new MaxIterations(10));
     // Simulate: startedAt is 2 seconds ago
     slowCond.reset();
-    const [stop, reason] = slowCond.check({
+    const [stop, reason] = await slowCond.check({
       turn: 1,
       replyText: turns[0].reply,
       startedAt: Date.now() - 2000,
@@ -392,7 +392,7 @@ describe("scheduled digest — PR summary with time budget", () => {
     expect(reason).toBe("time_limit");
   });
 
-  it("three-way fallback hierarchy: GSAR → TimeLimit → MaxIterations", () => {
+  it("three-way fallback hierarchy: GSAR → TimeLimit → MaxIterations", async () => {
     // If GSAR never fires and TimeLimit never fires, MaxIterations is the final backstop
     const neverGrounded = new GroundednessCondition(
       () => ({ grounded: 0, ungrounded: 5, contradicted: 0, complementary: 0 }),
@@ -400,7 +400,7 @@ describe("scheduled digest — PR summary with time budget", () => {
     )
       .or(new TimeLimit(999))
       .or(new MaxIterations(3));
-    const r = loop(
+    const r = await loop(
       neverGrounded,
       Array.from({ length: 5 }, (_, i) => ({
         reply: `Turn ${i + 1}: still searching...`,
@@ -550,39 +550,44 @@ describe("Anthropic vs OpenAI — full OpenClaw task suite", () => {
     },
   ];
 
-  function runProvider(provider: Provider, budget = 5) {
-    return tasks.map((task) => {
-      const turns = provider === "claude-3-7-sonnet" ? task.claude : task.gpt;
-      const cond = new GroundednessCondition(
-        scorer(turns.map((t) => t.partition)),
-        task.weights,
-      ).or(new MaxIterations(budget));
-      return loop(cond, turns, budget);
-    });
+  async function runProvider(provider: Provider, budget = 5) {
+    return Promise.all(
+      tasks.map((task) => {
+        const turns = provider === "claude-3-7-sonnet" ? task.claude : task.gpt;
+        const cond = new GroundednessCondition(
+          scorer(turns.map((t) => t.partition)),
+          task.weights,
+        ).or(new MaxIterations(budget));
+        return loop(cond, turns, budget);
+      }),
+    );
   }
 
-  it("Claude grounds all tasks in ≤2 turns on average", () => {
-    const results = runProvider("claude-3-7-sonnet");
+  it("Claude grounds all tasks in ≤2 turns on average", async () => {
+    const results = await runProvider("claude-3-7-sonnet");
     const avg = results.reduce((s, r) => s + r.turnsUsed, 0) / results.length;
     expect(avg).toBeLessThanOrEqual(2);
     expect(results.every((r) => r.reason?.includes("grounded:proceed"))).toBe(true);
   });
 
-  it("GPT-4o takes more turns and only proceeds via GSAR scoring (never via text signal)", () => {
-    const results = runProvider("gpt-4o");
+  it("GPT-4o takes more turns and only proceeds via GSAR scoring (never via text signal)", async () => {
+    const results = await runProvider("gpt-4o");
     const avg = results.reduce((s, r) => s + r.turnsUsed, 0) / results.length;
     expect(avg).toBeGreaterThan(2);
   });
 
-  it("Claude uses fewer total turns than GPT across all tasks", () => {
-    const claudeTotal = runProvider("claude-3-7-sonnet").reduce((s, r) => s + r.turnsUsed, 0);
-    const gptTotal = runProvider("gpt-4o").reduce((s, r) => s + r.turnsUsed, 0);
+  it("Claude uses fewer total turns than GPT across all tasks", async () => {
+    const claudeTotal = (await runProvider("claude-3-7-sonnet")).reduce(
+      (s, r) => s + r.turnsUsed,
+      0,
+    );
+    const gptTotal = (await runProvider("gpt-4o")).reduce((s, r) => s + r.turnsUsed, 0);
     expect(claudeTotal).toBeLessThan(gptTotal);
   });
 
-  it("both providers exit with grounded output (score ≥ 0.80) — quality is equal", () => {
-    const claudeResults = runProvider("claude-3-7-sonnet");
-    const gptResults = runProvider("gpt-4o");
+  it("both providers exit with grounded output (score ≥ 0.80) — quality is equal", async () => {
+    const claudeResults = await runProvider("claude-3-7-sonnet");
+    const gptResults = await runProvider("gpt-4o");
     for (const r of [...claudeResults, ...gptResults]) {
       if (r.reason?.includes("grounded:proceed")) {
         expect(r.score).toBeGreaterThanOrEqual(0.8);
@@ -590,21 +595,27 @@ describe("Anthropic vs OpenAI — full OpenClaw task suite", () => {
     }
   });
 
-  it("flat MaxIterations: Claude and GPT are indistinguishable — all burn 5 turns", () => {
-    const flat = (provider: Provider) =>
-      tasks.reduce((s, task) => {
+  it("flat MaxIterations: Claude and GPT are indistinguishable — all burn 5 turns", async () => {
+    const flat = async (provider: Provider) => {
+      let total = 0;
+      for (const task of tasks) {
         const turns = provider === "claude-3-7-sonnet" ? task.claude : task.gpt;
-        const r = loop(new MaxIterations(5), turns, 5);
-        return s + r.turnsUsed;
-      }, 0);
-    expect(flat("claude-3-7-sonnet")).toBe(flat("gpt-4o"));
+        const r = await loop(new MaxIterations(5), turns, 5);
+        total += r.turnsUsed;
+      }
+      return total;
+    };
+    expect(await flat("claude-3-7-sonnet")).toBe(await flat("gpt-4o"));
   });
 
-  it("cost summary: GSAR+algebra saves turns proportional to how early models ground claims", () => {
-    const claudeFlat = tasks.reduce((s, t) => s + 5, 0); // always 5
-    const claudeGsar = runProvider("claude-3-7-sonnet").reduce((s, r) => s + r.turnsUsed, 0);
-    const gptFlat = tasks.reduce((s, t) => s + 5, 0);
-    const gptGsar = runProvider("gpt-4o").reduce((s, r) => s + r.turnsUsed, 0);
+  it("cost summary: GSAR+algebra saves turns proportional to how early models ground claims", async () => {
+    const claudeFlat = tasks.reduce((s) => s + 5, 0); // always 5
+    const claudeGsar = (await runProvider("claude-3-7-sonnet")).reduce(
+      (s, r) => s + r.turnsUsed,
+      0,
+    );
+    const gptFlat = tasks.reduce((s) => s + 5, 0);
+    const gptGsar = (await runProvider("gpt-4o")).reduce((s, r) => s + r.turnsUsed, 0);
 
     const claudeSavingPct = ((claudeFlat - claudeGsar) / claudeFlat) * 100;
     const gptSavingPct = ((gptFlat - gptGsar) / gptFlat) * 100;

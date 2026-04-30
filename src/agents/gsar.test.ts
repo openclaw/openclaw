@@ -34,16 +34,16 @@ const p = (g: number, u: number, x: number, k: number): ClaimPartition => ({
   complementary: k,
 });
 
-function runRecoveryLoop(
+async function runRecoveryLoop(
   condition: TerminationCondition,
   turns: { reply: string; partition: ClaimPartition }[],
   maxTurns = turns.length,
-): {
+): Promise<{
   turnsUsed: number;
   exitReason: string | null;
   finalReply: string;
   finalScore: number;
-} {
+}> {
   condition.reset();
   const startedAt = Date.now();
   let turnsUsed = 0;
@@ -55,7 +55,7 @@ function runRecoveryLoop(
     const { reply } = turns[i];
     finalReply = reply;
     turnsUsed = turn;
-    const [stop, reason] = condition.check({ turn, replyText: reply, startedAt });
+    const [stop, reason] = await condition.check({ turn, replyText: reply, startedAt });
     if (stop) {
       exitReason = reason;
       break;
@@ -70,11 +70,11 @@ function runRecoveryLoop(
 // ─── 1. Six structural properties (P1–P6) ───────────────────────────────────
 
 describe("P1 — Boundedness: S ∈ [0, 1]", () => {
-  it("score is 0 when partition is empty", () => {
+  it("score is 0 when partition is empty", async () => {
     expect(computeGroundednessScore(p(0, 0, 0, 0))).toBe(0);
   });
 
-  it("score is 1 when all claims are grounded and no denominator expansion", () => {
+  it("score is 1 when all claims are grounded and no denominator expansion", async () => {
     expect(computeGroundednessScore(p(5, 0, 0, 0))).toBe(1);
   });
 
@@ -95,13 +95,13 @@ describe("P1 — Boundedness: S ∈ [0, 1]", () => {
 });
 
 describe("P2 — Grounded monotonicity: moving a claim from U→G never decreases S", () => {
-  it("adding a grounded claim (removing ungrounded) strictly increases S", () => {
+  it("adding a grounded claim (removing ungrounded) strictly increases S", async () => {
     const before = computeGroundednessScore(p(2, 2, 0, 0)); // S = 2/4 = 0.5
     const after = computeGroundednessScore(p(3, 1, 0, 0)); // S = 3/4 = 0.75
     expect(after).toBeGreaterThan(before);
   });
 
-  it("score is monotone across a U→G migration path", () => {
+  it("score is monotone across a U→G migration path", async () => {
     const scores = [0, 1, 2, 3, 4].map((g) => computeGroundednessScore(p(g, 4 - g, 0, 0)));
     for (let i = 1; i < scores.length; i++) {
       expect(scores[i]).toBeGreaterThanOrEqual(scores[i - 1]);
@@ -110,7 +110,7 @@ describe("P2 — Grounded monotonicity: moving a claim from U→G never decrease
 });
 
 describe("P3 — Contradiction penalty: adding contradicted claims never increases S", () => {
-  it("each additional contradicted claim strictly decreases S", () => {
+  it("each additional contradicted claim strictly decreases S", async () => {
     const scores = [0, 1, 2, 3].map((x) => computeGroundednessScore(p(3, 0, x, 0)));
     for (let i = 1; i < scores.length; i++) {
       expect(scores[i]).toBeLessThan(scores[i - 1]);
@@ -119,13 +119,13 @@ describe("P3 — Contradiction penalty: adding contradicted claims never increas
 });
 
 describe("P4 — Complementary value: K contributes positively but ≤ equivalent G", () => {
-  it("adding a complementary claim increases S", () => {
+  it("adding a complementary claim increases S", async () => {
     const base = computeGroundednessScore(p(2, 2, 0, 0));
     const withK = computeGroundednessScore(p(2, 2, 0, 1));
     expect(withK).toBeGreaterThan(base);
   });
 
-  it("equivalent K contributes less than equivalent G", () => {
+  it("equivalent K contributes less than equivalent G", async () => {
     // Same denominator expansion, but K weight (0.5) < G weight (1.0)
     const withG = computeGroundednessScore(p(3, 2, 0, 0));
     const withK = computeGroundednessScore(p(2, 2, 0, 1));
@@ -134,13 +134,13 @@ describe("P4 — Complementary value: K contributes positively but ≤ equivalen
 });
 
 describe("P5 — Contradiction non-suppression: X stays in denominator with ρ", () => {
-  it("score with contradiction < score without contradiction (same other claims)", () => {
+  it("score with contradiction < score without contradiction (same other claims)", async () => {
     const withX = computeGroundednessScore(p(3, 0, 1, 0), DEFAULT_WEIGHTS, 1.0);
     const withoutX = computeGroundednessScore(p(3, 0, 0, 0));
     expect(withX).toBeLessThan(withoutX);
   });
 
-  it("higher ρ (contradiction penalty) further reduces S", () => {
+  it("higher ρ (contradiction penalty) further reduces S", async () => {
     const low = computeGroundednessScore(p(3, 0, 2, 0), DEFAULT_WEIGHTS, 0.5);
     const high = computeGroundednessScore(p(3, 0, 2, 0), DEFAULT_WEIGHTS, 1.5);
     expect(high).toBeLessThan(low);
@@ -148,7 +148,7 @@ describe("P5 — Contradiction non-suppression: X stays in denominator with ρ",
 });
 
 describe("P6 — Inference-observation asymmetry: w(inference) < w(tool_match) decreases S", () => {
-  it("replacing tool_match weights with inference weights strictly decreases S", () => {
+  it("replacing tool_match weights with inference weights strictly decreases S", async () => {
     const toolMatchWeights: EvidenceWeights = {
       grounded: 1.0,
       complementary: 0.5,
@@ -171,19 +171,19 @@ describe("P6 — Inference-observation asymmetry: w(inference) < w(tool_match) d
 // ─── 2. Decision function ────────────────────────────────────────────────────
 
 describe("three-tier decision function δ(S)", () => {
-  it("proceed at S ≥ 0.80", () => {
+  it("proceed at S ≥ 0.80", async () => {
     expect(gsarDecision(0.8)).toBe("proceed");
     expect(gsarDecision(0.95)).toBe("proceed");
     expect(gsarDecision(1.0)).toBe("proceed");
   });
 
-  it("regenerate at 0.65 ≤ S < 0.80", () => {
+  it("regenerate at 0.65 ≤ S < 0.80", async () => {
     expect(gsarDecision(0.65)).toBe("regenerate");
     expect(gsarDecision(0.72)).toBe("regenerate");
     expect(gsarDecision(0.799)).toBe("regenerate");
   });
 
-  it("replan at S < 0.65", () => {
+  it("replan at S < 0.65", async () => {
     expect(gsarDecision(0.0)).toBe("replan");
     expect(gsarDecision(0.5)).toBe("replan");
     expect(gsarDecision(0.649)).toBe("replan");
@@ -207,31 +207,31 @@ describe("scenario A — grounded provider (Claude-like): exits at turn 1", () =
     { reply: "Never reached", partition: p(0, 0, 0, 0) },
   ];
 
-  it("GSAR condition exits at turn 1 with proceed", () => {
+  it("GSAR condition exits at turn 1 with proceed", async () => {
     const scorer = makeScorer(turns.map((t) => t.partition));
     const cond = new GroundednessCondition(scorer);
-    const result = runRecoveryLoop(cond.or(new MaxIterations(5)), turns);
+    const result = await runRecoveryLoop(cond.or(new MaxIterations(5)), turns);
     expect(result.turnsUsed).toBe(1);
     expect(result.exitReason).toMatch(/grounded:proceed/);
     expect(result.finalScore).toBeGreaterThanOrEqual(0.8);
   });
 
-  it("flat MaxIterations(5) runs all 5 turns regardless", () => {
-    const result = runRecoveryLoop(
+  it("flat MaxIterations(5) runs all 5 turns regardless", async () => {
+    const result = await runRecoveryLoop(
       new MaxIterations(5),
       Array.from({ length: 5 }, (_, i) => ({ reply: `Turn ${i + 1}`, partition: p(4, 0, 0, 1) })),
     );
     expect(result.turnsUsed).toBe(5);
   });
 
-  it("GSAR saves 4 turns compared to flat (80% reduction)", () => {
+  it("GSAR saves 4 turns compared to flat (80% reduction)", async () => {
     const scorer = makeScorer(turns.map((t) => t.partition));
-    const gsarResult = runRecoveryLoop(
+    const gsarResult = await runRecoveryLoop(
       new GroundednessCondition(scorer).or(new MaxIterations(5)),
       turns,
       5,
     );
-    const flatResult = runRecoveryLoop(
+    const flatResult = await runRecoveryLoop(
       new MaxIterations(5),
       Array.from({ length: 5 }, () => turns[0]),
     );
@@ -251,29 +251,29 @@ describe("scenario B — recovering provider: improves over iterations", () => {
     { reply: "Never reached", partition: p(0, 0, 0, 0) },
   ];
 
-  it("GSAR exits at turn 3 (first grounded response)", () => {
+  it("GSAR exits at turn 3 (first grounded response)", async () => {
     const scorer = makeScorer(turns.map((t) => t.partition));
     const cond = new GroundednessCondition(scorer).or(new MaxIterations(5));
-    const result = runRecoveryLoop(cond, turns);
+    const result = await runRecoveryLoop(cond, turns);
     expect(result.turnsUsed).toBe(3);
     expect(result.exitReason).toMatch(/grounded:proceed/);
   });
 
-  it("flat MaxIterations(5) exits at turn 5 accepting any quality", () => {
-    const result = runRecoveryLoop(new MaxIterations(5), turns, 5);
+  it("flat MaxIterations(5) exits at turn 5 accepting any quality", async () => {
+    const result = await runRecoveryLoop(new MaxIterations(5), turns, 5);
     expect(result.turnsUsed).toBe(5);
     // Exit reply is "Never reached" — not the good response at turn 3
     expect(result.finalReply).toBe("Never reached");
   });
 
-  it("GSAR selects the grounded reply; flat MaxIterations does not", () => {
+  it("GSAR selects the grounded reply; flat MaxIterations does not", async () => {
     const scorer = makeScorer(turns.map((t) => t.partition));
-    const gsarResult = runRecoveryLoop(
+    const gsarResult = await runRecoveryLoop(
       new GroundednessCondition(scorer).or(new MaxIterations(5)),
       turns,
       5,
     );
-    const flatResult = runRecoveryLoop(new MaxIterations(5), turns, 5);
+    const flatResult = await runRecoveryLoop(new MaxIterations(5), turns, 5);
 
     expect(gsarResult.finalScore).toBeGreaterThanOrEqual(0.8); // grounded output
     expect(flatResult.finalScore).toBe(0); // "Never reached" → empty partition
@@ -286,15 +286,15 @@ describe("scenario C — hallucinating provider: never improves, hits budget", (
     partition: p(0, 3, 2, 0), // low score: S = 0 / (0 + 0 + 2 + 0) = 0
   }));
 
-  it("GSAR hits MaxIterations budget (termination still guaranteed)", () => {
+  it("GSAR hits MaxIterations budget (termination still guaranteed)", async () => {
     const scorer = makeScorer(turns.map((t) => t.partition));
     const cond = new GroundednessCondition(scorer).or(new MaxIterations(5));
-    const result = runRecoveryLoop(cond, turns);
+    const result = await runRecoveryLoop(cond, turns);
     expect(result.turnsUsed).toBe(5);
     expect(result.exitReason).toBe("max_iterations");
   });
 
-  it("final score is low — caller can detect degraded output via score", () => {
+  it("final score is low — caller can detect degraded output via score", async () => {
     const partition = p(0, 3, 2, 0);
     expect(computeGroundednessScore(partition)).toBe(0);
   });
@@ -336,10 +336,10 @@ describe("joint improvement — GSAR × termination algebra", () => {
     ],
   };
 
-  function run(
+  async function run(
     provider: Provider,
     strategy: "flat" | "algebra_only" | "gsar_algebra",
-  ): { turnsUsed: number; finalScore: number } {
+  ): Promise<{ turnsUsed: number; finalScore: number }> {
     const turns = providerTurns[provider];
     let cond: TerminationCondition;
 
@@ -353,13 +353,13 @@ describe("joint improvement — GSAR × termination algebra", () => {
       cond = new GroundednessCondition(scorer).or(new MaxIterations(5));
     }
 
-    return runRecoveryLoop(cond, turns);
+    return await runRecoveryLoop(cond, turns);
   }
 
-  it("claude: all strategies exit quickly, GSAR confirms groundedness", () => {
-    const flat = run("claude", "flat");
-    const algebra = run("claude", "algebra_only");
-    const joint = run("claude", "gsar_algebra");
+  it("claude: all strategies exit quickly, GSAR confirms groundedness", async () => {
+    const flat = await run("claude", "flat");
+    const algebra = await run("claude", "algebra_only");
+    const joint = await run("claude", "gsar_algebra");
 
     expect(flat.turnsUsed).toBe(5); // flat wastes turns
     expect(algebra.turnsUsed).toBe(1); // TextMention("DONE") fires at turn 1
@@ -367,10 +367,10 @@ describe("joint improvement — GSAR × termination algebra", () => {
     expect(joint.finalScore).toBeGreaterThanOrEqual(0.8); // quality confirmed
   });
 
-  it("gpt: algebra exits late (no DONE marker), GSAR exits when grounded", () => {
-    const flat = run("gpt", "flat");
-    const algebra = run("gpt", "algebra_only");
-    const joint = run("gpt", "gsar_algebra");
+  it("gpt: algebra exits late (no DONE marker), GSAR exits when grounded", async () => {
+    const flat = await run("gpt", "flat");
+    const algebra = await run("gpt", "algebra_only");
+    const joint = await run("gpt", "gsar_algebra");
 
     expect(flat.turnsUsed).toBe(5);
     expect(algebra.turnsUsed).toBe(5); // GPT never says "DONE" → algebra can't help
@@ -378,9 +378,9 @@ describe("joint improvement — GSAR × termination algebra", () => {
     expect(joint.finalScore).toBeGreaterThanOrEqual(0.8);
   });
 
-  it("hallucinator: only MaxIterations saves it — all strategies hit budget, but GSAR signals degraded", () => {
-    const flat = run("hallucinator", "flat");
-    const joint = run("hallucinator", "gsar_algebra");
+  it("hallucinator: only MaxIterations saves it — all strategies hit budget, but GSAR signals degraded", async () => {
+    const flat = await run("hallucinator", "flat");
+    const joint = await run("hallucinator", "gsar_algebra");
 
     expect(flat.turnsUsed).toBe(5);
     expect(joint.turnsUsed).toBe(5);
@@ -388,10 +388,10 @@ describe("joint improvement — GSAR × termination algebra", () => {
     expect(joint.finalScore).toBe(0);
   });
 
-  it("recovering: algebra exits late (no DONE early), GSAR exits at turn 3 when grounded", () => {
-    const flat = run("recovering", "flat");
-    const algebra = run("recovering", "algebra_only");
-    const joint = run("recovering", "gsar_algebra");
+  it("recovering: algebra exits late (no DONE early), GSAR exits at turn 3 when grounded", async () => {
+    const flat = await run("recovering", "flat");
+    const algebra = await run("recovering", "algebra_only");
+    const joint = await run("recovering", "gsar_algebra");
 
     expect(flat.turnsUsed).toBe(5);
     expect(algebra.turnsUsed).toBe(3); // "DONE" appears at turn 3
@@ -399,14 +399,16 @@ describe("joint improvement — GSAR × termination algebra", () => {
     expect(joint.finalScore).toBeGreaterThanOrEqual(0.8);
   });
 
-  it("joint improvement summary: GSAR+algebra wins on both efficiency and quality", () => {
+  it("joint improvement summary: GSAR+algebra wins on both efficiency and quality", async () => {
     const providers: Provider[] = ["claude", "gpt", "hallucinator", "recovering"];
-    const results = providers.map((p) => ({
-      provider: p,
-      flat: run(p, "flat"),
-      algebra: run(p, "algebra_only"),
-      joint: run(p, "gsar_algebra"),
-    }));
+    const results = await Promise.all(
+      providers.map(async (p) => ({
+        provider: p,
+        flat: await run(p, "flat"),
+        algebra: await run(p, "algebra_only"),
+        joint: await run(p, "gsar_algebra"),
+      })),
+    );
 
     // Total turns: joint ≤ algebra ≤ flat across all providers
     const totalFlat = results.reduce((s, r) => s + r.flat.turnsUsed, 0);
