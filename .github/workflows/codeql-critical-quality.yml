@@ -10,16 +10,26 @@ on:
         type: choice
         options:
           - all
+          - plugin-boundary
           - plugin-sdk-package-contract
           - plugin-sdk-reply-runtime
           - provider-runtime-boundary
           - session-diagnostics-boundary
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - ".github/codeql/**"
+      - ".github/workflows/codeql-critical-quality.yml"
+      - "packages/plugin-package-contract/**"
+      - "packages/plugin-sdk/**"
+      - "src/plugin-sdk/**"
+      - "src/plugins/**"
   schedule:
     - cron: "30 6 * * *"
 
 concurrency:
-  group: codeql-critical-quality-${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.sha }}
-  cancel-in-progress: false
+  group: codeql-critical-quality-${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.event_name == 'pull_request' && github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
@@ -32,7 +42,7 @@ permissions:
 jobs:
   core-auth-secrets:
     name: Critical Quality (core-auth-secrets)
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.profile == 'all' }}
+    if: ${{ github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || inputs.profile == 'all') }}
     runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 25
     steps:
@@ -54,7 +64,7 @@ jobs:
 
   config-boundary:
     name: Critical Quality (config-boundary)
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.profile == 'all' }}
+    if: ${{ github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || inputs.profile == 'all') }}
     runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 25
     steps:
@@ -76,7 +86,7 @@ jobs:
 
   gateway-runtime-boundary:
     name: Critical Quality (gateway-runtime-boundary)
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.profile == 'all' }}
+    if: ${{ github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || inputs.profile == 'all') }}
     runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 25
     steps:
@@ -98,7 +108,7 @@ jobs:
 
   channel-runtime-boundary:
     name: Critical Quality (channel-runtime-boundary)
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.profile == 'all' }}
+    if: ${{ github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || inputs.profile == 'all') }}
     runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 25
     steps:
@@ -120,7 +130,7 @@ jobs:
 
   agent-runtime-boundary:
     name: Critical Quality (agent-runtime-boundary)
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.profile == 'all' }}
+    if: ${{ github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || inputs.profile == 'all') }}
     runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 25
     steps:
@@ -142,7 +152,7 @@ jobs:
 
   mcp-process-runtime-boundary:
     name: Critical Quality (mcp-process-runtime-boundary)
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.profile == 'all' }}
+    if: ${{ github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || inputs.profile == 'all') }}
     runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 25
     steps:
@@ -164,7 +174,7 @@ jobs:
 
   memory-runtime-boundary:
     name: Critical Quality (memory-runtime-boundary)
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.profile == 'all' }}
+    if: ${{ github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || inputs.profile == 'all') }}
     runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 25
     steps:
@@ -186,7 +196,7 @@ jobs:
 
   session-diagnostics-boundary:
     name: Critical Quality (session-diagnostics-boundary)
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.profile == 'all' || inputs.profile == 'session-diagnostics-boundary' }}
+    if: ${{ github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || inputs.profile == 'all' || inputs.profile == 'session-diagnostics-boundary') }}
     runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 25
     steps:
@@ -208,7 +218,7 @@ jobs:
 
   plugin-sdk-reply-runtime:
     name: Critical Quality (plugin-sdk-reply-runtime)
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.profile == 'all' || inputs.profile == 'plugin-sdk-reply-runtime' }}
+    if: ${{ github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || inputs.profile == 'all' || inputs.profile == 'plugin-sdk-reply-runtime') }}
     runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 25
     steps:
@@ -230,7 +240,7 @@ jobs:
 
   provider-runtime-boundary:
     name: Critical Quality (provider-runtime-boundary)
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.profile == 'all' || inputs.profile == 'provider-runtime-boundary' }}
+    if: ${{ github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || inputs.profile == 'all' || inputs.profile == 'provider-runtime-boundary') }}
     runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 25
     steps:
@@ -252,7 +262,7 @@ jobs:
 
   ui-control-plane:
     name: Critical Quality (ui-control-plane)
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.profile == 'all' }}
+    if: ${{ github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || inputs.profile == 'all') }}
     runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 25
     steps:
@@ -274,7 +284,7 @@ jobs:
 
   web-media-runtime-boundary:
     name: Critical Quality (web-media-runtime-boundary)
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.profile == 'all' }}
+    if: ${{ github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || inputs.profile == 'all') }}
     runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 25
     steps:
@@ -296,7 +306,7 @@ jobs:
 
   plugin-boundary:
     name: Critical Quality (plugin-boundary)
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.profile == 'all' }}
+    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (github.event_name == 'pull_request' || github.event_name != 'workflow_dispatch' || inputs.profile == 'all' || inputs.profile == 'plugin-boundary') }}
     runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 25
     steps:
@@ -318,7 +328,7 @@ jobs:
 
   plugin-sdk-package-contract:
     name: Critical Quality (plugin-sdk-package-contract)
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.profile == 'all' || inputs.profile == 'plugin-sdk-package-contract' }}
+    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (github.event_name == 'pull_request' || github.event_name != 'workflow_dispatch' || inputs.profile == 'all' || inputs.profile == 'plugin-sdk-package-contract') }}
     runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 25
     steps:
