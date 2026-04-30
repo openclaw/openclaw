@@ -114,4 +114,55 @@ describe("resolveImplicitProviders startup discovery scope", () => {
       }),
     );
   });
+
+  it("preserves GitHub Copilot IDE headers when explicit headers are configured", async () => {
+    mocks.resolveRuntimePluginDiscoveryProviders.mockResolvedValueOnce([
+      createProvider("github-copilot"),
+    ]);
+    mocks.runProviderCatalog.mockResolvedValueOnce({
+      providers: {
+        "github-copilot": {
+          baseUrl: "https://api.githubcopilot.test",
+          headers: {
+            "User-Agent": "GitHubCopilotChat/0.35.0",
+            "Editor-Version": "vscode/1.107.0",
+            "Editor-Plugin-Version": "copilot-chat/0.35.0",
+            "Copilot-Integration-Id": "vscode-chat",
+          },
+          models: [{ id: "gpt-new", name: "gpt-new" }],
+        },
+      },
+    });
+
+    await expect(
+      resolveImplicitProviders({
+        agentDir: "/tmp/openclaw-agent",
+        config: {
+          models: {
+            providers: {
+              "github-copilot": {
+                headers: {
+                  "X-Proxy-Auth": "proxy-token",
+                },
+              },
+            },
+          },
+        },
+        env: {} as NodeJS.ProcessEnv,
+        explicitProviders: {},
+      }),
+    ).resolves.toEqual({
+      "github-copilot": {
+        baseUrl: "https://api.githubcopilot.test",
+        headers: {
+          "User-Agent": "GitHubCopilotChat/0.35.0",
+          "Editor-Version": "vscode/1.107.0",
+          "Editor-Plugin-Version": "copilot-chat/0.35.0",
+          "Copilot-Integration-Id": "vscode-chat",
+          "X-Proxy-Auth": "proxy-token",
+        },
+        models: [{ id: "gpt-new", name: "gpt-new" }],
+      },
+    });
+  });
 });

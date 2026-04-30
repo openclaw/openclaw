@@ -15,9 +15,12 @@ import {
   resolveDefaultSecretProviderAlias,
   upsertAuthProfileWithLock,
 } from "openclaw/plugin-sdk/provider-auth";
+import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
 import { resolveFirstGithubToken } from "./auth.js";
+import { discoverCopilotModels, COPILOT_IDE_HEADERS } from "./discovery.js";
 import { githubCopilotMemoryEmbeddingProviderAdapter } from "./embeddings.js";
+import { getDefaultCopilotModelIds } from "./models-defaults.js";
 import { PROVIDER_ID, resolveCopilotForwardCompatModel } from "./models.js";
 import { buildGithubCopilotReplayPolicy } from "./replay-policy.js";
 import { wrapCopilotProviderStream } from "./stream.js";
@@ -35,6 +38,16 @@ type GithubCopilotPluginConfig = {
 
 async function loadGithubCopilotRuntime() {
   return await import("./register.runtime.js");
+}
+
+function resolveStringHeaders(headers: unknown): Record<string, string> | undefined {
+  if (!headers || typeof headers !== "object" || Array.isArray(headers)) {
+    return undefined;
+  }
+  const entries = Object.entries(headers).filter((entry): entry is [string, string] => {
+    return typeof entry[1] === "string";
+  });
+  return entries.length > 0 ? Object.fromEntries(entries) : undefined;
 }
 
 function applyCopilotDefaultModel(cfg: OpenClawConfig): OpenClawConfig {
@@ -373,6 +386,7 @@ export default definePluginEntry({
             return null;
           }
           let baseUrl = DEFAULT_COPILOT_API_BASE_URL;
+          let copilotToken: string | undefined;
           if (githubToken) {
             try {
               const token = await resolveCopilotApiToken({
@@ -380,14 +394,45 @@ export default definePluginEntry({
                 env: ctx.env,
               });
               baseUrl = token.baseUrl;
+              copilotToken = token.token;
             } catch {
               baseUrl = DEFAULT_COPILOT_API_BASE_URL;
             }
           }
+
+          const configuredProvider = ctx.config?.models?.providers?.[PROVIDER_ID];
+          const explicitModels = configuredProvider?.models;
+          const hasExplicitModels = Array.isArray(explicitModels)
+            ? explicitModels.length > 0
+            : explicitModels != null && typeof explicitModels === "object"
+              ? Object.keys(explicitModels).length > 0
+              : false;
+          const configuredBaseUrl = configuredProvider?.baseUrl;
+          const discoveryBaseUrl =
+            typeof configuredBaseUrl === "string" && configuredBaseUrl.trim()
+              ? configuredBaseUrl
+              : baseUrl;
+          const extraHeaders = resolveStringHeaders(configuredProvider?.headers);
+
+          let discoveredModels: ModelDefinitionConfig[] = [];
+          if (copilotToken && !hasExplicitModels) {
+            try {
+              discoveredModels = await discoverCopilotModels({
+                baseUrl: discoveryBaseUrl,
+                copilotToken,
+                knownModelIds: new Set(getDefaultCopilotModelIds()),
+                extraHeaders,
+              });
+            } catch {
+              // Best-effort discovery: keep the static catalog usable on errors.
+            }
+          }
+
           return {
             provider: {
               baseUrl,
-              models: [],
+              headers: COPILOT_IDE_HEADERS,
+              models: discoveredModels,
             },
           };
         },
