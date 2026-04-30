@@ -35,10 +35,10 @@ jobs:
         uses: actions/stale@v10
         with:
           repo-token: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}
-          days-before-issue-stale: 7
-          days-before-issue-close: 5
-          days-before-pr-stale: 5
-          days-before-pr-close: 3
+          days-before-issue-stale: 14
+          days-before-issue-close: 7
+          days-before-pr-stale: 14
+          days-before-pr-close: 7
           stale-issue-label: stale
           stale-pr-label: stale
           exempt-issue-labels: enhancement,maintainer,pinned,security,no-stale,bad-barnacle
@@ -95,7 +95,7 @@ jobs:
           days-before-issue-stale: -1
           days-before-issue-close: -1
           days-before-pr-stale: 27
-          days-before-pr-close: 3
+          days-before-pr-close: 7
           stale-pr-label: stale
           exempt-pr-labels: maintainer,no-stale,bad-barnacle
           operations-per-run: 2000
@@ -139,10 +139,10 @@ jobs:
         uses: actions/stale@v10
         with:
           repo-token: ${{ steps.app-token-fallback.outputs.token }}
-          days-before-issue-stale: 7
-          days-before-issue-close: 5
-          days-before-pr-stale: 5
-          days-before-pr-close: 3
+          days-before-issue-stale: 14
+          days-before-issue-close: 7
+          days-before-pr-stale: 14
+          days-before-pr-close: 7
           stale-issue-label: stale
           stale-pr-label: stale
           exempt-issue-labels: enhancement,maintainer,pinned,security,no-stale,bad-barnacle
@@ -197,7 +197,7 @@ jobs:
           days-before-issue-stale: -1
           days-before-issue-close: -1
           days-before-pr-stale: 27
-          days-before-pr-close: 3
+          days-before-pr-close: 7
           stale-pr-label: stale
           exempt-pr-labels: maintainer,no-stale,bad-barnacle
           operations-per-run: 2000
