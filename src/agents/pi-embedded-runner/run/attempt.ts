@@ -2730,6 +2730,11 @@ export async function runEmbeddedAttempt(
               messages: btwSnapshotMessages,
               inFlightPrompt: promptSubmission.prompt,
             });
+            // Guard: skip prompt when already aborted to prevent starting a
+            // floating Agent loop that nobody would abort (#74859).
+            if (aborted || runAbortController.signal.aborted) {
+              throw makeAbortError(runAbortController.signal);
+            }
             if (promptSubmission.runtimeOnly) {
               await abortable(activeSession.prompt(promptSubmission.prompt));
             } else {
@@ -3087,6 +3092,12 @@ export async function runEmbeddedAttempt(
           log.debug(
             `run cleanup: runId=${params.runId} sessionId=${params.sessionId} aborted=${aborted} timedOut=${timedOut}`,
           );
+        }
+        // Safety net: ensure any in-flight Agent loop is torn down when the
+        // attempt is cleaned up. Covers rare race windows where a prompt was
+        // started just before the pre-abort guard fires (#74859).
+        if (aborted || timedOut) {
+          void activeSession.abort();
         }
         try {
           unsubscribe();
