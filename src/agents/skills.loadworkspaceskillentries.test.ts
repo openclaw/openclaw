@@ -237,8 +237,8 @@ describe("loadWorkspaceSkillEntries", () => {
   it("discovers skills nested under workspace skill subdirectories", async () => {
     const workspaceDir = await createTempWorkspaceDir();
     await writeSkill({
-      dir: path.join(workspaceDir, "skills", "coze", "koze-retrieval"),
-      name: "koze-retrieval",
+      dir: path.join(workspaceDir, "skills", "coze", "coze-retrieval"),
+      name: "coze-retrieval",
       description: "Nested retrieval skill",
     });
     await writeSkill({
@@ -249,9 +249,9 @@ describe("loadWorkspaceSkillEntries", () => {
 
     const entries = loadTestWorkspaceSkillEntries(workspaceDir);
 
-    expect(entries.map((entry) => entry.skill.name).sort()).toEqual([
+    expect(entries.map((entry) => entry.skill.name).toSorted()).toEqual([
+      "coze-retrieval",
       "deeper-skill",
-      "koze-retrieval",
     ]);
   });
 
