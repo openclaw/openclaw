@@ -108,8 +108,6 @@ type MutableAssistantOutput = {
   errorMessage?: string;
 };
 
-const GOOGLE_VERTEX_DEFAULT_API_VERSION = "v1";
-
 type GoogleSseChunk = {
   responseId?: string;
   candidates?: Array<{
@@ -137,10 +135,6 @@ type GoogleSseChunk = {
 };
 
 let toolCallCounter = 0;
-
-function normalizeOptionalString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
 
 function requiresToolCallId(modelId: string): boolean {
   return modelId.startsWith("claude-") || modelId.startsWith("gpt-oss-");
