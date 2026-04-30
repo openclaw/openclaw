@@ -1,3 +1,4 @@
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
@@ -165,11 +166,11 @@ describe("memory dreaming host helpers", () => {
 
     expect(resolveMemoryDreamingWorkspaces(cfg)).toEqual([
       {
-        workspaceDir: "/workspace/shared",
+        workspaceDir: path.resolve("/workspace/shared"),
         agentIds: ["alpha", "gamma"],
       },
       {
-        workspaceDir: "/workspace/beta",
+        workspaceDir: path.resolve("/workspace/beta"),
         agentIds: ["beta"],
       },
     ]);
@@ -186,7 +187,7 @@ describe("memory dreaming host helpers", () => {
 
     expect(resolveMemoryDreamingWorkspaces(cfg)).toEqual([
       {
-        workspaceDir: "/workspace",
+        workspaceDir: path.resolve("/workspace"),
         agentIds: ["main"],
       },
     ]);

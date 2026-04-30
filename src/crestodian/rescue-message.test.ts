@@ -253,9 +253,9 @@ describe("Crestodian rescue message", () => {
     const deps = { runAgentsAdd: vi.fn(async () => {}) };
 
     await expect(
-      runRescue("/crestodian create agent work workspace /tmp/work", cfg, commandContext(), deps),
+      runRescue(`/crestodian create agent work workspace ${path.resolve("/tmp/work")}`, cfg, commandContext(), deps),
     ).resolves.toBe(
-      "Plan: create agent work with workspace /tmp/work. Reply /crestodian yes to apply.",
+      `Plan: create agent work with workspace ${path.resolve("/tmp/work")}. Reply /crestodian yes to apply.`,
     );
     await expect(runRescue("/crestodian yes", cfg, commandContext(), deps)).resolves.toContain(
       "[crestodian] done: agents.create",
@@ -265,7 +265,7 @@ describe("Crestodian rescue message", () => {
     expect(deps.runAgentsAdd).toHaveBeenCalledWith(
       {
         name: "work",
-        workspace: "/tmp/work",
+        workspace: path.resolve("/tmp/work"),
         nonInteractive: true,
       },
       expect.any(Object),
@@ -280,7 +280,7 @@ describe("Crestodian rescue message", () => {
         channel: "whatsapp",
         senderId: "user:owner",
         agentId: "work",
-        workspace: "/tmp/work",
+        workspace: path.resolve("/tmp/work"),
       },
     });
   });

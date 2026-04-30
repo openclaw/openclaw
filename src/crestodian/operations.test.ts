@@ -14,7 +14,7 @@ type TestConfig = Record<string, unknown>;
 const mockConfig = vi.hoisted(() => {
   const initial = {};
   const state = {
-    path: "/tmp/openclaw.json",
+    path: require("node:path").resolve("/tmp/openclaw.json"),
     exists: true,
     config: initial as TestConfig,
     hash: "mock-hash-0" as string | undefined,
@@ -40,7 +40,7 @@ const mockConfig = vi.hoisted(() => {
   };
   return {
     reset() {
-      state.path = "/tmp/openclaw.json";
+      state.path = require("node:path").resolve("/tmp/openclaw.json");
       state.exists = true;
       state.config = {};
       state.hash = "mock-hash-0";
@@ -98,7 +98,7 @@ vi.mock("./overview.js", () => ({
       { id: "main", isDefault: true },
       { id: "work", isDefault: false, model: "openai/gpt-5.2" },
     ],
-    config: { path: "/tmp/openclaw.json", exists: true, valid: true, issues: [], hash: null },
+    config: { path: require("node:path").resolve("/tmp/openclaw.json"), exists: true, valid: true, issues: [], hash: null },
     tools: {
       codex: { command: "codex", found: false, error: "not found" },
       claude: { command: "claude", found: false, error: "not found" },
@@ -207,20 +207,20 @@ describe("parseCrestodianOperation", () => {
 
   it("parses agent creation requests", () => {
     expect(
-      parseCrestodianOperation("create agent Work workspace /tmp/work model openai/gpt-5.2"),
+      parseCrestodianOperation(`create agent Work workspace ${path.resolve("/tmp/work")} model openai/gpt-5.2`),
     ).toEqual({
       kind: "create-agent",
       agentId: "work",
-      workspace: "/tmp/work",
+      workspace: path.resolve("/tmp/work"),
       model: "openai/gpt-5.2",
     });
     expect(parseCrestodianOperation("add agent ops")).toEqual({
       kind: "create-agent",
       agentId: "ops",
     });
-    expect(parseCrestodianOperation("setup workspace /tmp/work model openai/gpt-5.5")).toEqual({
+    expect(parseCrestodianOperation(`setup workspace ${path.resolve("/tmp/work")} model openai/gpt-5.5`)).toEqual({
       kind: "setup",
-      workspace: "/tmp/work",
+      workspace: path.resolve("/tmp/work"),
       model: "openai/gpt-5.5",
     });
     expect(parseCrestodianOperation("setup agent ops")).toEqual({
@@ -246,7 +246,7 @@ describe("parseCrestodianOperation", () => {
   });
 
   it("validates missing config without exiting the process", async () => {
-    mockConfig.missing("/tmp/openclaw.json");
+    mockConfig.missing(path.resolve("/tmp/openclaw.json"));
     const { runtime, lines } = createCrestodianTestRuntime();
 
     await expect(
@@ -347,7 +347,7 @@ describe("parseCrestodianOperation", () => {
     const { runtime, lines } = createCrestodianTestRuntime();
 
     const plan = await executeCrestodianOperation(
-      { kind: "setup", workspace: "/tmp/work" },
+      { kind: "setup", workspace: path.resolve("/tmp/work") },
       runtime,
     );
     expect(plan).toMatchObject({
@@ -356,7 +356,7 @@ describe("parseCrestodianOperation", () => {
     expect(lines.join("\n")).toContain("Model choice: openai/gpt-5.5 (OPENAI_API_KEY).");
 
     await expect(
-      executeCrestodianOperation({ kind: "setup", workspace: "/tmp/work" }, runtime, {
+      executeCrestodianOperation({ kind: "setup", workspace: path.resolve("/tmp/work") }, runtime, {
         approved: true,
         auditDetails: { rescue: true },
       }),
@@ -366,7 +366,7 @@ describe("parseCrestodianOperation", () => {
     expect(mockConfig.currentConfig()).toMatchObject({
       agents: {
         defaults: {
-          workspace: "/tmp/work",
+          workspace: path.resolve("/tmp/work"),
           model: { primary: "openai/gpt-5.5" },
         },
       },
@@ -378,7 +378,7 @@ describe("parseCrestodianOperation", () => {
       summary: "Bootstrapped setup with openai/gpt-5.5",
       details: {
         rescue: true,
-        workspace: "/tmp/work",
+        workspace: path.resolve("/tmp/work"),
         model: "openai/gpt-5.5",
         modelSource: "OPENAI_API_KEY",
       },

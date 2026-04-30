@@ -1,0 +1,9 @@
+﻿ΓÇëWARNΓÇë Unsupported engine: wanted: {"node":">=22.14.0"} (current: {"node":"v22.11.0","pnpm":"8.15.3"})
+
+> openclaw@2026.4.27 test C:\Users\sekha\OneDrive\Desktop\clw
+> node scripts/test-projects.mjs "src/agents/dreaming-config.test.ts"
+
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.5 [39m[90mC:/Users/sekha/OneDrive/Desktop/clw[39m
+
+ΓÇëELIFECYCLEΓÇë Test failed. See above for more details.
