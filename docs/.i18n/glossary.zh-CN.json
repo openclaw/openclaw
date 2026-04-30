@@ -52,6 +52,10 @@
     "target": "Agent loop"
   },
   {
+    "source": "Steering queue",
+    "target": "Steering queue"
+  },
+  {
     "source": "Models",
     "target": "Models"
   },

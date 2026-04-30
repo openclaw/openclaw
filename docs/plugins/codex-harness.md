@@ -946,6 +946,14 @@ originating chat, and the next queued follow-up message answers that native
 server request instead of being steered as extra context. Other MCP elicitation
 requests still fail closed.
 
+Active-run queue steering maps onto Codex app-server `turn/steer`. With the
+default `messages.queue.mode: "steer"`, OpenClaw batches queued chat messages
+for the configured quiet window and sends them as one `turn/steer` request in
+arrival order. Legacy `queue` mode sends separate `turn/steer` requests. Codex
+review and manual compaction turns can reject same-turn steering, in which case
+OpenClaw uses the followup queue when the selected mode allows fallback. See
+[Steering queue](/concepts/queue-steering).
+
 When the selected model uses the Codex harness, native thread compaction is
 delegated to Codex app-server. OpenClaw keeps a transcript mirror for channel
 history, search, `/new`, `/reset`, and future model or harness switching. The
