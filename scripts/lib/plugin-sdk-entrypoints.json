@@ -129,6 +129,7 @@
   "account-id",
   "account-resolution",
   "account-resolution-runtime",
+  "agent-config-helpers",
   "agent-config-primitives",
   "allow-from",
   "allowlist-config-edit",
