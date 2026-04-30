@@ -13,7 +13,7 @@ import { truncateSlackText } from "./truncate.js";
 
 const SLACK_SECTION_TEXT_MAX = 3000;
 const SLACK_PLAIN_TEXT_MAX = 75;
-const SLACK_OPTION_VALUE_MAX = 75;
+const SLACK_OPTION_VALUE_MAX = 150;
 const SLACK_BUTTON_VALUE_MAX = 2000;
 const SLACK_BUTTON_URL_MAX = 3000;
 const SLACK_STATIC_SELECT_OPTIONS_MAX = 100;
