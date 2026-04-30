@@ -23,26 +23,40 @@ describe("normalizeText", () => {
   });
 
   it.each([
-    ["U+200B zero-width space", "bad\u200Bword"],
-    ["U+200C zero-width non-joiner", "bad\u200Cword"],
-    ["U+200D zero-width joiner", "bad\u200Dword"],
-    ["U+FEFF BOM", "\uFEFFbadword"],
-    ["U+2060 word joiner", "bad\u2060word"],
+    ["U+00AD soft hyphen", "bad­word"],
+    ["U+200B zero-width space", "bad​word"],
+    ["U+200C zero-width non-joiner", "bad‌word"],
+    ["U+200D zero-width joiner", "bad‍word"],
+    ["U+200E left-to-right mark", "bad‎word"],
+    ["U+200F right-to-left mark", "bad‏word"],
+    ["U+202A left-to-right embedding", "bad‪word"],
+    ["U+202B right-to-left embedding", "bad‫word"],
+    ["U+202C pop directional formatting", "bad‬word"],
+    ["U+202D left-to-right override", "bad‭word"],
+    ["U+202E right-to-left override", "bad‮word"],
+    ["U+2060 word joiner", "bad⁠word"],
+    ["U+2066 left-to-right isolate", "bad⁦word"],
+    ["U+2067 right-to-left isolate", "bad⁧word"],
+    ["U+2068 first strong isolate", "bad⁨word"],
+    ["U+2069 pop directional isolate", "bad⁩word"],
+    ["U+115F hangul choseong filler", "badᅟword"],
+    ["U+1160 hangul jungseong filler", "badᅠword"],
+    ["U+FEFF BOM", "﻿badword"],
   ])("removes %s", (_name, input) => {
     expect(normalizeText(input)).toBe("badword");
   });
 
   it("removes multiple zero-width chars between every character", () => {
-    expect(normalizeText("b\u200Ba\u200Bd\u200Bw\u200Bo\u200Br\u200Bd")).toBe("badword");
+    expect(normalizeText("b​a​d​w​o​r​d")).toBe("badword");
   });
 
   it("handles combined fullwidth + zero-width bypass", () => {
-    expect(normalizeText("ｂａｄ\u200Bｗｏｒｄ")).toBe("badword");
+    expect(normalizeText("ｂａｄ​ｗｏｒｄ")).toBe("badword");
   });
 
   it("normalizes NFC: NFD input → NFC output matches NFC keyword", () => {
-    const nfd = "e\u0301tude"; // é as NFD
-    const nfc = "\u00e9tude"; // é as NFC
+    const nfd = "étude"; // é as NFD
+    const nfc = "étude"; // é as NFC
     expect(normalizeText(nfd)).toBe(normalizeText(nfc));
   });
 
