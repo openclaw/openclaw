@@ -54,7 +54,8 @@ import {
   NON_ENV_SECRETREF_MARKER,
 } from "./model-auth-markers.js";
 import { ProviderAuthError, type ResolvedProviderAuth } from "./model-auth-runtime-shared.js";
-import { normalizeProviderId, normalizeProviderIdForAuth } from "./model-selection.js";
+import { normalizeProviderId } from "./model-selection.js";
+import { resolveProviderIdForAuth } from "./provider-auth-aliases.js";
 
 export {
   ensureAuthProfileStore,
@@ -395,13 +396,18 @@ function buildAuthProfileModeMismatchHint(params: {
   if (!profiles) {
     return null;
   }
-  const providerAuthKey = normalizeProviderIdForAuth(params.provider);
+  const providerAuthKey = resolveProviderIdForAuth(params.provider, { config: params.cfg });
   for (const [profileId, profileConfig] of Object.entries(profiles)) {
-    if (normalizeProviderIdForAuth(profileConfig.provider) !== providerAuthKey) {
+    if (
+      resolveProviderIdForAuth(profileConfig.provider, { config: params.cfg }) !== providerAuthKey
+    ) {
       continue;
     }
     const credential = params.store.profiles[profileId];
-    if (!credential || normalizeProviderIdForAuth(credential.provider) !== providerAuthKey) {
+    if (
+      !credential ||
+      resolveProviderIdForAuth(credential.provider, { config: params.cfg }) !== providerAuthKey
+    ) {
       continue;
     }
     if (
