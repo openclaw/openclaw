@@ -82,17 +82,17 @@ models are not interchangeable.
 
 ## Supported providers
 
-| Provider       | ID               | Needs API key | Notes                                                             |
-| -------------- | ---------------- | ------------- | ----------------------------------------------------------------- |
-| Bedrock        | `bedrock`        | No            | Auto-detected when the AWS credential chain resolves              |
-| Gemini         | `gemini`         | Yes           | Supports image/audio indexing                                     |
-| GitHub Copilot | `github-copilot` | No            | Auto-detected, uses Copilot subscription                          |
-| Local          | `local`          | No            | GGUF model, ~0.6 GB download                                      |
-| Mistral        | `mistral`        | Yes           | Auto-detected                                                     |
-| Ollama         | `ollama`         | No            | Local, must set explicitly                                        |
-| OpenAI         | `openai`         | Yes           | Auto-detected, fast                                               |
-| oMLX           | `openai`         | Local key     | Apple Silicon MLX server; use `openai` adapter with custom baseUrl|
-| Voyage         | `voyage`         | Yes           | Auto-detected                                                     |
+| Provider       | ID               | Needs API key | Notes                                                              |
+| -------------- | ---------------- | ------------- | ------------------------------------------------------------------ |
+| Bedrock        | `bedrock`        | No            | Auto-detected when the AWS credential chain resolves               |
+| Gemini         | `gemini`         | Yes           | Supports image/audio indexing                                      |
+| GitHub Copilot | `github-copilot` | No            | Auto-detected, uses Copilot subscription                           |
+| Local          | `local`          | No            | GGUF model, ~0.6 GB download                                       |
+| Mistral        | `mistral`        | Yes           | Auto-detected                                                      |
+| Ollama         | `ollama`         | No            | Local, must set explicitly                                         |
+| OpenAI         | `openai`         | Yes           | Auto-detected, fast                                                |
+| oMLX           | `openai`         | Local key     | Apple Silicon MLX server; use `openai` adapter with custom baseUrl |
+| Voyage         | `voyage`         | Yes           | Auto-detected                                                      |
 
 ## How search works
 
