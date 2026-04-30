@@ -1317,6 +1317,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     let memorySlotMatched = false;
     const dreamingEngineId = resolveDreamingSidecarEngineId({ cfg, memorySlot });
     const pluginLoadStartMs = performance.now();
+    let pluginLoadAttemptCount = 0;
 
     for (const candidate of orderedCandidates) {
       const manifestRecord = manifestByRoot.get(candidate.rootDir);
@@ -1703,7 +1704,8 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         // Track the plugin as imported once module evaluation begins. Top-level
         // code may have already executed even if evaluation later throws.
         recordImportedPluginId(record.id);
-        logger.debug(`[plugins] loading ${record.id} from ${safeSource}`);
+        pluginLoadAttemptCount++;
+        logger.debug?.(`[plugins] loading ${record.id} from ${safeSource}`);
         mod = withProfile(
           { pluginId: record.id, source: safeSource },
           registrationMode,
@@ -2068,10 +2070,9 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     }
 
     const pluginLoadElapsedMs = performance.now() - pluginLoadStartMs;
-    const loadedCount = registry.plugins.length;
-    if (loadedCount > 0) {
-      logger.debug(
-        `[plugins] loaded ${loadedCount} plugin(s) in ${pluginLoadElapsedMs.toFixed(1)}ms`,
+    if (pluginLoadAttemptCount > 0) {
+      logger.debug?.(
+        `[plugins] loaded ${registry.plugins.length} plugin(s) (${pluginLoadAttemptCount} attempted) in ${pluginLoadElapsedMs.toFixed(1)}ms`,
       );
     }
 
