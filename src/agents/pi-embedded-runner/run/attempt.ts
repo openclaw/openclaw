@@ -15,6 +15,7 @@ import {
   createChildDiagnosticTraceContext,
   createDiagnosticTraceContextFromActiveScope,
   freezeDiagnosticTraceContext,
+  type DiagnosticTraceContext,
 } from "../../../infra/diagnostic-trace-context.js";
 import { isEmbeddedMode } from "../../../infra/embedded-mode.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
@@ -861,16 +862,6 @@ export async function runEmbeddedAttempt(
     }
     const activeContextEngine = isRawModelRun ? undefined : params.contextEngine;
     prepStages.mark("skills");
-
-    const sessionLock = await acquireSessionWriteLock({
-      sessionFile: params.sessionFile,
-      maxHoldMs: resolveSessionLockMaxHoldFromTimeout({
-        timeoutMs: resolveRunTimeoutWithCompactionGraceMs({
-          runTimeoutMs: params.timeoutMs,
-          compactionTimeoutMs: resolveCompactionTimeoutMs(params.config),
-        }),
-      }),
-    });
 
     const sessionLabel = params.sessionKey ?? params.sessionId;
     const contextInjectionMode = resolveContextInjectionMode(params.config);
