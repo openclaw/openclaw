@@ -1344,30 +1344,32 @@ export const sessionsHandlers: GatewayRequestHandlers = {
           payload &&
           typeof payload === "object" &&
           Array.isArray((payload as { runIds?: unknown[] }).runIds)
-            ? (payload as { runIds: unknown[] }).runIds.filter((value): value is string =>
-                Boolean(normalizeOptionalString(value)),
-              )
+            ? (payload as { runIds: unknown[] }).runIds
+                .map((value) => normalizeOptionalString(value))
+                .filter((value): value is string => Boolean(value))
             : [];
         const firstAbortedRunId = runIds[0] ?? null;
         abortedRunId = firstAbortedRunId;
-        if (firstAbortedRunId) {
+        if (runIds.length > 0) {
           const endedAt = Date.now();
-          const runKind = preAbortRunKinds.get(firstAbortedRunId);
-          const dedupePrefix = runKind === "agent" ? "agent" : "chat";
-          setGatewayDedupeEntry({
-            dedupe: context.dedupe,
-            key: `${dedupePrefix}:${firstAbortedRunId}`,
-            entry: {
-              ts: endedAt,
-              ok: true,
-              payload: {
-                status: "timeout",
-                runId: firstAbortedRunId,
-                stopReason: "rpc",
-                endedAt,
+          for (const runId of runIds) {
+            const runKind = preAbortRunKinds.get(runId);
+            const dedupePrefix = runKind === "agent" ? "agent" : "chat";
+            setGatewayDedupeEntry({
+              dedupe: context.dedupe,
+              key: `${dedupePrefix}:${runId}`,
+              entry: {
+                ts: endedAt,
+                ok: true,
+                payload: {
+                  status: "timeout",
+                  runId,
+                  stopReason: "rpc",
+                  endedAt,
+                },
               },
-            },
-          });
+            });
+          }
         }
         respond(
           true,

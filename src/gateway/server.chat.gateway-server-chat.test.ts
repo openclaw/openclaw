@@ -329,6 +329,61 @@ describe("gateway server chat", () => {
     }
   });
 
+  test("sessions.abort writes wait snapshots for every session-wide aborted run", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-abort-all-"));
+    const sessionKey = "agent:main:dashboard:test-abort-all";
+    const runIds = ["idem-sessions-abort-all-1", "idem-sessions-abort-all-2"];
+    const releaseFirstReply = mockBlockedChatReply();
+    const releaseSecondReply = mockBlockedChatReply();
+    testState.sessionStorePath = path.join(dir, "sessions.json");
+    try {
+      await writeSessionStore({
+        entries: {
+          [sessionKey]: {
+            sessionId: "sess-dashboard-abort-all",
+            updatedAt: Date.now(),
+          },
+        },
+      });
+
+      for (const runId of runIds) {
+        const sendRes = await rpcReq(ws, "sessions.send", {
+          key: sessionKey,
+          message: "hello",
+          idempotencyKey: runId,
+          timeoutMs: 30_000,
+        });
+        expect(sendRes.ok).toBe(true);
+        expect(sendRes.payload?.status).toBe("started");
+      }
+
+      const abortRes = await rpcReq(ws, "sessions.abort", {
+        key: sessionKey,
+      });
+      expect(abortRes.ok).toBe(true);
+      expect(abortRes.payload?.status).toBe("aborted");
+      expect(runIds).toContain(abortRes.payload?.abortedRunId);
+
+      for (const runId of runIds) {
+        const waitRes = await rpcReq(ws, "agent.wait", {
+          runId,
+          timeoutMs: 0,
+        });
+        expect(waitRes.ok).toBe(true);
+        expect(waitRes.payload).toMatchObject({
+          runId,
+          status: "timeout",
+          stopReason: "rpc",
+        });
+      }
+    } finally {
+      releaseFirstReply();
+      releaseSecondReply();
+      testState.sessionStorePath = undefined;
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
   test("sessions.abort resolves active runs by runId without a caller session key", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-abort-runid-"));
     testState.sessionStorePath = path.join(dir, "sessions.json");
