@@ -33,7 +33,7 @@ import {
   appendOutput,
   createSessionSlug,
   markExited,
-  tail,
+  // tail,
 } from "./bash-process-registry.js";
 import {
   buildDockerExecArgs,
@@ -122,7 +122,7 @@ export const DEFAULT_PENDING_MAX_OUTPUT = clampWithDefault(
 export const DEFAULT_PATH =
   process.env.PATH ?? "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 export const DEFAULT_NOTIFY_TAIL_CHARS = 400;
-const DEFAULT_NOTIFY_SNIPPET_CHARS = 180;
+// const DEFAULT_NOTIFY_SNIPPET_CHARS = 180;
 export const DEFAULT_APPROVAL_TIMEOUT_MS = DEFAULT_EXEC_APPROVAL_TIMEOUT_MS;
 export const DEFAULT_APPROVAL_REQUEST_TIMEOUT_MS = DEFAULT_APPROVAL_TIMEOUT_MS + 10_000;
 const DEFAULT_APPROVAL_RUNNING_NOTICE_MS = 10_000;
@@ -284,17 +284,17 @@ export function normalizeNotifyOutput(value: string) {
   return value.replace(/\s+/g, " ").trim();
 }
 
-function compactNotifyOutput(value: string, maxChars = DEFAULT_NOTIFY_SNIPPET_CHARS) {
-  const normalized = normalizeNotifyOutput(value);
-  if (!normalized) {
-    return "";
-  }
-  if (normalized.length <= maxChars) {
-    return normalized;
-  }
-  const safe = Math.max(1, maxChars - 1);
-  return `${normalized.slice(0, safe)}…`;
-}
+// function compactNotifyOutput(value: string, maxChars = DEFAULT_NOTIFY_SNIPPET_CHARS) {
+//   const normalized = normalizeNotifyOutput(value);
+//   if (!normalized) {
+//     return "";
+//   }
+//   if (normalized.length <= maxChars) {
+//     return normalized;
+//   }
+//   const safe = Math.max(1, maxChars - 1);
+//   return `${normalized.slice(0, safe)}…`;
+// }
 
 export function applyShellPath(env: Record<string, string>, shellPath?: string | null) {
   if (!shellPath) {
@@ -314,42 +314,79 @@ export function applyShellPath(env: Record<string, string>, shellPath?: string |
   }
 }
 
-export function maybeNotifyOnExit(session: any, statusOverride?: string): void {
-  if (!session || session.exitNotified) return;
+export function maybeNotifyOnExit(
+  session: ProcessSession, 
+  statusOverride?: string
+): void {
+  if (!session || session.exitNotified) {
+    return;
+  }
 
-  const sKey = session.sessionKey;
+  if (!session.notifyOnExit) {
+    session.exitNotified = true;
+    return;
+  }
+
+  const sKey = session.sessionKey?.trim();
   if (!sKey) {
     session.exitNotified = true;
     return;
   }
 
-  const process = session.process || {};
-  const exitCode = process.exitCode;
-  const signal = process.signal;
-  
-  const isActuallyFailed = exitCode !== 0 && exitCode !== undefined;
-  const status = statusOverride || (isActuallyFailed || signal ? "failed" : "completed");
+  const exitCode = session.exitCode;
+  const signal = session.exitSignal;
 
-  if (session.manuallyCanceled && status !== "failed") return;
+  const sessionAny = session as unknown as Record<string, unknown>;
+  const isManuallyCanceled = Boolean(
+    sessionAny.manuallyCanceled || 
+    (sessionAny.process as Record<string, unknown>)?.manuallyCanceled
+  );
+
+  const isActuallyFailed = exitCode !== 0 && exitCode !== undefined;
+  const status = statusOverride || (isActuallyFailed || signal != null ? "failed" : "completed");
+
+  if (isManuallyCanceled && status !== "failed") {
+    session.exitNotified = true;
+    return;
+  }
 
   session.exitNotified = true;
 
-  const { contextKey, deliveryContext, scopeKey } = session;
-  let text = signal ? `Process exited with signal ${signal}` : `Exec ${status} (exit code ${exitCode ?? 0})`;
+  const contextKey = sessionAny.contextKey as string | undefined;
+  const deliveryContext = sessionAny.deliveryContext as DeliveryContext | undefined;
+  const scopeKey = session.scopeKey;
+
+  let text = signal 
+    ? `Process exited with signal ${signal}` 
+    : `Exec ${status} (exit code ${exitCode ?? 0})`;
 
   const cfg = loadConfig() || {};
+  const cfgAny = cfg as unknown as Record<string, unknown>;
+
   if (!scopeKey) {
-    enqueueSystemEvent(text, { sessionKey: sKey, contextKey, deliveryContext });
+    enqueueSystemEvent(text, { 
+      sessionKey: sKey, 
+      contextKey, 
+      deliveryContext 
+    });
+
+    requestHeartbeatNow(
+      scopedHeartbeatWakeOptions(sKey, { reason: "exec-exit", coalesceMs: 0 })
+    );
     return;
   }
 
   const agentId = normalizeAgentId(scopeKey);
   const mainSessionKey = resolveAgentMainSessionKey({ cfg, agentId });
-  const allowFrom = (cfg as any)?.agents?.defaults?.allowFrom ?? [];
+
+  const allowFrom: string[] = 
+    ((cfgAny.agents as Record<string, unknown>)?.defaults as Record<string, unknown>)?.allowFrom as string[] 
+    ?? ((cfgAny.channels as Record<string, unknown>)?.allowFrom as string[]) 
+    ?? [];
 
   const finalSessionKey = normalizeEventRoutingKey({
     sessionKey: sKey,
-    dmScope: (cfg as any)?.session?.scope,
+    dmScope: (sessionAny.dmScope as string | undefined) || cfg.session?.scope,
     allowFrom,
     normalizeEntry: (entry: string) => entry.toLowerCase(),
     resolveAgentMainSessionKey: () => mainSessionKey,
@@ -360,6 +397,13 @@ export function maybeNotifyOnExit(session: any, statusOverride?: string): void {
     contextKey,
     deliveryContext,
   });
+
+  requestHeartbeatNow(
+    scopedHeartbeatWakeOptions(finalSessionKey, { 
+      reason: "exec-exit", 
+      coalesceMs: 0 
+    })
+  );
 }
 
 export function createApprovalSlug(id: string) {
@@ -430,20 +474,27 @@ export function emitExecSystemEvent(
     deliveryContext?: DeliveryContext;
     agentId?: string; 
   },
-) {
-  let sessionKey = opts.sessionKey?.trim(); 
-  if (!sessionKey) return;
+): void {
+  let sessionKey = opts.sessionKey?.trim();
+  if (!sessionKey) {
+    return;
+  }
 
-  const cfg = loadConfig();
+  const cfg = loadConfig() || {};
+  const cfgAny = cfg as unknown as Record<string, unknown>;
+
   sessionKey = normalizeEventRoutingKey({
     sessionKey: sessionKey,
     dmScope: cfg.session?.scope,
-    allowFrom: (cfg.agents?.defaults as any)?.allowFrom ?? [],
-    normalizeEntry: (entry) => entry.toLowerCase(),
-    resolveAgentMainSessionKey: (key) => resolveAgentMainSessionKey({ 
-        cfg, 
-        agentId: opts.agentId || "" 
-    }), 
+    allowFrom: 
+      ((cfgAny.agents as Record<string, unknown>)?.defaults as Record<string, unknown>)?.allowFrom as string[] 
+      ?? ((cfgAny.channels as Record<string, unknown>)?.allowFrom as string[]) 
+      ?? [],
+    normalizeEntry: (entry: string) => entry.toLowerCase(),
+    resolveAgentMainSessionKey: (_key) => resolveAgentMainSessionKey({ 
+      cfg, 
+      agentId: opts.agentId || "" 
+    }),
   });
 
   enqueueSystemEvent(text, {
@@ -453,10 +504,12 @@ export function emitExecSystemEvent(
   });
   
   requestHeartbeatNow(
-    scopedHeartbeatWakeOptions(sessionKey, { reason: "exec-event", coalesceMs: 0 }),
+    scopedHeartbeatWakeOptions(sessionKey, { 
+      reason: "exec-event", 
+      coalesceMs: 0 
+    })
   );
 }
-
 function joinExecFailureOutput(aggregated: string, reason: string) {
   return aggregated ? `${aggregated}\n\n${reason}` : reason;
 }
