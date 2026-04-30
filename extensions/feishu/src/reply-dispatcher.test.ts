@@ -995,6 +995,28 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("visible output started"));
   });
 
+  it("starts the live thinking card on onModelSelected for any streaming provider", async () => {
+    const runtime = { log: vi.fn(), error: vi.fn() };
+    const { result } = createDispatcherHarness({
+      runtime: runtime as never,
+      allowReasoningPreview: false,
+      onVisibleOutputStarted: vi.fn(),
+    });
+
+    // Architecture invariant: thinking card must appear at LLM-invoke moment
+    // for every streaming provider, not only claude-cli. Otherwise the user
+    // sees a typing emoji for 1-3s while the API handshake completes.
+    result.replyOptions.onModelSelected?.({
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+      thinkLevel: undefined,
+    });
+    await flushAsyncTasks();
+
+    expect(streamingInstances).toHaveLength(1);
+    expect(streamingInstances[0].start).toHaveBeenCalledTimes(1);
+  });
+
   it("does not animate a thinking panel for plain text-only streaming", async () => {
     vi.useFakeTimers();
     try {

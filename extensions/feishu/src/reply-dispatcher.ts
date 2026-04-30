@@ -1607,7 +1607,13 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       }) => {
         prefixContext.onModelSelected(ctx);
         claudeCliInitThinkingPanelEnabled = ctx.provider === "claude-cli";
-        if (claudeCliInitThinkingPanelEnabled && streamingEnabled) {
+        // Show the thinking card the moment the LLM is about to be invoked,
+        // for every streaming provider (not just claude-cli). This avoids
+        // the 1-3s gap between trigger submission and the first stream
+        // chunk where the user sees only a typing emoji and no card.
+        // claudeCliInitThinkingPanelEnabled stays available for claude-cli-
+        // specific thinking-panel content rendered downstream.
+        if (streamingEnabled) {
           queueThinkingPrelude({ forcePreview: true });
           startStreaming();
           queueThinkingPanelUpdate();
