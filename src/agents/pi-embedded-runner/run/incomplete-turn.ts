@@ -99,8 +99,26 @@ const PLANNING_ONLY_PROMISE_RE =
 // taking a tool call. Distinct from PLANNING_ONLY_PROMISE_RE because these forms
 // imply the action is already in progress, so they should bypass the action-verb
 // requirement that filters out vague planning prose.
+//
+// Anchored at the start of the trimmed visible text (after stripping a short
+// canonical interjection like "Great." or "Sure!"), and length-bounded to avoid
+// matching ordinary prose that incidentally contains "on it" or "got it" inside
+// a longer reply (e.g. "Here are my thoughts on it..."). The call site below
+// uses isActiveNarration to bypass the action-verb gate, so any unanchored
+// match would silently force a strict-agentic retry on legitimate answer prose.
+const PLANNING_ONLY_ACTIVE_NARRATION_MAX_LENGTH = 200;
+const PLANNING_ONLY_ACTIVE_NARRATION_LEAD_RE =
+  /^[\s.,!]*(?:great|sure|alright|cool|noted|will do|absolutely|yes|yep|okay|ok|right)[\s.,!]+/i;
 const PLANNING_ONLY_ACTIVE_NARRATION_RE =
-  /\b(?:on it|got it|doing (?:that|it) now|running (?:that|it) now|i(?:'m| am)\s+(?:running|doing|working|starting|handling|processing|polishing|rewriting|drafting|writing|reading|checking|looking|making|building|sending|posting|taking))\b/i;
+  /^(?:on it|got it|doing (?:that|it) now|running (?:that|it) now|i(?:'m| am)\s+(?:running|doing|working|starting|handling|processing|polishing|rewriting|drafting|writing|reading|checking|looking|making|building|sending|posting|taking))\b/i;
+
+function matchesPlanningOnlyActiveNarration(text: string): boolean {
+  if (text.length > PLANNING_ONLY_ACTIVE_NARRATION_MAX_LENGTH) {
+    return false;
+  }
+  const stripped = text.replace(PLANNING_ONLY_ACTIVE_NARRATION_LEAD_RE, "");
+  return PLANNING_ONLY_ACTIVE_NARRATION_RE.test(stripped);
+}
 const PLANNING_ONLY_COMPLETION_RE =
   /\b(?:done|finished|implemented|updated|fixed|changed|ran|verified|found|here(?:'s| is) what|blocked by|the blocker is)\b/i;
 const PLANNING_ONLY_HEADING_RE = /^(?:plan|steps?|next steps?)\s*:/i;
@@ -183,8 +201,15 @@ const ACTIONABLE_PROMPT_DIRECTIVE_RE =
   /^\s*(?:please\s+)?(?:check|look(?:\s+into|\s+at)?|read|write|edit|update|fix|investigate|debug|run|search|find|implement|add|remove|refactor|explain|summari(?:s|z)e|analy(?:s|z)e|review|tell|show|make|restart|deploy|prepare|do|put|post|draft|polish|rewrite|send|build|finish|create|generate|compose|ship|publish|kick|start|continue|proceed|go)\b/i;
 const ACTIONABLE_PROMPT_PASS_RE =
   /^\s*(?:please\s+)?pass\s+(?!(?:on|$))(?=.{1,120}\b(?:to|through|along|over|back)\b)/i;
+// REQUEST_RE matches polite-request shapes anywhere in the prompt ("can you X",
+// "please X", or a verb from the bare-verb fallback list). The anchored
+// DIRECTIVE_RE above already covers imperative phrasing, so this fallback list
+// stays intentionally narrow: only verbs that rarely appear in non-directive
+// prose. Adding short common verbs here (e.g. `do`, `start`, `continue`,
+// `proceed`) would falsely classify "I do not want you to X" or "I start to
+// think Y" as actionable directives.
 const ACTIONABLE_PROMPT_REQUEST_RE =
-  /\b(?:can|could|would|will)\s+you\b|\b(?:please|pls)\b|\b(?:help|explain|summari(?:s|z)e|analy(?:s|z)e|review|investigate|debug|fix|check|look(?:\s+into|\s+at)?|read|write|edit|update|run|search|find|implement|add|remove|refactor|show|tell me|walk me through|do|put|post|draft|polish|rewrite|send|build|finish|create|generate|compose|ship|publish|kick|start|continue|proceed)\b/i;
+  /\b(?:can|could|would|will)\s+you\b|\b(?:please|pls)\b|\b(?:help|explain|summari(?:s|z)e|analy(?:s|z)e|review|investigate|debug|fix|check|look(?:\s+into|\s+at)?|read|write|edit|update|run|search|find|implement|add|remove|refactor|show|tell me|walk me through|polish|rewrite|finish|create|generate|compose|publish)\b/i;
 
 export const PLANNING_ONLY_RETRY_INSTRUCTION =
   "The previous assistant turn only described the plan. Do not restate the plan. Act now: take the first concrete tool action you can. A blocker is ONLY an external technical obstacle outside your control - a missing file path, a failed API response, a denied permission, a tool that returns an error. Restating the task ('I haven't done it yet', 'I need to run X', 'I'm waiting to execute'), asking the user to confirm again, or describing what you intend to do is NOT a blocker and will be treated as another planning-only turn. Your reply this turn must contain either (a) a tool call, or (b) a single sentence naming a specific external obstacle with the exact error or resource that is blocking you.";
@@ -854,7 +879,7 @@ export function resolvePlanningOnlyRetryInstruction(params: {
     return null;
   }
   const hasStructuredPlanningFormat = hasStructuredPlanningOnlyFormat(text);
-  const isActiveNarration = PLANNING_ONLY_ACTIVE_NARRATION_RE.test(text);
+  const isActiveNarration = matchesPlanningOnlyActiveNarration(text);
   if (!PLANNING_ONLY_PROMISE_RE.test(text) && !hasStructuredPlanningFormat && !isActiveNarration) {
     return null;
   }
