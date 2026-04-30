@@ -381,6 +381,9 @@ export function buildCliArgs(params: {
   if (params.backend.modelArg && params.modelId) {
     args.push(params.backend.modelArg, params.modelId);
   }
+  // Fork-session resumes need the system prompt re-applied because the forked session starts fresh.
+  const isForkResume = params.useResume && params.baseArgs.includes("--fork-session");
+  const needsSystemPrompt = !params.useResume || isForkResume;
   if (
     !params.useResume &&
     params.systemPrompt &&
@@ -389,7 +392,7 @@ export function buildCliArgs(params: {
   ) {
     args.push(params.backend.systemPromptFileArg, params.systemPromptFilePath);
   } else if (
-    !params.useResume &&
+    needsSystemPrompt &&
     params.systemPrompt &&
     params.systemPromptFilePath &&
     params.backend.systemPromptFileConfigKey
@@ -401,7 +404,7 @@ export function buildCliArgs(params: {
         params.systemPromptFilePath,
       ),
     );
-  } else if (!params.useResume && params.systemPrompt && params.backend.systemPromptArg) {
+  } else if (needsSystemPrompt && params.systemPrompt && params.backend.systemPromptArg) {
     args.push(params.backend.systemPromptArg, stripSystemPromptCacheBoundary(params.systemPrompt));
   }
   if (!params.useResume && params.sessionId) {
