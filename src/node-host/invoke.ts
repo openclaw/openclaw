@@ -522,7 +522,11 @@ export async function handleInvoke(
         await sendErrorResult(client, frame, "INVALID_REQUEST", "path required");
         return;
       }
-      if (!filePath.startsWith("/") && !filePath.startsWith("~")) {
+      if (
+        !filePath.startsWith("/") &&
+        !filePath.startsWith("~") &&
+        !/^[A-Za-z]:[/\\]/.test(filePath)
+      ) {
         await sendErrorResult(
           client,
           frame,
@@ -609,7 +613,11 @@ export async function handleInvoke(
         await sendErrorResult(client, frame, "INVALID_REQUEST", "path required");
         return;
       }
-      if (!filePath.startsWith("/") && !filePath.startsWith("~")) {
+      if (
+        !filePath.startsWith("/") &&
+        !filePath.startsWith("~") &&
+        !/^[A-Za-z]:[/\\]/.test(filePath)
+      ) {
         await sendErrorResult(
           client,
           frame,
