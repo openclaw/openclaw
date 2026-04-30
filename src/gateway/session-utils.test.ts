@@ -1237,6 +1237,233 @@ describe("resolveSessionModelRef", () => {
 });
 
 describe("listSessionsFromStore selected model display", () => {
+  const writeTranscript = (filePath: string, user: string, assistant: string) => {
+    fs.writeFileSync(
+      filePath,
+      [
+        { type: "session", version: 1, id: path.basename(filePath, ".jsonl") },
+        { message: { role: "user", content: user } },
+        { message: { role: "assistant", content: assistant } },
+      ]
+        .map((line) => JSON.stringify(line))
+        .join("\n"),
+      "utf8",
+    );
+  };
+
+  const usageFields = {
+    totalTokens: 10,
+    totalTokensFresh: true,
+    contextTokens: 100,
+    estimatedCostUsd: 0,
+  } as const;
+
+  test("applies active window and limit before transcript-backed title enrichment on safe list paths", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-session-list-fast-path-"));
+    const storePath = path.join(tmpDir, "sessions.json");
+    const activeSessionId = "active-fast-path-session";
+    const staleSessionId = "stale-fast-path-session";
+    const globalSessionId = "global-fast-path-session";
+    const unknownSessionId = "unknown-fast-path-session";
+    const activeTranscript = path.join(tmpDir, `${activeSessionId}.jsonl`);
+    const staleTranscript = path.join(tmpDir, `${staleSessionId}.jsonl`);
+    const globalTranscript = path.join(tmpDir, `${globalSessionId}.jsonl`);
+    const unknownTranscript = path.join(tmpDir, `${unknownSessionId}.jsonl`);
+    writeTranscript(activeTranscript, "Active hello", "Active reply");
+    writeTranscript(staleTranscript, "Stale hello", "Stale reply");
+    writeTranscript(globalTranscript, "Global hello", "Global reply");
+    writeTranscript(unknownTranscript, "Unknown hello", "Unknown reply");
+
+    const now = Date.now();
+    const openSpy = vi.spyOn(fs, "openSync");
+    try {
+      const result = listSessionsFromStore({
+        cfg: createModelDefaultsConfig({ primary: "anthropic/claude-opus-4-6" }),
+        storePath,
+        store: {
+          global: {
+            sessionId: globalSessionId,
+            sessionFile: globalTranscript,
+            updatedAt: now,
+            ...usageFields,
+          } as SessionEntry,
+          unknown: {
+            sessionId: unknownSessionId,
+            sessionFile: unknownTranscript,
+            updatedAt: now,
+            ...usageFields,
+          } as SessionEntry,
+          "agent:main:stale": {
+            sessionId: staleSessionId,
+            sessionFile: staleTranscript,
+            updatedAt: now - 2 * 60 * 60 * 1000,
+            ...usageFields,
+          } as SessionEntry,
+          "agent:main:active": {
+            sessionId: activeSessionId,
+            sessionFile: activeTranscript,
+            updatedAt: now - 1_000,
+            ...usageFields,
+          } as SessionEntry,
+        },
+        opts: { activeMinutes: 60, limit: 1, includeDerivedTitles: true, includeLastMessage: true },
+      });
+
+      expect(result.sessions).toHaveLength(1);
+      expect(result.sessions[0]?.key).toBe("agent:main:active");
+      expect(result.sessions[0]?.derivedTitle).toBe("Active hello");
+      expect(result.sessions[0]?.lastMessagePreview).toBe("Active reply");
+      const openedPaths = openSpy.mock.calls.map((call) => String(call[0]));
+      expect(openedPaths).toContain(activeTranscript);
+      expect(openedPaths).not.toContain(staleTranscript);
+      expect(openedPaths).not.toContain(globalTranscript);
+      expect(openedPaths).not.toContain(unknownTranscript);
+    } finally {
+      openSpy.mockRestore();
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test("returns no rows without transcript reads when active window excludes all safe-path entries", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-session-list-empty-fast-path-"));
+    const storePath = path.join(tmpDir, "sessions.json");
+    const oldSessionId = "old-fast-path-session";
+    const oldTranscript = path.join(tmpDir, `${oldSessionId}.jsonl`);
+    writeTranscript(oldTranscript, "Old hello", "Old reply");
+
+    const openSpy = vi.spyOn(fs, "openSync");
+    try {
+      const result = listSessionsFromStore({
+        cfg: createModelDefaultsConfig({ primary: "anthropic/claude-opus-4-6" }),
+        storePath,
+        store: {
+          "agent:main:old": {
+            sessionId: oldSessionId,
+            sessionFile: oldTranscript,
+            updatedAt: Date.now() - 10 * 60 * 1000,
+            ...usageFields,
+          } as SessionEntry,
+        },
+        opts: { activeMinutes: 1, limit: 5, includeDerivedTitles: true, includeLastMessage: true },
+      });
+
+      expect(result.sessions).toEqual([]);
+      const openedPaths = openSpy.mock.calls.map((call) => String(call[0]));
+      expect(openedPaths).not.toContain(oldTranscript);
+    } finally {
+      openSpy.mockRestore();
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test("keeps safe-path selection stable when transcript-backed fields are toggled", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-session-list-flag-fast-path-"));
+    const storePath = path.join(tmpDir, "sessions.json");
+    const activeSessionId = "active-flag-fast-path-session";
+    const staleSessionId = "stale-flag-fast-path-session";
+    const activeTranscript = path.join(tmpDir, `${activeSessionId}.jsonl`);
+    const staleTranscript = path.join(tmpDir, `${staleSessionId}.jsonl`);
+    writeTranscript(activeTranscript, "Active flag hello", "Active flag reply");
+    writeTranscript(staleTranscript, "Stale flag hello", "Stale flag reply");
+
+    const now = Date.now();
+    const store = {
+      "agent:main:stale": {
+        sessionId: staleSessionId,
+        sessionFile: staleTranscript,
+        updatedAt: now - 2 * 60 * 60 * 1000,
+        ...usageFields,
+      } as SessionEntry,
+      "agent:main:active": {
+        sessionId: activeSessionId,
+        sessionFile: activeTranscript,
+        updatedAt: now - 1_000,
+        ...usageFields,
+      } as SessionEntry,
+    };
+
+    try {
+      const selections = [
+        {},
+        { includeDerivedTitles: true },
+        { includeLastMessage: true },
+        { includeDerivedTitles: true, includeLastMessage: true },
+      ].map((extraOpts) =>
+        listSessionsFromStore({
+          cfg: createModelDefaultsConfig({ primary: "anthropic/claude-opus-4-6" }),
+          storePath,
+          store,
+          opts: { activeMinutes: 60, limit: 1, ...extraOpts },
+        }).sessions.map((session) => session.key),
+      );
+
+      expect(selections).toEqual([
+        ["agent:main:active"],
+        ["agent:main:active"],
+        ["agent:main:active"],
+        ["agent:main:active"],
+      ]);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test("keeps search filtering before limit on the legacy enriched path", () => {
+    const now = Date.now();
+    const result = listSessionsFromStore({
+      cfg: createModelDefaultsConfig({ primary: "anthropic/claude-opus-4-6" }),
+      storePath: "/tmp/sessions.json",
+      store: {
+        "agent:main:newest-nonmatch": {
+          sessionId: "newest-nonmatch-session",
+          displayName: "Dashboard chatter",
+          updatedAt: now,
+          ...usageFields,
+        } as SessionEntry,
+        "agent:main:older-match": {
+          sessionId: "older-match-session",
+          displayName: "Needle review thread",
+          updatedAt: now - 1_000,
+          ...usageFields,
+        } as SessionEntry,
+      },
+      opts: { search: "needle", limit: 1 },
+    });
+
+    expect(result.sessions.map((session) => session.key)).toEqual(["agent:main:older-match"]);
+  });
+
+  test("keeps spawnedBy filtering on the legacy subagent-dependent path", () => {
+    const now = Date.now();
+    const parentKey = "agent:main:parent";
+    const result = listSessionsFromStore({
+      cfg: createModelDefaultsConfig({ primary: "anthropic/claude-opus-4-6" }),
+      storePath: "/tmp/sessions.json",
+      store: {
+        [parentKey]: {
+          sessionId: "parent-session",
+          updatedAt: now,
+          ...usageFields,
+        } as SessionEntry,
+        "agent:main:matching-child": {
+          sessionId: "matching-child-session",
+          spawnedBy: parentKey,
+          updatedAt: now - 1_000,
+          ...usageFields,
+        } as SessionEntry,
+        "agent:main:other-child": {
+          sessionId: "other-child-session",
+          spawnedBy: "agent:main:other-parent",
+          updatedAt: now - 500,
+          ...usageFields,
+        } as SessionEntry,
+      },
+      opts: { spawnedBy: parentKey, limit: 5 },
+    });
+
+    expect(result.sessions.map((session) => session.key)).toEqual(["agent:main:matching-child"]);
+  });
+
   test("async list yields during bulk transcript title and last-message hydration", async () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sessions-list-yield-"));
     try {
