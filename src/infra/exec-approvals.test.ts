@@ -1,9 +1,11 @@
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { normalizeSafeBins } from "./exec-approvals-allowlist.js";
 import {
   makeMockCommandResolution,
   makeMockExecutableResolution,
 } from "./exec-approvals-test-helpers.js";
+import { resolveExecApprovalsPath, resolveExecApprovalsSocketPath } from "./exec-approvals.js";
 import { evaluateExecAllowlist, type ExecAllowlistEntry } from "./exec-approvals.js";
 
 describe("exec approvals allowlist evaluation", () => {
@@ -233,5 +235,24 @@ describe("exec approvals allowlist evaluation", () => {
     expect(result.allowlistSatisfied).toBe(true);
     expect(result.allowlistMatches.map((entry) => entry.pattern)).toEqual(["/usr/bin/tool"]);
     expect(result.segmentSatisfiedBy).toEqual(["allowlist", "safeBins"]);
+  });
+});
+
+describe("resolveExecApprovalsPath / resolveExecApprovalsSocketPath", () => {
+  it("honors OPENCLAW_STATE_DIR override (regression #75204)", () => {
+    const original = process.env.OPENCLAW_STATE_DIR;
+    try {
+      process.env.OPENCLAW_STATE_DIR = "/custom/state";
+      expect(resolveExecApprovalsPath()).toBe(path.join("/custom/state", "exec-approvals.json"));
+      expect(resolveExecApprovalsSocketPath()).toBe(
+        path.join("/custom/state", "exec-approvals.sock"),
+      );
+    } finally {
+      if (original === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = original;
+      }
+    }
   });
 });

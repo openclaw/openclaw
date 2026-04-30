@@ -21,7 +21,10 @@ import {
   normalizeExecTarget,
   normalizeExecSecurity,
   requiresExecApproval,
+  resolveExecApprovalsPath,
 } from "./exec-approvals.js";
+
+const APPROVALS_PATH = resolveExecApprovalsPath();
 
 function expectMalformedAgentAskUsesDefaults(agentAsk: unknown): void {
   const approvals = {
@@ -48,7 +51,7 @@ function expectMalformedAgentAskUsesDefaults(agentAsk: unknown): void {
   expect(summary.ask).toMatchObject({
     requested: "off",
     host: "always",
-    hostSource: "~/.openclaw/exec-approvals.json defaults.ask",
+    hostSource: `${APPROVALS_PATH} defaults.ask`,
     effective: "always",
     note: "more aggressive ask wins",
   });
@@ -276,19 +279,19 @@ describe("exec approvals policy helpers", () => {
       requested: "full",
       host: "allowlist",
       effective: "allowlist",
-      hostSource: "~/.openclaw/exec-approvals.json defaults.security",
+      hostSource: `${APPROVALS_PATH} defaults.security`,
       note: "stricter host security wins",
     });
     expect(summary.ask).toMatchObject({
       requested: "off",
       host: "always",
       effective: "always",
-      hostSource: "~/.openclaw/exec-approvals.json defaults.ask",
+      hostSource: `${APPROVALS_PATH} defaults.ask`,
       note: "more aggressive ask wins",
     });
     expect(summary.askFallback).toEqual({
       effective: "deny",
-      source: "~/.openclaw/exec-approvals.json defaults.askFallback",
+      source: `${APPROVALS_PATH} defaults.askFallback`,
     });
   });
 
@@ -362,7 +365,7 @@ describe("exec approvals policy helpers", () => {
 
     expect(summary.askFallback).toEqual({
       effective: "allowlist",
-      source: "~/.openclaw/exec-approvals.json defaults.askFallback",
+      source: `${APPROVALS_PATH} defaults.askFallback`,
     });
   });
 
@@ -406,15 +409,15 @@ describe("exec approvals policy helpers", () => {
 
     expect(summary.security).toMatchObject({
       host: "allowlist",
-      hostSource: "~/.openclaw/exec-approvals.json agents.*.security",
+      hostSource: `${APPROVALS_PATH} agents.*.security`,
     });
     expect(summary.ask).toMatchObject({
       host: "always",
-      hostSource: "~/.openclaw/exec-approvals.json agents.*.ask",
+      hostSource: `${APPROVALS_PATH} agents.*.ask`,
     });
     expect(summary.askFallback).toEqual({
       effective: "deny",
-      source: "~/.openclaw/exec-approvals.json agents.*.askFallback",
+      source: `${APPROVALS_PATH} agents.*.askFallback`,
     });
   });
 
@@ -537,11 +540,11 @@ describe("exec approvals policy helpers", () => {
     expect(snapshots.map((snapshot) => snapshot.scopeLabel)).toEqual(["tools.exec"]);
     expect(snapshots[0]?.security).toMatchObject({
       host: "allowlist",
-      hostSource: "~/.openclaw/exec-approvals.json agents.main.security",
+      hostSource: `${APPROVALS_PATH} agents.main.security`,
     });
     expect(snapshots[0]?.ask).toMatchObject({
       host: "always",
-      hostSource: "~/.openclaw/exec-approvals.json agents.main.ask",
+      hostSource: `${APPROVALS_PATH} agents.main.ask`,
     });
   });
 
