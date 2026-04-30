@@ -589,16 +589,11 @@ describe("capability cli", () => {
     expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
   });
 
-  it("retries with lowercased model id when strict resolution fails (#73715)", async () => {
-    // First call: strict lookup fails (mimics 'Unknown model: anthropic/CLAUDE-OPUS-4-7').
-    // Second call (fallback): lowercased model id resolves successfully.
-    mocks.prepareSimpleCompletionModelForAgent
-      .mockResolvedValueOnce({ error: "Unknown model: anthropic/CLAUDE-OPUS-4-7." } as never)
-      .mockResolvedValueOnce({
-        selection: { provider: "anthropic", modelId: "claude-opus-4-7", agentDir: "/tmp" },
-        model: { provider: "anthropic", id: "claude-opus-4-7", maxTokens: 128 },
-        auth: { apiKey: "sk-test", source: "env:TEST_API_KEY", mode: "api-key" },
-      } as never);
+  it("canonicalizes case-mismatched model ref against the catalog before local dispatch (#73715)", async () => {
+    mocks.loadModelCatalog.mockResolvedValueOnce([
+      { id: "claude-opus-4-7", provider: "anthropic", name: "Claude Opus 4.7" },
+    ] as never);
+
 
     await runRegisteredCli({
       register: registerCapabilityCli as (program: Command) => void,
@@ -614,17 +609,17 @@ describe("capability cli", () => {
       ],
     });
 
-    const calls = mocks.prepareSimpleCompletionModelForAgent.mock.calls as unknown as Array<
-      [{ modelRef?: string }]
-    >;
-    expect(calls.length).toBe(2);
-    expect(calls[0][0]).toMatchObject({ modelRef: "anthropic/CLAUDE-OPUS-4-7" });
-    expect(calls[1][0]).toMatchObject({ modelRef: "anthropic/claude-opus-4-7" });
+    expect(mocks.prepareSimpleCompletionModelForAgent).toHaveBeenCalledTimes(1);
+    expect(mocks.prepareSimpleCompletionModelForAgent).toHaveBeenCalledWith(
+      expect.objectContaining({ modelRef: "anthropic/claude-opus-4-7" }),
+    );
   });
 
-  it("does not retry when strict resolution succeeds for mixed-case model ids (#73715)", async () => {
-    // Mixed-case canonical ids (DeepSeek-R1, Qwen3-30B-A3B-6bit) resolve on the
-    // strict path; the lowercase fallback must not run.
+  it("preserves intentionally mixed-case catalog model ids (#73715)", async () => {
+    mocks.loadModelCatalog.mockResolvedValueOnce([
+      { id: "DeepSeek-R1", provider: "deepseek", name: "DeepSeek R1" },
+    ] as never);
+
     await runRegisteredCli({
       register: registerCapabilityCli as (program: Command) => void,
       argv: [
@@ -645,14 +640,10 @@ describe("capability cli", () => {
     );
   });
 
-  it("preserves auth profile suffix casing when retrying with lowercased model id (#73715)", async () => {
-    mocks.prepareSimpleCompletionModelForAgent
-      .mockResolvedValueOnce({ error: "Unknown model: anthropic/CLAUDE-OPUS-4-7." } as never)
-      .mockResolvedValueOnce({
-        selection: { provider: "anthropic", modelId: "claude-opus-4-7", agentDir: "/tmp" },
-        model: { provider: "anthropic", id: "claude-opus-4-7", maxTokens: 128 },
-        auth: { apiKey: "sk-test", source: "env:TEST_API_KEY", mode: "api-key" },
-      } as never);
+  it("preserves auth profile suffix casing while canonicalizing model id (#73715)", async () => {
+    mocks.loadModelCatalog.mockResolvedValueOnce([
+      { id: "claude-opus-4-7", provider: "anthropic", name: "Claude Opus 4.7" },
+    ] as never);
 
     await runRegisteredCli({
       register: registerCapabilityCli as (program: Command) => void,
@@ -668,13 +659,61 @@ describe("capability cli", () => {
       ],
     });
 
-    const calls = mocks.prepareSimpleCompletionModelForAgent.mock.calls as unknown as Array<
-      [{ modelRef?: string }]
-    >;
-    expect(calls.length).toBe(2);
-    // Auth profile suffix '@Work' must NOT be lowercased — profile keys are
-    // resolved by exact match.
-    expect(calls[1][0]).toMatchObject({ modelRef: "anthropic/claude-opus-4-7@Work" });
+    expect(mocks.prepareSimpleCompletionModelForAgent).toHaveBeenCalledWith(
+      expect.objectContaining({ modelRef: "anthropic/claude-opus-4-7@Work" }),
+    );
+  });
+
+  it("forwards canonicalized model ref to gateway dispatch (#73715)", async () => {
+    mocks.loadModelCatalog.mockResolvedValueOnce([
+      { id: "claude-opus-4-7", provider: "anthropic", name: "Claude Opus 4.7" },
+    ] as never);
+
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: [
+        "capability",
+        "model",
+        "run",
+        "--model",
+        "anthropic/CLAUDE-OPUS-4-7",
+        "--prompt",
+        "hello",
+        "--gateway",
+        "--json",
+      ],
+    });
+
+    expect(mocks.callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        params: expect.objectContaining({
+          provider: "anthropic",
+          model: "claude-opus-4-7",
+        }),
+      }),
+    );
+  });
+
+  it("returns ref verbatim when no catalog match exists (#73715)", async () => {
+    mocks.loadModelCatalog.mockResolvedValueOnce([] as never);
+
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: [
+        "capability",
+        "model",
+        "run",
+        "--model",
+        "custom/MyCustomModel",
+        "--prompt",
+        "hello",
+        "--json",
+      ],
+    });
+
+    expect(mocks.prepareSimpleCompletionModelForAgent).toHaveBeenCalledWith(
+      expect.objectContaining({ modelRef: "custom/MyCustomModel" }),
+    );
   });
 
   it.each(["", "   ", "\n\t"])(

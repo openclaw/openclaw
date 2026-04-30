@@ -543,23 +543,59 @@ async function readInputFiles(files: string[]): Promise<Array<{ path: string; bu
   );
 }
 
-// Lowercase only the model-id segment of a `--model` ref while preserving the
-// optional `@<profile>` auth profile suffix verbatim. Auth profiles are looked
-// up by exact key, so they must keep their original casing (#73715 P2).
-function lowercaseModelIdSegment(raw: string): string | undefined {
-  const trimmed = raw.trim();
+// Canonicalize a user-supplied `--model` ref against the catalog before
+// dispatch (#73715). The catalog lookup is case-insensitive, but the returned
+// id keeps the catalog's canonical casing — so genuinely mixed-case canonical
+// ids (e.g. `deepseek/DeepSeek-R1`) survive untouched while case-only
+// mismatches (e.g. `anthropic/CLAUDE-OPUS-4-7`) get rewritten to the canonical
+// `anthropic/claude-opus-4-7` form. Refs that don't match any catalog entry
+// (custom configured models, dynamic plugin models) are returned verbatim and
+// the downstream resolver decides what to do.
+//
+// Auth profile suffixes (`<ref>@<profile>`) are case-sensitive — profile keys
+// are looked up by exact match — so the suffix is split out, never modified,
+// and reattached to the canonicalized ref.
+async function canonicalizeCliModelRef(raw: string | undefined): Promise<string | undefined> {
+  const trimmed = raw?.trim();
   if (!trimmed) {
     return undefined;
   }
   const { model, profile } = splitTrailingAuthProfile(trimmed);
   if (!model) {
-    return undefined;
-  }
-  const lowered = model.toLowerCase();
-  if (lowered === model && !profile) {
     return trimmed;
   }
-  return profile ? `${lowered}@${profile}` : lowered;
+  const slash = model.indexOf("/");
+  if (slash <= 0 || slash === model.length - 1) {
+    return trimmed;
+  }
+  const providerInput = model.slice(0, slash);
+  const modelInput = model.slice(slash + 1);
+  const providerKey = providerInput.toLowerCase();
+  const modelKeyLower = modelInput.toLowerCase();
+
+  let catalog: Awaited<ReturnType<typeof loadModelCatalog>>;
+  try {
+    catalog = await loadModelCatalog();
+  } catch {
+    return trimmed;
+  }
+
+  // Strict match wins: preserves intentionally mixed-case canonical ids.
+  const exact = catalog.find(
+    (entry) => entry.provider.toLowerCase() === providerKey && entry.id === modelInput,
+  );
+  if (exact) {
+    return trimmed;
+  }
+  const ciMatch = catalog.find(
+    (entry) =>
+      entry.provider.toLowerCase() === providerKey && entry.id.toLowerCase() === modelKeyLower,
+  );
+  if (!ciMatch) {
+    return trimmed;
+  }
+  const canonical = `${providerInput}/${ciMatch.id}`;
+  return profile ? `${canonical}@${profile}` : canonical;
 }
 
 function resolveModelRefOverride(raw: string | undefined): { provider?: string; model?: string } {
@@ -651,7 +687,14 @@ async function runModelRun(params: {
 }) {
   const cfg = getRuntimeConfig();
   const agentId = resolveDefaultAgentId(cfg);
-  const modelRef = params.model?.trim() || undefined;
+  // Canonicalize the user-supplied --model against the model catalog before
+  // any provider call (#73715). The catalog lookup preserves intentionally
+  // mixed-case canonical ids (e.g. `deepseek/DeepSeek-R1`,
+  // `openrouter/qwen/Qwen3-30B-A3B-6bit`) when the typed ref is an exact
+  // match, and rewrites case-only mismatches (e.g. `anthropic/CLAUDE-OPUS-4-7`
+  // → `anthropic/claude-opus-4-7`) so both the local and gateway transports
+  // dispatch the canonical id. Auth profile suffixes are not lowercased.
+  const modelRef = await canonicalizeCliModelRef(params.model);
   const imageFiles = await readModelRunImageFiles(params.files);
   const messageContent =
     imageFiles.length > 0
@@ -665,35 +708,13 @@ async function runModelRun(params: {
         ]
       : params.prompt;
   if (params.transport === "local") {
-    let prepared = await prepareSimpleCompletionModelForAgent({
+    const prepared = await prepareSimpleCompletionModelForAgent({
       cfg,
       agentId,
       modelRef,
       allowMissingApiKeyModes: ["aws-sdk"],
       skipPiDiscovery: true,
     });
-    if ("error" in prepared && modelRef) {
-      // Case-insensitive fallback: if strict resolution failed and the user
-      // supplied a model id whose lowercased form differs (e.g.
-      // `anthropic/CLAUDE-OPUS-4-7`), retry once with the lowercased form so
-      // a plain case-mismatched id resolves to its canonical lowercase entry
-      // (#73715). Auth profile suffixes are case-sensitive, so only the
-      // model-id portion is lowercased — `<provider>/<model>@<profile>` keeps
-      // its profile as typed.
-      const fallbackRef = lowercaseModelIdSegment(modelRef);
-      if (fallbackRef && fallbackRef !== modelRef) {
-        const retry = await prepareSimpleCompletionModelForAgent({
-          cfg,
-          agentId,
-          modelRef: fallbackRef,
-          allowMissingApiKeyModes: ["aws-sdk"],
-          skipPiDiscovery: true,
-        });
-        if (!("error" in retry)) {
-          prepared = retry;
-        }
-      }
-    }
     if ("error" in prepared) {
       throw new Error(prepared.error);
     }
