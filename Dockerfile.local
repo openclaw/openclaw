@@ -1,4 +1,38 @@
 FROM ghcr.io/openclaw/openclaw:latest
+
 USER root
-RUN apt-get update && apt-get install -y docker.io && rm -rf /var/lib/apt/lists/*
+
+COPY docker/apt-packages.txt /tmp/apt-packages.txt
+
+RUN apt-get update && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends $(cat /tmp/apt-packages.txt) && \
+    rm -rf /var/lib/apt/lists/*
+
+# Patch discord shared bundle: add resolveAccessorAccount that reads routing fields
+# (allowFrom, defaultTo) without resolving the token, fixing the
+# "unresolved SecretRef" error in `openclaw status` outside gateway runtime.
+RUN node -e " \
+const fs = require('fs'); \
+const f = '/app/dist/extensions/discord/shared-Cuv73Rz3.js'; \
+let s = fs.readFileSync(f, 'utf8'); \
+s = s.replace( \
+  'import { a as resolveDefaultDiscordAccountId, n as listDiscordAccountIds, o as resolveDiscordAccount } from \"./accounts-zcI4mtzH.js\";', \
+  'import { a as resolveDefaultDiscordAccountId, i as mergeDiscordAccountConfig, n as listDiscordAccountIds, o as resolveDiscordAccount } from \"./accounts-zcI4mtzH.js\";' \
+); \
+s = s.replace( \
+  'import { formatAllowFromLowercase } from \"openclaw/plugin-sdk/allow-from\";', \
+  'import { formatAllowFromLowercase } from \"openclaw/plugin-sdk/allow-from\";\nimport { normalizeAccountId } from \"openclaw/plugin-sdk/account-id\";' \
+); \
+s = s.replace( \
+  'const discordConfigAdapter = createScopedChannelConfigAdapter({', \
+  'function resolveDiscordConfigAccessorAccount({ cfg, accountId }) { const resolvedAccountId = normalizeAccountId(accountId); const merged = mergeDiscordAccountConfig(cfg, resolvedAccountId); return { config: merged }; }\nconst discordConfigAdapter = createScopedChannelConfigAdapter({' \
+); \
+s = s.replace( \
+  'resolveAccount: adaptScopedAccountAccessor(resolveDiscordAccount),', \
+  'resolveAccount: adaptScopedAccountAccessor(resolveDiscordAccount),\n\tresolveAccessorAccount: resolveDiscordConfigAccessorAccount,' \
+); \
+fs.writeFileSync(f, s); \
+console.log('Patched discord shared bundle successfully'); \
+"
+
 USER node
