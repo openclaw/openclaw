@@ -475,6 +475,23 @@ function isBundledProviderConfiguredForRuntimeDeps(params: {
   );
 }
 
+function isBundledLibraryExtensionConfiguredForRuntimeDeps(pluginDir: string): boolean {
+  try {
+    fs.accessSync(path.join(pluginDir, "openclaw.plugin.json"));
+    return false;
+  } catch {}
+  const pkg = readRuntimeDepsJsonObject(path.join(pluginDir, "package.json"));
+  const openclaw = pkg?.openclaw;
+  if (!openclaw || typeof openclaw !== "object" || Array.isArray(openclaw)) {
+    return false;
+  }
+  const bundle = (openclaw as JsonObject).bundle;
+  if (!bundle || typeof bundle !== "object" || Array.isArray(bundle)) {
+    return false;
+  }
+  return (bundle as JsonObject).stageRuntimeDependencies === true;
+}
+
 export function isBundledPluginConfiguredForRuntimeDeps(params: {
   config: OpenClawConfig;
   plugins: NormalizedPluginsConfig;
@@ -561,11 +578,15 @@ export function isBundledPluginConfiguredForRuntimeDeps(params: {
   ) {
     return true;
   }
-  return (
-    (params.includeEnabledByDefaultPlugins ?? true) &&
-    manifest.enabledByDefault &&
-    manifest.providers.length === 0
-  );
+  if (!(params.includeEnabledByDefaultPlugins ?? true)) {
+    return false;
+  }
+  if (manifest.enabledByDefault && manifest.providers.length === 0) {
+    return true;
+  }
+  // Library extensions have no openclaw.plugin.json, so package.json is their
+  // runtime-deps signal after the normal plugin policy gates have passed.
+  return isBundledLibraryExtensionConfiguredForRuntimeDeps(params.pluginDir);
 }
 
 function isBundledPluginExplicitlyDisabledForRuntimeDeps(params: {

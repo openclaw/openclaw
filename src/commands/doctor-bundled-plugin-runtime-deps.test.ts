@@ -1075,4 +1075,39 @@ describe("doctor bundled plugin runtime deps", () => {
     ]);
     expectNoLegacyRuntimeDepsManifest(installRoot);
   });
+
+  it("repairs library extension deps during doctor --fix", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-bundled-"));
+    writeJson(path.join(root, "package.json"), { name: "openclaw" });
+    writeJson(path.join(root, "dist", "extensions", "media-understanding-core", "package.json"), {
+      name: "@openclaw/media-understanding-core",
+      dependencies: { sharp: "0.34.5" },
+      openclaw: { bundle: { stageRuntimeDependencies: true } },
+    });
+    const installed = createInstalledRuntimeDeps();
+
+    await maybeRepairBundledPluginRuntimeDeps({
+      runtime: createRuntime(),
+      prompter: createNonInteractiveRepairPrompter(),
+      packageRoot: root,
+      config: { plugins: { enabled: true } },
+      installDeps: (params) => {
+        installed.push(params);
+        materializeRuntimeDeps(params);
+      },
+    });
+
+    const installRoot = resolveBundledRuntimeDependencyPackageInstallRoot(root);
+    expect(installed).toEqual([
+      {
+        installRoot,
+        missingSpecs: ["sharp@0.34.5"],
+        installSpecs: ["sharp@0.34.5"],
+      },
+    ]);
+    expect(installRoot).not.toBe(root);
+    expect(readMaterializedRuntimeDepSpecs(installRoot, ["sharp@0.34.5"])).toEqual([
+      "sharp@0.34.5",
+    ]);
+  });
 });
