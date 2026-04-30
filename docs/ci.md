@@ -299,12 +299,13 @@ The `CodeQL Critical Quality` workflow is the matching non-security shard. It
 runs only error-severity, non-security JavaScript/TypeScript quality queries
 over narrow high-value surfaces on the smaller Blacksmith Linux runner. Its
 pull request guard is intentionally smaller than the scheduled profile: non-draft
-PRs only run the matching `gateway-runtime-boundary`, `provider-runtime-boundary`,
-`plugin-boundary`, and `plugin-sdk-package-contract` shards for gateway
+PRs only run the matching `channel-runtime-boundary`,
+`gateway-runtime-boundary`, `provider-runtime-boundary`, `plugin-boundary`, and
+`plugin-sdk-package-contract` shards for channel runtime, gateway
 protocol/server-method, provider runtime/model catalog, plugin loader, Plugin
 SDK, or package-contract changes. CodeQL config and quality workflow changes run
-all four PR quality shards. Its manual dispatch accepts
-`profile=all|gateway-runtime-boundary|plugin-boundary|plugin-sdk-package-contract|plugin-sdk-reply-runtime|provider-runtime-boundary|session-diagnostics-boundary`;
+all five PR quality shards. Its manual dispatch accepts
+`profile=all|channel-runtime-boundary|gateway-runtime-boundary|plugin-boundary|plugin-sdk-package-contract|plugin-sdk-reply-runtime|provider-runtime-boundary|session-diagnostics-boundary`;
 the narrow profiles are teaching/iteration hooks for running one quality shard
 in isolation without dispatching the rest of the workflow.
 Its

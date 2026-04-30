@@ -10,6 +10,7 @@ on:
         type: choice
         options:
           - all
+          - channel-runtime-boundary
           - gateway-runtime-boundary
           - plugin-boundary
           - plugin-sdk-package-contract
@@ -23,6 +24,7 @@ on:
       - ".github/workflows/codeql-critical-quality.yml"
       - "packages/plugin-package-contract/**"
       - "packages/plugin-sdk/**"
+      - "src/channels/**"
       - "src/gateway/method-scopes.ts"
       - "src/gateway/protocol/**"
       - "src/gateway/server-methods/**"
@@ -53,6 +55,7 @@ jobs:
     runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 5
     outputs:
+      channel: ${{ steps.detect.outputs.channel }}
       gateway: ${{ steps.detect.outputs.gateway }}
       plugin: ${{ steps.detect.outputs.plugin }}
       plugin_sdk_package: ${{ steps.detect.outputs.plugin_sdk_package }}
@@ -68,12 +71,14 @@ jobs:
         run: |
           set -euo pipefail
 
+          channel=false
           gateway=false
           plugin=false
           plugin_sdk_package=false
           provider=false
 
           if [[ "${EVENT_NAME}" != "pull_request" ]]; then
+            channel=true
             gateway=true
             plugin=true
             plugin_sdk_package=true
@@ -82,10 +87,14 @@ jobs:
             while IFS= read -r file; do
               case "${file}" in
                 .github/codeql/*|.github/workflows/codeql-critical-quality.yml)
+                  channel=true
                   gateway=true
                   plugin=true
                   plugin_sdk_package=true
                   provider=true
+                  ;;
+                src/channels/*)
+                  channel=true
                   ;;
                 src/gateway/method-scopes.ts|src/gateway/protocol/*|src/gateway/server-methods/*|src/gateway/server-methods.ts|src/gateway/server-methods-list.ts)
                   gateway=true
@@ -112,6 +121,7 @@ jobs:
           fi
 
           {
+            echo "channel=${channel}"
             echo "gateway=${gateway}"
             echo "plugin=${plugin}"
             echo "plugin_sdk_package=${plugin_sdk_package}"
@@ -187,7 +197,8 @@ jobs:
 
   channel-runtime-boundary:
     name: Critical Quality (channel-runtime-boundary)
-    if: ${{ github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || inputs.profile == 'all') }}
+    needs: quality-shards
+    if: ${{ needs.quality-shards.outputs.channel == 'true' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (github.event_name == 'pull_request' || github.event_name != 'workflow_dispatch' || inputs.profile == 'all' || inputs.profile == 'channel-runtime-boundary') }}
     runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 25
     steps:
