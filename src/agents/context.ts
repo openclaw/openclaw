@@ -182,12 +182,15 @@ export function shouldEagerWarmContextWindowCache(argv: string[] = process.argv)
 
 function primeConfiguredContextWindows(): OpenClawConfig | undefined {
   if (CONTEXT_WINDOW_RUNTIME_STATE.configuredConfig) {
-    applyConfiguredContextWindows({
-      cache: MODEL_CONTEXT_TOKEN_CACHE,
-      modelsConfig: CONTEXT_WINDOW_RUNTIME_STATE.configuredConfig.models as
-        | ModelsConfig
-        | undefined,
-    });
+    if (CONTEXT_WINDOW_RUNTIME_STATE.configuredCache !== MODEL_CONTEXT_TOKEN_CACHE) {
+      applyConfiguredContextWindows({
+        cache: MODEL_CONTEXT_TOKEN_CACHE,
+        modelsConfig: CONTEXT_WINDOW_RUNTIME_STATE.configuredConfig.models as
+          | ModelsConfig
+          | undefined,
+      });
+      CONTEXT_WINDOW_RUNTIME_STATE.configuredCache = MODEL_CONTEXT_TOKEN_CACHE;
+    }
     return CONTEXT_WINDOW_RUNTIME_STATE.configuredConfig;
   }
   if (Date.now() < CONTEXT_WINDOW_RUNTIME_STATE.nextConfigLoadAttemptAtMs) {
@@ -200,6 +203,7 @@ function primeConfiguredContextWindows(): OpenClawConfig | undefined {
       modelsConfig: cfg.models as ModelsConfig | undefined,
     });
     CONTEXT_WINDOW_RUNTIME_STATE.configuredConfig = cfg;
+    CONTEXT_WINDOW_RUNTIME_STATE.configuredCache = MODEL_CONTEXT_TOKEN_CACHE;
     CONTEXT_WINDOW_RUNTIME_STATE.configLoadFailures = 0;
     CONTEXT_WINDOW_RUNTIME_STATE.nextConfigLoadAttemptAtMs = 0;
     return cfg;
