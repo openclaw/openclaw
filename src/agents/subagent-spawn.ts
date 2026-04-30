@@ -1083,7 +1083,9 @@ export async function spawnSubagentDirect(
             }
           : {}),
         ...(() => {
-          if (!resolvedModel) return {};
+          if (!resolvedModel) {
+            return {};
+          }
           const { provider, model } = splitModelRef(resolvedModel);
           return {
             ...(provider ? { provider } : {}),

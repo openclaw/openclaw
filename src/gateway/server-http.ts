@@ -567,8 +567,6 @@ export function createGatewayHttpServer(opts: {
       const resolvedAuth = getResolvedAuth();
       const requestStages: GatewayHttpRequestStage[] = [
         {
-          name: "http-rpc",
-          run: () => handleHttpRpcEndpoint(req, res, resolvedAuth, rateLimiter),
           name: "gateway-probes",
           run: () =>
             handleGatewayProbeRequest(
