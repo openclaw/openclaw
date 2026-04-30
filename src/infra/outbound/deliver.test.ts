@@ -467,6 +467,73 @@ describe("deliverOutboundPayloads", () => {
     );
   });
 
+  it("merges whatsapp account-level mediaLocalRoots for an explicit account", async () => {
+    const sendWhatsApp = vi.fn().mockResolvedValue({ messageId: "w3", toJid: "jid" });
+
+    await deliverOutboundPayloads({
+      cfg: {
+        channels: {
+          whatsapp: {
+            textChunkLimit: 4000,
+            accounts: {
+              work: {
+                mediaLocalRoots: ["/tmp/acct-root"],
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      channel: "whatsapp",
+      accountId: "work",
+      to: "+1555",
+      payloads: [{ text: "hi", mediaUrl: "https://example.com/x.png" }],
+      deps: { whatsapp: sendWhatsApp },
+    });
+
+    expect(sendWhatsApp).toHaveBeenCalledWith(
+      "+1555",
+      "hi",
+      expect.objectContaining({
+        mediaLocalRoots: expect.arrayContaining([expectedPreferredTmpRoot, "/tmp/acct-root"]),
+      }),
+    );
+  });
+
+  it("merges whatsapp account-level mediaLocalRoots for the configured default account", async () => {
+    const sendWhatsApp = vi.fn().mockResolvedValue({ messageId: "w4", toJid: "jid" });
+
+    await deliverOutboundPayloads({
+      cfg: {
+        channels: {
+          whatsapp: {
+            textChunkLimit: 4000,
+            defaultAccount: "work",
+            accounts: {
+              work: {
+                mediaLocalRoots: ["/tmp/default-acct-root"],
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      channel: "whatsapp",
+      to: "+1555",
+      payloads: [{ text: "hi", mediaUrl: "https://example.com/x.png" }],
+      deps: { whatsapp: sendWhatsApp },
+    });
+
+    expect(sendWhatsApp).toHaveBeenCalledWith(
+      "+1555",
+      "hi",
+      expect.objectContaining({
+        mediaLocalRoots: expect.arrayContaining([
+          expectedPreferredTmpRoot,
+          "/tmp/default-acct-root",
+        ]),
+      }),
+    );
+  });
+
   it("includes OpenClaw tmp root in imessage mediaLocalRoots", async () => {
     const sendIMessage = vi.fn().mockResolvedValue({ messageId: "i1", chatId: "chat-1" });
 

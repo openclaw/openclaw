@@ -35,6 +35,14 @@ const WhatsAppAckReactionSchema = z
   .strict()
   .optional();
 
+const WhatsAppMediaLocalRootSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .refine((value) => value.startsWith("/") || value.startsWith("file://"), {
+    message: "mediaLocalRoots entries must be absolute paths or file:// URLs",
+  });
+
 const WhatsAppSharedSchema = z.object({
   enabled: z.boolean().optional(),
   capabilities: z.array(z.string()).optional(),
@@ -55,7 +63,7 @@ const WhatsAppSharedSchema = z.object({
   dms: z.record(z.string(), DmConfigSchema.optional()).optional(),
   textChunkLimit: z.number().int().positive().optional(),
   chunkMode: z.enum(["length", "newline"]).optional(),
-  mediaLocalRoots: z.array(z.string()).optional(),
+  mediaLocalRoots: z.array(WhatsAppMediaLocalRootSchema).optional(),
   blockStreaming: z.boolean().optional(),
   blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
   groups: WhatsAppGroupsSchema,

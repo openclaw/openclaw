@@ -128,6 +128,33 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(true);
   });
 
+  it("accepts channels.whatsapp.mediaLocalRoots absolute paths", () => {
+    const res = validateConfigObject({
+      channels: {
+        whatsapp: {
+          mediaLocalRoots: ["/tmp/wa-media", "file:///tmp/wa-media-2"],
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("rejects channels.whatsapp.mediaLocalRoots relative paths", () => {
+    const res = validateConfigObject({
+      channels: {
+        whatsapp: {
+          mediaLocalRoots: ["relative/path"],
+        },
+      },
+    });
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues[0]?.path).toBe("channels.whatsapp.mediaLocalRoots.0");
+    }
+  });
+
   it("accepts BlueBubbles enrichGroupParticipantsFromContacts at channel and account scope", () => {
     const res = validateConfigObject({
       channels: {

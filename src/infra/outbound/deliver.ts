@@ -9,6 +9,7 @@ import {
   resolveTextChunkLimit,
 } from "../../auto-reply/chunk.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
+import { createAccountListHelpers } from "../../channels/plugins/account-helpers.js";
 import { loadChannelOutboundAdapter } from "../../channels/plugins/outbound/load.js";
 import type {
   ChannelOutboundAdapter,
@@ -44,6 +45,8 @@ export { normalizeOutboundPayloads } from "./payloads.js";
 export { resolveOutboundSendDep, type OutboundSendDeps } from "./send-deps.js";
 
 const log = createSubsystemLogger("outbound/deliver");
+const { resolveDefaultAccountId: resolveDefaultWhatsAppAccountId } =
+  createAccountListHelpers("whatsapp");
 let transcriptRuntimePromise:
   | Promise<typeof import("../../config/sessions/transcript.runtime.js")>
   | undefined;
@@ -268,9 +271,13 @@ function createChannelOutboundContextBase(
   params: ChannelHandlerParams,
 ): Omit<ChannelOutboundContext, "text" | "mediaUrl"> {
   const whatsappConfig = params.channel === "whatsapp" ? params.cfg.channels?.whatsapp : undefined;
+  const resolvedWhatsAppAccountId =
+    params.channel === "whatsapp"
+      ? params.accountId?.trim() || resolveDefaultWhatsAppAccountId(params.cfg)
+      : undefined;
   const whatsappAccountConfig =
-    params.channel === "whatsapp" && params.accountId
-      ? whatsappConfig?.accounts?.[params.accountId]
+    params.channel === "whatsapp" && resolvedWhatsAppAccountId
+      ? whatsappConfig?.accounts?.[resolvedWhatsAppAccountId]
       : undefined;
   const mediaLocalRoots =
     params.channel === "whatsapp"
