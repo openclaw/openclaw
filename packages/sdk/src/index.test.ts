@@ -8,13 +8,13 @@ type RequestCall = {
   options?: GatewayRequestOptions;
 };
 
-type FakeResponse =
-  | unknown
-  | ((
-      params: unknown,
-      options: GatewayRequestOptions | undefined,
-      transport: FakeTransport,
-    ) => Promise<unknown> | unknown);
+type FakeResponseValue = null | boolean | number | string | Record<string, unknown> | unknown[];
+type FakeResponseHandler = (
+  params: unknown,
+  options: GatewayRequestOptions | undefined,
+  transport: FakeTransport,
+) => Promise<FakeResponseValue> | FakeResponseValue;
+type FakeResponse = FakeResponseValue | FakeResponseHandler;
 
 class FakeTransport implements OpenClawTransport {
   readonly calls: RequestCall[] = [];
