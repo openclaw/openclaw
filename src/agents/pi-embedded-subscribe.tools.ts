@@ -292,14 +292,25 @@ export function filterToolResultMediaUrls(
   if (mediaUrls.length === 0) {
     return mediaUrls;
   }
-  if (isToolResultMediaTrusted(toolName, result)) {
+  // When details.media.trustedLocalMedia is explicitly true the tool itself
+  // is vouching for the local file (e.g. the TTS tool after generating audio).
+  // Skip the builtinToolNames name-registration gate in that case — the
+  // semantic of trustedLocalMedia is exactly "this local path is safe to
+  // deliver" regardless of how the tool name was registered in this run.
+  const detailsMedia = (
+    result as { details?: { media?: { trustedLocalMedia?: unknown } } } | undefined
+  )?.details?.media;
+  const hasTrustedLocalMedia = detailsMedia?.trustedLocalMedia === true;
+
+  if (hasTrustedLocalMedia || isToolResultMediaTrusted(toolName, result)) {
     // When the current run provides its exact registered tool names (core
     // built-ins plus bundled/trusted plugin tools), require the raw emitted
     // tool name to match one of them before allowing local MEDIA: paths.
     // This blocks normalized aliases and case-variant collisions such as
     // "Bash" -> "bash" or "Web_Search" -> "web_search" from inheriting a
-    // registered tool's media trust.
-    if (builtinToolNames !== undefined) {
+    // registered tool's media trust. The trustedLocalMedia flag bypasses
+    // this gate because the tool explicitly opted in at result-construction time.
+    if (builtinToolNames !== undefined && !hasTrustedLocalMedia) {
       const registeredName = toolName?.trim();
       if (!registeredName || !builtinToolNames.has(registeredName)) {
         return mediaUrls.filter((url) => HTTP_URL_RE.test(url.trim()));
