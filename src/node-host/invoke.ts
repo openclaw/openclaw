@@ -648,8 +648,19 @@ export async function handleInvoke(
         );
         return;
       }
+      if (params.overwrite === false && fs.existsSync(resolved)) {
+        await sendErrorResult(
+          client,
+          frame,
+          "PERMISSION_DENIED",
+          `file already exists and overwrite is false: ${filePath}`,
+        );
+        return;
+      }
       try {
-        fs.mkdirSync(path.dirname(resolved), { recursive: true });
+        if (params.mkdirs !== false) {
+          fs.mkdirSync(path.dirname(resolved), { recursive: true });
+        }
         fs.writeFileSync(resolved, buf);
       } catch (ioErr) {
         await sendErrorResult(client, frame, "IO_ERROR", String(ioErr));
