@@ -764,7 +764,14 @@ async function runModelRun(params: {
 
 async function buildModelProviders() {
   const cfg = getRuntimeConfig();
-  const catalog = await loadModelCatalog({ config: cfg });
+  // Read-only inspection: load the catalog without refreshing models.json
+  // and without invoking provider plugin runtime catalog hooks, so listing
+  // never blocks on plugin-runtime fan-out.
+  const catalog = await loadModelCatalog({
+    config: cfg,
+    readOnly: true,
+    skipProviderPluginAugmentation: true,
+  });
   const selectedProvider = resolveSelectedProviderFromModelRef(
     resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model),
   );
@@ -1601,24 +1608,36 @@ export function registerCapabilityCli(program: Command) {
 
   model
     .command("list")
-    .description("List known models")
+    .description(
+      "List known models (catalog metadata; use `openclaw models list --all` for live provider-discovered models)",
+    )
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
-        const result = await loadModelCatalog({ config: getRuntimeConfig() });
+        const result = await loadModelCatalog({
+          config: getRuntimeConfig(),
+          readOnly: true,
+          skipProviderPluginAugmentation: true,
+        });
         emitJsonOrText(defaultRuntime, Boolean(opts.json), result, providerSummaryText);
       });
     });
 
   model
     .command("inspect")
-    .description("Inspect one model catalog entry")
+    .description(
+      "Inspect one model catalog entry (catalog metadata; use `openclaw models list --all` for live provider-discovered models)",
+    )
     .requiredOption("--model <provider/model>", "Model id")
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
         const target = normalizeStringifiedOptionalString(opts.model) ?? "";
-        const catalog = await loadModelCatalog({ config: getRuntimeConfig() });
+        const catalog = await loadModelCatalog({
+          config: getRuntimeConfig(),
+          readOnly: true,
+          skipProviderPluginAugmentation: true,
+        });
         const entry =
           catalog.find((candidate) => `${candidate.provider}/${candidate.id}` === target) ??
           catalog.find((candidate) => candidate.id === target);
@@ -1633,7 +1652,9 @@ export function registerCapabilityCli(program: Command) {
 
   model
     .command("providers")
-    .description("List model providers from the catalog")
+    .description(
+      "List model providers from the catalog (catalog metadata; use `openclaw models list --all` for live provider-discovered models)",
+    )
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
