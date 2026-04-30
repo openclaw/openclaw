@@ -151,8 +151,13 @@ export function createBlockReplyPipeline(params: {
         sentKeys.add(payloadKey);
         sentContentKeys.add(contentKey);
         const reply = resolveSendableOutboundReplyParts(payload);
-        for (const mediaUrl of reply.mediaUrls) {
-          sentMediaUrls.add(mediaUrl);
+        // Only track media URLs for dedupe when the block payload is
+        // media-only (no text). Mixed text+media payloads carry media
+        // that must survive into the final reply (#75156).
+        if (!reply.trimmedText) {
+          for (const mediaUrl of reply.mediaUrls) {
+            sentMediaUrls.add(mediaUrl);
+          }
         }
         if (!reply.hasMedia && reply.trimmedText) {
           streamedTextFragments.push(reply.trimmedText);

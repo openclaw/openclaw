@@ -78,7 +78,7 @@ describe("createBlockReplyPipeline dedup with threading", () => {
     expect(pipeline.hasSentPayload({ text: "response text", replyToId: "other-id" })).toBe(true);
   });
 
-  it("tracks media URLs delivered via block replies", async () => {
+  it("tracks media-only URLs but not mixed text+media URLs delivered via block replies", async () => {
     const pipeline = createBlockReplyPipeline({
       onBlockReply: async () => {},
       timeoutMs: 5000,
@@ -86,12 +86,14 @@ describe("createBlockReplyPipeline dedup with threading", () => {
 
     expect(pipeline.getSentMediaUrls()).toEqual([]);
 
+    // Mixed text+media: media should NOT be tracked for dedupe because
+    // it must survive into the final reply (#75156).
     pipeline.enqueue({ text: "caption", mediaUrl: "file:///a.ogg" });
+    // Media-only: media SHOULD be tracked for dedupe.
     pipeline.enqueue({ mediaUrls: ["file:///b.ogg", "file:///c.ogg"] });
     await pipeline.flush({ force: true });
 
     expect(pipeline.getSentMediaUrls()).toEqual([
-      "file:///a.ogg",
       "file:///b.ogg",
       "file:///c.ogg",
     ]);
