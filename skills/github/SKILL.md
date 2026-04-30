@@ -63,6 +63,23 @@ gh auth login
 gh auth status
 ```
 
+### After installing or authenticating `gh`
+
+OpenClaw detects skill requirements when the gateway and agent sessions start. If you installed the GitHub CLI or ran `gh auth login` while OpenClaw was already running, start a fresh session or restart the gateway before assuming the skill is broken.
+
+```bash
+# Restart the gateway/service so OpenClaw re-checks available skill binaries
+openclaw gateway restart
+
+# Confirm the gateway came back cleanly
+openclaw gateway status
+
+# Confirm GitHub CLI auth is still visible to the service user
+gh auth status
+```
+
+On Linux/systemd installs, `openclaw gateway status` also shows the service command and environment. If `gh` works in your shell but the skill still appears unavailable, make sure the gateway service user can find the same `gh` binary on `PATH`.
+
 ## Common Commands
 
 ### Pull Requests
