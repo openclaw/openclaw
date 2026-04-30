@@ -34,14 +34,13 @@ steps:
     args:
       - -ceu
       - |
-        # OPENCLAW_EXTENSIONS opts in only the extensions this fleet
-        # uses; non-listed channel/provider extensions don't get their
-        # bundled deps staged. Smoke step protects against missing
-        # entries. Adjust this list when fleet usage changes.
+        # NOTE: tried OPENCLAW_EXTENSIONS opt-in here; it only affects
+        # workspace dep resolution, not the dist/extensions bundles that
+        # `pnpm build:docker` produces. Physical strip happens in
+        # Dockerfile.fork's source stage instead.
         docker build \
           --platform=linux/amd64 \
           --build-arg OPENCLAW_VARIANT=slim \
-          --build-arg OPENCLAW_EXTENSIONS="discord feishu codex diffs browser qa-lab diagnostics-otel google openai deepseek minimax xiaomi kimi-coding anthropic anthropic-vertex amazon-bedrock amazon-bedrock-mantle memory-core memory-lancedb memory-wiki active-memory shared" \
           -t openclaw-base:${SHORT_SHA} \
           -f Dockerfile \
           .

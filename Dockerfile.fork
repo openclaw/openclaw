@@ -35,6 +35,23 @@ RUN set -eux; \
       \) -delete 2>/dev/null || true; \
     rm -rf /var/lib/apt/lists/* /var/cache/apt /root/.npm /tmp/*
 
+# Drop bundled channel extensions this fleet does not use. The fleet
+# survey shows every agent on z4 uses only `discord` and `feishu`.
+# Each `dist/extensions/<name>/node_modules/` carries that extension's
+# pinned runtime deps (e.g., whatsapp ~73 MB, matrix ~44 MB), which is
+# the bulk of the savings. Smoke step in cloudbuild.yaml protects
+# against accidentally dropping something the gateway needs.
+ARG OPENCLAW_DROP_CHANNEL_EXTENSIONS="\
+whatsapp matrix slack telegram googlechat nostr qqbot tlon \
+msteams mattermost nextcloud-talk synology-chat \
+line bluebubbles imessage signal voice-call \
+twitch irc wechat zalo zalo-personal qa-matrix"
+RUN set -eux; \
+    for name in $OPENCLAW_DROP_CHANNEL_EXTENSIONS; do \
+      rm -rf "/app/dist/extensions/$name" "/app/extensions/$name" 2>/dev/null || true; \
+    done; \
+    rm -rf /app/node_modules/@tloncorp /app/node_modules/@matrix-org 2>/dev/null || true
+
 # Install gh + lark-cli into source (so stage 2 copies them in one go).
 ARG OPENCLAW_GH_VERSION="2.92.0"
 ARG OPENCLAW_LARK_CLI_VERSION="1.0.21"
