@@ -7,6 +7,7 @@ import {
 } from "../../agents/agent-scope.js";
 import { resolveEffectiveToolPolicy } from "../../agents/pi-tools.policy.js";
 import { isToolAllowedByPolicies } from "../../agents/tool-policy-match.js";
+import { resolveToolProfilePolicy } from "../../agents/tool-policy-shared.js";
 import {
   resolveConversationBindingRecord,
   touchConversationBindingRecord,
@@ -595,11 +596,18 @@ export async function dispatchReplyFromConfig(
       undefined,
     chatType: sessionStoreEntry.entry?.chatType,
   });
-  const { globalPolicy, agentPolicy } = resolveEffectiveToolPolicy({
+  const { globalPolicy, agentPolicy, profile, providerProfile } = resolveEffectiveToolPolicy({
     config: cfg,
     sessionKey,
   });
-  const messageToolAvailable = isToolAllowedByPolicies("message", [globalPolicy, agentPolicy]);
+  const profilePolicy = resolveToolProfilePolicy(profile);
+  const providerProfilePolicy = resolveToolProfilePolicy(providerProfile);
+  const messageToolAvailable = isToolAllowedByPolicies("message", [
+    profilePolicy,
+    providerProfilePolicy,
+    globalPolicy,
+    agentPolicy,
+  ]);
   const sourceReplyPolicy = resolveSourceReplyVisibilityPolicy({
     cfg,
     ctx,
