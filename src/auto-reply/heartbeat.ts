@@ -7,6 +7,7 @@ export type HeartbeatTask = {
   name: string;
   interval: string;
   prompt: string;
+  model?: string;
 };
 
 // Default heartbeat prompt (used when config.agents.defaults.heartbeat.prompt is unset).
@@ -218,6 +219,7 @@ export function parseHeartbeatTasks(content: string): HeartbeatTask[] {
     const isTaskField =
       trimmed.startsWith("interval:") ||
       trimmed.startsWith("prompt:") ||
+      trimmed.startsWith("model:") ||
       trimmed.startsWith("- name:");
     if (
       !isTaskField &&
@@ -238,6 +240,7 @@ export function parseHeartbeatTasks(content: string): HeartbeatTask[] {
         .replace(/^["']|["']$/g, "");
       let interval = "";
       let prompt = "";
+      let model: string | undefined;
 
       // Look ahead for interval and prompt
       for (let j = i + 1; j < lines.length; j++) {
@@ -266,6 +269,14 @@ export function parseHeartbeatTasks(content: string): HeartbeatTask[] {
             .replace("prompt:", "")
             .trim()
             .replace(/^["']|["']$/g, "");
+        } else if (
+          nextTrimmed.startsWith("model:") &&
+          (nextLine.startsWith(" ") || nextLine.startsWith("\t"))
+        ) {
+          model = nextTrimmed
+            .replace("model:", "")
+            .trim()
+            .replace(/^["']|["']$/g, "");
         } else if (!nextTrimmed.startsWith(" ") && !nextTrimmed.startsWith("\t") && nextTrimmed) {
           // End of tasks block
           inTasksBlock = false;
@@ -274,7 +285,7 @@ export function parseHeartbeatTasks(content: string): HeartbeatTask[] {
       }
 
       if (name && interval && prompt) {
-        tasks.push({ name, interval, prompt });
+        tasks.push({ name, interval, prompt, ...(model ? { model } : {}) });
       }
     }
   }

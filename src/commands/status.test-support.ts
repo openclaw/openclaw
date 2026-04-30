@@ -229,6 +229,7 @@ export function createStatusCommandReportDataParams(
     summary: baseStatusSummary,
     securityAudit: {
       ts: Date.now(),
+      score: 90,
       summary: { critical: 0, warn: 1, info: 0 },
       findings: [
         {

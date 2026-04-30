@@ -401,10 +401,7 @@ export function isUnhandledRejectionHandled(reason: unknown): boolean {
         return true;
       }
     } catch (err) {
-      log.error(
-        "Unhandled rejection handler failed:",
-        formatUncaughtError(err),
-      );
+      log.error("Unhandled rejection handler failed", { error: formatUncaughtError(err) });
     }
   }
   return false;
@@ -424,10 +421,7 @@ export function isUncaughtExceptionHandled(error: unknown): boolean {
         return true;
       }
     } catch (err) {
-      log.error(
-        "Uncaught exception handler failed:",
-        formatUncaughtError(err),
-      );
+      log.error("Uncaught exception handler failed", { error: formatUncaughtError(err) });
     }
   }
   return false;
@@ -447,10 +441,8 @@ export function installUnhandledRejectionHandler(): void {
       return;
     }
 
-    // AbortError is typically an intentional cancellation (e.g., during shutdown)
-    // Log it but don't crash - these are expected during graceful shutdown
     if (isAbortError(reason)) {
-      log.warn("Suppressed AbortError:", formatUncaughtError(reason));
+      log.warn("Suppressed AbortError", { error: formatUncaughtError(reason) });
       return;
     }
 
@@ -467,7 +459,7 @@ export function installUnhandledRejectionHandler(): void {
     }
 
     if (isTransientUnhandledRejectionError(reason)) {
-      log.warn("Non-fatal unhandled rejection (continuing):", formatUncaughtError(reason));
+      log.warn("Non-fatal unhandled rejection (continuing)", { error: formatUncaughtError(reason) });
       return;
     }
 

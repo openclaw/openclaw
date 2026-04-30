@@ -404,6 +404,7 @@ tasks:
 
 - name: inbox-triage
   interval: 30m
+  model: anthropic/claude-3-5-sonnet # optional per-task model override
   prompt: "Check for urgent unread emails and flag anything time sensitive."
 - name: calendar-scan
   interval: 2h
@@ -419,6 +420,7 @@ tasks:
   <Accordion title="Behavior">
     - OpenClaw parses the `tasks:` block and checks each task against its own `interval`.
     - Only **due** tasks are included in the heartbeat prompt for that tick.
+    - **Per-task models**: You can specify an optional `model:` override for each task. If multiple due tasks have different models, they are executed in separate grouped turns.
     - If no tasks are due, the heartbeat is skipped entirely (`reason=no-tasks-due`) to avoid a wasted model call.
     - Non-task content in `HEARTBEAT.md` is preserved and appended as additional context after the due-task list.
     - Task last-run timestamps are stored in session state (`heartbeatTaskState`), so intervals survive normal restarts.

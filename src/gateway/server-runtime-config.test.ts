@@ -148,9 +148,16 @@ describe("resolveGatewayRuntimeConfig", () => {
         expectedAuthMode: "none",
         expectedBindHost: "127.0.0.1",
       },
+      {
+        name: "lan binding with explicit none auth (falls back to loopback)",
+        cfg: { gateway: { bind: "lan" as const, auth: { mode: "none" as const } } },
+        expectedBindHost: "127.0.0.1",
+      },
     ])("allows $name", async ({ cfg, expectedAuthMode, expectedBindHost }) => {
       const result = await resolveGatewayRuntimeConfig({ cfg, port: 18789 });
-      expect(result.authMode).toBe(expectedAuthMode);
+      if (expectedAuthMode) {
+        expect(result.authMode).toBe(expectedAuthMode);
+      }
       expect(result.bindHost).toBe(expectedBindHost);
     });
 
@@ -160,11 +167,6 @@ describe("resolveGatewayRuntimeConfig", () => {
         cfg: { gateway: { bind: "lan" as const, auth: { mode: "token" as const } } },
         expectedMessage:
           "gateway auth mode is token, but no token was configured (set gateway.auth.token or OPENCLAW_GATEWAY_TOKEN)",
-      },
-      {
-        name: "lan binding with explicit none auth",
-        cfg: { gateway: { bind: "lan" as const, auth: { mode: "none" as const } } },
-        expectedMessage: "refusing to bind gateway",
       },
       {
         name: "loopback binding that resolves to non-loopback host",
@@ -287,15 +289,14 @@ describe("resolveGatewayRuntimeConfig", () => {
       ).rejects.toThrow(/non-loopback Control UI requires gateway\.controlUi\.allowedOrigins/);
     });
 
-    it("rejects container auto-bind without auth (security invariant preserved)", async () => {
+    it("falls back to loopback during container auto-bind without auth (hardening)", async () => {
       const fs = require("node:fs");
       vi.spyOn(fs, "accessSync").mockImplementation(() => undefined); // /.dockerenv exists
-      await expect(
-        resolveGatewayRuntimeConfig({
-          cfg: { gateway: { auth: { mode: "none" } } },
-          port: 18789,
-        }),
-      ).rejects.toThrow(/refusing to bind gateway/);
+      const result = await resolveGatewayRuntimeConfig({
+        cfg: { gateway: { auth: { mode: "none" } } },
+        port: 18789,
+      });
+      expect(result.bindHost).toBe("127.0.0.1");
     });
 
     it("respects explicit loopback config even inside a container", async () => {

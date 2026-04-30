@@ -5,13 +5,15 @@ import { formatUncaughtError } from "./infra/errors.js";
 import { runFatalErrorHooks } from "./infra/fatal-error-hooks.js";
 import { createSubsystemLogger } from "./logging/subsystem.js";
 
-const logger = createSubsystemLogger("infra:runtime");
+
 import { isMainModule } from "./infra/is-main.js";
 import {
   installUnhandledRejectionHandler,
   isBenignUncaughtExceptionError,
   isUncaughtExceptionHandled,
 } from "./infra/unhandled-rejections.js";
+
+const logger = createSubsystemLogger("infra:runtime");
 
 type LegacyCliDeps = {
   runCli: (argv: string[]) => Promise<void>;
@@ -101,8 +103,10 @@ if (isMain) {
       return;
     }
     logger.error("Uncaught exception", { error });
+    console.error("Uncaught exception:", error);
     for (const message of runFatalErrorHooks({ reason: "uncaught_exception", error })) {
       logger.error(message, { reason: "uncaught_exception", error });
+      console.error(message);
     }
     restoreTerminalState("uncaught exception", { resumeStdinIfPaused: false });
     process.exit(1);
@@ -110,8 +114,10 @@ if (isMain) {
 
   void runLegacyCliEntry(process.argv).catch((err) => {
     logger.error("CLI failed", { error: err });
+    console.error("CLI failed:", err);
     for (const message of runFatalErrorHooks({ reason: "legacy_cli_failure", error: err })) {
       logger.error(message, { reason: "legacy_cli_failure", error: err });
+      console.error(message);
     }
     restoreTerminalState("legacy cli failure", { resumeStdinIfPaused: false });
     process.exit(1);

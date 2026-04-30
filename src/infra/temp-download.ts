@@ -3,13 +3,10 @@ import { mkdtemp, rm } from "node:fs/promises";
 import path from "node:path";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
 
 const logger = createSubsystemLogger("infra:temp-download");
 
 export { resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir.js";
-
-const logger = createSubsystemLogger("infra:temp-download");
 
 export type TempDownloadTarget = {
   dir: string;

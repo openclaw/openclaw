@@ -18,7 +18,10 @@ import {
   isValidIPv4,
   resolveGatewayBindHost,
 } from "./net.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { mergeGatewayTailscaleConfig } from "./startup-auth.js";
+
+const log = createSubsystemLogger("gateway:config");
 
 export type GatewayRuntimeConfig = {
   bindHost: string;
@@ -61,7 +64,7 @@ export async function resolveGatewayRuntimeConfig(params: {
   const bindMode =
     bindExplicit ?? (tailscaleModeEarly !== "off" ? "loopback" : defaultGatewayBindMode());
   const customBindHost = params.cfg.gateway?.customBindHost;
-  const bindHost = params.host ?? (await resolveGatewayBindHost(bindMode, customBindHost));
+  let bindHost = params.host ?? (await resolveGatewayBindHost(bindMode, customBindHost));
   if (bindMode === "loopback" && !isLoopbackHost(bindHost)) {
     throw new Error(
       `gateway bind=loopback resolved to non-loopback host ${bindHost}; refusing fallback to a network bind`,
@@ -142,9 +145,12 @@ export async function resolveGatewayRuntimeConfig(params: {
     throw new Error("tailscale serve/funnel requires gateway bind=loopback (127.0.0.1)");
   }
   if (!isLoopbackHost(bindHost) && !hasSharedSecret && authMode !== "trusted-proxy") {
-    throw new Error(
-      `refusing to bind gateway to ${bindHost}:${params.port} without auth (set gateway.auth.token/password, or set OPENCLAW_GATEWAY_TOKEN/OPENCLAW_GATEWAY_PASSWORD; legacy CLAWDBOT_* and MOLTBOT_* environment variables are ignored)`,
+    log.warn(
+      `Gateway is configured to bind to ${bindHost} without authentication. ` +
+        "For security, falling back to loopback (127.0.0.1). " +
+        "To allow remote access, configure a gateway.auth.token or use Tailscale.",
     );
+    bindHost = "127.0.0.1";
   }
   if (
     controlUiEnabled &&
