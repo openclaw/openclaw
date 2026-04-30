@@ -502,6 +502,33 @@ describe("projectRecentChatDisplayMessages", () => {
     ]);
   });
 
+  it("projects empty stream-error assistant content with the visible error reason", () => {
+    const result = projectRecentChatDisplayMessages([
+      {
+        role: "assistant",
+        content: [],
+        stopReason: "error",
+        errorMessage: "401 status code (no body)",
+        timestamp: 1,
+      },
+    ]);
+
+    expect(result).toEqual([
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "text",
+            text: "Assistant couldn't start because model authentication failed. Reconnect the model provider and try again.",
+          },
+        ],
+        stopReason: "error",
+        errorMessage: "401 status code (no body)",
+        timestamp: 1,
+      },
+    ]);
+  });
+
   it("keeps stream-error fallback turns generic when no error reason exists", () => {
     const message = {
       role: "assistant",

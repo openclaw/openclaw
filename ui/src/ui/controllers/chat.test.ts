@@ -712,6 +712,41 @@ describe("handleChatEvent", () => {
     expect(state.lastError).toBe("lower-level error");
   });
 
+  it("uses visible fallback copy when an error payload has empty assistant content", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: "",
+      chatStreamStartedAt: 100,
+    });
+
+    expect(
+      handleChatEvent(state, {
+        runId: "run-1",
+        sessionKey: "main",
+        state: "error",
+        message: {
+          role: "assistant",
+          content: [],
+          timestamp: 101,
+        },
+        errorMessage: "401 status code (no body)",
+      }),
+    ).toBe("error");
+    expect(state.chatMessages).toMatchObject([
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "text",
+            text: "Assistant couldn't start because model authentication failed. Reconnect the model provider and try again.",
+          },
+        ],
+      },
+    ]);
+    expect(state.lastError).toBe("401 status code (no body)");
+  });
+
   it("keeps user messages containing NO_REPLY text", () => {
     const state = createState({
       sessionKey: "main",

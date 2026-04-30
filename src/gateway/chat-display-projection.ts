@@ -239,6 +239,9 @@ function projectAssistantStreamErrorForDisplay(
   if (isStreamErrorFallbackText(entry.content)) {
     entry.content = displayText;
     changed = true;
+  } else if (Array.isArray(entry.content) && entry.content.length === 0) {
+    entry.content = [{ type: "text", text: displayText }];
+    changed = true;
   } else if (Array.isArray(entry.content) && entry.content.length === 1) {
     const block = entry.content[0];
     if (block && typeof block === "object") {

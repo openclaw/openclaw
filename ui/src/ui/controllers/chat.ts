@@ -340,6 +340,24 @@ function visibleChatErrorText(errorMessage: unknown): string {
   return /^error:/i.test(rawText) ? rawText : `Error: ${rawText}`;
 }
 
+function hasVisibleAssistantMessageContent(message: Record<string, unknown>): boolean {
+  const text = extractText(message)?.trim();
+  if (text) {
+    return true;
+  }
+  const content = message.content;
+  return (
+    Array.isArray(content) &&
+    content.some((block) => {
+      if (!block || typeof block !== "object") {
+        return false;
+      }
+      const typed = block as { type?: unknown };
+      return typed.type !== "text";
+    })
+  );
+}
+
 function appendVisibleChatMessage(state: ChatState, message: unknown) {
   state.chatMessages = [...state.chatMessages, message];
   markChatLocalMutation(state);
@@ -888,7 +906,9 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     const errorMessage = normalizeFinalAssistantMessage(payload.message);
     appendVisibleChatMessage(
       state,
-      errorMessage && !isAssistantSilentReply(errorMessage)
+      errorMessage &&
+        !isAssistantSilentReply(errorMessage) &&
+        hasVisibleAssistantMessageContent(errorMessage)
         ? errorMessage
         : {
             role: "assistant",
