@@ -982,6 +982,7 @@ async function runImageDescribe(params: {
       if (!result.text) {
         // Provide more helpful error message if provider might not be configured
         const hasConfiguredImageProvider = hasConfiguredCapabilityProvider("image", cfg);
+        throw new Error(
           hasConfiguredImageProvider
             ? `No description returned for image: ${resolvedPath}`
             : "No image-understanding provider available. Configure a provider like openai (OPENAI_API_KEY) first."
@@ -1024,17 +1025,18 @@ async function runAudioTranscribe(params: {
   });
   if (!result.text) {
     // Provide more helpful error message if provider might not be configured
-    const registry = buildMediaUnderstandingRegistry(undefined, cfg);
-    const audioProviders = [...registry.values()]
-      .filter(p => p.capabilities?.includes("audio"));
-    const hasConfiguredAudioProvider = audioProviders.some(p =>
-      providerHasGenericConfig({
-        cfg,
-        providerId: p.id,
-        envVars: getProviderEnvVars(p.id, { config: cfg, includeUntrustedWorkspacePlugins: false }),
-      })
-    );
     const hasConfiguredAudioProvider = hasConfiguredCapabilityProvider("audio", cfg);
+    throw new Error(
+      hasConfiguredAudioProvider
+        ? `No transcript returned for audio: ${path.resolve(params.file)}`
+        : "No audio-transcription provider available. Configure a provider like openai (OPENAI_API_KEY) or deepgram (DEEPGRAM_API_KEY) first."
+    );
+  }
+  return {
+    ok: true,
+    capability: "audio.transcribe",
+    transport: "local" as const,
+    attempts: [],
     outputs: [{ path: path.resolve(params.file), text: result.text, kind: "audio.transcription" }],
   } satisfies CapabilityEnvelope;
 }
