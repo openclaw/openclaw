@@ -32,6 +32,53 @@ export function describeTelegramInteractiveButtonBehavior(): void {
         [{ text: "Alpha", callback_data: "alpha", style: undefined }],
       ]);
     });
+
+    it("maps URL buttons to Telegram URL buttons by default", () => {
+      expect(
+        buildTelegramInteractiveButtons({
+          blocks: [
+            {
+              type: "buttons",
+              buttons: [{ label: "Open", url: "https://example.com/app" }],
+            },
+          ],
+        }),
+      ).toEqual([[{ text: "Open", url: "https://example.com/app", style: undefined }]]);
+    });
+
+    it("maps HTTPS URL buttons to Mini App buttons when requested", () => {
+      expect(
+        buildTelegramInteractiveButtons(
+          {
+            blocks: [
+              {
+                type: "buttons",
+                buttons: [{ label: "Open", url: "https://example.com/app" }],
+              },
+            ],
+          },
+          { urlButtonMode: "web_app" },
+        ),
+      ).toEqual([
+        [{ text: "Open", web_app: { url: "https://example.com/app" }, style: undefined }],
+      ]);
+    });
+
+    it("keeps non-HTTPS URL buttons as regular URL buttons for Mini App mode", () => {
+      expect(
+        buildTelegramInteractiveButtons(
+          {
+            blocks: [
+              {
+                type: "buttons",
+                buttons: [{ label: "Open", url: "http://example.test/app" }],
+              },
+            ],
+          },
+          { urlButtonMode: "web_app" },
+        ),
+      ).toEqual([[{ text: "Open", url: "http://example.test/app", style: undefined }]]);
+    });
   });
 
   describe("resolveTelegramInlineButtons", () => {

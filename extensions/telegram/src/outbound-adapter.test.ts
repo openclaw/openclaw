@@ -98,6 +98,76 @@ describe("telegramOutbound", () => {
     expect(result).toEqual({ channel: "telegram", messageId: "tg-2", chatId: "12345" });
   });
 
+  it("renders direct-chat HTTPS presentation URL buttons as Mini App buttons", async () => {
+    const payload = telegramOutbound.renderPresentation?.({
+      payload: { text: "hello" },
+      presentation: {
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [{ label: "Open canvas", url: "https://example.com/canvas" }],
+          },
+        ],
+      },
+      ctx: {
+        cfg: {},
+        to: "12345",
+        text: "",
+        payload: { text: "hello" },
+      },
+    });
+
+    expect(payload).toMatchObject({
+      channelData: {
+        telegram: {
+          buttons: [
+            [
+              {
+                text: "Open canvas",
+                web_app: { url: "https://example.com/canvas" },
+              },
+            ],
+          ],
+        },
+      },
+    });
+  });
+
+  it("renders group presentation URL buttons as regular URL buttons", async () => {
+    const payload = telegramOutbound.renderPresentation?.({
+      payload: { text: "hello" },
+      presentation: {
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [{ label: "Open canvas", url: "https://example.com/canvas" }],
+          },
+        ],
+      },
+      ctx: {
+        cfg: {},
+        to: "-1001234567890",
+        text: "",
+        payload: { text: "hello" },
+      },
+    });
+
+    expect(payload).toMatchObject({
+      channelData: {
+        telegram: {
+          buttons: [
+            [
+              {
+                text: "Open canvas",
+                url: "https://example.com/canvas",
+              },
+            ],
+          ],
+        },
+      },
+    });
+  });
+
   it("passes delivery pin notify requests to Telegram pinning", async () => {
     pinMessageTelegramMock.mockResolvedValueOnce({ ok: true, messageId: "tg-1", chatId: "12345" });
 

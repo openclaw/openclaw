@@ -21,6 +21,7 @@ import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import type { TelegramInlineButtons } from "./button-types.js";
 import { resolveTelegramInlineButtons } from "./button-types.js";
 import { markdownToTelegramHtmlChunks } from "./format.js";
+import { resolveTelegramTargetChatType } from "./inline-buttons.js";
 import { parseTelegramReplyToMessageId, parseTelegramThreadId } from "./outbound-params.js";
 import { pinMessageTelegram } from "./send.js";
 
@@ -70,6 +71,14 @@ async function resolveTelegramSendContext(params: {
       gatewayClientScopes: params.gatewayClientScopes,
     },
   };
+}
+
+function resolveTelegramPresentationUrlButtonMode(to: string): "url" | "web_app" {
+  return resolveTelegramTargetChatType(to) === "direct" ? "web_app" : "url";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 export async function sendTelegramPayloadMessages(params: {
@@ -135,11 +144,29 @@ export const telegramOutbound: ChannelOutboundAdapter = {
   deliveryCapabilities: {
     pin: true,
   },
-  renderPresentation: ({ payload, presentation }) => ({
-    ...payload,
-    text: renderMessagePresentationFallbackText({ text: payload.text, presentation }),
-    interactive: presentationToInteractiveReply(presentation),
-  }),
+  renderPresentation: ({ payload, presentation, ctx }) => {
+    const interactive = presentationToInteractiveReply(presentation);
+    const buttons = resolveTelegramInlineButtons({
+      interactive,
+      urlButtonMode: resolveTelegramPresentationUrlButtonMode(ctx.to),
+    });
+    return {
+      ...payload,
+      text: renderMessagePresentationFallbackText({ text: payload.text, presentation }),
+      interactive,
+      ...(buttons
+        ? {
+            channelData: {
+              ...payload.channelData,
+              telegram: {
+                ...(isRecord(payload.channelData?.telegram) ? payload.channelData.telegram : {}),
+                buttons,
+              },
+            },
+          }
+        : {}),
+    };
+  },
   pinDeliveredMessage: async ({ cfg, target, messageId, pin }) => {
     await pinMessageTelegram(target.to, messageId, {
       cfg,

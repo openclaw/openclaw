@@ -434,6 +434,15 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 
     Legacy `capabilities: ["inlineButtons"]` maps to `inlineButtons: "all"`.
 
+    URL buttons in shared presentations are supported. In direct Telegram chats, HTTPS URL
+    buttons render as Telegram Mini App `web_app` buttons so canvas-style views open inside
+    Telegram. In groups, supergroups, channels, username targets, and non-HTTPS URLs, they render
+    as regular URL buttons because Bot API Mini App inline buttons are limited to private chats
+    between the user and bot and require HTTPS.
+
+    Mini App payloads must validate `Telegram.WebApp.initData` server-side before trusting user or
+    session data. Do not use `initDataUnsafe` for authorization decisions.
+
     Message action example:
 
 ```json5
