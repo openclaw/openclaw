@@ -66,12 +66,16 @@ export function createCliProgress(options: ProgressOptions): ProgressReporter {
 
   const delayMs = typeof options.delayMs === "number" ? options.delayMs : DEFAULT_DELAY_MS;
   const canOsc = isTty && supportsOscProgress(process.env, isTty);
+  const stdinIsRaw = process.stdin.isRaw === true;
   const allowSpinner = shouldUseInteractiveProgressSpinner({
     fallback: options.fallback,
     streamIsTty: isTty,
-    stdinIsRaw: process.stdin.isRaw,
+    stdinIsRaw,
   });
   const allowLine = isTty && options.fallback === "line";
+  if (isTty && stdinIsRaw && (options.fallback === undefined || options.fallback === "spinner")) {
+    return noopReporter;
+  }
 
   let started = false;
   let label = options.label;
