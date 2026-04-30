@@ -32,6 +32,7 @@ import {
   resolveProviderOwners,
   resolveSetupProviderOwners,
 } from "./plugin-registry.js";
+import { resolvePluginPath } from "./registry.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
 const tempDirs: string[] = [];
@@ -47,8 +48,6 @@ function makeTempDir() {
 function hermeticEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   return {
     OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
-    OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE: "1",
-    OPENCLAW_DISABLE_PLUGIN_MANIFEST_CACHE: "1",
     OPENCLAW_VERSION: "2026.4.25",
     VITEST: "true",
     ...overrides,
@@ -146,6 +145,27 @@ function createIndex(
 }
 
 describe("plugin registry facade", () => {
+  it("resolves relative plugin API paths against the plugin root", () => {
+    const pluginRoot = path.join(makeTempDir(), "plugins", "demo");
+
+    expect(resolvePluginPath("data/cache.json", pluginRoot)).toBe(
+      path.join(pluginRoot, "data", "cache.json"),
+    );
+    expect(resolvePluginPath("./data/cache.json", pluginRoot)).toBe(
+      path.join(pluginRoot, "data", "cache.json"),
+    );
+  });
+
+  it("keeps absolute and home plugin API paths user-resolved", () => {
+    const pluginRoot = path.join(makeTempDir(), "plugins", "demo");
+    const absolute = path.resolve(pluginRoot, "..", "outside.txt");
+
+    expect(resolvePluginPath(absolute, pluginRoot)).toBe(resolvePluginPath(absolute, undefined));
+    expect(resolvePluginPath("~/openclaw/plugin.txt", pluginRoot)).toBe(
+      resolvePluginPath("~/openclaw/plugin.txt", undefined),
+    );
+  });
+
   it("resolves cold plugin records and contribution owners without loading runtime", () => {
     const rootDir = makeTempDir();
     const candidate = createCandidate(rootDir);
@@ -544,7 +564,7 @@ describe("plugin registry facade", () => {
     ]);
   });
 
-  it("caches config-scoped derived registries when the persisted registry is missing", () => {
+  it("derives fresh config-scoped registries when the persisted registry is missing", () => {
     const stateDir = makeTempDir();
     const workspaceDir = makeTempDir();
     const bundledRoot = makeTempDir();
@@ -576,9 +596,10 @@ describe("plugin registry facade", () => {
     ).length;
 
     expect(first.source).toBe("derived");
-    expect(second).toBe(first);
+    expect(second.source).toBe("derived");
+    expect(second).not.toBe(first);
     expect(manifestReadsAfterFirst).toBeGreaterThan(0);
-    expect(manifestReadsAfterSecond).toBe(manifestReadsAfterFirst);
+    expect(manifestReadsAfterSecond).toBeGreaterThan(manifestReadsAfterFirst);
   });
 
   it("falls back to the derived registry when persisted reads are disabled", async () => {

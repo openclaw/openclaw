@@ -4,6 +4,7 @@ import ai.openclaw.app.BuildConfig
 import ai.openclaw.app.LocationMode
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.NotificationPackageFilterMode
+import ai.openclaw.app.SensitiveFeatureConfig
 import ai.openclaw.app.node.DeviceNotificationListenerService
 import ai.openclaw.app.normalizeLocalHourMinute
 import android.Manifest
@@ -204,10 +205,10 @@ fun SettingsSheet(viewModel: MainViewModel) {
 
   val smsPermissionAvailable =
     remember {
-      BuildConfig.OPENCLAW_ENABLE_SMS &&
+      SensitiveFeatureConfig.smsEnabled &&
         context.packageManager?.hasSystemFeature(PackageManager.FEATURE_TELEPHONY) == true
     }
-  val callLogPermissionAvailable = remember { BuildConfig.OPENCLAW_ENABLE_CALL_LOG }
+  val callLogPermissionAvailable = remember { SensitiveFeatureConfig.callLogEnabled }
   val photosPermission =
     if (Build.VERSION.SDK_INT >= 33) {
       Manifest.permission.READ_MEDIA_IMAGES

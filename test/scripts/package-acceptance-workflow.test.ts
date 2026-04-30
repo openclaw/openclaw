@@ -6,6 +6,7 @@ const LIVE_E2E_WORKFLOW = ".github/workflows/openclaw-live-and-e2e-checks-reusab
 const NPM_TELEGRAM_WORKFLOW = ".github/workflows/npm-telegram-beta-e2e.yml";
 const RELEASE_CHECKS_WORKFLOW = ".github/workflows/openclaw-release-checks.yml";
 const FULL_RELEASE_VALIDATION_WORKFLOW = ".github/workflows/full-release-validation.yml";
+const QA_LIVE_TRANSPORTS_WORKFLOW = ".github/workflows/qa-live-transports-convex.yml";
 
 describe("package acceptance workflow", () => {
   it("resolves candidate package sources before reusing Docker E2E lanes", () => {
@@ -54,7 +55,10 @@ describe("package acceptance workflow", () => {
       "package_label: openclaw@${{ needs.resolve_package.outputs.package_version }}",
     );
     expect(workflow).toContain(
-      "harness_ref: ${{ inputs.source == 'ref' && inputs.package_ref || inputs.workflow_ref }}",
+      "package_source_sha: ${{ steps.resolve.outputs.package_source_sha }}",
+    );
+    expect(workflow).toContain(
+      "harness_ref: ${{ needs.resolve_package.outputs.package_source_sha || inputs.workflow_ref }}",
     );
   });
 });
@@ -96,6 +100,10 @@ describe("package artifact reuse", () => {
 
     expect(pullHelper).toContain("OPENCLAW_DOCKER_PULL_ATTEMPTS");
     expect(pullHelper).toContain("OPENCLAW_DOCKER_PULL_TIMEOUT_SECONDS");
+    expect(pullHelper).toContain('timeout_seconds="${OPENCLAW_DOCKER_PULL_TIMEOUT_SECONDS:-180}"');
+    expect(pullHelper).toContain(
+      'retry_delay_seconds="${OPENCLAW_DOCKER_PULL_RETRY_DELAY_SECONDS:-5}"',
+    );
     expect(pullHelper).toContain(
       'timeout --foreground --kill-after=30s "${timeout_seconds}s" docker pull "$image"',
     );
@@ -112,13 +120,43 @@ describe("package artifact reuse", () => {
 
   it("shards broad native live tests instead of one serial live-all job", () => {
     const workflow = readFileSync(LIVE_E2E_WORKFLOW, "utf8");
+    const retryHelper = readFileSync("scripts/ci-live-command-retry.sh", "utf8");
 
+    expect(workflow).toContain("validate_selected_ref:\n    runs-on: ubuntu-24.04");
     expect(workflow).not.toContain("suite_id: live-all");
     expect(workflow).not.toContain("command: pnpm test:live\n");
     expect(workflow).toContain("suite_id: native-live-src-agents");
     expect(workflow).toContain("Checkout trusted live shard harness");
     expect(workflow).toContain(
       "command: node .release-harness/scripts/test-live-shard.mjs native-live-src-agents",
+    );
+    expect(workflow).toContain("OPENCLAW_LIVE_COMMAND: ${{ matrix.command }}");
+    expect(workflow).toContain("live_suite_filter:");
+    expect(workflow).toContain("validate_live_suite_filter:");
+    expect(workflow).toContain("LIVE_SUITE_FILTER: ${{ inputs.live_suite_filter }}");
+    expect(workflow).toContain(
+      "live_suite_filter '${LIVE_SUITE_FILTER}' does not match any runnable suite",
+    );
+    expect(workflow).toContain('add_profile_suite docker-live-models "minimum stable full"');
+    expect(workflow).toContain(
+      'add_profile_suite native-live-src-gateway-core "minimum stable full"',
+    );
+    expect(workflow).toContain('add_profile_suite live-cli-backend-docker "stable full"');
+    expect(workflow).toContain(
+      "inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id",
+    );
+    expect(workflow).toContain("OPENCLAW_LIVE_CLI_BACKEND_MODEL=codex-cli/gpt-5.5");
+    expect(workflow).toContain("OPENCLAW_LIVE_CLI_BACKEND_AUTH=api-key");
+    expect(workflow).toContain("OPENCLAW_LIVE_CLI_BACKEND_USE_CI_SAFE_CODEX_CONFIG=1");
+    expect((workflow.match(/service_tier=\\"fast\\"/g) ?? []).length).toBeGreaterThanOrEqual(2);
+    expect(workflow).not.toContain(
+      'OPENCLAW_LIVE_CLI_BACKEND_ARGS=["exec","--json","--color","never","--sandbox","danger-full-access","--skip-git-repo-check"]',
+    );
+    expect(workflow).toContain("bash .release-harness/scripts/ci-live-command-retry.sh");
+    expect(workflow).toMatch(/validate_repo_e2e:[\s\S]*?runs-on: blacksmith-8vcpu-ubuntu-2404/u);
+    expect(workflow).toMatch(/validate_special_e2e:[\s\S]*?runs-on: blacksmith-8vcpu-ubuntu-2404/u);
+    expect(workflow).toMatch(
+      /validate_live_provider_suites:[\s\S]*?runs-on: blacksmith-8vcpu-ubuntu-2404/u,
     );
     expect(workflow).toContain("suite_id: native-live-src-gateway-core");
     expect(workflow).toContain("suite_id: native-live-src-gateway-backends");
@@ -132,13 +170,38 @@ describe("package artifact reuse", () => {
     );
     expect(workflow).toContain("suite_id: native-live-extensions-a-k");
     expect(workflow).toContain("suite_id: native-live-extensions-l-n");
+    expect(workflow).toContain("suite_id: native-live-extensions-moonshot");
+    expect(workflow).toMatch(/suite_id: native-live-extensions-moonshot[\s\S]*?advisory: true/u);
+    expect(workflow).toContain("OPENCLAW_LIVE_SUITE_ADVISORY: ${{ matrix.advisory }}");
+    expect(workflow).toContain("Advisory live suite failed with exit code");
     expect(workflow).toContain("suite_id: native-live-extensions-openai");
-    expect(workflow).toContain("suite_id: native-live-extensions-o-z");
-    expect(workflow).toContain("suite_id: native-live-extensions-media");
+    expect(workflow).toContain("suite_id: native-live-extensions-o-z-other");
+    expect(workflow).toContain("validate_live_media_provider_suites:");
     expect(workflow).toMatch(
-      /suite_id: native-live-extensions-media-audio[\s\S]*?needs_ffmpeg: true/u,
+      /validate_live_media_provider_suites:[\s\S]*?runs-on: blacksmith-8vcpu-ubuntu-2404/u,
     );
-    expect(workflow).toContain("if: matrix.needs_ffmpeg");
+    expect(workflow).toContain("image: ghcr.io/openclaw/openclaw-live-media-runner:ubuntu-24.04");
+    expect(workflow).toContain("ffmpeg -version | head -1");
+    expect(workflow).toContain("ffprobe -version | head -1");
+    expect(workflow).toContain("suite_id: native-live-extensions-media-audio");
+    expect(workflow).toContain("suite_id: native-live-extensions-media-music-google");
+    expect(workflow).toContain("suite_id: native-live-extensions-media-music-minimax");
+    expect(workflow).toContain("suite_id: native-live-extensions-media-video");
+    expect(workflow).toContain("suite_group: native-live-extensions-media-video");
+    expect(workflow).toContain("OPENCLAW_LIVE_VIDEO_GENERATION_PROVIDERS=google,minimax");
+    expect(workflow).toContain("OPENCLAW_LIVE_VIDEO_GENERATION_PROVIDERS=openai,openrouter,xai");
+    expect(workflow).toContain("suite_group: native-live-src-gateway-profiles-opencode-go");
+    expect(workflow).toContain("opencode-go/mimo-v2-omni");
+    expect(workflow).toContain(
+      "inputs.live_suite_filter == 'native-live-src-gateway-profiles-opencode-go'",
+    );
+    expect(workflow).toContain("inputs.live_suite_filter == 'native-live-extensions-media-video'");
+    expect(workflow).not.toContain("needs_ffmpeg: true");
+    expect(retryHelper).toContain("OPENCLAW_LIVE_COMMAND_ATTEMPTS:-2");
+    expect(retryHelper).toContain("ECONNRESET");
+    expect(retryHelper).toContain("fetch failed");
+    expect(retryHelper).toContain("gateway request timeout");
+    expect(retryHelper).toContain("model idle timeout");
   });
 
   it("runs Docker live harnesses from trusted helper scripts", () => {
@@ -232,11 +295,15 @@ describe("package artifact reuse", () => {
 
     expect(workflow).toContain("package_acceptance_release_checks:");
     expect(workflow).toContain(
-      'live_and_e2e_release_checks:\n    needs: [resolve_target, prepare_release_package]\n    if: contains(fromJSON(\'["all","live-e2e"]\'), needs.resolve_target.outputs.rerun_group)',
+      "live_repo_e2e_release_checks:\n    name: Run repo/live E2E validation\n    needs: [resolve_target]",
     );
+    expect(workflow).toContain(
+      "docker_e2e_release_checks:\n    name: Run Docker release-path validation\n    needs: [resolve_target, prepare_release_package]",
+    );
+    expect(workflow).toContain("include_release_path_suites: false");
+    expect(workflow).toContain("include_release_path_suites: true");
     expect(workflow).toContain("uses: ./.github/workflows/package-acceptance.yml");
     expect(workflow).toContain("source: artifact");
-    expect(workflow).toContain("artifact_run_id: ${{ github.run_id }}");
     expect(workflow).toContain(
       "artifact_name: ${{ needs.prepare_release_package.outputs.artifact_name }}",
     );
@@ -258,6 +325,16 @@ describe("package artifact reuse", () => {
       "OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}",
     );
     expect(workflow).toContain("rerun_group:");
+    expect(workflow).toContain("live_suite_filter:");
+    expect(workflow).toContain(
+      "live_suite_filter: ${{ needs.resolve_target.outputs.live_suite_filter }}",
+    );
+    expect(workflow).toContain(
+      "contains(fromJSON('[\"all\",\"cross-os\",\"package\"]'), needs.resolve_target.outputs.rerun_group) || (needs.resolve_target.outputs.rerun_group == 'live-e2e' && needs.resolve_target.outputs.live_suite_filter == '')",
+    );
+    expect(workflow).toContain(
+      "contains(fromJSON('[\"all\",\"live-e2e\"]'), needs.resolve_target.outputs.rerun_group) && needs.resolve_target.outputs.live_suite_filter == ''",
+    );
     expect(workflow).toContain("- live-e2e");
     expect(workflow).toContain("- qa-live");
   });
@@ -271,7 +348,15 @@ describe("package artifact reuse", () => {
       'pnpm openclaw qa matrix --help 2>/dev/null | grep -F -q -- "--fail-fast"',
     );
     expect(releaseWorkflow).toContain("matrix_args+=(--fail-fast)");
-    expect(releaseWorkflow).toContain('pnpm openclaw qa matrix "${matrix_args[@]}"');
+    expect(releaseWorkflow).toContain(
+      'pnpm openclaw qa matrix --output-dir "${attempt_output_dir}" "${matrix_args[@]}"',
+    );
+    expect(releaseWorkflow).toContain(
+      'echo "Matrix live lane failed on attempt ${attempt}; retrying once..." >&2',
+    );
+    expect(releaseWorkflow).toContain(
+      'echo "Telegram live lane failed on attempt ${attempt}; retrying once..." >&2',
+    );
     expect(qaWorkflow).toContain(
       'pnpm openclaw qa matrix --help 2>/dev/null | grep -F -q -- "--fail-fast"',
     );
@@ -298,8 +383,53 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain('-f harness_ref="$TARGET_SHA"');
     expect(workflow).toContain("child_rerun_group=all");
     expect(workflow).toContain('-f rerun_group="$child_rerun_group"');
+    expect(workflow).toContain('args+=(-f live_suite_filter="$LIVE_SUITE_FILTER")');
+    expect(workflow).toContain("cancel-in-progress: false");
+    expect(workflow).not.toContain("gh run cancel");
+    expect(workflow).not.toContain("force-cancel");
     expect(workflow).toContain("NORMAL_CI_RESULT: ${{ needs.normal_ci.result }}");
     expect(workflow).not.toContain("workflow_ref:");
     expect(workflow).not.toContain("inputs.workflow_ref");
+  });
+
+  it("keeps release QA and repo E2E lanes off scarce 32-core runners", () => {
+    const releaseChecksWorkflow = readFileSync(RELEASE_CHECKS_WORKFLOW, "utf8");
+    const qaWorkflow = readFileSync(QA_LIVE_TRANSPORTS_WORKFLOW, "utf8");
+
+    for (const jobName of [
+      "qa_lab_parity_lane_release_checks",
+      "qa_lab_parity_report_release_checks",
+      "qa_live_matrix_release_checks",
+      "qa_live_telegram_release_checks",
+    ]) {
+      expect(releaseChecksWorkflow).toMatch(
+        new RegExp(`${jobName}:[\\s\\S]*?runs-on: blacksmith-8vcpu-ubuntu-2404`, "u"),
+      );
+    }
+
+    for (const jobName of [
+      "run_mock_parity",
+      "run_live_matrix",
+      "run_live_matrix_sharded",
+      "run_live_telegram",
+      "run_live_discord",
+    ]) {
+      expect(qaWorkflow).toMatch(
+        new RegExp(`${jobName}:[\\s\\S]*?runs-on: blacksmith-8vcpu-ubuntu-2404`, "u"),
+      );
+    }
+  });
+
+  it("summarizes queue time separately from execution time in full validation", () => {
+    const workflow = readFileSync(FULL_RELEASE_VALIDATION_WORKFLOW, "utf8");
+
+    expect(workflow).toContain("### Slowest jobs: ${label}");
+    expect(workflow).toContain("### Longest queues: ${label}");
+    expect(workflow).toContain("| Job | Result | Queue minutes | Run minutes |");
+    expect(workflow).toContain(
+      'gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/jobs?per_page=100"',
+    );
+    expect(workflow).toContain("(.started_at | ts) - (.created_at | ts)");
+    expect(workflow).not.toContain('gh run view "$run_id" --json createdAt,jobs');
   });
 });

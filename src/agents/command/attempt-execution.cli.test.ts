@@ -529,6 +529,80 @@ describe("CLI attempt execution", () => {
     );
   });
 
+  it("keeps one-shot model runs on the raw embedded provider path", async () => {
+    const sessionKey = "agent:main:direct:model-run-raw";
+    const sessionEntry: SessionEntry = {
+      sessionId: "openclaw-session-model-run-raw",
+      updatedAt: Date.now(),
+    };
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      meta: { durationMs: 1 },
+    } satisfies EmbeddedPiRunResult);
+
+    await runAgentAttempt({
+      providerOverride: "anthropic",
+      modelOverride: "claude-opus-4-7",
+      originalProvider: "anthropic",
+      cfg: {
+        agents: {
+          defaults: {
+            agentRuntime: { id: "claude-cli", fallback: "none" },
+          },
+        },
+      } as OpenClawConfig,
+      sessionEntry,
+      sessionId: sessionEntry.sessionId,
+      sessionKey,
+      sessionAgentId: "main",
+      sessionFile: path.join(tmpDir, "session.jsonl"),
+      workspaceDir: tmpDir,
+      body: "raw prompt",
+      isFallbackRetry: false,
+      resolvedThinkLevel: "medium",
+      timeoutMs: 1_000,
+      runId: "run-model-run-raw",
+      opts: {
+        senderIsOwner: false,
+        modelRun: true,
+        promptMode: "none",
+        inputProvenance: {
+          kind: "inter_session",
+          sourceSessionKey: "agent:main:discord:source",
+          sourceTool: "sessions_send",
+        },
+      } as Parameters<typeof runAgentAttempt>[0]["opts"],
+      runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
+      spawnedBy: undefined,
+      messageChannel: "telegram",
+      skillsSnapshot: undefined,
+      resolvedVerboseLevel: undefined,
+      agentDir: tmpDir,
+      onAgentEvent: vi.fn(),
+      authProfileProvider: "anthropic",
+      sessionStore,
+      storePath,
+      sessionHasHistory: true,
+    });
+
+    expect(runCliAgentMock).not.toHaveBeenCalled();
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "anthropic",
+        model: "claude-opus-4-7",
+        agentHarnessId: "pi",
+        prompt: "raw prompt",
+        modelRun: true,
+        promptMode: "none",
+        disableTools: true,
+      }),
+    );
+    expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]?.prompt).not.toContain(
+      "[Inter-session message]",
+    );
+  });
+
   it("forwards one-shot CLI cleanup to CLI providers", async () => {
     const sessionKey = "agent:main:direct:cleanup-claude-cli";
     const sessionEntry: SessionEntry = {

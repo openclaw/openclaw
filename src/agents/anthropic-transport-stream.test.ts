@@ -41,6 +41,14 @@ function createStalledSseResponse(params: { onCancel: (reason: unknown) => void 
       params.onCancel(reason);
     },
   });
+
+  return new Response(body, {
+    status: 200,
+    headers: { "content-type": "text/event-stream" },
+  });
+}
+
+function createRawSseResponse(body: string): Response {
   return new Response(body, {
     status: 200,
     headers: { "content-type": "text/event-stream" },
@@ -62,10 +70,16 @@ function latestAnthropicRequest() {
   };
 }
 
+function latestAnthropicRequestHeaders() {
+  return new Headers(latestAnthropicRequest().init?.headers);
+}
+
 function makeAnthropicTransportModel(
   params: {
     id?: string;
     name?: string;
+    provider?: string;
+    baseUrl?: string;
     reasoning?: boolean;
     maxTokens?: number;
     headers?: Record<string, string>;
@@ -77,8 +91,8 @@ function makeAnthropicTransportModel(
       id: params.id ?? "claude-sonnet-4-6",
       name: params.name ?? "Claude Sonnet 4.6",
       api: "anthropic-messages",
-      provider: "anthropic",
-      baseUrl: "https://api.anthropic.com",
+      provider: params.provider ?? "anthropic",
+      baseUrl: params.baseUrl ?? "https://api.anthropic.com",
       reasoning: params.reasoning ?? true,
       input: ["text"],
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -159,6 +173,97 @@ describe("anthropic transport stream", () => {
       model: "claude-sonnet-4-6",
       stream: true,
     });
+    expect(latestAnthropicRequestHeaders().get("anthropic-beta")).toBe(
+      "fine-grained-tool-streaming-2025-05-14",
+    );
+  });
+
+  it("does not add implicit Anthropic beta headers for custom compatible API-key endpoints", async () => {
+    const model = makeAnthropicTransportModel({
+      provider: "anthropic",
+      baseUrl: "https://custom-proxy.example",
+    });
+
+    await runTransportStream(
+      model,
+      {
+        messages: [{ role: "user", content: "hello" }],
+      } as AnthropicStreamContext,
+      {
+        apiKey: "sk-ant-api",
+      } as AnthropicStreamOptions,
+    );
+
+    expect(guardedFetchMock).toHaveBeenCalledWith(
+      "https://custom-proxy.example/v1/messages",
+      expect.objectContaining({ method: "POST" }),
+    );
+    expect(latestAnthropicRequestHeaders().get("anthropic-beta")).toBeNull();
+  });
+
+  it("does not add implicit Anthropic beta headers for custom compatible OAuth endpoints", async () => {
+    await runTransportStream(
+      makeAnthropicTransportModel({
+        provider: "anthropic",
+        baseUrl: "https://custom-proxy.example",
+      }),
+      {
+        messages: [{ role: "user", content: "hello" }],
+      } as AnthropicStreamContext,
+      {
+        apiKey: "sk-ant-oat-token",
+      } as AnthropicStreamOptions,
+    );
+
+    const headers = latestAnthropicRequestHeaders();
+    expect(headers.get("authorization")).toBe("Bearer sk-ant-oat-token");
+    expect(headers.get("anthropic-beta")).toBeNull();
+  });
+
+  it("keeps Anthropic beta headers for direct Anthropic OAuth endpoints", async () => {
+    await runTransportStream(
+      makeAnthropicTransportModel(),
+      {
+        messages: [{ role: "user", content: "hello" }],
+      } as AnthropicStreamContext,
+      {
+        apiKey: "sk-ant-oat-token",
+      } as AnthropicStreamOptions,
+    );
+
+    expect(latestAnthropicRequestHeaders().get("anthropic-beta")).toBe(
+      "claude-code-20250219,oauth-2025-04-20,fine-grained-tool-streaming-2025-05-14",
+    );
+  });
+
+  it("recognizes schemeless api.anthropic.com base URLs as direct Anthropic", async () => {
+    await runTransportStream(
+      makeAnthropicTransportModel({ baseUrl: "api.anthropic.com" }),
+      {
+        messages: [{ role: "user", content: "hello" }],
+      } as AnthropicStreamContext,
+      {
+        apiKey: "sk-ant-api",
+      } as AnthropicStreamOptions,
+    );
+
+    expect(latestAnthropicRequestHeaders().get("anthropic-beta")).toBe(
+      "fine-grained-tool-streaming-2025-05-14",
+    );
+  });
+
+  it("does not add implicit Anthropic beta headers for foreign hosts mentioning api.anthropic.com", async () => {
+    await runTransportStream(
+      makeAnthropicTransportModel({ baseUrl: "https://attacker.example/api.anthropic.com" }),
+      {
+        messages: [{ role: "user", content: "hello" }],
+      } as AnthropicStreamContext,
+      {
+        apiKey: "sk-ant-api",
+      } as AnthropicStreamOptions,
+    );
+
+    expect(latestAnthropicRequestHeaders().get("anthropic-beta")).toBeNull();
   });
 
   it("ignores non-positive runtime maxTokens overrides and falls back to the model limit", async () => {
@@ -240,6 +345,23 @@ describe("anthropic transport stream", () => {
       "Anthropic Messages transport requires a positive maxTokens value",
     );
     expect(guardedFetchMock).not.toHaveBeenCalled();
+  });
+
+  it("classifies malformed Anthropic SSE data as a stable transport error", async () => {
+    guardedFetchMock.mockResolvedValueOnce(createRawSseResponse('data: {"type":\n\n'));
+
+    const result = await runTransportStream(
+      makeAnthropicTransportModel(),
+      {
+        messages: [{ role: "user", content: "hello" }],
+      } as AnthropicStreamContext,
+      {
+        apiKey: "sk-ant-api",
+      } as AnthropicStreamOptions,
+    );
+
+    expect(result.stopReason).toBe("error");
+    expect(result.errorMessage).toBe("OpenClaw transport error: malformed_streaming_fragment");
   });
 
   it("preserves Anthropic OAuth identity and tool-name remapping with transport overrides", async () => {
@@ -333,6 +455,82 @@ describe("anthropic transport stream", () => {
     expect(result.content).toEqual(
       expect.arrayContaining([expect.objectContaining({ type: "toolCall", name: "read" })]),
     );
+  });
+
+  it("preserves text seeded on a text block after a thinking block", async () => {
+    guardedFetchMock.mockResolvedValueOnce(
+      createSseResponse([
+        {
+          type: "message_start",
+          message: { id: "msg_1", usage: { input_tokens: 6, output_tokens: 0 } },
+        },
+        {
+          type: "content_block_start",
+          index: 0,
+          content_block: { type: "thinking", thinking: "checking", signature: "sig_1" },
+        },
+        {
+          type: "content_block_delta",
+          index: 0,
+          delta: { type: "signature_delta", signature: "sig_2" },
+        },
+        {
+          type: "content_block_stop",
+          index: 0,
+        },
+        {
+          type: "content_block_start",
+          index: 1,
+          content_block: { type: "text", text: "NO_REPLY" },
+        },
+        {
+          type: "content_block_stop",
+          index: 1,
+        },
+        {
+          type: "message_delta",
+          delta: { stop_reason: "end_turn" },
+          usage: { input_tokens: 6, output_tokens: 9 },
+        },
+      ]),
+    );
+    const streamFn = createAnthropicMessagesTransportStreamFn();
+    const stream = await Promise.resolve(
+      streamFn(
+        makeAnthropicTransportModel({ provider: "meridian", baseUrl: "http://127.0.0.1:3456" }),
+        {
+          messages: [{ role: "user", content: "heartbeat" }],
+        } as Parameters<typeof streamFn>[1],
+        {
+          apiKey: "meridian-key",
+        } as Parameters<typeof streamFn>[2],
+      ),
+    );
+    const events: Array<{ type?: string; delta?: string; content?: string }> = [];
+    for await (const event of stream as AsyncIterable<{
+      type?: string;
+      delta?: string;
+      content?: string;
+    }>) {
+      events.push(event);
+    }
+    const result = await stream.result();
+
+    expect(result.content).toEqual([
+      expect.objectContaining({
+        type: "thinking",
+        thinking: "checking",
+        thinkingSignature: "sig_2",
+      }),
+      { type: "text", text: "NO_REPLY" },
+    ]);
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: "text_delta", delta: "NO_REPLY" }),
+        expect.objectContaining({ type: "text_end", content: "NO_REPLY" }),
+      ]),
+    );
+    expect(result.usage.output).toBe(9);
   });
 
   it("skips malformed tools when building Anthropic payloads", async () => {

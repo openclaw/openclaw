@@ -5,6 +5,7 @@ import {
   parseLaneSelection,
   resolveDockerE2ePlan,
 } from "../../scripts/lib/docker-e2e-plan.mjs";
+import { BUNDLED_PLUGIN_INSTALL_UNINSTALL_SHARDS } from "../../scripts/lib/docker-e2e-scenarios.mjs";
 
 const orderLanes = <T>(lanes: T[]) => lanes;
 
@@ -47,7 +48,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
     expect(plan.lanes.map((lane) => lane.name)).toContain("bundled-channel-feishu");
     expect(plan.lanes.map((lane) => lane.name)).toContain("bundled-channel-update-acpx");
     expect(plan.lanes.map((lane) => lane.name)).toContain("bundled-plugin-install-uninstall-0");
-    expect(plan.lanes.map((lane) => lane.name)).toContain("bundled-plugin-install-uninstall-7");
+    expect(plan.lanes.map((lane) => lane.name)).toContain("bundled-plugin-install-uninstall-23");
     expect(plan.lanes.filter((lane) => lane.name === "install-e2e-openai")).toHaveLength(1);
     expect(
       plan.lanes.filter((lane) => lane.name === "bundled-plugin-install-uninstall-0"),
@@ -119,6 +120,26 @@ describe("scripts/lib/docker-e2e-plan", () => {
       profile: RELEASE_PATH_PROFILE,
       releaseChunk: "plugins-runtime-install-d",
     });
+    const pluginsRuntimeInstallE = planFor({
+      includeOpenWebUI: true,
+      profile: RELEASE_PATH_PROFILE,
+      releaseChunk: "plugins-runtime-install-e",
+    });
+    const pluginsRuntimeInstallF = planFor({
+      includeOpenWebUI: true,
+      profile: RELEASE_PATH_PROFILE,
+      releaseChunk: "plugins-runtime-install-f",
+    });
+    const pluginsRuntimeInstallG = planFor({
+      includeOpenWebUI: true,
+      profile: RELEASE_PATH_PROFILE,
+      releaseChunk: "plugins-runtime-install-g",
+    });
+    const pluginsRuntimeInstallH = planFor({
+      includeOpenWebUI: true,
+      profile: RELEASE_PATH_PROFILE,
+      releaseChunk: "plugins-runtime-install-h",
+    });
     const bundledChannelsCore = planFor({
       includeOpenWebUI: true,
       profile: RELEASE_PATH_PROFILE,
@@ -154,30 +175,78 @@ describe("scripts/lib/docker-e2e-plan", () => {
       "doctor-switch",
       "update-channel-switch",
     ]);
+    expect(packageUpdateCore.lanes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: "npm-onboard-channel-agent",
+          stateScenario: "empty",
+        }),
+        expect.objectContaining({
+          name: "doctor-switch",
+          stateScenario: "empty",
+        }),
+        expect.objectContaining({
+          name: "update-channel-switch",
+          stateScenario: "update-stable",
+        }),
+      ]),
+    );
     expect(pluginsRuntimePlugins.lanes.map((lane) => lane.name)).toEqual(["plugins"]);
     expect(pluginsRuntimeServices.lanes.map((lane) => lane.name)).toEqual([
       "cron-mcp-cleanup",
       "openai-web-search-minimal",
       "openwebui",
     ]);
+    expect(pluginsRuntimeServices.lanes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: "cron-mcp-cleanup",
+          stateScenario: "empty",
+        }),
+      ]),
+    );
     expect(pluginsRuntimePlugins.lanes.map((lane) => lane.name)).not.toContain(
       "bundled-plugin-install-uninstall-0",
     );
     expect(pluginsRuntimeInstallA.lanes.map((lane) => lane.name)).toEqual([
       "bundled-plugin-install-uninstall-0",
       "bundled-plugin-install-uninstall-1",
+      "bundled-plugin-install-uninstall-2",
     ]);
     expect(pluginsRuntimeInstallB.lanes.map((lane) => lane.name)).toEqual([
-      "bundled-plugin-install-uninstall-2",
       "bundled-plugin-install-uninstall-3",
-    ]);
-    expect(pluginsRuntimeInstallC.lanes.map((lane) => lane.name)).toEqual([
       "bundled-plugin-install-uninstall-4",
       "bundled-plugin-install-uninstall-5",
     ]);
-    expect(pluginsRuntimeInstallD.lanes.map((lane) => lane.name)).toEqual([
+    expect(pluginsRuntimeInstallC.lanes.map((lane) => lane.name)).toEqual([
       "bundled-plugin-install-uninstall-6",
       "bundled-plugin-install-uninstall-7",
+      "bundled-plugin-install-uninstall-8",
+    ]);
+    expect(pluginsRuntimeInstallD.lanes.map((lane) => lane.name)).toEqual([
+      "bundled-plugin-install-uninstall-9",
+      "bundled-plugin-install-uninstall-10",
+      "bundled-plugin-install-uninstall-11",
+    ]);
+    expect(pluginsRuntimeInstallE.lanes.map((lane) => lane.name)).toEqual([
+      "bundled-plugin-install-uninstall-12",
+      "bundled-plugin-install-uninstall-13",
+      "bundled-plugin-install-uninstall-14",
+    ]);
+    expect(pluginsRuntimeInstallF.lanes.map((lane) => lane.name)).toEqual([
+      "bundled-plugin-install-uninstall-15",
+      "bundled-plugin-install-uninstall-16",
+      "bundled-plugin-install-uninstall-17",
+    ]);
+    expect(pluginsRuntimeInstallG.lanes.map((lane) => lane.name)).toEqual([
+      "bundled-plugin-install-uninstall-18",
+      "bundled-plugin-install-uninstall-19",
+      "bundled-plugin-install-uninstall-20",
+    ]);
+    expect(pluginsRuntimeInstallH.lanes.map((lane) => lane.name)).toEqual([
+      "bundled-plugin-install-uninstall-21",
+      "bundled-plugin-install-uninstall-22",
+      "bundled-plugin-install-uninstall-23",
     ]);
     expect(bundledChannelsCore.lanes.map((lane) => lane.name)).toEqual([
       "plugin-update",
@@ -187,6 +256,10 @@ describe("scripts/lib/docker-e2e-plan", () => {
       "bundled-channel-feishu",
       "bundled-channel-memory-lancedb",
     ]);
+    expect(bundledChannelsCore.lanes[0]).toMatchObject({
+      name: "plugin-update",
+      stateScenario: "empty",
+    });
     expect(bundledChannelsUpdateA.lanes.map((lane) => lane.name)).toEqual([
       "bundled-channel-update-telegram",
       "bundled-channel-update-memory-lancedb",
@@ -246,7 +319,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
       expect.arrayContaining([
         "plugins",
         "bundled-plugin-install-uninstall-0",
-        "bundled-plugin-install-uninstall-7",
+        "bundled-plugin-install-uninstall-23",
         "openwebui",
       ]),
     );
@@ -299,6 +372,111 @@ describe("scripts/lib/docker-e2e-plan", () => {
     });
   });
 
+  it("surfaces Docker lane test-state scenarios in plan JSON", () => {
+    const plan = planFor({
+      selectedLaneNames: [
+        "onboard",
+        "agents-delete-shared-workspace",
+        "doctor-switch",
+        "openai-image-auth",
+        "openai-web-search-minimal",
+        "mcp-channels",
+        "cron-mcp-cleanup",
+        "pi-bundle-mcp-tools",
+        "crestodian-first-run",
+        "crestodian-planner",
+        "crestodian-rescue",
+        "config-reload",
+        "plugin-update",
+        "plugins",
+        "kitchen-sink-plugin",
+        "bundled-channel-deps-compat",
+        "bundled-channel-setup-entry",
+        "bundled-plugin-install-uninstall-0",
+        "update-channel-switch",
+      ],
+    });
+
+    expect(plan.lanes).toEqual([
+      expect.objectContaining({
+        name: "onboard",
+        stateScenario: "empty",
+      }),
+      expect.objectContaining({
+        name: "agents-delete-shared-workspace",
+        stateScenario: "empty",
+      }),
+      expect.objectContaining({
+        name: "doctor-switch",
+        stateScenario: "empty",
+      }),
+      expect.objectContaining({
+        name: "openai-image-auth",
+        stateScenario: "empty",
+      }),
+      expect.objectContaining({
+        name: "openai-web-search-minimal",
+        stateScenario: "empty",
+      }),
+      expect.objectContaining({
+        name: "mcp-channels",
+        stateScenario: "empty",
+      }),
+      expect.objectContaining({
+        name: "cron-mcp-cleanup",
+        stateScenario: "empty",
+      }),
+      expect.objectContaining({
+        name: "pi-bundle-mcp-tools",
+        stateScenario: "empty",
+      }),
+      expect.objectContaining({
+        name: "crestodian-first-run",
+        stateScenario: "empty",
+      }),
+      expect.objectContaining({
+        name: "crestodian-planner",
+        stateScenario: "empty",
+      }),
+      expect.objectContaining({
+        name: "crestodian-rescue",
+        stateScenario: "empty",
+      }),
+      expect.objectContaining({
+        name: "config-reload",
+        stateScenario: "empty",
+      }),
+      expect.objectContaining({
+        name: "plugin-update",
+        stateScenario: "empty",
+      }),
+      expect.objectContaining({
+        name: "plugins",
+        stateScenario: "empty",
+      }),
+      expect.objectContaining({
+        name: "kitchen-sink-plugin",
+        stateScenario: "empty",
+      }),
+      expect.objectContaining({
+        name: "bundled-channel-deps-compat",
+        stateScenario: "empty",
+      }),
+      expect.objectContaining({
+        name: "bundled-channel-setup-entry",
+        stateScenario: "empty",
+      }),
+      expect.objectContaining({
+        name: "bundled-plugin-install-uninstall-0",
+        stateScenario: "empty",
+      }),
+      expect.objectContaining({
+        name: "update-channel-switch",
+        stateScenario: "update-stable",
+      }),
+    ]);
+  });
+
   it("maps the legacy bundled channel deps lane to the split compat lane", () => {
     const selectedLaneNames = parseLaneSelection("bundled-channel-deps");
     const plan = planFor({ selectedLaneNames });
@@ -335,9 +513,12 @@ describe("scripts/lib/docker-e2e-plan", () => {
     const plan = planFor({ selectedLaneNames });
 
     expect(selectedLaneNames).toEqual(
-      Array.from({ length: 8 }, (_, index) => `bundled-plugin-install-uninstall-${index}`),
+      Array.from(
+        { length: BUNDLED_PLUGIN_INSTALL_UNINSTALL_SHARDS },
+        (_, index) => `bundled-plugin-install-uninstall-${index}`,
+      ),
     );
-    expect(plan.lanes).toHaveLength(8);
+    expect(plan.lanes).toHaveLength(BUNDLED_PLUGIN_INSTALL_UNINSTALL_SHARDS);
     expect(plan.lanes[0]).toEqual(
       expect.objectContaining({
         command: expect.stringContaining("OPENCLAW_BUNDLED_PLUGIN_SWEEP_INDEX=0"),
@@ -347,12 +528,12 @@ describe("scripts/lib/docker-e2e-plan", () => {
         resources: expect.arrayContaining(["docker", "npm"]),
       }),
     );
-    expect(plan.lanes[7]).toEqual(
+    expect(plan.lanes[23]).toEqual(
       expect.objectContaining({
-        command: expect.stringContaining("OPENCLAW_BUNDLED_PLUGIN_SWEEP_INDEX=7"),
+        command: expect.stringContaining("OPENCLAW_BUNDLED_PLUGIN_SWEEP_INDEX=23"),
         imageKind: "functional",
         live: false,
-        name: "bundled-plugin-install-uninstall-7",
+        name: "bundled-plugin-install-uninstall-23",
         resources: expect.arrayContaining(["docker", "npm"]),
       }),
     );

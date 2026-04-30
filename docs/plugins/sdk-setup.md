@@ -477,7 +477,7 @@ The `ChannelSetupWizard` type supports `credentials`, `textInputs`, `dmPolicy`, 
 
 ## Publishing and installing
 
-**External plugins:** publish to [ClawHub](/tools/clawhub) or npm, then install:
+**External plugins:** publish to [ClawHub](/tools/clawhub), then install:
 
 <Tabs>
   <Tab title="Auto (ClawHub then npm)">
@@ -494,10 +494,11 @@ The `ChannelSetupWizard` type supports `credentials`, `textInputs`, `dmPolicy`, 
     ```
   </Tab>
   <Tab title="npm package spec">
-    There is no matching `npm:` override. Use the normal npm package spec when you want the npm path after ClawHub fallback:
+    Use npm when a package has not moved to ClawHub yet, or when you need a
+    direct npm install path during migration:
 
     ```bash
-    openclaw plugins install @myorg/openclaw-my-plugin
+    openclaw plugins install npm:@myorg/openclaw-my-plugin
     ```
 
   </Tab>
@@ -516,8 +517,10 @@ For npm-sourced installs, `openclaw plugins install` runs project-local `npm ins
 </Info>
 
 <Note>
-Bundled OpenClaw-owned plugins are the only startup repair exception: when a packaged install sees one enabled by plugin config, legacy channel config, or its bundled default-enabled manifest, startup installs that plugin's missing runtime dependencies before import. Third-party plugins should not rely on startup installs; keep using the explicit plugin installer.
+Bundled OpenClaw-owned plugins are the only startup repair exception: when a packaged install sees one enabled by plugin config, legacy channel config, or its bundled default-enabled manifest, startup installs that plugin's missing runtime dependencies before import. Operators can inspect or repair that stage with `openclaw plugins deps`. Third-party plugins should not rely on startup installs; keep using the explicit plugin installer.
 </Note>
+
+Bundled package-level runtime deps are explicit metadata, not inferred from built JavaScript at gateway startup. If a shared OpenClaw root dependency must be available inside the external bundled-plugin runtime mirror, declare it in `openclaw.bundle.mirroredRootRuntimeDependencies` in the root package manifest.
 
 ## Related
 

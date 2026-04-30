@@ -752,7 +752,7 @@ describe("exec approval handlers", () => {
       },
       hasExecApprovalClients: () => true,
     };
-    return { handlers, broadcasts, respond, context };
+    return { manager, handlers, broadcasts, respond, context };
   }
 
   function createForwardingExecApprovalFixture(opts?: {
@@ -1011,6 +1011,62 @@ describe("exec approval handlers", () => {
     expect(broadcasts.some((entry) => entry.event === "exec.approval.resolved")).toBe(true);
   });
 
+  it("treats duplicate same-decision exec resolves as idempotent during grace", async () => {
+    const { manager, handlers, broadcasts, respond, context } = createExecApprovalFixture();
+
+    const requestPromise = requestExecApproval({
+      handlers,
+      respond,
+      context,
+      params: { id: "approval-repeat-1", twoPhase: true },
+    });
+
+    const firstResolveRespond = vi.fn();
+    await resolveExecApproval({
+      handlers,
+      id: "approval-repeat-1",
+      respond: firstResolveRespond,
+      context,
+    });
+    await requestPromise;
+    expect(manager.consumeAllowOnce("approval-repeat-1")).toBe(true);
+
+    const resolvedBroadcastCount = broadcasts.filter(
+      (entry) => entry.event === "exec.approval.resolved",
+    ).length;
+
+    const repeatResolveRespond = vi.fn();
+    await resolveExecApproval({
+      handlers,
+      id: "approval-repeat-1",
+      respond: repeatResolveRespond,
+      context,
+    });
+
+    const conflictingResolveRespond = vi.fn();
+    await resolveExecApproval({
+      handlers,
+      id: "approval-repeat-1",
+      decision: "deny",
+      respond: conflictingResolveRespond,
+      context,
+    });
+
+    expect(firstResolveRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+    expect(repeatResolveRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+    expect(broadcasts.filter((entry) => entry.event === "exec.approval.resolved")).toHaveLength(
+      resolvedBroadcastCount,
+    );
+    expect(conflictingResolveRespond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        message: "approval already resolved",
+        details: expect.objectContaining({ reason: "APPROVAL_ALREADY_RESOLVED" }),
+      }),
+    );
+  });
+
   it("rejects allow-always when the request ask mode is always", async () => {
     const { handlers, broadcasts, respond, context } = createExecApprovalFixture();
 
@@ -1249,6 +1305,26 @@ describe("exec approval handlers", () => {
     expect((request["systemRunPlan"] as { commandText?: string }).commandText).toBe(
       "bash safe\u200B.sh",
     );
+  });
+
+  it("preserves approval warning line breaks while sanitizing hidden characters", async () => {
+    const { handlers, broadcasts, respond, context } = createExecApprovalFixture();
+    await requestExecApproval({
+      handlers,
+      respond,
+      context,
+      params: {
+        timeoutMs: 10,
+        warningText: "Diagnostics line one\r\n\r\nOpenAI Codex harness:\nSend feedback\u200B",
+      },
+    });
+    const requested = broadcasts.find((entry) => entry.event === "exec.approval.requested");
+    expect(requested).toBeTruthy();
+    const request = (requested?.payload as { request?: Record<string, unknown> })?.request ?? {};
+    expect(request["warningText"]).toBe(
+      "Diagnostics line one\n\nOpenAI Codex harness:\nSend feedback\\u{200B}",
+    );
+    expect(request["warningText"]).not.toContain("\\u{A}");
   });
 
   it("accepts resolve during broadcast", async () => {
@@ -1817,10 +1893,32 @@ describe("gateway healthHandlers.status scope handling", () => {
     async ({ scopes, includeSensitive }) => {
       const respond = await runHealthStatus(scopes);
 
-      expect(vi.mocked(statusModule.getStatusSummary)).toHaveBeenCalledWith({ includeSensitive });
+      expect(vi.mocked(statusModule.getStatusSummary)).toHaveBeenCalledWith({
+        includeSensitive,
+        includeChannelSummary: true,
+      });
       expect(respond).toHaveBeenCalledWith(true, { ok: true }, undefined);
     },
   );
+
+  it("can skip channel summary work for liveness-only status requests", async () => {
+    const respond = vi.fn();
+
+    await healthHandlers.status({
+      req: {} as never,
+      params: { includeChannelSummary: false },
+      respond: respond as never,
+      context: {} as never,
+      client: { connect: { role: "operator", scopes: ["operator.read"] } } as never,
+      isWebchatConnect: () => false,
+    });
+
+    expect(vi.mocked(statusModule.getStatusSummary)).toHaveBeenCalledWith({
+      includeSensitive: false,
+      includeChannelSummary: false,
+    });
+    expect(respond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+  });
 });
 
 describe("logs.tail", () => {

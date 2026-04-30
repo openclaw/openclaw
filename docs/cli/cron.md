@@ -183,6 +183,12 @@ Announce to a specific channel:
 openclaw cron edit <job-id> --announce --channel slack --to "channel:C1234567890"
 ```
 
+Announce to a Telegram forum topic:
+
+```bash
+openclaw cron edit <job-id> --announce --channel telegram --to "-1001234567890" --thread-id 42
+```
+
 Create an isolated job with lightweight bootstrap context:
 
 ```bash

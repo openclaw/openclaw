@@ -43,6 +43,7 @@ describe("unit-fast vitest lane", () => {
     );
     expect(config.test?.include).toContain("src/security/audit-config-symlink.test.ts");
     expect(config.test?.include).toContain("src/security/audit-exec-sandbox-host.test.ts");
+    expect(config.test?.include).toContain("src/security/audit-gateway.test.ts");
     expect(config.test?.include).toContain("src/security/audit-gateway-auth-selection.test.ts");
     expect(config.test?.include).toContain("src/security/audit-gateway-http-auth.test.ts");
     expect(config.test?.include).toContain("src/security/audit-gateway-tools-http.test.ts");
@@ -53,6 +54,7 @@ describe("unit-fast vitest lane", () => {
     expect(config.test?.include).toContain("src/video-generation/provider-registry.test.ts");
     expect(config.test?.include).toContain("src/plugin-sdk/provider-entry.test.ts");
     expect(config.test?.include).toContain("src/security/dangerous-config-flags.test.ts");
+    expect(config.test?.include).toContain("src/security/context-visibility.test.ts");
     expect(config.test?.include).toContain("src/security/safe-regex.test.ts");
   });
 
@@ -72,7 +74,7 @@ describe("unit-fast vitest lane", () => {
     expect(isUnitFastTestFile("src/plugin-sdk/temp-path.test.ts")).toBe(false);
     expect(isUnitFastTestFile("src/agents/sandbox.resolveSandboxContext.test.ts")).toBe(false);
     expect(isUnitFastTestFile("src/crestodian/assistant.test.ts")).toBe(false);
-    expect(isUnitFastTestFile("src/proxy-capture/coverage.test.ts")).toBe(false);
+    expect(isUnitFastTestFile("src/plugins/install.npm-spec.test.ts")).toBe(false);
     expect(isUnitFastTestFile("src/secrets/runtime.test.ts")).toBe(false);
     expect(resolveUnitFastTestIncludePattern("src/plugin-sdk/temp-path.ts")).toBeNull();
     expect(classifyUnitFastTestFileContent("vi.resetModules(); await import('./x.js')")).toEqual([
