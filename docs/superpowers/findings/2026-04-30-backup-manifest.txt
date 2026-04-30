@@ -1,0 +1,22 @@
+/home/ubuntu/openclaw-backup-2026-04-30:
+total 1373376
+drwxr-xr-x  3 ubuntu ubuntu       4096 Apr 30 21:11 .
+drwxr-x--- 18 ubuntu ubuntu       4096 Apr 30 21:02 ..
+-rw-r--r--  1 ubuntu ubuntu 1406312868 Apr 30 21:04 dotopenclaw.tgz
+-rw-r--r--  1 ubuntu ubuntu         72 Apr 30 21:11 image-id.txt
+drwxr-xr-x  3 ubuntu ubuntu       4096 Apr 30 21:11 stack
+
+/home/ubuntu/openclaw-backup-2026-04-30/stack:
+total 28
+drwxr-xr-x 3 ubuntu ubuntu 4096 Apr 30 21:11 .
+drwxr-xr-x 3 ubuntu ubuntu 4096 Apr 30 21:11 ..
+-rw------- 1 ubuntu ubuntu  616 Apr 30 21:11 .env
+-rw-r--r-- 1 ubuntu ubuntu  281 Apr 30 21:11 Dockerfile.local
+drwxr-xr-x 2 ubuntu ubuntu 4096 Apr 30 21:11 docker
+-rw-r--r-- 1 ubuntu ubuntu 5077 Apr 30 21:11 docker-compose.yml
+
+/home/ubuntu/openclaw-backup-2026-04-30/stack/docker:
+total 12
+drwxr-xr-x 2 ubuntu ubuntu 4096 Apr 30 21:11 .
+drwxr-xr-x 3 ubuntu ubuntu 4096 Apr 30 21:11 ..
+-rw-r--r-- 1 ubuntu ubuntu   18 Apr 30 21:11 apt-packages.txt
