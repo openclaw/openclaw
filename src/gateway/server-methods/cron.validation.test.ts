@@ -380,3 +380,97 @@ describe("cron method validation", () => {
     expect(respond).not.toHaveBeenCalled();
   });
 });
+
+  // Issue #74459: Validate cron expression BEFORE applying to disabled jobs
+  it("rejects invalid cron expression on disabled job update BEFORE applying patch (#74459)", async () => {
+    const disabledJob = createCronJob({ enabled: false });
+    const context = createCronContext(disabledJob);
+    const respond = vi.fn();
+
+    await cronHandlers["cron.update"]({
+      req: {} as never,
+      params: {
+        id: disabledJob.id,
+        patch: {
+          schedule: { kind: "cron", expr: "* * * 13 *" },  // Invalid: month 13
+        },
+      } as never,
+      respond: respond as never,
+      context: context as never,
+      client: null,
+      isWebchatConnect: () => false,
+    });
+
+    // Should reject BEFORE calling context.cron.update (not wait for runtime error)
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "INVALID_REQUEST",
+        message: expect.stringContaining("month"),
+      }),
+    );
+    // Should NOT have called context.cron.update with invalid schedule
+    expect(context.cron.update).not.toHaveBeenCalled();
+  });
+
+  it("rejects invalid cron expression on cron.add with disabled flag (#74459)", async () => {
+    const context = createCronContext();
+    const respond = vi.fn();
+
+    await cronHandlers["cron.add"]({
+      req: {} as never,
+      params: {
+        name: "invalid-disabled-cron",
+        enabled: false,  // Creating disabled job with invalid cron
+        schedule: { kind: "cron", expr: "0 0 * * 8" },  // Invalid: day of week 8
+        sessionTarget: "isolated",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "agentTurn", message: "ping" },
+      } as never,
+      respond: respond as never,
+      context: context as never,
+      client: null,
+      isWebchatConnect: () => false,
+    });
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "INVALID_REQUEST",
+        message: expect.stringMatching(/day|week|range/i),
+      }),
+    );
+    expect(context.cron.add).not.toHaveBeenCalled();
+  });
+
+  it("accepts valid cron expression on disabled job update", async () => {
+    const disabledJob = createCronJob({ enabled: false });
+    const context = createCronContext(disabledJob);
+    const respond = vi.fn();
+
+    await cronHandlers["cron.update"]({
+      req: {} as never,
+      params: {
+        id: disabledJob.id,
+        patch: {
+          schedule: { kind: "cron", expr: "0 0 * * *" },  // Valid expression
+        },
+      } as never,
+      respond: respond as never,
+      context: context as never,
+      client: null,
+      isWebchatConnect: () => false,
+    });
+
+    // Should accept and call context.cron.update
+    expect(context.cron.update).toHaveBeenCalledWith(
+      disabledJob.id,
+      expect.objectContaining({
+        schedule: { kind: "cron", expr: "0 0 * * *" },
+      }),
+    );
+    expect(respond).toHaveBeenCalledWith(true, { id: "cron-1" }, undefined);
+  });
+});

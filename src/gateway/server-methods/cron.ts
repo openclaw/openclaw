@@ -10,6 +10,7 @@ import { applyJobPatch } from "../../cron/service/jobs.js";
 import { isInvalidCronSessionTargetIdError } from "../../cron/session-target.js";
 import type { CronDelivery, CronJob, CronJobCreate, CronJobPatch } from "../../cron/types.js";
 import { validateScheduleTimestamp } from "../../cron/validate-timestamp.js";
+import { validateCronExpression } from "../../cron/validate-cron-expression.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { listConfiguredAnnounceChannelIdsForConfig } from "../../plugins/channel-plugin-ids.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
@@ -228,6 +229,21 @@ export const cronHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+    // Also validate cron expression syntax on creation (issue #74459)
+    if (jobCreate.schedule.kind === "cron") {
+      const cronValidation = validateCronExpression(
+        jobCreate.schedule.expr,
+        jobCreate.schedule.tz,
+      );
+      if (!cronValidation.ok) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, cronValidation.message),
+        );
+        return;
+      }
+    }
     try {
       assertValidCronCreateDelivery(cfg, jobCreate);
     } catch (err) {
@@ -316,6 +332,22 @@ export const cronHandlers: GatewayRequestHandlers = {
           errorShape(ErrorCodes.INVALID_REQUEST, timestampValidation.message),
         );
         return;
+      }
+      // Also validate cron expression syntax to prevent invalid schedules
+      // from being persisted in disabled jobs (issue #74459)
+      if (patch.schedule.kind === "cron") {
+        const cronValidation = validateCronExpression(
+          patch.schedule.expr,
+          patch.schedule.tz,
+        );
+        if (!cronValidation.ok) {
+          respond(
+            false,
+            undefined,
+            errorShape(ErrorCodes.INVALID_REQUEST, cronValidation.message),
+          );
+          return;
+        }
       }
     }
     try {
