@@ -99,7 +99,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
-- CLI/uninstall: refuse to prune workspace-inside-state paths when the resolved state directory is an unsafe root (home or filesystem root), so `OPENCLAW_STATE_DIR=$HOME` overrides with a nested workspace cannot enumerate and delete home directory children. Fixes #75052. Thanks @hclsys.
+- CLI/uninstall: preserve configured workspaces nested inside the state directory when state-only uninstall is selected without workspace removal, so state cleanup no longer recursively deletes active workspace data; also refuse to prune workspace-inside-state paths when the state directory is an unsafe root (home or filesystem root). Fixes #75052. Thanks @hclsys.
 - Security/outbound: strip re-formed HTML tags during plain-text sanitization so nested tag fragments cannot leave a CodeQL-detected `<script>` sequence behind. Thanks @vincentkoc.
 - Security/secrets: compare credential bytes with padded timing-safe buffers instead of hashing candidate passwords before equality checks. Thanks @vincentkoc.
 - Security/QQBot: sanitize debug log arguments before writing to `console.*`, so gateway payload fields cannot forge extra log lines when debug logging is enabled. Thanks @vincentkoc.
