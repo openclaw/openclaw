@@ -17,6 +17,7 @@ import {
   resolveProviderAuth,
   resolveSnapshot,
   run,
+  runStreaming,
   say,
   startHostServer,
   warn,
@@ -607,13 +608,13 @@ if ($LASTEXITCODE -ne 0) { throw "openclaw --version failed with exit code $LAST
     }
   }
 
-  private captureLatestRefFailure(): void {
-    this.runRefOnboard();
+  private async captureLatestRefFailure(): Promise<void> {
+    await this.runRefOnboard();
     this.showGatewayStatusCompat();
   }
 
-  private runRefOnboard(): void {
-    this.guestPowerShellBackground(
+  private runRefOnboard(): Promise<void> {
+    return this.guestPowerShellBackground(
       "ref-onboard",
       `$ErrorActionPreference = 'Continue'
 $PSNativeCommandUseErrorActionPreference = $false
@@ -624,7 +625,11 @@ if ($LASTEXITCODE -ne 0) { throw "openclaw onboard failed with exit code $LASTEX
     );
   }
 
-  private guestPowerShellBackground(label: string, script: string, timeoutMs: number): void {
+  private async guestPowerShellBackground(
+    label: string,
+    script: string,
+    timeoutMs: number,
+  ): Promise<void> {
     const safeLabel = label.replaceAll(/[^A-Za-z0-9_-]/g, "-");
     const nonce = `${safeLabel}-${Date.now()}-${Math.floor(Math.random() * 100000)}`;
     const fileBase = `openclaw-parallels-${nonce}`;
@@ -663,11 +668,10 @@ if (!(Test-Path $scriptPath)) { throw "background script was not written" }`,
     let lastLaunchStatus = 0;
     for (let attempt = 1; attempt <= 3; attempt++) {
       this.waitForGuestReady(120);
-      const launch = run(
-        "timeout",
+      const launchLogPath = path.join(this.runDir, `${safeLabel}-launch-${attempt}.log`);
+      const launchStatus = await runStreaming(
+        "prlctl",
         [
-          "20s",
-          "prlctl",
           "exec",
           this.options.vmName,
           "--current-user",
@@ -677,21 +681,21 @@ if (!(Test-Path $scriptPath)) { throw "background script was not written" }`,
           "/c",
           `start "" /min powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "%TEMP%\\${fileBase}.ps1"`,
         ],
-        { check: false, quiet: true, timeoutMs: this.remainingPhaseTimeoutMs(30_000) },
+        { logPath: launchLogPath, quiet: true, timeoutMs: this.remainingPhaseTimeoutMs(20_000) },
       );
-      this.log(launch.stdout);
-      this.log(launch.stderr);
-      if (launch.status === 0 || launch.status === 124) {
+      const launchLog = await readFile(launchLogPath, "utf8").catch(() => "");
+      this.log(launchLog);
+      if (launchStatus === 0 || launchStatus === 124) {
         launched = true;
         break;
       }
-      lastLaunchStatus = launch.status;
-      if (launch.stdout.includes("restoring") || launch.stderr.includes("restoring")) {
+      lastLaunchStatus = launchStatus;
+      if (launchLog.includes("restoring")) {
         warn(`${label} launch retry ${attempt}: VM is still restoring`);
         this.waitForVmNotRestoring(120);
         continue;
       }
-      throw new Error(`${label} background launch failed with exit code ${launch.status}`);
+      throw new Error(`${label} background launch failed with exit code ${launchStatus}`);
     }
     if (!launched) {
       throw new Error(`${label} background launch failed with exit code ${lastLaunchStatus}`);
@@ -716,8 +720,10 @@ if (Test-Path $logPath) {
   }
 }
 if (Test-Path $donePath) {
+  $backgroundExit = if (Test-Path $exitPath) { (Get-Content -Path $exitPath -Raw).Trim() } else { '0' }
+  "__OPENCLAW_BACKGROUND_EXIT__:$backgroundExit"
   '__OPENCLAW_BACKGROUND_DONE__'
-  if ((Test-Path $exitPath) -and ((Get-Content -Path $exitPath -Raw).Trim() -ne '0')) { exit 23 }
+  if ($backgroundExit -ne '0') { exit 23 }
   exit 0
 }`),
         ],
@@ -728,7 +734,9 @@ if (Test-Path $donePath) {
         lastLogOffset = Number(offsetMatch[1]);
       }
       if (result.stdout.includes("__OPENCLAW_BACKGROUND_DONE__")) {
-        if (result.status !== 0) {
+        const exitMatch = result.stdout.match(/__OPENCLAW_BACKGROUND_EXIT__:(\S+)/);
+        const backgroundExit = exitMatch?.[1] ?? "0";
+        if (backgroundExit !== "0" || (result.status !== 0 && result.status !== 124)) {
           throw new Error(`${label} failed`);
         }
         this.guestPowerShell(
@@ -775,8 +783,8 @@ Invoke-OpenClaw update status --json`,
     }
   }
 
-  private gatewayAction(action: "restart" | "stop"): void {
-    this.guestPowerShellBackground(
+  private gatewayAction(action: "restart" | "stop"): Promise<void> {
+    return this.guestPowerShellBackground(
       `gateway-${action}`,
       `$ErrorActionPreference = 'Continue'
 $PSNativeCommandUseErrorActionPreference = $false
@@ -826,8 +834,8 @@ if ($LASTEXITCODE -ne 0) { throw "gateway ${action} failed with exit code $LASTE
     this.guestPowerShell(`Invoke-OpenClaw gateway status ${suffix}`);
   }
 
-  private verifyTurn(): void {
-    this.guestPowerShellBackground(
+  private verifyTurn(): Promise<void> {
+    return this.guestPowerShellBackground(
       "agent-turn",
       `$ErrorActionPreference = 'Continue'
 $PSNativeCommandUseErrorActionPreference = $false

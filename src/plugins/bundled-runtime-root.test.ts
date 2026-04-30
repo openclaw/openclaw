@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveBundledRuntimeDependencyInstallRoot } from "./bundled-runtime-deps.js";
+import { materializeBundledRuntimeMirrorFile } from "./bundled-runtime-mirror.js";
 import { prepareBundledPluginRuntimeRoot } from "./bundled-runtime-root.js";
 import { writeGeneratedRuntimeDepsManifest } from "./test-helpers/bundled-runtime-deps-fixtures.js";
 
@@ -37,6 +38,24 @@ function isBigIntStatOptions(options: unknown): boolean {
 }
 
 describe("prepareBundledPluginRuntimeRoot", () => {
+  it("keeps existing materialized root chunks when copy refresh fails", () => {
+    const root = makeTempRoot();
+    const source = path.join(root, "source.js");
+    const target = path.join(root, "mirror", "source.js");
+    fs.writeFileSync(source, "export const value = 'new';\n", "utf8");
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, "export const value = 'old';\n", "utf8");
+    vi.spyOn(fs, "linkSync").mockImplementation(() => {
+      throw new Error("EXDEV");
+    });
+    vi.spyOn(fs, "copyFileSync").mockImplementation(() => {
+      throw new Error("ENOSPC");
+    });
+
+    expect(() => materializeBundledRuntimeMirrorFile(source, target)).toThrow("ENOSPC");
+    expect(fs.readFileSync(target, "utf8")).toBe("export const value = 'old';\n");
+  });
+
   it("materializes root JavaScript chunks in external mirrors", () => {
     const packageRoot = makeTempRoot();
     const stageDir = makeTempRoot();

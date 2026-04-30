@@ -3,9 +3,9 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { captureHttpExchange } from "openclaw/plugin-sdk/proxy-capture";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { Type } from "typebox";
 import { Check, Errors } from "typebox/value";
+import { isDiscordRateLimitResponseBody, summarizeDiscordResponseBody } from "../error-body.js";
 import { withAbortTimeout } from "./timeouts.js";
 
 const DISCORD_GATEWAY_BOT_URL = "https://discord.com/api/v10/gateway/bot";
@@ -80,18 +80,21 @@ export function resolveDiscordGatewayInfoTimeoutMs(params?: {
 }
 
 function summarizeGatewayResponseBody(body: string): string {
-  const normalized = body.trim().replace(/\s+/g, " ");
-  if (!normalized) {
-    return "<empty>";
-  }
-  return normalized.slice(0, 240);
+  return summarizeDiscordResponseBody(body, { emptyText: "<empty>" }) ?? "<empty>";
+}
+
+function isDiscordGatewayRateLimitResponse(status: number, body: string): boolean {
+  return status === 429 && isDiscordRateLimitResponseBody(body);
 }
 
 function isTransientDiscordGatewayResponse(status: number, body: string): boolean {
   if (status >= 500) {
     return true;
   }
-  const normalized = normalizeLowercaseStringOrEmpty(body);
+  if (isDiscordGatewayRateLimitResponse(status, body)) {
+    return true;
+  }
+  const normalized = body.toLowerCase();
   return (
     normalized.includes("upstream connect error") ||
     normalized.includes("disconnect/reset before headers") ||

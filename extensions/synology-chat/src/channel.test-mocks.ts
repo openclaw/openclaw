@@ -169,45 +169,7 @@ vi.mock("./runtime.js", () => ({
             routeSessionKey: resolved.routeSessionKey,
           };
         }),
-        runResolved: vi.fn(async (params) => {
-          const input =
-            typeof params.input === "function" ? await params.input(params.raw) : params.input;
-          if (!input) {
-            return { admission: { kind: "drop", reason: "ingest-null" }, dispatched: false };
-          }
-          const resolved = await params.resolveTurn(input, {
-            kind: "message",
-            canStartAgentTurn: true,
-          });
-          const dispatchResult = await resolved.dispatchReplyWithBufferedBlockDispatcher({
-            ctx: resolved.ctxPayload,
-            cfg: mockRuntimeConfig,
-            dispatcherOptions: {
-              ...resolved.dispatcherOptions,
-              deliver: resolved.delivery.deliver,
-              onError: resolved.delivery.onError,
-            },
-          });
-          return {
-            admission: { kind: "dispatch" },
-            dispatched: true,
-            dispatchResult,
-            ctxPayload: resolved.ctxPayload,
-            routeSessionKey: resolved.routeSessionKey,
-          };
-        }),
         buildContext: buildChannelTurnContextMock,
-        dispatchAssembled: vi.fn(async (params) => ({
-          dispatchResult: await params.dispatchReplyWithBufferedBlockDispatcher({
-            ctx: params.ctxPayload,
-            cfg: mockRuntimeConfig,
-            dispatcherOptions: {
-              ...params.dispatcherOptions,
-              deliver: params.delivery.deliver,
-              onError: params.delivery.onError,
-            },
-          }),
-        })),
       },
     },
   })),

@@ -3654,6 +3654,10 @@ module.exports = { id: "throws-after-import", register() {} };`,
             description: "failme",
             run: async () => ({ ok: true }),
           });
+          api.registerNodeInvokePolicy({
+            commands: ["failme.node"],
+            handle: async () => ({ ok: true }),
+          });
           api.registerSecurityAuditCollector({
             id: "failme",
             collect: async () => [],
@@ -3696,6 +3700,7 @@ module.exports = { id: "throws-after-import", register() {} };`,
     expect(getPluginCommandSpecs()).toEqual([]);
     expect(registry.reloads).toEqual([]);
     expect(registry.nodeHostCommands).toEqual([]);
+    expect(registry.nodeInvokePolicies).toEqual([]);
     expect(registry.securityAuditCollectors).toEqual([]);
     expect(resolvePluginInteractiveNamespaceMatch("slack", "failme:payload")).toBeNull();
     expect(getContextEngineFactory("failme-context")).toBeUndefined();

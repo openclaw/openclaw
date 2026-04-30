@@ -871,6 +871,45 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
               type: "string",
             },
           },
+          tabCleanup: {
+            type: "object",
+            properties: {
+              enabled: {
+                type: "boolean",
+                title: "Browser Tab Cleanup Enabled",
+                description:
+                  "Enables cleanup of idle tracked browser tabs for primary-agent sessions. Disable only when external tooling owns tab lifecycle completely.",
+              },
+              idleMinutes: {
+                type: "integer",
+                minimum: 0,
+                maximum: 9007199254740991,
+                title: "Browser Tab Cleanup Idle Minutes",
+                description:
+                  "Minutes of inactivity before a tracked primary-agent browser tab is eligible for closure. Set 0 to disable idle-time cleanup while keeping the per-session tab cap.",
+              },
+              maxTabsPerSession: {
+                type: "integer",
+                minimum: 0,
+                maximum: 9007199254740991,
+                title: "Browser Tab Cleanup Max Tabs Per Session",
+                description:
+                  "Maximum tracked browser tabs kept per primary-agent session. Oldest inactive tabs are closed first. Set 0 to disable the cap.",
+              },
+              sweepMinutes: {
+                type: "integer",
+                exclusiveMinimum: 0,
+                maximum: 9007199254740991,
+                title: "Browser Tab Cleanup Sweep Minutes",
+                description:
+                  "Minutes between browser tab cleanup sweeps. Keep this modest so idle tabs are reclaimed without adding frequent background work.",
+              },
+            },
+            additionalProperties: false,
+            title: "Browser Tab Cleanup",
+            description:
+              "Best-effort cleanup policy for browser tabs opened by primary-agent sessions. Keep enabled to avoid stale sandbox or managed-browser tabs accumulating across long-lived gateways.",
+          },
         },
         additionalProperties: false,
         title: "Browser",
@@ -18977,7 +19016,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 ],
                 title: "Queue Mode",
                 description:
-                  'Queue behavior mode. "steer" injects at the next model boundary; "followup" runs later; "collect" batches later; "steer-backlog" and "steer+backlog" steer now and preserve backlog; "queue" aliases steer; "interrupt" aborts the active run. Use conservative modes unless interruption is intentional.',
+                  'Queue behavior mode. Use "steer" to inject all queued steering messages at the next model boundary; "queue" is legacy one-at-a-time steering; "followup" runs later; "collect" batches later; "steer-backlog" (alias "steer+backlog") does both; "interrupt" aborts the active run.',
               },
               byChannel: {
                 type: "object",
@@ -28307,7 +28346,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "messages.queue.mode": {
       label: "Queue Mode",
-      help: 'Queue behavior mode. "steer" injects at the next model boundary; "followup" runs later; "collect" batches later; "steer-backlog" and "steer+backlog" steer now and preserve backlog; "queue" aliases steer; "interrupt" aborts the active run. Use conservative modes unless interruption is intentional.',
+      help: 'Queue behavior mode. Use "steer" to inject all queued steering messages at the next model boundary; "queue" is legacy one-at-a-time steering; "followup" runs later; "collect" batches later; "steer-backlog" (alias "steer+backlog") does both; "interrupt" aborts the active run.',
       tags: ["advanced"],
     },
     "messages.queue.byChannel": {
