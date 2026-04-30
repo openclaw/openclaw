@@ -39,7 +39,7 @@ type PendingRequest = {
 };
 
 export function isIMessageRpcPermissionDeniedText(value: unknown): boolean {
-  const text = String(value ?? "").toLowerCase();
+  const text = normalizeLowercaseStringOrEmpty(value);
   if (!text) {
     return false;
   }
