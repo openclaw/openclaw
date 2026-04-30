@@ -238,6 +238,14 @@ const updateCliShared = await import("./update-cli/shared.js");
 const { resolveGitInstallDir } = updateCliShared;
 const { spawnSync } = await import("node:child_process");
 
+function commandOptionsEnv(opts: unknown): NodeJS.ProcessEnv | undefined {
+  if (!opts || typeof opts !== "object") {
+    return undefined;
+  }
+  const env = (opts as { env?: unknown }).env;
+  return env && typeof env === "object" ? (env as NodeJS.ProcessEnv) : undefined;
+}
+
 type UpdateCliScenario = {
   name: string;
   run: () => Promise<void>;
@@ -714,6 +722,27 @@ describe("update-cli", () => {
     expect(syncPluginsForUpdateChannel).toHaveBeenCalledTimes(1);
     expect(updateNpmInstalledPlugins).toHaveBeenCalledTimes(1);
     expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it("restart verification mode skips the core update and waits for the expected gateway version", async () => {
+    await withEnvAsync(
+      {
+        OPENCLAW_UPDATE_RESTART_VERIFY: "1",
+        OPENCLAW_UPDATE_RESTART_VERIFY_ROOT: "/tmp/openclaw-updated-root",
+        OPENCLAW_UPDATE_RESTART_VERIFY_MODE: "npm",
+        OPENCLAW_UPDATE_RESTART_VERIFY_EXPECTED_VERSION: "1.0.0",
+        OPENCLAW_UPDATE_RESTART_VERIFY_GATEWAY_PORT: "18789",
+      },
+      async () => {
+        await updateCommand({ json: true });
+      },
+    );
+
+    expect(runGatewayUpdate).not.toHaveBeenCalled();
+    expect(syncPluginsForUpdateChannel).not.toHaveBeenCalled();
+    expect(updateNpmInstalledPlugins).not.toHaveBeenCalled();
+    expect(probeGateway).toHaveBeenCalledWith(expect.objectContaining({ includeDetails: true }));
+    expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
   });
 
   it("post-core resume mode persists the requested update channel with the updated process", async () => {
@@ -2217,7 +2246,45 @@ describe("update-cli", () => {
     ).toContain("updated install entrypoint not found");
   });
 
-  it("fails a JSON package update when fallback restart leaves the old gateway running", async () => {
+  it("delegates package restart verification to the updated install", async () => {
+    const updatedRoot = createCaseDir("openclaw-updated-root");
+    const updatedEntrypoint = path.join(updatedRoot, "dist", "entry.js");
+    setupUpdatedRootRefresh({
+      entrypoints: [updatedEntrypoint],
+      gatewayUpdateImpl: async () =>
+        makeOkUpdateResult({
+          mode: "npm",
+          root: updatedRoot,
+          before: { version: "2026.4.26" },
+          after: { version: "2026.4.27" },
+        }),
+    });
+    prepareRestartScript.mockResolvedValue("/tmp/openclaw-restart-test.sh");
+    serviceLoaded.mockResolvedValue(true);
+
+    await updateCommand({ yes: true, json: true });
+
+    expect(runRestartScript).toHaveBeenCalledWith("/tmp/openclaw-restart-test.sh");
+    expect(runCommandWithTimeout).toHaveBeenCalledWith(
+      [expect.stringMatching(/node/), updatedEntrypoint, "update", "--json"],
+      expect.objectContaining({
+        cwd: updatedRoot,
+        timeoutMs: 70_000,
+        env: expect.objectContaining({
+          NODE_DISABLE_COMPILE_CACHE: "1",
+          OPENCLAW_UPDATE_RESTART_VERIFY: "1",
+          OPENCLAW_UPDATE_RESTART_VERIFY_ROOT: updatedRoot,
+          OPENCLAW_UPDATE_RESTART_VERIFY_MODE: "npm",
+          OPENCLAW_UPDATE_RESTART_VERIFY_EXPECTED_VERSION: "2026.4.27",
+          OPENCLAW_UPDATE_RESTART_VERIFY_GATEWAY_PORT: "18789",
+        }),
+      }),
+    );
+    expect(probeGateway).not.toHaveBeenCalled();
+    expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
+  });
+
+  it("fails a JSON package update when updated restart verification reports the old gateway", async () => {
     const updatedRoot = createCaseDir("openclaw-updated-root");
     const updatedEntrypoint = path.join(updatedRoot, "dist", "entry.js");
     setupUpdatedRootRefresh({
@@ -2232,21 +2299,26 @@ describe("update-cli", () => {
     });
     prepareRestartScript.mockResolvedValue(null);
     serviceLoaded.mockResolvedValue(true);
-    probeGateway.mockResolvedValue({
-      ok: true,
-      close: null,
-      server: {
-        version: "2026.4.23",
-        connId: "old-gateway",
-      },
-      auth: { role: "operator", scopes: ["operator.read"], capability: "read_only" },
-      health: null,
-      status: null,
-      presence: null,
-      configSnapshot: null,
-      connectLatencyMs: 1,
-      error: null,
-      url: "ws://127.0.0.1:18789",
+    vi.mocked(runCommandWithTimeout).mockImplementation(async (_cmd, opts) => {
+      if (commandOptionsEnv(opts)?.OPENCLAW_UPDATE_RESTART_VERIFY === "1") {
+        return {
+          stdout: "",
+          stderr:
+            "Gateway version mismatch: expected 2026.4.24, running gateway reported 2026.4.23.",
+          code: 1,
+          signal: null,
+          killed: false,
+          termination: "exit",
+        };
+      }
+      return {
+        stdout: "",
+        stderr: "",
+        code: 0,
+        signal: null,
+        killed: false,
+        termination: "exit",
+      };
     });
 
     await updateCommand({ yes: true, json: true });
@@ -2257,7 +2329,21 @@ describe("update-cli", () => {
       [expect.stringMatching(/node/), updatedEntrypoint, "gateway", "restart", "--json"],
       expect.objectContaining({ cwd: updatedRoot, timeoutMs: 60_000 }),
     );
-    expect(probeGateway).toHaveBeenCalledWith(expect.objectContaining({ includeDetails: true }));
+    expect(runCommandWithTimeout).toHaveBeenCalledWith(
+      [expect.stringMatching(/node/), updatedEntrypoint, "update", "--json"],
+      expect.objectContaining({
+        cwd: updatedRoot,
+        timeoutMs: 70_000,
+        env: expect.objectContaining({
+          OPENCLAW_UPDATE_RESTART_VERIFY: "1",
+          OPENCLAW_UPDATE_RESTART_VERIFY_ROOT: updatedRoot,
+          OPENCLAW_UPDATE_RESTART_VERIFY_MODE: "npm",
+          OPENCLAW_UPDATE_RESTART_VERIFY_EXPECTED_VERSION: "2026.4.24",
+          OPENCLAW_UPDATE_RESTART_VERIFY_GATEWAY_PORT: "18789",
+        }),
+      }),
+    );
+    expect(probeGateway).not.toHaveBeenCalled();
     expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
     expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
     expect(
@@ -2286,39 +2372,42 @@ describe("update-cli", () => {
     });
     readPackageVersion.mockResolvedValue("2026.4.24");
     serviceLoaded.mockResolvedValue(true);
-    probeGateway.mockResolvedValue({
-      ok: true,
-      close: null,
-      server: {
-        version: "2026.4.24",
-        connId: "updated-gateway",
-      },
-      auth: { role: "operator", scopes: ["operator.read"], capability: "read_only" },
-      health: {
-        ok: true,
-        plugins: {
-          errors: [
-            {
-              id: "telegram",
-              origin: "bundled",
-              activated: true,
-              error: "failed to install bundled runtime deps: ENOSPC",
-            },
-          ],
-        },
-      },
-      status: null,
-      presence: null,
-      configSnapshot: null,
-      connectLatencyMs: 1,
-      error: null,
-      url: "ws://127.0.0.1:18789",
+    vi.mocked(runCommandWithTimeout).mockImplementation(async (_cmd, opts) => {
+      if (commandOptionsEnv(opts)?.OPENCLAW_UPDATE_RESTART_VERIFY === "1") {
+        return {
+          stdout: "- telegram: failed to install bundled runtime deps: ENOSPC",
+          stderr: "",
+          code: 1,
+          signal: null,
+          killed: false,
+          termination: "exit",
+        };
+      }
+      return {
+        stdout: "",
+        stderr: "",
+        code: 0,
+        signal: null,
+        killed: false,
+        termination: "exit",
+      };
     });
 
     await updateCommand({ yes: true });
 
     expect(runRestartScript).toHaveBeenCalled();
-    expect(probeGateway).toHaveBeenCalledWith(expect.objectContaining({ includeDetails: true }));
+    expect(runCommandWithTimeout).toHaveBeenCalledWith(
+      [expect.stringMatching(/node/), updatedEntrypoint, "update"],
+      expect.objectContaining({
+        cwd: updatedRoot,
+        timeoutMs: 70_000,
+        env: expect.objectContaining({
+          OPENCLAW_UPDATE_RESTART_VERIFY: "1",
+          OPENCLAW_UPDATE_RESTART_VERIFY_EXPECTED_VERSION: "2026.4.24",
+        }),
+      }),
+    );
+    expect(probeGateway).not.toHaveBeenCalled();
     expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
     expect(
       vi

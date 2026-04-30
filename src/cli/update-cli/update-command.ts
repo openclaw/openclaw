@@ -59,6 +59,7 @@ import { formatCliCommand } from "../command-format.js";
 import { installCompletion } from "../completion-runtime.js";
 import { runDaemonInstall, runDaemonRestart } from "../daemon-cli.js";
 import {
+  DEFAULT_RESTART_HEALTH_TIMEOUT_MS,
   renderRestartDiagnostics,
   terminateStaleGatewayPids,
   waitForGatewayHealthyRestart,
@@ -89,11 +90,17 @@ import { suppressDeprecations } from "./suppress-deprecations.js";
 
 const CLI_NAME = resolveCliName();
 const SERVICE_REFRESH_TIMEOUT_MS = 60_000;
+const RESTART_VERIFY_TIMEOUT_MS = DEFAULT_RESTART_HEALTH_TIMEOUT_MS + 10_000;
 const DEFAULT_UPDATE_STEP_TIMEOUT_MS = 30 * 60_000;
 const POST_CORE_UPDATE_ENV = "OPENCLAW_UPDATE_POST_CORE";
 const POST_CORE_UPDATE_CHANNEL_ENV = "OPENCLAW_UPDATE_POST_CORE_CHANNEL";
 const POST_CORE_UPDATE_REQUESTED_CHANNEL_ENV = "OPENCLAW_UPDATE_POST_CORE_REQUESTED_CHANNEL";
 const POST_CORE_UPDATE_RESULT_PATH_ENV = "OPENCLAW_UPDATE_POST_CORE_RESULT_PATH";
+const RESTART_VERIFY_ENV = "OPENCLAW_UPDATE_RESTART_VERIFY";
+const RESTART_VERIFY_ROOT_ENV = "OPENCLAW_UPDATE_RESTART_VERIFY_ROOT";
+const RESTART_VERIFY_MODE_ENV = "OPENCLAW_UPDATE_RESTART_VERIFY_MODE";
+const RESTART_VERIFY_EXPECTED_VERSION_ENV = "OPENCLAW_UPDATE_RESTART_VERIFY_EXPECTED_VERSION";
+const RESTART_VERIFY_GATEWAY_PORT_ENV = "OPENCLAW_UPDATE_RESTART_VERIFY_GATEWAY_PORT";
 const UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV =
   "OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE";
 const SERVICE_REFRESH_PATH_ENV_KEYS = [
@@ -440,6 +447,186 @@ async function runUpdatedInstallGatewayRestart(params: {
   throw new Error(
     `updated install restart failed (${entrypoint}): ${formatCommandFailure(res.stdout, res.stderr)}`,
   );
+}
+
+function renderRestartFailureDiagnostics(
+  health: Awaited<ReturnType<typeof waitForGatewayHealthyRestart>>,
+): string[] {
+  return [
+    "Gateway did not become healthy after restart.",
+    ...renderRestartDiagnostics(health),
+    `Restart log: ${resolveGatewayRestartLogPath(process.env)}`,
+    `Run \`${replaceCliName(formatCliCommand("openclaw gateway status --deep"), CLI_NAME)}\` for details.`,
+  ];
+}
+
+function emitRestartFailureDiagnostics(lines: string[], jsonMode: boolean): void {
+  if (jsonMode) {
+    defaultRuntime.error(lines.join("\n"));
+    return;
+  }
+
+  defaultRuntime.log(theme.warn(lines[0] ?? "Gateway did not become healthy."));
+  for (const line of lines.slice(1)) {
+    defaultRuntime.log(theme.muted(line));
+  }
+}
+
+async function verifyRestartedGatewayInCurrentProcess(params: {
+  expectedGatewayVersion: string | undefined;
+  gatewayPort: number;
+  jsonMode: boolean;
+  strictUnhealthy: boolean;
+  restartAfterStaleCleanup?: () => Promise<void>;
+}): Promise<boolean> {
+  const service = resolveGatewayService();
+  let health = await waitForGatewayHealthyRestart({
+    service,
+    port: params.gatewayPort,
+    expectedVersion: params.expectedGatewayVersion,
+  });
+
+  if (!health.healthy && health.staleGatewayPids.length > 0) {
+    if (!params.jsonMode) {
+      defaultRuntime.log(
+        theme.warn(
+          `Found stale gateway process(es) after restart: ${health.staleGatewayPids.join(", ")}. Cleaning up...`,
+        ),
+      );
+    }
+    await terminateStaleGatewayPids(health.staleGatewayPids);
+    await params.restartAfterStaleCleanup?.();
+    health = await waitForGatewayHealthyRestart({
+      service,
+      port: params.gatewayPort,
+      expectedVersion: params.expectedGatewayVersion,
+    });
+  }
+
+  if (health.healthy) {
+    return true;
+  }
+
+  emitRestartFailureDiagnostics(renderRestartFailureDiagnostics(health), params.jsonMode);
+  if (params.strictUnhealthy) {
+    return false;
+  }
+  return !(health.versionMismatch || health.activatedPluginErrors?.length);
+}
+
+async function verifyRestartedGatewayWithUpdatedInstall(params: {
+  result: UpdateRunResult;
+  opts: UpdateCommandOptions;
+  expectedGatewayVersion: string | undefined;
+  gatewayPort: number;
+  serviceEnv?: NodeJS.ProcessEnv;
+  invocationCwd?: string;
+}): Promise<boolean | null> {
+  if (!isPackageManagerUpdateMode(params.result.mode) || !params.expectedGatewayVersion) {
+    return null;
+  }
+
+  const entrypoint = await resolveGatewayInstallEntrypoint(params.result.root);
+  if (!entrypoint) {
+    return null;
+  }
+
+  const args = [entrypoint, "update"];
+  if (params.opts.json) {
+    args.push("--json");
+  }
+
+  // Package self-updates replace files on disk, but this process keeps old modules loaded.
+  const env = resolveUpdatedInstallCommandEnv(
+    params.serviceEnv ?? process.env,
+    params.invocationCwd,
+  );
+  const res = await runCommandWithTimeout([resolveNodeRunner(), ...args], {
+    cwd: params.result.root,
+    env: {
+      ...env,
+      [RESTART_VERIFY_ENV]: "1",
+      [RESTART_VERIFY_ROOT_ENV]: params.result.root,
+      [RESTART_VERIFY_MODE_ENV]: params.result.mode,
+      [RESTART_VERIFY_EXPECTED_VERSION_ENV]: params.expectedGatewayVersion,
+      [RESTART_VERIFY_GATEWAY_PORT_ENV]: String(params.gatewayPort),
+    },
+    timeoutMs: RESTART_VERIFY_TIMEOUT_MS,
+  });
+
+  if (res.code === 0) {
+    return true;
+  }
+
+  const output = (res.stderr || res.stdout).trim();
+  if (output) {
+    if (params.opts.json) {
+      defaultRuntime.error(output);
+    } else {
+      for (const line of output.split("\n")) {
+        defaultRuntime.log(theme.muted(line));
+      }
+    }
+  }
+  return false;
+}
+
+function parseRestartVerifyPort(raw: string | undefined): number | null {
+  const parsed = Number.parseInt(raw ?? "", 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return null;
+  }
+  return parsed;
+}
+
+function normalizeRestartVerifyMode(raw: string | undefined): UpdateRunResult["mode"] | null {
+  if (raw === "npm" || raw === "pnpm" || raw === "bun") {
+    return raw;
+  }
+  return null;
+}
+
+async function runRestartVerificationCommand(params: {
+  opts: UpdateCommandOptions;
+  invocationCwd?: string;
+}): Promise<void> {
+  const root = normalizeOptionalString(process.env[RESTART_VERIFY_ROOT_ENV]);
+  const mode = normalizeRestartVerifyMode(process.env[RESTART_VERIFY_MODE_ENV]);
+  const expectedGatewayVersion = normalizeOptionalString(
+    process.env[RESTART_VERIFY_EXPECTED_VERSION_ENV],
+  );
+  const gatewayPort = parseRestartVerifyPort(process.env[RESTART_VERIFY_GATEWAY_PORT_ENV]);
+  if (!root || !mode || !expectedGatewayVersion || gatewayPort === null) {
+    defaultRuntime.error("Missing restart verification context.");
+    defaultRuntime.exit(1);
+    return;
+  }
+
+  const restartAfterStaleCleanup = async () => {
+    await runUpdatedInstallGatewayRestart({
+      result: {
+        status: "ok",
+        mode,
+        root,
+        steps: [],
+        durationMs: 0,
+      } as UpdateRunResult,
+      jsonMode: Boolean(params.opts.json),
+      invocationCwd: params.invocationCwd,
+      env: process.env,
+    });
+  };
+
+  const ok = await verifyRestartedGatewayInCurrentProcess({
+    expectedGatewayVersion,
+    gatewayPort,
+    jsonMode: Boolean(params.opts.json),
+    strictUnhealthy: true,
+    restartAfterStaleCleanup,
+  });
+  if (!ok) {
+    defaultRuntime.exit(1);
+  }
 }
 
 async function tryInstallShellCompletion(opts: {
@@ -912,53 +1099,26 @@ async function maybeRestartService(params: {
         await runDaemonRestart();
       }
     };
-    const service = resolveGatewayService();
-    let health = await waitForGatewayHealthyRestart({
-      service,
-      port: params.gatewayPort,
-      expectedVersion: expectedGatewayVersion,
+
+    const updatedVerification = await verifyRestartedGatewayWithUpdatedInstall({
+      result: params.result,
+      opts: params.opts,
+      expectedGatewayVersion,
+      gatewayPort: params.gatewayPort,
+      serviceEnv: params.serviceEnv,
+      invocationCwd: params.invocationCwd,
     });
-    if (!health.healthy && health.staleGatewayPids.length > 0) {
-      if (!params.opts.json) {
-        defaultRuntime.log(
-          theme.warn(
-            `Found stale gateway process(es) after restart: ${health.staleGatewayPids.join(", ")}. Cleaning up...`,
-          ),
-        );
-      }
-      await terminateStaleGatewayPids(health.staleGatewayPids);
-      await restartAfterStaleCleanup();
-      health = await waitForGatewayHealthyRestart({
-        service,
-        port: params.gatewayPort,
-        expectedVersion: expectedGatewayVersion,
-      });
+    if (updatedVerification !== null) {
+      return updatedVerification;
     }
 
-    if (health.healthy) {
-      return true;
-    }
-
-    const diagnosticLines = [
-      "Gateway did not become healthy after restart.",
-      ...renderRestartDiagnostics(health),
-      `Restart log: ${resolveGatewayRestartLogPath(process.env)}`,
-      `Run \`${replaceCliName(formatCliCommand("openclaw gateway status --deep"), CLI_NAME)}\` for details.`,
-    ];
-    if (params.opts.json) {
-      defaultRuntime.error(diagnosticLines.join("\n"));
-    } else {
-      defaultRuntime.log(theme.warn(diagnosticLines[0] ?? "Gateway did not become healthy."));
-      for (const line of diagnosticLines.slice(1)) {
-        defaultRuntime.log(theme.muted(line));
-      }
-    }
-
-    if (isPackageManagerUpdateMode(params.result.mode)) {
-      return false;
-    }
-
-    return !(health.versionMismatch || health.activatedPluginErrors?.length);
+    return await verifyRestartedGatewayInCurrentProcess({
+      expectedGatewayVersion,
+      gatewayPort: params.gatewayPort,
+      jsonMode: Boolean(params.opts.json),
+      strictUnhealthy: isPackageManagerUpdateMode(params.result.mode),
+      restartAfterStaleCleanup,
+    });
   };
 
   if (params.shouldRestart) {
@@ -1271,6 +1431,11 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     return;
   }
   const updateStepTimeoutMs = timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS;
+
+  if (process.env[RESTART_VERIFY_ENV] === "1") {
+    await runRestartVerificationCommand({ opts, invocationCwd });
+    return;
+  }
 
   const root = await resolveUpdateRoot();
   if (postCoreUpdateResume) {
