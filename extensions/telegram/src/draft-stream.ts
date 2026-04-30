@@ -235,6 +235,16 @@ export function createTelegramDraftStream(params: {
     if (streamState.stopped && !streamState.final) {
       return false;
     }
+    // Wait out any active 429 backoff at the entry point so newer pending text
+    // (accumulated while the failing send was in-flight) is used for the retry
+    // rather than the stale text the loop snapshotted before the failed send.
+    if (rateLimitedUntilMs > 0) {
+      const remaining = rateLimitedUntilMs - Date.now();
+      if (remaining > 0) {
+        await new Promise<void>((r) => setTimeout(r, remaining));
+      }
+      rateLimitedUntilMs = 0;
+    }
     const trimmed = text.trimEnd();
     if (!trimmed) {
       return false;
@@ -332,16 +342,16 @@ export function createTelegramDraftStream(params: {
         const retryAfterMs = getTelegramRetryAfterMs(err) ?? 5_000;
         const backoffMs = retryAfterMs + 500;
         rateLimitedUntilMs = Date.now() + backoffMs;
-        // Clear sent-state markers so the retry loop doesn't hit the duplicate-text
-        // early-exit and actually re-attempts the pending preview.
+        // Clear sent-state markers so the retry does not hit the duplicate-text early-exit.
         lastSentText = "";
         lastSentParseMode = undefined;
         params.warn?.(
           `telegram stream preview rate limited; backing off ${retryAfterMs}ms (retry_after from API)`,
         );
-        await new Promise<void>((r) => setTimeout(r, backoffMs));
-        rateLimitedUntilMs = 0;
-        // Return false so the throttle loop retries on the next tick rather than stopping.
+        // Return false immediately without sleeping. The backoff wait is deferred to
+        // the start of the next sendOrEditStreamMessage call so any pending text
+        // accumulated during the in-flight send is preserved rather than overwritten
+        // by the draft loop's sent===false restore path.
         return false;
       }
       streamState.stopped = true;

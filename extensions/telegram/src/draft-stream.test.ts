@@ -687,3 +687,51 @@ describe("draft stream overflow chaining", () => {
     });
   });
 });
+
+describe("draft stream 429 rate limit backoff", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("retries with newest accumulated text when an update arrives during 429 backoff", async () => {
+    const api = createMockDraftApi();
+    const retryAfterMs = 2000;
+    const err429 = Object.assign(new Error("429: Too Many Requests"), {
+      error_code: 429,
+      parameters: { retry_after: retryAfterMs / 1000 },
+    });
+    api.editMessageText.mockRejectedValueOnce(err429);
+
+    const stream = createTelegramDraftStream({
+      api: api as unknown as Bot["api"],
+      chatId: 123,
+      throttleMs: 0,
+      previewTransport: "message",
+    });
+
+    // Establish a message ID so subsequent updates go through editMessageText.
+    stream.update("initial");
+    await stream.flush();
+    expect(api.sendMessage).toHaveBeenCalledWith(123, "initial", undefined);
+
+    // Second update triggers editMessageText → 429 (returns false immediately).
+    stream.update("stale");
+    await stream.flush();
+    expect(api.editMessageText).toHaveBeenCalledTimes(1);
+
+    // Newer text arrives while the backoff window is active.
+    stream.update("newest");
+
+    // Advance past the backoff window; the deferred wait inside sendOrEditStreamMessage resolves.
+    await vi.advanceTimersByTimeAsync(retryAfterMs + 600);
+    await stream.flush();
+
+    // The retry must use the newest text, not the stale pre-429 snapshot.
+    expect(api.editMessageText).toHaveBeenCalledTimes(2);
+    expect(api.editMessageText).toHaveBeenLastCalledWith(123, 17, "newest");
+  });
+});
