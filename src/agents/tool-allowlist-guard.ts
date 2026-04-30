@@ -20,6 +20,10 @@ export function buildEmptyExplicitToolAllowlistError(params: {
   toolsEnabled: boolean;
   disableTools?: boolean;
 }): Error | null {
+  // LLM-only runs intentionally disable tools; an empty callable set is expected, not an error.
+  if (params.disableTools === true) {
+    return null;
+  }
   const callableToolNames = params.callableToolNames.map(normalizeToolName).filter(Boolean);
   if (params.sources.length === 0 || callableToolNames.length > 0) {
     return null;

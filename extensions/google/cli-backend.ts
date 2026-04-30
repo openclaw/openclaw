@@ -27,16 +27,8 @@ export function buildGoogleGeminiCliBackend(): CliBackendPlugin {
     bundleMcpMode: "gemini-system-settings",
     config: {
       command: "gemini",
-      args: ["--skip-trust", "--output-format", "json", "--prompt", "{prompt}"],
-      resumeArgs: [
-        "--skip-trust",
-        "--resume",
-        "{sessionId}",
-        "--output-format",
-        "json",
-        "--prompt",
-        "{prompt}",
-      ],
+      args: ["--output-format", "json", "--prompt", "{prompt}"],
+      resumeArgs: ["--resume", "{sessionId}", "--output-format", "json", "--prompt", "{prompt}"],
       output: "json",
       input: "arg",
       imageArg: "@",
