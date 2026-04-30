@@ -343,6 +343,31 @@ describe("gateway sessions patch", () => {
     expect(entry.modelOverride).toBe("claude-sonnet-4-6");
   });
 
+  test("persists provider-qualified aliases as canonical model overrides", async () => {
+    const entry = expectPatchOk(
+      await runPatch({
+        cfg: {
+          agents: {
+            defaults: {
+              model: { primary: "openai/gpt-5.4" },
+              models: {
+                "lmstudio-moe/qwen3.6-35b-a3b": { alias: "MoE" },
+              },
+            },
+          },
+        } as OpenClawConfig,
+        patch: { key: MAIN_SESSION_KEY, model: "lmstudio-moe/MoE" },
+        loadGatewayModelCatalog: async () => [
+          { provider: "lmstudio-moe", id: "qwen3.6-35b-a3b", name: "Qwen 3.6 35B A3B" },
+        ],
+      }),
+    );
+
+    expect(entry.providerOverride).toBe("lmstudio-moe");
+    expect(entry.modelOverride).toBe("qwen3.6-35b-a3b");
+    expect(entry.modelOverrideSource).toBe("user");
+  });
+
   test("sets spawnDepth for subagent sessions", async () => {
     const entry = expectPatchOk(
       await runPatch({

@@ -934,6 +934,44 @@ describe("model-selection", () => {
         ref: { provider: "openai", model: "xiaomi/mimo-v2-pro-mit" },
       });
     });
+
+    it("resolves provider-qualified aliases to the configured model ref", () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            models: {
+              "lmstudio-moe/qwen3.6-35b-a3b": {
+                alias: "MoE",
+              },
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      expect(
+        resolveAllowedModelRef({
+          cfg,
+          catalog: [],
+          raw: "MoE",
+          defaultProvider: "lmstudio-moe",
+        }),
+      ).toEqual({
+        key: "lmstudio-moe/qwen3.6-35b-a3b",
+        ref: { provider: "lmstudio-moe", model: "qwen3.6-35b-a3b" },
+      });
+
+      expect(
+        resolveAllowedModelRef({
+          cfg,
+          catalog: [],
+          raw: "lmstudio-moe/MoE",
+          defaultProvider: "lmstudio-moe",
+        }),
+      ).toEqual({
+        key: "lmstudio-moe/qwen3.6-35b-a3b",
+        ref: { provider: "lmstudio-moe", model: "qwen3.6-35b-a3b" },
+      });
+    });
   });
 
   describe("resolveModelRefFromString", () => {
