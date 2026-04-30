@@ -2991,6 +2991,7 @@ export async function runEmbeddedAttempt(
       }
 
       let yieldAborted = false;
+      let directReplyAborted = false;
       const abortCompaction = () => {
         if (!activeSession.isCompacting) {
           return;
@@ -4345,6 +4346,8 @@ export async function runEmbeddedAttempt(
           }
         } catch (err) {
           releaseLeasedSteering(err);
+          directReplyAborted =
+            isRunnerAbortError(err) && err instanceof Error && err.cause === "direct_reply";
           yieldAborted =
             yieldDetected &&
             isRunnerAbortError(err) &&
@@ -4366,6 +4369,8 @@ export async function runEmbeddedAttempt(
                 await persistSessionsYieldContextMessage(activeSession, yieldMessage);
               }
             });
+          } else if (directReplyAborted) {
+            aborted = false;
           } else if (isMidTurnPrecheckSignal(err)) {
             await sessionLockController.waitForSessionEvents(activeSession);
             await sessionLockController.withSessionWriteLock(() => {
@@ -4478,16 +4483,17 @@ export async function runEmbeddedAttempt(
             await onBlockReplyFlush();
           }
 
-          // Skip compaction wait when yield aborted the run — the signal is
+          // Skip compaction wait when yield or direct-reply aborted the run — the signal is
           // already tripped and abortable() would immediately reject.
-          const compactionRetryWait = yieldAborted
-            ? { timedOut: false }
-            : await waitForCompactionRetryWithAggregateTimeout({
-                waitForCompactionRetry,
-                abortable,
-                aggregateTimeoutMs: COMPACTION_RETRY_AGGREGATE_TIMEOUT_MS,
-                isCompactionStillInFlight: isCompactionInFlight,
-              });
+          const compactionRetryWait =
+            yieldAborted || directReplyAborted
+              ? { timedOut: false }
+              : await waitForCompactionRetryWithAggregateTimeout({
+                  waitForCompactionRetry,
+                  abortable,
+                  aggregateTimeoutMs: COMPACTION_RETRY_AGGREGATE_TIMEOUT_MS,
+                  isCompactionStillInFlight: isCompactionInFlight,
+                });
           if (compactionRetryWait.timedOut) {
             timedOutDuringCompaction = true;
             if (!isProbeSession) {
