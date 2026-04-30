@@ -208,9 +208,9 @@ function effectivePriority(entry: QueueEntry): number {
 
 function pickNextIndex(queue: QueueEntry[]): number {
   let bestIdx = 0;
-  let bestPri = effectivePriority(queue[0]!);
+  let bestPri = effectivePriority(queue[0]);
   for (let i = 1; i < queue.length; i++) {
-    const pri = effectivePriority(queue[i]!);
+    const pri = effectivePriority(queue[i]);
     if (pri > bestPri) {
       bestIdx = i;
       bestPri = pri;
@@ -270,7 +270,7 @@ function drainLane(lane: string) {
     try {
       while (state.activeTaskIds.size < state.maxConcurrent && state.queue.length > 0) {
         const idx = pickNextIndex(state.queue);
-        const entry = state.queue.splice(idx, 1)[0]!;
+        const entry = state.queue.splice(idx, 1)[0] as QueueEntry;
         const waitedMs = Date.now() - entry.enqueuedAt;
         if (waitedMs >= entry.warnAfterMs) {
           try {
