@@ -416,11 +416,23 @@ static void spawn_ssh_echo_probe(ProbeCtx *ctx,
         g_ptr_array_add(argv, g_strdup("-i"));
         g_ptr_array_add(argv, g_strdup(ssh_identity));
     }
-    if (ssh_user && ssh_user[0] != '\0') {
-        g_ptr_array_add(argv, g_strdup_printf("%s@%s", ssh_user, ssh_host));
-    } else {
-        g_ptr_array_add(argv, g_strdup(ssh_host));
+    /*
+     * argv-boundary guard, mirroring remote_tunnel_command_build:
+     * render the SSH destination first and reject any leading '-' so
+     * the trailing argv positional cannot smuggle option flags.
+     */
+    g_autofree gchar *destination =
+        (ssh_user && ssh_user[0] != '\0')
+            ? g_strdup_printf("%s@%s", ssh_user, ssh_host)
+            : g_strdup(ssh_host);
+    if (!destination || destination[0] == '\0' || destination[0] == '-') {
+        g_ptr_array_free(argv, TRUE);
+        deliver(ctx, REMOTE_PROBE_FAILED,
+                g_strdup("SSH target invalid"),
+                g_strdup("rendered SSH destination begins with '-'"));
+        return;
     }
+    g_ptr_array_add(argv, g_strdup(destination));
     g_ptr_array_add(argv, g_strdup("echo"));
     g_ptr_array_add(argv, g_strdup("ok"));
     g_ptr_array_add(argv, NULL);
@@ -754,11 +766,23 @@ static void spawn_ssh_forward_probe(ProbeCtx *ctx,
         g_ptr_array_add(argv, g_strdup("-i"));
         g_ptr_array_add(argv, g_strdup(ssh_identity));
     }
-    if (ssh_user && ssh_user[0] != '\0') {
-        g_ptr_array_add(argv, g_strdup_printf("%s@%s", ssh_user, ssh_host));
-    } else {
-        g_ptr_array_add(argv, g_strdup(ssh_host));
+    /*
+     * argv-boundary guard, mirroring remote_tunnel_command_build:
+     * render the SSH destination first and reject any leading '-' so
+     * the trailing argv positional cannot smuggle option flags.
+     */
+    g_autofree gchar *destination =
+        (ssh_user && ssh_user[0] != '\0')
+            ? g_strdup_printf("%s@%s", ssh_user, ssh_host)
+            : g_strdup(ssh_host);
+    if (!destination || destination[0] == '\0' || destination[0] == '-') {
+        g_ptr_array_free(argv, TRUE);
+        deliver(ctx, REMOTE_PROBE_FAILED,
+                g_strdup("SSH target invalid"),
+                g_strdup("rendered SSH destination begins with '-'"));
+        return;
     }
+    g_ptr_array_add(argv, g_strdup(destination));
     g_ptr_array_add(argv, NULL);
     gchar **argv_s = (gchar **)g_ptr_array_free(argv, FALSE);
 
@@ -797,10 +821,18 @@ void remote_probe_ssh_async(const gchar *ssh_user,
     ctx->cancel = cancel ? g_object_ref(cancel) : NULL;
     ctx->gateway_port = gateway_port;
 
-    if (!ssh_host || ssh_host[0] == '\0' || ssh_host[0] == '-') {
+    /*
+     * argv-smuggling entry guard. Both ssh_host and ssh_user feed the
+     * trailing "[user@]host" argv positional in the spawn helpers
+     * below; either leading with '-' would let OpenSSH parse the
+     * destination as another option flag. We re-validate the rendered
+     * destination at each spawn site as well.
+     */
+    if (!ssh_host || ssh_host[0] == '\0' || ssh_host[0] == '-' ||
+        (ssh_user && ssh_user[0] == '-')) {
         deliver(ctx, REMOTE_PROBE_FAILED,
                 g_strdup("SSH target invalid"),
-                g_strdup("SSH target host is empty or begins with '-'"));
+                g_strdup("SSH target host or user is empty or begins with '-'"));
         return;
     }
 

@@ -155,6 +155,20 @@ gboolean gateway_remote_config_parse_ssh_target(const gchar *raw,
         while (*work == ' ' || *work == '\t') work++;
     }
 
+    /*
+     * argv-boundary guard, post-prefix-strip variant.
+     *
+     * The pre-strip check above rejects raw inputs like "-oProxyJump=…",
+     * but an attacker can hide the dash behind the optional "ssh "
+     * prefix (e.g. "ssh -oProxyCommand=evil@host" or
+     * "ssh    -oProxyJump=evil@host"). After we have peeled the prefix
+     * and skipped any leading whitespace, the *functional* head of the
+     * target must not begin with '-' either — otherwise the
+     * subsequently-parsed user/host components could smuggle option
+     * flags through to OpenSSH's argv. Reject such inputs outright.
+     */
+    if (work[0] == '-') return FALSE;
+
     /* No internal whitespace or control characters allowed */
     for (const gchar *p = work; *p; p++) {
         if (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r' || (guchar)*p < 0x20) {
