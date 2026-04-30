@@ -36,6 +36,7 @@ const ALLOWED_GATEWAY_CONFIG_PATHS = [
   "agents.defaults.thinkingDefault",
   "agents.defaults.reasoningDefault",
   "agents.defaults.fastModeDefault",
+  "agents.defaults.compaction.mode",
   "agents.list[].id",
   "agents.list[].systemPromptOverride",
   "agents.list[].model",
@@ -51,6 +52,8 @@ const ALLOWED_GATEWAY_CONFIG_PATHS = [
   "channels.*.*.*.requireMention",
   "channels.*.*.*.*.requireMention",
   "channels.*.*.*.*.*.requireMention",
+  // Runtime toggles that are safe for owner-triggered agent automation.
+  "cron.enabled",
 ] as const;
 
 /** @internal Exposed for regression tests only; do not import from runtime code. */
