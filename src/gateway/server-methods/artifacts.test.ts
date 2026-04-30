@@ -209,6 +209,33 @@ describe("artifacts RPC handlers", () => {
     });
   });
 
+  it("treats transcript non-base64 data URLs as unsupported downloads", () => {
+    const artifacts = collectArtifactsFromMessages({
+      sessionKey: "agent:main:main",
+      messages: [
+        {
+          role: "user",
+          content: [
+            {
+              type: "input_image",
+              image_url: "data:text/plain,hello",
+              alt: "uploaded.txt",
+            },
+          ],
+          __openclaw: { seq: 4 },
+        },
+      ],
+    });
+
+    expect(artifacts).toHaveLength(1);
+    expect(artifacts[0]).toMatchObject({
+      type: "image",
+      title: "uploaded.txt",
+      download: { mode: "unsupported" },
+    });
+    expect(artifacts[0]?.download).not.toHaveProperty("encoding", "base64");
+  });
+
   it("treats unsafe artifact URLs as unsupported downloads", async () => {
     const artifacts = collectArtifactsFromMessages({
       sessionKey: "agent:main:main",
