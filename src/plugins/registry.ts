@@ -558,15 +558,15 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
         // assignment like `event.context.bootstrapFiles = updated` (#75245).
         const context = evt.context ?? {};
         const hadPluginConfig = Object.prototype.hasOwnProperty.call(context, "pluginConfig");
-        const previousPluginConfig = (context as Record<string, unknown>).pluginConfig;
-        (context as Record<string, unknown>).pluginConfig = pluginConfig;
+        const previousPluginConfig = context.pluginConfig;
+        context.pluginConfig = pluginConfig;
         try {
           return await handler({ ...evt, context });
         } finally {
           if (hadPluginConfig) {
-            (context as Record<string, unknown>).pluginConfig = previousPluginConfig;
+            context.pluginConfig = previousPluginConfig;
           } else {
-            delete (context as Record<string, unknown>).pluginConfig;
+            delete context.pluginConfig;
           }
         }
       };
