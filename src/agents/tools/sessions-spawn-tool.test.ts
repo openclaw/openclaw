@@ -230,6 +230,42 @@ describe("sessions_spawn tool", () => {
     expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();
   });
 
+  it("keeps configured Codex agents on the subagent route unless ACP is explicit", async () => {
+    registerAcpBackendForTest();
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+      config: {
+        agents: {
+          list: [
+            {
+              id: "codex",
+              embeddedHarness: { runtime: "codex", fallback: "none" },
+            },
+          ],
+        },
+      },
+    });
+
+    const result = await tool.execute("call-codex-native", {
+      task: "background task",
+      agentId: "codex",
+    });
+
+    expect(result.details).toMatchObject({
+      status: "accepted",
+      childSessionKey: "agent:main:subagent:1",
+      runId: "run-subagent",
+    });
+    expect(hoisted.spawnSubagentDirectMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        task: "background task",
+        agentId: "codex",
+      }),
+      expect.any(Object),
+    );
+    expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();
+  });
+
   it.each([
     { status: "error" as const, error: "spawn failed" },
     { status: "forbidden" as const, error: "not allowed" },

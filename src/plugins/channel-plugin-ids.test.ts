@@ -969,6 +969,27 @@ describe("resolveGatewayStartupPluginIds", () => {
     });
   });
 
+  it("includes required agent harness owner plugins when legacy embeddedHarness forces the runtime", () => {
+    expectStartupPluginIdsCase({
+      config: {
+        agents: {
+          list: [
+            {
+              id: "codex",
+              embeddedHarness: { runtime: "codex", fallback: "none" },
+            },
+          ],
+        },
+        plugins: {
+          entries: {
+            codex: { enabled: true },
+          },
+        },
+      } as OpenClawConfig,
+      expected: ["demo-channel", "browser", "codex", "memory-core"],
+    });
+  });
+
   it("includes required agent harness owner plugins when env forces the runtime", () => {
     expectStartupPluginIdsCase({
       config: createStartupConfig({

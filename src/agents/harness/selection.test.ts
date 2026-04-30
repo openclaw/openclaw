@@ -411,6 +411,48 @@ describe("selectAgentHarness", () => {
     ).toThrow("PI fallback is disabled");
   });
 
+  it("honors legacy embeddedHarness as the default runtime policy source", () => {
+    const config: OpenClawConfig = {
+      agents: {
+        defaults: {
+          embeddedHarness: { runtime: "auto", fallback: "none" },
+        },
+      },
+    };
+
+    expect(() =>
+      selectAgentHarness({
+        provider: "anthropic",
+        modelId: "sonnet-4.6",
+        config,
+      }),
+    ).toThrow("PI fallback is disabled");
+  });
+
+  it("honors legacy embeddedHarness as an agent runtime policy source", async () => {
+    const config: OpenClawConfig = {
+      agents: {
+        defaults: {
+          agentRuntime: { fallback: "pi" },
+        },
+        list: [
+          {
+            id: "codex",
+            embeddedHarness: { runtime: "codex", fallback: "none" },
+          },
+        ],
+      },
+    };
+
+    await expect(
+      runAgentHarnessAttemptWithFallback({
+        ...createAttemptParams(config),
+        sessionKey: "agent:codex:subagent:child",
+      }),
+    ).rejects.toThrow('Requested agent harness "codex" is not registered');
+    expect(piRunAttempt).not.toHaveBeenCalled();
+  });
+
   it("does not treat CLI runtime aliases as embedded harness ids", async () => {
     const config: OpenClawConfig = {
       agents: {
