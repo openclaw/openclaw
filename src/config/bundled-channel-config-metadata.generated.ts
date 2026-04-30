@@ -13823,7 +13823,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
         },
         pollingStallThresholdMs: {
           type: "integer",
-          minimum: 30000,
+          minimum: 60000,
           maximum: 600000,
         },
         retry: {
@@ -14864,7 +14864,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
               },
               pollingStallThresholdMs: {
                 type: "integer",
-                minimum: 30000,
+                minimum: 60000,
                 maximum: 600000,
               },
               retry: {
@@ -15253,7 +15253,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
       },
       pollingStallThresholdMs: {
         label: "Telegram Polling Stall Threshold (ms)",
-        help: "Milliseconds without completed Telegram getUpdates liveness before the polling watchdog restarts the polling runner. Default: 120000.",
+        help: "Milliseconds without completed Telegram getUpdates liveness before the polling watchdog restarts the polling runner. Default: 120000. Minimum: 60000.",
       },
       silentErrorReplies: {
         label: "Telegram Silent Error Replies",

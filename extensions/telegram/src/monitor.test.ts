@@ -917,12 +917,12 @@ describe("monitorTelegramProvider (grammY)", () => {
       abortSignal: abort.signal,
       config: {
         agents: { defaults: { maxConcurrent: 2 } },
-        channels: { telegram: { pollingStallThresholdMs: 30_000 } },
+        channels: { telegram: { pollingStallThresholdMs: 60_000 } },
       },
     });
     await firstCycle.waitForRunStart();
 
-    vi.advanceTimersByTime(60_000);
+    vi.advanceTimersByTime(90_000);
     await secondCycle.waitForRunStart();
     await monitor;
 

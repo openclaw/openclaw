@@ -473,6 +473,38 @@ describe("TelegramPollingSession", () => {
     }
   });
 
+  it("clamps unsafe polling stall thresholds above the long-poll window", async () => {
+    const abort = new AbortController();
+    const botStop = vi.fn(async () => undefined);
+    const runnerStop = vi.fn(async () => undefined);
+    mockBotCapturingApiMiddleware(botStop);
+    const resolveFirstTask = mockLongRunningPollingCycle(runnerStop);
+    const watchdogHarness = installPollingStallWatchdogHarness([0, 0], 30_001);
+
+    const log = vi.fn();
+    const session = createPollingSession({
+      abortSignal: abort.signal,
+      log,
+      stallThresholdMs: 30_000,
+    });
+
+    try {
+      const runPromise = session.runUntilAbort();
+      const watchdog = await watchdogHarness.waitForWatchdog();
+      watchdog?.();
+
+      expect(runnerStop).not.toHaveBeenCalled();
+      expect(botStop).not.toHaveBeenCalled();
+      expect(log).not.toHaveBeenCalledWith(expect.stringContaining("Polling stall detected"));
+
+      abort.abort();
+      resolveFirstTask();
+      await runPromise;
+    } finally {
+      watchdogHarness.restore();
+    }
+  });
+
   it("rebuilds the transport after a stalled polling cycle", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const abort = new AbortController();

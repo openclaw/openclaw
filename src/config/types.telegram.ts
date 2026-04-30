@@ -152,7 +152,7 @@ export type TelegramAccountConfig = {
   mediaMaxMb?: number;
   /** Telegram API client timeout in seconds (grammY ApiClientOptions). */
   timeoutSeconds?: number;
-  /** Telegram polling watchdog threshold in milliseconds. Default: 120000. */
+  /** Telegram polling watchdog threshold in milliseconds. Default: 120000. Minimum: 60000. */
   pollingStallThresholdMs?: number;
   /** Retry policy for outbound Telegram API calls. */
   retry?: OutboundRetryConfig;
