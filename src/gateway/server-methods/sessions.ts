@@ -1020,6 +1020,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
           key: target.canonicalKey,
           label: normalizeOptionalString(p.label),
           model: normalizeOptionalString(p.model),
+          envelope: p.envelope,
         },
         loadGatewayModelCatalog: context.loadGatewayModelCatalog,
       });

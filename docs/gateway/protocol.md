@@ -404,11 +404,15 @@ enumeration of `src/gateway/server-methods/*.ts`.
     - `sessions.preview` returns bounded transcript previews for specific session keys.
     - `sessions.describe` returns one Gateway session row for an exact session key.
     - `sessions.resolve` resolves or canonicalizes a session target.
-    - `sessions.create` creates a new session entry.
+    - `sessions.create` creates a new session entry. Callers may include an optional `envelope` with declarative runtime constraints such as `allowedTools`, `disallowedTools`,
+      `allowedPaths`, `deniedPaths`, and `bashCommandAllowlist`. Path constraints are evaluated against normalized paths. Plain Bash allowlist entries match the command
+      prefix at a token boundary and reject shell chaining, redirection, substitution, and pipelines in the remaining arguments; slash-delimited regex entries must match the
+      whole command. Network constraints are intentionally not exposed here until they can be enforced by runtime sandbox or proxy controls.
     - `sessions.send` sends a message into an existing session.
     - `sessions.steer` is the interrupt-and-steer variant for an active session.
     - `sessions.abort` aborts active work for a session. A caller may pass `key` plus optional `runId`, or pass `runId` alone for active runs the Gateway can resolve to a session.
-    - `sessions.patch` updates session metadata/overrides and reports the resolved canonical model plus effective `agentRuntime`.
+    - `sessions.patch` updates session metadata/overrides and reports the resolved canonical model plus effective `agentRuntime`. Passing `envelope` replaces the persisted
+      runtime envelope; passing `envelope: null` clears it.
     - `sessions.reset`, `sessions.delete`, and `sessions.compact` perform session maintenance.
     - `sessions.get` returns the full stored session row.
     - Chat execution still uses `chat.history`, `chat.send`, `chat.abort`, and `chat.inject`. `chat.history` is display-normalized for UI clients: inline directive tags are stripped from visible text, plain-text tool-call XML payloads (including `<tool_call>...</tool_call>`, `<function_call>...</function_call>`, `<tool_calls>...</tool_calls>`, `<function_calls>...</function_calls>`, and truncated tool-call blocks) and leaked ASCII/full-width model control tokens are stripped, pure silent-token assistant rows such as exact `NO_REPLY` / `no_reply` are omitted, and oversized rows can be replaced with placeholders.

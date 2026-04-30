@@ -86,6 +86,14 @@ function normalizeSubagentControlScope(raw: string): "children" | "none" | undef
   return undefined;
 }
 
+function normalizeStringList(raw: string[] | undefined): string[] | undefined {
+  if (!Array.isArray(raw)) {
+    return undefined;
+  }
+  const normalized = raw.map((value) => value.trim()).filter(Boolean);
+  return normalized.length > 0 ? [...new Set(normalized)] : undefined;
+}
+
 export async function applySessionsPatchToStore(params: {
   cfg: OpenClawConfig;
   store: Record<string, SessionEntry>;
@@ -225,6 +233,24 @@ export async function applySessionsPatchToStore(params: {
         return invalid("subagentControlScope cannot be changed once set");
       }
       next.subagentControlScope = normalized;
+    }
+  }
+
+  if ("envelope" in patch) {
+    const raw = patch.envelope;
+    if (raw === null) {
+      delete next.envelope;
+    } else if (raw !== undefined) {
+      const envelope = {
+        allowedTools: normalizeStringList(raw.allowedTools),
+        disallowedTools: normalizeStringList(raw.disallowedTools),
+        allowedPaths: normalizeStringList(raw.allowedPaths),
+        deniedPaths: normalizeStringList(raw.deniedPaths),
+        bashCommandAllowlist: normalizeStringList(raw.bashCommandAllowlist),
+      };
+      next.envelope = Object.fromEntries(
+        Object.entries(envelope).filter(([, value]) => value !== undefined),
+      ) as NonNullable<SessionEntry["envelope"]>;
     }
   }
 

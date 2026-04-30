@@ -109,6 +109,14 @@ export type SessionCompactionCheckpoint = {
   postCompaction: SessionCompactionTranscriptReference;
 };
 
+export type SessionRuntimeEnvelope = {
+  allowedTools?: string[];
+  disallowedTools?: string[];
+  allowedPaths?: string[];
+  deniedPaths?: string[];
+  bashCommandAllowlist?: string[];
+};
+
 export type SessionPluginDebugEntry = {
   pluginId: string;
   lines: string[];
@@ -184,6 +192,8 @@ export type SessionEntry = {
   subagentRole?: "orchestrator" | "leaf";
   /** Explicit control scope assigned at spawn time for subagent control decisions. */
   subagentControlScope?: "children" | "none";
+  /** Per-session runtime policy envelope enforced before tool execution. */
+  envelope?: SessionRuntimeEnvelope;
   /** Plugin id that created this session through api.runtime.subagent. */
   pluginOwnerId?: string;
   systemSent?: boolean;

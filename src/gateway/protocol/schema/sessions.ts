@@ -102,12 +102,24 @@ export const SessionsResolveParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+export const SessionRuntimeEnvelopeSchema = Type.Object(
+  {
+    allowedTools: Type.Optional(Type.Array(NonEmptyString)),
+    disallowedTools: Type.Optional(Type.Array(NonEmptyString)),
+    allowedPaths: Type.Optional(Type.Array(NonEmptyString)),
+    deniedPaths: Type.Optional(Type.Array(NonEmptyString)),
+    bashCommandAllowlist: Type.Optional(Type.Array(NonEmptyString)),
+  },
+  { additionalProperties: false },
+);
+
 export const SessionsCreateParamsSchema = Type.Object(
   {
     key: Type.Optional(NonEmptyString),
     agentId: Type.Optional(NonEmptyString),
     label: Type.Optional(SessionLabelString),
     model: Type.Optional(NonEmptyString),
+    envelope: Type.Optional(SessionRuntimeEnvelopeSchema),
     parentSessionKey: Type.Optional(NonEmptyString),
     task: Type.Optional(Type.String()),
     message: Type.Optional(Type.String()),
@@ -183,6 +195,7 @@ export const SessionsPatchParamsSchema = Type.Object(
     subagentControlScope: Type.Optional(
       Type.Union([Type.Literal("children"), Type.Literal("none"), Type.Null()]),
     ),
+    envelope: Type.Optional(Type.Union([SessionRuntimeEnvelopeSchema, Type.Null()])),
     sendPolicy: Type.Optional(
       Type.Union([Type.Literal("allow"), Type.Literal("deny"), Type.Null()]),
     ),
