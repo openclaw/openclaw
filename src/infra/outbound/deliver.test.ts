@@ -1706,9 +1706,10 @@ describe("deliverOutboundPayloads", () => {
     expect(queueMocks.ackDelivery).not.toHaveBeenCalled();
   });
 
-  it("moves queue entry to failed/ when all bestEffort per-payload errors are permanent", async () => {
-    // Regression for openclaw/openclaw#74321: a permanent bestEffort error (e.g. "message is too
-    // long") should move the queue entry to failed/ immediately, not leave it in pending/ to replay.
+  it("moves queue entry to failed/ when any bestEffort per-payload error is permanent", async () => {
+    // Regression for openclaw/openclaw#74321: any permanent bestEffort error should move the queue
+    // entry to failed/ immediately. The queue is atomic — we cannot retry only the transient
+    // payloads while discarding the permanently-failed one.
     const permanentError = new Error("message is too long in bestEffort path");
     const sendMatrix = vi.fn().mockRejectedValue(permanentError);
     const onError = vi.fn();
@@ -1725,6 +1726,36 @@ describe("deliverOutboundPayloads", () => {
     });
 
     expect(onError).toHaveBeenCalledTimes(1);
+    expect(queueMocks.moveToFailed).toHaveBeenCalledWith("mock-queue-id");
+    expect(queueMocks.failDelivery).not.toHaveBeenCalled();
+    expect(queueMocks.ackDelivery).not.toHaveBeenCalled();
+  });
+
+  it("moves queue entry to failed/ on mixed bestEffort failures when any is permanent", async () => {
+    // The queue is atomic: if one payload fails permanently and another transiently, the whole
+    // entry must go to failed/ — failDelivery would queue a retry that can never fully succeed.
+    const permanentError = new Error("message is too long");
+    const transientError = new Error("network timeout");
+    const sendMatrix = vi
+      .fn()
+      .mockRejectedValueOnce(permanentError)
+      .mockRejectedValueOnce(transientError);
+    const onError = vi.fn();
+    queueMocks.isPermanentDeliveryError.mockImplementation((msg: string) =>
+      msg.includes("message is too long"),
+    );
+
+    await deliverOutboundPayloads({
+      cfg: {},
+      channel: "matrix",
+      to: "!room:example",
+      payloads: [{ text: "payload one" }, { text: "payload two" }],
+      deps: { matrix: sendMatrix },
+      bestEffort: true,
+      onError,
+    });
+
+    expect(onError).toHaveBeenCalledTimes(2);
     expect(queueMocks.moveToFailed).toHaveBeenCalledWith("mock-queue-id");
     expect(queueMocks.failDelivery).not.toHaveBeenCalled();
     expect(queueMocks.ackDelivery).not.toHaveBeenCalled();

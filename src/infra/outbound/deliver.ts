@@ -877,16 +877,18 @@ async function deliverOutboundPayloadsWithQueueCleanup(
   // When bestEffort is true, per-payload errors are caught and passed to onError
   // without throwing — so the outer try/catch never fires. We track whether any
   // payload failed so we can call failDelivery instead of ackDelivery, and
-  // whether all failures were permanent so we can move the entry to failed/.
+  // whether any failure was permanent so we can move the entry to failed/.
+  // A queue entry is atomic — we cannot retry only the transient payloads while
+  // discarding permanent ones — so any permanent partial failure wins.
   let hadPartialFailure = false;
-  let hadTransientPartialFailure = false;
+  let hadPermanentPartialFailure = false;
   const wrappedParams = params.onError
     ? {
         ...params,
         onError: (err: unknown, payload: NormalizedOutboundPayload) => {
           hadPartialFailure = true;
-          if (!isPermanentDeliveryError(formatErrorMessage(err))) {
-            hadTransientPartialFailure = true;
+          if (isPermanentDeliveryError(formatErrorMessage(err))) {
+            hadPermanentPartialFailure = true;
           }
           params.onError!(err, payload);
         },
@@ -897,7 +899,7 @@ async function deliverOutboundPayloadsWithQueueCleanup(
     const results = await deliverOutboundPayloadsCore(wrappedParams);
     if (queueId) {
       if (hadPartialFailure) {
-        if (!hadTransientPartialFailure) {
+        if (hadPermanentPartialFailure) {
           await moveToFailed(queueId).catch(() => {});
         } else {
           await failDelivery(queueId, "partial delivery failure (bestEffort)").catch(() => {});
