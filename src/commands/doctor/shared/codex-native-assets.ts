@@ -38,6 +38,10 @@ function resolveCodexHome(env: NodeJS.ProcessEnv): string {
   return resolveHomePath(env.CODEX_HOME?.trim() || "~/.codex", env);
 }
 
+function resolvePersonalAgentSkillsDir(env: NodeJS.ProcessEnv): string {
+  return path.join(resolveUserHome(env), ".agents", "skills");
+}
+
 async function exists(filePath: string): Promise<boolean> {
   try {
     await fs.access(filePath);
@@ -150,18 +154,28 @@ export async function scanCodexNativeAssets(params: {
     return [];
   }
   const codexHome = resolveCodexHome(env);
-  const hits: CodexNativeAssetHit[] = [];
-  hits.push(...(await discoverSkillHits(path.join(codexHome, "skills"))));
-  hits.push(...(await discoverPluginHits(path.join(codexHome, "plugins", "cache"))));
+  const hits = new Map<string, CodexNativeAssetHit>();
+  function record(hit: CodexNativeAssetHit): void {
+    hits.set(`${hit.kind}:${hit.path}`, hit);
+  }
+  for (const hit of await discoverSkillHits(path.join(codexHome, "skills"))) {
+    record(hit);
+  }
+  for (const hit of await discoverSkillHits(resolvePersonalAgentSkillsDir(env))) {
+    record(hit);
+  }
+  for (const hit of await discoverPluginHits(path.join(codexHome, "plugins", "cache"))) {
+    record(hit);
+  }
   const configPath = path.join(codexHome, "config.toml");
   if (await exists(configPath)) {
-    hits.push({ kind: "config", path: configPath });
+    record({ kind: "config", path: configPath });
   }
   const hooksPath = path.join(codexHome, "hooks", "hooks.json");
   if (await exists(hooksPath)) {
-    hits.push({ kind: "hooks", path: hooksPath });
+    record({ kind: "hooks", path: hooksPath });
   }
-  return hits.toSorted((a, b) => a.path.localeCompare(b.path));
+  return [...hits.values()].toSorted((a, b) => a.path.localeCompare(b.path));
 }
 
 function countKind(
@@ -193,7 +207,7 @@ export async function collectCodexNativeAssetWarnings(params: {
   return [
     [
       "- Personal Codex CLI assets were found, but native Codex-mode OpenClaw agents use isolated per-agent Codex homes.",
-      `- Source: ${resolveCodexHome(env)} (${counts.join(", ")}).`,
+      `- Sources: ${resolveCodexHome(env)} and ${resolvePersonalAgentSkillsDir(env)} (${counts.join(", ")}).`,
       "- These assets will not be loaded by the Codex app-server child unless you intentionally promote them.",
       "- Run `openclaw migrate codex --dry-run` to inventory them. Applying that migration copies skills into the current OpenClaw agent workspace; Codex plugins, hooks, and config stay manual-review only.",
     ].join("\n"),
