@@ -34,17 +34,26 @@ files:
 
   # Core documentation
   - id: root-docs
-    glob: "{README,CONTRIBUTING,VISION,CHANGELOG,SECURITY,LICENSE,AGENTS}.md"
+    glob: "{README,CONTRIBUTING,VISION,CHANGELOG,SECURITY,AGENTS}.md"
+
+  - id: license-file
+    glob: "LICENSE{,.md}"
 
   - id: agents-symlink
     glob: "CLAUDE.md"
 
   # Docs folder
   - id: docs-folder
-    glob: "docs/**/*.md"
+    glob: "docs/**/*.{md,mdx}"
 
   - id: docs-assets
     glob: "docs/assets/**/*"
+
+  - id: docs-images
+    glob: "docs/images/**/*"
+
+  - id: docs-json
+    glob: "docs/*.json"
 
   # Source code
   - id: typescript-source
@@ -59,7 +68,10 @@ files:
 
   # Scripts
   - id: scripts
-    glob: "scripts/**/*.{sh,mjs,js,ts}"
+    glob: "scripts/**/*.{sh,mjs,js,ts,py,ps1}"
+
+  - id: scripts-extensionless
+    glob: "scripts/**/*"
 
   # UI
   - id: ui-files
