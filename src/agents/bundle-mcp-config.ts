@@ -76,17 +76,29 @@ export function loadMergedBundleMcpConfig(params: {
   };
 }
 
-/** True if the merged bundle + OpenClaw `mcp.servers` layer has any server with `injectCallerContext: true`. */
-export function mergedBundleMcpLayerWantsCallerContextInjection(params: {
-  workspaceDir: string;
-  cfg?: OpenClawConfig;
-}): boolean {
-  const { config } = loadMergedBundleMcpConfig({
-    workspaceDir: params.workspaceDir,
-    cfg: params.cfg,
-    mapConfiguredServer: toCliBundleMcpServerConfig,
-  });
-  return Object.values(config.mcpServers).some(
-    (server) => isRecord(server) && server.injectCallerContext === true,
-  );
+/**
+ * Server names from owner-managed `cfg.mcp.servers` that opted in to OpenClaw
+ * caller-context header injection. Plugin-supplied bundle MCP layers are
+ * intentionally NOT scanned here: granting an enabled plugin permission to
+ * receive `x-session-key` and caller identifiers must remain an explicit owner
+ * decision, made by listing the server in `mcp.servers` with
+ * `injectCallerContext: true`.
+ */
+export function ownerCallerContextOptInServerNames(cfg?: OpenClawConfig): Set<string> {
+  const names = new Set<string>();
+  const servers = cfg?.mcp?.servers;
+  if (!servers) {
+    return names;
+  }
+  for (const [name, server] of Object.entries(servers)) {
+    if (isRecord(server) && server.injectCallerContext === true) {
+      names.add(name);
+    }
+  }
+  return names;
+}
+
+/** True if any server in owner-managed `cfg.mcp.servers` opts in to caller-context injection. */
+export function ownerWantsBundleMcpCallerContextInjection(cfg?: OpenClawConfig): boolean {
+  return ownerCallerContextOptInServerNames(cfg).size > 0;
 }

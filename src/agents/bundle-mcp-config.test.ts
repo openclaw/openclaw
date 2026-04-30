@@ -1,20 +1,53 @@
 import { describe, expect, it } from "vitest";
-import { mergedBundleMcpLayerWantsCallerContextInjection } from "./bundle-mcp-config.js";
+import {
+  ownerCallerContextOptInServerNames,
+  ownerWantsBundleMcpCallerContextInjection,
+} from "./bundle-mcp-config.js";
 
-describe("mergedBundleMcpLayerWantsCallerContextInjection", () => {
-  it("is true when OpenClaw mcp.servers opts in", () => {
+describe("ownerCallerContextOptInServerNames", () => {
+  it("collects only owner mcp.servers entries with injectCallerContext: true", () => {
+    const names = ownerCallerContextOptInServerNames({
+      plugins: { enabled: false },
+      mcp: {
+        servers: {
+          remote: {
+            type: "sse",
+            url: "https://example.com/mcp",
+            injectCallerContext: true,
+          },
+          remoteOff: {
+            type: "sse",
+            url: "https://example.com/other",
+            injectCallerContext: false,
+          },
+          remoteOmitted: {
+            type: "sse",
+            url: "https://example.com/third",
+          },
+        },
+      },
+    });
+
+    expect([...names]).toEqual(["remote"]);
+  });
+
+  it("returns an empty set when no servers are configured", () => {
+    expect([...ownerCallerContextOptInServerNames(undefined)]).toEqual([]);
+    expect([...ownerCallerContextOptInServerNames({ plugins: { enabled: false } })]).toEqual([]);
+  });
+});
+
+describe("ownerWantsBundleMcpCallerContextInjection", () => {
+  it("is true when at least one owner server opts in", () => {
     expect(
-      mergedBundleMcpLayerWantsCallerContextInjection({
-        workspaceDir: "/tmp/openclaw-bundle-mcp-caller-probe-nonexistent",
-        cfg: {
-          plugins: { enabled: false },
-          mcp: {
-            servers: {
-              remote: {
-                type: "sse",
-                url: "https://example.com/mcp",
-                injectCallerContext: true,
-              },
+      ownerWantsBundleMcpCallerContextInjection({
+        plugins: { enabled: false },
+        mcp: {
+          servers: {
+            remote: {
+              type: "sse",
+              url: "https://example.com/mcp",
+              injectCallerContext: true,
             },
           },
         },
@@ -22,18 +55,15 @@ describe("mergedBundleMcpLayerWantsCallerContextInjection", () => {
     ).toBe(true);
   });
 
-  it("is false when no server sets injectCallerContext true", () => {
+  it("is false when no owner server sets injectCallerContext: true", () => {
     expect(
-      mergedBundleMcpLayerWantsCallerContextInjection({
-        workspaceDir: "/tmp/openclaw-bundle-mcp-caller-probe-nonexistent",
-        cfg: {
-          plugins: { enabled: false },
-          mcp: {
-            servers: {
-              remote: {
-                type: "sse",
-                url: "https://example.com/mcp",
-              },
+      ownerWantsBundleMcpCallerContextInjection({
+        plugins: { enabled: false },
+        mcp: {
+          servers: {
+            remote: {
+              type: "sse",
+              url: "https://example.com/mcp",
             },
           },
         },

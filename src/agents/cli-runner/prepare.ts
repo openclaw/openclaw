@@ -42,7 +42,7 @@ import { resolveSkillsPromptForRun } from "../skills.js";
 import { resolveSystemPromptOverride } from "../system-prompt-override.js";
 import { buildSystemPromptReport } from "../system-prompt-report.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
-import { mergedBundleMcpLayerWantsCallerContextInjection } from "../bundle-mcp-config.js";
+import { ownerWantsBundleMcpCallerContextInjection } from "../bundle-mcp-config.js";
 import { prepareCliBundleMcpConfig } from "./bundle-mcp.js";
 import { buildSystemPrompt, normalizeCliModel } from "./helpers.js";
 import { cliBackendLog } from "./log.js";
@@ -187,11 +187,7 @@ export async function prepareCliRunContext(
   }
   const needsMcpPlaceholderEnv =
     backendResolved.bundleMcp &&
-    (Boolean(mcpLoopbackRuntime) ||
-      mergedBundleMcpLayerWantsCallerContextInjection({
-        workspaceDir,
-        cfg: params.config,
-      }));
+    (Boolean(mcpLoopbackRuntime) || ownerWantsBundleMcpCallerContextInjection(params.config));
   const mcpPlaceholderEnv: Record<string, string> | undefined = needsMcpPlaceholderEnv
     ? {
         ...(mcpLoopbackRuntime
