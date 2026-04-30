@@ -107,12 +107,21 @@ export async function removePath(
 export async function removeStateAndLinkedPaths(
   cleanup: CleanupResolvedPaths,
   runtime: RuntimeEnv,
-  opts?: { dryRun?: boolean },
+  opts?: { dryRun?: boolean; workspaceDirsToPreserve?: readonly string[] },
 ): Promise<void> {
-  await removePath(cleanup.stateDir, runtime, {
-    dryRun: opts?.dryRun,
-    label: cleanup.stateDir,
-  });
+  const hasWorkspaceInsideState = opts?.workspaceDirsToPreserve?.some((dir) =>
+    isPathWithin(dir, cleanup.stateDir),
+  );
+  if (hasWorkspaceInsideState) {
+    runtime.log(
+      `Skipping state dir removal — workspace directories inside ${cleanup.stateDir} were not selected for deletion.`,
+    );
+  } else {
+    await removePath(cleanup.stateDir, runtime, {
+      dryRun: opts?.dryRun,
+      label: cleanup.stateDir,
+    });
+  }
   if (!cleanup.configInsideState) {
     await removePath(cleanup.configPath, runtime, {
       dryRun: opts?.dryRun,

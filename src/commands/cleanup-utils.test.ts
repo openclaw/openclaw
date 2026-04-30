@@ -100,4 +100,31 @@ describe("cleanup path removals", () => {
     expect(logs).toContain("[dry-run] remove /tmp/openclaw-workspace-1");
     expect(logs).toContain("[dry-run] remove /tmp/openclaw-workspace-2");
   });
+
+  it("skips state dir removal when a workspace inside it is not selected for deletion", async () => {
+    // Regression for openclaw/openclaw#75052: uninstalling with state scope but not workspace
+    // scope must not delete a workspace directory stored inside the state dir.
+    const runtime = createRuntimeMock();
+    const tmpRoot = path.join(path.parse(process.cwd()).root, "tmp", "openclaw-cleanup");
+    const stateDir = path.join(tmpRoot, "state");
+    const workspaceInsideState = path.join(stateDir, "workspaces", "main");
+
+    await removeStateAndLinkedPaths(
+      {
+        stateDir,
+        configPath: path.join(stateDir, "openclaw.json"),
+        oauthDir: path.join(tmpRoot, "oauth"),
+        configInsideState: true,
+        oauthInsideState: false,
+      },
+      runtime,
+      { dryRun: true, workspaceDirsToPreserve: [workspaceInsideState] },
+    );
+
+    const joinedLogs = runtime.log.mock.calls
+      .map(([line]) => line.replaceAll("\\", "/"))
+      .join("\n");
+    expect(joinedLogs).toContain("Skipping state dir removal");
+    expect(joinedLogs).not.toContain(`[dry-run] remove /tmp/openclaw-cleanup/state`);
+  });
 });

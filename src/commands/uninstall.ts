@@ -176,7 +176,10 @@ export async function uninstallCommand(runtime: RuntimeEnv, opts: UninstallOptio
     await removeStateAndLinkedPaths(
       { stateDir, configPath, oauthDir, configInsideState, oauthInsideState },
       runtime,
-      { dryRun },
+      {
+        dryRun,
+        workspaceDirsToPreserve: scopes.has("workspace") ? undefined : workspaceDirs,
+      },
     );
   }
 
