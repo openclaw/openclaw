@@ -387,7 +387,7 @@ jobs:
                 let lane = "";
                 if (isPr && assigned) {
                   lane = "assigned-pr";
-                  eligible = isOlderThan(item.created_at, 34);
+                  eligible = isOlderThan(item.created_at, 34) && isOlderThan(item.updated_at, 7);
                 } else if (isPr) {
                   lane = "unassigned-pr";
                   eligible = isOlderThan(item.updated_at, 7);
@@ -422,7 +422,7 @@ jobs:
               counts[candidate.lane] = (counts[candidate.lane] || 0) + 1;
               return counts;
             }, {});
-            const selected = maxClosures === 0 ? candidates : candidates.slice(0, maxClosures);
+            const selected = candidates.slice(0, maxClosures);
 
             core.info(`Dry run: ${dryRun}`);
             core.info(`Candidates: ${candidates.length}`);
