@@ -82,6 +82,8 @@ export async function persistSessionUsageUpdate(params: {
   lastCallUsage?: NormalizedUsage;
   modelUsed?: string;
   providerUsed?: string;
+  sessionModel?: string;
+  sessionModelProvider?: string;
   contextTokensUsed?: number;
   promptTokens?: number;
   usageIsContextSnapshot?: boolean;
@@ -132,9 +134,11 @@ export async function persistSessionUsageUpdate(params: {
             providerUsed: params.providerUsed ?? entry.modelProvider,
             modelUsed: params.modelUsed ?? entry.model,
           });
+          const sessionModelProvider = params.sessionModelProvider ?? params.providerUsed;
+          const sessionModel = params.sessionModel ?? params.modelUsed;
           const patch: Partial<SessionEntry> = {
-            modelProvider: params.providerUsed ?? entry.modelProvider,
-            model: params.modelUsed ?? entry.model,
+            modelProvider: sessionModelProvider ?? entry.modelProvider,
+            model: sessionModel ?? entry.model,
             contextTokens: resolvedContextTokens,
             systemPromptReport: params.systemPromptReport ?? entry.systemPromptReport,
             updatedAt: Date.now(),
@@ -167,15 +171,22 @@ export async function persistSessionUsageUpdate(params: {
     return;
   }
 
-  if (params.modelUsed || params.contextTokensUsed) {
+  if (
+    params.modelUsed ||
+    params.contextTokensUsed ||
+    params.sessionModel ||
+    params.sessionModelProvider
+  ) {
     try {
       await updateSessionStoreEntry({
         storePath,
         sessionKey,
         update: async (entry) => {
+          const sessionModelProvider = params.sessionModelProvider ?? params.providerUsed;
+          const sessionModel = params.sessionModel ?? params.modelUsed;
           const patch: Partial<SessionEntry> = {
-            modelProvider: params.providerUsed ?? entry.modelProvider,
-            model: params.modelUsed ?? entry.model,
+            modelProvider: sessionModelProvider ?? entry.modelProvider,
+            model: sessionModel ?? entry.model,
             contextTokens: params.contextTokensUsed ?? entry.contextTokens,
             systemPromptReport: params.systemPromptReport ?? entry.systemPromptReport,
             updatedAt: Date.now(),

@@ -281,8 +281,9 @@ That means fallback retries have to coordinate with live model switching:
 - Only explicit user-driven model changes mark a pending live switch. That includes `/model`, `session_status(model=...)`, and `sessions.patch`.
 - System-driven model changes such as fallback rotation, heartbeat overrides, or compaction never mark a pending live switch on their own.
 - User-driven model overrides are treated as exact selections for fallback policy, so an unreachable selected provider surfaces as a failure instead of being masked by `agents.defaults.model.fallbacks`.
-- Before a fallback retry starts, the reply runner persists the selected fallback override fields to the session entry.
-- Auto fallback overrides remain selected on subsequent turns so OpenClaw does not probe a known-bad primary on every message. `/new`, `/reset`, and `sessions.reset` clear auto-sourced overrides and return the session to the configured default.
+- Before a fallback retry starts, the reply runner persists the selected fallback override fields to the session entry so the live session reconciler follows the candidate being attempted.
+- Auto fallback overrides are temporary attempt state. After a fallback attempt succeeds, OpenClaw rolls back the auto-sourced override fields it wrote so the next turn starts from the configured or user-selected primary again. Usage accounting still records the actual fallback provider/model that produced the reply.
+- `/new`, `/reset`, and `sessions.reset` also clear any leftover auto-sourced overrides and return the session to the configured default.
 - `/status` shows the selected model and, when fallback state differs, the active fallback model and reason.
 - Live-session reconciliation prefers persisted session overrides over stale runtime model fields.
 - If a live-switch error points at a later candidate in the active fallback chain, OpenClaw jumps directly to that selected model instead of walking unrelated candidates first.
@@ -308,7 +309,7 @@ This prevents the classic race:
   </Step>
 </Steps>
 
-The persisted fallback override closes that window, and the narrow rollback keeps newer manual or runtime session changes intact.
+The persisted fallback override closes that window for the active attempt. The narrow rollback then keeps newer manual or runtime session changes intact and prevents a successful temporary fallback from becoming a sticky model selection.
 
 ## Observability and failure summaries
 
