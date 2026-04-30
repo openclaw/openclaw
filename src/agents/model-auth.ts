@@ -489,6 +489,24 @@ function shouldDeferSyntheticProfileAuth(params: {
   );
 }
 
+function resolveScopedAuthProfileStore(params: {
+  agentDir?: string;
+  cfg?: OpenClawConfig;
+  provider: string;
+  profileId?: string;
+  preferredProfile?: string;
+}): AuthProfileStore {
+  const profileIds = [params.profileId, params.preferredProfile]
+    .map((value) => value?.trim())
+    .filter((value): value is string => Boolean(value));
+  return ensureAuthProfileStore(params.agentDir, {
+    allowKeychainPrompt: false,
+    config: params.cfg,
+    externalCliProviderIds: [params.provider],
+    ...(profileIds.length > 0 ? { externalCliProfileIds: profileIds } : {}),
+  });
+}
+
 export async function resolveApiKeyForProvider(params: {
   provider: string;
   cfg?: OpenClawConfig;
@@ -505,7 +523,15 @@ export async function resolveApiKeyForProvider(params: {
   const { provider, cfg, profileId, preferredProfile } = params;
 
   if (profileId) {
-    const store = params.store ?? ensureAuthProfileStore(params.agentDir);
+    const store =
+      params.store ??
+      resolveScopedAuthProfileStore({
+        agentDir: params.agentDir,
+        cfg,
+        provider,
+        profileId,
+        preferredProfile,
+      });
     const resolved = await resolveApiKeyForProfile({
       cfg,
       store,
@@ -591,7 +617,14 @@ export async function resolveApiKeyForProvider(params: {
       mode: "api-key",
     };
   }
-  const store = params.store ?? ensureAuthProfileStore(params.agentDir);
+  const store =
+    params.store ??
+    resolveScopedAuthProfileStore({
+      agentDir: params.agentDir,
+      cfg,
+      provider,
+      preferredProfile,
+    });
   const order = resolveAuthProfileOrder({
     cfg,
     store,
@@ -719,7 +752,12 @@ export function resolveModelAuthMode(
     return "aws-sdk";
   }
 
-  const authStore = store ?? ensureAuthProfileStore();
+  const authStore =
+    store ??
+    resolveScopedAuthProfileStore({
+      cfg,
+      provider: resolved,
+    });
   const profiles = listProfilesForProvider(authStore, resolved);
   if (profiles.length > 0) {
     const modes = new Set(
@@ -794,7 +832,14 @@ export async function hasAvailableAuthForProvider(params: {
     return true;
   }
 
-  const store = params.store ?? ensureAuthProfileStore(params.agentDir);
+  const store =
+    params.store ??
+    resolveScopedAuthProfileStore({
+      agentDir: params.agentDir,
+      cfg,
+      provider,
+      preferredProfile,
+    });
   const order = resolveAuthProfileOrder({
     cfg,
     store,
