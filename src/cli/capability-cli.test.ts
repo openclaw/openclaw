@@ -589,7 +589,17 @@ describe("capability cli", () => {
     expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
   });
 
-  it("lowercases case-mismatched model ref before local dispatch (#73715)", async () => {
+  it("retries with lowercased model id when strict resolution fails (#73715)", async () => {
+    // First call: strict lookup fails (mimics 'Unknown model: anthropic/CLAUDE-OPUS-4-7').
+    // Second call (fallback): lowercased model id resolves successfully.
+    mocks.prepareSimpleCompletionModelForAgent
+      .mockResolvedValueOnce({ error: "Unknown model: anthropic/CLAUDE-OPUS-4-7." } as never)
+      .mockResolvedValueOnce({
+        selection: { provider: "anthropic", modelId: "claude-opus-4-7", agentDir: "/tmp" },
+        model: { provider: "anthropic", id: "claude-opus-4-7", maxTokens: 128 },
+        auth: { apiKey: "sk-test", source: "env:TEST_API_KEY", mode: "api-key" },
+      } as never);
+
     await runRegisteredCli({
       register: registerCapabilityCli as (program: Command) => void,
       argv: [
@@ -604,24 +614,67 @@ describe("capability cli", () => {
       ],
     });
 
+    const calls = mocks.prepareSimpleCompletionModelForAgent.mock.calls as unknown as Array<
+      [{ modelRef?: string }]
+    >;
+    expect(calls.length).toBe(2);
+    expect(calls[0][0]).toMatchObject({ modelRef: "anthropic/CLAUDE-OPUS-4-7" });
+    expect(calls[1][0]).toMatchObject({ modelRef: "anthropic/claude-opus-4-7" });
+  });
+
+  it("does not retry when strict resolution succeeds for mixed-case model ids (#73715)", async () => {
+    // Mixed-case canonical ids (DeepSeek-R1, Qwen3-30B-A3B-6bit) resolve on the
+    // strict path; the lowercase fallback must not run.
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: [
+        "capability",
+        "model",
+        "run",
+        "--model",
+        "deepseek/DeepSeek-R1",
+        "--prompt",
+        "hello",
+        "--json",
+      ],
+    });
+
+    expect(mocks.prepareSimpleCompletionModelForAgent).toHaveBeenCalledTimes(1);
     expect(mocks.prepareSimpleCompletionModelForAgent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        modelRef: "anthropic/claude-opus-4-7",
-      }),
+      expect.objectContaining({ modelRef: "deepseek/DeepSeek-R1" }),
     );
   });
 
-  it("lowercases case-mismatched bare model ref before local dispatch (#73715)", async () => {
+  it("preserves auth profile suffix casing when retrying with lowercased model id (#73715)", async () => {
+    mocks.prepareSimpleCompletionModelForAgent
+      .mockResolvedValueOnce({ error: "Unknown model: anthropic/CLAUDE-OPUS-4-7." } as never)
+      .mockResolvedValueOnce({
+        selection: { provider: "anthropic", modelId: "claude-opus-4-7", agentDir: "/tmp" },
+        model: { provider: "anthropic", id: "claude-opus-4-7", maxTokens: 128 },
+        auth: { apiKey: "sk-test", source: "env:TEST_API_KEY", mode: "api-key" },
+      } as never);
+
     await runRegisteredCli({
       register: registerCapabilityCli as (program: Command) => void,
-      argv: ["capability", "model", "run", "--model", "GPT-5.4", "--prompt", "hello", "--json"],
+      argv: [
+        "capability",
+        "model",
+        "run",
+        "--model",
+        "anthropic/CLAUDE-OPUS-4-7@Work",
+        "--prompt",
+        "hello",
+        "--json",
+      ],
     });
 
-    expect(mocks.prepareSimpleCompletionModelForAgent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        modelRef: "gpt-5.4",
-      }),
-    );
+    const calls = mocks.prepareSimpleCompletionModelForAgent.mock.calls as unknown as Array<
+      [{ modelRef?: string }]
+    >;
+    expect(calls.length).toBe(2);
+    // Auth profile suffix '@Work' must NOT be lowercased — profile keys are
+    // resolved by exact match.
+    expect(calls[1][0]).toMatchObject({ modelRef: "anthropic/claude-opus-4-7@Work" });
   });
 
   it.each(["", "   ", "\n\t"])(

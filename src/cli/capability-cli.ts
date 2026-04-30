@@ -12,6 +12,7 @@ import {
 import { updateAuthProfileStoreWithLock } from "../agents/auth-profiles/store.js";
 import { resolveMemorySearchConfig } from "../agents/memory-search.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
+import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import {
   completeWithPreparedSimpleCompletionModel,
   prepareSimpleCompletionModelForAgent,
@@ -542,6 +543,25 @@ async function readInputFiles(files: string[]): Promise<Array<{ path: string; bu
   );
 }
 
+// Lowercase only the model-id segment of a `--model` ref while preserving the
+// optional `@<profile>` auth profile suffix verbatim. Auth profiles are looked
+// up by exact key, so they must keep their original casing (#73715 P2).
+function lowercaseModelIdSegment(raw: string): string | undefined {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  const { model, profile } = splitTrailingAuthProfile(trimmed);
+  if (!model) {
+    return undefined;
+  }
+  const lowered = model.toLowerCase();
+  if (lowered === model && !profile) {
+    return trimmed;
+  }
+  return profile ? `${lowered}@${profile}` : lowered;
+}
+
 function resolveModelRefOverride(raw: string | undefined): { provider?: string; model?: string } {
   const trimmed = raw?.trim();
   if (!trimmed) {
@@ -549,15 +569,11 @@ function resolveModelRefOverride(raw: string | undefined): { provider?: string; 
   }
   const slash = trimmed.indexOf("/");
   if (slash <= 0 || slash === trimmed.length - 1) {
-    // Bare model id (no provider prefix). Canonical model ids are lowercase
-    // throughout the codebase, so normalize here to match the case-insensitive
-    // behavior of the provider half and avoid case-mismatch dispatch failures
-    // (#73715).
-    return { model: trimmed.toLowerCase() };
+    return { model: trimmed };
   }
   return {
     provider: trimmed.slice(0, slash),
-    model: trimmed.slice(slash + 1).toLowerCase(),
+    model: trimmed.slice(slash + 1),
   };
 }
 
@@ -635,12 +651,7 @@ async function runModelRun(params: {
 }) {
   const cfg = getRuntimeConfig();
   const agentId = resolveDefaultAgentId(cfg);
-  // Canonicalize the user-typed --model to lowercase to match the
-  // case-insensitive provider half and avoid case-mismatch dispatch failures
-  // (#73715). Canonical model ids in OpenClaw's catalog are lowercase, and
-  // auth profile suffixes are also lowercase by convention, so a whole-string
-  // lower() is safe.
-  const modelRef = params.model?.trim().toLowerCase() || undefined;
+  const modelRef = params.model?.trim() || undefined;
   const imageFiles = await readModelRunImageFiles(params.files);
   const messageContent =
     imageFiles.length > 0
@@ -654,13 +665,35 @@ async function runModelRun(params: {
         ]
       : params.prompt;
   if (params.transport === "local") {
-    const prepared = await prepareSimpleCompletionModelForAgent({
+    let prepared = await prepareSimpleCompletionModelForAgent({
       cfg,
       agentId,
       modelRef,
       allowMissingApiKeyModes: ["aws-sdk"],
       skipPiDiscovery: true,
     });
+    if ("error" in prepared && modelRef) {
+      // Case-insensitive fallback: if strict resolution failed and the user
+      // supplied a model id whose lowercased form differs (e.g.
+      // `anthropic/CLAUDE-OPUS-4-7`), retry once with the lowercased form so
+      // a plain case-mismatched id resolves to its canonical lowercase entry
+      // (#73715). Auth profile suffixes are case-sensitive, so only the
+      // model-id portion is lowercased — `<provider>/<model>@<profile>` keeps
+      // its profile as typed.
+      const fallbackRef = lowercaseModelIdSegment(modelRef);
+      if (fallbackRef && fallbackRef !== modelRef) {
+        const retry = await prepareSimpleCompletionModelForAgent({
+          cfg,
+          agentId,
+          modelRef: fallbackRef,
+          allowMissingApiKeyModes: ["aws-sdk"],
+          skipPiDiscovery: true,
+        });
+        if (!("error" in retry)) {
+          prepared = retry;
+        }
+      }
+    }
     if ("error" in prepared) {
       throw new Error(prepared.error);
     }
