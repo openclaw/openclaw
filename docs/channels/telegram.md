@@ -310,8 +310,6 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 
     Preview streaming is separate from block streaming. When block streaming is explicitly enabled for Telegram, OpenClaw skips the preview stream to avoid double-streaming.
 
-    If native draft transport is unavailable/rejected, OpenClaw automatically falls back to `sendMessage` + `editMessageText`.
-
     Telegram-only reasoning stream:
 
     - `/reasoning stream` sends reasoning to the live preview while generating
