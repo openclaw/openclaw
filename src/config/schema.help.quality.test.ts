@@ -789,6 +789,7 @@ describe("config help copy quality", () => {
     const pluginConversationPolicy = FIELD_HELP["plugins.entries.*.hooks.allowConversationAccess"];
     expect(pluginConversationPolicy.includes("llm_input")).toBe(true);
     expect(pluginConversationPolicy.includes("llm_output")).toBe(true);
+    expect(pluginConversationPolicy.includes("llm_message_end")).toBe(true);
     expect(pluginConversationPolicy.includes("before_agent_finalize")).toBe(true);
     expect(pluginConversationPolicy.includes("agent_end")).toBe(true);
   });

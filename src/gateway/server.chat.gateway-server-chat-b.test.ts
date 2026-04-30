@@ -243,6 +243,7 @@ describe("gateway server chat", () => {
         agentRunSeq: new Map<string, number>(),
         chatAbortControllers: new Map(),
         chatAbortedRuns: new Map(),
+        chatHookFinalizedRuns: new Map(),
         chatRunBuffers: new Map(),
         chatDeltaSentAt: new Map(),
         chatDeltaLastBroadcastLen: new Map(),

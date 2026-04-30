@@ -43,6 +43,7 @@ describe("createGatewayRequestContext", () => {
       chatRunBuffers: new Map(),
       chatDeltaSentAt: new Map(),
       chatDeltaLastBroadcastLen: new Map(),
+      chatHookFinalizedRuns: new Map(),
       addChatRun: vi.fn(),
       removeChatRun: vi.fn(),
       subscribeSessionEvents: vi.fn(),

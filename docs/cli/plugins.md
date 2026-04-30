@@ -236,7 +236,7 @@ For runtime hook debugging:
 
 - `openclaw plugins inspect <id> --json` shows registered hooks and diagnostics from a module-loaded inspection pass.
 - `openclaw gateway status --deep --require-rpc` confirms the reachable Gateway, service/process hints, config path, and RPC health.
-- Non-bundled conversation hooks (`llm_input`, `llm_output`, `before_agent_finalize`, `agent_end`) require `plugins.entries.<id>.hooks.allowConversationAccess=true`.
+- Non-bundled conversation hooks (`llm_input`, `llm_output`, `llm_message_end`, `before_agent_finalize`, `agent_end`) require `plugins.entries.<id>.hooks.allowConversationAccess=true`.
 
 Use `--link` to avoid copying a local directory (adds to `plugins.load.paths`):
 

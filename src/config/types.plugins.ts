@@ -4,7 +4,7 @@ export type PluginEntryConfig = {
     /** Controls prompt mutation via before_prompt_build and prompt fields from legacy before_agent_start. */
     allowPromptInjection?: boolean;
     /**
-     * Controls access to raw conversation content from llm_input/llm_output/agent_end hooks.
+     * Controls access to raw conversation content from llm_input/llm_output/llm_message_end/agent_end hooks.
      * Non-bundled plugins must opt in explicitly; bundled plugins stay allowed unless disabled.
      */
     allowConversationAccess?: boolean;

@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { Agent, AgentEvent, AgentMessage } from "@mariozechner/pi-agent-core";
 import {
   createAgentSession,
   DefaultResourceLoader,
@@ -9,7 +9,10 @@ import {
 } from "@mariozechner/pi-coding-agent";
 import { isAcpRuntimeSpawnAvailable } from "../../../acp/runtime/availability.js";
 import { filterHeartbeatPairs } from "../../../auto-reply/heartbeat-filter.js";
+import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
 import { getRuntimeConfig } from "../../../config/config.js";
+import { appendBlockedUserMessageToSessionTranscript } from "../../../config/sessions/transcript.js";
+import { emitAgentEvent } from "../../../infra/agent-events.js";
 import { emitTrustedDiagnosticEvent } from "../../../infra/diagnostic-events.js";
 import {
   createChildDiagnosticTraceContext,
@@ -22,6 +25,13 @@ import { resolveHeartbeatSummaryForAgent } from "../../../infra/heartbeat-summar
 import { getMachineDisplayName } from "../../../infra/machine-name.js";
 import { MAX_IMAGE_BYTES } from "../../../media/constants.js";
 import { listRegisteredPluginAgentPromptGuidance } from "../../../plugins/command-registry-state.js";
+import { requestSingleHookApproval } from "../../../plugins/hook-approval.js";
+import {
+  DEFAULT_BLOCK_MAX_RETRIES,
+  type HookDecisionAsk,
+  resolveBlockMessage,
+} from "../../../plugins/hook-decision-types.js";
+import { redactDuplicateUserMessage } from "../../../plugins/hook-redaction.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import {
   extractModelCompat,
@@ -367,6 +377,113 @@ export {
 };
 
 const MAX_BTW_SNAPSHOT_MESSAGES = 100;
+
+type CoreAgentListener = (event: AgentEvent, signal: AbortSignal) => void | Promise<void>;
+
+function readPrivatePiAgentListeners(agent: Agent): Set<CoreAgentListener> | null {
+  // pi-agent-core 0.70.2 has no public prepend/priority subscribe API.
+  // `listeners` is a private TS field but a normal JS field at runtime; keep
+  // this dependency narrow and guarded until Pi exposes an official seam.
+  const listeners = (agent as unknown as { readonly listeners?: unknown }).listeners;
+  return listeners instanceof Set ? (listeners as Set<CoreAgentListener>) : null;
+}
+
+function prependPrivatePiAgentListener(agent: Agent, listener: CoreAgentListener): () => void {
+  const listeners = readPrivatePiAgentListeners(agent);
+  if (!listeners) {
+    return () => {};
+  }
+  const existing = [...listeners];
+  listeners.clear();
+  listeners.add(listener);
+  for (const existingListener of existing) {
+    listeners.add(existingListener);
+  }
+  return () => {
+    listeners.delete(listener);
+  };
+}
+
+function readAssistantTextBlocks(message: AgentMessage): string[] {
+  if (message.role !== "assistant" || !Array.isArray(message.content)) {
+    return [];
+  }
+  return message.content.flatMap((part) => {
+    if (!part || typeof part !== "object" || !("type" in part) || part.type !== "text") {
+      return [];
+    }
+    return "text" in part && typeof part.text === "string" ? [part.text] : [];
+  });
+}
+
+function hasAssistantTextBlock(message: AgentMessage): boolean {
+  return readAssistantTextBlocks(message).some((text) => text.trim().length > 0);
+}
+
+function replaceAssistantWithText(message: AgentMessage, text: string): void {
+  if (message.role !== "assistant") {
+    return;
+  }
+  message.content = [{ type: "text", text }];
+  message.stopReason = "stop";
+}
+
+export type LlmMessageEndGateConsumption = {
+  message: AgentMessage;
+};
+
+export function selectAssistantMessageEndGate(
+  event: AgentEvent,
+  hasHook: boolean,
+): LlmMessageEndGateConsumption | null {
+  if (event.type !== "message_end" || event.message.role !== "assistant") {
+    return null;
+  }
+  if (!hasHook) {
+    return null;
+  }
+  return { message: event.message };
+}
+
+export function formatMessageEndRetryExhaustedBlockMessage(params: {
+  retryCount: number;
+  reason?: string;
+}): string {
+  const retryLabel = params.retryCount === 1 ? "retry" : "retries";
+  const reason = params.reason?.trim() ? params.reason : "blocked by hook";
+  return (
+    `Response blocked after ${params.retryCount} ${retryLabel}.\n` +
+    `Reason: ${reason}\nLogs: openclaw logs --follow`
+  );
+}
+
+type MessageEndRetrySessionManager = Pick<
+  ReturnType<typeof SessionManager.open>,
+  "branch" | "getBranch"
+>;
+
+export function prepareMessageEndRetryContinuation(
+  sessionManager: MessageEndRetrySessionManager,
+  messages: AgentMessage[],
+): AgentMessage[] | null {
+  const branch = sessionManager.getBranch();
+  const transcriptLeaf = branch[branch.length - 1];
+  const messageLeaf = messages[messages.length - 1];
+  if (
+    !transcriptLeaf ||
+    transcriptLeaf.type !== "message" ||
+    transcriptLeaf.message.role !== "assistant" ||
+    !transcriptLeaf.parentId ||
+    !messageLeaf ||
+    messageLeaf.role !== "assistant" ||
+    hasAssistantTextBlock(transcriptLeaf.message as AgentMessage) ||
+    hasAssistantTextBlock(messageLeaf)
+  ) {
+    return null;
+  }
+  sessionManager.branch(transcriptLeaf.parentId);
+  return messages.slice(0, -1);
+}
 
 export function resolveUnknownToolGuardThreshold(loopDetection?: {
   enabled?: boolean;
@@ -2172,6 +2289,101 @@ export async function runEmbeddedAttempt(
       let cacheBreak: ReturnType<typeof completePromptCacheObservation> = null;
       let promptCache: EmbeddedRunAttemptResult["promptCache"];
       let finalPromptText: string | undefined;
+      let llmOutputRetryCount = params.llmOutputRetryCount ?? 0;
+      let llmOutputRetryRequested = false;
+      let promptErrorSource: EmbeddedRunAttemptResult["promptErrorSource"] = null;
+      const removeLlmMessageEndGate = prependPrivatePiAgentListener(
+        activeSession.agent,
+        async (event, signal) => {
+          const activeHookRunner = hookRunner;
+          if (!activeHookRunner) {
+            return;
+          }
+          const gate = selectAssistantMessageEndGate(
+            event,
+            activeHookRunner.hasHooks("llm_message_end"),
+          );
+          if (!gate) {
+            return;
+          }
+          const result = await activeHookRunner.runLlmMessageEnd(
+            {
+              runId: params.runId,
+              sessionId: params.sessionId,
+              provider: params.provider,
+              model: params.modelId,
+              prompt: finalPromptText ?? params.prompt,
+              message: gate.message,
+              usage: attemptUsage,
+            },
+            {
+              runId: params.runId,
+              agentId: sessionAgentId,
+              sessionKey: params.sessionKey,
+              sessionId: params.sessionId,
+              workspaceDir: params.workspaceDir,
+              messageProvider: params.messageProvider ?? undefined,
+              trigger: params.trigger,
+              channelId: params.messageChannel ?? params.messageProvider ?? undefined,
+            },
+          );
+          const decision = result?.decision;
+          const pluginId = result?.pluginId ?? "unknown";
+          if (!decision || decision.outcome === "pass") {
+            return;
+          }
+          const resolveDeniedAsk = (ask: HookDecisionAsk): string =>
+            ask.denialMessage ?? "Request denied by owner.";
+          let replacement: string | undefined;
+          if (decision.outcome === "ask") {
+            const approval = await requestSingleHookApproval({
+              hookPoint: "llm_message_end",
+              decision,
+              pluginId,
+              runId: params.runId,
+              sessionKey: params.sessionKey,
+              agentId: sessionAgentId,
+              signal,
+              log,
+            });
+            if (approval === "allow-once") {
+              return;
+            }
+            if (approval === "timeout" && decision.timeoutBehavior === "allow") {
+              return;
+            }
+            replacement =
+              approval === "timeout"
+                ? (decision.denialMessage ?? "Approval timed out.")
+                : resolveDeniedAsk(decision);
+          } else {
+            const wantsRetry = decision.retry === true;
+            const maxRetries = decision.maxRetries ?? DEFAULT_BLOCK_MAX_RETRIES;
+            if (wantsRetry && llmOutputRetryCount < maxRetries) {
+              llmOutputRetryCount += 1;
+              llmOutputRetryRequested = true;
+              replaceAssistantWithText(gate.message, "");
+              emitAgentEvent({
+                runId: params.runId,
+                stream: "chat_retry",
+                data: {
+                  retryCount: llmOutputRetryCount,
+                  maxRetries,
+                  reason: decision.reason,
+                },
+              });
+              return;
+            }
+            replacement = wantsRetry
+              ? formatMessageEndRetryExhaustedBlockMessage({
+                  retryCount: llmOutputRetryCount,
+                  reason: decision.reason,
+                })
+              : resolveBlockMessage(decision);
+          }
+          replaceAssistantWithText(gate.message, replacement);
+        },
+      );
       if (params.replyOperation) {
         params.replyOperation.attachBackend(queueHandle);
       }
@@ -2269,7 +2481,6 @@ export async function runEmbeddedAttempt(
       const hookAgentId = sessionAgentId;
 
       let preflightRecovery: EmbeddedRunAttemptResult["preflightRecovery"];
-      let promptErrorSource: "prompt" | "compaction" | "precheck" | null = null;
       let skipPromptSubmission = false;
       try {
         const promptStartedAt = Date.now();
@@ -2597,7 +2808,146 @@ export async function runEmbeddedAttempt(
             );
           }
 
+
+          if (!isRawModelRun && hookRunner?.hasHooks("before_agent_run")) {
+            const beforeRunResult = await hookRunner.runBeforeAgentRun(
+              {
+                prompt: effectivePrompt,
+                messages: activeSession.messages,
+                channelId: params.messageChannel ?? params.messageProvider ?? undefined,
+                senderId: params.senderId ?? undefined,
+                senderIsOwner: params.senderIsOwner,
+              },
+              {
+                runId: params.runId,
+                agentId: hookAgentId,
+                sessionKey: params.sessionKey,
+                sessionId: params.sessionId,
+                workspaceDir: params.workspaceDir,
+                messageProvider: params.messageProvider ?? undefined,
+                trigger: params.trigger,
+                channelId: params.messageChannel ?? params.messageProvider ?? undefined,
+              },
+            );
+            if (beforeRunResult) {
+              const { decision: beforeRunDecision, pluginId: beforeRunPluginId } = beforeRunResult;
+              if (beforeRunDecision.outcome === "block") {
+                log.warn(
+                  `before_agent_run hook blocked by ${beforeRunPluginId}: ${beforeRunDecision.reason}`,
+                );
+                const blockReplacementMsg = resolveBlockMessage(beforeRunDecision);
+                if (params.prompt) {
+                  try {
+                    await appendBlockedUserMessageToSessionTranscript({
+                      agentId: sessionAgentId,
+                      sessionKey: params.sessionKey ?? "",
+                      originalText: params.prompt,
+                      redactedText: blockReplacementMsg,
+                      pluginId: beforeRunPluginId,
+                      reason: beforeRunDecision.reason ?? "blocked by hook",
+                      idempotencyKey: `hook-block:before_agent_run:user:${params.runId}`,
+                      updateMode: "inline",
+                    });
+                  } catch (err) {
+                    log.warn(
+                      `before_agent_run block: failed to persist redacted user message: ${
+                        (err as Error)?.message ?? String(err)
+                      }`,
+                    );
+                  }
+                }
+                promptError = new Error(blockReplacementMsg);
+                promptErrorSource = "hook:before_agent_run";
+                skipPromptSubmission = true;
+              } else if (beforeRunDecision.outcome === "ask") {
+                log.warn(
+                  `before_agent_run hook requesting approval (${beforeRunPluginId}): ${beforeRunDecision.reason}`,
+                );
+                const approvalResult = await requestSingleHookApproval({
+                  hookPoint: "before_agent_run",
+                  decision: beforeRunDecision,
+                  pluginId: beforeRunPluginId,
+                  runId: params.runId,
+                  sessionKey: params.sessionKey,
+                  agentId: hookAgentId,
+                  signal: params.abortSignal,
+                  log,
+                });
+                if (approvalResult === "deny" || approvalResult === "cancelled") {
+                  log.warn(
+                    `before_agent_run hook approval ${approvalResult} (plugin=${beforeRunPluginId})${approvalResult === "cancelled" ? " — no approval route available (is control-ui connected?)" : ""}`,
+                  );
+                  const denyReplacementMsg =
+                    beforeRunDecision.denialMessage ?? "Request denied by owner.";
+                  // Persist the user's original prompt with sidecar so the SPA
+                  // shows the original text but agents only ever see the deny notice.
+                  if (params.prompt) {
+                    try {
+                      await appendBlockedUserMessageToSessionTranscript({
+                        agentId: sessionAgentId,
+                        sessionKey: params.sessionKey ?? "",
+                        originalText: params.prompt,
+                        redactedText: denyReplacementMsg,
+                        pluginId: beforeRunPluginId,
+                        reason: beforeRunDecision.reason ?? `approval ${approvalResult}`,
+                        idempotencyKey: `hook-ask-deny:before_agent_run:user:${params.runId}`,
+                        updateMode: "inline",
+                      });
+                    } catch (err) {
+                      log.warn(
+                        `before_agent_run ask-deny: failed to persist redacted user message: ${
+                          (err as Error)?.message ?? String(err)
+                        }`,
+                      );
+                    }
+                  }
+                  promptError = new Error(denyReplacementMsg);
+                  promptErrorSource = "hook:before_agent_run";
+                  skipPromptSubmission = true;
+                } else if (approvalResult === "timeout") {
+                  const behavior = beforeRunDecision.timeoutBehavior ?? "deny";
+                  if (behavior === "deny") {
+                    log.warn(`before_agent_run hook approval timed out (behavior=deny)`);
+                    const timeoutMsg = beforeRunDecision.denialMessage ?? "Approval timed out.";
+                    if (params.prompt) {
+                      try {
+                        await appendBlockedUserMessageToSessionTranscript({
+                          agentId: sessionAgentId,
+                          sessionKey: params.sessionKey ?? "",
+                          originalText: params.prompt,
+                          redactedText: timeoutMsg,
+                          pluginId: beforeRunPluginId,
+                          reason: beforeRunDecision.reason ?? "approval timed out",
+                          idempotencyKey: `hook-ask-timeout:before_agent_run:user:${params.runId}`,
+                          updateMode: "inline",
+                        });
+                      } catch (err) {
+                        log.warn(
+                          `before_agent_run ask-timeout: failed to persist redacted user message: ${
+                            (err as Error)?.message ?? String(err)
+                          }`,
+                        );
+                      }
+                    }
+                    promptError = new Error(timeoutMsg);
+                    promptErrorSource = "hook:before_agent_run";
+                    skipPromptSubmission = true;
+                  } else {
+                    log.warn(
+                      `before_agent_run hook approval timed out (behavior=allow), proceeding`,
+                    );
+                  }
+                } else {
+                  log.debug(
+                    `before_agent_run hook approval granted (${approvalResult}), proceeding`,
+                  );
+                }
+              }
+            }
+          }
+
           if (!isRawModelRun && hookRunner?.hasHooks("llm_input")) {
+
             hookRunner
               .runLlmInput(
                 {
@@ -2715,6 +3065,7 @@ export async function runEmbeddedAttempt(
               activeSession.agent.state.messages = normalizedReplayMessages;
             }
             finalPromptText = promptSubmission.prompt;
+            const isRetryAttempt = (params.llmOutputRetryCount ?? 0) > 0;
             trajectoryRecorder?.recordEvent("prompt.submitted", {
               prompt: promptSubmission.prompt,
               systemPrompt: systemPromptText,
@@ -2727,7 +3078,24 @@ export async function runEmbeddedAttempt(
               messages: btwSnapshotMessages,
               inFlightPrompt: promptSubmission.prompt,
             });
-            if (promptSubmission.runtimeOnly) {
+            if (isRetryAttempt) {
+              const retryMessages = prepareMessageEndRetryContinuation(
+                sessionManager,
+                activeSession.agent.state.messages,
+              );
+              if (retryMessages) {
+                activeSession.agent.state.messages = retryMessages;
+                await abortable(activeSession.agent.continue());
+              } else {
+                // Fallback for unexpected transcript shapes; scrub duplicate prompt best-effort.
+                await abortable(activeSession.prompt(promptSubmission.prompt));
+                try {
+                  await redactDuplicateUserMessage(params.sessionFile, promptSubmission.prompt);
+                } catch {
+                  // Duplicate user is cosmetic if cleanup fails.
+                }
+              }
+            } else if (promptSubmission.runtimeOnly) {
               await abortable(activeSession.prompt(promptSubmission.prompt));
             } else {
               const runtimeContext = promptSubmission.runtimeContext?.trim();
@@ -3086,6 +3454,7 @@ export async function runEmbeddedAttempt(
           );
         }
         try {
+          removeLlmMessageEndGate();
           unsubscribe();
         } catch (err) {
           // unsubscribe() should never throw; if it does, it indicates a serious bug.
@@ -3163,6 +3532,7 @@ export async function runEmbeddedAttempt(
               ...(params.runtimePlan?.observability.harnessId
                 ? { harnessId: params.runtimePlan.observability.harnessId }
                 : {}),
+              prompt: finalPromptText ?? params.prompt,
               assistantTexts,
               lastAssistant,
               usage: attemptUsage,
@@ -3289,6 +3659,8 @@ export async function runEmbeddedAttempt(
         // Client tool call detected (OpenResponses hosted tools)
         clientToolCall: clientToolCallDetected ?? undefined,
         yieldDetected: yieldDetected || undefined,
+        llmOutputRetryRequested,
+        llmOutputRetryCount,
       };
     } finally {
       if (trajectoryRecorder && !trajectoryEndRecorded) {

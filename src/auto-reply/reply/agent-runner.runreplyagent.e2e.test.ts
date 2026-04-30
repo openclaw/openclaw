@@ -106,6 +106,9 @@ function createMinimalRun(params?: {
   sessionEntry?: SessionEntry;
   sessionKey?: string;
   storePath?: string;
+  followupPrompt?: string;
+  followupTranscriptPrompt?: string;
+  followupSummaryLine?: string;
   typingMode?: TypingMode;
   blockStreamingEnabled?: boolean;
   isActive?: boolean;
@@ -124,9 +127,11 @@ function createMinimalRun(params?: {
     mode: params?.resolvedQueueMode ?? "interrupt",
   } as unknown as QueueSettings;
   const sessionKey = params?.sessionKey ?? "main";
+  const followupPrompt = params?.followupPrompt ?? "hello";
   const followupRun = {
-    prompt: "hello",
-    summaryLine: "hello",
+    prompt: followupPrompt,
+    transcriptPrompt: params?.followupTranscriptPrompt,
+    summaryLine: params?.followupSummaryLine ?? followupPrompt,
     enqueuedAt: Date.now(),
     run: {
       sessionId: "session",
@@ -217,6 +222,75 @@ describe("runReplyAgent heartbeat followup guard", () => {
     expect(result).toBeUndefined();
     expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledTimes(1);
     expect(state.runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+  });
+
+  it("passes queued followup prompts through to embedded runs for hook gates", async () => {
+    const queuedPrompt = "[hitl:block] queued message";
+    const queuedTranscriptPrompt = "[hitl:block] queued transcript";
+    const { run } = createMinimalRun({
+      opts: { isHeartbeat: false },
+      followupPrompt: queuedPrompt,
+      followupTranscriptPrompt: queuedTranscriptPrompt,
+      isActive: true,
+      shouldFollowup: true,
+      resolvedQueueMode: "followup",
+    });
+
+    await run();
+
+    expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledTimes(1);
+    const enqueueCall = vi.mocked(enqueueFollowupRun).mock.calls[0];
+    const queuedRun = enqueueCall?.[1] as FollowupRun | undefined;
+    const runQueuedFollowup = enqueueCall?.[4] as ((run: FollowupRun) => Promise<void>) | undefined;
+    expect(queuedRun?.prompt).toBe(queuedPrompt);
+    expect(queuedRun?.transcriptPrompt).toBe(queuedTranscriptPrompt);
+    expect(runQueuedFollowup).toBeTypeOf("function");
+
+    await runQueuedFollowup?.(queuedRun as FollowupRun);
+
+    expect(state.runEmbeddedPiAgentMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prompt: queuedPrompt,
+        transcriptPrompt: queuedTranscriptPrompt,
+        trigger: "user",
+      }),
+    );
+  });
+
+  it("passes collected queued message batches through to embedded runs for hook gates", async () => {
+    const collectedPrompt = [
+      "[Queued messages while agent was busy]",
+      "---",
+      "Queued #1",
+      "[hitl:block] first queued message",
+      "---",
+      "Queued #2",
+      "second queued message",
+    ].join("\n");
+    const { run } = createMinimalRun({
+      opts: { isHeartbeat: false },
+      followupPrompt: collectedPrompt,
+      isActive: true,
+      shouldFollowup: true,
+      resolvedQueueMode: "collect",
+    });
+
+    await run();
+
+    const enqueueCall = vi.mocked(enqueueFollowupRun).mock.calls[0];
+    const queuedRun = enqueueCall?.[1] as FollowupRun | undefined;
+    const runQueuedFollowup = enqueueCall?.[4] as ((run: FollowupRun) => Promise<void>) | undefined;
+    expect(queuedRun?.prompt).toBe(collectedPrompt);
+    expect(runQueuedFollowup).toBeTypeOf("function");
+
+    await runQueuedFollowup?.(queuedRun as FollowupRun);
+
+    expect(state.runEmbeddedPiAgentMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prompt: collectedPrompt,
+        trigger: "user",
+      }),
+    );
   });
 
   it("starts draining immediately when the active snapshot is already stale", async () => {

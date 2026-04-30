@@ -867,6 +867,7 @@ export async function runEmbeddedPiAgent(
         let accumulatedReplayState = createEmbeddedRunReplayState();
         // Hoisted so the retry-limit error path can use the most recent API total.
         let lastTurnTotal: number | undefined;
+        let llmOutputRetryCountCarry = 0;
         while (true) {
           if (runLoopIterations >= MAX_RUN_LOOP_ITERATIONS) {
             const message =
@@ -1012,6 +1013,7 @@ export async function runEmbeddedPiAgent(
             resolvedApiKey: resolvedStreamApiKey,
             authProfileId: lastProfileId,
             authProfileIdSource: lockedProfileId ? "user" : "auto",
+            llmOutputRetryCount: llmOutputRetryCountCarry,
             initialReplayState: accumulatedReplayState,
             authStorage,
             modelRegistry,
@@ -1545,6 +1547,49 @@ export async function runEmbeddedPiAgent(
                 replayInvalid: resolveReplayInvalidForAttempt(),
                 livenessState: "blocked",
                 error: { kind, message: errorText },
+              },
+            };
+          }
+
+          if (attempt.llmOutputRetryRequested && !aborted) {
+            llmOutputRetryCountCarry = attempt.llmOutputRetryCount ?? 0;
+            log.debug(
+              `[hook:llm_message_end] block requested retry — re-invoking attempt (count=${llmOutputRetryCountCarry})`,
+            );
+            continue;
+          }
+
+          if (promptErrorSource === "hook:before_agent_run" && !aborted) {
+            const errorText = formatErrorMessage(promptError);
+            const replayInvalid = resolveReplayInvalidForAttempt();
+            attempt.setTerminalLifecycleMeta?.({
+              replayInvalid,
+              livenessState: "blocked",
+            });
+            return {
+              payloads: [
+                {
+                  text: errorText,
+                  isError: true,
+                },
+              ],
+              meta: {
+                durationMs: Date.now() - started,
+                agentMeta: buildErrorAgentMeta({
+                  sessionId: sessionIdUsed,
+                  provider,
+                  model: model.id,
+                  contextTokens: ctxInfo.tokens,
+                  usageAccumulator,
+                  lastRunPromptUsage,
+                  lastAssistant: sessionLastAssistant,
+                  lastTurnTotal,
+                }),
+                systemPromptReport: attempt.systemPromptReport,
+                finalPromptText: attempt.finalPromptText,
+                replayInvalid,
+                livenessState: "blocked",
+                error: { kind: "hook_block", message: errorText },
               },
             };
           }

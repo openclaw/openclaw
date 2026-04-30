@@ -631,7 +631,12 @@ function handleChatGatewayEvent(host: GatewayHost, payload: ChatEventPayload | u
   if (shouldResolveDeferredSessionMessageReload) {
     deferredReloadHost.pendingSessionMessageReloadSessionKey = null;
   }
-  if (finalEventNeedsHistoryReload && !historyReloaded && !terminalEventIsForDifferentActiveRun) {
+  if (
+    isTerminalChatState(state) &&
+    !historyReloaded &&
+    !terminalEventIsForDifferentActiveRun &&
+    shouldReloadHistoryForFinalEvent(payload)
+  ) {
     void loadChatHistory(host as unknown as ChatState);
     return;
   }

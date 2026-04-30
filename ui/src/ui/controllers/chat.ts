@@ -359,6 +359,12 @@ export type ChatState = {
   chatRunId: string | null;
   chatStream: string | null;
   chatStreamStartedAt: number | null;
+  /** Live retry status from message-end hook retry events. */
+  chatRetryNotice: {
+    retryCount: number;
+    maxRetries: number;
+    reason: string;
+  } | null;
   lastError: string | null;
   resetChatInputHistoryNavigation?: () => void;
 };
@@ -366,9 +372,13 @@ export type ChatState = {
 export type ChatEventPayload = {
   runId?: string;
   sessionKey: string;
-  state: "delta" | "final" | "aborted" | "error";
+  state: "delta" | "final" | "aborted" | "error" | "retry";
   message?: unknown;
   errorMessage?: string;
+  errorKind?: string;
+  retryCount?: number;
+  maxRetries?: number;
+  reason?: string;
 };
 
 function maybeResetToolStream(state: ChatState) {
@@ -621,6 +631,7 @@ export async function sendChatMessage(
   state.chatRunId = runId;
   state.chatStream = "";
   state.chatStreamStartedAt = now;
+  state.chatRetryNotice = null;
 
   try {
     await requestChatSend(state, { message: msg, attachments, runId });
@@ -755,6 +766,7 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     state.chatStream = null;
     state.chatRunId = null;
     state.chatStreamStartedAt = null;
+    state.chatRetryNotice = null;
   } else if (payload.state === "aborted") {
     const normalizedMessage = normalizeAbortedAssistantMessage(payload.message);
     if (normalizedMessage && !isAssistantSilentReply(normalizedMessage)) {
@@ -775,11 +787,28 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     state.chatStream = null;
     state.chatRunId = null;
     state.chatStreamStartedAt = null;
+    state.chatRetryNotice = null;
   } else if (payload.state === "error") {
     state.chatStream = null;
     state.chatRunId = null;
     state.chatStreamStartedAt = null;
+    state.chatRetryNotice = null;
     state.lastError = payload.errorMessage ?? "chat error";
+  } else if (payload.state === "retry") {
+    // Keep the run live but clear the current stream so the retry renders fresh.
+    state.chatStream = "";
+    state.chatStreamStartedAt = Date.now();
+    if (
+      typeof payload.retryCount === "number" &&
+      typeof payload.maxRetries === "number" &&
+      typeof payload.reason === "string"
+    ) {
+      state.chatRetryNotice = {
+        retryCount: payload.retryCount,
+        maxRetries: payload.maxRetries,
+        reason: payload.reason,
+      };
+    }
   }
   return payload.state;
 }

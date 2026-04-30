@@ -14,6 +14,7 @@ import {
 } from "../infra/diagnostic-trace-context.js";
 import type { SessionState } from "../logging/diagnostic-session-state.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { requestPluginApproval } from "../plugins/hook-approval.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { copyPluginToolMeta } from "../plugins/tools.js";
 import { runTrustedToolPolicies } from "../plugins/trusted-tool-policy.js";
@@ -27,7 +28,6 @@ import { isPlainObject } from "../utils.js";
 import { copyChannelAgentToolMeta } from "./channel-tools.js";
 import { normalizeToolName } from "./tool-policy.js";
 import type { AnyAgentTool } from "./tools/common.js";
-import { callGatewayTool } from "./tools/gateway.js";
 
 export type HookContext = {
   agentId?: string;
@@ -36,6 +36,7 @@ export type HookContext = {
   sessionId?: string;
   runId?: string;
   trace?: DiagnosticTraceContext;
+  channelId?: string;
   loopDetection?: ToolLoopDetectionConfig;
 };
 
@@ -101,19 +102,6 @@ function mergeParamsWithApprovalOverrides(
     return approvalParams;
   }
   return originalParams;
-}
-
-function isAbortSignalCancellation(err: unknown, signal?: AbortSignal): boolean {
-  if (!signal?.aborted) {
-    return false;
-  }
-  if (err === signal.reason) {
-    return true;
-  }
-  if (err instanceof Error && err.name === "AbortError") {
-    return true;
-  }
-  return false;
 }
 
 function unwrapErrorCause(err: unknown): unknown {
@@ -481,6 +469,7 @@ export async function runBeforeToolCallHook(args: {
       ...(args.ctx?.runId && { runId: args.ctx.runId }),
       ...(args.ctx?.trace && { trace: freezeDiagnosticTraceContext(args.ctx.trace) }),
       ...(args.toolCallId && { toolCallId: args.toolCallId }),
+      ...(args.ctx?.channelId && { channelId: args.ctx.channelId }),
     };
     const trustedPolicyResult = await runTrustedToolPolicies(
       {

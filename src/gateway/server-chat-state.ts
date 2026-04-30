@@ -71,6 +71,16 @@ export type ChatRunState = {
   /** Length of text at the time of the last broadcast, used to avoid duplicate flushes. */
   deltaLastBroadcastLen: Map<string, number>;
   abortedRuns: Map<string, number>;
+  /**
+   * Message-end hook blocks finalize through lifecycle events; this prevents
+   * chat.send from overwriting the policy text with its generic fallback.
+   */
+  hookFinalizedRuns: Map<string, number>;
+  /**
+   * Message-end hook retries keep the run open across SDK attempts; suppress
+   * the interim agent_end so the SPA stays attached to the same run id.
+   */
+  pendingRetryRuns: Set<string>;
   clear: () => void;
 };
 
@@ -81,6 +91,8 @@ export function createChatRunState(): ChatRunState {
   const deltaSentAt = new Map<string, number>();
   const deltaLastBroadcastLen = new Map<string, number>();
   const abortedRuns = new Map<string, number>();
+  const hookFinalizedRuns = new Map<string, number>();
+  const pendingRetryRuns = new Set<string>();
 
   const clear = () => {
     registry.clear();
@@ -89,6 +101,8 @@ export function createChatRunState(): ChatRunState {
     deltaSentAt.clear();
     deltaLastBroadcastLen.clear();
     abortedRuns.clear();
+    hookFinalizedRuns.clear();
+    pendingRetryRuns.clear();
   };
 
   return {
@@ -98,6 +112,8 @@ export function createChatRunState(): ChatRunState {
     deltaSentAt,
     deltaLastBroadcastLen,
     abortedRuns,
+    hookFinalizedRuns,
+    pendingRetryRuns,
     clear,
   };
 }

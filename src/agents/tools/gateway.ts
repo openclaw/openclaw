@@ -7,6 +7,7 @@ import {
   type OperatorScope,
 } from "../../gateway/method-scopes.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../gateway/protocol/client-info.js";
+import type { DeviceIdentity } from "../../infra/device-identity.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -20,6 +21,7 @@ export type GatewayCallOptions = {
   gatewayUrl?: string;
   gatewayToken?: string;
   timeoutMs?: number;
+  deviceIdentity?: DeviceIdentity | null;
 };
 
 type GatewayOverrideTarget = "local" | "remote";
@@ -166,5 +168,6 @@ export async function callGatewayTool<T = Record<string, unknown>>(
     clientDisplayName: "agent",
     mode: GATEWAY_CLIENT_MODES.BACKEND,
     scopes,
+    deviceIdentity: opts.deviceIdentity,
   });
 }

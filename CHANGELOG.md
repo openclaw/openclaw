@@ -25,6 +25,7 @@ Docs: https://docs.openclaw.ai
 - Security/OpenGrep: add a precise OpenGrep rulepack, source-rule compiler, provenance metadata check, and PR/full scan workflows that validate first-party code and rulepack-only changes while uploading SARIF to GitHub Code Scanning. (#69483) Thanks @jesse-merhi.
 - Control UI/i18n: extend the locale registry with new Persian (fa), Dutch (nl), Vietnamese (vi), Italian (it), Arabic (ar), and Thai (th) entries and ship `fa`, `nl`, `vi`, and `zh-TW` docs glossaries, so the docs translation pipeline and the Control UI language picker stay aligned across surfaces. Thanks @vincentkoc.
 - Gateway/diagnostics: emit an opt-in startup diagnostics timeline that records gateway lifecycle and plugin-load phases behind a config flag, so slow-start diagnosis no longer requires bespoke instrumentation. Thanks @shakkernerd.
+- Plugin hooks: add HITL lifecycle approval gates for `before_agent_run` and assistant message-end output while reusing the existing plugin approval flow. (#71411) Thanks @jesse-merhi.
 
 ### Fixes
 

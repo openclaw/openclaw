@@ -80,4 +80,28 @@ describe("shouldReloadHistoryForFinalEvent", () => {
       }),
     ).toBe(true);
   });
+
+  it("returns true when state is `error` (hook-block path persists policy reply on disk)", () => {
+    expect(
+      shouldReloadHistoryForFinalEvent({
+        runId: "run-1",
+        sessionKey: "main",
+        state: "error",
+        errorKind: "hook_block",
+        errorMessage: "Response blocked by policy",
+      } as Parameters<typeof shouldReloadHistoryForFinalEvent>[0]),
+    ).toBe(true);
+  });
+
+  it("returns false for non-hook error events", () => {
+    expect(
+      shouldReloadHistoryForFinalEvent({
+        runId: "run-1",
+        sessionKey: "main",
+        state: "error",
+        errorKind: "rate_limit",
+        errorMessage: "Rate limited",
+      } as Parameters<typeof shouldReloadHistoryForFinalEvent>[0]),
+    ).toBe(false);
+  });
 });

@@ -106,6 +106,7 @@ function normalizeHeartbeatChatFinalText(params: {
   return { suppress: false, text: stripped.text };
 }
 
+
 /**
  * Keep this aligned with the agent.wait lifecycle-error grace so chat surfaces
  * do not finalize a run before fallback or retry reuses the same runId.
@@ -125,6 +126,7 @@ const CHAT_ERROR_KINDS = new Set<ErrorKind>([
   "timeout",
   "rate_limit",
   "context_length",
+  "hook_block",
   "unknown",
 ]);
 
@@ -303,6 +305,22 @@ export function createAgentEventHandler({
     const eventRunId = chatLink?.clientRunId ?? evt.runId;
     const isAborted =
       chatRunState.abortedRuns.has(clientRunId) || chatRunState.abortedRuns.has(evt.runId);
+
+    // A retry creates a fresh SDK attempt under the same run id; keep the SPA
+    // attached until that attempt streams or finishes.
+    const isPendingRetry =
+      chatRunState.pendingRetryRuns.has(evt.runId) ||
+      chatRunState.pendingRetryRuns.has(chatLink?.clientRunId ?? "");
+    if (isPendingRetry && lifecyclePhase === "end") {
+      chatRunState.pendingRetryRuns.delete(evt.runId);
+      if (chatLink?.clientRunId) {
+        chatRunState.pendingRetryRuns.delete(chatLink.clientRunId);
+      }
+      // Consume the agent_end without emitting a chat lifecycle. The
+      // chatLink registry entry stays alive so deltas from the next
+      // attempt continue to route to the same clientRunId.
+      return;
+    }
 
     if (isControlUiVisible && sessionKey) {
       if (!isAborted) {
@@ -548,13 +566,45 @@ export function createAgentEventHandler({
       nodeSendToSession(sessionKey, "chat", payload);
       return;
     }
+    // Message-end hook blocks arrive after streamed deltas; emit a final
+    // replacement first so the UI swaps the streamed text for policy text.
+    const errorText = error ? formatForLog(error) : undefined;
+    if (errorKind === "hook_block" && errorText) {
+      // Follow with an error for clients that only clear pending state on error.
+      const finalPayload = {
+        runId: clientRunId,
+        sessionKey,
+        seq,
+        state: "final" as const,
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: errorText }],
+          timestamp: Date.now(),
+        },
+      };
+      broadcast("chat", finalPayload);
+      nodeSendToSession(sessionKey, "chat", finalPayload);
+      const errorPayload = {
+        runId: clientRunId,
+        sessionKey,
+        seq,
+        state: "error" as const,
+        errorMessage: errorText,
+        errorKind: "hook_block" as const,
+      };
+      broadcast("chat", errorPayload);
+      nodeSendToSession(sessionKey, "chat", errorPayload);
+      // Mark this run so chat.send does not overwrite the policy text.
+      chatRunState.hookFinalizedRuns.set(clientRunId, Date.now());
+      return;
+    }
     const payload = {
       runId: clientRunId,
       sessionKey,
       ...(spawnedBy && { spawnedBy }),
       seq,
       state: "error" as const,
-      errorMessage: error ? formatForLog(error) : undefined,
+      errorMessage: errorText,
       ...(errorKind && { errorKind }),
     };
     broadcast("chat", payload);
@@ -700,12 +750,42 @@ export function createAgentEventHandler({
       ) {
         emitChatDelta(sessionKey, clientRunId, evt.runId, evt.seq, evt.data.text, evt.data.delta);
       }
+      // Retry signal from the message-end hook: clear buffers so the next
+      // attempt renders in a fresh bubble.
+      if (!isAborted && evt.stream === "chat_retry") {
+        clearBufferedChatState(clientRunId);
+        // Suppress the current attempt's agent_end; the retry attempt owns the
+        // next terminal state.
+        chatRunState.pendingRetryRuns.add(clientRunId);
+        if (evt.runId !== clientRunId) {
+          chatRunState.pendingRetryRuns.add(evt.runId);
+        }
+        const retryPayload = {
+          runId: clientRunId,
+          sessionKey,
+          seq: evt.seq,
+          state: "retry" as const,
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "" }],
+            timestamp: Date.now(),
+          },
+          retryCount: typeof evt.data?.retryCount === "number" ? evt.data.retryCount : undefined,
+          maxRetries: typeof evt.data?.maxRetries === "number" ? evt.data.maxRetries : undefined,
+          reason: typeof evt.data?.reason === "string" ? evt.data.reason : undefined,
+        };
+        broadcast("chat", retryPayload);
+        nodeSendToSession(sessionKey, "chat", retryPayload);
+      }
     }
 
     if (lifecyclePhase === "error") {
       clearBufferedChatState(clientRunId);
-      const skipChatErrorFinal = isChatSendRunActive(evt.runId) && !chatLink;
-      if (isAborted || lifecycleErrorRetryGraceMs <= 0) {
+      // Message-end hook blocks complete the run from chat.send's perspective,
+      // so the normal double-error prevention must not suppress this event.
+      const isHookOverride = evt.data?.hookOverride === true;
+      const skipChatErrorFinal = !isHookOverride && isChatSendRunActive(evt.runId) && !chatLink;
+      if (isAborted || lifecycleErrorRetryGraceMs <= 0 || isHookOverride) {
         finalizeLifecycleEvent(evt, { skipChatErrorFinal });
       } else {
         scheduleTerminalLifecycleError(evt, { skipChatErrorFinal });

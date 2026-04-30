@@ -241,6 +241,14 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
   const m = message as Record<string, unknown>;
   let role = typeof m.role === "string" ? m.role : "unknown";
 
+  if (role === "user") {
+    const oc = m.__openclaw as Record<string, unknown> | undefined;
+    const obc = oc?.originalBlockedContent as { content?: unknown } | undefined;
+    if (obc && Array.isArray(obc.content) && obc.content.length > 0) {
+      m.content = obc.content;
+    }
+  }
+
   // Detect tool messages by common gateway shapes.
   // Some tool events come through as assistant role with tool_* items in the content array.
   const hasToolId = typeof m.toolCallId === "string" || typeof m.tool_call_id === "string";

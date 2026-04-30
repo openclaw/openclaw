@@ -112,7 +112,13 @@ export function formatUncaughtError(err: unknown): string {
   return formatErrorMessage(err);
 }
 
-export type ErrorKind = "refusal" | "timeout" | "rate_limit" | "context_length" | "unknown";
+export type ErrorKind =
+  | "refusal"
+  | "timeout"
+  | "rate_limit"
+  | "context_length"
+  | "hook_block"
+  | "unknown";
 
 export function detectErrorKind(err: unknown): ErrorKind | undefined {
   if (err === undefined) {

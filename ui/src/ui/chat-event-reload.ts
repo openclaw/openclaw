@@ -22,6 +22,8 @@ function hasRenderableAssistantFinalMessage(message: unknown): boolean {
 
 export function shouldReloadHistoryForFinalEvent(payload?: ChatEventPayload): boolean {
   return Boolean(
-    payload && payload.state === "final" && !hasRenderableAssistantFinalMessage(payload.message),
+    payload &&
+      ((payload.state === "final" && !hasRenderableAssistantFinalMessage(payload.message)) ||
+        (payload.state === "error" && payload.errorKind === "hook_block")),
   );
 }

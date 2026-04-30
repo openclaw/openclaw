@@ -33,7 +33,7 @@ export function startGatewayMaintenanceTimers(params: {
   logHealth: { error: (msg: string) => void };
   dedupe: Map<string, DedupeEntry>;
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
-  chatRunState: { abortedRuns: Map<string, number> };
+  chatRunState: { abortedRuns: Map<string, number>; hookFinalizedRuns: Map<string, number> };
   chatRunBuffers: Map<string, string>;
   chatDeltaSentAt: Map<string, number>;
   chatDeltaLastBroadcastLen: Map<string, number>;
@@ -137,6 +137,14 @@ export function startGatewayMaintenanceTimers(params: {
       params.chatRunBuffers.delete(runId);
       params.chatDeltaSentAt.delete(runId);
       params.chatDeltaLastBroadcastLen.delete(runId);
+    }
+
+    // Clean up hook-block markers that were never consumed by chat.send.
+    for (const [runId, finalizedAt] of params.chatRunState.hookFinalizedRuns) {
+      if (now - finalizedAt <= ABORTED_RUN_TTL_MS) {
+        continue;
+      }
+      params.chatRunState.hookFinalizedRuns.delete(runId);
     }
 
     // Prune expired control-plane rate-limit buckets to prevent unbounded

@@ -313,10 +313,28 @@ function extractTranscriptAttachments(message: unknown): AttachmentItem[] {
   return attachments;
 }
 
+export type RetryNotice = {
+  retryCount: number;
+  maxRetries: number;
+  reason: string;
+};
+
+function renderRetryNoticeFooter(notice: RetryNotice | null | undefined) {
+  if (!notice) {
+    return nothing;
+  }
+  return html`
+    <div class="chat-retry-notice" role="status" aria-live="polite" title=${notice.reason}>
+      Retrying ${notice.retryCount}/${notice.maxRetries}: last attempt blocked: ${notice.reason}
+    </div>
+  `;
+}
+
 export function renderReadingIndicatorGroup(
   assistant?: AssistantIdentity,
   basePath?: string,
   authToken?: string | null,
+  retryNotice?: RetryNotice | null,
 ) {
   return html`
     <div class="chat-group assistant">
@@ -327,6 +345,7 @@ export function renderReadingIndicatorGroup(
             <span></span><span></span><span></span>
           </span>
         </div>
+        ${renderRetryNoticeFooter(retryNotice)}
       </div>
     </div>
   `;
@@ -339,6 +358,7 @@ export function renderStreamingGroup(
   assistant?: AssistantIdentity,
   basePath?: string,
   authToken?: string | null,
+  retryNotice?: RetryNotice | null,
 ) {
   const name = assistant?.name ?? "Assistant";
 
@@ -356,6 +376,7 @@ export function renderStreamingGroup(
           { isStreaming: true, showReasoning: false },
           onOpenSidebar,
         )}
+        ${renderRetryNoticeFooter(retryNotice)}
         <div class="chat-group-footer">
           <span class="chat-sender-name">${name}</span>
           ${renderChatTimestamp(startedAt)}
@@ -1362,6 +1383,10 @@ function renderGroupedMessage(
 
   const hasActions = canCopyMarkdown || canExpand;
 
+  const isBlockedUserMessage =
+    normalizedRole === "user" &&
+    Boolean((m.__openclaw as Record<string, unknown> | undefined)?.originalBlockedContent);
+
   return html`
     <div class="${bubbleClasses}">
       ${renderReplyPill(normalizedMessage.replyTarget)}
@@ -1500,6 +1525,9 @@ function renderGroupedMessage(
                 })
               : nothing}
           `}
+      ${isBlockedUserMessage
+        ? html`<div class="chat-blocked-user-note">hidden from agents</div>`
+        : nothing}
     </div>
   `;
 }

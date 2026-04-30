@@ -1,6 +1,9 @@
 import { randomUUID } from "node:crypto";
 import type { ExecApprovalForwarder } from "../../infra/exec-approval-forwarder.js";
-import type { ExecApprovalDecision } from "../../infra/exec-approvals.js";
+import {
+  resolveExecApprovalRequestAllowedDecisions,
+  type ExecApprovalDecision,
+} from "../../infra/exec-approvals.js";
 import type { PluginApprovalRequestPayload } from "../../infra/plugin-approvals.js";
 import {
   DEFAULT_PLUGIN_APPROVAL_TIMEOUT_MS,
@@ -67,6 +70,7 @@ export function createPluginApprovalHandlers(
         turnSourceTo?: string | null;
         turnSourceAccountId?: string | null;
         turnSourceThreadId?: string | number | null;
+        allowedDecisions?: string[];
         timeoutMs?: number;
         twoPhase?: boolean;
       };
@@ -78,6 +82,9 @@ export function createPluginApprovalHandlers(
 
       const normalizeTrimmedString = (value?: string | null): string | null =>
         normalizeOptionalString(value) || null;
+      const allowedDecisions = Array.isArray(p.allowedDecisions)
+        ? p.allowedDecisions.filter(isApprovalDecision)
+        : [];
 
       const request: PluginApprovalRequestPayload = {
         pluginId: p.pluginId ?? null,
@@ -92,6 +99,7 @@ export function createPluginApprovalHandlers(
         turnSourceTo: normalizeTrimmedString(p.turnSourceTo),
         turnSourceAccountId: normalizeTrimmedString(p.turnSourceAccountId),
         turnSourceThreadId: p.turnSourceThreadId ?? null,
+        ...(allowedDecisions.length > 0 ? { allowedDecisions } : {}),
       };
 
       // Always server-generate the ID — never accept plugin-provided IDs.
@@ -166,14 +174,19 @@ export function createPluginApprovalHandlers(
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "invalid decision"));
         return;
       }
+      const decision: ExecApprovalDecision = p.decision;
       await handleApprovalResolve({
         manager,
         inputId: p.id,
-        decision: p.decision,
+        decision,
         respond,
         context,
         client,
         exposeAmbiguousPrefixError: false,
+        validateDecision: (snapshot) =>
+          resolveExecApprovalRequestAllowedDecisions(snapshot.request).includes(decision)
+            ? null
+            : { message: "decision is not allowed for this plugin approval request" },
         resolvedEventName: "plugin.approval.resolved",
         buildResolvedEvent: ({ approvalId, decision, resolvedBy, snapshot, nowMs }) => ({
           id: approvalId,

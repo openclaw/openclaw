@@ -572,6 +572,21 @@ details.msg-meta:not([open]) .msg-meta__details {
   background: #dc2626;
 }
 
+.chat-retry-notice {
+  margin-top: 4px;
+  font-size: 0.75rem;
+  opacity: 0.6;
+  font-style: italic;
+}
+
+.chat-blocked-user-note {
+  text-align: right;
+  margin-top: 4px;
+  font-size: 0.7em;
+  opacity: 0.45;
+  font-style: italic;
+}
+
 @media (max-width: 768px) {
   .chat-group {
     margin-left: 0;

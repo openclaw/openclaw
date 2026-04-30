@@ -1575,6 +1575,25 @@ function nextChatSeq(context: { agentRunSeq: Map<string, number> }, runId: strin
   return next;
 }
 
+/**
+ * Returns true when the lifecycle event path already finalized a message-end
+ * hook block for this run.
+ */
+function consumeHookFinalizedRun(
+  context: Pick<GatewayRequestContext, "chatHookFinalizedRuns" | "agentRunSeq">,
+  runId: string,
+): boolean {
+  const has = context.chatHookFinalizedRuns.has(runId);
+  if (!has) {
+    return false;
+  }
+  context.chatHookFinalizedRuns.delete(runId);
+  // The lifecycle handler emitted the terminal payload; drop the seq
+  // counter so a subsequent run with the same id (unlikely) starts fresh.
+  context.agentRunSeq.delete(runId);
+  return true;
+}
+
 function broadcastChatFinal(params: {
   context: Pick<GatewayRequestContext, "broadcast" | "nodeSendToSession" | "agentRunSeq">;
   runId: string;
@@ -2352,6 +2371,21 @@ export const chatHandlers: GatewayRequestHandlers = {
       })
         .then(async () => {
           await rewriteUserTranscriptMedia();
+          // The lifecycle event path already displayed the message-end hook
+          // block; avoid replacing it with chat.send's generic fallback.
+          if (consumeHookFinalizedRun(context, clientRunId)) {
+            void emitUserTranscriptUpdate();
+            setGatewayDedupeEntry({
+              dedupe: context.dedupe,
+              key: `chat:${clientRunId}`,
+              entry: {
+                ts: Date.now(),
+                ok: true,
+                payload: { runId: clientRunId, status: "ok" as const },
+              },
+            });
+            return;
+          }
           if (!agentRunStarted) {
             await emitUserTranscriptUpdate();
             const btwReplies = deliveredReplies
@@ -2540,6 +2574,9 @@ export const chatHandlers: GatewayRequestHandlers = {
               `webchat user transcript update failed after error: ${formatForLog(transcriptErr)}`,
             );
           });
+          // Do not replace an already-displayed hook block with chat.send's
+          // generic error fallback.
+          const hookFinalized = consumeHookFinalizedRun(context, clientRunId);
           const error = errorShape(ErrorCodes.UNAVAILABLE, String(err));
           setGatewayDedupeEntry({
             dedupe: context.dedupe,
@@ -2555,12 +2592,14 @@ export const chatHandlers: GatewayRequestHandlers = {
               error,
             },
           });
-          broadcastChatError({
-            context,
-            runId: clientRunId,
-            sessionKey,
-            errorMessage: String(err),
-          });
+          if (!hookFinalized) {
+            broadcastChatError({
+              context,
+              runId: clientRunId,
+              sessionKey,
+              errorMessage: String(err),
+            });
+          }
         })
         .finally(() => {
           activeRunAbort.cleanup();

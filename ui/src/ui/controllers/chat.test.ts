@@ -19,6 +19,7 @@ function createState(overrides: Partial<ChatState> = {}): ChatState {
     chatLoading: false,
     chatMessage: "",
     chatMessages: [],
+    chatRetryNotice: null,
     chatRunId: null,
     chatSending: false,
     chatStream: null,
@@ -619,6 +620,53 @@ describe("handleChatEvent", () => {
     // entry.text takes precedence — "real reply" is NOT silent, so the message is kept.
     expect(handleChatEvent(state, payload)).toBe("final");
     expect(state.chatMessages).toHaveLength(1);
+  });
+
+  it("records retry notice without ending the active run", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: "blocked draft",
+      chatStreamStartedAt: 100,
+    });
+
+    expect(
+      handleChatEvent(state, {
+        runId: "run-1",
+        sessionKey: "main",
+        state: "retry",
+        retryCount: 1,
+        maxRetries: 3,
+        reason: "policy",
+      }),
+    ).toBe("retry");
+    expect(state.chatRunId).toBe("run-1");
+    expect(state.chatStream).toBe("");
+    expect(state.chatRetryNotice).toEqual({
+      retryCount: 1,
+      maxRetries: 3,
+      reason: "policy",
+    });
+  });
+
+  it("clears retry notice when the run finishes", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatRetryNotice: {
+        retryCount: 1,
+        maxRetries: 3,
+        reason: "policy",
+      },
+    });
+
+    handleChatEvent(state, {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "final",
+    });
+
+    expect(state.chatRetryNotice).toBeNull();
   });
 });
 

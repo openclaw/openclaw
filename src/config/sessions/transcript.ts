@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type { SessionManager } from "@mariozechner/pi-coding-agent";
@@ -44,6 +45,37 @@ async function ensureSessionHeader(params: {
     encoding: "utf-8",
     mode: 0o600,
   });
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+async function readLatestTranscriptMessageId(sessionFile: string): Promise<string | null> {
+  if (!fs.existsSync(sessionFile)) {
+    return null;
+  }
+  const lines = (await fs.promises.readFile(sessionFile, "utf-8")).split(/\r?\n/);
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const line = lines[index]?.trim();
+    if (!line) {
+      continue;
+    }
+    try {
+      const parsed: unknown = JSON.parse(line);
+      if (
+        isRecord(parsed) &&
+        parsed.type === "message" &&
+        typeof parsed.id === "string" &&
+        parsed.id.length > 0
+      ) {
+        return parsed.id;
+      }
+    } catch {
+      continue;
+    }
+  }
+  return null;
 }
 
 export type SessionTranscriptAppendResult =
@@ -283,6 +315,134 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
     case "inline":
       emitSessionTranscriptUpdate({ sessionFile, sessionKey, message, messageId });
       break;
+    case "file-only":
+      emitSessionTranscriptUpdate(sessionFile);
+      break;
+    case "none":
+      break;
+  }
+  return { ok: true, sessionFile, messageId };
+}
+
+/**
+ * Persist a user message blocked before model submission.
+ *
+ * Contract:
+ *   - `message.content` is REPLACED with a stub so the agent transcript only
+ *     ever shows the policy notice. No agent that reads JSONL `message.content`
+ *     can ever see the original.
+ *   - `originalBlockedContent` is a TOP-LEVEL JSONL field (next to `message`),
+ *     NOT inside `message`. SPA reads this and renders it to the human user
+ *     while the agent reads `message.content` and only sees the stub.
+ *   - Idempotency key prevents double-writes if the runner retries.
+ */
+export async function appendBlockedUserMessageToSessionTranscript(params: {
+  agentId?: string;
+  sessionKey: string;
+  originalText: string;
+  redactedText: string;
+  pluginId: string;
+  reason: string;
+  idempotencyKey?: string;
+  storePath?: string;
+  updateMode?: SessionTranscriptUpdateMode;
+}): Promise<SessionTranscriptAppendResult> {
+  const sessionKey = params.sessionKey.trim();
+  if (!sessionKey) {
+    return { ok: false, reason: "missing sessionKey" };
+  }
+  if (!params.originalText) {
+    return { ok: false, reason: "empty originalText" };
+  }
+
+  const storePath = params.storePath ?? resolveDefaultSessionStorePath(params.agentId);
+  const store = loadSessionStore(storePath, { skipCache: true });
+  const normalizedKey = normalizeStoreSessionKey(sessionKey);
+  const entry = (store[normalizedKey] ?? store[sessionKey]) as SessionEntry | undefined;
+  if (!entry?.sessionId) {
+    return { ok: false, reason: `unknown sessionKey: ${sessionKey}` };
+  }
+
+  let sessionFile: string;
+  try {
+    const resolvedSessionFile = await resolveAndPersistSessionFile({
+      sessionId: entry.sessionId,
+      sessionKey,
+      sessionStore: store,
+      storePath,
+      sessionEntry: entry,
+      agentId: params.agentId,
+      sessionsDir: path.dirname(storePath),
+    });
+    sessionFile = resolvedSessionFile.sessionFile;
+  } catch (err) {
+    return {
+      ok: false,
+      reason: formatErrorMessage(err),
+    };
+  }
+
+  await ensureSessionHeader({ sessionFile, sessionId: entry.sessionId });
+
+  const explicitIdempotencyKey = params.idempotencyKey;
+  const existingMessageId = explicitIdempotencyKey
+    ? await transcriptHasIdempotencyKey(sessionFile, explicitIdempotencyKey)
+    : undefined;
+  if (existingMessageId) {
+    return { ok: true, sessionFile, messageId: existingMessageId };
+  }
+
+  // Write the user message directly as a raw JSONL append (not via
+  // SessionManager.appendMessage) to avoid the TOCTOU race where the
+  // runner's own SessionManager re-reads the file and overwrites our
+  // line. The JSONL format is stable: one JSON object per line.
+  const messageId = `blocked-${crypto.randomUUID()}`;
+  const nowMs = Date.now();
+  const parentId = await readLatestTranscriptMessageId(sessionFile);
+  const jsonlEntry: Record<string, unknown> = {
+    type: "message",
+    id: messageId,
+    parentId,
+    timestamp: new Date(nowMs).toISOString(),
+    message: {
+      role: "user",
+      content: [{ type: "text", text: params.redactedText }],
+      timestamp: nowMs,
+      ...(explicitIdempotencyKey ? { idempotencyKey: explicitIdempotencyKey } : {}),
+    },
+    originalBlockedContent: {
+      content: [{ type: "text", text: params.originalText }],
+      blockedBy: params.pluginId,
+      reason: params.reason,
+      blockedAt: nowMs,
+    },
+  };
+
+  await fs.promises.appendFile(sessionFile, JSON.stringify(jsonlEntry) + "\n", {
+    encoding: "utf-8",
+    mode: 0o600,
+  });
+
+  switch (params.updateMode ?? "inline") {
+    case "inline": {
+      const inlineMessage =
+        isRecord(jsonlEntry.message) && isRecord(jsonlEntry.originalBlockedContent)
+          ? {
+              ...jsonlEntry.message,
+              __openclaw: {
+                ...(isRecord(jsonlEntry.message.__openclaw) ? jsonlEntry.message.__openclaw : {}),
+                originalBlockedContent: jsonlEntry.originalBlockedContent,
+              },
+            }
+          : jsonlEntry.message;
+      emitSessionTranscriptUpdate({
+        sessionFile,
+        sessionKey,
+        message: inlineMessage as Parameters<SessionManager["appendMessage"]>[0],
+        messageId,
+      });
+      break;
+    }
     case "file-only":
       emitSessionTranscriptUpdate(sessionFile);
       break;

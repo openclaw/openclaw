@@ -73,6 +73,11 @@ export type GatewayRequestContext = {
   chatRunBuffers: Map<string, string>;
   chatDeltaSentAt: Map<string, number>;
   chatDeltaLastBroadcastLen: Map<string, number>;
+  /**
+   * Runs already finalized by the lifecycle event path for a message-end hook
+   * block; chat.send should not overwrite their policy text.
+   */
+  chatHookFinalizedRuns: Map<string, number>;
   addChatRun: (sessionId: string, entry: { sessionKey: string; clientRunId: string }) => void;
   removeChatRun: (
     sessionId: string,

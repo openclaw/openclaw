@@ -21,6 +21,7 @@ import type {
   PluginHookBeforePromptBuildEvent,
   PluginHookBeforePromptBuildResult,
 } from "./hook-before-agent-start.types.js";
+import type { HookDecision, InputGateDecision } from "./hook-decision-types.js";
 import type {
   PluginHookInboundClaimContext,
   PluginHookInboundClaimEvent,
@@ -77,6 +78,7 @@ export type PluginHookName =
   | "model_call_ended"
   | "llm_input"
   | "llm_output"
+  | "llm_message_end"
   | "before_agent_finalize"
   | "agent_end"
   | "before_compaction"
@@ -102,7 +104,8 @@ export type PluginHookName =
   | "cron_changed"
   | "before_dispatch"
   | "reply_dispatch"
-  | "before_install";
+  | "before_install"
+  | "before_agent_run";
 
 export const PLUGIN_HOOK_NAMES = [
   "before_model_resolve",
@@ -114,6 +117,7 @@ export const PLUGIN_HOOK_NAMES = [
   "model_call_ended",
   "llm_input",
   "llm_output",
+  "llm_message_end",
   "before_agent_finalize",
   "agent_end",
   "before_compaction",
@@ -140,6 +144,7 @@ export const PLUGIN_HOOK_NAMES = [
   "before_dispatch",
   "reply_dispatch",
   "before_install",
+  "before_agent_run",
 ] as const satisfies readonly PluginHookName[];
 
 type MissingPluginHookNames = Exclude<PluginHookName, (typeof PLUGIN_HOOK_NAMES)[number]>;
@@ -169,6 +174,7 @@ export const isPromptInjectionHookName = (hookName: PluginHookName): boolean =>
 export const CONVERSATION_HOOK_NAMES = [
   "llm_input",
   "llm_output",
+  "llm_message_end",
   "before_agent_finalize",
   "agent_end",
 ] as const satisfies readonly PluginHookName[];
@@ -258,6 +264,8 @@ export type PluginHookLlmOutputEvent = {
    * `resolvedRef` so provider/model consumers keep a stable parse contract.
    */
   harnessId?: string;
+  /** The original user prompt that produced this output. */
+  prompt?: string;
   assistantTexts: string[];
   lastAssistant?: unknown;
   usage?: {
@@ -267,6 +275,20 @@ export type PluginHookLlmOutputEvent = {
     cacheWrite?: number;
     total?: number;
   };
+};
+
+export type PluginHookLlmMessageEndEvent = {
+  runId: string;
+  sessionId: string;
+  provider: string;
+  model: string;
+  resolvedRef?: string;
+  harnessId?: string;
+  /** The original user prompt that produced this message. */
+  prompt?: string;
+  /** Assistant message at the Pi `message_end` boundary. */
+  message: AgentMessage;
+  usage?: PluginHookLlmOutputEvent["usage"];
 };
 
 export type PluginHookAgentEndEvent = {
@@ -398,6 +420,7 @@ export type PluginHookToolContext = {
   trace?: DiagnosticTraceContext;
   toolName: string;
   toolCallId?: string;
+  channelId?: string;
 };
 
 export type PluginHookBeforeToolCallEvent = {
@@ -784,6 +807,27 @@ export type PluginHookBeforeInstallResult = {
   blockReason?: string;
 };
 
+// ---------------------------------------------------------------------------
+// before_agent_run — Lifecycle Gate Hook
+// ---------------------------------------------------------------------------
+
+/** Event payload for the before_agent_run gate hook. */
+export type PluginHookBeforeAgentRunEvent = {
+  /** The user's message that triggered this run. */
+  prompt: string;
+  /** Full session messages loaded so far (for context-aware checks). */
+  messages: unknown[];
+  /** Channel the message came from. */
+  channelId?: string;
+  /** Sender identity when available. */
+  senderId?: string;
+  /** Whether the sender is an owner. */
+  senderIsOwner?: boolean;
+};
+
+/** Result type for before_agent_run. Returns HookDecision or void (= pass). */
+export type PluginHookBeforeAgentRunResult = InputGateDecision | void;
+
 export type PluginHookHandlerMap = {
   agent_turn_prepare: (
     event: PluginAgentTurnPrepareEvent,
@@ -822,6 +866,10 @@ export type PluginHookHandlerMap = {
     event: PluginHookLlmOutputEvent,
     ctx: PluginHookAgentContext,
   ) => Promise<void> | void;
+  llm_message_end: (
+    event: PluginHookLlmMessageEndEvent,
+    ctx: PluginHookAgentContext,
+  ) => Promise<HookDecision | void> | HookDecision | void;
   before_agent_finalize: (
     event: PluginHookBeforeAgentFinalizeEvent,
     ctx: PluginHookAgentContext,
@@ -932,6 +980,10 @@ export type PluginHookHandlerMap = {
     event: PluginHookBeforeInstallEvent,
     ctx: PluginHookBeforeInstallContext,
   ) => Promise<PluginHookBeforeInstallResult | void> | PluginHookBeforeInstallResult | void;
+  before_agent_run: (
+    event: PluginHookBeforeAgentRunEvent,
+    ctx: PluginHookAgentContext,
+  ) => Promise<PluginHookBeforeAgentRunResult> | PluginHookBeforeAgentRunResult;
 };
 
 export type PluginHookRegistration<K extends PluginHookName = PluginHookName> = {

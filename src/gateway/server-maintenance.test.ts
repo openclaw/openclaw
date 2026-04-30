@@ -36,7 +36,7 @@ function createMaintenanceTimerDeps() {
     logHealth: { error: () => {} },
     dedupe: new Map(),
     chatAbortControllers: new Map(),
-    chatRunState: { abortedRuns: new Map() },
+    chatRunState: { abortedRuns: new Map(), hookFinalizedRuns: new Map() },
     chatRunBuffers: new Map(),
     chatDeltaSentAt: new Map(),
     chatDeltaLastBroadcastLen: new Map(),

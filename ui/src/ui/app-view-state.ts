@@ -94,6 +94,11 @@ export type AppViewState = {
   chatStreamSegments: Array<{ text: string; ts: number }>;
   chatStream: string | null;
   chatStreamStartedAt: number | null;
+  chatRetryNotice: {
+    retryCount: number;
+    maxRetries: number;
+    reason: string;
+  } | null;
   chatRunId: string | null;
   chatSideResult: ChatSideResult | null;
   chatSideResultTerminalRuns: Set<string>;
