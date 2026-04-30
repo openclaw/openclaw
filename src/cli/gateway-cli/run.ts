@@ -362,7 +362,7 @@ function isGatewayLockError(err: unknown): err is GatewayLockError {
   );
 }
 
-function isHealthyGatewayLockError(err: unknown): boolean {
+function isGatewayAlreadyRunningLockError(err: unknown): boolean {
   if (!isGatewayLockError(err) || typeof err.message !== "string") {
     return false;
   }
@@ -370,6 +370,20 @@ function isHealthyGatewayLockError(err: unknown): boolean {
     err.message.includes("gateway already running") ||
     err.message.includes("another gateway instance is already listening")
   );
+}
+
+function isHealthyGatewayLockError(err: unknown): boolean {
+  return isGatewayAlreadyRunningLockError(err);
+}
+
+function resolveGatewayLockErrorExitCode(
+  err: unknown,
+  supervisor: RespawnSupervisor | null,
+): number {
+  if (supervisor === "systemd" && isGatewayAlreadyRunningLockError(err)) {
+    return EXIT_CONFIG_ERROR;
+  }
+  return isHealthyGatewayLockError(err) ? 0 : 1;
 }
 
 function normalizeGatewayHealthProbeHost(host: string): string {
@@ -441,15 +455,17 @@ async function runGatewayLoopWithSupervisedLockRecovery(params: {
       await params.startLoop();
       return;
     } catch (err) {
-      const isGatewayAlreadyRunning =
-        err instanceof GatewayLockError &&
-        typeof err.message === "string" &&
-        err.message.includes("gateway already running");
-      if (!isGatewayAlreadyRunning) {
+      if (!isGatewayAlreadyRunningLockError(err)) {
         throw err;
       }
 
       if (await probeHealth({ host: params.healthHost, port: params.port })) {
+        if (supervisor === "systemd") {
+          throw new GatewayLockError(
+            "gateway already running under systemd; existing gateway is healthy, exiting with code 78 to prevent a systemd Restart=always loop",
+            err,
+          );
+        }
         params.log.info(
           `gateway already running under ${supervisor}; existing gateway is healthy, leaving it in control`,
         );
@@ -822,11 +838,12 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
         }),
     });
 
+  const { detectRespawnSupervisor } = await import("../../infra/supervisor-markers.js");
+  const supervisor = detectRespawnSupervisor(process.env);
   try {
-    const { detectRespawnSupervisor } = await import("../../infra/supervisor-markers.js");
     await runGatewayLoopWithSupervisedLockRecovery({
       startLoop,
-      supervisor: detectRespawnSupervisor(process.env),
+      supervisor,
       port,
       healthHost,
       log: gatewayLog,
@@ -850,7 +867,7 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
       }
       const { maybeExplainGatewayServiceStop } = await import("./shared.js");
       await maybeExplainGatewayServiceStop();
-      defaultRuntime.exit(isHealthyGatewayLockError(err) ? 0 : 1);
+      defaultRuntime.exit(resolveGatewayLockErrorExitCode(err, supervisor));
       return;
     }
     await maybeWriteGatewayStartupFailureBundle(err);
@@ -861,6 +878,7 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
 
 export const __testing = {
   normalizeGatewayHealthProbeHost,
+  resolveGatewayLockErrorExitCode,
   runGatewayLoopWithSupervisedLockRecovery,
 };
 
