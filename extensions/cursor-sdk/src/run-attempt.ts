@@ -67,7 +67,10 @@ export async function runCursorSdkAttempt(
   }
 
   const sdk = await import("@cursor/sdk");
-  loadedSdkModule = sdk;
+  loadedSdkModule = {
+    AuthenticationError: sdk.AuthenticationError,
+    RateLimitError: sdk.RateLimitError,
+  };
   const { Agent } = sdk;
 
   log.info(
@@ -169,20 +172,16 @@ export async function runCursorSdkAttempt(
   }
 }
 
+function buildUserMessage(prompt: string, timestamp: number): AgentMessage {
+  return { role: "user", content: prompt, timestamp } as AgentMessage;
+}
+
 function buildSuccessResult(
   params: AgentHarnessAttemptParams,
   ctx: { text: string; started: number },
 ): AgentHarnessAttemptResult {
   const assistantTexts = ctx.text ? [ctx.text] : [];
-  const messagesSnapshot: AgentMessage[] = [
-    { role: "user", content: params.prompt, timestamp: ctx.started },
-  ];
-  const lastAssistant = ctx.text
-    ? { role: "assistant" as const, content: ctx.text, timestamp: Date.now() }
-    : undefined;
-  if (lastAssistant) {
-    messagesSnapshot.push(lastAssistant);
-  }
+  const messagesSnapshot: AgentMessage[] = [buildUserMessage(params.prompt, ctx.started)];
 
   const agentHarnessResultClassification = classifyAgentHarnessTerminalOutcome({
     assistantTexts,
@@ -203,13 +202,13 @@ function buildSuccessResult(
     messagesSnapshot,
     assistantTexts,
     toolMetas: [],
-    lastAssistant,
+    lastAssistant: undefined,
     didSendViaMessagingTool: false,
     messagingToolSentTexts: [],
     messagingToolSentMediaUrls: [],
     messagingToolSentTargets: [],
     cloudCodeAssistFormatError: false,
-    replayMetadata: { items: [] },
+    replayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
     itemLifecycle: { startedCount: 0, completedCount: 0, activeCount: 0 },
   };
 }
@@ -228,7 +227,7 @@ function buildErrorResult(
     promptErrorSource: "prompt",
     sessionIdUsed: params.sessionId,
     agentHarnessId: "cursor-sdk",
-    messagesSnapshot: [{ role: "user", content: params.prompt, timestamp: ctx.started }],
+    messagesSnapshot: [buildUserMessage(params.prompt, ctx.started)],
     assistantTexts: [],
     toolMetas: [],
     lastAssistant: undefined,
@@ -237,7 +236,7 @@ function buildErrorResult(
     messagingToolSentMediaUrls: [],
     messagingToolSentTargets: [],
     cloudCodeAssistFormatError: false,
-    replayMetadata: { items: [] },
+    replayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
     itemLifecycle: { startedCount: 0, completedCount: 0, activeCount: 0 },
   };
 }
