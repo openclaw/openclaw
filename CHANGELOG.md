@@ -31,6 +31,9 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Bonjour/Gateway: cap flapping advertiser restarts in a sliding window, so mDNS probing/name-conflict loops disable discovery instead of churning indefinitely on constrained hosts. Refs #74209 and #74242. Thanks @ndj888 and @Sanjays2402.
+- Plugins/runtime-deps: verify staged package entry files before reusing mirrored runtime roots, so browser-control repairs incomplete `ajv`/MCP SDK installs after update instead of failing after restart on a missing `ajv/dist/ajv.js`. Refs #74630. Thanks @spickeringlr.
+- Heartbeat: resolve `responsePrefix` template variables with the selected provider, model, and thinking context before delivering alerts or suppressing prefixed `HEARTBEAT_OK` replies. Fixes #43064; repairs #43065; supersedes #46858. Thanks @yweiii and @JunJD.
 - Channels/Feishu: retry file-typed iOS video resource downloads as `media` after a Feishu/Lark HTTP 502 and preserve the original 502 when the fallback also fails. Fixes #49855; carries forward #50164 and #73986. Thanks @alex-xuweilong.
 - Providers/Amazon Bedrock: expose the full Claude Opus 4.7 thinking profile (`xhigh`, `adaptive`, and `max`) for Bedrock model refs, while keeping Opus/Sonnet 4.6 on adaptive-by-default, so `/think` menus and validation match the Anthropic transport behavior. Fixes #74701. Thanks @prasad-yashdeep, @sparkleHazard, @Sanjays2402, and @hclsys.
 - Plugins/tokenjuice: compile the bundled plugin against tokenjuice 0.7.0's published OpenClaw host types instead of a local compatibility shim, so package contract drift fails in OpenClaw validation before release. Thanks @vincentkoc.
@@ -44,6 +47,9 @@ Docs: https://docs.openclaw.ai
 - Agents/Codex: flush accepted debounced steering messages before normal app-server turn cleanup, so inbound follow-ups acknowledged as queued are not dropped when the turn completes before the debounce fires. Thanks @vincentkoc.
 - Slack/interactive replies: keep rendered buttons and selects within Slack Block Kit value and count limits, and align command argument select values with Slack's option limit, so overlong agent-authored choices no longer make Slack reject the whole block payload. Thanks @slackapi.
 - Slack/interactive replies: drop overlong Block Kit button URLs while preserving valid callback values, so malformed link buttons no longer make Slack reject the whole interactive reply. Thanks @slackapi.
+- Slack/commands: truncate native command argument-menu confirmation text to Slack's dialog limit, so long plugin arg names no longer make fallback buttons render invalid Block Kit payloads. Thanks @slackapi.
+- Slack/exec approvals: cap native approval metadata context to Slack's element and text limits, so large approval details no longer make Slack reject the approval card. Thanks @slackapi.
+- Channels/WhatsApp: require Baileys outbound message ids before marking auto-replies delivered, so transcript text and ack reactions no longer make failed group replies look sent. Fixes #49225. Thanks @TinyTb.
 - CLI/update: scope packaged Node compile caches by OpenClaw version and install metadata, so global installs no longer reuse stale compiled chunks after package updates. Thanks @pashpashpash.
 - Channels/Voice call: keep pre-auth webhook in-flight limiting active when socket remote address metadata is missing, so slow-body requests from stripped-IP proxy paths still share the fallback bucket. (#74453) Thanks @davidangularme.
 - Plugin SDK/testing: lazy-load TypeScript from the plugin test-contract runtime and add release checks for critical SDK contract entrypoint imports and bundle size, so published packages fail preflight before shipping ESM-incompatible or oversized contract helpers. Thanks @vincentkoc.

@@ -12,16 +12,9 @@ import {
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { recordInboundSession } from "openclaw/plugin-sdk/conversation-runtime";
 import { normalizeScpRemoteHost } from "openclaw/plugin-sdk/host-runtime";
-import {
-  hasFinalInboundReplyDispatch,
-  runPreparedInboundReplyTurn,
-} from "openclaw/plugin-sdk/inbound-reply-dispatch";
+import { runPreparedInboundReplyTurn } from "openclaw/plugin-sdk/inbound-reply-dispatch";
 import { isInboundPathAllowed, kindFromMime } from "openclaw/plugin-sdk/media-runtime";
-import {
-  clearHistoryEntriesIfEnabled,
-  DEFAULT_GROUP_HISTORY_LIMIT,
-  type HistoryEntry,
-} from "openclaw/plugin-sdk/reply-history";
+import { DEFAULT_GROUP_HISTORY_LIMIT, type HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-runtime";
 import { dispatchInboundMessage } from "openclaw/plugin-sdk/reply-runtime";
 import { createReplyDispatcher } from "openclaw/plugin-sdk/reply-runtime";
@@ -442,7 +435,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       },
     });
 
-    const { dispatchResult } = await runPreparedInboundReplyTurn({
+    await runPreparedInboundReplyTurn({
       channel: "imessage",
       accountId: decision.route.accountId,
       routeSessionKey: decision.route.sessionKey,
@@ -475,6 +468,12 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
           logVerbose(`imessage: failed updating session meta: ${String(err)}`);
         },
       },
+      history: {
+        isGroup: decision.isGroup,
+        historyKey: decision.historyKey,
+        historyMap: groupHistories,
+        limit: historyLimit,
+      },
       onPreDispatchFailure: () => settleReplyDispatcher({ dispatcher }),
       runDispatch: () =>
         dispatchInboundMessage({
@@ -490,23 +489,6 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
           },
         }),
     });
-    if (!hasFinalInboundReplyDispatch(dispatchResult)) {
-      if (decision.isGroup && decision.historyKey) {
-        clearHistoryEntriesIfEnabled({
-          historyMap: groupHistories,
-          historyKey: decision.historyKey,
-          limit: historyLimit,
-        });
-      }
-      return;
-    }
-    if (decision.isGroup && decision.historyKey) {
-      clearHistoryEntriesIfEnabled({
-        historyMap: groupHistories,
-        historyKey: decision.historyKey,
-        limit: historyLimit,
-      });
-    }
   }
 
   const handleMessage = async (raw: unknown) => {

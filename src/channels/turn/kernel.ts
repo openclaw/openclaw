@@ -1,11 +1,13 @@
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
-export { buildChannelTurnContext } from "./context.js";
+import { clearHistoryEntriesIfEnabled } from "../../auto-reply/reply/history.js";
+export { buildChannelTurnContext, filterChannelTurnSupplementalContext } from "./context.js";
 export type { BuildChannelTurnContextParams } from "./context.js";
 import type {
   AssembledChannelTurn,
   ChannelEventClass,
   ChannelTurnAdmission,
   ChannelTurnDeliveryAdapter,
+  ChannelTurnHistoryFinalizeOptions,
   ChannelTurnLogEvent,
   ChannelTurnResult,
   DispatchedChannelTurnResult,
@@ -31,6 +33,7 @@ export type {
   ChannelTurnAdapter,
   ChannelTurnAdmission,
   ChannelTurnDeliveryAdapter,
+  ChannelTurnHistoryFinalizeOptions,
   ChannelTurnDispatcherOptions,
   ChannelTurnLogEvent,
   ChannelTurnRecordOptions,
@@ -97,6 +100,17 @@ export function createNoopChannelTurnDeliveryAdapter(): ChannelTurnDeliveryAdapt
   };
 }
 
+function clearPendingHistoryAfterTurn(params?: ChannelTurnHistoryFinalizeOptions): void {
+  if (!params?.isGroup || !params.historyKey || !params.historyMap || params.limit === undefined) {
+    return;
+  }
+  clearHistoryEntriesIfEnabled({
+    historyMap: params.historyMap,
+    historyKey: params.historyKey,
+    limit: params.limit,
+  });
+}
+
 export async function dispatchAssembledChannelTurn(
   params: AssembledChannelTurn,
 ): Promise<DispatchedChannelTurnResult> {
@@ -108,6 +122,7 @@ export async function dispatchAssembledChannelTurn(
     ctxPayload: params.ctxPayload,
     recordInboundSession: params.recordInboundSession,
     record: params.record,
+    history: params.history,
     admission: params.admission,
     log: params.log,
     messageId: params.messageId,
@@ -222,6 +237,7 @@ export async function runPreparedChannelTurn<
       admission: admission.kind,
     },
   });
+  clearPendingHistoryAfterTurn(params.history);
 
   return {
     admission,

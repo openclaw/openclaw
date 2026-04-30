@@ -127,6 +127,30 @@ describe("channel turn kernel", () => {
     );
   });
 
+  it("clears pending group history after a successful prepared turn", async () => {
+    const historyMap = new Map([["room-1", [{ sender: "User", body: "queued before reply" }]]]);
+
+    await runPreparedChannelTurn({
+      channel: "test",
+      routeSessionKey: "agent:main:test:group:room-1",
+      storePath: "/tmp/sessions.json",
+      ctxPayload: createCtx(),
+      recordInboundSession: createRecordInboundSession(),
+      runDispatch: vi.fn(async () => ({
+        queuedFinal: false,
+        counts: { tool: 0, block: 0, final: 0 },
+      })),
+      history: {
+        isGroup: true,
+        historyKey: "room-1",
+        historyMap,
+        limit: 50,
+      },
+    });
+
+    expect(historyMap.get("room-1")).toEqual([]);
+  });
+
   it("cleans up pre-created dispatchers when session recording fails", async () => {
     const events: string[] = [];
     const recordError = new Error("session store failed");

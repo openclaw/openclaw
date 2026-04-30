@@ -25,14 +25,10 @@ import {
   toInternalMessageReceivedContext,
   triggerInternalHook,
 } from "openclaw/plugin-sdk/hook-runtime";
-import {
-  hasFinalInboundReplyDispatch,
-  runPreparedInboundReplyTurn,
-} from "openclaw/plugin-sdk/inbound-reply-dispatch";
+import { runPreparedInboundReplyTurn } from "openclaw/plugin-sdk/inbound-reply-dispatch";
 import { kindFromMime } from "openclaw/plugin-sdk/media-runtime";
 import {
   buildPendingHistoryContextFromMap,
-  clearHistoryEntriesIfEnabled,
   recordPendingHistoryEntryIfEnabled,
 } from "openclaw/plugin-sdk/reply-history";
 import { dispatchInboundMessage } from "openclaw/plugin-sdk/reply-runtime";
@@ -292,7 +288,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       },
     });
 
-    const { dispatchResult } = await runPreparedInboundReplyTurn({
+    await runPreparedInboundReplyTurn({
       channel: "signal",
       accountId: route.accountId,
       routeSessionKey: route.sessionKey,
@@ -331,6 +327,12 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
           logVerbose(`signal: failed updating session meta: ${String(err)}`);
         },
       },
+      history: {
+        isGroup: entry.isGroup,
+        historyKey,
+        historyMap: deps.groupHistories,
+        limit: deps.historyLimit,
+      },
       onPreDispatchFailure: () =>
         settleReplyDispatcher({
           dispatcher,
@@ -354,23 +356,6 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         }
       },
     });
-    if (!hasFinalInboundReplyDispatch(dispatchResult)) {
-      if (entry.isGroup && historyKey) {
-        clearHistoryEntriesIfEnabled({
-          historyMap: deps.groupHistories,
-          historyKey,
-          limit: deps.historyLimit,
-        });
-      }
-      return;
-    }
-    if (entry.isGroup && historyKey) {
-      clearHistoryEntriesIfEnabled({
-        historyMap: deps.groupHistories,
-        historyKey,
-        limit: deps.historyLimit,
-      });
-    }
   }
 
   const { debouncer: inboundDebouncer } = createChannelInboundDebouncer<SignalInboundEntry>({
