@@ -36,7 +36,10 @@ function setMockFetch(
 
 function createWebFetchToolForTest(params?: {
   firecrawlApiKey?: string;
-  ssrfPolicy?: { allowRfc2544BenchmarkRange?: boolean };
+  ssrfPolicy?: {
+    allowRfc2544BenchmarkRange?: boolean;
+    dangerouslyAllowPrivateNetwork?: boolean;
+  };
   cacheTtlMinutes?: number;
 }) {
   return createWebFetchTool({
@@ -177,5 +180,50 @@ describe("web_fetch SSRF protection", () => {
     expect(fetchSpy).toHaveBeenCalledTimes(1);
     const stricterTool = createWebFetchToolForTest({ cacheTtlMinutes: 1 });
     await expectBlockedUrl(stricterTool, url, /private|internal|blocked/i);
+  });
+
+  it("blocks RFC 1918 hosts by default and only passes them through when dangerouslyAllowPrivateNetwork is set", async () => {
+    // The default policy must still block the private-network lookup.
+    const privateHost = "internal.test";
+    lookupMock.mockResolvedValue([{ address: "10.0.0.5", family: 4 }]);
+    const defaultTool = createWebFetchToolForTest({ cacheTtlMinutes: 1 });
+    await expectBlockedUrl(defaultTool, `http://${privateHost}/`, /private|internal|blocked/i);
+
+    // Explicit opt-in lets the same private-network address through.
+    const fetchSpy = setMockFetch().mockResolvedValue(textResponse("private ok"));
+    const allowedTool = createWebFetchToolForTest({
+      ssrfPolicy: { dangerouslyAllowPrivateNetwork: true },
+      cacheTtlMinutes: 1,
+    });
+    const allowed = await allowedTool?.execute?.("call", {
+      url: `http://${privateHost}/`,
+    });
+    expect(allowed?.details).toMatchObject({
+      status: 200,
+      extractor: "raw",
+    });
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+
+    // A fresh tool without the flag must still block — the permissive cache
+    // entry must not leak into stricter sessions.
+    const stricterTool = createWebFetchToolForTest({ cacheTtlMinutes: 1 });
+    await expectBlockedUrl(stricterTool, `http://${privateHost}/`, /private|internal|blocked/i);
+  });
+
+  it("also allows loopback when dangerouslyAllowPrivateNetwork is set, matching the flag's name", async () => {
+    // When the operator opts in via dangerouslyAllowPrivateNetwork, the SSRF
+    // guard skips its hostname/private-IP rejection entirely, including
+    // loopback targets. This is the documented behavior — the flag is
+    // deliberately named "dangerously" because it relaxes *all* private-
+    // network protection, not just RFC 1918. Test it here so any future
+    // narrowing of the allow-flag semantics surfaces as a test failure.
+    const fetchSpy = setMockFetch().mockResolvedValue(textResponse("loopback ok"));
+    const tool = createWebFetchToolForTest({
+      ssrfPolicy: { dangerouslyAllowPrivateNetwork: true },
+      cacheTtlMinutes: 1,
+    });
+    const result = await tool?.execute?.("call", { url: "http://127.0.0.1/file" });
+    expect(result?.details).toMatchObject({ status: 200 });
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
 });

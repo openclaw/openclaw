@@ -579,6 +579,8 @@ export type ToolsConfig = {
       ssrfPolicy?: {
         /** Allow RFC 2544 benchmark range IPs (198.18.0.0/15) for fake-IP proxy compatibility (e.g., Clash TUN mode, Surge). */
         allowRfc2544BenchmarkRange?: boolean;
+        /** Allow access to private-network address ranges. Default is disabled; enable only for explicitly trusted private-network destinations such as self-hosted internal tools. */
+        dangerouslyAllowPrivateNetwork?: boolean;
       };
     };
   };

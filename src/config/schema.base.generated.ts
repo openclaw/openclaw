@@ -8610,6 +8610,12 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                         description:
                           "Allow RFC 2544 benchmark-range IPs (198.18.0.0/15) for fake-IP proxy compatibility such as Clash or Surge.",
                       },
+                      dangerouslyAllowPrivateNetwork: {
+                        type: "boolean",
+                        title: "Web Fetch Dangerously Allow Private Network",
+                        description:
+                          "Allows web_fetch to reach private-network address ranges (RFC 1918, link-local, loopback). Default is disabled; enable only for explicitly trusted private-network destinations such as self-hosted internal tools.",
+                      },
                     },
                     additionalProperties: false,
                     title: "Web Fetch SSRF Policy",
@@ -25666,6 +25672,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Web Fetch Allow RFC 2544 Benchmark Range",
       help: "Allow RFC 2544 benchmark-range IPs (198.18.0.0/15) for fake-IP proxy compatibility such as Clash or Surge.",
       tags: ["access", "tools"],
+    },
+    "tools.web.fetch.ssrfPolicy.dangerouslyAllowPrivateNetwork": {
+      label: "Web Fetch Dangerously Allow Private Network",
+      help: "Allows web_fetch to reach private-network address ranges (RFC 1918, link-local, loopback). Default is disabled; enable only for explicitly trusted private-network destinations such as self-hosted internal tools.",
+      tags: ["security", "access", "tools", "advanced"],
     },
     "gateway.controlUi.basePath": {
       label: "Control UI Base Path",

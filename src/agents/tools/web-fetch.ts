@@ -274,6 +274,7 @@ type WebFetchRuntimeParams = {
   config?: OpenClawConfig;
   ssrfPolicy?: {
     allowRfc2544BenchmarkRange?: boolean;
+    dangerouslyAllowPrivateNetwork?: boolean;
   };
   lookupFn?: LookupFn;
   resolveProviderFallback: () => Promise<WebFetchProviderFallback>;
@@ -387,10 +388,34 @@ async function maybeFetchProviderWebFetchPayload(
   return payload;
 }
 
+function buildFetchSsrfPolicy(flags: {
+  allowRfc2544BenchmarkRange: boolean;
+  dangerouslyAllowPrivateNetwork: boolean;
+}): { allowRfc2544BenchmarkRange?: boolean; dangerouslyAllowPrivateNetwork?: boolean } | undefined {
+  const policy: {
+    allowRfc2544BenchmarkRange?: boolean;
+    dangerouslyAllowPrivateNetwork?: boolean;
+  } = {};
+  if (flags.allowRfc2544BenchmarkRange) policy.allowRfc2544BenchmarkRange = true;
+  if (flags.dangerouslyAllowPrivateNetwork) policy.dangerouslyAllowPrivateNetwork = true;
+  // Return undefined when no flags are set so callers pass the same
+  // \`policy\` shape as before (no object), preserving the downstream
+  // guard's existing default-safe path.
+  return Object.keys(policy).length > 0 ? policy : undefined;
+}
+
 async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string, unknown>> {
   const allowRfc2544BenchmarkRange = params.ssrfPolicy?.allowRfc2544BenchmarkRange === true;
+  const dangerouslyAllowPrivateNetwork = params.ssrfPolicy?.dangerouslyAllowPrivateNetwork === true;
+  // Cache key includes every policy flag so responses fetched under a
+  // relaxed policy don't leak into sessions running with the default
+  // (restrictive) policy, which could happen if an operator toggles a
+  // flag at runtime via config reload.
+  const policySuffix =
+    (allowRfc2544BenchmarkRange ? ":allow-rfc2544" : "") +
+    (dangerouslyAllowPrivateNetwork ? ":allow-private-net" : "");
   const cacheKey = normalizeCacheKey(
-    `fetch:${params.url}:${params.extractMode}:${params.maxChars}${allowRfc2544BenchmarkRange ? ":allow-rfc2544" : ""}`,
+    `fetch:${params.url}:${params.extractMode}:${params.maxChars}${policySuffix}`,
   );
   const cached = readCache(FETCH_CACHE, cacheKey);
   if (cached) {
@@ -418,7 +443,10 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
       maxRedirects: params.maxRedirects,
       timeoutSeconds: params.timeoutSeconds,
       lookupFn: params.lookupFn,
-      policy: allowRfc2544BenchmarkRange ? { allowRfc2544BenchmarkRange } : undefined,
+      policy: buildFetchSsrfPolicy({
+        allowRfc2544BenchmarkRange,
+        dangerouslyAllowPrivateNetwork,
+      }),
       init: {
         headers: {
           Accept: "text/markdown, text/html;q=0.9, */*;q=0.1",

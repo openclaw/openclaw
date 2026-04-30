@@ -353,6 +353,7 @@ export const ToolsWebFetchSchema = z
     ssrfPolicy: z
       .object({
         allowRfc2544BenchmarkRange: z.boolean().optional(),
+        dangerouslyAllowPrivateNetwork: z.boolean().optional(),
       })
       .strict()
       .optional(),
