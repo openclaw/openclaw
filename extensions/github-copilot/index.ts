@@ -169,8 +169,12 @@ async function fetchCopilotModelCatalog(params: {
     : (() => {
         if (payload && typeof payload === "object") {
           const record = payload as { data?: unknown; models?: unknown };
-          if (Array.isArray(record.data)) return record.data;
-          if (Array.isArray(record.models)) return record.models;
+          if (Array.isArray(record.data)) {
+            return record.data;
+          }
+          if (Array.isArray(record.models)) {
+            return record.models;
+          }
         }
         return [];
       })();
