@@ -38,6 +38,23 @@ function writeBundledChannelOwnerPlugin(
   });
 }
 
+function writeBundledProviderPlugin(
+  root: string,
+  id: string,
+  providers: string[],
+  dependencies: Record<string, string>,
+) {
+  writeJson(path.join(root, "dist", "extensions", id, "package.json"), {
+    dependencies,
+  });
+  writeJson(path.join(root, "dist", "extensions", id, "openclaw.plugin.json"), {
+    id,
+    providers,
+    enabledByDefault: true,
+    configSchema: { type: "object" },
+  });
+}
+
 function writeDefaultEnabledBundledChannelPlugin(
   root: string,
   id: string,
@@ -511,6 +528,87 @@ describe("doctor bundled plugin runtime deps", () => {
           enabled: true,
           allow: ["bedrock"],
           entries: { bedrock: { enabled: true } },
+        },
+      },
+      installDeps: (params) => {
+        installed.push(params);
+        materializeRuntimeDeps(params);
+      },
+    });
+
+    expect(installed).toEqual([
+      {
+        installRoot: resolveBundledRuntimeDependencyPackageInstallRoot(root),
+        missingSpecs: ["bedrock-only@1.0.0"],
+        installSpecs: ["bedrock-only@1.0.0"],
+      },
+    ]);
+  });
+
+  it("repairs configured provider deps", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-bundled-"));
+    writeJson(path.join(root, "package.json"), { name: "openclaw" });
+    writeBundledProviderPlugin(root, "anthropic-vertex", ["anthropic-vertex"], {
+      "@anthropic-ai/vertex-sdk": "^0.16.0",
+    });
+    const installed = createInstalledRuntimeDeps();
+
+    await maybeRepairBundledPluginRuntimeDeps({
+      runtime: createRuntime(),
+      prompter: createNonInteractivePrompter(),
+      packageRoot: root,
+      config: {
+        plugins: { enabled: true },
+        agents: {
+          defaults: {
+            model: "anthropic-vertex/claude-sonnet-4-6",
+          },
+        },
+      },
+      installDeps: (params) => {
+        installed.push(params);
+        materializeRuntimeDeps(params);
+      },
+    });
+
+    expect(installed).toEqual([
+      {
+        installRoot: resolveBundledRuntimeDependencyPackageInstallRoot(root),
+        missingSpecs: ["@anthropic-ai/vertex-sdk@^0.16.0"],
+        installSpecs: ["@anthropic-ai/vertex-sdk@^0.16.0"],
+      },
+    ]);
+  });
+
+  it("repairs configured provider deps from provider aliases and subagent defaults", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-bundled-"));
+    writeJson(path.join(root, "package.json"), { name: "openclaw" });
+    writeBundledProviderPlugin(root, "amazon-bedrock", ["amazon-bedrock"], {
+      "bedrock-only": "1.0.0",
+    });
+    const installed = createInstalledRuntimeDeps();
+
+    await maybeRepairBundledPluginRuntimeDeps({
+      runtime: createRuntime(),
+      prompter: createNonInteractivePrompter(),
+      packageRoot: root,
+      config: {
+        plugins: { enabled: true },
+        models: {
+          providers: {
+            "aws-bedrock": {
+              baseUrl: "",
+              auth: "aws-sdk",
+              models: [],
+            },
+          },
+        },
+        agents: {
+          defaults: {
+            subagents: {
+              model: "bedrock/claude-sonnet-4-6",
+            },
+          },
         },
       },
       installDeps: (params) => {

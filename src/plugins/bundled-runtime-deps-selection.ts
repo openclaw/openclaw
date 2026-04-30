@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { normalizeProviderId } from "../agents/provider-id.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { readRuntimeDepsJsonObject, type JsonObject } from "./bundled-runtime-deps-json.js";
@@ -207,6 +208,88 @@ function passesRuntimeDepsPluginPolicy(params: {
   );
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function addConfiguredProviderId(providerIds: Set<string>, value: unknown): void {
+  if (typeof value !== "string") {
+    return;
+  }
+  const normalized = normalizeProviderId(value);
+  if (normalized) {
+    providerIds.add(normalized);
+  }
+}
+
+function addConfiguredProviderFromModelRef(providerIds: Set<string>, value: unknown): void {
+  if (typeof value !== "string") {
+    return;
+  }
+  const providerId = value.split("/", 1)[0]?.trim();
+  addConfiguredProviderId(providerIds, providerId);
+}
+
+function addConfiguredProvidersFromModelConfig(providerIds: Set<string>, value: unknown): void {
+  if (typeof value === "string") {
+    addConfiguredProviderFromModelRef(providerIds, value);
+    return;
+  }
+  if (!isRecord(value)) {
+    return;
+  }
+  addConfiguredProviderFromModelRef(providerIds, value.primary);
+  if (Array.isArray(value.fallbacks)) {
+    for (const fallback of value.fallbacks) {
+      addConfiguredProviderFromModelRef(providerIds, fallback);
+    }
+  }
+}
+
+function collectConfiguredProviderIds(config: OpenClawConfig): Set<string> {
+  const providerIds = new Set<string>();
+  for (const providerId of Object.keys(config.models?.providers ?? {})) {
+    addConfiguredProviderId(providerIds, providerId);
+  }
+  for (const profile of Object.values(config.auth?.profiles ?? {})) {
+    addConfiguredProviderId(providerIds, profile.provider);
+  }
+  for (const providerId of Object.keys(config.auth?.order ?? {})) {
+    addConfiguredProviderId(providerIds, providerId);
+  }
+
+  const defaults = config.agents?.defaults;
+  addConfiguredProvidersFromModelConfig(providerIds, defaults?.model);
+  addConfiguredProvidersFromModelConfig(providerIds, defaults?.imageModel);
+  addConfiguredProvidersFromModelConfig(providerIds, defaults?.imageGenerationModel);
+  addConfiguredProvidersFromModelConfig(providerIds, defaults?.videoGenerationModel);
+  addConfiguredProvidersFromModelConfig(providerIds, defaults?.musicGenerationModel);
+  addConfiguredProvidersFromModelConfig(providerIds, defaults?.pdfModel);
+  addConfiguredProvidersFromModelConfig(providerIds, defaults?.subagents?.model);
+  for (const providerId of Object.keys(defaults?.models ?? {})) {
+    addConfiguredProviderFromModelRef(providerIds, providerId);
+  }
+
+  for (const agent of config.agents?.list ?? []) {
+    addConfiguredProvidersFromModelConfig(providerIds, agent.model);
+    addConfiguredProvidersFromModelConfig(providerIds, agent.subagents?.model);
+  }
+  return providerIds;
+}
+
+function isBundledProviderConfiguredForRuntimeDeps(params: {
+  config: OpenClawConfig;
+  providers: readonly string[];
+}): boolean {
+  if (params.providers.length === 0) {
+    return false;
+  }
+  const configuredProviderIds = collectConfiguredProviderIds(params.config);
+  return params.providers.some((provider) =>
+    configuredProviderIds.has(normalizeProviderId(provider)),
+  );
+}
+
 export function isBundledPluginConfiguredForRuntimeDeps(params: {
   config: OpenClawConfig;
   plugins: NormalizedPluginsConfig;
@@ -280,7 +363,15 @@ export function isBundledPluginConfiguredForRuntimeDeps(params: {
   if (hasConfiguredChannel) {
     return true;
   }
-  return manifest.enabledByDefault;
+  if (
+    isBundledProviderConfiguredForRuntimeDeps({
+      config: params.config,
+      providers: manifest.providers,
+    })
+  ) {
+    return true;
+  }
+  return manifest.enabledByDefault && manifest.providers.length === 0;
 }
 
 function isBundledPluginExplicitlyDisabledForRuntimeDeps(params: {
