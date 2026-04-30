@@ -406,12 +406,22 @@ function resolveMediaRequestOverrides(config: MediaUnderstandingConfig | undefin
   };
 }
 
+function isMissingProviderApiKeyError(err: unknown, providerId: string): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return (
+    message.includes(`No API key found for provider "${providerId}"`) ||
+    message.includes(`No API key resolved for provider "${providerId}"`)
+  );
+}
+
 async function resolveProviderExecutionAuth(params: {
   providerId: string;
+  provider?: MediaUnderstandingProvider;
   cfg: OpenClawConfig;
   entry: MediaUnderstandingModelConfig;
   agentDir?: string;
 }) {
+  const providerConfig = params.cfg.models?.providers?.[params.providerId];
   const literalApiKey = resolveLiteralProviderApiKey({
     cfg: params.cfg,
     providerId: params.providerId,
@@ -422,28 +432,66 @@ async function resolveProviderExecutionAuth(params: {
         provider: params.providerId,
         primaryApiKey: literalApiKey,
       }),
-      providerConfig: params.cfg.models?.providers?.[params.providerId],
+      providerConfig,
     };
   }
-  const { requireApiKey, resolveApiKeyForProvider } = await loadModelAuth();
-  const auth = await resolveApiKeyForProvider({
-    provider: params.providerId,
-    cfg: params.cfg,
-    profileId: params.entry.profile,
-    preferredProfile: params.entry.preferredProfile,
-    agentDir: params.agentDir,
-  });
-  return {
-    apiKeys: collectProviderApiKeysForExecution({
+  const resolveMediaProviderSyntheticAuth = () => {
+    const syntheticAuth = params.provider?.resolveSyntheticAuth?.({
+      config: params.cfg,
       provider: params.providerId,
-      primaryApiKey: requireApiKey(auth, params.providerId),
-    }),
-    providerConfig: params.cfg.models?.providers?.[params.providerId],
+      providerConfig,
+    });
+    return syntheticAuth?.apiKey?.trim() || undefined;
   };
+  if (!providerConfig) {
+    const syntheticApiKey = resolveMediaProviderSyntheticAuth();
+    if (syntheticApiKey) {
+      return {
+        apiKeys: collectProviderApiKeysForExecution({
+          provider: params.providerId,
+          primaryApiKey: syntheticApiKey,
+        }),
+        providerConfig,
+      };
+    }
+  }
+  const { requireApiKey, resolveApiKeyForProvider } = await loadModelAuth();
+  try {
+    const auth = await resolveApiKeyForProvider({
+      provider: params.providerId,
+      cfg: params.cfg,
+      profileId: params.entry.profile,
+      preferredProfile: params.entry.preferredProfile,
+      agentDir: params.agentDir,
+    });
+    return {
+      apiKeys: collectProviderApiKeysForExecution({
+        provider: params.providerId,
+        primaryApiKey: requireApiKey(auth, params.providerId),
+      }),
+      providerConfig,
+    };
+  } catch (err) {
+    if (!isMissingProviderApiKeyError(err, params.providerId)) {
+      throw err;
+    }
+    const syntheticApiKey = resolveMediaProviderSyntheticAuth();
+    if (syntheticApiKey) {
+      return {
+        apiKeys: collectProviderApiKeysForExecution({
+          provider: params.providerId,
+          primaryApiKey: syntheticApiKey,
+        }),
+        providerConfig,
+      };
+    }
+    throw err;
+  }
 }
 
 async function resolveProviderExecutionContext(params: {
   providerId: string;
+  provider?: MediaUnderstandingProvider;
   cfg: OpenClawConfig;
   entry: MediaUnderstandingModelConfig;
   config?: MediaUnderstandingConfig;
@@ -451,6 +499,7 @@ async function resolveProviderExecutionContext(params: {
 }) {
   const { apiKeys, providerConfig } = await resolveProviderExecutionAuth({
     providerId: params.providerId,
+    provider: params.provider,
     cfg: params.cfg,
     entry: params.entry,
     agentDir: params.agentDir,
@@ -619,6 +668,7 @@ export async function runProviderEntry(params: {
     assertMinAudioSize({ size: media.size, attachmentIndex: params.attachmentIndex });
     const { apiKeys, baseUrl, headers, request } = await resolveProviderExecutionContext({
       providerId,
+      provider,
       cfg,
       entry,
       config: params.config,
@@ -689,6 +739,7 @@ export async function runProviderEntry(params: {
   }
   const { apiKeys, baseUrl, headers, request } = await resolveProviderExecutionContext({
     providerId,
+    provider,
     cfg,
     entry,
     config: params.config,
