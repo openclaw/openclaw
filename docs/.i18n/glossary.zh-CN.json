@@ -622,5 +622,45 @@
   {
     "source": "/cli/config",
     "target": "/cli/config"
+  },
+  {
+    "source": "Media understanding pipeline",
+    "target": "媒体理解管线"
+  },
+  {
+    "source": "PDF tool",
+    "target": "PDF 工具"
+  },
+  {
+    "source": "Background tasks",
+    "target": "后台任务"
+  },
+  {
+    "source": "ACP agents",
+    "target": "ACP agents"
+  },
+  {
+    "source": "Command queue",
+    "target": "命令队列"
+  },
+  {
+    "source": "Messages",
+    "target": "消息"
+  },
+  {
+    "source": "Channel turn kernel",
+    "target": "渠道回合内核"
+  },
+  {
+    "source": "Building channel plugins",
+    "target": "构建渠道插件"
+  },
+  {
+    "source": "Plugin runtime helpers",
+    "target": "插件运行时辅助工具"
+  },
+  {
+    "source": "Plugin internals",
+    "target": "插件内部机制"
   }
 ]

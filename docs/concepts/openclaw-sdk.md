@@ -21,6 +21,27 @@ resources.
   register providers, channels, tools, hooks, or trusted runtimes.
 </Note>
 
+## Boundary Checklist
+
+Use `@openclaw/sdk` when the code is an external client of a running Gateway.
+That includes apps, scripts, dashboards, CI jobs, IDE extensions, and
+OpenMeow/OpenCoven-style dogfood clients.
+
+External App SDK examples should:
+
+- Import from `@openclaw/sdk`
+- Connect through Gateway URL, token, password, or a custom transport
+- Use Gateway-backed namespaces such as `oc.agents`, `oc.sessions`, `oc.runs`,
+  `oc.models`, `oc.tools`, and `oc.approvals`
+- Treat raw Gateway events as an advanced escape hatch and prefer normalized
+  SDK events for UI state
+- Avoid `openclaw/plugin-sdk/*`, `src/**`, plugin runtime APIs, and bundled
+  plugin internals
+
+Use the [Plugin SDK](/plugins/sdk-overview) only when the code is loaded by
+OpenClaw as trusted in-process plugin code that registers providers, channels,
+tools, hooks, services, or runtimes.
+
 ## What Ships Today
 
 `@openclaw/sdk` ships with:
@@ -88,7 +109,9 @@ const oc = new OpenClaw({
 ## Run An Agent
 
 Use `oc.agents.get(id)` when the app wants an agent handle, then call
-`agent.run()`.
+`agent.run()`. This is the correct pattern for external clients such as
+OpenMeow, OpenCoven examples, local scripts, or CI jobs; those clients should
+not import Plugin SDK subpaths or OpenClaw core internals.
 
 ```typescript
 const agent = await oc.agents.get("main");
