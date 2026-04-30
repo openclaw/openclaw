@@ -29,9 +29,12 @@ describe("handleVesicleInboundMessage", () => {
   it("routes direct messages through the native chat GUID target and sends replies there", async () => {
     const runtime = createPluginRuntimeMock();
     const sendText = vi.fn(async () => undefined);
-    const dispatch = vi.fn(async (params: Parameters<typeof dispatchInboundReplyWithBase>[0]) => {
-      await params.deliver({ text: "pong" });
-    }) as typeof dispatchInboundReplyWithBase;
+    const dispatchMock = vi.fn(
+      async (params: Parameters<typeof dispatchInboundReplyWithBase>[0]) => {
+        await params.deliver({ text: "pong" });
+      },
+    );
+    const dispatch = dispatchMock as unknown as typeof dispatchInboundReplyWithBase;
 
     await handleVesicleInboundMessage({
       account,
@@ -57,8 +60,8 @@ describe("handleVesicleInboundMessage", () => {
         id: "+15551234567",
       },
     });
-    expect(dispatch).toHaveBeenCalledTimes(1);
-    expect(dispatch.mock.calls[0]?.[0].ctxPayload).toMatchObject({
+    expect(dispatchMock).toHaveBeenCalledTimes(1);
+    expect(dispatchMock.mock.calls[0]?.[0].ctxPayload).toMatchObject({
       BodyForAgent: "ping",
       To: "chat_guid:iMessage;-;+15551234567",
       From: "vesicle:+15551234567",
@@ -73,7 +76,8 @@ describe("handleVesicleInboundMessage", () => {
   });
 
   it("drops messages sent by the local Vesicle account", async () => {
-    const dispatch = vi.fn() as typeof dispatchInboundReplyWithBase;
+    const dispatchMock = vi.fn();
+    const dispatch = dispatchMock as unknown as typeof dispatchInboundReplyWithBase;
 
     await handleVesicleInboundMessage({
       account,
@@ -90,6 +94,6 @@ describe("handleVesicleInboundMessage", () => {
       },
     });
 
-    expect(dispatch).not.toHaveBeenCalled();
+    expect(dispatchMock).not.toHaveBeenCalled();
   });
 });
