@@ -2021,12 +2021,25 @@ export const chatHandlers: GatewayRequestHandlers = {
           agentId,
         }));
       } catch (err) {
+        const isServerFault = err instanceof MediaOffloadError;
+        // String(err) drops err.stack, so a synchronous RangeError ("Maximum
+        // call stack size exceeded") or any other Error thrown deep inside
+        // parseMessageWithAttachments / prestageMediaPathOffloads becomes
+        // unattributable in production. Log the full stack here so operators
+        // can find the recursing frame; keep the response surface minimal.
+        const stackText =
+          err instanceof Error ? (err.stack ?? `${err.name}: ${err.message}`) : String(err);
+        context.logGateway.error(
+          `chat.send: parseMessageWithAttachments failed (kind=${
+            isServerFault ? "media-offload" : "invalid"
+          }): ${stackText}`,
+        );
         respond(
           false,
           undefined,
           errorShape(
-            err instanceof MediaOffloadError ? ErrorCodes.UNAVAILABLE : ErrorCodes.INVALID_REQUEST,
-            String(err),
+            isServerFault ? ErrorCodes.UNAVAILABLE : ErrorCodes.INVALID_REQUEST,
+            err instanceof Error ? `${err.name}: ${err.message}` : String(err),
           ),
         );
         return;

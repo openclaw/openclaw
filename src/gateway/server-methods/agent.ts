@@ -633,12 +633,23 @@ export const agentHandlers: GatewayRequestHandlers = {
         // etc.). Map it to UNAVAILABLE so clients can retry without treating it as
         // a bad request. All other errors are input-validation failures → 4xx.
         const isServerFault = err instanceof MediaOffloadError;
+        // String(err) drops err.stack, leaving operators with no way to locate
+        // a synchronous Error thrown deep inside parseMessageWithAttachments
+        // (e.g. RangeError "Maximum call stack size exceeded"). Log the full
+        // stack here; keep the response surface minimal.
+        const stackText =
+          err instanceof Error ? (err.stack ?? `${err.name}: ${err.message}`) : String(err);
+        context.logGateway.error(
+          `agent: parseMessageWithAttachments failed (kind=${
+            isServerFault ? "media-offload" : "invalid"
+          }): ${stackText}`,
+        );
         respond(
           false,
           undefined,
           errorShape(
             isServerFault ? ErrorCodes.UNAVAILABLE : ErrorCodes.INVALID_REQUEST,
-            String(err),
+            err instanceof Error ? `${err.name}: ${err.message}` : String(err),
           ),
         );
         return;
