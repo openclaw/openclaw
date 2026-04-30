@@ -213,6 +213,16 @@ export function createFollowupRunner(params: {
             sessionKey: queued.run.sessionKey,
           }),
           run: async (provider, model, runOptions) => {
+            // Mirror agent-runner-execution.ts so the lightweight followup
+            // path also fires onModelSelected. Channels (e.g. Feishu's
+            // reply-dispatcher) hang the live thinking-card / response-prefix
+            // logic off this hook; without it the user sees no UX between
+            // typing emoji and final reply.
+            opts?.onModelSelected?.({
+              provider,
+              model,
+              thinkLevel: queued.run.thinkLevel,
+            });
             const authProfile = resolveRunAuthProfile(queued.run, provider);
             let attemptCompactionCount = 0;
             try {

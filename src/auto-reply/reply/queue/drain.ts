@@ -122,6 +122,13 @@ export function scheduleFollowupDrain(
           }
 
           const routing = resolveOriginRoutingMetadata(items);
+          // Carry the latest queued item's messageId on the aggregate followup
+          // so channel-side UX (e.g. Feishu's full followup dispatcher) can
+          // attach a streaming/thinking card to a concrete provider message.
+          // Without this, channels that require messageId for the full
+          // followup path silently fall back to the lightweight path,
+          // skipping the streaming card and onVisibleOutputStarted hook.
+          const latestMessageId = items.at(-1)?.messageId;
 
           const prompt = buildCollectPrompt({
             title: "[Queued messages while agent was busy]",
@@ -133,6 +140,7 @@ export function scheduleFollowupDrain(
             prompt,
             run,
             enqueuedAt: Date.now(),
+            ...(latestMessageId ? { messageId: latestMessageId } : {}),
             ...routing,
           });
           queue.items.splice(0, items.length);
