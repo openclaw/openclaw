@@ -100,6 +100,22 @@ Max total characters injected across all workspace bootstrap files. Default: `60
 }
 ```
 
+### `agents.defaults.bootstrapTier`
+
+Controls which standard workspace bootstrap files are injected into ordinary
+agent turns. Default: `"standard"`.
+
+- `"standard"`: preserve the full ordinary-session bootstrap set.
+- `"minimal"`: inject only `AGENTS.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`,
+  and `BOOTSTRAP.md`. Use this for constrained local models that struggle with
+  prompt pressure.
+
+```json5
+{
+  agents: { defaults: { bootstrapTier: "minimal" } },
+}
+```
+
 ### `agents.defaults.bootstrapPromptTruncationWarning`
 
 Controls agent-visible warning text when bootstrap context is truncated.

@@ -964,6 +964,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Max characters of each workspace bootstrap file injected into the system prompt before truncation (default: 12000).",
   "agents.defaults.bootstrapTotalMaxChars":
     "Max total characters across all injected workspace bootstrap files (default: 60000).",
+  "agents.defaults.bootstrapTier":
+    'Workspace bootstrap file selection profile. "standard" (default) preserves the full ordinary-session bootstrap set; "minimal" keeps only AGENTS.md, TOOLS.md, IDENTITY.md, USER.md, and BOOTSTRAP.md for constrained local-model sessions.',
   "agents.defaults.experimental":
     "Experimental agent-default flags. Keep these off unless you are intentionally testing a preview surface.",
   "agents.defaults.experimental.localModelLean":

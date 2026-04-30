@@ -171,6 +171,32 @@ describe("resolveBootstrapContextForRun", () => {
     expect(result.contextFiles.some((file) => file.path.endsWith("AGENTS.md"))).toBe(true);
   });
 
+  it("uses minimal bootstrap tier files when configured", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
+    await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "rules", "utf8");
+    await fs.writeFile(path.join(workspaceDir, "SOUL.md"), "persona", "utf8");
+    await fs.writeFile(path.join(workspaceDir, "TOOLS.md"), "tools", "utf8");
+    await fs.writeFile(path.join(workspaceDir, "IDENTITY.md"), "identity", "utf8");
+    await fs.writeFile(path.join(workspaceDir, "USER.md"), "user", "utf8");
+    await fs.writeFile(path.join(workspaceDir, "HEARTBEAT.md"), "heartbeat", "utf8");
+    await fs.writeFile(path.join(workspaceDir, "BOOTSTRAP.md"), "ritual", "utf8");
+    await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "memory", "utf8");
+
+    const files = await resolveBootstrapFilesForRun({
+      workspaceDir,
+      sessionKey: "agent:default:chat:main",
+      config: { agents: { defaults: { bootstrapTier: "minimal" } } },
+    });
+
+    expect(files.map((file) => file.name)).toEqual([
+      "AGENTS.md",
+      "TOOLS.md",
+      "IDENTITY.md",
+      "USER.md",
+      "BOOTSTRAP.md",
+    ]);
+  });
+
   it("uses heartbeat-only bootstrap files in lightweight heartbeat mode", async () => {
     const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
     await fs.writeFile(path.join(workspaceDir, "HEARTBEAT.md"), "check inbox", "utf8");

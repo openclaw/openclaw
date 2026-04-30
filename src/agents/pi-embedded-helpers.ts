@@ -6,9 +6,11 @@ export {
   ensureSessionHeader,
   resolveBootstrapMaxChars,
   resolveBootstrapPromptTruncationWarningMode,
+  resolveBootstrapTier,
   resolveBootstrapTotalMaxChars,
   stripThoughtSignatures,
 } from "./pi-embedded-helpers/bootstrap.js";
+export type { BootstrapTier } from "./pi-embedded-helpers/bootstrap.js";
 export {
   BILLING_ERROR_USER_MESSAGE,
   classifyProviderRuntimeFailureKind,

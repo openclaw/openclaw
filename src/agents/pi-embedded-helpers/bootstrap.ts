@@ -103,6 +103,8 @@ type TrimBootstrapResult = {
   originalLength: number;
 };
 
+export type BootstrapTier = "minimal" | "standard";
+
 export function resolveBootstrapMaxChars(cfg?: OpenClawConfig): number {
   const raw = cfg?.agents?.defaults?.bootstrapMaxChars;
   if (typeof raw === "number" && Number.isFinite(raw) && raw > 0) {
@@ -117,6 +119,10 @@ export function resolveBootstrapTotalMaxChars(cfg?: OpenClawConfig): number {
     return Math.floor(raw);
   }
   return DEFAULT_BOOTSTRAP_TOTAL_MAX_CHARS;
+}
+
+export function resolveBootstrapTier(cfg?: OpenClawConfig): BootstrapTier {
+  return cfg?.agents?.defaults?.bootstrapTier === "minimal" ? "minimal" : "standard";
 }
 
 export function resolveBootstrapPromptTruncationWarningMode(

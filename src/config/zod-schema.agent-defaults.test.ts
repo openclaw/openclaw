@@ -64,6 +64,17 @@ describe("agent defaults schema", () => {
     expect(result.experimental?.localModelLean).toBe(true);
   });
 
+  it("accepts bootstrapTier values", () => {
+    expect(AgentDefaultsSchema.parse({ bootstrapTier: "minimal" })?.bootstrapTier).toBe("minimal");
+    expect(AgentDefaultsSchema.parse({ bootstrapTier: "standard" })?.bootstrapTier).toBe(
+      "standard",
+    );
+  });
+
+  it("rejects unknown bootstrapTier values", () => {
+    expect(() => AgentDefaultsSchema.parse({ bootstrapTier: "full" })).toThrow();
+  });
+
   it("accepts contextInjection: always", () => {
     const result = AgentDefaultsSchema.parse({ contextInjection: "always" })!;
     expect(result.contextInjection).toBe("always");

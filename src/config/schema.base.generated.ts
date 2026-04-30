@@ -3725,6 +3725,21 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 description:
                   "Max total characters across all injected workspace bootstrap files (default: 60000).",
               },
+              bootstrapTier: {
+                anyOf: [
+                  {
+                    type: "string",
+                    const: "minimal",
+                  },
+                  {
+                    type: "string",
+                    const: "standard",
+                  },
+                ],
+                title: "Bootstrap Tier",
+                description:
+                  'Workspace bootstrap file selection profile. "standard" (default) preserves the full ordinary-session bootstrap set; "minimal" keeps only AGENTS.md, TOOLS.md, IDENTITY.md, USER.md, and BOOTSTRAP.md for constrained local-model sessions.',
+              },
               experimental: {
                 type: "object",
                 properties: {
@@ -26198,6 +26213,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Bootstrap Total Max Chars",
       help: "Max total characters across all injected workspace bootstrap files (default: 60000).",
       tags: ["performance"],
+    },
+    "agents.defaults.bootstrapTier": {
+      label: "Bootstrap Tier",
+      help: 'Workspace bootstrap file selection profile. "standard" (default) preserves the full ordinary-session bootstrap set; "minimal" keeps only AGENTS.md, TOOLS.md, IDENTITY.md, USER.md, and BOOTSTRAP.md for constrained local-model sessions.',
+      tags: ["advanced"],
     },
     "agents.defaults.experimental": {
       label: "Experimental Agent Flags",

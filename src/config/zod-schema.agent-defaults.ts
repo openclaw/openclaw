@@ -94,6 +94,7 @@ export const AgentDefaultsSchema = z
       .optional(),
     bootstrapMaxChars: z.number().int().positive().optional(),
     bootstrapTotalMaxChars: z.number().int().positive().optional(),
+    bootstrapTier: z.union([z.literal("minimal"), z.literal("standard")]).optional(),
     experimental: z
       .object({
         localModelLean: z.boolean().optional(),
@@ -231,9 +232,7 @@ export const AgentDefaultsSchema = z
       ])
       .optional(),
     verboseDefault: z.union([z.literal("off"), z.literal("on"), z.literal("full")]).optional(),
-    reasoningDefault: z
-      .union([z.literal("off"), z.literal("on"), z.literal("stream")])
-      .optional(),
+    reasoningDefault: z.union([z.literal("off"), z.literal("on"), z.literal("stream")]).optional(),
     elevatedDefault: z
       .union([z.literal("off"), z.literal("on"), z.literal("ask"), z.literal("full")])
       .optional(),

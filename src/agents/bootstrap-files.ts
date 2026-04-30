@@ -11,6 +11,7 @@ import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
 import {
   buildBootstrapContextFiles,
   resolveBootstrapMaxChars,
+  resolveBootstrapTier,
   resolveBootstrapTotalMaxChars,
 } from "./pi-embedded-helpers.js";
 import {
@@ -245,7 +246,11 @@ export async function resolveBootstrapFilesForRun(params: {
       })
     : await loadWorkspaceBootstrapFiles(params.workspaceDir);
   const bootstrapFiles = applyContextModeFilter({
-    files: filterBootstrapFilesForSession(rawFiles, sessionKey),
+    files: filterBootstrapFilesForSession(
+      rawFiles,
+      sessionKey,
+      resolveBootstrapTier(params.config),
+    ),
     contextMode: params.contextMode,
     runKind: params.runKind,
   });
