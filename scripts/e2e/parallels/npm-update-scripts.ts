@@ -11,6 +11,7 @@ export interface NpmUpdateScriptInput {
 
 export function macosUpdateScript(input: NpmUpdateScriptInput): string {
   return String.raw`set -euo pipefail
+export PATH=/opt/homebrew/bin:/opt/homebrew/opt/node/bin:/opt/homebrew/sbin:/usr/bin:/bin:/usr/sbin:/sbin
 scrub_future_plugin_entries() {
   python3 - <<'PY'
 import json
@@ -63,7 +64,7 @@ wait_for_gateway() {
 }
 scrub_future_plugin_entries
 stop_openclaw_gateway_processes
-OPENCLAW_DISABLE_BUNDLED_PLUGINS=1 /opt/homebrew/bin/openclaw update --tag ${shellQuote(input.updateTarget)} --yes --json
+OPENCLAW_DISABLE_BUNDLED_PLUGINS=1 /opt/homebrew/bin/openclaw update --tag ${shellQuote(input.updateTarget)} --yes --json --no-restart
 ${posixVersionCheck("/opt/homebrew/bin/openclaw", input.expectedNeedle)}
 start_openclaw_gateway
 wait_for_gateway
@@ -100,11 +101,15 @@ function Stop-OpenClawGatewayProcesses {
   Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
     Where-Object { $_.CommandLine -match 'openclaw.*gateway' } |
     ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+  Get-NetTCPConnection -LocalPort 18789 -State Listen -ErrorAction SilentlyContinue |
+    Select-Object -ExpandProperty OwningProcess -Unique |
+    ForEach-Object { Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue }
+  Start-Sleep -Seconds 2
 }
 Remove-FuturePluginEntries
 Stop-OpenClawGatewayProcesses
 $env:OPENCLAW_DISABLE_BUNDLED_PLUGINS = '1'
-Invoke-OpenClaw update --tag ${psSingleQuote(input.updateTarget)} --yes --json
+Invoke-OpenClaw update --tag ${psSingleQuote(input.updateTarget)} --yes --json --no-restart
 if ($LASTEXITCODE -ne 0) { throw "openclaw update failed with exit code $LASTEXITCODE" }
 $version = Invoke-OpenClaw --version
 $version
@@ -120,6 +125,7 @@ Invoke-OpenClaw agent --local --agent main --session-id parallels-npm-update-win
 
 export function linuxUpdateScript(input: NpmUpdateScriptInput): string {
   return String.raw`set -euo pipefail
+export PATH=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/snap/bin
 scrub_future_plugin_entries() {
   node - <<'JS'
 const fs = require("node:fs");
@@ -167,7 +173,7 @@ wait_for_gateway() {
 }
 scrub_future_plugin_entries
 stop_openclaw_gateway_processes
-OPENCLAW_DISABLE_BUNDLED_PLUGINS=1 openclaw update --tag ${shellQuote(input.updateTarget)} --yes --json
+OPENCLAW_DISABLE_BUNDLED_PLUGINS=1 openclaw update --tag ${shellQuote(input.updateTarget)} --yes --json --no-restart
 ${posixVersionCheck("openclaw", input.expectedNeedle)}
 start_openclaw_gateway
 wait_for_gateway
