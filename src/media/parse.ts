@@ -34,8 +34,14 @@ export function normalizeMediaSource(src: string) {
   return src.startsWith("file://") ? src.replace("file://", "") : src;
 }
 
+// Matches a file-extension boundary followed by non-path serialized JSON noise
+// (e.g. `.png"}],"details":...`). Captures the path up to and including the ext.
+const TRAILING_JSON_AFTER_EXT_RE = /^(.*\.\w{1,10})["'}\]|,].*$/s;
+
 function cleanCandidate(raw: string) {
-  return raw.replace(/^[`"'[{(]+/, "").replace(/[`"'\\})\],]+$/, "");
+  const stripped = raw.replace(/^[`"'[{(]+/, "").replace(/[`"'\\})\],]+$/, "");
+  const jsonMatch = TRAILING_JSON_AFTER_EXT_RE.exec(stripped);
+  return jsonMatch?.[1] ?? stripped;
 }
 
 const WINDOWS_DRIVE_RE = /^[a-zA-Z]:[\\/]/;
