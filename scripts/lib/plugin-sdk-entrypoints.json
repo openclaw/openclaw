@@ -284,6 +284,7 @@
   "telegram-account",
   "telegram-command-config",
   "text-autolink-runtime",
+  "task-events",
   "tool-payload",
   "tool-send",
   "webhook-ingress",

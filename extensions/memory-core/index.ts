@@ -12,6 +12,7 @@ import { registerBuiltInMemoryEmbeddingProviders } from "./src/memory/provider-a
 import { buildPromptSection } from "./src/prompt-section.js";
 import { listMemoryCorePublicArtifacts } from "./src/public-artifacts.js";
 import { memoryRuntime } from "./src/runtime-provider.js";
+import { registerTaskOutcomeRecorder } from "./src/task-outcome-recorder.js";
 import { createMemoryGetTool, createMemorySearchTool } from "./src/tools.js";
 export {
   buildMemoryFlushPlan,
@@ -30,6 +31,7 @@ export default definePluginEntry({
     registerBuiltInMemoryEmbeddingProviders(api);
     registerShortTermPromotionDreaming(api);
     registerDreamingCommand(api);
+    registerTaskOutcomeRecorder(api);
     api.registerMemoryCapability({
       promptBuilder: buildPromptSection,
       flushPlanResolver: buildMemoryFlushPlan,

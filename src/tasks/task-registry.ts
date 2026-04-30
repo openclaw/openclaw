@@ -29,6 +29,8 @@ import type { TaskRegistryControlRuntime } from "./task-registry-control.types.j
 import {
   getTaskRegistryObservers,
   getTaskRegistryStore,
+  hasAdditionalTaskRegistryEventListeners,
+  notifyAdditionalTaskRegistryEventListeners,
   resetTaskRegistryRuntimeForTests,
   type TaskRegistryObserverEvent,
 } from "./task-registry.store.js";
@@ -239,16 +241,24 @@ function snapshotTaskRecords(source: ReadonlyMap<string, TaskRecord>): TaskRecor
 
 function emitTaskRegistryObserverEvent(createEvent: () => TaskRegistryObserverEvent): void {
   const observers = getTaskRegistryObservers();
-  if (!observers?.onEvent) {
+  const hasSingleton = Boolean(observers?.onEvent);
+  const hasAdditional = hasAdditionalTaskRegistryEventListeners();
+  if (!hasSingleton && !hasAdditional) {
     return;
   }
-  try {
-    observers.onEvent(createEvent());
-  } catch (error) {
-    log.warn("Task registry observer failed", {
-      event: "task-registry",
-      error,
-    });
+  const event = createEvent();
+  if (hasSingleton && observers?.onEvent) {
+    try {
+      observers.onEvent(event);
+    } catch (error) {
+      log.warn("Task registry observer failed", {
+        event: "task-registry",
+        error,
+      });
+    }
+  }
+  if (hasAdditional) {
+    notifyAdditionalTaskRegistryEventListeners(event);
   }
 }
 
