@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import type { ChatRunRegistry } from "./server-chat-state.js";
+import type { ChatRunEntry } from "./server-chat-state.js";
 
 const drainLog = createSubsystemLogger("gateway/drain-manifest");
 
@@ -18,6 +18,10 @@ export type DrainManifest = {
   sessions: DrainManifestEntry[];
 };
 
+type DrainManifestSource = {
+  entries: () => ReadonlyArray<{ sessionId: string; runs: ReadonlyArray<ChatRunEntry> }>;
+};
+
 const DRAIN_MANIFEST_FILENAME = "draining-sessions.json";
 
 function resolveManifestPath(): string {
@@ -29,7 +33,7 @@ function resolveManifestPath(): string {
  * Write a drain manifest of all active chat runs to a durable file.
  * Called during gateway shutdown before sessions are cleared.
  */
-export function writeDrainManifest(registry: ChatRunRegistry): void {
+export function writeDrainManifest(registry: DrainManifestSource): void {
   const manifestPath = resolveManifestPath();
   const activeEntries = registry.entries();
 

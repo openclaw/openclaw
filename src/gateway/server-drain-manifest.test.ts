@@ -5,7 +5,6 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createChatRunRegistry } from "./server-chat-state.js";
 import {
   deleteDrainManifest,
-  type DrainManifest,
   readDrainManifest,
   writeDrainManifest,
 } from "./server-drain-manifest.js";
