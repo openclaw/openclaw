@@ -69,7 +69,13 @@ export function buildAnthropicCliBackend(): CliBackendPlugin {
       reliability: {
         watchdog: {
           fresh: { ...CLI_FRESH_WATCHDOG_DEFAULTS },
-          resume: { ...CLI_RESUME_WATCHDOG_DEFAULTS },
+          // Resume watchdog default cap is 3min; bumped to 5min for claude-cli
+          // because resuming large session jsonls (Lares' active session is
+          // already 800KB+) plus first-token latency through Anthropic's API
+          // can comfortably exceed 3min during post-incident slowdowns
+          // (e.g., after a 529 Overloaded storm). Fresh sessions stay on the
+          // 10min default since bootstrap can be heavier still.
+          resume: { ...CLI_RESUME_WATCHDOG_DEFAULTS, maxMs: 300_000 },
         },
       },
       serialize: true,
