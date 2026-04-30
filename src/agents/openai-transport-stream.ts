@@ -770,14 +770,26 @@ export function createOpenAIResponsesTransportStreamFn(): StreamFn {
       };
       try {
         const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
-        const turnState = resolveProviderTransportTurnState(model, {
+        // For openai-codex-responses, chatgpt.com requires a chatgpt-account-id header
+        // extracted from the JWT access token — identical to what the PI SDK does.
+        let effectiveModel = model;
+        if (isOpenAICodexResponsesModel(model) && apiKey) {
+          const accountId = extractOpenAICodexAccountId(apiKey);
+          if (accountId) {
+            effectiveModel = {
+              ...model,
+              headers: { ...model.headers, "chatgpt-account-id": accountId },
+            };
+          }
+        }
+        const turnState = resolveProviderTransportTurnState(effectiveModel, {
           sessionId: options?.sessionId,
           turnId: randomUUID(),
           attempt: 1,
           transport: "stream",
         });
         const client = createOpenAIResponsesClient(
-          model,
+          effectiveModel,
           context,
           apiKey,
           options?.headers,
@@ -953,6 +965,17 @@ function sanitizeOpenAICodexResponsesParams<T extends Record<string, unknown>>(
   return params;
 }
 
+function extractOpenAICodexAccountId(token: string): string | undefined {
+  try {
+    const parts = token.split(".");
+    if (parts.length < 2) return undefined;
+    const payload = JSON.parse(Buffer.from(parts[1]!, "base64url").toString("utf8"));
+    return (payload?.["https://api.openai.com/auth"] as Record<string, string> | undefined)
+      ?.chatgpt_account_id;
+  } catch {
+    return undefined;
+  }
+}
 function buildOpenAICodexResponsesInstructions(context: Context): string | undefined {
   if (!context.systemPrompt) {
     return undefined;

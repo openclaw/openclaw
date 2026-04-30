@@ -284,6 +284,16 @@ export function isTransientNetworkError(err: unknown): boolean {
       return true;
     }
 
+    if (typeof candidate === "string") {
+      const strMessage = normalizeLowercaseStringOrEmpty(candidate);
+      if (
+        strMessage &&
+        TRANSIENT_NETWORK_MESSAGE_SNIPPETS.some((snippet) => strMessage.includes(snippet))
+      ) {
+        return true;
+      }
+      continue;
+    }
     if (!candidate || typeof candidate !== "object") {
       continue;
     }
