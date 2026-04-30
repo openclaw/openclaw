@@ -10,6 +10,7 @@ on:
         type: choice
         options:
           - all
+          - gateway-runtime-boundary
           - plugin-boundary
           - plugin-sdk-package-contract
           - plugin-sdk-reply-runtime
@@ -22,6 +23,11 @@ on:
       - ".github/workflows/codeql-critical-quality.yml"
       - "packages/plugin-package-contract/**"
       - "packages/plugin-sdk/**"
+      - "src/gateway/method-scopes.ts"
+      - "src/gateway/protocol/**"
+      - "src/gateway/server-methods/**"
+      - "src/gateway/server-methods.ts"
+      - "src/gateway/server-methods-list.ts"
       - "src/plugin-sdk/**"
       - "src/plugins/**"
   schedule:
@@ -37,9 +43,64 @@ env:
 permissions:
   actions: read
   contents: read
+  pull-requests: read
   security-events: write
 
 jobs:
+  quality-shards:
+    name: Select Critical Quality shards
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 5
+    outputs:
+      gateway: ${{ steps.detect.outputs.gateway }}
+      plugin: ${{ steps.detect.outputs.plugin }}
+      plugin_sdk_package: ${{ steps.detect.outputs.plugin_sdk_package }}
+    steps:
+      - name: Detect PR shard paths
+        id: detect
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          gateway=false
+          plugin=false
+          plugin_sdk_package=false
+
+          if [[ "${EVENT_NAME}" != "pull_request" ]]; then
+            gateway=true
+            plugin=true
+            plugin_sdk_package=true
+          else
+            while IFS= read -r file; do
+              case "${file}" in
+                .github/codeql/*|.github/workflows/codeql-critical-quality.yml)
+                  gateway=true
+                  plugin=true
+                  plugin_sdk_package=true
+                  ;;
+                src/gateway/method-scopes.ts|src/gateway/protocol/*|src/gateway/server-methods/*|src/gateway/server-methods.ts|src/gateway/server-methods-list.ts)
+                  gateway=true
+                  ;;
+                src/plugin-sdk/*|src/plugins/*)
+                  plugin=true
+                  ;;
+                packages/plugin-package-contract/*|packages/plugin-sdk/*|src/plugin-sdk/*)
+                  plugin_sdk_package=true
+                  ;;
+              esac
+            done < <(gh api --paginate "repos/${REPOSITORY}/pulls/${PR_NUMBER}/files" --jq '.[].filename')
+          fi
+
+          {
+            echo "gateway=${gateway}"
+            echo "plugin=${plugin}"
+            echo "plugin_sdk_package=${plugin_sdk_package}"
+          } >> "${GITHUB_OUTPUT}"
+
   core-auth-secrets:
     name: Critical Quality (core-auth-secrets)
     if: ${{ github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || inputs.profile == 'all') }}
@@ -86,7 +147,8 @@ jobs:
 
   gateway-runtime-boundary:
     name: Critical Quality (gateway-runtime-boundary)
-    if: ${{ github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || inputs.profile == 'all') }}
+    needs: quality-shards
+    if: ${{ needs.quality-shards.outputs.gateway == 'true' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (github.event_name == 'pull_request' || github.event_name != 'workflow_dispatch' || inputs.profile == 'all' || inputs.profile == 'gateway-runtime-boundary') }}
     runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 25
     steps:
@@ -306,7 +368,8 @@ jobs:
 
   plugin-boundary:
     name: Critical Quality (plugin-boundary)
-    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (github.event_name == 'pull_request' || github.event_name != 'workflow_dispatch' || inputs.profile == 'all' || inputs.profile == 'plugin-boundary') }}
+    needs: quality-shards
+    if: ${{ needs.quality-shards.outputs.plugin == 'true' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (github.event_name == 'pull_request' || github.event_name != 'workflow_dispatch' || inputs.profile == 'all' || inputs.profile == 'plugin-boundary') }}
     runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 25
     steps:
@@ -328,7 +391,8 @@ jobs:
 
   plugin-sdk-package-contract:
     name: Critical Quality (plugin-sdk-package-contract)
-    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (github.event_name == 'pull_request' || github.event_name != 'workflow_dispatch' || inputs.profile == 'all' || inputs.profile == 'plugin-sdk-package-contract') }}
+    needs: quality-shards
+    if: ${{ needs.quality-shards.outputs.plugin_sdk_package == 'true' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (github.event_name == 'pull_request' || github.event_name != 'workflow_dispatch' || inputs.profile == 'all' || inputs.profile == 'plugin-sdk-package-contract') }}
     runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 25
     steps:
