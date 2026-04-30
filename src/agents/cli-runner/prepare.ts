@@ -80,7 +80,7 @@ import { ensureSystemPromptCacheBoundary } from "../system-prompt-cache-boundary
 import { buildSystemPromptReport } from "../system-prompt-report.js";
 import { appendModelIdentitySystemPrompt, buildModelIdentityPromptLine } from "../system-prompt.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
-import { mergedBundleMcpLayerWantsCallerContextInjection } from "../bundle-mcp-config.js";
+import { ownerWantsBundleMcpCallerContextInjection } from "../bundle-mcp-config.js";
 import { prepareCliBundleMcpConfig } from "./bundle-mcp.js";
 import { prepareClaudeCliSkillsPlugin } from "./claude-skills-plugin.js";
 import { buildCliAgentSystemPrompt, normalizeCliModel } from "./helpers.js";
@@ -443,11 +443,7 @@ export async function prepareCliRunContext(
   // MCP servers — bundle MCP is fully suppressed in that mode.
   const needsMcpPlaceholderEnv =
     bundleMcpEnabled &&
-    (Boolean(mcpLoopbackRuntime) ||
-      mergedBundleMcpLayerWantsCallerContextInjection({
-        workspaceDir,
-        cfg: params.config,
-      }));
+    (Boolean(mcpLoopbackRuntime) || ownerWantsBundleMcpCallerContextInjection(params.config));
   const mcpPlaceholderEnv: Record<string, string> | undefined = needsMcpPlaceholderEnv
     ? {
         ...(mcpLoopbackRuntime

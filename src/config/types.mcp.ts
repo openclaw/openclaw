@@ -79,6 +79,13 @@ export type McpServerConfig = {
    * remote (`url`) transport: `x-openclaw-agent-id`, `x-openclaw-account-id`,
    * `x-openclaw-message-channel`, and `x-session-key`, using `OPENCLAW_MCP_*`
    * placeholders. Default off (omit or false).
+   *
+   * Only honored when set in owner-managed `mcp.servers` (this property) or in
+   * OpenClaw runtime-supplied layers (e.g. the loopback gateway server).
+   * Setting it inside a plugin's `.mcp.json` is silently ignored, so enabling
+   * a plugin never implicitly grants it access to the caller's session key.
+   * Existing user-supplied `headers` (compared case-insensitively) are never
+   * overwritten.
    */
   injectCallerContext?: boolean;
   [key: string]: unknown;
