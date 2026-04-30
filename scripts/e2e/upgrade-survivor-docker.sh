@@ -11,6 +11,7 @@ IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-upgrade-survivor-e2e" OPENCLAW_
 SKIP_BUILD="${OPENCLAW_UPGRADE_SURVIVOR_E2E_SKIP_BUILD:-0}"
 PACKAGE_TGZ="$(docker_e2e_prepare_package_tgz upgrade-survivor "${OPENCLAW_CURRENT_PACKAGE_TGZ:-}")"
 DOCKER_RUN_TIMEOUT="${OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT:-900s}"
+BASELINE_SPEC="${OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC:-}"
 
 docker_e2e_package_mount_args "$PACKAGE_TGZ"
 OPENCLAW_TEST_STATE_SCRIPT_B64="$(docker_e2e_test_state_shell_b64 upgrade-survivor upgrade-survivor)"
@@ -23,6 +24,7 @@ docker_e2e_run_with_harness \
   -e OPENCLAW_TEST_STATE_SCRIPT_B64="$OPENCLAW_TEST_STATE_SCRIPT_B64" \
   -e OPENCLAW_UPGRADE_SURVIVOR_START_BUDGET_SECONDS="${OPENCLAW_UPGRADE_SURVIVOR_START_BUDGET_SECONDS:-90}" \
   -e OPENCLAW_UPGRADE_SURVIVOR_STATUS_BUDGET_SECONDS="${OPENCLAW_UPGRADE_SURVIVOR_STATUS_BUDGET_SECONDS:-30}" \
+  -e OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC="$BASELINE_SPEC" \
   "${DOCKER_E2E_PACKAGE_ARGS[@]}" \
   "$IMAGE_NAME" \
   timeout "$DOCKER_RUN_TIMEOUT" bash -lc 'set -euo pipefail
@@ -54,7 +56,16 @@ trap cleanup EXIT
 openclaw_e2e_eval_test_state_from_b64 "${OPENCLAW_TEST_STATE_SCRIPT_B64:?missing OPENCLAW_TEST_STATE_SCRIPT_B64}"
 node scripts/e2e/lib/upgrade-survivor/assertions.mjs seed
 
-openclaw_e2e_install_package /tmp/openclaw-upgrade-survivor-install.log "upgrade survivor package" /tmp/npm-prefix
+if [ -n "${OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC:-}" ]; then
+  echo "Installing published upgrade survivor baseline: ${OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC}"
+  if ! npm install -g --prefix /tmp/npm-prefix "$OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC" --no-fund --no-audit >/tmp/openclaw-upgrade-survivor-install.log 2>&1; then
+    echo "npm install failed for upgrade survivor baseline" >&2
+    cat /tmp/openclaw-upgrade-survivor-install.log >&2 || true
+    exit 1
+  fi
+else
+  openclaw_e2e_install_package /tmp/openclaw-upgrade-survivor-install.log "upgrade survivor package" /tmp/npm-prefix
+fi
 command -v openclaw >/dev/null
 package_version="$(node -p "JSON.parse(require(\"node:fs\").readFileSync(\"/tmp/npm-prefix/lib/node_modules/openclaw/package.json\", \"utf8\")).version")"
 OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT="$(
