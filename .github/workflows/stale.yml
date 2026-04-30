@@ -280,6 +280,33 @@ jobs:
             ]);
             const prExemptLabels = new Set(["maintainer", "no-stale", "bad-barnacle"]);
             const maintainerAssociations = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
+            const maintainerLogins = new Set([
+              "altaywtf",
+              "BunsDev",
+              "cpojer",
+              "gumadeiras",
+              "hydro13",
+              "hxy91819",
+              "jalehman",
+              "joshavant",
+              "joshp123",
+              "mbelinky",
+              "mukhtharcm",
+              "ngutman",
+              "obviyus",
+              "odysseus0",
+              "onutc",
+              "osolmaz",
+              "sebslight",
+              "sliverp",
+              "steipete",
+              "thewilloftheshadow",
+              "tyler6204",
+              "velvet-shark",
+              "vignesh07",
+              "vincentkoc",
+              "visionik",
+            ].map(login => login.toLowerCase()));
 
             const issueCloseMessage = [
               "Closing due to inactivity.",
@@ -310,6 +337,7 @@ jobs:
               missingStale: 0,
               exemptLabel: 0,
               maintainerAuthor: 0,
+              maintainerAssignee: 0,
               notOldEnough: 0,
               disabledType: 0,
             };
@@ -347,6 +375,14 @@ jobs:
                 }
 
                 const assigned = (item.assignees || []).length > 0;
+                const assignedToMaintainer = (item.assignees || []).some(assignee =>
+                  maintainerLogins.has(assignee.login.toLowerCase()),
+                );
+                if (assignedToMaintainer) {
+                  skipped.maintainerAssignee += 1;
+                  continue;
+                }
+
                 let eligible = false;
                 let lane = "";
                 if (isPr && assigned) {
