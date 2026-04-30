@@ -219,15 +219,23 @@ function isTerminalRunEvent(event: OpenClawEvent): boolean {
 function normalizeChatProjectionEvent(
   event: OpenClawEvent,
   projection: ChatProjection,
+  previousText: string | undefined,
 ): OpenClawEvent {
   const text = readChatProjectionText(projection.payload);
+  const isReplacement = Boolean(
+    previousText && text !== undefined && !text.startsWith(previousText),
+  );
   return {
     ...event,
     type: projection.state === "delta" ? "assistant.delta" : "run.completed",
     data:
       projection.state === "delta"
         ? text !== undefined
-          ? { delta: text }
+          ? {
+              text,
+              delta: isReplacement ? text : text.slice(previousText?.length ?? 0),
+              ...(isReplacement ? { replace: true } : {}),
+            }
           : event.data
         : { phase: "end", ...(text !== undefined ? { outputText: text } : {}) },
   };
@@ -335,20 +343,30 @@ export class OpenClaw {
     const replayEvents = this.replaySnapshot(runId);
     let hasCanonicalAssistantRunEvent = replayEvents.some(isAssistantRunEvent);
     let hasTerminalRunEvent = replayEvents.some(isTerminalRunEvent);
+    let previousChatProjectionText: string | undefined;
     const toRunStreamEvent = (event: OpenClawEvent): OpenClawEvent | undefined => {
       const chatProjection = readChatProjection(event);
       if (chatProjection?.state === "delta") {
         if (hasCanonicalAssistantRunEvent) {
           return undefined;
         }
-        return normalizeChatProjectionEvent(event, chatProjection);
+        const runEvent = normalizeChatProjectionEvent(
+          event,
+          chatProjection,
+          previousChatProjectionText,
+        );
+        const text = readChatProjectionText(chatProjection.payload);
+        if (text !== undefined) {
+          previousChatProjectionText = text;
+        }
+        return runEvent;
       }
       if (chatProjection?.state === "final") {
         if (hasTerminalRunEvent) {
           return undefined;
         }
         hasTerminalRunEvent = true;
-        return normalizeChatProjectionEvent(event, chatProjection);
+        return normalizeChatProjectionEvent(event, chatProjection, previousChatProjectionText);
       }
       if (isAssistantRunEvent(event)) {
         hasCanonicalAssistantRunEvent = true;

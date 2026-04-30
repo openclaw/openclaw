@@ -1072,6 +1072,20 @@ describe("scanBundledPluginRuntimeDeps config policy", () => {
       enabledByDefault: true,
       providers: ["amazon-bedrock"],
     });
+    writeBundledPluginPackage({
+      packageRoot,
+      pluginId: "anthropic",
+      deps: { "anthropic-runtime": "4.0.0" },
+      modelSupport: { modelPrefixes: ["claude-"] },
+      providers: ["anthropic"],
+    });
+    writeBundledPluginPackage({
+      packageRoot,
+      pluginId: "openai",
+      deps: { "openai-runtime": "5.0.0" },
+      modelSupport: { modelPrefixes: ["gpt-", "o1", "o3", "o4"] },
+      providers: ["openai", "openai-codex"],
+    });
     return packageRoot;
   }
 
@@ -1174,6 +1188,28 @@ describe("scanBundledPluginRuntimeDeps config policy", () => {
       config: { agents: { defaults: { model: "amazon-bedrock/claude-opus-4-7" } } },
       includeConfiguredChannels: false,
       expectedDeps: ["alpha-runtime@1.0.0", "bedrock-runtime@3.0.0"],
+    },
+    {
+      name: "includes configured bare model owner deps from model support",
+      config: { agents: { defaults: { model: "gpt-5.5" } } },
+      includeConfiguredChannels: false,
+      expectedDeps: ["alpha-runtime@1.0.0", "openai-runtime@5.0.0"],
+    },
+    {
+      name: "includes configured bare fallback model owner deps from model support",
+      config: {
+        agents: {
+          defaults: { model: { primary: "unknown-model", fallbacks: ["claude-sonnet-4-6"] } },
+        },
+      },
+      includeConfiguredChannels: false,
+      expectedDeps: ["alpha-runtime@1.0.0", "anthropic-runtime@4.0.0"],
+    },
+    {
+      name: "includes configured model provider deps from manifest provider aliases",
+      config: { agents: { defaults: { model: "openai-codex/gpt-5.5" } } },
+      includeConfiguredChannels: false,
+      expectedDeps: ["alpha-runtime@1.0.0", "openai-runtime@5.0.0"],
     },
     {
       name: "includes configured model provider deps from aliases",

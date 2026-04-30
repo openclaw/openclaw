@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import { normalizeProviderId } from "../agents/provider-id.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
@@ -29,10 +30,16 @@ export type BundledPluginRuntimeDepsManifest = {
   enabledByDefault: boolean;
   id?: string;
   legacyPluginIds: string[];
+  modelSupport?: BundledPluginRuntimeDepsModelSupport;
   providers: string[];
 };
 
 export type BundledPluginRuntimeDepsManifestCache = Map<string, BundledPluginRuntimeDepsManifest>;
+
+type BundledPluginRuntimeDepsModelSupport = {
+  modelPatterns: string[];
+  modelPrefixes: string[];
+};
 
 function collectDeclaredMirroredRootRuntimeDepNames(packageJson: JsonObject): string[] {
   const openclaw = packageJson.openclaw;
@@ -103,6 +110,7 @@ function readBundledPluginRuntimeDepsManifest(
   const manifest = readRuntimeDepsJsonObject(path.join(pluginDir, "openclaw.plugin.json"));
   const channels = manifest?.channels;
   const legacyPluginIds = manifest?.legacyPluginIds;
+  const modelSupport = readBundledPluginRuntimeDepsModelSupport(manifest?.modelSupport);
   const providers = manifest?.providers;
   const runtimeDepsManifest = {
     channels: Array.isArray(channels)
@@ -115,12 +123,34 @@ function readBundledPluginRuntimeDepsManifest(
           (entry): entry is string => typeof entry === "string" && entry !== "",
         )
       : [],
+    ...(modelSupport ? { modelSupport } : {}),
     providers: Array.isArray(providers)
       ? providers.filter((entry): entry is string => typeof entry === "string" && entry !== "")
       : [],
   };
   cache?.set(pluginDir, runtimeDepsManifest);
   return runtimeDepsManifest;
+}
+
+function readBundledPluginRuntimeDepsModelSupport(
+  value: unknown,
+): BundledPluginRuntimeDepsModelSupport | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const modelPatterns = readRuntimeDepsManifestStringList(value.modelPatterns);
+  const modelPrefixes = readRuntimeDepsManifestStringList(value.modelPrefixes);
+  if (modelPatterns.length === 0 && modelPrefixes.length === 0) {
+    return undefined;
+  }
+  return { modelPatterns, modelPrefixes };
+}
+
+function readRuntimeDepsManifestStringList(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.filter((entry): entry is string => typeof entry === "string" && entry !== "");
 }
 
 const BUILT_IN_RUNTIME_DEPS_PLUGIN_ALIAS_FALLBACKS: ReadonlyArray<
@@ -212,69 +242,176 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
-function addConfiguredProviderId(providerIds: Set<string>, value: unknown): void {
+type ConfiguredRuntimeDepsTargets = {
+  modelRefs: Set<string>;
+  providerIds: Set<string>;
+};
+
+function createConfiguredRuntimeDepsTargets(): ConfiguredRuntimeDepsTargets {
+  return {
+    modelRefs: new Set(),
+    providerIds: new Set(),
+  };
+}
+
+function addConfiguredProviderId(targets: ConfiguredRuntimeDepsTargets, value: unknown): void {
   if (typeof value !== "string") {
     return;
   }
   const normalized = normalizeProviderId(value);
   if (normalized) {
-    providerIds.add(normalized);
+    targets.providerIds.add(normalized);
   }
 }
 
-function addConfiguredProviderFromModelRef(providerIds: Set<string>, value: unknown): void {
+function addConfiguredModelRef(targets: ConfiguredRuntimeDepsTargets, value: unknown): void {
   if (typeof value !== "string") {
     return;
   }
-  const providerId = value.split("/", 1)[0]?.trim();
-  addConfiguredProviderId(providerIds, providerId);
+  const parsed = parseConfiguredModelRef(value);
+  if (!parsed) {
+    return;
+  }
+  if (parsed.providerId) {
+    targets.providerIds.add(parsed.providerId);
+  } else {
+    targets.modelRefs.add(parsed.modelId);
+  }
 }
 
-function addConfiguredProvidersFromModelConfig(providerIds: Set<string>, value: unknown): void {
+function parseConfiguredModelRef(
+  value: string,
+): { modelId: string; providerId?: string } | undefined {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  const slash = trimmed.indexOf("/");
+  if (slash < 0) {
+    const modelId = splitTrailingAuthProfile(trimmed).model.trim();
+    return modelId ? { modelId } : undefined;
+  }
+  const providerId = normalizeProviderId(trimmed.slice(0, slash));
+  const modelId = splitTrailingAuthProfile(trimmed.slice(slash + 1)).model.trim();
+  if (!providerId || !modelId) {
+    return undefined;
+  }
+  return { providerId, modelId };
+}
+
+function addConfiguredModelsFromModelConfig(
+  targets: ConfiguredRuntimeDepsTargets,
+  value: unknown,
+): void {
   if (typeof value === "string") {
-    addConfiguredProviderFromModelRef(providerIds, value);
+    addConfiguredModelRef(targets, value);
     return;
   }
   if (!isRecord(value)) {
     return;
   }
-  addConfiguredProviderFromModelRef(providerIds, value.primary);
+  addConfiguredModelRef(targets, value.primary);
   if (Array.isArray(value.fallbacks)) {
     for (const fallback of value.fallbacks) {
-      addConfiguredProviderFromModelRef(providerIds, fallback);
+      addConfiguredModelRef(targets, fallback);
     }
   }
 }
 
-function collectConfiguredProviderIds(config: OpenClawConfig): Set<string> {
-  const providerIds = new Set<string>();
+function collectConfiguredRuntimeDepsTargets(config: OpenClawConfig): ConfiguredRuntimeDepsTargets {
+  const targets = createConfiguredRuntimeDepsTargets();
   for (const providerId of Object.keys(config.models?.providers ?? {})) {
-    addConfiguredProviderId(providerIds, providerId);
+    addConfiguredProviderId(targets, providerId);
   }
   for (const profile of Object.values(config.auth?.profiles ?? {})) {
-    addConfiguredProviderId(providerIds, profile.provider);
+    addConfiguredProviderId(targets, profile.provider);
   }
   for (const providerId of Object.keys(config.auth?.order ?? {})) {
-    addConfiguredProviderId(providerIds, providerId);
+    addConfiguredProviderId(targets, providerId);
   }
 
   const defaults = config.agents?.defaults;
-  addConfiguredProvidersFromModelConfig(providerIds, defaults?.model);
-  addConfiguredProvidersFromModelConfig(providerIds, defaults?.imageModel);
-  addConfiguredProvidersFromModelConfig(providerIds, defaults?.imageGenerationModel);
-  addConfiguredProvidersFromModelConfig(providerIds, defaults?.videoGenerationModel);
-  addConfiguredProvidersFromModelConfig(providerIds, defaults?.musicGenerationModel);
-  addConfiguredProvidersFromModelConfig(providerIds, defaults?.pdfModel);
-  addConfiguredProvidersFromModelConfig(providerIds, defaults?.subagents?.model);
+  addConfiguredModelsFromModelConfig(targets, defaults?.model);
+  addConfiguredModelsFromModelConfig(targets, defaults?.imageModel);
+  addConfiguredModelsFromModelConfig(targets, defaults?.imageGenerationModel);
+  addConfiguredModelsFromModelConfig(targets, defaults?.videoGenerationModel);
+  addConfiguredModelsFromModelConfig(targets, defaults?.musicGenerationModel);
+  addConfiguredModelsFromModelConfig(targets, defaults?.pdfModel);
+  addConfiguredModelsFromModelConfig(targets, defaults?.subagents?.model);
   for (const providerId of Object.keys(defaults?.models ?? {})) {
-    addConfiguredProviderFromModelRef(providerIds, providerId);
+    addConfiguredModelRef(targets, providerId);
   }
 
   for (const agent of config.agents?.list ?? []) {
-    addConfiguredProvidersFromModelConfig(providerIds, agent.model);
-    addConfiguredProvidersFromModelConfig(providerIds, agent.subagents?.model);
+    addConfiguredModelsFromModelConfig(targets, agent.model);
+    addConfiguredModelsFromModelConfig(targets, agent.subagents?.model);
   }
-  return providerIds;
+  return targets;
+}
+
+function collectConfiguredProviderIds(config: OpenClawConfig): Set<string> {
+  return collectConfiguredRuntimeDepsTargets(config).providerIds;
+}
+
+function matchesBundledRuntimeDepsModelSupport(
+  manifest: BundledPluginRuntimeDepsManifest,
+  modelId: string,
+  kind: "pattern" | "prefix",
+): boolean {
+  if (kind === "pattern") {
+    for (const patternSource of manifest.modelSupport?.modelPatterns ?? []) {
+      try {
+        if (new RegExp(patternSource, "u").test(modelId)) {
+          return true;
+        }
+      } catch {
+        continue;
+      }
+    }
+    return false;
+  }
+  return (manifest.modelSupport?.modelPrefixes ?? []).some((prefix) => modelId.startsWith(prefix));
+}
+
+export function resolveBundledRuntimeDepsConfiguredModelOwnerPluginIds(params: {
+  config: OpenClawConfig;
+  extensionsDir: string;
+  manifestCache?: BundledPluginRuntimeDepsManifestCache;
+}): ReadonlySet<string> {
+  const targets = collectConfiguredRuntimeDepsTargets(params.config);
+  if (targets.modelRefs.size === 0 || !fs.existsSync(params.extensionsDir)) {
+    return new Set();
+  }
+  const plugins = fs
+    .readdirSync(params.extensionsDir, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => {
+      const pluginDir = path.join(params.extensionsDir, entry.name);
+      return {
+        pluginId: entry.name,
+        manifest: readBundledPluginRuntimeDepsManifest(pluginDir, params.manifestCache),
+      };
+    });
+  const pluginIds = new Set<string>();
+  for (const modelId of targets.modelRefs) {
+    const patternMatches = plugins.filter(({ manifest }) =>
+      matchesBundledRuntimeDepsModelSupport(manifest, modelId, "pattern"),
+    );
+    if (patternMatches.length === 1) {
+      pluginIds.add(patternMatches[0].pluginId);
+      continue;
+    }
+    if (patternMatches.length > 1) {
+      continue;
+    }
+    const prefixMatches = plugins.filter(({ manifest }) =>
+      matchesBundledRuntimeDepsModelSupport(manifest, modelId, "prefix"),
+    );
+    if (prefixMatches.length === 1) {
+      pluginIds.add(prefixMatches[0].pluginId);
+    }
+  }
+  return pluginIds;
 }
 
 function isBundledProviderConfiguredForRuntimeDeps(params: {
@@ -295,6 +432,7 @@ export function isBundledPluginConfiguredForRuntimeDeps(params: {
   plugins: NormalizedPluginsConfig;
   pluginId: string;
   pluginDir: string;
+  configuredModelOwnerPluginIds?: ReadonlySet<string>;
   includeConfiguredChannels?: boolean;
   manifestCache?: BundledPluginRuntimeDepsManifestCache;
 }): boolean {
@@ -363,6 +501,9 @@ export function isBundledPluginConfiguredForRuntimeDeps(params: {
   if (hasConfiguredChannel) {
     return true;
   }
+  if (params.configuredModelOwnerPluginIds?.has(params.pluginId)) {
+    return true;
+  }
   if (
     isBundledProviderConfiguredForRuntimeDeps({
       config: params.config,
@@ -409,6 +550,7 @@ function shouldIncludeBundledPluginRuntimeDeps(params: {
   selectedPluginIds?: ReadonlySet<string>;
   pluginId: string;
   pluginDir: string;
+  configuredModelOwnerPluginIds?: ReadonlySet<string>;
   includeConfiguredChannels?: boolean;
   manifestCache?: BundledPluginRuntimeDepsManifestCache;
 }): boolean {
@@ -458,6 +600,7 @@ function shouldIncludeBundledPluginRuntimeDeps(params: {
     plugins: params.plugins,
     pluginId: params.pluginId,
     pluginDir: params.pluginDir,
+    configuredModelOwnerPluginIds: params.configuredModelOwnerPluginIds,
     includeConfiguredChannels: params.includeConfiguredChannels,
     manifestCache: params.manifestCache,
   });
@@ -490,6 +633,14 @@ export function collectBundledPluginRuntimeDeps(params: {
   const plugins = params.config
     ? normalizePluginsConfigWithResolver(params.config.plugins, normalizePluginId)
     : undefined;
+  const configuredModelOwnerPluginIds =
+    params.config && plugins
+      ? resolveBundledRuntimeDepsConfiguredModelOwnerPluginIds({
+          config: params.config,
+          extensionsDir: params.extensionsDir,
+          manifestCache,
+        })
+      : undefined;
   const includedPluginIds = new Set<string>();
 
   for (const entry of fs.readdirSync(params.extensionsDir, { withFileTypes: true })) {
@@ -506,6 +657,7 @@ export function collectBundledPluginRuntimeDeps(params: {
         selectedPluginIds: params.selectedPluginIds,
         pluginId,
         pluginDir,
+        configuredModelOwnerPluginIds,
         includeConfiguredChannels: params.includeConfiguredChannels,
         manifestCache,
       })
