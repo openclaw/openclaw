@@ -322,7 +322,11 @@ export function renderUsage(props: UsageProps) {
         })()
       : data.costDaily;
 
-  const insightStats = buildUsageInsightStats(aggregateSessions, displayTotals, activeAggregates);
+  const insightStats = buildUsageInsightStats(aggregateSessions, displayTotals, activeAggregates, {
+    selectedDays: filters.selectedDays,
+    selectedHours: filters.selectedHours,
+    timeZone: filters.timeZone,
+  });
   const isEmpty = !data.loading && !data.totals && data.sessions.length === 0;
   const hasMissingCost =
     (displayTotals?.missingCostEntries ?? 0) > 0 ||

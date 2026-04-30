@@ -775,6 +775,11 @@ export const vi: TranslationMap = {
         "Thông lượng hiển thị số token mỗi phút trong thời gian hoạt động. Càng cao càng tốt.",
       tokensPerMinute: "tok/phút",
       perMinute: "/ phút",
+      activeTime: "Thời gian hoạt động",
+      activeTimeHint:
+        "Tổng thời gian hoạt động của các phiên có dữ liệu thời lượng trong phạm vi này.",
+      activeTimeSub: "Phiên TB {avgDuration} · {count} phiên có thời lượng",
+      acrossTimedSessions: "Trên {count} phiên có thời lượng",
       errorRate: "Tỷ lệ lỗi",
       errorHint: "Tỷ lệ lỗi = lỗi / tổng số tin nhắn. Càng thấp càng tốt.",
       avgSession: "phiên TB",

@@ -1,6 +1,6 @@
-import { describe, expect, it, vi, afterEach } from "vitest";
-import { buildPeakErrorHours } from "./usage-metrics.ts";
-import type { UsageSessionEntry } from "./usageTypes.ts";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { buildPeakErrorHours, buildUsageInsightStats } from "./usage-metrics.ts";
+import type { UsageAggregates, UsageSessionEntry, UsageTotals } from "./usageTypes.ts";
 
 /**
  * Helper: build a minimal UsageSessionEntry with utcQuarterHourMessageCounts
@@ -50,6 +50,66 @@ function makeSessionWithQuarterHourly(
       })),
     },
   } as unknown as UsageSessionEntry;
+}
+
+function makeInsightSession(
+  startMs: number,
+  endMs: number,
+  totalTokens: number,
+): UsageSessionEntry {
+  return {
+    key: `insight-${startMs}`,
+    usage: {
+      totalTokens,
+      totalCost: totalTokens / 100,
+      input: totalTokens,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      inputCost: 0,
+      outputCost: 0,
+      cacheReadCost: 0,
+      cacheWriteCost: 0,
+      missingCostEntries: 0,
+      durationMs: endMs - startMs,
+      firstActivity: startMs,
+      lastActivity: endMs,
+      messageCounts: {
+        total: 0,
+        user: 0,
+        assistant: 0,
+        toolCalls: 0,
+        toolResults: 0,
+        errors: 0,
+      },
+    },
+  } as unknown as UsageSessionEntry;
+}
+
+const emptyInsightAggregates: UsageAggregates = {
+  messages: { total: 0, user: 0, assistant: 0, toolCalls: 0, toolResults: 0, errors: 0 },
+  tools: { totalCalls: 0, uniqueTools: 0, tools: [] },
+  byModel: [],
+  byProvider: [],
+  byAgent: [],
+  byChannel: [],
+  daily: [],
+};
+
+function makeInsightTotals(totalTokens: number): UsageTotals {
+  return {
+    input: totalTokens,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    totalTokens,
+    totalCost: totalTokens / 100,
+    inputCost: 0,
+    outputCost: 0,
+    cacheReadCost: 0,
+    cacheWriteCost: 0,
+    missingCostEntries: 0,
+  };
 }
 
 describe("buildPeakErrorHours", () => {
@@ -268,5 +328,49 @@ describe("buildPeakErrorHours", () => {
       return sum + (match ? Number.parseInt(match[1], 10) : 0);
     }, 0);
     expect(totalErrors).toBe(3);
+  });
+});
+
+describe("buildUsageInsightStats", () => {
+  it("clips active time to selected days in utc mode", () => {
+    const startMs = Date.UTC(2026, 2, 15, 23, 30);
+    const endMs = Date.UTC(2026, 2, 16, 0, 30);
+
+    const stats = buildUsageInsightStats(
+      [makeInsightSession(startMs, endMs, 60)],
+      makeInsightTotals(60),
+      emptyInsightAggregates,
+      {
+        selectedDays: ["2026-03-16"],
+        selectedHours: [],
+        timeZone: "utc",
+      },
+    );
+
+    expect(stats.durationSumMs).toBe(30 * 60_000);
+    expect(stats.durationCount).toBe(1);
+    expect(stats.avgDurationMs).toBe(30 * 60_000);
+    expect(stats.throughputTokensPerMin).toBe(2);
+  });
+
+  it("clips active time to selected hours in utc mode", () => {
+    const startMs = Date.UTC(2026, 2, 15, 23, 30);
+    const endMs = Date.UTC(2026, 2, 16, 1, 30);
+
+    const stats = buildUsageInsightStats(
+      [makeInsightSession(startMs, endMs, 120)],
+      makeInsightTotals(120),
+      emptyInsightAggregates,
+      {
+        selectedDays: [],
+        selectedHours: [0],
+        timeZone: "utc",
+      },
+    );
+
+    expect(stats.durationSumMs).toBe(60 * 60_000);
+    expect(stats.durationCount).toBe(1);
+    expect(stats.avgDurationMs).toBe(60 * 60_000);
+    expect(stats.throughputTokensPerMin).toBe(2);
   });
 });

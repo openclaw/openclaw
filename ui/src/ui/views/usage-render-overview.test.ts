@@ -66,4 +66,31 @@ describe("renderUsageInsights", () => {
     expect(container.textContent).toContain("300 cached");
     expect(container.textContent).toContain("1.0K prompt");
   });
+
+  it("surfaces active time with average session duration", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderUsageInsights(
+        totals,
+        aggregates,
+        {
+          durationSumMs: 540_000,
+          durationCount: 3,
+          avgDurationMs: 180_000,
+          errorRate: 0,
+        },
+        false,
+        [],
+        3,
+        3,
+      ),
+      container,
+    );
+
+    expect(container.textContent).toContain("Active Time");
+    expect(container.textContent).toContain("9m");
+    expect(container.textContent).toContain("Avg session 3m");
+    expect(container.textContent).toContain("3 timed sessions");
+  });
 });

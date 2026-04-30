@@ -30,6 +30,13 @@ function formatHourLabel(hour: number): string {
   return date.toLocaleTimeString(undefined, { hour: "numeric" });
 }
 
+function formatZonedDateKey(date: Date, timeZone: "local" | "utc"): string {
+  const year = timeZone === "utc" ? date.getUTCFullYear() : date.getFullYear();
+  const month = timeZone === "utc" ? date.getUTCMonth() + 1 : date.getMonth() + 1;
+  const day = timeZone === "utc" ? date.getUTCDate() : date.getDate();
+  return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+}
+
 function forEachSessionHourSlice(
   session: UsageSessionEntry,
   timeZone: "local" | "utc",
@@ -576,15 +583,68 @@ type UsageInsightStats = {
   peakErrorDay?: { date: string; errors: number; messages: number; rate: number };
 };
 
+type UsageInsightFilters = {
+  selectedDays?: string[];
+  selectedHours?: number[];
+  timeZone?: "local" | "utc";
+};
+
+function getSessionInsightDurationMs(
+  session: UsageSessionEntry,
+  filters?: UsageInsightFilters,
+): number {
+  const usage = session.usage;
+  if (!usage) {
+    return 0;
+  }
+
+  const selectedDays = filters?.selectedDays ?? [];
+  const selectedHours = filters?.selectedHours ?? [];
+  const hasTimeSliceFilters = selectedDays.length > 0 || selectedHours.length > 0;
+  const start = usage.firstActivity ?? session.updatedAt;
+  const end = usage.lastActivity ?? session.updatedAt;
+  if (!start || !end) {
+    return hasTimeSliceFilters ? 0 : (usage.durationMs ?? 0);
+  }
+
+  const startMs = Math.min(start, end);
+  const endMs = Math.max(start, end);
+  if (endMs <= startMs) {
+    return hasTimeSliceFilters ? 0 : (usage.durationMs ?? 0);
+  }
+
+  if (!hasTimeSliceFilters) {
+    return usage.durationMs ?? Math.max(endMs - startMs, 0);
+  }
+
+  const timeZone = filters?.timeZone ?? "local";
+  let durationMs = 0;
+  let cursor = startMs;
+  while (cursor < endMs) {
+    const date = new Date(cursor);
+    const sliceEndExclusive = Math.min(setToHourEnd(date, timeZone).getTime() + 1, endMs);
+    const matchesDay =
+      selectedDays.length === 0 || selectedDays.includes(formatZonedDateKey(date, timeZone));
+    const matchesHour =
+      selectedHours.length === 0 || selectedHours.includes(getZonedHour(date, timeZone));
+    if (matchesDay && matchesHour) {
+      durationMs += Math.max(sliceEndExclusive - cursor, 0);
+    }
+    cursor = sliceEndExclusive;
+  }
+  return durationMs;
+}
+
 const buildUsageInsightStats = (
   sessions: UsageSessionEntry[],
   totals: UsageTotals | null,
   aggregates: UsageAggregates,
+  filters?: UsageInsightFilters,
 ): UsageInsightStats => {
   let durationSumMs = 0;
   let durationCount = 0;
   for (const session of sessions) {
-    const duration = session.usage?.durationMs ?? 0;
+    const duration = getSessionInsightDurationMs(session, filters);
     if (duration > 0) {
       durationSumMs += duration;
       durationCount += 1;
@@ -644,6 +704,7 @@ export {
   formatIsoDate,
   formatTokens,
   getZonedHour,
+  getSessionInsightDurationMs,
   renderUsageMosaic,
   setToHourEnd,
 };

@@ -510,12 +510,25 @@ function renderUsageInsights(
     stats.throughputCostPerMin !== undefined
       ? `${formatCost(stats.throughputCostPerMin, 4)} ${t("usage.overview.perMinute")}`
       : t("usage.common.emptyValue");
+  const activeTimeLabel =
+    stats.durationCount > 0
+      ? (formatDurationCompact(stats.durationSumMs, { spaced: true }) ??
+        t("usage.common.emptyValue"))
+      : t("usage.common.emptyValue");
   const avgDurationLabel =
     stats.durationCount > 0
       ? (formatDurationCompact(stats.avgDurationMs, { spaced: true }) ??
         t("usage.common.emptyValue"))
       : t("usage.common.emptyValue");
+  const activeTimeSub =
+    stats.durationCount > 0
+      ? t("usage.overview.activeTimeSub", {
+          avgDuration: avgDurationLabel,
+          count: String(stats.durationCount),
+        })
+      : t("usage.overview.acrossTimedSessions", { count: String(stats.durationCount) });
   const cacheHint = t("usage.overview.cacheHint");
+  const activeTimeHint = t("usage.overview.activeTimeHint");
   const errorHint = t("usage.overview.errorHint");
   const throughputHint = t("usage.overview.throughputHint");
   const tokensHint = t("usage.overview.avgTokensHint");
@@ -592,6 +605,14 @@ function renderUsageInsights(
             className: "usage-summary-card--half",
           })}
           ${renderSummaryStat({
+            title: t("usage.overview.activeTime"),
+            hint: activeTimeHint,
+            value: activeTimeLabel,
+            sub: activeTimeSub,
+            className: "usage-summary-card--half",
+            compactValue: true,
+          })}
+          ${renderSummaryStat({
             title: t("usage.overview.avgTokens"),
             hint: tokensHint,
             value: formatTokens(avgTokens),
@@ -612,7 +633,7 @@ function renderUsageInsights(
             title: t("usage.overview.errorRate"),
             hint: errorHint,
             value: `${errorRatePct.toFixed(2)}%`,
-            sub: `${aggregates.messages.errors} ${normalizeLowercaseStringOrEmpty(t("usage.overview.errors"))} · ${avgDurationLabel} ${t("usage.overview.avgSession")}`,
+            sub: `${aggregates.messages.errors} ${normalizeLowercaseStringOrEmpty(t("usage.overview.errors"))} · ${aggregates.messages.total} ${t("usage.overview.messagesAbbrev")}`,
             tone: errorRatePct > 5 ? "bad" : errorRatePct > 1 ? "warn" : "good",
             className: "usage-summary-card--medium",
           })}

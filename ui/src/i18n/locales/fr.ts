@@ -783,6 +783,11 @@ export const fr: TranslationMap = {
         "Le débit indique les jetons par minute pendant le temps d’activité. Plus il est élevé, mieux c’est.",
       tokensPerMinute: "jet/min",
       perMinute: "/ min",
+      activeTime: "Temps actif",
+      activeTimeHint:
+        "Temps actif total des sessions disposant de données de durée dans cette plage.",
+      activeTimeSub: "Session moy. {avgDuration} · {count} sessions avec durée",
+      acrossTimedSessions: "Sur {count} sessions avec durée",
       errorRate: "Taux d’erreur",
       errorHint: "Taux d’erreur = erreurs / total des messages. Plus il est faible, mieux c’est.",
       avgSession: "session moy.",
