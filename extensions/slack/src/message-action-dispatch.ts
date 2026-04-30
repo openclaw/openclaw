@@ -44,7 +44,8 @@ export async function handleSlackMessageAction(params: {
     const presentationBlocks = presentation
       ? buildSlackPresentationBlocks(presentation)
       : undefined;
-    const blocks = presentationBlocks?.length ? presentationBlocks : interactiveBlocks;
+    const mergedBlocks = [...(presentationBlocks ?? []), ...(interactiveBlocks ?? [])];
+    const blocks = mergedBlocks.length > 0 ? mergedBlocks : undefined;
     if (!content && !mediaUrl && !blocks) {
       throw new Error("Slack send requires message, blocks, or media.");
     }
