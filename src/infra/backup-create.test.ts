@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import * as tar from "tar";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { backupVerifyCommand } from "../commands/backup-verify.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -9,6 +9,7 @@ import {
   buildExtensionsNodeModulesFilter,
   createBackupArchive,
   formatBackupCreateSummary,
+  resolveSafeBackupTempRoot,
   type BackupCreateResult,
 } from "./backup-create.js";
 
@@ -140,6 +141,10 @@ describe("buildExtensionsNodeModulesFilter", () => {
 });
 
 describe("createBackupArchive", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   beforeEach(async () => {
     // Default: resolve to the real preferred tmp dir so non-containment tests work normally.
     const real =
@@ -226,7 +231,7 @@ describe("createBackupArchive", () => {
         await fs.mkdir(outputDir, { recursive: true });
 
         // Force resolvePreferredOpenClawTmpDir to return a path inside the state dir payload.
-        const fakeInternalTmpDir = state.path("tmp");
+        const fakeInternalTmpDir = path.join(state.stateDir, "tmp");
         await fs.mkdir(fakeInternalTmpDir, { recursive: true });
         tmpDirMocks.resolvePreferredOpenClawTmpDir.mockReturnValue(fakeInternalTmpDir);
 
@@ -238,6 +243,33 @@ describe("createBackupArchive", () => {
         const entries = await listArchiveEntries(result.archivePath);
         const manifestEntries = entries.filter((e) => e.endsWith("manifest.json"));
         expect(manifestEntries).toHaveLength(1);
+      },
+    );
+  });
+
+  it("fails before archiving when preferred and fallback temp roots are inside the state directory", async () => {
+    await withOpenClawTestState(
+      { layout: "state-only", prefix: "openclaw-backup-tmpdir-fallback-", scenario: "minimal" },
+      async (state) => {
+        const outputDir = state.path("backups");
+        await fs.mkdir(outputDir, { recursive: true });
+
+        const fakeInternalTmpDir = path.join(state.stateDir, "tmp");
+        await fs.mkdir(fakeInternalTmpDir, { recursive: true });
+        tmpDirMocks.resolvePreferredOpenClawTmpDir.mockReturnValue(fakeInternalTmpDir);
+        expect(() =>
+          resolveSafeBackupTempRoot(
+            [
+              {
+                kind: "state",
+                sourcePath: state.stateDir,
+                archivePath: "state",
+                displayPath: state.stateDir,
+              },
+            ],
+            fakeInternalTmpDir,
+          ),
+        ).toThrow(/temporary directory is inside a path selected for backup/i);
       },
     );
   });

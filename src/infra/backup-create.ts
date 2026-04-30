@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
-import os from "node:os";
+import { tmpdir as getOsTmpDir } from "node:os";
 import path from "node:path";
 import {
   buildBackupArchiveBasename,
@@ -296,15 +296,23 @@ export function buildExtensionsNodeModulesFilter(stateDir: string): (filePath: s
   };
 }
 
-function resolveSafeBackupTempRoot(assets: readonly BackupAsset[]): string {
+export function resolveSafeBackupTempRoot(
+  assets: readonly BackupAsset[],
+  fallbackTempRoot: string = getOsTmpDir(),
+): string {
   const preferred = resolvePreferredOpenClawTmpDir();
-  const insidePayload = assets.some((asset) => isPathWithin(preferred, asset.sourcePath));
-  if (!insidePayload) {
+  const isInsidePayload = (candidate: string): boolean =>
+    assets.some((asset) => isPathWithin(candidate, asset.sourcePath));
+
+  if (!isInsidePayload(preferred)) {
     return preferred;
   }
-  // Fallback: preferred temp root is inside a backup source (e.g. TMPDIR=~/.openclaw/tmp).
-  // Use the system temp dir directly to keep staging outside the archived payload.
-  return os.tmpdir();
+  if (!isInsidePayload(fallbackTempRoot)) {
+    return fallbackTempRoot;
+  }
+  throw new Error(
+    "Backup temporary directory is inside a path selected for backup; set TMPDIR outside OpenClaw state and retry.",
+  );
 }
 
 export async function createBackupArchive(
