@@ -23,6 +23,7 @@ import {
   getActiveEmbeddedRunCount,
   type ActiveEmbeddedRunSnapshot,
   type EmbeddedPiQueueHandle,
+  type EmbeddedPiQueueMessageOptions,
   type EmbeddedRunModelSwitchRequest,
   type EmbeddedRunWaiter,
 } from "./run-state.js";
@@ -31,6 +32,7 @@ export {
   getActiveEmbeddedRunCount,
   type ActiveEmbeddedRunSnapshot,
   type EmbeddedPiQueueHandle,
+  type EmbeddedPiQueueMessageOptions,
   type EmbeddedRunModelSwitchRequest,
 } from "./run-state.js";
 
@@ -57,7 +59,11 @@ function clearActiveRunSessionKeys(sessionId: string, sessionKey?: string): void
   }
 }
 
-export function queueEmbeddedPiMessage(sessionId: string, text: string): boolean {
+export function queueEmbeddedPiMessage(
+  sessionId: string,
+  text: string,
+  options?: EmbeddedPiQueueMessageOptions,
+): boolean {
   const handle = ACTIVE_EMBEDDED_RUNS.get(sessionId);
   if (!handle) {
     const queuedReplyRunMessage = queueReplyRunMessage(sessionId, text);
@@ -77,7 +83,7 @@ export function queueEmbeddedPiMessage(sessionId: string, text: string): boolean
     return false;
   }
   logMessageQueued({ sessionId, source: "pi-embedded-runner" });
-  void handle.queueMessage(text);
+  void handle.queueMessage(text, options ?? { steeringMode: "all" });
   return true;
 }
 

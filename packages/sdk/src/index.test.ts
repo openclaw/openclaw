@@ -8,21 +8,19 @@ type RequestCall = {
   options?: GatewayRequestOptions;
 };
 
+type FakeResponseValue = null | boolean | number | string | Record<string, unknown> | unknown[];
 type FakeResponseHandler = (
   params: unknown,
   options: GatewayRequestOptions | undefined,
   transport: FakeTransport,
-) => unknown;
-
-function isFakeResponseHandler(response: unknown): response is FakeResponseHandler {
-  return typeof response === "function";
-}
+) => Promise<FakeResponseValue> | FakeResponseValue;
+type FakeResponse = FakeResponseValue | FakeResponseHandler;
 
 class FakeTransport implements OpenClawTransport {
   readonly calls: RequestCall[] = [];
   private readonly eventHub = new EventHub<GatewayEvent>({ replayLimit: 100 });
 
-  constructor(private readonly responses: Record<string, unknown>) {}
+  constructor(private readonly responses: Record<string, FakeResponse>) {}
 
   async request<T = unknown>(
     method: string,
@@ -31,7 +29,7 @@ class FakeTransport implements OpenClawTransport {
   ): Promise<T> {
     this.calls.push({ method, params, options });
     const response = this.responses[method];
-    if (isFakeResponseHandler(response)) {
+    if (typeof response === "function") {
       return (await response(params, options, this)) as T;
     }
     return response as T;

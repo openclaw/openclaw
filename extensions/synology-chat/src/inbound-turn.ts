@@ -72,96 +72,98 @@ export async function dispatchSynologyChatInboundTurn(params: {
     userId: params.msg.from,
   });
 
-  await resolved.rt.channel.turn.runResolved({
+  await resolved.rt.channel.turn.run({
     channel: CHANNEL_ID,
     accountId: params.account.accountId,
     raw: params.msg,
-    input: (msg) => ({
-      id: `${params.account.accountId}:${msg.from}`,
-      timestamp: Date.now(),
-      rawText: msg.body,
-      textForAgent: msg.body,
-      textForCommands: msg.body,
-      raw: msg,
-    }),
-    resolveTurn: (input) => {
-      const chatKind =
-        params.msg.chatType === "group" || params.msg.chatType === "channel"
-          ? params.msg.chatType
-          : "direct";
-      const msgCtx = resolved.rt.channel.turn.buildContext({
-        channel: CHANNEL_ID,
-        accountId: params.account.accountId,
-        timestamp: input.timestamp,
-        from: `synology-chat:${params.msg.from}`,
-        sender: {
-          id: params.msg.from,
-          name: params.msg.senderName,
-        },
-        conversation: {
-          kind: chatKind,
-          id: params.msg.from,
-          label: params.msg.senderName || params.msg.from,
-          routePeer: {
-            kind: "direct",
-            id: params.msg.from,
-          },
-        },
-        route: {
-          agentId: resolved.route.agentId,
+    adapter: {
+      ingest: (msg) => ({
+        id: `${params.account.accountId}:${msg.from}`,
+        timestamp: Date.now(),
+        rawText: msg.body,
+        textForAgent: msg.body,
+        textForCommands: msg.body,
+        raw: msg,
+      }),
+      resolveTurn: (input) => {
+        const chatKind =
+          params.msg.chatType === "group" || params.msg.chatType === "channel"
+            ? params.msg.chatType
+            : "direct";
+        const msgCtx = resolved.rt.channel.turn.buildContext({
+          channel: CHANNEL_ID,
           accountId: params.account.accountId,
-          routeSessionKey: resolved.sessionKey,
-          dispatchSessionKey: resolved.sessionKey,
-        },
-        reply: {
-          to: `synology-chat:${params.msg.from}`,
-          originatingTo: `synology-chat:${params.msg.from}`,
-        },
-        message: {
-          rawBody: input.rawText,
-          commandBody: input.textForCommands,
-          bodyForAgent: input.textForAgent,
-          envelopeFrom: params.msg.senderName,
-        },
-        extra: {
-          ChatType: params.msg.chatType,
-          CommandAuthorized: params.msg.commandAuthorized,
-        },
-      });
-      const storePath = resolved.rt.channel.session.resolveStorePath(currentCfg.session?.store, {
-        agentId: resolved.route.agentId,
-      });
-      return {
-        cfg: currentCfg,
-        channel: CHANNEL_ID,
-        accountId: params.account.accountId,
-        agentId: resolved.route.agentId,
-        routeSessionKey: resolved.route.sessionKey,
-        storePath,
-        ctxPayload: msgCtx,
-        recordInboundSession: resolved.rt.channel.session.recordInboundSession,
-        dispatchReplyWithBufferedBlockDispatcher:
-          resolved.rt.channel.reply.dispatchReplyWithBufferedBlockDispatcher,
-        delivery: {
-          deliver: async (payload) => {
-            await deliverSynologyChatReply({
-              account: params.account,
-              sendUserId,
-              payload,
-            });
+          timestamp: input.timestamp,
+          from: `synology-chat:${params.msg.from}`,
+          sender: {
+            id: params.msg.from,
+            name: params.msg.senderName,
           },
-        },
-        dispatcherOptions: {
-          onReplyStart: () => {
-            params.log?.info?.(`Agent reply started for ${params.msg.from}`);
+          conversation: {
+            kind: chatKind,
+            id: params.msg.from,
+            label: params.msg.senderName || params.msg.from,
+            routePeer: {
+              kind: "direct",
+              id: params.msg.from,
+            },
           },
-        },
-        record: {
-          onRecordError: (err) => {
-            params.log?.info?.(`Session metadata update failed for ${params.msg.from}`, err);
+          route: {
+            agentId: resolved.route.agentId,
+            accountId: params.account.accountId,
+            routeSessionKey: resolved.sessionKey,
+            dispatchSessionKey: resolved.sessionKey,
           },
-        },
-      };
+          reply: {
+            to: `synology-chat:${params.msg.from}`,
+            originatingTo: `synology-chat:${params.msg.from}`,
+          },
+          message: {
+            rawBody: input.rawText,
+            commandBody: input.textForCommands,
+            bodyForAgent: input.textForAgent,
+            envelopeFrom: params.msg.senderName,
+          },
+          extra: {
+            ChatType: params.msg.chatType,
+            CommandAuthorized: params.msg.commandAuthorized,
+          },
+        });
+        const storePath = resolved.rt.channel.session.resolveStorePath(currentCfg.session?.store, {
+          agentId: resolved.route.agentId,
+        });
+        return {
+          cfg: currentCfg,
+          channel: CHANNEL_ID,
+          accountId: params.account.accountId,
+          agentId: resolved.route.agentId,
+          routeSessionKey: resolved.route.sessionKey,
+          storePath,
+          ctxPayload: msgCtx,
+          recordInboundSession: resolved.rt.channel.session.recordInboundSession,
+          dispatchReplyWithBufferedBlockDispatcher:
+            resolved.rt.channel.reply.dispatchReplyWithBufferedBlockDispatcher,
+          delivery: {
+            deliver: async (payload) => {
+              await deliverSynologyChatReply({
+                account: params.account,
+                sendUserId,
+                payload,
+              });
+            },
+          },
+          dispatcherOptions: {
+            onReplyStart: () => {
+              params.log?.info?.(`Agent reply started for ${params.msg.from}`);
+            },
+          },
+          record: {
+            onRecordError: (err) => {
+              params.log?.info?.(`Session metadata update failed for ${params.msg.from}`, err);
+            },
+          },
+        };
+      },
     },
   });
 

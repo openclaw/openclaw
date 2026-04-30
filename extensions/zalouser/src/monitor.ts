@@ -671,64 +671,66 @@ async function processMessage(
     },
   });
 
-  await core.channel.turn.runResolved({
+  await core.channel.turn.run({
     channel: "zalouser",
     accountId: account.accountId,
     raw: message,
-    input: {
-      id: messageSid ?? `${message.timestampMs}`,
-      timestamp: message.timestampMs,
-      rawText: rawBody,
-      textForAgent: rawBody,
-      textForCommands: commandBody,
-      raw: message,
-    },
-    resolveTurn: () => ({
-      cfg: config,
-      channel: "zalouser",
-      accountId: account.accountId,
-      agentId: route.agentId,
-      routeSessionKey: route.sessionKey,
-      storePath,
-      ctxPayload,
-      recordInboundSession: core.channel.session.recordInboundSession,
-      dispatchReplyWithBufferedBlockDispatcher:
-        core.channel.reply.dispatchReplyWithBufferedBlockDispatcher,
-      delivery: {
-        deliver: async (payload) => {
-          await deliverZalouserReply({
-            payload: payload as { text?: string; mediaUrls?: string[]; mediaUrl?: string },
-            profile: account.profile,
-            chatId,
-            isGroup,
-            runtime,
-            core,
-            config,
-            accountId: account.accountId,
-            statusSink,
-            tableMode: core.channel.text.resolveMarkdownTableMode({
-              cfg: config,
-              channel: "zalouser",
+    adapter: {
+      ingest: () => ({
+        id: messageSid ?? `${message.timestampMs}`,
+        timestamp: message.timestampMs,
+        rawText: rawBody,
+        textForAgent: rawBody,
+        textForCommands: commandBody,
+        raw: message,
+      }),
+      resolveTurn: () => ({
+        cfg: config,
+        channel: "zalouser",
+        accountId: account.accountId,
+        agentId: route.agentId,
+        routeSessionKey: route.sessionKey,
+        storePath,
+        ctxPayload,
+        recordInboundSession: core.channel.session.recordInboundSession,
+        dispatchReplyWithBufferedBlockDispatcher:
+          core.channel.reply.dispatchReplyWithBufferedBlockDispatcher,
+        delivery: {
+          deliver: async (payload) => {
+            await deliverZalouserReply({
+              payload: payload as { text?: string; mediaUrls?: string[]; mediaUrl?: string },
+              profile: account.profile,
+              chatId,
+              isGroup,
+              runtime,
+              core,
+              config,
               accountId: account.accountId,
-            }),
-          });
+              statusSink,
+              tableMode: core.channel.text.resolveMarkdownTableMode({
+                cfg: config,
+                channel: "zalouser",
+                accountId: account.accountId,
+              }),
+            });
+          },
+          onError: (err, info) => {
+            runtime.error(
+              `[${account.accountId}] Zalouser ${info.kind} reply failed: ${String(err)}`,
+            );
+          },
         },
-        onError: (err, info) => {
-          runtime.error(
-            `[${account.accountId}] Zalouser ${info.kind} reply failed: ${String(err)}`,
-          );
+        dispatcherOptions: replyPipeline,
+        replyOptions: {
+          onModelSelected,
         },
-      },
-      dispatcherOptions: replyPipeline,
-      replyOptions: {
-        onModelSelected,
-      },
-      record: {
-        onRecordError: (err) => {
-          runtime.error?.(`zalouser: failed updating session meta: ${String(err)}`);
+        record: {
+          onRecordError: (err) => {
+            runtime.error?.(`zalouser: failed updating session meta: ${String(err)}`);
+          },
         },
-      },
-    }),
+      }),
+    },
   });
   if (isGroup && historyKey) {
     clearHistoryEntriesIfEnabled({

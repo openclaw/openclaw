@@ -230,7 +230,6 @@ export function createMatrixHandlerTestHarness(
         },
         turn: {
           runPrepared,
-          dispatchAssembled: vi.fn(),
         },
         reactions: {
           shouldAckReaction: options.shouldAckReaction ?? (() => false),

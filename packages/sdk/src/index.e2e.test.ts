@@ -2,6 +2,8 @@ import type { AddressInfo } from "node:net";
 import net from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
 import { WebSocketServer, type RawData, type WebSocket } from "ws";
+import { installGatewayTestHooks, startServer } from "../../../src/gateway/test-helpers.js";
+import { emitAgentEvent, registerAgentRunContext } from "../../../src/infra/agent-events.js";
 import { GatewayClientTransport, OpenClaw } from "./index.js";
 
 type JsonObject = Record<string, unknown>;
@@ -273,6 +275,77 @@ describe("OpenClaw SDK websocket e2e", () => {
     } finally {
       await transport.close();
       await gateway.close();
+    }
+  });
+});
+
+describe("OpenClaw SDK real Gateway e2e", () => {
+  installGatewayTestHooks({ scope: "test" });
+
+  it("streams real Gateway agent events", async () => {
+    const token = "sdk-real-gateway-token";
+    const started = await startServer(token, { controlUiEnabled: false });
+    const transport = new GatewayClientTransport({
+      url: `ws://127.0.0.1:${started.port}`,
+      token,
+      deviceIdentity: null,
+      requestTimeoutMs: 2_000,
+    });
+    const oc = new OpenClaw({ transport });
+    const runId = "sdk-real-gateway-run";
+
+    try {
+      await oc.connect();
+
+      registerAgentRunContext(runId, {
+        sessionKey: "agent:main:dashboard:sdk-real-gateway",
+        verboseLevel: "off",
+      });
+
+      const run = await oc.runs.get(runId);
+      const eventsPromise = (async () => {
+        const seen: string[] = [];
+        const sessionKeys: Array<string | undefined> = [];
+        for await (const event of run.events()) {
+          seen.push(event.type);
+          sessionKeys.push(event.sessionKey);
+          if (event.type === "run.completed") {
+            break;
+          }
+        }
+        return { seen, sessionKeys };
+      })();
+      const eventsTimeout = new Promise<never>((_resolve, reject) => {
+        setTimeout(() => reject(new Error("timed out waiting for real Gateway SDK events")), 2_000);
+      });
+
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: { phase: "start", startedAt: 111 },
+      });
+      emitAgentEvent({
+        runId,
+        stream: "assistant",
+        data: { delta: "hello from real gateway" },
+      });
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: { phase: "end", endedAt: 222 },
+      });
+
+      const { seen, sessionKeys } = await Promise.race([eventsPromise, eventsTimeout]);
+      expect(seen).toEqual(["run.started", "assistant.delta", "run.completed"]);
+      expect(sessionKeys).toEqual([
+        "agent:main:dashboard:sdk-real-gateway",
+        "agent:main:dashboard:sdk-real-gateway",
+        "agent:main:dashboard:sdk-real-gateway",
+      ]);
+    } finally {
+      await oc.close();
+      await started.server.close();
+      started.envSnapshot.restore();
     }
   });
 });

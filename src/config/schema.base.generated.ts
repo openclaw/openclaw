@@ -18977,7 +18977,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 ],
                 title: "Queue Mode",
                 description:
-                  'Queue behavior mode. "steer" injects at the next model boundary; "followup" runs later; "collect" batches later; "steer-backlog" and "steer+backlog" steer now and preserve backlog; "queue" aliases steer; "interrupt" aborts the active run. Use conservative modes unless interruption is intentional.',
+                  'Queue behavior mode. Use "steer" to inject all queued steering messages at the next model boundary; "queue" is legacy one-at-a-time steering; "followup" runs later; "collect" batches later; "steer-backlog" (alias "steer+backlog") does both; "interrupt" aborts the active run.',
               },
               byChannel: {
                 type: "object",
@@ -28307,7 +28307,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "messages.queue.mode": {
       label: "Queue Mode",
-      help: 'Queue behavior mode. "steer" injects at the next model boundary; "followup" runs later; "collect" batches later; "steer-backlog" and "steer+backlog" steer now and preserve backlog; "queue" aliases steer; "interrupt" aborts the active run. Use conservative modes unless interruption is intentional.',
+      help: 'Queue behavior mode. Use "steer" to inject all queued steering messages at the next model boundary; "queue" is legacy one-at-a-time steering; "followup" runs later; "collect" batches later; "steer-backlog" (alias "steer+backlog") does both; "interrupt" aborts the active run.',
       tags: ["advanced"],
     },
     "messages.queue.byChannel": {
