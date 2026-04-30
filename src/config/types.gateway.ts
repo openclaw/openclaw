@@ -191,6 +191,11 @@ export type GatewayTailscaleServeConfig = {
   httpsPort?: number;
   /** Optional Tailscale Service id for `tailscale serve --service <id>`. */
   service?: string;
+  /**
+   * Auto-select https backend when gateway TLS is enabled (default: true).
+   * Set to false to always use the explicit backend value (or http default).
+   */
+  autoHttps?: boolean;
 };
 
 export type GatewayTailscaleConfig = {

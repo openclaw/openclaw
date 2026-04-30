@@ -420,7 +420,9 @@ export function buildTailscaleServeCommandArgs(params: {
   target: string;
   backend: "http" | "https" | "https-insecure";
 } {
-  const backend = params.serveConfig?.backend ?? "http";
+  const autoHttps = params.serveConfig?.autoHttps !== false;
+  const defaultBackend = params.tlsEnabled && autoHttps ? "https" : "http";
+  const backend = params.serveConfig?.backend ?? defaultBackend;
   const httpsPort = params.serveConfig?.httpsPort;
   const service = normalizeOptionalString(params.serveConfig?.service);
   const target =

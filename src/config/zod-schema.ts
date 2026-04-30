@@ -870,6 +870,7 @@ export const OpenClawSchema = z
                   .optional(),
                 httpsPort: z.number().int().min(1).max(65535).optional(),
                 service: z.string().min(1).optional(),
+                autoHttps: z.boolean().optional(),
               })
               .strict()
               .optional(),
