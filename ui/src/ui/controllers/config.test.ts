@@ -17,6 +17,7 @@ function createState(): ConfigState {
     configActiveSection: null,
     configActiveSubsection: null,
     configApplying: false,
+    configDraftBaseHash: null,
     configForm: null,
     configFormDirty: false,
     configFormMode: "form",
@@ -242,6 +243,7 @@ describe("applyConfig", () => {
     state.configRaw = '{\n  agent: { workspace: "~/openclaw" }\n}\n';
     state.configSnapshot = {
       hash: "hash-123",
+      raw: '{\n  agent: { workspace: "~/openclaw" }\n}\n',
     };
 
     await applyConfig(state);

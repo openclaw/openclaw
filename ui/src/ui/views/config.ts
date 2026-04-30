@@ -1109,7 +1109,8 @@ export function renderConfig(props: ConfigProps) {
                             <config-editor
                               .value=${props.raw}
                               ?readonly=${blurred}
-                              ?dark=${props.themeMode === "dark" || (props.themeMode === "system" && !prefersLightScheme())}
+                              ?dark=${props.themeMode === "dark" ||
+                              (props.themeMode === "system" && !prefersLightScheme())}
                               @change=${(e: CustomEvent) => props.onRawChange(e.detail.value)}
                             ></config-editor>
                           `}

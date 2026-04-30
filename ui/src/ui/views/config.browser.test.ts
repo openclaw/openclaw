@@ -321,7 +321,8 @@ describe("config view", () => {
     expect(text).toContain("1 secret redacted");
     expect(text).toContain("Use the reveal button above to edit the raw config.");
     expect(text).not.toContain("supersecret");
-    expect(container.querySelector("textarea")).toBeNull();
+    // Editor is not rendered when sensitive values are blurred
+    expect(container.querySelector("config-editor")).toBeNull();
   });
 
   it("reveals sensitive raw config before editing", () => {
@@ -342,14 +343,17 @@ describe("config view", () => {
     expect(revealButton).toBeTruthy();
     revealButton?.click();
 
-    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
-    expect(textarea).not.toBeNull();
-    expect(textarea?.value).toContain("supersecret");
-    if (!textarea) {
-      return;
-    }
-    textarea.value = textarea.value.replace("supersecret", "updatedsecret");
-    textarea.dispatchEvent(new Event("input", { bubbles: true }));
-    expect(onRawChange).toHaveBeenCalledWith(textarea.value);
+    const editor = container.querySelector("config-editor");
+    expect(editor).not.toBeNull();
+    // Simulate a change event from the config-editor component from the config-editor component
+    const newRaw = '{\n  "openai": { "apiKey": "updatedsecret" }\n}';
+    editor?.dispatchEvent(
+      new CustomEvent("change", {
+        detail: { value: newRaw },
+        bubbles: true,
+        composed: true,
+      }),
+    );
+    expect(onRawChange).toHaveBeenCalledWith(newRaw);
   });
 });

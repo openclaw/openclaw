@@ -1,7 +1,10 @@
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
-import JSON5 from "json5";
-import { json } from "@codemirror/lang-json";
-import { syntaxHighlighting, defaultHighlightStyle, foldGutter, foldKeymap } from "@codemirror/language";
+import {
+  syntaxHighlighting,
+  defaultHighlightStyle,
+  foldGutter,
+  foldKeymap,
+} from "@codemirror/language";
 import { linter, lintGutter, type Diagnostic } from "@codemirror/lint";
 import { EditorState, type Extension, Compartment } from "@codemirror/state";
 import {
@@ -12,6 +15,8 @@ import {
   drawSelection,
   highlightSpecialChars,
 } from "@codemirror/view";
+import { json5 } from "codemirror-json5";
+import JSON5 from "json5";
 import { css, html, LitElement } from "lit";
 import { customElement, property, query } from "lit/decorators.js";
 
@@ -215,8 +220,8 @@ export class ConfigEditor extends LitElement {
       // Selection
       drawSelection(),
 
-      // JSON language mode
-      json(),
+      // JSON5 language mode (OpenClaw raw config uses JSON5 with comments, unquoted keys, trailing commas)
+      json5(),
 
       // Syntax highlighting
       syntaxHighlighting(defaultHighlightStyle, { fallback: true }),

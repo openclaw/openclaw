@@ -23,6 +23,7 @@ export type ConfigState = {
   configApplying: boolean;
   updateRunning: boolean;
   configSnapshot: ConfigSnapshot | null;
+  configDraftBaseHash?: string | null;
   configSchema: unknown;
   configSchemaVersion: string | null;
   configSchemaLoading: boolean;
@@ -37,7 +38,11 @@ export type ConfigState = {
   lastError: string | null;
 };
 
-export async function loadConfig(state: ConfigState) {
+export type LoadConfigOptions = {
+  discardPendingChanges?: boolean;
+};
+
+export async function loadConfig(state: ConfigState, options: LoadConfigOptions = {}) {
   if (!state.client || !state.connected) {
     return;
   }
@@ -45,7 +50,7 @@ export async function loadConfig(state: ConfigState) {
   state.lastError = null;
   try {
     const res = await state.client.request<ConfigSnapshot>("config.get", {});
-    applyConfigSnapshot(state, res);
+    applyConfigSnapshot(state, res, options);
   } catch (err) {
     state.lastError = String(err);
   } finally {
@@ -77,9 +82,23 @@ export function applyConfigSchema(state: ConfigState, res: ConfigSchemaResponse)
   state.configSchemaVersion = res.version ?? null;
 }
 
-export function applyConfigSnapshot(state: ConfigState, snapshot: ConfigSnapshot) {
+export function applyConfigSnapshot(
+  state: ConfigState,
+  snapshot: ConfigSnapshot,
+  options: LoadConfigOptions = {},
+) {
+  const preservePendingChanges = state.configFormDirty && options.discardPendingChanges !== true;
+  const draftBaseHash = state.configDraftBaseHash ?? state.configSnapshot?.hash ?? null;
   state.configSnapshot = snapshot;
-  let rawFromSnapshot =
+  const rawAvailable = typeof snapshot.raw === "string";
+
+  // Force Form mode when raw editing was active but the snapshot has no raw text.
+  // Without this, the raw editor would show a blank/invalid document.
+  if (!rawAvailable && state.configFormMode === "raw") {
+    state.configFormMode = "form";
+  }
+
+  let rawFromSnapshot: string =
     typeof snapshot.raw === "string"
       ? snapshot.raw
       : snapshot.config && typeof snapshot.config === "object"
@@ -98,7 +117,7 @@ export function applyConfigSnapshot(state: ConfigState, snapshot: ConfigSnapshot
     }
   }
 
-  if (!state.configFormDirty || state.configFormMode === "raw") {
+  if (!preservePendingChanges || state.configFormMode === "raw") {
     state.configRaw = rawFromSnapshot;
   } else if (state.configForm) {
     state.configRaw = serializeConfigForm(state.configForm);
@@ -108,10 +127,14 @@ export function applyConfigSnapshot(state: ConfigState, snapshot: ConfigSnapshot
   state.configValid = typeof snapshot.valid === "boolean" ? snapshot.valid : null;
   state.configIssues = Array.isArray(snapshot.issues) ? snapshot.issues : [];
 
-  if (!state.configFormDirty) {
+  if (!preservePendingChanges) {
     state.configForm = cloneConfigObject(snapshot.config ?? {});
     state.configFormOriginal = cloneConfigObject(snapshot.config ?? {});
     state.configRawOriginal = rawFromSnapshot;
+    state.configFormDirty = false;
+    state.configDraftBaseHash = snapshot.hash ?? null;
+  } else {
+    state.configDraftBaseHash = draftBaseHash;
   }
 }
 
@@ -131,6 +154,12 @@ function asJsonSchema(value: unknown): JsonSchema | null {
  * gateway's Zod validation always sees correctly typed values.
  */
 function serializeFormForSubmit(state: ConfigState): string {
+  // Guard: raw editing is only safe when the snapshot carries a raw string.
+  // When raw is derived (serialized from config), re-submitting it can lose
+  // user formatting choices; force Form mode instead.
+  if (state.configFormMode === "raw" && typeof state.configSnapshot?.raw !== "string") {
+    throw new Error("Raw config editing is unavailable for this snapshot. Switch to Form mode.");
+  }
   if (state.configFormMode !== "form" || !state.configForm) {
     return state.configRaw;
   }
@@ -149,13 +178,14 @@ export async function saveConfig(state: ConfigState) {
   state.lastError = null;
   try {
     const raw = serializeFormForSubmit(state);
-    const baseHash = state.configSnapshot?.hash;
+    const baseHash = state.configDraftBaseHash ?? state.configSnapshot?.hash;
     if (!baseHash) {
       state.lastError = "Config hash missing; reload and retry.";
       return;
     }
     await state.client.request("config.set", { raw, baseHash });
     state.configFormDirty = false;
+    state.configDraftBaseHash = null;
     await loadConfig(state);
   } catch (err) {
     state.lastError = String(err);
@@ -172,7 +202,7 @@ export async function applyConfig(state: ConfigState) {
   state.lastError = null;
   try {
     const raw = serializeFormForSubmit(state);
-    const baseHash = state.configSnapshot?.hash;
+    const baseHash = state.configDraftBaseHash ?? state.configSnapshot?.hash;
     if (!baseHash) {
       state.lastError = "Config hash missing; reload and retry.";
       return;
@@ -183,6 +213,7 @@ export async function applyConfig(state: ConfigState) {
       sessionKey: state.applySessionKey,
     });
     state.configFormDirty = false;
+    state.configDraftBaseHash = null;
     await loadConfig(state);
   } catch (err) {
     state.lastError = String(err);
