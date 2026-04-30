@@ -250,7 +250,7 @@ function isDefaultEmptyBitableFieldValue(value: unknown): boolean {
     return true;
   }
   if (Array.isArray(value)) {
-    return value.length === 0 || value.every(isDefaultEmptyBitableFieldValue);
+    return value.every(isDefaultEmptyBitableFieldValue);
   }
   if (typeof value === "object") {
     const record = value as Record<string, unknown>;
