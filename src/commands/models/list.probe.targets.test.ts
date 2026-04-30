@@ -74,7 +74,10 @@ vi.mock("./shared.js", () => ({
 }));
 
 vi.mock("../../agents/auth-profiles.js", () => ({
-  externalCliDiscoveryScoped: (params: unknown) => ({ mode: "scoped", ...(params ?? {}) }),
+  externalCliDiscoveryScoped: (params: Record<string, unknown> = {}) => ({
+    mode: "scoped",
+    ...params,
+  }),
   ensureAuthProfileStore: (agentDir?: string) =>
     agentDir === "/tmp/coder-agent" && mockAgentStore ? mockAgentStore : mockStore,
   listProfilesForProvider: (store: AuthProfileStore, provider: string) =>
