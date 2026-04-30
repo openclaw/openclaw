@@ -350,7 +350,21 @@ lives on the [First-run FAQ](/help/faq-first-run).
   </Accordion>
 
   <Accordion title="Can I run Apple macOS-only skills from Linux?">
-    Not directly. macOS skills are gated by `metadata.openclaw.os` plus required binaries, and skills only appear in the system prompt when they are eligible on the **Gateway host**. On Linux, `darwin`-only skills (like `apple-notes`, `apple-reminders`, `things-mac`) will not load unless you override the gating.
+    Yes, if you have a **macOS node** connected to your Linux Gateway. The agent will execute the skill on the Mac node via the `exec` tool.
+  </Accordion>
+
+  <Accordion title="Is there a native Apple Notes skill that doesn't require extra CLI tools?">
+    Yes. While the default `apple-notes` skill requires the `memo` CLI, you can install the **`apple-notes-native`** skill (by `lishix520`) from ClawHub. It uses native macOS AppleScript (osascript) and has no external binary dependencies.
+
+    Install it via:
+    ```bash
+    openclaw skills install lishix520/apple-notes-native
+    ```
+
+  </Accordion>
+
+  <Accordion title="Gating macOS skills on Linux">
+    macOS skills are gated by `metadata.openclaw.os` plus required binaries, and skills only appear in the system prompt when they are eligible on the **Gateway host**. On Linux, `darwin`-only skills (like `apple-notes`, `apple-reminders`, `things-mac`) will not load unless you override the gating.
 
     You have three supported patterns:
 

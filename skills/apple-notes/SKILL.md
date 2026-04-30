@@ -75,3 +75,25 @@ Notes
 - macOS-only.
 - Requires Apple Notes.app to be accessible.
 - For automation, grant permissions in System Settings > Privacy & Security > Automation.
+
+## Native Alternative (No `memo` dependency)
+
+If you want a lower-friction setup that doesn't require installing the `memo` CLI, we recommend the `apple-notes-native` skill by `lishix520`. It uses native macOS AppleScript (osascript) for automation.
+
+**Install:**
+
+```bash
+openclaw skills install lishix520/apple-notes-native
+```
+
+Benefits:
+
+- No third-party binary dependencies (no `memo` brew tap needed).
+- Direct interaction with Notes.app via official automation APIs.
+- Simpler setup for macOS-only environments.
+
+**Caveats:**
+
+- **Automation Permissions:** Requires "Automation" access for Notes.app in macOS System Settings.
+- **Reliability:** AppleScript (osascript) can occasionally be slower than direct binary access.
+- **UI Context:** Notes.app may need to be open or in a specific state for some operations.

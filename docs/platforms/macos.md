@@ -58,6 +58,13 @@ The macOS app presents itself as a node. Common commands:
 
 The node reports a `permissions` map so agents can decide what’s allowed.
 
+### Native productivity skills
+
+For macOS-only workflows, we recommend using native-first skills that leverage AppleScript (osascript) to avoid external CLI dependencies:
+
+- **Apple Notes:** Use `apple-notes-native` (by `lishix520`) for direct interaction with Notes.app without the `memo` CLI wrapper.
+- **Things 3:** Use the bundled `things-mac` skill.
+
 Node service + app IPC:
 
 - When the headless node host service is running (remote mode), it connects to the Gateway WS as a node.
