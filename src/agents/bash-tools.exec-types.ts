@@ -27,6 +27,7 @@ export type ExecToolDefaults = {
   sandbox?: BashSandboxConfig;
   elevated?: ExecElevatedDefaults;
   allowBackground?: boolean;
+  processToolAvailable?: boolean;
   scopeKey?: string;
   sessionKey?: string;
   messageProvider?: string;

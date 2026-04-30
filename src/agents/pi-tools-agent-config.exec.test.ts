@@ -104,6 +104,9 @@ describe("Agent-specific exec tool defaults", () => {
 
     const resultDetails = result?.details as { status?: string } | undefined;
     expect(resultDetails?.status).toBe("running");
+    const resultText = result?.content?.find((item) => item.type === "text")?.text ?? "";
+    expect(resultText).not.toContain("Use process");
+    expect(resultText).toContain("completion wake");
   });
 
   it("routes implicit auto exec to gateway without a sandbox runtime", async () => {

@@ -6,8 +6,9 @@ read_when:
 title: "Exec tool"
 ---
 
-Run shell commands in the workspace. Supports foreground + background execution via `process`.
-If `process` is disallowed, `exec` runs synchronously and ignores `yieldMs`/`background`.
+Run shell commands in the workspace. Supports foreground + background execution.
+When `process` is available, background sessions can be managed with `process`.
+If `process` is disallowed, `exec` can still background long commands, but follow-up is limited to completion wake notifications and the command timeout.
 Background sessions are scoped per agent; `process` only sees sessions from the same agent.
 
 ## Parameters
@@ -88,7 +89,7 @@ Notes:
   that file.
 - For long-running work that starts now, start it once and rely on automatic
   completion wake when it is enabled and the command emits output or fails.
-  Use `process` for logs, status, input, or intervention; do not emulate
+  Use `process` when available for logs, status, input, or intervention; do not emulate
   scheduling with sleep loops, timeout loops, or repeated polling.
 - For work that should happen later or on a schedule, use cron instead of
   `exec` sleep/delay patterns.
