@@ -1,3 +1,4 @@
+import { STREAM_ERROR_FALLBACK_TEXT } from "../agents/stream-message-shared.js";
 import { isHeartbeatOkResponse, isHeartbeatUserMessage } from "../auto-reply/heartbeat-filter.js";
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
 import {
@@ -9,6 +10,9 @@ import { stripEnvelopeFromMessages } from "./chat-sanitize.js";
 import { isSuppressedControlReplyText } from "./control-reply-text.js";
 
 export const DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS = 8_000;
+const STREAM_ERROR_AUTH_DISPLAY_TEXT =
+  "Assistant couldn't start because model authentication failed. Reconnect the model provider and try again.";
+const STREAM_ERROR_GENERIC_DISPLAY_TEXT = "Assistant turn failed before producing a reply.";
 
 type RoleContentMessage = {
   role: string;
@@ -163,6 +167,99 @@ function sanitizeAssistantPhasedContentBlocks(content: unknown[]): {
   };
 }
 
+function projectAssistantTextFromMixedToolContent(
+  content: unknown[],
+  maxChars: number,
+): { content: unknown[]; changed: boolean } | null {
+  const hasToolHistoryBlock = content.some((block) => {
+    if (!block || typeof block !== "object") {
+      return false;
+    }
+    return isToolHistoryBlockType((block as { type?: unknown }).type);
+  });
+  if (!hasToolHistoryBlock) {
+    return null;
+  }
+
+  const textBlocks: unknown[] = [];
+  for (const block of content) {
+    if (!block || typeof block !== "object") {
+      continue;
+    }
+    const entry = block as { type?: unknown; text?: unknown };
+    if (entry.type !== "text" || typeof entry.text !== "string" || !entry.text.trim()) {
+      continue;
+    }
+    const stripped = stripInlineDirectiveTagsForDisplay(entry.text);
+    const truncated = truncateChatHistoryText(stripped.text, maxChars);
+    if (truncated.text.trim()) {
+      textBlocks.push({ type: "text", text: truncated.text });
+    }
+  }
+
+  return textBlocks.length > 0 ? { content: textBlocks, changed: true } : null;
+}
+
+function formatAssistantDisplayErrorText(errorMessage: unknown, maxChars: number): string | null {
+  if (typeof errorMessage !== "string") {
+    return null;
+  }
+  const text = stripInlineDirectiveTagsForDisplay(errorMessage).text.trim();
+  if (!text) {
+    return null;
+  }
+  const lower = text.toLowerCase();
+  const displayText = /\b(401|unauthorized|authentication|auth)\b/.test(lower)
+    ? STREAM_ERROR_AUTH_DISPLAY_TEXT
+    : /^\d{3}\s+status code\b/.test(lower)
+      ? STREAM_ERROR_GENERIC_DISPLAY_TEXT
+      : /^error:/i.test(text)
+        ? text
+        : `Error: ${text}`;
+  return truncateChatHistoryText(displayText, maxChars).text;
+}
+
+function isStreamErrorFallbackText(text: unknown): boolean {
+  return typeof text === "string" && text.trim() === STREAM_ERROR_FALLBACK_TEXT;
+}
+
+function projectAssistantStreamErrorForDisplay(
+  entry: Record<string, unknown>,
+  maxChars: number,
+): boolean {
+  if (entry.role !== "assistant") {
+    return false;
+  }
+  const displayText = formatAssistantDisplayErrorText(entry.errorMessage, maxChars);
+  if (!displayText) {
+    return false;
+  }
+
+  let changed = false;
+  if (isStreamErrorFallbackText(entry.content)) {
+    entry.content = displayText;
+    changed = true;
+  } else if (Array.isArray(entry.content) && entry.content.length === 0) {
+    entry.content = [{ type: "text", text: displayText }];
+    changed = true;
+  } else if (Array.isArray(entry.content) && entry.content.length === 1) {
+    const block = entry.content[0];
+    if (block && typeof block === "object") {
+      const typed = block as { type?: unknown; text?: unknown };
+      if (typed.type === "text" && isStreamErrorFallbackText(typed.text)) {
+        entry.content = [{ ...typed, text: displayText }];
+        changed = true;
+      }
+    }
+  }
+
+  if (isStreamErrorFallbackText(entry.text)) {
+    entry.text = displayText;
+    changed = true;
+  }
+  return changed;
+}
+
 function toFiniteNumber(x: unknown): number | undefined {
   return typeof x === "number" && Number.isFinite(x) ? x : undefined;
 }
@@ -285,10 +382,19 @@ function sanitizeChatHistoryMessage(
       changed = true;
     }
     if (entry.role === "assistant" && Array.isArray(entry.content)) {
-      const sanitizedPhases = sanitizeAssistantPhasedContentBlocks(entry.content);
-      if (sanitizedPhases.changed) {
-        entry.content = sanitizedPhases.content;
+      const mixedToolText = projectAssistantTextFromMixedToolContent(entry.content, maxChars);
+      if (mixedToolText) {
+        entry.content = mixedToolText.content;
+        if (entry.phase === "commentary") {
+          delete entry.phase;
+        }
         changed = true;
+      } else {
+        const sanitizedPhases = sanitizeAssistantPhasedContentBlocks(entry.content);
+        if (sanitizedPhases.changed) {
+          entry.content = sanitizedPhases.content;
+          changed = true;
+        }
       }
     }
   }
@@ -304,6 +410,9 @@ function sanitizeChatHistoryMessage(
       changed ||= stripped.changed || res.truncated;
     }
   }
+
+  const projectedStreamError = projectAssistantStreamErrorForDisplay(entry, maxChars);
+  changed ||= projectedStreamError;
 
   return { message: changed ? entry : message, changed };
 }
@@ -353,6 +462,31 @@ function hasAssistantNonTextContent(message: unknown): boolean {
   );
 }
 
+function hasAssistantMixedToolVisibleText(message: unknown): boolean {
+  if (!message || typeof message !== "object") {
+    return false;
+  }
+  const content = (message as { content?: unknown }).content;
+  if (!Array.isArray(content)) {
+    return false;
+  }
+  let hasToolHistoryBlock = false;
+  let hasText = false;
+  for (const block of content) {
+    if (!block || typeof block !== "object") {
+      continue;
+    }
+    const entry = block as { type?: unknown; text?: unknown };
+    if (isToolHistoryBlockType(entry.type)) {
+      hasToolHistoryBlock = true;
+    }
+    if (entry.type === "text" && typeof entry.text === "string" && entry.text.trim()) {
+      hasText = true;
+    }
+  }
+  return hasToolHistoryBlock && hasText;
+}
+
 function shouldDropAssistantHistoryMessage(message: unknown): boolean {
   if (!message || typeof message !== "object") {
     return false;
@@ -362,7 +496,7 @@ function shouldDropAssistantHistoryMessage(message: unknown): boolean {
     return false;
   }
   if (resolveAssistantMessagePhase(message) === "commentary") {
-    return true;
+    return !hasAssistantMixedToolVisibleText(message);
   }
   const text = extractAssistantTextForSilentCheck(message);
   if (text === undefined || !isSuppressedControlReplyText(text)) {

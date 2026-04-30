@@ -3,9 +3,13 @@ import { extractTextCached } from "./message-extract.ts";
 import { normalizeMessage } from "./message-normalizer.ts";
 import { normalizeRoleForGrouping } from "./role-normalizer.ts";
 import { messageMatchesSearchQuery } from "./search-match.ts";
+import { trimCommittedStreamPrefix } from "./stream-prefix.ts";
 import { extractToolCards, extractToolPreview } from "./tool-cards.ts";
 
 const CHAT_HISTORY_RENDER_LIMIT = 200;
+const UNKNOWN_TIMESTAMP = Number.NaN;
+const MAX_FALLBACK_TIMESTAMPS = 1_000;
+const fallbackTimestampsByKey = new Map<string, number>();
 
 export type BuildChatItemsProps = {
   sessionKey: string;
@@ -15,6 +19,7 @@ export type BuildChatItemsProps = {
   stream: string | null;
   streamStartedAt: number | null;
   showToolCalls: boolean;
+  assistantName?: string | null;
   searchOpen?: boolean;
   searchQuery?: string;
 };
@@ -68,7 +73,6 @@ function extractChatMessagePreview(toolMessage: unknown): {
   text: string | null;
   timestamp: number | null;
 } | null {
-  const normalized = normalizeMessage(toolMessage);
   const cards = extractToolCards(toolMessage, "preview");
   for (let index = cards.length - 1; index >= 0; index--) {
     const card = cards[index];
@@ -76,7 +80,7 @@ function extractChatMessagePreview(toolMessage: unknown): {
       return {
         preview: card.preview,
         text: card.outputText ?? null,
-        timestamp: normalized.timestamp ?? null,
+        timestamp: readMessageTimestamp(toolMessage),
       };
     }
   }
@@ -92,7 +96,36 @@ function extractChatMessagePreview(toolMessage: unknown): {
   if (preview?.kind !== "canvas") {
     return null;
   }
-  return { preview, text: text ?? null, timestamp: normalized.timestamp ?? null };
+  return { preview, text: text ?? null, timestamp: readMessageTimestamp(toolMessage) };
+}
+
+function readMessageTimestamp(message: unknown): number | null {
+  if (!message || typeof message !== "object") {
+    return null;
+  }
+  const timestamp = (message as Record<string, unknown>).timestamp;
+  return typeof timestamp === "number" && Number.isFinite(timestamp) ? timestamp : null;
+}
+
+export function resetChatItemFallbackTimestampsForTests() {
+  fallbackTimestampsByKey.clear();
+}
+
+function fallbackTimestampForKey(key: string): number {
+  const existing = fallbackTimestampsByKey.get(key);
+  if (typeof existing === "number") {
+    return existing;
+  }
+  const timestamp = Date.now();
+  fallbackTimestampsByKey.set(key, timestamp);
+  while (fallbackTimestampsByKey.size > MAX_FALLBACK_TIMESTAMPS) {
+    const oldest = fallbackTimestampsByKey.keys().next().value;
+    if (typeof oldest !== "string") {
+      break;
+    }
+    fallbackTimestampsByKey.delete(oldest);
+  }
+  return timestamp;
 }
 
 function findNearestAssistantMessageIndex(
@@ -111,7 +144,7 @@ function findNearestAssistantMessageIndex(
       }
       return {
         index,
-        timestamp: normalizeMessage(item.message).timestamp ?? null,
+        timestamp: readMessageTimestamp(item.message),
       };
     })
     .filter(Boolean) as Array<{ index: number; timestamp: number | null }>;
@@ -148,15 +181,95 @@ function findNearestAssistantMessageIndex(
   return assistantEntries[assistantEntries.length - 1]?.index ?? null;
 }
 
-function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup> {
+function readObject(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function readNonEmptyString(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function readSameTurnGroupKey(message: unknown): string | null {
+  const raw = readObject(message);
+  if (!raw) {
+    return null;
+  }
+  const local = readObject(raw.__openclaw_local);
+  const localRunId = readNonEmptyString(local?.runId);
+  if (localRunId) {
+    return `local-run:${localRunId}`;
+  }
+  const meta = readObject(raw.__openclaw);
+  for (const key of ["turnId", "turn_id", "runId", "run_id", "requestId", "request_id"]) {
+    const value = readNonEmptyString(meta?.[key] ?? raw[key]);
+    if (value) {
+      return `${key}:${value}`;
+    }
+  }
+  return null;
+}
+
+function readMessageText(message: unknown): string {
+  return normalizeMessage(message)
+    .content.reduce<string[]>((lines, item) => {
+      if (item.type === "text" && typeof item.text === "string") {
+        lines.push(item.text);
+      }
+      return lines;
+    }, [])
+    .join("\n")
+    .trim();
+}
+
+function readGatewaySessionMarkerLabel(
+  message: unknown,
+  assistantName: string | null | undefined,
+): { kind: "new-session" | "session-reset"; label: string } | null {
+  const raw = readObject(message);
+  if (!raw || raw.provider !== "openclaw" || raw.model !== "gateway-injected") {
+    return null;
+  }
+  const text = readMessageText(message)
+    .replace(/^✅\s*/u, "")
+    .replace(/\.$/u, "")
+    .trim()
+    .toLowerCase();
+  const name = assistantName?.trim() || "Assistant";
+  if (text === "new session started") {
+    return { kind: "new-session", label: `${name} New Session` };
+  }
+  if (text === "session reset") {
+    return { kind: "session-reset", label: `${name} Session Reset` };
+  }
+  return null;
+}
+
+function markerDividerKey(message: unknown, index: number, kind: string): string {
+  const raw = message as Record<string, unknown>;
+  const transcriptKey = openClawTranscriptKey(raw);
+  if (transcriptKey) {
+    return `divider:${kind}:transcript:${transcriptKey}`;
+  }
+  const timestamp = readMessageTimestamp(message);
+  return `divider:${kind}:${timestamp ?? "unknown"}:${index}`;
+}
+
+function groupMessages(
+  items: ChatItem[],
+  fallbackKeyPrefix: string,
+): Array<ChatItem | MessageGroup> {
   const result: Array<ChatItem | MessageGroup> = [];
   let currentGroup: MessageGroup | null = null;
+  let currentGroupTurnKey: string | null = null;
 
   for (const item of items) {
     if (item.kind !== "message") {
       if (currentGroup) {
         result.push(currentGroup);
         currentGroup = null;
+        currentGroupTurnKey = null;
       }
       result.push(item);
       continue;
@@ -165,12 +278,21 @@ function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup> {
     const normalized = normalizeMessage(item.message);
     const role = normalizeRoleForGrouping(normalized.role);
     const senderLabel = role.toLowerCase() === "user" ? (normalized.senderLabel ?? null) : null;
-    const timestamp = normalized.timestamp || Date.now();
+    const timestamp =
+      readMessageTimestamp(item.message) ??
+      fallbackTimestampForKey(`${fallbackKeyPrefix}:${item.key}`);
+    const isUserGroup = role.toLowerCase() === "user";
+    const turnKey = isUserGroup ? readSameTurnGroupKey(item.message) : null;
+    const canJoinCurrentUserGroup =
+      isUserGroup &&
+      turnKey !== null &&
+      currentGroupTurnKey !== null &&
+      turnKey === currentGroupTurnKey;
 
     if (
       !currentGroup ||
       currentGroup.role !== role ||
-      (role.toLowerCase() === "user" && currentGroup.senderLabel !== senderLabel)
+      (isUserGroup && (currentGroup.senderLabel !== senderLabel || !canJoinCurrentUserGroup))
     ) {
       if (currentGroup) {
         result.push(currentGroup);
@@ -184,6 +306,7 @@ function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup> {
         timestamp,
         isStreaming: false,
       };
+      currentGroupTurnKey = turnKey;
     } else {
       currentGroup.messages.push({ message: item.message, key: item.key });
     }
@@ -207,7 +330,7 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
       message: {
         role: "system",
         content: `Showing last ${CHAT_HISTORY_RENDER_LIMIT} messages (${historyStart} hidden).`,
-        timestamp: Date.now(),
+        timestamp: UNKNOWN_TIMESTAMP,
       },
     });
   }
@@ -216,15 +339,34 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
     const normalized = normalizeMessage(msg);
     const raw = msg as Record<string, unknown>;
     const marker = raw.__openclaw as Record<string, unknown> | undefined;
-    if (marker && marker.kind === "compaction") {
+    const sessionMarker = readGatewaySessionMarkerLabel(msg, props.assistantName);
+    if (sessionMarker) {
+      const timestamp = readMessageTimestamp(msg);
+      const key = markerDividerKey(msg, i, sessionMarker.kind);
       items.push({
         kind: "divider",
-        key:
-          typeof marker.id === "string"
-            ? `divider:compaction:${marker.id}`
-            : `divider:compaction:${normalized.timestamp}:${i}`,
+        key,
+        label: sessionMarker.label,
+        timestamp: timestamp ?? fallbackTimestampForKey(`divider:${props.sessionKey}:${key}`),
+      });
+      continue;
+    }
+
+    if (marker && marker.kind === "compaction") {
+      const timestamp = readMessageTimestamp(msg);
+      const markerSeq =
+        typeof marker.seq === "number" && Number.isFinite(marker.seq) ? marker.seq : null;
+      const key =
+        typeof marker.id === "string"
+          ? `divider:compaction:${marker.id}`
+          : markerSeq != null
+            ? `divider:compaction:seq:${markerSeq}`
+            : `divider:compaction:${timestamp ?? "unknown"}:${i}`;
+      items.push({
+        kind: "divider",
+        key,
         label: "Compaction",
-        timestamp: normalized.timestamp ?? Date.now(),
+        timestamp: timestamp ?? fallbackTimestampForKey(`divider:${props.sessionKey}:${key}`),
       });
       continue;
     }
@@ -291,23 +433,25 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
 
   if (props.stream !== null) {
     const key = `stream:${props.sessionKey}:${props.streamStartedAt ?? "live"}`;
-    if (props.stream.trim().length > 0) {
+    const streamText = trimCommittedStreamPrefix(props.stream, segments);
+    if (streamText.trim().length > 0) {
       items.push({
         kind: "stream",
         key,
-        text: props.stream,
-        startedAt: props.streamStartedAt ?? Date.now(),
+        text: streamText,
+        startedAt: props.streamStartedAt ?? fallbackTimestampForKey(key),
       });
     } else {
       items.push({ kind: "reading-indicator", key });
     }
   }
 
-  return groupMessages(items);
+  return groupMessages(items, `message:${props.sessionKey}`);
 }
 
 function messageKey(message: unknown, index: number): string {
   const m = message as Record<string, unknown>;
+  const transcriptKey = openClawTranscriptKey(m);
   const toolCallId = typeof m.toolCallId === "string" ? m.toolCallId : "";
   if (toolCallId) {
     const role = typeof m.role === "string" ? m.role : "unknown";
@@ -318,6 +462,9 @@ function messageKey(message: unknown, index: number): string {
     const messageId = typeof m.messageId === "string" ? m.messageId : "";
     if (messageId) {
       return `tool:${role}:${toolCallId}:${messageId}`;
+    }
+    if (transcriptKey) {
+      return `tool:${role}:${toolCallId}:transcript:${transcriptKey}`;
     }
     const timestamp = typeof m.timestamp === "number" ? m.timestamp : null;
     if (timestamp != null) {
@@ -333,10 +480,28 @@ function messageKey(message: unknown, index: number): string {
   if (messageId) {
     return `msg:${messageId}`;
   }
+  if (transcriptKey) {
+    return `msg:transcript:${transcriptKey}`;
+  }
   const timestamp = typeof m.timestamp === "number" ? m.timestamp : null;
   const role = typeof m.role === "string" ? m.role : "unknown";
   if (timestamp != null) {
     return `msg:${role}:${timestamp}:${index}`;
   }
   return `msg:${role}:${index}`;
+}
+
+function openClawTranscriptKey(message: Record<string, unknown>): string | null {
+  const meta = message.__openclaw;
+  if (!meta || typeof meta !== "object" || Array.isArray(meta)) {
+    return null;
+  }
+  const record = meta as Record<string, unknown>;
+  if (typeof record.id === "string" && record.id) {
+    return `id:${record.id}`;
+  }
+  if (typeof record.seq === "number" && Number.isFinite(record.seq)) {
+    return `seq:${record.seq}`;
+  }
+  return null;
 }

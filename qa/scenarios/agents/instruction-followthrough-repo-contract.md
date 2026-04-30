@@ -96,7 +96,7 @@ steps:
             message:
               expr: config.prompt
             timeoutMs:
-              expr: liveTurnTimeoutMs(env, 40000)
+              expr: liveTurnTimeoutMs(env, 60000)
       - call: waitForCondition
         saveAs: artifact
         args:

@@ -469,12 +469,18 @@ describe("handleSendChat", () => {
     expect(host.refreshSessionsAfterChat.size).toBe(0);
   });
 
-  it("sends button-triggered /new resets after confirmation", async () => {
+  it("uses sessions.reset for button-triggered bare /new after confirmation", async () => {
     const confirm = vi.fn(() => true);
     vi.stubGlobal("confirm", confirm);
     const request = vi.fn(async (method: string) => {
-      if (method === "chat.send") {
-        return { status: "started" };
+      if (method === "sessions.reset") {
+        return { ok: true };
+      }
+      if (method === "chat.history") {
+        return { messages: [], thinkingLevel: null };
+      }
+      if (method === "sessions.list") {
+        return createSessionsResult([]);
       }
       throw new Error(`Unexpected request: ${method}`);
     });
@@ -487,24 +493,56 @@ describe("handleSendChat", () => {
     await handleSendChat(host, "/new", { confirmReset: true, restoreDraft: true });
 
     expect(confirm).toHaveBeenCalledTimes(1);
-    expect(request).toHaveBeenCalledWith(
-      "chat.send",
-      expect.objectContaining({
-        sessionKey: "agent:main",
-        message: "/new",
-        deliver: false,
-        idempotencyKey: expect.any(String),
-      }),
-    );
+    expect(request).toHaveBeenCalledWith("sessions.reset", {
+      key: "agent:main",
+      reason: "new",
+    });
+    expect(request).toHaveBeenCalledWith("chat.history", {
+      sessionKey: "agent:main",
+      limit: 200,
+    });
     expect(host.chatMessage).toBe("restore me");
-    expect(host.refreshSessionsAfterChat).toContain(host.chatRunId);
+    expect(host.refreshSessionsAfterChat.size).toBe(0);
+    expect(host.chatRunId).toBeNull();
   });
 
   it.each(["/new", "/reset"])(
-    "preserves typed %s command dispatch without confirmation",
+    "uses sessions.reset for typed bare %s without confirmation",
     async (command) => {
       const confirm = vi.fn(() => false);
       vi.stubGlobal("confirm", confirm);
+      const request = vi.fn(async (method: string) => {
+        if (method === "sessions.reset") {
+          return { ok: true };
+        }
+        if (method === "chat.history") {
+          return { messages: [], thinkingLevel: null };
+        }
+        if (method === "sessions.list") {
+          return createSessionsResult([]);
+        }
+        throw new Error(`Unexpected request: ${method}`);
+      });
+      const host = makeHost({
+        client: { request } as unknown as ChatHost["client"],
+        chatMessage: command,
+        sessionKey: "agent:main",
+      });
+
+      await handleSendChat(host);
+
+      expect(confirm).not.toHaveBeenCalled();
+      expect(request).toHaveBeenCalledWith("sessions.reset", {
+        key: "agent:main",
+        reason: command === "/new" ? "new" : "reset",
+      });
+      expect(host.chatMessage).toBe("");
+    },
+  );
+
+  it.each(["/new follow up", "/reset follow up"])(
+    "sends reset commands with a tail through chat.send: %s",
+    async (command) => {
       const request = vi.fn(async (method: string) => {
         if (method === "chat.send") {
           return { status: "started" };
@@ -519,7 +557,6 @@ describe("handleSendChat", () => {
 
       await handleSendChat(host);
 
-      expect(confirm).not.toHaveBeenCalled();
       expect(request).toHaveBeenCalledWith(
         "chat.send",
         expect.objectContaining({
@@ -527,7 +564,7 @@ describe("handleSendChat", () => {
           message: command,
         }),
       );
-      expect(host.chatMessage).toBe("");
+      expect(host.refreshSessionsAfterChat).toContain(host.chatRunId);
     },
   );
 

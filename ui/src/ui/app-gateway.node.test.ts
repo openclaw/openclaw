@@ -114,9 +114,11 @@ vi.mock("./controllers/control-ui-bootstrap.ts", () => ({
 
 type TestGatewayHost = Parameters<typeof connectGateway>[0] & {
   chatMessages: unknown[];
+  chatDeferredMessages?: unknown[];
   chatSideResult: unknown;
   chatSideResultTerminalRuns: Set<string>;
   chatStream: string | null;
+  chatStreamStartedAt: number | null;
   chatToolMessages: Record<string, unknown>[];
   toolStreamById: Map<string, unknown>;
   toolStreamOrder: string[];
@@ -163,6 +165,7 @@ function createHost(): TestGatewayHost {
     updateStatusBanner: null,
     sessionKey: "main",
     chatMessages: [],
+    chatDeferredMessages: [],
     chatQueue: [],
     chatToolMessages: [],
     chatStreamSegments: [],
@@ -975,6 +978,72 @@ describe("connectGateway", () => {
     expect(host.chatRunId).toBeNull();
     expect(loadChatHistoryMock).toHaveBeenCalledTimes(1);
     expect(loadChatHistoryMock).toHaveBeenCalledWith(host);
+  });
+
+  it("clears the active chat view after a successful new-session command", () => {
+    const { host, client } = connectHostGateway();
+    host.chatMessages = [{ role: "user", content: "old transcript" }];
+    host.chatDeferredMessages = [{ role: "assistant", content: "queued old response" }];
+    host.chatStream = "reset stream";
+    host.chatStreamStartedAt = 123;
+    host.chatRunId = "reset-run";
+    host.chatSideResult = { runId: "side-run" };
+    host.chatSideResultTerminalRuns.add("side-run");
+    host.refreshSessionsAfterChat.add("reset-run");
+    loadChatHistoryMock.mockClear();
+
+    client.emitEvent({
+      event: "chat",
+      payload: {
+        runId: "reset-run",
+        sessionKey: "main",
+        state: "final",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "New session started." }],
+        },
+      },
+    });
+
+    expect(host.refreshSessionsAfterChat.size).toBe(0);
+    expect(host.chatMessages).toEqual([]);
+    expect(host.chatDeferredMessages).toEqual([]);
+    expect(host.chatStream).toBeNull();
+    expect(host.chatStreamStartedAt).toBeNull();
+    expect(host.chatRunId).toBeNull();
+    expect(host.chatSideResult).toBeNull();
+    expect(host.chatSideResultTerminalRuns.size).toBe(0);
+    expect(loadChatHistoryMock).toHaveBeenCalledTimes(1);
+    expect(loadChatHistoryMock).toHaveBeenCalledWith(host);
+  });
+
+  it("does not clear the active chat view when a new-session command fails", () => {
+    const { host, client } = connectHostGateway();
+    host.chatMessages = [{ role: "user", content: "old transcript" }];
+    host.chatRunId = "reset-run";
+    host.refreshSessionsAfterChat.add("reset-run");
+    loadChatHistoryMock.mockClear();
+
+    client.emitEvent({
+      event: "chat",
+      payload: {
+        runId: "reset-run",
+        sessionKey: "main",
+        state: "error",
+        errorMessage: "reset failed",
+      },
+    });
+
+    expect(host.refreshSessionsAfterChat.size).toBe(0);
+    expect(host.chatMessages).toEqual([
+      { role: "user", content: "old transcript" },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Error: reset failed" }],
+        timestamp: expect.any(Number),
+      },
+    ]);
+    expect(loadChatHistoryMock).not.toHaveBeenCalled();
   });
 
   it("keeps deferred session.message reload pending across unowned terminal events", () => {

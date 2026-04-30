@@ -836,6 +836,7 @@ export function renderChat(props: ChatProps) {
     stream: props.stream,
     streamStartedAt: props.streamStartedAt,
     showToolCalls: props.showToolCalls,
+    assistantName: props.assistantName,
     searchOpen: vs.searchOpen,
     searchQuery: vs.searchQuery,
   });

@@ -92,6 +92,7 @@ function resetChatStateForSessionSwitch(state: AppViewState, sessionKey: string)
   state.chatMessage = "";
   state.chatAttachments = [];
   state.chatMessages = [];
+  state.chatDeferredMessages = [];
   state.chatToolMessages = [];
   state.chatStreamSegments = [];
   state.chatThinkingLevel = null;

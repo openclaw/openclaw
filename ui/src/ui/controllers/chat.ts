@@ -4,6 +4,7 @@ import {
   getChatAttachmentPreviewUrl,
 } from "../chat/attachment-payload-store.ts";
 import { extractText } from "../chat/message-extract.ts";
+import { trimCommittedStreamPrefix, type ChatStreamSegment } from "../chat/stream-prefix.ts";
 import { formatConnectError } from "../connect-error.ts";
 import { GatewayRequestError, type GatewayBrowserClient } from "../gateway.ts";
 import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
@@ -22,7 +23,12 @@ const SYNTHETIC_TRANSCRIPT_REPAIR_RESULT =
 const STARTUP_CHAT_HISTORY_RETRY_TIMEOUT_MS = 60_000;
 const STARTUP_CHAT_HISTORY_DEFAULT_RETRY_MS = 500;
 const STARTUP_CHAT_HISTORY_MAX_RETRY_MS = 5_000;
+const CHAT_ERROR_AUTH_DISPLAY_TEXT =
+  "Assistant couldn't start because model authentication failed. Reconnect the model provider and try again.";
+const CHAT_ERROR_GENERIC_DISPLAY_TEXT = "Assistant turn failed before producing a reply.";
 const chatHistoryRequestVersions = new WeakMap<object, number>();
+const chatLocalMutationVersions = new WeakMap<object, number>();
+const deferredMessageSignatures = new WeakMap<object, string>();
 
 function beginChatHistoryRequest(state: ChatState): number {
   const key = state as object;
@@ -41,6 +47,15 @@ function shouldApplyChatHistoryResult(
   sessionKey: string,
 ): boolean {
   return isLatestChatHistoryRequest(state, version) && state.sessionKey === sessionKey;
+}
+
+function getChatLocalMutationVersion(state: ChatState): number {
+  return chatLocalMutationVersions.get(state as object) ?? 0;
+}
+
+function markChatLocalMutation(state: ChatState) {
+  const key = state as object;
+  chatLocalMutationVersions.set(key, getChatLocalMutationVersion(state) + 1);
 }
 
 function isSilentReplyStream(text: string): boolean {
@@ -268,9 +283,152 @@ function messageDisplaySignature(message: unknown): string | null {
   }
 }
 
+function readPlainObject(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function identityPart(value: unknown): string | null {
+  if (typeof value === "string" && value.trim()) {
+    return value.trim();
+  }
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return String(value);
+  }
+  return null;
+}
+
+function deferredMessageIdentitySignature(message: unknown, runId?: unknown): string | null {
+  const raw = readPlainObject(message);
+  if (!raw) {
+    const fallbackRunId = identityPart(runId);
+    return fallbackRunId ? `run:${fallbackRunId}` : null;
+  }
+  const role = normalizeLowercaseStringOrEmpty(raw.role) || "unknown";
+  const meta = readPlainObject(raw.__openclaw);
+  const candidates: Array<[string, unknown]> = [
+    ["openclaw.id", meta?.id],
+    ["openclaw.seq", meta?.seq],
+    ["id", raw.id],
+    ["messageId", raw.messageId],
+    ["message_id", raw.message_id],
+    ["openclaw.runId", meta?.runId ?? meta?.run_id],
+    ["runId", raw.runId ?? raw.run_id],
+    ["payload.runId", runId],
+  ];
+  for (const [kind, value] of candidates) {
+    const part = identityPart(value);
+    if (part) {
+      return `${role}:${kind}:${part}`;
+    }
+  }
+  return null;
+}
+
+function deferredIdentityForQueuedMessage(message: unknown): string | null {
+  if (!message || typeof message !== "object") {
+    return null;
+  }
+  return deferredMessageSignatures.get(message) ?? deferredMessageIdentitySignature(message);
+}
+
+function appendDeferredChatMessages(messages: unknown[], queued: unknown[]): unknown[] {
+  if (queued.length === 0) {
+    return messages;
+  }
+  const identities = new Set<string>();
+  for (const message of messages) {
+    const signature = deferredMessageIdentitySignature(message);
+    if (signature) {
+      identities.add(signature);
+    }
+  }
+  const next = [...messages];
+  for (const message of queued) {
+    const signature = deferredIdentityForQueuedMessage(message);
+    if (signature && identities.has(signature)) {
+      continue;
+    }
+    if (signature) {
+      identities.add(signature);
+    }
+    next.push(message);
+  }
+  return next;
+}
+
+function queueDeferredChatMessage(state: ChatState, message: unknown, runId?: unknown) {
+  const queued = Array.isArray(state.chatDeferredMessages) ? state.chatDeferredMessages : [];
+  const signature = deferredMessageIdentitySignature(message, runId);
+  if (message && typeof message === "object" && signature) {
+    deferredMessageSignatures.set(message, signature);
+  }
+  if (signature) {
+    for (const queuedMessage of queued) {
+      if (deferredIdentityForQueuedMessage(queuedMessage) === signature) {
+        return;
+      }
+    }
+  }
+  state.chatDeferredMessages = [...queued, message];
+}
+
+function flushDeferredChatMessages(state: ChatState) {
+  const queued = Array.isArray(state.chatDeferredMessages) ? state.chatDeferredMessages : [];
+  if (queued.length === 0) {
+    return;
+  }
+  const next = appendDeferredChatMessages(state.chatMessages, queued);
+  state.chatDeferredMessages = [];
+  if (next !== state.chatMessages) {
+    state.chatMessages = next;
+    markChatLocalMutation(state);
+  }
+}
+
+function visibleChatErrorText(errorMessage: unknown): string {
+  const rawText = typeof errorMessage === "string" ? errorMessage.trim() : "";
+  if (!rawText) {
+    return CHAT_ERROR_GENERIC_DISPLAY_TEXT;
+  }
+  const text = rawText.toLowerCase();
+  if (/\b(401|unauthorized|authentication|auth)\b/.test(text)) {
+    return CHAT_ERROR_AUTH_DISPLAY_TEXT;
+  }
+  if (/^\d{3}\s+status code\b/.test(text)) {
+    return CHAT_ERROR_GENERIC_DISPLAY_TEXT;
+  }
+  return /^error:/i.test(rawText) ? rawText : `Error: ${rawText}`;
+}
+
+function hasVisibleAssistantMessageContent(message: Record<string, unknown>): boolean {
+  const text = extractText(message)?.trim();
+  if (text) {
+    return true;
+  }
+  const content = message.content;
+  return (
+    Array.isArray(content) &&
+    content.some((block) => {
+      if (!block || typeof block !== "object") {
+        return false;
+      }
+      const typed = block as { type?: unknown };
+      return typed.type !== "text";
+    })
+  );
+}
+
+function appendVisibleChatMessage(state: ChatState, message: unknown) {
+  state.chatMessages = [...state.chatMessages, message];
+  markChatLocalMutation(state);
+}
+
 export function preserveOptimisticTailMessages(
   historyMessages: unknown[],
   previousMessages: unknown[],
+  opts?: { preserveUnanchoredOptimisticMessages?: boolean },
 ): unknown[] {
   if (previousMessages.length === 0) {
     return historyMessages;
@@ -302,7 +460,19 @@ export function preserveOptimisticTailMessages(
     }
   }
   if (sharedPreviousIndex < 0) {
-    return historyMessages;
+    if (!opts?.preserveUnanchoredOptimisticMessages) {
+      return historyMessages;
+    }
+    const optimisticMessages = previousMessages.filter((message) => {
+      if (!isLocallyOptimisticHistoryMessage(message) || shouldHideHistoryMessage(message)) {
+        return false;
+      }
+      const signature = messageDisplaySignature(message);
+      return Boolean(signature && !historySignatureIndexes.has(signature));
+    });
+    return optimisticMessages.length > 0
+      ? [...historyMessages, ...optimisticMessages]
+      : historyMessages;
   }
   if (sharedHistoryIndex < historyMessages.length - 1) {
     return historyMessages;
@@ -359,6 +529,8 @@ export type ChatState = {
   chatRunId: string | null;
   chatStream: string | null;
   chatStreamStartedAt: number | null;
+  chatStreamSegments?: ChatStreamSegment[];
+  chatDeferredMessages?: unknown[];
   lastError: string | null;
   resetChatInputHistoryNavigation?: () => void;
 };
@@ -383,12 +555,23 @@ function maybeResetToolStream(state: ChatState) {
   }
 }
 
+function currentStreamSegments(state: ChatState): ChatStreamSegment[] {
+  return Array.isArray(state.chatStreamSegments) ? state.chatStreamSegments : [];
+}
+
+function streamedAssistantText(state: ChatState): string {
+  const segments = currentStreamSegments(state);
+  const stream = state.chatStream ? trimCommittedStreamPrefix(state.chatStream, segments) : "";
+  return [...segments.map((segment) => segment.text), stream].join("");
+}
+
 export async function loadChatHistory(state: ChatState) {
   if (!state.client || !state.connected) {
     return;
   }
   const sessionKey = state.sessionKey;
   const requestVersion = beginChatHistoryRequest(state);
+  const localMutationVersion = getChatLocalMutationVersion(state);
   const startedAt = Date.now();
   const previousMessages = state.chatMessages;
   // Any pending input-history snapshot becomes invalid once we start reloading transcript state.
@@ -428,13 +611,19 @@ export async function loadChatHistory(state: ChatState) {
     }
     const messages = Array.isArray(res.messages) ? res.messages : [];
     const visibleMessages = messages.filter((message) => !shouldHideHistoryMessage(message));
-    state.chatMessages = preserveOptimisticTailMessages(visibleMessages, previousMessages);
+    const localStateChanged = getChatLocalMutationVersion(state) !== localMutationVersion;
+    const mergeBase = localStateChanged ? state.chatMessages : previousMessages;
+    state.chatMessages = preserveOptimisticTailMessages(visibleMessages, mergeBase, {
+      preserveUnanchoredOptimisticMessages: localStateChanged,
+    });
     state.chatThinkingLevel = res.thinkingLevel ?? null;
-    // Clear all streaming state — history includes tool results and text
-    // inline, so keeping streaming artifacts would cause duplicates.
-    maybeResetToolStream(state);
-    state.chatStream = null;
-    state.chatStreamStartedAt = null;
+    const hasActiveStream = state.chatRunId !== null || state.chatStream !== null;
+    if (!hasActiveStream) {
+      // Clear all streaming state — history includes tool results and text inline once no run is active.
+      maybeResetToolStream(state);
+      state.chatStream = null;
+      state.chatStreamStartedAt = null;
+    }
   } catch (err) {
     if (!shouldApplyChatHistoryResult(state, requestVersion, sessionKey)) {
       return;
@@ -614,6 +803,7 @@ export async function sendChatMessage(
       timestamp: now,
     },
   ];
+  markChatLocalMutation(state);
 
   state.chatSending = true;
   state.lastError = null;
@@ -635,10 +825,11 @@ export async function sendChatMessage(
       ...state.chatMessages,
       {
         role: "assistant",
-        content: [{ type: "text", text: "Error: " + error }],
+        content: [{ type: "text", text: visibleChatErrorText(error) }],
         timestamp: Date.now(),
       },
     ];
+    markChatLocalMutation(state);
     return null;
   } finally {
     state.chatSending = false;
@@ -725,8 +916,7 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     if (payload.state === "final") {
       const finalMessage = normalizeFinalAssistantMessage(payload.message);
       if (finalMessage && !isAssistantSilentReply(finalMessage)) {
-        state.chatMessages = [...state.chatMessages, finalMessage];
-        return null;
+        queueDeferredChatMessage(state, finalMessage, payload.runId);
       }
       return "final";
     }
@@ -741,41 +931,54 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
   } else if (payload.state === "final") {
     const finalMessage = normalizeFinalAssistantMessage(payload.message);
     if (finalMessage && !isAssistantSilentReply(finalMessage)) {
-      state.chatMessages = [...state.chatMessages, finalMessage];
-    } else if (state.chatStream?.trim() && !isSilentReplyStream(state.chatStream)) {
-      state.chatMessages = [
-        ...state.chatMessages,
-        {
+      appendVisibleChatMessage(state, finalMessage);
+    } else {
+      const streamedText = streamedAssistantText(state);
+      if (streamedText.trim() && !isSilentReplyStream(streamedText)) {
+        appendVisibleChatMessage(state, {
           role: "assistant",
-          content: [{ type: "text", text: state.chatStream }],
+          content: [{ type: "text", text: streamedText }],
           timestamp: Date.now(),
-        },
-      ];
+        });
+      }
     }
+    flushDeferredChatMessages(state);
     state.chatStream = null;
     state.chatRunId = null;
     state.chatStreamStartedAt = null;
   } else if (payload.state === "aborted") {
     const normalizedMessage = normalizeAbortedAssistantMessage(payload.message);
     if (normalizedMessage && !isAssistantSilentReply(normalizedMessage)) {
-      state.chatMessages = [...state.chatMessages, normalizedMessage];
+      appendVisibleChatMessage(state, normalizedMessage);
     } else {
-      const streamedText = state.chatStream ?? "";
+      const streamedText = streamedAssistantText(state);
       if (streamedText.trim() && !isSilentReplyStream(streamedText)) {
-        state.chatMessages = [
-          ...state.chatMessages,
-          {
-            role: "assistant",
-            content: [{ type: "text", text: streamedText }],
-            timestamp: Date.now(),
-          },
-        ];
+        appendVisibleChatMessage(state, {
+          role: "assistant",
+          content: [{ type: "text", text: streamedText }],
+          timestamp: Date.now(),
+        });
       }
     }
+    flushDeferredChatMessages(state);
     state.chatStream = null;
     state.chatRunId = null;
     state.chatStreamStartedAt = null;
   } else if (payload.state === "error") {
+    const errorMessage = normalizeFinalAssistantMessage(payload.message);
+    appendVisibleChatMessage(
+      state,
+      errorMessage &&
+        !isAssistantSilentReply(errorMessage) &&
+        hasVisibleAssistantMessageContent(errorMessage)
+        ? errorMessage
+        : {
+            role: "assistant",
+            content: [{ type: "text", text: visibleChatErrorText(payload.errorMessage) }],
+            timestamp: Date.now(),
+          },
+    );
+    flushDeferredChatMessages(state);
     state.chatStream = null;
     state.chatRunId = null;
     state.chatStreamStartedAt = null;

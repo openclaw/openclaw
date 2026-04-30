@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 
 const loadSessionsMock = vi.fn();
 const loadChatHistoryMock = vi.fn();
+const resetToolStreamMock = vi.fn();
 
 vi.mock("./app-chat.ts", () => ({
   CHAT_SESSIONS_ACTIVE_MINUTES: 10,
@@ -17,7 +18,7 @@ vi.mock("./app-settings.ts", () => ({
 }));
 vi.mock("./app-tool-stream.ts", () => ({
   handleAgentEvent: vi.fn(),
-  resetToolStream: vi.fn(),
+  resetToolStream: resetToolStreamMock,
 }));
 vi.mock("./controllers/agents.ts", () => ({
   loadAgents: vi.fn(),
@@ -57,7 +58,22 @@ const { addExecApproval } = await vi.importActual<typeof import("./controllers/e
   "./controllers/exec-approval.ts",
 );
 
-function createHost() {
+type TestGatewayHost = Parameters<typeof handleGatewayEvent>[0] & {
+  chatMessages: unknown[];
+  chatDeferredMessages: unknown[];
+  chatSideResult: { runId: string } | null;
+  chatSideResultTerminalRuns: Set<string>;
+  chatStream: string | null;
+  chatStreamStartedAt: number | null;
+  pendingAbort: { runId: string; sessionKey: string } | null;
+  sessionsResult: {
+    ts: number;
+    count: number;
+    sessions: { key: string; kind: "direct"; updatedAt: number; sessionId?: string }[];
+  };
+};
+
+function createHost(): TestGatewayHost {
   return {
     settings: {
       gatewayUrl: "ws://127.0.0.1:18789",
@@ -104,11 +120,34 @@ function createHost() {
     serverVersion: null,
     sessionKey: "main",
     chatRunId: null,
+    chatMessages: [],
+    chatDeferredMessages: [],
+    chatSideResult: null,
+    chatSideResultTerminalRuns: new Set<string>(),
+    chatStream: null,
+    chatStreamStartedAt: null,
+    pendingAbort: null,
     refreshSessionsAfterChat: new Set<string>(),
+    sessionsLoading: false,
+    sessionsResult: {
+      ts: 0,
+      count: 1,
+      sessions: [{ key: "main", kind: "direct", updatedAt: 0, sessionId: "session-old" }],
+    },
+    sessionsError: null,
+    sessionsFilterActive: "",
+    sessionsFilterLimit: "",
+    sessionsIncludeGlobal: false,
+    sessionsIncludeUnknown: false,
+    sessionsExpandedCheckpointKey: null,
+    sessionsCheckpointItemsByKey: {},
+    sessionsCheckpointLoadingKey: null,
+    sessionsCheckpointBusyKey: null,
+    sessionsCheckpointErrorByKey: {},
     execApprovalQueue: [],
     execApprovalError: null,
     updateAvailable: null,
-  } as unknown as Parameters<typeof handleGatewayEvent>[0];
+  } as unknown as TestGatewayHost;
 }
 
 describe("handleGatewayEvent sessions.changed", () => {
@@ -125,6 +164,153 @@ describe("handleGatewayEvent sessions.changed", () => {
 
     expect(loadSessionsMock).toHaveBeenCalledTimes(1);
     expect(loadSessionsMock).toHaveBeenCalledWith(host);
+  });
+
+  it("clears and reloads active chat history when the active session is reset", () => {
+    loadSessionsMock.mockReset();
+    loadChatHistoryMock.mockReset();
+    resetToolStreamMock.mockReset();
+    const host = createHost();
+    host.chatMessages = [{ role: "user", content: "old transcript" }];
+    host.chatDeferredMessages = [{ role: "assistant", content: "queued" }];
+    host.chatSideResult = { runId: "side-run" };
+    host.chatSideResultTerminalRuns.add("side-run");
+    host.chatStream = "old stream";
+    host.chatStreamStartedAt = 123;
+    host.chatRunId = "reset-run";
+    host.pendingAbort = { runId: "reset-run", sessionKey: "main" };
+
+    handleGatewayEvent(host, {
+      type: "event",
+      event: "sessions.changed",
+      payload: { sessionKey: "main", reason: "new", sessionId: "session-new" },
+      seq: 1,
+    });
+
+    expect(loadSessionsMock).toHaveBeenCalledTimes(1);
+    expect(host.chatMessages).toEqual([]);
+    expect(host.chatDeferredMessages).toEqual([]);
+    expect(host.chatSideResult).toBeNull();
+    expect(host.chatSideResultTerminalRuns.size).toBe(0);
+    expect(host.chatStream).toBeNull();
+    expect(host.chatStreamStartedAt).toBeNull();
+    expect(host.chatRunId).toBeNull();
+    expect(host.pendingAbort).toBeNull();
+    expect(resetToolStreamMock).toHaveBeenCalledTimes(1);
+    expect(resetToolStreamMock).toHaveBeenCalledWith(host);
+    expect(loadChatHistoryMock).toHaveBeenCalledTimes(1);
+    expect(loadChatHistoryMock).toHaveBeenCalledWith(host);
+  });
+
+  it("does not reload active chat history for normal session list patches", () => {
+    loadSessionsMock.mockReset();
+    loadChatHistoryMock.mockReset();
+    resetToolStreamMock.mockReset();
+    const host = createHost();
+    host.chatMessages = [{ role: "user", content: "current transcript" }];
+
+    handleGatewayEvent(host, {
+      type: "event",
+      event: "sessions.changed",
+      payload: { sessionKey: "main", reason: "patch", sessionId: "session-old" },
+      seq: 1,
+    });
+
+    expect(loadSessionsMock).toHaveBeenCalledTimes(1);
+    expect(host.chatMessages).toEqual([{ role: "user", content: "current transcript" }]);
+    expect(resetToolStreamMock).not.toHaveBeenCalled();
+    expect(loadChatHistoryMock).not.toHaveBeenCalled();
+  });
+
+  it("reloads active chat history when the active session id rotates", () => {
+    loadSessionsMock.mockReset();
+    loadChatHistoryMock.mockReset();
+    resetToolStreamMock.mockReset();
+    const host = createHost();
+    host.chatMessages = [{ role: "assistant", content: "old session" }];
+
+    handleGatewayEvent(host, {
+      type: "event",
+      event: "sessions.changed",
+      payload: { sessionKey: "main", reason: "patch", sessionId: "session-new" },
+      seq: 1,
+    });
+
+    expect(loadSessionsMock).toHaveBeenCalledTimes(1);
+    expect(host.chatMessages).toEqual([]);
+    expect(resetToolStreamMock).toHaveBeenCalledTimes(1);
+    expect(loadChatHistoryMock).toHaveBeenCalledTimes(1);
+    expect(loadChatHistoryMock).toHaveBeenCalledWith(host);
+  });
+
+  it("does not reload active chat history when another session resets", () => {
+    loadChatHistoryMock.mockReset();
+    resetToolStreamMock.mockReset();
+    const host = createHost();
+    host.chatMessages = [{ role: "user", content: "active transcript" }];
+
+    handleGatewayEvent(host, {
+      type: "event",
+      event: "sessions.changed",
+      payload: { sessionKey: "agent:qa:main", reason: "reset", sessionId: "session-new" },
+      seq: 1,
+    });
+
+    expect(host.chatMessages).toEqual([{ role: "user", content: "active transcript" }]);
+    expect(resetToolStreamMock).not.toHaveBeenCalled();
+    expect(loadChatHistoryMock).not.toHaveBeenCalled();
+  });
+
+  it("reloads active chat history for nested session payload rotation events", () => {
+    loadChatHistoryMock.mockReset();
+    resetToolStreamMock.mockReset();
+    const host = createHost();
+    host.chatMessages = [{ role: "assistant", content: "old nested session" }];
+
+    handleGatewayEvent(host, {
+      type: "event",
+      event: "sessions.changed",
+      payload: {
+        reason: "patch",
+        session: { key: "main", sessionId: "session-new" },
+      },
+      seq: 1,
+    });
+
+    expect(host.chatMessages).toEqual([]);
+    expect(resetToolStreamMock).toHaveBeenCalledTimes(1);
+    expect(loadChatHistoryMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("matches the canonical main session key when reset events use the expanded key", () => {
+    loadChatHistoryMock.mockReset();
+    resetToolStreamMock.mockReset();
+    const host = createHost();
+    host.hello = {
+      type: "hello-ok",
+      protocol: 3,
+      snapshot: {
+        sessionDefaults: {
+          defaultAgentId: "main",
+          mainKey: "main",
+          mainSessionKey: "agent:main:main",
+        },
+      },
+      auth: { role: "operator", scopes: [] },
+    };
+    host.sessionKey = "main";
+    host.chatMessages = [{ role: "user", content: "old alias transcript" }];
+
+    handleGatewayEvent(host, {
+      type: "event",
+      event: "sessions.changed",
+      payload: { sessionKey: "agent:main:main", reason: "reset", sessionId: "session-new" },
+      seq: 1,
+    });
+
+    expect(host.chatMessages).toEqual([]);
+    expect(resetToolStreamMock).toHaveBeenCalledTimes(1);
+    expect(loadChatHistoryMock).toHaveBeenCalledTimes(1);
   });
 });
 

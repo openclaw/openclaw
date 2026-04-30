@@ -130,6 +130,136 @@ type GatewayHostWithSideResults = GatewayHost & {
   chatSideResultTerminalRuns?: Set<string>;
 };
 
+type GatewayHostWithResettableChat = GatewayHost & {
+  chatMessages: unknown[];
+  chatDeferredMessages?: unknown[];
+  chatSideResult?: ChatSideResult | null;
+  chatSideResultTerminalRuns?: Set<string>;
+  chatStream: string | null;
+  chatRunId: string | null;
+  chatStreamStartedAt?: number | null;
+};
+
+type SessionsChangedPayloadRecord = Record<string, unknown>;
+
+function clearChatViewAfterSessionReset(host: GatewayHost) {
+  const chatHost = host as GatewayHostWithResettableChat;
+  chatHost.chatMessages = [];
+  chatHost.chatDeferredMessages = [];
+  chatHost.chatSideResult = null;
+  chatHost.chatSideResultTerminalRuns?.clear();
+  chatHost.chatStream = null;
+  chatHost.chatRunId = null;
+  chatHost.chatStreamStartedAt = null;
+  chatHost.pendingAbort = null;
+  (chatHost as GatewayHostWithDeferredSessionMessageReload).pendingSessionMessageReloadSessionKey =
+    null;
+}
+
+function readRecord(value: unknown): SessionsChangedPayloadRecord | null {
+  return value && typeof value === "object" ? (value as SessionsChangedPayloadRecord) : null;
+}
+
+function readTrimmedString(
+  record: SessionsChangedPayloadRecord | null,
+  key: string,
+): string | null {
+  const value = record?.[key];
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function readSessionsChangedPayload(payload: unknown): {
+  payload: SessionsChangedPayloadRecord | null;
+  source: SessionsChangedPayloadRecord | null;
+} {
+  const payloadRecord = readRecord(payload);
+  return {
+    payload: payloadRecord,
+    source: readRecord(payloadRecord?.session) ?? payloadRecord,
+  };
+}
+
+function readSessionsChangedSessionKey(payload: unknown): string | null {
+  const record = readSessionsChangedPayload(payload);
+  return (
+    readTrimmedString(record.source, "key") ??
+    readTrimmedString(record.payload, "sessionKey") ??
+    readTrimmedString(record.payload, "key")
+  );
+}
+
+function readSessionsChangedReason(payload: unknown): string | null {
+  const record = readSessionsChangedPayload(payload);
+  return readTrimmedString(record.source, "reason") ?? readTrimmedString(record.payload, "reason");
+}
+
+function readSessionsChangedSessionId(payload: unknown): string | null {
+  const record = readSessionsChangedPayload(payload);
+  return (
+    readTrimmedString(record.source, "sessionId") ?? readTrimmedString(record.payload, "sessionId")
+  );
+}
+
+function resolveSessionDefaults(host: GatewayHost): SessionDefaultsSnapshot | undefined {
+  const snapshot = host.hello?.snapshot as
+    | { sessionDefaults?: SessionDefaultsSnapshot }
+    | undefined;
+  return snapshot?.sessionDefaults;
+}
+
+function isDefaultMainSessionAliasMatch(left: string, right: string): boolean {
+  const aliases = new Set(["main", "agent:main", "agent:main:main"]);
+  return aliases.has(left) && aliases.has(right);
+}
+
+function sessionKeysMatchForHost(host: GatewayHost, left: string, right: string): boolean {
+  if (left === right) {
+    return true;
+  }
+  const defaults = resolveSessionDefaults(host);
+  if (defaults?.mainSessionKey) {
+    return (
+      normalizeSessionKeyForDefaults(left, defaults) ===
+      normalizeSessionKeyForDefaults(right, defaults)
+    );
+  }
+  return isDefaultMainSessionAliasMatch(left, right);
+}
+
+function getSessionIdForChangedSession(host: GatewayHost, changedKey: string): string | null {
+  const sessions = (host as unknown as SessionsState).sessionsResult?.sessions ?? [];
+  const row = sessions.find((session) => sessionKeysMatchForHost(host, session.key, changedKey));
+  return typeof row?.sessionId === "string" && row.sessionId.trim() ? row.sessionId.trim() : null;
+}
+
+function shouldReloadChatForSessionsChanged(host: GatewayHost, payload: unknown): boolean {
+  const sessionKey = readSessionsChangedSessionKey(payload);
+  if (!sessionKey || !sessionKeysMatchForHost(host, sessionKey, host.sessionKey)) {
+    return false;
+  }
+
+  const reason = readSessionsChangedReason(payload);
+  if (reason === "new" || reason === "reset") {
+    return true;
+  }
+
+  const nextSessionId = readSessionsChangedSessionId(payload);
+  const previousSessionId = nextSessionId ? getSessionIdForChangedSession(host, sessionKey) : null;
+  return Boolean(previousSessionId && nextSessionId && previousSessionId !== nextSessionId);
+}
+
+function handleSessionsChangedGatewayEvent(host: GatewayHost, payload: unknown) {
+  const shouldReloadChat = shouldReloadChatForSessionsChanged(host, payload);
+  applySessionsChangedEvent(host as unknown as SessionsState, payload);
+  void loadSessions(host as unknown as SessionsState);
+  if (!shouldReloadChat) {
+    return;
+  }
+  clearChatViewAfterSessionReset(host);
+  resetToolStream(host as unknown as Parameters<typeof resetToolStream>[0]);
+  void loadChatHistory(host as unknown as ChatState);
+}
+
 function enqueueApprovalRequest(host: GatewayHost, entry: ExecApprovalRequest | null) {
   if (!entry) {
     return;
@@ -561,6 +691,12 @@ function handleTerminalChatEvent(
       void loadSessions(host as unknown as SessionsState, {
         activeMinutes: CHAT_SESSIONS_ACTIVE_MINUTES,
       });
+      clearChatViewAfterSessionReset(host);
+      resetToolStream(toolHost);
+      void loadChatHistory(host as unknown as ChatState).finally(() => {
+        flushQueue();
+      });
+      return true;
     }
   }
   // Reload history when tools were used so the persisted tool results
@@ -731,8 +867,7 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
   }
 
   if (evt.event === "sessions.changed") {
-    applySessionsChangedEvent(host as unknown as SessionsState, evt.payload);
-    void loadSessions(host as unknown as SessionsState);
+    handleSessionsChangedGatewayEvent(host, evt.payload);
     return;
   }
 

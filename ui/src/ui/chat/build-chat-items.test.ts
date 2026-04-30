@@ -1,6 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { MessageGroup } from "../types/chat-types.ts";
-import { buildChatItems, type BuildChatItemsProps } from "./build-chat-items.ts";
+import {
+  buildChatItems,
+  resetChatItemFallbackTimestampsForTests,
+  type BuildChatItemsProps,
+} from "./build-chat-items.ts";
 
 function createProps(overrides: Partial<BuildChatItemsProps> = {}): BuildChatItemsProps {
   return {
@@ -25,6 +29,192 @@ function firstMessageContent(group: MessageGroup): unknown[] {
 }
 
 describe("buildChatItems", () => {
+  beforeEach(() => {
+    resetChatItemFallbackTimestampsForTests();
+  });
+
+  it("uses stable fallback timestamps for history messages that do not carry one", () => {
+    vi.useFakeTimers();
+    try {
+      const fallbackTimestamp = Date.UTC(2026, 3, 29, 12, 0);
+      vi.setSystemTime(fallbackTimestamp);
+      const first = messageGroups({
+        messages: [
+          {
+            role: "assistant",
+            content: "No persisted timestamp.",
+          },
+        ],
+      });
+
+      vi.setSystemTime(new Date("2026-04-29T12:05:00Z"));
+      const second = messageGroups({
+        messages: [
+          {
+            role: "assistant",
+            content: "No persisted timestamp.",
+          },
+        ],
+      });
+
+      expect(first[0]?.timestamp).toBe(fallbackTimestamp);
+      expect(second[0]?.timestamp).toBe(fallbackTimestamp);
+      expect(first[0]?.key).toBe(second[0]?.key);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps compaction divider keys stable when the divider has no timestamp", () => {
+    vi.useFakeTimers();
+    try {
+      const messages = [
+        {
+          role: "system",
+          content: "Compacted",
+          __openclaw: { kind: "compaction" },
+        },
+      ];
+      const fallbackTimestamp = Date.UTC(2026, 3, 29, 12, 0);
+      vi.setSystemTime(fallbackTimestamp);
+      const first = buildChatItems(createProps({ messages }));
+
+      vi.setSystemTime(new Date("2026-04-29T12:05:00Z"));
+      const second = buildChatItems(createProps({ messages }));
+
+      expect(first[0]).toMatchObject({ kind: "divider", key: "divider:compaction:unknown:0" });
+      expect(second[0]).toMatchObject({ kind: "divider", key: "divider:compaction:unknown:0" });
+      expect(first[0]).toMatchObject({ kind: "divider", timestamp: fallbackTimestamp });
+      expect(second[0]).toMatchObject({ kind: "divider", timestamp: fallbackTimestamp });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("uses transcript metadata before fallback timestamps for stable keys", () => {
+    const first = buildChatItems(
+      createProps({
+        messages: [
+          {
+            role: "assistant",
+            content: "Loaded without a persisted timestamp.",
+            timestamp: 1_000,
+            __openclaw: { seq: 7 },
+          },
+          {
+            role: "system",
+            content: "Compacted",
+            timestamp: 1_000,
+            __openclaw: { kind: "compaction", seq: 8 },
+          },
+        ],
+      }),
+    );
+    const second = buildChatItems(
+      createProps({
+        messages: [
+          {
+            role: "assistant",
+            content: "Loaded without a persisted timestamp.",
+            timestamp: 2_000,
+            __openclaw: { seq: 7 },
+          },
+          {
+            role: "system",
+            content: "Compacted",
+            timestamp: 2_000,
+            __openclaw: { kind: "compaction", seq: 8 },
+          },
+        ],
+      }),
+    );
+
+    expect(first[0]).toMatchObject({ kind: "group", key: "group:assistant:msg:transcript:seq:7" });
+    expect(second[0]).toMatchObject({
+      kind: "group",
+      key: "group:assistant:msg:transcript:seq:7",
+    });
+    expect(first[1]).toMatchObject({ kind: "divider", key: "divider:compaction:seq:8" });
+    expect(second[1]).toMatchObject({ kind: "divider", key: "divider:compaction:seq:8" });
+  });
+
+  it("renders gateway-injected new-session acknowledgements as assistant session dividers", () => {
+    const items = buildChatItems(
+      createProps({
+        assistantName: "Jarvis",
+        messages: [
+          {
+            role: "assistant",
+            content: [{ type: "text", text: "✅ New session started." }],
+            provider: "openclaw",
+            model: "gateway-injected",
+            timestamp: 1_000,
+            __openclaw: { id: "session-marker-1" },
+          },
+        ],
+      }),
+    );
+
+    expect(items).toEqual([
+      {
+        kind: "divider",
+        key: "divider:new-session:transcript:id:session-marker-1",
+        label: "Jarvis New Session",
+        timestamp: 1_000,
+      },
+    ]);
+  });
+
+  it("keeps normal assistant messages that happen to mention a new session", () => {
+    const groups = messageGroups({
+      assistantName: "Jarvis",
+      messages: [
+        {
+          role: "assistant",
+          content: "New session started.",
+          timestamp: 1_000,
+        },
+      ],
+    });
+
+    expect(groups).toHaveLength(1);
+    const group = groups[0];
+    if (!group) {
+      throw new Error("expected a message group");
+    }
+    const entry = group.messages[0];
+    if (!entry) {
+      throw new Error("expected a message entry");
+    }
+    expect((entry.message as { content?: unknown }).content).toBe("New session started.");
+  });
+
+  it("renders only the live stream suffix after committed stream segments", () => {
+    const items = buildChatItems(
+      createProps({
+        streamSegments: [{ text: "Before tool. ", ts: 100 }],
+        stream: "Before tool. After tool.",
+        streamStartedAt: 200,
+      }),
+    );
+
+    const streams = items.filter((item) => item.kind === "stream");
+    expect(streams).toEqual([
+      {
+        kind: "stream",
+        key: "stream-seg:main:0",
+        text: "Before tool. ",
+        startedAt: 100,
+      },
+      {
+        kind: "stream",
+        key: "stream:main:200",
+        text: "After tool.",
+        startedAt: 200,
+      },
+    ]);
+  });
+
   it("keeps consecutive user messages from different senders in separate groups", () => {
     const groups = messageGroups({
       messages: [
@@ -45,6 +235,64 @@ describe("buildChatItems", () => {
 
     expect(groups).toHaveLength(2);
     expect(groups.map((group) => group.senderLabel)).toEqual(["Iris", "Joaquin De Rojas"]);
+  });
+
+  it("keeps consecutive user messages from distinct sends in separate groups", () => {
+    const firstTimestamp = Date.UTC(2026, 3, 29, 23, 42);
+    const secondTimestamp = Date.UTC(2026, 3, 29, 23, 44);
+    const groups = messageGroups({
+      messages: [
+        {
+          role: "user",
+          content: "okay, check if ai-pulse health is fine",
+          timestamp: firstTimestamp,
+          __openclaw: { id: "user-1142", seq: 413 },
+        },
+        {
+          role: "user",
+          content: "okay, check if ai-pulse health is fine",
+          timestamp: secondTimestamp,
+          __openclaw: { id: "user-1144", seq: 415 },
+        },
+      ],
+    });
+
+    expect(groups).toHaveLength(2);
+    expect(groups.map((group) => group.messages)).toEqual([
+      [{ message: expect.any(Object), key: "msg:transcript:id:user-1142" }],
+      [{ message: expect.any(Object), key: "msg:transcript:id:user-1144" }],
+    ]);
+    expect(groups.map((group) => group.timestamp)).toEqual([firstTimestamp, secondTimestamp]);
+  });
+
+  it("groups multi-part user messages when they share a same-turn marker", () => {
+    const groups = messageGroups({
+      messages: [
+        {
+          role: "user",
+          content: [{ type: "text", text: "text part" }],
+          timestamp: 1000,
+          __openclaw_local: {
+            localId: "local:run-user:user-text",
+            runId: "run-user",
+            kind: "user",
+          },
+        },
+        {
+          role: "user",
+          content: [{ type: "image", source: { type: "url", url: "/image.png" } }],
+          timestamp: 1000,
+          __openclaw_local: {
+            localId: "local:run-user:user-image",
+            runId: "run-user",
+            kind: "user",
+          },
+        },
+      ],
+    });
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0]?.messages).toHaveLength(2);
   });
 
   it("attaches lifted canvas previews to the nearest assistant turn", () => {

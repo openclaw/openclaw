@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { STREAM_ERROR_FALLBACK_TEXT } from "../../agents/stream-message-shared.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { formatZonedTimestamp } from "../../infra/format-time/format-datetime.js";
 import {
@@ -458,6 +459,134 @@ describe("sanitizeChatHistoryMessages", () => {
 });
 
 describe("projectRecentChatDisplayMessages", () => {
+  it("shows stream-error fallback turns with the visible error reason", () => {
+    const result = projectRecentChatDisplayMessages([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: STREAM_ERROR_FALLBACK_TEXT }],
+        stopReason: "error",
+        errorMessage: "401 status code (no body)",
+        usage: {
+          input: 0,
+          output: 0,
+          totalTokens: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        timestamp: 1,
+      },
+    ]);
+
+    expect(result).toEqual([
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "text",
+            text: "Assistant couldn't start because model authentication failed. Reconnect the model provider and try again.",
+          },
+        ],
+        stopReason: "error",
+        errorMessage: "401 status code (no body)",
+        usage: {
+          input: 0,
+          output: 0,
+          totalTokens: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          cost: { total: 0 },
+        },
+        timestamp: 1,
+      },
+    ]);
+  });
+
+  it("projects empty stream-error assistant content with the visible error reason", () => {
+    const result = projectRecentChatDisplayMessages([
+      {
+        role: "assistant",
+        content: [],
+        stopReason: "error",
+        errorMessage: "401 status code (no body)",
+        timestamp: 1,
+      },
+    ]);
+
+    expect(result).toEqual([
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "text",
+            text: "Assistant couldn't start because model authentication failed. Reconnect the model provider and try again.",
+          },
+        ],
+        stopReason: "error",
+        errorMessage: "401 status code (no body)",
+        timestamp: 1,
+      },
+    ]);
+  });
+
+  it("keeps stream-error fallback turns generic when no error reason exists", () => {
+    const message = {
+      role: "assistant",
+      content: [{ type: "text", text: STREAM_ERROR_FALLBACK_TEXT }],
+      stopReason: "error",
+      timestamp: 1,
+    };
+
+    expect(projectRecentChatDisplayMessages([message])).toEqual([message]);
+  });
+
+  it("keeps visible assistant progress text from mixed tool-use messages", () => {
+    const result = projectRecentChatDisplayMessages([
+      {
+        role: "user",
+        content: [{ type: "text", text: "fix it" }],
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "private reasoning" },
+          {
+            type: "text",
+            text: "I will clean that up now.",
+            textSignature: JSON.stringify({
+              v: 1,
+              id: "msg-progress",
+              phase: "commentary",
+            }),
+          },
+          {
+            type: "toolCall",
+            id: "call-read",
+            name: "read",
+            arguments: { path: "SKILL.md" },
+          },
+        ],
+        timestamp: 2,
+        __openclaw: { seq: 2 },
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call-read",
+        toolName: "read",
+        content: [{ type: "text", text: "file contents" }],
+        timestamp: 3,
+      },
+    ]);
+
+    expect(result[1]).toEqual({
+      role: "assistant",
+      content: [{ type: "text", text: "I will clean that up now." }],
+      timestamp: 2,
+      __openclaw: { seq: 2 },
+    });
+  });
+
   it("applies history limits after dropping display-hidden messages", () => {
     const result = projectRecentChatDisplayMessages(
       [

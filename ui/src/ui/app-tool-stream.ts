@@ -1,3 +1,4 @@
+import { trimCommittedStreamPrefix, type ChatStreamSegment } from "./chat/stream-prefix.ts";
 import { formatUnknownText, truncateText } from "./format.ts";
 import { normalizeLowercaseStringOrEmpty } from "./string-coerce.ts";
 
@@ -31,7 +32,7 @@ type ToolStreamHost = {
   chatRunId: string | null;
   chatStream: string | null;
   chatStreamStartedAt: number | null;
-  chatStreamSegments: Array<{ text: string; ts: number }>;
+  chatStreamSegments: ChatStreamSegment[];
   toolStreamById: Map<string, ToolStreamEntry>;
   toolStreamOrder: string[];
   chatToolMessages: Record<string, unknown>[];
@@ -507,7 +508,10 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
       host.chatStream &&
       host.chatStream.trim().length > 0
     ) {
-      host.chatStreamSegments = [...host.chatStreamSegments, { text: host.chatStream, ts: now }];
+      const segmentText = trimCommittedStreamPrefix(host.chatStream, host.chatStreamSegments);
+      if (segmentText.trim().length > 0) {
+        host.chatStreamSegments = [...host.chatStreamSegments, { text: segmentText, ts: now }];
+      }
       host.chatStream = null;
       host.chatStreamStartedAt = null;
     }

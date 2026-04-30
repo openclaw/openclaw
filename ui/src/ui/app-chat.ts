@@ -46,6 +46,7 @@ export type ChatHost = ChatInputHistoryState & {
   chatStream: string | null;
   connected: boolean;
   chatAttachments: ChatAttachment[];
+  chatDeferredMessages?: unknown[];
   chatQueue: ChatQueueItem[];
   chatRunId: string | null;
   chatSending: boolean;
@@ -542,20 +543,42 @@ async function dispatchSlashCommand(
     case "stop":
       await handleAbortChat(host);
       return;
-    case "new":
-      await sendChatMessageNow(host, "/new", {
-        refreshSessions: true,
+    case "new": {
+      const trimmedArgs = args.trim();
+      if (trimmedArgs) {
+        await sendChatMessageNow(host, `/new ${trimmedArgs}`, {
+          refreshSessions: true,
+          previousDraft: sendOpts?.previousDraft,
+          restoreDraft: sendOpts?.restoreDraft,
+        });
+        return;
+      }
+      await clearChatHistory(host, {
+        reason: "new",
         previousDraft: sendOpts?.previousDraft,
         restoreDraft: sendOpts?.restoreDraft,
+        refreshSessions: true,
       });
       return;
-    case "reset":
-      await sendChatMessageNow(host, "/reset", {
-        refreshSessions: true,
+    }
+    case "reset": {
+      const trimmedArgs = args.trim();
+      if (trimmedArgs) {
+        await sendChatMessageNow(host, `/reset ${trimmedArgs}`, {
+          refreshSessions: true,
+          previousDraft: sendOpts?.previousDraft,
+          restoreDraft: sendOpts?.restoreDraft,
+        });
+        return;
+      }
+      await clearChatHistory(host, {
+        reason: "reset",
         previousDraft: sendOpts?.previousDraft,
         restoreDraft: sendOpts?.restoreDraft,
+        refreshSessions: true,
       });
       return;
+    }
     case "clear":
       await clearChatHistory(host);
       return;
@@ -606,20 +629,45 @@ async function dispatchSlashCommand(
   scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0]);
 }
 
-async function clearChatHistory(host: ChatHost) {
+async function clearChatHistory(
+  host: ChatHost,
+  opts?: {
+    reason?: "new" | "reset";
+    previousDraft?: string;
+    restoreDraft?: boolean;
+    refreshSessions?: boolean;
+  },
+) {
   if (!host.client || !host.connected) {
     return;
   }
   try {
-    await host.client.request("sessions.reset", { key: host.sessionKey });
+    const resetParams = opts?.reason
+      ? { key: host.sessionKey, reason: opts.reason }
+      : { key: host.sessionKey };
+    await host.client.request("sessions.reset", resetParams);
     host.chatMessages = [];
+    host.chatDeferredMessages = [];
     host.chatSideResult = null;
     host.chatSideResultTerminalRuns?.clear();
     host.chatStream = null;
     host.chatRunId = null;
-    await loadChatHistory(host as unknown as ChatState);
+    await Promise.all([
+      loadChatHistory(host as unknown as ChatState),
+      opts?.refreshSessions
+        ? loadSessions(host as unknown as SessionsState, {
+            activeMinutes: CHAT_SESSIONS_ACTIVE_MINUTES,
+          })
+        : Promise.resolve(),
+    ]);
+    if (opts?.restoreDraft && opts.previousDraft?.trim()) {
+      host.chatMessage = opts.previousDraft;
+    }
   } catch (err) {
     host.lastError = String(err);
+    if (opts?.previousDraft != null) {
+      host.chatMessage = opts.previousDraft;
+    }
   }
   scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0]);
 }
