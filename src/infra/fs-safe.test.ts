@@ -14,6 +14,8 @@ import {
   copyFileWithinRoot,
   createRootScopedReadFile,
   mkdirPathWithinRoot,
+  readdirWithinRoot,
+  renamePathWithinRoot,
   resolveOpenedFileRealPathForHandle,
   SafeOpenError,
   openFileWithinRoot,
@@ -21,6 +23,7 @@ import {
   readPathWithinRoot,
   readLocalFileSafely,
   removePathWithinRoot,
+  statPathWithinRoot,
   writeFileWithinRoot,
   writeFileFromPathWithinRoot,
 } from "./fs-safe.js";
@@ -387,6 +390,89 @@ describe("fs-safe", () => {
     });
 
     await expect(fs.stat(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("stats files and directories within root safely", async () => {
+    const root = await tempDirs.make("openclaw-fs-safe-root-");
+    await fs.mkdir(path.join(root, "nested"), { recursive: true });
+    await fs.writeFile(path.join(root, "nested", "file.txt"), "hello");
+
+    const fileStat = await statPathWithinRoot({ rootDir: root, relativePath: "nested/file.txt" });
+    expect(fileStat.kind).toBe("file");
+    expect(fileStat.exists).toBe(true);
+    expect(fileStat.size).toBe(5);
+
+    const dirStat = await statPathWithinRoot({ rootDir: root, relativePath: "nested" });
+    expect(dirStat.kind).toBe("directory");
+    expect(dirStat.exists).toBe(true);
+  });
+
+  it("returns missing stat results within root when allowed", async () => {
+    const root = await tempDirs.make("openclaw-fs-safe-root-");
+
+    await expect(
+      statPathWithinRoot({ rootDir: root, relativePath: "missing.txt", allowMissing: true }),
+    ).resolves.toMatchObject({ exists: false, kind: "missing" });
+    await expect(
+      statPathWithinRoot({ rootDir: root, relativePath: "missing.txt" }),
+    ).rejects.toMatchObject({ code: "not-found" });
+  });
+
+  it("lists directories within root safely", async () => {
+    const root = await tempDirs.make("openclaw-fs-safe-root-");
+    await fs.mkdir(path.join(root, "nested"), { recursive: true });
+    await fs.writeFile(path.join(root, "nested", "b.txt"), "b");
+    await fs.writeFile(path.join(root, "nested", "a.txt"), "a");
+
+    await expect(readdirWithinRoot({ rootDir: root, relativePath: "nested" })).resolves.toEqual([
+      "a.txt",
+      "b.txt",
+    ]);
+
+    const dirents = await readdirWithinRoot({
+      rootDir: root,
+      relativePath: "nested",
+      withFileTypes: true,
+    });
+    expect(dirents.map((entry) => entry.name).sort()).toEqual(["a.txt", "b.txt"]);
+  });
+
+  it("renames paths within root safely", async () => {
+    const root = await tempDirs.make("openclaw-fs-safe-root-");
+    await fs.mkdir(path.join(root, "nested"), { recursive: true });
+    await fs.writeFile(path.join(root, "nested", "from.txt"), "hello");
+
+    await renamePathWithinRoot({
+      rootDir: root,
+      fromRelativePath: "nested/from.txt",
+      toRelativePath: "nested/to.txt",
+    });
+
+    await expect(fs.readFile(path.join(root, "nested", "to.txt"), "utf8")).resolves.toBe("hello");
+    await expect(fs.stat(path.join(root, "nested", "from.txt"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
+  it("rejects stat, list, and rename traversal outside root", async () => {
+    const root = await tempDirs.make("openclaw-fs-safe-root-");
+    await expect(
+      statPathWithinRoot({ rootDir: root, relativePath: "../escape.txt" }),
+    ).rejects.toMatchObject({
+      code: "outside-workspace",
+    });
+    await expect(
+      readdirWithinRoot({ rootDir: root, relativePath: "../escape" }),
+    ).rejects.toMatchObject({
+      code: "invalid-path",
+    });
+    await expect(
+      renamePathWithinRoot({
+        rootDir: root,
+        fromRelativePath: "from.txt",
+        toRelativePath: "../escape.txt",
+      }),
+    ).rejects.toMatchObject({ code: "invalid-path" });
   });
 
   it("creates directories within root safely", async () => {
