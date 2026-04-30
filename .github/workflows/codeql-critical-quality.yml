@@ -26,12 +26,22 @@ on:
       - "packages/plugin-package-contract/**"
       - "packages/plugin-sdk/**"
       - "src/channels/**"
+      - "src/auto-reply/reply/post-compaction-context.ts"
+      - "src/auto-reply/reply/queue/**"
+      - "src/auto-reply/reply/startup-context.ts"
+      - "src/commands/doctor-session-*.ts"
+      - "src/commands/session-store-targets.ts"
+      - "src/commands/sessions*.ts"
       - "src/gateway/method-scopes.ts"
       - "src/gateway/protocol/**"
       - "src/gateway/server-methods/**"
       - "src/gateway/server-methods.ts"
       - "src/gateway/server-methods-list.ts"
+      - "src/infra/diagnostic-*.ts"
+      - "src/infra/diagnostics-timeline.ts"
       - "src/infra/outbound/**"
+      - "src/infra/session-delivery-queue*.ts"
+      - "src/logging/diagnostic*.ts"
       - "src/mcp/**"
       - "src/model-catalog/**"
       - "src/plugin-sdk/**"
@@ -65,6 +75,7 @@ jobs:
       plugin: ${{ steps.detect.outputs.plugin }}
       plugin_sdk_package: ${{ steps.detect.outputs.plugin_sdk_package }}
       provider: ${{ steps.detect.outputs.provider }}
+      session_diagnostics: ${{ steps.detect.outputs.session_diagnostics }}
     steps:
       - name: Detect PR shard paths
         id: detect
@@ -82,6 +93,7 @@ jobs:
           plugin=false
           plugin_sdk_package=false
           provider=false
+          session_diagnostics=false
 
           if [[ "${EVENT_NAME}" != "pull_request" ]]; then
             channel=true
@@ -90,6 +102,7 @@ jobs:
             plugin=true
             plugin_sdk_package=true
             provider=true
+            session_diagnostics=true
           else
             while IFS= read -r file; do
               case "${file}" in
@@ -100,12 +113,20 @@ jobs:
                   plugin=true
                   plugin_sdk_package=true
                   provider=true
+                  session_diagnostics=true
+                  ;;
+                src/auto-reply/reply/post-compaction-context.ts|src/auto-reply/reply/queue/*|src/auto-reply/reply/startup-context.ts|src/commands/doctor-session-*.ts|src/commands/session-store-targets.ts|src/commands/sessions*.ts|src/infra/diagnostic-*.ts|src/infra/diagnostics-timeline.ts|src/infra/session-delivery-queue*.ts|src/logging/diagnostic*.ts)
+                  session_diagnostics=true
                   ;;
                 src/channels/*)
                   channel=true
                   ;;
                 src/gateway/method-scopes.ts|src/gateway/protocol/*|src/gateway/server-methods/*|src/gateway/server-methods.ts|src/gateway/server-methods-list.ts)
                   gateway=true
+                  ;;
+                src/infra/outbound/base-session-key.ts|src/infra/outbound/delivery-queue*.ts|src/infra/outbound/outbound-session.ts|src/infra/outbound/session-binding*.ts|src/infra/outbound/session-context.ts|src/infra/outbound/targets-session.ts)
+                  mcp_process=true
+                  session_diagnostics=true
                   ;;
                 src/infra/outbound/*|src/mcp/*|src/process/*)
                   mcp_process=true
@@ -138,6 +159,7 @@ jobs:
             echo "plugin=${plugin}"
             echo "plugin_sdk_package=${plugin_sdk_package}"
             echo "provider=${provider}"
+            echo "session_diagnostics=${session_diagnostics}"
           } >> "${GITHUB_OUTPUT}"
 
   core-auth-secrets:
@@ -299,7 +321,8 @@ jobs:
 
   session-diagnostics-boundary:
     name: Critical Quality (session-diagnostics-boundary)
-    if: ${{ github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || inputs.profile == 'all' || inputs.profile == 'session-diagnostics-boundary') }}
+    needs: quality-shards
+    if: ${{ needs.quality-shards.outputs.session_diagnostics == 'true' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (github.event_name == 'pull_request' || github.event_name != 'workflow_dispatch' || inputs.profile == 'all' || inputs.profile == 'session-diagnostics-boundary') }}
     runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 25
     steps:
