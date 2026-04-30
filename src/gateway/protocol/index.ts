@@ -38,6 +38,17 @@ import {
   AgentsFilesSetParamsSchema,
   type AgentsFilesSetResult,
   AgentsFilesSetResultSchema,
+  type ArtifactsDownloadParams,
+  ArtifactsDownloadParamsSchema,
+  type ArtifactsDownloadResult,
+  type ArtifactsGetParams,
+  ArtifactsGetParamsSchema,
+  type ArtifactsGetResult,
+  type ArtifactsListParams,
+  ArtifactsListParamsSchema,
+  type ArtifactsListResult,
+  type ArtifactSummary,
+  ArtifactSummarySchema,
   type AgentsListParams,
   AgentsListParamsSchema,
   type AgentsListResult,
@@ -366,6 +377,12 @@ export const validateAgentsFilesGetParams = ajv.compile<AgentsFilesGetParams>(
 );
 export const validateAgentsFilesSetParams = ajv.compile<AgentsFilesSetParams>(
   AgentsFilesSetParamsSchema,
+);
+export const validateArtifactsListParams =
+  ajv.compile<ArtifactsListParams>(ArtifactsListParamsSchema);
+export const validateArtifactsGetParams = ajv.compile<ArtifactsGetParams>(ArtifactsGetParamsSchema);
+export const validateArtifactsDownloadParams = ajv.compile<ArtifactsDownloadParams>(
+  ArtifactsDownloadParamsSchema,
 );
 export const validateNodePairRequestParams = ajv.compile<NodePairRequestParams>(
   NodePairRequestParamsSchema,
@@ -845,6 +862,13 @@ export type {
   AgentsFilesGetResult,
   AgentsFilesSetParams,
   AgentsFilesSetResult,
+  ArtifactSummary,
+  ArtifactsListParams,
+  ArtifactsListResult,
+  ArtifactsGetParams,
+  ArtifactsGetResult,
+  ArtifactsDownloadParams,
+  ArtifactsDownloadResult,
   AgentsListParams,
   AgentsListResult,
   CommandsListParams,
