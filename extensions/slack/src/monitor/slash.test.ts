@@ -9,6 +9,7 @@ vi.mock("./slash-commands.runtime.js", () => {
   const reportLongCommand = { key: "reportlong", nativeName: "reportlong" };
   const reportLongButtonCommand = { key: "reportlongbutton", nativeName: "reportlongbutton" };
   const unsafeConfirmCommand = { key: "unsafeconfirm", nativeName: "unsafeconfirm" };
+  const longConfirmCommand = { key: "longconfirm", nativeName: "longconfirm" };
   const statusAliasCommand = { key: "status", nativeName: "status" };
   const periodArg = { name: "period", description: "period" };
   const baseReportPeriodChoices = [
@@ -78,6 +79,9 @@ vi.mock("./slash-commands.runtime.js", () => {
       if (normalized === "unsafeconfirm") {
         return unsafeConfirmCommand;
       }
+      if (normalized === "longconfirm") {
+        return longConfirmCommand;
+      }
       if (normalized === "agentstatus") {
         return statusAliasCommand;
       }
@@ -123,6 +127,12 @@ vi.mock("./slash-commands.runtime.js", () => {
       {
         name: "unsafeconfirm",
         description: "UnsafeConfirm",
+        acceptsArgs: true,
+        args: [],
+      },
+      {
+        name: "longconfirm",
+        description: "LongConfirm",
         acceptsArgs: true,
         args: [],
       },
@@ -173,6 +183,15 @@ vi.mock("./slash-commands.runtime.js", () => {
       if (params.command?.key === "unsafeconfirm") {
         return {
           arg: { name: "mode_*`~<&>", description: "mode" },
+          choices: [
+            { value: "on", label: "on" },
+            { value: "off", label: "off" },
+          ],
+        };
+      }
+      if (params.command?.key === "longconfirm") {
+        return {
+          arg: { name: `mode_${"x".repeat(320)}`, description: "mode" },
           choices: [
             { value: "on", label: "on" },
             { value: "off", label: "off" },
@@ -428,6 +447,7 @@ describe("Slack native command argument menus", () => {
   let reportLongHandler: (args: unknown) => Promise<void>;
   let reportLongButtonHandler: (args: unknown) => Promise<void>;
   let unsafeConfirmHandler: (args: unknown) => Promise<void>;
+  let longConfirmHandler: (args: unknown) => Promise<void>;
   let agentStatusHandler: (args: unknown) => Promise<void>;
   let argMenuHandler: (args: unknown) => Promise<void>;
   let argMenuOptionsHandler: (args: unknown) => Promise<void>;
@@ -446,6 +466,7 @@ describe("Slack native command argument menus", () => {
       "/reportlongbutton",
     );
     unsafeConfirmHandler = requireHandler(harness.commands, "/unsafeconfirm", "/unsafeconfirm");
+    longConfirmHandler = requireHandler(harness.commands, "/longconfirm", "/longconfirm");
     agentStatusHandler = requireHandler(harness.commands, "/agentstatus", "/agentstatus");
     argMenuHandler = requireHandler(harness.actions, /^openclaw_cmdarg/, "arg-menu action");
     argMenuOptionsHandler = requireHandler(harness.options, "openclaw_cmdarg", "arg-menu options");
@@ -594,6 +615,16 @@ describe("Slack native command argument menus", () => {
     expect(element?.confirm?.text?.text).toContain(
       "Run */unsafeconfirm* with *mode\\_\\*\\`\\~&lt;&amp;&gt;* set to this value?",
     );
+  });
+
+  it("truncates confirm dialog text when long args force button fallback", async () => {
+    const element = (await getFirstActionElementFromCommand(longConfirmHandler)) as
+      | { type?: string; confirm?: { text?: { text?: string } } }
+      | undefined;
+    const confirmText = element?.confirm?.text?.text;
+    expect(element?.type).toBe("button");
+    expect(confirmText).toHaveLength(300);
+    expect(confirmText?.endsWith("…")).toBe(true);
   });
 
   it("dispatches the command when a menu button is clicked", async () => {

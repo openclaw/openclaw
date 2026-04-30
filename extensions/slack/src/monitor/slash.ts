@@ -55,6 +55,7 @@ const SLACK_COMMAND_ARG_SELECT_OPTIONS_MAX = 100;
 const SLACK_COMMAND_ARG_SELECT_OPTION_TEXT_MAX = 75;
 const SLACK_COMMAND_ARG_SELECT_OPTION_VALUE_MAX = 75;
 const SLACK_COMMAND_ARG_BUTTON_TEXT_MAX = 75;
+const SLACK_COMMAND_ARG_CONFIRM_TEXT_MAX = 300;
 const SLACK_HEADER_TEXT_MAX = 150;
 let slashCommandsRuntimePromise: Promise<typeof import("./slash-commands.runtime.js")> | null =
   null;
@@ -142,7 +143,10 @@ function buildSlackArgMenuConfirm(params: { command: string; arg: string }) {
     title: { type: "plain_text", text: "Confirm selection" },
     text: {
       type: "mrkdwn",
-      text: `Run */${command}* with *${arg}* set to this value?`,
+      text: truncateSlackText(
+        `Run */${command}* with *${arg}* set to this value?`,
+        SLACK_COMMAND_ARG_CONFIRM_TEXT_MAX,
+      ),
     },
     confirm: { type: "plain_text", text: "Run command" },
     deny: { type: "plain_text", text: "Cancel" },
