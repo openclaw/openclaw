@@ -147,6 +147,7 @@ Docs: https://docs.openclaw.ai
 - macOS app: reserve layout space for exec approval command details so the allow dialog no longer overlaps the command, context, and action buttons. (#75470) Thanks @ngutman.
 - Agents/failover: carry `sessionId`, `lane`, `provider`, `model`, and `profileId` attribution through `FailoverError` and `describeFailoverError`/`coerceToFailoverError` so structured error logs (e.g. `gateway.err.log` ingestion) can attribute exhausted-fallback wrapper errors to the originating session and last-attempted provider instead of dropping the metadata after the per-profile errors. Fixes #42713. (#73506) Thanks @wenxu007.
 - Context Engine: treat assembled prompt as the default authority for preemptive overflow prechecks so engines that return a windowed, self-contained context no longer trigger false hard-fail compactions on huge raw history. Engines whose assembled view can hide overflow risk can opt back into the legacy behavior with `AssembleResult.promptAuthority: "preassembly_may_overflow"`. (#74255) Thanks @100yenadmin.
+- Mattermost: refresh current native slash command registrations before accepting callbacks so stale tokens from deleted or regenerated commands stop being accepted without a gateway restart while failed validations stay briefly cached and lookup starts are rate-limited per command, gate each callback against the resolved command's own startup token so a token leaked for one slash command cannot poison another command's failure cache, redact slash validation lookup errors, and add a body read timeout to the multi-account routing path so slow callback senders cannot tie up the dispatcher. Thanks @feynman-hou and @eleqtrizit.
 
 ## 2026.4.29
 
@@ -779,10 +780,6 @@ Docs: https://docs.openclaw.ai
 - TTS/BlueBubbles: pre-transcode synthesized MP3 audio to opus-in-CAF (mono, 24 kHz — validated against macOS 15.x Messages.app's native voice-memo CAF descriptor) on macOS hosts before handing the file to BlueBubbles, so iMessage renders the result as a native voice-memo bubble with proper duration and waveform UI instead of a plain file attachment. Adds an opt-in `tts.voice.preferAudioFileFormat` channel capability and a magic-byte sniff for the CAF container so the host-local-media validator (which uses `file-type` and didn't recognize CAF natively) can verify the pre-transcoded buffer. Channels that don't opt in are unaffected. (#72586) Fixes #72506. Thanks @omarshahine.
 - Feishu: retry WebSocket startup failures with monitor-owned backoff while preserving SDK-local heartbeat defaults, so persistent-connection startup failures no longer leave the monitor hung. Fixes #68766; related #42354 and #55532. Thanks @alex-xuweilong, @120106835, @sirfengyu, and @tianhaocui.
 - Cron: normalize isolated job tool allowlists before granting the narrow self-removal cron tool path, keeping scheduled jobs aligned with shared tool policy normalization. (#73028) Thanks @jalehman.
-
-### Fixes
-
-- Mattermost: refresh current native slash command registrations before accepting callbacks so stale tokens from deleted or regenerated commands stop being accepted without a gateway restart while failed validations stay briefly cached and lookup starts are rate-limited per command, gate each callback against the resolved command's own startup token so a token leaked for one slash command cannot poison another command's failure cache, redact slash validation lookup errors, and add a body read timeout to the multi-account routing path so slow callback senders cannot tie up the dispatcher. Thanks @feynman-hou and @eleqtrizit.
 
 ## 2026.4.26
 
