@@ -137,6 +137,41 @@ Each `models[]` entry can be **provider** or **CLI**:
   </Tab>
 </Tabs>
 
+### Provider credentials
+
+Provider model entries do **not** take an `apiKey` field inside `tools.media`. Media understanding uses the same provider credential sources as the rest of OpenClaw, so configure credentials before enabling provider-based image, audio, or video understanding.
+
+Use one of these credential sources:
+
+- Provider auth profiles created by `openclaw models auth login ...` when the provider supports them.
+- Provider environment variables such as `OPENAI_API_KEY`, `GOOGLE_API_KEY`, `ANTHROPIC_API_KEY`, or the provider-specific key documented on that provider page.
+- `models.providers.<providerId>` entries for custom or OpenAI-compatible providers.
+
+For example, a custom provider referenced by a media model should define its key under `models.providers`:
+
+```json5
+{
+  models: {
+    providers: {
+      moonshot: {
+        apiKey: "${MOONSHOT_API_KEY}",
+        baseUrl: "https://api.moonshot.ai/v1",
+      },
+    },
+  },
+  tools: {
+    media: {
+      video: {
+        enabled: true,
+        models: [{ provider: "moonshot", model: "kimi-k2.5" }],
+      },
+    },
+  },
+}
+```
+
+If media understanding reports that an API key cannot be found, check the provider auth/profile or `models.providers.<providerId>` configuration first; adding `apiKey` to the `tools.media.*.models[]` entry will not be read.
+
 ## Defaults and limits
 
 Recommended defaults:
