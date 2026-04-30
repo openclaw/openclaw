@@ -3,19 +3,48 @@
 // confirm that the policy assigned to each endpoint wrapper produces the expected
 // allow/block behaviour for private network addresses.
 
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { LookupFn } from "../../infra/net/ssrf.js";
 import {
   withSelfHostedWebToolsEndpoint,
   withTrustedWebToolsEndpoint,
 } from "./web-guarded-fetch.js";
 
+const PROXY_VARS = [
+  "HTTP_PROXY",
+  "HTTPS_PROXY",
+  "http_proxy",
+  "https_proxy",
+  "NO_PROXY",
+  "no_proxy",
+  "ALL_PROXY",
+  "all_proxy",
+] as const;
+
 function makeLookup(address: string): LookupFn {
   return vi.fn(async () => [{ address, family: 4 }]) as unknown as LookupFn;
 }
 
 describe("web-guarded-fetch SSRF policy integration", () => {
+  let savedProxyEnv: Partial<Record<string, string>>;
+
+  beforeEach(() => {
+    savedProxyEnv = {};
+    for (const key of PROXY_VARS) {
+      savedProxyEnv[key] = process.env[key];
+      delete process.env[key];
+    }
+  });
+
   afterEach(() => {
+    for (const key of PROXY_VARS) {
+      const saved = savedProxyEnv[key];
+      if (saved === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = saved;
+      }
+    }
     vi.clearAllMocks();
   });
 
