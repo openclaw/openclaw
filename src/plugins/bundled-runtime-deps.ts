@@ -44,6 +44,8 @@ import {
   type BundledRuntimeDepsInstallRootPlan,
 } from "./bundled-runtime-deps-roots.js";
 import {
+  collectConfiguredBundledPluginRuntimeDeps,
+  collectExactBundledPluginRuntimeDeps,
   collectBundledPluginRuntimeDeps,
   collectMirroredPackageRuntimeDeps,
   createBundledRuntimeDepsPluginIdNormalizer,
@@ -259,7 +261,7 @@ export function scanBundledPluginRuntimeDeps(params: {
   packageRoot: string;
   config?: OpenClawConfig;
   pluginIds?: readonly string[];
-  selectedPluginIds?: readonly string[];
+  exactPluginIds?: readonly string[];
   includeConfiguredChannels?: boolean;
   env?: NodeJS.ProcessEnv;
 }): {
@@ -276,21 +278,32 @@ export function scanBundledPluginRuntimeDeps(params: {
   }
   const manifestCache: BundledPluginRuntimeDepsManifestCache = new Map();
   const normalizePluginId =
-    params.config || params.pluginIds || params.selectedPluginIds
+    params.config || params.pluginIds || params.exactPluginIds
       ? createBundledRuntimeDepsPluginIdNormalizer({
           extensionsDir,
           manifestCache,
         })
       : undefined;
-  const { deps, conflicts, pluginIds } = collectBundledPluginRuntimeDeps({
-    extensionsDir,
-    config: params.config,
-    pluginIds: normalizePluginIdSet(params.pluginIds, normalizePluginId),
-    selectedPluginIds: normalizePluginIdSet(params.selectedPluginIds, normalizePluginId),
-    includeConfiguredChannels: params.includeConfiguredChannels,
-    manifestCache,
-    ...(normalizePluginId ? { normalizePluginId } : {}),
-  });
+  const exactPluginIds = normalizePluginIdSet(params.exactPluginIds, normalizePluginId);
+  const scopedPluginIds = normalizePluginIdSet(params.pluginIds, normalizePluginId);
+  const { deps, conflicts, pluginIds } = exactPluginIds
+    ? collectExactBundledPluginRuntimeDeps({
+        extensionsDir,
+        ...(params.config ? { config: params.config } : {}),
+        exactPluginIds,
+        manifestCache,
+        ...(normalizePluginId ? { normalizePluginId } : {}),
+      })
+    : collectConfiguredBundledPluginRuntimeDeps({
+        extensionsDir,
+        ...(params.config ? { config: params.config } : {}),
+        ...(scopedPluginIds ? { pluginIds: scopedPluginIds } : {}),
+        ...(params.includeConfiguredChannels !== undefined
+          ? { includeConfiguredChannels: params.includeConfiguredChannels }
+          : {}),
+        manifestCache,
+        ...(normalizePluginId ? { normalizePluginId } : {}),
+      });
   const packageRuntimeDeps =
     pluginIds.length > 0 ? collectMirroredPackageRuntimeDeps(params.packageRoot) : [];
   const installRootPlan = resolveBundledRuntimeDependencyPackageInstallRootPlan(

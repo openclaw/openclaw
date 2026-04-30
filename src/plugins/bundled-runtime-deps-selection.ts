@@ -595,16 +595,16 @@ function shouldIncludeBundledPluginRuntimeDeps(params: {
   config?: OpenClawConfig;
   plugins?: NormalizedPluginsConfig;
   pluginIds?: ReadonlySet<string>;
-  selectedPluginIds?: ReadonlySet<string>;
+  exactPluginIds?: ReadonlySet<string>;
   pluginId: string;
   pluginDir: string;
   configuredModelOwnerPluginIds?: ReadonlySet<string>;
   includeConfiguredChannels?: boolean;
   manifestCache?: BundledPluginRuntimeDepsManifestCache;
 }): boolean {
-  if (params.selectedPluginIds) {
+  if (params.exactPluginIds) {
     return (
-      params.selectedPluginIds.has(params.pluginId) &&
+      params.exactPluginIds.has(params.pluginId) &&
       !(
         params.config &&
         params.plugins &&
@@ -658,7 +658,7 @@ export function collectBundledPluginRuntimeDeps(params: {
   extensionsDir: string;
   config?: OpenClawConfig;
   pluginIds?: ReadonlySet<string>;
-  selectedPluginIds?: ReadonlySet<string>;
+  exactPluginIds?: ReadonlySet<string>;
   includeConfiguredChannels?: boolean;
   manifestCache?: BundledPluginRuntimeDepsManifestCache;
   normalizePluginId?: NormalizePluginId;
@@ -702,7 +702,7 @@ export function collectBundledPluginRuntimeDeps(params: {
         config: params.config,
         plugins,
         pluginIds: params.pluginIds,
-        selectedPluginIds: params.selectedPluginIds,
+        exactPluginIds: params.exactPluginIds,
         pluginId,
         pluginDir,
         configuredModelOwnerPluginIds,
@@ -776,6 +776,50 @@ export function collectBundledPluginRuntimeDeps(params: {
     conflicts: conflicts.toSorted((a, b) => a.name.localeCompare(b.name)),
     pluginIds: [...includedPluginIds].toSorted((a, b) => a.localeCompare(b)),
   };
+}
+
+export function collectExactBundledPluginRuntimeDeps(params: {
+  extensionsDir: string;
+  config?: OpenClawConfig;
+  exactPluginIds: ReadonlySet<string>;
+  manifestCache?: BundledPluginRuntimeDepsManifestCache;
+  normalizePluginId?: NormalizePluginId;
+}): {
+  deps: RuntimeDepEntry[];
+  conflicts: RuntimeDepConflict[];
+  pluginIds: string[];
+} {
+  return collectBundledPluginRuntimeDeps({
+    extensionsDir: params.extensionsDir,
+    ...(params.config ? { config: params.config } : {}),
+    exactPluginIds: params.exactPluginIds,
+    ...(params.manifestCache ? { manifestCache: params.manifestCache } : {}),
+    ...(params.normalizePluginId ? { normalizePluginId: params.normalizePluginId } : {}),
+  });
+}
+
+export function collectConfiguredBundledPluginRuntimeDeps(params: {
+  extensionsDir: string;
+  config?: OpenClawConfig;
+  pluginIds?: ReadonlySet<string>;
+  includeConfiguredChannels?: boolean;
+  manifestCache?: BundledPluginRuntimeDepsManifestCache;
+  normalizePluginId?: NormalizePluginId;
+}): {
+  deps: RuntimeDepEntry[];
+  conflicts: RuntimeDepConflict[];
+  pluginIds: string[];
+} {
+  return collectBundledPluginRuntimeDeps({
+    extensionsDir: params.extensionsDir,
+    ...(params.config ? { config: params.config } : {}),
+    ...(params.pluginIds ? { pluginIds: params.pluginIds } : {}),
+    ...(params.includeConfiguredChannels !== undefined
+      ? { includeConfiguredChannels: params.includeConfiguredChannels }
+      : {}),
+    ...(params.manifestCache ? { manifestCache: params.manifestCache } : {}),
+    ...(params.normalizePluginId ? { normalizePluginId: params.normalizePluginId } : {}),
+  });
 }
 
 export function normalizePluginIdSet(

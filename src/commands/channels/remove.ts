@@ -53,7 +53,7 @@ export async function channelsRemoveCommand(
   if (useWizard && prompter) {
     await prompter.intro("Remove channel account");
     const readOnlyPlugins = listReadOnlyChannelPluginsForConfig(cfg, {
-      includeSetupRuntimeFallback: true,
+      includeSetupFallbackPlugins: true,
     });
     const selectedChannel = await prompter.select({
       message: "Channel",

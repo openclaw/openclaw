@@ -10,7 +10,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
 import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
-import { measureDiagnosticsTimelineSpanSync } from "../infra/diagnostics-timeline.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   DEFAULT_MEMORY_DREAMING_PLUGIN_ID,
@@ -29,20 +28,18 @@ import { buildPluginApi } from "./api-builder.js";
 import { inspectBundleMcpRuntimeSupport } from "./bundle-mcp.js";
 import {
   clearBundledRuntimeDependencyJitiAliases,
-  registerBundledRuntimeDependencyJitiAliases,
   resolveBundledRuntimeDependencyJitiAliasMap,
 } from "./bundled-runtime-deps-jiti-aliases.js";
 import {
   clearBundledRuntimeDependencyNodePaths,
-  installBundledRuntimeDeps,
   type BundledRuntimeDepsInstallParams,
 } from "./bundled-runtime-deps.js";
 import { clearBundledRuntimeDistMirrorPreparationCache } from "./bundled-runtime-dist-mirror-cache.js";
 import {
   clearPreparedBundledPluginRuntimeLoadRoots,
   ensureOpenClawPluginSdkAlias,
-  prepareBundledPluginRuntimeLoadRoot,
 } from "./bundled-runtime-root.js";
+import { prepareBundledRuntimeLoadRootForPlugin } from "./bundled-runtime-staging.js";
 import {
   clearPluginCommands,
   listRegisteredPluginCommands,
@@ -1466,10 +1463,8 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       }
 
       if (shouldLoadModules && candidate.origin === "bundled" && enableState.enabled) {
-        let runtimeDepsInstallStartedAt: number | null = null;
-        let runtimeDepsInstallSpecs: string[] = [];
         try {
-          const preparedRuntimeRoot = prepareBundledPluginRuntimeLoadRoot({
+          const preparedRuntimeRoot = prepareBundledRuntimeLoadRootForPlugin({
             pluginId: record.id,
             pluginRoot,
             modulePath: runtimeCandidateSource,
@@ -1477,63 +1472,16 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
             env,
             config: cfg,
             installMissingDeps: shouldInstallBundledRuntimeDeps,
-            memoizePreparedRoot: true,
-            registerRuntimeAliasRoot: registerBundledRuntimeDependencyJitiAliases,
-            installDeps: (installParams) => {
-              const installSpecs = installParams.installSpecs ?? installParams.missingSpecs;
-              runtimeDepsInstallStartedAt = Date.now();
-              runtimeDepsInstallSpecs = installSpecs;
-              if (shouldActivate) {
-                logger.info(
-                  `[plugins] ${record.id} staging bundled runtime deps (${installSpecs.length} specs): ${installSpecs.join(", ")}`,
-                );
-              }
-              const installer =
-                options.bundledRuntimeDepsInstaller ??
-                ((params: BundledRuntimeDepsInstallParams) =>
-                  installBundledRuntimeDeps({
-                    installRoot: params.installRoot,
-                    installExecutionRoot: params.installExecutionRoot,
-                    missingSpecs: params.installSpecs ?? params.missingSpecs,
-                    installSpecs: params.installSpecs,
-                    env,
-                    warn: (message) => logger.warn(`[plugins] ${record.id}: ${message}`),
-                  }));
-              measureDiagnosticsTimelineSpanSync(
-                "runtimeDeps.stage",
-                () => installer(installParams),
-                {
-                  phase: "startup",
-                  config: cfg,
-                  env,
-                  attributes: {
-                    pluginId: record.id,
-                    dependencyCount: installSpecs.length,
-                  },
-                },
-              );
-            },
-            logInstalled: (installedSpecs) => {
-              if (shouldActivate) {
-                const elapsed =
-                  runtimeDepsInstallStartedAt === null
-                    ? ""
-                    : ` in ${Date.now() - runtimeDepsInstallStartedAt}ms`;
-                logger.info(
-                  `[plugins] ${record.id} installed bundled runtime deps${elapsed}: ${installedSpecs.join(", ")}`,
-                );
-              }
-            },
+            shouldLog: shouldActivate,
+            logger,
+            ...(options.bundledRuntimeDepsInstaller
+              ? { installer: options.bundledRuntimeDepsInstaller }
+              : {}),
           });
           runtimePluginRoot = preparedRuntimeRoot.pluginRoot;
           runtimeCandidateSource = preparedRuntimeRoot.modulePath;
           runtimeSetupSource = preparedRuntimeRoot.setupModulePath;
         } catch (error) {
-          if (shouldActivate && runtimeDepsInstallStartedAt !== null) {
-            logger.error(
-              `[plugins] ${record.id} failed to stage bundled runtime deps after ${Date.now() - runtimeDepsInstallStartedAt}ms: ${runtimeDepsInstallSpecs.join(", ")}`,
-            );
-          }
           pushPluginLoadError(`failed to prepare bundled runtime deps: ${String(error)}`);
           continue;
         }

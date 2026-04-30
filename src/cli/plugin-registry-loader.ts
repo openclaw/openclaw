@@ -1,6 +1,6 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loggingState } from "../logging/state.js";
-import type { PluginRegistryScope } from "./plugin-registry.js";
+import type { CliPluginRegistryScope } from "./command-catalog.js";
 
 let pluginRegistryModulePromise: Promise<typeof import("./plugin-registry.js")> | undefined;
 
@@ -10,30 +10,12 @@ function loadPluginRegistryModule() {
 }
 
 export type CliPluginRegistryLoadPolicy = {
-  scope: PluginRegistryScope;
+  scope: CliPluginRegistryScope;
   installBundledRuntimeDeps?: boolean;
 };
 
-export function resolvePluginRegistryLoadPolicyForCommandPath(
-  commandPath: string[],
-): CliPluginRegistryLoadPolicy {
-  if (commandPath[0] === "status" || commandPath[0] === "health") {
-    return {
-      scope: "channels",
-      installBundledRuntimeDeps: false,
-    };
-  }
-  if (commandPath[0] === "channels") {
-    return {
-      scope: "configured-channels",
-      installBundledRuntimeDeps: false,
-    };
-  }
-  return { scope: "all" };
-}
-
 export async function ensureCliPluginRegistryLoaded(params: {
-  scope: PluginRegistryScope;
+  scope: CliPluginRegistryScope;
   routeLogsToStderr?: boolean;
   config?: OpenClawConfig;
   activationSourceConfig?: OpenClawConfig;

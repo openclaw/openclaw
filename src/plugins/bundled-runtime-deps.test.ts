@@ -1299,7 +1299,7 @@ describe("scanBundledPluginRuntimeDeps config policy", () => {
   it("trusts preselected startup plugin ids without reapplying config policy", () => {
     const result = scanBundledPluginRuntimeDeps({
       packageRoot: setupPolicyPackageRoot(),
-      selectedPluginIds: ["telegram"],
+      exactPluginIds: ["telegram"],
       config: {
         plugins: { allow: ["browser"] },
         channels: { telegram: { botToken: "123:abc" } },
@@ -1315,7 +1315,7 @@ describe("scanBundledPluginRuntimeDeps config policy", () => {
   it("does not stage explicitly disabled preselected channel deps", () => {
     const result = scanBundledPluginRuntimeDeps({
       packageRoot: setupPolicyPackageRoot(),
-      selectedPluginIds: ["telegram"],
+      exactPluginIds: ["telegram"],
       config: {
         plugins: { allow: ["telegram"] },
         channels: { telegram: { enabled: false, botToken: "123:abc" } },
@@ -1500,7 +1500,7 @@ describe("scanBundledPluginRuntimeDeps config policy", () => {
 
     const result = scanBundledPluginRuntimeDeps({
       packageRoot,
-      selectedPluginIds: ["slack"],
+      exactPluginIds: ["slack"],
       config: {
         channels: { slack: { botToken: "xoxb-token" } },
       },
@@ -1561,7 +1561,7 @@ describe("scanBundledPluginRuntimeDeps config policy", () => {
 
     const result = scanBundledPluginRuntimeDeps({
       packageRoot,
-      selectedPluginIds: ["whatsapp"],
+      exactPluginIds: ["whatsapp"],
       config: {
         channels: { whatsapp: { enabled: true } },
       },
@@ -1613,7 +1613,7 @@ describe("scanBundledPluginRuntimeDeps config policy", () => {
 
     const result = scanBundledPluginRuntimeDeps({
       packageRoot,
-      selectedPluginIds: ["slack"],
+      exactPluginIds: ["slack"],
       config: {
         channels: { slack: { botToken: "xoxb-token" } },
       },

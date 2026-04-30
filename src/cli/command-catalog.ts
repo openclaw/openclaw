@@ -6,6 +6,11 @@ export type CliCommandPluginLoadPolicy =
   | "text-only"
   | ((ctx: { argv: string[]; commandPath: string[]; jsonOutputMode: boolean }) => boolean);
 export type CliRouteConfigGuardPolicy = "never" | "always" | "when-suppressed";
+export type CliPluginRegistryScope = "all" | "channels" | "configured-channels";
+export type CliPluginRegistryPolicy = {
+  scope: CliPluginRegistryScope;
+  installBundledRuntimeDeps?: boolean;
+};
 export type CliNetworkProxyPolicy = "default" | "bypass";
 export type CliNetworkProxyPolicyResolver =
   | CliNetworkProxyPolicy
@@ -29,6 +34,7 @@ export type CliCommandPathPolicy = {
   bypassConfigGuard: boolean;
   routeConfigGuard: CliRouteConfigGuardPolicy;
   loadPlugins: CliCommandPluginLoadPolicy;
+  pluginRegistry: CliPluginRegistryPolicy;
   hideBanner: boolean;
   ensureCliPath: boolean;
   networkProxy: CliNetworkProxyPolicyResolver;
@@ -57,7 +63,13 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     },
   },
   { commandPath: ["message"], policy: { loadPlugins: "never" } },
-  { commandPath: ["channels"], policy: { loadPlugins: "always" } },
+  {
+    commandPath: ["channels"],
+    policy: {
+      loadPlugins: "always",
+      pluginRegistry: { scope: "configured-channels", installBundledRuntimeDeps: false },
+    },
+  },
   { commandPath: ["directory"], policy: { loadPlugins: "always" } },
   { commandPath: ["agents"], policy: { loadPlugins: "always", networkProxy: "bypass" } },
   {
@@ -100,6 +112,7 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     commandPath: ["status"],
     policy: {
       loadPlugins: "never",
+      pluginRegistry: { scope: "channels", installBundledRuntimeDeps: false },
       routeConfigGuard: "when-suppressed",
       ensureCliPath: false,
       networkProxy: "bypass",
@@ -110,6 +123,7 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     commandPath: ["health"],
     policy: {
       loadPlugins: "never",
+      pluginRegistry: { scope: "channels", installBundledRuntimeDeps: false },
       ensureCliPath: false,
       networkProxy: "bypass",
     },

@@ -9,15 +9,6 @@ vi.mock("./program/config-guard.js", () => ({
 
 vi.mock("./plugin-registry-loader.js", () => ({
   ensureCliPluginRegistryLoaded: ensureCliPluginRegistryLoadedMock,
-  resolvePluginRegistryLoadPolicyForCommandPath: vi.fn((commandPath: string[]) => {
-    if (commandPath[0] === "status" || commandPath[0] === "health") {
-      return { scope: "channels", installBundledRuntimeDeps: false };
-    }
-    if (commandPath[0] === "channels") {
-      return { scope: "configured-channels", installBundledRuntimeDeps: false };
-    }
-    return { scope: "all" };
-  }),
 }));
 
 describe("ensureCliCommandBootstrap", () => {

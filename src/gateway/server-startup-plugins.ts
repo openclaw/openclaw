@@ -82,7 +82,7 @@ async function prestageGatewayBundledRuntimeDepsImpl(params: {
       const scan = scanBundledPluginRuntimeDeps({
         packageRoot,
         config: params.cfg,
-        selectedPluginIds: params.pluginIds,
+        exactPluginIds: params.pluginIds,
         env: process.env,
       });
       const missingSpecs = createBundledRuntimeDepsInstallSpecs({ deps: scan.missing });

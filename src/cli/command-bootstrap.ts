@@ -1,8 +1,6 @@
 import type { RuntimeEnv } from "../runtime.js";
-import {
-  ensureCliPluginRegistryLoaded,
-  resolvePluginRegistryLoadPolicyForCommandPath,
-} from "./plugin-registry-loader.js";
+import { resolveCliCommandPathPolicy } from "./command-path-policy.js";
+import { ensureCliPluginRegistryLoaded } from "./plugin-registry-loader.js";
 
 let configGuardModulePromise: Promise<typeof import("./program/config-guard.js")> | undefined;
 
@@ -31,9 +29,7 @@ export async function ensureCliCommandBootstrap(params: {
   if (!params.loadPlugins) {
     return;
   }
-  const pluginRegistryLoadPolicy = resolvePluginRegistryLoadPolicyForCommandPath(
-    params.commandPath,
-  );
+  const pluginRegistryLoadPolicy = resolveCliCommandPathPolicy(params.commandPath).pluginRegistry;
   await ensureCliPluginRegistryLoaded({
     scope: pluginRegistryLoadPolicy.scope,
     routeLogsToStderr: params.suppressDoctorStdout,

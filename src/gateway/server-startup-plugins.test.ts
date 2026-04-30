@@ -291,7 +291,7 @@ describe("prepareGatewayPluginBootstrap runtime-deps staging", () => {
 
     expect(scanBundledPluginRuntimeDeps).toHaveBeenCalledWith(
       expect.objectContaining({
-        selectedPluginIds: ["telegram"],
+        exactPluginIds: ["telegram"],
       }),
     );
     expect(repairBundledRuntimeDepsInstallRootAsync).toHaveBeenCalledWith(
@@ -310,6 +310,33 @@ describe("prepareGatewayPluginBootstrap runtime-deps staging", () => {
         memoizePreparedRoot: true,
       }),
     );
+    expect(loadGatewayStartupPlugins).toHaveBeenCalledWith(
+      expect.objectContaining({ installBundledRuntimeDeps: false }),
+    );
+  });
+
+  it("keeps warm gateway starts on verify-only plugin loading when deps are already staged", async () => {
+    scanBundledPluginRuntimeDeps.mockReturnValueOnce({
+      deps: [{ name: "grammy", version: "1.37.0", pluginIds: ["telegram"] }],
+      missing: [],
+      conflicts: [],
+    });
+    const log = createLog();
+    const { prepareGatewayPluginBootstrap } = await import("./server-startup-plugins.js");
+
+    await prepareGatewayPluginBootstrap({
+      cfgAtStart: {},
+      startupRuntimeConfig: {},
+      minimalTestGateway: false,
+      log,
+    });
+
+    expect(scanBundledPluginRuntimeDeps).toHaveBeenCalledWith(
+      expect.objectContaining({
+        exactPluginIds: ["telegram"],
+      }),
+    );
+    expect(repairBundledRuntimeDepsInstallRootAsync).not.toHaveBeenCalled();
     expect(loadGatewayStartupPlugins).toHaveBeenCalledWith(
       expect.objectContaining({ installBundledRuntimeDeps: false }),
     );
