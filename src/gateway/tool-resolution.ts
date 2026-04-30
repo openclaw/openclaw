@@ -133,10 +133,13 @@ export function resolveGatewayScopedTools(params: {
     surface === "http"
       ? DEFAULT_GATEWAY_HTTP_TOOL_DENY.filter((name) => !gatewayToolsCfg?.allow?.includes(name))
       : [];
+  const gatewayAllow = gatewayToolsCfg?.allow ?? [];
   const gatewayDenySet = new Set([
     ...defaultGatewayDeny,
     ...(Array.isArray(gatewayToolsCfg?.deny) ? gatewayToolsCfg.deny : []),
-    ...(params.excludeToolNames ? Array.from(params.excludeToolNames) : []),
+    ...(params.excludeToolNames
+      ? Array.from(params.excludeToolNames).filter((name) => !gatewayAllow.includes(name))
+      : []),
   ]);
 
   return {
