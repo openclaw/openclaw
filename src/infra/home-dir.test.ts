@@ -1,5 +1,6 @@
+import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   expandHomePrefix,
   resolveEffectiveHomeDir,
@@ -7,6 +8,8 @@ import {
   resolveOsHomeDir,
   resolveOsHomeRelativePath,
   resolveRequiredHomeDir,
+  resolveRequiredOsHomeDir,
+  safeCwd,
 } from "./home-dir.js";
 
 describe("resolveEffectiveHomeDir", () => {
@@ -210,5 +213,56 @@ describe("resolveOsHomeRelativePath", () => {
         } as NodeJS.ProcessEnv,
       }),
     ).toBe(path.resolve("/home/alice/docs"));
+  });
+});
+
+describe("safeCwd", () => {
+  it("returns the current working directory normally", () => {
+    expect(safeCwd()).toBe(process.cwd());
+  });
+
+  it("returns undefined when process.cwd() throws (deleted directory)", () => {
+    const spy = vi.spyOn(process, "cwd").mockImplementation(() => {
+      throw new Error("ENOENT: no such file or directory, uv_cwd");
+    });
+    try {
+      expect(safeCwd()).toBeUndefined();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+});
+
+describe("resolveRequiredHomeDir — deleted-cwd fallback", () => {
+  it("falls back to os.tmpdir when no home source exists and cwd is deleted", () => {
+    const spy = vi.spyOn(process, "cwd").mockImplementation(() => {
+      throw new Error("ENOENT: no such file or directory, uv_cwd");
+    });
+    try {
+      expect(
+        resolveRequiredHomeDir({} as NodeJS.ProcessEnv, () => {
+          throw new Error("no home");
+        }),
+      ).toBe(path.resolve(os.tmpdir()));
+    } finally {
+      spy.mockRestore();
+    }
+  });
+});
+
+describe("resolveRequiredOsHomeDir — deleted-cwd fallback", () => {
+  it("falls back to os.tmpdir when no home source exists and cwd is deleted", () => {
+    const spy = vi.spyOn(process, "cwd").mockImplementation(() => {
+      throw new Error("ENOENT: no such file or directory, uv_cwd");
+    });
+    try {
+      expect(
+        resolveRequiredOsHomeDir({} as NodeJS.ProcessEnv, () => {
+          throw new Error("no home");
+        }),
+      ).toBe(path.resolve(os.tmpdir()));
+    } finally {
+      spy.mockRestore();
+    }
   });
 });
