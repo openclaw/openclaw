@@ -25,32 +25,35 @@ describe("loadExtraBootstrapFiles", () => {
     }
   });
 
-  it("loads matching extra files from glob patterns regardless of basename", async () => {
+  it("loads recognized bootstrap files from glob patterns", async () => {
     const workspaceDir = await createWorkspaceDir("glob");
     const packageDir = path.join(workspaceDir, "packages", "core");
     await fs.mkdir(packageDir, { recursive: true });
     await fs.writeFile(path.join(packageDir, "TOOLS.md"), "tools", "utf-8");
-    await fs.writeFile(path.join(packageDir, "BOOTSTRAP-EUROTRIP.md"), "eurotrip", "utf-8");
+    await fs.writeFile(path.join(packageDir, "README.md"), "not bootstrap", "utf-8");
 
     const files = await loadExtraBootstrapFiles(workspaceDir, ["packages/*/*"]);
 
-    expect(files.map((file) => file.name)).toEqual(["BOOTSTRAP-EUROTRIP.md", "TOOLS.md"]);
-    expect(files.map((file) => file.content)).toEqual(["eurotrip", "tools"]);
+    expect(files).toHaveLength(1);
+    expect(files[0]?.name).toBe("TOOLS.md");
+    expect(files[0]?.content).toBe("tools");
   });
 
   it("preserves Node glob character class matching for extra file patterns", async () => {
     const workspaceDir = await createWorkspaceDir("glob-classes");
     const docsDir = path.join(workspaceDir, "docs");
-    await fs.mkdir(docsDir, { recursive: true });
-    await fs.writeFile(path.join(docsDir, "a.md"), "a", "utf-8");
-    await fs.writeFile(path.join(docsDir, "b.md"), "b", "utf-8");
-    await fs.writeFile(path.join(docsDir, "c.md"), "c", "utf-8");
+    await fs.mkdir(path.join(docsDir, "a"), { recursive: true });
+    await fs.mkdir(path.join(docsDir, "b"), { recursive: true });
+    await fs.mkdir(path.join(docsDir, "c"), { recursive: true });
+    await fs.writeFile(path.join(docsDir, "a", "TOOLS.md"), "a", "utf-8");
+    await fs.writeFile(path.join(docsDir, "b", "TOOLS.md"), "b", "utf-8");
+    await fs.writeFile(path.join(docsDir, "c", "TOOLS.md"), "c", "utf-8");
 
-    const files = await loadExtraBootstrapFiles(workspaceDir, ["docs/[ab]*.md"]);
+    const files = await loadExtraBootstrapFiles(workspaceDir, ["docs/[ab]/TOOLS.md"]);
 
     expect(files.map((file) => path.relative(workspaceDir, file.path))).toEqual([
-      path.join("docs", "a.md"),
-      path.join("docs", "b.md"),
+      path.join("docs", "a", "TOOLS.md"),
+      path.join("docs", "b", "TOOLS.md"),
     ]);
     expect(files.map((file) => file.content)).toEqual(["a", "b"]);
   });
@@ -59,16 +62,19 @@ describe("loadExtraBootstrapFiles", () => {
     const workspaceDir = await createWorkspaceDir("literal-order");
     const notesDir = path.join(workspaceDir, "notes");
     await fs.mkdir(notesDir, { recursive: true });
-    await fs.writeFile(path.join(notesDir, "z.md"), "z", "utf-8");
-    await fs.writeFile(path.join(notesDir, "a.md"), "a", "utf-8");
+    await fs.writeFile(path.join(notesDir, "TOOLS.md"), "tools", "utf-8");
+    await fs.writeFile(path.join(notesDir, "AGENTS.md"), "agents", "utf-8");
 
-    const files = await loadExtraBootstrapFiles(workspaceDir, ["notes/z.md", "notes/a.md"]);
+    const files = await loadExtraBootstrapFiles(workspaceDir, [
+      "notes/TOOLS.md",
+      "notes/AGENTS.md",
+    ]);
 
     expect(files.map((file) => path.relative(workspaceDir, file.path))).toEqual([
-      path.join("notes", "z.md"),
-      path.join("notes", "a.md"),
+      path.join("notes", "TOOLS.md"),
+      path.join("notes", "AGENTS.md"),
     ]);
-    expect(files.map((file) => file.content)).toEqual(["z", "a"]);
+    expect(files.map((file) => file.content)).toEqual(["tools", "agents"]);
   });
 
   it("keeps path-traversal attempts outside workspace excluded", async () => {
@@ -84,20 +90,41 @@ describe("loadExtraBootstrapFiles", () => {
     expect(files).toHaveLength(0);
   });
 
-  it("reports missing arbitrary files without adding placeholders", async () => {
+  it("reports missing recognized files without adding placeholders", async () => {
     const workspaceDir = await createWorkspaceDir("missing");
 
     const { files, diagnostics } = await loadExtraBootstrapFilesWithDiagnostics(workspaceDir, [
-      "docs/PROJECT.md",
+      "docs/TOOLS.md",
     ]);
 
     expect(files).toHaveLength(0);
     expect(diagnostics).toEqual([
       expect.objectContaining({
-        path: path.join(workspaceDir, "docs", "PROJECT.md"),
+        path: path.join(workspaceDir, "docs", "TOOLS.md"),
         reason: "missing",
       }),
     ]);
+  });
+
+  it("allows arbitrary basenames only when explicitly requested", async () => {
+    const workspaceDir = await createWorkspaceDir("arbitrary");
+    await fs.writeFile(path.join(workspaceDir, "PROJECT.md"), "project", "utf-8");
+
+    const defaultResult = await loadExtraBootstrapFilesWithDiagnostics(workspaceDir, [
+      "PROJECT.md",
+    ]);
+    const arbitraryResult = await loadExtraBootstrapFilesWithDiagnostics(
+      workspaceDir,
+      ["PROJECT.md"],
+      { allowArbitraryBasenames: true },
+    );
+
+    expect(defaultResult.files).toHaveLength(0);
+    expect(defaultResult.diagnostics).toEqual([
+      expect.objectContaining({ reason: "invalid-bootstrap-filename" }),
+    ]);
+    expect(arbitraryResult.files.map((file) => file.content)).toEqual(["project"]);
+    expect(arbitraryResult.diagnostics).toHaveLength(0);
   });
 
   it("supports symlinked workspace roots with realpath checks", async () => {
@@ -162,10 +189,11 @@ describe("loadExtraBootstrapFiles", () => {
     const workspaceDir = await createWorkspaceDir("budget");
     await fs.writeFile(path.join(workspaceDir, "BOOTSTRAP-EUROTRIP.md"), "a".repeat(200), "utf-8");
     await fs.writeFile(path.join(workspaceDir, "PROJECT.md"), "b".repeat(200), "utf-8");
-    const files = await loadExtraBootstrapFiles(workspaceDir, [
-      "BOOTSTRAP-EUROTRIP.md",
-      "PROJECT.md",
-    ]);
+    const { files } = await loadExtraBootstrapFilesWithDiagnostics(
+      workspaceDir,
+      ["BOOTSTRAP-EUROTRIP.md", "PROJECT.md"],
+      { allowArbitraryBasenames: true },
+    );
     const warnings: string[] = [];
 
     const embedded = buildBootstrapContextFiles(files, {

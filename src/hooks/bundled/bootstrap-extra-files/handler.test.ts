@@ -133,6 +133,48 @@ describe("bootstrap-extra-files hook", () => {
     expect(context.bootstrapFiles.map((file) => file.content)).not.toContain("main bootstrap");
   });
 
+  it("keeps arbitrary basenames scoped to matching session entries", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-bootstrap-extra-session-custom-");
+    const sessionDir = path.join(tempDir, "sessions", "zeus-dev");
+    await fs.mkdir(sessionDir, { recursive: true });
+    await fs.writeFile(path.join(sessionDir, "ZEUS.md"), "zeus custom", "utf-8");
+
+    const sessionKey = "agent:main:whatsapp:group:123";
+    const cfg = createBootstrapExtraConfig({
+      paths: ["sessions/zeus-dev/ZEUS.md"],
+      sessions: {
+        [sessionKey]: ["sessions/zeus-dev/ZEUS.md"],
+      },
+    });
+    const nonMatchingContext = await createBootstrapContext({
+      workspaceDir: tempDir,
+      cfg,
+      sessionKey: "agent:main:whatsapp:group:456",
+      rootFiles: [{ name: "AGENTS.md", content: "root agents" }],
+    });
+    const matchingContext = await createBootstrapContext({
+      workspaceDir: tempDir,
+      cfg,
+      sessionKey,
+      rootFiles: [{ name: "AGENTS.md", content: "root agents" }],
+    });
+
+    const nonMatchingEvent = createHookEvent(
+      "agent",
+      "bootstrap",
+      nonMatchingContext.sessionKey,
+      nonMatchingContext,
+    );
+    const matchingEvent = createHookEvent("agent", "bootstrap", sessionKey, matchingContext);
+    await handler(nonMatchingEvent);
+    await handler(matchingEvent);
+
+    expect(nonMatchingContext.bootstrapFiles.map((file) => file.content)).not.toContain(
+      "zeus custom",
+    );
+    expect(matchingContext.bootstrapFiles.map((file) => file.content)).toContain("zeus custom");
+  });
+
   it("combines and deduplicates global and session-specific patterns", async () => {
     const tempDir = await makeTempWorkspace("openclaw-bootstrap-extra-session-dedupe-");
     const sessionDir = path.join(tempDir, "sessions", "zeus-dev");
