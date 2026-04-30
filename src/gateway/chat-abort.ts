@@ -8,8 +8,8 @@ export type ChatAbortControllerEntry = {
   expiresAtMs: number;
 };
 
-export function isChatStopCommandText(text: string): boolean {
-  const trimmed = text.trim();
+export function isChatStopCommandText(text: string | undefined | null): boolean {
+  const trimmed = text?.trim() ?? "";
   if (!trimmed) {
     return false;
   }

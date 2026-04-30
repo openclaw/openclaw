@@ -24,7 +24,7 @@ function extractTextBlocksAndSignals(message: unknown): {
   const content = record.content;
 
   if (typeof content === "string") {
-    const text = content.trim();
+    const text = content?.trim() ?? "";
     return {
       textBlocks: text ? [text] : [],
       sawNonTextContentBlocks: false,
@@ -42,7 +42,7 @@ function extractTextBlocksAndSignals(message: unknown): {
     }
     const rec = block as Record<string, unknown>;
     if (rec.type === "text" && typeof rec.text === "string") {
-      const text = rec.text.trim();
+      const text = rec.text?.trim() ?? "";
       if (text) {
         textBlocks.push(text);
       }

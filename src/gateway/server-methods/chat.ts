@@ -81,10 +81,14 @@ function stripDisallowedChatControlChars(message: string): string {
 }
 
 export function sanitizeChatSendMessageInput(
-  message: string,
+  message: string | null | undefined,
 ): { ok: true; message: string } | { ok: false; error: string } {
-  if (typeof message !== "string") {
-    return { ok: false, error: "message must be a string" };
+  if (message == null || typeof message !== "string") {
+    return { ok: false, error: "message is required" };
+  }
+  const trimmed = message.trim();
+  if (!trimmed) {
+    return { ok: false, error: "message is required" };
   }
   const normalized = message.normalize("NFC");
   if (normalized.includes("\u0000")) {
@@ -710,7 +714,7 @@ export const chatHandlers: GatewayRequestHandlers = {
     const inboundMessage = sanitizedMessageResult.message;
     const stopCommand = isChatStopCommandText(inboundMessage);
     const normalizedAttachments = normalizeRpcAttachmentsToChatAttachments(p.attachments);
-    const rawMessage = inboundMessage.trim();
+    const rawMessage = inboundMessage?.trim() ?? "";
     if (!rawMessage && normalizedAttachments.length === 0) {
       respond(
         false,
