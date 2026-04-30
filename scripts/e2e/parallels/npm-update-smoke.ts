@@ -14,7 +14,6 @@ import {
   resolveLatestVersion,
   resolveProviderAuth,
   run,
-  runStreaming,
   say,
   startHostServer,
   writeJson,
@@ -43,6 +42,11 @@ interface Job {
   label: string;
   logPath: string;
   promise: Promise<number>;
+}
+
+interface UpdateJobContext {
+  append(chunk: string | Uint8Array): void;
+  logPath: string;
 }
 
 interface NpmUpdateSummary {
@@ -296,15 +300,15 @@ class NpmUpdateSmoke {
     const jobs: Job[] = [];
     if (this.options.platforms.has("macos")) {
       ensureVmRunning(macosVm);
-      jobs.push(this.spawnUpdate("macOS", "macos", () => this.runMacosUpdate()));
+      jobs.push(this.spawnUpdate("macOS", "macos", (ctx) => this.runMacosUpdate(ctx)));
     }
     if (this.options.platforms.has("windows")) {
       ensureVmRunning(windowsVm);
-      jobs.push(this.spawnUpdate("Windows", "windows", () => this.runWindowsUpdate()));
+      jobs.push(this.spawnUpdate("Windows", "windows", (ctx) => this.runWindowsUpdate(ctx)));
     }
     if (this.options.platforms.has("linux")) {
       ensureVmRunning(this.linuxVm);
-      jobs.push(this.spawnUpdate("Linux", "linux", () => this.runLinuxUpdate()));
+      jobs.push(this.spawnUpdate("Linux", "linux", (ctx) => this.runLinuxUpdate(ctx)));
     }
     await this.monitorJobs("update", jobs);
     for (const job of jobs) {
@@ -319,7 +323,11 @@ class NpmUpdateSmoke {
     }
   }
 
-  private spawnUpdate(label: string, platform: Platform, fn: () => Promise<void> | void): Job {
+  private spawnUpdate(
+    label: string,
+    platform: Platform,
+    fn: (ctx: UpdateJobContext) => Promise<void> | void,
+  ): Job {
     const logPath = path.join(this.runDir, `${platform}-update.log`);
     const job: Job = {
       done: false,
@@ -328,8 +336,6 @@ class NpmUpdateSmoke {
       promise: Promise.resolve(1),
     };
     job.promise = (async () => {
-      const originalStdout = process.stdout.write.bind(process.stdout);
-      const originalStderr = process.stderr.write.bind(process.stderr);
       let log = "";
       const append = (chunk: string | Uint8Array): boolean => {
         const text = typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8");
@@ -340,11 +346,7 @@ class NpmUpdateSmoke {
         append(`${label} update timed out after ${updateTimeoutSeconds}s\n`);
       }, updateTimeoutSeconds * 1000);
       try {
-        process.stdout.write = ((chunk: string | Uint8Array) =>
-          append(chunk)) as typeof process.stdout.write;
-        process.stderr.write = ((chunk: string | Uint8Array) =>
-          append(chunk)) as typeof process.stderr.write;
-        await fn();
+        await fn({ append, logPath });
         await writeFile(logPath, log, "utf8");
         return 0;
       } catch (error) {
@@ -353,8 +355,6 @@ class NpmUpdateSmoke {
         return 1;
       } finally {
         clearTimeout(timeout);
-        process.stdout.write = originalStdout;
-        process.stderr.write = originalStderr;
       }
     })().finally(() => {
       job.done = true;
@@ -362,16 +362,16 @@ class NpmUpdateSmoke {
     return job;
   }
 
-  private runMacosUpdate(): void {
-    this.guestMacos(this.updateScript("macos"), updateTimeoutSeconds * 1000);
+  private async runMacosUpdate(ctx: UpdateJobContext): Promise<void> {
+    await this.guestMacos(this.updateScript("macos"), updateTimeoutSeconds * 1000, ctx);
   }
 
-  private runWindowsUpdate(): Promise<void> {
-    return this.guestWindows(this.updateScript("windows"), updateTimeoutSeconds * 1000);
+  private runWindowsUpdate(ctx: UpdateJobContext): Promise<void> {
+    return this.guestWindows(this.updateScript("windows"), updateTimeoutSeconds * 1000, ctx);
   }
 
-  private runLinuxUpdate(): void {
-    this.guestLinux(this.updateScript("linux"), updateTimeoutSeconds * 1000);
+  private async runLinuxUpdate(ctx: UpdateJobContext): Promise<void> {
+    await this.guestLinux(this.updateScript("linux"), updateTimeoutSeconds * 1000, ctx);
   }
 
   private updateScript(platform: Platform): string {
@@ -436,24 +436,112 @@ class NpmUpdateSmoke {
     }
   }
 
-  private guestMacos(script: string, timeoutMs: number): void {
-    run(
+  private async guestMacos(
+    script: string,
+    timeoutMs: number,
+    ctx: UpdateJobContext,
+  ): Promise<void> {
+    const macosExecArgs = this.resolveMacosUpdateExecArgs(ctx);
+    const status = await this.runStreamingToJobLog(
       "prlctl",
-      [
-        "exec",
-        macosVm,
-        "--current-user",
-        "/usr/bin/env",
-        "PATH=/opt/homebrew/bin:/opt/homebrew/opt/node/bin:/opt/homebrew/sbin:/usr/bin:/bin:/usr/sbin:/sbin",
-        "/bin/bash",
-        "-lc",
-        script,
-      ],
-      { timeoutMs },
+      ["exec", macosVm, ...macosExecArgs, "/bin/bash", "-lc", script],
+      timeoutMs,
+      ctx,
     );
+    if (status !== 0) {
+      throw new Error(`macOS update command failed with exit code ${status}`);
+    }
   }
 
-  private async guestWindows(script: string, timeoutMs: number): Promise<void> {
+  private resolveMacosUpdateExecArgs(ctx: UpdateJobContext): string[] {
+    const guestPath =
+      "/opt/homebrew/bin:/opt/homebrew/opt/node/bin:/opt/homebrew/sbin:/usr/bin:/bin:/usr/sbin:/sbin";
+    const currentUser = run("prlctl", ["exec", macosVm, "--current-user", "whoami"], {
+      check: false,
+      quiet: true,
+      timeoutMs: 45_000,
+    });
+    const user = currentUser.stdout.trim().replaceAll("\r", "").split("\n").at(-1) ?? "";
+    if (currentUser.status === 0 && /^[A-Za-z0-9._-]+$/.test(user)) {
+      return ["--current-user", "/usr/bin/env", `PATH=${guestPath}`];
+    }
+
+    const fallbackUser = this.resolveMacosDesktopUser();
+    if (!fallbackUser) {
+      ctx.append(currentUser.stdout);
+      ctx.append(currentUser.stderr);
+      throw new Error("macOS desktop user unavailable before update phase");
+    }
+    ctx.append(
+      `desktop user unavailable via Parallels --current-user; using root sudo fallback for ${fallbackUser}\n`,
+    );
+    const home = this.resolveMacosDesktopHome(fallbackUser);
+    return [
+      "/usr/bin/sudo",
+      "-H",
+      "-u",
+      fallbackUser,
+      "/usr/bin/env",
+      `HOME=${home}`,
+      `USER=${fallbackUser}`,
+      `LOGNAME=${fallbackUser}`,
+      `PATH=${guestPath}`,
+    ];
+  }
+
+  private resolveMacosDesktopUser(): string {
+    const consoleUser =
+      run("prlctl", ["exec", macosVm, "/usr/bin/stat", "-f", "%Su", "/dev/console"], {
+        check: false,
+        quiet: true,
+        timeoutMs: 30_000,
+      })
+        .stdout.trim()
+        .replaceAll("\r", "")
+        .split("\n")
+        .at(-1) ?? "";
+    if (
+      /^[A-Za-z0-9._-]+$/.test(consoleUser) &&
+      consoleUser !== "root" &&
+      consoleUser !== "loginwindow"
+    ) {
+      return consoleUser;
+    }
+    const users = run(
+      "prlctl",
+      ["exec", macosVm, "/usr/bin/dscl", ".", "-list", "/Users", "NFSHomeDirectory"],
+      { check: false, quiet: true, timeoutMs: 30_000 },
+    ).stdout.replaceAll("\r", "");
+    for (const line of users.split("\n")) {
+      const [user, home] = line.trim().split(/\s+/);
+      if (
+        user &&
+        home?.startsWith("/Users/") &&
+        !user.startsWith("_") &&
+        user !== "Shared" &&
+        user !== ".localized"
+      ) {
+        return user;
+      }
+    }
+    return "";
+  }
+
+  private resolveMacosDesktopHome(user: string): string {
+    const output = run(
+      "prlctl",
+      ["exec", macosVm, "/usr/bin/dscl", ".", "-read", `/Users/${user}`, "NFSHomeDirectory"],
+      { check: false, quiet: true, timeoutMs: 30_000 },
+    ).stdout.replaceAll("\r", "");
+    const match = /NFSHomeDirectory:\s*(\S+)/.exec(output);
+    return match?.[1] ?? `/Users/${user}`;
+  }
+
+  private async guestWindows(
+    script: string,
+    timeoutMs: number,
+    ctx: UpdateJobContext,
+  ): Promise<void> {
     const fileBase = `openclaw-parallels-npm-update-windows-${process.pid}-${Date.now()}`;
     const pathsScript = `$base = Join-Path $env:TEMP '${fileBase}'
 $scriptPath = "$base.ps1"
@@ -474,7 +562,7 @@ ${script}
 } finally {
   Set-Content -Path $donePath -Value 'done' -Encoding UTF8
 }`;
-    run(
+    const writeScript = run(
       "prlctl",
       [
         "exec",
@@ -490,11 +578,21 @@ Remove-Item -Path $scriptPath, $logPath, $donePath, $exitPath -Force -ErrorActio
 [System.IO.File]::WriteAllText($scriptPath, [Console]::In.ReadToEnd(), [System.Text.UTF8Encoding]::new($false))
 if (!(Test-Path $scriptPath)) { throw "background update script was not written" }`),
       ],
-      { input: payload, timeoutMs: Math.min(timeoutMs, 120_000) },
+      { check: false, input: payload, timeoutMs: Math.min(timeoutMs, 120_000) },
     );
+    if (writeScript.stdout) {
+      ctx.append(writeScript.stdout);
+    }
+    if (writeScript.stderr) {
+      ctx.append(writeScript.stderr);
+    }
+    if (writeScript.status !== 0) {
+      throw new Error(
+        `Windows update background script write failed with exit code ${writeScript.status}`,
+      );
+    }
 
-    const launchLogPath = path.join(this.runDir, `${fileBase}-launch.log`);
-    const launchStatus = await runStreaming(
+    const launchStatus = await this.runStreamingToJobLog(
       "prlctl",
       [
         "exec",
@@ -506,12 +604,9 @@ if (!(Test-Path $scriptPath)) { throw "background update script was not written"
         "/c",
         `start "" /min powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "%TEMP%\\${fileBase}.ps1"`,
       ],
-      { logPath: launchLogPath, quiet: true, timeoutMs: 20_000 },
+      20_000,
+      ctx,
     );
-    const launchLog = await readFile(launchLogPath, "utf8").catch(() => "");
-    if (launchLog) {
-      process.stdout.write(launchLog);
-    }
     if (launchStatus !== 0 && launchStatus !== 124) {
       throw new Error(`Windows update background launch failed with exit code ${launchStatus}`);
     }
@@ -550,10 +645,10 @@ if (Test-Path $donePath) {
         { check: false, timeoutMs: Math.min(30_000, Math.max(1_000, deadline - Date.now())) },
       );
       if (poll.stdout) {
-        process.stdout.write(poll.stdout);
+        ctx.append(poll.stdout);
       }
       if (poll.stderr) {
-        process.stderr.write(poll.stderr);
+        ctx.append(poll.stderr);
       }
       const offsetMatch = poll.stdout.match(/__OPENCLAW_LOG_OFFSET__:(\d+)/);
       if (offsetMatch) {
@@ -588,9 +683,54 @@ Remove-Item -Path $scriptPath, $logPath, $donePath, $exitPath -Force -ErrorActio
     throw new Error(`Windows update timed out after ${updateTimeoutSeconds}s`);
   }
 
-  private guestLinux(script: string, timeoutMs: number): void {
-    run("prlctl", ["exec", this.linuxVm, "/usr/bin/env", "HOME=/root", "bash", "-lc", script], {
+  private async guestLinux(
+    script: string,
+    timeoutMs: number,
+    ctx: UpdateJobContext,
+  ): Promise<void> {
+    const status = await this.runStreamingToJobLog(
+      "prlctl",
+      ["exec", this.linuxVm, "/usr/bin/env", "HOME=/root", "bash", "-lc", script],
       timeoutMs,
+      ctx,
+    );
+    if (status !== 0) {
+      throw new Error(`Linux update command failed with exit code ${status}`);
+    }
+  }
+
+  private async runStreamingToJobLog(
+    command: string,
+    args: string[],
+    timeoutMs: number,
+    ctx: UpdateJobContext,
+  ): Promise<number> {
+    return await new Promise((resolve, reject) => {
+      const child = spawn(command, args, {
+        cwd: repoRoot,
+        env: process.env,
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+
+      child.stdout.on("data", (chunk: Buffer) => ctx.append(chunk));
+      child.stderr.on("data", (chunk: Buffer) => ctx.append(chunk));
+
+      let timedOut = false;
+      const timer = setTimeout(() => {
+        timedOut = true;
+        child.kill("SIGTERM");
+        setTimeout(() => child.kill("SIGKILL"), 2_000).unref();
+      }, timeoutMs);
+
+      child.on("error", reject);
+      child.on("close", (code, signal) => {
+        clearTimeout(timer);
+        if (timedOut) {
+          resolve(124);
+          return;
+        }
+        resolve(code ?? (signal ? 128 : 1));
+      });
     });
   }
 
