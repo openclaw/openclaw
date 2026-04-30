@@ -87,6 +87,7 @@ function resolveCapabilityProviderConfig(params: {
 
 function createCapabilityProviderFallbackLoadOptions(params: {
   compatConfig?: OpenClawConfig;
+  sourceConfig?: OpenClawConfig;
   pluginIds: string[];
   installBundledRuntimeDeps?: boolean;
 }): PluginLoadOptions {
@@ -95,7 +96,10 @@ function createCapabilityProviderFallbackLoadOptions(params: {
     onlyPluginIds: params.pluginIds,
     activate: false,
   };
-  if (params.installBundledRuntimeDeps === false) {
+  if (
+    params.installBundledRuntimeDeps === false ||
+    params.sourceConfig?.plugins?.enabled === false
+  ) {
     loadOptions.installBundledRuntimeDeps = false;
   }
   return loadOptions;
@@ -243,6 +247,7 @@ export function resolvePluginCapabilityProvider<K extends CapabilityProviderRegi
   });
   const loadOptions = createCapabilityProviderFallbackLoadOptions({
     compatConfig,
+    sourceConfig: params.cfg,
     pluginIds,
     installBundledRuntimeDeps: params.installBundledRuntimeDeps,
   });
@@ -288,6 +293,7 @@ export function resolvePluginCapabilityProviders<K extends CapabilityProviderReg
   });
   const loadOptions = createCapabilityProviderFallbackLoadOptions({
     compatConfig,
+    sourceConfig: params.cfg,
     pluginIds,
     installBundledRuntimeDeps: params.installBundledRuntimeDeps,
   });
