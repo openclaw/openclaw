@@ -274,6 +274,29 @@ describe("createChildAdapter", () => {
     });
   });
 
+  it("routes synchronous write errors to the callback", async () => {
+    const stub = createStubChild(11111);
+    const writeError = new Error("stream error");
+    vi.spyOn(stub.child.stdin!, "write").mockImplementation(() => {
+      throw writeError;
+    });
+    spawnWithFallbackMock.mockResolvedValue({
+      child: stub.child,
+      usedFallback: false,
+    });
+    const adapter = await createChildAdapter({
+      argv: ["google-gemini-cli"],
+      input: "test input",
+    });
+    expect(adapter.stdin).toBeDefined();
+    await new Promise<void>((resolve) => {
+      adapter.stdin!.write("x", (err) => {
+        expect(err).toBe(writeError);
+        resolve();
+      });
+    });
+  });
+
   it("does not crash when stdin emits an async EPIPE after spawn (shell-wrapped missing binary)", async () => {
     const stub = createStubChild(11111);
     // Simulate the real Linux shell-wrapper shape: stdin is initially writable
