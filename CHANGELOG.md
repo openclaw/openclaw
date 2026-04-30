@@ -32,6 +32,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - CLI/status: resolve read-only channel setup runtime fallback from the packaged OpenClaw dist root, so `status --all`, `status --deep`, channel, and doctor paths do not crash when an external channel plugin needs setup metadata. Fixes #74693. Thanks @giangthb.
+- Google Meet: block managed Chrome intro/test speech until browser health proves the participant is in-call, and expose `speechReady` diagnostics so login, admission, permission, and audio-bridge blockers no longer look like successful speech. Refs #72478. Thanks @DougButdorf.
 - CLI/update: scope packaged Node compile caches by OpenClaw version and install metadata, so global installs no longer reuse stale compiled chunks after package updates. Thanks @pashpashpash.
 - Channels/Voice call: keep pre-auth webhook in-flight limiting active when socket remote address metadata is missing, so slow-body requests from stripped-IP proxy paths still share the fallback bucket. (#74453) Thanks @davidangularme.
 - Plugin SDK/testing: lazy-load TypeScript from the plugin test-contract runtime and add release checks for critical SDK contract entrypoint imports and bundle size, so published packages fail preflight before shipping ESM-incompatible or oversized contract helpers. Thanks @vincentkoc.
