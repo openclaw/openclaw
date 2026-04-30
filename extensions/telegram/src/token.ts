@@ -83,13 +83,10 @@ function resolveRuntimeTokenValue(params: {
     }
     return { status: "configured_unavailable" };
   }
-  // Runtime resolution stays strict for non-env SecretRefs.
-  resolveSecretInputString({
-    value: params.value,
-    path: params.path,
-    defaults: params.cfg?.secrets?.defaults,
-    mode: "strict",
-  });
+  // Non-env SecretRefs (file, vault, etc.) cannot be resolved in read-only inspection
+  // paths such as `openclaw status`. Return configured_unavailable so the caller can
+  // surface a helpful status message. The previous strict-mode call here would throw
+  // "unresolved SecretRef" even when the gateway has the token available at runtime.
   return { status: "configured_unavailable" };
 }
 
