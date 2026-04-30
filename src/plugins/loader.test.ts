@@ -97,6 +97,10 @@ import {
   ensurePluginRegistryLoaded,
 } from "./runtime/runtime-registry-loader.js";
 import type { PluginSdkResolutionPreference } from "./sdk-alias.js";
+import {
+  writeGeneratedRuntimeDepsManifest,
+  writeInstalledRuntimeDepPackage,
+} from "./test-helpers/bundled-runtime-deps-fixtures.js";
 let cachedBundledTelegramDir = "";
 let cachedBundledMemoryDir = "";
 
@@ -1592,6 +1596,131 @@ module.exports = {
     });
 
     expect(registry.plugins.find((entry) => entry.id === "alpha")?.status).toBe("loaded");
+  });
+
+  it("does not reuse cached bundled runtime deps after an in-place package version upgrade", () => {
+    const packageRoot = makeTempDir();
+    const stageDir = makeTempDir();
+    const markerDir = makeTempDir();
+    const markerPath = path.join(markerDir, "browser-runtime-marker.json");
+    const bundledDir = path.join(packageRoot, "dist", "extensions");
+    const pluginRoot = path.join(bundledDir, "browser");
+    fs.mkdirSync(pluginRoot, { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginRoot, "package.json"),
+      JSON.stringify(
+        {
+          name: "@openclaw/browser",
+          version: "1.0.0",
+          dependencies: {
+            "browser-runtime": "1.0.0",
+          },
+          openclaw: { extensions: ["./index.cjs"] },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(pluginRoot, "openclaw.plugin.json"),
+      JSON.stringify(
+        {
+          id: "browser",
+          enabledByDefault: true,
+          configSchema: EMPTY_PLUGIN_SCHEMA,
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const env = {
+      ...process.env,
+      OPENCLAW_BUNDLED_PLUGINS_DIR: bundledDir,
+      OPENCLAW_PLUGIN_STAGE_DIR: stageDir,
+      OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
+      VITEST: "true",
+    };
+    const writePackageVersion = (version: string) => {
+      fs.writeFileSync(
+        path.join(packageRoot, "package.json"),
+        JSON.stringify({ name: "openclaw", version, type: "module" }, null, 2),
+        "utf-8",
+      );
+    };
+    const writeRuntimeEntry = (marker: string) => {
+      fs.writeFileSync(
+        path.join(pluginRoot, "index.cjs"),
+        `
+const fs = require("node:fs");
+const runtimeDep = require("browser-runtime/package.json");
+fs.writeFileSync(
+  ${JSON.stringify(markerPath)},
+  JSON.stringify({ marker: ${JSON.stringify(marker)}, filename: __filename, runtimeDep: runtimeDep.name }) + "\\n",
+  "utf-8",
+);
+module.exports = { id: "browser", register() {} };
+`,
+        "utf-8",
+      );
+    };
+    const installRoots: string[] = [];
+    const loadOptions = {
+      env,
+      onlyPluginIds: ["browser"],
+      config: {
+        plugins: {
+          enabled: true,
+        },
+      },
+      bundledRuntimeDepsInstaller: ({ installRoot, installSpecs, missingSpecs }) => {
+        installRoots.push(installRoot);
+        writeInstalledRuntimeDepPackage(installRoot, "browser-runtime", "1.0.0");
+        writeGeneratedRuntimeDepsManifest(installRoot, installSpecs ?? missingSpecs);
+      },
+    } satisfies Parameters<typeof loadOpenClawPlugins>[0];
+
+    writePackageVersion("2026.4.26");
+    writeRuntimeEntry("v26");
+    const first = withEnv(env, () => loadOpenClawPlugins(loadOptions));
+    const firstInstallRoot = installRoots.at(-1);
+    if (!firstInstallRoot) {
+      throw new Error("expected first runtime-deps install root");
+    }
+    const firstPlugin = first.plugins.find((entry) => entry.id === "browser");
+    expect(firstPlugin?.error).toBeUndefined();
+    expect(firstPlugin?.status).toBe("loaded");
+    const firstMarker = JSON.parse(fs.readFileSync(markerPath, "utf-8")) as {
+      filename: string;
+      marker: string;
+      runtimeDep: string;
+    };
+
+    expect(firstMarker.marker).toBe("v26");
+    expect(firstMarker.runtimeDep).toBe("browser-runtime");
+    expect(firstMarker.filename).toContain(path.join(firstInstallRoot, "dist", "extensions"));
+
+    writePackageVersion("2026.4.27");
+    writeRuntimeEntry("v27");
+    const second = withEnv(env, () => loadOpenClawPlugins(loadOptions));
+    const secondInstallRoot = installRoots.at(-1);
+    if (!secondInstallRoot) {
+      throw new Error("expected second runtime-deps install root");
+    }
+    const secondMarker = JSON.parse(fs.readFileSync(markerPath, "utf-8")) as {
+      filename: string;
+      marker: string;
+      runtimeDep: string;
+    };
+
+    expect(second).not.toBe(first);
+    expect(second.plugins.find((entry) => entry.id === "browser")?.status).toBe("loaded");
+    expect(secondMarker.marker).toBe("v27");
+    expect(secondMarker.runtimeDep).toBe("browser-runtime");
+    expect(secondMarker.filename).toContain(path.join(secondInstallRoot, "dist", "extensions"));
+    expect(secondInstallRoot).not.toBe(firstInstallRoot);
   });
 
   it("loads bundled plugins from symlinked package roots with an external stage dir", () => {
