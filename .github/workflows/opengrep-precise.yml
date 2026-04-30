@@ -9,6 +9,17 @@ name: OpenGrep — PR Diff
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - ".github/workflows/opengrep-precise.yml"
+      - ".github/workflows/opengrep-precise-full.yml"
+      - ".semgrepignore"
+      - "apps/**"
+      - "extensions/**"
+      - "packages/**"
+      - "scripts/**"
+      - "security/opengrep/**"
+      - "src/**"
 
 concurrency:
   group: opengrep-pr-diff-${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
@@ -21,7 +32,8 @@ permissions:
 jobs:
   scan:
     name: Scan changed paths (precise)
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    if: ${{ !github.event.pull_request.draft }}
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 30
     steps:
       - name: Checkout
