@@ -111,6 +111,41 @@ describe("bundled runtime dependency Jiti aliases", () => {
     });
   });
 
+  it("honors package condition order before top-level require fallbacks", () => {
+    const rootDir = makeTempRoot();
+    writeJson(path.join(rootDir, "package.json"), {
+      dependencies: {
+        conditional: "1.0.0",
+      },
+    });
+    const conditionalRoot = packageRoot(rootDir, "conditional");
+    writeJson(path.join(conditionalRoot, "package.json"), {
+      exports: {
+        ".": {
+          browser: {
+            default: "./dist/web/index.js",
+          },
+          node: {
+            import: "./dist/node/index.mjs",
+            require: "./dist/node/index.cjs",
+            default: "./dist/node/index.mjs",
+          },
+          import: "./dist/index.mjs",
+          require: "./dist/index.cjs",
+          default: "./dist/index.mjs",
+        },
+      },
+    });
+    writeFile(path.join(conditionalRoot, "dist/index.cjs"));
+    writeFile(path.join(conditionalRoot, "dist/node/index.cjs"));
+
+    registerBundledRuntimeDependencyJitiAliases(rootDir);
+
+    expect(resolveBundledRuntimeDependencyJitiAliasMap()).toEqual({
+      conditional: path.join(conditionalRoot, "dist/node/index.cjs"),
+    });
+  });
+
   it("ignores missing, private, and escaping export targets", () => {
     const rootDir = makeTempRoot();
     writeJson(path.join(rootDir, "package.json"), {

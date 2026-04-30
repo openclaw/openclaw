@@ -13,6 +13,7 @@ type RuntimeDependencyPackageJson = {
 };
 
 const bundledRuntimeDependencyJitiAliases = new Map<string, string>();
+const RUNTIME_DEPENDENCY_JITI_CONDITIONS = new Set(["node", "require", "default"]);
 
 function readRuntimeDependencyPackageJson(
   packageJsonPath: string,
@@ -52,8 +53,11 @@ function resolveRuntimePackageImportTarget(exportsField: unknown): string | null
   if (Object.prototype.hasOwnProperty.call(record, ".")) {
     return resolveRuntimePackageImportTarget(record["."]);
   }
-  for (const condition of ["require", "node", "default", "import"] as const) {
-    const resolved = resolveRuntimePackageImportTarget(record[condition]);
+  for (const [condition, target] of Object.entries(record)) {
+    if (!RUNTIME_DEPENDENCY_JITI_CONDITIONS.has(condition)) {
+      continue;
+    }
+    const resolved = resolveRuntimePackageImportTarget(target);
     if (resolved) {
       return resolved;
     }
