@@ -1143,7 +1143,7 @@ async function removePathWithinRootLegacy(resolved: { resolved: string }): Promi
 }
 
 async function readdirWithinRootLegacy(resolved: { resolved: string }): Promise<string[]> {
-  return (await fs.readdir(resolved.resolved)).sort();
+  return (await fs.readdir(resolved.resolved)).toSorted();
 }
 
 async function renamePathWithinRootLegacy(params: {
