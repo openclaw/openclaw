@@ -526,9 +526,22 @@ export async function executePreparedCliRun(
           outputMode: useResume ? (backend.resumeOutput ?? backend.output) : backend.output,
           fallbackSessionId: resolvedSessionId,
         });
+        // When we explicitly passed a session UUID (--session-id or --resume),
+        // we are the authority on the session identity. Claude CLI v2.x emits
+        // a spurious new session_id in its first stream record (a system init
+        // event) before switching to the actual resumed UUID in later records.
+        // parseCliOutput picks the first session_id it sees, which under
+        // --resume is the wrong one. Persisting that spurious UUID as the new
+        // binding orphans the jsonl (it only exists under the original UUID),
+        // causes context to fragment across many short jsonls, and burns
+        // tokens because every "fresh" UUID re-bootstraps from scratch.
+        // Trust our own UUID when we sent one. Restored from local commit
+        // 29f4844bd0 which was incorrectly dropped during the upstream rebase.
+        const effectiveSessionId = resolvedSessionId ?? parsed.sessionId;
         const rawText = parsed.text;
         return {
           ...parsed,
+          sessionId: effectiveSessionId,
           rawText,
           finalPromptText: prompt,
           text: applyPluginTextReplacements(
