@@ -525,6 +525,7 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount, SignalProbe> =
                 text: i === 0 ? text : "",
                 mediaUrl,
                 mediaLocalRoots: ctx.mediaLocalRoots,
+                mediaReadFile: ctx.mediaReadFile,
                 accountId: ctx.accountId ?? undefined,
                 replyToId: i === 0 ? (ctx.replyToId ?? undefined) : undefined,
                 deps: ctx.deps,
