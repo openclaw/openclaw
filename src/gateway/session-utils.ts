@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { performance } from "node:perf_hooks";
 import { resolveAgentRuntimeMetadata } from "../agents/agent-runtime-metadata.js";
 import {
   listAgentIds,
@@ -122,6 +123,30 @@ export type {
 } from "./session-utils.types.js";
 
 const DERIVED_TITLE_MAX_LEN = 60;
+
+export type SessionListBuildTimings = {
+  filterMs: number;
+  sortMs: number;
+  rowMs: number;
+  transcriptUsageMs: number;
+  childMs: number;
+  titleMs: number;
+  thinkingMs: number;
+  pluginMs: number;
+};
+
+export function createSessionListBuildTimings(): SessionListBuildTimings {
+  return {
+    filterMs: 0,
+    sortMs: 0,
+    rowMs: 0,
+    transcriptUsageMs: 0,
+    childMs: 0,
+    titleMs: 0,
+    thinkingMs: 0,
+    pluginMs: 0,
+  };
+}
 
 function tryResolveExistingPath(value: string): string | null {
   try {
@@ -1300,6 +1325,7 @@ export function buildGatewaySessionRow(params: {
   includeDerivedTitles?: boolean;
   includeLastMessage?: boolean;
   includeTranscriptUsage?: boolean;
+  timings?: SessionListBuildTimings;
 }): GatewaySessionRow {
   const { cfg, storePath, store, key, entry } = params;
   const now = params.now ?? Date.now();
@@ -1399,6 +1425,7 @@ export function buildGatewaySessionRow(params: {
       model: resolvedModel.model ?? DEFAULT_MODEL,
       entry,
     }) === undefined;
+  const transcriptUsageStartedAt = performance.now();
   const transcriptUsage =
     params.includeTranscriptUsage !== false &&
     (needsTranscriptTotalTokens || needsTranscriptContextTokens || needsTranscriptEstimatedCostUsd)
@@ -1411,6 +1438,9 @@ export function buildGatewaySessionRow(params: {
           fallbackModel: resolvedModel.model ?? DEFAULT_MODEL,
         })
       : null;
+  if (params.timings) {
+    params.timings.transcriptUsageMs += performance.now() - transcriptUsageStartedAt;
+  }
   const preferLiveSubagentModelIdentity =
     Boolean(subagentRun?.model?.trim()) && subagentStatus === "running";
   const shouldUseTranscriptModelIdentity =
@@ -1435,7 +1465,11 @@ export function buildGatewaySessionRow(params: {
     typeof totalTokens === "number" && Number.isFinite(totalTokens) && totalTokens > 0
       ? true
       : transcriptUsage?.totalTokensFresh === true;
+  const childStartedAt = performance.now();
   const childSessions = resolveChildSessionKeys(key, store, now);
+  if (params.timings) {
+    params.timings.childMs += performance.now() - childStartedAt;
+  }
   const latestCompactionCheckpoint = resolveLatestCompactionCheckpoint(entry);
   const agentRuntime = resolveAgentRuntimeMetadata(cfg, sessionAgentId);
   const selectedOrRuntimeModelProvider = selectedModel?.provider ?? modelProvider;
@@ -1470,6 +1504,7 @@ export function buildGatewaySessionRow(params: {
 
   let derivedTitle: string | undefined;
   let lastMessagePreview: string | undefined;
+  const titleStartedAt = performance.now();
   if (entry?.sessionId && (params.includeDerivedTitles || params.includeLastMessage)) {
     const fields = readSessionTitleFieldsFromTranscript(
       entry.sessionId,
@@ -1484,17 +1519,35 @@ export function buildGatewaySessionRow(params: {
       lastMessagePreview = fields.lastMessagePreview;
     }
   }
+  if (params.timings) {
+    params.timings.titleMs += performance.now() - titleStartedAt;
+  }
 
   const thinkingProvider = rowModelProvider ?? DEFAULT_PROVIDER;
   const thinkingModel = rowModel ?? DEFAULT_MODEL;
+  const thinkingStartedAt = performance.now();
   const thinkingLevels = listThinkingLevelOptions(
     thinkingProvider,
     thinkingModel,
     params.modelCatalog,
   );
+  const thinkingDefault = resolveGatewaySessionThinkingDefault({
+    cfg,
+    provider: thinkingProvider,
+    model: thinkingModel,
+    agentId: sessionAgentId,
+    modelCatalog: params.modelCatalog,
+  });
+  if (params.timings) {
+    params.timings.thinkingMs += performance.now() - thinkingStartedAt;
+  }
+  const pluginStartedAt = performance.now();
   const pluginExtensions = entry
     ? projectPluginSessionExtensionsSync({ sessionKey: key, entry })
     : [];
+  if (params.timings) {
+    params.timings.pluginMs += performance.now() - pluginStartedAt;
+  }
 
   return {
     key,
@@ -1522,13 +1575,7 @@ export function buildGatewaySessionRow(params: {
     thinkingLevel: entry?.thinkingLevel,
     thinkingLevels,
     thinkingOptions: thinkingLevels.map((level) => level.label),
-    thinkingDefault: resolveGatewaySessionThinkingDefault({
-      cfg,
-      provider: thinkingProvider,
-      model: thinkingModel,
-      agentId: sessionAgentId,
-      modelCatalog: params.modelCatalog,
-    }),
+    thinkingDefault,
     fastMode: entry?.fastMode,
     verboseLevel: entry?.verboseLevel,
     traceLevel: entry?.traceLevel,
@@ -1612,6 +1659,7 @@ export function listSessionsFromStore(params: {
   store: Record<string, SessionEntry>;
   modelCatalog?: ModelCatalogEntry[];
   opts: import("./protocol/index.js").SessionsListParams;
+  timings?: SessionListBuildTimings;
 }): SessionsListResult {
   const { cfg, storePath, store, opts } = params;
   const now = Date.now();
@@ -1630,6 +1678,7 @@ export function listSessionsFromStore(params: {
       ? Math.max(1, Math.floor(opts.activeMinutes))
       : undefined;
 
+  const filterStartedAt = performance.now();
   let entries = Object.entries(store)
     .filter(([key]) => {
       if (isCronRunSessionKey(key)) {
@@ -1683,8 +1732,16 @@ export function listSessionsFromStore(params: {
         return true;
       }
       return entry?.label === label;
-    })
-    .toSorted((a, b) => (b[1]?.updatedAt ?? 0) - (a[1]?.updatedAt ?? 0));
+    });
+  if (params.timings) {
+    params.timings.filterMs += performance.now() - filterStartedAt;
+  }
+
+  const sortStartedAt = performance.now();
+  entries = entries.toSorted((a, b) => (b[1]?.updatedAt ?? 0) - (a[1]?.updatedAt ?? 0));
+  if (params.timings) {
+    params.timings.sortMs += performance.now() - sortStartedAt;
+  }
 
   if (search) {
     entries = entries.filter(([key, entry]) => {
@@ -1711,6 +1768,7 @@ export function listSessionsFromStore(params: {
     entries = entries.slice(0, limit);
   }
 
+  const rowStartedAt = performance.now();
   const sessions = entries.map(([key, entry]) =>
     buildGatewaySessionRow({
       cfg,
@@ -1723,8 +1781,12 @@ export function listSessionsFromStore(params: {
       includeDerivedTitles,
       includeLastMessage,
       includeTranscriptUsage,
+      timings: params.timings,
     }),
   );
+  if (params.timings) {
+    params.timings.rowMs += performance.now() - rowStartedAt;
+  }
 
   return {
     ts: now,

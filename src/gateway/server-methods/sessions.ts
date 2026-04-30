@@ -72,6 +72,7 @@ import {
 import { reactivateCompletedSubagentSession } from "../session-subagent-reactivation.js";
 import {
   archiveFileOnDisk,
+  createSessionListBuildTimings,
   listSessionsFromStore,
   loadCombinedSessionStoreForGateway,
   loadGatewaySessionRow,
@@ -653,12 +654,14 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     const loadedStoreAt = Date.now();
     const modelCatalog = await loadOptionalSessionsListModelCatalog(context);
     const loadedCatalogAt = Date.now();
+    const listTimings = createSessionListBuildTimings();
     const result = listSessionsFromStore({
       cfg,
       storePath,
       store,
       modelCatalog,
       opts: p,
+      timings: listTimings,
     });
     const totalMs = Math.round(Date.now() - startedAt);
     const timingMessage = `sessions.list timing totalMs=${totalMs} storeMs=${Math.round(
@@ -669,7 +672,15 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       p.includeLastMessage === true
     } includeTranscriptUsage=${p.includeTranscriptUsage === true} limit=${
       typeof p.limit === "number" ? p.limit : "none"
-    }`;
+    } filterMs=${Math.round(listTimings.filterMs)} sortMs=${Math.round(
+      listTimings.sortMs,
+    )} rowMs=${Math.round(listTimings.rowMs)} childMs=${Math.round(
+      listTimings.childMs,
+    )} transcriptUsageMs=${Math.round(listTimings.transcriptUsageMs)} titleMs=${Math.round(
+      listTimings.titleMs,
+    )} thinkingMs=${Math.round(listTimings.thinkingMs)} pluginMs=${Math.round(
+      listTimings.pluginMs,
+    )}`;
     if (totalMs >= 1000) {
       context.logGateway?.warn?.(timingMessage);
     } else {
