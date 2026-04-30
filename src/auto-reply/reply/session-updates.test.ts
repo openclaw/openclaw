@@ -50,6 +50,9 @@ vi.mock("../../agents/skills.js", () => ({
 
 vi.mock("../../agents/skills/refresh.js", () => ({
   ensureSkillsWatcher: ensureSkillsWatcherMock,
+}));
+
+vi.mock("../../agents/skills/refresh-state.js", () => ({
   getSkillsSnapshotVersion: getSkillsSnapshotVersionMock,
   shouldRefreshSnapshotForVersion: shouldRefreshSnapshotForVersionMock,
 }));
@@ -181,5 +184,49 @@ describe("ensureSkillSnapshot", () => {
         skillFilter: ["telegram-callbacks"],
       }),
     );
+  });
+
+  it("refreshes stale mirrored session snapshots during prewarm", async () => {
+    vi.stubEnv("OPENCLAW_TEST_FAST", "0");
+    const entry = {
+      sessionId: "sess-1",
+      updatedAt: 1,
+      skillsSnapshot: {
+        prompt: "old-skills",
+        skills: [],
+        resolvedSkills: [],
+        version: 1,
+      },
+    };
+    const store = {
+      "agent:writer:telegram:group:-100123:topic:42": entry,
+    };
+    loadSessionStoreMock.mockReturnValue(store);
+    resolveSessionStoreEntryMock.mockReturnValue({ existing: entry, legacyKeys: [] });
+    getSkillsSnapshotVersionMock.mockReturnValue(2);
+    shouldRefreshSnapshotForVersionMock.mockReturnValue(true);
+    buildWorkspaceSkillSnapshotMock.mockReturnValue({
+      prompt: "fresh-skills",
+      skills: [],
+      resolvedSkills: [],
+      version: 2,
+    });
+
+    await prewarmMirroredSession({
+      cfg: {},
+      storePath: "/tmp/sessions.json",
+      sessionKey: "agent:writer:telegram:group:-100123:topic:42",
+    });
+
+    expect(shouldRefreshSnapshotForVersionMock).toHaveBeenCalledWith(1, 2);
+    expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalled();
+    expect(store["agent:writer:telegram:group:-100123:topic:42"]).toMatchObject({
+      sessionId: "sess-1",
+      skillsSnapshot: expect.objectContaining({
+        prompt: "fresh-skills",
+        version: 2,
+      }),
+    });
+    expect(store["agent:writer:telegram:group:-100123:topic:42"]).not.toHaveProperty("systemSent");
   });
 });

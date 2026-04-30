@@ -252,13 +252,15 @@ export async function prewarmMirroredSession(params: {
     config: params.cfg,
   });
   const skillFilter = resolveAgentSkillsFilter(params.cfg, agentId);
+  const workspaceDir = resolveAgentWorkspaceDir(params.cfg, agentId);
+  const snapshotVersion = getSkillsSnapshotVersion(workspaceDir);
   if (
     sessionEntry.skillsSnapshot &&
+    !shouldRefreshSnapshotForVersion(sessionEntry.skillsSnapshot.version, snapshotVersion) &&
     matchesSkillFilter(sessionEntry.skillsSnapshot.skillFilter, skillFilter)
   ) {
     return;
   }
-  const workspaceDir = resolveAgentWorkspaceDir(params.cfg, agentId);
   await ensureSkillSnapshot({
     sessionEntry,
     sessionStore,
