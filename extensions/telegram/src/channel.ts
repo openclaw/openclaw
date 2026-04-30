@@ -170,6 +170,7 @@ function buildTelegramSendOptions(params: {
   threadId?: string | number | null;
   silent?: boolean | null;
   forceDocument?: boolean | null;
+  asVoice?: boolean | null;
   gatewayClientScopes?: readonly string[] | null;
 }): TelegramSendOptions {
   return {
@@ -182,6 +183,7 @@ function buildTelegramSendOptions(params: {
     accountId: params.accountId ?? undefined,
     silent: params.silent ?? undefined,
     forceDocument: params.forceDocument ?? undefined,
+    asVoice: params.asVoice ?? undefined,
     ...(Array.isArray(params.gatewayClientScopes)
       ? { gatewayClientScopes: [...params.gatewayClientScopes] }
       : {}),
@@ -1066,6 +1068,7 @@ export const telegramPlugin = createChatChannelPlugin({
         threadId,
         silent,
         forceDocument,
+        audioAsVoice,
         gatewayClientScopes,
       }) => {
         const send = await resolveTelegramSend(deps);
@@ -1081,6 +1084,7 @@ export const telegramPlugin = createChatChannelPlugin({
             threadId,
             silent,
             forceDocument,
+            asVoice: audioAsVoice,
             gatewayClientScopes,
           }),
         });

@@ -98,6 +98,73 @@ describe("telegramOutbound", () => {
     expect(result).toEqual({ channel: "telegram", messageId: "tg-2", chatId: "12345" });
   });
 
+  it("preserves audioAsVoice flag as asVoice in sendMedia", async () => {
+    sendMessageTelegramMock.mockResolvedValueOnce({ messageId: "tg-voice" });
+
+    await telegramOutbound.sendMedia!({
+      cfg: {} as never,
+      to: "12345",
+      text: "",
+      mediaUrl: "https://example.com/note.ogg",
+      audioAsVoice: true,
+      accountId: "ops",
+      deps: { sendTelegram: sendMessageTelegramMock },
+    });
+
+    expect(sendMessageTelegramMock).toHaveBeenCalledWith(
+      "12345",
+      "",
+      expect.objectContaining({
+        mediaUrl: "https://example.com/note.ogg",
+        asVoice: true,
+      }),
+    );
+  });
+
+  it("preserves audioAsVoice flag as asVoice in sendPayload", async () => {
+    sendMessageTelegramMock.mockResolvedValueOnce({ messageId: "tg-voice", chatId: "12345" });
+
+    await telegramOutbound.sendPayload!({
+      cfg: {} as never,
+      to: "12345",
+      text: "",
+      payload: {
+        text: "voice message",
+        mediaUrls: ["https://example.com/note.ogg"],
+      },
+      audioAsVoice: true,
+      deps: { sendTelegram: sendMessageTelegramMock },
+    });
+
+    expect(sendMessageTelegramMock).toHaveBeenCalledWith(
+      "12345",
+      expect.any(String),
+      expect.objectContaining({
+        asVoice: true,
+      }),
+    );
+  });
+
+  it("defaults asVoice to false when audioAsVoice is not set", async () => {
+    sendMessageTelegramMock.mockResolvedValueOnce({ messageId: "tg-audio" });
+
+    await telegramOutbound.sendMedia!({
+      cfg: {} as never,
+      to: "12345",
+      text: "",
+      mediaUrl: "https://example.com/song.mp3",
+      deps: { sendTelegram: sendMessageTelegramMock },
+    });
+
+    expect(sendMessageTelegramMock).toHaveBeenCalledWith(
+      "12345",
+      "",
+      expect.objectContaining({
+        asVoice: false,
+      }),
+    );
+  });
+
   it("passes delivery pin notify requests to Telegram pinning", async () => {
     pinMessageTelegramMock.mockResolvedValueOnce({ ok: true, messageId: "tg-1", chatId: "12345" });
 
