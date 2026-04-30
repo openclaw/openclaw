@@ -17,6 +17,10 @@ import type { TtsAutoMode } from "../../config/types.tts.js";
 import { sleepWithAbort } from "../../infra/backoff.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { OutboundDeliveryResult } from "../../infra/outbound/deliver.js";
+import {
+  createOutboundPayloadPlan,
+  projectOutboundPayloadPlanForMirror,
+} from "../../infra/outbound/payloads.js";
 import { normalizeTargetForProvider } from "../../infra/outbound/target-normalization.js";
 import { hasReplyPayloadContent } from "../../interactive/payload.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
@@ -29,7 +33,6 @@ import {
 import { shouldAttemptTtsPayload } from "../../tts/tts-config.js";
 import { createCronExecutionId } from "../run-id.js";
 import { hasScheduledNextRunAtMs } from "../service/jobs.js";
-import { resolveCronDeliverySessionKey } from "../session-target.js";
 import type { CronJob, CronRunTelemetry } from "../types.js";
 import type { DeliveryTargetResolution } from "./delivery-target.js";
 import { pickLastNonEmptyTextFromPayloads, pickSummaryFromOutput } from "./helpers.js";
@@ -643,13 +646,15 @@ export async function dispatchCronDelivery(
         delivered = true;
         return null;
       }
-      const deliverySessionKey =
-        resolveCronDeliverySessionKey(params.job) ?? params.agentSessionKey;
+      const deliverySessionKey = params.agentSessionKey;
       const deliverySession = buildOutboundSessionContext({
         cfg: params.cfgWithAgentDefaults,
         agentId: params.agentId,
         sessionKey: deliverySessionKey,
       });
+      const mirrorProjection = projectOutboundPayloadPlanForMirror(
+        createOutboundPayloadPlan(payloadsForDelivery),
+      );
 
       // Track bestEffort partial failures so we can log them and avoid
       // marking the job as delivered when payloads were silently dropped.
@@ -675,7 +680,8 @@ export async function dispatchCronDelivery(
           mirror: {
             sessionKey: deliverySessionKey,
             agentId: params.agentId,
-            text: outputText || synthesizedText || undefined,
+            text: mirrorProjection.text || undefined,
+            mediaUrls: mirrorProjection.mediaUrls.length ? mirrorProjection.mediaUrls : undefined,
             idempotencyKey: deliveryIdempotencyKey,
           },
           identity,

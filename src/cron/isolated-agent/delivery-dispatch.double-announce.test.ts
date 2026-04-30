@@ -1069,14 +1069,53 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(buildOutboundSessionContext).toHaveBeenCalledWith({
       cfg: params.cfgWithAgentDefaults,
       agentId: "main",
-      sessionKey: "dest-session-id",
+      sessionKey: "agent:main:session:dest-session-id",
     });
     expect(deliverOutboundPayloads).toHaveBeenCalledWith(
       expect.objectContaining({
         mirror: {
-          sessionKey: "dest-session-id",
+          sessionKey: "agent:main:session:dest-session-id",
           agentId: "main",
           text: "hello from cron",
+          idempotencyKey: expect.stringContaining("test-job"),
+        },
+      }),
+    );
+  });
+
+  it("mirrors the filtered direct-delivery payload projection including media", async () => {
+    vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
+    vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);
+
+    const params = makeBaseParams({ synthesizedText: undefined });
+    params.job.sessionTarget = "session:dest-session-id";
+    params.agentSessionKey = "agent:main:session:dest-session-id";
+    params.deliveryPayloads = [
+      {
+        text: "NO_REPLY",
+        mediaUrls: ["https://example.com/report.pdf"],
+      },
+    ];
+    params.outputText = "NO_REPLY";
+    params.summary = "Report attached.";
+
+    const state = await dispatchCronDelivery(params);
+
+    expect(state.result).toBeUndefined();
+    expect(state.delivered).toBe(true);
+    expect(deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payloads: [
+          {
+            text: undefined,
+            mediaUrls: ["https://example.com/report.pdf"],
+          },
+        ],
+        mirror: {
+          sessionKey: "agent:main:session:dest-session-id",
+          agentId: "main",
+          text: undefined,
+          mediaUrls: ["https://example.com/report.pdf"],
           idempotencyKey: expect.stringContaining("test-job"),
         },
       }),
