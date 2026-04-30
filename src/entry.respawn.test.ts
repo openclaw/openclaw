@@ -91,6 +91,30 @@ describe("buildCliRespawnPlan", () => {
     ).toBeNull();
   });
 
+  it("does not respawn under Bun", () => {
+    expect(
+      buildCliRespawnPlan({
+        argv: ["bun", "openclaw", "plugins", "list"],
+        env: {},
+        execArgv: [],
+        autoNodeExtraCaCerts: "/etc/ssl/certs/ca-certificates.crt",
+        runtimeVersions: { ...process.versions, bun: "1.3.13" },
+      }),
+    ).toBeNull();
+  });
+
+  it("does not respawn from a SEA executable", () => {
+    expect(
+      buildCliRespawnPlan({
+        argv: ["/opt/openclaw/openclaw", "plugins", "list"],
+        env: { OPENCLAW_SEA: "1" },
+        execArgv: [],
+        execPath: "/opt/openclaw/openclaw",
+        autoNodeExtraCaCerts: "/etc/ssl/certs/ca-certificates.crt",
+      }),
+    ).toBeNull();
+  });
+
   it("respawns Volta shims through node so the shim is not called directly", () => {
     const plan = buildCliRespawnPlan({
       argv: ["/home/alice/.volta/bin/volta-shim", "/usr/local/bin/openclaw", "status"],
