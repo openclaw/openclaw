@@ -13,6 +13,7 @@ import {
 } from "./runtime-api.js";
 
 const MATRIX_OPENCLAW_PRESENTATION_KEY = "com.openclaw.presentation" as const;
+const MATRIX_OPENCLAW_PRESENTATION_TYPE = "message.presentation" as const;
 
 type MatrixChannelData = {
   extraContent?: MatrixExtraContentFields;
@@ -33,6 +34,7 @@ function buildMatrixPresentationContent(presentation: MessagePresentation) {
   return {
     ...presentation,
     version: 1,
+    type: MATRIX_OPENCLAW_PRESENTATION_TYPE,
   };
 }
 
@@ -52,7 +54,7 @@ function renderMatrixPresentationPayload(params: {
       matrix: {
         ...matrixData,
         extraContent: {
-          ...(matrixData.extraContent ?? {}),
+          ...matrixData.extraContent,
           [MATRIX_OPENCLAW_PRESENTATION_KEY]: buildMatrixPresentationContent(params.presentation),
         },
       },
