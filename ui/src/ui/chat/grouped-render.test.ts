@@ -249,6 +249,14 @@ async function flushAssistantAttachmentAvailabilityChecks() {
   }
 }
 
+function mediaTicketPayload(mediaTicket: string, ttlMs = 5 * 60 * 1000) {
+  return {
+    available: true,
+    mediaTicket,
+    mediaTicketExpiresAt: new Date(Date.now() + ttlMs).toISOString(),
+  };
+}
+
 afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
@@ -648,7 +656,7 @@ describe("grouped chat rendering", () => {
       expect(headers.get("Authorization")).toBe("Bearer session-token");
       return {
         ok: true,
-        json: async () => ({ available: true, mediaTicket: "ticket-user" }),
+        json: async () => mediaTicketPayload("ticket-user"),
       };
     });
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
@@ -922,7 +930,7 @@ describe("grouped chat rendering", () => {
         expect(headers.get("Authorization")).toBe("Bearer session-token");
         return {
           ok: true,
-          json: async () => ({ available: true, mediaTicket: "ticket-local" }),
+          json: async () => mediaTicketPayload("ticket-local"),
         };
       }
       throw new Error(`Unexpected fetch: ${url}`);
@@ -971,6 +979,65 @@ describe("grouped chat rendering", () => {
     vi.unstubAllGlobals();
   });
 
+  it("refreshes cached local assistant media tickets before they expire", async () => {
+    resetAssistantAttachmentAvailabilityCacheForTest();
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-04-30T00:00:00Z"));
+    const fetchMock = vi
+      .fn<
+        (url: string, init?: RequestInit) => Promise<{ ok: true; json: () => Promise<unknown> }>
+      >()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => mediaTicketPayload("ticket-old", 31_000),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => mediaTicketPayload("ticket-new"),
+      });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    const container = document.createElement("div");
+    const renderMessage = () =>
+      renderAssistantMessage(
+        container,
+        {
+          id: "assistant-local-media-ticket-refresh",
+          role: "assistant",
+          content: "Local image\nMEDIA:/tmp/openclaw/test image.png",
+          timestamp: Date.now(),
+        },
+        {
+          showToolCalls: false,
+          basePath: "/openclaw",
+          assistantAttachmentAuthToken: "session-token",
+          localMediaPreviewRoots: ["/tmp/openclaw"],
+          onRequestUpdate: renderMessage,
+        },
+      );
+
+    renderMessage();
+    await flushAssistantAttachmentAvailabilityChecks();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(
+      container.querySelector<HTMLImageElement>(".chat-message-image")?.getAttribute("src"),
+    ).toBe(
+      "/openclaw/__openclaw__/assistant-media?source=%2Ftmp%2Fopenclaw%2Ftest+image.png&mediaTicket=ticket-old",
+    );
+
+    vi.advanceTimersByTime(1_001);
+    renderMessage();
+    await flushAssistantAttachmentAvailabilityChecks();
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(
+      container.querySelector<HTMLImageElement>(".chat-message-image")?.getAttribute("src"),
+    ).toBe(
+      "/openclaw/__openclaw__/assistant-media?source=%2Ftmp%2Fopenclaw%2Ftest+image.png&mediaTicket=ticket-new",
+    );
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
   it("rechecks local assistant attachment availability when the auth token changes", async () => {
     resetAssistantAttachmentAvailabilityCacheForTest();
     const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
@@ -981,8 +1048,7 @@ describe("grouped chat rendering", () => {
       const authorized = headers.get("Authorization") === "Bearer fresh-token";
       return {
         ok: true,
-        json: async () =>
-          authorized ? { available: true, mediaTicket: "ticket-fresh" } : { available: false },
+        json: async () => (authorized ? mediaTicketPayload("ticket-fresh") : { available: false }),
       };
     });
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
@@ -1096,7 +1162,7 @@ describe("grouped chat rendering", () => {
       }
       return {
         ok: true,
-        json: async () => ({ available: true, mediaTicket: "ticket-platform" }),
+        json: async () => mediaTicketPayload("ticket-platform"),
       };
     });
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
@@ -1182,7 +1248,7 @@ describe("grouped chat rendering", () => {
       })
       .mockResolvedValueOnce({
         ok: true,
-        json: async () => ({ available: true, mediaTicket: "ticket-retry" }),
+        json: async () => mediaTicketPayload("ticket-retry"),
       });
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
     const container = document.createElement("div");

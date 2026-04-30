@@ -32,11 +32,12 @@ import {
 
 type AssistantAttachmentAvailability =
   | { status: "checking" }
-  | { status: "available"; mediaTicket?: string }
+  | { status: "available"; mediaTicket?: string; mediaTicketExpiresAt?: number }
   | { status: "unavailable"; reason: string; checkedAt: number };
 
 const assistantAttachmentAvailabilityCache = new Map<string, AssistantAttachmentAvailability>();
 const ASSISTANT_ATTACHMENT_UNAVAILABLE_RETRY_MS = 5_000;
+const ASSISTANT_ATTACHMENT_MEDIA_TICKET_REFRESH_SKEW_MS = 30_000;
 
 export type ChatTimestampDisplay = {
   label: string;
@@ -982,9 +983,17 @@ function resolveAssistantAttachmentAvailability(
   const cacheKey = `${basePath ?? ""}::${normalizedAuthToken}::${source}`;
   const cached = assistantAttachmentAvailabilityCache.get(cacheKey);
   if (cached) {
+    const now = Date.now();
     if (
       cached.status === "unavailable" &&
-      Date.now() - cached.checkedAt >= ASSISTANT_ATTACHMENT_UNAVAILABLE_RETRY_MS
+      now - cached.checkedAt >= ASSISTANT_ATTACHMENT_UNAVAILABLE_RETRY_MS
+    ) {
+      assistantAttachmentAvailabilityCache.delete(cacheKey);
+    } else if (
+      cached.status === "available" &&
+      cached.mediaTicket &&
+      (!cached.mediaTicketExpiresAt ||
+        cached.mediaTicketExpiresAt - now <= ASSISTANT_ATTACHMENT_MEDIA_TICKET_REFRESH_SKEW_MS)
     ) {
       assistantAttachmentAvailabilityCache.delete(cacheKey);
     } else {
@@ -1006,13 +1015,23 @@ function resolveAssistantAttachmentAvailability(
         const payload = (await res.json().catch(() => null)) as {
           available?: boolean;
           mediaTicket?: string;
+          mediaTicketExpiresAt?: string;
           reason?: string;
         } | null;
         if (payload?.available === true) {
           const mediaTicket = payload.mediaTicket?.trim();
+          const mediaTicketExpiresAt = Date.parse(payload.mediaTicketExpiresAt ?? "");
+          if (mediaTicket && !Number.isFinite(mediaTicketExpiresAt)) {
+            assistantAttachmentAvailabilityCache.set(cacheKey, {
+              status: "unavailable",
+              reason: "Attachment unavailable",
+              checkedAt: Date.now(),
+            });
+            return;
+          }
           assistantAttachmentAvailabilityCache.set(cacheKey, {
             status: "available",
-            ...(mediaTicket ? { mediaTicket } : {}),
+            ...(mediaTicket ? { mediaTicket, mediaTicketExpiresAt } : {}),
           });
         } else {
           assistantAttachmentAvailabilityCache.set(cacheKey, {
