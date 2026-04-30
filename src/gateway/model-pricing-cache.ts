@@ -13,6 +13,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { planManifestModelCatalogRows, type ModelCatalogCost } from "../model-catalog/index.js";
 import { isInstalledPluginEnabled } from "../plugins/installed-plugin-index.js";
+import { listOpenClawPluginManifestMetadata } from "../plugins/manifest-metadata-scan.js";
 import { loadPluginManifestRegistryForInstalledIndex } from "../plugins/manifest-registry-installed.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type {
@@ -419,6 +420,30 @@ function normalizeExternalPricingPolicy(
   };
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function loadBundledManifestPricingPolicies(): Map<string, ExternalPricingPolicy> {
+  const policies = new Map<string, ExternalPricingPolicy>();
+  for (const { manifest } of listOpenClawPluginManifestMetadata()) {
+    const modelPricing = isRecord(manifest.modelPricing) ? manifest.modelPricing : undefined;
+    const providers = isRecord(modelPricing?.providers) ? modelPricing.providers : undefined;
+    if (!providers) {
+      continue;
+    }
+    for (const [provider, rawPolicy] of Object.entries(providers)) {
+      const policy = isRecord(rawPolicy)
+        ? normalizeExternalPricingPolicy(rawPolicy as PluginManifestModelPricingProvider)
+        : undefined;
+      if (policy) {
+        policies.set(provider, policy);
+      }
+    }
+  }
+  return policies;
+}
+
 function filterActiveManifestRegistry(params: {
   registry: PluginManifestRegistry;
   index: PluginRegistrySnapshot;
@@ -592,14 +617,15 @@ function buildExternalCatalogCandidates(params: {
 
   for (const model of applyModelIdTransforms(ref.model, transforms)) {
     const candidate = modelKey(provider, model);
-    candidates.add(
-      source === "openRouter"
-        ? canonicalizeOpenRouterLookupId(candidate, {
-            allowManifestNormalization: params.allowManifestNormalization ?? true,
-            allowPluginNormalization: params.allowPluginNormalization ?? true,
-          })
-        : candidate,
-    );
+    candidates.add(candidate);
+    if (source === "openRouter") {
+      candidates.add(
+        canonicalizeOpenRouterLookupId(candidate, {
+          allowManifestNormalization: params.allowManifestNormalization ?? true,
+          allowPluginNormalization: params.allowPluginNormalization ?? true,
+        }),
+      );
+    }
   }
 
   if (sourcePolicy?.passthroughProviderModel && ref.model.includes("/")) {
@@ -1153,7 +1179,7 @@ export async function refreshGatewayModelPricingCache(params: {
     // in-memory state immediately without any live network fetch, then schedule
     // the next background refresh for when the cache TTL expires.
     // Note: loadPricingCacheFromDisk() is a no-op in Vitest environments.
-    const warmedFromDisk = await warmFromDiskCacheIfFresh({ config: params.config, fetchImpl });
+    const warmedFromDisk = await warmFromDiskCacheIfFresh();
     if (warmedFromDisk) {
       scheduleRefresh({ config: params.config, fetchImpl });
       return;
@@ -1165,7 +1191,14 @@ export async function refreshGatewayModelPricingCache(params: {
       manifestRegistry: params.manifestRegistry,
     });
     const normalizationOptions = getPricingModelNormalizationOptions(params.config);
-    const pricingContext = loadManifestPricingContext(manifestMetadata.activeRegistry);
+    const pricingContext = loadManifestPricingContext(manifestMetadata.allRegistry);
+    if (params.config.plugins?.enabled !== false) {
+      for (const [provider, policy] of loadBundledManifestPricingPolicies()) {
+        if (!pricingContext.policies.has(provider)) {
+          pricingContext.policies.set(provider, policy);
+        }
+      }
+    }
     const allRefs = collectConfiguredModelPricingRefs(params.config, {
       manifestRegistry: manifestMetadata.allRegistry,
     });
@@ -1237,7 +1270,6 @@ export async function refreshGatewayModelPricingCache(params: {
         allowManifestNormalization: normalizationOptions.allowManifestNormalization,
         allowPluginNormalization: normalizationOptions.allowPluginNormalization,
       });
-
       // 2. Try LiteLLM (may contain tiered pricing)
       const litellmPricing = resolveLiteLLMPricingForRef({
         ref,
@@ -1313,10 +1345,7 @@ export async function refreshGatewayModelPricingCache(params: {
   }
 }
 
-async function warmFromDiskCacheIfFresh(params: {
-  config: OpenClawConfig;
-  fetchImpl: typeof fetch;
-}): Promise<boolean> {
+async function warmFromDiskCacheIfFresh(): Promise<boolean> {
   const now = Date.now();
   const [openrouterCache, litellmCache] = await Promise.all([
     loadPricingCacheFromDisk("openrouter"),
