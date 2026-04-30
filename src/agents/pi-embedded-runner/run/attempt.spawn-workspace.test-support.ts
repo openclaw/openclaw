@@ -685,6 +685,8 @@ export type MutableSession = {
     streamFn?: unknown;
     transport?: string;
     reset: () => void;
+    abort?: () => void;
+    clearAllQueues?: () => void;
     state: {
       messages: unknown[];
       systemPrompt?: string;
@@ -808,6 +810,8 @@ export function createDefaultEmbeddedSession(params?: {
       reset: () => {
         session.messages = [];
       },
+      abort: () => {},
+      clearAllQueues: () => {},
       state: {
         get messages() {
           return session.messages;
