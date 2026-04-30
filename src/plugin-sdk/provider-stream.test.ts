@@ -300,4 +300,43 @@ describe("buildProviderStreamFamilyHooks", () => {
     expect(OPENROUTER_THINKING_STREAM_HOOKS.wrapStreamFn).toBeTypeOf("function");
     expect(TOOL_STREAM_DEFAULT_ON_HOOKS.wrapStreamFn).toBeTypeOf("function");
   });
+
+  it("keeps Codex OAuth auth injection when adding OpenAI attribution headers", () => {
+    let called = false;
+    let capturedApiKey: string | undefined;
+    let capturedHeaders: Record<string, string> | undefined;
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      called = true;
+      capturedApiKey = options?.apiKey;
+      capturedHeaders = options?.headers;
+      return {} as never;
+    };
+
+    const openAiHooks = OPENAI_RESPONSES_STREAM_HOOKS;
+    const wrapped = requireStreamFn(
+      requireWrapStreamFn(openAiHooks.wrapStreamFn)({
+        streamFn: baseStreamFn,
+        config: {},
+        agentDir: "/tmp/provider-stream-test",
+      } as never),
+    );
+
+    void wrapped(
+      {
+        api: "openai-codex-responses",
+        provider: "openai-codex",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        id: "gpt-5.5",
+      } as never,
+      {} as never,
+      { apiKey: "oauth-access-token" },
+    );
+
+    expect(called).toBe(true);
+    expect(capturedApiKey).toBe("oauth-access-token");
+    expect(capturedHeaders).toMatchObject({
+      originator: "openclaw",
+      "User-Agent": expect.stringMatching(/^openclaw\//),
+    });
+  });
 });

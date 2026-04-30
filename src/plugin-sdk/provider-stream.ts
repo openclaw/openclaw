@@ -103,7 +103,9 @@ export function buildProviderStreamFamilyHooks(
     case "openai-responses-defaults":
       return {
         wrapStreamFn: (ctx: ProviderWrapStreamFnContext) => {
-          let nextStreamFn = createOpenAIAttributionHeadersWrapper(ctx.streamFn);
+          let nextStreamFn = createOpenAIAttributionHeadersWrapper(ctx.streamFn, {
+            codexNativeTransportStreamFn: ctx.streamFn,
+          });
 
           if (resolveOpenAIFastMode(ctx.extraParams)) {
             nextStreamFn = createOpenAIFastModeWrapper(nextStreamFn);
