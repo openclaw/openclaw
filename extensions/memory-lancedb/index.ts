@@ -384,8 +384,11 @@ class OpenAiCompatibleEmbeddings implements Embeddings {
   }
 
   async embed(text: string, options?: { timeoutMs?: number }): Promise<number[]> {
-    if (typeof this.dimensions === "number" && this.dimensions <= 0) {
-      throw new Error("Embedding dimensions must be a positive number");
+    if (
+      typeof this.dimensions === "number" &&
+      (!Number.isInteger(this.dimensions) || this.dimensions <= 0)
+    ) {
+      throw new Error("Embedding dimensions must be a positive integer");
     }
 
     const params: Record<string, unknown> = {
@@ -421,7 +424,6 @@ class OpenAiCompatibleEmbeddings implements Embeddings {
     return embedding.slice(0, this.dimensions);
   }
 }
-
 
 class ProviderAdapterEmbeddings implements Embeddings {
   private providerPromise: Promise<MemoryEmbeddingProvider> | undefined;
