@@ -186,7 +186,7 @@ YOLO is the default host behavior unless you tighten it explicitly:
 - `tools.exec.host=auto` chooses **where** exec runs: sandbox when available, otherwise gateway.
 - YOLO chooses **how** host exec is approved: `security=full` plus `ask=off`.
 - In YOLO mode, OpenClaw does **not** add a separate heuristic command-obfuscation approval gate or script-preflight rejection layer on top of the configured host exec policy.
-- `auto` does not make gateway routing a free override from a sandboxed session. A per-call `host=node` request is allowed from `auto`; `host=gateway` is only allowed from `auto` when no sandbox runtime is active. For a stable non-auto default, set `tools.exec.host` or use `/exec host=...` explicitly.
+- `auto` does not make gateway or node routing a free override from a sandboxed session. Per-call `host=node` and `host=gateway` are both only allowed from `auto` when no sandbox runtime is active; with a sandbox active, `auto` keeps execution in the sandbox and rejects per-call host overrides. For a stable non-auto default, set `tools.exec.host` or use `/exec host=...` explicitly.
 
 </Warning>
 
