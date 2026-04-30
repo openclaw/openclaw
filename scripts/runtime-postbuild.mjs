@@ -104,6 +104,52 @@ export function writeLegacyCliExitCompatChunks(params = {}) {
   }
 }
 
+/**
+ * Copy native platform binaries that are downloaded at install time by
+ * postinstall scripts. The staged runtime dep install runs with
+ * --ignore-scripts, so postinstall hooks (e.g. native crypto downloads)
+ * never execute. After staging completes, copy the native artifacts from
+ * the source node_modules into the staged dist tree so they remain
+ * available at runtime.
+ */
+export function copyNativeRuntimeDepBinaries(params = {}) {
+  const rootDir = params.rootDir ?? ROOT;
+  const fsImpl = params.fs ?? fs;
+  const warn = params.warn ?? console.warn;
+
+  const nativeArtifacts = [
+    {
+      // @matrix-org/matrix-sdk-crypto-nodejs downloads a platform-specific
+      // .node binary via postinstall (download-lib.js). The staged install
+      // uses --ignore-scripts, so we must copy this manually.
+      src: "node_modules/@matrix-org/matrix-sdk-crypto-nodejs",
+      destDir: "dist/extensions/matrix/node_modules/@matrix-org/matrix-sdk-crypto-nodejs",
+      match: (name) => name.endsWith(".node"),
+      label: "matrix-sdk-crypto (native binary)",
+    },
+  ];
+
+  for (const { src, destDir, match, label } of nativeArtifacts) {
+    const srcDir = path.join(rootDir, src);
+    const targetDir = path.join(rootDir, destDir);
+    if (!fsImpl.existsSync(srcDir)) {
+      warn(`[runtime-postbuild] native artifact source not found, skipping: ${label}`);
+      continue;
+    }
+    if (!fsImpl.existsSync(targetDir)) {
+      warn(`[runtime-postbuild] native artifact dest not found, skipping: ${label}`);
+      continue;
+    }
+    const entries = fsImpl.readdirSync(srcDir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isFile()) continue;
+      if (match(entry.name)) {
+        fsImpl.copyFileSync(path.join(srcDir, entry.name), path.join(targetDir, entry.name));
+      }
+    }
+  }
+}
+
 export function runRuntimePostBuild(params = {}) {
   const timingsEnabled = params.timings ?? process.env.OPENCLAW_RUNTIME_POSTBUILD_TIMINGS !== "0";
   const runPhase = (label, action) => {
@@ -121,6 +167,7 @@ export function runRuntimePostBuild(params = {}) {
   runPhase("bundled plugin metadata", () => copyBundledPluginMetadata(params));
   runPhase("official channel catalog", () => writeOfficialChannelCatalog(params));
   runPhase("bundled plugin runtime deps", () => stageBundledPluginRuntimeDeps(params));
+  runPhase("native runtime dep binaries", () => copyNativeRuntimeDepBinaries(params));
   runPhase("bundled plugin runtime overlay", () => stageBundledPluginRuntime(params));
   runPhase("stable root runtime aliases", () => writeStableRootRuntimeAliases(params));
   runPhase("legacy CLI exit compat chunks", () => writeLegacyCliExitCompatChunks(params));
