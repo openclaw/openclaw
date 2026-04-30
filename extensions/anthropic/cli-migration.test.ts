@@ -167,6 +167,32 @@ describe("anthropic cli migration", () => {
     });
   });
 
+  it("migrates legacy claude-cli embedded harness defaults to agentRuntime", () => {
+    const result = buildAnthropicCliMigrationResult({
+      agents: {
+        defaults: {
+          model: { primary: "claude-cli/claude-opus-4-7" },
+          embeddedHarness: { runtime: "claude-cli" },
+          models: {
+            "claude-cli/claude-opus-4-7": {},
+          },
+        } as never,
+      },
+    });
+
+    expect(result.configPatch).toMatchObject({
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-opus-4-7" },
+          agentRuntime: { id: "claude-cli" },
+          models: {
+            "anthropic/claude-opus-4-7": {},
+          },
+        },
+      },
+    });
+  });
+
   it("backfills the Claude CLI allowlist when older configs only stored sonnet", () => {
     const result = buildAnthropicCliMigrationResult({
       agents: {

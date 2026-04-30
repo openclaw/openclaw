@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { resolveCliBackendConfig } from "../agents/cli-backends.js";
 import { listAgentHarnessIds } from "../agents/harness/registry.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import {
@@ -3814,6 +3815,29 @@ module.exports = { id: "throws-after-import", register() {} };`,
     expect(scoped.plugins.map((entry) => entry.id)).toEqual(["deepseek"]);
     expect(scoped.plugins[0]?.status).toBe("loaded");
     expect(scoped.providers.map((entry) => entry.provider.id)).toEqual(["deepseek"]);
+  });
+
+  it("loads bundled anthropic claude-cli as a resolvable CLI backend", () => {
+    const scoped = loadOpenClawPlugins({
+      cache: false,
+      pluginSdkResolution: "dist",
+      config: {
+        plugins: {
+          enabled: true,
+          allow: ["anthropic"],
+          entries: {
+            anthropic: { enabled: true },
+          },
+        },
+      },
+      onlyPluginIds: ["anthropic"],
+    });
+
+    expect(scoped.plugins.map((entry) => entry.id)).toEqual(["anthropic"]);
+    expect(scoped.plugins[0]?.status).toBe("loaded");
+    expect((scoped.cliBackends ?? []).map((entry) => entry.backend.id)).toContain("claude-cli");
+    expect(resolveCliBackendConfig("claude-cli")?.config.command).toBe("claude");
+    expect(listAgentHarnessIds()).not.toContain("claude-cli");
   });
 
   it("does not replace active memory plugin registries during non-activating loads", () => {
