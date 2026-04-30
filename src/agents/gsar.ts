@@ -129,8 +129,12 @@ export function gsarDecision(
   score: number,
   thresholds: GSARThresholds = DEFAULT_THRESHOLDS,
 ): GSARDecision {
-  if (score >= thresholds.proceed) return "proceed";
-  if (score >= thresholds.regenerate) return "regenerate";
+  if (score >= thresholds.proceed) {
+    return "proceed";
+  }
+  if (score >= thresholds.regenerate) {
+    return "regenerate";
+  }
   return "replan";
 }
 
@@ -252,7 +256,9 @@ export function measureThresholdAccuracy(
   weights: EvidenceWeights = DEFAULT_WEIGHTS,
   rho = 1.0,
 ): number {
-  if (examples.length === 0) return 0;
+  if (examples.length === 0) {
+    return 0;
+  }
   const correct = examples.filter((e) => {
     const score = computeGroundednessScore(e.partition, weights, rho);
     return gsarDecision(score, thresholds) === e.expected;

@@ -52,13 +52,17 @@ export class OrCondition extends TerminationCondition {
   async check(state: TerminationState): Promise<readonly [boolean, string | null]> {
     for (const cond of this.conditions) {
       const [stop, reason] = await cond.check(state);
-      if (stop) return [true, reason];
+      if (stop) {
+        return [true, reason];
+      }
     }
     return [false, null];
   }
 
   reset(): void {
-    for (const cond of this.conditions) cond.reset();
+    for (const cond of this.conditions) {
+      cond.reset();
+    }
   }
 }
 
@@ -71,14 +75,20 @@ export class AndCondition extends TerminationCondition {
     const reasons: string[] = [];
     for (const cond of this.conditions) {
       const [stop, reason] = await cond.check(state);
-      if (!stop) return [false, null];
-      if (reason) reasons.push(reason);
+      if (!stop) {
+        return [false, null];
+      }
+      if (reason) {
+        reasons.push(reason);
+      }
     }
     return [true, reasons.join(" AND ") || "all_conditions_met"];
   }
 
   reset(): void {
-    for (const cond of this.conditions) cond.reset();
+    for (const cond of this.conditions) {
+      cond.reset();
+    }
   }
 }
 
@@ -104,7 +114,9 @@ export class TimeLimit extends TerminationCondition {
   }
 
   check(state: TerminationState): readonly [boolean, string | null] {
-    if (this.startedAt === null) this.startedAt = state.startedAt;
+    if (this.startedAt === null) {
+      this.startedAt = state.startedAt;
+    }
     return Date.now() - this.startedAt >= this.seconds * 1000
       ? [true, "time_limit"]
       : [false, null];

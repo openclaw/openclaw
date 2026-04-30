@@ -15,15 +15,9 @@ import {
   type ClaimPartition,
   type EvidenceWeights,
   computeGroundednessScore,
-  evaluateGroundedness,
   gsarDecision,
 } from "./gsar.js";
-import {
-  MaxIterations,
-  TextMention,
-  type TerminationCondition,
-  type TerminationState,
-} from "./termination.js";
+import { MaxIterations, TextMention, type TerminationCondition } from "./termination.js";
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
