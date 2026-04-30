@@ -517,6 +517,20 @@ enumeration of `src/gateway/server-methods/*.ts`.
     the default agent workspace.
   - Config mode patches `skills.entries.<skillKey>` values such as `enabled`,
     `apiKey`, and `env`.
+- Operators may call plugin management RPCs so remote control-plane clients can
+  manage Gateway plugins without shelling out to the CLI:
+  - Admin (`operator.admin`): `plugins.doctor`, `plugins.list`,
+    `plugins.inspect`, `plugins.registry.status`, `plugins.registry.refresh`,
+    `plugins.install`, `plugins.update`, `plugins.uninstall`,
+    `plugins.enable`, and `plugins.disable`.
+  - `plugins.list`, `plugins.inspect`, and `plugins.registry.status` return
+    Gateway-host plugin metadata, including local paths or diagnostic install
+    metadata, so they are not available to read-only clients.
+  - `plugins.install` supports explicit `source: "path"`, `source: "npm"`, and
+    `source: "clawhub"` requests. Local paths are resolved on the Gateway host;
+    this RPC does not upload local client files.
+  - `plugins.uninstall` is non-interactive and requires `force: true` unless
+    `dryRun: true` is set.
 
 ### `models.list` views
 
