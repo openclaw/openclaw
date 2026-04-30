@@ -2976,6 +2976,36 @@ describe("ensureBundledPluginRuntimeDeps", () => {
     ).toBe(true);
   });
 
+  it("expires legacy PID-alive locks without starttime or createdAtMs when lock dir is stale", () => {
+    // Legacy Docker lock: pid=1 alive, no starttime, no createdAtMs,
+    // but lockDirMtimeMs shows the lock is 10+ minutes old.
+    const stale = bundledRuntimeDepsTesting.shouldRemoveRuntimeDepsLock(
+      { pid: 1, createdAtMs: undefined, lockDirMtimeMs: 1_000 },
+      601_001,
+      () => true,
+    );
+    const fresh = bundledRuntimeDepsTesting.shouldRemoveRuntimeDepsLock(
+      { pid: 1, createdAtMs: undefined, lockDirMtimeMs: 1_000 },
+      300_999,
+      () => true,
+    );
+    expect(stale).toBe(true);
+    expect(fresh).toBe(false);
+  });
+
+  it("keeps PID-alive locks with createdAtMs even without starttime and with stale mtimes", () => {
+    // Non-Linux platform: lock has createdAtMs but no starttime.
+    // mtime fallback must NOT apply — createdAtMs is present so lock is not legacy.
+    const now = Date.now();
+    expect(
+      bundledRuntimeDepsTesting.shouldRemoveRuntimeDepsLock(
+        { pid: 1, createdAtMs: now - 20_000, lockDirMtimeMs: 1_000 },
+        now,
+        () => true,
+      ),
+    ).toBe(false);
+  });
+
   it("includes runtime-deps lock owner details in timeout messages", () => {
     const message = bundledRuntimeDepsTesting.formatRuntimeDepsLockTimeoutMessage({
       lockDir: "/tmp/openclaw-plugin/.openclaw-runtime-deps.lock",

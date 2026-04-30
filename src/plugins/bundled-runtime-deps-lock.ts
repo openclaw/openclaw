@@ -120,6 +120,13 @@ export function shouldRemoveRuntimeDepsLock(
         return true;
       }
     }
+    // Legacy fallback: only for true legacy owners without starttime and createdAtMs
+    if (typeof owner.starttime !== "number" && typeof owner.createdAtMs !== "number") {
+      const legacyObservedAtMs = latestFiniteMs([owner.lockDirMtimeMs, owner.ownerFileMtimeMs]);
+      if (typeof legacyObservedAtMs === "number") {
+        return nowMs - legacyObservedAtMs > BUNDLED_RUNTIME_DEPS_LOCK_STALE_MS;
+      }
+    }
     return false;
   }
 
