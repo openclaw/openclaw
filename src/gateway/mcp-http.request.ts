@@ -30,6 +30,8 @@ export type McpRequestContext = {
   messageProvider: string | undefined;
   accountId: string | undefined;
   senderIsOwner: boolean;
+  /** Case-sensitive delivery channel ID (e.g. Matrix room ID). Preserved as-is to avoid lowercase corruption. */
+  currentChannelId: string | undefined;
 };
 
 function resolveScopedSessionKey(cfg: OpenClawConfig, rawSessionKey: string | undefined): string {
@@ -174,5 +176,6 @@ export function resolveMcpRequestContext(
       normalizeMessageChannel(getHeader(req, "x-openclaw-message-channel")) ?? undefined,
     accountId: normalizeOptionalString(getHeader(req, "x-openclaw-account-id")),
     senderIsOwner: auth.senderIsOwner,
+    currentChannelId: normalizeOptionalString(getHeader(req, "x-openclaw-current-channel-id")),
   };
 }

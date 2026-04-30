@@ -48,6 +48,8 @@ export type RunCliAgentParams = {
   messageChannel?: string;
   messageProvider?: string;
   agentAccountId?: string;
+  /** Case-sensitive current channel ID for cron delivery context (e.g. Matrix room ID). */
+  currentChannelId?: string;
   senderIsOwner?: boolean;
   abortSignal?: AbortSignal;
   onExecutionStarted?: () => void;
