@@ -213,6 +213,51 @@ Feishu/Lark does not support native slash-command menus, so send these as plain 
 5. Ensure the gateway is running: `openclaw gateway status`
 6. Check logs: `openclaw logs --follow`
 
+### Bot stops responding when a system proxy is configured
+
+Feishu/Lark traffic uses the same process environment as the gateway. If your
+model provider needs an outbound proxy but Feishu/Lark official endpoints must
+go direct in your network, configure a `NO_PROXY` bypass for the Feishu/Lark
+domains instead of clearing `HTTP_PROXY` / `HTTPS_PROXY` globally.
+
+Typical symptoms:
+
+- token requests fail even though `appId` and `appSecret` are correct
+- the WebSocket connection never becomes ready
+- logs show TLS/proxy errors while provider requests still need the proxy
+
+PowerShell example for Feishu China:
+
+```powershell
+$env:HTTPS_PROXY = "http://127.0.0.1:7890"
+$env:HTTP_PROXY = "http://127.0.0.1:7890"
+$env:NO_PROXY = "open.feishu.cn,*.feishu.cn"
+openclaw gateway restart
+```
+
+PowerShell example for Lark global:
+
+```powershell
+$env:HTTPS_PROXY = "http://127.0.0.1:7890"
+$env:HTTP_PROXY = "http://127.0.0.1:7890"
+$env:NO_PROXY = "open.larksuite.com,*.larksuite.com"
+openclaw gateway restart
+```
+
+If you use a custom Feishu/Lark domain, add that hostname to `NO_PROXY` as
+well. `NO_PROXY` entries can be comma- or whitespace-separated, and wildcard
+suffixes such as `*.example.com` are supported by OpenClaw's proxy matching.
+
+To verify the boundary:
+
+1. Restart the gateway after setting the environment variables
+2. Run `openclaw gateway status`
+3. Send a DM or @mention the bot
+4. Watch logs with `openclaw logs --follow`
+
+Avoid posting real `appId`, `appSecret`, tokens, webhook URLs, proxy
+credentials, or full local logs when asking for help.
+
 ### App Secret leaked
 
 1. Reset the App Secret in Feishu Open Platform / Lark Developer
