@@ -56,6 +56,29 @@ describe("prepareBundledPluginRuntimeRoot", () => {
     expect(fs.readFileSync(target, "utf8")).toBe("export const value = 'old';\n");
   });
 
+  it("reuses existing hardlinked mirror files without rewriting them", () => {
+    const root = makeTempRoot();
+    const source = path.join(root, "source.js");
+    const target = path.join(root, "mirror", "source.js");
+    fs.writeFileSync(source, "export const value = 'stable';\n", "utf8");
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.linkSync(source, target);
+    const initialTargetStat = fs.statSync(target, { bigint: true });
+
+    const linkSpy = vi.spyOn(fs, "linkSync");
+    const copySpy = vi.spyOn(fs, "copyFileSync");
+    const removeSpy = vi.spyOn(fs, "rmSync");
+
+    materializeBundledRuntimeMirrorFile(source, target);
+
+    const reusedTargetStat = fs.statSync(target, { bigint: true });
+    expect(reusedTargetStat.dev).toBe(initialTargetStat.dev);
+    expect(reusedTargetStat.ino).toBe(initialTargetStat.ino);
+    expect(linkSpy).not.toHaveBeenCalled();
+    expect(copySpy).not.toHaveBeenCalled();
+    expect(removeSpy).not.toHaveBeenCalled();
+  });
+
   it("materializes root JavaScript chunks in external mirrors", () => {
     const packageRoot = makeTempRoot();
     const stageDir = makeTempRoot();

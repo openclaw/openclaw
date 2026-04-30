@@ -694,6 +694,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         channel: "signal",
         groupId,
         accountId: deps.accountId,
+        configuredGroupDefaultsToNoMention: true,
       });
     const canDetectMention = mentionRegexes.length > 0;
     const mentionDecision = resolveInboundMentionDecision({

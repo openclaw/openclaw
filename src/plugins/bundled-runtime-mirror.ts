@@ -117,7 +117,6 @@ function isBundledRuntimeMirrorFileAlreadyMaterialized(
     sourceStat.ino === targetStat.ino
   );
 }
-
 function chmodBundledRuntimeMirrorFileReadable(sourcePath: string, targetPath: string): void {
   try {
     const sourceMode = fs.statSync(sourcePath).mode;
