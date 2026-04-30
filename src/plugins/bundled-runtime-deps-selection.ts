@@ -395,6 +395,9 @@ function resolveMemorySearchRuntimeDepsProvider(
     return undefined;
   }
   const normalized = normalizeProviderId(providerId);
+  if (normalized === "local") {
+    return normalized;
+  }
   const ownerApi = findNormalizedProviderValue(config.models?.providers, providerId)?.api?.trim();
   if (!ownerApi) {
     return normalized;

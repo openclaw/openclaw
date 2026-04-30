@@ -3437,6 +3437,21 @@ describe("ensureBundledPluginRuntimeDeps", () => {
         },
       },
       {
+        name: "explicit local provider with local model provider config",
+        config: {
+          models: {
+            providers: {
+              local: { api: "openai" as never, baseUrl: "", models: [] },
+            },
+          },
+          agents: {
+            defaults: {
+              memorySearch: { provider: "local" },
+            },
+          },
+        },
+      },
+      {
         name: "auto provider with a usable local model path",
         config: {
           agents: {
