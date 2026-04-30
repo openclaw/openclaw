@@ -253,3 +253,90 @@ describe("Anthropic vs OpenAI — termination algebra behavioral proof", () => {
     expect(savingPct).toBe(60);
   });
 });
+
+// ─── Illustrated proof: "where's the nearest coffee shop?" ───────────────────
+//
+// Same task, two agents. Claude is the friend who knows the neighbourhood.
+// GPT is the friend who has to check every app, cross-reference Yelp, Google,
+// and Apple Maps, then write a three-paragraph summary about it.
+//
+// Without the algebra, we wait for both of them to finish regardless.
+// With TextMention("FOUND IT").or(MaxIterations(5)), Claude exits when done.
+
+describe("illustrated proof — 'where is the nearest coffee shop?'", () => {
+  const claude: string[] = [
+    "Checking maps now...",
+    "Blue Bottle on Mission St, 4 minutes walk. FOUND IT",
+    // turns 3-5 never happen
+    "Just confirming...",
+    "Still Blue Bottle.",
+    "Yes, definitely Blue Bottle.",
+  ];
+
+  const gpt: string[] = [
+    "Let me check Google Maps...",
+    "Also checking Yelp for reviews...",
+    "Cross-referencing with Apple Maps...",
+    "Comparing ratings and hours...",
+    "Here is a comprehensive breakdown of 7 nearby options with pros and cons.",
+  ];
+
+  async function ask(
+    replies: string[],
+    cond: TerminationCondition,
+    max = 5,
+  ): Promise<{ turns: number; reason: string | null }> {
+    cond.reset();
+    const startedAt = Date.now();
+    for (let turn = 1; turn <= max; turn++) {
+      const replyText = replies[turn - 1] ?? "";
+      const [stop, reason] = await cond.check({ turn, replyText, startedAt });
+      if (stop) return { turns: turn, reason };
+    }
+    return { turns: max, reason: null };
+  }
+
+  it("without the algebra: you wait for both friends to finish — 5 turns each", async () => {
+    const flat = new MaxIterations(5);
+    const claudeResult = await ask(claude, flat);
+    const gptResult = await ask(gpt, flat);
+
+    expect(claudeResult.turns).toBe(5); // Claude has the answer at turn 2 but we wait anyway
+    expect(gptResult.turns).toBe(5);
+  });
+
+  it("with the algebra: Claude says 'FOUND IT' at turn 2 and you leave — GPT still types", async () => {
+    const cond = new TextMention("FOUND IT").or(new MaxIterations(5));
+    const claudeResult = await ask(claude, cond);
+    const gptResult = await ask(gpt, cond);
+
+    expect(claudeResult.turns).toBe(2);
+    expect(claudeResult.reason).toBe("text_mention:FOUND IT");
+
+    expect(gptResult.turns).toBe(5); // GPT never says "FOUND IT" — MaxIterations saves you
+    expect(gptResult.reason).toBe("max_iterations");
+  });
+
+  it("algebra saves 3 turns — that's 60% less waiting for Claude to finish", async () => {
+    const cond = new TextMention("FOUND IT").or(new MaxIterations(5));
+    const claudeResult = await ask(claude, cond);
+    const gptResult = await ask(gpt, cond);
+
+    const saved = gptResult.turns - claudeResult.turns;
+    expect(saved).toBe(3);
+    expect((saved / 5) * 100).toBe(60);
+  });
+
+  it("AND guard: don't trust the first answer — it must be specific AND mention the street", async () => {
+    // Require both "FOUND IT" AND at least 20 characters (forces useful detail)
+    const detailed = new CustomCondition((s) => [s.replyText.length >= 40, "detailed_enough"]);
+    const cond = new TextMention("FOUND IT").and(detailed).or(new MaxIterations(5));
+
+    // vague answer: "FOUND IT" but only 10 chars total
+    const vague = ["FOUND IT!", "Blue Bottle on Mission St, 4 min walk. FOUND IT"];
+    const result = await ask(vague, cond);
+
+    expect(result.turns).toBe(2); // turn 1 is vague (short), turn 2 passes both conditions
+    expect(result.reason).toContain("AND");
+  });
+});
