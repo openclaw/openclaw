@@ -88,11 +88,10 @@ export type ArtifactSummary = {
   expiresAt?: string;
 };
 
-export type ArtifactQuery = {
-  sessionKey?: string;
-  runId?: string;
-  taskId?: string;
-};
+export type ArtifactQuery =
+  | { sessionKey: string; runId?: string; taskId?: string }
+  | { runId: string; sessionKey?: string; taskId?: string }
+  | { taskId: string; sessionKey?: string; runId?: string };
 
 export type ArtifactsListResult = {
   artifacts: ArtifactSummary[];

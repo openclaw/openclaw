@@ -306,6 +306,22 @@ describe("OpenClaw SDK", () => {
     ]);
   });
 
+  it("requires artifact query scope before calling Gateway", async () => {
+    const transport = new FakeTransport({});
+    const oc = new OpenClaw({ transport });
+
+    await expect(oc.artifacts.list(undefined as never)).rejects.toThrow(
+      "oc.artifacts.list requires one of sessionKey, runId, or taskId",
+    );
+    await expect(oc.artifacts.get("artifact_123", undefined as never)).rejects.toThrow(
+      "oc.artifacts.get requires one of sessionKey, runId, or taskId",
+    );
+    await expect(oc.artifacts.download("artifact_123", undefined as never)).rejects.toThrow(
+      "oc.artifacts.download requires one of sessionKey, runId, or taskId",
+    );
+    expect(transport.calls).toEqual([]);
+  });
+
   it("throws explicit unsupported errors for SDK namespaces without Gateway RPCs", async () => {
     const transport = new FakeTransport({});
     const oc = new OpenClaw({ transport });

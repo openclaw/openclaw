@@ -189,6 +189,20 @@ function asRecord(value: unknown): Record<string, unknown> {
   return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
 }
 
+function hasArtifactQueryScope(params: unknown): params is ArtifactQuery {
+  const record = asRecord(params);
+  return [record.sessionKey, record.runId, record.taskId].some(
+    (value) => typeof value === "string" && value.trim().length > 0,
+  );
+}
+
+function requireArtifactQueryScope(api: string, params: unknown): ArtifactQuery {
+  if (!hasArtifactQueryScope(params)) {
+    throw new Error(`${api} requires one of sessionKey, runId, or taskId`);
+  }
+  return params;
+}
+
 function readChatProjection(event: OpenClawEvent): ChatProjection | undefined {
   const raw = event.raw;
   if (event.type !== "raw" || raw?.event !== "chat") {
@@ -763,15 +777,21 @@ export class ArtifactsNamespace extends RpcNamespace {
   }
 
   async list(params: ArtifactQuery): Promise<ArtifactsListResult> {
-    return await this.call("list", params);
+    return await this.call("list", requireArtifactQueryScope("oc.artifacts.list", params));
   }
 
   async get(id: string, params: ArtifactQuery): Promise<ArtifactsGetResult> {
-    return await this.call("get", { ...asRecord(params), artifactId: id });
+    return await this.call("get", {
+      ...requireArtifactQueryScope("oc.artifacts.get", params),
+      artifactId: id,
+    });
   }
 
   async download(id: string, params: ArtifactQuery): Promise<ArtifactsDownloadResult> {
-    return await this.call("download", { ...asRecord(params), artifactId: id });
+    return await this.call("download", {
+      ...requireArtifactQueryScope("oc.artifacts.download", params),
+      artifactId: id,
+    });
   }
 }
 

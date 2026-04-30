@@ -224,7 +224,8 @@ await oc.tools.effective({ sessionKey: "main" });
 ```
 
 Artifact helpers expose the Gateway artifact projection for session, run, or
-task context:
+task context. Each call requires one explicit `sessionKey`, `runId`, or
+`taskId` scope:
 
 ```typescript
 const { artifacts } = await oc.artifacts.list({ sessionKey: "main" });
