@@ -1,9 +1,9 @@
 import { mergeMissing } from "../../../config/legacy.shared.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import {
-  loadPluginManifestRegistry,
+  loadPluginManifestRegistryForPluginRegistry,
   resolveManifestContractOwnerPluginId,
-} from "../../../plugins/manifest-registry.js";
+} from "../../../plugins/plugin-registry.js";
 import {
   cloneRecord,
   ensureRecord,
@@ -18,21 +18,19 @@ const MODERN_SCOPED_WEB_SEARCH_KEYS = new Set(["openaiCodex"]);
 // `tools.web.search.tavily.*` shape to migrate.
 const NON_MIGRATED_LEGACY_WEB_SEARCH_PROVIDER_IDS = new Set(["tavily"]);
 const LEGACY_GLOBAL_WEB_SEARCH_PROVIDER_ID = "brave";
-let legacyWebSearchProviderIdsCache: string[] | undefined;
-let legacyWebSearchProviderIdSetCache: Set<string> | undefined;
 
 function getLegacyWebSearchProviderIds(): string[] {
-  legacyWebSearchProviderIdsCache ??= loadPluginManifestRegistry({ cache: true })
+  return loadPluginManifestRegistryForPluginRegistry({
+    includeDisabled: true,
+  })
     .plugins.filter((plugin) => plugin.origin === "bundled")
     .flatMap((plugin) => plugin.contracts?.webSearchProviders ?? [])
     .filter((providerId) => !NON_MIGRATED_LEGACY_WEB_SEARCH_PROVIDER_IDS.has(providerId))
     .toSorted((left, right) => left.localeCompare(right));
-  return legacyWebSearchProviderIdsCache;
 }
 
 function getLegacyWebSearchProviderIdSet(): Set<string> {
-  legacyWebSearchProviderIdSetCache ??= new Set(getLegacyWebSearchProviderIds());
-  return legacyWebSearchProviderIdSetCache;
+  return new Set(getLegacyWebSearchProviderIds());
 }
 
 function resolveLegacySearchConfig(raw: unknown): JsonRecord | undefined {

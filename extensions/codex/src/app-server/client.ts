@@ -1,7 +1,11 @@
 import { createInterface, type Interface as ReadlineInterface } from "node:readline";
-import { embeddedAgentLog, OPENCLAW_VERSION } from "openclaw/plugin-sdk/agent-harness";
+import { embeddedAgentLog, OPENCLAW_VERSION } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveCodexAppServerRuntimeOptions, type CodexAppServerStartOptions } from "./config.js";
 import {
+  type CodexAppServerRequestMethod,
+  type CodexAppServerRequestParams,
+  type CodexAppServerRequestResult,
+  type CodexInitializeParams,
   type CodexInitializeResponse,
   isRpcResponse,
   type CodexServerNotification,
@@ -12,9 +16,16 @@ import {
 } from "./protocol.js";
 import { createStdioTransport } from "./transport-stdio.js";
 import { createWebSocketTransport } from "./transport-websocket.js";
-import { closeCodexAppServerTransport, type CodexAppServerTransport } from "./transport.js";
+import {
+  closeCodexAppServerTransport,
+  closeCodexAppServerTransportAndWait,
+  type CodexAppServerTransport,
+} from "./transport.js";
+import { MIN_CODEX_APP_SERVER_VERSION } from "./version.js";
 
-export const MIN_CODEX_APP_SERVER_VERSION = "0.118.0";
+export { MIN_CODEX_APP_SERVER_VERSION } from "./version.js";
+const CODEX_APP_SERVER_PARSE_LOG_MAX = 500;
+const CODEX_DYNAMIC_TOOL_SERVER_REQUEST_TIMEOUT_MS = 30_000;
 
 type PendingRequest = {
   method: string;
@@ -74,6 +85,13 @@ export class CodexAppServerClient {
         ),
       );
     });
+    // Guard against unhandled EPIPE / write-after-close errors on the stdin
+    // stream. When the child process terminates abruptly the pipe can break
+    // before the "exit" event fires, so a pending writeMessage() produces an
+    // asynchronous error on stdin that would otherwise crash the gateway.
+    child.stdin.on?.("error", (error) =>
+      this.closeWithError(error instanceof Error ? error : new Error(String(error))),
+    );
   }
 
   static start(options?: Partial<CodexAppServerStartOptions>): CodexAppServerClient {
@@ -83,6 +101,9 @@ export class CodexAppServerClient {
       ...options,
       headers: options?.headers ?? defaults.headers,
     };
+    if (startOptions.transport === "stdio" && startOptions.commandSource === "managed") {
+      throw new Error("Managed Codex app-server start options must be resolved before spawn.");
+    }
     if (startOptions.transport === "websocket") {
       return new CodexAppServerClient(createWebSocketTransport(startOptions));
     }
@@ -99,7 +120,7 @@ export class CodexAppServerClient {
     }
     // The handshake identifies the exact app-server process we will keep using,
     // which matters when callers override the binary or app-server args.
-    const response = await this.request<CodexInitializeResponse>("initialize", {
+    const response = await this.request("initialize", {
       clientInfo: {
         name: "openclaw",
         title: "OpenClaw",
@@ -108,17 +129,28 @@ export class CodexAppServerClient {
       capabilities: {
         experimentalApi: true,
       },
-    });
+    } satisfies CodexInitializeParams);
     assertSupportedCodexAppServerVersion(response);
     this.notify("initialized");
     this.initialized = true;
   }
 
+  request<M extends CodexAppServerRequestMethod>(
+    method: M,
+    params: CodexAppServerRequestParams<M>,
+    options?: { timeoutMs?: number; signal?: AbortSignal },
+  ): Promise<CodexAppServerRequestResult<M>>;
   request<T = JsonValue | undefined>(
     method: string,
-    params?: JsonValue,
-    options: { timeoutMs?: number; signal?: AbortSignal } = {},
+    params?: unknown,
+    options?: { timeoutMs?: number; signal?: AbortSignal },
+  ): Promise<T>;
+  request<T = JsonValue | undefined>(
+    method: string,
+    params?: unknown,
+    options?: { timeoutMs?: number; signal?: AbortSignal },
   ): Promise<T> {
+    options ??= {};
     if (this.closed) {
       return Promise.reject(new Error("codex app-server client is closed"));
     }
@@ -126,7 +158,7 @@ export class CodexAppServerClient {
       return Promise.reject(new Error(`${method} aborted`));
     }
     const id = this.nextId++;
-    const message: RpcRequest = { id, method, params };
+    const message: RpcRequest = { id, method, params: params as JsonValue | undefined };
     return new Promise<T>((resolve, reject) => {
       let timeout: ReturnType<typeof setTimeout> | undefined;
       let cleanupAbort: (() => void) | undefined;
@@ -202,17 +234,31 @@ export class CodexAppServerClient {
   }
 
   close(): void {
-    if (this.closed) {
+    if (!this.markClosed(new Error("codex app-server client is closed"))) {
       return;
     }
-    this.closed = true;
-    this.lines.close();
-    this.rejectPendingRequests(new Error("codex app-server client is closed"));
     closeCodexAppServerTransport(this.child);
   }
 
+  async closeAndWait(options?: {
+    exitTimeoutMs?: number;
+    forceKillDelayMs?: number;
+  }): Promise<void> {
+    this.markClosed(new Error("codex app-server client is closed"));
+    await closeCodexAppServerTransportAndWait(this.child, options);
+  }
+
   private writeMessage(message: RpcRequest | RpcResponse): void {
-    this.child.stdin.write(`${JSON.stringify(message)}\n`);
+    if (this.closed) {
+      return;
+    }
+    const id = "id" in message ? message.id : undefined;
+    const method = "method" in message ? message.method : undefined;
+    this.child.stdin.write(`${JSON.stringify(message)}\n`, (error?: Error | null) => {
+      if (error) {
+        embeddedAgentLog.warn("codex app-server write failed", { error, id, method });
+      }
+    });
   }
 
   private handleLine(line: string): void {
@@ -224,7 +270,10 @@ export class CodexAppServerClient {
     try {
       parsed = JSON.parse(trimmed);
     } catch (error) {
-      embeddedAgentLog.warn("failed to parse codex app-server message", { error });
+      embeddedAgentLog.warn("failed to parse codex app-server message", {
+        error,
+        linePreview: redactCodexAppServerLinePreview(trimmed),
+      });
       return;
     }
     if (!parsed || typeof parsed !== "object") {
@@ -269,12 +318,10 @@ export class CodexAppServerClient {
     request: Required<Pick<RpcRequest, "id" | "method">> & { params?: JsonValue },
   ): Promise<void> {
     try {
-      for (const handler of this.requestHandlers) {
-        const result = await handler(request);
-        if (result !== undefined) {
-          this.writeMessage({ id: request.id, result });
-          return;
-        }
+      const result = await this.runServerRequestHandlers(request);
+      if (result !== undefined) {
+        this.writeMessage({ id: request.id, result });
+        return;
       }
       this.writeMessage({ id: request.id, result: defaultServerRequestResponse(request) });
     } catch (error) {
@@ -287,6 +334,49 @@ export class CodexAppServerClient {
     }
   }
 
+  private async runServerRequestHandlers(
+    request: Required<Pick<RpcRequest, "id" | "method">> & { params?: JsonValue },
+  ): Promise<JsonValue | undefined> {
+    const timeoutResponse = timeoutServerRequestResponse(request);
+    if (!timeoutResponse) {
+      return await this.runServerRequestHandlersWithoutTimeout(request);
+    }
+
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        this.runServerRequestHandlersWithoutTimeout(request),
+        new Promise<JsonValue>((resolve) => {
+          timeout = setTimeout(() => {
+            embeddedAgentLog.warn("codex app-server server request timed out", {
+              id: request.id,
+              method: request.method,
+              timeoutMs: CODEX_DYNAMIC_TOOL_SERVER_REQUEST_TIMEOUT_MS,
+            });
+            resolve(timeoutResponse);
+          }, CODEX_DYNAMIC_TOOL_SERVER_REQUEST_TIMEOUT_MS);
+          timeout.unref?.();
+        }),
+      ]);
+    } finally {
+      if (timeout) {
+        clearTimeout(timeout);
+      }
+    }
+  }
+
+  private async runServerRequestHandlersWithoutTimeout(
+    request: Required<Pick<RpcRequest, "id" | "method">> & { params?: JsonValue },
+  ): Promise<JsonValue | undefined> {
+    for (const handler of this.requestHandlers) {
+      const result = await handler(request);
+      if (result !== undefined) {
+        return result;
+      }
+    }
+    return undefined;
+  }
+
   private handleNotification(notification: CodexServerNotification): void {
     for (const handler of this.notificationHandlers) {
       Promise.resolve(handler(notification)).catch((error: unknown) => {
@@ -296,11 +386,19 @@ export class CodexAppServerClient {
   }
 
   private closeWithError(error: Error): void {
+    if (this.markClosed(error)) {
+      closeCodexAppServerTransport(this.child);
+    }
+  }
+
+  private markClosed(error: Error): boolean {
     if (this.closed) {
-      return;
+      return false;
     }
     this.closed = true;
+    this.lines.close();
     this.rejectPendingRequests(error);
+    return true;
   }
 
   private rejectPendingRequests(error: Error): void {
@@ -357,30 +455,52 @@ export function defaultServerRequestResponse(
   return {};
 }
 
+function timeoutServerRequestResponse(
+  request: Required<Pick<RpcRequest, "id" | "method">> & { params?: JsonValue },
+): JsonValue | undefined {
+  if (request.method !== "item/tool/call") {
+    return undefined;
+  }
+  return {
+    contentItems: [
+      {
+        type: "inputText",
+        text: `OpenClaw dynamic tool call timed out after ${CODEX_DYNAMIC_TOOL_SERVER_REQUEST_TIMEOUT_MS}ms before sending a response to Codex.`,
+      },
+    ],
+    success: false,
+  };
+}
+
 function assertSupportedCodexAppServerVersion(response: CodexInitializeResponse): void {
   const detectedVersion = readCodexVersionFromUserAgent(response.userAgent);
   if (!detectedVersion) {
     throw new Error(
-      `Codex app-server ${MIN_CODEX_APP_SERVER_VERSION} or newer is required, but OpenClaw could not determine the running Codex version. Upgrade Codex CLI and retry.`,
+      `Codex app-server ${MIN_CODEX_APP_SERVER_VERSION} or newer is required, but OpenClaw could not determine the running Codex version. Update the configured Codex app-server binary, or remove custom command overrides to use the managed binary.`,
     );
   }
   if (compareVersions(detectedVersion, MIN_CODEX_APP_SERVER_VERSION) < 0) {
     throw new Error(
-      `Codex app-server ${MIN_CODEX_APP_SERVER_VERSION} or newer is required, but detected ${detectedVersion}. Upgrade Codex CLI and retry.`,
+      `Codex app-server ${MIN_CODEX_APP_SERVER_VERSION} or newer is required, but detected ${detectedVersion}. Update the configured Codex app-server binary, or remove custom command overrides to use the managed binary.`,
     );
   }
 }
 
 export function readCodexVersionFromUserAgent(userAgent: string | undefined): string | undefined {
   // Codex returns `<originator>/<codex-version> ...`; the originator can be
-  // OpenClaw or an env override, so only the slash-delimited version is stable.
-  const match = userAgent?.match(/^[^/\s]+\/(\d+\.\d+\.\d+(?:[-+][^\s()]*)?)/);
+  // OpenClaw, Codex Desktop, or an env override, so only the slash-delimited
+  // version in the leading product field is stable.
+  const match = userAgent?.match(
+    /^[^/]+\/(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?)(?:[\s(]|$)/,
+  );
   return match?.[1];
 }
 
 function compareVersions(left: string, right: string): number {
-  const leftParts = numericVersionParts(left);
-  const rightParts = numericVersionParts(right);
+  const leftVersion = parseVersionForComparison(left);
+  const rightVersion = parseVersionForComparison(right);
+  const leftParts = leftVersion.parts;
+  const rightParts = rightVersion.parts;
   for (let index = 0; index < Math.max(leftParts.length, rightParts.length); index += 1) {
     const leftPart = leftParts[index] ?? 0;
     const rightPart = rightParts[index] ?? 0;
@@ -388,21 +508,53 @@ function compareVersions(left: string, right: string): number {
       return leftPart < rightPart ? -1 : 1;
     }
   }
+  if (leftVersion.unstableSuffix && !rightVersion.unstableSuffix) {
+    return -1;
+  }
+  if (!leftVersion.unstableSuffix && rightVersion.unstableSuffix) {
+    return 1;
+  }
   return 0;
 }
 
-function numericVersionParts(version: string): number[] {
-  // Pre-release/build tags do not affect our minimum gate; 0.118.0-dev should
-  // satisfy the same protocol floor as 0.118.0.
-  return version
-    .split(/[+-]/, 1)[0]
-    .split(".")
-    .map((part) => Number.parseInt(part, 10))
-    .map((part) => (Number.isFinite(part) ? part : 0));
+function parseVersionForComparison(version: string): { parts: number[]; unstableSuffix: boolean } {
+  // Same-version prerelease or build-suffixed versions do not satisfy a stable
+  // protocol floor because important app-server contract changes can land
+  // between alpha cuts and custom builds.
+  const hasBuildMetadata = version.includes("+");
+  const [withoutBuild = version] = version.split("+", 1);
+  const prereleaseIndex = withoutBuild.indexOf("-");
+  const numeric = prereleaseIndex >= 0 ? withoutBuild.slice(0, prereleaseIndex) : withoutBuild;
+  return {
+    parts: numeric
+      .split(".")
+      .map((part) => Number.parseInt(part, 10))
+      .map((part) => (Number.isFinite(part) ? part : 0)),
+    unstableSuffix: prereleaseIndex >= 0 || hasBuildMetadata,
+  };
 }
 
+function redactCodexAppServerLinePreview(value: string): string {
+  const compact = value.replace(/\s+/g, " ").trim();
+  const redacted = compact
+    .replace(/(Bearer\s+)[A-Za-z0-9._~+/-]+/gi, "$1<redacted>")
+    .replace(
+      /("(?:api_?key|authorization|token|access_token|refresh_token)"\s*:\s*")([^"]+)(")/gi,
+      "$1<redacted>$3",
+    );
+  return redacted.length > CODEX_APP_SERVER_PARSE_LOG_MAX
+    ? `${redacted.slice(0, CODEX_APP_SERVER_PARSE_LOG_MAX)}...`
+    : redacted;
+}
+
+const CODEX_APP_SERVER_APPROVAL_REQUEST_METHODS = new Set([
+  "item/commandExecution/requestApproval",
+  "item/fileChange/requestApproval",
+  "item/permissions/requestApproval",
+]);
+
 export function isCodexAppServerApprovalRequest(method: string): boolean {
-  return method.includes("requestApproval") || method.includes("Approval");
+  return CODEX_APP_SERVER_APPROVAL_REQUEST_METHODS.has(method);
 }
 
 function formatExitValue(value: unknown): string {
@@ -417,4 +569,7 @@ function formatExitValue(value: unknown): string {
 
 export const __testing = {
   closeCodexAppServerTransport,
+  closeCodexAppServerTransportAndWait,
+  CODEX_DYNAMIC_TOOL_SERVER_REQUEST_TIMEOUT_MS,
+  redactCodexAppServerLinePreview,
 } as const;

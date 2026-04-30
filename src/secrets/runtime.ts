@@ -8,6 +8,7 @@ import {
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   loadAuthProfileStoreForSecretsRuntime,
+  loadAuthProfileStoreWithoutExternalProfiles,
   replaceRuntimeAuthProfileStoreSnapshots,
 } from "../agents/auth-profiles.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
@@ -17,6 +18,7 @@ import {
   setRuntimeConfigSnapshot,
   type OpenClawConfig,
 } from "../config/config.js";
+import { coerceSecretRef } from "../config/types.secrets.js";
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
 import { resolveUserPath } from "../utils.js";
 import { type SecretResolverWarning } from "./runtime-shared.js";
@@ -138,12 +140,19 @@ async function resolveLoadablePluginOrigins(params: {
     params.config,
     resolveDefaultAgentId(params.config),
   );
-  const { loadPluginManifestRegistry } = await loadRuntimeManifestHelpers();
-  const manifestRegistry = loadPluginManifestRegistry({
+  const { loadPluginManifestRegistryForInstalledIndex, loadPluginRegistrySnapshot } =
+    await loadRuntimeManifestHelpers();
+  const index = loadPluginRegistrySnapshot({
     config: params.config,
     workspaceDir,
-    cache: true,
     env: params.env,
+  });
+  const manifestRegistry = loadPluginManifestRegistryForInstalledIndex({
+    index,
+    config: params.config,
+    workspaceDir,
+    env: params.env,
+    includeDisabled: true,
   });
   return new Map(manifestRegistry.plugins.map((record) => [record.id, record.origin]));
 }
@@ -174,6 +183,142 @@ function hasConfiguredPluginEntries(config: OpenClawConfig): boolean {
   );
 }
 
+function createEmptyRuntimeWebToolsMetadata(): RuntimeWebToolsMetadata {
+  return {
+    search: {
+      providerSource: "none",
+      diagnostics: [],
+    },
+    fetch: {
+      providerSource: "none",
+      diagnostics: [],
+    },
+    diagnostics: [],
+  };
+}
+
+const WEB_FETCH_CREDENTIAL_FIELD_NAMES = new Set(["apikey", "key", "token", "secret", "password"]);
+
+function hasCredentialBearingWebFetchValue(
+  value: unknown,
+  defaults: Parameters<typeof coerceSecretRef>[1],
+  seen = new WeakSet<object>(),
+): boolean {
+  if (coerceSecretRef(value, defaults)) {
+    return true;
+  }
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  if (seen.has(value)) {
+    return false;
+  }
+  seen.add(value);
+  if (Array.isArray(value)) {
+    return value.some((entry) => hasCredentialBearingWebFetchValue(entry, defaults, seen));
+  }
+  return Object.entries(value as Record<string, unknown>).some(([rawKey, entry]) => {
+    const key = rawKey.toLowerCase();
+    if (WEB_FETCH_CREDENTIAL_FIELD_NAMES.has(key) && entry != null && entry !== "") {
+      return true;
+    }
+    return hasCredentialBearingWebFetchValue(entry, defaults, seen);
+  });
+}
+
+function hasActiveRuntimeWebFetchProviderSurface(
+  fetch: unknown,
+  defaults: Parameters<typeof coerceSecretRef>[1],
+): boolean {
+  if (!fetch || typeof fetch !== "object" || Array.isArray(fetch)) {
+    return false;
+  }
+  const fetchConfig = fetch as Record<string, unknown>;
+  if (fetchConfig.enabled === false) {
+    return false;
+  }
+  if (typeof fetchConfig.provider === "string" && fetchConfig.provider.trim()) {
+    return true;
+  }
+  return hasCredentialBearingWebFetchValue(fetchConfig, defaults);
+}
+
+function hasRuntimeWebToolConfigSurface(config: OpenClawConfig): boolean {
+  const web = config.tools?.web;
+  const defaults = config.secrets?.defaults;
+  const fetchExplicitlyDisabled =
+    web &&
+    typeof web === "object" &&
+    !Array.isArray(web) &&
+    typeof (web as Record<string, unknown>).fetch === "object" &&
+    (web as { fetch?: { enabled?: unknown } }).fetch?.enabled === false;
+  if (web && typeof web === "object" && !Array.isArray(web)) {
+    const webRecord = web as Record<string, unknown>;
+    if ("search" in webRecord || "x_search" in webRecord) {
+      return true;
+    }
+    if (
+      "fetch" in webRecord &&
+      hasActiveRuntimeWebFetchProviderSurface(webRecord.fetch, defaults)
+    ) {
+      return true;
+    }
+  }
+  const entries = config.plugins?.entries;
+  if (!entries || typeof entries !== "object" || Array.isArray(entries)) {
+    return false;
+  }
+  return Object.values(entries).some((entry) => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      return false;
+    }
+    const pluginConfig = (entry as { config?: unknown }).config;
+    return (
+      !!pluginConfig &&
+      typeof pluginConfig === "object" &&
+      !Array.isArray(pluginConfig) &&
+      ("webSearch" in pluginConfig || (!fetchExplicitlyDisabled && "webFetch" in pluginConfig))
+    );
+  });
+}
+
+function hasSecretRefCandidate(
+  value: unknown,
+  defaults: Parameters<typeof coerceSecretRef>[1],
+  seen = new WeakSet<object>(),
+): boolean {
+  if (coerceSecretRef(value, defaults)) {
+    return true;
+  }
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  if (seen.has(value)) {
+    return false;
+  }
+  seen.add(value);
+  if (Array.isArray(value)) {
+    return value.some((entry) => hasSecretRefCandidate(entry, defaults, seen));
+  }
+  return Object.values(value as Record<string, unknown>).some((entry) =>
+    hasSecretRefCandidate(entry, defaults, seen),
+  );
+}
+
+function canUseSecretsRuntimeFastPath(params: {
+  sourceConfig: OpenClawConfig;
+  authStores: Array<{ agentDir: string; store: AuthProfileStore }>;
+}): boolean {
+  if (hasRuntimeWebToolConfigSurface(params.sourceConfig)) {
+    return false;
+  }
+  const defaults = params.sourceConfig.secrets?.defaults;
+  if (hasSecretRefCandidate(params.sourceConfig, defaults)) {
+    return false;
+  }
+  return !params.authStores.some((entry) => hasSecretRefCandidate(entry.store, defaults));
+}
+
 export async function prepareSecretsRuntimeSnapshot(params: {
   config: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
@@ -183,6 +328,40 @@ export async function prepareSecretsRuntimeSnapshot(params: {
   /** Test override for discovered loadable plugins and their origins. */
   loadablePluginOrigins?: ReadonlyMap<string, PluginOrigin>;
 }): Promise<PreparedSecretsRuntimeSnapshot> {
+  const runtimeEnv = mergeSecretsRuntimeEnv(params.env);
+  const sourceConfig = structuredClone(params.config);
+  const resolvedConfig = structuredClone(params.config);
+  const includeAuthStoreRefs = params.includeAuthStoreRefs ?? true;
+  let authStores: Array<{ agentDir: string; store: AuthProfileStore }> = [];
+  const fastPathLoadAuthStore = params.loadAuthStore ?? loadAuthProfileStoreWithoutExternalProfiles;
+  const candidateDirs = params.agentDirs?.length
+    ? [...new Set(params.agentDirs.map((entry) => resolveUserPath(entry, runtimeEnv)))]
+    : collectCandidateAgentDirs(resolvedConfig, runtimeEnv);
+  if (includeAuthStoreRefs) {
+    for (const agentDir of candidateDirs) {
+      authStores.push({
+        agentDir,
+        store: structuredClone(fastPathLoadAuthStore(agentDir)),
+      });
+    }
+  }
+  if (canUseSecretsRuntimeFastPath({ sourceConfig, authStores })) {
+    const snapshot = {
+      sourceConfig,
+      config: resolvedConfig,
+      authStores,
+      warnings: [],
+      webTools: createEmptyRuntimeWebToolsMetadata(),
+    };
+    preparedSnapshotRefreshContext.set(snapshot, {
+      env: runtimeEnv,
+      explicitAgentDirs: params.agentDirs?.length ? [...candidateDirs] : null,
+      loadAuthStore: fastPathLoadAuthStore,
+      loadablePluginOrigins: params.loadablePluginOrigins ?? new Map<string, PluginOrigin>(),
+    });
+    return snapshot;
+  }
+
   const {
     applyResolvedAssignments,
     collectAuthStoreAssignments,
@@ -191,9 +370,6 @@ export async function prepareSecretsRuntimeSnapshot(params: {
     resolveRuntimeWebTools,
     resolveSecretRefValues,
   } = await loadRuntimePrepareHelpers();
-  const runtimeEnv = mergeSecretsRuntimeEnv(params.env);
-  const sourceConfig = structuredClone(params.config);
-  const resolvedConfig = structuredClone(params.config);
   const loadablePluginOrigins =
     params.loadablePluginOrigins ??
     (hasConfiguredPluginEntries(sourceConfig)
@@ -210,21 +386,20 @@ export async function prepareSecretsRuntimeSnapshot(params: {
     loadablePluginOrigins,
   });
 
-  const includeAuthStoreRefs = params.includeAuthStoreRefs ?? true;
-  const authStores: Array<{ agentDir: string; store: AuthProfileStore }> = [];
-  const loadAuthStore = params.loadAuthStore ?? loadAuthProfileStoreForSecretsRuntime;
-  const candidateDirs = params.agentDirs?.length
-    ? [...new Set(params.agentDirs.map((entry) => resolveUserPath(entry, runtimeEnv)))]
-    : collectCandidateAgentDirs(resolvedConfig, runtimeEnv);
   if (includeAuthStoreRefs) {
-    for (const agentDir of candidateDirs) {
-      const store = structuredClone(loadAuthStore(agentDir));
-      collectAuthStoreAssignments({
-        store,
-        context,
+    const loadAuthStore = params.loadAuthStore ?? loadAuthProfileStoreForSecretsRuntime;
+    if (!params.loadAuthStore) {
+      authStores = candidateDirs.map((agentDir) => ({
         agentDir,
+        store: structuredClone(loadAuthStore(agentDir)),
+      }));
+    }
+    for (const entry of authStores) {
+      collectAuthStoreAssignments({
+        store: entry.store,
+        context,
+        agentDir: entry.agentDir,
       });
-      authStores.push({ agentDir, store });
     }
   }
 
@@ -255,7 +430,7 @@ export async function prepareSecretsRuntimeSnapshot(params: {
   preparedSnapshotRefreshContext.set(snapshot, {
     env: runtimeEnv,
     explicitAgentDirs: params.agentDirs?.length ? [...candidateDirs] : null,
-    loadAuthStore,
+    loadAuthStore: params.loadAuthStore ?? loadAuthProfileStoreForSecretsRuntime,
     loadablePluginOrigins,
   });
   return snapshot;

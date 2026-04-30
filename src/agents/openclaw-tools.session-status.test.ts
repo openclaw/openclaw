@@ -124,7 +124,7 @@ async function createConfigModuleMock() {
   const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
   return {
     ...actual,
-    loadConfig: () => mockConfig,
+    getRuntimeConfig: () => mockConfig,
   };
 }
 
@@ -141,6 +141,7 @@ function createModelCatalogModuleMock() {
         provider: "openai",
         id: "gpt-5.4",
         name: "GPT-5.4",
+        reasoning: true,
         contextWindow: 400000,
       },
     ],
@@ -182,6 +183,7 @@ function createCommandsStatusRuntimeModuleMock() {
       statusChannel: string;
       provider?: string;
       model: string;
+      workspaceDir?: string;
       primaryModelLabelOverride?: string;
       includeTranscriptUsage?: boolean;
       taskLineOverride?: string;
@@ -224,6 +226,7 @@ function createCommandsStatusRuntimeModuleMock() {
         sessionEntry: params.sessionEntry,
         modelAuth,
         includeTranscriptUsage: params.includeTranscriptUsage,
+        workspaceDir: params.workspaceDir,
       });
       return ["OpenClaw", `🧠 Model: ${primary}`, params.taskLineOverride]
         .filter(Boolean)
@@ -426,6 +429,28 @@ describe("session_status tool", () => {
     );
   });
 
+  it("passes spawned workspace to session_status auth labels", async () => {
+    resetSessionStore({
+      "agent:main:spawned": {
+        sessionId: "spawned-status",
+        updatedAt: 10,
+        spawnedWorkspaceDir: "/tmp/openclaw-spawned-workspace",
+        providerOverride: "anthropic",
+        modelOverride: "claude-opus-4-6",
+      },
+    });
+
+    const tool = getSessionStatusTool("agent:main:spawned");
+
+    await tool.execute("call-spawned-workspace-status", {});
+
+    expect(buildStatusMessageMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceDir: "/tmp/openclaw-spawned-workspace",
+      }),
+    );
+  });
+
   it("errors for unknown session keys", async () => {
     resetSessionStore({
       main: { sessionId: "s1", updatedAt: 10 },
@@ -465,6 +490,71 @@ describe("session_status tool", () => {
     const details = result.details as { ok?: boolean; sessionKey?: string };
     expect(details.ok).toBe(true);
     expect(details.sessionKey).toBe("main");
+  });
+
+  it("treats the TUI client label as the current requester session", async () => {
+    resetSessionStore({
+      "agent:main:main": {
+        sessionId: "s-main",
+        updatedAt: 10,
+      },
+    });
+
+    const tool = getSessionStatusTool("agent:main:main");
+
+    const result = await tool.execute("call-tui-label", { sessionKey: "openclaw-tui" });
+    const details = result.details as { ok?: boolean; sessionKey?: string };
+    expect(details.ok).toBe(true);
+    expect(details.sessionKey).toBe("agent:main:main");
+  });
+
+  it("falls back from implicit default-account direct policy keys to persisted direct sessions", async () => {
+    resetSessionStore({
+      "agent:main:telegram:direct:1053274893": {
+        sessionId: "s-direct",
+        updatedAt: 10,
+      },
+    });
+
+    const tool = getSessionStatusTool("agent:main:telegram:default:direct:1053274893");
+
+    const result = await tool.execute("call-default-direct", {});
+    const details = result.details as { ok?: boolean; sessionKey?: string };
+    expect(details.ok).toBe(true);
+    expect(details.sessionKey).toBe("agent:main:telegram:direct:1053274893");
+  });
+
+  it("falls back from implicit default-account direct policy keys to main sessions", async () => {
+    resetSessionStore({
+      "agent:main:main": {
+        sessionId: "s-main",
+        updatedAt: 10,
+      },
+    });
+
+    const tool = getSessionStatusTool("agent:main:telegram:default:direct:1053274893");
+
+    const result = await tool.execute("call-default-direct-main", {});
+    const details = result.details as { ok?: boolean; sessionKey?: string };
+    expect(details.ok).toBe(true);
+    expect(details.sessionKey).toBe("agent:main:main");
+  });
+
+  it("keeps explicit default-account direct session lookups strict", async () => {
+    resetSessionStore({
+      "agent:main:main": {
+        sessionId: "s-main",
+        updatedAt: 10,
+      },
+    });
+
+    const tool = getSessionStatusTool("agent:main:telegram:default:direct:1053274893");
+
+    await expect(
+      tool.execute("call-default-direct-explicit", {
+        sessionKey: "agent:main:telegram:default:direct:1053274893",
+      }),
+    ).rejects.toThrow("Unknown sessionKey: agent:main:telegram:default:direct:1053274893");
   });
 
   it("prefers a literal current session key in session_status", async () => {
@@ -891,12 +981,110 @@ describe("session_status tool", () => {
     }
   });
 
+  it("uses the implicit model thinking default when no config default is set", async () => {
+    resetSessionStore({
+      "agent:kira:main": {
+        sessionId: "agent-thinking-implicit",
+        updatedAt: 10,
+      },
+    });
+    const savedConfig = mockConfig;
+    try {
+      mockConfig = {
+        session: { mainKey: "main", scope: "per-sender" },
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-5.4" },
+            models: {},
+          },
+          list: [
+            {
+              id: "kira",
+              model: "openai/gpt-5.4",
+            },
+          ],
+        },
+        tools: {
+          agentToAgent: { enabled: false },
+        },
+      };
+
+      const tool = getSessionStatusTool("agent:kira:main");
+
+      await tool.execute("call-agent-thinking-implicit", {});
+
+      expect(buildStatusMessageMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agentId: "kira",
+          agent: expect.objectContaining({
+            thinkingDefault: "medium",
+          }),
+        }),
+      );
+    } finally {
+      mockConfig = savedConfig;
+    }
+  });
+
+  it("hydrates runtime catalog metadata for status when configured model metadata omits reasoning", async () => {
+    resetSessionStore({
+      "agent:kira:main": {
+        sessionId: "agent-thinking-runtime-hydration",
+        updatedAt: 10,
+      },
+    });
+    const savedConfig = mockConfig;
+    try {
+      mockConfig = {
+        session: { mainKey: "main", scope: "per-sender" },
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-5.4" },
+            models: {},
+          },
+          list: [
+            {
+              id: "kira",
+              model: "openai/gpt-5.4",
+            },
+          ],
+        },
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              models: [{ id: "gpt-5.4", name: "GPT-5.4" }],
+            },
+          },
+        },
+        tools: {
+          agentToAgent: { enabled: false },
+        },
+      };
+
+      const tool = getSessionStatusTool("agent:kira:main");
+
+      await tool.execute("call-agent-thinking-runtime-hydration", {});
+
+      expect(buildStatusMessageMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agentId: "kira",
+          agent: expect.objectContaining({
+            thinkingDefault: "medium",
+          }),
+        }),
+      );
+    } finally {
+      mockConfig = savedConfig;
+    }
+  });
+
   it("falls back to origin.provider when resolving queue settings", async () => {
     resetSessionStore({
       main: {
         sessionId: "status-origin-provider",
         updatedAt: 10,
-        origin: { provider: "discord" },
+        origin: { provider: "quietchat" },
       },
     });
 
@@ -906,9 +1094,9 @@ describe("session_status tool", () => {
 
     expect(resolveQueueSettingsMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        channel: "discord",
+        channel: "quietchat",
         sessionEntry: expect.objectContaining({
-          origin: { provider: "discord" },
+          origin: { provider: "quietchat" },
         }),
       }),
     );

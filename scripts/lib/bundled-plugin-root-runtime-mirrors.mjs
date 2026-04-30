@@ -2,11 +2,6 @@ import fs from "node:fs";
 import path from "node:path";
 
 const JS_EXTENSIONS = new Set([".cjs", ".js", ".mjs"]);
-const CURATED_ROOT_RUNTIME_MIRRORS = new Set([
-  "@matrix-org/matrix-sdk-crypto-nodejs",
-  "@matrix-org/matrix-sdk-crypto-wasm",
-]);
-
 export function collectRuntimeDependencySpecs(packageJson = {}) {
   return new Map(
     [
@@ -151,22 +146,18 @@ function extractModuleSpecifiers(source) {
   return specifiers;
 }
 
+function isPluginOwnedDistImporter(relativePath, source, pluginIds) {
+  return pluginIds.some(
+    (pluginId) =>
+      relativePath.startsWith(`extensions/${pluginId}/`) ||
+      source.includes(`//#region extensions/${pluginId}/`),
+  );
+}
+
 export function collectRootDistBundledRuntimeMirrors(params) {
   const distDir = params.distDir;
   const bundledSpecs = params.bundledRuntimeDependencySpecs;
   const mirrors = new Map();
-
-  for (const dependencyName of CURATED_ROOT_RUNTIME_MIRRORS) {
-    const bundledSpec = bundledSpecs.get(dependencyName);
-    if (!bundledSpec) {
-      continue;
-    }
-    mirrors.set(dependencyName, {
-      importers: new Set(["<curated root runtime surface>"]),
-      pluginIds: bundledSpec.pluginIds,
-      spec: bundledSpec.spec,
-    });
-  }
 
   for (const filePath of walkJavaScriptFiles(distDir)) {
     const source = fs.readFileSync(filePath, "utf8");
@@ -177,6 +168,9 @@ export function collectRootDistBundledRuntimeMirrors(params) {
         continue;
       }
       const bundledSpec = bundledSpecs.get(dependencyName);
+      if (isPluginOwnedDistImporter(relativePath, source, bundledSpec.pluginIds)) {
+        continue;
+      }
       const existing = mirrors.get(dependencyName);
       if (existing) {
         existing.importers.add(relativePath);
@@ -194,8 +188,15 @@ export function collectRootDistBundledRuntimeMirrors(params) {
 }
 
 export function collectBundledPluginRootRuntimeMirrorErrors(params) {
-  const rootRuntimeDeps = collectRuntimeDependencySpecs(params.rootPackageJson);
   const errors = [];
+  const declaredRootRuntimeDeps = collectRuntimeDependencySpecs(params.rootPackageJson);
+  const declaredMirrorDeps =
+    params.rootPackageJson?.openclaw?.bundle?.mirroredRootRuntimeDependencies ?? [];
+  const declaredMirrorDepNames = new Set(
+    Array.isArray(declaredMirrorDeps)
+      ? declaredMirrorDeps.filter((dependencyName) => typeof dependencyName === "string")
+      : [],
+  );
 
   for (const [dependencyName, record] of params.bundledRuntimeDependencySpecs) {
     for (const conflict of record.conflicts) {
@@ -205,25 +206,50 @@ export function collectBundledPluginRootRuntimeMirrorErrors(params) {
     }
   }
 
-  for (const [dependencyName, mirror] of params.requiredRootMirrors) {
-    const rootSpec = rootRuntimeDeps.get(dependencyName);
-    const importers = [...mirror.importers].toSorted((left, right) => left.localeCompare(right));
-    const importerLabel = importers.join(", ");
-    const pluginLabel = mirror.pluginIds
+  for (const [dependencyName, record] of params.requiredRootMirrors) {
+    if (declaredRootRuntimeDeps.has(dependencyName)) {
+      if (!declaredMirrorDepNames.has(dependencyName)) {
+        const importerList = Array.from(record.importers)
+          .toSorted((left, right) => left.localeCompare(right))
+          .join(", ");
+        errors.push(
+          `installed package root mirror '${dependencyName}' for dist importers: ${importerList} is missing from package.json openclaw.bundle.mirroredRootRuntimeDependencies. Add it there so packaged runtime installs the mirrored dependency, or keep imports under dist/extensions/${record.pluginIds[0]}/.`,
+        );
+      }
+      continue;
+    }
+    const importerList = Array.from(record.importers)
       .toSorted((left, right) => left.localeCompare(right))
       .join(", ");
-    if (typeof rootSpec !== "string" || rootSpec.length === 0) {
+    errors.push(
+      `installed package root is missing mirrored bundled runtime dependency '${dependencyName}' for dist importers: ${importerList}. Add it to package.json dependencies/optionalDependencies or keep imports under dist/extensions/${record.pluginIds[0]}/.`,
+    );
+  }
+
+  return errors.toSorted((left, right) => left.localeCompare(right));
+}
+
+export function collectDeclaredRootRuntimeDependencyMetadataErrors(rootPackageJson) {
+  const declaredRootRuntimeDeps = collectRuntimeDependencySpecs(rootPackageJson);
+  const declaredMirrorDeps =
+    rootPackageJson?.openclaw?.bundle?.mirroredRootRuntimeDependencies ?? [];
+  if (!Array.isArray(declaredMirrorDeps)) {
+    return ["package.json openclaw.bundle.mirroredRootRuntimeDependencies must be an array."];
+  }
+
+  const errors = [];
+  for (const dependencyName of declaredMirrorDeps) {
+    if (typeof dependencyName !== "string" || dependencyName.trim().length === 0) {
       errors.push(
-        `root dist imports bundled plugin runtime dependency '${dependencyName}' from ${importerLabel}; mirror '${dependencyName}: ${mirror.spec}' in root package.json (declared by ${pluginLabel}).`,
+        "package.json openclaw.bundle.mirroredRootRuntimeDependencies entries must be non-empty strings.",
       );
       continue;
     }
-    if (rootSpec !== mirror.spec) {
+    if (!declaredRootRuntimeDeps.has(dependencyName)) {
       errors.push(
-        `root dist imports bundled plugin runtime dependency '${dependencyName}' from ${importerLabel}; root package.json has '${rootSpec}' but plugin manifest declares '${mirror.spec}' (${pluginLabel}).`,
+        `package.json openclaw.bundle.mirroredRootRuntimeDependencies declares '${dependencyName}' but package.json dependencies/optionalDependencies do not include it.`,
       );
     }
   }
-
-  return errors;
+  return errors.toSorted((left, right) => left.localeCompare(right));
 }

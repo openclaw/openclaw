@@ -95,6 +95,40 @@ describe("media-generation runtime shared candidates", () => {
     ]);
   });
 
+  it("orders auto-detected provider defaults by canonical aliases", () => {
+    const candidates = resolveCapabilityModelCandidates({
+      cfg: {
+        agents: {
+          defaults: {
+            model: {
+              primary: "openai-codex/gpt-5.5",
+            },
+          },
+        },
+      } as OpenClawConfig,
+      modelConfig: undefined,
+      parseModelRef,
+      listProviders: () => [
+        {
+          id: "fal",
+          defaultModel: "fal-ai/flux/dev",
+          isConfigured: () => true,
+        },
+        {
+          id: "openai",
+          aliases: ["openai-codex"],
+          defaultModel: "gpt-image-2",
+          isConfigured: () => true,
+        },
+      ],
+    });
+
+    expect(candidates).toEqual([
+      { provider: "openai", model: "gpt-image-2" },
+      { provider: "fal", model: "fal-ai/flux/dev" },
+    ]);
+  });
+
   it("disables implicit provider expansion when mediaGenerationAutoProviderFallback=false", () => {
     const candidates = resolveCapabilityModelCandidates({
       cfg: {
@@ -118,6 +152,33 @@ describe("media-generation runtime shared candidates", () => {
     });
 
     expect(candidates).toEqual([{ provider: "google", model: "gemini-3.1-flash-image-preview" }]);
+  });
+
+  it("treats an explicit model override as exact-only", () => {
+    const candidates = resolveCapabilityModelCandidates({
+      cfg: {
+        agents: {
+          defaults: {
+            mediaGenerationAutoProviderFallback: false,
+          },
+        },
+      } as OpenClawConfig,
+      modelConfig: {
+        primary: "google/gemini-3.1-flash-image-preview",
+        fallbacks: ["fal/fal-ai/flux/dev"],
+      },
+      modelOverride: "openai/gpt-image-2",
+      parseModelRef,
+      listProviders: () => [
+        {
+          id: "google",
+          defaultModel: "gemini-3.1-flash-image-preview",
+          isConfigured: () => true,
+        },
+      ],
+    });
+
+    expect(candidates).toEqual([{ provider: "openai", model: "gpt-image-2" }]);
   });
 });
 

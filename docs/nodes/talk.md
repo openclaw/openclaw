@@ -1,12 +1,10 @@
 ---
-summary: "Talk mode: continuous speech conversations with ElevenLabs TTS"
+summary: "Talk mode: continuous speech conversations with configured TTS providers"
 read_when:
   - Implementing Talk mode on macOS/iOS/Android
   - Changing voice/TTS/interrupt behavior
-title: "Talk Mode"
+title: "Talk mode"
 ---
-
-# Talk Mode
 
 Talk mode is a continuous voice conversation loop:
 
@@ -52,10 +50,20 @@ Supported keys:
 ```json5
 {
   talk: {
-    voiceId: "elevenlabs_voice_id",
-    modelId: "eleven_v3",
-    outputFormat: "mp3_44100_128",
-    apiKey: "elevenlabs_api_key",
+    provider: "elevenlabs",
+    providers: {
+      elevenlabs: {
+        voiceId: "elevenlabs_voice_id",
+        modelId: "eleven_v3",
+        outputFormat: "mp3_44100_128",
+        apiKey: "elevenlabs_api_key",
+      },
+      mlx: {
+        modelId: "mlx-community/Soprano-80M-bf16",
+      },
+      system: {},
+    },
+    speechLocale: "ru-RU",
     silenceTimeoutMs: 1500,
     interruptOnSpeech: true,
   },
@@ -66,9 +74,12 @@ Defaults:
 
 - `interruptOnSpeech`: true
 - `silenceTimeoutMs`: when unset, Talk keeps the platform default pause window before sending the transcript (`700 ms on macOS and Android, 900 ms on iOS`)
-- `voiceId`: falls back to `ELEVENLABS_VOICE_ID` / `SAG_VOICE_ID` (or first ElevenLabs voice when API key is available)
-- `modelId`: defaults to `eleven_v3` when unset
-- `apiKey`: falls back to `ELEVENLABS_API_KEY` (or gateway shell profile if available)
+- `provider`: selects the active Talk provider. Use `elevenlabs`, `mlx`, or `system` for the macOS-local playback paths.
+- `providers.<provider>.voiceId`: falls back to `ELEVENLABS_VOICE_ID` / `SAG_VOICE_ID` for ElevenLabs (or first ElevenLabs voice when API key is available).
+- `providers.elevenlabs.modelId`: defaults to `eleven_v3` when unset.
+- `providers.mlx.modelId`: defaults to `mlx-community/Soprano-80M-bf16` when unset.
+- `providers.elevenlabs.apiKey`: falls back to `ELEVENLABS_API_KEY` (or gateway shell profile if available).
+- `speechLocale`: optional BCP 47 locale id for on-device Talk speech recognition on iOS/macOS. Leave unset to use the device default.
 - `outputFormat`: defaults to `pcm_44100` on macOS/iOS and `pcm_24000` on Android (set `mp3_*` to force MP3 streaming)
 
 ## macOS UI
@@ -82,11 +93,25 @@ Defaults:
   - Click cloud: stop speaking
   - Click X: exit Talk mode
 
+## Android UI
+
+- Voice tab toggle: **Talk**
+- Manual **Mic** and **Talk** are mutually exclusive runtime capture modes.
+- Manual Mic stops when the app leaves the foreground or the user leaves the Voice tab.
+- Talk Mode keeps running until toggled off or the Android node disconnects, and uses Android's microphone foreground-service type while active.
+
 ## Notes
 
 - Requires Speech + Microphone permissions.
 - Uses `chat.send` against session key `main`.
 - The gateway resolves Talk playback through `talk.speak` using the active Talk provider. Android falls back to local system TTS only when that RPC is unavailable.
+- macOS local MLX playback uses the bundled `openclaw-mlx-tts` helper when present, or an executable on `PATH`. Set `OPENCLAW_MLX_TTS_BIN` to point at a custom helper binary during development.
 - `stability` for `eleven_v3` is validated to `0.0`, `0.5`, or `1.0`; other models accept `0..1`.
 - `latency_tier` is validated to `0..4` when set.
 - Android supports `pcm_16000`, `pcm_22050`, `pcm_24000`, and `pcm_44100` output formats for low-latency AudioTrack streaming.
+
+## Related
+
+- [Voice wake](/nodes/voicewake)
+- [Audio and voice notes](/nodes/audio)
+- [Media understanding](/nodes/media-understanding)

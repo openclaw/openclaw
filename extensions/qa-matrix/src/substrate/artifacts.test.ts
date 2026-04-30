@@ -15,8 +15,13 @@ describe("matrix observed event artifacts", () => {
             type: "m.room.message",
             body: "secret",
             formattedBody: "<p>secret</p>",
-            msgtype: "m.text",
+            msgtype: "m.image",
             originServerTs: 1_700_000_000_000,
+            attachment: {
+              kind: "image",
+              caption: "secret",
+              filename: "qa-lighthouse.png",
+            },
             relatesTo: {
               relType: "m.thread",
               eventId: "$root",
@@ -33,8 +38,12 @@ describe("matrix observed event artifacts", () => {
         eventId: "$event",
         sender: "@sut:matrix-qa.test",
         type: "m.room.message",
-        msgtype: "m.text",
+        msgtype: "m.image",
         originServerTs: 1_700_000_000_000,
+        attachment: {
+          kind: "image",
+          filename: "qa-lighthouse.png",
+        },
         relatesTo: {
           relType: "m.thread",
           eventId: "$root",
@@ -85,6 +94,58 @@ describe("matrix observed event artifacts", () => {
         reaction: {
           eventId: "$reply",
           key: "👍",
+        },
+      },
+    ]);
+  });
+
+  it("keeps approval summaries in redacted Matrix observed-event artifacts", () => {
+    expect(
+      buildMatrixQaObservedEventsArtifact({
+        includeContent: false,
+        observedEvents: [
+          {
+            kind: "message",
+            roomId: "!room:matrix-qa.test",
+            eventId: "$approval",
+            sender: "@sut:matrix-qa.test",
+            type: "m.room.message",
+            body: "secret command body",
+            approval: {
+              id: "approval-1",
+              kind: "exec",
+              state: "pending",
+              type: "approval.request",
+              version: 1,
+              allowedDecisions: ["allow-once", "deny"],
+              hasCommandText: true,
+              commandTextPreview: "printf MATRIX_QA",
+            },
+          },
+        ],
+      }),
+    ).toEqual([
+      {
+        kind: "message",
+        roomId: "!room:matrix-qa.test",
+        eventId: "$approval",
+        sender: "@sut:matrix-qa.test",
+        type: "m.room.message",
+        originServerTs: undefined,
+        msgtype: undefined,
+        membership: undefined,
+        relatesTo: undefined,
+        mentions: undefined,
+        reaction: undefined,
+        approval: {
+          id: "approval-1",
+          kind: "exec",
+          state: "pending",
+          type: "approval.request",
+          version: 1,
+          allowedDecisions: ["allow-once", "deny"],
+          hasCommandText: true,
+          commandTextPreview: "printf MATRIX_QA",
         },
       },
     ]);

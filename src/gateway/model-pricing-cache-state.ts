@@ -2,22 +2,26 @@ import { normalizeModelRef } from "../agents/model-selection.js";
 import { normalizeProviderId } from "../agents/provider-id.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 
+export type CachedPricingTier = {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  /** [startTokens, endTokens) — half-open interval on the input token axis. */
+  range: [number, number];
+};
+
 export type CachedModelPricing = {
   input: number;
   output: number;
   cacheRead: number;
   cacheWrite: number;
+  /** Optional tiered pricing tiers sourced from LiteLLM or local config. */
+  tieredPricing?: CachedPricingTier[];
 };
 
 let cachedPricing = new Map<string, CachedModelPricing>();
 let cachedAt = 0;
-
-const WRAPPER_PROVIDERS = new Set([
-  "cloudflare-ai-gateway",
-  "kilocode",
-  "openrouter",
-  "vercel-ai-gateway",
-]);
 
 function modelPricingCacheKey(provider: string, model: string): string {
   const providerId = normalizeProviderId(provider);
@@ -30,16 +34,6 @@ function modelPricingCacheKey(provider: string, model: string): string {
   )
     ? modelId
     : `${providerId}/${modelId}`;
-}
-
-function shouldNormalizeCachedPricingLookup(provider: string): boolean {
-  const normalized = normalizeProviderId(provider);
-  return (
-    normalized === "anthropic" ||
-    normalized === "openrouter" ||
-    normalized === "xai" ||
-    WRAPPER_PROVIDERS.has(normalized)
-  );
 }
 
 export function replaceGatewayModelPricingCache(
@@ -69,11 +63,11 @@ export function getCachedGatewayModelPricing(params: {
   if (direct) {
     return direct;
   }
-  if (!shouldNormalizeCachedPricingLookup(provider)) {
-    return undefined;
-  }
   const normalized = normalizeModelRef(provider, model);
   const normalizedKey = modelPricingCacheKey(normalized.provider, normalized.model);
+  if (normalizedKey === key) {
+    return undefined;
+  }
   return normalizedKey ? cachedPricing.get(normalizedKey) : undefined;
 }
 

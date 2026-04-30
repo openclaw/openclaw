@@ -38,6 +38,7 @@ export type MockSock = {
   sendPresenceUpdate: AnyMockFn;
   sendMessage: AnyMockFn;
   readMessages: AnyMockFn;
+  groupMetadata: AnyMockFn;
   groupFetchAllParticipating: AnyMockFn;
   updateMediaMessage: AnyMockFn;
   logger: Record<string, unknown>;
@@ -110,6 +111,12 @@ function createMockSock(): MockSock {
     sendPresenceUpdate: createResolvedMock(),
     sendMessage: createResolvedMock(),
     readMessages: createResolvedMock(),
+    groupMetadata: vi.fn().mockImplementation(async (jid: string) => ({
+      id: jid,
+      subject: "Test Group",
+      owner: undefined,
+      participants: [],
+    })),
     groupFetchAllParticipating: vi.fn().mockResolvedValue({}),
     updateMediaMessage: vi.fn(),
     logger: {},
@@ -206,6 +213,7 @@ export async function startInboxMonitor(
     ({ monitorWebInbox } = await import("./inbound.js"));
   }
   const listener = await monitorWebInbox({
+    cfg: mockLoadConfig() as never,
     verbose: false,
     onMessage,
     accountId: DEFAULT_ACCOUNT_ID,

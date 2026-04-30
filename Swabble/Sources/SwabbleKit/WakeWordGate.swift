@@ -13,7 +13,9 @@ public struct WakeWordSegment: Sendable, Equatable {
         self.range = range
     }
 
-    public var end: TimeInterval { start + duration }
+    public var end: TimeInterval {
+        self.start + self.duration
+    }
 }
 
 public struct WakeWordGateConfig: Sendable, Equatable {
@@ -24,7 +26,8 @@ public struct WakeWordGateConfig: Sendable, Equatable {
     public init(
         triggers: [String],
         minPostTriggerGap: TimeInterval = 0.45,
-        minCommandLength: Int = 1) {
+        minCommandLength: Int = 1)
+    {
         self.triggers = triggers
         self.minPostTriggerGap = minPostTriggerGap
         self.minCommandLength = minCommandLength
@@ -35,11 +38,18 @@ public struct WakeWordGateMatch: Sendable, Equatable {
     public let triggerEndTime: TimeInterval
     public let postGap: TimeInterval
     public let command: String
+    public let trigger: String?
 
-    public init(triggerEndTime: TimeInterval, postGap: TimeInterval, command: String) {
+    public init(
+        triggerEndTime: TimeInterval,
+        postGap: TimeInterval,
+        command: String,
+        trigger: String? = nil)
+    {
         self.triggerEndTime = triggerEndTime
         self.postGap = postGap
         self.command = command
+        self.trigger = trigger
     }
 }
 
@@ -53,13 +63,17 @@ public enum WakeWordGate {
     }
 
     private struct TriggerTokens {
+        let source: String
         let tokens: [String]
     }
 
     private struct MatchCandidate {
         let index: Int
+        let endIndex: Int
+        let tokenCount: Int
         let triggerEnd: TimeInterval
         let gap: TimeInterval
+        let trigger: String
     }
 
     public static func match(
@@ -67,10 +81,10 @@ public enum WakeWordGate {
         segments: [WakeWordSegment],
         config: WakeWordGateConfig)
     -> WakeWordGateMatch? {
-        let triggerTokens = normalizeTriggers(config.triggers)
+        let triggerTokens = self.normalizeTriggers(config.triggers)
         guard !triggerTokens.isEmpty else { return nil }
 
-        let tokens = normalizeSegments(segments)
+        let tokens = self.normalizeSegments(segments)
         guard !tokens.isEmpty else { return nil }
 
         var best: MatchCandidate?
@@ -87,17 +101,31 @@ public enum WakeWordGate {
                 let gap = nextToken.start - triggerEnd
                 if gap < config.minPostTriggerGap { continue }
 
-                if let best, i <= best.index { continue }
+                let endIndex = i + count - 1
+                if let best {
+                    if endIndex < best.endIndex { continue }
+                    if endIndex == best.endIndex, count <= best.tokenCount { continue }
+                }
 
-                best = MatchCandidate(index: i, triggerEnd: triggerEnd, gap: gap)
+                best = MatchCandidate(
+                    index: i,
+                    endIndex: endIndex,
+                    tokenCount: count,
+                    triggerEnd: triggerEnd,
+                    gap: gap,
+                    trigger: trigger.source)
             }
         }
 
         guard let best else { return nil }
-        let command = commandText(transcript: transcript, segments: segments, triggerEndTime: best.triggerEnd)
+        let command = self.commandText(transcript: transcript, segments: segments, triggerEndTime: best.triggerEnd)
             .trimmingCharacters(in: Self.whitespaceAndPunctuation)
         guard command.count >= config.minCommandLength else { return nil }
-        return WakeWordGateMatch(triggerEndTime: best.triggerEnd, postGap: best.gap, command: command)
+        return WakeWordGateMatch(
+            triggerEndTime: best.triggerEnd,
+            postGap: best.gap,
+            command: command,
+            trigger: best.trigger)
     }
 
     public static func commandText(
@@ -120,7 +148,7 @@ public enum WakeWordGate {
         guard !text.isEmpty else { return false }
         let normalized = text.lowercased()
         for trigger in triggers {
-            let token = trigger.trimmingCharacters(in: whitespaceAndPunctuation).lowercased()
+            let token = trigger.trimmingCharacters(in: self.whitespaceAndPunctuation).lowercased()
             if token.isEmpty { continue }
             if normalized.contains(token) { return true }
         }
@@ -130,11 +158,11 @@ public enum WakeWordGate {
     public static func stripWake(text: String, triggers: [String]) -> String {
         var out = text
         for trigger in triggers {
-            let token = trigger.trimmingCharacters(in: whitespaceAndPunctuation)
+            let token = trigger.trimmingCharacters(in: self.whitespaceAndPunctuation)
             guard !token.isEmpty else { continue }
             out = out.replacingOccurrences(of: token, with: "", options: [.caseInsensitive])
         }
-        return out.trimmingCharacters(in: whitespaceAndPunctuation)
+        return out.trimmingCharacters(in: self.whitespaceAndPunctuation)
     }
 
     private static func normalizeTriggers(_ triggers: [String]) -> [TriggerTokens] {
@@ -142,17 +170,17 @@ public enum WakeWordGate {
         for trigger in triggers {
             let tokens = trigger
                 .split(whereSeparator: { $0.isWhitespace })
-                .map { normalizeToken(String($0)) }
+                .map { self.normalizeToken(String($0)) }
                 .filter { !$0.isEmpty }
             if tokens.isEmpty { continue }
-            output.append(TriggerTokens(tokens: tokens))
+            output.append(TriggerTokens(source: tokens.joined(separator: " "), tokens: tokens))
         }
         return output
     }
 
     private static func normalizeSegments(_ segments: [WakeWordSegment]) -> [Token] {
         segments.compactMap { segment in
-            let normalized = normalizeToken(segment.text)
+            let normalized = self.normalizeToken(segment.text)
             guard !normalized.isEmpty else { return nil }
             return Token(
                 normalized: normalized,
@@ -165,7 +193,7 @@ public enum WakeWordGate {
 
     private static func normalizeToken(_ token: String) -> String {
         token
-            .trimmingCharacters(in: whitespaceAndPunctuation)
+            .trimmingCharacters(in: self.whitespaceAndPunctuation)
             .lowercased()
     }
 

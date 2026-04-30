@@ -1,23 +1,19 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { createStartAccountContext } from "../../../test/helpers/plugins/start-account-context.js";
+import { createStartAccountContext } from "openclaw/plugin-sdk/channel-test-helpers";
 import {
   expectStopPendingUntilAbort,
   startAccountAndTrackLifecycle,
   waitForStartedMocks,
-} from "../../../test/helpers/plugins/start-account-lifecycle.js";
+} from "openclaw/plugin-sdk/channel-test-helpers";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedNextcloudTalkAccount } from "./accounts.js";
 
 const hoisted = vi.hoisted(() => ({
   monitorNextcloudTalkProvider: vi.fn(),
 }));
 
-vi.mock("./monitor.js", async () => {
-  const actual = await vi.importActual<typeof import("./monitor.js")>("./monitor.js");
-  return {
-    ...actual,
-    monitorNextcloudTalkProvider: hoisted.monitorNextcloudTalkProvider,
-  };
-});
+vi.mock("./monitor-runtime.js", () => ({
+  monitorNextcloudTalkProvider: hoisted.monitorNextcloudTalkProvider,
+}));
 
 const { nextcloudTalkGatewayAdapter } = await import("./gateway.js");
 

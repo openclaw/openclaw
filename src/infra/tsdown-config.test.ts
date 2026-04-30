@@ -1,5 +1,6 @@
+import { readFileSync } from "node:fs";
+import { bundledPluginRoot } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
-import { bundledPluginRoot } from "../../test/helpers/bundled-plugin-paths.js";
 import tsdownConfig from "../../tsdown.config.ts";
 
 type TsdownConfigEntry = {
@@ -41,6 +42,18 @@ function entryKeys(config: TsdownConfigEntry): string[] {
   return Object.keys(config.entry);
 }
 
+function entrySources(config: TsdownConfigEntry): Record<string, string> {
+  if (!config.entry || Array.isArray(config.entry)) {
+    return {};
+  }
+  return config.entry;
+}
+
+function hasBundledPluginRuntimeEntry(config: TsdownConfigEntry): boolean {
+  const keys = entryKeys(config);
+  return keys.includes("index") || keys.includes("runtime-api");
+}
+
 function bundledEntry(pluginId: string): string {
   return `${bundledPluginRoot(pluginId)}/index`;
 }
@@ -49,6 +62,10 @@ function unifiedDistGraph(): TsdownConfigEntry | undefined {
   return asConfigArray(tsdownConfig).find((config) =>
     entryKeys(config).includes("plugins/runtime/index"),
   );
+}
+
+function readGatewayRunLoopSource(): string {
+  return readFileSync(new URL("../cli/gateway-cli/run-loop.ts", import.meta.url), "utf8");
 }
 
 describe("tsdown config", () => {
@@ -61,8 +78,13 @@ describe("tsdown config", () => {
         "agents/auth-profiles.runtime",
         "agents/model-catalog.runtime",
         "agents/models-config.runtime",
+        "cli/gateway-lifecycle.runtime",
+        "plugins/memory-state",
         "subagent-registry.runtime",
+        "task-registry-control.runtime",
         "agents/pi-model-discovery-runtime",
+        "link-understanding/apply.runtime",
+        "media-understanding/apply.runtime",
         "index",
         "commands/status.summary.runtime",
         "plugins/provider-discovery.runtime",
@@ -71,10 +93,27 @@ describe("tsdown config", () => {
         "plugin-sdk/compat",
         "plugin-sdk/index",
         bundledEntry("openai"),
-        bundledEntry("msteams"),
         "bundled/boot-md/handler",
       ]),
     );
+  });
+
+  it("keeps gateway lifecycle lazy runtime behind one stable dist entry", () => {
+    const distGraph = unifiedDistGraph();
+
+    expect(entrySources(distGraph as TsdownConfigEntry)).toEqual(
+      expect.objectContaining({
+        "cli/gateway-lifecycle.runtime": "src/cli/gateway-cli/lifecycle.runtime.ts",
+      }),
+    );
+  });
+
+  it("routes gateway run-loop lifecycle imports through the stable runtime boundary", () => {
+    const importSpecifiers = [
+      ...readGatewayRunLoopSource().matchAll(/import\(["']([^"']+)["']\)/gu),
+    ].map((match) => match[1]);
+
+    expect(new Set(importSpecifiers)).toEqual(new Set(["./lifecycle.runtime.js"]));
   });
 
   it("emits staged bundled plugins as separate extension graphs", () => {
@@ -83,11 +122,19 @@ describe("tsdown config", () => {
     );
 
     expect(stagedGraphs.length).toBeGreaterThan(0);
-    expect(stagedGraphs.every((config) => entryKeys(config).includes("index"))).toBe(true);
+    expect(stagedGraphs.every(hasBundledPluginRuntimeEntry)).toBe(true);
     expect(stagedGraphs.every((config) => !entryKeys(config).includes("plugin-sdk/index"))).toBe(
       true,
     );
     expect(stagedGraphs.some((config) => config.outDir === "dist/extensions/discord")).toBe(true);
+    expect(stagedGraphs.some((config) => config.outDir === "dist/extensions/msteams")).toBe(true);
+    expect(
+      stagedGraphs.some(
+        (config) =>
+          config.outDir === "dist/extensions/media-understanding-core" &&
+          entryKeys(config).includes("image-ops"),
+      ),
+    ).toBe(true);
   });
 
   it("does not emit plugin-sdk or hooks from a separate dist graph", () => {

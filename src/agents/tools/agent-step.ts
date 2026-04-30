@@ -1,7 +1,9 @@
 import crypto from "node:crypto";
 import { callGateway } from "../../gateway/call.js";
+import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
-import { AGENT_LANE_NESTED } from "../lanes.js";
+import { resolveNestedAgentLaneForSession } from "../lanes.js";
+import { retireSessionMcpRuntimeForSessionKey } from "../pi-bundle-mcp-tools.js";
 import { waitForAgentRunAndReadUpdatedAssistantReply } from "../run-wait.js";
 
 export { readLatestAssistantReply } from "../run-wait.js";
@@ -28,22 +30,23 @@ export async function runAgentStep(params: {
   sourceTool?: string;
 }): Promise<string | undefined> {
   const stepIdem = crypto.randomUUID();
+  const inputProvenance = {
+    kind: "inter_session" as const,
+    sourceSessionKey: params.sourceSessionKey,
+    sourceChannel: params.sourceChannel,
+    sourceTool: params.sourceTool ?? "sessions_send",
+  };
   const response = await agentStepDeps.callGateway({
     method: "agent",
     params: {
-      message: params.message,
+      message: annotateInterSessionPromptText(params.message, inputProvenance),
       sessionKey: params.sessionKey,
       idempotencyKey: stepIdem,
       deliver: false,
       channel: params.channel ?? INTERNAL_MESSAGE_CHANNEL,
-      lane: params.lane ?? AGENT_LANE_NESTED,
+      lane: params.lane ?? resolveNestedAgentLaneForSession(params.sessionKey),
       extraSystemPrompt: params.extraSystemPrompt,
-      inputProvenance: {
-        kind: "inter_session",
-        sourceSessionKey: params.sourceSessionKey,
-        sourceChannel: params.sourceChannel,
-        sourceTool: params.sourceTool ?? "sessions_send",
-      },
+      inputProvenance,
     },
     timeoutMs: 10_000,
   });
@@ -55,6 +58,12 @@ export async function runAgentStep(params: {
     sessionKey: params.sessionKey,
     timeoutMs: Math.min(params.timeoutMs, 60_000),
   });
+  if (result.status === "ok" || result.status === "error") {
+    await retireSessionMcpRuntimeForSessionKey({
+      sessionKey: params.sessionKey,
+      reason: "nested-agent-step-complete",
+    });
+  }
   if (result.status !== "ok") {
     return undefined;
   }

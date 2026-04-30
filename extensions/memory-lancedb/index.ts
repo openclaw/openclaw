@@ -6,16 +6,29 @@
  * Provides seamless auto-recall and auto-capture via lifecycle hooks.
  */
 
+import { Buffer } from "node:buffer";
 import { randomUUID } from "node:crypto";
 import type * as LanceDB from "@lancedb/lancedb";
-import { Type } from "@sinclair/typebox";
 import OpenAI from "openai";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import {
+  getMemoryEmbeddingProvider,
+  type MemoryEmbeddingProvider,
+} from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
+import { resolveDefaultAgentId } from "openclaw/plugin-sdk/memory-host-core";
+import { resolveLivePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { ensureGlobalUndiciEnvProxyDispatcher } from "openclaw/plugin-sdk/runtime-env";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  truncateUtf16Safe,
+} from "openclaw/plugin-sdk/text-runtime";
+import { Type } from "typebox";
 import { definePluginEntry, type OpenClawPluginApi } from "./api.js";
 import {
   DEFAULT_CAPTURE_MAX_CHARS,
+  DEFAULT_RECALL_MAX_CHARS,
   MEMORY_CATEGORIES,
+  type MemoryConfig,
   type MemoryCategory,
   memoryConfigSchema,
   vectorDimsForModel,
@@ -35,18 +48,125 @@ type MemoryEntry = {
   createdAt: number;
 };
 
+type MemoryListEntry = Omit<MemoryEntry, "vector">;
+
+type MemoryListOptions = {
+  orderByCreatedAt?: boolean;
+};
+
 type MemorySearchResult = {
   entry: MemoryEntry;
   score: number;
 };
 
-type LegacyBeforeAgentStartContext = { prependContext: string } | undefined;
+type AutoCaptureCursor = {
+  nextIndex: number;
+  lastMessageFingerprint?: string;
+};
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function extractUserTextContent(message: unknown): string[] {
+  const msgObj = asRecord(message);
+  if (!msgObj || msgObj.role !== "user") {
+    return [];
+  }
+
+  const content = msgObj.content;
+  if (typeof content === "string") {
+    return [content];
+  }
+
+  if (!Array.isArray(content)) {
+    return [];
+  }
+
+  const texts: string[] = [];
+  for (const block of content) {
+    const blockObj = asRecord(block);
+    if (blockObj?.type === "text" && typeof blockObj.text === "string") {
+      texts.push(blockObj.text);
+    }
+  }
+  return texts;
+}
+
+function extractLatestUserText(messages: unknown[]): string | undefined {
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const text = extractUserTextContent(messages[index]).join("\n").trim();
+    if (text) {
+      return text;
+    }
+  }
+  return undefined;
+}
+
+export function normalizeRecallQuery(
+  text: string,
+  maxChars: number = DEFAULT_RECALL_MAX_CHARS,
+): string {
+  const normalized = text.replace(/\s+/g, " ").trim();
+  const limit = Math.max(0, Math.floor(maxChars));
+  return normalized.length > limit ? truncateUtf16Safe(normalized, limit).trimEnd() : normalized;
+}
+
+function messageFingerprint(message: unknown): string {
+  const msgObj = asRecord(message);
+  if (!msgObj) {
+    return `${typeof message}:${String(message)}`;
+  }
+  try {
+    return JSON.stringify({
+      role: msgObj.role,
+      content: msgObj.content,
+    });
+  } catch {
+    return `${String(msgObj.role)}:${String(msgObj.content)}`;
+  }
+}
+
+function resolveAutoCaptureStartIndex(
+  messages: unknown[],
+  cursor: AutoCaptureCursor | undefined,
+): number {
+  if (!cursor) {
+    return 0;
+  }
+  if (cursor.lastMessageFingerprint && cursor.nextIndex > 0) {
+    for (let index = messages.length - 1; index >= 0; index--) {
+      if (messageFingerprint(messages[index]) === cursor.lastMessageFingerprint) {
+        return index + 1;
+      }
+    }
+    return 0;
+  }
+  if (cursor.nextIndex <= messages.length) {
+    return cursor.nextIndex;
+  }
+  return 0;
+}
 
 // ============================================================================
 // LanceDB Provider
 // ============================================================================
 
 const TABLE_NAME = "memories";
+const DEFAULT_AUTO_RECALL_TIMEOUT_MS = 15_000;
+
+function parsePositiveIntegerOption(value: string | undefined, flag: string): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 1) {
+    throw new Error(`${flag} must be a positive integer`);
+  }
+  return parsed;
+}
 
 class MemoryDB {
   private db: LanceDB.Connection | null = null;
@@ -67,7 +187,10 @@ class MemoryDB {
       return this.initPromise;
     }
 
-    this.initPromise = this.doInitialize();
+    this.initPromise = this.doInitialize().catch((error) => {
+      this.initPromise = null;
+      throw error;
+    });
     return this.initPromise;
   }
 
@@ -135,6 +258,31 @@ class MemoryDB {
     return mapped.filter((r) => r.score >= minScore);
   }
 
+  async list(limit?: number, options: MemoryListOptions = {}): Promise<MemoryListEntry[]> {
+    await this.ensureInitialized();
+
+    let query = this.table!.query().select(["id", "text", "importance", "category", "createdAt"]);
+    // Push limit to LanceDB only when we don't need to sort in-memory.
+    if (!options.orderByCreatedAt && limit !== undefined) {
+      query = query.limit(limit);
+    }
+
+    const rows = await query.toArray();
+
+    const entries = rows.map((row) => ({
+      id: row.id as string,
+      text: row.text as string,
+      importance: row.importance as number,
+      category: row.category as MemoryEntry["category"],
+      createdAt: row.createdAt as number,
+    }));
+    if (options.orderByCreatedAt) {
+      entries.sort((a, b) => b.createdAt - a.createdAt);
+    }
+
+    return limit === undefined ? entries : entries.slice(0, limit);
+  }
+
   async delete(id: string): Promise<boolean> {
     await this.ensureInitialized();
     // Validate UUID format to prevent injection
@@ -150,13 +298,22 @@ class MemoryDB {
     await this.ensureInitialized();
     return this.table!.countRows();
   }
+
+  async getTable(): Promise<LanceDB.Table> {
+    await this.ensureInitialized();
+    return this.table!;
+  }
 }
 
 // ============================================================================
-// OpenAI Embeddings
+// Embeddings
 // ============================================================================
 
-class Embeddings {
+type Embeddings = {
+  embed(text: string, options?: { timeoutMs?: number }): Promise<number[]>;
+};
+
+class OpenAiCompatibleEmbeddings implements Embeddings {
   private client: OpenAI;
 
   constructor(
@@ -168,8 +325,8 @@ class Embeddings {
     this.client = new OpenAI({ apiKey, baseURL: baseUrl });
   }
 
-  async embed(text: string): Promise<number[]> {
-    const params: { model: string; input: string; dimensions?: number } = {
+  async embed(text: string, options?: { timeoutMs?: number }): Promise<number[]> {
+    const params: OpenAI.EmbeddingCreateParams = {
       model: this.model,
       input: text,
     };
@@ -177,9 +334,136 @@ class Embeddings {
       params.dimensions = this.dimensions;
     }
     ensureGlobalUndiciEnvProxyDispatcher();
-    const response = await this.client.embeddings.create(params);
-    return response.data[0].embedding;
+    // The OpenAI SDK's embeddings helper injects encoding_format=base64 when
+    // omitted, then decodes the response. Several compatible providers either
+    // reject encoding_format or always return float arrays, so use the generic
+    // transport and normalize the response ourselves.
+    const response = await this.client.post<EmbeddingCreateResponse>("/embeddings", {
+      body: params,
+      ...(options?.timeoutMs ? { timeout: options.timeoutMs, maxRetries: 0 } : {}),
+    });
+    return normalizeEmbeddingVector(response.data?.[0]?.embedding);
   }
+}
+
+class ProviderAdapterEmbeddings implements Embeddings {
+  private providerPromise: Promise<MemoryEmbeddingProvider> | undefined;
+
+  constructor(
+    private api: OpenClawPluginApi,
+    private embedding: MemoryConfig["embedding"],
+  ) {}
+
+  private getProvider(): Promise<MemoryEmbeddingProvider> {
+    // Auth profiles and local providers can be repaired while the Gateway stays up.
+    // Cache successful setup, but retry after failed provider discovery/auth.
+    this.providerPromise ??= this.createProvider().catch((err) => {
+      this.providerPromise = undefined;
+      throw err;
+    });
+    return this.providerPromise;
+  }
+
+  private async createProvider(): Promise<MemoryEmbeddingProvider> {
+    const cfg = (this.api.runtime.config?.current?.() ?? this.api.config) as OpenClawConfig;
+    const providerId = this.embedding.provider;
+    const adapter = getMemoryEmbeddingProvider(providerId, cfg);
+    if (!adapter) {
+      throw new Error(`Unknown memory embedding provider: ${providerId}`);
+    }
+    const defaultAgentId = resolveDefaultAgentId(cfg);
+    const agentDir = this.api.runtime.agent.resolveAgentDir(cfg, defaultAgentId);
+    const remote =
+      this.embedding.apiKey || this.embedding.baseUrl
+        ? {
+            ...(this.embedding.apiKey ? { apiKey: this.embedding.apiKey } : {}),
+            ...(this.embedding.baseUrl ? { baseUrl: this.embedding.baseUrl } : {}),
+          }
+        : undefined;
+    const result = await adapter.create({
+      config: cfg,
+      agentDir,
+      provider: providerId,
+      fallback: "none",
+      model: this.embedding.model,
+      ...(remote ? { remote } : {}),
+      ...(typeof this.embedding.dimensions === "number"
+        ? { outputDimensionality: this.embedding.dimensions }
+        : {}),
+    });
+    if (!result.provider) {
+      throw new Error(`Memory embedding provider ${providerId} is unavailable.`);
+    }
+    return result.provider;
+  }
+
+  async embed(text: string): Promise<number[]> {
+    return await (await this.getProvider()).embedQuery(text);
+  }
+}
+
+async function runWithTimeout<T>(params: {
+  timeoutMs: number;
+  task: () => Promise<T>;
+}): Promise<{ status: "ok"; value: T } | { status: "timeout" }> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const TIMEOUT = Symbol("timeout");
+  const timeoutPromise = new Promise<typeof TIMEOUT>((resolve) => {
+    timeout = setTimeout(() => resolve(TIMEOUT), params.timeoutMs);
+    timeout.unref?.();
+  });
+  const taskPromise = params.task();
+  taskPromise.catch(() => undefined);
+
+  try {
+    const result = await Promise.race([taskPromise, timeoutPromise]);
+    if (result === TIMEOUT) {
+      return { status: "timeout" };
+    }
+    return { status: "ok", value: result };
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
+}
+
+function createEmbeddings(api: OpenClawPluginApi, cfg: MemoryConfig): Embeddings {
+  const { provider, model, dimensions, apiKey, baseUrl } = cfg.embedding;
+  if (provider === "openai" && apiKey) {
+    return new OpenAiCompatibleEmbeddings(apiKey, model, baseUrl, dimensions);
+  }
+  return new ProviderAdapterEmbeddings(api, cfg.embedding);
+}
+
+type EmbeddingCreateResponse = {
+  data?: Array<{
+    embedding?: unknown;
+  }>;
+};
+
+export function normalizeEmbeddingVector(value: unknown): number[] {
+  if (Array.isArray(value)) {
+    if (!value.every((item) => typeof item === "number" && Number.isFinite(item))) {
+      throw new Error("Embedding response contains non-numeric values");
+    }
+    return value;
+  }
+
+  if (typeof value === "string") {
+    const bytes = Buffer.from(value, "base64");
+    if (bytes.byteLength % Float32Array.BYTES_PER_ELEMENT !== 0) {
+      throw new Error("Base64 embedding response has invalid byte length");
+    }
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    const floats: number[] = [];
+    for (let offset = 0; offset < bytes.byteLength; offset += Float32Array.BYTES_PER_ELEMENT) {
+      floats.push(view.getFloat32(offset, true));
+    }
+    return floats;
+  }
+
+  throw new Error("Embedding response is missing a vector");
 }
 
 // ============================================================================
@@ -196,6 +480,7 @@ const MEMORY_TRIGGERS = [
   /my\s+\w+\s+is|is\s+my/i,
   /i (like|prefer|hate|love|want|need)/i,
   /always|never|important/i,
+  /记住|记下|我(喜欢|偏好|讨厌|爱|想要|需要)|我的.*是|决定|总是|从不|重要/i,
 ];
 
 const PROMPT_INJECTION_PATTERNS = [
@@ -294,14 +579,60 @@ export default definePluginEntry({
   configSchema: memoryConfigSchema,
 
   register(api: OpenClawPluginApi) {
-    const cfg = memoryConfigSchema.parse(api.pluginConfig);
+    let cfg: MemoryConfig;
+    try {
+      cfg = memoryConfigSchema.parse(api.pluginConfig);
+    } catch (error) {
+      api.registerService({
+        id: "memory-lancedb",
+        start: () => {
+          const message = error instanceof Error ? error.message : String(error);
+          api.logger.warn(`memory-lancedb: disabled until configured (${message})`);
+        },
+      });
+      return;
+    }
     const dbPath = cfg.dbPath!;
     const resolvedDbPath = dbPath.includes("://") ? dbPath : api.resolvePath(dbPath);
-    const { model, dimensions, apiKey, baseUrl } = cfg.embedding;
+    const { model, dimensions } = cfg.embedding;
+    const disabledHookCfg = { ...cfg, autoCapture: false, autoRecall: false };
 
     const vectorDim = dimensions ?? vectorDimsForModel(model);
     const db = new MemoryDB(resolvedDbPath, vectorDim, cfg.storageOptions);
-    const embeddings = new Embeddings(apiKey, model, baseUrl, dimensions);
+    const embeddings = createEmbeddings(api, cfg);
+    const autoCaptureCursors = new Map<string, AutoCaptureCursor>();
+    const resolveCurrentHookConfig = () => {
+      const runtimePluginConfig = resolveLivePluginConfigObject(
+        api.runtime.config?.current
+          ? () => api.runtime.config.current() as OpenClawConfig
+          : undefined,
+        "memory-lancedb",
+        api.pluginConfig as Record<string, unknown>,
+      );
+      if (!runtimePluginConfig) {
+        return disabledHookCfg;
+      }
+      return memoryConfigSchema.parse({
+        embedding: {
+          provider: cfg.embedding.provider,
+          apiKey: cfg.embedding.apiKey,
+          model: cfg.embedding.model,
+          ...(cfg.embedding.baseUrl ? { baseUrl: cfg.embedding.baseUrl } : {}),
+          ...(typeof cfg.embedding.dimensions === "number"
+            ? { dimensions: cfg.embedding.dimensions }
+            : {}),
+          ...asRecord(asRecord(runtimePluginConfig)?.embedding),
+        },
+        ...(cfg.dreaming ? { dreaming: cfg.dreaming } : {}),
+        dbPath: cfg.dbPath,
+        autoCapture: cfg.autoCapture,
+        autoRecall: cfg.autoRecall,
+        captureMaxChars: cfg.captureMaxChars,
+        recallMaxChars: cfg.recallMaxChars,
+        ...(cfg.storageOptions ? { storageOptions: cfg.storageOptions } : {}),
+        ...asRecord(runtimePluginConfig),
+      });
+    };
 
     api.logger.info(`memory-lancedb: plugin registered (db: ${resolvedDbPath}, lazy init)`);
 
@@ -322,7 +653,10 @@ export default definePluginEntry({
         async execute(_toolCallId, params) {
           const { query, limit = 5 } = params as { query: string; limit?: number };
 
-          const vector = await embeddings.embed(query);
+          const currentCfg = resolveCurrentHookConfig();
+          const vector = await embeddings.embed(
+            normalizeRecallQuery(query, currentCfg.recallMaxChars),
+          );
           const results = await db.search(vector, limit, 0.1);
 
           if (results.length === 0) {
@@ -441,7 +775,10 @@ export default definePluginEntry({
           }
 
           if (query) {
-            const vector = await embeddings.embed(query);
+            const currentCfg = resolveCurrentHookConfig();
+            const vector = await embeddings.embed(
+              normalizeRecallQuery(query, currentCfg.recallMaxChars),
+            );
             const results = await db.search(vector, 5, 0.7);
 
             if (results.length === 0) {
@@ -460,7 +797,7 @@ export default definePluginEntry({
             }
 
             const list = results
-              .map((r) => `- [${r.entry.id.slice(0, 8)}] ${r.entry.text.slice(0, 60)}...`)
+              .map((r) => `- [${r.entry.id}] ${r.entry.text.slice(0, 60)}...`)
               .join("\n");
 
             // Strip vector data for serialization
@@ -502,9 +839,14 @@ export default definePluginEntry({
         memory
           .command("list")
           .description("List memories")
-          .action(async () => {
-            const count = await db.count();
-            console.log(`Total memories: ${count}`);
+          .option("--limit <n>", "Max results")
+          .option("--order-by-created-at", "Order memories by createdAt descending", false)
+          .action(async (opts) => {
+            const limit = parsePositiveIntegerOption(opts.limit, "--limit");
+            const entries = await db.list(limit, {
+              orderByCreatedAt: Boolean(opts.orderByCreatedAt),
+            });
+            console.log(JSON.stringify(entries, null, 2));
           });
 
         memory
@@ -513,8 +855,8 @@ export default definePluginEntry({
           .argument("<query>", "Search query")
           .option("--limit <n>", "Max results", "5")
           .action(async (query, opts) => {
-            const vector = await embeddings.embed(query);
-            const results = await db.search(vector, parseInt(opts.limit), 0.3);
+            const vector = await embeddings.embed(normalizeRecallQuery(query, cfg.recallMaxChars));
+            const results = await db.search(vector, Number.parseInt(opts.limit, 10), 0.3);
             // Strip vectors for output
             const output = results.map((r) => ({
               id: r.entry.id,
@@ -524,6 +866,74 @@ export default definePluginEntry({
               score: r.score,
             }));
             console.log(JSON.stringify(output, null, 2));
+          });
+
+        memory
+          .command("query")
+          .description("Query memories (non-vector search)")
+          .option("--cols <columns>", "Columns to select, comma-separated")
+          .option("--filter <condition>", "Filter condition")
+          .option("--limit <n>", "Limit number of results", "10")
+          .option("--order-by <order>", "Order by column and direction (e.g., createdAt:desc)")
+          .action(async (opts) => {
+            const table = await db.getTable();
+            let query = table.query();
+            let sortColAdded = false;
+            let sortColName: string | undefined;
+            if (opts.cols) {
+              const columns = (opts.cols as string).split(",").map((c: string) => c.trim());
+              if (opts.orderBy) {
+                const [sortCol] = opts.orderBy.split(":");
+                sortColName = sortCol;
+                if (!columns.includes(sortCol)) {
+                  columns.push(sortCol);
+                  sortColAdded = true;
+                }
+              }
+              query = query.select(columns);
+            } else {
+              query = query.select(["id", "text", "importance", "category", "createdAt"]);
+            }
+            if (opts.filter) {
+              const filterCondition = String(opts.filter);
+              if (filterCondition.length > 200) {
+                throw new Error("Filter condition exceeds maximum length of 200 characters");
+              }
+              if (!/^[a-zA-Z0-9_\-\s='"><!.,()%*]+$/.test(filterCondition)) {
+                throw new Error("Filter condition contains invalid characters");
+              }
+              query = query.where(filterCondition);
+            }
+            const limit = Number.parseInt(opts.limit, 10);
+            if (Number.isNaN(limit) || limit <= 0) {
+              throw new Error("Invalid limit: must be a positive integer");
+            }
+
+            // Fetch all filtered rows first if we need to order them in memory
+            if (!opts.orderBy) {
+              query = query.limit(limit);
+            }
+            let rows = await query.toArray();
+            if (opts.orderBy) {
+              const [col, dir] = opts.orderBy.split(":");
+              const direction = dir?.toLowerCase() === "desc" ? -1 : 1;
+              rows.sort((a, b) => {
+                if (a[col] < b[col]) {
+                  return -1 * direction;
+                }
+                if (a[col] > b[col]) {
+                  return 1 * direction;
+                }
+                return 0;
+              });
+              rows = rows.slice(0, limit);
+              if (sortColAdded && sortColName) {
+                for (const row of rows) {
+                  delete row[sortColName];
+                }
+              }
+            }
+            console.log(JSON.stringify(rows, null, 2));
           });
 
         memory
@@ -541,120 +951,132 @@ export default definePluginEntry({
     // Lifecycle Hooks
     // ========================================================================
 
-    // Auto-recall: inject relevant memories before agent starts
-    if (cfg.autoRecall) {
-      api.on("before_agent_start", async (event): Promise<LegacyBeforeAgentStartContext> => {
-        if (!event.prompt || event.prompt.length < 5) {
+    // Auto-recall: inject relevant memories during prompt build
+    api.on("before_prompt_build", async (event) => {
+      const currentCfg = resolveCurrentHookConfig();
+      if (!currentCfg.autoRecall) {
+        return undefined;
+      }
+      if (!event.prompt || event.prompt.length < 5) {
+        return undefined;
+      }
+
+      try {
+        const recallQuery = normalizeRecallQuery(
+          extractLatestUserText(Array.isArray(event.messages) ? event.messages : []) ??
+            event.prompt,
+          currentCfg.recallMaxChars,
+        );
+        const recall = await runWithTimeout({
+          timeoutMs: DEFAULT_AUTO_RECALL_TIMEOUT_MS,
+          task: async () => {
+            const vector = await embeddings.embed(recallQuery, {
+              timeoutMs: DEFAULT_AUTO_RECALL_TIMEOUT_MS,
+            });
+            return await db.search(vector, 3, 0.3);
+          },
+        });
+        if (recall.status === "timeout") {
+          api.logger.warn?.(
+            `memory-lancedb: auto-recall timed out after ${DEFAULT_AUTO_RECALL_TIMEOUT_MS}ms; skipping memory injection to avoid stalling agent startup`,
+          );
+          return undefined;
+        }
+        const results = recall.value;
+
+        if (results.length === 0) {
           return undefined;
         }
 
-        try {
-          const vector = await embeddings.embed(event.prompt);
-          const results = await db.search(vector, 3, 0.3);
+        api.logger.info?.(`memory-lancedb: injecting ${results.length} memories into context`);
 
-          if (results.length === 0) {
-            return undefined;
-          }
-
-          api.logger.info?.(`memory-lancedb: injecting ${results.length} memories into context`);
-
-          return {
-            prependContext: formatRelevantMemoriesContext(
-              results.map((r) => ({ category: r.entry.category, text: r.entry.text })),
-            ),
-          };
-        } catch (err) {
-          api.logger.warn(`memory-lancedb: recall failed: ${String(err)}`);
-        }
-        return undefined;
-      });
-    }
+        return {
+          prependContext: formatRelevantMemoriesContext(
+            results.map((r) => ({ category: r.entry.category, text: r.entry.text })),
+          ),
+        };
+      } catch (err) {
+        api.logger.warn(`memory-lancedb: recall failed: ${String(err)}`);
+      }
+      return undefined;
+    });
 
     // Auto-capture: analyze and store important information after agent ends
-    if (cfg.autoCapture) {
-      api.on("agent_end", async (event) => {
-        if (!event.success || !event.messages || event.messages.length === 0) {
-          return;
-        }
+    api.on("agent_end", async (event, ctx) => {
+      const currentCfg = resolveCurrentHookConfig();
+      if (!currentCfg.autoCapture) {
+        return;
+      }
+      if (!event.success || !event.messages || event.messages.length === 0) {
+        return;
+      }
 
-        try {
-          // Extract text content from messages (handling unknown[] type)
-          const texts: string[] = [];
-          for (const msg of event.messages) {
-            // Type guard for message object
-            if (!msg || typeof msg !== "object") {
-              continue;
-            }
-            const msgObj = msg as Record<string, unknown>;
+      try {
+        const cursorKey = ctx.sessionKey ?? ctx.sessionId;
+        const startIndex = resolveAutoCaptureStartIndex(
+          event.messages,
+          cursorKey ? autoCaptureCursors.get(cursorKey) : undefined,
+        );
+        let stored = 0;
+        let capturableSeen = 0;
+        for (let index = startIndex; index < event.messages.length; index++) {
+          const message = event.messages[index];
+          let messageProcessed = false;
 
-            // Only process user messages to avoid self-poisoning from model output
-            const role = msgObj.role;
-            if (role !== "user") {
-              continue;
-            }
-
-            const content = msgObj.content;
-
-            // Handle string content directly
-            if (typeof content === "string") {
-              texts.push(content);
-              continue;
-            }
-
-            // Handle array content (content blocks)
-            if (Array.isArray(content)) {
-              for (const block of content) {
-                if (
-                  block &&
-                  typeof block === "object" &&
-                  "type" in block &&
-                  (block as Record<string, unknown>).type === "text" &&
-                  "text" in block &&
-                  typeof (block as Record<string, unknown>).text === "string"
-                ) {
-                  texts.push((block as Record<string, unknown>).text as string);
-                }
+          try {
+            for (const text of extractUserTextContent(message)) {
+              if (!text || !shouldCapture(text, { maxChars: currentCfg.captureMaxChars })) {
+                continue;
               }
+              capturableSeen++;
+              if (capturableSeen > 3) {
+                continue;
+              }
+
+              const category = detectCategory(text);
+              const vector = await embeddings.embed(text);
+
+              // Check for duplicates (high similarity threshold)
+              const existing = await db.search(vector, 1, 0.95);
+              if (existing.length > 0) {
+                continue;
+              }
+
+              await db.store({
+                text,
+                vector,
+                importance: 0.7,
+                category,
+              });
+              stored++;
+            }
+            messageProcessed = true;
+          } finally {
+            if (messageProcessed && cursorKey) {
+              autoCaptureCursors.set(cursorKey, {
+                nextIndex: index + 1,
+                lastMessageFingerprint: messageFingerprint(message),
+              });
             }
           }
-
-          // Filter for capturable content
-          const toCapture = texts.filter(
-            (text) => text && shouldCapture(text, { maxChars: cfg.captureMaxChars }),
-          );
-          if (toCapture.length === 0) {
-            return;
-          }
-
-          // Store each capturable piece (limit to 3 per conversation)
-          let stored = 0;
-          for (const text of toCapture.slice(0, 3)) {
-            const category = detectCategory(text);
-            const vector = await embeddings.embed(text);
-
-            // Check for duplicates (high similarity threshold)
-            const existing = await db.search(vector, 1, 0.95);
-            if (existing.length > 0) {
-              continue;
-            }
-
-            await db.store({
-              text,
-              vector,
-              importance: 0.7,
-              category,
-            });
-            stored++;
-          }
-
-          if (stored > 0) {
-            api.logger.info(`memory-lancedb: auto-captured ${stored} memories`);
-          }
-        } catch (err) {
-          api.logger.warn(`memory-lancedb: capture failed: ${String(err)}`);
         }
-      });
-    }
+
+        if (stored > 0) {
+          api.logger.info(`memory-lancedb: auto-captured ${stored} memories`);
+        }
+      } catch (err) {
+        api.logger.warn(`memory-lancedb: capture failed: ${String(err)}`);
+      }
+    });
+
+    api.on("session_end", (event, ctx) => {
+      const cursorKey = ctx.sessionKey ?? event.sessionKey ?? ctx.sessionId ?? event.sessionId;
+      autoCaptureCursors.delete(cursorKey);
+      const nextCursorKey = event.nextSessionKey ?? event.nextSessionId;
+      if (nextCursorKey) {
+        autoCaptureCursors.delete(nextCursorKey);
+      }
+    });
 
     // ========================================================================
     // Service

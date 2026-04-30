@@ -1,13 +1,23 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+
+const { resolveChannelMessageToolMediaSourceParamKeysMock } = vi.hoisted(() => ({
+  resolveChannelMessageToolMediaSourceParamKeysMock: vi.fn(() => ["avatarPath", "avatarUrl"]),
+}));
+
+vi.mock("../../channels/plugins/message-action-discovery.js", () => ({
+  resolveChannelMessageToolMediaSourceParamKeys: resolveChannelMessageToolMediaSourceParamKeysMock,
+}));
+
 import {
   collectActionMediaSourceHints,
   hydrateAttachmentParamsForAction,
   normalizeSandboxMediaList,
   normalizeSandboxMediaParams,
+  resolveExtraActionMediaSourceParamKeys,
   resolveAttachmentMediaPolicy,
 } from "./message-action-params.js";
 
@@ -16,6 +26,52 @@ const maybeIt = process.platform === "win32" ? it.skip : it;
 const matrixMediaSourceParamKeys = ["avatarPath", "avatarUrl"] as const;
 
 describe("message action media helpers", () => {
+  beforeEach(() => {
+    resolveChannelMessageToolMediaSourceParamKeysMock.mockClear();
+  });
+
+  it("skips plugin media discovery when args only use standard action params", () => {
+    expect(
+      resolveExtraActionMediaSourceParamKeys({
+        cfg,
+        action: "send",
+        channel: "workspace",
+        args: {
+          channel: "workspace",
+          target: "#C12345678",
+          message: "hi",
+          media: "https://example.com/photo.png",
+        },
+      }),
+    ).toEqual([]);
+    expect(resolveChannelMessageToolMediaSourceParamKeysMock).not.toHaveBeenCalled();
+  });
+
+  it("discovers plugin media params when args include an extension-owned field", () => {
+    expect(
+      resolveExtraActionMediaSourceParamKeys({
+        cfg,
+        action: "set-profile",
+        channel: "matrix",
+        args: {
+          channel: "matrix",
+          avatarPath: "/workspace/avatars/profile.png",
+        },
+      }),
+    ).toEqual(["avatarPath", "avatarUrl"]);
+    expect(resolveChannelMessageToolMediaSourceParamKeysMock).toHaveBeenCalledWith({
+      cfg,
+      action: "set-profile",
+      channel: "matrix",
+      accountId: undefined,
+      sessionKey: undefined,
+      sessionId: undefined,
+      agentId: undefined,
+      requesterSenderId: undefined,
+      senderIsOwner: undefined,
+    });
+  });
+
   it("prefers sandbox media policy when sandbox roots are non-blank", () => {
     expect(
       resolveAttachmentMediaPolicy({
@@ -101,7 +157,7 @@ describe("message action media helpers", () => {
     }
   });
 
-  maybeIt("normalizes Discord event image sandbox media params", async () => {
+  maybeIt("normalizes extension event image sandbox media params", async () => {
     const sandboxRoot = await fs.mkdtemp(path.join(os.tmpdir(), "msg-params-image-"));
     try {
       const args: Record<string, unknown> = {
@@ -124,7 +180,7 @@ describe("message action media helpers", () => {
     }
   });
 
-  maybeIt("normalizes Matrix avatarPath and avatarUrl sandbox media params", async () => {
+  maybeIt("normalizes extension avatarPath and avatarUrl sandbox media params", async () => {
     const sandboxRoot = await fs.mkdtemp(path.join(os.tmpdir(), "msg-params-avatar-"));
     try {
       const args: Record<string, unknown> = {
@@ -171,7 +227,7 @@ describe("message action media helpers", () => {
     ]);
   });
 
-  maybeIt("normalizes Matrix snake_case avatar_path and avatar_url aliases", async () => {
+  maybeIt("normalizes extension snake_case avatar_path and avatar_url aliases", async () => {
     const sandboxRoot = await fs.mkdtemp(path.join(os.tmpdir(), "msg-params-avatar-snake-"));
     try {
       const args: Record<string, unknown> = {
@@ -197,7 +253,7 @@ describe("message action media helpers", () => {
     }
   });
 
-  maybeIt("prefers canonical Matrix media params over invalid snake_case aliases", async () => {
+  maybeIt("prefers canonical extension media params over invalid snake_case aliases", async () => {
     const sandboxRoot = await fs.mkdtemp(path.join(os.tmpdir(), "msg-params-avatar-canonical-"));
     try {
       const args: Record<string, unknown> = {
@@ -313,7 +369,7 @@ describe("message action media helpers", () => {
     };
     await hydrateAttachmentParamsForAction({
       cfg,
-      channel: "slack",
+      channel: "workspace",
       args: mediaArgs,
       action: "sendAttachment",
       dryRun: true,
@@ -326,7 +382,7 @@ describe("message action media helpers", () => {
     };
     await hydrateAttachmentParamsForAction({
       cfg,
-      channel: "slack",
+      channel: "workspace",
       args: fileArgs,
       action: "sendAttachment",
       dryRun: true,
@@ -342,7 +398,7 @@ describe("message action media helpers", () => {
 
     await hydrateAttachmentParamsForAction({
       cfg,
-      channel: "slack",
+      channel: "workspace",
       args,
       action: "sendAttachment",
       dryRun: true,
@@ -385,7 +441,7 @@ describe("message action sandbox media hydration", () => {
       await expect(
         hydrateAttachmentParamsForAction({
           cfg,
-          channel: "slack",
+          channel: "workspace",
           args,
           action: "sendAttachment",
           mediaPolicy,

@@ -58,12 +58,9 @@ type FlowRecordPatch = Omit<
   endedAt?: number | null;
 };
 
-export type CreateFlowRecordParams = {
-  syncMode?: TaskFlowSyncMode;
+type FlowRecordCreateFields = {
   ownerKey: string;
   requesterOrigin?: TaskFlowRecord["requesterOrigin"];
-  controllerId?: string | null;
-  revision?: number;
   status?: TaskFlowStatus;
   notifyPolicy?: TaskNotifyPolicy;
   goal: string;
@@ -76,6 +73,12 @@ export type CreateFlowRecordParams = {
   createdAt?: number;
   updatedAt?: number;
   endedAt?: number | null;
+};
+
+export type CreateFlowRecordParams = FlowRecordCreateFields & {
+  syncMode?: TaskFlowSyncMode;
+  controllerId?: string | null;
+  revision?: number;
 };
 
 export type TaskFlowUpdateResult =
@@ -206,6 +209,27 @@ export function deriveTaskFlowStatusFromTask(
     return "lost";
   }
   return "failed";
+}
+
+function isTerminalTaskFlowStatus(status: TaskFlowStatus): boolean {
+  return (
+    status === "succeeded" ||
+    status === "blocked" ||
+    status === "failed" ||
+    status === "cancelled" ||
+    status === "lost"
+  );
+}
+
+function resolveTaskMirroredFlowTiming(
+  task: Pick<TaskRecord, "createdAt" | "lastEventAt" | "endedAt">,
+  isTerminal: boolean,
+): { updatedAt: number; endedAt?: number } {
+  if (!isTerminal) {
+    return { updatedAt: task.lastEventAt ?? task.createdAt };
+  }
+  const endedAt = task.endedAt ?? task.lastEventAt ?? task.createdAt;
+  return { updatedAt: endedAt, endedAt };
 }
 
 function ensureFlowRegistryReady() {
@@ -349,23 +373,11 @@ export function createFlowRecord(params: CreateFlowRecordParams): TaskFlowRecord
   return writeFlowRecord(record);
 }
 
-export function createManagedTaskFlow(params: {
-  ownerKey: string;
-  controllerId: string;
-  requesterOrigin?: TaskFlowRecord["requesterOrigin"];
-  status?: TaskFlowStatus;
-  notifyPolicy?: TaskNotifyPolicy;
-  goal: string;
-  currentStep?: string | null;
-  blockedTaskId?: string | null;
-  blockedSummary?: string | null;
-  stateJson?: JsonValue | null;
-  waitJson?: JsonValue | null;
-  cancelRequestedAt?: number | null;
-  createdAt?: number;
-  updatedAt?: number;
-  endedAt?: number | null;
-}): TaskFlowRecord {
+export function createManagedTaskFlow(
+  params: FlowRecordCreateFields & {
+    controllerId: string;
+  },
+): TaskFlowRecord {
   return createFlowRecord({
     ...params,
     syncMode: "managed",
@@ -392,15 +404,10 @@ export function createTaskFlowForTask(params: {
   requesterOrigin?: TaskFlowRecord["requesterOrigin"];
 }): TaskFlowRecord {
   const terminalFlowStatus = deriveTaskFlowStatusFromTask(params.task);
-  const isTerminal =
-    terminalFlowStatus === "succeeded" ||
-    terminalFlowStatus === "blocked" ||
-    terminalFlowStatus === "failed" ||
-    terminalFlowStatus === "cancelled" ||
-    terminalFlowStatus === "lost";
-  const endedAt = isTerminal
-    ? (params.task.endedAt ?? params.task.lastEventAt ?? params.task.createdAt)
-    : undefined;
+  const timing = resolveTaskMirroredFlowTiming(
+    params.task,
+    isTerminalTaskFlowStatus(terminalFlowStatus),
+  );
   return createFlowRecord({
     syncMode: "task_mirrored",
     ownerKey: params.task.ownerKey,
@@ -413,8 +420,8 @@ export function createTaskFlowForTask(params: {
       terminalFlowStatus === "blocked" ? normalizeOptionalString(params.task.taskId) : undefined,
     blockedSummary: resolveFlowBlockedSummary(params.task),
     createdAt: params.task.createdAt,
-    updatedAt: params.task.lastEventAt ?? params.task.createdAt,
-    ...(endedAt !== undefined ? { endedAt } : {}),
+    updatedAt: timing.updatedAt,
+    ...(timing.endedAt !== undefined ? { endedAt: timing.endedAt } : {}),
   });
 }
 
@@ -606,12 +613,15 @@ export function syncFlowFromTask(
     return flow;
   }
   const terminalFlowStatus = deriveTaskFlowStatusFromTask(task);
-  const isTerminal =
-    terminalFlowStatus === "succeeded" ||
-    terminalFlowStatus === "blocked" ||
-    terminalFlowStatus === "failed" ||
-    terminalFlowStatus === "cancelled" ||
-    terminalFlowStatus === "lost";
+  const isTerminal = isTerminalTaskFlowStatus(terminalFlowStatus);
+  const timing = resolveTaskMirroredFlowTiming(
+    {
+      createdAt: flow.createdAt,
+      lastEventAt: task.lastEventAt,
+      endedAt: task.endedAt,
+    },
+    isTerminal,
+  );
   return updateFlowRecordByIdUnchecked(flowId, {
     status: terminalFlowStatus,
     notifyPolicy: task.notifyPolicy,
@@ -620,10 +630,10 @@ export function syncFlowFromTask(
     blockedSummary:
       terminalFlowStatus === "blocked" ? (resolveFlowBlockedSummary(task) ?? null) : null,
     waitJson: null,
-    updatedAt: task.lastEventAt ?? Date.now(),
+    updatedAt: timing.updatedAt,
     ...(isTerminal
       ? {
-          endedAt: task.endedAt ?? task.lastEventAt ?? Date.now(),
+          endedAt: timing.endedAt ?? timing.updatedAt,
         }
       : { endedAt: null }),
   });

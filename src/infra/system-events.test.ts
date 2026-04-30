@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { drainFormattedSystemEvents } from "../auto-reply/reply/session-updates.js";
+import { drainFormattedSystemEvents } from "../auto-reply/reply/session-system-events.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveMainSessionKey } from "../config/sessions.js";
-import { isCronSystemEvent } from "./heartbeat-runner.js";
+import { resolveMainSessionKey } from "../config/sessions/main-session.js";
+import { isCronSystemEvent } from "./heartbeat-events-filter.js";
 import {
   consumeSystemEventEntries,
   drainSystemEventEntries,
@@ -118,6 +118,23 @@ describe("system events (session routing)", () => {
 
     expect(consumeSystemEventEntries(key, inspected).map((entry) => entry.text)).toEqual(["first"]);
     expect(peekSystemEvents(key)).toEqual(["second"]);
+  });
+
+  it("matches consumed delivery contexts through normalized route identity", () => {
+    const key = "agent:main:test-consume-route-context";
+    enqueueSystemEvent("first", {
+      sessionKey: key,
+      deliveryContext: {
+        channel: "telegram",
+        to: "-100123",
+        threadId: 42.9,
+      },
+    });
+    const inspected = peekSystemEventEntries(key);
+    inspected[0].deliveryContext!.threadId = "42";
+
+    expect(consumeSystemEventEntries(key, inspected).map((entry) => entry.text)).toEqual(["first"]);
+    expect(peekSystemEvents(key)).toEqual([]);
   });
 
   it("resolves the newest effective delivery context from queued events", () => {

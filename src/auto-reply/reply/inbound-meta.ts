@@ -59,6 +59,13 @@ function sanitizeUntrustedJsonValue(value: unknown): unknown {
   );
 }
 
+function formatUntrustedStructuredContextLabel(label: unknown): string {
+  const normalized = normalizePromptMetadataString(label);
+  return normalized
+    ? `${normalized} (untrusted metadata):`
+    : "Structured object (untrusted metadata):";
+}
+
 function formatUntrustedJsonBlock(label: string, payload: unknown): string {
   return [
     label,
@@ -66,6 +73,23 @@ function formatUntrustedJsonBlock(label: string, payload: unknown): string {
     JSON.stringify(sanitizeUntrustedJsonValue(payload), null, 2),
     "```",
   ].join("\n");
+}
+
+function buildLocationContextPayload(ctx: TemplateContext): Record<string, unknown> | undefined {
+  const payload = {
+    latitude: typeof ctx.LocationLat === "number" ? ctx.LocationLat : undefined,
+    longitude: typeof ctx.LocationLon === "number" ? ctx.LocationLon : undefined,
+    accuracy_m:
+      typeof ctx.LocationAccuracy === "number" && Number.isFinite(ctx.LocationAccuracy)
+        ? ctx.LocationAccuracy
+        : undefined,
+    source: normalizePromptMetadataString(ctx.LocationSource),
+    is_live: ctx.LocationIsLive === true ? true : undefined,
+    name: sanitizePromptBody(ctx.LocationName),
+    address: sanitizePromptBody(ctx.LocationAddress),
+    caption: sanitizePromptBody(ctx.LocationCaption),
+  };
+  return Object.values(payload).some((value) => value !== undefined) ? payload : undefined;
 }
 
 function formatConversationTimestamp(
@@ -117,9 +141,9 @@ export function buildInboundMetaSystemPrompt(
 
   // Keep system metadata strictly free of attacker-controlled strings (sender names, group subjects, etc.).
   // Those belong in the user-role "untrusted context" blocks.
-  // Per-message identifiers and dynamic flags are also excluded here: they change on turns/replies
-  // and would bust prefix-based prompt caches on providers that use stable system prefixes.
-  // They are included in the user-role conversation info block instead.
+  // Conversation ids, per-message identifiers, and dynamic flags are also excluded here:
+  // they change on turns/replies and would bust prefix-based prompt caches on providers that
+  // use stable system prefixes. They are included in the user-role conversation info block instead.
 
   // Resolve channel identity: prefer explicit channel, then surface, then provider.
   // For webchat/Hub Chat sessions (when Surface is 'webchat' or undefined with no real channel),
@@ -128,7 +152,6 @@ export function buildInboundMetaSystemPrompt(
 
   const payload = {
     schema: "openclaw.inbound_meta.v2",
-    chat_id: normalizePromptMetadataString(ctx.OriginatingTo),
     account_id: normalizePromptMetadataString(ctx.AccountId),
     channel: channelValue,
     provider: normalizePromptMetadataString(ctx.Provider),
@@ -172,7 +195,10 @@ export function buildInboundUserContextPrefix(
   const inboundHistory = Array.isArray(ctx.InboundHistory) ? ctx.InboundHistory : [];
   const boundedHistory = inboundHistory.slice(-MAX_UNTRUSTED_HISTORY_ENTRIES);
 
+  // Keep volatile conversation/message identifiers in the user-role block so the system
+  // prompt stays byte-stable across task-scoped sessions and reply turns.
   const conversationInfo = {
+    chat_id: shouldIncludeConversationInfo ? normalizeOptionalString(ctx.OriginatingTo) : undefined,
     message_id: shouldIncludeConversationInfo ? resolvedMessageId : undefined,
     reply_to_id: shouldIncludeConversationInfo
       ? normalizePromptMetadataString(ctx.ReplyToId)
@@ -191,6 +217,7 @@ export function buildInboundUserContextPrefix(
     group_subject: normalizePromptMetadataString(ctx.GroupSubject),
     group_channel: normalizePromptMetadataString(ctx.GroupChannel),
     group_space: normalizePromptMetadataString(ctx.GroupSpace),
+    group_members: sanitizePromptBody(ctx.GroupMembers),
     thread_label: normalizePromptMetadataString(ctx.ThreadLabel),
     topic_id:
       ctx.MessageThreadId != null
@@ -263,6 +290,27 @@ export function buildInboundUserContextPrefix(
   if (forwardedFrom) {
     blocks.push(
       formatUntrustedJsonBlock("Forwarded message context (untrusted metadata):", forwardedContext),
+    );
+  }
+
+  const locationContext = buildLocationContextPayload(ctx);
+  if (locationContext) {
+    blocks.push(formatUntrustedJsonBlock("Location (untrusted metadata):", locationContext));
+  }
+
+  const structuredContext = Array.isArray(ctx.UntrustedStructuredContext)
+    ? ctx.UntrustedStructuredContext
+    : [];
+  for (const entry of structuredContext) {
+    if (!entry || typeof entry !== "object") {
+      continue;
+    }
+    blocks.push(
+      formatUntrustedJsonBlock(formatUntrustedStructuredContextLabel(entry.label), {
+        source: normalizePromptMetadataString(entry.source),
+        type: normalizePromptMetadataString(entry.type),
+        payload: entry.payload,
+      }),
     );
   }
 

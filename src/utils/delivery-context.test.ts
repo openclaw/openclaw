@@ -39,6 +39,31 @@ describe("delivery context helpers", () => {
             },
           },
         },
+        {
+          pluginId: "thread-child-chat",
+          source: "test",
+          plugin: {
+            ...createChannelTestPluginBase({
+              id: "thread-child-chat",
+              label: "Thread child chat",
+            }),
+            messaging: {
+              resolveDeliveryTarget: ({
+                conversationId,
+                parentConversationId,
+              }: {
+                conversationId: string;
+                parentConversationId?: string;
+              }) => {
+                const parent = parentConversationId?.trim();
+                const child = conversationId.trim();
+                return parent && parent !== child
+                  ? { to: `channel:${parent}`, threadId: child }
+                  : { to: `channel:${child}` };
+              },
+            },
+          },
+        },
       ]),
     );
   });
@@ -112,6 +137,9 @@ describe("delivery context helpers", () => {
     expect(
       deliveryContextKey({ channel: "demo-channel", to: "channel:C1", threadId: "123.456" }),
     ).toBe("demo-channel|channel:C1||123.456");
+    expect(deliveryContextKey({ channel: "telegram", to: "-100123", threadId: 42.9 })).toBe(
+      "telegram|-100123||42",
+    );
   });
 
   it("formats generic fallback conversation targets as channels", () => {
@@ -149,37 +177,15 @@ describe("delivery context helpers", () => {
     });
   });
 
-  it.each([
-    {
-      channel: "slack",
-      conversationId: "1710000000.000100",
-      parentConversationId: "C123",
-      expected: { to: "channel:C123", threadId: "1710000000.000100" },
-    },
-    {
-      channel: "telegram",
-      conversationId: "42",
-      parentConversationId: "-10099",
-      expected: { to: "channel:-10099", threadId: "42" },
-    },
-    {
-      channel: "mattermost",
-      conversationId: "msg-child-id",
-      parentConversationId: "channel-parent-id",
-      expected: { to: "channel:channel-parent-id", threadId: "msg-child-id" },
-    },
-  ])(
-    "resolves parent-scoped thread delivery targets for $channel",
-    ({ channel, conversationId, parentConversationId, expected }) => {
-      expect(
-        resolveConversationDeliveryTarget({
-          channel,
-          conversationId,
-          parentConversationId,
-        }),
-      ).toEqual(expected);
-    },
-  );
+  it("resolves parent-scoped thread delivery targets through channel messaging hooks", () => {
+    expect(
+      resolveConversationDeliveryTarget({
+        channel: "thread-child-chat",
+        conversationId: "msg-child-id",
+        parentConversationId: "channel-parent-id",
+      }),
+    ).toEqual({ to: "channel:channel-parent-id", threadId: "msg-child-id" });
+  });
 
   it("derives delivery context from a session entry", () => {
     expect(

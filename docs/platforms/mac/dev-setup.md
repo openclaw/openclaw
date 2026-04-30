@@ -2,12 +2,12 @@
 summary: "Setup guide for developers working on the OpenClaw macOS app"
 read_when:
   - Setting up the macOS development environment
-title: "macOS Dev Setup"
+title: "macOS dev setup"
 ---
 
-# macOS Developer Setup
+# macOS developer setup
 
-This guide covers the necessary steps to build and run the OpenClaw macOS application from source.
+Build and run the OpenClaw macOS application from source.
 
 ## Prerequisites
 
@@ -60,7 +60,7 @@ For the Gateway runtime, Node remains the recommended path.
 
 ## Troubleshooting
 
-### Build Fails: Toolchain or SDK Mismatch
+### Build fails: toolchain or SDK mismatch
 
 The macOS app build expects the latest macOS SDK and Swift 6.2 toolchain.
 
@@ -78,7 +78,7 @@ xcrun swift --version
 
 If versions don’t match, update macOS/Xcode and re-run the build.
 
-### App Crashes on Permission Grant
+### App crashes on permission grant
 
 If the app crashes when you try to allow **Speech Recognition** or **Microphone** access, it may be due to a corrupted TCC cache or signature mismatch.
 
@@ -105,3 +105,8 @@ lsof -nP -iTCP:18789 -sTCP:LISTEN
 ```
 
 If a manual run is holding the port, stop that process (Ctrl+C). As a last resort, kill the PID you found above.
+
+## Related
+
+- [macOS app](/platforms/macos)
+- [Install overview](/install)

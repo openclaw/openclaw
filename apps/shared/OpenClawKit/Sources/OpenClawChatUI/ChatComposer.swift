@@ -281,9 +281,9 @@ struct OpenClawChatComposer: View {
                 onPasteImageAttachment: { data, fileName, mimeType in
                     self.viewModel.addImageAttachment(data: data, fileName: fileName, mimeType: mimeType)
                 })
-            .frame(minHeight: self.textMinHeight, idealHeight: self.textMinHeight, maxHeight: self.textMaxHeight)
-            .padding(.horizontal, 4)
-            .padding(.vertical, 3)
+                .frame(minHeight: self.textMinHeight, idealHeight: self.textMinHeight, maxHeight: self.textMaxHeight)
+                .padding(.horizontal, 4)
+                .padding(.vertical, 3)
             #else
             TextEditor(text: self.$viewModel.input)
                 .font(.system(size: 15))
@@ -441,37 +441,23 @@ private struct ChatComposerTextView: NSViewRepresentable {
     var onSend: () -> Void
     var onPasteImageAttachment: (_ data: Data, _ fileName: String, _ mimeType: String) -> Void
 
-    func makeCoordinator() -> Coordinator { Coordinator(self) }
+    func makeCoordinator() -> Coordinator {
+        Coordinator(self)
+    }
 
     func makeNSView(context: Context) -> NSScrollView {
-        let textView = ChatComposerNSTextView()
-        textView.delegate = context.coordinator
-        textView.drawsBackground = false
-        textView.isRichText = false
-        textView.isAutomaticQuoteSubstitutionEnabled = false
-        textView.isAutomaticTextReplacementEnabled = false
-        textView.isAutomaticDashSubstitutionEnabled = false
-        textView.isAutomaticSpellingCorrectionEnabled = false
-        textView.font = .systemFont(ofSize: 14, weight: .regular)
-        textView.textContainer?.lineBreakMode = .byWordWrapping
-        textView.textContainer?.lineFragmentPadding = 0
-        textView.textContainerInset = NSSize(width: 2, height: 4)
-        textView.focusRingType = .none
+        let textView = ChatComposerTextViewFactory.makeConfiguredTextView()
+        guard let composerTextView = textView as? ChatComposerNSTextView else {
+            preconditionFailure("ChatComposerTextViewFactory must return ChatComposerNSTextView")
+        }
+        composerTextView.delegate = context.coordinator
 
-        textView.minSize = .zero
-        textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
-        textView.isHorizontallyResizable = false
-        textView.isVerticallyResizable = true
-        textView.autoresizingMask = [.width]
-        textView.textContainer?.containerSize = NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude)
-        textView.textContainer?.widthTracksTextView = true
-
-        textView.string = self.text
-        textView.onSend = { [weak textView] in
-            textView?.window?.makeFirstResponder(nil)
+        composerTextView.string = self.text
+        composerTextView.onSend = { [weak composerTextView] in
+            composerTextView?.window?.makeFirstResponder(nil)
             self.onSend()
         }
-        textView.onPasteImageAttachment = self.onPasteImageAttachment
+        composerTextView.onPasteImageAttachment = self.onPasteImageAttachment
 
         let scroll = NSScrollView()
         scroll.drawsBackground = false
@@ -511,7 +497,9 @@ private struct ChatComposerTextView: NSViewRepresentable {
         var parent: ChatComposerTextView
         var isProgrammaticUpdate = false
 
-        init(_ parent: ChatComposerTextView) { self.parent = parent }
+        init(_ parent: ChatComposerTextView) {
+            self.parent = parent
+        }
 
         func textDidChange(_ notification: Notification) {
             guard !self.isProgrammaticUpdate else { return }
@@ -519,6 +507,34 @@ private struct ChatComposerTextView: NSViewRepresentable {
             guard view.window?.firstResponder === view else { return }
             self.parent.text = view.string
         }
+    }
+}
+
+enum ChatComposerTextViewFactory {
+    /// Internal for @testable import coverage of composer text view defaults.
+    @MainActor
+    static func makeConfiguredTextView() -> NSTextView {
+        let textView = ChatComposerNSTextView()
+        textView.drawsBackground = false
+        textView.isRichText = false
+        textView.isAutomaticQuoteSubstitutionEnabled = false
+        textView.isAutomaticTextReplacementEnabled = false
+        textView.isAutomaticDashSubstitutionEnabled = false
+        textView.isAutomaticSpellingCorrectionEnabled = false
+        textView.font = .systemFont(ofSize: 14, weight: .regular)
+        textView.textContainer?.lineBreakMode = .byWordWrapping
+        textView.textContainer?.lineFragmentPadding = 0
+        textView.textContainerInset = NSSize(width: 2, height: 4)
+        textView.focusRingType = .none
+        textView.allowsUndo = true
+        textView.minSize = .zero
+        textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        textView.isHorizontallyResizable = false
+        textView.isVerticallyResizable = true
+        textView.autoresizingMask = [.width]
+        textView.textContainer?.containerSize = NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude)
+        textView.textContainer?.widthTracksTextView = true
+        return textView
     }
 }
 
@@ -739,7 +755,10 @@ enum ChatComposerPasteSupport {
         (NSPasteboard.PasteboardType("public.heif"), "heif", "image/heif"),
     ]
 
-    private static func matches(_ preferredType: NSPasteboard.PasteboardType?, candidate: NSPasteboard.PasteboardType) -> Bool {
+    private static func matches(
+        _ preferredType: NSPasteboard.PasteboardType?,
+        candidate: NSPasteboard.PasteboardType) -> Bool
+    {
         guard let preferredType else { return true }
         return preferredType == candidate
     }

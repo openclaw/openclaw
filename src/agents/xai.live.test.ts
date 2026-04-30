@@ -1,5 +1,5 @@
 import { completeSimple, getModel, streamSimple } from "@mariozechner/pi-ai";
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 import {
   createSingleUserPromptMessage,
@@ -11,6 +11,7 @@ import { createWebSearchTool } from "./tools/web-search.js";
 
 const XAI_KEY = process.env.XAI_API_KEY ?? "";
 const LIVE = isLiveTestEnabled(["XAI_LIVE_TEST"]);
+const XAI_WEB_SEARCH_LIVE_TIMEOUT_SECONDS = 60;
 
 const describeLive = LIVE && XAI_KEY ? describe : describe.skip;
 
@@ -133,6 +134,7 @@ describeLive("xai live", () => {
           web: {
             search: {
               provider: "grok",
+              timeoutSeconds: XAI_WEB_SEARCH_LIVE_TIMEOUT_SECONDS,
               grok: {
                 model: "grok-4-1-fast",
               },
@@ -165,5 +167,5 @@ describeLive("xai live", () => {
       (Array.isArray(details.citations) ? details.citations.length : 0) +
       (Array.isArray(details.inlineCitations) ? details.inlineCitations.length : 0);
     expect(citationCount).toBeGreaterThan(0);
-  }, 45_000);
+  }, 90_000);
 });

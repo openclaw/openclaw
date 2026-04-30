@@ -5,6 +5,11 @@ export type CoreCliCommandDescriptor = NamedCommandDescriptor;
 
 const coreCliCommandCatalog = defineCommandDescriptorCatalog([
   {
+    name: "crestodian",
+    description: "Open the ring-zero setup and repair helper",
+    hasSubcommands: false,
+  },
+  {
     name: "setup",
     description: "Initialize local config and agent workspace",
     hasSubcommands: false,
@@ -28,6 +33,11 @@ const coreCliCommandCatalog = defineCommandDescriptorCatalog([
   {
     name: "backup",
     description: "Create and verify local backup archives for OpenClaw state",
+    hasSubcommands: true,
+  },
+  {
+    name: "migrate",
+    description: "Import state from another agent system",
     hasSubcommands: true,
   },
   {

@@ -1,6 +1,6 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { loadConfig } from "../config/config.js";
+import { getRuntimeConfig } from "../config/config.js";
 import {
   loadSessionStore,
   resolveAgentIdFromSessionKey,
@@ -11,10 +11,11 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { defaultRuntime } from "../runtime.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
-import { type SubagentRunOutcome } from "./subagent-announce-output.js";
+import { withSubagentOutcomeTiming } from "./subagent-announce-output.js";
 import { SUBAGENT_ENDED_REASON_ERROR } from "./subagent-lifecycle-events.js";
-import { runOutcomesEqual } from "./subagent-registry-completion.js";
+import { shouldUpdateRunOutcome } from "./subagent-registry-completion.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { isStaleUnendedSubagentRun } from "./subagent-run-liveness.js";
 import {
   getSubagentSessionRuntimeMs,
   getSubagentSessionStartedAt,
@@ -35,7 +36,10 @@ export const ANNOUNCE_COMPLETION_HARD_EXPIRY_MS = 30 * 60_000;
 
 const FROZEN_RESULT_TEXT_MAX_BYTES = 100 * 1024;
 
-export type SubagentRunOrphanReason = "missing-session-entry" | "missing-session-id";
+export type SubagentRunOrphanReason =
+  | "missing-session-entry"
+  | "missing-session-id"
+  | "stale-unended-run";
 
 export function capFrozenResultText(resultText: string): string {
   const trimmed = resultText.trim();
@@ -93,7 +97,7 @@ export async function persistSubagentSessionTiming(entry: SubagentRunRecord) {
     return;
   }
 
-  const cfg = loadConfig();
+  const cfg = getRuntimeConfig();
   const agentId = resolveAgentIdFromSessionKey(childSessionKey);
   const storePath = resolveStorePath(cfg.session?.store, { agentId });
   const startedAt = getSubagentSessionStartedAt(entry);
@@ -140,13 +144,15 @@ export async function persistSubagentSessionTiming(entry: SubagentRunRecord) {
 export function resolveSubagentRunOrphanReason(params: {
   entry: SubagentRunRecord;
   storeCache?: Map<string, Record<string, SessionEntry>>;
+  includeStaleUnended?: boolean;
+  now?: number;
 }): SubagentRunOrphanReason | null {
   const childSessionKey = params.entry.childSessionKey?.trim();
   if (!childSessionKey) {
     return "missing-session-entry";
   }
   try {
-    const cfg = loadConfig();
+    const cfg = getRuntimeConfig();
     const agentId = resolveAgentIdFromSessionKey(childSessionKey);
     const storePath = resolveStorePath(cfg.session?.store, { agentId });
     let store = params.storeCache?.get(storePath);
@@ -160,6 +166,13 @@ export function resolveSubagentRunOrphanReason(params: {
     }
     if (typeof sessionEntry.sessionId !== "string" || !sessionEntry.sessionId.trim()) {
       return "missing-session-id";
+    }
+    if (
+      params.includeStaleUnended === true &&
+      sessionEntry.abortedLastRun !== true &&
+      isStaleUnendedSubagentRun(params.entry, params.now)
+    ) {
+      return "stale-unended-run";
     }
     return null;
   } catch {
@@ -219,11 +232,17 @@ export function reconcileOrphanedRun(params: {
     params.entry.endedAt = now;
     changed = true;
   }
-  const orphanOutcome: SubagentRunOutcome = {
-    status: "error",
-    error: `orphaned subagent run (${params.reason})`,
-  };
-  if (!runOutcomesEqual(params.entry.outcome, orphanOutcome)) {
+  const orphanOutcome = withSubagentOutcomeTiming(
+    {
+      status: "error",
+      error: `orphaned subagent run (${params.reason})`,
+    },
+    {
+      startedAt: params.entry.startedAt,
+      endedAt: params.entry.endedAt,
+    },
+  );
+  if (shouldUpdateRunOutcome(params.entry.outcome, orphanOutcome)) {
     params.entry.outcome = orphanOutcome;
     changed = true;
   }
@@ -260,11 +279,14 @@ export function reconcileOrphanedRestoredRuns(params: {
   resumedRuns: Set<string>;
 }) {
   const storeCache = new Map<string, Record<string, SessionEntry>>();
+  const now = Date.now();
   let changed = false;
   for (const [runId, entry] of params.runs.entries()) {
     const orphanReason = resolveSubagentRunOrphanReason({
       entry,
       storeCache,
+      includeStaleUnended: true,
+      now,
     });
     if (!orphanReason) {
       continue;
@@ -286,7 +308,7 @@ export function reconcileOrphanedRestoredRuns(params: {
 }
 
 export function resolveArchiveAfterMs(cfg?: OpenClawConfig) {
-  const config = cfg ?? loadConfig();
+  const config = cfg ?? getRuntimeConfig();
   const minutes = config.agents?.defaults?.subagents?.archiveAfterMinutes ?? 60;
   if (!Number.isFinite(minutes) || minutes < 0) {
     return undefined;

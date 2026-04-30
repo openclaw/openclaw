@@ -1,3 +1,4 @@
+import { installChannelOutboundPayloadContractSuite } from "openclaw/plugin-sdk/channel-contract-testing";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { describe, expect, it } from "vitest";
 import { createSlackOutboundPayloadHarness } from "../test-api.js";
@@ -10,15 +11,11 @@ function createHarness(params: {
 }
 
 describe("slackOutbound sendPayload", () => {
-  it("forwards Slack blocks from channelData", async () => {
+  it("renders presentation blocks", async () => {
     const { run, sendMock, to } = createHarness({
       payload: {
         text: "Fallback summary",
-        channelData: {
-          slack: {
-            blocks: [{ type: "divider" }],
-          },
-        },
+        presentation: { blocks: [{ type: "divider" }] },
       },
     });
 
@@ -33,43 +30,6 @@ describe("slackOutbound sendPayload", () => {
       }),
     );
     expect(result).toMatchObject({ channel: "slack", messageId: "sl-1" });
-  });
-
-  it("accepts blocks encoded as JSON strings in Slack channelData", async () => {
-    const { run, sendMock, to } = createHarness({
-      payload: {
-        channelData: {
-          slack: {
-            blocks: '[{"type":"section","text":{"type":"mrkdwn","text":"hello"}}]',
-          },
-        },
-      },
-    });
-
-    await run();
-
-    expect(sendMock).toHaveBeenCalledWith(
-      to,
-      "",
-      expect.objectContaining({
-        blocks: [{ type: "section", text: { type: "mrkdwn", text: "hello" } }],
-      }),
-    );
-  });
-
-  it("rejects invalid Slack blocks from channelData", async () => {
-    const { run, sendMock } = createHarness({
-      payload: {
-        channelData: {
-          slack: {
-            blocks: {},
-          },
-        },
-      },
-    });
-
-    await expect(run()).rejects.toThrow(/blocks must be an array/i);
-    expect(sendMock).not.toHaveBeenCalled();
   });
 
   it("sends media before a separate interactive blocks message", async () => {
@@ -119,11 +79,7 @@ describe("slackOutbound sendPayload", () => {
   it("fails when merged Slack blocks exceed the platform limit", async () => {
     const { run, sendMock } = createHarness({
       payload: {
-        channelData: {
-          slack: {
-            blocks: Array.from({ length: 50 }, () => ({ type: "divider" })),
-          },
-        },
+        presentation: { blocks: Array.from({ length: 50 }, () => ({ type: "divider" })) },
         interactive: {
           blocks: [
             {
@@ -137,5 +93,68 @@ describe("slackOutbound sendPayload", () => {
 
     await expect(run()).rejects.toThrow(/Slack blocks cannot exceed 50 items/i);
     expect(sendMock).not.toHaveBeenCalled();
+  });
+
+  it("offsets presentation controls against native Slack blocks before standalone interactive controls", async () => {
+    const { run, sendMock, to } = createHarness({
+      payload: {
+        text: "Deploy?",
+        channelData: {
+          slack: {
+            blocks: [
+              {
+                type: "actions",
+                block_id: "openclaw_reply_buttons_1",
+                elements: [],
+              },
+            ],
+          },
+        },
+        presentation: {
+          blocks: [
+            {
+              type: "buttons",
+              buttons: [{ label: "Stage", value: "stage" }],
+            },
+          ],
+        },
+        interactive: {
+          blocks: [
+            {
+              type: "buttons",
+              buttons: [{ label: "Approve", value: "approve" }],
+            },
+          ],
+        },
+      },
+    });
+
+    await run();
+
+    expect(sendMock).toHaveBeenCalledWith(
+      to,
+      "Deploy?",
+      expect.objectContaining({
+        blocks: [
+          expect.objectContaining({ block_id: "openclaw_reply_buttons_1" }),
+          expect.objectContaining({
+            block_id: "openclaw_reply_buttons_2",
+            elements: [expect.objectContaining({ action_id: "openclaw:reply_button:2:1" })],
+          }),
+          expect.objectContaining({
+            block_id: "openclaw_reply_buttons_3",
+            elements: [expect.objectContaining({ action_id: "openclaw:reply_button:3:1" })],
+          }),
+        ],
+      }),
+    );
+  });
+});
+
+describe("Slack outbound payload contract", () => {
+  installChannelOutboundPayloadContractSuite({
+    channel: "slack",
+    chunking: { mode: "passthrough", longTextLength: 5000 },
+    createHarness: createSlackOutboundPayloadHarness,
   });
 });

@@ -5,6 +5,7 @@ import {
   buildCommandText,
   buildCommandTextFromArgs,
   findCommandByNativeName,
+  formatCommandArgMenuTitle,
   getCommandDetection,
   listChatCommands,
   listChatCommandsForConfig,
@@ -18,6 +19,68 @@ import {
   shouldHandleTextCommands,
 } from "./commands-registry.js";
 import type { ChatCommandDefinition } from "./commands-registry.types.js";
+
+type NativeCommandNameResolver = (params: { commandKey: string; defaultName: string }) => string;
+
+function installNativeCommandOverridePlugin(params: {
+  id: "discord" | "slack";
+  resolveNativeCommandName: NativeCommandNameResolver;
+}) {
+  setActivePluginRegistry(
+    createTestRegistry([
+      {
+        pluginId: params.id,
+        plugin: {
+          ...createChannelTestPluginBase({
+            id: params.id,
+            capabilities: { nativeCommands: true, chatTypes: ["direct"] },
+          }),
+          commands: {
+            resolveNativeCommandName: params.resolveNativeCommandName,
+          },
+        },
+        source: "test",
+      },
+    ]),
+  );
+}
+
+function installDiscordNativeCommandOverrides() {
+  installNativeCommandOverridePlugin({
+    id: "discord",
+    resolveNativeCommandName: ({ commandKey, defaultName }) =>
+      commandKey === "tts" ? "voice" : defaultName,
+  });
+}
+
+function installSlackNativeCommandOverrides() {
+  installNativeCommandOverridePlugin({
+    id: "slack",
+    resolveNativeCommandName: ({ commandKey, defaultName }) =>
+      commandKey === "status" ? "agentstatus" : defaultName,
+  });
+}
+
+function installOllamaThinkingProvider() {
+  const registry = createTestRegistry();
+  registry.providers.push({
+    pluginId: "ollama",
+    source: "test",
+    provider: {
+      id: "ollama",
+      label: "Ollama",
+      auth: [],
+      resolveThinkingProfile: ({ reasoning }: { reasoning?: boolean }) => ({
+        levels:
+          reasoning === true
+            ? [{ id: "off" }, { id: "low" }, { id: "medium" }, { id: "high" }, { id: "max" }]
+            : [{ id: "off" }],
+        defaultLevel: "off",
+      }),
+    } as never,
+  });
+  setActivePluginRegistry(registry);
+}
 
 beforeEach(() => {
   vi.doUnmock("../channels/plugins/index.js");
@@ -112,6 +175,7 @@ describe("commands registry", () => {
   });
 
   it("applies discord native command overrides", () => {
+    installDiscordNativeCommandOverrides();
     const native = listNativeCommandSpecsForConfig(
       { commands: { native: true } },
       { provider: "discord" },
@@ -122,6 +186,7 @@ describe("commands registry", () => {
   });
 
   it("applies slack native command overrides", () => {
+    installSlackNativeCommandOverrides();
     const native = listNativeCommandSpecsForConfig(
       { commands: { native: true } },
       { provider: "slack" },
@@ -129,9 +194,28 @@ describe("commands registry", () => {
     expect(native.find((spec) => spec.name === "agentstatus")).toBeTruthy();
     expect(findCommandByNativeName("agentstatus", "slack")?.key).toBe("status");
     expect(findCommandByNativeName("status", "slack")).toBeUndefined();
+    expect(
+      findCommandByNativeName("agentstatus", "slack", {
+        includeBundledChannelFallback: false,
+      })?.key,
+    ).toBe("status");
+    expect(
+      findCommandByNativeName("status", "slack", {
+        includeBundledChannelFallback: false,
+      }),
+    ).toBeUndefined();
+  });
+
+  it("can resolve default native command names without loading bundled channel fallbacks", () => {
+    expect(
+      findCommandByNativeName("status", "discord", {
+        includeBundledChannelFallback: false,
+      })?.key,
+    ).toBe("status");
   });
 
   it("keeps discord native command specs within slash-command limits", () => {
+    installDiscordNativeCommandOverrides();
     const cfg = { commands: { native: true } };
     const native = listNativeCommandSpecsForConfig(cfg, { provider: "discord" });
     for (const spec of native) {
@@ -377,6 +461,15 @@ describe("commands registry args", () => {
     ]);
   });
 
+  it("keeps verbose full available while preserving no-arg status dispatch", () => {
+    const verbose = listChatCommands().find((command) => command.key === "verbose");
+
+    expect(verbose?.args?.[0]?.choices).toEqual(["on", "off", "full"]);
+    expect(
+      resolveCommandArgMenu({ command: verbose!, args: undefined, cfg: {} as never }),
+    ).toBeNull();
+  });
+
   it("does not show menus when arg already provided", () => {
     const command = createUsageModeCommand();
 
@@ -392,6 +485,7 @@ describe("commands registry args", () => {
     let seen: {
       provider?: string;
       model?: string;
+      catalogLength?: number;
       commandKey: string;
       argName: string;
     } | null = null;
@@ -408,8 +502,14 @@ describe("commands registry args", () => {
           name: "level",
           description: "level",
           type: "string",
-          choices: ({ provider, model, command, arg }) => {
-            seen = { provider, model, commandKey: command.key, argName: arg.name };
+          choices: ({ provider, model, catalog, command, arg }) => {
+            seen = {
+              provider,
+              model,
+              catalogLength: catalog?.length,
+              commandKey: command.key,
+              argName: arg.name,
+            };
             return ["low", "high"];
           },
         },
@@ -422,9 +522,13 @@ describe("commands registry args", () => {
       { label: "low", value: "low" },
       { label: "high", value: "high" },
     ]);
+    expect(formatCommandArgMenuTitle({ command, menu: menu! })).toBe(
+      "Choose level for /think.\nOptions: low, high.",
+    );
     const seenChoice = seen as {
       provider?: string;
       model?: string;
+      catalogLength?: number;
       commandKey: string;
       argName: string;
     } | null;
@@ -432,6 +536,78 @@ describe("commands registry args", () => {
     expect(seenChoice?.argName).toBe("level");
     expect(seenChoice?.provider).toBeTruthy();
     expect(seenChoice?.model).toBeTruthy();
+    expect(seenChoice?.catalogLength).toBe(0);
+  });
+
+  it("uses configured model catalog reasoning for /think arg menus", () => {
+    installOllamaThinkingProvider();
+    const command = findCommandByNativeName("think");
+    expect(command).toBeTruthy();
+    if (!command) {
+      return;
+    }
+
+    const menu = resolveCommandArgMenu({
+      command,
+      args: undefined,
+      cfg: {
+        models: {
+          providers: {
+            ollama: {
+              models: [{ id: "glm-5.1:cloud", name: "GLM 5.1 Cloud", reasoning: true }],
+            },
+          },
+        },
+      } as never,
+      provider: "ollama",
+      model: "glm-5.1:cloud",
+    });
+
+    expect(menu?.arg.name).toBe("level");
+    expect(menu?.choices.map((choice) => choice.value)).toEqual([
+      "off",
+      "low",
+      "medium",
+      "high",
+      "max",
+    ]);
+    expect(formatCommandArgMenuTitle({ command, menu: menu! })).toBe(
+      "Choose level for /think.\nOptions: off, low, medium, high, max.",
+    );
+  });
+
+  it("uses configured model compat for /think arg menus", () => {
+    const command = findCommandByNativeName("think");
+    expect(command).toBeTruthy();
+    if (!command) {
+      return;
+    }
+
+    const menu = resolveCommandArgMenu({
+      command,
+      args: undefined,
+      cfg: {
+        models: {
+          providers: {
+            gmn: {
+              models: [
+                {
+                  id: "gpt-5.4",
+                  name: "GPT 5.4 via GMN",
+                  reasoning: true,
+                  compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh"] },
+                },
+              ],
+            },
+          },
+        },
+      } as never,
+      provider: "gmn",
+      model: "gpt-5.4",
+    });
+
+    expect(menu?.choices.map((choice) => choice.value)).toContain("xhigh");
+    expect(formatCommandArgMenuTitle({ command, menu: menu! })).toContain("xhigh");
   });
 
   it("does not show menus when args were provided as raw text only", () => {

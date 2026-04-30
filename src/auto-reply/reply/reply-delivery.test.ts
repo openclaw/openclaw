@@ -13,7 +13,7 @@ type BlockReplyPipelineLike = NonNullable<
 >;
 
 describe("createBlockReplyDeliveryHandler", () => {
-  it("sends media-bearing block replies even when block streaming is disabled", async () => {
+  it("keeps captioned media-bearing block replies buffered when block streaming is disabled", async () => {
     const onBlockReply = vi.fn(async () => {});
     const normalizeStreamingText = vi.fn((payload: { text?: string }) => ({
       text: payload.text,
@@ -40,25 +40,49 @@ describe("createBlockReplyDeliveryHandler", () => {
       replyToCurrent: true,
     });
 
+    expect(onBlockReply).not.toHaveBeenCalled();
+    expect(directlySentBlockKeys).toEqual(new Set());
+    expect(typingSignals.signalTextDelta).toHaveBeenCalledWith("here's the vibe");
+  });
+
+  it("sends media-only block replies when block streaming is disabled", async () => {
+    const onBlockReply = vi.fn(async () => {});
+    const directlySentBlockKeys = new Set<string>();
+
+    const handler = createBlockReplyDeliveryHandler({
+      onBlockReply,
+      normalizeStreamingText: (payload) => ({ text: payload.text, skip: false }),
+      applyReplyToMode: (payload) => payload,
+      typingSignals: {
+        signalTextDelta: vi.fn(async () => {}),
+      } as unknown as TypingSignaler,
+      blockStreamingEnabled: false,
+      blockReplyPipeline: null,
+      directlySentBlockKeys,
+    });
+
+    await handler({
+      mediaUrls: ["/tmp/generated.png"],
+      replyToCurrent: true,
+    });
+
     expect(onBlockReply).toHaveBeenCalledWith({
-      text: undefined,
       mediaUrl: "/tmp/generated.png",
       mediaUrls: ["/tmp/generated.png"],
       replyToCurrent: true,
       replyToId: undefined,
       replyToTag: undefined,
       audioAsVoice: false,
+      text: undefined,
     });
     expect(directlySentBlockKeys).toEqual(
       new Set([
         createBlockReplyContentKey({
-          text: "here's the vibe",
           mediaUrls: ["/tmp/generated.png"],
           replyToCurrent: true,
         }),
       ]),
     );
-    expect(typingSignals.signalTextDelta).toHaveBeenCalledWith("here's the vibe");
   });
 
   it("keeps text-only block replies buffered when block streaming is disabled", async () => {
@@ -111,6 +135,38 @@ describe("createBlockReplyDeliveryHandler", () => {
     });
   });
 
+  it("suppresses implicit current-message threading for block replies when reply threading denies it", async () => {
+    const blockReplyPipeline = {
+      enqueue: vi.fn(),
+    } as unknown as BlockReplyPipelineLike;
+
+    const handler = createBlockReplyDeliveryHandler({
+      onBlockReply: vi.fn(async () => {}),
+      currentMessageId: "msg-123",
+      replyThreading: { implicitCurrentMessage: "deny" },
+      normalizeStreamingText: (payload) => ({ text: payload.text, skip: false }),
+      applyReplyToMode: (payload) => payload,
+      typingSignals: {
+        signalTextDelta: vi.fn(async () => {}),
+      } as unknown as TypingSignaler,
+      blockStreamingEnabled: true,
+      blockReplyPipeline,
+      directlySentBlockKeys: new Set(),
+    });
+
+    await handler({ text: "reset intro" });
+
+    expect(blockReplyPipeline.enqueue).toHaveBeenCalledWith({
+      text: "reset intro",
+      mediaUrl: undefined,
+      replyToId: undefined,
+      replyToCurrent: undefined,
+      replyToTag: undefined,
+      audioAsVoice: false,
+      mediaUrls: undefined,
+    });
+  });
+
   it("parses media directives in block replies before path normalization", () => {
     const normalized = normalizeReplyPayloadDirectives({
       payload: { text: "Result\nMEDIA: ./image.png" },
@@ -123,6 +179,30 @@ describe("createBlockReplyDeliveryHandler", () => {
       mediaUrl: "./image.png",
       mediaUrls: ["./image.png"],
     });
+  });
+
+  it("parses lowercase media directives in block replies before path normalization", () => {
+    const normalized = normalizeReplyPayloadDirectives({
+      payload: { text: "media: ./report.pdf" },
+      trimLeadingWhitespace: true,
+      parseMode: "auto",
+    });
+
+    expect(normalized.payload).toMatchObject({
+      text: undefined,
+      mediaUrl: "./report.pdf",
+      mediaUrls: ["./report.pdf"],
+    });
+  });
+
+  it("does not mark plain replies as explicit reply_to_current opt-outs", () => {
+    const normalized = normalizeReplyPayloadDirectives({
+      payload: { text: "plain reply" },
+      trimLeadingWhitespace: true,
+      parseMode: "auto",
+    });
+
+    expect(normalized.payload.replyToCurrent).toBeUndefined();
   });
 
   it("passes normalized media block replies through media path normalization", async () => {
@@ -155,7 +235,7 @@ describe("createBlockReplyDeliveryHandler", () => {
       mediaUrl: absPath,
       mediaUrls: [absPath],
       replyToId: undefined,
-      replyToCurrent: false,
+      replyToCurrent: undefined,
       replyToTag: false,
       audioAsVoice: false,
     });

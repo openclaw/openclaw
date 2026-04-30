@@ -3,6 +3,7 @@ import { SENSITIVE_URL_HINT_TAG } from "../shared/net/redact-sensitive-url.js";
 import { buildConfigSchema, lookupConfigSchema } from "./schema.js";
 import { applyDerivedTags, CONFIG_TAGS, deriveTagsForPath } from "./schema.tags.js";
 import { ToolsSchema } from "./zod-schema.agent-runtime.js";
+import { OpenClawSchema } from "./zod-schema.js";
 
 describe("config schema", () => {
   type SchemaInput = NonNullable<Parameters<typeof buildConfigSchema>[0]>;
@@ -133,6 +134,7 @@ describe("config schema", () => {
         }
       | undefined;
     expect(serversNode?.additionalProperties?.properties?.headers).toBeTruthy();
+    expect(serversNode?.additionalProperties?.properties?.transport).toBeTruthy();
   });
 
   it("merges plugin ui hints", () => {
@@ -289,12 +291,31 @@ describe("config schema", () => {
     expect(parsed?.web?.fetch?.maxResponseBytes).toBe(2_000_000);
   });
 
+  it("accepts WhatsApp Web Baileys socket timing in the runtime zod schema", () => {
+    const parsed = OpenClawSchema.parse({
+      web: {
+        whatsapp: {
+          keepAliveIntervalMs: 15_000,
+          connectTimeoutMs: 60_000,
+          defaultQueryTimeoutMs: 90_000,
+        },
+      },
+    });
+
+    expect(parsed.web?.whatsapp).toEqual({
+      keepAliveIntervalMs: 15_000,
+      connectTimeoutMs: 60_000,
+      defaultQueryTimeoutMs: 90_000,
+    });
+  });
+
   it("accepts web fetch ssrfPolicy in the runtime zod schema", () => {
     const parsed = ToolsSchema.parse({
       web: {
         fetch: {
           ssrfPolicy: {
             allowRfc2544BenchmarkRange: true,
+            allowIpv6UniqueLocalRange: true,
           },
         },
       },
@@ -302,6 +323,7 @@ describe("config schema", () => {
 
     expect(parsed?.web?.fetch?.ssrfPolicy).toEqual({
       allowRfc2544BenchmarkRange: true,
+      allowIpv6UniqueLocalRange: true,
     });
   });
 

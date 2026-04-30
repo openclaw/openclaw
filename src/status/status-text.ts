@@ -1,11 +1,13 @@
 import {
   resolveAgentConfig,
   resolveAgentDir,
+  resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
   resolveSessionAgentId,
   resolveAgentModelFallbacksOverride,
 } from "../agents/agent-scope.js";
 import { resolveFastModeState } from "../agents/fast-mode.js";
+import { selectAgentHarness } from "../agents/harness/selection.js";
 import { resolveModelAuthLabel } from "../agents/model-auth-label.js";
 import {
   resolveInternalSessionKey,
@@ -13,21 +15,15 @@ import {
 } from "../agents/tools/sessions-helpers.js";
 import { normalizeGroupActivation } from "../auto-reply/group-activation.js";
 import { resolveSelectedAndActiveModel } from "../auto-reply/model-runtime.js";
-import type {
-  ElevatedLevel,
-  ReasoningLevel,
-  ThinkLevel,
-  VerboseLevel,
-} from "../auto-reply/thinking.js";
+import type { ThinkLevel } from "../auto-reply/thinking.js";
 import { toAgentModelListLike } from "../config/model-input.js";
-import type { SessionEntry, SessionScope } from "../config/sessions.js";
+import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   formatUsageWindowSummary,
   loadProviderUsageSummary,
   resolveUsageProviderId,
 } from "../infra/provider-usage.js";
-import type { MediaUnderstandingDecision } from "../media-understanding/types.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import {
   listTasksForAgentIdForStatus,
@@ -38,34 +34,8 @@ import {
   formatTaskStatusDetail,
   formatTaskStatusTitle,
 } from "../tasks/task-status.js";
-
-export type BuildStatusTextParams = {
-  cfg: OpenClawConfig;
-  sessionEntry?: SessionEntry;
-  sessionKey: string;
-  parentSessionKey?: string;
-  sessionScope?: SessionScope;
-  storePath?: string;
-  statusChannel: string;
-  provider: string;
-  model: string;
-  contextTokens?: number;
-  resolvedThinkLevel?: ThinkLevel;
-  resolvedFastMode?: boolean;
-  resolvedVerboseLevel: VerboseLevel;
-  resolvedReasoningLevel: ReasoningLevel;
-  resolvedElevatedLevel?: ElevatedLevel;
-  resolveDefaultThinkingLevel: () => Promise<ThinkLevel | undefined>;
-  isGroup: boolean;
-  defaultGroupActivation: () => "always" | "mention";
-  mediaDecisions?: MediaUnderstandingDecision[];
-  taskLineOverride?: string;
-  skipDefaultTaskLookup?: boolean;
-  primaryModelLabelOverride?: string;
-  modelAuthOverride?: string;
-  activeModelAuthOverride?: string;
-  includeTranscriptUsage?: boolean;
-};
+import type { BuildStatusTextParams } from "./status-text.types.js";
+export type { BuildStatusTextParams } from "./status-text.types.js";
 
 const USAGE_OAUTH_ONLY_PROVIDERS = new Set([
   "anthropic",
@@ -131,6 +101,30 @@ function formatSessionTaskLine(sessionKey: string): string | undefined {
   return parts.length ? `📌 Tasks: ${parts.join(" · ")}` : undefined;
 }
 
+function resolveStatusHarnessId(params: {
+  cfg: OpenClawConfig;
+  provider: string;
+  model: string;
+  agentId: string;
+  sessionKey: string;
+  sessionEntry?: SessionEntry;
+}): string | undefined {
+  try {
+    const selected = selectAgentHarness({
+      provider: params.provider,
+      modelId: params.model,
+      config: params.cfg,
+      agentId: params.agentId,
+      sessionKey: params.sessionKey,
+      agentHarnessId: params.sessionEntry?.agentHarnessId,
+    });
+    const id = normalizeOptionalLowercaseString(selected.id);
+    return id && id !== "pi" ? id : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function formatAgentTaskCountsLine(agentId: string): string | undefined {
   const snapshot = buildTaskStatusSnapshot(listTasksForAgentIdForStatus(agentId));
   if (snapshot.totalCount === 0) {
@@ -164,6 +158,10 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
     ? resolveSessionAgentId({ sessionKey, config: cfg })
     : resolveDefaultAgentId(cfg);
   const statusAgentDir = resolveAgentDir(cfg, statusAgentId);
+  const statusWorkspaceDir =
+    params.workspaceDir ??
+    sessionEntry?.spawnedWorkspaceDir ??
+    resolveAgentWorkspaceDir(cfg, statusAgentId);
   const modelRefs = resolveSelectedAndActiveModel({
     selectedProvider: provider,
     selectedModel: model,
@@ -176,6 +174,8 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
         cfg,
         sessionEntry,
         agentDir: statusAgentDir,
+        workspaceDir: statusWorkspaceDir,
+        includeExternalProfiles: false,
       });
   const activeModelAuth = Object.hasOwn(params, "activeModelAuthOverride")
     ? params.activeModelAuthOverride
@@ -185,6 +185,8 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
           cfg,
           sessionEntry,
           agentDir: statusAgentDir,
+          workspaceDir: statusWorkspaceDir,
+          includeExternalProfiles: false,
         })
       : selectedModelAuth;
   const currentUsageProvider = (() => {
@@ -284,8 +286,21 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
       agentId: statusAgentId,
       sessionEntry,
     }).enabled;
+  const effectiveHarness =
+    params.resolvedHarness ??
+    resolveStatusHarnessId({
+      cfg,
+      provider,
+      model,
+      agentId: statusAgentId,
+      sessionKey,
+      sessionEntry,
+    });
   const agentFallbacksOverride = resolveAgentModelFallbacksOverride(cfg, statusAgentId);
   const { buildStatusMessage } = await loadStatusMessageRuntime();
+  const explicitThinkingDefault =
+    (agentConfig?.thinkingDefault as ThinkLevel | undefined) ??
+    (agentDefaults.thinkingDefault as ThinkLevel | undefined);
   return buildStatusMessage({
     config: cfg,
     agent: {
@@ -296,8 +311,9 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
         ...(agentFallbacksOverride === undefined ? {} : { fallbacks: agentFallbacksOverride }),
       },
       ...(typeof contextTokens === "number" && contextTokens > 0 ? { contextTokens } : {}),
-      thinkingDefault: agentConfig?.thinkingDefault ?? agentDefaults.thinkingDefault,
+      thinkingDefault: explicitThinkingDefault,
       verboseDefault: agentDefaults.verboseDefault,
+      reasoningDefault: agentConfig?.reasoningDefault ?? agentDefaults.reasoningDefault,
       elevatedDefault: agentDefaults.elevatedDefault,
     },
     agentId: statusAgentId,
@@ -311,8 +327,10 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
     sessionScope,
     sessionStorePath: storePath,
     groupActivation,
-    resolvedThink: resolvedThinkLevel ?? (await resolveDefaultThinkingLevel()),
+    resolvedThink:
+      resolvedThinkLevel ?? explicitThinkingDefault ?? (await resolveDefaultThinkingLevel()),
     resolvedFast: effectiveFastMode,
+    resolvedHarness: effectiveHarness,
     resolvedVerbose: resolvedVerboseLevel,
     resolvedReasoning: resolvedReasoningLevel,
     resolvedElevated: resolvedElevatedLevel,

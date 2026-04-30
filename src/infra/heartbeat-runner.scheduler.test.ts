@@ -2,7 +2,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { startHeartbeatRunner } from "./heartbeat-runner.js";
 import { computeNextHeartbeatPhaseDueMs, resolveHeartbeatPhaseMs } from "./heartbeat-schedule.js";
-import { requestHeartbeatNow, resetHeartbeatWakeStateForTests } from "./heartbeat-wake.js";
+import {
+  HEARTBEAT_SKIP_CRON_IN_PROGRESS,
+  HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT,
+  type RetryableHeartbeatBusySkipReason,
+  requestHeartbeatNow,
+  resetHeartbeatWakeStateForTests,
+} from "./heartbeat-wake.js";
 
 describe("startHeartbeatRunner", () => {
   type RunOnce = Parameters<typeof startHeartbeatRunner>[0]["runOnce"];
@@ -44,12 +50,12 @@ describe("startHeartbeatRunner", () => {
     });
   }
 
-  function createRequestsInFlightRunSpy(skipCount: number) {
+  function createRetryableBusyRunSpy(reason: RetryableHeartbeatBusySkipReason, skipCount: number) {
     let callCount = 0;
     return vi.fn().mockImplementation(async () => {
       callCount++;
       if (callCount <= skipCount) {
-        return { status: "skipped", reason: "requests-in-flight" } as const;
+        return { status: "skipped", reason } as const;
       }
       return { status: "ran", durationMs: 1 } as const;
     });
@@ -58,7 +64,7 @@ describe("startHeartbeatRunner", () => {
   async function expectWakeDispatch(params: {
     cfg: OpenClawConfig;
     runSpy: RunOnce;
-    wake: { reason: string; agentId?: string; sessionKey?: string; coalesceMs: number };
+    wake: Parameters<typeof requestHeartbeatNow>[0];
     expectedCall: Record<string, unknown>;
   }) {
     const runner = startHeartbeatRunner({
@@ -127,6 +133,27 @@ describe("startHeartbeatRunner", () => {
         (call) => call[0]?.agentId === "ops" && call[0]?.heartbeat?.every === "15m",
       ),
     ).toBe(true);
+
+    runner.stop();
+  });
+
+  it("schedules every configured agent when only global heartbeat defaults exist", async () => {
+    useFakeHeartbeatTime();
+
+    const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    const runner = startHeartbeatRunner({
+      cfg: heartbeatConfig([{ id: "main" }, { id: "ops" }]),
+      runOnce: runSpy,
+      stableSchedulerSeed: TEST_SCHEDULER_SEED,
+    });
+    const mainDueMs = resolveDueFromNow(0, 30 * 60_000, "main");
+    const opsDueMs = resolveDueFromNow(0, 30 * 60_000, "ops");
+
+    await vi.advanceTimersByTimeAsync(Math.max(mainDueMs, opsDueMs) + 1);
+
+    expect(runSpy.mock.calls.map((call) => call[0]?.agentId)).toEqual(
+      expect.arrayContaining(["main", "ops"]),
+    );
 
     runner.stop();
   });
@@ -214,7 +241,7 @@ describe("startHeartbeatRunner", () => {
   it("reschedules timer when runOnce returns requests-in-flight", async () => {
     useFakeHeartbeatTime();
 
-    const runSpy = createRequestsInFlightRunSpy(1);
+    const runSpy = createRetryableBusyRunSpy(HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT, 1);
 
     const runner = startHeartbeatRunner({
       cfg: heartbeatConfig(),
@@ -235,6 +262,27 @@ describe("startHeartbeatRunner", () => {
     runner.stop();
   });
 
+  it("reschedules timer when runOnce returns cron-in-progress", async () => {
+    useFakeHeartbeatTime();
+
+    const runSpy = createRetryableBusyRunSpy(HEARTBEAT_SKIP_CRON_IN_PROGRESS, 1);
+
+    const runner = startHeartbeatRunner({
+      cfg: heartbeatConfig(),
+      runOnce: runSpy,
+      stableSchedulerSeed: TEST_SCHEDULER_SEED,
+    });
+    const firstDueMs = resolveDueFromNow(0, 30 * 60_000, "main");
+
+    await vi.advanceTimersByTimeAsync(firstDueMs + 1);
+    expect(runSpy).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(runSpy).toHaveBeenCalledTimes(2);
+
+    runner.stop();
+  });
+
   it("does not push nextDueMs forward on repeated requests-in-flight skips", async () => {
     useFakeHeartbeatTime();
 
@@ -246,7 +294,7 @@ describe("startHeartbeatRunner", () => {
       callTimes.push(Date.now());
       callCount++;
       if (callCount <= 5) {
-        return { status: "skipped", reason: "requests-in-flight" } as const;
+        return { status: "skipped", reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT } as const;
       }
       return { status: "ran", durationMs: 1 } as const;
     });
@@ -302,6 +350,87 @@ describe("startHeartbeatRunner", () => {
       },
     });
 
+    runner.stop();
+  });
+
+  it("routes targeted wake requests to agents enabled by global defaults", async () => {
+    useFakeHeartbeatTime();
+    const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    const runner = await expectWakeDispatch({
+      cfg: heartbeatConfig([{ id: "main" }, { id: "ops" }]),
+      runSpy,
+      wake: {
+        reason: "cron:job-123",
+        agentId: "ops",
+        sessionKey: "agent:ops:discord:channel:alerts",
+        coalesceMs: 0,
+      },
+      expectedCall: {
+        agentId: "ops",
+        reason: "cron:job-123",
+        sessionKey: "agent:ops:discord:channel:alerts",
+      },
+    });
+
+    runner.stop();
+  });
+
+  it("merges targeted wake heartbeat overrides onto the agent heartbeat config", async () => {
+    useFakeHeartbeatTime();
+    const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    const runner = await expectWakeDispatch({
+      cfg: {
+        ...heartbeatConfig([
+          {
+            id: "ops",
+            heartbeat: {
+              every: "15m",
+              prompt: "Ops prompt",
+              directPolicy: "block",
+              target: "discord:channel:ops",
+            },
+          },
+        ]),
+      } as OpenClawConfig,
+      runSpy,
+      wake: {
+        reason: "cron:job-123",
+        agentId: "ops",
+        sessionKey: "agent:ops:discord:channel:alerts",
+        heartbeat: { target: "last" },
+        coalesceMs: 0,
+      },
+      expectedCall: {
+        agentId: "ops",
+        reason: "cron:job-123",
+        sessionKey: "agent:ops:discord:channel:alerts",
+        heartbeat: {
+          every: "15m",
+          prompt: "Ops prompt",
+          directPolicy: "block",
+          target: "last",
+        },
+      },
+    });
+
+    runner.stop();
+  });
+
+  it("clamps oversized scheduler delays so heartbeats do not fire in a tight loop (#71414)", async () => {
+    useFakeHeartbeatTime();
+    const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    // 365d resolves to ~31_536_000_000 ms, well past Node setTimeout's
+    // 2_147_483_647 ms cap. Without clamping, setTimeout would fire after
+    // 1ms and re-arm in a tight loop, exhausting the runner.
+    const runner = startHeartbeatRunner({
+      cfg: heartbeatConfig([{ id: "main", heartbeat: { every: "365d" } }]),
+      runOnce: runSpy,
+      stableSchedulerSeed: TEST_SCHEDULER_SEED,
+    });
+    // Advance well past the broken 1ms re-arm but well under the clamped cap
+    // (~24.85d). If the bug is present, runSpy gets called many times.
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(runSpy).not.toHaveBeenCalled();
     runner.stop();
   });
 

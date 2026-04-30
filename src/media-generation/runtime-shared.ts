@@ -1,6 +1,7 @@
 import { listProfilesForProvider } from "../agents/auth-profiles.js";
 import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
 import { DEFAULT_PROVIDER } from "../agents/defaults.js";
+import { describeFailoverError, isFailoverError } from "../agents/failover-error.js";
 import { resolveEnvApiKey } from "../agents/model-auth-env.js";
 import type { FallbackAttempt } from "../agents/model-fallback.types.js";
 import {
@@ -9,7 +10,8 @@ import {
 } from "../config/model-input.js";
 import type { AgentModelConfig } from "../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../config/types.js";
-import { getProviderEnvVars } from "../secrets/provider-env-vars.js";
+import { formatErrorMessage } from "../infra/errors.js";
+import { getProviderEnvVars as getDefaultProviderEnvVars } from "../secrets/provider-env-vars.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import type {
   MediaGenerationNormalizationMetadataInput,
@@ -27,6 +29,23 @@ export type {
   MediaNormalizationValue,
 } from "./normalization.types.js";
 
+export function recordCapabilityCandidateFailure(params: {
+  attempts: FallbackAttempt[];
+  provider: string;
+  model: string;
+  error: unknown;
+}): void {
+  const described = isFailoverError(params.error) ? describeFailoverError(params.error) : undefined;
+  params.attempts.push({
+    provider: params.provider,
+    model: params.model,
+    error: described?.message ?? formatErrorMessage(params.error),
+    reason: described?.reason,
+    status: described?.status,
+    code: described?.code,
+  });
+}
+
 export function hasMediaNormalizationEntry<TValue extends MediaNormalizationValue>(
   entry: MediaNormalizationEntry<TValue> | undefined,
 ): entry is MediaNormalizationEntry<TValue> {
@@ -43,6 +62,7 @@ const IMAGE_RESOLUTION_ORDER = ["1K", "2K", "4K"] as const;
 
 type CapabilityProviderCandidate = {
   id: string;
+  aliases?: readonly string[];
   defaultModel?: string | null;
   isConfigured?: (ctx: { cfg?: OpenClawConfig; agentDir?: string }) => boolean;
 };
@@ -103,7 +123,7 @@ function resolveAutoCapabilityFallbackRefs(params: {
   agentDir?: string;
   listProviders: (cfg?: OpenClawConfig) => CapabilityProviderCandidate[];
 }): string[] {
-  const providerDefaults = new Map<string, string>();
+  const providerDefaults = new Map<string, { ref: string; aliases: string[] }>();
   for (const provider of params.listProviders(params.cfg)) {
     const providerId = normalizeOptionalString(provider.id);
     const modelId = normalizeOptionalString(provider.defaultModel);
@@ -119,19 +139,26 @@ function resolveAutoCapabilityFallbackRefs(params: {
     ) {
       continue;
     }
-    providerDefaults.set(providerId, `${providerId}/${modelId}`);
+    const aliases = (provider.aliases ?? []).flatMap((alias) => {
+      const normalized = normalizeOptionalString(alias);
+      return normalized ? [normalized] : [];
+    });
+    providerDefaults.set(providerId, { ref: `${providerId}/${modelId}`, aliases });
   }
 
   const defaultProvider = resolveCurrentDefaultProviderId(params.cfg);
+  const providerIds = [...providerDefaults.keys()].toSorted();
+  const matchesDefaultProvider = (providerId: string): boolean => {
+    const entry = providerDefaults.get(providerId);
+    return providerId === defaultProvider || (entry?.aliases ?? []).includes(defaultProvider);
+  };
   const orderedProviders = [
-    defaultProvider,
-    ...[...providerDefaults.keys()]
-      .filter((providerId) => providerId !== defaultProvider)
-      .toSorted(),
+    ...providerIds.filter(matchesDefaultProvider),
+    ...providerIds.filter((providerId) => !matchesDefaultProvider(providerId)),
   ];
   return orderedProviders.flatMap((providerId) => {
-    const ref = providerDefaults.get(providerId);
-    return ref ? [ref] : [];
+    const entry = providerDefaults.get(providerId);
+    return entry ? [entry.ref] : [];
   });
 }
 
@@ -158,6 +185,11 @@ export function resolveCapabilityModelCandidates(params: {
     seen.add(key);
     candidates.push(parsed);
   };
+
+  const override = params.parseModelRef(params.modelOverride);
+  if (override) {
+    return [override];
+  }
 
   add(params.modelOverride);
   add(resolveAgentModelPrimaryValue(params.modelConfig));
@@ -202,12 +234,15 @@ function compareScores(
   return next.tertiary.localeCompare(best.tertiary) < 0;
 }
 
-function parseAspectRatioValue(raw?: string | null): ParsedAspectRatio | null {
+function parsePositiveDimensionPair(
+  raw: string | null | undefined,
+  pattern: RegExp,
+): { width: number; height: number } | null {
   const trimmed = normalizeOptionalString(raw);
   if (!trimmed) {
     return null;
   }
-  const match = /^(\d+(?:\.\d+)?)\s*:\s*(\d+(?:\.\d+)?)$/.exec(trimmed);
+  const match = pattern.exec(trimmed);
   if (!match) {
     return null;
   }
@@ -216,32 +251,31 @@ function parseAspectRatioValue(raw?: string | null): ParsedAspectRatio | null {
   if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
     return null;
   }
+  return { width, height };
+}
+
+function parseAspectRatioValue(raw?: string | null): ParsedAspectRatio | null {
+  const pair = parsePositiveDimensionPair(raw, /^(\d+(?:\.\d+)?)\s*:\s*(\d+(?:\.\d+)?)$/);
+  if (!pair) {
+    return null;
+  }
   return {
-    width,
-    height,
-    value: width / height,
+    width: pair.width,
+    height: pair.height,
+    value: pair.width / pair.height,
   };
 }
 
 function parseSizeValue(raw?: string | null): ParsedSize | null {
-  const trimmed = normalizeOptionalString(raw);
-  if (!trimmed) {
-    return null;
-  }
-  const match = /^(\d+)\s*x\s*(\d+)$/i.exec(trimmed);
-  if (!match) {
-    return null;
-  }
-  const width = Number(match[1]);
-  const height = Number(match[2]);
-  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+  const pair = parsePositiveDimensionPair(raw, /^(\d+)\s*x\s*(\d+)$/i);
+  if (!pair) {
     return null;
   }
   return {
-    width,
-    height,
-    aspectRatio: width / height,
-    area: width * height,
+    width: pair.width,
+    height: pair.height,
+    aspectRatio: pair.width / pair.height,
+    area: pair.width * pair.height,
   };
 }
 
@@ -478,7 +512,9 @@ export function buildNoCapabilityModelConfiguredMessage(params: {
   modelConfigKey: string;
   providers: Array<{ id: string; defaultModel?: string | null }>;
   fallbackSampleRef?: string;
+  getProviderEnvVars?: typeof getDefaultProviderEnvVars;
 }): string {
+  const getProviderEnvVars = params.getProviderEnvVars ?? getDefaultProviderEnvVars;
   const sampleModel = params.providers.find(
     (provider) =>
       normalizeOptionalString(provider.id) && normalizeOptionalString(provider.defaultModel),

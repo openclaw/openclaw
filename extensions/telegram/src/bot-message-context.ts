@@ -4,10 +4,11 @@ import {
   shouldAckReaction as shouldAckReactionGate,
 } from "openclaw/plugin-sdk/channel-feedback";
 import { logInboundDrop } from "openclaw/plugin-sdk/channel-inbound";
-import type { TelegramDirectConfig, TelegramGroupConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { TelegramDirectConfig, TelegramGroupConfig } from "openclaw/plugin-sdk/config-types";
 import { deriveLastRoutePolicy } from "openclaw/plugin-sdk/routing";
-import { DEFAULT_ACCOUNT_ID, resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
+import { normalizeAccountId, resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { resolveDefaultTelegramAccountId } from "./accounts.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { firstDefined, normalizeAllowFrom, normalizeDmAllowFromWithStore } from "./bot-access.js";
 import { resolveTelegramInboundBody } from "./bot-message-context.body.js";
@@ -67,10 +68,12 @@ type TelegramStatusReactionController = {
   cancelPending: () => void;
   setError: () => void | Promise<void>;
   setDone: () => void | Promise<void>;
+  restoreInitial: () => void | Promise<void>;
 };
 
 export type TelegramMessageContext = {
   ctxPayload: TelegramMessageContextPayload["ctxPayload"];
+  turn: TelegramMessageContextPayload["turn"];
   primaryCtx: BuildTelegramMessageContextParams["primaryCtx"];
   msg: BuildTelegramMessageContextParams["primaryCtx"]["message"];
   chatId: BuildTelegramMessageContextParams["primaryCtx"]["message"]["chat"]["id"];
@@ -220,7 +223,7 @@ export const buildTelegramMessageContext = async ({
   // Fresh config for bindings lookup; other routing inputs are payload-derived.
   const freshCfg =
     loadFreshConfig?.() ??
-    (runtime?.loadConfig ?? (await loadTelegramMessageContextRuntime()).loadConfig)();
+    (runtime?.getRuntimeConfig ?? (await loadTelegramMessageContextRuntime()).getRuntimeConfig)();
   let { route, configuredBinding, configuredBindingSessionKey } = resolveTelegramConversationRoute({
     cfg: freshCfg,
     accountId: account.accountId,
@@ -233,7 +236,10 @@ export const buildTelegramMessageContext = async ({
   });
   const requiresExplicitAccountBinding = (
     candidate: ReturnType<typeof resolveTelegramConversationRoute>["route"],
-  ): boolean => candidate.accountId !== DEFAULT_ACCOUNT_ID && candidate.matchedBy === "default";
+  ): boolean =>
+    normalizeAccountId(candidate.accountId) !==
+      normalizeAccountId(resolveDefaultTelegramAccountId(freshCfg)) &&
+    candidate.matchedBy === "default";
   const isNamedAccountFallback = requiresExplicitAccountBinding(route);
   // Named-account groups still require an explicit binding; DMs get a
   // per-account fallback session key below to preserve isolation.
@@ -257,7 +263,7 @@ export const buildTelegramMessageContext = async ({
   });
   // Group sender checks are explicit and must not inherit DM pairing-store entries.
   const effectiveGroupAllow = normalizeAllowFrom(groupAllowOverride ?? groupAllowFrom);
-  const hasGroupAllowOverride = typeof groupAllowOverride !== "undefined";
+  const hasGroupAllowOverride = groupAllowOverride !== undefined;
   const senderUsername = msg.from?.username ?? "";
   const baseAccess = evaluateTelegramGroupBaseAccess({
     isGroup,
@@ -549,7 +555,7 @@ export const buildTelegramMessageContext = async ({
         )
       : null;
 
-  const { ctxPayload, skillFilter } = await buildTelegramInboundContextPayload({
+  const { ctxPayload, skillFilter, turn } = await buildTelegramInboundContextPayload({
     cfg,
     primaryCtx,
     msg,
@@ -573,6 +579,9 @@ export const buildTelegramMessageContext = async ({
     topicConfig,
     stickerCacheHit: bodyResult.stickerCacheHit,
     effectiveWasMentioned: bodyResult.effectiveWasMentioned,
+    ...(bodyResult.audioTranscribedMediaIndex !== undefined
+      ? { audioTranscribedMediaIndex: bodyResult.audioTranscribedMediaIndex }
+      : {}),
     locationData: bodyResult.locationData,
     options,
     dmAllowFrom,
@@ -584,6 +593,7 @@ export const buildTelegramMessageContext = async ({
 
   return {
     ctxPayload,
+    turn,
     primaryCtx,
     msg,
     chatId,

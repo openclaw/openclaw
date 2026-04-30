@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import dotenv from "dotenv";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveConfigDir } from "../utils.js";
 import { resolveRequiredHomeDir } from "./home-dir.js";
 import {
@@ -9,6 +10,8 @@ import {
   isDangerousHostEnvVarName,
   normalizeEnvVarKey,
 } from "./host-env-security.js";
+
+const logger = createSubsystemLogger("infra:dotenv");
 
 const BLOCKED_WORKSPACE_DOTENV_KEYS = new Set([
   "ALL_PROXY",
@@ -21,8 +24,13 @@ const BLOCKED_WORKSPACE_DOTENV_KEYS = new Set([
   "CLAWHUB_URL",
   "HTTP_PROXY",
   "HTTPS_PROXY",
+  "IRC_HOST",
+  "MATTERMOST_URL",
+  "MATRIX_HOMESERVER",
+  "MINIMAX_API_HOST",
   "NODE_TLS_REJECT_UNAUTHORIZED",
   "NO_PROXY",
+  "NPM_EXECPATH",
   "OPENAI_API_KEY",
   "OPENAI_API_KEYS",
   "OPENCLAW_AGENT_DIR",
@@ -65,15 +73,22 @@ const BLOCKED_WORKSPACE_DOTENV_KEYS = new Set([
   "OPENCLAW_TEST_TAILSCALE_BINARY",
   "PI_CODING_AGENT_DIR",
   "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH",
+  "SYNOLOGY_CHAT_INCOMING_URL",
+  "SYNOLOGY_NAS_HOST",
   "UV_PYTHON",
 ]);
 
 // Block endpoint redirection for any service without overfitting per-provider names.
-const BLOCKED_WORKSPACE_DOTENV_SUFFIXES = ["_BASE_URL"];
+// `_HOMESERVER` covers Matrix's per-account scoped keys (MATRIX_<ACCOUNT>_HOMESERVER)
+// in addition to the bare MATRIX_HOMESERVER listed above.
+const BLOCKED_WORKSPACE_DOTENV_SUFFIXES = ["_API_HOST", "_BASE_URL", "_HOMESERVER"];
 const BLOCKED_WORKSPACE_DOTENV_PREFIXES = [
   "ANTHROPIC_API_KEY_",
   "CLAWHUB_",
   "OPENAI_API_KEY_",
+  // Workspace .env is untrusted; reserve the full OpenClaw runtime namespace
+  // for shell/global config so new OPENCLAW_* controls are fail-closed by default.
+  "OPENCLAW_",
   "OPENCLAW_CLAWHUB_",
   "OPENCLAW_DISABLE_",
   "OPENCLAW_SKIP_",
@@ -126,7 +141,7 @@ function readDotEnvFile(params: {
       const code =
         error && typeof error === "object" && "code" in error ? String(error.code) : undefined;
       if (code !== "ENOENT") {
-        console.warn(`[dotenv] Failed to read ${params.filePath}: ${String(error)}`);
+        logger.warn(`Failed to read ${params.filePath}: ${String(error)}`, { error });
       }
     }
     return null;
@@ -137,7 +152,7 @@ function readDotEnvFile(params: {
     parsed = dotenv.parse(content);
   } catch (error) {
     if (!params.quiet) {
-      console.warn(`[dotenv] Failed to parse ${params.filePath}: ${String(error)}`);
+      logger.warn(`Failed to parse ${params.filePath}: ${String(error)}`, { error });
     }
     return null;
   }
@@ -225,8 +240,9 @@ function loadParsedDotEnvFiles(files: LoadedDotEnvFile[]) {
     if (keys.length === 0) {
       continue;
     }
-    console.warn(
-      `[dotenv] Conflicting values in ${conflict.keptPath} and ${conflict.ignoredPath} for ${keys.join(", ")}; keeping ${conflict.keptPath}.`,
+    logger.warn(
+      `Conflicting values in ${conflict.keptPath} and ${conflict.ignoredPath} for ${keys.join(", ")}; keeping ${conflict.keptPath}.`,
+      { keptPath: conflict.keptPath, ignoredPath: conflict.ignoredPath, keys },
     );
   }
 }

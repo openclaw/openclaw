@@ -4,7 +4,9 @@ import { colorize, theme } from "../../terminal/theme.js";
 import { serializeGatewayDiscoveryBeacon } from "./discovery.js";
 import {
   isProbeReachable,
+  isPostConnectProbeFailure,
   isScopeLimitedProbeFailure,
+  summarizeGatewayProbeCapability,
   renderProbeSummaryLine,
   renderTargetHeader,
 } from "./helpers.js";
@@ -37,6 +39,9 @@ export function buildGatewayStatusWarnings(params: {
   const reachable = params.probed.filter((entry) => isProbeReachable(entry.probe));
   const degradedScopeLimited = params.probed.filter((entry) =>
     isScopeLimitedProbeFailure(entry.probe),
+  );
+  const degradedDetailFailed = params.probed.filter(
+    (entry) => isPostConnectProbeFailure(entry.probe) && !isScopeLimitedProbeFailure(entry.probe),
   );
   const warnings: GatewayStatusWarning[] = [];
   if (params.sshTarget && !params.sshTunnelStarted) {
@@ -78,7 +83,15 @@ export function buildGatewayStatusWarnings(params: {
     warnings.push({
       code: "probe_scope_limited",
       message:
-        "Probe diagnostics are limited by gateway scopes (missing operator.read). Connection succeeded, but status details may be incomplete. Hint: pair device identity or use credentials with operator.read.",
+        "Read-probe diagnostics are limited by gateway scopes (missing operator.read). Connection succeeded, but read-only status calls are incomplete. Hint: pair device identity or use credentials with operator.read.",
+      targetIds: [result.target.id],
+    });
+  }
+  for (const result of degradedDetailFailed) {
+    const detail = result.probe.error ? `: ${result.probe.error}` : ".";
+    warnings.push({
+      code: "probe_detail_failed",
+      message: `Gateway accepted the WebSocket connection, but follow-up read diagnostics failed${detail}`,
       targetIds: [result.target.id],
     });
   }
@@ -97,10 +110,12 @@ export function writeGatewayStatusJson(params: {
   primaryTargetId: string | null;
 }) {
   const reachable = params.probed.filter((entry) => isProbeReachable(entry.probe));
-  const degraded = params.probed.some((entry) => isScopeLimitedProbeFailure(entry.probe));
+  const degraded = params.probed.some((entry) => isPostConnectProbeFailure(entry.probe));
+  const capability = summarizeGatewayProbeCapability(reachable.map((entry) => entry.probe));
   writeRuntimeJson(params.runtime, {
     ok: reachable.length > 0,
     degraded,
+    capability,
     ts: Date.now(),
     durationMs: Date.now() - params.startedAt,
     timeoutMs: params.overallTimeoutMs,
@@ -126,6 +141,7 @@ export function writeGatewayStatusJson(params: {
         error: entry.probe.error,
         close: entry.probe.close,
       },
+      auth: entry.probe.auth,
       self: entry.self,
       config: entry.configSummary,
       health: entry.probe.health,
@@ -149,11 +165,15 @@ export function writeGatewayStatusText(params: {
 }) {
   const reachable = params.probed.filter((entry) => isProbeReachable(entry.probe));
   const ok = reachable.length > 0;
+  const capability = summarizeGatewayProbeCapability(reachable.map((entry) => entry.probe));
   params.runtime.log(colorize(params.rich, theme.heading, "Gateway Status"));
   params.runtime.log(
     ok
       ? `${colorize(params.rich, theme.success, "Reachable")}: yes`
       : `${colorize(params.rich, theme.error, "Reachable")}: no`,
+  );
+  params.runtime.log(
+    `${colorize(params.rich, theme.info, "Capability")}: ${capability.replaceAll("_", "-")}`,
   );
   params.runtime.log(
     colorize(params.rich, theme.muted, `Probe budget: ${params.overallTimeoutMs}ms`),
