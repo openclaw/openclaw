@@ -147,7 +147,7 @@ vi.mock("./slash-commands.runtime.js", () => {
       if (params.command?.key === "reportlong") {
         return resolvePeriodMenu(params, [
           ...fullReportPeriodChoices,
-          { value: "x".repeat(90), label: "long" },
+          { value: "x".repeat(45), label: "long" },
         ]);
       }
       if (params.command?.key === "reportlongbutton") {
@@ -576,7 +576,7 @@ describe("Slack native command argument menus", () => {
     expect(firstElement?.type).toBe("button");
     expect(firstElement?.text?.text).toHaveLength(75);
     expect(firstElement?.text?.text?.endsWith("…")).toBe(true);
-    expect(firstElement?.value?.length).toBeGreaterThan(150);
+    expect(firstElement?.value?.length).toBeGreaterThan(75);
     expect(firstElement?.confirm).toBeTruthy();
   });
 

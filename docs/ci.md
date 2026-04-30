@@ -256,10 +256,10 @@ landed PR is merged and that each duplicate has either a shared referenced issue
 or overlapping changed hunks.
 
 The `CodeQL` workflow is intentionally a narrow first-pass security scanner,
-not the full repository sweep. Daily and manual runs scan Actions workflow code
-plus the highest-risk JavaScript/TypeScript auth, secrets, sandbox, cron, and
-gateway surfaces with high-precision security queries under the
-`/codeql-critical-security/core-auth-secrets` category. The
+not the full repository sweep. Daily, manual, and non-draft pull request guard
+runs scan Actions workflow code plus the highest-risk JavaScript/TypeScript
+auth, secrets, sandbox, cron, and gateway surfaces with high-precision security
+queries under the `/codeql-critical-security/core-auth-secrets` category. The
 channel-runtime-boundary job separately scans core channel implementation
 contracts plus the channel plugin runtime, gateway, Plugin SDK, secrets, and
 audit touchpoints under the `/codeql-critical-security/channel-runtime-boundary`
@@ -278,6 +278,10 @@ source-loading, public-surface, and Plugin SDK package contract trust surfaces
 under the `/codeql-critical-security/plugin-trust-boundary` category so plugin
 supply-chain and runtime-loading signal stays separate from both bundled plugin
 implementation code and the non-security plugin quality shard.
+The pull request guard stays light: it only starts for changes under
+`.github/actions`, `.github/codeql`, `.github/workflows`, `packages`, or `src`,
+and it runs the same critical-security matrix as the scheduled workflow. Android,
+macOS, and non-security quality CodeQL stay out of PR defaults.
 
 The `CodeQL Android Critical Security` workflow is the scheduled Android
 security shard. It builds the Android app manually for CodeQL on the smallest
