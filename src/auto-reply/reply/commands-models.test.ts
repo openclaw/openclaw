@@ -297,6 +297,83 @@ describe("handleModelsCommand", () => {
     expect(result?.reply?.text).toContain("Switch: /model <provider/model>");
   });
 
+  it("groups namespaced models for aggregator providers", async () => {
+    modelProviderAuthMocks.authenticatedProviders = new Set(["anthropic", "litellm"]);
+    modelCatalogMocks.loadModelCatalog.mockResolvedValue([
+      { provider: "anthropic", id: "claude-opus-4-5", name: "Claude Opus" },
+      { provider: "litellm", id: "anthropic/claude-sonnet-4-5", name: "Claude Sonnet" },
+      { provider: "litellm", id: "deepseek/deepseek-chat", name: "DeepSeek Chat" },
+      { provider: "litellm", id: "deepseek/deepseek-reasoner", name: "DeepSeek Reasoner" },
+      { provider: "litellm", id: "openai/gpt-4.1", name: "GPT-4.1" },
+      { provider: "litellm", id: "openai/gpt-4.1-mini", name: "GPT-4.1 Mini" },
+      { provider: "litellm", id: "mistral-small", name: "Mistral Small" },
+    ]);
+
+    const result = await handleModelsCommand(buildParams("/models litellm"), true);
+
+    expect(result?.reply?.text).toContain(
+      "Model groups (litellm) — showing 1-3 of 3 groups (6 models, page 1/1)",
+    );
+    expect(result?.reply?.text).toContain("- /models litellm/anthropic (1)");
+    expect(result?.reply?.text).toContain("- /models litellm/deepseek (2)");
+    expect(result?.reply?.text).toContain("- /models litellm/openai (2)");
+    expect(result?.reply?.text).toContain("Ungrouped models: 1");
+    expect(result?.reply?.text).not.toContain("- litellm/deepseek/deepseek-chat");
+  });
+
+  it("lists a selected aggregator model group without changing /model refs", async () => {
+    modelProviderAuthMocks.authenticatedProviders = new Set(["anthropic", "litellm"]);
+    modelCatalogMocks.loadModelCatalog.mockResolvedValue([
+      { provider: "anthropic", id: "claude-opus-4-5", name: "Claude Opus" },
+      { provider: "litellm", id: "deepseek/deepseek-chat", name: "DeepSeek Chat" },
+      { provider: "litellm", id: "deepseek/deepseek-reasoner", name: "DeepSeek Reasoner" },
+      { provider: "litellm", id: "openai/gpt-4.1", name: "GPT-4.1" },
+    ]);
+
+    const result = await handleModelsCommand(buildParams("/models litellm/deepseek"), true);
+
+    expect(result?.reply?.text).toContain(
+      "Models (litellm/deepseek) — showing 1-2 of 2 (page 1/1)",
+    );
+    expect(result?.reply?.text).toContain("- litellm/deepseek/deepseek-chat");
+    expect(result?.reply?.text).toContain("- litellm/deepseek/deepseek-reasoner");
+    expect(result?.reply?.text).toContain("Switch: /model <provider/model>");
+    expect(result?.reply?.text).not.toContain("- litellm/openai/gpt-4.1");
+  });
+
+  it("does not add a grouping layer when a provider has only one namespaced group", async () => {
+    modelProviderAuthMocks.authenticatedProviders = new Set(["anthropic", "litellm"]);
+    modelCatalogMocks.loadModelCatalog.mockResolvedValue([
+      { provider: "anthropic", id: "claude-opus-4-5", name: "Claude Opus" },
+      { provider: "litellm", id: "deepseek/deepseek-chat", name: "DeepSeek Chat" },
+      { provider: "litellm", id: "deepseek/deepseek-reasoner", name: "DeepSeek Reasoner" },
+    ]);
+
+    const result = await handleModelsCommand(buildParams("/models litellm"), true);
+
+    expect(result?.reply?.text).toContain("Models (litellm) — showing 1-2 of 2 (page 1/1)");
+    expect(result?.reply?.text).toContain("- litellm/deepseek/deepseek-chat");
+    expect(result?.reply?.text).toContain("- litellm/deepseek/deepseek-reasoner");
+    expect(result?.reply?.text).not.toContain("Model groups (litellm)");
+  });
+
+  it("does not group mostly direct local model namespaces", async () => {
+    modelProviderAuthMocks.authenticatedProviders = new Set(["ollama"]);
+    modelCatalogMocks.loadModelCatalog.mockResolvedValue([
+      { provider: "ollama", id: "llama3.2:latest", name: "Llama 3.2" },
+      { provider: "ollama", id: "qwen3:latest", name: "Qwen 3" },
+      { provider: "ollama", id: "huihui_ai/deepseek-r1-abliterated:8b", name: "DeepSeek R1" },
+      { provider: "ollama", id: "ALIENTELLIGENCE/triangular:latest", name: "Triangular" },
+    ]);
+
+    const result = await handleModelsCommand(buildParams("/models ollama"), true);
+
+    expect(result?.reply?.text).toContain("Models (ollama) — showing 1-4 of 4 (page 1/1)");
+    expect(result?.reply?.text).toContain("- ollama/llama3.2:latest");
+    expect(result?.reply?.text).toContain("- ollama/huihui_ai/deepseek-r1-abliterated:8b");
+    expect(result?.reply?.text).not.toContain("Model groups (ollama)");
+  });
+
   it("does not list bare fallback models under the default provider when catalog ownership is unique", async () => {
     modelCatalogMocks.loadModelCatalog.mockResolvedValue([
       { provider: "openai-codex", id: "gpt-5.4", name: "GPT-5.4" },

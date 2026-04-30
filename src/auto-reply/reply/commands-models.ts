@@ -55,6 +55,7 @@ type ParsedModelsCommand =
   | {
       action: "list";
       provider?: string;
+      modelPrefix?: string;
       page: number;
       pageSize: number;
       all: boolean;
@@ -198,8 +199,28 @@ function formatProviderLine(params: { provider: string; count: number }): string
   return `- ${params.provider} (${params.count})`;
 }
 
+function parseProviderModelPath(raw?: string): { provider?: string; modelPrefix?: string } {
+  const trimmed = normalizeOptionalString(raw);
+  if (!trimmed) {
+    return {};
+  }
+  const slash = trimmed.indexOf("/");
+  if (slash === -1) {
+    return { provider: normalizeProviderId(trimmed) };
+  }
+  const provider = normalizeProviderId(trimmed.slice(0, slash));
+  const modelPrefix = trimmed
+    .slice(slash + 1)
+    .replace(/^\/+|\/+$/g, "")
+    .trim();
+  return {
+    provider,
+    ...(modelPrefix ? { modelPrefix } : {}),
+  };
+}
+
 function parseListArgs(tokens: string[]): Extract<ParsedModelsCommand, { action: "list" }> {
-  const provider = normalizeOptionalString(tokens[0]);
+  const providerPath = parseProviderModelPath(tokens[0]);
 
   let page = 1;
   let all = false;
@@ -238,7 +259,8 @@ function parseListArgs(tokens: string[]): Extract<ParsedModelsCommand, { action:
 
   return {
     action: "list",
-    provider: provider ? normalizeProviderId(provider) : undefined,
+    provider: providerPath.provider,
+    modelPrefix: providerPath.modelPrefix,
     page,
     pageSize,
     all,
@@ -269,13 +291,17 @@ function parseModelsArgs(raw: string): ParsedModelsCommand {
   }
 }
 
-function resolveProviderLabel(params: {
+function resolveProviderScopeLabel(params: {
   provider: string;
+  modelPrefix?: string;
   cfg: OpenClawConfig;
   agentDir?: string;
   workspaceDir?: string;
   sessionEntry?: ModelsCommandSessionEntry;
 }): string {
+  const scopedProvider = params.modelPrefix
+    ? `${params.provider}/${params.modelPrefix}`
+    : params.provider;
   const authLabel = resolveModelAuthLabel({
     provider: params.provider,
     cfg: params.cfg,
@@ -284,9 +310,19 @@ function resolveProviderLabel(params: {
     workspaceDir: params.workspaceDir,
   });
   if (!authLabel || authLabel === "unknown") {
-    return params.provider;
+    return scopedProvider;
   }
-  return `${params.provider} · 🔑 ${authLabel}`;
+  return `${scopedProvider} · 🔑 ${authLabel}`;
+}
+
+function resolveProviderLabel(params: {
+  provider: string;
+  cfg: OpenClawConfig;
+  agentDir?: string;
+  workspaceDir?: string;
+  sessionEntry?: ModelsCommandSessionEntry;
+}): string {
+  return resolveProviderScopeLabel(params);
 }
 
 export function formatModelsAvailableHeader(params: {
@@ -333,6 +369,101 @@ function buildProviderInfos(params: {
     id: provider,
     count: params.byProvider.get(provider)?.size ?? 0,
   }));
+}
+
+function scopedModelsForPrefix(models: readonly string[], modelPrefix?: string): string[] {
+  if (!modelPrefix) {
+    return [...models];
+  }
+  const prefixWithSlash = `${modelPrefix}/`;
+  return models.filter((model) => model === modelPrefix || model.startsWith(prefixWithSlash));
+}
+
+function buildModelGroupCounts(
+  models: readonly string[],
+  modelPrefix?: string,
+): { groups: Array<{ id: string; count: number }>; directCount: number } {
+  const prefixWithSlash = modelPrefix ? `${modelPrefix}/` : "";
+  const counts = new Map<string, number>();
+  let directCount = 0;
+  for (const model of models) {
+    const remainder = modelPrefix
+      ? model === modelPrefix
+        ? ""
+        : model.startsWith(prefixWithSlash)
+          ? model.slice(prefixWithSlash.length)
+          : undefined
+      : model;
+    if (remainder === undefined) {
+      continue;
+    }
+    const slash = remainder.indexOf("/");
+    if (slash <= 0) {
+      directCount += 1;
+      continue;
+    }
+    const group = remainder.slice(0, slash);
+    counts.set(group, (counts.get(group) ?? 0) + 1);
+  }
+  return {
+    groups: [...counts.entries()]
+      .map(([id, count]) => ({ id, count }))
+      .toSorted((left, right) => left.id.localeCompare(right.id)),
+    directCount,
+  };
+}
+
+function buildScopedModelPath(
+  provider: string,
+  modelPrefix: string | undefined,
+  child: string,
+): string {
+  return `${provider}/${modelPrefix ? `${modelPrefix}/` : ""}${child}`;
+}
+
+function buildModelGroupsText(params: {
+  provider: string;
+  providerLabel: string;
+  modelPrefix?: string;
+  groups: Array<{ id: string; count: number }>;
+  directCount: number;
+  total: number;
+  page: number;
+  pageSize: number;
+}): string | undefined {
+  if (params.groups.length <= 1) {
+    return;
+  }
+  const groupedCount = params.groups.reduce((sum, group) => sum + group.count, 0);
+  if (groupedCount <= params.directCount) {
+    return;
+  }
+  const pageCount = Math.max(1, Math.ceil(params.groups.length / params.pageSize));
+  const safePage = Math.max(1, Math.min(params.page, pageCount));
+  const startIndex = (safePage - 1) * params.pageSize;
+  const endIndexExclusive = Math.min(params.groups.length, startIndex + params.pageSize);
+  const pageGroups = params.groups.slice(startIndex, endIndexExclusive);
+  const lines = [
+    `Model groups (${params.providerLabel}) — showing ${startIndex + 1}-${endIndexExclusive} of ${params.groups.length} groups (${params.total} models, page ${safePage}/${pageCount})`,
+  ];
+  for (const group of pageGroups) {
+    lines.push(
+      `- /models ${buildScopedModelPath(params.provider, params.modelPrefix, group.id)} (${group.count})`,
+    );
+  }
+  if (params.directCount > 0) {
+    lines.push(
+      "",
+      `Ungrouped models: ${params.directCount}. Use /models ${params.provider} all to list every model.`,
+    );
+  }
+  lines.push("", "Open group: /models <provider/group>", "Switch: /model <provider/model>");
+  if (safePage < pageCount) {
+    lines.push(
+      `More: /models list ${params.modelPrefix ? `${params.provider}/${params.modelPrefix}` : params.provider} ${safePage + 1}`,
+    );
+  }
+  return lines.join("\n");
 }
 
 export async function resolveModelsCommandReply(params: {
@@ -387,7 +518,7 @@ export async function resolveModelsCommandReply(params: {
     return { text: MODELS_ADD_DEPRECATED_TEXT };
   }
 
-  const { provider, page, pageSize, all } = parsed;
+  const { provider, modelPrefix, page, pageSize, all } = parsed;
 
   if (!provider) {
     const channelData = commandPlugin?.commands?.buildModelsProviderChannelData?.({
@@ -417,12 +548,14 @@ export async function resolveModelsCommandReply(params: {
     };
   }
 
-  const models = [...(byProvider.get(provider) ?? new Set<string>())].toSorted();
+  const allProviderModels = [...(byProvider.get(provider) ?? new Set<string>())].toSorted();
+  const models = scopedModelsForPrefix(allProviderModels, modelPrefix).toSorted();
   const total = models.length;
 
   if (total === 0) {
-    const emptyProviderLabel = resolveProviderLabel({
+    const emptyProviderLabel = resolveProviderScopeLabel({
       provider,
+      modelPrefix,
       cfg: params.cfg,
       agentDir: params.agentDir,
       workspaceDir: params.workspaceDir,
@@ -464,6 +597,31 @@ export async function resolveModelsCommandReply(params: {
     };
   }
 
+  const providerLabel = resolveProviderScopeLabel({
+    provider,
+    modelPrefix,
+    cfg: params.cfg,
+    agentDir: params.agentDir,
+    workspaceDir: params.workspaceDir,
+    sessionEntry: params.sessionEntry,
+  });
+  if (!all) {
+    const groupInfo = buildModelGroupCounts(models, modelPrefix);
+    const groupText = buildModelGroupsText({
+      provider,
+      providerLabel,
+      modelPrefix,
+      groups: groupInfo.groups,
+      directCount: groupInfo.directCount,
+      total,
+      page,
+      pageSize,
+    });
+    if (groupText) {
+      return { text: groupText };
+    }
+  }
+
   const effectivePageSize = all ? total : pageSize;
   const pageCount = effectivePageSize > 0 ? Math.ceil(total / effectivePageSize) : 1;
   const safePage = all ? 1 : Math.max(1, Math.min(page, pageCount));
@@ -473,8 +631,8 @@ export async function resolveModelsCommandReply(params: {
       text: [
         `Page out of range: ${page} (valid: 1-${pageCount})`,
         "",
-        `Try: /models list ${provider} ${safePage}`,
-        `All: /models list ${provider} all`,
+        `Try: /models list ${modelPrefix ? `${provider}/${modelPrefix}` : provider} ${safePage}`,
+        `All: /models list ${modelPrefix ? `${provider}/${modelPrefix}` : provider} all`,
       ].join("\n"),
     };
   }
@@ -482,13 +640,6 @@ export async function resolveModelsCommandReply(params: {
   const startIndex = (safePage - 1) * effectivePageSize;
   const endIndexExclusive = Math.min(total, startIndex + effectivePageSize);
   const pageModels = models.slice(startIndex, endIndexExclusive);
-  const providerLabel = resolveProviderLabel({
-    provider,
-    cfg: params.cfg,
-    agentDir: params.agentDir,
-    workspaceDir: params.workspaceDir,
-    sessionEntry: params.sessionEntry,
-  });
   const lines = [
     `Models (${providerLabel}) — showing ${startIndex + 1}-${endIndexExclusive} of ${total} (page ${safePage}/${pageCount})`,
   ];
@@ -497,10 +648,12 @@ export async function resolveModelsCommandReply(params: {
   }
   lines.push("", "Switch: /model <provider/model>");
   if (!all && safePage < pageCount) {
-    lines.push(`More: /models list ${provider} ${safePage + 1}`);
+    lines.push(
+      `More: /models list ${modelPrefix ? `${provider}/${modelPrefix}` : provider} ${safePage + 1}`,
+    );
   }
   if (!all) {
-    lines.push(`All: /models list ${provider} all`);
+    lines.push(`All: /models list ${modelPrefix ? `${provider}/${modelPrefix}` : provider} all`);
   }
   return { text: lines.join("\n") };
 }
