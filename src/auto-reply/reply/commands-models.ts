@@ -432,11 +432,11 @@ function buildModelGroupsText(params: {
   pageSize: number;
 }): string | undefined {
   if (params.groups.length <= 1) {
-    return;
+    return undefined;
   }
   const groupedCount = params.groups.reduce((sum, group) => sum + group.count, 0);
   if (groupedCount <= params.directCount) {
-    return;
+    return undefined;
   }
   const pageCount = Math.max(1, Math.ceil(params.groups.length / params.pageSize));
   const safePage = Math.max(1, Math.min(params.page, pageCount));
