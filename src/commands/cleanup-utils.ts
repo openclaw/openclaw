@@ -1,3 +1,4 @@
+import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace.js";
@@ -142,7 +143,7 @@ async function removeStateDirAroundWorkspaces(
   runtime: RuntimeEnv,
   opts?: { dryRun?: boolean },
 ): Promise<void> {
-  let entries: fs.Dirent[];
+  let entries: Dirent[];
   try {
     entries = await fs.readdir(stateDir, { withFileTypes: true });
   } catch {
