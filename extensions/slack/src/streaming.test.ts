@@ -33,7 +33,7 @@ describe("slack plan message fallback", () => {
       "chat.postMessage",
       expect.objectContaining({
         channel: "D123",
-        text: "Thinking...",
+        text: "Thinking...\n- now: Reading message",
         blocks: [
           expect.objectContaining({
             type: "plan",
@@ -98,8 +98,8 @@ describe("slack plan message fallback", () => {
       "chat.update",
       expect.objectContaining({
         channel: "D123",
+        text: "Thinking completed.\n- done: Reading message\n- now: Deciding on next steps",
         ts: "171234.100",
-        text: "Thinking completed.",
         blocks: [
           expect.objectContaining({
             title: "Thinking completed",
@@ -107,5 +107,57 @@ describe("slack plan message fallback", () => {
         ],
       }),
     );
+  });
+
+  it("can render a plain text progress message for DM-safe fallback", async () => {
+    const apiCall = vi.fn(async (method: string) => ({
+      ok: true,
+      ts: method === "chat.postMessage" ? "171234.200" : undefined,
+    }));
+    const client = { apiCall };
+
+    const session = await startSlackPlanMessage({
+      client: client as never,
+      channel: "D123",
+      renderMode: "text",
+      chunks: [
+        {
+          type: "task_update",
+          id: "reading_message",
+          title: "Reading message",
+          status: "in_progress",
+        },
+      ],
+    });
+
+    expect(session.messageTs).toBe("171234.200");
+    expect(apiCall).toHaveBeenCalledWith("chat.postMessage", {
+      channel: "D123",
+      text: "Thinking...\n- now: Reading message",
+    });
+
+    await appendSlackPlanMessage({
+      session,
+      chunks: [
+        {
+          type: "task_update",
+          id: "reading_message",
+          title: "Reading message",
+          status: "complete",
+        },
+        {
+          type: "task_update",
+          id: "sending_reply",
+          title: "Sending reply",
+          status: "in_progress",
+        },
+      ],
+    });
+
+    expect(apiCall).toHaveBeenLastCalledWith("chat.update", {
+      channel: "D123",
+      ts: "171234.200",
+      text: "Thinking...\n- done: Reading message\n- now: Sending reply",
+    });
   });
 });

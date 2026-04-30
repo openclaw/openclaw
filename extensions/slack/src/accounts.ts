@@ -14,6 +14,8 @@ export { resolveSlackReplyToMode } from "./account-reply-mode.js";
 
 export type SlackTokenSource = "env" | "config" | "none";
 
+type SlackTokenNormalizer = (raw?: unknown, path?: string) => string | undefined;
+
 export type ResolvedSlackAccount = {
   accountId: string;
   enabled: boolean;
@@ -30,6 +32,32 @@ export type ResolvedSlackAccount = {
 const { listAccountIds, resolveDefaultAccountId } = createAccountListHelpers("slack");
 export const listSlackAccountIds = listAccountIds;
 export const resolveDefaultSlackAccountId = resolveDefaultAccountId;
+
+function resolveSlackConfiguredTokenWithEnvFallback(params: {
+  value?: unknown;
+  path: string;
+  envToken?: string;
+  normalize: SlackTokenNormalizer;
+}): { token?: string; source: SlackTokenSource } {
+  if (
+    params.envToken &&
+    typeof params.value === "object" &&
+    params.value !== null &&
+    typeof (params.value as { source?: unknown }).source === "string" &&
+    typeof (params.value as { provider?: unknown }).provider === "string" &&
+    typeof (params.value as { id?: unknown }).id === "string"
+  ) {
+    return {
+      token: params.envToken,
+      source: "env",
+    };
+  }
+  const token = params.normalize(params.value, params.path);
+  return {
+    token,
+    source: token ? "config" : "none",
+  };
+}
 
 export function mergeSlackAccountConfig(
   cfg: OpenClawConfig,
@@ -65,20 +93,38 @@ export function resolveSlackAccount(params: {
   const envUser =
     userActive && baseAllowEnv ? resolveSlackUserToken(process.env.SLACK_USER_TOKEN) : undefined;
   const configBot = botActive
-    ? resolveSlackBotToken(merged.botToken, `channels.slack.accounts.${accountId}.botToken`)
-    : undefined;
+    ? resolveSlackConfiguredTokenWithEnvFallback({
+        value: merged.botToken,
+        path: `channels.slack.accounts.${accountId}.botToken`,
+        envToken: envBot,
+        normalize: resolveSlackBotToken,
+      })
+    : { token: undefined, source: "none" as const };
   const configApp = appActive
-    ? resolveSlackAppToken(merged.appToken, `channels.slack.accounts.${accountId}.appToken`)
-    : undefined;
+    ? resolveSlackConfiguredTokenWithEnvFallback({
+        value: merged.appToken,
+        path: `channels.slack.accounts.${accountId}.appToken`,
+        envToken: envApp,
+        normalize: resolveSlackAppToken,
+      })
+    : { token: undefined, source: "none" as const };
   const configUser = userActive
-    ? resolveSlackUserToken(merged.userToken, `channels.slack.accounts.${accountId}.userToken`)
-    : undefined;
-  const botToken = configBot ?? envBot;
-  const appToken = configApp ?? envApp;
-  const userToken = configUser ?? envUser;
-  const botTokenSource: SlackTokenSource = configBot ? "config" : envBot ? "env" : "none";
-  const appTokenSource: SlackTokenSource = configApp ? "config" : envApp ? "env" : "none";
-  const userTokenSource: SlackTokenSource = configUser ? "config" : envUser ? "env" : "none";
+    ? resolveSlackConfiguredTokenWithEnvFallback({
+        value: merged.userToken,
+        path: `channels.slack.accounts.${accountId}.userToken`,
+        envToken: envUser,
+        normalize: resolveSlackUserToken,
+      })
+    : { token: undefined, source: "none" as const };
+  const botToken = configBot.token ?? envBot;
+  const appToken = configApp.token ?? envApp;
+  const userToken = configUser.token ?? envUser;
+  const botTokenSource: SlackTokenSource =
+    configBot.source !== "none" ? configBot.source : envBot ? "env" : "none";
+  const appTokenSource: SlackTokenSource =
+    configApp.source !== "none" ? configApp.source : envApp ? "env" : "none";
+  const userTokenSource: SlackTokenSource =
+    configUser.source !== "none" ? configUser.source : envUser ? "env" : "none";
 
   return {
     accountId,

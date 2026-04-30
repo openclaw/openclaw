@@ -67,6 +67,7 @@ export type SlackPlanMessageSession = {
   messageTs: string;
   tasks: SlackPlanMessageTask[];
   revision: number;
+  renderMode: "plan" | "text";
   stopped: boolean;
 };
 
@@ -125,6 +126,7 @@ export type StartSlackPlanMessageParams = {
   client: WebClient;
   channel: string;
   chunks?: SlackStreamChunk[];
+  renderMode?: "plan" | "text";
 };
 
 export type AppendSlackPlanMessageParams = {
@@ -387,6 +389,26 @@ function resolveSlackPlanMessageTitle(session: SlackPlanMessageSession): string 
   return activeTask?.title ?? "Working";
 }
 
+function buildSlackPlanMessageText(session: SlackPlanMessageSession) {
+  const header = session.stopped ? "Thinking completed." : "Thinking...";
+  if (session.tasks.length === 0) {
+    return header;
+  }
+  const lines = session.tasks.map((task) => {
+    switch (task.status) {
+      case "complete":
+        return `- done: ${task.title}`;
+      case "error":
+        return `- failed: ${task.title}`;
+      case "in_progress":
+        return `- now: ${task.title}`;
+      default:
+        return `- next: ${task.title}`;
+    }
+  });
+  return [header, ...lines].join("\n");
+}
+
 function buildSlackPlanMessageBlocks(session: SlackPlanMessageSession) {
   return [
     {
@@ -469,12 +491,13 @@ export async function startSlackPlanMessage(
     messageTs: "",
     tasks: applySlackPlanTaskChunks([], chunks),
     revision: 1,
+    renderMode: params.renderMode ?? "plan",
     stopped: false,
   };
   const response = await apiClient.apiCall("chat.postMessage", {
     channel,
-    text: "Thinking...",
-    blocks: buildSlackPlanMessageBlocks(session),
+    text: buildSlackPlanMessageText(session),
+    ...(session.renderMode === "plan" ? { blocks: buildSlackPlanMessageBlocks(session) } : {}),
   });
   session.messageTs = resolveSlackStreamMessageTs(response);
   return session;
@@ -491,8 +514,8 @@ export async function appendSlackPlanMessage(params: AppendSlackPlanMessageParam
   await apiClient.apiCall("chat.update", {
     channel: session.channel,
     ts: session.messageTs,
-    text: "Thinking...",
-    blocks: buildSlackPlanMessageBlocks(session),
+    text: buildSlackPlanMessageText(session),
+    ...(session.renderMode === "plan" ? { blocks: buildSlackPlanMessageBlocks(session) } : {}),
   });
 }
 
@@ -508,8 +531,8 @@ export async function stopSlackPlanMessage(params: StopSlackPlanMessageParams): 
   await apiClient.apiCall("chat.update", {
     channel: session.channel,
     ts: session.messageTs,
-    text: "Thinking completed.",
-    blocks: buildSlackPlanMessageBlocks(session),
+    text: buildSlackPlanMessageText(session),
+    ...(session.renderMode === "plan" ? { blocks: buildSlackPlanMessageBlocks(session) } : {}),
   });
 }
 

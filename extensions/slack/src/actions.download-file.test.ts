@@ -216,4 +216,18 @@ describe("downloadSlackFile", () => {
     });
     expect(result).toEqual(makeResolvedSlackMedia());
   });
+
+  it("short-circuits to an explicit token without requiring cfg", async () => {
+    const client = createClient();
+    mockSuccessfulMediaDownload(client);
+    createSlackWebClientMock.mockReturnValueOnce(client);
+
+    const result = await downloadSlackFile("F123", {
+      token: "xoxb-explicit",
+      maxBytes: 1024,
+    });
+
+    expect(createSlackWebClientMock).toHaveBeenCalledWith("xoxb-explicit");
+    expect(result).toEqual(makeResolvedSlackMedia());
+  });
 });

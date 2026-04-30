@@ -250,6 +250,47 @@ describe("resolveSlackAccount active secret surfaces", () => {
     }
   });
 
+  it("treats SecretRef-shaped default account tokens as env-backed when env tokens are present", () => {
+    const previousBotToken = process.env.SLACK_BOT_TOKEN;
+    const previousAppToken = process.env.SLACK_APP_TOKEN;
+    process.env.SLACK_BOT_TOKEN = "xoxb-env-secret-ref";
+    process.env.SLACK_APP_TOKEN = "xapp-env-secret-ref";
+    try {
+      const resolved = resolveSlackAccount({
+        cfg: {
+          channels: {
+            slack: {
+              accounts: {
+                default: {
+                  enabled: true,
+                  botToken: { source: "env", provider: "default", id: "SLACK_BOT_TOKEN" },
+                  appToken: { source: "env", provider: "default", id: "SLACK_APP_TOKEN" },
+                },
+              },
+            },
+          },
+        } as unknown as OpenClawConfig,
+        accountId: "default",
+      });
+
+      expect(resolved.botToken).toBe("xoxb-env-secret-ref");
+      expect(resolved.botTokenSource).toBe("env");
+      expect(resolved.appToken).toBe("xapp-env-secret-ref");
+      expect(resolved.appTokenSource).toBe("env");
+    } finally {
+      if (previousBotToken === undefined) {
+        delete process.env.SLACK_BOT_TOKEN;
+      } else {
+        process.env.SLACK_BOT_TOKEN = previousBotToken;
+      }
+      if (previousAppToken === undefined) {
+        delete process.env.SLACK_APP_TOKEN;
+      } else {
+        process.env.SLACK_APP_TOKEN = previousAppToken;
+      }
+    }
+  });
+
   it("does not use env fallback for inactive credentials", () => {
     const previousBotToken = process.env.SLACK_BOT_TOKEN;
     const previousAppToken = process.env.SLACK_APP_TOKEN;

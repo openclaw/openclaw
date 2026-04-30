@@ -562,7 +562,7 @@ Notes:
 
 - A reply thread must be available for native text streaming and Slack assistant thread status to appear. Thread selection still follows `replyToMode`.
 - Channel and group-chat roots can still use the normal draft preview when native streaming is unavailable.
-- Top-level Slack DMs stay off-thread by default. Native `partial` preview still requires a reply thread, but `progress` mode posts and updates a separate top-level plan message while keeping the final DM reply unthreaded.
+- Top-level Slack DMs stay off-thread by default in normal chat mode. When `channels.slack.streaming.mode` is `progress`, OpenClaw intentionally treats the DM turn as threaded assistant UI so Slack can show native plan/task progress and keep the final reply in that same assistant thread.
 - Media and non-text payloads fall back to normal delivery.
 - Media/error finals cancel pending preview edits; eligible text/block finals flush only when they can edit the preview in place.
 - If streaming fails mid-reply, OpenClaw falls back to normal delivery for remaining payloads.
@@ -570,7 +570,7 @@ Notes:
 ### Progress step lifecycle
 
 When `channels.slack.streaming.mode` is `"progress"`, Slack shows a task-style progress message. These steps are Slack-specific presentation for the underlying agent and channel lifecycle events. Some line up with OpenClaw hooks, but the progress step itself is emitted by Slack channel code.
-Threaded progress uses Slack native stream task updates. Unthreaded DM progress uses a normal top-level Slack message with a `plan` block that is updated with `chat.update`.
+Threaded progress uses Slack native stream task updates. For direct 1:1 chats, `progress` mode promotes the turn into Slack's assistant-thread surface from the first reply so the task plan, status, and final answer stay together.
 
 | Step                     | OpenClaw hook                                                                       | Slack progress trigger                                                                                      | When it starts                                                                                                                                     |
 | ------------------------ | ----------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |

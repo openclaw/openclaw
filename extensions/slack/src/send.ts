@@ -23,6 +23,7 @@ import { createSlackWriteClient } from "./client.js";
 import { markdownToSlackMrkdwnChunks } from "./format.js";
 import { SLACK_TEXT_LIMIT } from "./limits.js";
 import { loadOutboundMediaFromUrl } from "./runtime-api.js";
+import { getOptionalSlackRuntime } from "./runtime.js";
 import { parseSlackTarget } from "./targets.js";
 import { resolveSlackBotToken } from "./token.js";
 const SLACK_UPLOAD_SSRF_POLICY = {
@@ -321,7 +322,10 @@ export async function sendMessageSlack(
   if (!trimmedMessage && !opts.mediaUrl && !blocks) {
     throw new Error("Slack send requires text, blocks, or media");
   }
-  const cfg = requireRuntimeConfig(opts.cfg, "Slack send");
+  const cfg = requireRuntimeConfig(
+    getOptionalSlackRuntime()?.config?.loadConfig?.() ?? opts.cfg,
+    "Slack send",
+  );
   const account = resolveSlackAccount({
     cfg,
     accountId: opts.accountId,

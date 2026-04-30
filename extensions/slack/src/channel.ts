@@ -211,10 +211,8 @@ async function resolveSlackSendContext(params: {
   const send =
     resolveOutboundSendDep<SlackSendFn>(params.deps, "slack") ??
     (await loadSlackSendRuntime()).sendMessageSlack;
-  // params.cfg is the scoped channel-dispatch config; channel credentials are
-  // expected to be resolved from this snapshot. Strict mode
-  // is intentional so boot-time misconfigurations surface loudly. See #68237.
-  const account = resolveSlackAccount({ cfg: params.cfg, accountId: params.accountId });
+  const cfg = getOptionalSlackRuntime()?.config?.loadConfig?.() ?? params.cfg;
+  const account = resolveSlackAccount({ cfg, accountId: params.accountId });
   const token = getTokenForOperation(account, "write");
   const botToken = account.botToken?.trim();
   const tokenOverride = token && token !== botToken ? token : undefined;

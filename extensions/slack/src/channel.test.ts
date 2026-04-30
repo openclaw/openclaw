@@ -430,6 +430,50 @@ describe("slackPlugin outbound", () => {
     expect(result).toEqual({ channel: "slack", messageId: "m-text" });
   });
 
+  it("uses the loaded runtime config instead of a stale passed cfg for sendText token selection", async () => {
+    const runtimeCfg = {
+      channels: {
+        slack: {
+          accounts: {
+            default: {
+              userToken: "xoxp-runtime",
+              userTokenReadOnly: false,
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    setSlackRuntime({
+      config: {
+        loadConfig: () => runtimeCfg,
+      },
+      channel: {
+        slack: {
+          handleSlackAction: handleSlackActionMock,
+        },
+      },
+    } as never);
+    const sendSlack = vi.fn().mockResolvedValue({ messageId: "m-runtime" });
+    const sendText = requireSlackSendText();
+
+    await sendText({
+      cfg: {} as OpenClawConfig,
+      to: "C123",
+      text: "hello",
+      accountId: "default",
+      deps: { sendSlack },
+    });
+
+    expect(sendSlack).toHaveBeenCalledWith(
+      "C123",
+      "hello",
+      expect.objectContaining({
+        cfg: {} as OpenClawConfig,
+        token: "xoxp-runtime",
+      }),
+    );
+  });
+
   it("prefers replyToId over threadId for sendMedia", async () => {
     const sendSlack = vi.fn().mockResolvedValue({ messageId: "m-media" });
     const sendMedia = requireSlackSendMedia();

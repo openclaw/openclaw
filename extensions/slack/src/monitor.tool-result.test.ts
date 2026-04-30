@@ -421,7 +421,7 @@ describe("monitorSlackProvider tool results", () => {
     expect(capturedCtx[1]?.Body).not.toContain("thread-a-two");
   });
 
-  it("updates assistant thread status when replies start", async () => {
+  it("uses assistant thread status for direct messages when replies are threaded", async () => {
     replyMock.mockImplementation(async (...args: unknown[]) => {
       const opts = (args[1] ?? {}) as { onReplyStart?: () => Promise<void> | void };
       await opts?.onReplyStart?.();
@@ -429,14 +429,57 @@ describe("monitorSlackProvider tool results", () => {
     });
 
     setDirectMessageReplyMode("all");
+    const client = getSlackClient() as {
+      assistant?: { threads?: { setStatus?: ReturnType<typeof vi.fn> } };
+    };
+    const setStatus = client.assistant?.threads?.setStatus;
+    setStatus?.mockClear();
+
     await runSlackMessageOnce(monitorSlackProvider, {
       event: makeSlackMessageEvent(),
     });
+
+    expect(setStatus).toHaveBeenCalledTimes(2);
+    expect(setStatus).toHaveBeenNthCalledWith(1, {
+      token: "bot-token",
+      channel_id: "C1",
+      thread_ts: "123",
+      status: "is typing...",
+    });
+    expect(setStatus).toHaveBeenNthCalledWith(2, {
+      token: "bot-token",
+      channel_id: "C1",
+      thread_ts: "123",
+      status: "",
+    });
+  });
+
+  it("updates assistant thread status for room thread replies", async () => {
+    replyMock.mockImplementation(async (...args: unknown[]) => {
+      const opts = (args[1] ?? {}) as { onReplyStart?: () => Promise<void> | void };
+      await opts?.onReplyStart?.();
+      return { text: "final reply" };
+    });
+
+    setRequireMentionChannelConfig(["<@bot-user>"]);
 
     const client = getSlackClient() as {
       assistant?: { threads?: { setStatus?: ReturnType<typeof vi.fn> } };
     };
     const setStatus = client.assistant?.threads?.setStatus;
+    setStatus?.mockClear();
+
+    await runSlackMessageOnce(monitorSlackProvider, {
+      event: makeSlackMessageEvent({
+        channel_type: "channel",
+        channel: "C1",
+        ts: "124",
+        thread_ts: "123",
+        parent_user_id: "U2",
+        text: "<@bot-user> hello in thread",
+      }),
+    });
+
     expect(setStatus).toHaveBeenCalledTimes(2);
     expect(setStatus).toHaveBeenNthCalledWith(1, {
       token: "bot-token",
