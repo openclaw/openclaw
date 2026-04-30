@@ -19,6 +19,7 @@ const hookMocks = vi.hoisted(() => ({
 
 let cfg: Record<string, unknown> = {};
 let lastCreateOpenClawToolsContext: Record<string, unknown> | undefined;
+let createOpenClawToolsContexts: Array<Record<string, unknown>> = [];
 
 // Perf: keep this suite pure unit. Mock heavyweight config/session modules.
 vi.mock("../config/config.js", () => ({
@@ -91,6 +92,16 @@ vi.mock("../agents/openclaw-tools.js", () => {
       name: "agents_list",
       parameters: { type: "object", properties: { action: { type: "string" } } },
       execute: async () => ({ ok: true, result: [] }),
+    },
+    {
+      name: "memory_search",
+      parameters: { type: "object", properties: { query: { type: "string" } } },
+      execute: async () => ({ ok: true, results: [] }),
+    },
+    {
+      name: "memory_get",
+      parameters: { type: "object", properties: { path: { type: "string" } } },
+      execute: async () => ({ ok: true, content: "" }),
     },
     {
       name: "sessions_spawn",
@@ -190,7 +201,10 @@ vi.mock("../agents/openclaw-tools.js", () => {
   return {
     createOpenClawTools: (ctx: Record<string, unknown>) => {
       lastCreateOpenClawToolsContext = ctx;
-      return ctx.disablePluginTools ? tools.filter((tool) => tool.name !== "browser") : tools;
+      createOpenClawToolsContexts.push(ctx);
+      return ctx.disablePluginTools
+        ? tools.filter((tool) => tool.name !== "browser" && !tool.name.startsWith("memory_"))
+        : tools;
     },
   };
 });
@@ -258,6 +272,7 @@ beforeEach(() => {
   pluginHttpHandlers = [];
   cfg = {};
   lastCreateOpenClawToolsContext = undefined;
+  createOpenClawToolsContexts = [];
   hookMocks.resolveToolLoopDetectionConfig.mockClear();
   hookMocks.resolveToolLoopDetectionConfig.mockImplementation(() => ({ warnAt: 3 }));
   hookMocks.runBeforeToolCallHook.mockClear();
@@ -445,6 +460,30 @@ describe("POST /tools/invoke", () => {
 
     expect(res.status).toBe(200);
     expect(lastCreateOpenClawToolsContext?.disablePluginTools).toBe(false);
+  });
+
+  it("keeps plugin tools enabled for memory slot tool invokes", async () => {
+    setMainAllowedTools({ allow: ["memory_search"] });
+
+    const res = await invokeToolAuthed({
+      tool: "memory_search",
+      args: { query: "probe" },
+      sessionKey: "main",
+    });
+
+    const body = await expectOkInvokeResponse(res);
+    expect(body.result).toEqual({ ok: true, results: [] });
+    expect(createOpenClawToolsContexts.map((ctx) => ctx.disablePluginTools)).toEqual([true, false]);
+    expect(lastCreateOpenClawToolsContext?.disablePluginTools).toBe(false);
+  });
+
+  it("keeps plugin tools disabled for ordinary known core tool invokes", async () => {
+    allowAgentsListForMain();
+
+    const res = await invokeAgentsListAuthed({ sessionKey: "main" });
+
+    expect(res.status).toBe(200);
+    expect(lastCreateOpenClawToolsContext?.disablePluginTools).toBe(true);
   });
 
   it("blocks tool execution when before_tool_call rejects the invoke", async () => {
