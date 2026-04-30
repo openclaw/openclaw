@@ -728,10 +728,17 @@ async function applyPullRequestCandidateLabels(github, context, core, pullReques
   );
 }
 
+function isAutomationUser(user, fallbackLogin = "") {
+  const login = user?.login ?? fallbackLogin;
+  return user?.type === "Bot" || /\[bot\]$/i.test(login) || login.startsWith("app/");
+}
+
 function isAutomationActor(context) {
-  const sender = context.payload.sender;
-  const login = sender?.login ?? context.actor ?? "";
-  return sender?.type === "Bot" || /\[bot\]$/i.test(login);
+  return isAutomationUser(context.payload.sender, context.actor ?? "");
+}
+
+function isGitHubAppPullRequestAuthor(pullRequest) {
+  return isAutomationUser(pullRequest.user);
 }
 
 function candidateActionRuleForLabelSet(labelSet, preferredLabel = "") {
@@ -975,6 +982,11 @@ export async function runBarnacleAutoResponse({ github, context, core = console 
       return;
     }
 
+    if (isGitHubAppPullRequestAuthor(pullRequest)) {
+      await removeLabels(github, context, pullRequest.number, [activePrLimitLabel], labelSet);
+      core.info(`Skipping active PR limit for GitHub App-authored PR #${pullRequest.number}.`);
+    }
+
     await applyPullRequestCandidateLabels(github, context, core, pullRequest, labelSet);
 
     if (labelSet.has(dirtyLabel)) {
@@ -1061,7 +1073,10 @@ export async function runBarnacleAutoResponse({ github, context, core = console 
   if (pullRequest && labelSet.has(activePrLimitOverrideLabel)) {
     labelSet.delete(activePrLimitLabel);
   }
-  if (pullRequest && isAutomationPullRequest(pullRequest)) {
+  if (
+    pullRequest &&
+    (isAutomationPullRequest(pullRequest) || isGitHubAppPullRequestAuthor(pullRequest))
+  ) {
     await removeLabels(github, context, pullRequest.number, [activePrLimitLabel], labelSet);
   }
 

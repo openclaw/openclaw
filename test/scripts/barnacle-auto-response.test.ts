@@ -492,6 +492,30 @@ describe("barnacle-auto-response", () => {
     }
   });
 
+  it("removes stale PR-limit labels from GitHub App-authored PRs", async () => {
+    const { calls, github } = barnacleGithub([file("README.md")]);
+
+    await runBarnacleAutoResponse({
+      github,
+      context: barnacleContext(
+        {
+          user: {
+            login: "renovate[bot]",
+            type: "Bot",
+          },
+        },
+        ["r: too-many-prs"],
+      ),
+      core: {
+        info: () => undefined,
+      },
+    });
+
+    expect(calls.removeLabel).toContainEqual(expect.objectContaining({ name: "r: too-many-prs" }));
+    expect(calls.createComment).toEqual([]);
+    expect(calls.update).toEqual([]);
+  });
+
   it("still adds candidate labels to broad contributor PRs", async () => {
     const { calls, github } = barnacleGithub([
       file("ui/src/app.ts"),
