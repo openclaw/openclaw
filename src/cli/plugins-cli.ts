@@ -67,6 +67,17 @@ const quietPluginJsonLogger: PluginLogger = {
   error: () => undefined,
 };
 
+async function isKnownPluginId(cfg: OpenClawConfig, id: string): Promise<boolean> {
+  const { buildPluginRegistrySnapshotReport } = await import("../plugins/status.js");
+  const { normalizeChatChannelId } = await import("../channels/ids.js");
+  const report = buildPluginRegistrySnapshotReport({
+    config: cfg,
+    logger: quietPluginJsonLogger,
+  });
+  const resolvedId = normalizeChatChannelId(id) ?? id;
+  return report.plugins.some((plugin) => plugin.id === id || plugin.id === resolvedId);
+}
+
 function formatInspectSection(title: string, lines: string[]): string[] {
   if (lines.length === 0) {
     return [];
@@ -569,6 +580,19 @@ export function registerPluginsCli(program: Command) {
         await import("./plugins-registry-refresh.js");
       const snapshot = await readConfigFileSnapshot();
       const cfg = (snapshot.sourceConfig ?? snapshot.config) as OpenClawConfig;
+      // Reject unknown plugin ids before mutating config. The runtime config
+      // validator already filters stale entries with `warnOnly`, but the CLI
+      // is the surface where the user typed the id — failing there avoids
+      // accumulating phantom `plugins.entries.<id>: { enabled: true }`
+      // records that look successful but never load. See #73551.
+      if (!(await isKnownPluginId(cfg, id))) {
+        defaultRuntime.log(
+          theme.error(
+            `Plugin not found: ${id}. Run \`openclaw plugins list\` to see installed plugins.`,
+          ),
+        );
+        return defaultRuntime.exit(1);
+      }
       const enableResult = enablePluginInConfig(cfg, id);
       let next: OpenClawConfig = enableResult.config;
       const slotResult = applySlotSelectionForPlugin(next, id);
@@ -606,6 +630,17 @@ export function registerPluginsCli(program: Command) {
         await import("./plugins-registry-refresh.js");
       const snapshot = await readConfigFileSnapshot();
       const cfg = (snapshot.sourceConfig ?? snapshot.config) as OpenClawConfig;
+      // Symmetric with `enable`: refuse to write `enabled: false` for an id
+      // that doesn't exist in the discovered registry, so `disable` cannot
+      // be used to seed a stale entry either. See #73551.
+      if (!(await isKnownPluginId(cfg, id))) {
+        defaultRuntime.log(
+          theme.error(
+            `Plugin not found: ${id}. Run \`openclaw plugins list\` to see installed plugins.`,
+          ),
+        );
+        return defaultRuntime.exit(1);
+      }
       const next = setPluginEnabledInConfig(cfg, id, false);
       await replaceConfigFile({
         nextConfig: next,

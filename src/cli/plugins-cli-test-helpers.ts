@@ -79,7 +79,7 @@ export const recordHookInstall: UnknownMock = vi.fn();
 const { defaultRuntime, runtimeLogs, runtimeErrors, resetRuntimeCapture } =
   createCliRuntimeCapture();
 
-export { runtimeErrors, runtimeLogs };
+export { defaultRuntime, runtimeErrors, runtimeLogs };
 
 export function setInstalledPluginIndexInstallRecords(records: PluginInstallRecordMap): void {
   mockInstalledPluginIndexInstallRecords = clonePluginInstallRecords(records);
