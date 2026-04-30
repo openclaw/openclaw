@@ -44,6 +44,7 @@ type OpenAITtsProviderOverrides = {
   model?: string;
   voice?: string;
   speed?: number;
+  instructions?: string;
 };
 
 function normalizeOpenAISpeechResponseFormat(
@@ -154,7 +155,21 @@ function readOpenAIOverrides(
     model: trimToUndefined(overrides.model),
     voice: trimToUndefined(overrides.voice),
     speed: asFiniteNumber(overrides.speed),
+    instructions: trimToUndefined(overrides.instructions),
   };
+}
+
+function mergeOpenAIInstructions(
+  baseInstructions: string | undefined,
+  overrideInstructions: string | undefined,
+): string | undefined {
+  if (!baseInstructions) {
+    return overrideInstructions;
+  }
+  if (!overrideInstructions) {
+    return baseInstructions;
+  }
+  return `${baseInstructions}\n\n${overrideInstructions}`;
 }
 
 function renderOpenAITtsPersonaInstructions(req: {
@@ -308,7 +323,7 @@ export function buildOpenAISpeechProvider(): SpeechProviderPlugin {
         model: overrides.model ?? config.model,
         voice: overrides.voice ?? config.voice,
         speed: overrides.speed ?? config.speed,
-        instructions: config.instructions,
+        instructions: mergeOpenAIInstructions(config.instructions, overrides.instructions),
         responseFormat,
         extraBody: config.extraBody,
         timeoutMs: req.timeoutMs,

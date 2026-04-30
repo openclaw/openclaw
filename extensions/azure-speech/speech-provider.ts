@@ -28,6 +28,9 @@ type AzureSpeechProviderConfig = {
   lang: string;
   outputFormat: string;
   voiceNoteOutputFormat: string;
+  rate?: string;
+  pitch?: string;
+  volume?: string;
   timeoutMs?: number;
 };
 
@@ -35,6 +38,9 @@ type AzureSpeechProviderOverrides = {
   voice?: string;
   lang?: string;
   outputFormat?: string;
+  rate?: string;
+  pitch?: string;
+  volume?: string;
 };
 
 function readAzureSpeechEnvApiKey(): string | undefined {
@@ -91,6 +97,9 @@ function normalizeAzureSpeechProviderConfig(
     outputFormat: trimToUndefined(raw?.outputFormat) ?? DEFAULT_AZURE_SPEECH_AUDIO_FORMAT,
     voiceNoteOutputFormat:
       trimToUndefined(raw?.voiceNoteOutputFormat) ?? DEFAULT_AZURE_SPEECH_VOICE_NOTE_FORMAT,
+    rate: trimToUndefined(raw?.rate),
+    pitch: trimToUndefined(raw?.pitch),
+    volume: trimToUndefined(raw?.volume),
     timeoutMs: asFiniteNumber(raw?.timeoutMs),
   };
 }
@@ -114,6 +123,9 @@ function readAzureSpeechProviderConfig(config: SpeechProviderConfig): AzureSpeec
     outputFormat: trimToUndefined(config.outputFormat) ?? defaults.outputFormat,
     voiceNoteOutputFormat:
       trimToUndefined(config.voiceNoteOutputFormat) ?? defaults.voiceNoteOutputFormat,
+    rate: trimToUndefined(config.rate) ?? defaults.rate,
+    pitch: trimToUndefined(config.pitch) ?? defaults.pitch,
+    volume: trimToUndefined(config.volume) ?? defaults.volume,
     timeoutMs: asFiniteNumber(config.timeoutMs) ?? defaults.timeoutMs,
   };
 }
@@ -128,6 +140,9 @@ function readAzureSpeechOverrides(
     voice: trimToUndefined(overrides.voice ?? overrides.voiceId),
     lang: trimToUndefined(overrides.lang ?? overrides.languageCode),
     outputFormat: trimToUndefined(overrides.outputFormat),
+    rate: trimToUndefined(overrides.rate),
+    pitch: trimToUndefined(overrides.pitch),
+    volume: trimToUndefined(overrides.volume),
   };
 }
 
@@ -164,6 +179,19 @@ function parseDirectiveToken(ctx: SpeechDirectiveTokenParseContext): {
         return { handled: true };
       }
       return { handled: true, overrides: { ...ctx.currentOverrides, outputFormat: ctx.value } };
+    case "rate":
+    case "azure_rate":
+    case "pitch":
+    case "azure_pitch":
+    case "volume":
+    case "azure_volume":
+      if (!ctx.policy.allowVoiceSettings) {
+        return { handled: true };
+      }
+      return {
+        handled: true,
+        overrides: { ...ctx.currentOverrides, [ctx.key.replace(/^azure_/, "")]: ctx.value },
+      };
     default:
       return { handled: false };
   }
@@ -201,6 +229,9 @@ export function buildAzureSpeechProvider(): SpeechProviderPlugin {
         endpoint,
         region: region ?? base.region,
       });
+      const rate = trimToUndefined(talkProviderConfig.rate);
+      const pitch = trimToUndefined(talkProviderConfig.pitch);
+      const volume = trimToUndefined(talkProviderConfig.volume);
       return {
         ...base,
         ...(apiKey === undefined ? {} : { apiKey }),
@@ -216,19 +247,30 @@ export function buildAzureSpeechProvider(): SpeechProviderPlugin {
         ...(trimToUndefined(talkProviderConfig.outputFormat) == null
           ? {}
           : { outputFormat: trimToUndefined(talkProviderConfig.outputFormat) }),
+        ...(rate == null ? {} : { rate }),
+        ...(pitch == null ? {} : { pitch }),
+        ...(volume == null ? {} : { volume }),
       };
     },
-    resolveTalkOverrides: ({ params }) => ({
-      ...(trimToUndefined(params.voiceId) == null
-        ? {}
-        : { voice: trimToUndefined(params.voiceId) }),
-      ...(trimToUndefined(params.languageCode) == null
-        ? {}
-        : { lang: trimToUndefined(params.languageCode) }),
-      ...(trimToUndefined(params.outputFormat) == null
-        ? {}
-        : { outputFormat: trimToUndefined(params.outputFormat) }),
-    }),
+    resolveTalkOverrides: ({ params }) => {
+      const rate = trimToUndefined(params.rate);
+      const pitch = trimToUndefined(params.pitch);
+      const volume = trimToUndefined(params.volume);
+      return {
+        ...(trimToUndefined(params.voiceId) == null
+          ? {}
+          : { voice: trimToUndefined(params.voiceId) }),
+        ...(trimToUndefined(params.languageCode) == null
+          ? {}
+          : { lang: trimToUndefined(params.languageCode) }),
+        ...(trimToUndefined(params.outputFormat) == null
+          ? {}
+          : { outputFormat: trimToUndefined(params.outputFormat) }),
+        ...(rate == null ? {} : { rate }),
+        ...(pitch == null ? {} : { pitch }),
+        ...(volume == null ? {} : { volume }),
+      };
+    },
     listVoices: async (req) => {
       const config = req.providerConfig
         ? readAzureSpeechProviderConfig(req.providerConfig)
@@ -267,6 +309,9 @@ export function buildAzureSpeechProvider(): SpeechProviderPlugin {
         region: config.region,
         voice: overrides.voice ?? config.voice,
         lang: overrides.lang ?? config.lang,
+        rate: overrides.rate ?? config.rate,
+        pitch: overrides.pitch ?? config.pitch,
+        volume: overrides.volume ?? config.volume,
         outputFormat,
         timeoutMs: resolveTimeoutMs(config, req.timeoutMs),
       });

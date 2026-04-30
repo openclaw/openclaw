@@ -217,6 +217,43 @@ describe("buildMicrosoftSpeechProvider", () => {
     );
   });
 
+  it("applies prosody provider overrides to Edge TTS config", async () => {
+    const provider = buildMicrosoftSpeechProvider();
+    const edgeSpy = vi.spyOn(ttsModule, "edgeTTS").mockImplementation(async ({ outputPath }) => {
+      writeFileSync(outputPath, Buffer.from([0xff, 0xfb, 0x90, 0x00]));
+    });
+
+    await provider.synthesize({
+      text: "Great news, the deployment succeeded!",
+      cfg: TEST_CFG,
+      providerConfig: {
+        enabled: true,
+        voice: "en-US-MichelleNeural",
+        lang: "en-US",
+        outputFormat: "audio-24khz-48kbitrate-mono-mp3",
+        outputFormatConfigured: true,
+        saveSubtitles: false,
+      },
+      providerOverrides: {
+        rate: "+8%",
+        pitch: "+4%",
+        volume: "+0%",
+      },
+      timeoutMs: 1000,
+      target: "audio-file",
+    });
+
+    expect(edgeSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: expect.objectContaining({
+          rate: "+8%",
+          pitch: "+4%",
+          volume: "+0%",
+        }),
+      }),
+    );
+  });
+
   it("preserves an explicitly configured English voice for CJK text", async () => {
     const provider = buildMicrosoftSpeechProvider();
     const edgeSpy = vi.spyOn(ttsModule, "edgeTTS").mockImplementation(async ({ outputPath }) => {

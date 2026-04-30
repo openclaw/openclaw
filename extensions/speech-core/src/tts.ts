@@ -101,6 +101,54 @@ const TTS_AUTO_EMOTION_RULES: readonly TtsAutoEmotionRule[] = [
   },
 ];
 
+type TtsAutoEmotionProviderProfile = {
+  prompt: string;
+  elevenLabsVoiceSettings: {
+    style: number;
+    stability: number;
+  };
+  prosody: {
+    rate: string;
+    pitch: string;
+    volume: string;
+  };
+};
+
+const TTS_AUTO_EMOTION_PROSODY_KEYS = ["rate", "pitch", "volume"] as const;
+
+const TTS_AUTO_EMOTION_PROVIDER_PROFILES: Record<string, TtsAutoEmotionProviderProfile> = {
+  happy: {
+    prompt: "Speak in a warm, upbeat, cheerful tone.",
+    elevenLabsVoiceSettings: { style: 0.45, stability: 0.35 },
+    prosody: { rate: "+8%", pitch: "+4%", volume: "+0%" },
+  },
+  calm: {
+    prompt: "Speak in a calm, steady, reassuring tone.",
+    elevenLabsVoiceSettings: { style: 0.2, stability: 0.65 },
+    prosody: { rate: "-5%", pitch: "-2%", volume: "-5%" },
+  },
+  neutral: {
+    prompt: "Speak in a clear, neutral tone.",
+    elevenLabsVoiceSettings: { style: 0, stability: 0.5 },
+    prosody: { rate: "+0%", pitch: "+0%", volume: "+0%" },
+  },
+  sad: {
+    prompt: "Speak in a gentle, apologetic tone.",
+    elevenLabsVoiceSettings: { style: 0.25, stability: 0.75 },
+    prosody: { rate: "-8%", pitch: "-4%", volume: "-8%" },
+  },
+  surprised: {
+    prompt: "Speak with mild surprise while staying clear.",
+    elevenLabsVoiceSettings: { style: 0.55, stability: 0.35 },
+    prosody: { rate: "+6%", pitch: "+6%", volume: "+0%" },
+  },
+  angry: {
+    prompt: "Speak firmly, with controlled emphasis.",
+    elevenLabsVoiceSettings: { style: 0.5, stability: 0.45 },
+    prosody: { rate: "+4%", pitch: "+2%", volume: "+5%" },
+  },
+};
+
 type TtsUserPrefs = {
   tts?: {
     auto?: TtsAutoMode;
@@ -307,6 +355,124 @@ function inferTtsEmotion(
     candidate.patterns.some((pattern) => pattern.test(normalized)),
   );
   return chooseAllowedAutoEmotion(rule?.emotion, config);
+}
+
+function asObjectRecord(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function hasAnyStringSetting(
+  value: Record<string, unknown> | undefined,
+  keys: readonly string[],
+): boolean {
+  return Boolean(value && keys.some((key) => normalizeOptionalString(value[key]) !== undefined));
+}
+
+function hasAnyConfiguredStringSetting(params: {
+  providerConfig: Record<string, unknown> | undefined;
+  providerOverrides: Record<string, unknown> | undefined;
+  keys: readonly string[];
+}): boolean {
+  return (
+    hasAnyStringSetting(params.providerOverrides, params.keys) ||
+    hasAnyStringSetting(params.providerConfig, params.keys)
+  );
+}
+
+function hasElevenLabsVoiceSettings(value: Record<string, unknown> | undefined): boolean {
+  const voiceSettings = asObjectRecord(value?.voiceSettings);
+  return Boolean(
+    voiceSettings &&
+    (voiceSettings.style !== undefined ||
+      voiceSettings.stability !== undefined ||
+      voiceSettings.similarityBoost !== undefined),
+  );
+}
+
+function hasExplicitAutoEmotionOverride(params: {
+  providerId: string;
+  providerConfig: SpeechProviderConfig;
+  providerOverrides?: SpeechProviderOverrides;
+}): boolean {
+  const providerConfig = asObjectRecord(params.providerConfig);
+  const providerOverrides = asObjectRecord(params.providerOverrides);
+  switch (params.providerId) {
+    case "volcengine":
+      return hasAnyConfiguredStringSetting({
+        providerConfig,
+        providerOverrides,
+        keys: ["emotion"],
+      });
+    case "xiaomi":
+    case "mimo":
+      return hasAnyConfiguredStringSetting({
+        providerConfig,
+        providerOverrides,
+        keys: ["style"],
+      });
+    case "openai":
+      return hasAnyConfiguredStringSetting({
+        providerConfig,
+        providerOverrides,
+        keys: ["instructions"],
+      });
+    case "elevenlabs":
+      return (
+        hasElevenLabsVoiceSettings(providerOverrides) || hasElevenLabsVoiceSettings(providerConfig)
+      );
+    case "microsoft":
+    case "edge":
+    case "azure":
+    case "azure-speech":
+      return hasAnyConfiguredStringSetting({
+        providerConfig,
+        providerOverrides,
+        keys: TTS_AUTO_EMOTION_PROSODY_KEYS,
+      });
+    default:
+      return hasAnyConfiguredStringSetting({
+        providerConfig,
+        providerOverrides,
+        keys: ["emotion"],
+      });
+  }
+}
+
+function buildAutoEmotionProviderOverrides(params: {
+  providerId: string;
+  emotion: string;
+  providerOverrides?: SpeechProviderOverrides;
+}): SpeechProviderOverrides | undefined {
+  const profile = TTS_AUTO_EMOTION_PROVIDER_PROFILES[params.emotion];
+  if (!profile) {
+    return { ...params.providerOverrides, emotion: params.emotion };
+  }
+  switch (params.providerId) {
+    case "volcengine":
+      return { ...params.providerOverrides, emotion: params.emotion };
+    case "xiaomi":
+    case "mimo":
+      return { ...params.providerOverrides, style: profile.prompt };
+    case "openai":
+      return { ...params.providerOverrides, instructions: profile.prompt };
+    case "elevenlabs":
+      return {
+        ...params.providerOverrides,
+        voiceSettings: {
+          ...asObjectRecord(params.providerOverrides?.voiceSettings),
+          ...profile.elevenLabsVoiceSettings,
+        },
+      };
+    case "microsoft":
+    case "edge":
+    case "azure":
+    case "azure-speech":
+      return { ...params.providerOverrides, ...profile.prosody };
+    default:
+      return { ...params.providerOverrides, emotion: params.emotion };
+  }
 }
 
 function sortSpeechProvidersForAutoSelection(cfg?: OpenClawConfig) {
@@ -1102,6 +1268,7 @@ async function prepareSpeechSynthesis(params: {
 
 function applyAutoEmotionProviderOverride(params: {
   text: string;
+  providerId: string;
   config: ResolvedTtsConfig;
   providerConfig: SpeechProviderConfig;
   providerOverrides?: SpeechProviderOverrides;
@@ -1109,20 +1276,24 @@ function applyAutoEmotionProviderOverride(params: {
   if (!params.config.autoEmotion?.enabled) {
     return params.providerOverrides;
   }
-  if (normalizeTtsEmotion(params.providerOverrides?.emotion)) {
-    return params.providerOverrides;
-  }
-  if (normalizeTtsEmotion(params.providerConfig.emotion)) {
+  if (
+    hasExplicitAutoEmotionOverride({
+      providerId: params.providerId,
+      providerConfig: resolveRawProviderConfig(params.config.rawConfig, params.providerId),
+      providerOverrides: params.providerOverrides,
+    })
+  ) {
     return params.providerOverrides;
   }
   const emotion = inferTtsEmotion(params.text, params.config.autoEmotion);
   if (!emotion) {
     return params.providerOverrides;
   }
-  return {
-    ...params.providerOverrides,
+  return buildAutoEmotionProviderOverrides({
+    providerId: params.providerId,
     emotion,
-  };
+    providerOverrides: params.providerOverrides,
+  });
 }
 
 function resolveTtsRequestSetup(params: {
@@ -1378,6 +1549,7 @@ export async function synthesizeSpeech(params: {
         providerConfig: resolvedProvider.providerConfig,
         providerOverrides: applyAutoEmotionProviderOverride({
           text: params.text,
+          providerId: resolvedProvider.provider.id,
           config,
           providerConfig: resolvedProvider.providerConfig,
           providerOverrides: params.overrides?.providerOverrides?.[resolvedProvider.provider.id],

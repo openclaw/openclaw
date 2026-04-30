@@ -246,6 +246,9 @@ export function buildMicrosoftSpeechProvider(): SpeechProviderPlugin {
       let lang = config.lang;
       let outputFormat =
         trimToUndefined(req.providerOverrides?.outputFormat) ?? config.outputFormat;
+      const rate = trimToUndefined(req.providerOverrides?.rate) ?? config.rate;
+      const pitch = trimToUndefined(req.providerOverrides?.pitch) ?? config.pitch;
+      const volume = trimToUndefined(req.providerOverrides?.volume) ?? config.volume;
       const fallbackOutputFormat =
         outputFormat !== DEFAULT_EDGE_OUTPUT_FORMAT ? DEFAULT_EDGE_OUTPUT_FORMAT : undefined;
 
@@ -265,6 +268,9 @@ export function buildMicrosoftSpeechProvider(): SpeechProviderPlugin {
               ...config,
               voice,
               lang,
+              rate,
+              pitch,
+              volume,
               outputFormat: format,
             },
             timeoutMs: req.timeoutMs,
