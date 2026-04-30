@@ -1883,6 +1883,8 @@ export type PluginCommandContext = {
   sessionId?: string;
   /** Transcript file for the active OpenClaw session when available. */
   sessionFile?: string;
+  /** Id of the agent handling this conversation, when the caller resolved one. */
+  agentId?: string;
   /** Raw command arguments after the command name */
   args?: string;
   /** The full normalized command body */

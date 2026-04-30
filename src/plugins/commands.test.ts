@@ -943,4 +943,54 @@ describe("registerPluginCommand", () => {
       accountId: "work",
     });
   });
+
+  it("forwards the caller-provided agentId onto the plugin command context", async () => {
+    let receivedCtx: { agentId?: string } | undefined;
+    const handler = async (ctx: { agentId?: string }) => {
+      receivedCtx = ctx;
+      return { text: "ok" };
+    };
+
+    await executePluginCommand({
+      command: {
+        name: "agentcheck",
+        description: "Demo command",
+        acceptsArgs: false,
+        handler,
+        pluginId: "demo-plugin",
+      },
+      channel: "telegram",
+      isAuthorizedSender: true,
+      commandBody: "/agentcheck",
+      config: {} as never,
+      agentId: "main",
+    });
+
+    expect(receivedCtx?.agentId).toBe("main");
+  });
+
+  it("leaves ctx.agentId undefined when the caller omits it", async () => {
+    let receivedCtx: { agentId?: string } | undefined;
+    const handler = async (ctx: { agentId?: string }) => {
+      receivedCtx = ctx;
+      return { text: "ok" };
+    };
+
+    await executePluginCommand({
+      command: {
+        name: "agentcheck-missing",
+        description: "Demo command",
+        acceptsArgs: false,
+        handler,
+        pluginId: "demo-plugin",
+      },
+      channel: "telegram",
+      isAuthorizedSender: true,
+      commandBody: "/agentcheck-missing",
+      config: {} as never,
+    });
+
+    expect(receivedCtx).toBeDefined();
+    expect(receivedCtx?.agentId).toBeUndefined();
+  });
 });
