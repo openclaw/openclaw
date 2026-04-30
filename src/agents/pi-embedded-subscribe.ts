@@ -837,7 +837,15 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     // Compute delta: new text since the last emitted reasoning.
     // Guard against non-prefix changes (e.g. trim/format altering earlier content).
     const prior = state.lastStreamedReasoning ?? "";
-    const delta = formatted.startsWith(prior) ? formatted.slice(prior.length) : formatted;
+    let delta = formatted;
+    if (formatted.startsWith(prior)) {
+      delta = formatted.slice(prior.length);
+    } else if (prior.endsWith("_") && formatted.startsWith(prior.slice(0, -1))) {
+      // The formatter adds `_` to the end of each line. If the new text appends to the same line,
+      // `formatted` will not start with `prior` because `prior` has a premature closing `_`.
+      // We ignore that trailing `_` for the prefix check and emit the remainder as delta.
+      delta = formatted.slice(prior.length - 1);
+    }
     state.lastStreamedReasoning = formatted;
 
     // Broadcast thinking event to WebSocket clients in real-time
