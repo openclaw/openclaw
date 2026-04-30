@@ -158,7 +158,12 @@ inter-session user turns that only have provenance metadata.
 - Empty assistant stream-error turns are repaired to a non-empty fallback text block
   before replay. Bedrock Converse rejects assistant messages with `content: []`, so
   persisted assistant turns with `stopReason: "error"` and empty content are also
-  repaired on disk before load.
+  repaired on disk before load. **Exception:** trailing repaired failed-stream artifacts
+  (assistant entries with `stopReason: "error"` and empty content or the stream-error
+  fallback text, at the end of a session file) are dropped rather than repaired, because
+  replaying them as assistant prefill causes provider rejections. Normal completed
+  assistant turns — those with non-empty content and a non-error stop reason — are always
+  preserved, including when they appear at the end of a session.
 - Assistant stream-error turns that contain only blank text blocks are dropped
   from the in-memory replay copy instead of replaying an invalid blank block.
 - Claude thinking blocks with missing, empty, or blank replay signatures are
