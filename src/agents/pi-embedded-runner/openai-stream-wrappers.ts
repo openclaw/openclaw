@@ -498,10 +498,12 @@ export function createOpenAIAttributionHeadersWrapper(
     if (!attributionProvider) {
       return underlying(model, context, options);
     }
-    const streamFn =
-      attributionProvider === "openai-codex"
-        ? (opts?.codexNativeTransportStreamFn ?? createOpenAIResponsesTransportStreamFn())
-        : underlying;
+    const shouldCreateCodexTransport =
+      attributionProvider === "openai-codex" &&
+      (baseStreamFn === undefined || baseStreamFn === streamSimple);
+    const streamFn = shouldCreateCodexTransport
+      ? (opts?.codexNativeTransportStreamFn ?? createOpenAIResponsesTransportStreamFn())
+      : underlying;
     return streamFn(model, context, {
       ...options,
       headers: resolveProviderRequestPolicyConfig({

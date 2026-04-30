@@ -304,17 +304,33 @@ function withDefaultCodexContextMetadata(params: {
   };
 }
 
+function buildCodexCredentialExtra(identity: {
+  accountId?: string;
+  chatgptPlanType?: string;
+}): Record<string, unknown> | undefined {
+  const extra = {
+    ...(identity.accountId ? { accountId: identity.accountId } : {}),
+    ...(identity.chatgptPlanType ? { chatgptPlanType: identity.chatgptPlanType } : {}),
+  };
+  return Object.keys(extra).length > 0 ? extra : undefined;
+}
+
 async function refreshOpenAICodexOAuthCredential(cred: OAuthCredential) {
   try {
     const { refreshOpenAICodexToken } = await import("./openai-codex-provider.runtime.js");
     const refreshed = await refreshOpenAICodexToken(cred.refresh);
+    const identity = resolveCodexAuthIdentity({
+      accessToken: refreshed.access,
+      email: cred.email,
+    });
     return {
       ...cred,
       ...refreshed,
       type: "oauth" as const,
       provider: PROVIDER_ID,
-      email: cred.email,
+      email: identity.email ?? cred.email,
       displayName: cred.displayName,
+      ...buildCodexCredentialExtra(identity),
     };
   } catch (error) {
     const message = formatErrorMessage(error);
@@ -359,6 +375,7 @@ async function runOpenAICodexOAuth(ctx: ProviderAuthContext) {
     expires: creds.expires,
     email: identity.email,
     profileName: identity.profileName,
+    credentialExtra: buildCodexCredentialExtra(identity),
   });
 }
 
@@ -409,6 +426,7 @@ async function runOpenAICodexDeviceCode(ctx: ProviderAuthContext) {
       expires: creds.expires,
       email: identity.email,
       profileName: identity.profileName,
+      credentialExtra: buildCodexCredentialExtra(identity),
     });
   } catch (error) {
     spin.stop("OpenAI device code failed");
