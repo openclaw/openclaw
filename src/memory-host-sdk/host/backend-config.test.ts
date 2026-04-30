@@ -129,7 +129,7 @@ describe("resolveMemoryBackendConfig", () => {
     expect(custom?.path).toBe(path.resolve(workspaceRoot, "notes"));
   });
 
-  it("scopes qmd collection names per agent", () => {
+  it("scopes default memory collection names per agent while preserving explicit custom names", () => {
     const cfg = {
       agents: {
         defaults: { workspace: "/workspace/root" },
@@ -227,7 +227,7 @@ describe("resolveMemoryBackendConfig", () => {
     expect(devNames.has("notion-mirror")).toBe(true);
   });
 
-  it("keeps symlinked workspace paths agent-scoped when deciding custom collection names", async () => {
+  it("preserves explicit custom collection names for symlinked workspace paths", async () => {
     const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "qmd-backend-config-"));
     const workspaceDir = path.join(tmpRoot, "workspace");
     const workspaceAliasDir = path.join(tmpRoot, "workspace-alias");
@@ -254,7 +254,7 @@ describe("resolveMemoryBackendConfig", () => {
     }
   });
 
-  it("keeps unresolved child paths under a symlinked workspace agent-scoped", async () => {
+  it("preserves explicit custom collection names for unresolved child paths under a symlinked workspace", async () => {
     const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "qmd-backend-config-"));
     const realRootDir = path.join(tmpRoot, "real-root");
     const aliasRootDir = path.join(tmpRoot, "alias-root");
