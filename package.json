@@ -1611,6 +1611,7 @@
   "dependencies": {
     "@agentclientprotocol/sdk": "0.21.0",
     "@clack/prompts": "^1.2.0",
+    "@cursor/sdk": "^1.0.7",
     "@lydell/node-pty": "1.2.0-beta.12",
     "@mariozechner/pi-agent-core": "0.70.6",
     "@mariozechner/pi-ai": "0.70.6",

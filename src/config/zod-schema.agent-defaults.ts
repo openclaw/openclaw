@@ -231,9 +231,7 @@ export const AgentDefaultsSchema = z
       ])
       .optional(),
     verboseDefault: z.union([z.literal("off"), z.literal("on"), z.literal("full")]).optional(),
-    reasoningDefault: z
-      .union([z.literal("off"), z.literal("on"), z.literal("stream")])
-      .optional(),
+    reasoningDefault: z.union([z.literal("off"), z.literal("on"), z.literal("stream")]).optional(),
     elevatedDefault: z
       .union([z.literal("off"), z.literal("on"), z.literal("ask"), z.literal("full")])
       .optional(),
@@ -281,6 +279,35 @@ export const AgentDefaultsSchema = z
       .strict()
       .optional(),
     sandbox: AgentSandboxSchema,
+    cursorSdk: z
+      .object({
+        runtime: z.union([z.literal("local"), z.literal("cloud")]).optional(),
+        model: z.string().optional(),
+        cloud: z
+          .object({
+            repos: z
+              .array(
+                z
+                  .object({
+                    url: z.string(),
+                    startingRef: z.string().optional(),
+                  })
+                  .strict(),
+              )
+              .optional(),
+            autoCreatePR: z.boolean().optional(),
+          })
+          .strict()
+          .optional(),
+        local: z
+          .object({
+            cwd: z.string().optional(),
+          })
+          .strict()
+          .optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict()
   .optional();

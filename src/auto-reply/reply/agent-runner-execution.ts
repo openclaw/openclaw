@@ -12,13 +12,18 @@ import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-bu
 import { runCliAgent } from "../../agents/cli-runner.js";
 import { getCliSessionBinding } from "../../agents/cli-session.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
+import { runCursorSdkAgent } from "../../agents/cursor-sdk-runner.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 import { runWithModelFallback, isFallbackSummaryError } from "../../agents/model-fallback.js";
 import {
   isCliRuntimeAlias,
   resolveCliRuntimeExecutionProvider,
 } from "../../agents/model-runtime-aliases.js";
-import { isCliProvider, resolveModelRefFromString } from "../../agents/model-selection.js";
+import {
+  isCursorSdkProvider,
+  isCliProvider,
+  resolveModelRefFromString,
+} from "../../agents/model-selection.js";
 import {
   BILLING_ERROR_USER_MESSAGE,
   formatRateLimitOrOverloadedErrorCopy,
@@ -1380,6 +1385,67 @@ export async function runAgentTurnWithFallback(params: {
               }
             })();
           }
+
+          if (isCursorSdkProvider(cliExecutionProvider)) {
+            const startedAt = Date.now();
+            notifyAgentRunStart();
+            emitAgentEvent({
+              runId,
+              stream: "lifecycle",
+              data: { phase: "start", startedAt },
+            });
+            return (async () => {
+              let lifecycleTerminalEmitted = false;
+              try {
+                const result = await runCursorSdkAgent({
+                  sessionId: params.followupRun.run.sessionId,
+                  sessionKey: params.sessionKey,
+                  agentId: params.followupRun.run.agentId,
+                  sessionFile: params.followupRun.run.sessionFile,
+                  workspaceDir: params.followupRun.run.workspaceDir,
+                  config: runtimeConfig,
+                  prompt: params.commandBody,
+                  provider: cliExecutionProvider,
+                  model,
+                  timeoutMs: params.followupRun.run.timeoutMs,
+                  runId,
+                });
+                const cursorText = normalizeOptionalString(result.payloads?.[0]?.text);
+                if (cursorText) {
+                  emitAgentEvent({ runId, stream: "assistant", data: { text: cursorText } });
+                }
+                emitAgentEvent({
+                  runId,
+                  stream: "lifecycle",
+                  data: { phase: "end", startedAt, endedAt: Date.now() },
+                });
+                lifecycleTerminalEmitted = true;
+                return result;
+              } catch (err) {
+                emitAgentEvent({
+                  runId,
+                  stream: "lifecycle",
+                  data: { phase: "error", startedAt, endedAt: Date.now(), error: String(err) },
+                });
+                lifecycleTerminalEmitted = true;
+                throw err;
+              } finally {
+                if (!lifecycleTerminalEmitted) {
+                  emitAgentEvent({
+                    runId,
+                    stream: "lifecycle",
+                    data: {
+                      phase: "error",
+                      startedAt,
+                      endedAt: Date.now(),
+                      error: "Cursor SDK run completed without lifecycle terminal event",
+                    },
+                  });
+                }
+              }
+            })();
+          }
+
           const { embeddedContext, senderContext, runBaseParams } = buildEmbeddedRunExecutionParams(
             {
               run: effectiveRun,
