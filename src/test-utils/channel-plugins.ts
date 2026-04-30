@@ -18,6 +18,7 @@ export const createTestRegistry = (channels: TestChannelRegistration[] = []): Pl
   tools: [],
   hooks: [],
   typedHooks: [],
+  trustedToolPolicies: [],
   channels: channels as unknown as PluginRegistry["channels"],
   channelSetups: channels.map((entry) => ({
     pluginId: entry.pluginId,

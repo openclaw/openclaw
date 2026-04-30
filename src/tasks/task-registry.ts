@@ -1673,7 +1673,7 @@ export function markTaskTerminalByRunId(params: {
     startedAt: params.startedAt,
     endedAt: params.endedAt,
     lastEventAt: params.lastEventAt,
-    error: params.error,
+    error: params.error ?? undefined,
     progressSummary: params.progressSummary,
     terminalSummary: params.terminalSummary,
     terminalOutcome: params.terminalOutcome,
@@ -2014,4 +2014,30 @@ export function setTaskRegistryControlRuntimeForTests(runtime: TaskRegistryContr
     TASK_REGISTRY_CONTROL_RUNTIME_OVERRIDE_KEY
   ] = runtime;
   controlRuntimePromise = null;
+}
+
+export function reloadTaskRegistryFromStore(): void {
+  resetTaskRegistryForTests();
+  ensureTaskRegistryReady();
+}
+
+export function finalizeTaskRunByRunId(params: {
+  runId: string;
+  runtime?: TaskRuntime;
+  sessionKey?: string;
+  status?: Extract<TaskStatus, "succeeded" | "failed" | "timed_out" | "cancelled">;
+  completedAt?: number;
+  error?: string | null;
+  result?: unknown;
+  terminalOutcome?: TaskTerminalOutcome | null;
+}) {
+  return markTaskTerminalByRunId({
+    runId: params.runId,
+    runtime: params.runtime,
+    sessionKey: params.sessionKey,
+    status: params.status ?? "succeeded",
+    endedAt: params.completedAt ?? Date.now(),
+    error: params.error ?? undefined,
+    terminalOutcome: params.terminalOutcome,
+  });
 }

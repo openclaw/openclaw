@@ -6,6 +6,7 @@ export function createEmptyPluginRegistry(): PluginRegistry {
     tools: [],
     hooks: [],
     typedHooks: [],
+    trustedToolPolicies: [],
     channels: [],
     channelSetups: [],
     providers: [],

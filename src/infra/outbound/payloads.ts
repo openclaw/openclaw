@@ -131,10 +131,12 @@ type PreparedOutboundPayloadPlanEntry = {
 
 function createOutboundPayloadPlanEntry(
   payload: ReplyPayload,
+  context: Record<string, never> = {},
 ): PreparedOutboundPayloadPlanEntry | null {
   if (shouldSuppressReasoningPayload(payload)) {
     return null;
   }
+  void context;
   const parsed = parseReplyDirectives(payload.text ?? "");
   const explicitMediaUrls = payload.mediaUrls ?? parsed.mediaUrls;
   const explicitMediaUrl = payload.mediaUrl ?? parsed.mediaUrl;

@@ -167,3 +167,7 @@ export function freezeDiagnosticTraceContext(
     ...(context.traceFlags ? { traceFlags: context.traceFlags } : {}),
   });
 }
+
+export function getActiveDiagnosticTraceContext(): DiagnosticTraceContext | undefined {
+  return undefined;
+}

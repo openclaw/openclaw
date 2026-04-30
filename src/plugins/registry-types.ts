@@ -295,11 +295,26 @@ export type PluginRecord = {
   memorySlotSelected?: boolean;
 };
 
+export type PluginTrustedToolPolicyRegistration = {
+  pluginId: string;
+  pluginName?: string;
+  source: string;
+  rootDir?: string;
+  policy: {
+    id: string;
+    evaluate: (
+      event: import("./hook-types.js").PluginHookBeforeToolCallEvent,
+      ctx: import("./hook-types.js").PluginHookToolContext,
+    ) => Promise<import("./hook-types.js").PluginHookBeforeToolCallResult | undefined>;
+  };
+};
+
 export type PluginRegistry = {
   plugins: PluginRecord[];
   tools: PluginToolRegistration[];
   hooks: PluginHookRegistration[];
   typedHooks: TypedPluginHookRegistration[];
+  trustedToolPolicies: PluginTrustedToolPolicyRegistration[];
   channels: PluginChannelRegistration[];
   channelSetups: PluginChannelSetupRegistration[];
   providers: PluginProviderRegistration[];
