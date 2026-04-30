@@ -14,7 +14,7 @@ export function normalizeProviderId(provider: string): string {
   if (normalized === "opencode-go-auth") {
     return "opencode-go";
   }
-  if (normalized === "kimi" || normalized === "kimi-code") {
+  if (normalized === "kimi" || normalized === "kimi-code" || normalized === "kimi-coding") {
     return "kimi";
   }
   if (normalized === "bedrock" || normalized === "aws-bedrock") {
@@ -39,6 +39,12 @@ export function findNormalizedProviderValue<T>(
   if (!entries) {
     return undefined;
   }
+  const rawKey = provider.toLowerCase();
+  for (const [key, value] of Object.entries(entries)) {
+    if (key.toLowerCase() === rawKey) {
+      return value;
+    }
+  }
   const providerKey = normalizeProviderId(provider);
   for (const [key, value] of Object.entries(entries)) {
     if (normalizeProviderId(key) === providerKey) {
@@ -54,6 +60,11 @@ export function findNormalizedProviderKey(
 ): string | undefined {
   if (!entries) {
     return undefined;
+  }
+  const rawKey = provider.toLowerCase();
+  const exactMatch = Object.keys(entries).find((key) => key.toLowerCase() === rawKey);
+  if (exactMatch !== undefined) {
+    return exactMatch;
   }
   const providerKey = normalizeProviderId(provider);
   return Object.keys(entries).find((key) => normalizeProviderId(key) === providerKey);

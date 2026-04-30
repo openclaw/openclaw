@@ -23,6 +23,7 @@ import {
   resolveThinkingDefault,
   resolveModelRefFromString,
 } from "./model-selection.js";
+import { findNormalizedProviderValue, findNormalizedProviderKey } from "./provider-id.js";
 
 const EXPLICIT_ALLOWLIST_CONFIG = {
   agents: {
@@ -139,10 +140,39 @@ describe("model-selection", () => {
       expect(normalizeProviderId("OpenCode-Zen")).toBe("opencode");
       expect(normalizeProviderId("qwen")).toBe("qwen");
       expect(normalizeProviderId("kimi-code")).toBe("kimi");
-      expect(normalizeProviderId("kimi-coding")).toBe("kimi-coding");
+      expect(normalizeProviderId("kimi-coding")).toBe("kimi");
       expect(normalizeProviderId("bedrock")).toBe("amazon-bedrock");
       expect(normalizeProviderId("aws-bedrock")).toBe("amazon-bedrock");
       expect(normalizeProviderId("amazon-bedrock")).toBe("amazon-bedrock");
+    });
+  });
+
+  describe("findNormalizedProviderValue", () => {
+    it("returns value for exact case-insensitive provider key match before alias expansion", () => {
+      const entries = { "kimi-coding": "coding-value", kimi: "kimi-value" };
+      expect(findNormalizedProviderValue(entries, "kimi-coding")).toBe("coding-value");
+    });
+
+    it("falls back to alias-normalized match when no exact key exists", () => {
+      const entries = { kimi: "kimi-value" };
+      expect(findNormalizedProviderValue(entries, "kimi-coding")).toBe("kimi-value");
+    });
+
+    it("returns undefined when no exact or normalized match exists", () => {
+      const entries = { openai: "openai-value" };
+      expect(findNormalizedProviderValue(entries, "kimi-coding")).toBeUndefined();
+    });
+  });
+
+  describe("findNormalizedProviderKey", () => {
+    it("returns the exact key for a case-insensitive match before alias expansion", () => {
+      const entries = { "kimi-coding": "a", kimi: "b" };
+      expect(findNormalizedProviderKey(entries, "kimi-coding")).toBe("kimi-coding");
+    });
+
+    it("falls back to the alias-normalized key when no exact key exists", () => {
+      const entries = { kimi: "b" };
+      expect(findNormalizedProviderKey(entries, "kimi-coding")).toBe("kimi");
     });
   });
 
@@ -378,7 +408,7 @@ describe("model-selection", () => {
           overrideModel: "kimi-code",
         }),
       ).toEqual({
-        provider: "kimi-coding",
+        provider: "kimi",
         model: "kimi-code",
       });
     });
@@ -405,7 +435,7 @@ describe("model-selection", () => {
           overrideModel: "kimi-code",
         }),
       ).toEqual({
-        provider: "kimi-coding",
+        provider: "kimi",
         model: "kimi-code",
       });
     });
