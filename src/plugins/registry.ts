@@ -265,6 +265,24 @@ function resolvePluginRegistrationCapabilities(
   };
 }
 
+/**
+ * Resolves a path for a plugin API call, rooting relative inputs under the
+ * plugin's own `rootDir` so that `api.resolvePath('.')` always returns the
+ * plugin directory rather than the process CWD.
+ *
+ * - Empty input → preserves existing empty-string return from resolveUserPath.
+ * - Absolute paths and `~`-relative paths → pass through resolveUserPath unchanged.
+ * - Relative paths (including `.`) → resolved under `rootDir` when available.
+ *
+ * Exported for unit testing only; treat as internal to this module.
+ */
+export function resolvePluginPath(input: string, rootDir: string | undefined): string {
+  const trimmed = input?.trim() ?? "";
+  if (!trimmed) return resolveUserPath(input);
+  if (path.isAbsolute(trimmed) || trimmed.startsWith("~")) return resolveUserPath(input);
+  return rootDir ? path.resolve(rootDir, trimmed) : resolveUserPath(input);
+}
+
 export function createPluginRegistry(registryParams: PluginRegistryParams) {
   const registry = createEmptyPluginRegistry();
   const coreGatewayMethods = new Set([
@@ -2020,7 +2038,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       pluginConfig: params.pluginConfig,
       runtime: resolvePluginRuntime(record.id),
       logger: normalizeLogger(registryParams.logger),
-      resolvePath: (input: string) => resolveUserPath(input),
+      resolvePath: (input: string) => resolvePluginPath(input, record.rootDir),
       handlers: {
         ...(registrationCapabilities.capabilityHandlers
           ? {

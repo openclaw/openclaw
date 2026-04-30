@@ -32,6 +32,7 @@ import {
   resolveProviderOwners,
   resolveSetupProviderOwners,
 } from "./plugin-registry.js";
+import { resolvePluginPath } from "./registry.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
 const tempDirs: string[] = [];
@@ -709,5 +710,38 @@ describe("plugin registry facade", () => {
       },
       plugins: [],
     });
+  });
+});
+
+describe("resolvePluginPath", () => {
+  const rootDir = "/plugins/my-extension";
+
+  it("resolves '.' to plugin rootDir", () => {
+    expect(resolvePluginPath(".", rootDir)).toBe(rootDir);
+  });
+
+  it("resolves relative sub-paths under rootDir", () => {
+    expect(resolvePluginPath("data/ws.log", rootDir)).toBe(path.resolve(rootDir, "data/ws.log"));
+  });
+
+  it("passes absolute paths through unchanged", () => {
+    expect(resolvePluginPath("/tmp/absolute", rootDir)).toBe("/tmp/absolute");
+  });
+
+  it("passes home-relative paths through resolveUserPath", () => {
+    const result = resolvePluginPath("~/logs/ws.log", rootDir);
+    expect(result).toMatch(/^\/.*logs\/ws\.log$/);
+    expect(result).not.toContain("~");
+  });
+
+  it("returns empty string for empty input regardless of rootDir", () => {
+    expect(resolvePluginPath("", rootDir)).toBe("");
+  });
+
+  it("falls back to process CWD when rootDir is undefined", () => {
+    const result = resolvePluginPath(".", undefined);
+    expect(typeof result).toBe("string");
+    expect(result.length).toBeGreaterThan(0);
+    expect(path.isAbsolute(result)).toBe(true);
   });
 });

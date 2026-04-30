@@ -31,6 +31,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Plugins/SDK: fix `api.resolvePath` for plugins so that relative paths (including `'.'`) resolve against the plugin's own `rootDir` instead of the process CWD and remain available to registered services after startup, preventing startup file I/O crashes such as clawtalk's WebSocket log path failure. Fixes #74676. Thanks @jimdawdy-hub.
 - Bonjour/Gateway: cap flapping advertiser restarts in a sliding window, so mDNS probing/name-conflict loops disable discovery instead of churning indefinitely on constrained hosts. Refs #74209 and #74242. Thanks @ndj888 and @Sanjays2402.
 - Plugins/runtime-deps: verify staged package entry files before reusing mirrored runtime roots, so browser-control repairs incomplete `ajv`/MCP SDK installs after update instead of failing after restart on a missing `ajv/dist/ajv.js`. Refs #74630. Thanks @spickeringlr.
 - Channels/Feishu: retry file-typed iOS video resource downloads as `media` after a Feishu/Lark HTTP 502 and preserve the original 502 when the fallback also fails. Fixes #49855; carries forward #50164 and #73986. Thanks @alex-xuweilong.
