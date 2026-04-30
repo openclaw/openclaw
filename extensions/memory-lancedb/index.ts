@@ -832,6 +832,10 @@ export default definePluginEntry({
           .option("--timeout <seconds>", "Seconds to wait for index creation to finish", "180")
           .action(async (opts) => {
             const timeoutSeconds = Number.parseInt(String(opts.timeout), 10);
+            if (!Number.isFinite(timeoutSeconds) || timeoutSeconds <= 0) {
+              console.error(`Invalid timeout value: ${opts.timeout}. Must be a positive integer.`);
+              process.exit(1);
+            }
             const { rowCount, indexed } = await db.reindex(timeoutSeconds);
             if (!indexed) {
               console.log(`No memories to reindex (rows: ${rowCount})`);
