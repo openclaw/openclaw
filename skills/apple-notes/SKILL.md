@@ -78,15 +78,16 @@ Notes
 
 ## Native Alternative (No `memo` dependency)
 
-If you want a lower-friction setup that doesn't require installing the `memo` CLI, we recommend the `apple-notes-native` skill by `lishix520`. It uses native macOS AppleScript (osascript) for automation.
+If you want a lower-friction setup that doesn't require installing the `memo` CLI, you can find native macOS AppleScript-based skills on ClawHub.
 
-**Install:**
+**Search and Install:**
 
 ```bash
-openclaw skills install lishix520/apple-notes-native
+openclaw skills search apple-notes
+openclaw skills install apple-notes-native
 ```
 
-Benefits:
+Benefits of native-first alternatives:
 
 - No third-party binary dependencies (no `memo` brew tap needed).
 - Direct interaction with Notes.app via official automation APIs.
