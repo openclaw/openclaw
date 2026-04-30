@@ -137,11 +137,22 @@ export type WorkspaceBootstrapFileName =
   | typeof DEFAULT_BOOTSTRAP_FILENAME
   | typeof DEFAULT_MEMORY_FILENAME;
 
+/**
+ * Provenance of a workspace bootstrap file.
+ * - `"root"` — loaded from a recognized root-relative path (e.g. workspace root AGENTS.md).
+ * - `"hook"` — injected by the `bootstrap-extra-files` hook from a configured pattern
+ *   (e.g. `packages/*\/AGENTS.md`). Used by the `standard` tier to exclude hook-loaded
+ *   extras even when their basename matches a root allowlist entry.
+ */
+export type WorkspaceBootstrapFileSource = "root" | "hook";
+
 export type WorkspaceBootstrapFile = {
   name: WorkspaceBootstrapFileName;
   path: string;
   content?: string;
   missing: boolean;
+  /** Provenance tag. Absent values are treated as `"root"` for back-compat. */
+  source?: WorkspaceBootstrapFileSource;
 };
 
 export type ExtraBootstrapLoadDiagnosticCode =
@@ -658,9 +669,15 @@ export async function loadWorkspaceBootstrapFiles(dir: string): Promise<Workspac
         path: entry.filePath,
         content: loaded.content,
         missing: false,
+        source: "root",
       });
     } else {
-      result.push({ name: entry.name, path: entry.filePath, missing: true });
+      result.push({
+        name: entry.name,
+        path: entry.filePath,
+        missing: true,
+        source: "root",
+      });
     }
   }
   return result;
@@ -729,8 +746,13 @@ export function filterBootstrapFilesForSession(
     return files.filter((file) => MINIMAL_BOOTSTRAP_ALLOWLIST.has(file.name));
   }
   if (tier === "standard") {
-    // Standard includes only recognized bootstrap files, excluding extra patterns.
-    return files.filter((file) => STANDARD_BOOTSTRAP_ALLOWLIST.has(file.name));
+    // Standard includes only recognized root bootstrap files. Hook-loaded extras
+    // (e.g. `packages/*\/AGENTS.md` from the `bootstrap-extra-files` hook) are
+    // excluded here even when their basename matches the allowlist — `standard`
+    // must remain distinguishable from `full` on the real hook path.
+    return files.filter(
+      (file) => file.source !== "hook" && STANDARD_BOOTSTRAP_ALLOWLIST.has(file.name),
+    );
   }
   // "full" includes all loaded files, including extra bootstrap patterns.
   return files;
@@ -798,6 +820,7 @@ export async function loadExtraBootstrapFilesWithDiagnostics(
         path: filePath,
         content: loaded.content,
         missing: false,
+        source: "hook",
       });
       continue;
     }
