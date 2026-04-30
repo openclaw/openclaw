@@ -12,7 +12,10 @@ import {
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { recordInboundSession } from "openclaw/plugin-sdk/conversation-runtime";
 import { normalizeScpRemoteHost } from "openclaw/plugin-sdk/host-runtime";
-import { runPreparedInboundReplyTurn } from "openclaw/plugin-sdk/inbound-reply-dispatch";
+import {
+  hasFinalInboundReplyDispatch,
+  runPreparedInboundReplyTurn,
+} from "openclaw/plugin-sdk/inbound-reply-dispatch";
 import { isInboundPathAllowed, kindFromMime } from "openclaw/plugin-sdk/media-runtime";
 import {
   clearHistoryEntriesIfEnabled,
@@ -487,9 +490,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
           },
         }),
     });
-    const queuedFinal = dispatchResult.queuedFinal;
-
-    if (!queuedFinal) {
+    if (!hasFinalInboundReplyDispatch(dispatchResult)) {
       if (decision.isGroup && decision.historyKey) {
         clearHistoryEntriesIfEnabled({
           historyMap: groupHistories,

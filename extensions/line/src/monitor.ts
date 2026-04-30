@@ -2,7 +2,10 @@ import type { webhook } from "@line/bot-sdk";
 import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { recordInboundSession } from "openclaw/plugin-sdk/conversation-runtime";
-import { runPreparedInboundReplyTurn } from "openclaw/plugin-sdk/inbound-reply-dispatch";
+import {
+  hasFinalInboundReplyDispatch,
+  runPreparedInboundReplyTurn,
+} from "openclaw/plugin-sdk/inbound-reply-dispatch";
 import {
   dispatchReplyWithBufferedBlockDispatcher,
   chunkMarkdownText,
@@ -306,9 +309,7 @@ export async function monitorLineProvider(
               },
             }),
         });
-        const queuedFinal = dispatchResult.queuedFinal;
-
-        if (!queuedFinal) {
+        if (!hasFinalInboundReplyDispatch(dispatchResult)) {
           logVerbose(`line: no response generated for message from ${ctxPayload.From}`);
         }
       } catch (err) {

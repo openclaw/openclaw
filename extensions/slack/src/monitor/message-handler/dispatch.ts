@@ -18,7 +18,10 @@ import {
   resolveChannelStreamingPreviewToolProgress,
 } from "openclaw/plugin-sdk/channel-streaming";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { runPreparedInboundReplyTurn } from "openclaw/plugin-sdk/inbound-reply-dispatch";
+import {
+  hasVisibleInboundReplyDispatch,
+  runPreparedInboundReplyTurn,
+} from "openclaw/plugin-sdk/inbound-reply-dispatch";
 import { resolveAgentOutboundIdentity } from "openclaw/plugin-sdk/outbound-runtime";
 import { clearHistoryEntriesIfEnabled } from "openclaw/plugin-sdk/reply-history";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
@@ -1099,12 +1102,13 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     }
   }
 
-  const anyReplyDelivered =
-    observedReplyDelivery ||
-    queuedFinal ||
-    streamFallbackDelivered ||
-    (counts.block ?? 0) > 0 ||
-    (counts.final ?? 0) > 0;
+  const anyReplyDelivered = hasVisibleInboundReplyDispatch(
+    { queuedFinal, counts },
+    {
+      observedReplyDelivery,
+      fallbackDelivered: streamFallbackDelivered,
+    },
+  );
 
   if (statusReactionsEnabled) {
     if (dispatchError) {

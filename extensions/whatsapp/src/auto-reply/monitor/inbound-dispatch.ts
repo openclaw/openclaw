@@ -1,3 +1,4 @@
+import { hasVisibleInboundReplyDispatch } from "openclaw/plugin-sdk/inbound-reply-dispatch";
 import {
   type DeliverableWhatsAppOutboundPayload,
   normalizeWhatsAppOutboundPayload,
@@ -388,8 +389,7 @@ export async function dispatchWhatsAppBufferedReply(params: {
     },
   });
 
-  const didQueueVisibleReply =
-    queuedFinal || counts.tool > 0 || counts.block > 0 || counts.final > 0;
+  const didQueueVisibleReply = hasVisibleInboundReplyDispatch({ queuedFinal, counts });
   if (!didQueueVisibleReply) {
     if (params.shouldClearGroupHistory) {
       params.groupHistories.set(params.groupHistoryKey, []);

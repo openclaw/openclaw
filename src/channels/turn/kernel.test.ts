@@ -6,6 +6,9 @@ import type { RecordInboundSession } from "../session.types.js";
 import {
   createNoopChannelTurnDeliveryAdapter,
   dispatchAssembledChannelTurn,
+  hasFinalChannelTurnDispatch,
+  hasVisibleChannelTurnDispatch,
+  resolveChannelTurnDispatchCounts,
   runPreparedChannelTurn,
   runChannelTurn,
 } from "./kernel.js";
@@ -84,6 +87,7 @@ describe("channel turn kernel", () => {
 
   it("runs prepared dispatches after recording session metadata", async () => {
     const events: string[] = [];
+    const log = vi.fn();
     const recordInboundSession = createRecordInboundSession(events);
     const runDispatch = vi.fn(async () => {
       events.push("dispatch");
@@ -100,6 +104,8 @@ describe("channel turn kernel", () => {
       ctxPayload: createCtx(),
       recordInboundSession,
       runDispatch,
+      log,
+      messageId: "msg-1",
       record: {
         onRecordError: vi.fn(),
       },
@@ -107,11 +113,24 @@ describe("channel turn kernel", () => {
 
     expect(events).toEqual(["record", "dispatch"]);
     expect(result.dispatchResult?.queuedFinal).toBe(true);
+    expect(log).toHaveBeenCalledWith(
+      expect.objectContaining({ stage: "record", event: "start", messageId: "msg-1" }),
+    );
+    expect(log).toHaveBeenCalledWith(
+      expect.objectContaining({ stage: "record", event: "done", messageId: "msg-1" }),
+    );
+    expect(log).toHaveBeenCalledWith(
+      expect.objectContaining({ stage: "dispatch", event: "start", messageId: "msg-1" }),
+    );
+    expect(log).toHaveBeenCalledWith(
+      expect.objectContaining({ stage: "dispatch", event: "done", messageId: "msg-1" }),
+    );
   });
 
   it("cleans up pre-created dispatchers when session recording fails", async () => {
     const events: string[] = [];
     const recordError = new Error("session store failed");
+    const log = vi.fn();
     const recordInboundSession = vi.fn(async () => {
       events.push("record");
       throw recordError;
@@ -130,6 +149,7 @@ describe("channel turn kernel", () => {
         recordInboundSession,
         onPreDispatchFailure,
         runDispatch,
+        log,
         record: {
           onRecordError: vi.fn(),
         },
@@ -139,6 +159,33 @@ describe("channel turn kernel", () => {
     expect(events).toEqual(["record", "cleanup"]);
     expect(runDispatch).not.toHaveBeenCalled();
     expect(onPreDispatchFailure).toHaveBeenCalledWith(recordError);
+    expect(log).toHaveBeenCalledWith(expect.objectContaining({ stage: "record", event: "error" }));
+  });
+
+  it("normalizes visible dispatch checks", () => {
+    expect(hasVisibleChannelTurnDispatch(undefined)).toBe(false);
+    expect(
+      hasVisibleChannelTurnDispatch({
+        queuedFinal: false,
+        counts: { tool: 1, block: 0, final: 0 },
+      }),
+    ).toBe(true);
+    expect(
+      hasVisibleChannelTurnDispatch(undefined, {
+        observedReplyDelivery: true,
+      }),
+    ).toBe(true);
+    expect(
+      hasFinalChannelTurnDispatch({
+        queuedFinal: false,
+        counts: { tool: 1, block: 0, final: 0 },
+      }),
+    ).toBe(false);
+    expect(resolveChannelTurnDispatchCounts(undefined)).toEqual({
+      tool: 0,
+      block: 0,
+      final: 0,
+    });
   });
 
   it("drops when ingest returns null", async () => {
