@@ -3,6 +3,7 @@
 import { execFileSync, execSync } from "node:child_process";
 import {
   existsSync,
+  lstatSync,
   mkdtempSync,
   mkdirSync,
   realpathSync,
@@ -116,6 +117,15 @@ const appcastPath = resolve("appcast.xml");
 const laneBuildMin = 1_000_000_000;
 const laneFloorAdoptionDateKey = 20260227;
 const SAFE_UNIX_SMOKE_PATH = "/usr/bin:/bin";
+export const MAX_CRITICAL_PLUGIN_SDK_ENTRYPOINT_BYTES = 2 * 1024 * 1024;
+export const CRITICAL_PLUGIN_SDK_SIZE_CHECK_SPECIFIERS = [
+  "openclaw/plugin-sdk/agent-runtime-test-contracts",
+  "openclaw/plugin-sdk/plugin-test-contracts",
+  "openclaw/plugin-sdk/provider-test-contracts",
+] as const;
+export const CRITICAL_PLUGIN_SDK_IMPORT_SMOKE_SPECIFIERS = [
+  "openclaw/plugin-sdk/plugin-test-contracts",
+] as const;
 export const PACKED_CLI_SMOKE_COMMANDS = [
   ["--help"],
   ["onboard", "--help"],
@@ -843,6 +853,44 @@ async function checkPluginSdkExports() {
   }
 }
 
+export function collectCriticalPluginSdkEntrypointSizeErrors(rootDir = process.cwd()): string[] {
+  const errors: string[] = [];
+  for (const specifier of CRITICAL_PLUGIN_SDK_SIZE_CHECK_SPECIFIERS) {
+    const subpath = specifier.slice("openclaw/plugin-sdk/".length);
+    const relativePath = `dist/plugin-sdk/${subpath}.js`;
+    const filePath = resolve(rootDir, relativePath);
+    if (!existsSync(filePath)) {
+      errors.push(`${relativePath} is missing.`);
+      continue;
+    }
+    const stat = lstatSync(filePath);
+    if (!stat.isFile()) {
+      errors.push(`${relativePath} is not a file.`);
+      continue;
+    }
+    if (stat.size > MAX_CRITICAL_PLUGIN_SDK_ENTRYPOINT_BYTES) {
+      errors.push(
+        `${relativePath} is ${stat.size} bytes, exceeding ${MAX_CRITICAL_PLUGIN_SDK_ENTRYPOINT_BYTES} bytes. Keep public SDK test-contract entrypoints lazy and avoid bundling compiler/runtime internals.`,
+      );
+    }
+  }
+  return errors;
+}
+
+function runCriticalPluginSdkEntrypointImportSmoke() {
+  const script = [
+    `const specifiers = ${JSON.stringify(CRITICAL_PLUGIN_SDK_IMPORT_SMOKE_SPECIFIERS)};`,
+    `const importModule = new Function("specifier", "return imp" + "ort(specifier)");`,
+    "for (const specifier of specifiers) {",
+    "  await importModule(specifier);",
+    "}",
+  ].join("\n");
+  execFileSync(process.execPath, ["--input-type=module", "--eval", script], {
+    cwd: process.cwd(),
+    stdio: "inherit",
+  });
+}
+
 async function main() {
   checkAppcastSparkleVersions();
   checkCliBootstrapExternalImports({
@@ -851,6 +899,15 @@ async function main() {
     },
   });
   await checkPluginSdkExports();
+  const criticalPluginSdkEntrypointErrors = collectCriticalPluginSdkEntrypointSizeErrors();
+  if (criticalPluginSdkEntrypointErrors.length > 0) {
+    console.error("release-check: critical plugin-sdk entrypoint validation failed:");
+    for (const error of criticalPluginSdkEntrypointErrors) {
+      console.error(`  - ${error}`);
+    }
+    process.exit(1);
+  }
+  runCriticalPluginSdkEntrypointImportSmoke();
   checkBundledExtensionMetadata();
   await writePackageDistInventory(process.cwd());
 

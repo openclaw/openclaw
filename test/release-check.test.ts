@@ -11,6 +11,7 @@ import {
   collectAppcastSparkleVersionErrors,
   collectBundledExtensionManifestErrors,
   collectBundledPluginRootRuntimeMirrorErrors,
+  collectCriticalPluginSdkEntrypointSizeErrors,
   collectDeclaredRootRuntimeDependencyMetadataErrors,
   collectForbiddenPackContentPaths,
   collectInstalledBundledPluginRuntimeDepErrors,
@@ -21,6 +22,7 @@ import {
   collectPackUnpackedSizeErrors,
   createPackedCliSmokeEnv,
   createPackedBundledPluginPostinstallEnv,
+  MAX_CRITICAL_PLUGIN_SDK_ENTRYPOINT_BYTES,
   PACKED_CLI_SMOKE_COMMANDS,
   packageNameFromSpecifier,
   resolveMissingPackBuildHint,
@@ -726,6 +728,30 @@ describe("collectPackUnpackedSizeErrors", () => {
     ).toEqual([
       "npm pack --dry-run produced no unpackedSize data; pack size budget was not verified.",
     ]);
+  });
+});
+
+describe("collectCriticalPluginSdkEntrypointSizeErrors", () => {
+  it("flags oversized plugin SDK test-contract entrypoints before publish", () => {
+    const root = mkdtempSync(join(tmpdir(), "release-check-critical-sdk-"));
+    try {
+      const pluginSdkDir = join(root, "dist", "plugin-sdk");
+      mkdirSync(pluginSdkDir, { recursive: true });
+      writeFileSync(join(pluginSdkDir, "agent-runtime-test-contracts.js"), "export {};\n");
+      writeFileSync(join(pluginSdkDir, "provider-test-contracts.js"), "export {};\n");
+      writeFileSync(
+        join(pluginSdkDir, "plugin-test-contracts.js"),
+        "x".repeat(MAX_CRITICAL_PLUGIN_SDK_ENTRYPOINT_BYTES + 1),
+      );
+
+      expect(collectCriticalPluginSdkEntrypointSizeErrors(root)).toEqual([
+        `dist/plugin-sdk/plugin-test-contracts.js is ${
+          MAX_CRITICAL_PLUGIN_SDK_ENTRYPOINT_BYTES + 1
+        } bytes, exceeding ${MAX_CRITICAL_PLUGIN_SDK_ENTRYPOINT_BYTES} bytes. Keep public SDK test-contract entrypoints lazy and avoid bundling compiler/runtime internals.`,
+      ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
 
