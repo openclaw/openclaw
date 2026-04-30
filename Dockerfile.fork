@@ -67,11 +67,22 @@ LABEL org.opencontainers.image.source="https://github.com/1aboveio/openclaw" \
   org.opencontainers.image.base.name="docker.io/library/node:24-bookworm-slim"
 
 # Mirror upstream's runtime apt list, plus ca-certificates which slim
-# does not ship by default.
+# does not ship by default. Also pull in the Google Cloud CLI from the
+# official apt repo — used by skills/extensions for auth, secret manager,
+# GCS, and AR token exchange. Adds ~300 MB.
 RUN apt-get update && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-      ca-certificates procps hostname curl git lsof openssl && \
-    rm -rf /var/lib/apt/lists/*
+      ca-certificates gnupg procps hostname curl git lsof openssl && \
+    install -m 0755 -d /usr/share/keyrings && \
+    curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg \
+      | gpg --dearmor -o /usr/share/keyrings/cloud.google.gpg && \
+    chmod a+r /usr/share/keyrings/cloud.google.gpg && \
+    echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" \
+      > /etc/apt/sources.list.d/google-cloud-sdk.list && \
+    apt-get update && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+      google-cloud-cli && \
+    rm -rf /var/lib/apt/lists/* /usr/share/man/* /usr/share/doc/*
 
 WORKDIR /app
 RUN chown node:node /app

@@ -74,6 +74,7 @@ steps:
         git --version
         gh --version | head -1
         lark-cli --version
+        gcloud --version | head -1
         echo
         echo "=== Boot gateway ==="
         # Run gateway directly (no pipeline) so $! is the node PID, not tee's.
