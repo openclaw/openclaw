@@ -158,6 +158,7 @@ const SKIP_EAGER_WARMUP_PRIMARY_COMMANDS = new Set([
   "secrets",
   "sessions",
   "status",
+  "tui",
   "update",
   "webhooks",
 ]);
