@@ -18,6 +18,12 @@ export function materializePluginAutoEnableCandidates(params: {
 }): PluginAutoEnableResult {
   const env = params.env ?? process.env;
   const config = params.config ?? {};
+  // Skip manifest registry loading when there are no candidates — it is
+  // expensive on ARM64 (involves disk I/O + large JSON serialization) and
+  // entirely unnecessary when the candidate list is empty.
+  if (params.candidates.length === 0 && !params.manifestRegistry) {
+    return { config, changes: [], autoEnabledReasons: {} };
+  }
   const manifestRegistry = resolvePluginAutoEnableManifestRegistry({
     config,
     env,

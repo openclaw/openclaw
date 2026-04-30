@@ -9,7 +9,7 @@ import type { PluginLoadOptions } from "./loader.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import { hasExplicitPluginIdScope, normalizePluginIdScope } from "./plugin-scope.js";
 import type { PluginRegistry } from "./registry.js";
-import { getActivePluginRegistryWorkspaceDir } from "./runtime.js";
+import { getActivePluginRegistry, getActivePluginRegistryWorkspaceDir } from "./runtime.js";
 import {
   buildPluginRuntimeLoadOptionsFromValues,
   createPluginRuntimeLoaderLogger,
@@ -149,6 +149,16 @@ export function resolvePluginWebProviders<TEntry>(
     return deps.mapRegistryProviders({ registry, onlyPluginIds: pluginIds });
   }
 
+  // Fast path: use the active gateway registry if available. The gateway registry
+  // was loaded at startup with all plugins; filtering by onlyPluginIds afterward
+  // gives the same result without a redundant loadOpenClawPlugins call per request.
+  const gatewayRegistry = getActivePluginRegistry();
+  if (gatewayRegistry) {
+    return deps.mapRegistryProviders({
+      registry: gatewayRegistry,
+      onlyPluginIds: params.onlyPluginIds,
+    });
+  }
   const loadOptions = resolveWebProviderLoadOptions(params, deps);
   const compatible = resolveCompatibleRuntimePluginRegistry(loadOptions);
   if (compatible) {
