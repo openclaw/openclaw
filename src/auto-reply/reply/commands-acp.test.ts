@@ -1666,6 +1666,56 @@ describe("/acp command", () => {
     expect(result?.reply?.text).toContain("Removed 1 binding");
   });
 
+  it("closes the bound thread ACP session when an explicit session token is unresolvable", async () => {
+    hoisted.callGatewayMock.mockImplementation(async (request: { method?: string }) => {
+      if (request.method === "sessions.resolve") {
+        return null;
+      }
+      return { ok: true };
+    });
+    mockBoundThreadSession();
+    hoisted.sessionBindingUnbindMock.mockResolvedValue([
+      createBoundThreadSession() as SessionBindingRecord,
+    ]);
+
+    const result = await runThreadAcpCommand("/acp close not-a-session-target");
+
+    expect(hoisted.closeMock).toHaveBeenCalledWith({
+      cfg: baseCfg,
+      sessionKey: defaultAcpSessionKey,
+      reason: "manual-close",
+      allowBackendUnavailable: true,
+      clearMeta: true,
+    });
+    expect(hoisted.sessionBindingUnbindMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        targetSessionKey: defaultAcpSessionKey,
+        reason: "manual",
+      }),
+    );
+    expect(result?.reply?.text).toContain(`Closed ACP session ${defaultAcpSessionKey}`);
+  });
+
+  it("reports an explicit bad ACP session token before requester fallback", async () => {
+    hoisted.callGatewayMock.mockImplementation(async (request: { method?: string }) => {
+      if (request.method === "sessions.resolve") {
+        return null;
+      }
+      return { ok: true };
+    });
+    const params = createConversationParams("/acp close not-a-session-target", {
+      channel: "discord",
+      originatingTo: "channel:parent-1",
+      sessionKey: "requester-session",
+    });
+
+    const result = await handleAcpCommand(params, true);
+
+    expect(result?.reply?.text).toContain("Unable to resolve session target: not-a-session-target");
+    expect(hoisted.closeMock).not.toHaveBeenCalled();
+    expect(hoisted.readAcpSessionEntryMock).not.toHaveBeenCalled();
+  });
+
   it("handles /acp close in a bound thread when text commands are disabled", async () => {
     mockBoundThreadSession();
     hoisted.sessionBindingUnbindMock.mockResolvedValue([
