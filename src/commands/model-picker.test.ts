@@ -36,15 +36,53 @@ vi.mock("../agents/auth-profiles.js", () => ({
 }));
 
 const resolveEnvApiKey = vi.hoisted(() =>
-  vi.fn<(_provider: string) => { apiKey: string; source: string } | null>((_provider: string) => ({
-    apiKey: "test-key",
-    source: "test",
-  })),
+  vi.fn<(_provider: string, _env?: NodeJS.ProcessEnv) => { apiKey: string; source: string } | null>(
+    (_provider: string) => ({
+      apiKey: "test-key",
+      source: "test",
+    }),
+  ),
 );
-const hasUsableCustomProviderApiKey = vi.hoisted(() => vi.fn(() => false));
+const hasUsableCustomProviderApiKey = vi.hoisted(() =>
+  vi.fn<(_cfg?: OpenClawConfig, _provider?: string, _env?: NodeJS.ProcessEnv) => boolean>(
+    () => false,
+  ),
+);
+const hasRuntimeAvailableProviderAuth = vi.hoisted(() =>
+  vi.fn(
+    ({
+      provider,
+      cfg,
+      env,
+    }: {
+      provider: string;
+      cfg?: OpenClawConfig;
+      env?: NodeJS.ProcessEnv;
+    }) => {
+      if (provider === "amazon-bedrock") {
+        const auth = cfg?.models?.providers?.["amazon-bedrock"]?.auth;
+        return auth === undefined || auth === "aws-sdk";
+      }
+      if (resolveEnvApiKey(provider, env)?.apiKey) {
+        return true;
+      }
+      if (hasUsableCustomProviderApiKey(cfg, provider, env)) {
+        return true;
+      }
+      const providerConfig = cfg?.models?.providers?.[provider];
+      return Boolean(
+        providerConfig?.baseUrl?.startsWith("http://127.0.0.1") &&
+        providerConfig.api &&
+        providerConfig.models?.length &&
+        !providerConfig.apiKey,
+      );
+    },
+  ),
+);
 vi.mock("../agents/model-auth.js", () => ({
   resolveEnvApiKey,
   hasUsableCustomProviderApiKey,
+  hasRuntimeAvailableProviderAuth,
 }));
 
 const resolveOwningPluginIdsForProvider = vi.hoisted(() =>
@@ -206,6 +244,30 @@ describe("promptDefaultModel", () => {
       (option: { value: string }) => option.value,
     );
     expect(values).toEqual(["anthropic/claude-sonnet-4-6"]);
+  });
+
+  it("keeps implicit Bedrock AWS SDK models visible without API-key auth", async () => {
+    resolveEnvApiKey.mockReturnValue(null);
+    loadModelCatalog.mockResolvedValue([
+      { provider: "amazon-bedrock", id: "us.anthropic.claude-sonnet-4-5", name: "Claude Sonnet" },
+      { provider: "openai", id: "gpt-5.5", name: "GPT-5.5" },
+    ]);
+
+    const select = vi.fn(async (params) => params.initialValue as never);
+    const prompter = makePrompter({ select });
+
+    await promptDefaultModel({
+      config: { agents: { defaults: {} } } as OpenClawConfig,
+      prompter,
+      allowKeep: false,
+      includeManual: false,
+      ignoreAllowlist: true,
+    });
+
+    const values = (select.mock.calls[0]?.[0]?.options ?? []).map(
+      (option: { value: string }) => option.value,
+    );
+    expect(values).toEqual(["amazon-bedrock/us.anthropic.claude-sonnet-4-5"]);
   });
 
   it("hides legacy runtime providers from default model choices", async () => {
@@ -897,6 +959,44 @@ describe("promptModelAllowlist", () => {
       models: ["ollama/kimi-k2.5:cloud", "ollama/gpt-oss:20b-cloud"],
       scopeKeys: ["ollama/kimi-k2.5:cloud", "ollama/gpt-oss:20b-cloud"],
     });
+  });
+
+  it("keeps local no-key provider models visible in allowlist choices", async () => {
+    resolveEnvApiKey.mockReturnValue(null);
+    loadModelCatalog.mockResolvedValue([
+      {
+        provider: "vllm",
+        id: "meta-llama/Meta-Llama-3-8B-Instruct",
+        name: "Meta Llama",
+      },
+      {
+        provider: "openai",
+        id: "gpt-5.5",
+        name: "GPT-5.5",
+      },
+    ]);
+
+    const multiselect = createSelectAllMultiselect();
+    const prompter = makePrompter({ multiselect });
+    const config = {
+      models: {
+        providers: {
+          vllm: {
+            api: "openai-completions",
+            baseUrl: "http://127.0.0.1:8000/v1",
+            models: [configuredTextModel("meta-llama/Meta-Llama-3-8B-Instruct", "Meta Llama")],
+          },
+        },
+      },
+      agents: { defaults: {} },
+    } as OpenClawConfig;
+
+    const result = await promptModelAllowlist({ config, prompter });
+
+    expect(
+      multiselect.mock.calls[0]?.[0]?.options.map((option: { value: string }) => option.value),
+    ).toEqual(["vllm/meta-llama/Meta-Llama-3-8B-Instruct"]);
+    expect(result.models).toEqual(["vllm/meta-llama/Meta-Llama-3-8B-Instruct"]);
   });
 
   it("seeds existing model fallbacks into unscoped allowlist selections", async () => {

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
 import {
@@ -28,6 +29,7 @@ import {
   registerNativeHookRelay,
   setActiveEmbeddedRun,
   supportsModelTools,
+  runAgentCleanupStep,
   type AgentMessage,
   type EmbeddedRunAttemptParams,
   type EmbeddedRunAttemptResult,
@@ -57,6 +59,7 @@ import {
   readCodexDynamicToolCallParams,
 } from "./protocol-validators.js";
 import {
+  type CodexUserInput,
   isJsonObject,
   type CodexServerNotification,
   type CodexDynamicToolCallParams,
@@ -84,6 +87,7 @@ import { filterToolsForVisionInputs } from "./vision-tools.js";
 
 const CODEX_DYNAMIC_TOOL_TIMEOUT_MS = 30_000;
 const CODEX_TURN_COMPLETION_IDLE_TIMEOUT_MS = 60_000;
+const CODEX_STEER_ALL_DEBOUNCE_MS = 500;
 
 type OpenClawCodingToolsOptions = NonNullable<
   Parameters<(typeof import("openclaw/plugin-sdk/agent-harness"))["createOpenClawCodingTools"]>[0]
@@ -119,6 +123,94 @@ function emitCodexAppServerEvent(
 
 function collectTerminalAssistantText(result: EmbeddedRunAttemptResult): string {
   return result.assistantTexts.join("\n\n").trim();
+}
+
+type CodexSteeringQueueOptions = {
+  steeringMode?: "all" | "one-at-a-time";
+  debounceMs?: number;
+};
+
+function createCodexSteeringQueue(params: {
+  client: CodexAppServerClient;
+  threadId: string;
+  turnId: string;
+  answerPendingUserInput: (text: string) => boolean;
+  signal: AbortSignal;
+}) {
+  let batchedTexts: string[] = [];
+  let batchTimer: NodeJS.Timeout | undefined;
+  let sendChain: Promise<void> = Promise.resolve();
+
+  const clearBatchTimer = () => {
+    if (batchTimer) {
+      clearTimeout(batchTimer);
+      batchTimer = undefined;
+    }
+  };
+
+  const sendTexts = async (texts: string[]) => {
+    if (texts.length === 0 || params.signal.aborted) {
+      return;
+    }
+    await params.client.request("turn/steer", {
+      threadId: params.threadId,
+      expectedTurnId: params.turnId,
+      input: texts.map(toCodexTextInput),
+    });
+  };
+
+  const enqueueSend = (texts: string[]) => {
+    sendChain = sendChain
+      .then(() => sendTexts(texts))
+      .catch((error: unknown) => {
+        embeddedAgentLog.debug("codex app-server queued steer failed", { error });
+      });
+    return sendChain;
+  };
+
+  const flushBatch = () => {
+    clearBatchTimer();
+    const texts = batchedTexts;
+    batchedTexts = [];
+    return enqueueSend(texts);
+  };
+
+  return {
+    async queue(text: string, options?: CodexSteeringQueueOptions) {
+      if (params.answerPendingUserInput(text)) {
+        return;
+      }
+      if (options?.steeringMode === "one-at-a-time") {
+        await flushBatch();
+        await enqueueSend([text]);
+        return;
+      }
+      batchedTexts.push(text);
+      clearBatchTimer();
+      const debounceMs = normalizeCodexSteerDebounceMs(options?.debounceMs);
+      batchTimer = setTimeout(() => {
+        batchTimer = undefined;
+        void flushBatch();
+      }, debounceMs);
+    },
+    async flushPending() {
+      await flushBatch();
+    },
+    cancel() {
+      clearBatchTimer();
+      batchedTexts = [];
+    },
+  };
+}
+
+function normalizeCodexSteerDebounceMs(value: number | undefined): number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0
+    ? Math.floor(value)
+    : CODEX_STEER_ALL_DEBOUNCE_MS;
+}
+
+function toCodexTextInput(text: string): CodexUserInput {
+  return { type: "text", text, text_elements: [] };
 }
 
 export async function runCodexAppServerAttempt(
@@ -364,6 +456,7 @@ export async function runCodexAppServerAttempt(
   let turnId: string | undefined;
   const pendingNotifications: CodexServerNotification[] = [];
   let userInputBridge: ReturnType<typeof createCodexUserInputBridge> | undefined;
+  let steeringQueue: ReturnType<typeof createCodexSteeringQueue> | undefined;
   let completed = false;
   let timedOut = false;
   let turnCompletionIdleTimedOut = false;
@@ -497,6 +590,9 @@ export async function runCodexAppServerAttempt(
       });
     } finally {
       if (isTurnCompletion) {
+        if (!timedOut && !runAbortController.signal.aborted) {
+          await steeringQueue?.flushPending();
+        }
         completed = true;
         clearTurnCompletionIdleTimer();
         resolveCompletion?.();
@@ -682,7 +778,15 @@ export async function runCodexAppServerAttempt(
     notificationCleanup();
     requestCleanup();
     nativeHookRelay?.unregister();
-    await trajectoryRecorder?.flush();
+    await runAgentCleanupStep({
+      runId: params.runId,
+      sessionId: params.sessionId,
+      step: "codex-trajectory-flush-startup-failure",
+      log: embeddedAgentLog,
+      cleanup: async () => {
+        await trajectoryRecorder?.flush();
+      },
+    });
     params.abortSignal?.removeEventListener("abort", abortFromUpstream);
     throw error;
   }
@@ -717,18 +821,18 @@ export async function runCodexAppServerAttempt(
     });
   }
 
+  const activeSteeringQueue = createCodexSteeringQueue({
+    client,
+    threadId: thread.threadId,
+    turnId: activeTurnId,
+    answerPendingUserInput: (text) => userInputBridge?.handleQueuedMessage(text) ?? false,
+    signal: runAbortController.signal,
+  });
+  steeringQueue = activeSteeringQueue;
   const handle = {
     kind: "embedded" as const,
-    queueMessage: async (text: string) => {
-      if (userInputBridge?.handleQueuedMessage(text)) {
-        return;
-      }
-      await client.request("turn/steer", {
-        threadId: thread.threadId,
-        expectedTurnId: activeTurnId,
-        input: [{ type: "text", text, text_elements: [] }],
-      });
-    },
+    queueMessage: async (text: string, options?: CodexSteeringQueueOptions) =>
+      activeSteeringQueue.queue(text, options),
     isStreaming: () => !completed,
     isCompacting: () => projector?.isCompacting() ?? false,
     cancel: () => runAbortController.abort("cancelled"),
@@ -886,7 +990,18 @@ export async function runCodexAppServerAttempt(
         aborted: runAbortController.signal.aborted,
       });
     }
-    await trajectoryRecorder?.flush();
+    await runAgentCleanupStep({
+      runId: params.runId,
+      sessionId: params.sessionId,
+      step: "codex-trajectory-flush",
+      log: embeddedAgentLog,
+      cleanup: async () => {
+        await trajectoryRecorder?.flush();
+      },
+    });
+    if (!timedOut && !runAbortController.signal.aborted) {
+      await steeringQueue?.flushPending();
+    }
     userInputBridge?.cancelPending();
     clearTimeout(timeout);
     clearTurnCompletionIdleTimer();
@@ -895,6 +1010,7 @@ export async function runCodexAppServerAttempt(
     nativeHookRelay?.unregister();
     runAbortController.signal.removeEventListener("abort", abortListener);
     params.abortSignal?.removeEventListener("abort", abortFromUpstream);
+    steeringQueue?.cancel();
     clearActiveEmbeddedRun(params.sessionId, handle, params.sessionKey);
   }
 }
@@ -992,6 +1108,11 @@ function createCodexNativeHookRelay(params: {
   }
   return registerNativeHookRelay({
     provider: "codex",
+    relayId: buildCodexNativeHookRelayId({
+      agentId: params.agentId,
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+    }),
     ...(params.agentId ? { agentId: params.agentId } : {}),
     sessionId: params.sessionId,
     ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
@@ -1003,6 +1124,20 @@ function createCodexNativeHookRelay(params: {
       timeoutMs: params.options?.gatewayTimeoutMs,
     },
   });
+}
+
+function buildCodexNativeHookRelayId(params: {
+  agentId: string | undefined;
+  sessionId: string;
+  sessionKey: string | undefined;
+}): string {
+  const hash = createHash("sha256");
+  hash.update("openclaw:codex:native-hook-relay:v1");
+  hash.update("\0");
+  hash.update(params.agentId?.trim() || "");
+  hash.update("\0");
+  hash.update(params.sessionKey?.trim() || params.sessionId);
+  return `codex-${hash.digest("hex").slice(0, 40)}`;
 }
 
 function interruptCodexTurnBestEffort(
@@ -1079,7 +1214,9 @@ async function buildDynamicTools(input: DynamicToolBuildParams) {
         : undefined,
     modelApi: params.model.api,
     modelContextWindowTokens: params.model.contextWindow,
-    modelAuthMode: resolveModelAuthMode(params.model.provider, params.config),
+    modelAuthMode: resolveModelAuthMode(params.model.provider, params.config, undefined, {
+      workspaceDir: input.effectiveWorkspace,
+    }),
     currentChannelId: params.currentChannelId,
     currentThreadTs: params.currentThreadTs,
     currentMessageId: params.currentMessageId,
@@ -1280,6 +1417,7 @@ function handleApprovalRequest(params: {
 export const __testing = {
   CODEX_DYNAMIC_TOOL_TIMEOUT_MS,
   CODEX_TURN_COMPLETION_IDLE_TIMEOUT_MS,
+  buildCodexNativeHookRelayId,
   filterToolsForVisionInputs,
   handleDynamicToolCallWithTimeout,
   ...createCodexAppServerClientFactoryTestHooks((factory) => {

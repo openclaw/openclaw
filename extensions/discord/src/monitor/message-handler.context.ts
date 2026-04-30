@@ -3,7 +3,6 @@ import {
   resolveEnvelopeFormatOptions,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/context-visibility-runtime";
-import { recordInboundSession } from "openclaw/plugin-sdk/conversation-runtime";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
 import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import { buildPendingHistoryContextFromMap } from "openclaw/plugin-sdk/reply-history";
@@ -330,21 +329,6 @@ export async function buildDiscordMessageProcessContext(params: {
   });
   const persistedSessionKey = ctxPayload.SessionKey ?? route.sessionKey;
 
-  await recordInboundSession({
-    storePath,
-    sessionKey: persistedSessionKey,
-    ctx: ctxPayload,
-    updateLastRoute: {
-      sessionKey: persistedSessionKey,
-      channel: "discord",
-      to: lastRouteTo,
-      accountId: route.accountId,
-    },
-    onRecordError: (err) => {
-      logVerbose(`discord: failed updating session meta: ${String(err)}`);
-    },
-  });
-
   if (shouldLogVerbose()) {
     const preview = truncateUtf16Safe(combinedBody, 200).replace(/\n/g, "\\n");
     logVerbose(
@@ -355,6 +339,20 @@ export async function buildDiscordMessageProcessContext(params: {
   return {
     ctxPayload,
     persistedSessionKey,
+    turn: {
+      storePath,
+      record: {
+        updateLastRoute: {
+          sessionKey: persistedSessionKey,
+          channel: "discord",
+          to: lastRouteTo,
+          accountId: route.accountId,
+        },
+        onRecordError: (err: unknown) => {
+          logVerbose(`discord: failed updating session meta: ${String(err)}`);
+        },
+      },
+    },
     replyPlan,
     deliverTarget,
     replyTarget,

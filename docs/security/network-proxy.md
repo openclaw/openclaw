@@ -38,11 +38,25 @@ OpenClaw process
 
 The public contract is the routing behavior, not the internal Node hooks used to implement it. OpenClaw Gateway control-plane WebSocket clients use a narrow direct path for local loopback Gateway RPC traffic when the Gateway URL uses `localhost` or a literal loopback IP such as `127.0.0.1` or `[::1]`. That control-plane path must be able to reach loopback Gateways even when the operator proxy blocks loopback destinations. Normal runtime HTTP and WebSocket requests still use the configured proxy.
 
+Internally, OpenClaw uses two process-level routing hooks for this feature:
+
+- Undici dispatcher routing covers `fetch`, undici-backed clients, and transports that provide their own undici dispatcher.
+- `global-agent` routing covers Node core `node:http` and `node:https` callers, including many libraries layered on `http.request`, `https.request`, `http.get`, and `https.get`. Managed proxy mode forces that global agent so explicit Node HTTP agents do not accidentally bypass the operator proxy.
+
+Some plugins own custom transports that need explicit proxy wiring even when process-level routing exists. For example, Telegram's Bot API transport uses its own HTTP/1 undici dispatcher and therefore honors process proxy env plus the managed `OPENCLAW_PROXY_URL` fallback in that owner-specific transport path.
+
 The proxy URL itself must use `http://`. HTTPS destinations are still supported through the proxy with HTTP `CONNECT`; this only means OpenClaw expects a plain HTTP forward-proxy listener such as `http://127.0.0.1:3128`.
 
 While the proxy is active, OpenClaw clears `no_proxy`, `NO_PROXY`, and `GLOBAL_AGENT_NO_PROXY`. Those bypass lists are destination-based, so leaving `localhost` or `127.0.0.1` there would let high-risk SSRF targets skip the filtering proxy.
 
 On shutdown, OpenClaw restores the previous proxy environment and resets cached process routing state.
+
+## Related Proxy Terms
+
+- `proxy.enabled` / `proxy.proxyUrl`: outbound forward-proxy routing for OpenClaw runtime egress. This page documents that feature.
+- `gateway.auth.mode: "trusted-proxy"`: inbound identity-aware reverse-proxy authentication for Gateway access. See [Trusted proxy auth](/gateway/trusted-proxy-auth).
+- `openclaw proxy`: local debug proxy and capture inspector for development and support. See [openclaw proxy](/cli/proxy).
+- Channel or provider-specific proxy settings: owner-specific overrides for a particular transport. Prefer the managed network proxy when the goal is central egress control across the runtime.
 
 ## Configuration
 

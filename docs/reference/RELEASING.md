@@ -352,6 +352,9 @@ Docker environments instead of only source-level tests.
 Release Docker coverage includes:
 
 - full install smoke with the slow Bun global install smoke enabled
+- root Dockerfile smoke image preparation/reuse by target SHA, with QR,
+  root/gateway, and installer/Bun smoke jobs running as separate install-smoke
+  shards
 - repository E2E lanes
 - release-path Docker chunks: `core`, `package-update-openai`,
   `package-update-anthropic`, `package-update-core`, `plugins-runtime-plugins`,

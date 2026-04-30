@@ -35,6 +35,11 @@ export type ResolvedSlackAccount = {
   config: SlackAccountConfig;
 } & SlackAccountSurfaceFields;
 
+export type SlackConfigAccessorAccount = {
+  allowFrom: string[] | undefined;
+  defaultTo: string | undefined;
+};
+
 const { listAccountIds, resolveDefaultAccountId } = createAccountListHelpers("slack");
 export const listSlackAccountIds = listAccountIds;
 export const resolveDefaultSlackAccountId = resolveDefaultAccountId;
@@ -71,6 +76,20 @@ export function resolveSlackAccountAllowFrom(params: {
     parent: rootConfig as Record<string, unknown> | undefined,
   });
   return allowFrom ? mapAllowFromEntries(allowFrom) : undefined;
+}
+
+export function resolveSlackConfigAccessorAccount(params: {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+}): SlackConfigAccessorAccount {
+  const accountId = normalizeAccountId(
+    params.accountId ?? resolveDefaultSlackAccountId(params.cfg),
+  );
+  const config = mergeSlackAccountConfig(params.cfg, accountId);
+  return {
+    allowFrom: resolveSlackAccountAllowFrom({ cfg: params.cfg, accountId }),
+    defaultTo: config.defaultTo,
+  };
 }
 
 export function resolveSlackAccountDmPolicy(params: {

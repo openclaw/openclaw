@@ -15,12 +15,12 @@ function createPage(params: {
     aliases: [],
     sourceIds: [],
     linkTargets: [],
-    claims: [],
-    contradictions: params.contradictions,
-    questions: [],
     relationships: [],
     bestUsedFor: [],
     notEnoughFor: [],
+    claims: [],
+    contradictions: params.contradictions,
+    questions: [],
   };
 }
 

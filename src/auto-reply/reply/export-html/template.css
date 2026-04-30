@@ -1063,7 +1063,7 @@ body {
     display: block;
   }
 
-  #hamburger {
+  #hamburger.sidebar-menu-trigger {
     display: inline-flex;
   }
 

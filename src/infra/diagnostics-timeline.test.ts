@@ -45,6 +45,12 @@ describe("diagnostics timeline", () => {
 
     expect(isDiagnosticsTimelineEnabled({ env })).toBe(true);
     expect(isDiagnosticsTimelineEnabled({ env: { ...env, OPENCLAW_DIAGNOSTICS: "1" } })).toBe(true);
+    expect(isDiagnosticsTimelineEnabled({ env: { ...env, OPENCLAW_DIAGNOSTICS: "yes" } })).toBe(
+      true,
+    );
+    expect(isDiagnosticsTimelineEnabled({ env: { ...env, OPENCLAW_DIAGNOSTICS: "on" } })).toBe(
+      true,
+    );
     expect(isDiagnosticsTimelineEnabled({ env: { ...env, OPENCLAW_DIAGNOSTICS: "all" } })).toBe(
       true,
     );
@@ -83,6 +89,18 @@ describe("diagnostics timeline", () => {
     );
     expect(
       isDiagnosticsTimelineEnabled({ config: configWithoutTimeline, env: envWithoutFlag }),
+    ).toBe(false);
+  });
+
+  it("lets false-like env diagnostics disable config-enabled timeline output", async () => {
+    const { env } = await createTimelineEnv();
+    const configWithTimeline = { diagnostics: { flags: ["timeline"] } } as OpenClawConfig;
+
+    expect(
+      isDiagnosticsTimelineEnabled({
+        config: configWithTimeline,
+        env: { ...env, OPENCLAW_DIAGNOSTICS: "0" },
+      }),
     ).toBe(false);
   });
 

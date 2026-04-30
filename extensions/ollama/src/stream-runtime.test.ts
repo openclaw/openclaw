@@ -577,6 +577,48 @@ describe("convertToOllamaMessages", () => {
     ]);
   });
 
+  it("preserves exact allowlisted tool-prefix names before Ollama replay", () => {
+    const messages = [
+      {
+        role: "assistant",
+        content: [
+          { type: "toolCall", id: "call_1", name: "tool_a", arguments: { value: 1 } },
+          { type: "tool_use", id: "call_2", name: "tools_invoke_test", input: { value: 2 } },
+          { type: "toolCall", id: "call_3", name: "function-run", arguments: { value: 3 } },
+        ],
+      },
+    ];
+    const result = convertToOllamaMessages(messages, undefined, {
+      availableToolNames: new Set(["tool_a", "tools_invoke_test", "function-run"]),
+    });
+    expect(result[0].tool_calls).toEqual([
+      { function: { name: "tool_a", arguments: { value: 1 } } },
+      { function: { name: "tools_invoke_test", arguments: { value: 2 } } },
+      { function: { name: "function-run", arguments: { value: 3 } } },
+    ]);
+  });
+
+  it("strips underscore and dash provider prefixes only when the suffix is allowlisted", () => {
+    const messages = [
+      {
+        role: "assistant",
+        content: [
+          { type: "toolCall", id: "call_1", name: "tools_exec", arguments: { command: "pwd" } },
+          { type: "tool_use", id: "call_2", name: "function-read", input: { path: "." } },
+          { type: "toolCall", id: "call_3", name: "tool_missing", arguments: {} },
+        ],
+      },
+    ];
+    const result = convertToOllamaMessages(messages, undefined, {
+      availableToolNames: new Set(["exec", "read"]),
+    });
+    expect(result[0].tool_calls).toEqual([
+      { function: { name: "exec", arguments: { command: "pwd" } } },
+      { function: { name: "read", arguments: { path: "." } } },
+      { function: { name: "tool_missing", arguments: {} } },
+    ]);
+  });
+
   it("keeps non-prefixed Ollama replay tool names intact", () => {
     const messages = [
       {
@@ -585,6 +627,7 @@ describe("convertToOllamaMessages", () => {
           { type: "toolCall", id: "call_1", name: "functionshell", arguments: {} },
           { type: "toolCall", id: "call_2", name: "tooling", arguments: {} },
           { type: "toolCall", id: "call_3", name: "tools", arguments: {} },
+          { type: "toolCall", id: "call_4", name: "tool_a", arguments: {} },
         ],
       },
     ];
@@ -593,6 +636,7 @@ describe("convertToOllamaMessages", () => {
       { function: { name: "functionshell", arguments: {} } },
       { function: { name: "tooling", arguments: {} } },
       { function: { name: "tools", arguments: {} } },
+      { function: { name: "tool_a", arguments: {} } },
     ]);
   });
 
@@ -825,6 +869,39 @@ describe("buildAssistantMessage", () => {
     ]);
   });
 
+  it("preserves exact allowlisted tool-prefix names in Ollama responses", () => {
+    const response = {
+      model: "qwen3:32b",
+      created_at: "2026-01-01T00:00:00Z",
+      message: {
+        role: "assistant" as const,
+        content: "",
+        tool_calls: [
+          { function: { name: "tool_a", arguments: { value: 1 } } },
+          { function: { name: "tools_invoke_test", arguments: { value: 2 } } },
+          { function: { name: "function-run", arguments: { value: 3 } } },
+        ],
+      },
+      done: true,
+    };
+    const result = buildAssistantMessage(response, modelInfo, undefined, {
+      availableToolNames: new Set(["tool_a", "tools_invoke_test", "function-run"]),
+    });
+    expect(result.content).toEqual([
+      expect.objectContaining({ type: "toolCall", name: "tool_a", arguments: { value: 1 } }),
+      expect.objectContaining({
+        type: "toolCall",
+        name: "tools_invoke_test",
+        arguments: { value: 2 },
+      }),
+      expect.objectContaining({
+        type: "toolCall",
+        name: "function-run",
+        arguments: { value: 3 },
+      }),
+    ]);
+  });
+
   it("keeps non-prefixed Ollama response tool names intact", () => {
     const response = {
       model: "qwen3:32b",
@@ -836,6 +913,7 @@ describe("buildAssistantMessage", () => {
           { function: { name: "functionshell", arguments: {} } },
           { function: { name: "tooling", arguments: {} } },
           { function: { name: "tools", arguments: {} } },
+          { function: { name: "tool_a", arguments: {} } },
         ],
       },
       done: true,
@@ -845,6 +923,7 @@ describe("buildAssistantMessage", () => {
       expect.objectContaining({ type: "toolCall", name: "functionshell", arguments: {} }),
       expect.objectContaining({ type: "toolCall", name: "tooling", arguments: {} }),
       expect.objectContaining({ type: "toolCall", name: "tools", arguments: {} }),
+      expect.objectContaining({ type: "toolCall", name: "tool_a", arguments: {} }),
     ]);
   });
 

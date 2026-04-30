@@ -340,6 +340,7 @@ describe("scripts/changed-lanes", () => {
       "changelog attributions",
       "guarded extension wildcard re-exports",
       "plugin-sdk wildcard re-exports",
+      "duplicate scan target coverage",
       "typecheck core tests",
       "lint core",
       "lint scripts",
@@ -629,6 +630,7 @@ describe("scripts/changed-lanes", () => {
       "check:changelog-attributions",
       "lint:extensions:no-guarded-wildcard-reexports",
       "lint:extensions:no-plugin-sdk-wildcard-reexports",
+      "dup:check:coverage",
       "release-metadata:check",
       "ios:version:check",
       "config:schema:check",
@@ -781,6 +783,7 @@ describe("scripts/changed-lanes", () => {
         name: "plugin-sdk wildcard re-exports",
         args: ["lint:extensions:no-plugin-sdk-wildcard-reexports"],
       },
+      { name: "duplicate scan target coverage", args: ["dup:check:coverage"] },
     ]);
   });
 
@@ -800,6 +803,7 @@ describe("scripts/changed-lanes", () => {
         name: "plugin-sdk wildcard re-exports",
         args: ["lint:extensions:no-plugin-sdk-wildcard-reexports"],
       },
+      { name: "duplicate scan target coverage", args: ["dup:check:coverage"] },
     ]);
   });
 });

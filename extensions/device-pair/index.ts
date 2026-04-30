@@ -321,6 +321,12 @@ async function resolveGatewayUrl(api: OpenClawPluginApi): Promise<ResolveUrlResu
     return { error: "Configured publicUrl is invalid." };
   }
 
+  const configuredRemoteUrl = normalizeOptionalString(cfg.gateway?.remote?.url);
+  const remoteUrl = configuredRemoteUrl ? normalizeUrl(configuredRemoteUrl, scheme) : null;
+  if (configuredRemoteUrl && !remoteUrl) {
+    return { error: "Configured gateway.remote.url is invalid." };
+  }
+
   const tailscaleMode = cfg.gateway?.tailscale?.mode ?? "off";
   if (tailscaleMode === "serve" || tailscaleMode === "funnel") {
     const host = await resolveTailnetHost();
@@ -330,12 +336,8 @@ async function resolveGatewayUrl(api: OpenClawPluginApi): Promise<ResolveUrlResu
     return { url: `wss://${host}`, source: `gateway.tailscale.mode=${tailscaleMode}` };
   }
 
-  const remoteUrl = normalizeOptionalString(cfg.gateway?.remote?.url);
   if (remoteUrl) {
-    const url = normalizeUrl(remoteUrl, scheme);
-    if (url) {
-      return { url, source: "gateway.remote.url" };
-    }
+    return { url: remoteUrl, source: "gateway.remote.url" };
   }
 
   const bindResult = resolveGatewayBindUrl({

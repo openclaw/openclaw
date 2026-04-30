@@ -887,6 +887,30 @@ describe("monitorDiscordProvider", () => {
     expect(getConstructedClientOptions().clientId).toBe("123");
   });
 
+  it("uses configured application id before token parsing or REST lookup", async () => {
+    const fetchApplicationId = vi.fn(async () => "network-app");
+    providerTesting.setFetchDiscordApplicationId(fetchApplicationId);
+    resolveDiscordAccountMock.mockReturnValue({
+      accountId: "default",
+      token: "MTIz.abc.def",
+      config: {
+        applicationId: "987654321098765432",
+        commands: { native: true, nativeSkills: false },
+        voice: { enabled: false },
+        agentComponents: { enabled: false },
+        execApprovals: { enabled: false },
+      },
+    });
+
+    await monitorDiscordProvider({
+      config: baseConfig(),
+      runtime: baseRuntime(),
+    });
+
+    expect(fetchApplicationId).not.toHaveBeenCalled();
+    expect(getConstructedClientOptions().clientId).toBe("987654321098765432");
+  });
+
   it("reports connected status on startup and shutdown", async () => {
     const setStatus = vi.fn();
     clientGetPluginMock.mockImplementation((name: string) =>

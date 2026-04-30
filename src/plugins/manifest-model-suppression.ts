@@ -114,7 +114,12 @@ export function buildManifestBuiltInModelSuppressionResolver(params: {
     env: params.env ?? process.env,
   });
 
-  return (input: { provider?: string | null; id?: string | null; baseUrl?: string | null }) => {
+  return (input: {
+    provider?: string | null;
+    id?: string | null;
+    baseUrl?: string | null;
+    unconditionalOnly?: boolean;
+  }) => {
     const provider = normalizeLowercaseStringOrEmpty(input.provider);
     const modelId = normalizeLowercaseStringOrEmpty(input.id);
     if (!provider || !modelId) {
@@ -124,6 +129,7 @@ export function buildManifestBuiltInModelSuppressionResolver(params: {
     const suppression = suppressions.find(
       (entry) =>
         entry.mergeKey === mergeKey &&
+        (!input.unconditionalOnly || !entry.when) &&
         manifestSuppressionMatchesConditions({
           suppression: entry,
           provider,
@@ -159,6 +165,7 @@ export function resolveManifestBuiltInModelSuppression(params: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   baseUrl?: string | null;
+  unconditionalOnly?: boolean;
 }) {
   const resolver = buildManifestBuiltInModelSuppressionResolver({
     config: params.config,
@@ -169,5 +176,6 @@ export function resolveManifestBuiltInModelSuppression(params: {
     provider: params.provider,
     id: params.id,
     baseUrl: params.baseUrl,
+    unconditionalOnly: params.unconditionalOnly,
   });
 }

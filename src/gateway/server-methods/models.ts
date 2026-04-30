@@ -1,5 +1,7 @@
+import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { DEFAULT_PROVIDER } from "../../agents/defaults.js";
 import { resolveVisibleModelCatalog } from "../../agents/model-catalog-visibility.js";
+import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import {
   ErrorCodes,
   errorShape,
@@ -30,6 +32,9 @@ export const modelsHandlers: GatewayRequestHandlers = {
     try {
       const catalog = await context.loadGatewayModelCatalog();
       const cfg = context.getRuntimeConfig();
+      const workspaceDir =
+        resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg)) ??
+        resolveDefaultAgentWorkspaceDir();
       const view = resolveModelsListView(params);
       if (view === "all") {
         respond(true, { models: catalog }, undefined);
@@ -39,6 +44,7 @@ export const modelsHandlers: GatewayRequestHandlers = {
         cfg,
         catalog,
         defaultProvider: DEFAULT_PROVIDER,
+        workspaceDir,
         view,
       });
       respond(true, { models }, undefined);

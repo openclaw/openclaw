@@ -5,6 +5,7 @@ import type { MarkdownTableMode } from "../config/types.base.js";
 type ListState = {
   type: "bullet" | "ordered";
   index: number;
+  openLevel: number;
 };
 
 type LinkState = {
@@ -269,7 +270,8 @@ function appendParagraphSeparator(state: RenderState, token?: MarkdownToken) {
     return;
   } // Don't add paragraph separators inside tables
   if (state.env.listStack.length > 0) {
-    const directListParagraphLevel = state.env.listStack.length * 2;
+    const currentList = state.env.listStack[state.env.listStack.length - 1];
+    const directListParagraphLevel = (currentList?.openLevel ?? 0) + 2;
     if (
       token?.type !== "paragraph_close" ||
       token.hidden ||
@@ -685,7 +687,7 @@ function renderTokens(tokens: MarkdownToken[], state: RenderState): void {
         if (state.env.listStack.length > 0) {
           appendNestedListSeparator(state);
         }
-        state.env.listStack.push({ type: "bullet", index: 0 });
+        state.env.listStack.push({ type: "bullet", index: 0, openLevel: token.level ?? 0 });
         break;
       case "bullet_list_close":
         state.env.listStack.pop();
@@ -699,7 +701,11 @@ function renderTokens(tokens: MarkdownToken[], state: RenderState): void {
           appendNestedListSeparator(state);
         }
         const start = Number(getAttr(token, "start") ?? "1");
-        state.env.listStack.push({ type: "ordered", index: start - 1 });
+        state.env.listStack.push({
+          type: "ordered",
+          index: start - 1,
+          openLevel: token.level ?? 0,
+        });
         break;
       }
       case "ordered_list_close":

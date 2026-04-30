@@ -16,9 +16,16 @@ const modelCatalogMocks = vi.hoisted(() => ({
 const modelAuthLabelMocks = vi.hoisted(() => ({
   resolveModelAuthLabel: vi.fn<(params: unknown) => string | undefined>(() => undefined),
 }));
-const modelProviderAuthMocks = vi.hoisted(() => ({
-  authenticatedProviders: new Set(["anthropic", "google", "openai"]),
-}));
+const modelProviderAuthMocks = vi.hoisted(() => {
+  const state = {
+    authenticatedProviders: new Set(["anthropic", "google", "openai"]),
+    createProviderAuthChecker: vi.fn(),
+  };
+  state.createProviderAuthChecker.mockImplementation(
+    () => (provider: string) => state.authenticatedProviders.has(provider),
+  );
+  return state;
+});
 
 const MODELS_ADD_DEPRECATED_TEXT =
   "⚠️ /models add is deprecated. Use /models to browse providers and /model to switch models.";
@@ -32,8 +39,7 @@ vi.mock("../../agents/model-auth-label.js", () => ({
 }));
 
 vi.mock("../../agents/model-provider-auth.js", () => ({
-  createProviderAuthChecker: () => (provider: string) =>
-    modelProviderAuthMocks.authenticatedProviders.has(provider),
+  createProviderAuthChecker: modelProviderAuthMocks.createProviderAuthChecker,
   hasAuthForModelProvider: ({ provider }: { provider: string }) =>
     modelProviderAuthMocks.authenticatedProviders.has(provider),
 }));
@@ -104,6 +110,7 @@ beforeEach(() => {
   modelAuthLabelMocks.resolveModelAuthLabel.mockReset();
   modelAuthLabelMocks.resolveModelAuthLabel.mockReturnValue(undefined);
   modelProviderAuthMocks.authenticatedProviders = new Set(["anthropic", "google", "openai"]);
+  modelProviderAuthMocks.createProviderAuthChecker.mockClear();
   setActivePluginRegistry(
     createTestRegistry([
       ...textSurfaceModelsTestPlugins,
@@ -179,6 +186,9 @@ describe("handleModelsCommand", () => {
     expect(result?.reply?.text).toContain("Use: /models <provider>");
     expect(result?.reply?.text).toContain("Switch: /model <provider/model>");
     expect(result?.reply?.text).not.toContain("Add: /models add");
+    expect(modelProviderAuthMocks.createProviderAuthChecker).toHaveBeenCalledWith(
+      expect.objectContaining({ workspaceDir: "/tmp" }),
+    );
   });
 
   it("hides unauthenticated providers by default and keeps all as explicit browse", async () => {
@@ -351,6 +361,32 @@ describe("handleModelsCommand", () => {
     const result = await handleModelsCommand(params, true);
 
     expect(result?.reply?.text).toContain("Models (anthropic · 🔑 target-auth) — showing 1-2 of 2");
+    expect(modelAuthLabelMocks.resolveModelAuthLabel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "anthropic",
+        workspaceDir: "/tmp",
+      }),
+    );
+  });
+
+  it("uses spawned workspace for direct /models provider visibility", async () => {
+    modelProviderAuthMocks.authenticatedProviders = new Set(["anthropic"]);
+    const params = buildParams("/models");
+    params.workspaceDir = "/tmp/current-workspace";
+    params.sessionStore = {
+      "agent:main:discord:direct:user-1": {
+        sessionId: "target-session",
+        updatedAt: Date.now(),
+        spawnedWorkspaceDir: "/tmp/spawned-workspace",
+      },
+    };
+
+    const result = await handleModelsCommand(params, true);
+
+    expect(result?.reply?.text).toContain("- anthropic (2)");
+    expect(modelProviderAuthMocks.createProviderAuthChecker).toHaveBeenCalledWith(
+      expect.objectContaining({ workspaceDir: "/tmp/spawned-workspace" }),
+    );
   });
 
   it("returns a deprecation message for /models add when no provider is given", async () => {
