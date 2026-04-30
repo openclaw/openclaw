@@ -329,9 +329,14 @@ describe("deliverWebReply", () => {
         skipLog: true,
         timeoutMs: 1,
       }),
-    ).resolves.toBeUndefined();
+    ).resolves.toMatchObject({
+      messageIds: ["reply-sent-1"],
+      providerAccepted: true,
+      results: [expect.objectContaining({ kind: "text", providerAccepted: true })],
+    });
 
     expect(msg.sendMedia).not.toHaveBeenCalled();
+    expect(msg.reply).toHaveBeenCalledWith("⚠️ Media failed.", undefined);
     expect(replyLogger.warn).toHaveBeenCalledWith(
       expect.objectContaining({ mediaUrl: "http://example.com/img.jpg" }),
       "failed to send web media reply",
