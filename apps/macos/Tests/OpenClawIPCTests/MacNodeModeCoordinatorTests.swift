@@ -31,16 +31,16 @@ struct MacNodeModeCoordinatorTests {
     }
 
     @Test func `tls pin store key uses default wss port`() throws {
-        let url = try #require(URL(string: "wss://gutsy-home.tail06a72.ts.net"))
-        #expect(MacNodeModeCoordinator.tlsPinStoreKey(for: url) == "gutsy-home.tail06a72.ts.net:443")
+        let url = try #require(URL(string: "wss://gateway.example.ts.net"))
+        #expect(MacNodeModeCoordinator.tlsPinStoreKey(for: url) == "gateway.example.ts.net:443")
     }
 
     @Test func `auto repairs trusted tailscale serve pin mismatch`() throws {
-        let url = try #require(URL(string: "wss://gutsy-home.tail06a72.ts.net"))
+        let url = try #require(URL(string: "wss://gateway.example.ts.net"))
         let failure = GatewayTLSValidationFailure(
             kind: .pinMismatch,
-            host: "gutsy-home.tail06a72.ts.net",
-            storeKey: "gutsy-home.tail06a72.ts.net:443",
+            host: "gateway.example.ts.net",
+            storeKey: "gateway.example.ts.net:443",
             expectedFingerprint: "old",
             observedFingerprint: "new",
             systemTrustOk: true)

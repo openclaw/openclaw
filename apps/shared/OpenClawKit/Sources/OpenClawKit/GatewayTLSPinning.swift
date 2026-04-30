@@ -184,6 +184,12 @@ public final class GatewayTLSPinningSession: NSObject, WebSocketSessioning, URLS
         self.failureLock.unlock()
     }
 
+    private func clearTLSFailure() {
+        self.failureLock.lock()
+        self.lastTLSFailure = nil
+        self.failureLock.unlock()
+    }
+
     public func makeWebSocketTask(url: URL) -> WebSocketTaskBox {
         let task = self.session.webSocketTask(with: url)
         task.maximumMessageSize = 16 * 1024 * 1024
@@ -205,9 +211,11 @@ public final class GatewayTLSPinningSession: NSObject, WebSocketSessioning, URLS
         let host = challenge.protectionSpace.host
         let systemTrustOk = SecTrustEvaluateWithError(trust, nil)
         let expected = self.params.expectedFingerprint.map(normalizeFingerprint)
-        if let fingerprint = certificateFingerprint(trust) {
+        let fingerprint = certificateFingerprint(trust)
+        if let fingerprint {
             if let expected {
                 if fingerprint == expected {
+                    self.clearTLSFailure()
                     completionHandler(.useCredential, URLCredential(trust: trust))
                 } else {
                     self.recordTLSFailure(GatewayTLSValidationFailure(
@@ -225,28 +233,22 @@ public final class GatewayTLSPinningSession: NSObject, WebSocketSessioning, URLS
                 if let storeKey = params.storeKey {
                     GatewayTLSStore.saveFingerprint(fingerprint, stableID: storeKey)
                 }
+                self.clearTLSFailure()
                 completionHandler(.useCredential, URLCredential(trust: trust))
                 return
             }
-        } else {
-            self.recordTLSFailure(GatewayTLSValidationFailure(
-                kind: .certificateUnavailable,
-                host: host,
-                storeKey: self.params.storeKey,
-                expectedFingerprint: expected,
-                observedFingerprint: nil,
-                systemTrustOk: systemTrustOk))
         }
 
         if systemTrustOk || !self.params.required {
+            self.clearTLSFailure()
             completionHandler(.useCredential, URLCredential(trust: trust))
         } else {
             self.recordTLSFailure(GatewayTLSValidationFailure(
-                kind: .untrustedCertificate,
+                kind: fingerprint == nil ? .certificateUnavailable : .untrustedCertificate,
                 host: host,
                 storeKey: self.params.storeKey,
                 expectedFingerprint: expected,
-                observedFingerprint: nil,
+                observedFingerprint: fingerprint,
                 systemTrustOk: false))
             completionHandler(.cancelAuthenticationChallenge, nil)
         }
