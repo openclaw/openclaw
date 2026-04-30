@@ -305,6 +305,7 @@ describe("isContextOverflowError", () => {
       "request size exceeds model context window",
       '400 {"type":"error","error":{"type":"invalid_request_error","message":"Request size exceeds model context window"}}',
       "The request size exceeds model context window limit",
+      "Your input exceeds the context window of this model. Please adjust your input and try again.",
     ];
     for (const sample of samples) {
       expect(isContextOverflowError(sample)).toBe(true);
@@ -429,6 +430,7 @@ describe("isLikelyContextOverflowError", () => {
       "Model context window is 128k tokens, you requested 256k tokens",
       "Context window exceeded: requested 12000 tokens",
       "Prompt too large for this model",
+      "Your input exceeds the context window of this model. Please adjust your input and try again.",
     ];
     for (const sample of samples) {
       expect(isLikelyContextOverflowError(sample)).toBe(true);
