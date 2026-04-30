@@ -134,7 +134,7 @@ describe("createGatewayRequestContext", () => {
         connect: { device: { id: "device-2" }, role: "primary" },
         socket: unrelatedSocket,
       },
-    ] as never);
+    ]) as GatewayRequestContextParams["clients"];
 
     const context = createGatewayRequestContext(
       makeContextParams({
@@ -143,7 +143,7 @@ describe("createGatewayRequestContext", () => {
       }),
     );
 
-    context.disconnectClientsForDevice("device-1");
+    context.disconnectClientsForDevice!("device-1");
 
     expect(throwingSocket.close).toHaveBeenCalledWith(4001, "device removed");
     expect(throwingSocket.terminate).toHaveBeenCalledTimes(1);
