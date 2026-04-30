@@ -90,6 +90,18 @@ describe("TtsConfigSchema openai speed and instructions", () => {
     expect(result.success).toBe(true);
   });
 
+  it("accepts conservative automatic emotion selection config", () => {
+    expect(() =>
+      TtsConfigSchema.parse({
+        autoEmotion: {
+          enabled: true,
+          fallback: "neutral",
+          allowed: ["happy", "calm", "neutral"],
+        },
+      }),
+    ).not.toThrow();
+  });
+
   it("rejects persona rewrite config until runtime behavior exists", () => {
     const result = TtsConfigSchema.safeParse({
       personas: {
