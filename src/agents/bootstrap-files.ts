@@ -236,6 +236,13 @@ export async function resolveBootstrapFilesForRun(params: {
   contextMode?: BootstrapContextMode;
   runKind?: BootstrapContextRunKind;
 }): Promise<WorkspaceBootstrapFile[]> {
+  // Honor agents.defaults.skipBootstrap so configured runs do not inject
+  // workspace bootstrap files into the system prompt (#75184). The flag is
+  // already respected at workspace-creation time in agent-command.ts; this
+  // ensures the runtime injection path also skips when set.
+  if (params.config?.agents?.defaults?.skipBootstrap === true) {
+    return [];
+  }
   const excludeHeartbeatBootstrapFile = shouldExcludeHeartbeatBootstrapFile(params);
   const sessionKey = params.sessionKey ?? params.sessionId;
   const rawFiles = params.sessionKey
