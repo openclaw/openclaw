@@ -402,6 +402,11 @@ export async function dispatchWhatsAppBufferedReply(params: {
     replyOptions: {
       disableBlockStreaming,
       onModelSelected: params.onModelSelected,
+      // Route reasoning chunks to pipeline suppression rather than letting them
+      // fall through to the deliver callback. The deliver layer also filters
+      // isReasoning payloads, but providing this callback ensures the pipeline
+      // knows WhatsApp does not handle reasoning streaming directly.
+      onReasoningStream: () => {},
     },
   });
 
