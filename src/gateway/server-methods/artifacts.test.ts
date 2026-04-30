@@ -60,11 +60,11 @@ describe("artifacts RPC handlers", () => {
     ]);
   });
 
-  it("lists stable transcript artifact summaries by sessionKey", () => {
+  it("lists stable transcript artifact summaries by sessionKey", async () => {
     const { calls, respond } = createResponder();
 
-    artifactsHandlers["artifacts.list"]?.({
-      req: { id: 1, method: "artifacts.list", params: {} },
+    await artifactsHandlers["artifacts.list"]?.({
+      req: { type: "req", id: "1", method: "artifacts.list", params: {} },
       params: { sessionKey: "agent:main:main" },
       client: null,
       isWebchatConnect: () => false,
@@ -90,7 +90,7 @@ describe("artifacts RPC handlers", () => {
     expect(payload.artifacts?.[0]).not.toHaveProperty("data");
   });
 
-  it("gets and downloads an inline artifact", () => {
+  it("gets and downloads an inline artifact", async () => {
     const listed = collectArtifactsFromMessages({
       sessionKey: "agent:main:main",
       messages: hoisted.readSessionMessages(),
@@ -99,8 +99,8 @@ describe("artifacts RPC handlers", () => {
     expect(artifactId).toBeTruthy();
 
     const get = createResponder();
-    artifactsHandlers["artifacts.get"]?.({
-      req: { id: 1, method: "artifacts.get", params: {} },
+    await artifactsHandlers["artifacts.get"]?.({
+      req: { type: "req", id: "2", method: "artifacts.get", params: {} },
       params: { sessionKey: "agent:main:main", artifactId },
       client: null,
       isWebchatConnect: () => false,
@@ -113,8 +113,8 @@ describe("artifacts RPC handlers", () => {
     });
 
     const download = createResponder();
-    artifactsHandlers["artifacts.download"]?.({
-      req: { id: 1, method: "artifacts.download", params: {} },
+    await artifactsHandlers["artifacts.download"]?.({
+      req: { type: "req", id: "3", method: "artifacts.download", params: {} },
       params: { sessionKey: "agent:main:main", artifactId },
       client: null,
       isWebchatConnect: () => false,
@@ -129,12 +129,12 @@ describe("artifacts RPC handlers", () => {
     });
   });
 
-  it("resolves runId queries through the gateway run-to-session lookup", () => {
+  it("resolves runId queries through the gateway run-to-session lookup", async () => {
     hoisted.resolveSessionKeyForRun.mockReturnValue("agent:main:main");
     const { calls, respond } = createResponder();
 
-    artifactsHandlers["artifacts.list"]?.({
-      req: { id: 1, method: "artifacts.list", params: {} },
+    await artifactsHandlers["artifacts.list"]?.({
+      req: { type: "req", id: "4", method: "artifacts.list", params: {} },
       params: { runId: "run-1" },
       client: null,
       isWebchatConnect: () => false,
@@ -148,10 +148,10 @@ describe("artifacts RPC handlers", () => {
     expect(payload.artifacts?.[0]).toMatchObject({ runId: "run-1" });
   });
 
-  it("returns typed errors for missing query scope and missing artifacts", () => {
+  it("returns typed errors for missing query scope and missing artifacts", async () => {
     const missingScope = createResponder();
-    artifactsHandlers["artifacts.list"]?.({
-      req: { id: 1, method: "artifacts.list", params: {} },
+    await artifactsHandlers["artifacts.list"]?.({
+      req: { type: "req", id: "5", method: "artifacts.list", params: {} },
       params: {},
       client: null,
       isWebchatConnect: () => false,
@@ -164,8 +164,8 @@ describe("artifacts RPC handlers", () => {
     });
 
     const notFound = createResponder();
-    artifactsHandlers["artifacts.get"]?.({
-      req: { id: 1, method: "artifacts.get", params: {} },
+    await artifactsHandlers["artifacts.get"]?.({
+      req: { type: "req", id: "6", method: "artifacts.get", params: {} },
       params: { sessionKey: "agent:main:main", artifactId: "artifact_missing" },
       client: null,
       isWebchatConnect: () => false,

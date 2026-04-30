@@ -3,9 +3,7 @@ import {
   ErrorCodes,
   errorShape,
   type ArtifactSummary,
-  type ArtifactsDownloadParams,
   type ArtifactsGetParams,
-  type ArtifactsListParams,
   validateArtifactsDownloadParams,
   validateArtifactsGetParams,
   validateArtifactsListParams,
@@ -276,7 +274,7 @@ function requireQueryable(params: ArtifactQuery, respond: RespondFn): boolean {
   return false;
 }
 
-function findArtifact(params: ArtifactsGetParams | ArtifactsDownloadParams): {
+function findArtifact(params: ArtifactsGetParams): {
   artifact?: ArtifactRecord;
   sessionKey?: string;
 } {
@@ -297,14 +295,11 @@ export const artifactsHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateArtifactsListParams, "artifacts.list", respond)) {
       return;
     }
-    if (!requireQueryable(params as ArtifactsListParams, respond)) {
+    if (!requireQueryable(params, respond)) {
       return;
     }
-    const { artifacts, sessionKey } = loadArtifacts(params as ArtifactsListParams);
-    if (
-      !sessionKey &&
-      ((params as ArtifactsListParams).runId || (params as ArtifactsListParams).taskId)
-    ) {
+    const { artifacts, sessionKey } = loadArtifacts(params);
+    if (!sessionKey && (params.runId || params.taskId)) {
       respond(
         false,
         undefined,
@@ -318,16 +313,16 @@ export const artifactsHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateArtifactsGetParams, "artifacts.get", respond)) {
       return;
     }
-    if (!requireQueryable(params as ArtifactsGetParams, respond)) {
+    if (!requireQueryable(params, respond)) {
       return;
     }
-    const { artifact } = findArtifact(params as ArtifactsGetParams);
+    const { artifact } = findArtifact(params);
     if (!artifact) {
       respond(
         false,
         undefined,
         artifactError("artifact_not_found", "artifact not found", {
-          artifactId: (params as ArtifactsGetParams).artifactId,
+          artifactId: params.artifactId,
         }),
       );
       return;
@@ -340,16 +335,16 @@ export const artifactsHandlers: GatewayRequestHandlers = {
     ) {
       return;
     }
-    if (!requireQueryable(params as ArtifactsDownloadParams, respond)) {
+    if (!requireQueryable(params, respond)) {
       return;
     }
-    const { artifact } = findArtifact(params as ArtifactsDownloadParams);
+    const { artifact } = findArtifact(params);
     if (!artifact) {
       respond(
         false,
         undefined,
         artifactError("artifact_not_found", "artifact not found", {
-          artifactId: (params as ArtifactsDownloadParams).artifactId,
+          artifactId: params.artifactId,
         }),
       );
       return;
