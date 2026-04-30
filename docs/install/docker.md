@@ -129,7 +129,9 @@ The setup script accepts these optional environment variables:
 | `OPENCLAW_EXTENSIONS`                      | Pre-install plugin deps at build time (space-separated names)   |
 | `OPENCLAW_EXTRA_MOUNTS`                    | Extra host bind mounts (comma-separated `source:target[:opts]`) |
 | `OPENCLAW_HOME_VOLUME`                     | Persist `/home/node` in a named Docker volume                   |
+| `OPENCLAW_PLUGIN_STAGE_DIR`                | Container path for generated bundled plugin deps and mirrors    |
 | `OPENCLAW_SANDBOX`                         | Opt in to sandbox bootstrap (`1`, `true`, `yes`, `on`)          |
+| `OPENCLAW_SKIP_ONBOARDING`                 | Skip the interactive onboarding step (`1`, `true`, `yes`, `on`) |
 | `OPENCLAW_DOCKER_SOCKET`                   | Override Docker socket path                                     |
 | `OPENCLAW_DISABLE_BONJOUR`                 | Disable Bonjour/mDNS advertising (defaults to `1` for Docker)   |
 | `OPENCLAW_DISABLE_BUNDLED_SOURCE_OVERLAYS` | Disable bundled plugin source bind-mount overlays               |
@@ -259,7 +261,11 @@ For gotchas and troubleshooting, see [Bonjour discovery](/gateway/bonjour).
 
 Docker Compose bind-mounts `OPENCLAW_CONFIG_DIR` to `/home/node/.openclaw` and
 `OPENCLAW_WORKSPACE_DIR` to `/home/node/.openclaw/workspace`, so those paths
-survive container replacement.
+survive container replacement. When either variable is unset, the bundled
+`docker-compose.yml` falls back to `${HOME}/.openclaw` (and
+`${HOME}/.openclaw/workspace` for the workspace mount), or `/tmp/.openclaw`
+when `HOME` itself is also missing. That keeps `docker compose up` from
+emitting an empty-source volume spec on bare environments.
 
 That mounted config directory is where OpenClaw keeps:
 
@@ -267,11 +273,24 @@ That mounted config directory is where OpenClaw keeps:
 - `agents/<agentId>/agent/auth-profiles.json` for stored provider OAuth/API-key auth
 - `.env` for env-backed runtime secrets such as `OPENCLAW_GATEWAY_TOKEN`
 
+Bundled plugin runtime dependencies and mirrored runtime files are generated
+state, not user config. Compose stores them in the named Docker volume
+`openclaw-plugin-runtime-deps` mounted at
+`/var/lib/openclaw/plugin-runtime-deps`. Keeping that high-churn tree out of the
+host config bind mount avoids slow Docker Desktop/WSL file operations and stale
+Windows handles during cold Gateway startup.
+
+The default Compose file sets `OPENCLAW_PLUGIN_STAGE_DIR` to that path for both
+`openclaw-gateway` and `openclaw-cli`, so `openclaw doctor --fix`, channel
+login/setup commands, and Gateway startup all use the same generated runtime
+volume.
+
 For full persistence details on VM deployments, see
 [Docker VM Runtime - What persists where](/install/docker-vm-runtime#what-persists-where).
 
 **Disk growth hotspots:** watch `media/`, session JSONL files, `cron/runs/*.jsonl`,
-and rolling file logs under `/tmp/openclaw/`.
+the `openclaw-plugin-runtime-deps` Docker volume, and rolling file logs under
+`/tmp/openclaw/`.
 
 ### Shell helpers (optional)
 

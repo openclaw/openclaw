@@ -94,13 +94,37 @@ describe("command-startup-policy", () => {
     ).toBe(false);
     expect(
       shouldLoadPluginsForCommandPath({
-        commandPath: ["agents", "list"],
+        argv: ["node", "openclaw", "agent", "--json"],
+        commandPath: ["agent"],
+        jsonOutputMode: true,
+      }),
+    ).toBe(false);
+    expect(
+      shouldLoadPluginsForCommandPath({
+        argv: ["node", "openclaw", "agent", "--json", "--local"],
+        commandPath: ["agent"],
+        jsonOutputMode: true,
+      }),
+    ).toBe(true);
+    expect(
+      shouldLoadPluginsForCommandPath({
+        argv: ["node", "openclaw", "agent"],
+        commandPath: ["agent"],
         jsonOutputMode: false,
       }),
     ).toBe(true);
-    // text-only opts agents list out of plugin preload in --json mode so
-    // dashboards/scripts that poll this command don't pay the bundled-plugin
-    // import waterfall when they only consume config-derived fields. (#71739)
+    expect(
+      shouldLoadPluginsForCommandPath({
+        commandPath: ["agents"],
+        jsonOutputMode: false,
+      }),
+    ).toBe(false);
+    expect(
+      shouldLoadPluginsForCommandPath({
+        commandPath: ["agents", "list"],
+        jsonOutputMode: false,
+      }),
+    ).toBe(false);
     expect(
       shouldLoadPluginsForCommandPath({
         commandPath: ["agents", "list"],
@@ -156,6 +180,7 @@ describe("command-startup-policy", () => {
     expect(shouldEnsureCliPathForCommandPath(["sessions"])).toBe(false);
     expect(shouldEnsureCliPathForCommandPath(["config", "get"])).toBe(false);
     expect(shouldEnsureCliPathForCommandPath(["models", "status"])).toBe(false);
+    expect(shouldEnsureCliPathForCommandPath(["tools", "effective"])).toBe(false);
     expect(shouldEnsureCliPathForCommandPath(["message", "send"])).toBe(true);
     expect(shouldEnsureCliPathForCommandPath([])).toBe(true);
   });

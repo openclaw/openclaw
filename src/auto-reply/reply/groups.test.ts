@@ -31,7 +31,20 @@ describe("group runtime loading", () => {
       "You are in a WhatsApp group chat. Your replies are automatically sent to this group chat. Do not use the message tool to send to this same group - just reply normally.",
     );
     expect(groupChatContext).toContain("Minimize empty lines and use normal chat conventions");
+    expect(groupChatContext).toContain("prefer delegating bounded side investigations early");
+    expect(groupChatContext).toContain("Keep the critical path local");
     expect(groupChatContext).toContain('reply with exactly "NO_REPLY"');
+    const toolOnlyContext = groups.buildGroupChatContext({
+      sessionCtx: { ChatType: "group", Provider: "discord" },
+      sourceReplyDeliveryMode: "message_tool_only",
+      silentReplyPolicy: "allow",
+      silentToken: "NO_REPLY",
+    });
+    expect(toolOnlyContext).toContain("Normal final replies are private");
+    expect(toolOnlyContext).toContain("message tool with action=send");
+    expect(toolOnlyContext).toContain("Be a good group participant");
+    expect(toolOnlyContext).toContain("do not call message(action=send)");
+    expect(toolOnlyContext).not.toContain('reply with exactly "NO_REPLY"');
     expect(
       groups.buildGroupIntro({
         cfg: {} as OpenClawConfig,

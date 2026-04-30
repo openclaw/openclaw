@@ -289,7 +289,8 @@ function resolveOwnerAllowFromList(params: {
       const prefix = trimmed.slice(0, separatorIndex);
       const channel = normalizeAnyChannelId(prefix);
       if (channel) {
-        if (params.providerId && channel !== params.providerId) {
+        // Channel-prefixed entries require a known matching provider; webchat leaves it unset.
+        if (!params.providerId || channel !== params.providerId) {
           continue;
         }
         const remainder = trimmed.slice(separatorIndex + 1).trim();
@@ -429,6 +430,7 @@ function resolveOwnerAuthorizationState(params: {
 
 function resolveCommandSenderAuthorization(params: {
   commandAuthorized: boolean;
+  nativeCommandAuthorized: boolean;
   isOwnerForCommands: boolean;
   senderCandidates: string[];
   commandsAllowFromList: string[] | null;
@@ -450,7 +452,7 @@ function resolveCommandSenderAuthorization(params: {
       !params.providerResolutionError && (commandsAllowAll || Boolean(matchedCommandsAllowFrom))
     );
   }
-  return params.commandAuthorized && params.isOwnerForCommands;
+  return params.commandAuthorized && (params.isOwnerForCommands || params.nativeCommandAuthorized);
 }
 
 function isConversationLikeIdentity(value: string): boolean {
@@ -704,8 +706,11 @@ export function resolveCommandAuthorization(params: {
       : ownerAllowlistConfigured
         ? senderIsOwner
         : senderIsOwnerByScope || Boolean(matchedCommandOwner);
+  const nativeCommandAuthorized =
+    commandAuthorized && ctx.CommandSource === "native" && !ownerAllowlistConfigured;
   const isAuthorizedSender = resolveCommandSenderAuthorization({
     commandAuthorized,
+    nativeCommandAuthorized,
     isOwnerForCommands,
     senderCandidates,
     commandsAllowFromList,

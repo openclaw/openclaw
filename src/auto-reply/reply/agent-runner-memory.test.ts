@@ -154,10 +154,12 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
     const flushCall = runEmbeddedPiAgentMock.mock.calls[0]?.[0] as {
       prompt?: string;
+      transcriptPrompt?: string;
       memoryFlushWritePath?: string;
       silentExpected?: boolean;
     };
     expect(flushCall.prompt).toContain("Pre-compaction memory flush.");
+    expect(flushCall.transcriptPrompt).toBe("");
     expect(flushCall.memoryFlushWritePath).toMatch(/^memory\/\d{4}-\d{2}-\d{2}\.md$/);
     expect(flushCall.silentExpected).toBe(true);
     expect(refreshQueuedFollowupSessionMock).toHaveBeenCalledWith({
@@ -585,6 +587,7 @@ describe("runMemoryFlushIfNeeded", () => {
 
     const flushCall = runEmbeddedPiAgentMock.mock.calls[0]?.[0] as {
       prompt?: string;
+      transcriptPrompt?: string;
       extraSystemPrompt?: string;
       bootstrapPromptWarningSignaturesSeen?: string[];
       bootstrapPromptWarningSignature?: string;
@@ -594,6 +597,7 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(flushCall.prompt).toContain("Write notes.");
     expect(flushCall.prompt).toContain("NO_REPLY");
     expect(flushCall.prompt).toContain("MEMORY.md");
+    expect(flushCall.transcriptPrompt).toBe("");
     expect(flushCall.extraSystemPrompt).toContain("extra system");
     expect(flushCall.extraSystemPrompt).toContain("Flush memory now.");
     expect(flushCall.memoryFlushWritePath).toBe("memory/2023-11-14.md");

@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { prepareAcpxCodexAuthConfig } from "./codex-auth-bridge.js";
 import { resolveAcpxPluginConfig } from "./config.js";
 
@@ -66,6 +66,7 @@ function expectClaudeWrapperCommand(command: string | undefined, wrapperPath: st
 }
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   restoreEnv("CODEX_HOME");
   restoreEnv("OPENCLAW_AGENT_DIR");
   restoreEnv("PI_CODING_AGENT_DIR");
@@ -114,6 +115,31 @@ describe("prepareAcpxCodexAuthConfig", () => {
     ).rejects.toMatchObject({ code: "ENOENT" });
   });
 
+  it("keeps generated wrappers usable when chmod is rejected by the state filesystem", async () => {
+    const root = await makeTempDir();
+    const stateDir = path.join(root, "state");
+    const generatedCodex = generatedCodexPaths(stateDir);
+    const generatedClaude = generatedClaudePaths(stateDir);
+    const chmodError = Object.assign(new Error("operation not permitted"), { code: "EPERM" });
+    const chmodSpy = vi.spyOn(fs, "chmod").mockRejectedValue(chmodError);
+    const pluginConfig = resolveAcpxPluginConfig({
+      rawConfig: {},
+      workspaceDir: root,
+    });
+
+    const resolved = await prepareAcpxCodexAuthConfig({
+      pluginConfig,
+      stateDir,
+    });
+
+    expect(chmodSpy).toHaveBeenCalledWith(generatedCodex.wrapperPath, 0o755);
+    expect(chmodSpy).toHaveBeenCalledWith(generatedClaude.wrapperPath, 0o755);
+    expectCodexWrapperCommand(resolved.agents.codex, generatedCodex.wrapperPath);
+    expectClaudeWrapperCommand(resolved.agents.claude, generatedClaude.wrapperPath);
+    await expect(fs.access(generatedCodex.wrapperPath)).resolves.toBeUndefined();
+    await expect(fs.access(generatedClaude.wrapperPath)).resolves.toBeUndefined();
+  });
+
   it("falls back to the current Codex ACP package range when the local adapter is unavailable", async () => {
     const root = await makeTempDir();
     const stateDir = path.join(root, "state");
@@ -151,10 +177,10 @@ describe("prepareAcpxCodexAuthConfig", () => {
     });
 
     const wrapper = await fs.readFile(generated.wrapperPath, "utf8");
-    expect(wrapper).toContain('"@agentclientprotocol/claude-agent-acp@0.31.0"');
+    expect(wrapper).toContain('"@agentclientprotocol/claude-agent-acp@0.31.1"');
     expect(wrapper).toContain('"--", "claude-agent-acp"');
     expect(wrapper).not.toContain("@agentclientprotocol/claude-agent-acp@^0.31.0");
-    expect(wrapper).not.toContain("@agentclientprotocol/claude-agent-acp@0.31.1");
+    expect(wrapper).not.toContain("@agentclientprotocol/claude-agent-acp@0.31.0");
   });
 
   it("uses the bundled Codex ACP dependency by default when it is installed", async () => {
@@ -353,7 +379,7 @@ describe("prepareAcpxCodexAuthConfig", () => {
       rawConfig: {
         agents: {
           claude: {
-            command: "npx -y @agentclientprotocol/claude-agent-acp@0.31.0 --permission-mode bypass",
+            command: "npx -y @agentclientprotocol/claude-agent-acp@0.31.1 --permission-mode bypass",
           },
         },
       },
@@ -399,7 +425,7 @@ describe("prepareAcpxCodexAuthConfig", () => {
     const root = await makeTempDir();
     const stateDir = path.join(root, "state");
     const command =
-      "node ./custom-claude-wrapper.mjs @agentclientprotocol/claude-agent-acp@0.31.0 --flag";
+      "node ./custom-claude-wrapper.mjs @agentclientprotocol/claude-agent-acp@0.31.1 --flag";
     const pluginConfig = resolveAcpxPluginConfig({
       rawConfig: {
         agents: {

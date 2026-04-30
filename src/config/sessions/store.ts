@@ -39,7 +39,6 @@ import {
   capEntryCount,
   getActiveSessionMaintenanceWarning,
   pruneStaleEntries,
-  rotateSessionFile,
   shouldRunSessionEntryMaintenance,
   type ResolvedSessionMaintenanceConfig,
   type SessionMaintenanceWarning,
@@ -134,7 +133,6 @@ export {
   getActiveSessionMaintenanceWarning,
   pruneStaleEntries,
   resolveMaintenanceConfig,
-  rotateSessionFile,
 };
 export type { ResolvedSessionMaintenanceConfig, SessionMaintenanceWarning };
 
@@ -363,9 +361,6 @@ async function saveSessionStoreUnlocked(
           });
         }
       }
-
-      // Rotate the on-disk file if it exceeds the size threshold.
-      await rotateSessionFile(storePath, maintenance.rotateBytes);
 
       const diskBudget = await enforceSessionDiskBudget({
         store,

@@ -1,4 +1,5 @@
 import type { ImageContent } from "@mariozechner/pi-ai";
+import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import type { ReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { CliSessionBinding } from "../../config/sessions.js";
@@ -6,6 +7,7 @@ import type { SessionSystemPromptReport } from "../../config/sessions/types.js";
 import type { CliBackendConfig } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
+import type { InputProvenance } from "../../sessions/input-provenance.js";
 import type { ResolvedCliBackend } from "../cli-backends.js";
 import type { EmbeddedRunTrigger } from "../pi-embedded-runner/run/params.js";
 import type { SkillSnapshot } from "../skills.js";
@@ -21,6 +23,7 @@ export type RunCliAgentParams = {
   config?: OpenClawConfig;
   prompt: string;
   transcriptPrompt?: string;
+  inputProvenance?: InputProvenance;
   provider: string;
   model?: string;
   thinkLevel?: ThinkLevel;
@@ -28,6 +31,7 @@ export type RunCliAgentParams = {
   runId: string;
   jobId?: string;
   extraSystemPrompt?: string;
+  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   silentReplyPromptMode?: SilentReplyPromptMode;
   /** Static portion of extraSystemPrompt (excluding per-message inbound metadata) for session reuse hashing. */
   extraSystemPromptStatic?: string;

@@ -22,6 +22,7 @@ type ExecApprovalFollowupParams = {
   turnSourceAccountId?: string;
   turnSourceThreadId?: string | number;
   resultText: string;
+  direct?: boolean;
 };
 
 function buildExecDeniedFollowupPrompt(resultText: string): string {
@@ -120,6 +121,20 @@ function buildSessionResumeFallbackPrefix(): string {
   return "Automatic session resume failed, so sending the status directly.\n\n";
 }
 
+function shouldPrefixDirectFollowupWithSessionResumeFailure(params: {
+  resultText: string;
+  sessionError: unknown;
+}): boolean {
+  if (!params.sessionError) {
+    return false;
+  }
+  const parsed = parseExecApprovalResultText(params.resultText);
+  if (parsed.kind !== "finished") {
+    return true;
+  }
+  return !normalizeLowercaseStringOrEmpty(parsed.metadata).includes("code 0");
+}
+
 function canDirectSendDeniedFollowup(sessionError: unknown): boolean {
   return sessionError !== null;
 }
@@ -130,17 +145,22 @@ function buildAgentFollowupArgs(params: {
   resultText: string;
   deliveryTarget: ExternalBestEffortDeliveryTarget;
   sessionOnlyOriginChannel?: string;
+  turnSourceChannel?: string;
   turnSourceTo?: string;
   turnSourceAccountId?: string;
   turnSourceThreadId?: string | number;
 }) {
   const { deliveryTarget, sessionOnlyOriginChannel } = params;
+  // When the followup run has no deliverable route and no gateway-internal channel,
+  // preserve the raw turnSourceChannel so the spawned agent inherits messageProvider.
+  // Without this, tools.elevated.allowFrom.<provider> checks fail with provider=null.
+  const fallbackChannel = sessionOnlyOriginChannel ?? params.turnSourceChannel;
   return {
     sessionKey: params.sessionKey,
     message: buildExecApprovalFollowupPrompt(params.resultText),
     deliver: deliveryTarget.deliver,
     ...(deliveryTarget.deliver ? { bestEffortDeliver: true as const } : {}),
-    channel: deliveryTarget.deliver ? deliveryTarget.channel : sessionOnlyOriginChannel,
+    channel: deliveryTarget.deliver ? deliveryTarget.channel : fallbackChannel,
     to: deliveryTarget.deliver
       ? deliveryTarget.to
       : sessionOnlyOriginChannel
@@ -173,7 +193,9 @@ async function sendDirectFollowupFallback(params: {
     return false;
   }
 
-  const prefix = params.sessionError ? buildSessionResumeFallbackPrefix() : "";
+  const prefix = shouldPrefixDirectFollowupWithSessionResumeFailure(params)
+    ? buildSessionResumeFallbackPrefix()
+    : "";
   await sendMessage({
     channel: params.deliveryTarget.channel,
     to: params.deliveryTarget.to ?? "",
@@ -213,7 +235,7 @@ export async function sendExecApprovalFollowup(
 
   let sessionError: unknown = null;
 
-  if (sessionKey) {
+  if (sessionKey && params.direct !== true) {
     try {
       await callGatewayTool(
         "agent",
@@ -224,6 +246,7 @@ export async function sendExecApprovalFollowup(
           resultText,
           deliveryTarget,
           sessionOnlyOriginChannel,
+          turnSourceChannel: params.turnSourceChannel,
           turnSourceTo: params.turnSourceTo,
           turnSourceAccountId: params.turnSourceAccountId,
           turnSourceThreadId: params.turnSourceThreadId,

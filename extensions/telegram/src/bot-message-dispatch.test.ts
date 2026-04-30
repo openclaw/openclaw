@@ -290,6 +290,13 @@ describe("dispatchTelegramMessage draft streaming", () => {
       reactionApi: null,
       removeAckAfterReply: false,
     } as unknown as TelegramMessageContext;
+    base.turn = {
+      storePath: "/tmp/openclaw/telegram-sessions.json",
+      recordInboundSession: vi.fn(async () => undefined),
+      record: {
+        onRecordError: vi.fn(),
+      },
+    } as unknown as TelegramMessageContext["turn"];
 
     return {
       ...base,
@@ -790,7 +797,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     );
   });
 
-  it("keeps default tool progress messages when answer preview streaming is off", async () => {
+  it("suppresses default tool progress messages when answer preview streaming is off", async () => {
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
       await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
       await replyOptions?.onItemEvent?.({ progressText: "exec ls ~/Desktop" });
@@ -803,7 +810,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledWith(
       expect.objectContaining({
         replyOptions: expect.objectContaining({
-          suppressDefaultToolProgressMessages: false,
+          suppressDefaultToolProgressMessages: true,
         }),
       }),
     );
