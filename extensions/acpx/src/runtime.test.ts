@@ -15,11 +15,13 @@ const CODEX_ACP_WRAPPER_COMMAND = `node "/tmp/openclaw/acpx/codex-acp-wrapper.mj
 function makeRuntime(
   baseStore: TestSessionStore,
   options: Partial<ConstructorParameters<typeof AcpxRuntime>[0]> = {},
+  testOptions?: ConstructorParameters<typeof AcpxRuntime>[1],
 ): {
   runtime: AcpxRuntime;
   wrappedStore: TestSessionStore & { markFresh: (sessionKey: string) => void };
   delegate: {
     close: AcpRuntime["close"];
+    cancel: AcpRuntime["cancel"];
     ensureSession: AcpRuntime["ensureSession"];
     getStatus: NonNullable<AcpRuntime["getStatus"]>;
     setConfigOption: NonNullable<AcpRuntime["setConfigOption"]>;
@@ -28,6 +30,7 @@ function makeRuntime(
   };
   bridgeSafeDelegate: {
     close: AcpRuntime["close"];
+    cancel: AcpRuntime["cancel"];
     ensureSession: AcpRuntime["ensureSession"];
     getStatus: NonNullable<AcpRuntime["getStatus"]>;
     setConfigOption: NonNullable<AcpRuntime["setConfigOption"]>;
@@ -35,16 +38,19 @@ function makeRuntime(
     probeAvailability(): Promise<void>;
   };
 } {
-  const runtime = new AcpxRuntime({
-    cwd: "/tmp",
-    sessionStore: baseStore,
-    agentRegistry: {
-      resolve: (agentName: string) => (agentName === "openclaw" ? "openclaw acp" : agentName),
-      list: () => ["codex", "openclaw"],
+  const runtime = new AcpxRuntime(
+    {
+      cwd: "/tmp",
+      sessionStore: baseStore,
+      agentRegistry: {
+        resolve: (agentName: string) => (agentName === "openclaw" ? "openclaw acp" : agentName),
+        list: () => ["codex", "openclaw"],
+      },
+      permissionMode: "approve-reads",
+      ...options,
     },
-    permissionMode: "approve-reads",
-    ...options,
-  });
+    testOptions,
+  );
 
   return {
     runtime,
@@ -57,6 +63,7 @@ function makeRuntime(
       runtime as unknown as {
         delegate: {
           close: AcpRuntime["close"];
+          cancel: AcpRuntime["cancel"];
           ensureSession: AcpRuntime["ensureSession"];
           getStatus: NonNullable<AcpRuntime["getStatus"]>;
           setConfigOption: NonNullable<AcpRuntime["setConfigOption"]>;
@@ -69,6 +76,7 @@ function makeRuntime(
       runtime as unknown as {
         bridgeSafeDelegate: {
           close: AcpRuntime["close"];
+          cancel: AcpRuntime["cancel"];
           ensureSession: AcpRuntime["ensureSession"];
           getStatus: NonNullable<AcpRuntime["getStatus"]>;
           setConfigOption: NonNullable<AcpRuntime["setConfigOption"]>;
@@ -515,6 +523,143 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     });
     expect(await wrappedStore.load("agent:codex:acp:binding:test")).toBeUndefined();
     expect(baseStore.load).toHaveBeenCalledOnce();
+  });
+
+  it("cleans the recorded OpenClaw Codex ACP process tree after close", async () => {
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => ({
+        acpxRecordId: "agent:codex:acp:binding:test",
+        agentCommand: CODEX_ACP_WRAPPER_COMMAND,
+        pid: 501,
+      })),
+      save: vi.fn(async () => {}),
+    };
+    const killed: number[] = [];
+    const { runtime, delegate } = makeRuntime(baseStore, {}, {
+      openclawProcessCleanup: {
+        listProcesses: async () => [
+          {
+            pid: 501,
+            ppid: 1,
+            command: CODEX_ACP_WRAPPER_COMMAND,
+          },
+          {
+            pid: 502,
+            ppid: 501,
+            command:
+              "/usr/bin/node /Users/me/.openclaw/plugin-runtime-deps/openclaw/node_modules/@zed-industries/codex-acp/bin/codex-acp.js",
+          },
+        ],
+        killProcess: (pid: number) => killed.push(pid),
+        isProcessAlive: () => false,
+        sleep: async () => {},
+        forceAfterMs: 0,
+      },
+    } as never);
+    vi.spyOn(delegate, "close").mockResolvedValue(undefined);
+
+    await runtime.close({
+      handle: {
+        sessionKey: "agent:codex:acp:binding:test",
+        backend: "acpx",
+        runtimeSessionName: "agent:codex:acp:binding:test",
+        acpxRecordId: "agent:codex:acp:binding:test",
+      },
+      reason: "close-test",
+    });
+
+    expect(killed).toEqual([502, 501]);
+  });
+
+  it("does not clean a non-OpenClaw Codex app-server tree after close", async () => {
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => ({
+        acpxRecordId: "agent:codex:acp:binding:test",
+        agentCommand: "/usr/local/bin/codex app-server --port 12345",
+        pid: 601,
+      })),
+      save: vi.fn(async () => {}),
+    };
+    const killProcess = vi.fn();
+    const { runtime, delegate } = makeRuntime(baseStore, {}, {
+      openclawProcessCleanup: {
+        listProcesses: async () => [
+          {
+            pid: 601,
+            ppid: 1,
+            command: "/usr/local/bin/codex app-server --port 12345",
+          },
+          {
+            pid: 602,
+            ppid: 601,
+            command: "/bin/sh -c child",
+          },
+        ],
+        killProcess,
+        isProcessAlive: () => false,
+        sleep: async () => {},
+        forceAfterMs: 0,
+      },
+    } as never);
+    vi.spyOn(delegate, "close").mockResolvedValue(undefined);
+
+    await runtime.close({
+      handle: {
+        sessionKey: "agent:codex:acp:binding:test",
+        backend: "acpx",
+        runtimeSessionName: "agent:codex:acp:binding:test",
+        acpxRecordId: "agent:codex:acp:binding:test",
+      },
+      reason: "close-test",
+    });
+
+    expect(killProcess).not.toHaveBeenCalled();
+  });
+
+  it("cleans the recorded OpenClaw Codex ACP process tree after cancel", async () => {
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => ({
+        acpxRecordId: "agent:codex:acp:binding:test",
+        agentCommand: CODEX_ACP_WRAPPER_COMMAND,
+        pid: 701,
+      })),
+      save: vi.fn(async () => {}),
+    };
+    const killed: number[] = [];
+    const { runtime, delegate } = makeRuntime(baseStore, {}, {
+      openclawProcessCleanup: {
+        listProcesses: async () => [
+          {
+            pid: 701,
+            ppid: 1,
+            command: CODEX_ACP_WRAPPER_COMMAND,
+          },
+          {
+            pid: 702,
+            ppid: 701,
+            command:
+              "/usr/bin/node /Users/me/.openclaw/plugin-runtime-deps/openclaw/node_modules/@zed-industries/codex-acp/bin/codex-acp.js",
+          },
+        ],
+        killProcess: (pid: number) => killed.push(pid),
+        isProcessAlive: () => false,
+        sleep: async () => {},
+        forceAfterMs: 0,
+      },
+    } as never);
+    vi.spyOn(delegate, "cancel").mockResolvedValue(undefined);
+
+    await runtime.cancel({
+      handle: {
+        sessionKey: "agent:codex:acp:binding:test",
+        backend: "acpx",
+        runtimeSessionName: "agent:codex:acp:binding:test",
+        acpxRecordId: "agent:codex:acp:binding:test",
+      },
+      reason: "cancel-test",
+    });
+
+    expect(killed).toEqual([702, 701]);
   });
 
   it("routes openclaw ensureSession through the bridge-safe delegate when MCP servers are configured", async () => {

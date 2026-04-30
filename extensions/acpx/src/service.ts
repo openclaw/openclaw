@@ -14,6 +14,7 @@ import {
   toAcpMcpServers,
   type ResolvedAcpxPluginConfig,
 } from "./config.js";
+import { reapStaleOpenClawOwnedAcpxOrphans } from "./process-reaper.js";
 
 type AcpxRuntimeLike = AcpRuntime & {
   probeAvailability(): Promise<void>;
@@ -216,6 +217,20 @@ export function createAcpxRuntimeService(
         logger: ctx.logger,
       });
       await fs.mkdir(pluginConfig.stateDir, { recursive: true });
+      try {
+        const reaped = await reapStaleOpenClawOwnedAcpxOrphans({
+          stateDir: pluginConfig.stateDir,
+        });
+        if (reaped.killedPids.length > 0) {
+          ctx.logger.info(
+            `embedded acpx runtime reaped stale OpenClaw-owned process(es): ${reaped.killedPids.join(", ")}`,
+          );
+        }
+      } catch (error) {
+        ctx.logger.warn(
+          `embedded acpx runtime stale process reaper failed: ${formatErrorMessage(error)}`,
+        );
+      }
       warnOnIgnoredLegacyCompatibilityConfig({
         pluginConfig,
         logger: ctx.logger,

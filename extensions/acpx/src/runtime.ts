@@ -15,6 +15,12 @@ import {
   type AcpRuntimeStatus,
 } from "acpx/runtime";
 import { AcpRuntimeError, type AcpRuntime } from "../runtime-api.js";
+import {
+  cleanupOpenClawOwnedAcpxProcessTree,
+  listUnixProcesses,
+  type AcpxProcessCleanupDeps,
+  type AcpxProcessInfo,
+} from "./process-reaper.js";
 
 type AcpSessionStore = AcpRuntimeOptions["sessionStore"];
 type AcpSessionRecord = Parameters<AcpSessionStore["save"]>[0];
@@ -22,6 +28,16 @@ type AcpLoadedSessionRecord = Awaited<ReturnType<AcpSessionStore["load"]>>;
 
 type ResetAwareSessionStore = AcpSessionStore & {
   markFresh: (sessionKey: string) => void;
+};
+
+type AcpxRuntimeTestOptions = {
+  openclawProcessCleanup?: AcpxProcessCleanupDeps;
+};
+
+type RuntimeCleanupContext = {
+  pid: number;
+  command?: string;
+  processes: AcpxProcessInfo[];
 };
 
 function readSessionRecordName(record: AcpSessionRecord): string {
@@ -114,6 +130,17 @@ function readAgentCommandFromRecord(record: AcpLoadedSessionRecord): string | un
   }
   const { agentCommand } = record as { agentCommand?: unknown };
   return typeof agentCommand === "string" ? agentCommand.trim() || undefined : undefined;
+}
+
+function readAgentPidFromRecord(record: AcpLoadedSessionRecord): number | undefined {
+  if (typeof record !== "object" || record === null) {
+    return undefined;
+  }
+  const { pid, processId } = record as { pid?: unknown; processId?: unknown };
+  const candidate = typeof pid === "number" ? pid : processId;
+  return typeof candidate === "number" && Number.isInteger(candidate) && candidate > 0
+    ? candidate
+    : undefined;
 }
 
 function splitCommandParts(value: string): string[] {
@@ -402,13 +429,13 @@ export class AcpxRuntime implements AcpRuntime {
   private readonly delegate: BaseAcpxRuntime;
   private readonly bridgeSafeDelegate: BaseAcpxRuntime;
   private readonly probeDelegate: BaseAcpxRuntime;
+  private readonly processCleanup: AcpxProcessCleanupDeps;
 
-  constructor(
-    options: AcpRuntimeOptions,
-    testOptions?: ConstructorParameters<typeof BaseAcpxRuntime>[1],
-  ) {
+  constructor(options: AcpRuntimeOptions, testOptions?: AcpxRuntimeTestOptions) {
+    const delegateTestOptions: ConstructorParameters<typeof BaseAcpxRuntime>[1] = testOptions;
     this.sessionStore = createResetAwareSessionStore(options.sessionStore);
     this.agentRegistry = options.agentRegistry;
+    this.processCleanup = testOptions?.openclawProcessCleanup ?? {};
     this.scopedAgentRegistry = createModelScopedAgentRegistry({
       agentRegistry: this.agentRegistry,
       scope: this.codexAcpModelOverrideScope,
@@ -418,14 +445,14 @@ export class AcpxRuntime implements AcpRuntime {
       sessionStore: this.sessionStore,
       agentRegistry: this.scopedAgentRegistry,
     };
-    this.delegate = new BaseAcpxRuntime(sharedOptions, testOptions);
+    this.delegate = new BaseAcpxRuntime(sharedOptions, delegateTestOptions);
     this.bridgeSafeDelegate = shouldUseDistinctBridgeDelegate(options)
       ? new BaseAcpxRuntime(
           {
             ...sharedOptions,
             mcpServers: [],
           },
-          testOptions,
+          delegateTestOptions,
         )
       : this.delegate;
     this.probeDelegate = this.resolveDelegateForAgent(resolveProbeAgentName(options));
@@ -445,6 +472,13 @@ export class AcpxRuntime implements AcpRuntime {
 
   private async resolveDelegateForHandle(handle: AcpRuntimeHandle): Promise<BaseAcpxRuntime> {
     const record = await this.sessionStore.load(handle.acpxRecordId ?? handle.sessionKey);
+    return this.resolveDelegateForRecord(handle, record);
+  }
+
+  private resolveDelegateForRecord(
+    handle: AcpRuntimeHandle,
+    record: AcpLoadedSessionRecord,
+  ): BaseAcpxRuntime {
     const recordCommand = readAgentCommandFromRecord(record);
     if (recordCommand) {
       return this.resolveDelegateForCommand(recordCommand);
@@ -461,6 +495,40 @@ export class AcpxRuntime implements AcpRuntime {
     return resolveAgentCommandForName({
       agentName: readAgentFromHandle(handle),
       agentRegistry: this.agentRegistry,
+    });
+  }
+
+  private async resolveCleanupContextFromRecord(
+    record: AcpLoadedSessionRecord,
+  ): Promise<RuntimeCleanupContext | undefined> {
+    const pid = readAgentPidFromRecord(record);
+    if (!pid) {
+      return undefined;
+    }
+    let processes: AcpxProcessInfo[] = [];
+    try {
+      processes = await (this.processCleanup.listProcesses ?? listUnixProcesses)();
+    } catch {
+      processes = [];
+    }
+    return {
+      pid,
+      command: readAgentCommandFromRecord(record),
+      processes: processes ?? [],
+    };
+  }
+
+  private async cleanupRecordedProcessTree(
+    context: RuntimeCleanupContext | undefined,
+  ): Promise<void> {
+    if (!context) {
+      return;
+    }
+    await cleanupOpenClawOwnedAcpxProcessTree({
+      ...this.processCleanup,
+      rootPid: context.pid,
+      rootCommand: context.command,
+      processes: context.processes.length > 0 ? context.processes : undefined,
     });
   }
 
@@ -571,8 +639,16 @@ export class AcpxRuntime implements AcpRuntime {
   }
 
   async cancel(input: Parameters<AcpRuntime["cancel"]>[0]): Promise<void> {
-    const delegate = await this.resolveDelegateForHandle(input.handle);
-    await delegate.cancel(input);
+    const record = await this.sessionStore.load(
+      input.handle.acpxRecordId ?? input.handle.sessionKey,
+    );
+    const delegate = this.resolveDelegateForRecord(input.handle, record);
+    const cleanupContext = await this.resolveCleanupContextFromRecord(record);
+    try {
+      await delegate.cancel(input);
+    } finally {
+      await this.cleanupRecordedProcessTree(cleanupContext);
+    }
   }
 
   async prepareFreshSession(input: { sessionKey: string }): Promise<void> {
@@ -580,13 +656,20 @@ export class AcpxRuntime implements AcpRuntime {
   }
 
   async close(input: Parameters<AcpRuntime["close"]>[0]): Promise<void> {
-    await (
-      await this.resolveDelegateForHandle(input.handle)
-    ).close({
-      handle: input.handle,
-      reason: input.reason,
-      discardPersistentState: input.discardPersistentState,
-    });
+    const record = await this.sessionStore.load(
+      input.handle.acpxRecordId ?? input.handle.sessionKey,
+    );
+    const delegate = this.resolveDelegateForRecord(input.handle, record);
+    const cleanupContext = await this.resolveCleanupContextFromRecord(record);
+    try {
+      await delegate.close({
+        handle: input.handle,
+        reason: input.reason,
+        discardPersistentState: input.discardPersistentState,
+      });
+    } finally {
+      await this.cleanupRecordedProcessTree(cleanupContext);
+    }
     if (input.discardPersistentState) {
       this.sessionStore.markFresh(input.handle.sessionKey);
     }

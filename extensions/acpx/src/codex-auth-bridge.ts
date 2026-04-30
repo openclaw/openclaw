@@ -179,14 +179,41 @@ if (!command) {
 const child = spawn(command, args, {
   env,
   stdio: "inherit",
+  detached: process.platform !== "win32",
   windowsHide: true,
 });
 
+function killChildTree(signal) {
+  if (!child.pid) {
+    return;
+  }
+  if (process.platform !== "win32") {
+    try {
+      process.kill(-child.pid, signal);
+      return;
+    } catch {
+      // Fall back to direct child signalling below.
+    }
+  }
+  child.kill(signal);
+}
+
 for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
   process.once(signal, () => {
-    child.kill(signal);
+    killChildTree(signal);
   });
 }
+
+const originalParentPid = process.ppid;
+const parentWatch = setInterval(() => {
+  if (originalParentPid > 1 && process.ppid === 1) {
+    killChildTree("SIGTERM");
+    setTimeout(() => killChildTree("SIGKILL"), 1500).unref?.();
+    clearInterval(parentWatch);
+    process.exit(0);
+  }
+}, 1000);
+parentWatch.unref?.();
 
 child.on("error", (error) => {
   console.error(\`[openclaw] failed to launch ${params.displayName} ACP wrapper: \${error.message}\`);
@@ -194,6 +221,7 @@ child.on("error", (error) => {
 });
 
 child.on("exit", (code, signal) => {
+  clearInterval(parentWatch);
   if (code !== null) {
     process.exit(code);
   }

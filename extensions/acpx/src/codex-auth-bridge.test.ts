@@ -140,6 +140,28 @@ describe("prepareAcpxCodexAuthConfig", () => {
     await expect(fs.access(generatedClaude.wrapperPath)).resolves.toBeUndefined();
   });
 
+  it("generates wrappers that terminate the child process group if the wrapper is orphaned", async () => {
+    const root = await makeTempDir();
+    const stateDir = path.join(root, "state");
+    const generated = generatedCodexPaths(stateDir);
+    const pluginConfig = resolveAcpxPluginConfig({
+      rawConfig: {},
+      workspaceDir: root,
+    });
+
+    await prepareAcpxCodexAuthConfig({
+      pluginConfig,
+      stateDir,
+      resolveInstalledCodexAcpBinPath: async () => path.join(root, "codex-acp.js"),
+    });
+
+    const wrapper = await fs.readFile(generated.wrapperPath, "utf8");
+    expect(wrapper).toContain('detached: process.platform !== "win32"');
+    expect(wrapper).toContain("process.kill(-child.pid, signal)");
+    expect(wrapper).toContain("process.ppid === 1");
+    expect(wrapper).toContain('killChildTree("SIGKILL")');
+  });
+
   it("falls back to the current Codex ACP package range when the local adapter is unavailable", async () => {
     const root = await makeTempDir();
     const stateDir = path.join(root, "state");
