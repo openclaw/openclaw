@@ -253,7 +253,6 @@ function createRuntimeCore(cfg: OpenClawConfig) {
       },
       turn: {
         runPrepared,
-        dispatchAssembled: vi.fn(),
       },
       text: {
         chunkMarkdownTextWithMode: (text: string) => [text],

@@ -109,6 +109,16 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     expect(sweepScript).toContain('plugins install "$KITCHEN_SINK_SPEC"');
     expect(sweepScript).toContain("KITCHEN_SINK_PERSONALITY");
     expect(sweepScript).toContain('plugins uninstall "$KITCHEN_SINK_SPEC" --force');
+    const successScenario = sweepScript.slice(
+      sweepScript.indexOf("run_success_scenario()"),
+      sweepScript.indexOf("run_failure_scenario()"),
+    );
+    expect(successScenario.indexOf('plugins install "$KITCHEN_SINK_SPEC"')).toBeLessThan(
+      successScenario.indexOf("configure_kitchen_sink_runtime"),
+    );
+    expect(successScenario.indexOf("configure_kitchen_sink_runtime")).toBeLessThan(
+      successScenario.indexOf('plugins enable "$KITCHEN_SINK_ID"'),
+    );
     expect(sweepScript).toContain("run_failure_scenario");
     expect(assertionsScript).toContain("record.source !== source");
     expect(assertionsScript).toContain("record.clawhubPackage !== packageName");

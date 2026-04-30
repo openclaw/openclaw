@@ -234,7 +234,14 @@ export async function runChannelTurn<TRaw>(
   const admission = resolved.admission ?? preflightAdmission ?? ({ kind: "dispatch" } as const);
   let result: ChannelTurnResult;
   try {
-    const dispatchResult = await dispatchAssembledChannelTurn(resolved);
+    const dispatchResult = await dispatchAssembledChannelTurn(
+      admission.kind === "observeOnly"
+        ? {
+            ...resolved,
+            delivery: createNoopChannelTurnDeliveryAdapter(),
+          }
+        : resolved,
+    );
     result = {
       ...dispatchResult,
       admission,

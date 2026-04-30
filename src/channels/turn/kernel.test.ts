@@ -195,8 +195,9 @@ describe("channel turn kernel", () => {
     expect(resolveTurn).not.toHaveBeenCalled();
   });
 
-  it("runs observe-only preflights through resolve, record, dispatch, and finalize", async () => {
+  it("runs observe-only preflights through resolve, record, dispatch, and finalize without visible delivery", async () => {
     const events: string[] = [];
+    const deliver = vi.fn();
     const onFinalize = vi.fn();
     const result = await runChannelTurn({
       channel: "test",
@@ -213,7 +214,7 @@ describe("channel turn kernel", () => {
           ctxPayload: createCtx({ SessionKey: "agent:observer:test:peer" }),
           recordInboundSession: createRecordInboundSession(events),
           dispatchReplyWithBufferedBlockDispatcher: createDispatch(events),
-          delivery: createNoopChannelTurnDeliveryAdapter(),
+          delivery: { deliver },
           record: {
             onRecordError: vi.fn(),
           },
@@ -228,6 +229,7 @@ describe("channel turn kernel", () => {
     });
     expect(result.dispatched).toBe(true);
     expect(events).toEqual(["record", "dispatch"]);
+    expect(deliver).not.toHaveBeenCalled();
     expect(onFinalize).toHaveBeenCalledWith(
       expect.objectContaining({
         admission: { kind: "observeOnly", reason: "broadcast-observer" },

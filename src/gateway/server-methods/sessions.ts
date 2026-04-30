@@ -64,6 +64,7 @@ import {
   validateSessionsResolveParams,
   validateSessionsSendParams,
 } from "../protocol/index.js";
+import { resolveSessionKeyForRun } from "../server-session-key.js";
 import {
   getSessionCompactionCheckpoint,
   listSessionCompactionCheckpoints,
@@ -1293,7 +1294,16 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
     const p = params;
-    const key = requireSessionKey(p.key, respond);
+    const requestedRunId = readStringValue(p.runId);
+    const keyCandidate =
+      p.key ??
+      (requestedRunId ? context.chatAbortControllers.get(requestedRunId)?.sessionKey : undefined) ??
+      (requestedRunId ? resolveSessionKeyForRun(requestedRunId) : undefined);
+    if (!keyCandidate && requestedRunId) {
+      respond(true, { ok: true, abortedRunId: null, status: "no-active-run" });
+      return;
+    }
+    const key = requireSessionKey(keyCandidate, respond);
     if (!key) {
       return;
     }
@@ -1302,14 +1312,14 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       context,
       requestedKey: key,
       canonicalKey,
-      runId: readStringValue(p.runId),
+      runId: requestedRunId,
     });
     let abortedRunId: string | null = null;
     await chatHandlers["chat.abort"]({
       req,
       params: {
         sessionKey: abortSessionKey,
-        runId: readStringValue(p.runId),
+        runId: requestedRunId,
       },
       respond: (ok, payload, error, meta) => {
         if (!ok) {

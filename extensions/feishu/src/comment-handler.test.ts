@@ -135,8 +135,6 @@ function createTestRuntime(overrides?: {
       },
       turn: {
         runPrepared: runPrepared as unknown as PluginRuntime["channel"]["turn"]["runPrepared"],
-        dispatchAssembled:
-          vi.fn() as unknown as PluginRuntime["channel"]["turn"]["dispatchAssembled"],
       },
       pairing: {
         readAllowFromStore: vi.fn(overrides?.readAllowFromStore ?? (async () => [])),

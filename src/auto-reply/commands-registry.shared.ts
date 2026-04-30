@@ -892,7 +892,7 @@ export function buildBuiltinChatCommands(): ChatCommandDefinition[] {
           name: "mode",
           description: "queue mode",
           type: "string",
-          choices: ["steer", "interrupt", "followup", "collect", "steer-backlog"],
+          choices: ["steer", "queue", "interrupt", "followup", "collect", "steer-backlog"],
         },
         {
           name: "debounce",

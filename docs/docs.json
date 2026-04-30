@@ -1114,6 +1114,7 @@
                   "concepts/agent",
                   "concepts/agent-loop",
                   "concepts/agent-runtimes",
+                  "concepts/openclaw-sdk",
                   "concepts/system-prompt",
                   "concepts/context",
                   "concepts/context-engine",
@@ -1163,7 +1164,8 @@
                   "concepts/messages",
                   "concepts/streaming",
                   "concepts/retry",
-                  "concepts/queue"
+                  "concepts/queue",
+                  "concepts/queue-steering"
                 ]
               }
             ]
@@ -1209,6 +1211,7 @@
                       "plugins/sdk-subpaths",
                       "plugins/sdk-entrypoints",
                       "plugins/sdk-runtime",
+                      "plugins/sdk-channel-turn",
                       "plugins/sdk-agent-harness",
                       "plugins/sdk-setup",
                       "plugins/sdk-testing",
@@ -1651,7 +1654,11 @@
               },
               {
                 "group": "RPC and API",
-                "pages": ["reference/rpc", "reference/device-models"]
+                "pages": [
+                  "reference/rpc",
+                  "reference/openclaw-sdk-api-design",
+                  "reference/device-models"
+                ]
               },
               {
                 "group": "Templates",
