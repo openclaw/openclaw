@@ -6,6 +6,8 @@ import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
 export type SourceReplyDeliveryModeContext = {
   ChatType?: string;
   CommandSource?: "text" | "native";
+  /** When true, the bot was explicitly mentioned in this turn (e.g., @bot in group chat). */
+  WasMentioned?: boolean;
 };
 
 export function resolveSourceReplyDeliveryMode(params: {
@@ -21,6 +23,11 @@ export function resolveSourceReplyDeliveryMode(params: {
   }
   const chatType = normalizeChatType(params.ctx.ChatType);
   if (chatType === "group" || chatType === "channel") {
+    // Explicit mentions in group/channel contexts should get visible replies,
+    // just like native commands do, since the user explicitly invoked the bot.
+    if (params.ctx.WasMentioned === true) {
+      return "automatic";
+    }
     const configuredMode =
       params.cfg.messages?.groupChat?.visibleReplies ?? params.cfg.messages?.visibleReplies;
     return configuredMode === "automatic" ? "automatic" : "message_tool_only";

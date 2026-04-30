@@ -78,6 +78,43 @@ describe("resolveSourceReplyDeliveryMode", () => {
       }),
     ).toBe("automatic");
   });
+
+  it("treats explicit mentions as automatic delivery in group chat", () => {
+    expect(
+      resolveSourceReplyDeliveryMode({
+        cfg: emptyConfig,
+        ctx: { ChatType: "group", WasMentioned: true },
+      }),
+    ).toBe("automatic");
+  });
+
+  it("treats explicit mentions as automatic delivery in channel chat", () => {
+    expect(
+      resolveSourceReplyDeliveryMode({
+        cfg: emptyConfig,
+        ctx: { ChatType: "channel", WasMentioned: true },
+      }),
+    ).toBe("automatic");
+  });
+
+  it("does not affect non-mentioned group messages", () => {
+    expect(
+      resolveSourceReplyDeliveryMode({
+        cfg: emptyConfig,
+        ctx: { ChatType: "group", WasMentioned: false },
+      }),
+    ).toBe("message_tool_only");
+  });
+
+  it("does not affect direct chats even when WasMentioned is true", () => {
+    // WasMentioned only applies to group/channel contexts
+    expect(
+      resolveSourceReplyDeliveryMode({
+        cfg: emptyConfig,
+        ctx: { ChatType: "direct", WasMentioned: true },
+      }),
+    ).toBe("automatic");
+  });
 });
 
 describe("resolveSourceReplyVisibilityPolicy", () => {
@@ -124,6 +161,22 @@ describe("resolveSourceReplyVisibilityPolicy", () => {
       resolveSourceReplyVisibilityPolicy({
         cfg: emptyConfig,
         ctx: { ChatType: "group", CommandSource: "native" },
+        sendPolicy: "allow",
+      }),
+    ).toMatchObject({
+      sourceReplyDeliveryMode: "automatic",
+      suppressAutomaticSourceDelivery: false,
+      suppressDelivery: false,
+      suppressHookReplyLifecycle: false,
+      suppressTyping: false,
+    });
+  });
+
+  it("keeps explicitly mentioned replies visible in group chat", () => {
+    expect(
+      resolveSourceReplyVisibilityPolicy({
+        cfg: emptyConfig,
+        ctx: { ChatType: "group", WasMentioned: true },
         sendPolicy: "allow",
       }),
     ).toMatchObject({
