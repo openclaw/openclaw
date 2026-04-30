@@ -149,6 +149,22 @@ injection behavior from the shared defaults. Omitted fields inherit from
 }
 ```
 
+### `agents.defaults.bootstrapTier`
+
+Controls which standard workspace bootstrap files are injected into ordinary
+agent turns. Default: `"standard"`.
+
+- `"standard"`: preserve the full ordinary-session bootstrap set.
+- `"minimal"`: inject only `AGENTS.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`,
+  and `BOOTSTRAP.md`. Use this for constrained local models that struggle with
+  prompt pressure.
+
+```json5
+{
+  agents: { defaults: { bootstrapTier: "minimal" } },
+}
+```
+
 ### `agents.defaults.bootstrapPromptTruncationWarning`
 
 Controls the agent-visible system-prompt notice when bootstrap context is truncated.

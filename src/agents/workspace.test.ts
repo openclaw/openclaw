@@ -70,6 +70,16 @@ function expectSubagentAllowedBootstrapNames(files: WorkspaceBootstrapFile[]) {
   expect(names).toStrictEqual(["AGENTS.md", "SOUL.md", "TOOLS.md", "IDENTITY.md", "USER.md"]);
 }
 
+function expectMinimalBootstrapNames(files: WorkspaceBootstrapFile[]) {
+  expect(files.map((file) => file.name)).toEqual([
+    "AGENTS.md",
+    "TOOLS.md",
+    "IDENTITY.md",
+    "USER.md",
+    "BOOTSTRAP.md",
+  ]);
+}
+
 describe("ensureAgentWorkspace", () => {
   it("creates BOOTSTRAP.md and records a seeded marker for brand new workspaces", async () => {
     const tempDir = await makeTempWorkspace("openclaw-workspace-");
@@ -405,6 +415,16 @@ describe("filterBootstrapFilesForSession", () => {
     expect(result).toStrictEqual(mockFiles);
   });
 
+  it("returns all files for standard normal sessions", () => {
+    const result = filterBootstrapFilesForSession(mockFiles, "agent:default:chat:main", "standard");
+    expect(result).toHaveLength(mockFiles.length);
+  });
+
+  it("filters normal sessions to minimal bootstrap files", () => {
+    const result = filterBootstrapFilesForSession(mockFiles, "agent:default:chat:main", "minimal");
+    expectMinimalBootstrapNames(result);
+  });
+
   it("filters to allowlist for subagent sessions", () => {
     const result = filterBootstrapFilesForSession(mockFiles, "agent:default:subagent:task-1");
     expectSubagentAllowedBootstrapNames(result);
@@ -412,6 +432,15 @@ describe("filterBootstrapFilesForSession", () => {
 
   it("filters to allowlist for cron sessions", () => {
     const result = filterBootstrapFilesForSession(mockFiles, "agent:default:cron:daily-check");
+    expectSubagentAllowedBootstrapNames(result);
+  });
+
+  it("preserves the subagent allowlist when minimal tier is configured", () => {
+    const result = filterBootstrapFilesForSession(
+      mockFiles,
+      "agent:default:subagent:task-1",
+      "minimal",
+    );
     expectSubagentAllowedBootstrapNames(result);
   });
 });

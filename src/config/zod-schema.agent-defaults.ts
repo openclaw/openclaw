@@ -104,6 +104,7 @@ export const AgentDefaultsSchema = z
       .optional(),
     bootstrapMaxChars: z.number().int().positive().optional(),
     bootstrapTotalMaxChars: z.number().int().positive().optional(),
+    bootstrapTier: z.union([z.literal("minimal"), z.literal("standard")]).optional(),
     experimental: z
       .object({
         localModelLean: z.boolean().optional(),

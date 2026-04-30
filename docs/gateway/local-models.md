@@ -312,11 +312,13 @@ If the model loads cleanly but full agent turns misbehave, work top-down — con
    openclaw infer model run --gateway --model <provider/model> --prompt "Reply with exactly: pong" --json
    ```
 
-3. **Try lean mode.** If both probes pass but real agent turns fail with malformed tool calls or oversized prompts, enable `agents.defaults.experimental.localModelLean: true`. It drops the three heaviest default tools (`browser`, `cron`, `message`) so the prompt shape is smaller and less brittle. See [Experimental Features → Local model lean mode](/concepts/experimental-features#local-model-lean-mode) for the full explanation, when to use it, and how to confirm it is on.
+3. **Reduce bootstrap context.** If both probes pass but normal OpenClaw agent turns fail under prompt pressure, set `agents.defaults.bootstrapTier: "minimal"`. This keeps the essential workspace rules and identity files while omitting heavier persona, heartbeat, and memory bootstrap files from ordinary turns.
 
-4. **Disable tools entirely as a last resort.** If lean mode is not enough, set `models.providers.<provider>.models[].compat.supportsTools: false` for that model entry. The agent will then operate without tool calls on that model.
+4. **Try lean mode.** If real agent turns still fail with malformed tool calls or oversized prompts, enable `agents.defaults.experimental.localModelLean: true`. It drops the three heaviest default tools (`browser`, `cron`, `message`) so the prompt shape is smaller and less brittle. See [Experimental Features → Local model lean mode](/concepts/experimental-features#local-model-lean-mode) for the full explanation, when to use it, and how to confirm it is on.
 
-5. **Past that, the bottleneck is upstream.** If the backend still fails only on larger OpenClaw runs after lean mode and `supportsTools: false`, the remaining issue is usually upstream model or server capacity — context window, GPU memory, kv-cache eviction, or a backend bug. It is not OpenClaw's transport layer at that point.
+5. **Disable tools entirely as a last resort.** If lean mode is not enough, set `models.providers.<provider>.models[].compat.supportsTools: false` for that model entry. The agent will then operate without tool calls on that model.
+
+6. **Past that, the bottleneck is upstream.** If the backend still fails only on larger OpenClaw runs after lean mode and `supportsTools: false`, the remaining issue is usually upstream model or server capacity — context window, GPU memory, kv-cache eviction, or a backend bug. It is not OpenClaw's transport layer at that point.
 
 ## Troubleshooting
 

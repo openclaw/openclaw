@@ -1,3 +1,4 @@
+import { resolveBootstrapTier } from "../../../agents/pi-embedded-helpers.js";
 import {
   filterBootstrapFilesForSession,
   loadExtraBootstrapFilesWithDiagnostics,
@@ -58,6 +59,7 @@ const bootstrapExtraFilesHook: HookHandler = async (event) => {
     context.bootstrapFiles = filterBootstrapFilesForSession(
       [...context.bootstrapFiles, ...extras],
       context.sessionKey,
+      resolveBootstrapTier(context.cfg),
     );
   } catch (err) {
     log.warn(`failed: ${String(err)}`);

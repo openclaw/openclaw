@@ -213,6 +213,11 @@ memory directly. If `MEMORY.md` is repeatedly truncated, distill it into a
 shorter durable summary and move detailed history into `memory/*.md`, or
 intentionally raise the bootstrap limits.
 
+Use `agents.defaults.bootstrapTier: "minimal"` for constrained local models that
+need a smaller always-injected bootstrap set. Minimal bootstrap keeps
+`AGENTS.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, and `BOOTSTRAP.md` while
+omitting heavier persona, heartbeat, and memory files from ordinary turns.
+
 Sub-agent sessions only inject `AGENTS.md` and `TOOLS.md` (other bootstrap files
 are filtered out to keep the sub-agent context small).
 

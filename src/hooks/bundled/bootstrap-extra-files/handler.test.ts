@@ -98,4 +98,34 @@ describe("bootstrap-extra-files hook", () => {
       "TOOLS.md",
     ]);
   });
+
+  it("re-applies minimal bootstrap tier after extras are added", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-bootstrap-extra-minimal-");
+    const extraDir = path.join(tempDir, "packages", "persona");
+    await fs.mkdir(extraDir, { recursive: true });
+    await fs.writeFile(path.join(extraDir, "SOUL.md"), "extra persona", "utf-8");
+
+    const cfg = {
+      ...createBootstrapExtraConfig(["packages/*/SOUL.md"]),
+      agents: { defaults: { bootstrapTier: "minimal" } },
+    } satisfies OpenClawConfig;
+    const context = await createBootstrapContext({
+      workspaceDir: tempDir,
+      cfg,
+      sessionKey: "agent:main:main",
+      rootFiles: [
+        { name: "AGENTS.md", content: "root agents" },
+        { name: "TOOLS.md", content: "root tools" },
+        { name: "BOOTSTRAP.md", content: "root bootstrap" },
+      ],
+    });
+
+    const event = createHookEvent("agent", "bootstrap", "agent:main:main", context);
+    await handler(event);
+    expect(context.bootstrapFiles.map((f) => f.name).toSorted()).toEqual([
+      "AGENTS.md",
+      "BOOTSTRAP.md",
+      "TOOLS.md",
+    ]);
+  });
 });

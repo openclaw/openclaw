@@ -31,6 +31,9 @@ Treat them differently from normal config:
 
 `agents.defaults.experimental.localModelLean: true` is a pressure-release valve for weaker local-model setups. When it is on, OpenClaw drops three default tools — `browser`, `cron`, and `message` — from the agent's tool surface for every turn. Nothing else changes.
 
+This is separate from `agents.defaults.bootstrapTier: "minimal"`, which trims
+always-injected workspace bootstrap files before changing the tool surface.
+
 ### Why these three tools
 
 These three tools have the largest descriptions and the most parameter shapes in the default OpenClaw runtime. On a small-context or stricter OpenAI-compatible backend that is the difference between:

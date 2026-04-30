@@ -6,10 +6,13 @@ import {
 import { resolveBootstrapContextForRun } from "../agents/bootstrap-files.js";
 import {
   resolveBootstrapMaxChars,
+  resolveBootstrapTier,
   resolveBootstrapTotalMaxChars,
 } from "../agents/pi-embedded-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { note } from "../terminal/note.js";
+
+const LOCAL_MODEL_BOOTSTRAP_PRESSURE_THRESHOLD_CHARS = 8_000;
 
 function formatInt(value: number): string {
   return new Intl.NumberFormat("en-US").format(Math.max(0, Math.floor(value)));
@@ -30,6 +33,86 @@ function formatCauses(causes: Array<"per-file-limit" | "total-limit">): string {
   return causes.map((cause) => (cause === "per-file-limit" ? "max/file" : "max/total")).join(", ");
 }
 
+function parseModelRef(model: unknown): string | undefined {
+  if (typeof model === "string") {
+    const trimmed = model.trim();
+    return trimmed || undefined;
+  }
+  if (model && typeof model === "object") {
+    const primary = (model as { primary?: unknown }).primary;
+    if (typeof primary === "string") {
+      const trimmed = primary.trim();
+      return trimmed || undefined;
+    }
+  }
+  return undefined;
+}
+
+function parseProviderModelRef(ref: string): { provider: string; modelId: string } | undefined {
+  const slash = ref.indexOf("/");
+  if (slash <= 0 || slash >= ref.length - 1) {
+    return undefined;
+  }
+  return {
+    provider: ref.slice(0, slash),
+    modelId: ref.slice(slash + 1),
+  };
+}
+
+function isLoopbackBaseUrl(raw: string | undefined): boolean {
+  if (!raw?.trim()) {
+    return false;
+  }
+  try {
+    const host = new URL(raw).hostname
+      .trim()
+      .toLowerCase()
+      .replace(/^\[|\]$/g, "");
+    return (
+      host === "localhost" ||
+      host === "::1" ||
+      host === "::ffff:127.0.0.1" ||
+      host === "127.0.0.1" ||
+      /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host)
+    );
+  } catch {
+    return false;
+  }
+}
+
+function hasLikelyLoopbackPrimaryModel(cfg: OpenClawConfig): boolean {
+  const modelRef = parseModelRef(cfg.agents?.defaults?.model);
+  if (!modelRef) {
+    return false;
+  }
+  const parsed = parseProviderModelRef(modelRef);
+  if (!parsed) {
+    return false;
+  }
+  const provider = cfg.models?.providers?.[parsed.provider];
+  if (!provider) {
+    return false;
+  }
+  if (isLoopbackBaseUrl(provider.baseUrl)) {
+    return true;
+  }
+  const model = provider.models?.find((entry) => entry.id === parsed.modelId);
+  return isLoopbackBaseUrl(model?.baseUrl);
+}
+
+function shouldWarnForLocalModelBootstrapPressure(
+  cfg: OpenClawConfig,
+  injectedChars: number,
+): boolean {
+  if (resolveBootstrapTier(cfg) === "minimal") {
+    return false;
+  }
+  return (
+    injectedChars >= LOCAL_MODEL_BOOTSTRAP_PRESSURE_THRESHOLD_CHARS &&
+    hasLikelyLoopbackPrimaryModel(cfg)
+  );
+}
+
 export async function noteBootstrapFileSize(cfg: OpenClawConfig) {
   const workspaceDir = resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
   const bootstrapMaxChars = resolveBootstrapMaxChars(cfg);
@@ -47,6 +130,24 @@ export async function noteBootstrapFileSize(cfg: OpenClawConfig) {
     bootstrapMaxChars,
     bootstrapTotalMaxChars,
   });
+  const shouldWarnLocalPressure =
+    !analysis.hasTruncation &&
+    analysis.nearLimitFiles.length === 0 &&
+    !analysis.totalNearLimit &&
+    shouldWarnForLocalModelBootstrapPressure(cfg, analysis.totals.injectedChars);
+  if (shouldWarnLocalPressure) {
+    note(
+      [
+        "Workspace bootstrap context is large for a loopback local model.",
+        `Total bootstrap injected chars: ${formatInt(analysis.totals.injectedChars)}.`,
+        "- Tip: set `agents.defaults.bootstrapTier` to `minimal` for constrained local-model sessions.",
+        "- Tip: also consider `agents.defaults.experimental.localModelLean: true` if the model still struggles with the full tool surface.",
+        "- See `docs/gateway/local-models.md` for local-model troubleshooting.",
+      ].join("\n"),
+      "Bootstrap prompt pressure",
+    );
+    return analysis;
+  }
   if (!analysis.hasTruncation && analysis.nearLimitFiles.length === 0 && !analysis.totalNearLimit) {
     return analysis;
   }
