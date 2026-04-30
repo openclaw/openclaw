@@ -63,6 +63,29 @@ gh auth login
 gh auth status
 ```
 
+### After installing `gh` or changing `PATH`
+
+OpenClaw checks skill binary requirements from the running gateway process. If
+you install the GitHub CLI or change `PATH` while OpenClaw is already running,
+restart the gateway so it re-checks available skill binaries before assuming the
+skill is broken.
+
+```bash
+# Restart the gateway/service so OpenClaw re-checks available skill binaries
+openclaw gateway restart
+
+# Confirm the gateway came back cleanly
+openclaw gateway status
+
+# Confirm GitHub CLI auth is still visible to the service user
+gh auth status
+```
+
+On Linux/systemd installs, `openclaw gateway status` also shows the service
+command and environment. If `gh` works in your shell but the skill still appears
+unavailable, make sure the gateway service user can find the same `gh` binary on
+`PATH`.
+
 ### When the gateway HOME differs from the operator HOME
 
 OpenClaw agent shells often run with a different `HOME` than the user that ran
@@ -150,13 +173,17 @@ gh api repos/owner/repo --jq '{stars: .stargazers_count, forks: .forks_count}'
 Most commands support `--json` for structured output with `--jq` filtering:
 
 ```bash
-gh issue list --repo owner/repo --json number,title --jq '.[] | "\(.number): \(.title)"'
-gh pr list --json number,title,state,mergeable --jq '.[] | select(.mergeable == "MERGEABLE")'
+gh issue list --repo owner/repo --json number,title \
+  --jq '.[] | "\(.number): \(.title)"'
+gh pr list --json number,title,state,mergeable \
+  --jq '.[] | select(.mergeable == "MERGEABLE")'
 ```
 
 ## Templates
 
 ### PR Review Summary
+
+<!-- markdownlint-disable MD013 -->
 
 ```bash
 # Get PR overview for review
@@ -167,13 +194,19 @@ gh pr view $PR --repo $REPO --json title,body,author,additions,deletions,changed
 gh pr checks $PR --repo $REPO
 ```
 
+<!-- markdownlint-enable MD013 -->
+
 ### Issue Triage
+
+<!-- markdownlint-disable MD013 -->
 
 ```bash
 # Quick issue triage view
 gh issue list --repo owner/repo --state open --json number,title,labels,createdAt \
   --jq '.[] | "[\(.number)] \(.title) - \([.labels[].name] | join(", ")) (\(.createdAt[:10]))"'
 ```
+
+<!-- markdownlint-enable MD013 -->
 
 ## Notes
 
