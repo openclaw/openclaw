@@ -95,6 +95,28 @@ export function prepareBundledPluginRuntimeRoot(params: {
   return prepareBundledPluginRuntimeLoadRoot(params);
 }
 
+function ensureBundledRuntimeLoadRootDeps(params: {
+  pluginId: string;
+  pluginRoot: string;
+  env: NodeJS.ProcessEnv;
+  config?: OpenClawConfig;
+  installMissingDeps?: boolean;
+  installDeps?: (params: BundledRuntimeDepsInstallParams) => void;
+  logInstalled?: (installedSpecs: readonly string[]) => void;
+}): void {
+  const depsInstallResult = ensureBundledPluginRuntimeDeps({
+    pluginId: params.pluginId,
+    pluginRoot: params.pluginRoot,
+    env: params.env,
+    config: params.config,
+    installMissingDeps: params.installMissingDeps,
+    installDeps: params.installDeps,
+  });
+  if (depsInstallResult.installedSpecs.length > 0) {
+    params.logInstalled?.(depsInstallResult.installedSpecs);
+  }
+}
+
 export function prepareBundledPluginRuntimeLoadRoot(params: {
   pluginId: string;
   pluginRoot: string;
@@ -116,6 +138,7 @@ export function prepareBundledPluginRuntimeLoadRoot(params: {
   const cacheKey = createPreparedRuntimeLoadRootKey({ ...params, env });
   const cached = params.memoizePreparedRoot ? preparedRuntimeLoadRoots.get(cacheKey) : undefined;
   if (cached) {
+    ensureBundledRuntimeLoadRootDeps({ ...params, env });
     registerBundledRuntimeLoadRootAliases({
       pluginRoot: params.pluginRoot,
       installRoot,
@@ -124,17 +147,7 @@ export function prepareBundledPluginRuntimeLoadRoot(params: {
     });
     return cached;
   }
-  const depsInstallResult = ensureBundledPluginRuntimeDeps({
-    pluginId: params.pluginId,
-    pluginRoot: params.pluginRoot,
-    env,
-    config: params.config,
-    installMissingDeps: params.installMissingDeps,
-    installDeps: params.installDeps,
-  });
-  if (depsInstallResult.installedSpecs.length > 0) {
-    params.logInstalled?.(depsInstallResult.installedSpecs);
-  }
+  ensureBundledRuntimeLoadRootDeps({ ...params, env });
   if (path.resolve(installRoot) === path.resolve(params.pluginRoot)) {
     registerBundledRuntimeLoadRootAliases({
       pluginRoot: params.pluginRoot,

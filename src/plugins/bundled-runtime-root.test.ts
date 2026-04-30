@@ -2,13 +2,20 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { resolveBundledRuntimeDependencyInstallRoot } from "./bundled-runtime-deps.js";
+import {
+  resolveBundledRuntimeDependencyInstallRoot,
+  type BundledRuntimeDepsInstallParams,
+} from "./bundled-runtime-deps.js";
 import { materializeBundledRuntimeMirrorFile } from "./bundled-runtime-mirror.js";
 import {
   clearPreparedBundledPluginRuntimeLoadRoots,
+  prepareBundledPluginRuntimeLoadRoot,
   prepareBundledPluginRuntimeRoot,
 } from "./bundled-runtime-root.js";
-import { writeGeneratedRuntimeDepsManifest } from "./test-helpers/bundled-runtime-deps-fixtures.js";
+import {
+  writeGeneratedRuntimeDepsManifest,
+  writeInstalledRuntimeDepPackage,
+} from "./test-helpers/bundled-runtime-deps-fixtures.js";
 
 const tempRoots: string[] = [];
 
@@ -627,6 +634,71 @@ describe("prepareBundledPluginRuntimeRoot", () => {
     expect(preparedAgain).toEqual(prepared);
     expect(reusedStat.mtimeMs).toBe(initialStat.mtimeMs);
     expect(fs.readFileSync(mirrorEntry, "utf8")).toContain("v1");
+  });
+
+  it("verifies runtime deps before returning a memoized prepared root", () => {
+    const packageRoot = makeTempRoot();
+    const stageDir = makeTempRoot();
+    const pluginRoot = path.join(packageRoot, "dist", "extensions", "whatsapp");
+    const env = { ...process.env, OPENCLAW_PLUGIN_STAGE_DIR: stageDir };
+    fs.mkdirSync(pluginRoot, { recursive: true });
+    fs.writeFileSync(
+      path.join(packageRoot, "package.json"),
+      JSON.stringify({ name: "openclaw", version: "2026.4.27", type: "module" }),
+      "utf8",
+    );
+    fs.writeFileSync(path.join(pluginRoot, "index.js"), "export const marker = 'v1';\n", "utf8");
+    fs.writeFileSync(
+      path.join(pluginRoot, "package.json"),
+      JSON.stringify(
+        {
+          name: "@openclaw/whatsapp",
+          version: "1.0.0",
+          type: "module",
+          dependencies: { "whatsapp-runtime": "1.0.0" },
+          openclaw: { extensions: ["./index.js"] },
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+    const installRoot = resolveBundledRuntimeDependencyInstallRoot(pluginRoot, { env });
+    const installDeps = vi.fn((installParams: BundledRuntimeDepsInstallParams) => {
+      const installSpecs = installParams.installSpecs ?? [];
+      for (const spec of installSpecs) {
+        const atIndex = spec.lastIndexOf("@");
+        writeInstalledRuntimeDepPackage(
+          installParams.installRoot,
+          spec.slice(0, atIndex),
+          spec.slice(atIndex + 1),
+        );
+      }
+      writeGeneratedRuntimeDepsManifest(installParams.installRoot, installSpecs);
+    });
+
+    const prepared = prepareBundledPluginRuntimeLoadRoot({
+      pluginId: "whatsapp",
+      pluginRoot,
+      modulePath: path.join(pluginRoot, "index.js"),
+      env,
+      installDeps,
+      memoizePreparedRoot: true,
+    });
+    fs.rmSync(path.join(installRoot, "node_modules"), { recursive: true, force: true });
+    fs.rmSync(path.join(installRoot, "package.json"), { force: true });
+
+    const preparedAgain = prepareBundledPluginRuntimeLoadRoot({
+      pluginId: "whatsapp",
+      pluginRoot,
+      modulePath: path.join(pluginRoot, "index.js"),
+      env,
+      installDeps,
+      memoizePreparedRoot: true,
+    });
+
+    expect(preparedAgain).toEqual(prepared);
+    expect(installDeps).toHaveBeenCalledTimes(2);
   });
 
   it("refreshes external runtime mirrors when source files change", async () => {

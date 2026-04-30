@@ -144,6 +144,9 @@ vi.mock("../infra/openclaw-root.js", () => ({
 }));
 
 vi.mock("../plugins/bundled-runtime-deps.js", () => ({
+  createBundledRuntimeDepsInstallSpecs: (params: {
+    deps: readonly { name: string; version: string }[];
+  }) => params.deps.map((dep) => `${dep.name}@${dep.version}`),
   pruneUnknownBundledRuntimeDepsRoots: (params: unknown) =>
     pruneUnknownBundledRuntimeDepsRoots(params),
   repairBundledRuntimeDepsInstallRootAsync: (params: unknown) =>
@@ -286,6 +289,11 @@ describe("prepareGatewayPluginBootstrap runtime-deps staging", () => {
       log,
     });
 
+    expect(scanBundledPluginRuntimeDeps).toHaveBeenCalledWith(
+      expect.objectContaining({
+        selectedPluginIds: ["telegram"],
+      }),
+    );
     expect(repairBundledRuntimeDepsInstallRootAsync).toHaveBeenCalledWith(
       expect.objectContaining({
         installRoot: "/runtime",

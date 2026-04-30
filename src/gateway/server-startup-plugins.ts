@@ -7,11 +7,11 @@ import { measureDiagnosticsTimelineSpan } from "../infra/diagnostics-timeline.js
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { registerBundledRuntimeDependencyJitiAliases } from "../plugins/bundled-runtime-deps-jiti-aliases.js";
 import {
+  createBundledRuntimeDepsInstallSpecs,
   pruneUnknownBundledRuntimeDepsRoots,
   repairBundledRuntimeDepsInstallRootAsync,
   resolveBundledRuntimeDependencyPackageInstallRoot,
   scanBundledPluginRuntimeDeps,
-  type RuntimeDepEntry,
 } from "../plugins/bundled-runtime-deps.js";
 import { prepareBundledPluginRuntimeLoadRoot } from "../plugins/bundled-runtime-root.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
@@ -30,14 +30,6 @@ type GatewayPluginBootstrapLog = {
   error: (message: string) => void;
   debug: (message: string) => void;
 };
-
-function createBundledRuntimeDepsInstallSpecs(params: {
-  deps: readonly RuntimeDepEntry[];
-}): string[] {
-  return params.deps
-    .map((dep) => `${dep.name}@${dep.version}`)
-    .toSorted((left, right) => left.localeCompare(right));
-}
 
 export function resolveGatewayStartupMaintenanceConfig(params: {
   cfgAtStart: OpenClawConfig;
@@ -90,7 +82,7 @@ async function prestageGatewayBundledRuntimeDepsImpl(params: {
       const scan = scanBundledPluginRuntimeDeps({
         packageRoot,
         config: params.cfg,
-        pluginIds: params.pluginIds,
+        selectedPluginIds: params.pluginIds,
         env: process.env,
       });
       const missingSpecs = createBundledRuntimeDepsInstallSpecs({ deps: scan.missing });
