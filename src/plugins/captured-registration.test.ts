@@ -108,9 +108,10 @@ describe("captured plugin registration", () => {
       sessionKey: "agent:main:main",
       message: "wake",
       name: "custom-turn",
+      delayMs: 1_000,
     });
 
-    expect(jobHandle.pluginId).toBe("custom-captured-plugin");
+    expect(jobHandle?.pluginId).toBe("custom-captured-plugin");
     expect(scheduledHandle?.pluginId).toBe("custom-captured-plugin");
   });
 });
