@@ -26,7 +26,7 @@ async function expectSameTargetRepliesSuppressed(params: { provider: string; to:
 }
 
 describe("buildReplyPayloads media filter integration", () => {
-  it("drops reasoning payloads before final channel delivery", async () => {
+  it("preserves reasoning payloads for channel-specific final lanes", async () => {
     const { replyPayloads } = await buildReplyPayloads({
       ...baseParams,
       payloads: [
@@ -35,9 +35,12 @@ describe("buildReplyPayloads media filter integration", () => {
       ],
     });
 
-    expect(replyPayloads).toHaveLength(1);
-    expect(replyPayloads[0]).toMatchObject({ text: "Visible answer" });
-    expect(replyPayloads[0]?.text).not.toContain("internal chain of thought");
+    expect(replyPayloads).toHaveLength(2);
+    expect(replyPayloads[0]).toMatchObject({
+      text: "Reasoning:\n_internal chain of thought_",
+      isReasoning: true,
+    });
+    expect(replyPayloads[1]).toMatchObject({ text: "Visible answer" });
   });
 
   it("strips media URL from payload when in messagingToolSentMediaUrls", async () => {

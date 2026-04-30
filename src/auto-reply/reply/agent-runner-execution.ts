@@ -1111,9 +1111,6 @@ export async function runAgentTurnWithFallback(params: {
   while (true) {
     try {
       const normalizeStreamingText = (payload: ReplyPayload): { text?: string; skip: boolean } => {
-        if (payload.isReasoning === true) {
-          return { skip: true };
-        }
         if (params.followupRun.run.silentExpected) {
           return { skip: true };
         }

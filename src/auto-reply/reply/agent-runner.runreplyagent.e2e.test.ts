@@ -373,7 +373,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
     expect(res).toBeUndefined();
   });
 
-  it("does not forward reasoning-marked streamed payloads as visible text", async () => {
+  it("preserves reasoning-marked streamed payloads for channel-specific lanes", async () => {
     const onBlockReply = vi.fn();
     const onToolResult = vi.fn();
     state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
@@ -388,9 +388,13 @@ describe("runReplyAgent typing (heartbeat)", () => {
     });
     const res = await run();
 
-    expect(onBlockReply).not.toHaveBeenCalled();
-    expect(onToolResult).not.toHaveBeenCalled();
-    expect(typing.startTypingOnText).not.toHaveBeenCalled();
+    expect(onBlockReply).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "Reasoning:\n_block_", isReasoning: true }),
+    );
+    expect(onToolResult).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "Reasoning:\n_tool_", isReasoning: true }),
+    );
+    expect(typing.startTypingOnText).toHaveBeenCalledWith("Reasoning:\n_block_");
     expect(res).toMatchObject({ text: "Visible final" });
   });
 
