@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { CURRENT_SESSION_VERSION, SessionManager } from "@mariozechner/pi-coding-agent";
+import { resolveAgentRuntimeMetadata } from "../../agents/agent-runtime-metadata.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import {
   abortEmbeddedPiRun,
@@ -63,6 +64,7 @@ import {
   validateSessionsResolveParams,
   validateSessionsSendParams,
 } from "../protocol/index.js";
+import { resolveSessionKeyForRun } from "../server-session-key.js";
 import {
   getSessionCompactionCheckpoint,
   listSessionCompactionCheckpoints,
@@ -79,6 +81,7 @@ import {
   resolveDeletedAgentIdFromSessionKey,
   resolveFreshestSessionEntryFromStoreKeys,
   resolveGatewaySessionStoreTarget,
+  resolveSessionDisplayModelIdentityRef,
   resolveSessionModelRef,
   resolveSessionTranscriptCandidates,
   type SessionsPatchResult,
@@ -88,6 +91,7 @@ import {
 } from "../session-utils.js";
 import { applySessionsPatchToStore } from "../sessions-patch.js";
 import { resolveSessionKeyFromResolveParams } from "../sessions-resolve.js";
+import { setGatewayDedupeEntry } from "./agent-wait-dedupe.js";
 import { chatHandlers } from "./chat.js";
 import type {
   GatewayClient,
@@ -101,10 +105,44 @@ import { assertValidParams } from "./validation.js";
 type SessionsRuntimeModule = typeof import("./sessions.runtime.js");
 
 let sessionsRuntimeModulePromise: Promise<SessionsRuntimeModule> | undefined;
+let loggedSlowSessionsListCatalog = false;
+
+const SESSIONS_LIST_MODEL_CATALOG_TIMEOUT_MS = 750;
 
 function loadSessionsRuntimeModule(): Promise<SessionsRuntimeModule> {
   sessionsRuntimeModulePromise ??= import("./sessions.runtime.js");
   return sessionsRuntimeModulePromise;
+}
+
+async function loadOptionalSessionsListModelCatalog(
+  context: GatewayRequestContext,
+): Promise<Awaited<ReturnType<GatewayRequestContext["loadGatewayModelCatalog"]>> | undefined> {
+  let timeout: NodeJS.Timeout | undefined;
+  const timedOut = Symbol("sessions-list-model-catalog-timeout");
+  const timeoutPromise = new Promise<typeof timedOut>((resolve) => {
+    timeout = setTimeout(() => resolve(timedOut), SESSIONS_LIST_MODEL_CATALOG_TIMEOUT_MS);
+    timeout.unref?.();
+  });
+  try {
+    const result = await Promise.race([
+      context.loadGatewayModelCatalog().catch(() => undefined),
+      timeoutPromise,
+    ]);
+    if (result === timedOut) {
+      if (!loggedSlowSessionsListCatalog) {
+        loggedSlowSessionsListCatalog = true;
+        context.logGateway.debug(
+          `sessions.list continuing without model catalog after ${SESSIONS_LIST_MODEL_CATALOG_TIMEOUT_MS}ms`,
+        );
+      }
+      return undefined;
+    }
+    return Array.isArray(result) ? result : undefined;
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
 }
 
 function requireSessionKey(key: unknown, respond: RespondFn): string | null {
@@ -611,8 +649,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     const p = params;
     const cfg = context.getRuntimeConfig();
     const { storePath, store } = loadCombinedSessionStoreForGateway(cfg);
-    const loadedCatalog = await context.loadGatewayModelCatalog().catch(() => undefined);
-    const modelCatalog = Array.isArray(loadedCatalog) ? loadedCatalog : undefined;
+    const modelCatalog = await loadOptionalSessionsListModelCatalog(context);
     const result = listSessionsFromStore({
       cfg,
       storePath,
@@ -1258,7 +1295,16 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
     const p = params;
-    const key = requireSessionKey(p.key, respond);
+    const requestedRunId = readStringValue(p.runId);
+    const keyCandidate =
+      p.key ??
+      (requestedRunId ? context.chatAbortControllers.get(requestedRunId)?.sessionKey : undefined) ??
+      (requestedRunId ? resolveSessionKeyForRun(requestedRunId) : undefined);
+    if (!keyCandidate && requestedRunId) {
+      respond(true, { ok: true, abortedRunId: null, status: "no-active-run" });
+      return;
+    }
+    const key = requireSessionKey(keyCandidate, respond);
     if (!key) {
       return;
     }
@@ -1267,14 +1313,27 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       context,
       requestedKey: key,
       canonicalKey,
-      runId: readStringValue(p.runId),
+      runId: requestedRunId,
     });
+    // Capture run kinds before the abort because abortChatRunById deletes entries
+    // from chatAbortControllers synchronously. We use this snapshot to choose the
+    // correct dedupe namespace: agent-kind runs use "agent:" (their runId equals
+    // their idempotency key), while chat-send runs use "chat:" so the abort
+    // snapshot does not collide with the agent RPC dedupe cache.
+    const preAbortRunKinds = new Map<string, "chat-send" | "agent" | undefined>();
+    if (requestedRunId) {
+      preAbortRunKinds.set(requestedRunId, context.chatAbortControllers.get(requestedRunId)?.kind);
+    } else {
+      for (const [rid, entry] of context.chatAbortControllers) {
+        preAbortRunKinds.set(rid, entry.kind);
+      }
+    }
     let abortedRunId: string | null = null;
     await chatHandlers["chat.abort"]({
       req,
       params: {
         sessionKey: abortSessionKey,
-        runId: readStringValue(p.runId),
+        runId: requestedRunId,
       },
       respond: (ok, payload, error, meta) => {
         if (!ok) {
@@ -1289,7 +1348,27 @@ export const sessionsHandlers: GatewayRequestHandlers = {
                 Boolean(normalizeOptionalString(value)),
               )
             : [];
-        abortedRunId = runIds[0] ?? null;
+        const firstAbortedRunId = runIds[0] ?? null;
+        abortedRunId = firstAbortedRunId;
+        if (firstAbortedRunId) {
+          const endedAt = Date.now();
+          const runKind = preAbortRunKinds.get(firstAbortedRunId);
+          const dedupePrefix = runKind === "agent" ? "agent" : "chat";
+          setGatewayDedupeEntry({
+            dedupe: context.dedupe,
+            key: `${dedupePrefix}:${firstAbortedRunId}`,
+            entry: {
+              ts: endedAt,
+              ok: true,
+              payload: {
+                status: "timeout",
+                runId: firstAbortedRunId,
+                stopReason: "rpc",
+                endedAt,
+              },
+            },
+          });
+        }
         respond(
           true,
           {
@@ -1364,14 +1443,22 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     const parsed = parseAgentSessionKey(target.canonicalKey ?? key);
     const agentId = normalizeAgentId(parsed?.agentId ?? resolveDefaultAgentId(cfg));
     const resolved = resolveSessionModelRef(cfg, applied.entry, agentId);
+    const resolvedDisplayModel = resolveSessionDisplayModelIdentityRef({
+      cfg,
+      agentId,
+      provider: resolved.provider,
+      model: resolved.model,
+    });
+    const agentRuntime = resolveAgentRuntimeMetadata(cfg, agentId);
     const result: SessionsPatchResult = {
       ok: true,
       path: storePath,
       key: target.canonicalKey,
       entry: applied.entry,
       resolved: {
-        modelProvider: resolved.provider,
-        model: resolved.model,
+        modelProvider: resolvedDisplayModel.provider,
+        model: resolvedDisplayModel.model,
+        agentRuntime,
       },
     };
     respond(true, result, undefined);

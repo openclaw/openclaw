@@ -9,6 +9,7 @@ import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/test-env";
 import { afterAll, afterEach, beforeAll, beforeEach, vi, type Mock } from "vitest";
 import type { WebChannelStatus } from "./auto-reply/types.js";
 import type { WebInboundMessage, WebListenerCloseReason } from "./inbound.js";
+import type { WhatsAppSendKind, WhatsAppSendResult } from "./inbound/send-result.js";
 import {
   resetBaileysMocks as _resetBaileysMocks,
   resetLoadConfigMock as _resetLoadConfigMock,
@@ -27,9 +28,9 @@ type MockWebListener = {
   close: () => Promise<void>;
   onClose: Promise<WebListenerCloseReason>;
   signalClose: () => void;
-  sendMessage: () => Promise<{ messageId: string }>;
-  sendPoll: () => Promise<{ messageId: string }>;
-  sendReaction: () => Promise<void>;
+  sendMessage: () => Promise<WhatsAppSendResult>;
+  sendPoll: () => Promise<WhatsAppSendResult>;
+  sendReaction: () => Promise<WhatsAppSendResult>;
   sendComposingTo: () => Promise<void>;
 };
 type UnknownMock = Mock<(...args: unknown[]) => unknown>;
@@ -45,8 +46,13 @@ type WebAutoReplyMonitorHarness = {
   run: Promise<unknown>;
 };
 type MockSessionSocket = {
-  ev: { on: ReturnType<typeof vi.fn>; off: ReturnType<typeof vi.fn> };
-  ws: EventEmitter & { close: ReturnType<typeof vi.fn> };
+  ev: {
+    on: ReturnType<typeof vi.fn>;
+    off: ReturnType<typeof vi.fn>;
+  };
+  ws: EventEmitter & {
+    close: ReturnType<typeof vi.fn>;
+  };
   user: { id: string };
 };
 
@@ -68,7 +74,7 @@ vi.mock("./session.js", async () => {
     createWaSocket: vi.fn(async () => {
       const ws = new EventEmitter() as MockSessionSocket["ws"];
       ws.close = vi.fn();
-      const sock: MockSessionSocket = {
+      const socket: MockSessionSocket = {
         ev: {
           on: vi.fn(),
           off: vi.fn(),
@@ -76,8 +82,8 @@ vi.mock("./session.js", async () => {
         ws,
         user: { id: "123@s.whatsapp.net" },
       };
-      getSessionSockets().push(sock);
-      return sock;
+      getSessionSockets().push(socket);
+      return socket;
     }),
     waitForWaConnection: vi.fn().mockResolvedValue(undefined),
   };
@@ -248,10 +254,23 @@ export function createMockWebListener(): MockWebListener {
     close: vi.fn(async () => undefined),
     onClose: new Promise<WebListenerCloseReason>(() => {}),
     signalClose: vi.fn(),
-    sendMessage: vi.fn(async () => ({ messageId: "msg-1" })),
-    sendPoll: vi.fn(async () => ({ messageId: "poll-1" })),
-    sendReaction: vi.fn(async () => undefined),
+    sendMessage: vi.fn(async () => createAcceptedWhatsAppSendResult("text", "msg-1")),
+    sendPoll: vi.fn(async () => createAcceptedWhatsAppSendResult("poll", "poll-1")),
+    sendReaction: vi.fn(async () => createAcceptedWhatsAppSendResult("reaction", "reaction-1")),
     sendComposingTo: vi.fn(async () => undefined),
+  };
+}
+
+export function createAcceptedWhatsAppSendResult(
+  kind: WhatsAppSendKind,
+  id: string,
+): WhatsAppSendResult {
+  return {
+    kind,
+    messageId: id,
+    messageIds: [id],
+    keys: [{ id }],
+    providerAccepted: true,
   };
 }
 
@@ -289,8 +308,8 @@ export function createScriptedWebListenerFactory(): AnyExport {
 
 export function createWebInboundDeliverySpies(): AnyExport {
   return {
-    sendMedia: vi.fn(),
-    reply: vi.fn().mockResolvedValue(undefined),
+    sendMedia: vi.fn().mockResolvedValue(createAcceptedWhatsAppSendResult("media", "m1")),
+    reply: vi.fn().mockResolvedValue(createAcceptedWhatsAppSendResult("text", "r1")),
     sendComposing: vi.fn(),
   };
 }
@@ -309,6 +328,7 @@ export function startWebAutoReplyMonitor(params: {
   sleep: UnknownMock | AsyncUnknownMock;
   signal?: AbortSignal;
   heartbeatSeconds?: number;
+  transportTimeoutMs?: number;
   messageTimeoutMs?: number;
   watchdogCheckMs?: number;
   reconnect?: { initialMs: number; maxMs: number; maxAttempts: number; factor: number };
@@ -326,6 +346,7 @@ export function startWebAutoReplyMonitor(params: {
     params.signal ?? controller.signal,
     {
       heartbeatSeconds: params.heartbeatSeconds ?? 1,
+      transportTimeoutMs: params.transportTimeoutMs,
       messageTimeoutMs: params.messageTimeoutMs,
       watchdogCheckMs: params.watchdogCheckMs,
       reconnect: params.reconnect ?? { initialMs: 10, maxMs: 10, maxAttempts: 3, factor: 1.1 },

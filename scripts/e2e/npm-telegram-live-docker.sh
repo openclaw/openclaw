@@ -89,7 +89,6 @@ if [ -z "$PACKAGE_LABEL" ]; then
 fi
 
 docker_e2e_build_or_reuse "$IMAGE_NAME" npm-telegram-live "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR" "$DOCKER_TARGET"
-docker_e2e_harness_mount_args
 
 mkdir -p "$ROOT_DIR/.artifacts/qa-e2e"
 run_log="$(mktemp "${TMPDIR:-/tmp}/openclaw-npm-telegram-live.XXXXXX")"
@@ -189,10 +188,9 @@ openclaw --version
 EOF
 
 # Mount only test harness/plugin QA sources; the SUT itself is the installed package candidate.
-run_logged docker run --rm \
+run_logged docker_e2e_run_with_harness \
   "${docker_env[@]}" \
   -v "$ROOT_DIR/.artifacts:/app/.artifacts" \
-  "${DOCKER_E2E_HARNESS_ARGS[@]}" \
   -v "$ROOT_DIR/extensions:/app/extensions:ro" \
   -v "$npm_prefix_host:/npm-global" \
   -i "$IMAGE_NAME" bash -s <<'EOF'
@@ -235,24 +233,9 @@ ln -sfnT /app/extensions "$openclaw_package_dir/extensions"
 mkdir -p /app/node_modules/@openclaw
 rm -rf /app/node_modules/@openclaw/qa-channel
 ln -sfnT /app/extensions/qa-channel /app/node_modules/@openclaw/qa-channel
-node --input-type=module <<'NODE'
-import fs from "node:fs";
-
-for (const packageJsonPath of [
-  "/app/package.json",
-  "/app/node_modules/openclaw/package.json",
-]) {
-  const pkg = JSON.parse(fs.readFileSync(packageJsonPath, "utf8"));
-  pkg.exports = pkg.exports && typeof pkg.exports === "object" ? pkg.exports : {};
-  if (!pkg.exports["./plugin-sdk/gateway-runtime"]) {
-    pkg.exports["./plugin-sdk/gateway-runtime"] = {
-      types: "./dist/plugin-sdk/gateway-runtime.d.ts",
-      default: "./dist/plugin-sdk/gateway-runtime.js",
-    };
-  }
-  fs.writeFileSync(packageJsonPath, `${JSON.stringify(pkg, null, 2)}\n`);
-}
-NODE
+node scripts/e2e/lib/npm-telegram-live/prepare-package.mjs \
+  /app/package.json \
+  /app/node_modules/openclaw/package.json
 for deps_dir in "$openclaw_package_dir/node_modules" /npm-global/lib/node_modules; do
   [ -d "$deps_dir" ] || continue
   for dependency_dir in "$deps_dir"/*; do

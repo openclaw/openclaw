@@ -120,10 +120,12 @@ async function applyLocalStatusRpcFallback(params: {
     password?: string;
   };
   timeoutMs: number;
+  timeoutMsExplicit: boolean;
 }): Promise<GatewayProbeResult | null> {
   if (!shouldTryLocalStatusRpcFallback(params)) {
     return params.gatewayProbe;
   }
+  const boundedFallbackTimeoutMs = Math.min(2000, Math.max(1000, params.timeoutMs));
   const status = await loadGatewayCallModule()
     .then(({ callGateway }) =>
       callGateway({
@@ -131,7 +133,9 @@ async function applyLocalStatusRpcFallback(params: {
         method: "status",
         token: params.gatewayProbeAuth.token,
         password: params.gatewayProbeAuth.password,
-        timeoutMs: Math.min(2000, Math.max(1000, params.timeoutMs)),
+        timeoutMs: params.timeoutMsExplicit
+          ? boundedFallbackTimeoutMs
+          : Math.max(params.cfg.gateway?.handshakeTimeoutMs ?? 0, boundedFallbackTimeoutMs),
         mode: GATEWAY_CLIENT_MODES.BACKEND,
         clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
       }),
@@ -206,13 +210,19 @@ export async function resolveGatewayProbeSnapshot(params: {
       )
     : { auth: {}, warning: undefined };
   let gatewayProbeAuthWarning = gatewayProbeAuthResolution.warning;
-  const probeTimeoutMs = Math.min(params.opts.all ? 5000 : 2500, params.opts.timeoutMs ?? 10_000);
+  const defaultProbeTimeoutMs = Math.max(
+    params.opts.all ? 5000 : 2500,
+    params.cfg.gateway?.handshakeTimeoutMs ?? 0,
+  );
+  const timeoutMsExplicit = params.opts.timeoutMs !== undefined;
+  const probeTimeoutMs = params.opts.timeoutMs ?? defaultProbeTimeoutMs;
   const initialGatewayProbe = shouldProbe
     ? await loadProbeGatewayModule()
         .then(({ probeGateway }) =>
           probeGateway({
             url: gatewayConnection.url,
             auth: gatewayProbeAuthResolution.auth,
+            preauthHandshakeTimeoutMs: params.cfg.gateway?.handshakeTimeoutMs,
             timeoutMs: probeTimeoutMs,
             detailLevel: params.opts.detailLevel ?? "presence",
           }),
@@ -226,6 +236,7 @@ export async function resolveGatewayProbeSnapshot(params: {
     gatewayProbe: initialGatewayProbe,
     gatewayProbeAuth: gatewayProbeAuthResolution.auth,
     timeoutMs: probeTimeoutMs,
+    timeoutMsExplicit,
   });
   if (
     (params.opts.mergeAuthWarningIntoProbeError ?? true) &&

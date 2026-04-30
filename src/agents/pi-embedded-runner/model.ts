@@ -11,7 +11,6 @@ import {
   applyProviderResolvedModelCompatWithPlugins,
   applyProviderResolvedTransportWithPlugin,
   buildProviderUnknownModelHintWithPlugin,
-  clearProviderRuntimeHookCache,
   normalizeProviderTransportWithPlugin,
   prepareProviderDynamicModel,
   runProviderDynamicModel,
@@ -26,6 +25,7 @@ import { findNormalizedProviderValue, normalizeProviderId } from "../model-selec
 import {
   buildSuppressedBuiltInModelError,
   shouldSuppressBuiltInModel,
+  shouldUnconditionallySuppress,
 } from "../model-suppression.js";
 import { isLegacyModelsAddCodexMetadataModel } from "../openai-codex-models-add-legacy.js";
 import { discoverAuthStorage, discoverModels } from "../pi-model-discovery.js";
@@ -53,7 +53,6 @@ type ProviderRuntimeHooks = {
   buildProviderUnknownModelHintWithPlugin: (
     params: Parameters<typeof buildProviderUnknownModelHintWithPlugin>[0],
   ) => string | undefined;
-  clearProviderRuntimeHookCache: () => void;
   prepareProviderDynamicModel: (
     params: Parameters<typeof prepareProviderDynamicModel>[0],
   ) => Promise<void>;
@@ -69,15 +68,23 @@ type ProviderRuntimeHooks = {
   ) => unknown;
 };
 
-const DEFAULT_PROVIDER_RUNTIME_HOOKS: ProviderRuntimeHooks = {
-  applyProviderResolvedModelCompatWithPlugins,
-  applyProviderResolvedTransportWithPlugin,
+const TARGET_PROVIDER_RUNTIME_HOOKS: ProviderRuntimeHooks = {
   buildProviderUnknownModelHintWithPlugin,
-  clearProviderRuntimeHookCache,
   prepareProviderDynamicModel,
   runProviderDynamicModel,
   shouldPreferProviderRuntimeResolvedModel,
   normalizeProviderResolvedModelWithPlugin,
+  // Target-provider resolution keeps owner hooks, but avoids broad
+  // cross-provider hooks that can load unrelated bundled provider runtimes.
+  applyProviderResolvedModelCompatWithPlugins: () => undefined,
+  applyProviderResolvedTransportWithPlugin: () => undefined,
+  normalizeProviderTransportWithPlugin: () => undefined,
+};
+
+const DEFAULT_PROVIDER_RUNTIME_HOOKS: ProviderRuntimeHooks = {
+  ...TARGET_PROVIDER_RUNTIME_HOOKS,
+  applyProviderResolvedModelCompatWithPlugins,
+  applyProviderResolvedTransportWithPlugin,
   normalizeProviderTransportWithPlugin,
 };
 
@@ -85,11 +92,15 @@ const STATIC_PROVIDER_RUNTIME_HOOKS: ProviderRuntimeHooks = {
   applyProviderResolvedModelCompatWithPlugins: () => undefined,
   applyProviderResolvedTransportWithPlugin: () => undefined,
   buildProviderUnknownModelHintWithPlugin: () => undefined,
-  clearProviderRuntimeHookCache: () => {},
   prepareProviderDynamicModel: async () => {},
   runProviderDynamicModel: () => undefined,
   normalizeProviderResolvedModelWithPlugin: () => undefined,
   normalizeProviderTransportWithPlugin: () => undefined,
+};
+
+const SKIP_PI_DISCOVERY_PROVIDER_RUNTIME_HOOKS: ProviderRuntimeHooks = {
+  // skipPiDiscovery is the lean path used before PI discovery/models.json has run.
+  ...TARGET_PROVIDER_RUNTIME_HOOKS,
 };
 
 function createEmptyPiDiscoveryStores(): {
@@ -110,11 +121,18 @@ function createEmptyPiDiscoveryStores(): {
 function resolveRuntimeHooks(params?: {
   runtimeHooks?: ProviderRuntimeHooks;
   skipProviderRuntimeHooks?: boolean;
+  skipPiDiscovery?: boolean;
 }): ProviderRuntimeHooks {
   if (params?.skipProviderRuntimeHooks) {
     return STATIC_PROVIDER_RUNTIME_HOOKS;
   }
-  return params?.runtimeHooks ?? DEFAULT_PROVIDER_RUNTIME_HOOKS;
+  if (params?.runtimeHooks) {
+    return params.runtimeHooks;
+  }
+  if (params?.skipPiDiscovery) {
+    return SKIP_PI_DISCOVERY_PROVIDER_RUNTIME_HOOKS;
+  }
+  return DEFAULT_PROVIDER_RUNTIME_HOOKS;
 }
 
 function canonicalizeLegacyResolvedModel(params: {
@@ -597,6 +615,14 @@ function resolveExplicitModelWithRegistry(params: {
     modelId,
   });
   if (inlineMatch?.api) {
+    // Unconditional suppressions (no `when` clause) represent absolute provider
+    // capability blocks that cannot be overridden by inline user configuration.
+    // Conditional suppressions (e.g. baseUrlHosts-gated qwen restrictions) are
+    // intentionally bypassable when the user has explicitly configured the model.
+    // (#74451)
+    if (shouldUnconditionallySuppress({ provider, id: modelId, config: cfg })) {
+      return { kind: "suppressed" };
+    }
     const resolvedParams = mergeConfiguredRuntimeModelParams({
       cfg,
       provider,
@@ -1020,10 +1046,7 @@ export async function resolveModelAsync(
     };
   }
   const providerConfig = resolveConfiguredProviderConfig(cfg, normalizedRef.provider);
-  const resolveDynamicAttempt = async (attemptOptions?: { clearHookCache?: boolean }) => {
-    if (attemptOptions?.clearHookCache) {
-      runtimeHooks.clearProviderRuntimeHookCache();
-    }
+  const resolveDynamicAttempt = async () => {
     await runtimeHooks.prepareProviderDynamicModel({
       provider: normalizedRef.provider,
       config: cfg,
@@ -1058,9 +1081,9 @@ export async function resolveModelAsync(
       : await resolveDynamicAttempt();
   if (!model && !explicitModel && options?.retryTransientProviderRuntimeMiss) {
     // Startup can race the first provider-runtime snapshot load on a fresh
-    // gateway boot. Retry once with a cleared hook cache before surfacing a
-    // user-visible "Unknown model" that disappears on the next message.
-    model = await resolveDynamicAttempt({ clearHookCache: true });
+    // gateway boot. Retry once before surfacing a user-visible "Unknown model"
+    // that disappears on the next message.
+    model = await resolveDynamicAttempt();
   }
   if (model) {
     return { model, authStorage, modelRegistry };

@@ -68,6 +68,7 @@ function createTaskRegistryMaintenanceHarness(params: {
   const currentTasks = new Map(params.tasks.map((task) => [task.taskId, { ...task }]));
 
   const runtime: TaskRegistryMaintenanceRuntime = {
+    listAcpSessionEntries: async () => [],
     readAcpSessionEntry: () =>
       acpEntry !== undefined
         ? ({

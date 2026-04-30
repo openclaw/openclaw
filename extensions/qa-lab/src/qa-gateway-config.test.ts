@@ -109,6 +109,22 @@ describe("buildQaGatewayConfig", () => {
     expect(cfg.plugins?.allow).toEqual(["acpx", "memory-core"]);
   });
 
+  it("falls back to provider defaults for blank model refs", () => {
+    const cfg = buildQaGatewayConfig({
+      bind: "loopback",
+      gatewayPort: 18789,
+      gatewayToken: "token",
+      providerBaseUrl: "http://127.0.0.1:44080/v1",
+      workspaceDir: "/tmp/qa-workspace",
+      providerMode: "mock-openai",
+      primaryModel: " ",
+      alternateModel: "",
+    });
+
+    expect(getPrimaryModel(cfg.agents?.defaults?.model)).toBe("mock-openai/gpt-5.5");
+    expect(cfg.agents?.defaults?.models).toHaveProperty("mock-openai/gpt-5.5-alt");
+  });
+
   it("can wire AIMock as a separate mock provider lane", () => {
     const cfg = buildQaGatewayConfig({
       bind: "loopback",

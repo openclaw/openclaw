@@ -245,6 +245,40 @@ Compatibility notes for stricter OpenAI-compatible backends:
   openclaw config set agents.defaults.models '{"local/my-local-model":{"params":{"extra_body":{"tool_choice":"required"}}}}' --strict-json --merge
   ```
 
+- If a custom OpenAI-compatible model accepts OpenAI reasoning efforts beyond
+  the built-in profile, declare them on the model compat block. Adding `"xhigh"`
+  here makes `/think xhigh`, session pickers, Gateway validation, and `llm-task`
+  validation expose the level for that configured provider/model ref:
+
+  ```json5
+  {
+    models: {
+      providers: {
+        local: {
+          baseUrl: "http://127.0.0.1:8000/v1",
+          apiKey: "sk-local",
+          api: "openai-responses",
+          models: [
+            {
+              id: "gpt-5.4",
+              name: "GPT 5.4 via local proxy",
+              reasoning: true,
+              input: ["text"],
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              contextWindow: 196608,
+              maxTokens: 8192,
+              compat: {
+                supportedReasoningEfforts: ["low", "medium", "high", "xhigh"],
+                reasoningEffortMap: { xhigh: "xhigh" },
+              },
+            },
+          ],
+        },
+      },
+    },
+  }
+  ```
+
 - Some smaller or stricter local backends are unstable with OpenClaw's full
   agent-runtime prompt shape, especially when tool schemas are included. First
   verify the provider path with the lean local probe:
@@ -285,7 +319,7 @@ Compatibility notes for stricter OpenAI-compatible backends:
   OpenClaw process RSS/heap snapshot in diagnostics. For LM Studio/Ollama
   memory pressure, match that timestamp against the server log or macOS crash /
   jetsam log to confirm whether the model server was killed.
-- OpenClaw warns when the detected context window is below **32k** and blocks below **16k**. If you hit that preflight, raise the server/model context limit or choose a larger model.
+- OpenClaw derives context-window preflight thresholds from the detected model window, or from the uncapped model window when `agents.defaults.contextTokens` lowers the effective window. It warns below 20% with an **8k** floor. Hard blocks use the 10% threshold with a **4k** floor, capped to the effective context window so oversized model metadata cannot reject an otherwise valid user cap. If you hit that preflight, raise the server/model context limit or choose a larger model.
 - Context errors? Lower `contextWindow` or raise your server limit.
 - OpenAI-compatible server returns `messages[].content ... expected a string`?
   Add `compat.requiresStringContent: true` on that model entry.

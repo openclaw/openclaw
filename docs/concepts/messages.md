@@ -124,9 +124,20 @@ If a run is already active, inbound messages can be queued, steered into the
 current run, or collected for a followup turn.
 
 - Configure via `messages.queue` (and `messages.queue.byChannel`).
-- Modes: `interrupt`, `steer`, `followup`, `collect`, plus backlog variants.
+- Default mode is `steer`, with a 500ms followup debounce when steering falls
+  back to queued followup delivery.
+- Modes: `steer`, `followup`, `collect`, `steer-backlog`, `interrupt`, and the
+  legacy one-at-a-time `queue` mode.
 
-Details: [Queueing](/concepts/queue).
+Details: [Command queue](/concepts/queue) and [Steering queue](/concepts/queue-steering).
+
+## Channel run ownership
+
+Channel plugins may preserve ordering, debounce input, and apply transport
+backpressure before a message enters the session queue. They should not impose a
+separate timeout around the agent turn itself. Once a message is routed to a
+session, long-running work is governed by the session, tool, and runtime
+lifecycle so all channels report and recover from slow turns consistently.
 
 ## Streaming, chunking, and batching
 

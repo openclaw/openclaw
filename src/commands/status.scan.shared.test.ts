@@ -238,6 +238,91 @@ describe("resolveGatewayProbeSnapshot", () => {
     expect(result.gatewayProbeAuthWarning).toBe("warn");
   });
 
+  it("keeps the local status RPC fallback timeout aligned with configured handshake timeout", async () => {
+    mocks.resolveGatewayProbeTarget.mockReturnValue({
+      mode: "local",
+      gatewayMode: "local",
+      remoteUrlMissing: false,
+    });
+    mocks.probeGateway.mockResolvedValue({
+      ok: false,
+      url: "ws://127.0.0.1:18789",
+      connectLatencyMs: null,
+      error: "timeout",
+      close: null,
+      auth: {
+        role: null,
+        scopes: [],
+        capability: "unknown",
+      },
+      health: null,
+      status: null,
+      presence: null,
+      configSnapshot: null,
+    });
+    mocks.callGateway.mockResolvedValue({ sessions: 1 });
+
+    await resolveGatewayProbeSnapshot({
+      cfg: { gateway: { handshakeTimeoutMs: 30_000 } },
+      opts: {},
+    });
+
+    expect(mocks.probeGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        preauthHandshakeTimeoutMs: 30_000,
+        timeoutMs: 30_000,
+      }),
+    );
+    expect(mocks.callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: { gateway: { handshakeTimeoutMs: 30_000 } },
+        timeoutMs: 30_000,
+      }),
+    );
+  });
+
+  it("does not raise an explicit local status RPC fallback timeout", async () => {
+    mocks.resolveGatewayProbeTarget.mockReturnValue({
+      mode: "local",
+      gatewayMode: "local",
+      remoteUrlMissing: false,
+    });
+    mocks.probeGateway.mockResolvedValue({
+      ok: false,
+      url: "ws://127.0.0.1:18789",
+      connectLatencyMs: null,
+      error: "timeout",
+      close: null,
+      auth: {
+        role: null,
+        scopes: [],
+        capability: "unknown",
+      },
+      health: null,
+      status: null,
+      presence: null,
+      configSnapshot: null,
+    });
+    mocks.callGateway.mockResolvedValue({ sessions: 1 });
+
+    await resolveGatewayProbeSnapshot({
+      cfg: { gateway: { handshakeTimeoutMs: 30_000 } },
+      opts: { timeoutMs: 1000 },
+    });
+
+    expect(mocks.probeGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        preauthHandshakeTimeoutMs: 30_000,
+        timeoutMs: 1000,
+      }),
+    );
+    expect(mocks.callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        timeoutMs: 1000,
+      }),
+    );
+  });
+
   it("lets callGateway reuse paired-device auth for local status RPC fallback", async () => {
     mocks.resolveGatewayProbeTarget.mockReturnValue({
       mode: "local",

@@ -16,6 +16,9 @@ const loadGatewayStartupPlugins = vi.hoisted(() =>
     gatewayMethods: ["ping"],
   })),
 );
+const pruneUnknownBundledRuntimeDepsRoots = vi.hoisted(() =>
+  vi.fn((_params: unknown) => ({ scanned: 0, removed: 0, skippedLocked: 0 })),
+);
 const repairBundledRuntimeDepsInstallRootAsync = vi.hoisted(() =>
   vi.fn(async (_params: unknown) => ({})),
 );
@@ -120,6 +123,8 @@ vi.mock("../infra/openclaw-root.js", () => ({
 }));
 
 vi.mock("../plugins/bundled-runtime-deps.js", () => ({
+  pruneUnknownBundledRuntimeDepsRoots: (params: unknown) =>
+    pruneUnknownBundledRuntimeDepsRoots(params),
   repairBundledRuntimeDepsInstallRootAsync: (params: unknown) =>
     repairBundledRuntimeDepsInstallRootAsync(params),
   resolveBundledRuntimeDependencyPackageInstallRoot: (packageRoot: string, params: unknown) =>
@@ -170,6 +175,11 @@ describe("prepareGatewayPluginBootstrap runtime-deps staging", () => {
     applyPluginAutoEnable.mockClear();
     initSubagentRegistry.mockClear();
     loadGatewayStartupPlugins.mockClear();
+    pruneUnknownBundledRuntimeDepsRoots.mockClear().mockReturnValue({
+      scanned: 0,
+      removed: 0,
+      skippedLocked: 0,
+    });
     repairBundledRuntimeDepsInstallRootAsync.mockReset().mockResolvedValue({});
     resolveBundledRuntimeDependencyPackageInstallRoot.mockClear();
     loadPluginLookUpTable.mockClear().mockReturnValue({
@@ -235,7 +245,7 @@ describe("prepareGatewayPluginBootstrap runtime-deps staging", () => {
     );
   });
 
-  it("pre-stages only missing runtime deps while retaining the full startup dependency set", async () => {
+  it("pre-stages the full startup dependency set", async () => {
     scanBundledPluginRuntimeDeps.mockReturnValueOnce({
       deps: [
         { name: "alpha-runtime", version: "1.0.0", pluginIds: ["telegram"] },
@@ -257,7 +267,7 @@ describe("prepareGatewayPluginBootstrap runtime-deps staging", () => {
     expect(repairBundledRuntimeDepsInstallRootAsync).toHaveBeenCalledWith(
       expect.objectContaining({
         installRoot: "/runtime",
-        missingSpecs: ["grammy@1.37.0"],
+        missingSpecs: ["alpha-runtime@1.0.0", "grammy@1.37.0"],
         installSpecs: ["alpha-runtime@1.0.0", "grammy@1.37.0"],
       }),
     );

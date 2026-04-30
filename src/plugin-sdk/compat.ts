@@ -1,5 +1,8 @@
-// Legacy compat surface for external plugins that still depend on older
-// broad plugin-sdk imports. Keep this file intentionally small.
+/**
+ * @deprecated Legacy compat surface for external plugins that still depend on
+ * older broad plugin-sdk imports. Use focused openclaw/plugin-sdk subpaths
+ * instead.
+ */
 
 const shouldWarnCompatImport =
   process.env.VITEST !== "true" &&

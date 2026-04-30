@@ -385,6 +385,7 @@ public struct AgentEvent: Codable, Sendable {
     public let seq: Int
     public let stream: String
     public let ts: Int
+    public let spawnedby: String?
     public let data: [String: AnyCodable]
 
     public init(
@@ -392,12 +393,14 @@ public struct AgentEvent: Codable, Sendable {
         seq: Int,
         stream: String,
         ts: Int,
+        spawnedby: String?,
         data: [String: AnyCodable])
     {
         self.runid = runid
         self.seq = seq
         self.stream = stream
         self.ts = ts
+        self.spawnedby = spawnedby
         self.data = data
     }
 
@@ -406,6 +409,7 @@ public struct AgentEvent: Codable, Sendable {
         case seq
         case stream
         case ts
+        case spawnedby = "spawnedBy"
         case data
     }
 }
@@ -1847,11 +1851,11 @@ public struct SessionsMessagesUnsubscribeParams: Codable, Sendable {
 }
 
 public struct SessionsAbortParams: Codable, Sendable {
-    public let key: String
+    public let key: String?
     public let runid: String?
 
     public init(
-        key: String,
+        key: String?,
         runid: String?)
     {
         self.key = key
@@ -2866,19 +2870,22 @@ public struct AgentSummary: Codable, Sendable {
     public let identity: [String: AnyCodable]?
     public let workspace: String?
     public let model: [String: AnyCodable]?
+    public let agentruntime: [String: AnyCodable]?
 
     public init(
         id: String,
         name: String?,
         identity: [String: AnyCodable]?,
         workspace: String?,
-        model: [String: AnyCodable]?)
+        model: [String: AnyCodable]?,
+        agentruntime: [String: AnyCodable]?)
     {
         self.id = id
         self.name = name
         self.identity = identity
         self.workspace = workspace
         self.model = model
+        self.agentruntime = agentruntime
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -2887,6 +2894,7 @@ public struct AgentSummary: Codable, Sendable {
         case identity
         case workspace
         case model
+        case agentruntime = "agentRuntime"
     }
 }
 
@@ -4195,6 +4203,7 @@ public struct ExecApprovalRequestParams: Codable, Sendable {
     public let host: AnyCodable?
     public let security: AnyCodable?
     public let ask: AnyCodable?
+    public let warningtext: AnyCodable?
     public let agentid: AnyCodable?
     public let resolvedpath: AnyCodable?
     public let sessionkey: AnyCodable?
@@ -4216,6 +4225,7 @@ public struct ExecApprovalRequestParams: Codable, Sendable {
         host: AnyCodable?,
         security: AnyCodable?,
         ask: AnyCodable?,
+        warningtext: AnyCodable?,
         agentid: AnyCodable?,
         resolvedpath: AnyCodable?,
         sessionkey: AnyCodable?,
@@ -4236,6 +4246,7 @@ public struct ExecApprovalRequestParams: Codable, Sendable {
         self.host = host
         self.security = security
         self.ask = ask
+        self.warningtext = warningtext
         self.agentid = agentid
         self.resolvedpath = resolvedpath
         self.sessionkey = sessionkey
@@ -4258,6 +4269,7 @@ public struct ExecApprovalRequestParams: Codable, Sendable {
         case host
         case security
         case ask
+        case warningtext = "warningText"
         case agentid = "agentId"
         case resolvedpath = "resolvedPath"
         case sessionkey = "sessionKey"
@@ -4745,6 +4757,7 @@ public struct ChatInjectParams: Codable, Sendable {
 public struct ChatEvent: Codable, Sendable {
     public let runid: String
     public let sessionkey: String
+    public let spawnedby: String?
     public let seq: Int
     public let state: AnyCodable
     public let message: AnyCodable?
@@ -4756,6 +4769,7 @@ public struct ChatEvent: Codable, Sendable {
     public init(
         runid: String,
         sessionkey: String,
+        spawnedby: String?,
         seq: Int,
         state: AnyCodable,
         message: AnyCodable?,
@@ -4766,6 +4780,7 @@ public struct ChatEvent: Codable, Sendable {
     {
         self.runid = runid
         self.sessionkey = sessionkey
+        self.spawnedby = spawnedby
         self.seq = seq
         self.state = state
         self.message = message
@@ -4778,6 +4793,7 @@ public struct ChatEvent: Codable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case runid = "runId"
         case sessionkey = "sessionKey"
+        case spawnedby = "spawnedBy"
         case seq
         case state
         case message
