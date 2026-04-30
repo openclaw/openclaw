@@ -11,6 +11,17 @@ function makeFile(name: string, missing = false): WorkspaceBootstrapFile {
     path: `/workspace/${name}`,
     content: "test",
     missing,
+    source: "root",
+  };
+}
+
+function makeHookFile(name: string, relPath: string): WorkspaceBootstrapFile {
+  return {
+    name: name as WorkspaceBootstrapFile["name"],
+    path: `/workspace/${relPath}`,
+    content: "extra",
+    missing: false,
+    source: "hook",
   };
 }
 
@@ -120,5 +131,23 @@ describe("filterBootstrapFilesForSession", () => {
     const full = filterBootstrapFilesForSession(ALL_FILES, MAIN_KEY, "full");
     expect(full.length).toBeGreaterThan(standard.length);
     expect(full.length - standard.length).toBe(EXTRA_FILES.length);
+  });
+
+  it("standard tier excludes hook-sourced files even when basename matches the root allowlist", () => {
+    // Regression: previously the standard-tier filter matched only on basename,
+    // so an extra like `packages/core/AGENTS.md` slipped through alongside the
+    // root AGENTS.md and rendered standard indistinguishable from full.
+    const rootAgents = makeFile("AGENTS.md");
+    const hookAgents = makeHookFile("AGENTS.md", "packages/core/AGENTS.md");
+    const hookSoul = makeHookFile("SOUL.md", "packages/persona/SOUL.md");
+    const files = [rootAgents, hookAgents, hookSoul];
+
+    const standard = filterBootstrapFilesForSession(files, MAIN_KEY, "standard");
+    expect(standard).toHaveLength(1);
+    expect(standard[0]?.path).toBe("/workspace/AGENTS.md");
+    expect(standard[0]?.source).toBe("root");
+
+    const full = filterBootstrapFilesForSession(files, MAIN_KEY, "full");
+    expect(full).toHaveLength(3);
   });
 });
