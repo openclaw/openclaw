@@ -407,6 +407,21 @@ export class NodeRegistry {
       return false;
     }
     this.activeMcpSessions.delete(params.sessionId);
+    const pending = this.pendingMcpOpens.get(params.sessionId);
+    if (pending && pending.nodeId === params.nodeId) {
+      clearTimeout(pending.timer);
+      this.pendingMcpOpens.delete(params.sessionId);
+      pending.resolve({
+        sessionId: params.sessionId,
+        nodeId: params.nodeId,
+        serverId: pending.serverId,
+        ok: false,
+        error: {
+          code: "CLIENT_CLOSED",
+          message: "node MCP session closed before open completed",
+        },
+      });
+    }
     return this.sendEvent(params.nodeId, "node.mcp.session.close", params);
   }
 

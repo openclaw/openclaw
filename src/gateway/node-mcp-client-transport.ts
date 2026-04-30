@@ -44,6 +44,9 @@ export class NodeMcpClientTransport implements Transport {
       onOutput: (chunk) => this.handleOutput(chunk),
       onClosed: (closed) => this.handleClosed(closed),
     });
+    if (this.closed) {
+      throw new Error("NodeMcpClientTransport is closed");
+    }
     if (!result.ok) {
       const message = result.error?.message ?? "failed to open node MCP session";
       throw new Error(message);
@@ -73,13 +76,11 @@ export class NodeMcpClientTransport implements Transport {
     }
     this.closed = true;
     this.readBuffer.clear();
-    if (this.started) {
-      this.registry.closeMcpSession({
-        nodeId: this.options.nodeId,
-        sessionId: this.nodeMcpSessionId,
-        reason: "client_close",
-      });
-    }
+    this.registry.closeMcpSession({
+      nodeId: this.options.nodeId,
+      sessionId: this.nodeMcpSessionId,
+      reason: "client_close",
+    });
     this.onclose?.();
   }
 

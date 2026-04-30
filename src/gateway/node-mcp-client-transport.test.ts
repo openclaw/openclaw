@@ -165,6 +165,65 @@ describe("NodeMcpClientTransport", () => {
     expect(sent).toEqual([]);
   });
 
+  it("closes pending open sessions when the caller closes before start resolves", async () => {
+    const registry = new NodeRegistry();
+    const { client, sent } = createNodeClient({
+      mcpServers: [{ id: "computer-use", status: "ready" }],
+    });
+    registry.register(client, {});
+    const transport = new NodeMcpClientTransport(registry, {
+      nodeId: "mac-node",
+      serverId: "computer-use",
+      sessionId: "session-opening",
+      openTimeoutMs: 1000,
+    });
+    const onclose = vi.fn();
+    assignTransportHandlers(transport, { onclose });
+
+    const start = transport.start();
+    expect(sent).toEqual([
+      {
+        event: "node.mcp.session.open",
+        payload: {
+          sessionId: "session-opening",
+          nodeId: "mac-node",
+          serverId: "computer-use",
+          timeoutMs: 1000,
+        },
+      },
+    ]);
+
+    await transport.close();
+
+    expect(sent.at(-1)).toEqual({
+      event: "node.mcp.session.close",
+      payload: {
+        sessionId: "session-opening",
+        nodeId: "mac-node",
+        reason: "client_close",
+      },
+    });
+    await expect(start).rejects.toThrow("NodeMcpClientTransport is closed");
+    expect(onclose).toHaveBeenCalledTimes(1);
+    expect(
+      registry.handleMcpSessionOpenResult({
+        sessionId: "session-opening",
+        nodeId: "mac-node",
+        serverId: "computer-use",
+        ok: true,
+      }),
+    ).toBe(false);
+    expect(
+      registry.handleMcpSessionOutput({
+        sessionId: "session-opening",
+        nodeId: "mac-node",
+        seq: 0,
+        stream: "stdout",
+        dataBase64: Buffer.from('{"jsonrpc":"2.0","method":"stale"}\n').toString("base64"),
+      }),
+    ).toBe(false);
+  });
+
   it("rejects advertised MCP servers that are not ready", async () => {
     const registry = new NodeRegistry();
     const { client, sent } = createNodeClient({
