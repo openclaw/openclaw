@@ -48,6 +48,11 @@ describe("live tool probe utils", () => {
         expected: true,
       },
       {
+        name: "detects tool authorization refusals",
+        text: "Before proceeding, I must confirm: are you authorizing me to execute the read tool with the provided arguments?",
+        expected: true,
+      },
+      {
         name: "ignores generic helper text",
         text: "I can help with that request.",
         expected: false,
@@ -264,6 +269,28 @@ describe("live tool probe utils", () => {
           text: "Let me try reading the file again:",
           nonce: "nonce-c",
           provider: "zai",
+          attempt: 0,
+          maxAttempts: 3,
+        },
+        expected: true,
+      },
+      {
+        name: "retries eventual-consistency exec readback output",
+        params: {
+          text: "The file creation command succeeded, but the file wasn't found immediately after. Let me verify the file exists and read it again.",
+          nonce: "nonce-c",
+          provider: "mistral",
+          attempt: 0,
+          maxAttempts: 3,
+        },
+        expected: true,
+      },
+      {
+        name: "retries file-not-found exec readback wording",
+        params: {
+          text: "The `exec` command ran successfully, but the file read failed because the file was not found. Let me verify the file creation and read it again.",
+          nonce: "nonce-c",
+          provider: "mistral",
           attempt: 0,
           maxAttempts: 3,
         },

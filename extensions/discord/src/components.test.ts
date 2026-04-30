@@ -1,5 +1,5 @@
 import { MessageFlags } from "discord-api-types/v10";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 let clearDiscordComponentEntries: typeof import("./components-registry.js").clearDiscordComponentEntries;
 let registerDiscordComponentEntries: typeof import("./components-registry.js").registerDiscordComponentEntries;
@@ -9,8 +9,7 @@ let buildDiscordComponentMessage: typeof import("./components.js").buildDiscordC
 let buildDiscordComponentMessageFlags: typeof import("./components.js").buildDiscordComponentMessageFlags;
 let readDiscordComponentSpec: typeof import("./components.js").readDiscordComponentSpec;
 
-beforeEach(async () => {
-  vi.resetModules();
+beforeAll(async () => {
   ({
     clearDiscordComponentEntries,
     registerDiscordComponentEntries,

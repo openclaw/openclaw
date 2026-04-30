@@ -1,16 +1,23 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 let collectTelegramUnmentionedGroupIds: typeof import("./audit.js").collectTelegramUnmentionedGroupIds;
 let auditTelegramGroupMembership: typeof import("./audit.js").auditTelegramGroupMembership;
 const fetchWithTimeoutMock = vi.hoisted(() => vi.fn());
+const resolveTelegramFetchMock = vi.hoisted(() => vi.fn(() => fetchWithTimeoutMock));
+const resolveTelegramApiBaseMock = vi.hoisted(() => vi.fn(() => "https://api.telegram.org"));
 
-vi.mock("openclaw/plugin-sdk/text-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/text-runtime")>();
-  return {
-    ...actual,
-    fetchWithTimeout: fetchWithTimeoutMock,
-  };
-});
+vi.mock("openclaw/plugin-sdk/text-runtime", () => ({
+  fetchWithTimeout: fetchWithTimeoutMock,
+  isRecord: (value: unknown): value is Record<string, unknown> =>
+    typeof value === "object" && value !== null,
+  normalizeOptionalString: (value: unknown) => {
+    if (typeof value !== "string") {
+      return undefined;
+    }
+    const trimmed = value.trim();
+    return trimmed ? trimmed : undefined;
+  },
+}));
 
 function mockGetChatMemberStatus(status: string) {
   fetchWithTimeoutMock.mockResolvedValueOnce(
@@ -31,11 +38,19 @@ async function auditSingleGroup() {
 }
 
 describe("telegram audit", () => {
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeAll(async () => {
+    vi.doMock("./fetch.js", () => ({
+      resolveTelegramApiBase: resolveTelegramApiBaseMock,
+      resolveTelegramFetch: resolveTelegramFetchMock,
+    }));
     ({ collectTelegramUnmentionedGroupIds, auditTelegramGroupMembership } =
       await import("./audit.js"));
+  });
+
+  beforeEach(() => {
     fetchWithTimeoutMock.mockReset();
+    resolveTelegramFetchMock.mockClear();
+    resolveTelegramApiBaseMock.mockClear();
   });
 
   it("collects unmentioned numeric group ids and flags wildcard", async () => {
@@ -57,6 +72,7 @@ describe("telegram audit", () => {
     expect(res.ok).toBe(true);
     expect(res.groups[0]?.chatId).toBe("-1001");
     expect(res.groups[0]?.status).toBe("member");
+    expect(resolveTelegramFetchMock).toHaveBeenCalled();
   });
 
   it("reports bot not in group when status is left", async () => {

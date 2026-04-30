@@ -1,22 +1,32 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { resolveNextcloudTalkRoomKind, __testing } from "./room-info.js";
 
-const fetchWithSsrFGuard = vi.fn();
-const readFileSync = vi.fn();
+const fetchWithSsrFGuard = vi.hoisted(() => vi.fn());
+const readFileSync = vi.hoisted(() => vi.fn());
 
-vi.mock("../runtime-api.js", () => ({
-  fetchWithSsrFGuard,
-}));
+vi.mock("../runtime-api.js", () => {
+  return vi
+    .importActual<typeof import("../runtime-api.js")>("../runtime-api.js")
+    .then((actual) => ({
+      ...actual,
+      fetchWithSsrFGuard,
+    }));
+});
 
-vi.mock("node:fs", () => ({
-  readFileSync,
-}));
+vi.mock("node:fs", () => {
+  return vi.importActual<typeof import("node:fs")>("node:fs").then((actual) => ({
+    ...actual,
+    readFileSync,
+  }));
+});
+
+afterEach(() => {
+  fetchWithSsrFGuard.mockReset();
+  readFileSync.mockReset();
+  __testing.resetRoomCache();
+});
 
 describe("nextcloud talk room info", () => {
-  afterEach(() => {
-    fetchWithSsrFGuard.mockReset();
-    readFileSync.mockReset();
-  });
-
   it("resolves direct rooms from the room info endpoint", async () => {
     const release = vi.fn(async () => {});
     fetchWithSsrFGuard.mockResolvedValue({
@@ -33,7 +43,6 @@ describe("nextcloud talk room info", () => {
       release,
     });
 
-    const { resolveNextcloudTalkRoomKind } = await import("./room-info.js");
     const kind = await resolveNextcloudTalkRoomKind({
       account: {
         accountId: "acct-direct",
@@ -56,7 +65,7 @@ describe("nextcloud talk room info", () => {
     expect(release).toHaveBeenCalledTimes(1);
   });
 
-  it("reads the api password from a file and logs non-ok responses", async () => {
+  it("reads the api password from a file and logs non-ok room info responses", async () => {
     const release = vi.fn(async () => {});
     const log = vi.fn();
     const error = vi.fn();
@@ -71,7 +80,6 @@ describe("nextcloud talk room info", () => {
       release,
     });
 
-    const { resolveNextcloudTalkRoomKind } = await import("./room-info.js");
     const kind = await resolveNextcloudTalkRoomKind({
       account: {
         accountId: "acct-group",
@@ -91,9 +99,7 @@ describe("nextcloud talk room info", () => {
     expect(release).toHaveBeenCalledTimes(1);
   });
 
-  it("returns undefined without credentials or base url", async () => {
-    const { resolveNextcloudTalkRoomKind } = await import("./room-info.js");
-
+  it("returns undefined from room info without credentials or base url", async () => {
     await expect(
       resolveNextcloudTalkRoomKind({
         account: {

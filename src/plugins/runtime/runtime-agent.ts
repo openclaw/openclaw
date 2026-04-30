@@ -1,37 +1,33 @@
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../agents/defaults.js";
 import { resolveAgentIdentity } from "../../agents/identity.js";
-import { resolveThinkingDefault } from "../../agents/model-selection.js";
+import {
+  buildConfiguredModelCatalog,
+  resolveThinkingDefault,
+} from "../../agents/model-selection.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { ensureAgentWorkspace } from "../../agents/workspace.js";
+import { normalizeThinkLevel, resolveThinkingProfile } from "../../auto-reply/thinking.js";
+import { getRuntimeConfig } from "../../config/config.js";
 import { resolveSessionFilePath, resolveStorePath } from "../../config/sessions/paths.js";
 import { loadSessionStore, saveSessionStore } from "../../config/sessions/store.js";
 import { createLazyRuntimeMethod, createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
+import { defineCachedValue } from "./runtime-cache.js";
 import type { PluginRuntime } from "./types.js";
-
-function defineCachedValue<T extends object, K extends PropertyKey>(
-  target: T,
-  key: K,
-  create: () => unknown,
-): void {
-  let cached: unknown;
-  let ready = false;
-  Object.defineProperty(target, key, {
-    configurable: true,
-    enumerable: true,
-    get() {
-      if (!ready) {
-        cached = create();
-        ready = true;
-      }
-      return cached;
-    },
-  });
-}
 
 const loadEmbeddedPiRuntime = createLazyRuntimeModule(
   () => import("./runtime-embedded-pi.runtime.js"),
 );
+
+function resolveRuntimeThinkingCatalog(
+  params: Parameters<PluginRuntime["agent"]["resolveThinkingPolicy"]>[0],
+) {
+  if (params.catalog) {
+    return params.catalog;
+  }
+  const configuredCatalog = buildConfiguredModelCatalog({ cfg: getRuntimeConfig() });
+  return configuredCatalog.length > 0 ? configuredCatalog : undefined;
+}
 
 export function createRuntimeAgent(): PluginRuntime["agent"] {
   const agentRuntime = {
@@ -43,11 +39,28 @@ export function createRuntimeAgent(): PluginRuntime["agent"] {
     resolveAgentWorkspaceDir,
     resolveAgentIdentity,
     resolveThinkingDefault,
+    normalizeThinkingLevel: normalizeThinkLevel,
+    resolveThinkingPolicy: (params) => {
+      const profile = resolveThinkingProfile({
+        ...params,
+        catalog: resolveRuntimeThinkingCatalog(params),
+      });
+      const policy: Omit<
+        ReturnType<PluginRuntime["agent"]["resolveThinkingPolicy"]>,
+        "defaultLevel"
+      > = {
+        levels: profile.levels.map(({ id, label }) => ({ id, label })),
+      };
+      return profile.defaultLevel ? { ...policy, defaultLevel: profile.defaultLevel } : policy;
+    },
     resolveAgentTimeoutMs,
     ensureAgentWorkspace,
-  } satisfies Omit<PluginRuntime["agent"], "runEmbeddedPiAgent" | "session"> &
-    Partial<Pick<PluginRuntime["agent"], "runEmbeddedPiAgent" | "session">>;
+  } satisfies Omit<PluginRuntime["agent"], "runEmbeddedAgent" | "runEmbeddedPiAgent" | "session"> &
+    Partial<Pick<PluginRuntime["agent"], "runEmbeddedAgent" | "runEmbeddedPiAgent" | "session">>;
 
+  defineCachedValue(agentRuntime, "runEmbeddedAgent", () =>
+    createLazyRuntimeMethod(loadEmbeddedPiRuntime, (runtime) => runtime.runEmbeddedAgent),
+  );
   defineCachedValue(agentRuntime, "runEmbeddedPiAgent", () =>
     createLazyRuntimeMethod(loadEmbeddedPiRuntime, (runtime) => runtime.runEmbeddedPiAgent),
   );

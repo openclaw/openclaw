@@ -1,4 +1,5 @@
 import { html, nothing } from "lit";
+import { t } from "../../i18n/index.ts";
 import type {
   AgentIdentityResult,
   AgentsFilesListResult,
@@ -10,11 +11,12 @@ import {
   normalizeModelValue,
   parseFallbackList,
   resolveAgentConfig,
+  resolveAgentRuntimeLabel,
   resolveModelFallbacks,
   resolveModelLabel,
   resolveModelPrimary,
 } from "./agents-utils.ts";
-import type { AgentsPanel } from "./agents.ts";
+import type { AgentsPanel } from "./agents.types.ts";
 
 export function renderAgentOverview(params: {
   agent: AgentsListResult["agents"][number];
@@ -48,25 +50,38 @@ export function renderAgentOverview(params: {
     onModelFallbacksChange,
     onSelectPanel,
   } = params;
+  const isDefault = Boolean(params.defaultId && agent.id === params.defaultId);
   const config = resolveAgentConfig(configForm, agent.id);
+  const agentModel = agent.model;
   const workspaceFromFiles =
     agentFilesList && agentFilesList.agentId === agent.id ? agentFilesList.workspace : null;
   const workspace =
-    workspaceFromFiles || config.entry?.workspace || config.defaults?.workspace || "default";
+    workspaceFromFiles ||
+    config.entry?.workspace ||
+    config.defaults?.workspace ||
+    agent.workspace ||
+    "default";
   const model = config.entry?.model
     ? resolveModelLabel(config.entry?.model)
-    : resolveModelLabel(config.defaults?.model);
-  const defaultModel = resolveModelLabel(config.defaults?.model);
+    : config.defaults?.model
+      ? resolveModelLabel(config.defaults?.model)
+      : resolveModelLabel(agentModel);
+  const runtime = resolveAgentRuntimeLabel(agent.agentRuntime);
+  const defaultModel = resolveModelLabel(config.defaults?.model ?? agentModel);
   const entryPrimary = resolveModelPrimary(config.entry?.model);
   const defaultPrimary =
     resolveModelPrimary(config.defaults?.model) ||
-    (defaultModel !== "-" ? normalizeModelValue(defaultModel) : null);
+    (defaultModel !== "-" ? normalizeModelValue(defaultModel) : null) ||
+    (configForm ? null : resolveModelPrimary(agentModel));
   const effectivePrimary = entryPrimary ?? defaultPrimary ?? null;
-  const modelFallbacks = resolveModelFallbacks(config.entry?.model);
+  const selectedPrimary = isDefault ? effectivePrimary : entryPrimary;
+  const modelFallbacks =
+    resolveModelFallbacks(config.entry?.model) ??
+    resolveModelFallbacks(config.defaults?.model) ??
+    (configForm ? null : resolveModelFallbacks(agentModel));
   const fallbackChips = modelFallbacks ?? [];
   const skillFilter = Array.isArray(config.entry?.skills) ? config.entry?.skills : null;
   const skillCount = skillFilter?.length ?? null;
-  const isDefault = Boolean(params.defaultId && agent.id === params.defaultId);
   const disabled = !configForm || configLoading || configSaving;
 
   const removeChip = (index: number) => {
@@ -100,7 +115,9 @@ export function renderAgentOverview(params: {
               class="workspace-link mono"
               @click=${() => onSelectPanel("files")}
               title="Open Files tab"
-            >${workspace}</button>
+            >
+              ${workspace}
+            </button>
           </div>
         </div>
         <div class="agent-kv">
@@ -108,18 +125,22 @@ export function renderAgentOverview(params: {
           <div class="mono">${model}</div>
         </div>
         <div class="agent-kv">
+          <div class="label">Runtime</div>
+          <div class="mono">${runtime}</div>
+        </div>
+        <div class="agent-kv">
           <div class="label">Skills Filter</div>
           <div>${skillFilter ? `${skillCount} selected` : "all skills"}</div>
         </div>
       </div>
 
-      ${
-        configDirty
-          ? html`
-              <div class="callout warn" style="margin-top: 16px">You have unsaved config changes.</div>
-            `
-          : nothing
-      }
+      ${configDirty
+        ? html`
+            <div class="callout warn" style="margin-top: 16px">
+              You have unsaved config changes.
+            </div>
+          `
+        : nothing}
 
       <div class="agent-model-select" style="margin-top: 20px;">
         <div class="label">Model Selection</div>
@@ -127,34 +148,38 @@ export function renderAgentOverview(params: {
           <label class="field">
             <span>Primary model${isDefault ? " (default)" : ""}</span>
             <select
-              .value=${isDefault ? (effectivePrimary ?? "") : (entryPrimary ?? "")}
+              .value=${selectedPrimary ?? ""}
               ?disabled=${disabled}
               @change=${(e: Event) =>
                 onModelChange(agent.id, (e.target as HTMLSelectElement).value || null)}
             >
-              ${
-                isDefault
-                  ? html`
-                      <option value="">Not set</option>
-                    `
-                  : html`
-                      <option value="">
-                        ${defaultPrimary ? `Inherit default (${defaultPrimary})` : "Inherit default"}
-                      </option>
-                    `
-              }
-              ${buildModelOptions(configForm, effectivePrimary ?? undefined, params.modelCatalog)}
+              ${isDefault
+                ? html` <option value="" ?selected=${!selectedPrimary}>Not set</option> `
+                : html`
+                    <option value="" ?selected=${!selectedPrimary}>
+                      ${defaultPrimary ? `Inherit default (${defaultPrimary})` : "Inherit default"}
+                    </option>
+                  `}
+              ${buildModelOptions(
+                configForm,
+                effectivePrimary ?? undefined,
+                params.modelCatalog,
+                selectedPrimary,
+              )}
             </select>
           </label>
           <div class="field">
             <span>Fallbacks</span>
-            <div class="agent-chip-input" @click=${(e: Event) => {
-              const container = e.currentTarget as HTMLElement;
-              const input = container.querySelector("input");
-              if (input) {
-                input.focus();
-              }
-            }}>
+            <div
+              class="agent-chip-input"
+              @click=${(e: Event) => {
+                const container = e.currentTarget as HTMLElement;
+                const input = container.querySelector("input");
+                if (input) {
+                  input.focus();
+                }
+              }}
+            >
               ${fallbackChips.map(
                 (chip, i) => html`
                   <span class="chip">
@@ -164,7 +189,9 @@ export function renderAgentOverview(params: {
                       class="chip-remove"
                       ?disabled=${disabled}
                       @click=${() => removeChip(i)}
-                    >&times;</button>
+                    >
+                      &times;
+                    </button>
                   </span>
                 `,
               )}
@@ -185,8 +212,13 @@ export function renderAgentOverview(params: {
           </div>
         </div>
         <div class="agent-model-actions">
-          <button type="button" class="btn btn--sm" ?disabled=${configLoading} @click=${onConfigReload}>
-            Reload Config
+          <button
+            type="button"
+            class="btn btn--sm"
+            ?disabled=${configLoading}
+            @click=${onConfigReload}
+          >
+            ${t("common.reloadConfig")}
           </button>
           <button
             type="button"

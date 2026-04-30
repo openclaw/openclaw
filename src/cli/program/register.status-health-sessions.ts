@@ -1,8 +1,19 @@
 import type { Command } from "commander";
+import { commitmentsDismissCommand, commitmentsListCommand } from "../../commands/commitments.js";
+import { exportTrajectoryCommand } from "../../commands/export-trajectory.js";
+import { flowsCancelCommand, flowsListCommand, flowsShowCommand } from "../../commands/flows.js";
 import { healthCommand } from "../../commands/health.js";
 import { sessionsCleanupCommand } from "../../commands/sessions-cleanup.js";
 import { sessionsCommand } from "../../commands/sessions.js";
 import { statusCommand } from "../../commands/status.js";
+import {
+  tasksAuditCommand,
+  tasksCancelCommand,
+  tasksListCommand,
+  tasksMaintenanceCommand,
+  tasksNotifyCommand,
+  tasksShowCommand,
+} from "../../commands/tasks.js";
 import { setVerbose } from "../../globals.js";
 import { defaultRuntime } from "../../runtime.js";
 import { formatDocsLink } from "../../terminal/links.js";
@@ -208,6 +219,327 @@ export function registerStatusHealthSessionsCommands(program: Command) {
             fixMissing: Boolean(opts.fixMissing),
             activeKey: opts.activeKey as string | undefined,
             json: Boolean(opts.json || parentOpts?.json),
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
+  sessionsCmd
+    .command("export-trajectory")
+    .description("Export a redacted trajectory bundle for a stored session")
+    .option("--session-key <key>", "Session key to export")
+    .option("--output <path>", "Output directory name inside .openclaw/trajectory-exports")
+    .option("--workspace <path>", "Workspace root for the export (default: current directory)")
+    .option("--store <path>", "Path to session store (default: resolved from session key)")
+    .option("--agent <id>", "Agent id for resolving the default session store")
+    .option("--request-json-base64 <payload>", "Base64url-encoded export request")
+    .option("--json", "Output JSON", false)
+    .action(async (opts, command) => {
+      const parentOpts = command.parent?.opts() as
+        | {
+            store?: string;
+            agent?: string;
+            json?: boolean;
+          }
+        | undefined;
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        await exportTrajectoryCommand(
+          {
+            sessionKey: opts.sessionKey as string | undefined,
+            output: opts.output as string | undefined,
+            workspace: opts.workspace as string | undefined,
+            store: (opts.store as string | undefined) ?? parentOpts?.store,
+            agent: (opts.agent as string | undefined) ?? parentOpts?.agent,
+            requestJsonBase64: opts.requestJsonBase64 as string | undefined,
+            json: Boolean(opts.json || parentOpts?.json),
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
+  const commitmentsCmd = program
+    .command("commitments")
+    .description("List and manage inferred follow-up commitments")
+    .option("--json", "Output JSON instead of text", false)
+    .option("--agent <id>", "Agent id to inspect")
+    .option("--status <status>", "Filter by status (pending, sent, dismissed, snoozed, expired)")
+    .option("--all", "Show all statuses", false)
+    .addHelpText(
+      "after",
+      () =>
+        `\n${theme.heading("Examples:")}\n${formatHelpExamples([
+          ["openclaw commitments", "List pending inferred follow-ups."],
+          ["openclaw commitments --all", "List all inferred follow-ups."],
+          ["openclaw commitments --agent work", "List one agent's inferred follow-ups."],
+          ["openclaw commitments dismiss cm_abc123", "Dismiss a follow-up."],
+        ])}`,
+    )
+    .action(async (opts) => {
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        await commitmentsListCommand(
+          {
+            json: Boolean(opts.json),
+            agent: opts.agent as string | undefined,
+            status: opts.status as string | undefined,
+            all: Boolean(opts.all),
+          },
+          defaultRuntime,
+        );
+      });
+    });
+  commitmentsCmd.enablePositionalOptions();
+
+  commitmentsCmd
+    .command("list")
+    .description("List inferred follow-up commitments")
+    .option("--json", "Output JSON instead of text", false)
+    .option("--agent <id>", "Agent id to inspect")
+    .option("--status <status>", "Filter by status (pending, sent, dismissed, snoozed, expired)")
+    .option("--all", "Show all statuses", false)
+    .action(async (opts, command) => {
+      const parentOpts = command.parent?.opts() as
+        | { json?: boolean; agent?: string; status?: string; all?: boolean }
+        | undefined;
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        await commitmentsListCommand(
+          {
+            json: Boolean(opts.json || parentOpts?.json),
+            agent: (opts.agent as string | undefined) ?? parentOpts?.agent,
+            status: (opts.status as string | undefined) ?? parentOpts?.status,
+            all: Boolean(opts.all || parentOpts?.all),
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
+  commitmentsCmd
+    .command("dismiss <ids...>")
+    .description("Dismiss inferred follow-up commitments")
+    .option("--json", "Output JSON instead of text", false)
+    .action(async (ids: string[], opts, command) => {
+      const parentOpts = command.parent?.opts() as { json?: boolean } | undefined;
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        await commitmentsDismissCommand(
+          {
+            ids,
+            json: Boolean(opts.json || parentOpts?.json),
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
+  const tasksCmd = program
+    .command("tasks")
+    .description("Inspect durable background tasks and TaskFlow state")
+    .option("--json", "Output as JSON", false)
+    .option("--runtime <name>", "Filter by kind (subagent, acp, cron, cli)")
+    .option(
+      "--status <name>",
+      "Filter by status (queued, running, succeeded, failed, timed_out, cancelled, lost)",
+    )
+    .action(async (opts) => {
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        await tasksListCommand(
+          {
+            json: Boolean(opts.json),
+            runtime: opts.runtime as string | undefined,
+            status: opts.status as string | undefined,
+          },
+          defaultRuntime,
+        );
+      });
+    });
+  tasksCmd.enablePositionalOptions();
+
+  tasksCmd
+    .command("list")
+    .description("List tracked background tasks")
+    .option("--json", "Output as JSON", false)
+    .option("--runtime <name>", "Filter by kind (subagent, acp, cron, cli)")
+    .option(
+      "--status <name>",
+      "Filter by status (queued, running, succeeded, failed, timed_out, cancelled, lost)",
+    )
+    .action(async (opts, command) => {
+      const parentOpts = command.parent?.opts() as
+        | {
+            json?: boolean;
+            runtime?: string;
+            status?: string;
+          }
+        | undefined;
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        await tasksListCommand(
+          {
+            json: Boolean(opts.json || parentOpts?.json),
+            runtime: (opts.runtime as string | undefined) ?? parentOpts?.runtime,
+            status: (opts.status as string | undefined) ?? parentOpts?.status,
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
+  tasksCmd
+    .command("audit")
+    .description("Show stale or broken background tasks and TaskFlows")
+    .option("--json", "Output as JSON", false)
+    .option("--severity <level>", "Filter by severity (warn, error)")
+    .option(
+      "--code <name>",
+      "Filter by finding code (stale_queued, stale_running, lost, delivery_failed, missing_cleanup, inconsistent_timestamps, restore_failed, stale_waiting, stale_blocked, cancel_stuck, missing_linked_tasks, blocked_task_missing)",
+    )
+    .option("--limit <n>", "Limit displayed findings")
+    .action(async (opts, command) => {
+      const parentOpts = command.parent?.opts() as { json?: boolean } | undefined;
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        await tasksAuditCommand(
+          {
+            json: Boolean(opts.json || parentOpts?.json),
+            severity: opts.severity as "warn" | "error" | undefined,
+            code: opts.code as
+              | "stale_queued"
+              | "stale_running"
+              | "lost"
+              | "delivery_failed"
+              | "missing_cleanup"
+              | "inconsistent_timestamps"
+              | "restore_failed"
+              | "stale_waiting"
+              | "stale_blocked"
+              | "cancel_stuck"
+              | "missing_linked_tasks"
+              | "blocked_task_missing"
+              | undefined,
+            limit: parsePositiveIntOrUndefined(opts.limit),
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
+  tasksCmd
+    .command("maintenance")
+    .description("Preview or apply tasks and TaskFlow maintenance")
+    .option("--json", "Output as JSON", false)
+    .option("--apply", "Apply reconciliation, cleanup stamping, and pruning", false)
+    .action(async (opts, command) => {
+      const parentOpts = command.parent?.opts() as { json?: boolean } | undefined;
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        await tasksMaintenanceCommand(
+          {
+            json: Boolean(opts.json || parentOpts?.json),
+            apply: Boolean(opts.apply),
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
+  tasksCmd
+    .command("show")
+    .description("Show one background task by task id, run id, or session key")
+    .argument("<lookup>", "Task id, run id, or session key")
+    .option("--json", "Output as JSON", false)
+    .action(async (lookup, opts, command) => {
+      const parentOpts = command.parent?.opts() as { json?: boolean } | undefined;
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        await tasksShowCommand(
+          {
+            lookup,
+            json: Boolean(opts.json || parentOpts?.json),
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
+  tasksCmd
+    .command("notify")
+    .description("Set task notify policy")
+    .argument("<lookup>", "Task id, run id, or session key")
+    .argument("<notify>", "Notify policy (done_only, state_changes, silent)")
+    .action(async (lookup, notify) => {
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        await tasksNotifyCommand(
+          {
+            lookup,
+            notify: notify as "done_only" | "state_changes" | "silent",
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
+  tasksCmd
+    .command("cancel")
+    .description("Cancel a running background task")
+    .argument("<lookup>", "Task id, run id, or session key")
+    .action(async (lookup) => {
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        await tasksCancelCommand(
+          {
+            lookup,
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
+  const tasksFlowCmd = tasksCmd
+    .command("flow")
+    .description("Inspect durable TaskFlow state under tasks");
+
+  tasksFlowCmd
+    .command("list")
+    .description("List tracked TaskFlows")
+    .option("--json", "Output as JSON", false)
+    .option(
+      "--status <name>",
+      "Filter by status (queued, running, waiting, blocked, succeeded, failed, cancelled, lost)",
+    )
+    .action(async (opts) => {
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        await flowsListCommand(
+          {
+            json: Boolean(opts.json),
+            status: opts.status as string | undefined,
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
+  tasksFlowCmd
+    .command("show")
+    .description("Show one TaskFlow by flow id or owner key")
+    .argument("<lookup>", "Flow id or owner key")
+    .option("--json", "Output as JSON", false)
+    .action(async (lookup, opts) => {
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        await flowsShowCommand(
+          {
+            lookup,
+            json: Boolean(opts.json),
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
+  tasksFlowCmd
+    .command("cancel")
+    .description("Cancel a running TaskFlow")
+    .argument("<lookup>", "Flow id or owner key")
+    .action(async (lookup) => {
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        await flowsCancelCommand(
+          {
+            lookup,
           },
           defaultRuntime,
         );

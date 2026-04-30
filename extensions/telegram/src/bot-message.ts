@@ -1,5 +1,5 @@
-import type { ReplyToMode } from "openclaw/plugin-sdk/config-runtime";
-import type { TelegramAccountConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { ReplyToMode } from "openclaw/plugin-sdk/config-types";
+import type { TelegramAccountConfig } from "openclaw/plugin-sdk/config-types";
 import { danger, logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import type { TelegramBotDeps } from "./bot-deps.js";
@@ -10,7 +10,8 @@ import {
 } from "./bot-message-context.js";
 import type { TelegramMessageContextOptions } from "./bot-message-context.types.js";
 import { dispatchTelegramMessage } from "./bot-message-dispatch.js";
-import type { TelegramBotOptions } from "./bot.js";
+import type { TelegramBotOptions } from "./bot.types.js";
+import { buildTelegramThreadParams } from "./bot/helpers.js";
 import type { TelegramContext, TelegramStreamMode } from "./bot/types.js";
 
 /** Dependencies injected once when creating the message processor. */
@@ -94,7 +95,7 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
       if (ingressDebugEnabled && ingressReceivedAtMs && ingressContextStartMs) {
         logVerbose(
           `telegram ingress: chatId=${primaryCtx.message.chat.id} dropped after ${Date.now() - ingressReceivedAtMs}ms` +
-            `${options?.ingressBuffer ? ` buffer=${options.ingressBuffer}` : ""}`,
+            (options?.ingressBuffer ? ` buffer=${options.ingressBuffer}` : ""),
         );
       }
       return;
@@ -103,9 +104,12 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
       logVerbose(
         `telegram ingress: chatId=${context.chatId} contextReadyMs=${Date.now() - ingressReceivedAtMs}` +
           ` preDispatchMs=${Date.now() - ingressContextStartMs}` +
-          `${options?.ingressBuffer ? ` buffer=${options.ingressBuffer}` : ""}`,
+          (options?.ingressBuffer ? ` buffer=${options.ingressBuffer}` : ""),
       );
     }
+    void context.sendTyping().catch((err) => {
+      logVerbose(`telegram early typing cue failed for chat ${context.chatId}: ${String(err)}`);
+    });
     try {
       await dispatchTelegramMessage({
         context,
@@ -122,7 +126,7 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
       if (ingressDebugEnabled && ingressReceivedAtMs) {
         logVerbose(
           `telegram ingress: chatId=${context.chatId} dispatchCompleteMs=${Date.now() - ingressReceivedAtMs}` +
-            `${options?.ingressBuffer ? ` buffer=${options.ingressBuffer}` : ""}`,
+            (options?.ingressBuffer ? ` buffer=${options.ingressBuffer}` : ""),
         );
       }
     } catch (err) {
@@ -131,7 +135,7 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
         await bot.api.sendMessage(
           context.chatId,
           "Something went wrong while processing your request. Please try again.",
-          context.threadSpec?.id != null ? { message_thread_id: context.threadSpec.id } : undefined,
+          buildTelegramThreadParams(context.threadSpec),
         );
       } catch {
         // Best-effort fallback; delivery may fail if the bot was blocked or the chat is invalid.

@@ -1,5 +1,5 @@
-import CoreImage
 import Combine
+import CoreImage
 import OpenClawKit
 import PhotosUI
 import SwiftUI
@@ -69,6 +69,7 @@ struct OnboardingWizardView: View {
     @State private var showQRScanner: Bool = false
     @State private var scannerError: String?
     @State private var selectedPhoto: PhotosPickerItem?
+    @State private var showGatewayProblemDetails: Bool = false
     @State private var lastPairingAutoResumeAttemptAt: Date?
     private static let pairingAutoResumeTicker = Timer.publish(every: 2.0, on: .main, in: .common).autoconnect()
 
@@ -84,6 +85,10 @@ struct OnboardingWizardView: View {
 
     private var isFullScreenStep: Bool {
         self.step == .intro || self.step == .welcome || self.step == .success
+    }
+
+    private var currentProblem: GatewayConnectionProblem? {
+        self.appModel.lastGatewayProblem
     }
 
     var body: some View {
@@ -146,8 +151,7 @@ struct OnboardingWizardView: View {
                             #selector(UIResponder.resignFirstResponder),
                             to: nil,
                             from: nil,
-                            for: nil
-                        )
+                            for: nil)
                     }
                 }
             }
@@ -155,155 +159,136 @@ struct OnboardingWizardView: View {
         .gatewayTrustPromptAlert()
         .alert("QR Scanner Unavailable", isPresented: Binding(
             get: { self.scannerError != nil },
-            set: { if !$0 { self.scannerError = nil } }
-        )) {
+            set: { if !$0 { self.scannerError = nil } }))
+        {
             Button("OK", role: .cancel) {}
         } message: {
             Text(self.scannerError ?? "")
         }
         .sheet(isPresented: self.$showQRScanner) {
-            NavigationStack {
-                QRScannerView(
-                    onGatewayLink: { link in
-                        self.handleScannedLink(link)
-                    },
-                    onError: { error in
-                        self.showQRScanner = false
-                        self.statusLine = "Scanner error: \(error)"
-                        self.scannerError = error
-                    },
-                    onDismiss: {
-                        self.showQRScanner = false
-                    })
-                    .ignoresSafeArea()
-                    .navigationTitle("Scan QR Code")
-                    .navigationBarTitleDisplayMode(.inline)
-                    .toolbar {
-                        ToolbarItem(placement: .topBarLeading) {
-                            Button("Cancel") { self.showQRScanner = false }
-                        }
-                        ToolbarItem(placement: .topBarTrailing) {
-                            PhotosPicker(selection: self.$selectedPhoto, matching: .images) {
-                                Label("Photos", systemImage: "photo")
+                NavigationStack {
+                    QRScannerView(
+                        onGatewayLink: { link in
+                            self.handleScannedLink(link)
+                        },
+                        onError: { error in
+                            self.showQRScanner = false
+                            self.statusLine = "Scanner error: \(error)"
+                            self.scannerError = error
+                        },
+                        onDismiss: {
+                            self.showQRScanner = false
+                        })
+                        .ignoresSafeArea()
+                        .navigationTitle("Scan QR Code")
+                        .navigationBarTitleDisplayMode(.inline)
+                        .toolbar {
+                            ToolbarItem(placement: .topBarLeading) {
+                                Button("Cancel") { self.showQRScanner = false }
+                            }
+                            ToolbarItem(placement: .topBarTrailing) {
+                                PhotosPicker(selection: self.$selectedPhoto, matching: .images) {
+                                    Label("Photos", systemImage: "photo")
+                                }
                             }
                         }
-                    }
-            }
-            .onChange(of: self.selectedPhoto) { _, newValue in
-                guard let item = newValue else { return }
-                self.selectedPhoto = nil
-                Task {
-                    guard let data = try? await item.loadTransferable(type: Data.self) else {
+                }
+                .onChange(of: self.selectedPhoto) { _, newValue in
+                    guard let item = newValue else { return }
+                    self.selectedPhoto = nil
+                    Task {
+                        guard let data = try? await item.loadTransferable(type: Data.self) else {
+                            self.showQRScanner = false
+                            self.scannerError = "Could not load the selected image."
+                            return
+                        }
+                        if let message = self.detectQRCode(from: data) {
+                            if let link = GatewayConnectDeepLink.fromSetupCode(message) {
+                                self.handleScannedLink(link)
+                                return
+                            }
+                            if let url = URL(string: message),
+                               let route = DeepLinkParser.parse(url),
+                               case let .gateway(link) = route
+                            {
+                                self.handleScannedLink(link)
+                                return
+                            }
+                        }
                         self.showQRScanner = false
-                        self.scannerError = "Could not load the selected image."
-                        return
+                        self.scannerError = "No valid QR code found in the selected image."
                     }
-                    if let message = self.detectQRCode(from: data) {
-                        if let link = GatewayConnectDeepLink.fromSetupCode(message) {
-                            self.handleScannedLink(link)
-                            return
-                        }
-                        if let url = URL(string: message),
-                           let route = DeepLinkParser.parse(url),
-                           case let .gateway(link) = route
-                        {
-                            self.handleScannedLink(link)
-                            return
-                        }
-                    }
-                    self.showQRScanner = false
-                    self.scannerError = "No valid QR code found in the selected image."
                 }
             }
-        }
-        .onAppear {
-            self.initializeState()
-        }
-        .onDisappear {
-            self.discoveryRestartTask?.cancel()
-            self.discoveryRestartTask = nil
-        }
-        .onChange(of: self.discoveryDomain) { _, _ in
-            self.scheduleDiscoveryRestart()
-        }
-        .onChange(of: self.manualPortText) { _, newValue in
-            let digits = newValue.filter(\.isNumber)
-            if digits != newValue {
-                self.manualPortText = digits
-                return
+            .sheet(isPresented: self.$showGatewayProblemDetails) {
+                if let currentProblem = self.currentProblem {
+                    GatewayProblemDetailsSheet(
+                        problem: currentProblem,
+                        primaryActionTitle: "Retry",
+                        onPrimaryAction: {
+                            Task { await self.retryLastAttempt() }
+                        })
+                }
             }
-            guard let parsed = Int(digits), parsed > 0 else {
-                self.manualPort = 0
-                return
+            .onAppear {
+                self.initializeState()
             }
-            self.manualPort = min(parsed, 65535)
-        }
-        .onChange(of: self.manualPort) { _, newValue in
-            let normalized = newValue > 0 ? String(newValue) : ""
-            if self.manualPortText != normalized {
-                self.manualPortText = normalized
+            .onDisappear {
+                self.discoveryRestartTask?.cancel()
+                self.discoveryRestartTask = nil
             }
-        }
-        .onChange(of: self.gatewayToken) { _, newValue in
-            self.saveGatewayCredentials(token: newValue, password: self.gatewayPassword)
-        }
-        .onChange(of: self.gatewayPassword) { _, newValue in
-            self.saveGatewayCredentials(token: self.gatewayToken, password: newValue)
-        }
-        .onChange(of: self.appModel.gatewayStatusText) { _, newValue in
-            let next = GatewayConnectionIssue.detect(from: newValue)
-            // Avoid "flip-flopping" the UI by clearing actionable issues when the underlying connection
-            // transitions through intermediate statuses (e.g. Offline/Connecting while reconnect churns).
-            if self.issue.needsPairing, next.needsPairing {
-                // Keep the requestId sticky even if the status line omits it after we pause.
-                let mergedRequestId = next.requestId ?? self.issue.requestId ?? self.pairingRequestId
-                self.issue = .pairingRequired(requestId: mergedRequestId)
-            } else if self.issue.needsPairing, !next.needsPairing {
-                // Ignore non-pairing statuses until the user explicitly retries/scans again, or we connect.
-            } else if self.issue.needsAuthToken, !next.needsAuthToken, !next.needsPairing {
-                // Same idea for auth: once we learn credentials are missing/rejected, keep that sticky until
-                // the user retries/scans again or we successfully connect.
-            } else {
-                self.issue = next
+            .onChange(of: self.discoveryDomain) { _, _ in
+                self.scheduleDiscoveryRestart()
             }
-
-            if let requestId = next.requestId, !requestId.isEmpty {
-                self.pairingRequestId = requestId
+            .onChange(of: self.manualPortText) { _, newValue in
+                let digits = newValue.filter(\.isNumber)
+                if digits != newValue {
+                    self.manualPortText = digits
+                    return
+                }
+                guard let parsed = Int(digits), parsed > 0 else {
+                    self.manualPort = 0
+                    return
+                }
+                self.manualPort = min(parsed, 65535)
             }
-
-            // If the gateway tells us auth is missing/rejected, stop reconnect churn until the user intervenes.
-            if next.needsAuthToken {
-                self.appModel.gatewayAutoReconnectEnabled = false
+            .onChange(of: self.manualPort) { _, newValue in
+                let normalized = newValue > 0 ? String(newValue) : ""
+                if self.manualPortText != normalized {
+                    self.manualPortText = normalized
+                }
             }
-
-            if self.issue.needsAuthToken || self.issue.needsPairing {
-                self.step = .auth
+            .onChange(of: self.gatewayToken) { _, newValue in
+                self.saveGatewayCredentials(token: newValue, password: self.gatewayPassword)
             }
-            if !newValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                self.connectMessage = newValue
-                self.statusLine = newValue
+            .onChange(of: self.gatewayPassword) { _, newValue in
+                self.saveGatewayCredentials(token: self.gatewayToken, password: newValue)
             }
-        }
-        .onChange(of: self.appModel.gatewayServerName) { _, newValue in
-            guard newValue != nil else { return }
-            self.showQRScanner = false
-            self.statusLine = "Connected."
-            if !self.didMarkCompleted, let selectedMode {
-                OnboardingStateStore.markCompleted(mode: selectedMode)
-                self.didMarkCompleted = true
+            .onChange(of: self.appModel.lastGatewayProblem) { _, newValue in
+                self.updateConnectionIssue(problem: newValue, statusText: self.appModel.gatewayStatusText)
             }
-            self.onClose()
-        }
-        .onChange(of: self.scenePhase) { _, newValue in
-            guard newValue == .active else { return }
-            self.attemptAutomaticPairingResumeIfNeeded()
-        }
-        .onReceive(Self.pairingAutoResumeTicker) { _ in
-            self.attemptAutomaticPairingResumeIfNeeded()
-        }
+            .onChange(of: self.appModel.gatewayStatusText) { _, newValue in
+                self.updateConnectionIssue(problem: self.appModel.lastGatewayProblem, statusText: newValue)
+            }
+            .onChange(of: self.appModel.gatewayServerName) { _, newValue in
+                guard newValue != nil else { return }
+                self.showQRScanner = false
+                self.statusLine = "Connected."
+                if !self.didMarkCompleted, let selectedMode {
+                    OnboardingStateStore.markCompleted(mode: selectedMode)
+                    self.didMarkCompleted = true
+                }
+                self.onClose()
+            }
+            .onChange(of: self.scenePhase) { _, newValue in
+                guard newValue == .active else { return }
+                self.attemptAutomaticPairingResumeIfNeeded()
+            }
+            .onReceive(Self.pairingAutoResumeTicker) { _ in
+                self.attemptAutomaticPairingResumeIfNeeded()
+            }
     }
 
-    @ViewBuilder
     private var introStep: some View {
         VStack(spacing: 0) {
             Spacer()
@@ -351,7 +336,9 @@ struct OnboardingWizardView: View {
                     Text("Security notice")
                         .font(.headline)
                     Text(
-                        "The connected OpenClaw agent can use device capabilities you enable, such as camera, microphone, photos, contacts, calendar, and location. Continue only if you trust the gateway and agent you connect to.")
+                        "The connected OpenClaw agent can use device capabilities you enable, "
+                            + "such as camera, microphone, photos, contacts, calendar, and location. "
+                            + "Continue only if you trust the gateway and agent you connect to.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -380,7 +367,6 @@ struct OnboardingWizardView: View {
         }
     }
 
-    @ViewBuilder
     private var welcomeStep: some View {
         VStack(spacing: 0) {
             Spacer()
@@ -509,7 +495,7 @@ struct OnboardingWizardView: View {
             Section {
                 LabeledContent("Mode", value: selectedMode.title)
                 LabeledContent("Discovery", value: self.gatewayController.discoveryStatusText)
-                LabeledContent("Status", value: self.appModel.gatewayStatusText)
+                LabeledContent("Status", value: self.appModel.gatewayDisplayStatusText)
                 LabeledContent("Progress", value: self.statusLine)
             } header: {
                 Text("Status")
@@ -612,7 +598,17 @@ struct OnboardingWizardView: View {
                     .autocorrectionDisabled()
                 SecureField("Gateway Password", text: self.$gatewayPassword)
 
-                if self.issue.needsAuthToken {
+                if let problem = self.currentProblem {
+                    GatewayProblemBanner(
+                        problem: problem,
+                        primaryActionTitle: "Retry connection",
+                        onPrimaryAction: {
+                            Task { await self.retryLastAttempt() }
+                        },
+                        onShowDetails: {
+                            self.showGatewayProblemDetails = true
+                        })
+                } else if self.issue.needsAuthToken {
                     Text("Gateway rejected credentials. Scan a fresh QR code or update token/password.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
@@ -635,14 +631,15 @@ struct OnboardingWizardView: View {
                     Text("Pairing Approval")
                 } footer: {
                     let requestLine: String = {
-                        if let id = self.issue.requestId, !id.isEmpty {
+                        if let id = self.currentProblem?.requestId ?? self.issue.requestId, !id.isEmpty {
                             return "Request ID: \(id)"
                         }
                         return "Request ID: check `openclaw devices list`."
                     }()
+                    let commandLine = self.currentProblem?.actionCommand ?? "openclaw devices approve <requestId>"
                     Text(
                         "Approve this device on the gateway.\n"
-                            + "1) `openclaw devices approve` (or `openclaw devices approve <requestId>`)\n"
+                            + "1) `\(commandLine)`\n"
                             + "2) `/pair approve` in your OpenClaw chat\n"
                             + "\(requestLine)\n"
                             + "OpenClaw will also retry automatically when you return to this app.")
@@ -712,7 +709,6 @@ struct OnboardingWizardView: View {
         }
     }
 
-    @ViewBuilder
     private func manualConnectionFieldsSection(title: String) -> some View {
         Section(title) {
             TextField("Host", text: self.$manualHost)
@@ -824,13 +820,51 @@ struct OnboardingWizardView: View {
         self.resumeAfterPairingApprovalInBackground()
     }
 
+    private func updateConnectionIssue(problem: GatewayConnectionProblem?, statusText: String) {
+        let next = GatewayConnectionIssue.detect(problem: problem)
+        let fallback = next == .none ? GatewayConnectionIssue.detect(from: statusText) : next
+
+        // Avoid "flip-flopping" the UI by clearing actionable issues when the underlying connection
+        // transitions through intermediate statuses (e.g. Offline/Connecting while reconnect churns).
+        if self.issue.needsPairing, fallback.needsPairing {
+            let mergedRequestId = fallback.requestId ?? self.issue.requestId ?? self.pairingRequestId
+            self.issue = .pairingRequired(requestId: mergedRequestId)
+        } else if self.issue.needsPairing, !fallback.needsPairing {
+            // Ignore non-pairing statuses until the user explicitly retries/scans again, or we connect.
+        } else if self.issue.needsAuthToken, !fallback.needsAuthToken, !fallback.needsPairing {
+            // Same idea for auth: once we learn credentials are missing/rejected, keep that sticky until
+            // the user retries/scans again or we successfully connect.
+        } else {
+            self.issue = fallback
+        }
+
+        if let requestId = problem?.requestId ?? fallback.requestId, !requestId.isEmpty {
+            self.pairingRequestId = requestId
+        }
+
+        if self.issue.needsAuthToken || self.issue.needsPairing || problem?.pauseReconnect == true {
+            self.step = .auth
+        }
+
+        if let problem {
+            self.connectMessage = problem.message
+            self.statusLine = problem.message
+            return
+        }
+
+        let trimmedStatus = statusText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedStatus.isEmpty {
+            self.connectMessage = trimmedStatus
+            self.statusLine = trimmedStatus
+        }
+    }
+
     private func detectQRCode(from data: Data) -> String? {
         guard let ciImage = CIImage(data: data) else { return nil }
         let detector = CIDetector(
             ofType: CIDetectorTypeQRCode,
             context: nil,
-            options: [CIDetectorAccuracy: CIDetectorAccuracyHigh]
-        )
+            options: [CIDetectorAccuracy: CIDetectorAccuracyHigh])
         let features = detector?.features(in: ciImage) ?? []
         for feature in features {
             if let qr = feature as? CIQRCodeFeature, let message = qr.messageString {
@@ -852,6 +886,7 @@ struct OnboardingWizardView: View {
         self.connectMessage = nil
         self.step = target
     }
+
     private var canConnectManual: Bool {
         let host = self.manualHost.trimmingCharacters(in: .whitespacesAndNewlines)
         return !host.isEmpty && self.manualPort > 0 && self.manualPort <= 65535
@@ -880,7 +915,7 @@ struct OnboardingWizardView: View {
         if self.selectedMode == nil {
             self.selectedMode = OnboardingStateStore.lastMode()
         }
-        if self.selectedMode == .developerLocal && self.manualHost == "openclaw.local" {
+        if self.selectedMode == .developerLocal, self.manualHost == "openclaw.local" {
             self.manualHost = "localhost"
             self.manualTLS = false
         }

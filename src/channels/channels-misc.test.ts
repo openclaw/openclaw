@@ -1,8 +1,8 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { normalizeChatType } from "./chat-type.js";
 
 describe("normalizeChatType", () => {
-  const cases: Array<{ name: string; value: string | undefined; expected: string | undefined }> = [
+  it.each([
     { name: "normalizes direct", value: "direct", expected: "direct" },
     { name: "normalizes dm alias", value: "dm", expected: "direct" },
     { name: "normalizes group", value: "group", expected: "group" },
@@ -11,13 +11,12 @@ describe("normalizeChatType", () => {
     { name: "returns undefined for empty", value: "", expected: undefined },
     { name: "returns undefined for unknown value", value: "nope", expected: undefined },
     { name: "returns undefined for unsupported room", value: "room", expected: undefined },
-  ];
-
-  for (const testCase of cases) {
-    it(testCase.name, () => {
-      expect(normalizeChatType(testCase.value)).toBe(testCase.expected);
-    });
-  }
+  ] satisfies Array<{ name: string; value: string | undefined; expected: string | undefined }>)(
+    "$name",
+    ({ value, expected }) => {
+      expect(normalizeChatType(value)).toBe(expected);
+    },
+  );
 
   describe("backward compatibility", () => {
     it("accepts legacy 'dm' value shape variants and normalizes to 'direct'", () => {
@@ -25,46 +24,5 @@ describe("normalizeChatType", () => {
       expect(normalizeChatType("DM")).toBe("direct");
       expect(normalizeChatType(" dm ")).toBe("direct");
     });
-  });
-});
-
-describe("WA_WEB_AUTH_DIR", () => {
-  afterEach(() => {
-    vi.doUnmock("../plugins/runtime/runtime-whatsapp-boundary.js");
-    vi.resetModules();
-  });
-
-  it("resolves lazily and caches across the legacy and channels/web entrypoints", async () => {
-    const resolveWaWebAuthDir = vi.fn(() => "/tmp/openclaw-whatsapp-auth");
-
-    vi.resetModules();
-    vi.doMock("../plugins/runtime/runtime-whatsapp-boundary.js", () => ({
-      createWaSocket: vi.fn(),
-      extractMediaPlaceholder: vi.fn(),
-      extractText: vi.fn(),
-      formatError: vi.fn(),
-      getStatusCode: vi.fn(),
-      logWebSelfId: vi.fn(),
-      loginWeb: vi.fn(),
-      logoutWeb: vi.fn(),
-      monitorWebChannel: vi.fn(),
-      monitorWebInbox: vi.fn(),
-      pickWebChannel: vi.fn(),
-      resolveHeartbeatRecipients: vi.fn(),
-      resolveWaWebAuthDir,
-      runWebHeartbeatOnce: vi.fn(),
-      sendMessageWhatsApp: vi.fn(),
-      sendReactionWhatsApp: vi.fn(),
-      waitForWaConnection: vi.fn(),
-      webAuthExists: vi.fn(),
-    }));
-
-    const channelWeb = await import("../channel-web.js");
-    const webEntry = await import("./web/index.js");
-
-    expect(resolveWaWebAuthDir).not.toHaveBeenCalled();
-    expect(String(channelWeb.WA_WEB_AUTH_DIR)).toBe("/tmp/openclaw-whatsapp-auth");
-    expect(String(webEntry.WA_WEB_AUTH_DIR)).toBe("/tmp/openclaw-whatsapp-auth");
-    expect(resolveWaWebAuthDir).toHaveBeenCalledTimes(1);
   });
 });

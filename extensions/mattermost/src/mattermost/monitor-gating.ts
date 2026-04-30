@@ -1,4 +1,4 @@
-import type { ChatType, OpenClawConfig } from "../runtime-api.js";
+import type { ChatType, OpenClawConfig } from "./runtime-api.js";
 
 export function mapMattermostChannelTypeToChatType(channelType?: string | null): ChatType {
   if (!channelType) {
@@ -12,6 +12,17 @@ export function mapMattermostChannelTypeToChatType(channelType?: string | null):
     return "group";
   }
   return "channel";
+}
+
+export function resolveMattermostTrustedChatKind(params: {
+  channelType?: string | null;
+  fallback?: ChatType;
+}): ChatType {
+  const channelType = params.channelType?.trim();
+  if (channelType) {
+    return mapMattermostChannelTypeToChatType(channelType);
+  }
+  return params.fallback ?? "channel";
 }
 
 export type MattermostRequireMentionResolverInput = {

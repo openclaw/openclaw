@@ -4,7 +4,6 @@ import readline from "node:readline";
 import type { NormalizedUsage, UsageLike } from "../agents/usage.js";
 import { normalizeUsage } from "../agents/usage.js";
 import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
-import type { OpenClawConfig } from "../config/config.js";
 import {
   isPrimarySessionTranscriptFileName,
   isSessionArchiveArtifactName,
@@ -17,7 +16,10 @@ import {
   resolveSessionTranscriptsDirForAgent,
 } from "../config/sessions/paths.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { stripEnvelope, stripMessageIdHints } from "../shared/chat-envelope.js";
+import { asFiniteNumber } from "../shared/number-coercion.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { countToolResults, extractToolCallNames } from "../utils/transcript-tools.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../utils/usage-format.js";
 import type {
@@ -36,6 +38,7 @@ import type {
   SessionLogEntry,
   SessionMessageCounts,
   SessionModelUsage,
+  SessionUtcQuarterHourMessageCounts,
   SessionToolUsage,
   SessionUsageTimePoint,
   SessionUsageTimeSeries,
@@ -55,6 +58,7 @@ export type {
   SessionLogEntry,
   SessionMessageCounts,
   SessionModelUsage,
+  SessionUtcQuarterHourMessageCounts,
   SessionToolUsage,
   SessionUsageTimePoint,
   SessionUsageTimeSeries,
@@ -74,16 +78,6 @@ const emptyTotals = (): CostUsageTotals => ({
   missingCostEntries: 0,
 });
 
-const toFiniteNumber = (value: unknown): number | undefined => {
-  if (typeof value !== "number") {
-    return undefined;
-  }
-  if (!Number.isFinite(value)) {
-    return undefined;
-  }
-  return value;
-};
-
 const extractCostBreakdown = (usageRaw?: UsageLike | null): CostBreakdown | undefined => {
   if (!usageRaw || typeof usageRaw !== "object") {
     return undefined;
@@ -94,17 +88,17 @@ const extractCostBreakdown = (usageRaw?: UsageLike | null): CostBreakdown | unde
     return undefined;
   }
 
-  const total = toFiniteNumber(cost.total);
+  const total = asFiniteNumber(cost.total);
   if (total === undefined || total < 0) {
     return undefined;
   }
 
   return {
     total,
-    input: toFiniteNumber(cost.input),
-    output: toFiniteNumber(cost.output),
-    cacheRead: toFiniteNumber(cost.cacheRead),
-    cacheWrite: toFiniteNumber(cost.cacheWrite),
+    input: asFiniteNumber(cost.input),
+    output: asFiniteNumber(cost.output),
+    cacheRead: asFiniteNumber(cost.cacheRead),
+    cacheWrite: asFiniteNumber(cost.cacheWrite),
   };
 };
 
@@ -117,7 +111,7 @@ const parseTimestamp = (entry: Record<string, unknown>): Date | undefined => {
     }
   }
   const message = entry.message as Record<string, unknown> | undefined;
-  const messageTimestamp = toFiniteNumber(message?.timestamp);
+  const messageTimestamp = asFiniteNumber(message?.timestamp);
   if (messageTimestamp !== undefined) {
     const parsed = new Date(messageTimestamp);
     if (!Number.isNaN(parsed.valueOf())) {
@@ -152,7 +146,7 @@ const parseTranscriptEntry = (entry: Record<string, unknown>): ParsedTranscriptE
 
   const costBreakdown = extractCostBreakdown(usageRaw);
   const stopReason = typeof message.stopReason === "string" ? message.stopReason : undefined;
-  const durationMs = toFiniteNumber(message.durationMs ?? entry.durationMs);
+  const durationMs = asFiniteNumber(message.durationMs ?? entry.durationMs);
 
   return {
     message,
@@ -172,6 +166,39 @@ const parseTranscriptEntry = (entry: Record<string, unknown>): ParsedTranscriptE
 
 const formatDayKey = (date: Date): string =>
   date.toLocaleDateString("en-CA", { timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone });
+
+const formatUtcDayKey = (date: Date): string =>
+  `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(date.getUTCDate()).padStart(2, "0")}`;
+
+/**
+ * Accumulate message-level counts into a bucket (daily or UTC quarter-hour).
+ * Avoids duplicating the same logic for both daily and quarter-hour message counts.
+ */
+const accumulateMessageCounts = (
+  bucket: {
+    total: number;
+    user: number;
+    assistant: number;
+    toolCalls: number;
+    toolResults: number;
+    errors: number;
+  },
+  entry: ParsedTranscriptEntry,
+  errorStopReasons: Set<string>,
+) => {
+  bucket.total += entry.role === "user" || entry.role === "assistant" ? 1 : 0;
+  if (entry.role === "user") {
+    bucket.user += 1;
+  } else if (entry.role === "assistant") {
+    bucket.assistant += 1;
+  }
+  bucket.toolCalls += entry.toolNames.length;
+  bucket.toolResults += entry.toolResultCounts.total;
+  bucket.errors += entry.toolResultCounts.errors;
+  if (entry.stopReason && errorStopReasons.has(entry.stopReason)) {
+    bucket.errors += 1;
+  }
+};
 
 const computeLatencyStats = (values: number[]): SessionLatencyStats | undefined => {
   if (!values.length) {
@@ -257,13 +284,23 @@ async function scanTranscriptFile(params: {
       continue;
     }
 
-    if (entry.usage && entry.costTotal === undefined) {
+    if (entry.usage) {
       const cost = resolveModelCostConfig({
         provider: entry.provider,
         model: entry.model,
         config: params.config,
       });
-      entry.costTotal = estimateUsageCost({ usage: entry.usage, cost });
+      if (cost?.tieredPricing && cost.tieredPricing.length > 0) {
+        // When tiered pricing is configured, always recompute to override
+        // the flat-rate cost that the transport layer wrote into the transcript.
+        // Clear costBreakdown so downstream aggregation uses the recomputed total
+        // instead of the stale flat-rate breakdown from the transport layer.
+        entry.costTotal = estimateUsageCost({ usage: entry.usage, cost });
+        entry.costBreakdown = undefined;
+      } else if (entry.costTotal === undefined) {
+        // Fill in missing cost estimates.
+        entry.costTotal = estimateUsageCost({ usage: entry.usage, cost });
+      }
     }
 
     params.onEntry(entry);
@@ -360,7 +397,8 @@ export function resolveExistingUsageSessionFile(params: {
 export async function loadCostUsageSummary(params?: {
   startMs?: number;
   endMs?: number;
-  days?: number; // Deprecated, for backwards compatibility
+  /** @deprecated Use startMs/endMs. */
+  days?: number;
   config?: OpenClawConfig;
   agentId?: string;
 }): Promise<CostUsageSummary> {
@@ -569,6 +607,7 @@ export async function loadSessionCostSummary(params: {
   const activityDatesSet = new Set<string>();
   const dailyMap = new Map<string, { tokens: number; cost: number }>();
   const dailyMessageMap = new Map<string, SessionDailyMessageCounts>();
+  const utcQuarterHourMessageMap = new Map<string, SessionUtcQuarterHourMessageCounts>();
   const dailyLatencyMap = new Map<string, number[]>();
   const dailyModelUsageMap = new Map<string, SessionDailyModelUsage>();
   const messageCounts: SessionMessageCounts = {
@@ -666,19 +705,27 @@ export async function loadSessionCostSummary(params: {
           toolResults: 0,
           errors: 0,
         };
-        daily.total += entry.role === "user" || entry.role === "assistant" ? 1 : 0;
-        if (entry.role === "user") {
-          daily.user += 1;
-        } else if (entry.role === "assistant") {
-          daily.assistant += 1;
-        }
-        daily.toolCalls += entry.toolNames.length;
-        daily.toolResults += entry.toolResultCounts.total;
-        daily.errors += entry.toolResultCounts.errors;
-        if (entry.stopReason && errorStopReasons.has(entry.stopReason)) {
-          daily.errors += 1;
-        }
+        accumulateMessageCounts(daily, entry, errorStopReasons);
         dailyMessageMap.set(dayKey, daily);
+
+        // Per-quarter-hour message counts for precise hourly stats (UTC-based)
+        const quarterIndex = Math.floor(
+          (entry.timestamp.getUTCHours() * 60 + entry.timestamp.getUTCMinutes()) / 15,
+        );
+        const utcDayKey = formatUtcDayKey(entry.timestamp);
+        const quarterKey = `${utcDayKey}::${quarterIndex}`;
+        const utcQuarterHour = utcQuarterHourMessageMap.get(quarterKey) ?? {
+          date: utcDayKey,
+          quarterIndex,
+          total: 0,
+          user: 0,
+          assistant: 0,
+          toolCalls: 0,
+          toolResults: 0,
+          errors: 0,
+        };
+        accumulateMessageCounts(utcQuarterHour, entry, errorStopReasons);
+        utcQuarterHourMessageMap.set(quarterKey, utcQuarterHour);
       }
 
       if (!entry.usage) {
@@ -764,13 +811,17 @@ export async function loadSessionCostSummary(params: {
     dailyMessageMap.values(),
   ).toSorted((a, b) => a.date.localeCompare(b.date));
 
+  const utcQuarterHourMessageCounts: SessionUtcQuarterHourMessageCounts[] = Array.from(
+    utcQuarterHourMessageMap.values(),
+  ).toSorted((a, b) => a.date.localeCompare(b.date) || a.quarterIndex - b.quarterIndex);
+
   const dailyLatency: SessionDailyLatency[] = Array.from(dailyLatencyMap.entries())
     .map(([date, values]) => {
       const stats = computeLatencyStats(values);
       if (!stats) {
         return null;
       }
-      return { date, ...stats };
+      return Object.assign({ date }, stats);
     })
     .filter((entry): entry is SessionDailyLatency => Boolean(entry))
     .toSorted((a, b) => a.date.localeCompare(b.date));
@@ -811,6 +862,9 @@ export async function loadSessionCostSummary(params: {
     activityDates: Array.from(activityDatesSet).toSorted(),
     dailyBreakdown,
     dailyMessageCounts,
+    utcQuarterHourMessageCounts: utcQuarterHourMessageCounts.length
+      ? utcQuarterHourMessageCounts
+      : undefined,
     dailyLatency: dailyLatency.length ? dailyLatency : undefined,
     dailyModelUsage: dailyModelUsage.length ? dailyModelUsage : undefined,
     messageCounts,
@@ -954,8 +1008,7 @@ export async function loadSessionLogs(params: {
 
       const contentParts: string[] = [];
       const rawToolName = message.toolName ?? message.tool_name ?? message.name ?? message.tool;
-      const toolName =
-        typeof rawToolName === "string" && rawToolName.trim() ? rawToolName.trim() : undefined;
+      const toolName = normalizeOptionalString(rawToolName);
       if (role === "tool" || role === "toolResult") {
         contentParts.push(`[Tool: ${toolName ?? "tool"}]`);
         contentParts.push("[Tool Result]");

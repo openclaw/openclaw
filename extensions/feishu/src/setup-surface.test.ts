@@ -1,14 +1,24 @@
-import { describe, expect, it, vi } from "vitest";
-import { createNonExitingTypedRuntimeEnv } from "../../../test/helpers/extensions/runtime-env.js";
 import {
+  createNonExitingRuntimeEnv,
   createPluginSetupWizardConfigure,
   createPluginSetupWizardStatus,
   createTestWizardPrompter,
   runSetupWizardConfigure,
-} from "../../../test/helpers/extensions/setup-wizard.js";
+} from "openclaw/plugin-sdk/plugin-test-runtime";
+import { describe, expect, it, vi } from "vitest";
 
 vi.mock("./probe.js", () => ({
   probeFeishu: vi.fn(async () => ({ ok: false, error: "mocked" })),
+}));
+
+vi.mock("./app-registration.js", () => ({
+  initAppRegistration: vi.fn(async () => {
+    throw new Error("mocked: scan-to-create not available");
+  }),
+  beginAppRegistration: vi.fn(),
+  pollAppRegistration: vi.fn(),
+  printQrCode: vi.fn(async () => {}),
+  getAppOwnerOpenId: vi.fn(async () => undefined),
 }));
 
 import { feishuPlugin } from "./channel.js";
@@ -57,20 +67,18 @@ async function getStatusWithEnvRefs(params: { appIdKey: string; appSecretKey: st
 
 const feishuConfigure = createPluginSetupWizardConfigure(feishuPlugin);
 const feishuGetStatus = createPluginSetupWizardStatus(feishuPlugin);
-type FeishuConfigureRuntime = Parameters<typeof feishuConfigure>[0]["runtime"];
 
 describe("feishu setup wizard", () => {
   it("does not throw when config appId/appSecret are SecretRef objects", async () => {
     const text = vi
       .fn()
       .mockResolvedValueOnce("cli_from_prompt")
-      .mockResolvedValueOnce("secret_from_prompt")
-      .mockResolvedValueOnce("oc_group_1");
+      .mockResolvedValueOnce("secret_from_prompt");
     const prompter = createTestWizardPrompter({
       text,
       confirm: vi.fn(async () => true),
       select: vi.fn(
-        async ({ initialValue }: { initialValue?: string }) => initialValue ?? "allowlist",
+        async ({ initialValue }: { initialValue?: string }) => initialValue ?? "bot",
       ) as never,
     });
 
@@ -86,13 +94,33 @@ describe("feishu setup wizard", () => {
           },
         } as never,
         prompter,
-        runtime: createNonExitingTypedRuntimeEnv<FeishuConfigureRuntime>(),
+        runtime: createNonExitingRuntimeEnv(),
       }),
     ).resolves.toBeTruthy();
   });
 });
 
 describe("feishu setup wizard status", () => {
+  it("treats SecretRef appSecret as configured when appId is present", async () => {
+    const status = await feishuGetStatus({
+      cfg: {
+        channels: {
+          feishu: {
+            appId: "cli_a123456",
+            appSecret: {
+              source: "env",
+              provider: "default",
+              id: "FEISHU_APP_SECRET",
+            },
+          },
+        },
+      } as never,
+      accountOverrides: {},
+    });
+
+    expect(status.configured).toBe(true);
+  });
+
   it("does not fallback to top-level appId when account explicitly sets empty appId", async () => {
     const status = await feishuGetStatus({
       cfg: {

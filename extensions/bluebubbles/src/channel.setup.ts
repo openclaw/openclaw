@@ -1,81 +1,31 @@
-import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
-import { formatNormalizedAllowFromEntries } from "openclaw/plugin-sdk/allow-from";
+import type { ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
+import { type ResolvedBlueBubblesAccount } from "./accounts.js";
 import {
-  adaptScopedAccountAccessor,
-  createScopedChannelConfigAdapter,
-} from "openclaw/plugin-sdk/channel-config-helpers";
-import { buildChannelConfigSchema } from "openclaw/plugin-sdk/channel-config-schema";
-import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
-import {
-  listBlueBubblesAccountIds,
-  type ResolvedBlueBubblesAccount,
-  resolveBlueBubblesAccount,
-  resolveDefaultBlueBubblesAccountId,
-} from "./accounts.js";
-import { BlueBubblesConfigSchema } from "./config-schema.js";
+  bluebubblesCapabilities,
+  bluebubblesConfigAdapter,
+  bluebubblesConfigSchema,
+  bluebubblesMeta,
+  bluebubblesReload,
+  describeBlueBubblesAccount,
+} from "./channel-shared.js";
 import { blueBubblesSetupAdapter } from "./setup-core.js";
 import { blueBubblesSetupWizard } from "./setup-surface.js";
-import { normalizeBlueBubblesHandle } from "./targets.js";
-
-const meta = {
-  id: "bluebubbles",
-  label: "BlueBubbles",
-  selectionLabel: "BlueBubbles (macOS app)",
-  detailLabel: "BlueBubbles",
-  docsPath: "/channels/bluebubbles",
-  docsLabel: "bluebubbles",
-  blurb: "iMessage via the BlueBubbles mac app + REST API.",
-  systemImage: "bubble.left.and.text.bubble.right",
-  aliases: ["bb"],
-  order: 75,
-  preferOver: ["imessage"],
-} as const;
-
-const bluebubblesConfigAdapter = createScopedChannelConfigAdapter<ResolvedBlueBubblesAccount>({
-  sectionKey: "bluebubbles",
-  listAccountIds: listBlueBubblesAccountIds,
-  resolveAccount: adaptScopedAccountAccessor(resolveBlueBubblesAccount),
-  defaultAccountId: resolveDefaultBlueBubblesAccountId,
-  clearBaseFields: ["serverUrl", "password", "name", "webhookPath"],
-  resolveAllowFrom: (account: ResolvedBlueBubblesAccount) => account.config.allowFrom,
-  formatAllowFrom: (allowFrom) =>
-    formatNormalizedAllowFromEntries({
-      allowFrom,
-      normalizeEntry: (entry) => normalizeBlueBubblesHandle(entry.replace(/^bluebubbles:/i, "")),
-    }),
-});
 
 export const bluebubblesSetupPlugin: ChannelPlugin<ResolvedBlueBubblesAccount> = {
   id: "bluebubbles",
   meta: {
-    ...meta,
-    aliases: [...meta.aliases],
-    preferOver: [...meta.preferOver],
+    ...bluebubblesMeta,
+    aliases: [...bluebubblesMeta.aliases],
+    preferOver: [...bluebubblesMeta.preferOver],
   },
-  capabilities: {
-    chatTypes: ["direct", "group"],
-    media: true,
-    reactions: true,
-    edit: true,
-    unsend: true,
-    reply: true,
-    effects: true,
-    groupManagement: true,
-  },
-  reload: { configPrefixes: ["channels.bluebubbles"] },
-  configSchema: buildChannelConfigSchema(BlueBubblesConfigSchema),
+  capabilities: bluebubblesCapabilities,
+  reload: bluebubblesReload,
+  configSchema: bluebubblesConfigSchema,
   setupWizard: blueBubblesSetupWizard,
   config: {
     ...bluebubblesConfigAdapter,
     isConfigured: (account) => account.configured,
-    describeAccount: (account) =>
-      describeAccountSnapshot({
-        account,
-        configured: account.configured,
-        extra: {
-          baseUrl: account.baseUrl,
-        },
-      }),
+    describeAccount: (account) => describeBlueBubblesAccount(account),
   },
   setup: blueBubblesSetupAdapter,
 };

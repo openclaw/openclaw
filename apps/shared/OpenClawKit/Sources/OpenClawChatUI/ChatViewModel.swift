@@ -1,6 +1,6 @@
-import OpenClawKit
 import Foundation
 import Observation
+import OpenClawKit
 import OSLog
 import UniformTypeIdentifiers
 
@@ -14,6 +14,7 @@ private let chatUILogger = Logger(subsystem: "ai.openclaw", category: "OpenClawC
 
 @MainActor
 @Observable
+// swiftlint:disable:next type_body_length
 public final class OpenClawChatViewModel {
     public static let defaultModelSelectionID = "__default__"
 
@@ -60,6 +61,9 @@ public final class OpenClawChatViewModel {
     private var nextThinkingSelectionRequestID: UInt64 = 0
     private var latestThinkingSelectionRequestIDsBySession: [String: UInt64] = [:]
     private var latestThinkingLevelsBySession: [String: String] = [:]
+    private var isCompacting = false
+    private var lastCompactAt: Date?
+    private let compactCooldown: TimeInterval = 60
 
     private var pendingToolCallsById: [String: OpenClawChatPendingToolCall] = [:] {
         didSet {
@@ -465,6 +469,7 @@ public final class OpenClawChatViewModel {
     }
 
     private static let resetTriggers: Set<String> = ["/new", "/reset", "/clear"]
+    private static let compactTriggers: Set<String> = ["/compact"]
 
     private func performSend() async {
         guard !self.isSending else { return }
@@ -474,6 +479,11 @@ public final class OpenClawChatViewModel {
         if Self.resetTriggers.contains(trimmed.lowercased()) {
             self.input = ""
             await self.performReset()
+            return
+        }
+        if Self.compactTriggers.contains(trimmed.lowercased()) {
+            self.input = ""
+            await self.performCompact()
             return
         }
 
@@ -623,6 +633,42 @@ public final class OpenClawChatViewModel {
         await self.bootstrap()
     }
 
+    private func performCompact() async {
+        guard !self.isCompacting else { return }
+        guard !self.isSending, self.pendingRuns.isEmpty, !self.isAborting else {
+            self.errorText = "Wait for the current response before compacting the session."
+            return
+        }
+        if let lastCompactAt,
+           Date().timeIntervalSince(lastCompactAt) < self.compactCooldown
+        {
+            self.errorText = "Please wait before compacting this session again."
+            return
+        }
+
+        self.isCompacting = true
+        self.isLoading = true
+        self.errorText = nil
+        defer {
+            self.isLoading = false
+            self.isCompacting = false
+        }
+
+        do {
+            try await self.transport.compactSession(sessionKey: self.sessionKey)
+        } catch {
+            self.errorText = "Unable to compact the session. Please try again."
+            let nsError = error as NSError
+            chatUILogger.error(
+                "compact failed domain=\(nsError.domain, privacy: .public) code=\(nsError.code, privacy: .public)")
+            chatUILogger.error("compact details=\(String(describing: error), privacy: .private)")
+            return
+        }
+
+        self.lastCompactAt = Date()
+        await self.bootstrap()
+    }
+
     private func performSelectThinkingLevel(_ level: String) async {
         let next = Self.normalizedThinkingLevel(level) ?? "off"
         guard next != self.thinkingLevel else { return }
@@ -688,7 +734,10 @@ public final class OpenClawChatViewModel {
                 self.latestModelSelectionRequestIDsBySession.removeValue(forKey: sessionKey)
             }
             if self.lastSuccessfulModelSelectionIDsBySession[sessionKey] == previous {
-                self.applySuccessfulModelSelection(previous, sessionKey: sessionKey, syncSelection: sessionKey == self.sessionKey)
+                self.applySuccessfulModelSelection(
+                    previous,
+                    sessionKey: sessionKey,
+                    syncSelection: sessionKey == self.sessionKey)
             }
             guard sessionKey == self.sessionKey else { return }
             self.modelSelectionID = previous
@@ -811,7 +860,8 @@ public final class OpenClawChatViewModel {
             syncSelection: syncSelection)
     }
 
-    private func resolvedSessionModelIdentity(forSelectionID selectionID: String) -> (modelID: String?, modelProvider: String?) {
+    private func resolvedSessionModelIdentity(forSelectionID selectionID: String)
+    -> (modelID: String?, modelProvider: String?) {
         guard let modelRef = self.modelRef(forSelectionID: selectionID) else {
             return (nil, nil)
         }

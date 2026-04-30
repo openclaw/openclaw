@@ -1,17 +1,21 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginCompatibilityNotice } from "../plugins/status.js";
+import { createCompatibilityNotice } from "../plugins/status.test-helpers.js";
+import { requireValidConfigSnapshot } from "./config-validation.js";
 
-const readConfigFileSnapshot = vi.fn();
-const buildPluginCompatibilityNotices = vi.fn<(_params?: unknown) => PluginCompatibilityNotice[]>(
-  () => [],
-);
+const { readConfigFileSnapshot, buildPluginCompatibilitySnapshotNotices } = vi.hoisted(() => ({
+  readConfigFileSnapshot: vi.fn(),
+  buildPluginCompatibilitySnapshotNotices: vi.fn<
+    (_params?: unknown) => PluginCompatibilityNotice[]
+  >(() => []),
+}));
 
 vi.mock("../config/config.js", () => ({
   readConfigFileSnapshot,
 }));
 
 vi.mock("../plugins/status.js", () => ({
-  buildPluginCompatibilityNotices,
+  buildPluginCompatibilitySnapshotNotices,
   formatPluginCompatibilityNotice: (notice: { pluginId: string; message: string }) =>
     `${notice.pluginId} ${notice.message}`,
 }));
@@ -21,61 +25,43 @@ describe("requireValidConfigSnapshot", () => {
     vi.clearAllMocks();
   });
 
-  it("returns config without emitting compatibility advice by default", async () => {
+  function createValidSnapshot() {
     readConfigFileSnapshot.mockResolvedValue({
       exists: true,
       valid: true,
       config: { plugins: {} },
       issues: [],
     });
-    buildPluginCompatibilityNotices.mockReturnValue([
-      {
-        pluginId: "legacy-plugin",
-        code: "legacy-before-agent-start",
-        severity: "warn",
-        message:
-          "still uses legacy before_agent_start; keep regression coverage on this plugin, and prefer before_model_resolve/before_prompt_build for new work.",
-      },
+    buildPluginCompatibilitySnapshotNotices.mockReturnValue([
+      createCompatibilityNotice({ pluginId: "legacy-plugin", code: "legacy-before-agent-start" }),
     ]);
-    const runtime = {
+  }
+
+  function createRuntime() {
+    return {
       log: vi.fn(),
       error: vi.fn(),
       exit: vi.fn(),
     };
+  }
 
-    const { requireValidConfigSnapshot } = await import("./config-validation.js");
+  it("returns config without emitting compatibility advice by default", async () => {
+    createValidSnapshot();
+    const runtime = createRuntime();
+
     const config = await requireValidConfigSnapshot(runtime);
 
     expect(config).toEqual({ plugins: {} });
     expect(runtime.error).not.toHaveBeenCalled();
     expect(runtime.exit).not.toHaveBeenCalled();
-    expect(buildPluginCompatibilityNotices).not.toHaveBeenCalled();
+    expect(buildPluginCompatibilitySnapshotNotices).not.toHaveBeenCalled();
     expect(runtime.log).not.toHaveBeenCalled();
   });
 
   it("emits a non-blocking compatibility advisory when explicitly requested", async () => {
-    readConfigFileSnapshot.mockResolvedValue({
-      exists: true,
-      valid: true,
-      config: { plugins: {} },
-      issues: [],
-    });
-    buildPluginCompatibilityNotices.mockReturnValue([
-      {
-        pluginId: "legacy-plugin",
-        code: "legacy-before-agent-start",
-        severity: "warn",
-        message:
-          "still uses legacy before_agent_start; keep regression coverage on this plugin, and prefer before_model_resolve/before_prompt_build for new work.",
-      },
-    ]);
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    };
+    createValidSnapshot();
+    const runtime = createRuntime();
 
-    const { requireValidConfigSnapshot } = await import("./config-validation.js");
     const config = await requireValidConfigSnapshot(runtime, {
       includeCompatibilityAdvisory: true,
     });
@@ -96,13 +82,8 @@ describe("requireValidConfigSnapshot", () => {
       config: {},
       issues: [{ path: "routing.allowFrom", message: "Legacy key" }],
     });
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    };
+    const runtime = createRuntime();
 
-    const { requireValidConfigSnapshot } = await import("./config-validation.js");
     const config = await requireValidConfigSnapshot(runtime, {
       includeCompatibilityAdvisory: true,
     });

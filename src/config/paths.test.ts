@@ -3,13 +3,19 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
+  DEFAULT_GATEWAY_PORT,
   resolveDefaultConfigCandidates,
   resolveConfigPathCandidate,
   resolveConfigPath,
+  resolveGatewayPort,
   resolveOAuthDir,
   resolveOAuthPath,
   resolveStateDir,
 } from "./paths.js";
+
+function envWith(overrides: Record<string, string | undefined>): NodeJS.ProcessEnv {
+  return { ...overrides };
+}
 
 describe("oauth paths", () => {
   it("prefers OPENCLAW_OAUTH_DIR over OPENCLAW_STATE_DIR", () => {
@@ -32,6 +38,65 @@ describe("oauth paths", () => {
     expect(resolveOAuthDir(env, "/custom/state")).toBe(path.join("/custom/state", "credentials"));
     expect(resolveOAuthPath(env, "/custom/state")).toBe(
       path.join("/custom/state", "credentials", "oauth.json"),
+    );
+  });
+});
+
+describe("gateway port resolution", () => {
+  it("prefers numeric env values over config", () => {
+    expect(
+      resolveGatewayPort({ gateway: { port: 19002 } }, envWith({ OPENCLAW_GATEWAY_PORT: "19001" })),
+    ).toBe(19001);
+  });
+
+  it("accepts Compose-style IPv4 host publish values from env", () => {
+    expect(
+      resolveGatewayPort(
+        { gateway: { port: 19002 } },
+        envWith({ OPENCLAW_GATEWAY_PORT: "127.0.0.1:18789" }),
+      ),
+    ).toBe(18789);
+  });
+
+  it("accepts Compose-style IPv6 host publish values from env", () => {
+    expect(
+      resolveGatewayPort(
+        { gateway: { port: 19002 } },
+        envWith({ OPENCLAW_GATEWAY_PORT: "[::1]:28789" }),
+      ),
+    ).toBe(28789);
+  });
+
+  it("ignores the legacy env name and falls back to config", () => {
+    expect(
+      resolveGatewayPort(
+        { gateway: { port: 19002 } },
+        envWith({ CLAWDBOT_GATEWAY_PORT: "127.0.0.1:18789" }),
+      ),
+    ).toBe(19002);
+  });
+
+  it("falls back to config when the Compose-style suffix is invalid", () => {
+    expect(
+      resolveGatewayPort(
+        { gateway: { port: 19003 } },
+        envWith({ OPENCLAW_GATEWAY_PORT: "127.0.0.1:not-a-port" }),
+      ),
+    ).toBe(19003);
+  });
+
+  it("falls back when malformed IPv6 inputs do not provide an explicit port", () => {
+    expect(
+      resolveGatewayPort({ gateway: { port: 19003 } }, envWith({ OPENCLAW_GATEWAY_PORT: "::1" })),
+    ).toBe(19003);
+    expect(resolveGatewayPort({}, envWith({ OPENCLAW_GATEWAY_PORT: "2001:db8::1" }))).toBe(
+      DEFAULT_GATEWAY_PORT,
+    );
+  });
+
+  it("falls back to the default port when env is invalid and config is unset", () => {
+    expect(resolveGatewayPort({}, envWith({ OPENCLAW_GATEWAY_PORT: "127.0.0.1:not-a-port" }))).toBe(
+      DEFAULT_GATEWAY_PORT,
     );
   });
 });
@@ -79,13 +144,8 @@ describe("state + config path candidates", () => {
     const expected = [
       path.join(resolvedHome, ".openclaw", "openclaw.json"),
       path.join(resolvedHome, ".openclaw", "clawdbot.json"),
-      path.join(resolvedHome, ".openclaw", "moldbot.json"),
       path.join(resolvedHome, ".clawdbot", "openclaw.json"),
       path.join(resolvedHome, ".clawdbot", "clawdbot.json"),
-      path.join(resolvedHome, ".clawdbot", "moldbot.json"),
-      path.join(resolvedHome, ".moldbot", "openclaw.json"),
-      path.join(resolvedHome, ".moldbot", "clawdbot.json"),
-      path.join(resolvedHome, ".moldbot", "moldbot.json"),
     ];
     expect(candidates).toEqual(expected);
   });

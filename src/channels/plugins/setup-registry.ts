@@ -1,30 +1,23 @@
 import {
-  getActivePluginRegistryVersion,
+  getActivePluginChannelRegistry,
   requireActivePluginRegistry,
 } from "../../plugins/runtime.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { CHAT_CHANNEL_ORDER, type ChatChannelId } from "../registry.js";
-import { bundledChannelSetupPlugins } from "./bundled.js";
-import type { ChannelId, ChannelPlugin } from "./types.js";
+import { listBundledChannelSetupPlugins } from "./bundled.js";
+import type { ChannelPlugin } from "./types.plugin.js";
+import type { ChannelId } from "./types.public.js";
 
-type CachedChannelSetupPlugins = {
-  registryVersion: number;
+type ChannelSetupPluginView = {
   sorted: ChannelPlugin[];
   byId: Map<string, ChannelPlugin>;
 };
 
-const EMPTY_CHANNEL_SETUP_CACHE: CachedChannelSetupPlugins = {
-  registryVersion: -1,
-  sorted: [],
-  byId: new Map(),
-};
-
-let cachedChannelSetupPlugins = EMPTY_CHANNEL_SETUP_CACHE;
-
-function dedupeSetupPlugins(plugins: ChannelPlugin[]): ChannelPlugin[] {
+function dedupeSetupPlugins(plugins: readonly ChannelPlugin[]): ChannelPlugin[] {
   const seen = new Set<string>();
   const resolved: ChannelPlugin[] = [];
   for (const plugin of plugins) {
-    const id = String(plugin.id).trim();
+    const id = normalizeOptionalString(plugin.id) ?? "";
     if (!id || seen.has(id)) {
       continue;
     }
@@ -34,7 +27,7 @@ function dedupeSetupPlugins(plugins: ChannelPlugin[]): ChannelPlugin[] {
   return resolved;
 }
 
-function sortChannelSetupPlugins(plugins: ChannelPlugin[]): ChannelPlugin[] {
+function sortChannelSetupPlugins(plugins: readonly ChannelPlugin[]): ChannelPlugin[] {
   return dedupeSetupPlugins(plugins).toSorted((a, b) => {
     const indexA = CHAT_CHANNEL_ORDER.indexOf(a.id as ChatChannelId);
     const indexB = CHAT_CHANNEL_ORDER.indexOf(b.id as ChatChannelId);
@@ -47,40 +40,37 @@ function sortChannelSetupPlugins(plugins: ChannelPlugin[]): ChannelPlugin[] {
   });
 }
 
-function resolveCachedChannelSetupPlugins(): CachedChannelSetupPlugins {
+function resolveChannelSetupPlugins(): ChannelSetupPluginView {
   const registry = requireActivePluginRegistry();
-  const registryVersion = getActivePluginRegistryVersion();
-  const cached = cachedChannelSetupPlugins;
-  if (cached.registryVersion === registryVersion) {
-    return cached;
-  }
 
   const registryPlugins = (registry.channelSetups ?? []).map((entry) => entry.plugin);
   const sorted = sortChannelSetupPlugins(
-    registryPlugins.length > 0 ? registryPlugins : bundledChannelSetupPlugins,
+    registryPlugins.length > 0 ? registryPlugins : listBundledChannelSetupPlugins(),
   );
   const byId = new Map<string, ChannelPlugin>();
   for (const plugin of sorted) {
     byId.set(plugin.id, plugin);
   }
 
-  const next: CachedChannelSetupPlugins = {
-    registryVersion,
+  return {
     sorted,
     byId,
   };
-  cachedChannelSetupPlugins = next;
-  return next;
 }
 
 export function listChannelSetupPlugins(): ChannelPlugin[] {
-  return resolveCachedChannelSetupPlugins().sorted.slice();
+  return resolveChannelSetupPlugins().sorted.slice();
+}
+
+export function listActiveChannelSetupPlugins(): ChannelPlugin[] {
+  const registry = getActivePluginChannelRegistry();
+  return sortChannelSetupPlugins((registry?.channelSetups ?? []).map((entry) => entry.plugin));
 }
 
 export function getChannelSetupPlugin(id: ChannelId): ChannelPlugin | undefined {
-  const resolvedId = String(id).trim();
+  const resolvedId = normalizeOptionalString(id) ?? "";
   if (!resolvedId) {
     return undefined;
   }
-  return resolveCachedChannelSetupPlugins().byId.get(resolvedId);
+  return resolveChannelSetupPlugins().byId.get(resolvedId);
 }

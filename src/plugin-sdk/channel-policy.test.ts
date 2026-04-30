@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
+import { formatPairingApproveHint } from "../channels/plugins/helpers.js";
 import type { GroupPolicy } from "../config/types.base.js";
-import { createRestrictSendersChannelSecurity } from "./channel-policy.js";
+import {
+  coerceNativeSetting,
+  createDangerousNameMatchingMutableAllowlistWarningCollector,
+  createRestrictSendersChannelSecurity,
+  normalizeAllowFromList,
+} from "./channel-policy.js";
 
 describe("createRestrictSendersChannelSecurity", () => {
   it("builds dm policy resolution and open-group warnings from one descriptor", async () => {
@@ -37,7 +43,7 @@ describe("createRestrictSendersChannelSecurity", () => {
       allowFrom: ["line:user:abc"],
       policyPath: "channels.line.dmPolicy",
       allowFromPath: "channels.line.",
-      approveHint: "Approve via: openclaw pairing list line / openclaw pairing approve line <code>",
+      approveHint: formatPairingApproveHint("line"),
       normalizeEntry: undefined,
     });
 
@@ -53,5 +59,77 @@ describe("createRestrictSendersChannelSecurity", () => {
     ).toEqual([
       '- LINE groups: groupPolicy="open" allows any member in groups to trigger. Set channels.line.groupPolicy="allowlist" + channels.line.groupAllowFrom to restrict senders.',
     ]);
+  });
+});
+
+describe("createDangerousNameMatchingMutableAllowlistWarningCollector", () => {
+  const collectWarnings = createDangerousNameMatchingMutableAllowlistWarningCollector({
+    channel: "irc",
+    detector: (entry) => !entry.includes("@"),
+    collectLists: (scope) => [
+      {
+        pathLabel: `${scope.prefix}.allowFrom`,
+        list: scope.account.allowFrom,
+      },
+    ],
+  });
+
+  it("collects mutable entries while dangerous matching is disabled", () => {
+    expect(
+      collectWarnings({
+        cfg: {
+          channels: {
+            irc: {
+              allowFrom: ["charlie"],
+            },
+          },
+        } as never,
+      }),
+    ).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("mutable allowlist entry"),
+        expect.stringContaining("channels.irc.allowFrom: charlie"),
+      ]),
+    );
+  });
+
+  it("skips scopes that explicitly allow dangerous name matching", () => {
+    expect(
+      collectWarnings({
+        cfg: {
+          channels: {
+            irc: {
+              dangerouslyAllowNameMatching: true,
+              allowFrom: ["charlie"],
+            },
+          },
+        } as never,
+      }),
+    ).toEqual([]);
+  });
+});
+
+describe("normalizeAllowFromList", () => {
+  it("normalizes strings and numbers into trimmed entries", () => {
+    expect(normalizeAllowFromList(["  abc ", 42, "", "   "])).toEqual(["abc", "42"]);
+  });
+
+  it("returns an empty list for non-arrays", () => {
+    expect(normalizeAllowFromList(undefined)).toEqual([]);
+    expect(normalizeAllowFromList(null)).toEqual([]);
+  });
+});
+
+describe("coerceNativeSetting", () => {
+  it("keeps boolean and auto values", () => {
+    expect(coerceNativeSetting(true)).toBe(true);
+    expect(coerceNativeSetting(false)).toBe(false);
+    expect(coerceNativeSetting("auto")).toBe("auto");
+  });
+
+  it("drops unsupported values", () => {
+    expect(coerceNativeSetting("true")).toBeUndefined();
+    expect(coerceNativeSetting("on")).toBeUndefined();
+    expect(coerceNativeSetting(1)).toBeUndefined();
   });
 });

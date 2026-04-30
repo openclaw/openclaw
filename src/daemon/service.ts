@@ -1,3 +1,5 @@
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { assertFutureConfigActionAllowed } from "./future-config-guard.js";
 import {
   installLaunchAgent,
   isLaunchAgentLoaded,
@@ -27,7 +29,9 @@ import type {
   GatewayServiceInstallArgs,
   GatewayServiceManageArgs,
   GatewayServiceRestartResult,
+  GatewayServiceStartResult,
   GatewayServiceStageArgs,
+  GatewayServiceState,
 } from "./service-types.js";
 import {
   installSystemdService,
@@ -47,7 +51,9 @@ export type {
   GatewayServiceInstallArgs,
   GatewayServiceManageArgs,
   GatewayServiceRestartResult,
+  GatewayServiceStartResult,
   GatewayServiceStageArgs,
+  GatewayServiceState,
 } from "./service-types.js";
 
 function ignoreServiceWriteResult<TArgs extends GatewayServiceInstallArgs>(
@@ -72,6 +78,71 @@ export type GatewayService = {
   readRuntime: (env: GatewayServiceEnv) => Promise<GatewayServiceRuntime>;
 };
 
+function mergeGatewayServiceEnv(
+  baseEnv: GatewayServiceEnv,
+  command: GatewayServiceCommandConfig | null,
+): GatewayServiceEnv {
+  if (!command?.environment) {
+    return baseEnv;
+  }
+  return {
+    ...baseEnv,
+    ...command.environment,
+  };
+}
+
+export async function readGatewayServiceState(
+  service: GatewayService,
+  args: GatewayServiceEnvArgs = {},
+): Promise<GatewayServiceState> {
+  const baseEnv = args.env ?? (process.env as GatewayServiceEnv);
+  const command = await service.readCommand(baseEnv).catch(() => null);
+  const env = mergeGatewayServiceEnv(baseEnv, command);
+  const [loaded, runtime] = await Promise.all([
+    service.isLoaded({ env }).catch(() => false),
+    service.readRuntime(env).catch(() => undefined),
+  ]);
+  return {
+    installed: command !== null,
+    loaded,
+    running: runtime?.status === "running",
+    env,
+    command,
+    runtime,
+  };
+}
+
+export async function startGatewayService(
+  service: GatewayService,
+  args: GatewayServiceControlArgs,
+): Promise<GatewayServiceStartResult> {
+  const state = await readGatewayServiceState(service, { env: args.env });
+  if (!state.loaded && !state.installed) {
+    return {
+      outcome: "missing-install",
+      state,
+    };
+  }
+
+  try {
+    const restartResult = await service.restart({ ...args, env: state.env });
+    const nextState = await readGatewayServiceState(service, { env: state.env });
+    return {
+      outcome: restartResult.outcome === "scheduled" ? "scheduled" : "started",
+      state: nextState,
+    };
+  } catch (err) {
+    const nextState = await readGatewayServiceState(service, { env: state.env });
+    if (!nextState.installed) {
+      return {
+        outcome: "missing-install",
+        state: nextState,
+      };
+    }
+    throw err;
+  }
+}
+
 export function describeGatewayServiceRestart(
   serviceNoun: string,
   result: GatewayServiceRestartResult,
@@ -85,7 +156,7 @@ export function describeGatewayServiceRestart(
     return {
       scheduled: true,
       daemonActionResult: "scheduled",
-      message: `restart scheduled, ${serviceNoun.toLowerCase()} will restart momentarily`,
+      message: `restart scheduled, ${normalizeLowercaseStringOrEmpty(serviceNoun)} will restart momentarily`,
       progressMessage: `${serviceNoun} service restart scheduled.`,
     };
   }
@@ -141,6 +212,32 @@ const GATEWAY_SERVICE_REGISTRY: Record<SupportedGatewayServicePlatform, GatewayS
   },
 };
 
+function withFutureConfigGuard(service: GatewayService): GatewayService {
+  return {
+    ...service,
+    stage: async (args) => {
+      await assertFutureConfigActionAllowed("rewrite the gateway service");
+      return await service.stage(args);
+    },
+    install: async (args) => {
+      await assertFutureConfigActionAllowed("install or rewrite the gateway service");
+      return await service.install(args);
+    },
+    uninstall: async (args) => {
+      await assertFutureConfigActionAllowed("uninstall the gateway service");
+      return await service.uninstall(args);
+    },
+    stop: async (args) => {
+      await assertFutureConfigActionAllowed("stop the gateway service");
+      return await service.stop(args);
+    },
+    restart: async (args) => {
+      await assertFutureConfigActionAllowed("restart the gateway service");
+      return await service.restart(args);
+    },
+  };
+}
+
 function isSupportedGatewayServicePlatform(
   platform: NodeJS.Platform,
 ): platform is SupportedGatewayServicePlatform {
@@ -149,7 +246,7 @@ function isSupportedGatewayServicePlatform(
 
 export function resolveGatewayService(): GatewayService {
   if (isSupportedGatewayServicePlatform(process.platform)) {
-    return GATEWAY_SERVICE_REGISTRY[process.platform];
+    return withFutureConfigGuard(GATEWAY_SERVICE_REGISTRY[process.platform]);
   }
   throw new Error(`Gateway service install not supported on ${process.platform}`);
 }

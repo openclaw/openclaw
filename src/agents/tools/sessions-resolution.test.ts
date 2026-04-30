@@ -1,20 +1,34 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 const callGatewayMock = vi.fn();
 vi.mock("../../gateway/call.js", () => ({
   callGateway: (opts: unknown) => callGatewayMock(opts),
 }));
-import {
-  isResolvedSessionVisibleToRequester,
-  looksLikeSessionId,
-  looksLikeSessionKey,
-  resolveDisplaySessionKey,
-  resolveInternalSessionKey,
-  resolveMainSessionAlias,
-  resolveSessionReference,
-  shouldVerifyRequesterSpawnedSessionVisibility,
-  shouldResolveSessionIdInput,
-} from "./sessions-resolution.js";
+let isResolvedSessionVisibleToRequester: typeof import("./sessions-resolution.js").isResolvedSessionVisibleToRequester;
+let looksLikeSessionId: typeof import("./sessions-resolution.js").looksLikeSessionId;
+let looksLikeSessionKey: typeof import("./sessions-resolution.js").looksLikeSessionKey;
+let resolveCurrentSessionClientAlias: typeof import("./sessions-resolution.js").resolveCurrentSessionClientAlias;
+let resolveDisplaySessionKey: typeof import("./sessions-resolution.js").resolveDisplaySessionKey;
+let resolveInternalSessionKey: typeof import("./sessions-resolution.js").resolveInternalSessionKey;
+let resolveMainSessionAlias: typeof import("./sessions-resolution.js").resolveMainSessionAlias;
+let resolveSessionReference: typeof import("./sessions-resolution.js").resolveSessionReference;
+let shouldVerifyRequesterSpawnedSessionVisibility: typeof import("./sessions-resolution.js").shouldVerifyRequesterSpawnedSessionVisibility;
+let shouldResolveSessionIdInput: typeof import("./sessions-resolution.js").shouldResolveSessionIdInput;
+
+beforeAll(async () => {
+  ({
+    isResolvedSessionVisibleToRequester,
+    looksLikeSessionId,
+    looksLikeSessionKey,
+    resolveCurrentSessionClientAlias,
+    resolveDisplaySessionKey,
+    resolveInternalSessionKey,
+    resolveMainSessionAlias,
+    resolveSessionReference,
+    shouldVerifyRequesterSpawnedSessionVisibility,
+    shouldResolveSessionIdInput,
+  } = await import("./sessions-resolution.js"));
+});
 
 beforeEach(() => {
   callGatewayMock.mockReset();
@@ -93,6 +107,22 @@ describe("session key display/internal mapping", () => {
       "current",
     );
   });
+
+  it("maps interactive client ids to the requester session", () => {
+    expect(
+      resolveCurrentSessionClientAlias({
+        key: "openclaw-tui",
+        requesterInternalKey: "agent:main:main",
+      }),
+    ).toBe("agent:main:main");
+    expect(resolveCurrentSessionClientAlias({ key: "openclaw-tui" })).toBeUndefined();
+    expect(
+      resolveCurrentSessionClientAlias({
+        key: "node-host",
+        requesterInternalKey: "agent:main:main",
+      }),
+    ).toBeUndefined();
+  });
 });
 
 describe("session reference shape detection", () => {
@@ -107,7 +137,7 @@ describe("session reference shape detection", () => {
     expect(looksLikeSessionKey("agent:main:main")).toBe(true);
     expect(looksLikeSessionKey("cron:daily-report")).toBe(true);
     expect(looksLikeSessionKey("node:macbook")).toBe(true);
-    expect(looksLikeSessionKey("telegram:group:123")).toBe(true);
+    expect(looksLikeSessionKey("forum:group:123")).toBe(true);
     expect(looksLikeSessionKey("random-slug")).toBe(false);
   });
 
@@ -169,6 +199,33 @@ describe("resolved session visibility checks", () => {
         requesterSessionKey: "agent:main:main",
         targetSessionKey: "agent:main:other",
         restrictToSpawned: false,
+        resolvedViaSessionId: false,
+      }),
+    ).resolves.toBe(true);
+  });
+
+  it("does not hide an exact spawned target behind the sessions.list visibility cap", async () => {
+    callGatewayMock.mockImplementation(
+      async (request: { method?: string; params?: { key?: string } }) => {
+        if (request.method === "sessions.resolve") {
+          return { key: request.params?.key };
+        }
+        if (request.method === "sessions.list") {
+          return {
+            sessions: Array.from({ length: 500 }, (_, index) => ({
+              key: `agent:main:subagent:worker-${index}`,
+            })),
+          };
+        }
+        return {};
+      },
+    );
+
+    await expect(
+      isResolvedSessionVisibleToRequester({
+        requesterSessionKey: "agent:main:main",
+        targetSessionKey: "agent:main:subagent:worker-999",
+        restrictToSpawned: true,
         resolvedViaSessionId: false,
       }),
     ).resolves.toBe(true);
@@ -263,5 +320,23 @@ describe("resolveSessionReference", () => {
       },
     });
     expect(callGatewayMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("treats the TUI client label as the requester session", async () => {
+    await expect(
+      resolveSessionReference({
+        sessionKey: "openclaw-tui",
+        alias: "main",
+        mainKey: "main",
+        requesterInternalKey: "agent:main:main",
+        restrictToSpawned: false,
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      key: "agent:main:main",
+      displayKey: "agent:main:main",
+      resolvedViaSessionId: false,
+    });
+    expect(callGatewayMock).not.toHaveBeenCalled();
   });
 });
