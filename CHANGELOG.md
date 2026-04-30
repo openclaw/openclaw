@@ -30,6 +30,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- CLI/status: resolve read-only channel setup runtime fallback from the packaged OpenClaw dist root, so `status --all`, `status --deep`, channel, and doctor paths do not crash when an external channel plugin needs setup metadata. Fixes #74693. Thanks @giangthb.
 - CLI/update: scope packaged Node compile caches by OpenClaw version and install metadata, so global installs no longer reuse stale compiled chunks after package updates. Thanks @pashpashpash.
 - Plugin SDK/testing: lazy-load TypeScript from the plugin test-contract runtime and add release checks for critical SDK contract entrypoint imports and bundle size, so published packages fail preflight before shipping ESM-incompatible or oversized contract helpers. Thanks @vincentkoc.
 - Channels/Microsoft Teams: treat configured `19:...@thread.tacv2` and legacy `19:...@thread.skype` team/channel IDs as already resolved during startup, avoiding false `channels unresolved` warnings while preserving Graph name lookup for display-name entries. Fixes #74683. Thanks @dseravalli.
