@@ -4,7 +4,9 @@ import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../shared/assistant-
 import { getSlashCommands, parseCommand } from "./commands.js";
 import {
   createBackspaceDeduper,
+  drainAndStopTuiForExitSafely,
   drainAndStopTuiSafely,
+  getTuiShutdownSignals,
   isIgnorableTuiStopError,
   resolveCodexCliBin,
   resolveCtrlCAction,
@@ -260,6 +262,12 @@ describe("resolveCtrlCAction", () => {
 });
 
 describe("TUI shutdown safety", () => {
+  it("registers SIGHUP shutdown on POSIX but not Windows", () => {
+    expect(getTuiShutdownSignals("linux")).toEqual(["SIGINT", "SIGTERM", "SIGHUP"]);
+    expect(getTuiShutdownSignals("darwin")).toEqual(["SIGINT", "SIGTERM", "SIGHUP"]);
+    expect(getTuiShutdownSignals("win32")).toEqual(["SIGINT", "SIGTERM"]);
+  });
+
   it("drains terminal input before stopping the TUI", async () => {
     const calls: string[] = [];
     const drainInput = vi.fn(async () => {
@@ -336,6 +344,40 @@ describe("TUI shutdown safety", () => {
         throw new Error("boom");
       });
     }).toThrow("boom");
+  });
+
+  it("bounds signal-exit cleanup when terminal drain hangs", async () => {
+    const stop = vi.fn();
+    const drainInput = vi.fn(() => new Promise<void>(() => {}));
+
+    await drainAndStopTuiForExitSafely(
+      {
+        stop,
+        terminal: { drainInput },
+      },
+      1,
+    );
+
+    expect(drainInput).toHaveBeenCalledOnce();
+    expect(drainInput).toHaveBeenCalledWith(1, 50);
+    expect(stop).toHaveBeenCalledOnce();
+  });
+
+  it("swallows terminal stop errors during signal-exit cleanup", async () => {
+    const stop = vi.fn(() => {
+      throw new Error("dead terminal");
+    });
+
+    await expect(
+      drainAndStopTuiForExitSafely(
+        {
+          stop,
+        },
+        1,
+      ),
+    ).resolves.toBeUndefined();
+
+    expect(stop).toHaveBeenCalledOnce();
   });
 });
 

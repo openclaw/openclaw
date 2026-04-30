@@ -252,6 +252,8 @@ type DrainableTui = {
   };
 };
 
+const TUI_EXIT_CLEANUP_TIMEOUT_MS = 1000;
+
 export async function drainAndStopTuiSafely(tui: DrainableTui): Promise<void> {
   if (typeof tui.terminal?.drainInput === "function") {
     try {
@@ -261,6 +263,38 @@ export async function drainAndStopTuiSafely(tui: DrainableTui): Promise<void> {
     }
   }
   stopTuiSafely(() => tui.stop());
+}
+
+export async function drainAndStopTuiForExitSafely(
+  tui: DrainableTui,
+  timeoutMs = TUI_EXIT_CLEANUP_TIMEOUT_MS,
+): Promise<void> {
+  let timeout: NodeJS.Timeout | undefined;
+  try {
+    if (typeof tui.terminal?.drainInput === "function") {
+      await Promise.race([
+        tui.terminal.drainInput(Math.max(1, timeoutMs), 50),
+        new Promise<void>((resolve) => {
+          timeout = setTimeout(resolve, Math.max(1, timeoutMs));
+          timeout.unref?.();
+        }),
+      ]);
+    }
+    stopTuiSafely(() => tui.stop());
+  } catch {
+    // Signal shutdown is best-effort. Do not keep an orphaned TUI alive because
+    // terminal cleanup threw after the controlling terminal disappeared.
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
+}
+
+export function getTuiShutdownSignals(
+  platform: NodeJS.Platform = process.platform,
+): NodeJS.Signals[] {
+  return platform === "win32" ? ["SIGINT", "SIGTERM"] : ["SIGINT", "SIGTERM", "SIGHUP"];
 }
 
 type CtrlCAction = "clear" | "warn" | "exit";
@@ -925,6 +959,16 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
   });
 
   let finishTui: (() => void) | null = null;
+  const stopStatusUi = () => {
+    stopStatusTimer();
+    stopWaitingTimer();
+    try {
+      statusLoader?.stop();
+    } catch {
+      // Exit path only: a dead terminal should not keep the process alive.
+    }
+    statusLoader = null;
+  };
   const requestExit = (result?: Partial<TuiResult>) => {
     if (exitRequested) {
       return;
@@ -934,8 +978,9 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       exitReason: result?.exitReason ?? "exit",
       ...(result?.crestodianMessage ? { crestodianMessage: result.crestodianMessage } : {}),
     };
+    stopStatusUi();
     client.stop();
-    void drainAndStopTuiSafely(tui).then(() => {
+    void drainAndStopTuiForExitSafely(tui).finally(() => {
       finishTui?.();
     });
   };
@@ -1130,11 +1175,15 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
   const sigintHandler = () => {
     handleCtrlC();
   };
-  const sigtermHandler = () => {
+  const shutdownHandler = () => {
     requestExit();
   };
-  process.on("SIGINT", sigintHandler);
-  process.on("SIGTERM", sigtermHandler);
+  const signalHandlers = new Map<NodeJS.Signals, () => void>();
+  for (const signal of getTuiShutdownSignals()) {
+    const handler = signal === "SIGINT" ? sigintHandler : shutdownHandler;
+    process.on(signal, handler);
+    signalHandlers.set(signal, handler);
+  }
   tui.start();
   client.start();
   await new Promise<void>((resolve) => {
@@ -1142,8 +1191,10 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       if (isLocalMode) {
         setConsoleSubsystemFilter(previousConsoleSubsystemFilter);
       }
-      process.removeListener("SIGINT", sigintHandler);
-      process.removeListener("SIGTERM", sigtermHandler);
+      for (const [signal, handler] of signalHandlers) {
+        process.removeListener(signal, handler);
+      }
+      signalHandlers.clear();
       process.removeListener("exit", finish);
       finishTui = null;
       resolve();
