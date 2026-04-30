@@ -7,6 +7,8 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Agents/subagents: bound automatic orphan recovery with persisted recovery attempts and a wedged-session tombstone, and teach task maintenance/doctor to reconcile those sessions so restart loops no longer require manual `sessions.json` surgery. Fixes #74864. Thanks @solosage1.
+- Gateway/startup: skip pre-bind web-fetch provider discovery for credential-free `tools.web.fetch` config, so Docker/Kubernetes gateways bind even when optional fetch limits are present. Fixes #74896. Thanks @KoykL.
+- Slack: require bot-authored room messages with `allowBots=true` to come from an explicitly channel-allowlisted bot or from a room where an explicit Slack owner is present, so broad bot relays cannot run unattended. Fixes #59284. Thanks @andrewhong-translucent.
 - CLI/progress: suppress nested progress spinners and line clears while TUI input owns raw stdin, so Crestodian `/status` no longer disturbs the active input row. (#75003) Thanks @velvet-shark.
 - Models/OpenAI Codex: restore `openai-codex/gpt-5.4-mini` for ChatGPT/Codex OAuth PI runs after live OAuth proof, and align the manifest, forward-compat metadata, docs, and regression tests so stale cron and heartbeat configs resolve again. Fixes #74451. Thanks @0xCyda, @hclsys, and @Marvae.
 - Telegram: use durable message edits for streaming previews instead of native draft state, so generated replies no longer flicker through draft-to-message transitions that look like duplicates. (#75073) Thanks @obviyus.
