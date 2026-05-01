@@ -165,6 +165,7 @@ function metadataKeyForCapabilityContract(
     case "mediaUnderstandingProviders":
       return undefined;
   }
+  return undefined;
 }
 
 function normalizeBaseUrlForManifestGuard(value: string): string {

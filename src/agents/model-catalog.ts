@@ -136,16 +136,27 @@ export function loadManifestModelCatalog(params: {
   const plan = planManifestModelCatalogRows({
     registry: { plugins: eligiblePlugins },
   });
-  return plan.rows.map((row) => ({
-    id: row.id,
-    name: row.name,
-    provider: row.provider,
-    ...(row.contextWindow ? { contextWindow: row.contextWindow } : {}),
-    ...(row.contextTokens && !row.contextWindow ? { contextWindow: row.contextTokens } : {}),
-    ...(typeof row.reasoning === "boolean" ? { reasoning: row.reasoning } : {}),
-    ...(row.input?.length ? { input: [...row.input] } : {}),
-    ...(row.compat ? { compat: row.compat } : {}),
-  }));
+  return plan.rows.map((row) => {
+    const entry: ModelCatalogEntry = {
+      id: row.id,
+      name: row.name,
+      provider: row.provider,
+    };
+    const contextWindow = row.contextWindow ?? row.contextTokens;
+    if (contextWindow) {
+      entry.contextWindow = contextWindow;
+    }
+    if (typeof row.reasoning === "boolean") {
+      entry.reasoning = row.reasoning;
+    }
+    if (row.input?.length) {
+      entry.input = [...row.input];
+    }
+    if (row.compat) {
+      entry.compat = row.compat;
+    }
+    return entry;
+  });
 }
 
 export async function loadModelCatalog(params?: {
