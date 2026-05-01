@@ -19,6 +19,7 @@ describe("web search Codex native config validation", () => {
               contextSize: "medium",
               userLocation: {
                 country: "US",
+                region: "NY",
                 city: "New York",
                 timezone: "America/New_York",
               },
