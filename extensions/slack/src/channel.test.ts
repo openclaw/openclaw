@@ -1,5 +1,7 @@
+import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { createRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createSlackActions } from "./channel-actions.js";
 import { slackPlugin } from "./channel.js";
 import { slackOutbound } from "./outbound-adapter.js";
 import * as probeModule from "./probe.js";
@@ -182,6 +184,60 @@ describe("slackPlugin actions", () => {
       ],
       capabilities: expect.arrayContaining(["presentation"]),
     });
+  });
+
+  it("forwards media access to custom action invokes for upload-file", async () => {
+    const cfg = {
+      channels: {
+        slack: {
+          botToken: "xoxb-test",
+          appToken: "xapp-test",
+        },
+      },
+    } as OpenClawConfig;
+    const mediaReadFile = vi.fn(async () => Buffer.from("media"));
+    const invoke = vi.fn(
+      async (): Promise<AgentToolResult<unknown>> => ({
+        content: [{ type: "text", text: "uploaded" }],
+        details: { ok: true },
+      }),
+    );
+    const actions = createSlackActions("slack", { invoke });
+    if (!actions.handleAction) {
+      throw new Error("slack actions.handleAction unavailable");
+    }
+
+    await actions.handleAction({
+      channel: "slack",
+      action: "upload-file",
+      cfg,
+      params: {
+        channelId: "channel:C123",
+        filePath: "/tmp/workspace/render.wav",
+      },
+      mediaLocalRoots: ["/tmp/workspace"],
+      mediaReadFile,
+      toolContext: {
+        currentChannelId: "C123",
+        currentThreadTs: "111.222",
+        replyToMode: "all",
+      },
+    } as never);
+
+    expect(invoke).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "uploadFile",
+        to: "C123",
+        filePath: "/tmp/workspace/render.wav",
+      }),
+      cfg,
+      expect.objectContaining({
+        currentChannelId: "C123",
+        currentThreadTs: "111.222",
+        mediaLocalRoots: ["/tmp/workspace"],
+        mediaReadFile,
+      }),
+    );
   });
 
   it("uses configured defaultAccount for pairing approval notifications", async () => {

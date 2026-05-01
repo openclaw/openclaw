@@ -32,14 +32,19 @@ export function createSlackActions(
         ctx,
         normalizeChannelId: resolveSlackChannelId,
         includeReadThreadId: true,
-        invoke: async (action, cfg, toolContext) =>
-          await (options?.invoke
-            ? options.invoke(action, cfg, toolContext)
-            : (await loadSlackActionRuntime()).handleSlackAction(action, cfg, {
-                ...(toolContext as SlackActionContext | undefined),
-                mediaLocalRoots: ctx.mediaLocalRoots,
-                mediaReadFile: ctx.mediaReadFile,
-              })),
+        invoke: async (action, cfg, toolContext) => {
+          const actionContext =
+            toolContext || ctx.mediaLocalRoots || ctx.mediaReadFile
+              ? {
+                  ...(toolContext as SlackActionContext | undefined),
+                  mediaLocalRoots: ctx.mediaLocalRoots,
+                  mediaReadFile: ctx.mediaReadFile,
+                }
+              : undefined;
+          return await (options?.invoke
+            ? options.invoke(action, cfg, actionContext)
+            : (await loadSlackActionRuntime()).handleSlackAction(action, cfg, actionContext));
+        },
       });
     },
   };
