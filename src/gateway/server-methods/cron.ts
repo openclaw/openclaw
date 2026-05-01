@@ -28,6 +28,8 @@ import {
 } from "../protocol/index.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
+const OPENCLAW_CRON_LIST_DIAGNOSTIC_DEBUG = "OPENCLAW_CRON_LIST_DIAGNOSTIC_DEBUG";
+
 type CronListDiagnosticStage =
   | "handler_entered"
   | "params_validated"
@@ -73,6 +75,10 @@ function listConfiguredAnnounceChannelIds(cfg: OpenClawConfig): string[] {
     config: cfg,
     env: process.env,
   });
+}
+
+function isCronListDiagnosticDebugEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env[OPENCLAW_CRON_LIST_DIAGNOSTIC_DEBUG] === "1";
 }
 
 function sanitizeDiagnosticString(value: unknown): string | undefined {
@@ -180,6 +186,9 @@ function logCronListDiagnostic(params: {
   ok?: unknown;
   error?: unknown;
 }) {
+  if (!isCronListDiagnosticDebugEnabled()) {
+    return;
+  }
   params.log.info(
     formatCronListDiagnosticEvent(
       buildCronListDiagnosticEvent({
