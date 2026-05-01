@@ -1,11 +1,7 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { resolveRuntimePluginRegistry } from "../plugins/loader.js";
-import {
-  getActivePluginRegistry,
-  getActivePluginRegistryWorkspaceDir,
-  getActivePluginRuntimeSubagentMode,
-} from "../plugins/runtime.js";
+import { getActivePluginRuntimeSubagentMode } from "../plugins/runtime.js";
 import { resolveUserPath } from "../utils.js";
 
 type StartupScopedPluginSnapshot = NonNullable<
@@ -31,33 +27,6 @@ function resolveStartupPluginIdsFromCurrentSnapshot(params: {
   return pluginIds.filter((pluginId): pluginId is string => typeof pluginId === "string");
 }
 
-function activeRegistryCoversStartupScope(params: {
-  pluginIds: readonly string[];
-  workspaceDir?: string;
-  allowGatewaySubagentBinding: boolean;
-}): boolean {
-  const activeRegistry = getActivePluginRegistry();
-  if (!activeRegistry) {
-    return false;
-  }
-  if (
-    params.allowGatewaySubagentBinding &&
-    getActivePluginRuntimeSubagentMode() !== "gateway-bindable"
-  ) {
-    return false;
-  }
-  const activeWorkspaceDir = getActivePluginRegistryWorkspaceDir();
-  if (
-    activeWorkspaceDir !== undefined &&
-    params.workspaceDir !== undefined &&
-    activeWorkspaceDir !== params.workspaceDir
-  ) {
-    return false;
-  }
-  const activePluginIds = new Set(activeRegistry.plugins.map((plugin) => plugin.id));
-  return params.pluginIds.every((pluginId) => activePluginIds.has(pluginId));
-}
-
 export function ensureRuntimePluginsLoaded(params: {
   config?: OpenClawConfig;
   workspaceDir?: string | null;
@@ -74,16 +43,6 @@ export function ensureRuntimePluginsLoaded(params: {
     config: params.config,
     workspaceDir,
   });
-  if (
-    startupPluginIds &&
-    activeRegistryCoversStartupScope({
-      pluginIds: startupPluginIds,
-      workspaceDir,
-      allowGatewaySubagentBinding,
-    })
-  ) {
-    return;
-  }
   const loadOptions = {
     config: params.config,
     workspaceDir,

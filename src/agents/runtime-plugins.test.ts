@@ -3,8 +3,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const hoisted = vi.hoisted(() => ({
   getCurrentPluginMetadataSnapshot: vi.fn(),
   resolveRuntimePluginRegistry: vi.fn(),
-  getActivePluginRegistry: vi.fn(),
-  getActivePluginRegistryWorkspaceDir: vi.fn(),
   getActivePluginRuntimeSubagentMode: vi.fn<() => "default" | "explicit" | "gateway-bindable">(
     () => "default",
   ),
@@ -19,8 +17,6 @@ vi.mock("../plugins/loader.js", () => ({
 }));
 
 vi.mock("../plugins/runtime.js", () => ({
-  getActivePluginRegistry: hoisted.getActivePluginRegistry,
-  getActivePluginRegistryWorkspaceDir: hoisted.getActivePluginRegistryWorkspaceDir,
   getActivePluginRuntimeSubagentMode: hoisted.getActivePluginRuntimeSubagentMode,
 }));
 
@@ -32,10 +28,6 @@ describe("ensureRuntimePluginsLoaded", () => {
     hoisted.getCurrentPluginMetadataSnapshot.mockReturnValue(undefined);
     hoisted.resolveRuntimePluginRegistry.mockReset();
     hoisted.resolveRuntimePluginRegistry.mockReturnValue(undefined);
-    hoisted.getActivePluginRegistry.mockReset();
-    hoisted.getActivePluginRegistry.mockReturnValue(null);
-    hoisted.getActivePluginRegistryWorkspaceDir.mockReset();
-    hoisted.getActivePluginRegistryWorkspaceDir.mockReturnValue(undefined);
     hoisted.getActivePluginRuntimeSubagentMode.mockReset();
     hoisted.getActivePluginRuntimeSubagentMode.mockReturnValue("default");
     vi.resetModules();
@@ -98,17 +90,13 @@ describe("ensureRuntimePluginsLoaded", () => {
     });
   });
 
-  it("reuses an active gateway registry that already covers the startup plan", async () => {
+  it("delegates startup-scope registry reuse to loader cache compatibility", async () => {
     hoisted.getCurrentPluginMetadataSnapshot.mockReturnValue({
       startup: {
         pluginIds: ["telegram"],
       },
     });
     hoisted.getActivePluginRuntimeSubagentMode.mockReturnValue("gateway-bindable");
-    hoisted.getActivePluginRegistryWorkspaceDir.mockReturnValue("/tmp/workspace");
-    hoisted.getActivePluginRegistry.mockReturnValue({
-      plugins: [{ id: "telegram", status: "loaded" }],
-    });
 
     ensureRuntimePluginsLoaded({
       config: {} as never,
@@ -116,28 +104,49 @@ describe("ensureRuntimePluginsLoaded", () => {
       allowGatewaySubagentBinding: true,
     });
 
-    expect(hoisted.resolveRuntimePluginRegistry).not.toHaveBeenCalled();
+    expect(hoisted.resolveRuntimePluginRegistry).toHaveBeenCalledWith({
+      config: {} as never,
+      installBundledRuntimeDeps: false,
+      onlyPluginIds: ["telegram"],
+      workspaceDir: "/tmp/workspace",
+      runtimeOptions: {
+        allowGatewaySubagentBinding: true,
+      },
+    });
   });
 
-  it("does not reuse an active gateway registry for another workspace", async () => {
+  it("lets the loader decide when startup ids match but config changes", async () => {
+    const config = {
+      plugins: {
+        config: {
+          telegram: {
+            replyMode: "changed",
+          },
+        },
+      },
+    } as never;
     hoisted.getCurrentPluginMetadataSnapshot.mockReturnValue({
       startup: {
         pluginIds: ["telegram"],
       },
     });
     hoisted.getActivePluginRuntimeSubagentMode.mockReturnValue("gateway-bindable");
-    hoisted.getActivePluginRegistryWorkspaceDir.mockReturnValue("/tmp/other-workspace");
-    hoisted.getActivePluginRegistry.mockReturnValue({
-      plugins: [{ id: "telegram", status: "loaded" }],
-    });
 
     ensureRuntimePluginsLoaded({
-      config: {} as never,
+      config,
       workspaceDir: "/tmp/workspace",
       allowGatewaySubagentBinding: true,
     });
 
-    expect(hoisted.resolveRuntimePluginRegistry).toHaveBeenCalledTimes(1);
+    expect(hoisted.resolveRuntimePluginRegistry).toHaveBeenCalledWith({
+      config,
+      installBundledRuntimeDeps: false,
+      onlyPluginIds: ["telegram"],
+      workspaceDir: "/tmp/workspace",
+      runtimeOptions: {
+        allowGatewaySubagentBinding: true,
+      },
+    });
   });
 
   it("does not enable gateway subagent binding for normal runtime loads", async () => {
