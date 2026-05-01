@@ -1202,8 +1202,15 @@ export async function dispatchReplyFromConfig(
             if (suppressDelivery) {
               return;
             }
+            const preTtsPayload =
+              payload.internalShape === "provider-inventory" && ctx.ChatType !== "direct"
+                ? resolveToolDeliveryPayload(payload)
+                : payload;
+            if (!preTtsPayload) {
+              return;
+            }
             const ttsPayload = await maybeApplyTtsToReplyPayload({
-              payload,
+              payload: preTtsPayload,
               cfg,
               channel: deliveryChannel,
               kind: "tool",

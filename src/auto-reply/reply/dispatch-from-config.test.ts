@@ -118,6 +118,7 @@ const agentEventMocks = vi.hoisted(() => ({
 const ttsMocks = vi.hoisted(() => {
   const state = {
     synthesizeFinalAudio: false,
+    synthesizeToolAudio: false,
   };
   return {
     state,
@@ -136,6 +137,19 @@ const ttsMocks = vi.hoisted(() => {
           ...params.payload,
           mediaUrl: "https://example.com/tts-synth.opus",
           audioAsVoice: true,
+        };
+      }
+      if (
+        state.synthesizeToolAudio &&
+        params.kind === "tool" &&
+        typeof params.payload?.text === "string" &&
+        params.payload.text.trim()
+      ) {
+        return {
+          ...params.payload,
+          mediaUrl: "https://example.com/tts-tool.opus",
+          audioAsVoice: true,
+          spokenText: params.payload.text,
         };
       }
       return params.payload;
@@ -788,6 +802,7 @@ describe("dispatchReplyFromConfig", () => {
     threadInfoMocks.parseSessionThreadInfo.mockReset();
     threadInfoMocks.parseSessionThreadInfo.mockImplementation(parseGenericThreadSessionInfo);
     ttsMocks.state.synthesizeFinalAudio = false;
+    ttsMocks.state.synthesizeToolAudio = false;
     ttsMocks.maybeApplyTtsToPayload.mockClear();
     ttsMocks.normalizeTtsAutoMode.mockClear();
     ttsMocks.resolveTtsConfig.mockClear();
@@ -1585,6 +1600,52 @@ describe("dispatchReplyFromConfig", () => {
     expect(sent?.text).toBeUndefined();
     expect(sent?.mediaUrls).toEqual(["https://example.com/preview.png"]);
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "done" });
+  });
+
+  it("suppresses provider-inventory before tool TTS can synthesize shared audio", async () => {
+    setNoAbort();
+    ttsMocks.state.synthesizeToolAudio = true;
+    ttsMocks.resolveTtsConfig.mockReturnValue({ mode: "all" });
+    const cfg = {
+      ...automaticGroupReplyConfig,
+      messages: {
+        tts: {
+          auto: "all",
+          mode: "all",
+        },
+      },
+    } satisfies OpenClawConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "discord",
+      Surface: "discord",
+      ChatType: "channel",
+    });
+
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
+    ) => {
+      await opts?.onToolResult?.({
+        text: "openai: default=sora-2 | models=sora-2",
+        internalShape: "provider-inventory",
+      });
+      return { text: "done" } satisfies ReplyPayload;
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(ttsMocks.maybeApplyTtsToPayload).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "tool",
+        payload: expect.objectContaining({
+          internalShape: "provider-inventory",
+          text: expect.any(String),
+        }),
+      }),
+    );
+    expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
   });
 
   it("sends tool results via dispatcher in DM sessions", async () => {
