@@ -18,4 +18,3 @@ export {
   resolveShellWrapperTransportArgv,
   unwrapKnownShellMultiplexerInvocation,
 } from "./shell-wrapper-resolution.js";
-export { resolveExecWrapperTrustPlan } from "./exec-wrapper-trust-plan.js";
