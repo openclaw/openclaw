@@ -105,6 +105,6 @@ export async function transcribeAudio(
     const result = (await response.json()) as { text?: string };
     return normalizeOptionalString(result.text) ?? null;
   } finally {
-    release();
+    await release();
   }
 }
