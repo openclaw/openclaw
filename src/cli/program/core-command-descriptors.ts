@@ -36,6 +36,11 @@ const coreCliCommandCatalog = defineCommandDescriptorCatalog([
     hasSubcommands: true,
   },
   {
+    name: "profile",
+    description: "Export and import privacy-safe OpenClaw profile archives",
+    hasSubcommands: true,
+  },
+  {
     name: "migrate",
     description: "Import state from another agent system",
     hasSubcommands: true,

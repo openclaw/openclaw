@@ -10,6 +10,7 @@ import type { PluginRegistry } from "../src/plugins/registry.js";
 import { installSharedTestSetup } from "./setup.shared.js";
 
 installSharedTestSetup();
+process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR ??= "1";
 
 const WORKER_RUNTIME_STATE = Symbol.for("openclaw.testSetupRuntimeState");
 const WORKER_PLUGIN_RUNTIME_HELPERS = Symbol.for("openclaw.testSetupPluginRuntimeHelpers");

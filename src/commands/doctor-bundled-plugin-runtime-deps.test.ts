@@ -12,10 +12,19 @@ import { maybeRepairBundledPluginRuntimeDeps } from "./doctor-bundled-plugin-run
 import type { DoctorPrompter } from "./doctor-prompter.js";
 
 type InstalledRuntimeDeps = BundledRuntimeDepsInstallParams[];
+const trustedPackageRoots: string[] = [];
 
 function writeJson(filePath: string, value: unknown) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   fs.writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+}
+
+function makeTrustedPackageRoot(): string {
+  const trustedRoot = path.resolve("dist", "extensions");
+  fs.mkdirSync(trustedRoot, { recursive: true });
+  const root = fs.mkdtempSync(path.join(trustedRoot, "openclaw-doctor-bundled-"));
+  trustedPackageRoots.push(root);
+  return root;
 }
 
 function writeBundledChannelPlugin(root: string, id: string, dependencies: Record<string, string>) {
@@ -161,6 +170,9 @@ function createRuntime(options: { logs?: string[]; errors?: string[] } = {}): Ru
 describe("doctor bundled plugin runtime deps", () => {
   afterEach(() => {
     vi.useRealTimers();
+    for (const root of trustedPackageRoots.splice(0)) {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("skips source checkouts", () => {
@@ -491,6 +503,9 @@ describe("doctor bundled plugin runtime deps", () => {
       runtime: createRuntime(),
       prompter: createNonInteractivePrompter(),
       packageRoot: root,
+      env: {
+        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+      },
       config: {
         plugins: { enabled: true },
       },
@@ -636,6 +651,7 @@ describe("doctor bundled plugin runtime deps", () => {
       runtime: createRuntime(),
       prompter: createNonInteractivePrompter(),
       packageRoot: root,
+      includeConfiguredChannels: true,
       config: {
         plugins: { enabled: true },
         channels: { telegram: { enabled: true } },
@@ -751,7 +767,7 @@ describe("doctor bundled plugin runtime deps", () => {
   });
 
   it("repairs deps for configured channel owner plugins", async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-bundled-"));
+    const root = makeTrustedPackageRoot();
     writeJson(path.join(root, "package.json"), { name: "openclaw" });
     writeBundledChannelOwnerPlugin(root, "chat-bridge", ["telegram"], { grammy: "1.37.0" });
     const installed = createInstalledRuntimeDeps();
