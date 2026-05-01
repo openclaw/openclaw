@@ -8,6 +8,7 @@ const PACKAGE_JSON = "package.json";
 const RELEASE_CHECKS_WORKFLOW = ".github/workflows/openclaw-release-checks.yml";
 const FULL_RELEASE_VALIDATION_WORKFLOW = ".github/workflows/full-release-validation.yml";
 const QA_LIVE_TRANSPORTS_WORKFLOW = ".github/workflows/qa-live-transports-convex.yml";
+const UPGRADE_SURVIVOR_RUN_SCRIPT = "scripts/e2e/lib/upgrade-survivor/run.sh";
 
 describe("package acceptance workflow", () => {
   it("resolves candidate package sources before reusing Docker E2E lanes", () => {
@@ -76,6 +77,7 @@ describe("package artifact reuse", () => {
     const workflow = readFileSync(LIVE_E2E_WORKFLOW, "utf8");
     const packageJson = readFileSync(PACKAGE_JSON, "utf8");
     const scheduler = readFileSync("scripts/test-docker-all.mjs", "utf8");
+    const publishedUpgradeSurvivor = readFileSync(UPGRADE_SURVIVOR_RUN_SCRIPT, "utf8");
 
     expect(workflow).toContain("package_artifact_name:");
     expect(workflow).toContain("package_artifact_run_id:");
@@ -115,6 +117,13 @@ describe("package artifact reuse", () => {
       '["OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC", baseEnv.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC]',
     );
     expect(packageJson).toContain("OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1");
+    expect(publishedUpgradeSurvivor).toContain("validate_baseline_package_spec");
+    expect(publishedUpgradeSurvivor).toContain("openclaw@(beta|latest|");
+    expect(
+      publishedUpgradeSurvivor.indexOf('validate_baseline_package_spec "$baseline_spec"'),
+    ).toBeLessThan(
+      publishedUpgradeSurvivor.indexOf('npm install -g --prefix "$npm_config_prefix"'),
+    );
   });
 
   it("bounds shared Docker image pulls so package acceptance cannot stall forever", () => {
