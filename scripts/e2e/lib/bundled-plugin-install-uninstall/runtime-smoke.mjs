@@ -86,7 +86,7 @@ function activateSmokePlugin(config, pluginId) {
       entries: {
         ...config.plugins?.entries,
         [pluginId]: {
-          ...(config.plugins?.entries?.[pluginId] ?? {}),
+          ...config.plugins?.entries?.[pluginId],
           enabled: true,
         },
       },
@@ -105,7 +105,7 @@ function buildPluginPlan(manifest) {
     ? contracts.speechProviders.filter(isNonEmptyString)
     : [];
   const tools = Array.isArray(contracts.tools) ? contracts.tools.filter(isNonEmptyString) : [];
-  const hasRuntimeContractSurface = Boolean(
+  const hasRuntimeContractSurface =
     channels.length > 0 ||
     speechProviders.length > 0 ||
     tools.length > 0 ||
@@ -113,8 +113,7 @@ function buildPluginPlan(manifest) {
     (Array.isArray(manifest.cliBackends) && manifest.cliBackends.length > 0) ||
     (Array.isArray(contracts.mediaUnderstandingProviders) &&
       contracts.mediaUnderstandingProviders.length > 0) ||
-    (Array.isArray(contracts.migrationProviders) && contracts.migrationProviders.length > 0),
-  );
+    (Array.isArray(contracts.migrationProviders) && contracts.migrationProviders.length > 0);
   const legacyImplicitStartupSidecar =
     manifest.activation?.onStartup === undefined &&
     channels.length === 0 &&
