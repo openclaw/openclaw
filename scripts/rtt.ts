@@ -61,7 +61,7 @@ function parseArgs(argv: string[]) {
   let spec: string | undefined;
   let providerMode = DEFAULT_PROVIDER_MODE;
   let runs = 1;
-  let harnessRoot = "~/Developer/clawdbot";
+  let harnessRoot = process.cwd();
   let output = "runs";
   let timeoutMs = DEFAULT_TIMEOUT_MS;
 
