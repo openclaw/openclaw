@@ -1,5 +1,5 @@
 import { formatInboundEnvelope } from "openclaw/plugin-sdk/channel-inbound";
-import type { ContextVisibilityMode } from "openclaw/plugin-sdk/config-types";
+import type { ContextVisibilityMode, OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import {
   filterSupplementalContextItems,
@@ -8,7 +8,13 @@ import {
 import type { ResolvedSlackAccount } from "../../accounts.js";
 import type { SlackMessageEvent } from "../../types.js";
 import { resolveSlackAllowListMatch } from "../allow-list.js";
-import { readSessionUpdatedAt } from "../config.runtime.js";
+import {
+  evaluateSessionFreshness,
+  loadSessionStore,
+  resolveChannelResetConfig,
+  resolveSessionResetPolicy,
+  resolveSessionStoreEntry,
+} from "../config.runtime.js";
 import type { SlackMonitorContext } from "../context.js";
 import type { SlackMediaResult } from "../media-types.js";
 import { resolveSlackThreadHistory, type SlackThreadStarter } from "../thread.js";
@@ -67,6 +73,8 @@ export async function resolveSlackThreadContextData(params: {
     typeof import("openclaw/plugin-sdk/channel-inbound").resolveEnvelopeFormatOptions
   >;
   effectiveDirectMedia: SlackMediaResult[] | null;
+  cfg?: OpenClawConfig;
+  now?: number;
 }): Promise<SlackThreadContextData> {
   const isCurrentBotAuthor = (author: { userId?: string; botId?: string }): boolean =>
     Boolean(
@@ -149,12 +157,40 @@ export async function resolveSlackThreadContextData(params: {
   }
 
   const threadInitialHistoryLimit = params.account.config?.thread?.initialHistoryLimit ?? 20;
-  threadSessionPreviousTimestamp = readSessionUpdatedAt({
-    storePath: params.storePath,
+  // Load the full session entry so the freshness check sees the same lifecycle
+  // timestamps initSessionState evaluates (sessionStartedAt for daily resets,
+  // lastInteractionAt for idle resets). An updatedAt-only check can disagree
+  // with the reset decision when updatedAt is recent but a lifecycle timestamp
+  // is past its boundary.
+  const sessionStore = loadSessionStore(params.storePath);
+  const { existing: sessionEntry } = resolveSessionStoreEntry({
+    store: sessionStore,
     sessionKey: params.sessionKey,
   });
+  threadSessionPreviousTimestamp = sessionEntry?.updatedAt;
 
-  if (threadInitialHistoryLimit > 0 && !threadSessionPreviousTimestamp) {
+  // A stale (past daily-reset / past idle window) session must be treated the
+  // same as no timestamp — the session was effectively reset, so the agent
+  // will see an empty transcript and needs thread history loaded again.
+  // Without this check, the bot replies blind on the first message after a reset (#33507).
+  const isEffectivelyNewSession =
+    !sessionEntry ||
+    !evaluateSessionFreshness({
+      updatedAt: sessionEntry.updatedAt,
+      sessionStartedAt: sessionEntry.sessionStartedAt,
+      lastInteractionAt: sessionEntry.lastInteractionAt,
+      now: params.now ?? Date.now(),
+      policy: resolveSessionResetPolicy({
+        sessionCfg: params.cfg?.session,
+        resetType: "thread",
+        resetOverride: resolveChannelResetConfig({
+          sessionCfg: params.cfg?.session,
+          channel: "slack",
+        }),
+      }),
+    }).fresh;
+
+  if (threadInitialHistoryLimit > 0 && isEffectivelyNewSession) {
     const threadHistory = await resolveSlackThreadHistory({
       channelId: params.message.channel,
       threadTs: params.threadTs,

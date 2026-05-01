@@ -1,9 +1,14 @@
 export { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 export { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
 export {
+  evaluateSessionFreshness,
+  loadSessionStore,
   readSessionUpdatedAt,
   recordSessionMetaFromInbound,
+  resolveChannelResetConfig,
   resolveSessionKey,
+  resolveSessionResetPolicy,
+  resolveSessionStoreEntry,
   resolveStorePath,
   updateLastRoute,
 } from "openclaw/plugin-sdk/session-store-runtime";
