@@ -12,6 +12,9 @@ export type AgentHarnessHookContext = {
   messageProvider?: string;
   trigger?: string;
   channelId?: string;
+  senderId?: string;
+  senderExternalId?: string;
+  chatId?: string;
 };
 
 export function buildAgentHookContext(params: AgentHarnessHookContext): PluginHookAgentContext {
@@ -27,5 +30,8 @@ export function buildAgentHookContext(params: AgentHarnessHookContext): PluginHo
     ...(params.messageProvider ? { messageProvider: params.messageProvider } : {}),
     ...(params.trigger ? { trigger: params.trigger } : {}),
     ...(params.channelId ? { channelId: params.channelId } : {}),
+    ...(params.senderId ? { senderId: params.senderId } : {}),
+    ...(params.senderExternalId ? { senderExternalId: params.senderExternalId } : {}),
+    ...(params.chatId ? { chatId: params.chatId } : {}),
   };
 }
