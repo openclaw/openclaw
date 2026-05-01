@@ -693,6 +693,8 @@ Both kinds share Matrix reaction shortcuts and message updates. Approvers see re
 
 Fallback slash commands: `/approve <id> allow-once`, `/approve <id> allow-always`, `/approve <id> deny`.
 
+Matrix approval reaction targets use best-effort SDK-backed persistent state behind the in-memory cache. Reactions on still-pending approval prompts can resolve after a Gateway restart; if the persistent store is unavailable or fails, OpenClaw logs the failure and keeps the previous process-local cache behavior.
+
 Only resolved approvers can approve or deny. Channel delivery for exec approvals includes the command text — only enable `channel` or `both` in trusted rooms.
 
 Related: [Exec approvals](/tools/exec-approvals).
