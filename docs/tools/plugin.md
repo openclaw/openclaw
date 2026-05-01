@@ -586,26 +586,26 @@ behind full-runtime paths.
 
 Common registration methods:
 
-| Method                                  | What it registers           |
-| --------------------------------------- | --------------------------- |
-| `registerProvider`                      | Model provider (LLM)        |
-| `registerStatusProvider`                | TUI footer status provider  |
-| `registerChannel`                       | Chat channel                |
-| `registerTool`                          | Agent tool                  |
-| `registerHook` / `on(...)`              | Lifecycle hooks             |
-| `registerSpeechProvider`                | Text-to-speech / STT        |
-| `registerRealtimeTranscriptionProvider` | Streaming STT               |
-| `registerRealtimeVoiceProvider`         | Duplex realtime voice       |
-| `registerMediaUnderstandingProvider`    | Image/audio analysis        |
-| `registerImageGenerationProvider`       | Image generation            |
-| `registerMusicGenerationProvider`       | Music generation            |
-| `registerVideoGenerationProvider`       | Video generation            |
-| `registerWebFetchProvider`              | Web fetch / scrape provider |
-| `registerWebSearchProvider`             | Web search                  |
-| `registerHttpRoute`                     | HTTP endpoint               |
-| `registerCommand` / `registerCli`       | CLI commands                |
-| `registerContextEngine`                 | Context engine              |
-| `registerService`                       | Background service          |
+| Method                                  | What it registers                                   |
+| --------------------------------------- | --------------------------------------------------- |
+| `registerProvider`                      | Model provider (LLM)                                |
+| `registerStatusProvider`                | API-only status provider for future status surfaces |
+| `registerChannel`                       | Chat channel                                        |
+| `registerTool`                          | Agent tool                                          |
+| `registerHook` / `on(...)`              | Lifecycle hooks                                     |
+| `registerSpeechProvider`                | Text-to-speech / STT                                |
+| `registerRealtimeTranscriptionProvider` | Streaming STT                                       |
+| `registerRealtimeVoiceProvider`         | Duplex realtime voice                               |
+| `registerMediaUnderstandingProvider`    | Image/audio analysis                                |
+| `registerImageGenerationProvider`       | Image generation                                    |
+| `registerMusicGenerationProvider`       | Music generation                                    |
+| `registerVideoGenerationProvider`       | Video generation                                    |
+| `registerWebFetchProvider`              | Web fetch / scrape provider                         |
+| `registerWebSearchProvider`             | Web search                                          |
+| `registerHttpRoute`                     | HTTP endpoint                                       |
+| `registerCommand` / `registerCli`       | CLI commands                                        |
+| `registerContextEngine`                 | Context engine                                      |
+| `registerService`                       | Background service                                  |
 
 Hook guard behavior for typed lifecycle hooks:
 

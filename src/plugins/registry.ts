@@ -452,7 +452,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       });
       return;
     }
-    const existing = registry.statusProviders.find((entry) => entry.provider.id === id);
+    const existing = registry.statusProviders.find((entry) => entry.provider.id.trim() === id);
     if (existing) {
       pushDiagnostic({
         level: "error",
@@ -464,7 +464,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     }
     registry.statusProviders.push({
       pluginId: record.id,
-      provider,
+      provider: { ...provider, id },
     });
   };
 
