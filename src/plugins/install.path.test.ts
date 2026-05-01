@@ -338,7 +338,7 @@ describe("installPluginFromPath", () => {
     expect(fs.existsSync(path.join(result.targetDir, ".claude-plugin", "plugin.json"))).toBe(true);
   });
 
-  it("prefers native package metadata for dual-format archives", async () => {
+  it("prefers native package metadata without installing dependencies for dual-format archives", async () => {
     const { pluginDir, extensionsDir } = setupDualFormatInstallFixture({
       bundleFormat: "claude",
     });
@@ -371,5 +371,6 @@ describe("installPluginFromPath", () => {
     expect(result.pluginId).toBe("native-dual");
     expect(result.targetDir).toBe(path.join(extensionsDir, "native-dual"));
     expect(run).not.toHaveBeenCalled();
+    expect(fs.existsSync(path.join(result.targetDir, "node_modules"))).toBe(false);
   });
 });

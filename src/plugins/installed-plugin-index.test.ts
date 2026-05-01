@@ -270,7 +270,7 @@ describe("installed plugin index", () => {
     });
   });
 
-  it("tags deprecated implicit startup sidecars for legacy plugins", () => {
+  it("does not classify legacy plugins as startup sidecars", () => {
     const rootDir = makeTempDir();
     writeRuntimeEntry(rootDir);
     writePluginManifest(rootDir, {
@@ -290,9 +290,9 @@ describe("installed plugin index", () => {
     expect(index.plugins[0]).toMatchObject({
       pluginId: "legacy-sidecar",
       startup: {
-        sidecar: true,
+        sidecar: false,
       },
-      compat: ["legacy-implicit-startup-sidecar"],
+      compat: [],
     });
   });
 
@@ -326,9 +326,9 @@ describe("installed plugin index", () => {
     expect(records[0]).toMatchObject({
       pluginId: "stale-record",
       startup: {
-        sidecar: true,
+        sidecar: false,
       },
-      compat: ["legacy-implicit-startup-sidecar"],
+      compat: [],
     });
   });
 
@@ -394,7 +394,7 @@ describe("installed plugin index", () => {
     expect(second.plugins[0]?.manifestHash).not.toBe(first.plugins[0]?.manifestHash);
   });
 
-  it("does not classify or tag explicit startup opt-outs as deprecated implicit sidecars", () => {
+  it("keeps explicit startup opt-outs out of startup sidecars", () => {
     const rootDir = makeTempDir();
     writeRuntimeEntry(rootDir);
     writePluginManifest(rootDir, {

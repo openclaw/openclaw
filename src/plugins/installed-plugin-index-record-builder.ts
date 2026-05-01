@@ -29,44 +29,9 @@ function sortUnique(values: readonly string[] | undefined): readonly string[] {
   );
 }
 
-function hasRuntimeContractSurface(record: PluginManifestRecord): boolean {
-  const providers = record.providers ?? [];
-  const cliBackends = record.cliBackends ?? [];
-  return Boolean(
-    providers.length > 0 ||
-    cliBackends.length > 0 ||
-    record.contracts?.speechProviders?.length ||
-    record.contracts?.mediaUnderstandingProviders?.length ||
-    record.contracts?.documentExtractors?.length ||
-    record.contracts?.imageGenerationProviders?.length ||
-    record.contracts?.videoGenerationProviders?.length ||
-    record.contracts?.musicGenerationProviders?.length ||
-    record.contracts?.webContentExtractors?.length ||
-    record.contracts?.webFetchProviders?.length ||
-    record.contracts?.webSearchProviders?.length ||
-    record.contracts?.migrationProviders?.length ||
-    record.contracts?.memoryEmbeddingProviders?.length ||
-    hasKind(record.kind, "memory"),
-  );
-}
-
-/**
- * @deprecated Compatibility classification for plugins that predate explicit
- * `activation.onStartup`. Every plugin manifest should move to an explicit
- * startup decision so Gateway boot can avoid importing inert plugins.
- */
-function isLegacyImplicitStartupSidecar(record: PluginManifestRecord): boolean {
-  const channels = Array.isArray(record.channels) ? record.channels : [];
-  return (
-    channels.length === 0 &&
-    !hasRuntimeContractSurface(record) &&
-    record.activation?.onStartup === undefined
-  );
-}
-
 function buildStartupInfo(record: PluginManifestRecord): InstalledPluginStartupInfo {
   return {
-    sidecar: record.activation?.onStartup === true || isLegacyImplicitStartupSidecar(record),
+    sidecar: record.activation?.onStartup === true,
     memory: hasKind(record.kind, "memory"),
     deferConfiguredChannelFullLoadUntilAfterListen:
       record.startupDeferConfiguredChannelFullLoadUntilAfterListen === true,
@@ -81,9 +46,6 @@ export function collectPluginManifestCompatCodes(
   record: PluginManifestRecord,
 ): readonly PluginCompatCode[] {
   const codes: PluginCompatCode[] = [];
-  if (isLegacyImplicitStartupSidecar(record)) {
-    codes.push("legacy-implicit-startup-sidecar");
-  }
   if (record.providerAuthEnvVars && Object.keys(record.providerAuthEnvVars).length > 0) {
     codes.push("provider-auth-env-vars");
   }

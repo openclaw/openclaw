@@ -104,6 +104,7 @@ function createManifestRegistryFixture(): PluginManifestRegistry {
         id: "browser",
         channels: [],
         activation: {
+          onStartup: true,
           onConfigPaths: ["browser"],
         },
         origin: "bundled",
@@ -212,6 +213,9 @@ function createManifestRegistryFixture(): PluginManifestRegistry {
       {
         id: "voice-call",
         channels: [],
+        activation: {
+          onStartup: true,
+        },
         origin: "bundled",
         enabledByDefault: undefined,
         providers: [],
@@ -238,6 +242,9 @@ function createManifestRegistryFixture(): PluginManifestRegistry {
       {
         id: "demo-global-sidecar",
         channels: [],
+        activation: {
+          onStartup: true,
+        },
         origin: "global",
         enabledByDefault: undefined,
         providers: [],
@@ -295,10 +302,6 @@ function normalizeStartupAgentHarnesses(record: PluginManifestRecord): readonly 
   ].toSorted((left, right) => left.localeCompare(right));
 }
 
-function hasRuntimeContractSurface(record: PluginManifestRecord): boolean {
-  return record.providers.length > 0 || record.cliBackends.length > 0;
-}
-
 function hasPluginKind(record: PluginManifestRecord, kind: string): boolean {
   return Array.isArray(record.kind) ? record.kind.includes(kind as never) : record.kind === kind;
 }
@@ -317,12 +320,7 @@ function createInstalledPluginRecordFixture(
     enabled: true,
     ...(record.enabledByDefault === true ? { enabledByDefault: true } : {}),
     startup: {
-      sidecar:
-        record.activation?.onStartup === true ||
-        (record.activation?.onStartup === undefined &&
-          record.channels.length === 0 &&
-          !hasRuntimeContractSurface(record) &&
-          !memory),
+      sidecar: record.activation?.onStartup === true,
       memory,
       deferConfiguredChannelFullLoadUntilAfterListen:
         record.startupDeferConfiguredChannelFullLoadUntilAfterListen === true,
@@ -654,35 +652,7 @@ describe("resolveGatewayStartupPluginIds", () => {
     });
   });
 
-  it("keeps deprecated implicit startup sidecar fallback for legacy plugins", () => {
-    expectStartupPluginIdsCase({
-      config: createStartupConfig({
-        enabledPluginIds: ["demo-global-sidecar"],
-        allowPluginIds: ["demo-global-sidecar"],
-        noConfiguredChannels: true,
-        memorySlot: "none",
-      }),
-      expected: ["demo-global-sidecar"],
-    });
-  });
-
-  it("can disable deprecated implicit startup sidecar fallback for future-mode testing", () => {
-    expectStartupPluginIdsCase({
-      config: createStartupConfig({
-        enabledPluginIds: ["demo-global-sidecar"],
-        allowPluginIds: ["demo-global-sidecar"],
-        noConfiguredChannels: true,
-        memorySlot: "none",
-      }),
-      env: {
-        ...process.env,
-        OPENCLAW_DISABLE_LEGACY_IMPLICIT_STARTUP_SIDECARS: "1",
-      },
-      expected: [],
-    });
-  });
-
-  it("skips deprecated implicit startup sidecar fallback when activation.onStartup is false", () => {
+  it("skips startup when activation.onStartup is false", () => {
     expectStartupPluginIdsCase({
       config: createStartupConfig({
         enabledPluginIds: ["demo-global-startup-opt-out"],
@@ -702,10 +672,6 @@ describe("resolveGatewayStartupPluginIds", () => {
         noConfiguredChannels: true,
         memorySlot: "none",
       }),
-      env: {
-        ...process.env,
-        OPENCLAW_DISABLE_LEGACY_IMPLICIT_STARTUP_SIDECARS: "1",
-      },
       expected: ["demo-global-explicit-startup"],
     });
   });

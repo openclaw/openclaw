@@ -255,24 +255,15 @@ embedded agent harness ids that do not already have an ownership field.
 This block is metadata only. It does not register runtime behavior, and it does
 not replace `register(...)`, `setupEntry`, or other runtime/plugin entrypoints.
 Current consumers use it as a narrowing hint before broader plugin loading, so
-missing activation metadata usually only costs performance; it should not
-change correctness while legacy manifest ownership fallbacks still exist.
+missing non-startup activation metadata usually only costs performance; it
+should not change correctness while manifest ownership fallbacks still exist.
 
-Every plugin should set `activation.onStartup` intentionally as OpenClaw moves
-away from implicit startup imports. Set it to `true` only when the plugin must
-run during Gateway startup. Set it to `false` when the plugin is inert at
-startup and should load only from narrower triggers. Omitting `onStartup` keeps
-the deprecated legacy implicit startup sidecar fallback for plugins with no
-static capability metadata; future versions may stop startup-loading those
-plugins unless they declare `activation.onStartup: true`. Plugin status and
-compatibility reports warn with `legacy-implicit-startup-sidecar` when a plugin
-still relies on that fallback.
-
-For migration testing, set
-`OPENCLAW_DISABLE_LEGACY_IMPLICIT_STARTUP_SIDECARS=1` to disable only that
-deprecated fallback. This opt-in mode does not block explicit
-`activation.onStartup: true` plugins or plugins loaded by channel, config,
-agent-harness, memory, or other narrower activation triggers.
+Every plugin should set `activation.onStartup` intentionally. Set it to `true`
+only when the plugin must run during Gateway startup. Set it to `false` when
+the plugin is inert at startup and should load only from narrower triggers.
+Omitting `onStartup` no longer startup-loads the plugin implicitly; use explicit
+activation metadata for startup, channel, config, agent-harness, memory, or
+other narrower activation triggers.
 
 ```json
 {
@@ -288,21 +279,21 @@ agent-harness, memory, or other narrower activation triggers.
 }
 ```
 
-| Field              | Required | Type                                                 | What it means                                                                                                                                                                                                                      |
-| ------------------ | -------- | ---------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `onStartup`        | No       | `boolean`                                            | Explicit Gateway startup activation. Every plugin should set this. `true` imports the plugin during startup; `false` opts out of the deprecated implicit sidecar startup fallback unless another matched trigger requires loading. |
-| `onProviders`      | No       | `string[]`                                           | Provider ids that should include this plugin in activation/load plans.                                                                                                                                                             |
-| `onAgentHarnesses` | No       | `string[]`                                           | Embedded agent harness runtime ids that should include this plugin in activation/load plans. Use top-level `cliBackends` for CLI backend aliases.                                                                                  |
-| `onCommands`       | No       | `string[]`                                           | Command ids that should include this plugin in activation/load plans.                                                                                                                                                              |
-| `onChannels`       | No       | `string[]`                                           | Channel ids that should include this plugin in activation/load plans.                                                                                                                                                              |
-| `onRoutes`         | No       | `string[]`                                           | Route kinds that should include this plugin in activation/load plans.                                                                                                                                                              |
-| `onConfigPaths`    | No       | `string[]`                                           | Root-relative config paths that should include this plugin in startup/load plans when the path is present and not explicitly disabled.                                                                                             |
-| `onCapabilities`   | No       | `Array<"provider" \| "channel" \| "tool" \| "hook">` | Broad capability hints used by control-plane activation planning. Prefer narrower fields when possible.                                                                                                                            |
+| Field              | Required | Type                                                 | What it means                                                                                                                                                                               |
+| ------------------ | -------- | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `onStartup`        | No       | `boolean`                                            | Explicit Gateway startup activation. Every plugin should set this. `true` imports the plugin during startup; `false` keeps it startup-lazy unless another matched trigger requires loading. |
+| `onProviders`      | No       | `string[]`                                           | Provider ids that should include this plugin in activation/load plans.                                                                                                                      |
+| `onAgentHarnesses` | No       | `string[]`                                           | Embedded agent harness runtime ids that should include this plugin in activation/load plans. Use top-level `cliBackends` for CLI backend aliases.                                           |
+| `onCommands`       | No       | `string[]`                                           | Command ids that should include this plugin in activation/load plans.                                                                                                                       |
+| `onChannels`       | No       | `string[]`                                           | Channel ids that should include this plugin in activation/load plans.                                                                                                                       |
+| `onRoutes`         | No       | `string[]`                                           | Route kinds that should include this plugin in activation/load plans.                                                                                                                       |
+| `onConfigPaths`    | No       | `string[]`                                           | Root-relative config paths that should include this plugin in startup/load plans when the path is present and not explicitly disabled.                                                      |
+| `onCapabilities`   | No       | `Array<"provider" \| "channel" \| "tool" \| "hook">` | Broad capability hints used by control-plane activation planning. Prefer narrower fields when possible.                                                                                     |
 
 Current live consumers:
 
 - Gateway startup planning uses `activation.onStartup` for explicit startup
-  import and opt-out of deprecated implicit sidecar startup fallback
+  import
 - command-triggered CLI planning falls back to legacy
   `commandAliases[].cliCommand` or `commandAliases[].name`
 - agent-runtime startup planning uses `activation.onAgentHarnesses` for
