@@ -320,6 +320,25 @@ function containsRealConversationMessages(messages: AgentMessage[]): boolean {
   );
 }
 
+function shouldSkipCompactionForNoRealConversation(params: {
+  messages: AgentMessage[];
+  observedTokenCount?: number;
+  contextWindowTokens: number;
+  reserveTokens: number;
+}): boolean {
+  if (containsRealConversationMessages(params.messages)) {
+    return false;
+  }
+  const observedTokenCount = normalizeObservedTokenCount(params.observedTokenCount);
+  if (observedTokenCount === undefined) {
+    return true;
+  }
+  const contextWindowTokens = Math.max(1, Math.floor(params.contextWindowTokens));
+  const reserveTokens = Math.max(0, Math.floor(params.reserveTokens));
+  const threshold = Math.max(1, contextWindowTokens - reserveTokens);
+  return observedTokenCount < threshold;
+}
+
 /**
  * Core compaction logic without lane queueing.
  * Use this when already inside a session/global lane to avoid deadlocks.
@@ -1021,7 +1040,17 @@ export async function compactEmbeddedPiSessionDirect(
             );
           }
 
-          if (!containsRealConversationMessages(session.messages)) {
+          if (
+            shouldSkipCompactionForNoRealConversation({
+              messages: session.messages,
+              observedTokenCount,
+              contextWindowTokens: ctxInfo.tokens,
+              reserveTokens:
+                typeof settingsManager.getCompactionReserveTokens === "function"
+                  ? settingsManager.getCompactionReserveTokens()
+                  : 0,
+            })
+          ) {
             log.info(
               `[compaction] skipping — no real conversation messages (sessionKey=${params.sessionKey ?? params.sessionId})`,
             );
@@ -1260,6 +1289,7 @@ export const __testing = {
   hasRealConversationContent,
   hasMeaningfulConversationContent,
   containsRealConversationMessages,
+  shouldSkipCompactionForNoRealConversation,
   estimateTokensAfterCompaction,
   buildBeforeCompactionHookMetrics,
   hardenManualCompactionBoundary,
