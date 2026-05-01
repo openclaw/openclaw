@@ -4,8 +4,8 @@ import { findNormalizedProviderValue } from "./provider-id.js";
 
 export const CONTEXT_WINDOW_HARD_MIN_TOKENS = 4_000;
 export const CONTEXT_WINDOW_WARN_BELOW_TOKENS = 8_000;
-export const CONTEXT_WINDOW_HARD_MIN_RATIO = 0.1;
-export const CONTEXT_WINDOW_WARN_BELOW_RATIO = 0.2;
+const CONTEXT_WINDOW_HARD_MIN_RATIO = 0.1;
+const CONTEXT_WINDOW_WARN_BELOW_RATIO = 0.2;
 
 export type ContextWindowSource = "model" | "modelsConfig" | "agentContextTokens" | "default";
 
@@ -79,7 +79,7 @@ export type ContextWindowGuardHint = {
   likelySelfHosted: boolean;
 };
 
-export function resolveContextWindowGuardHint(params: {
+function resolveContextWindowGuardHint(params: {
   runtimeBaseUrl?: string | null;
 }): ContextWindowGuardHint {
   const endpoint = resolveProviderEndpoint(params.runtimeBaseUrl ?? undefined);
