@@ -20,8 +20,20 @@ export function windowsModelProviderTimeoutScript(modelId: string): string {
   if (!providerId || !configJson) {
     return "";
   }
-  return `Invoke-OpenClaw config set ${psSingleQuote(`models.providers.${providerId}`)} ${psSingleQuote(configJson)} --strict-json
-if ($LASTEXITCODE -ne 0) { throw "model provider timeout config set failed" }`;
+  const batchJson = JSON.stringify([
+    {
+      path: `models.providers.${providerId}`,
+      value: JSON.parse(configJson) as unknown,
+    },
+  ]);
+  return `$providerTimeoutBatchPath = Join-Path ([System.IO.Path]::GetTempPath()) 'openclaw-provider-timeout.batch.json'
+@'
+${batchJson}
+'@ | Set-Content -Path $providerTimeoutBatchPath -Encoding UTF8
+Invoke-OpenClaw config set --batch-file $providerTimeoutBatchPath --strict-json
+$providerTimeoutExit = $LASTEXITCODE
+Remove-Item $providerTimeoutBatchPath -Force -ErrorAction SilentlyContinue
+if ($providerTimeoutExit -ne 0) { throw "model provider timeout config set failed" }`;
 }
 
 export const windowsOpenClawResolver = String.raw`function Resolve-OpenClawCommand {
