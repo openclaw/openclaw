@@ -268,6 +268,15 @@ async function smokePlugin(pluginId, pluginDir, requiresConfig, pluginIndex) {
   const port =
     readPositiveInt(process.env.OPENCLAW_BUNDLED_PLUGIN_RUNTIME_PORT_BASE, 19000) + pluginIndex * 3;
   const config = ensureGatewayConfig(readConfig(), port);
+  for (const channel of plan.channels) {
+    config.channels = {
+      ...(config.channels ?? {}),
+      [channel]: {
+        ...(config.channels?.[channel] ?? {}),
+        enabled: true,
+      },
+    };
+  }
   if (plan.speechProviders[0]) {
     config.messages = {
       ...(config.messages ?? {}),
