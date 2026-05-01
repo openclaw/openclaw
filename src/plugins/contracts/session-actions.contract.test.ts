@@ -156,7 +156,8 @@ describe("plugin session actions", () => {
         }),
         expect.objectContaining({
           pluginId: "invalid-session-actions",
-          message: "session action schema must be a JSON schema object: bad-schema-shape",
+          message:
+            "session action schema must be a JSON schema object or boolean: bad-schema-shape",
         }),
         expect.objectContaining({
           pluginId: "invalid-session-actions",
@@ -210,6 +211,18 @@ describe("plugin session actions", () => {
             code: "needs_input",
             details: { field: "version" },
           }),
+        });
+        api.registerSessionAction({
+          id: "allow-any",
+          schema: true,
+          handler: ({ payload }) => ({
+            data: { ...(payload !== undefined ? { payload } : {}) },
+          }),
+        });
+        api.registerSessionAction({
+          id: "deny-all",
+          schema: false,
+          handler: () => ({ data: { unreachable: true } }),
         });
       },
     });
@@ -274,6 +287,37 @@ describe("plugin session actions", () => {
         details: {
           field: "version",
         },
+      },
+    });
+
+    await expect(
+      callPluginSessionActionForTest({
+        body: {
+          pluginId: "schema-action-fixture",
+          actionId: "allow-any",
+          payload: { any: ["json", true] },
+        },
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      payload: {
+        ok: true,
+        result: { payload: { any: ["json", true] } },
+      },
+    });
+
+    await expect(
+      callPluginSessionActionForTest({
+        body: {
+          pluginId: "schema-action-fixture",
+          actionId: "deny-all",
+          payload: { rejected: true },
+        },
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: {
+        code: "INVALID_REQUEST",
       },
     });
   });
