@@ -274,15 +274,13 @@ jobs:
               runMacos ? [{ check_name: "macos-node", runtime: "node", task: "test" }] : [],
             ),
             run_macos_swift: runMacos,
-            run_android_job: runAndroid,
+            run_android_job: true,
             android_matrix: createMatrix(
-              runAndroid
-                ? [
-                    { check_name: "android-test-play", task: "test-play" },
-                    { check_name: "android-test-third-party", task: "test-third-party" },
-                    { check_name: "android-build-play", task: "build-play" },
-                  ]
-                : [],
+              [
+                { check_name: "android-test-play", task: "test-play" },
+                { check_name: "android-test-third-party", task: "test-third-party" },
+                { check_name: "android-build-play", task: "build-play" },
+              ]
             ),
           };
 
