@@ -160,9 +160,9 @@ inside every shard.
 - `pnpm test:docker:npm-onboard-channel-agent`
   - Builds an npm tarball from the current checkout, installs it globally in
     Docker, runs non-interactive OpenAI API-key onboarding, configures Telegram
-    by default, verifies enabling the plugin installs runtime dependencies on
-    demand, runs doctor, and runs one local agent turn against a mocked OpenAI
-    endpoint.
+    by default, verifies the packaged plugin runtime loads without startup
+    dependency repair, runs doctor, and runs one local agent turn against a
+    mocked OpenAI endpoint.
   - Use `OPENCLAW_NPM_ONBOARD_CHANNEL=discord` to run the same packaged-install
     lane with Discord.
 - `pnpm test:docker:session-runtime-context`

@@ -118,8 +118,7 @@ loader state when code or installed artifacts are actually loaded, such as:
 - `PluginLoaderCacheState` and compatible active runtime registries
 - jiti/module caches and public-surface loader caches used to avoid importing
   the same runtime surface repeatedly
-- runtime dependency mirrors and filesystem caches for installed plugin
-  artifacts
+- filesystem caches for installed plugin artifacts
 - short-lived per-call maps for path normalization or duplicate resolution
 
 Those caches are data-plane implementation details. They must not answer

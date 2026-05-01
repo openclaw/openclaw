@@ -517,7 +517,7 @@ For npm-sourced installs, `openclaw plugins install` installs the package under 
 </Info>
 
 <Note>
-Gateway startup does not install plugin dependencies. npm/git/ClawHub installs own dependency convergence; local plugins must already have their dependencies installed.
+Gateway startup does not install plugin dependencies. npm/git/ClawHub install flows own dependency convergence; local plugins must already have their dependencies installed.
 </Note>
 
 Bundled package metadata is explicit, not inferred from built JavaScript at gateway startup. Runtime dependencies belong in the plugin package that owns them; packaged OpenClaw startup never repairs or mirrors plugin dependencies.
