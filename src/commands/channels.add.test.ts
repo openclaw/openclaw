@@ -566,7 +566,7 @@ describe("channelsAddCommand", () => {
           plugin: {
             ...createChannelTestPluginBase({ id: "telegram", label: "Telegram" }),
             setup: {
-              applyAccountConfig: ({ cfg, input }) => ({
+              applyAccountConfig: ({ cfg, input }: ApplyAccountConfigParams) => ({
                 ...cfg,
                 channels: {
                   ...cfg.channels,
