@@ -1,8 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  capturePluginRegistration,
-  createCapturedPluginRegistration,
-} from "./captured-registration.js";
+import { capturePluginRegistration } from "./captured-registration.js";
 import type { AnyAgentTool, OpenClawPluginApi } from "./types.js";
 
 describe("captured plugin registration", () => {
@@ -97,11 +94,14 @@ describe("captured plugin registration", () => {
   it("returns synthetic scheduled-turn ids independent of human-readable names", async () => {
     let scheduleSessionTurn: OpenClawPluginApi["scheduleSessionTurn"] | undefined;
     let registerSessionSchedulerJob: OpenClawPluginApi["registerSessionSchedulerJob"] | undefined;
-    const captured = createCapturedPluginRegistration({
+    const captured = capturePluginRegistration({
       id: "captured-custom-plugin",
+      name: "Captured Custom Plugin",
+      register(api) {
+        registerSessionSchedulerJob = api.registerSessionSchedulerJob;
+        scheduleSessionTurn = api.scheduleSessionTurn;
+      },
     });
-    registerSessionSchedulerJob = captured.api.registerSessionSchedulerJob;
-    scheduleSessionTurn = captured.api.scheduleSessionTurn;
 
     expect(
       registerSessionSchedulerJob?.({

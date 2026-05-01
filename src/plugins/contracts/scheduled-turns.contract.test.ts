@@ -151,12 +151,12 @@ describe("plugin scheduled turns", () => {
 
   it("pages through cron.list when unscheduling tagged turns", async () => {
     const removed: string[] = [];
-    const listOffsets: unknown[] = [];
+    const listRequests: unknown[] = [];
     workflowMocks.callGatewayTool.mockImplementation(
       async (method: string, _opts: unknown, body: unknown) => {
         if (method === "cron.list") {
           const offset = (body as { offset?: unknown }).offset;
-          listOffsets.push(offset);
+          listRequests.push(body);
           if (offset === undefined) {
             return {
               jobs: [
@@ -197,7 +197,23 @@ describe("plugin scheduled turns", () => {
         request: { sessionKey: "agent:main:main", tag: "nudge" },
       }),
     ).resolves.toEqual({ removed: 2, failed: 0 });
-    expect(listOffsets).toEqual([undefined, 200]);
+    expect(listRequests).toEqual([
+      {
+        includeDisabled: true,
+        limit: 200,
+        query: "plugin:workflow-plugin:tag:nudge:agent:main:main:",
+        sortBy: "name",
+        sortDir: "asc",
+      },
+      {
+        includeDisabled: true,
+        limit: 200,
+        offset: 200,
+        query: "plugin:workflow-plugin:tag:nudge:agent:main:main:",
+        sortBy: "name",
+        sortDir: "asc",
+      },
+    ]);
     expect(removed.toSorted()).toEqual(["job-page-1", "job-page-2"]);
   });
 

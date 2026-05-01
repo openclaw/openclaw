@@ -288,10 +288,12 @@ export function createCapturedPluginRegistration(params?: {
   };
 }
 
-export function capturePluginRegistration(params: {
-  register(api: OpenClawPluginApi): void;
-}): CapturedPluginRegistration {
-  const captured = createCapturedPluginRegistration();
+export function capturePluginRegistration(
+  params: NonNullable<Parameters<typeof createCapturedPluginRegistration>[0]> & {
+    register(api: OpenClawPluginApi): void;
+  },
+): CapturedPluginRegistration {
+  const captured = createCapturedPluginRegistration(params);
   params.register(captured.api);
   return captured;
 }
