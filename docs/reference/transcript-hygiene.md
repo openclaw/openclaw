@@ -24,6 +24,7 @@ Scope includes:
 - Blank text-block cleanup before provider replay
 - User-input provenance tagging (for inter-session routed prompts)
 - Empty assistant error-turn repair for Bedrock Converse replay
+- Trailing empty assistant cleanup before fallback handoff
 
 If you need transcript storage details, see:
 
@@ -111,6 +112,30 @@ During context rebuild, OpenClaw applies the same marker to older persisted
 inter-session user turns that only have provenance metadata.
 
 ---
+
+
+## Global rule: fallback tail cleanup
+
+When a provider attempt fails after appending an assistant turn with no usable
+model-visible content, OpenClaw removes that **trailing** assistant turn from the
+in-memory session copy before dispatching fallback or retry work. This prevents
+the fallback provider from receiving a stale prefill-like assistant tail that was
+created by the failed attempt instead of by a completed model response.
+
+The repair is intentionally narrow:
+
+- It runs at the embedded-runner boundary and again after replay normalization.
+- It only removes the final assistant turn when that turn is empty, contains only
+  blank text, is a failed error turn, or contains only the stream-error sentinel
+  text.
+- It leaves earlier assistant turns and assistant turns with real text, tool
+  calls, or reasoning content intact.
+
+Implementation:
+
+- `stripTrailingEmptyAssistantTurn` in `src/agents/session-transcript-repair.ts`
+- Applied in `src/agents/pi-embedded-runner/run/attempt.ts` before fallback and
+  before normalized replay submission
 
 ## Provider matrix (current behavior)
 
