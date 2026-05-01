@@ -935,6 +935,41 @@ describe("session_status tool", () => {
     );
   });
 
+  it("keeps selected overrides separate from the runtime session identity", async () => {
+    resetSessionStore({
+      main: {
+        sessionId: "override-vs-runtime",
+        updatedAt: 10,
+        modelProvider: "anthropic",
+        model: "claude-opus-4-6",
+        providerOverride: "openai",
+        modelOverride: "gpt-5.4-mini",
+      },
+    });
+
+    const tool = getSessionStatusTool();
+
+    await tool.execute("call-override-vs-runtime", {});
+
+    expect(buildStatusMessageMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "openai",
+        model: "gpt-5.4-mini",
+        agent: expect.objectContaining({
+          model: expect.objectContaining({
+            primary: "openai/gpt-5.4-mini",
+          }),
+        }),
+        sessionEntry: expect.objectContaining({
+          modelProvider: "anthropic",
+          model: "claude-opus-4-6",
+          providerOverride: "openai",
+          modelOverride: "gpt-5.4-mini",
+        }),
+      }),
+    );
+  });
+
   it("passes per-agent thinkingDefault through to the status card", async () => {
     resetSessionStore({
       "agent:kira:main": {

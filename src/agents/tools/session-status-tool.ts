@@ -13,7 +13,7 @@ import {
   updateSessionStore,
 } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { resolveSessionModelIdentityRef } from "../../gateway/session-utils.js";
+
 import {
   buildAgentMainSessionKey,
   DEFAULT_AGENT_ID,
@@ -213,8 +213,11 @@ async function resolveModelOverride(params: {
     cfg: params.cfg,
     agentId: params.agentId,
   });
-  const currentProvider = params.sessionEntry?.providerOverride?.trim() || configDefault.provider;
-  const currentModel = params.sessionEntry?.modelOverride?.trim() || configDefault.model;
+  const currentProvider = params.sessionEntry?.providerOverride?.trim() ?? configDefault.provider;
+  const currentModel =
+    params.sessionEntry?.modelOverride?.trim() ??
+    params.sessionEntry?.model?.trim() ??
+    configDefault.model;
 
   const aliasIndex = buildModelAliasIndex({
     cfg: params.cfg,
@@ -515,23 +518,19 @@ export function createSessionStatusTool(opts?: {
         }
       }
 
-      const runtimeModelIdentity = resolveSessionModelIdentityRef(
-        cfg,
-        resolved.entry,
-        agentId,
-        `${configured.provider}/${configured.model}`,
-      );
-      const runtimeProviderForCard = runtimeModelIdentity.provider?.trim();
-      const runtimeModelForCard = runtimeModelIdentity.model.trim();
+      
 
       const selectedProvider = resolved.entry.providerOverride?.trim() ?? configured.provider;
 
-      const selectedModel =
-        resolved.entry.modelOverride?.trim() ?? resolved.entry.model?.trim() ?? configured.model;
+      const providerlessRuntimeModel =
+        resolved.entry.model?.trim() &&
+        !resolved.entry.providerOverride?.trim() &&
+        !resolved.entry.modelOverride?.trim()
+          ? resolved.entry.model.trim()
+          : undefined;
 
-      // ✅ FIX: ACTIVE identity (runtime, can be partial)
-      const activeProvider = runtimeProviderForCard;
-      const activeModel = runtimeModelForCard;
+const selectedModel =
+  resolved.entry.modelOverride?.trim() ?? providerlessRuntimeModel ?? configured.model;
 
       // ✅ FIX: Pass SELECTED to status text (NOT runtime)
       const providerForCard = selectedProvider;
