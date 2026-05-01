@@ -90,9 +90,7 @@ describe("seekNextActivePhaseDueMs", () => {
   });
 
   it("skips quiet-hours slots and returns the first in-window slot", () => {
-    // Active window: 08:00 – 17:00 UTC
-    // Interval: 4h, start slot at 19:00 UTC (quiet hours)
-    // Next slots: 23:00 (quiet), 03:00 (quiet), 07:00 (quiet), 11:00 (active!)
+    // 08:00–17:00 UTC, 4h interval, start at 19:00 (quiet).
     const startMs = Date.parse("2026-01-01T19:00:00.000Z");
     const intervalMs = 4 * HOUR;
     const isActive = (ms: number) => {
@@ -107,14 +105,11 @@ describe("seekNextActivePhaseDueMs", () => {
       isActive,
     });
 
-    // 19:00 + 4h = 23:00 (skip) + 4h = 03:00 (skip) + 4h = 07:00 (skip) + 4h = 11:00
     expect(result).toBe(Date.parse("2026-01-02T11:00:00.000Z"));
   });
 
   it("handles overnight active windows correctly", () => {
-    // Active window: 22:00 – 06:00 UTC (overnight)
-    // Interval: 4h, start slot at 10:00 UTC (quiet hours)
-    // Next: 14:00 (quiet), 18:00 (quiet), 22:00 (active!)
+    // 22:00–06:00 UTC (overnight), 4h interval, start at 10:00 (quiet).
     const startMs = Date.parse("2026-01-01T10:00:00.000Z");
     const intervalMs = 4 * HOUR;
     const isActive = (ms: number) => {
@@ -133,7 +128,6 @@ describe("seekNextActivePhaseDueMs", () => {
   });
 
   it("falls back to startMs when no slot is active within the seek horizon", () => {
-    // All slots are outside active hours (isActive always returns false)
     const startMs = Date.parse("2026-01-01T10:00:00.000Z");
     const result = seekNextActivePhaseDueMs({
       startMs,
@@ -146,16 +140,12 @@ describe("seekNextActivePhaseDueMs", () => {
   });
 
   it("seeks across timezone-aware active hours using isWithinActiveHours semantics", () => {
-    // Simulate Asia/Shanghai: active 08:00-23:00 local = 00:00-15:00 UTC
-    // Interval: 4h, phase slot at 15:21 UTC (23:21 Shanghai = quiet)
-    // Next: 19:21 UTC (03:21 Shanghai = quiet), 23:21 UTC (07:21 = quiet),
-    //       03:21 UTC (11:21 Shanghai = active!)
+    // Asia/Shanghai (UTC+8): active 08:00–23:00 local.
     const startMs = Date.parse("2026-01-01T15:21:00.000Z");
     const intervalMs = 4 * HOUR;
     const shanghaiOffsetMs = 8 * HOUR;
 
     const isActive = (ms: number) => {
-      // Simulate Asia/Shanghai = UTC+8, active 08:00-23:00
       const shanghaiMs = ms + shanghaiOffsetMs;
       const shanghaiHour = new Date(shanghaiMs).getUTCHours();
       return shanghaiHour >= 8 && shanghaiHour < 23;
@@ -168,13 +158,11 @@ describe("seekNextActivePhaseDueMs", () => {
       isActive,
     });
 
-    // 15:21 + 4h = 19:21 (skip) + 4h = 23:21 (skip) + 4h = 03:21 UTC = 11:21 Shanghai
     expect(result).toBe(Date.parse("2026-01-02T03:21:00.000Z"));
   });
 
   it("handles very short intervals efficiently", () => {
-    // 30-minute interval, active window 09:00-17:00
-    // Start at 17:00 (quiet), should find 09:00 next day
+    // 30m interval, 09:00–17:00. Start at 17:00 (quiet) → 09:00 next day.
     const startMs = Date.parse("2026-01-01T17:00:00.000Z");
     const intervalMs = 30 * 60_000;
     const isActive = (ms: number) => {
@@ -189,13 +177,10 @@ describe("seekNextActivePhaseDueMs", () => {
       isActive,
     });
 
-    // Should skip 32 half-hour slots (17:00 through 08:30) to reach 09:00 next day
     expect(result).toBe(Date.parse("2026-01-02T09:00:00.000Z"));
   });
 
   it("caps iterations for pathological sub-second intervals", () => {
-    // 1ms interval with always-false predicate — without the iteration cap
-    // this would loop ~604 million times.  The cap (10 080) prevents that.
     const startMs = Date.parse("2026-01-01T12:00:00.000Z");
     const t0 = performance.now();
     const result = seekNextActivePhaseDueMs({
@@ -206,14 +191,11 @@ describe("seekNextActivePhaseDueMs", () => {
     });
     const elapsedMs = performance.now() - t0;
 
-    // Falls back to startMs (runtime guard will handle it).
     expect(result).toBe(startMs);
-    // Must complete quickly — without the cap this would take minutes.
     expect(elapsedMs).toBeLessThan(500);
   });
 
   it("handles intervalMs larger than the seek horizon", () => {
-    // 8-day interval — only the startMs candidate is checked within horizon.
     const startMs = Date.parse("2026-01-01T03:00:00.000Z");
     const eightDays = 8 * 24 * HOUR;
     const result = seekNextActivePhaseDueMs({
@@ -226,8 +208,6 @@ describe("seekNextActivePhaseDueMs", () => {
       },
     });
 
-    // startMs (03:00) is outside 09:00–17:00.  The next candidate would be
-    // 8 days later which is past the 7-day horizon.  Falls back to startMs.
     expect(result).toBe(startMs);
   });
 

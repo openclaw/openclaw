@@ -60,23 +60,16 @@ export function resolveNextHeartbeatDueMs(params: {
 
 /**
  * Seek forward through phase-aligned slots until one falls within the active
- * hours window.  Returns the first in-window slot, or falls back to the raw
- * next slot when no active hours are configured or no in-window slot is found
- * within the seek horizon.
+ * hours window.  Falls back to the raw next slot when no predicate is provided
+ * or no in-window slot is found within the seek horizon.
  *
- * `isActive` is a predicate that mirrors `isWithinActiveHours` — the caller
- * binds the config/heartbeat so this module stays config-agnostic.
- *
- * `phaseMs` is accepted for call-site symmetry but unused: the caller passes
- * a phase-aligned `startMs`, and advancing by `intervalMs` preserves alignment.
+ * The caller binds config/heartbeat into `isActive` so this module stays
+ * config-agnostic.  `phaseMs` is unused — alignment is preserved because
+ * `startMs` is already phase-aligned and `intervalMs` addition maintains it.
  */
-const MAX_SEEK_HORIZON_MS = 7 * 24 * 60 * 60_000; // 7 days
-
-// Cap iterations so pathological sub-minute intervals (e.g. "1s", "1ms")
-// cannot block the event loop.  10 080 = 7 days at 1-minute steps — generous
-// enough for any reasonable config.  Pathological configs fall back to the raw
-// slot where the runtime guard still gates execution.
-const MAX_SEEK_ITERATIONS = 10_080;
+const MAX_SEEK_HORIZON_MS = 7 * 24 * 60 * 60_000;
+// Prevent pathological sub-minute intervals from blocking the event loop.
+const MAX_SEEK_ITERATIONS = 10_080; // 7 days at 1-minute steps
 
 export function seekNextActivePhaseDueMs(params: {
   startMs: number;
@@ -99,8 +92,6 @@ export function seekNextActivePhaseDueMs(params: {
     candidateMs += intervalMs;
     iterations++;
   }
-  // All slots within the seek horizon (or iteration cap) fall outside active
-  // hours — return the raw first slot so the runtime execution guard can
-  // still gate it.
+  // No in-window slot found; fall back so the runtime guard can gate it.
   return params.startMs;
 }

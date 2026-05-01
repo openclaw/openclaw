@@ -4,14 +4,7 @@ import { startHeartbeatRunner } from "./heartbeat-runner.js";
 import { computeNextHeartbeatPhaseDueMs, resolveHeartbeatPhaseMs } from "./heartbeat-schedule.js";
 import { resetHeartbeatWakeStateForTests } from "./heartbeat-wake.js";
 
-/**
- * E2E tests for heartbeat active-hours-aware scheduling (#75487).
- *
- * Verifies that the scheduler seeks forward through phase-aligned slots to
- * find the first one that falls within the configured activeHours window,
- * rather than arming a timer for a quiet-hours slot and relying solely on
- * the runtime execution guard to skip it.
- */
+/** Verifies that the scheduler seeks to in-window phase slots (#75487). */
 describe("heartbeat scheduler: activeHours-aware scheduling (#75487)", () => {
   type RunOnce = Parameters<typeof startHeartbeatRunner>[0]["runOnce"];
   const TEST_SCHEDULER_SEED = "heartbeat-ah-schedule-test-seed";
@@ -58,12 +51,7 @@ describe("heartbeat scheduler: activeHours-aware scheduling (#75487)", () => {
   });
 
   it("skips quiet-hours slots and fires at the first in-window phase slot", async () => {
-    // Active window: 09:00–17:00 UTC. Interval: 4h.
-    // Start the clock at 16:30 UTC — the next raw phase slot will be computed
-    // from this time.  For a 4h interval the phase-aligned slots repeat every
-    // 4h.  We resolve the first raw due, assert it falls outside the active
-    // window, then verify the runner arms its timer for the first in-window
-    // slot (which must be >= 09:00 the next day).
+    // 09:00–17:00 UTC, 4h interval. Start at 16:30 — raw due is after 17:00.
     const startMs = Date.parse("2026-06-15T16:30:00.000Z");
     useFakeHeartbeatTime(startMs);
 
@@ -83,26 +71,17 @@ describe("heartbeat scheduler: activeHours-aware scheduling (#75487)", () => {
       stableSchedulerSeed: TEST_SCHEDULER_SEED,
     });
 
-    // Compute what the raw (timezone-unaware) first due would be.
     const rawDueMs = resolveDueFromNow(startMs, intervalMs, "main");
 
-    // Advance past the raw due — the scheduler should NOT fire because that
-    // slot falls outside active hours (it's after 17:00).
+    // Advance past the raw due — should NOT fire (quiet hours).
     await vi.advanceTimersByTimeAsync(rawDueMs - startMs + 1);
-    // If the scheduler is timezone-aware, it shouldn't have fired at the raw
-    // quiet-hours slot.  It might have already found and armed the first
-    // in-window slot.
 
-    // Now advance to 09:01 on the next day plus enough time for any phase
-    // offset — the scheduler should fire within the active window.
-    const nextDay0900 = Date.parse("2026-06-16T09:00:00.000Z");
+    // Advance to end of next day's window — should fire within 09:00–17:00.
     const safeEndOfWindow = Date.parse("2026-06-16T17:00:00.000Z");
     await vi.advanceTimersByTimeAsync(safeEndOfWindow - Date.now());
 
-    // The first call must have happened within the active window.
     expect(runSpy).toHaveBeenCalled();
-    const firstCallTime = callTimes[0]!;
-    const firstCallHourUTC = new Date(firstCallTime).getUTCHours();
+    const firstCallHourUTC = new Date(callTimes[0]!).getUTCHours();
     expect(firstCallHourUTC).toBeGreaterThanOrEqual(9);
     expect(firstCallHourUTC).toBeLessThan(17);
 
@@ -110,8 +89,6 @@ describe("heartbeat scheduler: activeHours-aware scheduling (#75487)", () => {
   });
 
   it("fires immediately when the first phase slot is already within active hours", async () => {
-    // Active window: 08:00–20:00 UTC. Interval: 4h.
-    // Start at 10:00 UTC — the first phase slot is within active hours.
     const startMs = Date.parse("2026-06-15T10:00:00.000Z");
     useFakeHeartbeatTime(startMs);
 
@@ -128,8 +105,6 @@ describe("heartbeat scheduler: activeHours-aware scheduling (#75487)", () => {
     });
 
     const rawDueMs = resolveDueFromNow(startMs, intervalMs, "main");
-
-    // The raw due should be within active hours — advance to it.
     await vi.advanceTimersByTimeAsync(rawDueMs - startMs + 1);
 
     expect(runSpy).toHaveBeenCalledTimes(1);
@@ -137,9 +112,8 @@ describe("heartbeat scheduler: activeHours-aware scheduling (#75487)", () => {
   });
 
   it("seeks forward correctly with a non-UTC timezone (e.g. America/New_York)", async () => {
-    // Active window: 09:00–17:00 America/New_York (EDT = UTC-4 in June).
-    // So active hours in UTC = 13:00–21:00.
-    // Interval: 4h. Start at 21:30 UTC (17:30 ET = outside window).
+    // 09:00–17:00 ET (EDT = UTC-4 in June) → 13:00–21:00 UTC.
+    // Start at 21:30 UTC (17:30 ET = outside window).
     const startMs = Date.parse("2026-06-15T21:30:00.000Z");
     useFakeHeartbeatTime(startMs);
 
@@ -159,15 +133,10 @@ describe("heartbeat scheduler: activeHours-aware scheduling (#75487)", () => {
       stableSchedulerSeed: TEST_SCHEDULER_SEED,
     });
 
-    // Advance through two full days to capture the first fire.
     await vi.advanceTimersByTimeAsync(48 * 60 * 60_000);
 
     expect(runSpy).toHaveBeenCalled();
-    // Verify the first call was within the ET active window.
-    // 09:00 ET = 13:00 UTC, 17:00 ET = 21:00 UTC (during EDT, June).
-    const firstCallTime = callTimes[0]!;
-    const firstCallHourUTC = new Date(firstCallTime).getUTCHours();
-    // In ET active hours → UTC 13:00–21:00
+    const firstCallHourUTC = new Date(callTimes[0]!).getUTCHours();
     expect(firstCallHourUTC).toBeGreaterThanOrEqual(13);
     expect(firstCallHourUTC).toBeLessThan(21);
 
@@ -175,10 +144,7 @@ describe("heartbeat scheduler: activeHours-aware scheduling (#75487)", () => {
   });
 
   it("advances to in-window slot after a quiet-hours skip during interval runs", async () => {
-    // Active window: 09:00–17:00 UTC. Interval: 4h.
-    // Start at 09:00 UTC — first fire is within window.
-    // After the first fire, the next raw slot may fall outside the window.
-    // Verify the scheduler seeks forward past quiet-hours slots.
+    // 09:00–17:00 UTC, 4h interval. Verify ALL fires over 48h stay in-window.
     const startMs = Date.parse("2026-06-15T09:00:00.000Z");
     useFakeHeartbeatTime(startMs);
 
@@ -198,10 +164,8 @@ describe("heartbeat scheduler: activeHours-aware scheduling (#75487)", () => {
       stableSchedulerSeed: TEST_SCHEDULER_SEED,
     });
 
-    // Advance through 48 hours — collect all fire times.
     await vi.advanceTimersByTimeAsync(48 * 60 * 60_000);
 
-    // Every single fire must be within 09:00–17:00 UTC.
     expect(callTimes.length).toBeGreaterThan(0);
     for (const t of callTimes) {
       const hour = new Date(t).getUTCHours();
@@ -218,8 +182,7 @@ describe("heartbeat scheduler: activeHours-aware scheduling (#75487)", () => {
   });
 
   it("does not loop indefinitely when activeHours window is zero-width", async () => {
-    // start === end means never-active. The scheduler should arm at the raw
-    // slot (fallback) and the runtime guard will skip execution.
+    // start === end → never-active; seek falls back, runtime guard skips.
     const startMs = Date.parse("2026-06-15T10:00:00.000Z");
     useFakeHeartbeatTime(startMs);
 
@@ -234,20 +197,15 @@ describe("heartbeat scheduler: activeHours-aware scheduling (#75487)", () => {
       stableSchedulerSeed: TEST_SCHEDULER_SEED,
     });
 
-    // Advance 2 hours — the scheduler should not hang or spin.
     await vi.advanceTimersByTimeAsync(2 * 60 * 60_000);
 
-    // The runner fires because start === end returns false from
-    // isWithinActiveHours, so the seek falls back to the raw slot.
-    // runOnce returns quiet-hours skip each time.
     expect(runSpy).toHaveBeenCalled();
     runner.stop();
   });
 
   it("recomputes schedule when activeHours config changes via hot reload", async () => {
-    // Start with a narrow window that pushes nextDueMs far ahead.
-    // Then widen the window via updateConfig — the scheduler should
-    // recompute from `now` instead of keeping the stale far-future slot.
+    // Narrow window pushes nextDueMs to tomorrow; widening via updateConfig
+    // must recompute from `now` so the timer fires today.
     const startMs = Date.parse("2026-06-15T14:00:00.000Z");
     useFakeHeartbeatTime(startMs);
 
@@ -258,8 +216,6 @@ describe("heartbeat scheduler: activeHours-aware scheduling (#75487)", () => {
       return { status: "ran", durationMs: 1 };
     });
 
-    // Narrow window: 09:00–10:00 UTC.  At 14:00 UTC the next in-window
-    // slot is tomorrow ~09:xx (19+ hours away).
     const runner = startHeartbeatRunner({
       cfg: heartbeatConfig({
         every: "4h",
@@ -269,12 +225,10 @@ describe("heartbeat scheduler: activeHours-aware scheduling (#75487)", () => {
       stableSchedulerSeed: TEST_SCHEDULER_SEED,
     });
 
-    // Advance 1 hour — should NOT fire (next slot is tomorrow).
     await vi.advanceTimersByTimeAsync(60 * 60_000);
     expect(runSpy).not.toHaveBeenCalled();
 
-    // Hot-reload: widen window to 08:00–20:00 UTC.
-    // At 15:00 UTC the next phase slot should now be reachable within hours.
+    // Widen window — scheduler must recompute, not keep stale tomorrow slot.
     runner.updateConfig(
       heartbeatConfig({
         every: "4h",
@@ -282,15 +236,12 @@ describe("heartbeat scheduler: activeHours-aware scheduling (#75487)", () => {
       }),
     );
 
-    // Advance another 8 hours — should fire within the widened window.
     await vi.advanceTimersByTimeAsync(8 * 60 * 60_000);
     expect(runSpy).toHaveBeenCalled();
-    const firstCallTime = callTimes[0]!;
-    const firstCallHour = new Date(firstCallTime).getUTCHours();
+    const firstCallHour = new Date(callTimes[0]!).getUTCHours();
     expect(firstCallHour).toBeGreaterThanOrEqual(8);
     expect(firstCallHour).toBeLessThan(20);
-    // Crucially, the first fire should be today (June 15), not tomorrow.
-    expect(new Date(firstCallTime).getUTCDate()).toBe(15);
+    expect(new Date(callTimes[0]!).getUTCDate()).toBe(15); // today, not tomorrow
 
     runner.stop();
   });

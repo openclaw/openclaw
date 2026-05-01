@@ -226,7 +226,6 @@ type HeartbeatAgentState = {
 
 type ActiveHoursWindow = NonNullable<HeartbeatConfig>["activeHours"];
 
-/** Shallow equality for the three scheduling-relevant activeHours fields. */
 function activeHoursConfigMatch(a?: ActiveHoursWindow, b?: ActiveHoursWindow): boolean {
   if (a === b) return true;
   if (!a || !b) return false;
@@ -1913,11 +1912,8 @@ export function startHeartbeatRunner(opts: {
       });
       intervals.push(intervalMs);
       const prevState = prevAgents.get(agent.agentId);
-      // When activeHours config changes, discard the preserved nextDueMs so
-      // the scheduler recomputes from `now` instead of keeping a stale slot
-      // that was pushed far ahead by the old window.  resolveNextDue only
-      // compares intervalMs/phaseMs, so we null-out prevState when the
-      // scheduling-relevant active-hours fields differ.
+      // resolveNextDue only compares intervalMs/phaseMs, so discard
+      // prevState when activeHours changed to avoid a stale far-future slot.
       const ahChanged =
         prevState &&
         !activeHoursConfigMatch(prevState.heartbeat?.activeHours, agent.heartbeat?.activeHours);
