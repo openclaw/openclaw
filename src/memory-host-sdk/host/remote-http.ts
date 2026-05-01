@@ -1,4 +1,5 @@
-import { fetchWithSsrFGuard } from "../../infra/net/fetch-guard.js";
+import { fetchWithSsrFGuard, type GuardedFetchMode } from "../../infra/net/fetch-guard.js";
+import { hasProxyEnvConfigured } from "../../infra/net/proxy-env.js";
 import type { SsrFPolicy } from "../../infra/net/ssrf.js";
 
 export function buildRemoteBaseUrlPolicy(baseUrl: string): SsrFPolicy | undefined {
@@ -25,14 +26,21 @@ export async function withRemoteHttpResponse<T>(params: {
   ssrfPolicy?: SsrFPolicy;
   fetchImpl?: typeof fetch;
   auditContext?: string;
+  mode?: GuardedFetchMode;
   onResponse: (response: Response) => Promise<T>;
 }): Promise<T> {
+  // When env proxy vars are set (e.g. CrabTrap) and the caller hasn't
+  // explicitly chosen a mode, use trusted_env_proxy so the request routes
+  // through the operator-configured proxy instead of connecting directly.
+  const mode: GuardedFetchMode | undefined =
+    params.mode ?? (hasProxyEnvConfigured() ? "trusted_env_proxy" : undefined);
   const { response, release } = await fetchWithSsrFGuard({
     url: params.url,
     fetchImpl: params.fetchImpl,
     init: params.init,
     policy: params.ssrfPolicy,
     auditContext: params.auditContext ?? "memory-remote",
+    ...(mode ? { mode } : {}),
   });
   try {
     return await params.onResponse(response);
