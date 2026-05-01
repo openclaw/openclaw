@@ -97,6 +97,7 @@ import {
   computeNextHeartbeatPhaseDueMs,
   resolveHeartbeatPhaseMs,
   resolveNextHeartbeatDueMs,
+  seekNextActivePhaseDueMs,
 } from "./heartbeat-schedule.js";
 import {
   isHeartbeatEnabledForAgent,
@@ -1779,8 +1780,16 @@ export function startHeartbeatRunner(opts: {
         : undefined,
     });
 
+  const seekActiveSlotForAgent = (agent: HeartbeatAgentState, rawDueMs: number) =>
+    seekNextActivePhaseDueMs({
+      startMs: rawDueMs,
+      intervalMs: agent.intervalMs,
+      phaseMs: agent.phaseMs,
+      isActive: (ms) => isWithinActiveHours(state.cfg, agent.heartbeat, ms),
+    });
+
   const advanceAgentSchedule = (agent: HeartbeatAgentState, now: number, reason?: string) => {
-    agent.nextDueMs =
+    const rawDueMs =
       reason === "interval"
         ? computeNextHeartbeatPhaseDueMs({
             nowMs: now,
@@ -1790,6 +1799,7 @@ export function startHeartbeatRunner(opts: {
         : // Targeted and action-driven wakes still count as a fresh heartbeat run
           // for cooldown purposes, so keep the existing now + interval behavior.
           now + agent.intervalMs;
+    agent.nextDueMs = seekActiveSlotForAgent(agent, rawDueMs);
   };
 
   // Centralized cooldown gate. Both targeted and broadcast dispatch branches
@@ -1894,7 +1904,13 @@ export function startHeartbeatRunner(opts: {
       });
       intervals.push(intervalMs);
       const prevState = prevAgents.get(agent.agentId);
-      const nextDueMs = resolveNextDue(now, intervalMs, phaseMs, prevState);
+      const rawNextDueMs = resolveNextDue(now, intervalMs, phaseMs, prevState);
+      const nextDueMs = seekNextActivePhaseDueMs({
+        startMs: rawNextDueMs,
+        intervalMs,
+        phaseMs,
+        isActive: (ms) => isWithinActiveHours(cfg, agent.heartbeat, ms),
+      });
       nextAgents.set(agent.agentId, {
         agentId: agent.agentId,
         heartbeat: agent.heartbeat,
