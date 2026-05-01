@@ -1,27 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isPlainTextSurface, sanitizeForPlainText } from "./sanitize-text.js";
-
-// ---------------------------------------------------------------------------
-// isPlainTextSurface
-// ---------------------------------------------------------------------------
-
-describe("isPlainTextSurface", () => {
-  it.each(["whatsapp", "signal", "sms", "irc", "telegram", "imessage", "googlechat"])(
-    "returns true for %s",
-    (channel) => {
-      expect(isPlainTextSurface(channel)).toBe(true);
-    },
-  );
-
-  it.each(["discord", "slack", "web", "matrix"])("returns false for %s", (channel) => {
-    expect(isPlainTextSurface(channel)).toBe(false);
-  });
-
-  it("is case-insensitive", () => {
-    expect(isPlainTextSurface("WhatsApp")).toBe(true);
-    expect(isPlainTextSurface("SIGNAL")).toBe(true);
-  });
-});
+import { sanitizeForPlainText, stripInternalRuntimeScaffolding } from "./sanitize-text.js";
 
 // ---------------------------------------------------------------------------
 // sanitizeForPlainText
@@ -85,6 +63,24 @@ describe("sanitizeForPlainText", () => {
     expect(sanitizeForPlainText('<a href="https://example.com">link</a>')).toBe("link");
   });
 
+  it("keeps stripping tags exposed by malformed tag text", () => {
+    const sanitized = sanitizeForPlainText(
+      "before <<script>script>alert(1)</<script>script> after",
+    );
+
+    expect(sanitized).toBe("before alert(1) after");
+    expect(sanitized).not.toContain("<script");
+  });
+
+  it("strips known internal runtime scaffolding tags including underscore names", () => {
+    expect(sanitizeForPlainText("ok <previous_response>null</previous_response> done")).toBe(
+      "ok  done",
+    );
+    expect(sanitizeForPlainText("ok <system-reminder>use todos</system-reminder> done")).toBe(
+      "ok  done",
+    );
+  });
+
   it("preserves angle-bracket autolinks", () => {
     expect(sanitizeForPlainText("See <https://example.com/path?q=1> now")).toBe(
       "See https://example.com/path?q=1 now",
@@ -112,5 +108,28 @@ describe("sanitizeForPlainText", () => {
 
   it("collapses excessive newlines", () => {
     expect(sanitizeForPlainText("a<br><br><br><br>b")).toBe("a\n\nb");
+  });
+});
+
+describe("stripInternalRuntimeScaffolding", () => {
+  it("removes closed, self-closing, and stray internal runtime tags", () => {
+    expect(
+      stripInternalRuntimeScaffolding(
+        [
+          "before",
+          "<system-reminder>internal hint</system-reminder>",
+          "<previous_response>null</previous_response>",
+          "<system-reminder />",
+          "<previous_response>",
+          "visible",
+        ].join("\n"),
+      ),
+    ).toBe(["before", "", "", "", "", "visible"].join("\n"));
+  });
+
+  it("does not strip arbitrary XML-like user content", () => {
+    expect(stripInternalRuntimeScaffolding("<note>keep this</note>")).toBe(
+      "<note>keep this</note>",
+    );
   });
 });

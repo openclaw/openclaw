@@ -1,56 +1,70 @@
 import { Command } from "commander";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { registerPairingCli } from "./pairing-cli.js";
 
-const listChannelPairingRequests = vi.fn();
-const approveChannelPairingCode = vi.fn();
-const notifyPairingApproved = vi.fn();
+const mocks = vi.hoisted(() => ({
+  listChannelPairingRequests: vi.fn(),
+  approveChannelPairingCode: vi.fn(),
+  notifyPairingApproved: vi.fn(),
+  readConfigFileSnapshotForWrite: vi.fn(),
+  replaceConfigFile: vi.fn(),
+  normalizeChannelId: vi.fn((raw: string) => {
+    if (!raw) {
+      return null;
+    }
+    if (raw === "imsg") {
+      return "imessage";
+    }
+    if (["telegram", "discord", "imessage"].includes(raw)) {
+      return raw;
+    }
+    return null;
+  }),
+  getPairingAdapter: vi.fn((channel: string) => ({
+    idLabel: pairingIdLabels[channel] ?? "userId",
+  })),
+  listPairingChannels: vi.fn(() => ["telegram", "discord", "imessage"]),
+}));
+
+const {
+  listChannelPairingRequests,
+  approveChannelPairingCode,
+  notifyPairingApproved,
+  readConfigFileSnapshotForWrite,
+  replaceConfigFile,
+  normalizeChannelId,
+  getPairingAdapter,
+  listPairingChannels,
+} = mocks;
+
 const pairingIdLabels: Record<string, string> = {
   telegram: "telegramUserId",
   discord: "discordUserId",
 };
-const normalizeChannelId = vi.fn((raw: string) => {
-  if (!raw) {
-    return null;
-  }
-  if (raw === "imsg") {
-    return "imessage";
-  }
-  if (["telegram", "discord", "imessage"].includes(raw)) {
-    return raw;
-  }
-  return null;
-});
-const getPairingAdapter = vi.fn((channel: string) => ({
-  idLabel: pairingIdLabels[channel] ?? "userId",
-}));
-const listPairingChannels = vi.fn(() => ["telegram", "discord", "imessage"]);
 
 vi.mock("../pairing/pairing-store.js", () => ({
-  listChannelPairingRequests,
-  approveChannelPairingCode,
+  listChannelPairingRequests: mocks.listChannelPairingRequests,
+  approveChannelPairingCode: mocks.approveChannelPairingCode,
 }));
 
 vi.mock("../channels/plugins/pairing.js", () => ({
-  listPairingChannels,
-  notifyPairingApproved,
-  getPairingAdapter,
+  listPairingChannels: mocks.listPairingChannels,
+  notifyPairingApproved: mocks.notifyPairingApproved,
+  getPairingAdapter: mocks.getPairingAdapter,
 }));
 
 vi.mock("../channels/plugins/index.js", () => ({
-  normalizeChannelId,
+  normalizeChannelId: mocks.normalizeChannelId,
 }));
 
 vi.mock("../config/config.js", () => ({
+  getRuntimeConfig: vi.fn().mockReturnValue({}),
   loadConfig: vi.fn().mockReturnValue({}),
+  readConfigFileSnapshotForWrite: mocks.readConfigFileSnapshotForWrite,
+  replaceConfigFile: mocks.replaceConfigFile,
 }));
 
 describe("pairing cli", () => {
-  let registerPairingCli: typeof import("./pairing-cli.js").registerPairingCli;
-
-  beforeAll(async () => {
-    ({ registerPairingCli } = await import("./pairing-cli.js"));
-  });
-
   beforeEach(() => {
     listChannelPairingRequests.mockClear();
     listChannelPairingRequests.mockResolvedValue([]);
@@ -65,6 +79,23 @@ describe("pairing cli", () => {
       },
     });
     notifyPairingApproved.mockClear();
+    readConfigFileSnapshotForWrite.mockClear();
+    readConfigFileSnapshotForWrite.mockResolvedValue({
+      snapshot: {
+        path: "/tmp/openclaw.json",
+        exists: true,
+        raw: "{}",
+        parsed: {},
+        valid: true,
+        issues: [],
+        legacyIssues: [],
+        sourceConfig: {},
+        runtimeConfig: {},
+      },
+      writeOptions: {},
+    });
+    replaceConfigFile.mockClear();
+    replaceConfigFile.mockResolvedValue(undefined);
     normalizeChannelId.mockClear();
     getPairingAdapter.mockClear();
     listPairingChannels.mockClear();
@@ -194,10 +225,42 @@ describe("pairing cli", () => {
         channel: "telegram",
         code: "ABCDEFGH",
       });
+      expect(replaceConfigFile).toHaveBeenCalledWith(
+        expect.objectContaining({
+          nextConfig: {
+            commands: {
+              ownerAllowFrom: ["telegram:123"],
+            },
+          },
+        }),
+      );
       expect(log).toHaveBeenCalledWith(expect.stringContaining("Approved"));
+      expect(log).toHaveBeenCalledWith(expect.stringContaining("Command owner configured"));
     } finally {
       log.mockRestore();
     }
+  });
+
+  it("does not overwrite an existing command owner when approving pairing", async () => {
+    readConfigFileSnapshotForWrite.mockResolvedValueOnce({
+      snapshot: {
+        path: "/tmp/openclaw.json",
+        exists: true,
+        raw: "{}",
+        parsed: {},
+        valid: true,
+        issues: [],
+        legacyIssues: [],
+        sourceConfig: { commands: { ownerAllowFrom: ["discord:999"] } },
+        runtimeConfig: { commands: { ownerAllowFrom: ["discord:999"] } },
+      },
+      writeOptions: {},
+    });
+    mockApprovedPairing();
+
+    await runPairing(["pairing", "approve", "telegram", "ABCDEFGH"]);
+
+    expect(replaceConfigFile).not.toHaveBeenCalled();
   });
 
   it("forwards --account for approve", async () => {

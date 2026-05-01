@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { blockedIpv6MulticastLiterals } from "../../shared/net/ip-test-fixtures.js";
-import { normalizeFingerprint } from "../tls/fingerprint.js";
-import { isBlockedHostnameOrIp, isPrivateIpAddress } from "./ssrf.js";
+import {
+  isBlockedHostnameOrIp,
+  isPrivateIpAddress,
+  isSameSsrFPolicy,
+  ssrfPolicyFromHttpBaseUrlAllowedHostname,
+} from "./ssrf.js";
 
 const privateIpCases = [
   "198.18.0.1",
@@ -39,7 +43,11 @@ const privateIpCases = [
   "fe80::1%lo0",
   "fd00::1",
   "fec0::1",
+  "100::1",
   ...blockedIpv6MulticastLiterals,
+  "2001:2::1",
+  "2001:20::1",
+  "2001:db8::1",
   "2001:db8:1234::5efe:127.0.0.1",
   "2001:db8:1234:1:200:5efe:7f00:1",
 ];
@@ -54,13 +62,12 @@ const publicIpCases = [
   "203.0.114.1",
   "223.255.255.255",
   "2606:4700:4700::1111",
-  "2001:db8::1",
   "64:ff9b::8.8.8.8",
   "64:ff9b:1::8.8.8.8",
   "2002:0808:0808::",
   "2001:0000:0:0:0:0:f7f7:f7f7",
-  "2001:db8:1234::5efe:8.8.8.8",
-  "2001:db8:1234:1:1111:5efe:7f00:1",
+  "2001:4860:1234::5efe:8.8.8.8",
+  "2001:4860:1234:1:1111:5efe:7f00:1",
 ];
 
 const malformedIpv6Cases = ["::::", "2001:db8::gggg"];
@@ -81,63 +88,145 @@ const unsupportedLegacyIpv4Cases = [
 
 const nonIpHostnameCases = ["example.com", "abc.123.example", "1password.com", "0x.example.com"];
 
+function expectIpPrivacyCases(cases: string[], expected: boolean) {
+  for (const address of cases) {
+    expect(isPrivateIpAddress(address)).toBe(expected);
+  }
+}
+
 describe("ssrf ip classification", () => {
   it("classifies blocked ip literals as private", () => {
-    const blockedCases = [...privateIpCases, ...malformedIpv6Cases, ...unsupportedLegacyIpv4Cases];
-    for (const address of blockedCases) {
-      expect(isPrivateIpAddress(address)).toBe(true);
-    }
+    expectIpPrivacyCases(
+      [...privateIpCases, ...malformedIpv6Cases, ...unsupportedLegacyIpv4Cases],
+      true,
+    );
   });
 
   it("classifies public ip literals as non-private", () => {
-    for (const address of publicIpCases) {
-      expect(isPrivateIpAddress(address)).toBe(false);
-    }
+    expectIpPrivacyCases(publicIpCases, false);
   });
 
   it("does not treat hostnames as ip literals", () => {
-    for (const hostname of nonIpHostnameCases) {
-      expect(isPrivateIpAddress(hostname)).toBe(false);
-    }
+    expectIpPrivacyCases(nonIpHostnameCases, false);
   });
 });
 
-describe("normalizeFingerprint", () => {
-  it("strips sha256 prefixes and separators", () => {
-    expect(normalizeFingerprint("sha256:AA:BB:cc")).toBe("aabbcc");
-    expect(normalizeFingerprint("SHA-256 11-22-33")).toBe("112233");
-    expect(normalizeFingerprint("aa:bb:cc")).toBe("aabbcc");
+describe("ssrfPolicyFromHttpBaseUrlAllowedHostname", () => {
+  it("builds an allowed-hostname policy from HTTP base URLs", () => {
+    expect(ssrfPolicyFromHttpBaseUrlAllowedHostname(" https://api.example.com/v1 ")).toEqual({
+      allowedHostnames: ["api.example.com"],
+    });
+  });
+
+  it("ignores empty, invalid, and non-HTTP URLs", () => {
+    expect(ssrfPolicyFromHttpBaseUrlAllowedHostname("")).toBeUndefined();
+    expect(ssrfPolicyFromHttpBaseUrlAllowedHostname("not-a-url")).toBeUndefined();
+    expect(ssrfPolicyFromHttpBaseUrlAllowedHostname("ftp://api.example.com")).toBeUndefined();
   });
 });
 
 describe("isBlockedHostnameOrIp", () => {
-  it("blocks localhost.localdomain and metadata hostname aliases", () => {
-    expect(isBlockedHostnameOrIp("localhost.localdomain")).toBe(true);
-    expect(isBlockedHostnameOrIp("metadata.google.internal")).toBe(true);
+  it.each([
+    "localhost.localdomain",
+    "metadata.google.internal",
+    "api.localhost",
+    "svc.local",
+    "db.internal",
+  ])("blocks reserved hostname %s", (hostname) => {
+    expect(isBlockedHostnameOrIp(hostname)).toBe(true);
   });
 
-  it("blocks private transition addresses via shared IP classifier", () => {
-    expect(isBlockedHostnameOrIp("2001:db8:1234::5efe:127.0.0.1")).toBe(true);
-    expect(isBlockedHostnameOrIp("2001:db8::1")).toBe(false);
+  it.each([
+    ["2001:db8:1234::5efe:127.0.0.1", true],
+    ["100::1", true],
+    ["2001:2::1", true],
+    ["2001:20::1", true],
+    ["2001:db8::1", true],
+    ["198.18.0.1", true],
+    ["198.20.0.1", false],
+  ])("returns %s => %s", (value, expected) => {
+    expect(isBlockedHostnameOrIp(value)).toBe(expected);
   });
 
-  it("blocks IPv4 special-use ranges but allows adjacent public ranges", () => {
-    expect(isBlockedHostnameOrIp("198.18.0.1")).toBe(true);
-    expect(isBlockedHostnameOrIp("198.20.0.1")).toBe(false);
+  it.each([
+    ["198.18.0.1", undefined, true],
+    ["198.18.0.1", { allowRfc2544BenchmarkRange: true }, false],
+    ["::ffff:198.18.0.1", { allowRfc2544BenchmarkRange: true }, false],
+    ["198.51.100.1", { allowRfc2544BenchmarkRange: true }, true],
+  ] as const)("applies RFC2544 benchmark policy for %s", (value, policy, expected) => {
+    expect(isBlockedHostnameOrIp(value, policy)).toBe(expected);
   });
 
-  it("supports opt-in policy to allow RFC2544 benchmark range", () => {
-    const policy = { allowRfc2544BenchmarkRange: true };
-    expect(isBlockedHostnameOrIp("198.18.0.1")).toBe(true);
-    expect(isBlockedHostnameOrIp("198.18.0.1", policy)).toBe(false);
-    expect(isBlockedHostnameOrIp("::ffff:198.18.0.1", policy)).toBe(false);
-    expect(isBlockedHostnameOrIp("198.51.100.1", policy)).toBe(true);
+  // #74351: fake-ip proxy stacks (sing-box / Clash / Surge) resolve foreign
+  // domains to BOTH IPv4 198.18.0.0/15 AND IPv6 fc00::/7 simultaneously.
+  // The policy must let operators opt into the IPv6 ULA range
+  // independently of the IPv4 benchmark exemption.
+  it.each([
+    ["fc00::1", undefined, true],
+    ["fc00::1", { allowIpv6UniqueLocalRange: true }, false],
+    ["fdff::dead:beef", { allowIpv6UniqueLocalRange: true }, false],
+    // Other reserved IPv6 ranges stay blocked even with the new flag set —
+    // the exemption is scoped to ULA, not "any reserved IPv6".
+    ["::1", { allowIpv6UniqueLocalRange: true }, true],
+    ["fec0::1", { allowIpv6UniqueLocalRange: true }, true],
+    // The flag is independent of the IPv4 benchmark flag — neither
+    // implies the other.
+    ["198.18.0.1", { allowIpv6UniqueLocalRange: true }, true],
+    ["fc00::1", { allowRfc2544BenchmarkRange: true }, true],
+  ] as const)("applies IPv6 unique-local policy for %s", (value, policy, expected) => {
+    expect(isBlockedHostnameOrIp(value, policy)).toBe(expected);
   });
 
-  it("blocks legacy IPv4 literal representations", () => {
-    expect(isBlockedHostnameOrIp("0177.0.0.1")).toBe(true);
-    expect(isBlockedHostnameOrIp("8.8.2056")).toBe(true);
-    expect(isBlockedHostnameOrIp("127.1")).toBe(true);
-    expect(isBlockedHostnameOrIp("2130706433")).toBe(true);
+  it.each(["0177.0.0.1", "8.8.2056", "127.1", "2130706433"])(
+    "blocks legacy IPv4 literal %s",
+    (address) => {
+      expect(isBlockedHostnameOrIp(address)).toBe(true);
+    },
+  );
+
+  it.each(["example.com", "api.example.net"])("does not block ordinary hostname %s", (value) => {
+    expect(isBlockedHostnameOrIp(value)).toBe(false);
+  });
+});
+
+describe("isSameSsrFPolicy", () => {
+  it("compares policy fields semantically", () => {
+    expect(
+      isSameSsrFPolicy(
+        {
+          allowPrivateNetwork: true,
+          allowRfc2544BenchmarkRange: true,
+          allowedHostnames: ["b.example.com", "A.example.com"],
+          hostnameAllowlist: ["*.example.com", "api.example.com"],
+        },
+        {
+          allowPrivateNetwork: true,
+          allowRfc2544BenchmarkRange: true,
+          allowedHostnames: ["a.example.com", "B.EXAMPLE.COM"],
+          hostnameAllowlist: ["api.example.com", "*.example.com"],
+        },
+      ),
+    ).toBe(true);
+
+    expect(
+      isSameSsrFPolicy(
+        { dangerouslyAllowPrivateNetwork: true },
+        { dangerouslyAllowPrivateNetwork: true, allowRfc2544BenchmarkRange: true },
+      ),
+    ).toBe(false);
+
+    // #74351: the new `allowIpv6UniqueLocalRange` flag must participate in
+    // semantic equality. Otherwise consumers caching policy objects keyed by
+    // `isSameSsrFPolicy` would silently reuse a stale fc00::/7-blocking
+    // policy after the flag was flipped on.
+    expect(
+      isSameSsrFPolicy(
+        { allowPrivateNetwork: true },
+        { allowPrivateNetwork: true, allowIpv6UniqueLocalRange: true },
+      ),
+    ).toBe(false);
+    expect(
+      isSameSsrFPolicy({ allowIpv6UniqueLocalRange: true }, { allowIpv6UniqueLocalRange: true }),
+    ).toBe(true);
   });
 });

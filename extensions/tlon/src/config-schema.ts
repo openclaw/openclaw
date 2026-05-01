@@ -1,10 +1,10 @@
-import { buildChannelConfigSchema } from "openclaw/plugin-sdk/tlon";
-import { z } from "zod";
+import { buildChannelConfigSchema } from "openclaw/plugin-sdk/channel-config-schema";
+import { z } from "openclaw/plugin-sdk/zod";
 
 const ShipSchema = z.string().min(1);
 const ChannelNestSchema = z.string().min(1);
 
-export const TlonChannelRuleSchema = z.object({
+const TlonChannelRuleSchema = z.object({
   mode: z.enum(["restricted", "open"]).optional(),
   allowedShips: z.array(ShipSchema).optional(),
 });
@@ -13,13 +13,20 @@ export const TlonAuthorizationSchema = z.object({
   channelRules: z.record(z.string(), TlonChannelRuleSchema).optional(),
 });
 
+const TlonNetworkSchema = z
+  .object({
+    dangerouslyAllowPrivateNetwork: z.boolean().optional(),
+  })
+  .strict()
+  .optional();
+
 const tlonCommonConfigFields = {
   name: z.string().optional(),
   enabled: z.boolean().optional(),
   ship: ShipSchema.optional(),
   url: z.string().optional(),
   code: z.string().optional(),
-  allowPrivateNetwork: z.boolean().optional(),
+  network: TlonNetworkSchema,
   groupChannels: z.array(ChannelNestSchema).optional(),
   dmAllowlist: z.array(ShipSchema).optional(),
   autoDiscoverChannels: z.boolean().optional(),
@@ -32,7 +39,7 @@ const tlonCommonConfigFields = {
   ownerShip: ShipSchema.optional(), // Ship that receives approval requests and can approve/deny
 } satisfies z.ZodRawShape;
 
-export const TlonAccountSchema = z.object({
+const TlonAccountSchema = z.object({
   ...tlonCommonConfigFields,
 });
 

@@ -1,5 +1,9 @@
 package ai.openclaw.app.ui
 
+import ai.openclaw.app.MainViewModel
+import ai.openclaw.app.VoiceCaptureMode
+import ai.openclaw.app.voice.VoiceConversationEntry
+import ai.openclaw.app.voice.VoiceConversationRole
 import android.Manifest
 import android.app.Activity
 import android.content.Context
@@ -17,10 +21,12 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
@@ -33,10 +39,11 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Mic
-import androidx.compose.material.icons.filled.MicOff
 import androidx.compose.material.icons.automirrored.filled.VolumeOff
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
+import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.MicOff
+import androidx.compose.material.icons.filled.RecordVoiceOver
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
@@ -66,9 +73,6 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
-import ai.openclaw.app.MainViewModel
-import ai.openclaw.app.voice.VoiceConversationEntry
-import ai.openclaw.app.voice.VoiceConversationRole
 import kotlin.math.max
 
 @Composable
@@ -79,6 +83,7 @@ fun VoiceTabScreen(viewModel: MainViewModel) {
   val listState = rememberLazyListState()
 
   val gatewayStatus by viewModel.statusText.collectAsState()
+  val voiceCaptureMode by viewModel.voiceCaptureMode.collectAsState()
   val micEnabled by viewModel.micEnabled.collectAsState()
   val micCooldown by viewModel.micCooldown.collectAsState()
   val speakerEnabled by viewModel.speakerEnabled.collectAsState()
@@ -88,12 +93,15 @@ fun VoiceTabScreen(viewModel: MainViewModel) {
   val micConversation by viewModel.micConversation.collectAsState()
   val micInputLevel by viewModel.micInputLevel.collectAsState()
   val micIsSending by viewModel.micIsSending.collectAsState()
+  val talkModeEnabled by viewModel.talkModeEnabled.collectAsState()
+  val talkModeListening by viewModel.talkModeListening.collectAsState()
+  val talkModeSpeaking by viewModel.talkModeSpeaking.collectAsState()
 
   val hasStreamingAssistant = micConversation.any { it.role == VoiceConversationRole.Assistant && it.isStreaming }
   val showThinkingBubble = micIsSending && !hasStreamingAssistant
 
   var hasMicPermission by remember { mutableStateOf(context.hasRecordAudioPermission()) }
-  var pendingMicEnable by remember { mutableStateOf(false) }
+  var pendingVoicePermissionAction by remember { mutableStateOf<PendingVoicePermissionAction?>(null) }
 
   DisposableEffect(lifecycleOwner, context) {
     val observer =
@@ -105,7 +113,7 @@ fun VoiceTabScreen(viewModel: MainViewModel) {
     lifecycleOwner.lifecycle.addObserver(observer)
     onDispose {
       lifecycleOwner.lifecycle.removeObserver(observer)
-      // Stop TTS when leaving the voice screen
+      // Manual mic is tied to the Voice tab; Talk Mode is explicit and can continue.
       viewModel.setVoiceScreenActive(false)
     }
   }
@@ -113,10 +121,14 @@ fun VoiceTabScreen(viewModel: MainViewModel) {
   val requestMicPermission =
     rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
       hasMicPermission = granted
-      if (granted && pendingMicEnable) {
-        viewModel.setMicEnabled(true)
+      if (granted) {
+        when (pendingVoicePermissionAction) {
+          PendingVoicePermissionAction.ManualMic -> viewModel.setMicEnabled(true)
+          PendingVoicePermissionAction.TalkMode -> viewModel.setTalkModeEnabled(true)
+          null -> Unit
+        }
       }
-      pendingMicEnable = false
+      pendingVoicePermissionAction = null
     }
 
   LaunchedEffect(micConversation.size, showThinkingBubble) {
@@ -159,12 +171,12 @@ fun VoiceTabScreen(viewModel: MainViewModel) {
                 tint = mobileTextTertiary,
               )
               Text(
-                "Tap the mic to start",
+                "Tap mic or Talk",
                 style = mobileHeadline,
                 color = mobileTextSecondary,
               )
               Text(
-                "Each pause sends a turn automatically.",
+                "Mic sends turns; Talk keeps the conversation open.",
                 style = mobileCallout,
                 color = mobileTextTertiary,
               )
@@ -212,19 +224,26 @@ fun VoiceTabScreen(viewModel: MainViewModel) {
         verticalAlignment = Alignment.CenterVertically,
       ) {
         // Speaker toggle
-        IconButton(
-          onClick = { viewModel.setSpeakerEnabled(!speakerEnabled) },
-          modifier = Modifier.size(48.dp),
-          colors =
-            IconButtonDefaults.iconButtonColors(
-              containerColor = if (speakerEnabled) mobileSurface else mobileDangerSoft,
-            ),
-        ) {
-          Icon(
-            imageVector = if (speakerEnabled) Icons.AutoMirrored.Filled.VolumeUp else Icons.AutoMirrored.Filled.VolumeOff,
-            contentDescription = if (speakerEnabled) "Mute speaker" else "Unmute speaker",
-            modifier = Modifier.size(22.dp),
-            tint = if (speakerEnabled) mobileTextSecondary else mobileDanger,
+        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+          IconButton(
+            onClick = { viewModel.setSpeakerEnabled(!speakerEnabled) },
+            modifier = Modifier.size(48.dp),
+            colors =
+              IconButtonDefaults.iconButtonColors(
+                containerColor = if (speakerEnabled) mobileSurface else mobileDangerSoft,
+              ),
+          ) {
+            Icon(
+              imageVector = if (speakerEnabled) Icons.AutoMirrored.Filled.VolumeUp else Icons.AutoMirrored.Filled.VolumeOff,
+              contentDescription = if (speakerEnabled) "Mute speaker" else "Unmute speaker",
+              modifier = Modifier.size(22.dp),
+              tint = if (speakerEnabled) mobileTextSecondary else mobileDanger,
+            )
+          }
+          Text(
+            if (speakerEnabled) "Speaker" else "Muted",
+            style = mobileCaption2,
+            color = if (speakerEnabled) mobileTextTertiary else mobileDanger,
           )
         }
 
@@ -254,7 +273,7 @@ fun VoiceTabScreen(viewModel: MainViewModel) {
               if (hasMicPermission) {
                 viewModel.setMicEnabled(true)
               } else {
-                pendingMicEnable = true
+                pendingVoicePermissionAction = PendingVoicePermissionAction.ManualMic
                 requestMicPermission.launch(Manifest.permission.RECORD_AUDIO)
               }
             },
@@ -264,7 +283,14 @@ fun VoiceTabScreen(viewModel: MainViewModel) {
             modifier = Modifier.size(60.dp),
             colors =
               ButtonDefaults.buttonColors(
-                containerColor = if (micCooldown) mobileTextSecondary else if (micEnabled) mobileDanger else mobileAccent,
+                containerColor =
+                  if (micCooldown) {
+                    mobileTextSecondary
+                  } else if (micEnabled) {
+                    mobileDanger
+                  } else {
+                    mobileAccent
+                  },
                 contentColor = Color.White,
                 disabledContainerColor = mobileTextSecondary,
                 disabledContentColor = Color.White.copy(alpha = 0.5f),
@@ -278,25 +304,74 @@ fun VoiceTabScreen(viewModel: MainViewModel) {
           }
         }
 
-        // Invisible spacer to balance the row (same size as speaker button)
-        Box(modifier = Modifier.size(48.dp))
+        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+          IconButton(
+            onClick = {
+              if (talkModeEnabled) {
+                viewModel.setTalkModeEnabled(false)
+                return@IconButton
+              }
+              if (hasMicPermission) {
+                viewModel.setTalkModeEnabled(true)
+              } else {
+                pendingVoicePermissionAction = PendingVoicePermissionAction.TalkMode
+                requestMicPermission.launch(Manifest.permission.RECORD_AUDIO)
+              }
+            },
+            modifier = Modifier.size(48.dp),
+            colors =
+              IconButtonDefaults.iconButtonColors(
+                containerColor = if (talkModeEnabled) mobileSuccessSoft else mobileSurface,
+              ),
+          ) {
+            Icon(
+              imageVector = Icons.Default.RecordVoiceOver,
+              contentDescription = if (talkModeEnabled) "Turn Talk Mode off" else "Turn Talk Mode on",
+              modifier = Modifier.size(22.dp),
+              tint = if (talkModeEnabled) mobileSuccess else mobileTextSecondary,
+            )
+          }
+          Spacer(modifier = Modifier.height(4.dp))
+          Text(
+            if (talkModeEnabled) "Talk on" else "Talk",
+            style = mobileCaption2,
+            color = if (talkModeEnabled) mobileSuccess else mobileTextTertiary,
+          )
+        }
       }
 
       // Status + labels
       val queueCount = micQueuedMessages.size
       val stateText =
         when {
+          voiceCaptureMode == VoiceCaptureMode.TalkMode && talkModeSpeaking -> "Talk speaking"
+          voiceCaptureMode == VoiceCaptureMode.TalkMode && talkModeListening -> "Talk listening"
+          voiceCaptureMode == VoiceCaptureMode.TalkMode -> "Talk on"
           queueCount > 0 -> "$queueCount queued"
           micIsSending -> "Sending"
           micCooldown -> "Cooldown"
           micEnabled -> "Listening"
           else -> "Mic off"
         }
-      Text(
-        "$gatewayStatus · $stateText",
-        style = mobileCaption1,
-        color = mobileTextSecondary,
-      )
+      val stateColor =
+        when {
+          voiceCaptureMode == VoiceCaptureMode.TalkMode -> mobileSuccess
+          micEnabled -> mobileSuccess
+          micIsSending -> mobileAccent
+          else -> mobileTextSecondary
+        }
+      Surface(
+        shape = RoundedCornerShape(999.dp),
+        color = if (micEnabled || talkModeEnabled) mobileSuccessSoft else mobileSurface,
+        border = BorderStroke(1.dp, if (micEnabled || talkModeEnabled) mobileSuccess.copy(alpha = 0.3f) else mobileBorder),
+      ) {
+        Text(
+          "$gatewayStatus · $stateText",
+          style = mobileCallout.copy(fontWeight = FontWeight.SemiBold),
+          color = stateColor,
+          modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
+        )
+      }
 
       if (!hasMicPermission) {
         val showRationale =
@@ -327,6 +402,11 @@ fun VoiceTabScreen(viewModel: MainViewModel) {
   }
 }
 
+private enum class PendingVoicePermissionAction {
+  ManualMic,
+  TalkMode,
+}
+
 @Composable
 private fun VoiceTurnBubble(entry: VoiceConversationEntry) {
   val isUser = entry.role == VoiceConversationRole.User
@@ -337,7 +417,7 @@ private fun VoiceTurnBubble(entry: VoiceConversationEntry) {
     Surface(
       modifier = Modifier.fillMaxWidth(0.90f),
       shape = RoundedCornerShape(12.dp),
-      color = if (isUser) mobileAccentSoft else Color.White,
+      color = if (isUser) mobileAccentSoft else mobileCardSurface,
       border = BorderStroke(1.dp, if (isUser) mobileAccent else mobileBorderStrong),
     ) {
       Column(
@@ -365,7 +445,7 @@ private fun VoiceThinkingBubble() {
     Surface(
       modifier = Modifier.fillMaxWidth(0.68f),
       shape = RoundedCornerShape(12.dp),
-      color = Color.White,
+      color = mobileCardSurface,
       border = BorderStroke(1.dp, mobileBorderStrong),
     ) {
       Row(
@@ -390,7 +470,10 @@ private fun ThinkingDots(color: Color) {
 }
 
 @Composable
-private fun ThinkingDot(alpha: Float, color: Color) {
+private fun ThinkingDot(
+  alpha: Float,
+  color: Color,
+) {
   Surface(
     modifier = Modifier.size(6.dp).alpha(alpha),
     shape = CircleShape,
@@ -398,12 +481,11 @@ private fun ThinkingDot(alpha: Float, color: Color) {
   ) {}
 }
 
-private fun Context.hasRecordAudioPermission(): Boolean {
-  return (
+private fun Context.hasRecordAudioPermission(): Boolean =
+  (
     ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) ==
       PackageManager.PERMISSION_GRANTED
-    )
-}
+  )
 
 private fun Context.findActivity(): Activity? =
   when (this) {

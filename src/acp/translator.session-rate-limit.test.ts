@@ -12,6 +12,10 @@ import { createInMemorySessionStore } from "./session.js";
 import { AcpGatewayAgent } from "./translator.js";
 import { createAcpConnection, createAcpGateway } from "./translator.test-helpers.js";
 
+vi.mock("./commands.js", () => ({
+  getAvailableCommands: () => [],
+}));
+
 function createNewSessionRequest(cwd = "/tmp"): NewSessionRequest {
   return {
     cwd,
@@ -52,7 +56,7 @@ function createSetSessionModeRequest(sessionId: string, modeId: string): SetSess
 function createSetSessionConfigOptionRequest(
   sessionId: string,
   configId: string,
-  value: string,
+  value: string | boolean,
 ): SetSessionConfigOptionRequest {
   return {
     sessionId,
@@ -125,12 +129,11 @@ describe("acp session creation rate limit", () => {
     const agent = new AcpGatewayAgent(createAcpConnection(), createAcpGateway(), {
       sessionStore,
       sessionCreateRateLimit: {
-        maxRequests: 2,
+        maxRequests: 1,
         windowMs: 60_000,
       },
     });
 
-    await agent.newSession(createNewSessionRequest());
     await agent.newSession(createNewSessionRequest());
     await expect(agent.newSession(createNewSessionRequest())).rejects.toThrow(
       /session creation rate limit exceeded/i,
@@ -241,7 +244,7 @@ describe("acp session UX bridge behavior", () => {
     sessionStore.clearAllSessionsForTest();
   });
 
-  it("replays user and assistant text history on loadSession and returns initial controls", async () => {
+  it("replays user text, assistant text, and hidden assistant thinking on loadSession", async () => {
     const sessionStore = createInMemorySessionStore();
     const connection = createAcpConnection();
     const sessionUpdate = connection.__sessionUpdateMock;
@@ -267,6 +270,11 @@ describe("acp session UX bridge behavior", () => {
               thinkingLevel: "high",
               modelProvider: "openai",
               model: "gpt-5.4",
+              thinkingLevels: [
+                { id: "off", label: "off" },
+                { id: "medium", label: "medium" },
+                { id: "max", label: "max" },
+              ],
               verboseLevel: "full",
               reasoningLevel: "stream",
               responseUsage: "tokens",
@@ -282,7 +290,13 @@ describe("acp session UX bridge behavior", () => {
         return {
           messages: [
             { role: "user", content: [{ type: "text", text: "Question" }] },
-            { role: "assistant", content: [{ type: "text", text: "Answer" }] },
+            {
+              role: "assistant",
+              content: [
+                { type: "thinking", thinking: "Internal loop about NO_REPLY" },
+                { type: "text", text: "Answer" },
+              ],
+            },
             { role: "system", content: [{ type: "text", text: "ignore me" }] },
             { role: "assistant", content: [{ type: "image", image: "skip" }] },
           ],
@@ -297,7 +311,12 @@ describe("acp session UX bridge behavior", () => {
     const result = await agent.loadSession(createLoadSessionRequest("agent:main:work"));
 
     expect(result.modes?.currentModeId).toBe("high");
-    expect(result.modes?.availableModes.map((mode) => mode.id)).toContain("xhigh");
+    expect(result.modes?.availableModes.map((mode) => mode.id)).toEqual([
+      "off",
+      "medium",
+      "max",
+      "high",
+    ]);
     expect(result.configOptions).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -327,6 +346,13 @@ describe("acp session UX bridge behavior", () => {
       update: {
         sessionUpdate: "user_message_chunk",
         content: { type: "text", text: "Question" },
+      },
+    });
+    expect(sessionUpdate).toHaveBeenCalledWith({
+      sessionId: "agent:main:work",
+      update: {
+        sessionUpdate: "agent_thought_chunk",
+        content: { type: "text", text: "Internal loop about NO_REPLY" },
       },
     });
     expect(sessionUpdate).toHaveBeenCalledWith({
@@ -644,6 +670,176 @@ describe("acp setSessionConfigOption bridge behavior", () => {
 
     sessionStore.clearAllSessionsForTest();
   });
+
+  it("updates fast mode ACP config options through gateway session patches", async () => {
+    const sessionStore = createInMemorySessionStore();
+    const connection = createAcpConnection();
+    const sessionUpdate = connection.__sessionUpdateMock;
+    const request = vi.fn(async (method: string, _params?: unknown) => {
+      if (method === "sessions.list") {
+        return {
+          ts: Date.now(),
+          path: "/tmp/sessions.json",
+          count: 1,
+          defaults: {
+            modelProvider: null,
+            model: null,
+            contextTokens: null,
+          },
+          sessions: [
+            {
+              key: "fast-session",
+              kind: "direct",
+              updatedAt: Date.now(),
+              thinkingLevel: "minimal",
+              modelProvider: "openai",
+              model: "gpt-5.4",
+              fastMode: true,
+            },
+          ],
+        };
+      }
+      if (method === "sessions.patch") {
+        expect(_params).toEqual({
+          key: "fast-session",
+          fastMode: true,
+        });
+      }
+      return { ok: true };
+    }) as GatewayClient["request"];
+    const agent = new AcpGatewayAgent(connection, createAcpGateway(request), {
+      sessionStore,
+    });
+
+    await agent.loadSession(createLoadSessionRequest("fast-session"));
+    sessionUpdate.mockClear();
+
+    const result = await agent.setSessionConfigOption(
+      createSetSessionConfigOptionRequest("fast-session", "fast_mode", "on"),
+    );
+
+    expect(result.configOptions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "fast_mode",
+          currentValue: "on",
+        }),
+      ]),
+    );
+    expect(sessionUpdate).toHaveBeenCalledWith({
+      sessionId: "fast-session",
+      update: {
+        sessionUpdate: "config_option_update",
+        configOptions: expect.arrayContaining([
+          expect.objectContaining({
+            id: "fast_mode",
+            currentValue: "on",
+          }),
+        ]),
+      },
+    });
+
+    sessionStore.clearAllSessionsForTest();
+  });
+
+  it("accepts forwarded timeout config options without failing OpenClaw ACP bridge turns", async () => {
+    const sessionStore = createInMemorySessionStore();
+    const connection = createAcpConnection();
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.list") {
+        return {
+          ts: Date.now(),
+          path: "/tmp/sessions.json",
+          count: 1,
+          defaults: {
+            modelProvider: null,
+            model: null,
+            contextTokens: null,
+          },
+          sessions: [
+            {
+              key: "timeout-session",
+              kind: "direct",
+              updatedAt: Date.now(),
+              thinkingLevel: "minimal",
+              modelProvider: "openai",
+              model: "gpt-5.4",
+            },
+          ],
+        };
+      }
+      expect(method).not.toBe("sessions.patch");
+      return { ok: true };
+    }) as GatewayClient["request"];
+    const agent = new AcpGatewayAgent(connection, createAcpGateway(request), {
+      sessionStore,
+    });
+
+    await agent.loadSession(createLoadSessionRequest("timeout-session"));
+
+    await expect(
+      agent.setSessionConfigOption(
+        createSetSessionConfigOptionRequest("timeout-session", "timeout", "180"),
+      ),
+    ).resolves.toEqual(
+      expect.objectContaining({
+        configOptions: expect.any(Array),
+      }),
+    );
+
+    expect(request).not.toHaveBeenCalledWith("sessions.patch", expect.anything());
+
+    sessionStore.clearAllSessionsForTest();
+  });
+
+  it("rejects non-string ACP config option values", async () => {
+    const sessionStore = createInMemorySessionStore();
+    const connection = createAcpConnection();
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.list") {
+        return {
+          ts: Date.now(),
+          path: "/tmp/sessions.json",
+          count: 1,
+          defaults: {
+            modelProvider: null,
+            model: null,
+            contextTokens: null,
+          },
+          sessions: [
+            {
+              key: "bool-config-session",
+              kind: "direct",
+              updatedAt: Date.now(),
+              thinkingLevel: "minimal",
+              modelProvider: "openai",
+              model: "gpt-5.4",
+            },
+          ],
+        };
+      }
+      return { ok: true };
+    }) as GatewayClient["request"];
+    const agent = new AcpGatewayAgent(connection, createAcpGateway(request), {
+      sessionStore,
+    });
+
+    await agent.loadSession(createLoadSessionRequest("bool-config-session"));
+
+    await expect(
+      agent.setSessionConfigOption(
+        createSetSessionConfigOptionRequest("bool-config-session", "thought_level", false),
+      ),
+    ).rejects.toThrow(
+      'ACP bridge does not support non-string session config option values for "thought_level".',
+    );
+    expect(request).not.toHaveBeenCalledWith(
+      "sessions.patch",
+      expect.objectContaining({ key: "bool-config-session" }),
+    );
+
+    sessionStore.clearAllSessionsForTest();
+  });
 });
 
 describe("acp tool streaming bridge behavior", () => {
@@ -898,5 +1094,146 @@ describe("acp prompt size hardening", () => {
       sessionId: "prompt-limit-prefix",
       text: "a".repeat(2 * 1024 * 1024),
     });
+  });
+});
+
+describe("acp final chat snapshots", () => {
+  async function createSnapshotHarness() {
+    const sessionStore = createInMemorySessionStore();
+    const connection = createAcpConnection();
+    const sessionUpdate = connection.__sessionUpdateMock;
+    const request = vi.fn(async (method: string) => {
+      if (method === "chat.send") {
+        return new Promise(() => {});
+      }
+      return { ok: true };
+    }) as GatewayClient["request"];
+    const agent = new AcpGatewayAgent(connection, createAcpGateway(request), {
+      sessionStore,
+    });
+    await agent.loadSession(createLoadSessionRequest("snapshot-session"));
+    sessionUpdate.mockClear();
+    const promptPromise = agent.prompt(createPromptRequest("snapshot-session", "hello"));
+    const runId = sessionStore.getSession("snapshot-session")?.activeRunId;
+    if (!runId) {
+      throw new Error("Expected ACP prompt run to be active");
+    }
+    return { agent, sessionUpdate, promptPromise, runId, sessionStore };
+  }
+
+  it("emits final snapshot text before resolving end_turn", async () => {
+    const { agent, sessionUpdate, promptPromise, runId, sessionStore } =
+      await createSnapshotHarness();
+
+    await agent.handleGatewayEvent({
+      event: "chat",
+      payload: {
+        sessionKey: "snapshot-session",
+        runId,
+        state: "final",
+        stopReason: "end_turn",
+        message: {
+          content: [{ type: "text", text: "FINAL TEXT SHOULD BE EMITTED" }],
+        },
+      },
+    } as unknown as EventFrame);
+
+    await expect(promptPromise).resolves.toEqual({ stopReason: "end_turn" });
+    expect(sessionUpdate).toHaveBeenCalledWith({
+      sessionId: "snapshot-session",
+      update: {
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "FINAL TEXT SHOULD BE EMITTED" },
+      },
+    });
+    expect(sessionStore.getSession("snapshot-session")?.activeRunId).toBeNull();
+    sessionStore.clearAllSessionsForTest();
+  });
+
+  it("does not duplicate text when final repeats the last delta snapshot", async () => {
+    const { agent, sessionUpdate, promptPromise, runId, sessionStore } =
+      await createSnapshotHarness();
+
+    await agent.handleGatewayEvent({
+      event: "chat",
+      payload: {
+        sessionKey: "snapshot-session",
+        runId,
+        state: "delta",
+        message: {
+          content: [{ type: "text", text: "Hello world" }],
+        },
+      },
+    } as unknown as EventFrame);
+
+    await agent.handleGatewayEvent({
+      event: "chat",
+      payload: {
+        sessionKey: "snapshot-session",
+        runId,
+        state: "final",
+        stopReason: "end_turn",
+        message: {
+          content: [{ type: "text", text: "Hello world" }],
+        },
+      },
+    } as unknown as EventFrame);
+
+    await expect(promptPromise).resolves.toEqual({ stopReason: "end_turn" });
+    const chunks = sessionUpdate.mock.calls.filter(
+      (call: unknown[]) =>
+        (call[0] as Record<string, unknown>)?.update &&
+        (call[0] as Record<string, Record<string, unknown>>).update?.sessionUpdate ===
+          "agent_message_chunk",
+    );
+    expect(chunks).toHaveLength(1);
+    sessionStore.clearAllSessionsForTest();
+  });
+
+  it("emits only the missing tail when the final snapshot extends prior deltas", async () => {
+    const { agent, sessionUpdate, promptPromise, runId, sessionStore } =
+      await createSnapshotHarness();
+
+    await agent.handleGatewayEvent({
+      event: "chat",
+      payload: {
+        sessionKey: "snapshot-session",
+        runId,
+        state: "delta",
+        message: {
+          content: [{ type: "text", text: "Hello" }],
+        },
+      },
+    } as unknown as EventFrame);
+
+    await agent.handleGatewayEvent({
+      event: "chat",
+      payload: {
+        sessionKey: "snapshot-session",
+        runId,
+        state: "final",
+        stopReason: "max_tokens",
+        message: {
+          content: [{ type: "text", text: "Hello world" }],
+        },
+      },
+    } as unknown as EventFrame);
+
+    await expect(promptPromise).resolves.toEqual({ stopReason: "max_tokens" });
+    expect(sessionUpdate).toHaveBeenCalledWith({
+      sessionId: "snapshot-session",
+      update: {
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "Hello" },
+      },
+    });
+    expect(sessionUpdate).toHaveBeenCalledWith({
+      sessionId: "snapshot-session",
+      update: {
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: " world" },
+      },
+    });
+    sessionStore.clearAllSessionsForTest();
   });
 });

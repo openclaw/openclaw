@@ -89,6 +89,20 @@ private func readLineFromHandle(_ handle: FileHandle, maxBytes: Int) throws -> S
     return String(data: lineData, encoding: .utf8)
 }
 
+func timingSafeHexStringEquals(_ lhs: String, _ rhs: String) -> Bool {
+    let lhsBytes = Array(lhs.utf8)
+    let rhsBytes = Array(rhs.utf8)
+    guard lhsBytes.count == rhsBytes.count else {
+        return false
+    }
+
+    var diff: UInt8 = 0
+    for index in lhsBytes.indices {
+        diff |= lhsBytes[index] ^ rhsBytes[index]
+    }
+    return diff == 0
+}
+
 enum ExecApprovalsSocketClient {
     private struct TimeoutError: LocalizedError {
         var message: String
@@ -239,12 +253,11 @@ enum ExecApprovalsPromptPresenter {
     }
 
     @MainActor
-    private static func buildAccessoryView(_ request: ExecApprovalPromptRequest) -> NSView {
+    static func buildAccessoryView(_ request: ExecApprovalPromptRequest) -> NSView {
         let stack = NSStackView()
         stack.orientation = .vertical
         stack.spacing = 8
         stack.alignment = .leading
-        stack.translatesAutoresizingMaskIntoConstraints = false
         stack.widthAnchor.constraint(greaterThanOrEqualToConstant: 380).isActive = true
 
         let commandTitle = NSTextField(labelWithString: "Command")
@@ -257,7 +270,7 @@ enum ExecApprovalsPromptPresenter {
         commandText.drawsBackground = true
         commandText.backgroundColor = NSColor.textBackgroundColor
         commandText.font = NSFont.monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
-        commandText.string = request.command
+        commandText.string = ExecApprovalCommandDisplaySanitizer.sanitize(request.command)
         commandText.textContainerInset = NSSize(width: 6, height: 6)
         commandText.textContainer?.lineFragmentPadding = 0
         commandText.textContainer?.widthTracksTextView = true
@@ -323,6 +336,10 @@ enum ExecApprovalsPromptPresenter {
         footer.font = NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)
         stack.addArrangedSubview(footer)
 
+        // NSAlert reserves accessory space from the view frame, not from Auto Layout constraints.
+        // Give the top-level accessory an explicit frame so its subviews do not paint over the
+        // alert title, message, and buttons while the frame remains zero-sized.
+        stack.frame = NSRect(origin: .zero, size: stack.fittingSize)
         return stack
     }
 
@@ -364,7 +381,7 @@ private enum ExecHostExecutor {
         let context = await self.buildContext(
             request: request,
             command: validatedRequest.command,
-            rawCommand: validatedRequest.displayCommand)
+            rawCommand: validatedRequest.evaluationRawCommand)
 
         switch ExecHostRequestEvaluator.evaluate(
             context: context,
@@ -462,16 +479,8 @@ private enum ExecHostExecutor {
     {
         guard decision == .allowAlways, context.security == .allowlist else { return }
         var seenPatterns = Set<String>()
-        for candidate in context.allowlistResolutions {
-            guard let pattern = ExecApprovalHelpers.allowlistPattern(
-                command: context.command,
-                resolution: candidate)
-            else {
-                continue
-            }
-            if seenPatterns.insert(pattern).inserted {
-                ExecApprovalsStore.addAllowlistEntry(agentId: context.agentId, pattern: pattern)
-            }
+        for pattern in context.allowAlwaysPatterns where seenPatterns.insert(pattern).inserted {
+            ExecApprovalsStore.addAllowlistEntry(agentId: context.agentId, pattern: pattern)
         }
     }
 
@@ -854,7 +863,7 @@ private final class ExecApprovalsSocketServer: @unchecked Sendable {
                 error: ExecHostError(code: "INVALID_REQUEST", message: "expired request", reason: "ttl"))
         }
         let expected = self.hmacHex(nonce: request.nonce, ts: request.ts, requestJson: request.requestJson)
-        if expected != request.hmac {
+        if !timingSafeHexStringEquals(expected, request.hmac) {
             return ExecHostResponse(
                 type: "exec-res",
                 id: request.id,

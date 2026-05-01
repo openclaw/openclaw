@@ -26,12 +26,42 @@ class DeviceHandlerTest {
     assertTrue(result.ok)
     val payload = parsePayload(result.payloadJson)
     assertEquals("Android", payload.getValue("systemName").jsonPrimitive.content)
-    assertTrue(payload.getValue("deviceName").jsonPrimitive.content.isNotBlank())
-    assertTrue(payload.getValue("modelIdentifier").jsonPrimitive.content.isNotBlank())
-    assertTrue(payload.getValue("systemVersion").jsonPrimitive.content.isNotBlank())
-    assertTrue(payload.getValue("appVersion").jsonPrimitive.content.isNotBlank())
-    assertTrue(payload.getValue("appBuild").jsonPrimitive.content.isNotBlank())
-    assertTrue(payload.getValue("locale").jsonPrimitive.content.isNotBlank())
+    assertTrue(
+      payload
+        .getValue("deviceName")
+        .jsonPrimitive.content
+        .isNotBlank(),
+    )
+    assertTrue(
+      payload
+        .getValue("modelIdentifier")
+        .jsonPrimitive.content
+        .isNotBlank(),
+    )
+    assertTrue(
+      payload
+        .getValue("systemVersion")
+        .jsonPrimitive.content
+        .isNotBlank(),
+    )
+    assertTrue(
+      payload
+        .getValue("appVersion")
+        .jsonPrimitive.content
+        .isNotBlank(),
+    )
+    assertTrue(
+      payload
+        .getValue("appBuild")
+        .jsonPrimitive.content
+        .isNotBlank(),
+    )
+    assertTrue(
+      payload
+        .getValue("locale")
+        .jsonPrimitive.content
+        .isNotBlank(),
+    )
   }
 
   @Test
@@ -54,9 +84,21 @@ class DeviceHandlerTest {
     }
     battery.getValue("lowPowerModeEnabled").jsonPrimitive.boolean
 
-    val totalBytes = storage.getValue("totalBytes").jsonPrimitive.content.toLong()
-    val freeBytes = storage.getValue("freeBytes").jsonPrimitive.content.toLong()
-    val usedBytes = storage.getValue("usedBytes").jsonPrimitive.content.toLong()
+    val totalBytes =
+      storage
+        .getValue("totalBytes")
+        .jsonPrimitive.content
+        .toLong()
+    val freeBytes =
+      storage
+        .getValue("freeBytes")
+        .jsonPrimitive.content
+        .toLong()
+    val usedBytes =
+      storage
+        .getValue("usedBytes")
+        .jsonPrimitive.content
+        .toLong()
     assertTrue(totalBytes >= 0L)
     assertTrue(freeBytes >= 0L)
     assertTrue(usedBytes >= 0L)
@@ -93,6 +135,7 @@ class DeviceHandlerTest {
         "photos",
         "contacts",
         "calendar",
+        "callLog",
         "motion",
       )
     for (key in expected) {
@@ -100,7 +143,134 @@ class DeviceHandlerTest {
       val status = state.getValue("status").jsonPrimitive.content
       assertTrue(status == "granted" || status == "denied")
       state.getValue("promptable").jsonPrimitive.boolean
+      if (key == "sms") {
+        val capabilities = state.getValue("capabilities").jsonObject
+        for (capabilityKey in listOf("send", "read")) {
+          val capability = capabilities.getValue(capabilityKey).jsonObject
+          val capabilityStatus = capability.getValue("status").jsonPrimitive.content
+          assertTrue(capabilityStatus == "granted" || capabilityStatus == "denied")
+          capability.getValue("promptable").jsonPrimitive.boolean
+        }
+      }
     }
+  }
+
+  @Test
+  fun smsTopLevelStatusTreatsSendOnlyPartialGrantAsGranted() {
+    assertTrue(
+      DeviceHandler.hasAnySmsCapability(
+        smsEnabled = true,
+        telephonyAvailable = true,
+        smsSendGranted = true,
+        smsReadGranted = false,
+      ),
+    )
+  }
+
+  @Test
+  fun smsTopLevelStatusTreatsReadOnlyPartialGrantAsGranted() {
+    assertTrue(
+      DeviceHandler.hasAnySmsCapability(
+        smsEnabled = true,
+        telephonyAvailable = true,
+        smsSendGranted = false,
+        smsReadGranted = true,
+      ),
+    )
+  }
+
+  @Test
+  fun smsTopLevelStatusTreatsNoSmsGrantAsDenied() {
+    assertTrue(
+      !DeviceHandler.hasAnySmsCapability(
+        smsEnabled = true,
+        telephonyAvailable = true,
+        smsSendGranted = false,
+        smsReadGranted = false,
+      ),
+    )
+  }
+
+  @Test
+  fun smsTopLevelStatusTreatsDisabledSmsAsDenied() {
+    assertTrue(
+      !DeviceHandler.hasAnySmsCapability(
+        smsEnabled = false,
+        telephonyAvailable = true,
+        smsSendGranted = true,
+        smsReadGranted = true,
+      ),
+    )
+  }
+
+  @Test
+  fun smsTopLevelStatusTreatsMissingTelephonyAsDenied() {
+    assertTrue(
+      !DeviceHandler.hasAnySmsCapability(
+        smsEnabled = true,
+        telephonyAvailable = false,
+        smsSendGranted = true,
+        smsReadGranted = true,
+      ),
+    )
+  }
+
+  @Test
+  fun smsTopLevelPromptableStaysTrueUntilBothSmsPermissionsAreGranted() {
+    assertTrue(
+      DeviceHandler.isSmsPromptable(
+        smsEnabled = true,
+        telephonyAvailable = true,
+        smsSendGranted = true,
+        smsReadGranted = false,
+      ),
+    )
+    assertTrue(
+      !DeviceHandler.isSmsPromptable(
+        smsEnabled = true,
+        telephonyAvailable = true,
+        smsSendGranted = true,
+        smsReadGranted = true,
+      ),
+    )
+  }
+
+  @Test
+  fun smsTopLevelPromptableIsFalseWhenSmsCannotExist() {
+    assertTrue(
+      !DeviceHandler.isSmsPromptable(
+        smsEnabled = false,
+        telephonyAvailable = true,
+        smsSendGranted = false,
+        smsReadGranted = false,
+      ),
+    )
+    assertTrue(
+      !DeviceHandler.isSmsPromptable(
+        smsEnabled = true,
+        telephonyAvailable = false,
+        smsSendGranted = false,
+        smsReadGranted = false,
+      ),
+    )
+  }
+
+  @Test
+  fun handleDevicePermissions_marksCallLogUnpromptableWhenFeatureDisabled() {
+    val handler = DeviceHandler(appContext(), callLogEnabled = false)
+
+    val result = handler.handleDevicePermissions(null)
+
+    assertTrue(result.ok)
+    val payload = parsePayload(result.payloadJson)
+    val callLog =
+      payload
+        .getValue("permissions")
+        .jsonObject
+        .getValue("callLog")
+        .jsonObject
+    assertEquals("denied", callLog.getValue("status").jsonPrimitive.content)
+    assertTrue(!callLog.getValue("promptable").jsonPrimitive.boolean)
   }
 
   @Test
@@ -118,9 +288,21 @@ class DeviceHandlerTest {
 
     val pressure = memory.getValue("pressure").jsonPrimitive.content
     assertTrue(pressure in setOf("normal", "moderate", "high", "critical", "unknown"))
-    val totalRamBytes = memory.getValue("totalRamBytes").jsonPrimitive.content.toLong()
-    val availableRamBytes = memory.getValue("availableRamBytes").jsonPrimitive.content.toLong()
-    val usedRamBytes = memory.getValue("usedRamBytes").jsonPrimitive.content.toLong()
+    val totalRamBytes =
+      memory
+        .getValue("totalRamBytes")
+        .jsonPrimitive.content
+        .toLong()
+    val availableRamBytes =
+      memory
+        .getValue("availableRamBytes")
+        .jsonPrimitive.content
+        .toLong()
+    val usedRamBytes =
+      memory
+        .getValue("usedRamBytes")
+        .jsonPrimitive.content
+        .toLong()
     assertTrue(totalRamBytes >= 0L)
     assertTrue(availableRamBytes >= 0L)
     assertTrue(usedRamBytes >= 0L)

@@ -7,7 +7,7 @@ import type {
   MSTeamsConfig,
   MSTeamsReplyStyle,
   MSTeamsTeamConfig,
-} from "openclaw/plugin-sdk/msteams";
+} from "../runtime-api.js";
 import {
   buildChannelKeyCandidates,
   evaluateSenderGroupAccessForPolicy,
@@ -16,9 +16,10 @@ import {
   resolveToolsBySender,
   resolveChannelEntryMatchWithFallback,
   resolveNestedAllowlistDecision,
-} from "openclaw/plugin-sdk/msteams";
+  isDangerousNameMatchingEnabled,
+} from "../runtime-api.js";
 
-export type MSTeamsResolvedRouteConfig = {
+type MSTeamsResolvedRouteConfig = {
   teamConfig?: MSTeamsTeamConfig;
   channelConfig?: MSTeamsChannelConfig;
   allowlistConfigured: boolean;
@@ -35,6 +36,7 @@ export function resolveMSTeamsRouteConfig(params: {
   teamName?: string | null | undefined;
   conversationId?: string | null | undefined;
   channelName?: string | null | undefined;
+  allowNameMatching?: boolean;
 }): MSTeamsResolvedRouteConfig {
   const teamId = params.teamId?.trim();
   const teamName = params.teamName?.trim();
@@ -44,8 +46,8 @@ export function resolveMSTeamsRouteConfig(params: {
   const allowlistConfigured = Object.keys(teams).length > 0;
   const teamCandidates = buildChannelKeyCandidates(
     teamId,
-    teamName,
-    teamName ? normalizeChannelSlug(teamName) : undefined,
+    params.allowNameMatching ? teamName : undefined,
+    params.allowNameMatching && teamName ? normalizeChannelSlug(teamName) : undefined,
   );
   const teamMatch = resolveChannelEntryMatchWithFallback({
     entries: teams,
@@ -58,8 +60,8 @@ export function resolveMSTeamsRouteConfig(params: {
   const channelAllowlistConfigured = Object.keys(channels).length > 0;
   const channelCandidates = buildChannelKeyCandidates(
     conversationId,
-    channelName,
-    channelName ? normalizeChannelSlug(channelName) : undefined,
+    params.allowNameMatching ? channelName : undefined,
+    params.allowNameMatching && channelName ? normalizeChannelSlug(channelName) : undefined,
   );
   const channelMatch = resolveChannelEntryMatchWithFallback({
     entries: channels,
@@ -101,6 +103,7 @@ export function resolveMSTeamsGroupToolPolicy(
   const groupId = params.groupId?.trim();
   const groupChannel = params.groupChannel?.trim();
   const groupSpace = params.groupSpace?.trim();
+  const allowNameMatching = isDangerousNameMatchingEnabled(cfg);
 
   const resolved = resolveMSTeamsRouteConfig({
     cfg,
@@ -108,6 +111,7 @@ export function resolveMSTeamsGroupToolPolicy(
     teamName: groupSpace,
     conversationId: groupId,
     channelName: groupChannel,
+    allowNameMatching,
   });
 
   if (resolved.channelConfig) {
@@ -158,8 +162,8 @@ export function resolveMSTeamsGroupToolPolicy(
 
   const channelCandidates = buildChannelKeyCandidates(
     groupId,
-    groupChannel,
-    groupChannel ? normalizeChannelSlug(groupChannel) : undefined,
+    allowNameMatching ? groupChannel : undefined,
+    allowNameMatching && groupChannel ? normalizeChannelSlug(groupChannel) : undefined,
   );
   for (const teamConfig of Object.values(cfg.teams ?? {})) {
     const match = resolveChannelEntryMatchWithFallback({
@@ -199,12 +203,12 @@ export function resolveMSTeamsGroupToolPolicy(
   return undefined;
 }
 
-export type MSTeamsReplyPolicy = {
+type MSTeamsReplyPolicy = {
   requireMention: boolean;
   replyStyle: MSTeamsReplyStyle;
 };
 
-export type MSTeamsAllowlistMatch = AllowlistMatch<"wildcard" | "id" | "name">;
+type MSTeamsAllowlistMatch = AllowlistMatch<"wildcard" | "id" | "name">;
 
 export function resolveMSTeamsAllowlistMatch(params: {
   allowFrom: Array<string | number>;

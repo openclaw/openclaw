@@ -1,10 +1,11 @@
-import OpenClawProtocol
 import Foundation
+import OpenClawProtocol
 
 public enum GatewayConnectAuthDetailCode: String, Sendable {
     case authRequired = "AUTH_REQUIRED"
     case authUnauthorized = "AUTH_UNAUTHORIZED"
     case authTokenMismatch = "AUTH_TOKEN_MISMATCH"
+    case authBootstrapTokenInvalid = "AUTH_BOOTSTRAP_TOKEN_INVALID"
     case authDeviceTokenMismatch = "AUTH_DEVICE_TOKEN_MISMATCH"
     case authTokenMissing = "AUTH_TOKEN_MISSING"
     case authTokenNotConfigured = "AUTH_TOKEN_NOT_CONFIGURED"
@@ -42,12 +43,32 @@ public struct GatewayConnectAuthError: LocalizedError, Sendable {
     public let detailCodeRaw: String?
     public let recommendedNextStepRaw: String?
     public let canRetryWithDeviceToken: Bool
+    public let requestId: String?
+    public let detailsReason: String?
+    public let ownerRaw: String?
+    public let titleOverride: String?
+    public let userMessageOverride: String?
+    public let actionLabel: String?
+    public let actionCommand: String?
+    public let docsURLString: String?
+    public let retryableOverride: Bool?
+    public let pauseReconnectOverride: Bool?
 
     public init(
         message: String,
         detailCodeRaw: String?,
         canRetryWithDeviceToken: Bool,
-        recommendedNextStepRaw: String? = nil)
+        recommendedNextStepRaw: String? = nil,
+        requestId: String? = nil,
+        detailsReason: String? = nil,
+        ownerRaw: String? = nil,
+        titleOverride: String? = nil,
+        userMessageOverride: String? = nil,
+        actionLabel: String? = nil,
+        actionCommand: String? = nil,
+        docsURLString: String? = nil,
+        retryableOverride: Bool? = nil,
+        pauseReconnectOverride: Bool? = nil)
     {
         let trimmedMessage = message.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedDetailCode = detailCodeRaw?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -58,24 +79,63 @@ public struct GatewayConnectAuthError: LocalizedError, Sendable {
         self.canRetryWithDeviceToken = canRetryWithDeviceToken
         self.recommendedNextStepRaw =
             trimmedRecommendedNextStep?.isEmpty == false ? trimmedRecommendedNextStep : nil
+        self.requestId = Self.trimmedOrNil(requestId)
+        self.detailsReason = Self.trimmedOrNil(detailsReason)
+        self.ownerRaw = Self.trimmedOrNil(ownerRaw)
+        self.titleOverride = Self.trimmedOrNil(titleOverride)
+        self.userMessageOverride = Self.trimmedOrNil(userMessageOverride)
+        self.actionLabel = Self.trimmedOrNil(actionLabel)
+        self.actionCommand = Self.trimmedOrNil(actionCommand)
+        self.docsURLString = Self.trimmedOrNil(docsURLString)
+        self.retryableOverride = retryableOverride
+        self.pauseReconnectOverride = pauseReconnectOverride
     }
 
     public init(
         message: String,
         detailCode: String?,
         canRetryWithDeviceToken: Bool,
-        recommendedNextStep: String? = nil)
+        recommendedNextStep: String? = nil,
+        requestId: String? = nil,
+        detailsReason: String? = nil,
+        ownerRaw: String? = nil,
+        titleOverride: String? = nil,
+        userMessageOverride: String? = nil,
+        actionLabel: String? = nil,
+        actionCommand: String? = nil,
+        docsURLString: String? = nil,
+        retryableOverride: Bool? = nil,
+        pauseReconnectOverride: Bool? = nil)
     {
         self.init(
             message: message,
             detailCodeRaw: detailCode,
             canRetryWithDeviceToken: canRetryWithDeviceToken,
-            recommendedNextStepRaw: recommendedNextStep)
+            recommendedNextStepRaw: recommendedNextStep,
+            requestId: requestId,
+            detailsReason: detailsReason,
+            ownerRaw: ownerRaw,
+            titleOverride: titleOverride,
+            userMessageOverride: userMessageOverride,
+            actionLabel: actionLabel,
+            actionCommand: actionCommand,
+            docsURLString: docsURLString,
+            retryableOverride: retryableOverride,
+            pauseReconnectOverride: pauseReconnectOverride)
     }
 
-    public var detailCode: String? { self.detailCodeRaw }
+    private static func trimmedOrNil(_ value: String?) -> String? {
+        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? nil : trimmed
+    }
 
-    public var recommendedNextStepCode: String? { self.recommendedNextStepRaw }
+    public var detailCode: String? {
+        self.detailCodeRaw
+    }
+
+    public var recommendedNextStepCode: String? {
+        self.recommendedNextStepRaw
+    }
 
     public var detail: GatewayConnectAuthDetailCode? {
         guard let detailCodeRaw else { return nil }
@@ -87,22 +147,25 @@ public struct GatewayConnectAuthError: LocalizedError, Sendable {
         return GatewayConnectRecoveryNextStep(rawValue: recommendedNextStepRaw)
     }
 
-    public var errorDescription: String? { self.message }
+    public var errorDescription: String? {
+        self.message
+    }
 
     public var isNonRecoverable: Bool {
         switch self.detail {
         case .authTokenMissing,
-            .authTokenNotConfigured,
-            .authPasswordMissing,
-            .authPasswordMismatch,
-            .authPasswordNotConfigured,
-            .authRateLimited,
-            .pairingRequired,
-            .controlUiDeviceIdentityRequired,
-            .deviceIdentityRequired:
-            return true
+             .authBootstrapTokenInvalid,
+             .authTokenNotConfigured,
+             .authPasswordMissing,
+             .authPasswordMismatch,
+             .authPasswordNotConfigured,
+             .authRateLimited,
+             .pairingRequired,
+             .controlUiDeviceIdentityRequired,
+             .deviceIdentityRequired:
+            true
         default:
-            return false
+            false
         }
     }
 }
@@ -125,6 +188,12 @@ public struct GatewayResponseError: LocalizedError, @unchecked Sendable {
         self.details = details ?? [:]
     }
 
+    public var detailsReason: String? {
+        let raw = self.details["reason"]?.value as? String
+        let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
     public var errorDescription: String? {
         if self.code == "GATEWAY_ERROR" { return "\(self.method): \(self.message)" }
         return "\(self.method): [\(self.code)] \(self.message)"
@@ -140,5 +209,7 @@ public struct GatewayDecodingError: LocalizedError, Sendable {
         self.message = message
     }
 
-    public var errorDescription: String? { "\(self.method): \(self.message)" }
+    public var errorDescription: String? {
+        "\(self.method): \(self.message)"
+    }
 }

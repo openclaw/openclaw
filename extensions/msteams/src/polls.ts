@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import { resolveMSTeamsStorePath } from "./storage.js";
 import { readJsonFile, withFileLock, writeJsonFile } from "./store-fs.js";
 
-export type MSTeamsPollVote = {
+type MSTeamsPollVote = {
   pollId: string;
   selections: string[];
 };
@@ -29,7 +29,7 @@ export type MSTeamsPollStore = {
   }) => Promise<MSTeamsPoll | null>;
 };
 
-export type MSTeamsPollCard = {
+type MSTeamsPollCard = {
   pollId: string;
   question: string;
   options: string[];
@@ -46,8 +46,17 @@ type PollStoreData = {
 const STORE_FILENAME = "msteams-polls.json";
 const MAX_POLLS = 1000;
 const POLL_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+
 function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function normalizeOptionalString(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed ? trimmed : undefined;
 }
 
 function normalizeChoiceValue(value: unknown): string | null {
@@ -90,8 +99,7 @@ function readNestedValue(value: unknown, keys: Array<string | number>): unknown 
 }
 
 function readNestedString(value: unknown, keys: Array<string | number>): string | undefined {
-  const found = readNestedValue(value, keys);
-  return typeof found === "string" && found.trim() ? found.trim() : undefined;
+  return normalizeOptionalString(readNestedValue(value, keys));
 }
 
 export function extractMSTeamsPollVote(
@@ -213,7 +221,7 @@ export function buildMSTeamsPollCard(params: {
   };
 }
 
-export type MSTeamsPollStoreFsOptions = {
+type MSTeamsPollStoreFsOptions = {
   env?: NodeJS.ProcessEnv;
   homedir?: () => string;
   stateDir?: string;
@@ -273,7 +281,7 @@ export function createMSTeamsPollStoreFs(params?: MSTeamsPollStoreFsOptions): MS
   const empty: PollStoreData = { version: 1, polls: {} };
 
   const readStore = async (): Promise<PollStoreData> => {
-    const { value } = await readJsonFile<PollStoreData>(filePath, empty);
+    const { value } = await readJsonFile(filePath, empty);
     const pruned = pruneToLimit(pruneExpired(value.polls ?? {}));
     return { version: 1, polls: pruned };
   };

@@ -1,7 +1,7 @@
 import path from "node:path";
 import type { ZodIssue } from "zod";
-import type { OpenClawConfig } from "../config/config.js";
 import { CONFIG_PATH } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { OpenClawSchema } from "../config/zod-schema.js";
 import { note } from "../terminal/note.js";
 import { isRecord } from "../utils.js";
@@ -126,7 +126,7 @@ export function noteOpencodeProviderOverrides(cfg: OpenClawConfig): void {
   });
 
   lines.push(
-    "- Remove these entries to restore per-model API routing + costs (then re-run onboarding if needed).",
+    "- Remove these entries to restore per-model API routing + costs (then re-run setup if needed).",
   );
   note(lines.join("\n"), "OpenCode");
 }

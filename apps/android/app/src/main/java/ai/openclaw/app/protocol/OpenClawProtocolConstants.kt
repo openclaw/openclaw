@@ -1,6 +1,8 @@
 package ai.openclaw.app.protocol
 
-enum class OpenClawCapability(val rawValue: String) {
+enum class OpenClawCapability(
+  val rawValue: String,
+) {
   Canvas("canvas"),
   Camera("camera"),
   Sms("sms"),
@@ -13,9 +15,12 @@ enum class OpenClawCapability(val rawValue: String) {
   Contacts("contacts"),
   Calendar("calendar"),
   Motion("motion"),
+  CallLog("callLog"),
 }
 
-enum class OpenClawCanvasCommand(val rawValue: String) {
+enum class OpenClawCanvasCommand(
+  val rawValue: String,
+) {
   Present("canvas.present"),
   Hide("canvas.hide"),
   Navigate("canvas.navigate"),
@@ -28,7 +33,9 @@ enum class OpenClawCanvasCommand(val rawValue: String) {
   }
 }
 
-enum class OpenClawCanvasA2UICommand(val rawValue: String) {
+enum class OpenClawCanvasA2UICommand(
+  val rawValue: String,
+) {
   Push("canvas.a2ui.push"),
   PushJSONL("canvas.a2ui.pushJSONL"),
   Reset("canvas.a2ui.reset"),
@@ -39,7 +46,9 @@ enum class OpenClawCanvasA2UICommand(val rawValue: String) {
   }
 }
 
-enum class OpenClawCameraCommand(val rawValue: String) {
+enum class OpenClawCameraCommand(
+  val rawValue: String,
+) {
   List("camera.list"),
   Snap("camera.snap"),
   Clip("camera.clip"),
@@ -50,8 +59,11 @@ enum class OpenClawCameraCommand(val rawValue: String) {
   }
 }
 
-enum class OpenClawSmsCommand(val rawValue: String) {
+enum class OpenClawSmsCommand(
+  val rawValue: String,
+) {
   Send("sms.send"),
+  Search("sms.search"),
   ;
 
   companion object {
@@ -59,7 +71,9 @@ enum class OpenClawSmsCommand(val rawValue: String) {
   }
 }
 
-enum class OpenClawLocationCommand(val rawValue: String) {
+enum class OpenClawLocationCommand(
+  val rawValue: String,
+) {
   Get("location.get"),
   ;
 
@@ -68,7 +82,9 @@ enum class OpenClawLocationCommand(val rawValue: String) {
   }
 }
 
-enum class OpenClawDeviceCommand(val rawValue: String) {
+enum class OpenClawDeviceCommand(
+  val rawValue: String,
+) {
   Status("device.status"),
   Info("device.info"),
   Permissions("device.permissions"),
@@ -80,7 +96,9 @@ enum class OpenClawDeviceCommand(val rawValue: String) {
   }
 }
 
-enum class OpenClawNotificationsCommand(val rawValue: String) {
+enum class OpenClawNotificationsCommand(
+  val rawValue: String,
+) {
   List("notifications.list"),
   Actions("notifications.actions"),
   ;
@@ -90,7 +108,9 @@ enum class OpenClawNotificationsCommand(val rawValue: String) {
   }
 }
 
-enum class OpenClawSystemCommand(val rawValue: String) {
+enum class OpenClawSystemCommand(
+  val rawValue: String,
+) {
   Notify("system.notify"),
   ;
 
@@ -99,7 +119,9 @@ enum class OpenClawSystemCommand(val rawValue: String) {
   }
 }
 
-enum class OpenClawPhotosCommand(val rawValue: String) {
+enum class OpenClawPhotosCommand(
+  val rawValue: String,
+) {
   Latest("photos.latest"),
   ;
 
@@ -108,7 +130,9 @@ enum class OpenClawPhotosCommand(val rawValue: String) {
   }
 }
 
-enum class OpenClawContactsCommand(val rawValue: String) {
+enum class OpenClawContactsCommand(
+  val rawValue: String,
+) {
   Search("contacts.search"),
   Add("contacts.add"),
   ;
@@ -118,7 +142,9 @@ enum class OpenClawContactsCommand(val rawValue: String) {
   }
 }
 
-enum class OpenClawCalendarCommand(val rawValue: String) {
+enum class OpenClawCalendarCommand(
+  val rawValue: String,
+) {
   Events("calendar.events"),
   Add("calendar.add"),
   ;
@@ -128,12 +154,25 @@ enum class OpenClawCalendarCommand(val rawValue: String) {
   }
 }
 
-enum class OpenClawMotionCommand(val rawValue: String) {
+enum class OpenClawMotionCommand(
+  val rawValue: String,
+) {
   Activity("motion.activity"),
   Pedometer("motion.pedometer"),
   ;
 
   companion object {
     const val NamespacePrefix: String = "motion."
+  }
+}
+
+enum class OpenClawCallLogCommand(
+  val rawValue: String,
+) {
+  Search("callLog.search"),
+  ;
+
+  companion object {
+    const val NamespacePrefix: String = "callLog."
   }
 }

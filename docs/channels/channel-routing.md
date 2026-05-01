@@ -2,7 +2,7 @@
 summary: "Routing rules per channel (WhatsApp, Telegram, Discord, Slack) and shared context"
 read_when:
   - Changing channel routing or inbox behavior
-title: "Channel Routing"
+title: "Channel routing"
 ---
 
 # Channels & routing
@@ -13,7 +13,7 @@ host configuration.
 
 ## Key terms
 
-- **Channel**: `whatsapp`, `telegram`, `discord`, `slack`, `signal`, `imessage`, `webchat`.
+- **Channel**: `telegram`, `whatsapp`, `discord`, `irc`, `googlechat`, `slack`, `signal`, `imessage`, `line`, plus plugin channels. `webchat` is the internal WebChat UI channel and is not a configurable outbound channel.
 - **AccountId**: per‑channel account instance (when supported).
 - Optional channel default account: `channels.<channel>.defaultAccount` chooses
   which account is used when an outbound path does not specify `accountId`.
@@ -23,9 +23,13 @@ host configuration.
 
 ## Session key shapes (examples)
 
-Direct messages collapse to the agent’s **main** session:
+Direct messages collapse to the agent’s **main** session by default:
 
 - `agent:<agentId>:<mainKey>` (default: `agent:main:main`)
+
+Even when direct-message conversation history is shared with main, sandbox and
+tool policy use a derived per-account direct-chat runtime key for external DMs
+so channel-originated messages are not treated like local main-session runs.
 
 Groups and channels remain isolated per channel:
 
@@ -54,6 +58,13 @@ OpenClaw infers a pinned owner from `allowFrom` when all of these are true:
 
 In that mismatch case, OpenClaw still records inbound session metadata, but it
 skips updating the main session `lastRoute`.
+
+## Guarded inbound recording
+
+Channel plugins can mark an inbound session record as `createIfMissing: false`
+when a guarded path must not create a new OpenClaw session. In that mode,
+OpenClaw may update metadata and `lastRoute` for an existing session, but it
+does not create a route-only session entry just because a message was observed.
 
 ## Routing rules (how an agent is chosen)
 
@@ -118,6 +129,11 @@ Session stores live under the state directory (default `~/.openclaw`):
 
 You can override the store path via `session.store` and `{agentId}` templating.
 
+Gateway and ACP session discovery also scans disk-backed agent stores under the
+default `agents/` root and under templated `session.store` roots. Discovered
+stores must stay inside that resolved agent root and use a regular
+`sessions.json` file. Symlinks and out-of-root paths are ignored.
+
 ## WebChat behavior
 
 WebChat attaches to the **selected agent** and defaults to the agent’s main
@@ -132,3 +148,9 @@ Inbound replies include:
 - Quoted context is appended to `Body` as a `[Replying to ...]` block.
 
 This is consistent across channels.
+
+## Related
+
+- [Groups](/channels/groups)
+- [Broadcast groups](/channels/broadcast-groups)
+- [Pairing](/channels/pairing)

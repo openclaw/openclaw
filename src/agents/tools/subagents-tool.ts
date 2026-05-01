@@ -1,10 +1,8 @@
-import { Type } from "@sinclair/typebox";
-import { loadConfig } from "../../config/config.js";
+import { Type } from "typebox";
+import { getRuntimeConfig } from "../../config/config.js";
 import { optionalStringEnum } from "../schema/typebox.js";
 import {
-  buildSubagentList,
   DEFAULT_RECENT_MINUTES,
-  isActiveSubagentRun,
   killAllControlledSubagentRuns,
   killControlledSubagentRun,
   listControlledSubagentRuns,
@@ -13,8 +11,12 @@ import {
   resolveControlledSubagentTarget,
   resolveSubagentController,
   steerControlledSubagentRun,
-  createPendingDescendantCounter,
 } from "../subagent-control.js";
+import {
+  buildSubagentList,
+  createPendingDescendantCounter,
+  isActiveSubagentRun,
+} from "../subagent-list.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readNumberParam, readStringParam } from "./common.js";
 
@@ -38,7 +40,7 @@ export function createSubagentsTool(opts?: { agentSessionKey?: string }): AnyAge
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
       const action = (readStringParam(params, "action") ?? "list") as SubagentAction;
-      const cfg = loadConfig();
+      const cfg = getRuntimeConfig();
       const controller = resolveSubagentController({
         cfg,
         agentSessionKey: opts?.agentSessionKey,

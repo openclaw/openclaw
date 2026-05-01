@@ -1,7 +1,10 @@
+import { isAuthErrorMessage } from "../agents/pi-embedded-helpers.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
+import { formatRawAssistantErrorForUi } from "../shared/assistant-error-format.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { asString, extractTextFromMessage, isCommandMessage } from "./tui-formatters.js";
 import { TuiStreamAssembler } from "./tui-stream-assembler.js";
-import type { AgentEvent, ChatEvent, TuiStateAccess } from "./tui-types.js";
+import type { AgentEvent, BtwEvent, ChatEvent, TuiStateAccess } from "./tui-types.js";
 
 type EventHandlerChatLog = {
   startTool: (toolCallId: string, toolName: string, args: unknown) => void;
@@ -20,34 +23,124 @@ type EventHandlerTui = {
   requestRender: () => void;
 };
 
+type EventHandlerBtwPresenter = {
+  showResult: (params: { question: string; text: string; isError?: boolean }) => void;
+  clear: () => void;
+};
+
 type EventHandlerContext = {
   chatLog: EventHandlerChatLog;
+  btw: EventHandlerBtwPresenter;
   tui: EventHandlerTui;
   state: TuiStateAccess;
   setActivityStatus: (text: string) => void;
   refreshSessionInfo?: () => Promise<void>;
   loadHistory?: () => Promise<void>;
+  noteLocalRunId?: (runId: string) => void;
   isLocalRunId?: (runId: string) => boolean;
   forgetLocalRunId?: (runId: string) => void;
   clearLocalRunIds?: () => void;
+  isLocalBtwRunId?: (runId: string) => boolean;
+  forgetLocalBtwRunId?: (runId: string) => void;
+  clearLocalBtwRunIds?: () => void;
+  /** Reset `streaming` after this much delta silence. Set to 0 to disable. */
+  streamingWatchdogMs?: number;
+  localMode?: boolean;
 };
+
+const DEFAULT_STREAMING_WATCHDOG_MS = 30_000;
 
 export function createEventHandlers(context: EventHandlerContext) {
   const {
     chatLog,
+    btw,
     tui,
     state,
     setActivityStatus,
     refreshSessionInfo,
     loadHistory,
+    noteLocalRunId,
     isLocalRunId,
     forgetLocalRunId,
     clearLocalRunIds,
+    isLocalBtwRunId,
+    forgetLocalBtwRunId,
+    clearLocalBtwRunIds,
+    localMode,
   } = context;
   const finalizedRuns = new Map<string, number>();
   const sessionRuns = new Map<string, number>();
   let streamAssembler = new TuiStreamAssembler();
   let lastSessionKey = state.currentSessionKey;
+  let pendingHistoryRefresh = false;
+  let reconnectPendingRunId: string | null = null;
+
+  const streamingWatchdogMs =
+    typeof context.streamingWatchdogMs === "number" &&
+    Number.isFinite(context.streamingWatchdogMs) &&
+    context.streamingWatchdogMs >= 0
+      ? Math.floor(context.streamingWatchdogMs)
+      : DEFAULT_STREAMING_WATCHDOG_MS;
+  let streamingWatchdogTimer: ReturnType<typeof setTimeout> | null = null;
+  let streamingWatchdogRunId: string | null = null;
+
+  const flushPendingHistoryRefreshIfIdle = () => {
+    if (!pendingHistoryRefresh || state.activeChatRunId) {
+      return;
+    }
+    pendingHistoryRefresh = false;
+    void loadHistory?.();
+  };
+
+  const clearStreamingWatchdog = () => {
+    if (streamingWatchdogTimer) {
+      clearTimeout(streamingWatchdogTimer);
+      streamingWatchdogTimer = null;
+    }
+    streamingWatchdogRunId = null;
+  };
+
+  const pauseStreamingWatchdog = () => {
+    clearStreamingWatchdog();
+  };
+
+  const armStreamingWatchdog = (runId: string) => {
+    if (streamingWatchdogMs <= 0) {
+      return;
+    }
+    if (streamingWatchdogTimer) {
+      clearTimeout(streamingWatchdogTimer);
+    }
+    streamingWatchdogRunId = runId;
+    streamingWatchdogTimer = setTimeout(() => {
+      streamingWatchdogTimer = null;
+      if (streamingWatchdogRunId !== runId || state.activeChatRunId !== runId) {
+        return;
+      }
+      streamingWatchdogRunId = null;
+      state.activeChatRunId = null;
+      state.activityStatus = "idle";
+      setActivityStatus("idle");
+      if (reconnectPendingRunId === runId) {
+        reconnectPendingRunId = null;
+        pendingHistoryRefresh = false;
+        void loadHistory?.();
+        tui.requestRender();
+        return;
+      }
+      flushPendingHistoryRefreshIfIdle();
+      chatLog.addSystem(
+        `streaming watchdog: no stream updates for ${Math.round(
+          streamingWatchdogMs / 1000,
+        )}s; resetting status. The backend may have dropped this run silently — send a new message to resync.`,
+      );
+      tui.requestRender();
+    }, streamingWatchdogMs);
+    const maybeUnref = (streamingWatchdogTimer as { unref?: () => void }).unref;
+    if (typeof maybeUnref === "function") {
+      maybeUnref.call(streamingWatchdogTimer);
+    }
+  };
 
   const pruneRunMap = (runs: Map<string, number>) => {
     if (runs.size <= 200) {
@@ -80,7 +173,23 @@ export function createEventHandlers(context: EventHandlerContext) {
     finalizedRuns.clear();
     sessionRuns.clear();
     streamAssembler = new TuiStreamAssembler();
+    pendingHistoryRefresh = false;
+    state.pendingOptimisticUserMessage = false;
+    reconnectPendingRunId = null;
     clearLocalRunIds?.();
+    clearLocalBtwRunIds?.();
+    btw.clear();
+    clearStreamingWatchdog();
+  };
+
+  const resolveAuthErrorHint = (errorMessage: string): string | undefined => {
+    if (!localMode || !isAuthErrorMessage(errorMessage)) {
+      return undefined;
+    }
+    const provider = state.sessionInfo.modelProvider?.trim();
+    return provider
+      ? `auth or provider access failed for ${provider}. Run /auth ${provider} to refresh credentials; if you already re-authed, switch models/providers because this account may still be blocked for inference.`
+      : "auth or provider access failed for the current provider. Run /auth to refresh credentials; if you already re-authed, switch models/providers because this account may still be blocked for inference.";
   };
 
   const noteSessionRun = (runId: string) => {
@@ -101,6 +210,41 @@ export function createEventHandlers(context: EventHandlerContext) {
     }
   };
 
+  const clearStaleStreamingIfNoTrackedRunRemains = () => {
+    const activeRunId = state.activeChatRunId;
+    // A missing active run is the recovery case; only tracked active runs block cleanup.
+    const activeRunIsStillTracked = activeRunId ? sessionRuns.has(activeRunId) : false;
+    if (state.activityStatus !== "streaming" || activeRunIsStillTracked || sessionRuns.size > 0) {
+      return;
+    }
+    state.activeChatRunId = null;
+    state.activityStatus = "idle";
+    setActivityStatus("idle");
+    clearStreamingWatchdog();
+    flushPendingHistoryRefreshIfIdle();
+  };
+
+  const reconnectStreamingWatchdog = () => {
+    clearStreamingWatchdog();
+    const activeRunId = state.activeChatRunId;
+    if (!activeRunId) {
+      reconnectPendingRunId = null;
+      clearStaleStreamingIfNoTrackedRunRemains();
+      return;
+    }
+    if (!sessionRuns.has(activeRunId)) {
+      reconnectPendingRunId = null;
+      state.activeChatRunId = null;
+      state.activityStatus = "idle";
+      setActivityStatus("idle");
+      flushPendingHistoryRefreshIfIdle();
+      return;
+    }
+    reconnectPendingRunId = activeRunId;
+    setActivityStatus("streaming");
+    armStreamingWatchdog(activeRunId);
+  };
+
   const finalizeRun = (params: {
     runId: string;
     wasActiveRun: boolean;
@@ -108,8 +252,15 @@ export function createEventHandlers(context: EventHandlerContext) {
   }) => {
     noteFinalizedRun(params.runId);
     clearActiveRunIfMatch(params.runId);
+    flushPendingHistoryRefreshIfIdle();
     if (params.wasActiveRun) {
       setActivityStatus(params.status);
+      clearStreamingWatchdog();
+    } else {
+      if (streamingWatchdogRunId === params.runId) {
+        clearStreamingWatchdog();
+      }
+      clearStaleStreamingIfNoTrackedRunRemains();
     }
     void refreshSessionInfo?.();
   };
@@ -122,8 +273,14 @@ export function createEventHandlers(context: EventHandlerContext) {
     streamAssembler.drop(params.runId);
     sessionRuns.delete(params.runId);
     clearActiveRunIfMatch(params.runId);
+    flushPendingHistoryRefreshIfIdle();
     if (params.wasActiveRun) {
       setActivityStatus(params.status);
+      clearStreamingWatchdog();
+    } else {
+      if (streamingWatchdogRunId === params.runId) {
+        clearStreamingWatchdog();
+      }
     }
     void refreshSessionInfo?.();
   };
@@ -143,19 +300,27 @@ export function createEventHandlers(context: EventHandlerContext) {
     const isLocalRun = isLocalRunId?.(runId) ?? false;
     if (isLocalRun) {
       forgetLocalRunId?.(runId);
+      // Local runs with displayable output do not need a history reload.
       if (!opts?.allowLocalWithoutDisplayableFinal) {
+        return;
+      }
+      // Defer the reload if a newer run is active so we preserve the pending
+      // user message, then flush once that active run finishes.
+      if (state.activeChatRunId && state.activeChatRunId !== runId) {
+        pendingHistoryRefresh = true;
         return;
       }
     }
     if (hasConcurrentActiveRun(runId)) {
       return;
     }
+    pendingHistoryRefresh = false;
     void loadHistory?.();
   };
 
   const isSameSessionKey = (left: string | undefined, right: string | undefined): boolean => {
-    const normalizedLeft = (left ?? "").trim().toLowerCase();
-    const normalizedRight = (right ?? "").trim().toLowerCase();
+    const normalizedLeft = normalizeLowercaseStringOrEmpty(left);
+    const normalizedRight = normalizeLowercaseStringOrEmpty(right);
     if (!normalizedLeft || !normalizedRight) {
       return false;
     }
@@ -190,23 +355,45 @@ export function createEventHandlers(context: EventHandlerContext) {
         return;
       }
       if (evt.state === "final") {
+        clearStaleStreamingIfNoTrackedRunRemains();
         return;
       }
     }
+    if (reconnectPendingRunId === evt.runId) {
+      reconnectPendingRunId = null;
+    }
     noteSessionRun(evt.runId);
-    if (!state.activeChatRunId) {
+    if (!state.activeChatRunId && !isLocalBtwRunId?.(evt.runId)) {
       state.activeChatRunId = evt.runId;
+      if (state.pendingOptimisticUserMessage) {
+        noteLocalRunId?.(evt.runId);
+        state.pendingOptimisticUserMessage = false;
+      }
     }
     if (evt.state === "delta") {
+      // Arm watchdog and mark streaming on every delta, even when the visible
+      // text hasn't changed yet (e.g. first commentary-only or tool-call delta).
+      // Without this, the watchdog never fires and the status bar stays stale.
+      setActivityStatus("streaming");
+      if (state.activeChatRunId === evt.runId) {
+        armStreamingWatchdog(evt.runId);
+      }
       const displayText = streamAssembler.ingestDelta(evt.runId, evt.message, state.showThinking);
       if (!displayText) {
         return;
       }
       chatLog.updateAssistant(displayText, evt.runId);
-      setActivityStatus("streaming");
     }
     if (evt.state === "final") {
+      const isLocalBtwRun = isLocalBtwRunId?.(evt.runId) ?? false;
       const wasActiveRun = state.activeChatRunId === evt.runId;
+      if (!evt.message && isLocalBtwRun) {
+        forgetLocalBtwRunId?.(evt.runId);
+        noteFinalizedRun(evt.runId);
+        clearStaleStreamingIfNoTrackedRunRemains();
+        tui.requestRender();
+        return;
+      }
       if (!evt.message) {
         maybeRefreshHistoryForRun(evt.runId, {
           allowLocalWithoutDisplayableFinal: true,
@@ -254,14 +441,18 @@ export function createEventHandlers(context: EventHandlerContext) {
       });
     }
     if (evt.state === "aborted") {
+      forgetLocalBtwRunId?.(evt.runId);
       const wasActiveRun = state.activeChatRunId === evt.runId;
       chatLog.addSystem("run aborted");
       terminateRun({ runId: evt.runId, wasActiveRun, status: "aborted" });
       maybeRefreshHistoryForRun(evt.runId);
     }
     if (evt.state === "error") {
+      forgetLocalBtwRunId?.(evt.runId);
       const wasActiveRun = state.activeChatRunId === evt.runId;
-      chatLog.addSystem(`run error: ${evt.errorMessage ?? "unknown"}`);
+      const errorMessage = evt.errorMessage ?? "unknown";
+      const renderedError = formatRawAssistantErrorForUi(errorMessage);
+      chatLog.addSystem(resolveAuthErrorHint(errorMessage) ?? `run error: ${renderedError}`);
       terminateRun({ runId: evt.runId, wasActiveRun, status: "error" });
       maybeRefreshHistoryForRun(evt.runId);
     }
@@ -283,6 +474,9 @@ export function createEventHandlers(context: EventHandlerContext) {
       return;
     }
     if (evt.stream === "tool") {
+      if (isActiveRun) {
+        armStreamingWatchdog(evt.runId);
+      }
       const verbose = state.sessionInfo.verboseLevel ?? "off";
       const allowToolEvents = verbose !== "off";
       const allowToolOutput = verbose === "full";
@@ -322,6 +516,9 @@ export function createEventHandlers(context: EventHandlerContext) {
         return;
       }
       const phase = typeof evt.data?.phase === "string" ? evt.data.phase : "";
+      if (phase && phase !== "end" && phase !== "error") {
+        armStreamingWatchdog(evt.runId);
+      }
       if (phase === "start") {
         setActivityStatus("running");
       }
@@ -335,5 +532,41 @@ export function createEventHandlers(context: EventHandlerContext) {
     }
   };
 
-  return { handleChatEvent, handleAgentEvent };
+  const handleBtwEvent = (payload: unknown) => {
+    if (!payload || typeof payload !== "object") {
+      return;
+    }
+    const evt = payload as BtwEvent;
+    syncSessionKey();
+    if (!isSameSessionKey(evt.sessionKey, state.currentSessionKey)) {
+      return;
+    }
+    if (evt.kind !== "btw") {
+      return;
+    }
+    const question = evt.question.trim();
+    const text = evt.text.trim();
+    if (!question || !text) {
+      return;
+    }
+    btw.showResult({
+      question,
+      text,
+      isError: evt.isError,
+    });
+    tui.requestRender();
+  };
+
+  const dispose = () => {
+    clearStreamingWatchdog();
+  };
+
+  return {
+    handleChatEvent,
+    handleAgentEvent,
+    handleBtwEvent,
+    pauseStreamingWatchdog,
+    reconnectStreamingWatchdog,
+    dispose,
+  };
 }

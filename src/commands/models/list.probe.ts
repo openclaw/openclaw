@@ -5,6 +5,7 @@ import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/ag
 import {
   type AuthProfileCredential,
   type AuthProfileEligibilityReasonCode,
+  externalCliDiscoveryScoped,
   ensureAuthProfileStore,
   listProfilesForProvider,
   resolveAuthProfileDisplayLabel,
@@ -19,19 +20,25 @@ import {
   normalizeProviderId,
   parseModelRef,
 } from "../../agents/model-selection.js";
-import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
-import type { OpenClawConfig } from "../../config/config.js";
 import {
   resolveSessionTranscriptPath,
   resolveSessionTranscriptsDirForAgent,
 } from "../../config/sessions/paths.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { coerceSecretRef, normalizeSecretInputString } from "../../config/types.secrets.js";
 import { type SecretRefResolveCache, resolveSecretRefString } from "../../secrets/resolve.js";
 import { redactSecrets } from "../status-all/format.js";
 import { DEFAULT_PROVIDER, formatMs } from "./shared.js";
 
 const PROBE_PROMPT = "Reply with OK. Do not use tools.";
+
+let embeddedRunnerModulePromise: Promise<typeof import("../../agents/pi-embedded.js")> | undefined;
+
+function loadEmbeddedRunnerModule() {
+  embeddedRunnerModulePromise ??= import("../../agents/pi-embedded.js");
+  return embeddedRunnerModulePromise;
+}
 
 export type AuthProbeStatus =
   | "ok"
@@ -115,6 +122,9 @@ export function mapFailoverReasonToProbeStatus(reason?: string | null): AuthProb
   if (reason === "timeout") {
     return "timeout";
   }
+  if (reason === "model_not_found") {
+    return "format";
+  }
   if (reason === "format") {
     return "format";
   }
@@ -124,7 +134,7 @@ export function mapFailoverReasonToProbeStatus(reason?: string | null): AuthProb
 function buildCandidateMap(modelCandidates: string[]): Map<string, string[]> {
   const map = new Map<string, string[]>();
   for (const raw of modelCandidates) {
-    const parsed = parseModelRef(String(raw ?? ""), DEFAULT_PROVIDER);
+    const parsed = parseModelRef(raw ?? "", DEFAULT_PROVIDER);
     if (!parsed) {
       continue;
     }
@@ -147,9 +157,9 @@ function selectProbeModel(params: {
   if (direct && direct.length > 0) {
     return { provider, model: direct[0] };
   }
-  const fromCatalog = catalog.find((entry) => entry.provider === provider);
+  const fromCatalog = catalog.find((entry) => normalizeProviderId(entry.provider) === provider);
   if (fromCatalog) {
-    return { provider: fromCatalog.provider, model: fromCatalog.id };
+    return { provider, model: fromCatalog.id };
   }
   return null;
 }
@@ -240,12 +250,21 @@ async function maybeResolveUnresolvedRefIssue(params: {
 
 export async function buildProbeTargets(params: {
   cfg: OpenClawConfig;
+  agentDir?: string;
+  workspaceDir?: string;
   providers: string[];
   modelCandidates: string[];
   options: AuthProbeOptions;
 }): Promise<{ targets: AuthProbeTarget[]; results: AuthProbeResult[] }> {
-  const { cfg, providers, modelCandidates, options } = params;
-  const store = ensureAuthProfileStore();
+  const { cfg, agentDir, providers, modelCandidates, options, workspaceDir } = params;
+  const store = ensureAuthProfileStore(agentDir, {
+    externalCli: externalCliDiscoveryScoped({
+      config: cfg,
+      allowKeychainPrompt: false,
+      providerIds: providers,
+      profileIds: options.profileIds,
+    }),
+  });
   const providerFilter = options.provider?.trim();
   const providerFilterKey = providerFilter ? normalizeProviderId(providerFilter) : null;
   const profileFilter = new Set((options.profileIds ?? []).map((id) => id.trim()).filter(Boolean));
@@ -371,7 +390,10 @@ export async function buildProbeTargets(params: {
       continue;
     }
 
-    const envKey = resolveEnvApiKey(providerKey);
+    const envKey = resolveEnvApiKey(providerKey, process.env, {
+      config: cfg,
+      workspaceDir,
+    });
     const hasUsableModelsJsonKey = hasUsableCustomProviderApiKey(cfg, providerKey);
     if (!envKey && !hasUsableModelsJsonKey) {
       continue;
@@ -431,13 +453,26 @@ async function probeTarget(params: {
       error: "No model available for probe",
     };
   }
+  const model = target.model;
 
   const sessionId = `probe-${target.provider}-${crypto.randomUUID()}`;
   const sessionFile = resolveSessionTranscriptPath(sessionId, agentId);
   await fs.mkdir(sessionDir, { recursive: true });
 
   const start = Date.now();
+  const buildResult = (status: AuthProbeResult["status"], error?: string): AuthProbeResult => ({
+    provider: target.provider,
+    model: `${model.provider}/${model.model}`,
+    profileId: target.profileId,
+    label: target.label,
+    source: target.source,
+    mode: target.mode,
+    status,
+    ...(error ? { error } : {}),
+    latencyMs: Date.now() - start,
+  });
   try {
+    const { runEmbeddedPiAgent } = await loadEmbeddedRunnerModule();
     await runEmbeddedPiAgent({
       sessionId,
       sessionFile,
@@ -457,35 +492,24 @@ async function probeTarget(params: {
       reasoningLevel: "off",
       verboseLevel: "off",
       streamParams: { maxTokens },
+      disableTools: true,
+      cleanupBundleMcpOnRunEnd: true,
     });
-    return {
-      provider: target.provider,
-      model: `${target.model.provider}/${target.model.model}`,
-      profileId: target.profileId,
-      label: target.label,
-      source: target.source,
-      mode: target.mode,
-      status: "ok",
-      latencyMs: Date.now() - start,
-    };
+    return buildResult("ok");
   } catch (err) {
     const described = describeFailoverError(err);
-    return {
-      provider: target.provider,
-      model: `${target.model.provider}/${target.model.model}`,
-      profileId: target.profileId,
-      label: target.label,
-      source: target.source,
-      mode: target.mode,
-      status: mapFailoverReasonToProbeStatus(described.reason),
-      error: redactSecrets(described.message),
-      latencyMs: Date.now() - start,
-    };
+    return buildResult(
+      mapFailoverReasonToProbeStatus(described.reason),
+      redactSecrets(described.message),
+    );
   }
 }
 
 async function runTargetsWithConcurrency(params: {
   cfg: OpenClawConfig;
+  agentId?: string;
+  agentDir?: string;
+  workspaceDir?: string;
   targets: AuthProbeTarget[];
   timeoutMs: number;
   maxTokens: number;
@@ -495,9 +519,12 @@ async function runTargetsWithConcurrency(params: {
   const { cfg, targets, timeoutMs, maxTokens, onProgress } = params;
   const concurrency = Math.max(1, Math.min(targets.length || 1, params.concurrency));
 
-  const agentId = resolveDefaultAgentId(cfg);
-  const agentDir = resolveOpenClawAgentDir();
-  const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId) ?? resolveDefaultAgentWorkspaceDir();
+  const agentId = params.agentId ?? resolveDefaultAgentId(cfg);
+  const agentDir = params.agentDir ?? resolveOpenClawAgentDir();
+  const workspaceDir =
+    params.workspaceDir ??
+    resolveAgentWorkspaceDir(cfg, agentId) ??
+    resolveDefaultAgentWorkspaceDir();
   const sessionDir = resolveSessionTranscriptsDirForAgent(agentId);
 
   await fs.mkdir(workspaceDir, { recursive: true });
@@ -542,6 +569,9 @@ async function runTargetsWithConcurrency(params: {
 
 export async function runAuthProbes(params: {
   cfg: OpenClawConfig;
+  agentId?: string;
+  agentDir?: string;
+  workspaceDir?: string;
   providers: string[];
   modelCandidates: string[];
   options: AuthProbeOptions;
@@ -550,6 +580,8 @@ export async function runAuthProbes(params: {
   const startedAt = Date.now();
   const plan = await buildProbeTargets({
     cfg: params.cfg,
+    agentDir: params.agentDir,
+    workspaceDir: params.workspaceDir,
     providers: params.providers,
     modelCandidates: params.modelCandidates,
     options: params.options,
@@ -561,6 +593,9 @@ export async function runAuthProbes(params: {
   const results = totalTargets
     ? await runTargetsWithConcurrency({
         cfg: params.cfg,
+        agentId: params.agentId,
+        agentDir: params.agentDir,
+        workspaceDir: params.workspaceDir,
         targets: plan.targets,
         timeoutMs: params.options.timeoutMs,
         maxTokens: params.options.maxTokens,
