@@ -723,6 +723,30 @@ export async function runEmbeddedAttempt(
       log.trace(message);
     }
   };
+  const emitCorePluginToolStageSummary = (
+    phase: string,
+    summary: ReturnType<typeof prepStages.snapshot>,
+  ) => {
+    if (summary.stages.length === 0) {
+      return;
+    }
+    const shouldWarn = shouldWarnEmbeddedRunStageSummary(summary, {
+      totalThresholdMs: 5_000,
+      stageThresholdMs: 2_000,
+    });
+    if (!shouldWarn && !log.isEnabled("trace")) {
+      return;
+    }
+    const message = formatEmbeddedRunStageSummary(
+      `[trace:embedded-run] core-plugin-tool stages: runId=${params.runId} sessionId=${params.sessionId} phase=${phase}`,
+      summary,
+    );
+    if (shouldWarn) {
+      log.warn(message);
+    } else {
+      log.trace(message);
+    }
+  };
 
   await fs.mkdir(resolvedWorkspace, { recursive: true });
 
@@ -833,6 +857,7 @@ export async function runEmbeddedAttempt(
         ...(err ? { errorCategory: diagnosticErrorCategory(err) } : {}),
       });
     };
+    const corePluginToolStages = createEmbeddedRunStageTracker();
     const toolsRaw =
       params.disableTools || isRawModelRun
         ? []
@@ -893,6 +918,7 @@ export async function runEmbeddedAttempt(
                 params.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey),
               disableMessageTool: params.disableMessageTool,
               forceMessageTool: params.forceMessageTool,
+              recordToolPrepStage: (name) => corePluginToolStages.mark(name),
               onYield: (message) => {
                 yieldDetected = true;
                 yieldMessage = message;
@@ -901,9 +927,13 @@ export async function runEmbeddedAttempt(
                 abortSessionForYield?.();
               },
             });
-            return applyEmbeddedAttemptToolsAllow(allTools, params.toolsAllow);
+            corePluginToolStages.mark("attempt:create-openclaw-coding-tools");
+            const filteredTools = applyEmbeddedAttemptToolsAllow(allTools, params.toolsAllow);
+            corePluginToolStages.mark("attempt:tools-allow");
+            return filteredTools;
           })();
     prepStages.mark("core-plugin-tools");
+    emitCorePluginToolStageSummary("core-plugin-tools", corePluginToolStages.snapshot());
     const toolsEnabled = supportsModelTools(params.model);
     const bootstrapHasFileAccess = toolsEnabled && toolsRaw.some((tool) => tool.name === "read");
     const bootstrapRouting = await resolveAttemptWorkspaceBootstrapRouting({

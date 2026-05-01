@@ -100,6 +100,8 @@ export function createOpenClawTools(
     enableHeartbeatTool?: boolean;
     /** If true, skip plugin tool resolution and return only shipped core tools. */
     disablePluginTools?: boolean;
+    /** Records hot-path tool-prep stages for reply startup diagnostics. */
+    recordToolPrepStage?: (name: string) => void;
     /** Trusted sender id from inbound context (not tool args). */
     requesterSenderId?: string | null;
     /** Whether the requesting sender is an owner. */
@@ -135,6 +137,7 @@ export function createOpenClawTools(
   const spawnWorkspaceDir = resolveWorkspaceRoot(
     options?.spawnWorkspaceDir ?? options?.workspaceDir ?? inferredWorkspaceDir,
   );
+  options?.recordToolPrepStage?.("openclaw-tools:session-workspace");
   const deliveryContext = normalizeDeliveryContext({
     channel: options?.agentChannel,
     to: options?.agentTo,
@@ -156,6 +159,7 @@ export function createOpenClawTools(
         modelHasVision: options?.modelHasVision,
       })
     : null;
+  options?.recordToolPrepStage?.("openclaw-tools:image-tool");
   const imageGenerateTool = createImageGenerateTool({
     config: options?.config,
     agentDir: options?.agentDir,
@@ -163,6 +167,7 @@ export function createOpenClawTools(
     sandbox,
     fsPolicy: options?.fsPolicy,
   });
+  options?.recordToolPrepStage?.("openclaw-tools:image-generate-tool");
   const videoGenerateTool = createVideoGenerateTool({
     config: options?.config,
     agentDir: options?.agentDir,
@@ -172,6 +177,7 @@ export function createOpenClawTools(
     sandbox,
     fsPolicy: options?.fsPolicy,
   });
+  options?.recordToolPrepStage?.("openclaw-tools:video-generate-tool");
   const musicGenerateTool = createMusicGenerateTool({
     config: options?.config,
     agentDir: options?.agentDir,
@@ -181,6 +187,7 @@ export function createOpenClawTools(
     sandbox,
     fsPolicy: options?.fsPolicy,
   });
+  options?.recordToolPrepStage?.("openclaw-tools:music-generate-tool");
   const pdfTool = options?.agentDir?.trim()
     ? createPdfTool({
         config: options?.config,
@@ -190,17 +197,20 @@ export function createOpenClawTools(
         fsPolicy: options?.fsPolicy,
       })
     : null;
+  options?.recordToolPrepStage?.("openclaw-tools:pdf-tool");
   const webSearchTool = createWebSearchTool({
     config: options?.config,
     sandboxed: options?.sandboxed,
     runtimeWebSearch: runtimeWebTools?.search,
     lateBindRuntimeConfig: true,
   });
+  options?.recordToolPrepStage?.("openclaw-tools:web-search-tool");
   const webFetchTool = createWebFetchTool({
     config: options?.config,
     sandboxed: options?.sandboxed,
     runtimeWebFetch: runtimeWebTools?.fetch,
   });
+  options?.recordToolPrepStage?.("openclaw-tools:web-fetch-tool");
   const messageTool = options?.disableMessageTool
     ? null
     : createMessageTool({
@@ -220,6 +230,7 @@ export function createOpenClawTools(
         senderIsOwner: options?.senderIsOwner,
       });
   const heartbeatTool = options?.enableHeartbeatTool ? createHeartbeatResponseTool() : null;
+  options?.recordToolPrepStage?.("openclaw-tools:message-tool");
   const nodesToolBase = createNodesTool({
     agentSessionKey: options?.agentSessionKey,
     agentChannel: options?.agentChannel,
@@ -236,6 +247,7 @@ export function createOpenClawTools(
     sandboxRoot: options?.sandboxRoot,
     workspaceDir,
   });
+  options?.recordToolPrepStage?.("openclaw-tools:nodes-tool");
   const embedded = isEmbeddedMode();
   const effectiveCallGateway = embedded
     ? createEmbeddedCallGateway()
@@ -341,6 +353,7 @@ export function createOpenClawTools(
     }),
     ...collectPresentOpenClawTools([webSearchTool, webFetchTool, imageTool, pdfTool]),
   ];
+  options?.recordToolPrepStage?.("openclaw-tools:core-tool-list");
 
   if (options?.disablePluginTools) {
     return tools;
@@ -351,6 +364,7 @@ export function createOpenClawTools(
     resolvedConfig,
     existingToolNames: new Set(tools.map((tool) => tool.name)),
   });
+  options?.recordToolPrepStage?.("openclaw-tools:plugin-tools");
 
   return [...tools, ...wrappedPluginTools];
 }
