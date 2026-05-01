@@ -6,6 +6,7 @@ import { createSubsystemLogger, redactSensitiveText } from "./openclaw-runtime-i
 import {
   HEARTBEAT_PROMPT,
   HEARTBEAT_TOKEN,
+  hasInternalSystemUserProvenance,
   hasInterSessionUserProvenance,
   isCompactionCheckpointTranscriptFileName,
   isCronRunSessionKey,
@@ -13,7 +14,10 @@ import {
   isHeartbeatUserMessage,
   isSessionArchiveArtifactName,
   isSilentReplyPayloadText,
+  isTrajectoryRuntimeArtifactName,
   isUsageCountedSessionTranscriptFileName,
+  parseSessionArchiveTimestamp,
+  parseUsageCountedSessionIdFromFileName,
   resolveSessionTranscriptsDirForAgent,
   stripInboundMetadata,
   stripInternalRuntimeContext,
@@ -54,6 +58,10 @@ export type BuildSessionEntryOptions = {
 export type SessionTranscriptClassification = {
   dreamingNarrativeTranscriptPaths: ReadonlySet<string>;
   cronRunTranscriptPaths: ReadonlySet<string>;
+  dreamingNarrativeSessionIds: ReadonlySet<string>;
+  cronRunSessionIds: ReadonlySet<string>;
+  transcriptPathToSessionKey: ReadonlyMap<string, string>;
+  sessionIdToSessionKey: ReadonlyMap<string, string>;
 };
 
 type SessionTranscriptStoreEntry = {
@@ -176,22 +184,119 @@ export function loadSessionTranscriptClassificationForSessionsDir(
   const store = readSessionTranscriptClassificationStore(storePath);
   const dreamingTranscriptPaths = new Set<string>();
   const cronRunTranscriptPaths = new Set<string>();
+  const dreamingNarrativeSessionIds = new Set<string>();
+  const cronRunSessionIds = new Set<string>();
+  const transcriptPathToSessionKey = new Map<string, string>();
+  const sessionIdToSessionKey = new Map<string, string>();
   for (const [sessionKey, entry] of Object.entries(store)) {
     const transcriptPath = resolveSessionStoreTranscriptPath(sessionsDir, entry);
-    if (!transcriptPath) {
-      continue;
+    const sessionId = readSessionStoreSessionId(entry);
+    if (transcriptPath) {
+      transcriptPathToSessionKey.set(transcriptPath, sessionKey);
+    }
+    if (sessionId) {
+      sessionIdToSessionKey.set(sessionId, sessionKey);
     }
     if (isDreamingNarrativeSessionStoreKey(sessionKey)) {
-      dreamingTranscriptPaths.add(transcriptPath);
+      if (transcriptPath) {
+        dreamingTranscriptPaths.add(transcriptPath);
+      }
+      if (sessionId) {
+        dreamingNarrativeSessionIds.add(sessionId);
+      }
     }
     if (isCronRunSessionKey(sessionKey)) {
-      cronRunTranscriptPaths.add(transcriptPath);
+      if (transcriptPath) {
+        cronRunTranscriptPaths.add(transcriptPath);
+      }
+      if (sessionId) {
+        cronRunSessionIds.add(sessionId);
+      }
     }
   }
   return {
     dreamingNarrativeTranscriptPaths: dreamingTranscriptPaths,
     cronRunTranscriptPaths,
+    dreamingNarrativeSessionIds,
+    cronRunSessionIds,
+    transcriptPathToSessionKey,
+    sessionIdToSessionKey,
   };
+}
+
+function readSessionStoreSessionId(entry: { sessionId?: unknown } | undefined): string | null {
+  if (typeof entry?.sessionId !== "string") {
+    return null;
+  }
+  const trimmed = entry.sessionId.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+const PLAUSIBLE_SESSION_ID_RE = /^[A-Za-z0-9_-]{1,128}$/;
+
+function isPlausibleSessionId(candidate: string): boolean {
+  return PLAUSIBLE_SESSION_ID_RE.test(candidate);
+}
+
+export function extractSessionIdFromTranscriptFileName(fileName: string): string | null {
+  const trimmed = fileName.trim();
+  if (!trimmed) {
+    return null;
+  }
+  let base: string | null = null;
+  if (isTrajectoryRuntimeArtifactName(trimmed)) {
+    base = trimmed.slice(0, -".trajectory.jsonl".length);
+  } else {
+    for (const reason of ["reset", "deleted"] as const) {
+      const marker = `.trajectory.jsonl.${reason}.`;
+      const index = trimmed.lastIndexOf(marker);
+      if (index > 0 && parseSessionArchiveTimestamp(trimmed, reason) !== null) {
+        base = trimmed.slice(0, index);
+        break;
+      }
+    }
+    if (!base && isUsageCountedSessionTranscriptFileName(trimmed)) {
+      base = parseUsageCountedSessionIdFromFileName(trimmed);
+    }
+  }
+  return base && isPlausibleSessionId(base) ? base : null;
+}
+
+export function lookupSessionKeyForTranscriptPath(
+  classification: SessionTranscriptClassification,
+  absPath: string,
+): string | null {
+  const direct = classification.transcriptPathToSessionKey.get(normalizeComparablePath(absPath));
+  if (direct) {
+    return direct;
+  }
+  const sessionId = extractSessionIdFromTranscriptFileName(path.basename(absPath));
+  if (!sessionId) {
+    return null;
+  }
+  return classification.sessionIdToSessionKey.get(sessionId) ?? null;
+}
+
+export function isCronRunTranscriptPath(
+  classification: SessionTranscriptClassification,
+  absPath: string,
+): boolean {
+  if (classification.cronRunTranscriptPaths.has(normalizeComparablePath(absPath))) {
+    return true;
+  }
+  const sessionId = extractSessionIdFromTranscriptFileName(path.basename(absPath));
+  return sessionId !== null && classification.cronRunSessionIds.has(sessionId);
+}
+
+export function isDreamingNarrativeTranscriptPath(
+  classification: SessionTranscriptClassification,
+  absPath: string,
+): boolean {
+  if (classification.dreamingNarrativeTranscriptPaths.has(normalizeComparablePath(absPath))) {
+    return true;
+  }
+  const sessionId = extractSessionIdFromTranscriptFileName(path.basename(absPath));
+  return sessionId !== null && classification.dreamingNarrativeSessionIds.has(sessionId);
 }
 
 function readSessionTranscriptClassificationStore(
@@ -231,8 +336,11 @@ function classifySessionTranscriptFromSessionStore(absPath: string): {
   const classification = loadSessionTranscriptClassificationForSessionsDir(sessionsDir);
   return {
     generatedByDreamingNarrative:
-      classification.dreamingNarrativeTranscriptPaths.has(normalizedAbsPath),
-    generatedByCronRun: classification.cronRunTranscriptPaths.has(normalizedAbsPath),
+      classification.dreamingNarrativeTranscriptPaths.has(normalizedAbsPath) ||
+      isDreamingNarrativeTranscriptPath(classification, absPath),
+    generatedByCronRun:
+      classification.cronRunTranscriptPaths.has(normalizedAbsPath) ||
+      isCronRunTranscriptPath(classification, absPath),
   };
 }
 
@@ -251,7 +359,8 @@ export async function listSessionFilesForAgent(agentId: string): Promise<string[
 }
 
 export function sessionPathForFile(absPath: string): string {
-  return path.join("sessions", path.basename(absPath)).replace(/\\/g, "/");
+  const base = path.basename(absPath).replace(/[\r\n\t]/g, "_");
+  return path.posix.join("sessions", base);
 }
 
 async function logSessionFileReadFailure(absPath: string, err: unknown): Promise<void> {
@@ -483,6 +592,7 @@ export async function buildSessionEntry(
       false;
     const generatedByCronRun =
       opts.generatedByCronRun ?? sessionStoreClassification?.generatedByCronRun ?? false;
+    let dropAssistantsForInternalSystemRun = false;
     for (let jsonlIdx = 0; jsonlIdx < lines.length; jsonlIdx++) {
       const line = lines[jsonlIdx];
       if (!line.trim()) {
@@ -513,7 +623,16 @@ export async function buildSessionEntry(
       if (message.role !== "user" && message.role !== "assistant") {
         continue;
       }
-      if (message.role === "user" && hasInterSessionUserProvenance(message)) {
+      if (message.role === "user") {
+        if (hasInternalSystemUserProvenance(message)) {
+          dropAssistantsForInternalSystemRun = true;
+          continue;
+        }
+        dropAssistantsForInternalSystemRun = false;
+        if (hasInterSessionUserProvenance(message)) {
+          continue;
+        }
+      } else if (message.role === "assistant" && dropAssistantsForInternalSystemRun) {
         continue;
       }
       const rawText = collectRawSessionText(message.content);

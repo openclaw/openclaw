@@ -4,20 +4,27 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import {
   buildSessionEntry,
+  isCronRunTranscriptPath,
+  isDreamingNarrativeTranscriptPath,
   listSessionFilesForAgent,
   loadSessionTranscriptClassificationForAgent,
-  normalizeSessionTranscriptPathForComparison,
+  lookupSessionKeyForTranscriptPath,
   parseUsageCountedSessionIdFromFileName,
   sessionPathForFile,
 } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import {
   formatMemoryDreamingDay,
+  resolveMemoryDreamingPluginConfig,
   resolveMemoryDreamingWorkspaces,
   resolveMemoryLightDreamingConfig,
   resolveMemoryRemDreamingConfig,
 } from "openclaw/plugin-sdk/memory-core-host-status";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import {
+  compileSafeRegexDetailed,
+  testRegexWithBoundedInput,
+} from "openclaw/plugin-sdk/security-runtime";
 import { writeDailyDreamingPhaseBlock } from "./dreaming-markdown.js";
 import {
   generateAndAppendDreamNarrative,
@@ -703,6 +710,157 @@ async function appendSessionCorpusLines(params: {
   });
 }
 
+type SessionIngestionExcludeInput = {
+  agentId: string;
+  sessionPath: string;
+  sessionKey: string | null;
+};
+
+type SessionIngestionExcludePredicate = (input: SessionIngestionExcludeInput) => boolean;
+
+const SESSION_KEY_CRON_JOB_RE = /(?:^|:)cron:([^:]+)/;
+const SESSION_FILTER_MAX_ITEM_COUNT = 1024;
+const SESSION_FILTER_MAX_ITEM_CHARS = 512;
+const SESSION_FILTER_REGEX_MAX_PATTERN_CHARS = 512;
+const SESSION_FILTER_REGEX_MAX_PATTERN_COUNT = 32;
+const SESSION_FILTER_REGEX_INPUT_WINDOW = 4096;
+
+function readSessionFilterStringArray(
+  filter: Record<string, unknown> | undefined,
+  key: string,
+  logger?: Logger,
+): string[] {
+  const raw = filter?.[key];
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  const out: string[] = [];
+  let droppedTooLong = 0;
+  let truncatedCount = false;
+  for (const value of raw) {
+    if (out.length >= SESSION_FILTER_MAX_ITEM_COUNT) {
+      truncatedCount = true;
+      break;
+    }
+    if (typeof value !== "string") {
+      continue;
+    }
+    if (value.length > SESSION_FILTER_MAX_ITEM_CHARS) {
+      droppedTooLong += 1;
+      continue;
+    }
+    const trimmed = value.trim();
+    if (trimmed.length > 0) {
+      out.push(trimmed);
+    }
+  }
+  if (droppedTooLong > 0 || truncatedCount) {
+    logger?.warn?.(
+      `[memory-core] dreaming.sessionFilter.${key}: dropped entries (too-long=${droppedTooLong}${
+        truncatedCount ? `, count-truncated-to-${SESSION_FILTER_MAX_ITEM_COUNT}` : ""
+      })`,
+    );
+  }
+  return out;
+}
+
+function compileSessionFilterRegexes(patterns: string[], logger?: Logger): RegExp[] {
+  const out: RegExp[] = [];
+  let droppedTooLong = 0;
+  let droppedUnsafe = 0;
+  let droppedInvalid = 0;
+  let truncatedCount = false;
+  const limit = Math.min(patterns.length, SESSION_FILTER_REGEX_MAX_PATTERN_COUNT);
+  if (patterns.length > SESSION_FILTER_REGEX_MAX_PATTERN_COUNT) {
+    truncatedCount = true;
+  }
+  for (let index = 0; index < limit; index += 1) {
+    const pattern = patterns[index];
+    if (pattern.length > SESSION_FILTER_REGEX_MAX_PATTERN_CHARS) {
+      droppedTooLong += 1;
+      continue;
+    }
+    const compiled = compileSafeRegexDetailed(pattern);
+    if (compiled.regex) {
+      out.push(compiled.regex);
+      continue;
+    }
+    if (compiled.reason === "unsafe-nested-repetition") {
+      droppedUnsafe += 1;
+    } else {
+      droppedInvalid += 1;
+    }
+  }
+  if (droppedTooLong + droppedUnsafe + droppedInvalid + (truncatedCount ? 1 : 0) > 0) {
+    logger?.warn?.(
+      `[memory-core] dreaming.sessionFilter.excludeSourcePathRegex: dropped patterns (too-long=${droppedTooLong}, unsafe-nested-repetition=${droppedUnsafe}, invalid-regex=${droppedInvalid}${
+        truncatedCount ? `, count-truncated-to-${SESSION_FILTER_REGEX_MAX_PATTERN_COUNT}` : ""
+      })`,
+    );
+  }
+  return out;
+}
+
+function extractCronJobIdFromSessionKey(sessionKey: string): string | null {
+  const match = SESSION_KEY_CRON_JOB_RE.exec(sessionKey);
+  const trimmed = match?.[1]?.trim();
+  return trimmed ? trimmed : null;
+}
+
+function resolveSessionIngestionExcludePredicate(
+  cfg: DreamingHostConfig,
+  logger?: Logger,
+): SessionIngestionExcludePredicate {
+  const pluginConfig = resolveMemoryDreamingPluginConfig(
+    cfg as Parameters<typeof resolveMemoryDreamingPluginConfig>[0],
+  );
+  const dreaming = asRecord(pluginConfig?.dreaming);
+  const sessionFilter = asRecord(dreaming?.sessionFilter);
+  if (!sessionFilter) {
+    return () => false;
+  }
+  const cronJobIds = new Set(
+    readSessionFilterStringArray(sessionFilter, "excludeCronJobIds", logger),
+  );
+  const sessionKeyPrefixes = readSessionFilterStringArray(
+    sessionFilter,
+    "excludeSessionKeyPrefixes",
+    logger,
+  );
+  const agentIds = new Set(readSessionFilterStringArray(sessionFilter, "excludeAgentIds", logger));
+  const sourcePathRegexes = compileSessionFilterRegexes(
+    readSessionFilterStringArray(sessionFilter, "excludeSourcePathRegex", logger),
+    logger,
+  );
+  if (
+    cronJobIds.size === 0 &&
+    sessionKeyPrefixes.length === 0 &&
+    agentIds.size === 0 &&
+    sourcePathRegexes.length === 0
+  ) {
+    return () => false;
+  }
+  return ({ agentId, sessionPath, sessionKey }) => {
+    if (agentIds.has(agentId)) {
+      return true;
+    }
+    if (sessionKey) {
+      for (const prefix of sessionKeyPrefixes) {
+        if (sessionKey.startsWith(prefix)) {
+          return true;
+        }
+      }
+      const cronJobId = extractCronJobIdFromSessionKey(sessionKey);
+      if (cronJobId && cronJobIds.has(cronJobId)) {
+        return true;
+      }
+    }
+    return sourcePathRegexes.some((regex) =>
+      testRegexWithBoundedInput(regex, sessionPath, SESSION_FILTER_REGEX_INPUT_WINDOW),
+    );
+  };
+}
+
 async function collectSessionIngestionBatches(params: {
   workspaceDir: string;
   cfg?: DreamingHostConfig;
@@ -710,6 +868,7 @@ async function collectSessionIngestionBatches(params: {
   nowMs: number;
   timezone?: string;
   state: SessionIngestionState;
+  logger?: Logger;
 }): Promise<SessionIngestionCollectionResult> {
   if (!params.cfg) {
     return {
@@ -726,6 +885,7 @@ async function collectSessionIngestionBatches(params: {
   const nextFiles: Record<string, SessionIngestionFileState> = {};
   const nextSeenMessages: Record<string, string[]> = { ...params.state.seenMessages };
   let changed = false;
+  const excludePredicate = resolveSessionIngestionExcludePredicate(params.cfg, params.logger);
 
   const sessionFiles: Array<{
     agentId: string;
@@ -742,19 +902,29 @@ async function collectSessionIngestionBatches(params: {
         : {
             dreamingNarrativeTranscriptPaths: new Set<string>(),
             cronRunTranscriptPaths: new Set<string>(),
+            dreamingNarrativeSessionIds: new Set<string>(),
+            cronRunSessionIds: new Set<string>(),
+            transcriptPathToSessionKey: new Map<string, string>(),
+            sessionIdToSessionKey: new Map<string, string>(),
           };
     for (const absolutePath of files) {
       if (isCheckpointSessionTranscriptPath(absolutePath)) {
         continue;
       }
-      const normalizedPath = normalizeSessionTranscriptPathForComparison(absolutePath);
+      const sessionPath = sessionPathForFile(absolutePath);
+      const sessionKey = lookupSessionKeyForTranscriptPath(transcriptClassification, absolutePath);
+      if (excludePredicate({ agentId, sessionPath, sessionKey })) {
+        continue;
+      }
       sessionFiles.push({
         agentId,
         absolutePath,
-        generatedByDreamingNarrative:
-          transcriptClassification.dreamingNarrativeTranscriptPaths.has(normalizedPath),
-        generatedByCronRun: transcriptClassification.cronRunTranscriptPaths.has(normalizedPath),
-        sessionPath: sessionPathForFile(absolutePath),
+        generatedByDreamingNarrative: isDreamingNarrativeTranscriptPath(
+          transcriptClassification,
+          absolutePath,
+        ),
+        generatedByCronRun: isCronRunTranscriptPath(transcriptClassification, absolutePath),
+        sessionPath,
       });
     }
   }
@@ -1006,6 +1176,7 @@ async function ingestSessionTranscriptSignals(params: {
   lookbackDays: number;
   nowMs: number;
   timezone?: string;
+  logger?: Logger;
 }): Promise<void> {
   const state = await readSessionIngestionState(params.workspaceDir);
   const collected = await collectSessionIngestionBatches({
@@ -1015,6 +1186,7 @@ async function ingestSessionTranscriptSignals(params: {
     nowMs: params.nowMs,
     timezone: params.timezone,
     state,
+    logger: params.logger,
   });
   const ingestionDayBucket = formatMemoryDreamingDay(params.nowMs, params.timezone);
   for (const batch of collected.batches) {
@@ -1540,6 +1712,7 @@ async function runLightDreaming(params: {
     lookbackDays: params.config.lookbackDays,
     nowMs,
     timezone: params.config.timezone,
+    logger: params.logger,
   });
   const recentEntries = await filterLiveShortTermRecallEntries({
     workspaceDir: params.workspaceDir,
@@ -1637,6 +1810,7 @@ async function runRemDreaming(params: {
     lookbackDays: params.config.lookbackDays,
     nowMs,
     timezone: params.config.timezone,
+    logger: params.logger,
   });
   const entries = await filterLiveShortTermRecallEntries({
     workspaceDir: params.workspaceDir,

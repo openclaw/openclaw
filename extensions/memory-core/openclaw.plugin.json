@@ -190,6 +190,53 @@
                 }
               }
             }
+          },
+          "sessionFilter": {
+            "type": "object",
+            "additionalProperties": false,
+            "description": "Operator-facing exclusions applied during session-corpus ingestion before content is appended to memory/.dreams/session-corpus/<day>.txt.",
+            "properties": {
+              "excludeCronJobIds": {
+                "type": "array",
+                "description": "Skip transcripts whose session key carries any of these cron job ids in a cron:<cronJobId> segment. Match is global across all agents: adding \"sync\" drops agent:main:cron:sync:run:<runId> and agent:ops:cron:sync:run:<runId> alike. For per-agent scoping use excludeSessionKeyPrefixes with a fully qualified prefix such as \"agent:main:cron:sync:\".",
+                "maxItems": 1024,
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 512
+                }
+              },
+              "excludeSessionKeyPrefixes": {
+                "type": "array",
+                "description": "Skip transcripts whose session key starts with any of these prefixes, for example agent:main:cron: to skip every cron run for the main agent, or agent:ops: to skip one agent surface.",
+                "maxItems": 1024,
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 512
+                }
+              },
+              "excludeAgentIds": {
+                "type": "array",
+                "description": "Skip transcripts owned by any of these agent ids. This affects dreaming ingestion only; the agent still runs normally.",
+                "maxItems": 1024,
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 512
+                }
+              },
+              "excludeSourcePathRegex": {
+                "type": "array",
+                "description": "Skip transcripts whose normalized source path matches any of these regular expressions. The path is sessionPathForFile(absPath) output: sessions/<basename> with no agent prefix. For a live transcript that is sessions/<uuid>.jsonl; for a rotated artifact the basename keeps the rotation suffix, such as sessions/<uuid>.jsonl.deleted.<ts>, sessions/<uuid>.jsonl.reset.<ts>, or sessions/<uuid>.trajectory.jsonl.deleted.<ts>. Use a non-anchored pattern or \\.jsonl(?:\\.deleted\\.|\\.reset\\.|$) when matching live plus rotated files. Invalid or unsafe patterns are ignored at runtime with a count-only warning.",
+                "maxItems": 32,
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 512
+                }
+              }
+            }
           }
         }
       }

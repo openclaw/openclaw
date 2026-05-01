@@ -588,6 +588,19 @@ For conceptual behavior and slash commands, see [Dreaming](/concepts/dreaming).
 | `frequency` | `string`  | `0 3 * * *`   | Optional cron cadence for the full dreaming sweep |
 | `model`     | `string`  | default model | Optional Dream Diary subagent model override      |
 
+### Session filters
+
+`dreaming.sessionFilter` is an operator-only exclusion layer for session transcript ingestion. It runs before transcript snippets are appended to `memory/.dreams/session-corpus/<day>.txt`.
+
+| Key                         | Type       | Description                                                                                                                            |
+| --------------------------- | ---------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `excludeCronJobIds`         | `string[]` | Skip transcripts whose session key contains a matching `cron:<cronJobId>` segment. This match is global across agents.                 |
+| `excludeSessionKeyPrefixes` | `string[]` | Skip transcripts whose session key starts with a prefix, for example `agent:main:cron:` for one agent's cron runs.                     |
+| `excludeAgentIds`           | `string[]` | Skip transcripts owned by these agent ids for dreaming ingestion only.                                                                 |
+| `excludeSourcePathRegex`    | `string[]` | Skip transcripts whose normalized source path matches a safe regular expression. Paths use `sessions/<basename>` with no agent prefix. |
+
+For source-path regexes, live transcripts look like `sessions/<uuid>.jsonl`. Rotated artifacts keep their suffix, such as `sessions/<uuid>.jsonl.deleted.<ts>`, so avoid strict `\\.jsonl$` anchors when you intend to match both live and rotated files.
+
 ### Example
 
 ```json5
@@ -604,6 +617,10 @@ For conceptual behavior and slash commands, see [Dreaming](/concepts/dreaming).
             enabled: true,
             frequency: "0 3 * * *",
             model: "anthropic/claude-sonnet-4-6",
+            sessionFilter: {
+              excludeSessionKeyPrefixes: ["agent:main:cron:"],
+              excludeSourcePathRegex: ["^sessions/tmp-"],
+            },
           },
         },
       },

@@ -2,7 +2,16 @@ import fsSync from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { buildSessionEntry, listSessionFilesForAgent } from "./session-files.js";
+import {
+  buildSessionEntry,
+  extractSessionIdFromTranscriptFileName,
+  isCronRunTranscriptPath,
+  isDreamingNarrativeTranscriptPath,
+  listSessionFilesForAgent,
+  loadSessionTranscriptClassificationForSessionsDir,
+  lookupSessionKeyForTranscriptPath,
+  sessionPathForFile,
+} from "./session-files.js";
 
 let fixtureRoot: string;
 let tmpDir: string;
@@ -212,5 +221,123 @@ describe("buildSessionEntry", () => {
     expect(entry).not.toBeNull();
     expect(entry!.content).toBe("Assistant: User-facing summary.\nUser: Actual user follow-up.");
     expect(entry!.lineMap).toEqual([2, 3]);
+  });
+
+  it("drops internal-system runs until the next real user", async () => {
+    const jsonlLines = [
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "user",
+          content: "Read HEARTBEAT.md. Reply HEARTBEAT_OK if nothing to do.",
+          provenance: { kind: "internal_system", sourceTool: "heartbeat" },
+        },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: { role: "assistant", content: "I'll read the heartbeat file." },
+      }),
+      JSON.stringify({ type: "message", message: { role: "assistant", content: "HEARTBEAT_OK" } }),
+      JSON.stringify({
+        type: "message",
+        message: { role: "user", content: "Real user follow-up question." },
+      }),
+      JSON.stringify({ type: "message", message: { role: "assistant", content: "Real reply." } }),
+    ];
+    const filePath = path.join(tmpDir, "internal-system-session.jsonl");
+    fsSync.writeFileSync(filePath, jsonlLines.join("\n"));
+
+    const entry = await buildSessionEntry(filePath);
+    expect(entry).not.toBeNull();
+    expect(entry!.content).toBe("User: Real user follow-up question.\nAssistant: Real reply.");
+    expect(entry!.lineMap).toEqual([4, 5]);
+  });
+});
+
+describe("transcript classification helpers", () => {
+  function setupSessionsDir(opts: { cronSessionId: string; dreamingSessionId: string }): {
+    sessionsDir: string;
+    cronLivePath: string;
+    dreamingLivePath: string;
+  } {
+    const sessionsDir = path.join(tmpDir, "sessions");
+    fsSync.mkdirSync(sessionsDir, { recursive: true });
+    const cronLivePath = path.join(sessionsDir, `${opts.cronSessionId}.jsonl`);
+    const dreamingLivePath = path.join(sessionsDir, `${opts.dreamingSessionId}.jsonl`);
+    fsSync.writeFileSync(
+      path.join(sessionsDir, "sessions.json"),
+      JSON.stringify({
+        "agent:main:cron:job-1:run:run-1": {
+          sessionId: opts.cronSessionId,
+          sessionFile: cronLivePath,
+        },
+        "agent:main:dreaming-narrative-light-2026-04-25T06:00:00.000Z": {
+          sessionId: opts.dreamingSessionId,
+          sessionFile: dreamingLivePath,
+        },
+      }),
+      "utf-8",
+    );
+    return { sessionsDir, cronLivePath, dreamingLivePath };
+  }
+
+  it("extracts session ids from live and rotated transcript file names", () => {
+    expect(extractSessionIdFromTranscriptFileName("session-A.jsonl")).toBe("session-A");
+    expect(
+      extractSessionIdFromTranscriptFileName("session-A.jsonl.deleted.2026-04-25T06-33-10.801Z"),
+    ).toBe("session-A");
+    expect(
+      extractSessionIdFromTranscriptFileName(
+        "session-A.trajectory.jsonl.deleted.2026-04-25T06-33-10.801Z",
+      ),
+    ).toBe("session-A");
+    expect(extractSessionIdFromTranscriptFileName("sessions.json")).toBeNull();
+    expect(extractSessionIdFromTranscriptFileName("../bad.jsonl")).toBeNull();
+  });
+
+  it("classifies rotated cron and dreaming transcripts via session id", () => {
+    const { sessionsDir } = setupSessionsDir({
+      cronSessionId: "cron-rotated-id",
+      dreamingSessionId: "dream-rotated-id",
+    });
+    const classification = loadSessionTranscriptClassificationForSessionsDir(sessionsDir);
+
+    expect(
+      isCronRunTranscriptPath(
+        classification,
+        path.join(sessionsDir, "cron-rotated-id.jsonl.deleted.2026-04-25T06-33-10.801Z"),
+      ),
+    ).toBe(true);
+    expect(
+      isDreamingNarrativeTranscriptPath(
+        classification,
+        path.join(sessionsDir, "dream-rotated-id.jsonl.deleted.2026-04-25T06-33-10.801Z"),
+      ),
+    ).toBe(true);
+  });
+
+  it("looks up session keys for live and rotated transcript paths", () => {
+    const { sessionsDir, cronLivePath } = setupSessionsDir({
+      cronSessionId: "cron-key-id",
+      dreamingSessionId: "dream-key-id",
+    });
+    const classification = loadSessionTranscriptClassificationForSessionsDir(sessionsDir);
+
+    expect(lookupSessionKeyForTranscriptPath(classification, cronLivePath)).toBe(
+      "agent:main:cron:job-1:run:run-1",
+    );
+    expect(
+      lookupSessionKeyForTranscriptPath(
+        classification,
+        path.join(sessionsDir, "cron-key-id.jsonl.deleted.2026-04-25T06-33-10.801Z"),
+      ),
+    ).toBe("agent:main:cron:job-1:run:run-1");
+  });
+
+  it("normalizes source paths as documented sessions/basename values", () => {
+    expect(sessionPathForFile(path.join(tmpDir, "abc.jsonl"))).toBe("sessions/abc.jsonl");
+    expect(sessionPathForFile(path.join(tmpDir, "bad\nname.jsonl"))).toBe(
+      "sessions/bad_name.jsonl",
+    );
   });
 });

@@ -70,6 +70,8 @@ These phases are internal implementation details, not separate user-configured "
 
 Dreaming can ingest redacted session transcripts into the dreaming corpus. When transcripts are available, they are fed into the light phase alongside daily memory signals and recall traces. Personal and sensitive content is redacted before ingestion.
 
+Operators can exclude known noisy transcript sources with `dreaming.sessionFilter`. Filters can match global cron job ids, full session-key prefixes, agent ids, or normalized source paths. Source-path regexes see the documented `sessions/<basename>` shape; live transcripts look like `sessions/<uuid>.jsonl`, while rotated artifacts keep suffixes such as `sessions/<uuid>.jsonl.deleted.<ts>`.
+
 ## Dream Diary
 
 Dreaming also keeps a narrative **Dream Diary** in `DREAMS.md`. After each phase has enough material, `memory-core` runs a best-effort background subagent turn and appends a short diary entry. It uses the default runtime model unless `dreaming.model` is configured. If the configured model is unavailable, Dream Diary retries once with the session default model.
@@ -214,6 +216,18 @@ All settings live under `plugins.entries.memory-core.config.dreaming`.
 </ParamField>
 <ParamField path="model" type="string">
   Optional Dream Diary subagent model override. Use a canonical `provider/model` value when also setting a subagent `allowedModels` allowlist.
+</ParamField>
+<ParamField path="sessionFilter.excludeCronJobIds" type="string[]">
+  Skip transcripts whose session key contains one of these cron job ids. This match is global across all agents; use `excludeSessionKeyPrefixes` for per-agent scoping.
+</ParamField>
+<ParamField path="sessionFilter.excludeSessionKeyPrefixes" type="string[]">
+  Skip transcripts whose session key starts with one of these prefixes.
+</ParamField>
+<ParamField path="sessionFilter.excludeAgentIds" type="string[]">
+  Skip transcripts owned by these agent ids for dreaming ingestion only.
+</ParamField>
+<ParamField path="sessionFilter.excludeSourcePathRegex" type="string[]">
+  Skip transcripts whose normalized source path, such as `sessions/<uuid>.jsonl`, matches a safe regular expression.
 </ParamField>
 
 <Warning>

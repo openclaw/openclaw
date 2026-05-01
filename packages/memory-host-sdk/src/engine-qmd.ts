@@ -3,9 +3,13 @@
 export { extractKeywords, isQueryStopWordToken } from "./host/query-expansion.js";
 export {
   buildSessionEntry,
+  extractSessionIdFromTranscriptFileName,
+  isCronRunTranscriptPath,
+  isDreamingNarrativeTranscriptPath,
   listSessionFilesForAgent,
   loadDreamingNarrativeTranscriptPathSetForAgent,
   loadSessionTranscriptClassificationForAgent,
+  lookupSessionKeyForTranscriptPath,
   normalizeSessionTranscriptPathForComparison,
   sessionPathForFile,
   type BuildSessionEntryOptions,

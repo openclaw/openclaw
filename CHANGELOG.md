@@ -119,6 +119,7 @@ Docs: https://docs.openclaw.ai
 - Security/outbound: strip re-formed HTML tags during plain-text sanitization so nested tag fragments cannot leave a CodeQL-detected `<script>` sequence behind. Thanks @vincentkoc.
 - Security/secrets: compare credential bytes with padded timing-safe buffers instead of hashing candidate passwords before equality checks. Thanks @vincentkoc.
 - Security/QQBot: sanitize debug log arguments before writing to `console.*`, so gateway payload fields cannot forge extra log lines when debug logging is enabled. Thanks @vincentkoc.
+- Memory/Dreaming: keep cron and heartbeat system transcripts out of the dreaming corpus after rotation, and add operator session filters for noisy cron, agent, session-key, and source-path exclusions. (#72913) Thanks @zqchris.
 - QQBot: unify slash command auth and c2cOnly gating in the command registry, pass `allowQQBotDataDownloads` when sending slash command file attachments, align clear-storage with actual downloads directory, and add `/bot-me` to display sender user ID. (#73616) Thanks @cxyhhhhh.
 - CLI/agents/status: keep `openclaw agents`, text `agents list`, and plain text `status` on read-only metadata paths so human output no longer preloads plugin runtimes or live channel scans before printing. Fixes #74195. Thanks @NianJiuZst.
 - Agents/local models: derive context-window guard thresholds from the effective model window with 4k/8k safety floors, so small local models are no longer rejected by fixed 16k/32k preflight cutoffs. Fixes #42999. Thanks @chengjialu8888.

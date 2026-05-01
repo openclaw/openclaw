@@ -51,7 +51,9 @@ export { resolveStateDir } from "../../../../src/config/paths.js";
 export {
   isCompactionCheckpointTranscriptFileName,
   isSessionArchiveArtifactName,
+  isTrajectoryRuntimeArtifactName,
   isUsageCountedSessionTranscriptFileName,
+  parseSessionArchiveTimestamp,
   parseUsageCountedSessionIdFromFileName,
 } from "../../../../src/config/sessions/artifacts.js";
 export { resolveSessionTranscriptsDirForAgent } from "../../../../src/config/sessions/paths.js";
@@ -136,7 +138,10 @@ export type { OpenClawPluginApi } from "../../../../src/plugins/types.js";
 // Shared session/text utilities.
 export { defaultRuntime } from "../../../../src/runtime.js";
 export { parseAgentSessionKey } from "../../../../src/routing/session-key.js";
-export { hasInterSessionUserProvenance } from "../../../../src/sessions/input-provenance.js";
+export {
+  hasInterSessionUserProvenance,
+  hasInternalSystemUserProvenance,
+} from "../../../../src/sessions/input-provenance.js";
 export { isCronRunSessionKey } from "../../../../src/sessions/session-key-utils.js";
 export { onSessionTranscriptUpdate } from "../../../../src/sessions/transcript-events.js";
 export { formatDocsLink } from "../../../../src/terminal/links.js";

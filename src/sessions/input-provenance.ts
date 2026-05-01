@@ -77,6 +77,21 @@ export function hasInterSessionUserProvenance(
   return isInterSessionInputProvenance(message.provenance);
 }
 
+export function isInternalSystemInputProvenance(value: unknown): boolean {
+  return normalizeInputProvenance(value)?.kind === "internal_system";
+}
+
+// Cron and heartbeat prompts are system-originated user records. Dreaming
+// corpus export drops them, along with assistant chatter from the same run.
+export function hasInternalSystemUserProvenance(
+  message: { role?: unknown; provenance?: unknown } | undefined,
+): boolean {
+  if (!message || message.role !== "user") {
+    return false;
+  }
+  return isInternalSystemInputProvenance(message.provenance);
+}
+
 export function buildInterSessionPromptPrefix(
   inputProvenance: InputProvenance | undefined,
 ): string {
