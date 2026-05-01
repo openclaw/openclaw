@@ -7,6 +7,7 @@ import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fi
 const tempDirs: string[] = [];
 const originalBundledDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
 const originalDisableBundledPlugins = process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
+const originalTestTrustBundledPluginsDir = process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR;
 const originalVitest = process.env.VITEST;
 const originalArgv1 = process.argv[1];
 const originalExecArgv = [...process.execArgv];
@@ -157,6 +158,11 @@ afterEach(() => {
     delete process.env.VITEST;
   } else {
     process.env.VITEST = originalVitest;
+  }
+  if (originalTestTrustBundledPluginsDir === undefined) {
+    delete process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR;
+  } else {
+    process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR = originalTestTrustBundledPluginsDir;
   }
   process.argv[1] = originalArgv1;
   process.execArgv.length = 0;
@@ -310,6 +316,7 @@ describe("resolveBundledPluginsDir", () => {
     process.argv[1] = path.join(installedRoot, "openclaw.mjs");
     process.execArgv.length = 0;
     delete process.env.VITEST;
+    delete process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR;
     process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = path.join(installedRoot, "dist", "extensions");
     delete process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
 
@@ -396,6 +403,7 @@ describe("resolveBundledPluginsDir", () => {
     process.argv[1] = path.join(installedRoot, "openclaw.mjs");
     process.execArgv.length = 0;
     delete process.env.VITEST;
+    delete process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR;
     process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = path.join(overrideRoot, "extensions");
     delete process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
 

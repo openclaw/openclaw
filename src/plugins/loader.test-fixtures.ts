@@ -105,7 +105,7 @@ export function writePlugin(params: {
 
 export function useNoBundledPlugins() {
   process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = "1";
-  delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+  process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
 }
 
 export function loadBundleFixture(params: {
