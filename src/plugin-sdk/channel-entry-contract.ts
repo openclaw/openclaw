@@ -345,6 +345,36 @@ function canTryNodeRequireBuiltModule(modulePath: string): boolean {
   );
 }
 
+function emitBundledEntryModuleLoadProfile(params: {
+  modulePath: string;
+  loadStartMs: number;
+  getJitiEndMs: number;
+}): void {
+  const endMs = performance.now();
+  // Use shared formatter — but split timing fields ourselves so we can
+  // attribute time spent in `getJiti(...)` factory creation vs the actual
+  // graph-walking `__j(modulePath)` call. Both are emitted as extras
+  // alongside the canonical `elapsedMs=<total>` field.
+  console.error(
+    formatPluginLoadProfileLine({
+      phase: "bundled-entry-module-load",
+      pluginId: "(bundled-entry)",
+      source: params.modulePath,
+      elapsedMs: endMs - params.loadStartMs,
+      // When the built-artifact fast-path resolves the module via `nodeRequire`,
+      // `getJitiEndMs` stays `0` because the `catch` block (the only place
+      // it gets stamped) never runs. Reporting `getJitiMs` /
+      // `jitiCallMs` as `0` for that path keeps the breakdown honest:
+      // `elapsedMs=` already captures the nodeRequire time, and we don't
+      // want to mis-attribute it to jiti sub-steps.
+      extras: [
+        ["getJitiMs", params.getJitiEndMs ? params.getJitiEndMs - params.loadStartMs : 0],
+        ["jitiCallMs", params.getJitiEndMs ? endMs - params.getJitiEndMs : 0],
+      ],
+    }),
+  );
+}
+
 function loadBundledEntryModuleSync(
   importMetaUrl: string,
   specifier: string,
@@ -383,29 +413,7 @@ function loadBundledEntryModuleSync(
     loaded = jiti(toSafeImportPath(modulePath));
   }
   if (profile) {
-    const endMs = performance.now();
-    // Use shared formatter — but split timing fields ourselves so we can
-    // attribute time spent in `getJiti(...)` factory creation vs the actual
-    // graph-walking `__j(modulePath)` call. Both are emitted as extras
-    // alongside the canonical `elapsedMs=<total>` field.
-    console.error(
-      formatPluginLoadProfileLine({
-        phase: "bundled-entry-module-load",
-        pluginId: "(bundled-entry)",
-        source: modulePath,
-        elapsedMs: endMs - loadStartMs,
-        // When the built-artifact fast-path resolves the module via `nodeRequire`,
-        // `getJitiEndMs` stays `0` because the `catch` block (the only place
-        // it gets stamped) never runs. Reporting `getJitiMs` /
-        // `jitiCallMs` as `0` for that path keeps the breakdown honest:
-        // `elapsedMs=` already captures the nodeRequire time, and we don't
-        // want to mis-attribute it to jiti sub-steps.
-        extras: [
-          ["getJitiMs", getJitiEndMs ? getJitiEndMs - loadStartMs : 0],
-          ["jitiCallMs", getJitiEndMs ? endMs - getJitiEndMs : 0],
-        ],
-      }),
-    );
+    emitBundledEntryModuleLoadProfile({ modulePath, loadStartMs, getJitiEndMs });
   }
   loadedModuleExports.set(modulePath, loaded);
   return loaded;

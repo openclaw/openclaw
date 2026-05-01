@@ -78,9 +78,7 @@ describe("codex plugin", () => {
       registerMediaUnderstandingProvider: vi.fn(),
       registerProvider: vi.fn(),
       on: vi.fn(),
-    }) as ReturnType<typeof createTestPluginApi> & {
-      onConversationBindingResolved?: ReturnType<typeof vi.fn>;
-    };
+    });
     delete (api as { onConversationBindingResolved?: unknown }).onConversationBindingResolved;
 
     expect(() => plugin.register(api)).not.toThrow();

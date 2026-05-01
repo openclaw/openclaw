@@ -1,4 +1,4 @@
-import { spawn, spawnSync } from "node:child_process";
+import { execFile, spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
@@ -54,10 +54,12 @@ import {
 
 vi.mock("node:child_process", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:child_process")>()),
+  execFile: vi.fn(),
   spawn: vi.fn(),
   spawnSync: vi.fn(),
 }));
 
+const execFileMock = vi.mocked(execFile);
 const spawnMock = vi.mocked(spawn);
 const spawnSyncMock = vi.mocked(spawnSync);
 const tempDirs: string[] = [];
@@ -86,6 +88,7 @@ function statfsFixture(params: {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  execFileMock.mockReset();
   spawnMock.mockReset();
   spawnSyncMock.mockReset();
   bundledRuntimeDepsActivityTesting.resetBundledRuntimeDepsInstallActivity();
