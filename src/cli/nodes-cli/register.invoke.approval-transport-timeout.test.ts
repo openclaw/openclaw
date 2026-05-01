@@ -80,7 +80,7 @@ describe("exec approval transport timeout (#12098)", () => {
       parseTimeoutMs(String(userTimeout)) ?? 0,
       approvalTransportFloorMs,
     );
-    expect(transportTimeoutMs).toBe(approvalTransportFloorMs);
+    expect(transportTimeoutMs).toBe(userTimeout);
 
     await callGatewayCli(
       "exec.approval.request",
@@ -90,7 +90,7 @@ describe("exec approval transport timeout (#12098)", () => {
     );
 
     const callOpts = callGatewaySpy.mock.calls[0][0];
-    expect(callOpts.timeoutMs).toBe(approvalTransportFloorMs);
+    expect(callOpts.timeoutMs).toBe(userTimeout);
   });
 
   it("fix: non-numeric timeout falls back to approval floor", async () => {
@@ -109,5 +109,13 @@ describe("exec approval transport timeout (#12098)", () => {
 
     const callOpts = callGatewaySpy.mock.calls[0][0];
     expect(callOpts.timeoutMs).toBe(approvalTransportFloorMs);
+  });
+
+  it("throws for invalid shared gateway CLI timeout values", async () => {
+    await expect(
+      callGatewayCli("exec.approval.request", { timeout: "0" } as never, {
+        timeoutMs: 120_000,
+      }),
+    ).rejects.toThrow("invalid --timeout: 0");
   });
 });
