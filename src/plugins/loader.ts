@@ -1500,19 +1500,29 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
                     env,
                     warn: (message) => logger.warn(`[plugins] ${record.id}: ${message}`),
                   }));
-              measureDiagnosticsTimelineSpanSync(
-                "runtimeDeps.stage",
-                () => installer(installParams),
-                {
-                  phase: "startup",
-                  config: cfg,
-                  env,
-                  attributes: {
-                    pluginId: record.id,
-                    dependencyCount: installSpecs.length,
+              // Schedule runtime dep installation in the background to avoid
+              // blocking the event loop. spawnSync (used by the installer) can
+              // block for multiple seconds per plugin, starving I/O and
+              // delaying message dispatch by 60-120s when multiple plugins
+              // install concurrently (e.g. during sessions.list after a
+              // Control UI reconnect). The prepared runtime root is not
+              // consumed until the plugin is actually loaded, so a microtask
+              // deferral is safe.
+              setImmediate(() => {
+                measureDiagnosticsTimelineSpanSync(
+                  "runtimeDeps.stage",
+                  () => installer(installParams),
+                  {
+                    phase: "startup",
+                    config: cfg,
+                    env,
+                    attributes: {
+                      pluginId: record.id,
+                      dependencyCount: installSpecs.length,
+                    },
                   },
-                },
-              );
+                );
+              });
             },
             logInstalled: (installedSpecs) => {
               if (shouldActivate) {
