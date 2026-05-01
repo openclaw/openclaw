@@ -204,7 +204,7 @@ function readParagraph(text: string, from: number): { end: number; text: string 
 }
 
 function isMetadataHeading(paragraph: string): boolean {
-  return /^(?:Conversation info \(untrusted metadata\):|Sender \(untrusted metadata\):|Replied message \(untrusted, for context\):|Inbound Context \(trusted metadata\):)$/u.test(
+  return /^(?:Conversation info \(untrusted metadata\):|Sender \(untrusted metadata\):|Replied message \(untrusted, for context\):|(?:##\s+)?Inbound Context \(trusted metadata\):?)$/u.test(
     paragraph,
   );
 }
@@ -258,7 +258,10 @@ function isAsyncCompletionScaffold(paragraph: string): boolean {
 
 function consumeExecStateSection(text: string, cursor: number): number | null {
   const heading = readParagraph(text, cursor);
-  if (heading.text !== "Current Exec Session State") {
+  if (
+    heading.text !== "Current Exec Session State" &&
+    heading.text !== "## Current Exec Session State"
+  ) {
     return null;
   }
 
