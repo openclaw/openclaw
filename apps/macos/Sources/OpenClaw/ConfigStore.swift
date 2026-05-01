@@ -8,6 +8,7 @@ enum ConfigStore {
         var saveLocal: (@MainActor @Sendable ([String: Any]) -> Void)?
         var loadRemote: (@MainActor @Sendable () async -> [String: Any])?
         var saveRemote: (@MainActor @Sendable ([String: Any]) async throws -> Void)?
+        var saveGateway: (@MainActor @Sendable ([String: Any]) async throws -> Void)?
     }
 
     private actor OverrideStore {
@@ -63,7 +64,15 @@ enum ConfigStore {
                 do {
                     try await self.saveToGateway(root)
                 } catch {
-                    OpenClawConfigFile.saveDict(root)
+                    guard self.shouldFallbackToLocalWrite(afterGatewaySaveError: error) else {
+                        self.lastHash = nil
+                        throw error
+                    }
+                    guard OpenClawConfigFile.saveDict(root) else {
+                        throw NSError(domain: "ConfigStore", code: 2, userInfo: [
+                            NSLocalizedDescriptionKey: "Local config write rejected to protect gateway auth/mode.",
+                        ])
+                    }
                 }
             }
         }
@@ -83,8 +92,30 @@ enum ConfigStore {
         }
     }
 
+    private static func shouldFallbackToLocalWrite(afterGatewaySaveError error: Error) -> Bool {
+        let nsError = error as NSError
+        let message = "\(nsError.domain) \(nsError.localizedDescription)".lowercased()
+        let blockedFragments = [
+            "invalid_request",
+            "invalid request",
+            "invalid config",
+            "config changed since last load",
+            "base hash",
+            "basehash",
+            "unauthorized",
+            "token mismatch",
+            "auth",
+        ]
+        return !blockedFragments.contains { message.contains($0) }
+    }
+
     @MainActor
     private static func saveToGateway(_ root: [String: Any]) async throws {
+        let overrides = await self.overrideStore.overrides
+        if let saveGateway = overrides.saveGateway {
+            try await saveGateway(root)
+            return
+        }
         if self.lastHash == nil {
             _ = await self.loadFromGateway()
         }

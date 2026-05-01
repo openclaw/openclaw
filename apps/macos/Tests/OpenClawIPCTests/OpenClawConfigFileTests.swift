@@ -232,4 +232,98 @@ struct OpenClawConfigFileTests {
             }
         }
     }
+
+    @MainActor
+    @Test
+    func `save dict preserves existing gateway auth and stamps meta`() async throws {
+        let stateDir = FileManager().temporaryDirectory
+            .appendingPathComponent("openclaw-state-\(UUID().uuidString)", isDirectory: true)
+        let configPath = stateDir.appendingPathComponent("openclaw.json")
+        let auditPath = stateDir.appendingPathComponent("logs/config-audit.jsonl")
+
+        defer { try? FileManager().removeItem(at: stateDir) }
+
+        try await TestIsolation.withEnvValues([
+            "OPENCLAW_STATE_DIR": stateDir.path,
+            "OPENCLAW_CONFIG_PATH": configPath.path,
+        ]) {
+            OpenClawConfigFile.saveDict([
+                "gateway": [
+                    "mode": "local",
+                    "auth": ["mode": "token", "token": "test-token"],
+                ],
+            ])
+
+            OpenClawConfigFile.saveDict([
+                "gateway": ["mode": "local"],
+                "browser": ["enabled": false],
+            ])
+
+            let data = try Data(contentsOf: configPath)
+            let root = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+            let gateway = root?["gateway"] as? [String: Any]
+            let auth = gateway?["auth"] as? [String: Any]
+            #expect(gateway?["mode"] as? String == "local")
+            #expect(auth?["mode"] as? String == "token")
+            #expect(auth?["token"] as? String == "test-token")
+            #expect((root?["meta"] as? [String: Any]) != nil)
+
+            let rawAudit = try String(contentsOf: auditPath, encoding: .utf8)
+            let last = rawAudit.split(whereSeparator: \.isNewline).map(String.init).last
+            let auditRoot = try JSONSerialization.jsonObject(with: Data((last ?? "{}").utf8)) as? [String: Any]
+            #expect(auditRoot?["result"] as? String == "success")
+            #expect(auditRoot?["preservedGatewayAuth"] as? Bool == true)
+        }
+    }
+
+    @MainActor
+    @Test
+    func `save dict rejects gateway mode removal and keeps previous config`() async throws {
+        let stateDir = FileManager().temporaryDirectory
+            .appendingPathComponent("openclaw-state-\(UUID().uuidString)", isDirectory: true)
+        let configPath = stateDir.appendingPathComponent("openclaw.json")
+        let auditPath = stateDir.appendingPathComponent("logs/config-audit.jsonl")
+
+        defer { try? FileManager().removeItem(at: stateDir) }
+
+        try await TestIsolation.withEnvValues([
+            "OPENCLAW_STATE_DIR": stateDir.path,
+            "OPENCLAW_CONFIG_PATH": configPath.path,
+        ]) {
+            OpenClawConfigFile.saveDict([
+                "gateway": [
+                    "mode": "local",
+                    "auth": ["mode": "token", "token": "test-token"],
+                ],
+                "browser": ["enabled": true],
+            ])
+            let before = try String(contentsOf: configPath, encoding: .utf8)
+
+            OpenClawConfigFile.saveDict([
+                "browser": ["enabled": false],
+            ])
+
+            let after = try String(contentsOf: configPath, encoding: .utf8)
+            #expect(after == before)
+
+            let rawAudit = try String(contentsOf: auditPath, encoding: .utf8)
+            let lines = rawAudit.split(whereSeparator: \.isNewline).map(String.init)
+            guard let last = lines.last else {
+                Issue.record("Missing rejected config audit line")
+                return
+            }
+            let auditRoot = try JSONSerialization.jsonObject(with: Data(last.utf8)) as? [String: Any]
+            #expect(auditRoot?["result"] as? String == "rejected")
+            let suspicious = auditRoot?["suspicious"] as? [String] ?? []
+            let blocking = auditRoot?["blocking"] as? [String] ?? []
+            #expect(suspicious.contains("gateway-mode-removed"))
+            #expect(blocking.contains("gateway-mode-removed"))
+            if let rejectedPath = auditRoot?["rejectedPath"] as? String {
+                #expect(FileManager().fileExists(atPath: rejectedPath))
+            } else {
+                Issue.record("Missing rejected payload path")
+            }
+        }
+    }
+
 }

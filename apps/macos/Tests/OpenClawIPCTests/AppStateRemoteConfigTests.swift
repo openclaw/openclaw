@@ -259,4 +259,38 @@ struct AppStateRemoteConfigTests {
                 remoteTokenDirty: true))
         #expect((cleared["token"] as? String) == nil)
     }
+
+    @Test
+    func syncedGatewayRootPreservesGatewayAuthAcrossModeChanges() {
+        let initialRoot: [String: Any] = [
+            "gateway": [
+                "mode": "remote",
+                "auth": [
+                    "mode": "token",
+                    "token": "test-token", // pragma: allowlist secret
+                ],
+                "remote": [
+                    "transport": "direct",
+                    "url": "wss://old-gateway.example",
+                ],
+            ],
+        ]
+
+        let localRoot = AppState._testSyncedGatewayRoot(
+            currentRoot: initialRoot,
+            draft: .init(
+                connectionMode: .local,
+                remoteTransport: .ssh,
+                remoteTarget: "",
+                remoteIdentity: "",
+                remoteUrl: "",
+                remoteToken: "",
+                remoteTokenDirty: false))
+        let localGateway = localRoot["gateway"] as? [String: Any]
+        let auth = localGateway?["auth"] as? [String: Any]
+        #expect(localGateway?["mode"] as? String == "local")
+        #expect(auth?["mode"] as? String == "token")
+        #expect(auth?["token"] as? String == "test-token") // pragma: allowlist secret
+    }
+
 }
