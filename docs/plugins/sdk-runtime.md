@@ -214,6 +214,38 @@ Provider and channel execution paths must use the active runtime config snapshot
     Use `bindSession({ sessionKey, requesterOrigin })` when you already have a trusted OpenClaw session key from your own binding layer. Do not bind from raw user input.
 
   </Accordion>
+  <Accordion title="api.runtime.tasks.runs lifecycle">
+    Plugins that own their own background process can create and update session-owned task records without creating a Task Flow. The lifecycle runtime is bound to an existing OpenClaw session, so the plugin cannot choose a different owner.
+
+    ```typescript
+    const runs = api.runtime.tasks.runs.fromToolContext(ctx);
+
+    const task = runs.lifecycle.create({
+      taskKind: "my-plugin.session",
+      runId: session.id,
+      title: session.name,
+      status: "running",
+      progressSummary: "Launching",
+    });
+
+    runs.lifecycle.progress({
+      taskKind: "my-plugin.session",
+      runId: session.id,
+      progressSummary: "Waiting for input",
+    });
+
+    runs.lifecycle.finalize({
+      taskKind: "my-plugin.session",
+      runId: session.id,
+      status: "succeeded",
+      endedAt: Date.now(),
+      terminalSummary: "Completed",
+    });
+    ```
+
+    Lifecycle-created records use the existing `cli` task runtime with a required plugin-namespaced `taskKind`. Repeating `create` with the same owner, `taskKind`, and `runId` returns the existing task instead of creating a duplicate. `cancel` keeps the normal CLI task behavior: it marks the task `cancelled` in OpenClaw but does not call back into plugin process control.
+
+  </Accordion>
   <Accordion title="api.runtime.tts">
     Text-to-speech synthesis.
 
