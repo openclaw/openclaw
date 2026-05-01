@@ -46,7 +46,6 @@ import type {
 } from "./session-cost-usage.types.js";
 
 export type {
-  CostUsageDailyEntry,
   CostUsageSummary,
   CostUsageTotals,
   DiscoveredSession,

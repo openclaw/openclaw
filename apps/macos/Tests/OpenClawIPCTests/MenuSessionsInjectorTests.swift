@@ -35,7 +35,9 @@ struct MenuSessionsInjectorTests {
         menu.addItem(NSMenuItem(title: "Send Heartbeats", action: nil, keyEquivalent: ""))
 
         injector.injectForTesting(into: menu)
-        #expect(menu.items.contains { $0.tag == 9_415_557 })
+        let contextItem = menu.items.first { $0.tag == 9_415_557 && $0.title == "Context" }
+        #expect(contextItem != nil)
+        #expect(contextItem?.submenu != nil)
     }
 
     @Test func `injects session rows`() throws {
@@ -114,8 +116,12 @@ struct MenuSessionsInjectorTests {
         menu.addItem(NSMenuItem(title: "Settings…", action: nil, keyEquivalent: ""))
 
         injector.injectForTesting(into: menu)
-        #expect(menu.items.contains { $0.tag == 9_415_557 })
+        let contextItem = try #require(menu.items.first { $0.tag == 9_415_557 && $0.title == "Context" })
+        let contextSubmenu = try #require(contextItem.submenu)
+        #expect(menu.items.filter { $0.tag == 9_415_557 && $0.title == "Context" }.count == 1)
         #expect(menu.items.contains { $0.tag == 9_415_557 && $0.isSeparatorItem })
+        #expect(contextSubmenu.items.compactMap { $0.representedObject as? String }.filter { ["main", "discord:group:alpha"].contains($0) }.count == 2)
+        #expect(contextSubmenu.items.allSatisfy { $0.title != "Usage cost (30 days)" })
         let sendHeartbeatsIndex = try #require(menu.items.firstIndex(where: { $0.title == "Send Heartbeats" }))
         let openDashboardIndex = try #require(menu.items.firstIndex(where: { $0.title == "Open Dashboard" }))
         let firstInjectedIndex = try #require(menu.items.firstIndex(where: { $0.tag == 9_415_557 }))
@@ -160,6 +166,8 @@ struct MenuSessionsInjectorTests {
 
         injector.injectForTesting(into: menu)
 
+        let contextItem = menu.items.first { $0.tag == 9_415_557 && $0.title == "Context" }
+        #expect(contextItem?.submenu?.items.allSatisfy { $0.title != "Usage cost (30 days)" } == true)
         let usageCostItem = menu.items.first { $0.title == "Usage cost (30 days)" }
         #expect(usageCostItem != nil)
         #expect(usageCostItem?.submenu != nil)

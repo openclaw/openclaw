@@ -2,6 +2,7 @@ import http from "node:http";
 import type {
   RealtimeVoiceBridge,
   RealtimeVoiceProviderPlugin,
+  RealtimeVoiceToolCallEvent,
 } from "openclaw/plugin-sdk/realtime-voice";
 import { describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
@@ -59,6 +60,13 @@ function makeHandler(
     instructions: overrides?.instructions ?? "Be helpful.",
     toolPolicy: overrides?.toolPolicy ?? "safe-read-only",
     tools: overrides?.tools ?? [],
+    fastContext: overrides?.fastContext ?? {
+      enabled: false,
+      timeoutMs: 800,
+      maxResults: 3,
+      sources: ["memory", "sessions"],
+      fallbackToConsult: false,
+    },
     providers: overrides?.providers ?? {},
     ...(overrides?.provider ? { provider: overrides.provider } : {}),
   };
@@ -338,9 +346,11 @@ describe("RealtimeCallHandler path routing", () => {
             name: string;
             args: unknown;
           }) => void;
+          onTranscript?: (role: "user" | "assistant", text: string, isFinal: boolean) => void;
         }
       | undefined;
     let resolveConsult: ((value: unknown) => void) | undefined;
+    let receivedPartialTranscript: string | undefined;
     const submitToolResult = vi.fn();
     const bridge = makeBridge({
       supportsToolResultContinuation: true,
@@ -373,13 +383,12 @@ describe("RealtimeCallHandler path routing", () => {
       },
       realtimeProvider: makeRealtimeProvider(createBridge),
     });
-    handler.registerToolHandler(
-      "openclaw_agent_consult",
-      () =>
-        new Promise((resolve) => {
-          resolveConsult = resolve;
-        }),
-    );
+    handler.registerToolHandler("openclaw_agent_consult", (_args, _callId, context) => {
+      receivedPartialTranscript = context.partialUserTranscript;
+      return new Promise((resolve) => {
+        resolveConsult = resolve;
+      });
+    });
     handler.registerToolHandler("custom_lookup", async () => ({ ok: true }));
     const server = await startRealtimeServer(handler);
 
@@ -396,12 +405,14 @@ describe("RealtimeCallHandler path routing", () => {
           expect(createBridge).toHaveBeenCalled();
         });
 
+        callbacks?.onTranscript?.("user", "Are the basement", false);
         callbacks?.onToolCall?.({
           itemId: "item-1",
           callId: "consult-call",
           name: "openclaw_agent_consult",
           args: { question: "Are the basement lights on?" },
         });
+        expect(receivedPartialTranscript).toBe("Are the basement");
 
         await vi.waitFor(() => {
           expect(submitToolResult).toHaveBeenCalledWith(
@@ -441,6 +452,95 @@ describe("RealtimeCallHandler path routing", () => {
         expect(submitToolResult).not.toHaveBeenCalledWith("custom-call", expect.anything(), {
           willContinue: true,
         });
+      } finally {
+        if (ws.readyState !== WebSocket.CLOSED && ws.readyState !== WebSocket.CLOSING) {
+          ws.close();
+        }
+      }
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("does not submit an interim checking result when fast context is enabled", async () => {
+    let callbacks:
+      | {
+          onToolCall?: (event: RealtimeVoiceToolCallEvent) => void;
+        }
+      | undefined;
+    const submitToolResult = vi.fn();
+    const bridge = makeBridge({
+      supportsToolResultContinuation: true,
+      submitToolResult,
+    });
+    const createBridge = vi.fn(
+      (request: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0]) => {
+        callbacks = request;
+        return bridge;
+      },
+    );
+    const handler = makeHandler(
+      {
+        fastContext: {
+          enabled: true,
+          timeoutMs: 800,
+          maxResults: 3,
+          sources: ["memory", "sessions"],
+          fallbackToConsult: false,
+        },
+      },
+      {
+        manager: {
+          getCallByProviderCallId: vi.fn(
+            (): CallRecord => ({
+              callId: "call-1",
+              providerCallId: "CA-fast",
+              provider: "twilio",
+              direction: "inbound",
+              state: "ringing",
+              from: "+15550001234",
+              to: "+15550009999",
+              startedAt: Date.now(),
+              transcript: [],
+              processedEventIds: [],
+              metadata: {},
+            }),
+          ),
+        },
+        realtimeProvider: makeRealtimeProvider(createBridge),
+      },
+    );
+    handler.registerToolHandler("openclaw_agent_consult", async () => ({ text: "Fast context." }));
+    const server = await startRealtimeServer(handler);
+
+    try {
+      const ws = await connectWs(server.url);
+      try {
+        ws.send(
+          JSON.stringify({
+            event: "start",
+            start: { streamSid: "MZ-fast", callSid: "CA-fast" },
+          }),
+        );
+        await vi.waitFor(() => {
+          expect(createBridge).toHaveBeenCalled();
+        });
+
+        callbacks?.onToolCall?.({
+          itemId: "item-1",
+          callId: "consult-call",
+          name: "openclaw_agent_consult",
+          args: { question: "What do you remember?" },
+        });
+
+        await vi.waitFor(() => {
+          expect(submitToolResult).toHaveBeenCalledWith(
+            "consult-call",
+            { text: "Fast context." },
+            undefined,
+          );
+        });
+        expect(submitToolResult).toHaveBeenCalledTimes(1);
       } finally {
         if (ws.readyState !== WebSocket.CLOSED && ws.readyState !== WebSocket.CLOSING) {
           ws.close();

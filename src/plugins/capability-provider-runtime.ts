@@ -315,7 +315,7 @@ export function resolvePluginCapabilityProvider<K extends CapabilityProviderRegi
   const loadOptions = createCapabilityProviderFallbackLoadOptions({
     compatConfig,
     pluginIds,
-    installBundledRuntimeDeps: params.installBundledRuntimeDeps,
+    installBundledRuntimeDeps: params.installBundledRuntimeDeps ?? false,
   });
   const cache = resolveCapabilityProviderSnapshotCache(params.cfg);
   const cacheKey = cache
@@ -373,7 +373,7 @@ export function resolvePluginCapabilityProviders<K extends CapabilityProviderReg
   const loadOptions = createCapabilityProviderFallbackLoadOptions({
     compatConfig,
     pluginIds,
-    installBundledRuntimeDeps: params.installBundledRuntimeDeps,
+    installBundledRuntimeDeps: params.installBundledRuntimeDeps ?? false,
   });
   const cache = resolveCapabilityProviderSnapshotCache(params.cfg);
   const cacheKey = cache

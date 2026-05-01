@@ -924,6 +924,16 @@ Defaults:
   and writing audio in `chrome.audioFormat`
 - `chrome.audioOutputCommand`: SoX command reading audio in `chrome.audioFormat`
   and writing to CoreAudio `BlackHole 2ch`
+- `chrome.bargeInInputCommand`: optional local microphone command that writes
+  signed 16-bit little-endian mono PCM for human barge-in detection while
+  assistant playback is active. This currently applies to the Gateway-hosted
+  `chrome` command-pair bridge.
+- `chrome.bargeInRmsThreshold: 650`: RMS level that counts as a human
+  interruption on `chrome.bargeInInputCommand`
+- `chrome.bargeInPeakThreshold: 2500`: peak level that counts as a human
+  interruption on `chrome.bargeInInputCommand`
+- `chrome.bargeInCooldownMs: 900`: minimum delay between repeated human
+  interruption clears
 - `realtime.provider: "openai"`
 - `realtime.toolPolicy: "safe-read-only"`
 - `realtime.instructions`: brief spoken replies, with
@@ -946,6 +956,24 @@ Optional overrides:
   chrome: {
     guestName: "OpenClaw Agent",
     waitForInCallMs: 30000,
+    bargeInInputCommand: [
+      "sox",
+      "-q",
+      "-t",
+      "coreaudio",
+      "External Microphone",
+      "-r",
+      "24000",
+      "-c",
+      "1",
+      "-b",
+      "16",
+      "-e",
+      "signed-integer",
+      "-t",
+      "raw",
+      "-",
+    ],
   },
   chromeNode: {
     node: "parallels-macos",
@@ -1028,6 +1056,8 @@ a session ended.
   not send the intro/test phrase into the audio bridge.
 - `providerConnected` / `realtimeReady`: realtime voice bridge state
 - `lastInputAt` / `lastOutputAt`: last audio seen from or sent to the bridge
+- `lastSuppressedInputAt` / `suppressedInputBytes`: loopback input ignored while
+  assistant playback is active
 
 ```json
 {
@@ -1133,6 +1163,8 @@ Expected Twilio state:
   `twilio-voice-call-credentials`, and `twilio-voice-call-webhook` checks.
 - `voicecall` is available in the CLI after Gateway reload.
 - The returned session has `transport: "twilio"` and a `twilio.voiceCallId`.
+- `openclaw logs --follow` shows DTMF TwiML served before realtime TwiML, then a
+  realtime bridge with the initial greeting queued.
 - `googlemeet leave <sessionId>` hangs up the delegated voice call.
 
 ## Troubleshooting
@@ -1407,6 +1439,10 @@ participant:
   active.
 - Run `openclaw voicecall tail` and check that Twilio webhooks are arriving at
   the Gateway.
+- Run `openclaw logs --follow` and look for the Twilio Meet sequence: Google
+  Meet delegates the join, Voice Call stores pre-connect DTMF TwiML, serves
+  that initial TwiML, then serves realtime TwiML and starts the realtime bridge
+  with `initialGreeting=queued`.
 - Re-run `openclaw googlemeet setup --transport twilio`; a green setup check is
   required but does not prove the meeting PIN sequence is correct.
 - Confirm the dial-in number belongs to the same Meet invitation and region as
@@ -1414,9 +1450,9 @@ participant:
 - Increase the leading pauses in `--dtmf-sequence` if Meet answers slowly, for
   example `wwww123456#`.
 - If the participant joins but you do not hear the greeting, check
-  `openclaw voicecall tail` for a Twilio stream start followed by realtime
-  provider readiness. The greeting is now generated from the initial
-  `voicecall.start` message after the stream connects.
+  `openclaw logs --follow` for realtime TwiML, realtime bridge startup, and
+  `initialGreeting=queued`. The greeting is generated from the initial
+  `voicecall.start` message after the realtime bridge connects.
 
 If webhooks do not arrive, debug the Voice Call plugin first: the provider must
 reach `plugins.entries.voice-call.config.publicUrl` or the configured tunnel.
@@ -1441,6 +1477,14 @@ Chrome realtime mode needs `BlackHole 2ch` plus either:
 For clean duplex audio, route Meet output and Meet microphone through separate
 virtual devices or a Loopback-style virtual device graph. A single shared
 BlackHole device can echo other participants back into the call.
+
+With the command-pair Chrome bridge, `chrome.bargeInInputCommand` can listen to a
+separate local microphone and clear assistant playback when the human starts
+talking. This keeps human speech ahead of assistant output even when the shared
+BlackHole loopback input is temporarily suppressed during assistant playback.
+Like `chrome.audioInputCommand` and `chrome.audioOutputCommand`, it is an
+operator-configured local command. Use an explicit trusted command path or
+argument list, and do not point it at scripts from untrusted locations.
 
 `googlemeet speak` triggers the active realtime audio bridge for a Chrome
 session. `googlemeet leave` stops that bridge. For Twilio sessions delegated

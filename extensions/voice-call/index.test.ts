@@ -317,8 +317,9 @@ describe("voice-call plugin", () => {
     expect(createVoiceCallRuntime).not.toHaveBeenCalled();
     expect(respond).toHaveBeenCalledWith(
       false,
+      undefined,
       expect.objectContaining({
-        error: expect.stringContaining("TWILIO_ACCOUNT_SID"),
+        message: expect.stringContaining("TWILIO_ACCOUNT_SID"),
       }),
     );
   });
@@ -534,7 +535,7 @@ describe("voice-call plugin", () => {
       });
       expect(callGatewayFromCliMock).toHaveBeenCalledWith(
         "voicecall.start",
-        { json: true, timeout: "5000" },
+        { json: true, timeout: "35000" },
         { to: "+1", message: "Hello", mode: "conversation" },
         { progress: false },
       );
@@ -543,6 +544,145 @@ describe("voice-call plugin", () => {
     } finally {
       stdout.restore();
     }
+  });
+
+  it("responds with protocol errors for delegated gateway failures", async () => {
+    const { methods } = setup({ provider: "mock" });
+    const handler = methods.get("voicecall.start") as
+      | ((ctx: {
+          params: Record<string, unknown>;
+          respond: ReturnType<typeof vi.fn>;
+        }) => Promise<void>)
+      | undefined;
+    const respond = vi.fn();
+
+    await handler?.({ params: {}, respond });
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "INVALID_REQUEST",
+        message: "to required",
+      }),
+    );
+  });
+
+  it("starts and polls delegated gateway continue operations", async () => {
+    callGatewayFromCliMock
+      .mockResolvedValueOnce({
+        operationId: "op-1",
+        status: "pending",
+        pollTimeoutMs: 180000,
+      })
+      .mockResolvedValueOnce({
+        operationId: "op-1",
+        status: "completed",
+        result: { success: true, transcript: "gateway hello" },
+      });
+    const program = new Command();
+    const stdout = captureStdout();
+    await registerVoiceCallCli(program, {
+      provider: "mock",
+      transcriptTimeoutMs: 120000,
+      tts: { timeoutMs: 30000 },
+    });
+
+    try {
+      await program.parseAsync(
+        ["voicecall", "continue", "--call-id", "call-1", "--message", "Hello"],
+        {
+          from: "user",
+        },
+      );
+      expect(callGatewayFromCliMock).toHaveBeenCalledWith(
+        "voicecall.continue.start",
+        { json: true, timeout: "35000" },
+        { callId: "call-1", message: "Hello" },
+        { progress: false },
+      );
+      expect(callGatewayFromCliMock).toHaveBeenCalledWith(
+        "voicecall.continue.result",
+        { json: true, timeout: "5000" },
+        { operationId: "op-1" },
+        { progress: false },
+      );
+      expect(createVoiceCallRuntime).not.toHaveBeenCalled();
+      expect(stdout.output()).toContain('"transcript": "gateway hello"');
+    } finally {
+      stdout.restore();
+    }
+  });
+
+  it("gateway continue operations return pending then completed results", async () => {
+    let finishContinue: ((value: { success: true; transcript: string }) => void) | undefined;
+    const continuePromise = new Promise<{ success: true; transcript: string }>((resolve) => {
+      finishContinue = resolve;
+    });
+    runtimeStub.manager.continueCall = vi.fn(
+      async () => await continuePromise,
+    ) as VoiceCallRuntime["manager"]["continueCall"];
+    const { methods } = setup({
+      provider: "mock",
+      transcriptTimeoutMs: 120000,
+      tts: { timeoutMs: 30000 },
+    });
+    const start = methods.get("voicecall.continue.start") as
+      | ((ctx: {
+          params: Record<string, unknown>;
+          respond: ReturnType<typeof vi.fn>;
+        }) => Promise<void>)
+      | undefined;
+    const result = methods.get("voicecall.continue.result") as
+      | ((ctx: {
+          params: Record<string, unknown>;
+          respond: ReturnType<typeof vi.fn>;
+        }) => Promise<void>)
+      | undefined;
+    const startRespond = vi.fn();
+
+    await start?.({
+      params: { callId: "call-1", message: "Hello" },
+      respond: startRespond,
+    });
+    const startPayload = startRespond.mock.calls[0]?.[1] as
+      | { operationId?: string; pollTimeoutMs?: number }
+      | undefined;
+    expect(startPayload).toEqual(
+      expect.objectContaining({
+        operationId: expect.any(String),
+        status: "pending",
+        pollTimeoutMs: 180000,
+      }),
+    );
+    expect(runtimeStub.manager.continueCall).toHaveBeenCalledWith("call-1", "Hello");
+
+    const pendingRespond = vi.fn();
+    await result?.({
+      params: { operationId: startPayload?.operationId },
+      respond: pendingRespond,
+    });
+    expect(pendingRespond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ status: "pending" }),
+    );
+
+    finishContinue?.({ success: true, transcript: "gateway hello" });
+    await continuePromise;
+    await Promise.resolve();
+
+    const completedRespond = vi.fn();
+    await result?.({
+      params: { operationId: startPayload?.operationId },
+      respond: completedRespond,
+    });
+    expect(completedRespond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        status: "completed",
+        result: { success: true, transcript: "gateway hello" },
+      }),
+    );
   });
 
   it("CLI setup prints human-readable checks by default", async () => {

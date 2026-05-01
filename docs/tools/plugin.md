@@ -93,6 +93,8 @@ repair; explicit bundled channel enablement (`channels.<id>.enabled: true`) can
 still repair that channel's plugin dependencies.
 External plugins and custom load paths must still be installed through
 `openclaw plugins install`.
+See [Plugin dependency resolution](/plugins/dependency-resolution) for the full
+planning and staging lifecycle.
 
 ## Plugin types
 
@@ -309,7 +311,7 @@ do not run in live chat traffic, check these first:
 - Restart the live Gateway after plugin install/config/code changes. In wrapper
   containers, PID 1 may only be a supervisor; restart or signal the child
   `openclaw gateway run` process.
-- Use `openclaw plugins inspect <id> --json` to confirm hook registrations and
+- Use `openclaw plugins inspect <id> --runtime --json` to confirm hook registrations and
   diagnostics. Non-bundled conversation hooks such as `llm_input`,
   `llm_output`, `before_agent_finalize`, and `agent_end` need
   `plugins.entries.<id>.hooks.allowConversationAccess=true`.
@@ -336,7 +338,7 @@ Debug steps:
 
 - Run `openclaw plugins list --enabled --verbose` to see every enabled plugin
   and origin.
-- Run `openclaw plugins inspect <id> --json` for each suspected plugin and
+- Run `openclaw plugins inspect <id> --runtime --json` for each suspected plugin and
   compare `channels`, `channelConfigs`, `tools`, and diagnostics.
 - Run `openclaw plugins registry --refresh` after installing or removing
   plugin packages so persisted metadata reflects the current install.
@@ -381,7 +383,8 @@ openclaw plugins list                       # compact inventory
 openclaw plugins list --enabled            # only enabled plugins
 openclaw plugins list --verbose            # per-plugin detail lines
 openclaw plugins list --json               # machine-readable inventory
-openclaw plugins inspect <id>              # deep detail
+openclaw plugins inspect <id>              # static detail
+openclaw plugins inspect <id> --runtime    # registered hooks/tools/diagnostics
 openclaw plugins inspect <id> --json       # machine-readable
 openclaw plugins inspect --all             # fleet-wide table
 openclaw plugins info <id>                 # inspect alias

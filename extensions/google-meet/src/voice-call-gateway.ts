@@ -2,6 +2,7 @@ import {
   GatewayClient,
   startGatewayClientWhenEventLoopReady,
 } from "openclaw/plugin-sdk/gateway-runtime";
+import type { RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
 import type { GoogleMeetConfig } from "./config.js";
 
 type VoiceCallGatewayClient = InstanceType<typeof GatewayClient>;
@@ -72,12 +73,16 @@ export async function joinMeetViaVoiceCallGateway(params: {
   config: GoogleMeetConfig;
   dialInNumber: string;
   dtmfSequence?: string;
+  logger?: RuntimeLogger;
   message?: string;
 }): Promise<VoiceCallMeetJoinResult> {
   let client: VoiceCallGatewayClient | undefined;
 
   try {
     client = await createConnectedGatewayClient(params.config);
+    params.logger?.info(
+      `[google-meet] Delegating Twilio join to Voice Call (dtmf=${params.dtmfSequence ? "yes" : "no"}, intro=${params.message ? "yes" : "no"})`,
+    );
     const start = (await client.request(
       "voicecall.start",
       {
@@ -91,6 +96,9 @@ export async function joinMeetViaVoiceCallGateway(params: {
     if (!start.callId) {
       throw new Error(start.error || "voicecall.start did not return callId");
     }
+    params.logger?.info(
+      `[google-meet] Voice Call Twilio join started: callId=${start.callId} dtmf=${params.dtmfSequence ? "yes" : "no"} intro=${params.message ? "yes" : "no"}`,
+    );
     return {
       callId: start.callId,
       dtmfSent: Boolean(params.dtmfSequence),

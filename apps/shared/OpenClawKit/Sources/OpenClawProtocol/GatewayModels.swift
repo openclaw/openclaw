@@ -3830,6 +3830,100 @@ public struct ToolsEffectiveResult: Codable, Sendable {
     }
 }
 
+public struct ToolsInvokeParams: Codable, Sendable {
+    public let name: String
+    public let args: [String: AnyCodable]?
+    public let sessionkey: String?
+    public let agentid: String?
+    public let confirm: Bool?
+    public let idempotencykey: String?
+
+    public init(
+        name: String,
+        args: [String: AnyCodable]?,
+        sessionkey: String?,
+        agentid: String?,
+        confirm: Bool?,
+        idempotencykey: String?)
+    {
+        self.name = name
+        self.args = args
+        self.sessionkey = sessionkey
+        self.agentid = agentid
+        self.confirm = confirm
+        self.idempotencykey = idempotencykey
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case name
+        case args
+        case sessionkey = "sessionKey"
+        case agentid = "agentId"
+        case confirm
+        case idempotencykey = "idempotencyKey"
+    }
+}
+
+public struct ToolsInvokeError: Codable, Sendable {
+    public let code: String
+    public let message: String
+    public let details: AnyCodable?
+
+    public init(
+        code: String,
+        message: String,
+        details: AnyCodable?)
+    {
+        self.code = code
+        self.message = message
+        self.details = details
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case code
+        case message
+        case details
+    }
+}
+
+public struct ToolsInvokeResult: Codable, Sendable {
+    public let ok: Bool
+    public let toolname: String
+    public let output: AnyCodable?
+    public let requiresapproval: Bool?
+    public let approvalid: String?
+    public let source: AnyCodable?
+    public let error: [String: AnyCodable]?
+
+    public init(
+        ok: Bool,
+        toolname: String,
+        output: AnyCodable?,
+        requiresapproval: Bool?,
+        approvalid: String?,
+        source: AnyCodable?,
+        error: [String: AnyCodable]?)
+    {
+        self.ok = ok
+        self.toolname = toolname
+        self.output = output
+        self.requiresapproval = requiresapproval
+        self.approvalid = approvalid
+        self.source = source
+        self.error = error
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case ok
+        case toolname = "toolName"
+        case output
+        case requiresapproval = "requiresApproval"
+        case approvalid = "approvalId"
+        case source
+        case error
+    }
+}
+
 public struct SkillsBinsParams: Codable, Sendable {}
 
 public struct SkillsBinsResult: Codable, Sendable {
