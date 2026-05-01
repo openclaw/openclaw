@@ -231,13 +231,13 @@ export async function executePreparedCliRun(
   const useResume = Boolean(
     cliSessionIdToUse && resolvedSessionId && backend.resumeArgs && backend.resumeArgs.length > 0,
   );
-  const systemPromptArg = resolveSystemPromptUsage({
-    backend,
-    isNewSession: isNew,
-    systemPrompt: context.systemPrompt,
-  });
   const isForkResume =
     useResume && (backend.resumeArgs ?? backend.args ?? []).includes("--fork-session");
+  const systemPromptArg = resolveSystemPromptUsage({
+    backend,
+    isNewSession: isNew || isForkResume,
+    systemPrompt: context.systemPrompt,
+  });
   const systemPromptFile =
     (!useResume || isForkResume) && systemPromptArg
       ? await writeCliSystemPromptFile({
