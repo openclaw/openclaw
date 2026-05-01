@@ -10,6 +10,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+<<<<<<< HEAD
 - Models/auth: add `openclaw models auth list [--provider <id>] [--json]` so users can inspect saved per-agent auth profiles without dumping secrets or hitting the old “too many arguments” path. Thanks @vincentkoc.
 - Control UI/header: show the active agent name in dashboard breadcrumbs without adding the current session key, keeping non-chat views oriented without crowding the topbar.
 - Control UI/cron: make the New Job sidebar collapsible so the jobs list can reclaim space while keeping the form one click away. Thanks @BunsDev.
@@ -43,6 +44,7 @@ Docs: https://docs.openclaw.ai
 - Providers/OpenRouter: expand app-attribution categories so OpenClaw advertises coding, programming, writing, chat, and personal-agent usage on verified OpenRouter routes. Thanks @vincentkoc.
 - Plugins/runtime state: add `registerIfAbsent` for atomic keyed-store dedupe claims that return whether a plugin successfully claimed a key without overwriting an existing live value. Thanks @amknight.
 - Plugin SDK: add plugin-owned `SessionEntry` slot projection and scoped trusted-policy session extension reads. (#75609; replaces part of #73384/#74483) Thanks @100yenadmin.
+- New bundled `payment` plugin: agent-issued one-time virtual cards via Stripe Link (with biometric buyer approval), browser-fill via sentinel substitution (raw card values never reach the LLM transcript), HTTP 402 machine-payment via MPP, and Stripe Link CLI as the V1 provider.
 
 ### Fixes
 

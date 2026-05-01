@@ -8,6 +8,10 @@
     "plugin:check": "pnpm dlx @openclaw/plugin-inspector@0.3.5 inspect --no-openclaw",
     "plugin:ci": "pnpm dlx @openclaw/plugin-inspector@0.3.5 ci --no-openclaw --runtime --mock-sdk --allow-execute"
   },
+  "dependencies": {
+    "typebox": "1.1.37",
+    "zod": "^4.3.6"
+  },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"
   },
