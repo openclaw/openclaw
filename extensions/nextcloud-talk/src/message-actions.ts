@@ -7,7 +7,7 @@ import type {
   ChannelMessageActionAdapter,
   ChannelMessageActionName,
 } from "openclaw/plugin-sdk/channel-contract";
-import { listEnabledNextcloudTalkAccounts, resolveNextcloudTalkAccount } from "./accounts.js";
+import { listNextcloudTalkAccountIds, resolveNextcloudTalkAccount } from "./accounts.js";
 import { sendReactionNextcloudTalk } from "./send.js";
 import type { CoreConfig } from "./types.js";
 
@@ -26,7 +26,9 @@ function hasConfiguredAccount(cfg: CoreConfig, accountId: string | null | undefi
     const account = resolveNextcloudTalkAccount({ cfg, accountId });
     return isAccountConfigured(account);
   }
-  return listEnabledNextcloudTalkAccounts(cfg).some(isAccountConfigured);
+  return listNextcloudTalkAccountIds(cfg)
+    .map((id) => resolveNextcloudTalkAccount({ cfg, accountId: id }))
+    .some(isAccountConfigured);
 }
 
 export const nextcloudTalkMessageActions: ChannelMessageActionAdapter = {

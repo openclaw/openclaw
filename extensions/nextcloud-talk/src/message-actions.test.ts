@@ -1,11 +1,11 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CoreConfig } from "./types.js";
 
 const hoisted = vi.hoisted(() => ({
   sendReactionNextcloudTalk: vi.fn(),
   sendMessageNextcloudTalk: vi.fn(),
-  listEnabledNextcloudTalkAccounts: vi.fn(),
+  listNextcloudTalkAccountIds: vi.fn(),
   resolveNextcloudTalkAccount: vi.fn(),
 }));
 
@@ -15,7 +15,7 @@ vi.mock("./send.js", () => ({
 }));
 
 vi.mock("./accounts.js", () => ({
-  listEnabledNextcloudTalkAccounts: hoisted.listEnabledNextcloudTalkAccounts,
+  listNextcloudTalkAccountIds: hoisted.listNextcloudTalkAccountIds,
   resolveNextcloudTalkAccount: hoisted.resolveNextcloudTalkAccount,
 }));
 
@@ -47,13 +47,13 @@ describe("nextcloudTalkMessageActions", () => {
     hoisted.sendReactionNextcloudTalk.mockReset();
     hoisted.sendReactionNextcloudTalk.mockResolvedValue({ ok: true });
     hoisted.sendMessageNextcloudTalk.mockReset();
-    hoisted.listEnabledNextcloudTalkAccounts.mockReset();
+    hoisted.listNextcloudTalkAccountIds.mockReset();
     hoisted.resolveNextcloudTalkAccount.mockReset();
   });
 
   describe("describeMessageTool", () => {
     it("returns null when no accounts are configured", () => {
-      hoisted.listEnabledNextcloudTalkAccounts.mockReturnValue([]);
+      hoisted.listNextcloudTalkAccountIds.mockReturnValue([]);
 
       const result = nextcloudTalkMessageActions.describeMessageTool?.({
         cfg: {} as OpenClawConfig,
@@ -63,7 +63,8 @@ describe("nextcloudTalkMessageActions", () => {
     });
 
     it("returns null when configured account has no secret/baseUrl", () => {
-      hoisted.listEnabledNextcloudTalkAccounts.mockReturnValue([unconfiguredAccount]);
+      hoisted.listNextcloudTalkAccountIds.mockReturnValue([unconfiguredAccount.accountId]);
+      hoisted.resolveNextcloudTalkAccount.mockReturnValue(unconfiguredAccount);
 
       const result = nextcloudTalkMessageActions.describeMessageTool?.({
         cfg: {} as OpenClawConfig,
@@ -73,7 +74,8 @@ describe("nextcloudTalkMessageActions", () => {
     });
 
     it("returns null when the only listed account is disabled", () => {
-      hoisted.listEnabledNextcloudTalkAccounts.mockReturnValue([disabledAccount]);
+      hoisted.listNextcloudTalkAccountIds.mockReturnValue([disabledAccount.accountId]);
+      hoisted.resolveNextcloudTalkAccount.mockReturnValue(disabledAccount);
 
       const result = nextcloudTalkMessageActions.describeMessageTool?.({
         cfg: {} as OpenClawConfig,
@@ -83,7 +85,8 @@ describe("nextcloudTalkMessageActions", () => {
     });
 
     it("advertises send + react when an account is configured", () => {
-      hoisted.listEnabledNextcloudTalkAccounts.mockReturnValue([configuredAccount]);
+      hoisted.listNextcloudTalkAccountIds.mockReturnValue([configuredAccount.accountId]);
+      hoisted.resolveNextcloudTalkAccount.mockReturnValue(configuredAccount);
 
       const result = nextcloudTalkMessageActions.describeMessageTool?.({
         cfg: {} as OpenClawConfig,
@@ -104,7 +107,7 @@ describe("nextcloudTalkMessageActions", () => {
         cfg: {},
         accountId: "work",
       });
-      expect(hoisted.listEnabledNextcloudTalkAccounts).not.toHaveBeenCalled();
+      expect(hoisted.listNextcloudTalkAccountIds).not.toHaveBeenCalled();
       expect(result?.actions).toEqual(["send", "react"]);
     });
 
