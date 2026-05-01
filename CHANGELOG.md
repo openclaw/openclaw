@@ -19,6 +19,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Discord/voice: merge configured media-understanding providers such as Deepgram into partial active provider registries, so follow-up voice turns keep transcribing after another media plugin is already active. Fixes #65687. Thanks @OneMintJulep.
+- WhatsApp: stage `qrcode` with the WhatsApp plugin runtime dependencies so packaged QR pairing can render from staged plugin-runtime-deps installs. Fixes #75394. Thanks @FelipeX2001.
 - Discord/voice: apply per-channel Discord `systemPrompt` overrides to voice transcript turns by forwarding the trusted channel prompt through the voice agent run. Fixes #47095. Thanks @qearlyao.
 - Discord/voice: run voice-channel turns under a voice-output policy that hides the agent `tts` tool and asks for spoken reply text, so `/vc join` sessions synthesize and play agent replies instead of ending with `NO_REPLY`. Fixes #61536. Thanks @aounakram.
 - Plugins/runtime-deps: include packaged OpenClaw identity in bundled plugin loader cache keys, so same-path package upgrades stop reusing stale versioned runtime-deps mirrors. Fixes #75045. Thanks @sahilsatralkar.
