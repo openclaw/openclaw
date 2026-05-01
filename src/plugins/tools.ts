@@ -17,6 +17,7 @@ import {
   buildPluginRuntimeLoadOptions,
   resolvePluginRuntimeLoadContext,
 } from "./runtime/load-context.js";
+import { findUndeclaredPluginToolNames } from "./tool-contracts.js";
 import type { OpenClawPluginToolContext } from "./types.js";
 
 export type PluginToolMeta = {
@@ -470,6 +471,23 @@ export function resolvePluginTools(params: {
         continue;
       }
       const tool = toolRaw as AnyAgentTool;
+      const undeclared = entry.declaredNames
+        ? findUndeclaredPluginToolNames({
+            declaredNames: entry.declaredNames,
+            toolNames: [tool.name],
+          })
+        : [];
+      if (undeclared.length > 0) {
+        const message = `plugin tool is undeclared (${entry.pluginId}): ${undeclared.join(", ")}`;
+        context.logger.error(message);
+        registry.diagnostics.push({
+          level: "error",
+          pluginId: entry.pluginId,
+          source: entry.source,
+          message,
+        });
+        continue;
+      }
       if (nameSet.has(tool.name) || existing.has(tool.name)) {
         const message = `plugin tool name conflict (${entry.pluginId}): ${tool.name}`;
         if (!params.suppressNameConflicts) {

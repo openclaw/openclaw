@@ -4,10 +4,10 @@ import { loggingState } from "../logging/state.js";
 
 type MockRegistryToolEntry = {
   pluginId: string;
-  names?: string[];
   optional: boolean;
   source: string;
   names: string[];
+  declaredNames?: string[];
   factory: (ctx: unknown) => unknown;
 };
 
@@ -481,6 +481,24 @@ describe("resolvePluginTools optional tools", () => {
 
     expectResolvedToolNames(tools, ["optional_tool"]);
     expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  it("skips factory-returned tools outside the manifest tool contract", () => {
+    const registry = setRegistry([
+      {
+        pluginId: "dynamic-owner",
+        optional: false,
+        source: "/tmp/dynamic-owner.js",
+        names: ["declared_tool"],
+        declaredNames: ["declared_tool"],
+        factory: () => [makeTool("declared_tool"), makeTool("rogue_tool")],
+      },
+    ]);
+
+    const tools = resolvePluginTools(createResolveToolsParams());
+
+    expectResolvedToolNames(tools, ["declared_tool"]);
+    expectSingleDiagnosticMessage(registry.diagnostics, "plugin tool is undeclared");
   });
 
   it("skips allowlisted optional malformed plugin tools", () => {

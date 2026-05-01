@@ -68,6 +68,7 @@ export type PluginToolRegistration = {
   pluginName?: string;
   factory: OpenClawPluginToolFactory;
   names: string[];
+  declaredNames?: string[];
   optional: boolean;
   source: string;
   rootDir?: string;
