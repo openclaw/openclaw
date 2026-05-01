@@ -187,6 +187,36 @@ describe("isBlockedHostnameOrIp", () => {
   it.each(["example.com", "api.example.net"])("does not block ordinary hostname %s", (value) => {
     expect(isBlockedHostnameOrIp(value)).toBe(false);
   });
+
+  it.each([{ allowPrivateNetwork: true }, { dangerouslyAllowPrivateNetwork: true }])(
+    "still blocks metadata.google.internal under %p (cloud metadata escape hatch is intentional)",
+    (policy) => {
+      expect(isBlockedHostnameOrIp("metadata.google.internal", policy)).toBe(true);
+    },
+  );
+
+  it.each([
+    "169.254.169.254",
+    "::ffff:169.254.169.254",
+    "64:ff9b::169.254.169.254",
+  ])("keeps cloud metadata IP %s blocked when private network is allowed", (value) => {
+    expect(isBlockedHostnameOrIp(value, { allowPrivateNetwork: true })).toBe(true);
+  });
+
+  it.each([
+    ["foo.internal", { allowPrivateNetwork: true }, true],
+    ["bar.compute.internal", { allowPrivateNetwork: true }, true],
+    ["foo.localhost", { allowPrivateNetwork: true }, false],
+    ["bar.local", { allowPrivateNetwork: true }, false],
+    ["localhost", { allowPrivateNetwork: true }, false],
+    ["localhost.localdomain", { allowPrivateNetwork: true }, false],
+    ["api.example.com", { allowPrivateNetwork: true }, false],
+  ] as const)(
+    "allowPrivateNetwork lets through loopback/.localhost/.local but keeps .internal blocked: %s",
+    (hostname, policy, expected) => {
+      expect(isBlockedHostnameOrIp(hostname, policy)).toBe(expected);
+    },
+  );
 });
 
 describe("isSameSsrFPolicy", () => {
