@@ -129,12 +129,9 @@ describe("createMusicGenerateTool", () => {
     vi.unstubAllEnvs();
   });
 
-  it("defers music-generation model resolution until execution", async () => {
+  it("returns null when no music-generation config or auth-backed provider is available", () => {
     vi.spyOn(musicGenerationRuntime, "listRuntimeMusicGenerationProviders").mockReturnValue([]);
-    const tool = createMusicGenerateTool({ config: asConfig({}) });
-    await expect(tool.execute("tool-call-1", { prompt: "make a loop" })).rejects.toThrow(
-      "No music-generation model configured.",
-    );
+    expect(createMusicGenerateTool({ config: asConfig({}) })).toBeNull();
   });
 
   it("registers when music-generation config is present", () => {

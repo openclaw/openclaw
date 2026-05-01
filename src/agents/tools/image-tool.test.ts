@@ -618,20 +618,13 @@ describe("image tool implicit imageModel config", () => {
     __testing.setProviderDepsForTest();
   });
 
-  it("defers image model pairing until execution", async () => {
+  it("stays disabled without auth when no pairing is possible", async () => {
     await withTempAgentDir(async (agentDir) => {
       const cfg: OpenClawConfig = {
         agents: { defaults: { model: { primary: "openai/gpt-5.4" } } },
       };
       expect(resolveImageModelConfigForTool({ cfg, agentDir })).toBeNull();
-      const tool = createImageTool({ config: cfg, agentDir });
-      expect(tool).not.toBeNull();
-      await expect(
-        tool?.execute("tool-call-1", {
-          image: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
-          prompt: "describe it",
-        }),
-      ).rejects.toThrow("No image model configured.");
+      expect(createImageTool({ config: cfg, agentDir })).toBeNull();
     });
   });
 
