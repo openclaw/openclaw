@@ -1435,6 +1435,8 @@ before entering the PIN.
 If the phone call is created but the Meet roster never shows the dial-in
 participant:
 
+- Run `openclaw googlemeet doctor <session-id>` to confirm the delegated Twilio
+  call ID, whether DTMF was queued, and whether the intro greeting was requested.
 - Run `openclaw voicecall status --call-id <id>` and confirm the call is still
   active.
 - Run `openclaw voicecall tail` and check that Twilio webhooks are arriving at

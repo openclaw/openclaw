@@ -20,8 +20,11 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Plugins/TTS: keep bundled speech-provider discovery available on cold package Gateway paths and add bundled plugin matrix runtime probes for health, readiness, RPC, TTS discovery, and post-ready runtime-deps watchdog coverage. Refs #75283. Thanks @vincentkoc.
+- Google Meet/Twilio: show delegated voice call ID, DTMF, and intro-greeting state in `googlemeet doctor`, and avoid claiming DTMF was sent when no Meet PIN sequence was configured. Refs #72478. Thanks @DougButdorf.
 - Voice Call/Twilio: send notify-mode initial TwiML directly in the outbound create-call request while keeping conversation and pre-connect DTMF calls webhook-driven, so one-shot notify calls do not depend on a first-answer webhook fetch. Supersedes #72758. Thanks @tyshepps.
 - Discord/Slack: defer status-reaction cleanup until run finalization so queued, thinking, tool, and terminal reactions no longer flicker during normal progress updates. (#75582)
+- Discord/voice: leave Discord voice off for text-only configs unless `channels.discord.voice` is explicitly configured, avoiding default `GuildVoiceStates` traffic and idle gateway CPU pressure for bots that do not use `/vc`. Fixes #73753; refs #74044. Thanks @sanchezm86 and @SecureCloudProjO.
 - Discord/voice: rerun configured voice auto-join after Discord gateway RESUMED events and ignore already-destroyed stale voice connections during reconnect cleanup, so health-monitor account restarts can rejoin configured channels. Fixes #40665. Thanks @liz709.
 - Discord/voice: lengthen the default voice join Ready wait, add configurable `voice.connectTimeoutMs`/`voice.reconnectGraceMs`, and warn before destroying unrecovered disconnected sessions so slow Discord voice handshakes and reconnects no longer fail silently. Fixes #63098; refs #39825 and #65039. Thanks @darealgege, @kzicherman, and @ayochim.
 - Gateway/health: refresh cached health RPC snapshots when channel runtime state diverges, so Discord and other channel status reads no longer report stale running or connected values until the cache TTL expires. (#75423) Thanks @clawsweeper.
