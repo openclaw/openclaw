@@ -713,6 +713,16 @@ describe("plugin session actions", () => {
       expect(
         workspaceApi?.emitAgentEvent({
           runId: "run-emit",
+          stream: "other-plugin.workflow",
+          data: { state: "queued" },
+        }),
+      ).toEqual({
+        emitted: false,
+        reason: "stream other-plugin.workflow must be scoped to plugin workspace-event-plugin",
+      });
+      expect(
+        workspaceApi?.emitAgentEvent({
+          runId: "run-emit",
           stream: "workspace-event-plugin.workflow",
           data: { state: "queued" },
         }),
