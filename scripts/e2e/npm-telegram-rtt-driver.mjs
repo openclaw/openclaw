@@ -16,6 +16,7 @@ const scenarioIds = (
   .split(",")
   .map((value) => value.trim())
   .filter(Boolean);
+const scenarioIdSet = new Set(scenarioIds);
 
 if (!groupId || !driverToken || !sutToken) {
   throw new Error(
@@ -63,9 +64,6 @@ function messageText(message) {
   return message.text ?? message.caption ?? "";
 }
 
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
 
 async function flushUpdates(bot) {
   let updates = await bot.getUpdates({ timeout: 0, allowed_updates: ["message"] });
@@ -194,7 +192,7 @@ async function main() {
     }),
   );
 
-  if (scenarioIds.includes("telegram-mentioned-message-reply")) {
+  if (scenarioIdSet.has("telegram-mentioned-message-reply")) {
     const marker = `OPENCLAW_RTT_${Date.now().toString(36)}`;
     scenarios.push(
       await runScenario({

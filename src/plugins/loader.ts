@@ -895,44 +895,57 @@ function getCompatibleActivePluginRegistry(
   if (!activeCacheKey) {
     return undefined;
   }
-  const loadContext = resolvePluginLoadCacheContext(options);
-  if (loadContext.cacheKey === activeCacheKey) {
-    return activeRegistry;
-  }
-  if (!loadContext.shouldActivate) {
-    const activatingCacheKey = resolvePluginLoadCacheContext({
+  const compatibilityOptions = [options];
+  if (options.installBundledRuntimeDeps === false) {
+    // A request that skips bundled runtime-dep repair can safely reuse an
+    // already-active registry that was loaded with repair enabled. The inverse
+    // is not true because a caller asking for repair may need staged deps.
+    compatibilityOptions.push({
       ...options,
-      activate: true,
-    }).cacheKey;
-    if (activatingCacheKey === activeCacheKey) {
-      return activeRegistry;
-    }
+      installBundledRuntimeDeps: true,
+    });
   }
-  if (
-    loadContext.runtimeSubagentMode === "default" &&
-    getActivePluginRuntimeSubagentMode() === "gateway-bindable"
-  ) {
-    const gatewayBindableCacheKey = resolvePluginLoadCacheContext({
-      ...options,
-      runtimeOptions: {
-        ...options.runtimeOptions,
-        allowGatewaySubagentBinding: true,
-      },
-    }).cacheKey;
-    if (gatewayBindableCacheKey === activeCacheKey) {
+
+  for (const candidateOptions of compatibilityOptions) {
+    const loadContext = resolvePluginLoadCacheContext(candidateOptions);
+    if (loadContext.cacheKey === activeCacheKey) {
       return activeRegistry;
     }
     if (!loadContext.shouldActivate) {
-      const activatingGatewayBindableCacheKey = resolvePluginLoadCacheContext({
-        ...options,
+      const activatingCacheKey = resolvePluginLoadCacheContext({
+        ...candidateOptions,
         activate: true,
+      }).cacheKey;
+      if (activatingCacheKey === activeCacheKey) {
+        return activeRegistry;
+      }
+    }
+    if (
+      loadContext.runtimeSubagentMode === "default" &&
+      getActivePluginRuntimeSubagentMode() === "gateway-bindable"
+    ) {
+      const gatewayBindableCacheKey = resolvePluginLoadCacheContext({
+        ...candidateOptions,
         runtimeOptions: {
-          ...options.runtimeOptions,
+          ...candidateOptions.runtimeOptions,
           allowGatewaySubagentBinding: true,
         },
       }).cacheKey;
-      if (activatingGatewayBindableCacheKey === activeCacheKey) {
+      if (gatewayBindableCacheKey === activeCacheKey) {
         return activeRegistry;
+      }
+      if (!loadContext.shouldActivate) {
+        const activatingGatewayBindableCacheKey = resolvePluginLoadCacheContext({
+          ...candidateOptions,
+          activate: true,
+          runtimeOptions: {
+            ...candidateOptions.runtimeOptions,
+            allowGatewaySubagentBinding: true,
+          },
+        }).cacheKey;
+        if (activatingGatewayBindableCacheKey === activeCacheKey) {
+          return activeRegistry;
+        }
       }
     }
   }
