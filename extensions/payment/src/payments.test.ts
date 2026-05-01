@@ -302,6 +302,7 @@ describe("store integration", () => {
     const meta = handleMap.get(handle.id);
     expect(meta).toBeDefined();
     expect(meta?.spendRequestId).toBe(handle.providerRequestId);
+    expect(meta?.providerId).toBe("mock");
     expect(meta?.last4).toBe("4242");
   });
 
@@ -325,6 +326,47 @@ describe("store integration", () => {
     await expect(manager.getStatus("completely-unknown-handle")).rejects.toThrow(
       CardUnavailableError,
     );
+  });
+
+  it("propagates real adapter errors from getStatus rather than masking as 'unknown handle'", async () => {
+    // Build an adapter whose getStatus throws a transient (non-CardUnavailable) error.
+    const transientError = new Error("network timeout from adapter");
+
+    const flakyAdapter: PaymentProviderAdapter = {
+      id: "mock",
+      rails: ["virtual_card", "machine_payment"],
+      getSetupStatus: vi.fn(),
+      listFundingSources: vi.fn(),
+      issueVirtualCard: vi.fn(
+        async (): Promise<CredentialHandle> => ({
+          id: "flaky-handle-1",
+          provider: "mock",
+          rail: "virtual_card",
+          status: "approved",
+        }),
+      ),
+      retrieveCardSecrets: vi.fn(),
+      executeMachinePayment: vi.fn(),
+      getStatus: vi.fn(async () => {
+        throw transientError;
+      }),
+    };
+
+    const manager = createPaymentManager({ adapters: [flakyAdapter], config: MOCK_CONFIG });
+
+    // Manually populate handleMap with providerId so getStatus can dispatch without iterating.
+    handleMap.set("flaky-handle-1", {
+      spendRequestId: "flaky-spreq-1",
+      providerId: "mock",
+      issuedAt: new Date().toISOString(),
+    });
+
+    // With the fix, the manager dispatches directly via meta.providerId and lets the
+    // adapter error propagate as-is — NOT wrapped as CardUnavailableError("unknown handle").
+    await expect(manager.getStatus("flaky-handle-1")).rejects.toThrow(
+      "network timeout from adapter",
+    );
+    await expect(manager.getStatus("flaky-handle-1")).rejects.not.toThrow(CardUnavailableError);
   });
 });
 

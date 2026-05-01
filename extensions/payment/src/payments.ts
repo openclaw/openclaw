@@ -124,36 +124,11 @@ export function createPaymentManager(opts: {
     },
 
     async getStatus(handleId: string): Promise<CredentialHandle> {
-      // Look up which provider owns this handle via handleMap
       const meta = handleMap.get(handleId);
       if (!meta) {
         throw new CardUnavailableError(handleId, "unknown handle", undefined);
       }
-
-      // Determine provider from handleMap metadata — the spendRequestId prefix encodes the provider.
-      // For V1 we iterate adapters to find one that can return status for this handle.
-      // Simple approach: try the configured default provider first, then others.
-      const defaultAdapter = registry.get(opts.config.provider);
-      if (defaultAdapter) {
-        try {
-          return await defaultAdapter.getStatus(handleId);
-        } catch {
-          // Fall through to try other adapters
-        }
-      }
-
-      for (const adapter of registry.values()) {
-        if (adapter.id === opts.config.provider) {
-          continue; // already tried
-        }
-        try {
-          return await adapter.getStatus(handleId);
-        } catch {
-          // Try next
-        }
-      }
-
-      throw new CardUnavailableError(handleId, "unknown handle", undefined);
+      return requireAdapter(meta.providerId).getStatus(handleId);
     },
 
     /**

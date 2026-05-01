@@ -228,6 +228,7 @@ export async function readAuditRecords(storePath: string): Promise<AuditRecord[]
 
 export type HandleMetadata = {
   spendRequestId: string;
+  providerId: PaymentProviderId;
   last4?: string;
   targetMerchantName?: string;
   issuedAt: string;
@@ -236,6 +237,7 @@ export type HandleMetadata = {
 
 const ALLOWED_HANDLE_METADATA_KEYS = new Set([
   "spendRequestId",
+  "providerId",
   "last4",
   "targetMerchantName",
   "issuedAt",

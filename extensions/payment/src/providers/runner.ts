@@ -40,6 +40,15 @@ export function createNodeCommandRunner(): CommandRunner {
         stdio: ["pipe", "pipe", "pipe"],
       });
 
+      // Silence EPIPE / ERR_STREAM_DESTROYED that can fire when the child exits
+      // before reading stdin, or before stdout/stderr are fully drained.
+      // These listeners MUST be registered before any stdin.write() / stdin.end() call.
+      child.stdin?.on("error", () => {
+        /* swallow EPIPE / ERR_STREAM_DESTROYED on early kill */
+      });
+      child.stdout?.on("error", () => {});
+      child.stderr?.on("error", () => {});
+
       const stdoutChunks: Buffer[] = [];
       const stderrChunks: Buffer[] = [];
 

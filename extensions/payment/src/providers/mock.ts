@@ -122,6 +122,7 @@ export const mockPaymentAdapter: PaymentProviderAdapter = {
     // the manager layer can take over in U5 when audit records are wired).
     handleMap.set(handleId, {
       spendRequestId,
+      providerId: "mock",
       last4: "4242",
       issuedAt: new Date().toISOString(),
       validUntil: handle.validUntil,

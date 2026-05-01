@@ -58,3 +58,18 @@ describe("createNodeCommandRunner — stdin input", () => {
     expect(result.exitCode).toBe(0);
   });
 });
+
+describe("createNodeCommandRunner — EPIPE / early-exit child", () => {
+  it("does not hang or unhandled-error when input is supplied but the child doesn't read stdin", async () => {
+    // `node -e "process.exit(0)"` exits immediately without reading stdin.
+    // Before the fix, writing to stdin after the child exits would emit an unhandled
+    // EPIPE / ERR_STREAM_DESTROYED error event. With the fix, the no-op error listeners
+    // on child.stdin/stdout/stderr swallow the error and the promise resolves cleanly.
+    const run = createNodeCommandRunner();
+    const result = await run("node", ["-e", "process.exit(0)"], {
+      input: "some data that will never be read",
+      timeoutMs: 5000,
+    });
+    expect(result.exitCode).toBe(0);
+  });
+});

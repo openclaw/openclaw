@@ -329,6 +329,7 @@ describe("handleMap", () => {
 
   const sampleMeta: HandleMetadata = {
     spendRequestId: "spend_req_test_001",
+    providerId: "mock",
     last4: "4242",
     targetMerchantName: "Acme Corp",
     issuedAt: "2026-04-30T00:00:00.000Z",
@@ -370,6 +371,7 @@ describe("handleMap", () => {
     const storedKeys = Object.keys(stored);
     const allowedKeys: (keyof HandleMetadata)[] = [
       "spendRequestId",
+      "providerId",
       "last4",
       "targetMerchantName",
       "issuedAt",
@@ -379,6 +381,7 @@ describe("handleMap", () => {
       expect(allowedKeys).toContain(key);
     }
 
+    expect(stored.providerId).toBe("mock");
     // @ts-expect-error — pan is not a valid HandleMetadata key
     expect((stored as Record<string, unknown>)["pan"]).toBeUndefined();
     // @ts-expect-error — cvv is not a valid HandleMetadata key
@@ -388,5 +391,19 @@ describe("handleMap", () => {
   it("throws when a disallowed key is smuggled in (I8 — runtime privacy invariant)", () => {
     const smuggled = { spendRequestId: "x", issuedAt: "y", pan: "4242424242424242" } as any;
     expect(() => handleMap.set("h1", smuggled)).toThrowError(/pan/);
+  });
+
+  it("providerId is an allowed key in ALLOWED_HANDLE_METADATA_KEYS and round-trips correctly", () => {
+    // providerId is a required field on HandleMetadata (TS-enforced); the runtime allow-list
+    // must also accept it so handleMap.set does not throw.
+    // Note: omitting providerId when constructing a HandleMetadata literal is a TypeScript error
+    // caught at compile time — no runtime requirement is added for missing required keys.
+    const metaWithProvider: HandleMetadata = {
+      spendRequestId: "spend_req_provider_test",
+      providerId: "mock",
+      issuedAt: "2026-04-30T00:00:00.000Z",
+    };
+    expect(() => handleMap.set("handle_provider_test", metaWithProvider)).not.toThrow();
+    expect(handleMap.get("handle_provider_test")?.providerId).toBe("mock");
   });
 });
