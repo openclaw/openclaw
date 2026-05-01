@@ -308,6 +308,30 @@ describe("streamSignalEvents", () => {
     ).rejects.toMatchObject({ name: "AbortError", message: "Signal SSE aborted" });
   });
 
+  it("keeps quiet event streams open by default until aborted", async () => {
+    const baseUrl = await withSignalServer(() => {
+      // Leave the request open without response headers.
+    });
+    const abortController = new AbortController();
+    let settled = false;
+    const stream = streamSignalEvents({
+      baseUrl,
+      abortSignal: abortController.signal,
+      onEvent: () => {},
+    }).finally(() => {
+      settled = true;
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 35));
+    expect(settled).toBe(false);
+
+    abortController.abort();
+    await expect(stream).rejects.toMatchObject({
+      name: "AbortError",
+      message: "Signal SSE aborted",
+    });
+  });
+
   it("rejects oversized SSE line buffers by byte size", async () => {
     const baseUrl = await withSignalServer((_req, res) => {
       res.writeHead(200, { "Content-Type": "text/event-stream" });

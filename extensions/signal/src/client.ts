@@ -102,8 +102,8 @@ function normalizeSignalHttpResponseMaxBytes(value: number | undefined): number 
   return Math.floor(value);
 }
 
-function normalizeSignalSseTimeoutMs(timeoutMs: number): number | null {
-  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+function normalizeSignalSseTimeoutMs(timeoutMs: number | undefined): number | null {
+  if (typeof timeoutMs !== "number" || !Number.isFinite(timeoutMs) || timeoutMs <= 0) {
     return null;
   }
   return timeoutMs;
@@ -253,7 +253,7 @@ export async function signalCheck(
 function openSignalEventStream(
   url: URL,
   abortSignal?: AbortSignal,
-  timeoutMs = DEFAULT_TIMEOUT_MS,
+  timeoutMs?: number,
 ): Promise<{ response: IncomingMessage; cleanup: () => void }> {
   assertSignalHttpProtocol(url, "SSE");
   if (abortSignal?.aborted) {
@@ -346,7 +346,7 @@ export async function streamSignalEvents(params: {
   const { response, cleanup } = await openSignalEventStream(
     url,
     params.abortSignal,
-    params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    params.timeoutMs,
   );
   const decoder = new TextDecoder();
   let buffer = "";
