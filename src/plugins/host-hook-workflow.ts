@@ -126,6 +126,13 @@ async function validateAttachmentFiles(
   return paths;
 }
 
+function normalizeOptionalThreadId(value: unknown): string | number | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  return normalizeOptionalString(value);
+}
+
 export async function sendPluginSessionAttachment(
   params: PluginSessionAttachmentParams & { config?: OpenClawConfig; origin?: PluginOrigin },
 ): Promise<PluginSessionAttachmentResult> {
@@ -153,8 +160,8 @@ export async function sendPluginSessionAttachment(
   }
   const text = normalizeOptionalString(params.text) ?? "";
   const explicitThreadId = normalizeOptionalString(params.threadId);
-  const deliveryThreadId = normalizeOptionalString(deliveryContext.threadId);
-  const fallbackThreadId = normalizeOptionalString(threadId);
+  const deliveryThreadId = normalizeOptionalThreadId(deliveryContext.threadId);
+  const fallbackThreadId = normalizeOptionalThreadId(threadId);
   let result: Awaited<ReturnType<SendMessage>>;
   try {
     const sendMessage = await loadSendMessage();

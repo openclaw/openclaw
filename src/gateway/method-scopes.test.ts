@@ -52,8 +52,10 @@ describe("method scope resolution", () => {
     expect(resolveLeastPrivilegeOperatorScopesForMethod("node.pending.drain")).toEqual([]);
   });
 
-  it("classifies plugin session actions without advertising one fixed operator scope", () => {
-    expect(resolveLeastPrivilegeOperatorScopesForMethod("plugins.sessionAction")).toEqual([]);
+  it("classifies plugin session actions with a CLI-safe default operator scope", () => {
+    expect(resolveLeastPrivilegeOperatorScopesForMethod("plugins.sessionAction")).toEqual([
+      "operator.write",
+    ]);
     expect(isGatewayMethodClassified("plugins.sessionAction")).toBe(true);
     expect(authorizeOperatorScopesForMethod("plugins.sessionAction", ["operator.read"])).toEqual({
       allowed: true,

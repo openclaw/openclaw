@@ -31,7 +31,7 @@ export function extractDeliveryInfo(
   options?: { cfg?: OpenClawConfig },
 ): {
   deliveryContext:
-    | { channel?: string; to?: string; accountId?: string; threadId?: string }
+    | { channel?: string; to?: string; accountId?: string; threadId?: string | number }
     | undefined;
   threadId: string | undefined;
 } {
@@ -41,7 +41,7 @@ export function extractDeliveryInfo(
   }
 
   let deliveryContext:
-    | { channel?: string; to?: string; accountId?: string; threadId?: string }
+    | { channel?: string; to?: string; accountId?: string; threadId?: string | number }
     | undefined;
   try {
     const cfg = options?.cfg ?? getRuntimeConfig();
@@ -57,10 +57,7 @@ export function extractDeliveryInfo(
         channel: storedDeliveryContext.channel,
         to: storedDeliveryContext.to,
         accountId: storedDeliveryContext.accountId,
-        threadId:
-          storedDeliveryContext.threadId != null
-            ? String(storedDeliveryContext.threadId)
-            : undefined,
+        threadId: storedDeliveryContext.threadId,
       };
     }
   } catch {

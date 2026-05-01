@@ -218,7 +218,7 @@ describe("extractDeliveryInfo", () => {
         channel: "telegram",
         to: "group:98765",
         accountId: "main",
-        threadId: "77",
+        threadId: 77,
       },
       threadId: undefined,
     });

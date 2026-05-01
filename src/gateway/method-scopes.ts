@@ -254,6 +254,9 @@ export function resolveRequiredOperatorScopeForMethod(method: string): OperatorS
 }
 
 export function resolveLeastPrivilegeOperatorScopesForMethod(method: string): OperatorScope[] {
+  if (DYNAMIC_OPERATOR_SCOPE_METHODS.has(method)) {
+    return [WRITE_SCOPE];
+  }
   const requiredScope = resolveRequiredOperatorScopeForMethod(method);
   if (requiredScope) {
     return [requiredScope];

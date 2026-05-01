@@ -92,6 +92,53 @@ describe("plugin host workflow helpers", () => {
     }
   });
 
+  it("preserves numeric delivery route thread IDs for attachment sends", async () => {
+    const stateDir = await fs.mkdtemp(
+      path.join(resolvePreferredOpenClawTmpDir(), "openclaw-plugin-attachment-thread-"),
+    );
+    const storePath = path.join(stateDir, "sessions.json");
+    const attachmentPath = path.join(stateDir, "artifact.txt");
+    try {
+      await fs.writeFile(attachmentPath, "artifact", "utf8");
+      await updateSessionStore(storePath, (store) => {
+        store["agent:main:main"] = {
+          sessionId: "session-1",
+          updatedAt: Date.now(),
+          deliveryContext: {
+            channel: "telegram",
+            to: "telegram:chat-123",
+            accountId: "default",
+            threadId: 77,
+          },
+        };
+        return undefined;
+      });
+      mocks.sendMessage.mockResolvedValueOnce({ channel: "telegram" });
+
+      await expect(
+        sendPluginSessionAttachment({
+          origin: "bundled",
+          config: { session: { store: storePath } },
+          sessionKey: "agent:main:main",
+          files: [{ path: attachmentPath }],
+        }),
+      ).resolves.toEqual({
+        ok: true,
+        channel: "telegram",
+        deliveredTo: "telegram:chat-123",
+        count: 1,
+      });
+
+      expect(mocks.sendMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          threadId: 77,
+        }),
+      );
+    } finally {
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("tracks scheduled session turns using cron.add's top-level job id", async () => {
     mocks.callGatewayTool.mockResolvedValueOnce({
       id: "cron-top-level-id",
