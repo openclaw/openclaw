@@ -315,7 +315,11 @@ export function createProfileAvailability({
           `Browser user data directory not found for profile "${profile.name}": ${profile.userDataDir}`,
         );
       }
-      const { ensureChromeMcpAvailable } = await getChromeMcpModule();
+      const { ensureChromeMcpAvailable, probeChromeMcpHealth } = await getChromeMcpModule();
+      const health = await probeChromeMcpHealth(profile.name, profile);
+      if (health.attached) {
+        return;
+      }
       await ensureChromeMcpAvailable(profile.name, profile);
       await waitForChromeMcpReadyAfterAttach();
       return;
