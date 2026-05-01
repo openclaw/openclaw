@@ -1212,6 +1212,62 @@ describe("speech-core native voice-note routing", () => {
     }
   });
 
+  it("uses the fallback route config when primary provider config resolution fails", async () => {
+    const failingResolveConfig = vi.fn(() => {
+      throw new Error("missing primary secret");
+    });
+    const primary = createMockSpeechProvider("elevenlabs", {
+      capabilities: { sourceTextHandling: "preserve_expressive_tags" },
+      resolveConfig: failingResolveConfig,
+      autoSelectOrder: 1,
+    });
+    const plainSynthesize = vi.fn(async (request: SpeechSynthesisRequest) =>
+      synthesizeMock(request),
+    );
+    const fallback = createMockSpeechProvider("mock", {
+      synthesize: plainSynthesize,
+      autoSelectOrder: 2,
+    });
+    installSpeechProviders([primary, fallback]);
+    const cfg: OpenClawConfig = {
+      messages: {
+        tts: {
+          enabled: true,
+          provider: "elevenlabs",
+          prefsPath: `/tmp/openclaw-tts-primary-config-fallback-test.json`,
+        },
+      },
+    };
+    const payload = setReplyPayloadMetadata(
+      { text: "Hello there, friend." } satisfies ReplyPayload,
+      {
+        ttsSourceText: "[warmly] Hello there, friend.",
+        ttsPlainText: "Hello there, friend.",
+      },
+    );
+
+    let mediaDir: string | undefined;
+    try {
+      const result = await maybeApplyTtsToPayload({
+        payload,
+        cfg,
+        channel: "slack",
+        kind: "final",
+      });
+
+      expect(failingResolveConfig).toHaveBeenCalled();
+      expect(plainSynthesize).toHaveBeenCalledWith(
+        expect.objectContaining({ text: "Hello there, friend." }),
+      );
+      expect(result.mediaUrl).toMatch(/voice-\d+\.ogg$/);
+      mediaDir = result.mediaUrl ? path.dirname(result.mediaUrl) : undefined;
+    } finally {
+      if (mediaDir) {
+        rmSync(mediaDir, { recursive: true, force: true });
+      }
+    }
+  });
+
   it("falls back from empty per-variant directive text to cleaned variant text", async () => {
     const plainSynthesize = vi.fn(async (request: SpeechSynthesisRequest) =>
       synthesizeMock(request),
@@ -1328,6 +1384,48 @@ describe("speech-core native voice-note routing", () => {
 
     expect(elevenSynthesize).toHaveBeenCalledWith(expect.objectContaining({ text: "[warmly] hi" }));
     expect(plainSynthesize).not.toHaveBeenCalled();
+    expect(result.mediaUrl).toBeUndefined();
+  });
+
+  it("skips provider preflight when both routed TTS variants are too short", async () => {
+    const fallbackResolveConfig = vi.fn(() => ({ apiKey: "unused" }));
+    const fallbackIsConfigured = vi.fn(() => true);
+    const synthesize = vi.fn(synthesizeMock);
+    installSpeechProviders([
+      createMockSpeechProvider("mock", {
+        autoSelectOrder: 1,
+      }),
+      createMockSpeechProvider("elevenlabs", {
+        capabilities: { sourceTextHandling: "preserve_expressive_tags" },
+        autoSelectOrder: 2,
+        isConfigured: fallbackIsConfigured,
+        resolveConfig: fallbackResolveConfig,
+        synthesize,
+      }),
+    ]);
+    const cfg: OpenClawConfig = {
+      messages: {
+        tts: {
+          enabled: true,
+          provider: "mock",
+          prefsPath: `/tmp/openclaw-tts-short-preflight-test.json`,
+        },
+      },
+    };
+    const payload = setReplyPayloadMetadata({ text: "hi" } satisfies ReplyPayload, {
+      ttsSourceText: "hi",
+      ttsPlainText: "hi",
+    });
+
+    const result = await maybeApplyTtsToPayload({
+      payload,
+      cfg,
+      channel: "slack",
+      kind: "final",
+    });
+
+    expect(fallbackIsConfigured).not.toHaveBeenCalled();
+    expect(synthesize).not.toHaveBeenCalled();
     expect(result.mediaUrl).toBeUndefined();
   });
 });

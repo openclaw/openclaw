@@ -1607,6 +1607,20 @@ export async function maybeApplyTtsToPayload(params: {
   if (autoMode === "off") {
     return params.payload;
   }
+  const reply = resolveSendableOutboundReplyParts(params.payload);
+  const text = reply.text;
+  const replyMetadata = getReplyPayloadMetadata(params.payload);
+  const ttsSourceText = replyMetadata?.ttsSourceText;
+  const ttsPlainText = replyMetadata?.ttsPlainText;
+  const rawSpeechCandidates = [text, ttsSourceText, ttsPlainText].filter(
+    (candidate): candidate is string => typeof candidate === "string",
+  );
+  if (
+    rawSpeechCandidates.length > 0 &&
+    rawSpeechCandidates.every((candidate) => candidate.trim().length < MIN_TTS_TEXT_LENGTH)
+  ) {
+    return params.payload;
+  }
   const config = resolveTtsConfig(cfg, {
     agentId: params.agentId,
     channelId: params.channel,
@@ -1614,11 +1628,6 @@ export async function maybeApplyTtsToPayload(params: {
   });
   const activeProvider = getTtsProvider(config, prefsPath);
 
-  const reply = resolveSendableOutboundReplyParts(params.payload);
-  const text = reply.text;
-  const replyMetadata = getReplyPayloadMetadata(params.payload);
-  const ttsSourceText = replyMetadata?.ttsSourceText;
-  const ttsPlainText = replyMetadata?.ttsPlainText;
   const hasTtsSourceText = typeof ttsSourceText === "string";
   const hasTtsPlainText = typeof ttsPlainText === "string";
   // Directive parsing — routing/gating decisions (provider override, [[tts]]
@@ -1742,7 +1751,7 @@ export async function maybeApplyTtsToPayload(params: {
   const resolveFirstRoutableText = (
     expressiveText: string,
     plainText: string,
-  ): { provider: TtsProvider; text: string } | undefined => {
+  ): { provider: TtsProvider; providerConfig: SpeechProviderConfig; text: string } | undefined => {
     const providers = [
       effectiveProvider,
       ...providerOrder.filter((provider) => provider !== effectiveProvider),
@@ -1771,14 +1780,19 @@ export async function maybeApplyTtsToPayload(params: {
       if (resolvedProvider.kind === "skip") {
         continue;
       }
+      const providerConfig = resolveProviderConfigForTextRouting(
+        provider,
+        resolvedProvider.providerConfig,
+      );
       let candidate: string;
       try {
-        candidate = resolveRoutedSpeechText(
+        candidate = resolveSpeechTextForProvider({
           provider,
+          cfg,
+          providerConfig,
           expressiveText,
           plainText,
-          resolvedProvider.providerConfig,
-        ).trim();
+        }).trim();
       } catch (err) {
         if (isVerbose()) {
           logVerbose(`tts preflight: ${provider} text routing failed: ${formatErrorMessage(err)}`);
@@ -1786,7 +1800,7 @@ export async function maybeApplyTtsToPayload(params: {
         continue;
       }
       if (candidate.length >= MIN_TTS_TEXT_LENGTH) {
-        return { provider, text: candidate };
+        return { provider, providerConfig, text: candidate };
       }
     }
     return undefined;
@@ -1824,30 +1838,17 @@ export async function maybeApplyTtsToPayload(params: {
   if (text.includes("MEDIA:")) {
     return nextPayload;
   }
+  if (
+    plainSpeechText.trim().length < MIN_TTS_TEXT_LENGTH &&
+    expressiveSpeechText.trim().length < MIN_TTS_TEXT_LENGTH
+  ) {
+    return nextPayload;
+  }
   const initialRoute = resolveFirstRoutableText(expressiveSpeechText, plainSpeechText);
   if (!initialRoute) {
     return nextPayload;
   }
-  // Per chatgpt-codex P1 review on tts.ts:1832 — even though the preflight
-  // loop above catches per-provider resolution failures, this call to
-  // `resolveProviderConfigForTextRouting(effectiveProvider)` can still throw
-  // if the primary provider's config resolver errors (e.g. unresolved SecretRef
-  // or bad provider config). Without this guard a recoverable TTS-provider
-  // failure would escape `maybeApplyTtsToPayload` and become a hard reply-path
-  // failure in callers that don't wrap this path. Fall back to text-only by
-  // returning `nextPayload` if preflight already accepted a route but the
-  // primary-provider config resolution then fails.
-  let initialProviderConfig: SpeechProviderConfig;
-  try {
-    initialProviderConfig = resolveProviderConfigForTextRouting(effectiveProvider);
-  } catch (err) {
-    if (isVerbose()) {
-      logVerbose(
-        `tts initial config resolution failed for ${effectiveProvider}: ${formatErrorMessage(err)}`,
-      );
-    }
-    return nextPayload;
-  }
+  const initialProviderConfig = initialRoute.providerConfig;
 
   const maxLength = getTtsMaxLength(prefsPath);
   let textForAudio = initialRoute.text;
@@ -1910,7 +1911,13 @@ export async function maybeApplyTtsToPayload(params: {
   };
   const preparedPrimaryText = stripMarkdown(textForAudio).trim();
   const initialRouteUsesExpressiveText = Boolean(
-    resolveRoutedSpeechText(initialRoute.provider, expressiveSpeechText, "").trim(),
+    resolveSpeechTextForProvider({
+      provider: initialRoute.provider,
+      cfg,
+      providerConfig: initialProviderConfig,
+      expressiveText: expressiveSpeechText,
+      plainText: "",
+    }).trim(),
   );
   const preparedPlainText = wasSummarized
     ? initialRouteUsesExpressiveText
@@ -1923,7 +1930,7 @@ export async function maybeApplyTtsToPayload(params: {
       : enforceMaxLength(stripMarkdown(expressiveSpeechText).trim()) || preparedPlainText
     : enforceMaxLength(stripMarkdown(expressiveSpeechText).trim()) || preparedPlainText;
   const effectiveTextForAudio = resolveSpeechTextForProvider({
-    provider: effectiveProvider,
+    provider: initialRoute.provider,
     cfg,
     providerConfig: initialProviderConfig,
     expressiveText: preparedExpressiveText,
