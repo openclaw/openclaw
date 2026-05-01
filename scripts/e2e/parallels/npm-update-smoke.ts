@@ -378,6 +378,7 @@ class NpmUpdateSmoke {
     const input = {
       auth: this.auth,
       expectedNeedle: this.updateExpectedNeedle,
+      provider: this.options.provider,
       updateTarget: this.updateTargetEffective,
     };
     switch (platform) {
