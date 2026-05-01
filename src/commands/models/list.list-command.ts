@@ -93,10 +93,15 @@ export async function modelsListCommand(
   let availabilityErrorMessage: string | undefined;
   const { entries } = resolveConfiguredEntries(cfg);
   const configuredByKey = new Map(entries.map((entry) => [entry.key, entry]));
-  const sourcePlanModule = opts.all ? await loadSourcePlanModule() : undefined;
+  // Provider-filtered listing without --all also runs the source-plan cascade so
+  // it surfaces manifest/provider-index/static-catalog/registry rows for
+  // providers the user hasn't configured (issue #75517). The plan is registry-
+  // free unless the cascade settles on a registry-backed kind.
+  const useSourcePlan = Boolean(opts.all) || Boolean(providerFilter);
+  const sourcePlanModule = useSourcePlan ? await loadSourcePlanModule() : undefined;
   const sourcePlan = sourcePlanModule
     ? await sourcePlanModule.planAllModelListSources({
-        all: opts.all,
+        all: useSourcePlan,
         providerFilter,
         cfg,
       })
@@ -152,7 +157,7 @@ export async function modelsListCommand(
   });
   const rows: ModelRow[] = [];
 
-  if (opts.all) {
+  if (useSourcePlan) {
     const { appendAllModelRowSources } = await loadRowSourcesModule();
     if (!sourcePlan || !sourcePlanModule) {
       throw new Error("models list source plan was not initialized");
@@ -160,6 +165,7 @@ export async function modelsListCommand(
     let rowContext = buildRowContext(sourcePlan.skipRuntimeModelSuppression);
     const initialAppend = await appendAllModelRowSources({
       rows,
+      entries,
       context: rowContext,
       modelRegistry,
       registryModels,
@@ -185,6 +191,7 @@ export async function modelsListCommand(
       rowContext = buildRowContext(useScopedRegistryFallback);
       await appendAllModelRowSources({
         rows,
+        entries,
         context: rowContext,
         modelRegistry,
         registryModels,

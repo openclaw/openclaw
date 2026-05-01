@@ -14,6 +14,7 @@ import type { ConfiguredEntry, ModelRow } from "./list.types.js";
 
 type AllModelRowSources = {
   rows: ModelRow[];
+  entries?: ConfiguredEntry[];
   context: RowBuilderContext;
   modelRegistry?: ModelRegistry;
   registryModels?: ReturnType<ModelRegistry["getAll"]>;
@@ -28,7 +29,18 @@ export async function appendAllModelRowSources(
   params: AllModelRowSources,
 ): Promise<AppendAllModelRowSourcesResult> {
   if (params.context.filter.provider && params.sourcePlan.kind !== "registry") {
-    let seenKeys = new Set<string>();
+    const seenKeys = new Set<string>();
+    if (params.entries && params.entries.length > 0) {
+      await appendConfiguredRows({
+        rows: params.rows,
+        entries: params.entries,
+        modelRegistry: params.modelRegistry,
+        context: params.context,
+      });
+      for (const row of params.rows) {
+        seenKeys.add(row.key);
+      }
+    }
     await appendConfiguredProviderRows({
       rows: params.rows,
       context: params.context,
@@ -63,7 +75,13 @@ export async function appendAllModelRowSources(
         staticOnly: params.sourcePlan.kind === "provider-runtime-static",
       });
     }
-    if (catalogRows === 0 && params.sourcePlan.fallbackToRegistryWhenEmpty) {
+    // Only fall back to the registry when no other source produced rows.
+    // Configured-provider rows alone (e.g. ollama) keep the path registry-free.
+    if (
+      catalogRows === 0 &&
+      params.rows.length === 0 &&
+      params.sourcePlan.fallbackToRegistryWhenEmpty
+    ) {
       if (!params.modelRegistry) {
         return { requiresRegistryFallback: true };
       }
