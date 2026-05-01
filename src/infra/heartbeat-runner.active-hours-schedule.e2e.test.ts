@@ -243,4 +243,55 @@ describe("heartbeat scheduler: activeHours-aware scheduling (#75487)", () => {
     expect(runSpy).toHaveBeenCalled();
     runner.stop();
   });
+
+  it("recomputes schedule when activeHours config changes via hot reload", async () => {
+    // Start with a narrow window that pushes nextDueMs far ahead.
+    // Then widen the window via updateConfig — the scheduler should
+    // recompute from `now` instead of keeping the stale far-future slot.
+    const startMs = Date.parse("2026-06-15T14:00:00.000Z");
+    useFakeHeartbeatTime(startMs);
+
+    const intervalMs = 4 * 60 * 60_000;
+    const callTimes: number[] = [];
+    const runSpy: RunOnce = vi.fn().mockImplementation(async () => {
+      callTimes.push(Date.now());
+      return { status: "ran", durationMs: 1 };
+    });
+
+    // Narrow window: 09:00–10:00 UTC.  At 14:00 UTC the next in-window
+    // slot is tomorrow ~09:xx (19+ hours away).
+    const runner = startHeartbeatRunner({
+      cfg: heartbeatConfig({
+        every: "4h",
+        activeHours: { start: "09:00", end: "10:00", timezone: "UTC" },
+      }),
+      runOnce: runSpy,
+      stableSchedulerSeed: TEST_SCHEDULER_SEED,
+    });
+
+    // Advance 1 hour — should NOT fire (next slot is tomorrow).
+    await vi.advanceTimersByTimeAsync(60 * 60_000);
+    expect(runSpy).not.toHaveBeenCalled();
+
+    // Hot-reload: widen window to 08:00–20:00 UTC.
+    // At 15:00 UTC the next phase slot should now be reachable within hours.
+    runner.updateConfig(
+      heartbeatConfig({
+        every: "4h",
+        activeHours: { start: "08:00", end: "20:00", timezone: "UTC" },
+      }),
+    );
+
+    // Advance another 8 hours — should fire within the widened window.
+    await vi.advanceTimersByTimeAsync(8 * 60 * 60_000);
+    expect(runSpy).toHaveBeenCalled();
+    const firstCallTime = callTimes[0]!;
+    const firstCallHour = new Date(firstCallTime).getUTCHours();
+    expect(firstCallHour).toBeGreaterThanOrEqual(8);
+    expect(firstCallHour).toBeLessThan(20);
+    // Crucially, the first fire should be today (June 15), not tomorrow.
+    expect(new Date(firstCallTime).getUTCDate()).toBe(15);
+
+    runner.stop();
+  });
 });
