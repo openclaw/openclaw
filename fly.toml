@@ -1,34 +1,35 @@
-# OpenClaw Fly.io deployment configuration
-# See https://fly.io/docs/reference/configuration/
+# fly.toml app configuration file generated for openclaw-oyurda on 2026-05-01T10:12:01Z
+#
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+#
 
-app = "openclaw"
-primary_region = "iad" # change to your closest region
+app = 'openclaw-oyurda'
+primary_region = 'cdg'
 
 [build]
-dockerfile = "Dockerfile"
+  dockerfile = 'Dockerfile'
 
 [env]
-NODE_ENV = "production"
-# Fly uses x86, but keep this for consistency
-OPENCLAW_PREFER_PNPM = "1"
-OPENCLAW_STATE_DIR = "/data"
-NODE_OPTIONS = "--max-old-space-size=1536"
+  NODE_ENV = 'production'
+  NODE_OPTIONS = '--max-old-space-size=1536'
+  OPENCLAW_PREFER_PNPM = '1'
+  OPENCLAW_STATE_DIR = '/data'
 
 [processes]
-app = "node dist/index.js gateway --allow-unconfigured --port 3000 --bind lan"
+  app = 'node dist/index.js gateway --allow-unconfigured --port 3000 --bind lan'
+
+[[mounts]]
+  source = 'openclaw_data'
+  destination = '/data'
 
 [http_service]
-internal_port = 3000
-force_https = true
-auto_stop_machines = false # Keep running for persistent connections
-auto_start_machines = true
-min_machines_running = 1
-processes = ["app"]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = 'off'
+  auto_start_machines = true
+  min_machines_running = 1
+  processes = ['app']
 
 [[vm]]
-size = "shared-cpu-2x"
-memory = "2048mb"
-
-[mounts]
-source = "openclaw_data"
-destination = "/data"
+  size = 'shared-cpu-2x'
+  memory = '2048mb'
