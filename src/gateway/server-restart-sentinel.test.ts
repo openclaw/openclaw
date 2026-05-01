@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
+import type { RestartSentinelPayload } from "../infra/restart-sentinel.js";
 
 type LoadedSessionEntry = ReturnType<typeof import("./session-utils.js").loadSessionEntry>;
 type RecordInboundSessionAndDispatchReplyParams = Parameters<
@@ -19,7 +20,7 @@ const mocks = vi.hoisted(() => {
     set queuedSessionDelivery(value: Record<string, unknown> | null) {
       state.queuedSessionDelivery = value;
     },
-    readRestartSentinel: vi.fn(async () => ({
+    readRestartSentinel: vi.fn<() => Promise<unknown>>(async () => ({
       payload: {
         sessionKey: "agent:main:main",
         deliveryContext: {
@@ -30,12 +31,16 @@ const mocks = vi.hoisted(() => {
       },
     })),
     removeRestartSentinelFile: vi.fn(async () => undefined),
-    rewriteRestartSentinel: vi.fn(async () => null),
-    finalizeUpdateRestartSentinelRunningVersion: vi.fn(async () => null),
+    rewriteRestartSentinel: vi.fn<
+      (
+        rewrite: (payload: RestartSentinelPayload) => RestartSentinelPayload | null,
+      ) => Promise<unknown>
+    >(async () => null),
+    finalizeUpdateRestartSentinelRunningVersion: vi.fn<() => Promise<unknown>>(async () => null),
     resolveRestartSentinelPath: vi.fn(() => "/tmp/restart-sentinel.json"),
     formatRestartSentinelMessage: vi.fn(() => "restart message"),
     summarizeRestartSentinel: vi.fn(() => "restart summary"),
-    readDetachedUpdateResult: vi.fn(() => null),
+    readDetachedUpdateResult: vi.fn<() => unknown>(() => null),
     removeDetachedUpdateResult: vi.fn(),
     resolveMainSessionKeyFromConfig: vi.fn(() => "agent:main:main"),
     parseSessionThreadInfo: vi.fn(
