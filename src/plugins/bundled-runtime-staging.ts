@@ -19,6 +19,7 @@ export function prepareBundledRuntimeLoadRootForPlugin(params: {
   env: NodeJS.ProcessEnv;
   config: OpenClawConfig;
   installMissingDeps: boolean;
+  previousRepairError?: unknown;
   shouldLog: boolean;
   logger: PluginLogger;
   installer?: (params: BundledRuntimeDepsInstallParams) => void;
@@ -34,6 +35,7 @@ export function prepareBundledRuntimeLoadRootForPlugin(params: {
       env: params.env,
       config: params.config,
       installMissingDeps: params.installMissingDeps,
+      previousRepairError: params.previousRepairError,
       memoizePreparedRoot: true,
       registerRuntimeAliasRoot: registerBundledRuntimeDependencyJitiAliases,
       installDeps: (installParams) => {

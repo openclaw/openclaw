@@ -26,6 +26,10 @@ type GatewayPluginBootstrapLog = {
   debug: (message: string) => void;
 };
 
+type GatewayBundledRuntimeDepsPrestageResult = {
+  repairError?: unknown;
+};
+
 export function resolveGatewayStartupMaintenanceConfig(params: {
   cfgAtStart: OpenClawConfig;
   startupRuntimeConfig: OpenClawConfig;
@@ -44,8 +48,8 @@ async function prestageGatewayBundledRuntimeDeps(params: {
   manifestRegistry: PluginManifestRegistry;
   pluginIds: readonly string[];
   log: GatewayPluginBootstrapLog;
-}): Promise<void> {
-  await measureDiagnosticsTimelineSpan(
+}): Promise<GatewayBundledRuntimeDepsPrestageResult> {
+  return await measureDiagnosticsTimelineSpan(
     "runtimeDeps.stage",
     () => prestageGatewayBundledRuntimeDepsImpl(params),
     {
@@ -63,10 +67,11 @@ async function prestageGatewayBundledRuntimeDepsImpl(params: {
   manifestRegistry: PluginManifestRegistry;
   pluginIds: readonly string[];
   log: GatewayPluginBootstrapLog;
-}): Promise<void> {
+}): Promise<GatewayBundledRuntimeDepsPrestageResult> {
   if (params.pluginIds.length === 0) {
-    return;
+    return {};
   }
+  let repairError: unknown;
   const packageRoot = resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url });
   if (packageRoot) {
     try {
@@ -89,12 +94,17 @@ async function prestageGatewayBundledRuntimeDepsImpl(params: {
         );
       }
     } catch (error) {
+      repairError = error;
       params.log.warn(
         `[plugins] bundled runtime dependency staging failed; plugin load will verify without synchronous repair: ${String(error)}`,
       );
     }
   }
-  prestageGatewayBundledRuntimeMirrors(params);
+  prestageGatewayBundledRuntimeMirrors({
+    ...params,
+    previousRepairError: repairError,
+  });
+  return repairError === undefined ? {} : { repairError };
 }
 
 function prestageGatewayBundledRuntimeMirrors(params: {
@@ -102,6 +112,7 @@ function prestageGatewayBundledRuntimeMirrors(params: {
   manifestRegistry: PluginManifestRegistry;
   pluginIds: readonly string[];
   log: GatewayPluginBootstrapLog;
+  previousRepairError?: unknown;
 }): void {
   const pluginIdSet = new Set(params.pluginIds);
   const startedAt = Date.now();
@@ -119,6 +130,7 @@ function prestageGatewayBundledRuntimeMirrors(params: {
         env: process.env,
         config: params.cfg,
         installMissingDeps: false,
+        previousRepairError: params.previousRepairError,
         memoizePreparedRoot: true,
         registerRuntimeAliasRoot: registerBundledRuntimeDependencyJitiAliases,
       });
@@ -256,7 +268,7 @@ export async function loadGatewayStartupPluginRuntime(params: {
   preferSetupRuntimeForChannelPlugins?: boolean;
   suppressPluginInfoLogs?: boolean;
 }) {
-  await prestageGatewayBundledRuntimeDeps({
+  const prestageResult = await prestageGatewayBundledRuntimeDeps({
     cfg: params.cfg,
     manifestRegistry: params.pluginLookUpTable?.manifestRegistry ?? {
       plugins: [],
@@ -275,6 +287,7 @@ export async function loadGatewayStartupPluginRuntime(params: {
     pluginIds: params.startupPluginIds,
     pluginLookUpTable: params.pluginLookUpTable,
     installBundledRuntimeDeps: false,
+    bundledRuntimeDepsRepairError: prestageResult.repairError,
     preferSetupRuntimeForChannelPlugins: params.preferSetupRuntimeForChannelPlugins,
     suppressPluginInfoLogs: params.suppressPluginInfoLogs,
   });

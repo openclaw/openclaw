@@ -250,13 +250,22 @@ describe("prepareGatewayPluginBootstrap runtime-deps staging", () => {
     );
     expect(repairBundledRuntimeDepsPackagePlanAsync).toHaveBeenCalledOnce();
     expect(prepareBundledPluginRuntimeLoadRoot).toHaveBeenCalledWith(
-      expect.objectContaining({ pluginId: "telegram", installMissingDeps: false }),
+      expect.objectContaining({
+        pluginId: "telegram",
+        installMissingDeps: false,
+        previousRepairError: expect.any(Error),
+      }),
     );
     expect(log.warn).toHaveBeenCalledWith(
       expect.stringContaining("plugin load will verify without synchronous repair"),
     );
     expect(loadGatewayStartupPlugins.mock.calls[0]?.[0]).not.toHaveProperty(
       "bundledRuntimeDepsInstaller",
+    );
+    expect(loadGatewayStartupPlugins).toHaveBeenCalledWith(
+      expect.objectContaining({
+        bundledRuntimeDepsRepairError: expect.any(Error),
+      }),
     );
   });
 

@@ -1373,7 +1373,7 @@ describe("createBundledRuntimeDepsPackagePlan config policy", () => {
     expect(result.conflicts).toEqual([]);
   });
 
-  it("accepts staged runtime deps without revalidating package entry files", () => {
+  it("accepts staged runtime deps with extensionless declared entry files", () => {
     const installRoot = makeTempDir();
     const packageDir = path.join(installRoot, "node_modules", "jszip");
     fs.mkdirSync(path.join(packageDir, "lib"), { recursive: true });
@@ -1385,6 +1385,36 @@ describe("createBundledRuntimeDepsPackagePlan config policy", () => {
     fs.writeFileSync(path.join(packageDir, "lib", "index.js"), "export default {};\n", "utf8");
 
     expect(() => assertBundledRuntimeDepsInstalled(installRoot, ["jszip@^3.10.1"])).not.toThrow();
+  });
+
+  it("reports staged runtime deps as missing when a declared entry file is absent", () => {
+    const packageRoot = setupPolicyPackageRoot();
+    const env = { OPENCLAW_PLUGIN_STAGE_DIR: makeTempDir() };
+    const installRoot = resolveBundledRuntimeDependencyPackageInstallRoot(packageRoot, { env });
+    const packageDir = path.join(installRoot, "node_modules", "alpha-runtime");
+    fs.mkdirSync(packageDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(packageDir, "package.json"),
+      JSON.stringify({
+        name: "alpha-runtime",
+        version: "1.0.0",
+        main: "./lib/index",
+      }),
+      "utf8",
+    );
+
+    const result = createBundledRuntimeDepsPackagePlan({
+      packageRoot,
+      config: {},
+      env,
+    });
+
+    expect(result.missing.map((dep) => `${dep.name}@${dep.version}`)).toEqual([
+      "alpha-runtime@1.0.0",
+    ]);
+    expect(() => assertBundledRuntimeDepsInstalled(installRoot, ["alpha-runtime@1.0.0"])).toThrow(
+      /alpha-runtime@1\.0\.0/,
+    );
   });
 
   it("reports staged package-level runtime deps as missing when the version is stale", () => {
@@ -3632,6 +3662,8 @@ describe("ensureBundledPluginRuntimeDeps", () => {
       path.join(ajvRoot, "package.json"),
       JSON.stringify({ name: "ajv", version: "8.20.0", main: "dist/ajv.js" }),
     );
+    fs.mkdirSync(path.join(ajvRoot, "dist"), { recursive: true });
+    fs.writeFileSync(path.join(ajvRoot, "dist", "ajv.js"), "export {};\n");
 
     const calls: BundledRuntimeDepsInstallParams[] = [];
     const result = ensureBundledPluginRuntimeDeps({

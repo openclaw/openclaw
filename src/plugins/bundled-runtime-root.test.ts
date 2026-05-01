@@ -699,6 +699,38 @@ describe("prepareBundledPluginRuntimeRoot", () => {
     expect(installDeps).toHaveBeenCalledTimes(2);
   });
 
+  it("includes earlier staging failures when verify-only runtime deps still fail", () => {
+    const packageRoot = makeTempRoot();
+    const stageDir = makeTempRoot();
+    const pluginRoot = path.join(packageRoot, "dist", "extensions", "whatsapp");
+    const env = { ...process.env, OPENCLAW_PLUGIN_STAGE_DIR: stageDir };
+    fs.mkdirSync(pluginRoot, { recursive: true });
+    fs.writeFileSync(path.join(pluginRoot, "index.js"), "export {};\n", "utf8");
+    fs.writeFileSync(
+      path.join(pluginRoot, "package.json"),
+      JSON.stringify({
+        name: "@openclaw/whatsapp",
+        version: "1.0.0",
+        type: "module",
+        dependencies: { "whatsapp-runtime": "1.0.0" },
+      }),
+      "utf8",
+    );
+
+    expect(() =>
+      prepareBundledPluginRuntimeRoot({
+        pluginId: "whatsapp",
+        pluginRoot,
+        modulePath: path.join(pluginRoot, "index.js"),
+        env,
+        installMissingDeps: false,
+        previousRepairError: new Error("offline registry"),
+      }),
+    ).toThrow(
+      /bundled runtime dependencies missing.*whatsapp-runtime@1\.0\.0.*previous bundled runtime dependency staging failure: offline registry/s,
+    );
+  });
+
   it("refreshes external runtime mirrors when source files change", async () => {
     const packageRoot = makeTempRoot();
     const stageDir = makeTempRoot();

@@ -43,21 +43,12 @@ function readPackageRuntimeDepSpecs(packageRoot: string): string[] | null {
   return normalizeRuntimeDepSpecs(specs);
 }
 
-function sameRuntimeDepSpecs(left: readonly string[], right: readonly string[]): boolean {
-  const normalizedLeft = normalizeRuntimeDepSpecs(left);
-  const normalizedRight = normalizeRuntimeDepSpecs(right);
-  return (
-    normalizedLeft.length === normalizedRight.length &&
-    normalizedLeft.every((entry, index) => entry === normalizedRight[index])
-  );
-}
-
 function runtimeDepSpecsIncludeAll(
-  candidate: readonly string[],
-  required: readonly string[],
+  availableSpecs: readonly string[],
+  requestedSpecs: readonly string[],
 ): boolean {
-  const candidateSet = new Set(normalizeRuntimeDepSpecs(candidate));
-  return normalizeRuntimeDepSpecs(required).every((spec) => candidateSet.has(spec));
+  const available = new Set(normalizeRuntimeDepSpecs(availableSpecs));
+  return normalizeRuntimeDepSpecs(requestedSpecs).every((spec) => available.has(spec));
 }
 
 function readInstalledRuntimeDepPackage(
@@ -76,32 +67,37 @@ function readInstalledRuntimeDepPackage(
   }
 }
 
-function hasInstalledRuntimeDepEntryFiles(packageDir: string, packageJson: JsonObject): boolean {
-  const main = packageJson.main;
-  if (typeof main !== "string" || main.trim() === "") {
+function hasRuntimeDepEntryFile(packageDir: string, rawEntry: string): boolean {
+  const entry = rawEntry.trim();
+  if (entry === "") {
     return true;
   }
-  const mainPath = path.resolve(packageDir, main);
-  if (mainPath !== packageDir && !mainPath.startsWith(`${packageDir}${path.sep}`)) {
+  const entryPath = path.resolve(packageDir, entry);
+  if (entryPath !== packageDir && !entryPath.startsWith(`${packageDir}${path.sep}`)) {
     return false;
   }
-  if (fs.existsSync(mainPath)) {
+  if (fs.existsSync(entryPath)) {
     return true;
   }
   return (
-    fs.existsSync(`${mainPath}.js`) ||
-    fs.existsSync(`${mainPath}.json`) ||
-    fs.existsSync(`${mainPath}.node`) ||
-    fs.existsSync(path.join(mainPath, "index.js")) ||
-    fs.existsSync(path.join(mainPath, "index.json")) ||
-    fs.existsSync(path.join(mainPath, "index.node"))
+    fs.existsSync(`${entryPath}.js`) ||
+    fs.existsSync(`${entryPath}.json`) ||
+    fs.existsSync(`${entryPath}.node`) ||
+    fs.existsSync(path.join(entryPath, "index.js")) ||
+    fs.existsSync(path.join(entryPath, "index.json")) ||
+    fs.existsSync(path.join(entryPath, "index.node"))
   );
 }
 
-export function isRuntimeDepSatisfied(
-  rootDir: string,
-  dep: { name: string; version: string },
-): boolean {
+function hasInstalledRuntimeDepEntryFiles(packageDir: string, packageJson: JsonObject): boolean {
+  const main = packageJson.main;
+  if (typeof main === "string") {
+    return hasRuntimeDepEntryFile(packageDir, main);
+  }
+  return true;
+}
+
+function isRuntimeDepSatisfied(rootDir: string, dep: { name: string; version: string }): boolean {
   const installed = readInstalledRuntimeDepPackage(rootDir, dep.name);
   if (!installed) {
     return false;
@@ -138,7 +134,8 @@ export function isRuntimeDepsPlanMaterialized(
   return (
     ((generatedManifestSpecs !== null &&
       runtimeDepSpecsIncludeAll(generatedManifestSpecs, installSpecs)) ||
-      (packageManifestSpecs !== null && sameRuntimeDepSpecs(packageManifestSpecs, installSpecs))) &&
+      (packageManifestSpecs !== null &&
+        runtimeDepSpecsIncludeAll(packageManifestSpecs, installSpecs))) &&
     hasSatisfiedInstallSpecPackages(installRoot, installSpecs)
   );
 }
@@ -160,6 +157,54 @@ export function removeLegacyRuntimeDepsManifest(installRoot: string): void {
   fs.rmSync(path.join(installRoot, LEGACY_RETAINED_RUNTIME_DEPS_MANIFEST), {
     force: true,
   });
+}
+
+export function removeRuntimeDepsNodeModulesSymlink(installRoot: string): boolean {
+  const nodeModulesPath = path.join(installRoot, "node_modules");
+  try {
+    if (!fs.lstatSync(nodeModulesPath).isSymbolicLink()) {
+      return false;
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return false;
+    }
+    throw error;
+  }
+  fs.unlinkSync(nodeModulesPath);
+  return true;
+}
+
+export function linkRuntimeDepsNodeModulesFromRoot(params: {
+  sourceRoot: string;
+  targetRoot: string;
+}): boolean {
+  const sourceNodeModules = path.join(params.sourceRoot, "node_modules");
+  const targetNodeModules = path.join(params.targetRoot, "node_modules");
+  if (path.resolve(sourceNodeModules) === path.resolve(targetNodeModules)) {
+    return true;
+  }
+  let sourceStat: fs.Stats;
+  try {
+    sourceStat = fs.lstatSync(sourceNodeModules);
+  } catch {
+    return false;
+  }
+  if (!sourceStat.isDirectory() || sourceStat.isSymbolicLink()) {
+    return false;
+  }
+  try {
+    fs.lstatSync(targetNodeModules);
+    return false;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw error;
+    }
+  }
+  fs.mkdirSync(params.targetRoot, { recursive: true });
+  const linkType = process.platform === "win32" ? "junction" : "dir";
+  fs.symlinkSync(sourceNodeModules, targetNodeModules, linkType);
+  return true;
 }
 
 function createNpmInstallExecutionManifest(installSpecs: readonly string[]): JsonObject {

@@ -188,6 +188,7 @@ export type PluginLoadOptions = {
   installBundledRuntimeDeps?: boolean;
   throwOnLoadError?: boolean;
   bundledRuntimeDepsInstaller?: (params: BundledRuntimeDepsInstallParams) => void;
+  bundledRuntimeDepsRepairError?: unknown;
   manifestRegistry?: PluginManifestRegistry;
 };
 
@@ -1470,6 +1471,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
             env,
             config: cfg,
             installMissingDeps: shouldInstallBundledRuntimeDeps,
+            previousRepairError: options.bundledRuntimeDepsRepairError,
             shouldLog: shouldActivate,
             logger,
             ...(options.bundledRuntimeDepsInstaller

@@ -40,6 +40,7 @@ type GatewayPluginBootstrapParams = {
   installBundledRuntimeDeps?: boolean;
   logDiagnostics?: boolean;
   bundledRuntimeDepsInstaller?: (params: BundledRuntimeDepsInstallParams) => void;
+  bundledRuntimeDepsRepairError?: unknown;
   beforePrimeRegistry?: (pluginRegistry: PluginRegistry) => void;
 };
 
@@ -107,6 +108,7 @@ export function prepareGatewayPluginLoad(params: GatewayPluginBootstrapParams) {
     suppressPluginInfoLogs: params.suppressPluginInfoLogs,
     installBundledRuntimeDeps: params.installBundledRuntimeDeps,
     bundledRuntimeDepsInstaller: params.bundledRuntimeDepsInstaller,
+    bundledRuntimeDepsRepairError: params.bundledRuntimeDepsRepairError,
   });
   params.beforePrimeRegistry?.(loaded.pluginRegistry);
   primeConfiguredBindingRegistry({ cfg: resolvedConfig });

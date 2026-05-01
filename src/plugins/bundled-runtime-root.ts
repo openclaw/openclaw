@@ -77,6 +77,25 @@ function registerBundledRuntimeLoadRootAliases(params: {
   }
 }
 
+function formatRuntimeDepsError(error: unknown): string {
+  if (error instanceof Error && error.message.trim()) {
+    return error.message;
+  }
+  return String(error);
+}
+
+function appendPreviousRuntimeDepsRepairError(params: {
+  error: unknown;
+  previousRepairError?: unknown;
+}): never {
+  if (params.previousRepairError === undefined) {
+    throw params.error;
+  }
+  throw new Error(
+    `${formatRuntimeDepsError(params.error)}; previous bundled runtime dependency staging failure: ${formatRuntimeDepsError(params.previousRepairError)}`,
+  );
+}
+
 export function isBuiltBundledPluginRuntimeRoot(pluginRoot: string): boolean {
   const extensionsDir = path.dirname(pluginRoot);
   const buildDir = path.dirname(extensionsDir);
@@ -92,6 +111,7 @@ export function prepareBundledPluginRuntimeRoot(params: {
   modulePath: string;
   env?: NodeJS.ProcessEnv;
   installMissingDeps?: boolean;
+  previousRepairError?: unknown;
   logInstalled?: (installedSpecs: readonly string[]) => void;
 }): { pluginRoot: string; modulePath: string } {
   return prepareBundledPluginRuntimeLoadRoot(params);
@@ -103,17 +123,26 @@ function ensureBundledRuntimeLoadRootDeps(params: {
   env: NodeJS.ProcessEnv;
   config?: OpenClawConfig;
   installMissingDeps?: boolean;
+  previousRepairError?: unknown;
   installDeps?: (params: BundledRuntimeDepsInstallParams) => void;
   logInstalled?: (installedSpecs: readonly string[]) => void;
 }): void {
-  const depsInstallResult = ensureBundledPluginRuntimeDeps({
-    pluginId: params.pluginId,
-    pluginRoot: params.pluginRoot,
-    env: params.env,
-    config: params.config,
-    installMissingDeps: params.installMissingDeps,
-    installDeps: params.installDeps,
-  });
+  let depsInstallResult: ReturnType<typeof ensureBundledPluginRuntimeDeps>;
+  try {
+    depsInstallResult = ensureBundledPluginRuntimeDeps({
+      pluginId: params.pluginId,
+      pluginRoot: params.pluginRoot,
+      env: params.env,
+      config: params.config,
+      installMissingDeps: params.installMissingDeps,
+      installDeps: params.installDeps,
+    });
+  } catch (error) {
+    appendPreviousRuntimeDepsRepairError({
+      error,
+      previousRepairError: params.previousRepairError,
+    });
+  }
   if (depsInstallResult.installedSpecs.length > 0) {
     params.logInstalled?.(depsInstallResult.installedSpecs);
   }
@@ -127,6 +156,7 @@ export function prepareBundledPluginRuntimeLoadRoot(params: {
   env?: NodeJS.ProcessEnv;
   config?: OpenClawConfig;
   installMissingDeps?: boolean;
+  previousRepairError?: unknown;
   installDeps?: (params: BundledRuntimeDepsInstallParams) => void;
   registerRuntimeAliasRoot?: (rootDir: string) => void;
   memoizePreparedRoot?: boolean;

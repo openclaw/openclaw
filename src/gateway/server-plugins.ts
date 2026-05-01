@@ -533,6 +533,7 @@ export function loadGatewayPlugins(params: {
   suppressPluginInfoLogs?: boolean;
   installBundledRuntimeDeps?: boolean;
   bundledRuntimeDepsInstaller?: (params: BundledRuntimeDepsInstallParams) => void;
+  bundledRuntimeDepsRepairError?: unknown;
 }) {
   const activationAutoEnabled =
     params.activationSourceConfig !== undefined
@@ -606,6 +607,7 @@ export function loadGatewayPlugins(params: {
     preferSetupRuntimeForChannelPlugins: params.preferSetupRuntimeForChannelPlugins,
     installBundledRuntimeDeps: params.installBundledRuntimeDeps,
     bundledRuntimeDepsInstaller: params.bundledRuntimeDepsInstaller,
+    bundledRuntimeDepsRepairError: params.bundledRuntimeDepsRepairError,
     ...(params.pluginLookUpTable?.manifestRegistry
       ? { manifestRegistry: params.pluginLookUpTable.manifestRegistry }
       : {}),
