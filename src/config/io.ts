@@ -913,6 +913,7 @@ export type ConfigIoDeps = {
   configPath?: string;
   logger?: Pick<typeof console, "error" | "warn">;
   measure?: ConfigSnapshotReadMeasure;
+  persistShippedPluginInstallMigration?: boolean;
 };
 
 function warnOnConfigMiskeys(raw: unknown, logger: Pick<typeof console, "warn">): void {
@@ -971,6 +972,8 @@ function normalizeDeps(overrides: ConfigIoDeps = {}): Required<ConfigIoDeps> {
     configPath: overrides.configPath ?? "",
     logger: overrides.logger ?? console,
     measure: overrides.measure ?? (async (_name, run) => await run()),
+    persistShippedPluginInstallMigration:
+      overrides.persistShippedPluginInstallMigration ?? !overrides.configPath,
   };
 }
 
@@ -1861,7 +1864,9 @@ export function createConfigIO(
   }
 
   async function readConfigFileSnapshot(): Promise<ConfigFileSnapshot> {
-    const result = await readConfigFileSnapshotInternal();
+    const result = await readConfigFileSnapshotInternal({
+      persistShippedPluginInstallMigration: deps.persistShippedPluginInstallMigration,
+    });
     return result.snapshot;
   }
 
@@ -2369,10 +2374,16 @@ export async function readSourceConfigBestEffort(): Promise<OpenClawConfig> {
 
 export async function readConfigFileSnapshot(options?: {
   measure?: ConfigSnapshotReadMeasure;
+  configPath?: string;
+  persistShippedPluginInstallMigration?: boolean;
 }): Promise<ConfigFileSnapshot> {
-  return await createConfigIO(
-    options?.measure ? { measure: options.measure } : {},
-  ).readConfigFileSnapshot();
+  return await createConfigIO({
+    ...(options?.measure ? { measure: options.measure } : {}),
+    ...(options?.configPath ? { configPath: options.configPath } : {}),
+    ...(options?.persistShippedPluginInstallMigration !== undefined
+      ? { persistShippedPluginInstallMigration: options.persistShippedPluginInstallMigration }
+      : {}),
+  }).readConfigFileSnapshot();
 }
 
 export async function readConfigFileSnapshotWithPluginMetadata(options?: {

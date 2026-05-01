@@ -12,7 +12,8 @@ import { createCliRuntimeCapture, mockRuntimeModule } from "./test-runtime-captu
  * but before runtime defaults), so runtime defaults don't leak into the written config.
  */
 
-const mockReadConfigFileSnapshot = vi.fn<() => Promise<ConfigFileSnapshot>>();
+const mockReadConfigFileSnapshot =
+  vi.fn<(options?: { configPath?: string }) => Promise<ConfigFileSnapshot>>();
 const mockWriteConfigFile = vi.fn<
   (cfg: OpenClawConfig, options?: { unsetPaths?: string[][] }) => Promise<void>
 >(async () => {});
@@ -23,7 +24,9 @@ vi.mock("../config/config.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../config/config.js")>();
   return {
     ...actual,
-    readConfigFileSnapshot: () => mockReadConfigFileSnapshot(),
+    readConfigFileSnapshot: (
+      options?: Parameters<typeof import("../config/io.js").readConfigFileSnapshot>[0],
+    ) => mockReadConfigFileSnapshot(options),
     writeConfigFile: (cfg: OpenClawConfig, options?: { unsetPaths?: string[][] }) =>
       mockWriteConfigFile(cfg, options),
     replaceConfigFile: (params: {
@@ -596,6 +599,48 @@ describe("config cli", () => {
       await expect(runConfigCommand(["config", "validate"])).rejects.toThrow("__exit__:1");
       expect(mockError).toHaveBeenCalledWith(expect.stringContaining("Config file not found:"));
       expect(mockLog).not.toHaveBeenCalled();
+    });
+
+    it("validates a custom file when --file is provided", async () => {
+      const resolved: OpenClawConfig = {
+        gateway: { port: 18789 },
+      };
+      setSnapshot(resolved, resolved);
+
+      await runConfigCommand(["config", "validate", "--file", "/tmp/my-config.json"]);
+
+      expect(mockExit).not.toHaveBeenCalled();
+      expect(mockError).not.toHaveBeenCalled();
+      expect(mockLog).toHaveBeenCalledWith(expect.stringContaining("Config valid:"));
+      expect(mockReadConfigFileSnapshot).toHaveBeenCalledWith({
+        configPath: "/tmp/my-config.json",
+      });
+    });
+
+    it("returns JSON for a custom file when --file and --json are provided", async () => {
+      setSnapshotOnce(
+        makeInvalidSnapshot({
+          path: "/tmp/my-config.json",
+          issues: [{ path: "gateway.bind", message: "Invalid enum value" }],
+        }),
+      );
+
+      await expect(
+        runConfigCommand(["config", "validate", "--file", "/tmp/my-config.json", "--json"]),
+      ).rejects.toThrow("__exit__:1");
+      const raw = mockLog.mock.calls.at(0)?.[0];
+      expect(typeof raw).toBe("string");
+      const payload = JSON.parse(String(raw)) as {
+        valid: boolean;
+        path: string;
+        issues: Array<{ path: string; message: string }>;
+      };
+      expect(payload.valid).toBe(false);
+      expect(payload.path).toBe("/tmp/my-config.json");
+      expect(payload.issues).toEqual([{ path: "gateway.bind", message: "Invalid enum value" }]);
+      expect(mockReadConfigFileSnapshot).toHaveBeenCalledWith({
+        configPath: "/tmp/my-config.json",
+      });
     });
   });
 

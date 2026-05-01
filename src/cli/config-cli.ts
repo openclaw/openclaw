@@ -1744,12 +1744,14 @@ export async function runConfigSchema(opts: { runtime?: RuntimeEnv } = {}) {
   }
 }
 
-export async function runConfigValidate(opts: { json?: boolean; runtime?: RuntimeEnv } = {}) {
+export async function runConfigValidate(
+  opts: { json?: boolean; file?: string; runtime?: RuntimeEnv } = {},
+) {
   const runtime = opts.runtime ?? defaultRuntime;
-  let outputPath = CONFIG_PATH ?? "openclaw.json";
+  let outputPath = opts.file ?? CONFIG_PATH ?? "openclaw.json";
 
   try {
-    const snapshot = await readConfigFileSnapshot();
+    const snapshot = await readConfigFileSnapshot(opts.file ? { configPath: opts.file } : {});
     outputPath = snapshot.path;
     const shortPath = shortenHomePath(outputPath);
 
@@ -1961,8 +1963,9 @@ export function registerConfigCli(program: Command) {
   cmd
     .command("validate")
     .description("Validate the current config against the schema without starting the gateway")
+    .option("--file <path>", "Validate a specific config file instead of the default")
     .option("--json", "Output validation result as JSON", false)
     .action(async (opts) => {
-      await runConfigValidate({ json: Boolean(opts.json) });
+      await runConfigValidate({ json: Boolean(opts.json), file: opts.file });
     });
 }

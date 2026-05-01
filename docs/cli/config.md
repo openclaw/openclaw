@@ -456,7 +456,11 @@ Validate the current config against the active schema without starting the gatew
 ```bash
 openclaw config validate
 openclaw config validate --json
+openclaw config validate --file /path/to/config.json
+openclaw config validate --file /path/to/config.json --json
 ```
+
+Use `--file` to validate an arbitrary config file without modifying `OPENCLAW_CONFIG_PATH` or triggering hot reload.
 
 After `openclaw config validate` is passing, you can use the local TUI to have an embedded agent compare the active config against the docs while you validate each change from the same terminal:
 
