@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import {
   createBundledRuntimeDepsInstallSpecs,
+  hasPreviousIncompleteInstall,
   repairBundledRuntimeDepsInstallRootAsync,
   resolveBundledRuntimeDependencyPackageInstallRootPlan,
   scanBundledPluginRuntimeDeps,
@@ -77,24 +78,43 @@ export async function maybeRepairBundledPluginRuntimeDeps(params: {
     );
   }
 
-  if (missing.length === 0) {
-    return;
-  }
-
   const installRootPlan = resolveBundledRuntimeDependencyPackageInstallRootPlan(packageRoot, {
     env,
   });
   const installSpecs = createBundledRuntimeDepsInstallSpecs({
     deps,
   });
-  note(
-    [
-      "Bundled plugin runtime deps need staging.",
-      ...missing.map((dep) => `- ${dep.name}@${dep.version} (used by ${dep.pluginIds.join(", ")})`),
-      `Fix: run ${formatCliCommand("openclaw doctor --fix")} to install them.`,
-    ].join("\n"),
-    "Bundled plugins",
-  );
+  // If node_modules exists but the install completion marker is absent, the previous
+  // install was interrupted (e.g. ETIMEDOUT during `openclaw update`). The completion
+  // marker is written only after successful install, so its absence indicates corrupt
+  // state even if manifest exists. Treat all deps as missing so repair performs full reinstall.
+  const installIncomplete = hasPreviousIncompleteInstall(installRootPlan.installRoot, installSpecs);
+  const effectiveMissing = installIncomplete ? deps : missing;
+
+  if (effectiveMissing.length === 0) {
+    return;
+  }
+
+  if (installIncomplete) {
+    note(
+      [
+        "Bundled plugin runtime deps install was incomplete (retained manifest missing).",
+        "The previous install was likely interrupted. All deps will be reinstalled.",
+      ].join("\n"),
+      "Bundled plugins",
+    );
+  } else {
+    note(
+      [
+        "Bundled plugin runtime deps are missing.",
+        ...missing.map(
+          (dep) => `- ${dep.name}@${dep.version} (used by ${dep.pluginIds.join(", ")})`,
+        ),
+        `Fix: run ${formatCliCommand("openclaw doctor --fix")} to install them.`,
+      ].join("\n"),
+      "Bundled plugins",
+    );
+  }
 
   const shouldRepair =
     params.prompter.shouldRepair ||

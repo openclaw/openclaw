@@ -239,6 +239,22 @@ function collectPackageLevelRuntimeDepsForPlugin(params: {
   });
 }
 
+/**
+ * Returns true if a previous bundled runtime deps install at `installRoot`
+ * started but did not complete — i.e. `node_modules` exists but the install
+ * completion marker is absent. The marker is written only after a successful
+ * install, so its absence indicates an interrupted install (e.g. ETIMEDOUT
+ * during `openclaw update`) even if `node_modules` and manifest exist.
+ */
+export function hasPreviousIncompleteInstall(
+  installRoot: string,
+  _installSpecs: readonly string[],
+): boolean {
+  const nodeModulesPath = path.join(installRoot, "node_modules");
+  const markerPath = path.join(installRoot, ".install-complete");
+  return fs.existsSync(nodeModulesPath) && !fs.existsSync(markerPath);
+}
+
 export function scanBundledPluginRuntimeDeps(params: {
   packageRoot: string;
   config?: OpenClawConfig;

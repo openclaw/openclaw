@@ -19,6 +19,9 @@ const loadGatewayStartupPlugins = vi.hoisted(() =>
 const pruneUnknownBundledRuntimeDepsRoots = vi.hoisted(() =>
   vi.fn((_params: unknown) => ({ scanned: 0, removed: 0, skippedLocked: 0 })),
 );
+const hasPreviousIncompleteInstall = vi.hoisted(() =>
+  vi.fn((_installRoot: string, _installSpecs: readonly string[]) => false),
+);
 const repairBundledRuntimeDepsInstallRootAsync = vi.hoisted(() =>
   vi.fn(async (_params: unknown) => ({})),
 );
@@ -123,6 +126,8 @@ vi.mock("../infra/openclaw-root.js", () => ({
 }));
 
 vi.mock("../plugins/bundled-runtime-deps.js", () => ({
+  hasPreviousIncompleteInstall: (installRoot: string, installSpecs: readonly string[]) =>
+    hasPreviousIncompleteInstall(installRoot, installSpecs),
   pruneUnknownBundledRuntimeDepsRoots: (params: unknown) =>
     pruneUnknownBundledRuntimeDepsRoots(params),
   repairBundledRuntimeDepsInstallRootAsync: (params: unknown) =>
@@ -173,6 +178,7 @@ function createLog() {
 describe("prepareGatewayPluginBootstrap runtime-deps staging", () => {
   beforeEach(() => {
     applyPluginAutoEnable.mockClear();
+    hasPreviousIncompleteInstall.mockClear().mockReturnValue(false);
     initSubagentRegistry.mockClear();
     loadGatewayStartupPlugins.mockClear();
     pruneUnknownBundledRuntimeDepsRoots.mockClear().mockReturnValue({
@@ -271,6 +277,58 @@ describe("prepareGatewayPluginBootstrap runtime-deps staging", () => {
         installSpecs: ["alpha-runtime@1.0.0", "grammy@1.37.0"],
       }),
     );
+  });
+
+  it("forces full reinstall when node_modules exists but install is not fully materialized", async () => {
+    scanBundledPluginRuntimeDeps.mockReturnValueOnce({
+      deps: [
+        { name: "alpha-runtime", version: "1.0.0", pluginIds: ["telegram"] },
+        { name: "grammy", version: "1.37.0", pluginIds: ["telegram"] },
+      ],
+      missing: [],
+      conflicts: [],
+    });
+    hasPreviousIncompleteInstall.mockReturnValueOnce(true);
+    const log = createLog();
+    const { prepareGatewayPluginBootstrap } = await import("./server-startup-plugins.js");
+
+    await prepareGatewayPluginBootstrap({
+      cfgAtStart: {},
+      startupRuntimeConfig: {},
+      minimalTestGateway: false,
+      log,
+    });
+
+    expect(repairBundledRuntimeDepsInstallRootAsync).toHaveBeenCalledWith(
+      expect.objectContaining({
+        installRoot: "/runtime",
+        missingSpecs: ["alpha-runtime@1.0.0", "grammy@1.37.0"],
+        installSpecs: ["alpha-runtime@1.0.0", "grammy@1.37.0"],
+      }),
+    );
+    expect(log.warn).toHaveBeenCalledWith(
+      expect.stringContaining("previous bundled runtime deps install was incomplete"),
+    );
+  });
+
+  it("skips staging when all deps are present and install is complete", async () => {
+    scanBundledPluginRuntimeDeps.mockReturnValueOnce({
+      deps: [{ name: "grammy", version: "1.37.0", pluginIds: ["telegram"] }],
+      missing: [],
+      conflicts: [],
+    });
+    hasPreviousIncompleteInstall.mockReturnValueOnce(false);
+    const log = createLog();
+    const { prepareGatewayPluginBootstrap } = await import("./server-startup-plugins.js");
+
+    await prepareGatewayPluginBootstrap({
+      cfgAtStart: {},
+      startupRuntimeConfig: {},
+      minimalTestGateway: false,
+      log,
+    });
+
+    expect(repairBundledRuntimeDepsInstallRootAsync).not.toHaveBeenCalled();
   });
 
   it("derives startup activation from source config instead of runtime plugin defaults", async () => {

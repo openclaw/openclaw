@@ -661,6 +661,42 @@ describe("doctor bundled plugin runtime deps", () => {
     expectNoLegacyRuntimeDepsManifest(installRoot);
   });
 
+  it("forces full reinstall when node_modules exists but install is not fully materialized", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-bundled-"));
+    writeJson(path.join(root, "package.json"), { name: "openclaw" });
+    writeBundledChannelPlugin(root, "telegram", { grammy: "1.37.0" });
+    const installRoot = resolveBundledRuntimeDependencyPackageInstallRoot(root);
+    // Write only the version sentinel so the dep appears present to the scanner,
+    // but omit the generated install manifest (installRoot/package.json with
+    // name "openclaw-runtime-deps-install") to simulate an interrupted install.
+    writeJson(path.join(installRoot, "node_modules", "grammy", "package.json"), {
+      name: "grammy",
+      version: "1.37.0",
+    });
+    const installed = createInstalledRuntimeDeps();
+
+    await maybeRepairBundledPluginRuntimeDeps({
+      runtime: createRuntime(),
+      prompter: createNonInteractivePrompter(),
+      packageRoot: root,
+      config: {
+        plugins: { enabled: true },
+        channels: { telegram: { enabled: true } },
+      },
+      installDeps: (params) => {
+        installed.push(params);
+      },
+    });
+
+    expect(installed).toEqual([
+      {
+        installRoot,
+        missingSpecs: ["grammy@1.37.0"],
+        installSpecs: ["grammy@1.37.0"],
+      },
+    ]);
+  });
+
   it("logs runtime dependency repair progress before and after install", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-bundled-"));
     writeJson(path.join(root, "package.json"), { name: "openclaw" });

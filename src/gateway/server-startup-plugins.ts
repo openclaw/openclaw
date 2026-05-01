@@ -6,6 +6,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { measureDiagnosticsTimelineSpan } from "../infra/diagnostics-timeline.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import {
+  hasPreviousIncompleteInstall,
   pruneUnknownBundledRuntimeDepsRoots,
   repairBundledRuntimeDepsInstallRootAsync,
   resolveBundledRuntimeDependencyPackageInstallRoot,
@@ -103,13 +104,25 @@ async function prestageGatewayBundledRuntimeDepsImpl(params: {
       `[plugins] bundled runtime deps have version conflicts: ${conflicts.map((conflict) => `${conflict.name} (${conflict.versions.join(", ")})`).join("; ")}`,
     );
   }
-  if (missing.length === 0) {
-    return;
-  }
-  const installSpecs = deps.map((dep) => `${dep.name}@${dep.version}`);
+
   const installRoot = resolveBundledRuntimeDependencyPackageInstallRoot(packageRoot, {
     env: process.env,
   });
+  const installSpecs = deps.map((dep) => `${dep.name}@${dep.version}`);
+  // If node_modules exists but the install completion marker is absent, the previous
+  // install was interrupted (e.g. ETIMEDOUT during `openclaw update`). The completion
+  // marker is written only after successful install, so its absence indicates corrupt
+  // state even if manifest exists. Treat all deps as missing so repair performs full reinstall.
+  const installIncomplete = hasPreviousIncompleteInstall(installRoot, installSpecs);
+  const effectiveMissing = installIncomplete ? deps : missing;
+  if (effectiveMissing.length === 0) {
+    return;
+  }
+  if (installIncomplete) {
+    params.log.warn(
+      `[plugins] previous bundled runtime deps install was incomplete; forcing reinstall of all ${deps.length} deps`,
+    );
+  }
   const startedAt = Date.now();
   params.log.info(
     `[plugins] staging bundled runtime deps before gateway startup (${installSpecs.length} specs): ${installSpecs.join(", ")}`,

@@ -25,6 +25,7 @@ import {
 import { normalizeRuntimeDepSpecs } from "./bundled-runtime-deps-specs.js";
 
 const BUNDLED_RUNTIME_DEPS_INSTALL_PROGRESS_INTERVAL_MS = 5_000;
+const BUNDLED_RUNTIME_DEPS_INSTALL_COMPLETE_MARKER = ".install-complete";
 
 export type BundledRuntimeDepsInstallParams = {
   installRoot: string;
@@ -196,6 +197,11 @@ function finalizeBundledRuntimeDepsInstall(params: {
     assertBundledRuntimeDepsInstalled(params.installRoot, context.installSpecs);
   }
   removeLegacyRuntimeDepsManifest(params.installRoot);
+  // Write completion marker AFTER successful install to catch interrupted installs
+  fs.writeFileSync(
+    path.join(params.installRoot, BUNDLED_RUNTIME_DEPS_INSTALL_COMPLETE_MARKER),
+    Date.now().toString(),
+  );
 }
 
 function cleanupBundledRuntimeDepsInstallContext(context: BundledRuntimeDepsInstallContext): void {
@@ -294,6 +300,11 @@ export function installBundledRuntimeDeps(params: {
     removeLegacyRuntimeDepsManifest(params.installRoot);
     return;
   }
+  // Remove old completion marker before starting new install
+  const markerPath = path.join(params.installRoot, BUNDLED_RUNTIME_DEPS_INSTALL_COMPLETE_MARKER);
+  if (fs.existsSync(markerPath)) {
+    fs.unlinkSync(markerPath);
+  }
   const context = createBundledRuntimeDepsInstallContext({
     installRoot: params.installRoot,
     installExecutionRoot: params.installExecutionRoot,
@@ -334,6 +345,11 @@ export async function installBundledRuntimeDepsAsync(params: {
   if (isRuntimeDepsPlanMaterialized(params.installRoot, installSpecs)) {
     removeLegacyRuntimeDepsManifest(params.installRoot);
     return;
+  }
+  // Remove old completion marker before starting new install
+  const markerPath = path.join(params.installRoot, BUNDLED_RUNTIME_DEPS_INSTALL_COMPLETE_MARKER);
+  if (fs.existsSync(markerPath)) {
+    fs.unlinkSync(markerPath);
   }
   const context = createBundledRuntimeDepsInstallContext({
     installRoot: params.installRoot,
