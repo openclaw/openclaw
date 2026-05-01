@@ -48,6 +48,7 @@ const {
   setTelegramBotRuntimeForTest,
 } = await import("./bot-core.js");
 const { resetTelegramForumFlagCacheForTest } = await import("./bot/helpers.js");
+const { clearAccountThrottlersForTest } = await import("./account-throttler.js");
 let createTelegramBot: (
   opts: TelegramBotOptions,
 ) => ReturnType<typeof import("./bot-core.js").createTelegramBotCore>;
@@ -162,6 +163,7 @@ describe("createTelegramBot", () => {
   });
   beforeEach(() => {
     resetTelegramForumFlagCacheForTest();
+    clearAccountThrottlersForTest();
     setTelegramBotRuntimeForTest(
       telegramBotRuntimeForTest as unknown as Parameters<typeof setTelegramBotRuntimeForTest>[0],
     );
