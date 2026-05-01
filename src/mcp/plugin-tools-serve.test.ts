@@ -22,9 +22,13 @@ vi.mock("../config/config.js", () => ({
   getRuntimeConfig: getRuntimeConfigMock,
 }));
 
-vi.mock("../logging/console.js", () => ({
-  routeLogsToStderr: routeLogsToStderrMock,
-}));
+vi.mock("../logging/console.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../logging/console.js")>();
+  return {
+    ...actual,
+    routeLogsToStderr: routeLogsToStderrMock,
+  };
+});
 
 vi.mock("../plugins/tools.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../plugins/tools.js")>();
