@@ -245,7 +245,6 @@ export function tryLoadActivatedBundledPluginPublicSurfaceModuleSync<T extends o
 
 export function resetFacadeRuntimeStateForTest(): void {
   resetFacadeLoaderStateForTest();
-  facadeActivationCheckRuntimeModule?.resetFacadeActivationCheckRuntimeStateForTest();
   facadeActivationCheckRuntimeModule = undefined;
   facadeActivationCheckRuntimeJitiLoaders.clear();
 }
