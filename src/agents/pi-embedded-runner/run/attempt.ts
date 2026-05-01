@@ -2074,7 +2074,11 @@ export async function runEmbeddedAttempt(
 
         if (activeContextEngine) {
           try {
-            const preassemblyContextEngineMessagesForPrecheck = activeSession.messages;
+            // Snapshot before assemble: the assemble contract does not require
+            // the input array to be treated immutably, so an engine that windows
+            // history in place would otherwise leave the precheck reading
+            // already-windowed messages instead of the true pre-assembly state.
+            const preassemblyContextEngineMessagesForPrecheck = activeSession.messages.slice();
             const assembled = await assembleAttemptContextEngine({
               contextEngine: activeContextEngine,
               sessionId: params.sessionId,
@@ -2095,7 +2099,7 @@ export async function runEmbeddedAttempt(
             contextEnginePromptAuthority = assembled.promptAuthority ?? "assembled";
             if (contextEnginePromptAuthority === "preassembly_may_overflow") {
               unwindowedContextEngineMessagesForPrecheck =
-                preassemblyContextEngineMessagesForPrecheck.slice();
+                preassemblyContextEngineMessagesForPrecheck;
             }
             if (assembled.systemPromptAddition) {
               systemPromptText = prependSystemPromptAddition({
