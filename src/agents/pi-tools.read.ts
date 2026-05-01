@@ -738,8 +738,12 @@ function createSandboxWriteOperations(params: SandboxToolParams) {
       try {
         const buf = await params.bridge.readFile({ filePath: absolutePath, cwd: params.root });
         existing = buf.toString("utf8");
-      } catch {
-        // File does not exist yet — start empty.
+      } catch (err) {
+        // Only treat genuine missing-file errors as empty; re-throw safety and I/O failures.
+        const msg = err instanceof Error ? err.message : String(err);
+        if (!/ENOENT|no such file/i.test(msg)) {
+          throw err;
+        }
       }
       await params.bridge.writeFile({
         filePath: absolutePath,
@@ -854,6 +858,11 @@ export function wrapToolWriteWithAppend(
       const content = typeof record?.content === "string" ? record.content : undefined;
       if (!filePath || !filePath.trim() || content === undefined || !content.trim()) {
         return tool.execute(toolCallId, args, signal, onUpdate);
+      }
+      if (signal?.aborted) {
+        const err = new Error("Aborted");
+        err.name = "AbortError";
+        throw err;
       }
       // Strip @ workspace-alias prefix and expand ~ before resolving; mirrors resolveToCwd semantics.
       const normalized = filePath.startsWith("@") ? filePath.slice(1) : filePath;
