@@ -95,6 +95,72 @@ function qmdUsesVectors(searchMode: ResolvedQmdConfig["searchMode"]): boolean {
   return searchMode !== "search";
 }
 
+const QMD_RELAXED_LEXICAL_STOP_WORDS = new Set([
+  "about",
+  "added",
+  "after",
+  "again",
+  "also",
+  "and",
+  "any",
+  "before",
+  "brief",
+  "briefly",
+  "came",
+  "can",
+  "could",
+  "current",
+  "derived",
+  "did",
+  "does",
+  "facts",
+  "from",
+  "helped",
+  "hits",
+  "into",
+  "irrelevant",
+  "just",
+  "keep",
+  "latest",
+  "message",
+  "notice",
+  "please",
+  "prior",
+  "prompt",
+  "report",
+  "returned",
+  "retrieval",
+  "search",
+  "semantic",
+  "separate",
+  "should",
+  "stale",
+  "test",
+  "that",
+  "the",
+  "this",
+  "thread",
+  "told",
+  "what",
+  "when",
+  "whether",
+  "with",
+  "zero",
+]);
+
+const QMD_RELAXED_LEXICAL_PRIORITY_WORDS = new Set([
+  "active",
+  "discord",
+  "durable",
+  "file",
+  "gateway",
+  "memory",
+  "openclaw",
+  "qmd",
+  "runtime",
+  "workspace",
+]);
+
 function isDefaultMemoryPath(relPath: string): boolean {
   const normalized = relPath.trim().replace(/^\.\//, "").replace(/\\/g, "/");
   if (!normalized) {
@@ -147,7 +213,7 @@ function getQmdUpdateQueueState(): QmdUpdateQueueState {
   }));
 }
 
-function _hasHanScript(value: string): boolean {
+function hasHanScript(value: string): boolean {
   return HAN_SCRIPT_RE.test(value);
 }
 
@@ -155,6 +221,42 @@ function normalizeHanBm25Query(query: string): string {
   const trimmed = query.trim();
   // Keep Han/CJK BM25 queries intact so OpenClaw search semantics match direct qmd search.
   return trimmed;
+}
+
+function buildRelaxedQmdLexicalQuery(query: string): string | null {
+  if (hasHanScript(query)) {
+    return null;
+  }
+  const tokens = query.replace(/[._/-]+/g, " ").match(/[A-Za-z0-9][A-Za-z0-9']*/g);
+  if (!tokens || tokens.length < 6) {
+    return null;
+  }
+  const seen = new Set<string>();
+  const candidates: string[] = [];
+  for (const token of tokens) {
+    const normalized = token.replace(/^'+|'+$/g, "");
+    const key = normalized.toLowerCase();
+    if (key.length < 3 || key === "md" || QMD_RELAXED_LEXICAL_STOP_WORDS.has(key)) {
+      continue;
+    }
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    candidates.push(normalized);
+  }
+  if (candidates.length < 2) {
+    return null;
+  }
+  const priority = candidates.filter((token) =>
+    QMD_RELAXED_LEXICAL_PRIORITY_WORDS.has(token.toLowerCase()),
+  );
+  if (priority.length < 2) {
+    return null;
+  }
+  const selected = priority.slice(0, 8);
+  const relaxed = selected.join(" ");
+  return relaxed && relaxed !== query.trim() ? relaxed : null;
 }
 
 function parseQmdStatusVectorCount(raw: string): number | null {
@@ -1114,6 +1216,7 @@ export class QmdMemoryManager implements MemorySearchManager {
     const mcporterEnabled = this.qmd.mcporter.enabled;
     const runSearchAttempt = async (
       allowMissingCollectionRepair: boolean,
+      searchQuery: string,
     ): Promise<QmdQueryResult[]> => {
       try {
         if (mcporterEnabled) {
@@ -1124,7 +1227,7 @@ export class QmdMemoryManager implements MemorySearchManager {
                 tool: explicitSearchTool,
                 searchCommand: qmdSearchCommand,
                 explicitToolOverride: true,
-                query: trimmed,
+                query: searchQuery,
                 limit,
                 minScore,
                 collectionNames,
@@ -1135,7 +1238,7 @@ export class QmdMemoryManager implements MemorySearchManager {
               tool: explicitSearchTool,
               searchCommand: qmdSearchCommand,
               explicitToolOverride: true,
-              query: trimmed,
+              query: searchQuery,
               limit,
               minScore,
               collection: collectionNames[0],
@@ -1148,7 +1251,7 @@ export class QmdMemoryManager implements MemorySearchManager {
               tool,
               searchCommand: qmdSearchCommand,
               explicitToolOverride: false,
-              query: trimmed,
+              query: searchQuery,
               limit,
               minScore,
               collectionNames,
@@ -1159,7 +1262,7 @@ export class QmdMemoryManager implements MemorySearchManager {
             tool,
             searchCommand: qmdSearchCommand,
             explicitToolOverride: false,
-            query: trimmed,
+            query: searchQuery,
             limit,
             minScore,
             collection: collectionNames[0],
@@ -1169,13 +1272,13 @@ export class QmdMemoryManager implements MemorySearchManager {
         const collectionGroups = await this.resolveCollectionSearchGroups(collectionNames);
         if (collectionGroups.length > 1) {
           return await this.runQueryAcrossCollectionGroups(
-            trimmed,
+            searchQuery,
             limit,
             collectionGroups,
             qmdSearchCommand,
           );
         }
-        const args = this.buildSearchArgs(qmdSearchCommand, trimmed, limit);
+        const args = this.buildSearchArgs(qmdSearchCommand, searchQuery, limit);
         args.push(...this.buildCollectionFilterArgs(collectionGroups[0] ?? collectionNames));
         const result = await this.runQmd(args, { timeoutMs: this.qmd.limits.timeoutMs });
         return parseQmdQueryJson(result.stdout, result.stderr);
@@ -1197,13 +1300,13 @@ export class QmdMemoryManager implements MemorySearchManager {
             const collectionGroups = await this.resolveCollectionSearchGroups(collectionNames);
             if (collectionGroups.length > 1) {
               return await this.runQueryAcrossCollectionGroups(
-                trimmed,
+                searchQuery,
                 limit,
                 collectionGroups,
                 "query",
               );
             }
-            const fallbackArgs = this.buildSearchArgs("query", trimmed, limit);
+            const fallbackArgs = this.buildSearchArgs("query", searchQuery, limit);
             fallbackArgs.push(
               ...this.buildCollectionFilterArgs(collectionGroups[0] ?? collectionNames),
             );
@@ -1224,12 +1327,23 @@ export class QmdMemoryManager implements MemorySearchManager {
 
     let parsed: QmdQueryResult[];
     try {
-      parsed = await runSearchAttempt(true);
+      parsed = await runSearchAttempt(true, trimmed);
     } catch (err) {
       if (!(await this.tryRepairMissingCollectionSearch(err))) {
         throw err instanceof Error ? err : new Error(String(err));
       }
-      parsed = await runSearchAttempt(false);
+      parsed = await runSearchAttempt(false, trimmed);
+    }
+    if (parsed.length === 0 && qmdSearchCommand === "search") {
+      const relaxedQuery = buildRelaxedQmdLexicalQuery(trimmed);
+      if (relaxedQuery) {
+        try {
+          parsed = await runSearchAttempt(false, relaxedQuery);
+          searchFallbackReason = "relaxed-lexical-zero-hit";
+        } catch (err) {
+          log.warn(`qmd relaxed search fallback failed: ${String(err)}`);
+        }
+      }
     }
     const results: MemorySearchResult[] = [];
     for (const entry of parsed) {
