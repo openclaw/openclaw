@@ -29,6 +29,10 @@ export const InstallRecordShape = {
   clawhubChannel: z
     .union([z.literal("official"), z.literal("community"), z.literal("private")])
     .optional(),
+  storepackSha256: z.string().optional(),
+  storepackSpecVersion: z.number().int().nonnegative().optional(),
+  storepackManifestSha256: z.string().optional(),
+  storepackSize: z.number().int().nonnegative().optional(),
   gitUrl: z.string().optional(),
   gitRef: z.string().optional(),
   gitCommit: z.string().optional(),

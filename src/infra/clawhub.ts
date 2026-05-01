@@ -23,6 +23,36 @@ export type ClawHubPackageCompatibility = {
   pluginSdkVersion?: string;
   minGatewayVersion?: string;
 };
+export type ClawHubPackageHostTarget = {
+  os?: string | null;
+  arch?: string | null;
+  libc?: string | null;
+  key?: string | null;
+};
+export type ClawHubPackageEnvironmentSummary = {
+  requiresLocalDesktop?: boolean;
+  requiresBrowser?: boolean;
+  requiresAudioDevice?: boolean;
+  requiresNetwork?: boolean;
+  requiresExternalServices?: string[];
+  requiresOsPermissions?: string[];
+  supportsRemoteHost?: boolean;
+  knownUnsupported?: string[];
+};
+export type ClawHubPackageStorePackSummary = {
+  available: boolean;
+  specVersion?: number | null;
+  format?: string | null;
+  sha256?: string | null;
+  size?: number | null;
+  fileCount?: number | null;
+  manifestSha256?: string | null;
+  builtAt?: number | null;
+  buildVersion?: string | null;
+  hostTargets?: ClawHubPackageHostTarget[];
+  environment?: ClawHubPackageEnvironmentSummary | null;
+  runtimeBundles?: unknown[];
+};
 export type ClawHubPackageListItem = {
   name: string;
   displayName: string;
@@ -38,6 +68,10 @@ export type ClawHubPackageListItem = {
   capabilityTags?: string[];
   executesCode?: boolean;
   verificationTier?: string | null;
+  storepackAvailable?: boolean;
+  hostTargetKeys?: string[];
+  environmentFlags?: string[];
+  storepack?: ClawHubPackageStorePackSummary;
 };
 export type ClawHubPackageDetail = {
   package:
@@ -65,6 +99,7 @@ export type ClawHubPackageDetail = {
           hasProvenance?: boolean;
           scanStatus?: string;
         } | null;
+        storepack?: ClawHubPackageStorePackSummary;
       })
     | null;
   owner?: {
@@ -103,6 +138,7 @@ export type ClawHubPackageVersion = {
         ? C
         : never
       : never;
+    storepack?: ClawHubPackageStorePackSummary;
   } | null;
 };
 

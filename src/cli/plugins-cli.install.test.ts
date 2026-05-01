@@ -84,6 +84,10 @@ function createClawHubInstallResult(params: {
       version: params.version,
       integrity: "sha256-abc",
       resolvedAt: "2026-03-22T00:00:00.000Z",
+      storepackSha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      storepackSpecVersion: 1,
+      storepackManifestSha256: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      storepackSize: 4096,
     },
   };
 }
@@ -467,6 +471,10 @@ describe("plugins cli install", () => {
         clawhubPackage: "demo",
         clawhubFamily: "code-plugin",
         clawhubChannel: "official",
+        storepackSha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        storepackSpecVersion: 1,
+        storepackManifestSha256: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        storepackSize: 4096,
       }),
     });
     expect(writeConfigFile).toHaveBeenCalledWith(enabledCfg);
@@ -544,7 +552,7 @@ describe("plugins cli install", () => {
           "memory-lancedb": {
             config: {
               embedding: {
-                provider: "openai",
+                apiKey: "sk-test",
                 model: "text-embedding-3-small",
               },
             },
@@ -636,6 +644,10 @@ describe("plugins cli install", () => {
         installPath: cliInstallPath("demo"),
         version: "1.2.3",
         clawhubPackage: "demo",
+        storepackSha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        storepackSpecVersion: 1,
+        storepackManifestSha256: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        storepackSize: 4096,
       }),
     });
   });

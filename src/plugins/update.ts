@@ -938,6 +938,10 @@ export async function updateNpmInstalledPlugins(params: {
         clawhubPackage: clawhubResult.clawhub.clawhubPackage,
         clawhubFamily: clawhubResult.clawhub.clawhubFamily,
         clawhubChannel: clawhubResult.clawhub.clawhubChannel,
+        storepackSha256: clawhubResult.clawhub.storepackSha256,
+        storepackSpecVersion: clawhubResult.clawhub.storepackSpecVersion,
+        storepackManifestSha256: clawhubResult.clawhub.storepackManifestSha256,
+        storepackSize: clawhubResult.clawhub.storepackSize,
       });
     } else if (record.source === "git") {
       const gitResult = result as Extract<

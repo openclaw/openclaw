@@ -18,6 +18,16 @@ function setInstallStringField<Key extends keyof Omit<InstalledPluginInstallReco
   }
 }
 
+function setInstallNumberField<Key extends keyof Omit<InstalledPluginInstallRecordInfo, "source">>(
+  target: InstalledPluginInstallRecordInfo,
+  key: Key,
+  value: PluginInstallRecord[Key],
+): void {
+  if (typeof value === "number" && Number.isSafeInteger(value) && value >= 0) {
+    target[key] = value as InstalledPluginInstallRecordInfo[Key];
+  }
+}
+
 function normalizeInstallRecord(
   record: PluginInstallRecord | undefined,
 ): InstalledPluginInstallRecordInfo | undefined {
@@ -42,6 +52,10 @@ function normalizeInstallRecord(
   setInstallStringField(normalized, "clawhubPackage", record.clawhubPackage);
   setInstallStringField(normalized, "clawhubFamily", record.clawhubFamily);
   setInstallStringField(normalized, "clawhubChannel", record.clawhubChannel);
+  setInstallStringField(normalized, "storepackSha256", record.storepackSha256);
+  setInstallNumberField(normalized, "storepackSpecVersion", record.storepackSpecVersion);
+  setInstallStringField(normalized, "storepackManifestSha256", record.storepackManifestSha256);
+  setInstallNumberField(normalized, "storepackSize", record.storepackSize);
   setInstallStringField(normalized, "gitUrl", record.gitUrl);
   setInstallStringField(normalized, "gitRef", record.gitRef);
   setInstallStringField(normalized, "gitCommit", record.gitCommit);
