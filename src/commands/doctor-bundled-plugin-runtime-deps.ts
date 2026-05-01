@@ -92,7 +92,6 @@ export async function maybeRepairBundledPluginRuntimeDeps(params: {
 
   const shouldRepair =
     params.prompter.shouldRepair ||
-    params.prompter.repairMode.nonInteractive ||
     (await params.prompter.confirmAutoFix({
       message: "Install missing bundled plugin runtime deps now?",
       initialValue: true,

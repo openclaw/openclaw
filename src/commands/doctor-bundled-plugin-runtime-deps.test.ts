@@ -122,13 +122,14 @@ function expectNoLegacyRuntimeDepsManifest(installRoot: string): void {
 }
 
 function createNonInteractivePrompter(
-  options: { updateInProgress?: boolean } = {},
+  options: { repair?: boolean; updateInProgress?: boolean } = {},
 ): DoctorPrompter {
+  const shouldRepair = options.repair ?? true;
   return {
-    shouldRepair: false,
+    shouldRepair,
     shouldForce: false,
     repairMode: {
-      shouldRepair: false,
+      shouldRepair,
       shouldForce: false,
       nonInteractive: true,
       canPrompt: false,
@@ -491,6 +492,34 @@ describe("doctor bundled plugin runtime deps", () => {
       packageRoot: root,
       config: {
         plugins: { enabled: true },
+      },
+      installDeps: (params) => {
+        installed.push(params);
+        materializeRuntimeDeps(params);
+      },
+    });
+
+    expect(installed).toEqual([]);
+  });
+
+  it("does not repair missing runtime deps during plain non-interactive doctor", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-bundled-"));
+    writeJson(path.join(root, "package.json"), { name: "openclaw" });
+    writeBundledProviderPlugin(root, "bedrock", ["bedrock"], {
+      "bedrock-only": "1.0.0",
+    });
+    const installed = createInstalledRuntimeDeps();
+
+    await maybeRepairBundledPluginRuntimeDeps({
+      runtime: createRuntime(),
+      prompter: createNonInteractivePrompter({ repair: false }),
+      packageRoot: root,
+      config: {
+        plugins: {
+          enabled: true,
+          allow: ["bedrock"],
+          entries: { bedrock: { enabled: true } },
+        },
       },
       installDeps: (params) => {
         installed.push(params);
