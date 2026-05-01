@@ -412,6 +412,32 @@ describe("resolveGoogleChatAccount", () => {
     expect(resolved.credentialsFile).toBe("/tmp/googlechat.json");
   });
 
+  it("does not fall back to inline serviceAccount when serviceAccountRef is unresolved", () => {
+    expect(() =>
+      resolveGoogleChatAccount({
+        cfg: {
+          channels: {
+            googlechat: {
+              serviceAccount: {
+                client_email: "bot@example.com",
+                private_key: "legacy-key",
+                type: "service_account",
+              },
+              serviceAccountRef: {
+                source: "exec",
+                provider: "onepassword",
+                id: "service-account.json",
+              },
+            },
+          },
+        },
+        accountId: "default",
+      }),
+    ).toThrow(
+      'channels.googlechat.accounts.default.serviceAccount: unresolved SecretRef "exec:onepassword:service-account.json"',
+    );
+  });
+
   it("inherits shared defaults from accounts.default for named accounts", () => {
     const cfg: OpenClawConfig = {
       channels: {
