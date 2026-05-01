@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { validateConfigObjectRaw } from "./validation.js";
+import { OpenClawSchema } from "./zod-schema.js";
 
 describe("web search Codex native config validation", () => {
   it("accepts tools.web.search.openaiCodex", () => {
-    const result = validateConfigObjectRaw({
+    const result = OpenClawSchema.safeParse({
       tools: {
         web: {
           search: {
@@ -24,7 +25,7 @@ describe("web search Codex native config validation", () => {
       },
     });
 
-    expect(result.ok).toBe(true);
+    expect(result.success).toBe(true);
   });
 
   it("rejects invalid openaiCodex.mode", () => {
