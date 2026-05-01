@@ -36,8 +36,6 @@ describe("bundled plugin public surface loader", () => {
       createJiti,
     }));
     vi.doMock("./native-module-require.js", () => ({
-      isJavaScriptModulePath: (modulePath: string) =>
-        modulePath.endsWith(".js") || modulePath.endsWith(".mjs") || modulePath.endsWith(".cjs"),
       tryNativeRequireJavaScriptModule: () => ({
         ok: true,
         moduleExport: { marker: "windows-dist-ok" },
@@ -118,8 +116,6 @@ describe("bundled plugin public surface loader", () => {
       createJiti,
     }));
     vi.doMock("./native-module-require.js", () => ({
-      isJavaScriptModulePath: (modulePath: string) =>
-        modulePath.endsWith(".js") || modulePath.endsWith(".mjs") || modulePath.endsWith(".cjs"),
       tryNativeRequireJavaScriptModule: (modulePath: string) => ({
         ok: true,
         moduleExport: { marker: path.basename(path.dirname(modulePath)) },
@@ -129,7 +125,7 @@ describe("bundled plugin public surface loader", () => {
 
     const publicSurfaceLoader = await importFreshModule<
       typeof import("./public-surface-loader.js")
-    >(import.meta.url, "./public-surface-loader.js?scope=shared-bundled-jiti");
+    >(import.meta.url, "./public-surface-loader.js?scope=bundled-native-public-artifacts");
     const tempRoot = createTempDir();
     const bundledPluginsDir = path.join(tempRoot, "dist");
     process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledPluginsDir;

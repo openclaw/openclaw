@@ -6,7 +6,6 @@ import type { OpenClawConfig } from "../config/types.js";
 import { asNullableRecord } from "../shared/record-coerce.js";
 import { getCachedPluginJitiLoader, type PluginJitiLoaderCache } from "./jiti-loader-cache.js";
 import type { PluginManifestRegistry } from "./manifest-registry.js";
-import { tryNativeRequireJavaScriptModule } from "./native-module-require.js";
 import { loadPluginManifestRegistryForPluginRegistry } from "./plugin-registry.js";
 
 const CONTRACT_API_EXTENSIONS = [".js", ".mjs", ".cjs", ".ts", ".mts", ".cts"] as const;
@@ -39,20 +38,12 @@ type PluginManifestRegistryRecord = PluginManifestRegistry["plugins"][number];
 
 const jitiLoaders: PluginJitiLoaderCache = new Map();
 
-function getJiti(modulePath: string) {
+function loadPluginDoctorContractModule(modulePath: string): PluginDoctorContractModule {
   return getCachedPluginJitiLoader({
     cache: jitiLoaders,
     modulePath,
     importerUrl: import.meta.url,
-  });
-}
-
-function loadPluginDoctorContractModule(modulePath: string): PluginDoctorContractModule {
-  const nativeModule = tryNativeRequireJavaScriptModule(modulePath, { allowWindows: true });
-  if (nativeModule.ok) {
-    return nativeModule.moduleExport as PluginDoctorContractModule;
-  }
-  return getJiti(modulePath)(modulePath) as PluginDoctorContractModule;
+  })(modulePath) as PluginDoctorContractModule;
 }
 
 function resolveContractApiPath(rootDir: string): string | null {

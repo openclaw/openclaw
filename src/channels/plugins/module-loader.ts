@@ -5,26 +5,21 @@ import {
   getCachedPluginJitiLoader,
   type PluginJitiLoaderCache,
 } from "../../plugins/jiti-loader-cache.js";
-import { tryNativeRequireJavaScriptModule } from "../../plugins/native-module-require.js";
 export { isJavaScriptModulePath } from "../../plugins/native-module-require.js";
 
-function createModuleLoader() {
-  const jitiLoaders: PluginJitiLoaderCache = new Map();
+const jitiLoaders: PluginJitiLoaderCache = new Map();
 
-  return (modulePath: string, tryNative?: boolean) => {
-    return getCachedPluginJitiLoader({
-      cache: jitiLoaders,
-      modulePath,
-      importerUrl: import.meta.url,
-      argvEntry: process.argv[1],
-      preferBuiltDist: true,
-      jitiFilename: import.meta.url,
-      tryNative,
-    });
-  };
+function loadModule(modulePath: string, tryNative?: boolean) {
+  return getCachedPluginJitiLoader({
+    cache: jitiLoaders,
+    modulePath,
+    importerUrl: import.meta.url,
+    argvEntry: process.argv[1],
+    preferBuiltDist: true,
+    jitiFilename: import.meta.url,
+    tryNative,
+  });
 }
-
-let loadModule = createModuleLoader();
 
 export function resolveCompiledBundledModulePath(modulePath: string): string {
   const compiledDistModulePath = modulePath.replace(
@@ -84,14 +79,5 @@ export function loadChannelPluginModule(params: {
   }
   const safePath = opened.path;
   fs.closeSync(opened.fd);
-  const shouldTryNative = params.shouldTryNativeRequire?.(safePath);
-  if (shouldTryNative) {
-    const nativeModule = tryNativeRequireJavaScriptModule(safePath, {
-      allowWindows: true,
-    });
-    if (nativeModule.ok) {
-      return nativeModule.moduleExport;
-    }
-  }
-  return loadModule(safePath, shouldTryNative)(safePath);
+  return loadModule(safePath, params.shouldTryNativeRequire?.(safePath))(safePath);
 }
