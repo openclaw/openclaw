@@ -762,12 +762,22 @@ export function formatSkillsCompact(skills: Skill[]): string {
 // Budget reserved for the compact-mode warning line prepended by the caller.
 const COMPACT_WARNING_OVERHEAD = 150;
 
+/**
+ * Sanitize a skill name for safe inclusion in model-facing prompt text.
+ * Strips control characters, backticks, and angle brackets to prevent
+ * prompt injection or markdown/XML breakout.
+ */
+function sanitizeSkillName(name: string): string {
+  return name.replace(/[\x00-\x1f\x7f`<>]/g, "").trim();
+}
+
 function applySkillsPromptLimits(params: {
   skills: Skill[];
   config?: OpenClawConfig;
   agentId?: string;
 }): {
   skillsForPrompt: Skill[];
+  omittedNames: string[];
   truncated: boolean;
   compact: boolean;
 } {
@@ -811,7 +821,12 @@ function applySkillsPromptLimits(params: {
     }
   }
 
-  return { skillsForPrompt, truncated, compact };
+  const omittedNames = params.skills
+    .slice(skillsForPrompt.length)
+    .map((s) => sanitizeSkillName(s.name))
+    .filter(Boolean);
+
+  return { skillsForPrompt, omittedNames, truncated, compact };
 }
 
 export function buildWorkspaceSkillSnapshot(
@@ -889,13 +904,17 @@ function resolveWorkspaceSkillPromptState(
   const promptSkills = compactSkillPaths(resolvedSkills)
     .slice()
     .sort((a, b) => a.name.localeCompare(b.name, "en"));
-  const { skillsForPrompt, truncated, compact } = applySkillsPromptLimits({
+  const { skillsForPrompt, omittedNames, truncated, compact } = applySkillsPromptLimits({
     skills: promptSkills,
     config: opts?.config,
     agentId: opts?.agentId,
   });
+  const omittedList =
+    omittedNames.length > 0
+      ? ` Omitted: ${omittedNames.join(", ")}. Use \`openclaw skills info <name>\` to load them on demand.`
+      : "";
   const truncationNote = truncated
-    ? `⚠️ Skills truncated: included ${skillsForPrompt.length} of ${resolvedSkills.length}${compact ? " (compact format, descriptions omitted)" : ""}. Run \`openclaw skills check\` to audit.`
+    ? `⚠️ Skills truncated: included ${skillsForPrompt.length} of ${resolvedSkills.length}${compact ? " (compact format, descriptions omitted)" : ""}.${omittedList} Run \`openclaw skills check\` to audit.`
     : compact
       ? `⚠️ Skills catalog using compact format (descriptions omitted). Run \`openclaw skills check\` to audit.`
       : "";
