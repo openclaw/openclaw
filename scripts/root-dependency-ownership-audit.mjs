@@ -3,7 +3,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { packageNameFromSpecifier } from "./lib/bundled-plugin-root-runtime-mirrors.mjs";
+import { packageNameFromSpecifier } from "./lib/plugin-package-dependencies.mjs";
 
 const DEFAULT_SCAN_ROOTS = ["src", "extensions", "packages", "ui", "scripts", "test"];
 const SCANNED_EXTENSIONS = new Set([".cjs", ".cts", ".js", ".jsx", ".mjs", ".mts", ".ts", ".tsx"]);

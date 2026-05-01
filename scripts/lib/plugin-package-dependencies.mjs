@@ -27,7 +27,7 @@ export function packageNameFromSpecifier(specifier) {
   return first.startsWith("@") && second ? `${first}/${second}` : first;
 }
 
-export function collectBundledPluginRuntimeDependencySpecs(bundledPluginsDir) {
+export function collectBundledPluginPackageDependencySpecs(bundledPluginsDir) {
   const specs = new Map();
 
   if (!fs.existsSync(bundledPluginsDir)) {

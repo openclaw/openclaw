@@ -21,7 +21,7 @@ import { listBundledPluginPackArtifacts } from "./lib/bundled-plugin-build-entri
 import {
   collectRuntimeDependencySpecs,
   packageNameFromSpecifier,
-} from "./lib/bundled-plugin-root-runtime-mirrors.mjs";
+} from "./lib/plugin-package-dependencies.mjs";
 import { runInstalledWorkspaceBootstrapSmoke } from "./lib/workspace-bootstrap-smoke.mjs";
 import { parseReleaseVersion, resolveNpmCommandInvocation } from "./openclaw-npm-release-check.ts";
 

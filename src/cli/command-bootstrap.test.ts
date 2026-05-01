@@ -85,7 +85,7 @@ describe("ensureCliCommandBootstrap", () => {
     });
   });
 
-  it("loads agent command plugins with bundled runtime repair enabled", async () => {
+  it("loads agent command plugins without package-manager repair", async () => {
     await ensureCliCommandBootstrap({
       runtime: {} as never,
       commandPath: ["agent"],

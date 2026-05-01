@@ -28,8 +28,8 @@ import {
   type ExtensionPackageJson as PackageJson,
 } from "./lib/bundled-extension-manifest.ts";
 import { listBundledPluginPackArtifacts } from "./lib/bundled-plugin-build-entries.mjs";
-import { collectBundledPluginRuntimeDependencySpecs } from "./lib/bundled-plugin-root-runtime-mirrors.mjs";
 import { collectPackUnpackedSizeErrors as collectNpmPackUnpackedSizeErrors } from "./lib/npm-pack-budget.mjs";
+import { collectBundledPluginPackageDependencySpecs } from "./lib/plugin-package-dependencies.mjs";
 import { listPluginSdkDistArtifacts } from "./lib/plugin-sdk-entries.mjs";
 import {
   runInstalledWorkspaceBootstrapSmoke,
@@ -40,7 +40,7 @@ import { sparkleBuildFloorsFromShortVersion, type SparkleBuildFloors } from "./s
 import { buildCmdExeCommandLine } from "./windows-cmd-helpers.mjs";
 
 export { collectBundledExtensionManifestErrors } from "./lib/bundled-extension-manifest.ts";
-export { packageNameFromSpecifier } from "./lib/bundled-plugin-root-runtime-mirrors.mjs";
+export { packageNameFromSpecifier } from "./lib/plugin-package-dependencies.mjs";
 
 type PackFile = { path: string };
 type PackResult = { files?: PackFile[]; filename?: string; unpackedSize?: number };
@@ -147,14 +147,14 @@ function collectBundledExtensions(): BundledExtension[] {
 function checkBundledExtensionMetadata() {
   const extensions = collectBundledExtensions();
   const manifestErrors = collectBundledExtensionManifestErrors(extensions);
-  const bundledRuntimeDependencySpecs = collectBundledPluginRuntimeDependencySpecs(
+  const bundledPackageDependencySpecs = collectBundledPluginPackageDependencySpecs(
     resolve("extensions"),
   );
-  const dependencyConflictErrors = [...bundledRuntimeDependencySpecs.entries()]
+  const dependencyConflictErrors = [...bundledPackageDependencySpecs.entries()]
     .flatMap(([dependencyName, record]) =>
       record.conflicts.map(
         (conflict) =>
-          `bundled runtime dependency '${dependencyName}' has conflicting plugin specs: ${record.pluginIds.join(", ")} use '${record.spec}', ${conflict.pluginId} uses '${conflict.spec}'.`,
+          `bundled plugin package dependency '${dependencyName}' has conflicting specs: ${record.pluginIds.join(", ")} use '${record.spec}', ${conflict.pluginId} uses '${conflict.spec}'.`,
       ),
     )
     .toSorted((left, right) => left.localeCompare(right));

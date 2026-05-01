@@ -246,7 +246,7 @@ describe("collectBundledExtensionManifestErrors", () => {
   });
 });
 
-describe("bundled plugin root runtime mirrors", () => {
+describe("bundled plugin package dependency checks", () => {
   function makeBundledSpecs() {
     return new Map([
       ["@larksuiteoapi/node-sdk", { conflicts: [], pluginIds: ["feishu"], spec: "^1.60.0" }],
