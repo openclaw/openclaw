@@ -209,6 +209,7 @@ describe("createModelSelectionState catalog loading", () => {
       hasModelDirective: true,
     });
 
+    expect(loadModelCatalog).toHaveBeenCalledOnce();
     expect(loadModelCatalog).toHaveBeenCalledWith({
       config: cfg,
       intent: "runtimeDiscovery",

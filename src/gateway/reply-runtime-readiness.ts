@@ -21,6 +21,8 @@ import {
   markReplyRuntimeProviderPrepared,
 } from "./reply-runtime-readiness-monitor.js";
 
+const AWS_SDK_AUTH_SENTINEL = "__aws_sdk_auth__";
+
 type Awaitable<T> = T | Promise<T>;
 
 type ReplyRuntimeReadinessPhaseName =
@@ -234,7 +236,8 @@ export async function prepareReplyRuntimeForChannels(params: {
         agentDir,
         workspaceDir,
       });
-      const apiKey = auth.apiKey?.trim();
+      const apiKey =
+        auth.apiKey?.trim() || (auth.mode === "aws-sdk" ? AWS_SDK_AUTH_SENTINEL : undefined);
       if (!apiKey) {
         throw new Error(
           `No credential resolved for ${selected.provider} (auth mode: ${auth.mode}).`,

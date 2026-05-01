@@ -29,7 +29,9 @@ export type NodeEventContext = {
     probe?: boolean;
     includeSensitive?: boolean;
   }) => Promise<HealthSummary>;
-  loadGatewayModelCatalog: () => Promise<ModelCatalogEntry[]>;
+  loadGatewayModelCatalog: (params?: {
+    mode?: "cacheOnly" | "cachePreferred" | "runtimeDiscovery";
+  }) => Promise<ModelCatalogEntry[]>;
   logGateway: { warn: (msg: string) => void };
 };
 

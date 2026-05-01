@@ -533,6 +533,11 @@ describe("startGatewayPostAttachRuntime", () => {
         await vi.waitFor(() => {
           expect(prepareReadiness).toHaveBeenCalledTimes(1);
         });
+        expect(prepareReadiness).toHaveBeenCalledWith(
+          expect.objectContaining({
+            workspaceDir: "/tmp/openclaw-workspace",
+          }),
+        );
         expect(startChannels).not.toHaveBeenCalled();
 
         finishReadiness({

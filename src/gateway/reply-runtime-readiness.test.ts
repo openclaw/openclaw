@@ -259,6 +259,44 @@ describe("reply-runtime readiness", () => {
     vi.unstubAllEnvs();
   });
 
+  it("accepts aws-sdk auth without a static api key during readiness", async () => {
+    hoisted.loadModelCatalog.mockResolvedValueOnce([
+      {
+        provider: "amazon-bedrock",
+        id: "us.anthropic.claude-opus-4-6-v1:0",
+        name: "Claude Opus 4.6",
+        reasoning: true,
+      },
+    ]);
+    hoisted.getApiKeyForModel.mockResolvedValueOnce({
+      apiKey: undefined,
+      mode: "aws-sdk",
+      source: "aws-sdk default chain",
+    });
+
+    const result = await prepareReplyRuntimeForChannels({
+      cfg: {
+        agents: {
+          defaults: {
+            model: { primary: "amazon-bedrock/us.anthropic.claude-opus-4-6-v1:0" },
+          },
+        },
+      } as OpenClawConfig,
+      workspaceDir: "/tmp/openclaw-workspace",
+    });
+
+    expect(result.status).toBe("ready");
+    expect(hoisted.prepareProviderRuntimeAuth).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "amazon-bedrock",
+        context: expect.objectContaining({
+          apiKey: "__aws_sdk_auth__",
+          authMode: "aws-sdk",
+        }),
+      }),
+    );
+  });
+
   it("keeps createOpenClawTools contracts unchanged before and after readiness warmup", async () => {
     const cases: OpenClawConfig[] = [
       {

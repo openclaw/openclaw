@@ -1196,7 +1196,9 @@ export function resolveSessionModelRef(
 }
 
 export async function resolveGatewayModelSupportsImages(params: {
-  loadGatewayModelCatalog: () => Promise<ModelCatalogEntry[]>;
+  loadGatewayModelCatalog: (params?: {
+    mode?: "cacheOnly" | "cachePreferred" | "runtimeDiscovery";
+  }) => Promise<ModelCatalogEntry[]>;
   provider?: string;
   model?: string;
 }): Promise<boolean> {
