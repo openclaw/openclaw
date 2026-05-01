@@ -71,7 +71,7 @@ start_openclaw_gateway
 wait_for_gateway
 /opt/homebrew/bin/openclaw models set ${shellQuote(input.auth.modelId)}
 /opt/homebrew/bin/openclaw config set agents.defaults.skipBootstrap true --strict-json
-/opt/homebrew/bin/openclaw config set tools.profile '"minimal"' --strict-json
+/opt/homebrew/bin/openclaw config set tools.profile minimal
 ${posixAgentWorkspaceScript("Parallels npm update smoke test assistant.")}
 ${input.auth.apiKeyEnv}=${shellQuote(input.auth.apiKeyValue)} /opt/homebrew/bin/openclaw agent --local --agent main --session-id parallels-npm-update-macos --message 'Reply with exact ASCII text OK only.' --thinking minimal --json`;
 }
@@ -142,7 +142,7 @@ if ($LASTEXITCODE -ne 0) {
 Wait-OpenClawGateway
 Invoke-OpenClaw models set ${psSingleQuote(input.auth.modelId)}
 Invoke-OpenClaw config set agents.defaults.skipBootstrap true --strict-json
-Invoke-OpenClaw config set tools.profile '"minimal"' --strict-json
+Invoke-OpenClaw config set tools.profile minimal
 ${windowsAgentWorkspaceScript("Parallels npm update smoke test assistant.")}
 Set-Item -Path ('Env:' + ${psSingleQuote(input.auth.apiKeyEnv)}) -Value ${psSingleQuote(input.auth.apiKeyValue)}
 Invoke-OpenClaw agent --local --agent main --session-id parallels-npm-update-windows --message 'Reply with exact ASCII text OK only.' --thinking minimal --json`;
@@ -205,7 +205,7 @@ start_openclaw_gateway
 wait_for_gateway
 openclaw models set ${shellQuote(input.auth.modelId)}
 openclaw config set agents.defaults.skipBootstrap true --strict-json
-openclaw config set tools.profile '"minimal"' --strict-json
+openclaw config set tools.profile minimal
 ${posixAgentWorkspaceScript("Parallels npm update smoke test assistant.")}
 ${input.auth.apiKeyEnv}=${shellQuote(input.auth.apiKeyValue)} openclaw agent --local --agent main --session-id parallels-npm-update-linux --message 'Reply with exact ASCII text OK only.' --thinking minimal --json`;
 }
