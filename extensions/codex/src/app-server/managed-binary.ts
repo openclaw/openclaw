@@ -12,7 +12,7 @@ type ManagedCodexAppServerPaths = {
   candidateCommandPaths: string[];
 };
 
-export type ResolveManagedCodexAppServerOptions = {
+type ResolveManagedCodexAppServerOptions = {
   platform?: NodeJS.Platform;
   pluginRoot?: string;
   pathExists?: (filePath: string, platform: NodeJS.Platform) => Promise<boolean>;

@@ -1,4 +1,5 @@
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { getBundledChannelSetupPlugin } from "../../channels/plugins/bundled.js";
 import { parseOptionalDelimitedEntries } from "../../channels/plugins/helpers.js";
 import { getLoadedChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import { moveSingleAccountChannelSectionToDefaultAccount } from "../../channels/plugins/setup-helpers.js";
@@ -47,9 +48,19 @@ async function resolveCatalogChannelEntry(raw: string, cfg: OpenClawConfig | nul
   if (!trimmed) {
     return undefined;
   }
-  const { listChannelPluginCatalogEntries } = await import("../../channels/plugins/catalog.js");
-  const workspaceDir = cfg ? resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg)) : undefined;
-  return listChannelPluginCatalogEntries({ workspaceDir }).find((entry) => {
+  const entries = cfg
+    ? await import("../channel-setup/trusted-catalog.js").then(
+        ({ listTrustedChannelPluginCatalogEntries }) =>
+          listTrustedChannelPluginCatalogEntries({
+            cfg,
+            workspaceDir: resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg)),
+          }),
+      )
+    : await import("../../channels/plugins/catalog.js").then(
+        ({ listChannelPluginCatalogEntries }) =>
+          listChannelPluginCatalogEntries({ excludeWorkspace: true }),
+      );
+  return entries.find((entry) => {
     if (normalizeOptionalLowercaseString(entry.id) === trimmed) {
       return true;
     }
@@ -268,13 +279,13 @@ export async function channelsAddCommand(
   let catalogEntry = channel ? undefined : await resolveCatalogChannelEntry(rawChannel, nextConfig);
   const resolveWorkspaceDir = () =>
     resolveAgentWorkspaceDir(nextConfig, resolveDefaultAgentId(nextConfig));
-  // May trigger loadOpenClawPlugins on cache miss (disk scan + jiti import)
+  // May load a scoped plugin when the channel is not already registered.
   const loadScopedPlugin = async (
     channelId: ChannelId,
     pluginId?: string,
   ): Promise<ChannelPlugin | undefined> => {
     const existing = getLoadedChannelPlugin(channelId);
-    if (existing) {
+    if (existing?.setup?.applyAccountConfig) {
       return existing;
     }
     const { loadChannelSetupPluginRegistrySnapshotForChannel } =
@@ -289,7 +300,9 @@ export async function channelsAddCommand(
     });
     return (
       snapshot.channelSetups.find((entry) => entry.plugin.id === channelId)?.plugin ??
-      snapshot.channels.find((entry) => entry.plugin.id === channelId)?.plugin
+      getBundledChannelSetupPlugin(channelId) ??
+      snapshot.channels.find((entry) => entry.plugin.id === channelId)?.plugin ??
+      existing
     );
   };
 

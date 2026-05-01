@@ -1,18 +1,23 @@
 import { resetModelCatalogCache } from "../agents/model-catalog.js";
 import { disposeAllSessionMcpRuntimes } from "../agents/pi-bundle-mcp-tools.js";
 import { getActiveEmbeddedRunCount } from "../agents/pi-embedded-runner/run-state.js";
+import { abortEmbeddedPiRun } from "../agents/pi-embedded-runner/runs.js";
 import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { isRestartEnabled } from "../config/commands.flags.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
+import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { resetDirectoryCache } from "../infra/outbound/target-resolver.js";
 import {
   deferGatewayRestartUntilIdle,
   emitGatewayRestart,
+  resolveGatewayRestartDeferralTimeoutMs,
   setGatewaySigusr1RestartPolicy,
 } from "../infra/restart.js";
+import { pruneUnknownBundledRuntimeDepsRoots } from "../plugins/bundled-runtime-deps-roots.js";
+import { repairBundledRuntimeDepsPackagePlanAsync } from "../plugins/bundled-runtime-deps.js";
 import { getTotalQueueSize } from "../process/command-queue.js";
 import {
   activateSecretsRuntimeSnapshot,
@@ -27,6 +32,7 @@ import { startGatewayConfigReloader, type GatewayReloadPlan } from "./config-rel
 import { resolveHooksConfig } from "./hooks.js";
 import { buildGatewayCronService, type GatewayCronState } from "./server-cron.js";
 import { applyGatewayLaneConcurrency } from "./server-lanes.js";
+import { markGatewayModelCatalogStaleForReload } from "./server-model-catalog.js";
 import {
   type GatewayChannelManager,
   startGatewayChannelHealthMonitor,
@@ -58,6 +64,65 @@ type GatewayReloadLog = {
 const MCP_RUNTIME_RELOAD_DISPOSE_TIMEOUT_MS = 5_000;
 const CHANNEL_RELOAD_DEFERRAL_POLL_MS = 500;
 const CHANNEL_RELOAD_STILL_PENDING_WARN_MS = 30_000;
+
+async function planPluginRuntimeDepsForHotReload(params: {
+  nextConfig: OpenClawConfig;
+  logReload: GatewayReloadLog;
+}): Promise<void> {
+  const packageRoot = resolveOpenClawPackageRootSync({
+    argv1: process.argv[1],
+    cwd: process.cwd(),
+    moduleUrl: import.meta.url,
+  });
+  if (!packageRoot) {
+    return;
+  }
+  try {
+    pruneUnknownBundledRuntimeDepsRoots({
+      env: process.env,
+      warn: params.logReload.warn,
+    });
+    const startedAt = Date.now();
+    const result = await repairBundledRuntimeDepsPackagePlanAsync({
+      packageRoot,
+      config: params.nextConfig,
+      includeConfiguredChannels: true,
+      env: process.env,
+      warn: params.logReload.warn,
+      onProgress: params.logReload.info,
+    });
+    if (result.repairedSpecs.length > 0) {
+      params.logReload.info(
+        `config hot reload prepared bundled runtime dependencies in ${Date.now() - startedAt}ms: ${result.repairedSpecs.join(", ")}`,
+      );
+    } else if (result.reusedSpecs && result.reusedSpecs.length > 0) {
+      params.logReload.info(
+        `config hot reload reused bundled runtime dependencies in ${Date.now() - startedAt}ms: ${result.reusedSpecs.join(", ")}`,
+      );
+    }
+  } catch (error) {
+    params.logReload.warn(
+      `config hot reload bundled runtime dependency planning failed; runtime load will verify without repair: ${String(error)}`,
+    );
+  }
+}
+
+function abortActiveAgentRunsAfterConfigRecovery(params: {
+  reason: string;
+  logReload: GatewayReloadLog;
+}) {
+  const aborted = abortEmbeddedPiRun(undefined, { mode: "all" });
+  if (!aborted) {
+    return;
+  }
+  params.logReload.warn(
+    `config recovery aborted active agent run(s) after reload-${params.reason}`,
+  );
+}
+
+export const __testing = {
+  abortActiveAgentRunsAfterConfigRecovery,
+};
 
 async function disposeMcpRuntimesWithTimeout(params: {
   dispose: () => Promise<void>;
@@ -222,6 +287,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
       )
     ) {
       resetModelCatalogCache();
+      markGatewayModelCatalogStaleForReload();
     }
 
     if (plan.reloadHooks) {
@@ -238,6 +304,13 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     }
 
     resetDirectoryCache();
+
+    if (plan.planPluginRuntimeDeps) {
+      await planPluginRuntimeDepsForHotReload({
+        nextConfig,
+        logReload: params.logReload,
+      });
+    }
 
     if (plan.restartCron) {
       state.cronState.cron.stop();
@@ -345,7 +418,9 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
 
       deferGatewayRestartUntilIdle({
         getPendingCount: () => getActiveCounts().totalActive,
-        maxWaitMs: nextConfig.gateway?.reload?.deferralTimeoutMs,
+        maxWaitMs: resolveGatewayRestartDeferralTimeoutMs(
+          nextConfig.gateway?.reload?.deferralTimeoutMs,
+        ),
         hooks: {
           onReady: () => {
             restartPending = false;
@@ -418,11 +493,13 @@ export function startManagedGatewayConfigReloader(params: ManagedGatewayConfigRe
       await params.recoverSnapshot({ snapshot, reason: `reload-${reason}` }),
     promoteSnapshot: async (snapshot, _reason) => await params.promoteSnapshot(snapshot),
     onRecovered: ({ reason, snapshot, recoveredSnapshot }) => {
+      abortActiveAgentRunsAfterConfigRecovery({ reason, logReload: params.logReload });
       enqueueConfigRecoveryNotice({
         cfg: recoveredSnapshot.config,
         phase: "reload",
         reason: `reload-${reason}`,
         configPath: snapshot.path,
+        issues: [...snapshot.issues, ...snapshot.legacyIssues],
       });
     },
     subscribeToWrites: params.subscribeToWrites,

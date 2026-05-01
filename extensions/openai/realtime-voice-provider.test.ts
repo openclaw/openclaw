@@ -1,8 +1,8 @@
 import { REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ } from "openclaw/plugin-sdk/realtime-voice";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildOpenAIRealtimeVoiceProvider } from "./realtime-voice-provider.js";
 
-const { FakeWebSocket } = vi.hoisted(() => {
+const { FakeWebSocket, fetchWithSsrFGuardMock } = vi.hoisted(() => {
   type Listener = (...args: unknown[]) => void;
 
   class MockWebSocket {
@@ -15,8 +15,10 @@ const { FakeWebSocket } = vi.hoisted(() => {
     sent: string[] = [];
     closed = false;
     terminated = false;
+    args: unknown[];
 
-    constructor() {
+    constructor(...args: unknown[]) {
+      this.args = args;
       MockWebSocket.instances.push(this);
     }
 
@@ -49,17 +51,24 @@ const { FakeWebSocket } = vi.hoisted(() => {
     }
   }
 
-  return { FakeWebSocket: MockWebSocket };
+  return { FakeWebSocket: MockWebSocket, fetchWithSsrFGuardMock: vi.fn() };
 });
 
 vi.mock("ws", () => ({
   default: FakeWebSocket,
 }));
 
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
+  fetchWithSsrFGuard: fetchWithSsrFGuardMock,
+}));
+
 type FakeWebSocketInstance = InstanceType<typeof FakeWebSocket>;
 type SentRealtimeEvent = {
   type: string;
   audio?: string;
+  item_id?: string;
+  content_index?: number;
+  audio_end_ms?: number;
   session?: {
     input_audio_format?: string;
     output_audio_format?: string;
@@ -70,9 +79,93 @@ function parseSent(socket: FakeWebSocketInstance): SentRealtimeEvent[] {
   return socket.sent.map((payload: string) => JSON.parse(payload) as SentRealtimeEvent);
 }
 
+function createJsonResponse(body: unknown, init?: { status?: number }): Response {
+  return new Response(JSON.stringify(body), {
+    status: init?.status ?? 200,
+    headers: {
+      "Content-Type": "application/json",
+    },
+  });
+}
+
 describe("buildOpenAIRealtimeVoiceProvider", () => {
   beforeEach(() => {
     FakeWebSocket.instances = [];
+    fetchWithSsrFGuardMock.mockReset();
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("adds OpenClaw attribution headers to native realtime websocket requests", () => {
+    vi.stubEnv("OPENCLAW_VERSION", "2026.3.22");
+    const provider = buildOpenAIRealtimeVoiceProvider();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+    });
+
+    void bridge.connect();
+    bridge.close();
+
+    const socket = FakeWebSocket.instances[0];
+    const options = socket?.args[1] as { headers?: Record<string, string> } | undefined;
+    expect(options?.headers).toMatchObject({
+      originator: "openclaw",
+      version: "2026.3.22",
+      "User-Agent": "openclaw/2026.3.22",
+    });
+  });
+
+  it("returns browser-safe OpenClaw attribution headers for native WebRTC offers", async () => {
+    vi.stubEnv("OPENCLAW_VERSION", "2026.3.22");
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: createJsonResponse({
+        client_secret: { value: "client-secret-123" },
+        expires_at: 1_765_000_000,
+      }),
+      release: vi.fn(async () => undefined),
+    });
+    const provider = buildOpenAIRealtimeVoiceProvider();
+    if (!provider.createBrowserSession) {
+      throw new Error("expected OpenAI realtime provider to support browser sessions");
+    }
+
+    const session = await provider.createBrowserSession({
+      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
+      instructions: "Be concise.",
+    });
+
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "https://api.openai.com/v1/realtime/client_secrets",
+        init: expect.objectContaining({
+          method: "POST",
+          headers: expect.objectContaining({
+            Authorization: "Bearer sk-test", // pragma: allowlist secret
+            "Content-Type": "application/json",
+            originator: "openclaw",
+            version: "2026.3.22",
+            "User-Agent": "openclaw/2026.3.22",
+          }),
+        }),
+      }),
+    );
+    expect(session).toMatchObject({
+      provider: "openai",
+      transport: "webrtc-sdp",
+      clientSecret: "client-secret-123",
+      offerUrl: "https://api.openai.com/v1/realtime/calls",
+      offerHeaders: {
+        originator: "openclaw",
+        version: "2026.3.22",
+      },
+    });
+    expect((session as { offerHeaders?: Record<string, string> }).offerHeaders).not.toHaveProperty(
+      "User-Agent",
+    );
   });
 
   it("normalizes provider-owned voice settings from raw provider config", () => {
@@ -188,5 +281,57 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     expect(socket.closed).toBe(true);
     expect(socket.terminated).toBe(false);
     expect(onClose).toHaveBeenCalledWith("completed");
+  });
+
+  it("truncates externally interrupted playback after an immediate mark acknowledgement", async () => {
+    const provider = buildOpenAIRealtimeVoiceProvider();
+    const onAudio = vi.fn();
+    const onClearAudio = vi.fn();
+    let bridge: ReturnType<typeof provider.createBridge>;
+    bridge = provider.createBridge({
+      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
+      onAudio,
+      onClearAudio,
+      onMark: () => bridge.acknowledgeMark(),
+    });
+    const connecting = bridge.connect();
+    const socket = FakeWebSocket.instances[0];
+    if (!socket) {
+      throw new Error("expected bridge to create a websocket");
+    }
+
+    socket.readyState = FakeWebSocket.OPEN;
+    socket.emit("open");
+    await connecting;
+    socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
+
+    bridge.setMediaTimestamp(1000);
+    socket.emit(
+      "message",
+      Buffer.from(JSON.stringify({ type: "response.created", response: { id: "resp_1" } })),
+    );
+    socket.emit(
+      "message",
+      Buffer.from(
+        JSON.stringify({
+          type: "response.audio.delta",
+          item_id: "item_1",
+          delta: Buffer.from("assistant audio").toString("base64"),
+        }),
+      ),
+    );
+    bridge.setMediaTimestamp(1240);
+
+    bridge.handleBargeIn?.({ audioPlaybackActive: true });
+
+    expect(onAudio).toHaveBeenCalledTimes(1);
+    expect(onClearAudio).toHaveBeenCalledTimes(1);
+    expect(parseSent(socket)).toContainEqual({ type: "response.cancel" });
+    expect(parseSent(socket)).toContainEqual({
+      type: "conversation.item.truncate",
+      item_id: "item_1",
+      content_index: 0,
+      audio_end_ms: 240,
+    });
   });
 });

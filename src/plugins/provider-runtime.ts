@@ -14,10 +14,7 @@ import { sanitizeForLog } from "../terminal/ansi.js";
 import { normalizeProviderModelIdWithManifest } from "./manifest-model-id-normalization.js";
 import { resolvePluginDiscoveryProvidersRuntime } from "./provider-discovery.runtime.js";
 import {
-  __testing as providerHookRuntimeTesting,
-  clearProviderRuntimeHookCache as clearProviderHookRuntimeCache,
   prepareProviderExtraParams,
-  resolveProviderHookConfigCacheShape,
   resolveProviderAuthProfileId,
   resolveProviderExtraParamsForTransport,
   resolveProviderFollowupFallbackRoute,
@@ -35,7 +32,6 @@ import {
   resolveExternalAuthProfileProviderPluginIds,
   resolveOwningPluginIdsForProvider,
 } from "./providers.js";
-import { resolvePluginCacheInputs } from "./roots.js";
 import { getActivePluginRegistryWorkspaceDirFromState } from "./runtime-state.js";
 import { resolveRuntimeTextTransforms } from "./text-transforms.runtime.js";
 import type {
@@ -86,8 +82,6 @@ import type {
 
 const log = createSubsystemLogger("plugins/provider-runtime");
 const warnedExternalAuthFallbackPluginIds = new Set<string>();
-let catalogHookProvidersCache = new WeakMap<NodeJS.ProcessEnv, Map<string, ProviderPlugin[]>>();
-let catalogHookProviderIdCache = new WeakMap<NodeJS.ProcessEnv, Map<string, string[]>>();
 
 function matchesProviderPluginRef(provider: ProviderPlugin, providerId: string): boolean {
   const normalized = normalizeProviderId(providerId);
@@ -143,74 +137,6 @@ function resetExternalAuthFallbackWarningCacheForTest(): void {
   warnedExternalAuthFallbackPluginIds.clear();
 }
 
-function resetCatalogHookProvidersCacheForTest(): void {
-  catalogHookProvidersCache = new WeakMap<NodeJS.ProcessEnv, Map<string, ProviderPlugin[]>>();
-}
-
-function clearCatalogHookProviderIdCache(): void {
-  catalogHookProviderIdCache = new WeakMap<NodeJS.ProcessEnv, Map<string, string[]>>();
-}
-
-function resolveCatalogHookProviderIdCacheBucket(params: {
-  env: NodeJS.ProcessEnv;
-}): Map<string, string[]> {
-  let bucket = catalogHookProviderIdCache.get(params.env);
-  if (!bucket) {
-    bucket = new Map<string, string[]>();
-    catalogHookProviderIdCache.set(params.env, bucket);
-  }
-  return bucket;
-}
-
-function buildCatalogHookProviderIdCacheKey(params: {
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-}): string {
-  const { roots } = resolvePluginCacheInputs({
-    workspaceDir: params.workspaceDir,
-    env: params.env,
-  });
-  return `${roots.workspace ?? ""}::${roots.global}::${roots.stock ?? ""}::${JSON.stringify(resolveProviderHookConfigCacheShape(params.config, undefined))}`;
-}
-
-function resolveCachedCatalogHookProviderPluginIds(params: {
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-}): string[] {
-  const env = params.env ?? process.env;
-  const bucket = resolveCatalogHookProviderIdCacheBucket({
-    env,
-  });
-  const key = buildCatalogHookProviderIdCacheKey({
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-    env,
-  });
-  const cached = bucket.get(key);
-  if (cached) {
-    return cached;
-  }
-  const resolved = resolveCatalogHookProviderPluginIds({
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-    env,
-  });
-  bucket.set(key, resolved);
-  return resolved;
-}
-
-export function clearProviderRuntimeHookCache(): void {
-  resetCatalogHookProvidersCacheForTest();
-  clearCatalogHookProviderIdCache();
-  clearProviderHookRuntimeCache();
-}
-
-export function resetProviderRuntimeHookCacheForTest(): void {
-  clearProviderRuntimeHookCache();
-}
-
 export {
   prepareProviderExtraParams,
   resolveProviderAuthProfileId,
@@ -221,10 +147,7 @@ export {
 };
 
 export const __testing = {
-  ...providerHookRuntimeTesting,
   resetExternalAuthFallbackWarningCacheForTest,
-  resetCatalogHookProvidersCacheForTest,
-  resetProviderRuntimeHookCacheForTest,
 } as const;
 
 function resolveProviderPluginsForCatalogHooks(params: {
@@ -234,36 +157,20 @@ function resolveProviderPluginsForCatalogHooks(params: {
 }): ProviderPlugin[] {
   const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDirFromState();
   const env = params.env ?? process.env;
-  let envCache = catalogHookProvidersCache.get(env);
-  if (!envCache) {
-    envCache = new Map<string, ProviderPlugin[]>();
-    catalogHookProvidersCache.set(env, envCache);
-  }
-  const onlyPluginIds = resolveCachedCatalogHookProviderPluginIds({
+  const onlyPluginIds = resolveCatalogHookProviderPluginIds({
     config: params.config,
     workspaceDir,
     env,
   });
-  const cacheKey = JSON.stringify({
-    workspaceDir: workspaceDir ?? "",
-    plugins: resolveProviderHookConfigCacheShape(params.config, onlyPluginIds),
-  });
-  const cached = envCache.get(cacheKey);
-  if (cached) {
-    return cached;
-  }
   if (onlyPluginIds.length === 0) {
-    envCache.set(cacheKey, []);
     return [];
   }
-  const providers = resolveProviderPluginsForHooks({
+  return resolveProviderPluginsForHooks({
     ...params,
     workspaceDir,
     env,
     onlyPluginIds,
   });
-  envCache.set(cacheKey, providers);
-  return providers;
 }
 
 export function runProviderDynamicModel(params: {
@@ -618,7 +525,7 @@ export function resolveProviderReplayPolicyWithPlugin(params: {
   env?: NodeJS.ProcessEnv;
   context: ProviderReplayPolicyContext;
 }): ProviderReplayPolicy | undefined {
-  return resolveProviderHookPlugin(params)?.buildReplayPolicy?.(params.context) ?? undefined;
+  return resolveProviderRuntimePlugin(params)?.buildReplayPolicy?.(params.context) ?? undefined;
 }
 
 export async function sanitizeProviderReplayHistoryWithPlugin(params: {
@@ -628,7 +535,7 @@ export async function sanitizeProviderReplayHistoryWithPlugin(params: {
   env?: NodeJS.ProcessEnv;
   context: ProviderSanitizeReplayHistoryContext;
 }) {
-  return await resolveProviderHookPlugin(params)?.sanitizeReplayHistory?.(params.context);
+  return await resolveProviderRuntimePlugin(params)?.sanitizeReplayHistory?.(params.context);
 }
 
 export async function validateProviderReplayTurnsWithPlugin(params: {
@@ -638,7 +545,7 @@ export async function validateProviderReplayTurnsWithPlugin(params: {
   env?: NodeJS.ProcessEnv;
   context: ProviderValidateReplayTurnsContext;
 }) {
-  return await resolveProviderHookPlugin(params)?.validateReplayTurns?.(params.context);
+  return await resolveProviderRuntimePlugin(params)?.validateReplayTurns?.(params.context);
 }
 
 export function normalizeProviderToolSchemasWithPlugin(params: {
@@ -648,7 +555,7 @@ export function normalizeProviderToolSchemasWithPlugin(params: {
   env?: NodeJS.ProcessEnv;
   context: ProviderNormalizeToolSchemasContext;
 }) {
-  return resolveProviderHookPlugin(params)?.normalizeToolSchemas?.(params.context) ?? undefined;
+  return resolveProviderRuntimePlugin(params)?.normalizeToolSchemas?.(params.context) ?? undefined;
 }
 
 export function inspectProviderToolSchemasWithPlugin(params: {
@@ -658,7 +565,7 @@ export function inspectProviderToolSchemasWithPlugin(params: {
   env?: NodeJS.ProcessEnv;
   context: ProviderNormalizeToolSchemasContext;
 }) {
-  return resolveProviderHookPlugin(params)?.inspectToolSchemas?.(params.context) ?? undefined;
+  return resolveProviderRuntimePlugin(params)?.inspectToolSchemas?.(params.context) ?? undefined;
 }
 
 export function resolveProviderReasoningOutputModeWithPlugin(params: {
@@ -668,7 +575,7 @@ export function resolveProviderReasoningOutputModeWithPlugin(params: {
   env?: NodeJS.ProcessEnv;
   context: ProviderReasoningOutputModeContext;
 }): ProviderReasoningOutputMode | undefined {
-  const mode = resolveProviderHookPlugin(params)?.resolveReasoningOutputMode?.(params.context);
+  const mode = resolveProviderRuntimePlugin(params)?.resolveReasoningOutputMode?.(params.context);
   return mode === "native" || mode === "tagged" ? mode : undefined;
 }
 
@@ -690,7 +597,7 @@ export function resolveProviderTransportTurnStateWithPlugin(params: {
   context: ProviderResolveTransportTurnStateContext;
 }): ProviderTransportTurnState | undefined {
   return (
-    resolveProviderHookPlugin(params)?.resolveTransportTurnState?.(params.context) ?? undefined
+    resolveProviderRuntimePlugin(params)?.resolveTransportTurnState?.(params.context) ?? undefined
   );
 }
 
@@ -702,7 +609,8 @@ export function resolveProviderWebSocketSessionPolicyWithPlugin(params: {
   context: ProviderResolveWebSocketSessionPolicyContext;
 }): ProviderWebSocketSessionPolicy | undefined {
   return (
-    resolveProviderHookPlugin(params)?.resolveWebSocketSessionPolicy?.(params.context) ?? undefined
+    resolveProviderRuntimePlugin(params)?.resolveWebSocketSessionPolicy?.(params.context) ??
+    undefined
   );
 }
 

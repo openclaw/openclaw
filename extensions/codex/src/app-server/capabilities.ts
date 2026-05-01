@@ -3,6 +3,7 @@ import { CodexAppServerRpcError } from "./client.js";
 export const CODEX_CONTROL_METHODS = {
   account: "account/read",
   compact: "thread/compact/start",
+  feedback: "feedback/upload",
   listMcpServers: "mcpServerStatus/list",
   listSkills: "skills/list",
   listThreads: "thread/list",
@@ -11,7 +12,7 @@ export const CODEX_CONTROL_METHODS = {
   review: "review/start",
 } as const;
 
-export type CodexControlName = keyof typeof CODEX_CONTROL_METHODS;
+type CodexControlName = keyof typeof CODEX_CONTROL_METHODS;
 export type CodexControlMethod = (typeof CODEX_CONTROL_METHODS)[CodexControlName];
 
 export function describeControlFailure(error: unknown): string {

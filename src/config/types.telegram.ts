@@ -67,7 +67,7 @@ export type TelegramExecApprovalTarget = "dm" | "channel" | "both";
 export type TelegramExecApprovalConfig = {
   /** Enable mode for Telegram exec approvals on this account. Default: auto when approvers can be resolved; false disables. */
   enabled?: import("./types.approvals.js").NativeExecApprovalEnableMode;
-  /** Telegram user IDs allowed to approve exec requests. Optional: falls back to numeric owner IDs inferred from allowFrom/defaultTo when possible. */
+  /** Telegram user IDs allowed to approve exec requests. Optional: falls back to numeric owner IDs inferred from commands.ownerAllowFrom when possible. */
   approvers?: Array<string | number>;
   /** Only forward approvals for these agent IDs. Omit = all agents. */
   agentFilter?: string[];
@@ -212,7 +212,7 @@ export type TelegramAccountConfig = {
    * Telegram expects unicode emoji (e.g., "👀") rather than shortcodes.
    */
   ackReaction?: string;
-  /** Custom Telegram Bot API root URL (e.g. "https://my-proxy.example.com" or a local Bot API server). */
+  /** Custom Telegram Bot API root URL (e.g. "https://my-proxy.example.com" or a local Bot API server), not a /bot<TOKEN> endpoint. */
   apiRoot?: string;
   /** Trusted local filesystem roots for self-hosted Telegram Bot API absolute file_path values. */
   trustedLocalFileRoots?: string[];

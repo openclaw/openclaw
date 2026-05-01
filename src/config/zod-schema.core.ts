@@ -369,14 +369,9 @@ export const ModelProviderSchema = z
   })
   .strict();
 
-export const BedrockDiscoverySchema = z
+const ModelPricingConfigSchema = z
   .object({
     enabled: z.boolean().optional(),
-    region: z.string().optional(),
-    providerFilter: z.array(z.string()).optional(),
-    refreshInterval: z.number().int().nonnegative().optional(),
-    defaultContextWindow: z.number().int().positive().optional(),
-    defaultMaxTokens: z.number().int().positive().optional(),
   })
   .strict()
   .optional();
@@ -385,6 +380,7 @@ export const ModelsConfigSchema = z
   .object({
     mode: z.union([z.literal("merge"), z.literal("replace")]).optional(),
     providers: z.record(z.string(), ModelProviderSchema).optional(),
+    pricing: ModelPricingConfigSchema,
   })
   .strict()
   .optional();
@@ -393,6 +389,7 @@ export const GroupChatSchema = z
   .object({
     mentionPatterns: z.array(z.string()).optional(),
     historyLimit: z.number().int().positive().optional(),
+    visibleReplies: z.enum(["automatic", "message_tool"]).optional(),
   })
   .strict()
   .optional();

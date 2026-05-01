@@ -242,6 +242,7 @@ export async function getReplyFromConfig(
     : await ensureAgentWorkspace({
         dir: workspaceDirRaw,
         ensureBootstrapFiles: !agentCfg?.skipBootstrap && !isFastTestEnv,
+        skipOptionalBootstrapFiles: agentCfg?.skipOptionalBootstrapFiles,
       });
   const workspaceDir = workspace.dir;
   const agentDir = resolveAgentDir(cfg, agentId);
@@ -469,6 +470,7 @@ export async function getReplyFromConfig(
     groupResolution,
     isGroup,
     triggerBodyNormalized,
+    resetTriggered,
     commandAuthorized,
     defaultProvider,
     defaultModel,
@@ -613,7 +615,11 @@ export async function getReplyFromConfig(
     }
   }
 
-  if (!useFastTestBootstrap && sessionKey && hasInboundMedia(ctx)) {
+  // ctx.MediaStaged=true means the caller (e.g. chat.send RPC) already staged
+  // synchronously so it could surface 5xx before respond(). Skipping here keeps
+  // staging a single-call contract instead of relying on relative-path no-op
+  // semantics in stageSandboxMedia.
+  if (!useFastTestBootstrap && sessionKey && !ctx.MediaStaged && hasInboundMedia(ctx)) {
     const { stageSandboxMedia } = await loadStageSandboxMediaRuntime();
     await stageSandboxMedia({
       ctx,

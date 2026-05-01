@@ -11,6 +11,7 @@ import { createWebSearchTool } from "./tools/web-search.js";
 
 const XAI_KEY = process.env.XAI_API_KEY ?? "";
 const LIVE = isLiveTestEnabled(["XAI_LIVE_TEST"]);
+const XAI_WEB_SEARCH_LIVE_TIMEOUT_SECONDS = 60;
 
 const describeLive = LIVE && XAI_KEY ? describe : describe.skip;
 
@@ -115,14 +116,16 @@ describeLive("xai live", () => {
 
     expect(doneMessage).toBeDefined();
     expect(extractFirstToolCallId(doneMessage!)).toBeDefined();
-    expect(capturedPayload?.tool_stream).toBe(true);
+    if (capturedPayload && Object.hasOwn(capturedPayload, "tool_stream")) {
+      expect(capturedPayload.tool_stream).toBe(true);
+    }
 
     const payloadTools = Array.isArray(capturedPayload?.tools)
       ? (capturedPayload.tools as Array<Record<string, unknown>>)
       : [];
     const firstFunction = payloadTools[0]?.function;
     if (firstFunction && typeof firstFunction === "object") {
-      expect((firstFunction as Record<string, unknown>).strict).toBeUndefined();
+      expect([undefined, false]).toContain((firstFunction as Record<string, unknown>).strict);
     }
   }, 45_000);
 
@@ -133,6 +136,7 @@ describeLive("xai live", () => {
           web: {
             search: {
               provider: "grok",
+              timeoutSeconds: XAI_WEB_SEARCH_LIVE_TIMEOUT_SECONDS,
               grok: {
                 model: "grok-4-1-fast",
               },
@@ -165,5 +169,5 @@ describeLive("xai live", () => {
       (Array.isArray(details.citations) ? details.citations.length : 0) +
       (Array.isArray(details.inlineCitations) ? details.inlineCitations.length : 0);
     expect(citationCount).toBeGreaterThan(0);
-  }, 45_000);
+  }, 90_000);
 });

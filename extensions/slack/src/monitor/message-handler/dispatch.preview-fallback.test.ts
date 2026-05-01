@@ -100,11 +100,16 @@ function createPreparedSlackMessage(params?: {
       agentId: "agent-1",
       accountId: "default",
       mainSessionKey: "main",
+      sessionKey: "agent:agent-1:slack:C123",
     },
     channelConfig: null,
     replyTarget: "channel:C123",
     ctxPayload: {
       MessageThreadId: THREAD_TS,
+    },
+    turn: {
+      storePath: "/tmp/slack-sessions.json",
+      record: {},
     },
     replyToMode: params?.replyToMode ?? "all",
     isDirectMessage: false,
@@ -139,6 +144,10 @@ vi.mock("openclaw/plugin-sdk/channel-feedback", () => ({
   removeAckReactionAfterReply: () => {},
 }));
 
+vi.mock("../conversation.runtime.js", () => ({
+  recordInboundSession: vi.fn(async () => undefined),
+}));
+
 vi.mock("openclaw/plugin-sdk/channel-reply-pipeline", () => ({
   createChannelReplyPipeline: () => ({
     typingCallbacks: {
@@ -146,6 +155,22 @@ vi.mock("openclaw/plugin-sdk/channel-reply-pipeline", () => ({
     },
     onModelSelected: undefined,
   }),
+  resolveChannelSourceReplyDeliveryMode: (params: {
+    cfg?: { messages?: { groupChat?: { visibleReplies?: string } } };
+    ctx?: { ChatType?: string };
+    requested?: "automatic" | "message_tool_only";
+  }) => {
+    if (params.requested) {
+      return params.requested;
+    }
+    const chatType = params.ctx?.ChatType;
+    if (chatType === "group" || chatType === "channel") {
+      return params.cfg?.messages?.groupChat?.visibleReplies === "automatic"
+        ? "automatic"
+        : "message_tool_only";
+    }
+    return "automatic";
+  },
 }));
 
 vi.mock("openclaw/plugin-sdk/channel-streaming", () => ({
