@@ -25,6 +25,7 @@ import {
   resolveAttemptToolPolicyMessageProvider,
   resolvePromptBuildHookResult,
   resolvePromptModeForSession,
+  selectBtwSnapshotMessages,
   shouldStripBootstrapFromEmbeddedContext,
   shouldWarnOnOrphanedUserRepair,
   wrapStreamFnRepairMalformedToolCallArguments,
@@ -159,6 +160,24 @@ describe("normalizeMessagesForLlmBoundary", () => {
     expect(output).toEqual(
       expect.arrayContaining([expect.objectContaining({ customType: "other-extension-context" })]),
     );
+  });
+});
+
+describe("selectBtwSnapshotMessages", () => {
+  it("keeps BTW follow-up snapshots aligned with fallback-safe replay state", () => {
+    const input = [
+      { role: "user", content: [{ type: "text", text: "please continue" }], timestamp: 1 },
+      {
+        role: "assistant",
+        stopReason: "error",
+        content: [{ type: "text", text: "[assistant turn failed before producing content]" }],
+        timestamp: 2,
+      },
+    ] as Parameters<typeof selectBtwSnapshotMessages>[0];
+
+    expect(selectBtwSnapshotMessages(input)).toEqual([
+      { role: "user", content: [{ type: "text", text: "please continue" }], timestamp: 1 },
+    ]);
   });
 });
 
