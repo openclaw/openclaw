@@ -536,6 +536,40 @@ describe("resolvePluginCapabilityProviders", () => {
     });
   });
 
+  it("reuses capability snapshot loads for the same config object", () => {
+    const { cfg, enablementCompat } = createCompatChainConfig();
+    const loaded = createEmptyPluginRegistry();
+    loaded.mediaUnderstandingProviders.push({
+      pluginId: "openai",
+      pluginName: "openai",
+      source: "test",
+      provider: {
+        id: "openai",
+        capabilities: ["image"],
+      },
+    } as never);
+    setBundledCapabilityFixture("mediaUnderstandingProviders");
+    mocks.withBundledPluginEnablementCompat.mockReturnValue(enablementCompat);
+    mocks.withBundledPluginVitestCompat.mockReturnValue(enablementCompat);
+    mocks.resolveRuntimePluginRegistry.mockImplementation((params?: unknown) =>
+      params === undefined ? undefined : loaded,
+    );
+
+    expectResolvedCapabilityProviderIds(
+      resolvePluginCapabilityProviders({ key: "mediaUnderstandingProviders", cfg }),
+      ["openai"],
+    );
+    expectResolvedCapabilityProviderIds(
+      resolvePluginCapabilityProviders({ key: "mediaUnderstandingProviders", cfg }),
+      ["openai"],
+    );
+
+    const snapshotLoads = mocks.resolveRuntimePluginRegistry.mock.calls.filter(
+      ([options]) => options !== undefined,
+    );
+    expect(snapshotLoads).toHaveLength(1);
+  });
+
   it("resolves manifest-derived capability plugin ids for equivalent config snapshots independently", () => {
     const first = createCompatChainConfig();
     const second = createCompatChainConfig();
