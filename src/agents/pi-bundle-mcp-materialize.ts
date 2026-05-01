@@ -38,7 +38,7 @@ function normalizeMcpContent(
       out.push({ type: "text", text: marker });
       continue;
     }
-    out.push(block as AgentToolResult<unknown>["content"][number]);
+    out.push(block as unknown as AgentToolResult<unknown>["content"][number]);
   }
   return out;
 }
