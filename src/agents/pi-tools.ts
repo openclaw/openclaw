@@ -844,6 +844,7 @@ export function createOpenClawCodingTools(options?: {
     wrapToolWithBeforeToolCallHook(tool, {
       agentId,
       ...(options?.config ? { config: options.config } : {}),
+      cwd: sandboxRoot ?? workspaceRoot,
       sessionKey: options?.sessionKey,
       sessionId: options?.sessionId,
       runId: options?.runId,

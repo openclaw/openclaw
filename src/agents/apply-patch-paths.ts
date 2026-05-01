@@ -1,4 +1,5 @@
 import path from "node:path";
+import { resolveSandboxInputPath } from "./sandbox-paths.js";
 
 /**
  * Lightweight path extractor for the `apply_patch` envelope grammar.
@@ -30,6 +31,10 @@ const DELETE_FILE_MARKER = "*** Delete File: ";
 const UPDATE_FILE_MARKER = "*** Update File: ";
 const MOVE_TO_MARKER = "*** Move to: ";
 
+export type ApplyPatchPathExtractionOptions = {
+  cwd?: string;
+};
+
 function readPatchText(input: unknown): string | undefined {
   if (typeof input === "string") {
     return input;
@@ -43,17 +48,27 @@ function readPatchText(input: unknown): string | undefined {
   return undefined;
 }
 
-function normalizePatchPath(raw: string): string | undefined {
+function normalizePatchPath(
+  raw: string,
+  options: ApplyPatchPathExtractionOptions = {},
+): string | undefined {
   const trimmed = raw.trim();
   if (!trimmed) {
     return undefined;
   }
-  const normalized = path.posix.normalize(trimmed.replace(/\\/g, "/"));
+  const normalized = options.cwd
+    ? path.normalize(resolveSandboxInputPath(trimmed, options.cwd))
+    : path.posix.normalize(trimmed.replace(/\\/g, "/"));
   return normalized && normalized !== "." ? normalized : undefined;
 }
 
-function pushPath(target: string[], seen: Set<string>, raw: string): void {
-  const normalized = normalizePatchPath(raw);
+function pushPath(
+  target: string[],
+  seen: Set<string>,
+  raw: string,
+  options: ApplyPatchPathExtractionOptions,
+): void {
+  const normalized = normalizePatchPath(raw, options);
   if (!normalized) {
     return;
   }
@@ -100,7 +115,10 @@ function normalizeMarkerHeaderLine(
  * referenced multiple times within a single envelope). Returns `[]` for any
  * input that is not a recognised envelope.
  */
-export function extractApplyPatchTargetPaths(input: unknown): string[] {
+export function extractApplyPatchTargetPaths(
+  input: unknown,
+  options: ApplyPatchPathExtractionOptions = {},
+): string[] {
   const text = readPatchText(input);
   if (text === undefined || text.length === 0) {
     return [];
@@ -112,7 +130,7 @@ export function extractApplyPatchTargetPaths(input: unknown): string[] {
     const line = lines[index];
     const addPath = readMarkerPath(line, ADD_FILE_MARKER);
     if (addPath !== undefined) {
-      pushPath(paths, seen, addPath);
+      pushPath(paths, seen, addPath, options);
       while (index + 1 < lines.length && lines[index + 1].startsWith("+")) {
         index += 1;
       }
@@ -120,12 +138,12 @@ export function extractApplyPatchTargetPaths(input: unknown): string[] {
     }
     const deletePath = readMarkerPath(line, DELETE_FILE_MARKER);
     if (deletePath !== undefined) {
-      pushPath(paths, seen, deletePath);
+      pushPath(paths, seen, deletePath, options);
       continue;
     }
     const updatePath = readMarkerPath(line, UPDATE_FILE_MARKER);
     if (updatePath !== undefined) {
-      pushPath(paths, seen, updatePath);
+      pushPath(paths, seen, updatePath, options);
       // The Update header may be immediately followed by a `*** Move to:`
       // sub-marker that names the new path. Skip leading blank lines so
       // human-edited patches with extra spacing still pick it up.
@@ -135,7 +153,7 @@ export function extractApplyPatchTargetPaths(input: unknown): string[] {
       }
       const movePath = readMarkerPath(lines[lookahead], MOVE_TO_MARKER);
       if (movePath !== undefined) {
-        pushPath(paths, seen, movePath);
+        pushPath(paths, seen, movePath, options);
         lookahead += 1;
       }
       while (lookahead < lines.length) {
@@ -143,11 +161,7 @@ export function extractApplyPatchTargetPaths(input: unknown): string[] {
           lookahead += 1;
           continue;
         }
-        if (
-          normalizeMarkerHeaderLine(lines[lookahead], {
-            allowSingleSpaceIndent: false,
-          }) !== undefined
-        ) {
+        if (lines[lookahead].startsWith("***")) {
           break;
         }
         lookahead += 1;

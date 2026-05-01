@@ -1,5 +1,6 @@
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isPlainObject } from "../utils.js";
 import type {
   PluginHookBeforeToolCallEvent,
   PluginHookBeforeToolCallResult,
@@ -8,6 +9,10 @@ import type {
 import { getPluginSessionExtensionStateSync } from "./host-hook-state.js";
 import type { PluginJsonValue } from "./host-hooks.js";
 import { getActivePluginRegistry } from "./runtime.js";
+
+export function hasTrustedToolPolicies(): boolean {
+  return (getActivePluginRegistry()?.trustedToolPolicies?.length ?? 0) > 0;
+}
 
 function normalizeDerivedEventFields(
   value: Pick<PluginHookBeforeToolCallEvent, "derivedPaths"> | undefined,
@@ -103,7 +108,7 @@ export async function runTrustedToolPolicies(
     // pipeline) — it does NOT short-circuit the policy chain. Params and
     // approvals are remembered so later trusted policies can still inspect or
     // block the final call.
-    if ("params" in decision && decision.params) {
+    if ("params" in decision && isPlainObject(decision.params)) {
       adjustedParams = decision.params;
       hasAdjustedParams = true;
       currentDerivedEvent = normalizeDerivedEventFields(options?.deriveEvent?.(adjustedParams));
