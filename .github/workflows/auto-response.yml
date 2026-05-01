@@ -33,13 +33,13 @@ jobs:
         id: app-token
         continue-on-error: true
         with:
-          app-id: "2729701"
+          client-id: "2729701"
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
       - uses: actions/create-github-app-token@v3
         id: app-token-fallback
         if: steps.app-token.outcome == 'failure'
         with:
-          app-id: "2971289"
+          client-id: "2971289"
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY_FALLBACK }}
       - name: Run Barnacle auto-response
         uses: actions/github-script@v9
