@@ -14,7 +14,7 @@ import type { EngineLogger } from "../types.js";
 import { formatErrorMessage } from "../utils/format.js";
 
 /** Standard retry policy with exponential or fixed backoff. */
-export interface RetryPolicy {
+interface RetryPolicy {
   /** Maximum retry attempts (excluding the initial attempt). */
   maxRetries: number;
   /** Base delay in milliseconds. */
@@ -36,7 +36,7 @@ export interface RetryPolicy {
  * the standard retry loop into a tight fixed-interval loop bounded
  * only by the total timeout.
  */
-export interface PersistentRetryPolicy {
+interface PersistentRetryPolicy {
   /** Total timeout in milliseconds for the persistent retry loop. */
   timeoutMs: number;
   /** Fixed interval between retries in milliseconds. */
