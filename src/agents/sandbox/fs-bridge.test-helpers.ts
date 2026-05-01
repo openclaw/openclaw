@@ -171,7 +171,7 @@ export async function withTempDir<T>(
   }
 }
 
-export function installDockerReadMock(params?: { canonicalPath?: string }) {
+function installDockerReadMock(params?: { canonicalPath?: string }) {
   const canonicalPath = params?.canonicalPath;
   mockedExecDockerRaw.mockImplementation(async (args) => {
     const script = getDockerScript(args);
