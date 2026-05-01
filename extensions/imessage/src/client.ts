@@ -108,6 +108,13 @@ export class IMessageRpcClient {
       this.closedResolve?.();
     });
 
+    // stdin write errors (e.g. EPIPE when the child closes its end) are emitted
+    // on the stdin stream, not the child process. Without this listener they
+    // escape to uncaughtException and crash the gateway.
+    child.stdin.on("error", (err) => {
+      this.failAll(err instanceof Error ? err : new Error(String(err)));
+    });
+
     child.on("close", (code, signal) => {
       if (code !== 0 && code !== null) {
         const reason = signal ? `signal ${signal}` : `code ${code}`;
